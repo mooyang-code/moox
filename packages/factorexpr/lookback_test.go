@@ -36,6 +36,8 @@ func TestLookbackRules(t *testing.T) {
 		{`ts_corr(close, ts_mean(volume, 10), 5)`, 14},
 		{`ts_quantile(close, 30, 0.5)`, 30},
 		{`ema(close, 20)`, 208},
+		{`ema(close, 50000, 50000)`, 50000},
+		{`ema(ts_mean(close, 20), 1000, 300)`, 319},
 		{`sma(close, 20, 1)`, 405},
 		{`ema(ts_mean(close, 20), 20)`, 227},
 		{`cs_rank(ts_mean(close, 20))`, 20},

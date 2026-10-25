@@ -86,6 +86,7 @@ func TestTypeAndNameChecks(t *testing.T) {
 		{"huge integer literal", `close * 99999999999999999`, "超出范围"},
 		{"lookback overflow", `ts_mean(ts_mean(close, 60000), 60000)`, "超过上限 100000"},
 		{"recursive lookback overflow", `ema(close, 100000)`, "超过上限 100000"},
+		{"ema explicit k out of range", `ema(close, 20, 0)`, "1～100000"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

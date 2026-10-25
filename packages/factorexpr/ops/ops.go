@@ -174,10 +174,15 @@ var rolling = map[string]Rolling{
 		return sortedWindow(ints[0], median)
 	},
 	"ema": func(ints []int, _ []float64) SeriesKernel {
-		return truncatedSmoothing(factorexpr.EMAAlpha(ints[0]))
+		alpha := factorexpr.EMAAlpha(ints[0])
+		if ints[1] > 0 {
+			return truncatedSmoothing(alpha, ints[1])
+		}
+		return truncatedSmoothing(alpha, factorexpr.RecursiveSpan(alpha))
 	},
 	"sma": func(ints []int, _ []float64) SeriesKernel {
-		return truncatedSmoothing(factorexpr.SMAAlpha(ints[0], ints[1]))
+		alpha := factorexpr.SMAAlpha(ints[0], ints[1])
+		return truncatedSmoothing(alpha, factorexpr.RecursiveSpan(alpha))
 	},
 	"delay": func(ints []int, _ []float64) SeriesKernel {
 		k := ints[0]

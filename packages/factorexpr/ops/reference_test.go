@@ -340,7 +340,7 @@ func TestTruncatedSmoothingMatchesRecursion(t *testing.T) {
 	x := randomSeries(rng, 900)
 	for _, alpha := range []float64{factorexpr.EMAAlpha(5), factorexpr.EMAAlpha(20), factorexpr.SMAAlpha(10, 1), 1} {
 		k := factorexpr.RecursiveSpan(alpha)
-		kernel := truncatedSmoothing(alpha)
+		kernel := truncatedSmoothing(alpha, k)
 		out := make([]float64, len(x)-k+1)
 		kernel(out, k-1, []Series{{Data: x}})
 		for i, got := range out {
@@ -490,4 +490,24 @@ func FuzzRollingKernels(f *testing.F) {
 			checkKernel(t, rc, n, x, y, seed)
 		}
 	})
+}
+
+// 显式指定 k 的 EMA：span 远大于 k 时仍与「以窗口最老值为初值、按定义递推」一致。
+func TestTruncatedSmoothingExplicitSpan(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	x := randomSeries(rng, 600)
+	alpha, k := factorexpr.EMAAlpha(1000), 300
+	kernel := rolling["ema"]([]int{1000, k}, nil)
+	out := make([]float64, len(x)-k+1)
+	kernel(out, k-1, []Series{{Data: x}})
+	for i, got := range out {
+		tm := k - 1 + i
+		w := x[tm-k+1 : tm+1]
+		if hasNaN(w) {
+			continue
+		}
+		if want := refEMA(w, alpha); math.Abs(got-want) > 1e-12*math.Abs(want) {
+			t.Fatalf("t=%d: got %v, want %v", tm, got, want)
+		}
+	}
 }

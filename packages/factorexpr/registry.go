@@ -132,8 +132,13 @@ func SMAAlpha(n, m int) float64 { return float64(m) / float64(n) }
 
 func windowBack(ints []int) int { return ints[0] - 1 }
 func shiftBack(ints []int) int  { return ints[0] }
-func emaBack(ints []int) int    { return RecursiveSpan(EMAAlpha(ints[0])) - 1 }
-func smaBack(ints []int) int    { return RecursiveSpan(SMAAlpha(ints[0], ints[1])) - 1 }
+func emaBack(ints []int) int {
+	if ints[1] > 0 {
+		return ints[1] - 1
+	}
+	return RecursiveSpan(EMAAlpha(ints[0])) - 1
+}
+func smaBack(ints []int) int { return RecursiveSpan(SMAAlpha(ints[0], ints[1])) - 1 }
 
 var (
 	argX      = ArgSpec{Name: "x", Kind: ArgNumber}
@@ -220,9 +225,11 @@ var functionList = []*Function{
 	rolling("ts_resi", []ArgSpec{{Name: "y", Kind: ArgSeries}, window(2)}, "对时间序号 1..n 做最小二乘后当期的残差", "ts_resi(close, 20)"),
 
 	// 时序：递归平滑（截断到 K 根）
-	{Name: "ema", Category: CategoryTimeSeries, Args: []ArgSpec{argSeries, window(1)}, Result: ResultNumber,
-		Lookback: "L(x)+K−1，K 为让起点权重衰减到 1e−9 以下的根数",
-		Doc:      "指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)）", Example: "ema(close, 20)", back: emaBack},
+	{Name: "ema", Category: CategoryTimeSeries,
+		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 1, Max: MaxWindow, Optional: true, Default: 0}},
+		Result: ResultNumber, Lookback: "L(x)+K−1，K 为 k；不写 k 时为让起点权重衰减到 1e−9 以下的根数",
+		Doc:     "指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)）；可选的 k 显式指定 K，例如 ema(close, 50000, 50000)；n 远大于 k 时起点权重不可忽略，值是近似的",
+		Example: "ema(close, 20)", back: emaBack},
 	{Name: "sma", Category: CategoryTimeSeries,
 		Args:   []ArgSpec{argSeries, {Name: "n", Kind: ArgInteger, Min: 2, Max: MaxWindow}, {Name: "m", Kind: ArgInteger, Min: 1, Max: MaxWindow}},
 		Result: ResultNumber, Lookback: "L(x)+K−1，K 为让起点权重衰减到 1e−9 以下的根数",
