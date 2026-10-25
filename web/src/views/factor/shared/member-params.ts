@@ -9,8 +9,24 @@ export const MAX_ALIAS_LENGTH = 32;
  */
 export function formatParamValue(value: number): string {
   const normalized = Object.is(value, -0) || Number.isNaN(value) ? 0 : value;
-  const text = normalized.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 20 });
+  // String() 给出最短的往返表示，与 Go 的 FormatFloat(v, 'f', -1, 64) 的数字一致；只有指数形式需要展开成十进制。
+  let text = String(normalized);
+  if (/e/i.test(text)) text = expandExponent(text);
   return text.replace(/\./g, "p").replace(/-/g, "n");
+}
+
+/** 把 1e-7、1.5e+21 这样的指数形式展开成十进制文本。 */
+function expandExponent(text: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?e([+-]?\d+)$/i.exec(text);
+  if (!match) return text;
+  const [, sign, integer, fraction = "", exponent] = match;
+  const digits = integer + fraction;
+  const point = integer.length + Number(exponent);
+  let body: string;
+  if (point <= 0) body = `0.${"0".repeat(-point)}${digits}`;
+  else if (point >= digits.length) body = digits + "0".repeat(point - digits.length);
+  else body = `${digits.slice(0, point)}.${digits.slice(point)}`;
+  return sign + body;
 }
 
 /** 用定义声明的默认值把给出的参数补全成完整参数。 */

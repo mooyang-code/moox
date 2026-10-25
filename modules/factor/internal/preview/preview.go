@@ -123,6 +123,17 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 	shown := req.Subjects
+	if len(shown) > 0 {
+		inDataset := make(map[string]struct{}, len(universe))
+		for _, subject := range universe {
+			inDataset[subject] = struct{}{}
+		}
+		for _, subject := range shown {
+			if _, ok := inDataset[subject]; !ok {
+				return Result{}, fmt.Errorf("标的 %s 不在源数据集 %s 里", subject, set.SourceDatasetID)
+			}
+		}
+	}
 	if len(shown) == 0 {
 		shown = universe[:min(DefaultSubjects, len(universe))]
 	}

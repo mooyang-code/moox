@@ -57,6 +57,9 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
+	if err := checkSubjectsInDataset(ctx, storage, set, req.Subjects); err != nil {
+		return pipeline.Outcome{}, err
+	}
 	subjects, err := setSubjects(ctx, storage, set, req.Subjects)
 	if err != nil {
 		return pipeline.Outcome{}, err

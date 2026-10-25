@@ -42,7 +42,11 @@ describe("member alias derivation", () => {
     expect(formatParamValue(-0)).toBe("0");
     expect(formatParamValue(1e-7)).toBe("0p0000001");
     expect(formatParamValue(123456789)).toBe("123456789");
-    expect(formatParamValue(1e21)).not.toMatch(/e|\+/);
+    expect(formatParamValue(1e21)).toBe("1000000000000000000000");
+    expect(formatParamValue(1e-21)).toBe("0p000000000000000000001");
+    expect(formatParamValue(1.5e-10)).toBe("0p00000000015");
+    expect(formatParamValue(-2.5e-8)).toBe("n0p000000025");
+    expect(formatParamValue(1.25e22)).toBe("12500000000000000000000");
   });
 
   it("completes params with the declared defaults", () => {

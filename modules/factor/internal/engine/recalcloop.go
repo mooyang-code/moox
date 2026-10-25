@@ -211,6 +211,28 @@ func setSubjects(ctx context.Context, source SourceDataset, set domain.EngineSet
 	return subjects, nil
 }
 
+// checkSubjectsInDataset 核对显式指定的标的都属于源数据集：任务的标的就是源数据集当前的标的。
+// 诊断入口（runonce）直接写正式结果，不经过管理端提交时的校验，所以自己核对。
+func checkSubjectsInDataset(ctx context.Context, source SourceDataset, set domain.EngineSet, requested []string) error {
+	if len(requested) == 0 {
+		return nil
+	}
+	all, err := source.ListDatasetSubjects(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
+	if err != nil {
+		return fmt.Errorf("list source dataset subjects: %w", err)
+	}
+	inDataset := make(map[string]struct{}, len(all))
+	for _, subject := range all {
+		inDataset[subject] = struct{}{}
+	}
+	for _, subject := range requested {
+		if _, ok := inDataset[subject]; !ok {
+			return fmt.Errorf("subject %q is not in source dataset %s", subject, set.Set.SourceDatasetID)
+		}
+	}
+	return nil
+}
+
 func (l *recalcLoop) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		found, err := l.RunOnce(ctx)

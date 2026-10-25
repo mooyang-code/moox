@@ -49,7 +49,7 @@ type preloader struct {
 	onReady func(setID string)
 	kick    chan struct{}
 
-	// prepared 记录每个集合预载成功时的状态：目录里的因子变了回看更长、集合的标的列表变了，都要重新预载（设计 6.2 移除标的）。
+	// prepared 记录每个集合预载成功时的状态：目录里的因子变了回看更长、源数据集的标的清单变了，都要重新预载（设计 6.2 移除标的）。
 	mu       sync.Mutex
 	prepared map[string]preparedState
 }

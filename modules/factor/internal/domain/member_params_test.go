@@ -57,6 +57,12 @@ func TestFormatParamValue(t *testing.T) {
 		require.Equal(t, want, FormatParamValue(value), "%v", value)
 	}
 	require.False(t, strings.ContainsAny(FormatParamValue(1e21), "e+"))
+	// 前端用同样的数字：极小与极大值都按十进制展开（见 web 的 member-params.test.ts）。
+	for value, want := range map[float64]string{
+		1e21: "1000000000000000000000", 1e-21: "0p000000000000000000001", 1.5e-10: "0p00000000015", -2.5e-8: "n0p000000025", 1.25e22: "12500000000000000000000",
+	} {
+		require.Equal(t, want, FormatParamValue(value), "%v", value)
+	}
 }
 
 func TestResolveMemberParams(t *testing.T) {
@@ -103,11 +109,20 @@ func TestMemberSnapshotAndParamColumns(t *testing.T) {
 	require.NotEqual(t, ParamsDigest(MemberSnapshot(dynamic)), ParamsDigest(snapshot))
 }
 
-func TestCheckMemberParamsAfterDefinitionChange(t *testing.T) {
+func TestCheckSharedMemberParamsAfterDefinitionChange(t *testing.T) {
 	narrow := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\noutputs:\n  ema: ema(close, span)\n")
-	require.NoError(t, CheckMemberParams(narrow, map[string]float64{"span": 20}))
-	require.Error(t, CheckMemberParams(narrow, map[string]float64{"span": 50}))
-	require.NoError(t, CheckMemberParams(narrow, nil))
+	require.NoError(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 20}))
+	require.Error(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 50}), "超出新范围")
+
+	require.ErrorContains(t, CheckSharedMemberParams(narrow, nil), "新增了参数", "定义现在声明了参数，空的固定参数不完整")
+	require.ErrorContains(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 20, "extra": 1}), "不再声明")
+
+	wider := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\n  warmup: {type: int, min: 0, max: 100, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n")
+	require.ErrorContains(t, CheckSharedMemberParams(wider, map[string]float64{"span": 20}), "新增了参数 warmup", "定义新增参数后旧成员要重加")
+
+	plain := compiledDef(t, "Plain", "outputs:\n  o: close\n")
+	require.NoError(t, CheckSharedMemberParams(plain, nil))
+	require.ErrorContains(t, CheckSharedMemberParams(plain, map[string]float64{"span": 20}), "不再声明")
 }
 
 func TestParamsSummary(t *testing.T) {

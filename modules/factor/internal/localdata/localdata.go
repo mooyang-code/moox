@@ -59,7 +59,7 @@ type Config struct {
 var ErrChangeGap = errors.New("变更日志同步位点断档，需要执行对账")
 
 // NoDataError 表示集合里有标的在本地和 Storage 都没有任何数据（设计 6.2，决定 24）：数据源未就绪，
-// 要导入历史数据，或把这些标的从集合的标的列表里移除。
+// 要导入历史数据，或把这些标的从源数据集的标签里移除。
 type NoDataError struct {
 	Subjects []string
 }
@@ -69,7 +69,7 @@ func (e *NoDataError) Error() string {
 	if len(shown) > 5 {
 		shown = shown[:5]
 	}
-	return fmt.Sprintf("%d 个标的在本地和 Storage 都没有数据（例如 %s）：请导入历史数据，或把它们从集合的标的列表里移除", len(e.Subjects), strings.Join(shown, "、"))
+	return fmt.Sprintf("%d 个标的在本地和 Storage 都没有数据（例如 %s）：请导入历史数据，或把它们从源数据集的标签里移除", len(e.Subjects), strings.Join(shown, "、"))
 }
 
 // LookbackExceededError 表示集合里有因子的回看超过了数据源的回看数量 N。

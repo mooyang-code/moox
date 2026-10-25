@@ -43,8 +43,26 @@ func ResolveMemberParams(def FactorDef, given map[string]float64) (map[string]fl
 	return full, nil
 }
 
-// CheckMemberParams 检查成员保存的固定参数在定义上仍然合法（定义更新时用）；固定参数为空的成员不检查。
-func CheckMemberParams(def FactorDef, params map[string]float64) error {
+// CheckSharedMemberParams 检查普通任务的成员保存的固定参数在（更新后的）定义上仍然成立：保存的必须恰好是定义声明的全部参数，
+// 且类型、范围与联合约束都通过。定义新增或删去了参数时，成员的固定参数就不完整或多余了——它的取值会随定义默认值漂移，
+// 所以要求先移除再重加。策略专属任务的成员不带固定参数，不用这个检查。
+func CheckSharedMemberParams(def FactorDef, params map[string]float64) error {
+	compiled := def.Compiled()
+	if compiled == nil {
+		return fmt.Errorf("因子 %s 的定义没有编译", def.FactorID)
+	}
+	declared := make(map[string]bool, len(compiled.Params))
+	for _, param := range compiled.Params {
+		declared[param.Name] = true
+		if _, ok := params[param.Name]; !ok {
+			return fmt.Errorf("定义新增了参数 %s，成员保存的固定参数不完整；请先移除成员，再带完整参数重新添加", param.Name)
+		}
+	}
+	for name := range params {
+		if !declared[name] {
+			return fmt.Errorf("定义不再声明参数 %s，成员保存的固定参数已失效；请先移除成员，再重新添加", name)
+		}
+	}
 	if len(params) == 0 {
 		return nil
 	}

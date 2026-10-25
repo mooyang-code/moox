@@ -104,6 +104,10 @@ func TestUpdateFactorChecksMemberFixedParams(t *testing.T) {
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", renamed))
 	require.ErrorContains(t, err, "固定参数不再合法", "参数改名后成员的固定参数没有对应的声明")
 
+	extra := "params:\n  window: {type: int, min: 2, max: 30, default: 5}\n  shift: {type: int, min: 0, max: 5, default: 0}\noutputs:\n  mean: ts_mean(close, window)\n"
+	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", extra))
+	require.ErrorContains(t, err, "新增了参数 shift", "定义新增参数后，旧成员的固定参数不完整，要先移除再重加")
+
 	newDefault := "params:\n  window: {type: int, min: 2, max: 30, default: 6}\noutputs:\n  mean: ts_mean(close, window)\n"
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", newDefault))
 	require.NoError(t, err)

@@ -97,7 +97,7 @@ func (r *Runtime) checkSet(ctx context.Context, ref lifecycle.Ref) []lifecycle.C
 		checks = append(checks, lifecycle.Check{
 			Name: "长缺口", Status: lifecycle.CheckWarn,
 			Message: gapMessage(len(gaps), first),
-			Remedy:  "确认交易所是否仍有该标的的行情；不需要时把它从集合的标的列表里移除，或在因子里用 is_filled 排除填充值",
+			Remedy:  "确认交易所是否仍有该标的的行情；不需要时把它从源数据集的标签里移除，或在因子里用 is_filled 排除填充值",
 		})
 	}
 	return checks
@@ -122,7 +122,7 @@ func (r *Runtime) blockedCheck(src seriesstore.Source, setID string) lifecycle.C
 	case errors.As(err, &noData):
 		return lifecycle.Check{
 			Name: "本地数据", Status: lifecycle.CheckFail, Message: err.Error(),
-			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>；或把这些标的从集合的标的列表里移除", src.SpaceID, src.DatasetID, src.Freq),
+			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>；或把这些标的从源数据集的标签里移除", src.SpaceID, src.DatasetID, src.Freq),
 		}
 	case errors.As(err, &over):
 		return lifecycle.Check{
@@ -156,7 +156,7 @@ func (r *Runtime) autoStartSet(ref lifecycle.Ref) bool {
 
 // autoConfirmSet 报告预热中的计算任务能否自动确认进入运行：只对非专属任务（专属任务的预热阶段有“策略对预热实例发影子目标”的语义，
 // 不自动确认）。证据只放在引擎内存里：任务进入预热之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
-// 写入了结果行，且这一期的成员清单与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
+// 写入了结果行，且这一期各成员的别名、定义指纹与固定参数摘要都与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
 // 代价至多是晚一个周期转为运行；因子计算在预热阶段本来就是完整的。
 func (r *Runtime) autoConfirmSet(ref lifecycle.Ref, since time.Time) bool {
 	if ref.Kind != factorSetKind {
@@ -181,12 +181,22 @@ func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
 	if len(run.factors) != len(members) {
 		return false
 	}
-	want := make(map[string]struct{}, len(members))
+	want := make(map[string]domain.MemberDef, len(members))
 	for _, member := range members {
-		want[member.Alias] = struct{}{}
+		want[member.Alias] = member
 	}
 	for _, factor := range run.factors {
-		if _, ok := want[factor.MemberAlias]; !ok || factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.GapSubjects) > 0 {
+		member, ok := want[factor.MemberAlias]
+		if !ok || factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.GapSubjects) > 0 {
+			return false
+		}
+		// 证据要绑定成员的计算内容：同一别名删除重加成不同的定义或固定参数后，旧的一期不能算新成员的证据。
+		compiled, err := domain.CompileDefinition(member.Factor)
+		if err != nil {
+			return false
+		}
+		member.Factor = compiled
+		if factor.DefinitionHash != domain.DefinitionHash(compiled) || factor.ParamsDigest != domain.ParamsDigest(domain.MemberSnapshot(member)) {
 			return false
 		}
 		delete(want, factor.MemberAlias)

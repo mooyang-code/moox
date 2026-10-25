@@ -90,3 +90,13 @@ func TestPreviewRejectsOversizedRequestsBeforeReading(t *testing.T) {
 	require.ErrorIs(t, err, pipeline.ErrMemoryBudget)
 	require.Zero(t, source.reads, "超限时不读取")
 }
+
+// 显式指定的标的必须属于源数据集：任务的标的就是源数据集当前的标的。
+func TestPreviewRejectsSubjectsOutsideTheSourceDataset(t *testing.T) {
+	source := &fakeSource{subjects: []string{"BTC", "ETH"}}
+	def := domain.MustDefinition("mean", "mean", "outputs:\n  m: ts_mean(close, 2)\n")
+	_, err := newService(source).Preview(context.Background(), Request{Set: set, Factor: def, Subjects: []string{"BTC", "DOGE"}, Periods: 4})
+	require.ErrorContains(t, err, "DOGE")
+	require.ErrorContains(t, err, "不在源数据集")
+	require.Zero(t, source.reads, "校验在读取源数据之前")
+}

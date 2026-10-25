@@ -33,10 +33,24 @@ func TestAutoStartSetForEverySetInCatalog(t *testing.T) {
 	require.False(t, r.autoStartSet(lifecycle.Ref{Kind: "strategy_instance", ID: "fset_shared"}), "不是因子集")
 }
 
+// completeState 是成员按当前目录算完一期后的状态（定义指纹与参数摘要与目录一致）。
+func completeState(member domain.MemberDef) storageio.FactorState {
+	compiled, err := domain.CompileDefinition(member.Factor)
+	if err != nil {
+		panic(err)
+	}
+	member.Factor = compiled
+	return storageio.FactorState{
+		Member: member.Alias, FactorID: member.Factor.FactorID, Status: "complete",
+		DefinitionHash: domain.DefinitionHash(compiled), ParamsDigest: domain.ParamsDigest(domain.MemberSnapshot(member)),
+	}
+}
+
 func recordPeriod(r *Runtime, setID string, completedAt time.Time, mutate func(*pipeline.Outcome)) {
-	outcome := pipeline.Outcome{
-		Status: "complete", RowsWritten: 10,
-		Factors: []storageio.FactorState{{Member: "bias", Status: "complete"}, {Member: "cci", Status: "complete"}},
+	set, _ := r.catalog.SetByID(setID)
+	outcome := pipeline.Outcome{Status: "complete", RowsWritten: 10}
+	for _, member := range set.Members {
+		outcome.Factors = append(outcome.Factors, completeState(member))
 	}
 	if mutate != nil {
 		mutate(&outcome)
@@ -75,6 +89,8 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 		"成员清单多一个": func(o *pipeline.Outcome) {
 			o.Factors = append(o.Factors, storageio.FactorState{Member: "extra", Status: "complete"})
 		},
+		"定义指纹对不上": func(o *pipeline.Outcome) { o.Factors[0].DefinitionHash = "sha256:other" },
+		"参数摘要对不上": func(o *pipeline.Outcome) { o.Factors[0].ParamsDigest = "sha256:other" },
 	}
 	since := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
 	for name, mutate := range cases {
@@ -84,4 +100,28 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 			require.False(t, r.autoConfirmSet(setRef("fset_shared"), since))
 		})
 	}
+}
+
+// 同一别名删除重加成不同的固定参数：目录里的成员变了，预热里已经完成的一期不再是证据，要等按新成员算完的一期。
+func TestAutoConfirmEvidenceIsBoundToMemberContent(t *testing.T) {
+	cache, _ := newTestCache(t)
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutputs:\n  mean: ts_mean(close, window)\n")
+	build := func(window float64) domain.EngineSet {
+		set := engineSet("fset_shared", "dataset_a", true)
+		set.Members = []domain.MemberDef{{Alias: "pmean", Factor: def, Params: map[string]float64{"window": window}}}
+		return uncompiled(set)
+	}
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h1", Sets: []domain.EngineSet{build(5)}})
+	require.NoError(t, err)
+	r := &Runtime{catalog: cache, runs: newRunTracker()}
+	since := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
+	recordPeriod(r, "fset_shared", since.Add(time.Minute), nil)
+	require.True(t, r.autoConfirmSet(setRef("fset_shared"), since), "按当前成员算完的一期是证据")
+
+	_, err = cache.Apply(CatalogSnapshot{Hash: "h2", Sets: []domain.EngineSet{build(10)}})
+	require.NoError(t, err)
+	require.False(t, r.autoConfirmSet(setRef("fset_shared"), since), "同一别名换了固定参数，旧的一期不是新成员的证据")
+
+	recordPeriod(r, "fset_shared", since.Add(2*time.Minute), nil)
+	require.True(t, r.autoConfirmSet(setRef("fset_shared"), since), "按新成员算完一期之后才确认")
 }

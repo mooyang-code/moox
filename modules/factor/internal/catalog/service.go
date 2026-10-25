@@ -291,9 +291,11 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
-		// 成员保存的固定参数在新定义上必须仍然合法（参数名仍声明、类型与范围仍成立）。
-		if err := domain.CheckMemberParams(factor, usage.Params); err != nil {
-			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q 的固定参数不再合法：%w", usage.SetID, usage.MemberAlias, err)
+		// 普通任务的成员保存的固定参数在新定义上必须恰好是声明的全部参数且仍然合法；策略专属任务的成员不带固定参数。
+		if set.OwnerInstanceID == "" {
+			if err := domain.CheckSharedMemberParams(factor, usage.Params); err != nil {
+				return domain.FactorDef{}, fmt.Errorf("factor set %q member %q 的固定参数不再合法：%w", usage.SetID, usage.MemberAlias, err)
+			}
 		}
 		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor, Params: usage.Params}); err != nil {
 			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q: %w", usage.SetID, usage.MemberAlias, err)
