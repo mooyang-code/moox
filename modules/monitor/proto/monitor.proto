@@ -491,6 +491,37 @@ message GetDoctorContextRsp {
   repeated DoctorObservation missing_observations = 12;
 }
 
+// AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：探测、入库、告警评估与记录照常，到期自动恢复。
+message AlertMuteState {
+  bool muted = 1;
+  // since 与 expires_at 为 RFC3339 UTC；未屏蔽时为空。
+  string since = 2;
+  string expires_at = 3;
+  string reason = 4;
+  string by = 5;
+}
+// MuteAlertsReq 屏蔽告警推送一段时间，用于初始数据导入等会让数据链路告警暂时失真的操作。
+message MuteAlertsReq {
+  // duration_seconds 取 1～86400（最长 24 小时，防止忘记恢复）。
+  uint32 duration_seconds = 1;
+  string reason = 2;
+}
+message MuteAlertsRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+// UnmuteAlertsReq 提前结束屏蔽；结束时补发一条汇总（仍未恢复的告警，以及屏蔽期间触发后又恢复的）。
+message UnmuteAlertsReq {}
+message UnmuteAlertsRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+message GetAlertMuteReq {}
+message GetAlertMuteRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
   rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
@@ -501,4 +532,7 @@ service MonitorMgr {
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
   rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
+  rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);
+  rpc UnmuteAlerts(UnmuteAlertsReq) returns (UnmuteAlertsRsp);
+  rpc GetAlertMute(GetAlertMuteReq) returns (GetAlertMuteRsp);
 }

@@ -18,7 +18,7 @@ func newMonitorResetEnv(t *testing.T) (*lifecycle.Controller, *store.Store, *Run
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.SQL()))
 	t.Cleanup(func() { _ = db.Close() })
-	life, err := newMonitorLifecycle(db, dbPath)
+	life, err := newMonitorLifecycle(db, dbPath, nil)
 	require.NoError(t, err)
 	life.Refresh(context.Background())
 	runtime := &Runtime{Store: db, Repositories: db.Repositories()}

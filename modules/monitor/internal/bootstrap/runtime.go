@@ -36,6 +36,8 @@ type Runtime struct {
 	klineFreshness *monmetrics.KlineFreshnessEvaluator
 	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
 	life atomic.Pointer[lifecycle.Controller]
+	// mutes 记录进入静默的时间，静默结束时据此补发汇总。
+	mutes muteTracker
 
 	ObservabilityIngestReady atomic.Bool
 	MetricsReporterReady     atomic.Bool

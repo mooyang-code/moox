@@ -544,6 +544,9 @@ components:
           - QueryPipelineArrivalHistory
           - GetDoctorContext
           - GetHostPolicy
+          - MuteAlerts
+          - UnmuteAlerts
+          - GetAlertMute
         read_only_methods:
           - GetHealthOverview
           - ListNotificationChannels
@@ -552,6 +555,7 @@ components:
           - QueryPipelineArrivalHistory
           - GetDoctorContext
           - GetHostPolicy
+          - GetAlertMute
         acl:
           - methods:
               - GetHealthOverview
@@ -562,8 +566,14 @@ components:
               - QueryHostMetricHistory
               - QueryPipelineArrivalHistory
               - GetDoctorContext
+              - GetAlertMute
             callers:
               - console
+              - moox-cli
+          - methods:
+              - MuteAlerts
+              - UnmuteAlerts
+            callers:
               - moox-cli
           - methods:
               - GetHostPolicy

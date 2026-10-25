@@ -24,7 +24,7 @@ func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, r
 	var life *lifecycle.Controller
 	if runtime != nil && runtime.Store != nil {
 		var err error
-		if life, err = newMonitorLifecycle(runtime.Store, cfg.Database.Path); err != nil {
+		if life, err = newMonitorLifecycle(runtime.Store, cfg.Database.Path, runtime.onLifecycleChange); err != nil {
 			return fmt.Errorf("monitor lifecycle state failed to open: %w", err)
 		}
 		runtime.life.Store(life)
