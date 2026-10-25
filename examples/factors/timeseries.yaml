@@ -56,3 +56,14 @@
   spec: |
     outputs:
       ema50000: ema(close, 50000, 50000)
+
+# EMA20 用 5 万根预热：ema(x, n, k) 的 k 是预热总根数（含起点），窗口里最老的一根收盘价作为递推初值，
+# 结果与「从 5 万根之前开始、按 α=2/21 逐根递推」一致。共享因子集的成员只用默认参数，所以把预热根数写死在表达式里；
+# 需要数据源的回看数量 N ≥ 50000（引擎 window.lookback）。
+- factor_id: Ema20Warmup50000
+  name: EMA20（5 万根预热）
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    outputs:
+      ema20_warmup50000: ema(close, 20, 50000)

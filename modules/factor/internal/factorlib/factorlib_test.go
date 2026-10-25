@@ -19,7 +19,7 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 			// 常用技术指标（common.yaml）：EMA、MACD、RSI 带指数衰减，回看按截断到起点权重低于 1e-9 的根数推导。
 			"Ma": 120, "Ema": 50000, "Macd": 362, "Rsi": 2478, "Roc": 121, "Boll": 120, "Atr": 121, "ReturnStd": 121, "Vwap": 120,
 		},
-		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405, "Ema50000": 50000},
+		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405, "Ema50000": 50000, "Ema20Warmup50000": 50000},
 	}
 	for dir, lookbacks := range cases {
 		entries, err := LoadDir(dir)
