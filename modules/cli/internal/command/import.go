@@ -44,6 +44,11 @@ type importOptions struct {
 	Engine               string
 	JobDB                string
 	JobID                string
+	// TailRows 与 Pack、MinRows 见初始数据导入执行计划：Storage 只写每个文件最后 TailRows 行（且在保留期内）、
+	// 按导入包清单预检、要求每个文件至少 MinRows 行。
+	TailRows int
+	Pack     string
+	MinRows  int
 }
 
 var importCmd = &cobra.Command{
@@ -86,6 +91,9 @@ func init() {
 	f.StringVar(&importFlags.Engine, "engine", "http://127.0.0.1:11417", "因子引擎健康检查地址（本地写入接口挂在它上面，可以是 SSH 隧道的本地端口）")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
+	f.IntVar(&importFlags.TailRows, "tail-rows", 0, "Storage 目标每个文件只写最后 N 行，且跳过早于保留期的行；因子机本地目标仍写全量（初始数据导入用，0 表示不限制）")
+	f.StringVar(&importFlags.Pack, "manifest-pack", "", "导入包目录（含 manifest.json）：空间、数据集、频率、series_tag 与文件清单取自清单，并按清单预检；--dry-run 只预检")
+	f.IntVar(&importFlags.MinRows, "min-rows", 0, "预检要求每个文件至少这么多行（该数据源的回看数量，保证因子窗口凑得满）")
 }
 
 // localBounds 取标的在因子机本地的边界（补更早的历史时批要从后往前写）。
@@ -105,6 +113,13 @@ func localBounds(engine *engineclient.Client, opts importOptions) func(ctx conte
 }
 
 func runImportCommand(ctx context.Context, opts importOptions) error {
+	var pack *importPack
+	if opts.Pack != "" {
+		var err error
+		if pack, err = applyImportPack(&opts); err != nil {
+			return err
+		}
+	}
 	step, err := importStep(opts.Freq)
 	if err != nil {
 		return err
@@ -175,27 +190,90 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	if wantFactor && !opts.DryRun {
 		targets = append(targets, &target.Factor{Endpoint: opts.Engine, AuthVersion: engine.AuthVersion, AccessKey: engine.AccessKey, SecretKey: engine.SecretKey})
 	}
-	if wantStorage && strings.EqualFold(strings.TrimSpace(opts.Format), "csv") {
-		if retention, ok := loadImportRetention(opts.Manifest, opts.Space, opts.Freq); ok {
-			warnImportRetention(os.Stderr, opts.Paths, opts.TimeColumn, opts.Space, opts.Freq, retention, time.Now())
-		}
+	retention, retentionKnown := loadImportRetention(opts.Manifest, opts.Space, opts.Freq)
+	limits := importPackLimits{Now: time.Now().UTC(), Retention: retention, RetentionKnown: retentionKnown, MinRows: opts.MinRows}
+	// 用了 --tail-rows 的 Storage 目标只写保留期内的尾部，不会有“写进去又被清掉”的行，不需要保留期警告。
+	if wantStorage && opts.TailRows == 0 && strings.EqualFold(strings.TrimSpace(opts.Format), "csv") && retentionKnown {
+		warnImportRetention(os.Stderr, opts.Paths, opts.TimeColumn, opts.Space, opts.Freq, retention, time.Now())
 	}
 	cps, err := checkpoint.Open(opts.JobDB)
 	if err != nil {
 		return err
 	}
 	defer cps.Close()
-	summary, runErr := runner.Run(ctx, runner.Request{
+	request := runner.Request{
 		Space: opts.Space, Dataset: opts.Dataset, Freq: opts.Freq, Paths: opts.Paths, Format: opts.Format, Subject: opts.Subject,
 		TimeColumn: opts.TimeColumn, SeriesTag: opts.SeriesTag, BatchRows: opts.BatchRows, AllowMissing: opts.AllowMissing,
 		Recalc: opts.Recalc, DryRun: opts.DryRun, JobID: opts.JobID, Step: step,
-	}, meta, targets, cps)
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(summary); err != nil && runErr == nil {
+		TailRows: opts.TailRows, TailCutoff: limits.tailCutoff(),
+	}
+	if pack != nil {
+		// 导入包先整体预检（校验全部文件、核对清单与硬约束），通过了才写；--dry-run 到这里为止。
+		preflight := request
+		preflight.DryRun = true
+		checked, err := runner.Run(ctx, preflight, meta, nil, nil)
+		problems := checkImportPackFiles(pack)
+		if err == nil {
+			problems = append(problems, checkImportPack(pack, checked, limits)...)
+		}
+		if err != nil || len(problems) > 0 {
+			return importPackPreflightError(err, problems)
+		}
+		if opts.DryRun {
+			return writeImportSummary(checked)
+		}
+	}
+	summary, runErr := runner.Run(ctx, request, meta, targets, cps)
+	if err := writeImportSummary(summary); err != nil && runErr == nil {
 		runErr = err
 	}
 	return runErr
+}
+
+func writeImportSummary(summary runner.Summary) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(summary)
+}
+
+// applyImportPack 从导入包清单补全空间、数据集、频率、series_tag 与文件清单；命令行同时给了不一致的值就拒绝。
+func applyImportPack(opts *importOptions) (*importPack, error) {
+	pack, err := loadImportPack(opts.Pack)
+	if err != nil {
+		return nil, err
+	}
+	for _, field := range []struct {
+		name, flag, manifest string
+		target               *string
+	}{
+		{"space", opts.Space, pack.SpaceID, &opts.Space},
+		{"dataset", opts.Dataset, pack.DatasetID, &opts.Dataset},
+		{"freq", opts.Freq, pack.Freq, &opts.Freq},
+		{"series-tag", opts.SeriesTag, pack.SeriesTag, &opts.SeriesTag},
+	} {
+		if field.flag != "" && field.flag != field.manifest {
+			return nil, fmt.Errorf("--%s=%q 与导入包清单的 %q 不一致", field.name, field.flag, field.manifest)
+		}
+		*field.target = field.manifest
+	}
+	if len(opts.Paths) > 0 || opts.Subject != "" {
+		return nil, errors.New("用了 --manifest-pack 就不要再指定 --path 或 --subject：文件清单取自导入包")
+	}
+	opts.Paths = pack.paths()
+	return pack, nil
+}
+
+func importPackPreflightError(runErr error, problems []string) error {
+	var lines []string
+	if runErr != nil {
+		lines = append(lines, runErr.Error())
+	}
+	lines = append(lines, problems...)
+	shown := lines
+	if len(shown) > 20 {
+		shown = append(append([]string(nil), shown[:20]...), fmt.Sprintf("……另有 %d 项", len(lines)-20))
+	}
+	return fmt.Errorf("导入包预检未通过（%d 项，没有写入任何内容）：\n  %s", len(lines), strings.Join(shown, "\n  "))
 }
 
 func importTargets(names []string) (storage, factor bool, err error) {
@@ -285,6 +363,9 @@ type importStorageTarget struct {
 }
 
 func (t *importStorageTarget) Name() string { return "storage" }
+
+// TailOnly：Storage 只放近期窗口，--tail-rows 只对它生效；因子机本地写全量。
+func (t *importStorageTarget) TailOnly() bool { return true }
 
 func (t *importStorageTarget) Write(ctx context.Context, c runner.Chunk) error {
 	t.written = true
