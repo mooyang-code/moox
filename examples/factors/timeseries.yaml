@@ -46,3 +46,13 @@
       n: {type: int, min: 5, max: 20, default: 20}
     outputs:
       sma: sma(close, n, 1)
+
+# 显式截断的长周期 EMA：ema(x, n, k) 只用最近 k 根（k = n = 50000 时起点权重约 13%，是近似值），
+# 回看恰为 50000 根，用来观察单期 5 万根计算的耗时；需要数据源的回看数量 N ≥ 50000（引擎 window.lookback）。
+- factor_id: Ema50000
+  name: EMA(50000)
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    outputs:
+      ema50000: ema(close, 50000, 50000)

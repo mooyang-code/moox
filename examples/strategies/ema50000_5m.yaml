@@ -1,0 +1,24 @@
+# 观察用策略：声明 EMA(50000) 因子，启用实例时自动建立私有因子集并每期计算，用来观察单期 5 万根计算的耗时。
+# 绑定 5m 合约 K 线 View；不挂账户（观察实例）。
+name: ema50000_5m
+bar: 5m
+
+factors:
+  Ema50000: {factor: Ema50000}
+
+universe:
+  min_age_bars: 100
+
+rules:
+  - id: above_ema
+    name: 站上 EMA(50000) 且偏离最大
+    type: rank
+    filter: "ema50000 > 0 && close > ema50000"
+    score: "rank(close / ema50000 - 1)"
+    select: {top: 10}
+    weight: {total: 1, method: equal, cap: 0.2}
+
+portfolio:
+  leverage: 1
+  min_universe: 5
+  max_missing: 0.2
