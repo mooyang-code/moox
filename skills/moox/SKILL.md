@@ -128,6 +128,13 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 向用户汇报差异并在用户确认后写入（`moox-cli setup factors` 或控制台），最后做写入后验证。
 不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
 
+### Initial Historical Data Import
+
+用户要把一批历史 K 线（CSV）导入某个数据源，让因子有完整的长回看时，读 [`references/initial-import.md`](references/initial-import.md)，按其中的步骤逐步执行：
+预检导入包（`moox-cli import --manifest-pack … --dry-run`）、核对 `series_tag`、屏蔽告警推送（`moox-cli monitor mute`）、补缺口、
+rsync 到因子机后并发写因子机本地存储（全量）、操作机写 Storage 尾部窗口（`--tail-rows`）、等 View 追平、只比边界与行数校验、解除屏蔽、最后启用（启用不自动补算历史）。
+不要为了追平 View 去重启服务或重建 View（需要用户确认的破坏性运维）；导入包不合格时把预检原文交给用户整理，不要自己改包。
+
 ### Tencent Cloud Firewall
 
 Open the ports MooX needs on every Tencent host with the CLI; it derives the ports from the
