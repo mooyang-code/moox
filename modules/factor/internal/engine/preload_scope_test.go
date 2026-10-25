@@ -135,3 +135,27 @@ func TestPreloaderRepreparesWhenDatasetSubjectsChange(t *testing.T) {
 	p.once(ctx)
 	require.Len(t, data.calls, 3)
 }
+
+type failingSubjects struct{}
+
+func (failingSubjects) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (failingSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("storage unavailable")
+}
+
+// 诊断入口直接写正式结果：显式指定的标的必须属于源数据集；没有指定标的时不查询；查询失败要报错。
+func TestCheckSubjectsInDataset(t *testing.T) {
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
+	source := &listSubjects{subjects: []string{"BTC", "ETH"}}
+	ctx := context.Background()
+
+	require.NoError(t, checkSubjectsInDataset(ctx, source, set, nil), "没有指定标的：取源数据集全部，不需要核对")
+	require.NoError(t, checkSubjectsInDataset(ctx, source, set, []string{"ETH", "BTC"}))
+	err := checkSubjectsInDataset(ctx, source, set, []string{"BTC", "DOGE"})
+	require.ErrorContains(t, err, "DOGE")
+	require.ErrorContains(t, err, "dataset_a")
+	require.ErrorContains(t, checkSubjectsInDataset(ctx, failingSubjects{}, set, []string{"BTC"}), "storage unavailable")
+	require.NoError(t, checkSubjectsInDataset(ctx, failingSubjects{}, set, nil), "不指定标的时不会去查询")
+}

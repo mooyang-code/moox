@@ -169,7 +169,7 @@ func (s *Service) FreezeParams(ctx context.Context, setIDs []string, period time
 		}
 		freezeMembers := make([]store.FreezeMember, 0, len(members))
 		for _, member := range members {
-			freezeMembers = append(freezeMembers, store.FreezeMember{Alias: member.MemberAlias, Defaults: domain.MemberSnapshot(member.Def())})
+			freezeMembers = append(freezeMembers, store.FreezeMember{Alias: member.MemberAlias, Defaults: domain.MemberSnapshot(member.Def()), Fixed: member.Def().FixedParams()})
 		}
 		freezes, err := s.db.FreezeParams(ctx, set.SetID, period.UTC(), previous, freezeMembers)
 		if err != nil {

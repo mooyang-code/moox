@@ -163,8 +163,12 @@ func putSnapshot(tx *gorm.DB, snapshot domain.ParamSnapshot) error {
 
 // FreezeMember 是冻结一个成员时需要的信息：别名与它的默认快照（从未有过冻结记录时使用）。
 type FreezeMember struct {
-	Alias    string
+	Alias string
+	// Defaults 是没有请求时这一期用的快照：定义的默认值，或成员的固定参数（Fixed）。
 	Defaults domain.ParamSnapshot
+	// Fixed 为真表示 Defaults 是成员的固定参数：不沿用上一期的冻结快照，只有与当前固定值相同的旧快照才可延长，
+	// 同一别名删除重加成不同的固定参数后，不能继续用旧值。
+	Fixed bool
 }
 
 // FreezeParams 冻结集合在 period 这一期的参数并返回每个成员的冻结结果；previous 是网格上的上一期，用于判断能否
@@ -233,6 +237,9 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		}
 		// 成员的参数声明在两期之间变过（增删参数），旧快照缺参数或多参数，不能再沿用：改回当前声明的默认值。
 		if ok && !sameParamNames(last.Snapshot, member.Defaults) {
+			ok = false
+		}
+		if ok && member.Fixed && last.Snapshot.Hash() != member.Defaults.Hash() {
 			ok = false
 		}
 		if ok {

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -141,4 +142,36 @@ func TestFixedParamMembersWriteNoParamColumns(t *testing.T) {
 	private, err := svc.EnsureInstanceSet(ctx, instanceRequest(InstanceMember{Alias: "fast", FactorID: "pmean"}))
 	require.NoError(t, err)
 	require.Contains(t, resultColumns(meta, private.Set.SetID), "fast__window")
+}
+
+// 共享任务的成员每期按当前固定值冻结：同一别名移除后以不同的固定值重加，下一期用新值，不沿用旧的冻结快照。
+func TestFreezeParamsFollowsReaddedFixedMember(t *testing.T) {
+	db := openCatalogStore(t)
+	svc := newReadyService(t, db, newMetadataFake())
+	ctx := context.Background()
+	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
+	require.NoError(t, err)
+	enable := func(window float64) {
+		_, err := svc.AddFactorToSet(ctx, testSetID(), "m", "pmean", map[string]float64{"window": window})
+		require.NoError(t, err)
+		_, err = svc.SetFactorMemberStatus(ctx, testSetID(), "m", domain.MemberStatusEnabled)
+		require.NoError(t, err)
+	}
+	windowOf := func(at time.Time) float64 {
+		freezes, err := svc.FreezeParams(ctx, []string{testSetID()}, at)
+		require.NoError(t, err)
+		require.Len(t, freezes[testSetID()], 1)
+		return freezes[testSetID()][0].Snapshot.Value("window", "BTC")
+	}
+
+	base := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	enable(10)
+	require.Equal(t, 10.0, windowOf(base))
+	require.Equal(t, 10.0, windowOf(base.Add(time.Minute)))
+
+	_, err = svc.SetFactorMemberStatus(ctx, testSetID(), "m", domain.MemberStatusDisabled)
+	require.NoError(t, err)
+	require.NoError(t, svc.RemoveFactorFromSet(ctx, testSetID(), "m"))
+	enable(7)
+	require.Equal(t, 7.0, windowOf(base.Add(2*time.Minute)), "同一别名换了固定值，下一期按新值冻结")
 }

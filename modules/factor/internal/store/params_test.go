@@ -210,3 +210,36 @@ func TestFreezeAfterOfflineKeepsDefaultSourceForNeverRequestedMember(t *testing.
 	require.Equal(t, domain.ParamsRequested, freeze(t, s, period(3)).Source)
 	require.Equal(t, domain.ParamsCarried, freeze(t, s, period(4)).Source, "提交过之后的沿用才算 carried")
 }
+
+// 带固定参数的成员：同一别名删除重加成不同的固定值后，不能沿用旧的冻结快照，要按当前的固定值冻结。
+func TestFreezeFixedMemberDoesNotCarryOldFixedValues(t *testing.T) {
+	s := openTestStore(t)
+	freezeFixed := func(at time.Time, window float64) domain.ParamFreeze {
+		freezes, err := s.FreezeParams(context.Background(), "set", at, at.Add(-time.Minute),
+			[]FreezeMember{{Alias: "fixed", Defaults: snapshotOf(window), Fixed: true}})
+		require.NoError(t, err)
+		require.Len(t, freezes, 1)
+		return freezes[0]
+	}
+	first := freezeFixed(period(0), 5)
+	require.Equal(t, 5.0, first.Snapshot.Value("window", "BTC"))
+	require.Equal(t, domain.ParamsDefault, first.Source)
+
+	same := freezeFixed(period(1), 5)
+	require.Equal(t, 5.0, same.Snapshot.Value("window", "BTC"))
+	require.Equal(t, first.SnapshotHash, same.SnapshotHash, "固定值没变，延长同一个区间")
+
+	changed := freezeFixed(period(2), 10)
+	require.Equal(t, 10.0, changed.Snapshot.Value("window", "BTC"), "同一别名换了固定值，不沿用旧快照")
+	require.Equal(t, domain.ParamsDefault, changed.Source)
+
+	// 对比：不带固定参数的成员沿用上一期（参数由写入方提交，默认值变化不影响已沿用的快照）。
+	freezes, err := s.FreezeParams(context.Background(), "set", period(0), period(0).Add(-time.Minute),
+		[]FreezeMember{{Alias: "dynamic", Defaults: snapshotOf(5)}})
+	require.NoError(t, err)
+	require.Equal(t, 5.0, freezes[0].Snapshot.Value("window", "BTC"))
+	freezes, err = s.FreezeParams(context.Background(), "set", period(1), period(0),
+		[]FreezeMember{{Alias: "dynamic", Defaults: snapshotOf(10)}})
+	require.NoError(t, err)
+	require.Equal(t, 5.0, freezes[0].Snapshot.Value("window", "BTC"), "非固定成员仍沿用上一期的快照")
+}
