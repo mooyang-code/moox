@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
@@ -26,8 +26,6 @@ type setupFactorSet struct {
 	SpaceID         string
 	SourceDatasetID string
 	Freq            string
-	SubjectMode     string
-	Subjects        []string
 }
 
 // setupFactorDefinition is the global factor contract read from a YAML factor
@@ -86,9 +84,12 @@ func readFactorLibrary(path string) (map[string]libraryEntry, error) {
 	return library, nil
 }
 
+// setupFactorMember 是任务里的一个成员。Alias 为空时由服务端按参数生成；Params 是配置里给出的固定参数（没给的取定义的默认值）。
 type setupFactorMember struct {
 	SetID    string
 	FactorID string
+	Alias    string
+	Params   map[string]float64
 	Status   string
 }
 
@@ -155,7 +156,6 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		plan.Sets = append(plan.Sets, setupFactorSet{
 			SetID: factorSetID(set.SourceDatasetID, set.Freq), SpaceID: strings.TrimSpace(set.SpaceID),
 			SourceDatasetID: strings.TrimSpace(set.SourceDatasetID), Freq: strings.TrimSpace(set.Freq),
-			SubjectMode: defaultString(strings.TrimSpace(set.SubjectMode), "all"), Subjects: cleanStrings(set.Subjects),
 		})
 	}
 	sort.Slice(plan.Sets, func(i, j int) bool { return plan.Sets[i].SetID < plan.Sets[j].SetID })
@@ -220,18 +220,22 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 			return plan, fmt.Errorf("factors.members[%d].status must be enabled or disabled", index)
 		}
 		setID := factorSetID(datasetID, freq)
-		key := setID + "\x00" + factorID
+		alias := strings.TrimSpace(member.MemberAlias)
+		key := setID + "\x00" + factorID + "\x00" + alias + "\x00" + paramsKey(member.Params)
 		if _, dup := memberSeen[key]; dup {
-			return plan, fmt.Errorf("factor %q is a member of set %q more than once", factorID, setID)
+			return plan, fmt.Errorf("factor %q is a member of set %q more than once with the same alias and params", factorID, setID)
 		}
 		memberSeen[key] = struct{}{}
-		plan.Members = append(plan.Members, setupFactorMember{SetID: setID, FactorID: factorID, Status: status})
+		plan.Members = append(plan.Members, setupFactorMember{SetID: setID, FactorID: factorID, Alias: alias, Params: member.Params, Status: status})
 	}
-	sort.Slice(plan.Members, func(i, j int) bool {
+	sort.SliceStable(plan.Members, func(i, j int) bool {
 		if plan.Members[i].SetID != plan.Members[j].SetID {
 			return plan.Members[i].SetID < plan.Members[j].SetID
 		}
-		return plan.Members[i].FactorID < plan.Members[j].FactorID
+		if plan.Members[i].FactorID != plan.Members[j].FactorID {
+			return plan.Members[i].FactorID < plan.Members[j].FactorID
+		}
+		return plan.Members[i].Alias < plan.Members[j].Alias
 	})
 	// 保留期必须大于因子的最大回看根数：两处配置是关联的，初始化时核对。
 	errs, warnings := factorRetentionFindings(manifest.StoragePolicy(), plan)
@@ -260,23 +264,6 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func cleanStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }
 
 func pathWithin(root, path string) bool {
@@ -314,13 +301,22 @@ type factorAPIDef struct {
 	CategoryID           string `json:"category_id"`
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
 	DefinitionHash       string `json:"definition_hash"`
+	// Params 是定义声明的可调参数；默认值用来补全成员的固定参数，判断配置里的成员是否已经存在。
+	Params []factorAPIParam `json:"params"`
+}
+
+// factorAPIParam mirrors the FactorParamDecl proto JSON (only what the CLI reads).
+type factorAPIParam struct {
+	Name         string  `json:"name"`
+	DefaultValue float64 `json:"default_value"`
 }
 
 // factorAPIUsage mirrors the FactorUsage proto JSON.
 type factorAPIUsage struct {
-	SetID       string `json:"set_id"`
-	MemberAlias string `json:"member_alias"`
-	Status      string `json:"status"`
+	SetID       string             `json:"set_id"`
+	MemberAlias string             `json:"member_alias"`
+	Status      string             `json:"status"`
+	Params      map[string]float64 `json:"params"`
 }
 
 // factorAPIInfo mirrors the FactorInfo proto JSON (ListFactors element).
@@ -341,14 +337,16 @@ type factorAPIResponse struct {
 	Usages    []factorAPIUsage `json:"usages"`
 	Factors   []factorAPIInfo  `json:"factors"`
 	FactorSet struct {
-		SetID           string   `json:"set_id"`
-		SpaceID         string   `json:"space_id"`
-		SourceDatasetID string   `json:"source_dataset_id"`
-		Freq            string   `json:"freq"`
-		SubjectMode     string   `json:"subject_mode"`
-		Subjects        []string `json:"subjects"`
-		Status          string   `json:"status"`
+		SetID           string `json:"set_id"`
+		SpaceID         string `json:"space_id"`
+		SourceDatasetID string `json:"source_dataset_id"`
+		Freq            string `json:"freq"`
+		Status          string `json:"status"`
 	} `json:"factor_set"`
+	// Member 是 AddFactorToSet 返回的成员（别名可能由服务端按参数生成）。
+	Member struct {
+		MemberAlias string `json:"member_alias"`
+	} `json:"member"`
 }
 
 func (r factorAPIResponse) err(method string) error {
@@ -385,7 +383,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			create := factorAPIResponse{}
 			return r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
 				"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
-				"freq": set.Freq, "subject_mode": set.SubjectMode, "subjects": set.Subjects, "status": "pending",
+				"freq": set.Freq, "status": "pending",
 			}}, &create)
 		}
 		if err != nil {
@@ -403,14 +401,6 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			// resumes provisioning its result Dataset.
 			if createErr := createSet(); createErr != nil {
 				return summary, createErr
-			}
-		}
-		if get.FactorSet.SubjectMode != set.SubjectMode || !slices.Equal(cleanStrings(get.FactorSet.Subjects), set.Subjects) {
-			updated := factorAPIResponse{}
-			if updateErr := r.call(ctx, "UpdateFactorSet", map[string]any{
-				"set_id": set.SetID, "subject_mode": set.SubjectMode, "subjects": set.Subjects,
-			}, &updated); updateErr != nil {
-				return summary, updateErr
 			}
 		}
 	}
@@ -431,17 +421,18 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			return summary, err
 		}
 	}
-	// usages[factor_id][set_id] is the current membership status, kept in step
-	// with the calls below so one GetFactor per definition is enough.
-	// 初始化的成员别名就是 factor_id（共享集合不需要别名）；同一定义以其他别名加入的成员不算。
-	usages := make(map[string]map[string]string, len(plan.Definitions))
+	// 成员的身份是（任务, 别名）：同一个定义可以用不同的固定参数多次加入同一个任务。
+	// usages[factor_id] 是该定义现有的全部成员（任何别名），随下面的调用同步更新；defaults 是定义声明的参数默认值，
+	// 用来把配置里给出的参数补全成完整参数，再与现有成员的固定参数比较。
+	usages := make(map[string][]*setupUsage, len(plan.Definitions))
+	defaults := make(map[string]map[string]float64, len(plan.Definitions))
 	for _, def := range plan.Definitions {
 		get := factorAPIResponse{}
 		err := r.call(ctx, "GetFactor", map[string]any{"factor_id": def.FactorID}, &get)
 		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
-		usages[def.FactorID] = map[string]string{}
+		usages[def.FactorID] = nil
 		if err != nil {
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
@@ -450,6 +441,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
+			defaults[def.FactorID] = paramDefaults(create.Factor)
 			summary.Imported++
 			continue
 		}
@@ -473,42 +465,131 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 				return summary, err
 			}
 		}
+		defaults[def.FactorID] = paramDefaults(get.Factor)
 		for _, usage := range get.Usages {
-			if usage.MemberAlias == "" || usage.MemberAlias == def.FactorID {
-				usages[def.FactorID][usage.SetID] = usage.Status
-			}
+			usages[def.FactorID] = append(usages[def.FactorID], &setupUsage{SetID: usage.SetID, Alias: usage.MemberAlias, Status: usage.Status, Params: usage.Params})
 		}
 		summary.Unchanged++
 	}
-	for _, member := range plan.Members {
+	// 先把缺的成员都加上，记下每个计划成员对应的现有成员，再统一设置状态。
+	matched := make([]*setupUsage, len(plan.Members))
+	for index, member := range plan.Members {
 		if _, known := usages[member.FactorID]; !known {
 			return summary, fmt.Errorf("member references factor %q that is not defined", member.FactorID)
 		}
-		if _, exists := usages[member.FactorID][member.SetID]; exists {
+		want := completeParams(defaults[member.FactorID], member.Params)
+		var found *setupUsage
+		for _, usage := range usages[member.FactorID] {
+			if usage.SetID != member.SetID {
+				continue
+			}
+			if member.Alias != "" {
+				if usage.Alias == member.Alias {
+					found = usage
+					break
+				}
+				continue
+			}
+			if sameParamValues(usage.Params, want) {
+				found = usage
+				break
+			}
+		}
+		if found != nil && member.Alias != "" && !sameParamValues(found.Params, want) {
+			return summary, fmt.Errorf("member %q of set %q already exists with different params; params are fixed once a member is added, use another alias", member.Alias, member.SetID)
+		}
+		if found != nil {
+			matched[index] = found
 			continue
 		}
 		added := factorAPIResponse{}
-		if err := r.call(ctx, "AddFactorToSet", map[string]any{"set_id": member.SetID, "factor_id": member.FactorID, "member_alias": member.FactorID}, &added); err != nil {
+		body := map[string]any{"set_id": member.SetID, "factor_id": member.FactorID, "member_alias": member.Alias}
+		if len(member.Params) > 0 {
+			body["params"] = member.Params
+		}
+		if err := r.call(ctx, "AddFactorToSet", body, &added); err != nil {
 			return summary, err
 		}
-		usages[member.FactorID][member.SetID] = "disabled"
+		alias := added.Member.MemberAlias
+		if alias == "" {
+			return summary, fmt.Errorf("AddFactorToSet returned no member alias for factor %q in set %q", member.FactorID, member.SetID)
+		}
+		found = &setupUsage{SetID: member.SetID, Alias: alias, Status: "disabled", Params: want}
+		usages[member.FactorID] = append(usages[member.FactorID], found)
+		matched[index] = found
 		summary.MembersAdded++
 	}
-	for _, member := range plan.Members {
-		if usages[member.FactorID][member.SetID] == member.Status {
+	for index, member := range plan.Members {
+		usage := matched[index]
+		if usage.Status == member.Status {
 			summary.MembersUnchanged++
 			continue
 		}
 		status := factorAPIResponse{}
 		if err := r.call(ctx, "SetFactorMemberStatus", map[string]any{
-			"set_id": member.SetID, "member_alias": member.FactorID, "status": member.Status,
+			"set_id": member.SetID, "member_alias": usage.Alias, "status": member.Status,
 		}, &status); err != nil {
 			return summary, err
 		}
-		usages[member.FactorID][member.SetID] = member.Status
+		usage.Status = member.Status
 		summary.MembersEnabled++
 	}
 	return summary, nil
+}
+
+// setupUsage 是一个现有成员：任务、别名、状态与固定参数。
+type setupUsage struct {
+	SetID  string
+	Alias  string
+	Status string
+	Params map[string]float64
+}
+
+// paramDefaults 取定义声明的参数默认值。
+func paramDefaults(def factorAPIDef) map[string]float64 {
+	out := make(map[string]float64, len(def.Params))
+	for _, param := range def.Params {
+		out[param.Name] = param.DefaultValue
+	}
+	return out
+}
+
+// completeParams 把配置里给出的参数用定义的默认值补全成完整参数。
+func completeParams(defaults, given map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(defaults))
+	for name, value := range defaults {
+		out[name] = value
+	}
+	for name, value := range given {
+		out[name] = value
+	}
+	return out
+}
+
+func sameParamValues(left, right map[string]float64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, value := range left {
+		if other, ok := right[name]; !ok || other != value {
+			return false
+		}
+	}
+	return true
+}
+
+// paramsKey 把固定参数写成键有序的文本，用于计划里判重。
+func paramsKey(params map[string]float64) string {
+	names := make([]string, 0, len(params))
+	for name := range params {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		b.WriteString(name + "=" + strconv.FormatFloat(params[name], 'f', -1, 64) + ";")
+	}
+	return b.String()
 }
 
 func factorAPINotFound(response factorAPIResponse) bool {

@@ -367,8 +367,90 @@ factor_id = "bias"
 	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
 	require.Len(t, snapshot.Manifest.Factors.Members, 1)
 	assert.Equal(t, "bias", snapshot.Manifest.Factors.Definitions[0].FactorID)
-	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
 	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Members[0].Status)
+}
+
+const factorSetupParamsBody = `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+
+[[factors.definitions]]
+factor_id = "Ema"
+file = "common.yaml"
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Ema"
+
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Ema"
+params = { span = 20, warmup = 50000 }
+`
+
+// 同一个因子可以用不同的固定参数多次加入同一个任务，别名缺省由服务端生成。
+func TestFactorSetupParsesMembersWithFixedParams(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest+factorSetupParamsBody, 0o600), root)
+	require.NoError(t, err)
+	members := snapshot.Manifest.Factors.Members
+	require.Len(t, members, 2)
+	assert.Empty(t, members[0].Params)
+	assert.Equal(t, map[string]float64{"span": 20, "warmup": 50000}, members[1].Params)
+	assert.Empty(t, members[1].MemberAlias)
+}
+
+func TestFactorSetupRejectsDuplicateMemberWithSameParams(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + factorSetupParamsBody + `
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Ema"
+params = { warmup = 50000, span = 20 }
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "more than once")
+}
+
+func TestFactorSetupRejectsBadMemberAlias(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + factorSetupParamsBody + `
+[[factors.members]]
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+factor_id = "Ema"
+member_alias = "bad__alias"
+params = { span = 30 }
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "member_alias")
+}
+
+// 任务没有单独的对象范围：配置里残留的 subject_mode 不再被接受，避免误以为还能限定标的。
+func TestFactorSetupRejectsRemovedSubjectScope(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "./examples/factors"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_1m"
+freq = "1m"
+subject_mode = "all"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.Error(t, err)
 }
 
 func TestFactorSetupRejectsMemberWithUnknownFactor(t *testing.T) {

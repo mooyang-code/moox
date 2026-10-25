@@ -117,13 +117,11 @@ source_dir = "./modules/factor/factors"
 space_id = "crypto"
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-subject_mode = "all"
 
 [[factors.sets]]
 space_id = "crypto"
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-subject_mode = "all"
 
 [[factors.definitions]]
 factor_id = "Bias"
@@ -215,6 +213,15 @@ source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
 factor_id = "Ema"
 status = "enabled"
+
+# 同一个因子可以用不同的固定参数多次加入同一个任务；没给的参数取定义的默认值，member_alias 缺省时由服务端生成
+# （全部参数等于默认值时沿用 factor_id，否则是 factor_id_参数1_参数2…），固定参数加成员之后不再改。
+# [[factors.members]]
+# source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+# freq = "1m"
+# factor_id = "Ema"
+# params = { span = 20, warmup = 50000 }
+# status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"

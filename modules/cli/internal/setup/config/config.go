@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -282,14 +284,12 @@ type FactorSetup struct {
 	Members     []FactorSetupMember     `toml:"members"`
 }
 
-// FactorSetupSet identifies the source Dataset and subject scope shared by a
-// group of factor members.
+// FactorSetupSet identifies the source Dataset shared by a group of factor members.
+// 任务的标的就是源数据集当前的标的，没有单独的对象范围。
 type FactorSetupSet struct {
-	SpaceID         string   `toml:"space_id"`
-	SourceDatasetID string   `toml:"source_dataset_id"`
-	Freq            string   `toml:"freq"`
-	SubjectMode     string   `toml:"subject_mode"`
-	Subjects        []string `toml:"subjects"`
+	SpaceID         string `toml:"space_id"`
+	SourceDatasetID string `toml:"source_dataset_id"`
+	Freq            string `toml:"freq"`
 }
 
 // FactorSetupDefinition 引用 YAML 因子库文件里的一个定义（docs/计划/因子表达式引擎详细设计.md 9.5）：
@@ -301,11 +301,15 @@ type FactorSetupDefinition struct {
 
 // FactorSetupMember adds one definition to one set (identified by
 // source_dataset_id and freq) with the target run status.
+// Params 是成员的固定参数（没给的参数取定义的默认值），MemberAlias 缺省时由服务端按参数生成：全部参数等于默认值时
+// 沿用 factor_id，否则是“factor_id_参数1_参数2…”。同一个定义可以用不同参数多次加入同一个任务。
 type FactorSetupMember struct {
-	SourceDatasetID string `toml:"source_dataset_id"`
-	Freq            string `toml:"freq"`
-	FactorID        string `toml:"factor_id"`
-	Status          string `toml:"status"`
+	SourceDatasetID string             `toml:"source_dataset_id"`
+	Freq            string             `toml:"freq"`
+	FactorID        string             `toml:"factor_id"`
+	MemberAlias     string             `toml:"member_alias"`
+	Params          map[string]float64 `toml:"params"`
+	Status          string             `toml:"status"`
 }
 
 type Manifest struct {
@@ -824,7 +828,6 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		set.SpaceID = strings.TrimSpace(set.SpaceID)
 		set.SourceDatasetID = strings.TrimSpace(set.SourceDatasetID)
 		set.Freq = strings.TrimSpace(set.Freq)
-		set.SubjectMode = strings.TrimSpace(set.SubjectMode)
 		if set.SpaceID == "" || set.SourceDatasetID == "" || set.Freq == "" {
 			return fmt.Errorf("config_invalid: %s requires space_id, source_dataset_id and freq", path)
 		}
@@ -833,19 +836,6 @@ func validateFactorSetup(cfg *FactorSetup) error {
 			return fmt.Errorf("config_invalid: factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
 		}
 		setKeys[key] = struct{}{}
-		if set.SubjectMode == "" {
-			set.SubjectMode = "all"
-		}
-		if set.SubjectMode != "all" && set.SubjectMode != "include" {
-			return fmt.Errorf("config_invalid: %s.subject_mode must be all or include", path)
-		}
-		set.Subjects = uniqueTrimmedStrings(set.Subjects)
-		if set.SubjectMode == "include" && len(set.Subjects) == 0 {
-			return fmt.Errorf("config_invalid: %s.subjects must not be empty for include mode", path)
-		}
-		if set.SubjectMode == "all" && len(set.Subjects) != 0 {
-			return fmt.Errorf("config_invalid: %s.subjects must be empty when subject_mode is all", path)
-		}
 	}
 	seen := make(map[string]struct{}, len(cfg.Definitions))
 	for index := range cfg.Definitions {
@@ -884,9 +874,19 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		if _, ok := seen[member.FactorID]; !ok {
 			return fmt.Errorf("config_invalid: %s references unknown factor_id %q; declare it in [[factors.definitions]]", path, member.FactorID)
 		}
-		key := factorSetupSetKey(member.SourceDatasetID, member.Freq) + "\x00" + member.FactorID
+		member.MemberAlias = strings.TrimSpace(member.MemberAlias)
+		if member.MemberAlias != "" && (!factorMemberAliasPattern.MatchString(member.MemberAlias) || strings.Contains(member.MemberAlias, "__")) {
+			return fmt.Errorf("config_invalid: %s.member_alias %q is invalid: start with a letter, letters/digits/underscores only, at most 32 characters, no double underscores", path, member.MemberAlias)
+		}
+		for name, value := range member.Params {
+			if strings.TrimSpace(name) == "" || math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("config_invalid: %s.params has an empty name or a non-finite value", path)
+			}
+		}
+		// 同一任务里同一因子可以多次加入，只要别名不同、参数不同；别名缺省时以参数区分。
+		key := factorSetupSetKey(member.SourceDatasetID, member.Freq) + "\x00" + member.FactorID + "\x00" + member.MemberAlias + "\x00" + canonicalParams(member.Params)
 		if _, ok := memberKeys[key]; ok {
-			return fmt.Errorf("config_invalid: factor %q is a member of set (%s, %s) more than once", member.FactorID, member.SourceDatasetID, member.Freq)
+			return fmt.Errorf("config_invalid: factor %q is a member of set (%s, %s) more than once with the same alias and params", member.FactorID, member.SourceDatasetID, member.Freq)
 		}
 		memberKeys[key] = struct{}{}
 		if member.Status == "" {
@@ -901,23 +901,6 @@ func validateFactorSetup(cfg *FactorSetup) error {
 
 func factorSetupSetKey(sourceDatasetID, freq string) string {
 	return strings.TrimSpace(sourceDatasetID) + "\x00" + strings.TrimSpace(freq)
-}
-
-func uniqueTrimmedStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	return result
 }
 
 // supportedSCFRegion keeps an operator typo from creating a partial fleet.
@@ -963,4 +946,20 @@ func validateAccessAddress(address, path string) error {
 		return fmt.Errorf("config_invalid: %s must be host:port", path)
 	}
 	return nil
+}
+
+var factorMemberAliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
+
+// canonicalParams 把固定参数写成键有序的文本，用来判断两个成员的参数是否相同。
+func canonicalParams(params map[string]float64) string {
+	names := make([]string, 0, len(params))
+	for name := range params {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		b.WriteString(name + "=" + strconv.FormatFloat(params[name], 'f', -1, 64) + ";")
+	}
+	return b.String()
 }

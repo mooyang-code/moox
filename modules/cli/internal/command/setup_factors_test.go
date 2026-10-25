@@ -16,7 +16,6 @@ type fakeFactorJSONClient struct {
 	calls         []string
 	createdIDs    []string
 	createdSetIDs []string
-	updatedSetIDs []string
 	addedMembers  []string
 	statuses      []string
 	createdBodies []map[string]any
@@ -24,10 +23,16 @@ type fakeFactorJSONClient struct {
 	usages        []factorAPIUsage
 	existingSet   *setupFactorSet
 	setStatus     string
+	// paramDefaults 是假服务端上定义声明的参数（名称与默认值）。
+	paramDefaults []factorAPIParam
 	// existingCategory 是已有定义的分类；categories、movedCategories 记录分类的建立与改动。
 	existingCategory string
 	categories       []string
 	movedCategories  []string
+}
+
+func (f *fakeFactorJSONClient) defaultParams() []factorAPIParam {
+	return append([]factorAPIParam(nil), f.paramDefaults...)
 }
 
 // fakeDefinitionHash 模拟 FactorMgr 编译后的 definition_hash：忽略首尾空白。
@@ -55,15 +60,11 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 			result.FactorSet.SpaceID = f.existingSet.SpaceID
 			result.FactorSet.SourceDatasetID = f.existingSet.SourceDatasetID
 			result.FactorSet.Freq = f.existingSet.Freq
-			result.FactorSet.SubjectMode = f.existingSet.SubjectMode
-			result.FactorSet.Subjects = append([]string(nil), f.existingSet.Subjects...)
 			result.FactorSet.Status = f.setStatus
 		}
 	case "trpc.moox.factor.FactorMgr/CreateFactorSet":
 		set := request["factor_set"].(map[string]any)
 		f.createdSetIDs = append(f.createdSetIDs, set["set_id"].(string))
-	case "trpc.moox.factor.FactorMgr/UpdateFactorSet":
-		f.updatedSetIDs = append(f.updatedSetIDs, request["set_id"].(string))
 	case "trpc.moox.factor.FactorMgr/GetFactor":
 		if f.existing == nil {
 			result.RetInfo.Code, result.RetInfo.Msg = 9, "not found"
@@ -72,6 +73,7 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 			result.Factor.Name = f.existing.Name
 			result.Factor.CategoryID = f.existingCategory
 			result.Factor.DefinitionHash = fakeDefinitionHash(f.existing.Spec)
+			result.Factor.Params = f.defaultParams()
 			result.Usages = append([]factorAPIUsage(nil), f.usages...)
 		}
 	case "trpc.moox.factor.FactorMgr/ValidateFactorSpec":
@@ -80,8 +82,17 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 		factor := request["factor"].(map[string]any)
 		f.createdBodies = append(f.createdBodies, factor)
 		f.createdIDs = append(f.createdIDs, factor["factor_id"].(string))
+		result.Factor.Params = f.defaultParams()
 	case "trpc.moox.factor.FactorMgr/AddFactorToSet":
-		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+request["member_alias"].(string)+"="+request["factor_id"].(string))
+		alias, _ := request["member_alias"].(string)
+		if alias == "" {
+			alias = request["factor_id"].(string) // 模拟服务端：不给别名时按参数生成，全默认时就是因子 ID
+			if params, ok := request["params"].(map[string]any); ok && len(params) > 0 {
+				alias += "_p"
+			}
+		}
+		result.Member.MemberAlias = alias
+		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+alias+"="+request["factor_id"].(string))
 	case "trpc.moox.factor.FactorMgr/SetFactorMemberStatus":
 		f.statuses = append(f.statuses, request["member_alias"].(string)+"="+request["status"].(string))
 	case "trpc.moox.factor.FactorMgr/UpsertFactorCategory":
@@ -209,7 +220,7 @@ func TestLoadSetupFactorsRejectsSymlinkEscape(t *testing.T) {
 
 func testSetupPlan() setupFactorPlan {
 	return setupFactorPlan{
-		Sets:        []setupFactorSet{{SetID: "fset_prices_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m", SubjectMode: "all"}},
+		Sets:        []setupFactorSet{{SetID: "fset_prices_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
 		Definitions: []setupFactorDefinition{{FactorID: "Bias", Name: "Bias", Spec: "outputs:\n  bias: close / ts_mean(close, 5)\n"}},
 		Members:     []setupFactorMember{{SetID: "fset_prices_1m", FactorID: "Bias", Status: "enabled"}},
 	}
@@ -277,7 +288,6 @@ func TestApplySkipsIdenticalDefinition(t *testing.T) {
 }
 
 // 因子库里的分类先建立（同一分类只调一次），新定义带上分类；已有定义的分类不同时改成因子库里的（分类不进 definition_hash）。
-// 同一定义以其他别名加入的成员（策略实例的私有集合里常见）不算初始化的成员。
 func TestApplySyncsCategoriesAndIgnoresOtherAliases(t *testing.T) {
 	plan := testSetupPlan()
 	plan.Definitions[0].CategoryID, plan.Definitions[0].CategoryName = "momentum", "动量类"
@@ -296,7 +306,7 @@ func TestApplySyncsCategoriesAndIgnoresOtherAliases(t *testing.T) {
 	_, err = (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Bias=momentum"}, client.movedCategories)
-	require.Equal(t, []string{"fset_prices_1m/Bias=Bias"}, client.addedMembers, "别名 bias_fast 的成员不是初始化的成员")
+	require.Empty(t, client.addedMembers, "没有参数的因子在同一任务里只能有一个成员：别名 bias_fast 的成员就是它，服务端也会拒绝重复")
 }
 
 func TestApplyComparesDefinitionHashAndName(t *testing.T) {
@@ -332,15 +342,62 @@ func TestApplyDoesNotPruneExtraMembers(t *testing.T) {
 	require.Empty(t, client.statuses)
 }
 
-func TestApplyUpdatesExistingSetSubjectScope(t *testing.T) {
+func paramPlan(members ...setupFactorMember) setupFactorPlan {
 	plan := testSetupPlan()
-	plan.Sets[0].SubjectMode, plan.Sets[0].Subjects = "include", []string{"BTC"}
-	got := plan.Sets[0]
-	got.SubjectMode, got.Subjects = "all", nil
-	client := &fakeFactorJSONClient{existingSet: &got}
-	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	plan.Members = members
+	return plan
+}
+
+// 同一个因子带不同固定参数多次加入同一个任务：没给的参数用定义的默认值补全；别名缺省时由服务端生成。
+func TestApplyAddsMembersWithFixedParams(t *testing.T) {
+	plan := paramPlan(
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Status: "enabled"},
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "disabled"},
+	)
+	client := &fakeFactorJSONClient{paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}}}
+	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
-	require.Equal(t, []string{"fset_prices_1m"}, client.updatedSetIDs)
+	require.Equal(t, 3, result.MembersAdded)
+	require.Equal(t, []string{"fset_prices_1m/Bias=Bias", "fset_prices_1m/Bias_p=Bias", "fset_prices_1m/bias_slow=Bias"}, client.addedMembers)
+	require.Equal(t, []string{"Bias=enabled", "Bias_p=enabled"}, client.statuses, "按服务端返回的别名设置状态；配置要求停用的成员保持新增时的停用")
+}
+
+// 再次执行不重复添加：按完整参数（用定义的默认值补全）与现有成员比较，别名相同的成员按别名认。
+func TestApplyMatchesExistingMembersByAliasAndParams(t *testing.T) {
+	plan := paramPlan(
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Status: "enabled"},
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
+		setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "enabled"},
+	)
+	client := &fakeFactorJSONClient{
+		existingSet: &plan.Sets[0], existing: &plan.Definitions[0],
+		paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}},
+		usages: []factorAPIUsage{
+			{SetID: "fset_prices_1m", MemberAlias: "Bias", Status: "enabled", Params: map[string]float64{"window": 5}},
+			{SetID: "fset_prices_1m", MemberAlias: "Bias_10", Status: "enabled", Params: map[string]float64{"window": 10}},
+			{SetID: "fset_prices_1m", MemberAlias: "bias_slow", Status: "disabled", Params: map[string]float64{"window": 30}},
+			{SetID: "fset_other_5m", MemberAlias: "Bias", Status: "enabled", Params: map[string]float64{"window": 5}},
+		},
+	}
+	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Empty(t, client.addedMembers)
+	require.Equal(t, 2, result.MembersUnchanged)
+	require.Equal(t, 1, result.MembersEnabled)
+	require.Equal(t, []string{"bias_slow=enabled"}, client.statuses)
+}
+
+// 固定参数加成员后不再改：别名已存在但参数不同时报错，要换参数请换别名。
+func TestApplyRejectsAliasWithDifferentParams(t *testing.T) {
+	plan := paramPlan(setupFactorMember{SetID: "fset_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 31}, Status: "enabled"})
+	client := &fakeFactorJSONClient{
+		existingSet: &plan.Sets[0], existing: &plan.Definitions[0],
+		paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}},
+		usages:        []factorAPIUsage{{SetID: "fset_prices_1m", MemberAlias: "bias_slow", Status: "enabled", Params: map[string]float64{"window": 30}}},
+	}
+	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.ErrorContains(t, err, "different params")
 }
 
 // The CLI parses raw JSON instead of importing factorgen, so pin the shapes it
