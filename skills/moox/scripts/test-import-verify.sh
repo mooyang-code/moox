@@ -24,4 +24,15 @@ if FAKE_ROWS=1 python3 -I "$here/import_verify.py" --pack "$tmp/pack" --prefligh
   echo "行数不一致时应返回非零" >&2; exit 1
 fi
 grep -q "行数不一致 AAA-USDT：CSV 2，Storage 1" "$tmp/out.txt"
+# 导出被 --page-size 截断时不能当作完整结果：报读取失败。
+cat > "$tmp/moox-cli-truncated" <<'SH'
+#!/usr/bin/env bash
+echo "已导出 2 行，达到 --page-size 上限，区间内还有更多数据"
+python3 -c "import json; print(json.dumps({'rows':[{}]*2}))"
+SH
+chmod +x "$tmp/moox-cli-truncated"
+if python3 -I "$here/import_verify.py" --pack "$tmp/pack" --preflight "$tmp/preflight.json" --moox-cli "$tmp/moox-cli-truncated" >"$tmp/out2.txt"; then
+  echo "导出被截断时应返回非零" >&2; exit 1
+fi
+grep -q "读取失败 AAA-USDT" "$tmp/out2.txt"
 echo "ok"

@@ -2,7 +2,8 @@
 """初始数据导入的 Storage 行数校验（流程见 references/initial-import.md 第 10 步）。
 
 对导入包里的每个标的，比较 Storage 里 [尾部起点, 文件末根] 内的行数与 CSV 在同一区间内的行数。
-尾部起点取自预检（--dry-run --tail-rows）输出里每个文件的 tail_from；预检输出由 --preflight 传入。
+尾部起点取自导入命令输出里每个文件的 tail_from（用第 8 步实际导入的输出，不要用早先预检的输出：
+截止点 = 现在 − 保留期 + 1 天，每次运行都会重新计算，两步相隔久了窗口起点会后移）；输出文件由 --preflight 传入。
 只用标准库；每个标的调用一次 moox-cli data rows export，默认 8 个并发。
 
 退出码：0 全部一致；1 有标的行数不一致或读取失败；2 参数或输入有问题。
@@ -44,6 +45,9 @@ def storage_rows_in_window(args, manifest, subject, start, end):
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "moox-cli 失败")
     text = result.stdout
+    # 导出达到 --page-size 上限时命令会提示「区间内还有更多数据」：行数被截断，不能当作完整结果比较。
+    if "达到 --page-size 上限" in result.stdout + result.stderr:
+        raise RuntimeError(f"导出达到 --page-size {args.page_size} 上限，行数被截断，请调大 --page-size")
     start_at = text.find("{")
     if start_at < 0:
         raise RuntimeError("moox-cli 没有输出 JSON")
@@ -54,7 +58,7 @@ def storage_rows_in_window(args, manifest, subject, start, end):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--pack", required=True, help="导入包目录（含 manifest.json）")
-    parser.add_argument("--preflight", required=True, help="预检输出的 JSON 文件（moox-cli import --manifest-pack … --dry-run --tail-rows N 的 stdout）")
+    parser.add_argument("--preflight", required=True, help="导入命令输出的 JSON 文件（moox-cli import --manifest-pack … --tail-rows N 的 stdout，每个文件带 tail_from）")
     parser.add_argument("--moox-cli", required=True, help="moox-cli 路径（当前版本）")
     parser.add_argument("--moox-toml", default="./moox.toml")
     parser.add_argument("--workers", type=int, default=8)
@@ -75,7 +79,7 @@ def main():
     tail_from = {}
     for entry in preflight.get("files", []):
         if not entry.get("tail_from"):
-            print("预检输出里没有 tail_from：预检要带 --tail-rows 运行", file=sys.stderr)
+            print("输入里没有 tail_from：导入要带 --tail-rows 运行", file=sys.stderr)
             return 2
         tail_from[os.path.basename(entry["file"])] = entry["tail_from"]
 
@@ -83,7 +87,7 @@ def main():
     for entry in manifest["files"]:
         name = os.path.basename(entry["file"])
         if name not in tail_from:
-            print(f"预检输出里没有 {name}", file=sys.stderr)
+            print(f"输入里没有 {name}", file=sys.stderr)
             return 2
         jobs.append((entry["subject_id"], os.path.join(args.pack, entry["file"]), parse_time(tail_from[name]), parse_time(entry["last_utc"])))
 

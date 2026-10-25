@@ -20,8 +20,9 @@ import (
 // 免得真问题被吞掉：仍未恢复的告警逐条列出，期间触发后又恢复的按检查项列出次数与时间范围。
 
 const (
-	muteSummaryEventLimit  = 2000
-	muteSummaryFiringLimit = 500
+	muteSummaryEventLimit = 2000
+	// 触发中的告警数量天然受检查项总数约束（几百），上限只是兜底；取不全时「已恢复」的分类可能不准，正文会写明。
+	muteSummaryFiringLimit = 5000
 	muteSummaryLineLimit   = 20
 	// muteSummaryFallbackWindow 是重启后丢了静默起点时回看的范围（一次屏蔽最长 24 小时）。
 	muteSummaryFallbackWindow = 24 * time.Hour
@@ -189,7 +190,7 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 	section("仍未恢复", open)
 	section("期间触发后已恢复", recovered)
 	if truncated {
-		fmt.Fprintf(&body, "\n注意：静默期间的告警事件太多，上面只统计了最近 %d 条事件、%d 个触发中的告警，更早的以告警记录为准。\n", muteSummaryEventLimit, muteSummaryFiringLimit)
+		fmt.Fprintf(&body, "\n注意：静默期间的告警事件太多，上面只统计了最近 %d 条事件、%d 个触发中的告警，更早的以告警记录为准；触发中的告警取不全时，上面“已恢复”的分类也可能不准。\n", muteSummaryEventLimit, muteSummaryFiringLimit)
 	}
 	severity := notification.SeverityInfo
 	if len(open) > 0 {

@@ -54,7 +54,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
   --tail-rows 6000 --allow-missing --manifest ./moox.toml > preflight.json
 ```
 
-`--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），第 10 步的校验要用。
+`--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
 有任何一项不合格就停下，把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（数据源有 `lookback_overrides` 的取覆盖值）。
 
 ## 3. 核对 series_tag（操作机，只读）
@@ -130,8 +130,10 @@ ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target fac
 
 ```bash
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
-  --manifest ./moox.toml --job-db ./storage-import.db
+  --manifest ./moox.toml --job-db ./storage-import.db > storage-import.json
 ```
+
+输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
 
 只写每个文件最后 6000 行中仍在保留期内的部分。Storage 写入在 DataNode 内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
@@ -146,10 +148,10 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
 ## 10. 校验（只比边界与行数）
 
 - **Storage**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；**每个标的**在 `[tail_from, 文件末根]` 内的行数等于 CSV 在同一区间内的行数——
-  用脚本逐个核对（`tail_from` 取自第 2 步的预检输出，已经包含了保留期截止点）：
+  用脚本逐个核对（`tail_from` 取自第 8 步**实际导入**的输出 `storage-import.json`，已经包含了保留期截止点；不要用第 2 步的预检输出——截止点每次运行都重新计算，两步相隔久了会后移）：
 
   ```bash
-  python3 -I skills/moox/scripts/import_verify.py --pack <包目录> --preflight preflight.json --moox-cli <moox-cli 路径> --moox-toml ./moox.toml
+  python3 -I skills/moox/scripts/import_verify.py --pack <包目录> --preflight storage-import.json --moox-cli <moox-cli 路径> --moox-toml ./moox.toml
   ```
 
   退出码非零或有“行数不一致 / 读取失败”的标的就停下汇报（读取失败多半是 Storage 忙，稍后重跑脚本即可）。
