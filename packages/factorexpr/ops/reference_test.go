@@ -511,3 +511,48 @@ func TestTruncatedSmoothingExplicitSpan(t *testing.T) {
 		}
 	}
 }
+
+// EMA20 用 5 万根预热：与「以窗口最老一根为初值、逐根按 α=2/21 递推 49999 次」逐点一致；
+// k=0 与不写 k 相同（按通常方式由 n 推出）；预热 5 万根与通常方式的差异在 1e−9 量级。
+func TestEMA20WithLongWarmup(t *testing.T) {
+	const span, warmup, rows = 20, 50000, 50400
+	rng := rand.New(rand.NewSource(20))
+	x := make([]float64, rows)
+	price := 100.0
+	for i := range x {
+		price *= 1 + (rng.Float64()-0.5)*0.01
+		x[i] = price
+	}
+	alpha := factorexpr.EMAAlpha(span)
+	long := rolling["ema"]([]int{span, warmup}, nil)
+	usual := rolling["ema"]([]int{span, 0}, nil)
+	unset := rolling["ema"]([]int{span, 0}, nil)
+	outLong := make([]float64, rows-warmup+1)
+	long(outLong, warmup-1, []Series{{Data: x}})
+	for i, got := range outLong {
+		tm := warmup - 1 + i
+		ema := x[tm-warmup+1]
+		for _, v := range x[tm-warmup+2 : tm+1] {
+			ema = alpha*v + (1-alpha)*ema
+		}
+		if math.Abs(got-ema) > 1e-9*math.Abs(ema) {
+			t.Fatalf("t=%d: 预热 %d 根得 %v，逐根递推得 %v", tm, warmup, got, ema)
+		}
+	}
+	const from = 1000
+	outUsual, outUnset := make([]float64, rows-from), make([]float64, rows-from)
+	usual(outUsual, from, []Series{{Data: x}})
+	unset(outUnset, from, []Series{{Data: x}})
+	for i := range outUsual {
+		if outUsual[i] != outUnset[i] {
+			t.Fatalf("t=%d: k=0 与不写 k 不一致", from+i)
+		}
+		tm := from + i
+		if tm < warmup-1 {
+			continue
+		}
+		if long := outLong[tm-(warmup-1)]; math.Abs(long-outUsual[i]) > 1e-8*math.Abs(long) {
+			t.Fatalf("t=%d: 预热 5 万根 %v 与通常方式 %v 差异过大", tm, long, outUsual[i])
+		}
+	}
+}

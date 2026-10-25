@@ -37,6 +37,8 @@ func TestLookbackRules(t *testing.T) {
 		{`ts_quantile(close, 30, 0.5)`, 30},
 		{`ema(close, 20)`, 208},
 		{`ema(close, 50000, 50000)`, 50000},
+		{`ema(close, 20, 0)`, 208},
+		{`ema(close, 20, 50000)`, 50000},
 		{`ema(ts_mean(close, 20), 1000, 300)`, 319},
 		{`sma(close, 20, 1)`, 405},
 		{`ema(ts_mean(close, 20), 20)`, 227},

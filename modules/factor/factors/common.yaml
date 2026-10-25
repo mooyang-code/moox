@@ -15,11 +15,15 @@
   name: 指数移动平均（EMA）
   category_id: trend
   category_name: 趋势类
-  # 窗口上限 4825 时最大回看 49995 根（约 34.7 天的 1m），是不超过 5 万根的最大窗口。
+  # span 是 EMA 的跨度（EMA20 的 20），α = 2/(span+1)，不是滚动窗口。
+  # warmup 是预热总根数（含起点那一根）：0 按通常方式由 span 推出，否则用最近 warmup 根递推，例如 span=20、warmup=50000。
+  # span 上限 4825 时通常方式的回看为 49995 根（约 34.7 天的 1m）；warmup 上限 50000，因子最大回看 50000 根。
   spec: |
-    params: {window: {type: int, min: 2, max: 4825, default: 20}}
+    params:
+      span: {type: int, min: 2, max: 4825, default: 20}
+      warmup: {type: int, min: 0, max: 50000, default: 0}
     outputs:
-      ema: ema(close, window)
+      ema: ema(close, span, warmup)
 
 - factor_id: Macd
   name: 指数平滑异同移动平均（MACD）

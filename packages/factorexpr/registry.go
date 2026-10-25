@@ -226,9 +226,9 @@ var functionList = []*Function{
 
 	// 时序：递归平滑（截断到 K 根）
 	{Name: "ema", Category: CategoryTimeSeries,
-		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 1, Max: MaxWindow, Optional: true, Default: 0}},
-		Result: ResultNumber, Lookback: "L(x)+K−1，K 为 k；不写 k 时为让起点权重衰减到 1e−9 以下的根数",
-		Doc:     "指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)）；可选的 k 显式指定 K，例如 ema(close, 50000, 50000)；n 远大于 k 时起点权重不可忽略，值是近似的",
+		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 0, Max: MaxWindow, Optional: true, Default: 0}},
+		Result: ResultNumber, Lookback: "L(x)+K−1，K 为 k；k 不写或为 0 时为让起点权重衰减到 1e−9 以下的根数",
+		Doc:     "指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)），窗口里最老的一根收盘价作为递推的初始值；可选的 k 显式指定预热总根数 K（含起点）：ema(close, 20, 50000) 是 EMA20 用 5 万根预热；k 不写或为 0 时由 n 推出；n 远大于 k 时起点权重不可忽略，值是近似的",
 		Example: "ema(close, 20)", back: emaBack},
 	{Name: "sma", Category: CategoryTimeSeries,
 		Args:   []ArgSpec{argSeries, {Name: "n", Kind: ArgInteger, Min: 2, Max: MaxWindow}, {Name: "m", Kind: ArgInteger, Min: 1, Max: MaxWindow}},
