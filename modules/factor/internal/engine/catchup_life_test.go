@@ -108,16 +108,12 @@ func TestCatchupSetReportsBlockedWatermark(t *testing.T) {
 	require.Contains(t, got.Message, "no_rows")
 }
 
-// 没有水位记录（从未跑过实时周期）的任务，本地同步完成即追平；同步失败会报告并在下一次评估重试。
-func TestCatchupSetWithoutWatermarkAndSyncFailure(t *testing.T) {
-	r, _ := newCatchupRuntime(t)
+// 本地数据同步失败会报告原因，并丢弃同步记录让下一次评估重试（不丢弃就会永远卡在失败上）。
+// 没有水位记录的任务同步完成即追平，由 TestEngineResumeCatchesUpThroughLifecycle 覆盖。
+func TestCatchupSyncFailureIsReportedAndRetried(t *testing.T) {
 	ctx := context.Background()
 	since := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	now := since.Add(10 * time.Minute)
-	r.catchupSet(ctx, "ftask_a", since, now)
-	waitSynced(t, r, "ftask_a", since)
-	require.True(t, r.catchupSet(ctx, "ftask_a", since, now).CaughtUp)
-
 	r2, _ := newCatchupRuntime(t)
 	r2.preload.data = failingPrepare{err: errors.New("Storage 不可达")}
 	// 后台同步失败得很快时，发起同步的那次评估自己就会读到失败并丢弃 job，所以不能等 job 出现失败状态，
