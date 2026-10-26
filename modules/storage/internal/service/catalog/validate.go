@@ -87,15 +87,14 @@ func validateChineseDisplayName(field string, value string) error {
 	return fmt.Errorf("%s must contain Chinese characters", field)
 }
 
-func validateColumnDisplayName(field string, spaceID string, attrs map[string]string, factorOutputColumn bool) error {
+func validateColumnDisplayName(field string, spaceID string, columnName string, attrs map[string]string, factorOutputColumn bool) error {
 	if attrs == nil {
 		return validateChineseDisplayName(field, "")
 	}
 	displayName := strings.TrimSpace(attrs["display_name"])
-	factorOutput := strings.TrimSpace(attrs["factor_output"])
 	if factorOutputColumn {
-		if displayName != factorOutput {
-			return fmt.Errorf("%s must match factor_output", field)
+		if displayName != strings.TrimSpace(columnName) {
+			return fmt.Errorf("%s must match the column name", field)
 		}
 		return nil
 	}
@@ -171,12 +170,9 @@ func isFactorViewColumn(column *pb.ViewColumn) bool {
 		return false
 	}
 	attrs := column.GetAttributes()
-	factorID := strings.TrimSpace(attrs["origin_factor_id"])
-	output := strings.TrimSpace(attrs["factor_output"])
-	// A factor output column is named after its output, like the Dataset
-	// column it reads.
-	originID := strings.TrimSpace(column.GetOriginId())
-	return factorID != "" && output != "" && originID == strings.TrimSpace(column.GetColumnName()) && originID == output
+	// 因子输出列在 View 里沿用数据集列的名字和属性；参数列 __params 不是因子输出。
+	return factorColumnKind(attrs) == factorColumnKindOutput && strings.TrimSpace(attrs["member_key"]) != "" &&
+		strings.TrimSpace(column.GetOriginId()) == strings.TrimSpace(column.GetColumnName())
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {

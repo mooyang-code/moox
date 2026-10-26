@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -128,64 +129,49 @@ func TestNewFactorResultColumnExtendsDefaultViewDesiredSchema(t *testing.T) {
 	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision(), "idempotent metadata upsert must not advance View revision")
 }
 
-func TestFactorResultColumnUsesOriginFactorIDWithoutFactorEntity(t *testing.T) {
+func TestFactorResultColumnUsesMemberKeyWithoutFactorEntity(t *testing.T) {
 	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
-	column := &pb.DatasetColumn{
-		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "bias_10",
-		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-		OriginId:   "bias",
-		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Attributes: map[string]string{
-			"display_name": "bias_10", "origin_factor_id": "bias", "factor_output": "bias_10",
-		},
-	}
+	column := factorOutputColumn(dataset, "bias__10", "bias", "bias", "fixed")
 	rsp, err := service.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, "bias", rsp.GetColumn().GetOriginId())
+	require.Equal(t, "bias__10", rsp.GetColumn().GetOriginId())
 }
 
-func TestFactorMemberCanOwnMultipleOutputsAndParameterColumns(t *testing.T) {
+func TestFactorMemberCanOwnMultipleOutputsAndTheParamsColumn(t *testing.T) {
 	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
 	activateFactorResultFixture(t, service, dataset)
 	ctx := context.Background()
-	for _, item := range []struct{ name, kind string }{
-		{"bias_short", "output"}, {"bias_long", "output"}, {"Bias__window", "param"},
+	for _, column := range []*pb.DatasetColumn{
+		factorOutputColumn(dataset, "boll__30__mid", "boll", "mid", "fixed"),
+		factorOutputColumn(dataset, "boll__30__up", "boll", "up", "fixed"),
+		factorParamsColumn(dataset),
 	} {
-		column := &pb.DatasetColumn{
-			SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: item.name,
-			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-			OriginId:   "Bias", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			Attributes: map[string]string{
-				"display_name": item.name, "factor_output": item.name, "origin_factor_id": "Bias",
-				"member_alias": "Bias", "column_kind": item.kind,
-			},
-		}
 		rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: column})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-		require.Equal(t, "Bias", rsp.GetColumn().GetOriginId())
 	}
 	columns, _, err := store.ListDatasetColumns(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), nil)
 	require.NoError(t, err)
 	var memberColumns []string
 	for _, column := range columns {
-		if column.GetOriginId() == "Bias" {
+		if column.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR {
 			memberColumns = append(memberColumns, column.GetColumnName())
 		}
 	}
-	require.ElementsMatch(t, []string{"bias_short", "bias_long", "Bias__window"}, memberColumns)
+	require.ElementsMatch(t, []string{"boll__30__mid", "boll__30__up", "__params"}, memberColumns)
 	view, err := store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
 	require.NoError(t, err)
-	var projectedColumns []string
+	projected := map[string]*pb.ViewColumn{}
 	for _, column := range view.GetColumns() {
-		if column.GetAttributes()["member_alias"] == "Bias" {
-			projectedColumns = append(projectedColumns, column.GetColumnName())
+		if column.GetAttributes()["column_kind"] != "" {
+			projected[column.GetColumnName()] = column
 			require.Equal(t, column.GetColumnName(), column.GetOriginId())
-			require.Equal(t, "Bias", column.GetAttributes()["origin_factor_id"])
 		}
 	}
-	require.ElementsMatch(t, memberColumns, projectedColumns)
+	require.Len(t, projected, 3, "默认 View 带上全部因子列，包括 __params")
+	require.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_JSON, projected["__params"].GetValueType())
+	require.Equal(t, "boll__30__mid", projected["boll__30__mid"].GetAttributes()["display_name"])
 	// 字段来源仍然唯一；只允许因子成员拥有多列。
 	rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
 		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "close_alias",
@@ -214,16 +200,83 @@ func TestFactorResultDatasetAcceptsCarriedSourceColumns(t *testing.T) {
 
 func TestFactorResultFactorColumnRequiresOriginMetadata(t *testing.T) {
 	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
-	column := &pb.DatasetColumn{
-		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "bias_10",
-		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
-		OriginId:   "bias",
-		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		Attributes: map[string]string{"display_name": "bias_10", "factor_output": "bias_10"},
-	}
+	column := factorOutputColumn(dataset, "bias__10", "bias", "bias", "fixed")
+	column.Attributes = map[string]string{"display_name": "bias__10"}
 	rsp, err := service.UpsertDatasetColumn(context.Background(), &pb.UpsertDatasetColumnReq{Column: column})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+// 输出列与参数列的契约：列名由成员键和输出名拼出，Storage 只做字符串比较；__params 恰好一列、json 类型。
+func TestFactorResultColumnContract(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	ctx := context.Background()
+	mutate := func(base *pb.DatasetColumn, fn func(*pb.DatasetColumn)) *pb.DatasetColumn {
+		column := proto.Clone(base).(*pb.DatasetColumn)
+		fn(column)
+		return column
+	}
+	output := factorOutputColumn(dataset, "boll__30__mid", "boll", "mid", "fixed")
+	params := factorParamsColumn(dataset)
+	cases := []struct {
+		name   string
+		column *pb.DatasetColumn
+		want   pb.ErrorCode
+	}{
+		{"多输出列", output, pb.ErrorCode_SUCCESS},
+		{"单输出列：列名就是成员键", factorOutputColumn(dataset, "ema__20_50000", "ema", "ema", "fixed"), pb.ErrorCode_SUCCESS},
+		{"可变成员", factorOutputColumn(dataset, "ma_fast__var", "ma_fast", "ma_fast", "var"), pb.ErrorCode_SUCCESS},
+		{"参数列", params, pb.ErrorCode_SUCCESS},
+		{"列名与成员键、输出名对不上", mutate(output, func(c *pb.DatasetColumn) {
+			c.ColumnName = "boll__30__up"
+			c.Attributes["display_name"] = "boll__30__up"
+		}), pb.ErrorCode_INVALID_PARAM},
+		{"成员键不以因子 ID 开头", mutate(output, func(c *pb.DatasetColumn) { c.Attributes["member_key"] = "macd__30"; c.OriginId = "macd__30" }), pb.ErrorCode_INVALID_PARAM},
+		{"来源 ID 不是成员键", mutate(output, func(c *pb.DatasetColumn) { c.OriginId = "boll" }), pb.ErrorCode_INVALID_PARAM},
+		{"缺 member_kind", mutate(output, func(c *pb.DatasetColumn) { delete(c.Attributes, "member_kind") }), pb.ErrorCode_INVALID_PARAM},
+		{"member_kind 不合法", mutate(output, func(c *pb.DatasetColumn) { c.Attributes["member_kind"] = "dynamic" }), pb.ErrorCode_INVALID_PARAM},
+		{"输出列不是 double", mutate(output, func(c *pb.DatasetColumn) { c.ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_JSON }), pb.ErrorCode_INVALID_PARAM},
+		{"展示名不等于列名", mutate(output, func(c *pb.DatasetColumn) { c.Attributes["display_name"] = "布林中轨" }), pb.ErrorCode_INVALID_PARAM},
+		{"没有 column_kind", mutate(output, func(c *pb.DatasetColumn) { delete(c.Attributes, "column_kind") }), pb.ErrorCode_INVALID_PARAM},
+		{"旧属性不再被接受", mutate(output, func(c *pb.DatasetColumn) {
+			c.Attributes = map[string]string{"display_name": "boll__30__mid", "origin_factor_id": "boll", "factor_output": "boll__30__mid"}
+		}), pb.ErrorCode_INVALID_PARAM},
+		{"参数列改了名", mutate(params, func(c *pb.DatasetColumn) { c.ColumnName = "params_json"; c.OriginId = "params_json" }), pb.ErrorCode_INVALID_PARAM},
+		{"参数列不是 json", mutate(params, func(c *pb.DatasetColumn) { c.ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING }), pb.ErrorCode_INVALID_PARAM},
+		{"参数列的展示名不含中文", mutate(params, func(c *pb.DatasetColumn) { c.Attributes["display_name"] = "params" }), pb.ErrorCode_INVALID_PARAM},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: tc.column})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		})
+	}
+}
+
+func factorOutputColumn(dataset *pb.Dataset, name, factorID, output, kind string) *pb.DatasetColumn {
+	memberKey := name
+	if output != factorID {
+		memberKey = strings.TrimSuffix(name, "__"+output)
+	}
+	return &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: name,
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, OriginId: memberKey,
+		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{
+			"display_name": name, "column_kind": "output", "factor_id": factorID, "member_key": memberKey,
+			"output_name": output, "member_kind": kind, "category_id": "trend",
+		},
+	}
+}
+
+func factorParamsColumn(dataset *pb.Dataset) *pb.DatasetColumn {
+	return &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "__params",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, OriginId: "__params",
+		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_JSON,
+		Attributes: map[string]string{"display_name": "因子参数", "column_kind": "params"},
+	}
 }
 
 func TestActivateFactorResultDatasetRejectsRecordDatasetBeforeCommit(t *testing.T) {
@@ -361,8 +414,8 @@ func TestFactorResultColumnAttributeChangeRefreshesDefaultViewColumn(t *testing.
 			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, OriginId: "fast_bias",
 			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			Attributes: map[string]string{
-				"display_name": "fast_bias", "factor_output": "fast_bias", "origin_factor_id": "fast_bias",
-				"member_alias": "fast", "factor_id": factorID, "category_id": category, "column_kind": "output",
+				"display_name": "fast_bias", "member_key": "fast_bias", "output_name": "fast_bias", "member_kind": "fixed",
+				"factor_id": factorID, "category_id": category, "column_kind": "output",
 			},
 		}
 	}

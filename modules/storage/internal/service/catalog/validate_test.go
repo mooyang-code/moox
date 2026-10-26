@@ -20,21 +20,14 @@ func TestValidateViewIDAllowsFiftyCharacters(t *testing.T) {
 }
 
 func TestValidateColumnDisplayNameAllowsMatchingFactorOutput(t *testing.T) {
-	require.NoError(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
-		"display_name":  "bias_20",
-		"factor_output": "bias_20",
-	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
-		"display_name":  "bias_20",
-		"factor_output": "bias_20",
-	}, false))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
-		"display_name": "bias_20",
-	}, true))
-	require.Error(t, validateColumnDisplayName("display_name", "crypto", map[string]string{
-		"display_name":  "ma_20",
-		"factor_output": "bias_20",
-	}, true))
+	// 因子输出列的展示名必须等于列名。
+	require.NoError(t, validateColumnDisplayName("display_name", "crypto", "bias__20", map[string]string{"display_name": "bias__20"}, true))
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", "bias__20", map[string]string{"display_name": "bias__20"}, false),
+		"不是因子输出列时，展示名必须含中文")
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", "bias__20", map[string]string{"display_name": "ma__20"}, true))
+	require.Error(t, validateColumnDisplayName("display_name", "crypto", "bias__20", map[string]string{}, true))
+	// 参数列 __params 按普通业务列处理：含中文且不超过 10 个字。
+	require.NoError(t, validateColumnDisplayName("display_name", "crypto", "__params", map[string]string{"display_name": "因子参数"}, false))
 }
 
 func TestFactorResultDatasetRecognitionUsesRole(t *testing.T) {
@@ -45,18 +38,21 @@ func TestFactorResultDatasetRecognitionUsesRole(t *testing.T) {
 }
 
 func TestFactorViewColumnIdentity(t *testing.T) {
-	attrs := map[string]string{"display_name": "bias_20", "factor_output": "bias_20", "origin_factor_id": "Bias"}
+	attrs := map[string]string{"display_name": "bias__20", "column_kind": "output", "member_key": "bias__20", "factor_id": "bias", "output_name": "bias"}
 	viewColumn := &pb.ViewColumn{
-		ColumnName: "bias_20",
+		ColumnName: "bias__20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "bias_20",
+		OriginId:   "bias__20",
 		Attributes: attrs,
 	}
 	require.True(t, isFactorViewColumn(viewColumn))
-	viewColumn.OriginId = "bias_q_20"
+	viewColumn.OriginId = "bias_q__20"
 	require.False(t, isFactorViewColumn(viewColumn), "column_name must equal origin_id")
-	viewColumn.ColumnName, viewColumn.OriginId = "bias_q_20", "bias_q_20"
-	require.False(t, isFactorViewColumn(viewColumn), "the column must be named after factor_output")
+	viewColumn.ColumnName, viewColumn.OriginId = "bias_q__20", "bias_q__20"
+	delete(attrs, "member_key")
+	require.False(t, isFactorViewColumn(viewColumn), "an output column needs member_key")
+	attrs["member_key"], attrs["column_kind"] = "bias__20", "params"
+	require.False(t, isFactorViewColumn(viewColumn), "the params column is not a factor output")
 	viewColumn.OriginType = pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM
 	viewColumn.ColumnName, viewColumn.OriginId = "bias_20", "bias_20"
 	require.False(t, isFactorViewColumn(viewColumn))
