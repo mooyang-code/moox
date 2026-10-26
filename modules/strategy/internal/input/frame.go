@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // Loader 为一个启用实例装配一期输入。
@@ -102,19 +103,6 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	mark("标签", began)
-	// 年龄（上市时间）按 K 线判断：声明了 factors 的实例读绑定的 K 线 View，而不是私有因子结果 View——
-	// 启用成员不自动补算历史，因子结果 View 只有启用之后的行，按它判断会让标的在 min_age_bars 期内都被当作新上市。
-	probeView, probeResolved, probeOnSource := view, resolved, resolved.MinAgeBars > 0 && resolved.SourceViewID != ""
-	if probeOnSource {
-		source, err := l.Client.GetView(ctx, spaceID, resolved.SourceViewID)
-		if err != nil {
-			return Loaded{}, err
-		}
-		if (source.Status != "" && source.Status != "active") || source.ActiveIndexID == "" {
-			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("K 线 View %s 不可用（状态 %q），请重新绑定实例", resolved.SourceViewID, source.Status)}
-		}
-		probeView, probeResolved.ViewID, probeResolved.DatasetID = source, resolved.SourceViewID, source.DatasetID
-	}
 	// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
 	// 覆盖统计只在探针前用到：与标的、集合和行读取并行，探针前再取结果。
 	var covered chan struct {
@@ -132,7 +120,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 				view ViewInfo
 				err  error
 			}{withCoverage, err}
-		}(probeView)
+		}(view)
 	}
 	began = time.Now()
 	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
@@ -164,6 +152,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	columns := append([]string(nil), program.Columns...)
 	columns = uniqueSorted(append(columns, program.PreviousColumns...))
+	if len(program.ParamRefs) > 0 {
+		columns = uniqueSorted(append(columns, factorname.ParamsColumn))
+	}
 	query := Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 	// 上一根与当期合并成一次范围读取：相邻两根之间没有别的根，少一次往返，也保证两根取自同一修订号。
 	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
@@ -195,15 +186,10 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		if result.err != nil {
 			return Loaded{}, result.err
 		}
-		probeView = result.view
-	}
-	// 两个 View 各有各的索引修订号：读源 K 线 View 时不沿用因子结果 View 本期读取返回的修订号。
-	probeRevision := revision
-	if probeOnSource {
-		probeRevision = 0
+		view = result.view
 	}
 	began = time.Now()
-	err = sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, probeResolved, probeView, activeSubjects, bar.BarStart, probeRevision, l.Meta))
+	err = sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision, l.Meta))
 	mark("年龄探针", began)
 	if err != nil {
 		return Loaded{}, err
@@ -219,7 +205,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		if _, ok := sets.Subjects[subjectID]; !ok {
 			continue
 		}
-		engineRow := engine.Row{Values: row.Values}
+		engineRow := engine.Row{Values: row.Values, Params: row.Params}
 		if prev, ok := previous[subjectID]; ok {
 			engineRow.Previous = prev.Values
 		}
@@ -237,6 +223,9 @@ func MissingColumns(view ViewInfo, program *dsl.Program, minAgeBars int) []strin
 	required := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
 	if minAgeBars > 0 {
 		required = append(required, ageProbeColumn)
+	}
+	if len(program.ParamRefs) > 0 {
+		required = append(required, factorname.ParamsColumn)
 	}
 	var missing []string
 	for _, column := range uniqueSorted(required) {

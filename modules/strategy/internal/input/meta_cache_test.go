@@ -106,7 +106,7 @@ func TestMetaCacheRevalidateFailureIsReturned(t *testing.T) {
 // 经真实 LoadBar 连续处理多个事件：标的元数据跨事件复用，修订号变化后重读，修订号读取失败时返回错误。
 func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 	fake := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), fake, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), fake, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, index
 func TestAgeProbePersistsAcrossRestart(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err != nil {
 		t.Fatal(err)
 	}

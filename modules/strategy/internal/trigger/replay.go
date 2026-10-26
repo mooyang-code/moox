@@ -97,8 +97,8 @@ type ReplayBinding struct {
 	SourceColumns []string `json:"source_columns"`
 	// PreviousDepth 是策略引用上一根（bars[-1]）的深度：0 或 1。
 	PreviousDepth int `json:"previous_depth"`
-	// FactorTaskID 是声明了 factors 的实例的私有因子任务（回放用它计算因子）；Tuned 为真表示策略逐期输出下一期的因子参数（闭环回放）。
-	FactorTaskID string `json:"factor_task_id,omitempty"`
+	// FactorTaskID 是实例关联的因子任务（回放用它计算因子）；Tuned 为真表示策略逐期输出下一期的可变成员参数（闭环回放）。
+	FactorTaskID string `json:"factor_task_id"`
 	Tuned        bool   `json:"tuned,omitempty"`
 }
 
@@ -137,7 +137,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 		return ReplayBinding{}, err
 	}
 	if !resolved.Spot {
-		return ReplayBinding{}, fmt.Errorf("View %s 的源数据集 market_type=%s；回放第一版只支持现货", instance.ViewID, resolved.MarketType)
+		return ReplayBinding{}, fmt.Errorf("View %s 的源数据集 market_type=%s；回放第一版只支持现货", resolved.ViewID, resolved.MarketType)
 	}
 	e.mu.Lock()
 	if e.bindings == nil {
@@ -166,7 +166,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	}
 	sort.Strings(columns)
 	return ReplayBinding{
-		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: instance.ViewID,
+		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: resolved.ViewID,
 		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: resolved.Spot, MinAgeBars: resolved.MinAgeBars,
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
 		FactorTaskID: resolved.FactorTaskID, Tuned: len(program.Params) > 0,
@@ -179,13 +179,16 @@ type ReplayRow struct {
 	SourcePrev  map[string]float64            `json:"source_prev,omitempty"`
 	Factors     map[string]map[string]float64 `json:"factors,omitempty"`
 	FactorsPrev map[string]map[string]float64 `json:"factors_prev,omitempty"`
-	AgeBars     int                           `json:"age_bars"`
+	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值），与实时结果行的 __params 一致，params() 读它。
+	Params  map[string]map[string]float64 `json:"params,omitempty"`
+	AgeBars int                           `json:"age_bars"`
 }
 
-// ReplayFactorState 是一个因子本期的状态。
+// ReplayFactorState 是一个成员本期的状态。
 type ReplayFactorState struct {
 	Status         string   `json:"status"`
 	DefinitionHash string   `json:"definition_hash"`
+	Kind           string   `json:"kind"`
 	FailedSubjects []string `json:"failed_subjects,omitempty"`
 }
 
@@ -214,7 +217,7 @@ type ReplayDecision struct {
 	Summary    json.RawMessage `json:"summary,omitempty"`
 	BarEnd     string          `json:"bar_end"`
 	DSLHash    string          `json:"dsl_hash"`
-	// NextParams 是本期求出的下一期因子参数（成员别名 → 参数名 → 取值）：只含求出参数的成员，且只在本期 ok 时给出。
+	// NextParams 是本期求出的下一期可变成员参数（成员键 → 参数名 → 取值）：只含求出参数的成员，且只在本期 ok 时给出。
 	NextParams map[string]map[string]ReplayParamValue `json:"next_params,omitempty"`
 }
 
@@ -286,7 +289,7 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	event := &storagepb.ViewDataReady{Status: "complete"}
 	for member, factorState := range req.FactorStates {
 		event.Factors = append(event.Factors, &storagepb.FactorPeriodState{
-			MemberAlias: member, FactorId: member, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
+			MemberKey: member, MemberKind: factorState.Kind, FactorId: member, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
 		})
 	}
 	var adjacent *readiness.Record
@@ -341,7 +344,7 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 		if _, ok := sets.Subjects[subject]; !ok {
 			continue
 		}
-		engineRow := engine.Row{Values: replayValues(resolved, program, row.Source, row.Factors)}
+		engineRow := engine.Row{Values: replayValues(resolved, program, row.Source, row.Factors), Params: row.Params}
 		if program.UsesPreviousBar {
 			if len(row.SourcePrev) > 0 || len(row.FactorsPrev) > 0 {
 				engineRow.Previous = replayValues(resolved, program, row.SourcePrev, row.FactorsPrev)
@@ -360,10 +363,10 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	outcome := engine.EvaluateParams(program, frame, resolved.FactorParams)
 	if len(outcome.Params) > 0 {
 		out.NextParams = make(map[string]map[string]ReplayParamValue, len(outcome.Params))
-		for alias, params := range outcome.Params {
-			out.NextParams[alias] = make(map[string]ReplayParamValue, len(params))
+		for member, params := range outcome.Params {
+			out.NextParams[member] = make(map[string]ReplayParamValue, len(params))
 			for name, value := range params {
-				out.NextParams[alias][name] = ReplayParamValue{Default: value.Default, Overrides: value.Overrides}
+				out.NextParams[member][name] = ReplayParamValue{Default: value.Default, Overrides: value.Overrides}
 			}
 		}
 	}
@@ -381,11 +384,7 @@ func replayValues(resolved input.Resolved, program *dsl.Program, source map[stri
 		switch {
 		case !ok:
 		case binding.Source == input.SourceFactor:
-			output := binding.FactorOutput
-			if output == "" {
-				output = name
-			}
-			if v, has := factors[binding.Member][output]; has {
+			if v, has := factors[binding.Member][name]; has {
 				values[name] = v
 			}
 		default:

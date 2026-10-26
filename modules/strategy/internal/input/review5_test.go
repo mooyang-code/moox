@@ -62,22 +62,22 @@ func TestResolveCalendarInheritance(t *testing.T) {
 	strategy := parseStrategy(t, "name: x\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
 	build := func(datasetAttributes map[string]string) *fakeClient {
 		client := newFakeClient("spot")
-		client.views["view_1d"] = ViewInfo{ViewID: "view_1d", DatasetID: "ds_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []ViewColumn{plainColumn("close")}}
+		client.views["view_factor_1d"] = ViewInfo{ViewID: "view_factor_1d", DatasetID: "ds_1d", Frequency: "1d", Status: "active", ActiveIndexID: "idx", Columns: []ViewColumn{plainColumn("close")}}
 		client.datasets["ds_1d"] = DatasetInfo{DatasetID: "ds_1d", Status: "active", Frequency: "1d", Retention: "forever", Attributes: datasetAttributes}
 		client.datasets["ds_source"] = DatasetInfo{DatasetID: "ds_source", Status: "active", Frequency: "1m", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
 		return client
 	}
 	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result", "alignment": "epoch_utc"})
-	resolved, _, err := Resolve(context.Background(), resample, "space", "view_1d", strategy)
+	resolved, _, err := Resolve(context.Background(), resample, "space", "ftask_1d", strategy)
 	if err != nil || resolved.Calendar != DefaultCalendar {
 		t.Fatalf("重采样数据集不应继承源数据集的 A 股日历：%+v err=%v", resolved, err)
 	}
 	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"})
-	if resolved, _, err := Resolve(context.Background(), factor, "space", "view_1d", strategy); err != nil || resolved.Calendar != "cn_stock" {
+	if resolved, _, err := Resolve(context.Background(), factor, "space", "ftask_1d", strategy); err != nil || resolved.Calendar != "cn_stock" {
 		t.Fatalf("因子结果应继承源数据集的日历：%+v err=%v", resolved, err)
 	}
 	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock", "alignment": "epoch_utc"})
-	if _, _, err := Resolve(context.Background(), misaligned, "space", "view_1d", strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
+	if _, _, err := Resolve(context.Background(), misaligned, "space", "ftask_1d", strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
 		t.Fatalf("按 UTC 零点对齐的数据集不能使用 A 股日历：%v", err)
 	}
 }
@@ -89,11 +89,11 @@ func TestPreviousFactorsOnlyForFactorColumns(t *testing.T) {
 rules:
   - {id: r, type: signal, pool: [BTC-USDT], entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1", weight: 1}
 `)
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", klineOnly)
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", klineOnly)
 	if err != nil || !program.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {
 		t.Fatalf("只经 bars[-1] 读 K 线列时不应要求上一根的因子证据：%+v err=%v", resolved, err)
 	}
-	withFactor, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	withFactor, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil || len(withFactor.PreviousFactors) != 1 || withFactor.PreviousFactors[0] != "ma" {
 		t.Fatalf("经 bars[-1] 读取的因子应记录下来：%+v err=%v", withFactor.PreviousFactors, err)
 	}

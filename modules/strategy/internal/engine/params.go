@@ -8,7 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
-// 参数输出（因子动态调参执行计划 2.8）：每期求值后算出下一期各成员的完整参数快照。
+// 参数输出（设计 8.3）：每期求值后算出下一期各可变成员的完整参数快照。
 //
 //   - default 与 per_subject 都是数值表达式，在这一期的一帧数据上按标的求值（可用 rank、zscore 与 bars[-1]）。
 //   - 统一值取 default 在各标的上的中位数（不引用任何列的常数表达式就是它本身）；per_subject 与统一值不同的标的进入覆盖。
@@ -20,7 +20,7 @@ type ParamValue struct {
 	Overrides map[string]float64
 }
 
-// ParamSet 是各成员（别名）的完整参数快照：别名 → 参数名 → 取值。
+// ParamSet 是各可变成员的完整参数快照：成员键 → 参数名 → 取值。
 type ParamSet map[string]map[string]ParamValue
 
 // ParamOutcome 是一期参数输出的结果。Notes 记录求值失败或被限幅的说明（写进结果记录，便于排查）。
@@ -46,41 +46,41 @@ func EvaluateParams(program *dsl.Program, frame Frame, decls map[string][]dsl.Pa
 	sort.Strings(ids)
 	byMember := map[string][]dsl.CompiledParam{}
 	for _, param := range program.Params {
-		byMember[param.Alias] = append(byMember[param.Alias], param)
+		byMember[param.Member] = append(byMember[param.Member], param)
 	}
-	for _, alias := range sortedAliases(byMember) {
+	for _, member := range sortedMembers(byMember) {
 		snapshot := map[string]ParamValue{}
 		failed := false
-		for _, decl := range decls[alias] {
+		for _, decl := range decls[member] {
 			snapshot[decl.Name] = ParamValue{Default: decl.Default}
 		}
-		for _, param := range byMember[alias] {
-			decl, known := findDecl(decls[alias], param.Name)
+		for _, param := range byMember[member] {
+			decl, known := findDecl(decls[member], param.Name)
 			value, note, ok := evaluateParam(param, ids, frame.Rows, frame.FailedColumns)
 			if !ok {
-				outcome.Notes = append(outcome.Notes, fmt.Sprintf("成员 %s 的参数 %s 求值失败（%s），本期不提交该成员的参数", alias, param.Name, note))
+				outcome.Notes = append(outcome.Notes, fmt.Sprintf("成员 %s 的参数 %s 求值失败（%s），本期不提交该成员的参数", member, param.Name, note))
 				failed = true
 				break
 			}
 			if known {
 				value, note = fitParam(decl, value)
 				if note != "" {
-					outcome.Notes = append(outcome.Notes, fmt.Sprintf("成员 %s 的参数 %s：%s", alias, param.Name, note))
+					outcome.Notes = append(outcome.Notes, fmt.Sprintf("成员 %s 的参数 %s：%s", member, param.Name, note))
 				}
 			}
 			snapshot[param.Name] = value
 		}
 		if !failed {
-			outcome.Params[alias] = snapshot
+			outcome.Params[member] = snapshot
 		}
 	}
 	return outcome
 }
 
-func sortedAliases(values map[string][]dsl.CompiledParam) []string {
+func sortedMembers(values map[string][]dsl.CompiledParam) []string {
 	out := make([]string, 0, len(values))
-	for alias := range values {
-		out = append(out, alias)
+	for member := range values {
+		out = append(out, member)
 	}
 	sort.Strings(out)
 	return out

@@ -16,18 +16,18 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 实例：定义 + View + 可选组合账户；启用时固化解析结果；软删除
+-- 实例：定义 + 因子任务 + 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
+-- 读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
+    c_factor_task_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_enabled INTEGER NOT NULL DEFAULT 0,
     c_session_id TEXT,
     c_resolved_json TEXT NOT NULL DEFAULT '{}',
     c_health TEXT NOT NULL DEFAULT 'ok',
-    c_deleted_at DATETIME,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_enabled IN (0, 1)),
@@ -39,7 +39,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_t_strategy_instances_view ON t_strategy_instances (c_space_id, c_view_id, c_enabled);
+-- 一个因子任务只能被一个实例独占
+CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_factor_task ON t_strategy_instances (c_factor_task_id);
 
 -- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
@@ -55,7 +56,9 @@ CREATE TABLE IF NOT EXISTS t_strategy_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_sessions_instance ON t_strategy_sessions (c_instance_id, c_ctime);
 
--- 每个处理过的周期一行：ok 带目标与规则状态，skipped 带原因；只有 ok 行参与投递
+-- 每个处理过的周期一行：ok 带目标与规则状态，skipped 带原因；ok 行参与目标投递。
+-- c_next_params_json 是这一期算出的下一期可变成员参数（没有可变成员时为空），与结果在同一个事务里写入；
+-- c_params_delivered_at 是它被因子侧接受的时间，c_params_error 是被因子侧明确拒绝的原因（不再重试）。
 CREATE TABLE IF NOT EXISTS t_strategy_results (
     c_result_id TEXT NOT NULL PRIMARY KEY,
     c_instance_id TEXT NOT NULL,
@@ -71,6 +74,9 @@ CREATE TABLE IF NOT EXISTS t_strategy_results (
     c_summary_json TEXT NOT NULL,
     c_event_data BLOB,
     c_publish_status TEXT NOT NULL DEFAULT 'none',
+    c_next_params_json TEXT NOT NULL DEFAULT '',
+    c_params_delivered_at DATETIME,
+    c_params_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('ok', 'skipped')),
     CHECK (c_publish_status IN ('none', 'pending', 'sent', 'cancelled')),
@@ -86,6 +92,11 @@ ON t_strategy_results (c_instance_id, c_session_id, c_status, c_bar_end_time);
 CREATE INDEX IF NOT EXISTS idx_t_strategy_results_pending
 ON t_strategy_results (c_ctime, c_result_id)
 WHERE c_publish_status = 'pending';
+
+-- 参数投递：每个会话里还没送达也没被拒绝的结果
+CREATE INDEX IF NOT EXISTS idx_t_strategy_results_params_pending
+ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
+WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
 -- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_ctime 与所属结果相同，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_result_items (
@@ -104,7 +115,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
--- 回放任务：基于 View 的研究回放，按天数与每个空间的个数清理；c_view_generation 是提交时校验区间所用的活动索引代次
+-- 回放任务：基于因子任务结果 View 的研究回放（c_view_id 由 c_factor_task_id 推导），按天数与每个空间的个数清理；c_view_generation 是提交时校验区间所用的活动索引代次
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
@@ -115,6 +126,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_view_generation TEXT NOT NULL,
     c_calendar TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
+    c_factor_task_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
@@ -164,38 +176,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_subject_id)
 );
 
--- 因子参数的待提交记录：策略每期求出下一期的参数后，与结果在同一个事务里落库，由独立的投递循环调用
--- FactorMgr.SubmitFactorParams 并记录终态。pending 退避重试到被接受、被拒绝或该期已冻结（too_late）；
--- c_period_time 是参数生效的目标期次（Unix 毫秒）。
-CREATE TABLE IF NOT EXISTS t_strategy_param_submissions (
-    c_request_id TEXT NOT NULL PRIMARY KEY,
-    c_instance_id TEXT NOT NULL,
-    c_session_id TEXT NOT NULL,
-    c_result_id TEXT NOT NULL,
-    c_task_id TEXT NOT NULL,
-    c_period_time INTEGER NOT NULL,
-    c_based_on_period INTEGER NOT NULL,
-    c_params_json TEXT NOT NULL,
-    c_notes TEXT NOT NULL DEFAULT '',
-    c_status TEXT NOT NULL DEFAULT 'pending',
-    c_attempts INTEGER NOT NULL DEFAULT 0,
-    c_next_attempt DATETIME NOT NULL,
-    c_outcome_json TEXT NOT NULL DEFAULT '[]',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('pending', 'accepted', 'too_late', 'rejected', 'abandoned')),
-    FOREIGN KEY (c_result_id) REFERENCES t_strategy_results (c_result_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_strategy_param_submissions_pending
-ON t_strategy_param_submissions (c_next_attempt, c_request_id)
-WHERE c_status = 'pending';
-
-CREATE INDEX IF NOT EXISTS idx_t_strategy_param_submissions_instance
-ON t_strategy_param_submissions (c_instance_id, c_period_time);
-
 -- 实例的外显设置：只存隐藏的内容（默认全部展示）。只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据，
--- 不进会话快照与哈希，改了立即生效。c_hidden_json 形如 {"categories": [...], "members": [...], "columns": [...]}。
+-- 不进会话快照与哈希，改了立即生效。c_hidden_json 形如 {"categories": [...], "members": [...], "columns": [...]}，members 是成员键。
 CREATE TABLE IF NOT EXISTS t_strategy_display_settings (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_hidden_json TEXT NOT NULL DEFAULT '{}',

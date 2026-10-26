@@ -4,33 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
-// 策略实例的私有因子任务与参数提交（因子动态调参执行计划 2.3、2.8）。声明了 factors 的策略在启用实例时由 FactorMgr
-// 建立私有因子任务（成员恰好是声明的因子，实例是唯一的参数写入方），实例绑定它的结果 View 求值；每期求出的下一期参数
-// 经结果库里的待提交记录异步提交。
+// 策略实例与因子任务的关联、参数提交（设计 6.2、8.1、8.3）。实例创建时选定因子任务；第一次启用时调用 BindFactorTask
+// 与任务正式关联（独占、永久，幂等）；每期求出的下一期参数经结果表里的待投递记录异步提交。
 
 // ParamDecl 是因子定义声明的一个可调参数。
 type ParamDecl = dsl.ParamDecl
 
-// InstanceFactorTaskRequest 是为实例建立或对齐私有因子任务的请求。
-type InstanceFactorTaskRequest struct {
-	InstanceID      string
-	SpaceID         string
-	SourceDatasetID string
-	Freq            string
-	Members         []dsl.FactorDecl
-}
-
-// InstanceFactorTask 是私有因子任务：集合 ID 与它的结果 View。
-type InstanceFactorTask struct {
-	TaskID string
-	ViewID string
+// ViewIDOfTask 由因子任务 ID 推导它的结果数据集的默认 View。
+func ViewIDOfTask(taskID string) (string, error) {
+	suffix, err := factorname.ParseTaskID(strings.TrimSpace(taskID))
+	if err != nil {
+		return "", err
+	}
+	return factorname.ResultViewID(suffix)
 }
 
 // ParamValue 是一个参数一期的取值：统一值加按标的覆盖。
@@ -39,17 +34,16 @@ type ParamValue struct {
 	Overrides map[string]float64 `json:"overrides,omitempty"`
 }
 
-// ParamSubmission 是一期的参数提交：写入方、集合、期次与各成员的完整快照。
+// ParamSubmission 是一期的参数提交：写入方、任务、目标期次、幂等键与各可变成员的完整快照。
 type ParamSubmission struct {
-	RequestID     string                           `json:"request_id"`
-	Writer        string                           `json:"writer"`
-	TaskID        string                           `json:"task_id"`
-	PeriodTime    time.Time                        `json:"period_time"`
-	BasedOnPeriod time.Time                        `json:"based_on_period"`
-	Members       map[string]map[string]ParamValue `json:"members"`
+	RequestID  string                           `json:"request_id"`
+	Writer     string                           `json:"writer"`
+	TaskID     string                           `json:"task_id"`
+	PeriodTime time.Time                        `json:"period_time"`
+	Members    map[string]map[string]ParamValue `json:"members"`
 }
 
-// MemberSubmitResult 是一个成员的提交结果：accepted、too_late 或 rejected。
+// MemberSubmitResult 是一个成员的提交结果：accepted、duplicate（幂等重复）或 rejected。
 type MemberSubmitResult struct {
 	Member string `json:"member"`
 	Result string `json:"result"`
@@ -58,67 +52,40 @@ type MemberSubmitResult struct {
 
 // 提交结果。
 const (
-	SubmitAccepted = "accepted"
-	SubmitTooLate  = "too_late"
-	SubmitRejected = "rejected"
+	SubmitAccepted  = "accepted"
+	SubmitDuplicate = "duplicate"
+	SubmitRejected  = "rejected"
 )
 
-// FactorTasks 是私有因子任务与参数提交用到的 FactorMgr 接口。
+// BoundTask 是 BindFactorTask 返回的任务状态。
+type BoundTask struct {
+	TaskID          string
+	Status          string
+	BoundInstanceID string
+}
+
+// FactorTasks 是任务关联与参数提交用到的 FactorMgr 接口。
 type FactorTasks interface {
-	EnsureInstanceFactorTask(ctx context.Context, request InstanceFactorTaskRequest) (InstanceFactorTask, error)
-	SetInstanceFactorTaskEnabled(ctx context.Context, instanceID string, enabled bool) error
-	ReleaseInstanceFactorTask(ctx context.Context, instanceID string) error
+	BindFactorTask(ctx context.Context, taskID, instanceID string) (BoundTask, error)
 	SubmitFactorParams(ctx context.Context, submission ParamSubmission) ([]MemberSubmitResult, error)
 }
 
 var _ FactorTasks = (*RPCClient)(nil)
 
-// EnsureInstanceFactorTask 建立或对齐实例的私有因子任务（幂等）。
-func (c *RPCClient) EnsureInstanceFactorTask(ctx context.Context, request InstanceFactorTaskRequest) (InstanceFactorTask, error) {
+// BindFactorTask 把任务与实例永久关联（幂等：同一个实例重复调用直接成功，换一个实例会被拒绝）。
+func (c *RPCClient) BindFactorTask(ctx context.Context, taskID, instanceID string) (BoundTask, error) {
 	if c == nil || c.Factor == nil {
-		return InstanceFactorTask{}, errors.New("Factor 客户端未配置")
+		return BoundTask{}, errors.New("Factor 客户端未配置")
 	}
-	req := &factorpb.EnsureInstanceFactorTaskReq{InstanceId: request.InstanceID, SpaceId: request.SpaceID,
-		SourceDatasetId: request.SourceDatasetID, Freq: request.Freq}
-	for _, member := range request.Members {
-		req.Members = append(req.Members, &factorpb.InstanceTaskMember{MemberAlias: member.Alias, FactorId: member.FactorID})
-	}
-	rsp, err := c.Factor.EnsureInstanceFactorTask(ctx, req)
+	rsp, err := c.Factor.BindFactorTask(ctx, &factorpb.BindFactorTaskReq{TaskId: taskID, InstanceId: instanceID})
 	if err != nil {
-		return InstanceFactorTask{}, transport("建立实例的私有因子任务", err)
+		return BoundTask{}, transport("关联因子任务", err)
 	}
-	if err := retError("建立实例的私有因子任务", rsp.GetRetInfo()); err != nil {
-		return InstanceFactorTask{}, err
+	if err := retError("关联因子任务", rsp.GetRetInfo()); err != nil {
+		return BoundTask{}, err
 	}
-	set := InstanceFactorTask{TaskID: rsp.GetFactorTask().GetTaskId(), ViewID: strings.TrimSpace(rsp.GetViewId())}
-	if set.TaskID == "" || set.ViewID == "" {
-		return InstanceFactorTask{}, errors.New("FactorMgr 没有返回私有因子任务或它的 View")
-	}
-	return set, nil
-}
-
-// SetInstanceFactorTaskEnabled 停用或重新启用实例的私有因子任务；停用没有私有因子任务的实例视为成功。
-func (c *RPCClient) SetInstanceFactorTaskEnabled(ctx context.Context, instanceID string, enabled bool) error {
-	if c == nil || c.Factor == nil {
-		return errors.New("Factor 客户端未配置")
-	}
-	rsp, err := c.Factor.SetInstanceFactorTaskEnabled(ctx, &factorpb.SetInstanceFactorTaskEnabledReq{InstanceId: instanceID, Enabled: enabled})
-	if err != nil {
-		return transport("切换实例私有因子任务的启用状态", err)
-	}
-	return retError("切换实例私有因子任务的启用状态", rsp.GetRetInfo())
-}
-
-// ReleaseInstanceFactorTask 删除实例的私有因子任务与它的结果数据集（幂等）。
-func (c *RPCClient) ReleaseInstanceFactorTask(ctx context.Context, instanceID string) error {
-	if c == nil || c.Factor == nil {
-		return errors.New("Factor 客户端未配置")
-	}
-	rsp, err := c.Factor.ReleaseInstanceFactorTask(ctx, &factorpb.ReleaseInstanceFactorTaskReq{InstanceId: instanceID})
-	if err != nil {
-		return transport("删除实例的私有因子任务", err)
-	}
-	return retError("删除实例的私有因子任务", rsp.GetRetInfo())
+	task := rsp.GetFactorTask()
+	return BoundTask{TaskID: task.GetTaskId(), Status: task.GetStatus(), BoundInstanceID: task.GetBoundInstanceId()}, nil
 }
 
 // SubmitFactorParams 提交一期的参数快照。
@@ -128,12 +95,9 @@ func (c *RPCClient) SubmitFactorParams(ctx context.Context, submission ParamSubm
 	}
 	req := &factorpb.SubmitFactorParamsReq{Writer: submission.Writer, TaskId: submission.TaskID, RequestId: submission.RequestID,
 		PeriodTime: submission.PeriodTime.Unix()}
-	if !submission.BasedOnPeriod.IsZero() {
-		req.BasedOnPeriod = submission.BasedOnPeriod.Unix()
-	}
-	for _, alias := range sortedMapKeys(submission.Members) {
-		member := &factorpb.MemberParams{MemberAlias: alias, Params: map[string]*factorpb.ParamValue{}}
-		for name, value := range submission.Members[alias] {
+	for _, key := range sortedMapKeys(submission.Members) {
+		member := &factorpb.MemberParams{MemberKey: key, Params: map[string]*factorpb.ParamValue{}}
+		for name, value := range submission.Members[key] {
 			member.Params[name] = &factorpb.ParamValue{DefaultValue: value.Default, Overrides: value.Overrides}
 		}
 		req.Members = append(req.Members, member)
@@ -147,7 +111,7 @@ func (c *RPCClient) SubmitFactorParams(ctx context.Context, submission ParamSubm
 	}
 	results := make([]MemberSubmitResult, 0, len(rsp.GetResults()))
 	for _, item := range rsp.GetResults() {
-		results = append(results, MemberSubmitResult{Member: item.GetMemberAlias(), Result: item.GetResult(), Reason: item.GetReason()})
+		results = append(results, MemberSubmitResult{Member: item.GetMemberKey(), Result: item.GetResult(), Reason: item.GetReason()})
 	}
 	return results, nil
 }
@@ -161,31 +125,64 @@ func sortedMapKeys[V any](values map[string]V) []string {
 	return keys
 }
 
-// CheckFactorParams 对照因子定义检查 factor_params：参数名必须是该因子声明的参数。
-func CheckFactorParams(strategy dsl.Strategy, definitions map[string]FactorInfo) error {
-	byAlias := make(map[string]string, len(strategy.Factors))
-	for _, decl := range strategy.Factors {
-		byAlias[decl.Alias] = decl.FactorID
+// VarMember 是关联任务里的一个可变成员：成员键、引用的因子定义和定义声明的可调参数。
+type VarMember struct {
+	Key      string
+	FactorID string
+	Params   []ParamDecl
+}
+
+// CheckFactorParams 对照任务的可变成员检查 DSL（设计 8.1、8.2）：factor_params 与 params() 引用的成员必须是任务的可变成员，
+// 参数名必须是该因子声明的参数；任务的每个可变成员都要在 factor_params 里有输出（可变成员与 factor_params 一一对应）。
+func CheckFactorParams(strategy dsl.Strategy, members map[string]VarMember, refs []dsl.ParamRef) error {
+	available := func() string {
+		keys := make([]string, 0, len(members))
+		for key := range members {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if len(keys) == 0 {
+			return "该任务没有可变成员"
+		}
+		return "任务的可变成员：" + strings.Join(keys, "、")
 	}
-	for _, output := range strategy.FactorParamOutputs() {
-		factor := definitions[byAlias[output.Alias]]
-		found := false
-		for _, decl := range factor.Params {
-			if decl.Name == output.Name {
-				found = true
-				break
+	declared := func(member VarMember, name string) bool {
+		for _, decl := range member.Params {
+			if decl.Name == name {
+				return true
 			}
 		}
-		if !found {
-			names := make([]string, 0, len(factor.Params))
-			for _, decl := range factor.Params {
+		return false
+	}
+	check := func(where, key, name string) error {
+		member, ok := members[key]
+		if !ok {
+			return fmt.Errorf("%s：成员 %s 不是关联任务的可变成员（%s）", where, key, available())
+		}
+		if !declared(member, name) {
+			names := make([]string, 0, len(member.Params))
+			for _, decl := range member.Params {
 				names = append(names, decl.Name)
 			}
-			available := "没有可调参数"
-			if len(names) > 0 {
-				available = "可调参数：" + strings.Join(names, "、")
-			}
-			return fmt.Errorf("factor_params.%s.%s：因子 %s 没有参数 %s（%s）", output.Alias, output.Name, factor.FactorID, output.Name, available)
+			return fmt.Errorf("%s：因子 %s 没有参数 %s（可调参数：%s）", where, member.FactorID, name, strings.Join(names, "、"))
+		}
+		return nil
+	}
+	written := make(map[string]struct{})
+	for _, output := range strategy.FactorParamOutputs() {
+		if err := check("factor_params."+output.Member+"."+output.Name, output.Member, output.Name); err != nil {
+			return err
+		}
+		written[output.Member] = struct{}{}
+	}
+	for _, ref := range refs {
+		if err := check(fmt.Sprintf(`params("%s", "%s")`, ref.Member, ref.Name), ref.Member, ref.Name); err != nil {
+			return err
+		}
+	}
+	for _, key := range sortedMapKeys(members) {
+		if _, ok := written[key]; !ok {
+			return fmt.Errorf("关联任务的可变成员 %s 在 factor_params 里没有输出：可变成员的参数由策略逐期提交，没有输出就永远用默认参数", key)
 		}
 	}
 	return nil

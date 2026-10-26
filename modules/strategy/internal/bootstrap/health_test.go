@@ -44,7 +44,19 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 			t.Fatal(err)
 		}
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "crypto", ViewID: "view_a", LogicalAccountID: account, CreatedAt: seedTime}); err != nil {
+	// 每个实例独占一个因子任务；会话快照里的任务要与实例的一致。
+	task := "ftask_" + instanceID
+	var snapshot map[string]any
+	if err := json.Unmarshal([]byte(resolved), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	snapshot["factor_task_id"] = task
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved = string(raw)
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "crypto", FactorTaskID: task, LogicalAccountID: account, CreatedAt: seedTime}); err != nil {
 		t.Fatal(err)
 	}
 	session := instanceID + "-session"
@@ -60,7 +72,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	}
 }
 
-const resolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
+const resolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
 
 func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	repo := openStore(t)

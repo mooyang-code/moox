@@ -30,9 +30,7 @@ type DataViewClient interface {
 // FactorClient 是策略读取 FactorMgr 用到的最小方法集合。
 type FactorClient interface {
 	GetFactor(context.Context, *factorpb.GetFactorReq, ...client.Option) (*factorpb.GetFactorRsp, error)
-	EnsureInstanceFactorTask(context.Context, *factorpb.EnsureInstanceFactorTaskReq, ...client.Option) (*factorpb.EnsureInstanceFactorTaskRsp, error)
-	SetInstanceFactorTaskEnabled(context.Context, *factorpb.SetInstanceFactorTaskEnabledReq, ...client.Option) (*factorpb.SetInstanceFactorTaskEnabledRsp, error)
-	ReleaseInstanceFactorTask(context.Context, *factorpb.ReleaseInstanceFactorTaskReq, ...client.Option) (*factorpb.ReleaseInstanceFactorTaskRsp, error)
+	BindFactorTask(context.Context, *factorpb.BindFactorTaskReq, ...client.Option) (*factorpb.BindFactorTaskRsp, error)
 	SubmitFactorParams(context.Context, *factorpb.SubmitFactorParamsReq, ...client.Option) (*factorpb.SubmitFactorParamsRsp, error)
 }
 
@@ -117,16 +115,8 @@ func (a *gatewayAdapter) GetFactor(ctx context.Context, request *factorpb.GetFac
 	return invokeGateway[factorpb.GetFactorRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "GetFactor", request, options)
 }
 
-func (a *gatewayAdapter) EnsureInstanceFactorTask(ctx context.Context, request *factorpb.EnsureInstanceFactorTaskReq, options ...client.Option) (*factorpb.EnsureInstanceFactorTaskRsp, error) {
-	return invokeGateway[factorpb.EnsureInstanceFactorTaskRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "EnsureInstanceFactorTask", request, options)
-}
-
-func (a *gatewayAdapter) SetInstanceFactorTaskEnabled(ctx context.Context, request *factorpb.SetInstanceFactorTaskEnabledReq, options ...client.Option) (*factorpb.SetInstanceFactorTaskEnabledRsp, error) {
-	return invokeGateway[factorpb.SetInstanceFactorTaskEnabledRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "SetInstanceFactorTaskEnabled", request, options)
-}
-
-func (a *gatewayAdapter) ReleaseInstanceFactorTask(ctx context.Context, request *factorpb.ReleaseInstanceFactorTaskReq, options ...client.Option) (*factorpb.ReleaseInstanceFactorTaskRsp, error) {
-	return invokeGateway[factorpb.ReleaseInstanceFactorTaskRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "ReleaseInstanceFactorTask", request, options)
+func (a *gatewayAdapter) BindFactorTask(ctx context.Context, request *factorpb.BindFactorTaskReq, options ...client.Option) (*factorpb.BindFactorTaskRsp, error) {
+	return invokeGateway[factorpb.BindFactorTaskRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "BindFactorTask", request, options)
 }
 
 func (a *gatewayAdapter) SubmitFactorParams(ctx context.Context, request *factorpb.SubmitFactorParamsReq, options ...client.Option) (*factorpb.SubmitFactorParamsRsp, error) {

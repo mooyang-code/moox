@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -80,6 +81,8 @@ type PulledJob struct {
 	Window     recalcexec.Window
 	Subjects   []string
 	Set        domain.EngineTask
+	// DefaultFilled 是管理端已经记下的、按默认参数新补的期次（成员键 → 闭区间）：作业中途换引擎或重启后接着累计。
+	DefaultFilled map[string][]domain.TimeRange
 }
 
 func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, error) {
@@ -95,7 +98,8 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 	if err != nil {
 		return PulledJob{}, false, fmt.Errorf("decode recalc job set: %w", err)
 	}
-	job := PulledJob{JobID: rsp.GetJob().GetJobId(), LeaseToken: rsp.GetLeaseToken(), Subjects: rsp.GetJob().GetSubjects(), Set: set}
+	job := PulledJob{JobID: rsp.GetJob().GetJobId(), LeaseToken: rsp.GetLeaseToken(), Subjects: rsp.GetJob().GetSubjects(), Set: set,
+		DefaultFilled: defaultFilledFromRanges(rsp.GetJob().GetDefaultFilled())}
 	for _, field := range []struct {
 		name   string
 		value  string
@@ -114,12 +118,14 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 	return job, true, nil
 }
 
-// ReportRecalcProgress returns the manager's current status of the job.
-func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (string, error) {
+// ReportRecalcProgress returns the manager's current status of the job. defaultFilled 是到目前为止累计的按默认参数新补的期次，
+// 为空表示没有变化。
+func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
 	var rsp factorpb.ReportRecalcProgressRsp
 	req := &factorpb.ReportRecalcProgressReq{
 		Engine: factorwire.EngineIdentityToPB(c.identity), JobId: jobID, LeaseToken: leaseToken,
 		ProgressTime: factorwire.FormatTime(progress), Status: status, Error: errText,
+		DefaultFilled: defaultFilledToRanges(defaultFilled),
 	}
 	if err := c.call(ctx, "ReportRecalcProgress", req, &rsp, rsp.GetRetInfo); err != nil {
 		return "", err
@@ -147,4 +153,34 @@ func (c *ManagerClient) call(ctx context.Context, method string, req, rsp proto.
 	default:
 		return fmt.Errorf("%s failed: %s", method, ret.GetMsg())
 	}
+}
+
+func defaultFilledToRanges(filled map[string][]domain.TimeRange) []*factorpb.MemberRanges {
+	keys := make([]string, 0, len(filled))
+	for key := range filled {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]*factorpb.MemberRanges, 0, len(keys))
+	for _, key := range keys {
+		item := &factorpb.MemberRanges{MemberKey: key}
+		for _, r := range filled[key] {
+			item.Ranges = append(item.Ranges, &factorpb.TimeRange{Start: r.Start, End: r.End})
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func defaultFilledFromRanges(items []*factorpb.MemberRanges) map[string][]domain.TimeRange {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make(map[string][]domain.TimeRange, len(items))
+	for _, item := range items {
+		for _, r := range item.GetRanges() {
+			out[item.GetMemberKey()] = append(out[item.GetMemberKey()], domain.TimeRange{Start: r.GetStart(), End: r.GetEnd()})
+		}
+	}
+	return out
 }

@@ -19,7 +19,7 @@ import (
 // 策略数据库的业务表分类；Plan 校验库里的每张表都已归类，schema 新增表而忘了归类时重置会拒绝执行。
 var (
 	strategyDataTables = []string{
-		"t_strategy_param_submissions", "t_strategy_results", "t_strategy_result_items", "t_strategy_replays", "t_strategy_replay_bars", "t_strategy_age_passed",
+		"t_strategy_results", "t_strategy_result_items", "t_strategy_replays", "t_strategy_replay_bars", "t_strategy_age_passed",
 	}
 	strategyConfigTables = []string{
 		"t_strategy_defs", "t_strategy_def_versions", "t_strategy_instances", "t_strategy_sessions", "t_strategy_display_settings",

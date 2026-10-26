@@ -3,57 +3,19 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskIDAndResultDatasetID(t *testing.T) {
-	tests := []struct {
-		name      string
-		datasetID string
-		freq      string
-		taskID    string
-		resultID  string
-	}{
-		{
-			name:      "source already ends in frequency",
-			datasetID: "dataset_binance_kline_1m",
-			freq:      "1m",
-			taskID:    "ftask_binance_kline_1m",
-			resultID:  "dataset_factor_binance_kline_1m",
-		},
-		{
-			name:      "frequency appended to source suffix",
-			datasetID: "dataset_spot_kline",
-			freq:      "1h",
-			taskID:    "ftask_spot_kline_1h",
-			resultID:  "dataset_factor_spot_kline_1h",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.taskID, TaskID(tt.datasetID, tt.freq))
-			require.Equal(t, tt.resultID, ResultDatasetID(TaskID(tt.datasetID, tt.freq)))
-		})
-	}
-}
-
-// 私有任务的 ID 由实例 ID 的摘要推出：满足 Storage 的小写下划线规则与 50 个字符上限，同一实例总是同一个 ID。
-func TestInstanceTaskIDFitsStorageRules(t *testing.T) {
-	instanceID := "5f0c3a4e-8d2b-4c1a-9e7f-1234567890ab"
-	taskID := InstanceTaskID(instanceID)
-	require.Equal(t, taskID, InstanceTaskID(instanceID))
-	require.NotEqual(t, taskID, InstanceTaskID("another"))
-	require.True(t, strings.HasPrefix(taskID, "ftask_i"))
-	dataset := ResultDatasetID(taskID)
-	require.LessOrEqual(t, len(dataset), 50)
-	require.Regexp(t, `^dataset_factor_i[0-9a-f]{20}$`, dataset)
-	require.Equal(t, "view_factor_"+strings.TrimPrefix(taskID, "ftask_"), ResultViewID(taskID))
-	require.LessOrEqual(t, len([]rune(InstanceDatasetName(instanceID))), 10)
+// 结果数据集与默认 View 的 ID 由任务 ID 的后缀推出；任务 ID 不合法时返回空串。
+func TestResultIDsDeriveFromTaskID(t *testing.T) {
+	require.Equal(t, "dataset_factor_abc12345", ResultDatasetID("ftask_abc12345"))
+	require.Equal(t, "view_factor_abc12345", ResultViewID("ftask_abc12345"))
+	require.Equal(t, "dataset_factor_my_ema", ResultDatasetID(" ftask_my_ema "))
+	require.Empty(t, ResultDatasetID("fset_abc"))
+	require.Empty(t, ResultViewID("ftask_Bad"))
 }
 
 func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
@@ -79,28 +41,45 @@ func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
 }
 
 func TestValidateTaskRequiresCanonicalIdentity(t *testing.T) {
-	set := FactorTask{
-		TaskID:          TaskID("dataset_binance_kline_1m", "1m"),
+	task := FactorTask{
+		TaskID:          "ftask_abc12345",
 		SpaceID:         "crypto",
+		Name:            "动量任务",
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
-		ResultDatasetID: ResultDatasetID(TaskID("dataset_binance_kline_1m", "1m")),
+		ResultDatasetID: "dataset_factor_abc12345",
 		Status:          TaskStatusPending,
 	}
-	require.NoError(t, ValidateTask(set))
+	require.NoError(t, ValidateTask(task))
 
-	set.ResultDatasetID = "dataset_other"
-	require.ErrorContains(t, ValidateTask(set), "result_dataset_id")
+	bad := task
+	bad.ResultDatasetID = "dataset_other"
+	require.ErrorContains(t, ValidateTask(bad), "result_dataset_id")
 
-	set.ResultDatasetID = ResultDatasetID(set.TaskID)
+	bad = task
+	bad.TaskID = "ftask_Bad"
+	require.Error(t, ValidateTask(bad))
 
-	// 私有任务的 ID 必须由实例推出。
-	private := set
-	private.OwnerInstanceID = "inst-1"
-	require.ErrorContains(t, ValidateTask(private), "task_id must be")
-	private.TaskID = InstanceTaskID("inst-1")
-	private.ResultDatasetID = ResultDatasetID(private.TaskID)
-	require.NoError(t, ValidateTask(private))
+	bad = task
+	bad.Status = "deleting"
+	require.ErrorContains(t, ValidateTask(bad), "status")
+
+	bad = task
+	bad.BoundInstanceID = " inst-1"
+	require.ErrorContains(t, ValidateTask(bad), "bound_instance_id")
+	task.BoundInstanceID = "inst-1"
+	require.NoError(t, ValidateTask(task))
+}
+
+func TestValidateTaskName(t *testing.T) {
+	for _, name := range []string{"动量任务", "BTC动量", "一二三四五六七八九十"} {
+		require.NoError(t, ValidateTaskName(name), name)
+	}
+	for name, text := range map[string]string{
+		"空": "", "无汉字": "momentum", "超过十个字": "一二三四五六七八九十一", "首尾空白": " 动量", "控制字符": "动\t量",
+	} {
+		require.Error(t, ValidateTaskName(text), name)
+	}
 }
 
 func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
@@ -123,7 +102,9 @@ func TestValidateDefinitionDoesNotNeedSourceColumns(t *testing.T) {
 
 var closeColumns = []SourceColumn{{Name: "close", Numeric: true}, {Name: "symbol_name", Numeric: false}}
 
-func member(factor FactorDef) MemberDef { return MemberDef{Alias: factor.FactorID, Factor: factor} }
+func member(factor FactorDef) MemberDef {
+	return MemberDef{Key: factor.FactorID, Factor: factor, Kind: MemberKindFixed}
+}
 
 func TestValidateMembershipRejectsUnknownOrNonNumericInput(t *testing.T) {
 	factor := compiledFactor(t, "f", "output: missing")
@@ -148,20 +129,24 @@ func TestValidateMembershipRejectsDuplicateColumnInTaskExcludingSelf(t *testing.
 	factor := validFactor(t)
 	// 两个输出的因子，其中一个输出与 validFactor 的列重名。
 	sibling := compiledFactor(t, "sibling", "outputs:\n  close_mean: close + 1\n  other: close + 2\n")
-	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{member(sibling)}, nil), "重复")
-	// A member never conflicts with itself.
+	sibling.Outputs = []string{"close_mean", "other"}
+	// 多输出因子的列是 成员键__输出名，不会与单输出因子的列重名。
+	require.NoError(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{member(sibling)}, nil))
+	// 成员不会与自己冲突。
 	require.NoError(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{member(factor)}, nil))
-	// 同一定义用不同别名加入：列名带别名前缀，互不冲突。
-	fast := MemberDef{Alias: "fast", Factor: factor}
-	slow := MemberDef{Alias: "slow", Factor: factor}
-	require.NoError(t, ValidateMembership(FactorTask{}, fast, closeColumns, []MemberDef{slow}, nil))
-	// 同名成员（别名与因子 ID 相同）输出列重名，要拒绝。
-	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{{Alias: "sibling", Factor: sibling}}, nil), "重复")
+	// 同一因子的固定成员与可变成员：成员键不同，列名互不冲突。
+	ema := compiledFactor(t, "ema", "params:\n  span: {type: int, min: 2, max: 100, default: 20}\noutput: ema(close, span)\n")
+	fixed := fixedMember(t, ema, map[string]float64{"span": 30})
+	variable := varMember(t, ema)
+	require.NoError(t, ValidateMembership(FactorTask{}, fixed, closeColumns, []MemberDef{variable}, nil))
+	require.NoError(t, ValidateMembership(FactorTask{}, variable, closeColumns, []MemberDef{fixed}, nil))
+	// 同一成员键出现两次（兄弟列表里混进同键成员）按同一成员处理，不算冲突。
+	require.NoError(t, ValidateMembership(FactorTask{}, fixed, closeColumns, []MemberDef{fixed}, nil))
 }
 
 func TestValidateMembershipRejectsColumnOwnedByOtherMember(t *testing.T) {
 	factor := validFactor(t)
-	err := ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, map[string]string{"close_mean": "Other"})
+	err := ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, map[string]string{"close_mean": "other"})
 	require.ErrorContains(t, err, "已属于")
 }
 
@@ -171,16 +156,49 @@ func TestValidateMembershipAllowsReaddOfSameMember(t *testing.T) {
 		map[string]string{"close_mean": factor.FactorID}))
 }
 
+// 成员键必须是公共命名包按类型和参数推出的那一个；类型不合法也拒绝。
+func TestValidateMembershipChecksMemberKeyAndKind(t *testing.T) {
+	ema := compiledFactor(t, "ema", "params:\n  span: {type: int, min: 2, max: 100, default: 20}\noutput: ema(close, span)\n")
+	fixed := fixedMember(t, ema, map[string]float64{"span": 30})
+	require.Equal(t, "ema__30", fixed.Key)
+	fixed.Key = "ema__31"
+	require.ErrorContains(t, ValidateMembership(FactorTask{}, fixed, closeColumns, nil, nil), "成员键必须是")
+	fixed.Key, fixed.Kind = "ema", "other"
+	require.ErrorContains(t, ValidateMembership(FactorTask{}, fixed, closeColumns, nil, nil), "成员类型")
+	require.Equal(t, "ema__var", varMember(t, ema).Key)
+}
+
 func TestMemberColumns(t *testing.T) {
 	factor := compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  down: ts_mean(close, w) * 2\n")
-	require.Equal(t, []string{"up", "down"}, member(factor).OutputColumns())
-	fast := MemberDef{Alias: "fast", Factor: factor}
-	require.Equal(t, []string{"fast_up", "fast_down"}, fast.OutputColumns())
-	require.Equal(t, []string{"fast__w"}, fast.ParamColumns())
-	require.Equal(t, "ftask_x/fast", fast.Key("ftask_x"))
-	// 参数列与源列冲突、别名不合法都拒绝。
-	require.ErrorContains(t, ValidateMembership(FactorTask{}, MemberDef{Alias: "x__y", Factor: factor}, closeColumns, nil, nil), "别名")
-	require.ErrorContains(t, ValidateMembership(FactorTask{}, fast, append(closeColumns, SourceColumn{Name: "fast__w", Numeric: true}), nil, nil), "与源列重名")
+	require.Equal(t, []string{"boll__up", "boll__down"}, member(factor).OutputColumns())
+	fast := fixedMember(t, factor, map[string]float64{"w": 10})
+	require.Equal(t, []string{"boll__10__up", "boll__10__down"}, fast.OutputColumns())
+	variable := varMember(t, factor)
+	require.Equal(t, []string{"boll__var__up", "boll__var__down"}, variable.OutputColumns())
+	require.Equal(t, "ftask_x/boll__var", variable.ProgramKey("ftask_x"))
+	// 输出列与源列冲突时拒绝。
+	require.ErrorContains(t, ValidateMembership(FactorTask{}, fast, append(closeColumns, SourceColumn{Name: "boll__10__up", Numeric: true}), nil, nil), "与源列重名")
+	// 单输出因子的列就是成员键。
+	single := compiledFactor(t, "ma", "params: {n: {type: int, min: 2, max: 50, default: 20}}\noutput: ts_mean(close, n)\n")
+	require.Equal(t, []string{"ma__var"}, varMember(t, single).OutputColumns())
+}
+
+func fixedMember(t *testing.T, factor FactorDef, params map[string]float64) MemberDef {
+	t.Helper()
+	full, err := ResolveMemberParams(factor, params)
+	require.NoError(t, err)
+	key, err := DeriveMemberKey(factor, MemberKindFixed, full)
+	require.NoError(t, err)
+	return MemberDef{Key: key, Factor: factor, Kind: MemberKindFixed, Params: full}
+}
+
+func varMember(t *testing.T, factor FactorDef) MemberDef {
+	t.Helper()
+	full, err := ResolveMemberParams(factor, nil)
+	require.NoError(t, err)
+	key, err := DeriveMemberKey(factor, MemberKindVar, full)
+	require.NoError(t, err)
+	return MemberDef{Key: key, Factor: factor, Kind: MemberKindVar, Params: full}
 }
 
 func compiledFactor(t *testing.T, factorID, spec string) FactorDef {

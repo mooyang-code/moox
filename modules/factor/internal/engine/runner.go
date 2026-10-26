@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
@@ -34,10 +32,6 @@ type measuredRunner struct {
 	metrics *observability.Metrics
 	health  *Health
 	runs    *runTracker
-
-	// carried 是每个成员连续沿用参数的期数（任务/别名 → 期数），实时周期按冻结来源更新。
-	carriedMu sync.Mutex
-	carried   map[string]int
 }
 
 func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
@@ -74,7 +68,6 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			r.metrics.LastPeriodTime.WithLabelValues(taskID).Set(float64(periodTime.Unix()))
 			r.runs.record(taskID, periodTime, status, outcome, time.Now())
 		}
-		r.recordParams(taskID, outcome)
 	}
 	for _, factor := range outcome.Factors {
 		if factor.Status != "complete" {
@@ -82,8 +75,8 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			if reason == "" {
 				reason = "failed"
 			}
-			r.metrics.Failures.WithLabelValues(taskID, factor.Member, reason).Inc()
-			log.ErrorContextf(ctx, "factor_compute_failed task_id=%s member=%s factor_id=%s reason=%s", taskID, factor.Member, factor.FactorID, reason)
+			r.metrics.Failures.WithLabelValues(taskID, factor.MemberKey, reason).Inc()
+			log.ErrorContextf(ctx, "factor_compute_failed task_id=%s member=%s factor_id=%s reason=%s", taskID, factor.MemberKey, factor.FactorID, reason)
 		}
 	}
 	if err != nil {
@@ -93,37 +86,6 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		log.InfoContextf(ctx, "factor_period_done task_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", taskID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
-}
-
-// recordParams 按每个成员这一期冻结参数的来源计数，并维护连续沿用的期数：沿用（含离线沿用）加一，
-// 新提交生效时归零；默认值（从未提交过）不算沿用。
-func (r *measuredRunner) recordParams(taskID string, outcome pipeline.Outcome) {
-	r.carriedMu.Lock()
-	defer r.carriedMu.Unlock()
-	if r.carried == nil {
-		r.carried = map[string]int{}
-	}
-	for _, state := range outcome.Factors {
-		if state.ParamsSource == "" {
-			continue
-		}
-		r.metrics.ParamFreezes.WithLabelValues(taskID, state.ParamsSource).Inc()
-		key := taskID + "/" + state.Member
-		switch state.ParamsSource {
-		case domain.ParamsCarried, domain.ParamsCarriedOffline:
-			r.carried[key]++
-		default:
-			r.carried[key] = 0
-		}
-		r.metrics.ParamCarriedPeriods.WithLabelValues(taskID, state.Member).Set(float64(r.carried[key]))
-	}
-}
-
-// carriedPeriods 返回成员当前连续沿用参数的期数（没有记录为 0）。
-func (r *measuredRunner) carriedPeriods(taskID, member string) int {
-	r.carriedMu.Lock()
-	defer r.carriedMu.Unlock()
-	return r.carried[taskID+"/"+member]
 }
 
 // pipelineStages is the order a period runs through; the log line lists the

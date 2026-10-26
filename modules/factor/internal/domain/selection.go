@@ -8,43 +8,43 @@ import (
 )
 
 // SelectEnabledMembers resolves a recalc selection against a set's members:
-// no aliases means every enabled member, explicit aliases must all be enabled members.
-func SelectEnabledMembers(members []TaskMember, aliases []string) ([]MemberDef, error) {
-	byAlias := make(map[string]TaskMember, len(members))
+// no keys means every enabled member, explicit keys must all be enabled members.
+func SelectEnabledMembers(members []TaskMember, keys []string) ([]MemberDef, error) {
+	byKey := make(map[string]TaskMember, len(members))
 	enabled := make([]MemberDef, 0, len(members))
 	for _, member := range members {
-		byAlias[member.MemberAlias] = member
+		byKey[member.MemberKey] = member
 		if member.Status == MemberStatusEnabled {
 			enabled = append(enabled, member.Def())
 		}
 	}
-	if len(aliases) == 0 {
+	if len(keys) == 0 {
 		if len(enabled) == 0 {
 			return nil, errors.New("factor task has no enabled members")
 		}
 		return enabled, nil
 	}
-	requested := make([]string, 0, len(aliases))
-	seen := make(map[string]struct{}, len(aliases))
-	for _, alias := range aliases {
-		alias = strings.TrimSpace(alias)
-		if alias == "" {
-			return nil, errors.New("member aliases contain an empty value")
+	requested := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, errors.New("member keys contain an empty value")
 		}
-		if _, ok := seen[alias]; !ok {
-			seen[alias] = struct{}{}
-			requested = append(requested, alias)
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			requested = append(requested, key)
 		}
 	}
 	sort.Strings(requested)
 	selected := make([]MemberDef, 0, len(requested))
-	for _, alias := range requested {
-		member, ok := byAlias[alias]
+	for _, key := range requested {
+		member, ok := byKey[key]
 		if !ok {
-			return nil, fmt.Errorf("成员 %q 不在因子任务里", alias)
+			return nil, fmt.Errorf("成员 %q 不在因子任务里", key)
 		}
 		if member.Status != MemberStatusEnabled {
-			return nil, fmt.Errorf("member %q is not enabled in set", alias)
+			return nil, fmt.Errorf("member %q is not enabled in set", key)
 		}
 		selected = append(selected, member.Def())
 	}

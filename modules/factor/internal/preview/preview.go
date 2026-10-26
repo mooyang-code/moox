@@ -83,8 +83,8 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	if factor.Compiled() == nil {
 		return Result{}, errors.New("定义尚未编译")
 	}
-	member := domain.MemberDef{Alias: factor.FactorID, Factor: factor}
-	params := map[string]domain.ParamFreeze{}
+	member := domain.MemberDef{Key: factor.FactorID, Factor: factor, Kind: domain.MemberKindFixed}
+	params := map[string]domain.ParamSnapshot{}
 	if len(req.Params) > 0 {
 		if err := domain.CheckSnapshotNumbers(req.Params); err != nil {
 			return Result{}, err
@@ -92,7 +92,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		if err := domain.ValidateSnapshot(member, req.Params, nil); err != nil {
 			return Result{}, err
 		}
-		params[member.Alias] = domain.ParamFreeze{MemberAlias: member.Alias, Snapshot: req.Params, Source: domain.ParamsRequested}
+		params[member.Key] = req.Params
 	}
 	periods := req.Periods
 	if periods <= 0 {

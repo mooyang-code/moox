@@ -145,25 +145,27 @@ func (r *Runtime) initTask(ctx context.Context, ref lifecycle.Ref) error {
 }
 
 // autoStartTask 报告任务是否随创建自动 init、start：目录里的计算任务没有人会逐个执行生命周期命令，
-// 建好就该直接开始预热计算（策略实例的私有因子任务在实例启用时建立，同样如此）。
+// 有启用成员的任务建好就该直接开始预热计算。没有启用成员的任务不启动（它不会产出任何列，启动没有意义；
+// 周期刷新会在成员启用、目录同步之后重新判断）。本地序列是否覆盖成员里最长的“回看 + 预热”由预热阶段的数据检查负责，
+// 可变成员的回看按参数声明范围的上限计算（编译时已取最坏情况），不够时停在预热阶段，状态里给出需要导入历史的提示。
 func (r *Runtime) autoStartTask(ref lifecycle.Ref) bool {
 	if ref.Kind != factorTaskKind {
 		return false
 	}
-	_, lookup := r.catalog.SetByID(ref.ID)
-	return lookup == SetFound
+	set, lookup := r.catalog.SetByID(ref.ID)
+	return lookup == SetFound && len(set.Members) > 0
 }
 
-// autoConfirmTask 报告预热中的计算任务能否自动确认进入运行：只对非专属任务（专属任务的预热阶段有“策略对预热实例发影子目标”的语义，
-// 不自动确认）。证据只放在引擎内存里：任务进入预热之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
-// 写入了结果行，且这一期各成员的别名、定义指纹与固定参数摘要都与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
+// autoConfirmTask 报告预热中的计算任务能否自动确认进入运行：只对还没关联策略实例的任务（已关联任务的预热阶段有“策略对预热实例
+// 发影子目标”的语义，不自动确认）。证据只放在引擎内存里：任务进入预热之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
+// 写入了结果行，且这一期各成员的成员契约（成员键、类型、定义哈希）都与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
 // 代价至多是晚一个周期转为运行；因子计算在预热阶段本来就是完整的。
 func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
 	if ref.Kind != factorTaskKind {
 		return false
 	}
 	set, lookup := r.catalog.SetByID(ref.ID)
-	if lookup != SetFound || set.Set.OwnerInstanceID != "" {
+	if lookup != SetFound || set.Set.BoundInstanceID != "" {
 		return false
 	}
 	run, ok := r.runs.lastRecorded(ref.ID)
@@ -183,23 +185,23 @@ func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
 	}
 	want := make(map[string]domain.MemberDef, len(members))
 	for _, member := range members {
-		want[member.Alias] = member
+		want[member.Key] = member
 	}
 	for _, factor := range run.factors {
-		member, ok := want[factor.MemberAlias]
+		member, ok := want[factor.MemberKey]
 		if !ok || factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.GapSubjects) > 0 {
 			return false
 		}
-		// 证据要绑定成员的计算内容：同一别名删除重加成不同的定义或固定参数后，旧的一期不能算新成员的证据。
+		// 证据要绑定成员的契约：成员键已经带了固定参数，再核对类型与定义哈希，成员删除重加成不同的定义或类型后，
+		// 旧的一期不能算新成员的证据。
 		compiled, err := domain.CompileDefinition(member.Factor)
 		if err != nil {
 			return false
 		}
-		member.Factor = compiled
-		if factor.DefinitionHash != domain.DefinitionHash(compiled) || factor.ParamsDigest != domain.ParamsDigest(domain.MemberSnapshot(member)) {
+		if factor.MemberKind != member.Kind || factor.DefinitionHash != domain.DefinitionHash(compiled) {
 			return false
 		}
-		delete(want, factor.MemberAlias)
+		delete(want, factor.MemberKey)
 	}
 	return len(want) == 0
 }

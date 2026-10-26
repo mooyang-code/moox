@@ -16,12 +16,12 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 	backoff := recheckRereadBackoff
 	recheckRereadBackoff = time.Millisecond
 	t.Cleanup(func() { recheckRereadBackoff = backoff })
-	view, err := client.GetView(context.Background(), "crypto", "view_a")
+	view, err := client.GetView(context.Background(), "crypto", "view_factor_a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_a", Bar: "1h", Calendar: input.DefaultCalendar}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", ViewID: "view_a", EndTime: origin.Add(20 * time.Hour)}
+	resolved := input.Resolved{ViewID: "view_factor_a", Bar: "1h", Calendar: input.DefaultCalendar}
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", EndTime: origin.Add(20 * time.Hour)}
 	return &Runner{Store: openStore(t), Client: client}, job, resolved, view
 }
 

@@ -29,17 +29,17 @@ func PeriodValues(plan Plan, computation Computation, period time.Time) (FactorV
 	}
 	for _, member := range plan.Members {
 		cross := member.Factor.FactorType == domain.FactorTypeCrossSection
-		for subject, item := range computation.Results[member.Alias] {
+		for subject, item := range computation.Results[member.Key] {
 			if item.Err != nil {
 				continue
 			}
 			if err := validateResultColumns(item, member, cross); err != nil {
-				return nil, fmt.Errorf("成员 %s 的结果列不符：%w", member.Alias, err)
+				return nil, fmt.Errorf("成员 %s 的结果列不符：%w", member.Key, err)
 			}
 			for _, row := range item.Rows {
 				at, _, rowSubject, values, err := decodeResultRow(row, cross)
 				if err != nil {
-					return nil, fmt.Errorf("成员 %s 的结果行无法解码：%w", member.Alias, err)
+					return nil, fmt.Errorf("成员 %s 的结果行无法解码：%w", member.Key, err)
 				}
 				if !at.Equal(period) {
 					continue
@@ -47,7 +47,7 @@ func PeriodValues(plan Plan, computation Computation, period time.Time) (FactorV
 				if !cross {
 					rowSubject = subject
 				}
-				put(rowSubject, member.Alias, member.OutputColumns(), values)
+				put(rowSubject, member.Key, member.OutputColumns(), values)
 			}
 		}
 	}

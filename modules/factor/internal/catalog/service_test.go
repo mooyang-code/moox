@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,16 +25,15 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 
 	set, err := svc.CreateTask(context.Background(), newTask())
 	require.NoError(t, err)
-	require.Equal(t, domain.TaskID("dataset_prices", "1m"), set.TaskID)
-	require.Equal(t, domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")), set.ResultDatasetID)
+	require.Equal(t, testTaskID(), set.TaskID)
+	require.Equal(t, "dataset_factor_prices_1m", set.ResultDatasetID)
 	require.Equal(t, domain.TaskStatusEnabled, set.Status)
 	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["write_owner"])
-	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close")}, meta.createdSpec.Columns)
-	require.Equal(t, "Prices因子", meta.createdSpec.Name)
-	require.LessOrEqual(t, len([]rune(meta.createdSpec.Name)), 10)
+	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close"), paramsColumn()}, meta.createdSpec.Columns, "结果数据集创建时同时注册 __params 列")
+	require.Equal(t, "价格因子", meta.createdSpec.Name, "任务名称直接用作结果数据集的名称")
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
 	require.Equal(t, []string{"create", "activate"}, meta.writeOps)
 }
@@ -50,8 +50,8 @@ func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
 	created, err := NewService(db, meta).CreateTask(context.Background(), set)
 	require.NoError(t, err)
 	require.Equal(t, "1h", created.Freq)
-	require.Equal(t, "ftask_prices_1h", created.TaskID)
-	require.Equal(t, "dataset_factor_prices_1h", created.ResultDatasetID)
+	require.Equal(t, testTaskID(), created.TaskID)
+	require.Equal(t, "dataset_factor_prices_1m", created.ResultDatasetID)
 }
 
 func TestCreateTaskRejectsSpaceWithoutCalendar(t *testing.T) {
@@ -72,7 +72,7 @@ func TestCreateTaskRetryResumesFromPending(t *testing.T) {
 
 	_, err := svc.CreateTask(context.Background(), newTask())
 	require.ErrorContains(t, err, "activate")
-	set, err := db.GetTask(context.Background(), domain.TaskID("dataset_prices", "1m"))
+	set, err := db.GetTask(context.Background(), testTaskID())
 	require.NoError(t, err)
 	require.Equal(t, domain.TaskStatusPending, set.Status)
 
@@ -94,7 +94,7 @@ func TestCreateTaskRejectsFactorResultSource(t *testing.T) {
 
 	_, err := svc.CreateTask(context.Background(), newTask())
 	require.ErrorContains(t, err, "factor_result")
-	_, err = db.GetTask(context.Background(), domain.TaskID("dataset_prices", "1m"))
+	_, err = db.GetTask(context.Background(), testTaskID())
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -134,83 +134,64 @@ func TestDeleteSetKeepsResultDatasetUnlessPurging(t *testing.T) {
 	}
 }
 
-func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
+// 删除失败后任务仍在，重试即可：先删结果数据集、再删数据库记录，Storage 删除数据集对"已不存在"幂等。
+func TestDeleteTaskPurgeIsRetryable(t *testing.T) {
+	ctx := context.Background()
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := NewService(db, meta)
-	set, err := svc.CreateTask(context.Background(), newTask())
+	set, err := svc.CreateTask(ctx, newTask())
 	require.NoError(t, err)
-	require.NoError(t, db.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled))
-	_, err = svc.CreateFactor(context.Background(), testFactor())
+	_, err = svc.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusDisabled)
 	require.NoError(t, err)
 	meta.deleteErrs = 1
 
-	err = svc.DeleteTask(context.Background(), set.TaskID, true)
+	err = svc.DeleteTask(ctx, set.TaskID, true)
 	require.ErrorContains(t, err, "temporary metadata failure")
-	pending, err := db.GetTask(context.Background(), set.TaskID)
+	stored, err := db.GetTask(ctx, set.TaskID)
 	require.NoError(t, err)
-	require.Equal(t, domain.TaskStatusDeleting, pending.Status)
-	_, err = svc.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusEnabled)
-	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.AddTaskMember(context.Background(), set.TaskID, "", "momentum", nil)
-	require.ErrorContains(t, err, "purge is pending")
+	require.Equal(t, domain.TaskStatusDisabled, stored.Status, "没有持久化的删除意图，任务保持停用")
 
-	// Reconcile runs at startup and periodically. It resumes after failures at
-	// any point after the durable intent, including a crash after physical purge.
-	require.NoError(t, svc.Reconcile(context.Background()))
-	_, err = db.GetTask(context.Background(), set.TaskID)
+	require.NoError(t, svc.DeleteTask(ctx, set.TaskID, true))
+	_, err = db.GetTask(ctx, set.TaskID)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = meta.GetDataset(context.Background(), set.SpaceID, set.ResultDatasetID)
+	_, err = meta.GetDataset(ctx, set.SpaceID, set.ResultDatasetID)
 	require.Error(t, err)
 }
 
-func TestDeletingTaskRejectsLifecycleMutation(t *testing.T) {
+// 数据集已在 Storage 删除、本地记录还在（删除数据集之后进程退出）：重试仍然成功。
+func TestDeleteTaskPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.T) {
+	ctx := context.Background()
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := NewService(db, meta)
-	set, err := svc.CreateTask(context.Background(), newTask())
+	set, err := svc.CreateTask(ctx, newTask())
 	require.NoError(t, err)
-	require.NoError(t, db.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled))
-	require.NoError(t, db.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusDisabled, domain.TaskStatusDeleting))
-
-	retry := set
-	retry.Status = domain.TaskStatusPending
-	_, err = svc.CreateTask(context.Background(), retry)
-	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusDisabled)
-	require.ErrorContains(t, err, "purge is pending")
-
-	// Even if an invariant-breaking writer inserted a member, member mutations
-	// still cannot alter the pending purge into an enabled or stuck state.
-	factor, err := svc.CreateFactor(context.Background(), testFactor())
+	_, err = svc.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusDisabled)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), set.TaskID, "", factor.FactorID, nil)
-	require.ErrorContains(t, err, "purge is pending")
-	_, err = db.AddMember(context.Background(), set.TaskID, factor.FactorID, factor.FactorID, nil)
-	require.NoError(t, err)
-	_, err = svc.SetTaskMemberStatus(context.Background(), set.TaskID, factor.FactorID, domain.MemberStatusEnabled)
-	require.ErrorContains(t, err, "purge is pending")
-	err = svc.RemoveTaskMember(context.Background(), set.TaskID, factor.FactorID)
-	require.ErrorContains(t, err, "purge is pending")
-	stored, err := db.GetTask(context.Background(), set.TaskID)
-	require.NoError(t, err)
-	require.Equal(t, domain.TaskStatusDeleting, stored.Status)
+	require.NoError(t, meta.DeleteDataset(ctx, set.SpaceID, set.ResultDatasetID))
+	require.NoError(t, svc.DeleteTask(ctx, set.TaskID, true))
+	_, err = db.GetTask(ctx, set.TaskID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-func TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.T) {
+// 已关联策略实例的任务不能删除。
+func TestDeleteTaskRejectsBoundTask(t *testing.T) {
+	ctx := context.Background()
 	db := openCatalogStore(t)
-	meta := newMetadataFake()
-	svc := NewService(db, meta)
-	set, err := svc.CreateTask(context.Background(), newTask())
+	svc := newReadyService(t, db, newMetadataFake())
+	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusDisabled)
+	_, err := svc.BindTask(ctx, testTaskID(), "inst-1")
 	require.NoError(t, err)
-	require.NoError(t, db.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled))
-	require.NoError(t, db.SetTaskStatus(context.Background(), set.TaskID, domain.TaskStatusDisabled, domain.TaskStatusDeleting))
-	// Models process death after Storage's metadata commit and before the local
-	// Factor task row is removed. DeleteDataset is idempotent for the retry.
-	require.NoError(t, meta.DeleteDataset(context.Background(), set.SpaceID, set.ResultDatasetID))
-	require.NoError(t, svc.Reconcile(context.Background()))
-	_, err = db.GetTask(context.Background(), set.TaskID)
-	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	require.NoError(t, svc.RemoveTaskMember(ctx, testTaskID(), "momentum"))
+	_, err = svc.SetTaskStatus(ctx, testTaskID(), domain.TaskStatusDisabled)
+	require.NoError(t, err)
+
+	err = svc.DeleteTask(ctx, testTaskID(), true)
+	require.ErrorIs(t, err, store.ErrConflict)
+	require.ErrorContains(t, err, "inst-1")
+	_, err = db.GetTask(ctx, testTaskID())
+	require.NoError(t, err)
 }
 
 func TestCreateFactorDoesNotNeedTask(t *testing.T) {
@@ -241,7 +222,7 @@ func TestCreateFactorRunsStaticValidation(t *testing.T) {
 	require.ErrorContains(t, err, "系统列")
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	resultColumns, err := meta.ListColumns(context.Background(), "crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))
+	resultColumns, err := meta.ListColumns(context.Background(), "crypto", testResultDatasetID())
 	require.NoError(t, err)
 	require.NotContains(t, metadataColumnNames(resultColumns), "momentum")
 }
@@ -252,55 +233,48 @@ func TestAddFactorToTaskValidatesAgainstSourceColumns(t *testing.T) {
 	unknown := factorWithSpec("unknown_input", "output: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "unknown_input", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "unknown_input", "", nil)
 	require.ErrorContains(t, err, "unknown input column")
 
 	// 单输出因子的输出名就是因子 ID：因子 ID 叫 close，输出列就与源列 close 重名。
 	collide := factorWithSpec("close", "output: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "close", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "close", "", nil)
 	require.ErrorContains(t, err, "与源列重名")
 	_, err = db.GetMember(context.Background(), testTaskID(), "close")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-func TestAddFactorToTaskRejectsPendingOrDeletingTask(t *testing.T) {
+func TestAddFactorToTaskRejectsPendingTask(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	require.NoError(t, db.SetTaskStatus(context.Background(), testTaskID(), domain.TaskStatusEnabled, domain.TaskStatusDisabled))
-	require.NoError(t, db.SetTaskStatus(context.Background(), testTaskID(), domain.TaskStatusDisabled, domain.TaskStatusDeleting))
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "momentum", nil)
-	require.ErrorContains(t, err, "purge is pending")
 
 	pending := domain.FactorTask{
-		TaskID: "ftask_pending_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "5m",
+		TaskID: "ftask_pending_1m", SpaceID: "crypto", Name: "待创建任务", SourceDatasetID: "dataset_prices", Freq: "5m",
 		ResultDatasetID: "dataset_factor_pending", Status: domain.TaskStatusPending,
 	}
 	require.NoError(t, db.CreateTask(context.Background(), pending))
-	_, err = svc.AddTaskMember(context.Background(), pending.TaskID, "", "momentum", nil)
+	_, err = svc.AddTaskMember(context.Background(), pending.TaskID, "momentum", "", nil)
 	require.ErrorContains(t, err, "not ready")
 }
 
-func TestAddFactorToTaskRejectsOutputOwnedByOtherFactor(t *testing.T) {
+func TestAddFactorToTaskRejectsOutputOwnedByOtherMember(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
-	// other 是两个输出的因子：被移除的 other 成员留下了结果列 momentum 与 extra，它们属于 other。
-	other := factorWithSpec("other", "outputs:\n  momentum: ts_mean(close, 3)\n  extra: ts_mean(close, 5)\n")
-	other.Name = "other"
-	_, err := svc.CreateFactor(context.Background(), other)
-	require.NoError(t, err)
-	// A retained result column from a removed "other" member.
-	require.NoError(t, meta.UpsertColumns(context.Background(), "crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")),
-		appendFactorColumns(nil, domain.MemberDef{Alias: other.FactorID, Factor: domain.MustDefinition(other.FactorID, other.Name, other.Spec)})))
-	_, err = svc.CreateFactor(context.Background(), testFactor())
+	// 被移除的成员留下了结果列 momentum，它属于另一个成员（origin_id 是成员键）。
+	retained := momentumColumn()
+	retained.OriginID = "gone_member"
+	key := resultKey("crypto", testResultDatasetID())
+	meta.columns[key] = append(meta.columns[key], retained) // 直接放进 fake：Storage 本身不会接受 origin_id 与成员键不符的列
+	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "momentum", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
 	require.ErrorContains(t, err, "已属于")
 }
 
@@ -312,11 +286,38 @@ func TestAddFactorToTaskDoesNotAddColumnsOrSubmitRecalc(t *testing.T) {
 	require.NoError(t, err)
 	meta.writeOps = nil
 
-	member, err := svc.AddTaskMember(context.Background(), testTaskID(), "", "momentum", nil)
+	member, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Equal(t, "momentum", member.Factor.FactorID)
 	require.Empty(t, meta.writeOps)
+}
+
+// 重新加入同一个成员键时核对旧列元数据：member_kind 或 factor_params 不一致就拒绝（兜底，正常不会发生）。
+func TestReaddRejectsInconsistentRetainedColumnMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	_, err := svc.CreateFactor(ctx, factorWithSpec("pmean", paramSpec))
+	require.NoError(t, err)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10})
+	require.NoError(t, err)
+	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "pmean__10", domain.MemberStatusEnabled)
+	require.NoError(t, err)
+	_, err = svc.SetTaskMemberStatus(ctx, testTaskID(), "pmean__10", domain.MemberStatusDisabled)
+	require.NoError(t, err)
+	require.NoError(t, svc.RemoveTaskMember(ctx, testTaskID(), "pmean__10"))
+
+	key := resultKey("crypto", testResultDatasetID())
+	for i, col := range meta.columns[key] {
+		if col.ColumnName == "pmean__10" {
+			meta.columns[key][i].Attributes = map[string]string{"display_name": "pmean__10", "column_kind": "output", "factor_id": "pmean",
+				"member_key": "pmean__10", "member_kind": "fixed", "output_name": "pmean", "factor_params": `{"window":11}`}
+		}
+	}
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "pmean", domain.MemberKindFixed, map[string]float64{"window": 10})
+	require.ErrorContains(t, err, "不一致")
 }
 
 func TestReaddAfterRemoveReusesRetainedColumns(t *testing.T) {
@@ -328,7 +329,7 @@ func TestReaddAfterRemoveReusesRetainedColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.RemoveTaskMember(context.Background(), testTaskID(), "momentum"))
 
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "momentum", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
 	require.NoError(t, err)
 	_, err = svc.SetTaskMemberStatus(context.Background(), testTaskID(), "momentum", domain.MemberStatusEnabled)
 	require.NoError(t, err)
@@ -351,15 +352,17 @@ func TestEnableMemberRevalidatesAndAddsColumnsWithoutBackfill(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, jobs, "启用成员不能自动提交补算作业")
 	var output storageio.ColumnInfo
-	for _, col := range meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))] {
+	for _, col := range meta.columns[resultKey("crypto", testResultDatasetID())] {
 		if col.ColumnName == "momentum" {
 			output = col
 		}
 	}
 	require.Equal(t, storageio.ColumnOriginFactor, output.OriginType)
+	require.Equal(t, "momentum", output.OriginID, "origin_id 是成员键")
 	require.Equal(t, map[string]string{
-		"display_name": "momentum", "factor_output": "momentum", "origin_factor_id": "momentum",
-		"member_alias": "momentum", "factor_id": "momentum", "category_id": domain.DefaultCategoryID, "column_kind": ColumnKindOutput, "output_name": "momentum",
+		"display_name": "momentum", "column_kind": "output", "factor_id": "momentum", "member_key": "momentum", "member_kind": "fixed",
+		"output_name": "momentum", "category_id": domain.DefaultCategoryID, "definition_hash": domain.DefinitionHash(domain.MustDefinition("momentum", "momentum", "output: ts_mean(close, 3)\n")),
+		"factor_params": "{}",
 	}, output.Attributes)
 }
 
@@ -382,14 +385,14 @@ func TestDisableMemberKeepsColumns(t *testing.T) {
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	before := append([]storageio.ColumnInfo(nil), meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))]...)
+	before := append([]storageio.ColumnInfo(nil), meta.columns[resultKey("crypto", testResultDatasetID())]...)
 	meta.writeOps = nil
 
 	member, err := svc.SetTaskMemberStatus(context.Background(), testTaskID(), "momentum", domain.MemberStatusDisabled)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Empty(t, meta.writeOps)
-	require.Equal(t, before, meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))])
+	require.Equal(t, before, meta.columns[resultKey("crypto", testResultDatasetID())])
 }
 
 func TestRemoveRequiresDisabledMember(t *testing.T) {
@@ -415,12 +418,12 @@ func TestSameDefinitionEnablesIndependentlyInTwoTasks(t *testing.T) {
 	meta.datasets[resultKey("crypto", hourlySource.DatasetID)] = hourlySource
 	meta.sourceColumnsByDataset[hourlySource.DatasetID] = meta.sourceColumnsByDataset["dataset_prices"]
 	hourly := newTask()
-	hourly.SourceDatasetID, hourly.Freq = hourlySource.DatasetID, "1h"
+	hourly.TaskID, hourly.Name, hourly.SourceDatasetID, hourly.Freq = "ftask_prices_1h", "小时因子", hourlySource.DatasetID, "1h"
 	_, err := svc.CreateTask(context.Background(), hourly)
 	require.NoError(t, err)
-	hourlyID := domain.TaskID(hourlySource.DatasetID, "1h")
+	hourlyID := hourly.TaskID
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	_, err = svc.AddTaskMember(context.Background(), hourlyID, "", "momentum", nil)
+	_, err = svc.AddTaskMember(context.Background(), hourlyID, "momentum", "", nil)
 	require.NoError(t, err)
 
 	first, err := db.GetMember(context.Background(), testTaskID(), "momentum")
@@ -503,7 +506,7 @@ func TestListFactorsWithAndWithoutTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 	require.Empty(t, all[0].Usages) // loose sorts first
-	require.Equal(t, []domain.FactorUsage{{TaskID: testTaskID(), MemberAlias: "momentum", Status: domain.MemberStatusEnabled}}, all[1].Usages)
+	require.Equal(t, []domain.FactorUsage{{TaskID: testTaskID(), MemberKey: "momentum", Status: domain.MemberStatusEnabled, Params: map[string]float64(nil)}}, all[1].Usages)
 
 	inSet, err := svc.ListFactors(context.Background(), testTaskID(), domain.MemberStatusDisabled)
 	require.NoError(t, err)
@@ -518,13 +521,13 @@ func TestAddAndUpdateDoNotInterleave(t *testing.T) {
 	svc := newReadyService(t, db, newMetadataFake())
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "momentum", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
 	require.NoError(t, err)
 	unlock, err := svc.Locks().LockFactorContext(context.Background(), "momentum")
 	require.NoError(t, err)
 	done := make(chan error, 3)
 	go func() {
-		_, err := svc.AddTaskMember(context.Background(), testTaskID(), "slow", "momentum", nil)
+		_, err := svc.AddTaskMember(context.Background(), testTaskID(), "momentum", "", nil)
 		done <- err
 	}()
 	go func() { _, err := svc.UpdateFactor(context.Background(), testFactor()); done <- err }()
@@ -554,9 +557,9 @@ func TestReconcileTaskAddsNewSourceColumns(t *testing.T) {
 	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("volume"))
 	meta.writeOps = nil
 
-	require.NoError(t, svc.ReconcileTask(context.Background(), domain.TaskID("dataset_prices", "1m")))
+	require.NoError(t, svc.ReconcileTask(context.Background(), testTaskID()))
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
-	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))])
+	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume"), paramsColumn()}, meta.columns[resultKey("crypto", testResultDatasetID())])
 }
 
 func TestReconcileRejectsSourceColumnCollisionWithEnabledMember(t *testing.T) {
@@ -567,7 +570,7 @@ func TestReconcileRejectsSourceColumnCollisionWithEnabledMember(t *testing.T) {
 	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("momentum"))
 	meta.writeOps = nil
 
-	err := svc.ReconcileTask(context.Background(), domain.TaskID("dataset_prices", "1m"))
+	err := svc.ReconcileTask(context.Background(), testTaskID())
 	require.ErrorContains(t, err, `source column "momentum" collides with enabled member momentum`)
 	require.Empty(t, meta.writeOps)
 }
@@ -590,6 +593,7 @@ func TestReconcileContinuesAfterOneTaskFailure(t *testing.T) {
 	secondInput := newTask()
 	secondInput.SourceDatasetID = "dataset_zzz"
 	secondInput.TaskID = ""
+	secondInput.Name = "第二任务"
 	secondInput.ResultDatasetID = ""
 	second, err := svc.CreateTask(context.Background(), secondInput)
 	require.NoError(t, err)
@@ -608,13 +612,13 @@ func TestLifecycleOpsSerializeWithPeriodLock(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
-	unlock := svc.Locks().Lock(domain.TaskID("dataset_prices", "1m"))
+	unlock := svc.Locks().Lock(testTaskID())
 	done := make(chan struct{})
 	started := make(chan struct{})
 	go func() {
 		close(started)
 		defer close(done)
-		_, _ = svc.SetTaskStatus(context.Background(), domain.TaskID("dataset_prices", "1m"), domain.TaskStatusDisabled)
+		_, _ = svc.SetTaskStatus(context.Background(), testTaskID(), domain.TaskStatusDisabled)
 	}()
 	<-started
 	select {
@@ -648,7 +652,7 @@ func newReadyService(t *testing.T, db *store.Store, meta *metadataFake) *Service
 
 func newTask() domain.FactorTask {
 	return domain.FactorTask{
-		SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
+		TaskID: "ftask_prices_1m", SpaceID: "crypto", Name: "价格因子", SourceDatasetID: "dataset_prices", Freq: "1m",
 	}
 }
 
@@ -661,7 +665,15 @@ func factorWithSpec(factorID, spec string) domain.FactorDef {
 	return domain.FactorDef{FactorID: factorID, Name: factorID, Spec: spec}
 }
 
-func testTaskID() string { return domain.TaskID("dataset_prices", "1m") }
+func testTaskID() string { return "ftask_prices_1m" }
+
+func testResultDatasetID() string { return "dataset_factor_prices_1m" }
+
+// momentumColumn 是测试因子 momentum 的固定成员输出列。
+func momentumColumn() storageio.ColumnInfo {
+	member := domain.MemberDef{Key: "momentum", Factor: domain.MustDefinition("momentum", "momentum", "output: ts_mean(close, 3)\n"), Kind: domain.MemberKindFixed}
+	return factorOutputColumns(member)[0]
+}
 
 // addMember registers the standard test factor (if missing) and attaches it to
 // the set, enabling it when status asks for it.
@@ -672,7 +684,7 @@ func addMember(t *testing.T, svc *Service, taskID, factorID, status string) {
 		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "output: ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
-	_, err := svc.AddTaskMember(ctx, taskID, "", factorID, nil)
+	_, err := svc.AddTaskMember(ctx, taskID, factorID, "", nil)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		_, err = svc.SetTaskMemberStatus(ctx, taskID, factorID, domain.MemberStatusEnabled)
@@ -765,6 +777,20 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 	f.createdSpec = spec
 	key := resultKey(spec.SpaceID, spec.DatasetID)
 	if _, exists := f.datasets[key]; !exists {
+		// 与 Storage 一致：数据集名称在空间内唯一，且含汉字、不超过 10 个字。
+		if err := validateStorageDatasetName(spec.Name); err != nil {
+			return err
+		}
+		for _, other := range f.datasets {
+			if other.SpaceID == spec.SpaceID && other.Name == spec.Name {
+				return fmt.Errorf("dataset name %q already exists in space %s", spec.Name, spec.SpaceID)
+			}
+		}
+		for _, column := range spec.Columns {
+			if err := validateStorageColumn(column); err != nil {
+				return err
+			}
+		}
 		f.createdDatasets++
 		attrs := map[string]string{"dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": spec.SourceDatasetID}
 		for name, value := range spec.Attributes {
@@ -800,6 +826,9 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 		current[col.ColumnName] = col
 	}
 	for _, col := range cols {
+		if err := validateStorageColumn(col); err != nil {
+			return err
+		}
 		current[col.ColumnName] = col
 	}
 	merged := make([]storageio.ColumnInfo, 0, len(current))
@@ -890,49 +919,14 @@ func TestReconcileFollowsSourceSubjectTags(t *testing.T) {
 	require.Equal(t, []string{"binance_spot", "binance_swap"}, meta.datasets[resultKey("crypto", set.ResultDatasetID)].SubjectTags)
 }
 
-func TestResultDatasetNameIsDerivedFromItsSource(t *testing.T) {
-	require.Equal(t, "现货分钟K线因子", resultDatasetName("现货分钟K线"))
-	require.NotEqual(t, resultDatasetName("现货分钟K线"), resultDatasetName("合约分钟K线"), "factor tasks of different sources must not collide")
-	long := resultDatasetName("一二三四五六七八九十")
-	require.Equal(t, "一二三四五六七八因子", long)
-	require.LessOrEqual(t, len([]rune(long)), maxResultDatasetNameRunes)
-	require.Equal(t, "因子结果", resultDatasetName(" "))
-}
-
-// 结果数据集清理失败时参数冻结历史还在：参数记录在数据集清理成功之后才删，任务停在 deleting 可以重试。
-func TestDeleteTaskKeepsParamHistoryWhenPurgeFails(t *testing.T) {
-	ctx := context.Background()
-	db := openCatalogStore(t)
-	meta := newMetadataFake()
-	svc := NewService(db, meta)
-	set, err := svc.CreateTask(ctx, newTask())
-	require.NoError(t, err)
-	require.NoError(t, db.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled))
-	at := time.Unix(1_800_000_000, 0).UTC()
-	_, err = db.FreezeParams(ctx, set.TaskID, at, at.Add(-time.Minute),
-		[]store.FreezeMember{{Alias: "fast", Defaults: domain.ParamSnapshot{"window": {Default: 20}}}})
-	require.NoError(t, err)
-	meta.deleteErrs = 1
-
-	require.Error(t, svc.DeleteTask(ctx, set.TaskID, true))
-	intervals, err := db.ListParamIntervals(ctx, set.TaskID, "", at.Add(-time.Hour), at.Add(time.Hour))
-	require.NoError(t, err)
-	require.Len(t, intervals, 1, "清理失败时冻结历史必须保留")
-
-	require.NoError(t, svc.Reconcile(ctx))
-	intervals, err = db.ListParamIntervals(ctx, set.TaskID, "", at.Add(-time.Hour), at.Add(time.Hour))
-	require.NoError(t, err)
-	require.Empty(t, intervals)
-}
-
-// 结果列身份一致但属性过期（成员换绑了另一个定义后列上还留着旧的 factor_id、分类）：对账刷新属性并保留别处设置的其他属性。
+// 结果列身份一致但属性过期（列上还留着旧的 factor_id、分类）：对账刷新属性并保留别处设置的其他属性。
 func TestReconcileRefreshesStaleResultColumnAttributes(t *testing.T) {
 	ctx := context.Background()
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	key := resultKey("crypto", domain.ResultDatasetID(testTaskID()))
+	key := resultKey("crypto", testResultDatasetID())
 	columns := meta.columns[key]
 	stale := -1
 	for i, col := range columns {
@@ -964,4 +958,70 @@ func TestReconcileRefreshesStaleResultColumnAttributes(t *testing.T) {
 	meta.writeOps = nil
 	require.NoError(t, svc.ReconcileTask(ctx, testTaskID()))
 	require.Empty(t, meta.writeOps, "属性已是最新时不再写 Storage")
+}
+
+// validateStorageDatasetName 复刻 Storage 对数据集名称的要求：含汉字、不超过 10 个字。
+func validateStorageDatasetName(name string) error {
+	if err := domain.ValidateTaskName(name); err != nil {
+		return fmt.Errorf("storage 拒绝数据集名称 %q：%w", name, err)
+	}
+	return nil
+}
+
+// validateStorageColumn 复刻 Storage 对因子结果列的校验（modules/storage 的 validateFactorResultColumn 与展示名规则），
+// 让单测在因子侧就能发现上线后才会被 Storage 拒绝的列。只检查来源为 FACTOR 的列。
+func validateStorageColumn(col storageio.ColumnInfo) error {
+	if col.OriginType != storageio.ColumnOriginFactor {
+		return nil
+	}
+	attrs := col.Attributes
+	switch attrs["column_kind"] {
+	case "params":
+		if col.ColumnName != "__params" || col.OriginID != "__params" || col.ValueType != storageio.ColumnTypeJSON {
+			return fmt.Errorf("storage 拒绝 params 列 %q", col.ColumnName)
+		}
+		if name := attrs["display_name"]; name == "" || !hasHan(name) {
+			return fmt.Errorf("storage 要求 __params 的展示名含汉字，得到 %q", name)
+		}
+		return nil
+	case "output":
+	default:
+		return fmt.Errorf("storage 要求因子列带 column_kind，列 %q 得到 %q", col.ColumnName, attrs["column_kind"])
+	}
+	factorID, memberKey, output, kind := attrs["factor_id"], attrs["member_key"], attrs["output_name"], attrs["member_kind"]
+	if factorID == "" || memberKey == "" || output == "" {
+		return fmt.Errorf("storage 要求输出列 %q 带 factor_id、member_key、output_name", col.ColumnName)
+	}
+	if kind != "fixed" && kind != "var" {
+		return fmt.Errorf("storage 要求 member_kind 是 fixed 或 var，列 %q 得到 %q", col.ColumnName, kind)
+	}
+	if memberKey != factorID && !strings.HasPrefix(memberKey, factorID+"__") {
+		return fmt.Errorf("storage 要求 member_key %q 以 factor_id %q 开头", memberKey, factorID)
+	}
+	want := memberKey
+	if output != factorID {
+		want = memberKey + "__" + output
+	}
+	if col.ColumnName != want {
+		return fmt.Errorf("storage 要求输出列名是 %q，得到 %q", want, col.ColumnName)
+	}
+	if col.OriginID != memberKey {
+		return fmt.Errorf("storage 要求输出列 %q 的 origin_id 是成员键 %q，得到 %q", col.ColumnName, memberKey, col.OriginID)
+	}
+	if col.ValueType != storageio.ColumnTypeDouble {
+		return fmt.Errorf("storage 要求输出列 %q 是 double", col.ColumnName)
+	}
+	if attrs["display_name"] != col.ColumnName {
+		return fmt.Errorf("storage 要求输出列 %q 的展示名等于列名，得到 %q", col.ColumnName, attrs["display_name"])
+	}
+	return nil
+}
+
+func hasHan(text string) bool {
+	for _, r := range text {
+		if r >= 0x4e00 && r <= 0x9fff {
+			return true
+		}
+	}
+	return false
 }

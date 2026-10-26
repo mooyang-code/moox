@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -19,6 +21,7 @@ import (
 type MetadataClient interface {
 	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
 	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
+	ListDatasets(context.Context, *storagepb.ListDatasetsReq, ...client.Option) (*storagepb.ListDatasetsRsp, error)
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 }
 
@@ -229,4 +232,55 @@ func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {
 		output[id] = struct{}{}
 	}
 	return output
+}
+
+// FactorResultDataset 是源数据集上一个因子任务的结果数据集：任务 ID 由数据集 ID 反解，名称就是数据集名称（与任务名相同）。
+type FactorResultDataset struct {
+	TaskID, Name, DatasetID string
+}
+
+const (
+	factorResultRole     = "factor_result"
+	factorResultPageSize = 200
+	maxFactorResultScans = 50
+)
+
+// ListFactorResultDatasets 列出源数据集 + 周期上的全部因子任务（按结果数据集的 dataset_role=factor_result 与 source_dataset_id
+// 属性筛选），按任务 ID 排序。任务 ID 不能从数据集 ID 反解的数据集（不是任务建出来的）忽略。
+func (a *StorageAdapter) ListFactorResultDatasets(ctx context.Context, spaceID, sourceDatasetID, freq string) ([]FactorResultDataset, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	var out []FactorResultDataset
+	for page := uint32(1); page <= maxFactorResultScans; page++ {
+		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{
+			AuthInfo: a.auth, SpaceId: spaceID, Freq: freq,
+			Page: &commonpb.Page{Page: page, Size: factorResultPageSize},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list factor result datasets: %w", err)
+		}
+		if err := storageOK("list factor result datasets", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, dataset := range rsp.GetDatasets() {
+			if dataset == nil || dataset.GetAttributes()["dataset_role"] != factorResultRole || dataset.GetAttributes()["source_dataset_id"] != sourceDatasetID {
+				continue
+			}
+			suffix, err := factorname.ParseResultDatasetID(dataset.GetDatasetId())
+			if err != nil {
+				continue
+			}
+			taskID, err := factorname.TaskID(suffix)
+			if err != nil {
+				continue
+			}
+			out = append(out, FactorResultDataset{TaskID: taskID, Name: dataset.GetName(), DatasetID: dataset.GetDatasetId()})
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("factor result dataset catalog exceeds %d pages", maxFactorResultScans)
 }

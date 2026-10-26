@@ -21,12 +21,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	var reconcileErrors []error
 	for _, set := range sets {
-		if set.Status == domain.TaskStatusDeleting {
-			if err := s.DeleteTask(ctx, set.TaskID, true); err != nil {
-				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor task purge %q: %w", set.TaskID, err))
-			}
-			continue
-		}
 		if set.Status != domain.TaskStatusEnabled {
 			continue
 		}
@@ -119,9 +113,9 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		sourceNames[col.ColumnName] = struct{}{}
 	}
 	for _, member := range members {
-		for _, column := range append(member.OutputColumns(), member.ParamColumns()...) {
+		for _, column := range member.OutputColumns() {
 			if _, exists := sourceNames[column]; exists {
-				return fmt.Errorf("source column %q collides with enabled member %s", column, member.Alias)
+				return fmt.Errorf("source column %q collides with enabled member %s", column, member.Key)
 			}
 		}
 	}
@@ -141,7 +135,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 			if !compatibleResultColumn(existing, col) {
 				return fmt.Errorf("result column %q conflicts with the current source/factor contract", col.ColumnName)
 			}
-			// 身份一致但属性过期（成员换绑了另一个定义：factor_id、分类等变了）：刷新属性，否则策略按旧属性固化因子身份。
+			// 身份一致但属性过期（定义改了表达式：definition_hash 变了；或分类变了）：刷新属性，否则策略按旧属性固化因子身份。
 			if refreshed, stale := refreshedColumnAttributes(existing, col); stale {
 				col.Attributes = refreshed
 				missing = append(missing, col)
@@ -181,9 +175,11 @@ func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
 		return false
 	}
 	if wanted.OriginType == storageio.ColumnOriginFactor {
-		return existing.Attributes["origin_factor_id"] == wanted.Attributes["origin_factor_id"] &&
-			existing.Attributes["factor_output"] == wanted.Attributes["factor_output"] &&
-			existing.Attributes["column_kind"] == wanted.Attributes["column_kind"]
+		return existing.Attributes["column_kind"] == wanted.Attributes["column_kind"] &&
+			existing.Attributes["member_key"] == wanted.Attributes["member_key"] &&
+			existing.Attributes["output_name"] == wanted.Attributes["output_name"] &&
+			existing.Attributes["member_kind"] == wanted.Attributes["member_kind"] &&
+			existing.Attributes["factor_params"] == wanted.Attributes["factor_params"]
 	}
 	return true
 }

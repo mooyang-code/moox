@@ -38,12 +38,12 @@ type Handler struct {
 	gate func(taskID string) bool
 	// catchupGate 非空时，实时门禁关闭的任务在恢复追赶中仍可推进连续水位（只写历史周期）。
 	catchupGate func(taskID string) bool
-	// params 在开算一期之前冻结任务的参数（因子动态调参执行计划 2.4）；为空时全部按默认参数计算。
-	params trigger.ParamFreezer
+	// params 在开算一期之前取得任务各可变成员用的参数（设计 6.3）；为空时全部按成员自己的参数计算。
+	params trigger.ParamSelector
 }
 
-// SetParamFreezer 设置参数冻结；必须在开始消费之前调用。
-func (h *Handler) SetParamFreezer(params trigger.ParamFreezer) { h.params = params }
+// SetParamSelector 设置取参来源；必须在开始消费之前调用。
+func (h *Handler) SetParamSelector(params trigger.ParamSelector) { h.params = params }
 
 // SetGate 设置生命周期门禁；必须在开始消费之前调用。
 func (h *Handler) SetGate(gate func(taskID string) bool) { h.gate = gate }
@@ -188,17 +188,19 @@ type periodEvent struct {
 	failed     []string
 }
 
-// computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先冻结这一期的参数
-// （冻结是幂等的：重投、重启后重算拿到同一份）。
+// computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先取得这一期的参数
+// （取参是幂等的：重投、重启后重算拿到同一份，直到这一期的完成标记写出）。
 func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Outcome, error) {
 	exists, existsErr := h.store.ComputedExists(ctx, set.SpaceID, set.ResultDatasetID, triggerEventID, period.Unix())
 	if existsErr != nil {
 		return pipeline.Outcome{}, fmt.Errorf("%w: check computed factor period: %v", storageio.ErrInfra, existsErr)
 	}
 	if exists {
+		// 完成标记已经写出：只需清掉可能残留的取参进行中记录（写标记之后、清记录之前进程退出的情况）。
+		h.finishParams(ctx, set, period)
 		return pipeline.Outcome{}, nil
 	}
-	var params map[string]domain.ParamFreeze
+	var params map[string]domain.ParamSnapshot
 	if h.params != nil && len(members) > 0 {
 		aligned := period
 		if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
@@ -206,20 +208,42 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 				aligned = value
 			}
 		}
-		frozen, err := h.params.Freeze(ctx, set, members, aligned)
+		selected, err := h.params.Select(ctx, set, members, aligned)
 		if err != nil {
-			return pipeline.Outcome{}, fmt.Errorf("%w: freeze factor params: %v", storageio.ErrInfra, err)
+			return pipeline.Outcome{}, fmt.Errorf("%w: select factor params: %v", storageio.ErrInfra, err)
 		}
-		params = frozen
+		params = selected
 	}
 	plan, err := h.livePlan(ctx, set, members, params, period, universe, failed, triggerEventID)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	return h.runner.Run(ctx, plan)
+	outcome, err := h.runner.Run(ctx, plan)
+	if err != nil {
+		return outcome, err
+	}
+	h.finishParams(ctx, set, period)
+	return outcome, nil
 }
 
-func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamFreeze, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
+// finishParams 在这一期的完成标记写成功后清掉取参的进行中记录；清不掉不影响这一期的结果（下次同一期不会再算，
+// 之后的期次覆盖记录），只记日志。
+func (h *Handler) finishParams(ctx context.Context, set domain.FactorTask, period time.Time) {
+	if h.params == nil {
+		return
+	}
+	aligned := period
+	if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
+		if value, err := clock.Align(period, set.Freq); err == nil {
+			aligned = value
+		}
+	}
+	if err := h.params.Done(ctx, set.TaskID, aligned); err != nil {
+		log.ErrorContextf(ctx, "factor_param_inflight_clear_failed task_id=%s period=%s error=%v", set.TaskID, aligned.UTC().Format(time.RFC3339), err)
+	}
+}
+
+func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
 	clock, clockErr := periodclock.ForSpace(set.SpaceID)
 	if clockErr != nil {
 		return pipeline.Plan{}, clockErr

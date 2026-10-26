@@ -107,8 +107,20 @@ func (f *fakeClient) GetFactor(_ context.Context, factorID string) (FactorInfo, 
 	return factor, nil
 }
 
+// factorColumn 是固定成员的因子输出列：成员键取因子 ID，输出名取列名。
 func factorColumn(name, factorID string) ViewColumn {
-	return ViewColumn{Name: name, Attributes: map[string]string{"origin_factor_id": factorID, "factor_output": name}}
+	return memberColumn(name, factorID, factorID, "fixed")
+}
+
+// memberColumn 是成员 member（引用因子 factorID，类型 kind）的因子输出列。
+func memberColumn(name, member, factorID, kind string) ViewColumn {
+	return ViewColumn{Name: name, Attributes: map[string]string{"column_kind": "output", "member_key": member, "factor_id": factorID,
+		"member_kind": kind, "output_name": name}}
+}
+
+// paramsColumn 是结果数据集的系统列 __params（各成员实际参数的 JSON）。
+func paramsColumn() ViewColumn {
+	return ViewColumn{Name: "__params", Attributes: map[string]string{"column_kind": "params"}}
 }
 
 func plainColumn(name string) ViewColumn {

@@ -75,16 +75,16 @@ func TestInstanceWritesRequireLiveDefinition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.SoftDeleteDefinition(ctx, "s2", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i2", StrategyID: "s2", SpaceID: "space", ViewID: "view_a", CreatedAt: testNow, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i2", StrategyID: "s2", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: testNow, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
 		t.Fatalf("新建实例不能引用已删除的定义：%v", err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s2", SpaceID: "space", ViewID: "view_a", UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s2", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
 		t.Fatalf("改绑不能引用已删除的定义：%v", err)
 	}
 }
@@ -96,7 +96,7 @@ func TestDeleteReplaysBeyondKeepsLatestPerSpace(t *testing.T) {
 	instance, session := "i1", "session-1"
 	for i := 0; i < 5; i++ {
 		for _, space := range []string{"a", "b"} {
-			replay := Replay{ReplayID: fmt.Sprintf("%s-%d", space, i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: space, ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute), InstanceID: &instance, SessionID: &session}
+			replay := Replay{ReplayID: fmt.Sprintf("%s-%d", space, i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: space, FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute), InstanceID: &instance, SessionID: &session}
 			if err := repo.CreateReplay(ctx, replay); err != nil {
 				t.Fatal(err)
 			}

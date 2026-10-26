@@ -20,9 +20,11 @@ type TaskLocator interface {
 	FilterSubjects(context.Context) ([]string, error)
 }
 
-// ParamFreezer 在开算一期之前冻结任务各成员的参数（别名 → 冻结记录）。
-type ParamFreezer interface {
-	Freeze(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error)
+// ParamSelector 在开算一期之前取得任务各可变成员用的参数（成员键 → 快照）；固定成员和没有提交值的可变成员不在结果里，按成员自己的参数计算。
+type ParamSelector interface {
+	Select(ctx context.Context, task domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamSnapshot, error)
+	// Done 在这一期的完成标记写成功（或发现标记已经存在）后调用，清掉这一期取参的进行中记录。
+	Done(ctx context.Context, taskID string, period time.Time) error
 }
 
 type PeriodStore interface {

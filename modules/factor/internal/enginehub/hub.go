@@ -24,7 +24,7 @@ type Store interface {
 	GetTask(ctx context.Context, taskID string) (domain.FactorTask, error)
 	ListMembers(ctx context.Context, taskID, status string) ([]domain.TaskMember, error)
 	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
-	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, now time.Time, ttl time.Duration) (store.RecalcJob, error)
+	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time, ttl time.Duration) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
 }
 

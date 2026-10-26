@@ -306,7 +306,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			} else if business.Kind == "factor_watermark" {
 				checkID, name = "factor_watermark:"+business.Module, "因子连续水位"
 			} else if business.Kind == "factor_params" {
-				checkID, name = "factor_params:"+business.Module, "因子参数 "+business.Module
+				checkID, name = "factor_params:"+business.Module, "策略参数投递"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 			} else if business.Kind == "metrics_ingest" {

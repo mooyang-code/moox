@@ -4,7 +4,9 @@ import "time"
 
 // FactorPeriodState is one member's outcome for the most recent live period.
 type FactorPeriodState struct {
-	MemberAlias    string
+	MemberKey string
+	// MemberKind 是成员类型：fixed 或 var。
+	MemberKind     string
 	FactorID       string
 	Status         string
 	FailedSubjects []string
@@ -12,9 +14,6 @@ type FactorPeriodState struct {
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string
-	// ParamsSource、ParamsDigest 是这一期冻结参数的来源与摘要。
-	ParamsSource string
-	ParamsDigest string
 }
 
 // TaskRunSummary is the latest live period of one factor task as reported by
@@ -63,20 +62,6 @@ type EngineStatus struct {
 	CatalogSyncedAt time.Time
 	// Watermarks 是各任务的连续水位与阻塞状态。
 	Watermarks []SetWatermark
-	// ParamHealth 是各成员的参数状态：连续沿用的期数与最近一次离线冻结的时间，监控据此告警。
-	ParamHealth []MemberParamHealth
-	// OfflinePending 是本地还没补报给管理端的离线冻结数。
-	OfflinePending int
-}
-
-// MemberParamHealth 是一个成员的参数状态。CarriedPeriods 是连续沿用（含离线沿用）参数的期数，新提交生效后归零，
-// 从未提交过（默认值）不算沿用；AlertAfter 是超过多少期告警；LastOfflineAt 是最近一次离线冻结的时间（零值表示没有）。
-type MemberParamHealth struct {
-	TaskID         string
-	Member         string
-	CarriedPeriods int
-	AlertAfter     int
-	LastOfflineAt  time.Time
 }
 
 // SetWatermark 是一个任务的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。

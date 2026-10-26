@@ -77,6 +77,11 @@ type Result struct {
 	EventData      []byte
 	PublishStatus  PublishStatus
 	CreatedAt      time.Time
+	// NextParamsJSON 是这一期算出的下一期可变成员参数（形如 {"period": 目标期 Unix 秒, "members": {成员键: {参数名: {default, overrides}}}}），
+	// 没有可变成员或求值失败时为空。ParamsDeliveredAt 是它被因子侧接受的时间，ParamsError 是被因子侧明确拒绝的原因（不再重试）。
+	NextParamsJSON    json.RawMessage
+	ParamsDeliveredAt *time.Time
+	ParamsError       string
 }
 
 // ResultItem 是一条规则下一个标的的解释。
@@ -91,21 +96,24 @@ type ResultItem struct {
 }
 
 type resultRow struct {
-	ResultID       string        `gorm:"column:c_result_id"`
-	InstanceID     string        `gorm:"column:c_instance_id"`
-	SessionID      string        `gorm:"column:c_session_id"`
-	BarEndTime     int64         `gorm:"column:c_bar_end_time"`
-	ValidUntil     int64         `gorm:"column:c_valid_until"`
-	Status         string        `gorm:"column:c_status"`
-	SkipReason     string        `gorm:"column:c_skip_reason"`
-	DSLHash        string        `gorm:"column:c_dsl_hash"`
-	InputJSON      string        `gorm:"column:c_input_json"`
-	TargetsJSON    string        `gorm:"column:c_targets_json"`
-	RuleStatesJSON string        `gorm:"column:c_rule_states_json"`
-	SummaryJSON    string        `gorm:"column:c_summary_json"`
-	EventData      []byte        `gorm:"column:c_event_data"`
-	PublishStatus  PublishStatus `gorm:"column:c_publish_status"`
-	CreatedAt      time.Time     `gorm:"column:c_ctime"`
+	ResultID        string        `gorm:"column:c_result_id"`
+	InstanceID      string        `gorm:"column:c_instance_id"`
+	SessionID       string        `gorm:"column:c_session_id"`
+	BarEndTime      int64         `gorm:"column:c_bar_end_time"`
+	ValidUntil      int64         `gorm:"column:c_valid_until"`
+	Status          string        `gorm:"column:c_status"`
+	SkipReason      string        `gorm:"column:c_skip_reason"`
+	DSLHash         string        `gorm:"column:c_dsl_hash"`
+	InputJSON       string        `gorm:"column:c_input_json"`
+	TargetsJSON     string        `gorm:"column:c_targets_json"`
+	RuleStatesJSON  string        `gorm:"column:c_rule_states_json"`
+	SummaryJSON     string        `gorm:"column:c_summary_json"`
+	EventData       []byte        `gorm:"column:c_event_data"`
+	PublishStatus   PublishStatus `gorm:"column:c_publish_status"`
+	CreatedAt       time.Time     `gorm:"column:c_ctime"`
+	NextParams      string        `gorm:"column:c_next_params_json"`
+	ParamsDelivered sql.NullTime  `gorm:"column:c_params_delivered_at"`
+	ParamsError     string        `gorm:"column:c_params_error"`
 }
 
 func (r resultRow) result() Result {
@@ -116,10 +124,11 @@ func (r resultRow) result() Result {
 		InputJSON: json.RawMessage(r.InputJSON), TargetsJSON: json.RawMessage(r.TargetsJSON),
 		RuleStatesJSON: json.RawMessage(r.RuleStatesJSON), SummaryJSON: json.RawMessage(r.SummaryJSON),
 		EventData: append([]byte(nil), r.EventData...), PublishStatus: r.PublishStatus, CreatedAt: r.CreatedAt.UTC(),
+		NextParamsJSON: json.RawMessage(r.NextParams), ParamsDeliveredAt: nullableTime(r.ParamsDelivered), ParamsError: r.ParamsError,
 	}
 }
 
-const resultColumns = "c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime"
+const resultColumns = "c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error"
 
 // CommitRequest 是一次结果提交。
 type CommitRequest struct {
@@ -128,8 +137,6 @@ type CommitRequest struct {
 	// ExpectedLatestResultID 非 nil 时要求本实例本会话当前最新处理记录的 ID 等于它（空串表示期望没有记录）。
 	ExpectedLatestResultID *string
 	Now                    time.Time
-	// Params 非 nil 时与结果同事务写入待提交的因子参数（声明了 factor_params 的实例每期产出下一期的参数）。
-	Params *ParamSubmission
 }
 
 func validateResult(result Result) error {
@@ -176,6 +183,18 @@ func validateResult(result Result) error {
 	if err := json.Unmarshal(result.TargetsJSON, &array); err != nil || array == nil {
 		return errors.New("结果的 targets_json 必须是 JSON 数组")
 	}
+	if len(result.NextParamsJSON) != 0 {
+		if result.Status != StatusOK {
+			return errors.New("只有 ok 结果才能带下一期的参数")
+		}
+		var next struct {
+			Period  int64                      `json:"period"`
+			Members map[string]json.RawMessage `json:"members"`
+		}
+		if err := json.Unmarshal(result.NextParamsJSON, &next); err != nil || next.Period <= 0 || len(next.Members) == 0 {
+			return errors.New("结果的 next_params_json 必须是带目标期次与成员快照的 JSON 对象")
+		}
+	}
 	return nil
 }
 
@@ -213,7 +232,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 		if err != nil {
 			return err
 		}
-		if instance.Enabled != 1 || instance.DeletedAt.Valid || !instance.SessionID.Valid || instance.SessionID.String != result.SessionID {
+		if instance.Enabled != 1 || !instance.SessionID.Valid || instance.SessionID.String != result.SessionID {
 			return ErrResultInstanceNotActive
 		}
 		if result.Status == StatusOK && !result.ValidUntil.After(now) {
@@ -245,18 +264,14 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 		}
 		if err := tx.Exec(`
 			INSERT INTO t_strategy_results (`+resultColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')
 		`, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
-			string(result.InputJSON), string(result.TargetsJSON), string(result.RuleStatesJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC()).Error; err != nil {
+			string(result.InputJSON), string(result.TargetsJSON), string(result.RuleStatesJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC(),
+			string(result.NextParamsJSON)).Error; err != nil {
 			return err
 		}
 		if err := insertItems(tx, result.ResultID, result.CreatedAt.UTC(), request.Items); err != nil {
 			return err
-		}
-		if request.Params != nil {
-			if err := insertParamSubmission(tx, result, *request.Params, now); err != nil {
-				return fmt.Errorf("%w：%v", ErrResultInvalid, err)
-			}
 		}
 		if result.Status == StatusOK && result.PublishStatus == PublishPending {
 			cancel := tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`, result.InstanceID, result.SessionID, millis(result.BarEndTime))
@@ -504,7 +519,7 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 		if err != nil {
 			return err
 		}
-		active := instance.Enabled == 1 && !instance.DeletedAt.Valid && instance.SessionID.Valid && instance.SessionID.String == row.SessionID
+		active := instance.Enabled == 1 && instance.SessionID.Valid && instance.SessionID.String == row.SessionID
 		switch {
 		case !active:
 			reason = CancelInactive

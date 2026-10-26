@@ -16,12 +16,13 @@ message Strategy {
   string updated_at = 6;
 }
 
-// StrategyInstance 把定义绑定到一个空间、一个 View 和可选的组合账户。
+// StrategyInstance 把定义绑定到一个空间、一个因子任务和可选的组合账户。因子任务在创建时写定、不能修改，
+// 实例第一次启用时才与任务正式关联（独占、永久）；读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。
 message StrategyInstance {
   string instance_id = 1;
   string strategy_id = 2;
   string space_id = 3;
-  string view_id = 4;
+  string factor_task_id = 4;
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
@@ -53,6 +54,10 @@ message StrategyResult {
   string rule_states_json = 12;
   string publish_status = 13;            // none | pending | sent | cancelled
   string created_at = 14;
+  // 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空。
+  string next_params_json = 15;
+  string params_delivered_at = 16;       // 被因子侧接受的时间；空表示还没送达
+  string params_error = 17;              // 被因子侧明确拒绝的原因（不再重试）
 }
 
 // StrategyResultItem 是一条规则下一个标的的解释。
@@ -86,6 +91,7 @@ message Replay {
   string instance_id = 16;               // 从实例发起时的来源实例
   string session_id = 17;                // 从实例发起时固化 DSL 的会话
   string calendar = 18;                  // 回放所用的日历（crypto_24x7 | cn_stock）；cn_stock 的区间按上海日期解释
+  string factor_task_id = 19;            // 回放读取的因子任务（view_id 是它的结果 View）
 }
 
 // ReplayBar 是回放中一个周期的记录。
@@ -124,7 +130,7 @@ message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
 message ValidateStrategyReq {
   string dsl_yaml = 1;
-  string view_id = 2;                    // 可选；给出时做列解析并在最新周期试算
+  string factor_task_id = 2;             // 可选；给出时做列解析并在最新周期试算
 }
 message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;
@@ -144,8 +150,6 @@ message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2;
 message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
 message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
-message DeleteStrategyInstanceReq { string instance_id = 1; }
-message DeleteStrategyInstanceRsp { common.RetInfo ret_info = 1; }
 
 message ListStrategyResultsReq { PageRequest page = 1; string instance_id = 2; string session_id = 3; }
 message ListStrategyResultsRsp { common.RetInfo ret_info = 1; repeated StrategyResult results = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
@@ -170,7 +174,7 @@ message ListStrategyTargetsRsp {
 message StartReplayReq {
   string strategy_id = 1;                // strategy_id、dsl_yaml、instance_id 三选一：定义当前的 DSL、给定文本或实例当前会话固化的 DSL
   string dsl_yaml = 2;
-  string view_id = 3;
+  string factor_task_id = 3;             // 回放读取的因子任务的结果 View；从实例发起时必须与实例关联的任务一致
   string start_time = 4;
   string end_time = 5;
   double fee_bps = 6;
@@ -186,7 +190,7 @@ message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars
 message CancelReplayReq { string replay_id = 1; }
 message CancelReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
 
-// DisplayHidden 是实例外显设置里隐藏的内容（默认全部展示）：按因子分类、成员别名与列名勾选隐藏；参数列跟随所属成员显示与隐藏。
+// DisplayHidden 是实例外显设置里隐藏的内容（默认全部展示）：按因子分类、成员键与列名勾选隐藏。
 // 只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据。
 message DisplayHidden {
   repeated string categories = 1;
@@ -197,27 +201,6 @@ message GetStrategyDisplaySettingsReq { string instance_id = 1; }
 message GetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
 message SetStrategyDisplaySettingsReq { string instance_id = 1; DisplayHidden hidden = 2; }
 message SetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
-
-// ParamSubmission 是策略为下一期因子参数做的一次提交：产出它的结果、目标期次、完整快照与终态。
-// status：pending（待提交）、accepted、too_late（该期已冻结）、rejected、abandoned（实例停用或超过重试期限）。
-// 某期实际是否采用以 FactorMgr 的冻结记录为准（GetFactorParams）。
-message ParamSubmission {
-  string request_id = 1;
-  string instance_id = 2;
-  string result_id = 3;
-  string task_id = 4;
-  int64 period_time = 5;     // 参数生效的目标期次（Unix 毫秒）
-  int64 based_on_period = 6; // 产出参数的期次
-  string params_json = 7;    // {成员别名: {参数名: {default, overrides}}}
-  string notes = 8;
-  string status = 9;
-  int32 attempts = 10;
-  string outcome_json = 11;  // [{member, result, reason}]
-  string created_at = 12;
-  string updated_at = 13;
-}
-message ListStrategyParamSubmissionsReq { string instance_id = 1; int32 limit = 2; }
-message ListStrategyParamSubmissionsRsp { common.RetInfo ret_info = 1; repeated ParamSubmission submissions = 2; }
 
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
@@ -231,7 +214,6 @@ service StrategyMgr {
   rpc GetStrategyInstance(GetStrategyInstanceReq) returns (GetStrategyInstanceRsp);
   rpc ListStrategyInstances(ListStrategyInstancesReq) returns (ListStrategyInstancesRsp);
   rpc SetStrategyInstanceEnabled(SetStrategyInstanceEnabledReq) returns (SetStrategyInstanceEnabledRsp);
-  rpc DeleteStrategyInstance(DeleteStrategyInstanceReq) returns (DeleteStrategyInstanceRsp);
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
   rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);
@@ -242,5 +224,4 @@ service StrategyMgr {
   rpc CancelReplay(CancelReplayReq) returns (CancelReplayRsp);
   rpc GetStrategyDisplaySettings(GetStrategyDisplaySettingsReq) returns (GetStrategyDisplaySettingsRsp);
   rpc SetStrategyDisplaySettings(SetStrategyDisplaySettingsReq) returns (SetStrategyDisplaySettingsRsp);
-  rpc ListStrategyParamSubmissions(ListStrategyParamSubmissionsReq) returns (ListStrategyParamSubmissionsRsp);
 }

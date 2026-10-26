@@ -31,6 +31,9 @@ func (g *goneMetadata) GetDataset(_ context.Context, req *storagepb.GetDatasetRe
 	}
 	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Dataset: &storagepb.Dataset{DatasetId: req.GetDatasetId()}}, nil
 }
+func (g *goneMetadata) ListDatasets(context.Context, *storagepb.ListDatasetsReq, ...client.Option) (*storagepb.ListDatasetsRsp, error) {
+	return &storagepb.ListDatasetsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+}
 func (g *goneMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }

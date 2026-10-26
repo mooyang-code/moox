@@ -69,19 +69,18 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	if err != nil {
 		return Run{}, fmt.Errorf("固定策略版本：%w", err)
 	}
-	if binding.FactorTaskID != "" {
-		if spec.TaskID == "" {
-			spec.TaskID = binding.FactorTaskID
-		} else if spec.TaskID != binding.FactorTaskID {
-			return Run{}, fmt.Errorf("实例 %s 声明了 factors，回放用它的私有因子任务 %s，不能指定其他因子任务 %s", spec.InstanceID, binding.FactorTaskID, spec.TaskID)
-		}
+	// 回放用实例关联的因子任务计算因子帧：TaskID 可以省略，写了必须与实例的一致。
+	if binding.FactorTaskID == "" {
+		return Run{}, fmt.Errorf("实例 %s 没有关联因子任务", spec.InstanceID)
 	}
 	if spec.TaskID == "" {
-		return Run{}, errors.New("task_id 是必填项（实例没有声明 factors 时要指定计算因子帧的因子任务）")
+		spec.TaskID = binding.FactorTaskID
+	} else if spec.TaskID != binding.FactorTaskID {
+		return Run{}, fmt.Errorf("实例 %s 关联的因子任务是 %s，不能指定其他因子任务 %s", spec.InstanceID, binding.FactorTaskID, spec.TaskID)
 	}
 	// 闭环回放用的是回放里策略逐期产出的参数，正式结果数据集里的值依据的是冻结记录：写回会让结果与冻结记录对不上
 	// （后续补算又会按冻结记录改回去），所以调参策略的回放不写回因子结果。
-	if spec.WriteFactors && (binding.FactorTaskID != "" || binding.Tuned) {
+	if spec.WriteFactors && binding.Tuned {
 		return Run{}, fmt.Errorf("实例 %s 的策略会逐期调整因子参数，闭环回放用的是回放中的参数，不能写回因子结果（去掉 write_factors）", spec.InstanceID)
 	}
 	run, created, err := r.Store.CreateRun(spec, 0)
@@ -445,7 +444,7 @@ func mergeParams(effective, next MemberParams) MemberParams {
 	return out
 }
 
-// factorDrift 检查策略引用的因子成员（键是成员别名）在因子任务里存在且指纹一致。
+// factorDrift 检查策略引用的因子成员（键是成员键）在因子任务里存在且指纹一致。
 func factorDrift(strategy map[string]string, set []FactorInfo) string {
 	byID := make(map[string]string, len(set))
 	for _, f := range set {

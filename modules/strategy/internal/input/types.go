@@ -87,7 +87,7 @@ type ViewInfo struct {
 	Columns    []ViewColumn
 }
 
-// ViewColumn 是 View 的一列及其属性（因子列带 origin_factor_id 与 factor_output）。
+// ViewColumn 是 View 的一列及其属性（因子输出列带 column_kind=output、member_key、member_kind、factor_id 等）。
 type ViewColumn struct {
 	Name       string
 	Attributes map[string]string
@@ -125,12 +125,14 @@ type FactorInfo struct {
 	Params []ParamDecl
 }
 
-// Row 是 View 的一行：数值列已转为 float64，无法解析的列不出现。
+// Row 是 View 的一行：数值列已转为 float64，无法解析的列不出现。Params 是 __params 列解析出的
+// 各成员这一行实际用的参数（成员键 → 参数名 → 值），查询没有读 __params 或这一行没有值时为空。
 type Row struct {
 	SubjectID string
 	SeriesTag string
 	DataTime  time.Time
 	Values    map[string]float64
+	Params    map[string]map[string]float64
 }
 
 // Query 是一次固定索引的分页读取。
@@ -172,14 +174,15 @@ type Client interface {
 	GetFactor(ctx context.Context, factorID string) (FactorInfo, error)
 }
 
-// ColumnBinding 是一个被引用列的来源。因子列以成员别名标识（同一定义可以用不同别名出现多次），FactorID 是它引用的定义。
+// ColumnBinding 是一个被引用列的来源。因子列以成员键标识（同一因子可以用不同参数出现多次），FactorID 是它引用的定义。
 type ColumnBinding struct {
-	Source string `json:"source"`
-	Member string `json:"member,omitempty"`
-	// Param 非空表示这一列是成员的参数列（这一期这个标的实际用的参数值），值为参数名；否则是因子输出列。
-	Param          string `json:"param,omitempty"`
-	FactorID       string `json:"factor_id,omitempty"`
-	FactorOutput   string `json:"factor_output,omitempty"`
+	Source     string `json:"source"`
+	Member     string `json:"member,omitempty"`
+	FactorID   string `json:"factor_id,omitempty"`
+	OutputName string `json:"output_name,omitempty"`
+	// MemberKind 是成员类型：fixed 或 var。
+	MemberKind string `json:"member_kind,omitempty"`
+	// DefinitionHash 是启用时成员的定义哈希（成员契约由它和成员类型组成，见 readiness.Contract）。
 	DefinitionHash string `json:"definition_hash,omitempty"`
 }
 
@@ -191,12 +194,10 @@ const (
 
 // Resolved 是启用时固化的绑定解析，保存在实例与会话的 resolved_json 中。
 type Resolved struct {
-	ViewID string `json:"view_id"`
-	// SourceViewID 与 FactorTaskID 只在策略声明了 factors 时有值：实例绑定的 K 线 View，以及为实例建立的私有因子任务。
-	// 此时 ViewID 是私有因子任务的结果 View（事件路由与求值都用它）。
-	SourceViewID string `json:"source_view_id,omitempty"`
-	FactorTaskID string `json:"factor_task_id,omitempty"`
-	// FactorParams 是各成员（别名）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
+	// ViewID 是关联因子任务的结果 View（由任务 ID 推导；事件路由与求值都用它），FactorTaskID 是关联的因子任务。
+	ViewID       string `json:"view_id"`
+	FactorTaskID string `json:"factor_task_id"`
+	// FactorParams 是任务各可变成员（成员键）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
 	FactorParams    map[string][]ParamDecl   `json:"factor_params,omitempty"`
 	DatasetID       string                   `json:"dataset_id"`
 	SourceDatasetID string                   `json:"source_dataset_id,omitempty"`
@@ -205,7 +206,7 @@ type Resolved struct {
 	MarketType      string                   `json:"market_type,omitempty"`
 	Spot            bool                     `json:"spot"`
 	Columns         map[string]ColumnBinding `json:"columns"`
-	// Factors 是引用的因子成员（别名）及其固化的 definition_hash。
+	// Factors 是引用的因子成员（成员键）及其固化的成员契约（readiness.Contract：定义哈希加成员类型）。
 	Factors map[string]string `json:"factors,omitempty"`
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的成员（排序）：只有它们需要上一根的版本证据。由编译结果派生
 	// （Resolve 与 Compile 填入），不进快照。
@@ -216,7 +217,7 @@ type Resolved struct {
 	ViewColumns    []string `json:"view_columns"`
 }
 
-// ColumnsOfFactor 返回由某个因子成员（别名）产出的被引用列。
+// ColumnsOfFactor 返回由某个因子成员（成员键）产出的被引用列。
 func (r Resolved) ColumnsOfFactor(member string) []string {
 	columns := make([]string, 0)
 	for name, binding := range r.Columns {

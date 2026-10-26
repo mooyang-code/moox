@@ -10,21 +10,10 @@ import (
 	"github.com/mooyang-code/moox/packages/factorname"
 )
 
-var ReservedColumns = []string{"subject_id", "freq", "data_time", "series_tag"}
-
-// aliasPattern 是成员别名：与定义 ID 同一字符集，最长 32 个字符（列名“别名__参数名”要留出空间）。
-var aliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
+var ReservedColumns = []string{"subject_id", "freq", "data_time", "series_tag", factorname.ParamsColumn}
 
 // categoryIDPattern 是分类 ID。
 var categoryIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
-
-// ValidateAlias 检查成员别名。
-func ValidateAlias(alias string) error {
-	if !aliasPattern.MatchString(alias) || strings.Contains(alias, "__") {
-		return fmt.Errorf("成员别名 %q 不合法：字母开头，只含字母、数字、下划线，最长 32 个字符，不能含连续下划线", alias)
-	}
-	return nil
-}
 
 // ValidateCategory 检查分类。
 func ValidateCategory(category FactorCategory) error {
@@ -34,37 +23,61 @@ func ValidateCategory(category FactorCategory) error {
 	return validateName(category.Name)
 }
 
-// ValidateTask checks the stable identity contract of a set.
-func ValidateTask(set FactorTask) error {
+// MaxTaskNameRunes 是任务名称的字数上限：任务名称直接用作 Storage 结果数据集的名称，Storage 限 10 个字符。
+const MaxTaskNameRunes = 10
+
+// ValidateTaskName 检查任务名称：含汉字、不超过 10 个字、首尾无空白、不含控制字符（空间内唯一由创建时检查）。
+func ValidateTaskName(name string) error {
+	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > MaxTaskNameRunes {
+		return fmt.Errorf("任务名称必须是 1～%d 个字，首尾不能有空白", MaxTaskNameRunes)
+	}
+	hasHan := false
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("任务名称不能包含控制字符")
+		}
+		if unicode.Is(unicode.Han, r) {
+			hasHan = true
+		}
+	}
+	if !hasHan {
+		return fmt.Errorf("任务名称必须含汉字")
+	}
+	return nil
+}
+
+// ValidateTask 检查任务的稳定身份：ID 规则、结果数据集 ID 与名称。
+func ValidateTask(task FactorTask) error {
 	for name, value := range map[string]string{
-		"task_id": set.TaskID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
-		"freq": set.Freq, "result_dataset_id": set.ResultDatasetID,
+		"task_id": task.TaskID, "space_id": task.SpaceID, "source_dataset_id": task.SourceDatasetID,
+		"freq": task.Freq, "result_dataset_id": task.ResultDatasetID,
 	} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
 			return fmt.Errorf("%s is required and must not have surrounding whitespace", name)
 		}
 	}
-	if _, err := ParseFrequency(set.Freq); err != nil {
-		return fmt.Errorf("invalid freq %q: %w", set.Freq, err)
+	if _, err := ParseFrequency(task.Freq); err != nil {
+		return fmt.Errorf("invalid freq %q: %w", task.Freq, err)
 	}
-	if set.OwnerInstanceID != strings.TrimSpace(set.OwnerInstanceID) {
-		return fmt.Errorf("owner_instance_id must not have surrounding whitespace")
+	if err := ValidateTaskName(task.Name); err != nil {
+		return err
 	}
-	wantTaskID := TaskID(set.SourceDatasetID, set.Freq)
-	if set.OwnerInstanceID != "" {
-		wantTaskID = InstanceTaskID(set.OwnerInstanceID)
+	if task.BoundInstanceID != strings.TrimSpace(task.BoundInstanceID) {
+		return fmt.Errorf("bound_instance_id must not have surrounding whitespace")
 	}
-	if set.TaskID != wantTaskID {
-		return fmt.Errorf("task_id must be %q", wantTaskID)
+	suffix, err := factorname.ParseTaskID(task.TaskID)
+	if err != nil {
+		return err
 	}
-	if set.ResultDatasetID != ResultDatasetID(set.TaskID) {
-		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.TaskID))
+	wantDataset, _ := factorname.ResultDatasetID(suffix)
+	if task.ResultDatasetID != wantDataset {
+		return fmt.Errorf("result_dataset_id must be %q", wantDataset)
 	}
-	switch set.Status {
-	case TaskStatusPending, TaskStatusEnabled, TaskStatusDisabled, TaskStatusDeleting:
+	switch task.Status {
+	case TaskStatusPending, TaskStatusEnabled, TaskStatusDisabled:
 		return nil
 	default:
-		return fmt.Errorf("invalid factor task status %q", set.Status)
+		return fmt.Errorf("invalid factor task status %q", task.Status)
 	}
 }
 
@@ -129,20 +142,27 @@ type SourceColumn struct {
 // 默认把填充值当正常值参与计算，需要排除填充值的因子用它判断。与 serieswindow.FilledColumn 一致。
 const FilledColumn = "is_filled"
 
-// resultColumnOrigins maps a result column to the member alias that owns it; a
+// resultColumnOrigins maps a result column to the member key that owns it; a
 // column owned by the same member is reused rather than reported as a conflict.
-// 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。结果列包括输出列与参数列，
-// 都不能与源列、其他成员的列或结果数据集里别的成员拥有的列重名。
+// 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。成员的输出列
+// 不能与源列、其他成员的列或结果数据集里别的成员拥有的列重名。
 func ValidateMembership(set FactorTask, member MemberDef, sourceColumns []SourceColumn,
 	siblings []MemberDef, resultColumnOrigins map[string]string) error {
-	if err := ValidateAlias(member.Alias); err != nil {
-		return err
+	if member.Kind != MemberKindFixed && member.Kind != MemberKindVar {
+		return fmt.Errorf("成员类型 %q 不合法：只能是 %s 或 %s", member.Kind, MemberKindFixed, MemberKindVar)
 	}
 	def, err := CompileDefinition(member.Factor)
 	if err != nil {
 		return fmt.Errorf("spec 编译失败：%w", err)
 	}
 	member.Factor = def
+	wantKey, err := DeriveMemberKey(def, member.Kind, member.Params)
+	if err != nil {
+		return err
+	}
+	if member.Key != wantKey {
+		return fmt.Errorf("成员键必须是 %q，实际是 %q", wantKey, member.Key)
+	}
 	sourceSet := make(map[string]SourceColumn, len(sourceColumns))
 	for _, column := range sourceColumns {
 		sourceSet[strings.TrimSpace(column.Name)] = column
@@ -171,10 +191,13 @@ func ValidateMembership(set FactorTask, member MemberDef, sourceColumns []Source
 			}
 		}
 	}
-	own := memberColumns(member)
+	own := member.OutputColumns()
+	if own == nil {
+		return fmt.Errorf("无法推导成员 %s 的结果列名", member.Key)
+	}
 	for _, column := range own {
 		if !validResultColumn(column) {
-			return fmt.Errorf("结果列名 %q 不合法（别名加输出名或参数名太长，或不是合法标识符）", column)
+			return fmt.Errorf("结果列名 %q 不合法（成员键加输出名太长，或不是合法标识符）", column)
 		}
 		if isReservedColumn(column) {
 			return fmt.Errorf("结果列 %s 是系统列", column)
@@ -182,12 +205,12 @@ func ValidateMembership(set FactorTask, member MemberDef, sourceColumns []Source
 		if _, collision := sourceSet[column]; collision {
 			return fmt.Errorf("结果列 %q 与源列重名", column)
 		}
-		if origin, owned := resultColumnOrigins[column]; owned && origin != member.Alias {
+		if origin, owned := resultColumnOrigins[column]; owned && origin != member.Key {
 			return fmt.Errorf("结果列 %q 已属于结果数据集里的成员 %q", column, origin)
 		}
 	}
 	for _, sibling := range siblings {
-		if sibling.Alias == member.Alias {
+		if sibling.Key == member.Key {
 			continue
 		}
 		compiledSibling, err := CompileDefinition(sibling.Factor)
@@ -195,20 +218,15 @@ func ValidateMembership(set FactorTask, member MemberDef, sourceColumns []Source
 			continue // 兄弟定义编译失败时由它自己的校验报错
 		}
 		sibling.Factor = compiledSibling
-		for _, column := range memberColumns(sibling) {
+		for _, column := range sibling.OutputColumns() {
 			for _, mine := range own {
 				if column == mine {
-					return fmt.Errorf("结果列 %q 在因子任务 %s 的成员 %s 与 %s 中重复", column, set.TaskID, sibling.Alias, member.Alias)
+					return fmt.Errorf("结果列 %q 在因子任务 %s 的成员 %s 与 %s 中重复", column, set.TaskID, sibling.Key, member.Key)
 				}
 			}
 		}
 	}
 	return nil
-}
-
-// memberColumns 返回成员在结果数据集里的全部列：输出列与参数列。
-func memberColumns(member MemberDef) []string {
-	return append(member.OutputColumns(), member.ParamColumns()...)
 }
 
 var resultColumnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)

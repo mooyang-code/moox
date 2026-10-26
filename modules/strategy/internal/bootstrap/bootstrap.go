@@ -85,7 +85,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	ranged := *live
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
 	var replayClient input.Client = &ranged
-	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}, Factors: live}
+	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
 	service.Owner = tradeowner.New(cfg.Trade, gateway)
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
@@ -95,6 +95,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil, nil, err
 	}
 	service.Alerts = observer
+	observer.SetStaleAlertPeriods(cfg.Params.StaleAlertPeriods)
 
 	// 先尝试完成崩溃或网络中断留下的启停握手，再开始消费事件。Trade 暂不可达或个别实例不一致只告警：
 	// 停用侧由对账循环继续重试；启用侧被 Trade 拒绝的实例自动停用，结果未知的标记 session_unverified，
@@ -237,11 +238,6 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 			log.Warnf("清理过期解释明细失败：%v", err)
 		} else if deleted > 0 {
 			log.Infof("已清理 %d 条过期解释明细", deleted)
-		}
-		if deleted, err := repo.DeleteParamSubmissionsBefore(ctx, now.AddDate(0, 0, -cfg.ResultItemsDays)); err != nil {
-			log.Warnf("清理过期因子参数提交记录失败：%v", err)
-		} else if deleted > 0 {
-			log.Infof("已清理 %d 条过期因子参数提交记录", deleted)
 		}
 		if deleted, err := repo.DeleteReplaysBefore(ctx, now.AddDate(0, 0, -cfg.ReplaysDays)); err != nil {
 			log.Warnf("清理过期回放失败：%v", err)

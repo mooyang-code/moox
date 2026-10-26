@@ -1,202 +1,109 @@
 package rpc
 
 import (
-	"context"
-	"errors"
+	"strings"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
 const tunedDSL = `name: tuned
-factors:
-  fast: {factor: bias}
 factor_params:
-  fast:
-    window: "20"
+  bias__var:
+    window: 20
 rules:
   - id: r
     type: rank
-    score: "fast_bias"
+    score: "bias__var"
     select: {top: 1}
     weight: 1
 `
 
-// tunedResolver 在 fakeResolver 之上实现 InstanceResolver：声明了 factors 的策略绑定实例的私有 View。
-type tunedResolver struct {
-	*fakeResolver
-	instances []string
-}
-
-func (r *tunedResolver) ResolveInstance(_ context.Context, instanceID, _, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
-	r.instances = append(r.instances, instanceID)
-	program, err := dsl.Compile(strategy, []string{"close", "fast_bias", "fast__window"})
-	if err != nil {
-		return input.Resolved{}, nil, err
-	}
-	return input.Resolved{
-		CompletionKind: "factor_period.computed", ViewID: "view_factor_" + instanceID, SourceViewID: viewID, FactorTaskID: "ftask_" + instanceID, DatasetID: "ds", Bar: "1h",
-		Calendar: input.DefaultCalendar, Spot: true, MarketType: "spot", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "fast_bias"},
-	}, program, nil
-}
-
-type factorTasksFake struct {
-	paused   []string
-	released []string
-	err      error
-}
-
-func (f *factorTasksFake) EnsureInstanceFactorTask(context.Context, input.InstanceFactorTaskRequest) (input.InstanceFactorTask, error) {
-	return input.InstanceFactorTask{}, nil
-}
-func (f *factorTasksFake) SetInstanceFactorTaskEnabled(_ context.Context, instanceID string, enabled bool) error {
-	if !enabled {
-		f.paused = append(f.paused, instanceID)
-	}
-	return f.err
-}
-func (f *factorTasksFake) ReleaseInstanceFactorTask(_ context.Context, instanceID string) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.released = append(f.released, instanceID)
-	return nil
-}
-func (f *factorTasksFake) SubmitFactorParams(context.Context, input.ParamSubmission) ([]input.MemberSubmitResult, error) {
-	return nil, nil
-}
-
-// 声明了 factors 的实例：启用时按实例建私有因子任务并绑定它的 View（会话固化 source_view_id，重复启用沿用会话）；
-// 停用时停用私有因子任务；删除时先删私有因子任务（失败则实例保持原样可重试）；改绑 View 时释放旧的私有因子任务。
-func TestFactorDeclaringInstanceLifecycle(t *testing.T) {
-	h := newHarness(t)
-	resolver := &tunedResolver{fakeResolver: h.resolver}
-	factors := &factorTasksFake{}
-	h.service.Resolver, h.service.Factors = resolver, factors
-	h.createStrategy("s1", tunedDSL)
-
-	created := h.createInstance("i1", "s1", "view_a", "", true)
-	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
-	instance := created.GetInstance()
-	if !instance.GetEnabled() || instance.GetViewId() != "view_a" || len(resolver.instances) != 1 || resolver.instances[0] != "i1" {
-		t.Fatalf("启用结果不符：%+v resolved=%v", instance, resolver.instances)
-	}
-	session := instance.GetSessionId()
-	// 重复启用幂等：沿用会话，不再解析（会话里的绑定是私有 View，实例绑定的仍是 K 线 View）。
-	again := h.setEnabled("i1", true)
-	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
-	if again.GetInstance().GetSessionId() != session || len(resolver.instances) != 1 {
-		t.Fatalf("重复启用应沿用会话：%+v", again.GetInstance())
-	}
-	// 停用 → 私有因子任务停用；再启用：会话已关闭，重新解析（会重新对齐并启用私有因子任务）。
-	disabled := h.setEnabled("i1", false)
-	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
-	if len(factors.paused) != 1 || factors.paused[0] != "i1" {
-		t.Fatalf("停用应同步停用私有因子任务：%v", factors.paused)
-	}
-	reenabled := h.setEnabled("i1", true)
-	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
-	if len(resolver.instances) != 2 {
-		t.Fatalf("重新启用应重新解析：%v", resolver.instances)
-	}
-
-	// 删除：释放私有因子任务失败时实例保持原样。
-	h.setEnabled("i1", false)
-	factors.err = errors.New("factor-mgr 不可达")
-	failed, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireFail(t, int32(failed.GetRetInfo().GetCode()), failed.GetRetInfo().GetMsg(), "私有因子任务")
-	if got, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i1"}); got.GetInstance().GetInstanceId() != "i1" {
-		t.Fatalf("释放失败时实例应保留：%+v", got)
-	}
-	factors.err = nil
-	deleted, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
-	if len(factors.released) != 1 || factors.released[0] != "i1" {
-		t.Fatalf("删除应释放私有因子任务：%v", factors.released)
-	}
-}
-
-func TestFactorDeclaringStrategyValidateAndReplay(t *testing.T) {
-	h := newHarness(t)
-	h.service.Resolver = &tunedResolver{fakeResolver: h.resolver}
-	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, ViewId: "view_a"})
-	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
-	if len(validated.GetDiagnostics()) != 1 || validated.GetResolvedJson() != "" {
-		t.Fatalf("应只校验 DSL 并说明原因：%+v", validated)
-	}
-	replay, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, ViewId: "view_a", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
-	requireFail(t, int32(replay.GetRetInfo().GetCode()), replay.GetRetInfo().GetMsg(), "factors")
-}
-
-func TestFactorSettingsRequireInScopeInstance(t *testing.T) {
+// 实例创建时必须选定一个合法的因子任务；一个任务只能被一个实例独占；任务在创建时写定。
+func TestInstanceFactorTaskIsRequiredAndExclusive(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	requireOK(t, int32(h.createInstance("i1", "s1", "view_a", "", false).GetRetInfo().GetCode()), "")
-	set, _ := h.service.SetStrategyDisplaySettings(h.ctx, &strategypb.SetStrategyDisplaySettingsReq{InstanceId: "i1", Hidden: &strategypb.DisplayHidden{Categories: []string{"volume"}, Columns: []string{"fast_bias"}}})
+	missing := h.createInstance("i1", "s1", "", "", false)
+	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "factor_task_id")
+	badID := h.createInstance("i1", "s1", "view_a", "", false)
+	requireFail(t, int32(badID.GetRetInfo().GetCode()), badID.GetRetInfo().GetMsg(), "不合法")
+
+	created := h.createInstance("i1", "s1", "ftask_shared", "", false)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	if created.GetInstance().GetFactorTaskId() != "ftask_shared" {
+		t.Fatalf("实例应记下因子任务：%+v", created.GetInstance())
+	}
+	taken := h.createInstance("i2", "s1", "ftask_shared", "", false)
+	requireFail(t, int32(taken.GetRetInfo().GetCode()), taken.GetRetInfo().GetMsg(), "")
+	if _, err := h.service.Store.GetInstance(h.ctx, "i2"); err == nil {
+		t.Fatal("任务已被独占时第二个实例不应创建成功")
+	}
+
+	// 修改实例：任务不可改，留空或给同一个任务则只改其他字段。
+	changed, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTaskId: "ftask_other"}})
+	requireFail(t, int32(changed.GetRetInfo().GetCode()), changed.GetRetInfo().GetMsg(), "不能修改")
+	same, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTaskId: "ftask_shared", LogicalAccountId: "acct-1"}})
+	requireOK(t, int32(same.GetRetInfo().GetCode()), same.GetRetInfo().GetMsg())
+	if same.GetInstance().GetFactorTaskId() != "ftask_shared" || same.GetInstance().GetLogicalAccountId() != "acct-1" {
+		t.Fatalf("修改后的实例不符：%+v", same.GetInstance())
+	}
+}
+
+// 启用时以实例和任务调用解析（关联任务）；会话固化任务的结果 View；重复启用沿用会话，停用后再启用重新解析。
+func TestEnableBindsFactorTaskAndSnapshotsItsView(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	instance := created.GetInstance()
+	if !instance.GetEnabled() || len(h.resolver.bound) != 1 || h.resolver.bound[0] != "i1@ftask_i1" {
+		t.Fatalf("启用应关联任务：%+v bound=%v", instance, h.resolver.bound)
+	}
+	if !strings.Contains(instance.GetResolvedJson(), `"view_id":"view_factor_i1"`) || !strings.Contains(instance.GetResolvedJson(), `"factor_task_id":"ftask_i1"`) {
+		t.Fatalf("会话应固化任务与它的结果 View：%s", instance.GetResolvedJson())
+	}
+	again := h.setEnabled("i1", true)
+	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
+	if again.GetInstance().GetSessionId() != instance.GetSessionId() || len(h.resolver.bound) != 1 {
+		t.Fatalf("重复启用应沿用会话：%+v bound=%v", again.GetInstance(), h.resolver.bound)
+	}
+	requireOK(t, int32(h.setEnabled("i1", false).GetRetInfo().GetCode()), "")
+	reenabled := h.setEnabled("i1", true)
+	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
+	if len(h.resolver.bound) != 2 || reenabled.GetInstance().GetSessionId() == instance.GetSessionId() {
+		t.Fatalf("停用后再启用应重新解析并新建会话：bound=%v", h.resolver.bound)
+	}
+}
+
+// 校验与研究回放都按因子任务解析；回放必须给出任务；输出了 factor_params 的策略暂不支持研究回放。
+func TestValidateAndReplayByFactorTask(t *testing.T) {
+	h := newHarness(t)
+	h.resolver.columns = []string{"close", "bias__var"}
+	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, FactorTaskId: "ftask_x"})
+	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
+	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"view_id":"view_factor_x"`) {
+		t.Fatalf("校验应按任务解析并返回绑定：%s", validated.GetResolvedJson())
+	}
+	if len(h.resolver.bound) != 0 {
+		t.Fatalf("校验只读，不能关联任务：%v", h.resolver.bound)
+	}
+
+	noTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	requireFail(t, int32(noTask.GetRetInfo().GetCode()), noTask.GetRetInfo().GetMsg(), "factor_task_id")
+	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTaskId: "ftask_x", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	requireFail(t, int32(tuned.GetRetInfo().GetCode()), tuned.GetRetInfo().GetMsg(), "factor_params")
+}
+
+func TestDisplaySettingsRequireInScopeInstance(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	requireOK(t, int32(h.createInstance("i1", "s1", "ftask_i1", "", false).GetRetInfo().GetCode()), "")
+	set, _ := h.service.SetStrategyDisplaySettings(h.ctx, &strategypb.SetStrategyDisplaySettingsReq{InstanceId: "i1", Hidden: &strategypb.DisplayHidden{Categories: []string{"volume"}, Members: []string{"bias__var"}, Columns: []string{"bias__var"}}})
 	requireOK(t, int32(set.GetRetInfo().GetCode()), set.GetRetInfo().GetMsg())
 	got, _ := h.service.GetStrategyDisplaySettings(h.ctx, &strategypb.GetStrategyDisplaySettingsReq{InstanceId: "i1"})
-	if len(got.GetHidden().GetCategories()) != 1 || got.GetHidden().GetColumns()[0] != "fast_bias" {
+	if len(got.GetHidden().GetCategories()) != 1 || got.GetHidden().GetColumns()[0] != "bias__var" || got.GetHidden().GetMembers()[0] != "bias__var" {
 		t.Fatalf("外显设置读回不符：%+v", got.GetHidden())
 	}
 	missing, _ := h.service.GetStrategyDisplaySettings(h.ctx, &strategypb.GetStrategyDisplaySettingsReq{InstanceId: "nope"})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "")
-	list, _ := h.service.ListStrategyParamSubmissions(h.ctx, &strategypb.ListStrategyParamSubmissionsReq{InstanceId: "i1"})
-	requireOK(t, int32(list.GetRetInfo().GetCode()), list.GetRetInfo().GetMsg())
-}
-
-// 启用中的实例不能删除，也不能改绑；这些请求被拒绝之前不能动它的私有因子任务。
-func TestRejectedDeleteAndRebindKeepFactorTask(t *testing.T) {
-	h := newHarness(t)
-	h.service.Resolver = &tunedResolver{fakeResolver: h.resolver}
-	factors := &factorTasksFake{}
-	h.service.Factors = factors
-	h.createStrategy("s1", tunedDSL)
-	created := h.createInstance("i1", "s1", "view_a", "", true)
-	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
-
-	rejected, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "先停用")
-	if len(factors.released) != 0 {
-		t.Fatalf("启用中的实例被拒绝删除，不应释放私有因子任务：%v", factors.released)
-	}
-
-	h.setEnabled("i1", false)
-	missing, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
-		InstanceId: "i1", StrategyId: "no-such-strategy", ViewId: "view_b"}})
-	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "不存在")
-	if len(factors.released) != 0 {
-		t.Fatalf("改绑到不存在的策略被拒绝，不应释放私有因子任务：%v", factors.released)
-	}
-}
-
-// 别的实例还绑定着私有结果 View 时，删除拥有者被拒绝，私有因子任务不会被释放（否则读取方永久失去 View）。
-func TestDeleteOwnerRejectedWhileAnotherInstanceReadsItsView(t *testing.T) {
-	h := newHarness(t)
-	h.service.Resolver = &tunedResolver{fakeResolver: h.resolver}
-	factors := &factorTasksFake{}
-	h.service.Factors = factors
-	h.createStrategy("s1", tunedDSL)
-	h.createStrategy("s2", demoDSL)
-	created := h.createInstance("i1", "s1", "view_a", "", true)
-	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
-	// i2 只读绑定 i1 的私有结果 View（启用时固化的 view_id）。
-	reader := h.createInstance("i2", "s2", "view_factor_i1", "", false)
-	requireOK(t, int32(reader.GetRetInfo().GetCode()), reader.GetRetInfo().GetMsg())
-	h.setEnabled("i1", false)
-
-	rejected, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "还绑定着")
-	if len(factors.released) != 0 {
-		t.Fatalf("还有读取方时不应释放私有因子任务：%v", factors.released)
-	}
-	// 读取方删除之后再删拥有者就可以。
-	deletedReader, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i2"})
-	requireOK(t, int32(deletedReader.GetRetInfo().GetCode()), deletedReader.GetRetInfo().GetMsg())
-	deleted, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
-	if n := len(factors.released); n == 0 || factors.released[n-1] != "i1" {
-		t.Fatalf("读取方删除后应释放拥有者的私有因子任务：%v", factors.released)
-	}
 }

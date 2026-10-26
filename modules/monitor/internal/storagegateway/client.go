@@ -60,6 +60,10 @@ func (c *Client) ListDatasetSubjects(ctx context.Context, request *storagepb.Lis
 	return invoke[storagepb.ListDatasetSubjectsRsp](ctx, c, "Metadata", "ListDatasetSubjects", request, options)
 }
 
+func (c *Client) ListDatasets(ctx context.Context, request *storagepb.ListDatasetsReq, options ...client.Option) (*storagepb.ListDatasetsRsp, error) {
+	return invoke[storagepb.ListDatasetsRsp](ctx, c, "Metadata", "ListDatasets", request, options)
+}
+
 func (c *Client) ListTags(ctx context.Context, request *storagepb.ListTagsReq, options ...client.Option) (*storagepb.ListTagsRsp, error) {
 	return invoke[storagepb.ListTagsRsp](ctx, c, "Metadata", "ListTags", request, options)
 }

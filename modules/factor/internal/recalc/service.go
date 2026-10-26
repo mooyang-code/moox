@@ -46,7 +46,7 @@ func NewService(db *store.Store, options ...Option) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
-func (s *Service) Submit(ctx context.Context, taskID string, aliases, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
+func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
@@ -70,12 +70,12 @@ func (s *Service) Submit(ctx context.Context, taskID string, aliases, subjects [
 	if existing, found, err := s.db.FindRecalcJobByRequestID(ctx, requestID); err != nil {
 		return store.RecalcJob{}, err
 	} else if found {
-		if !matchesSubmitRequest(existing, taskID, aliases, subjects, start.Unix(), end.Unix()) {
+		if !matchesSubmitRequest(existing, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
 			return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
 		}
 		return existing, nil
 	}
-	set, selected, normalizedSubjects, clock, err := s.selection(ctx, taskID, aliases, subjects)
+	set, selected, normalizedSubjects, clock, err := s.selection(ctx, taskID, memberKeys, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -85,30 +85,30 @@ func (s *Service) Submit(ctx context.Context, taskID string, aliases, subjects [
 	}
 	ids := make([]string, 0, len(selected))
 	for _, member := range selected {
-		ids = append(ids, member.Alias)
+		ids = append(ids, member.Key)
 	}
 	job, err := s.db.CreateRecalcJob(ctx, store.RecalcJob{
 		JobID: requestID, RequestID: requestID, TaskID: taskID,
 		Members: ids, Subjects: normalizedSubjects,
-		MembersOmitted: len(aliases) == 0, SubjectsOmitted: len(subjects) == 0,
+		MembersOmitted: len(memberKeys) == 0, SubjectsOmitted: len(subjects) == 0,
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	})
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	if !matchesSubmitRequest(job, taskID, aliases, subjects, start.Unix(), end.Unix()) {
+	if !matchesSubmitRequest(job, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
 		return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
 	}
 	return job, nil
 }
 
-func matchesSubmitRequest(job store.RecalcJob, taskID string, aliases, subjects []string, start, end int64) bool {
+func matchesSubmitRequest(job store.RecalcJob, taskID string, memberKeys, subjects []string, start, end int64) bool {
 	if job.TaskID != taskID || job.StartTime != start || job.EndTime != end ||
-		job.MembersOmitted != (len(aliases) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
+		job.MembersOmitted != (len(memberKeys) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
 		return false
 	}
 	if !job.MembersOmitted {
-		normalized, err := normalizeIDs(aliases)
+		normalized, err := normalizeIDs(memberKeys)
 		if err != nil || !sameStrings(job.Members, normalized) {
 			return false
 		}
@@ -151,7 +151,7 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 	})
 }
 
-func (s *Service) selection(ctx context.Context, taskID string, aliases, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, periodclock.Clock, error) {
+func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, periodclock.Clock, error) {
 	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return domain.FactorTask{}, nil, nil, nil, err
@@ -167,7 +167,7 @@ func (s *Service) selection(ctx context.Context, taskID string, aliases, subject
 	if err != nil {
 		return domain.FactorTask{}, nil, nil, nil, err
 	}
-	selected, err := domain.SelectEnabledMembers(members, aliases)
+	selected, err := domain.SelectEnabledMembers(members, memberKeys)
 	if err != nil {
 		return domain.FactorTask{}, nil, nil, nil, err
 	}

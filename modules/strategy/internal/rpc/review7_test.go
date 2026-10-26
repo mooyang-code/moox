@@ -14,7 +14,7 @@ import (
 func TestReplayLookupMapsSpaceAndStoreErrors(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-03"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-03"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	id := started.GetReplay().GetReplayId()
 
@@ -61,7 +61,7 @@ func TestStartReplayRecordsCalendar(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, shanghai), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)}
 	h.createStrategy("s1", demoDSL)
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-10-01"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-10-01"})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 	if rsp.GetReplay().GetCalendar() != "cn_stock" {
 		t.Fatalf("回放记录应带上日历：%q", rsp.GetReplay().GetCalendar())

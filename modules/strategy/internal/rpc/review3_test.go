@@ -8,12 +8,12 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
-// 账户已被其他启用实例持有时，在写会话之前就拒绝：实例上不留下待定会话，之后仍可直接修改或删除。
+// 账户已被其他启用实例持有时，在写会话之前就拒绝：实例上不留下待定会话，之后仍可直接修改。
 func TestEnableHolderCheckLeavesNoPendingSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "acct-1", true)
-	h.createInstance("i2", "s1", "view_a", "acct-1", false)
+	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
+	h.createInstance("i2", "s1", "ftask_i2", "acct-1", false)
 	rsp := h.setEnabled("i2", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "已被启用实例 i1 绑定")
 	instance, err := h.service.Store.GetInstance(h.ctx, "i2")
@@ -27,8 +27,8 @@ func TestEnableHolderCheckLeavesNoPendingSession(t *testing.T) {
 	if instance.SessionID != nil || len(sessions) != 0 {
 		t.Fatalf("被拒绝的启用不应留下会话：%+v sessions=%v", instance, sessions)
 	}
-	deleted, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i2"})
-	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
+	updated, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i2", StrategyId: "s1"}})
+	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
 }
 
 // 改绑到已删除的定义被拒绝。
@@ -36,10 +36,10 @@ func TestUpdateInstanceRejectsDeletedDefinition(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.createStrategy("s2", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "", false)
+	h.createInstance("i1", "s1", "ftask_i1", "", false)
 	removed, _ := h.service.DeleteStrategy(h.ctx, &strategypb.DeleteStrategyReq{StrategyId: "s2"})
 	requireOK(t, int32(removed.GetRetInfo().GetCode()), removed.GetRetInfo().GetMsg())
-	rsp, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s2", ViewId: "view_a"}})
+	rsp, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s2", FactorTaskId: "ftask_i1"}})
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "s2 不存在")
 }
 
@@ -48,7 +48,7 @@ func TestEnableFollowsRebindWhileWaitingForLock(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.createStrategy("s2", demoDSL+"\n# 第二个定义\n")
-	h.createInstance("i1", "s1", "view_a", "", false)
+	h.createInstance("i1", "s1", "ftask_i1", "", false)
 	unlockFirst := mustLockStrategy(h.service, "s1")
 	unlockSecond := mustLockStrategy(h.service, "s2")
 	done := make(chan *strategypb.SetStrategyInstanceEnabledRsp, 1)
@@ -81,12 +81,12 @@ func TestEnableFollowsRebindWhileWaitingForLock(t *testing.T) {
 func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "", true)
+	h.createInstance("i1", "s1", "ftask_i1", "", true)
 	instance, err := h.service.Store.GetInstance(h.ctx, "i1")
 	if err != nil || instance.SessionID == nil {
 		t.Fatalf("实例应已启用：%+v err=%v", instance, err)
 	}
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", ViewId: "view_a", StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	replay := started.GetReplay()
 	if replay.GetInstanceId() != "i1" || replay.GetSessionId() != *instance.SessionID || replay.GetStartTime() != "2026-09-02T00:00:00Z" {

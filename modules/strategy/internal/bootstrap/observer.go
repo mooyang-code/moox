@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
@@ -53,10 +54,14 @@ type instanceObserver struct {
 	datasets *report.DatasetMetrics
 	module   *report.ModuleMetrics
 	periods  *prometheus.CounterVec
-	// paramSubmits 统计因子参数提交的终态。
+	// paramSubmits 统计可变成员参数投递的终态；paramStale 是各实例的参数投递是否已连续多期没有送达。
 	paramSubmits *prometheus.CounterVec
-	now          func() time.Time
-	logf         func(format string, args ...any)
+	paramStale   *prometheus.GaugeVec
+	// staleAlertPeriods 是触发 paramStale 的连续未送达期数（0 表示不告警）。
+	staleAlertPeriods int
+	staleExported     map[string]string
+	now               func() time.Time
+	logf              func(format string, args ...any)
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
@@ -100,14 +105,18 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
 	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
-	paramSubmits := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_param_submit_total", Help: "策略提交的因子参数终态数，按结果分类（accepted、too_late、rejected、abandoned）。"}, []string{"result"})
+	paramSubmits := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_param_submit_total", Help: "策略投递的可变成员参数终态数，按结果分类（delivered、rejected）。"}, []string{"result"})
 	if err := registerer.Register(paramSubmits); err != nil {
 		return nil, fmt.Errorf("注册因子参数提交指标失败：%w", err)
 	}
-	for _, status := range []string{store.ParamAccepted, store.ParamTooLate, store.ParamRejected, store.ParamAbandoned} {
+	for _, status := range []string{paramsubmit.ResultDelivered, paramsubmit.ResultRejected} {
 		paramSubmits.WithLabelValues(status)
 	}
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, accumulatingSince: map[string]time.Time{}}, nil
+	paramStale := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: paramStaleMetric, Help: "实例有可变成员、并且最近连续多期的结果都没有把参数送达因子侧为 1，否则为 0。"}, []string{"space_id", "instance_id"})
+	if err := registerer.Register(paramStale); err != nil {
+		return nil, fmt.Errorf("注册因子参数投递滞后指标失败：%w", err)
+	}
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, paramStale: paramStale, staleExported: map[string]string{}, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, accumulatingSince: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
@@ -173,6 +182,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		return fmt.Errorf("读取启用实例：%w", err)
 	}
 	o.loadBases(ctx, instances)
+	o.observeParamDelivery(ctx, instances)
 	definitionNames := o.definitionNames(ctx)
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -422,7 +432,53 @@ func (o *instanceObserver) log(format string, args ...any) {
 	}
 }
 
-// ParamSubmitted 记录一条因子参数提交的终态。
+// paramStaleMetric 是参数投递滞后告警的指标名（设计 6.5、S7）。
+const paramStaleMetric = "moox_strategy_param_delivery_stale"
+
+// SetStaleAlertPeriods 设置触发参数投递滞后告警的连续未送达期数；0 表示不告警。
+func (o *instanceObserver) SetStaleAlertPeriods(periods int) { o.staleAlertPeriods = periods }
+
+// observeParamDelivery 导出各实例的参数投递是否已连续多期没有送达：实例在运行、DSL 有可变成员（固化的解析里有可变成员的参数声明）、
+// 并且当前会话最近 N 期带参数的结果都没有送达时为 1，否则为 0；不再启用的实例把已导出的序列清零。
+func (o *instanceObserver) observeParamDelivery(ctx context.Context, instances []store.Instance) {
+	if o.paramStale == nil {
+		return
+	}
+	current := make(map[string]string, len(instances))
+	for _, instance := range instances {
+		resolved, err := input.ParseResolved(instance.ResolvedJSON)
+		if err != nil || len(resolved.FactorParams) == 0 || instance.SessionID == nil {
+			continue
+		}
+		stale := false
+		if o.staleAlertPeriods > 0 {
+			var err error
+			if stale, err = o.store.ParamDeliveryStale(ctx, instance.InstanceID, *instance.SessionID, o.staleAlertPeriods); err != nil {
+				o.log("读取实例 %s 的参数投递状态失败：%v", instance.InstanceID, err)
+				continue
+			}
+		}
+		current[instance.InstanceID] = instance.SpaceID
+		value := 0.0
+		if stale {
+			value = 1
+		}
+		o.paramStale.WithLabelValues(instance.SpaceID, instance.InstanceID).Set(value)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for id, space := range o.staleExported {
+		if _, still := current[id]; !still {
+			o.paramStale.WithLabelValues(space, id).Set(0)
+			delete(o.staleExported, id)
+		}
+	}
+	for id, space := range current {
+		o.staleExported[id] = space
+	}
+}
+
+// ParamSubmitted 记录一条可变成员参数投递的终态（delivered、rejected）。
 func (o *instanceObserver) ParamSubmitted(status string) {
 	if o != nil && o.paramSubmits != nil {
 		o.paramSubmits.WithLabelValues(status).Inc()

@@ -68,7 +68,7 @@ func TestCatalogHashChanges(t *testing.T) {
 
 }
 
-// 成员的固定参数进目录指纹：同一别名换了参数，引擎必须重新同步。
+// 成员的固定参数进目录指纹：同一成员键换了参数，引擎必须重新同步。
 func TestCatalogHashCoversMemberParams(t *testing.T) {
 	member := domain.AsMembers(testFactor("bias"))[0]
 	base := []domain.EngineTask{{Set: domain.FactorTask{TaskID: "task_a"}, Members: []domain.MemberDef{member}}}

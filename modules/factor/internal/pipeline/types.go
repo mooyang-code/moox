@@ -20,11 +20,14 @@ const (
 type Plan struct {
 	Mode Mode
 	Set  domain.FactorTask
-	// Members 是本次计算的成员（别名加定义）。
+	// Members 是本次计算的成员（成员键加定义）。
 	Members []domain.MemberDef
-	// Params 是本次计算各成员的冻结参数（别名 → 冻结记录）：实时是这一期的冻结，补算是一个参数段（段内各期快照相同）。
-	// 没有的成员按默认参数计算。目标期的快照覆盖整个回看区间。
-	Params         map[string]domain.ParamFreeze
+	// Params 是本次计算各成员用的参数（成员键 → 快照）：实时是这一期取到的提交值，补算是一个参数段（段内各期快照相同）。
+	// 没有的成员按成员自己的参数（固定参数，或可变成员的默认参数）计算。目标期的快照覆盖整个回看区间。
+	Params map[string]domain.ParamSnapshot
+	// BaseParams 是已有结果行的 __params（行 → 成员键 → 参数名 → 取值），补算与只填充时按它合并写回：
+	// 只替换本次计算的成员，其余成员的记录保留。nil 表示没有已有行（实时写入整行重新生成）。
+	BaseParams     map[RowKey]map[string]map[string]float64
 	PeriodTime     time.Time // 实时模式的目标周期 T；补算为零值
 	TargetStart    time.Time
 	TargetEnd      time.Time
@@ -42,6 +45,13 @@ type Plan struct {
 	CommitSalt string
 }
 
+// RowKey 标识结果数据集里的一行：标的、时间与序列标签。
+type RowKey struct {
+	Subject string
+	At      time.Time
+	Tag     string
+}
+
 type Outcome struct {
 	Status         string
 	FailedSubjects []string
@@ -51,6 +61,9 @@ type Outcome struct {
 	StageDurations map[string]time.Duration
 	// Items 是补算与填充的逐 (因子, 标的, 周期) 结果；实时周期不填。
 	Items map[ItemKey]ItemStatus
+	// DefaultFilled 是补算里按默认参数新补的期次（成员键 → 期次）：已有行不存在、或 __params 里没有这个成员。
+	// 由补算执行器填写，管线本身不知道。
+	DefaultFilled map[string][]time.Time
 }
 
 type Config struct {

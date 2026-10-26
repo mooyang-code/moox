@@ -16,17 +16,18 @@ import (
 )
 
 type hubFake struct {
-	hash        string
-	notModified bool
-	sets        []domain.EngineTask
-	identity    domain.EngineIdentity
-	status      domain.EngineStatus
-	job         store.RecalcJob
-	pulledTask  domain.EngineTask
-	found       bool
-	progress    time.Time
-	reportedErr string
-	err         error
+	hash          string
+	notModified   bool
+	sets          []domain.EngineTask
+	identity      domain.EngineIdentity
+	status        domain.EngineStatus
+	job           store.RecalcJob
+	pulledTask    domain.EngineTask
+	found         bool
+	progress      time.Time
+	reportedErr   string
+	defaultFilled map[string][]store.TimeRange
+	err           error
 	// noLease 让 HoldsLease 返回 false（调用方不是持有租约的引擎）。
 	noLease bool
 }
@@ -49,7 +50,8 @@ func (f *hubFake) Pull(context.Context, domain.EngineIdentity) (store.RecalcJob,
 	return f.job, f.pulledTask, f.found, f.err
 }
 
-func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string) (store.RecalcJob, error) {
+func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
+	f.defaultFilled = defaultFilled
 	f.progress, f.reportedErr = progress, errText
 	job := f.job
 	job.Status = status
@@ -60,7 +62,7 @@ var testEngine = &factorpb.EngineIdentity{EngineId: "factor-engine@mac", BootId:
 
 func engineTaskFixture() domain.EngineTask {
 	return domain.EngineTask{
-		Set:         domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.TaskStatusEnabled},
+		Set:         domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", Name: "行情因子", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "output: close / ts_mean(close, 5)\n")),
 		ResultReady: true,
 	}

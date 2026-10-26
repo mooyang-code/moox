@@ -100,7 +100,7 @@ func TestPullReclaimsExpiredRunningLease(t *testing.T) {
 	first, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
-	_, err = s.ReportRecalcProgress(context.Background(), first.JobID, first.LeaseToken, 200, RecalcStatusRunning, "", pullNow, time.Minute)
+	_, err = s.ReportRecalcProgress(context.Background(), first.JobID, first.LeaseToken, 200, RecalcStatusRunning, "", nil, pullNow, time.Minute)
 	require.NoError(t, err)
 
 	second, ok, err := s.PullRecalcJob(context.Background(), "engine-b", pullNow.Add(2*time.Minute), time.Minute, nil, 0)
@@ -129,7 +129,7 @@ func TestReportProgressRejectsWrongToken(t *testing.T) {
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
-	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, "stale-token", 200, RecalcStatusRunning, "", pullNow, time.Minute)
+	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, "stale-token", 200, RecalcStatusRunning, "", nil, pullNow, time.Minute)
 
 	require.ErrorIs(t, err, ErrConflict)
 }
@@ -141,7 +141,7 @@ func TestReportProgressExtendsLease(t *testing.T) {
 	require.NoError(t, err)
 	later := pullNow.Add(50 * time.Second)
 
-	updated, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", later, time.Minute)
+	updated, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", nil, later, time.Minute)
 
 	require.NoError(t, err)
 	require.Equal(t, int64(200), updated.ProgressTime)
@@ -154,7 +154,7 @@ func TestReportProgressCompletesJob(t *testing.T) {
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
-	done, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 400, RecalcStatusSucceeded, "degraded: failed_subjects=1", pullNow, time.Minute)
+	done, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 400, RecalcStatusSucceeded, "degraded: failed_subjects=1", nil, pullNow, time.Minute)
 
 	require.NoError(t, err)
 	require.Equal(t, RecalcStatusSucceeded, done.Status)
@@ -175,7 +175,7 @@ func TestReportProgressReturnsCancelled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	current, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", pullNow, time.Minute)
+	current, err := s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", nil, pullNow, time.Minute)
 
 	require.NoError(t, err)
 	require.Equal(t, RecalcStatusCancelled, current.Status)
@@ -187,10 +187,10 @@ func TestReportProgressRejectsRegression(t *testing.T) {
 	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
-	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 300, RecalcStatusRunning, "", pullNow, time.Minute)
+	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 300, RecalcStatusRunning, "", nil, pullNow, time.Minute)
 	require.NoError(t, err)
 
-	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", pullNow, time.Minute)
+	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusRunning, "", nil, pullNow, time.Minute)
 
 	require.ErrorIs(t, err, ErrConflict)
 }
@@ -201,7 +201,7 @@ func TestReportProgressRejectsUnknownStatus(t *testing.T) {
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
-	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusCancelled, "", pullNow, time.Minute)
+	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 200, RecalcStatusCancelled, "", nil, pullNow, time.Minute)
 
 	require.Error(t, err)
 }

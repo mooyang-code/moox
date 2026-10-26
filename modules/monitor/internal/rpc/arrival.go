@@ -15,7 +15,7 @@ func (s *Service) QueryPipelineArrivalHistory(ctx context.Context, req *monitorp
 		return &monitorpb.QueryPipelineArrivalHistoryRsp{RetInfo: inner(errors.New("到达历史不可用"))}, nil
 	}
 	history, err := s.healthView.Facts.ArrivalHistory(ctx, observability.ArrivalHistoryQuery{
-		SpaceID: req.GetSpaceId(), DatasetID: req.GetDatasetId(), Freq: req.GetFreq(), Day: req.GetDay(),
+		SpaceID: req.GetSpaceId(), DatasetID: req.GetDatasetId(), Freq: req.GetFreq(), Day: req.GetDay(), TaskID: req.GetTaskId(),
 	})
 	if errors.Is(err, observability.ErrInvalidArrivalQuery) {
 		return &monitorpb.QueryPipelineArrivalHistoryRsp{RetInfo: invalid(err)}, nil
@@ -27,6 +27,9 @@ func (s *Service) QueryPipelineArrivalHistory(ctx context.Context, req *monitorp
 		RetInfo: success(), Timezone: history.Timezone, Day: history.Day,
 		StartAt: history.Start.UTC().Format(time.RFC3339), EndAt: history.End.UTC().Format(time.RFC3339),
 		RetentionTruncated: history.RetentionTruncated, Truncated: history.Truncated,
+	}
+	for _, task := range history.Tasks {
+		rsp.Tasks = append(rsp.Tasks, &monitorpb.ArrivalTask{TaskId: task.TaskID, Name: task.Name, ResultDatasetId: task.ResultDatasetID})
 	}
 	for _, series := range history.Series {
 		out := &monitorpb.ArrivalHistorySeries{

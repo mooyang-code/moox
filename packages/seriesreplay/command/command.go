@@ -94,7 +94,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	var c common
 	c.bind(fs)
 	var spec seriesreplay.Spec
-	fs.StringVar(&spec.TaskID, "task", "", "计算因子帧的因子任务 ID（实例声明了 factors 时可省略，取实例的私有因子任务）")
+	fs.StringVar(&spec.TaskID, "task", "", "计算因子帧的因子任务 ID（可省略，取实例关联的因子任务）")
 	fs.StringVar(&spec.InstanceID, "instance", "", "提供策略定义与数据源绑定的策略实例 ID")
 	fs.StringVar(&spec.From, "from", "", "回放起点（RFC3339，含）")
 	fs.StringVar(&spec.To, "to", "", "回放终点（RFC3339，不含）；本地数据必须包含终点之后的一根")

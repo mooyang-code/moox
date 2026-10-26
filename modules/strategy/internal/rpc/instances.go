@@ -39,8 +39,11 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	if v.GetSpaceId() != "" && v.GetSpaceId() != scoped {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
+	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetFactorTaskId()) == "" {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 factor_task_id 不能为空"))}, nil
+	}
+	if _, err := input.ViewIDOfTask(v.GetFactorTaskId()); err != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("factor_task_id 不合法：%w", err))}, nil
 	}
 	instanceID := strings.TrimSpace(v.GetInstanceId())
 	if instanceID == "" {
@@ -54,7 +57,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	}
 	defer unlock()
 	now := s.nowTime()
-	instance := store.Instance{InstanceID: instanceID, StrategyID: v.GetStrategyId(), SpaceID: scoped, ViewID: strings.TrimSpace(v.GetViewId()), LogicalAccountID: optionalString(v.GetLogicalAccountId()), CreatedAt: now, UpdatedAt: now}
+	instance := store.Instance{InstanceID: instanceID, StrategyID: v.GetStrategyId(), SpaceID: scoped, FactorTaskID: strings.TrimSpace(v.GetFactorTaskId()), LogicalAccountID: optionalString(v.GetLogicalAccountId()), CreatedAt: now, UpdatedAt: now}
 	if existing, err := s.Store.GetInstance(ctx, instanceID); err == nil {
 		return createRetryResponse(existing, instance, v.GetEnabled()), nil
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -78,7 +81,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		if getErr != nil {
 			return &strategypb.CreateStrategyInstanceRsp{
 				RetInfo:  invalid(fmt.Errorf("实例 %q 已创建但状态不可读，请先查看实例再用 SetStrategyInstanceEnabled 启用：%w", instanceID, errors.Join(err, fmt.Errorf("读取已创建的实例：%w", getErr)))),
-				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, ViewId: instance.ViewID},
+				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, FactorTaskId: instance.FactorTaskID},
 			}
 		}
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("实例 %q 已创建；请查看实例并用 SetStrategyInstanceEnabled 启用：%w", instanceID, err)), Instance: instanceProto(current)}
@@ -98,7 +101,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 // createRetryResponse 处理重复创建：配置一致时返回现有实例，启用状态不同时提示用显式启用接口。
 func createRetryResponse(existing, requested store.Instance, desiredEnabled bool) *strategypb.CreateStrategyInstanceRsp {
 	sameAccount := (existing.LogicalAccountID == nil && requested.LogicalAccountID == nil) || (existing.LogicalAccountID != nil && requested.LogicalAccountID != nil && *existing.LogicalAccountID == *requested.LogicalAccountID)
-	if existing.DeletedAt != nil || existing.SpaceID != requested.SpaceID || existing.StrategyID != requested.StrategyID || existing.ViewID != requested.ViewID || !sameAccount {
+	if existing.SpaceID != requested.SpaceID || existing.StrategyID != requested.StrategyID || existing.FactorTaskID != requested.FactorTaskID || !sameAccount {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 与已有实例的配置冲突"))}
 	}
 	response := &strategypb.CreateStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(existing)}
@@ -120,9 +123,10 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
 	}
 	v := req.GetInstance()
-	// 可编辑字段整体替换：策略定义与 View 必填，组合账户留空表示观察实例。
-	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetViewId()) == "" {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 view_id 不能为空"))}, nil
+	// 可编辑字段整体替换：策略定义必填，组合账户留空表示观察实例。因子任务在创建时写定，不能修改：
+	// 请求里给了 factor_task_id 时必须与现有的一致。
+	if strings.TrimSpace(v.GetStrategyId()) == "" {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil
 	}
 	// 改绑同时锁住实例当前的定义与新定义：启用新定义的实例、修改或删除新定义都不能与改绑交错；
 	// 等锁期间实例被并发改绑时换锁重试，保证持有的锁覆盖重读到的定义。
@@ -134,13 +138,11 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	if current.SpaceID != scoped {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	if current.DeletedAt != nil {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例已删除"))}, nil
+	if task := strings.TrimSpace(v.GetFactorTaskId()); task != "" && task != current.FactorTaskID {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的因子任务在创建时写定，不能修改"))}, nil
 	}
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
-	updated.ViewID = strings.TrimSpace(v.GetViewId())
-	// 释放旧私有因子任务之前先核对所有会让更新失败的条件，避免先破坏因子任务、再返回失败。
 	if current.Enabled {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能修改"))}, nil
 	}
@@ -149,12 +151,6 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	}
 	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", updated.StrategyID))}, nil
-	}
-	if !current.Enabled && (updated.StrategyID != current.StrategyID || updated.ViewID != current.ViewID) {
-		// 改绑策略或 View 后私有因子任务的成员或数据源可能不同：先删掉旧的，下次启用重新建立。
-		if err := s.releaseFactorTask(ctx, current); err != nil {
-			return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例旧的私有因子任务失败：%w", err))}, nil
-		}
 	}
 	updated.LogicalAccountID = optionalString(v.GetLogicalAccountId())
 	updated.UpdatedAt = s.nowTime()
@@ -222,47 +218,6 @@ func (s *Service) ListStrategyInstances(ctx context.Context, req *strategypb.Lis
 	return &strategypb.ListStrategyInstancesRsp{RetInfo: success(), Instances: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
 }
 
-func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.DeleteStrategyInstanceReq) (*strategypb.DeleteStrategyInstanceRsp, error) {
-	if err := s.ready(); err != nil {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
-	}
-	scoped, err := requireSpaceID(ctx)
-	if err != nil {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(err)}, nil
-	}
-	if req == nil || strings.TrimSpace(req.GetInstanceId()) == "" {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 不能为空"))}, nil
-	}
-	instance, unlock, err := s.lockInstance(ctx, req.GetInstanceId())
-	if err != nil {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
-	}
-	defer unlock()
-	if instance.SpaceID != scoped {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
-	}
-	// 持锁后先核对实例状态：启用中或启停尚未完成的实例不能删，此时不能动它的私有因子任务。
-	if instance.DeletedAt == nil {
-		if instance.Enabled {
-			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能删除"))}, nil
-		}
-		if instance.SessionID != nil {
-			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的停用操作尚未完成，请稍后再删除"))}, nil
-		}
-	}
-	// 先删私有因子任务（幂等）：失败时实例保持原样，可以重试；实例软删除之后就没有入口再清理它了。
-	if err := s.releaseFactorTask(ctx, instance); err != nil {
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例的私有因子任务失败：%w", err))}, nil
-	}
-	if err := s.Store.SoftDeleteInstance(ctx, instance.InstanceID, s.nowTime()); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
-		}
-		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(err)}, nil
-	}
-	return &strategypb.DeleteStrategyInstanceRsp{RetInfo: success()}, nil
-}
-
 func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategypb.SetStrategyInstanceEnabledReq) (*strategypb.SetStrategyInstanceEnabledRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: failure(err)}, nil
@@ -282,9 +237,6 @@ func (s *Service) SetStrategyInstanceEnabled(ctx context.Context, req *strategyp
 	defer unlock()
 	if instance.SpaceID != scoped {
 		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
-	}
-	if instance.DeletedAt != nil {
-		return &strategypb.SetStrategyInstanceEnabledRsp{RetInfo: invalid(errors.New("实例已删除"))}, nil
 	}
 	if req.GetEnabled() {
 		if instance.Enabled {
@@ -341,7 +293,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 	var resolvedJSON json.RawMessage
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
-		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && sessionView(session) == instance.ViewID {
+		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && sessionTask(session) == instance.FactorTaskID {
 			resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 			if err != nil {
 				return reload(), err
@@ -371,7 +323,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if s.Resolver == nil {
 			return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 		}
-		resolved, _, err := s.resolveForInstance(ctx, instance, strategy)
+		resolved, _, err := s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTaskID, strategy)
 		if err != nil {
 			return reload(), err
 		}
@@ -430,20 +382,15 @@ func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
 	return nil
 }
 
-// sessionView 返回会话固化的解析结果里的 View（与存储层启用时的核对口径一致）；解析失败时返回空串。
-func sessionView(session store.Session) string {
+// sessionTask 返回会话固化的解析结果里的因子任务（与存储层启用时的核对口径一致）；解析失败时返回空串。
+func sessionTask(session store.Session) string {
 	var resolved struct {
-		ViewID       string `json:"view_id"`
-		SourceViewID string `json:"source_view_id"`
+		FactorTaskID string `json:"factor_task_id"`
 	}
 	if err := json.Unmarshal([]byte(session.ResolvedJSON), &resolved); err != nil {
 		return ""
 	}
-	// 声明了 factors 的会话绑定的是私有因子任务的 View：与实例比较的是它绑定的 K 线 View。
-	if resolved.SourceViewID != "" {
-		return resolved.SourceViewID
-	}
-	return resolved.ViewID
+	return resolved.FactorTaskID
 }
 
 // disable 执行停用流程：先落库再释放 Trade；释放确认前保留会话，供重启对账恢复。
@@ -462,7 +409,6 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
 	}
-	s.pauseFactorTask(ctx, instance.InstanceID)
 	if releaseNeeded {
 		if s.Owner == nil {
 			return reload(), errors.New("未接线 Trade，无法释放账户会话；请接线后重试停用")

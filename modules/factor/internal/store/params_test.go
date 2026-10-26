@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,237 +10,201 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func period(minute int) time.Time { return time.Unix(int64(1_800_000_000+minute*60), 0).UTC() }
-
-func snapshotOf(window float64) domain.ParamSnapshot {
-	return domain.ParamSnapshot{"window": {Default: window}}
-}
-
-func submit(t *testing.T, s *Store, requestID string, at time.Time, window float64) (domain.ParamRequest, error) {
+func addVarMember(t *testing.T, s *Store, taskID, factorID string) string {
 	t.Helper()
-	return s.SubmitParamRequest(context.Background(), domain.ParamRequest{RequestID: requestID, TaskID: "set", MemberAlias: "fast",
-		PeriodTime: at, Snapshot: snapshotOf(window), Writer: "inst"})
+	ctx := context.Background()
+	if _, err := s.GetFactor(ctx, factorID); err != nil {
+		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
+	}
+	key := factorID + "__var"
+	_, err := s.AddMember(ctx, taskID, key, factorID, domain.MemberKindVar, map[string]float64{"span": 20})
+	require.NoError(t, err)
+	return key
 }
 
-func freeze(t *testing.T, s *Store, at time.Time) domain.ParamFreeze {
+func snapshot(defaultSpan float64, overrides map[string]float64) domain.ParamSnapshot {
+	return domain.ParamSnapshot{"span": {Default: defaultSpan, Overrides: overrides}}
+}
+
+func submit(t *testing.T, s *Store, period int64, requestID string, key string, snap domain.ParamSnapshot) ParamSubmitOutcome {
 	t.Helper()
-	freezes, err := s.FreezeParams(context.Background(), "set", at, at.Add(-time.Minute),
-		[]FreezeMember{{Alias: "fast", Defaults: snapshotOf(20)}})
+	outcomes, err := s.SubmitMemberParams(context.Background(), "task_prices", period, requestID,
+		[]ParamSubmission{{MemberKey: key, Snapshot: snap}}, nil)
 	require.NoError(t, err)
-	require.Len(t, freezes, 1)
-	return freezes[0]
+	require.Len(t, outcomes, 1)
+	return outcomes[0]
 }
 
-// 冻结选库内序号最大的已接受请求；没有请求时沿用上一期；从未有过冻结时用默认值。冻结之后的同期请求 too_late。
-func TestFreezeSelectsLatestRequestCarriesAndDefaults(t *testing.T) {
+// 一个因子在同一个任务里最多一个可变成员；固定成员不受限制。
+func TestVarMemberIsUniquePerFactor(t *testing.T) {
 	s := openTestStore(t)
-	first := freeze(t, s, period(0))
-	require.Equal(t, domain.ParamsDefault, first.Source)
-	require.Equal(t, 20.0, first.Snapshot.Value("window", "BTC"))
-
-	_, err := submit(t, s, "r1", period(1), 30)
-	require.NoError(t, err)
-	_, err = submit(t, s, "r2", period(1), 40)
-	require.NoError(t, err)
-	got := freeze(t, s, period(1))
-	require.Equal(t, domain.ParamsRequested, got.Source)
-	require.Equal(t, "r2", got.RequestID)
-	require.Equal(t, 40.0, got.Snapshot.Value("window", "BTC"))
-
-	_, err = submit(t, s, "late", period(1), 50)
-	require.True(t, IsTooLate(err), "err = %v", err)
-
-	carried := freeze(t, s, period(2))
-	require.Equal(t, domain.ParamsCarried, carried.Source)
-	require.Equal(t, 40.0, carried.Snapshot.Value("window", "BTC"))
-
-	// 重复冻结同一期返回同一份（引擎重试、重启后重算）。
-	again := freeze(t, s, period(1))
-	require.Equal(t, got.SnapshotHash, again.SnapshotHash)
-	require.Equal(t, domain.ParamsRequested, again.Source)
-	require.Equal(t, "r2", again.RequestID)
-
-	requests, err := s.ListParamRequests(context.Background(), "set", "fast", period(0), period(5), 0)
-	require.NoError(t, err)
-	statuses := map[string]string{}
-	for _, request := range requests {
-		statuses[request.RequestID] = request.Status
-	}
-	require.Equal(t, map[string]string{"r1": domain.ParamRequestSuperseded, "r2": domain.ParamRequestApplied}, statuses)
-}
-
-// 快照与来源相同的连续期次压缩成一个区间；快照或来源变化时新开区间。
-func TestFreezeIntervalsCompress(t *testing.T) {
-	s := openTestStore(t)
-	for minute := 0; minute < 5; minute++ {
-		freeze(t, s, period(minute))
-	}
-	_, err := submit(t, s, "r", period(5), 30)
-	require.NoError(t, err)
-	freeze(t, s, period(5))
-	_, err = submit(t, s, "r6", period(6), 30)
-	require.NoError(t, err)
-	freeze(t, s, period(6))
-	freeze(t, s, period(7))
-	intervals, err := s.ListParamIntervals(context.Background(), "set", "", period(0), period(10))
-	require.NoError(t, err)
-	type span struct {
-		start, end int
-		source     string
-	}
-	var got []span
-	for _, interval := range intervals {
-		got = append(got, span{int(interval.Start.Sub(period(0)) / time.Minute), int(interval.End.Sub(period(0)) / time.Minute), interval.Source})
-	}
-	require.Equal(t, []span{{0, 4, domain.ParamsDefault}, {5, 6, domain.ParamsRequested}, {7, 7, domain.ParamsCarried}}, got)
-
-	// 区间查询带上 from 之前最近的一个区间（from 没有记录时沿用它）。
-	later, err := s.ListParamIntervals(context.Background(), "set", "fast", period(20), period(30))
-	require.NoError(t, err)
-	require.Len(t, later, 1)
-	require.Equal(t, period(7), later[0].End)
-}
-
-// 同一 request_id 重复提交返回同一结果；内容不同报冲突。
-func TestSubmitParamRequestIdempotent(t *testing.T) {
-	s := openTestStore(t)
-	first, err := submit(t, s, "r", period(3), 30)
-	require.NoError(t, err)
-	again, err := submit(t, s, "r", period(3), 30)
-	require.NoError(t, err)
-	require.Equal(t, first.Seq, again.Seq)
-	_, err = submit(t, s, "r", period(3), 31)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	addVarMember(t, s, "task_prices", "ema")
+	_, err := s.AddMember(ctx, "task_prices", "ema__other", "ema", domain.MemberKindVar, nil)
 	require.ErrorIs(t, err, ErrConflict)
+	_, err = s.AddMember(ctx, "task_prices", "ema", "ema", domain.MemberKindFixed, map[string]float64{"span": 20})
+	require.NoError(t, err)
+	_, err = s.AddMember(ctx, "task_prices", "ema__30", "ema", domain.MemberKindFixed, map[string]float64{"span": 30})
+	require.NoError(t, err)
+	_, err = s.AddMember(ctx, "task_prices", "ema__x", "ema", "other", nil)
+	require.ErrorContains(t, err, "member kind")
 }
 
-// 离线冻结补报：管理端没有记录的期次写入 carried_offline 并把那期已接受的请求标为未生效；已有不同记录的期次作为冲突返回。
-func TestApplyOfflineFreezes(t *testing.T) {
+// 目标期不能倒退；同期同 request_id 幂等；同期不同 request_id 拒绝；成员必须存在且可变。
+func TestSubmitMemberParamsPeriodAndIdempotency(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	freeze(t, s, period(0))
-	_, err := submit(t, s, "r", period(1), 30)
-	require.NoError(t, err)
-	previous := func(at time.Time) time.Time { return at.Add(-time.Minute) }
-	conflicts, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{
-		{TaskID: "set", MemberAlias: "fast", PeriodTime: period(0), Snapshot: snapshotOf(99)},
-		{TaskID: "set", MemberAlias: "fast", PeriodTime: period(1), Snapshot: snapshotOf(20)},
-	}, previous)
-	require.NoError(t, err)
-	require.Len(t, conflicts, 1)
-	require.Equal(t, period(0), conflicts[0].PeriodTime)
-	require.Equal(t, 20.0, conflicts[0].Snapshot.Value("window", "BTC"))
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	key := addVarMember(t, s, "task_prices", "ema")
+	addTestMember(t, s, "task_prices", "fixed_one", domain.MemberStatusDisabled)
 
-	through, ok, err := s.FrozenThrough(ctx, "set")
+	first := submit(t, s, 1000, "req-1", key, snapshot(30, nil))
+	require.Equal(t, SubmitAccepted, first.Result)
+	require.Equal(t, SubmitDuplicate, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
+
+	other := submit(t, s, 1000, "req-2", key, snapshot(40, nil))
+	require.Equal(t, SubmitRejected, other.Result)
+	require.Contains(t, other.Reason, "request_id req-1")
+
+	back := submit(t, s, 900, "req-3", key, snapshot(40, nil))
+	require.Equal(t, SubmitRejected, back.Result)
+	require.Contains(t, back.Reason, "早于")
+
+	forward := submit(t, s, 2000, "req-4", key, snapshot(50, nil))
+	require.Equal(t, SubmitAccepted, forward.Result)
+
+	fixed := submit(t, s, 3000, "req-5", "fixed_one", snapshot(30, nil))
+	require.Equal(t, SubmitRejected, fixed.Result)
+	require.Contains(t, fixed.Reason, "固定成员")
+	missing := submit(t, s, 3000, "req-6", "nope__var", snapshot(30, nil))
+	require.Equal(t, SubmitRejected, missing.Result)
+
+	states, err := s.ListMemberParamStates(ctx, "task_prices")
 	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, period(1), through)
-	got := freeze(t, s, period(1))
-	require.Equal(t, domain.ParamsCarriedOffline, got.Source)
-	requests, err := s.ListParamRequests(ctx, "set", "fast", period(1), period(1), 0)
-	require.NoError(t, err)
-	require.Equal(t, domain.ParamRequestNotApplied, requests[0].Status)
+	require.Len(t, states, 1)
+	require.Equal(t, int64(2000), states[0].LastSubmittedPeriod)
+	require.Equal(t, "req-4", states[0].LastRequestID)
+	require.NotNil(t, states[0].LastSubmittedAt)
+	require.Equal(t, 50.0, states[0].LastSubmittedParams.Value("span", "BTC"))
 }
 
-// 清理：过期请求、保留期之外的冻结区间，以及不再被引用的快照。
-func TestCleanupParams(t *testing.T) {
+// 按标的合并：默认值取本次提交的；本次带了的标的覆盖旧值，没带的标的保留旧值。
+func TestSubmitMemberParamsMergesBySubject(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	for minute := 0; minute < 3; minute++ {
-		freeze(t, s, period(minute))
-	}
-	_, err := submit(t, s, "r", period(3), 30)
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	key := addVarMember(t, s, "task_prices", "ema")
+
+	submit(t, s, 1000, "req-1", key, snapshot(30, map[string]float64{"BTC": 10, "ETH": 15}))
+	submit(t, s, 2000, "req-2", key, snapshot(40, map[string]float64{"BTC": 12, "SOL": 8}))
+
+	states, err := s.ListMemberParamStates(ctx, "task_prices")
 	require.NoError(t, err)
-	freeze(t, s, period(3))
-	removed, err := s.CleanupParams(ctx, time.Now().Add(time.Hour), map[string]time.Time{"set": period(3)})
-	require.NoError(t, err)
-	require.Positive(t, removed)
-	intervals, err := s.ListParamIntervals(ctx, "set", "", period(0), period(10))
-	require.NoError(t, err)
-	require.Len(t, intervals, 1)
-	require.Equal(t, period(3), intervals[0].Start)
-	var snapshots int64
-	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_factor_param_snapshots").Scan(&snapshots).Error)
-	require.Equal(t, int64(1), snapshots)
+	got := states[0].LastSubmittedParams
+	require.Equal(t, 12.0, got.Value("span", "BTC"))
+	require.Equal(t, 15.0, got.Value("span", "ETH"))
+	require.Equal(t, 8.0, got.Value("span", "SOL"))
+	require.Equal(t, 40.0, got.Value("span", "XRP"))
 }
 
-// 每个成员的最后一个区间在清理后仍保留：长期没有冻结之后恢复，沿用的基线不能丢。
-func TestCleanupKeepsLastIntervalOfEachMember(t *testing.T) {
+// 合并结果由调用方校验：校验失败的成员被拒绝，其他成员照常接受，被拒绝的成员状态不变。
+func TestSubmitMemberParamsChecksMergedSnapshotPerMember(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	_, err := submit(t, s, "r", period(0), 30)
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	a := addVarMember(t, s, "task_prices", "ema")
+	b := addVarMember(t, s, "task_prices", "wma")
+
+	outcomes, err := s.SubmitMemberParams(ctx, "task_prices", 1000, "req-1", []ParamSubmission{
+		{MemberKey: a, Snapshot: snapshot(30, nil)},
+		{MemberKey: b, Snapshot: snapshot(99, nil)},
+	}, func(memberKey string, merged domain.ParamSnapshot) error {
+		if merged.Value("span", "") > 50 {
+			return errors.New("span 超过上限")
+		}
+		return nil
+	})
 	require.NoError(t, err)
-	got := freeze(t, s, period(0))
-	require.Equal(t, 30.0, got.Snapshot.Value("window", "BTC"))
-	_, err = s.CleanupParams(ctx, time.Now().Add(time.Hour), map[string]time.Time{"set": period(100)})
+	require.Equal(t, []ParamSubmitOutcome{
+		{MemberKey: a, Result: SubmitAccepted},
+		{MemberKey: b, Result: SubmitRejected, Reason: "span 超过上限"},
+	}, outcomes)
+	states, err := s.ListMemberParamStates(ctx, "task_prices")
 	require.NoError(t, err)
-	intervals, err := s.ListParamIntervals(ctx, "set", "", period(0), period(200))
-	require.NoError(t, err)
-	require.Len(t, intervals, 1)
-	carried := freeze(t, s, period(101))
-	require.Equal(t, domain.ParamsCarried, carried.Source)
-	require.Equal(t, 30.0, carried.Snapshot.Value("window", "BTC"))
+	require.Equal(t, int64(1000), states[0].LastSubmittedPeriod)
+	require.Equal(t, int64(0), states[1].LastSubmittedPeriod)
 }
 
-// 参数声明在两期之间变过（新增参数）：旧快照缺参数，不能沿用，改回当前声明的默认值。
-func TestFreezeDoesNotCarryAcrossDeclarationChange(t *testing.T) {
-	s := openTestStore(t)
-	first := freeze(t, s, period(0))
-	require.Equal(t, domain.ParamsDefault, first.Source)
-	defaults := domain.ParamSnapshot{"window": {Default: 20}, "k": {Default: 2}}
-	freezes, err := s.FreezeParams(context.Background(), "set", period(1), period(0), []FreezeMember{{Alias: "fast", Defaults: defaults}})
-	require.NoError(t, err)
-	require.Len(t, freezes, 1)
-	require.Equal(t, domain.ParamsDefault, freezes[0].Source)
-	require.Equal(t, 2.0, freezes[0].Snapshot.Value("k", "BTC"))
-}
-
-// 从没提交生效过的成员，经过一次离线冻结之后来源链是 carried_offline；之后的沿用仍是默认值（来源 default），
-// 不能被当成“沿用旧提交”触发连续沿用告警；真正提交过的成员沿用才记 carried。
-func TestFreezeAfterOfflineKeepsDefaultSourceForNeverRequestedMember(t *testing.T) {
+// 提交只写 c_last_* 运行状态列，不更新 c_mtime，所以不改变目录指纹；改配置列（状态）才更新 c_mtime。
+func TestSubmitMemberParamsDoesNotTouchMtime(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.Equal(t, domain.ParamsDefault, freeze(t, s, period(0)).Source)
-	_, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{{TaskID: "set", MemberAlias: "fast", PeriodTime: period(1),
-		Snapshot: snapshotOf(20), SnapshotHash: snapshotOf(20).Hash(), Source: domain.ParamsCarriedOffline}},
-		func(at time.Time) time.Time { return at.Add(-time.Minute) })
-	require.NoError(t, err)
-	require.Equal(t, domain.ParamsDefault, freeze(t, s, period(2)).Source, "从没提交过：沿用的仍是默认值")
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	key := addVarMember(t, s, "task_prices", "ema")
+	require.NoError(t, s.db.Exec("UPDATE t_factor_task_members SET c_mtime = '2000-01-01 00:00:00'").Error)
 
-	_, err = submit(t, s, "r", period(3), 30)
-	require.NoError(t, err)
-	require.Equal(t, domain.ParamsRequested, freeze(t, s, period(3)).Source)
-	require.Equal(t, domain.ParamsCarried, freeze(t, s, period(4)).Source, "提交过之后的沿用才算 carried")
+	require.Equal(t, SubmitAccepted, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
+	var mtime string
+	require.NoError(t, s.db.Raw("SELECT c_mtime FROM t_factor_task_members WHERE c_member_key = ?", key).Scan(&mtime).Error)
+	require.Contains(t, mtime, "2000-01-01")
+
+	require.NoError(t, s.SetMemberStatus(ctx, "task_prices", key, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+	require.NoError(t, s.db.Raw("SELECT c_mtime FROM t_factor_task_members WHERE c_member_key = ?", key).Scan(&mtime).Error)
+	require.NotContains(t, mtime, "2000-01-01")
 }
 
-// 带固定参数的成员：同一别名删除重加成不同的固定值后，不能沿用旧的冻结快照，要按当前的固定值冻结。
-func TestFreezeFixedMemberDoesNotCarryOldFixedValues(t *testing.T) {
+// 固定成员不能带提交状态（CHECK 约束）。
+func TestFixedMemberCannotCarrySubmission(t *testing.T) {
 	s := openTestStore(t)
-	freezeFixed := func(at time.Time, window float64) domain.ParamFreeze {
-		freezes, err := s.FreezeParams(context.Background(), "set", at, at.Add(-time.Minute),
-			[]FreezeMember{{Alias: "fixed", Defaults: snapshotOf(window), Fixed: true}})
-		require.NoError(t, err)
-		require.Len(t, freezes, 1)
-		return freezes[0]
-	}
-	first := freezeFixed(period(0), 5)
-	require.Equal(t, 5.0, first.Snapshot.Value("window", "BTC"))
-	require.Equal(t, domain.ParamsDefault, first.Source)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	addTestMember(t, s, "task_prices", "factor_close", domain.MemberStatusDisabled)
+	require.Error(t, s.db.Exec("UPDATE t_factor_task_members SET c_last_submitted_period = 5 WHERE c_member_key = 'factor_close'").Error)
+}
 
-	same := freezeFixed(period(1), 5)
-	require.Equal(t, 5.0, same.Snapshot.Value("window", "BTC"))
-	require.Equal(t, first.SnapshotHash, same.SnapshotHash, "固定值没变，延长同一个区间")
-
-	changed := freezeFixed(period(2), 10)
-	require.Equal(t, 10.0, changed.Snapshot.Value("window", "BTC"), "同一别名换了固定值，不沿用旧快照")
-	require.Equal(t, domain.ParamsDefault, changed.Source)
-
-	// 对比：不带固定参数的成员沿用上一期（参数由写入方提交，默认值变化不影响已沿用的快照）。
-	freezes, err := s.FreezeParams(context.Background(), "set", period(0), period(0).Add(-time.Minute),
-		[]FreezeMember{{Alias: "dynamic", Defaults: snapshotOf(5)}})
+func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	job, err := s.CreateRecalcJob(ctx, RecalcJob{JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 1000})
 	require.NoError(t, err)
-	require.Equal(t, 5.0, freezes[0].Snapshot.Value("window", "BTC"))
-	freezes, err = s.FreezeParams(context.Background(), "set", period(1), period(0),
-		[]FreezeMember{{Alias: "dynamic", Defaults: snapshotOf(10)}})
+	require.Empty(t, job.DefaultFilled)
+	now := time.Unix(500, 0)
+	pulled, found, err := s.PullRecalcJob(ctx, "engine-1", now, time.Minute, nil, 0)
 	require.NoError(t, err)
-	require.Equal(t, 5.0, freezes[0].Snapshot.Value("window", "BTC"), "非固定成员仍沿用上一期的快照")
+	require.True(t, found)
+
+	filled := map[string][]TimeRange{"ema__var": {{Start: 100, End: 160}, {Start: 300, End: 300}}}
+	updated, err := s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 400, RecalcStatusRunning, "", filled, now, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, filled, updated.DefaultFilled)
+
+	// nil 表示没有变化；非 nil 整体替换。
+	updated, err = s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 500, RecalcStatusRunning, "", nil, now, time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, filled, updated.DefaultFilled)
+	done, err := s.ReportRecalcProgress(ctx, pulled.JobID, pulled.LeaseToken, 1000, RecalcStatusSucceeded, "", map[string][]TimeRange{}, now, time.Minute)
+	require.NoError(t, err)
+	require.Empty(t, done.DefaultFilled)
+}
+
+// 数据重置清掉提交状态，成员和配置保持不变。
+func TestClearParamSubmissionsKeepsMembers(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	key := addVarMember(t, s, "task_prices", "ema")
+	require.Equal(t, SubmitAccepted, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
+
+	require.NoError(t, s.ClearParamSubmissions(ctx))
+	states, err := s.ListMemberParamStates(ctx, "task_prices")
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, int64(0), states[0].LastSubmittedPeriod)
+	require.Empty(t, states[0].LastRequestID)
+	require.Nil(t, states[0].LastSubmittedAt)
+	require.Equal(t, map[string]float64{"span": 20}, states[0].Params, "默认参数是配置，保留")
+	// 目标期可以重新从头开始。
+	require.Equal(t, SubmitAccepted, submit(t, s, 500, "req-2", key, snapshot(40, nil)).Result)
 }

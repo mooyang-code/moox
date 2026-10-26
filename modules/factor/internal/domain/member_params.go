@@ -2,14 +2,12 @@ package domain
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
-)
 
-// MaxAliasLength 是成员别名的最大长度（与 ValidateAlias 一致）。
-const MaxAliasLength = 32
+	"github.com/mooyang-code/moox/packages/factorname"
+)
 
 // ResolveMemberParams 把加成员时给出的参数补全成完整的固定参数：没给的参数取定义的默认值；
 // 参数名必须是定义声明的，类型、范围与算子联合约束都要通过。定义没有参数时返回 nil。
@@ -43,10 +41,36 @@ func ResolveMemberParams(def FactorDef, given map[string]float64) (map[string]fl
 	return full, nil
 }
 
-// CheckSharedMemberParams 检查普通任务的成员保存的固定参数在（更新后的）定义上仍然成立：保存的必须恰好是定义声明的全部参数，
-// 且类型、范围与联合约束都通过。定义新增或删去了参数时，成员的固定参数就不完整或多余了——它的取值会随定义默认值漂移，
-// 所以要求先移除再重加。策略专属任务的成员不带固定参数，不用这个检查。
-func CheckSharedMemberParams(def FactorDef, params map[string]float64) error {
+// FactorParams 把定义声明的参数转成公共命名包用的声明（顺序就是定义里的声明顺序）。
+func FactorParams(def FactorDef) []factorname.Param {
+	compiled := def.Compiled()
+	if compiled == nil {
+		return nil
+	}
+	decl := make([]factorname.Param, len(compiled.Params))
+	for i, param := range compiled.Params {
+		decl[i] = factorname.Param{Name: param.Name, Default: param.Default}
+	}
+	return decl
+}
+
+// DeriveMemberKey 推导成员键：可变成员是 因子ID__var；固定成员参数全为默认值（或因子没有参数）时是因子 ID，
+// 否则带参数段。params 是加成员时给出的参数（没给的取默认值）。
+func DeriveMemberKey(def FactorDef, kind string, params map[string]float64) (string, error) {
+	switch kind {
+	case MemberKindVar:
+		return factorname.VarKey(def.FactorID)
+	case MemberKindFixed:
+		return factorname.FixedKey(def.FactorID, FactorParams(def), params)
+	default:
+		return "", fmt.Errorf("成员类型 %q 不合法：只能是 %s 或 %s", kind, MemberKindFixed, MemberKindVar)
+	}
+}
+
+// CheckMemberParams 检查成员保存的参数在（更新后的）定义上仍然成立：保存的必须恰好是定义声明的全部参数，
+// 且类型、范围与联合约束都通过。定义新增或删去了参数时，成员的参数就不完整或多余了——它的取值会随定义默认值漂移，
+// 所以要求先移除再重加。
+func CheckMemberParams(def FactorDef, params map[string]float64) error {
 	compiled := def.Compiled()
 	if compiled == nil {
 		return fmt.Errorf("因子 %s 的定义没有编译", def.FactorID)
@@ -55,12 +79,12 @@ func CheckSharedMemberParams(def FactorDef, params map[string]float64) error {
 	for _, param := range compiled.Params {
 		declared[param.Name] = true
 		if _, ok := params[param.Name]; !ok {
-			return fmt.Errorf("定义新增了参数 %s，成员保存的固定参数不完整；请先移除成员，再带完整参数重新添加", param.Name)
+			return fmt.Errorf("定义新增了参数 %s，成员保存的参数不完整；请先移除成员，再带完整参数重新添加", param.Name)
 		}
 	}
 	for name := range params {
 		if !declared[name] {
-			return fmt.Errorf("定义不再声明参数 %s，成员保存的固定参数已失效；请先移除成员，再重新添加", name)
+			return fmt.Errorf("定义不再声明参数 %s，成员保存的参数已失效；请先移除成员，再重新添加", name)
 		}
 	}
 	if len(params) == 0 {
@@ -68,47 +92,6 @@ func CheckSharedMemberParams(def FactorDef, params map[string]float64) error {
 	}
 	_, err := ResolveMemberParams(def, params)
 	return err
-}
-
-// FormatParamValue 把参数值写成别名里用的片段：十进制（不出现指数）、整数不带小数点、-0 按 0；
-// 小数点换成 p、负号换成 n（0.5 → 0p5，-1 → n1）。
-func FormatParamValue(value float64) string {
-	if value == 0 || math.IsNaN(value) {
-		value = 0
-	}
-	text := strconv.FormatFloat(value, 'f', -1, 64)
-	text = strings.ReplaceAll(text, ".", "p")
-	return strings.ReplaceAll(text, "-", "n")
-}
-
-// DeriveMemberAlias 按参数生成成员别名：全部参数等于定义的默认值（或定义没有参数）时沿用因子 ID，
-// 否则是“因子ID_参数1_参数2…”，参数值按定义声明的顺序全部写出。
-// 别名超过长度上限时返回错误，调用方提示手填。
-func DeriveMemberAlias(def FactorDef, params map[string]float64) (string, error) {
-	compiled := def.Compiled()
-	if compiled == nil {
-		return "", fmt.Errorf("因子 %s 的定义没有编译", def.FactorID)
-	}
-	allDefault := true
-	parts := make([]string, 0, len(compiled.Params))
-	for _, param := range compiled.Params {
-		value, ok := params[param.Name]
-		if !ok {
-			value = param.Default
-		}
-		if value != param.Default {
-			allDefault = false
-		}
-		parts = append(parts, FormatParamValue(value))
-	}
-	if allDefault {
-		return def.FactorID, nil
-	}
-	alias := def.FactorID + "_" + strings.Join(parts, "_")
-	if len(alias) > MaxAliasLength {
-		return "", fmt.Errorf("按参数生成的别名 %q 超过 %d 个字符，请手动指定别名", alias, MaxAliasLength)
-	}
-	return alias, nil
 }
 
 // ParamsSummary 返回参数摘要（如 span=20, warmup=50000），按参数名排序；没有参数时为空。

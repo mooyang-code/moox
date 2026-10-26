@@ -37,8 +37,8 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetViewId()) == "" {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("view_id 不能为空"))}, nil
+	if req == nil || strings.TrimSpace(req.GetFactorTaskId()) == "" {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("factor_task_id 不能为空"))}, nil
 	}
 	source, err := s.replaySource(ctx, scoped, req)
 	if err != nil {
@@ -65,8 +65,8 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
-	if len(strategy.Factors) > 0 {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("声明了 factors 的策略暂不支持回放：因子随参数逐期变化，需要闭环回放"))}, nil
+	if len(strategy.FactorParams) > 0 {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
 	}
 	// 先做一次低成本计数：排队已满时不必再解析绑定、让 Storage 现算覆盖统计；事务内的计数仍是最终判定。
 	if active, err := s.Store.CountActiveReplays(ctx, scoped); err != nil {
@@ -74,12 +74,12 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	} else if active >= store.MaxActiveReplays {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", scoped, active))}, nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetViewId(), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetFactorTaskId(), strategy)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	if !resolved.Spot {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", req.GetViewId(), resolved.MarketType))}, nil
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", resolved.ViewID, resolved.MarketType))}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
 	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
@@ -101,7 +101,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewGeneration: generation, Calendar: resolved.Calendar, SpaceID: scoped, ViewID: req.GetViewId(), StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewGeneration: generation, Calendar: resolved.Calendar, SpaceID: scoped, FactorTaskID: resolved.FactorTaskID, ViewID: resolved.ViewID, StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -147,7 +147,7 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 		return replayInput{dslYaml: def.DSLYaml, strategyID: &def.StrategyID}, nil
 	case instanceID != "":
 		instance, err := s.Store.GetInstance(ctx, instanceID)
-		if err != nil || instance.SpaceID != scoped || instance.DeletedAt != nil {
+		if err != nil || instance.SpaceID != scoped {
 			return replayInput{}, fmt.Errorf("实例 %s 不存在或不在当前空间", instanceID)
 		}
 		sessionID := ""

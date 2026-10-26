@@ -134,7 +134,7 @@ func TestReportRenewsJobLease(t *testing.T) {
 	clock.Advance(50 * time.Second)
 	leaseEngineA(t, hub)
 
-	updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
 
 	require.NoError(t, err)
 	require.Equal(t, int64(300), updated.ProgressTime)
@@ -153,7 +153,7 @@ func TestReportRejectsEngineWithoutLease(t *testing.T) {
 	_, err = hub.Heartbeat(context.Background(), engineB, domain.EngineStatus{})
 	require.NoError(t, err)
 
-	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
 
 	require.ErrorIs(t, err, ErrLeaseConflict)
 }
@@ -173,11 +173,11 @@ func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	_, err = hub.Heartbeat(context.Background(), restarted, domain.EngineStatus{})
 	require.NoError(t, err)
 
-	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	_, err = hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
 	require.ErrorIs(t, err, ErrLeaseConflict, "旧进程的 Report 必须被拒绝")
 	_, _, _, err = hub.Pull(context.Background(), engineA)
 	require.ErrorIs(t, err, ErrLeaseConflict, "旧进程的 Pull 必须被拒绝")
-	_, err = hub.Report(context.Background(), restarted, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+	_, err = hub.Report(context.Background(), restarted, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
 	require.NotErrorIs(t, err, ErrLeaseConflict, "新进程持有租约")
 }
 
@@ -201,7 +201,7 @@ func TestReportStopsJobWhenMemberOrTaskDisabledBetweenChunks(t *testing.T) {
 
 			disable(db) // 第一块运行期间停用
 
-			updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "")
+			updated, err := hub.Report(context.Background(), engineA, job.JobID, job.LeaseToken, time.Unix(300, 0), store.RecalcStatusRunning, "", nil)
 			require.NoError(t, err)
 			require.Equal(t, store.RecalcStatusFailed, updated.Status, "后续分块必须停止")
 			require.NotEmpty(t, updated.Error)
@@ -230,7 +230,7 @@ func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
 	require.False(t, found, "第一个任务还在运行，不再发出第二个")
 
 	// 第一个任务结束后才轮到下一个。
-	_, err = hub.Report(context.Background(), engineA, first.JobID, first.LeaseToken, time.Unix(600, 0), store.RecalcStatusSucceeded, "")
+	_, err = hub.Report(context.Background(), engineA, first.JobID, first.LeaseToken, time.Unix(600, 0), store.RecalcStatusSucceeded, "", nil)
 	require.NoError(t, err)
 	second, _, found, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)

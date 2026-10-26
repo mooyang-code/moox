@@ -72,33 +72,27 @@ func TestTunedReplayRejectsWriteFactors(t *testing.T) {
 	require.Empty(t, f.writes)
 }
 
-func TestFactorDriftMatchesByMemberAlias(t *testing.T) {
+func TestFactorDriftMatchesByMemberKey(t *testing.T) {
 	set := []FactorInfo{{Member: "fast", FactorID: "bias", DefinitionHash: "h1"}, {Member: "slow", FactorID: "bias", DefinitionHash: "h1"}}
 	require.Empty(t, factorDrift(map[string]string{"fast": "h1", "slow": "h1"}, set))
 	require.Contains(t, factorDrift(map[string]string{"mid": "h1"}, set), "mid")
 	require.Contains(t, factorDrift(map[string]string{"fast": "h2"}, set), "指纹")
 }
 
-// 实例声明了 factors 时因子任务就是实例的私有因子任务：省略 task_id 取它的，写了别的被拒绝。
-func TestRunUsesInstancePrivateFactorTask(t *testing.T) {
+// 因子任务就是实例关联的任务：省略 task_id 取它的，写了别的被拒绝；实例没有关联任务时拒绝。
+func TestRunUsesInstanceFactorTask(t *testing.T) {
 	r, _, s, _ := newRunner(t)
-	s.taskID = "ftask_i1"
+	s.taskID = "ftask_other"
 	omitted := noWrite(spec(2))
 	omitted.TaskID = ""
 	run, err := r.Run(context.Background(), omitted)
 	require.NoError(t, err)
-	require.Equal(t, "ftask_i1", run.Spec.TaskID)
+	require.Equal(t, "ftask_other", run.Spec.TaskID)
 
 	r2, _, s2, _ := newRunner(t)
-	s2.taskID = "ftask_i1"
+	s2.taskID = "ftask_other"
 	_, err = r2.Run(context.Background(), spec(2))
-	require.ErrorContains(t, err, "私有因子任务")
-
-	r3, _, _, _ := newRunner(t)
-	missing := noWrite(spec(2))
-	missing.TaskID = ""
-	_, err = r3.Run(context.Background(), missing)
-	require.ErrorContains(t, err, "task_id")
+	require.ErrorContains(t, err, "关联的因子任务是 ftask_other")
 }
 
 // 策略产出了引擎拒绝的参数：记录里保存的生效参数以引擎实际用的为基础，非法快照不会留下来，续跑也不会反复用到它；

@@ -15,6 +15,7 @@ import (
 	"github.com/expr-lang/expr/conf"
 	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // Stage 是表达式所在的阶段，决定返回类型与可用标识符。
@@ -35,6 +36,8 @@ const (
 	normalizerRank   = "rank"
 	normalizerZScore = "zscore"
 	normalizerPrefix = "__norm_"
+	paramRefPrefix   = "__param_"
+	paramFunction    = "params"
 
 	identifierBars       = "bars"
 	identifierScore      = "score"
@@ -52,6 +55,13 @@ type Normalizer struct {
 	Inner    *Expression
 }
 
+// ParamRef 是表达式里一处 params(成员键, 参数名) 的引用：求值时它被改写成变量 Variable，值来自这一行的 __params。
+type ParamRef struct {
+	Variable string
+	Member   string
+	Name     string
+}
+
 // Expression 是一条已分析（可选已编译）的表达式。
 type Expression struct {
 	Source          string
@@ -59,6 +69,7 @@ type Expression struct {
 	Rewritten       string
 	Program         *vm.Program
 	Normalizers     []*Normalizer
+	ParamRefs       []ParamRef
 	Columns         []string // 直接引用的当期列（不含截面函数参数内部的引用）
 	PreviousColumns []string // 通过 bars[-1] 引用的上一根列
 	Numeric         bool
@@ -76,6 +87,38 @@ func (e *Expression) AllPreviousColumns() []string {
 	set := make(map[string]struct{})
 	e.collectColumns(set, true)
 	return sortedKeys(set)
+}
+
+// AllParamRefs 返回包括截面函数参数在内的全部 params() 引用（去重，按成员键与参数名排序；Variable 取各自表达式里的变量名）。
+func (e *Expression) AllParamRefs() []ParamRef {
+	if e == nil {
+		return nil
+	}
+	seen := make(map[[2]string]ParamRef)
+	e.collectParamRefs(seen)
+	refs := make([]ParamRef, 0, len(seen))
+	for _, ref := range seen {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Member != refs[j].Member {
+			return refs[i].Member < refs[j].Member
+		}
+		return refs[i].Name < refs[j].Name
+	})
+	return refs
+}
+
+func (e *Expression) collectParamRefs(seen map[[2]string]ParamRef) {
+	if e == nil {
+		return
+	}
+	for _, ref := range e.ParamRefs {
+		seen[[2]string{ref.Member, ref.Name}] = ParamRef{Member: ref.Member, Name: ref.Name}
+	}
+	for _, normalizer := range e.Normalizers {
+		normalizer.Inner.collectParamRefs(seen)
+	}
 }
 
 func (e *Expression) collectColumns(set map[string]struct{}, previous bool) {
@@ -158,6 +201,7 @@ func analyze(source string, stage Stage) (*Expression, error) {
 	}
 	expression.Columns = sortedKeys(w.columns)
 	expression.PreviousColumns = sortedKeys(w.previous)
+	expression.ParamRefs = w.paramRefs
 	expression.Rewritten = tree.Node.String()
 	for _, spec := range w.normalizers {
 		inner, err := analyze(spec.innerSource, stageInner)
@@ -185,7 +229,7 @@ func compileAnalyzed(expression *Expression, columns map[string]struct{}) error 
 			return err
 		}
 	}
-	env := make(map[string]any, len(columns)+len(expression.Normalizers)+3)
+	env := make(map[string]any, len(columns)+len(expression.Normalizers)+len(expression.ParamRefs)+3)
 	for column := range columns {
 		env[column] = float64(0)
 	}
@@ -194,6 +238,9 @@ func compileAnalyzed(expression *Expression, columns map[string]struct{}) error 
 	env[identifierInstrument] = ""
 	for _, normalizer := range expression.Normalizers {
 		env[normalizer.Variable] = float64(0)
+	}
+	for _, ref := range expression.ParamRefs {
+		env[ref.Variable] = float64(0)
 	}
 	options := []expr.Option{expr.Env(env), expr.DisableAllBuiltins(), expr.MaxNodes(maxExpressionNodes)}
 	if expression.Numeric {
@@ -261,6 +308,7 @@ type walker struct {
 	columns         map[string]struct{}
 	previous        map[string]struct{}
 	normalizers     []normalizerSpec
+	paramRefs       []ParamRef
 	barsIdentifiers int
 	barsAccesses    int
 }
@@ -424,8 +472,11 @@ func (w *walker) call(node *ast.Node, n *ast.CallNode) error {
 	if !ok {
 		return errors.New("不允许调用方法")
 	}
+	if callee.Value == paramFunction {
+		return w.paramCall(node, n)
+	}
 	if callee.Value != normalizerRank && callee.Value != normalizerZScore {
-		return fmt.Errorf("不允许调用函数 %s，只支持 rank 和 zscore", callee.Value)
+		return fmt.Errorf("不允许调用函数 %s，只支持 rank、zscore 和 params", callee.Value)
 	}
 	if w.stage != StageScore && w.stage != stageInner {
 		return fmt.Errorf("%s 只能在 score 中使用", callee.Value)
@@ -436,6 +487,33 @@ func (w *walker) call(node *ast.Node, n *ast.CallNode) error {
 	spec := normalizerSpec{variable: fmt.Sprintf("%s%d", normalizerPrefix, len(w.normalizers)), kind: callee.Value, innerSource: n.Arguments[0].String()}
 	w.normalizers = append(w.normalizers, spec)
 	ast.Patch(node, &ast.IdentifierNode{Value: spec.variable})
+	return nil
+}
+
+// paramCall 把 params("成员键", "参数名") 改写成变量：两个参数都必须是字符串字面量，成员键必须是可变成员的成员键。
+// 变量的值由引擎在每一行从 __params 取（缺值为 NaN）；成员是否在任务里、参数名是否属于该因子由启用时检查。
+func (w *walker) paramCall(node *ast.Node, n *ast.CallNode) error {
+	if len(n.Arguments) != 2 {
+		return errors.New(`params 需要两个参数：params("成员键", "参数名")`)
+	}
+	member, memberOK := n.Arguments[0].(*ast.StringNode)
+	name, nameOK := n.Arguments[1].(*ast.StringNode)
+	if !memberOK || !nameOK {
+		return errors.New(`params 的两个参数都必须是字符串字面量，例如 params("ma_fast__var", "window")`)
+	}
+	parsed, err := factorname.ParseMemberKey(member.Value)
+	if err != nil {
+		return fmt.Errorf("params 的成员键 %q 不合法：%w", member.Value, err)
+	}
+	if parsed.Kind != factorname.KindVar {
+		return fmt.Errorf("params 的成员键 %q 不是可变成员（形如 因子ID__var）", member.Value)
+	}
+	if err := factorname.ValidateParamName(name.Value); err != nil {
+		return fmt.Errorf("params 的参数名不合法：%w", err)
+	}
+	ref := ParamRef{Variable: fmt.Sprintf("%s%d", paramRefPrefix, len(w.paramRefs)), Member: member.Value, Name: name.Value}
+	w.paramRefs = append(w.paramRefs, ref)
+	ast.Patch(node, &ast.IdentifierNode{Value: ref.Variable})
 	return nil
 }
 

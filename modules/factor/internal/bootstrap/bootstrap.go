@@ -209,12 +209,6 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 				if err := service.Reconcile(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
 					log.ErrorContextf(reconcileCtx, "factor catalog reconciliation failed: %v", err)
 				}
-				// 参数请求原文与保留期之外的冻结区间顺带清理（因子动态调参执行计划 2.6）。
-				if removed, err := service.CleanupParams(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
-					log.ErrorContextf(reconcileCtx, "factor param cleanup failed: %v", err)
-				} else if removed > 0 {
-					log.InfoContextf(reconcileCtx, "factor_param_cleanup removed=%d", removed)
-				}
 			}
 		}
 	}()

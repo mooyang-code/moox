@@ -30,20 +30,16 @@ type CatalogAPI interface {
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
 	ListFactors(ctx context.Context, taskID, status string) ([]domain.FactorInfo, error)
-	AddTaskMember(ctx context.Context, taskID, alias, factorID string, params map[string]float64) (domain.TaskMember, error)
-	RemoveTaskMember(ctx context.Context, taskID, alias string) error
-	SetTaskMemberStatus(ctx context.Context, taskID, alias, status string) (domain.TaskMember, error)
+	AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64) (domain.TaskMember, error)
+	RemoveTaskMember(ctx context.Context, taskID, memberKey string) error
+	SetTaskMemberStatus(ctx context.Context, taskID, memberKey, status string) (domain.TaskMember, error)
+	BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error)
 	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
 	UpsertCategory(ctx context.Context, category domain.FactorCategory) (domain.FactorCategory, error)
 	DeleteCategory(ctx context.Context, categoryID string) error
 	SetFactorCategory(ctx context.Context, factorID, categoryID string) (domain.FactorDef, error)
-	EnsureInstanceTask(ctx context.Context, request catalog.InstanceTaskRequest) (catalog.InstanceTask, error)
-	SetInstanceTaskEnabled(ctx context.Context, instanceID string, enabled bool) (domain.FactorTask, error)
-	ReleaseInstanceTask(ctx context.Context, instanceID string) error
-	SubmitParams(ctx context.Context, writer string, submissions []catalog.ParamSubmission) ([]catalog.ParamSubmitResult, error)
-	ListParamIntervals(ctx context.Context, taskID, alias string, from, to time.Time) ([]domain.ParamInterval, error)
-	ListParamRequests(ctx context.Context, taskID, alias string, from, to time.Time, limit int) ([]domain.ParamRequest, error)
-	FrozenThrough(ctx context.Context, taskID string) (time.Time, bool, error)
+	SubmitParams(ctx context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error)
+	GetParams(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error)
 }
 
 // RecalcJob is the RPC-facing representation of one durable recalc request.
@@ -59,8 +55,10 @@ type RecalcJob struct {
 	ProgressTime time.Time
 	Error        string
 	EngineID     string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间）。
+	DefaultFilled map[string][]store.TimeRange
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // JobFromStore converts a stored recalc job to its RPC representation.
@@ -69,7 +67,7 @@ func JobFromStore(job store.RecalcJob) RecalcJob {
 		JobID: job.JobID, RequestID: job.RequestID, TaskID: job.TaskID,
 		Members: append([]string(nil), job.Members...), Subjects: append([]string(nil), job.Subjects...),
 		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
-		Status: job.Status, Error: job.Error, EngineID: job.EngineID, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
+		Status: job.Status, Error: job.Error, EngineID: job.EngineID, DefaultFilled: job.DefaultFilled, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 	}
 }
 
@@ -158,9 +156,6 @@ func (s *Service) CreateFactorTask(ctx context.Context, req *factorpb.CreateFact
 		}
 		return &factorpb.CreateFactorTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	if in.OwnerInstanceID != "" {
-		return &factorpb.CreateFactorTaskRsp{RetInfo: invalid(fmt.Errorf("私有因子任务由策略实例启用时自动建立，不能手工创建"))}, nil
-	}
 	set, err := s.catalog.CreateTask(ctx, in)
 	if err != nil {
 		return &factorpb.CreateFactorTaskRsp{RetInfo: inner(err)}, nil
@@ -178,9 +173,6 @@ func (s *Service) SetFactorTaskStatus(ctx context.Context, req *factorpb.SetFact
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.SetFactorTaskStatusRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.rejectOwnedTask(ctx, req.GetTaskId()); err != nil {
-		return &factorpb.SetFactorTaskStatusRsp{RetInfo: invalid(err)}, nil
-	}
 	status := req.GetStatus()
 	if status != domain.TaskStatusEnabled && status != domain.TaskStatusDisabled {
 		return &factorpb.SetFactorTaskStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.TaskStatusEnabled, domain.TaskStatusDisabled))}, nil
@@ -190,6 +182,23 @@ func (s *Service) SetFactorTaskStatus(ctx context.Context, req *factorpb.SetFact
 		return &factorpb.SetFactorTaskStatusRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.SetFactorTaskStatusRsp{RetInfo: success(), FactorTask: factorwire.SetToPB(set)}, nil
+}
+
+func (s *Service) BindFactorTask(ctx context.Context, req *factorpb.BindFactorTaskReq) (*factorpb.BindFactorTaskRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.BindFactorTaskRsp{RetInfo: unavailable(err)}, nil
+	}
+	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetInstanceId()) == "" {
+		return &factorpb.BindFactorTaskRsp{RetInfo: invalid(fmt.Errorf("task_id and instance_id are required"))}, nil
+	}
+	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
+		return &factorpb.BindFactorTaskRsp{RetInfo: invalid(err)}, nil
+	}
+	task, err := s.catalog.BindTask(ctx, req.GetTaskId(), req.GetInstanceId())
+	if err != nil {
+		return &factorpb.BindFactorTaskRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.BindFactorTaskRsp{RetInfo: success(), FactorTask: factorwire.SetToPB(task)}, nil
 }
 
 func (s *Service) DeleteFactorTask(ctx context.Context, req *factorpb.DeleteFactorTaskReq) (*factorpb.DeleteFactorTaskRsp, error) {
@@ -309,10 +318,7 @@ func (s *Service) AddTaskMember(ctx context.Context, req *factorpb.AddTaskMember
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.AddTaskMemberRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.rejectOwnedTask(ctx, req.GetTaskId()); err != nil {
-		return &factorpb.AddTaskMemberRsp{RetInfo: invalid(err)}, nil
-	}
-	member, err := s.catalog.AddTaskMember(ctx, req.GetTaskId(), req.GetMemberAlias(), req.GetFactorId(), factorwire.CloneParams(req.GetParams()))
+	member, err := s.catalog.AddTaskMember(ctx, req.GetTaskId(), req.GetFactorId(), req.GetKind(), factorwire.CloneParams(req.GetParams()))
 	if err != nil {
 		return &factorpb.AddTaskMemberRsp{RetInfo: inner(err)}, nil
 	}
@@ -323,16 +329,13 @@ func (s *Service) RemoveTaskMember(ctx context.Context, req *factorpb.RemoveTask
 	if err := s.mutationAllowed(); err != nil {
 		return &factorpb.RemoveTaskMemberRsp{RetInfo: unavailable(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberAlias()) == "" {
-		return &factorpb.RemoveTaskMemberRsp{RetInfo: invalid(fmt.Errorf("task_id and member_alias are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberKey()) == "" {
+		return &factorpb.RemoveTaskMemberRsp{RetInfo: invalid(fmt.Errorf("task_id and member_key are required"))}, nil
 	}
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.RemoveTaskMemberRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.rejectOwnedTask(ctx, req.GetTaskId()); err != nil {
-		return &factorpb.RemoveTaskMemberRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := s.catalog.RemoveTaskMember(ctx, req.GetTaskId(), req.GetMemberAlias()); err != nil {
+	if err := s.catalog.RemoveTaskMember(ctx, req.GetTaskId(), req.GetMemberKey()); err != nil {
 		return &factorpb.RemoveTaskMemberRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.RemoveTaskMemberRsp{RetInfo: success()}, nil
@@ -342,20 +345,17 @@ func (s *Service) SetTaskMemberStatus(ctx context.Context, req *factorpb.SetTask
 	if err := s.mutationAllowed(); err != nil {
 		return &factorpb.SetTaskMemberStatusRsp{RetInfo: unavailable(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberAlias()) == "" {
-		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(fmt.Errorf("task_id and member_alias are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetMemberKey()) == "" {
+		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(fmt.Errorf("task_id and member_key are required"))}, nil
 	}
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
-		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := s.rejectOwnedTask(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
 		return &factorpb.SetTaskMemberStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled))}, nil
 	}
-	member, err := s.catalog.SetTaskMemberStatus(ctx, req.GetTaskId(), req.GetMemberAlias(), status)
+	member, err := s.catalog.SetTaskMemberStatus(ctx, req.GetTaskId(), req.GetMemberKey(), status)
 	if err != nil {
 		return &factorpb.SetTaskMemberStatusRsp{RetInfo: inner(err)}, nil
 	}

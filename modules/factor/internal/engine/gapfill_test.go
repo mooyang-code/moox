@@ -85,7 +85,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 				case f.status != nil:
 					status = f.status(selection, at)
 				}
-				outcome.Items[pipeline.ItemKey{Member: member.Alias, Subject: subject, Period: at}] = status
+				outcome.Items[pipeline.ItemKey{Member: member.Key, Subject: subject, Period: at}] = status
 			}
 		}
 	}

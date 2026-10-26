@@ -15,16 +15,16 @@ func TestMemberUniqueAndForeignKeys(t *testing.T) {
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
 
-	member, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", nil)
+	member, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.NotZero(t, member.CreatedAt)
 
-	_, err = s.AddMember(ctx, "task_prices", "factor_close", "factor_close", nil)
+	_, err = s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.ErrorIs(t, err, ErrConflict)
-	_, err = s.AddMember(ctx, "task_prices", "missing", "missing", nil)
+	_, err = s.AddMember(ctx, "task_prices", "missing", "missing", domain.MemberKindFixed, nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close", nil)
+	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -116,8 +116,8 @@ func TestListUsagesAggregatesAcrossTasks(t *testing.T) {
 	usages, err := s.ListUsages(ctx, "bias", "unused")
 	require.NoError(t, err)
 	require.Equal(t, []domain.FactorUsage{
-		{TaskID: "task_1h", MemberAlias: "bias", Status: domain.MemberStatusDisabled},
-		{TaskID: "task_1m", MemberAlias: "bias", Status: domain.MemberStatusEnabled},
+		{TaskID: "task_1h", MemberKey: "bias", Status: domain.MemberStatusDisabled},
+		{TaskID: "task_1m", MemberKey: "bias", Status: domain.MemberStatusEnabled},
 	}, usages["bias"])
 	require.Empty(t, usages["unused"])
 

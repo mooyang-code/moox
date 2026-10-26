@@ -94,7 +94,7 @@ type recalcMember struct {
 func seedRecalcTask(t *testing.T, db *store.Store, members ...recalcMember) {
 	t.Helper()
 	set := domain.FactorTask{
-		TaskID: "ftask_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m",
+		TaskID: "ftask_bars_1m", SpaceID: "crypto", Name: "行情因子", SourceDatasetID: "dataset_bars_1m",
 		Freq:            "1m",
 		ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 	}
@@ -107,7 +107,7 @@ func seedRecalcTask(t *testing.T, db *store.Store, members ...recalcMember) {
 func addRecalcMember(t *testing.T, db *store.Store, taskID string, member recalcMember) {
 	t.Helper()
 	require.NoError(t, db.CreateFactor(context.Background(), member.def))
-	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, nil)
+	_, err := db.AddMember(context.Background(), taskID, member.def.FactorID, member.def.FactorID, domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	if member.status == domain.MemberStatusEnabled {
 		require.NoError(t, db.SetMemberStatus(context.Background(), taskID, member.def.FactorID,

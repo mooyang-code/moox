@@ -94,7 +94,7 @@ func (s *Store) UpdateDefinition(ctx context.Context, def Definition) error {
 			return ErrNotFound
 		}
 		var active int64
-		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ? AND c_deleted_at IS NULL AND (c_enabled = 1 OR c_session_id IS NOT NULL)`, def.StrategyID).Scan(&active).Error; err != nil {
+		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ? AND (c_enabled = 1 OR c_session_id IS NOT NULL)`, def.StrategyID).Scan(&active).Error; err != nil {
 			return err
 		}
 		if active > 0 {
@@ -132,7 +132,7 @@ func (s *Store) ListDefinitions(ctx context.Context) ([]Definition, error) {
 	return defs, nil
 }
 
-// SoftDeleteDefinition 软删除定义；仍被未删除实例引用时拒绝。
+// SoftDeleteDefinition 软删除定义；仍被实例引用时拒绝（实例不可删除，被引用的定义因此也不可删除）。
 func (s *Store) SoftDeleteDefinition(ctx context.Context, strategyID string, at time.Time) error {
 	now, err := requireTime(at)
 	if err != nil {
@@ -140,11 +140,11 @@ func (s *Store) SoftDeleteDefinition(ctx context.Context, strategyID string, at 
 	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		var references int64
-		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ? AND c_deleted_at IS NULL`, strategyID).Scan(&references).Error; err != nil {
+		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_instances WHERE c_strategy_id = ?`, strategyID).Scan(&references).Error; err != nil {
 			return err
 		}
 		if references > 0 {
-			return fmt.Errorf("策略定义仍被 %d 个实例引用，请先删除这些实例", references)
+			return fmt.Errorf("策略定义仍被 %d 个实例引用，不能删除", references)
 		}
 		result := tx.Exec(`UPDATE t_strategy_defs SET c_deleted_at = ?, c_mtime = ? WHERE c_strategy_id = ? AND c_deleted_at IS NULL`, now, now, strategyID)
 		if result.Error != nil {

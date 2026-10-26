@@ -37,8 +37,7 @@ type Strategy struct {
 	Universe  Universe
 	Rules     []Rule
 	Portfolio Portfolio
-	// Factors 是声明的因子成员（见 factors.go）；FactorParams 是成员别名 → 参数名 → 下一期参数的输出表达式。
-	Factors      []FactorDecl
+	// FactorParams 是可变成员的成员键 → 参数名 → 下一期参数的输出表达式（见 factors.go）。
 	FactorParams map[string]map[string]ParamExpr
 }
 

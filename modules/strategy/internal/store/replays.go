@@ -37,10 +37,12 @@ type Replay struct {
 	ViewGeneration string
 	Calendar       string
 	SpaceID        string
-	ViewID         string
-	StartTime      time.Time
-	EndTime        time.Time
-	FeeBps         float64
+	// FactorTaskID 是回放读取的因子任务；ViewID 是它的结果 View。
+	FactorTaskID string
+	ViewID       string
+	StartTime    time.Time
+	EndTime      time.Time
+	FeeBps       float64
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -87,6 +89,7 @@ type replayRow struct {
 	ViewGeneration string         `gorm:"column:c_view_generation"`
 	Calendar       string         `gorm:"column:c_calendar"`
 	SpaceID        string         `gorm:"column:c_space_id"`
+	FactorTaskID   string         `gorm:"column:c_factor_task_id"`
 	ViewID         string         `gorm:"column:c_view_id"`
 	StartTime      int64          `gorm:"column:c_start_time"`
 	EndTime        int64          `gorm:"column:c_end_time"`
@@ -102,7 +105,7 @@ type replayRow struct {
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
-		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewGeneration: r.ViewGeneration, Calendar: r.Calendar, SpaceID: r.SpaceID, ViewID: r.ViewID,
+		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewGeneration: r.ViewGeneration, Calendar: r.Calendar, SpaceID: r.SpaceID, FactorTaskID: r.FactorTaskID, ViewID: r.ViewID,
 		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), FeeBps: r.FeeBps, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
@@ -116,14 +119,14 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_generation, c_calendar, c_space_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_generation, c_calendar, c_space_id, c_factor_task_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
 
 // replayListColumns 与 replayColumns 相同，只是不读取 DSL 全文。
 var replayListColumns = strings.Replace(replayColumns, "c_dsl_yaml,", "'' AS c_dsl_yaml,", 1)
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
-	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.ViewGeneration) == "" || strings.TrimSpace(replay.Calendar) == "" {
+	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.FactorTaskID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.ViewGeneration) == "" || strings.TrimSpace(replay.Calendar) == "" {
 		return errors.New("回放缺少 replay_id、space_id、view_id、DSL 文本、版本哈希、View 索引代次或日历")
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
@@ -154,8 +157,8 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		}
 		return tx.Exec(`
 			INSERT INTO t_strategy_replays (`+replayColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.Calendar, replay.SpaceID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.Calendar, replay.SpaceID, replay.FactorTaskID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
 	})
 }
 

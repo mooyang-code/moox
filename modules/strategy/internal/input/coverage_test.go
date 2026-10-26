@@ -134,13 +134,13 @@ func TestSubjectSeriesTagAndTagErrors(t *testing.T) {
 		t.Fatalf("标签不存在应返回 ErrTagNotFound：%v", err)
 	}
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "exclude_tags: [stablecoins]", "exclude_tags: [no_such_tag]", 1))
-	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "view_factor_1h", strategy); err == nil || !strings.Contains(err.Error(), "标签 no_such_tag 不存在（ID 区分大小写）") {
+	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "ftask_1h", strategy); err == nil || !strings.Contains(err.Error(), "标签 no_such_tag 不存在（ID 区分大小写）") {
 		t.Fatalf("引用不存在的标签应拒绝启用：%v", err)
 	}
 	client := newFakeClient("spot")
 	client.tags["no_such_tag"] = nil
 	unreachable := &tagFailingClient{fakeClient: client, err: &TransportError{Operation: "读取标签 no_such_tag", Err: errors.New("dial tcp 10.0.0.1:443: i/o timeout")}}
-	if _, _, err := Resolve(context.Background(), unreachable, "space", "view_factor_1h", strategy); err == nil || strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "暂时不可用") {
+	if _, _, err := Resolve(context.Background(), unreachable, "space", "ftask_1h", strategy); err == nil || strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "暂时不可用") {
 		t.Fatalf("读取标签的传输失败不应报成标签不存在：%v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestResolveCompletionKindByDatasetRole(t *testing.T) {
 		dataset := client.datasets["ds_factor"]
 		dataset.Attributes = map[string]string{"source_dataset_id": "ds_kline", "dataset_role": tc.role}
 		client.datasets["ds_factor"] = dataset
-		resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+		resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 		if err != nil {
 			t.Fatal(err)
 		}

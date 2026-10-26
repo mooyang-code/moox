@@ -41,8 +41,8 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	require.Empty(t, cfg.GatewayClient.KeyID)
 }
 
-func TestValidateImportableTaskRejectsPendingAndDeleting(t *testing.T) {
-	for _, status := range []string{domain.TaskStatusPending, domain.TaskStatusDeleting} {
+func TestValidateImportableTaskRejectsPending(t *testing.T) {
+	for _, status := range []string{domain.TaskStatusPending} {
 		err := validateImportableTask(domain.FactorTask{Status: status})
 		require.Error(t, err)
 	}

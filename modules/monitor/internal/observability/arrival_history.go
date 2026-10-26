@@ -18,6 +18,8 @@ var ErrInvalidArrivalQuery = errors.New("到达历史查询参数无效")
 // ArrivalHistoryQuery 选一条数据链路（源数据集，即入库的数据集，加周期）和一天。
 type ArrivalHistoryQuery struct {
 	SpaceID, DatasetID, Freq string
+	// TaskID 选定因子任务：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只给任务列表和源数据集这一段。
+	TaskID string
 	// Day 是 YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
 	Day string
 }
@@ -41,21 +43,33 @@ type ArrivalSeries struct {
 // ArrivalHistory 是一条链路一天的到达曲线：时间点按收线时间落在 [Start, End) 内。
 type ArrivalHistory struct {
 	// Timezone 是市场时区的 IANA 名称，Day 按它切分。
-	Timezone           string
-	Day                string
-	Start, End         time.Time
-	Series             []ArrivalSeries
+	Timezone   string
+	Day        string
+	Start, End time.Time
+	Series     []ArrivalSeries
+	// Tasks 是这个源数据集 + 周期上的全部因子任务，由页面选择任务后再查。
+	Tasks              []ArrivalTask
 	RetentionTruncated bool
 	// Truncated 表示记录超过一次查询的上限，曲线只含前面的部分。
 	Truncated bool
 }
 
+// ArrivalTask 是源数据集上的一个因子任务。
+type ArrivalTask struct {
+	TaskID, Name, ResultDatasetID string
+}
+
+// FactorResultSource 列出源数据集 + 周期上的因子任务结果数据集；monmetrics.QueryService 实现它（来自 Storage 元数据）。
+type FactorResultSource interface {
+	ListFactorResultDatasets(ctx context.Context, spaceID, sourceDatasetID, freq string) ([]monmetrics.FactorResultDataset, error)
+}
+
 var arrivalStageOrder = map[string]int{"storage": 0, "view": 1, "factor": 2, "factor_view": 3, "strategy": 4}
 
 // ArrivalHistory 按链路读出一天的逐根到达记录，并按市场交易日历算出收线时间、延迟与跳过的根数。
-// 链路成员：入库是源数据集本身；视图是主数据集为它的 View；因子是按命名规则对应的因子结果数据集
-// （与 modules/factor 的 ResultDatasetID 一致）；因子视图是主数据集为因子结果的 View；策略的输入在运行时解析、
-// Monitor 拿不到，按同空间同周期列出。
+// 链路成员：入库是源数据集本身；视图是主数据集为它的 View；因子是选定任务的结果数据集；因子视图是主数据集为因子结果的 View；
+// 策略的输入在运行时解析、Monitor 拿不到，按同空间同周期列出。同一个源数据集可以有多个因子任务：任务列表来自 Storage 元数据，
+// 给了 task_id 就查它，只有一个任务时默认查它，有多个任务又没选时只返回任务列表和源数据集这一段。
 func (b Builder) ArrivalHistory(ctx context.Context, q ArrivalHistoryQuery) (ArrivalHistory, error) {
 	q.SpaceID, q.DatasetID, q.Day = strings.TrimSpace(q.SpaceID), strings.TrimSpace(q.DatasetID), strings.TrimSpace(q.Day)
 	if q.SpaceID == "" || q.DatasetID == "" {
@@ -93,7 +107,15 @@ func (b Builder) ArrivalHistory(ctx context.Context, q ArrivalHistoryQuery) (Arr
 		RetentionTruncated: start.Before(now.Add(-monmetrics.BarArrivalRetention)),
 	}
 	// 收线落在这一天的根，开盘可能更早（小时线、日线在前一天，周线、月线在几周前）：多读两个周期（至少一天），再按收线时间筛。
-	factorID := factorResultDatasetID(q.DatasetID, string(freq))
+	tasks, err := b.arrivalTasks(ctx, q.SpaceID, q.DatasetID, string(freq))
+	if err != nil {
+		return ArrivalHistory{}, err
+	}
+	out.Tasks = tasks
+	factorID, err := selectArrivalTask(tasks, q.TaskID)
+	if err != nil {
+		return ArrivalHistory{}, err
+	}
 	lookback := max(2*freq.NominalDuration(), 24*time.Hour)
 	rows, truncated, err := b.Metrics.ListBarArrivals(ctx, monmetrics.BarArrivalChain{
 		SpaceID: q.SpaceID, Freq: string(freq), SourceDatasetID: q.DatasetID, FactorDatasetID: factorID,
@@ -140,16 +162,16 @@ func (b Builder) ArrivalHistory(ctx context.Context, q ArrivalHistoryQuery) (Arr
 	return out, nil
 }
 
-// arrivalStage 判断一条到达记录属于链路的哪个环节；不属于这条链路时返回空。
+// arrivalStage 判断一条到达记录属于链路的哪个环节；不属于这条链路时返回空。factorID 为空表示没有选定任务，不含因子环节。
 func arrivalStage(row monmetrics.BarArrival, sourceID, factorID string) string {
 	switch {
 	case row.Producer == "storage" && row.DatasetID == sourceID:
 		return "storage"
 	case row.Producer == "storage_view" && row.PrimaryDatasetID == sourceID:
 		return "view"
-	case row.Producer == "factor" && row.DatasetID == factorID:
+	case factorID != "" && row.Producer == "factor" && row.DatasetID == factorID:
 		return "factor"
-	case row.Producer == "storage_view" && row.PrimaryDatasetID == factorID:
+	case factorID != "" && row.Producer == "storage_view" && row.PrimaryDatasetID == factorID:
 		return "factor_view"
 	case row.Producer == "strategy":
 		return "strategy"
@@ -179,11 +201,36 @@ func arrivalPoint(clock monmetrics.MarketClock, freq frequencypkg.Frequency, rec
 	return point
 }
 
-// factorResultDatasetID 是源数据集对应的因子结果数据集，与 modules/factor/internal/domain 的 ResultDatasetID 同一规则。
-func factorResultDatasetID(sourceDatasetID, freq string) string {
-	suffix := strings.TrimPrefix(strings.TrimSpace(sourceDatasetID), "dataset_")
-	if freq != "" && !strings.HasSuffix(suffix, "_"+freq) {
-		suffix += "_" + freq
+// arrivalTasks 列出源数据集 + 周期上的全部因子任务；没有配置 Storage 元数据时没有任务。
+func (b Builder) arrivalTasks(ctx context.Context, spaceID, sourceDatasetID, freq string) ([]ArrivalTask, error) {
+	if b.Metrics == nil {
+		return nil, nil
 	}
-	return "dataset_factor_" + suffix
+	datasets, err := b.Metrics.ListFactorResultDatasets(ctx, spaceID, sourceDatasetID, freq)
+	if err != nil {
+		return nil, fmt.Errorf("读取源数据集 %s 上的因子任务：%w", sourceDatasetID, err)
+	}
+	tasks := make([]ArrivalTask, 0, len(datasets))
+	for _, dataset := range datasets {
+		tasks = append(tasks, ArrivalTask{TaskID: dataset.TaskID, Name: dataset.Name, ResultDatasetID: dataset.DatasetID})
+	}
+	return tasks, nil
+}
+
+// selectArrivalTask 返回要查的因子结果数据集 ID：给了 taskID 就必须是列表里的任务；没给时只有一个任务就查它，
+// 没有或有多个任务时返回空（链路不含因子环节）。
+func selectArrivalTask(tasks []ArrivalTask, taskID string) (string, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID != "" {
+		for _, task := range tasks {
+			if task.TaskID == taskID {
+				return task.ResultDatasetID, nil
+			}
+		}
+		return "", fmt.Errorf("%w：源数据集上没有因子任务 %s", ErrInvalidArrivalQuery, taskID)
+	}
+	if len(tasks) == 1 {
+		return tasks[0].ResultDatasetID, nil
+	}
+	return "", nil
 }

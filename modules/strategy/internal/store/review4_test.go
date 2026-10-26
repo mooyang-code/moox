@@ -12,7 +12,7 @@ import (
 )
 
 // 挂会话与启用都对会话做比较交换：会话必须属于该实例、未关闭，并与实例当前引用的定义版本和 View 一致。
-// 打开会话之后实例被改绑、定义被修改，或会话已被关闭，都在联系 Trade 之前拒绝。
+// 会话固化的因子任务与实例不一致、打开会话之后定义被修改，或会话已被关闭，都在联系 Trade 之前拒绝。
 func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
@@ -20,13 +20,13 @@ func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"i1", "i2"} {
-		if err := repo.CreateInstance(ctx, Instance{InstanceID: id, StrategyID: "s1", SpaceID: "space", ViewID: "view_a", CreatedAt: testNow}); err != nil {
+		if err := repo.CreateInstance(ctx, Instance{InstanceID: id, StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_" + id, CreatedAt: testNow}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	open := func(sessionID, instanceID, hash, view string) string {
+	open := func(sessionID, instanceID, hash, task string) string {
 		t.Helper()
-		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"view_id":%q}`, view), CreatedAt: testNow}, "name: demo"); err != nil {
+		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"factor_task_id":%q}`, task), CreatedAt: testNow}, "name: demo"); err != nil {
 			t.Fatal(err)
 		}
 		return sessionID
@@ -35,21 +35,18 @@ func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
 		return repo.SetInstanceEnabled(ctx, "i1", false, &sessionID, nil, testNow)
 	}
 
-	// 打开会话之后实例被改绑到另一个 View。
-	stale := open("s-view", "i1", testHash, "view_a")
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_b", UpdatedAt: testNow}); err != nil {
-		t.Fatal(err)
-	}
+	// 会话固化的因子任务与实例的不一致。
+	stale := open("s-task", "i1", testHash, "ftask_other")
 	if err := attach(stale); err == nil || !strings.Contains(err.Error(), "被修改") {
-		t.Fatalf("改绑后不应挂上旧会话：%v", err)
+		t.Fatalf("因子任务不一致的会话不应挂上：%v", err)
 	}
 	// 会话属于另一个实例。
-	foreign := open("s-foreign", "i2", testHash, "view_b")
+	foreign := open("s-foreign", "i2", testHash, "ftask_i2")
 	if err := attach(foreign); err == nil || !strings.Contains(err.Error(), "不属于该实例") {
 		t.Fatalf("不应挂上其他实例的会话：%v", err)
 	}
 	// 打开会话之后定义被修改。
-	before := open("s-def", "i1", testHash, "view_b")
+	before := open("s-def", "i1", testHash, "ftask_i1")
 	if err := repo.UpdateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo2", DSLHash: "sha256:def2", UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +54,7 @@ func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
 		t.Fatalf("定义修改后不应挂上旧版本的会话：%v", err)
 	}
 	// 一致的会话可以挂上；挂上之后被关闭（例如对账释放）则不能启用。
-	current := open("s-ok", "i1", "sha256:def2", "view_b")
+	current := open("s-ok", "i1", "sha256:def2", "ftask_i1")
 	if err := attach(current); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +74,7 @@ func TestDeleteReplaysBeyondRanksOnlyFinished(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		if err := repo.CreateReplay(ctx, Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "space", ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute)}); err != nil {
+		if err := repo.CreateReplay(ctx, Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "space", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow.Add(time.Duration(i) * time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,7 +107,7 @@ func TestCreateReplayLimitsActivePerSpace(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	replay := func(id, space string) Replay {
-		return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: space, ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}
+		return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: space, FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}
 	}
 	for i := 0; i < MaxActiveReplays; i++ {
 		if err := repo.CreateReplay(ctx, replay(fmt.Sprintf("a%d", i), "a")); err != nil {
@@ -135,7 +132,7 @@ func TestCreateReplayLimitsActivePerSpace(t *testing.T) {
 func TestReplayListOmitsDSLButKeepsHash(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
-	if err := repo.CreateReplay(ctx, Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx_a@b1", SpaceID: "space", ViewID: "view", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}); err != nil {
+	if err := repo.CreateReplay(ctx, Replay{ReplayID: "p1", DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx_a@b1", SpaceID: "space", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: testNow, EndTime: testNow.Add(time.Hour), CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	listed, _, err := repo.ListReplays(ctx, "space", 0, 10)

@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"fmt"
+	"sort"
 )
 
 // CompiledRule 是一条规则及其各阶段已编译的表达式。
@@ -70,8 +71,10 @@ func (r *CompiledRule) PreviousColumns() []string {
 type Program struct {
 	Strategy Strategy
 	Rules    []CompiledRule
-	// Params 是 factor_params 的已编译表达式（按别名、参数名排序）。
-	Params          []CompiledParam
+	// Params 是 factor_params 的已编译表达式（按成员键、参数名排序）。
+	Params []CompiledParam
+	// ParamRefs 是规则与参数表达式里 params(成员键, 参数名) 引用的全部参数（去重排序）；非空时求值需要读取 __params 列。
+	ParamRefs       []ParamRef
 	Columns         []string
 	PreviousColumns []string
 	UsesPreviousBar bool
@@ -89,6 +92,7 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 	program := &Program{Strategy: strategy, Rules: make([]CompiledRule, 0, len(strategy.Rules))}
 	allColumns := make(map[string]struct{})
 	allPrevious := make(map[string]struct{})
+	refs := make(map[ParamRef]struct{})
 	for _, rule := range strategy.Rules {
 		compiled := CompiledRule{Rule: rule}
 		var err error
@@ -119,6 +123,11 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 		for _, column := range compiled.PreviousColumns() {
 			allPrevious[column] = struct{}{}
 		}
+		for _, expression := range compiled.Expressions() {
+			for _, ref := range expression.AllParamRefs() {
+				refs[ref] = struct{}{}
+			}
+		}
 		program.Rules = append(program.Rules, compiled)
 	}
 	params, err := compileParams(strategy, available)
@@ -132,8 +141,14 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 		for _, column := range param.PreviousColumns() {
 			allPrevious[column] = struct{}{}
 		}
+		for _, expression := range []*Expression{param.Default, param.PerSubject} {
+			for _, ref := range expression.AllParamRefs() {
+				refs[ref] = struct{}{}
+			}
+		}
 	}
 	program.Params = params
+	program.ParamRefs = sortedParamRefs(refs)
 	program.Columns = sortedKeys(allColumns)
 	program.PreviousColumns = sortedKeys(allPrevious)
 	program.UsesPreviousBar = len(program.PreviousColumns) > 0
@@ -161,8 +176,58 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 			}
 		}
 	}
-	if err := referencedParamColumns(strategy, set); err != nil {
+	if err := referencedParamExprColumns(strategy, set); err != nil {
 		return nil, err
 	}
 	return sortedKeys(set), nil
+}
+
+// ReferencedParamRefs 在不知道任务的情况下返回 DSL 里 params(成员键, 参数名) 引用的全部参数（去重排序），
+// 以及 factor_params 输出的参数；用于启用前对照任务的成员与定义的参数声明做检查。
+func ReferencedParamRefs(strategy Strategy) ([]ParamRef, error) {
+	refs := make(map[ParamRef]struct{})
+	collect := func(source string, stage Stage, where string) error {
+		if source == "" {
+			return nil
+		}
+		expression, err := Analyze(source, stage)
+		if err != nil {
+			return fmt.Errorf("%s 无效：%w", where, err)
+		}
+		for _, ref := range expression.AllParamRefs() {
+			refs[ref] = struct{}{}
+		}
+		return nil
+	}
+	for _, rule := range strategy.Rules {
+		for _, item := range rule.stageSources() {
+			if err := collect(item.source, item.stage, fmt.Sprintf("规则 %s 的 %s 表达式", rule.ID, item.stage)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, output := range strategy.FactorParamOutputs() {
+		where := "factor_params." + output.Member + "." + output.Name
+		if err := collect(output.Expr.Default, StageScore, where+".default"); err != nil {
+			return nil, err
+		}
+		if err := collect(output.Expr.PerSubject, StageScore, where+".per_subject"); err != nil {
+			return nil, err
+		}
+	}
+	return sortedParamRefs(refs), nil
+}
+
+func sortedParamRefs(set map[ParamRef]struct{}) []ParamRef {
+	refs := make([]ParamRef, 0, len(set))
+	for ref := range set {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Member != refs[j].Member {
+			return refs[i].Member < refs[j].Member
+		}
+		return refs[i].Name < refs[j].Name
+	})
+	return refs
 }

@@ -392,6 +392,14 @@ message QueryPipelineArrivalHistoryReq {
   string freq = 3;
   // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
   string day = 4;
+  // 因子任务 ID：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只返回任务列表和源数据集这一段。
+  string task_id = 5;
+}
+// ArrivalTask 是源数据集上的一个因子任务（任务 ID 由结果数据集 ID 反解，名称就是结果数据集的名称）。
+message ArrivalTask {
+  string task_id = 1;
+  string name = 2;
+  string result_dataset_id = 3;
 }
 message ArrivalHistoryPoint {
   // 收线时间（UTC，RFC3339）。
@@ -424,6 +432,8 @@ message QueryPipelineArrivalHistoryRsp {
   bool retention_truncated = 7;
   // 记录超过一次查询的上限，曲线只含这一天前面的部分。
   bool truncated = 8;
+  // 这个源数据集 + 周期上的全部因子任务，由页面选择任务后再查。
+  repeated ArrivalTask tasks = 9;
 }
 
 message DoctorExpectedComponent {

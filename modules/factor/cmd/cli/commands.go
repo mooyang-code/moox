@@ -99,12 +99,8 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "spec_hash": factor.SpecHash,
 		"definition_hash": domain.DefinitionHash(factor)}
 	if target != nil {
-		params, err := defaultMemberParams(target.set, factor)
-		if err != nil {
-			return err
-		}
-		if _, err := db.AddMember(ctx, target.set.TaskID, factor.FactorID, factor.FactorID, params); err != nil {
-			return fmt.Errorf("add factor to set: %w", err)
+		if err := addDefaultMember(ctx, db, target.set.TaskID, factor); err != nil {
+			return fmt.Errorf("add factor to task: %w", err)
 		}
 		result["task_id"], result["member_status"] = target.set.TaskID, domain.MemberStatusDisabled
 	}
@@ -221,12 +217,8 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	for _, factor := range prepared {
 		item := map[string]string{"factor_id": factor.FactorID, "spec_hash": factor.SpecHash}
 		if target != nil {
-			params, err := defaultMemberParams(target.set, factor)
-			if err != nil {
-				return err
-			}
-			if _, err := db.AddMember(ctx, target.set.TaskID, factor.FactorID, factor.FactorID, params); err != nil {
-				return fmt.Errorf("add factor %s to set: %w", factor.FactorID, err)
+			if err := addDefaultMember(ctx, db, target.set.TaskID, factor); err != nil {
+				return fmt.Errorf("add factor %s to task: %w", factor.FactorID, err)
 			}
 			item["member_status"] = domain.MemberStatusDisabled
 		}
@@ -279,23 +271,20 @@ func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfi
 	return &importTarget{set: set, sourceColumns: sourceColumns, siblings: siblings}, nil
 }
 
-// validate runs the dataset-dependent membership checks of a member aliased by
-// its definition id; result-dataset column ownership is checked later when
-// FactorMgr enables the member.
+// validate 对照源数据集做成员校验：导入的成员都是参数全取默认值的固定成员（成员键就是因子 ID）；
+// 结果数据集的列归属在 FactorMgr 启用成员时再校验。
 func (t *importTarget) validate(factor domain.FactorDef, pending []domain.FactorDef) error {
 	siblings := append([]domain.MemberDef(nil), t.siblings...)
 	for _, def := range pending {
-		siblings = append(siblings, domain.MemberDef{Alias: def.FactorID, Factor: def})
+		siblings = append(siblings, domain.MemberDef{Key: def.FactorID, Factor: def, Kind: domain.MemberKindFixed})
 	}
-	return domain.ValidateMembership(t.set, domain.MemberDef{Alias: factor.FactorID, Factor: factor}, t.sourceColumns, siblings, nil)
+	return domain.ValidateMembership(t.set, domain.MemberDef{Key: factor.FactorID, Factor: factor, Kind: domain.MemberKindFixed}, t.sourceColumns, siblings, nil)
 }
 
 func validateImportableTask(set domain.FactorTask) error {
 	switch set.Status {
 	case domain.TaskStatusEnabled, domain.TaskStatusDisabled:
 		return nil
-	case domain.TaskStatusDeleting:
-		return errors.New("factor task purge is pending")
 	default:
 		return errors.New("factor task must be enabled or disabled before importing factors")
 	}
@@ -460,10 +449,16 @@ func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error
 	return storageio.NewGatewayClient(gateway, storageio.AuthInfo(requestID)), gateway.Close, nil
 }
 
-// defaultMemberParams 返回命令行直接加成员时的固定参数：普通任务按定义的默认值补全，策略实例专属任务没有固定参数。
-func defaultMemberParams(set domain.FactorTask, factor domain.FactorDef) (map[string]float64, error) {
-	if set.OwnerInstanceID != "" {
-		return nil, nil
+// addDefaultMember 把定义作为参数全取默认值的固定成员加入任务（成员键就是因子 ID）。
+func addDefaultMember(ctx context.Context, db *store.Store, taskID string, factor domain.FactorDef) error {
+	params, err := domain.ResolveMemberParams(factor, nil)
+	if err != nil {
+		return err
 	}
-	return domain.ResolveMemberParams(factor, nil)
+	key, err := domain.DeriveMemberKey(factor, domain.MemberKindFixed, params)
+	if err != nil {
+		return err
+	}
+	_, err = db.AddMember(ctx, taskID, key, factor.FactorID, domain.MemberKindFixed, params)
+	return err
 }

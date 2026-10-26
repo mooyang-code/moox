@@ -41,8 +41,6 @@ type StrategyMgrService interface {
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error)
 
-	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error)
-
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error)
 
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq) (*GetStrategyResultRsp, error)
@@ -62,8 +60,6 @@ type StrategyMgrService interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error)
-
-	ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq) (*ListStrategyParamSubmissionsRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -264,24 +260,6 @@ func StrategyMgrService_SetStrategyInstanceEnabled_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func StrategyMgrService_DeleteStrategyInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteStrategyInstanceReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).DeleteStrategyInstance(ctx, reqbody.(*DeleteStrategyInstanceReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func StrategyMgrService_ListStrategyResults_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ListStrategyResultsReq{}
 	filters, err := f(req)
@@ -462,24 +440,6 @@ func StrategyMgrService_SetStrategyDisplaySettings_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func StrategyMgrService_ListStrategyParamSubmissions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListStrategyParamSubmissionsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(StrategyMgrService).ListStrategyParamSubmissions(ctx, reqbody.(*ListStrategyParamSubmissionsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -530,10 +490,6 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: StrategyMgrService_SetStrategyInstanceEnabled_Handler,
 		},
 		{
-			Name: "/trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
-			Func: StrategyMgrService_DeleteStrategyInstance_Handler,
-		},
-		{
 			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyResults",
 			Func: StrategyMgrService_ListStrategyResults_Handler,
 		},
@@ -572,10 +528,6 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
 			Func: StrategyMgrService_SetStrategyDisplaySettings_Handler,
-		},
-		{
-			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyParamSubmissions",
-			Func: StrategyMgrService_ListStrategyParamSubmissions_Handler,
 		},
 	},
 }
@@ -624,9 +576,6 @@ func (s *UnimplementedStrategyMgr) ListStrategyInstances(ctx context.Context, re
 func (s *UnimplementedStrategyMgr) SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error) {
 	return nil, errors.New("rpc SetStrategyInstanceEnabled of service StrategyMgr is not implemented")
 }
-func (s *UnimplementedStrategyMgr) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error) {
-	return nil, errors.New("rpc DeleteStrategyInstance of service StrategyMgr is not implemented")
-}
 func (s *UnimplementedStrategyMgr) ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error) {
 	return nil, errors.New("rpc ListStrategyResults of service StrategyMgr is not implemented")
 }
@@ -656,9 +605,6 @@ func (s *UnimplementedStrategyMgr) GetStrategyDisplaySettings(ctx context.Contex
 }
 func (s *UnimplementedStrategyMgr) SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error) {
 	return nil, errors.New("rpc SetStrategyDisplaySettings of service StrategyMgr is not implemented")
-}
-func (s *UnimplementedStrategyMgr) ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq) (*ListStrategyParamSubmissionsRsp, error) {
-	return nil, errors.New("rpc ListStrategyParamSubmissions of service StrategyMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -691,8 +637,6 @@ type StrategyMgrClientProxy interface {
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq, opts ...client.Option) (rsp *SetStrategyInstanceEnabledRsp, err error)
 
-	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (rsp *DeleteStrategyInstanceRsp, err error)
-
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (rsp *ListStrategyResultsRsp, err error)
 
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq, opts ...client.Option) (rsp *GetStrategyResultRsp, err error)
@@ -712,8 +656,6 @@ type StrategyMgrClientProxy interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *GetStrategyDisplaySettingsRsp, err error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *SetStrategyDisplaySettingsRsp, err error)
-
-	ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq, opts ...client.Option) (rsp *ListStrategyParamSubmissionsRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -945,26 +887,6 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyInstanceEnabled(ctx context.Cont
 	return rsp, nil
 }
 
-func (c *StrategyMgrClientProxyImpl) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (*DeleteStrategyInstanceRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("DeleteStrategyInstance")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &DeleteStrategyInstanceRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *StrategyMgrClientProxyImpl) ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (*ListStrategyResultsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -1159,26 +1081,6 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyDisplaySettings(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetStrategyDisplaySettingsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *StrategyMgrClientProxyImpl) ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq, opts ...client.Option) (*ListStrategyParamSubmissionsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ListStrategyParamSubmissions")
-	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("strategy")
-	msg.WithCalleeService("StrategyMgr")
-	msg.WithCalleeMethod("ListStrategyParamSubmissions")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListStrategyParamSubmissionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

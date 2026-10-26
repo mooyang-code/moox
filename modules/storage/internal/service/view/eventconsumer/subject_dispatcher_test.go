@@ -80,7 +80,7 @@ func TestDatasetDispatcherFailedRowBlocksFactorUntilRedelivery(t *testing.T) {
 	at := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	markerEncoded, err := consumer.registry.Encode(events.FactorPeriodComputed, &storagepb.FactorPeriodComputed{
 		DatasetId: "bar", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"ETH"}, Factors: []*storagepb.FactorPeriodState{{MemberAlias: "factor", FactorId: "factor", ParamsSource: "default", Status: "complete", SourceHash: "hash", DefinitionHash: "def"}},
+		UniverseSubjectIds: []string{"ETH"}, Factors: []*storagepb.FactorPeriodState{{MemberKey: "factor", FactorId: "factor", MemberKind: "fixed", Status: "complete", SourceHash: "hash", DefinitionHash: "def"}},
 		TriggerEventId: "source-ready", ComputedAt: timestamppb.New(at),
 	}, events.PublishOptions{EventID: "factor-marker", OccurredAt: at, SpaceID: "foo", SubjectID: "bar"})
 	if err != nil {

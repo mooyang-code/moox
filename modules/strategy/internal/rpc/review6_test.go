@@ -18,7 +18,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.calendar = "cn_stock"
 	h.createStrategy("s1", demoDSL)
-	requireOK(t, int32(h.createInstance("i1", "s1", "view_a", "", false).GetRetInfo().GetCode()), "")
+	requireOK(t, int32(h.createInstance("i1", "s1", "ftask_i1", "", false).GetRetInfo().GetCode()), "")
 	h.now = time.Date(2026, 12, 30, 2, 0, 0, 0, time.UTC) // 上海 10:00，已过 12-29 的截止日
 	rsp := h.setEnabled("i1", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "不能启用实例")
@@ -28,7 +28,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
+	raw, _ := json.Marshal(input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_i1", FactorTaskID: "ftask_i1", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
 	pending := "pending-session"
 	if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: pending, InstanceID: "i1", DSLHash: definition.DSLHash, ResolvedJSON: string(raw), CreatedAt: h.now}, definition.DSLYaml); err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestStartReplayStockUsesShanghaiDates(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, shanghai), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)}
 	h.createStrategy("s1", demoDSL)
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-10-01"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-10-01"})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 	if rsp.GetReplay().GetStartTime() != "2026-08-31T16:00:00Z" || rsp.GetReplay().GetEndTime() != "2026-09-30T16:00:00Z" {
 		t.Fatalf("区间应记录为上海日期零点：%s ~ %s", rsp.GetReplay().GetStartTime(), rsp.GetReplay().GetEndTime())
@@ -73,7 +73,7 @@ func TestCancelReplayMapsErrors(t *testing.T) {
 	if missing.GetRetInfo().GetCode() != commonpb.ErrorCode_NOT_FOUND {
 		t.Fatalf("不存在的回放应返回 NOT_FOUND：%v", missing.GetRetInfo())
 	}
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-03"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-03"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	id := started.GetReplay().GetReplayId()
 	cancelled, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: id})
@@ -87,7 +87,7 @@ func TestCancelReplayMapsErrors(t *testing.T) {
 	}
 	requireFail(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg(), "不在可取消的状态")
 
-	other, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-04", EndTime: "2026-09-05"})
+	other, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-04", EndTime: "2026-09-05"})
 	requireOK(t, int32(other.GetRetInfo().GetCode()), other.GetRetInfo().GetMsg())
 	if err := h.service.Store.ApplySchema(`CREATE TRIGGER trg_test_cancel_fails BEFORE UPDATE ON t_strategy_replays BEGIN SELECT RAISE(ABORT, 'boom'); END;`); err != nil {
 		t.Fatal(err)

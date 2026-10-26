@@ -70,7 +70,7 @@ type fakeStrategy struct {
 	hash   string
 	// next 非空时，按周期产出下一期的因子参数（返回 nil 表示这一期不产出）。
 	next func(period time.Time) MemberParams
-	// taskID 非空时，绑定带实例的私有因子任务。
+	// taskID 是实例关联的因子任务，空取 ftask_i1。
 	taskID string
 }
 
@@ -79,7 +79,11 @@ func (s *fakeStrategy) Bind(context.Context, string) (StrategyBinding, error) {
 	if hash == "" {
 		hash = "dsl1"
 	}
-	return StrategyBinding{InstanceID: "i1", DSLHash: hash, Factors: map[string]string{"f": "h1"}, PreviousDepth: 1, SourceColumns: []string{"close"}, FactorTaskID: s.taskID, Tuned: s.next != nil}, nil
+	task := s.taskID
+	if task == "" {
+		task = "ftask_i1"
+	}
+	return StrategyBinding{InstanceID: "i1", DSLHash: hash, Factors: map[string]string{"f": "h1"}, PreviousDepth: 1, SourceColumns: []string{"close"}, FactorTaskID: task, Tuned: s.next != nil}, nil
 }
 
 // 决策：状态里记录已处理的周期数；偶数周期 ok、奇数周期跳过。
@@ -160,7 +164,7 @@ func newRunner(t *testing.T) (*Runner, *fakeFactor, *fakeStrategy, *fakeTrade) {
 }
 
 func spec(minutes int) Spec {
-	return Spec{ReplayID: "r1", TaskID: "set", InstanceID: "i1", From: t0.Format(time.RFC3339), To: t0.Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339), WriteFactors: true}
+	return Spec{ReplayID: "r1", TaskID: "ftask_i1", InstanceID: "i1", From: t0.Format(time.RFC3339), To: t0.Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339), WriteFactors: true}
 }
 
 // 逐期推进：每期取因子帧、求值、记录、向 Trade 推进、写回因子；策略状态逐期传递，跳过的周期不改状态。

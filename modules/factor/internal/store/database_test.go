@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ func TestOpenCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, s.db.Raw(`
 		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
 	`).Scan(&tables).Error)
-	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_param_freezes", "t_factor_param_frozen_periods", "t_factor_param_requests", "t_factor_param_snapshots", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks"}, tables)
+	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks"}, tables)
 }
 
 // 已有库缺少后来新增的引擎心跳表时，启动时补建，已有数据保留。
@@ -60,7 +61,7 @@ func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", "disabled")))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
-	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", nil)
+	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
 		JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,

@@ -2,12 +2,14 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"gorm.io/gorm"
 )
 
@@ -20,32 +22,66 @@ const (
 )
 
 // RecalcJob is the durable state needed to accept, resume, inspect, or cancel
-// one asynchronous factor-set recalculation.
+// one asynchronous factor-task recalculation.
 type RecalcJob struct {
-	JobID           string    `json:"job_id"`
-	RequestID       string    `json:"request_id"`
-	TaskID          string    `json:"task_id"`
-	Members         []string  `json:"members"`
-	Subjects        []string  `json:"subjects"`
-	MembersOmitted  bool      `json:"-"`
-	SubjectsOmitted bool      `json:"-"`
-	StartTime       int64     `json:"start_time"`
-	EndTime         int64     `json:"end_time"`
-	Status          string    `json:"status"`
-	ProgressTime    int64     `json:"progress_time"`
-	Error           string    `json:"error"`
-	EngineID        string    `json:"engine_id"`
-	LeaseToken      string    `json:"-"`
-	LeaseExpiresAt  int64     `json:"-"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	JobID           string   `json:"job_id"`
+	RequestID       string   `json:"request_id"`
+	TaskID          string   `json:"task_id"`
+	Members         []string `json:"members"`
+	Subjects        []string `json:"subjects"`
+	MembersOmitted  bool     `json:"-"`
+	SubjectsOmitted bool     `json:"-"`
+	StartTime       int64    `json:"start_time"`
+	EndTime         int64    `json:"end_time"`
+	Status          string   `json:"status"`
+	ProgressTime    int64    `json:"progress_time"`
+	Error           string   `json:"error"`
+	// DefaultFilled 是按默认参数新补的期次（成员键 → 闭区间 [起始秒, 结束秒] 列表，相邻期次已合并）：
+	// 原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，与当时的实时结果不保证一致。
+	DefaultFilled  map[string][]TimeRange `json:"default_filled,omitempty"`
+	EngineID       string                 `json:"engine_id"`
+	LeaseToken     string                 `json:"-"`
+	LeaseExpiresAt int64                  `json:"-"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+}
+
+// TimeRange 是 Unix 秒的闭区间。
+type TimeRange = domain.TimeRange
+
+func encodeDefaultFilled(filled map[string][]TimeRange) (string, error) {
+	pairs := make(map[string][][2]int64, len(filled))
+	for key, ranges := range filled {
+		for _, r := range ranges {
+			pairs[key] = append(pairs[key], [2]int64{r.Start, r.End})
+		}
+	}
+	raw, err := json.Marshal(pairs)
+	return string(raw), err
+}
+
+func decodeDefaultFilled(raw string) (map[string][]TimeRange, error) {
+	var pairs map[string][][2]int64
+	if err := json.Unmarshal([]byte(raw), &pairs); err != nil {
+		return nil, err
+	}
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	filled := make(map[string][]TimeRange, len(pairs))
+	for key, list := range pairs {
+		for _, pair := range list {
+			filled[key] = append(filled[key], TimeRange{Start: pair[0], End: pair[1]})
+		}
+	}
+	return filled, nil
 }
 
 // recalcJobColumns is the column list every recalc job read selects, in the
 // order of recalcJobRow.
 const recalcJobColumns = `c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
 	 c_members_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
-	 c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
+	 c_default_filled_json, c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
@@ -60,6 +96,7 @@ type recalcJobRow struct {
 	Status          string    `gorm:"column:c_status"`
 	ProgressTime    int64     `gorm:"column:c_progress_time"`
 	Error           string    `gorm:"column:c_error"`
+	DefaultFilled   string    `gorm:"column:c_default_filled_json"`
 	EngineID        string    `gorm:"column:c_engine_id"`
 	LeaseToken      string    `gorm:"column:c_lease_token"`
 	LeaseExpiresAt  int64     `gorm:"column:c_lease_expires_at"`
@@ -76,12 +113,16 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 	if err != nil {
 		return RecalcJob{}, fmt.Errorf("decode recalc subjects: %w", err)
 	}
+	filled, err := decodeDefaultFilled(r.DefaultFilled)
+	if err != nil {
+		return RecalcJob{}, fmt.Errorf("decode recalc default filled: %w", err)
+	}
 	return RecalcJob{
 		JobID: r.JobID, RequestID: r.RequestID, TaskID: r.TaskID,
 		Members: members, Subjects: subjects,
 		MembersOmitted: r.MembersOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
-		Error: r.Error, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
+		Error: r.Error, DefaultFilled: filled, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }

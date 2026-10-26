@@ -243,7 +243,7 @@ func TestAdjacentRecordTrustRules(t *testing.T) {
 	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	attachAndEnable(t, repo, "i1", "session-2", nil)
