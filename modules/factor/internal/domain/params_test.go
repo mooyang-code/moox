@@ -79,3 +79,33 @@ func TestMergeSnapshots(t *testing.T) {
 	require.Equal(t, submitted.Canonical(), MergeSnapshots(nil, submitted).Canonical())
 	require.NotContains(t, MergeSnapshots(ParamSnapshot{"gone": {Default: 1}}, submitted), "gone")
 }
+
+func TestCheckDefinitionCompatible(t *testing.T) {
+	spec := func(span, k string) string {
+		return "params:\n  span: " + span + "\n  k: " + k + "\noutput: ts_mean(close, span) * k\n"
+	}
+	const spanOK = "{type: int, min: 2, max: 100, default: 20}"
+	const kOK = "{type: float, min: 0, max: 5, default: 1}"
+	base := compiledFactor(t, "ema", spec(spanOK, kOK))
+	compat := func(text string) error {
+		return CheckDefinitionCompatible(base, compiledFactor(t, "ema", text))
+	}
+	// 表达式与范围可以改。
+	require.NoError(t, compat(spec("{type: int, min: 2, max: 200, default: 20}", kOK)))
+	require.NoError(t, compat("params:\n  span: "+spanOK+"\n  k: "+kOK+"\noutput: ts_mean(close, span) * k + 1\n"))
+	for name, text := range map[string]string{
+		"增参数":  "params:\n  span: " + spanOK + "\n  k: " + kOK + "\n  j: {type: float, min: 0, max: 5, default: 1}\noutput: ts_mean(close, span) * k * j\n",
+		"删参数":  "params:\n  span: " + spanOK + "\noutput: ts_mean(close, span)\n",
+		"换顺序":  "params:\n  k: " + kOK + "\n  span: " + spanOK + "\noutput: ts_mean(close, span) * k\n",
+		"改默认值": spec("{type: int, min: 2, max: 100, default: 21}", kOK),
+		"改类型":  spec(spanOK, "{type: int, min: 0, max: 5, default: 1}"),
+		"改参数名": "params:\n  length: " + spanOK + "\n  k: " + kOK + "\noutput: ts_mean(close, length) * k\n",
+	} {
+		require.Error(t, compat(text), name)
+	}
+	// 输出改变：单输出改多输出，多输出增删、改名、重排。
+	multi := compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  low: ts_mean(close, w)\n")
+	require.Error(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  low: ts_mean(close, w)\n  up: ts_mean(close, w)\n")))
+	require.Error(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  mid: ts_mean(close, w)\n  low: ts_mean(close, w)\n")))
+	require.NoError(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 80, default: 20}}\noutputs:\n  up: ts_mean(close, w) + 1\n  low: ts_mean(close, w)\n")))
+}

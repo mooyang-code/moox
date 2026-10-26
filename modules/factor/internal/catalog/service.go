@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"gorm.io/gorm"
 )
 
@@ -33,6 +34,7 @@ type Service struct {
 	recordReady func(taskID string, ready bool)
 	locks       *setlock.Locks
 	now         func() time.Time
+	subjects    SubjectSource
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
@@ -48,6 +50,9 @@ func NewService(db *store.Store, metadata storageio.Metadata, options ...Option)
 // Locks exposes the per-set locks shared with live pipeline and recalculation.
 func (s *Service) Locks() *setlock.Locks { return s.locks }
 
+// CreateTask 创建因子任务及其结果数据集。TaskID 为空时生成随机后缀的任务 ID；调用方也可以指定 ftask_<后缀>，
+// 同一个 ID 重复创建且身份一致时按幂等处理（创建中途失败后用同一个 ID 重试）。名称含汉字、不超过 10 个字、空间内唯一，
+// 直接用作 Storage 结果数据集的名称。结果数据集创建时同时注册 __params 系统列。
 func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.FactorTask, error) {
 	if s == nil || s.db == nil || s.metadata == nil {
 		return domain.FactorTask{}, errors.New("factor store and Storage metadata are required")
@@ -56,13 +61,18 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 		return domain.FactorTask{}, errors.New("freq is required")
 	}
 	in.SpaceID = strings.TrimSpace(in.SpaceID)
+	in.Name = strings.TrimSpace(in.Name)
 	in.SourceDatasetID = strings.TrimSpace(in.SourceDatasetID)
 	in.Freq = strings.ToLower(strings.TrimSpace(in.Freq))
-	in.OwnerInstanceID = strings.TrimSpace(in.OwnerInstanceID)
+	in.BoundInstanceID = ""
+	in.TaskID = strings.TrimSpace(in.TaskID)
 	if in.TaskID == "" {
-		in.TaskID = domain.TaskID(in.SourceDatasetID, in.Freq)
-		if in.OwnerInstanceID != "" {
-			in.TaskID = domain.InstanceTaskID(in.OwnerInstanceID)
+		suffix, err := factorname.NewSuffix()
+		if err != nil {
+			return domain.FactorTask{}, err
+		}
+		if in.TaskID, err = factorname.TaskID(suffix); err != nil {
+			return domain.FactorTask{}, err
 		}
 	}
 	if in.ResultDatasetID == "" {
@@ -92,14 +102,11 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 		if err := sameTaskIdentity(existing, in); err != nil {
 			return domain.FactorTask{}, err
 		}
-		if existing.Status == domain.TaskStatusDeleting {
-			return domain.FactorTask{}, errors.New("factor task purge is pending")
-		}
 		if existing.Status != domain.TaskStatusPending {
 			return existing, nil
 		}
 		in = existing
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+	} else if !newTask {
 		return domain.FactorTask{}, err
 	}
 	source, columns, err := s.sourceDataset(ctx, in)
@@ -111,15 +118,9 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 			return domain.FactorTask{}, err
 		}
 	}
-
 	spec := resultDatasetSpec(in, source, columns)
-	if in.OwnerInstanceID != "" {
-		spec.Name = domain.InstanceDatasetName(in.OwnerInstanceID)
-		spec.Description = "Private factor results of strategy instance " + in.OwnerInstanceID
-		spec.Attributes["owner_instance_id"] = in.OwnerInstanceID
-	}
 	if err := s.metadata.CreateResultDataset(ctx, spec); err != nil {
-		return domain.FactorTask{}, fmt.Errorf("create factor result dataset: %w", err)
+		return domain.FactorTask{}, fmt.Errorf("create factor result dataset（任务 %s 已登记为待创建，可用同一个任务 ID 重试）: %w", in.TaskID, err)
 	}
 	if err := s.metadata.ActivateDataset(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("activate factor result dataset: %w", err)
@@ -138,33 +139,67 @@ func (s *Service) SetTaskStatus(ctx context.Context, taskID, status string) (dom
 		return domain.FactorTask{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetTask(ctx, taskID)
+	task, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return domain.FactorTask{}, err
 	}
 	if status != domain.TaskStatusEnabled && status != domain.TaskStatusDisabled {
 		return domain.FactorTask{}, fmt.Errorf("status must be %q or %q", domain.TaskStatusEnabled, domain.TaskStatusDisabled)
 	}
-	if set.Status == domain.TaskStatusDeleting {
-		return domain.FactorTask{}, errors.New("factor task purge is pending")
+	if task.Status == status {
+		return task, nil
 	}
-	if set.Status == status {
-		return set, nil
-	}
-	if set.Status == domain.TaskStatusPending {
+	if task.Status == domain.TaskStatusPending {
 		return domain.FactorTask{}, errors.New("pending factor task cannot be toggled")
 	}
 	if status == domain.TaskStatusEnabled {
-		if err := s.reconcileTaskUnlocked(ctx, set); err != nil {
+		if err := s.reconcileTaskUnlocked(ctx, task); err != nil {
 			return domain.FactorTask{}, err
 		}
 	}
-	if err := s.db.SetTaskStatus(ctx, set.TaskID, set.Status, status); err != nil {
+	if err := s.db.SetTaskStatus(ctx, task.TaskID, task.Status, status); err != nil {
 		return domain.FactorTask{}, err
 	}
-	return s.db.GetTask(ctx, set.TaskID)
+	return s.db.GetTask(ctx, task.TaskID)
 }
 
+// BindTask 把任务与策略实例永久关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
+// 任务没有成员时拒绝：没有成员的任务不会产出任何列，关联没有意义（设计 S1）。
+func (s *Service) BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error) {
+	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
+	if taskID == "" || instanceID == "" {
+		return domain.FactorTask{}, errors.New("task_id and instance_id are required")
+	}
+	unlock, err := s.locks.LockContext(ctx, taskID)
+	if err != nil {
+		return domain.FactorTask{}, err
+	}
+	defer unlock()
+	task, err := s.db.GetTask(ctx, taskID)
+	if err != nil {
+		return domain.FactorTask{}, err
+	}
+	if task.BoundInstanceID == instanceID {
+		return task, nil
+	}
+	if task.BoundInstanceID != "" {
+		return domain.FactorTask{}, fmt.Errorf("%w: factor task %q is already bound to another strategy instance", store.ErrConflict, taskID)
+	}
+	if task.Status == domain.TaskStatusPending {
+		return domain.FactorTask{}, errors.New("factor task is not ready")
+	}
+	count, err := s.db.CountMembers(ctx, taskID)
+	if err != nil {
+		return domain.FactorTask{}, err
+	}
+	if count == 0 {
+		return domain.FactorTask{}, fmt.Errorf("factor task %q has no members; add at least one member before binding", taskID)
+	}
+	return s.db.BindTask(ctx, taskID, instanceID)
+}
+
+// DeleteTask 删除没有成员、也没有关联策略实例的已停用任务。purge 为 true 时先删结果数据集、再删数据库记录；
+// Storage 删除数据集对"已不存在"幂等，所以两步都可以重试，不需要持久化删除意图。
 func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) error {
 	taskID = strings.TrimSpace(taskID)
 	unlock, err := s.locks.LockContext(ctx, taskID)
@@ -172,11 +207,14 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 		return err
 	}
 	defer unlock()
-	set, err := s.db.GetTask(ctx, taskID)
+	task, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if set.Status != domain.TaskStatusDisabled && !(purge && set.Status == domain.TaskStatusDeleting) {
+	if task.BoundInstanceID != "" {
+		return fmt.Errorf("%w: factor task %q is bound to strategy instance %q and cannot be deleted", store.ErrConflict, taskID, task.BoundInstanceID)
+	}
+	if task.Status != domain.TaskStatusDisabled {
 		return errors.New("factor task must be disabled before deletion")
 	}
 	memberCount, err := s.db.CountMembers(ctx, taskID)
@@ -190,23 +228,11 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 		if s.metadata == nil {
 			return errors.New("Storage metadata is required to purge the result dataset")
 		}
-		if set.Status != domain.TaskStatusDeleting {
-			if err := s.db.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusDisabled, domain.TaskStatusDeleting); err != nil {
-				return fmt.Errorf("persist factor result purge intent: %w", err)
-			}
-		}
-		if err := s.metadata.DeleteDataset(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
+		if err := s.metadata.DeleteDataset(ctx, task.SpaceID, task.ResultDatasetID); err != nil {
 			return fmt.Errorf("delete factor result dataset: %w", err)
 		}
 	}
-	// 参数记录最后删：结果数据集清理失败（例如还有额外的 View 引用）时任务停在 deleting，冻结历史还在，可以重试。
-	if err := s.db.DeleteTaskParams(ctx, taskID); err != nil {
-		return fmt.Errorf("delete factor task params: %w", err)
-	}
-	if err := s.db.DeleteTask(ctx, taskID); err != nil {
-		return err
-	}
-	return nil
+	return s.db.DeleteTask(ctx, taskID)
 }
 
 // GetTask returns a factor task with all of its members (any status) and their definitions.
@@ -241,9 +267,9 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 	return s.db.GetFactor(ctx, factor.FactorID)
 }
 
-// UpdateFactor rewrites a definition. It is rejected while any member is
-// enabled; otherwise the new definition is re-validated against every set that
-// references it and any failure rejects the whole update.
+// UpdateFactor 改写一个定义。被任务引用的定义有这些限制：任一成员已启用时拒绝；不允许增删参数，不允许改参数的类型、
+// 声明顺序和默认值，也不允许增删、改名或重排输出（设计 5.4）；新的参数范围必须仍包含所有引用它的成员保存的参数；
+// 新定义还要对每个引用它的任务重新做成员校验，任何一项不通过都拒绝整次更新。
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
@@ -254,7 +280,8 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		return domain.FactorDef{}, err
 	}
 	defer unlockFactor()
-	if _, err := s.db.GetFactor(ctx, factor.FactorID); err != nil {
+	current, err := s.db.GetFactor(ctx, factor.FactorID)
+	if err != nil {
 		return domain.FactorDef{}, err
 	}
 	// Every member operation takes the definition lock first, so the usage list
@@ -266,20 +293,25 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	referencing := usages[factor.FactorID]
 	for _, usage := range referencing {
 		if usage.Status == domain.MemberStatusEnabled {
-			return domain.FactorDef{}, fmt.Errorf("%w: factor %q is enabled in set %q; disable it before updating its definition",
+			return domain.FactorDef{}, fmt.Errorf("%w: factor %q is enabled in task %q; disable it before updating its definition",
 				store.ErrConflict, factor.FactorID, usage.TaskID)
 		}
 	}
-	setIDs := make([]string, 0, len(referencing))
+	if len(referencing) > 0 {
+		if err := domain.CheckDefinitionCompatible(current, factor); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("%w: %v", store.ErrConflict, err)
+		}
+	}
+	taskIDs := make([]string, 0, len(referencing))
 	seenTasks := map[string]bool{}
 	for _, usage := range referencing {
 		if !seenTasks[usage.TaskID] {
 			seenTasks[usage.TaskID] = true
-			setIDs = append(setIDs, usage.TaskID)
+			taskIDs = append(taskIDs, usage.TaskID)
 		}
 	}
-	sort.Strings(setIDs)
-	for _, taskID := range setIDs {
+	sort.Strings(taskIDs)
+	for _, taskID := range taskIDs {
 		unlockTask, err := s.locks.LockContext(ctx, taskID)
 		if err != nil {
 			return domain.FactorDef{}, err
@@ -287,18 +319,19 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		defer unlockTask()
 	}
 	for _, usage := range referencing {
-		set, err := s.db.GetTask(ctx, usage.TaskID)
+		task, err := s.db.GetTask(ctx, usage.TaskID)
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
-		// 普通任务的成员保存的固定参数在新定义上必须恰好是声明的全部参数且仍然合法；策略专属任务的成员不带固定参数。
-		if set.OwnerInstanceID == "" {
-			if err := domain.CheckSharedMemberParams(factor, usage.Params); err != nil {
-				return domain.FactorDef{}, fmt.Errorf("factor task %q member %q 的固定参数不再合法：%w", usage.TaskID, usage.MemberAlias, err)
-			}
+		member, err := s.db.GetMember(ctx, usage.TaskID, usage.MemberKey)
+		if err != nil {
+			return domain.FactorDef{}, err
 		}
-		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor, Params: usage.Params}); err != nil {
-			return domain.FactorDef{}, fmt.Errorf("factor task %q member %q: %w", usage.TaskID, usage.MemberAlias, err)
+		if err := domain.CheckMemberParams(factor, member.Params); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("factor task %q member %q 的参数不再合法：%w", usage.TaskID, usage.MemberKey, err)
+		}
+		if _, err := s.validateMembership(ctx, task, domain.MemberDef{Key: usage.MemberKey, Factor: factor, Kind: member.Kind, Params: member.Params}); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("factor task %q member %q: %w", usage.TaskID, usage.MemberKey, err)
 		}
 	}
 	if err := s.db.UpdateFactor(ctx, factor); err != nil {
@@ -374,25 +407,24 @@ func (s *Service) ListFactors(ctx context.Context, taskID, status string) ([]dom
 	return infos, nil
 }
 
-// AddTaskMember attaches a definition to a set as a disabled member after
-// validating it against the set's source dataset. It neither adds result columns
-// nor submits a backfill.
-//
-// 非策略专属任务的成员带固定参数：params 给出的参数加上定义的默认值补全成完整参数并校验，之后不变；别名为空时按参数生成
-// （全默认沿用因子 ID）；同任务内同因子同参数只能有一个成员。策略专属任务的参数由写入方逐期提交，不能带固定参数，
-// 别名为空时取因子 ID。
-func (s *Service) AddTaskMember(ctx context.Context, taskID, alias, factorID string, params map[string]float64) (domain.TaskMember, error) {
-	taskID, alias, factorID = strings.TrimSpace(taskID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
+// AddTaskMember 把定义作为一个停用的成员加入任务，加入前对照任务的源数据集校验；既不添加结果列，也不提交补算。
+// kind 为空按 fixed：固定成员的参数由 params 加上定义的默认值补全成完整参数并校验，之后不变；可变成员的 params 是默认参数
+// （没有策略提交时用它），参数由关联的策略逐期提交。成员键与列名都按公共命名包推导；同一个任务里同一个因子最多一个可变成员。
+func (s *Service) AddTaskMember(ctx context.Context, taskID, factorID, kind string, params map[string]float64) (domain.TaskMember, error) {
+	taskID, factorID, kind = strings.TrimSpace(taskID), strings.TrimSpace(factorID), strings.TrimSpace(kind)
+	if kind == "" {
+		kind = domain.MemberKindFixed
+	}
 	unlock, err := s.lockMemberContext(ctx, taskID, factorID)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetTask(ctx, taskID)
+	task, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	if err := requireSetOpen(set); err != nil {
+	if err := requireTaskOpen(task); err != nil {
 		return domain.TaskMember{}, err
 	}
 	// Re-read the definition under the locks so a concurrent update cannot interleave.
@@ -400,59 +432,96 @@ func (s *Service) AddTaskMember(ctx context.Context, taskID, alias, factorID str
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	fixed, alias, err := s.resolveNewMember(ctx, set, factor, alias, params)
+	member, err := newMemberDef(factor, kind, params)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: alias, Factor: factor, Params: fixed}); err != nil {
+	if _, err := s.validateMembership(ctx, task, member); err != nil {
 		return domain.TaskMember{}, err
 	}
-	member, err := s.db.AddMember(ctx, taskID, alias, factorID, fixed)
+	if err := s.checkReaddConsistent(ctx, task, member); err != nil {
+		return domain.TaskMember{}, err
+	}
+	stored, err := s.db.AddMember(ctx, taskID, member.Key, factorID, member.Kind, member.Params)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	return domain.TaskMember{FactorTaskMember: member, Factor: factor}, nil
+	return domain.TaskMember{FactorTaskMember: stored, Factor: factor}, nil
+}
+
+// newMemberDef 按类型和参数构造成员：补全参数、推导成员键。
+func newMemberDef(factor domain.FactorDef, kind string, params map[string]float64) (domain.MemberDef, error) {
+	if kind != domain.MemberKindFixed && kind != domain.MemberKindVar {
+		return domain.MemberDef{}, fmt.Errorf("成员类型 %q 不合法：只能是 %s 或 %s", kind, domain.MemberKindFixed, domain.MemberKindVar)
+	}
+	full, err := domain.ResolveMemberParams(factor, params)
+	if err != nil {
+		return domain.MemberDef{}, err
+	}
+	if kind == domain.MemberKindVar && len(full) == 0 {
+		return domain.MemberDef{}, fmt.Errorf("因子 %s 没有可调参数，不能作为可变成员", factor.FactorID)
+	}
+	key, err := domain.DeriveMemberKey(factor, kind, full)
+	if err != nil {
+		return domain.MemberDef{}, err
+	}
+	return domain.MemberDef{Key: key, Factor: factor, Kind: kind, Params: full}, nil
+}
+
+// checkReaddConsistent 重新加入曾经移除的成员键时，核对旧列元数据里的 factor_params、member_kind 与本次一致：
+// 被引用的定义连默认值都不能改，所以同一个键必然对应同一组参数；这里是兜底，不一致就拒绝。
+func (s *Service) checkReaddConsistent(ctx context.Context, task domain.FactorTask, member domain.MemberDef) error {
+	columns, err := s.metadata.ListColumns(ctx, task.SpaceID, task.ResultDatasetID)
+	if err != nil {
+		return fmt.Errorf("list factor result columns: %w", err)
+	}
+	wanted := make(map[string]storageio.ColumnInfo)
+	for _, column := range factorOutputColumns(member) {
+		wanted[column.ColumnName] = column
+	}
+	for _, existing := range columns {
+		want, ok := wanted[existing.ColumnName]
+		if !ok || existing.OriginType != storageio.ColumnOriginFactor {
+			continue
+		}
+		if existing.Attributes["member_kind"] != want.Attributes["member_kind"] ||
+			existing.Attributes["factor_params"] != want.Attributes["factor_params"] {
+			return fmt.Errorf("结果列 %q 的旧元数据（member_kind=%q，factor_params=%q）与本次成员不一致，不能重新加入",
+				existing.ColumnName, existing.Attributes["member_kind"], existing.Attributes["factor_params"])
+		}
+	}
+	return nil
 }
 
 // RemoveTaskMember detaches a disabled member; result columns are kept.
-func (s *Service) RemoveTaskMember(ctx context.Context, taskID, alias string) error {
-	taskID, alias = strings.TrimSpace(taskID), strings.TrimSpace(alias)
-	unlock, _, err := s.lockExistingMember(ctx, taskID, alias)
+func (s *Service) RemoveTaskMember(ctx context.Context, taskID, memberKey string) error {
+	taskID, memberKey = strings.TrimSpace(taskID), strings.TrimSpace(memberKey)
+	unlock, _, err := s.lockExistingMember(ctx, taskID, memberKey)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	set, err := s.db.GetTask(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	if set.Status == domain.TaskStatusDeleting {
-		return errors.New("factor task purge is pending")
-	}
-	return s.db.RemoveMember(ctx, taskID, alias)
+	return s.db.RemoveMember(ctx, taskID, memberKey)
 }
 
 // SetTaskMemberStatus enables or disables one member. Enabling re-validates
 // and adds result columns, but does not backfill history; disabling only stops
 // writes and keeps the columns.
-func (s *Service) SetTaskMemberStatus(ctx context.Context, taskID, alias, status string) (domain.TaskMember, error) {
-	taskID, alias = strings.TrimSpace(taskID), strings.TrimSpace(alias)
-	unlock, factorID, err := s.lockExistingMember(ctx, taskID, alias)
+func (s *Service) SetTaskMemberStatus(ctx context.Context, taskID, memberKey, status string) (domain.TaskMember, error) {
+	taskID, memberKey = strings.TrimSpace(taskID), strings.TrimSpace(memberKey)
+	unlock, factorID, err := s.lockExistingMember(ctx, taskID, memberKey)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetTask(ctx, taskID)
+	task, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return domain.TaskMember{}, err
-	}
-	if set.Status == domain.TaskStatusDeleting {
-		return domain.TaskMember{}, errors.New("factor task purge is pending")
 	}
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
 		return domain.TaskMember{}, fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
 	}
-	member, err := s.db.GetMember(ctx, taskID, alias)
+	member, err := s.db.GetMember(ctx, taskID, memberKey)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
@@ -465,22 +534,22 @@ func (s *Service) SetTaskMemberStatus(ctx context.Context, taskID, alias, status
 		return result, nil
 	}
 	if status == domain.MemberStatusDisabled {
-		if err := s.db.SetMemberStatus(ctx, taskID, alias, member.Status, status); err != nil {
+		if err := s.db.SetMemberStatus(ctx, taskID, memberKey, member.Status, status); err != nil {
 			return domain.TaskMember{}, err
 		}
-		return s.reloadMember(ctx, taskID, alias, factor)
+		return s.reloadMember(ctx, taskID, memberKey, factor)
 	}
-	if set.Status == domain.TaskStatusPending {
+	if task.Status == domain.TaskStatusPending {
 		return domain.TaskMember{}, errors.New("factor task is not ready")
 	}
 	// Definitions may have been edited and source columns may have changed while
 	// the member was disabled, so enabling repeats the full membership checks.
-	enabling := domain.MemberDef{Alias: alias, Factor: factor, Params: member.Params}
-	members, err := s.validateMembership(ctx, set, enabling)
+	enabling := domain.MemberDef{Key: memberKey, Factor: factor, Kind: member.Kind, Params: member.Params}
+	members, err := s.validateMembership(ctx, task, enabling)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
-	source, columns, err := s.sourceDataset(ctx, set)
+	source, columns, err := s.sourceDataset(ctx, task)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
@@ -491,19 +560,19 @@ func (s *Service) SetTaskMemberStatus(ctx context.Context, taskID, alias, status
 		}
 	}
 	active = replaceMember(active, enabling)
-	if err := s.ensureResultColumns(ctx, set, source, columns, active...); err != nil {
+	if err := s.ensureResultColumns(ctx, task, source, columns, active...); err != nil {
 		return domain.TaskMember{}, err
 	}
-	s.markReady(set.TaskID, true)
+	s.markReady(task.TaskID, true)
 	// 启用只让成员参与此后每期的计算，不自动补算历史：需要历史因子值时用手动补算（recalc）指定范围。
-	if err := s.db.SetMemberStatus(ctx, taskID, alias, member.Status, status); err != nil {
+	if err := s.db.SetMemberStatus(ctx, taskID, memberKey, member.Status, status); err != nil {
 		return domain.TaskMember{}, err
 	}
-	return s.reloadMember(ctx, taskID, alias, factor)
+	return s.reloadMember(ctx, taskID, memberKey, factor)
 }
 
-func (s *Service) reloadMember(ctx context.Context, taskID, alias string, factor domain.FactorDef) (domain.TaskMember, error) {
-	member, err := s.db.GetMember(ctx, taskID, alias)
+func (s *Service) reloadMember(ctx context.Context, taskID, memberKey string, factor domain.FactorDef) (domain.TaskMember, error) {
+	member, err := s.db.GetMember(ctx, taskID, memberKey)
 	if err != nil {
 		return domain.TaskMember{}, err
 	}
@@ -511,8 +580,8 @@ func (s *Service) reloadMember(ctx context.Context, taskID, alias string, factor
 }
 
 // lockExistingMember 找到成员引用的定义，按固定顺序（定义锁、任务锁）加锁后再确认成员仍引用同一定义。
-func (s *Service) lockExistingMember(ctx context.Context, taskID, alias string) (func(), string, error) {
-	member, err := s.db.GetMember(ctx, taskID, alias)
+func (s *Service) lockExistingMember(ctx context.Context, taskID, memberKey string) (func(), string, error) {
+	member, err := s.db.GetMember(ctx, taskID, memberKey)
 	if err != nil {
 		return nil, "", err
 	}
@@ -520,11 +589,11 @@ func (s *Service) lockExistingMember(ctx context.Context, taskID, alias string) 
 	if err != nil {
 		return nil, "", err
 	}
-	current, err := s.db.GetMember(ctx, taskID, alias)
+	current, err := s.db.GetMember(ctx, taskID, memberKey)
 	if err != nil || current.FactorID != member.FactorID {
 		unlock()
 		if err == nil {
-			err = fmt.Errorf("%w: member %q changed concurrently", store.ErrConflict, alias)
+			err = fmt.Errorf("%w: member %q changed concurrently", store.ErrConflict, memberKey)
 		}
 		return nil, "", err
 	}
@@ -580,12 +649,9 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask,
 	return members, nil
 }
 
-func requireSetOpen(set domain.FactorTask) error {
-	switch set.Status {
-	case domain.TaskStatusPending:
+func requireTaskOpen(task domain.FactorTask) error {
+	if task.Status == domain.TaskStatusPending {
 		return errors.New("factor task is not ready")
-	case domain.TaskStatusDeleting:
-		return errors.New("factor task purge is pending")
 	}
 	return nil
 }
@@ -597,42 +663,24 @@ func (s *Service) markReady(taskID string, ready bool) {
 }
 
 func sameTaskIdentity(existing, requested domain.FactorTask) error {
-	if existing.SpaceID != requested.SpaceID || existing.SourceDatasetID != requested.SourceDatasetID ||
-		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID ||
-		existing.OwnerInstanceID != requested.OwnerInstanceID {
-		return fmt.Errorf("factor task %q conflicts with the requested source identity", requested.TaskID)
+	if existing.SpaceID != requested.SpaceID || existing.Name != requested.Name || existing.SourceDatasetID != requested.SourceDatasetID ||
+		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID {
+		return fmt.Errorf("factor task %q conflicts with the requested identity", requested.TaskID)
 	}
 	return nil
 }
 
-func resultDatasetSpec(set domain.FactorTask, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
+func resultDatasetSpec(task domain.FactorTask, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
 	return storageio.ResultDatasetSpec{
-		SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, SourceDatasetID: set.SourceDatasetID,
-		Name: resultDatasetName(source.Name), Description: "Factor results for " + source.DatasetID,
+		SpaceID: task.SpaceID, DatasetID: task.ResultDatasetID, SourceDatasetID: task.SourceDatasetID,
+		Name: task.Name, Description: "Factor results for " + source.DatasetID,
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
-		DataKind: storageio.DataKindTimeSeries, Frequency: set.Freq,
+		DataKind: storageio.DataKindTimeSeries, Frequency: task.Freq,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
 			"owner_module": "factor", "dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID, "write_owner": "factor",
 		},
-		Columns: columns,
+		Columns: append(append([]storageio.ColumnInfo(nil), columns...), paramsColumn()),
 	}
-}
-
-// maxResultDatasetNameRunes is Storage's display-name limit.
-const maxResultDatasetNameRunes = 10
-
-// resultDatasetName derives the result Dataset name from its source name,
-// which is unique in the Space, so several factor tasks can coexist.
-func resultDatasetName(sourceName string) string {
-	const suffix = "因子"
-	source := []rune(strings.TrimSpace(sourceName))
-	if len(source) == 0 {
-		return "因子结果"
-	}
-	if keep := maxResultDatasetNameRunes - len([]rune(suffix)); len(source) > keep {
-		source = source[:keep]
-	}
-	return string(source) + suffix
 }
 
 func businessColumns(columns []storageio.ColumnInfo) []storageio.ColumnInfo {
@@ -664,100 +712,12 @@ func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
 	return out
 }
 
-// 结果列的属性：列归属的成员（origin_factor_id 与 origin_id 都是成员别名，Storage 要求两者一致、factor_output
-// 与列名一致）、定义 ID、分类，以及列是输出值还是参数取值。
-const (
-	ColumnKindOutput = "output"
-	ColumnKindParam  = "param"
-)
-
-func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.MemberDef) []storageio.ColumnInfo {
-	seen := make(map[string]struct{}, len(columns))
-	for _, col := range columns {
-		seen[col.ColumnName] = struct{}{}
-	}
-	add := func(member domain.MemberDef, column, kind, name string) {
-		if _, exists := seen[column]; exists {
-			return
-		}
-		seen[column] = struct{}{}
-		attributes := map[string]string{
-			"display_name": column, "factor_output": column, "origin_factor_id": member.Alias,
-			"member_alias": member.Alias, "factor_id": member.Factor.FactorID, "category_id": member.Factor.CategoryID,
-			"column_kind": kind,
-		}
-		if kind == ColumnKindParam {
-			attributes["param_name"] = name
-		} else {
-			attributes["output_name"] = name
-		}
-		columns = append(columns, storageio.ColumnInfo{
-			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: member.Alias,
-			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
-		})
-	}
-	for _, member := range members {
-		for i, output := range member.Factor.Outputs {
-			add(member, member.OutputColumns()[i], ColumnKindOutput, output)
-		}
-		names := member.ParamNames()
-		for i, column := range member.ParamColumns() {
-			add(member, column, ColumnKindParam, names[i])
-		}
-	}
-	return columns
-}
-
 func replaceMember(members []domain.MemberDef, next domain.MemberDef) []domain.MemberDef {
 	for i, member := range members {
-		if member.Alias == next.Alias {
+		if member.Key == next.Key {
 			members[i] = next
 			return members
 		}
 	}
 	return append(members, next)
-}
-
-// resolveNewMember 决定新成员的固定参数与别名，并校验同任务内同因子同参数不重复。
-func (s *Service) resolveNewMember(ctx context.Context, set domain.FactorTask, factor domain.FactorDef, alias string, params map[string]float64) (map[string]float64, string, error) {
-	if set.OwnerInstanceID != "" {
-		if len(params) > 0 {
-			return nil, "", fmt.Errorf("策略实例专属任务的成员参数由实例逐期提交，不能带固定参数")
-		}
-		if alias == "" {
-			alias = factor.FactorID
-		}
-		return nil, alias, nil
-	}
-	fixed, err := domain.ResolveMemberParams(factor, params)
-	if err != nil {
-		return nil, "", err
-	}
-	if alias == "" {
-		if alias, err = domain.DeriveMemberAlias(factor, fixed); err != nil {
-			return nil, "", err
-		}
-	}
-	members, err := s.db.ListMembers(ctx, set.TaskID, "")
-	if err != nil {
-		return nil, "", err
-	}
-	for _, existing := range members {
-		if existing.FactorID == factor.FactorID && sameParams(existing.Params, fixed) {
-			return nil, "", fmt.Errorf("%w: 任务 %q 里已有成员 %q 使用因子 %q 的同一组参数", store.ErrConflict, set.TaskID, existing.MemberAlias, factor.FactorID)
-		}
-	}
-	return fixed, alias, nil
-}
-
-func sameParams(a, b map[string]float64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for name, value := range a {
-		if other, ok := b[name]; !ok || other != value {
-			return false
-		}
-	}
-	return true
 }
