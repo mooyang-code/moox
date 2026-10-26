@@ -20,16 +20,6 @@ func ResultDatasetID(taskID string) string {
 	return id
 }
 
-// ResultViewID 是结果数据集的默认 View（Storage 激活结果数据集时按 view_ + 数据集后缀创建）；任务 ID 不合法时返回空串。
-func ResultViewID(taskID string) string {
-	suffix, err := factorname.ParseTaskID(strings.TrimSpace(taskID))
-	if err != nil {
-		return ""
-	}
-	id, _ := factorname.ResultViewID(suffix)
-	return id
-}
-
 // SpecHash returns the content identity of a definition text.
 func SpecHash(spec string) string {
 	hash := sha256.Sum256([]byte(spec))

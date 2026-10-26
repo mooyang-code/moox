@@ -120,8 +120,8 @@
               </div>
               <div class="preview__controls">
                 <a-select v-model="previewTaskId" allow-search placeholder="选择计算任务" class="preview__task">
-                  <a-option v-for="info in store.sets" :key="info.factor_task.task_id" :value="info.factor_task.task_id">
-                    {{ store.setLabel(info.factor_task) }}
+                  <a-option v-for="info in store.tasks" :key="info.factor_task.task_id" :value="info.factor_task.task_id">
+                    {{ store.taskLabel(info.factor_task) }}
                   </a-option>
                 </a-select>
                 <a-input-tag
@@ -388,15 +388,15 @@ const functionGroups = computed(() => {
     .filter(group => group.items.length);
 });
 
-function setLabelOf(taskId: string) {
-  const info = store.sets.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
-  return info ? store.setLabel(info.factor_task) : taskId;
+function taskLabelOf(taskId: string) {
+  const info = store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+  return info ? store.taskLabel(info.factor_task) : taskId;
 }
 
 const enabledUsages = computed(() =>
   usages.value
     .filter(usage => usage.status === "enabled")
-    .map(usage => ({ taskId: usage.task_id, label: setLabelOf(usage.task_id) }))
+    .map(usage => ({ taskId: usage.task_id, label: taskLabelOf(usage.task_id) }))
 );
 const readOnly = computed(() => editing.value && enabledUsages.value.length > 0);
 
@@ -643,7 +643,7 @@ onBeforeRouteUpdate(() => confirmLeave());
 watch(factorId, () => void load());
 watch(() => [form.spec, form.allow_partial_universe], scheduleValidate, { immediate: true });
 watch(
-  () => store.sets.map((info: FactorTaskInfo) => info.factor_task.task_id),
+  () => store.tasks.map((info: FactorTaskInfo) => info.factor_task.task_id),
   ids => {
     if (previewTaskId.value && !ids.includes(previewTaskId.value)) previewTaskId.value = "";
     if (!previewTaskId.value && ids.length) previewTaskId.value = ids[0];

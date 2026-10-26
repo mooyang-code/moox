@@ -37,7 +37,7 @@ func (s *handlerTaskLocator) all() []domain.EngineTask {
 	return append(out, s.extra...)
 }
 
-func (s *handlerTaskLocator) EnabledSetsByDataset(context.Context, string, string, string) ([]domain.EngineTask, error) {
+func (s *handlerTaskLocator) EnabledTasksByDataset(context.Context, string, string, string) ([]domain.EngineTask, error) {
 	return s.all(), s.err
 }
 
@@ -330,7 +330,7 @@ func (s *mutableFilterSetSource) FilterSubjects(context.Context) ([]string, erro
 	return trigger.NormalizeFilters(filters), nil
 }
 
-func (s *mutableFilterSetSource) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
+func (s *mutableFilterSetSource) EnabledTasksByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
 	var out []domain.EngineTask
 	for _, set := range s.sets {
 		if set.SpaceID == spaceID && set.SourceDatasetID == datasetID && set.Freq == freq && set.Status == domain.TaskStatusEnabled {

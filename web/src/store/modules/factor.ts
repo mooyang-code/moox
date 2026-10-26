@@ -30,7 +30,7 @@ async function fetchDatasetNames(spaceId: string) {
 }
 
 export const useFactorStore = defineStore("factorStore", () => {
-  const sets = ref<FactorTaskInfo[]>([]);
+  const tasks = ref<FactorTaskInfo[]>([]);
   const loading = ref(false);
   const loadError = ref("");
   const currentTaskId = ref("");
@@ -41,10 +41,10 @@ export const useFactorStore = defineStore("factorStore", () => {
   const datasetNamesSpaceId = ref("");
   const gate = new RequestGate();
 
-  const current = computed(() => sets.value.find(item => item.factor_task.task_id === currentTaskId.value));
+  const current = computed(() => tasks.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
   /** 因子任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
-  function setLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
+  function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
     const base = set.name || datasetNames.value[set.source_dataset_id] || set.source_dataset_id;
     return `${base} · ${set.freq}`;
   }
@@ -72,7 +72,7 @@ export const useFactorStore = defineStore("factorStore", () => {
     const token = gate.next();
     spaceId.value = nextSpaceId;
     if (!nextSpaceId) {
-      sets.value = [];
+      tasks.value = [];
       currentTaskId.value = "";
       loadedSpaceId.value = "";
       loading.value = false;
@@ -83,7 +83,7 @@ export const useFactorStore = defineStore("factorStore", () => {
     try {
       const [items] = await Promise.all([fetchAllTasks(nextSpaceId), loadDatasetNames(nextSpaceId, token)]);
       if (!gate.isCurrent(token)) return;
-      sets.value = items;
+      tasks.value = items;
       loadedSpaceId.value = nextSpaceId;
       loadError.value = "";
       if (!items.some(item => item.factor_task.task_id === currentTaskId.value)) {
@@ -103,7 +103,7 @@ export const useFactorStore = defineStore("factorStore", () => {
 
   /** 尊重路由给出的 taskId；不存在时保持 load 的回落结果。 */
   function select(taskId: string) {
-    if (taskId && sets.value.some(item => item.factor_task.task_id === taskId)) currentTaskId.value = taskId;
+    if (taskId && tasks.value.some(item => item.factor_task.task_id === taskId)) currentTaskId.value = taskId;
   }
 
   async function refreshEngine() {
@@ -117,7 +117,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   function reset() {
     gate.next();
     spaceId.value = "";
-    sets.value = [];
+    tasks.value = [];
     currentTaskId.value = "";
     loadedSpaceId.value = "";
     datasetNames.value = {};
@@ -128,7 +128,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   }
 
   return {
-    sets,
+    tasks,
     loading,
     loadError,
     currentTaskId,
@@ -136,7 +136,7 @@ export const useFactorStore = defineStore("factorStore", () => {
     engine,
     spaceId,
     datasetNames,
-    setLabel,
+    taskLabel,
     isLoadedFor,
     load,
     reload,

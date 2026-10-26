@@ -84,7 +84,7 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, loaded)
 	require.Equal(t, "hash-1", restarted.Status().Hash)
-	sets, err := restarted.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := restarted.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 	require.Equal(t, "ftask_a", sets[0].Set.TaskID)
@@ -115,7 +115,7 @@ func TestCatalogLoadWithoutStateFile(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, loaded)
-	_, err = cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	_, err = cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.ErrorIs(t, err, storageio.ErrInfra, "events wait until a catalog exists")
 }
 
@@ -132,7 +132,7 @@ func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
 
 	require.Error(t, err)
 	require.Equal(t, "hash-1", cache.Status().Hash)
-	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 }
@@ -156,7 +156,7 @@ func TestCatalogSyncFailureKeepsServing(t *testing.T) {
 
 	cache.MarkSyncFailed(errors.New("manager unreachable"))
 
-	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 	status := cache.Status()
@@ -173,7 +173,7 @@ func TestCatalogNotReadyTaskReturnsInfraError(t *testing.T) {
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 
-	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 	require.False(t, sets[0].ResultReady, "结果数据集没就绪的任务交给调用方重投")
@@ -189,7 +189,7 @@ func TestCatalogReturnsEverySetOverDataset(t *testing.T) {
 		engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_i_x", "dataset_a", true, "cci"), engineTask("ftask_b", "dataset_b", true, "bias"),
 	}})
 	require.NoError(t, err)
-	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	var ids []string
 	for _, set := range sets {
@@ -203,7 +203,7 @@ func TestCatalogUnknownDatasetNotFound(t *testing.T) {
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
-	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_other", "1m")
+	sets, err := cache.EnabledTasksByDataset(context.Background(), "crypto", "dataset_other", "1m")
 
 	require.NoError(t, err)
 	require.Empty(t, sets)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,30 +43,18 @@ func newFakeFactorMgr() *fakeFactorMgr {
 // fakeDefinitionHash 模拟 FactorMgr 编译后的 definition_hash：忽略首尾空白。
 func fakeDefinitionHash(spec string) string { return "dh:" + strings.TrimSpace(spec) }
 
+// memberKey 与服务端一样用 factorname 推导成员键，避免替身认可服务端不会生成的键。
 func (f *fakeFactorMgr) memberKey(factorID, kind string, given map[string]float64) string {
 	if kind == "var" {
-		return factorID + "__var"
+		key, _ := factorname.VarKey(factorID)
+		return key
 	}
-	allDefault, parts := true, []string{}
+	decls := make([]factorname.Param, 0, len(f.paramDecls[factorID]))
 	for _, decl := range f.paramDecls[factorID] {
-		value, ok := given[decl.Name]
-		if !ok {
-			value = decl.DefaultValue
-		}
-		if value != decl.DefaultValue {
-			allDefault = false
-		}
-		parts = append(parts, strings.ReplaceAll(strings.ReplaceAll(trimFloat(value), ".", "p"), "-", "n"))
+		decls = append(decls, factorname.Param{Name: decl.Name, Default: decl.DefaultValue})
 	}
-	if allDefault {
-		return factorID
-	}
-	return factorID + "__" + strings.Join(parts, "_")
-}
-
-func trimFloat(value float64) string {
-	raw, _ := json.Marshal(value)
-	return string(raw)
+	key, _ := factorname.FixedKey(factorID, decls, given)
+	return key
 }
 
 func (f *fakeFactorMgr) CallGatewayJSON(_ context.Context, service string, method string, body, response any) error {

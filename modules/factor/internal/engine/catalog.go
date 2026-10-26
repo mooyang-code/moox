@@ -163,12 +163,12 @@ func (c *CatalogCache) TaskIDs() []string {
 	return ids
 }
 
-// EnabledSetsByDataset implements trigger.TaskLocator from the snapshot: every
+// EnabledTasksByDataset implements trigger.TaskLocator from the snapshot: every
 // enabled set over the source dataset (各策略实例的私有任务可以共用一个源数据集). A missing
 // snapshot is a transient infrastructure condition so the event is retried
 // rather than dropped; sets whose result dataset is not ready are returned
 // with ResultReady false and retried by the caller.
-func (c *CatalogCache) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
+func (c *CatalogCache) EnabledTasksByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.loaded {

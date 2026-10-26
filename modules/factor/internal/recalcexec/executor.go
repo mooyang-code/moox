@@ -570,10 +570,10 @@ func DegradedNote(outcome pipeline.Outcome) string {
 
 // filterDefaultFilled 只保留确实按默认参数新补出值的期次：该期有某个标的写出了这个成员的值，并且这个标的的已有行里没有它的参数
 // （行不存在，或 __params 里没有这个成员）。候选期次是按“任一被选标的缺参数”生成的，计算失败的标的、原来就有参数的标的都不算新补。
-// 没有逐项结果（Items 为空）时原样返回。
+// 没有逐项结果（Items 为空）说明没有任何值写出，结果为空。
 func filterDefaultFilled(selection Selection, base paramRows, filled map[string][]time.Time, items map[pipeline.ItemKey]pipeline.ItemStatus) map[string][]time.Time {
 	if len(items) == 0 || len(filled) == 0 {
-		return filled
+		return nil
 	}
 	out := make(map[string][]time.Time, len(filled))
 	for member, periods := range filled {

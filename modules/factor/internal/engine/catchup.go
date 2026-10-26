@@ -60,7 +60,7 @@ func advanceAll(ctx context.Context, taskIDs []string, budget time.Duration, adv
 func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 	for _, item := range filled {
 		// 同一个源数据集上的每个任务（各策略实例的私有任务）都要知道这段周期已补齐。
-		sets, err := r.catalog.EnabledSetsByDataset(context.Background(), item.GetSpaceId(), item.GetDatasetId(), item.GetFrequency())
+		sets, err := r.catalog.EnabledTasksByDataset(context.Background(), item.GetSpaceId(), item.GetDatasetId(), item.GetFrequency())
 		if err != nil {
 			continue
 		}

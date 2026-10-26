@@ -136,11 +136,11 @@ const route = useRoute();
 const router = useRouter();
 const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true });
 
-const available = computed<FactorTaskInfo[]>(() => resultTasks(store.sets));
+const available = computed<FactorTaskInfo[]>(() => resultTasks(store.tasks));
 const tabs = computed(() =>
   available.value.map((info: FactorTaskInfo) => ({
     taskId: info.factor_task.task_id,
-    title: resultTabTitle(info, store.setLabel(info.factor_task))
+    title: resultTabTitle(info, store.taskLabel(info.factor_task))
   }))
 );
 const activeTaskId = ref("");
@@ -305,7 +305,7 @@ watch(
   }
 );
 
-watch(() => store.sets, stamp, { immediate: true });
+watch(() => store.tasks, stamp, { immediate: true });
 </script>
 
 <style scoped lang="scss">

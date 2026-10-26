@@ -13,8 +13,8 @@ import (
 // TaskLocator resolves an enabled set and its current exact event filters.
 // TaskLocator 找到要计算的任务。同一个源数据集可以有多个任务（各策略实例的私有任务），周期完成事件分给其中每一个。
 type TaskLocator interface {
-	// EnabledSetsByDataset 返回源数据集上启用的全部任务（含成员与结果数据集是否就绪）。
-	EnabledSetsByDataset(ctx context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error)
+	// EnabledTasksByDataset 返回源数据集上启用的全部任务（含成员与结果数据集是否就绪）。
+	EnabledTasksByDataset(ctx context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error)
 	// EnabledTask 按任务 ID 取启用的任务；没有时 found 为 false。
 	EnabledTask(ctx context.Context, taskID string) (set domain.EngineTask, found bool, err error)
 	FilterSubjects(context.Context) ([]string, error)

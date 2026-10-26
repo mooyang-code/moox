@@ -9,13 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 结果数据集与默认 View 的 ID 由任务 ID 的后缀推出；任务 ID 不合法时返回空串。
-func TestResultIDsDeriveFromTaskID(t *testing.T) {
+// 结果数据集的 ID 由任务 ID 的后缀推出；任务 ID 不合法时返回空串。
+func TestResultDatasetIDDerivesFromTaskID(t *testing.T) {
 	require.Equal(t, "dataset_factor_abc12345", ResultDatasetID("ftask_abc12345"))
-	require.Equal(t, "view_factor_abc12345", ResultViewID("ftask_abc12345"))
 	require.Equal(t, "dataset_factor_my_ema", ResultDatasetID(" ftask_my_ema "))
 	require.Empty(t, ResultDatasetID("fset_abc"))
-	require.Empty(t, ResultViewID("ftask_Bad"))
+	require.Empty(t, ResultDatasetID("ftask_Bad"))
 }
 
 func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {

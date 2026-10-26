@@ -8,7 +8,7 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
-        <a-empty v-if="!store.sets.length && !store.loading" description="当前空间没有计算任务">
+        <a-empty v-if="!store.tasks.length && !store.loading" description="当前空间没有计算任务">
           <template #extra>
             <a-button @click="goTasks">前往计算任务</a-button>
           </template>

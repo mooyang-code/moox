@@ -91,7 +91,7 @@ describe("useFactorScope", () => {
     await flushPromises();
     expect(reset).not.toHaveBeenCalled();
     expect(listFactorTasks).not.toHaveBeenCalled();
-    expect(store.sets).toHaveLength(1);
+    expect(store.tasks).toHaveLength(1);
   });
 
   it("resets and reloads when the space id changes", async () => {
@@ -101,13 +101,13 @@ describe("useFactorScope", () => {
     const store = useFactorStore();
     mountScope();
     await flushPromises();
-    expect(store.sets.map(item => item.factor_task.task_id)).toEqual(["a"]);
+    expect(store.tasks.map(item => item.factor_task.task_id)).toEqual(["a"]);
 
     const reset = vi.spyOn(store, "reset");
     useSpaceStore().selectedSpaceId = "stockcn";
     await flushPromises();
     expect(reset).toHaveBeenCalledTimes(1);
-    expect(store.sets.map(item => item.factor_task.task_id)).toEqual(["x"]);
+    expect(store.tasks.map(item => item.factor_task.task_id)).toEqual(["x"]);
   });
 
   it("requireSet resolves ?task= then currentTaskId then first", async () => {
@@ -151,7 +151,7 @@ describe("useFactorScope", () => {
     mountScope({ requireSet: false });
     await flushPromises();
     expect(hoisted.replace).not.toHaveBeenCalled();
-    expect(store.sets).toHaveLength(1);
+    expect(store.tasks).toHaveLength(1);
   });
 
   it("follows ?task= changes while active", async () => {

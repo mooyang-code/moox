@@ -51,7 +51,14 @@ func TestRunChunkSplitsByRowParams(t *testing.T) {
 		rowKey, members := windowParam(at, minute, key, value)
 		reader.rows[rowKey] = members
 	}
-	runner := &recordingRunner{}
+	// 真实管线在补算里总会给出逐项结果：这里让每个期次都写出了值。
+	runner := &recordingRunner{onRun: func(_ context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+		items := map[pipeline.ItemKey]pipeline.ItemStatus{}
+		for period := plan.TargetStart; period.Before(plan.TargetEnd); period = period.Add(time.Minute) {
+			items[pipeline.ItemKey{Member: key, Subject: "BTC", Period: period.UTC()}] = pipeline.ItemWritten
+		}
+		return pipeline.Outcome{Status: "complete", Items: items}, nil
+	}}
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(100), WithParamReader(reader))
 
 	outcome, err := executor.RunChunk(context.Background(), selection, window.Start, window.End)

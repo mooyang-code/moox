@@ -83,12 +83,12 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   }
 
   function hasSet(taskId: string) {
-    return Boolean(taskId) && store.sets.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+    return Boolean(taskId) && store.tasks.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
   }
 
   function resolveSelection() {
     if (!requireSet || !canWriteRoute()) return;
-    const resolved = [routeTaskId.value, store.currentTaskId].find(hasSet) ?? store.sets[0]?.factor_task.task_id ?? "";
+    const resolved = [routeTaskId.value, store.currentTaskId].find(hasSet) ?? store.tasks[0]?.factor_task.task_id ?? "";
     store.select(resolved);
     if (resolved !== routeTaskId.value) void navigate({ task: resolved || undefined });
   }

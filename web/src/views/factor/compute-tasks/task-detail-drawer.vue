@@ -101,7 +101,7 @@ const router = useRouter();
 const store = useFactorStore();
 
 const set = computed(() => props.info?.factor_task as FactorTask);
-const title = computed(() => (props.info ? store.setLabel(set.value) : ""));
+const title = computed(() => (props.info ? store.taskLabel(set.value) : ""));
 const statusTag = computed(() => taskStatusTag(set.value?.status || ""));
 const health = computed(() => setHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
 const actionKind = computed(() => (set.value ? setActionKind(set.value) : "none"));

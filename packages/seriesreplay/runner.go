@@ -268,7 +268,7 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 		advance := buildAdvance(spec.ReplayID, t.Add(step), decision, frame)
 		// 下一期请求的参数以引擎本期实际生效的为基础叠加策略的新参数：策略产出的不合法参数在下一期被引擎拒绝后沿用上一期，
 		// 不会连同非法快照一起被保存、续跑时反复用到。
-		// 引擎返回了生效参数或拒绝原因就以它为准（成员全被拒绝时生效参数为空）；两者都没有（旧版引擎，或没有请求参数）按请求的计。
+		// 引擎返回了生效参数或拒绝原因就以它为准（成员全被拒绝时生效参数为空）；两者都没有（没有请求参数）按请求的计。
 		applied := params
 		if frame.AppliedParams != nil || len(frame.RejectedParams) > 0 {
 			applied = frame.AppliedParams

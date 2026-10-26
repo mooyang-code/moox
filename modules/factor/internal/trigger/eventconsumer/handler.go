@@ -136,7 +136,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
 	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
-	sets, lookupErr := h.sets.EnabledSetsByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
+	sets, lookupErr := h.sets.EnabledTasksByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
 	if lookupErr != nil {
 		err = fmt.Errorf("%w: lookup enabled factor tasks: %v", storageio.ErrInfra, lookupErr)
 	}

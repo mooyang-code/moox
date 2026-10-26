@@ -94,8 +94,3 @@ func TestCheckMemberParamsAfterDefinitionChange(t *testing.T) {
 	require.NoError(t, CheckMemberParams(plain, nil))
 	require.ErrorContains(t, CheckMemberParams(plain, map[string]float64{"span": 20}), "不再声明")
 }
-
-func TestParamsSummary(t *testing.T) {
-	require.Equal(t, "", ParamsSummary(nil))
-	require.Equal(t, "span=20, warmup=50000", ParamsSummary(map[string]float64{"warmup": 50000, "span": 20}))
-}

@@ -2,9 +2,6 @@ package domain
 
 import (
 	"fmt"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/mooyang-code/moox/packages/factorname"
 )
@@ -92,21 +89,4 @@ func CheckMemberParams(def FactorDef, params map[string]float64) error {
 	}
 	_, err := ResolveMemberParams(def, params)
 	return err
-}
-
-// ParamsSummary 返回参数摘要（如 span=20, warmup=50000），按参数名排序；没有参数时为空。
-func ParamsSummary(params map[string]float64) string {
-	if len(params) == 0 {
-		return ""
-	}
-	names := make([]string, 0, len(params))
-	for name := range params {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	parts := make([]string, len(names))
-	for i, name := range names {
-		parts[i] = name + "=" + strconv.FormatFloat(params[name], 'f', -1, 64)
-	}
-	return strings.Join(parts, ", ")
 }

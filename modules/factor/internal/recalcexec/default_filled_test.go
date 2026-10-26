@@ -29,5 +29,5 @@ func TestFilterDefaultFilledKeepsOnlyNewlyFilledPeriods(t *testing.T) {
 		{Member: "ema__var", Subject: "BTC", Period: t2}: pipeline.ItemFailed,
 	}
 	require.Equal(t, map[string][]time.Time{"ema__var": {t0}}, filterDefaultFilled(selection, base, filled, items))
-	require.Equal(t, filled, filterDefaultFilled(selection, base, filled, nil), "没有逐项结果时原样返回")
+	require.Empty(t, filterDefaultFilled(selection, base, filled, nil), "没有逐项结果说明没有值写出")
 }

@@ -90,8 +90,8 @@ const gate = new RequestGate();
 
 const chips = computed(() =>
   usageChips(usages.value, taskId => {
-    const info = store.sets.find((item: { factor_task: { task_id: string } }) => item.factor_task.task_id === taskId);
-    return info ? store.setLabel(info.factor_task) : taskId;
+    const info = store.tasks.find((item: { factor_task: { task_id: string } }) => item.factor_task.task_id === taskId);
+    return info ? store.taskLabel(info.factor_task) : taskId;
   })
 );
 

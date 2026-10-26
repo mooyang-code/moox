@@ -34,7 +34,7 @@
           size="small"
           :bordered="{ cell: true }"
           :data="rows"
-          :loading="store.loading && !store.sets.length"
+          :loading="store.loading && !store.tasks.length"
           :pagination="false"
           :scroll="{ x: 'max-content' }"
         >
@@ -191,13 +191,13 @@ const filters = reactive<TaskFilters>({ keyword: "", status: "" });
 const createVisible = ref(false);
 const busy = ref(false);
 
-const filteredTasks = computed(() => filterTasks(store.sets, filters, (set: FactorTask) => store.setLabel(set)));
+const filteredTasks = computed(() => filterTasks(store.tasks, filters, (set: FactorTask) => store.taskLabel(set)));
 
 const rows = computed(() =>
   filteredTasks.value.map((info: FactorTaskInfo) => ({
     task_id: info.factor_task.task_id,
     info,
-    label: store.setLabel(info.factor_task),
+    label: store.taskLabel(info.factor_task),
     sourceName: store.datasetNames[info.factor_task.source_dataset_id] || info.factor_task.source_dataset_id,
     freq: info.factor_task.freq,
     boundInstance: info.factor_task.bound_instance_id || "",
@@ -215,7 +215,7 @@ const detailId = computed(() => {
   return typeof value === "string" ? value : "";
 });
 const detailInfo = computed<FactorTaskInfo | undefined>(() =>
-  store.sets.find((item: FactorTaskInfo) => item.factor_task.task_id === detailId.value)
+  store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === detailId.value)
 );
 
 function openDetail(taskId: string) {
@@ -236,7 +236,7 @@ async function onCreated(taskId: string) {
   const createdGeneration = selectedSpaceGeneration();
   await store.reload({ silent: false });
   if (spaceStore.selectedSpaceId !== createdSpaceId || selectedSpaceGeneration() !== createdGeneration) return;
-  if (!store.sets.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId)) return;
+  if (!store.tasks.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId)) return;
   // 刷新期间用户又打开了新的创建弹窗：这时再打开详情抽屉会盖住正在填写的新草稿
   if (createVisible.value) return;
   openDetail(taskId);

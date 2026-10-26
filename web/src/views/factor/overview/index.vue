@@ -102,8 +102,8 @@ const jobs = ref<RecalcJob[]>([]);
 const refreshing = ref(false);
 const gate = new RequestGate();
 
-const labelOf = (set: FactorTask) => store.setLabel(set);
-const sets = computed<FactorTaskInfo[]>(() => store.sets);
+const labelOf = (set: FactorTask) => store.taskLabel(set);
+const sets = computed<FactorTaskInfo[]>(() => store.tasks);
 const cards = computed(() => taskCards(sets.value, labelOf));
 const split = computed(() => splitRecalcJobs(jobs.value));
 const running = computed(() => split.value.running);

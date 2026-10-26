@@ -38,15 +38,14 @@ describe("strategy DSL preview", () => {
 });
 
 describe("tuned template", () => {
-  it("declares factor members and next-period parameters and passes the local precheck", () => {
+  it("declares the variable member parameters and passes the local precheck", () => {
     const tuned = parseDSL(tunedTemplate);
     expect(tuned.diagnostics).toEqual([]);
-    expect(tuned.preview?.rules.map(rule => rule.id)).toEqual(["bias_spread"]);
-    expect(tunedTemplate).toContain("factors:");
+    expect(tuned.preview?.rules.map(rule => rule.id)).toEqual(["above_ma"]);
+    // 不再有 factors 段（服务端会拒绝）：可变成员的参数由 factor_params 给出，规则直接写列名与 params()。
+    expect(tunedTemplate).not.toContain("factors:");
     expect(tunedTemplate).toContain("factor_params:");
-    // 同一定义用两个别名；列名是 <别名>_<输出名>。
-    expect(tunedTemplate).toContain("fast: {factor: Bias}");
-    expect(tunedTemplate).toContain("slow: {factor: Bias}");
-    expect(tunedTemplate).toContain("fast_bias");
+    expect(tunedTemplate).toContain("ma__var:");
+    expect(tunedTemplate).toContain('params("ma__var", "window")');
   });
 });

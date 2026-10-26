@@ -27,9 +27,9 @@ const emit = defineEmits<{ "update:modelValue": [taskId: string]; change: [taskI
 const store = useFactorStore();
 
 const options = computed(() =>
-  store.sets.map((item: FactorTaskInfo) => ({
+  store.tasks.map((item: FactorTaskInfo) => ({
     value: item.factor_task.task_id,
-    label: store.setLabel(item.factor_task),
+    label: store.taskLabel(item.factor_task),
     status: item.factor_task.status
   }))
 );

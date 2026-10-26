@@ -120,11 +120,11 @@ describe("因子结果页", () => {
     Object.assign(
       hoisted.store,
       reactive({
-        sets: [taskInfo("a")],
+        tasks: [taskInfo("a")],
         currentTaskId: "a",
         loading: false,
         loadError: "",
-        setLabel: () => "K线 · 1m",
+        taskLabel: () => "K线 · 1m",
         reload: vi.fn()
       })
     );
@@ -212,7 +212,7 @@ describe("因子结果页", () => {
   });
 
   it("关联了策略实例的因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
-    Object.assign(hoisted.store, { sets: [taskInfo("a", "inst-1")] });
+    Object.assign(hoisted.store, { tasks: [taskInfo("a", "inst-1")] });
     hoisted.getDisplay.mockResolvedValue({ categories: ["momentum"], members: [], columns: ["open"] });
     hoisted.route.query = { tab: "results", task: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };
     const wrapper = mountPage();
