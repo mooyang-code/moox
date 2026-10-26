@@ -48,7 +48,15 @@
               <a-descriptions-item label="规则"
                 ><div v-for="rule in parse.preview.rules" :key="rule.id">
                   {{ rule.name || rule.id }} · <span class="mono">{{ rule.id }}</span> ·
-                  {{ rule.type === "rank" ? "截面选股" : rule.type === "signal" ? "固定池择时" : rule.type }}
+                  {{
+                    rule.type === "rank"
+                      ? "截面选股"
+                      : rule.type === "signal"
+                        ? "固定池择时"
+                        : rule.type === "f1"
+                          ? `F1 截面选币（${rule.subStrategies} 个子策略）`
+                          : rule.type
+                  }}
                 </div></a-descriptions-item
               >
             </a-descriptions>
