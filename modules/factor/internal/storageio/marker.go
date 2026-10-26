@@ -96,14 +96,13 @@ func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEve
 
 func markerToProto(marker PeriodMarker) *storagepb.FactorPeriodComputedMarker {
 	factors := append([]FactorState(nil), marker.Factors...)
-	sort.Slice(factors, func(i, j int) bool { return factors[i].Member < factors[j].Member })
+	sort.Slice(factors, func(i, j int) bool { return factors[i].MemberKey < factors[j].MemberKey })
 	protoFactors := make([]*storagepb.FactorPeriodState, 0, len(factors))
 	for _, factor := range factors {
 		protoFactors = append(protoFactors, &storagepb.FactorPeriodState{
-			FactorId: factor.FactorID, MemberAlias: factor.Member, Status: factor.Status,
+			FactorId: factor.FactorID, MemberKey: factor.MemberKey, MemberKind: factor.MemberKind, Status: factor.Status,
 			FailedSubjects: normalizedSorted(factor.FailedSubjects), SourceHash: factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
-			ParamsSource: factor.ParamsSource, ParamsDigest: factor.ParamsDigest,
 		})
 	}
 	return &storagepb.FactorPeriodComputedMarker{

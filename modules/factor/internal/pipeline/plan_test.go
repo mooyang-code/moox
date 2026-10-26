@@ -31,7 +31,7 @@ func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
 	require.Equal(t, target, plan.PeriodTime)
 	require.Equal(t, target.Add(time.Minute), plan.TargetEnd)
 	require.Equal(t, []string{"close", "volume"}, plan.CarryColumns)
-	require.Equal(t, []string{"long", "short"}, []string{plan.Members[0].Alias, plan.Members[1].Alias})
+	require.Equal(t, []string{"long", "short"}, []string{plan.Members[0].Key, plan.Members[1].Key})
 	require.True(t, plan.WriteCarry)
 }
 

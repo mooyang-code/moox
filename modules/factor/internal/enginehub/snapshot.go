@@ -32,7 +32,7 @@ func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []d
 		for _, member := range members {
 			defs = append(defs, member.Def())
 		}
-		sort.Slice(defs, func(i, j int) bool { return defs[i].Alias < defs[j].Alias })
+		sort.Slice(defs, func(i, j int) bool { return defs[i].Key < defs[j].Key })
 		sets = append(sets, domain.EngineTask{Set: set, Members: defs, ResultReady: h.isReady(set.TaskID)})
 	}
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.TaskID < sets[j].Set.TaskID })
@@ -52,21 +52,21 @@ type hashedSet struct {
 	SourceDatasetID string         `json:"source_dataset_id"`
 	Freq            string         `json:"freq"`
 	ResultDatasetID string         `json:"result_dataset_id"`
-	OwnerInstanceID string         `json:"owner_instance_id"`
 	Status          string         `json:"status"`
 	ResultReady     bool           `json:"result_ready"`
 	Members         []hashedMember `json:"members"`
 }
 
 type hashedMember struct {
-	Alias                string `json:"alias"`
+	Key                  string `json:"key"`
+	Kind                 string `json:"kind"`
 	FactorID             string `json:"factor_id"`
 	CategoryID           string `json:"category_id"`
 	Name                 string `json:"name"`
 	SpecHash             string `json:"spec_hash"`
 	DefinitionHash       string `json:"definition_hash"`
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
-	// Params 是成员的固定参数；同一别名删除重加、换参数后目录指纹必须变化，引擎才会重新同步。
+	// Params 是成员的固定参数，或可变成员的默认参数；同一成员键删除重加、换参数后目录指纹必须变化，引擎才会重新同步。
 	Params map[string]float64 `json:"params,omitempty"`
 }
 
@@ -80,7 +80,7 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 		for _, member := range set.Members {
 			factor := member.Factor
 			members = append(members, hashedMember{
-				Alias: member.Alias, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
+				Key: member.Key, Kind: member.Kind, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
 				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
 				Params: member.Params,
 			})
@@ -88,7 +88,7 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 		hashed = append(hashed, hashedSet{
 			TaskID: set.Set.TaskID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
 			Freq:            set.Set.Freq,
-			ResultDatasetID: set.Set.ResultDatasetID, OwnerInstanceID: set.Set.OwnerInstanceID, Status: set.Set.Status,
+			ResultDatasetID: set.Set.ResultDatasetID, Status: set.Set.Status,
 			ResultReady: set.ResultReady, Members: members,
 		})
 	}

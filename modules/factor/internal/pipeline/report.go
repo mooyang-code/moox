@@ -21,9 +21,9 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 		StageDurations: make(map[string]time.Duration),
 	}
 	for _, member := range plan.Members {
-		state, ok := computation.FactorStates[member.Alias]
+		state, ok := computation.FactorStates[member.Key]
 		if !ok {
-			state = memberState(plan, member, "degraded", nil)
+			state = memberState(member, "degraded", nil)
 		}
 		state.FailedSubjects = uniqueSorted(state.FailedSubjects)
 		outcome.Factors = append(outcome.Factors, state)
@@ -37,7 +37,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	if computation.BudgetHit {
 		outcome.Status = "degraded"
 	}
-	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].Member < outcome.Factors[j].Member })
+	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].MemberKey < outcome.Factors[j].MemberKey })
 	return outcome
 }
 
@@ -88,7 +88,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
 	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}
 	for _, member := range plan.Members {
-		computation.FactorStates[member.Alias] = memberState(plan, member, "complete", nil)
+		computation.FactorStates[member.Key] = memberState(member, "complete", nil)
 	}
 	rowsWritten := 0
 	var items map[ItemKey]ItemStatus
@@ -205,7 +205,7 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 	for _, subject := range warming {
 		for i, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: hashes[i],
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: hashes[i],
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonWarming,
 			})
 		}
@@ -230,7 +230,7 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 	for _, subject := range plan.UpstreamFailed {
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}
@@ -267,7 +267,7 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		}
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Key, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}

@@ -628,6 +628,8 @@ message ReportRecalcProgressReq {
   string progress_time = 4;
   string status = 5;
   string error = 6;
+  // default_filled 是引擎到目前为止累计的按默认参数新补的期次；为空表示这次没有变化，非空时整体替换。
+  repeated MemberRanges default_filled = 7;
 }
 message ReportRecalcProgressRsp {
   common.RetInfo ret_info = 1;

@@ -111,7 +111,7 @@ func e2eMean() domain.FactorDef {
 
 func e2eBroken() domain.FactorDef {
 	return domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "output: newer_function(close)\n",
-		FactorType: domain.FactorTypeTimeSeries, InputColumns: []string{"close"}, Outputs: []string{"broken_out"}, LookbackPeriods: 3}
+		FactorType: domain.FactorTypeTimeSeries, InputColumns: []string{"close"}, Outputs: []string{"broken"}, LookbackPeriods: 3}
 }
 
 func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDef) LiveInput {
@@ -221,8 +221,8 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		require.Equal(t, "complete", states["mean"])
 		require.NotEqual(t, "complete", states["broken"])
 		for _, row := range store.result {
-			require.Contains(t, row.Fields, "broken_out")
-			require.Nil(t, row.Fields["broken_out"])
+			require.Contains(t, row.Fields, "broken")
+			require.Nil(t, row.Fields["broken"])
 			require.NotNil(t, row.Fields["mean"])
 		}
 	})

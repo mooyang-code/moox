@@ -45,7 +45,7 @@ func EstimateChunkMemory(members []domain.MemberDef, series, periods, carryColum
 		if err != nil {
 			continue
 		}
-		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Alias, FactorID: def.FactorID, Factor: def.Compiled()})
+		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Key, FactorID: def.FactorID, Factor: def.Compiled()})
 		outputs += len(def.Outputs) + len(def.Compiled().Params)
 	}
 	if len(inputs) == 0 {

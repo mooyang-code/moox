@@ -14,10 +14,11 @@ func SetToPB(set domain.FactorTask) *factorpb.FactorTask {
 	return &factorpb.FactorTask{
 		TaskId:          set.TaskID,
 		SpaceId:         set.SpaceID,
+		Name:            set.Name,
 		SourceDatasetId: set.SourceDatasetID,
 		Freq:            set.Freq,
 		ResultDatasetId: set.ResultDatasetID,
-		OwnerInstanceId: set.OwnerInstanceID,
+		BoundInstanceId: set.BoundInstanceID,
 		Status:          set.Status,
 		CreatedAt:       FormatTime(set.CreatedAt),
 		UpdatedAt:       FormatTime(set.UpdatedAt),
@@ -39,10 +40,11 @@ func SetFromPB(pb *factorpb.FactorTask) (domain.FactorTask, error) {
 	return domain.FactorTask{
 		TaskID:          pb.GetTaskId(),
 		SpaceID:         pb.GetSpaceId(),
+		Name:            pb.GetName(),
 		SourceDatasetID: pb.GetSourceDatasetId(),
 		Freq:            pb.GetFreq(),
 		ResultDatasetID: pb.GetResultDatasetId(),
-		OwnerInstanceID: pb.GetOwnerInstanceId(),
+		BoundInstanceID: pb.GetBoundInstanceId(),
 		Status:          pb.GetStatus(),
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
@@ -114,14 +116,13 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	for _, factor := range summary.Factors {
 		factors = append(factors, &factorpb.FactorPeriodState{
 			FactorId:       factor.FactorID,
-			MemberAlias:    factor.MemberAlias,
+			MemberKey:      factor.MemberKey,
+			MemberKind:     factor.MemberKind,
 			Status:         factor.Status,
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
 			SpecHash:       factor.SpecHash,
 			DefinitionHash: factor.DefinitionHash,
 			GapSubjects:    CloneStrings(factor.GapSubjects),
-			ParamsSource:   factor.ParamsSource,
-			ParamsDigest:   factor.ParamsDigest,
 		})
 	}
 	return &factorpb.TaskRunSummary{
@@ -138,10 +139,9 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 	factors := make([]domain.FactorPeriodState, 0, len(pb.GetFactors()))
 	for _, factor := range pb.GetFactors() {
 		factors = append(factors, domain.FactorPeriodState{
-			FactorID: factor.GetFactorId(), MemberAlias: factor.GetMemberAlias(), Status: factor.GetStatus(),
+			FactorID: factor.GetFactorId(), MemberKey: factor.GetMemberKey(), MemberKind: factor.GetMemberKind(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), GapSubjects: CloneStrings(factor.GetGapSubjects()),
-			ParamsSource: factor.GetParamsSource(), ParamsDigest: factor.GetParamsDigest(),
 		})
 	}
 	return domain.TaskRunSummary{
@@ -191,16 +191,10 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		watermarks = append(watermarks, &factorpb.TaskWatermarkStatus{TaskId: item.TaskID, CommittedThrough: FormatTime(item.CommittedThrough), Target: FormatTime(item.Target),
 			BlockedSince: FormatTime(item.BlockedSince), BlockedPeriod: FormatTime(item.BlockedPeriod), BlockedReason: item.BlockedReason})
 	}
-	health := make([]*factorpb.MemberParamHealth, 0, len(status.ParamHealth))
-	for _, item := range status.ParamHealth {
-		health = append(health, &factorpb.MemberParamHealth{TaskId: item.TaskID, MemberAlias: item.Member, CarriedPeriods: int32(item.CarriedPeriods),
-			AlertAfter: int32(item.AlertAfter), LastOfflineAt: FormatTime(item.LastOfflineAt)})
-	}
 	return &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
-		ParamHealth: health, OfflinePending: int32(status.OfflinePending),
 	}
 }
 
@@ -221,16 +215,9 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 		blockedPeriod, _ := ParseTime(item.GetBlockedPeriod())
 		watermarks = append(watermarks, domain.SetWatermark{TaskID: item.GetTaskId(), CommittedThrough: committed, Target: target, BlockedSince: blockedSince, BlockedPeriod: blockedPeriod, BlockedReason: item.GetBlockedReason()})
 	}
-	health := make([]domain.MemberParamHealth, 0, len(pb.GetParamHealth()))
-	for _, item := range pb.GetParamHealth() {
-		offlineAt, _ := ParseTime(item.GetLastOfflineAt())
-		health = append(health, domain.MemberParamHealth{TaskID: item.GetTaskId(), Member: item.GetMemberAlias(), CarriedPeriods: int(item.GetCarriedPeriods()),
-			AlertAfter: int(item.GetAlertAfter()), LastOfflineAt: offlineAt})
-	}
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
-		ParamHealth: health, OfflinePending: int(pb.GetOfflinePending()),
 	}, nil
 }
 
@@ -238,7 +225,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 func EngineTaskToPB(set domain.EngineTask) *factorpb.EngineTask {
 	members := make([]*factorpb.EngineMember, 0, len(set.Members))
 	for _, member := range set.Members {
-		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor), CarryAlertPeriods: int32(member.CarryAlertPeriods), Params: CloneParams(member.Params)})
+		members = append(members, &factorpb.EngineMember{MemberKey: member.Key, Factor: DefToPB(member.Factor), Kind: member.Kind, Params: CloneParams(member.Params)})
 	}
 	return &factorpb.EngineTask{FactorTask: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady}
 }
@@ -252,9 +239,9 @@ func EngineTaskFromPB(pb *factorpb.EngineTask) (domain.EngineTask, error) {
 	for _, raw := range pb.GetMembers() {
 		factor, err := DefFromPB(raw.GetFactor())
 		if err != nil {
-			return domain.EngineTask{}, fmt.Errorf("member %s: %w", raw.GetMemberAlias(), err)
+			return domain.EngineTask{}, fmt.Errorf("member %s: %w", raw.GetMemberKey(), err)
 		}
-		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor, CarryAlertPeriods: int(raw.GetCarryAlertPeriods()), Params: CloneParams(raw.GetParams())})
+		members = append(members, domain.MemberDef{Key: raw.GetMemberKey(), Factor: factor, Kind: raw.GetKind(), Params: CloneParams(raw.GetParams())})
 	}
 	return domain.EngineTask{Set: set, Members: members, ResultReady: pb.GetResultReady()}, nil
 }
@@ -291,30 +278,39 @@ func SnapshotFromPB(params map[string]*factorpb.ParamValue) domain.ParamSnapshot
 	return out
 }
 
-// IntervalToPB 转换一个冻结区间。
-func IntervalToPB(interval domain.ParamInterval) *factorpb.ParamIntervalInfo {
-	return &factorpb.ParamIntervalInfo{MemberAlias: interval.MemberAlias, StartPeriod: interval.Start.Unix(), EndPeriod: interval.End.Unix(),
-		Params: SnapshotToPB(interval.Snapshot), Source: interval.Source, SnapshotHash: interval.SnapshotHash}
+// MemberParamStateToPB 转换一个可变成员最近一次被接受的提交。
+func MemberParamStateToPB(member domain.FactorTaskMember) *factorpb.MemberParamState {
+	state := &factorpb.MemberParamState{
+		MemberKey: member.MemberKey, Params: SnapshotToPB(member.LastSubmittedParams),
+		LastSubmittedPeriod: member.LastSubmittedPeriod, LastRequestId: member.LastRequestID,
+	}
+	if member.LastSubmittedAt != nil {
+		state.LastSubmittedAt = FormatTime(*member.LastSubmittedAt)
+	}
+	return state
 }
 
-// IntervalFromPB 还原一个冻结区间。
-func IntervalFromPB(taskID string, pb *factorpb.ParamIntervalInfo) domain.ParamInterval {
-	snapshot := SnapshotFromPB(pb.GetParams())
-	return domain.ParamInterval{TaskID: taskID, MemberAlias: pb.GetMemberAlias(), Start: time.Unix(pb.GetStartPeriod(), 0).UTC(),
-		End: time.Unix(pb.GetEndPeriod(), 0).UTC(), Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: pb.GetSource()}
+// MemberParamState 是引擎和策略读到的可变成员的最近一次提交；LastSubmittedPeriod 为 0 表示从未提交过（Params 为空）。
+type MemberParamState struct {
+	MemberKey           string
+	Params              domain.ParamSnapshot
+	LastSubmittedPeriod int64
+	LastRequestID       string
+	LastSubmittedAt     time.Time
 }
 
-// FreezeToPB 转换一个成员一期的冻结结果。
-func FreezeToPB(freeze domain.ParamFreeze) *factorpb.MemberParamFreeze {
-	return &factorpb.MemberParamFreeze{MemberAlias: freeze.MemberAlias, Params: SnapshotToPB(freeze.Snapshot), Source: freeze.Source,
-		SnapshotHash: freeze.SnapshotHash, RequestId: freeze.RequestID}
-}
-
-// FreezeFromPB 还原一个成员一期的冻结结果。
-func FreezeFromPB(taskID string, period time.Time, pb *factorpb.MemberParamFreeze) domain.ParamFreeze {
-	snapshot := SnapshotFromPB(pb.GetParams())
-	return domain.ParamFreeze{TaskID: taskID, MemberAlias: pb.GetMemberAlias(), PeriodTime: period.UTC(), Snapshot: snapshot,
-		SnapshotHash: snapshot.Hash(), Source: pb.GetSource(), RequestID: pb.GetRequestId()}
+// MemberParamStateFromPB 还原一个可变成员最近一次被接受的提交。
+func MemberParamStateFromPB(pb *factorpb.MemberParamState) (MemberParamState, error) {
+	submittedAt, err := ParseTime(pb.GetLastSubmittedAt())
+	if err != nil {
+		return MemberParamState{}, fmt.Errorf("member %s last_submitted_at: %w", pb.GetMemberKey(), err)
+	}
+	var params domain.ParamSnapshot
+	if len(pb.GetParams()) > 0 {
+		params = SnapshotFromPB(pb.GetParams())
+	}
+	return MemberParamState{MemberKey: pb.GetMemberKey(), Params: params, LastSubmittedPeriod: pb.GetLastSubmittedPeriod(),
+		LastRequestID: pb.GetLastRequestId(), LastSubmittedAt: submittedAt}, nil
 }
 
 func FormatTime(value time.Time) string {

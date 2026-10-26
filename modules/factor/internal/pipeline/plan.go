@@ -13,8 +13,8 @@ import (
 type LiveInput struct {
 	Set     domain.FactorTask
 	Members []domain.MemberDef
-	// Params 是这一期各成员的冻结参数（别名 → 冻结记录）。
-	Params         map[string]domain.ParamFreeze
+	// Params 是这一期各成员用的参数（成员键 → 快照）。
+	Params         map[string]domain.ParamSnapshot
 	PeriodTime     time.Time
 	Universe       []string
 	UpstreamFailed []string
@@ -51,7 +51,7 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 			maxLookback = member.Factor.LookbackPeriods
 		}
 	}
-	sort.Slice(members, func(i, j int) bool { return members[i].Alias < members[j].Alias })
+	sort.Slice(members, func(i, j int) bool { return members[i].Key < members[j].Key })
 	window, err := clock.Window(target, input.Set.Freq, maxLookback)
 	if err != nil {
 		return Plan{}, err
