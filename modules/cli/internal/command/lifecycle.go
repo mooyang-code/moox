@@ -39,16 +39,16 @@ var (
 
 var lifecycleCmd = &cobra.Command{
 	Use:   "lifecycle",
-	Short: "查看和推进模块、对象的生命周期（未就绪 → 就绪 → 预热 → 运行）",
+	Short: "查看和推进模块、对象的生命周期（未就绪 → 就绪 → 试运行 → 运行）",
 	Long: `查看和推进模块或其管理对象（因子任务、策略实例）的生命周期。
 
   moox-cli lifecycle status                      查看状态、各对象阶段和未就绪原因
   moox-cli lifecycle check  [--task <id>]         重新执行启动前检查
   moox-cli lifecycle init   [--task <id>]         执行初始化（因子任务：载入本地窗口）
-  moox-cli lifecycle start  [--task <id>]         启动：进入预热
-  moox-cli lifecycle confirm [--task <id>]        确认预热结果：进入运行
+  moox-cli lifecycle start  [--task <id>]         启动：进入试运行
+  moox-cli lifecycle confirm [--task <id>]        确认试运行结果：进入运行
   moox-cli lifecycle pause  [--task <id>] [--reason 原因] [--pause-kind manual|system]
-                                                 暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、预热、运行时暂停）
+                                                 暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、试运行、运行时暂停）
   moox-cli lifecycle resume [--task <id>] [--pause-kind system] [--force] [--manual-release]
                                                  恢复：先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后自动放行回到暂停前的阶段；
                                                  --manual-release 追平后停在待放行，等 release（系统级恢复用）；
@@ -83,7 +83,7 @@ func init() {
 		},
 	})
 	shadow := &cobra.Command{
-		Use: "shadow", Short: "查看预热中的策略实例的影子目标（--endpoint 指向 Trade 的健康检查地址）", Args: cobra.NoArgs,
+		Use: "shadow", Short: "查看试运行中的策略实例的影子目标（--endpoint 指向 Trade 的健康检查地址）", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runLifecycleShadow(cmd.Context(), lifecycleFlags, shadowSpace, shadowLimit, cmd.OutOrStdout())
 		},
