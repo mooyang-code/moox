@@ -87,7 +87,6 @@ func TestAutoConfirmNeedsAFullPeriodAfterWarmupStarted(t *testing.T) {
 	recordPeriod(r, "ftask_shared", warmingSince.Add(time.Minute), nil)
 	require.True(t, r.autoConfirmTask(ref, warmingSince))
 
-	require.False(t, r.autoConfirmTask(setRef("ftask_private"), warmingSince), "已关联策略实例的任务不自动确认")
 	require.False(t, r.autoConfirmTask(setRef("ftask_missing"), warmingSince))
 	require.False(t, r.autoConfirmTask(lifecycle.Ref{}, warmingSince))
 }

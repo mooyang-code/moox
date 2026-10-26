@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,7 +16,8 @@ import (
 )
 
 // 策略模块的生命周期（设计第 6 节）：对象是启用的策略实例，只有处于预热或运行的实例才求值。
-// 预热：求值并发出带影子标记的目标（Trade 只换算记录，不下单）；暂停或没有启动：不求值、不发新目标，持仓不动。
+// 试运行：求值并发出带影子标记的目标（Trade 只换算记录，不下单）；没有挂账户的观察实例随后自动确认进入运行，挂了账户的实例由用户 confirm；
+// 暂停或没有启动：不求值、不发新目标，持仓不动。
 
 const (
 	instanceKind            = "strategy_instance"
@@ -46,6 +48,7 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			CheckObject: deps.checkInstance,
 			Objects:     deps.instances,
 			AutoStart:   func(ref lifecycle.Ref) bool { return ref.Kind == instanceKind },
+			AutoConfirm: deps.autoConfirm,
 			Catchup:     deps.catchup,
 			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
@@ -53,6 +56,19 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			},
 		},
 	})
+}
+
+// autoConfirm 报告试运行中的实例能否自动确认进入运行：没有挂组合账户的观察实例只计算、不投递目标，不存在真实下单，
+// 试运行（影子目标）没有意义；挂了账户的实例仍由用户确认，避免自己开始真实下单。
+func (d lifecycleDeps) autoConfirm(ref lifecycle.Ref, _ time.Time) bool {
+	if ref.Kind != instanceKind || d.db == nil {
+		return false
+	}
+	instance, err := d.db.GetInstance(context.Background(), ref.ID)
+	if err != nil {
+		return false
+	}
+	return instance.LogicalAccountID == nil || strings.TrimSpace(*instance.LogicalAccountID) == ""
 }
 
 func instanceRef(id string) lifecycle.Ref { return lifecycle.Ref{Kind: instanceKind, ID: id} }

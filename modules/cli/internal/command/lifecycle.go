@@ -272,7 +272,7 @@ func stageText(s lifecycle.Stage) string {
 	case lifecycle.StageReady:
 		return "就绪"
 	case lifecycle.StageWarming:
-		return "预热"
+		return "试运行"
 	case lifecycle.StageRunning:
 		return "运行"
 	case lifecycle.StagePaused:

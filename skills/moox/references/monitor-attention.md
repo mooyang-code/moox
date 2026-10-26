@@ -56,7 +56,7 @@
 | 重启或发布期间，采集、采集计划、“采集任务清单控制面数据过期”、某组件探针失败 | 依赖的服务重启或发布中，暂时不可用；Monitor 评估时读不到 | 几分钟内自愈，等 2～3 个评估周期（约 1～3 分钟）再看；不要因此去重启别的组件 |
 | 主机“失联”（`presence`） | 主机采集代理 3 分钟没上报：主机离线、网络断、host-agent 停了；或刚重启 Monitor、EventBus | 看当前 `alerts`；只在 `incidents` 里出现的是历史。持续存在才登录主机看 host-agent 进程和 EventBus 连通 |
 | “策略参数投递”（`factor_params` 检查）告警 | 策略导出的 `moox_strategy_param_delivery_stale` 为 1：实例在运行、任务有可变成员，但连续多期（默认 10）结果都没有把下一期参数送达因子侧 | 看对应策略实例的结果里 `c_params_error` 与 FactorMgr 是否可达、参数提交是否被拒绝；规则见 [`docs/模块/因子.md`](../../../docs/模块/因子.md) 第 11 节 |
-| 新建的因子任务一直停在“就绪/预热” | 任务启用后引擎自动 init、start、confirm；本地序列不足最长回看（可变成员按参数上限）时停在预热 | 不是故障：看 `lifecycle status` 给出的原因，需要时导入历史（见初始数据导入） |
+| 新建的因子任务一直停在“就绪/试运行” | 任务启用后引擎自动 init、start、confirm；本地序列不足最长回看（可变成员按参数上限）时停在试运行 | 不是故障：看 `lifecycle status` 给出的原因，需要时导入历史（见初始数据导入） |
 | 数据落后（`late_confirmed`、`success stale`、`run stale`） | 生产链路真的慢了：Collector、Storage Primary、View、Factor 之一 | 按 [`view-catchup.md`](view-catchup.md) 分别量 Primary、View、Factor 三段，再决定补算或修复 |
 | 组件“从未收到监控上报”“监控上报已中断” | 进程没起、连不上 EventBus，或凭据不对 | `native-release.sh status --host <别名>` 看进程与就绪；EventBus 凭据问题见 [`eventbus-credentials.md`](eventbus-credentials.md) |
 

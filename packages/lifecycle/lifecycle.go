@@ -31,7 +31,7 @@ const (
 	StageUninitialized Stage = "uninitialized" // 灰：刚部署，初始化未完成
 	StageNotReady      Stage = "not_ready"     // 红：检查有失败项
 	StageReady         Stage = "ready"         // 蓝：检查全部通过，等待用户启动
-	StageWarming       Stage = "warming"       // 黄：预热，用真实数据跑完整链路，不真实下单
+	StageWarming       Stage = "warming"       // 黄：试运行，用真实数据跑完整链路，不真实下单
 	StageRunning       Stage = "running"       // 绿：用户确认后运行
 	StagePaused        Stage = "paused"        // 橙：手动暂停，或受上游故障影响自动暂停
 	StageResuming      Stage = "resuming"      // 青：恢复追赶，补齐暂停期间缺失的数据；不计算、不下单

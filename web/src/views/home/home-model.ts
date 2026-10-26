@@ -456,7 +456,7 @@ export function statusLine(input: { attention: AttentionItem[]; overview?: Healt
 const PHASE_LABELS: Record<string, string> = {
   uninitialized: "未初始化",
   ready: "就绪",
-  warming: "预热中",
+  warming: "试运行",
   running: "运行中",
   paused: "已暂停",
   partially_paused: "部分暂停",
@@ -465,9 +465,9 @@ const PHASE_LABELS: Record<string, string> = {
 };
 
 export interface SystemStage {
-  /** 圆点颜色：红（健康面异常）、紫（重置中）、青（恢复追赶）、橙（降级或暂停）、黄（预热）、蓝（就绪）、绿（运行）、灰。 */
+  /** 圆点颜色：红（健康面异常）、紫（重置中）、青（恢复追赶）、橙（降级或暂停）、黄（试运行）、蓝（就绪）、绿（运行）、灰。 */
   color: LifecycleColor;
-  /** 形如「运行中 · 降级」「预热中」「就绪」。 */
+  /** 形如「运行中 · 降级」「试运行」「就绪」。 */
   label: string;
   /** 受影响的模块与原因，最多显示 3 条，其余折叠为一条“另有 N 项”。 */
   issues: string[];

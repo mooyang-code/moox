@@ -739,7 +739,7 @@ describe("systemStage", () => {
       issues: [],
       recovered: false
     });
-    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("预热中");
+    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("试运行");
     expect(systemStage({ system: { phase: "ready", color: "blue", health: "healthy" } })?.label).toBe("就绪");
   });
 

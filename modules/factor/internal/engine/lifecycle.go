@@ -156,8 +156,8 @@ func (r *Runtime) autoStartTask(ref lifecycle.Ref) bool {
 	return lookup == SetFound && len(set.Members) > 0
 }
 
-// autoConfirmTask 报告预热中的计算任务能否自动确认进入运行：只对还没关联策略实例的任务（已关联任务的预热阶段有“策略对预热实例
-// 发影子目标”的语义，不自动确认）。证据只放在引擎内存里：任务进入预热之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
+// autoConfirmTask 报告试运行中的计算任务能否自动确认进入运行（任务与策略实例相互独立，是否关联实例不影响）。
+// 证据只放在引擎内存里：任务进入试运行之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
 // 写入了结果行，且这一期各成员的成员契约（成员键、类型、定义哈希）都与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
 // 代价至多是晚一个周期转为运行；因子计算在预热阶段本来就是完整的。
 func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
@@ -165,7 +165,7 @@ func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
 		return false
 	}
 	set, lookup := r.catalog.SetByID(ref.ID)
-	if lookup != SetFound || set.Set.BoundInstanceID != "" {
+	if lookup != SetFound {
 		return false
 	}
 	run, ok := r.runs.lastRecorded(ref.ID)

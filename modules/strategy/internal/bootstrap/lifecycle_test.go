@@ -96,3 +96,40 @@ func TestTriggerGateCatchupModeAndReleaseBoundary(t *testing.T) {
 }
 
 var caughtUpFlag atomic.Bool
+
+// 没挂账户的观察实例不会真实下单，试运行后自动确认进入运行；挂了账户的实例仍由用户确认。
+func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.Open(filepath.Join(dir, "strategy.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	account := "acc-1"
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := db.CreateDefinition(ctx, store.Definition{StrategyID: "s", Name: "s", DSLYaml: "name: s", DSLHash: "sha256:s", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, instance := range []store.Instance{
+		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_a", CreatedAt: now, UpdatedAt: now},
+		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_b", LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.CreateInstance(ctx, instance); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deps := lifecycleDeps{db: db}
+	if !deps.autoConfirm(instanceRef("observer"), time.Time{}) {
+		t.Fatal("没挂账户的实例应自动确认")
+	}
+	if deps.autoConfirm(instanceRef("trader"), time.Time{}) {
+		t.Fatal("挂了账户的实例不应自动确认")
+	}
+	if deps.autoConfirm(instanceRef("missing"), time.Time{}) || deps.autoConfirm(lifecycle.Ref{Kind: "factor_task", ID: "observer"}, time.Time{}) {
+		t.Fatal("不存在的实例与别的对象类型都不自动确认")
+	}
+}
