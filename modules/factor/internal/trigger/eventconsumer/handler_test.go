@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +51,7 @@ func (s *handlerTaskLocator) EnabledTask(_ context.Context, taskID string) (doma
 }
 
 type handlerParamSelector struct {
+	mu      sync.Mutex
 	periods []time.Time
 	sets    []string
 	done    []string
@@ -56,6 +59,8 @@ type handlerParamSelector struct {
 }
 
 func (f *handlerParamSelector) Select(_ context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamSnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.periods, f.sets = append(f.periods, period), append(f.sets, set.TaskID)
 	if f.err != nil {
 		return nil, f.err
@@ -68,6 +73,8 @@ func (f *handlerParamSelector) Select(_ context.Context, set domain.FactorTask, 
 }
 
 func (f *handlerParamSelector) Done(_ context.Context, taskID string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.done = append(f.done, taskID)
 	return nil
 }
@@ -75,13 +82,21 @@ func (f *handlerParamSelector) Done(_ context.Context, taskID string, _ time.Tim
 func (s *handlerTaskLocator) FilterSubjects(context.Context) ([]string, error) { return nil, nil }
 
 type handlerPeriodStore struct {
+	mu     sync.Mutex
 	exists bool
-	err    error
-	calls  int
+	// existsFor 非空时按结果数据集判断“这一期已算过”，用来模拟多个任务里只有部分已经写出。
+	existsFor map[string]bool
+	err       error
+	calls     int
 }
 
-func (s *handlerPeriodStore) ComputedExists(context.Context, string, string, string, int64) (bool, error) {
+func (s *handlerPeriodStore) ComputedExists(_ context.Context, _, resultDatasetID, _ string, _ int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
+	if s.existsFor != nil {
+		return s.existsFor[resultDatasetID], s.err
+	}
 	return s.exists, s.err
 }
 
@@ -90,30 +105,49 @@ func (s *handlerPeriodStore) DatasetColumns(context.Context, string, string) ([]
 }
 
 type handlerRunner struct {
+	mu     sync.Mutex
 	plans  []pipeline.Plan
 	out    pipeline.Outcome
 	err    error
 	called chan struct{}
+	// errFor 非空时按任务返回错误（优先于 err）；hook 在记录计划之后、返回之前调用，用来制造并发等待。
+	errFor map[string]error
+	hook   func(pipeline.Plan)
 }
 
 func (r *handlerRunner) Run(_ context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	r.mu.Lock()
 	r.plans = append(r.plans, plan)
+	r.mu.Unlock()
 	if r.called != nil {
 		r.called <- struct{}{}
+	}
+	if r.hook != nil {
+		r.hook(plan)
+	}
+	if err, ok := r.errFor[plan.Set.TaskID]; ok {
+		return r.out, err
 	}
 	return r.out, r.err
 }
 
 type testTaskLocks struct {
+	mu     sync.Mutex
 	locked map[string]int
 }
 
 func (l *testTaskLocks) LockContext(_ context.Context, taskID string) (func(), error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.locked == nil {
 		l.locked = make(map[string]int)
 	}
 	l.locked[taskID]++
-	return func() { l.locked[taskID]-- }, nil
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.locked[taskID]--
+	}, nil
 }
 
 func TestHandlerAcksWhenNoEnabledTask(t *testing.T) {
@@ -349,4 +383,91 @@ func collectorPeriodSubject(t *testing.T, spaceID, datasetID string) string {
 	subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, spaceID, datasetID)
 	require.NoError(t, err)
 	return subject
+}
+
+// secondTask 是同一源数据集上的另一个启用任务。
+func secondTask() domain.EngineTask {
+	set := enabledTestTask()
+	set.TaskID, set.ResultDatasetID = "ftask_second", "dataset_factor_second"
+	return domain.EngineTask{Set: set, Members: domain.AsMembers(domain.FactorDef{FactorID: "f", InputColumns: []string{"close"}}), ResultReady: true}
+}
+
+// 同一事件的各任务并发计算：两个任务的开算时间重叠，每个任务都要等到另一个也开始才能继续，串行分发会超时。
+func TestHandlerComputesTasksConcurrently(t *testing.T) {
+	var started sync.WaitGroup
+	started.Add(2)
+	overlap := make(chan struct{})
+	go func() { started.Wait(); close(overlap) }()
+	runner := &handlerRunner{hook: func(pipeline.Plan) {
+		started.Done()
+		select {
+		case <-overlap:
+		case <-time.After(5 * time.Second):
+		}
+	}}
+	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{secondTask()}},
+		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
+	t.Cleanup(handler.Close)
+
+	result := handler.Handle(context.Background(), collectorDelivery(t, "event-parallel"))
+	require.Equal(t, jetstream.ACK, result.Decision)
+	select {
+	case <-overlap:
+	default:
+		t.Fatal("两个任务的开算时间没有重叠：任务不是并发分发的")
+	}
+	require.Len(t, runner.plans, 2)
+}
+
+// 一个任务失败不影响另一个：另一个照常写出；事件重投后已写出的任务被跳过，只重算失败的任务。
+func TestHandlerOneTaskFailureKeepsTheOtherAndRedeliverySkipsIt(t *testing.T) {
+	first, second := enabledTestTask(), secondTask()
+	runner := &handlerRunner{errFor: map[string]error{first.TaskID: errors.Join(errors.New("读源数据失败"), storageio.ErrInfra)}}
+	periodStore := &handlerPeriodStore{existsFor: map[string]bool{}}
+	handler := NewHandler(&handlerTaskLocator{set: first, found: true, extra: []domain.EngineTask{second}}, periodStore, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
+	t.Cleanup(handler.Close)
+
+	result := handler.Handle(context.Background(), collectorDelivery(t, "event-partial"))
+	require.Equal(t, jetstream.RETRY, result.Decision)
+	require.ErrorIs(t, result.Err, storageio.ErrInfra)
+	planned := map[string]int{}
+	for _, plan := range runner.plans {
+		planned[plan.Set.TaskID]++
+	}
+	require.Equal(t, map[string]int{first.TaskID: 1, second.Set.TaskID: 1}, planned, "失败的任务不拖住另一个任务")
+
+	// 重投：第二个任务的完成标记已经写出，只重算第一个。
+	periodStore.existsFor[second.Set.ResultDatasetID] = true
+	delete(runner.errFor, first.TaskID)
+	result = handler.Handle(context.Background(), collectorDelivery(t, "event-partial"))
+	require.Equal(t, jetstream.ACK, result.Decision)
+	planned = map[string]int{}
+	for _, plan := range runner.plans {
+		planned[plan.Set.TaskID]++
+	}
+	require.Equal(t, map[string]int{first.TaskID: 2, second.Set.TaskID: 1}, planned, "已写出的任务在重投时被跳过")
+}
+
+// 同一任务内部仍然串行：同一个任务的两个事件并发到达时，两次计算不重叠。
+func TestHandlerKeepsOnePeriodAtATimePerTask(t *testing.T) {
+	var active, peak atomic.Int32
+	runner := &handlerRunner{hook: func(pipeline.Plan) {
+		peak.Store(max(peak.Load(), active.Add(1)))
+		time.Sleep(30 * time.Millisecond)
+		active.Add(-1)
+	}}
+	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
+	t.Cleanup(handler.Close)
+
+	var wg sync.WaitGroup
+	for _, id := range []string{"event-serial-1", "event-serial-2", "event-serial-3"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.Equal(t, jetstream.ACK, handler.Handle(context.Background(), collectorDelivery(t, id)).Decision)
+		}()
+	}
+	wg.Wait()
+	require.Len(t, runner.plans, 3)
+	require.EqualValues(t, 1, peak.Load(), "同一任务的期次不能并行计算")
 }

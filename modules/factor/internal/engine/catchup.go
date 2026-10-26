@@ -27,17 +27,32 @@ func (r *Runtime) runCatchup(ctx context.Context) {
 		if consumer == nil || !r.active() {
 			continue
 		}
+		var behind []string
 		for _, state := range r.continuity.States() {
-			if !state.Behind() || (only != "" && state.TaskID != only) {
-				continue
+			if state.Behind() && (only == "" || state.TaskID == only) {
+				behind = append(behind, state.TaskID)
 			}
-			advanceCtx, cancel := context.WithTimeout(ctx, r.cfg.Pipeline.PeriodBudgetMax)
-			if err := consumer.Advance(advanceCtx, state.TaskID); err != nil {
-				log.WarnContextf(ctx, "factor_watermark_catchup_failed task_id=%s error=%v", state.TaskID, err)
-			}
-			cancel()
 		}
+		advanceAll(ctx, behind, r.cfg.Pipeline.PeriodBudgetMax, consumer.Advance)
 	}
+}
+
+// advanceAll 并发推进各任务的追赶：任务之间互不依赖，每个任务内部仍按期次串行（Advance 走任务自己的串行通道）。
+// 每个任务有自己的时限，全部结束后返回；单个任务失败只记日志，不影响其他任务。
+func advanceAll(ctx context.Context, taskIDs []string, budget time.Duration, advance func(context.Context, string) error) {
+	var wg sync.WaitGroup
+	for _, taskID := range taskIDs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			advanceCtx, cancel := context.WithTimeout(ctx, budget)
+			defer cancel()
+			if err := advance(advanceCtx, taskID); err != nil {
+				log.WarnContextf(ctx, "factor_watermark_catchup_failed task_id=%s error=%v", taskID, err)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // onFilled 处理补齐通知：记下补采确认缺失的标的，标记这段周期已补齐（上游失败的待办不再等 Settle），

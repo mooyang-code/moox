@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,4 +154,51 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	require.True(t, r.gate("ftask_a"))
 	require.False(t, r.catchupGate("ftask_a"))
 	_ = store
+}
+
+// 各任务的追赶并发进行：两个任务同时在推进时才都能结束；一个失败不影响另一个；全部结束后才返回。
+func TestAdvanceAllRunsTasksConcurrently(t *testing.T) {
+	var running, peak atomic.Int32
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		advanceAll(context.Background(), []string{"ftask_a", "ftask_b"}, time.Minute, func(_ context.Context, taskID string) error {
+			peak.Store(max(peak.Load(), running.Add(1)))
+			defer running.Add(-1)
+			started <- taskID
+			<-release
+			if taskID == "ftask_a" {
+				return errors.New("暂时不可用")
+			}
+			return nil
+		})
+		close(finished)
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("两个任务应同时开始推进")
+		}
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("全部任务结束后应返回")
+	}
+	require.EqualValues(t, 2, peak.Load())
+}
+
+// 每个任务有自己的时限，不被其他任务拖累。
+func TestAdvanceAllGivesEachTaskItsOwnDeadline(t *testing.T) {
+	deadlines := make(chan time.Time, 2)
+	advanceAll(context.Background(), []string{"ftask_a", "ftask_b"}, time.Hour, func(ctx context.Context, _ string) error {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		deadlines <- deadline
+		return nil
+	})
+	require.Len(t, deadlines, 2)
 }

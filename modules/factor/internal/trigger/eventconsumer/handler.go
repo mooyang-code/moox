@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -133,8 +134,8 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
 		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 	}
-	// 同一个源数据集可以有多个任务（各策略实例的私有任务）：事件分给每个启用的任务，各自在自己的串行通道里计算。
-	// 任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
+	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
+	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
 	sets, lookupErr := h.sets.EnabledSetsByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
 	if lookupErr != nil {
 		err = fmt.Errorf("%w: lookup enabled factor tasks: %v", storageio.ErrInfra, lookupErr)
@@ -143,31 +144,39 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	if err != nil {
 		errs = append(errs, err)
 	}
-	for _, engineTask := range sets {
+	taskErrs := make([]error, len(sets))
+	var wg sync.WaitGroup
+	for index, engineTask := range sets {
 		set, members := engineTask.Set, engineTask.Members
 		if !engineTask.ResultReady {
-			errs = append(errs, fmt.Errorf("%w: result dataset of factor task %s is not ready", storageio.ErrInfra, set.TaskID))
+			taskErrs[index] = fmt.Errorf("%w: result dataset of factor task %s is not ready", storageio.ErrInfra, set.TaskID)
 			continue
 		}
-		_, setErr := h.runners.Do(ctx, set.TaskID, func(runnerCtx context.Context) (pipeline.Outcome, error) {
-			if set.Status != domain.TaskStatusEnabled {
-				return pipeline.Outcome{}, nil
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, setErr := h.runners.Do(ctx, set.TaskID, func(runnerCtx context.Context) (pipeline.Outcome, error) {
+				if set.Status != domain.TaskStatusEnabled {
+					return pipeline.Outcome{}, nil
+				}
+				if set.TaskID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
+					return pipeline.Outcome{}, fmt.Errorf("enabled factor task identity does not match collector event")
+				}
+				if h.gate != nil && !h.gate(set.TaskID) {
+					return pipeline.Outcome{}, nil
+				}
+				if h.continuity != nil {
+					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, set, members, event)
+				}
+				return h.computePeriod(runnerCtx, set, members, event.periodTime, event.universe, event.failed, event.eventID)
+			})
+			if setErr != nil {
+				taskErrs[index] = fmt.Errorf("factor task %s: %w", set.TaskID, setErr)
 			}
-			if set.TaskID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
-				return pipeline.Outcome{}, fmt.Errorf("enabled factor task identity does not match collector event")
-			}
-			if h.gate != nil && !h.gate(set.TaskID) {
-				return pipeline.Outcome{}, nil
-			}
-			if h.continuity != nil {
-				return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, set, members, event)
-			}
-			return h.computePeriod(runnerCtx, set, members, event.periodTime, event.universe, event.failed, event.eventID)
-		})
-		if setErr != nil {
-			errs = append(errs, fmt.Errorf("factor task %s: %w", set.TaskID, setErr))
-		}
+		}()
 	}
+	wg.Wait()
+	errs = append(errs, taskErrs...)
 	err = errors.Join(errs...)
 	if err == nil {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}

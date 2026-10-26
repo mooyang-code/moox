@@ -113,9 +113,9 @@ type replayPeriod struct {
 
 // ReplayFactorState 是一个成员本期的状态：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
 type ReplayFactorState struct {
-	Status         string   `json:"status"`
-	FactorID       string   `json:"factor_id"`
-	DefinitionHash string   `json:"definition_hash"`
+	Status         string `json:"status"`
+	FactorID       string `json:"factor_id"`
+	DefinitionHash string `json:"definition_hash"`
 	// Kind 是成员类型（fixed 或 var）：策略据此和启用时固化的成员契约比对。
 	Kind           string   `json:"kind"`
 	FailedSubjects []string `json:"failed_subjects,omitempty"`
