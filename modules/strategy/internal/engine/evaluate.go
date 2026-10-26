@@ -99,6 +99,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		summary.Allocated = allocated.String()
 		decision.Summary.Rules[rule.Rule.ID] = summary
 		decision.State.Rules[rule.Rule.ID] = result.state
+		decision.Summary.Notes = append(decision.Summary.Notes, result.notes...)
 		decision.Items = append(decision.Items, result.items...)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}

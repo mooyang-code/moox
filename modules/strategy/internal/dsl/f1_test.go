@@ -257,3 +257,11 @@ func TestF1CompileChecksColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, refs, "po__65_193")
 }
+
+func TestF1RejectsNonFiniteNumbers(t *testing.T) {
+	for _, value := range []string{".nan", ".inf", "-.inf", "!!float NaN"} {
+		text := "name: n\nrules:\n  - id: n\n    type: f1\n    weight: 1\n    f1:\n      seal999: false\n      long_factors: [{factor: a}]\n      short_weight: 0\n      stg_weight: " + value + "\n"
+		_, err := Parse([]byte(text))
+		require.ErrorContains(t, err, "有限的数字", value)
+	}
+}

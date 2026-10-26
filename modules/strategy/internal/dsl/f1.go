@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -332,8 +333,8 @@ func scalarFloat(node *yaml.Node, path string) (float64, error) {
 		return 0, fmt.Errorf("%s 必须是数字", path)
 	}
 	value, err := strconv.ParseFloat(strings.TrimSpace(node.Value), 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s 必须是数字", path)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, fmt.Errorf("%s 必须是有限的数字", path)
 	}
 	return value, nil
 }
@@ -799,8 +800,9 @@ func (r Rule) F1Columns() []string {
 	return sortedKeys(set)
 }
 
-// F1Groups 按排名签名把子策略分组：签名包括影响候选、排名与选币的全部字段（因子、计算方式、名单、前置过滤、个数），
-// 不包括只影响配权与持有的字段（hold_period、long/short_weight、filter_after、stg_weight）。组按签名排序。
+// F1Groups 按排名签名把子策略分组：签名包括影响候选、排名与选币的全部字段（因子、计算方式、名单、前置过滤、个数，
+// 以及哪一侧的权重大于 0——这决定这一侧要不要选币），不包括只影响配权与持有的字段（hold_period、权重大小、
+// filter_after、stg_weight）。组按签名排序。数值在解析时已保证有限，序列化不会失败。
 func (s *F1Spec) F1Groups() []F1Group {
 	type signature struct {
 		CalcType     string     `json:"c"`
@@ -813,12 +815,14 @@ func (s *F1Spec) F1Groups() []F1Group {
 		ShortWhite   []string   `json:"sw"`
 		ShortBlack   []string   `json:"sb"`
 		FilterBefore []F1Filter `json:"fb"`
+		LongActive   bool       `json:"la"`
+		ShortActive  bool       `json:"sa"`
 	}
 	index := make(map[string]int)
 	var groups []F1Group
 	for i, sub := range s.Subs {
 		raw, _ := json.Marshal(signature{sub.CalcType, sub.LongFactors, sub.ShortFactors, sub.LongCoinNum, sub.ShortCoinNum,
-			sub.LongWhite, sub.LongBlack, sub.ShortWhite, sub.ShortBlack, sub.FilterBefore})
+			sub.LongWhite, sub.LongBlack, sub.ShortWhite, sub.ShortBlack, sub.FilterBefore, sub.LongWeight > 0, sub.ShortWeight > 0})
 		key := Hash(raw)
 		at, ok := index[key]
 		if !ok {

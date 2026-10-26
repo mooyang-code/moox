@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -18,6 +19,8 @@ import (
 const (
 	reasonF1FilterAfter = "f1_filter_after"
 	f1ReasonPrefix      = "f1:"
+	// f1StateNoteBytes 是 f1 状态的观察阈值：超过时在本期摘要里说明（不截断）。
+	f1StateNoteBytes = 256 << 10
 )
 
 // F1State 是 f1 规则下一期需要的状态：按排名签名分组的开仓记录（设计 7.4）。
@@ -43,7 +46,8 @@ type F1Pick struct {
 }
 
 // partitionF1 是 f1 规则专用的集合划分：缺数只算没有行、close 或 volume 为空、或 K 线对该标的失败；
-// 因子列为空不算缺数（F1 用中位数名次补上，过滤按 between 语义计算）。
+// 因子列为空不算缺数（F1 用中位数名次补上，过滤按 between 语义计算）。volume 为 0 的标的既不可用也不缺数（inactive），
+// 所以可用集合就是候选行 B，min_universe 按它守门。
 func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{})}
 	heldSet := make(map[string]struct{}, len(held))
@@ -80,6 +84,10 @@ func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 		}
 		if reason != "" {
 			sets.missing[id] = reason
+			continue
+		}
+		if row.Values["volume"] <= 0 {
+			sets.inactive = append(sets.inactive, id)
 			continue
 		}
 		sets.available = append(sets.available, id)
@@ -456,13 +464,8 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 	for _, id := range sets.expected {
 		expected[id] = struct{}{}
 	}
-	// 1. 候选行 B：可用并且 volume > 0，按 F1 的行顺序（symbol 升序）排列。
-	candidates := make([]string, 0, len(sets.available))
-	for _, id := range sets.available {
-		if frame.Rows[id].Values["volume"] > 0 {
-			candidates = append(candidates, id)
-		}
-	}
+	// 1. 候选行 B：可用集合（有行且 volume > 0），按 F1 的行顺序（symbol 升序）排列。
+	candidates := append([]string(nil), sets.available...)
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := f1Key(candidates[i]), f1Key(candidates[j])
 		if a != b {
@@ -605,6 +608,10 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 	}
 	result.selected = len(newlyPicked)
 	result.state = RuleState{Held: held, F1: state}
+	// 开仓记录只在该币累计满 h 个候选行后删除：长期没有候选行的币会让记录一直保留（截断会改变结果，所以只提示）。
+	if raw, err := json.Marshal(state); err == nil && len(raw) > f1StateNoteBytes {
+		result.notes = append(result.notes, fmt.Sprintf("规则 %s 的 f1 状态有 %d 字节，超过 %d 字节：有标的长期没有候选行，开仓记录一直保留", rule.Rule.ID, len(raw), f1StateNoteBytes))
+	}
 	result.items = explain.list()
 	return result, nil
 }

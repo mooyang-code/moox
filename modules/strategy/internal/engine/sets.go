@@ -15,6 +15,8 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
+	// inactive 是 f1 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（F1 只保留 volume > 0 的行）。
+	inactive []string
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。

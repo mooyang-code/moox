@@ -17,6 +17,8 @@ type ruleResult struct {
 	filtered int
 	scored   int
 	selected int
+	// notes 是写进本期摘要的说明（f1 状态体积提示）。
+	notes []string
 }
 
 // 明细原因：holding 规则下只由延续批次持有的标的记 holding，本期又在某个阶段被淘汰时记 holding:<原因>；
