@@ -142,3 +142,15 @@ func (s *Store) ListMemberParamStates(ctx context.Context, taskID string) ([]dom
 	}
 	return members, nil
 }
+
+// ClearParamSubmissions 清掉全部可变成员最近一次被接受的提交（数据重置用）；成员本身和配置不变，也不更新 c_mtime。
+func (s *Store) ClearParamSubmissions(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE t_factor_task_members
+		SET c_last_submitted_params = '{}', c_last_submitted_period = 0, c_last_request_id = '', c_last_submitted_at = NULL
+		WHERE c_kind = ?
+	`, domain.MemberKindVar).Error
+}

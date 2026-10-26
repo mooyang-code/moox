@@ -188,3 +188,23 @@ func TestRecalcJobDefaultFilledRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, done.DefaultFilled)
 }
+
+// 数据重置清掉提交状态，成员和配置保持不变。
+func TestClearParamSubmissionsKeepsMembers(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
+	key := addVarMember(t, s, "task_prices", "ema")
+	require.Equal(t, SubmitAccepted, submit(t, s, 1000, "req-1", key, snapshot(30, nil)).Result)
+
+	require.NoError(t, s.ClearParamSubmissions(ctx))
+	states, err := s.ListMemberParamStates(ctx, "task_prices")
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, int64(0), states[0].LastSubmittedPeriod)
+	require.Empty(t, states[0].LastRequestID)
+	require.Nil(t, states[0].LastSubmittedAt)
+	require.Equal(t, map[string]float64{"span": 20}, states[0].Params, "默认参数是配置，保留")
+	// 目标期可以重新从头开始。
+	require.Equal(t, SubmitAccepted, submit(t, s, 500, "req-2", key, snapshot(40, nil)).Result)
+}
