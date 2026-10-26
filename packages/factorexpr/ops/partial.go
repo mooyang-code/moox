@@ -52,7 +52,7 @@ func byPartialWindow(fn func(w []float64) float64) Rolling {
 }
 
 // partialSmoothing 是 truncatedSmoothing 的部分窗口版本：窗口最老的有效值作为递推初值。窗口里没有 NaN 时，
-// 权重与 truncatedSmoothing 完全相同，结果逐位一致。
+// 用与 truncatedSmoothing 完全相同的权重向量与求和路径，结果逐位一致；只有序列开头的部分窗口才按有效段重新取权重。
 func partialSmoothing(alpha float64, k int) SeriesKernel {
 	decay := make([]float64, k) // decay[d] = (1−α)^d，与 truncatedSmoothing 一样逐次相乘得到
 	decay[0] = 1
@@ -63,22 +63,30 @@ func partialSmoothing(alpha float64, k int) SeriesKernel {
 	for d := range weight {
 		weight[d] = alpha * decay[d]
 	}
+	full := make([]float64, k) // 完整窗口的权重（0 为最老），与 truncatedSmoothing 的 weights 相同
+	for i := 1; i < k; i++ {
+		full[i] = weight[k-1-i]
+	}
+	full[0] = decay[k-1]
 	return func(out []float64, outStart int, in []Series) {
 		x := in[0]
 		for i := range out {
 			w := x.Window(outStart+i, k)
 			tail := validTail(w)
-			if tail == nil {
+			switch {
+			case tail == nil:
 				out[i] = nan
-				continue
+			case len(tail) == k:
+				out[i] = factorexpr.Finite(exactSumOf(k, func(j int) float64 { return full[j] * w[j] }))
+			default:
+				last := len(tail) - 1
+				out[i] = factorexpr.Finite(exactSumOf(len(tail), func(j int) float64 {
+					if j == 0 {
+						return decay[last] * tail[0]
+					}
+					return weight[last-j] * tail[j]
+				}))
 			}
-			last := len(tail) - 1
-			out[i] = factorexpr.Finite(exactSumOf(len(tail), func(j int) float64 {
-				if j == 0 {
-					return decay[last] * tail[0]
-				}
-				return weight[last-j] * tail[j]
-			}))
 		}
 	}
 }
