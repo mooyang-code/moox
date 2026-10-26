@@ -91,9 +91,11 @@ type F1Spec struct {
 }
 
 // F1Group 是排名签名相同的一组子策略：它们每期的候选、排名与选币完全相同，只算一次。
+// StateKey 同时覆盖签名与组内全部子策略：组成员或任何子策略字段变化时，上一期的开仓记录不再沿用。
 type F1Group struct {
-	Key  string
-	Subs []int // F1Spec.Subs 的下标
+	Key      string
+	StateKey string
+	Subs     []int // F1Spec.Subs 的下标
 }
 
 var (
@@ -825,6 +827,15 @@ func (s *F1Spec) F1Groups() []F1Group {
 			groups = append(groups, F1Group{Key: key})
 		}
 		groups[at].Subs = append(groups[at].Subs, i)
+	}
+	for i := range groups {
+		members := make([]F1Sub, len(groups[i].Subs))
+		for k, index := range groups[i].Subs {
+			members[k] = s.Subs[index]
+			members[k].Row = 0 // 行号不影响状态
+		}
+		raw, _ := json.Marshal(members)
+		groups[i].StateKey = Hash(append([]byte(groups[i].Key), raw...))
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Key < groups[j].Key })
 	return groups

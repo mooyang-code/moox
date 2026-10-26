@@ -78,6 +78,10 @@ func heldColumns(rule *dsl.CompiledRule) (columns, previous []string) {
 // 混有其他原因（因子失败、K 线失败、无行、值缺失而没有证据），就完全按现有逻辑处理。
 func frozenSet(program *dsl.Program, frame Frame, previous State) map[string]struct{} {
 	frozen := make(map[string]struct{})
+	// f1 规则不与其他规则混用，持仓到期只看候选行（与 F1 一致），不参与空洞冻结。
+	if program.Strategy.HasF1() {
+		return frozen
+	}
 	candidates := make([]string, 0, len(previous.Targets))
 	for id, raw := range previous.Targets {
 		weight, err := quant.Parse(raw)

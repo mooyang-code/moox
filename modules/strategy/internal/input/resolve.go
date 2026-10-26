@@ -87,6 +87,9 @@ func Resolve(ctx context.Context, client Client, spaceID, taskID string, strateg
 	if err := CheckCalendar(resolved.Calendar, resolved.Bar); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
 	}
+	if resolved.Spot && strategy.HasF1() {
+		return Resolved{}, nil, errors.New("f1 规则只用于合约 View：按数量持有会让权重之和略大于 1，现货 View 不允许")
+	}
 	if resolved.Spot {
 		if strategy.Portfolio.Leverage.Cmp(quant.One()) > 0 {
 			return Resolved{}, nil, fmt.Errorf("现货 View 不允许 portfolio.leverage 大于 1（当前 %s）", strategy.Portfolio.Leverage.String())
