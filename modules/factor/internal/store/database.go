@@ -110,30 +110,30 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_category_id", "c_spec", "c_spec_hash", "c_allow_partial_universe", "c_ctime", "c_mtime",
 		},
-		"t_factor_set_members": {
-			"c_set_id", "c_member_alias", "c_factor_id", "c_status", "c_carry_alert_periods", "c_params", "c_ctime", "c_mtime",
+		"t_factor_task_members": {
+			"c_task_id", "c_member_alias", "c_factor_id", "c_status", "c_carry_alert_periods", "c_params", "c_ctime", "c_mtime",
 		},
 		"t_factor_param_requests": {
-			"c_seq", "c_request_id", "c_set_id", "c_member_alias", "c_period_time", "c_based_on_period",
+			"c_seq", "c_request_id", "c_task_id", "c_member_alias", "c_period_time", "c_based_on_period",
 			"c_snapshot_hash", "c_writer", "c_status", "c_ctime",
 		},
 		"t_factor_param_snapshots": {
 			"c_snapshot_hash", "c_snapshot_json", "c_ctime",
 		},
 		"t_factor_param_freezes": {
-			"c_set_id", "c_member_alias", "c_start_period", "c_end_period", "c_snapshot_hash", "c_source", "c_mtime",
+			"c_task_id", "c_member_alias", "c_start_period", "c_end_period", "c_snapshot_hash", "c_source", "c_mtime",
 		},
 		"t_factor_param_frozen_periods": {
-			"c_set_id", "c_frozen_through", "c_mtime",
+			"c_task_id", "c_frozen_through", "c_mtime",
 		},
 		"t_factor_recalc_jobs": {
-			"c_job_id", "c_request_id", "c_set_id", "c_members_json", "c_subjects_json",
+			"c_job_id", "c_request_id", "c_task_id", "c_members_json", "c_subjects_json",
 			"c_members_omitted", "c_subjects_omitted",
 			"c_start_time", "c_end_time", "c_status", "c_progress_time", "c_error",
 			"c_engine_id", "c_lease_token", "c_lease_expires_at", "c_ctime", "c_mtime",
 		},
-		"t_factor_sets": {
-			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq",
+		"t_factor_tasks": {
+			"c_task_id", "c_space_id", "c_source_dataset_id", "c_freq",
 			"c_result_dataset_id", "c_owner_instance_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_engine_heartbeat": {

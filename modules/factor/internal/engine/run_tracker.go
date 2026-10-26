@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 )
 
-// runTracker keeps the latest live period per factor set in memory. The period
+// runTracker keeps the latest live period per factor task in memory. The period
 // pipeline has no durable ledger by design, so these values are only meant for
 // status display and reset on restart.
 type runTracker struct {
@@ -53,12 +53,12 @@ func (t *runTracker) setOnRecord(hook func()) {
 	t.mu.Unlock()
 }
 
-func (t *runTracker) record(setID string, periodTime time.Time, status string, outcome pipeline.Outcome, completedAt time.Time) {
-	if t == nil || setID == "" || periodTime.IsZero() {
+func (t *runTracker) record(taskID string, periodTime time.Time, status string, outcome pipeline.Outcome, completedAt time.Time) {
+	if t == nil || taskID == "" || periodTime.IsZero() {
 		return
 	}
 	t.mu.Lock()
-	if current, ok := t.runs[setID]; ok && current.periodTime.After(periodTime) {
+	if current, ok := t.runs[taskID]; ok && current.periodTime.After(periodTime) {
 		t.mu.Unlock()
 		return
 	}
@@ -76,7 +76,7 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 			GapSubjects:    factor.GapSubjects,
 		})
 	}
-	t.runs[setID] = trackedRun{
+	t.runs[taskID] = trackedRun{
 		periodTime: periodTime, completedAt: completedAt, status: status, factors: factors,
 		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming, rows: outcome.RowsWritten,
 	}
@@ -88,12 +88,12 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 // done 为真表示账本里这一期已经没有待恢复项，这时按补齐的结果改写摘要：去掉已补齐的失败标的与空洞标的，
 // 不再算作预热中，余下没有失败时记为完成；completedAt 作为这一期新的完成时刻，并像实时周期一样立刻补发心跳。
 // 已完成、已失败的期次不改写（失败的期次没有写完，补算只补跳过的项）。返回是否改写了摘要。
-func (t *runTracker) repair(setID string, result RepairedPeriod, completedAt time.Time) bool {
-	if t == nil || setID == "" {
+func (t *runTracker) repair(taskID string, result RepairedPeriod, completedAt time.Time) bool {
+	if t == nil || taskID == "" {
 		return false
 	}
 	t.mu.Lock()
-	run, ok := t.runs[setID]
+	run, ok := t.runs[taskID]
 	if !ok || !run.periodTime.Equal(result.Period) || run.status == "failed" || (run.status == "complete" && run.warming == 0) {
 		t.mu.Unlock()
 		return false
@@ -103,7 +103,7 @@ func (t *runTracker) repair(setID string, result RepairedPeriod, completedAt tim
 	if result.Done {
 		run = run.withRepairs(completedAt)
 	}
-	t.runs[setID] = run
+	t.runs[taskID] = run
 	t.mu.Unlock()
 	if result.Done {
 		t.notifyRecorded()
@@ -213,21 +213,21 @@ func subjectsWithout(subjects []string, drop map[string]struct{}) []string {
 	return out
 }
 
-func (t *runTracker) all(now time.Time) []domain.SetRunSummary {
+func (t *runTracker) all(now time.Time) []domain.TaskRunSummary {
 	if t == nil {
 		return nil
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	out := make([]domain.SetRunSummary, 0, len(t.runs))
-	for setID, run := range t.runs {
-		out = append(out, summaryOf(setID, run, now))
+	out := make([]domain.TaskRunSummary, 0, len(t.runs))
+	for taskID, run := range t.runs {
+		out = append(out, summaryOf(taskID, run, now))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
+	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
 	return out
 }
 
-func summaryOf(setID string, run trackedRun, now time.Time) domain.SetRunSummary {
+func summaryOf(taskID string, run trackedRun, now time.Time) domain.TaskRunSummary {
 	lag := int64(now.Sub(run.periodTime).Seconds())
 	if lag < 0 {
 		lag = 0
@@ -236,19 +236,19 @@ func summaryOf(setID string, run trackedRun, now time.Time) domain.SetRunSummary
 	if !run.completedAt.IsZero() {
 		completedAt = run.completedAt.Unix()
 	}
-	return domain.SetRunSummary{
-		SetID: setID, LastPeriodTime: run.periodTime.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
+	return domain.TaskRunSummary{
+		TaskID: taskID, LastPeriodTime: run.periodTime.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
 }
 
-// lastRecorded 返回集合最近记录的一期原始记录（只在内存里，引擎重启后清空）。
-func (t *runTracker) lastRecorded(setID string) (trackedRun, bool) {
+// lastRecorded 返回任务最近记录的一期原始记录（只在内存里，引擎重启后清空）。
+func (t *runTracker) lastRecorded(taskID string) (trackedRun, bool) {
 	if t == nil {
 		return trackedRun{}, false
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	run, ok := t.runs[setID]
+	run, ok := t.runs[taskID]
 	return run, ok
 }

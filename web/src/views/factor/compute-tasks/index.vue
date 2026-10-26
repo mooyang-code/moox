@@ -10,7 +10,7 @@
 
         <div class="result-toolbar">
           <span class="result-count">
-            共 {{ filteredSets.length }} 个计算任务
+            共 {{ filteredTasks.length }} 个计算任务
             <InfoTip text="一个计算任务 = 一个源数据集 × 一个频率，持续计算一组因子，写入一个结果数据集和默认视图。" />
           </span>
           <a-space wrap>
@@ -28,7 +28,7 @@
         </div>
 
         <a-table
-          row-key="set_id"
+          row-key="task_id"
           size="small"
           :bordered="{ cell: true }"
           :data="rows"
@@ -42,8 +42,8 @@
           <template #columns>
             <a-table-column title="计算任务" :width="240">
               <template #cell="{ record }">
-                <a-link @click="openDetail(record.set_id)">{{ record.label }}</a-link>
-                <div class="cell-sub">{{ record.set_id }}</div>
+                <a-link @click="openDetail(record.task_id)">{{ record.label }}</a-link>
+                <div class="cell-sub">{{ record.task_id }}</div>
               </template>
             </a-table-column>
             <a-table-column title="源数据集" :width="200" :ellipsis="true" :tooltip="true">
@@ -60,7 +60,7 @@
             </a-table-column>
             <a-table-column title="周期健康" :width="100" align="center">
               <template #cell="{ record }">
-                <HealthTag :set="record.info.factor_set" :last-run="record.info.last_run" />
+                <HealthTag :set="record.info.factor_task" :last-run="record.info.last_run" />
               </template>
             </a-table-column>
             <a-table-column title="最近周期" :width="190">
@@ -72,27 +72,27 @@
             <a-table-column title="操作" :width="230" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space wrap>
-                  <a-button size="mini" type="text" @click="openDetail(record.set_id)">详情</a-button>
+                  <a-button size="mini" type="text" @click="openDetail(record.task_id)">详情</a-button>
                   <a-button
                     v-if="record.action === 'retry'"
                     size="mini"
                     type="text"
                     :loading="busy"
-                    @click="retryActivation(record.info.factor_set)"
+                    @click="retryActivation(record.info.factor_task)"
                   >
                     重试激活
                   </a-button>
                   <a-popconfirm
                     v-if="record.action === 'disable'"
                     content="停用后不再接收周期事件；结果数据集和 View 保留，确认停用？"
-                    @ok="toggleStatus(record.info.factor_set, 'disabled')"
+                    @ok="toggleStatus(record.info.factor_task, 'disabled')"
                   >
                     <a-button size="mini" type="text" status="danger" :loading="busy">停用</a-button>
                   </a-popconfirm>
                   <a-popconfirm
                     v-if="record.action === 'enable'"
                     :content="ENABLE_ENGINE_HINT"
-                    @ok="toggleStatus(record.info.factor_set, 'enabled')"
+                    @ok="toggleStatus(record.info.factor_task, 'enabled')"
                   >
                     <a-button size="mini" type="text" status="success" :loading="busy">启用</a-button>
                   </a-popconfirm>
@@ -103,7 +103,7 @@
                         type="text"
                         status="danger"
                         :disabled="record.remove.disabled"
-                        @click="openDelete(record.info.factor_set)"
+                        @click="openDelete(record.info.factor_task)"
                       >
                         删除
                       </a-button>
@@ -140,7 +140,7 @@
         <a-radio :value="false">仅删除计算任务（保留结果数据集和已写入的数据）</a-radio>
         <a-radio :value="true">同时清理结果数据集（purge，不可恢复）</a-radio>
       </a-radio-group>
-      <a-form-item v-if="purge" class="delete-confirm" :label="`请输入 ${target?.set_id} 以确认`">
+      <a-form-item v-if="purge" class="delete-confirm" :label="`请输入 ${target?.task_id} 以确认`">
         <a-input v-model="confirmText" allow-clear />
       </a-form-item>
     </a-modal>
@@ -153,22 +153,22 @@ import { useSpaceStore } from "@/store/modules/space";
 import { computed, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { createFactorSet, deleteFactorSet, setFactorSetStatus } from "@/api/factor";
-import type { FactorSet, FactorSetInfo } from "@/api/factor/types";
+import { createFactorTask, deleteFactorTask, setFactorTaskStatus } from "@/api/factor";
+import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
-import { setStatusTag } from "@/views/factor/shared/status";
+import { taskStatusTag } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import {
   deleteState,
   ENABLE_ENGINE_HINT,
-  filterSets,
+  filterTasks,
   memberCountText,
   setActionKind,
   type TaskFilters
 } from "./compute-tasks-model";
-import SetCreateModal from "./set-create-modal.vue";
+import SetCreateModal from "./task-create-modal.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";
 
 defineOptions({ name: "FactorComputeTasks" });
@@ -187,21 +187,21 @@ const filters = reactive<TaskFilters>({ keyword: "", status: "" });
 const createVisible = ref(false);
 const busy = ref(false);
 
-const filteredSets = computed(() => filterSets(store.sets, filters, (set: FactorSet) => store.setLabel(set)));
+const filteredTasks = computed(() => filterTasks(store.sets, filters, (set: FactorTask) => store.setLabel(set)));
 
 const rows = computed(() =>
-  filteredSets.value.map((info: FactorSetInfo) => ({
-    set_id: info.factor_set.set_id,
+  filteredTasks.value.map((info: FactorTaskInfo) => ({
+    task_id: info.factor_task.task_id,
     info,
-    label: store.setLabel(info.factor_set),
-    sourceName: store.datasetNames[info.factor_set.source_dataset_id] || info.factor_set.source_dataset_id,
-    freq: info.factor_set.freq,
+    label: store.setLabel(info.factor_task),
+    sourceName: store.datasetNames[info.factor_task.source_dataset_id] || info.factor_task.source_dataset_id,
+    freq: info.factor_task.freq,
     members: memberCountText(info),
-    statusTag: setStatusTag(info.factor_set.status),
-    action: setActionKind(info.factor_set),
+    statusTag: taskStatusTag(info.factor_task.status),
+    action: setActionKind(info.factor_task),
     remove: deleteState(info),
     lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time) : "-",
-    lag: barLagText(info.factor_set.freq, info.last_run)
+    lag: barLagText(info.factor_task.freq, info.last_run)
   }))
 );
 
@@ -209,12 +209,12 @@ const detailId = computed(() => {
   const value = route.query.detail;
   return typeof value === "string" ? value : "";
 });
-const detailInfo = computed<FactorSetInfo | undefined>(() =>
-  store.sets.find((item: FactorSetInfo) => item.factor_set.set_id === detailId.value)
+const detailInfo = computed<FactorTaskInfo | undefined>(() =>
+  store.sets.find((item: FactorTaskInfo) => item.factor_task.task_id === detailId.value)
 );
 
-function openDetail(setId: string) {
-  void navigate({ detail: setId });
+function openDetail(taskId: string) {
+  void navigate({ detail: taskId });
 }
 
 function closeDetail() {
@@ -225,16 +225,16 @@ const spaceStore = useSpaceStore();
 // 因子周期日历目前只实现了 crypto 空间（与后端 periodclock.ForSpace 一致）。
 const createSupported = computed(() => spaceStore.selectedSpaceId === "crypto");
 
-async function onCreated(setId: string) {
+async function onCreated(taskId: string) {
   // 刷新期间切换空间：创建的任务属于原空间，不能把它的 ID 写进新空间的详情路由
   const createdSpaceId = spaceStore.selectedSpaceId;
   const createdGeneration = selectedSpaceGeneration();
   await store.reload({ silent: false });
   if (spaceStore.selectedSpaceId !== createdSpaceId || selectedSpaceGeneration() !== createdGeneration) return;
-  if (!store.sets.some((item: FactorSetInfo) => item.factor_set.set_id === setId)) return;
+  if (!store.sets.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId)) return;
   // 刷新期间用户又打开了新的创建弹窗：这时再打开详情抽屉会盖住正在填写的新草稿
   if (createVisible.value) return;
-  openDetail(setId);
+  openDetail(taskId);
 }
 
 async function run(action: () => Promise<unknown>, success: string, failure: string) {
@@ -252,19 +252,19 @@ async function run(action: () => Promise<unknown>, success: string, failure: str
   }
 }
 
-function toggleStatus(set: FactorSet, next: "enabled" | "disabled") {
+function toggleStatus(set: FactorTask, next: "enabled" | "disabled") {
   return run(
-    () => setFactorSetStatus(set.set_id, next),
+    () => setFactorTaskStatus(set.task_id, next),
     next === "enabled" ? "计算任务已启用" : "计算任务已停用",
     "更新计算任务状态失败"
   );
 }
 
-function retryActivation(set: FactorSet) {
+function retryActivation(set: FactorTask) {
   return run(
     () =>
-      createFactorSet({
-        set_id: set.set_id,
+      createFactorTask({
+        task_id: set.task_id,
         space_id: set.space_id,
         source_dataset_id: set.source_dataset_id,
         freq: set.freq,
@@ -275,13 +275,13 @@ function retryActivation(set: FactorSet) {
   );
 }
 
-const target = ref<FactorSet | null>(null);
+const target = ref<FactorTask | null>(null);
 const deleteVisible = ref(false);
 const purge = ref(false);
 const confirmText = ref("");
-const deleteConfirmed = computed(() => !purge.value || confirmText.value.trim() === target.value?.set_id);
+const deleteConfirmed = computed(() => !purge.value || confirmText.value.trim() === target.value?.task_id);
 
-function openDelete(set: FactorSet) {
+function openDelete(set: FactorTask) {
   target.value = set;
   purge.value = false;
   confirmText.value = "";
@@ -292,11 +292,11 @@ async function confirmDelete() {
   const current = target.value;
   if (!current || !deleteConfirmed.value) return false;
   const ok = await run(
-    () => deleteFactorSet(current.set_id, purge.value),
+    () => deleteFactorTask(current.task_id, purge.value),
     purge.value ? "计算任务已删除，结果数据集清理中" : "计算任务已删除",
     "删除计算任务失败"
   );
-  if (ok && detailId.value === current.set_id) closeDetail();
+  if (ok && detailId.value === current.task_id) closeDetail();
   return ok;
 }
 </script>

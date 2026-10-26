@@ -13,12 +13,12 @@ func TestRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	first, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-first", RequestID: "request-1", SetID: "set_prices",
+		JobID: "job-first", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 	})
 	require.NoError(t, err)
 	second, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-retry", RequestID: "request-1", SetID: "set_prices",
+		JobID: "job-retry", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 	})
 	require.NoError(t, err)
@@ -35,8 +35,8 @@ func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
 
 	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-race", SetID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-race", SetID: "set", Members: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
+		{JobID: "job-a", RequestID: "request-race", TaskID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
+		{JobID: "job-b", RequestID: "request-race", TaskID: "set", Members: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
 	}
 	results := concurrentCreate(t, firstStore, secondStore, jobs)
 	require.NoError(t, results[0].err)
@@ -54,8 +54,8 @@ func TestConcurrentDifferentRecalcPayloadConflicts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
 	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-conflict", SetID: "set", Members: []string{"a"}, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-conflict", SetID: "set", Members: []string{"b"}, StartTime: 1, EndTime: 2},
+		{JobID: "job-a", RequestID: "request-conflict", TaskID: "set", Members: []string{"a"}, StartTime: 1, EndTime: 2},
+		{JobID: "job-b", RequestID: "request-conflict", TaskID: "set", Members: []string{"b"}, StartTime: 1, EndTime: 2},
 	}
 	results := concurrentCreate(t, firstStore, secondStore, jobs)
 	require.NotEqual(t, results[0].err == nil, results[1].err == nil)
@@ -94,7 +94,7 @@ func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-1", RequestID: "request-1", SetID: "set_prices",
+		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 500, Status: RecalcStatusAccepted,
 	})
 	require.NoError(t, err)
@@ -132,13 +132,13 @@ func TestUpdateRecalcProgressAndCancel(t *testing.T) {
 	require.EqualValues(t, 300, job.ProgressTime)
 }
 
-func TestListRecalcJobsFiltersSetAndStatuses(t *testing.T) {
+func TestListRecalcJobsFiltersTaskAndStatuses(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	for _, job := range []RecalcJob{
-		{JobID: "job-a", RequestID: "req-a", SetID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusAccepted},
-		{JobID: "job-b", RequestID: "req-b", SetID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
-		{JobID: "job-c", RequestID: "req-c", SetID: "other", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
+		{JobID: "job-a", RequestID: "req-a", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusAccepted},
+		{JobID: "job-b", RequestID: "req-b", TaskID: "set", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
+		{JobID: "job-c", RequestID: "req-c", TaskID: "other", StartTime: 1, EndTime: 2, Status: RecalcStatusRunning},
 	} {
 		_, err := s.CreateRecalcJob(ctx, job)
 		require.NoError(t, err)
@@ -147,12 +147,12 @@ func TestListRecalcJobsFiltersSetAndStatuses(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, running, 2)
 
-	jobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{SetID: "set", Statuses: []string{RecalcStatusRunning}})
+	jobs, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "set", Statuses: []string{RecalcStatusRunning}})
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	require.Equal(t, "job-b", jobs[0].JobID)
 
-	all, err := s.ListRecalcJobs(ctx, RecalcJobFilter{SetID: "set"})
+	all, err := s.ListRecalcJobs(ctx, RecalcJobFilter{TaskID: "set"})
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 }
@@ -162,7 +162,7 @@ func TestRecalcJobPersistsAcrossStoreReopen(t *testing.T) {
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	job, err := s.CreateRecalcJob(context.Background(), RecalcJob{
-		JobID: "job-1", RequestID: "request-1", SetID: "set_prices",
+		JobID: "job-1", RequestID: "request-1", TaskID: "task_prices",
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 	})
 	require.NoError(t, err)

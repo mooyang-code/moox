@@ -20,7 +20,7 @@ const (
 	ParamsCarried = "carried"
 	// ParamsCarriedOffline 是 FactorMgr 不可达时引擎在本地按沿用规则冻结的期次。
 	ParamsCarriedOffline = "carried_offline"
-	// ParamsDefault 是从未有过冻结记录（集合启用前的回填、从未提交过参数）时使用定义的默认值。
+	// ParamsDefault 是从未有过冻结记录（任务启用前的回填、从未提交过参数）时使用定义的默认值。
 	ParamsDefault = "default"
 )
 
@@ -137,7 +137,7 @@ func ValidateSnapshot(member MemberDef, snapshot ParamSnapshot, inScope func(sub
 				return fmt.Errorf("参数 %s 的覆盖里有空的或带首尾空白的标的", name)
 			}
 			if inScope != nil && !inScope(subject) {
-				return fmt.Errorf("参数 %s 覆盖的标的 %s 不在集合的标的范围内", name, subject)
+				return fmt.Errorf("参数 %s 覆盖的标的 %s 不在任务的标的范围内", name, subject)
 			}
 			subjects[subject] = struct{}{}
 		}
@@ -175,7 +175,7 @@ func crossSectionParams(MemberDef) []string { return nil }
 type ParamRequest struct {
 	Seq           int64
 	RequestID     string
-	SetID         string
+	TaskID        string
 	MemberAlias   string
 	PeriodTime    time.Time
 	BasedOnPeriod time.Time
@@ -188,7 +188,7 @@ type ParamRequest struct {
 
 // ParamFreeze 是成员某一期最终采用的参数：快照与来源。它是唯一事实来源，计算、重试、补算与回放都只认它。
 type ParamFreeze struct {
-	SetID        string
+	TaskID       string
 	MemberAlias  string
 	PeriodTime   time.Time
 	Snapshot     ParamSnapshot
@@ -200,7 +200,7 @@ type ParamFreeze struct {
 
 // ParamInterval 是冻结记录的存储形式：快照与来源相同的连续期次压缩成一个区间 [Start, End]（两端都含）。
 type ParamInterval struct {
-	SetID        string
+	TaskID       string
 	MemberAlias  string
 	Start        time.Time
 	End          time.Time

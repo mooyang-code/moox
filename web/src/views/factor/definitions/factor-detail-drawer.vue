@@ -41,7 +41,7 @@
           <h3>使用情况</h3>
           <span v-if="!chips.length" class="detail-empty">未被使用</span>
           <a-space v-else wrap>
-            <a-tag v-for="chip in chips" :key="chip.key" class="usage-tag" @click="emit('openTask', chip.setId)">
+            <a-tag v-for="chip in chips" :key="chip.key" class="usage-tag" @click="emit('openTask', chip.taskId)">
               {{ chip.label }}{{ chip.alias ? ` · ${chip.alias}` : "" }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} · {{ chip.statusLabel }}
             </a-tag>
           </a-space>
@@ -78,7 +78,7 @@ import { usageChips } from "./definitions-model";
 defineOptions({ name: "FactorDetailDrawer" });
 
 const props = defineProps<{ factorId: string; categories?: FactorCategory[] }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "openTask", setId: string): void }>();
+const emit = defineEmits<{ (e: "close"): void; (e: "openTask", taskId: string): void }>();
 
 const store = useFactorStore();
 const factor = ref<FactorDef | null>(null);
@@ -88,9 +88,9 @@ const error = ref("");
 const gate = new RequestGate();
 
 const chips = computed(() =>
-  usageChips(usages.value, setId => {
-    const info = store.sets.find((item: { factor_set: { set_id: string } }) => item.factor_set.set_id === setId);
-    return info ? store.setLabel(info.factor_set) : setId;
+  usageChips(usages.value, taskId => {
+    const info = store.sets.find((item: { factor_task: { task_id: string } }) => item.factor_task.task_id === taskId);
+    return info ? store.setLabel(info.factor_task) : taskId;
   })
 );
 

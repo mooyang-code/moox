@@ -33,8 +33,8 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}, nil
 	}
 	if len(strategy.Factors) > 0 {
-		// 因子列在实例的私有因子集里，启用实例时才建立：这里只做 DSL 与因子声明的校验。
-		rsp.Diagnostics = append(rsp.Diagnostics, "声明了 factors 的策略在启用实例时建立私有因子集，列与试算在启用后才可用；这里只校验了 DSL")
+		// 因子列在实例的私有因子任务里，启用实例时才建立：这里只做 DSL 与因子声明的校验。
+		rsp.Diagnostics = append(rsp.Diagnostics, "声明了 factors 的策略在启用实例时建立私有因子任务，列与试算在启用后才可用；这里只校验了 DSL")
 		return rsp, nil
 	}
 	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetViewId(), strategy)

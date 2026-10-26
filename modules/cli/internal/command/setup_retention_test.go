@@ -11,11 +11,11 @@ import (
 func lookbackPlan(spaceID, freq string, window int) setupFactorPlan {
 	// 回看按参数上限推导：上限就是 window。
 	spec := "params:\n  window: {type: int, min: 2, max: " + strconv.Itoa(window) + ", default: 2}\noutputs:\n  bias: close / ts_mean(close, window)\n"
-	setID := "fset_prices_" + freq
+	taskID := "ftask_prices_" + freq
 	return setupFactorPlan{
-		Sets:        []setupFactorSet{{SetID: setID, SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq}},
+		Sets:        []setupFactorTask{{TaskID: taskID, SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq}},
 		Definitions: []setupFactorDefinition{{FactorID: "bias", Name: "Bias", Spec: spec}},
-		Members:     []setupFactorMember{{SetID: setID, FactorID: "bias", Status: "enabled"}},
+		Members:     []setupFactorMember{{TaskID: taskID, FactorID: "bias", Status: "enabled"}},
 	}
 }
 
@@ -31,7 +31,7 @@ func TestFactorRetentionFindingsCrypto(t *testing.T) {
 	errs, warnings = factorRetentionFindings(policy, lookbackPlan("crypto", "1h", 200))
 	require.Empty(t, warnings)
 	require.Len(t, errs, 1)
-	require.Contains(t, errs[0], "fset_prices_1h")
+	require.Contains(t, errs[0], "ftask_prices_1h")
 	require.Contains(t, errs[0], "回看 200 根")
 	require.Contains(t, errs[0], "约 100 根")
 	require.Contains(t, errs[0], "storage_retention.spaces.crypto.1h")

@@ -15,7 +15,7 @@ type Data interface {
 	//   - 实时：先把 plan.Available 标的同步到本期（只拉增量），再抓取截至本期的读租约；
 	//   - 补算：从本地存储读 [回看起点, TargetEnd)。
 	Load(ctx context.Context, plan Plan) (DataResult, error)
-	// WindowStatuses 返回各集合内存窗口的载入状态。
+	// WindowStatuses 返回各任务内存窗口的载入状态。
 	WindowStatuses() []WarmupStatus
 }
 
@@ -37,7 +37,7 @@ type Admission interface {
 	Reserve(ctx context.Context, bytes int64) (release func(), err error)
 }
 
-// Warm-up states of a live factor set. 窗口载入完成之前，该集合的标的本期都不算（记入账本，载入后由跳过恢复补算）。
+// Warm-up states of a live factor task. 窗口载入完成之前，该任务的标的本期都不算（记入账本，载入后由跳过恢复补算）。
 const (
 	WarmupWarming = "warming"
 	WarmupReady   = "ready"
@@ -47,7 +47,7 @@ const (
 // window loaded. Results of warming subjects are not formal: they are reported
 // as failed subjects, so strategies holding them do not evaluate the period.
 type WarmupStatus struct {
-	SetID            string
+	TaskID           string
 	State            string
 	WarmSubjects     int
 	ExpectedSubjects int
@@ -62,7 +62,7 @@ const SkipReasonUpstream = "upstream_failed"
 
 // GapEntry 是写入账本的一条跳过记录：一个标的、一个周期、一个成员。
 type GapEntry struct {
-	SetID          string
+	TaskID         string
 	Subject        string
 	Period         time.Time
 	Member         string

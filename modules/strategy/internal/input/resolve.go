@@ -220,7 +220,7 @@ func referencedTags(strategy dsl.Strategy) []string {
 // 涉及时不读取。
 //
 // 声明了 factors 的实例按绑定的 K 线 View（SourceViewID）校验，而不是私有因子结果 View：启用成员不自动补算历史，
-// 刚建立的私有因子集的结果 View 是空的，历史长度由源 K 线决定（因子的回看由因子机本地数据保证）。
+// 刚建立的私有因子任务的结果 View 是空的，历史长度由源 K 线决定（因子的回看由因子机本地数据保证）。
 func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, now time.Time) error {
 	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
@@ -331,7 +331,7 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	return int((time.Duration(hours) * time.Hour) / duration), true
 }
 
-// factorColumnIdentity 返回因子列（输出列或参数列）的成员别名与定义 ID：成员别名取 member_alias（共享集合的成员别名就是
+// factorColumnIdentity 返回因子列（输出列或参数列）的成员别名与定义 ID：成员别名取 member_alias（共享任务的成员别名就是
 // 定义 ID），定义 ID 取 factor_id；不是因子列时别名为空。
 func factorColumnIdentity(attributes map[string]string) (string, string) {
 	member := strings.TrimSpace(attributes["member_alias"])

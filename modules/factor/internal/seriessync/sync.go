@@ -30,7 +30,7 @@ type Spec struct {
 	Fields []seriesstore.Field
 	// Lookback 是本地还没有某个标的时一次性拉取的根数（回看数量 N）。
 	Lookback int
-	// Subjects 非空时是集合的标的范围：变更跟进只处理范围内的标的，被移出集合的标的不再同步（设计 6.2）。nil 表示不过滤。
+	// Subjects 非空时是任务的标的范围：变更跟进只处理范围内的标的，被移出任务的标的不再同步（设计 6.2）。nil 表示不过滤。
 	Subjects map[string]struct{}
 }
 
@@ -392,7 +392,7 @@ type FollowResult struct {
 type FollowStats struct {
 	// Pages 是读取的变更日志页数；Changes 是读到的变更条数。
 	Pages, Changes int
-	// Skipped 是因为已被拉取反映而跳过的（标的，区间）数；OutOfScope 是因标的已不在集合内而忽略的数。
+	// Skipped 是因为已被拉取反映而跳过的（标的，区间）数；OutOfScope 是因标的已不在任务内而忽略的数。
 	Skipped, OutOfScope int
 	// Refetched 是需要重拉比对的（标的，区间）数；Replaced 是比对后内容不同、整段替换的数。
 	Refetched, Replaced int
@@ -459,7 +459,7 @@ func unionSpan(a, b seriesstore.Span) seriesstore.Span {
 	return out
 }
 
-// applyChanges 处理一页变更：先跳过已被拉取反映的、标的已不在集合内的，其余按标的合并区间，批量重拉 Storage、与本地比对，
+// applyChanges 处理一页变更：先跳过已被拉取反映的、标的已不在任务内的，其余按标的合并区间，批量重拉 Storage、与本地比对，
 // 不同的才整段替换；位点与这一页的写入同一个 batch 提交，没有写入时单独推进位点。
 func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Changes, next []byte, stats *FollowStats) (map[string]seriesstore.WriteResult, error) {
 	step, err := seriesstore.Step(spec.Source.Freq)
@@ -827,7 +827,7 @@ func (s *Syncer) Reconcile(ctx context.Context, spec Spec, subjects []string, pr
 	return res, nil
 }
 
-// Resync 对账指定标的在本地数据范围内与 Storage 保留期的重叠区间（不动同步位点）：标的重新加入集合时，
+// Resync 对账指定标的在本地数据范围内与 Storage 保留期的重叠区间（不动同步位点）：标的重新加入任务时，
 // 它被移出期间 Storage 里的修正没有被跟进，本地保有的历史可能是旧值。内容不同的整段替换并记失效重算。
 func (s *Syncer) Resync(ctx context.Context, spec Spec, subjects []string) (map[string]seriesstore.WriteResult, error) {
 	step, err := seriesstore.Step(spec.Source.Freq)

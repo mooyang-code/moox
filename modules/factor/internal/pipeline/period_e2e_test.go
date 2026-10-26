@@ -116,9 +116,9 @@ func e2eBroken() domain.FactorDef {
 
 func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDef) LiveInput {
 	return LiveInput{
-		Set: domain.FactorSet{
-			SetID: "set_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
-			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
+		Set: domain.FactorTask{
+			TaskID: "task_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
+			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
 		Members: domain.AsMembers(factors...), PeriodTime: target, Universe: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
 	}
@@ -252,12 +252,12 @@ func TestSameDefinitionInTwoSetsComputesIntoEachResultDataset(t *testing.T) {
 	store := newMemoryStorage(subjects, target, 10)
 	runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 
-	for _, set := range []domain.FactorSet{
-		{SetID: "set_1m", ResultDatasetID: "dataset_factor_bars_1m"},
-		{SetID: "set_other", ResultDatasetID: "dataset_factor_bars_other"},
+	for _, set := range []domain.FactorTask{
+		{TaskID: "task_1m", ResultDatasetID: "dataset_factor_bars_1m"},
+		{TaskID: "task_other", ResultDatasetID: "dataset_factor_bars_other"},
 	} {
 		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
-		input.Set.SetID, input.Set.ResultDatasetID = set.SetID, set.ResultDatasetID
+		input.Set.TaskID, input.Set.ResultDatasetID = set.TaskID, set.ResultDatasetID
 		plan, err := BuildLivePlan(clock, input)
 		require.NoError(t, err)
 		outcome, err := runner.Run(context.Background(), plan)

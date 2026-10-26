@@ -23,9 +23,9 @@ type progressRecord struct {
 func executorSelection(subjects ...string) Selection {
 	member := testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)
 	return Selection{
-		Set: domain.FactorSet{
-			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
-			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
+		Set: domain.FactorTask{
+			TaskID: "ftask_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
+			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
 		Members: domain.AsMembers(member.def), Subjects: subjects, Columns: []string{"close"},
 	}
@@ -160,7 +160,7 @@ func TestExecutorPassesOutcomeToReport(t *testing.T) {
 	require.Equal(t, "degraded: failed_subjects=1", DegradedNote(records[0].outcome))
 }
 
-func TestExecutorHoldsSetLockPerChunk(t *testing.T) {
+func TestExecutorHoldsTaskLockPerChunk(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
 		require.True(t, locks.held, "chunk must run under the set lock")
@@ -171,7 +171,7 @@ func TestExecutorHoldsSetLockPerChunk(t *testing.T) {
 
 	require.NoError(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))
 
-	require.Equal(t, []string{"fset_bars_1m", "fset_bars_1m", "fset_bars_1m"}, locks.setIDs)
+	require.Equal(t, []string{"ftask_bars_1m", "ftask_bars_1m", "ftask_bars_1m"}, locks.setIDs)
 	require.False(t, locks.held)
 }
 
@@ -180,8 +180,8 @@ type countingLocks struct {
 	held   bool
 }
 
-func (l *countingLocks) LockContext(_ context.Context, setID string) (func(), error) {
-	l.setIDs = append(l.setIDs, setID)
+func (l *countingLocks) LockContext(_ context.Context, taskID string) (func(), error) {
+	l.setIDs = append(l.setIDs, taskID)
 	l.held = true
 	return func() { l.held = false }, nil
 }
@@ -214,10 +214,10 @@ func pipelineSelection(factors ...recalcMember) Selection {
 		defs = append(defs, factor.def)
 	}
 	return Selection{
-		Set: domain.FactorSet{
-			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
+		Set: domain.FactorTask{
+			TaskID: "ftask_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
 
-			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
+			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.TaskStatusEnabled,
 		},
 		Members: domain.AsMembers(defs...), Subjects: []string{"BTC"}, Columns: []string{"close"},
 	}
@@ -329,11 +329,11 @@ func testRecalcFactor(id, status string, lookback int) recalcMember {
 		fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, %d)\n", id, lookback))}
 }
 
-// RunChunkWith：先取集合锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。
+// RunChunkWith：先取任务锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。
 func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
-		require.True(t, locks.held, "运行必须在集合锁内")
+		require.True(t, locks.held, "运行必须在任务锁内")
 		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{Member: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
 	}}
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
@@ -358,7 +358,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, calls, "锁外探测一次，锁内重读一次")
-	require.True(t, afterHeld, "after 在持有集合锁时调用")
+	require.True(t, afterHeld, "after 在持有任务锁时调用")
 	require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{Member: "f", Subject: "BTC"}])
 	plans := runner.snapshot()
 	require.Len(t, plans, 1)
@@ -412,7 +412,7 @@ func TestExecutorGateStopsWritesBeforeRunner(t *testing.T) {
 	runner := &recordingRunner{}
 	open := false
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2),
-		WithGate(func(setID string) bool { return open && setID == "fset_bars_1m" }))
+		WithGate(func(taskID string) bool { return open && taskID == "ftask_bars_1m" }))
 	var records []progressRecord
 
 	err := executor.Run(context.Background(), testWindow(4), fixedSource(executorSelection("BTC")), recordProgress(&records, 0))

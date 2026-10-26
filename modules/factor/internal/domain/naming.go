@@ -9,25 +9,25 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
-// SetID derives the FactorSet ID of a set without a writer from its source and frequency.
-func SetID(sourceDatasetID, freq string) string {
-	return "fset_" + sourceSuffix(sourceDatasetID, freq)
+// TaskID derives the FactorTask ID of a set without a writer from its source and frequency.
+func TaskID(sourceDatasetID, freq string) string {
+	return "ftask_" + sourceSuffix(sourceDatasetID, freq)
 }
 
-// InstanceSetID derives the private FactorSet ID of a strategy instance. 实例 ID 是 UUID，不满足 Storage 的小写
+// InstanceTaskID derives the private FactorTask ID of a strategy instance. 实例 ID 是 UUID，不满足 Storage 的小写
 // 下划线标识规则，也太长，所以取它的摘要：结果数据集 ID 不超过 Storage 的 50 个字符上限。
-func InstanceSetID(instanceID string) string {
-	return "fset_" + instanceSuffix(instanceID)
+func InstanceTaskID(instanceID string) string {
+	return "ftask_" + instanceSuffix(instanceID)
 }
 
-// ResultDatasetID derives the result Dataset ID from a FactorSet ID.
-func ResultDatasetID(setID string) string {
-	return "dataset_factor_" + strings.TrimPrefix(strings.TrimSpace(setID), "fset_")
+// ResultDatasetID derives the result Dataset ID from a FactorTask ID.
+func ResultDatasetID(taskID string) string {
+	return "dataset_factor_" + strings.TrimPrefix(strings.TrimSpace(taskID), "ftask_")
 }
 
 // ResultViewID 是结果数据集的默认 View（Storage 激活结果数据集时按 view_ + 数据集后缀创建）。
-func ResultViewID(setID string) string {
-	return "view_factor_" + strings.TrimPrefix(strings.TrimSpace(setID), "fset_")
+func ResultViewID(taskID string) string {
+	return "view_factor_" + strings.TrimPrefix(strings.TrimSpace(taskID), "ftask_")
 }
 
 func instanceSuffix(instanceID string) string {

@@ -26,7 +26,7 @@ func TestParseLifecycleReadsPauseHoldAndCatchup(t *testing.T) {
 		"pause":{"kind":"system","reason":"切换行情源","by":"cli:ops","since":"2026-10-21T10:00:00Z"},
 		"catchup":{"since":"2026-10-21T10:00:00Z","done":6,"total":10,"caught_up":false,"blocked_by":"collector","unfillable":2},
 		"pause_kinds":{"manual":1},
-		"attention":[{"kind":"factor_set","id":"s1","stage":"paused","effective":"paused","pause":{"kind":"manual","reason":"手动暂停"}}]}}}`
+		"attention":[{"kind":"factor_task","id":"s1","stage":"paused","effective":"paused","pause":{"kind":"manual","reason":"手动暂停"}}]}}}`
 	got := ParseLifecycle(body)
 	require.NotNil(t, got)
 	require.Equal(t, "system_pause", got.Hold)

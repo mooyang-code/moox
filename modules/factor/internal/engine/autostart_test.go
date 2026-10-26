@@ -15,22 +15,22 @@ import (
 func autoRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	cache, _ := newTestCache(t)
-	private := engineSet("fset_private", "dataset_a", true, "bias")
+	private := engineTask("ftask_private", "dataset_a", true, "bias")
 	private.Set.OwnerInstanceID = "inst-1"
-	shared := engineSet("fset_shared", "dataset_a", true, "bias", "cci")
-	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineSet{uncompiled(private), uncompiled(shared)}})
+	shared := engineTask("ftask_shared", "dataset_a", true, "bias", "cci")
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineTask{uncompiled(private), uncompiled(shared)}})
 	require.NoError(t, err)
 	return &Runtime{catalog: cache, runs: newRunTracker()}
 }
 
 // 目录里的全部计算任务（共享的与策略实例专属的）随创建自动 init、start，不必手动执行生命周期命令。
-func TestAutoStartSetForEverySetInCatalog(t *testing.T) {
+func TestAutoStartTaskForEveryTaskInCatalog(t *testing.T) {
 	r := autoRuntime(t)
-	require.True(t, r.autoStartSet(setRef("fset_private")))
-	require.True(t, r.autoStartSet(setRef("fset_shared")))
-	require.False(t, r.autoStartSet(setRef("fset_missing")), "不在目录里的集合不自动推进")
-	require.False(t, r.autoStartSet(lifecycle.Ref{}), "模块自身不是集合")
-	require.False(t, r.autoStartSet(lifecycle.Ref{Kind: "strategy_instance", ID: "fset_shared"}), "不是因子集")
+	require.True(t, r.autoStartTask(setRef("ftask_private")))
+	require.True(t, r.autoStartTask(setRef("ftask_shared")))
+	require.False(t, r.autoStartTask(setRef("ftask_missing")), "不在目录里的任务不自动推进")
+	require.False(t, r.autoStartTask(lifecycle.Ref{}), "模块自身不是任务")
+	require.False(t, r.autoStartTask(lifecycle.Ref{Kind: "strategy_instance", ID: "ftask_shared"}), "不是因子任务")
 }
 
 // completeState 是成员按当前目录算完一期后的状态（定义指纹与参数摘要与目录一致）。
@@ -46,8 +46,8 @@ func completeState(member domain.MemberDef) storageio.FactorState {
 	}
 }
 
-func recordPeriod(r *Runtime, setID string, completedAt time.Time, mutate func(*pipeline.Outcome)) {
-	set, _ := r.catalog.SetByID(setID)
+func recordPeriod(r *Runtime, taskID string, completedAt time.Time, mutate func(*pipeline.Outcome)) {
+	set, _ := r.catalog.SetByID(taskID)
 	outcome := pipeline.Outcome{Status: "complete", RowsWritten: 10}
 	for _, member := range set.Members {
 		outcome.Factors = append(outcome.Factors, completeState(member))
@@ -55,26 +55,26 @@ func recordPeriod(r *Runtime, setID string, completedAt time.Time, mutate func(*
 	if mutate != nil {
 		mutate(&outcome)
 	}
-	r.runs.record(setID, time.Date(2026, 10, 25, 13, 35, 0, 0, time.UTC), outcome.Status, outcome, completedAt)
+	r.runs.record(taskID, time.Date(2026, 10, 25, 13, 35, 0, 0, time.UTC), outcome.Status, outcome, completedAt)
 }
 
 // 预热到运行的自动确认：只对非专属任务，且要预热之后有一期所有成员都完整算完。
 func TestAutoConfirmNeedsAFullPeriodAfterWarmupStarted(t *testing.T) {
 	r := autoRuntime(t)
-	ref := setRef("fset_shared")
+	ref := setRef("ftask_shared")
 	warmingSince := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
 
-	require.False(t, r.autoConfirmSet(ref, warmingSince), "还没有任何一期")
+	require.False(t, r.autoConfirmTask(ref, warmingSince), "还没有任何一期")
 
-	recordPeriod(r, "fset_shared", warmingSince.Add(-time.Minute), nil)
-	require.False(t, r.autoConfirmSet(ref, warmingSince), "完成时间早于进入预热，不算证据")
+	recordPeriod(r, "ftask_shared", warmingSince.Add(-time.Minute), nil)
+	require.False(t, r.autoConfirmTask(ref, warmingSince), "完成时间早于进入预热，不算证据")
 
-	recordPeriod(r, "fset_shared", warmingSince.Add(time.Minute), nil)
-	require.True(t, r.autoConfirmSet(ref, warmingSince))
+	recordPeriod(r, "ftask_shared", warmingSince.Add(time.Minute), nil)
+	require.True(t, r.autoConfirmTask(ref, warmingSince))
 
-	require.False(t, r.autoConfirmSet(setRef("fset_private"), warmingSince), "专属任务不自动确认")
-	require.False(t, r.autoConfirmSet(setRef("fset_missing"), warmingSince))
-	require.False(t, r.autoConfirmSet(lifecycle.Ref{}, warmingSince))
+	require.False(t, r.autoConfirmTask(setRef("ftask_private"), warmingSince), "专属任务不自动确认")
+	require.False(t, r.autoConfirmTask(setRef("ftask_missing"), warmingSince))
+	require.False(t, r.autoConfirmTask(lifecycle.Ref{}, warmingSince))
 }
 
 func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
@@ -96,8 +96,8 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := autoRuntime(t)
-			recordPeriod(r, "fset_shared", since.Add(time.Minute), mutate)
-			require.False(t, r.autoConfirmSet(setRef("fset_shared"), since))
+			recordPeriod(r, "ftask_shared", since.Add(time.Minute), mutate)
+			require.False(t, r.autoConfirmTask(setRef("ftask_shared"), since))
 		})
 	}
 }
@@ -106,22 +106,22 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 func TestAutoConfirmEvidenceIsBoundToMemberContent(t *testing.T) {
 	cache, _ := newTestCache(t)
 	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutputs:\n  mean: ts_mean(close, window)\n")
-	build := func(window float64) domain.EngineSet {
-		set := engineSet("fset_shared", "dataset_a", true)
+	build := func(window float64) domain.EngineTask {
+		set := engineTask("ftask_shared", "dataset_a", true)
 		set.Members = []domain.MemberDef{{Alias: "pmean", Factor: def, Params: map[string]float64{"window": window}}}
 		return uncompiled(set)
 	}
-	_, err := cache.Apply(CatalogSnapshot{Hash: "h1", Sets: []domain.EngineSet{build(5)}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h1", Sets: []domain.EngineTask{build(5)}})
 	require.NoError(t, err)
 	r := &Runtime{catalog: cache, runs: newRunTracker()}
 	since := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
-	recordPeriod(r, "fset_shared", since.Add(time.Minute), nil)
-	require.True(t, r.autoConfirmSet(setRef("fset_shared"), since), "按当前成员算完的一期是证据")
+	recordPeriod(r, "ftask_shared", since.Add(time.Minute), nil)
+	require.True(t, r.autoConfirmTask(setRef("ftask_shared"), since), "按当前成员算完的一期是证据")
 
-	_, err = cache.Apply(CatalogSnapshot{Hash: "h2", Sets: []domain.EngineSet{build(10)}})
+	_, err = cache.Apply(CatalogSnapshot{Hash: "h2", Sets: []domain.EngineTask{build(10)}})
 	require.NoError(t, err)
-	require.False(t, r.autoConfirmSet(setRef("fset_shared"), since), "同一别名换了固定参数，旧的一期不是新成员的证据")
+	require.False(t, r.autoConfirmTask(setRef("ftask_shared"), since), "同一别名换了固定参数，旧的一期不是新成员的证据")
 
-	recordPeriod(r, "fset_shared", since.Add(2*time.Minute), nil)
-	require.True(t, r.autoConfirmSet(setRef("fset_shared"), since), "按新成员算完一期之后才确认")
+	recordPeriod(r, "ftask_shared", since.Add(2*time.Minute), nil)
+	require.True(t, r.autoConfirmTask(setRef("ftask_shared"), since), "按新成员算完一期之后才确认")
 }

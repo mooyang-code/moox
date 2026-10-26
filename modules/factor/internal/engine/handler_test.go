@@ -52,9 +52,9 @@ func newCatalogHandler(t *testing.T, cache *CatalogCache, runner *planRecorder) 
 	return handler
 }
 
-func TestHandlerRetriesWhenSetNotResultReady(t *testing.T) {
+func TestHandlerRetriesWhenTaskNotResultReady(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", false, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 
@@ -64,9 +64,9 @@ func TestHandlerRetriesWhenSetNotResultReady(t *testing.T) {
 	require.Empty(t, runner.plans)
 }
 
-func TestHandlerComputesReadySet(t *testing.T) {
+func TestHandlerComputesReadyTask(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 
@@ -74,12 +74,12 @@ func TestHandlerComputesReadySet(t *testing.T) {
 
 	require.Equal(t, jetstream.ACK, result.Decision)
 	require.Len(t, runner.plans, 1)
-	require.Equal(t, "fset_a", runner.plans[0].Set.SetID)
+	require.Equal(t, "ftask_a", runner.plans[0].Set.TaskID)
 }
 
-func TestHandlerAcksWhenSetRemovedFromSnapshot(t *testing.T) {
+func TestHandlerAcksWhenTaskRemovedFromSnapshot(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2"})
 	require.NoError(t, err)

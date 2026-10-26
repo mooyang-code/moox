@@ -188,7 +188,7 @@ func (s *Store) ListInstances(ctx context.Context, spaceID string, enabled *bool
 }
 
 // EnabledInstancesByView 返回事件路由到某个 View 的启用实例：按启用时固化的解析里的 View 路由（声明了 factors 的实例
-// 路由到它的私有因子集的结果 View，而不是它绑定的 K 线 View）；没有固化解析时用实例绑定的 View。
+// 路由到它的私有因子任务的结果 View，而不是它绑定的 K 线 View）；没有固化解析时用实例绑定的 View。
 func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID string) ([]Instance, error) {
 	var rows []instanceRow
 	if err := s.db.WithContext(ctx).Raw(`
@@ -387,7 +387,7 @@ func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string)
 		SourceViewID string `json:"source_view_id"`
 	}
 	_ = json.Unmarshal([]byte(session.ResolvedJSON), &resolved)
-	// 声明了 factors 的会话绑定的是私有因子集的 View，实例绑定的 K 线 View 记在 source_view_id。
+	// 声明了 factors 的会话绑定的是私有因子任务的 View，实例绑定的 K 线 View 记在 source_view_id。
 	boundView := resolved.ViewID
 	if resolved.SourceViewID != "" {
 		boundView = resolved.SourceViewID

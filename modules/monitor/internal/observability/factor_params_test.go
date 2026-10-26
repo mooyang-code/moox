@@ -23,20 +23,20 @@ func factorParamChecks(got Overview) map[string]BusinessStatus {
 func TestBuilderReportsFactorParamCarryAndOfflineFreeze(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "carry-hot", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"fast"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"slow"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "off-recent", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, float64(now.Add(-5*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "off-old", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_b"}`, float64(now.Add(-2*time.Hour).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "carry-hot", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","task_id":"ftask_a","member":"fast"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","task_id":"ftask_a","member":"slow"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "off-recent", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_a"}`, float64(now.Add(-5*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "off-old", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_b"}`, float64(now.Add(-2*time.Hour).Unix()), now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
 	require.Equal(t, "down", checks["carry"].Status)
-	require.Contains(t, checks["carry"].Reason, "fset_a/fast")
-	require.NotContains(t, checks["carry"].Reason, "fset_a/slow")
+	require.Contains(t, checks["carry"].Reason, "ftask_a/fast")
+	require.NotContains(t, checks["carry"].Reason, "ftask_a/slow")
 	require.Equal(t, "down", checks["offline_freeze"].Status)
-	require.Contains(t, checks["offline_freeze"].Reason, "fset_a")
-	require.NotContains(t, checks["offline_freeze"].Reason, "fset_b")
+	require.Contains(t, checks["offline_freeze"].Reason, "ftask_a")
+	require.NotContains(t, checks["offline_freeze"].Reason, "ftask_b")
 
 	empty, _ := openOverviewState(t, func(*gorm.DB) {})
 	got, err = (Builder{Metrics: empty, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -47,8 +47,8 @@ func TestBuilderReportsFactorParamCarryAndOfflineFreeze(t *testing.T) {
 func TestBuilderFactorParamsHealthyWhenAlertsClear(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"fast"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "off-none", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","task_id":"ftask_a","member":"fast"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "off-none", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_a"}`, 0, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
@@ -63,14 +63,14 @@ func TestBuilderFactorParamsReadsAllSeriesPages(t *testing.T) {
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		for i := 0; i < 500; i++ {
 			seedOverviewMetricForInstance(t, db, fmt.Sprintf("carry-%03d", i), "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
-				fmt.Sprintf(`{"space_id":"crypto","set_id":"fset_a","member":"m%03d"}`, i), 0, now)
+				fmt.Sprintf(`{"space_id":"crypto","task_id":"ftask_a","member":"m%03d"}`, i), 0, now)
 		}
 		seedOverviewMetricForInstance(t, db, "carry-zzz", "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
-			`{"space_id":"crypto","set_id":"fset_a","member":"last"}`, 1, now)
+			`{"space_id":"crypto","task_id":"ftask_a","member":"last"}`, 1, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
 	require.Equal(t, "down", checks["carry"].Status)
-	require.Contains(t, checks["carry"].Reason, "fset_a/last")
+	require.Contains(t, checks["carry"].Reason, "ftask_a/last")
 }

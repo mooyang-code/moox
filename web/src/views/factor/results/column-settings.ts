@@ -3,7 +3,7 @@ import { LOCKED_SYSTEM_KEYS, SYSTEM_KEYS, type FactorScope } from "./factor-scop
 /** 主表最多钉住的因子列数；更多的因子请在“查看全部”弹窗里看。 */
 export const MAX_PINNED = 30;
 
-/** 结果页的列设置，按因子集分别保存在浏览器本地。 */
+/** 结果页的列设置，按因子任务分别保存在浏览器本地。 */
 export interface ColumnSettings {
   /** 隐藏的系统键（只能是频率、序列标签）。 */
   hiddenSystem: string[];
@@ -13,7 +13,7 @@ export interface ColumnSettings {
   pinned: string[];
 }
 
-const storageKey = (setId: string) => `moox.factor-results.columns.${setId}`;
+const storageKey = (taskId: string) => `moox.factor-results.columns.${taskId}`;
 
 export function defaultColumnSettings(scope: FactorScope): ColumnSettings {
   return { hiddenSystem: [], market: [...scope.baseMarket], pinned: [] };
@@ -47,18 +47,18 @@ export function normalizeColumnSettings(raw: unknown, scope: FactorScope): Colum
 }
 
 /** 读取失败（存储不可用、JSON 无效）时回到默认。 */
-export function loadColumnSettings(setId: string, scope: FactorScope): ColumnSettings {
+export function loadColumnSettings(taskId: string, scope: FactorScope): ColumnSettings {
   try {
-    const text = window.localStorage.getItem(storageKey(setId));
+    const text = window.localStorage.getItem(storageKey(taskId));
     return text ? normalizeColumnSettings(JSON.parse(text), scope) : defaultColumnSettings(scope);
   } catch {
     return defaultColumnSettings(scope);
   }
 }
 
-export function saveColumnSettings(setId: string, settings: ColumnSettings) {
+export function saveColumnSettings(taskId: string, settings: ColumnSettings) {
   try {
-    window.localStorage.setItem(storageKey(setId), JSON.stringify(settings));
+    window.localStorage.setItem(storageKey(taskId), JSON.stringify(settings));
   } catch {
     // 本地存储不可用时只在本次页面内生效。
   }

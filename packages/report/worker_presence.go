@@ -10,7 +10,7 @@ import (
 // 外部程序（因子引擎、归档 worker）的在线状态。它们运行在运维机上、不在部署体系内，
 // 由管理端（factor-mgr、archive-mgr）按最近一次被接受的心跳评估，经指标上报给 Monitor 告警。
 const (
-	PresenceNotRequired = 0 // 没有需要它工作的配置（没有启用的因子集 / 归档任务）
+	PresenceNotRequired = 0 // 没有需要它工作的配置（没有启用的因子任务 / 归档任务）
 	PresenceOnline      = 1
 	PresenceOffline     = 2
 )

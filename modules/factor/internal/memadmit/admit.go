@@ -77,7 +77,7 @@ func (a *Admitter) SetResident(name string, bytes int64) {
 	a.dispatchLocked()
 }
 
-// CanResident 判断再增加 extra 字节常驻内存之后，常驻部分是否仍在预算之内（启用新集合前检查，设计 4.2）。
+// CanResident 判断再增加 extra 字节常驻内存之后，常驻部分是否仍在预算之内（启用新任务前检查，设计 4.2）。
 func (a *Admitter) CanResident(name string, extra int64) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

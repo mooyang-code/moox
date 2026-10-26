@@ -25,7 +25,7 @@ func (f *paramManagerFake) FreezeFactorParams(_ context.Context, setIDs []string
 		return nil, f.freezeErr
 	}
 	snapshot := domain.ParamSnapshot{"window": {Default: 30}}
-	return map[string]map[string]domain.ParamFreeze{setIDs[0]: {"fast": {SetID: setIDs[0], MemberAlias: "fast", PeriodTime: period,
+	return map[string]map[string]domain.ParamFreeze{setIDs[0]: {"fast": {TaskID: setIDs[0], MemberAlias: "fast", PeriodTime: period,
 		Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}}}, nil
 }
 
@@ -46,7 +46,7 @@ func paramMember() domain.MemberDef {
 	return domain.MemberDef{Alias: "fast", Factor: def}
 }
 
-var paramSet = domain.FactorSet{SetID: "fset_i_x", SpaceID: "crypto", Freq: "1m"}
+var paramSet = domain.FactorTask{TaskID: "ftask_i_x", SpaceID: "crypto", Freq: "1m"}
 
 func newTestFreezer(t *testing.T, manager paramManager, file string) *paramFreezer {
 	t.Helper()
@@ -81,11 +81,11 @@ func TestParamFreezerFreezesOfflineWithCarryAndDedup(t *testing.T) {
 	require.Equal(t, 1, freezer.OfflinePending())
 	require.Equal(t, 1, offline)
 
-	// 重启后待补报的记录还在；没有冻结过的集合按默认值离线冻结。
+	// 重启后待补报的记录还在；没有冻结过的任务按默认值离线冻结。
 	restarted := newTestFreezer(t, manager, file)
 	require.Equal(t, 1, restarted.OfflinePending())
 	other := paramSet
-	other.SetID = "fset_i_y"
+	other.TaskID = "ftask_i_y"
 	fresh, err := restarted.Freeze(context.Background(), other, []domain.MemberDef{paramMember()}, t0)
 	require.NoError(t, err)
 	require.Equal(t, 20.0, fresh["fast"].Snapshot.Value("window", "BTC"))
@@ -104,7 +104,7 @@ func TestParamFreezerFlushReportsAndKeepsOnFailure(t *testing.T) {
 	require.Equal(t, 1, freezer.OfflinePending())
 
 	manager.reportErr = nil
-	manager.conflicts = []domain.ParamFreeze{{SetID: paramSet.SetID, MemberAlias: "fast", PeriodTime: t0, Source: domain.ParamsRequested}}
+	manager.conflicts = []domain.ParamFreeze{{TaskID: paramSet.TaskID, MemberAlias: "fast", PeriodTime: t0, Source: domain.ParamsRequested}}
 	var conflicts []domain.ParamFreeze
 	freezer.onConflict = func(freeze domain.ParamFreeze) { conflicts = append(conflicts, freeze) }
 	require.NoError(t, freezer.Flush(context.Background()))

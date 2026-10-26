@@ -12,10 +12,10 @@ const (
 	MemberStatusEnabled    = "enabled"
 	MemberStatusDisabled   = "disabled"
 
-	SetStatusPending  = "pending"
-	SetStatusEnabled  = "enabled"
-	SetStatusDisabled = "disabled"
-	SetStatusDeleting = "deleting"
+	TaskStatusPending  = "pending"
+	TaskStatusEnabled  = "enabled"
+	TaskStatusDisabled = "disabled"
+	TaskStatusDeleting = "deleting"
 )
 
 // DefaultCategoryID 是没有指定分类的因子所属的分类。
@@ -24,11 +24,11 @@ const DefaultCategoryID = "uncategorized"
 // DefaultCarryAlertPeriods 是成员连续沿用参数多少期后告警（因子动态调参执行计划 2.10）。
 const DefaultCarryAlertPeriods = 10
 
-// FactorSet groups member definitions over one source dataset and frequency.
-// OwnerInstanceID 非空时是某个策略实例的私有集合：该实例是唯一的参数写入方；为空时没有写入方，成员带固定参数。
+// FactorTask groups member definitions over one source dataset and frequency.
+// OwnerInstanceID 非空时是某个策略实例的私有任务：该实例是唯一的参数写入方；为空时没有写入方，成员带固定参数。
 // 任务的标的就是源数据集当前的标的，没有单独的对象范围。
-type FactorSet struct {
-	SetID           string    `json:"set_id" gorm:"column:c_set_id;primaryKey"`
+type FactorTask struct {
+	TaskID          string    `json:"task_id" gorm:"column:c_task_id;primaryKey"`
 	SpaceID         string    `json:"space_id" gorm:"column:c_space_id"`
 	SourceDatasetID string    `json:"source_dataset_id" gorm:"column:c_source_dataset_id"`
 	Freq            string    `json:"freq" gorm:"column:c_freq"`
@@ -39,10 +39,10 @@ type FactorSet struct {
 	UpdatedAt       time.Time `json:"updated_at" gorm:"column:c_mtime"`
 }
 
-func (FactorSet) TableName() string { return "t_factor_sets" }
+func (FactorTask) TableName() string { return "t_factor_tasks" }
 
-// ComputeGroup 是集合所属的计算组：同一源数据集、同一频率的集合在引擎里一起计算。
-func (s FactorSet) ComputeGroup() string { return s.SpaceID + "/" + s.SourceDatasetID + "/" + s.Freq }
+// ComputeGroup 是任务所属的计算组：同一源数据集、同一频率的任务在引擎里一起计算。
+func (s FactorTask) ComputeGroup() string { return s.SpaceID + "/" + s.SourceDatasetID + "/" + s.Freq }
 
 // FactorCategory 是因子分类（例如动量类、波动类）：只是元数据，用于因子库查找与按类展示，不进 definition_hash。
 type FactorCategory struct {
@@ -77,10 +77,10 @@ type FactorDef struct {
 
 func (FactorDef) TableName() string { return "t_factor_defs" }
 
-// FactorSetMember is a definition's runtime instance inside one factor set. 成员的身份是集合内唯一的别名：
-// 同一个定义可以用不同别名加入同一集合（例如 fast、slow 各自调参）。
-type FactorSetMember struct {
-	SetID       string `json:"set_id" gorm:"column:c_set_id;primaryKey"`
+// FactorTaskMember is a definition's runtime instance inside one factor task. 成员的身份是任务内唯一的别名：
+// 同一个定义可以用不同别名加入同一任务（例如 fast、slow 各自调参）。
+type FactorTaskMember struct {
+	TaskID      string `json:"task_id" gorm:"column:c_task_id;primaryKey"`
 	MemberAlias string `json:"member_alias" gorm:"column:c_member_alias;primaryKey"`
 	FactorID    string `json:"factor_id" gorm:"column:c_factor_id"`
 	Status      string `json:"status" gorm:"column:c_status"`
@@ -92,16 +92,16 @@ type FactorSetMember struct {
 	UpdatedAt time.Time          `json:"updated_at" gorm:"column:c_mtime"`
 }
 
-func (FactorSetMember) TableName() string { return "t_factor_set_members" }
+func (FactorTaskMember) TableName() string { return "t_factor_task_members" }
 
-// SetMember is the set-side view: a member together with its definition.
-type SetMember struct {
-	FactorSetMember
+// TaskMember is the set-side view: a member together with its definition.
+type TaskMember struct {
+	FactorTaskMember
 	Factor FactorDef
 }
 
 // Def 返回成员的计算视图。
-func (m SetMember) Def() MemberDef {
+func (m TaskMember) Def() MemberDef {
 	return MemberDef{Alias: m.MemberAlias, Factor: m.Factor, CarryAlertPeriods: m.CarryAlertPeriods, Params: m.Params}
 }
 
@@ -183,11 +183,11 @@ func (m MemberDef) ParamColumns() []string {
 func (m MemberDef) FixedParams() bool { return len(m.Params) > 0 }
 
 // Key 返回成员在计算组程序里的内部身份。
-func (m MemberDef) Key(setID string) string { return setID + "/" + m.Alias }
+func (m MemberDef) Key(taskID string) string { return taskID + "/" + m.Alias }
 
 // FactorUsage reports one set member that references a definition.
 type FactorUsage struct {
-	SetID       string
+	TaskID      string
 	MemberAlias string
 	Status      string
 	// Params 是成员的固定参数（空表示参数由写入方逐期提交）。

@@ -250,7 +250,7 @@ func runSystemResetApply(ctx context.Context, o systemOptions, r systemResetOpti
 	}
 	fmt.Fprintln(out, "\n系统重置完成：各模块处于未初始化。下一步按常规流程：")
 	fmt.Fprintln(out, "  1. 各模块 moox-cli lifecycle init（Collector 重置后需要 fetch-plan reregister 重新登记）")
-	fmt.Fprintln(out, "  2. 重新配置因子集合和策略实例，start → confirm")
+	fmt.Fprintln(out, "  2. 重新配置因子任务和策略实例，start → confirm")
 	return nil
 }
 

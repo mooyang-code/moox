@@ -21,12 +21,12 @@ type MemoryPlan struct {
 	Window int64
 	// Compute 是单次计算分块的内存上限。
 	Compute int64
-	// Parallel 是计算并行数：计划启用的集合数与 CPU 核数中的较小值。
+	// Parallel 是计算并行数：计划启用的任务数与 CPU 核数中的较小值。
 	Parallel int
 	Warnings []string
 }
 
-// PlanMemory 按总内存、CPU 核数、计划启用的集合数和块缓存给出建议：
+// PlanMemory 按总内存、CPU 核数、计划启用的任务数和块缓存给出建议：
 //   - memory.total_budget = M × 60%；
 //   - window.max_memory = (总预算 − C) × 40%（窗口常驻，计算要留出余量）；
 //   - compute.max_memory = max(1GiB, (总预算 − W − C) × 50% ÷ 并行数)。

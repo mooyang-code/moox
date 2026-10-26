@@ -168,7 +168,7 @@ type fixture struct {
 	st     *fakeStorage
 	data   *Data
 	runner *pipeline.Runner
-	set    domain.EngineSet
+	set    domain.EngineTask
 	now    time.Time
 }
 
@@ -181,9 +181,9 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 	fx := &fixture{st: st, now: at(10)}
 	fx.data = New(Config{Store: store, Storage: st, Clock: periodclock.Continuous{}, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2, Now: func() time.Time { return fx.now }})
 	fx.runner = pipeline.NewRunner(st, fx.data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	fx.set = domain.EngineSet{
-		Set: domain.FactorSet{SetID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m",
-			ResultDatasetID: "factor_spot", Status: domain.SetStatusEnabled},
+	fx.set = domain.EngineTask{
+		Set: domain.FactorTask{TaskID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m",
+			ResultDatasetID: "factor_spot", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(factors...),
 	}
 	return fx
@@ -240,13 +240,13 @@ func TestLivePeriodsWarmThenIncrementalSync(t *testing.T) {
 	}
 
 	outcome := fx.live(t, at(9), subjects)
-	require.Equal(t, 2, outcome.Warming, "还没有预载：整个集合预热中")
+	require.Equal(t, 2, outcome.Warming, "还没有预载：整个任务预热中")
 	require.Empty(t, fx.data.WindowStatuses())
 
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
 	status := fx.data.WindowStatuses()
 	require.Len(t, status, 1)
-	require.Equal(t, pipeline.WarmupStatus{SetID: "set1", State: pipeline.WarmupReady, WarmSubjects: 2, ExpectedSubjects: 2}, status[0])
+	require.Equal(t, pipeline.WarmupStatus{TaskID: "set1", State: pipeline.WarmupReady, WarmSubjects: 2, ExpectedSubjects: 2}, status[0])
 	// 本地只拉了回看窗口（3 根），不是全部历史。
 	b, ok, err := fx.data.Store().Bounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, "BTC")
 	require.NoError(t, err)

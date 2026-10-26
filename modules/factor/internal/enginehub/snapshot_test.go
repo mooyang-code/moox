@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotOnlyEnabledSetsAndMembersWithSource(t *testing.T) {
+func TestSnapshotOnlyEnabledTasksAndMembersWithSource(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusDisabled})
-	disabled := seedSet(t, db, "set_b", map[string]string{"bias": domain.MemberStatusEnabled})
-	require.NoError(t, db.SetSetStatus(context.Background(), disabled.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusDisabled})
+	disabled := seedTask(t, db, "task_b", map[string]string{"bias": domain.MemberStatusEnabled})
+	require.NoError(t, db.SetTaskStatus(context.Background(), disabled.TaskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled))
 
 	hash, notModified, sets, err := hub.Snapshot(context.Background(), "")
 
@@ -20,7 +20,7 @@ func TestSnapshotOnlyEnabledSetsAndMembersWithSource(t *testing.T) {
 	require.False(t, notModified)
 	require.NotEmpty(t, hash)
 	require.Len(t, sets, 1)
-	require.Equal(t, "set_a", sets[0].Set.SetID)
+	require.Equal(t, "task_a", sets[0].Set.TaskID)
 	require.Len(t, sets[0].Members, 1)
 	require.Equal(t, "bias", sets[0].Members[0].Factor.FactorID)
 	require.NotEmpty(t, sets[0].Members[0].Factor.Spec)
@@ -30,7 +30,7 @@ func TestSnapshotOnlyEnabledSetsAndMembersWithSource(t *testing.T) {
 
 func TestSnapshotNotModifiedWhenHashMatches(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
 	hash, _, _, err := hub.Snapshot(context.Background(), "")
 	require.NoError(t, err)
 
@@ -45,21 +45,21 @@ func TestSnapshotNotModifiedWhenHashMatches(t *testing.T) {
 func TestCatalogHashChanges(t *testing.T) {
 	hub, db, _ := newTestHub(t)
 	ctx := context.Background()
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusDisabled})
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusDisabled})
 	base, _, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 
-	hub.SetResultReady("set_a", true)
+	hub.SetResultReady("task_a", true)
 	ready, _, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 	require.NotEqual(t, base, ready, "result readiness changes the hash")
 
-	require.NoError(t, db.SetMemberStatus(ctx, "set_a", "cci", domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+	require.NoError(t, db.SetMemberStatus(ctx, "task_a", "cci", domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	member, _, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 	require.NotEqual(t, ready, member, "enabling a member changes the hash")
 
-	require.NoError(t, db.SetMemberStatus(ctx, "set_a", "cci", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
+	require.NoError(t, db.SetMemberStatus(ctx, "task_a", "cci", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
 	edited := domain.MustDefinition("cci", "cci", "outputs:\n  cci_value: close * 2\n")
 	require.NoError(t, db.UpdateFactor(ctx, edited))
 	unchanged, _, _, err := hub.Snapshot(ctx, "")
@@ -71,23 +71,23 @@ func TestCatalogHashChanges(t *testing.T) {
 // 成员的固定参数进目录指纹：同一别名换了参数，引擎必须重新同步。
 func TestCatalogHashCoversMemberParams(t *testing.T) {
 	member := domain.AsMembers(testFactor("bias"))[0]
-	base := []domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}}
+	base := []domain.EngineTask{{Set: domain.FactorTask{TaskID: "task_a"}, Members: []domain.MemberDef{member}}}
 	first, err := CatalogHash(base)
 	require.NoError(t, err)
 
 	member.Params = map[string]float64{"window": 20}
-	withParams, err := CatalogHash([]domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}})
+	withParams, err := CatalogHash([]domain.EngineTask{{Set: domain.FactorTask{TaskID: "task_a"}, Members: []domain.MemberDef{member}}})
 	require.NoError(t, err)
 	require.NotEqual(t, first, withParams)
 
 	member.Params = map[string]float64{"window": 50}
-	other, err := CatalogHash([]domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}})
+	other, err := CatalogHash([]domain.EngineTask{{Set: domain.FactorTask{TaskID: "task_a"}, Members: []domain.MemberDef{member}}})
 	require.NoError(t, err)
 	require.NotEqual(t, withParams, other)
 }
 
 func TestCatalogHashIgnoresTimestamps(t *testing.T) {
-	sets := []domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: domain.AsMembers(testFactor("bias"))}}
+	sets := []domain.EngineTask{{Set: domain.FactorTask{TaskID: "task_a"}, Members: domain.AsMembers(testFactor("bias"))}}
 	first, err := CatalogHash(sets)
 	require.NoError(t, err)
 	sets[0].Set.UpdatedAt = sets[0].Set.UpdatedAt.Add(1)
@@ -102,7 +102,7 @@ func TestCatalogHashIgnoresTimestamps(t *testing.T) {
 func TestCatalogInSyncComparesHeartbeatHash(t *testing.T) {
 	hub, db, _ := newTestHub(t)
 	ctx := context.Background()
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
 	hash, _, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)
 
@@ -112,7 +112,7 @@ func TestCatalogInSyncComparesHeartbeatHash(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info.CatalogInSync)
 
-	hub.SetResultReady("set_a", true)
+	hub.SetResultReady("task_a", true)
 	info, _, _, err = hub.Engine(ctx)
 	require.NoError(t, err)
 	require.False(t, info.CatalogInSync)

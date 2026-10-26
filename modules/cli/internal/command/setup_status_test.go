@@ -15,7 +15,7 @@ type fakeRegistry struct {
 	hosts       map[string]string
 	deployments map[string]map[string]string
 	calls       []string
-	failSet     bool
+	failTask    bool
 }
 
 func (f *fakeRegistry) Registry(context.Context) ([]setupclient.HostRegistration, []setupclient.DeploymentRegistration, error) {
@@ -34,7 +34,7 @@ func (f *fakeRegistry) Registry(context.Context) ([]setupclient.HostRegistration
 
 func (f *fakeRegistry) SetHostStatus(_ context.Context, hostID, status string) error {
 	f.calls = append(f.calls, "host:"+hostID+":"+status)
-	if f.failSet {
+	if f.failTask {
 		return errors.New("admin refused")
 	}
 	f.hosts[hostID] = status
@@ -43,7 +43,7 @@ func (f *fakeRegistry) SetHostStatus(_ context.Context, hostID, status string) e
 
 func (f *fakeRegistry) SetDeploymentStatus(_ context.Context, hostID, component, status string) error {
 	f.calls = append(f.calls, "deployment:"+hostID+"/"+component+":"+status)
-	if f.failSet {
+	if f.failTask {
 		return errors.New("admin refused")
 	}
 	f.deployments[hostID][component] = status
@@ -200,7 +200,7 @@ func TestDeploymentChangeForOrdinaryComponentOnlyTouchesRegistry(t *testing.T) {
 func TestHostEnableDoesNotStartProgramsWhenRegistryChangeFails(t *testing.T) {
 	env, registry, calls := statusFixture()
 	registry.hosts["factor"] = "disabled"
-	registry.failSet = true
+	registry.failTask = true
 	report, err := changeHostStatus(t.Context(), env, "factor", true, true)
 	require.ErrorContains(t, err, "admin refused")
 	assert.Empty(t, *calls, "登记没改成功就不能启动外部程序")

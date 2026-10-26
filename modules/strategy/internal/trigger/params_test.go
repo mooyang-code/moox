@@ -34,7 +34,7 @@ func tunedResolved() input.Resolved {
 		CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true,
 		Columns:     map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "fast", FactorID: "f", DefinitionHash: "h1"}},
 		Factors:     map[string]string{"fast": "h1"},
-		ViewColumns: []string{"close", "m"}, FactorSetID: "fset_i1",
+		ViewColumns: []string{"close", "m"}, FactorTaskID: "ftask_i1",
 		FactorParams: map[string][]dsl.ParamDecl{"fast": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}},
 	}
 }
@@ -54,7 +54,7 @@ func TestHandleWritesNextPeriodParamSubmission(t *testing.T) {
 		t.Fatalf("应有一条待提交的参数：%+v err=%v", submissions, err)
 	}
 	got := submissions[0]
-	if got.Status != store.ParamPending || got.SetID != "fset_i1" || got.ResultID != result.ResultID || got.RequestID != "p-"+result.ResultID {
+	if got.Status != store.ParamPending || got.TaskID != "ftask_i1" || got.ResultID != result.ResultID || got.RequestID != "p-"+result.ResultID {
 		t.Fatalf("记录不符：%+v", got)
 	}
 	if !got.PeriodTime.Equal(barStart(3)) || !got.BasedOnPeriod.Equal(barStart(2)) {

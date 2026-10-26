@@ -101,7 +101,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			return Outcome{StageDurations: outcome.StageDurations}, budgetErr
 		}
 		if budgetErr != nil {
-			log.ErrorContextf(ctx, "factor_memory_budget_exceeded set_id=%s error=%v", plan.Set.SetID, budgetErr)
+			log.ErrorContextf(ctx, "factor_memory_budget_exceeded task_id=%s error=%v", plan.Set.TaskID, budgetErr)
 			computation = r.failAll(plan, budgetErr)
 			goto assemble
 		}
@@ -194,7 +194,7 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 	}
 	target, err := planTarget(r.clock, plan)
 	if err != nil {
-		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s error=%v", plan.Set.SetID, err)
+		log.ErrorContextf(ctx, "factor_warming_record_failed task_id=%s error=%v", plan.Set.TaskID, err)
 		return
 	}
 	hashes := make([]string, len(plan.Members))
@@ -205,13 +205,13 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 	for _, subject := range warming {
 		for i, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: hashes[i],
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: hashes[i],
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonWarming,
 			})
 		}
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(warming), err)
+		log.ErrorContextf(ctx, "factor_warming_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(warming), err)
 	}
 }
 
@@ -230,13 +230,13 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 	for _, subject := range plan.UpstreamFailed {
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_upstream_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(plan.UpstreamFailed), err)
+		log.ErrorContextf(ctx, "factor_upstream_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(plan.UpstreamFailed), err)
 		return fmt.Errorf("%w: record upstream failures: %v", storageio.ErrInfra, err)
 	}
 	return nil
@@ -257,7 +257,7 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 	}
 	target, err := planTarget(r.clock, plan)
 	if err != nil {
-		log.ErrorContextf(ctx, "factor_unavailable_record_failed set_id=%s error=%v", plan.Set.SetID, err)
+		log.ErrorContextf(ctx, "factor_unavailable_record_failed task_id=%s error=%v", plan.Set.TaskID, err)
 		return
 	}
 	var entries []GapEntry
@@ -267,7 +267,7 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		}
 		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
+				TaskID: plan.Set.TaskID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}
@@ -276,6 +276,6 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		return
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_unavailable_record_failed set_id=%s period=%s entries=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(entries), err)
+		log.ErrorContextf(ctx, "factor_unavailable_record_failed task_id=%s period=%s entries=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(entries), err)
 	}
 }

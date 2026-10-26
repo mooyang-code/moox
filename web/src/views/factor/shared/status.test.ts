@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isActiveJob, jobProgress, jobStatusTag, setStatusTag, splitJobNote } from "./status";
+import { isActiveJob, jobProgress, jobStatusTag, taskStatusTag, splitJobNote } from "./status";
 
 describe("splitJobNote", () => {
   it("treats the degraded prefix as a note, not an error", () => {
@@ -35,8 +35,8 @@ describe("job helpers", () => {
   });
 
   it("maps statuses to labels and falls back for unknown values", () => {
-    expect(setStatusTag("deleting").label).toBe("清理中");
+    expect(taskStatusTag("deleting").label).toBe("清理中");
     expect(jobStatusTag("cancelled").label).toBe("已取消");
-    expect(setStatusTag("???")).toEqual({ label: "???", color: "gray" });
+    expect(taskStatusTag("???")).toEqual({ label: "???", color: "gray" });
   });
 });

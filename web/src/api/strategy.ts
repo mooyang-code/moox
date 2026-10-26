@@ -404,7 +404,7 @@ function normalizeSubmission(value: any): ParamSubmission {
     request_id: value?.request_id ?? "",
     instance_id: value?.instance_id ?? "",
     result_id: value?.result_id ?? "",
-    set_id: value?.set_id ?? "",
+    task_id: value?.task_id ?? "",
     period_time: Number(value?.period_time ?? 0),
     based_on_period: Number(value?.based_on_period ?? 0),
     params_json: value?.params_json || "{}",

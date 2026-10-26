@@ -88,7 +88,7 @@ message HealthComponent {
   // 模块自己的生命周期状态（设计 6.1）；模块没有生命周期接口时为空。
   HealthLifecycle lifecycle = 12;
 }
-// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子集合、策略实例）。
+// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子任务、策略实例）。
 message HealthLifecycle {
   // 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | resetting | reset_failed | fault。
   string stage = 1;

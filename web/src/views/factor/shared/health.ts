@@ -1,5 +1,5 @@
-import type { FactorSet, SetRunSummary } from "@/api/factor/types";
-import { setStatusTag } from "./status";
+import type { FactorTask, TaskRunSummary } from "@/api/factor/types";
+import { taskStatusTag } from "./status";
 
 export type SetHealthKey = "pending" | "deleting" | "disabled" | "idle" | "failed" | "degraded" | "lagging" | "ok";
 
@@ -46,7 +46,7 @@ export function closedBarLag(freq: string, lastPeriodSec: number, nowSec: number
 }
 
 /** 引擎汇总里的落后量：汇总的“现在”是 上一期时间 + lag_seconds（服务端计算它时的时钟），不依赖浏览器时钟。 */
-export function runBarLag(freq: string, lastRun?: Pick<SetRunSummary, "last_period_time" | "lag_seconds">): BarLag {
+export function runBarLag(freq: string, lastRun?: Pick<TaskRunSummary, "last_period_time" | "lag_seconds">): BarLag {
   const last = Number(lastRun?.last_period_time);
   const lag = Number(lastRun?.lag_seconds);
   if (!last || !Number.isFinite(lag)) return { bars: 0, seconds: 0 };
@@ -54,15 +54,15 @@ export function runBarLag(freq: string, lastRun?: Pick<SetRunSummary, "last_peri
 }
 
 /** 展示用文案：已追平，或“落后 N 根（X 分钟）”；还没有周期时为空。 */
-export function barLagText(freq: string, lastRun?: Pick<SetRunSummary, "last_period_time" | "lag_seconds">): string {
+export function barLagText(freq: string, lastRun?: Pick<TaskRunSummary, "last_period_time" | "lag_seconds">): string {
   if (!lastRun?.last_period_time) return "";
   const { bars, seconds } = runBarLag(freq, lastRun);
   return bars === 0 ? "已追平" : `落后 ${bars} 根（${formatLag(seconds)}）`;
 }
 
-export function setHealth(set: Pick<FactorSet, "status" | "freq">, lastRun?: SetRunSummary): SetHealth {
+export function setHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: TaskRunSummary): SetHealth {
   if (set.status === "deleting" || set.status === "pending" || set.status === "disabled") {
-    const tag = setStatusTag(set.status);
+    const tag = taskStatusTag(set.status);
     return { key: set.status, ...tag };
   }
   if (!lastRun || !lastRun.last_period_time) return { key: "idle", label: "暂无周期", color: "gray" };

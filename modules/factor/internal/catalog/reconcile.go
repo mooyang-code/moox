@@ -12,67 +12,67 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-// Reconcile refreshes result columns for all enabled factor sets. Bootstrap
+// Reconcile refreshes result columns for all enabled factor tasks. Bootstrap
 // owns when this method runs at startup and on the periodic interval.
 func (s *Service) Reconcile(ctx context.Context) error {
-	sets, err := s.db.ListSets(ctx)
+	sets, err := s.db.ListTasks(ctx)
 	if err != nil {
 		return err
 	}
 	var reconcileErrors []error
 	for _, set := range sets {
-		if set.Status == domain.SetStatusDeleting {
-			if err := s.DeleteSet(ctx, set.SetID, true); err != nil {
-				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor set purge %q: %w", set.SetID, err))
+		if set.Status == domain.TaskStatusDeleting {
+			if err := s.DeleteTask(ctx, set.TaskID, true); err != nil {
+				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor task purge %q: %w", set.TaskID, err))
 			}
 			continue
 		}
-		if set.Status != domain.SetStatusEnabled {
+		if set.Status != domain.TaskStatusEnabled {
 			continue
 		}
-		if err := s.ReconcileSet(ctx, set.SetID); err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile factor set %q: %w", set.SetID, err))
+		if err := s.ReconcileTask(ctx, set.TaskID); err != nil {
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile factor task %q: %w", set.TaskID, err))
 		}
 	}
 	return errors.Join(reconcileErrors...)
 }
 
-func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
-	unlock, err := s.locks.LockContext(ctx, strings.TrimSpace(setID))
+func (s *Service) ReconcileTask(ctx context.Context, taskID string) error {
+	unlock, err := s.locks.LockContext(ctx, strings.TrimSpace(taskID))
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if set.Status != domain.SetStatusEnabled {
+	if set.Status != domain.TaskStatusEnabled {
 		return nil
 	}
-	return s.reconcileSetUnlocked(ctx, set)
+	return s.reconcileTaskUnlocked(ctx, set)
 }
 
-func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet) error {
+func (s *Service) reconcileTaskUnlocked(ctx context.Context, set domain.FactorTask) error {
 	err := s.reconcileResultColumns(ctx, set)
 	switch {
 	case err == nil:
-		s.markReady(set.SetID, true)
+		s.markReady(set.TaskID, true)
 	case errors.Is(err, storageio.ErrInfra):
 		// A transient Storage failure says nothing about the result dataset;
 		// keep the engine computing with the last known readiness.
 	default:
-		s.markReady(set.SetID, false)
+		s.markReady(set.TaskID, false)
 	}
 	return err
 }
 
-func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorSet) error {
+func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorTask) error {
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
 		return err
 	}
-	members, err := s.db.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
+	members, err := s.db.ListMembers(ctx, set.TaskID, domain.MemberStatusEnabled)
 	if err != nil {
 		return fmt.Errorf("list enabled members: %w", err)
 	}
@@ -83,7 +83,7 @@ func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorS
 	return s.ensureResultColumns(ctx, set, source, columns, defs...)
 }
 
-func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet, source storageio.DatasetInfo, sourceColumns []storageio.ColumnInfo, members ...domain.MemberDef) error {
+func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask, source storageio.DatasetInfo, sourceColumns []storageio.ColumnInfo, members ...domain.MemberDef) error {
 	if s.metadata == nil {
 		return errors.New("Storage metadata is required")
 	}
@@ -188,7 +188,7 @@ func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
 	return true
 }
 
-func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (storageio.DatasetInfo, []storageio.ColumnInfo, error) {
+func (s *Service) sourceDataset(ctx context.Context, set domain.FactorTask) (storageio.DatasetInfo, []storageio.ColumnInfo, error) {
 	if s.metadata == nil {
 		return storageio.DatasetInfo{}, nil, errors.New("Storage metadata is required")
 	}
@@ -203,7 +203,7 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (stor
 		return storageio.DatasetInfo{}, nil, errors.New("factor_result dataset cannot be used as a source")
 	}
 	if source.DataKind != storageio.DataKindTimeSeries {
-		return storageio.DatasetInfo{}, nil, errors.New("factor sets require a time_series source dataset")
+		return storageio.DatasetInfo{}, nil, errors.New("factor tasks require a time_series source dataset")
 	}
 	if source.Freq != set.Freq {
 		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset freq is %q, not %q", source.Freq, set.Freq)

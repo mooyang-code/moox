@@ -1,6 +1,6 @@
 // Package lifecycle 是各模块共用的生命周期状态机（设计第 6 节）。
 //
-// 每个模块和它管理的对象（因子集合、策略实例……）都有同一套阶段：
+// 每个模块和它管理的对象（因子任务、策略实例……）都有同一套阶段：
 //
 //	未初始化 → 未就绪 / 就绪 → 预热 → 运行；运行中可以暂停、自动暂停、故障。
 //
@@ -225,12 +225,12 @@ type Hooks struct {
 	CheckModule func(ctx context.Context) []Check
 	// CheckObject 检查一个对象能不能运行（数据源就绪、上游没有断档……）。
 	CheckObject func(ctx context.Context, ref Ref) []Check
-	// Objects 列出当前存在的对象（目录里启用的因子集合、策略实例……）。
+	// Objects 列出当前存在的对象（目录里启用的因子任务、策略实例……）。
 	Objects func() []Ref
 	// Init 执行初始化动作（可为 nil）；ref 为空表示模块自身。
 	Init func(ctx context.Context, ref Ref) error
 	// AutoStart 报告对象是否随创建自动推进到预热（init → start）：返回 true 的对象在未初始化、就绪时由周期刷新自动
-	// init、start，不必用户逐个执行命令（例如策略实例的私有因子集、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
+	// init、start，不必用户逐个执行命令（例如策略实例的私有因子任务、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
 	// 的对象不动，预热到运行的确认（confirm）默认仍由用户执行（见 AutoConfirm）。为 nil 表示没有对象自动推进。
 	AutoStart func(ref Ref) bool
 	// AutoConfirm 报告预热中的对象能否自动确认进入运行；since 是对象进入预热的时间。只对 AutoStart 认定的对象调用，

@@ -936,18 +936,18 @@ components:
         timeout_ms: 120000
         max_body_bytes: 4194304
         methods:
-          - CreateFactorSet
-          - SetFactorSetStatus
-          - DeleteFactorSet
-          - GetFactorSet
-          - ListFactorSets
+          - CreateFactorTask
+          - SetFactorTaskStatus
+          - DeleteFactorTask
+          - GetFactorTask
+          - ListFactorTasks
           - CreateFactor
           - UpdateFactor
           - DeleteFactor
           - GetFactor
-          - AddFactorToSet
-          - RemoveFactorFromSet
-          - SetFactorMemberStatus
+          - AddTaskMember
+          - RemoveTaskMember
+          - SetTaskMemberStatus
           - ListFactors
           - RecalcFactors
           - ListRecalcJobs
@@ -962,14 +962,14 @@ components:
           - UpsertFactorCategory
           - DeleteFactorCategory
           - SetFactorCategory
-          - EnsureInstanceFactorSet
-          - SetInstanceFactorSetEnabled
-          - ReleaseInstanceFactorSet
+          - EnsureInstanceFactorTask
+          - SetInstanceFactorTaskEnabled
+          - ReleaseInstanceFactorTask
           - SubmitFactorParams
           - GetFactorParams
         read_only_methods:
-          - GetFactorSet
-          - ListFactorSets
+          - GetFactorTask
+          - ListFactorTasks
           - GetFactor
           - ListFactors
           - ListRecalcJobs
@@ -982,18 +982,18 @@ components:
           - GetFactorParams
         acl:
           - methods:
-              - CreateFactorSet
-              - SetFactorSetStatus
-              - DeleteFactorSet
-              - GetFactorSet
-              - ListFactorSets
+              - CreateFactorTask
+              - SetFactorTaskStatus
+              - DeleteFactorTask
+              - GetFactorTask
+              - ListFactorTasks
               - CreateFactor
               - UpdateFactor
               - DeleteFactor
               - GetFactor
-              - AddFactorToSet
-              - RemoveFactorFromSet
-              - SetFactorMemberStatus
+              - AddTaskMember
+              - RemoveTaskMember
+              - SetTaskMemberStatus
               - ListFactors
               - RecalcFactors
               - ListRecalcJobs
@@ -1011,18 +1011,18 @@ components:
             callers:
               - console
               - moox-cli
-          # 策略实例的私有因子集与参数提交（因子动态调参）：只有策略服务是参数写入方。
+          # 策略实例的私有因子任务与参数提交（因子动态调参）：只有策略服务是参数写入方。
           - methods:
-              - GetFactorSet
-              - ListFactorSets
+              - GetFactorTask
+              - ListFactorTasks
               - GetFactor
               - ListFactors
               - ListRecalcJobs
               - GetStatus
               - ListFactorCategories
-              - EnsureInstanceFactorSet
-              - SetInstanceFactorSetEnabled
-              - ReleaseInstanceFactorSet
+              - EnsureInstanceFactorTask
+              - SetInstanceFactorTaskEnabled
+              - ReleaseInstanceFactorTask
               - SubmitFactorParams
               - GetFactorParams
             callers:

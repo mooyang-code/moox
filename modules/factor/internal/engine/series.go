@@ -41,12 +41,12 @@ type seriesFollower struct {
 }
 
 type seriesSets interface {
-	SetByID(setID string) (domain.EngineSet, SetLookup)
+	SetByID(taskID string) (domain.EngineTask, SetLookup)
 }
 
-// seriesCommitted 返回集合已经算过的最后一期（水位已提交到的周期之前）；没有记录时 ok 为 false。
+// seriesCommitted 返回任务已经算过的最后一期（水位已提交到的周期之前）；没有记录时 ok 为 false。
 type seriesCommitted interface {
-	CommittedThrough(setID string) (time.Time, bool)
+	CommittedThrough(taskID string) (time.Time, bool)
 }
 
 func (f *seriesFollower) Run(ctx context.Context) {
@@ -84,8 +84,8 @@ func (f *seriesFollower) tick(ctx context.Context) {
 	f.recompute(ctx)
 }
 
-// recompute 处理各数据源待办的失效重算区间。同一个数据源可以被多个集合共用（各策略实例的私有集合）：
-// 待办对每个集合都要重算，全部成功之后才清掉。
+// recompute 处理各数据源待办的失效重算区间。同一个数据源可以被多个任务共用（各策略实例的私有任务）：
+// 待办对每个任务都要重算，全部成功之后才清掉。
 func (f *seriesFollower) recompute(ctx context.Context) {
 	bySource := map[seriesstore.Source][]string{}
 	var sources []seriesstore.Source
@@ -93,7 +93,7 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 		if _, seen := bySource[info.Source]; !seen {
 			sources = append(sources, info.Source)
 		}
-		bySource[info.Source] = append(bySource[info.Source], info.SetID)
+		bySource[info.Source] = append(bySource[info.Source], info.TaskID)
 	}
 	for _, src := range sources {
 		if ctx.Err() != nil || (f.active != nil && !f.active()) {
@@ -108,11 +108,11 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 			continue
 		}
 		done := true
-		for _, setID := range bySource[src] {
-			if err := f.recomputeSet(ctx, setID, pending); err != nil {
+		for _, taskID := range bySource[src] {
+			if err := f.recomputeTask(ctx, taskID, pending); err != nil {
 				done = false
 				if ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
-					log.WarnContextf(ctx, "factor_series_recompute_failed set_id=%s error=%v", setID, err)
+					log.WarnContextf(ctx, "factor_series_recompute_failed task_id=%s error=%v", taskID, err)
 				}
 			}
 		}
@@ -125,10 +125,10 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 	}
 }
 
-func (f *seriesFollower) recomputeSet(ctx context.Context, setID string, pending []seriesstore.PendingSpan) error {
-	set, lookup := f.sets.SetByID(setID)
+func (f *seriesFollower) recomputeTask(ctx context.Context, taskID string, pending []seriesstore.PendingSpan) error {
+	set, lookup := f.sets.SetByID(taskID)
 	if lookup != SetFound {
-		return nil // 集合已停用或删除：不影响同源的其他集合
+		return nil // 任务已停用或删除：不影响同源的其他任务
 	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
@@ -139,10 +139,10 @@ func (f *seriesFollower) recomputeSet(ctx context.Context, setID string, pending
 	for _, member := range set.Members {
 		cross = cross || member.Factor.FactorType == domain.FactorTypeCrossSection
 	}
-	committed, hasCommitted := f.periods.CommittedThrough(setID)
+	committed, hasCommitted := f.periods.CommittedThrough(taskID)
 
 	// 失效范围向后扩展到受影响的回看窗口：[from, to + (L−1)×周期)；有连续水位时再截断到水位之前（水位之后的周期由实时与追赶用新数据算）。
-	// 没有水位（集合还没有跑过实时周期）时水位不能代表「算过的范围」（可能做过人工补算），不截断，按请求的范围重算，待办不能丢。
+	// 没有水位（任务还没有跑过实时周期）时水位不能代表「算过的范围」（可能做过人工补算），不截断，按请求的范围重算，待办不能丢。
 	type job struct {
 		from, to time.Time
 		subjects map[string]struct{}
@@ -184,13 +184,13 @@ func (f *seriesFollower) recomputeSet(ctx context.Context, setID string, pending
 	return nil
 }
 
-// run 在 [start, end) 上重算一批标的的全部因子（非只填充，覆盖已经算出的旧值）。截面因子用集合的全部标的重算。
-func (f *seriesFollower) run(ctx context.Context, set domain.EngineSet, changed map[string]struct{}, cross bool, start, end time.Time) error {
+// run 在 [start, end) 上重算一批标的的全部因子（非只填充，覆盖已经算出的旧值）。截面因子用任务的全部标的重算。
+func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed map[string]struct{}, cross bool, start, end time.Time) error {
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		if f.active != nil && !f.active() {
 			return recalcexec.Selection{}, nil
 		}
-		current, lookup := f.sets.SetByID(set.Set.SetID)
+		current, lookup := f.sets.SetByID(set.Set.TaskID)
 		if lookup != SetFound {
 			return recalcexec.Selection{}, nil
 		}
@@ -214,7 +214,7 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineSet, changed 
 		// 失效重算的是已经算过的周期：按当时冻结的参数重算。
 		var intervals map[string][]domain.ParamInterval
 		if f.params != nil {
-			if intervals, err = f.params.Intervals(ctx, current.Set.SetID, start, end); err != nil {
+			if intervals, err = f.params.Intervals(ctx, current.Set.TaskID, start, end); err != nil {
 				return recalcexec.Selection{}, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
 			}
 		}
@@ -222,7 +222,7 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineSet, changed 
 	}
 	_, err := f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr == nil && outcome.Status == "degraded" {
-			log.WarnContextf(ctx, "factor_series_recompute_degraded set_id=%s from=%s to=%s failed_subjects=%d", set.Set.SetID,
+			log.WarnContextf(ctx, "factor_series_recompute_degraded task_id=%s from=%s to=%s failed_subjects=%d", set.Set.TaskID,
 				start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), len(outcome.FailedSubjects))
 		}
 	})

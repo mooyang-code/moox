@@ -192,10 +192,10 @@ const (
 // Resolved 是启用时固化的绑定解析，保存在实例与会话的 resolved_json 中。
 type Resolved struct {
 	ViewID string `json:"view_id"`
-	// SourceViewID 与 FactorSetID 只在策略声明了 factors 时有值：实例绑定的 K 线 View，以及为实例建立的私有因子集。
-	// 此时 ViewID 是私有因子集的结果 View（事件路由与求值都用它）。
+	// SourceViewID 与 FactorTaskID 只在策略声明了 factors 时有值：实例绑定的 K 线 View，以及为实例建立的私有因子任务。
+	// 此时 ViewID 是私有因子任务的结果 View（事件路由与求值都用它）。
 	SourceViewID string `json:"source_view_id,omitempty"`
-	FactorSetID  string `json:"factor_set_id,omitempty"`
+	FactorTaskID string `json:"factor_task_id,omitempty"`
 	// FactorParams 是各成员（别名）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
 	FactorParams    map[string][]ParamDecl   `json:"factor_params,omitempty"`
 	DatasetID       string                   `json:"dataset_id"`

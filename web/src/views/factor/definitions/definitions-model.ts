@@ -45,9 +45,9 @@ export function filterDefinitions(items: FactorInfo[], filters: DefinitionFilter
 }
 
 export interface UsageChip {
-  /** 列表项的唯一键：同一定义在一个集合里可以用不同别名出现多次。 */
+  /** 列表项的唯一键：同一定义在一个任务里可以用不同别名出现多次。 */
   key: string;
-  setId: string;
+  taskId: string;
   /** 成员别名；与定义 ID 相同时为空。 */
   alias?: string;
   label: string;
@@ -58,12 +58,12 @@ export interface UsageChip {
 }
 
 /** 使用情况 chip：「数据集名 · 频率」+ 状态点（labelOf 由页面用 store 拼出）。 */
-export function usageChips(usages: FactorUsage[], labelOf: (setId: string) => string): UsageChip[] {
+export function usageChips(usages: FactorUsage[], labelOf: (taskId: string) => string): UsageChip[] {
   return usages.map(usage => ({
-    key: `${usage.set_id}/${usage.member_alias ?? ""}`,
-    setId: usage.set_id,
+    key: `${usage.task_id}/${usage.member_alias ?? ""}`,
+    taskId: usage.task_id,
     alias: usage.member_alias || undefined,
-    label: labelOf(usage.set_id),
+    label: labelOf(usage.task_id),
     status: usage.status,
     statusLabel: memberStatusTag(usage.status).label,
     paramsText: fixedParamsText(usage.params) || undefined
@@ -150,7 +150,7 @@ export interface DefinitionRow {
 export function definitionRows(
   items: FactorInfo[],
   categories: FactorCategory[],
-  labelOf: (setId: string) => string
+  labelOf: (taskId: string) => string
 ): DefinitionRow[] {
   return items.map(item => ({
     factor_id: item.factor.factor_id,

@@ -17,7 +17,7 @@ func snapshotOf(window float64) domain.ParamSnapshot {
 
 func submit(t *testing.T, s *Store, requestID string, at time.Time, window float64) (domain.ParamRequest, error) {
 	t.Helper()
-	return s.SubmitParamRequest(context.Background(), domain.ParamRequest{RequestID: requestID, SetID: "set", MemberAlias: "fast",
+	return s.SubmitParamRequest(context.Background(), domain.ParamRequest{RequestID: requestID, TaskID: "set", MemberAlias: "fast",
 		PeriodTime: at, Snapshot: snapshotOf(window), Writer: "inst"})
 }
 
@@ -121,8 +121,8 @@ func TestApplyOfflineFreezes(t *testing.T) {
 	require.NoError(t, err)
 	previous := func(at time.Time) time.Time { return at.Add(-time.Minute) }
 	conflicts, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{
-		{SetID: "set", MemberAlias: "fast", PeriodTime: period(0), Snapshot: snapshotOf(99)},
-		{SetID: "set", MemberAlias: "fast", PeriodTime: period(1), Snapshot: snapshotOf(20)},
+		{TaskID: "set", MemberAlias: "fast", PeriodTime: period(0), Snapshot: snapshotOf(99)},
+		{TaskID: "set", MemberAlias: "fast", PeriodTime: period(1), Snapshot: snapshotOf(20)},
 	}, previous)
 	require.NoError(t, err)
 	require.Len(t, conflicts, 1)
@@ -199,7 +199,7 @@ func TestFreezeAfterOfflineKeepsDefaultSourceForNeverRequestedMember(t *testing.
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.Equal(t, domain.ParamsDefault, freeze(t, s, period(0)).Source)
-	_, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{{SetID: "set", MemberAlias: "fast", PeriodTime: period(1),
+	_, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{{TaskID: "set", MemberAlias: "fast", PeriodTime: period(1),
 		Snapshot: snapshotOf(20), SnapshotHash: snapshotOf(20).Hash(), Source: domain.ParamsCarriedOffline}},
 		func(at time.Time) time.Time { return at.Add(-time.Minute) })
 	require.NoError(t, err)

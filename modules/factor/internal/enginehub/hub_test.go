@@ -25,23 +25,23 @@ func newTestHub(t *testing.T) (*Hub, *store.Store, *fakeClock) {
 	return New(db, WithClock(clock.Now), WithEngineLeaseTTL(45*time.Second), WithJobLeaseTTL(time.Minute)), db, clock
 }
 
-func seedSet(t *testing.T, db *store.Store, setID string, members map[string]string) domain.FactorSet {
+func seedTask(t *testing.T, db *store.Store, taskID string, members map[string]string) domain.FactorTask {
 	t.Helper()
 	ctx := context.Background()
-	set := domain.FactorSet{
-		SetID: setID, SpaceID: "crypto", SourceDatasetID: "dataset_" + setID, Freq: "1m",
-		ResultDatasetID: "dataset_factor_" + setID,
-		Status:          domain.SetStatusEnabled,
+	set := domain.FactorTask{
+		TaskID: taskID, SpaceID: "crypto", SourceDatasetID: "dataset_" + taskID, Freq: "1m",
+		ResultDatasetID: "dataset_factor_" + taskID,
+		Status:          domain.TaskStatusEnabled,
 	}
-	require.NoError(t, db.CreateSet(ctx, set))
+	require.NoError(t, db.CreateTask(ctx, set))
 	for factorID, status := range members {
 		if _, err := db.GetFactor(ctx, factorID); err != nil {
 			require.NoError(t, db.CreateFactor(ctx, testFactor(factorID)))
 		}
-		_, err := db.AddMember(ctx, setID, factorID, factorID, nil)
+		_, err := db.AddMember(ctx, taskID, factorID, factorID, nil)
 		require.NoError(t, err)
 		if status == domain.MemberStatusEnabled {
-			require.NoError(t, db.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+			require.NoError(t, db.SetMemberStatus(ctx, taskID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 		}
 	}
 	return set
@@ -133,17 +133,17 @@ func TestEngineBeforeFirstHeartbeat(t *testing.T) {
 func TestLatestRunRecomputesLag(t *testing.T) {
 	hub, _, clock := newTestHub(t)
 	period := clock.now.Add(-2 * time.Minute)
-	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{RecentRuns: []domain.SetRunSummary{
-		{SetID: "set_a", LastPeriodTime: period.Unix(), LastStatus: "complete", LagSeconds: 1},
+	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{RecentRuns: []domain.TaskRunSummary{
+		{TaskID: "task_a", LastPeriodTime: period.Unix(), LastStatus: "complete", LagSeconds: 1},
 	}})
 	require.NoError(t, err)
 	clock.Advance(time.Minute)
 
-	run := hub.LatestRun("set_a")
+	run := hub.LatestRun("task_a")
 
 	require.Equal(t, "complete", run.LastStatus)
 	require.Equal(t, int64(180), run.LagSeconds)
-	require.Equal(t, "set_b", hub.LatestRun("set_b").SetID)
+	require.Equal(t, "task_b", hub.LatestRun("task_b").TaskID)
 }
 
 func TestHeartbeatRejectsSameEngineFromAnotherBoot(t *testing.T) {

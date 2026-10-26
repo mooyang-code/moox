@@ -26,7 +26,7 @@ func testPipelineFactor(id, factorType string, lookback int, partial bool) domai
 
 func computePlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
-		Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
+		Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		Members: domain.AsMembers(factors...), TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}
@@ -157,7 +157,7 @@ func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
 		Outputs: []string{"broken_value"}, LookbackPeriods: 1, FactorType: domain.FactorTypeTimeSeries}
 	var counted atomic.Int32
 	plan := computePlan(target, []domain.FactorDef{good, broken}, []string{"BTC", "ETH"})
-	runner := newComputeRunner(Config{OnCompileError: func(setID, factorID string) {
+	runner := newComputeRunner(Config{OnCompileError: func(taskID, factorID string) {
 		require.Equal(t, "broken", factorID)
 		counted.Add(1)
 	}})
@@ -234,7 +234,7 @@ func TestComputeIsDeterministicAcrossWorkersAndTags(t *testing.T) {
 
 func recalcPlan(start time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
-		Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
+		Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
 		Members: domain.AsMembers(factors...), TargetStart: start, TargetEnd: start.Add(3 * time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}

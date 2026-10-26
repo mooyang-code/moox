@@ -11,15 +11,15 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
-// 策略实例的私有因子集与参数提交（因子动态调参执行计划 2.3、2.8）。声明了 factors 的策略在启用实例时由 FactorMgr
-// 建立私有因子集（成员恰好是声明的因子，实例是唯一的参数写入方），实例绑定它的结果 View 求值；每期求出的下一期参数
+// 策略实例的私有因子任务与参数提交（因子动态调参执行计划 2.3、2.8）。声明了 factors 的策略在启用实例时由 FactorMgr
+// 建立私有因子任务（成员恰好是声明的因子，实例是唯一的参数写入方），实例绑定它的结果 View 求值；每期求出的下一期参数
 // 经结果库里的待提交记录异步提交。
 
 // ParamDecl 是因子定义声明的一个可调参数。
 type ParamDecl = dsl.ParamDecl
 
-// InstanceFactorSetRequest 是为实例建立或对齐私有因子集的请求。
-type InstanceFactorSetRequest struct {
+// InstanceFactorTaskRequest 是为实例建立或对齐私有因子任务的请求。
+type InstanceFactorTaskRequest struct {
 	InstanceID      string
 	SpaceID         string
 	SourceDatasetID string
@@ -27,9 +27,9 @@ type InstanceFactorSetRequest struct {
 	Members         []dsl.FactorDecl
 }
 
-// InstanceFactorSet 是私有因子集：集合 ID 与它的结果 View。
-type InstanceFactorSet struct {
-	SetID  string
+// InstanceFactorTask 是私有因子任务：集合 ID 与它的结果 View。
+type InstanceFactorTask struct {
+	TaskID string
 	ViewID string
 }
 
@@ -43,7 +43,7 @@ type ParamValue struct {
 type ParamSubmission struct {
 	RequestID     string                           `json:"request_id"`
 	Writer        string                           `json:"writer"`
-	SetID         string                           `json:"set_id"`
+	TaskID        string                           `json:"task_id"`
 	PeriodTime    time.Time                        `json:"period_time"`
 	BasedOnPeriod time.Time                        `json:"based_on_period"`
 	Members       map[string]map[string]ParamValue `json:"members"`
@@ -63,62 +63,62 @@ const (
 	SubmitRejected = "rejected"
 )
 
-// FactorSets 是私有因子集与参数提交用到的 FactorMgr 接口。
-type FactorSets interface {
-	EnsureInstanceFactorSet(ctx context.Context, request InstanceFactorSetRequest) (InstanceFactorSet, error)
-	SetInstanceFactorSetEnabled(ctx context.Context, instanceID string, enabled bool) error
-	ReleaseInstanceFactorSet(ctx context.Context, instanceID string) error
+// FactorTasks 是私有因子任务与参数提交用到的 FactorMgr 接口。
+type FactorTasks interface {
+	EnsureInstanceFactorTask(ctx context.Context, request InstanceFactorTaskRequest) (InstanceFactorTask, error)
+	SetInstanceFactorTaskEnabled(ctx context.Context, instanceID string, enabled bool) error
+	ReleaseInstanceFactorTask(ctx context.Context, instanceID string) error
 	SubmitFactorParams(ctx context.Context, submission ParamSubmission) ([]MemberSubmitResult, error)
 }
 
-var _ FactorSets = (*RPCClient)(nil)
+var _ FactorTasks = (*RPCClient)(nil)
 
-// EnsureInstanceFactorSet 建立或对齐实例的私有因子集（幂等）。
-func (c *RPCClient) EnsureInstanceFactorSet(ctx context.Context, request InstanceFactorSetRequest) (InstanceFactorSet, error) {
+// EnsureInstanceFactorTask 建立或对齐实例的私有因子任务（幂等）。
+func (c *RPCClient) EnsureInstanceFactorTask(ctx context.Context, request InstanceFactorTaskRequest) (InstanceFactorTask, error) {
 	if c == nil || c.Factor == nil {
-		return InstanceFactorSet{}, errors.New("Factor 客户端未配置")
+		return InstanceFactorTask{}, errors.New("Factor 客户端未配置")
 	}
-	req := &factorpb.EnsureInstanceFactorSetReq{InstanceId: request.InstanceID, SpaceId: request.SpaceID,
+	req := &factorpb.EnsureInstanceFactorTaskReq{InstanceId: request.InstanceID, SpaceId: request.SpaceID,
 		SourceDatasetId: request.SourceDatasetID, Freq: request.Freq}
 	for _, member := range request.Members {
-		req.Members = append(req.Members, &factorpb.InstanceSetMember{MemberAlias: member.Alias, FactorId: member.FactorID})
+		req.Members = append(req.Members, &factorpb.InstanceTaskMember{MemberAlias: member.Alias, FactorId: member.FactorID})
 	}
-	rsp, err := c.Factor.EnsureInstanceFactorSet(ctx, req)
+	rsp, err := c.Factor.EnsureInstanceFactorTask(ctx, req)
 	if err != nil {
-		return InstanceFactorSet{}, transport("建立实例的私有因子集", err)
+		return InstanceFactorTask{}, transport("建立实例的私有因子任务", err)
 	}
-	if err := retError("建立实例的私有因子集", rsp.GetRetInfo()); err != nil {
-		return InstanceFactorSet{}, err
+	if err := retError("建立实例的私有因子任务", rsp.GetRetInfo()); err != nil {
+		return InstanceFactorTask{}, err
 	}
-	set := InstanceFactorSet{SetID: rsp.GetFactorSet().GetSetId(), ViewID: strings.TrimSpace(rsp.GetViewId())}
-	if set.SetID == "" || set.ViewID == "" {
-		return InstanceFactorSet{}, errors.New("FactorMgr 没有返回私有因子集或它的 View")
+	set := InstanceFactorTask{TaskID: rsp.GetFactorTask().GetTaskId(), ViewID: strings.TrimSpace(rsp.GetViewId())}
+	if set.TaskID == "" || set.ViewID == "" {
+		return InstanceFactorTask{}, errors.New("FactorMgr 没有返回私有因子任务或它的 View")
 	}
 	return set, nil
 }
 
-// SetInstanceFactorSetEnabled 停用或重新启用实例的私有因子集；停用没有私有因子集的实例视为成功。
-func (c *RPCClient) SetInstanceFactorSetEnabled(ctx context.Context, instanceID string, enabled bool) error {
+// SetInstanceFactorTaskEnabled 停用或重新启用实例的私有因子任务；停用没有私有因子任务的实例视为成功。
+func (c *RPCClient) SetInstanceFactorTaskEnabled(ctx context.Context, instanceID string, enabled bool) error {
 	if c == nil || c.Factor == nil {
 		return errors.New("Factor 客户端未配置")
 	}
-	rsp, err := c.Factor.SetInstanceFactorSetEnabled(ctx, &factorpb.SetInstanceFactorSetEnabledReq{InstanceId: instanceID, Enabled: enabled})
+	rsp, err := c.Factor.SetInstanceFactorTaskEnabled(ctx, &factorpb.SetInstanceFactorTaskEnabledReq{InstanceId: instanceID, Enabled: enabled})
 	if err != nil {
-		return transport("切换实例私有因子集的启用状态", err)
+		return transport("切换实例私有因子任务的启用状态", err)
 	}
-	return retError("切换实例私有因子集的启用状态", rsp.GetRetInfo())
+	return retError("切换实例私有因子任务的启用状态", rsp.GetRetInfo())
 }
 
-// ReleaseInstanceFactorSet 删除实例的私有因子集与它的结果数据集（幂等）。
-func (c *RPCClient) ReleaseInstanceFactorSet(ctx context.Context, instanceID string) error {
+// ReleaseInstanceFactorTask 删除实例的私有因子任务与它的结果数据集（幂等）。
+func (c *RPCClient) ReleaseInstanceFactorTask(ctx context.Context, instanceID string) error {
 	if c == nil || c.Factor == nil {
 		return errors.New("Factor 客户端未配置")
 	}
-	rsp, err := c.Factor.ReleaseInstanceFactorSet(ctx, &factorpb.ReleaseInstanceFactorSetReq{InstanceId: instanceID})
+	rsp, err := c.Factor.ReleaseInstanceFactorTask(ctx, &factorpb.ReleaseInstanceFactorTaskReq{InstanceId: instanceID})
 	if err != nil {
-		return transport("删除实例的私有因子集", err)
+		return transport("删除实例的私有因子任务", err)
 	}
-	return retError("删除实例的私有因子集", rsp.GetRetInfo())
+	return retError("删除实例的私有因子任务", rsp.GetRetInfo())
 }
 
 // SubmitFactorParams 提交一期的参数快照。
@@ -126,7 +126,7 @@ func (c *RPCClient) SubmitFactorParams(ctx context.Context, submission ParamSubm
 	if c == nil || c.Factor == nil {
 		return nil, errors.New("Factor 客户端未配置")
 	}
-	req := &factorpb.SubmitFactorParamsReq{Writer: submission.Writer, SetId: submission.SetID, RequestId: submission.RequestID,
+	req := &factorpb.SubmitFactorParamsReq{Writer: submission.Writer, TaskId: submission.TaskID, RequestId: submission.RequestID,
 		PeriodTime: submission.PeriodTime.Unix()}
 	if !submission.BasedOnPeriod.IsZero() {
 		req.BasedOnPeriod = submission.BasedOnPeriod.Unix()

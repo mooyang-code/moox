@@ -1785,7 +1785,7 @@ func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string,
 	return out, nil
 }
 
-// factorWatermarkStallAfter 是因子集合连续水位阻塞多久告警：不自动跳过，交给人工（手动补采、确认缺失）。
+// factorWatermarkStallAfter 是因子任务连续水位阻塞多久告警：不自动跳过，交给人工（手动补采、确认缺失）。
 const factorWatermarkStallAfter = 30 * time.Minute
 
 // buildFactorWatermarkHealth 消费因子管理服务导出的连续水位阻塞起始时间：阻塞超过 30 分钟的集合告警。
@@ -1793,7 +1793,7 @@ func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string,
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_factor_set_watermark_blocked_since_timestamp_seconds", "", 500, now)
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_factor_task_watermark_blocked_since_timestamp_seconds", "", 500, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1817,7 +1817,7 @@ func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string,
 		}
 		seen[current] = true
 		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) > factorWatermarkStallAfter {
-			stalled[current] = append(stalled[current], fmt.Sprintf("%s 自 %s 起", labels["set_id"], unixTime(latest.Value).Format(time.RFC3339)))
+			stalled[current] = append(stalled[current], fmt.Sprintf("%s 自 %s 起", labels["task_id"], unixTime(latest.Value).Format(time.RFC3339)))
 		}
 	}
 	spaces := make([]string, 0, len(seen))

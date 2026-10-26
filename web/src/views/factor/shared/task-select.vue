@@ -1,14 +1,14 @@
 <template>
   <a-select
     :model-value="props.modelValue"
-    class="set-select"
+    class="task-select"
     :placeholder="props.placeholder"
     :loading="store.loading"
     :disabled="!options.length"
     @change="onChange"
   >
     <a-option v-for="item in options" :key="item.value" :value="item.value">
-      <span class="set-select__dot" :class="`set-select__dot--${item.status}`"></span>
+      <span class="task-select__dot" :class="`task-select__dot--${item.status}`"></span>
       {{ item.label }}
     </a-option>
   </a-select>
@@ -16,37 +16,37 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { FactorSetInfo } from "@/api/factor/types";
+import type { FactorTaskInfo } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
 
-defineOptions({ name: "FactorSetSelect" });
+defineOptions({ name: "FactorTaskSelect" });
 
 const props = withDefaults(defineProps<{ modelValue: string; placeholder?: string }>(), { placeholder: "选择计算任务" });
-const emit = defineEmits<{ "update:modelValue": [setId: string]; change: [setId: string] }>();
+const emit = defineEmits<{ "update:modelValue": [taskId: string]; change: [taskId: string] }>();
 
 const store = useFactorStore();
 
 const options = computed(() =>
-  store.sets.map((item: FactorSetInfo) => ({
-    value: item.factor_set.set_id,
-    label: store.setLabel(item.factor_set),
-    status: item.factor_set.status
+  store.sets.map((item: FactorTaskInfo) => ({
+    value: item.factor_task.task_id,
+    label: store.setLabel(item.factor_task),
+    status: item.factor_task.status
   }))
 );
 
 function onChange(value: unknown) {
-  const setId = String(value ?? "");
-  emit("update:modelValue", setId);
-  emit("change", setId);
+  const taskId = String(value ?? "");
+  emit("update:modelValue", taskId);
+  emit("change", taskId);
 }
 </script>
 
 <style scoped>
-.set-select {
+.task-select {
   min-width: 220px;
 }
 
-.set-select__dot {
+.task-select__dot {
   display: inline-block;
   width: 8px;
   height: 8px;
@@ -55,15 +55,15 @@ function onChange(value: unknown) {
   background: var(--color-neutral-5);
 }
 
-.set-select__dot--enabled {
+.task-select__dot--enabled {
   background: rgb(var(--success-6));
 }
 
-.set-select__dot--pending {
+.task-select__dot--pending {
   background: rgb(var(--primary-6));
 }
 
-.set-select__dot--disabled {
+.task-select__dot--disabled {
   background: rgb(var(--warning-6));
 }
 </style>

@@ -1,10 +1,10 @@
 import type { ParamSubmission, ParamSubmissionStatus } from "@/api/strategy-types";
 
-/** 实例启用时固化的私有因子集绑定；没有声明 factors 的实例返回 null。 */
+/** 实例启用时固化的私有因子任务绑定；没有声明 factors 的实例返回 null。 */
 export interface FactorBinding {
-  /** 实例的私有因子集 ID（也是参数提交与冻结记录的集合）。 */
-  setId: string;
-  /** 事件路由与求值用的结果 View（私有因子集的结果 View）。 */
+  /** 实例的私有因子任务 ID（也是参数提交与冻结记录的集合）。 */
+  taskId: string;
+  /** 事件路由与求值用的结果 View（私有因子任务的结果 View）。 */
   viewId: string;
   /** 实例绑定的 K 线 View。 */
   sourceViewId: string;
@@ -25,7 +25,7 @@ function parseObject(raw?: string): Record<string, any> {
 
 export function parseFactorBinding(resolvedJson?: string): FactorBinding | null {
   const value = parseObject(resolvedJson);
-  if (!value.factor_set_id) return null;
+  if (!value.factor_task_id) return null;
   const declared = (value.factor_params ?? {}) as Record<string, Array<{ name?: string }>>;
   const params: Record<string, string[]> = {};
   for (const [alias, list] of Object.entries(declared))
@@ -35,7 +35,7 @@ export function parseFactorBinding(resolvedJson?: string): FactorBinding | null 
     if (binding?.member) members.add(binding.member);
   }
   return {
-    setId: value.factor_set_id,
+    taskId: value.factor_task_id,
     viewId: value.view_id ?? "",
     sourceViewId: value.source_view_id ?? "",
     members: [...members].sort(),

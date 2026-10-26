@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func seedJob(t *testing.T, db *store.Store, jobID, setID string, factorIDs ...string) {
+func seedJob(t *testing.T, db *store.Store, jobID, taskID string, factorIDs ...string) {
 	t.Helper()
 	_, err := db.CreateRecalcJob(context.Background(), store.RecalcJob{
-		JobID: jobID, RequestID: jobID, SetID: setID, Members: factorIDs, StartTime: 0, EndTime: 600,
+		JobID: jobID, RequestID: jobID, TaskID: taskID, Members: factorIDs, StartTime: 0, EndTime: 600,
 	})
 	require.NoError(t, err)
 }
@@ -26,9 +26,9 @@ func leaseEngineA(t *testing.T, hub *Hub) {
 
 func TestPullRequiresEngineLease(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
 
 	_, _, _, err := hub.Pull(context.Background(), engineA)
 
@@ -37,9 +37,9 @@ func TestPullRequiresEngineLease(t *testing.T) {
 
 func TestPullReturnsJobWithEnabledSelection(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a", "cci")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a", "cci")
 	leaseEngineA(t, hub)
 
 	job, set, found, err := hub.Pull(context.Background(), engineA)
@@ -49,7 +49,7 @@ func TestPullReturnsJobWithEnabledSelection(t *testing.T) {
 	require.Equal(t, "job-1", job.JobID)
 	require.Equal(t, engineA.EngineID, job.EngineID)
 	require.NotEmpty(t, job.LeaseToken)
-	require.Equal(t, "set_a", set.Set.SetID)
+	require.Equal(t, "task_a", set.Set.TaskID)
 	require.True(t, set.ResultReady)
 	require.Len(t, set.Members, 1)
 	require.Equal(t, "cci", set.Members[0].Factor.FactorID)
@@ -58,9 +58,9 @@ func TestPullReturnsJobWithEnabledSelection(t *testing.T) {
 
 func TestPullDefaultsToAllEnabledMembers(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled, "cci": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
 	leaseEngineA(t, hub)
 
 	_, set, found, err := hub.Pull(context.Background(), engineA)
@@ -72,9 +72,9 @@ func TestPullDefaultsToAllEnabledMembers(t *testing.T) {
 
 func TestPullFailsJobWhenSelectedFactorDisabled(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a", "zf")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled, "zf": domain.MemberStatusDisabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a", "zf")
 	leaseEngineA(t, hub)
 
 	_, _, found, err := hub.Pull(context.Background(), engineA)
@@ -87,15 +87,15 @@ func TestPullFailsJobWhenSelectedFactorDisabled(t *testing.T) {
 	require.Contains(t, job.Error, "not enabled in set")
 }
 
-func TestPullFailsJobOfDisabledSetAndContinues(t *testing.T) {
+func TestPullFailsJobOfDisabledTaskAndContinues(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_off", map[string]string{"bias": domain.MemberStatusEnabled})
-	require.NoError(t, db.SetSetStatus(context.Background(), "set_off", domain.SetStatusEnabled, domain.SetStatusDisabled))
-	seedSet(t, db, "set_on", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_on", true)
-	seedJob(t, db, "job-off", "set_off")
+	seedTask(t, db, "task_off", map[string]string{"bias": domain.MemberStatusEnabled})
+	require.NoError(t, db.SetTaskStatus(context.Background(), "task_off", domain.TaskStatusEnabled, domain.TaskStatusDisabled))
+	seedTask(t, db, "task_on", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_on", true)
+	seedJob(t, db, "job-off", "task_off")
 	time.Sleep(5 * time.Millisecond)
-	seedJob(t, db, "job-on", "set_on")
+	seedJob(t, db, "job-on", "task_on")
 	leaseEngineA(t, hub)
 
 	job, _, found, err := hub.Pull(context.Background(), engineA)
@@ -108,10 +108,10 @@ func TestPullFailsJobOfDisabledSetAndContinues(t *testing.T) {
 	require.Equal(t, store.RecalcStatusFailed, off.Status)
 }
 
-func TestPullSkipsSetsNotResultReady(t *testing.T) {
+func TestPullSkipsTasksNotResultReady(t *testing.T) {
 	hub, db, _ := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	seedJob(t, db, "job-1", "task_a")
 	leaseEngineA(t, hub)
 
 	_, _, found, err := hub.Pull(context.Background(), engineA)
@@ -125,9 +125,9 @@ func TestPullSkipsSetsNotResultReady(t *testing.T) {
 
 func TestReportRenewsJobLease(t *testing.T) {
 	hub, db, clock := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
 	leaseEngineA(t, hub)
 	job, _, _, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
@@ -143,9 +143,9 @@ func TestReportRenewsJobLease(t *testing.T) {
 
 func TestReportRejectsEngineWithoutLease(t *testing.T) {
 	hub, db, clock := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
 	leaseEngineA(t, hub)
 	job, _, _, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
@@ -161,9 +161,9 @@ func TestReportRejectsEngineWithoutLease(t *testing.T) {
 // 同一 engine_id 的新进程（不同 boot_id）接管后，旧进程的 Pull/Report 不能再续租或完成任务。
 func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	hub, db, clock := newTestHub(t)
-	seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_a", true)
-	seedJob(t, db, "job-1", "set_a")
+	seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_a", true)
+	seedJob(t, db, "job-1", "task_a")
 	leaseEngineA(t, hub)
 	job, _, _, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
@@ -181,20 +181,20 @@ func TestOldBootOfSameEngineCannotPullOrReportAfterTakeover(t *testing.T) {
 	require.NotErrorIs(t, err, ErrLeaseConflict, "新进程持有租约")
 }
 
-func TestReportStopsJobWhenMemberOrSetDisabledBetweenChunks(t *testing.T) {
+func TestReportStopsJobWhenMemberOrTaskDisabledBetweenChunks(t *testing.T) {
 	for name, disable := range map[string]func(*store.Store){
 		"member": func(db *store.Store) {
-			require.NoError(t, db.SetMemberStatus(context.Background(), "set_a", "bias", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
+			require.NoError(t, db.SetMemberStatus(context.Background(), "task_a", "bias", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
 		},
 		"set": func(db *store.Store) {
-			require.NoError(t, db.SetSetStatus(context.Background(), "set_a", domain.SetStatusEnabled, domain.SetStatusDisabled))
+			require.NoError(t, db.SetTaskStatus(context.Background(), "task_a", domain.TaskStatusEnabled, domain.TaskStatusDisabled))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			hub, db, _ := newTestHub(t)
-			seedSet(t, db, "set_a", map[string]string{"bias": domain.MemberStatusEnabled})
-			hub.SetResultReady("set_a", true)
-			seedJob(t, db, "job-1", "set_a")
+			seedTask(t, db, "task_a", map[string]string{"bias": domain.MemberStatusEnabled})
+			hub.SetResultReady("task_a", true)
+			seedJob(t, db, "job-1", "task_a")
 			leaseEngineA(t, hub)
 			job, _, _, err := hub.Pull(context.Background(), engineA)
 			require.NoError(t, err)
@@ -209,13 +209,13 @@ func TestReportStopsJobWhenMemberOrSetDisabledBetweenChunks(t *testing.T) {
 	}
 }
 
-// 同时只跑一个补算任务：补算整窗口读取源数据，并发的回填会让 DataNode 读不动在线计算。
+// 同时只跑一个补算作业：补算整窗口读取源数据，并发的回填会让 DataNode 读不动在线计算。
 func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
 	hub, db, clock := newTestHub(t)
-	for _, setID := range []string{"set_a", "set_b"} {
-		seedSet(t, db, setID, map[string]string{"bias": domain.MemberStatusEnabled})
-		hub.SetResultReady(setID, true)
-		seedJob(t, db, "job-"+setID, setID)
+	for _, taskID := range []string{"task_a", "task_b"} {
+		seedTask(t, db, taskID, map[string]string{"bias": domain.MemberStatusEnabled})
+		hub.SetResultReady(taskID, true)
+		seedJob(t, db, "job-"+taskID, taskID)
 	}
 	leaseEngineA(t, hub)
 	require.Equal(t, DefaultMaxRunningJobs, hub.maxRunningJobs)
@@ -223,7 +223,7 @@ func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
 	first, _, found, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "job-set_a", first.JobID)
+	require.Equal(t, "job-task_a", first.JobID)
 
 	_, _, found, err = hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
@@ -235,13 +235,13 @@ func TestPullRunsOneRecalcJobAtATimeByDefault(t *testing.T) {
 	second, _, found, err := hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "job-set_b", second.JobID)
+	require.Equal(t, "job-task_b", second.JobID)
 
 	// 显式放开上限后可以并行。
 	hub.maxRunningJobs = 0
-	seedSet(t, db, "set_c", map[string]string{"bias": domain.MemberStatusEnabled})
-	hub.SetResultReady("set_c", true)
-	seedJob(t, db, "job-set_c", "set_c")
+	seedTask(t, db, "task_c", map[string]string{"bias": domain.MemberStatusEnabled})
+	hub.SetResultReady("task_c", true)
+	seedJob(t, db, "job-task_c", "task_c")
 	clock.Advance(time.Second)
 	_, _, found, err = hub.Pull(context.Background(), engineA)
 	require.NoError(t, err)

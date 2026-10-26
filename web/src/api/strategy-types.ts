@@ -167,7 +167,7 @@ export interface ParamSubmission {
   request_id: string;
   instance_id: string;
   result_id: string;
-  set_id: string;
+  task_id: string;
   /** 参数生效的目标期次（Unix 毫秒）。 */
   period_time: number;
   based_on_period: number;

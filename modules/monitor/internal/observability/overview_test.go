@@ -1136,13 +1136,13 @@ func TestBuilderReportsCollectorStreamHeartbeatAndMissingStreaks(t *testing.T) {
 	}
 }
 
-// 因子集合连续水位阻塞超过 30 分钟告警，未超过或没有阻塞时正常。
+// 因子任务连续水位阻塞超过 30 分钟告警，未超过或没有阻塞时正常。
 func TestBuilderReportsStalledFactorWatermarks(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "wm-stalled", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, float64(now.Add(-31*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "wm-recent", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_b"}`, float64(now.Add(-5*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "wm-ok", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_c"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "wm-stalled", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_a"}`, float64(now.Add(-31*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "wm-recent", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_b"}`, float64(now.Add(-5*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "wm-ok", "factor", "factor-mgr@control", "moox_factor_task_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","task_id":"ftask_c"}`, 0, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
@@ -1154,8 +1154,8 @@ func TestBuilderReportsStalledFactorWatermarks(t *testing.T) {
 	}
 	require.NotNil(t, check)
 	require.Equal(t, "down", check.Status)
-	require.Contains(t, check.Reason, "fset_a")
-	require.NotContains(t, check.Reason, "fset_b")
+	require.Contains(t, check.Reason, "ftask_a")
+	require.NotContains(t, check.Reason, "ftask_b")
 }
 
 // 最近 10 分钟内有截止拒绝的数据集告警，更早的不告警。

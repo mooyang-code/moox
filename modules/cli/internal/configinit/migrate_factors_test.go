@@ -15,7 +15,7 @@ import (
 var commonFactorIDs = []string{"Ma", "Ema", "Macd", "Rsi", "Roc", "Boll", "Atr", "ReturnStd", "Vwap"}
 
 // withoutCommonFactors 去掉示例里 9 个常用因子的定义与成员，模拟加入默认因子之前的配置；
-// 同时把 Bias 在一个因子集里的成员改成 disabled，用来确认已有条目不被改动。
+// 同时把 Bias 在一个因子任务里的成员改成 disabled，用来确认已有条目不被改动。
 func withoutCommonFactors(t *testing.T) string {
 	t.Helper()
 	common := map[string]bool{}

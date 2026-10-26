@@ -1,12 +1,12 @@
 import { flushPromises, shallowMount } from "@vue/test-utils";
 import { defineComponent, reactive } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { FactorMember, FactorSetInfo } from "@/api/factor/types";
+import type { FactorMember, FactorTaskInfo } from "@/api/factor/types";
 
 const hoisted = vi.hoisted(() => ({
   route: { path: "/factor/tasks", query: {} as Record<string, string | undefined> },
   navigate: vi.fn(),
-  selectSet: vi.fn(),
+  selectTask: vi.fn(),
   listViews: vi.fn(),
   listAllViewColumns: vi.fn(),
   listFactorCategories: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("@/views/factor/shared/use-factor-scope", () => ({
   useFactorScope: () => ({
     store: hoisted.store,
     spaceId: { value: "crypto" },
-    selectSet: hoisted.selectSet,
+    selectTask: hoisted.selectTask,
     navigate: hoisted.navigate,
     reload: vi.fn()
   })
@@ -34,7 +34,7 @@ import FactorResults from "./index.vue";
 
 function member(alias: string, outputs: string[], category = "momentum"): FactorMember {
   return {
-    set_id: "a",
+    task_id: "a",
     member_alias: alias,
     factor_id: alias,
     status: "enabled",
@@ -58,14 +58,14 @@ function member(alias: string, outputs: string[], category = "momentum"): Factor
   };
 }
 
-function setInfo(setId: string, ownerInstanceId = ""): FactorSetInfo {
+function taskInfo(taskId: string, ownerInstanceId = ""): FactorTaskInfo {
   return {
-    factor_set: {
-      set_id: setId,
+    factor_task: {
+      task_id: taskId,
       space_id: "crypto",
       source_dataset_id: "kline",
       freq: "1m",
-      result_dataset_id: `r_${setId}`,
+      result_dataset_id: `r_${taskId}`,
       status: "enabled",
       owner_instance_id: ownerInstanceId
     },
@@ -114,14 +114,14 @@ function mountPage() {
 describe("因子结果页", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    hoisted.route.query = { tab: "results", set: "a" };
+    hoisted.route.query = { tab: "results", task: "a" };
     hoisted.navigate.mockReset();
     hoisted.warning.mockReset();
     Object.assign(
       hoisted.store,
       reactive({
-        sets: [setInfo("a")],
-        currentSetId: "a",
+        sets: [taskInfo("a")],
+        currentTaskId: "a",
         loading: false,
         loadError: "",
         setLabel: () => "K线 · 1m",
@@ -162,7 +162,7 @@ describe("因子结果页", () => {
   it("带 ?fc= 进入时首查就带条件；失效条件被丢弃、提示并改写 URL", async () => {
     hoisted.route.query = {
       tab: "results",
-      set: "a",
+      task: "a",
       fc: JSON.stringify([
         ["rsi", "gt", 70],
         ["gone", "lt", 1]
@@ -211,10 +211,10 @@ describe("因子结果页", () => {
     expect(browse.props("searchColumns")).toEqual(["close", "request_id"]);
   });
 
-  it("策略私有因子集按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
-    Object.assign(hoisted.store, { sets: [setInfo("a", "inst-1")] });
+  it("策略私有因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
+    Object.assign(hoisted.store, { sets: [taskInfo("a", "inst-1")] });
     hoisted.getDisplay.mockResolvedValue({ categories: ["momentum"], members: [], columns: ["open"] });
-    hoisted.route.query = { tab: "results", set: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };
+    hoisted.route.query = { tab: "results", task: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };
     const wrapper = mountPage();
     await flushPromises();
     const browse = wrapper.findComponent(ViewBrowseStub);

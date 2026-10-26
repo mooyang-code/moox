@@ -34,10 +34,10 @@ func ValidateCategory(category FactorCategory) error {
 	return validateName(category.Name)
 }
 
-// ValidateSet checks the stable identity contract of a set.
-func ValidateSet(set FactorSet) error {
+// ValidateTask checks the stable identity contract of a set.
+func ValidateTask(set FactorTask) error {
 	for name, value := range map[string]string{
-		"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
+		"task_id": set.TaskID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
 		"freq": set.Freq, "result_dataset_id": set.ResultDatasetID,
 	} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
@@ -50,21 +50,21 @@ func ValidateSet(set FactorSet) error {
 	if set.OwnerInstanceID != strings.TrimSpace(set.OwnerInstanceID) {
 		return fmt.Errorf("owner_instance_id must not have surrounding whitespace")
 	}
-	wantSetID := SetID(set.SourceDatasetID, set.Freq)
+	wantTaskID := TaskID(set.SourceDatasetID, set.Freq)
 	if set.OwnerInstanceID != "" {
-		wantSetID = InstanceSetID(set.OwnerInstanceID)
+		wantTaskID = InstanceTaskID(set.OwnerInstanceID)
 	}
-	if set.SetID != wantSetID {
-		return fmt.Errorf("set_id must be %q", wantSetID)
+	if set.TaskID != wantTaskID {
+		return fmt.Errorf("task_id must be %q", wantTaskID)
 	}
-	if set.ResultDatasetID != ResultDatasetID(set.SetID) {
-		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.SetID))
+	if set.ResultDatasetID != ResultDatasetID(set.TaskID) {
+		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.TaskID))
 	}
 	switch set.Status {
-	case SetStatusPending, SetStatusEnabled, SetStatusDisabled, SetStatusDeleting:
+	case TaskStatusPending, TaskStatusEnabled, TaskStatusDisabled, TaskStatusDeleting:
 		return nil
 	default:
-		return fmt.Errorf("invalid factor set status %q", set.Status)
+		return fmt.Errorf("invalid factor task status %q", set.Status)
 	}
 }
 
@@ -125,7 +125,7 @@ const FilledColumn = "is_filled"
 // column owned by the same member is reused rather than reported as a conflict.
 // 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。结果列包括输出列与参数列，
 // 都不能与源列、其他成员的列或结果数据集里别的成员拥有的列重名。
-func ValidateMembership(set FactorSet, member MemberDef, sourceColumns []SourceColumn,
+func ValidateMembership(set FactorTask, member MemberDef, sourceColumns []SourceColumn,
 	siblings []MemberDef, resultColumnOrigins map[string]string) error {
 	if err := ValidateAlias(member.Alias); err != nil {
 		return err
@@ -190,7 +190,7 @@ func ValidateMembership(set FactorSet, member MemberDef, sourceColumns []SourceC
 		for _, column := range memberColumns(sibling) {
 			for _, mine := range own {
 				if column == mine {
-					return fmt.Errorf("结果列 %q 在因子集 %s 的成员 %s 与 %s 中重复", column, set.SetID, sibling.Alias, member.Alias)
+					return fmt.Errorf("结果列 %q 在因子任务 %s 的成员 %s 与 %s 中重复", column, set.TaskID, sibling.Alias, member.Alias)
 				}
 			}
 		}

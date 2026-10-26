@@ -69,7 +69,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
 		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
 	}}
-	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
+	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupTask{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
 	cmd := newSetupCommand(setupDeps{
 		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -82,7 +82,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	require.Len(t, factor.plan.Definitions, 1)
 	require.Len(t, factor.plan.Members, 1)
 	assert.Equal(t, "Bias", factor.plan.Definitions[0].FactorID)
-	assert.Equal(t, "fset_binance_kline_1m", factor.plan.Members[0].SetID)
+	assert.Equal(t, "ftask_binance_kline_1m", factor.plan.Members[0].TaskID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 

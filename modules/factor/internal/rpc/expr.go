@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
-// Previewer 在因子集的源数据上试算一个定义。
+// Previewer 在因子任务的源数据上试算一个定义。
 type Previewer interface {
 	Preview(ctx context.Context, req preview.Request) (preview.Result, error)
 }
@@ -57,22 +57,22 @@ func diagnosticToPB(err error) *factorpb.FactorSpecDiagnostic {
 	return &factorpb.FactorSpecDiagnostic{Message: err.Error()}
 }
 
-// PreviewFactor 在指定因子集的源数据上试算一个定义。
+// PreviewFactor 在指定因子任务的源数据上试算一个定义。
 func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactorReq) (*factorpb.PreviewFactorRsp, error) {
-	if req == nil || req.GetSetId() == "" {
-		return &factorpb.PreviewFactorRsp{RetInfo: invalid(errors.New("set_id is required"))}, nil
+	if req == nil || req.GetTaskId() == "" {
+		return &factorpb.PreviewFactorRsp{RetInfo: invalid(errors.New("task_id is required"))}, nil
 	}
 	if s.previewer == nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: inner(errors.New("试算未启用"))}, nil
 	}
-	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}
 	def, err := draftDefinition(req.GetSpec(), req.GetAllowPartialUniverse())
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(fmt.Errorf("定义不合法：%w", err))}, nil
 	}
-	set, _, err := s.catalog.GetSet(ctx, req.GetSetId())
+	set, _, err := s.catalog.GetTask(ctx, req.GetTaskId())
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}

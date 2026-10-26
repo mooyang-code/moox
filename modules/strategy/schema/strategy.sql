@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_param_submissions (
     c_instance_id TEXT NOT NULL,
     c_session_id TEXT NOT NULL,
     c_result_id TEXT NOT NULL,
-    c_set_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
     c_period_time INTEGER NOT NULL,
     c_based_on_period INTEGER NOT NULL,
     c_params_json TEXT NOT NULL,

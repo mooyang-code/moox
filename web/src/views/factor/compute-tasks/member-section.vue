@@ -83,7 +83,7 @@
     <p class="member-section__hint">启用时加列，不自动补算历史（需要时到「补算」手动提交）；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。固定参数加成员之后不再改，要换参数请另加一个成员。</p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
       最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{
-        barLagText(props.info.factor_set.freq, props.info.last_run)
+        barLagText(props.info.factor_task.freq, props.info.last_run)
       }}
     </p>
 
@@ -95,8 +95,8 @@
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { removeFactorFromSet, setFactorMemberStatus } from "@/api/factor";
-import type { FactorMember, FactorSetInfo, MemberStatus } from "@/api/factor/types";
+import { removeFactorFromTask, setFactorMemberStatus } from "@/api/factor";
+import type { FactorMember, FactorTaskInfo, MemberStatus } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import { fixedParamsText } from "@/views/factor/shared/member-params";
@@ -113,7 +113,7 @@ import {
 
 defineOptions({ name: "FactorMemberSection" });
 
-const props = defineProps<{ info: FactorSetInfo; title: string }>();
+const props = defineProps<{ info: FactorTaskInfo; title: string }>();
 
 const router = useRouter();
 const store = useFactorStore();
@@ -121,7 +121,7 @@ const addVisible = ref(false);
 const pending = ref("");
 
 const counts = computed(() => memberCounts(props.info));
-const addState = computed(() => addFactorState(props.info.factor_set));
+const addState = computed(() => addFactorState(props.info.factor_task));
 const rows = computed(() =>
   props.info.members.map(member => {
     const alias = member.member_alias || member.factor_id;
@@ -129,7 +129,7 @@ const rows = computed(() =>
     return {
       member,
       alias,
-      actions: memberActions(props.info.factor_set, member),
+      actions: memberActions(props.info.factor_task, member),
       period,
       outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
       params: member.param_columns ?? [],
@@ -155,7 +155,7 @@ async function toggle(member: FactorMember, target: MemberStatus) {
   const alias = member.member_alias || member.factor_id;
   pending.value = alias;
   try {
-    await setFactorMemberStatus(member.set_id, alias, target);
+    await setFactorMemberStatus(member.task_id, alias, target);
     Message.success(
       target === "enabled" ? `因子 ${alias} 已启用（不自动补算历史，需要时到「补算」手动提交）` : `因子 ${alias} 已停用`
     );
@@ -170,7 +170,7 @@ async function toggle(member: FactorMember, target: MemberStatus) {
 async function remove(member: FactorMember) {
   try {
     const alias = member.member_alias || member.factor_id;
-    await removeFactorFromSet(member.set_id, alias);
+    await removeFactorFromTask(member.task_id, alias);
     Message.success(`因子 ${alias} 已从计算任务移除，结果列保留`);
     await reload();
   } catch (error) {

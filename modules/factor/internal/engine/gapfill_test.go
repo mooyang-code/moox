@@ -27,19 +27,19 @@ func gapFactor(id, factorType string, partial bool) domain.FactorDef {
 	return def
 }
 
-type fakeSets struct {
-	sets    map[string]domain.EngineSet
+type fakeTasks struct {
+	sets    map[string]domain.EngineTask
 	lookups map[string]SetLookup
 }
 
-func (f *fakeSets) SetByID(id string) (domain.EngineSet, SetLookup) {
+func (f *fakeTasks) SetByID(id string) (domain.EngineTask, SetLookup) {
 	if lookup, ok := f.lookups[id]; ok {
 		return f.sets[id], lookup
 	}
 	if set, ok := f.sets[id]; ok {
 		return set, SetFound
 	}
-	return domain.EngineSet{}, SetGone
+	return domain.EngineTask{}, SetGone
 }
 
 type fakeColumns struct{}
@@ -108,7 +108,7 @@ func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, 
 type gapFixture struct {
 	ledger *gapledger.Ledger
 	now    time.Time
-	sets   *fakeSets
+	sets   *fakeTasks
 	chunks *fakeChunks
 	filler *gapFiller
 }
@@ -120,8 +120,8 @@ func newGapFixture(t *testing.T, universe fakeUniverse, factors ...domain.Factor
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ledger.Close() })
 	f.ledger = ledger
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "bars", ResultDatasetID: "result", Freq: "1m"}, Members: domain.AsMembers(factors...), ResultReady: true}
-	f.sets = &fakeSets{sets: map[string]domain.EngineSet{"fset": set}, lookups: map[string]SetLookup{}}
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "fset", SpaceID: "crypto", SourceDatasetID: "bars", ResultDatasetID: "result", Freq: "1m"}, Members: domain.AsMembers(factors...), ResultReady: true}
+	f.sets = &fakeTasks{sets: map[string]domain.EngineTask{"fset": set}, lookups: map[string]SetLookup{}}
 	f.filler = &gapFiller{
 		ledger: ledger, sets: f.sets, source: fakeColumns{}, exec: f.chunks, universe: universe, clock: periodclock.Continuous{},
 		cfg:    GapConfig{SweepInterval: time.Minute, Settle: 5 * time.Minute, GiveUpAfter: 6 * time.Hour, MaxGroupsPerSweep: 20, MaxSpan: 60},
@@ -137,7 +137,7 @@ func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute i
 	f.now = at
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
-		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
+		entries = append(entries, pipeline.GapEntry{TaskID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
 			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger})
 	}
 	require.NoError(t, f.ledger.RecordGaps(context.Background(), entries))
@@ -187,8 +187,8 @@ func TestGapFillerCancelsWhenDefinitionChangedOrFactorRemoved(t *testing.T) {
 	require.Zero(t, f.ledger.PendingCount())
 }
 
-// 集合已不存在：取消；目录未加载或结果表未就绪：等待，不能当作集合已经不存在。
-func TestGapFillerSetGoneCancelsButNotReadyWaits(t *testing.T) {
+// 任务已不存在：取消；目录未加载或结果表未就绪：等待，不能当作任务已经不存在。
+func TestGapFillerTaskGoneCancelsButNotReadyWaits(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, factor)
 	f.record(t, gapT0, "BTC", 0, "", factor)
@@ -200,7 +200,7 @@ func TestGapFillerSetGoneCancelsButNotReadyWaits(t *testing.T) {
 
 	f.sets.lookups["fset"] = SetGone
 	f.filler.tick(context.Background())
-	require.Zero(t, f.ledger.PendingCount(), "集合已不再启用：取消")
+	require.Zero(t, f.ledger.PendingCount(), "任务已不再启用：取消")
 }
 
 // 超过 give_up_after 仍补不上：gave_up 并通知；执行出错保持待恢复。
@@ -262,7 +262,7 @@ func (f *gapFixture) recordWarming(t *testing.T, subject string, minute int, tri
 	t.Helper()
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
-		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
+		entries = append(entries, pipeline.GapEntry{TaskID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
 			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger, Reason: pipeline.SkipReasonWarming})
 	}
 	saved := f.now
@@ -341,18 +341,18 @@ type repairedCall struct {
 	done                bool
 }
 
-// 预热就绪后立刻补算预热期间跳过的那一期：不等 Settle；空洞跳过的项仍等 Settle，集合还在预热时也等。
+// 预热就绪后立刻补算预热期间跳过的那一期：不等 Settle；空洞跳过的项仍等 Settle，任务还在预热时也等。
 // 每批补齐后按周期回调，账本里这一期没有待办了才算补齐。
-func TestGapFillerRepairsWarmingSkipsOnceSetIsWarm(t *testing.T) {
+func TestGapFillerRepairsWarmingSkipsOnceTaskIsWarm(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, factor)
 	state := pipeline.WarmupWarming
 	f.filler.warmup = func() []pipeline.WarmupStatus {
-		return []pipeline.WarmupStatus{{SetID: "fset", State: state}, {SetID: "other", State: pipeline.WarmupReady}}
+		return []pipeline.WarmupStatus{{TaskID: "fset", State: state}, {TaskID: "other", State: pipeline.WarmupReady}}
 	}
 	var calls []repairedCall
-	f.filler.onRepaired = func(setID string, period RepairedPeriod) {
-		require.Equal(t, "fset", setID)
+	f.filler.onRepaired = func(taskID string, period RepairedPeriod) {
+		require.Equal(t, "fset", taskID)
 		calls = append(calls, repairedCall{period: period.Period, repaired: len(period.Repaired), unwritten: len(period.Unwritten), done: period.Done})
 	}
 	for i := 0; i < maxFillSubjects+1; i++ {
@@ -362,7 +362,7 @@ func TestGapFillerRepairsWarmingSkipsOnceSetIsWarm(t *testing.T) {
 
 	f.now = gapT0.Add(2 * time.Minute)
 	f.filler.tick(context.Background())
-	require.Empty(t, f.chunks.calls, "还在 Settle 内，集合也还在预热")
+	require.Empty(t, f.chunks.calls, "还在 Settle 内，任务也还在预热")
 
 	state = pipeline.WarmupReady
 	f.filler.tick(context.Background())
@@ -402,7 +402,7 @@ func TestWarmingKickSinkKicksOnWarmingEntries(t *testing.T) {
 	t.Cleanup(func() { _ = ledger.Close() })
 	kicks := 0
 	sink := warmingKickSink{GapSink: ledger, kick: func() { kicks++ }}
-	entry := pipeline.GapEntry{SetID: "fset", Subject: "BTC", Period: gapT0, Member: "ma", DefinitionHash: "h"}
+	entry := pipeline.GapEntry{TaskID: "fset", Subject: "BTC", Period: gapT0, Member: "ma", DefinitionHash: "h"}
 	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry}))
 	require.Zero(t, kicks)
 	entry.Subject, entry.Reason = "ETH", pipeline.SkipReasonWarming

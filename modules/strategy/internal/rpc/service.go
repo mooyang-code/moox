@@ -30,7 +30,7 @@ type Resolver interface {
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error)
 }
 
-// InstanceResolver 是声明了 factors 的策略启用时用的解析：先为实例建立私有因子集，再绑定它的结果 View。
+// InstanceResolver 是声明了 factors 的策略启用时用的解析：先为实例建立私有因子任务，再绑定它的结果 View。
 type InstanceResolver interface {
 	ResolveInstance(ctx context.Context, instanceID, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 }
@@ -56,8 +56,8 @@ type ReplayWaker interface {
 type Service struct {
 	Store    *store.Store
 	Resolver Resolver
-	// Factors 是 FactorMgr 的私有因子集接口：停用、改绑与删除实例时同步其私有因子集；nil 表示未接线（没有声明 factors 的部署）。
-	Factors input.FactorSets
+	// Factors 是 FactorMgr 的私有因子任务接口：停用、改绑与删除实例时同步其私有因子任务；nil 表示未接线（没有声明 factors 的部署）。
+	Factors input.FactorTasks
 	Owner   Owner
 	Replays ReplayWaker
 	Alerts  Alerter

@@ -31,9 +31,9 @@ func callerSpace(ctx context.Context) (space string, scoped bool, err error) {
 	return space, scoped, nil
 }
 
-// checkSetSpace 要求计算任务属于调用方声明的空间：Console 只校验了请求头里空间的权限，FactorMgr 的任务按全局 set_id 定位，
+// checkTaskSpace 要求计算任务属于调用方声明的空间：Console 只校验了请求头里空间的权限，FactorMgr 的任务按全局 task_id 定位，
 // 不校验归属会让一个空间的管理员读取、停用或删除其他空间的任务。
-func (s *Service) checkSetSpace(ctx context.Context, setID string) error {
+func (s *Service) checkTaskSpace(ctx context.Context, taskID string) error {
 	space, scoped, err := callerSpace(ctx)
 	if err != nil {
 		return err
@@ -41,17 +41,17 @@ func (s *Service) checkSetSpace(ctx context.Context, setID string) error {
 	if !scoped {
 		return nil
 	}
-	set, _, err := s.catalog.GetSet(ctx, setID)
+	set, _, err := s.catalog.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if set.SpaceID != space {
-		return fmt.Errorf("factor set %q does not belong to space %q", setID, space)
+		return fmt.Errorf("factor task %q does not belong to space %q", taskID, space)
 	}
 	return nil
 }
 
-// checkJobSpace 通过 补算任务 → 计算任务 → 空间 校验归属。
+// checkJobSpace 通过 补算作业 → 计算任务 → 空间 校验归属。
 func (s *Service) checkJobSpace(ctx context.Context, jobID string) error {
 	if _, scoped, err := callerSpace(ctx); err != nil || !scoped {
 		return err
@@ -60,7 +60,7 @@ func (s *Service) checkJobSpace(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
-	return s.checkSetSpace(ctx, job.SetID)
+	return s.checkTaskSpace(ctx, job.TaskID)
 }
 
 // scopeUsages 把因子的引用关系裁剪到调用方空间：其他空间的任务 ID 与启停状态不对外暴露。
@@ -75,7 +75,7 @@ func (s *Service) scopeUsages(ctx context.Context, usages []domain.FactorUsage) 
 	}
 	out := make([]domain.FactorUsage, 0, len(usages))
 	for _, usage := range usages {
-		set, _, err := s.catalog.GetSet(ctx, usage.SetID)
+		set, _, err := s.catalog.GetTask(ctx, usage.TaskID)
 		if err != nil {
 			return nil, err
 		}

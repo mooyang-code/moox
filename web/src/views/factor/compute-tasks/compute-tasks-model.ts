@@ -1,9 +1,9 @@
 import type {
   FactorMember,
   FactorPeriodState,
-  FactorSet,
-  FactorSetInfo,
-  FactorSetStatus,
+  FactorTask,
+  FactorTaskInfo,
+  FactorTaskStatus,
   MemberStatus
 } from "@/api/factor/types";
 
@@ -14,7 +14,7 @@ export const ENABLE_ENGINE_HINT = "计算引擎约 1 分钟内生效，期间的
 
 export interface TaskFilters {
   keyword: string;
-  status: "" | FactorSetStatus;
+  status: "" | FactorTaskStatus;
 }
 
 export interface ActionState {
@@ -23,27 +23,27 @@ export interface ActionState {
 }
 
 const enabledAction: ActionState = { disabled: false, reason: "" };
-const PRIVATE_SET_REASON = "策略实例的私有因子集，成员与状态由实例维护";
+const PRIVATE_SET_REASON = "策略实例的私有因子任务，成员与状态由实例维护";
 
-/** 策略实例的私有因子集：成员恰好是策略 factors 声明的因子，随实例启用、停用与删除自动维护。 */
-export const isPrivateSet = (set: Pick<FactorSet, "owner_instance_id">) => Boolean(set.owner_instance_id);
+/** 策略实例的私有因子任务：成员恰好是策略 factors 声明的因子，随实例启用、停用与删除自动维护。 */
+export const isPrivateTask = (set: Pick<FactorTask, "owner_instance_id">) => Boolean(set.owner_instance_id);
 const blocked = (reason: string): ActionState => ({ disabled: true, reason });
 
-export function filterSets(sets: FactorSetInfo[], filters: TaskFilters, labelOf: (set: FactorSet) => string) {
+export function filterTasks(sets: FactorTaskInfo[], filters: TaskFilters, labelOf: (set: FactorTask) => string) {
   const keyword = filters.keyword.trim().toLowerCase();
-  return sets.filter(({ factor_set: set }) => {
+  return sets.filter(({ factor_task: set }) => {
     if (filters.status && set.status !== filters.status) return false;
     if (!keyword) return true;
-    return [set.set_id, set.source_dataset_id, labelOf(set)].some(text => text.toLowerCase().includes(keyword));
+    return [set.task_id, set.source_dataset_id, labelOf(set)].some(text => text.toLowerCase().includes(keyword));
   });
 }
 
-export function memberCounts(info: Pick<FactorSetInfo, "members">) {
+export function memberCounts(info: Pick<FactorTaskInfo, "members">) {
   const members = info.members || [];
   return { enabled: members.filter(member => member.status === "enabled").length, total: members.length };
 }
 
-export function memberCountText(info: Pick<FactorSetInfo, "members">) {
+export function memberCountText(info: Pick<FactorTaskInfo, "members">) {
   const { enabled, total } = memberCounts(info);
   return `${enabled} / ${total}`;
 }
@@ -51,27 +51,27 @@ export function memberCountText(info: Pick<FactorSetInfo, "members">) {
 export type SetActionKind = "retry" | "disable" | "enable" | "none";
 
 /** 列表行 / 抽屉上与状态相关的主动作：激活失败重试，运行中停用，已停用启用。 */
-export function setActionKind(set: Pick<FactorSet, "status">): SetActionKind {
+export function setActionKind(set: Pick<FactorTask, "status">): SetActionKind {
   if (set.status === "pending") return "retry";
   if (set.status === "enabled") return "disable";
   if (set.status === "disabled") return "enable";
   return "none";
 }
 
-const lockedReason = (status: FactorSetStatus) =>
+const lockedReason = (status: FactorTaskStatus) =>
   status === "pending" ? "计算任务创建中，暂不能操作" : "计算任务清理中，暂不能操作";
-const isLocked = (set: Pick<FactorSet, "status">) => set.status === "pending" || set.status === "deleting";
+const isLocked = (set: Pick<FactorTask, "status">) => set.status === "pending" || set.status === "deleting";
 
 /** 删除计算任务的前置条件：已停用、没有成员（D23），且不在清理中。 */
-export function deleteState(info: Pick<FactorSetInfo, "factor_set" | "members">): ActionState {
-  if (info.factor_set.status === "deleting") return blocked("计算任务清理中");
-  if (info.factor_set.status !== "disabled") return blocked("请先停用计算任务，再删除");
+export function deleteState(info: Pick<FactorTaskInfo, "factor_task" | "members">): ActionState {
+  if (info.factor_task.status === "deleting") return blocked("计算任务清理中");
+  if (info.factor_task.status !== "disabled") return blocked("请先停用计算任务，再删除");
   if ((info.members || []).length > 0) return blocked("请先在「因子」里移除全部因子成员，再删除计算任务");
   return enabledAction;
 }
 
-export function addFactorState(set: Pick<FactorSet, "status"> & Partial<Pick<FactorSet, "owner_instance_id">>): ActionState {
-  if (isPrivateSet(set)) return blocked(PRIVATE_SET_REASON);
+export function addFactorState(set: Pick<FactorTask, "status"> & Partial<Pick<FactorTask, "owner_instance_id">>): ActionState {
+  if (isPrivateTask(set)) return blocked(PRIVATE_SET_REASON);
   return isLocked(set) ? blocked(lockedReason(set.status)) : enabledAction;
 }
 
@@ -84,11 +84,11 @@ export interface MemberActions {
 }
 
 export function memberActions(
-  set: Pick<FactorSet, "status"> & Partial<Pick<FactorSet, "owner_instance_id">>,
+  set: Pick<FactorTask, "status"> & Partial<Pick<FactorTask, "owner_instance_id">>,
   member: Pick<FactorMember, "status">
 ): MemberActions {
   const enabled = member.status === "enabled";
-  if (isPrivateSet(set)) {
+  if (isPrivateTask(set)) {
     return {
       toggleLabel: enabled ? "停用" : "启用",
       toggleTarget: enabled ? "disabled" : "enabled",
@@ -111,7 +111,7 @@ export function memberActions(
 }
 
 /** 成员本期的状态：周期状态以成员别名为单位（同一定义可以用不同别名出现多次）。 */
-export function memberPeriodState(info: Pick<FactorSetInfo, "last_run">, memberAlias: string): FactorPeriodState | undefined {
+export function memberPeriodState(info: Pick<FactorTaskInfo, "last_run">, memberAlias: string): FactorPeriodState | undefined {
   return info.last_run?.factors?.find(item => (item.member_alias || item.factor_id) === memberAlias);
 }
 

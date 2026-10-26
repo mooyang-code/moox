@@ -9,7 +9,7 @@ import (
 
 func paramSubmission(requestID string) *ParamSubmission {
 	return &ParamSubmission{
-		RequestID: requestID, SetID: "fset_i1", PeriodTime: testNow.Add(2 * time.Hour), BasedOnPeriod: testNow.Add(time.Hour),
+		RequestID: requestID, TaskID: "ftask_i1", PeriodTime: testNow.Add(2 * time.Hour), BasedOnPeriod: testNow.Add(time.Hour),
 		ParamsJSON: json.RawMessage(`{"fast":{"window":{"default":20,"overrides":{"BTC":10}}}}`), Notes: "n",
 	}
 }
@@ -84,7 +84,7 @@ func TestParamSubmissionLifecycle(t *testing.T) {
 	}
 }
 
-// 声明了 factors 的实例按启用时固化的解析路由到私有因子集的结果 View，而不是它绑定的 K 线 View。
+// 声明了 factors 的实例按启用时固化的解析路由到私有因子任务的结果 View，而不是它绑定的 K 线 View。
 func TestEnabledInstancesByViewRoutesOnResolvedView(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
@@ -92,7 +92,7 @@ func TestEnabledInstancesByViewRoutesOnResolvedView(t *testing.T) {
 	if err := repo.CreateInstance(ctx, Instance{InstanceID: "tuned", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := json.RawMessage(`{"view_id":"view_factor_i1","source_view_id":"view_a","factor_set_id":"fset_i1"}`)
+	resolved := json.RawMessage(`{"view_id":"view_factor_i1","source_view_id":"view_a","factor_task_id":"ftask_i1"}`)
 	if err := repo.OpenSession(ctx, Session{SessionID: "session-t", InstanceID: "tuned", DSLHash: testHash, ResolvedJSON: string(resolved), CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}

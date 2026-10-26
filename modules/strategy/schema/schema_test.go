@@ -52,7 +52,7 @@ func TestStrategySchemaColumns(t *testing.T) {
 		"t_strategy_defs":              {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
 		"t_strategy_def_versions":      {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
 		"t_strategy_display_settings":  {"c_instance_id", "c_hidden_json", "c_ctime", "c_mtime"},
-		"t_strategy_param_submissions": {"c_request_id", "c_instance_id", "c_session_id", "c_result_id", "c_set_id", "c_period_time", "c_based_on_period", "c_params_json", "c_notes", "c_status", "c_attempts", "c_next_attempt", "c_outcome_json", "c_ctime", "c_mtime"},
+		"t_strategy_param_submissions": {"c_request_id", "c_instance_id", "c_session_id", "c_result_id", "c_task_id", "c_period_time", "c_based_on_period", "c_params_json", "c_notes", "c_status", "c_attempts", "c_next_attempt", "c_outcome_json", "c_ctime", "c_mtime"},
 		"t_strategy_instances":         {"c_instance_id", "c_strategy_id", "c_space_id", "c_view_id", "c_logical_account_id", "c_enabled", "c_session_id", "c_resolved_json", "c_health", "c_deleted_at", "c_ctime", "c_mtime"},
 		"t_strategy_sessions":          {"c_session_id", "c_instance_id", "c_dsl_hash", "c_resolved_json", "c_ctime", "c_closed_at"},
 		"t_strategy_results":           {"c_result_id", "c_instance_id", "c_session_id", "c_bar_end_time", "c_valid_until", "c_status", "c_skip_reason", "c_dsl_hash", "c_input_json", "c_targets_json", "c_rule_states_json", "c_summary_json", "c_event_data", "c_publish_status", "c_ctime"},

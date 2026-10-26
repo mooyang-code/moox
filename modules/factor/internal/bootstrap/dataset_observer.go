@@ -15,7 +15,7 @@ import (
 // engineView is the part of the engine hub the observer reads: the catalog the
 // engine computes and the engine's latest heartbeat.
 type engineView interface {
-	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineSet, error)
+	Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error)
 	Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error)
 }
 
@@ -36,12 +36,12 @@ type factorDatasetObserver struct {
 	// the same period is not counted as another run. Timer ticks may overlap.
 	mu       sync.Mutex
 	observed map[string]observedPeriod
-	// blocked 是各集合连续水位阻塞的起始时间（0 表示没有阻塞），Monitor 据此对停滞超过 30 分钟告警。
+	// blocked 是各任务连续水位阻塞的起始时间（0 表示没有阻塞），Monitor 据此对停滞超过 30 分钟告警。
 	blocked *prometheus.GaugeVec
-	// carryAlert 是成员连续沿用参数是否超过告警阈值（1 是），offlineFreeze 是集合最近一次离线冻结的 Unix 时间（0 表示没有）。
+	// carryAlert 是成员连续沿用参数是否超过告警阈值（1 是），offlineFreeze 是任务最近一次离线冻结的 Unix 时间（0 表示没有）。
 	carryAlert    *prometheus.GaugeVec
 	offlineFreeze *prometheus.GaugeVec
-	// carryExported、offlineExported 记下已经导出过的序列（成员 → 空间、集合 → 空间），状态恢复后清零。
+	// carryExported、offlineExported 记下已经导出过的序列（成员 → 空间、任务 → 空间），状态恢复后清零。
 	carryExported   map[paramMemberKey]string
 	offlineExported map[string]string
 }
@@ -63,16 +63,16 @@ func newParamGauges(registerer prometheus.Registerer) (carry, offline *prometheu
 		}
 		return gauge
 	}
-	carry = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: carryAlertMetric, Help: "成员连续沿用参数的期数超过告警阈值为 1，否则为 0。"}, []string{"space_id", "set_id", "member"}))
-	offline = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: offlineFreezeMetric, Help: "集合最近一次因 FactorMgr 不可达而离线冻结参数的 Unix 时间，0 表示没有。"}, []string{"space_id", "set_id"}))
+	carry = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: carryAlertMetric, Help: "成员连续沿用参数的期数超过告警阈值为 1，否则为 0。"}, []string{"space_id", "task_id", "member"}))
+	offline = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: offlineFreezeMetric, Help: "任务最近一次因 FactorMgr 不可达而离线冻结参数的 Unix 时间，0 表示没有。"}, []string{"space_id", "task_id"}))
 	return carry, offline
 }
 
-// watermarkBlockedMetric 是因子集合连续水位阻塞起始时间的指标。
-const watermarkBlockedMetric = "moox_factor_set_watermark_blocked_since_timestamp_seconds"
+// watermarkBlockedMetric 是因子任务连续水位阻塞起始时间的指标。
+const watermarkBlockedMetric = "moox_factor_task_watermark_blocked_since_timestamp_seconds"
 
 func newWatermarkBlockedGauge(registerer prometheus.Registerer) *prometheus.GaugeVec {
-	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: watermarkBlockedMetric, Help: "因子集合连续水位阻塞开始的 Unix 时间，0 表示没有阻塞。"}, []string{"space_id", "set_id"})
+	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: watermarkBlockedMetric, Help: "因子任务连续水位阻塞开始的 Unix 时间，0 表示没有阻塞。"}, []string{"space_id", "task_id"})
 	if err := registerer.Register(gauge); err != nil {
 		if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
 			return existing.ExistingCollector.(*prometheus.GaugeVec)
@@ -81,7 +81,7 @@ func newWatermarkBlockedGauge(registerer prometheus.Registerer) *prometheus.Gaug
 	return gauge
 }
 
-// observedPeriod 是一个集合已记录的最新一期与它的结果等级。同一期只接受结果变好的升级（缺口补算补齐了预热中或空洞跳过的项）：
+// observedPeriod 是一个任务已记录的最新一期与它的结果等级。同一期只接受结果变好的升级（缺口补算补齐了预热中或空洞跳过的项）：
 // 从不正式（预热中、出错，不推进产出水位）到正式，或者从不完整到成功。
 type observedPeriod struct {
 	period int64
@@ -110,7 +110,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	_, _, sets, err := o.engine.Snapshot(ctx, "")
 	if err != nil {
 		o.metrics.ObserveInventoryRefreshError()
-		return fmt.Errorf("load factor sets: %w", err)
+		return fmt.Errorf("load factor tasks: %w", err)
 	}
 	keys := make(map[string]report.DatasetKey, len(sets))
 	expected := make([]report.DatasetExpectation, 0, len(sets))
@@ -123,7 +123,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 			continue
 		}
 		key := report.DatasetKey{SpaceID: set.Set.SpaceID, DatasetID: set.Set.ResultDatasetID, Freq: set.Set.Freq}
-		keys[set.Set.SetID] = key
+		keys[set.Set.TaskID] = key
 		expected = append(expected, report.DatasetExpectation{Key: key, Interval: interval})
 	}
 	if err := o.metrics.ReplaceExpected(expected); err != nil {
@@ -135,7 +135,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	}
 	if o.blocked != nil {
 		for _, item := range status.Watermarks {
-			key, known := keys[item.SetID]
+			key, known := keys[item.TaskID]
 			if !known {
 				continue
 			}
@@ -143,13 +143,13 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 			if !item.BlockedSince.IsZero() {
 				value = float64(item.BlockedSince.Unix())
 			}
-			o.blocked.WithLabelValues(key.SpaceID, item.SetID).Set(value)
+			o.blocked.WithLabelValues(key.SpaceID, item.TaskID).Set(value)
 		}
 	}
 	o.observeParams(keys, status)
 	finishedAt := o.now().UTC()
 	for _, run := range status.RecentRuns {
-		key, expected := keys[run.SetID]
+		key, expected := keys[run.TaskID]
 		if !expected || run.LastPeriodTime <= 0 {
 			continue
 		}
@@ -163,14 +163,14 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		if run.WarmingSubjects == 0 && observation.Result != "error" {
 			observation.OutputWatermark = time.Unix(run.LastPeriodTime, 0).UTC()
 		}
-		previous, seen := o.observed[run.SetID]
+		previous, seen := o.observed[run.TaskID]
 		next := observedPeriod{period: run.LastPeriodTime, rank: resultRank(observation)}
 		if seen && (next.period < previous.period || (next.period == previous.period && next.rank <= previous.rank)) {
 			continue
 		}
-		o.observed[run.SetID] = next
+		o.observed[run.TaskID] = next
 		if err := o.metrics.ObserveRun(observation); err != nil {
-			return fmt.Errorf("observe factor set %s: %w", run.SetID, err)
+			return fmt.Errorf("observe factor task %s: %w", run.TaskID, err)
 		}
 		// 同一期在产出水位已推进之后才升级为成功（空洞跳过的项补齐了）：水位不再前进，ObserveRun 不会补报，
 		// 这里主动补报一次，Monitor 立刻看到成功，不等 30 秒的定时上报。到达时间仍是第一次正式产出的时刻。
@@ -181,7 +181,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	return nil
 }
 
-func datasetResult(run domain.SetRunSummary) string {
+func datasetResult(run domain.TaskRunSummary) string {
 	switch {
 	case run.LastStatus == "failed":
 		return "error"
@@ -195,9 +195,9 @@ func datasetResult(run domain.SetRunSummary) string {
 }
 
 // partialByDesign 判断这一期是否只因“数据还没攒够”而不完整：失败的标的都是回看窗口空洞（窗口里缺 K 线，保护逻辑不出值，
-// 见 FactorPeriodState.GapSubjects）或预热中（结果不正式、列在失败标的里），没有别的失败。数据重置、新建因子集、重启后
+// 见 FactorPeriodState.GapSubjects）或预热中（结果不正式、列在失败标的里），没有别的失败。数据重置、新建因子任务、重启后
 // 的第一期都是这种情况，生产者在正常工作；Monitor 据此显示“积累中”而不告警。有任何空洞与预热之外的失败就是意外的不完整。
-func partialByDesign(run domain.SetRunSummary) bool {
+func partialByDesign(run domain.TaskRunSummary) bool {
 	gap := map[string]struct{}{}
 	for _, factor := range run.Factors {
 		for _, subject := range factor.GapSubjects {

@@ -205,7 +205,7 @@ message ParamSubmission {
   string request_id = 1;
   string instance_id = 2;
   string result_id = 3;
-  string set_id = 4;
+  string task_id = 4;
   int64 period_time = 5;     // 参数生效的目标期次（Unix 毫秒）
   int64 based_on_period = 6; // 产出参数的期次
   string params_json = 7;    // {成员别名: {参数名: {default, overrides}}}

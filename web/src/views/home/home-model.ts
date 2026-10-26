@@ -1,5 +1,5 @@
 import type { ActivityLogItem } from "@/api/admin/activity";
-import type { FactorSetInfo } from "@/api/factor/types";
+import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
@@ -177,7 +177,7 @@ export function freshnessRows(overview: HealthOverview | undefined, names: NameB
 }
 
 export interface FactorRow {
-  setId: string;
+  taskId: string;
   label: string;
   factors: number;
   health: { key: string; label: string; color: string };
@@ -194,17 +194,17 @@ export interface FactorRow {
 const FACTOR_TONE: Record<string, Tone> = { ok: "ok", lagging: "warn", degraded: "warn", failed: "bad" };
 
 /** 因子计算任务：数据集名称 · 频率、启用因子数、最近周期与滞后。 */
-export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBook, nowMs: number): FactorRow[] {
+export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameBook, nowMs: number): FactorRow[] {
   return sets
-    .filter(info => info.factor_set.space_id === spaceId)
+    .filter(info => info.factor_task.space_id === spaceId)
     .map(info => {
-      const set = info.factor_set;
+      const set = info.factor_task;
       const health = setHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
       const periodOpenMs = toMillis(info.last_run?.last_period_time);
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
-        setId: set.set_id,
+        taskId: set.task_id,
         label: `${names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
         factors: (info.members || []).filter(member => member.status === "enabled").length,
         health,
@@ -213,7 +213,7 @@ export function factorRows(sets: FactorSetInfo[], spaceId: string, names: NameBo
         lag: behindSeconds === null ? "—" : behindText(behindSeconds),
         behindSeconds,
         periodEndMs,
-        path: `/factor/tasks?tab=results&set=${encodeURIComponent(set.set_id)}`
+        path: `/factor/tasks?tab=results&task=${encodeURIComponent(set.task_id)}`
       };
     })
     .sort((a, b) => TONE_RANK[a.tone] - TONE_RANK[b.tone] || a.label.localeCompare(b.label));
@@ -355,7 +355,7 @@ export function attentionItems(input: {
   for (const row of input.factors) {
     if (row.tone !== "warn" && row.tone !== "bad") continue;
     items.push({
-      key: `factor-${row.setId}`,
+      key: `factor-${row.taskId}`,
       tone: row.tone,
       source: "因子",
       title: row.label,

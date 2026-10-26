@@ -1,9 +1,9 @@
 <template>
   <section v-if="binding" class="factor-params" aria-label="因子参数">
     <a-descriptions :column="{ xs: 1, md: 2 }" bordered size="small">
-      <a-descriptions-item label="私有因子集">
+      <a-descriptions-item label="私有因子任务">
         <a-link @click="openResults"
-          ><span class="mono">{{ binding.setId }}</span></a-link
+          ><span class="mono">{{ binding.taskId }}</span></a-link
         >
       </a-descriptions-item>
       <a-descriptions-item label="成员（因子别名）">{{ binding.members.join("、") || "-" }}</a-descriptions-item>
@@ -168,7 +168,7 @@ async function load() {
   try {
     const now = Math.floor(Date.now() / 1000);
     const [params, list, settings, cats] = await Promise.all([
-      getFactorParams({ set_id: current.setId, from: now - WINDOW_SECONDS }),
+      getFactorParams({ task_id: current.taskId, from: now - WINDOW_SECONDS }),
       listStrategyParamSubmissions(props.instance.instance_id, 100, { silent: true }),
       getStrategyDisplaySettings(props.instance.instance_id),
       listFactorCategories().catch(() => [] as FactorCategory[])
@@ -224,7 +224,7 @@ function clearHidden() {
 }
 
 function openResults() {
-  if (binding.value) void router.push({ path: "/factor/results", query: { set: binding.value.setId } });
+  if (binding.value) void router.push({ path: "/factor/results", query: { task: binding.value.taskId } });
 }
 
 // 多源 watch 按每个源逐个比较：父页面每 10 秒整体替换实例对象时，实例与会话没变就不重新加载，

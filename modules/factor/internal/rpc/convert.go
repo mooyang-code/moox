@@ -19,7 +19,7 @@ func factorDefToPBListed(factor domain.FactorDef, includeSpec bool) *factorpb.Fa
 func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 	out := make([]*factorpb.FactorUsage, 0, len(usages))
 	for _, usage := range usages {
-		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, MemberAlias: usage.MemberAlias, Status: usage.Status, Params: factorwire.CloneParams(usage.Params)})
+		out = append(out, &factorpb.FactorUsage{TaskId: usage.TaskID, MemberAlias: usage.MemberAlias, Status: usage.Status, Params: factorwire.CloneParams(usage.Params)})
 	}
 	return out
 }
@@ -34,10 +34,10 @@ func factorInfosToPB(infos []domain.FactorInfo, includeSpec bool) []*factorpb.Fa
 	return out
 }
 
-func memberToPB(member domain.SetMember, includeSpec bool) *factorpb.FactorMember {
+func memberToPB(member domain.TaskMember, includeSpec bool) *factorpb.FactorMember {
 	def := member.Def()
 	return &factorpb.FactorMember{
-		SetId:             member.SetID,
+		TaskId:            member.TaskID,
 		MemberAlias:       member.MemberAlias,
 		FactorId:          member.FactorID,
 		Status:            member.Status,
@@ -52,7 +52,7 @@ func memberToPB(member domain.SetMember, includeSpec bool) *factorpb.FactorMembe
 }
 
 // membersToPB renders a set's members without spec (list-style response).
-func membersToPB(members []domain.SetMember) []*factorpb.FactorMember {
+func membersToPB(members []domain.TaskMember) []*factorpb.FactorMember {
 	out := make([]*factorpb.FactorMember, 0, len(members))
 	for _, member := range members {
 		out = append(out, memberToPB(member, false))
@@ -60,7 +60,7 @@ func membersToPB(members []domain.SetMember) []*factorpb.FactorMember {
 	return out
 }
 
-func setRunSummaryToPBIfPresent(summary domain.SetRunSummary) *factorpb.SetRunSummary {
+func taskRunSummaryToPBIfPresent(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 	if summary.LastPeriodTime == 0 && summary.LastStatus == "" && summary.LagSeconds == 0 {
 		return nil
 	}
@@ -71,7 +71,7 @@ func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
 	return &factorpb.RecalcJob{
 		JobId:        job.JobID,
 		RequestId:    job.RequestID,
-		SetId:        job.SetID,
+		TaskId:       job.TaskID,
 		Members:      factorwire.CloneStrings(job.Members),
 		Subjects:     factorwire.CloneStrings(job.Subjects),
 		StartTime:    factorwire.FormatTime(job.StartTime),

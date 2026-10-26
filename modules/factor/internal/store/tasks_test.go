@@ -19,9 +19,9 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-func testSet(setID, status string) domain.FactorSet {
-	return domain.FactorSet{
-		SetID: setID, SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
+func testTask(taskID, status string) domain.FactorTask {
+	return domain.FactorTask{
+		TaskID: taskID, SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
 		ResultDatasetID: "dataset_factor_prices", Status: status,
 	}
 }
@@ -38,23 +38,23 @@ func changedSpec(def domain.FactorDef, spec string) domain.FactorDef {
 }
 
 // addTestMember creates the definition if needed and attaches it to the set with the given status.
-func addTestMember(t *testing.T, s *Store, setID, factorID, status string) {
+func addTestMember(t *testing.T, s *Store, taskID, factorID, status string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := s.GetFactor(ctx, factorID); err != nil {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
-	_, err := s.AddMember(ctx, setID, factorID, factorID, nil)
+	_, err := s.AddMember(ctx, taskID, factorID, factorID, nil)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
-		require.NoError(t, s.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+		require.NoError(t, s.SetMemberStatus(ctx, taskID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	}
 }
 
 func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	factor := testFactorDef("factor_close")
 	err := s.CreateFactors(ctx, []domain.FactorDef{factor, factor})
 	require.ErrorIs(t, err, ErrConflict)
@@ -62,46 +62,46 @@ func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
 	require.Error(t, err)
 }
 
-// 同一个源数据集与频率可以有多个集合（各策略实例的私有集合）；集合 ID 与结果数据集仍各自唯一。
-func TestCreateSetAllowsSharedSourceButUniqueResult(t *testing.T) {
+// 同一个源数据集与频率可以有多个任务（各策略实例的私有任务）；任务 ID 与结果数据集仍各自唯一。
+func TestCreateTaskAllowsSharedSourceButUniqueResult(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 
-	private := testSet("set_prices_private", domain.SetStatusPending)
+	private := testTask("task_prices_private", domain.TaskStatusPending)
 	private.ResultDatasetID, private.OwnerInstanceID = "dataset_factor_private", "inst-1"
-	require.NoError(t, s.CreateSet(ctx, private))
-	owned, err := s.GetSetByOwner(ctx, "inst-1")
+	require.NoError(t, s.CreateTask(ctx, private))
+	owned, err := s.GetTaskByOwner(ctx, "inst-1")
 	require.NoError(t, err)
-	require.Equal(t, "set_prices_private", owned.SetID)
+	require.Equal(t, "task_prices_private", owned.TaskID)
 
-	duplicate := testSet("set_prices_duplicate", domain.SetStatusPending)
+	duplicate := testTask("task_prices_duplicate", domain.TaskStatusPending)
 	duplicate.ResultDatasetID = "dataset_factor_private"
-	require.ErrorIs(t, s.CreateSet(ctx, duplicate), ErrConflict)
+	require.ErrorIs(t, s.CreateTask(ctx, duplicate), ErrConflict)
 }
 
-func TestDeleteSetFailsWhenMembersExist(t *testing.T) {
+func TestDeleteTaskFailsWhenMembersExist(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusDisabled)))
-	addTestMember(t, s, "set_prices", "factor_close", domain.MemberStatusDisabled)
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusDisabled)))
+	addTestMember(t, s, "task_prices", "factor_close", domain.MemberStatusDisabled)
 
-	require.ErrorIs(t, s.DeleteSet(ctx, "set_prices"), ErrConflict)
-	_, err := s.GetSet(ctx, "set_prices")
+	require.ErrorIs(t, s.DeleteTask(ctx, "task_prices"), ErrConflict)
+	_, err := s.GetTask(ctx, "task_prices")
 	require.NoError(t, err)
 }
 
-func TestSetCRUDAndFactorCRUD(t *testing.T) {
+func TestTaskCRUDAndFactorCRUD(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	set := testSet("set_prices", domain.SetStatusPending)
-	require.NoError(t, s.CreateSet(ctx, set))
-	got, err := s.GetSet(ctx, set.SetID)
+	set := testTask("task_prices", domain.TaskStatusPending)
+	require.NoError(t, s.CreateTask(ctx, set))
+	got, err := s.GetTask(ctx, set.TaskID)
 	require.NoError(t, err)
 	require.Equal(t, set.SourceDatasetID, got.SourceDatasetID)
-	require.Equal(t, domain.SetStatusPending, got.Status)
+	require.Equal(t, domain.TaskStatusPending, got.Status)
 
-	sets, err := s.ListSets(ctx)
+	sets, err := s.ListTasks(ctx)
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
 
@@ -122,27 +122,27 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
 	require.NoError(t, s.DeleteFactor(ctx, def.FactorID))
-	require.NoError(t, s.DeleteSet(ctx, set.SetID))
+	require.NoError(t, s.DeleteTask(ctx, set.TaskID))
 }
 
 func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	set := testSet("set_prices", domain.SetStatusPending)
-	require.NoError(t, s.CreateSet(ctx, set))
-	require.NoError(t, s.SetSetStatus(ctx, set.SetID, domain.SetStatusPending, domain.SetStatusEnabled))
-	require.ErrorIs(t, s.SetSetStatus(ctx, set.SetID, domain.SetStatusPending, domain.SetStatusDisabled), ErrConflict)
-	storedSet, err := s.GetSet(ctx, set.SetID)
+	set := testTask("task_prices", domain.TaskStatusPending)
+	require.NoError(t, s.CreateTask(ctx, set))
+	require.NoError(t, s.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusPending, domain.TaskStatusEnabled))
+	require.ErrorIs(t, s.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusPending, domain.TaskStatusDisabled), ErrConflict)
+	storedTask, err := s.GetTask(ctx, set.TaskID)
 	require.NoError(t, err)
-	require.Equal(t, domain.SetStatusEnabled, storedSet.Status)
+	require.Equal(t, domain.TaskStatusEnabled, storedTask.Status)
 
 	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	_, err = s.AddMember(ctx, set.SetID, factor.FactorID, factor.FactorID, nil)
+	_, err = s.AddMember(ctx, set.TaskID, factor.FactorID, factor.FactorID, nil)
 	require.NoError(t, err)
-	require.NoError(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
-	require.ErrorIs(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)
-	member, err := s.GetMember(ctx, set.SetID, factor.FactorID)
+	require.NoError(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
+	require.ErrorIs(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)
+	member, err := s.GetMember(ctx, set.TaskID, factor.FactorID)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusEnabled, member.Status)
 }

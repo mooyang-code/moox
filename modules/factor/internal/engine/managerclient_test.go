@@ -72,7 +72,7 @@ func TestManagerClientSignsNativeRequestsWithAssignedExternalIdentity(t *testing
 		require.NoError(t, proto.Unmarshal(body, &req))
 		require.Equal(t, "hash-0", req.GetKnownHash())
 		require.Equal(t, "factor-engine@mac", req.GetEngine().GetEngineId())
-		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Sets: []*factorpb.EngineSet{{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberAlias: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "outputs:\n  bias: close\n"}}}}}}, nil
+		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Tasks: []*factorpb.EngineTask{{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberAlias: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "outputs:\n  bias: close\n"}}}}}}, nil
 	})
 	snapshot, err := client.SyncCatalog(t.Context(), "hash-0")
 	require.NoError(t, err)
@@ -134,7 +134,7 @@ func TestManagerClientPullDecodesWindowAndProgressRetainsFence(t *testing.T) {
 			return &factorpb.ReportRecalcProgressRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, JobStatus: "running"}, nil
 		}
 		require.Equal(t, "PullRecalcJob", method)
-		return &factorpb.PullRecalcJobRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, LeaseToken: "token", Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z", ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}}, Set: &factorpb.EngineSet{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}}}, nil
+		return &factorpb.PullRecalcJobRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Found: true, LeaseToken: "token", Job: &factorpb.RecalcJob{JobId: "job-1", StartTime: "2026-10-04T00:00:00Z", EndTime: "2026-10-04T01:00:00Z", ProgressTime: "2026-10-04T00:30:00Z", Subjects: []string{"BTC"}}, Task: &factorpb.EngineTask{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}}}, nil
 	})
 	job, found, err := client.PullRecalcJob(t.Context())
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestManagerClientPullDecodesWindowAndProgressRetainsFence(t *testing.T) {
 	require.Equal(t, "token", job.LeaseToken)
 	require.Equal(t, time.Date(2026, 10, 4, 0, 30, 0, 0, time.UTC), job.Window.Progress)
 	require.Equal(t, []string{"BTC"}, job.Subjects)
-	require.Equal(t, "fset_a", job.Set.Set.SetID)
+	require.Equal(t, "ftask_a", job.Set.Set.TaskID)
 	status, err := client.ReportRecalcProgress(t.Context(), job.JobID, job.LeaseToken, job.Window.Progress, "running", "")
 	require.NoError(t, err)
 	require.Equal(t, "running", status)

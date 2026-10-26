@@ -227,13 +227,13 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 
 type recalcRPCAdapter struct{ service *recalc.Service }
 
-func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Submit(ctx, setID, members, subjects, requestID, start, end)
+func (a recalcRPCAdapter) Submit(ctx context.Context, taskID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Submit(ctx, taskID, members, subjects, requestID, start, end)
 	return factorrpc.JobFromStore(job), err
 }
 
-func (a recalcRPCAdapter) List(ctx context.Context, setID string, statuses []string) ([]factorrpc.RecalcJob, error) {
-	jobs, err := a.service.List(ctx, setID, statuses)
+func (a recalcRPCAdapter) List(ctx context.Context, taskID string, statuses []string) ([]factorrpc.RecalcJob, error) {
+	jobs, err := a.service.List(ctx, taskID, statuses)
 	if err != nil {
 		return nil, err
 	}

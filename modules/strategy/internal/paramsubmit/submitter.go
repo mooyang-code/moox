@@ -29,7 +29,7 @@ const (
 // Submitter 投递待提交的因子参数。
 type Submitter struct {
 	Store   *store.Store
-	Factors input.FactorSets
+	Factors input.FactorTasks
 	Now     func() time.Time
 	// Interval 是轮询待提交记录的间隔；Batch 是每轮最多处理的条数；MaxAge 是记录超过目标期次这么久仍没有结果时放弃。
 	Interval   time.Duration
@@ -110,7 +110,7 @@ func (s *Submitter) finish(ctx context.Context, submission store.ParamSubmission
 }
 
 func (s *Submitter) deliver(ctx context.Context, submission store.ParamSubmission) error {
-	// 实例停用、换了会话或已删除后，旧的参数不再有意义：放弃，不去影响私有因子集。
+	// 实例停用、换了会话或已删除后，旧的参数不再有意义：放弃，不去影响私有因子任务。
 	instance, err := s.Store.GetInstance(ctx, submission.InstanceID)
 	if err != nil || !instance.Enabled || instance.DeletedAt != nil || instance.SessionID == nil || *instance.SessionID != submission.SessionID {
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -132,7 +132,7 @@ func (s *Submitter) deliver(ctx context.Context, submission store.ParamSubmissio
 	callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
 	defer cancel()
 	results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
-		RequestID: submission.RequestID, Writer: submission.InstanceID, SetID: submission.SetID,
+		RequestID: submission.RequestID, Writer: submission.InstanceID, TaskID: submission.TaskID,
 		PeriodTime: submission.PeriodTime, BasedOnPeriod: submission.BasedOnPeriod, Members: members,
 	})
 	if err != nil {

@@ -79,11 +79,11 @@ func (f *previewerFake) Preview(_ context.Context, req preview.Request) (preview
 }
 
 func TestPreviewFactorCompilesAndConvertsNulls(t *testing.T) {
-	set := domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}
+	set := domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}
 	previewer := &previewerFake{}
 	svc := NewService(&catalogFake{set: set}, &recalcFake{}, WithPreviewer(previewer))
 	rsp, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{
-		SetId: "fset_a", Spec: "outputs:\n  m: ts_mean(close, 3)\n", Subjects: []string{"BTC"}, Periods: 2,
+		TaskId: "ftask_a", Spec: "outputs:\n  m: ts_mean(close, 3)\n", Subjects: []string{"BTC"}, Periods: 2,
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
@@ -98,16 +98,16 @@ func TestPreviewFactorCompilesAndConvertsNulls(t *testing.T) {
 	require.Equal(t, []bool{true}, rsp.GetRows()[1].GetNulls())
 	require.Equal(t, "2026-10-17T01:02:00Z", rsp.GetRows()[0].GetDataTime())
 
-	bad, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{SetId: "fset_a", Spec: "outputs: {m: nope(close)}"})
+	bad, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs: {m: nope(close)}"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 	previewer.err = errors.New("源数据集没有输入列 close")
-	failed, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{SetId: "fset_a", Spec: "outputs:\n  m: close\n"})
+	failed, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs:\n  m: close\n"})
 	require.NoError(t, err)
 	require.Contains(t, failed.GetRetInfo().GetMsg(), "没有输入列")
 
 	disabled, err := NewService(&catalogFake{set: set}, &recalcFake{}).PreviewFactor(context.Background(),
-		&factorpb.PreviewFactorReq{SetId: "fset_a", Spec: "outputs:\n  m: close\n"})
+		&factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs:\n  m: close\n"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INNER_ERR, disabled.GetRetInfo().GetCode())
 }

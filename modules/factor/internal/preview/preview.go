@@ -1,4 +1,4 @@
-// Package preview 在管理端试算一个表达式定义（设计 9.4 PreviewFactor）：在指定因子集的源数据上，
+// Package preview 在管理端试算一个表达式定义（设计 9.4 PreviewFactor）：在指定因子任务的源数据上，
 // 对少量标的计算最近若干期。直接读 Storage，复用周期流水线的读取与计算，不写任何结果，也不经过引擎。
 package preview
 
@@ -22,7 +22,7 @@ const (
 	MaxPeriods = 500
 	// DefaultSubjects 是不指定标的时取源数据集的前几个标的。
 	DefaultSubjects = 5
-	// MaxSubjects 是一次试算最多输出的标的数；截面因子仍用集合的全部标的计算。
+	// MaxSubjects 是一次试算最多输出的标的数；截面因子仍用任务的全部标的计算。
 	MaxSubjects = 20
 	// MaxUniverse 是截面因子试算时参与计算的标的上限。
 	MaxUniverse = 2000
@@ -38,7 +38,7 @@ type Source interface {
 
 // Request 是一次试算的输入。
 type Request struct {
-	Set      domain.FactorSet
+	Set      domain.FactorTask
 	Factor   domain.FactorDef // 已经 NormalizeFactorDefinition 编译过
 	Subjects []string
 	Periods  int
@@ -138,12 +138,12 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		shown = universe[:min(DefaultSubjects, len(universe))]
 	}
 	if len(shown) == 0 {
-		return Result{}, errors.New("因子集没有可用的标的")
+		return Result{}, errors.New("因子任务没有可用的标的")
 	}
 	computed := shown
 	if factor.FactorType == domain.FactorTypeCrossSection {
 		if len(universe) > MaxUniverse {
-			return Result{}, fmt.Errorf("截面因子试算最多支持 %d 个标的，集合有 %d 个", MaxUniverse, len(universe))
+			return Result{}, fmt.Errorf("截面因子试算最多支持 %d 个标的，任务有 %d 个", MaxUniverse, len(universe))
 		}
 		computed = universe
 	}
@@ -176,7 +176,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	return collect(factor, computation, shown)
 }
 
-func (s *Service) universe(ctx context.Context, set domain.FactorSet) ([]string, error) {
+func (s *Service) universe(ctx context.Context, set domain.FactorTask) ([]string, error) {
 	subjects, err := s.source.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("列出源数据集的标的：%w", err)
@@ -221,7 +221,7 @@ func collect(factor domain.FactorDef, computation pipeline.Computation, shown []
 		}
 	}
 	if state, ok := computation.FactorStates[factor.FactorID]; ok && state.Status == "skipped" {
-		return Result{}, errors.New("截面因子本次被跳过：集合的标的不完整")
+		return Result{}, errors.New("截面因子本次被跳过：任务的标的不完整")
 	}
 	sort.Slice(result.Rows, func(i, j int) bool {
 		left, right := result.Rows[i], result.Rows[j]

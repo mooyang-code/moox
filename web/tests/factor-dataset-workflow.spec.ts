@@ -5,8 +5,8 @@ const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: 
 
 let jobs: Array<Record<string, unknown>> = [];
 
-const factorSet = {
-  set_id: "fset_binance_kline_1m",
+const factorTask = {
+  task_id: "ftask_binance_kline_1m",
   space_id: "crypto",
   source_dataset_id: "dataset_binance_kline_1m",
   freq: "1m",
@@ -29,7 +29,7 @@ const baseDef = {
 
 type Def = typeof baseDef & { factor_id: string; outputs: string[] };
 type Member = {
-  set_id: string;
+  task_id: string;
   member_alias: string;
   factor_id: string;
   status: "enabled" | "disabled";
@@ -44,7 +44,7 @@ let createdFactor: Record<string, unknown> | null = null;
 
 function member(def: Def, status: Member["status"]): Member {
   return {
-    set_id: factorSet.set_id,
+    task_id: factorTask.task_id,
     member_alias: def.factor_id,
     factor_id: def.factor_id,
     status,
@@ -94,7 +94,7 @@ async function mockGateway(route: Route) {
           },
           {
             space_id: "crypto",
-            dataset_id: factorSet.result_dataset_id,
+            dataset_id: factorTask.result_dataset_id,
             name: "现货K线因子结果",
             status: "active",
             freq: "1m",
@@ -105,14 +105,14 @@ async function mockGateway(route: Route) {
       })
     });
   }
-  if (method === "ListFactorSets") {
+  if (method === "ListFactorTasks") {
     return route.fulfill({
       json: ok({
-        factor_sets: [
+        factor_tasks: [
           {
-            factor_set: factorSet,
+            factor_task: factorTask,
             members,
-            last_run: { set_id: factorSet.set_id, last_period_time: 1791086400, last_status: "complete", lag_seconds: 30 }
+            last_run: { task_id: factorTask.task_id, last_period_time: 1791086400, last_status: "complete", lag_seconds: 30 }
           }
         ],
         page_result: { page: 1, size: 500, total: 1, has_more: false }
@@ -122,7 +122,9 @@ async function mockGateway(route: Route) {
   if (method === "ListFactors") {
     const factors = defs.map(def => ({
       factor: def,
-      usages: members.filter(item => item.factor_id === def.factor_id).map(item => ({ set_id: item.set_id, status: item.status }))
+      usages: members
+        .filter(item => item.factor_id === def.factor_id)
+        .map(item => ({ task_id: item.task_id, status: item.status }))
     }));
     return route.fulfill({ json: ok({ factors, page_result: { page: 1, size: 200, total: factors.length, has_more: false } }) });
   }
@@ -130,7 +132,7 @@ async function mockGateway(route: Route) {
     const def = defs.find(item => item.factor_id === body.factor_id);
     const usages = members
       .filter(item => item.factor_id === body.factor_id)
-      .map(item => ({ set_id: item.set_id, status: item.status }));
+      .map(item => ({ task_id: item.task_id, status: item.status }));
     return route.fulfill({ json: ok({ factor: def, usages }) });
   }
   if (method === "CreateFactor") {
@@ -138,17 +140,17 @@ async function mockGateway(route: Route) {
     defs = [...defs, { ...baseDef, ...body.factor }];
     return route.fulfill({ json: ok({ factor: body.factor }) });
   }
-  if (method === "AddFactorToSet") {
+  if (method === "AddTaskMember") {
     const def = defs.find(item => item.factor_id === body.factor_id)!;
     const added = member(def, "disabled");
     members = [...members, added];
     return route.fulfill({ json: ok({ member: added }) });
   }
-  if (method === "RemoveFactorFromSet") {
+  if (method === "RemoveTaskMember") {
     members = members.filter(item => item.member_alias !== body.member_alias);
     return route.fulfill({ json: ok() });
   }
-  if (method === "SetFactorMemberStatus") {
+  if (method === "SetTaskMemberStatus") {
     members = members.map(item => (item.member_alias === body.member_alias ? { ...item, status: body.status } : item));
     const updated = members.find(item => item.member_alias === body.member_alias);
     return route.fulfill({ json: ok({ member: updated }) });
@@ -160,7 +162,7 @@ async function mockGateway(route: Route) {
           space_id: "crypto",
           view_id: "view_factor_binance_kline_1m",
           name: "现货K线因子结果",
-          dataset_id: factorSet.result_dataset_id,
+          dataset_id: factorTask.result_dataset_id,
           status: "active",
           attributes: { owner_module: "factor", view_role: "factor_result" }
         }
@@ -196,7 +198,7 @@ async function mockGateway(route: Route) {
     const job = {
       job_id: body.request_id || "job-1",
       request_id: body.request_id || "job-1",
-      set_id: body.set_id,
+      task_id: body.task_id,
       members: body.members || [],
       subjects: body.subjects || [],
       start_time: body.start_time,
@@ -209,7 +211,7 @@ async function mockGateway(route: Route) {
     return route.fulfill({ json: ok({ job }) });
   }
   if (method === "ListRecalcJobs") {
-    const items = jobs.filter(item => item.set_id === body.set_id);
+    const items = jobs.filter(item => item.task_id === body.task_id);
     return route.fulfill({ json: ok({ jobs: items, page_result: { page: 1, size: 20, total: items.length, has_more: false } }) });
   }
   if (method === "GetStatus") {
@@ -219,7 +221,7 @@ async function mockGateway(route: Route) {
         compute_workers: 4,
         engine_expr_version: "expr/1",
         manager_expr_version: "expr/1",
-        lanes: [],
+        runners: [],
         recent_runs: []
       })
     });
@@ -232,7 +234,7 @@ async function mockGateway(route: Route) {
             space_id: "crypto",
             view_id: "view_factor_binance_kline_1m",
             name: "现货K线因子结果",
-            dataset_id: factorSet.result_dataset_id,
+            dataset_id: factorTask.result_dataset_id,
             status: "active",
             attributes: { owner_module: "factor", view_role: "factor_result" }
           }
@@ -271,8 +273,8 @@ test.beforeEach(async ({ page }) => {
 
 test("factor workbench scopes factors, results and async recalculation to one set", async ({ page }) => {
   await page.goto("/#/factor/workbench");
-  await expect(page.getByText(factorSet.set_id)).toBeVisible();
-  await expect(page.getByText(factorSet.result_dataset_id)).toBeVisible();
+  await expect(page.getByText(factorTask.task_id)).toBeVisible();
+  await expect(page.getByText(factorTask.result_dataset_id)).toBeVisible();
   await page.getByRole("tab", { name: "因子" }).click();
   await expect(page.getByText("Bias", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "结果" }).click();
@@ -296,7 +298,7 @@ test("compute task drawer lists members and locks enabled factors", async ({ pag
     .first()
     .click();
   const drawer = page.locator(".arco-drawer");
-  await expect(drawer.getByText(factorSet.result_dataset_id)).toBeVisible();
+  await expect(drawer.getByText(factorTask.result_dataset_id)).toBeVisible();
   await expect(drawer.getByText("bias", { exact: true })).toBeVisible();
   await expect(drawer.getByRole("button", { name: "编辑定义" })).toBeDisabled();
   await expect(drawer.getByRole("button", { name: "移除" })).toBeDisabled();
@@ -345,7 +347,7 @@ test("new definition is created without a set and highlights the definitions men
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "保存因子" }).click();
   await expect.poll(() => createdFactor?.factor_id).toBe("momentum");
-  expect(createdFactor).not.toHaveProperty("set_id");
+  expect(createdFactor).not.toHaveProperty("task_id");
 });
 
 test("adding a factor to a task then enabling it does not start a backfill", async ({ page }) => {
@@ -370,5 +372,5 @@ test("adding a factor to a task then enabling it does not start a backfill", asy
 test("overview page is read-only and links to tasks", async ({ page }) => {
   await page.goto("/#/factor/overview");
   await expect(page.getByRole("heading", { name: "因子总览" })).toBeVisible();
-  await expect(page.getByText(factorSet.set_id).or(page.getByText("现货K线")).first()).toBeVisible();
+  await expect(page.getByText(factorTask.task_id).or(page.getByText("现货K线")).first()).toBeVisible();
 });

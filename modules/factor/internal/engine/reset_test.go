@@ -17,7 +17,7 @@ import (
 )
 
 // 引擎进程内重置的端到端：暂停 → plan → apply，本地时序存储、连续水位、空洞账本、内存数据源被清掉，
-// 小文件备份在 reset-backups；all 范围再清目录缓存；之后集合要重新 init 才能用。
+// 小文件备份在 reset-backups；all 范围再清目录缓存；之后任务要重新 init 才能用。
 func TestEngineResetClearsLocalStateInProcess(t *testing.T) {
 	ctx := context.Background()
 	r, _ := newLifecycleRuntime(t)
@@ -36,18 +36,18 @@ func TestEngineResetClearsLocalStateInProcess(t *testing.T) {
 
 	r.watermarks, err = watermark.Open(filepath.Join(dir, "watermarks.json"))
 	require.NoError(t, err)
-	require.NoError(t, r.watermarks.Put(watermark.State{SetID: "fset_a", CommittedThrough: t0, Target: t0}))
+	require.NoError(t, r.watermarks.Put(watermark.State{TaskID: "ftask_a", CommittedThrough: t0, Target: t0}))
 	r.cfg.CatalogSync.StateFile = r.catalog.stateFile // 夹具里 Apply 已经写出了目录缓存文件，备份时要能拷到
 	r.cfg.Gap.LedgerDir = filepath.Join(dir, "gap")
 	ledger, _, err := gapledger.Open(r.cfg.Gap.LedgerDir, time.Now, 0)
 	require.NoError(t, err)
-	require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{SetID: "fset_a", Subject: "BTC", Period: t0, Member: "f", DefinitionHash: "h", Reason: pipeline.SkipReasonUpstream}}))
+	require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{TaskID: "ftask_a", Subject: "BTC", Period: t0, Member: "f", DefinitionHash: "h", Reason: pipeline.SkipReasonUpstream}}))
 	r.gap = ledger
 	require.Equal(t, 1, ledger.PendingCount())
 	r.data = localdata.New(localdata.Config{})
 	r.preload.data = &preloadDataFake{}
-	require.NoError(t, r.preload.PrepareSet(ctx, "fset_a"))
-	require.True(t, r.preload.Ready("fset_a"))
+	require.NoError(t, r.preload.PrepareSet(ctx, "ftask_a"))
+	require.True(t, r.preload.Ready("ftask_a"))
 
 	r.life.Refresh(ctx)
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem})
@@ -69,16 +69,16 @@ func TestEngineResetClearsLocalStateInProcess(t *testing.T) {
 	require.Empty(t, subjects, "本地时序存储被清空")
 	require.Empty(t, r.watermarks.All(), "连续水位被清空")
 	require.Zero(t, ledger.PendingCount(), "空洞账本被清空")
-	require.False(t, r.preload.Ready("fset_a"), "预载记录被忘掉，集合要重新 init")
+	require.False(t, r.preload.Ready("ftask_a"), "预载记录被忘掉，任务要重新 init")
 	require.Equal(t, lifecycle.StageUninitialized, r.life.Stage(lifecycle.Ref{}))
-	require.False(t, r.gate("fset_a"))
+	require.False(t, r.gate("ftask_a"))
 
 	backups, err := filepath.Glob(filepath.Join(dir, "reset-backups", "*", "watermarks.json"))
 	require.NoError(t, err)
 	require.Len(t, backups, 1, "水位文件备份在 reset-backups")
 	raw, err := os.ReadFile(backups[0])
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "fset_a", "备份的是重置前的内容")
+	require.Contains(t, string(raw), "ftask_a", "备份的是重置前的内容")
 
 	// 重置后还能 init，数据层重新工作。
 	obj, err := r.life.Command(ctx, lifecycle.CmdInit, lifecycle.Ref{})

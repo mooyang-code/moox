@@ -124,7 +124,7 @@ func (v *listFlag) Set(raw string) error {
 func runOnce(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("run-once", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
-	setID := fs.String("set", "", "factor set id")
+	taskID := fs.String("task", "", "factor task id")
 	period := fs.String("period", "", "period start timestamp RFC3339")
 	var factors, subjects listFlag
 	fs.Var(&factors, "member", "member alias (repeatable; all members when omitted)")
@@ -132,8 +132,8 @@ func runOnce(args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*setID) == "" {
-		return errors.New("--set is required")
+	if strings.TrimSpace(*taskID) == "" {
+		return errors.New("--task is required")
 	}
 	at, err := time.Parse(time.RFC3339Nano, *period)
 	if err != nil {
@@ -144,13 +144,13 @@ func runOnce(args []string, out io.Writer) error {
 		return err
 	}
 	outcome, err := engine.RunOnce(context.Background(), cfg, engine.RunOnceRequest{
-		SetID: *setID, Members: factors, Subjects: subjects, Period: at.UTC(),
+		TaskID: *taskID, Members: factors, Subjects: subjects, Period: at.UTC(),
 	})
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "set_id": *setID, "period": at.UTC().Format(time.RFC3339),
+		"ok": true, "task_id": *taskID, "period": at.UTC().Format(time.RFC3339),
 		"status": outcome.Status, "rows_written": outcome.RowsWritten, "factors": outcome.Factors,
 	})
 }
@@ -185,7 +185,7 @@ func health(args []string, out io.Writer) error {
 }
 
 // resetGapLedger 删除空洞账本。数据被整体清空之后账本里的待恢复项指向已不存在的数据，必须在引擎停止后执行：
-// 引擎持有打开的账本文件，并在内存里维护待恢复集合。
+// 引擎持有打开的账本文件，并在内存里维护待恢复任务。
 func resetGapLedger(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("reset-gap-ledger", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
@@ -212,21 +212,21 @@ func resetGapLedger(args []string, out io.Writer) error {
 	return json.NewEncoder(out).Encode(map[string]any{"status": "ok", "ledger_dir": cfg.Gap.LedgerDir, "files_removed": removed})
 }
 
-// reconcile 对账一个因子集合的源数据：本地时序存储与 Storage 保留期内的数据比对并整段替换，完成后重建变更日志位点。
+// reconcile 对账一个因子任务的源数据：本地时序存储与 Storage 保留期内的数据比对并整段替换，完成后重建变更日志位点。
 // 变更日志断档（离线超过保留期、Storage 节点更换）时引擎把该数据源判为未就绪，由人工执行本命令。
 // 本地存储同一时刻只能由一个进程打开，必须在引擎停止后执行。
 func reconcile(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("reconcile", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
 	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
-	set := fs.String("set", "", "要对账的因子集合 ID")
+	set := fs.String("task", "", "要对账的因子任务 ID")
 	var subjects listFlag
 	fs.Var(&subjects, "subject", "只对账这个标的（可重复）；不写表示本地有数据的全部标的")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*set) == "" {
-		return errors.New("--set 是必填项")
+		return errors.New("--task 是必填项")
 	}
 	cfg, err := engine.Load(*app)
 	if err != nil {
@@ -237,7 +237,7 @@ func reconcile(args []string, out io.Writer) error {
 		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再对账（本地存储同一时刻只能由一个进程打开）", *healthAddr)
 	}
 	summary, err := engine.Reconcile(context.Background(), cfg, engine.ReconcileRequest{
-		SetID: *set, Subjects: subjects,
+		TaskID: *set, Subjects: subjects,
 		Progress: func(done, total int) {
 			if done == total || done%50 == 0 {
 				fmt.Fprintf(os.Stderr, "对账进度 %d/%d\n", done, total)
@@ -250,12 +250,12 @@ func reconcile(args []string, out io.Writer) error {
 	return json.NewEncoder(out).Encode(summary)
 }
 
-// backfill 把集合源数据的本地历史从 Storage 回补到指定根数（Storage 保留期内有多少补多少）；引擎必须已停止。
+// backfill 把任务源数据的本地历史从 Storage 回补到指定根数（Storage 保留期内有多少补多少）；引擎必须已停止。
 func backfill(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("backfill", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
 	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
-	set := fs.String("set", "", "要回补的因子集合 ID")
+	set := fs.String("task", "", "要回补的因子任务 ID")
 	bars := fs.Int("bars", 0, "每个标的本地连续历史的目标根数（以本地最新一根往前数）")
 	var subjects listFlag
 	fs.Var(&subjects, "subject", "只回补这个标的（可重复）；不写表示本地有数据的全部标的")
@@ -263,7 +263,7 @@ func backfill(args []string, out io.Writer) error {
 		return err
 	}
 	if strings.TrimSpace(*set) == "" || *bars <= 0 {
-		return errors.New("--set 与 --bars 是必填项")
+		return errors.New("--task 与 --bars 是必填项")
 	}
 	cfg, err := engine.Load(*app)
 	if err != nil {
@@ -274,7 +274,7 @@ func backfill(args []string, out io.Writer) error {
 		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再回补（本地存储同一时刻只能由一个进程打开）", *healthAddr)
 	}
 	summary, err := engine.Backfill(context.Background(), cfg, engine.BackfillRequest{
-		SetID: *set, Bars: *bars, Subjects: subjects,
+		TaskID: *set, Bars: *bars, Subjects: subjects,
 		Progress: func(done, total int) {
 			if done == total || done%50 == 0 {
 				fmt.Fprintf(os.Stderr, "回补进度 %d/%d\n", done, total)
@@ -292,7 +292,7 @@ func tune(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
 	memory := fs.Int64("memory-gib", 0, "总内存（GiB）；不写则探测本机")
-	sets := fs.Int("sets", 4, "计划启用的因子集合数（决定计算并行数）")
+	sets := fs.Int("sets", 4, "计划启用的因子任务数（决定计算并行数）")
 	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
 	series := fs.Int("series", 0, "计划启用的序列总数（标的数 × series_tag 数，所有数据源合计）；给出后按回看数量 N 估算窗口内存并与建议的窗口上限比较")
 	fields := fs.Int("fields", 7, "数据集的数值字段数（用于窗口内存估算）")

@@ -50,7 +50,7 @@ func TestPrepareRejectsFactorLookbackBeyondN(t *testing.T) {
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
 }
 
-// 窗口长度就是 N，而不是集合里因子的最大回看。
+// 窗口长度就是 N，而不是任务里因子的最大回看。
 func TestWindowLengthIsConfiguredLookback(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 8 }
@@ -65,7 +65,7 @@ func TestWindowLengthIsConfiguredLookback(t *testing.T) {
 	require.Equal(t, at(2), b.Earliest, "新标的一次性拉取 N=8 根")
 }
 
-// 标的被移出集合：重新准备后窗口释放它们，变更跟进也不再处理它们的修正（设计 6.2，决定 18）。
+// 标的被移出任务：重新准备后窗口释放它们，变更跟进也不再处理它们的修正（设计 6.2，决定 18）。
 func TestRemovedSubjectsLeaveWindowAndFollow(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 10 }
@@ -76,7 +76,7 @@ func TestRemovedSubjectsLeaveWindowAndFollow(t *testing.T) {
 	require.Equal(t, []string{"A", "B"}, window.Subjects())
 
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A"}))
-	require.Equal(t, []string{"A"}, window.Subjects(), "B 已移出集合，窗口释放它占的内存")
+	require.Equal(t, []string{"A"}, window.Subjects(), "B 已移出任务，窗口释放它占的内存")
 
 	// 修正 B 的历史：不再被跟进处理，本地的 B 保持原值；A 照常。
 	fx.st.put("B", 900, 5)
@@ -95,7 +95,7 @@ func TestLongGapThreshold(t *testing.T) {
 	require.Equal(t, 3, LongGapThreshold(24*time.Hour), "日线按 3 期")
 }
 
-// 标的被移出集合期间 Storage 里的修正不会被跟进；重新加入时要先把本地保有的历史与 Storage 对账（审查意见 3）。
+// 标的被移出任务期间 Storage 里的修正不会被跟进；重新加入时要先把本地保有的历史与 Storage 对账（审查意见 3）。
 func TestReaddedSubjectIsResynced(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 10 }

@@ -31,7 +31,7 @@ type SetLocker interface {
 // Selection is the input of one recalc chunk: the set, the members to compute,
 // the resolved subjects and the source columns carried into the result.
 type Selection struct {
-	Set      domain.FactorSet
+	Set      domain.FactorTask
 	Members  []domain.MemberDef
 	Subjects []string
 	Columns  []string
@@ -64,11 +64,11 @@ const defaultChunkPeriods = 2000
 // maxChunkRetryBackoff 是同一个补算分块两次重试之间等待的上限。
 const maxChunkRetryBackoff = 2 * time.Minute
 
-// ErrGated 表示集合被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
-var ErrGated = errors.New("factor set is gated by lifecycle")
+// ErrGated 表示任务被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
+var ErrGated = errors.New("factor task is gated by lifecycle")
 
 type config struct {
-	gate         func(setID string) bool
+	gate         func(taskID string) bool
 	chunkPeriods int
 	memoryBudget int64
 	chunkRetries int
@@ -89,15 +89,15 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 }
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 
-// WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有集合锁）检查，集合不允许写结果时返回 ErrGated。
+// WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有任务锁）检查，任务不允许写结果时返回 ErrGated。
 // 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶、重置期间这些后台路径不会越过门禁写结果。
-func WithGate(gate func(setID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
-func WithLocks(locks SetLocker) Option             { return func(cfg *config) { cfg.locks = locks } }
+func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
+func WithLocks(locks SetLocker) Option              { return func(cfg *config) { cfg.locks = locks } }
 
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
-	gate         func(setID string) bool
+	gate         func(taskID string) bool
 	runner       Runner
 	locks        SetLocker
 	clock        periodclock.Clock
@@ -172,7 +172,7 @@ func (e *Executor) RunChunk(ctx context.Context, selection Selection, start, end
 	if e == nil || e.runner == nil {
 		return pipeline.Outcome{}, errors.New("factor recalc runner is required")
 	}
-	unlock, err := e.lock(ctx, selection.Set.SetID)
+	unlock, err := e.lock(ctx, selection.Set.TaskID)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -199,7 +199,7 @@ func (e *Executor) runSegments(ctx context.Context, selection Selection, start, 
 	return merged, nil
 }
 
-// RunChunkWith 先取集合锁，再在锁内调用 source 重新取得集合、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
+// RunChunkWith 先取任务锁，再在锁内调用 source 重新取得任务、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
 // after（可为 nil）。恢复用它在锁内重读待办、写入并确认，锁释放之后发生的新失效不会被这次确认移除。
 // source 返回空标的集合时不运行。
 func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, start, end time.Time, after func(Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -209,12 +209,12 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if source == nil {
 		return pipeline.Outcome{}, errors.New("recalc selection source is required")
 	}
-	// 先在锁外取一次，只为知道要锁哪个集合；真正使用的选择在锁内重读。
+	// 先在锁外取一次，只为知道要锁哪个任务；真正使用的选择在锁内重读。
 	probe, err := source(ctx)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	unlock, err := e.lock(ctx, probe.Set.SetID)
+	unlock, err := e.lock(ctx, probe.Set.TaskID)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -229,7 +229,7 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if len(selection.Subjects) == 0 {
 		return pipeline.Outcome{}, nil
 	}
-	if e.gate != nil && !e.gate(selection.Set.SetID) {
+	if e.gate != nil && !e.gate(selection.Set.TaskID) {
 		return pipeline.Outcome{}, ErrGated
 	}
 	outcome, runErr := e.runSegments(ctx, selection, start, end)
@@ -273,7 +273,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if len(selection.Subjects) == 0 {
 		return windowEnd, pipeline.Outcome{}, true, nil
 	}
-	unlock, err := e.lock(ctx, selection.Set.SetID)
+	unlock, err := e.lock(ctx, selection.Set.TaskID)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
@@ -295,7 +295,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
-	if e.gate != nil && !e.gate(selection.Set.SetID) {
+	if e.gate != nil && !e.gate(selection.Set.TaskID) {
 		return time.Time{}, pipeline.Outcome{}, false, ErrGated
 	}
 	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
@@ -308,7 +308,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	return segmentEnd, outcome, false, err
 }
 
-func (e *Executor) duration(set domain.FactorSet) (time.Duration, error) {
+func (e *Executor) duration(set domain.FactorTask) (time.Duration, error) {
 	clock := e.clock
 	if clock == nil {
 		var err error
@@ -333,7 +333,7 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (ti
 			return time.Time{}, err
 		}
 		if fit < periods {
-			log.Infof("factor_recalc_chunk_narrowed set_id=%s periods=%d configured=%d budget=%d", set.SetID, fit, periods, e.memoryBudget)
+			log.Infof("factor_recalc_chunk_narrowed task_id=%s periods=%d configured=%d budget=%d", set.TaskID, fit, periods, e.memoryBudget)
 			periods = fit
 		}
 	}
@@ -347,13 +347,13 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (ti
 	return end, nil
 }
 
-func (e *Executor) lock(ctx context.Context, setID string) (func(), error) {
+func (e *Executor) lock(ctx context.Context, taskID string) (func(), error) {
 	if e.locks == nil {
 		return func() {}, nil
 	}
-	unlock, err := e.locks.LockContext(ctx, setID)
+	unlock, err := e.locks.LockContext(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("lock factor set %s: %w", setID, err)
+		return nil, fmt.Errorf("lock factor task %s: %w", taskID, err)
 	}
 	return unlock, nil
 }
@@ -371,7 +371,7 @@ func paramSegment(selection Selection, start, limit time.Time, duration time.Dur
 			switch {
 			case interval.Covers(start):
 				covered = true
-				params[member.Alias] = domain.ParamFreeze{SetID: selection.Set.SetID, MemberAlias: member.Alias, PeriodTime: start,
+				params[member.Alias] = domain.ParamFreeze{TaskID: selection.Set.TaskID, MemberAlias: member.Alias, PeriodTime: start,
 					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
 				if stop := interval.End.Add(duration); stop.Before(end) {
 					end = stop
@@ -388,7 +388,7 @@ func paramSegment(selection Selection, start, limit time.Time, duration time.Dur
 			}
 		}
 		if !covered && previous != nil {
-			params[member.Alias] = domain.ParamFreeze{SetID: selection.Set.SetID, MemberAlias: member.Alias, PeriodTime: start,
+			params[member.Alias] = domain.ParamFreeze{TaskID: selection.Set.TaskID, MemberAlias: member.Alias, PeriodTime: start,
 				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: carriedSource(previous.Source)}
 		}
 	}

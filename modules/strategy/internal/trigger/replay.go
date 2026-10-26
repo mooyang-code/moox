@@ -97,9 +97,9 @@ type ReplayBinding struct {
 	SourceColumns []string `json:"source_columns"`
 	// PreviousDepth 是策略引用上一根（bars[-1]）的深度：0 或 1。
 	PreviousDepth int `json:"previous_depth"`
-	// FactorSetID 是声明了 factors 的实例的私有因子集（回放用它计算因子）；Tuned 为真表示策略逐期输出下一期的因子参数（闭环回放）。
-	FactorSetID string `json:"factor_set_id,omitempty"`
-	Tuned       bool   `json:"tuned,omitempty"`
+	// FactorTaskID 是声明了 factors 的实例的私有因子任务（回放用它计算因子）；Tuned 为真表示策略逐期输出下一期的因子参数（闭环回放）。
+	FactorTaskID string `json:"factor_task_id,omitempty"`
+	Tuned        bool   `json:"tuned,omitempty"`
 }
 
 func (e *ReplayEvaluator) handleBind(rw http.ResponseWriter, r *http.Request) {
@@ -169,7 +169,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: instance.ViewID,
 		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: resolved.Spot, MinAgeBars: resolved.MinAgeBars,
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
-		FactorSetID: resolved.FactorSetID, Tuned: len(program.Params) > 0,
+		FactorTaskID: resolved.FactorTaskID, Tuned: len(program.Params) > 0,
 	}, nil
 }
 

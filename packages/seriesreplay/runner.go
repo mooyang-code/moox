@@ -69,19 +69,19 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	if err != nil {
 		return Run{}, fmt.Errorf("固定策略版本：%w", err)
 	}
-	if binding.FactorSetID != "" {
-		if spec.SetID == "" {
-			spec.SetID = binding.FactorSetID
-		} else if spec.SetID != binding.FactorSetID {
-			return Run{}, fmt.Errorf("实例 %s 声明了 factors，回放用它的私有因子集 %s，不能指定其他因子集合 %s", spec.InstanceID, binding.FactorSetID, spec.SetID)
+	if binding.FactorTaskID != "" {
+		if spec.TaskID == "" {
+			spec.TaskID = binding.FactorTaskID
+		} else if spec.TaskID != binding.FactorTaskID {
+			return Run{}, fmt.Errorf("实例 %s 声明了 factors，回放用它的私有因子任务 %s，不能指定其他因子任务 %s", spec.InstanceID, binding.FactorTaskID, spec.TaskID)
 		}
 	}
-	if spec.SetID == "" {
-		return Run{}, errors.New("set_id 是必填项（实例没有声明 factors 时要指定计算因子帧的因子集合）")
+	if spec.TaskID == "" {
+		return Run{}, errors.New("task_id 是必填项（实例没有声明 factors 时要指定计算因子帧的因子任务）")
 	}
 	// 闭环回放用的是回放里策略逐期产出的参数，正式结果数据集里的值依据的是冻结记录：写回会让结果与冻结记录对不上
 	// （后续补算又会按冻结记录改回去），所以调参策略的回放不写回因子结果。
-	if spec.WriteFactors && (binding.FactorSetID != "" || binding.Tuned) {
+	if spec.WriteFactors && (binding.FactorTaskID != "" || binding.Tuned) {
 		return Run{}, fmt.Errorf("实例 %s 的策略会逐期调整因子参数，闭环回放用的是回放中的参数，不能写回因子结果（去掉 write_factors）", spec.InstanceID)
 	}
 	run, created, err := r.Store.CreateRun(spec, 0)
@@ -110,14 +110,14 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	}
 
 	open, err := r.Factor.Open(ctx, FactorOpenRequest{
-		ReplayID: spec.ReplayID, SetID: spec.SetID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth,
+		ReplayID: spec.ReplayID, TaskID: spec.TaskID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth,
 		Quote: spec.Quote, WriteFactors: spec.WriteFactors, AllowShortWarmup: spec.AllowShortWarmup,
 	})
 	if err != nil {
 		return r.fail(spec.ReplayID, fmt.Errorf("建立因子回放会话：%w", err))
 	}
 	if drift := factorDrift(binding.Factors, open.Factors); drift != "" {
-		return r.fail(spec.ReplayID, fmt.Errorf("策略引用的因子与因子集合 %s 里的定义不一致（%s）", spec.SetID, drift))
+		return r.fail(spec.ReplayID, fmt.Errorf("策略引用的因子与因子任务 %s 里的定义不一致（%s）", spec.TaskID, drift))
 	}
 	if open.ShortWarmup > 0 {
 		r.logf("回放 %s：%d 个标的的本地数据晚于预热起点（例如 %s），它们的因子前段是空值", spec.ReplayID, open.ShortWarmup, strings.Join(open.ShortSamples, "、"))
@@ -319,7 +319,7 @@ func (r *Runner) factorStep(ctx context.Context, spec Spec, binding StrategyBind
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) && httpErr.Status == http.StatusNotFound {
 		r.logf("回放 %s：因子引擎里的会话不存在（引擎重启？），重新建立", spec.ReplayID)
-		if _, openErr := r.Factor.Open(ctx, FactorOpenRequest{ReplayID: spec.ReplayID, SetID: spec.SetID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth, Quote: spec.Quote, WriteFactors: spec.WriteFactors, AllowShortWarmup: spec.AllowShortWarmup}); openErr != nil {
+		if _, openErr := r.Factor.Open(ctx, FactorOpenRequest{ReplayID: spec.ReplayID, TaskID: spec.TaskID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth, Quote: spec.Quote, WriteFactors: spec.WriteFactors, AllowShortWarmup: spec.AllowShortWarmup}); openErr != nil {
 			return FactorStepResponse{}, fmt.Errorf("重新建立因子回放会话：%w", openErr)
 		}
 		frame, err = r.Factor.Step(ctx, request)
@@ -371,7 +371,7 @@ func mustParse(value string) time.Time {
 }
 
 func validateSpec(spec *Spec) error {
-	spec.ReplayID, spec.SetID, spec.InstanceID = strings.TrimSpace(spec.ReplayID), strings.TrimSpace(spec.SetID), strings.TrimSpace(spec.InstanceID)
+	spec.ReplayID, spec.TaskID, spec.InstanceID = strings.TrimSpace(spec.ReplayID), strings.TrimSpace(spec.TaskID), strings.TrimSpace(spec.InstanceID)
 	if spec.ReplayID == "" || spec.InstanceID == "" {
 		return errors.New("replay_id 与 instance_id 是必填项")
 	}
@@ -445,7 +445,7 @@ func mergeParams(effective, next MemberParams) MemberParams {
 	return out
 }
 
-// factorDrift 检查策略引用的因子成员（键是成员别名）在因子集合里存在且指纹一致。
+// factorDrift 检查策略引用的因子成员（键是成员别名）在因子任务里存在且指纹一致。
 func factorDrift(strategy map[string]string, set []FactorInfo) string {
 	byID := make(map[string]string, len(set))
 	for _, f := range set {
@@ -460,9 +460,9 @@ func factorDrift(strategy map[string]string, set []FactorInfo) string {
 		hash, ok := byID[id]
 		switch {
 		case !ok:
-			return fmt.Sprintf("因子 %s 不在集合里", id)
+			return fmt.Sprintf("因子 %s 不在任务里", id)
 		case hash != strategy[id]:
-			return fmt.Sprintf("因子 %s 的指纹 %s（集合）≠ %s（策略）", id, hash, strategy[id])
+			return fmt.Sprintf("因子 %s 的指纹 %s（任务）≠ %s（策略）", id, hash, strategy[id])
 		}
 	}
 	return ""

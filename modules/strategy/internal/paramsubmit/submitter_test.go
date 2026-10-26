@@ -22,11 +22,11 @@ type factorsFake struct {
 	err     error
 }
 
-func (f *factorsFake) EnsureInstanceFactorSet(context.Context, input.InstanceFactorSetRequest) (input.InstanceFactorSet, error) {
-	return input.InstanceFactorSet{}, nil
+func (f *factorsFake) EnsureInstanceFactorTask(context.Context, input.InstanceFactorTaskRequest) (input.InstanceFactorTask, error) {
+	return input.InstanceFactorTask{}, nil
 }
-func (f *factorsFake) SetInstanceFactorSetEnabled(context.Context, string, bool) error { return nil }
-func (f *factorsFake) ReleaseInstanceFactorSet(context.Context, string) error          { return nil }
+func (f *factorsFake) SetInstanceFactorTaskEnabled(context.Context, string, bool) error { return nil }
+func (f *factorsFake) ReleaseInstanceFactorTask(context.Context, string) error          { return nil }
 func (f *factorsFake) SubmitFactorParams(_ context.Context, submission input.ParamSubmission) ([]input.MemberSubmitResult, error) {
 	f.calls = append(f.calls, submission)
 	return f.results, f.err
@@ -50,7 +50,7 @@ func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 	if err := db.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := json.RawMessage(`{"view_id":"view_factor_i1","source_view_id":"view_a","factor_set_id":"fset_i1"}`)
+	resolved := json.RawMessage(`{"view_id":"view_factor_i1","source_view_id":"view_a","factor_task_id":"ftask_i1"}`)
 	if err := db.OpenSession(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: string(resolved), CreatedAt: now}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 		SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	submission := &store.ParamSubmission{
-		RequestID: "p-r1", SetID: "fset_i1", PeriodTime: now.Add(time.Hour), BasedOnPeriod: now,
+		RequestID: "p-r1", TaskID: "ftask_i1", PeriodTime: now.Add(time.Hour), BasedOnPeriod: now,
 		ParamsJSON: json.RawMessage(`{"fast":{"window":{"default":20,"overrides":{"BTC":10}}}}`),
 	}
 	if _, _, err := db.CommitResult(ctx, store.CommitRequest{Result: result, Now: now, Params: submission}); err != nil {
@@ -98,7 +98,7 @@ func TestSubmitterDeliversAndRecordsAccepted(t *testing.T) {
 		t.Fatalf("应提交一次：%+v", fake.calls)
 	}
 	call := fake.calls[0]
-	if call.Writer != "i1" || call.SetID != "fset_i1" || call.RequestID != "p-r1" || !call.PeriodTime.Equal(now.Add(time.Hour)) ||
+	if call.Writer != "i1" || call.TaskID != "ftask_i1" || call.RequestID != "p-r1" || !call.PeriodTime.Equal(now.Add(time.Hour)) ||
 		call.Members["fast"]["window"].Default != 20 || call.Members["fast"]["window"].Overrides["BTC"] != 10 {
 		t.Fatalf("提交内容不符：%+v", call)
 	}
@@ -151,7 +151,7 @@ func TestSubmitterRetriesTransientAndRejectsInvalid(t *testing.T) {
 	}
 }
 
-// 实例停用（或换了会话）、超过重试期限的记录放弃，不去影响私有因子集；暂停时保持待提交。
+// 实例停用（或换了会话）、超过重试期限的记录放弃，不去影响私有因子任务；暂停时保持待提交。
 func TestSubmitterAbandonsAndHonorsPause(t *testing.T) {
 	db, submitter, fake := harness(t)
 	submitter.Allowed = func(string) bool { return false }

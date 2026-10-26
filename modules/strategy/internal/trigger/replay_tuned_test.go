@@ -31,7 +31,7 @@ portfolio:
   max_missing: 1
 `
 
-// tunedReplayClient 是私有因子集的结果 View：close、成员 fast 的输出 fast_m 与参数列 fast__window。
+// tunedReplayClient 是私有因子任务的结果 View：close、成员 fast 的输出 fast_m 与参数列 fast__window。
 type tunedReplayClient struct{ replayClient }
 
 func (tunedReplayClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
@@ -62,7 +62,7 @@ func newTunedReplayEvaluator(t *testing.T, enabled bool) *ReplayEvaluator {
 	}
 	if enabled {
 		resolved, err := json.Marshal(input.Resolved{
-			CompletionKind: "factor_period.computed", ViewID: "view_factor_i1", SourceViewID: "view_a", FactorSetID: "fset_i1", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar,
+			CompletionKind: "factor_period.computed", ViewID: "view_factor_i1", SourceViewID: "view_a", FactorTaskID: "ftask_i1", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar,
 			FactorParams: map[string][]dsl.ParamDecl{"fast": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}},
 		})
 		if err != nil {
@@ -90,7 +90,7 @@ func tunedRows(values map[string]float64) map[string]ReplayRow {
 	return rows
 }
 
-// 声明了 factors 的实例回放：绑定到实例私有因子集的结果 View（用启用时固化的解析），读因子输出与参数列；
+// 声明了 factors 的实例回放：绑定到实例私有因子任务的结果 View（用启用时固化的解析），读因子输出与参数列；
 // ok 的周期输出下一期的因子参数（整型取整、限幅），skipped 的周期不输出。
 func TestReplayTunedStrategyEmitsNextParams(t *testing.T) {
 	e := newTunedReplayEvaluator(t, true)
@@ -99,7 +99,7 @@ func TestReplayTunedStrategyEmitsNextParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.FactorSetID != "fset_i1" || !binding.Tuned || binding.Factors["fast"] != "h1" {
+	if binding.FactorTaskID != "ftask_i1" || !binding.Tuned || binding.Factors["fast"] != "h1" {
 		t.Fatalf("绑定不符：%+v", binding)
 	}
 	if got := binding.Columns["fast__window"]; got.Member != "fast" || got.Param != "window" {
@@ -128,6 +128,6 @@ func TestReplayTunedStrategyEmitsNextParams(t *testing.T) {
 func TestReplayTunedStrategyNeedsEnabledInstance(t *testing.T) {
 	e := newTunedReplayEvaluator(t, false)
 	if _, err := e.Bind(context.Background(), "i1"); err == nil {
-		t.Fatal("没有启用过的实例没有私有因子集，不能回放")
+		t.Fatal("没有启用过的实例没有私有因子任务，不能回放")
 	}
 }

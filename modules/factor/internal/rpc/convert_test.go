@@ -73,16 +73,16 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
 	def := domain.MustDefinition("rolling_mean", "Rolling mean", "outputs:\n  mean_close: cs_rank(ts_mean(close, 3))\n")
 	def.AllowPartialUniverse, def.CreatedAt, def.UpdatedAt = true, createdAt, createdAt
-	member := domain.SetMember{
-		FactorSetMember: domain.FactorSetMember{
-			SetID: "fset_a", FactorID: "rolling_mean", Status: domain.MemberStatusEnabled,
+	member := domain.TaskMember{
+		FactorTaskMember: domain.FactorTaskMember{
+			TaskID: "ftask_a", FactorID: "rolling_mean", Status: domain.MemberStatusEnabled,
 			CreatedAt: createdAt, UpdatedAt: createdAt.Add(time.Minute),
 		},
 		Factor: def,
 	}
 
 	full := memberToPB(member, true)
-	require.Equal(t, "fset_a", full.GetSetId())
+	require.Equal(t, "ftask_a", full.GetTaskId())
 	require.Equal(t, "rolling_mean", full.GetFactorId())
 	require.Equal(t, domain.MemberStatusEnabled, full.GetStatus())
 	require.Equal(t, "2026-10-04T10:12:12Z", full.GetUpdatedAt())
@@ -97,16 +97,16 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	require.Equal(t, []string{"mean_close"}, listed.GetFactor().GetOutputs(), "列表里仍带派生字段")
 }
 
-func TestConvertFactorSetRoundTrip(t *testing.T) {
+func TestConvertFactorTaskRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
-	want := domain.FactorSet{
-		SetID:           "fset_binance_kline_1m",
+	want := domain.FactorTask{
+		TaskID:          "ftask_binance_kline_1m",
 		SpaceID:         "crypto",
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
 
 		ResultDatasetID: "dataset_factor_binance_kline_1m",
-		Status:          domain.SetStatusEnabled,
+		Status:          domain.TaskStatusEnabled,
 		CreatedAt:       createdAt,
 		UpdatedAt:       createdAt.Add(time.Minute),
 	}
@@ -122,7 +122,7 @@ func TestConvertRecalcJobRoundTrip(t *testing.T) {
 	want := RecalcJob{
 		JobID:        "request-1",
 		RequestID:    "request-1",
-		SetID:        "fset_binance_kline_1m",
+		TaskID:       "ftask_binance_kline_1m",
 		Members:      []string{"rolling_mean"},
 		Subjects:     []string{"BTCUSDT"},
 		StartTime:    start,
@@ -155,7 +155,7 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	var job RecalcJob
 	job.JobID = pb.GetJobId()
 	job.RequestID = pb.GetRequestId()
-	job.SetID = pb.GetSetId()
+	job.TaskID = pb.GetTaskId()
 	job.Members = factorwire.CloneStrings(pb.GetMembers())
 	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
 	job.Status = pb.GetStatus()

@@ -13,7 +13,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 因子管理（FactorMgr）的生命周期：模块级，没有对象。暂停时修改类接口（创建、修改、删除、启停因子与因子集合，提交与取消重算）被拒绝，
+// 因子管理（FactorMgr）的生命周期：模块级，没有对象。暂停时修改类接口（创建、修改、删除、启停因子与因子任务，提交与取消重算）被拒绝，
 // 读接口与引擎的同步、心跳、领取任务照常；它没有要追赶的数据。重置见 reset.go。
 
 const lifecycleRefreshEvery = 30 * time.Second

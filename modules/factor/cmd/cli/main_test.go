@@ -15,15 +15,15 @@ import (
 )
 
 func TestParseImport(t *testing.T) {
-	cfg, err := parseArgs([]string{"import", "--set", "fset_bars_1m", "--file", "./xbx.yaml", "--factor-id", "Bias"})
+	cfg, err := parseArgs([]string{"import", "--task", "ftask_bars_1m", "--file", "./xbx.yaml", "--factor-id", "Bias"})
 	require.NoError(t, err)
-	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "ftask_bars_1m", cfg.TaskID)
 	require.Equal(t, "./xbx.yaml", cfg.File)
 	require.Equal(t, "Bias", cfg.FactorID)
 
 	alone, err := parseArgs([]string{"import", "--file", "./xbx.yaml"})
 	require.NoError(t, err)
-	require.Empty(t, alone.SetID)
+	require.Empty(t, alone.TaskID)
 
 	for _, retired := range []string{"--inputs", "--outputs", "--lookback", "--params", "--factor-type"} {
 		_, err := parseArgs([]string{"import", "--file", "./xbx.yaml", retired, "x"})
@@ -31,10 +31,10 @@ func TestParseImport(t *testing.T) {
 	}
 }
 
-func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
-	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
+func TestParseImportCatalogUsesDirectoryAndTask(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--task", "ftask_bars_1m", "--dir", "/opt/factors"})
 	require.NoError(t, err)
-	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "ftask_bars_1m", cfg.TaskID)
 	require.Equal(t, "/opt/factors", cfg.CatalogDir)
 }
 
@@ -46,7 +46,7 @@ func TestParseImportCatalogDefaultsToFactorsDirectory(t *testing.T) {
 
 func TestParseRecalcRangeAndSelectors(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"recalc", "--set", "fset_bars_1m", "--start", "2026-10-04T00:00:00Z",
+		"recalc", "--task", "ftask_bars_1m", "--start", "2026-10-04T00:00:00Z",
 		"--end", "2026-10-04T01:00:00Z", "--member", "Bias", "--member", "Cci",
 		"--subject", "BTC,ETH",
 	})
@@ -82,7 +82,7 @@ func TestRunInitCreatesFactorSchema(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.True(t, result.OK)
-	require.Equal(t, []string{"t_factor_sets", "t_factor_defs", "t_factor_set_members", "t_factor_recalc_jobs"}, result.Tables)
+	require.Equal(t, []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_recalc_jobs"}, result.Tables)
 	db, err := store.Open(&store.Options{Path: dbPath})
 	require.NoError(t, err)
 	require.NoError(t, db.Close())

@@ -22,7 +22,7 @@ func WithLockDir(path string) Option { return func(s *Service) { s.locks = setlo
 
 // WithReadyRecorder receives whether each set's result dataset accepted its
 // columns; the compute engine only writes to ready sets.
-func WithReadyRecorder(record func(setID string, ready bool)) Option {
+func WithReadyRecorder(record func(taskID string, ready bool)) Option {
 	return func(s *Service) { s.recordReady = record }
 }
 
@@ -30,7 +30,7 @@ func WithReadyRecorder(record func(setID string, ready bool)) Option {
 type Service struct {
 	db          *store.Store
 	metadata    storageio.Metadata
-	recordReady func(setID string, ready bool)
+	recordReady func(taskID string, ready bool)
 	locks       *setlock.Locks
 	now         func() time.Time
 }
@@ -48,67 +48,67 @@ func NewService(db *store.Store, metadata storageio.Metadata, options ...Option)
 // Locks exposes the per-set locks shared with live pipeline and recalculation.
 func (s *Service) Locks() *setlock.Locks { return s.locks }
 
-func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.FactorSet, error) {
+func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.FactorTask, error) {
 	if s == nil || s.db == nil || s.metadata == nil {
-		return domain.FactorSet{}, errors.New("factor store and Storage metadata are required")
+		return domain.FactorTask{}, errors.New("factor store and Storage metadata are required")
 	}
 	if strings.TrimSpace(in.Freq) == "" {
-		return domain.FactorSet{}, errors.New("freq is required")
+		return domain.FactorTask{}, errors.New("freq is required")
 	}
 	in.SpaceID = strings.TrimSpace(in.SpaceID)
 	in.SourceDatasetID = strings.TrimSpace(in.SourceDatasetID)
 	in.Freq = strings.ToLower(strings.TrimSpace(in.Freq))
 	in.OwnerInstanceID = strings.TrimSpace(in.OwnerInstanceID)
-	if in.SetID == "" {
-		in.SetID = domain.SetID(in.SourceDatasetID, in.Freq)
+	if in.TaskID == "" {
+		in.TaskID = domain.TaskID(in.SourceDatasetID, in.Freq)
 		if in.OwnerInstanceID != "" {
-			in.SetID = domain.InstanceSetID(in.OwnerInstanceID)
+			in.TaskID = domain.InstanceTaskID(in.OwnerInstanceID)
 		}
 	}
 	if in.ResultDatasetID == "" {
-		in.ResultDatasetID = domain.ResultDatasetID(in.SetID)
+		in.ResultDatasetID = domain.ResultDatasetID(in.TaskID)
 	}
 	if in.Status == "" {
-		in.Status = domain.SetStatusPending
+		in.Status = domain.TaskStatusPending
 	}
-	if in.Status != domain.SetStatusPending {
-		return domain.FactorSet{}, errors.New("new factor sets must start pending")
+	if in.Status != domain.TaskStatusPending {
+		return domain.FactorTask{}, errors.New("new factor tasks must start pending")
 	}
-	if err := domain.ValidateSet(in); err != nil {
-		return domain.FactorSet{}, err
+	if err := domain.ValidateTask(in); err != nil {
+		return domain.FactorTask{}, err
 	}
 	// 启用成员时才会取空间日历；不支持的空间在创建时就拒绝，避免出现永远无法启用的计算任务。
 	if _, err := periodclock.ForSpace(in.SpaceID); err != nil {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
-	unlock, err := s.locks.LockContext(ctx, in.SetID)
+	unlock, err := s.locks.LockContext(ctx, in.TaskID)
 	if err != nil {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
 	defer unlock()
-	existing, err := s.db.GetSet(ctx, in.SetID)
-	newSet := errors.Is(err, gorm.ErrRecordNotFound)
+	existing, err := s.db.GetTask(ctx, in.TaskID)
+	newTask := errors.Is(err, gorm.ErrRecordNotFound)
 	if err == nil {
-		if err := sameSetIdentity(existing, in); err != nil {
-			return domain.FactorSet{}, err
+		if err := sameTaskIdentity(existing, in); err != nil {
+			return domain.FactorTask{}, err
 		}
-		if existing.Status == domain.SetStatusDeleting {
-			return domain.FactorSet{}, errors.New("factor set purge is pending")
+		if existing.Status == domain.TaskStatusDeleting {
+			return domain.FactorTask{}, errors.New("factor task purge is pending")
 		}
-		if existing.Status != domain.SetStatusPending {
+		if existing.Status != domain.TaskStatusPending {
 			return existing, nil
 		}
 		in = existing
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
 	source, columns, err := s.sourceDataset(ctx, in)
 	if err != nil {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
-	if newSet {
-		if err := s.db.CreateSet(ctx, in); err != nil {
-			return domain.FactorSet{}, err
+	if newTask {
+		if err := s.db.CreateTask(ctx, in); err != nil {
+			return domain.FactorTask{}, err
 		}
 	}
 
@@ -119,79 +119,79 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 		spec.Attributes["owner_instance_id"] = in.OwnerInstanceID
 	}
 	if err := s.metadata.CreateResultDataset(ctx, spec); err != nil {
-		return domain.FactorSet{}, fmt.Errorf("create factor result dataset: %w", err)
+		return domain.FactorTask{}, fmt.Errorf("create factor result dataset: %w", err)
 	}
 	if err := s.metadata.ActivateDataset(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
-		return domain.FactorSet{}, fmt.Errorf("activate factor result dataset: %w", err)
+		return domain.FactorTask{}, fmt.Errorf("activate factor result dataset: %w", err)
 	}
-	if err := s.db.SetSetStatus(ctx, in.SetID, domain.SetStatusPending, domain.SetStatusEnabled); err != nil {
-		return domain.FactorSet{}, fmt.Errorf("enable factor set after result dataset activation: %w", err)
+	if err := s.db.SetTaskStatus(ctx, in.TaskID, domain.TaskStatusPending, domain.TaskStatusEnabled); err != nil {
+		return domain.FactorTask{}, fmt.Errorf("enable factor task after result dataset activation: %w", err)
 	}
-	s.markReady(in.SetID, true)
-	return s.db.GetSet(ctx, in.SetID)
+	s.markReady(in.TaskID, true)
+	return s.db.GetTask(ctx, in.TaskID)
 }
 
-func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domain.FactorSet, error) {
-	setID = strings.TrimSpace(setID)
-	unlock, err := s.locks.LockContext(ctx, setID)
+func (s *Service) SetTaskStatus(ctx context.Context, taskID, status string) (domain.FactorTask, error) {
+	taskID = strings.TrimSpace(taskID)
+	unlock, err := s.locks.LockContext(ctx, taskID)
 	if err != nil {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.FactorSet{}, err
+		return domain.FactorTask{}, err
 	}
-	if status != domain.SetStatusEnabled && status != domain.SetStatusDisabled {
-		return domain.FactorSet{}, fmt.Errorf("status must be %q or %q", domain.SetStatusEnabled, domain.SetStatusDisabled)
+	if status != domain.TaskStatusEnabled && status != domain.TaskStatusDisabled {
+		return domain.FactorTask{}, fmt.Errorf("status must be %q or %q", domain.TaskStatusEnabled, domain.TaskStatusDisabled)
 	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorSet{}, errors.New("factor set purge is pending")
+	if set.Status == domain.TaskStatusDeleting {
+		return domain.FactorTask{}, errors.New("factor task purge is pending")
 	}
 	if set.Status == status {
 		return set, nil
 	}
-	if set.Status == domain.SetStatusPending {
-		return domain.FactorSet{}, errors.New("pending factor set cannot be toggled")
+	if set.Status == domain.TaskStatusPending {
+		return domain.FactorTask{}, errors.New("pending factor task cannot be toggled")
 	}
-	if status == domain.SetStatusEnabled {
-		if err := s.reconcileSetUnlocked(ctx, set); err != nil {
-			return domain.FactorSet{}, err
+	if status == domain.TaskStatusEnabled {
+		if err := s.reconcileTaskUnlocked(ctx, set); err != nil {
+			return domain.FactorTask{}, err
 		}
 	}
-	if err := s.db.SetSetStatus(ctx, set.SetID, set.Status, status); err != nil {
-		return domain.FactorSet{}, err
+	if err := s.db.SetTaskStatus(ctx, set.TaskID, set.Status, status); err != nil {
+		return domain.FactorTask{}, err
 	}
-	return s.db.GetSet(ctx, set.SetID)
+	return s.db.GetTask(ctx, set.TaskID)
 }
 
-func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error {
-	setID = strings.TrimSpace(setID)
-	unlock, err := s.locks.LockContext(ctx, setID)
+func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) error {
+	taskID = strings.TrimSpace(taskID)
+	unlock, err := s.locks.LockContext(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if set.Status != domain.SetStatusDisabled && !(purge && set.Status == domain.SetStatusDeleting) {
-		return errors.New("factor set must be disabled before deletion")
+	if set.Status != domain.TaskStatusDisabled && !(purge && set.Status == domain.TaskStatusDeleting) {
+		return errors.New("factor task must be disabled before deletion")
 	}
-	memberCount, err := s.db.CountMembers(ctx, setID)
+	memberCount, err := s.db.CountMembers(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if memberCount != 0 {
-		return errors.New("factor set must not contain members before deletion")
+		return errors.New("factor task must not contain members before deletion")
 	}
 	if purge {
 		if s.metadata == nil {
 			return errors.New("Storage metadata is required to purge the result dataset")
 		}
-		if set.Status != domain.SetStatusDeleting {
-			if err := s.db.SetSetStatus(ctx, set.SetID, domain.SetStatusDisabled, domain.SetStatusDeleting); err != nil {
+		if set.Status != domain.TaskStatusDeleting {
+			if err := s.db.SetTaskStatus(ctx, set.TaskID, domain.TaskStatusDisabled, domain.TaskStatusDeleting); err != nil {
 				return fmt.Errorf("persist factor result purge intent: %w", err)
 			}
 		}
@@ -199,32 +199,32 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 			return fmt.Errorf("delete factor result dataset: %w", err)
 		}
 	}
-	// 参数记录最后删：结果数据集清理失败（例如还有额外的 View 引用）时集合停在 deleting，冻结历史还在，可以重试。
-	if err := s.db.DeleteSetParams(ctx, setID); err != nil {
-		return fmt.Errorf("delete factor set params: %w", err)
+	// 参数记录最后删：结果数据集清理失败（例如还有额外的 View 引用）时任务停在 deleting，冻结历史还在，可以重试。
+	if err := s.db.DeleteTaskParams(ctx, taskID); err != nil {
+		return fmt.Errorf("delete factor task params: %w", err)
 	}
-	if err := s.db.DeleteSet(ctx, setID); err != nil {
+	if err := s.db.DeleteTask(ctx, taskID); err != nil {
 		return err
 	}
 	return nil
 }
 
-// GetSet returns a factor set with all of its members (any status) and their definitions.
-func (s *Service) GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.SetMember, error) {
-	set, err := s.db.GetSet(ctx, setID)
+// GetTask returns a factor task with all of its members (any status) and their definitions.
+func (s *Service) GetTask(ctx context.Context, taskID string) (domain.FactorTask, []domain.TaskMember, error) {
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.FactorSet{}, nil, err
+		return domain.FactorTask{}, nil, err
 	}
-	members, err := s.db.ListMembers(ctx, setID, "")
+	members, err := s.db.ListMembers(ctx, taskID, "")
 	return set, members, err
 }
 
-func (s *Service) ListSets(ctx context.Context) ([]domain.FactorSet, error) {
-	return s.db.ListSets(ctx)
+func (s *Service) ListTasks(ctx context.Context) ([]domain.FactorTask, error) {
+	return s.db.ListTasks(ctx)
 }
 
 // CreateFactor registers a standalone definition. It only runs the static
-// checks (compiling the spec); dataset checks wait for AddFactorToSet.
+// checks (compiling the spec); dataset checks wait for AddTaskMember.
 func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
@@ -267,38 +267,38 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 	for _, usage := range referencing {
 		if usage.Status == domain.MemberStatusEnabled {
 			return domain.FactorDef{}, fmt.Errorf("%w: factor %q is enabled in set %q; disable it before updating its definition",
-				store.ErrConflict, factor.FactorID, usage.SetID)
+				store.ErrConflict, factor.FactorID, usage.TaskID)
 		}
 	}
 	setIDs := make([]string, 0, len(referencing))
-	seenSets := map[string]bool{}
+	seenTasks := map[string]bool{}
 	for _, usage := range referencing {
-		if !seenSets[usage.SetID] {
-			seenSets[usage.SetID] = true
-			setIDs = append(setIDs, usage.SetID)
+		if !seenTasks[usage.TaskID] {
+			seenTasks[usage.TaskID] = true
+			setIDs = append(setIDs, usage.TaskID)
 		}
 	}
 	sort.Strings(setIDs)
-	for _, setID := range setIDs {
-		unlockSet, err := s.locks.LockContext(ctx, setID)
+	for _, taskID := range setIDs {
+		unlockTask, err := s.locks.LockContext(ctx, taskID)
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
-		defer unlockSet()
+		defer unlockTask()
 	}
 	for _, usage := range referencing {
-		set, err := s.db.GetSet(ctx, usage.SetID)
+		set, err := s.db.GetTask(ctx, usage.TaskID)
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
 		// 普通任务的成员保存的固定参数在新定义上必须恰好是声明的全部参数且仍然合法；策略专属任务的成员不带固定参数。
 		if set.OwnerInstanceID == "" {
 			if err := domain.CheckSharedMemberParams(factor, usage.Params); err != nil {
-				return domain.FactorDef{}, fmt.Errorf("factor set %q member %q 的固定参数不再合法：%w", usage.SetID, usage.MemberAlias, err)
+				return domain.FactorDef{}, fmt.Errorf("factor task %q member %q 的固定参数不再合法：%w", usage.TaskID, usage.MemberAlias, err)
 			}
 		}
 		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor, Params: usage.Params}); err != nil {
-			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q: %w", usage.SetID, usage.MemberAlias, err)
+			return domain.FactorDef{}, fmt.Errorf("factor task %q member %q: %w", usage.TaskID, usage.MemberAlias, err)
 		}
 	}
 	if err := s.db.UpdateFactor(ctx, factor); err != nil {
@@ -323,7 +323,7 @@ func (s *Service) DeleteFactor(ctx context.Context, factorID string) error {
 		return err
 	}
 	if used := usages[factorID]; len(used) > 0 {
-		return fmt.Errorf("%w: factor %q is still used by factor set %q", store.ErrConflict, factorID, used[0].SetID)
+		return fmt.Errorf("%w: factor %q is still used by factor task %q", store.ErrConflict, factorID, used[0].TaskID)
 	}
 	return s.db.DeleteFactor(ctx, factorID)
 }
@@ -341,21 +341,21 @@ func (s *Service) GetFactor(ctx context.Context, factorID string) (domain.Factor
 }
 
 // ListFactors returns every definition, or only one set's members' definitions
-// (optionally filtered by member status) when setID is given. Each entry carries
+// (optionally filtered by member status) when taskID is given. Each entry carries
 // all of its usages.
-func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error) {
+func (s *Service) ListFactors(ctx context.Context, taskID, status string) ([]domain.FactorInfo, error) {
 	var factors []domain.FactorDef
-	if strings.TrimSpace(setID) == "" {
+	if strings.TrimSpace(taskID) == "" {
 		all, err := s.db.ListFactors(ctx)
 		if err != nil {
 			return nil, err
 		}
 		factors = all
 	} else {
-		if _, err := s.db.GetSet(ctx, setID); err != nil {
+		if _, err := s.db.GetTask(ctx, taskID); err != nil {
 			return nil, err
 		}
-		members, err := s.db.ListMembers(ctx, setID, status)
+		members, err := s.db.ListMembers(ctx, taskID, status)
 		if err != nil {
 			return nil, err
 		}
@@ -374,115 +374,115 @@ func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]doma
 	return infos, nil
 }
 
-// AddFactorToSet attaches a definition to a set as a disabled member after
+// AddTaskMember attaches a definition to a set as a disabled member after
 // validating it against the set's source dataset. It neither adds result columns
 // nor submits a backfill.
 //
 // 非策略专属任务的成员带固定参数：params 给出的参数加上定义的默认值补全成完整参数并校验，之后不变；别名为空时按参数生成
 // （全默认沿用因子 ID）；同任务内同因子同参数只能有一个成员。策略专属任务的参数由写入方逐期提交，不能带固定参数，
 // 别名为空时取因子 ID。
-func (s *Service) AddFactorToSet(ctx context.Context, setID, alias, factorID string, params map[string]float64) (domain.SetMember, error) {
-	setID, alias, factorID = strings.TrimSpace(setID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
-	unlock, err := s.lockMemberContext(ctx, setID, factorID)
+func (s *Service) AddTaskMember(ctx context.Context, taskID, alias, factorID string, params map[string]float64) (domain.TaskMember, error) {
+	taskID, alias, factorID = strings.TrimSpace(taskID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
+	unlock, err := s.lockMemberContext(ctx, taskID, factorID)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	if err := requireSetOpen(set); err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	// Re-read the definition under the locks so a concurrent update cannot interleave.
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	fixed, alias, err := s.resolveNewMember(ctx, set, factor, alias, params)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: alias, Factor: factor, Params: fixed}); err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	member, err := s.db.AddMember(ctx, setID, alias, factorID, fixed)
+	member, err := s.db.AddMember(ctx, taskID, alias, factorID, fixed)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	return domain.SetMember{FactorSetMember: member, Factor: factor}, nil
+	return domain.TaskMember{FactorTaskMember: member, Factor: factor}, nil
 }
 
-// RemoveFactorFromSet detaches a disabled member; result columns are kept.
-func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, alias string) error {
-	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
-	unlock, _, err := s.lockExistingMember(ctx, setID, alias)
+// RemoveTaskMember detaches a disabled member; result columns are kept.
+func (s *Service) RemoveTaskMember(ctx context.Context, taskID, alias string) error {
+	taskID, alias = strings.TrimSpace(taskID), strings.TrimSpace(alias)
+	unlock, _, err := s.lockExistingMember(ctx, taskID, alias)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if set.Status == domain.SetStatusDeleting {
-		return errors.New("factor set purge is pending")
+	if set.Status == domain.TaskStatusDeleting {
+		return errors.New("factor task purge is pending")
 	}
-	return s.db.RemoveMember(ctx, setID, alias)
+	return s.db.RemoveMember(ctx, taskID, alias)
 }
 
-// SetFactorMemberStatus enables or disables one member. Enabling re-validates
+// SetTaskMemberStatus enables or disables one member. Enabling re-validates
 // and adds result columns, but does not backfill history; disabling only stops
 // writes and keeps the columns.
-func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, error) {
-	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
-	unlock, factorID, err := s.lockExistingMember(ctx, setID, alias)
+func (s *Service) SetTaskMemberStatus(ctx context.Context, taskID, alias, status string) (domain.TaskMember, error) {
+	taskID, alias = strings.TrimSpace(taskID), strings.TrimSpace(alias)
+	unlock, factorID, err := s.lockExistingMember(ctx, taskID, alias)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.SetMember{}, errors.New("factor set purge is pending")
+	if set.Status == domain.TaskStatusDeleting {
+		return domain.TaskMember{}, errors.New("factor task purge is pending")
 	}
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
-		return domain.SetMember{}, fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
+		return domain.TaskMember{}, fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
 	}
-	member, err := s.db.GetMember(ctx, setID, alias)
+	member, err := s.db.GetMember(ctx, taskID, alias)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	result := domain.SetMember{FactorSetMember: member, Factor: factor}
+	result := domain.TaskMember{FactorTaskMember: member, Factor: factor}
 	if member.Status == status {
 		return result, nil
 	}
 	if status == domain.MemberStatusDisabled {
-		if err := s.db.SetMemberStatus(ctx, setID, alias, member.Status, status); err != nil {
-			return domain.SetMember{}, err
+		if err := s.db.SetMemberStatus(ctx, taskID, alias, member.Status, status); err != nil {
+			return domain.TaskMember{}, err
 		}
-		return s.reloadMember(ctx, setID, alias, factor)
+		return s.reloadMember(ctx, taskID, alias, factor)
 	}
-	if set.Status == domain.SetStatusPending {
-		return domain.SetMember{}, errors.New("factor set is not ready")
+	if set.Status == domain.TaskStatusPending {
+		return domain.TaskMember{}, errors.New("factor task is not ready")
 	}
 	// Definitions may have been edited and source columns may have changed while
 	// the member was disabled, so enabling repeats the full membership checks.
 	enabling := domain.MemberDef{Alias: alias, Factor: factor, Params: member.Params}
 	members, err := s.validateMembership(ctx, set, enabling)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
 	active := make([]domain.MemberDef, 0, len(members)+1)
 	for _, candidate := range members {
@@ -492,35 +492,35 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, statu
 	}
 	active = replaceMember(active, enabling)
 	if err := s.ensureResultColumns(ctx, set, source, columns, active...); err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	s.markReady(set.SetID, true)
+	s.markReady(set.TaskID, true)
 	// 启用只让成员参与此后每期的计算，不自动补算历史：需要历史因子值时用手动补算（recalc）指定范围。
-	if err := s.db.SetMemberStatus(ctx, setID, alias, member.Status, status); err != nil {
-		return domain.SetMember{}, err
+	if err := s.db.SetMemberStatus(ctx, taskID, alias, member.Status, status); err != nil {
+		return domain.TaskMember{}, err
 	}
-	return s.reloadMember(ctx, setID, alias, factor)
+	return s.reloadMember(ctx, taskID, alias, factor)
 }
 
-func (s *Service) reloadMember(ctx context.Context, setID, alias string, factor domain.FactorDef) (domain.SetMember, error) {
-	member, err := s.db.GetMember(ctx, setID, alias)
+func (s *Service) reloadMember(ctx context.Context, taskID, alias string, factor domain.FactorDef) (domain.TaskMember, error) {
+	member, err := s.db.GetMember(ctx, taskID, alias)
 	if err != nil {
-		return domain.SetMember{}, err
+		return domain.TaskMember{}, err
 	}
-	return domain.SetMember{FactorSetMember: member, Factor: factor}, nil
+	return domain.TaskMember{FactorTaskMember: member, Factor: factor}, nil
 }
 
-// lockExistingMember 找到成员引用的定义，按固定顺序（定义锁、集合锁）加锁后再确认成员仍引用同一定义。
-func (s *Service) lockExistingMember(ctx context.Context, setID, alias string) (func(), string, error) {
-	member, err := s.db.GetMember(ctx, setID, alias)
+// lockExistingMember 找到成员引用的定义，按固定顺序（定义锁、任务锁）加锁后再确认成员仍引用同一定义。
+func (s *Service) lockExistingMember(ctx context.Context, taskID, alias string) (func(), string, error) {
+	member, err := s.db.GetMember(ctx, taskID, alias)
 	if err != nil {
 		return nil, "", err
 	}
-	unlock, err := s.lockMemberContext(ctx, setID, member.FactorID)
+	unlock, err := s.lockMemberContext(ctx, taskID, member.FactorID)
 	if err != nil {
 		return nil, "", err
 	}
-	current, err := s.db.GetMember(ctx, setID, alias)
+	current, err := s.db.GetMember(ctx, taskID, alias)
 	if err != nil || current.FactorID != member.FactorID {
 		unlock()
 		if err == nil {
@@ -533,30 +533,30 @@ func (s *Service) lockExistingMember(ctx context.Context, setID, alias string) (
 
 // lockMemberContext takes the definition lock and then the set lock, the fixed
 // order for every operation that touches one (set, factor) pair.
-func (s *Service) lockMemberContext(ctx context.Context, setID, factorID string) (func(), error) {
+func (s *Service) lockMemberContext(ctx context.Context, taskID, factorID string) (func(), error) {
 	unlockFactor, err := s.locks.LockFactorContext(ctx, factorID)
 	if err != nil {
 		return nil, err
 	}
-	unlockSet, err := s.locks.LockContext(ctx, setID)
+	unlockTask, err := s.locks.LockContext(ctx, taskID)
 	if err != nil {
 		unlockFactor()
 		return nil, err
 	}
 	return func() {
-		unlockSet()
+		unlockTask()
 		unlockFactor()
 	}, nil
 }
 
 // validateMembership runs the dataset-dependent checks of one member against
 // one set and returns the set's current members.
-func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, member domain.MemberDef) ([]domain.SetMember, error) {
+func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask, member domain.MemberDef) ([]domain.TaskMember, error) {
 	_, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
 		return nil, err
 	}
-	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	members, err := s.db.ListMembers(ctx, set.TaskID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -580,32 +580,32 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 	return members, nil
 }
 
-func requireSetOpen(set domain.FactorSet) error {
+func requireSetOpen(set domain.FactorTask) error {
 	switch set.Status {
-	case domain.SetStatusPending:
-		return errors.New("factor set is not ready")
-	case domain.SetStatusDeleting:
-		return errors.New("factor set purge is pending")
+	case domain.TaskStatusPending:
+		return errors.New("factor task is not ready")
+	case domain.TaskStatusDeleting:
+		return errors.New("factor task purge is pending")
 	}
 	return nil
 }
 
-func (s *Service) markReady(setID string, ready bool) {
+func (s *Service) markReady(taskID string, ready bool) {
 	if s.recordReady != nil {
-		s.recordReady(setID, ready)
+		s.recordReady(taskID, ready)
 	}
 }
 
-func sameSetIdentity(existing, requested domain.FactorSet) error {
+func sameTaskIdentity(existing, requested domain.FactorTask) error {
 	if existing.SpaceID != requested.SpaceID || existing.SourceDatasetID != requested.SourceDatasetID ||
 		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID ||
 		existing.OwnerInstanceID != requested.OwnerInstanceID {
-		return fmt.Errorf("factor set %q conflicts with the requested source identity", requested.SetID)
+		return fmt.Errorf("factor task %q conflicts with the requested source identity", requested.TaskID)
 	}
 	return nil
 }
 
-func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
+func resultDatasetSpec(set domain.FactorTask, source storageio.DatasetInfo, columns []storageio.ColumnInfo) storageio.ResultDatasetSpec {
 	return storageio.ResultDatasetSpec{
 		SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, SourceDatasetID: set.SourceDatasetID,
 		Name: resultDatasetName(source.Name), Description: "Factor results for " + source.DatasetID,
@@ -622,7 +622,7 @@ func resultDatasetSpec(set domain.FactorSet, source storageio.DatasetInfo, colum
 const maxResultDatasetNameRunes = 10
 
 // resultDatasetName derives the result Dataset name from its source name,
-// which is unique in the Space, so several factor sets can coexist.
+// which is unique in the Space, so several factor tasks can coexist.
 func resultDatasetName(sourceName string) string {
 	const suffix = "因子"
 	source := []rune(strings.TrimSpace(sourceName))
@@ -719,7 +719,7 @@ func replaceMember(members []domain.MemberDef, next domain.MemberDef) []domain.M
 }
 
 // resolveNewMember 决定新成员的固定参数与别名，并校验同任务内同因子同参数不重复。
-func (s *Service) resolveNewMember(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, alias string, params map[string]float64) (map[string]float64, string, error) {
+func (s *Service) resolveNewMember(ctx context.Context, set domain.FactorTask, factor domain.FactorDef, alias string, params map[string]float64) (map[string]float64, string, error) {
 	if set.OwnerInstanceID != "" {
 		if len(params) > 0 {
 			return nil, "", fmt.Errorf("策略实例专属任务的成员参数由实例逐期提交，不能带固定参数")
@@ -738,13 +738,13 @@ func (s *Service) resolveNewMember(ctx context.Context, set domain.FactorSet, fa
 			return nil, "", err
 		}
 	}
-	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	members, err := s.db.ListMembers(ctx, set.TaskID, "")
 	if err != nil {
 		return nil, "", err
 	}
 	for _, existing := range members {
 		if existing.FactorID == factor.FactorID && sameParams(existing.Params, fixed) {
-			return nil, "", fmt.Errorf("%w: 任务 %q 里已有成员 %q 使用因子 %q 的同一组参数", store.ErrConflict, set.SetID, existing.MemberAlias, factor.FactorID)
+			return nil, "", fmt.Errorf("%w: 任务 %q 里已有成员 %q 使用因子 %q 的同一组参数", store.ErrConflict, set.TaskID, existing.MemberAlias, factor.FactorID)
 		}
 	}
 	return fixed, alias, nil

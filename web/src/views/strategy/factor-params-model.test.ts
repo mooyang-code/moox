@@ -5,7 +5,7 @@ import { parseFactorBinding, submissionRows, submissionStatus, submissionSummary
 const resolved = JSON.stringify({
   view_id: "view_factor_i1",
   source_view_id: "view_kline",
-  factor_set_id: "fset_i1",
+  factor_task_id: "ftask_i1",
   bar: "1m",
   columns: {
     fast_bias: { source: "factor", member: "fast", factor_id: "Bias" },
@@ -15,9 +15,9 @@ const resolved = JSON.stringify({
 });
 
 describe("factor binding of an instance", () => {
-  it("reads the private set, members and declared parameter names", () => {
+  it("reads the private task, members and declared parameter names", () => {
     expect(parseFactorBinding(resolved)).toEqual({
-      setId: "fset_i1",
+      taskId: "ftask_i1",
       viewId: "view_factor_i1",
       sourceViewId: "view_kline",
       members: ["fast", "slow", "vol"],
@@ -25,7 +25,7 @@ describe("factor binding of an instance", () => {
     });
   });
 
-  it("returns null for instances without a private factor set", () => {
+  it("returns null for instances without a private factor task", () => {
     expect(parseFactorBinding("{}")).toBeNull();
     expect(parseFactorBinding(undefined)).toBeNull();
     expect(parseFactorBinding("not json")).toBeNull();
@@ -38,7 +38,7 @@ describe("parameter submissions", () => {
     request_id: "p-1",
     instance_id: "i1",
     result_id: "r1",
-    set_id: "fset_i1",
+    task_id: "ftask_i1",
     period_time: Date.UTC(2026, 9, 23, 8, 1, 0),
     based_on_period: 0,
     params_json: JSON.stringify({

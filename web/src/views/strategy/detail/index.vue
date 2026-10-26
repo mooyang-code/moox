@@ -83,7 +83,7 @@
           <a-collapse-item key="bindings" header="输入绑定（会话固化的 View 列与因子指纹）"
             ><ResolvedTable :resolved-json="store.instance.resolved_json"
           /></a-collapse-item>
-          <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（私有因子集、冻结记录、提交记录与外显设置）">
+          <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（私有因子任务、冻结记录、提交记录与外显设置）">
             <StrategyFactorParams :instance="store.instance" />
           </a-collapse-item>
           <a-collapse-item key="definition" header="DSL 定义">

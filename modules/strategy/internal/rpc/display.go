@@ -83,7 +83,7 @@ func (s *Service) ListStrategyParamSubmissions(ctx context.Context, req *strateg
 	rsp := &strategypb.ListStrategyParamSubmissionsRsp{RetInfo: success()}
 	for _, item := range submissions {
 		rsp.Submissions = append(rsp.Submissions, &strategypb.ParamSubmission{
-			RequestId: item.RequestID, InstanceId: item.InstanceID, ResultId: item.ResultID, SetId: item.SetID,
+			RequestId: item.RequestID, InstanceId: item.InstanceID, ResultId: item.ResultID, TaskId: item.TaskID,
 			PeriodTime: item.PeriodTime.UnixMilli(), BasedOnPeriod: item.BasedOnPeriod.UnixMilli(), ParamsJson: string(item.ParamsJSON),
 			Notes: item.Notes, Status: item.Status, Attempts: int32(item.Attempts), OutcomeJson: string(item.OutcomeJSON),
 			CreatedAt: item.CreatedAt.Format(time.RFC3339), UpdatedAt: item.UpdatedAt.Format(time.RFC3339),

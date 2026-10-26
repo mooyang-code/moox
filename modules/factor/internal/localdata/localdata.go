@@ -46,11 +46,11 @@ type Config struct {
 	// Headroom 是窗口数组余量的根数；0 取默认。
 	Headroom int
 	// Lookback 返回数据源的回看数量 N（设计 8.1，决定 23）：窗口长度、本地要保有的根数、因子回看的上限。
-	// 为 nil 或返回非正数时取集合内各因子的最大回看。
+	// 为 nil 或返回非正数时取任务内各因子的最大回看。
 	Lookback func(src seriesstore.Source) int
 	// LockWaitWarn 是实时同步等数据源锁的告警阈值（设计 4.1），0 取 1 秒。
 	LockWaitWarn time.Duration
-	// WindowMax 是所有数据源窗口常驻内存的上限；新启用的集合会超出时拒绝启用。0 表示不限制。
+	// WindowMax 是所有数据源窗口常驻内存的上限；新启用的任务会超出时拒绝启用。0 表示不限制。
 	WindowMax int64
 	Now       func() time.Time
 }
@@ -58,7 +58,7 @@ type Config struct {
 // ErrChangeGap 表示数据源的变更日志同步位点断档（离线太久、Storage 节点更换）：要先执行对账。
 var ErrChangeGap = errors.New("变更日志同步位点断档，需要执行对账")
 
-// NoDataError 表示集合里有标的在本地和 Storage 都没有任何数据（设计 6.2，决定 24）：数据源未就绪，
+// NoDataError 表示任务里有标的在本地和 Storage 都没有任何数据（设计 6.2，决定 24）：数据源未就绪，
 // 要导入历史数据，或把这些标的从源数据集的标签里移除。
 type NoDataError struct {
 	Subjects []string
@@ -72,7 +72,7 @@ func (e *NoDataError) Error() string {
 	return fmt.Sprintf("%d 个标的在本地和 Storage 都没有数据（例如 %s）：请导入历史数据，或把它们从源数据集的标签里移除", len(e.Subjects), strings.Join(shown, "、"))
 }
 
-// LookbackExceededError 表示集合里有因子的回看超过了数据源的回看数量 N。
+// LookbackExceededError 表示任务里有因子的回看超过了数据源的回看数量 N。
 type LookbackExceededError struct {
 	N       int
 	Factors []string
@@ -101,8 +101,8 @@ type coverageKey struct {
 	lookback int
 }
 
-// setReg 是一个集合在数据源上的登记：它的标的范围与回看。同一数据源可以被多个集合（例如各策略实例的私有集合）共用，
-// 数据源按全部登记集合的标的并集与最大回看准备。
+// setReg 是一个任务在数据源上的登记：它的标的范围与回看。同一数据源可以被多个任务（例如各策略实例的私有任务）共用，
+// 数据源按全部登记任务的标的并集与最大回看准备。
 type setReg struct {
 	lookback int
 	subjects []string
@@ -111,7 +111,7 @@ type setReg struct {
 type source struct {
 	// mu 串行同一个数据源的同步、跟进变更与对账。
 	mu sync.Mutex
-	// regs 是登记在这个数据源上的集合（Prepare 时写入、ReleaseSet 时删除）；regsMu 让状态上报在不持有 mu 时也能读。
+	// regs 是登记在这个数据源上的任务（Prepare 时写入、ReleaseTask 时删除）；regsMu 让状态上报在不持有 mu 时也能读。
 	regsMu  sync.Mutex
 	regs    map[string]setReg
 	spec    seriessync.Spec
@@ -119,7 +119,7 @@ type source struct {
 	numeric []string
 	window  *serieswindow.Window
 	blocked error
-	// subjects 是 Prepare 时集合的标的全集；covered 缓存「回看根数够了或属于新标的」的结论，键是 标的、本地最早时间、回看根数。
+	// subjects 是 Prepare 时任务的标的全集；covered 缓存「回看根数够了或属于新标的」的结论，键是 标的、本地最早时间、回看根数。
 	subjects []string
 	covered  map[coverageKey]struct{}
 	// flush 是上一期还没落盘的热路径写入（设计 5.2，决定 25）：窗口已经追加、计算已经开始，写盘与计算并行。
@@ -149,7 +149,7 @@ func New(cfg Config) *Data {
 	}
 }
 
-// Reset 丢弃内存里的全部数据源（窗口、同步状态）并释放常驻内存登记（重置时用，之后要对每个集合重新 Prepare）。
+// Reset 丢弃内存里的全部数据源（窗口、同步状态）并释放常驻内存登记（重置时用，之后要对每个任务重新 Prepare）。
 func (d *Data) Reset() {
 	d.Drain() // 热路径的后台落盘先写完：之后本地存储要被清空，不能让它在清空之后再写进去
 	d.mu.Lock()
@@ -171,7 +171,7 @@ func (d *Data) Store() *seriesstore.Store { return d.cfg.Store }
 // Syncer 返回同步器（对账命令用）。
 func (d *Data) Syncer() *seriessync.Syncer { return d.syncer }
 
-func sourceOf(set domain.FactorSet) seriesstore.Source {
+func sourceOf(set domain.FactorTask) seriesstore.Source {
 	return seriesstore.Source{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq}
 }
 
@@ -181,7 +181,7 @@ func (d *Data) lookup(src seriesstore.Source) *source {
 	return d.sources[src]
 }
 
-// registered 返回登记在数据源上的集合（按集合 ID 排序）及其登记。
+// registered 返回登记在数据源上的任务（按任务 ID 排序）及其登记。
 func (st *source) registered() ([]string, map[string]setReg) {
 	st.regsMu.Lock()
 	defer st.regsMu.Unlock()
@@ -213,10 +213,10 @@ func (d *Data) lookbackFor(src seriesstore.Source, members []domain.MemberDef) i
 	return maxLookback(members)
 }
 
-// ReleaseSet 取消集合在数据源上的登记（集合离开目录、改绑到别的数据源时）。数据源还有其他集合登记时，窗口下次准备时
-// 按其余集合的范围与回看收缩；没有任何登记时直接丢弃数据源的窗口与同步状态，并释放它的常驻内存预算。
+// ReleaseTask 取消任务在数据源上的登记（任务离开目录、改绑到别的数据源时）。数据源还有其他任务登记时，窗口下次准备时
+// 按其余任务的范围与回看收缩；没有任何登记时直接丢弃数据源的窗口与同步状态，并释放它的常驻内存预算。
 // 等数据源锁与上一期的后台落盘结束再释放，不会打断在途的同步、跟进或落盘。
-func (d *Data) ReleaseSet(set domain.FactorSet) {
+func (d *Data) ReleaseTask(set domain.FactorTask) {
 	src := sourceOf(set)
 	st := d.lookup(src)
 	if st == nil {
@@ -226,7 +226,7 @@ func (d *Data) ReleaseSet(set domain.FactorSet) {
 	defer st.mu.Unlock()
 	d.settleFlush(st)
 	st.regsMu.Lock()
-	delete(st.regs, set.SetID)
+	delete(st.regs, set.TaskID)
 	empty := len(st.regs) == 0
 	st.regsMu.Unlock()
 	if !empty {
@@ -259,10 +259,10 @@ func (d *Data) lockSource(st *source, op string) {
 
 // ---------------------------------------------------------------- 准备
 
-// Prepare 为一个集合准备数据：读数据集字段 → 取同步基线或跟进变更 → 把本地补到最新已收盘的一根 → 载入内存窗口。
-// 可以重复调用（目录变化、集合新启用时）；窗口载入完成之前该集合的实时周期按预热处理（本期不算、记账本）。
+// Prepare 为一个任务准备数据：读数据集字段 → 取同步基线或跟进变更 → 把本地补到最新已收盘的一根 → 载入内存窗口。
+// 可以重复调用（目录变化、任务新启用时）；窗口载入完成之前该任务的实时周期按预热处理（本期不算、记账本）。
 // 窗口内存会超出进程预算时拒绝，并给出原因。
-func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []string) error {
+func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []string) error {
 	src := sourceOf(set.Set)
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
@@ -290,9 +290,9 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	d.settleFlush(st)
-	// 登记本集合，再按全部登记集合的标的并集与最大回看准备数据源。
+	// 登记本任务，再按全部登记任务的标的并集与最大回看准备数据源。
 	st.regsMu.Lock()
-	st.regs[set.Set.SetID] = setReg{lookback: setLookback, subjects: append([]string(nil), subjects...)}
+	st.regs[set.Set.TaskID] = setReg{lookback: setLookback, subjects: append([]string(nil), subjects...)}
 	lookback, union := 1, map[string]struct{}{}
 	for _, reg := range st.regs {
 		lookback = max(lookback, reg.lookback)
@@ -311,7 +311,7 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 		previous[subject] = struct{}{}
 	}
 	st.spec = seriessync.Spec{Source: src, Fields: fields, Lookback: lookback}
-	// 标的范围：集合列出的标的，或「全部标的」集合下数据集里状态为 active 的标的。被移出的标的（集合里去掉，或在数据集的标签里
+	// 标的范围：任务列出的标的，或「全部标的」任务下数据集里状态为 active 的标的。被移出的标的（任务里去掉，或在数据集的标签里
 	// 删除）不再跟进变更（设计 6.2）；清单变化时预载会重新准备并刷新这个范围。
 	st.spec.Subjects = make(map[string]struct{}, len(subjects))
 	for _, subject := range subjects {
@@ -384,7 +384,7 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	if len(pull.Failed) > 0 && len(pull.Failed) == len(subjects) {
 		return fmt.Errorf("%w：所有标的同步失败", storageio.ErrInfra)
 	}
-	// 重新加入集合的标的：移出期间 Storage 里的修正没有被跟进，先把本地已有的历史与 Storage 对账（只在同一进程里见过它被移出时）。
+	// 重新加入任务的标的：移出期间 Storage 里的修正没有被跟进，先把本地已有的历史与 Storage 对账（只在同一进程里见过它被移出时）。
 	if len(previous) > 0 {
 		var readded []string
 		for _, subject := range subjects {
@@ -394,7 +394,7 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 		}
 		if len(readded) > 0 {
 			if _, err := d.syncer.Resync(ctx, st.spec, readded); err != nil {
-				return fmt.Errorf("重新对账重新加入集合的标的：%w", err)
+				return fmt.Errorf("重新对账重新加入任务的标的：%w", err)
 			}
 		}
 	}
@@ -496,7 +496,7 @@ func (d *Data) shortOfLookback(st *source, subjects []string, lookback int) ([]s
 	return short, nil
 }
 
-// noDataSubjects 是集合里本地没有数据、同步又没有失败的标的：Storage 成功返回了空结果。
+// noDataSubjects 是任务里本地没有数据、同步又没有失败的标的：Storage 成功返回了空结果。
 func noDataSubjects(subjects, local, failed []string) []string {
 	have := make(map[string]struct{}, len(local)+len(failed))
 	for _, s := range local {
@@ -531,10 +531,10 @@ func (d *Data) windowBytesExcept(except seriesstore.Source) int64 {
 	return total
 }
 
-// SourceInfo 是一个已准备的数据源及其集合。
+// SourceInfo 是一个已准备的数据源及其任务。
 type SourceInfo struct {
 	Source seriesstore.Source
-	SetID  string
+	TaskID string
 }
 
 // Sources 返回已准备（至少调用过 Prepare）的数据源。
@@ -545,10 +545,10 @@ func (d *Data) Sources() []SourceInfo {
 	for src, st := range d.sources {
 		ids, _ := st.registered()
 		for _, id := range ids {
-			out = append(out, SourceInfo{Source: src, SetID: id})
+			out = append(out, SourceInfo{Source: src, TaskID: id})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
+	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
 	return out
 }
 
@@ -658,7 +658,7 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	for subject, res := range written {
 		if err := d.applyToWindow(ctx, st, subject, res); err != nil {
 			if errors.Is(err, serieswindow.ErrSchemaChanged) {
-				// 数据集字段变了：窗口要按新字段重建，重建完成之前该集合按预热处理。
+				// 数据集字段变了：窗口要按新字段重建，重建完成之前该任务按预热处理。
 				st.ready.Store(false)
 				return pipeline.DataResult{Warming: subjects}, false, nil
 			}
@@ -997,7 +997,7 @@ func (d *Data) LongGaps(src seriesstore.Source) []LongGap {
 	return out
 }
 
-// WindowStatuses 实现 pipeline.Data：各集合内存窗口的载入状态。
+// WindowStatuses 实现 pipeline.Data：各任务内存窗口的载入状态。
 func (d *Data) WindowStatuses() []pipeline.WarmupStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1013,7 +1013,7 @@ func (d *Data) WindowStatuses() []pipeline.WarmupStatus {
 		}
 		for _, id := range ids {
 			reg := regs[id]
-			status := pipeline.WarmupStatus{SetID: id, State: pipeline.WarmupWarming, ExpectedSubjects: len(reg.subjects)}
+			status := pipeline.WarmupStatus{TaskID: id, State: pipeline.WarmupWarming, ExpectedSubjects: len(reg.subjects)}
 			for _, subject := range reg.subjects {
 				if _, ok := loaded[subject]; ok {
 					status.WarmSubjects++
@@ -1025,7 +1025,7 @@ func (d *Data) WindowStatuses() []pipeline.WarmupStatus {
 			out = append(out, status)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
+	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
 	return out
 }
 
@@ -1098,7 +1098,7 @@ func (d *Data) followSource(ctx context.Context, st *source) (int, bool, error) 
 func (d *Data) Reconcile(ctx context.Context, src seriesstore.Source, subjects []string, progress func(done, total int)) (seriessync.ReconcileResult, error) {
 	st := d.lookup(src)
 	if st == nil {
-		return seriessync.ReconcileResult{}, fmt.Errorf("数据源 %s 还没有准备好（集合未启用）", src)
+		return seriessync.ReconcileResult{}, fmt.Errorf("数据源 %s 还没有准备好（任务未启用）", src)
 	}
 	d.lockSource(st, "对账")
 	defer st.mu.Unlock()
@@ -1122,8 +1122,8 @@ func (d *Data) Reconcile(ctx context.Context, src seriesstore.Source, subjects [
 	return res, nil
 }
 
-// ReconcileSet 在不启动窗口的情况下对账一个集合的数据源（引擎停止后由命令行执行，本地存储同一时刻只能由一个进程打开）。
-func (d *Data) ReconcileSet(ctx context.Context, set domain.EngineSet, subjects []string, progress func(done, total int)) (seriessync.ReconcileResult, error) {
+// ReconcileTask 在不启动窗口的情况下对账一个任务的数据源（引擎停止后由命令行执行，本地存储同一时刻只能由一个进程打开）。
+func (d *Data) ReconcileTask(ctx context.Context, set domain.EngineTask, subjects []string, progress func(done, total int)) (seriessync.ReconcileResult, error) {
 	src := sourceOf(set.Set)
 	columns, err := d.cfg.Storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
 	if err != nil {
@@ -1184,7 +1184,7 @@ func sortedKeys(set map[string]struct{}) []string {
 // st 返回数据源状态（测试用）。
 func (d *Data) st(src seriesstore.Source) *source { return d.lookup(src) }
 
-// Short 是回看根数不足的标的：本地连续数据的根数不到集合要求的回看，而 Storage 在本地最早一根之前还有数据（不是新上市的标的）。
+// Short 是回看根数不足的标的：本地连续数据的根数不到任务要求的回看，而 Storage 在本地最早一根之前还有数据（不是新上市的标的）。
 type Short struct {
 	Subject string
 	// Have 是本地连续的根数，Want 是要求的回看根数。
@@ -1247,9 +1247,9 @@ func (d *Data) Coverage(ctx context.Context, src seriesstore.Source) ([]Short, e
 	return short, nil
 }
 
-// BackfillSet 把集合源数据每个标的的本地历史从 Storage 补到最多 bars 根（只补本地最早一根之前、Storage 保留期内的部分）。
+// BackfillTask 把任务源数据每个标的的本地历史从 Storage 补到最多 bars 根（只补本地最早一根之前、Storage 保留期内的部分）。
 // 不碰窗口：由引擎停止时的命令行使用。subjects 为空表示本地有数据的全部标的。
-func (d *Data) BackfillSet(ctx context.Context, set domain.EngineSet, subjects []string, bars int, progress func(done, total int)) (int, error) {
+func (d *Data) BackfillTask(ctx context.Context, set domain.EngineTask, subjects []string, bars int, progress func(done, total int)) (int, error) {
 	src := sourceOf(set.Set)
 	columns, err := d.cfg.Storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
 	if err != nil {

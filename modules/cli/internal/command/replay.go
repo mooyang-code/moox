@@ -11,7 +11,7 @@ var replayCmd = &cobra.Command{
 	Long: `逐期回放：按时间顺序逐期推进历史数据，每期取因子帧（因子引擎）、求策略决策（策略）、
 在 Trade 的纸面账本里撮合，得到接近实盘时序的模拟结果。回放绝不产生实际下单，不影响实盘策略实例。
 
-  moox-cli replay start [--set <因子集合>] --instance <策略实例> --from <起> --to <止> [--write-factors]
+  moox-cli replay start [--task <因子任务>] --instance <策略实例> --from <起> --to <止> [--write-factors]
   moox-cli replay status [--replay <ID>]
   moox-cli replay pause|resume|cancel|report|delete --replay <ID>
 

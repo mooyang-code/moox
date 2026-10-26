@@ -11,7 +11,7 @@ import (
 )
 
 type LiveInput struct {
-	Set     domain.FactorSet
+	Set     domain.FactorTask
 	Members []domain.MemberDef
 	// Params 是这一期各成员的冻结参数（别名 → 冻结记录）。
 	Params         map[string]domain.ParamFreeze
@@ -27,11 +27,11 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	if clock == nil {
 		return Plan{}, fmt.Errorf("period clock is required")
 	}
-	if input.Set.Status != domain.SetStatusEnabled {
-		return Plan{}, fmt.Errorf("factor set must be enabled")
+	if input.Set.Status != domain.TaskStatusEnabled {
+		return Plan{}, fmt.Errorf("factor task must be enabled")
 	}
 	if strings.TrimSpace(input.Set.SpaceID) == "" || strings.TrimSpace(input.Set.SourceDatasetID) == "" || strings.TrimSpace(input.Set.Freq) == "" {
-		return Plan{}, fmt.Errorf("factor set identity is incomplete")
+		return Plan{}, fmt.Errorf("factor task identity is incomplete")
 	}
 	target, err := clock.Align(input.PeriodTime, input.Set.Freq)
 	if err != nil {
@@ -58,13 +58,13 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	}
 	expected := uniqueSorted(input.Universe)
 	upstreamFailed := intersectLists(expected, input.UpstreamFailed)
-	failedSet := make(map[string]struct{}, len(upstreamFailed))
+	failedTask := make(map[string]struct{}, len(upstreamFailed))
 	for _, subject := range upstreamFailed {
-		failedSet[subject] = struct{}{}
+		failedTask[subject] = struct{}{}
 	}
 	available := make([]string, 0, len(expected)-len(upstreamFailed))
 	for _, subject := range expected {
-		if _, failed := failedSet[subject]; !failed {
+		if _, failed := failedTask[subject]; !failed {
 			available = append(available, subject)
 		}
 	}

@@ -81,8 +81,8 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addFactorToSet, listFactors } from "@/api/factor";
-import type { FactorDef, FactorParamDecl, FactorSetInfo } from "@/api/factor/types";
+import { addFactorToTask, listFactors } from "@/api/factor";
+import type { FactorDef, FactorParamDecl, FactorTaskInfo } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
@@ -91,7 +91,7 @@ import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./a
 
 defineOptions({ name: "FactorAddFactorModal" });
 
-const props = defineProps<{ info: FactorSetInfo; title: string }>();
+const props = defineProps<{ info: FactorTaskInfo; title: string }>();
 const emit = defineEmits<{ (e: "added", factorIds: string[]): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
 
@@ -207,7 +207,7 @@ async function prepare() {
   loadError.value = "";
   sourceColumns.value = null;
   loading.value = true;
-  const { space_id: spaceId, source_dataset_id: datasetId } = props.info.factor_set;
+  const { space_id: spaceId, source_dataset_id: datasetId } = props.info.factor_task;
   try {
     const [items, columns] = await Promise.all([fetchAllFactors(), fetchSourceColumns(spaceId, datasetId).catch(() => null)]);
     factors.value = items;
@@ -241,7 +241,7 @@ function noteClass(row: CandidateRow) {
 const spaceStore = useSpaceStore();
 
 async function submit() {
-  const { set_id: setId } = props.info.factor_set;
+  const { task_id: taskId } = props.info.factor_task;
   // 批量添加固定发起空间与代次：每一项请求都按当前空间头发出，空间切换后继续提交会把旧任务的因子写到新空间
   const submitSpaceId = spaceStore.selectedSpaceId;
   const submitGeneration = selectedSpaceGeneration();
@@ -260,7 +260,7 @@ async function submit() {
         const decls = row?.decls ?? [];
         // 有参数的因子把完整参数一起提交（没改的取默认值）；别名留空时由服务端按参数生成。
         const params = decls.length ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value])) : undefined;
-        const member = await addFactorToSet(setId, factorId, draft?.alias?.trim() || undefined, params);
+        const member = await addFactorToTask(taskId, factorId, draft?.alias?.trim() || undefined, params);
         addedMembers.value = [
           ...addedMembers.value,
           {

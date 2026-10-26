@@ -222,7 +222,7 @@ describe("strategy factor parameters API", () => {
         {
           request_id: "p-1",
           instance_id: "i-1",
-          set_id: "fset_i1",
+          task_id: "ftask_i1",
           period_time: "1761206400000",
           status: "accepted",
           attempts: 1

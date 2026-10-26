@@ -4,11 +4,11 @@ import type {
   FactorDef,
   FactorInfo,
   FactorMember,
-  FactorSet,
+  FactorTask,
   ListRecalcJobsReq,
   RecalcFactorsReq,
   RecalcJob,
-  SetRunSummary
+  TaskRunSummary
 } from "@/api/factor/types";
 import taskHost from "@/views/factor/task-management/index.vue?raw";
 import factorScope from "@/views/factor/shared/use-factor-scope.ts?raw";
@@ -40,9 +40,9 @@ describe("factor API contract", () => {
       created_at: "2026-10-04T00:00:00Z",
       updated_at: "2026-10-04T00:00:00Z"
     };
-    const info: FactorInfo = { factor, usages: [{ set_id: "factor_set_crypto_1m", status: "enabled" }] };
+    const info: FactorInfo = { factor, usages: [{ task_id: "factor_task_crypto_1m", status: "enabled" }] };
     const member: FactorMember = {
-      set_id: "factor_set_crypto_1m",
+      task_id: "factor_task_crypto_1m",
       factor_id: "Bias",
       status: "enabled",
       factor,
@@ -51,14 +51,14 @@ describe("factor API contract", () => {
     };
     expect(factor.input_columns).toEqual(["benchmark_return", "nav"]);
     expect(factor.lookback_periods).toBe(100);
-    expect(factor).not.toHaveProperty("set_id");
+    expect(factor).not.toHaveProperty("task_id");
     expect(factor).not.toHaveProperty("status");
     expect(info.usages[0].status).toBe(member.status);
   });
 
   it("accepts set-scoped async recalc jobs with a request id", () => {
     const request: RecalcFactorsReq = {
-      set_id: "factor_set_crypto_1m",
+      task_id: "factor_task_crypto_1m",
       factor_ids: ["Bias"],
       subjects: ["BTC-USDT"],
       request_id: "recalc-1",
@@ -68,7 +68,7 @@ describe("factor API contract", () => {
     const job: RecalcJob = {
       job_id: "job-1",
       request_id: request.request_id,
-      set_id: request.set_id,
+      task_id: request.task_id,
       factor_ids: request.factor_ids,
       subjects: request.subjects,
       start_time: request.start_time,
@@ -79,22 +79,22 @@ describe("factor API contract", () => {
       created_at: request.start_time,
       updated_at: request.start_time
     };
-    const list: ListRecalcJobsReq = { set_id: job.set_id, statuses: ["accepted", "running"] };
-    expect(list.set_id).toBe(request.set_id);
+    const list: ListRecalcJobsReq = { task_id: job.task_id, statuses: ["accepted", "running"] };
+    expect(list.task_id).toBe(request.task_id);
     expect(job.progress_time).toBe(request.start_time);
   });
 
   it("exposes per-factor period states and the deleting set status", () => {
-    const set: FactorSet = {
-      set_id: "factor_set_crypto_1m",
+    const set: FactorTask = {
+      task_id: "factor_task_crypto_1m",
       space_id: "crypto",
       source_dataset_id: "dataset_crypto_kline_1m",
       freq: "1m",
       result_dataset_id: "dataset_factor_crypto_1m",
       status: "deleting"
     };
-    const run: SetRunSummary = {
-      set_id: set.set_id,
+    const run: TaskRunSummary = {
+      task_id: set.task_id,
       last_period_time: 1,
       last_status: "degraded",
       lag_seconds: 3,
@@ -106,7 +106,7 @@ describe("factor API contract", () => {
       compute_workers: 4,
       engine_expr_version: "expr/1",
       manager_expr_version: "expr/1",
-      lanes: [],
+      runners: [],
       recent_runs: [run]
     };
     expect(set.result_dataset_id).toMatch(/^dataset_/);
@@ -118,17 +118,17 @@ describe("factor pages contract", () => {
   it("keeps the selected set and tab in the URL query", () => {
     expect(taskHost).toContain("route.query.tab");
     expect(taskHost).toContain("PageTitleTabs");
-    expect(factorScope).toContain("route.query.set");
+    expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
     expect(overviewPage).toContain("usePolling");
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {
-    expect(memberSection).toContain("setFactorMemberStatus(member.set_id, alias, target)");
-    expect(memberSection).toContain("removeFactorFromSet");
+    expect(memberSection).toContain("setFactorMemberStatus(member.task_id, alias, target)");
+    expect(memberSection).toContain("removeFactorFromTask");
     expect(memberSection).not.toContain("backfill_job");
     expect(memberModel).toContain("需要先停用");
-    expect(addFactorModal).toContain("addFactorToSet");
+    expect(addFactorModal).toContain("addFactorToTask");
     expect(addFactorModal).toContain("listDatasetColumns");
     expect(definitionsPage).not.toContain("setFactorMemberStatus");
     expect(factorEditor).not.toContain('v-model="form.status"');
@@ -163,7 +163,7 @@ describe("factor pages contract", () => {
     expect(factorEditor).toContain("insertTemplate('timeseries')");
     expect(factorEditor).toContain("insertTemplate('cross_section')");
     expect(factorEditor).not.toContain('v-model="form.factor_type"');
-    expect(factorEditor).not.toContain("createFactorSet");
+    expect(factorEditor).not.toContain("createFactorTask");
     expect(factorEditor).toContain("onBeforeRouteLeave");
   });
 
@@ -176,8 +176,8 @@ describe("factor pages contract", () => {
   });
 
   it("offers lifecycle actions for compute tasks including purge delete", () => {
-    expect(computeTasks).toContain("deleteFactorSet(current.set_id, purge.value)");
-    expect(computeTasks).toContain("setFactorSetStatus");
+    expect(computeTasks).toContain("deleteFactorTask(current.task_id, purge.value)");
+    expect(computeTasks).toContain("setFactorTaskStatus");
   });
 
   it("scopes results to the factor result view of the selected set", () => {

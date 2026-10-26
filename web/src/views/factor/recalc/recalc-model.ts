@@ -1,4 +1,4 @@
-import type { FactorSetInfo, RecalcJob, RecalcJobStatus, RecalcSubjectMode } from "@/api/factor/types";
+import type { FactorTaskInfo, RecalcJob, RecalcJobStatus, RecalcSubjectMode } from "@/api/factor/types";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { jobProgress, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
 
@@ -35,7 +35,7 @@ export function jobDisplay(job: Pick<RecalcJob, "status" | "error">) {
 
 export const progressPercent = jobProgress;
 
-export function enabledMemberIds(info: Pick<FactorSetInfo, "members">): string[] {
+export function enabledMemberIds(info: Pick<FactorTaskInfo, "members">): string[] {
   return (info.members || [])
     .filter(member => member.status === "enabled")
     .map(member => member.member_alias || member.factor_id);

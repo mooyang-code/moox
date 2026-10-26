@@ -34,7 +34,7 @@ function sameParams(left: Record<string, number>, right: Record<string, number>)
 }
 
 /**
- * 「添加因子」弹窗的预检，只用于提前置灰与提示；权威校验永远是后端 AddFactorToSet（后端规格 §6.2 / D25）。
+ * 「添加因子」弹窗的预检，只用于提前置灰与提示；权威校验永远是后端 AddTaskMember（后端规格 §6.2 / D25）。
  * 同一个因子可以用不同的固定参数多次加入：没有声明参数的因子在任务里只能有一个成员，有参数的因子参数不同才算新成员。
  */
 export function precheckAddFactor({ candidate, members, sourceColumns, params, alias }: PrecheckInput): PrecheckResult {

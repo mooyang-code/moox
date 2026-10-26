@@ -474,7 +474,7 @@ factor_id = "ghost"
 	require.ErrorContains(t, err, "unknown factor_id")
 }
 
-func TestFactorSetupRejectsMemberWithUnknownSet(t *testing.T) {
+func TestFactorSetupRejectsMemberWithUnknownTask(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 [factors]
@@ -496,7 +496,7 @@ freq = "1m"
 factor_id = "Bias"
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "no matching factor set")
+	require.ErrorContains(t, err, "no matching factor task")
 }
 
 func TestFactorSetupRejectsLegacyItemsKeyWithMigrationHint(t *testing.T) {

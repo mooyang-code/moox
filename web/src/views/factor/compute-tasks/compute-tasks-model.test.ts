@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { FactorMember, FactorSet, FactorSetInfo } from "@/api/factor/types";
+import type { FactorMember, FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import {
   addFactorState,
   deleteState,
-  filterSets,
+  filterTasks,
   memberActions,
   memberCountText,
   memberCounts,
@@ -11,18 +11,18 @@ import {
   setActionKind
 } from "./compute-tasks-model";
 
-const set = (patch: Partial<FactorSet> = {}): FactorSet => ({
-  set_id: "set_a",
+const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
+  task_id: "task_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
   freq: "1m",
-  result_dataset_id: "dataset_factor_set_a",
+  result_dataset_id: "dataset_factor_task_a",
   status: "enabled",
   ...patch
 });
 
 const member = (factorId: string, status: FactorMember["status"]): FactorMember => ({
-  set_id: "set_a",
+  task_id: "task_a",
   factor_id: factorId,
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
@@ -30,21 +30,28 @@ const member = (factorId: string, status: FactorMember["status"]): FactorMember 
   updated_at: ""
 });
 
-const info = (patch: Partial<FactorSet> = {}, members: FactorMember[] = []): FactorSetInfo => ({
-  factor_set: set(patch),
+const info = (patch: Partial<FactorTask> = {}, members: FactorMember[] = []): FactorTaskInfo => ({
+  factor_task: set(patch),
   members
 });
-const labelOf = (item: FactorSet) =>
+const labelOf = (item: FactorTask) =>
   `${item.source_dataset_id === "dataset_kline" ? "现货K线" : item.source_dataset_id} · ${item.freq}`;
 
 describe("compute task list model", () => {
-  it("filterSets by keyword and status", () => {
-    const sets = [info({ set_id: "set_a" }), info({ set_id: "set_b", source_dataset_id: "dataset_funding", status: "disabled" })];
-    expect(filterSets(sets, { keyword: "", status: "" }, labelOf)).toHaveLength(2);
-    expect(filterSets(sets, { keyword: "现货", status: "" }, labelOf).map(item => item.factor_set.set_id)).toEqual(["set_a"]);
-    expect(filterSets(sets, { keyword: "SET_B", status: "" }, labelOf).map(item => item.factor_set.set_id)).toEqual(["set_b"]);
-    expect(filterSets(sets, { keyword: "funding", status: "" }, labelOf)).toHaveLength(1);
-    expect(filterSets(sets, { keyword: "", status: "disabled" }, labelOf).map(item => item.factor_set.set_id)).toEqual(["set_b"]);
+  it("filterTasks by keyword and status", () => {
+    const sets = [
+      info({ task_id: "task_a" }),
+      info({ task_id: "task_b", source_dataset_id: "dataset_funding", status: "disabled" })
+    ];
+    expect(filterTasks(sets, { keyword: "", status: "" }, labelOf)).toHaveLength(2);
+    expect(filterTasks(sets, { keyword: "现货", status: "" }, labelOf).map(item => item.factor_task.task_id)).toEqual(["task_a"]);
+    expect(filterTasks(sets, { keyword: "TASK_B", status: "" }, labelOf).map(item => item.factor_task.task_id)).toEqual([
+      "task_b"
+    ]);
+    expect(filterTasks(sets, { keyword: "funding", status: "" }, labelOf)).toHaveLength(1);
+    expect(filterTasks(sets, { keyword: "", status: "disabled" }, labelOf).map(item => item.factor_task.task_id)).toEqual([
+      "task_b"
+    ]);
   });
 
   it("factor counts are enabled over total from members", () => {
@@ -66,7 +73,7 @@ describe("compute task list model", () => {
     expect(blocked.disabled).toBe(true);
     expect(blocked.reason).toContain("移除");
     expect(deleteState(info({ status: "disabled" })).disabled).toBe(false);
-    // 后端 DeleteSet 要求任务已停用：启用中的任务先停用。
+    // 后端 DeleteTask 要求任务已停用：启用中的任务先停用。
     expect(deleteState(info({ status: "enabled" }))).toMatchObject({ disabled: true, reason: expect.stringContaining("停用") });
     expect(deleteState(info({ status: "deleting" })).disabled).toBe(true);
   });
@@ -99,10 +106,10 @@ describe("compute task list model", () => {
   });
 
   it("finds the latest period state of a member factor", () => {
-    const value: FactorSetInfo = {
+    const value: FactorTaskInfo = {
       ...info({}, [member("a", "enabled")]),
       last_run: {
-        set_id: "set_a",
+        task_id: "task_a",
         last_period_time: 1,
         last_status: "complete",
         lag_seconds: 0,

@@ -56,7 +56,7 @@ func newService(source *fakeSource) *Service {
 	return s
 }
 
-var set = domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}
+var set = domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}
 
 func TestPreviewComputesRecentPeriodsForShownSubjects(t *testing.T) {
 	source := &fakeSource{subjects: []string{"ETH", "BTC", "SOL"}}

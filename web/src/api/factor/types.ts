@@ -1,20 +1,20 @@
 import type { Page, PageResult, RetInfo } from "@/api/storage/types";
 
 export type MemberStatus = "enabled" | "disabled";
-export type FactorSetStatus = "pending" | "enabled" | "disabled" | "deleting";
+export type FactorTaskStatus = "pending" | "enabled" | "disabled" | "deleting";
 export type PeriodFactorStatus = "complete" | "degraded" | "skipped";
 export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
 /** 补算作业的标的范围选择：全部（源数据集的全部标的）或指定一组。不是计算任务的属性。 */
 export type RecalcSubjectMode = "all" | "include";
 export type FactorType = "timeseries" | "cross_section";
 
-export interface FactorSet {
-  set_id: string;
+export interface FactorTask {
+  task_id: string;
   space_id: string;
   source_dataset_id: string;
   freq: string;
   result_dataset_id: string;
-  status: FactorSetStatus;
+  status: FactorTaskStatus;
   created_at?: string;
   updated_at?: string;
   /** 非空表示策略实例的专属任务：该实例是唯一的参数写入方；为空是普通计算任务，成员带固定参数。 */
@@ -63,7 +63,7 @@ export interface FactorDef {
   updated_at: string;
 }
 
-/** createFactor / updateFactor 的提交体：派生字段与时间戳由服务端生成，定义不带 set_id 与状态。 */
+/** createFactor / updateFactor 的提交体：派生字段与时间戳由服务端生成，定义不带 task_id 与状态。 */
 export type FactorInput = Pick<FactorDef, "factor_id" | "name"> &
   Partial<Pick<FactorDef, "allow_partial_universe" | "category_id">> & { spec: string };
 
@@ -90,7 +90,7 @@ export interface ValidateFactorSpecRsp {
 }
 
 export interface PreviewFactorReq {
-  set_id: string;
+  task_id: string;
   spec: string;
   subjects?: string[];
   periods?: number;
@@ -138,9 +138,9 @@ export interface ListFactorFunctionsRsp {
 }
 
 export interface FactorUsage {
-  set_id: string;
+  task_id: string;
   status: MemberStatus;
-  /** 成员在这个集合里的别名（同一定义可以用不同别名出现多次）。 */
+  /** 成员在这个任务里的别名（同一定义可以用不同别名出现多次）。 */
   member_alias?: string;
   /** 成员的固定参数（空表示参数由策略实例逐期提交）。 */
   params?: Record<string, number>;
@@ -152,8 +152,8 @@ export interface FactorInfo {
 }
 
 export interface FactorMember {
-  set_id: string;
-  /** 成员身份：集合内唯一的别名；共享集合里就是定义 ID。 */
+  task_id: string;
+  /** 成员身份：任务内唯一的别名；共享任务里就是定义 ID。 */
   member_alias: string;
   factor_id: string;
   status: MemberStatus;
@@ -183,8 +183,8 @@ export interface FactorPeriodState {
   params_digest?: string;
 }
 
-export interface SetRunSummary {
-  set_id: string;
+export interface TaskRunSummary {
+  task_id: string;
   /** int64：ProtoJSON 实际输出字符串，格式化函数统一转换。 */
   last_period_time: number | string;
   last_status: string;
@@ -195,14 +195,14 @@ export interface SetRunSummary {
   warming_subjects?: number;
 }
 
-export interface FactorSetInfo {
-  factor_set: FactorSet;
+export interface FactorTaskInfo {
+  factor_task: FactorTask;
   members: FactorMember[];
-  last_run?: SetRunSummary;
+  last_run?: TaskRunSummary;
 }
 
-export interface FactorLaneStatus {
-  set_id: string;
+export interface FactorRunnerStatus {
+  task_id: string;
   queued: number;
   active: boolean;
   /** warming：部分对象尚未载入回看窗口，其结果不作为正式数据（不触发策略）。 */
@@ -231,13 +231,13 @@ export interface EngineStatus {
   /** 引擎与管理端内置的表达式语义版本；不一致时说明二者没有一起升级。 */
   engine_expr_version?: string;
   manager_expr_version?: string;
-  lanes: FactorLaneStatus[];
-  recent_runs: SetRunSummary[];
+  runners: FactorRunnerStatus[];
+  recent_runs: TaskRunSummary[];
   engine?: EngineInfo;
 }
 
 export interface RecalcFactorsReq {
-  set_id: string;
+  task_id: string;
   /** 要补算的成员别名；空表示全部已启用成员。 */
   members: string[];
   subjects: string[];
@@ -249,7 +249,7 @@ export interface RecalcFactorsReq {
 export interface RecalcJob {
   job_id: string;
   request_id: string;
-  set_id: string;
+  task_id: string;
   members: string[];
   subjects: string[];
   start_time: string;
@@ -265,18 +265,18 @@ export interface RecalcJob {
 
 export type FactorRetRsp<T extends object = Record<string, never>> = T & { ret_info: RetInfo };
 
-export interface ListFactorSetsReq {
-  status?: FactorSetStatus;
+export interface ListFactorTasksReq {
+  status?: FactorTaskStatus;
   page?: Page;
 }
 
-export interface ListFactorSetsRsp {
-  factor_sets: FactorSetInfo[];
+export interface ListFactorTasksRsp {
+  factor_tasks: FactorTaskInfo[];
   page_result: PageResult;
 }
 
 export interface ListFactorsReq {
-  set_id?: string;
+  task_id?: string;
   status?: MemberStatus;
   include_spec?: boolean;
   page?: Page;
@@ -288,7 +288,7 @@ export interface ListFactorsRsp {
 }
 
 export interface ListRecalcJobsReq {
-  set_id: string;
+  task_id: string;
   statuses?: RecalcJobStatus[];
   page?: Page;
 }
@@ -303,7 +303,7 @@ export interface GetFactorRsp {
   usages: FactorUsage[];
 }
 
-export interface SetFactorMemberStatusResult {
+export interface SetTaskMemberStatusResult {
   member: FactorMember;
 }
 
@@ -337,7 +337,7 @@ export interface ParamRequestInfo {
 }
 
 export interface GetFactorParamsReq {
-  set_id: string;
+  task_id: string;
   member_alias?: string;
   from?: number;
   to?: number;
@@ -348,6 +348,6 @@ export interface GetFactorParamsReq {
 export interface GetFactorParamsRsp {
   intervals: ParamInterval[];
   requests?: ParamRequestInfo[];
-  /** 集合已冻结到的最新一期（Unix 秒）。 */
+  /** 任务已冻结到的最新一期（Unix 秒）。 */
   frozen_through?: number | string;
 }

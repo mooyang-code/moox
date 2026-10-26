@@ -9,8 +9,8 @@ import (
 
 // SelectEnabledMembers resolves a recalc selection against a set's members:
 // no aliases means every enabled member, explicit aliases must all be enabled members.
-func SelectEnabledMembers(members []SetMember, aliases []string) ([]MemberDef, error) {
-	byAlias := make(map[string]SetMember, len(members))
+func SelectEnabledMembers(members []TaskMember, aliases []string) ([]MemberDef, error) {
+	byAlias := make(map[string]TaskMember, len(members))
 	enabled := make([]MemberDef, 0, len(members))
 	for _, member := range members {
 		byAlias[member.MemberAlias] = member
@@ -20,7 +20,7 @@ func SelectEnabledMembers(members []SetMember, aliases []string) ([]MemberDef, e
 	}
 	if len(aliases) == 0 {
 		if len(enabled) == 0 {
-			return nil, errors.New("factor set has no enabled members")
+			return nil, errors.New("factor task has no enabled members")
 		}
 		return enabled, nil
 	}
@@ -41,7 +41,7 @@ func SelectEnabledMembers(members []SetMember, aliases []string) ([]MemberDef, e
 	for _, alias := range requested {
 		member, ok := byAlias[alias]
 		if !ok {
-			return nil, fmt.Errorf("成员 %q 不在因子集里", alias)
+			return nil, fmt.Errorf("成员 %q 不在因子任务里", alias)
 		}
 		if member.Status != MemberStatusEnabled {
 			return nil, fmt.Errorf("member %q is not enabled in set", alias)

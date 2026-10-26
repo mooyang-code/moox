@@ -10,19 +10,19 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 )
 
-// SetLocator resolves an enabled set and its current exact event filters.
-// SetLocator 找到要计算的集合。同一个源数据集可以有多个集合（各策略实例的私有集合），周期完成事件分给其中每一个。
-type SetLocator interface {
-	// EnabledSetsByDataset 返回源数据集上启用的全部集合（含成员与结果数据集是否就绪）。
-	EnabledSetsByDataset(ctx context.Context, spaceID, datasetID, freq string) ([]domain.EngineSet, error)
-	// EnabledSet 按集合 ID 取启用的集合；没有时 found 为 false。
-	EnabledSet(ctx context.Context, setID string) (set domain.EngineSet, found bool, err error)
+// TaskLocator resolves an enabled set and its current exact event filters.
+// TaskLocator 找到要计算的任务。同一个源数据集可以有多个任务（各策略实例的私有任务），周期完成事件分给其中每一个。
+type TaskLocator interface {
+	// EnabledSetsByDataset 返回源数据集上启用的全部任务（含成员与结果数据集是否就绪）。
+	EnabledSetsByDataset(ctx context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error)
+	// EnabledTask 按任务 ID 取启用的任务；没有时 found 为 false。
+	EnabledTask(ctx context.Context, taskID string) (set domain.EngineTask, found bool, err error)
 	FilterSubjects(context.Context) ([]string, error)
 }
 
-// ParamFreezer 在开算一期之前冻结集合各成员的参数（别名 → 冻结记录）。
+// ParamFreezer 在开算一期之前冻结任务各成员的参数（别名 → 冻结记录）。
 type ParamFreezer interface {
-	Freeze(ctx context.Context, set domain.FactorSet, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error)
+	Freeze(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error)
 }
 
 type PeriodStore interface {
@@ -34,7 +34,7 @@ type PipelineRunner interface {
 	Run(context.Context, pipeline.Plan) (pipeline.Outcome, error)
 }
 
-type SetLocks interface {
+type TaskLocks interface {
 	LockContext(context.Context, string) (func(), error)
 }
 

@@ -16,11 +16,11 @@ import (
 const pullableCondition = `(c_status = 'accepted' OR (c_status = 'running' AND c_lease_expires_at <= ?))`
 
 // PullRecalcJob atomically leases the oldest pullable job to engineID. Jobs of
-// sets in skipSets are left for a later pull. The returned job carries the new
+// sets in skipTasks are left for a later pull. The returned job carries the new
 // lease token; found is false when no job is pullable.
-// maxRunning 是同时运行（租约未过期）的补算任务上限，达到上限时不再发出新任务；0 表示不限制。
-// 补算和回填会整窗口读取源数据，并发多了会打满 Storage（2026-10-14 的 1h 因子集回填），上限与领取在同一个事务里判断。
-func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool, maxRunning int) (RecalcJob, bool, error) {
+// maxRunning 是同时运行（租约未过期）的补算作业上限，达到上限时不再发出新任务；0 表示不限制。
+// 补算和回填会整窗口读取源数据，并发多了会打满 Storage（2026-10-14 的 1h 因子任务回填），上限与领取在同一个事务里判断。
+func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (RecalcJob, bool, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, false, fmt.Errorf("factor database is not open")
 	}
@@ -51,7 +51,7 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 			return err
 		}
 		for _, row := range rows {
-			if skipSets[row.SetID] {
+			if skipTasks[row.TaskID] {
 				continue
 			}
 			progress := max(row.ProgressTime, row.StartTime)

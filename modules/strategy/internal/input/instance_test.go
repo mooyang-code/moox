@@ -25,16 +25,16 @@ rules:
 `
 
 type setsFake struct {
-	requests []InstanceFactorSetRequest
+	requests []InstanceFactorTaskRequest
 	err      error
 }
 
-func (f *setsFake) EnsureInstanceFactorSet(_ context.Context, request InstanceFactorSetRequest) (InstanceFactorSet, error) {
+func (f *setsFake) EnsureInstanceFactorTask(_ context.Context, request InstanceFactorTaskRequest) (InstanceFactorTask, error) {
 	f.requests = append(f.requests, request)
-	return InstanceFactorSet{SetID: "fset_i1", ViewID: "view_factor_i1"}, f.err
+	return InstanceFactorTask{TaskID: "ftask_i1", ViewID: "view_factor_i1"}, f.err
 }
-func (f *setsFake) SetInstanceFactorSetEnabled(context.Context, string, bool) error { return nil }
-func (f *setsFake) ReleaseInstanceFactorSet(context.Context, string) error          { return nil }
+func (f *setsFake) SetInstanceFactorTaskEnabled(context.Context, string, bool) error { return nil }
+func (f *setsFake) ReleaseInstanceFactorTask(context.Context, string) error          { return nil }
 func (f *setsFake) SubmitFactorParams(context.Context, ParamSubmission) ([]MemberSubmitResult, error) {
 	return nil, nil
 }
@@ -76,9 +76,9 @@ func tunedClient() *fakeClient {
 	return client
 }
 
-// 声明了 factors 的策略：先为实例建立私有因子集（成员恰好是声明的因子），再绑定它的结果 View。同一定义的两个别名
-// 各有自己的列绑定与指纹；参数列不当作因子列；启用时固化私有因子集、K 线 View 与各成员的参数声明。
-func TestResolveInstanceBindsPrivateFactorSet(t *testing.T) {
+// 声明了 factors 的策略：先为实例建立私有因子任务（成员恰好是声明的因子），再绑定它的结果 View。同一定义的两个别名
+// 各有自己的列绑定与指纹；参数列不当作因子列；启用时固化私有因子任务、K 线 View 与各成员的参数声明。
+func TestResolveInstanceBindsPrivateFactorTask(t *testing.T) {
 	client, sets := tunedClient(), &setsFake{}
 	service := Service{Client: client, Sets: sets}
 	resolved, program, err := service.ResolveInstance(context.Background(), "i1", "space", "view_kline", parseStrategy(t, tunedDSL))
@@ -86,14 +86,14 @@ func TestResolveInstanceBindsPrivateFactorSet(t *testing.T) {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if len(sets.requests) != 1 {
-		t.Fatalf("应建立一次私有因子集：%+v", sets.requests)
+		t.Fatalf("应建立一次私有因子任务：%+v", sets.requests)
 	}
 	request := sets.requests[0]
 	if request.InstanceID != "i1" || request.SpaceID != "space" || request.SourceDatasetID != "ds_kline" || request.Freq != "1h" ||
 		len(request.Members) != 2 || request.Members[0] != (dsl.FactorDecl{Alias: "fast", FactorID: "bias"}) {
 		t.Fatalf("建集合请求不符：%+v", request)
 	}
-	if resolved.ViewID != "view_factor_i1" || resolved.SourceViewID != "view_kline" || resolved.FactorSetID != "fset_i1" {
+	if resolved.ViewID != "view_factor_i1" || resolved.SourceViewID != "view_kline" || resolved.FactorTaskID != "ftask_i1" {
 		t.Fatalf("应绑定私有 View 并记下 K 线 View 与集合：%+v", resolved)
 	}
 	if got := resolved.Columns["fast_bias_q_20"]; got.Source != SourceFactor || got.Member != "fast" || got.FactorID != "bias" || got.DefinitionHash != "sha256:bias" {
@@ -122,7 +122,7 @@ func TestResolveInstanceRejectsUnknownParamAndMissingDependencies(t *testing.T) 
 	if _, _, err := (Service{Client: tunedClient()}).ResolveInstance(context.Background(), "i1", "space", "view_kline", parseStrategy(t, tunedDSL)); err == nil {
 		t.Fatal("没有接线 Factor 时不能启用声明了 factors 的策略")
 	}
-	// 没有声明 factors 的策略不建私有因子集。
+	// 没有声明 factors 的策略不建私有因子任务。
 	sets := &setsFake{}
 	if _, _, err := (Service{Client: newFakeClient("spot"), Sets: sets}).ResolveInstance(context.Background(), "i1", "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err != nil || len(sets.requests) != 0 {
 		t.Fatalf("普通策略应直接解析：err=%v requests=%+v", err, sets.requests)

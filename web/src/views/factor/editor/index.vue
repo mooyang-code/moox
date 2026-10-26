@@ -32,7 +32,13 @@
       <a-alert v-if="readOnly" type="warning" show-icon class="editor-alert">
         该因子在 {{ enabledUsages.length }} 个计算任务中处于启用状态，需要先停用后才能编辑。
         <div class="usage-row">
-          <button v-for="chip in enabledUsages" :key="chip.setId" type="button" class="usage-chip" @click="openTask(chip.setId)">
+          <button
+            v-for="chip in enabledUsages"
+            :key="chip.taskId"
+            type="button"
+            class="usage-chip"
+            @click="openTask(chip.taskId)"
+          >
             {{ chip.label }}
           </button>
           <a-button size="mini" type="primary" @click="openTask('')">去计算任务</a-button>
@@ -113,9 +119,9 @@
                 <span class="preview__hint">在计算任务的源数据上算最近若干期，只读、不写结果。</span>
               </div>
               <div class="preview__controls">
-                <a-select v-model="previewSetId" allow-search placeholder="选择计算任务" class="preview__set">
-                  <a-option v-for="info in store.sets" :key="info.factor_set.set_id" :value="info.factor_set.set_id">
-                    {{ store.setLabel(info.factor_set) }}
+                <a-select v-model="previewTaskId" allow-search placeholder="选择计算任务" class="preview__task">
+                  <a-option v-for="info in store.sets" :key="info.factor_task.task_id" :value="info.factor_task.task_id">
+                    {{ store.setLabel(info.factor_task) }}
                   </a-option>
                 </a-select>
                 <a-input-tag
@@ -251,7 +257,7 @@ import type {
   FactorCategory,
   FactorParamDecl,
   FactorFunction,
-  FactorSetInfo,
+  FactorTaskInfo,
   FactorUsage,
   PreviewFactorRsp,
   ValidateFactorSpecRsp
@@ -324,7 +330,7 @@ const exprVersion = ref("");
 const functionsError = ref("");
 const functionKeyword = ref("");
 
-const previewSetId = ref("");
+const previewTaskId = ref("");
 const previewSubjects = ref<string[]>([]);
 const previewPeriods = ref(20);
 const previewing = ref(false);
@@ -360,7 +366,7 @@ const compileClass = computed(() => ({
   "is-ok": compile.value.status === "valid" && compiledFor(compile.value, form)
 }));
 const usedColumns = computed(() => new Set(derived.value?.input_columns || []));
-const canPreview = computed(() => Boolean(previewSetId.value) && compiledFor(compile.value, form) && !previewing.value);
+const canPreview = computed(() => Boolean(previewTaskId.value) && compiledFor(compile.value, form) && !previewing.value);
 const previewColumns = computed(() => previewResult.value?.columns || []);
 const previewRows = computed(() =>
   (previewResult.value?.rows || []).map((row, index) => ({
@@ -382,15 +388,15 @@ const functionGroups = computed(() => {
     .filter(group => group.items.length);
 });
 
-function setLabelOf(setId: string) {
-  const info = store.sets.find((item: FactorSetInfo) => item.factor_set.set_id === setId);
-  return info ? store.setLabel(info.factor_set) : setId;
+function setLabelOf(taskId: string) {
+  const info = store.sets.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+  return info ? store.setLabel(info.factor_task) : taskId;
 }
 
 const enabledUsages = computed(() =>
   usages.value
     .filter(usage => usage.status === "enabled")
-    .map(usage => ({ setId: usage.set_id, label: setLabelOf(usage.set_id) }))
+    .map(usage => ({ taskId: usage.task_id, label: setLabelOf(usage.task_id) }))
 );
 const readOnly = computed(() => editing.value && enabledUsages.value.length > 0);
 
@@ -502,7 +508,7 @@ async function runPreview() {
   previewDone.value = false;
   try {
     const rsp = await previewFactor({
-      set_id: previewSetId.value,
+      task_id: previewTaskId.value,
       spec: form.spec,
       subjects: previewSubjects.value,
       periods: previewPeriods.value,
@@ -626,8 +632,8 @@ function leave() {
   void router.push("/factor/definitions");
 }
 
-function openTask(setId: string) {
-  void router.push(setId ? { path: "/factor/tasks", query: { detail: setId } } : "/factor/tasks");
+function openTask(taskId: string) {
+  void router.push(taskId ? { path: "/factor/tasks", query: { detail: taskId } } : "/factor/tasks");
 }
 
 const confirmLeave = () => committed.value || !dirty.value || window.confirm("当前因子定义尚未保存，确认离开？");
@@ -637,10 +643,10 @@ onBeforeRouteUpdate(() => confirmLeave());
 watch(factorId, () => void load());
 watch(() => [form.spec, form.allow_partial_universe], scheduleValidate, { immediate: true });
 watch(
-  () => store.sets.map((info: FactorSetInfo) => info.factor_set.set_id),
+  () => store.sets.map((info: FactorTaskInfo) => info.factor_task.task_id),
   ids => {
-    if (previewSetId.value && !ids.includes(previewSetId.value)) previewSetId.value = "";
-    if (!previewSetId.value && ids.length) previewSetId.value = ids[0];
+    if (previewTaskId.value && !ids.includes(previewTaskId.value)) previewTaskId.value = "";
+    if (!previewTaskId.value && ids.length) previewTaskId.value = ids[0];
   },
   { immediate: true }
 );
@@ -841,7 +847,7 @@ watch(factorId, () => saveScope.invalidate());
   margin-bottom: var(--moox-space-2);
 }
 
-.preview__set {
+.preview__task {
   width: 240px;
 }
 

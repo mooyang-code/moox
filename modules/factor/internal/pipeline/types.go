@@ -19,7 +19,7 @@ const (
 
 type Plan struct {
 	Mode Mode
-	Set  domain.FactorSet
+	Set  domain.FactorTask
 	// Members 是本次计算的成员（别名加定义）。
 	Members []domain.MemberDef
 	// Params 是本次计算各成员的冻结参数（别名 → 冻结记录）：实时是这一期的冻结，补算是一个参数段（段内各期快照相同）。
@@ -63,7 +63,7 @@ type Config struct {
 	// 补算分块在读取之前已按同一估算收窄（recalcexec.WithMemoryBudget）。
 	MaxMemory int64
 	// OnCompileError 在引擎侧编译定义失败时调用（指标 factor_compile_errors_total）；nil 不记录。
-	OnCompileError func(setID, factorID string)
+	OnCompileError func(taskID, factorID string)
 	// MemoryAdmission 非空时，每次计算先向它预留估算的内存（设计 4.4），预留不到就排队，超时按计算失败处理。
 	MemoryAdmission Admission
 	// AdmissionTimeout 是等待内存预留的最长时间；0 表示不超时（受 ctx 限制）。

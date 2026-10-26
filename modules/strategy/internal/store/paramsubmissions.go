@@ -26,7 +26,7 @@ type ParamSubmission struct {
 	InstanceID    string
 	SessionID     string
 	ResultID      string
-	SetID         string
+	TaskID        string
 	PeriodTime    time.Time
 	BasedOnPeriod time.Time
 	// ParamsJSON 是各成员的完整快照：{别名: {参数名: {default, overrides}}}。
@@ -47,7 +47,7 @@ type paramSubmissionRow struct {
 	InstanceID    string    `gorm:"column:c_instance_id"`
 	SessionID     string    `gorm:"column:c_session_id"`
 	ResultID      string    `gorm:"column:c_result_id"`
-	SetID         string    `gorm:"column:c_set_id"`
+	TaskID        string    `gorm:"column:c_task_id"`
 	PeriodTime    int64     `gorm:"column:c_period_time"`
 	BasedOnPeriod int64     `gorm:"column:c_based_on_period"`
 	ParamsJSON    string    `gorm:"column:c_params_json"`
@@ -60,11 +60,11 @@ type paramSubmissionRow struct {
 	UpdatedAt     time.Time `gorm:"column:c_mtime"`
 }
 
-const paramSubmissionColumns = "c_request_id, c_instance_id, c_session_id, c_result_id, c_set_id, c_period_time, c_based_on_period, c_params_json, c_notes, c_status, c_attempts, c_next_attempt, c_outcome_json, c_ctime, c_mtime"
+const paramSubmissionColumns = "c_request_id, c_instance_id, c_session_id, c_result_id, c_task_id, c_period_time, c_based_on_period, c_params_json, c_notes, c_status, c_attempts, c_next_attempt, c_outcome_json, c_ctime, c_mtime"
 
 func (r paramSubmissionRow) submission() ParamSubmission {
 	return ParamSubmission{
-		RequestID: r.RequestID, InstanceID: r.InstanceID, SessionID: r.SessionID, ResultID: r.ResultID, SetID: r.SetID,
+		RequestID: r.RequestID, InstanceID: r.InstanceID, SessionID: r.SessionID, ResultID: r.ResultID, TaskID: r.TaskID,
 		PeriodTime: fromMillis(r.PeriodTime), BasedOnPeriod: fromMillis(r.BasedOnPeriod), ParamsJSON: json.RawMessage(r.ParamsJSON),
 		Notes: r.Notes, Status: r.Status, Attempts: r.Attempts, NextAttempt: r.NextAttempt.UTC(), OutcomeJSON: json.RawMessage(r.OutcomeJSON),
 		CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
@@ -72,8 +72,8 @@ func (r paramSubmissionRow) submission() ParamSubmission {
 }
 
 func validateParamSubmission(submission ParamSubmission) error {
-	if strings.TrimSpace(submission.RequestID) == "" || strings.TrimSpace(submission.SetID) == "" {
-		return errors.New("参数提交缺少 request_id 或 set_id")
+	if strings.TrimSpace(submission.RequestID) == "" || strings.TrimSpace(submission.TaskID) == "" {
+		return errors.New("参数提交缺少 request_id 或 task_id")
 	}
 	if submission.PeriodTime.IsZero() {
 		return errors.New("参数提交缺少目标期次")
@@ -93,7 +93,7 @@ func insertParamSubmission(tx *gorm.DB, result Result, submission ParamSubmissio
 	return tx.Exec(`
 		INSERT INTO t_strategy_param_submissions (`+paramSubmissionColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, '[]', ?, ?)
-	`, submission.RequestID, result.InstanceID, result.SessionID, result.ResultID, submission.SetID, millis(submission.PeriodTime),
+	`, submission.RequestID, result.InstanceID, result.SessionID, result.ResultID, submission.TaskID, millis(submission.PeriodTime),
 		millis(submission.BasedOnPeriod), string(submission.ParamsJSON), submission.Notes, now, now, now).Error
 }
 

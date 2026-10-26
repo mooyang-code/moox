@@ -16,15 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func engineSet(setID, datasetID string, ready bool, factorIDs ...string) domain.EngineSet {
+func engineTask(taskID, datasetID string, ready bool, factorIDs ...string) domain.EngineTask {
 	factors := make([]domain.FactorDef, 0, len(factorIDs))
 	for _, id := range factorIDs {
 		factors = append(factors, domain.MustDefinition(id, id, fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, 2)\n", id)))
 	}
-	return domain.EngineSet{
-		Set: domain.FactorSet{
-			SetID: setID, SpaceID: "crypto", SourceDatasetID: datasetID, Freq: "1m",
-			ResultDatasetID: "result_" + datasetID, Status: domain.SetStatusEnabled,
+	return domain.EngineTask{
+		Set: domain.FactorTask{
+			TaskID: taskID, SpaceID: "crypto", SourceDatasetID: datasetID, Freq: "1m",
+			ResultDatasetID: "result_" + datasetID, Status: domain.TaskStatusEnabled,
 		},
 		Members: domain.AsMembers(factors...), ResultReady: ready,
 	}
@@ -39,12 +39,12 @@ func newTestCache(t *testing.T) (*CatalogCache, string) {
 }
 
 // 快照里的定义来自 JSON，没有编译结果；目录安装快照时编译每个定义（设计 8）。
-func uncompiled(set domain.EngineSet) domain.EngineSet {
+func uncompiled(set domain.EngineTask) domain.EngineTask {
 	raw, err := json.Marshal(set)
 	if err != nil {
 		panic(err)
 	}
-	var decoded domain.EngineSet
+	var decoded domain.EngineTask
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		panic(err)
 	}
@@ -53,14 +53,14 @@ func uncompiled(set domain.EngineSet) domain.EngineSet {
 
 func TestCatalogApplyCompilesAndPersists(t *testing.T) {
 	cache, stateFile := newTestCache(t)
-	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias"))
+	set := uncompiled(engineTask("ftask_a", "dataset_a", true, "bias"))
 	require.Nil(t, set.Members[0].Factor.Compiled())
 
-	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
+	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{set}})
 
 	require.NoError(t, err)
 	require.True(t, changed)
-	got, lookup := cache.SetByID("fset_a")
+	got, lookup := cache.SetByID("ftask_a")
 	require.Equal(t, SetFound, lookup)
 	require.NotNil(t, got.Members[0].Factor.Compiled())
 	require.Equal(t, 2, got.Members[0].Factor.LookbackPeriods)
@@ -75,7 +75,7 @@ func TestCatalogApplyCompilesAndPersists(t *testing.T) {
 
 func TestCatalogLoadFromStateFile(t *testing.T) {
 	cache, stateFile := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
 	restarted, err := NewCatalogCache(stateFile)
@@ -88,22 +88,22 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 	sets, err := restarted.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
-	require.Equal(t, "fset_a", sets[0].Set.SetID)
+	require.Equal(t, "ftask_a", sets[0].Set.TaskID)
 	require.Len(t, sets[0].Members, 1)
 	require.NotNil(t, sets[0].Members[0].Factor.Compiled(), "加载快照时重新编译")
 	require.Equal(t, []string{"bias_value"}, sets[0].Members[0].Factor.Outputs)
 }
 
 // 派生字段以编译结果为准：快照里的派生字段即使被改动，也按 spec 重新推导。
-// 编译失败的定义原样保留，由流水线按该因子失败处理，不影响同集合的其他因子。
+// 编译失败的定义原样保留，由流水线按该因子失败处理，不影响同任务的其他因子。
 func TestCatalogRederivesFieldsAndKeepsUncompilableDefinitions(t *testing.T) {
 	cache, _ := newTestCache(t)
-	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias", "cci"))
+	set := uncompiled(engineTask("ftask_a", "dataset_a", true, "bias", "cci"))
 	set.Members[0].Factor.LookbackPeriods, set.Members[0].Factor.Outputs = 999, []string{"forged"}
 	set.Members[1].Factor.Spec = "outputs:\n  cci_value: future_function(close)\n"
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{set}})
 	require.NoError(t, err)
-	got, _ := cache.SetByID("fset_a")
+	got, _ := cache.SetByID("ftask_a")
 	require.Equal(t, 2, got.Members[0].Factor.LookbackPeriods)
 	require.Equal(t, []string{"bias_value"}, got.Members[0].Factor.Outputs)
 	require.Nil(t, got.Members[1].Factor.Compiled())
@@ -122,14 +122,14 @@ func TestCatalogLoadWithoutStateFile(t *testing.T) {
 
 func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 	// 快照写盘失败：新快照不生效。
 	blocker := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
 	cache.stateFile = filepath.Join(blocker, "catalog.json")
 
-	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineSet{engineSet("fset_b", "dataset_b", true, "cci")}})
+	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineTask{engineTask("ftask_b", "dataset_b", true, "cci")}})
 
 	require.Error(t, err)
 	require.Equal(t, "hash-1", cache.Status().Hash)
@@ -138,9 +138,9 @@ func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
 	require.Len(t, sets, 1)
 }
 
-func TestCatalogNotModifiedKeepsSets(t *testing.T) {
+func TestCatalogNotModifiedKeepsTasks(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
 	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", NotModified: true})
@@ -152,7 +152,7 @@ func TestCatalogNotModifiedKeepsSets(t *testing.T) {
 
 func TestCatalogSyncFailureKeepsServing(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
 	cache.MarkSyncFailed(errors.New("manager unreachable"))
@@ -169,39 +169,39 @@ func TestCatalogSyncFailureKeepsServing(t *testing.T) {
 	require.True(t, cache.Status().SyncErrorSince.IsZero(), "a successful sync clears the failure")
 }
 
-func TestCatalogNotReadySetReturnsInfraError(t *testing.T) {
+func TestCatalogNotReadyTaskReturnsInfraError(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", false, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 
 	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	require.Len(t, sets, 1)
-	require.False(t, sets[0].ResultReady, "结果数据集没就绪的集合交给调用方重投")
-	_, found, err := cache.EnabledSet(context.Background(), "fset_a")
+	require.False(t, sets[0].ResultReady, "结果数据集没就绪的任务交给调用方重投")
+	_, found, err := cache.EnabledTask(context.Background(), "ftask_a")
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.False(t, found)
 }
 
-// 同一源数据集上的多个集合（各策略实例的私有集合）都返回。
+// 同一源数据集上的多个任务（各策略实例的私有任务）都返回。
 func TestCatalogReturnsEverySetOverDataset(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{
-		engineSet("fset_a", "dataset_a", true, "bias"), engineSet("fset_i_x", "dataset_a", true, "cci"), engineSet("fset_b", "dataset_b", true, "bias"),
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{
+		engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_i_x", "dataset_a", true, "cci"), engineTask("ftask_b", "dataset_b", true, "bias"),
 	}})
 	require.NoError(t, err)
 	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
 	var ids []string
 	for _, set := range sets {
-		ids = append(ids, set.Set.SetID)
+		ids = append(ids, set.Set.TaskID)
 	}
-	require.ElementsMatch(t, []string{"fset_a", "fset_i_x"}, ids)
+	require.ElementsMatch(t, []string{"ftask_a", "ftask_i_x"}, ids)
 }
 
 func TestCatalogUnknownDatasetNotFound(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
 	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_other", "1m")
@@ -212,8 +212,8 @@ func TestCatalogUnknownDatasetNotFound(t *testing.T) {
 
 func TestCatalogFilterSubjects(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{
-		engineSet("fset_b", "dataset_b", true, "bias"), engineSet("fset_a", "dataset_a", true, "bias"),
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{
+		engineTask("ftask_b", "dataset_b", true, "bias"), engineTask("ftask_a", "dataset_a", true, "bias"),
 	}})
 	require.NoError(t, err)
 
@@ -231,17 +231,17 @@ func TestCatalogFilterSubjects(t *testing.T) {
 	require.ElementsMatch(t, want, filters)
 }
 
-func TestCatalogApplyReportsSetChanges(t *testing.T) {
+func TestCatalogApplyReportsTaskChanges(t *testing.T) {
 	cache, _ := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
-	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias", "cci")}})
+	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias", "cci")}})
 	require.NoError(t, err)
 	require.False(t, changed, "a member change keeps the same subscriptions")
 
-	changed, err = cache.Apply(CatalogSnapshot{Hash: "hash-3", Sets: []domain.EngineSet{
-		engineSet("fset_a", "dataset_a", true, "bias"), engineSet("fset_b", "dataset_b", true, "bias"),
+	changed, err = cache.Apply(CatalogSnapshot{Hash: "hash-3", Sets: []domain.EngineTask{
+		engineTask("ftask_a", "dataset_a", true, "bias"), engineTask("ftask_b", "dataset_b", true, "bias"),
 	}})
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -279,7 +279,7 @@ func (f *catalogClientFake) SyncCatalog(_ context.Context, knownHash string) (Ca
 func TestSyncerSendsKnownHashAndNotifiesChanges(t *testing.T) {
 	cache, _ := newTestCache(t)
 	client := &catalogClientFake{snapshots: []CatalogSnapshot{
-		{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}},
+		{Hash: "hash-1", Sets: []domain.EngineTask{engineTask("ftask_a", "dataset_a", true, "bias")}},
 		{Hash: "hash-1", NotModified: true},
 	}}
 	changes := 0
@@ -304,12 +304,12 @@ func TestSyncerFailureMarksCache(t *testing.T) {
 // Clear 清空目录缓存并写盘：重启后读到的也是空目录（loaded=false，等下一次同步）。
 func TestCatalogCacheClearEmptiesMemoryAndDisk(t *testing.T) {
 	cache, stateFile := newTestCache(t)
-	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineSet{uncompiled(engineSet("fset_a", "dataset_a", true, "bias"))}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineTask{uncompiled(engineTask("ftask_a", "dataset_a", true, "bias"))}})
 	require.NoError(t, err)
-	require.Equal(t, []string{"fset_a"}, cache.SetIDs())
+	require.Equal(t, []string{"ftask_a"}, cache.TaskIDs())
 
 	require.NoError(t, cache.Clear())
-	require.Empty(t, cache.SetIDs())
+	require.Empty(t, cache.TaskIDs())
 	require.False(t, cache.Loaded())
 
 	again, err := NewCatalogCache(stateFile)
@@ -317,6 +317,6 @@ func TestCatalogCacheClearEmptiesMemoryAndDisk(t *testing.T) {
 	loaded, err := again.Load()
 	require.NoError(t, err)
 	if loaded {
-		require.Empty(t, again.SetIDs(), "磁盘上的快照也是空的")
+		require.Empty(t, again.TaskIDs(), "磁盘上的快照也是空的")
 	}
 }

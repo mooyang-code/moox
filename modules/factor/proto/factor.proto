@@ -6,8 +6,8 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/factor/proto/factorgen;factorpb";
 
-message FactorSet {
-  string set_id = 1;
+message FactorTask {
+  string task_id = 1;
   string space_id = 2;
   string source_dataset_id = 3;
   string freq = 4;
@@ -15,7 +15,7 @@ message FactorSet {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // owner_instance_id 非空时是策略实例的私有集合，该实例是唯一的参数写入方；为空时成员带固定参数。
+  // owner_instance_id 非空时是策略实例的私有任务，该实例是唯一的参数写入方；为空时成员带固定参数。
   string owner_instance_id = 11;
 }
 
@@ -60,7 +60,7 @@ message FactorDef {
 }
 
 message FactorUsage {
-  string set_id = 1;
+  string task_id = 1;
   string status = 2;
   string member_alias = 3;
   // params 是成员的固定参数（空表示参数由策略实例逐期提交）。
@@ -72,9 +72,9 @@ message FactorInfo {
   repeated FactorUsage usages = 2;
 }
 
-// FactorMember 是定义在因子集中的运行实例，身份是集合内唯一的别名。
+// FactorMember 是定义在因子任务中的运行实例，身份是任务内唯一的别名。
 message FactorMember {
-  string set_id = 1;
+  string task_id = 1;
   string factor_id = 2;
   string status = 3;
   FactorDef factor = 4;
@@ -103,8 +103,8 @@ message FactorPeriodState {
   string params_digest = 9;
 }
 
-message SetRunSummary {
-  string set_id = 1;
+message TaskRunSummary {
+  string task_id = 1;
   int64 last_period_time = 2;
   string last_status = 3;
   int64 lag_seconds = 4;
@@ -117,16 +117,16 @@ message SetRunSummary {
   int64 completed_at = 8;
 }
 
-message FactorSetInfo {
-  FactorSet factor_set = 1;
+message FactorTaskInfo {
+  FactorTask factor_task = 1;
   repeated FactorMember members = 2;
-  SetRunSummary last_run = 3;
+  TaskRunSummary last_run = 3;
 }
 
 message RecalcJob {
   string job_id = 1;
   string request_id = 2;
-  string set_id = 3;
+  string task_id = 3;
   repeated string members = 4;
   repeated string subjects = 5;
   string start_time = 6;
@@ -139,42 +139,42 @@ message RecalcJob {
   string engine_id = 13;
 }
 
-message CreateFactorSetReq { FactorSet factor_set = 1; }
-message CreateFactorSetRsp {
+message CreateFactorTaskReq { FactorTask factor_task = 1; }
+message CreateFactorTaskRsp {
   common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
+  FactorTask factor_task = 2;
 }
 
-message SetFactorSetStatusReq {
-  string set_id = 1;
+message SetFactorTaskStatusReq {
+  string task_id = 1;
   string status = 2;
 }
-message SetFactorSetStatusRsp {
+message SetFactorTaskStatusRsp {
   common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
+  FactorTask factor_task = 2;
 }
 
-message DeleteFactorSetReq {
-  string set_id = 1;
+message DeleteFactorTaskReq {
+  string task_id = 1;
   bool purge = 2;
 }
-message DeleteFactorSetRsp { common.RetInfo ret_info = 1; }
+message DeleteFactorTaskRsp { common.RetInfo ret_info = 1; }
 
-message GetFactorSetReq { string set_id = 1; }
-message GetFactorSetRsp {
+message GetFactorTaskReq { string task_id = 1; }
+message GetFactorTaskRsp {
   common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
+  FactorTask factor_task = 2;
   repeated FactorMember members = 3;
-  SetRunSummary last_run = 4;
+  TaskRunSummary last_run = 4;
 }
 
-message ListFactorSetsReq {
+message ListFactorTasksReq {
   string status = 1;
   common.Page page = 2;
 }
-message ListFactorSetsRsp {
+message ListFactorTasksRsp {
   common.RetInfo ret_info = 1;
-  repeated FactorSetInfo factor_sets = 2;
+  repeated FactorTaskInfo factor_tasks = 2;
   common.PageResult page_result = 3;
 }
 
@@ -190,31 +190,31 @@ message UpdateFactorRsp {
   FactorDef factor = 2;
 }
 
-message AddFactorToSetReq {
-  string set_id = 1;
+message AddTaskMemberReq {
+  string task_id = 1;
   string factor_id = 2;
   // member_alias 为空时：普通任务按参数生成（全部参数等于默认值时取 factor_id），策略实例专属任务取 factor_id。
   string member_alias = 3;
   // params 是成员的固定参数；没给的参数取定义的默认值。策略实例专属任务不能带固定参数。
   map<string, double> params = 4;
 }
-message AddFactorToSetRsp {
+message AddTaskMemberRsp {
   common.RetInfo ret_info = 1;
   FactorMember member = 2;
 }
 
-message RemoveFactorFromSetReq {
-  string set_id = 1;
+message RemoveTaskMemberReq {
+  string task_id = 1;
   string member_alias = 2;
 }
-message RemoveFactorFromSetRsp { common.RetInfo ret_info = 1; }
+message RemoveTaskMemberRsp { common.RetInfo ret_info = 1; }
 
-message SetFactorMemberStatusReq {
-  string set_id = 1;
+message SetTaskMemberStatusReq {
+  string task_id = 1;
   string member_alias = 2;
   string status = 3;
 }
-message SetFactorMemberStatusRsp {
+message SetTaskMemberStatusRsp {
   common.RetInfo ret_info = 1;
   FactorMember member = 2;
 }
@@ -230,7 +230,7 @@ message GetFactorRsp {
 }
 
 message ListFactorsReq {
-  string set_id = 1;
+  string task_id = 1;
   string status = 2;
   common.Page page = 3;
   bool include_spec = 4;
@@ -242,7 +242,7 @@ message ListFactorsRsp {
 }
 
 message RecalcFactorsReq {
-  string set_id = 1;
+  string task_id = 1;
   repeated string members = 2;
   repeated string subjects = 3;
   string start_time = 4;
@@ -255,7 +255,7 @@ message RecalcFactorsRsp {
 }
 
 message ListRecalcJobsReq {
-  string set_id = 1;
+  string task_id = 1;
   repeated string statuses = 2;
   common.Page page = 3;
 }
@@ -277,8 +277,8 @@ message CancelRecalcJobRsp {
   RecalcJob job = 2;
 }
 
-message FactorLaneStatus {
-  string set_id = 1;
+message FactorRunnerStatus {
+  string task_id = 1;
   int32 queued = 2;
   bool active = 3;
   // warmup_state is warming while some subjects lack a loaded lookback window
@@ -305,8 +305,8 @@ message GetStatusReq {}
 message GetStatusRsp {
   common.RetInfo ret_info = 1;
   bool consumer_running = 2;
-  repeated FactorLaneStatus lanes = 5;
-  repeated SetRunSummary recent_runs = 6;
+  repeated FactorRunnerStatus runners = 5;
+  repeated TaskRunSummary recent_runs = 6;
   EngineInfo engine = 7;
   int32 compute_workers = 8;
   // engine_expr_version 是引擎上报的 expr 语义版本，manager_expr_version 是管理端自己的；两者不同时
@@ -341,9 +341,9 @@ message ValidateFactorSpecRsp {
   repeated FactorParamDecl params = 10;
 }
 
-// 在指定因子集的源数据上试算：少量标的、最近若干期。管理端直接读 Storage 计算，不经过引擎。
+// 在指定因子任务的源数据上试算：少量标的、最近若干期。管理端直接读 Storage 计算，不经过引擎。
 message PreviewFactorReq {
-  string set_id = 1;
+  string task_id = 1;
   string spec = 2;
   repeated string subjects = 3; // 为空时取源数据集的前几个标的
   int32 periods = 4;            // 输出最近多少期，默认 20，最多 500
@@ -413,38 +413,38 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// 策略实例的私有因子集（因子动态调参执行计划 2.3）：启用实例时建立或对齐，停用时停用，删除实例时释放。
-message InstanceSetMember {
+// 策略实例的私有因子任务（因子动态调参执行计划 2.3）：启用实例时建立或对齐，停用时停用，删除实例时释放。
+message InstanceTaskMember {
   string member_alias = 1;
   string factor_id = 2;
 }
 
-message EnsureInstanceFactorSetReq {
+message EnsureInstanceFactorTaskReq {
   string instance_id = 1;
   string space_id = 2;
   string source_dataset_id = 3;
   string freq = 4;
-  repeated InstanceSetMember members = 7;
+  repeated InstanceTaskMember members = 7;
 }
-message EnsureInstanceFactorSetRsp {
+message EnsureInstanceFactorTaskRsp {
   common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
+  FactorTask factor_task = 2;
   repeated FactorMember members = 3;
   // view_id 是私有结果数据集的默认 View，实例绑定它读取。
   string view_id = 4;
 }
 
-message SetInstanceFactorSetEnabledReq {
+message SetInstanceFactorTaskEnabledReq {
   string instance_id = 1;
   bool enabled = 2;
 }
-message SetInstanceFactorSetEnabledRsp {
+message SetInstanceFactorTaskEnabledRsp {
   common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
+  FactorTask factor_task = 2;
 }
 
-message ReleaseInstanceFactorSetReq { string instance_id = 1; }
-message ReleaseInstanceFactorSetRsp { common.RetInfo ret_info = 1; }
+message ReleaseInstanceFactorTaskReq { string instance_id = 1; }
+message ReleaseInstanceFactorTaskRsp { common.RetInfo ret_info = 1; }
 
 // ParamValue 是一个参数一期的取值：默认值加按标的覆盖。
 message ParamValue {
@@ -462,7 +462,7 @@ message MemberParams {
 // accepted 只表示已接受，某期是否采用以冻结记录为准（GetFactorParams）。
 message SubmitFactorParamsReq {
   string writer = 1;
-  string set_id = 2;
+  string task_id = 2;
   int64 period_time = 3;
   int64 based_on_period = 4;
   string request_id = 5;
@@ -501,7 +501,7 @@ message ParamRequestInfo {
 }
 
 message GetFactorParamsReq {
-  string set_id = 1;
+  string task_id = 1;
   string member_alias = 2; // 为空时全部成员
   int64 from = 3;
   int64 to = 4;
@@ -516,18 +516,18 @@ message GetFactorParamsRsp {
 }
 
 service FactorMgr {
-  rpc CreateFactorSet(CreateFactorSetReq) returns (CreateFactorSetRsp);
-  rpc SetFactorSetStatus(SetFactorSetStatusReq) returns (SetFactorSetStatusRsp);
-  rpc DeleteFactorSet(DeleteFactorSetReq) returns (DeleteFactorSetRsp);
-  rpc GetFactorSet(GetFactorSetReq) returns (GetFactorSetRsp);
-  rpc ListFactorSets(ListFactorSetsReq) returns (ListFactorSetsRsp);
+  rpc CreateFactorTask(CreateFactorTaskReq) returns (CreateFactorTaskRsp);
+  rpc SetFactorTaskStatus(SetFactorTaskStatusReq) returns (SetFactorTaskStatusRsp);
+  rpc DeleteFactorTask(DeleteFactorTaskReq) returns (DeleteFactorTaskRsp);
+  rpc GetFactorTask(GetFactorTaskReq) returns (GetFactorTaskRsp);
+  rpc ListFactorTasks(ListFactorTasksReq) returns (ListFactorTasksRsp);
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
   rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
   rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
-  rpc AddFactorToSet(AddFactorToSetReq) returns (AddFactorToSetRsp);
-  rpc RemoveFactorFromSet(RemoveFactorFromSetReq) returns (RemoveFactorFromSetRsp);
-  rpc SetFactorMemberStatus(SetFactorMemberStatusReq) returns (SetFactorMemberStatusRsp);
+  rpc AddTaskMember(AddTaskMemberReq) returns (AddTaskMemberRsp);
+  rpc RemoveTaskMember(RemoveTaskMemberReq) returns (RemoveTaskMemberRsp);
+  rpc SetTaskMemberStatus(SetTaskMemberStatusReq) returns (SetTaskMemberStatusRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc RecalcFactors(RecalcFactorsReq) returns (RecalcFactorsRsp);
   rpc ListRecalcJobs(ListRecalcJobsReq) returns (ListRecalcJobsRsp);
@@ -542,9 +542,9 @@ service FactorMgr {
   rpc UpsertFactorCategory(UpsertFactorCategoryReq) returns (UpsertFactorCategoryRsp);
   rpc DeleteFactorCategory(DeleteFactorCategoryReq) returns (DeleteFactorCategoryRsp);
   rpc SetFactorCategory(SetFactorCategoryReq) returns (SetFactorCategoryRsp);
-  rpc EnsureInstanceFactorSet(EnsureInstanceFactorSetReq) returns (EnsureInstanceFactorSetRsp);
-  rpc SetInstanceFactorSetEnabled(SetInstanceFactorSetEnabledReq) returns (SetInstanceFactorSetEnabledRsp);
-  rpc ReleaseInstanceFactorSet(ReleaseInstanceFactorSetReq) returns (ReleaseInstanceFactorSetRsp);
+  rpc EnsureInstanceFactorTask(EnsureInstanceFactorTaskReq) returns (EnsureInstanceFactorTaskRsp);
+  rpc SetInstanceFactorTaskEnabled(SetInstanceFactorTaskEnabledReq) returns (SetInstanceFactorTaskEnabledRsp);
+  rpc ReleaseInstanceFactorTask(ReleaseInstanceFactorTaskReq) returns (ReleaseInstanceFactorTaskRsp);
   rpc SubmitFactorParams(SubmitFactorParamsReq) returns (SubmitFactorParamsRsp);
   rpc GetFactorParams(GetFactorParamsReq) returns (GetFactorParamsRsp);
 }
@@ -566,8 +566,8 @@ message EngineMember {
   map<string, double> params = 4;
 }
 
-message EngineSet {
-  FactorSet factor_set = 1;
+message EngineTask {
+  FactorTask factor_task = 1;
   repeated EngineMember members = 2;
   bool result_ready = 3;
 }
@@ -580,34 +580,34 @@ message SyncEngineCatalogRsp {
   common.RetInfo ret_info = 1;
   string catalog_hash = 2;
   bool not_modified = 3;
-  repeated EngineSet sets = 4;
+  repeated EngineTask tasks = 4;
 }
 
 message EngineRuntimeStatus {
   bool consumer_running = 1;
-  repeated FactorLaneStatus lanes = 4;
-  repeated SetRunSummary recent_runs = 5;
+  repeated FactorRunnerStatus runners = 4;
+  repeated TaskRunSummary recent_runs = 5;
   string catalog_hash = 6;
   string catalog_synced_at = 7;
   int32 compute_workers = 8;
   string expr_version = 9;
-  // watermarks 是各集合的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
-  repeated SetWatermarkStatus watermarks = 10;
+  // watermarks 是各任务的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
+  repeated TaskWatermarkStatus watermarks = 10;
   // param_health 是各成员的参数状态；offline_pending 是还没补报给管理端的离线冻结数。
   repeated MemberParamHealth param_health = 11;
   int32 offline_pending = 12;
 }
 
 message MemberParamHealth {
-  string set_id = 1;
+  string task_id = 1;
   string member_alias = 2;
   int32 carried_periods = 3;
   int32 alert_after = 4;
   string last_offline_at = 5;
 }
 
-message SetWatermarkStatus {
-  string set_id = 1;
+message TaskWatermarkStatus {
+  string task_id = 1;
   string committed_through = 2;
   string target = 3;
   // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
@@ -653,7 +653,7 @@ message PullRecalcJobRsp {
   bool found = 2;
   RecalcJob job = 3;
   string lease_token = 4;
-  EngineSet set = 5;
+  EngineTask task = 5;
 }
 
 message ReportRecalcProgressReq {
@@ -669,7 +669,7 @@ message ReportRecalcProgressRsp {
   string job_status = 2;
 }
 
-// FreezeFactorParams 在引擎开算一期之前冻结这些集合的参数（因子动态调参执行计划 2.4）：提交与冻结在管理端同一个库里
+// FreezeFactorParams 在引擎开算一期之前冻结这些任务的参数（因子动态调参执行计划 2.4）：提交与冻结在管理端同一个库里
 // 串行化；同一期重复调用返回同一份结果。
 message MemberParamFreeze {
   string member_alias = 1;
@@ -678,23 +678,23 @@ message MemberParamFreeze {
   string snapshot_hash = 4;
   string request_id = 5;
 }
-message SetParamFreeze {
-  string set_id = 1;
+message TaskParamFreeze {
+  string task_id = 1;
   repeated MemberParamFreeze members = 2;
 }
 message FreezeFactorParamsReq {
   EngineIdentity engine = 1;
-  repeated string set_ids = 2;
+  repeated string task_ids = 2;
   int64 period_time = 3;
 }
 message FreezeFactorParamsRsp {
   common.RetInfo ret_info = 1;
-  repeated SetParamFreeze sets = 2;
+  repeated TaskParamFreeze tasks = 2;
 }
 
 // OfflineFreeze 是引擎在管理端不可达时本地按沿用规则冻结的一期。
 message OfflineFreeze {
-  string set_id = 1;
+  string task_id = 1;
   string member_alias = 2;
   int64 period_time = 3;
   map<string, ParamValue> params = 4;
@@ -712,7 +712,7 @@ message ReportOfflineFreezesRsp {
 
 message ListParamIntervalsReq {
   EngineIdentity engine = 1;
-  string set_id = 2;
+  string task_id = 2;
   int64 from = 3;
   int64 to = 4;
 }

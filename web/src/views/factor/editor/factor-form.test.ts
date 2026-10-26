@@ -183,15 +183,15 @@ describe("templates and function reference", () => {
 describe("editor page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
 
-  it("editor has no 因子集 / 源数据集 / 频率 selector", () => {
-    expect(page).not.toContain("因子集");
+  it("editor has no 因子任务 / 源数据集 / 频率 selector", () => {
+    expect(page).not.toContain("因子任务");
     expect(page).not.toContain('label="源数据集"');
     expect(page).not.toContain('label="频率"');
     expect(page).toContain("参考数据集");
   });
 
-  it("editor never calls createFactorSet", () => {
-    expect(page).not.toContain("createFactorSet");
+  it("editor never calls createFactorTask", () => {
+    expect(page).not.toContain("createFactorTask");
     expect(page).toContain("createFactor");
     expect(page).toContain("updateFactor");
   });

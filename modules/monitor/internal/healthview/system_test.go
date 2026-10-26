@@ -111,7 +111,7 @@ func TestProjectSystemResumingAndReset(t *testing.T) {
 			l.Catchup = &pb.HealthCatchup{Done: 6, Total: 10}
 		}),
 		component("策略", "resuming", func(l *pb.HealthLifecycle) {
-			l.Catchup = &pb.HealthCatchup{BlockedBy: "factor_set/crypto_1m"}
+			l.Catchup = &pb.HealthCatchup{BlockedBy: "factor_task/crypto_1m"}
 		}),
 		component("Trade", "resuming", func(l *pb.HealthLifecycle) { l.Catchup = &pb.HealthCatchup{CaughtUp: true} }),
 	})
@@ -120,7 +120,7 @@ func TestProjectSystemResumingAndReset(t *testing.T) {
 	require.False(t, resuming.Degraded, "恢复追赶是预期的过渡，不算降级")
 	require.Equal(t, int32(3), resuming.ResumingModules)
 	require.Equal(t, int32(1), resuming.CaughtUpModules)
-	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 factor_set/crypto_1m 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
+	require.ElementsMatch(t, []string{"因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞", "Trade：已追平，待放行"}, resuming.CatchupNotes)
 
 	resetting := projectSystem([]*pb.HealthComponent{component("因子引擎", "resetting"), component("策略", "running")})
 	require.Equal(t, "resetting", resetting.Phase)

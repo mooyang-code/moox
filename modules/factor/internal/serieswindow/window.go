@@ -33,7 +33,7 @@ var (
 // Config 是一个数据源窗口的参数。
 type Config struct {
 	Source seriesstore.Source
-	// Lookback 是窗口保留的根数（集合内各因子的最大回看根数）。
+	// Lookback 是窗口保留的根数（任务内各因子的最大回看根数）。
 	Lookback int
 	// Headroom 是数组余量的根数；0 取 max(Lookback/4, 16)。
 	Headroom int
@@ -206,7 +206,7 @@ func (w *Window) Latest(subject string) (time.Time, bool) {
 
 // ---------------------------------------------------------------- 载入
 
-// Retain 只保留名单里的标的，其余标的的序列从窗口里移除（标的被移出集合之后释放它们占的内存，设计 6.2）。返回移除的标的数。
+// Retain 只保留名单里的标的，其余标的的序列从窗口里移除（标的被移出任务之后释放它们占的内存，设计 6.2）。返回移除的标的数。
 // 已经抓到的读租约不受影响，数组由 GC 在租约释放后回收。
 func (w *Window) Retain(subjects []string) int {
 	keep := make(map[string]struct{}, len(subjects))

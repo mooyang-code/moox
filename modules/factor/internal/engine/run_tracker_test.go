@@ -17,9 +17,9 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	tracker := newRunTracker()
 	t1 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	completed := t1.Add(time.Minute + 4*time.Second)
-	tracker.record("fset_a", t1, "complete", pipeline.Outcome{}, completed)
-	tracker.record("fset_a", t1.Add(-time.Minute), "degraded", pipeline.Outcome{}, completed.Add(time.Second))
-	tracker.record("fset_b", t1, "degraded", pipeline.Outcome{
+	tracker.record("ftask_a", t1, "complete", pipeline.Outcome{}, completed)
+	tracker.record("ftask_a", t1.Add(-time.Minute), "degraded", pipeline.Outcome{}, completed.Add(time.Second))
+	tracker.record("ftask_b", t1, "degraded", pipeline.Outcome{
 		FailedSubjects: []string{"ETHUSDT"},
 		Factors: []storageio.FactorState{
 			{Member: "momentum", FactorID: "momentum", Status: "complete", SourceHash: "abc"},
@@ -27,17 +27,17 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 		},
 	}, completed)
 
-	summary := tracker.latest("fset_a", t1.Add(30*time.Second))
+	summary := tracker.latest("ftask_a", t1.Add(30*time.Second))
 	require.Equal(t, t1.Unix(), summary.LastPeriodTime)
 	require.Equal(t, "complete", summary.LastStatus)
 	require.EqualValues(t, 30, summary.LagSeconds)
 	// 完成时间是写完最新一期的时刻，较旧的期次不覆盖它。
 	require.Equal(t, completed.Unix(), summary.CompletedAt)
 	require.Len(t, tracker.all(t1), 2)
-	require.Equal(t, "fset_a", tracker.all(t1)[0].SetID)
+	require.Equal(t, "ftask_a", tracker.all(t1)[0].TaskID)
 	require.Zero(t, tracker.latest("missing", t1).LastPeriodTime)
 
-	degraded := tracker.latest("fset_b", t1)
+	degraded := tracker.latest("ftask_b", t1)
 	require.Equal(t, []string{"ETHUSDT"}, degraded.FailedSubjects)
 	require.Equal(t, []domain.FactorPeriodState{
 		{MemberAlias: "momentum", FactorID: "momentum", Status: "complete", SpecHash: "abc"},
@@ -147,15 +147,15 @@ func TestPeriodFailureReasonClassifiesAbortedPeriods(t *testing.T) {
 	require.Equal(t, "internal", periodFailureReason(errors.New("assemble failed")))
 }
 
-func (t *runTracker) latest(setID string, now time.Time) domain.SetRunSummary {
+func (t *runTracker) latest(taskID string, now time.Time) domain.TaskRunSummary {
 	if t == nil {
-		return domain.SetRunSummary{SetID: setID}
+		return domain.TaskRunSummary{TaskID: taskID}
 	}
 	t.mu.RLock()
-	run, ok := t.runs[setID]
+	run, ok := t.runs[taskID]
 	t.mu.RUnlock()
 	if !ok {
-		return domain.SetRunSummary{SetID: setID}
+		return domain.TaskRunSummary{TaskID: taskID}
 	}
-	return summaryOf(setID, run, now)
+	return summaryOf(taskID, run, now)
 }

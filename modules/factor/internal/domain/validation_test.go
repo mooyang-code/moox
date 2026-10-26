@@ -64,9 +64,9 @@ func TestValidateDefinitionRequiresMatchingSpecHash(t *testing.T) {
 	require.ErrorContains(t, err, "spec_hash")
 }
 
-func TestFactorDefCarriesNoStatusOrSet(t *testing.T) {
+func TestFactorDefCarriesNoStatusOrTask(t *testing.T) {
 	typeOf := reflect.TypeOf(FactorDef{})
-	for _, name := range []string{"Status", "SetID", "SourceCode", "ParamsJSON"} {
+	for _, name := range []string{"Status", "TaskID", "SourceCode", "ParamsJSON"} {
 		_, has := typeOf.FieldByName(name)
 		require.False(t, has, name)
 	}

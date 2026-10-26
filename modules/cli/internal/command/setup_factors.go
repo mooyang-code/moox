@@ -20,9 +20,9 @@ import (
 
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// setupFactorSet is one factor set to create; sets are keyed by SetID.
-type setupFactorSet struct {
-	SetID           string
+// setupFactorTask is one factor task to create; sets are keyed by TaskID.
+type setupFactorTask struct {
+	TaskID          string
 	SpaceID         string
 	SourceDatasetID string
 	Freq            string
@@ -86,7 +86,7 @@ func readFactorLibrary(path string) (map[string]libraryEntry, error) {
 
 // setupFactorMember 是任务里的一个成员。Alias 为空时由服务端按参数生成；Params 是配置里给出的固定参数（没给的取定义的默认值）。
 type setupFactorMember struct {
-	SetID    string
+	TaskID   string
 	FactorID string
 	Alias    string
 	Params   map[string]float64
@@ -96,7 +96,7 @@ type setupFactorMember struct {
 // setupFactorPlan is what a setup run applies: sets first, then definitions,
 // then memberships.
 type setupFactorPlan struct {
-	Sets        []setupFactorSet
+	Sets        []setupFactorTask
 	Definitions []setupFactorDefinition
 	Members     []setupFactorMember
 	// Warnings 是不阻止初始化但用户应该知道的配置关联问题（例如交易时段市场的保留期估算装不下因子回看根数）。
@@ -111,7 +111,7 @@ type setupFactorSummary struct {
 	Enabled          bool `json:"enabled"`
 	Definitions      int  `json:"definitions"`
 	Members          int  `json:"members"`
-	SetsCreated      int  `json:"sets_created"`
+	SetsCreated      int  `json:"tasks_created"`
 	Imported         int  `json:"imported"`
 	Unchanged        int  `json:"unchanged"`
 	MembersAdded     int  `json:"members_added"`
@@ -135,7 +135,7 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		manifest.Factors.SourceDir = "modules/factor/factors"
 	}
 	definitions, members := manifest.Factors.Definitions, manifest.Factors.Members
-	// Factor sets name concrete source Datasets, so an enabled factor setup must
+	// Factor tasks name concrete source Datasets, so an enabled factor setup must
 	// declare its sets, definitions and members explicitly.
 	if len(definitions) == 0 && len(members) == 0 && len(manifest.Factors.Sets) == 0 {
 		return plan, fmt.Errorf("factors.enabled requires [[factors.sets]], [[factors.definitions]] and [[factors.members]]")
@@ -143,22 +143,22 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 	if len(definitions) == 0 {
 		return plan, fmt.Errorf("factors.definitions must be configured when factors.sets or factors.members is specified")
 	}
-	sets := make(map[string]setupconfig.FactorSetupSet, len(manifest.Factors.Sets))
+	sets := make(map[string]setupconfig.FactorSetupTask, len(manifest.Factors.Sets))
 	for _, set := range manifest.Factors.Sets {
 		key := factorSetupIdentity(set.SourceDatasetID, set.Freq)
 		if key == "\x00" {
-			return plan, fmt.Errorf("factor set requires source_dataset_id and freq")
+			return plan, fmt.Errorf("factor task requires source_dataset_id and freq")
 		}
 		if _, exists := sets[key]; exists {
-			return plan, fmt.Errorf("factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
+			return plan, fmt.Errorf("factor task for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
 		}
 		sets[key] = set
-		plan.Sets = append(plan.Sets, setupFactorSet{
-			SetID: factorSetID(set.SourceDatasetID, set.Freq), SpaceID: strings.TrimSpace(set.SpaceID),
+		plan.Sets = append(plan.Sets, setupFactorTask{
+			TaskID: factorTaskID(set.SourceDatasetID, set.Freq), SpaceID: strings.TrimSpace(set.SpaceID),
 			SourceDatasetID: strings.TrimSpace(set.SourceDatasetID), Freq: strings.TrimSpace(set.Freq),
 		})
 	}
-	sort.Slice(plan.Sets, func(i, j int) bool { return plan.Sets[i].SetID < plan.Sets[j].SetID })
+	sort.Slice(plan.Sets, func(i, j int) bool { return plan.Sets[i].TaskID < plan.Sets[j].TaskID })
 	root := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
 	seen := make(map[string]struct{}, len(definitions))
 	libraries := map[string]map[string]libraryEntry{}
@@ -219,18 +219,18 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		if status != "enabled" && status != "disabled" {
 			return plan, fmt.Errorf("factors.members[%d].status must be enabled or disabled", index)
 		}
-		setID := factorSetID(datasetID, freq)
+		taskID := factorTaskID(datasetID, freq)
 		alias := strings.TrimSpace(member.MemberAlias)
-		key := setID + "\x00" + factorID + "\x00" + alias + "\x00" + paramsKey(member.Params)
+		key := taskID + "\x00" + factorID + "\x00" + alias + "\x00" + paramsKey(member.Params)
 		if _, dup := memberSeen[key]; dup {
-			return plan, fmt.Errorf("factor %q is a member of set %q more than once with the same alias and params", factorID, setID)
+			return plan, fmt.Errorf("factor %q is a member of set %q more than once with the same alias and params", factorID, taskID)
 		}
 		memberSeen[key] = struct{}{}
-		plan.Members = append(plan.Members, setupFactorMember{SetID: setID, FactorID: factorID, Alias: alias, Params: member.Params, Status: status})
+		plan.Members = append(plan.Members, setupFactorMember{TaskID: taskID, FactorID: factorID, Alias: alias, Params: member.Params, Status: status})
 	}
 	sort.SliceStable(plan.Members, func(i, j int) bool {
-		if plan.Members[i].SetID != plan.Members[j].SetID {
-			return plan.Members[i].SetID < plan.Members[j].SetID
+		if plan.Members[i].TaskID != plan.Members[j].TaskID {
+			return plan.Members[i].TaskID < plan.Members[j].TaskID
 		}
 		if plan.Members[i].FactorID != plan.Members[j].FactorID {
 			return plan.Members[i].FactorID < plan.Members[j].FactorID
@@ -250,13 +250,13 @@ func factorSetupIdentity(sourceDatasetID, freq string) string {
 	return strings.TrimSpace(sourceDatasetID) + "\x00" + strings.TrimSpace(freq)
 }
 
-func factorSetID(sourceDatasetID, freq string) string {
+func factorTaskID(sourceDatasetID, freq string) string {
 	suffix := strings.TrimPrefix(strings.TrimSpace(sourceDatasetID), "dataset_")
 	freq = strings.TrimSpace(freq)
 	if !strings.HasSuffix(suffix, "_"+freq) {
 		suffix += "_" + freq
 	}
-	return "fset_" + suffix
+	return "ftask_" + suffix
 }
 
 func defaultString(value, fallback string) string {
@@ -313,7 +313,7 @@ type factorAPIParam struct {
 
 // factorAPIUsage mirrors the FactorUsage proto JSON.
 type factorAPIUsage struct {
-	SetID       string             `json:"set_id"`
+	TaskID      string             `json:"task_id"`
 	MemberAlias string             `json:"member_alias"`
 	Status      string             `json:"status"`
 	Params      map[string]float64 `json:"params"`
@@ -333,17 +333,17 @@ type factorAPIResponse struct {
 	Diagnostic     struct {
 		Message string `json:"message"`
 	} `json:"diagnostic"`
-	Factor    factorAPIDef     `json:"factor"`
-	Usages    []factorAPIUsage `json:"usages"`
-	Factors   []factorAPIInfo  `json:"factors"`
-	FactorSet struct {
-		SetID           string `json:"set_id"`
+	Factor     factorAPIDef     `json:"factor"`
+	Usages     []factorAPIUsage `json:"usages"`
+	Factors    []factorAPIInfo  `json:"factors"`
+	FactorTask struct {
+		TaskID          string `json:"task_id"`
 		SpaceID         string `json:"space_id"`
 		SourceDatasetID string `json:"source_dataset_id"`
 		Freq            string `json:"freq"`
 		Status          string `json:"status"`
-	} `json:"factor_set"`
-	// Member 是 AddFactorToSet 返回的成员（别名可能由服务端按参数生成）。
+	} `json:"factor_task"`
+	// Member 是 AddTaskMember 返回的成员（别名可能由服务端按参数生成）。
 	Member struct {
 		MemberAlias string `json:"member_alias"`
 	} `json:"member"`
@@ -375,31 +375,31 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 	summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
 	for _, set := range plan.Sets {
 		get := factorAPIResponse{}
-		err := r.call(ctx, "GetFactorSet", map[string]any{"set_id": set.SetID}, &get)
+		err := r.call(ctx, "GetFactorTask", map[string]any{"task_id": set.TaskID}, &get)
 		if err != nil && !factorAPINotFound(get) {
 			return summary, err
 		}
-		createSet := func() error {
+		createTask := func() error {
 			create := factorAPIResponse{}
-			return r.call(ctx, "CreateFactorSet", map[string]any{"factor_set": map[string]any{
-				"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
+			return r.call(ctx, "CreateFactorTask", map[string]any{"factor_task": map[string]any{
+				"task_id": set.TaskID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
 				"freq": set.Freq, "status": "pending",
 			}}, &create)
 		}
 		if err != nil {
-			if createErr := createSet(); createErr != nil {
+			if createErr := createTask(); createErr != nil {
 				return summary, createErr
 			}
 			summary.SetsCreated++
 			continue
 		}
-		if get.FactorSet.SpaceID != set.SpaceID || get.FactorSet.SourceDatasetID != set.SourceDatasetID || get.FactorSet.Freq != set.Freq {
-			return summary, fmt.Errorf("factor set %q already exists with a different source identity", set.SetID)
+		if get.FactorTask.SpaceID != set.SpaceID || get.FactorTask.SourceDatasetID != set.SourceDatasetID || get.FactorTask.Freq != set.Freq {
+			return summary, fmt.Errorf("factor task %q already exists with a different source identity", set.TaskID)
 		}
-		if get.FactorSet.Status == "pending" {
-			// An interrupted creation left the set pending; CreateFactorSet
+		if get.FactorTask.Status == "pending" {
+			// An interrupted creation left the set pending; CreateFactorTask
 			// resumes provisioning its result Dataset.
-			if createErr := createSet(); createErr != nil {
+			if createErr := createTask(); createErr != nil {
 				return summary, createErr
 			}
 		}
@@ -467,7 +467,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		}
 		defaults[def.FactorID] = paramDefaults(get.Factor)
 		for _, usage := range get.Usages {
-			usages[def.FactorID] = append(usages[def.FactorID], &setupUsage{SetID: usage.SetID, Alias: usage.MemberAlias, Status: usage.Status, Params: usage.Params})
+			usages[def.FactorID] = append(usages[def.FactorID], &setupUsage{TaskID: usage.TaskID, Alias: usage.MemberAlias, Status: usage.Status, Params: usage.Params})
 		}
 		summary.Unchanged++
 	}
@@ -480,7 +480,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		want := completeParams(defaults[member.FactorID], member.Params)
 		var found *setupUsage
 		for _, usage := range usages[member.FactorID] {
-			if usage.SetID != member.SetID {
+			if usage.TaskID != member.TaskID {
 				continue
 			}
 			if member.Alias != "" {
@@ -496,25 +496,25 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			}
 		}
 		if found != nil && member.Alias != "" && !sameParamValues(found.Params, want) {
-			return summary, fmt.Errorf("member %q of set %q already exists with different params; params are fixed once a member is added, use another alias", member.Alias, member.SetID)
+			return summary, fmt.Errorf("member %q of set %q already exists with different params; params are fixed once a member is added, use another alias", member.Alias, member.TaskID)
 		}
 		if found != nil {
 			matched[index] = found
 			continue
 		}
 		added := factorAPIResponse{}
-		body := map[string]any{"set_id": member.SetID, "factor_id": member.FactorID, "member_alias": member.Alias}
+		body := map[string]any{"task_id": member.TaskID, "factor_id": member.FactorID, "member_alias": member.Alias}
 		if len(member.Params) > 0 {
 			body["params"] = member.Params
 		}
-		if err := r.call(ctx, "AddFactorToSet", body, &added); err != nil {
+		if err := r.call(ctx, "AddTaskMember", body, &added); err != nil {
 			return summary, err
 		}
 		alias := added.Member.MemberAlias
 		if alias == "" {
-			return summary, fmt.Errorf("AddFactorToSet returned no member alias for factor %q in set %q", member.FactorID, member.SetID)
+			return summary, fmt.Errorf("AddTaskMember returned no member alias for factor %q in set %q", member.FactorID, member.TaskID)
 		}
-		found = &setupUsage{SetID: member.SetID, Alias: alias, Status: "disabled", Params: want}
+		found = &setupUsage{TaskID: member.TaskID, Alias: alias, Status: "disabled", Params: want}
 		usages[member.FactorID] = append(usages[member.FactorID], found)
 		matched[index] = found
 		summary.MembersAdded++
@@ -526,8 +526,8 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			continue
 		}
 		status := factorAPIResponse{}
-		if err := r.call(ctx, "SetFactorMemberStatus", map[string]any{
-			"set_id": member.SetID, "member_alias": usage.Alias, "status": member.Status,
+		if err := r.call(ctx, "SetTaskMemberStatus", map[string]any{
+			"task_id": member.TaskID, "member_alias": usage.Alias, "status": member.Status,
 		}, &status); err != nil {
 			return summary, err
 		}
@@ -539,7 +539,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 
 // setupUsage 是一个现有成员：任务、别名、状态与固定参数。
 type setupUsage struct {
-	SetID  string
+	TaskID string
 	Alias  string
 	Status string
 	Params map[string]float64

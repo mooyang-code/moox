@@ -25,7 +25,7 @@ type CatalogClient interface {
 }
 
 // catalogSyncer pulls the manager's catalog on the aligned timer and installs
-// it into the cache; onChange runs when the set of factor sets changed.
+// it into the cache; onChange runs when the set of factor tasks changed.
 type catalogSyncer struct {
 	client   CatalogClient
 	cache    *CatalogCache

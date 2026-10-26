@@ -16,7 +16,7 @@ import (
 
 // RunOnceRequest computes one period of one set for diagnosis.
 type RunOnceRequest struct {
-	SetID    string
+	TaskID   string
 	Members  []string
 	Subjects []string
 	Period   time.Time
@@ -49,11 +49,11 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if managerErr == nil {
 		_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
 	}
-	set, err := cache.Set(strings.TrimSpace(req.SetID))
+	set, err := cache.Set(strings.TrimSpace(req.TaskID))
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	members, err := selectSetMembers(set, req.Members)
+	members, err := selectTaskMembers(set, req.Members)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -97,7 +97,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 		if managerErr != nil {
 			return pipeline.Outcome{}, fmt.Errorf("成员 %s 带可调参数，需要读取冻结参数，但无法连接因子管理端：%w", member.Alias, managerErr)
 		}
-		if intervals, err = manager.ListParamIntervals(ctx, set.Set.SetID, start, start); err != nil {
+		if intervals, err = manager.ListParamIntervals(ctx, set.Set.TaskID, start, start); err != nil {
 			return pipeline.Outcome{}, fmt.Errorf("成员 %s 带可调参数，读取冻结参数失败，拒绝按默认参数写入正式结果（请改用补算）：%w", member.Alias, err)
 		}
 		break
@@ -108,25 +108,25 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 }
 
 // Set returns one set of the snapshot.
-func (c *CatalogCache) Set(setID string) (domain.EngineSet, error) {
+func (c *CatalogCache) Set(taskID string) (domain.EngineTask, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.loaded {
-		return domain.EngineSet{}, errors.New("factor catalog is not available: the manager is unreachable and no snapshot was saved")
+		return domain.EngineTask{}, errors.New("factor catalog is not available: the manager is unreachable and no snapshot was saved")
 	}
 	for _, set := range c.sets {
-		if set.Set.SetID == setID {
+		if set.Set.TaskID == taskID {
 			return set, nil
 		}
 	}
-	return domain.EngineSet{}, fmt.Errorf("factor set %q is not enabled in the catalog", setID)
+	return domain.EngineTask{}, fmt.Errorf("factor task %q is not enabled in the catalog", taskID)
 }
 
-func selectSetMembers(set domain.EngineSet, aliases []string) ([]domain.MemberDef, error) {
-	members := make([]domain.SetMember, 0, len(set.Members))
+func selectTaskMembers(set domain.EngineTask, aliases []string) ([]domain.MemberDef, error) {
+	members := make([]domain.TaskMember, 0, len(set.Members))
 	for _, member := range set.Members {
-		members = append(members, domain.SetMember{
-			FactorSetMember: domain.FactorSetMember{SetID: set.Set.SetID, MemberAlias: member.Alias, FactorID: member.Factor.FactorID,
+		members = append(members, domain.TaskMember{
+			FactorTaskMember: domain.FactorTaskMember{TaskID: set.Set.TaskID, MemberAlias: member.Alias, FactorID: member.Factor.FactorID,
 				Status: domain.MemberStatusEnabled, Params: member.Params},
 			Factor: member.Factor,
 		})

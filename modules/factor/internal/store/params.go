@@ -12,13 +12,13 @@ import (
 )
 
 // 参数请求与冻结（因子动态调参执行计划 2.4、2.6）。提交与冻结在同一个库里串行化：冻结时在一个事务里为每个成员
-// 选出该期库内序号最大的已接受请求（没有就沿用上一期的冻结快照，从未有过就用默认值），写冻结区间并推进集合的
+// 选出该期库内序号最大的已接受请求（没有就沿用上一期的冻结快照，从未有过就用默认值），写冻结区间并推进任务的
 // 已冻结期次；之后到达的同期请求一律 too_late。
 
 type paramRequestRow struct {
 	Seq           int64     `gorm:"column:c_seq"`
 	RequestID     string    `gorm:"column:c_request_id"`
-	SetID         string    `gorm:"column:c_set_id"`
+	TaskID        string    `gorm:"column:c_task_id"`
 	MemberAlias   string    `gorm:"column:c_member_alias"`
 	PeriodTime    int64     `gorm:"column:c_period_time"`
 	BasedOnPeriod int64     `gorm:"column:c_based_on_period"`
@@ -29,7 +29,7 @@ type paramRequestRow struct {
 	SnapshotJSON  string    `gorm:"column:c_snapshot_json"`
 }
 
-const paramRequestColumns = `r.c_seq, r.c_request_id, r.c_set_id, r.c_member_alias, r.c_period_time, r.c_based_on_period,
+const paramRequestColumns = `r.c_seq, r.c_request_id, r.c_task_id, r.c_member_alias, r.c_period_time, r.c_based_on_period,
 	r.c_snapshot_hash, r.c_writer, r.c_status, r.c_ctime, COALESCE(p.c_snapshot_json, '') AS c_snapshot_json`
 
 func (r paramRequestRow) domain() (domain.ParamRequest, error) {
@@ -38,7 +38,7 @@ func (r paramRequestRow) domain() (domain.ParamRequest, error) {
 		return domain.ParamRequest{}, err
 	}
 	request := domain.ParamRequest{
-		Seq: r.Seq, RequestID: r.RequestID, SetID: r.SetID, MemberAlias: r.MemberAlias,
+		Seq: r.Seq, RequestID: r.RequestID, TaskID: r.TaskID, MemberAlias: r.MemberAlias,
 		PeriodTime: time.Unix(r.PeriodTime, 0).UTC(), Snapshot: snapshot, SnapshotHash: r.SnapshotHash,
 		Writer: r.Writer, Status: r.Status, CreatedAt: r.CreatedAt,
 	}
@@ -49,7 +49,7 @@ func (r paramRequestRow) domain() (domain.ParamRequest, error) {
 }
 
 type paramIntervalRow struct {
-	SetID        string `gorm:"column:c_set_id"`
+	TaskID       string `gorm:"column:c_task_id"`
 	MemberAlias  string `gorm:"column:c_member_alias"`
 	StartPeriod  int64  `gorm:"column:c_start_period"`
 	EndPeriod    int64  `gorm:"column:c_end_period"`
@@ -58,7 +58,7 @@ type paramIntervalRow struct {
 	SnapshotJSON string `gorm:"column:c_snapshot_json"`
 }
 
-const paramIntervalColumns = `f.c_set_id, f.c_member_alias, f.c_start_period, f.c_end_period, f.c_snapshot_hash, f.c_source,
+const paramIntervalColumns = `f.c_task_id, f.c_member_alias, f.c_start_period, f.c_end_period, f.c_snapshot_hash, f.c_source,
 	p.c_snapshot_json`
 
 func (r paramIntervalRow) domain() (domain.ParamInterval, error) {
@@ -67,26 +67,26 @@ func (r paramIntervalRow) domain() (domain.ParamInterval, error) {
 		return domain.ParamInterval{}, err
 	}
 	return domain.ParamInterval{
-		SetID: r.SetID, MemberAlias: r.MemberAlias, Start: time.Unix(r.StartPeriod, 0).UTC(), End: time.Unix(r.EndPeriod, 0).UTC(),
+		TaskID: r.TaskID, MemberAlias: r.MemberAlias, Start: time.Unix(r.StartPeriod, 0).UTC(), End: time.Unix(r.EndPeriod, 0).UTC(),
 		Snapshot: snapshot, SnapshotHash: r.SnapshotHash, Source: r.Source,
 	}, nil
 }
 
-// SubmitParamRequest 接受一份参数请求。同一 (request_id, 集合, 成员) 重复提交返回已存的请求；
-// 期次不晚于集合已冻结的期次时返回 domain.ErrParamsTooLate。快照的合法性由调用方先检查。
+// SubmitParamRequest 接受一份参数请求。同一 (request_id, 任务, 成员) 重复提交返回已存的请求；
+// 期次不晚于任务已冻结的期次时返回 domain.ErrParamsTooLate。快照的合法性由调用方先检查。
 func (s *Store) SubmitParamRequest(ctx context.Context, request domain.ParamRequest) (domain.ParamRequest, error) {
 	if s == nil || s.db == nil {
 		return domain.ParamRequest{}, fmt.Errorf("factor database is not open")
 	}
-	request.RequestID, request.SetID, request.MemberAlias = strings.TrimSpace(request.RequestID), strings.TrimSpace(request.SetID),
+	request.RequestID, request.TaskID, request.MemberAlias = strings.TrimSpace(request.RequestID), strings.TrimSpace(request.TaskID),
 		strings.TrimSpace(request.MemberAlias)
-	if request.RequestID == "" || request.SetID == "" || request.MemberAlias == "" || request.PeriodTime.IsZero() {
-		return domain.ParamRequest{}, fmt.Errorf("request_id, set_id, member and period_time are required")
+	if request.RequestID == "" || request.TaskID == "" || request.MemberAlias == "" || request.PeriodTime.IsZero() {
+		return domain.ParamRequest{}, fmt.Errorf("request_id, task_id, member and period_time are required")
 	}
 	request.SnapshotHash = request.Snapshot.Hash()
 	var stored domain.ParamRequest
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		existing, found, err := findParamRequest(tx, request.RequestID, request.SetID, request.MemberAlias)
+		existing, found, err := findParamRequest(tx, request.RequestID, request.TaskID, request.MemberAlias)
 		if err != nil {
 			return err
 		}
@@ -97,7 +97,7 @@ func (s *Store) SubmitParamRequest(ctx context.Context, request domain.ParamRequ
 			stored = existing
 			return nil
 		}
-		frozen, ok, err := frozenThrough(tx, request.SetID)
+		frozen, ok, err := frozenThrough(tx, request.TaskID)
 		if err != nil {
 			return err
 		}
@@ -113,23 +113,23 @@ func (s *Store) SubmitParamRequest(ctx context.Context, request domain.ParamRequ
 		}
 		if err := tx.Exec(`
 			INSERT INTO t_factor_param_requests
-			(c_request_id, c_set_id, c_member_alias, c_period_time, c_based_on_period, c_snapshot_hash, c_writer, c_status, c_ctime)
+			(c_request_id, c_task_id, c_member_alias, c_period_time, c_based_on_period, c_snapshot_hash, c_writer, c_status, c_ctime)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, request.RequestID, request.SetID, request.MemberAlias, request.PeriodTime.Unix(), basedOn, request.SnapshotHash,
+		`, request.RequestID, request.TaskID, request.MemberAlias, request.PeriodTime.Unix(), basedOn, request.SnapshotHash,
 			request.Writer, domain.ParamRequestAccepted, time.Now().UTC()).Error; err != nil {
 			return err
 		}
-		stored, _, err = findParamRequest(tx, request.RequestID, request.SetID, request.MemberAlias)
+		stored, _, err = findParamRequest(tx, request.RequestID, request.TaskID, request.MemberAlias)
 		return err
 	})
 	return stored, err
 }
 
-func findParamRequest(tx *gorm.DB, requestID, setID, alias string) (domain.ParamRequest, bool, error) {
+func findParamRequest(tx *gorm.DB, requestID, taskID, alias string) (domain.ParamRequest, bool, error) {
 	var row paramRequestRow
 	result := tx.Raw(`SELECT `+paramRequestColumns+` FROM t_factor_param_requests r
 		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_request_id = ? AND r.c_set_id = ? AND r.c_member_alias = ?`, requestID, setID, alias).Scan(&row)
+		WHERE r.c_request_id = ? AND r.c_task_id = ? AND r.c_member_alias = ?`, requestID, taskID, alias).Scan(&row)
 	if result.Error != nil || result.RowsAffected == 0 {
 		return domain.ParamRequest{}, false, result.Error
 	}
@@ -137,9 +137,9 @@ func findParamRequest(tx *gorm.DB, requestID, setID, alias string) (domain.Param
 	return request, err == nil, err
 }
 
-func frozenThrough(tx *gorm.DB, setID string) (time.Time, bool, error) {
+func frozenThrough(tx *gorm.DB, taskID string) (time.Time, bool, error) {
 	var through []int64
-	if err := tx.Raw(`SELECT c_frozen_through FROM t_factor_param_frozen_periods WHERE c_set_id = ?`, setID).Scan(&through).Error; err != nil {
+	if err := tx.Raw(`SELECT c_frozen_through FROM t_factor_param_frozen_periods WHERE c_task_id = ?`, taskID).Scan(&through).Error; err != nil {
 		return time.Time{}, false, err
 	}
 	if len(through) == 0 {
@@ -148,12 +148,12 @@ func frozenThrough(tx *gorm.DB, setID string) (time.Time, bool, error) {
 	return time.Unix(through[0], 0).UTC(), true, nil
 }
 
-// FrozenThrough 返回集合已冻结到的最新一期。
-func (s *Store) FrozenThrough(ctx context.Context, setID string) (time.Time, bool, error) {
+// FrozenThrough 返回任务已冻结到的最新一期。
+func (s *Store) FrozenThrough(ctx context.Context, taskID string) (time.Time, bool, error) {
 	if s == nil || s.db == nil {
 		return time.Time{}, false, fmt.Errorf("factor database is not open")
 	}
-	return frozenThrough(s.db.WithContext(ctx), strings.TrimSpace(setID))
+	return frozenThrough(s.db.WithContext(ctx), strings.TrimSpace(taskID))
 }
 
 func putSnapshot(tx *gorm.DB, snapshot domain.ParamSnapshot) error {
@@ -171,26 +171,26 @@ type FreezeMember struct {
 	Fixed bool
 }
 
-// FreezeParams 冻结集合在 period 这一期的参数并返回每个成员的冻结结果；previous 是网格上的上一期，用于判断能否
+// FreezeParams 冻结任务在 period 这一期的参数并返回每个成员的冻结结果；previous 是网格上的上一期，用于判断能否
 // 延长上一个区间。已冻结过的成员期次原样返回（引擎重试、重投、重启后重算都拿到同一份），所以调用是幂等的。
-func (s *Store) FreezeParams(ctx context.Context, setID string, period, previous time.Time, members []FreezeMember) ([]domain.ParamFreeze, error) {
+func (s *Store) FreezeParams(ctx context.Context, taskID string, period, previous time.Time, members []FreezeMember) ([]domain.ParamFreeze, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	setID = strings.TrimSpace(setID)
-	if setID == "" || period.IsZero() || !previous.Before(period) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" || period.IsZero() || !previous.Before(period) {
 		return nil, fmt.Errorf("set id, period and an earlier previous period are required")
 	}
 	period, previous = period.UTC(), previous.UTC()
 	var freezes []domain.ParamFreeze
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		frozen, hasFrozen, err := frozenThrough(tx, setID)
+		frozen, hasFrozen, err := frozenThrough(tx, taskID)
 		if err != nil {
 			return err
 		}
 		fresh := !hasFrozen || period.After(frozen)
 		for _, member := range members {
-			freeze, err := freezeMember(tx, setID, member, period, previous, fresh)
+			freeze, err := freezeMember(tx, taskID, member, period, previous, fresh)
 			if err != nil {
 				return fmt.Errorf("冻结成员 %s：%w", member.Alias, err)
 			}
@@ -198,32 +198,32 @@ func (s *Store) FreezeParams(ctx context.Context, setID string, period, previous
 		}
 		if fresh {
 			return tx.Exec(`
-				INSERT INTO t_factor_param_frozen_periods (c_set_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
-				ON CONFLICT (c_set_id) DO UPDATE SET c_frozen_through = excluded.c_frozen_through, c_mtime = excluded.c_mtime
-			`, setID, period.Unix(), time.Now().UTC()).Error
+				INSERT INTO t_factor_param_frozen_periods (c_task_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
+				ON CONFLICT (c_task_id) DO UPDATE SET c_frozen_through = excluded.c_frozen_through, c_mtime = excluded.c_mtime
+			`, taskID, period.Unix(), time.Now().UTC()).Error
 		}
 		return nil
 	})
 	return freezes, err
 }
 
-func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previous time.Time, fresh bool) (domain.ParamFreeze, error) {
-	covering, found, err := intervalCovering(tx, setID, member.Alias, period)
+func freezeMember(tx *gorm.DB, taskID string, member FreezeMember, period, previous time.Time, fresh bool) (domain.ParamFreeze, error) {
+	covering, found, err := intervalCovering(tx, taskID, member.Alias, period)
 	if err != nil {
 		return domain.ParamFreeze{}, err
 	}
 	if found {
-		freeze := domain.ParamFreeze{SetID: setID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: covering.Snapshot,
+		freeze := domain.ParamFreeze{TaskID: taskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: covering.Snapshot,
 			SnapshotHash: covering.SnapshotHash, Source: covering.Source}
 		if covering.Source == domain.ParamsRequested {
-			freeze.RequestID, _ = appliedRequestID(tx, setID, member.Alias, period)
+			freeze.RequestID, _ = appliedRequestID(tx, taskID, member.Alias, period)
 		}
 		return freeze, nil
 	}
-	freeze := domain.ParamFreeze{SetID: setID, MemberAlias: member.Alias, PeriodTime: period}
+	freeze := domain.ParamFreeze{TaskID: taskID, MemberAlias: member.Alias, PeriodTime: period}
 	var chosen *domain.ParamRequest
 	if fresh {
-		if chosen, err = latestAcceptedRequest(tx, setID, member.Alias, period); err != nil {
+		if chosen, err = latestAcceptedRequest(tx, taskID, member.Alias, period); err != nil {
 			return domain.ParamFreeze{}, err
 		}
 	}
@@ -231,7 +231,7 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 	case chosen != nil:
 		freeze.Snapshot, freeze.Source, freeze.RequestID = chosen.Snapshot, domain.ParamsRequested, chosen.RequestID
 	default:
-		last, ok, err := lastIntervalBefore(tx, setID, member.Alias, period)
+		last, ok, err := lastIntervalBefore(tx, taskID, member.Alias, period)
 		if err != nil {
 			return domain.ParamFreeze{}, err
 		}
@@ -248,7 +248,7 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 			// 来源链可能被离线冻结（carried_offline）打断，所以不能只看上一个区间的来源：成员从没有提交生效过，沿用的就还是默认值。
 			if last.Source == domain.ParamsDefault {
 				freeze.Source = domain.ParamsDefault
-			} else if requested, err := everRequested(tx, setID, member.Alias); err != nil {
+			} else if requested, err := everRequested(tx, taskID, member.Alias); err != nil {
 				return domain.ParamFreeze{}, err
 			} else if !requested {
 				freeze.Source = domain.ParamsDefault
@@ -258,13 +258,13 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		}
 	}
 	freeze.SnapshotHash = freeze.Snapshot.Hash()
-	if err := writeInterval(tx, setID, member.Alias, period, previous, freeze.Snapshot, freeze.Source); err != nil {
+	if err := writeInterval(tx, taskID, member.Alias, period, previous, freeze.Snapshot, freeze.Source); err != nil {
 		return domain.ParamFreeze{}, err
 	}
 	if chosen != nil {
 		if err := tx.Exec(`UPDATE t_factor_param_requests SET c_status = CASE WHEN c_seq = ? THEN ? ELSE ? END
-			WHERE c_set_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
-			chosen.Seq, domain.ParamRequestApplied, domain.ParamRequestSuperseded, setID, member.Alias, period.Unix(),
+			WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
+			chosen.Seq, domain.ParamRequestApplied, domain.ParamRequestSuperseded, taskID, member.Alias, period.Unix(),
 			domain.ParamRequestAccepted).Error; err != nil {
 			return domain.ParamFreeze{}, err
 		}
@@ -273,14 +273,14 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 }
 
 // everRequested 报告成员是否有过提交生效的冻结区间。
-func everRequested(tx *gorm.DB, setID, alias string) (bool, error) {
+func everRequested(tx *gorm.DB, taskID, alias string) (bool, error) {
 	var n int64
-	err := tx.Raw(`SELECT COUNT(*) FROM (SELECT 1 FROM t_factor_param_freezes WHERE c_set_id = ? AND c_member_alias = ? AND c_source = ? LIMIT 1)`,
-		setID, alias, domain.ParamsRequested).Scan(&n).Error
+	err := tx.Raw(`SELECT COUNT(*) FROM (SELECT 1 FROM t_factor_param_freezes WHERE c_task_id = ? AND c_member_alias = ? AND c_source = ? LIMIT 1)`,
+		taskID, alias, domain.ParamsRequested).Scan(&n).Error
 	return n > 0, err
 }
 
-// sameParamNames 判断两份快照的参数名集合是否一致。
+// sameParamNames 判断两份快照的参数名任务是否一致。
 func sameParamNames(a, b domain.ParamSnapshot) bool {
 	if len(a) != len(b) {
 		return false
@@ -293,12 +293,12 @@ func sameParamNames(a, b domain.ParamSnapshot) bool {
 	return true
 }
 
-func latestAcceptedRequest(tx *gorm.DB, setID, alias string, period time.Time) (*domain.ParamRequest, error) {
+func latestAcceptedRequest(tx *gorm.DB, taskID, alias string, period time.Time) (*domain.ParamRequest, error) {
 	var row paramRequestRow
 	result := tx.Raw(`SELECT `+paramRequestColumns+` FROM t_factor_param_requests r
 		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_set_id = ? AND r.c_member_alias = ? AND r.c_period_time = ? AND r.c_status = ?
-		ORDER BY r.c_seq DESC LIMIT 1`, setID, alias, period.Unix(), domain.ParamRequestAccepted).Scan(&row)
+		WHERE r.c_task_id = ? AND r.c_member_alias = ? AND r.c_period_time = ? AND r.c_status = ?
+		ORDER BY r.c_seq DESC LIMIT 1`, taskID, alias, period.Unix(), domain.ParamRequestAccepted).Scan(&row)
 	if result.Error != nil || result.RowsAffected == 0 {
 		return nil, result.Error
 	}
@@ -309,23 +309,23 @@ func latestAcceptedRequest(tx *gorm.DB, setID, alias string, period time.Time) (
 	return &request, nil
 }
 
-func appliedRequestID(tx *gorm.DB, setID, alias string, period time.Time) (string, error) {
+func appliedRequestID(tx *gorm.DB, taskID, alias string, period time.Time) (string, error) {
 	var ids []string
 	err := tx.Raw(`SELECT c_request_id FROM t_factor_param_requests
-		WHERE c_set_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ? LIMIT 1`,
-		setID, alias, period.Unix(), domain.ParamRequestApplied).Scan(&ids).Error
+		WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ? LIMIT 1`,
+		taskID, alias, period.Unix(), domain.ParamRequestApplied).Scan(&ids).Error
 	if err != nil || len(ids) == 0 {
 		return "", err
 	}
 	return ids[0], nil
 }
 
-func intervalCovering(tx *gorm.DB, setID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
+func intervalCovering(tx *gorm.DB, taskID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
 	var row paramIntervalRow
 	result := tx.Raw(`SELECT `+paramIntervalColumns+` FROM t_factor_param_freezes f
 		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_set_id = ? AND f.c_member_alias = ? AND f.c_start_period <= ? AND f.c_end_period >= ?
-		ORDER BY f.c_start_period DESC LIMIT 1`, setID, alias, period.Unix(), period.Unix()).Scan(&row)
+		WHERE f.c_task_id = ? AND f.c_member_alias = ? AND f.c_start_period <= ? AND f.c_end_period >= ?
+		ORDER BY f.c_start_period DESC LIMIT 1`, taskID, alias, period.Unix(), period.Unix()).Scan(&row)
 	if result.Error != nil || result.RowsAffected == 0 {
 		return domain.ParamInterval{}, false, result.Error
 	}
@@ -333,12 +333,12 @@ func intervalCovering(tx *gorm.DB, setID, alias string, period time.Time) (domai
 	return interval, err == nil, err
 }
 
-func lastIntervalBefore(tx *gorm.DB, setID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
+func lastIntervalBefore(tx *gorm.DB, taskID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
 	var row paramIntervalRow
 	result := tx.Raw(`SELECT `+paramIntervalColumns+` FROM t_factor_param_freezes f
 		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_set_id = ? AND f.c_member_alias = ? AND f.c_end_period < ?
-		ORDER BY f.c_end_period DESC LIMIT 1`, setID, alias, period.Unix()).Scan(&row)
+		WHERE f.c_task_id = ? AND f.c_member_alias = ? AND f.c_end_period < ?
+		ORDER BY f.c_end_period DESC LIMIT 1`, taskID, alias, period.Unix()).Scan(&row)
 	if result.Error != nil || result.RowsAffected == 0 {
 		return domain.ParamInterval{}, false, result.Error
 	}
@@ -347,14 +347,14 @@ func lastIntervalBefore(tx *gorm.DB, setID, alias string, period time.Time) (dom
 }
 
 // writeInterval 记录成员 period 这一期的冻结：上一个区间恰好结束在 previous、快照与来源都相同时延长它，否则新开一个区间。
-func writeInterval(tx *gorm.DB, setID, alias string, period, previous time.Time, snapshot domain.ParamSnapshot, source string) error {
+func writeInterval(tx *gorm.DB, taskID, alias string, period, previous time.Time, snapshot domain.ParamSnapshot, source string) error {
 	if err := putSnapshot(tx, snapshot); err != nil {
 		return err
 	}
 	hash := snapshot.Hash()
 	result := tx.Exec(`UPDATE t_factor_param_freezes SET c_end_period = ?, c_mtime = ?
-		WHERE c_set_id = ? AND c_member_alias = ? AND c_end_period = ? AND c_snapshot_hash = ? AND c_source = ?`,
-		period.Unix(), time.Now().UTC(), setID, alias, previous.Unix(), hash, source)
+		WHERE c_task_id = ? AND c_member_alias = ? AND c_end_period = ? AND c_snapshot_hash = ? AND c_source = ?`,
+		period.Unix(), time.Now().UTC(), taskID, alias, previous.Unix(), hash, source)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -362,8 +362,8 @@ func writeInterval(tx *gorm.DB, setID, alias string, period, previous time.Time,
 		return nil
 	}
 	return tx.Exec(`INSERT INTO t_factor_param_freezes
-		(c_set_id, c_member_alias, c_start_period, c_end_period, c_snapshot_hash, c_source, c_mtime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		setID, alias, period.Unix(), period.Unix(), hash, source, time.Now().UTC()).Error
+		(c_task_id, c_member_alias, c_start_period, c_end_period, c_snapshot_hash, c_source, c_mtime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		taskID, alias, period.Unix(), period.Unix(), hash, source, time.Now().UTC()).Error
 }
 
 // ApplyOfflineFreezes 合并引擎在 FactorMgr 不可达时本地冻结的期次。管理端已有记录的期次以管理端为准，快照不同的
@@ -376,30 +376,30 @@ func (s *Store) ApplyOfflineFreezes(ctx context.Context, freezes []domain.ParamF
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, freeze := range freezes {
 			period := freeze.PeriodTime.UTC()
-			covering, found, err := intervalCovering(tx, freeze.SetID, freeze.MemberAlias, period)
+			covering, found, err := intervalCovering(tx, freeze.TaskID, freeze.MemberAlias, period)
 			if err != nil {
 				return err
 			}
 			if found {
 				if covering.SnapshotHash != freeze.Snapshot.Hash() {
-					conflicts = append(conflicts, domain.ParamFreeze{SetID: freeze.SetID, MemberAlias: freeze.MemberAlias, PeriodTime: period,
+					conflicts = append(conflicts, domain.ParamFreeze{TaskID: freeze.TaskID, MemberAlias: freeze.MemberAlias, PeriodTime: period,
 						Snapshot: covering.Snapshot, SnapshotHash: covering.SnapshotHash, Source: covering.Source})
 				}
 				continue
 			}
-			if err := writeInterval(tx, freeze.SetID, freeze.MemberAlias, period, previous(period), freeze.Snapshot,
+			if err := writeInterval(tx, freeze.TaskID, freeze.MemberAlias, period, previous(period), freeze.Snapshot,
 				domain.ParamsCarriedOffline); err != nil {
 				return err
 			}
 			if err := tx.Exec(`UPDATE t_factor_param_requests SET c_status = ?
-				WHERE c_set_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
-				domain.ParamRequestNotApplied, freeze.SetID, freeze.MemberAlias, period.Unix(), domain.ParamRequestAccepted).Error; err != nil {
+				WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
+				domain.ParamRequestNotApplied, freeze.TaskID, freeze.MemberAlias, period.Unix(), domain.ParamRequestAccepted).Error; err != nil {
 				return err
 			}
 			if err := tx.Exec(`
-				INSERT INTO t_factor_param_frozen_periods (c_set_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
-				ON CONFLICT (c_set_id) DO UPDATE SET c_frozen_through = MAX(c_frozen_through, excluded.c_frozen_through), c_mtime = excluded.c_mtime
-			`, freeze.SetID, period.Unix(), time.Now().UTC()).Error; err != nil {
+				INSERT INTO t_factor_param_frozen_periods (c_task_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
+				ON CONFLICT (c_task_id) DO UPDATE SET c_frozen_through = MAX(c_frozen_through, excluded.c_frozen_through), c_mtime = excluded.c_mtime
+			`, freeze.TaskID, period.Unix(), time.Now().UTC()).Error; err != nil {
 				return err
 			}
 		}
@@ -408,18 +408,18 @@ func (s *Store) ApplyOfflineFreezes(ctx context.Context, freezes []domain.ParamF
 	return conflicts, err
 }
 
-// ListParamIntervals 返回集合（可限定成员）与 [from, to] 相交的冻结区间，外加每个成员结束在 from 之前的最近一个区间
+// ListParamIntervals 返回任务（可限定成员）与 [from, to] 相交的冻结区间，外加每个成员结束在 from 之前的最近一个区间
 // （from 没有冻结记录时按它沿用），按成员、起点排序。
-func (s *Store) ListParamIntervals(ctx context.Context, setID, alias string, from, to time.Time) ([]domain.ParamInterval, error) {
+func (s *Store) ListParamIntervals(ctx context.Context, taskID, alias string, from, to time.Time) ([]domain.ParamInterval, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
 	query := `SELECT ` + paramIntervalColumns + ` FROM t_factor_param_freezes f
 		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_set_id = ? AND ((f.c_end_period >= ? AND f.c_start_period <= ?) OR f.c_end_period = (
+		WHERE f.c_task_id = ? AND ((f.c_end_period >= ? AND f.c_start_period <= ?) OR f.c_end_period = (
 			SELECT MAX(g.c_end_period) FROM t_factor_param_freezes g
-			WHERE g.c_set_id = f.c_set_id AND g.c_member_alias = f.c_member_alias AND g.c_end_period < ?))`
-	args := []any{strings.TrimSpace(setID), from.Unix(), to.Unix(), from.Unix()}
+			WHERE g.c_task_id = f.c_task_id AND g.c_member_alias = f.c_member_alias AND g.c_end_period < ?))`
+	args := []any{strings.TrimSpace(taskID), from.Unix(), to.Unix(), from.Unix()}
 	if alias = strings.TrimSpace(alias); alias != "" {
 		query += " AND f.c_member_alias = ?"
 		args = append(args, alias)
@@ -440,8 +440,8 @@ func (s *Store) ListParamIntervals(ctx context.Context, setID, alias string, fro
 	return intervals, nil
 }
 
-// ListParamRequests 返回集合（可限定成员）在 [from, to] 期次内的请求，按期次、序号排序，最多 limit 条。
-func (s *Store) ListParamRequests(ctx context.Context, setID, alias string, from, to time.Time, limit int) ([]domain.ParamRequest, error) {
+// ListParamRequests 返回任务（可限定成员）在 [from, to] 期次内的请求，按期次、序号排序，最多 limit 条。
+func (s *Store) ListParamRequests(ctx context.Context, taskID, alias string, from, to time.Time, limit int) ([]domain.ParamRequest, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
@@ -450,8 +450,8 @@ func (s *Store) ListParamRequests(ctx context.Context, setID, alias string, from
 	}
 	query := `SELECT ` + paramRequestColumns + ` FROM t_factor_param_requests r
 		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_set_id = ? AND r.c_period_time >= ? AND r.c_period_time <= ?`
-	args := []any{strings.TrimSpace(setID), from.Unix(), to.Unix()}
+		WHERE r.c_task_id = ? AND r.c_period_time >= ? AND r.c_period_time <= ?`
+	args := []any{strings.TrimSpace(taskID), from.Unix(), to.Unix()}
 	if alias = strings.TrimSpace(alias); alias != "" {
 		query += " AND r.c_member_alias = ?"
 		args = append(args, alias)
@@ -473,7 +473,7 @@ func (s *Store) ListParamRequests(ctx context.Context, setID, alias string, from
 	return requests, nil
 }
 
-// CleanupParams 删除 requestsBefore 之前提交的请求、集合 setID 结束在 freezesBefore 之前的冻结区间，以及不再被引用的快照。
+// CleanupParams 删除 requestsBefore 之前提交的请求、任务 taskID 结束在 freezesBefore 之前的冻结区间，以及不再被引用的快照。
 // freezesBefore 为零值时不删冻结区间。
 func (s *Store) CleanupParams(ctx context.Context, requestsBefore time.Time, freezesBefore map[string]time.Time) (int64, error) {
 	if s == nil || s.db == nil {
@@ -486,15 +486,15 @@ func (s *Store) CleanupParams(ctx context.Context, requestsBefore time.Time, fre
 			return result.Error
 		}
 		removed += result.RowsAffected
-		for setID, before := range freezesBefore {
+		for taskID, before := range freezesBefore {
 			if before.IsZero() {
 				continue
 			}
 			// 每个成员的最后一个区间始终保留：长期停用或引擎停摆后恢复，沿用的基线不能丢。
-			result := tx.Exec(`DELETE FROM t_factor_param_freezes WHERE c_set_id = ? AND c_end_period < ?
+			result := tx.Exec(`DELETE FROM t_factor_param_freezes WHERE c_task_id = ? AND c_end_period < ?
 				AND c_end_period < (SELECT MAX(f2.c_end_period) FROM t_factor_param_freezes f2
-					WHERE f2.c_set_id = t_factor_param_freezes.c_set_id AND f2.c_member_alias = t_factor_param_freezes.c_member_alias)`,
-				setID, before.Unix())
+					WHERE f2.c_task_id = t_factor_param_freezes.c_task_id AND f2.c_member_alias = t_factor_param_freezes.c_member_alias)`,
+				taskID, before.Unix())
 			if result.Error != nil {
 				return result.Error
 			}
@@ -512,14 +512,14 @@ func (s *Store) CleanupParams(ctx context.Context, requestsBefore time.Time, fre
 	return removed, err
 }
 
-// DeleteSetParams 删除集合的全部参数记录（集合删除时）。
-func (s *Store) DeleteSetParams(ctx context.Context, setID string) error {
+// DeleteTaskParams 删除任务的全部参数记录（任务删除时）。
+func (s *Store) DeleteTaskParams(ctx context.Context, taskID string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, table := range []string{"t_factor_param_requests", "t_factor_param_freezes", "t_factor_param_frozen_periods"} {
-			if err := tx.Exec("DELETE FROM "+table+" WHERE c_set_id = ?", setID).Error; err != nil {
+			if err := tx.Exec("DELETE FROM "+table+" WHERE c_task_id = ?", taskID).Error; err != nil {
 				return err
 			}
 		}

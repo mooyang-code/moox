@@ -35,8 +35,8 @@ const info = (id: string, usages: FactorUsage[] = [], patch: Partial<FactorDef> 
 });
 
 const items: FactorInfo[] = [
-  info("Bias", [{ set_id: "set_a", status: "enabled" }]),
-  info("Momentum", [{ set_id: "set_b", status: "disabled" }], { factor_type: "cross_section" }),
+  info("Bias", [{ task_id: "task_a", status: "enabled" }]),
+  info("Momentum", [{ task_id: "task_b", status: "disabled" }], { factor_type: "cross_section" }),
   info("Idle")
 ];
 
@@ -63,30 +63,44 @@ describe("definitions model", () => {
   });
 
   it("usage chips carry dataset name · freq and status dot", () => {
-    const labels: Record<string, string> = { set_a: "现货K线 · 1m" };
+    const labels: Record<string, string> = { task_a: "现货K线 · 1m" };
     const chips = usageChips(
       [
-        { set_id: "set_a", status: "enabled" },
-        { set_id: "set_gone", status: "disabled" }
+        { task_id: "task_a", status: "enabled" },
+        { task_id: "task_gone", status: "disabled" }
       ],
-      setId => labels[setId] ?? setId
+      taskId => labels[taskId] ?? taskId
     );
     expect(chips).toEqual([
-      { key: "set_a/", setId: "set_a", label: "现货K线 · 1m", status: "enabled", statusLabel: "已启用", paramsText: undefined },
-      { key: "set_gone/", setId: "set_gone", label: "set_gone", status: "disabled", statusLabel: "已停用", paramsText: undefined }
+      {
+        key: "task_a/",
+        taskId: "task_a",
+        label: "现货K线 · 1m",
+        status: "enabled",
+        statusLabel: "已启用",
+        paramsText: undefined
+      },
+      {
+        key: "task_gone/",
+        taskId: "task_gone",
+        label: "task_gone",
+        status: "disabled",
+        statusLabel: "已停用",
+        paramsText: undefined
+      }
     ]);
   });
 
   it("usage chips show the fixed params of each member", () => {
     const chips = usageChips(
       [
-        { set_id: "set_a", member_alias: "Ema", status: "enabled", params: { span: 20, warmup: 0 } },
-        { set_id: "set_a", member_alias: "Ema_20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
+        { task_id: "task_a", member_alias: "Ema", status: "enabled", params: { span: 20, warmup: 0 } },
+        { task_id: "task_a", member_alias: "Ema_20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
       ],
-      () => "5m 因子集"
+      () => "5m 因子任务"
     );
     expect(chips.map(chip => chip.paramsText)).toEqual(["span=20, warmup=0", "span=20, warmup=50000"]);
-    expect(chips.map(chip => chip.key)).toEqual(["set_a/Ema", "set_a/Ema_20_50000"]);
+    expect(chips.map(chip => chip.key)).toEqual(["task_a/Ema", "task_a/Ema_20_50000"]);
   });
 
   it("edit locked when any enabled usage, with reason", () => {
@@ -180,7 +194,7 @@ describe("定义表格与批量移动", () => {
         updated_at: "t1",
         params: [{ name: "window", type: "int", min: 2, max: 120, default_value: 14 }]
       }),
-      usages: [{ set_id: "s1", status: "enabled" }]
+      usages: [{ task_id: "s1", status: "enabled" }]
     };
     const [row] = definitionRows([item], [{ category_id: "momentum", name: "动量类" }], id => `任务 ${id}`);
     expect(row).toMatchObject({ factor_id: "Rsi", updated_at: "t1", category: "动量类", paramNames: "window" });

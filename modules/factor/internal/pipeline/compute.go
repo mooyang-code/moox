@@ -17,7 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-// Compute 每个集合每期（补算每个参数段的每个分块）调用一次 factorexpr 程序（设计 8）：集合内可计算的成员编译成一个程序，
+// Compute 每个任务每期（补算每个参数段的每个分块）调用一次 factorexpr 程序（设计 8）：任务内可计算的成员编译成一个程序，
 // 按本次的冻结参数在 available 标的的网格面板上算出全部目标时刻，再按源行转换成逐行结果。成员级的判断（严格截面因子
 // 跳过、空洞标的失败）都在这里完成。
 func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Computation, error) {
@@ -56,7 +56,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		if compileErr != nil {
 			compileErrs[member.Alias] = fmt.Errorf("成员 %s（因子 %s）在引擎侧编译失败：%w", member.Alias, member.Factor.FactorID, compileErr)
 			if r.cfg.OnCompileError != nil {
-				r.cfg.OnCompileError(plan.Set.SetID, member.Factor.FactorID)
+				r.cfg.OnCompileError(plan.Set.TaskID, member.Factor.FactorID)
 			}
 		}
 		withDef := member
@@ -185,7 +185,7 @@ func (g computeGrid) at(t int) time.Time { return g.start.Add(time.Duration(t) *
 
 func (g computeGrid) index(at time.Time) int { return int(at.Sub(g.start) / g.duration) }
 
-// run 构建面板并执行程序。网格从“第一个目标周期的集合回看窗口起点”到最后一个目标周期（设计 7.1）。
+// run 构建面板并执行程序。网格从“第一个目标周期的任务回看窗口起点”到最后一个目标周期（设计 7.1）。
 // 每个成员的参数槽按序列取冻结快照里该标的的值（默认值加按标的覆盖）。
 func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef, subjects []string,
 	view *serieswindow.View) (*exec.Result, computeGrid, error) {
@@ -217,7 +217,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	}
 	inputs := make([]factorexpr.ProgramInput, 0, len(members))
 	for _, member := range members {
-		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Key(plan.Set.SetID), FactorID: member.Factor.FactorID,
+		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Key(plan.Set.TaskID), FactorID: member.Factor.FactorID,
 			Factor: member.Factor.Compiled()})
 	}
 	program, err := factorexpr.NewProgram(inputs)
@@ -255,7 +255,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 			for i, key := range keys {
 				vector[i] = snapshot.Value(name, key.Subject)
 			}
-			params[factorexpr.ParamSlot(member.Key(plan.Set.SetID), name)] = vector
+			params[factorexpr.ParamSlot(member.Key(plan.Set.TaskID), name)] = vector
 		}
 	}
 	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers,
@@ -389,7 +389,7 @@ func buildPanel(grid computeGrid, columns []string, subjects []string, view *ser
 
 // outputColumns 返回成员各输出在结果里的位置（按定义的输出顺序）。
 func outputColumns(plan Plan, result *exec.Result, member domain.MemberDef) []int {
-	key := member.Key(plan.Set.SetID)
+	key := member.Key(plan.Set.TaskID)
 	positions := make([]int, 0, len(member.Factor.Outputs))
 	for _, output := range member.Factor.Outputs {
 		for i, column := range result.Columns {

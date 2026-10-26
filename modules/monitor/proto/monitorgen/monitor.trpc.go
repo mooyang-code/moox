@@ -36,8 +36,11 @@ type MonitorMgrService interface {
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
 
 	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
+
 	MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error)
+
 	UnmuteAlerts(ctx context.Context, req *UnmuteAlertsReq) (*UnmuteAlertsRsp, error)
+
 	GetAlertMute(ctx context.Context, req *GetAlertMuteReq) (*GetAlertMuteRsp, error)
 }
 

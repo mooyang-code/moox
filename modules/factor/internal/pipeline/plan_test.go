@@ -10,8 +10,8 @@ import (
 )
 
 func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
-	set := domain.FactorSet{
-		SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled,
+	set := domain.FactorTask{
+		SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled,
 	}
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
@@ -37,7 +37,7 @@ func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
 
 func TestBuildLivePlanRejectsUnalignedPeriod(t *testing.T) {
 	_, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
-		Set:        domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled},
+		Set:        domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		PeriodTime: time.Date(2026, 10, 4, 0, 10, 30, 0, time.UTC),
 	})
 	require.ErrorContains(t, err, "not aligned")

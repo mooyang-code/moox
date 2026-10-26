@@ -23,7 +23,7 @@ describe("compute task host", () => {
     expect(source).not.toContain("<a-alert");
   });
 
-  it("normalizes ?tab=, keeps ?set= when switching tabs and drops detail/job", () => {
+  it("normalizes ?tab=, keeps ?task= when switching tabs and drops detail/job", () => {
     expect(normalized).toContain("route.query.tab");
     expect(normalized).toContain('value==="results"||value==="recalc"?value:"tasks"');
     expect(normalized).toContain("router.replace");

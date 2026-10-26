@@ -29,13 +29,13 @@ vi.mock("@/api/admin/activity", () => ({
 }));
 vi.mock("@/api/function-instance", () => ({ listFunctionInstances: vi.fn(async () => ({ items: [], total: 46 })) }));
 vi.mock("@/api/factor", () => ({
-  listFactorSets: vi.fn(async () => ({
-    factor_sets: [
+  listFactorTasks: vi.fn(async () => ({
+    factor_tasks: [
       {
-        factor_set: { set_id: "f1", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "f1", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
         members: [{ status: "enabled" }],
         last_run: {
-          set_id: "f1",
+          task_id: "f1",
           last_period_time: String(Math.floor(Date.now() / 1000) - 60),
           last_status: "ok",
           lag_seconds: "8"

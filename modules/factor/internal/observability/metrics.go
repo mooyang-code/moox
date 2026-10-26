@@ -7,7 +7,7 @@ type Metrics struct {
 	PeriodLag      *prometheus.GaugeVec
 	PeriodTotal    *prometheus.CounterVec
 	Failures       *prometheus.CounterVec
-	LaneBacklog    *prometheus.GaugeVec
+	RunnerBacklog  *prometheus.GaugeVec
 	CompileErrors  *prometheus.CounterVec
 	LastPeriodTime *prometheus.GaugeVec
 	// K 线空洞账本：待恢复条目数、累计跳过与累计放弃（交给人工）的条目数、账本是否写盘失败。
@@ -42,12 +42,12 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		Failures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_failures_total", Help: "Number of factor calculation failures.",
 		}, []string{"set", "factor", "reason"}),
-		LaneBacklog: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "factor_lane_backlog", Help: "Number of queued periods for each factor set lane.",
+		RunnerBacklog: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "factor_runner_backlog", Help: "Number of queued periods for each factor task runner.",
 		}, []string{"set"}),
 		CompileErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_compile_errors_total", Help: "引擎侧编译因子定义失败的次数（mgr 与引擎的 expr 版本不一致时出现）。",
-		}, []string{"set_id", "factor_id"}),
+		}, []string{"task_id", "factor_id"}),
 		LastPeriodTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_last_period_time", Help: "Unix timestamp of the most recently computed period.",
 		}, []string{"set"}),
@@ -68,22 +68,22 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		}),
 		ParamFreezes: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_param_freezes_total", Help: "每个成员每期冻结参数的次数，按来源（requested、carried、carried_offline、default）。",
-		}, []string{"set_id", "source"}),
+		}, []string{"task_id", "source"}),
 		ParamCarriedPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_param_carried_periods", Help: "成员连续沿用（没有新提交）参数的期数；提交生效后归零。",
-		}, []string{"set_id", "member"}),
+		}, []string{"task_id", "member"}),
 		ParamOfflineFreezes: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_param_offline_freezes_total", Help: "FactorMgr 不可达时引擎在本地冻结参数的成员期数。",
-		}, []string{"set_id"}),
+		}, []string{"task_id"}),
 		ParamOfflineConflicts: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_param_offline_conflicts_total", Help: "补报离线冻结时管理端已有不同记录的成员期数（以管理端为准，需要手工重算）。",
-		}, []string{"set_id"}),
+		}, []string{"task_id"}),
 	}
 	if err := registerer.Register(metrics.PeriodDuration); err != nil {
 		return nil, err
 	}
 	collectors := []prometheus.Collector{
-		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
+		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.RunnerBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
 		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded, metrics.SeriesChangeGaps,
 		metrics.ParamFreezes, metrics.ParamCarriedPeriods, metrics.ParamOfflineFreezes, metrics.ParamOfflineConflicts,
 	}

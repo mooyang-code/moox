@@ -26,14 +26,14 @@ const (
 )
 
 // accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被空洞保护跳过。
-// 数据重置、新建因子集之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
+// 数据重置、新建因子任务之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
 // 不告警，也不计模块失败）；超过上限仍然不足，说明不是在积累（例如 min_age_bars 超过 View 保留根数），回到失败处理。
 var accumulatingReasons = map[string]bool{
 	input.SkipHistoryInsufficient: true,
 	readiness.ReasonFactorSkipped: true,
 }
 
-// minAccumulationLimit 是积累期上限的下限：上游因子的回看窗口可达两三天（1h 因子集），min_age_bars 对应的时长更短时也要给足。
+// minAccumulationLimit 是积累期上限的下限：上游因子的回看窗口可达两三天（1h 因子任务），min_age_bars 对应的时长更短时也要给足。
 const minAccumulationLimit = 72 * time.Hour
 
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。

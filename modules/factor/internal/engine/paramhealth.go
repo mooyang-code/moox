@@ -15,12 +15,12 @@ func (r *Runtime) paramHealth() ([]domain.MemberParamHealth, int) {
 	var out []domain.MemberParamHealth
 	for _, set := range r.catalog.Sets() {
 		for _, member := range set.Members {
-			carried := r.runner.carriedPeriods(set.Set.SetID, member.Alias)
-			offlineAt := r.lastOffline(set.Set.SetID, member.Alias)
+			carried := r.runner.carriedPeriods(set.Set.TaskID, member.Alias)
+			offlineAt := r.lastOffline(set.Set.TaskID, member.Alias)
 			if carried == 0 && offlineAt.IsZero() {
 				continue
 			}
-			out = append(out, domain.MemberParamHealth{SetID: set.Set.SetID, Member: member.Alias, CarriedPeriods: carried,
+			out = append(out, domain.MemberParamHealth{TaskID: set.Set.TaskID, Member: member.Alias, CarriedPeriods: carried,
 				AlertAfter: member.CarryAlertAfter(), LastOfflineAt: offlineAt})
 		}
 	}
@@ -31,9 +31,9 @@ func (r *Runtime) paramHealth() ([]domain.MemberParamHealth, int) {
 	return out, pending
 }
 
-func (r *Runtime) lastOffline(setID, member string) (at time.Time) {
+func (r *Runtime) lastOffline(taskID, member string) (at time.Time) {
 	if r.params == nil {
 		return at
 	}
-	return r.params.LastOffline(setID, member)
+	return r.params.LastOffline(taskID, member)
 }

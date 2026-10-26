@@ -13,15 +13,15 @@ import (
 // Service 把解析与装配封装成管理接口可用的形式。
 type Service struct {
 	Client Client
-	// Sets 是 FactorMgr 的私有因子集接口；nil 时不能启用声明了 factors 的策略。
-	Sets FactorSets
-	// ReadyWait 与 ReadyStep 是私有因子集的结果 View 补齐成员列的最长等待与探测间隔（列由 Storage 异步扩展进 View）；
+	// Sets 是 FactorMgr 的私有因子任务接口；nil 时不能启用声明了 factors 的策略。
+	Sets FactorTasks
+	// ReadyWait 与 ReadyStep 是私有因子任务的结果 View 补齐成员列的最长等待与探测间隔（列由 Storage 异步扩展进 View）；
 	// 零值表示不等待。
 	ReadyWait time.Duration
 	ReadyStep time.Duration
 }
 
-// ResolveInstance 启用实例时的解析：没有声明 factors 的策略直接解析 viewID；声明了 factors 的先为实例建立私有因子集
+// ResolveInstance 启用实例时的解析：没有声明 factors 的策略直接解析 viewID；声明了 factors 的先为实例建立私有因子任务
 // （成员恰好是声明的因子，实例是唯一的参数写入方），等它的结果 View 补齐列后绑定该 View。
 func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID, viewID string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if len(strategy.Factors) == 0 {
@@ -51,7 +51,7 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID, viewI
 	if err := CheckFactorParams(strategy, definitions); err != nil {
 		return Resolved{}, nil, err
 	}
-	set, err := s.Sets.EnsureInstanceFactorSet(ctx, InstanceFactorSetRequest{
+	set, err := s.Sets.EnsureInstanceFactorTask(ctx, InstanceFactorTaskRequest{
 		InstanceID: instanceID, SpaceID: spaceID, SourceDatasetID: source.DatasetID, Freq: strings.ToLower(source.Frequency), Members: strategy.Factors,
 	})
 	if err != nil {
@@ -61,7 +61,7 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID, viewI
 	for {
 		resolved, program, err := Resolve(ctx, s.Client, spaceID, set.ViewID, strategy)
 		if err == nil {
-			resolved.SourceViewID, resolved.FactorSetID = viewID, set.SetID
+			resolved.SourceViewID, resolved.FactorTaskID = viewID, set.TaskID
 			resolved.FactorParams = make(map[string][]ParamDecl, len(strategy.Factors))
 			for _, decl := range strategy.Factors {
 				resolved.FactorParams[decl.Alias] = definitions[decl.FactorID].Params
@@ -79,7 +79,7 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID, viewI
 	}
 }
 
-// waitingForColumns 报告解析失败是否只是私有因子集的结果 View 还没补齐成员列（或 View 尚未建出），稍后会好。
+// waitingForColumns 报告解析失败是否只是私有因子任务的结果 View 还没补齐成员列（或 View 尚未建出），稍后会好。
 func waitingForColumns(err error) bool {
 	if err == nil {
 		return false

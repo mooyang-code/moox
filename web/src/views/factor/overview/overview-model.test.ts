@@ -1,23 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { EngineStatus, FactorMember, FactorSet, FactorSetInfo, RecalcJob } from "@/api/factor/types";
-import { cardLinks, pendingItems, recalcQuerySets, splitRecalcJobs, statsStrip, taskCards } from "./overview-model";
+import type { EngineStatus, FactorMember, FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
+import { cardLinks, pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards } from "./overview-model";
 
 const NOW = Date.parse("2026-10-05T12:00:00Z");
 
-const set = (patch: Partial<FactorSet> = {}): FactorSet => ({
-  set_id: "set_a",
+const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
+  task_id: "task_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
   freq: "1m",
-  result_dataset_id: "dataset_factor_set_a",
+  result_dataset_id: "dataset_factor_task_a",
   status: "enabled",
   ...patch
 });
 
 const member = (factorId: string, status: FactorMember["status"] = "enabled"): FactorMember => ({
-  set_id: "set_a",
+  task_id: "task_a",
   factor_id: factorId,
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
@@ -25,14 +25,14 @@ const member = (factorId: string, status: FactorMember["status"] = "enabled"): F
   updated_at: ""
 });
 
-const info = (patch: Partial<FactorSet> = {}, extra: Partial<FactorSetInfo> = {}): FactorSetInfo => ({
-  factor_set: set(patch),
+const info = (patch: Partial<FactorTask> = {}, extra: Partial<FactorTaskInfo> = {}): FactorTaskInfo => ({
+  factor_task: set(patch),
   members: [],
   ...extra
 });
 
-const run = (patch: Partial<NonNullable<FactorSetInfo["last_run"]>> = {}): NonNullable<FactorSetInfo["last_run"]> => ({
-  set_id: "set_a",
+const run = (patch: Partial<NonNullable<FactorTaskInfo["last_run"]>> = {}): NonNullable<FactorTaskInfo["last_run"]> => ({
+  task_id: "task_a",
   last_period_time: 1_700_000_000,
   last_status: "complete",
   lag_seconds: 10,
@@ -42,7 +42,7 @@ const run = (patch: Partial<NonNullable<FactorSetInfo["last_run"]>> = {}): NonNu
 const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
   request_id: "factor-recalc-1",
-  set_id: "set_a",
+  task_id: "task_a",
   factor_ids: ["Bias"],
   subjects: [],
   start_time: "2026-10-01T00:00:00Z",
@@ -66,7 +66,7 @@ const onlineEngine = {
   catalog_in_sync: true
 };
 
-const label = (item: FactorSet) => `现货K线 · ${item.freq}`;
+const label = (item: FactorTask) => `现货K线 · ${item.freq}`;
 
 describe("overview model", () => {
   it("stats strip from engine status", () => {
@@ -76,9 +76,9 @@ describe("overview model", () => {
       compute_workers: 4,
       engine_expr_version: "expr/1",
       manager_expr_version: "expr/1",
-      lanes: [
-        { set_id: "a", queued: 3, active: true },
-        { set_id: "b", queued: 2, active: false }
+      runners: [
+        { task_id: "a", queued: 3, active: true },
+        { task_id: "b", queued: 2, active: false }
       ]
     } as EngineStatus;
     const stats = statsStrip(engine, 2);
@@ -110,10 +110,10 @@ describe("overview model", () => {
       engine: onlineEngine,
       consumer_running: true,
       compute_workers: 4,
-      lanes: [
-        { set_id: "a", queued: 0, active: false, warmup_state: "warming", warm_subjects: 120, expected_subjects: 500 },
-        { set_id: "b", queued: 0, active: false, warmup_state: "ready", warm_subjects: 500, expected_subjects: 500 },
-        { set_id: "c", queued: 0, active: false, warmup_state: "warming" }
+      runners: [
+        { task_id: "a", queued: 0, active: false, warmup_state: "warming", warm_subjects: 120, expected_subjects: 500 },
+        { task_id: "b", queued: 0, active: false, warmup_state: "ready", warm_subjects: 500, expected_subjects: 500 },
+        { task_id: "c", queued: 0, active: false, warmup_state: "warming" }
       ]
     } as EngineStatus;
     const warmup = statsStrip(engine, 0).find(item => item.key === "warmup");
@@ -122,7 +122,7 @@ describe("overview model", () => {
   });
 
   it("engine card follows the heartbeat", () => {
-    const base = { consumer_running: true, compute_workers: 8, lanes: [] } as unknown as EngineStatus;
+    const base = { consumer_running: true, compute_workers: 8, runners: [] } as unknown as EngineStatus;
     const engine = {
       engine_id: "factor-engine@mac",
       boot_id: "b",
@@ -167,24 +167,24 @@ describe("overview model", () => {
   });
 
   it("pending items derivation", () => {
-    const failed = info({ set_id: "f" }, { last_run: run({ set_id: "f", last_status: "failed" }) });
-    const degraded = info({ set_id: "d" }, { last_run: run({ set_id: "d", last_status: "degraded", failed_subjects: ["x"] }) });
-    const lagging = info({ set_id: "l" }, { last_run: run({ set_id: "l", lag_seconds: 500 }) });
-    const creating = info({ set_id: "p", status: "pending" });
-    const healthy = info({ set_id: "ok" }, { last_run: run({ set_id: "ok" }) });
+    const failed = info({ task_id: "f" }, { last_run: run({ task_id: "f", last_status: "failed" }) });
+    const degraded = info({ task_id: "d" }, { last_run: run({ task_id: "d", last_status: "degraded", failed_subjects: ["x"] }) });
+    const lagging = info({ task_id: "l" }, { last_run: run({ task_id: "l", lag_seconds: 500 }) });
+    const creating = info({ task_id: "p", status: "pending" });
+    const healthy = info({ task_id: "ok" }, { last_run: run({ task_id: "ok" }) });
     const items = pendingItems(
       [failed, degraded, lagging, creating, healthy],
-      [job({ job_id: "bad", set_id: "ok", status: "failed", error: "boom" })],
+      [job({ job_id: "bad", task_id: "ok", status: "failed", error: "boom" })],
       label,
       NOW
     );
     expect(items.map(item => item.kind)).toEqual(["failed", "degraded", "lagging", "pending", "recalc-failed"]);
     expect(items[0].target).toEqual({ path: "/factor/tasks", query: { detail: "f" } });
-    expect(items[1].target).toEqual({ path: "/factor/tasks", query: { tab: "results", set: "d" } });
+    expect(items[1].target).toEqual({ path: "/factor/tasks", query: { tab: "results", task: "d" } });
     expect(items[1].text).toContain("1");
-    expect(items[2].target.query).toEqual({ tab: "results", set: "l" });
+    expect(items[2].target.query).toEqual({ tab: "results", task: "l" });
     expect(items[3].target).toEqual({ path: "/factor/tasks", query: { detail: "p" } });
-    expect(items[4].target).toEqual({ path: "/factor/tasks", query: { tab: "recalc", set: "ok", job: "bad" } });
+    expect(items[4].target).toEqual({ path: "/factor/tasks", query: { tab: "recalc", task: "ok", job: "bad" } });
   });
 
   it("ignores recalc failures older than a day and cancelled jobs", () => {
@@ -195,12 +195,12 @@ describe("overview model", () => {
 
   it("running recalc only queries enabled sets", () => {
     const sets = [
-      info({ set_id: "a" }),
-      info({ set_id: "b", status: "disabled" }),
-      info({ set_id: "c", status: "pending" }),
-      info({ set_id: "d" })
+      info({ task_id: "a" }),
+      info({ task_id: "b", status: "disabled" }),
+      info({ task_id: "c", status: "pending" }),
+      info({ task_id: "d" })
     ];
-    expect(recalcQuerySets(sets)).toEqual(["a", "d"]);
+    expect(recalcQueryTasks(sets)).toEqual(["a", "d"]);
   });
 
   it("splits fetched recalc jobs into running and failed", () => {
@@ -215,12 +215,12 @@ describe("overview model", () => {
     expect(split.failed.map(item => item.job_id)).toEqual(["f"]);
   });
 
-  it("links target the right tab and carry ?set= / ?detail=", () => {
-    expect(cardLinks("set_a")).toEqual({
-      detail: { path: "/factor/tasks", query: { detail: "set_a" } },
-      results: { path: "/factor/tasks", query: { tab: "results", set: "set_a" } },
-      recalc: { path: "/factor/tasks", query: { tab: "recalc", set: "set_a" } },
-      factors: { path: "/factor/tasks", query: { detail: "set_a" } }
+  it("links target the right tab and carry ?task= / ?detail=", () => {
+    expect(cardLinks("task_a")).toEqual({
+      detail: { path: "/factor/tasks", query: { detail: "task_a" } },
+      results: { path: "/factor/tasks", query: { tab: "results", task: "task_a" } },
+      recalc: { path: "/factor/tasks", query: { tab: "recalc", task: "task_a" } },
+      factors: { path: "/factor/tasks", query: { detail: "task_a" } }
     });
   });
 });
@@ -230,12 +230,12 @@ describe("overview page contract", () => {
 
   it("overview has no write action", () => {
     for (const name of [
-      "createFactorSet",
-      "deleteFactorSet",
-      "setFactorSetStatus",
+      "createFactorTask",
+      "deleteFactorTask",
+      "setFactorTaskStatus",
       "setFactorMemberStatus",
-      "addFactorToSet",
-      "removeFactorFromSet",
+      "addFactorToTask",
+      "removeFactorFromTask",
       "recalcFactors",
       "cancelRecalcJob",
       "createFactor",
@@ -247,7 +247,7 @@ describe("overview page contract", () => {
 
   it("fans out recalc queries per enabled set and polls through usePolling", () => {
     expect(page).toContain("listRecalcJobs");
-    expect(page).toContain("recalcQuerySets");
+    expect(page).toContain("recalcQueryTasks");
     expect(page).toContain("usePolling");
   });
 });

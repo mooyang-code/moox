@@ -20,13 +20,13 @@ Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看
 来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-factor-mgr-cli recalc --set fset_dasftksvjhj2jom4vhd0_1m \
+moox-factor-mgr-cli recalc --task ftask_dasftksvjhj2jom4vhd0_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
 Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
-FactorMgr 接口。因子定义与因子集解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--set` 才会
-把它作为 disabled 成员加入因子集；启用成员走 FactorMgr `SetFactorMemberStatus`，不是
+FactorMgr 接口。因子定义与因子任务解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--task` 才会
+把它作为 disabled 成员加入因子任务；启用成员走 FactorMgr `SetTaskMemberStatus`，不是
 CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
 `[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
 不删除；旧的 `[[factors.items]]` 已移除。

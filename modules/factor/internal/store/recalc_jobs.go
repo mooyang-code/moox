@@ -24,7 +24,7 @@ const (
 type RecalcJob struct {
 	JobID           string    `json:"job_id"`
 	RequestID       string    `json:"request_id"`
-	SetID           string    `json:"set_id"`
+	TaskID          string    `json:"task_id"`
 	Members         []string  `json:"members"`
 	Subjects        []string  `json:"subjects"`
 	MembersOmitted  bool      `json:"-"`
@@ -43,14 +43,14 @@ type RecalcJob struct {
 
 // recalcJobColumns is the column list every recalc job read selects, in the
 // order of recalcJobRow.
-const recalcJobColumns = `c_job_id, c_request_id, c_set_id, c_members_json, c_subjects_json,
+const recalcJobColumns = `c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
 	 c_members_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
 	 c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
 	RequestID       string    `gorm:"column:c_request_id"`
-	SetID           string    `gorm:"column:c_set_id"`
+	TaskID          string    `gorm:"column:c_task_id"`
 	MembersJSON     string    `gorm:"column:c_members_json"`
 	SubjectsJSON    string    `gorm:"column:c_subjects_json"`
 	MembersOmitted  bool      `gorm:"column:c_members_omitted"`
@@ -77,7 +77,7 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 		return RecalcJob{}, fmt.Errorf("decode recalc subjects: %w", err)
 	}
 	return RecalcJob{
-		JobID: r.JobID, RequestID: r.RequestID, SetID: r.SetID,
+		JobID: r.JobID, RequestID: r.RequestID, TaskID: r.TaskID,
 		Members: members, Subjects: subjects,
 		MembersOmitted: r.MembersOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
@@ -114,8 +114,8 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 
 func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
 	job.RequestID = strings.TrimSpace(job.RequestID)
-	job.SetID = strings.TrimSpace(job.SetID)
-	if job.RequestID == "" || job.SetID == "" || job.EndTime <= job.StartTime {
+	job.TaskID = strings.TrimSpace(job.TaskID)
+	if job.RequestID == "" || job.TaskID == "" || job.EndTime <= job.StartTime {
 		return RecalcJob{}, "", "", fmt.Errorf("recalc job identity or time range is invalid")
 	}
 	if job.JobID == "" {
@@ -145,12 +145,12 @@ func insertRecalcJob(tx *gorm.DB, job RecalcJob, membersJSON, subjectsJSON strin
 	now := time.Now().UTC()
 	result := tx.Exec(`
 		INSERT INTO t_factor_recalc_jobs
-		(c_job_id, c_request_id, c_set_id, c_members_json, c_subjects_json,
+		(c_job_id, c_request_id, c_task_id, c_members_json, c_subjects_json,
 		 c_members_omitted, c_subjects_omitted,
 		 c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_request_id) DO NOTHING
-	`, job.JobID, job.RequestID, job.SetID, membersJSON, subjectsJSON,
+	`, job.JobID, job.RequestID, job.TaskID, membersJSON, subjectsJSON,
 		job.MembersOmitted, job.SubjectsOmitted,
 		job.StartTime, job.EndTime, job.Status, job.ProgressTime, job.Error, now, now)
 	if result.Error != nil {
@@ -172,7 +172,7 @@ func insertRecalcJob(tx *gorm.DB, job RecalcJob, membersJSON, subjectsJSON strin
 }
 
 func sameRecalcRequest(left, right RecalcJob) bool {
-	if left.RequestID != right.RequestID || left.SetID != right.SetID ||
+	if left.RequestID != right.RequestID || left.TaskID != right.TaskID ||
 		left.StartTime != right.StartTime || left.EndTime != right.EndTime ||
 		left.MembersOmitted != right.MembersOmitted || left.SubjectsOmitted != right.SubjectsOmitted {
 		return false
@@ -305,11 +305,11 @@ func (s *Store) FindRecalcJobByRequestID(ctx context.Context, requestID string) 
 
 // RecalcJobFilter narrows ListRecalcJobs; zero fields match everything.
 type RecalcJobFilter struct {
-	SetID    string
+	TaskID   string
 	Statuses []string
 }
 
-// ListRecalcJobs returns jobs newest first, optionally restricted to one factor set and statuses.
+// ListRecalcJobs returns jobs newest first, optionally restricted to one factor task and statuses.
 func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
@@ -318,9 +318,9 @@ func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]R
 	 FROM t_factor_recalc_jobs`
 	var conditions []string
 	var args []any
-	if setID := strings.TrimSpace(filter.SetID); setID != "" {
-		conditions = append(conditions, "c_set_id = ?")
-		args = append(args, setID)
+	if taskID := strings.TrimSpace(filter.TaskID); taskID != "" {
+		conditions = append(conditions, "c_task_id = ?")
+		args = append(args, taskID)
 	}
 	var statuses []string
 	for _, status := range filter.Statuses {

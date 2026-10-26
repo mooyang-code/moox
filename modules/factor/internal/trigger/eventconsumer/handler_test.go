@@ -18,34 +18,34 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type handlerSetLocator struct {
-	set     domain.FactorSet
+type handlerTaskLocator struct {
+	set     domain.FactorTask
 	factors []domain.FactorDef
 	found   bool
 	err     error
-	// extra 是同一源数据集上的其他启用集合（各策略实例的私有集合）。
-	extra []domain.EngineSet
+	// extra 是同一源数据集上的其他启用任务（各策略实例的私有任务）。
+	extra []domain.EngineTask
 }
 
-func (s *handlerSetLocator) all() []domain.EngineSet {
-	var out []domain.EngineSet
+func (s *handlerTaskLocator) all() []domain.EngineTask {
+	var out []domain.EngineTask
 	if s.found {
-		out = append(out, domain.EngineSet{Set: s.set, Members: domain.AsMembers(s.factors...), ResultReady: true})
+		out = append(out, domain.EngineTask{Set: s.set, Members: domain.AsMembers(s.factors...), ResultReady: true})
 	}
 	return append(out, s.extra...)
 }
 
-func (s *handlerSetLocator) EnabledSetsByDataset(context.Context, string, string, string) ([]domain.EngineSet, error) {
+func (s *handlerTaskLocator) EnabledSetsByDataset(context.Context, string, string, string) ([]domain.EngineTask, error) {
 	return s.all(), s.err
 }
 
-func (s *handlerSetLocator) EnabledSet(_ context.Context, setID string) (domain.EngineSet, bool, error) {
+func (s *handlerTaskLocator) EnabledTask(_ context.Context, taskID string) (domain.EngineTask, bool, error) {
 	for _, set := range s.all() {
-		if set.Set.SetID == setID {
+		if set.Set.TaskID == taskID {
 			return set, true, s.err
 		}
 	}
-	return domain.EngineSet{}, false, s.err
+	return domain.EngineTask{}, false, s.err
 }
 
 type handlerParamFreezer struct {
@@ -54,21 +54,21 @@ type handlerParamFreezer struct {
 	err     error
 }
 
-func (f *handlerParamFreezer) Freeze(_ context.Context, set domain.FactorSet, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error) {
-	f.periods, f.sets = append(f.periods, period), append(f.sets, set.SetID)
+func (f *handlerParamFreezer) Freeze(_ context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error) {
+	f.periods, f.sets = append(f.periods, period), append(f.sets, set.TaskID)
 	if f.err != nil {
 		return nil, f.err
 	}
 	out := make(map[string]domain.ParamFreeze, len(members))
 	for _, member := range members {
 		snapshot := domain.ParamSnapshot{"window": {Default: 30}}
-		out[member.Alias] = domain.ParamFreeze{SetID: set.SetID, MemberAlias: member.Alias, PeriodTime: period,
+		out[member.Alias] = domain.ParamFreeze{TaskID: set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
 			Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
 	}
 	return out, nil
 }
 
-func (s *handlerSetLocator) FilterSubjects(context.Context) ([]string, error) { return nil, nil }
+func (s *handlerTaskLocator) FilterSubjects(context.Context) ([]string, error) { return nil, nil }
 
 type handlerPeriodStore struct {
 	exists bool
@@ -100,21 +100,21 @@ func (r *handlerRunner) Run(_ context.Context, plan pipeline.Plan) (pipeline.Out
 	return r.out, r.err
 }
 
-type testSetLocks struct {
+type testTaskLocks struct {
 	locked map[string]int
 }
 
-func (l *testSetLocks) LockContext(_ context.Context, setID string) (func(), error) {
+func (l *testTaskLocks) LockContext(_ context.Context, taskID string) (func(), error) {
 	if l.locked == nil {
 		l.locked = make(map[string]int)
 	}
-	l.locked[setID]++
-	return func() { l.locked[setID]-- }, nil
+	l.locked[taskID]++
+	return func() { l.locked[taskID]-- }, nil
 }
 
-func TestHandlerAcksWhenNoEnabledSet(t *testing.T) {
+func TestHandlerAcksWhenNoEnabledTask(t *testing.T) {
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerSetLocator{}, &handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(&handlerTaskLocator{}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-1"))
@@ -124,10 +124,10 @@ func TestHandlerAcksWhenNoEnabledSet(t *testing.T) {
 }
 
 func TestHandlerGateClosedAcksWithoutComputing(t *testing.T) {
-	set := enabledTestSet()
+	set := enabledTestTask()
 	periodStore := &handlerPeriodStore{}
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerSetLocator{set: set, found: true}, periodStore, runner, new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, periodStore, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 	open := false
 	handler.SetGate(func(string) bool { return open })
@@ -143,10 +143,10 @@ func TestHandlerGateClosedAcksWithoutComputing(t *testing.T) {
 }
 
 func TestHandlerAcksWhenComputedAlreadyExists(t *testing.T) {
-	set := enabledTestSet()
+	set := enabledTestTask()
 	periodStore := &handlerPeriodStore{exists: true}
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerSetLocator{set: set, found: true}, periodStore, runner, new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, periodStore, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-2"))
@@ -157,9 +157,9 @@ func TestHandlerAcksWhenComputedAlreadyExists(t *testing.T) {
 }
 
 func TestHandlerNaksOnErrInfra(t *testing.T) {
-	set := enabledTestSet()
+	set := enabledTestTask()
 	runner := &handlerRunner{err: errors.Join(errors.New("wrapped"), storageio.ErrInfra)}
-	handler := NewHandler(&handlerSetLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{NakDelay: 3 * time.Second})
+	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: 3 * time.Second})
 	t.Cleanup(handler.Close)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-3"))
@@ -170,9 +170,9 @@ func TestHandlerNaksOnErrInfra(t *testing.T) {
 }
 
 func TestHandlerAcksDegradedOutcome(t *testing.T) {
-	set := enabledTestSet()
+	set := enabledTestTask()
 	runner := &handlerRunner{out: pipeline.Outcome{Status: "degraded", FailedSubjects: []string{"ETH"}}}
-	handler := NewHandler(&handlerSetLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(&handlerTaskLocator{set: set, found: true}, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-4"))
@@ -189,16 +189,16 @@ func TestHandlerAcksDegradedOutcome(t *testing.T) {
 	require.True(t, plan.WriteCarry)
 }
 
-// 同一源数据集上的多个集合（各策略实例的私有集合）各算一份；每个集合开算前冻结自己这一期的参数并带进计划。
-func TestHandlerFansOutToEverySetAndFreezesParams(t *testing.T) {
-	first := enabledTestSet()
-	second := enabledTestSet()
-	second.SetID, second.ResultDatasetID = "fset_i_strategy", "dataset_factor_i_strategy"
+// 同一源数据集上的多个任务（各策略实例的私有任务）各算一份；每个任务开算前冻结自己这一期的参数并带进计划。
+func TestHandlerFansOutToEveryTaskAndFreezesParams(t *testing.T) {
+	first := enabledTestTask()
+	second := enabledTestTask()
+	second.TaskID, second.ResultDatasetID = "ftask_i_strategy", "dataset_factor_i_strategy"
 	factor := domain.FactorDef{FactorID: "f", InputColumns: []string{"close"}}
-	locator := &handlerSetLocator{set: first, factors: []domain.FactorDef{factor}, found: true,
-		extra: []domain.EngineSet{{Set: second, Members: []domain.MemberDef{{Alias: "fast", Factor: factor}}, ResultReady: true}}}
+	locator := &handlerTaskLocator{set: first, factors: []domain.FactorDef{factor}, found: true,
+		extra: []domain.EngineTask{{Set: second, Members: []domain.MemberDef{{Alias: "fast", Factor: factor}}, ResultReady: true}}}
 	runner := new(handlerRunner)
-	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 	freezer := new(handlerParamFreezer)
 	handler.SetParamFreezer(freezer)
@@ -208,21 +208,21 @@ func TestHandlerFansOutToEverySetAndFreezesParams(t *testing.T) {
 	require.Len(t, runner.plans, 2)
 	planned := map[string]pipeline.Plan{}
 	for _, plan := range runner.plans {
-		planned[plan.Set.SetID] = plan
+		planned[plan.Set.TaskID] = plan
 	}
-	require.Contains(t, planned, first.SetID)
-	require.Contains(t, planned, second.SetID)
-	require.Equal(t, domain.ParamsRequested, planned[second.SetID].Params["fast"].Source)
-	require.Equal(t, 30.0, planned[first.SetID].Params["f"].Snapshot.Value("window", "BTC"))
-	require.ElementsMatch(t, []string{first.SetID, second.SetID}, freezer.sets)
+	require.Contains(t, planned, first.TaskID)
+	require.Contains(t, planned, second.TaskID)
+	require.Equal(t, domain.ParamsRequested, planned[second.TaskID].Params["fast"].Source)
+	require.Equal(t, 30.0, planned[first.TaskID].Params["f"].Snapshot.Value("window", "BTC"))
+	require.ElementsMatch(t, []string{first.TaskID, second.TaskID}, freezer.sets)
 	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), freezer.periods[0])
 }
 
 // 冻结失败是基础设施错误：事件重投，不按默认参数硬算。
 func TestHandlerRetriesWhenFreezeFails(t *testing.T) {
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerSetLocator{set: enabledTestSet(), factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
-		&handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{NakDelay: time.Second})
+	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
+		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
 	t.Cleanup(handler.Close)
 	handler.SetParamFreezer(&handlerParamFreezer{err: errors.New("mgr down")})
 
@@ -232,23 +232,23 @@ func TestHandlerRetriesWhenFreezeFails(t *testing.T) {
 	require.Empty(t, runner.plans)
 }
 
-// 结果数据集还没就绪的集合不计算，事件重投；其他集合照常计算。
-func TestHandlerRetriesWhenAnySetResultIsNotReady(t *testing.T) {
-	pending := enabledTestSet()
-	pending.SetID = "fset_pending"
+// 结果数据集还没就绪的任务不计算，事件重投；其他任务照常计算。
+func TestHandlerRetriesWhenAnyTaskResultIsNotReady(t *testing.T) {
+	pending := enabledTestTask()
+	pending.TaskID = "ftask_pending"
 	runner := new(handlerRunner)
-	handler := NewHandler(&handlerSetLocator{set: enabledTestSet(), found: true, extra: []domain.EngineSet{{Set: pending}}},
-		&handlerPeriodStore{}, runner, new(testSetLocks), HandlerConfig{NakDelay: time.Second})
+	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), found: true, extra: []domain.EngineTask{{Set: pending}}},
+		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
 	t.Cleanup(handler.Close)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-pending"))
 	require.Equal(t, jetstream.RETRY, result.Decision)
 	require.Len(t, runner.plans, 1)
-	require.Equal(t, enabledTestSet().SetID, runner.plans[0].Set.SetID)
+	require.Equal(t, enabledTestTask().TaskID, runner.plans[0].Set.TaskID)
 }
 
 func TestHandlerTerminatesMalformedEvent(t *testing.T) {
-	handler := NewHandler(&handlerSetLocator{}, &handlerPeriodStore{}, new(handlerRunner), new(testSetLocks), HandlerConfig{})
+	handler := NewHandler(&handlerTaskLocator{}, &handlerPeriodStore{}, new(handlerRunner), new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
 	result := handler.Handle(context.Background(), &jetstream.Delivery{RawData: []byte("not-an-event")})
 
@@ -256,8 +256,8 @@ func TestHandlerTerminatesMalformedEvent(t *testing.T) {
 	require.Error(t, result.Err)
 }
 
-func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
-	sets := &mutableFilterSetSource{t: t, sets: []domain.FactorSet{enabledTestSet()}}
+func TestFilterSubjectsFollowEnabledTasks(t *testing.T) {
+	sets := &mutableFilterSetSource{t: t, sets: []domain.FactorTask{enabledTestTask()}}
 	consumer := &Consumer{sets: sets}
 	require.NoError(t, consumer.RefreshFilters(context.Background()))
 	barsSubject := collectorPeriodSubject(t, "crypto", "bars")
@@ -266,8 +266,8 @@ func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
 	slices.Sort(want)
 	require.Equal(t, []string{barsSubject}, consumer.CurrentFilterSubjects())
 
-	sets.sets = append(sets.sets, domain.FactorSet{
-		SpaceID: "crypto", SourceDatasetID: "quotes", Freq: "5m", Status: domain.SetStatusEnabled,
+	sets.sets = append(sets.sets, domain.FactorTask{
+		SpaceID: "crypto", SourceDatasetID: "quotes", Freq: "5m", Status: domain.TaskStatusEnabled,
 	})
 	consumer.SetsChanged()
 
@@ -277,42 +277,42 @@ func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
 
 type mutableFilterSetSource struct {
 	t    *testing.T
-	sets []domain.FactorSet
+	sets []domain.FactorTask
 }
 
 func (s *mutableFilterSetSource) FilterSubjects(context.Context) ([]string, error) {
 	var filters []string
 	for _, set := range s.sets {
-		if set.Status == domain.SetStatusEnabled {
+		if set.Status == domain.TaskStatusEnabled {
 			filters = append(filters, collectorPeriodSubject(s.t, set.SpaceID, set.SourceDatasetID))
 		}
 	}
 	return trigger.NormalizeFilters(filters), nil
 }
 
-func (s *mutableFilterSetSource) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineSet, error) {
-	var out []domain.EngineSet
+func (s *mutableFilterSetSource) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
+	var out []domain.EngineTask
 	for _, set := range s.sets {
-		if set.SpaceID == spaceID && set.SourceDatasetID == datasetID && set.Freq == freq && set.Status == domain.SetStatusEnabled {
-			out = append(out, domain.EngineSet{Set: set, ResultReady: true})
+		if set.SpaceID == spaceID && set.SourceDatasetID == datasetID && set.Freq == freq && set.Status == domain.TaskStatusEnabled {
+			out = append(out, domain.EngineTask{Set: set, ResultReady: true})
 		}
 	}
 	return out, nil
 }
 
-func (s *mutableFilterSetSource) EnabledSet(_ context.Context, setID string) (domain.EngineSet, bool, error) {
+func (s *mutableFilterSetSource) EnabledTask(_ context.Context, taskID string) (domain.EngineTask, bool, error) {
 	for _, set := range s.sets {
-		if set.SetID == setID && set.Status == domain.SetStatusEnabled {
-			return domain.EngineSet{Set: set, ResultReady: true}, true, nil
+		if set.TaskID == taskID && set.Status == domain.TaskStatusEnabled {
+			return domain.EngineTask{Set: set, ResultReady: true}, true, nil
 		}
 	}
-	return domain.EngineSet{}, false, nil
+	return domain.EngineTask{}, false, nil
 }
 
-func enabledTestSet() domain.FactorSet {
-	return domain.FactorSet{
-		SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "bars", Freq: "1m",
-		Status: domain.SetStatusEnabled, ResultDatasetID: "dataset_factor_bars_1m",
+func enabledTestTask() domain.FactorTask {
+	return domain.FactorTask{
+		TaskID: "ftask_bars_1m", SpaceID: "crypto", SourceDatasetID: "bars", Freq: "1m",
+		Status: domain.TaskStatusEnabled, ResultDatasetID: "dataset_factor_bars_1m",
 	}
 }
 

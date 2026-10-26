@@ -109,7 +109,7 @@ func TestWriteBatchesRows(t *testing.T) {
 		rows[i] = storageio.ResultRow{SubjectID: "BTC", DataTime: time.Unix(int64(i+1), 0).UTC(), Fields: map[string]any{"close": i}}
 	}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	require.NoError(t, runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), rows, 1000))
+	require.NoError(t, runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), rows, 1000))
 	require.Len(t, store.writeCalls, 3)
 	require.NotEqual(t, store.writeCalls[0].commitID, store.writeCalls[1].commitID)
 	require.NotEqual(t, store.writeCalls[1].commitID, store.writeCalls[2].commitID)
@@ -119,7 +119,7 @@ func TestWriteBatchesRows(t *testing.T) {
 func TestWriteRetriesTransientThenReturnsErrInfra(t *testing.T) {
 	store := &outputStore{writeErr: fmt.Errorf("%w: write unavailable", storageio.ErrInfra)}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	err := runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
+	err := runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Len(t, store.writeCalls, 3)
 }
@@ -127,7 +127,7 @@ func TestWriteRetriesTransientThenReturnsErrInfra(t *testing.T) {
 func TestWritePermanentErrorIsNotRetriedNorInfra(t *testing.T) {
 	store := &outputStore{writeErr: errors.New("column circulating_supply is not defined")}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	err := runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
+	err := runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
 	require.Error(t, err)
 	require.False(t, errors.Is(err, storageio.ErrInfra))
 	require.Len(t, store.writeCalls, 1)
@@ -142,7 +142,7 @@ func TestOutcomeStatusDegradedWhenAnyFactorFailed(t *testing.T) {
 func TestReportOnlyInLiveMode(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars", SourceDatasetID: "dataset_bars", Freq: "1m"}}
+	plan := Plan{Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars", SourceDatasetID: "dataset_bars", Freq: "1m"}}
 	require.NoError(t, runner.Report(context.Background(), plan, Outcome{Status: "complete"}))
 	require.Empty(t, store.markers)
 	plan.Mode = ModeLive
@@ -155,7 +155,7 @@ func TestReportOnlyInLiveMode(t *testing.T) {
 func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "complete", outcome.Status)
@@ -167,7 +167,7 @@ func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 func TestNoEnabledFactorsWithUpstreamFailureReportsDegraded(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "degraded", outcome.Status)

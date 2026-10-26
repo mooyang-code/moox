@@ -15,7 +15,7 @@ import (
 // 没有声明 factor_params、结果不是 ok、或没有任何成员求出参数时返回 nil（因子沿用上一期的参数）。
 func (h *Handler) paramSubmission(p *period, result store.Result, decision engine.Decision, loaded input.Loaded) (*store.ParamSubmission, error) {
 	rt := p.runtime
-	if rt == nil || rt.program == nil || len(rt.program.Params) == 0 || rt.resolved.FactorSetID == "" || decision.Status != engine.StatusOK {
+	if rt == nil || rt.program == nil || len(rt.program.Params) == 0 || rt.resolved.FactorTaskID == "" || decision.Status != engine.StatusOK {
 		return nil, nil
 	}
 	outcome := engine.EvaluateParams(rt.program, loaded.Frame, rt.resolved.FactorParams)
@@ -45,7 +45,7 @@ func (h *Handler) paramSubmission(p *period, result store.Result, decision engin
 		return nil, err
 	}
 	return &store.ParamSubmission{
-		RequestID: "p-" + result.ResultID, SetID: rt.resolved.FactorSetID, PeriodTime: next.StorageStart, BasedOnPeriod: p.boundary.StorageStart,
+		RequestID: "p-" + result.ResultID, TaskID: rt.resolved.FactorTaskID, PeriodTime: next.StorageStart, BasedOnPeriod: p.boundary.StorageStart,
 		ParamsJSON: raw, Notes: strings.Join(outcome.Notes, "；"),
 	}, nil
 }

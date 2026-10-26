@@ -19,7 +19,7 @@ func addDefaultFactors(plain []byte) ([]byte, DefaultFactorsReport, error) {
 	var report DefaultFactorsReport
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
 	if !slices.ContainsFunc(blocks, func(b block) bool { return b.header == "factors" && !b.array }) {
-		return nil, report, errors.New("moox.toml 里没有 [factors]，先按样例补上 [factors] 与因子集")
+		return nil, report, errors.New("moox.toml 里没有 [factors]，先按样例补上 [factors] 与因子任务")
 	}
 	defined := map[string]bool{}
 	members := map[string]bool{}

@@ -60,7 +60,7 @@ func fail(name, msg string) Check {
 }
 func pass(name string) Check { return Check{Name: name, Status: CheckPass} }
 
-var set1 = Ref{Kind: "factor_set", ID: "set1"}
+var set1 = Ref{Kind: "factor_task", ID: "set1"}
 
 func newController(t *testing.T, f *fakeModule, file string) *Controller {
 	t.Helper()
@@ -161,7 +161,7 @@ func TestStartConfirmPauseResumeFlow(t *testing.T) {
 
 // 运行中检查失败只暂停受影响的对象；通过之后自动回到暂停前的阶段；别的对象不受影响。
 func TestAutoPauseOnlyAffectedObjectAndAutoResume(t *testing.T) {
-	set2 := Ref{Kind: "factor_set", ID: "set2"}
+	set2 := Ref{Kind: "factor_task", ID: "set2"}
 	f := newFake()
 	f.refs = []Ref{set1, set2}
 	f.setObject(set1, pass("ok"))
@@ -280,7 +280,7 @@ func TestObjectRemovedFromCatalogDisappears(t *testing.T) {
 }
 
 func TestSnapshotSummarizesModuleAndObjects(t *testing.T) {
-	set2 := Ref{Kind: "factor_set", ID: "set2"}
+	set2 := Ref{Kind: "factor_task", ID: "set2"}
 	f := newFake()
 	f.refs = []Ref{set1, set2}
 	f.module = []Check{pass("布局")}
@@ -341,16 +341,16 @@ func TestHTTPHandlers(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &out)
 		return rec, out
 	}
-	rec, out := post(`{"command":"init","kind":"factor_set","id":"set1"}`)
+	rec, out := post(`{"command":"init","kind":"factor_task","id":"set1"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "ready", out["stage"])
 	require.Equal(t, "blue", out["color"])
 
-	rec, _ = post(`{"command":"confirm","kind":"factor_set","id":"set1"}`)
+	rec, _ = post(`{"command":"confirm","kind":"factor_task","id":"set1"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, "阶段不允许")
-	rec, _ = post(`{"command":"start","kind":"factor_set"}`)
+	rec, _ = post(`{"command":"start","kind":"factor_task"}`)
 	require.Equal(t, http.StatusBadRequest, rec.Code, "kind 与 id 要成对")
-	rec, _ = post(`{"command":"fly","kind":"factor_set","id":"set1"}`)
+	rec, _ = post(`{"command":"fly","kind":"factor_task","id":"set1"}`)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	rec, _ = post(`{"bogus":1}`)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -377,7 +377,7 @@ func TestOnChangeHookReportsTransitions(t *testing.T) {
 	ctx := context.Background()
 	_, _ = c.Command(ctx, CmdInit, set1)
 	_, _ = c.Command(ctx, CmdStart, set1)
-	require.Equal(t, []string{"factor_set/set1:uninitialized>ready", "factor_set/set1:ready>warming"}, f.changes)
+	require.Equal(t, []string{"factor_task/set1:uninitialized>ready", "factor_task/set1:ready>warming"}, f.changes)
 }
 
 // 客户端经过 HTTP 处理器读状态、执行命令；命令不被允许时返回 409 和错误文本。
@@ -467,7 +467,7 @@ func TestAutoAdvanceMovesOptedInObjectsToWarming(t *testing.T) {
 	ctx := context.Background()
 	f := newFake()
 	f.module = []Check{pass("本地存储")}
-	other := Ref{Kind: "factor_set", ID: "shared"}
+	other := Ref{Kind: "factor_task", ID: "shared"}
 	f.refs = []Ref{set1, other}
 	f.setObject(set1, pass("窗口"))
 	f.setObject(other, pass("窗口"))

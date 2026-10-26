@@ -11,17 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func seedPullJob(t *testing.T, s *Store, jobID, setID string) RecalcJob {
+func seedPullJob(t *testing.T, s *Store, jobID, taskID string) RecalcJob {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := s.GetSet(ctx, setID); err != nil {
-		// 每个因子集的数据源和结果数据集必须各不相同（数据库对 空间+数据源+频率 有唯一约束）。
-		set := testSet(setID, domain.SetStatusEnabled)
-		set.SourceDatasetID, set.ResultDatasetID = "dataset_"+setID, "dataset_factor_"+setID
-		require.NoError(t, s.CreateSet(ctx, set))
+	if _, err := s.GetTask(ctx, taskID); err != nil {
+		// 每个因子任务的数据源和结果数据集必须各不相同（数据库对 空间+数据源+频率 有唯一约束）。
+		set := testTask(taskID, domain.TaskStatusEnabled)
+		set.SourceDatasetID, set.ResultDatasetID = "dataset_"+taskID, "dataset_factor_"+taskID
+		require.NoError(t, s.CreateTask(ctx, set))
 	}
 	job, err := s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: jobID, RequestID: jobID, SetID: setID, StartTime: 100, EndTime: 400,
+		JobID: jobID, RequestID: jobID, TaskID: taskID, StartTime: 100, EndTime: 400,
 	})
 	require.NoError(t, err)
 	return job
@@ -31,7 +31,7 @@ var pullNow = time.Unix(10_000, 0).UTC()
 
 func TestPullRecalcJobIsAtomic(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -55,7 +55,7 @@ func TestPullRecalcJobIsAtomic(t *testing.T) {
 
 func TestPullMarksJobRunningWithLease(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 
 	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 
@@ -70,9 +70,9 @@ func TestPullMarksJobRunningWithLease(t *testing.T) {
 
 func TestPullPrefersOldestAccepted(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-old", "set_a")
+	seedPullJob(t, s, "job-old", "task_a")
 	time.Sleep(5 * time.Millisecond)
-	seedPullJob(t, s, "job-new", "set_a")
+	seedPullJob(t, s, "job-new", "task_a")
 
 	job, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 
@@ -83,7 +83,7 @@ func TestPullPrefersOldestAccepted(t *testing.T) {
 
 func TestPullSkipsLiveLease(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -96,7 +96,7 @@ func TestPullSkipsLiveLease(t *testing.T) {
 
 func TestPullReclaimsExpiredRunningLease(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	first, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -113,11 +113,11 @@ func TestPullReclaimsExpiredRunningLease(t *testing.T) {
 	require.Equal(t, int64(200), second.ProgressTime, "a reclaimed job resumes from its progress")
 }
 
-func TestPullSkipsExcludedSets(t *testing.T) {
+func TestPullSkipsExcludedTasks(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 
-	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, map[string]bool{"set_a": true}, 0)
+	_, ok, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, map[string]bool{"task_a": true}, 0)
 
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -125,7 +125,7 @@ func TestPullSkipsExcludedSets(t *testing.T) {
 
 func TestReportProgressRejectsWrongToken(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
@@ -136,7 +136,7 @@ func TestReportProgressRejectsWrongToken(t *testing.T) {
 
 func TestReportProgressExtendsLease(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	later := pullNow.Add(50 * time.Second)
@@ -150,7 +150,7 @@ func TestReportProgressExtendsLease(t *testing.T) {
 
 func TestReportProgressCompletesJob(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
@@ -166,7 +166,7 @@ func TestReportProgressCompletesJob(t *testing.T) {
 
 func TestReportProgressReturnsCancelled(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	_, err = s.UpdateRecalcJob(context.Background(), job.JobID, func(current *RecalcJob) error {
@@ -184,7 +184,7 @@ func TestReportProgressReturnsCancelled(t *testing.T) {
 
 func TestReportProgressRejectsRegression(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 	_, err = s.ReportRecalcProgress(context.Background(), job.JobID, job.LeaseToken, 300, RecalcStatusRunning, "", pullNow, time.Minute)
@@ -197,7 +197,7 @@ func TestReportProgressRejectsRegression(t *testing.T) {
 
 func TestReportProgressRejectsUnknownStatus(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
+	seedPullJob(t, s, "job-1", "task_a")
 	job, _, err := s.PullRecalcJob(context.Background(), "engine-a", pullNow, time.Minute, nil, 0)
 	require.NoError(t, err)
 
@@ -209,8 +209,8 @@ func TestReportProgressRejectsUnknownStatus(t *testing.T) {
 // 补算按整窗口读取源数据，同时跑的任务有上限；上限在领取的同一个事务里判断。
 func TestPullRecalcJobHonorsTheRunningLimit(t *testing.T) {
 	s := openTestStore(t)
-	seedPullJob(t, s, "job-1", "set_a")
-	seedPullJob(t, s, "job-2", "set_b")
+	seedPullJob(t, s, "job-1", "task_a")
+	seedPullJob(t, s, "job-2", "task_b")
 	ctx := context.Background()
 
 	first, ok, err := s.PullRecalcJob(ctx, "engine-a", pullNow, time.Minute, nil, 1)

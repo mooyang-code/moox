@@ -25,7 +25,7 @@ const col = (name: string, attributes?: Record<string, string>): ViewColumn => (
 
 function member(alias: string, factorId: string, category: string, outputs: string[], params: string[] = []): FactorMember {
   return {
-    set_id: "s",
+    task_id: "s",
     member_alias: alias,
     factor_id: factorId,
     status: "enabled",

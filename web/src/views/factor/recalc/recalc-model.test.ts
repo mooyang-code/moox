@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { FactorMember, FactorSetInfo, RecalcJob } from "@/api/factor/types";
+import type { FactorMember, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import {
   defaultRange,
   enabledMemberIds,
@@ -15,7 +15,7 @@ import {
 const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
   request_id: "factor-recalc-1",
-  set_id: "set_a",
+  task_id: "task_a",
   factor_ids: ["Bias"],
   subjects: [],
   start_time: "2026-10-01T00:00:00Z",
@@ -29,7 +29,7 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
 });
 
 const member = (factorId: string, status: FactorMember["status"]): FactorMember => ({
-  set_id: "set_a",
+  task_id: "task_a",
   factor_id: factorId,
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
@@ -91,8 +91,8 @@ describe("recalc model", () => {
   });
 
   it("default factor selection is all enabled members", () => {
-    const info: FactorSetInfo = {
-      factor_set: {} as FactorSetInfo["factor_set"],
+    const info: FactorTaskInfo = {
+      factor_task: {} as FactorTaskInfo["factor_task"],
       members: [member("A", "enabled"), member("B", "disabled"), member("C", "enabled")]
     };
     expect(enabledMemberIds(info)).toEqual(["A", "C"]);

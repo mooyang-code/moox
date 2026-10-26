@@ -26,16 +26,16 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createFactorSet } from "@/api/factor";
+import { createFactorTask } from "@/api/factor";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 
-defineOptions({ name: "FactorSetCreateModal" });
+defineOptions({ name: "FactorTaskCreateModal" });
 
-const emit = defineEmits<{ (e: "created", setId: string): void }>();
+const emit = defineEmits<{ (e: "created", taskId: string): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
 
 const spaceStore = useSpaceStore();
@@ -44,7 +44,7 @@ const datasetsLoading = ref(false);
 const submitting = ref(false);
 const form = reactive({ source_dataset_id: "" });
 
-// A Dataset has exactly one frequency, so the factor set takes the source's. 任务的标的就是源数据集当前的标的。
+// A Dataset has exactly one frequency, so the factor task takes the source's. 任务的标的就是源数据集当前的标的。
 const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freq || "");
 
 async function loadSourceDatasets(spaceId: string) {
@@ -92,18 +92,18 @@ async function submit() {
     !submission.isCurrent() || spaceStore.selectedSpaceId !== spaceId || selectedSpaceGeneration() !== submitGeneration;
   submitting.value = true;
   try {
-    const created = await createFactorSet({
+    const created = await createFactorTask({
       space_id: spaceId,
       source_dataset_id: form.source_dataset_id,
       freq: sourceFreq.value
     });
     if (stale()) {
       // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）
-      Message.info(`计算任务 ${created.set_id} 已创建；弹窗已关闭/重新打开或空间已切换，不再打开详情`);
+      Message.info(`计算任务 ${created.task_id} 已创建；弹窗已关闭/重新打开或空间已切换，不再打开详情`);
       return false;
     }
-    Message.success(`计算任务已创建：${created.set_id}`);
-    emit("created", created.set_id);
+    Message.success(`计算任务已创建：${created.task_id}`);
+    emit("created", created.task_id);
     return true;
   } catch (error) {
     if (stale()) return false;

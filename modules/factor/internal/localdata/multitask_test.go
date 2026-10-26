@@ -11,12 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 同一源数据集上的两个集合（例如两个策略实例的私有集合）共用一个数据源：按标的并集与最大回看准备，
-// 各自的预热状态按自己的标的统计，各自都能算；释放一个集合后数据源按其余集合收缩。
-func TestTwoSetsShareOneSource(t *testing.T) {
+// 同一源数据集上的两个任务（例如两个策略实例的私有任务）共用一个数据源：按标的并集与最大回看准备，
+// 各自的预热状态按自己的标的统计，各自都能算；释放一个任务后数据源按其余任务收缩。
+func TestTwoTasksShareOneSource(t *testing.T) {
 	fx := newFixture(t, mean3())
-	second := domain.EngineSet{Set: fx.set.Set, Members: domain.AsMembers(mean5())}
-	second.Set.SetID, second.Set.ResultDatasetID = "set2", "factor_spot_2"
+	second := domain.EngineTask{Set: fx.set.Set, Members: domain.AsMembers(mean5())}
+	second.Set.TaskID, second.Set.ResultDatasetID = "set2", "factor_spot_2"
 	for _, subject := range []string{"BTC", "ETH"} {
 		fx.st.put(subject, 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	}
@@ -24,10 +24,10 @@ func TestTwoSetsShareOneSource(t *testing.T) {
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
 	require.NoError(t, fx.data.Prepare(context.Background(), second, []string{"ETH"}))
 	require.Equal(t, []pipeline.WarmupStatus{
-		{SetID: "set1", State: pipeline.WarmupReady, WarmSubjects: 1, ExpectedSubjects: 1},
-		{SetID: "set2", State: pipeline.WarmupReady, WarmSubjects: 1, ExpectedSubjects: 1},
+		{TaskID: "set1", State: pipeline.WarmupReady, WarmSubjects: 1, ExpectedSubjects: 1},
+		{TaskID: "set2", State: pipeline.WarmupReady, WarmSubjects: 1, ExpectedSubjects: 1},
 	}, fx.data.WindowStatuses())
-	// 回看取两个集合里较大的 5 根：ETH 本地有 5 根。
+	// 回看取两个任务里较大的 5 根：ETH 本地有 5 根。
 	bounds, ok, err := fx.data.Store().Bounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, "ETH")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -45,13 +45,13 @@ func TestTwoSetsShareOneSource(t *testing.T) {
 	require.Equal(t, "complete", outcome.Status)
 	require.InDelta(t, (105+106+107+108+109)/5.0, fx.result("ETH", 9).Fields["mean5"], 1e-9)
 
-	fx.data.ReleaseSet(second.Set)
+	fx.data.ReleaseTask(second.Set)
 	statuses := fx.data.WindowStatuses()
 	require.Len(t, statuses, 1)
-	require.Equal(t, "set1", statuses[0].SetID)
+	require.Equal(t, "set1", statuses[0].TaskID)
 
-	// 最后一个集合也释放后，数据源的窗口与同步状态被丢弃（不再占内存预算、不再被跟进）。
-	fx.data.ReleaseSet(fx.set.Set)
+	// 最后一个任务也释放后，数据源的窗口与同步状态被丢弃（不再占内存预算、不再被跟进）。
+	fx.data.ReleaseTask(fx.set.Set)
 	require.Empty(t, fx.data.WindowStatuses())
 	require.Nil(t, fx.data.st(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}))
 }

@@ -48,13 +48,13 @@ import { Message } from "@arco-design/web-vue";
 import { recalcFactors } from "@/api/factor";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
-import type { FactorSetInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
+import type { FactorTaskInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
 import SubjectScopeFields from "@/views/factor/recalc/subject-scope-fields.vue";
 import { defaultRange, enabledMemberIds, estimateRecalc, quickRange } from "./recalc-model";
 
 defineOptions({ name: "FactorRecalcCreateDrawer" });
 
-const props = defineProps<{ info?: FactorSetInfo }>();
+const props = defineProps<{ info?: FactorTaskInfo }>();
 const emit = defineEmits<{ (e: "submitted", job: RecalcJob): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
 const spaceStore = useSpaceStore();
@@ -81,7 +81,7 @@ const form = reactive({
   request_id: ""
 });
 
-const freq = computed(() => props.info?.factor_set.freq || "");
+const freq = computed(() => props.info?.factor_task.freq || "");
 const candidates = computed(() => (props.info ? enabledMemberIds(props.info) : []));
 const estimate = computed(() =>
   estimateRecalc({
@@ -94,7 +94,7 @@ const estimate = computed(() =>
   })
 );
 const blocker = computed(() => {
-  const set = props.info?.factor_set;
+  const set = props.info?.factor_task;
   if (!set) return "";
   if (set.status !== "enabled") return "计算任务未启用，无法提交补算；已有任务仍可查看。";
   if (!candidates.value.length) return "该计算任务没有已启用的因子，请先在「计算任务」里启用因子。";
@@ -119,7 +119,7 @@ function prepare() {
 }
 
 async function submit() {
-  const current = props.info?.factor_set;
+  const current = props.info?.factor_task;
   if (!current || blocker.value) return false;
   if (!form.members.length) {
     Message.warning("请至少选择一个因子");
@@ -145,21 +145,21 @@ async function submit() {
   submitting.value = true;
   try {
     const job = await recalcFactors({
-      set_id: current.set_id,
+      task_id: current.task_id,
       members: [...form.members],
       subjects: form.subjectMode === "include" ? [...form.subjects] : [],
       start_time: new Date(form.start_time).toISOString(),
       end_time: new Date(form.end_time).toISOString(),
       request_id: form.request_id.trim() || `factor-recalc-${Date.now()}`
     });
-    Message.success("补算任务已受理");
+    Message.success("补算作业已受理");
     // 抽屉已被取消/重新打开或空间已切换：任务已受理，但不能再导航（会重建页面、丢失新表单草稿）
     if (stale()) return true;
     emit("submitted", job);
     return true;
   } catch (error) {
     if (stale()) return false;
-    Message.error(error instanceof Error ? error.message : "补算任务提交失败");
+    Message.error(error instanceof Error ? error.message : "补算作业提交失败");
     return false;
   } finally {
     if (!stale()) submitting.value = false;

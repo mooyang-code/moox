@@ -85,7 +85,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	ranged := *live
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
 	var replayClient input.Client = &ranged
-	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorSetReadyWait, ReadyStep: factorSetReadyStep}, Factors: live}
+	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}, Factors: live}
 	service.Owner = tradeowner.New(cfg.Trade, gateway)
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
@@ -199,10 +199,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	return s, closeFn, nil
 }
 
-// 私有因子集的结果 View 由 Storage 异步补齐成员列：启用实例时最多等这么久。
+// 私有因子任务的结果 View 由 Storage 异步补齐成员列：启用实例时最多等这么久。
 const (
-	factorSetReadyWait = 90 * time.Second
-	factorSetReadyStep = 3 * time.Second
+	factorTaskReadyWait = 90 * time.Second
+	factorTaskReadyStep = 3 * time.Second
 )
 
 // paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），其余模式照常。

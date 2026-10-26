@@ -41,7 +41,7 @@ const (
 // ReplayDeps 是回放会话用到的引擎能力。
 type ReplayDeps struct {
 	Sets interface {
-		SetByID(string) (domain.EngineSet, SetLookup)
+		SetByID(string) (domain.EngineTask, SetLookup)
 	}
 	// Params 提供回放区间的冻结参数（复现历史时用；闭环回放由每期请求带参数）。为 nil 时按默认参数。
 	Params  paramIntervalSource
@@ -72,7 +72,7 @@ func newReplayManager(deps ReplayDeps) *replayManager {
 
 type replaySession struct {
 	id       string
-	set      domain.EngineSet
+	set      domain.EngineTask
 	src      seriesstore.Source
 	clock    periodclock.Clock
 	step     time.Duration
@@ -127,7 +127,7 @@ type ReplayFactorState struct {
 // ReplayOpenRequest 是 POST /v1/replay/open 的请求体。
 type ReplayOpenRequest struct {
 	ReplayID string `json:"replay_id"`
-	SetID    string `json:"set_id"`
+	TaskID   string `json:"task_id"`
 	// From、To 是回放区间（RFC3339，左闭右开）：决策周期是 data_time 落在其中的每一根 K 线。
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -211,9 +211,9 @@ func (m *replayManager) handleOpen(rw http.ResponseWriter, r *http.Request) {
 
 // Open 建立回放会话。同一个 replay_id 重复打开时（回放服务重启后续跑）先释放旧会话再重建。
 func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (ReplayOpenResponse, int, error) {
-	req.ReplayID, req.SetID = strings.TrimSpace(req.ReplayID), strings.TrimSpace(req.SetID)
-	if req.ReplayID == "" || req.SetID == "" {
-		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("replay_id 与 set_id 是必填项")
+	req.ReplayID, req.TaskID = strings.TrimSpace(req.ReplayID), strings.TrimSpace(req.TaskID)
+	if req.ReplayID == "" || req.TaskID == "" {
+		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("replay_id 与 task_id 是必填项")
 	}
 	if req.ExtraPeriods < 0 {
 		return ReplayOpenResponse{}, http.StatusBadRequest, errors.New("extra_periods 不能为负数")
@@ -233,9 +233,9 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("to：%w", err)
 	}
-	set, lookup := m.deps.Sets.SetByID(req.SetID)
+	set, lookup := m.deps.Sets.SetByID(req.TaskID)
 	if lookup != SetFound {
-		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子集合 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.SetID)
+		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子任务 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.TaskID)
 	}
 	set.Members = CompileMembers(set.Members)
 	step, err := seriesstore.Step(set.Set.Freq)
@@ -345,7 +345,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	}
 	var intervals map[string][]domain.ParamInterval
 	if m.deps.Params != nil {
-		if intervals, err = m.deps.Params.Intervals(ctx, set.Set.SetID, start, to); err != nil {
+		if intervals, err = m.deps.Params.Intervals(ctx, set.Set.TaskID, start, to); err != nil {
 			return ReplayOpenResponse{}, http.StatusBadGateway, fmt.Errorf("读取冻结参数：%w", err)
 		}
 	}
@@ -588,7 +588,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 			found = found || member.Alias == alias
 		}
 		if !found {
-			return nil, nil, nil, fmt.Errorf("集合里没有成员 %s", alias)
+			return nil, nil, nil, fmt.Errorf("任务里没有成员 %s", alias)
 		}
 	}
 	out := make(map[string]domain.ParamFreeze, len(s.set.Members))
@@ -603,7 +603,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 				err = domain.ValidateSnapshot(member, snapshot, nil)
 			}
 			if err == nil {
-				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
+				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
 					SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
 				if applied == nil {
 					applied = map[string]domain.ParamSnapshot{}
@@ -613,7 +613,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 			}
 			rejected = append(rejected, ReplayParamRejection{Member: member.Alias, Reason: err.Error()})
 			if previous, ok := s.applied[period.Add(-s.step).Unix()][member.Alias]; ok {
-				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: previous,
+				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: previous,
 					SnapshotHash: previous.Hash(), Source: domain.ParamsCarried}
 				if applied == nil {
 					applied = map[string]domain.ParamSnapshot{}
@@ -626,7 +626,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 		for i := range s.intervals[member.Alias] {
 			interval := s.intervals[member.Alias][i]
 			if interval.Covers(period) {
-				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period,
+				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
 					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
 				previous = nil
 				break
@@ -640,7 +640,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 			if previous.Source == domain.ParamsDefault {
 				source = domain.ParamsDefault
 			}
-			out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period,
+			out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
 				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: source}
 		}
 	}

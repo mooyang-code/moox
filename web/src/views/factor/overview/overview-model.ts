@@ -1,4 +1,4 @@
-import type { EngineStatus, FactorSet, FactorSetInfo, RecalcJob } from "@/api/factor/types";
+import type { EngineStatus, FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { setHealth, type SetHealth } from "@/views/factor/shared/health";
 import { memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 
@@ -10,13 +10,13 @@ export interface RouteTarget {
 const TASKS_PATH = "/factor/tasks";
 const RECENT_FAILURE_MS = 24 * 3600 * 1000;
 
-/** 跨页跳转：用 ?set= 传计算任务，?tab= 选 Tab，?detail= 打开详情抽屉。 */
-export function cardLinks(setId: string) {
-  const detail: RouteTarget = { path: TASKS_PATH, query: { detail: setId } };
+/** 跨页跳转：用 ?task= 传计算任务，?tab= 选 Tab，?detail= 打开详情抽屉。 */
+export function cardLinks(taskId: string) {
+  const detail: RouteTarget = { path: TASKS_PATH, query: { detail: taskId } };
   return {
     detail,
-    results: { path: TASKS_PATH, query: { tab: "results", set: setId } } as RouteTarget,
-    recalc: { path: TASKS_PATH, query: { tab: "recalc", set: setId } } as RouteTarget,
+    results: { path: TASKS_PATH, query: { tab: "results", task: taskId } } as RouteTarget,
+    recalc: { path: TASKS_PATH, query: { tab: "recalc", task: taskId } } as RouteTarget,
     factors: { ...detail, query: { ...detail.query } } as RouteTarget
   };
 }
@@ -51,9 +51,9 @@ export function exprStat(engine: EngineStatus | null): StatItem {
 export function statsStrip(status: EngineStatus | null | undefined, runningRecalc: number): StatItem[] {
   // 引擎离线或从未上报心跳时，管理端留着的只是最后一次快照，不能当作当前的运行状态展示。
   const engine = status?.engine?.online ? status : null;
-  const lanes = engine?.lanes ?? [];
-  const queued = lanes.reduce((total, lane) => total + lane.queued, 0);
-  const active = lanes.filter(lane => lane.active).length;
+  const runners = engine?.runners ?? [];
+  const queued = runners.reduce((total, runner) => total + runner.queued, 0);
+  const active = runners.filter(runner => runner.active).length;
   return [
     engineStat(status),
     {
@@ -86,11 +86,11 @@ export function statsStrip(status: EngineStatus | null | undefined, runningRecal
 function warmupStat(engine: EngineStatus | null | undefined): StatItem {
   const base = { key: "warmup" as const, label: "数据预热" };
   if (!engine) return { ...base, value: "-", hint: "引擎载入回看窗口", tone: "muted" };
-  const lanes = engine.lanes ?? [];
-  const warming = lanes.filter(lane => lane.warmup_state === "warming");
+  const runners = engine.runners ?? [];
+  const warming = runners.filter(runner => runner.warmup_state === "warming");
   if (!warming.length) return { ...base, value: "已就绪", hint: "因子结果正式对外提供", tone: "ok" };
-  const warm = warming.reduce((total, lane) => total + (lane.warm_subjects ?? 0), 0);
-  const expected = warming.reduce((total, lane) => total + (lane.expected_subjects ?? 0), 0);
+  const warm = warming.reduce((total, runner) => total + (runner.warm_subjects ?? 0), 0);
+  const expected = warming.reduce((total, runner) => total + (runner.expected_subjects ?? 0), 0);
   return {
     ...base,
     value: "预热中",
@@ -126,14 +126,14 @@ export interface MemberChip {
 }
 
 export interface TaskCard {
-  setId: string;
+  taskId: string;
   title: string;
   health: SetHealth;
   chips: MemberChip[];
   links: ReturnType<typeof cardLinks>;
 }
 
-function memberChips(info: FactorSetInfo): MemberChip[] {
+function memberChips(info: FactorTaskInfo): MemberChip[] {
   const states = new Map((info.last_run?.factors ?? []).map(state => [state.member_alias || state.factor_id, state]));
   return info.members.map(member => {
     const alias = member.member_alias || member.factor_id;
@@ -150,13 +150,13 @@ function memberChips(info: FactorSetInfo): MemberChip[] {
   });
 }
 
-export function taskCards(sets: FactorSetInfo[], labelOf: (set: FactorSet) => string): TaskCard[] {
+export function taskCards(sets: FactorTaskInfo[], labelOf: (set: FactorTask) => string): TaskCard[] {
   return sets.map(info => ({
-    setId: info.factor_set.set_id,
-    title: labelOf(info.factor_set),
-    health: setHealth(info.factor_set, info.last_run),
+    taskId: info.factor_task.task_id,
+    title: labelOf(info.factor_task),
+    health: setHealth(info.factor_task, info.last_run),
     chips: memberChips(info),
-    links: cardLinks(info.factor_set.set_id)
+    links: cardLinks(info.factor_task.task_id)
   }));
 }
 
@@ -164,7 +164,7 @@ export type PendingKind = "failed" | "degraded" | "lagging" | "pending" | "recal
 
 export interface PendingItem {
   kind: PendingKind;
-  setId: string;
+  taskId: string;
   title: string;
   text: string;
   target: RouteTarget;
@@ -172,53 +172,53 @@ export interface PendingItem {
 
 /** 「待处理」纯前端派生：计算任务健康 + 最近失败的补算。 */
 export function pendingItems(
-  sets: FactorSetInfo[],
+  sets: FactorTaskInfo[],
   failedJobs: RecalcJob[],
-  labelOf: (set: FactorSet) => string,
+  labelOf: (set: FactorTask) => string,
   now = Date.now()
 ) {
   const items: PendingItem[] = [];
   for (const info of sets) {
-    const { set_id: setId } = info.factor_set;
-    const title = labelOf(info.factor_set);
-    const links = cardLinks(setId);
-    const health = setHealth(info.factor_set, info.last_run);
+    const { task_id: taskId } = info.factor_task;
+    const title = labelOf(info.factor_task);
+    const links = cardLinks(taskId);
+    const health = setHealth(info.factor_task, info.last_run);
     if (health.key === "failed") {
-      items.push({ kind: "failed", setId, title, text: "最近周期计算失败", target: links.detail });
+      items.push({ kind: "failed", taskId, title, text: "最近周期计算失败", target: links.detail });
     } else if (health.key === "degraded") {
       const failed = info.last_run?.failed_subjects?.length ?? 0;
       items.push({
         kind: "degraded",
-        setId,
+        taskId,
         title,
         text: failed ? `降级，${failed} 个对象失败` : "最近周期降级",
         target: links.results
       });
     } else if (health.key === "lagging") {
-      items.push({ kind: "lagging", setId, title, text: "结果落后超过 2 个频率周期", target: links.results });
-    } else if (info.factor_set.status === "pending") {
-      items.push({ kind: "pending", setId, title, text: "创建中或激活失败，可重试激活", target: links.detail });
+      items.push({ kind: "lagging", taskId, title, text: "结果落后超过 2 个频率周期", target: links.results });
+    } else if (info.factor_task.status === "pending") {
+      items.push({ kind: "pending", taskId, title, text: "创建中或激活失败，可重试激活", target: links.detail });
     }
   }
-  const labels = new Map(sets.map(info => [info.factor_set.set_id, labelOf(info.factor_set)]));
+  const labels = new Map(sets.map(info => [info.factor_task.task_id, labelOf(info.factor_task)]));
   for (const job of failedJobs) {
     if (job.status !== "failed") continue;
     const updated = Date.parse(job.updated_at || job.created_at);
     if (!Number.isFinite(updated) || now - updated > RECENT_FAILURE_MS) continue;
     items.push({
       kind: "recalc-failed",
-      setId: job.set_id,
-      title: labels.get(job.set_id) ?? job.set_id,
+      taskId: job.task_id,
+      title: labels.get(job.task_id) ?? job.task_id,
       text: job.error ? `补算失败：${job.error}` : "补算失败",
-      target: { path: TASKS_PATH, query: { tab: "recalc", set: job.set_id, job: job.job_id } }
+      target: { path: TASKS_PATH, query: { tab: "recalc", task: job.task_id, job: job.job_id } }
     });
   }
   return items;
 }
 
-/** 进行中补算只对已启用的计算任务扇出查询（ListRecalcJobs 必须带 set_id）。 */
-export function recalcQuerySets(sets: FactorSetInfo[]) {
-  return sets.filter(info => info.factor_set.status === "enabled").map(info => info.factor_set.set_id);
+/** 进行中补算只对已启用的计算任务扇出查询（ListRecalcJobs 必须带 task_id）。 */
+export function recalcQueryTasks(sets: FactorTaskInfo[]) {
+  return sets.filter(info => info.factor_task.status === "enabled").map(info => info.factor_task.task_id);
 }
 
 export function splitRecalcJobs(jobs: RecalcJob[]) {

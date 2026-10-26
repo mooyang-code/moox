@@ -19,7 +19,7 @@ import (
 type lifecycleOptions struct {
 	Endpoint string
 	Kind, ID string
-	Set      string
+	Task     string
 	JSON     bool
 	// 暂停与恢复的参数。
 	Reason        string
@@ -40,24 +40,24 @@ var (
 var lifecycleCmd = &cobra.Command{
 	Use:   "lifecycle",
 	Short: "查看和推进模块、对象的生命周期（未就绪 → 就绪 → 预热 → 运行）",
-	Long: `查看和推进模块或其管理对象（因子集合、策略实例）的生命周期。
+	Long: `查看和推进模块或其管理对象（因子任务、策略实例）的生命周期。
 
   moox-cli lifecycle status                      查看状态、各对象阶段和未就绪原因
-  moox-cli lifecycle check  [--set <id>]         重新执行启动前检查
-  moox-cli lifecycle init   [--set <id>]         执行初始化（因子集合：载入本地窗口）
-  moox-cli lifecycle start  [--set <id>]         启动：进入预热
-  moox-cli lifecycle confirm [--set <id>]        确认预热结果：进入运行
-  moox-cli lifecycle pause  [--set <id>] [--reason 原因] [--pause-kind manual|system]
+  moox-cli lifecycle check  [--task <id>]         重新执行启动前检查
+  moox-cli lifecycle init   [--task <id>]         执行初始化（因子任务：载入本地窗口）
+  moox-cli lifecycle start  [--task <id>]         启动：进入预热
+  moox-cli lifecycle confirm [--task <id>]        确认预热结果：进入运行
+  moox-cli lifecycle pause  [--task <id>] [--reason 原因] [--pause-kind manual|system]
                                                  暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、预热、运行时暂停）
-  moox-cli lifecycle resume [--set <id>] [--pause-kind system] [--force] [--manual-release]
+  moox-cli lifecycle resume [--task <id>] [--pause-kind system] [--force] [--manual-release]
                                                  恢复：先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后自动放行回到暂停前的阶段；
                                                  --manual-release 追平后停在待放行，等 release（系统级恢复用）；
                                                  --pause-kind system 只恢复系统暂停（不动手动暂停）；
                                                  --force 在模块暂停期间只放行单个对象的追赶
-  moox-cli lifecycle release [--set <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
+  moox-cli lifecycle release [--task <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
   moox-cli lifecycle catchup                     查看恢复追赶的进度
 
-不指定 --set / --kind --id 时作用于模块自身。--endpoint 指向模块的健康检查地址
+不指定 --task / --kind --id 时作用于模块自身。--endpoint 指向模块的健康检查地址
 （可以是 SSH 隧道的本地端口），鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。`,
 }
 
@@ -65,8 +65,8 @@ func init() {
 	rootCmd.AddCommand(lifecycleCmd)
 	pf := lifecycleCmd.PersistentFlags()
 	pf.StringVar(&lifecycleFlags.Endpoint, "endpoint", "http://127.0.0.1:11417", "模块健康检查地址（因子引擎默认 11417）")
-	pf.StringVar(&lifecycleFlags.Set, "set", "", "因子集合 ID（等价于 --kind factor_set --id <ID>）")
-	pf.StringVar(&lifecycleFlags.Kind, "kind", "", "对象类型（factor_set、strategy_instance……）")
+	pf.StringVar(&lifecycleFlags.Task, "task", "", "因子任务 ID（等价于 --kind factor_task --id <ID>）")
+	pf.StringVar(&lifecycleFlags.Kind, "kind", "", "对象类型（factor_task、strategy_instance……）")
 	pf.StringVar(&lifecycleFlags.ID, "id", "", "对象 ID")
 	pf.BoolVar(&lifecycleFlags.JSON, "json", false, "以 JSON 输出")
 	pf.StringVar(&lifecycleFlags.Reason, "reason", "", "暂停原因（写进暂停详情）")
@@ -110,11 +110,11 @@ func init() {
 
 func (o lifecycleOptions) ref() (lifecycle.Ref, error) {
 	kind, id := o.Kind, o.ID
-	if o.Set != "" {
+	if o.Task != "" {
 		if kind != "" || id != "" {
-			return lifecycle.Ref{}, errors.New("--set 不能和 --kind / --id 同时使用")
+			return lifecycle.Ref{}, errors.New("--task 不能和 --kind / --id 同时使用")
 		}
-		kind, id = "factor_set", o.Set
+		kind, id = "factor_task", o.Task
 	}
 	if (kind == "") != (id == "") {
 		return lifecycle.Ref{}, errors.New("--kind 与 --id 要么都写，要么都不写（作用于模块自身）")

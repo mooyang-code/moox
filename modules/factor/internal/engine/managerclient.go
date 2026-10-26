@@ -41,7 +41,7 @@ func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, iden
 type CatalogSnapshot struct {
 	Hash        string
 	NotModified bool
-	Sets        []domain.EngineSet
+	Sets        []domain.EngineTask
 }
 
 func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (CatalogSnapshot, error) {
@@ -51,10 +51,10 @@ func (c *ManagerClient) SyncCatalog(ctx context.Context, knownHash string) (Cata
 		return CatalogSnapshot{}, err
 	}
 	snapshot := CatalogSnapshot{Hash: rsp.GetCatalogHash(), NotModified: rsp.GetNotModified()}
-	for _, raw := range rsp.GetSets() {
-		set, err := factorwire.EngineSetFromPB(raw)
+	for _, raw := range rsp.GetTasks() {
+		set, err := factorwire.EngineTaskFromPB(raw)
 		if err != nil {
-			return CatalogSnapshot{}, fmt.Errorf("decode factor set %s: %w", raw.GetFactorSet().GetSetId(), err)
+			return CatalogSnapshot{}, fmt.Errorf("decode factor task %s: %w", raw.GetFactorTask().GetTaskId(), err)
 		}
 		snapshot.Sets = append(snapshot.Sets, set)
 	}
@@ -79,7 +79,7 @@ type PulledJob struct {
 	LeaseToken string
 	Window     recalcexec.Window
 	Subjects   []string
-	Set        domain.EngineSet
+	Set        domain.EngineTask
 }
 
 func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, error) {
@@ -91,7 +91,7 @@ func (c *ManagerClient) PullRecalcJob(ctx context.Context) (PulledJob, bool, err
 	if !rsp.GetFound() {
 		return PulledJob{}, false, nil
 	}
-	set, err := factorwire.EngineSetFromPB(rsp.GetSet())
+	set, err := factorwire.EngineTaskFromPB(rsp.GetTask())
 	if err != nil {
 		return PulledJob{}, false, fmt.Errorf("decode recalc job set: %w", err)
 	}

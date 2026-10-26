@@ -64,7 +64,7 @@ export interface FactorScopeInput {
   viewColumns: ViewColumn[];
   members: FactorMember[];
   categories: FactorCategory[];
-  /** 策略私有因子集的外显设置；共享因子集为空。 */
+  /** 策略私有因子任务的外显设置；共享因子任务为空。 */
   hidden?: DisplayHidden;
 }
 

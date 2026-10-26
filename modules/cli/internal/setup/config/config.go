@@ -279,14 +279,14 @@ type SCFCloudAccountConfig struct {
 type FactorSetup struct {
 	Enabled     bool                    `toml:"enabled"`
 	SourceDir   string                  `toml:"source_dir"`
-	Sets        []FactorSetupSet        `toml:"sets"`
+	Sets        []FactorSetupTask       `toml:"sets"`
 	Definitions []FactorSetupDefinition `toml:"definitions"`
 	Members     []FactorSetupMember     `toml:"members"`
 }
 
-// FactorSetupSet identifies the source Dataset shared by a group of factor members.
+// FactorSetupTask identifies the source Dataset shared by a group of factor members.
 // 任务的标的就是源数据集当前的标的，没有单独的对象范围。
-type FactorSetupSet struct {
+type FactorSetupTask struct {
 	SpaceID         string `toml:"space_id"`
 	SourceDatasetID string `toml:"source_dataset_id"`
 	Freq            string `toml:"freq"`
@@ -821,7 +821,7 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	if cfg.SourceDir == "" || cfg.SourceDir == "." || filepath.IsAbs(cfg.SourceDir) || cfg.SourceDir == ".." || strings.HasPrefix(cfg.SourceDir, "../") {
 		return fmt.Errorf("config_invalid: factors.source_dir must be a repository-relative directory")
 	}
-	setKeys := make(map[string]struct{}, len(cfg.Sets))
+	taskKeys := make(map[string]struct{}, len(cfg.Sets))
 	for index := range cfg.Sets {
 		set := &cfg.Sets[index]
 		path := fmt.Sprintf("factors.sets[%d]", index)
@@ -832,10 +832,10 @@ func validateFactorSetup(cfg *FactorSetup) error {
 			return fmt.Errorf("config_invalid: %s requires space_id, source_dataset_id and freq", path)
 		}
 		key := factorSetupSetKey(set.SourceDatasetID, set.Freq)
-		if _, ok := setKeys[key]; ok {
-			return fmt.Errorf("config_invalid: factor set for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
+		if _, ok := taskKeys[key]; ok {
+			return fmt.Errorf("config_invalid: factor task for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
 		}
-		setKeys[key] = struct{}{}
+		taskKeys[key] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(cfg.Definitions))
 	for index := range cfg.Definitions {
@@ -868,8 +868,8 @@ func validateFactorSetup(cfg *FactorSetup) error {
 		if member.FactorID == "" || member.SourceDatasetID == "" || member.Freq == "" {
 			return fmt.Errorf("config_invalid: %s requires factor_id, source_dataset_id and freq", path)
 		}
-		if _, ok := setKeys[factorSetupSetKey(member.SourceDatasetID, member.Freq)]; !ok {
-			return fmt.Errorf("config_invalid: %s has no matching factor set for source_dataset_id %q and freq %q", path, member.SourceDatasetID, member.Freq)
+		if _, ok := taskKeys[factorSetupSetKey(member.SourceDatasetID, member.Freq)]; !ok {
+			return fmt.Errorf("config_invalid: %s has no matching factor task for source_dataset_id %q and freq %q", path, member.SourceDatasetID, member.Freq)
 		}
 		if _, ok := seen[member.FactorID]; !ok {
 			return fmt.Errorf("config_invalid: %s references unknown factor_id %q; declare it in [[factors.definitions]]", path, member.FactorID)

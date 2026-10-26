@@ -22,7 +22,7 @@ func (b Builder) buildFactorParamHealth(ctx context.Context, spaceID string, now
 	}
 	carried, carriedSeen, err := b.factorParamSeries(ctx, spaceID, now, "moox_factor_param_carry_alert", func(value float64, _ map[string]string) (string, bool) {
 		return "", value >= 1
-	}, func(labels map[string]string) string { return labels["set_id"] + "/" + labels["member"] })
+	}, func(labels map[string]string) string { return labels["task_id"] + "/" + labels["member"] })
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +31,7 @@ func (b Builder) buildFactorParamHealth(ctx context.Context, spaceID string, now
 			return "", false
 		}
 		return "（最近 " + unixTime(value).Format(time.RFC3339) + "）", true
-	}, func(labels map[string]string) string { return labels["set_id"] })
+	}, func(labels map[string]string) string { return labels["task_id"] })
 	if err != nil {
 		return nil, err
 	}

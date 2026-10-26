@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 引擎在线状态按最近心跳判断，与 45 秒的租约无关；没有启用的因子集时不需要引擎；
+// 引擎在线状态按最近心跳判断，与 45 秒的租约无关；没有启用的因子任务时不需要引擎；
 // 最近心跳落库，管理端重启后引擎一直没回来仍判为离线。
 func TestPresenceUsesLastHeartbeatAndSurvivesRestart(t *testing.T) {
 	hub, db, clock := newTestHub(t)
@@ -19,12 +19,12 @@ func TestPresenceUsesLastHeartbeatAndSurvivesRestart(t *testing.T) {
 
 	state, _, _, err := hub.Presence(ctx)
 	require.NoError(t, err)
-	require.Equal(t, report.PresenceNotRequired, state, "没有启用的因子集")
+	require.Equal(t, report.PresenceNotRequired, state, "没有启用的因子任务")
 
-	seedSet(t, db, "s1", nil)
+	seedTask(t, db, "s1", nil)
 	state, engineID, _, err := hub.Presence(ctx)
 	require.NoError(t, err)
-	require.Equal(t, report.PresenceOffline, state, "有启用的因子集但从未收到心跳")
+	require.Equal(t, report.PresenceOffline, state, "有启用的因子任务但从未收到心跳")
 	require.Empty(t, engineID)
 
 	id := domain.EngineIdentity{EngineID: "factor-engine@m1", BootID: "b1"}

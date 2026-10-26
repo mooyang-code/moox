@@ -10,33 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type laneTestLocks struct {
+type runnerTestLocks struct {
 	mu     sync.Mutex
 	active map[string]int
 }
 
-func (l *laneTestLocks) LockContext(_ context.Context, setID string) (func(), error) {
+func (l *runnerTestLocks) LockContext(_ context.Context, taskID string) (func(), error) {
 	l.mu.Lock()
 	if l.active == nil {
 		l.active = make(map[string]int)
 	}
-	l.active[setID]++
+	l.active[taskID]++
 	l.mu.Unlock()
 	return func() {
 		l.mu.Lock()
-		l.active[setID]--
+		l.active[taskID]--
 		l.mu.Unlock()
 	}, nil
 }
 
-func TestLanesSerialPerSetParallelAcrossSets(t *testing.T) {
-	lanes := NewLanes(nil)
-	defer lanes.Close()
+func TestRunnersSerialPerTaskParallelAcrossTasks(t *testing.T) {
+	runners := NewTaskRunners(nil)
+	defer runners.Close()
 	started := make(chan string, 3)
 	releaseFirst := make(chan struct{})
 	done := make(chan error, 3)
 	go func() {
-		_, err := lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+		_, err := runners.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
 			started <- "a1"
 			<-releaseFirst
 			return pipeline.Outcome{}, nil
@@ -45,14 +45,14 @@ func TestLanesSerialPerSetParallelAcrossSets(t *testing.T) {
 	}()
 	require.Equal(t, "a1", <-started)
 	go func() {
-		_, err := lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+		_, err := runners.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
 			started <- "a2"
 			return pipeline.Outcome{}, nil
 		})
 		done <- err
 	}()
 	go func() {
-		_, err := lanes.Do(context.Background(), "set-b", func(context.Context) (pipeline.Outcome, error) {
+		_, err := runners.Do(context.Background(), "set-b", func(context.Context) (pipeline.Outcome, error) {
 			started <- "b1"
 			return pipeline.Outcome{}, nil
 		})
@@ -72,11 +72,11 @@ func TestLanesSerialPerSetParallelAcrossSets(t *testing.T) {
 	}
 }
 
-func TestLaneHoldsSetLockDuringRun(t *testing.T) {
-	locks := &laneTestLocks{active: make(map[string]int)}
-	lanes := NewLanes(locks)
-	defer lanes.Close()
-	_, err := lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+func TestRunnerHoldsTaskLockDuringRun(t *testing.T) {
+	locks := &runnerTestLocks{active: make(map[string]int)}
+	runners := NewTaskRunners(locks)
+	defer runners.Close()
+	_, err := runners.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
 		locks.mu.Lock()
 		defer locks.mu.Unlock()
 		require.Equal(t, 1, locks.active["set-a"])
@@ -88,14 +88,14 @@ func TestLaneHoldsSetLockDuringRun(t *testing.T) {
 	locks.mu.Unlock()
 }
 
-func TestLaneStatusReportsActiveAndQueuedPeriods(t *testing.T) {
-	lanes := NewLanes(nil)
-	defer lanes.Close()
+func TestRunnerStatusReportsActiveAndQueuedPeriods(t *testing.T) {
+	runners := NewTaskRunners(nil)
+	defer runners.Close()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+		_, _ = runners.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
 			close(started)
 			<-release
 			return pipeline.Outcome{}, nil
@@ -104,19 +104,19 @@ func TestLaneStatusReportsActiveAndQueuedPeriods(t *testing.T) {
 	}()
 	<-started
 	go func() {
-		_, _ = lanes.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
+		_, _ = runners.Do(context.Background(), "set-a", func(context.Context) (pipeline.Outcome, error) {
 			return pipeline.Outcome{}, nil
 		})
 		done <- struct{}{}
 	}()
 	deadline := time.Now().Add(time.Second)
 	for {
-		status := lanes.Status()
+		status := runners.Status()
 		if len(status) == 1 && status[0].Active && status[0].Queued == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("lane status did not include active and queued work: %#v", status)
+			t.Fatalf("runner status did not include active and queued work: %#v", status)
 		}
 		time.Sleep(time.Millisecond)
 	}

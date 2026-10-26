@@ -126,7 +126,7 @@ func testJob(subjects ...string) PulledJob {
 	return PulledJob{
 		JobID: "job-1", LeaseToken: "token", Subjects: subjects,
 		Window: recalcexec.Window{Start: start, End: start.Add(6 * time.Minute), Progress: start},
-		Set:    engineSet("fset_a", "dataset_a", true, "bias"),
+		Set:    engineTask("ftask_a", "dataset_a", true, "bias"),
 	}
 }
 
@@ -280,7 +280,7 @@ func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outco
 	return f(ctx, plan)
 }
 
-// 补算任务自带定义（JSON，没有编译结果），领取时现场编译后再交给流水线。
+// 补算作业自带定义（JSON，没有编译结果），领取时现场编译后再交给流水线。
 func TestRecalcLoopCompilesJobDefinitions(t *testing.T) {
 	job := testJob("BTC")
 	job.Set = uncompiled(job.Set)
@@ -319,14 +319,14 @@ func TestHeartbeatWakeSendsWithoutWaitingForTheTicker(t *testing.T) {
 	runs := newRunTracker()
 	runs.setOnRecord(beat.Wake)
 	period := time.Date(2026, 10, 16, 15, 45, 0, 0, time.UTC)
-	runs.record("set_a", period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
+	runs.record("task_a", period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
 	select {
 	case <-recorder.beats:
 	case <-time.After(5 * time.Second):
 		t.Fatal("recording a period must send a heartbeat right away")
 	}
 	// 比已记录的更早的一期不覆盖，也不唤醒。
-	runs.record("set_a", period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
+	runs.record("task_a", period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
 	select {
 	case <-recorder.beats:
 		t.Fatal("an older period must not wake the heartbeat")
@@ -346,7 +346,7 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 	loop.now = func() time.Time { return client.job.Window.Start.Add(100 * time.Minute) }
 	var gotBars int
 	var gotSubjects []string
-	loop.history = func(_ context.Context, set domain.EngineSet, subjects []string, bars int) error {
+	loop.history = func(_ context.Context, set domain.EngineTask, subjects []string, bars int) error {
 		gotBars, gotSubjects = bars, subjects
 		return nil
 	}
@@ -362,13 +362,13 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 	// 补历史失败：任务照常运行（只用已有的本地数据）。
 	failing := &jobClientFake{job: testJob("BTC"), found: true}
 	loop2 := newTestLoop(failing, &planRecorder{out: pipeline.Outcome{Status: "complete"}}, &sourceFake{})
-	loop2.history = func(context.Context, domain.EngineSet, []string, int) error { return errors.New("storage 不可达") }
+	loop2.history = func(context.Context, domain.EngineTask, []string, int) error { return errors.New("storage 不可达") }
 	_, err = loop2.RunOnce(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
 }
 
-// 集合刚建立、自动 init/start 还没走完时任务会被生命周期门禁挡住：在限定时间内重试，放行后继续跑完，
+// 任务刚建立、自动 init/start 还没走完时任务会被生命周期门禁挡住：在限定时间内重试，放行后继续跑完，
 // 不必等任务租约过期（15 分钟）才被重新领取；一直挡住时按原样返回，不报失败。
 func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
 	var attempts int
