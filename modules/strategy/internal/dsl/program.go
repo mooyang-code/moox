@@ -14,6 +14,8 @@ type CompiledRule struct {
 	FilterAfter *Expression
 	Entry       *Expression
 	Exit        *Expression
+	// F1Groups 是 f1 规则按排名签名分好的子策略组（见 f1.go）；其他类型为空。
+	F1Groups []F1Group
 }
 
 // stageSource 是规则一个阶段的表达式文本。
@@ -47,6 +49,9 @@ func (r *CompiledRule) Expressions() []*Expression {
 
 // Columns 返回该规则引用的全部当期列。
 func (r *CompiledRule) Columns() []string {
+	if r.Rule.Type == RuleTypeF1 {
+		return r.Rule.F1Columns()
+	}
 	set := make(map[string]struct{})
 	for _, expression := range r.Expressions() {
 		for _, column := range expression.AllColumns() {
@@ -117,6 +122,14 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
 		}
+		if rule.Type == RuleTypeF1 {
+			for _, column := range rule.F1Columns() {
+				if _, ok := available[column]; !ok {
+					return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
+				}
+			}
+			compiled.F1Groups = rule.F1.F1Groups()
+		}
 		for _, column := range compiled.Columns() {
 			allColumns[column] = struct{}{}
 		}
@@ -160,6 +173,12 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 func ReferencedColumns(strategy Strategy) ([]string, error) {
 	set := make(map[string]struct{})
 	for _, rule := range strategy.Rules {
+		if rule.Type == RuleTypeF1 {
+			for _, column := range rule.F1Columns() {
+				set[column] = struct{}{}
+			}
+			continue
+		}
 		for _, item := range rule.stageSources() {
 			if item.source == "" {
 				continue
