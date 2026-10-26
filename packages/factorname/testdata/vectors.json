@@ -1,0 +1,844 @@
+{
+ "format_value": [
+  {
+   "value": 0,
+   "text": "0"
+  },
+  {
+   "value": -0.0,
+   "text": "0"
+  },
+  {
+   "value": 20,
+   "text": "20"
+  },
+  {
+   "value": 0.5,
+   "text": "0p5"
+  },
+  {
+   "value": -1,
+   "text": "n1"
+  },
+  {
+   "value": -1.5,
+   "text": "n1p5"
+  },
+  {
+   "value": 2.5,
+   "text": "2p5"
+  },
+  {
+   "value": 0.1,
+   "text": "0p1"
+  },
+  {
+   "value": 50000,
+   "text": "50000"
+  },
+  {
+   "value": 123456789012,
+   "text": "123456789012"
+  },
+  {
+   "value": 0.30000000000000004,
+   "text": "0p30000000000000004"
+  },
+  {
+   "value": 1e-07,
+   "text": "0p0000001"
+  },
+  {
+   "value": 1e-21,
+   "text": "0p000000000000000000001"
+  },
+  {
+   "value": 1e+21,
+   "text": "1000000000000000000000"
+  },
+  {
+   "value": 5e-324,
+   "text": "0p000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005"
+  },
+  {
+   "value": 1.7976931348623157e+308,
+   "text": "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "value": -2.5e-10,
+   "text": "n0p00000000025"
+  },
+  {
+   "value": 100,
+   "text": "100"
+  },
+  {
+   "value": 1000000000000000.0,
+   "text": "1000000000000000"
+  },
+  {
+   "value": 1e+16,
+   "text": "10000000000000000"
+  }
+ ],
+ "fixed_key": [
+  {
+   "name": "全默认沿用因子 ID",
+   "factor_id": "ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "key": "ema"
+  },
+  {
+   "name": "显式给出默认值",
+   "factor_id": "ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {
+    "span": 20
+   },
+   "key": "ema"
+  },
+  {
+   "name": "两个参数都不是默认值",
+   "factor_id": "ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {
+    "span": 20,
+    "warmup": 50000
+   },
+   "key": "ema__20_50000"
+  },
+  {
+   "name": "只给一个参数，另一个取默认值",
+   "factor_id": "ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {
+    "warmup": 50000
+   },
+   "key": "ema__20_50000"
+  },
+  {
+   "name": "单个参数",
+   "factor_id": "boll",
+   "decl": [
+    {
+     "name": "window",
+     "default": 20
+    }
+   ],
+   "values": {
+    "window": 30
+   },
+   "key": "boll__30"
+  },
+  {
+   "name": "没有参数的因子",
+   "factor_id": "rsi",
+   "decl": [],
+   "values": {},
+   "key": "rsi"
+  },
+  {
+   "name": "小数",
+   "factor_id": "bb",
+   "decl": [
+    {
+     "name": "k",
+     "default": 2.5
+    }
+   ],
+   "values": {
+    "k": 1.5
+   },
+   "key": "bb__1p5"
+  },
+  {
+   "name": "负数",
+   "factor_id": "x",
+   "decl": [
+    {
+     "name": "a",
+     "default": 0
+    }
+   ],
+   "values": {
+    "a": -1
+   },
+   "key": "x__n1"
+  },
+  {
+   "name": "负小数",
+   "factor_id": "x",
+   "decl": [
+    {
+     "name": "a",
+     "default": 0
+    }
+   ],
+   "values": {
+    "a": -0.25
+   },
+   "key": "x__n0p25"
+  },
+  {
+   "name": "因子 ID 里有下划线",
+   "factor_id": "ma_fast",
+   "decl": [
+    {
+     "name": "window",
+     "default": 5
+    }
+   ],
+   "values": {
+    "window": 10
+   },
+   "key": "ma_fast__10"
+  },
+  {
+   "name": "定义没有的参数名",
+   "factor_id": "ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {
+    "fast": 3
+   },
+   "error": true
+  },
+  {
+   "name": "成员键超过 44 个字符",
+   "factor_id": "abcdefghijklmnopqrstuvwx",
+   "decl": [
+    {
+     "name": "alpha",
+     "default": 0
+    },
+    {
+     "name": "beta",
+     "default": 0
+    },
+    {
+     "name": "gamma",
+     "default": 0
+    }
+   ],
+   "values": {
+    "alpha": 123456789,
+    "beta": 987654321,
+    "gamma": 555555555
+   },
+   "error": true
+  },
+  {
+   "name": "因子 ID 大写",
+   "factor_id": "Ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 以下划线结尾",
+   "factor_id": "ema_",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 以下划线开头",
+   "factor_id": "_ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 含连续下划线",
+   "factor_id": "ema__x",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 以数字开头",
+   "factor_id": "1ema",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 超过 24 个字符",
+   "factor_id": "abcdefghijklmnopqrstuvwxy",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  },
+  {
+   "name": "因子 ID 为空",
+   "factor_id": "",
+   "decl": [
+    {
+     "name": "span",
+     "default": 20
+    },
+    {
+     "name": "warmup",
+     "default": 0
+    }
+   ],
+   "values": {},
+   "error": true
+  }
+ ],
+ "var_key": [
+  {
+   "factor_id": "ma_fast",
+   "key": "ma_fast__var"
+  },
+  {
+   "factor_id": "ema",
+   "key": "ema__var"
+  },
+  {
+   "factor_id": "Ma",
+   "error": true
+  }
+ ],
+ "column": [
+  {
+   "key": "ema",
+   "output": "",
+   "column": "ema"
+  },
+  {
+   "key": "boll",
+   "output": "mid",
+   "column": "boll__mid"
+  },
+  {
+   "key": "boll__30",
+   "output": "mid",
+   "column": "boll__30__mid"
+  },
+  {
+   "key": "ma_fast__var",
+   "output": "",
+   "column": "ma_fast__var"
+  },
+  {
+   "key": "ma_fast__var",
+   "output": "ma",
+   "column": "ma_fast__var__ma"
+  },
+  {
+   "key": "boll",
+   "output": "var",
+   "error": true
+  },
+  {
+   "key": "Boll",
+   "output": "mid",
+   "error": true
+  },
+  {
+   "key": "boll__01",
+   "output": "",
+   "error": true
+  }
+ ],
+ "output_name": [
+  {
+   "factor_id": "boll",
+   "name": "mid",
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "name": "mid_up",
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "name": "n",
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "name": "n5x",
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "name": "var",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "n5",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "n5_n3",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "boll",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "Mid",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "mid_",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "a__b",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "",
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "name": "abcdefghijklmnopq",
+   "ok": false
+  }
+ ],
+ "outputs": [
+  {
+   "factor_id": "ema",
+   "outputs": [
+    "ema"
+   ],
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "outputs": [
+    "mid",
+    "up",
+    "low",
+    "pctb"
+   ],
+   "ok": true
+  },
+  {
+   "factor_id": "boll",
+   "outputs": [
+    "mid"
+   ],
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "outputs": [
+    "mid",
+    "mid"
+   ],
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "outputs": [
+    "boll",
+    "up"
+   ],
+   "ok": false
+  },
+  {
+   "factor_id": "boll",
+   "outputs": [],
+   "ok": false
+  },
+  {
+   "factor_id": "ema",
+   "outputs": [
+    "ema",
+    "x"
+   ],
+   "ok": false
+  }
+ ],
+ "parse_column": [
+  {
+   "column": "ema",
+   "ok": true,
+   "factor_id": "ema",
+   "kind": "fixed",
+   "has_params": false,
+   "values": [],
+   "output": ""
+  },
+  {
+   "column": "ema__20_50000",
+   "ok": true,
+   "factor_id": "ema",
+   "kind": "fixed",
+   "has_params": true,
+   "values": [
+    20,
+    50000
+   ],
+   "output": ""
+  },
+  {
+   "column": "boll__mid",
+   "ok": true,
+   "factor_id": "boll",
+   "kind": "fixed",
+   "has_params": false,
+   "values": [],
+   "output": "mid"
+  },
+  {
+   "column": "boll__30__mid",
+   "ok": true,
+   "factor_id": "boll",
+   "kind": "fixed",
+   "has_params": true,
+   "values": [
+    30
+   ],
+   "output": "mid"
+  },
+  {
+   "column": "ma_fast__var",
+   "ok": true,
+   "factor_id": "ma_fast",
+   "kind": "var",
+   "has_params": false,
+   "values": [],
+   "output": ""
+  },
+  {
+   "column": "ma_fast__var__ma",
+   "ok": true,
+   "factor_id": "ma_fast",
+   "kind": "var",
+   "has_params": false,
+   "values": [],
+   "output": "ma"
+  },
+  {
+   "column": "x__n1",
+   "ok": true,
+   "factor_id": "x",
+   "kind": "fixed",
+   "has_params": true,
+   "values": [
+    -1
+   ],
+   "output": ""
+  },
+  {
+   "column": "x__1p5",
+   "ok": true,
+   "factor_id": "x",
+   "kind": "fixed",
+   "has_params": true,
+   "values": [
+    1.5
+   ],
+   "output": ""
+  },
+  {
+   "column": "x__n0p25__y",
+   "ok": true,
+   "factor_id": "x",
+   "kind": "fixed",
+   "has_params": true,
+   "values": [
+    -0.25
+   ],
+   "output": "y"
+  },
+  {
+   "column": "x__01",
+   "ok": false
+  },
+  {
+   "column": "x__1p0",
+   "ok": false
+  },
+  {
+   "column": "x__n0",
+   "ok": false
+  },
+  {
+   "column": "x__0p50",
+   "ok": false
+  },
+  {
+   "column": "a__b__c__d",
+   "ok": false
+  },
+  {
+   "column": "boll__mid__up",
+   "ok": false
+  },
+  {
+   "column": "x__var__n5",
+   "ok": false
+  },
+  {
+   "column": "Ema",
+   "ok": false
+  },
+  {
+   "column": "ema__",
+   "ok": false
+  },
+  {
+   "column": "__params",
+   "ok": false
+  },
+  {
+   "column": "",
+   "ok": false
+  },
+  {
+   "column": "x__10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "ok": false
+  }
+ ],
+ "canonical_params": [
+  {
+   "input": {
+    "ema__20_50000": {
+     "warmup": 50000,
+     "span": 20
+    },
+    "rsi": {
+     "window": 14
+    }
+   },
+   "text": "{\"ema__20_50000\":{\"span\":20,\"warmup\":50000},\"rsi\":{\"window\":14}}"
+  },
+  {
+   "input": {},
+   "text": "{}"
+  },
+  {
+   "input": {
+    "boll": {
+     "window": 20.5
+    }
+   },
+   "text": "{\"boll\":{\"window\":20.5}}"
+  },
+  {
+   "input": {
+    "x__n1": {
+     "a": -0.0
+    }
+   },
+   "text": "{\"x__n1\":{\"a\":0}}"
+  },
+  {
+   "input": {
+    "x": {
+     "a": 1e+21
+    }
+   },
+   "text": "{\"x\":{\"a\":1000000000000000000000}}"
+  },
+  {
+   "input": {
+    "x": {
+     "a": 1e-07
+    }
+   },
+   "text": "{\"x\":{\"a\":0.0000001}}"
+  },
+  {
+   "input": {
+    "Ema": {
+     "span": 20
+    }
+   },
+   "error": true
+  },
+  {
+   "input": {
+    "ema": {
+     "Span": 20
+    }
+   },
+   "error": true
+  },
+  {
+   "input": {
+    "ema__01": {
+     "span": 20
+    }
+   },
+   "error": true
+  }
+ ],
+ "canonical_values": [
+  {
+   "input": {
+    "warmup": 50000,
+    "span": 20
+   },
+   "text": "{\"span\":20,\"warmup\":50000}"
+  },
+  {
+   "input": {},
+   "text": "{}"
+  },
+  {
+   "input": {
+    "Span": 1
+   },
+   "error": true
+  }
+ ],
+ "id": [
+  {
+   "suffix": "k3m9q2x7",
+   "task": "ftask_k3m9q2x7",
+   "dataset": "dataset_factor_k3m9q2x7",
+   "view": "view_factor_k3m9q2x7"
+  },
+  {
+   "suffix": "swap5m_chain",
+   "task": "ftask_swap5m_chain",
+   "dataset": "dataset_factor_swap5m_chain",
+   "view": "view_factor_swap5m_chain"
+  },
+  {
+   "suffix": "a",
+   "task": "ftask_a",
+   "dataset": "dataset_factor_a",
+   "view": "view_factor_a"
+  },
+  {
+   "suffix": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "task": "ftask_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "dataset": "dataset_factor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "view": "view_factor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+ ],
+ "suffix_invalid": [
+  "",
+  "Abc",
+  "a-b",
+  "_a",
+  "a_",
+  "a b",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ ],
+ "id_parse_invalid": [
+  "fset_x",
+  "ftask_",
+  "ftask__x",
+  "ftask_X",
+  "dataset_x",
+  "x"
+ ]
+}

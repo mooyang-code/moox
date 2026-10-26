@@ -38,6 +38,7 @@ use (
 	./packages/doctor
 	./packages/events
 	./packages/factorexpr
+	./packages/factorname
 	./packages/frequency
 	./packages/gatewayauth
 	./packages/gatewayclient
