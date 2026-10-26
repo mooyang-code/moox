@@ -31,16 +31,20 @@ func factorRetentionFindings(policy storagepolicy.Policy, plan setupFactorPlan) 
 		lookback int
 	}
 	byTask := map[string]worst{}
-	for _, member := range plan.Members {
-		if member.Status != "enabled" {
-			continue
-		}
-		lookback, ok := lookbacks[member.FactorID]
-		if !ok {
-			continue
-		}
-		if current, seen := byTask[member.TaskID]; !seen || lookback > current.lookback {
-			byTask[member.TaskID] = worst{factor: member.FactorID, lookback: lookback}
+	sets := map[string]setupFactorTask{}
+	for _, task := range plan.Tasks {
+		sets[task.TaskID] = task
+		for _, member := range task.Members {
+			if member.Status != "enabled" {
+				continue
+			}
+			lookback, ok := lookbacks[member.FactorID]
+			if !ok {
+				continue
+			}
+			if current, seen := byTask[task.TaskID]; !seen || lookback > current.lookback {
+				byTask[task.TaskID] = worst{factor: member.FactorID, lookback: lookback}
+			}
 		}
 	}
 	setIDs := make([]string, 0, len(byTask))
@@ -48,10 +52,6 @@ func factorRetentionFindings(policy storagepolicy.Policy, plan setupFactorPlan) 
 		setIDs = append(setIDs, id)
 	}
 	sort.Strings(setIDs)
-	sets := map[string]setupFactorTask{}
-	for _, set := range plan.Sets {
-		sets[set.TaskID] = set
-	}
 	for _, id := range setIDs {
 		set, ok := sets[id]
 		if !ok {

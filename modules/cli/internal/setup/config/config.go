@@ -15,11 +15,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
@@ -273,23 +276,25 @@ type SCFCloudAccountConfig struct {
 	COSBucket          string `toml:"cos_bucket"`
 }
 
-// FactorSetup describes the factor definitions (YAML factor library files),
-// the dataset-backed sets and which sets each factor joins, imported by `moox-cli setup init` or
-// `setup factors`. Definitions are global; members bind a definition to a set.
+// FactorSetup 描述由 `moox-cli setup init` 或 `setup factors` 导入的因子：定义来自 YAML 因子库文件（全局），
+// 因子任务内嵌自己的成员（设计 12）。
 type FactorSetup struct {
 	Enabled     bool                    `toml:"enabled"`
 	SourceDir   string                  `toml:"source_dir"`
-	Sets        []FactorSetupTask       `toml:"sets"`
+	Tasks       []FactorSetupTask       `toml:"tasks"`
 	Definitions []FactorSetupDefinition `toml:"definitions"`
-	Members     []FactorSetupMember     `toml:"members"`
 }
 
-// FactorSetupTask identifies the source Dataset shared by a group of factor members.
+// FactorSetupTask 是一个因子任务：id 是任务 ID（ftask_ 加后缀），name 是展示名（直接用作结果数据集的名称），
+// 源数据集 + 频率决定它读哪份数据；一个源数据集可以有多个任务。成员内嵌在任务里。
 // 任务的标的就是源数据集当前的标的，没有单独的对象范围。
 type FactorSetupTask struct {
-	SpaceID         string `toml:"space_id"`
-	SourceDatasetID string `toml:"source_dataset_id"`
-	Freq            string `toml:"freq"`
+	ID              string              `toml:"id"`
+	Name            string              `toml:"name"`
+	SpaceID         string              `toml:"space_id"`
+	SourceDatasetID string              `toml:"source_dataset_id"`
+	Freq            string              `toml:"freq"`
+	Members         []FactorSetupMember `toml:"members"`
 }
 
 // FactorSetupDefinition 引用 YAML 因子库文件里的一个定义（docs/计划/因子表达式引擎详细设计.md 9.5）：
@@ -299,17 +304,14 @@ type FactorSetupDefinition struct {
 	File     string `toml:"file"`
 }
 
-// FactorSetupMember adds one definition to one set (identified by
-// source_dataset_id and freq) with the target run status.
-// Params 是成员的固定参数（没给的参数取定义的默认值），MemberAlias 缺省时由服务端按参数生成：全部参数等于默认值时
-// 沿用 factor_id，否则是“factor_id_参数1_参数2…”。同一个定义可以用不同参数多次加入同一个任务。
+// FactorSetupMember 把一个定义加入任务。Params 是固定成员的固定参数（没给的参数取定义的默认值），Var 为真表示可变成员：
+// 参数由关联的策略实例逐期提交，Params 是它的默认参数。成员键由参数推导（见 packages/factorname），不在配置里写。
+// 同一个定义可以用不同的固定参数多次加入同一个任务。Status 缺省为 enabled。
 type FactorSetupMember struct {
-	SourceDatasetID string             `toml:"source_dataset_id"`
-	Freq            string             `toml:"freq"`
-	FactorID        string             `toml:"factor_id"`
-	MemberAlias     string             `toml:"member_alias"`
-	Params          map[string]float64 `toml:"params"`
-	Status          string             `toml:"status"`
+	Factor string             `toml:"factor"`
+	Params map[string]float64 `toml:"params"`
+	Var    bool               `toml:"var"`
+	Status string             `toml:"status"`
 }
 
 type Manifest struct {
@@ -455,9 +457,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if keys := md.Undecoded(); len(keys) != 0 {
 		if first := keys[0].String(); strings.HasPrefix(first, "factors.definitions.") {
 			return fmt.Errorf("config_invalid: %s is no longer supported; [[factors.definitions]] accepts only factor_id and file (a YAML factor library file); name, spec and the derived fields come from the library", first)
-		}
-		if first := keys[0].String(); first == "factors.items" || strings.HasPrefix(first, "factors.items.") {
-			return fmt.Errorf("config_invalid: factors.items is no longer supported; split it into [[factors.definitions]] (factor contract) and [[factors.members]] (source_dataset_id, freq, factor_id, status)")
 		}
 		first := keys[0].String()
 		section := string(keys[0][0])
@@ -821,22 +820,6 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	if cfg.SourceDir == "" || cfg.SourceDir == "." || filepath.IsAbs(cfg.SourceDir) || cfg.SourceDir == ".." || strings.HasPrefix(cfg.SourceDir, "../") {
 		return fmt.Errorf("config_invalid: factors.source_dir must be a repository-relative directory")
 	}
-	taskKeys := make(map[string]struct{}, len(cfg.Sets))
-	for index := range cfg.Sets {
-		set := &cfg.Sets[index]
-		path := fmt.Sprintf("factors.sets[%d]", index)
-		set.SpaceID = strings.TrimSpace(set.SpaceID)
-		set.SourceDatasetID = strings.TrimSpace(set.SourceDatasetID)
-		set.Freq = strings.TrimSpace(set.Freq)
-		if set.SpaceID == "" || set.SourceDatasetID == "" || set.Freq == "" {
-			return fmt.Errorf("config_invalid: %s requires space_id, source_dataset_id and freq", path)
-		}
-		key := factorSetupSetKey(set.SourceDatasetID, set.Freq)
-		if _, ok := taskKeys[key]; ok {
-			return fmt.Errorf("config_invalid: factor task for source_dataset_id %q and freq %q is duplicated", set.SourceDatasetID, set.Freq)
-		}
-		taskKeys[key] = struct{}{}
-	}
 	seen := make(map[string]struct{}, len(cfg.Definitions))
 	for index := range cfg.Definitions {
 		item := &cfg.Definitions[index]
@@ -857,50 +840,98 @@ func validateFactorSetup(cfg *FactorSetup) error {
 			return fmt.Errorf("config_invalid: %s.file must be a YAML factor library file (*.yaml)", path)
 		}
 	}
-	memberKeys := make(map[string]struct{}, len(cfg.Members))
-	for index := range cfg.Members {
-		member := &cfg.Members[index]
-		path := fmt.Sprintf("factors.members[%d]", index)
-		member.SourceDatasetID = strings.TrimSpace(member.SourceDatasetID)
-		member.Freq = strings.TrimSpace(member.Freq)
-		member.FactorID = strings.TrimSpace(member.FactorID)
-		member.Status = strings.TrimSpace(member.Status)
-		if member.FactorID == "" || member.SourceDatasetID == "" || member.Freq == "" {
-			return fmt.Errorf("config_invalid: %s requires factor_id, source_dataset_id and freq", path)
+	taskIDs := make(map[string]struct{}, len(cfg.Tasks))
+	taskNames := make(map[string]struct{}, len(cfg.Tasks))
+	for index := range cfg.Tasks {
+		task := &cfg.Tasks[index]
+		path := fmt.Sprintf("factors.tasks[%d]", index)
+		task.ID, task.Name = strings.TrimSpace(task.ID), strings.TrimSpace(task.Name)
+		task.SpaceID, task.SourceDatasetID, task.Freq = strings.TrimSpace(task.SpaceID), strings.TrimSpace(task.SourceDatasetID), strings.TrimSpace(task.Freq)
+		if task.ID == "" || task.Name == "" || task.SpaceID == "" || task.SourceDatasetID == "" || task.Freq == "" {
+			return fmt.Errorf("config_invalid: %s requires id, name, space_id, source_dataset_id and freq", path)
 		}
-		if _, ok := taskKeys[factorSetupSetKey(member.SourceDatasetID, member.Freq)]; !ok {
-			return fmt.Errorf("config_invalid: %s has no matching factor task for source_dataset_id %q and freq %q", path, member.SourceDatasetID, member.Freq)
+		if _, err := factorname.ParseTaskID(task.ID); err != nil {
+			return fmt.Errorf("config_invalid: %s.id is invalid: %v", path, err)
 		}
-		if _, ok := seen[member.FactorID]; !ok {
-			return fmt.Errorf("config_invalid: %s references unknown factor_id %q; declare it in [[factors.definitions]]", path, member.FactorID)
+		if err := validateFactorTaskName(task.Name); err != nil {
+			return fmt.Errorf("config_invalid: %s.name is invalid: %v", path, err)
 		}
-		member.MemberAlias = strings.TrimSpace(member.MemberAlias)
-		if member.MemberAlias != "" && (!factorMemberAliasPattern.MatchString(member.MemberAlias) || strings.Contains(member.MemberAlias, "__")) {
-			return fmt.Errorf("config_invalid: %s.member_alias %q is invalid: start with a letter, letters/digits/underscores only, at most 32 characters, no double underscores", path, member.MemberAlias)
+		if _, ok := taskIDs[task.ID]; ok {
+			return fmt.Errorf("config_invalid: factor task id %q is duplicated", task.ID)
 		}
-		for name, value := range member.Params {
-			if strings.TrimSpace(name) == "" || math.IsNaN(value) || math.IsInf(value, 0) {
-				return fmt.Errorf("config_invalid: %s.params has an empty name or a non-finite value", path)
-			}
+		taskIDs[task.ID] = struct{}{}
+		// 任务名直接用作结果数据集名称，空间内唯一。
+		nameKey := task.SpaceID + "\x00" + task.Name
+		if _, ok := taskNames[nameKey]; ok {
+			return fmt.Errorf("config_invalid: factor task name %q is duplicated in space %q", task.Name, task.SpaceID)
 		}
-		// 同一任务里同一因子可以多次加入，只要别名不同、参数不同；别名缺省时以参数区分。
-		key := factorSetupSetKey(member.SourceDatasetID, member.Freq) + "\x00" + member.FactorID + "\x00" + member.MemberAlias + "\x00" + canonicalParams(member.Params)
-		if _, ok := memberKeys[key]; ok {
-			return fmt.Errorf("config_invalid: factor %q is a member of set (%s, %s) more than once with the same alias and params", member.FactorID, member.SourceDatasetID, member.Freq)
-		}
-		memberKeys[key] = struct{}{}
-		if member.Status == "" {
-			member.Status = "enabled"
-		}
-		if member.Status != "enabled" && member.Status != "disabled" {
-			return fmt.Errorf("config_invalid: %s.status must be enabled or disabled", path)
+		taskNames[nameKey] = struct{}{}
+		if err := validateFactorSetupMembers(path, task.Members, seen); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func factorSetupSetKey(sourceDatasetID, freq string) string {
-	return strings.TrimSpace(sourceDatasetID) + "\x00" + strings.TrimSpace(freq)
+// validateFactorSetupMembers 检查任务内嵌的成员：引用的定义已声明、参数有限、状态合法；同一定义的可变成员最多一个，
+// 固定成员的参数相同（完全相同的写法）算重复。成员键由服务端按定义的默认参数推导，写法不同但推导出同一个键的情况由 setup 时报告。
+func validateFactorSetupMembers(path string, members []FactorSetupMember, definitions map[string]struct{}) error {
+	keys := make(map[string]struct{}, len(members))
+	for index := range members {
+		member := &members[index]
+		memberPath := fmt.Sprintf("%s.members[%d]", path, index)
+		member.Factor, member.Status = strings.TrimSpace(member.Factor), strings.TrimSpace(member.Status)
+		if member.Factor == "" {
+			return fmt.Errorf("config_invalid: %s requires factor", memberPath)
+		}
+		if _, ok := definitions[member.Factor]; !ok {
+			return fmt.Errorf("config_invalid: %s references unknown factor %q; declare it in [[factors.definitions]]", memberPath, member.Factor)
+		}
+		for name, value := range member.Params {
+			if strings.TrimSpace(name) == "" || math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("config_invalid: %s.params has an empty name or a non-finite value", memberPath)
+			}
+		}
+		kind := "fixed"
+		if member.Var {
+			kind = "var"
+		}
+		key := member.Factor + "\x00" + kind
+		if !member.Var {
+			key += "\x00" + canonicalParams(member.Params)
+		}
+		if _, ok := keys[key]; ok {
+			return fmt.Errorf("config_invalid: %s repeats factor %q (%s) with the same params", memberPath, member.Factor, kind)
+		}
+		keys[key] = struct{}{}
+		if member.Status == "" {
+			member.Status = "enabled"
+		}
+		if member.Status != "enabled" && member.Status != "disabled" {
+			return fmt.Errorf("config_invalid: %s.status must be enabled or disabled", memberPath)
+		}
+	}
+	return nil
+}
+
+// validateFactorTaskName 与 FactorMgr 的任务名规则一致：1～10 个字、含汉字、首尾无空白、无控制字符。
+func validateFactorTaskName(name string) error {
+	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > 10 {
+		return fmt.Errorf("must be 1-10 characters without surrounding whitespace")
+	}
+	hasHan := false
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("must not contain control characters")
+		}
+		if unicode.Is(unicode.Han, r) {
+			hasHan = true
+		}
+	}
+	if !hasHan {
+		return fmt.Errorf("must contain Chinese characters")
+	}
+	return nil
 }
 
 // supportedSCFRegion keeps an operator typo from creating a partial fleet.
@@ -947,8 +978,6 @@ func validateAccessAddress(address, path string) error {
 	}
 	return nil
 }
-
-var factorMemberAliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
 
 // canonicalParams 把固定参数写成键有序的文本，用来判断两个成员的参数是否相同。
 func canonicalParams(params map[string]float64) string {

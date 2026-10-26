@@ -54,3 +54,16 @@ func retentionComment(line string) string {
 	}
 	return ""
 }
+
+// entryLines 取一个条目的表头与键值行，去掉属于下一段的空行与注释。
+func entryLines(b block) []string {
+	lines := slices.Clone(b.lines)
+	for len(lines) > 1 {
+		last := strings.TrimSpace(lines[len(lines)-1])
+		if last != "" && !strings.HasPrefix(last, "#") {
+			break
+		}
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}

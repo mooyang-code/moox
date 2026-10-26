@@ -13,9 +13,11 @@ func lookbackPlan(spaceID, freq string, window int) setupFactorPlan {
 	spec := "params:\n  window: {type: int, min: 2, max: " + strconv.Itoa(window) + ", default: 2}\noutput: close / ts_mean(close, window)\n"
 	taskID := "ftask_prices_" + freq
 	return setupFactorPlan{
-		Sets:        []setupFactorTask{{TaskID: taskID, SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq}},
+		Tasks: []setupFactorTask{{
+			TaskID: taskID, Name: "行情因子", SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq,
+			Members: []setupFactorMember{{FactorID: "bias", Kind: "fixed", Status: "enabled"}},
+		}},
 		Definitions: []setupFactorDefinition{{FactorID: "bias", Name: "bias", Spec: spec}},
-		Members:     []setupFactorMember{{TaskID: taskID, FactorID: "bias", Status: "enabled"}},
 	}
 }
 
@@ -58,7 +60,7 @@ func TestFactorRetentionFindingsSessionMarketAndDisabledMembers(t *testing.T) {
 	require.Contains(t, warnings[0], "仅作提醒")
 
 	plan := lookbackPlan("stockcn", "1m", 500)
-	plan.Members[0].Status = "disabled"
+	plan.Tasks[0].Members[0].Status = "disabled"
 	errs, warnings = factorRetentionFindings(policy, plan)
 	require.Empty(t, errs)
 	require.Empty(t, warnings)

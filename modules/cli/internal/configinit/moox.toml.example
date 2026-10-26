@@ -99,29 +99,75 @@ max_rows_per_pass = 50000
 channel_type = "wecom"
 webhook_url = ""
 
-# setup init 导入因子：先按源数据集与频率建立因子集，再导入因子定义，最后把定义加入因子集并按 status 启用。
+# setup init 导入因子：先导入因子定义，再按任务建立因子任务并把成员加入任务、按 status 启用。
 # 定义（factors.definitions）引用 source_dir 下 YAML 因子库文件里的一个因子（factor_id + file），
 # 展示名与表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到；定义是全局的，不含数据集、
-# 频率和状态。成员（factors.members）用 source_dataset_id + freq 指向因子集，一个定义可加入多个因子集。
-# 输出列名同时作为结果列的 display_name，例如 bias_20。
+# 频率和状态。
+# 因子任务（factors.tasks）读一个源数据集的一个频率，一个源数据集可以有多个任务：
+#   id           任务 ID，ftask_ 加小写字母、数字、下划线组成的后缀；
+#   name         展示名，直接用作结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）；
+#   members      任务的成员，内嵌在任务里：factor 引用定义；params 是固定成员的固定参数，没给的参数取定义的默认值；
+#                var = true 是可变成员，参数由关联的策略实例逐期提交，params 是它的默认参数；status 缺省为 enabled。
+# 成员键由参数推导，不在配置里写：参数全为默认值时就是因子 ID，否则是 因子ID__值1_值2…，可变成员是 因子ID__var。
+# 结果列名是成员键，多输出因子再加 __输出名；setup factors 会逐项打印已存在 / 新建 / 冲突，以及每个成员的成员键和列名。
+# 同一个因子可以用不同的固定参数多次加入同一个任务，固定参数加成员之后不再改，要换参数请另加一个成员。
 # 默认因子：xbx.yaml 里的 bias、cci、min_max、quote_volume_mean，以及 common.yaml 里的常用技术指标
 # （MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）。
-# 关闭默认因子导入请设置 factors.enabled = false；也可以在因子库里新增定义，或复制条目改成自己的数据集与频率。
+# 关闭默认因子导入请设置 factors.enabled = false；也可以在因子库里新增定义，或复制任务改成自己的数据集与频率。
 [factors]
 enabled = false
 source_dir = "./modules/factor/factors"
 
 # 每个采集任务独占一个结果数据集，ID 由任务 ID 派生为 dataset_<task_id>
-# （见 config/setup/collection-tasks.yaml）：下面两个分别是币安现货、合约 1m 任务的结果。
-[[factors.sets]]
+# （见 config/setup/collection-tasks.yaml）：下面两个分别读币安现货、合约 1m 任务的结果。
+# 固定参数、可变成员的写法示例（加进任务的 members 里即可，不要和任务里已有的同一成员重复）：
+#   { factor = "ema", params = { span = 20, warmup = 50000 } },   # 成员键 ema__20_50000
+#   { factor = "ma", var = true },                                 # 成员键 ma__var，参数由关联的策略实例逐期提交
+[[factors.tasks]]
+id = "ftask_spot_1m"
+name = "现货一分钟"
 space_id = "crypto"
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
+members = [
+  { factor = "bias" },
+  { factor = "cci" },
+  { factor = "min_max" },
+  { factor = "quote_volume_mean" },
+  { factor = "ma" },
+  { factor = "ema" },
+  { factor = "macd" },
+  { factor = "rsi" },
+  { factor = "roc" },
+  { factor = "boll" },
+  { factor = "atr" },
+  { factor = "atr_pct" },
+  { factor = "return_std" },
+  { factor = "vwap" },
+]
 
-[[factors.sets]]
+[[factors.tasks]]
+id = "ftask_swap_1m"
+name = "合约一分钟"
 space_id = "crypto"
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
+members = [
+  { factor = "bias" },
+  { factor = "cci" },
+  { factor = "min_max" },
+  { factor = "quote_volume_mean" },
+  { factor = "ma" },
+  { factor = "ema" },
+  { factor = "macd" },
+  { factor = "rsi" },
+  { factor = "roc" },
+  { factor = "boll" },
+  { factor = "atr" },
+  { factor = "atr_pct" },
+  { factor = "return_std" },
+  { factor = "vwap" },
+]
 
 [[factors.definitions]]
 factor_id = "bias"
@@ -178,186 +224,6 @@ file = "common.yaml"
 [[factors.definitions]]
 factor_id = "vwap"
 file = "common.yaml"
-
-# 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
-# market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "bias"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "cci"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "min_max"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "quote_volume_mean"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "ma"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "ema"
-status = "enabled"
-
-# 同一个因子可以用不同的固定参数多次加入同一个任务；没给的参数取定义的默认值，member_alias 缺省时由服务端生成
-# （全部参数等于默认值时沿用 factor_id，否则是 factor_id_参数1_参数2…），固定参数加成员之后不再改。
-# [[factors.members]]
-# source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-# freq = "1m"
-# factor_id = "ema"
-# params = { span = 20, warmup = 50000 }
-# status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "macd"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "rsi"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "roc"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "boll"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "atr"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "atr_pct"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "return_std"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "vwap"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "bias"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "cci"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "min_max"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "quote_volume_mean"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "ma"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "ema"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "macd"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "rsi"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "roc"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "boll"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "atr"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "atr_pct"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "return_std"
-status = "enabled"
-
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
-freq = "1m"
-factor_id = "vwap"
-status = "enabled"
 
 # SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。
 # setup deploy 据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
