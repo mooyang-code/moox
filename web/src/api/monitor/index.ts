@@ -18,7 +18,7 @@ export const monitorApi = {
     return callControl<typeof req, Record<string, never>>(SERVICE, "DeleteNotificationChannel", req);
   },
   /** 一条数据链路（源数据集 + 周期）某一天各环节逐根 K 线的到达延迟；day 按市场时区，空为今天。 */
-  queryArrivalHistory(req: { space_id: string; dataset_id: string; freq: string; day?: string }) {
+  queryArrivalHistory(req: { space_id: string; dataset_id: string; freq: string; day?: string; task_id?: string }) {
     return callControl<typeof req, ArrivalHistory>(SERVICE, "QueryPipelineArrivalHistory", req);
   }
 };

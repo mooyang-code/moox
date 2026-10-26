@@ -16,7 +16,7 @@
             <a-tag size="small" :color="replayStatusColor(item.status)">{{ replayStatusLabel(item.status) }}</a-tag>
             <span>{{ replaySourceLabel(item, strategies) }}</span>
           </span>
-          <span class="replay-line muted mono">{{ item.view_id }}</span>
+          <span class="replay-line muted mono">{{ item.factor_task_id }}</span>
           <span class="replay-line muted">{{ replayRangeLabel(item) }}</span>
           <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
             进度 {{ formatUtcTime(item.progress_time) }}

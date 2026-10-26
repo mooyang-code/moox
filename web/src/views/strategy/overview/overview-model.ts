@@ -143,7 +143,7 @@ export function instanceCards(input: OverviewInput): InstanceCard[] {
         period: snapshot?.bar_end_time ? `最近一期 ${formatStrategyTime(snapshot.bar_end_time)}` : "",
         links: {
           results: resultsLink(instance.instance_id),
-          replay: replayLink({ instanceId: instance.instance_id, viewId: instance.view_id })
+          replay: replayLink({ instanceId: instance.instance_id, factorTaskId: instance.factor_task_id })
         }
       };
     });

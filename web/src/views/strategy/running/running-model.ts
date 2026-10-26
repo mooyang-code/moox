@@ -45,18 +45,6 @@ export function listKey(state: RunningState): string {
   return `${state.strategyId}|${state.enabled}|${state.page}`;
 }
 
-export interface ActionState {
-  disabled: boolean;
-  reason: string;
-}
-
-/** 删除实例的条件与原因：启用中、会话仍在释放中都不能删。 */
-export function instanceDeleteState(instance: { enabled: boolean; session_id: string }): ActionState {
-  if (instance.enabled) return { disabled: true, reason: "实例已启用，请先停用" };
-  if (instance.session_id) return { disabled: true, reason: "实例已停用，但会话仍在释放中，稍后可删除" };
-  return { disabled: false, reason: "" };
-}
-
 export type EmptyKind = "none" | "no-instances" | "no-match" | "error";
 
 /** 列表空态的类别：读取失败、当前空间没有实例、筛选无匹配分别提示。 */
@@ -64,9 +52,4 @@ export function emptyKind(options: { loading: boolean; error: string; count: num
   if (options.loading || options.count > 0) return "none";
   if (options.error) return "error";
   return options.filtered ? "no-match" : "no-instances";
-}
-
-/** 删除最后一项后应显示的页码：末页被删空时回到上一页。 */
-export function pageAfterRemoval(page: number, remainingOnPage: number): number {
-  return remainingOnPage === 0 && page > 1 ? page - 1 : page;
 }

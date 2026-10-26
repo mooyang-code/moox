@@ -19,6 +19,8 @@ const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
 const member = (factorId: string, status: FactorMember["status"] = "enabled"): FactorMember => ({
   task_id: "task_a",
   factor_id: factorId,
+  member_key: factorId,
+  kind: "fixed",
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
   created_at: "",

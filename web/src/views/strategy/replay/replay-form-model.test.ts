@@ -7,7 +7,7 @@ const base: ReplayFormState = {
   strategy_id: "s1",
   dsl_yaml: "",
   instance_id: "",
-  view_id: "v1",
+  factor_task_id: "ftask_1",
   start: "2026-09-01 00:00",
   end: "2026-09-02 00:00",
   fee_bps: 10
@@ -25,9 +25,9 @@ describe("replay form model", () => {
     expect(validateReplayForm(base, parseUtcInput)).toBe("");
   });
 
-  it("requires a view and a source", () => {
-    expect(validateReplayForm({ ...base, view_id: "" }, parseUtcInput)).toContain("请选择 View");
-    expect(validateReplayForm({ ...base, strategy_id: "" }, parseUtcInput)).toContain("请选择 View");
+  it("requires a factor task and a source", () => {
+    expect(validateReplayForm({ ...base, factor_task_id: "" }, parseUtcInput)).toContain("请选择因子任务");
+    expect(validateReplayForm({ ...base, strategy_id: "" }, parseUtcInput)).toContain("请选择因子任务");
   });
 
   it("checks the time format and ordering", () => {

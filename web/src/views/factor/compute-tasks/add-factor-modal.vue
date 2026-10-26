@@ -50,18 +50,24 @@
               <span class="add-factor__param-hint">{{ decl.min }} ~ {{ decl.max }}，默认 {{ decl.default_value }}</span>
             </span>
             <span class="add-factor__param">
-              <span class="add-factor__param-name">成员别名</span>
-              <a-input
-                :model-value="drafts[row.factor.factor_id]?.alias ?? ''"
-                :placeholder="row.check.ok ? row.check.alias : row.factor.factor_id"
-                :disabled="submitting"
+              <span class="add-factor__param-name">成员类型</span>
+              <a-radio-group
+                :model-value="kindOf(row.factor.factor_id)"
+                type="button"
                 size="small"
-                allow-clear
-                class="add-factor__alias-input"
-                @update:model-value="setAlias(row.factor.factor_id, $event)"
-              />
-              <span class="add-factor__param-hint">{{ columnsHint(row) }}</span>
+                :disabled="submitting"
+                @change="setKind(row.factor.factor_id, $event as MemberKind)"
+              >
+                <a-radio value="fixed">固定参数</a-radio>
+                <a-radio value="var" :disabled="!row.decls.length">可变（策略逐期提交）</a-radio>
+              </a-radio-group>
+              <span v-if="kindOf(row.factor.factor_id) === 'var'" class="add-factor__param-hint"
+                >上面的参数是默认参数，加成员之后不能改</span
+              >
             </span>
+            <span v-if="row.check.ok" class="add-factor__preview"
+              >成员键 {{ row.check.memberKey }} · 结果列 {{ row.check.columns.join(", ") }}</span
+            >
           </div>
         </div>
       </div>
@@ -82,7 +88,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addFactorToTask, listFactors } from "@/api/factor";
-import type { FactorDef, FactorParamDecl, FactorTaskInfo } from "@/api/factor/types";
+import type { FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
@@ -114,15 +120,16 @@ interface CandidateRow {
   locked: boolean;
 }
 
-/** 每个选中因子的草稿：固定参数（只存改过的）与手填的别名。 */
-const drafts = ref<Record<string, { params: Record<string, number>; alias: string }>>({});
-/** 本次弹窗里已经加入的成员（别名与固定参数），预检把它们算作已有成员。 */
+/** 每个选中因子的草稿：参数（只存改过的）与成员类型。 */
+const drafts = ref<Record<string, { params: Record<string, number>; kind: MemberKind }>>({});
+/** 本次弹窗里已经加入的成员（成员键、类型与参数），预检把它们算作已有成员。 */
 const addedMembers = ref<PrecheckMember[]>([]);
 
 const memberViews = computed<PrecheckMember[]>(() => [
   ...props.info.members.map(member => ({
     factor_id: member.factor_id,
-    alias: member.member_alias || member.factor_id,
+    member_key: member.member_key,
+    kind: member.kind,
     params: member.params,
     output_columns: member.output_columns?.length ? member.output_columns : member.factor.outputs
   })),
@@ -139,8 +146,8 @@ const rows = computed<CandidateRow[]>(() => {
         candidate: item,
         members: memberViews.value,
         sourceColumns: sourceColumns.value,
-        params: selected.value.includes(item.factor_id) ? draft?.params : undefined,
-        alias: selected.value.includes(item.factor_id) ? draft?.alias : undefined
+        kind: selected.value.includes(item.factor_id) ? draft?.kind : undefined,
+        params: selected.value.includes(item.factor_id) ? draft?.params : undefined
       });
       return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
     });
@@ -155,25 +162,21 @@ function paramValue(factorId: string, decl: FactorParamDecl) {
 }
 
 function draftOf(factorId: string) {
-  return (drafts.value[factorId] ??= { params: {}, alias: "" });
+  return (drafts.value[factorId] ??= { params: {}, kind: "fixed" });
+}
+
+function kindOf(factorId: string): MemberKind {
+  return drafts.value[factorId]?.kind ?? "fixed";
+}
+
+function setKind(factorId: string, kind: MemberKind) {
+  draftOf(factorId).kind = kind;
 }
 
 function setParam(factorId: string, name: string, value: number | undefined) {
   const draft = draftOf(factorId);
   if (value === undefined || value === null || Number.isNaN(value)) delete draft.params[name];
   else draft.params[name] = value;
-}
-
-function setAlias(factorId: string, value: string) {
-  draftOf(factorId).alias = value ?? "";
-}
-
-/** 选中后在行下方提示这个成员的结果列名（别名等于因子 ID 时就是输出名）。 */
-function columnsHint(row: CandidateRow) {
-  if (!row.check.ok) return "";
-  const alias = row.check.alias;
-  const columns = row.factor.outputs.map(output => (alias === row.factor.factor_id ? output : `${alias}_${output}`));
-  return `结果列 ${columns.join(", ")}`;
 }
 
 async function fetchAllFactors() {
@@ -228,7 +231,11 @@ function toggle(factorId: string, checked: boolean | (string | number | boolean)
 function noteText(row: CandidateRow) {
   const failure = errors.value[row.factor.factor_id];
   if (failure) return failure;
-  return row.check.ok ? (row.check.alias === row.factor.factor_id ? "可添加" : `可添加，别名 ${row.check.alias}`) : row.check.reason;
+  return row.check.ok
+    ? row.check.memberKey === row.factor.factor_id
+      ? "可添加"
+      : `可添加，成员键 ${row.check.memberKey}`
+    : row.check.reason;
 }
 
 function noteClass(row: CandidateRow) {
@@ -258,14 +265,18 @@ async function submit() {
         const draft = drafts.value[factorId];
         const row = rows.value.find(item => item.factor.factor_id === factorId);
         const decls = row?.decls ?? [];
-        // 有参数的因子把完整参数一起提交（没改的取默认值）；别名留空时由服务端按参数生成。
-        const params = decls.length ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value])) : undefined;
-        const member = await addFactorToTask(taskId, factorId, draft?.alias?.trim() || undefined, params);
+        // 有参数的因子把完整参数一起提交（没改的取默认值）；成员键由服务端按参数推导并返回。
+        const params = decls.length
+          ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value]))
+          : undefined;
+        const kind = draft?.kind ?? "fixed";
+        const member = await addFactorToTask(taskId, factorId, kind, params);
         addedMembers.value = [
           ...addedMembers.value,
           {
             factor_id: factorId,
-            alias: member.member_alias || factorId,
+            member_key: member.member_key,
+            kind: member.kind ?? kind,
             params: member.params ?? params,
             output_columns: member.output_columns ?? []
           }
@@ -373,8 +384,10 @@ onBeforeUnmount(() => addScope.invalidate());
   width: 96px;
 }
 
-.add-factor__alias-input {
-  width: 180px;
+.add-factor__preview {
+  width: 100%;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .add-factor__param-hint {

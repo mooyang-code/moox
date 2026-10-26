@@ -5,7 +5,6 @@ import { createMemoryHistory, createRouter } from "vue-router";
 
 const api = vi.hoisted(() => ({
   loadInstances: vi.fn(),
-  removeInstance: vi.fn(),
   clearInstances: vi.fn(),
   store: null as any,
   space: null as any,
@@ -76,7 +75,6 @@ async function setup(query: Record<string, string>) {
 describe("strategy running page", () => {
   beforeEach(() => {
     api.loadInstances.mockReset().mockResolvedValue(undefined);
-    api.removeInstance.mockReset().mockResolvedValue(undefined);
     api.clearInstances.mockReset();
     api.warning.mockReset();
     api.confirmToggle.mockReset();
@@ -90,7 +88,6 @@ describe("strategy running page", () => {
       instancesError: "",
       catalogError: "",
       loadInstances: api.loadInstances,
-      removeInstance: api.removeInstance,
       clearInstances: api.clearInstances,
       loadAllStrategies: vi.fn().mockImplementation(async () => {
         api.store.strategyCatalog = [{ strategy_id: "s1", name: "动量" }];
@@ -175,34 +172,6 @@ describe("strategy running page", () => {
     const alerts = wrapper.findAll(".alert").map(item => item.text());
     expect(alerts.some(text => text.includes("策略定义目录加载失败"))).toBe(true);
     expect(alerts.some(text => text.includes("实例加载失败"))).toBe(false);
-  });
-
-  it("steps back a page when deleting empties the last page", async () => {
-    const { router, wrapper } = await setup({ page: "3" });
-    api.removeInstance.mockImplementation(async () => {
-      api.store.instances = [];
-    });
-    api.store.instances = [{ instance_id: "i9", enabled: false, session_id: "" }];
-    api.loadInstances.mockClear();
-    const vm = wrapper.vm as unknown as { confirmRemove: (instance: unknown) => void };
-    vm.confirmRemove({ instance_id: "i9", enabled: false, session_id: "" });
-    await api.warning.mock.calls[0][0].onOk();
-    await flushPromises();
-    expect(router.currentRoute.value.query).toEqual({ page: "2" });
-    expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
-  });
-  it("closes the deleted instance's quick detail and steps back a page in one navigation", async () => {
-    const { router, wrapper } = await setup({ page: "3", instance_id: "i9" });
-    api.removeInstance.mockImplementation(async () => {
-      api.store.instances = [];
-    });
-    api.store.instances = [{ instance_id: "i9", enabled: false, session_id: "" }];
-    const vm = wrapper.vm as unknown as { confirmRemove: (instance: unknown) => void };
-    vm.confirmRemove({ instance_id: "i9", enabled: false, session_id: "" });
-    await api.warning.mock.calls.at(-1)[0].onOk();
-    await flushPromises();
-    expect(router.currentRoute.value.query).toEqual({ page: "2" });
   });
 
   it("toggles an instance from the list through the shared confirm flow and reloads afterwards", async () => {

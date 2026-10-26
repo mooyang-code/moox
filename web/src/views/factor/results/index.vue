@@ -224,8 +224,8 @@ async function loadScope(current: FactorTaskInfo["factor_task"], view: View, tok
       // 分类只用于展示名称和排序，读取失败时按 ID 展示。
       listFactorCategories().catch(() => [] as FactorCategory[]),
       // 外显设置只影响展示：读取失败时全部展示。
-      current.owner_instance_id
-        ? getStrategyDisplaySettings(current.owner_instance_id).catch(() => undefined)
+      current.bound_instance_id
+        ? getStrategyDisplaySettings(current.bound_instance_id).catch(() => undefined)
         : Promise.resolve(undefined)
     ]);
     if (!viewGate.isCurrent(token)) return;

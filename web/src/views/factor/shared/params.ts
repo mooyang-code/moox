@@ -1,4 +1,4 @@
-import type { FactorCategory, FactorParamDecl, ParamInterval, ParamValue, ParamsSource } from "@/api/factor/types";
+import type { FactorCategory, FactorParamDecl, ParamValue } from "@/api/factor/types";
 import { UNCATEGORIZED } from "@/api/factor/types";
 
 /** 一个可调参数的一行说明：名称、类型、范围与默认值。 */
@@ -19,17 +19,6 @@ export function categoryName(categories: FactorCategory[], categoryId?: string) 
   return categories.find(category => category.category_id === id)?.name ?? (id === UNCATEGORIZED ? "未分类" : id);
 }
 
-export const PARAMS_SOURCE_TEXT: Record<ParamsSource, string> = {
-  requested: "提交生效",
-  carried: "沿用上期",
-  carried_offline: "离线沿用",
-  default: "默认值"
-};
-
-export function paramsSourceText(source: string) {
-  return PARAMS_SOURCE_TEXT[source as ParamsSource] ?? source;
-}
-
 /** 一个参数取值的文本：统一值，有按标的覆盖时附上覆盖个数。 */
 export function paramValueText(value: ParamValue) {
   const overrides = Object.keys(value.overrides ?? {}).length;
@@ -37,41 +26,11 @@ export function paramValueText(value: ParamValue) {
   return overrides ? `${defaultValue}（${overrides} 个标的覆盖）` : String(defaultValue);
 }
 
-export interface ParamTimelineRow {
-  key: string;
-  member: string;
-  start: number;
-  end: number;
-  periods: number;
-  source: string;
-  sourceText: string;
-  params: string;
-}
-
-/** 把 int64（ProtoJSON 输出字符串）转成数字。 */
-const toNumber = (value: number | string) => Number(value);
-
-/**
- * 冻结区间转成时间线行（新的在前）：每行是快照与来源相同的连续期次。periodSeconds 用来估算区间覆盖的期数。
- */
-export function paramTimeline(intervals: ParamInterval[], periodSeconds: number): ParamTimelineRow[] {
-  return intervals
-    .map(interval => {
-      const start = toNumber(interval.start_period);
-      const end = toNumber(interval.end_period);
-      return {
-        key: `${interval.member_alias}@${start}`,
-        member: interval.member_alias,
-        start,
-        end,
-        periods: periodSeconds > 0 ? Math.floor((end - start) / periodSeconds) + 1 : 1,
-        source: interval.source,
-        sourceText: paramsSourceText(interval.source),
-        params: Object.entries(interval.params ?? {})
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([name, value]) => `${name}=${paramValueText(value)}`)
-          .join("，")
-      };
-    })
-    .sort((a, b) => b.start - a.start || a.member.localeCompare(b.member));
+/** 成员参数的展示文本（按参数名排序，如 span=20, warmup=50000）；没有参数时为空。 */
+export function paramsText(params?: Record<string, number>): string {
+  if (!params) return "";
+  return Object.keys(params)
+    .sort()
+    .map(name => `${name}=${params[name]}`)
+    .join(", ");
 }

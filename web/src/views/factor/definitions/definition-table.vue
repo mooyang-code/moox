@@ -49,7 +49,7 @@
               :key="chip.key"
               type="button"
               class="usage-chip"
-              :title="`${chip.label}${chip.alias ? ` · ${chip.alias}` : ''}（${chip.statusLabel}）`"
+              :title="`${chip.label}${chip.memberKey ? ` · ${chip.memberKey}` : ''}（${chip.statusLabel}）`"
               @click.stop="$emit('openTask', chip.taskId)"
             >
               <span class="usage-dot" :class="`usage-dot--${chip.status}`"></span>

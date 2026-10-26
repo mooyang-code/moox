@@ -35,7 +35,7 @@ describe("job helpers", () => {
   });
 
   it("maps statuses to labels and falls back for unknown values", () => {
-    expect(taskStatusTag("deleting").label).toBe("清理中");
+    expect(taskStatusTag("pending").label).toBe("创建中");
     expect(jobStatusTag("cancelled").label).toBe("已取消");
     expect(taskStatusTag("???")).toEqual({ label: "???", color: "gray" });
   });

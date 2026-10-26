@@ -13,7 +13,7 @@ function scopeWith(outputs: string[], baseMarket = ["open", "close"], otherSourc
   const items = outputs.map(column => ({
     column,
     output: column,
-    alias: column,
+    memberKey: column,
     factorId: column,
     factorName: column,
     categoryId: "c"
@@ -21,7 +21,7 @@ function scopeWith(outputs: string[], baseMarket = ["open", "close"], otherSourc
   return {
     outputs: items,
     outputByColumn: new Map(items.map(item => [item.column, item])),
-    paramsByAlias: new Map(),
+    paramsColumn: "",
     baseMarket,
     otherSource,
     categoryNames: new Map(),

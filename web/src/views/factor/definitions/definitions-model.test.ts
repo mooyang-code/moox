@@ -66,23 +66,25 @@ describe("definitions model", () => {
     const labels: Record<string, string> = { task_a: "现货K线 · 1m" };
     const chips = usageChips(
       [
-        { task_id: "task_a", status: "enabled" },
-        { task_id: "task_gone", status: "disabled" }
+        { task_id: "task_a", member_key: "bias", status: "enabled" },
+        { task_id: "task_gone", member_key: "bias__var", status: "disabled" }
       ],
       taskId => labels[taskId] ?? taskId
     );
     expect(chips).toEqual([
       {
-        key: "task_a/",
+        key: "task_a/bias",
         taskId: "task_a",
+        memberKey: "bias",
         label: "现货K线 · 1m",
         status: "enabled",
         statusLabel: "已启用",
         paramsText: undefined
       },
       {
-        key: "task_gone/",
+        key: "task_gone/bias__var",
         taskId: "task_gone",
+        memberKey: "bias__var",
         label: "task_gone",
         status: "disabled",
         statusLabel: "已停用",
@@ -94,13 +96,13 @@ describe("definitions model", () => {
   it("usage chips show the fixed params of each member", () => {
     const chips = usageChips(
       [
-        { task_id: "task_a", member_alias: "Ema", status: "enabled", params: { span: 20, warmup: 0 } },
-        { task_id: "task_a", member_alias: "Ema_20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
+        { task_id: "task_a", member_key: "ema", status: "enabled", params: { span: 20, warmup: 0 } },
+        { task_id: "task_a", member_key: "ema__20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
       ],
       () => "5m 因子任务"
     );
     expect(chips.map(chip => chip.paramsText)).toEqual(["span=20, warmup=0", "span=20, warmup=50000"]);
-    expect(chips.map(chip => chip.key)).toEqual(["task_a/Ema", "task_a/Ema_20_50000"]);
+    expect(chips.map(chip => chip.key)).toEqual(["task_a/ema", "task_a/ema__20_50000"]);
   });
 
   it("edit locked when any enabled usage, with reason", () => {

@@ -61,7 +61,7 @@ export function barLagText(freq: string, lastRun?: Pick<TaskRunSummary, "last_pe
 }
 
 export function setHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: TaskRunSummary): SetHealth {
-  if (set.status === "deleting" || set.status === "pending" || set.status === "disabled") {
+  if (set.status === "pending" || set.status === "disabled") {
     const tag = taskStatusTag(set.status);
     return { key: set.status, ...tag };
   }

@@ -91,35 +91,45 @@ describe("FactorMgr factor-set API", () => {
     const member = { task_id: "set-1", factor_id: "f1", status: "disabled" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member });
     await expect(addFactorToTask("set-1", "f1")).resolves.toEqual(member);
-    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "f1" });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "f1", kind: "fixed" });
   });
 
-  it("removeFactorFromTask posts task_id and the member alias", async () => {
+  it("removeFactorFromTask posts task_id and the member key", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
     await removeFactorFromTask("set-1", "f1");
-    expect(call).toHaveBeenLastCalledWith("RemoveTaskMember", { task_id: "set-1", member_alias: "f1" });
+    expect(call).toHaveBeenLastCalledWith("RemoveTaskMember", { task_id: "set-1", member_key: "f1" });
   });
 
   it("setFactorMemberStatus returns the member", async () => {
     const member = { task_id: "set-1", factor_id: "f1", status: "enabled" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member });
     await expect(setFactorMemberStatus("set-1", "f1", "enabled")).resolves.toEqual({ member });
-    expect(call).toHaveBeenLastCalledWith("SetTaskMemberStatus", { task_id: "set-1", member_alias: "f1", status: "enabled" });
+    expect(call).toHaveBeenLastCalledWith("SetTaskMemberStatus", { task_id: "set-1", member_key: "f1", status: "enabled" });
   });
 
-  it("addFactorToTask sends the alias and fixed params only when given", async () => {
+  it("addFactorToTask sends the kind and params only when given", async () => {
     call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, member: { task_id: "set-1" } });
     await addFactorToTask("set-1", "bias");
-    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "bias" });
-    await addFactorToTask("set-1", "bias", "fast");
-    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "bias", member_alias: "fast" });
-    await addFactorToTask("set-1", "Ema", undefined, { span: 20, warmup: 50000 });
-    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "Ema", params: { span: 20, warmup: 50000 } });
-    await addFactorToTask("set-1", "Ema", "ema20", {});
-    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "Ema", member_alias: "ema20" });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "bias", kind: "fixed" });
+    await addFactorToTask("set-1", "ema", "fixed", { span: 20, warmup: 50000 });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "ema",
+      kind: "fixed",
+      params: { span: 20, warmup: 50000 }
+    });
+    await addFactorToTask("set-1", "ema", "var", {});
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "ema", kind: "var" });
+    await addFactorToTask("set-1", "ema", "var", { span: 30 });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "ema",
+      kind: "var",
+      params: { span: 30 }
+    });
   });
 
-  it("manages categories, factor category and parameter history", async () => {
+  it("manages categories, factor category and the submitted params", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, categories: [{ category_id: "momentum", name: "动量类" }] });
     await expect(listFactorCategories()).resolves.toEqual([{ category_id: "momentum", name: "动量类" }]);
     expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {});
@@ -136,10 +146,13 @@ describe("FactorMgr factor-set API", () => {
     await expect(setFactorCategory("bias", "momentum")).resolves.toEqual({ factor_id: "bias", category_id: "momentum" });
     expect(call).toHaveBeenLastCalledWith("SetFactorCategory", { factor_id: "bias", category_id: "momentum" });
 
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, intervals: [], frozen_through: "180" });
-    const rsp = await getFactorParams({ task_id: "set-1", include_requests: true });
-    expect(call).toHaveBeenLastCalledWith("GetFactorParams", { task_id: "set-1", include_requests: true });
-    expect(rsp.frozen_through).toBe("180");
+    call.mockResolvedValueOnce({
+      ret_info: { code: 0, msg: "" },
+      members: [{ member_key: "bias__var", params: { window: { default_value: 20 } }, last_submitted_period: "180" }]
+    });
+    const rsp = await getFactorParams({ task_id: "set-1" });
+    expect(call).toHaveBeenLastCalledWith("GetFactorParams", { task_id: "set-1" });
+    expect(rsp.members[0]).toMatchObject({ member_key: "bias__var", last_submitted_period: "180" });
   });
 
   it("getFactor returns usages", async () => {

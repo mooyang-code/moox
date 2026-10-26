@@ -84,21 +84,25 @@ describe("factor API contract", () => {
     expect(job.progress_time).toBe(request.start_time);
   });
 
-  it("exposes per-factor period states and the deleting set status", () => {
+  it("exposes per-member period states and the task name and binding", () => {
     const set: FactorTask = {
       task_id: "factor_task_crypto_1m",
       space_id: "crypto",
       source_dataset_id: "dataset_crypto_kline_1m",
       freq: "1m",
+      name: "加密一分钟",
       result_dataset_id: "dataset_factor_crypto_1m",
-      status: "deleting"
+      status: "enabled",
+      bound_instance_id: "i1"
     };
     const run: TaskRunSummary = {
       task_id: set.task_id,
       last_period_time: 1,
       last_status: "degraded",
       lag_seconds: 3,
-      factors: [{ factor_id: "Bias", status: "degraded", failed_subjects: ["BTC-USDT"] }]
+      factors: [
+        { factor_id: "bias", member_key: "bias__var", member_kind: "var", status: "degraded", failed_subjects: ["BTC-USDT"] }
+      ]
     };
     const engine: EngineStatus = {
       ret_info: { code: 0, msg: "success" },
@@ -124,7 +128,7 @@ describe("factor pages contract", () => {
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {
-    expect(memberSection).toContain("setFactorMemberStatus(member.task_id, alias, target)");
+    expect(memberSection).toContain("setFactorMemberStatus(member.task_id, key, target)");
     expect(memberSection).toContain("removeFactorFromTask");
     expect(memberSection).not.toContain("backfill_job");
     expect(memberModel).toContain("需要先停用");

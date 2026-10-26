@@ -7,6 +7,13 @@
           <option v-for="chain in chains" :key="chain.key" :value="chain.key">{{ chain.label }}</option>
         </select>
       </label>
+      <label v-if="taskOptions.length > 1">
+        <span>因子任务</span>
+        <select v-model="taskId" aria-label="因子任务">
+          <option value="">请选择（不选则不含因子环节）</option>
+          <option v-for="option in taskOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+      </label>
       <label>
         <span>日期（{{ zone }}）</span>
         <input v-model="day" type="date" aria-label="日期" :min="minDay" :max="maxDay" />
@@ -31,6 +38,7 @@
       <span v-if="loading" class="muted">加载中…</span>
       <span v-else-if="error" class="arrival-error">{{ error }}</span>
       <span v-else-if="model.notice" class="muted">{{ model.notice }}</span>
+      <span v-else-if="choosingTask" class="muted">这个数据集上有多个因子任务，选择一个才能看到因子环节的曲线</span>
     </div>
     <p v-if="!chains.length" class="muted">没有可查看的数据链路（入库环节还没有行情数据集）</p>
     <!-- 链路这一天没有记录也画出空的坐标，不让图表区消失。 -->
@@ -54,9 +62,11 @@ import {
   arrivalChains,
   arrivalChartSpec,
   arrivalModel,
+  arrivalTaskOptions,
   arrivalWindowAt,
   defaultArrivalAnchor,
   defaultArrivalScale,
+  needsTaskChoice,
   pipelineDisplayNames,
   shiftArrivalAnchor,
   type ArrivalScale
@@ -75,6 +85,10 @@ const maxDay = computed(() => marketDay(props.nowMs, chain.value?.timezone));
 const minDay = computed(() => marketDay(props.nowMs - 7 * DAY_MS, chain.value?.timezone));
 const day = ref("");
 const history = ref<ArrivalHistory>();
+/** 选定的因子任务；空表示由服务端默认（只有一个任务时查它，多个任务时不含因子环节）。 */
+const taskId = ref("");
+const taskOptions = computed(() => arrivalTaskOptions(history.value));
+const choosingTask = computed(() => needsTaskChoice(history.value, taskId.value));
 const loading = ref(false);
 const error = ref("");
 const model = computed(() => arrivalModel(history.value, props.names, pipelineDisplayNames(props.overview)));
@@ -150,7 +164,8 @@ async function load(options: { refresh?: boolean } = {}) {
       space_id: current.spaceId,
       dataset_id: current.datasetId,
       freq: current.freq,
-      day: day.value
+      day: day.value,
+      task_id: taskId.value || undefined
     });
     if (id !== requestID) return;
     history.value = rsp;
@@ -163,16 +178,17 @@ async function load(options: { refresh?: boolean } = {}) {
   if (id === requestID) render();
 }
 
-// 换链路时回到这条链路的默认档位（分钟线 1 小时，小时线及以上全天）。
+// 换链路时回到这条链路的默认档位（分钟线 1 小时，小时线及以上全天），并清掉上一条链路选的因子任务。
 watch(
   chainKey,
   () => {
+    taskId.value = "";
     scale.value = defaultArrivalScale(chain.value?.freq || "");
   },
   { immediate: true }
 );
 watch(
-  [chainKey, day],
+  [chainKey, day, taskId],
   () => {
     pinnedAnchor.value = null;
     void load();

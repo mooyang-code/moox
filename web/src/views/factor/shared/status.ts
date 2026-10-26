@@ -8,8 +8,7 @@ export interface StatusTag {
 const taskStatusTags: Record<FactorTaskStatus, StatusTag> = {
   pending: { label: "创建中", color: "blue" },
   enabled: { label: "运行中", color: "green" },
-  disabled: { label: "已停用", color: "orange" },
-  deleting: { label: "清理中", color: "gray" }
+  disabled: { label: "已停用", color: "orange" }
 };
 
 const memberStatusTags: Record<MemberStatus, StatusTag> = {

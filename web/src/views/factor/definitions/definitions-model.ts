@@ -1,4 +1,3 @@
-import { fixedParamsText } from "@/views/factor/shared/member-params";
 import {
   UNCATEGORIZED,
   type FactorCategory,
@@ -8,7 +7,7 @@ import {
   type MemberStatus
 } from "@/api/factor/types";
 import { memberStatusTag } from "@/views/factor/shared/status";
-import { categoryName } from "@/views/factor/shared/params";
+import { categoryName, paramsText } from "@/views/factor/shared/params";
 
 export type UsageFilter = "all" | "using" | "idle";
 
@@ -45,28 +44,28 @@ export function filterDefinitions(items: FactorInfo[], filters: DefinitionFilter
 }
 
 export interface UsageChip {
-  /** 列表项的唯一键：同一定义在一个任务里可以用不同别名出现多次。 */
+  /** 列表项的唯一键：同一定义在一个任务里可以用不同参数多次出现，成员键各不相同。 */
   key: string;
   taskId: string;
-  /** 成员别名；与定义 ID 相同时为空。 */
-  alias?: string;
+  /** 成员键；与定义 ID 相同时为空。 */
+  memberKey?: string;
   label: string;
   status: MemberStatus;
   statusLabel: string;
-  /** 成员的固定参数摘要（如 span=20, warmup=50000）；没有固定参数时为空。 */
+  /** 成员的参数摘要（如 span=20, warmup=50000）；没有参数时为空。 */
   paramsText?: string;
 }
 
 /** 使用情况 chip：「数据集名 · 频率」+ 状态点（labelOf 由页面用 store 拼出）。 */
 export function usageChips(usages: FactorUsage[], labelOf: (taskId: string) => string): UsageChip[] {
   return usages.map(usage => ({
-    key: `${usage.task_id}/${usage.member_alias ?? ""}`,
+    key: `${usage.task_id}/${usage.member_key}`,
     taskId: usage.task_id,
-    alias: usage.member_alias || undefined,
+    memberKey: usage.member_key && usage.member_key !== "" ? usage.member_key : undefined,
     label: labelOf(usage.task_id),
     status: usage.status,
     statusLabel: memberStatusTag(usage.status).label,
-    paramsText: fixedParamsText(usage.params) || undefined
+    paramsText: paramsText(usage.params) || undefined
   }));
 }
 

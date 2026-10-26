@@ -18,7 +18,6 @@ import {
   getReplay,
   getStrategyDisplaySettings,
   getStrategyResult,
-  listStrategyParamSubmissions,
   setStrategyDisplaySettings,
   listInstances,
   listReplays,
@@ -47,18 +46,18 @@ describe("strategy API", () => {
     await expect(listStrategies()).rejects.toThrow("upstream EOF");
   });
 
-  it("creates a disabled instance bound to one View", async () => {
+  it("creates a disabled instance bound to one factor task", async () => {
     callControl.mockResolvedValueOnce({
-      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", view_id: "view_a", enabled: false }
+      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", factor_task_id: "ftask_a", enabled: false }
     });
-    const instance = await createInstance({ strategy_id: "s-1", view_id: "view_a", logical_account_id: "" });
+    const instance = await createInstance({ strategy_id: "s-1", factor_task_id: "ftask_a", logical_account_id: "" });
     expect(callControl).toHaveBeenCalledWith(
       "strategy",
       "CreateStrategyInstance",
-      { instance: { strategy_id: "s-1", view_id: "view_a", logical_account_id: "", enabled: false } },
+      { instance: { strategy_id: "s-1", factor_task_id: "ftask_a", logical_account_id: "", enabled: false } },
       undefined
     );
-    expect(instance).toMatchObject({ instance_id: "i-1", view_id: "view_a", resolved_json: "{}", health: "ok" });
+    expect(instance).toMatchObject({ instance_id: "i-1", factor_task_id: "ftask_a", resolved_json: "{}", health: "ok" });
   });
 
   it("reads results with status, skip reason and explanation items", async () => {
@@ -103,10 +102,10 @@ describe("strategy API", () => {
         diagnostics: ["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列", ""]
       })
     );
-    const result = await validateStrategy("name: x", "view_a");
+    const result = await validateStrategy("name: x", "ftask_a");
     expect(result.diagnostics).toEqual(["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列"]);
     expect(result.trial).toBeNull();
-    expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", { dsl_yaml: "name: x", view_id: "view_a" });
+    expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", { dsl_yaml: "name: x", factor_task_id: "ftask_a" });
   });
 
   it("falls back to the error message when a rejected validation carries no diagnostics", async () => {
@@ -155,7 +154,7 @@ describe("strategy API", () => {
     await expect(
       startReplay({
         instance_id: "i-1",
-        view_id: "view_a",
+        factor_task_id: "ftask_a",
         start_time: "2026-09-01T00:00:00Z",
         end_time: "2026-09-30T00:00:00Z",
         fee_bps: 10
@@ -214,28 +213,5 @@ describe("strategy factor parameters API", () => {
       { instance_id: "i-1", hidden },
       undefined
     );
-  });
-
-  it("lists parameter submissions with numeric periods", async () => {
-    callControl.mockResolvedValueOnce({
-      submissions: [
-        {
-          request_id: "p-1",
-          instance_id: "i-1",
-          task_id: "ftask_i1",
-          period_time: "1761206400000",
-          status: "accepted",
-          attempts: 1
-        }
-      ]
-    });
-    const rows = await listStrategyParamSubmissions("i-1", 50, { silent: true });
-    expect(callControl).toHaveBeenLastCalledWith(
-      "strategy",
-      "ListStrategyParamSubmissions",
-      { instance_id: "i-1", limit: 50 },
-      { silentError: true }
-    );
-    expect(rows[0]).toMatchObject({ request_id: "p-1", period_time: 1761206400000, status: "accepted", params_json: "{}" });
   });
 });

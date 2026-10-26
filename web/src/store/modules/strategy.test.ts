@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 const api = vi.hoisted(() => ({
-  deleteInstance: vi.fn(),
   deleteStrategy: vi.fn(),
   getInstance: vi.fn(),
   getStrategy: vi.fn(),
@@ -22,7 +21,7 @@ const instance = (overrides: Record<string, unknown> = {}) => ({
   instance_id: "instance-1",
   strategy_id: "strategy-1",
   space_id: "space-1",
-  view_id: "view_a",
+  factor_task_id: "ftask_a",
   logical_account_id: "",
   enabled: true,
   session_id: "session-1",
@@ -305,17 +304,11 @@ describe("strategy store", () => {
     });
   });
 
-  it("caches result explanations and removes deleted rows", async () => {
+  it("caches result explanations", async () => {
     api.getStrategyResult.mockResolvedValue({ result: { result_id: "r1" }, items: [], dsl_yaml: "", resolved_json: "{}" });
-    api.deleteInstance.mockResolvedValue(undefined);
     const store = useStrategyStore();
     await store.loadResultDetail("r1");
     await store.loadResultDetail("r1");
     expect(api.getStrategyResult).toHaveBeenCalledTimes(1);
-    store.instances = [instance(), instance({ instance_id: "instance-2" })];
-    store.totalInstances = 2;
-    await store.removeInstance("instance-1");
-    expect(store.instances.map(item => item.instance_id)).toEqual(["instance-2"]);
-    expect(store.totalInstances).toBe(1);
   });
 });

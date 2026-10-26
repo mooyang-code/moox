@@ -16,7 +16,7 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
   request_id: "factor-recalc-1",
   task_id: "task_a",
-  factor_ids: ["Bias"],
+  members: ["Bias"],
   subjects: [],
   start_time: "2026-10-01T00:00:00Z",
   end_time: "2026-10-03T00:00:00Z",
@@ -31,6 +31,8 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
 const member = (factorId: string, status: FactorMember["status"]): FactorMember => ({
   task_id: "task_a",
   factor_id: factorId,
+  member_key: factorId,
+  kind: "fixed",
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
   created_at: "",

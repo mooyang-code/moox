@@ -193,7 +193,7 @@ export interface FactorRow {
 
 const FACTOR_TONE: Record<string, Tone> = { ok: "ok", lagging: "warn", degraded: "warn", failed: "bad" };
 
-/** 因子计算任务：数据集名称 · 频率、启用因子数、最近周期与滞后。 */
+/** 因子计算任务：任务名（没有时用数据集名称）· 频率、启用因子数、最近周期与滞后。 */
 export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameBook, nowMs: number): FactorRow[] {
   return sets
     .filter(info => info.factor_task.space_id === spaceId)
@@ -205,7 +205,7 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;
       return {
         taskId: set.task_id,
-        label: `${names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
+        label: `${set.name || names.datasets[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`,
         factors: (info.members || []).filter(member => member.status === "enabled").length,
         health,
         tone: FACTOR_TONE[health.key] || "idle",

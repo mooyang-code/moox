@@ -1,79 +1,91 @@
 import { describe, expect, it } from "vitest";
-import type { ParamSubmission } from "@/api/strategy-types";
-import { parseFactorBinding, submissionRows, submissionStatus, submissionSummary } from "./factor-params-model";
+import type { StrategyResult } from "@/api/strategy-types";
+import { deliveryStatus, memberParamsSummary, nextParamsRows, parseFactorBinding, periodText } from "./factor-params-model";
 
-const resolved = JSON.stringify({
-  view_id: "view_factor_i1",
-  source_view_id: "view_kline",
-  factor_task_id: "ftask_i1",
-  bar: "1m",
-  columns: {
-    fast_bias: { source: "factor", member: "fast", factor_id: "Bias" },
-    vol_zf_std: { source: "factor", member: "vol", factor_id: "ZfStd" }
-  },
-  factor_params: { fast: [{ name: "window" }, { name: "k" }], slow: [{ name: "window" }] }
+const result = (patch: Partial<StrategyResult> = {}): StrategyResult => ({
+  result_id: "r1",
+  instance_id: "i1",
+  session_id: "s1",
+  bar_end_time: "2026-10-26T10:00:00Z",
+  valid_until: "",
+  status: "ok",
+  skip_reason: "",
+  dsl_hash: "",
+  targets: [],
+  summary_json: "{}",
+  input_json: "{}",
+  rule_states_json: "{}",
+  publish_status: "none",
+  created_at: "",
+  next_params_json: "",
+  params_delivered_at: "",
+  params_error: "",
+  ...patch
 });
 
-describe("factor binding of an instance", () => {
-  it("reads the private task, members and declared parameter names", () => {
-    expect(parseFactorBinding(resolved)).toEqual({
-      taskId: "ftask_i1",
-      viewId: "view_factor_i1",
-      sourceViewId: "view_kline",
-      members: ["fast", "slow", "vol"],
-      params: { fast: ["window", "k"], slow: ["window"] }
+describe("parseFactorBinding", () => {
+  it("reads the task, result view and the variable members with their parameters", () => {
+    const binding = parseFactorBinding(
+      JSON.stringify({
+        factor_task_id: "ftask_a",
+        view_id: "view_factor_a",
+        factor_params: { ma__var: [{ name: "span" }], bias__var: [{ name: "window" }, { name: "k" }] }
+      })
+    );
+    expect(binding).toEqual({
+      taskId: "ftask_a",
+      viewId: "view_factor_a",
+      members: ["bias__var", "ma__var"],
+      params: { ma__var: ["span"], bias__var: ["window", "k"] }
     });
   });
 
-  it("returns null for instances without a private factor task", () => {
+  it("returns null without a task and tolerates malformed json", () => {
     expect(parseFactorBinding("{}")).toBeNull();
-    expect(parseFactorBinding(undefined)).toBeNull();
     expect(parseFactorBinding("not json")).toBeNull();
-    expect(parseFactorBinding(JSON.stringify({ view_id: "v" }))).toBeNull();
+    expect(parseFactorBinding(undefined)).toBeNull();
+    // 没有可变成员的实例仍然关联着任务。
+    expect(parseFactorBinding('{"factor_task_id":"ftask_a"}')).toMatchObject({ members: [], params: {} });
   });
 });
 
-describe("parameter submissions", () => {
-  const submission = (overrides: Partial<ParamSubmission>): ParamSubmission => ({
-    request_id: "p-1",
-    instance_id: "i1",
-    result_id: "r1",
-    task_id: "ftask_i1",
-    period_time: Date.UTC(2026, 9, 23, 8, 1, 0),
-    based_on_period: 0,
-    params_json: JSON.stringify({
-      fast: { window: { default: 20, overrides: { BTC: 10, ETH: 30 } }, k: { default: 2 } },
-      slow: { window: { default: 60 } }
-    }),
-    notes: "",
-    status: "accepted",
-    attempts: 1,
-    outcome_json: "[]",
-    created_at: "",
-    updated_at: "",
-    ...overrides
-  });
-
-  it("summarises a snapshot by member and parameter", () => {
-    expect(submissionSummary(submission({}).params_json)).toBe("fast: k=2，window=20（2 个标的覆盖）；slow: window=60");
-    expect(submissionSummary("{}")).toBe("");
-  });
-
-  it("maps statuses and lists only the members that were not accepted", () => {
-    expect(submissionStatus("too_late")).toMatchObject({ label: "已晚到", color: "orange" });
-    expect(submissionStatus("weird")).toMatchObject({ label: "weird" });
-    const [row] = submissionRows([
-      submission({
-        status: "rejected",
-        outcome_json: JSON.stringify([
-          { member: "fast", result: "accepted" },
-          { member: "slow", result: "rejected", reason: "参数 window 超出范围" }
-        ]),
-        notes: "成员 vol 求值失败"
+describe("params summaries", () => {
+  it("summarises members and parameters in a stable order, mentioning per-subject overrides", () => {
+    expect(
+      memberParamsSummary({
+        ma__var: { span: { default: 60 } },
+        bias__var: { window: { default: 20, overrides: { BTC: 10, ETH: 30 } }, k: { default_value: 2 } }
       })
+    ).toBe("bias__var: k=2，window=20（2 个标的覆盖）；ma__var: span=60");
+  });
+
+  it("classifies the delivery state of a result", () => {
+    expect(deliveryStatus(result({ params_delivered_at: "2026-10-26T10:01:00Z" })).key).toBe("delivered");
+    expect(deliveryStatus(result({ params_error: "超出范围" }))).toMatchObject({ key: "rejected", hint: "超出范围" });
+    expect(deliveryStatus(result()).key).toBe("pending");
+    // 已送达优先于遗留的拒绝原因。
+    expect(deliveryStatus(result({ params_delivered_at: "x", params_error: "y" })).key).toBe("delivered");
+  });
+
+  it("lists only results that carry next params, newest first", () => {
+    const envelope = JSON.stringify({ period: 1790000000, members: { bias__var: { window: { default: 20 } } } });
+    const rows = nextParamsRows([
+      result({
+        result_id: "old",
+        bar_end_time: "2026-10-26T09:00:00Z",
+        next_params_json: envelope,
+        params_delivered_at: "2026-10-26T09:01:00Z"
+      }),
+      result({ result_id: "none", bar_end_time: "2026-10-26T09:30:00Z" }),
+      result({ result_id: "new", bar_end_time: "2026-10-26T10:00:00Z", next_params_json: envelope, params_error: "被拒绝" })
     ]);
-    expect(row).toMatchObject({ statusLabel: "被拒绝", periodText: "2026-10-23 08:01:00 UTC" });
-    expect(row.outcome).toBe("slow rejected：参数 window 超出范围");
-    expect(row.notes).toBe("成员 vol 求值失败");
+    expect(rows.map(row => row.resultId)).toEqual(["new", "old"]);
+    expect(rows[0]).toMatchObject({ statusKey: "rejected", summary: "bias__var: window=20", targetText: periodText(1790000000) });
+    expect(rows[1].statusKey).toBe("delivered");
+  });
+
+  it("formats unix seconds as UTC text", () => {
+    expect(periodText(0)).toBe("-");
+    expect(periodText("1790000000")).toBe("2026-09-21 14:13:20 UTC");
   });
 });

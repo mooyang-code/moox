@@ -11,7 +11,9 @@
         <div class="result-toolbar">
           <span class="result-count">
             共 {{ filteredTasks.length }} 个计算任务
-            <InfoTip text="一个计算任务 = 一个源数据集 × 一个频率，持续计算一组因子，写入一个结果数据集和默认视图。" />
+            <InfoTip
+              text="一个计算任务 = 一个源数据集 × 一个频率，持续计算一组因子，写入一个结果数据集和默认视图；一个任务只能被一个策略实例独占使用，关联永久有效。"
+            />
           </span>
           <a-space wrap>
             <a-input-search v-model="filters.keyword" allow-clear placeholder="搜索计算任务或源数据集" class="tasks-search" />
@@ -50,6 +52,9 @@
               <template #cell="{ record }">{{ record.sourceName }}</template>
             </a-table-column>
             <a-table-column title="频率" data-index="freq" :width="80" />
+            <a-table-column title="关联实例" :width="150" :ellipsis="true" :tooltip="true">
+              <template #cell="{ record }">{{ record.boundInstance || "-" }}</template>
+            </a-table-column>
             <a-table-column title="因子" :width="90" align="center">
               <template #cell="{ record }">{{ record.members }}</template>
             </a-table-column>
@@ -179,8 +184,7 @@ const { store, spaceId, navigate, reload } = useFactorScope();
 const statusOptions = [
   { value: "enabled", label: "运行中" },
   { value: "pending", label: "创建中" },
-  { value: "disabled", label: "已停用" },
-  { value: "deleting", label: "清理中" }
+  { value: "disabled", label: "已停用" }
 ] as const;
 
 const filters = reactive<TaskFilters>({ keyword: "", status: "" });
@@ -196,6 +200,7 @@ const rows = computed(() =>
     label: store.setLabel(info.factor_task),
     sourceName: store.datasetNames[info.factor_task.source_dataset_id] || info.factor_task.source_dataset_id,
     freq: info.factor_task.freq,
+    boundInstance: info.factor_task.bound_instance_id || "",
     members: memberCountText(info),
     statusTag: taskStatusTag(info.factor_task.status),
     action: setActionKind(info.factor_task),
@@ -265,6 +270,7 @@ function retryActivation(set: FactorTask) {
     () =>
       createFactorTask({
         task_id: set.task_id,
+        name: set.name,
         space_id: set.space_id,
         source_dataset_id: set.source_dataset_id,
         freq: set.freq,

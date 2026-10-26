@@ -15,16 +15,15 @@ function scopeOf(count: number): FactorScope {
   const outputs = Array.from({ length: count }, (_, index) => ({
     column: `f${index}`,
     output: `f${index}`,
-    alias: `m${Math.floor(index / 2)}`,
+    memberKey: `m${Math.floor(index / 2)}`,
     factorId: `F${Math.floor(index / 2)}`,
     factorName: `F${Math.floor(index / 2)}`,
     categoryId: index % 2 ? "trend" : "momentum"
   }));
-  const paramsByAlias = new Map(outputs.map(item => [item.alias, [{ column: `${item.alias}__window`, name: "window" }]]));
   return {
     outputs,
     outputByColumn: new Map(outputs.map(item => [item.column, item])),
-    paramsByAlias,
+    paramsColumn: "__params",
     baseMarket: ["open", "close"],
     otherSource: ["request_id"],
     categoryNames: new Map([
@@ -143,17 +142,9 @@ describe("因子值弹窗", () => {
     hoisted.query.mockReset();
   });
 
-  it("每页单独查这一行：投影当前页输出与所属成员参数列，翻页再查", async () => {
+  it("每页单独查这一行：只投影当前页输出，默认不读 __params，翻页再查", async () => {
     hoisted.query.mockResolvedValue({
-      rows: [
-        {
-          key: rowKey,
-          fields: [
-            { field_id: "f0", value: { double_value: 0.123456789 } },
-            { field_id: "m0__window", value: { int_value: 20 } }
-          ]
-        }
-      ]
+      rows: [{ key: rowKey, fields: [{ field_id: "f0", value: { double_value: 0.123456789 } }] }]
     });
     const wrapper = mount(FactorValuesModal, {
       props: { visible: true, viewId: "v", rowKey, scope: scopeOf(45) },
@@ -165,13 +156,50 @@ describe("因子值弹窗", () => {
     expect(first.selectors).toEqual([{ space_id: "crypto", dataset_id: "d", subject_id: "BTC", freq: "1m", series_tag: "" }]);
     expect(first.total_mode).toBe("NONE");
     expect(first.page).toEqual({ page: 1, size: 1 });
-    expect(first.column_names.filter((name: string) => !name.includes("__"))).toHaveLength(20);
-    expect(first.column_names).toContain("m0__window");
+    expect(first.column_names).toHaveLength(20);
+    expect(first.column_names).not.toContain("__params");
 
     await wrapper.get("button.next").trigger("click");
     await flushPromises();
     expect(hoisted.query).toHaveBeenCalledTimes(2);
     expect(hoisted.query.mock.calls[1][0].column_names[0]).toBe("f20");
+  });
+
+  it("打开显示参数后才读取 __params，并按成员展示这一行实际用的参数", async () => {
+    // 像服务端一样只返回请求的列。
+    hoisted.query.mockImplementation(async (request: { column_names: string[] }) => ({
+      rows: [
+        {
+          key: rowKey,
+          fields: [
+            { field_id: "f0", value: { double_value: 1.5 } },
+            { field_id: "__params", value: { string_value: '{"m0":{"k":2,"window":20}}' } }
+          ].filter(field => request.column_names.includes(field.field_id))
+        }
+      ]
+    }));
+    const wrapper = mount(FactorValuesModal, {
+      props: { visible: true, viewId: "v", rowKey, scope: scopeOf(4) },
+      global: {
+        stubs: {
+          ...stubs,
+          "a-switch": defineComponent({
+            props: ["modelValue"],
+            emits: ["update:modelValue"],
+            template: '<button class="show-params" @click="$emit(\'update:modelValue\', !modelValue)" />'
+          })
+        }
+      }
+    });
+    await flushPromises();
+    expect(hoisted.query.mock.calls[0][0].column_names).not.toContain("__params");
+    expect((wrapper.vm as unknown as { values: Record<string, string> }).values.__params).toBeUndefined();
+
+    await wrapper.get("button.show-params").trigger("click");
+    await flushPromises();
+    expect(hoisted.query).toHaveBeenCalledTimes(2);
+    expect(hoisted.query.mock.calls[1][0].column_names).toContain("__params");
+    expect((wrapper.vm as unknown as { values: Record<string, string> }).values.__params).toBe('{"m0":{"k":2,"window":20}}');
   });
 
   it("过期的响应被丢弃", async () => {

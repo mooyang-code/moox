@@ -6,6 +6,7 @@ import type {
   FactorInput,
   FactorMember,
   FactorRetRsp,
+  MemberKind,
   FactorTask,
   ListFactorTasksReq,
   ListFactorTasksRsp,
@@ -25,13 +26,16 @@ import type {
   SetTaskMemberStatusResult
 } from "./types";
 
-export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "freq"> &
+export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "freq" | "name"> &
   Partial<Pick<FactorTask, "task_id" | "result_dataset_id" | "status">>;
 
 export async function createFactorTask(factorTask: CreateFactorTaskInput) {
-  const rsp = await callFactor<{ factor_task: CreateFactorTaskInput }, FactorRetRsp<{ factor_task: FactorTask }>>("CreateFactorTask", {
-    factor_task: factorTask
-  });
+  const rsp = await callFactor<{ factor_task: CreateFactorTaskInput }, FactorRetRsp<{ factor_task: FactorTask }>>(
+    "CreateFactorTask",
+    {
+      factor_task: factorTask
+    }
+  );
   return rsp.factor_task;
 }
 
@@ -66,31 +70,39 @@ export function listFactors(params: ListFactorsReq = {}) {
 }
 
 /**
- * 把定义加入计算任务。params 是成员的固定参数（没给的参数取定义的默认值，加成员之后不再改）；
- * member_alias 缺省时由服务端按参数生成：全部参数等于默认值时取定义 ID，否则是“定义ID_参数1_参数2…”。
+ * 把定义加入计算任务。kind 缺省按 fixed；params 是固定成员的固定参数、或可变成员的默认参数（没给的参数取定义的默认值，
+ * 加成员之后不再改）。成员键由服务端推导并在响应里返回。
  */
-export async function addFactorToTask(task_id: string, factor_id: string, member_alias?: string, params?: Record<string, number>) {
-  const body: { task_id: string; factor_id: string; member_alias?: string; params?: Record<string, number> } = { task_id, factor_id };
-  if (member_alias) body.member_alias = member_alias;
+export async function addFactorToTask(
+  task_id: string,
+  factor_id: string,
+  kind: MemberKind = "fixed",
+  params?: Record<string, number>
+) {
+  const body: { task_id: string; factor_id: string; kind: MemberKind; params?: Record<string, number> } = {
+    task_id,
+    factor_id,
+    kind
+  };
   if (params && Object.keys(params).length) body.params = params;
   const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddTaskMember", body);
   return rsp.member;
 }
 
-/** 成员以任务内唯一的别名标识（共享任务里别名就是定义 ID）。 */
-export function removeFactorFromTask(task_id: string, member_alias: string) {
-  return callFactor<{ task_id: string; member_alias: string }, FactorRetRsp>("RemoveTaskMember", { task_id, member_alias });
+/** 成员以任务内唯一的成员键标识。 */
+export function removeFactorFromTask(task_id: string, member_key: string) {
+  return callFactor<{ task_id: string; member_key: string }, FactorRetRsp>("RemoveTaskMember", { task_id, member_key });
 }
 
 export async function setFactorMemberStatus(
   task_id: string,
-  member_alias: string,
+  member_key: string,
   status: string
 ): Promise<SetTaskMemberStatusResult> {
-  const rsp = await callFactor<
-    { task_id: string; member_alias: string; status: string },
-    FactorRetRsp<SetTaskMemberStatusResult>
-  >("SetTaskMemberStatus", { task_id, member_alias, status });
+  const rsp = await callFactor<{ task_id: string; member_key: string; status: string }, FactorRetRsp<SetTaskMemberStatusResult>>(
+    "SetTaskMemberStatus",
+    { task_id, member_key, status }
+  );
   return { member: rsp.member };
 }
 
@@ -125,7 +137,7 @@ export async function setFactorCategory(factor_id: string, category_id: string) 
   return rsp.factor;
 }
 
-/** 读取因子任务的冻结记录（每期实际用的参数）与可选的提交审计。 */
+/** 读取因子任务里各可变成员最近一次被接受的提交（只读）。 */
 export function getFactorParams(params: GetFactorParamsReq) {
   return callFactor<GetFactorParamsReq, FactorRetRsp<GetFactorParamsRsp>>("GetFactorParams", params);
 }

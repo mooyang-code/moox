@@ -50,9 +50,9 @@
               <div class="cell-sub mono">{{ record.instance_id }}</div></template
             ></a-table-column
           >
-          <a-table-column title="View" :width="180" :ellipsis="true" :tooltip="true"
+          <a-table-column title="因子任务" :width="200" :ellipsis="true" :tooltip="true"
             ><template #cell="{ record }"
-              ><span class="mono">{{ record.view_id }}</span></template
+              ><span class="mono">{{ record.factor_task_id }}</span></template
             ></a-table-column
           >
           <a-table-column title="模式" :width="80"
@@ -79,13 +79,6 @@
                     <a-doption :disabled="togglingId === record.instance_id" @click="toggle(record)">{{
                       record.enabled ? "停用实例" : "启用实例"
                     }}</a-doption>
-                    <a-doption
-                      :disabled="deleteState(record).disabled || removingId === record.instance_id"
-                      @click="confirmRemove(record)"
-                      >删除<span v-if="deleteState(record).reason" class="muted"
-                        >（{{ deleteState(record).reason }}）</span
-                      ></a-doption
-                    >
                   </template>
                 </a-dropdown>
               </div>
@@ -126,7 +119,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -141,9 +133,7 @@ import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.
 import {
   buildRunningQuery,
   emptyKind,
-  instanceDeleteState,
   listKey,
-  pageAfterRemoval,
   parseRunningQuery,
   type RunningState
 } from "@/views/strategy/running/running-model";
@@ -160,7 +150,6 @@ const state = computed<RunningState>(() => parseRunningQuery(route.query));
 const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.value.enabled as string });
 const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));
 const readAt = ref("");
-const removingId = ref("");
 const togglingId = ref("");
 const empty = computed(() =>
   emptyKind({
@@ -228,7 +217,7 @@ function openResults(instanceId: string) {
   router.push(resultsLink(instanceId));
 }
 function goReplay(instance: StrategyInstance) {
-  router.push(replayLink({ instanceId: instance.instance_id, viewId: instance.view_id }));
+  router.push(replayLink({ instanceId: instance.instance_id, factorTaskId: instance.factor_task_id }));
 }
 /** 本 Tab 是否是当前页面：离开工作台或切到其它 Tab 后不再响应 URL。 */
 function isCurrentTab() {
@@ -236,9 +225,6 @@ function isCurrentTab() {
 }
 function strategyName(id: string) {
   return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
-}
-function deleteState(instance: StrategyInstance) {
-  return instanceDeleteState(instance);
 }
 function created(instanceId: string) {
   openDetail(instanceId);
@@ -254,36 +240,6 @@ function toggle(instance: StrategyInstance) {
     }
   });
 }
-function confirmRemove(instance: StrategyInstance) {
-  Modal.warning({
-    title: `删除实例「${instance.instance_id}」`,
-    content: "删除后实例从列表与路由中移除，历史结果与解释仍可查看。确认删除？",
-    hideCancel: false,
-    okButtonProps: { status: "danger" },
-    onOk: () => remove(instance.instance_id)
-  });
-}
-async function remove(instanceId: string) {
-  removingId.value = instanceId;
-  try {
-    await store.removeInstance(instanceId);
-    Message.success("实例已删除");
-    const page = pageAfterRemoval(state.value.page, store.instances.length);
-    const closing = state.value.instanceId === instanceId;
-    // 页码回退与关闭已删除实例的快速详情合并成一次导航，否则后一次会基于旧 query 把已删除的 ID 带回来。
-    // 补载当前页：本页被删空的末页回到上一页（由 URL 变化触发读取），其余页把后面的实例补上来。
-    if (page !== state.value.page) void go({ page, ...(closing ? { instanceId: "" } : {}) });
-    else {
-      if (closing) void go({ instanceId: "" });
-      await refresh();
-    }
-  } catch (err) {
-    Message.error(err instanceof Error ? err.message : "删除失败");
-  } finally {
-    removingId.value = "";
-  }
-}
-
 onMounted(() => {
   // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。
   store.clearInstances();

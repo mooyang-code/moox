@@ -36,9 +36,7 @@ export function jobDisplay(job: Pick<RecalcJob, "status" | "error">) {
 export const progressPercent = jobProgress;
 
 export function enabledMemberIds(info: Pick<FactorTaskInfo, "members">): string[] {
-  return (info.members || [])
-    .filter(member => member.status === "enabled")
-    .map(member => member.member_alias || member.factor_id);
+  return (info.members || []).filter(member => member.status === "enabled").map(member => member.member_key);
 }
 
 export interface TimeRange {

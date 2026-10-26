@@ -33,8 +33,13 @@
       <section class="detail-section">
         <h3>基本信息</h3>
         <a-descriptions :column="2" bordered size="small">
+          <a-descriptions-item label="任务名称">{{ set.name || "-" }}</a-descriptions-item>
           <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
+          <a-descriptions-item label="关联策略实例">
+            <template v-if="set.bound_instance_id">{{ set.bound_instance_id }}</template>
+            <span v-else class="detail-hint">尚未关联：创建策略实例时选择这个任务，关联后永久有效</span>
+          </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
           <a-descriptions-item label="结果数据集" :span="2">{{ set.result_dataset_id }}</a-descriptions-item>
           <a-descriptions-item label="结果视图" :span="2">{{ resultViewId || "-" }}</a-descriptions-item>
@@ -61,7 +66,9 @@
             <a-button status="danger" :disabled="removeState.disabled" @click="emit('delete', set)">删除计算任务…</a-button>
           </span>
         </a-tooltip>
-        <p class="detail-hint">删除前需要先移除全部因子；可选择同时清理结果数据集（purge，不可恢复）。</p>
+        <p class="detail-hint">
+          删除前需要先停用并移除全部因子；已关联策略实例的任务不能删除；可选择同时清理结果数据集（purge，不可恢复）。
+        </p>
       </section>
     </template>
   </a-drawer>
@@ -171,7 +178,6 @@ function goTab(tab: "results" | "recalc") {
   font-size: 15px;
   font-weight: 600;
 }
-
 
 .detail-hint {
   margin: var(--moox-space-2) 0 0;

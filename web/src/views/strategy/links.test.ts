@@ -24,11 +24,11 @@ describe("strategy links", () => {
 
   it("opens the create drawer only when a replay source is given, preferring the instance", () => {
     expect(replayLink({ replayId: "r1" }).query).toEqual({ tab: "replay", replay_id: "r1" });
-    expect(replayLink({ instanceId: "i1", strategyId: "s1", viewId: "v" }).query).toEqual({
+    expect(replayLink({ instanceId: "i1", strategyId: "s1", factorTaskId: "ftask_v" }).query).toEqual({
       tab: "replay",
       create: "1",
       instance_id: "i1",
-      view_id: "v"
+      factor_task_id: "ftask_v"
     });
     expect(replayLink({ strategyId: "s1" }).query).toEqual({ tab: "replay", create: "1", strategy_id: "s1" });
   });

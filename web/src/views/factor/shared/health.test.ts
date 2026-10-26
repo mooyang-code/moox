@@ -27,7 +27,6 @@ describe("setHealth", () => {
 
   it("reports lifecycle states before run state", () => {
     expect(setHealth({ status: "pending", freq: "1m" }, run()).key).toBe("pending");
-    expect(setHealth({ status: "deleting", freq: "1m" }, run()).key).toBe("deleting");
     expect(setHealth({ status: "disabled", freq: "1m" }, run()).key).toBe("disabled");
   });
 

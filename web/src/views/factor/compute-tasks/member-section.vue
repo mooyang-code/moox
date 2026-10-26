@@ -14,16 +14,21 @@
 
     <a-empty v-if="!props.info.members.length" description="还没有因子。点击「添加因子」，从「因子定义」中选择。" />
     <ul v-else class="member-list">
-      <li v-for="row in rows" :key="row.alias" class="member-row">
+      <li v-for="row in rows" :key="row.key" class="member-row">
         <div class="member-row__main">
           <div class="member-row__name">
-            <strong>{{ row.alias }}</strong>
-            <span v-if="row.alias !== row.member.factor_id" class="member-row__definition">定义 {{ row.member.factor_id }}</span>
+            <strong>{{ row.key }}</strong>
+            <span v-if="row.key !== row.member.factor_id" class="member-row__definition">定义 {{ row.member.factor_id }}</span>
             <a-tag size="small">{{ factorTypeLabel(row.member.factor.factor_type) }}</a-tag>
+            <a-tag size="small" :color="row.member.kind === 'var' ? 'purple' : 'gray'">
+              {{ row.member.kind === "var" ? "可变" : "固定" }}
+            </a-tag>
           </div>
-          <div class="member-row__outputs">输出 {{ row.outputs.join(", ") || "-" }}</div>
-          <div v-if="row.fixedParams" class="member-row__outputs">固定参数 {{ row.fixedParams }}</div>
-          <div v-if="row.params.length" class="member-row__outputs">参数列 {{ row.params.join(", ") }}</div>
+          <div class="member-row__outputs">结果列 {{ row.outputs.join(", ") || "-" }}</div>
+          <div v-if="row.paramsText" class="member-row__outputs">
+            {{ row.member.kind === "var" ? "默认参数" : "固定参数" }} {{ row.paramsText }}
+          </div>
+          <div v-if="row.member.kind === 'var'" class="member-row__outputs">{{ row.submissionText }}</div>
         </div>
         <a-tag size="small" :color="memberStatusTag(row.member.status).color">{{
           memberStatusTag(row.member.status).label
@@ -32,7 +37,6 @@
           {{ periodStatusTag(row.period.status).label }}
         </a-tag>
         <span v-else class="member-row__period-empty">-</span>
-        <a-tag v-if="row.paramsTag" size="small" :color="row.paramsTag.color">{{ row.paramsTag.label }}</a-tag>
         <a-space size="mini" class="member-row__actions">
           <a-tooltip :content="row.actions.edit.reason" :disabled="!row.actions.edit.disabled">
             <span>
@@ -46,7 +50,7 @@
             content="停用后不再计算该因子，已写入的结果列保留。确认停用？"
             @ok="toggle(row.member, row.actions.toggleTarget)"
           >
-            <a-button size="mini" type="text" status="danger" :loading="pending === row.alias">
+            <a-button size="mini" type="text" status="danger" :loading="pending === row.key">
               {{ row.actions.toggleLabel }}
             </a-button>
           </a-popconfirm>
@@ -62,7 +66,7 @@
                   type="text"
                   status="success"
                   :disabled="row.actions.toggle.disabled"
-                  :loading="pending === row.alias"
+                  :loading="pending === row.key"
                 >
                   {{ row.actions.toggleLabel }}
                 </a-button>
@@ -80,7 +84,9 @@
       </li>
     </ul>
 
-    <p class="member-section__hint">启用时加列，不自动补算历史（需要时到「补算」手动提交）；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。固定参数加成员之后不再改，要换参数请另加一个成员。</p>
+    <p class="member-section__hint">
+      启用时加列，不自动补算历史（需要时到「补算」手动提交）；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。固定参数（可变成员的默认参数）加成员之后不再改，要换参数请另加一个成员。
+    </p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
       最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{
         barLagText(props.info.factor_task.freq, props.info.last_run)
@@ -99,16 +105,16 @@ import { removeFactorFromTask, setFactorMemberStatus } from "@/api/factor";
 import type { FactorMember, FactorTaskInfo, MemberStatus } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
-import { fixedParamsText } from "@/views/factor/shared/member-params";
+import { paramsText } from "@/views/factor/shared/params";
 import { factorTypeLabel, memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 import AddFactorModal from "./add-factor-modal.vue";
 import {
   addFactorState,
   ENABLE_ENGINE_HINT,
   memberActions,
+  lastSubmission,
   memberCounts,
-  memberPeriodState,
-  paramsSourceLabel
+  memberPeriodState
 } from "./compute-tasks-model";
 
 defineOptions({ name: "FactorMemberSection" });
@@ -124,17 +130,19 @@ const counts = computed(() => memberCounts(props.info));
 const addState = computed(() => addFactorState(props.info.factor_task));
 const rows = computed(() =>
   props.info.members.map(member => {
-    const alias = member.member_alias || member.factor_id;
-    const period = memberPeriodState(props.info, alias);
+    const key = member.member_key || member.factor_id;
+    const period = memberPeriodState(props.info, key);
+    const submitted = lastSubmission(member);
     return {
       member,
-      alias,
+      key,
       actions: memberActions(props.info.factor_task, member),
       period,
       outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
-      params: member.param_columns ?? [],
-      fixedParams: fixedParamsText(member.params),
-      paramsTag: paramsSourceLabel(period?.params_source)
+      paramsText: paramsText(member.params),
+      submissionText: submitted
+        ? `最近提交：目标期 ${formatPeriod(submitted.period)}，提交于 ${formatTime(submitted.at)}`
+        : "尚未提交（按默认参数计算）"
     };
   })
 );
@@ -151,13 +159,17 @@ function editDefinition(member: FactorMember) {
   void router.push(`/factor/definitions/${encodeURIComponent(member.factor_id)}/edit`);
 }
 
+function formatTime(value?: string) {
+  return value ? new Date(value).toLocaleString() : "-";
+}
+
 async function toggle(member: FactorMember, target: MemberStatus) {
-  const alias = member.member_alias || member.factor_id;
-  pending.value = alias;
+  const key = member.member_key;
+  pending.value = key;
   try {
-    await setFactorMemberStatus(member.task_id, alias, target);
+    await setFactorMemberStatus(member.task_id, key, target);
     Message.success(
-      target === "enabled" ? `因子 ${alias} 已启用（不自动补算历史，需要时到「补算」手动提交）` : `因子 ${alias} 已停用`
+      target === "enabled" ? `因子 ${key} 已启用（不自动补算历史，需要时到「补算」手动提交）` : `因子 ${key} 已停用`
     );
     await reload();
   } catch (error) {
@@ -169,9 +181,9 @@ async function toggle(member: FactorMember, target: MemberStatus) {
 
 async function remove(member: FactorMember) {
   try {
-    const alias = member.member_alias || member.factor_id;
-    await removeFactorFromTask(member.task_id, alias);
-    Message.success(`因子 ${alias} 已从计算任务移除，结果列保留`);
+    const key = member.member_key;
+    await removeFactorFromTask(member.task_id, key);
+    Message.success(`因子 ${key} 已从计算任务移除，结果列保留`);
     await reload();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "移除因子失败");

@@ -42,7 +42,8 @@
           <span v-if="!chips.length" class="detail-empty">未被使用</span>
           <a-space v-else wrap>
             <a-tag v-for="chip in chips" :key="chip.key" class="usage-tag" @click="emit('openTask', chip.taskId)">
-              {{ chip.label }}{{ chip.alias ? ` · ${chip.alias}` : "" }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} · {{ chip.statusLabel }}
+              {{ chip.label }}{{ chip.memberKey ? ` · ${chip.memberKey}` : ""
+              }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} · {{ chip.statusLabel }}
             </a-tag>
           </a-space>
         </section>

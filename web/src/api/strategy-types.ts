@@ -24,12 +24,12 @@ export interface Strategy {
   updated_at: string;
 }
 
-/** 实例：定义 + 一个 View + 可选的组合账户；启用时固化 resolved_json。 */
+/** 实例：定义 + 一个因子任务（创建时选定，永久独占，不可改）+ 可选的组合账户；启用时固化 resolved_json。 */
 export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
   space_id: string;
-  view_id: string;
+  factor_task_id: string;
   logical_account_id: string;
   enabled: boolean;
   session_id: string;
@@ -55,6 +55,12 @@ export interface StrategyResult {
   rule_states_json: string;
   publish_status: "none" | "pending" | "sent" | "cancelled" | string;
   created_at: string;
+  /** 这一期算出的下一期可变成员参数（JSON：成员键 → 参数名 → {default, overrides}）；没有可变成员时为空串。 */
+  next_params_json: string;
+  /** 被因子侧接受的时间；空表示还没送达。 */
+  params_delivered_at: string;
+  /** 被因子侧明确拒绝的原因（不再重试）。 */
+  params_error: string;
 }
 
 /** 一条规则下一个标的的解释。 */
@@ -96,6 +102,8 @@ export interface Replay {
   strategy_id: string;
   dsl_yaml: string;
   space_id: string;
+  /** 回放读取的因子任务；view_id 是它的结果 View。 */
+  factor_task_id: string;
   view_id: string;
   start_time: string;
   end_time: string;
@@ -138,7 +146,8 @@ export interface StartReplayRequest {
   strategy_id?: string;
   dsl_yaml?: string;
   instance_id?: string;
-  view_id: string;
+  /** 回放读取的因子任务；从实例发起时必须与实例关联的任务一致。 */
+  factor_task_id: string;
   start_time: string;
   end_time: string;
   fee_bps: number;
@@ -157,26 +166,4 @@ export interface DisplayHidden {
   categories: string[];
   members: string[];
   columns: string[];
-}
-
-/** 参数提交的状态：pending 待提交，accepted 已接受，too_late 该期已冻结，rejected 被拒绝，abandoned 实例停用或超过重试期限。 */
-export type ParamSubmissionStatus = "pending" | "accepted" | "too_late" | "rejected" | "abandoned";
-
-/** 策略为下一期因子参数做的一次提交；某期实际是否采用以因子管理端的冻结记录为准。 */
-export interface ParamSubmission {
-  request_id: string;
-  instance_id: string;
-  result_id: string;
-  task_id: string;
-  /** 参数生效的目标期次（Unix 毫秒）。 */
-  period_time: number;
-  based_on_period: number;
-  /** {成员别名: {参数名: {default, overrides}}} */
-  params_json: string;
-  notes: string;
-  status: ParamSubmissionStatus;
-  attempts: number;
-  outcome_json: string;
-  created_at: string;
-  updated_at: string;
 }

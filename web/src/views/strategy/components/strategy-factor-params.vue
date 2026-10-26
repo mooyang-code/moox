@@ -1,61 +1,57 @@
 <template>
   <section v-if="binding" class="factor-params" aria-label="因子参数">
     <a-descriptions :column="{ xs: 1, md: 2 }" bordered size="small">
-      <a-descriptions-item label="私有因子任务">
+      <a-descriptions-item label="因子任务">
         <a-link @click="openResults"
           ><span class="mono">{{ binding.taskId }}</span></a-link
         >
       </a-descriptions-item>
-      <a-descriptions-item label="成员（因子别名）">{{ binding.members.join("、") || "-" }}</a-descriptions-item>
-      <a-descriptions-item label="结果 View"
+      <a-descriptions-item label="可变成员">{{ binding.members.join("、") || "无（任务里没有可变成员）" }}</a-descriptions-item>
+      <a-descriptions-item label="结果 View" :span="2"
         ><span class="mono">{{ binding.viewId }}</span></a-descriptions-item
       >
-      <a-descriptions-item label="冻结到">{{ frozenThrough }}</a-descriptions-item>
     </a-descriptions>
 
     <a-alert v-if="error" type="error" show-icon class="factor-params__alert">
       {{ error }}<template #action><a-button size="mini" @click="load">重试</a-button></template>
     </a-alert>
 
-    <h4>实际生效的参数（冻结记录）</h4>
+    <h4>因子侧最近一次接受的提交</h4>
     <p class="hint">
-      每期开算前由因子管理端冻结：用该期最后一份被接受的提交，没有就沿用上一期，从未提交过用默认值。以下按区间合并显示（快照与来源相同的连续期次为一行）。
+      每期开算前，因子引擎读取每个可变成员最近一次被接受的提交；从未提交过的成员用定义的默认参数。每期实际用的参数随结果记在结果数据集的
+      __params 列里。
     </p>
-    <a-table
-      row-key="key"
-      size="small"
-      :data="timeline"
-      :loading="loading"
-      :pagination="{ pageSize: 10, hideOnSinglePage: true }"
-    >
-      <template #empty><a-empty description="还没有冻结记录（等待第一个周期）" /></template>
+    <a-table row-key="member_key" size="small" :data="current" :loading="loading" :pagination="false">
+      <template #empty><a-empty description="任务里没有可变成员，或还没有提交" /></template>
       <template #columns>
-        <a-table-column title="成员" data-index="member" :width="110" />
-        <a-table-column title="起始期" :width="190">
-          <template #cell="{ record }">{{ freezePeriodText(record.start) }}</template>
+        <a-table-column title="成员" data-index="member_key" :width="150" />
+        <a-table-column title="目标期" :width="190">
+          <template #cell="{ record }">{{ periodText(record.last_submitted_period) }}</template>
         </a-table-column>
-        <a-table-column title="期数" data-index="periods" :width="70" />
-        <a-table-column title="来源" :width="100">
-          <template #cell="{ record }"
-            ><a-tag size="small">{{ record.sourceText }}</a-tag></template
-          >
+        <a-table-column title="参数" data-index="summary" :ellipsis="true" :tooltip="true" />
+        <a-table-column title="提交时间" :width="190">
+          <template #cell="{ record }">{{
+            record.last_submitted_at ? new Date(record.last_submitted_at).toLocaleString() : "-"
+          }}</template>
         </a-table-column>
-        <a-table-column title="参数" data-index="params" :ellipsis="true" :tooltip="true" />
       </template>
     </a-table>
 
-    <h4>策略的提交记录</h4>
-    <p class="hint">策略每期求出下一期的参数并提交；「已接受」不等于「已生效」，某期是否采用以上面的冻结记录为准。</p>
+    <h4>策略每期产出的下一期参数</h4>
+    <p class="hint">
+      参数随结果一起落库，再异步送达因子管理端；只投当前会话里最新的一条，被明确拒绝的不再重试。「已送达」不等于「已生效」：只有在下一期开算之前到达才会被采用。
+    </p>
     <a-table
-      row-key="request_id"
+      row-key="resultId"
       size="small"
-      :data="submissions"
+      :data="produced"
       :loading="loading"
       :pagination="{ pageSize: 10, hideOnSinglePage: true }"
     >
-      <template #empty><a-empty description="还没有提交记录（策略没有声明 factor_params，或还没有 ok 的周期）" /></template>
+      <template #empty><a-empty description="还没有产出参数的结果（策略没有声明 factor_params，或还没有 ok 的周期）" /></template>
       <template #columns>
-        <a-table-column title="目标期次" :width="190" data-index="periodText" />
+        <a-table-column title="结果周期" data-index="barEnd" :width="190" />
+        <a-table-column title="目标期" data-index="targetText" :width="190" />
         <a-table-column title="状态" :width="90">
           <template #cell="{ record }">
             <a-tooltip :content="record.hint"
@@ -64,10 +60,6 @@
           </template>
         </a-table-column>
         <a-table-column title="参数" data-index="summary" :ellipsis="true" :tooltip="true" />
-        <a-table-column title="尝试" data-index="attempts" :width="70" />
-        <a-table-column title="说明" :ellipsis="true" :tooltip="true">
-          <template #cell="{ record }">{{ [record.outcome, record.notes].filter(Boolean).join("；") || "-" }}</template>
-        </a-table-column>
       </template>
     </a-table>
 
@@ -113,13 +105,12 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { getFactorParams, listFactorCategories } from "@/api/factor";
-import type { FactorCategory, ParamInterval } from "@/api/factor/types";
+import type { FactorCategory, MemberParamState } from "@/api/factor/types";
 import { listAllViewColumns } from "@/api/storage/metadata";
-import { getStrategyDisplaySettings, listStrategyParamSubmissions, setStrategyDisplaySettings } from "@/api/strategy";
-import type { DisplayHidden, ParamSubmission, StrategyInstance } from "@/api/strategy-types";
+import { getStrategyDisplaySettings, listStrategyResults, setStrategyDisplaySettings } from "@/api/strategy";
+import type { DisplayHidden, StrategyInstance, StrategyResult } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
-import { freezePeriodText, parseFactorBinding, submissionRows } from "@/views/strategy/factor-params-model";
-import { paramTimeline } from "@/views/factor/shared/params";
+import { memberParamsSummary, nextParamsRows, parseFactorBinding, periodText } from "@/views/strategy/factor-params-model";
 
 defineOptions({ name: "StrategyFactorParams" });
 
@@ -132,57 +123,43 @@ const binding = computed(() => parseFactorBinding(props.instance.resolved_json))
 const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
-const intervals = ref<ParamInterval[]>([]);
-const frozenSeconds = ref<number | string>(0);
-const rawSubmissions = ref<ParamSubmission[]>([]);
+const members = ref<MemberParamState[]>([]);
+const results = ref<StrategyResult[]>([]);
 const categories = ref<FactorCategory[]>([]);
 const columnOptions = ref<string[]>([]);
 const hidden = reactive<DisplayHidden>({ categories: [], members: [], columns: [] });
 
-const WINDOW_SECONDS = 7 * 24 * 3600;
-const timeline = computed(() => paramTimeline(intervals.value, periodSeconds()));
-const submissions = computed(() => submissionRows(rawSubmissions.value));
-const frozenThrough = computed(() => (Number(frozenSeconds.value) > 0 ? freezePeriodText(frozenSeconds.value) : "还没有冻结"));
+/** 因子侧每个可变成员最近一次被接受的提交，附上参数摘要。 */
+const current = computed(() =>
+  members.value.map(item => ({
+    ...item,
+    summary: memberParamsSummary({ [item.member_key]: item.params ?? {} }).replace(/^[^:]*: /, "")
+  }))
+);
+const produced = computed(() => nextParamsRows(results.value));
 const hasHidden = computed(() => hidden.categories.length + hidden.members.length + hidden.columns.length > 0);
 
-/** 估算一个周期的秒数，用来给冻结区间标注期数；resolved 里的 bar 如 1m、1h、1d。 */
-function periodSeconds() {
-  const match = /^(\d+)([smhd])$/.exec(String(parsedBar()));
-  if (!match) return 0;
-  return Number(match[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[match[2] as "s" | "m" | "h" | "d"];
-}
-
-function parsedBar() {
-  try {
-    return JSON.parse(props.instance.resolved_json || "{}").bar ?? "";
-  } catch {
-    return "";
-  }
-}
-
 async function load() {
-  const current = binding.value;
-  if (!current) return;
+  const taskBinding = binding.value;
+  if (!taskBinding) return;
   loading.value = true;
   error.value = "";
   try {
-    const now = Math.floor(Date.now() / 1000);
     const [params, list, settings, cats] = await Promise.all([
-      getFactorParams({ task_id: current.taskId, from: now - WINDOW_SECONDS }),
-      listStrategyParamSubmissions(props.instance.instance_id, 100, { silent: true }),
+      getFactorParams({ task_id: taskBinding.taskId }),
+      listStrategyResults(props.instance.instance_id, { page_size: 100, session_id: props.instance.session_id || undefined }),
       getStrategyDisplaySettings(props.instance.instance_id),
       listFactorCategories().catch(() => [] as FactorCategory[])
     ]);
-    intervals.value = params.intervals ?? [];
-    frozenSeconds.value = params.frozen_through ?? 0;
-    rawSubmissions.value = list;
+    members.value = params.members ?? [];
+    results.value = list.items;
     categories.value = cats;
     Object.assign(hidden, {
       categories: [...settings.categories],
       members: [...settings.members],
       columns: [...settings.columns]
     });
-    await loadColumns(current.viewId);
+    await loadColumns(taskBinding.viewId);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "因子参数加载失败";
   } finally {

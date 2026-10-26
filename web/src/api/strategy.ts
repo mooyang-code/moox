@@ -2,7 +2,6 @@ import { callControl, ControlRequestError } from "@/api/admin/http";
 import type {
   DisplayHidden,
   InstrumentTarget,
-  ParamSubmission,
   PageRequest,
   PageResponse,
   Replay,
@@ -34,7 +33,7 @@ function normalizeInstance(value: any): StrategyInstance {
     instance_id: value?.instance_id ?? "",
     strategy_id: value?.strategy_id ?? "",
     space_id: value?.space_id ?? "",
-    view_id: value?.view_id ?? "",
+    factor_task_id: value?.factor_task_id ?? "",
     logical_account_id: value?.logical_account_id ?? "",
     enabled: Boolean(value?.enabled),
     session_id: value?.session_id ?? "",
@@ -64,7 +63,10 @@ function normalizeResult(value: any): StrategyResult {
     input_json: value?.input_json || "{}",
     rule_states_json: value?.rule_states_json || "{}",
     publish_status: value?.publish_status ?? "",
-    created_at: value?.created_at ?? ""
+    created_at: value?.created_at ?? "",
+    next_params_json: value?.next_params_json ?? "",
+    params_delivered_at: value?.params_delivered_at ?? "",
+    params_error: value?.params_error ?? ""
   };
 }
 
@@ -86,6 +88,7 @@ function normalizeReplay(value: any): Replay {
     strategy_id: value?.strategy_id ?? "",
     dsl_yaml: value?.dsl_yaml ?? "",
     space_id: value?.space_id ?? "",
+    factor_task_id: value?.factor_task_id ?? "",
     view_id: value?.view_id ?? "",
     start_time: value?.start_time ?? "",
     end_time: value?.end_time ?? "",
@@ -183,13 +186,13 @@ function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 
-/** 校验 DSL；给出 view_id 时解析绑定并在最新周期试算一次（不落库）。 */
-export async function validateStrategy(dsl_yaml: string, view_id = ""): Promise<ValidateStrategyResult> {
+/** 校验 DSL；给出 factor_task_id 时按任务的结果 View 解析绑定并在最新周期试算一次（不落库）。 */
+export async function validateStrategy(dsl_yaml: string, factor_task_id = ""): Promise<ValidateStrategyResult> {
   let response: any;
   try {
-    response = await callControl<{ dsl_yaml: string; view_id?: string }, any>("strategy", "ValidateStrategy", {
+    response = await callControl<{ dsl_yaml: string; factor_task_id?: string }, any>("strategy", "ValidateStrategy", {
       dsl_yaml,
-      view_id: view_id || undefined
+      factor_task_id: factor_task_id || undefined
     });
   } catch (error) {
     // 只有服务端明确返回“参数无效”的校验失败才转成诊断结果；断网、HTTP、认证、空间失效等请求错误继续抛出，由页面按请求错误展示。
@@ -217,7 +220,7 @@ export async function validateStrategy(dsl_yaml: string, view_id = ""): Promise<
 export async function createInstance(instance: {
   instance_id?: string;
   strategy_id: string;
-  view_id: string;
+  factor_task_id: string;
   logical_account_id?: string;
 }) {
   const response = await call<{ instance: typeof instance & { enabled: false } }, { instance?: StrategyInstance }>(
@@ -227,12 +230,8 @@ export async function createInstance(instance: {
   return normalizeInstance(response.instance);
 }
 
-export async function updateInstance(instance: {
-  instance_id: string;
-  strategy_id?: string;
-  view_id?: string;
-  logical_account_id?: string;
-}) {
+/** 修改实例的策略定义与组合账户；因子任务在创建时写定，不能修改。 */
+export async function updateInstance(instance: { instance_id: string; strategy_id?: string; logical_account_id?: string }) {
   const response = await call<{ instance: typeof instance }, { instance?: StrategyInstance }>("UpdateStrategyInstance", {
     instance
   });
@@ -242,10 +241,6 @@ export async function updateInstance(instance: {
 export async function getInstance(instance_id: string) {
   const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>("GetStrategyInstance", { instance_id });
   return normalizeInstance(response.instance);
-}
-
-export async function deleteInstance(instance_id: string) {
-  await call<{ instance_id: string }, Record<string, never>>("DeleteStrategyInstance", { instance_id });
 }
 
 export async function listInstances(
@@ -397,36 +392,4 @@ export async function setStrategyDisplaySettings(instance_id: string, hidden: Di
     }
   );
   return normalizeHidden(response.hidden);
-}
-
-function normalizeSubmission(value: any): ParamSubmission {
-  return {
-    request_id: value?.request_id ?? "",
-    instance_id: value?.instance_id ?? "",
-    result_id: value?.result_id ?? "",
-    task_id: value?.task_id ?? "",
-    period_time: Number(value?.period_time ?? 0),
-    based_on_period: Number(value?.based_on_period ?? 0),
-    params_json: value?.params_json || "{}",
-    notes: value?.notes ?? "",
-    status: value?.status ?? "pending",
-    attempts: Number(value?.attempts ?? 0),
-    outcome_json: value?.outcome_json || "[]",
-    created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? ""
-  };
-}
-
-/** 实例最近的因子参数提交记录（目标期次倒序）。 */
-export async function listStrategyParamSubmissions(
-  instance_id: string,
-  limit = 100,
-  options: RequestOptions = {}
-): Promise<ParamSubmission[]> {
-  const response = await call<{ instance_id: string; limit: number }, { submissions?: ParamSubmission[] }>(
-    "ListStrategyParamSubmissions",
-    { instance_id, limit },
-    options
-  );
-  return (response.submissions ?? []).map(normalizeSubmission);
 }

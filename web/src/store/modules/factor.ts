@@ -43,11 +43,10 @@ export const useFactorStore = defineStore("factorStore", () => {
 
   const current = computed(() => sets.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
-  /** 计算任务的展示名：数据集名称 · 频率；取不到名称时回落为 source_dataset_id。 */
-  function setLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "owner_instance_id">>) {
-    const base = `${datasetNames.value[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`;
-    // 策略实例的私有因子任务与共享因子任务同源同频，加上实例标识才分得开。
-    return set.owner_instance_id ? `${base} · 实例 ${set.owner_instance_id.slice(0, 8)}` : base;
+  /** 因子任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
+  function setLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
+    const base = set.name || datasetNames.value[set.source_dataset_id] || set.source_dataset_id;
+    return `${base} · ${set.freq}`;
   }
 
   /** 该空间的因子任务是否已经成功加载过（页面重新挂载时据此跳过重置）。 */

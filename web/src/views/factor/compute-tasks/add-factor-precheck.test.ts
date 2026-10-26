@@ -3,8 +3,8 @@ import type { FactorDef } from "@/api/factor/types";
 import { precheckAddFactor, type PrecheckMember } from "./add-factor-precheck";
 
 const def = (patch: Partial<FactorDef> = {}): FactorDef => ({
-  factor_id: "Bias",
-  name: "Bias",
+  factor_id: "bias",
+  name: "bias",
   factor_type: "timeseries",
   spec_hash: "h",
   input_columns: ["close"],
@@ -18,7 +18,7 @@ const def = (patch: Partial<FactorDef> = {}): FactorDef => ({
 
 const ema = (): FactorDef =>
   def({
-    factor_id: "Ema",
+    factor_id: "ema",
     outputs: ["ema"],
     params: [
       { name: "span", type: "int", min: 2, max: 4825, default_value: 20 },
@@ -27,8 +27,9 @@ const ema = (): FactorDef =>
   });
 
 const member = (patch: Partial<PrecheckMember> = {}): PrecheckMember => ({
-  factor_id: "Bias",
-  alias: "Bias",
+  factor_id: "bias",
+  member_key: "bias",
+  kind: "fixed",
   output_columns: ["bias"],
   ...patch
 });
@@ -36,8 +37,11 @@ const member = (patch: Partial<PrecheckMember> = {}): PrecheckMember => ({
 const base = { sourceColumns: ["open", "high", "low", "close", "volume"], members: [] as PrecheckMember[] };
 
 describe("precheckAddFactor", () => {
-  it("a factor without params can only be a member once", () => {
-    expect(precheckAddFactor({ ...base, candidate: def(), members: [member()] })).toEqual({ ok: false, reason: "已在该计算任务中" });
+  it("a factor without params can only be a fixed member once", () => {
+    expect(precheckAddFactor({ ...base, candidate: def(), members: [member()] })).toEqual({
+      ok: false,
+      reason: "已在该计算任务中"
+    });
   });
 
   it("missing input column reports the column name", () => {
@@ -46,72 +50,103 @@ describe("precheckAddFactor", () => {
   });
 
   it("output colliding with another member's result column is rejected", () => {
-    const other = member({ factor_id: "Other", alias: "Other", output_columns: ["bias"] });
-    const result = precheckAddFactor({ ...base, candidate: def({ factor_id: "Bias2" }), members: [other] });
-    expect(result).toEqual({ ok: false, reason: "输出列 bias 与成员 Other 的输出列重名", fixable: true });
+    const other = member({ factor_id: "other", member_key: "other", output_columns: ["bias"] });
+    const result = precheckAddFactor({
+      ...base,
+      candidate: def({ factor_id: "bias2", outputs: ["bias2"] }),
+      members: [other],
+      sourceColumns: ["close", "bias2"]
+    });
+    expect(result).toEqual({ ok: false, reason: "输出列 bias2 与源数据集列重名", fixable: true });
+    const clash = precheckAddFactor({
+      ...base,
+      candidate: def({ factor_id: "bias2", outputs: ["bias2"] }),
+      members: [member({ member_key: "other", output_columns: ["bias2"] })]
+    });
+    expect(clash).toEqual({ ok: false, reason: "输出列 bias2 与成员 other 的输出列重名", fixable: true });
   });
 
-  it("output colliding with source column is rejected", () => {
-    const result = precheckAddFactor({ ...base, candidate: def({ outputs: ["close"] }) });
-    expect(result).toEqual({ ok: false, reason: "输出列 close 与源数据集列重名", fixable: true });
-  });
-
-  it("valid candidate is selectable and reports its alias", () => {
-    expect(precheckAddFactor({ ...base, candidate: def() })).toEqual({ ok: true, alias: "Bias" });
+  it("valid candidate is selectable and reports its member key and columns", () => {
+    expect(precheckAddFactor({ ...base, candidate: def() })).toEqual({ ok: true, memberKey: "bias", columns: ["bias"] });
   });
 
   it("skips column checks while the source columns are still unknown", () => {
     expect(precheckAddFactor({ candidate: def({ input_columns: ["x"] }), members: [], sourceColumns: null })).toEqual({
       ok: true,
-      alias: "Bias"
+      memberKey: "bias",
+      columns: ["bias"]
     });
   });
 
-  it("derives the alias from the params; all defaults keep the factor id", () => {
-    expect(precheckAddFactor({ ...base, candidate: ema() })).toEqual({ ok: true, alias: "Ema" });
-    expect(precheckAddFactor({ ...base, candidate: ema(), params: { warmup: 50000 } })).toEqual({ ok: true, alias: "Ema_20_50000" });
-    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 50, warmup: 20000 }, alias: "slow" })).toEqual({
+  it("derives the member key from the params; all defaults keep the factor id", () => {
+    expect(precheckAddFactor({ ...base, candidate: ema() })).toMatchObject({ ok: true, memberKey: "ema" });
+    expect(precheckAddFactor({ ...base, candidate: ema(), params: { warmup: 50000 } })).toMatchObject({
       ok: true,
-      alias: "slow"
+      memberKey: "ema__20_50000"
     });
+    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 50, warmup: 20000 } })).toMatchObject({
+      ok: true,
+      memberKey: "ema__50_20000",
+      columns: ["ema__50_20000"]
+    });
+  });
+
+  it("a variable member is keyed by the factor id plus __var, one per factor", () => {
+    const variable = precheckAddFactor({ ...base, candidate: ema(), kind: "var" });
+    expect(variable).toEqual({ ok: true, memberKey: "ema__var", columns: ["ema__var"] });
+    const existing = member({ factor_id: "ema", member_key: "ema__var", kind: "var", output_columns: ["ema__var"] });
+    expect(precheckAddFactor({ ...base, candidate: ema(), kind: "var", members: [existing] })).toEqual({
+      ok: false,
+      reason: "已有这个因子的可变成员"
+    });
+    // 固定成员和可变成员互不冲突。
+    expect(precheckAddFactor({ ...base, candidate: ema(), members: [existing] })).toMatchObject({ ok: true, memberKey: "ema" });
   });
 
   it("the same factor with different params can be added again; the same params cannot", () => {
-    const defaults = member({ factor_id: "Ema", alias: "Ema", params: { span: 20, warmup: 0 }, output_columns: ["ema"] });
-    expect(precheckAddFactor({ ...base, candidate: ema(), members: [defaults], params: { warmup: 50000 } })).toEqual({
+    const defaults = member({ factor_id: "ema", member_key: "ema", params: { span: 20, warmup: 0 }, output_columns: ["ema"] });
+    expect(precheckAddFactor({ ...base, candidate: ema(), members: [defaults], params: { warmup: 50000 } })).toMatchObject({
       ok: true,
-      alias: "Ema_20_50000"
+      memberKey: "ema__20_50000"
     });
     expect(precheckAddFactor({ ...base, candidate: ema(), members: [defaults], params: { span: 20, warmup: 0 } })).toEqual({
       ok: false,
-      reason: "别名 Ema 已在该计算任务中",
+      reason: "已有相同参数的成员 ema",
       fixable: true
     });
-    expect(precheckAddFactor({ ...base, candidate: ema(), members: [defaults], params: {}, alias: "again" })).toEqual({
+  });
+
+  it("rejects out-of-range or fractional params", () => {
+    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 1 } })).toEqual({
       ok: false,
-      reason: "已有相同参数的成员 Ema",
+      reason: "参数 span 需在 2 ~ 4825 之间",
+      fixable: true
+    });
+    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 20.5 } })).toEqual({
+      ok: false,
+      reason: "参数 span 必须是整数",
       fixable: true
     });
   });
 
-  it("rejects out-of-range or fractional params and bad aliases", () => {
-    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 1 } })).toEqual({ ok: false, reason: "参数 span 需在 2 ~ 4825 之间", fixable: true });
-    expect(precheckAddFactor({ ...base, candidate: ema(), params: { span: 20.5 } })).toEqual({ ok: false, reason: "参数 span 必须是整数", fixable: true });
-    expect(precheckAddFactor({ ...base, candidate: ema(), alias: "bad__alias" }).ok).toBe(false);
-    expect(precheckAddFactor({ ...base, candidate: ema(), alias: "1abc" }).ok).toBe(false);
-  });
-
-  it("asks for a manual alias when the generated one is too long", () => {
-    const long = ema();
-    long.factor_id = "ALongFactorIdentifierForTesting";
-    const result = precheckAddFactor({ ...base, candidate: long, params: { warmup: 50000 } });
+  it("reports an over-long generated member key so the params can be changed", () => {
+    const long = def({
+      factor_id: "a_long_factor_identifier",
+      outputs: ["a_long_factor_identifier"],
+      params: ["x", "y", "z"].map(name => ({ name, type: "float" as const, min: 0, max: 1e6, default_value: 1 }))
+    });
+    const result = precheckAddFactor({ ...base, candidate: long, params: { x: 123456.789, y: 123456.789, z: 123456.789 } });
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.reason).toContain("手动指定别名");
+    expect(result.ok === false && result.reason).toContain("超过");
+    expect(result.ok === false && result.fixable).toBe(true);
   });
 
-  it("result columns of a prefixed alias do not collide with the default member's", () => {
-    const defaults = member({ factor_id: "Ema", alias: "Ema", params: { span: 20, warmup: 0 }, output_columns: ["ema"] });
-    const result = precheckAddFactor({ ...base, candidate: ema(), members: [defaults], params: { warmup: 50000 } });
-    expect(result.ok).toBe(true);
+  it("multi-output factors get one column per output, prefixed by the member key", () => {
+    const boll = def({ factor_id: "boll", outputs: ["upper", "mid", "lower"] });
+    expect(precheckAddFactor({ ...base, candidate: boll })).toEqual({
+      ok: true,
+      memberKey: "boll",
+      columns: ["boll__upper", "boll__mid", "boll__lower"]
+    });
   });
 });

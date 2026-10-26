@@ -18,6 +18,10 @@
       <a-form-item label="频率">
         <a-input :model-value="sourceFreq" disabled placeholder="由源数据集决定" />
       </a-form-item>
+      <a-form-item label="任务名称" required :validate-status="nameError ? 'error' : undefined" :help="nameError">
+        <a-input v-model="form.name" :max-length="10" show-word-limit placeholder="含汉字，不超过 10 个字，空间内唯一" />
+        <template #extra>任务名称直接用作结果数据集的名称，创建后不能修改。</template>
+      </a-form-item>
     </a-form>
   </a-modal>
 </template>
@@ -32,6 +36,7 @@ import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
+import { validateTaskName } from "./compute-tasks-model";
 
 defineOptions({ name: "FactorTaskCreateModal" });
 
@@ -42,7 +47,10 @@ const spaceStore = useSpaceStore();
 const sourceDatasets = ref<Dataset[]>([]);
 const datasetsLoading = ref(false);
 const submitting = ref(false);
-const form = reactive({ source_dataset_id: "" });
+const form = reactive({ source_dataset_id: "", name: "" });
+
+// 输入过之后才提示名称错误，避免一打开就满屏红字。
+const nameError = computed(() => (form.name ? validateTaskName(form.name) : ""));
 
 // A Dataset has exactly one frequency, so the factor task takes the source's. 任务的标的就是源数据集当前的标的。
 const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freq || "");
@@ -65,6 +73,7 @@ async function loadSourceDatasets(spaceId: string) {
 
 async function prepare() {
   form.source_dataset_id = "";
+  form.name = "";
   // 打开时先清空：上一次（可能属于其他空间）的选项不能在新空间加载失败后继续可选
   sourceDatasets.value = [];
   const spaceId = spaceStore.selectedSpaceId;
@@ -86,6 +95,11 @@ async function submit() {
     Message.warning("请选择源数据集");
     return false;
   }
+  const invalidName = validateTaskName(form.name);
+  if (invalidName) {
+    Message.warning(invalidName);
+    return false;
+  }
   const submission = createScope.begin();
   const submitGeneration = selectedSpaceGeneration();
   const stale = () =>
@@ -95,7 +109,8 @@ async function submit() {
     const created = await createFactorTask({
       space_id: spaceId,
       source_dataset_id: form.source_dataset_id,
-      freq: sourceFreq.value
+      freq: sourceFreq.value,
+      name: form.name
     });
     if (stale()) {
       // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）

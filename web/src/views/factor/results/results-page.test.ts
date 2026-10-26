@@ -32,15 +32,16 @@ vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn(), warning: hoi
 
 import FactorResults from "./index.vue";
 
-function member(alias: string, outputs: string[], category = "momentum"): FactorMember {
+function member(key: string, outputs: string[], category = "momentum"): FactorMember {
   return {
     task_id: "a",
-    member_alias: alias,
-    factor_id: alias,
+    member_key: key,
+    kind: "fixed",
+    factor_id: key,
     status: "enabled",
     factor: {
-      factor_id: alias,
-      name: alias,
+      factor_id: key,
+      name: key,
       spec_hash: "",
       factor_type: "timeseries",
       input_columns: [],
@@ -53,21 +54,21 @@ function member(alias: string, outputs: string[], category = "momentum"): Factor
     },
     created_at: "",
     updated_at: "",
-    output_columns: outputs,
-    param_columns: [`${alias}__window`]
+    output_columns: outputs
   };
 }
 
-function taskInfo(taskId: string, ownerInstanceId = ""): FactorTaskInfo {
+function taskInfo(taskId: string, boundInstanceId = ""): FactorTaskInfo {
   return {
     factor_task: {
       task_id: taskId,
       space_id: "crypto",
       source_dataset_id: "kline",
       freq: "1m",
+      name: "行情因子",
       result_dataset_id: `r_${taskId}`,
       status: "enabled",
-      owner_instance_id: ownerInstanceId
+      bound_instance_id: boundInstanceId
     },
     members: [member("rsi", ["rsi"]), member("boll", ["boll_mid", "boll_up"], "trend")]
   };
@@ -87,11 +88,10 @@ const viewColumns = [
   column("open"),
   column("close"),
   column("request_id"),
-  column("rsi", { column_kind: "output", member_alias: "rsi" }),
-  column("rsi__window", { column_kind: "param", member_alias: "rsi" }),
-  column("boll_mid", { column_kind: "output", member_alias: "boll" }),
-  column("boll_up", { column_kind: "output", member_alias: "boll" }),
-  column("boll__window", { column_kind: "param", member_alias: "boll" })
+  column("rsi", { column_kind: "output", member_key: "rsi" }),
+  column("boll_mid", { column_kind: "output", member_key: "boll" }),
+  column("boll_up", { column_kind: "output", member_key: "boll" }),
+  column("__params", { column_kind: "params" })
 ];
 
 const ViewBrowseStub = defineComponent({
@@ -211,7 +211,7 @@ describe("因子结果页", () => {
     expect(browse.props("searchColumns")).toEqual(["close", "request_id"]);
   });
 
-  it("策略私有因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
+  it("关联了策略实例的因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
     Object.assign(hoisted.store, { sets: [taskInfo("a", "inst-1")] });
     hoisted.getDisplay.mockResolvedValue({ categories: ["momentum"], members: [], columns: ["open"] });
     hoisted.route.query = { tab: "results", task: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };
