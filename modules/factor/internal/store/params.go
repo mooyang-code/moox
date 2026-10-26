@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,521 +11,134 @@ import (
 	"gorm.io/gorm"
 )
 
-// 参数请求与冻结（因子动态调参执行计划 2.4、2.6）。提交与冻结在同一个库里串行化：冻结时在一个事务里为每个成员
-// 选出该期库内序号最大的已接受请求（没有就沿用上一期的冻结快照，从未有过就用默认值），写冻结区间并推进任务的
-// 已冻结期次；之后到达的同期请求一律 too_late。
+// 参数提交结果。
+const (
+	SubmitAccepted  = "accepted"
+	SubmitDuplicate = "duplicate"
+	SubmitRejected  = "rejected"
+)
 
-type paramRequestRow struct {
-	Seq           int64     `gorm:"column:c_seq"`
-	RequestID     string    `gorm:"column:c_request_id"`
-	TaskID        string    `gorm:"column:c_task_id"`
-	MemberAlias   string    `gorm:"column:c_member_alias"`
-	PeriodTime    int64     `gorm:"column:c_period_time"`
-	BasedOnPeriod int64     `gorm:"column:c_based_on_period"`
-	SnapshotHash  string    `gorm:"column:c_snapshot_hash"`
-	Writer        string    `gorm:"column:c_writer"`
-	Status        string    `gorm:"column:c_status"`
-	CreatedAt     time.Time `gorm:"column:c_ctime"`
-	SnapshotJSON  string    `gorm:"column:c_snapshot_json"`
+// ParamSubmission 是一个可变成员的一份参数提交（完整快照：默认值加按标的覆盖）。
+type ParamSubmission struct {
+	MemberKey string
+	Snapshot  domain.ParamSnapshot
 }
 
-const paramRequestColumns = `r.c_seq, r.c_request_id, r.c_task_id, r.c_member_alias, r.c_period_time, r.c_based_on_period,
-	r.c_snapshot_hash, r.c_writer, r.c_status, r.c_ctime, COALESCE(p.c_snapshot_json, '') AS c_snapshot_json`
-
-func (r paramRequestRow) domain() (domain.ParamRequest, error) {
-	snapshot, err := domain.ParseParamSnapshot(r.SnapshotJSON)
-	if err != nil {
-		return domain.ParamRequest{}, err
-	}
-	request := domain.ParamRequest{
-		Seq: r.Seq, RequestID: r.RequestID, TaskID: r.TaskID, MemberAlias: r.MemberAlias,
-		PeriodTime: time.Unix(r.PeriodTime, 0).UTC(), Snapshot: snapshot, SnapshotHash: r.SnapshotHash,
-		Writer: r.Writer, Status: r.Status, CreatedAt: r.CreatedAt,
-	}
-	if r.BasedOnPeriod != 0 {
-		request.BasedOnPeriod = time.Unix(r.BasedOnPeriod, 0).UTC()
-	}
-	return request, nil
+// ParamSubmitOutcome 是一个成员的提交结果；Result 为 rejected 时 Reason 说明原因。
+type ParamSubmitOutcome struct {
+	MemberKey string
+	Result    string
+	Reason    string
 }
 
-type paramIntervalRow struct {
-	TaskID       string `gorm:"column:c_task_id"`
-	MemberAlias  string `gorm:"column:c_member_alias"`
-	StartPeriod  int64  `gorm:"column:c_start_period"`
-	EndPeriod    int64  `gorm:"column:c_end_period"`
-	SnapshotHash string `gorm:"column:c_snapshot_hash"`
-	Source       string `gorm:"column:c_source"`
-	SnapshotJSON string `gorm:"column:c_snapshot_json"`
-}
-
-const paramIntervalColumns = `f.c_task_id, f.c_member_alias, f.c_start_period, f.c_end_period, f.c_snapshot_hash, f.c_source,
-	p.c_snapshot_json`
-
-func (r paramIntervalRow) domain() (domain.ParamInterval, error) {
-	snapshot, err := domain.ParseParamSnapshot(r.SnapshotJSON)
-	if err != nil {
-		return domain.ParamInterval{}, err
-	}
-	return domain.ParamInterval{
-		TaskID: r.TaskID, MemberAlias: r.MemberAlias, Start: time.Unix(r.StartPeriod, 0).UTC(), End: time.Unix(r.EndPeriod, 0).UTC(),
-		Snapshot: snapshot, SnapshotHash: r.SnapshotHash, Source: r.Source,
-	}, nil
-}
-
-// SubmitParamRequest 接受一份参数请求。同一 (request_id, 任务, 成员) 重复提交返回已存的请求；
-// 期次不晚于任务已冻结的期次时返回 domain.ErrParamsTooLate。快照的合法性由调用方先检查。
-func (s *Store) SubmitParamRequest(ctx context.Context, request domain.ParamRequest) (domain.ParamRequest, error) {
-	if s == nil || s.db == nil {
-		return domain.ParamRequest{}, fmt.Errorf("factor database is not open")
-	}
-	request.RequestID, request.TaskID, request.MemberAlias = strings.TrimSpace(request.RequestID), strings.TrimSpace(request.TaskID),
-		strings.TrimSpace(request.MemberAlias)
-	if request.RequestID == "" || request.TaskID == "" || request.MemberAlias == "" || request.PeriodTime.IsZero() {
-		return domain.ParamRequest{}, fmt.Errorf("request_id, task_id, member and period_time are required")
-	}
-	request.SnapshotHash = request.Snapshot.Hash()
-	var stored domain.ParamRequest
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		existing, found, err := findParamRequest(tx, request.RequestID, request.TaskID, request.MemberAlias)
-		if err != nil {
-			return err
-		}
-		if found {
-			if existing.SnapshotHash != request.SnapshotHash || !existing.PeriodTime.Equal(request.PeriodTime.UTC()) {
-				return fmt.Errorf("%w: request %q was already submitted with different content", ErrConflict, request.RequestID)
-			}
-			stored = existing
-			return nil
-		}
-		frozen, ok, err := frozenThrough(tx, request.TaskID)
-		if err != nil {
-			return err
-		}
-		if ok && !request.PeriodTime.After(frozen) {
-			return fmt.Errorf("%w（已冻结到 %s）", domain.ErrParamsTooLate, frozen.Format(time.RFC3339))
-		}
-		if err := putSnapshot(tx, request.Snapshot); err != nil {
-			return err
-		}
-		var basedOn int64
-		if !request.BasedOnPeriod.IsZero() {
-			basedOn = request.BasedOnPeriod.Unix()
-		}
-		if err := tx.Exec(`
-			INSERT INTO t_factor_param_requests
-			(c_request_id, c_task_id, c_member_alias, c_period_time, c_based_on_period, c_snapshot_hash, c_writer, c_status, c_ctime)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, request.RequestID, request.TaskID, request.MemberAlias, request.PeriodTime.Unix(), basedOn, request.SnapshotHash,
-			request.Writer, domain.ParamRequestAccepted, time.Now().UTC()).Error; err != nil {
-			return err
-		}
-		stored, _, err = findParamRequest(tx, request.RequestID, request.TaskID, request.MemberAlias)
-		return err
-	})
-	return stored, err
-}
-
-func findParamRequest(tx *gorm.DB, requestID, taskID, alias string) (domain.ParamRequest, bool, error) {
-	var row paramRequestRow
-	result := tx.Raw(`SELECT `+paramRequestColumns+` FROM t_factor_param_requests r
-		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_request_id = ? AND r.c_task_id = ? AND r.c_member_alias = ?`, requestID, taskID, alias).Scan(&row)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return domain.ParamRequest{}, false, result.Error
-	}
-	request, err := row.domain()
-	return request, err == nil, err
-}
-
-func frozenThrough(tx *gorm.DB, taskID string) (time.Time, bool, error) {
-	var through []int64
-	if err := tx.Raw(`SELECT c_frozen_through FROM t_factor_param_frozen_periods WHERE c_task_id = ?`, taskID).Scan(&through).Error; err != nil {
-		return time.Time{}, false, err
-	}
-	if len(through) == 0 {
-		return time.Time{}, false, nil
-	}
-	return time.Unix(through[0], 0).UTC(), true, nil
-}
-
-// FrozenThrough 返回任务已冻结到的最新一期。
-func (s *Store) FrozenThrough(ctx context.Context, taskID string) (time.Time, bool, error) {
-	if s == nil || s.db == nil {
-		return time.Time{}, false, fmt.Errorf("factor database is not open")
-	}
-	return frozenThrough(s.db.WithContext(ctx), strings.TrimSpace(taskID))
-}
-
-func putSnapshot(tx *gorm.DB, snapshot domain.ParamSnapshot) error {
-	return tx.Exec(`INSERT OR IGNORE INTO t_factor_param_snapshots (c_snapshot_hash, c_snapshot_json, c_ctime) VALUES (?, ?, ?)`,
-		snapshot.Hash(), snapshot.Canonical(), time.Now().UTC()).Error
-}
-
-// FreezeMember 是冻结一个成员时需要的信息：别名与它的默认快照（从未有过冻结记录时使用）。
-type FreezeMember struct {
-	Alias string
-	// Defaults 是没有请求时这一期用的快照：定义的默认值，或成员的固定参数（Fixed）。
-	Defaults domain.ParamSnapshot
-	// Fixed 为真表示 Defaults 是成员的固定参数：不沿用上一期的冻结快照，只有与当前固定值相同的旧快照才可延长，
-	// 同一别名删除重加成不同的固定参数后，不能继续用旧值。
-	Fixed bool
-}
-
-// FreezeParams 冻结任务在 period 这一期的参数并返回每个成员的冻结结果；previous 是网格上的上一期，用于判断能否
-// 延长上一个区间。已冻结过的成员期次原样返回（引擎重试、重投、重启后重算都拿到同一份），所以调用是幂等的。
-func (s *Store) FreezeParams(ctx context.Context, taskID string, period, previous time.Time, members []FreezeMember) ([]domain.ParamFreeze, error) {
+// SubmitMemberParams 在一个事务里处理一次提交（每个成员一份）。对每个成员：
+//  1. 目标期不能倒退：小于该成员最近一次被接受的目标期则拒绝；
+//  2. 同一目标期下，同一个 requestID 重复提交按幂等成功，不同 requestID 拒绝；
+//  3. 按标的合并（domain.MergeSnapshots）后，交给 check 校验合并结果；通过就写入 c_last_submitted_*。
+//
+// 提交只写运行状态列，不更新 c_mtime，也就不改变目录指纹。成员不存在、或不是可变成员时该成员被拒绝，不影响其他成员。
+func (s *Store) SubmitMemberParams(ctx context.Context, taskID string, period int64, requestID string, submissions []ParamSubmission,
+	check func(memberKey string, merged domain.ParamSnapshot) error) ([]ParamSubmitOutcome, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	taskID = strings.TrimSpace(taskID)
-	if taskID == "" || period.IsZero() || !previous.Before(period) {
-		return nil, fmt.Errorf("set id, period and an earlier previous period are required")
+	taskID, requestID = strings.TrimSpace(taskID), strings.TrimSpace(requestID)
+	if taskID == "" || requestID == "" || period <= 0 {
+		return nil, fmt.Errorf("task id, request id and a positive period are required")
 	}
-	period, previous = period.UTC(), previous.UTC()
-	var freezes []domain.ParamFreeze
+	outcomes := make([]ParamSubmitOutcome, 0, len(submissions))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		frozen, hasFrozen, err := frozenThrough(tx, taskID)
-		if err != nil {
-			return err
-		}
-		fresh := !hasFrozen || period.After(frozen)
-		for _, member := range members {
-			freeze, err := freezeMember(tx, taskID, member, period, previous, fresh)
+		outcomes = outcomes[:0]
+		for _, submission := range submissions {
+			outcome, err := submitOne(tx, taskID, period, requestID, submission, check)
 			if err != nil {
-				return fmt.Errorf("冻结成员 %s：%w", member.Alias, err)
+				return err
 			}
-			freezes = append(freezes, freeze)
-		}
-		if fresh {
-			return tx.Exec(`
-				INSERT INTO t_factor_param_frozen_periods (c_task_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
-				ON CONFLICT (c_task_id) DO UPDATE SET c_frozen_through = excluded.c_frozen_through, c_mtime = excluded.c_mtime
-			`, taskID, period.Unix(), time.Now().UTC()).Error
+			outcomes = append(outcomes, outcome)
 		}
 		return nil
 	})
-	return freezes, err
+	if err != nil {
+		return nil, err
+	}
+	return outcomes, nil
 }
 
-func freezeMember(tx *gorm.DB, taskID string, member FreezeMember, period, previous time.Time, fresh bool) (domain.ParamFreeze, error) {
-	covering, found, err := intervalCovering(tx, taskID, member.Alias, period)
-	if err != nil {
-		return domain.ParamFreeze{}, err
+func submitOne(tx *gorm.DB, taskID string, period int64, requestID string, submission ParamSubmission,
+	check func(string, domain.ParamSnapshot) error) (ParamSubmitOutcome, error) {
+	outcome := ParamSubmitOutcome{MemberKey: submission.MemberKey}
+	reject := func(format string, args ...any) (ParamSubmitOutcome, error) {
+		outcome.Result, outcome.Reason = SubmitRejected, fmt.Sprintf(format, args...)
+		return outcome, nil
 	}
-	if found {
-		freeze := domain.ParamFreeze{TaskID: taskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: covering.Snapshot,
-			SnapshotHash: covering.SnapshotHash, Source: covering.Source}
-		if covering.Source == domain.ParamsRequested {
-			freeze.RequestID, _ = appliedRequestID(tx, taskID, member.Alias, period)
-		}
-		return freeze, nil
+	var row memberRow
+	result := tx.Raw(`SELECT `+memberColumns+` FROM t_factor_task_members WHERE c_task_id = ? AND c_member_key = ?`,
+		taskID, submission.MemberKey).Scan(&row)
+	if result.Error != nil {
+		return outcome, result.Error
 	}
-	freeze := domain.ParamFreeze{TaskID: taskID, MemberAlias: member.Alias, PeriodTime: period}
-	var chosen *domain.ParamRequest
-	if fresh {
-		if chosen, err = latestAcceptedRequest(tx, taskID, member.Alias, period); err != nil {
-			return domain.ParamFreeze{}, err
-		}
+	if result.RowsAffected == 0 {
+		return reject("任务 %s 里没有成员 %s", taskID, submission.MemberKey)
+	}
+	if row.Kind != domain.MemberKindVar {
+		return reject("成员 %s 是固定成员，不接受参数提交", submission.MemberKey)
 	}
 	switch {
-	case chosen != nil:
-		freeze.Snapshot, freeze.Source, freeze.RequestID = chosen.Snapshot, domain.ParamsRequested, chosen.RequestID
-	default:
-		last, ok, err := lastIntervalBefore(tx, taskID, member.Alias, period)
-		if err != nil {
-			return domain.ParamFreeze{}, err
-		}
-		// 成员的参数声明在两期之间变过（增删参数），旧快照缺参数或多参数，不能再沿用：改回当前声明的默认值。
-		if ok && !sameParamNames(last.Snapshot, member.Defaults) {
-			ok = false
-		}
-		if ok && member.Fixed && last.Snapshot.Hash() != member.Defaults.Hash() {
-			ok = false
-		}
-		if ok {
-			// 从未提交过时沿用的仍是默认值，来源记为 default（连续沿用的告警只看真正提交过之后的沿用）。
-			freeze.Snapshot, freeze.Source = last.Snapshot, domain.ParamsCarried
-			// 来源链可能被离线冻结（carried_offline）打断，所以不能只看上一个区间的来源：成员从没有提交生效过，沿用的就还是默认值。
-			if last.Source == domain.ParamsDefault {
-				freeze.Source = domain.ParamsDefault
-			} else if requested, err := everRequested(tx, taskID, member.Alias); err != nil {
-				return domain.ParamFreeze{}, err
-			} else if !requested {
-				freeze.Source = domain.ParamsDefault
-			}
-		} else {
-			freeze.Snapshot, freeze.Source = member.Defaults, domain.ParamsDefault
-		}
+	case period < row.LastSubmittedPeriod:
+		return reject("目标期 %s 早于已接受的目标期 %s", formatPeriod(period), formatPeriod(row.LastSubmittedPeriod))
+	case period == row.LastSubmittedPeriod && row.LastRequestID == requestID:
+		outcome.Result = SubmitDuplicate
+		return outcome, nil
+	case period == row.LastSubmittedPeriod:
+		return reject("目标期 %s 已被另一次提交（request_id %s）接受", formatPeriod(period), row.LastRequestID)
 	}
-	freeze.SnapshotHash = freeze.Snapshot.Hash()
-	if err := writeInterval(tx, taskID, member.Alias, period, previous, freeze.Snapshot, freeze.Source); err != nil {
-		return domain.ParamFreeze{}, err
-	}
-	if chosen != nil {
-		if err := tx.Exec(`UPDATE t_factor_param_requests SET c_status = CASE WHEN c_seq = ? THEN ? ELSE ? END
-			WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
-			chosen.Seq, domain.ParamRequestApplied, domain.ParamRequestSuperseded, taskID, member.Alias, period.Unix(),
-			domain.ParamRequestAccepted).Error; err != nil {
-			return domain.ParamFreeze{}, err
-		}
-	}
-	return freeze, nil
-}
-
-// everRequested 报告成员是否有过提交生效的冻结区间。
-func everRequested(tx *gorm.DB, taskID, alias string) (bool, error) {
-	var n int64
-	err := tx.Raw(`SELECT COUNT(*) FROM (SELECT 1 FROM t_factor_param_freezes WHERE c_task_id = ? AND c_member_alias = ? AND c_source = ? LIMIT 1)`,
-		taskID, alias, domain.ParamsRequested).Scan(&n).Error
-	return n > 0, err
-}
-
-// sameParamNames 判断两份快照的参数名任务是否一致。
-func sameParamNames(a, b domain.ParamSnapshot) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for name := range a {
-		if _, ok := b[name]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func latestAcceptedRequest(tx *gorm.DB, taskID, alias string, period time.Time) (*domain.ParamRequest, error) {
-	var row paramRequestRow
-	result := tx.Raw(`SELECT `+paramRequestColumns+` FROM t_factor_param_requests r
-		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_task_id = ? AND r.c_member_alias = ? AND r.c_period_time = ? AND r.c_status = ?
-		ORDER BY r.c_seq DESC LIMIT 1`, taskID, alias, period.Unix(), domain.ParamRequestAccepted).Scan(&row)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return nil, result.Error
-	}
-	request, err := row.domain()
+	previous, err := domain.ParseParamSnapshot(row.LastSubmittedParams)
 	if err != nil {
-		return nil, err
+		return outcome, err
 	}
-	return &request, nil
-}
-
-func appliedRequestID(tx *gorm.DB, taskID, alias string, period time.Time) (string, error) {
-	var ids []string
-	err := tx.Raw(`SELECT c_request_id FROM t_factor_param_requests
-		WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ? LIMIT 1`,
-		taskID, alias, period.Unix(), domain.ParamRequestApplied).Scan(&ids).Error
-	if err != nil || len(ids) == 0 {
-		return "", err
-	}
-	return ids[0], nil
-}
-
-func intervalCovering(tx *gorm.DB, taskID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
-	var row paramIntervalRow
-	result := tx.Raw(`SELECT `+paramIntervalColumns+` FROM t_factor_param_freezes f
-		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_task_id = ? AND f.c_member_alias = ? AND f.c_start_period <= ? AND f.c_end_period >= ?
-		ORDER BY f.c_start_period DESC LIMIT 1`, taskID, alias, period.Unix(), period.Unix()).Scan(&row)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return domain.ParamInterval{}, false, result.Error
-	}
-	interval, err := row.domain()
-	return interval, err == nil, err
-}
-
-func lastIntervalBefore(tx *gorm.DB, taskID, alias string, period time.Time) (domain.ParamInterval, bool, error) {
-	var row paramIntervalRow
-	result := tx.Raw(`SELECT `+paramIntervalColumns+` FROM t_factor_param_freezes f
-		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_task_id = ? AND f.c_member_alias = ? AND f.c_end_period < ?
-		ORDER BY f.c_end_period DESC LIMIT 1`, taskID, alias, period.Unix()).Scan(&row)
-	if result.Error != nil || result.RowsAffected == 0 {
-		return domain.ParamInterval{}, false, result.Error
-	}
-	interval, err := row.domain()
-	return interval, err == nil, err
-}
-
-// writeInterval 记录成员 period 这一期的冻结：上一个区间恰好结束在 previous、快照与来源都相同时延长它，否则新开一个区间。
-func writeInterval(tx *gorm.DB, taskID, alias string, period, previous time.Time, snapshot domain.ParamSnapshot, source string) error {
-	if err := putSnapshot(tx, snapshot); err != nil {
-		return err
-	}
-	hash := snapshot.Hash()
-	result := tx.Exec(`UPDATE t_factor_param_freezes SET c_end_period = ?, c_mtime = ?
-		WHERE c_task_id = ? AND c_member_alias = ? AND c_end_period = ? AND c_snapshot_hash = ? AND c_source = ?`,
-		period.Unix(), time.Now().UTC(), taskID, alias, previous.Unix(), hash, source)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected > 0 {
-		return nil
-	}
-	return tx.Exec(`INSERT INTO t_factor_param_freezes
-		(c_task_id, c_member_alias, c_start_period, c_end_period, c_snapshot_hash, c_source, c_mtime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		taskID, alias, period.Unix(), period.Unix(), hash, source, time.Now().UTC()).Error
-}
-
-// ApplyOfflineFreezes 合并引擎在 FactorMgr 不可达时本地冻结的期次。管理端已有记录的期次以管理端为准，快照不同的
-// 作为冲突返回（引擎据此重算那一期）；没有记录的写入来源为 carried_offline 的区间，并把那一期已接受的请求标为未生效。
-func (s *Store) ApplyOfflineFreezes(ctx context.Context, freezes []domain.ParamFreeze, previous func(time.Time) time.Time) ([]domain.ParamFreeze, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("factor database is not open")
-	}
-	var conflicts []domain.ParamFreeze
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, freeze := range freezes {
-			period := freeze.PeriodTime.UTC()
-			covering, found, err := intervalCovering(tx, freeze.TaskID, freeze.MemberAlias, period)
-			if err != nil {
-				return err
-			}
-			if found {
-				if covering.SnapshotHash != freeze.Snapshot.Hash() {
-					conflicts = append(conflicts, domain.ParamFreeze{TaskID: freeze.TaskID, MemberAlias: freeze.MemberAlias, PeriodTime: period,
-						Snapshot: covering.Snapshot, SnapshotHash: covering.SnapshotHash, Source: covering.Source})
-				}
-				continue
-			}
-			if err := writeInterval(tx, freeze.TaskID, freeze.MemberAlias, period, previous(period), freeze.Snapshot,
-				domain.ParamsCarriedOffline); err != nil {
-				return err
-			}
-			if err := tx.Exec(`UPDATE t_factor_param_requests SET c_status = ?
-				WHERE c_task_id = ? AND c_member_alias = ? AND c_period_time = ? AND c_status = ?`,
-				domain.ParamRequestNotApplied, freeze.TaskID, freeze.MemberAlias, period.Unix(), domain.ParamRequestAccepted).Error; err != nil {
-				return err
-			}
-			if err := tx.Exec(`
-				INSERT INTO t_factor_param_frozen_periods (c_task_id, c_frozen_through, c_mtime) VALUES (?, ?, ?)
-				ON CONFLICT (c_task_id) DO UPDATE SET c_frozen_through = MAX(c_frozen_through, excluded.c_frozen_through), c_mtime = excluded.c_mtime
-			`, freeze.TaskID, period.Unix(), time.Now().UTC()).Error; err != nil {
-				return err
-			}
+	merged := domain.MergeSnapshots(previous, submission.Snapshot)
+	if check != nil {
+		if err := check(submission.MemberKey, merged); err != nil {
+			return reject("%v", err)
 		}
-		return nil
-	})
-	return conflicts, err
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return outcome, err
+	}
+	// 只写 c_last_* 运行状态列：触发器按配置列限定，不会更新 c_mtime。
+	if err := tx.Exec(`
+		UPDATE t_factor_task_members
+		SET c_last_submitted_params = ?, c_last_submitted_period = ?, c_last_request_id = ?, c_last_submitted_at = ?
+		WHERE c_task_id = ? AND c_member_key = ?
+	`, string(encoded), period, requestID, time.Now().UTC(), taskID, submission.MemberKey).Error; err != nil {
+		return outcome, err
+	}
+	outcome.Result = SubmitAccepted
+	return outcome, nil
 }
 
-// ListParamIntervals 返回任务（可限定成员）与 [from, to] 相交的冻结区间，外加每个成员结束在 from 之前的最近一个区间
-// （from 没有冻结记录时按它沿用），按成员、起点排序。
-func (s *Store) ListParamIntervals(ctx context.Context, taskID, alias string, from, to time.Time) ([]domain.ParamInterval, error) {
+func formatPeriod(period int64) string { return time.Unix(period, 0).UTC().Format(time.RFC3339) }
+
+// ListMemberParamStates 返回任务里各可变成员最近一次被接受的提交（没有提交过的成员也在内，LastSubmittedPeriod 为 0），
+// 按成员键排序。
+func (s *Store) ListMemberParamStates(ctx context.Context, taskID string) ([]domain.FactorTaskMember, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	query := `SELECT ` + paramIntervalColumns + ` FROM t_factor_param_freezes f
-		JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = f.c_snapshot_hash
-		WHERE f.c_task_id = ? AND ((f.c_end_period >= ? AND f.c_start_period <= ?) OR f.c_end_period = (
-			SELECT MAX(g.c_end_period) FROM t_factor_param_freezes g
-			WHERE g.c_task_id = f.c_task_id AND g.c_member_alias = f.c_member_alias AND g.c_end_period < ?))`
-	args := []any{strings.TrimSpace(taskID), from.Unix(), to.Unix(), from.Unix()}
-	if alias = strings.TrimSpace(alias); alias != "" {
-		query += " AND f.c_member_alias = ?"
-		args = append(args, alias)
-	}
-	query += " ORDER BY f.c_member_alias, f.c_start_period"
-	var rows []paramIntervalRow
-	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+	var rows []memberRow
+	if err := s.db.WithContext(ctx).Raw(`
+		SELECT `+memberColumns+` FROM t_factor_task_members WHERE c_task_id = ? AND c_kind = ? ORDER BY c_member_key
+	`, strings.TrimSpace(taskID), domain.MemberKindVar).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	intervals := make([]domain.ParamInterval, 0, len(rows))
+	members := make([]domain.FactorTaskMember, 0, len(rows))
 	for _, row := range rows {
-		interval, err := row.domain()
+		member, err := row.domain()
 		if err != nil {
 			return nil, err
 		}
-		intervals = append(intervals, interval)
+		members = append(members, member)
 	}
-	return intervals, nil
+	return members, nil
 }
-
-// ListParamRequests 返回任务（可限定成员）在 [from, to] 期次内的请求，按期次、序号排序，最多 limit 条。
-func (s *Store) ListParamRequests(ctx context.Context, taskID, alias string, from, to time.Time, limit int) ([]domain.ParamRequest, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("factor database is not open")
-	}
-	if limit <= 0 || limit > 5000 {
-		limit = 5000
-	}
-	query := `SELECT ` + paramRequestColumns + ` FROM t_factor_param_requests r
-		LEFT JOIN t_factor_param_snapshots p ON p.c_snapshot_hash = r.c_snapshot_hash
-		WHERE r.c_task_id = ? AND r.c_period_time >= ? AND r.c_period_time <= ?`
-	args := []any{strings.TrimSpace(taskID), from.Unix(), to.Unix()}
-	if alias = strings.TrimSpace(alias); alias != "" {
-		query += " AND r.c_member_alias = ?"
-		args = append(args, alias)
-	}
-	query += " ORDER BY r.c_period_time, r.c_seq LIMIT ?"
-	args = append(args, limit)
-	var rows []paramRequestRow
-	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	requests := make([]domain.ParamRequest, 0, len(rows))
-	for _, row := range rows {
-		request, err := row.domain()
-		if err != nil {
-			return nil, err
-		}
-		requests = append(requests, request)
-	}
-	return requests, nil
-}
-
-// CleanupParams 删除 requestsBefore 之前提交的请求、任务 taskID 结束在 freezesBefore 之前的冻结区间，以及不再被引用的快照。
-// freezesBefore 为零值时不删冻结区间。
-func (s *Store) CleanupParams(ctx context.Context, requestsBefore time.Time, freezesBefore map[string]time.Time) (int64, error) {
-	if s == nil || s.db == nil {
-		return 0, fmt.Errorf("factor database is not open")
-	}
-	var removed int64
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Exec(`DELETE FROM t_factor_param_requests WHERE c_ctime < ?`, requestsBefore.UTC())
-		if result.Error != nil {
-			return result.Error
-		}
-		removed += result.RowsAffected
-		for taskID, before := range freezesBefore {
-			if before.IsZero() {
-				continue
-			}
-			// 每个成员的最后一个区间始终保留：长期停用或引擎停摆后恢复，沿用的基线不能丢。
-			result := tx.Exec(`DELETE FROM t_factor_param_freezes WHERE c_task_id = ? AND c_end_period < ?
-				AND c_end_period < (SELECT MAX(f2.c_end_period) FROM t_factor_param_freezes f2
-					WHERE f2.c_task_id = t_factor_param_freezes.c_task_id AND f2.c_member_alias = t_factor_param_freezes.c_member_alias)`,
-				taskID, before.Unix())
-			if result.Error != nil {
-				return result.Error
-			}
-			removed += result.RowsAffected
-		}
-		result = tx.Exec(`DELETE FROM t_factor_param_snapshots WHERE
-			c_snapshot_hash NOT IN (SELECT c_snapshot_hash FROM t_factor_param_freezes)
-			AND c_snapshot_hash NOT IN (SELECT c_snapshot_hash FROM t_factor_param_requests)`)
-		if result.Error != nil {
-			return result.Error
-		}
-		removed += result.RowsAffected
-		return nil
-	})
-	return removed, err
-}
-
-// DeleteTaskParams 删除任务的全部参数记录（任务删除时）。
-func (s *Store) DeleteTaskParams(ctx context.Context, taskID string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("factor database is not open")
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, table := range []string{"t_factor_param_requests", "t_factor_param_freezes", "t_factor_param_frozen_periods"} {
-			if err := tx.Exec("DELETE FROM "+table+" WHERE c_task_id = ?", taskID).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-// IsTooLate 报告错误是否表示期次已冻结。
-func IsTooLate(err error) bool { return errors.Is(err, domain.ErrParamsTooLate) }

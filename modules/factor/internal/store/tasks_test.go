@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -21,7 +22,7 @@ func openTestStore(t *testing.T) *Store {
 
 func testTask(taskID, status string) domain.FactorTask {
 	return domain.FactorTask{
-		TaskID: taskID, SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
+		TaskID: taskID, SpaceID: "crypto", Name: taskID, SourceDatasetID: "dataset_prices", Freq: "1m",
 		ResultDatasetID: "dataset_factor_prices", Status: status,
 	}
 }
@@ -44,7 +45,7 @@ func addTestMember(t *testing.T, s *Store, taskID, factorID, status string) {
 	if _, err := s.GetFactor(ctx, factorID); err != nil {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
-	_, err := s.AddMember(ctx, taskID, factorID, factorID, nil)
+	_, err := s.AddMember(ctx, taskID, factorID, factorID, domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		require.NoError(t, s.SetMemberStatus(ctx, taskID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
@@ -62,22 +63,59 @@ func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
 	require.Error(t, err)
 }
 
-// 同一个源数据集与频率可以有多个任务（各策略实例的私有任务）；任务 ID 与结果数据集仍各自唯一。
-func TestCreateTaskAllowsSharedSourceButUniqueResult(t *testing.T) {
+// 同一个源数据集与频率可以有多个任务；任务 ID、结果数据集与空间内的名称仍各自唯一。
+func TestCreateTaskAllowsSharedSourceButUniqueResultAndName(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 
-	private := testTask("task_prices_private", domain.TaskStatusPending)
-	private.ResultDatasetID, private.OwnerInstanceID = "dataset_factor_private", "inst-1"
-	require.NoError(t, s.CreateTask(ctx, private))
-	owned, err := s.GetTaskByOwner(ctx, "inst-1")
-	require.NoError(t, err)
-	require.Equal(t, "task_prices_private", owned.TaskID)
+	second := testTask("task_prices_2", domain.TaskStatusPending)
+	second.ResultDatasetID = "dataset_factor_second"
+	require.NoError(t, s.CreateTask(ctx, second))
 
-	duplicate := testTask("task_prices_duplicate", domain.TaskStatusPending)
-	duplicate.ResultDatasetID = "dataset_factor_private"
-	require.ErrorIs(t, s.CreateTask(ctx, duplicate), ErrConflict)
+	duplicateResult := testTask("task_prices_3", domain.TaskStatusPending)
+	require.ErrorIs(t, s.CreateTask(ctx, duplicateResult), ErrConflict)
+
+	duplicateName := testTask("task_prices_4", domain.TaskStatusPending)
+	duplicateName.ResultDatasetID, duplicateName.Name = "dataset_factor_fourth", "task_prices"
+	require.ErrorIs(t, s.CreateTask(ctx, duplicateName), ErrConflict)
+
+	otherSpace := duplicateName
+	otherSpace.SpaceID = "stock"
+	require.NoError(t, s.CreateTask(ctx, otherSpace), "名称只在空间内唯一")
+}
+
+// 关联实例独占且永久：同一个实例重复关联幂等；任务不能换实例；一个实例只能关联一个任务；已关联的任务不能删除。
+func TestBindTaskIsExclusiveAndPermanent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_a", domain.TaskStatusEnabled)))
+	other := testTask("task_b", domain.TaskStatusEnabled)
+	other.ResultDatasetID = "dataset_factor_b"
+	require.NoError(t, s.CreateTask(ctx, other))
+
+	bound, err := s.BindTask(ctx, "task_a", "inst-1")
+	require.NoError(t, err)
+	require.Equal(t, "inst-1", bound.BoundInstanceID)
+	again, err := s.BindTask(ctx, "task_a", "inst-1")
+	require.NoError(t, err)
+	require.Equal(t, bound.UpdatedAt, again.UpdatedAt)
+
+	_, err = s.BindTask(ctx, "task_a", "inst-2")
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = s.BindTask(ctx, "task_b", "inst-1")
+	require.ErrorIs(t, err, ErrConflict)
+	_, err = s.BindTask(ctx, "missing", "inst-1")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	byInstance, err := s.GetTaskByInstance(ctx, "inst-1")
+	require.NoError(t, err)
+	require.Equal(t, "task_a", byInstance.TaskID)
+	_, err = s.GetTaskByInstance(ctx, "inst-9")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	require.ErrorIs(t, s.DeleteTask(ctx, "task_a"), ErrConflict)
+	require.NoError(t, s.DeleteTask(ctx, "task_b"))
 }
 
 func TestDeleteTaskFailsWhenMembersExist(t *testing.T) {
@@ -138,7 +176,7 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 
 	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	_, err = s.AddMember(ctx, set.TaskID, factor.FactorID, factor.FactorID, nil)
+	_, err = s.AddMember(ctx, set.TaskID, factor.FactorID, factor.FactorID, domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	require.NoError(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	require.ErrorIs(t, s.SetMemberStatus(ctx, set.TaskID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)
