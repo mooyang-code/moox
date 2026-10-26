@@ -7,37 +7,27 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
-// TaskID derives the FactorTask ID of a set without a writer from its source and frequency.
-func TaskID(sourceDatasetID, freq string) string {
-	return "ftask_" + sourceSuffix(sourceDatasetID, freq)
-}
-
-// InstanceTaskID derives the private FactorTask ID of a strategy instance. 实例 ID 是 UUID，不满足 Storage 的小写
-// 下划线标识规则，也太长，所以取它的摘要：结果数据集 ID 不超过 Storage 的 50 个字符上限。
-func InstanceTaskID(instanceID string) string {
-	return "ftask_" + instanceSuffix(instanceID)
-}
-
-// ResultDatasetID derives the result Dataset ID from a FactorTask ID.
+// ResultDatasetID 由任务 ID 推出结果数据集 ID；任务 ID 不合法时返回空串（创建任务时已校验）。
 func ResultDatasetID(taskID string) string {
-	return "dataset_factor_" + strings.TrimPrefix(strings.TrimSpace(taskID), "ftask_")
+	suffix, err := factorname.ParseTaskID(strings.TrimSpace(taskID))
+	if err != nil {
+		return ""
+	}
+	id, _ := factorname.ResultDatasetID(suffix)
+	return id
 }
 
-// ResultViewID 是结果数据集的默认 View（Storage 激活结果数据集时按 view_ + 数据集后缀创建）。
+// ResultViewID 是结果数据集的默认 View（Storage 激活结果数据集时按 view_ + 数据集后缀创建）；任务 ID 不合法时返回空串。
 func ResultViewID(taskID string) string {
-	return "view_factor_" + strings.TrimPrefix(strings.TrimSpace(taskID), "ftask_")
-}
-
-func instanceSuffix(instanceID string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(instanceID)))
-	return "i" + hex.EncodeToString(sum[:])[:20]
-}
-
-// InstanceDatasetName 是私有结果数据集的展示名（Storage 限 10 个字符、空间内唯一）。
-func InstanceDatasetName(instanceID string) string {
-	return "策略因子" + instanceSuffix(instanceID)[1:7]
+	suffix, err := factorname.ParseTaskID(strings.TrimSpace(taskID))
+	if err != nil {
+		return ""
+	}
+	id, _ := factorname.ResultViewID(suffix)
+	return id
 }
 
 // SpecHash returns the content identity of a definition text.
@@ -83,13 +73,4 @@ func DefinitionHash(def FactorDef) string {
 	parts := []string{"definition-v2", factorexpr.ExprVersion, compiled.compiled.CanonicalText(), strconv.FormatBool(def.AllowPartialUniverse)}
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "sha256:" + hex.EncodeToString(hash[:])
-}
-
-func sourceSuffix(sourceDatasetID, freq string) string {
-	suffix := strings.TrimPrefix(strings.TrimSpace(sourceDatasetID), "dataset_")
-	freq = strings.TrimSpace(freq)
-	if freq != "" && !strings.HasSuffix(suffix, "_"+freq) {
-		suffix += "_" + freq
-	}
-	return suffix
 }

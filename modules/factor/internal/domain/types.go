@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 const (
@@ -12,28 +13,29 @@ const (
 	MemberStatusEnabled    = "enabled"
 	MemberStatusDisabled   = "disabled"
 
+	// 成员类型：固定成员的参数在加成员时写定；可变成员的参数由关联的策略逐期提交。
+	MemberKindFixed = factorname.KindFixed
+	MemberKindVar   = factorname.KindVar
+
 	TaskStatusPending  = "pending"
 	TaskStatusEnabled  = "enabled"
 	TaskStatusDisabled = "disabled"
-	TaskStatusDeleting = "deleting"
 )
 
 // DefaultCategoryID 是没有指定分类的因子所属的分类。
 const DefaultCategoryID = "uncategorized"
 
-// DefaultCarryAlertPeriods 是成员连续沿用参数多少期后告警（因子动态调参执行计划 2.10）。
-const DefaultCarryAlertPeriods = 10
-
-// FactorTask groups member definitions over one source dataset and frequency.
-// OwnerInstanceID 非空时是某个策略实例的私有任务：该实例是唯一的参数写入方；为空时没有写入方，成员带固定参数。
+// FactorTask 是一个因子计算任务：一个源数据集和频率，产出一个结果数据集。
+// BoundInstanceID 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
 // 任务的标的就是源数据集当前的标的，没有单独的对象范围。
 type FactorTask struct {
 	TaskID          string    `json:"task_id" gorm:"column:c_task_id;primaryKey"`
 	SpaceID         string    `json:"space_id" gorm:"column:c_space_id"`
+	Name            string    `json:"name" gorm:"column:c_name"`
 	SourceDatasetID string    `json:"source_dataset_id" gorm:"column:c_source_dataset_id"`
 	Freq            string    `json:"freq" gorm:"column:c_freq"`
 	ResultDatasetID string    `json:"result_dataset_id" gorm:"column:c_result_dataset_id"`
-	OwnerInstanceID string    `json:"owner_instance_id" gorm:"column:c_owner_instance_id"`
+	BoundInstanceID string    `json:"bound_instance_id" gorm:"column:c_bound_instance_id"`
 	Status          string    `json:"status" gorm:"column:c_status"`
 	CreatedAt       time.Time `json:"created_at" gorm:"column:c_ctime"`
 	UpdatedAt       time.Time `json:"updated_at" gorm:"column:c_mtime"`
@@ -55,7 +57,7 @@ type FactorCategory struct {
 
 func (FactorCategory) TableName() string { return "t_factor_categories" }
 
-// FactorDef describes an algorithm only; it has no set binding and no run state.
+// FactorDef describes an algorithm only; 它与因子任务无关，也没有运行状态.
 // 持久化的只有 FactorID、Name、CategoryID、Spec、SpecHash、AllowPartialUniverse 与时间；FactorType、InputColumns、
 // Outputs、LookbackPeriods 由编译 Spec 派生（CompileDefinition），不落库。
 type FactorDef struct {
@@ -77,24 +79,29 @@ type FactorDef struct {
 
 func (FactorDef) TableName() string { return "t_factor_defs" }
 
-// FactorTaskMember is a definition's runtime instance inside one factor task. 成员的身份是任务内唯一的别名：
-// 同一个定义可以用不同别名加入同一任务（例如 fast、slow 各自调参）。
+// FactorTaskMember 是定义在某个因子任务里的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段，规则见 packages/factorname）。
+// 固定成员的参数（Params）在加成员时写定；可变成员的 Params 是默认参数，策略逐期提交的值记在 LastSubmitted*。
+// LastSubmitted* 是运行状态，不属于配置：目录同步、目录指纹都不看它们，提交时也不更新 UpdatedAt。
 type FactorTaskMember struct {
-	TaskID      string `json:"task_id" gorm:"column:c_task_id;primaryKey"`
-	MemberAlias string `json:"member_alias" gorm:"column:c_member_alias;primaryKey"`
-	FactorID    string `json:"factor_id" gorm:"column:c_factor_id"`
-	Status      string `json:"status" gorm:"column:c_status"`
-	// CarryAlertPeriods 是连续沿用参数多少期后告警。
-	CarryAlertPeriods int `json:"carry_alert_periods" gorm:"column:c_carry_alert_periods"`
-	// Params 是成员的固定参数（见 MemberDef.Params），落库为规范 JSON。
+	TaskID    string             `json:"task_id" gorm:"column:c_task_id;primaryKey"`
+	MemberKey string             `json:"member_key" gorm:"column:c_member_key;primaryKey"`
+	FactorID  string             `json:"factor_id" gorm:"column:c_factor_id"`
+	Kind      string             `json:"kind" gorm:"column:c_kind"`
+	Status    string             `json:"status" gorm:"column:c_status"`
 	Params    map[string]float64 `json:"params,omitempty" gorm:"column:c_params;serializer:json"`
-	CreatedAt time.Time          `json:"created_at" gorm:"column:c_ctime"`
-	UpdatedAt time.Time          `json:"updated_at" gorm:"column:c_mtime"`
+	// LastSubmittedParams 是各标的最近一次提交的参数（按标的合并后的结果）。
+	LastSubmittedParams ParamSnapshot `json:"last_submitted_params,omitempty" gorm:"column:c_last_submitted_params;serializer:json"`
+	// LastSubmittedPeriod 是最近一次被接受的提交的目标期（Unix 秒）；0 表示从未提交。
+	LastSubmittedPeriod int64      `json:"last_submitted_period,omitempty" gorm:"column:c_last_submitted_period"`
+	LastRequestID       string     `json:"last_request_id,omitempty" gorm:"column:c_last_request_id"`
+	LastSubmittedAt     *time.Time `json:"last_submitted_at,omitempty" gorm:"column:c_last_submitted_at"`
+	CreatedAt           time.Time  `json:"created_at" gorm:"column:c_ctime"`
+	UpdatedAt           time.Time  `json:"updated_at" gorm:"column:c_mtime"`
 }
 
 func (FactorTaskMember) TableName() string { return "t_factor_task_members" }
 
-// TaskMember is the set-side view: a member together with its definition.
+// TaskMember 是任务一侧的成员视图：成员加上它的定义。
 type TaskMember struct {
 	FactorTaskMember
 	Factor FactorDef
@@ -102,56 +109,45 @@ type TaskMember struct {
 
 // Def 返回成员的计算视图。
 func (m TaskMember) Def() MemberDef {
-	return MemberDef{Alias: m.MemberAlias, Factor: m.Factor, CarryAlertPeriods: m.CarryAlertPeriods, Params: m.Params}
+	return MemberDef{Key: m.MemberKey, Factor: m.Factor, Kind: m.Kind, Params: m.Params}
 }
 
-// AsMembers 把定义按“别名即定义 ID”转成成员，用于命令行工具和测试里不需要别名的场合。
+// AsMembers 把定义按“参数全取默认值的固定成员”转成成员，用于命令行工具和测试里不关心成员参数的场合。
+// 定义没有编译或成员键推导失败时 panic：调用方给的是已校验过的定义。
 func AsMembers(defs ...FactorDef) []MemberDef {
 	members := make([]MemberDef, 0, len(defs))
 	for _, def := range defs {
-		members = append(members, MemberDef{Alias: def.FactorID, Factor: def})
+		key, err := DeriveMemberKey(def, MemberKindFixed, nil)
+		if err != nil {
+			panic(err)
+		}
+		members = append(members, MemberDef{Key: key, Factor: def, Kind: MemberKindFixed})
 	}
 	return members
 }
 
-// MemberDef 是成员在计算时的样子：别名加定义。结果列名、参数列名与程序里的内部身份都由它推出。
+// MemberDef 是成员在计算时的样子：成员键加定义。结果列名与程序里的内部身份都由它推出。
 type MemberDef struct {
-	Alias  string    `json:"alias"`
+	Key    string    `json:"key"`
 	Factor FactorDef `json:"factor"`
-	// CarryAlertPeriods 是连续沿用参数超过多少期告警（0 取 DefaultCarryAlertPeriods）；只用于监控，不影响计算。
-	CarryAlertPeriods int `json:"carry_alert_periods,omitempty"`
-	// Params 是成员的固定参数（参数名 → 取值，加成员时给定的完整参数，之后不变）。非空时参数由成员自己决定，
-	// 不写参数列；为空时参数由写入方（策略实例）逐期提交，没有提交就取定义的默认值，并写参数列。
+	// Kind 是成员类型：fixed 或 var。
+	Kind string `json:"kind"`
+	// Params 是成员的固定参数，或可变成员的默认参数（参数名 → 取值，加成员时给定的完整参数，之后不变）。
 	Params map[string]float64 `json:"params,omitempty"`
 }
 
-// CarryAlertAfter 返回连续沿用多少期之后告警。
-func (m MemberDef) CarryAlertAfter() int {
-	if m.CarryAlertPeriods > 0 {
-		return m.CarryAlertPeriods
-	}
-	return DefaultCarryAlertPeriods
-}
+// IsVar 报告成员是否是可变成员。
+func (m MemberDef) IsVar() bool { return m.Kind == MemberKindVar }
 
-// OutputColumn 返回输出 output 在结果数据集里的列名：别名与定义 ID 相同时就是输出名，否则是“别名_输出名”。
-func (m MemberDef) OutputColumn(output string) string {
-	if m.Alias == m.Factor.FactorID {
-		return output
-	}
-	return m.Alias + "_" + output
-}
-
-// OutputColumns 返回全部输出列名，与 Factor.Outputs 一一对应。
+// OutputColumns 返回成员在结果数据集里的全部输出列名，与 Factor.Outputs 一一对应。
+// 成员键和输出名在加成员时已校验过；无法推导（只会出现在没有校验的测试数据里）时返回 nil。
 func (m MemberDef) OutputColumns() []string {
-	columns := make([]string, len(m.Factor.Outputs))
-	for i, output := range m.Factor.Outputs {
-		columns[i] = m.OutputColumn(output)
+	columns, err := factorname.Columns(m.Factor.FactorID, m.Key, m.Factor.Outputs)
+	if err != nil {
+		return nil
 	}
 	return columns
 }
-
-// ParamColumn 返回参数 name 的实际取值在结果数据集里的列名：“别名__参数名”，成员的全部输出共用。
-func (m MemberDef) ParamColumn(name string) string { return m.Alias + "__" + name }
 
 // ParamNames 返回成员定义声明的参数名（按声明顺序）；定义没有编译时为空。
 func (m MemberDef) ParamNames() []string {
@@ -166,35 +162,19 @@ func (m MemberDef) ParamNames() []string {
 	return names
 }
 
-// ParamColumns 返回全部参数列名，与 ParamNames 一一对应。成员带固定参数时参数不会变，不写参数列，返回空。
-func (m MemberDef) ParamColumns() []string {
-	if m.FixedParams() {
-		return nil
-	}
-	names := m.ParamNames()
-	columns := make([]string, len(names))
-	for i, name := range names {
-		columns[i] = m.ParamColumn(name)
-	}
-	return columns
-}
+// ProgramKey 返回成员在计算组程序里的内部身份。
+func (m MemberDef) ProgramKey(taskID string) string { return taskID + "/" + m.Key }
 
-// FixedParams 报告成员是否带固定参数：带固定参数的成员（非策略专属任务）不写参数列。
-func (m MemberDef) FixedParams() bool { return len(m.Params) > 0 }
-
-// Key 返回成员在计算组程序里的内部身份。
-func (m MemberDef) Key(taskID string) string { return taskID + "/" + m.Alias }
-
-// FactorUsage reports one set member that references a definition.
+// FactorUsage 是引用某个定义的一个任务成员。
 type FactorUsage struct {
-	TaskID      string
-	MemberAlias string
-	Status      string
-	// Params 是成员的固定参数（空表示参数由写入方逐期提交）。
+	TaskID    string
+	MemberKey string
+	Status    string
+	// Params 是成员的固定参数，或可变成员的默认参数。
 	Params map[string]float64
 }
 
-// FactorInfo is the definition-side view: a definition and where it is used.
+// FactorInfo 是定义一侧的视图：定义和它被用在哪里。
 type FactorInfo struct {
 	Factor FactorDef
 	Usages []FactorUsage

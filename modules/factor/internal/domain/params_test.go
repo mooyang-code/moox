@@ -9,7 +9,7 @@ import (
 func smaMember(t *testing.T) MemberDef {
 	t.Helper()
 	def := compiledFactor(t, "sma", "params:\n  n: {type: int, min: 2, max: 100, default: 20}\n  m: {type: int, min: 1, max: 99, default: 2}\n  k: {type: float, min: 0, max: 5, default: 1}\noutput: sma(close, n, m) * k\n")
-	return MemberDef{Alias: "fast", Factor: def}
+	return MemberDef{Key: "sma__var", Factor: def, Kind: MemberKindVar}
 }
 
 func TestDefaultSnapshotAndValue(t *testing.T) {
@@ -55,4 +55,27 @@ func TestValidateSnapshotRejects(t *testing.T) {
 		mutate(snapshot)
 		require.Error(t, ValidateSnapshot(member, snapshot, inScope), name)
 	}
+}
+
+// 按标的合并：默认值取本次的；本次带了的标的覆盖旧值，没带的标的保留旧值。
+func TestMergeSnapshots(t *testing.T) {
+	previous := ParamSnapshot{
+		"n": {Default: 20, Overrides: map[string]float64{"BTC": 10, "ETH": 15}},
+		"k": {Default: 1},
+	}
+	submitted := ParamSnapshot{
+		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "SOL": 8}},
+		"k": {Default: 2},
+	}
+	merged := MergeSnapshots(previous, submitted)
+	require.Equal(t, ParamSnapshot{
+		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "ETH": 15, "SOL": 8}},
+		"k": {Default: 2},
+	}, merged)
+	// 不改动入参。
+	require.Equal(t, 10.0, previous["n"].Overrides["BTC"])
+	require.Len(t, submitted["n"].Overrides, 2)
+	// 旧快照里本次没有的参数被丢弃；从空开始合并就是本次提交本身。
+	require.Equal(t, submitted.Canonical(), MergeSnapshots(nil, submitted).Canonical())
+	require.NotContains(t, MergeSnapshots(ParamSnapshot{"gone": {Default: 1}}, submitted), "gone")
 }
