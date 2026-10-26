@@ -159,6 +159,20 @@ func rolling(name string, args []ArgSpec, doc, example string) *Function {
 		Lookback: "L(x)+n−1", Doc: doc, Example: example, back: func(ints []int) int { return ints[len(ints)-1] - 1 }}
 }
 
+// partialWindow 登记 (x, n, m) 形式的部分窗口算子：回看按 n 推导，m 是序列开头最少的有效值个数。
+func partialWindow(name string, minimum int, doc, example string) *Function {
+	return &Function{Name: name, Category: CategoryTimeSeries,
+		Args:   []ArgSpec{argSeries, window(minimum), {Name: "m", Kind: ArgInteger, Min: float64(minimum), Max: MaxWindow}},
+		Result: ResultNumber, Lookback: "L(x)+n−1", Doc: doc, Example: example,
+		back: func(ints []int) int { return ints[0] - 1 },
+		validate: func(ints []int, _ []float64) string {
+			if ints[1] > ints[0] {
+				return name + " 的 m 不能大于 n"
+			}
+			return ""
+		}}
+}
+
 func cross(name, doc, example string) *Function {
 	return &Function{Name: name, Category: CategoryCrossSection, Args: []ArgSpec{argSeries}, Result: ResultNumber,
 		Lookback: "L(x)", Doc: doc, Example: example}
@@ -240,6 +254,17 @@ var functionList = []*Function{
 			}
 			return ""
 		}},
+
+	// 时序：序列开头允许部分窗口（对应 pandas 的 min_periods 与 ewm 从首根递推；中途出现 NaN 时仍输出 NaN）
+	{Name: "ema_partial", Category: CategoryTimeSeries,
+		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 0, Max: MaxWindow, Optional: true, Default: 0}},
+		Result: ResultNumber, Lookback: "同 ema：L(x)+K−1",
+		Doc:     "同 ema(x, n, k)；窗口开头是 NaN（序列还没开始）时，从第一个有效值开始递推，相当于 pandas ewm(span=n, adjust=False) 从序列首根算起；有效值之后再出现 NaN 时为 NaN",
+		Example: "ema_partial(close, 20)", back: emaBack},
+	partialWindow("ts_mean_partial", 1, "窗口内均值；窗口开头是 NaN（序列还没开始）时，在不少于 m 个有效值上计算，相当于 pandas rolling(n, min_periods=m)；有效值之后再出现 NaN 时为 NaN", "ts_mean_partial(close, 20, 1)"),
+	partialWindow("ts_std_partial", 2, "窗口内样本标准差（ddof=1）；序列开头的部分窗口规则同 ts_mean_partial，m ≥ 2", "ts_std_partial(close, 20, 2)"),
+	partialWindow("ts_min_partial", 1, "窗口内最小值；序列开头的部分窗口规则同 ts_mean_partial", "ts_min_partial(low, 20, 1)"),
+	partialWindow("ts_max_partial", 1, "窗口内最大值；序列开头的部分窗口规则同 ts_mean_partial", "ts_max_partial(high, 20, 1)"),
 
 	// 截面
 	cross("cs_rank", "截面百分位（名次 / 有效样本数，并列取平均名次）；按 (data_time, series_tag) 分组，排除 NaN", "cs_rank(ts_mean(volume, 20))"),
