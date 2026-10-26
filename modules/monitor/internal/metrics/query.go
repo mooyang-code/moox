@@ -77,6 +77,14 @@ func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetI
 	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
 
+// ListFactorResultDatasets 列出源数据集 + 周期上的全部因子任务；没有配置元数据时没有任务。
+func (q *QueryService) ListFactorResultDatasets(ctx context.Context, spaceID, sourceDatasetID, freq string) ([]FactorResultDataset, error) {
+	if q == nil || q.storage == nil {
+		return nil, nil
+	}
+	return q.storage.ListFactorResultDatasets(ctx, spaceID, sourceDatasetID, freq)
+}
+
 // DatasetGone 报告数据集已在 Storage 里被删除（见 StorageAdapter.DatasetGone）；没有配置元数据时恒为假。
 func (q *QueryService) DatasetGone(ctx context.Context, spaceID, datasetID string) bool {
 	if q == nil || q.storage == nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // Loader 为一个启用实例装配一期输入。
@@ -151,6 +152,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	columns := append([]string(nil), program.Columns...)
 	columns = uniqueSorted(append(columns, program.PreviousColumns...))
+	if len(program.ParamRefs) > 0 {
+		columns = uniqueSorted(append(columns, factorname.ParamsColumn))
+	}
 	query := Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 	// 上一根与当期合并成一次范围读取：相邻两根之间没有别的根，少一次往返，也保证两根取自同一修订号。
 	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
@@ -201,7 +205,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		if _, ok := sets.Subjects[subjectID]; !ok {
 			continue
 		}
-		engineRow := engine.Row{Values: row.Values}
+		engineRow := engine.Row{Values: row.Values, Params: row.Params}
 		if prev, ok := previous[subjectID]; ok {
 			engineRow.Previous = prev.Values
 		}
@@ -219,6 +223,9 @@ func MissingColumns(view ViewInfo, program *dsl.Program, minAgeBars int) []strin
 	required := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
 	if minAgeBars > 0 {
 		required = append(required, ageProbeColumn)
+	}
+	if len(program.ParamRefs) > 0 {
+		required = append(required, factorname.ParamsColumn)
 	}
 	var missing []string
 	for _, column := range uniqueSorted(required) {

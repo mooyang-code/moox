@@ -13,7 +13,7 @@ import (
 )
 
 // Lock order: a definition lock (LockFactorContext) is always taken before any
-// set lock, and several set locks are taken in ascending set_id order.
+// set lock, and several set locks are taken in ascending task_id order.
 
 // Locks serializes catalog changes with live and recalculation work for a set.
 // The in-process lock is a one-slot channel: blocked acquirers are served in
@@ -29,9 +29,9 @@ type Locks struct {
 // other processes (moox-factor-mgr and its CLI) that open the same database.
 func New(lockDir string) *Locks { return &Locks{dir: lockDir} }
 
-// Lock acquires the stable mutex for setID and returns its unlock function.
-func (l *Locks) Lock(setID string) func() {
-	unlock, err := l.LockContext(context.Background(), setID)
+// Lock acquires the stable mutex for taskID and returns its unlock function.
+func (l *Locks) Lock(taskID string) func() {
+	unlock, err := l.LockContext(context.Background(), taskID)
 	if err != nil {
 		panic(err)
 	}
@@ -40,13 +40,13 @@ func (l *Locks) Lock(setID string) func() {
 
 // LockContext acquires the per-set in-process lock and, when configured, a
 // filesystem lock shared with other moox-factor processes using the same DB.
-func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
+func (l *Locks) LockContext(ctx context.Context, taskID string) (func(), error) {
 	if l == nil {
 		return func() {}, nil
 	}
-	setID = strings.TrimSpace(setID)
-	if setID == "" {
-		return nil, errors.New("factor set id is required for locking")
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, errors.New("factor task id is required for locking")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -55,10 +55,10 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 	if l.locks == nil {
 		l.locks = make(map[string]chan struct{})
 	}
-	slot := l.locks[setID]
+	slot := l.locks[taskID]
 	if slot == nil {
 		slot = make(chan struct{}, 1)
-		l.locks[setID] = slot
+		l.locks[taskID] = slot
 	}
 	l.mu.Unlock()
 	select {
@@ -71,7 +71,7 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 		var once sync.Once
 		return func() { once.Do(release) }, nil
 	}
-	file, err := l.openFileLock(setID)
+	file, err := l.openFileLock(taskID)
 	if err != nil {
 		release()
 		return nil, err
@@ -119,10 +119,10 @@ func (l *Locks) LockFactorContext(ctx context.Context, factorID string) (func(),
 
 const factorLockPrefix = "factor:"
 
-func (l *Locks) openFileLock(setID string) (*fileLock, error) {
+func (l *Locks) openFileLock(taskID string) (*fileLock, error) {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256([]byte(setID))
+	digest := sha256.Sum256([]byte(taskID))
 	return openLockFile(filepath.Join(l.dir, hex.EncodeToString(digest[:])+".lock"))
 }

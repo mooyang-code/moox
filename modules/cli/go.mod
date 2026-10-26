@@ -15,6 +15,10 @@ replace github.com/mooyang-code/moox/packages/seriesimport => ../../packages/ser
 replace github.com/mooyang-code/moox/packages/seriesreplay => ../../packages/seriesreplay
 
 replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
+
+replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
+
+replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
 replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/seriesformat
 
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
@@ -35,6 +39,8 @@ require (
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/factorexpr v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/factorname v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/factorname v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesreplay v0.0.0-00010101000000-000000000000

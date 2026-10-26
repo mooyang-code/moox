@@ -28,24 +28,6 @@ func (s *Store) DeleteResultItemsBefore(ctx context.Context, cutoff time.Time) (
 	}
 }
 
-// DeleteParamSubmissionsBefore 删除创建时间早于 cutoff 且已有终态的因子参数提交记录；待提交的不删。
-func (s *Store) DeleteParamSubmissionsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	var total int64
-	for {
-		result := s.db.WithContext(ctx).Exec(`
-			DELETE FROM t_strategy_param_submissions
-			WHERE rowid IN (SELECT rowid FROM t_strategy_param_submissions WHERE c_ctime < ? AND c_status <> 'pending' LIMIT ?)
-		`, cutoff.UTC(), retentionBatch)
-		if result.Error != nil {
-			return total, result.Error
-		}
-		total += result.RowsAffected
-		if result.RowsAffected < retentionBatch {
-			return total, nil
-		}
-	}
-}
-
 // DeleteReplaysBefore 删除创建时间早于 cutoff 且已结束的回放：逐个回放先分批删周期记录，再删任务本身，
 // 每条语句的工作量有界，不会在单连接上长时间阻塞事件处理与接口。
 func (s *Store) DeleteReplaysBefore(ctx context.Context, cutoff time.Time) (int64, error) {

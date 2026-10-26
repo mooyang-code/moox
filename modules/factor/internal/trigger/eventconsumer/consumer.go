@@ -29,12 +29,12 @@ type ConsumerConfig struct {
 	ReadColumnTimeout  time.Duration
 	// Continuity 非空时按连续水位逐期推进。
 	Continuity *Continuity
-	// Gate 非空时是生命周期门禁：集合没有处于预热或运行就不计算。
-	Gate func(setID string) bool
-	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的集合，只允许连续水位追赶（历史周期），实时事件仍不处理。
-	CatchupGate func(setID string) bool
-	// Params 非空时在开算每一期之前冻结参数；为空时全部按默认参数计算。
-	Params trigger.ParamFreezer
+	// Gate 非空时是生命周期门禁：任务没有处于预热或运行就不计算。
+	Gate func(taskID string) bool
+	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的任务，只允许连续水位追赶（历史周期），实时事件仍不处理。
+	CatchupGate func(taskID string) bool
+	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
+	Params trigger.ParamSelector
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -77,12 +77,12 @@ type ConsumerStatus struct {
 	FilterRefreshError string
 }
 
-// Consumer owns the durable period-completion subscription and its lanes.
+// Consumer owns the durable period-completion subscription and its runners.
 // The JetStream durable uses the stable event-family filter; exact enabled-set
 // subjects are refreshed locally because JetStream cannot widen a durable's
 // FilterSubjects without replacing its acknowledgement state.
 type Consumer struct {
-	sets     trigger.SetLocator
+	sets     trigger.TaskLocator
 	handler  *Handler
 	consumer *events.Consumer
 	client   *jetstream.Client
@@ -97,7 +97,7 @@ type Consumer struct {
 	runWG              sync.WaitGroup
 }
 
-func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.SetLocks) (*Consumer, error) {
+func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocator, periodStore trigger.PeriodStore, runner trigger.PipelineRunner, locks trigger.TaskLocks) (*Consumer, error) {
 	if sets == nil || periodStore == nil || runner == nil {
 		return nil, fmt.Errorf("factor trigger set locator, Storage and pipeline runner are required")
 	}
@@ -111,7 +111,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	}
 	c := &Consumer{sets: sets}
 	if err := c.RefreshFilters(ctx); err != nil {
-		return nil, fmt.Errorf("load enabled factor set filters: %w", err)
+		return nil, fmt.Errorf("load enabled factor task filters: %w", err)
 	}
 
 	clientCfg := jetstream.ConfigFromEnv(append([]string(nil), cfg.URLs...), "moox-factor")
@@ -148,7 +148,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	}
 	handler.SetGate(cfg.Gate)
 	handler.SetCatchupGate(cfg.CatchupGate)
-	handler.SetParamFreezer(cfg.Params)
+	handler.SetParamSelector(cfg.Params)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
@@ -169,12 +169,12 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 
 func (c *Consumer) Ready() bool { return c != nil && c.ready.Load() }
 
-// Advance 在集合的通道里按连续水位推进一次（追赶循环、补齐通知）。
-func (c *Consumer) Advance(ctx context.Context, setID string) error {
+// Advance 在任务的通道里按连续水位推进一次（追赶循环、补齐通知）。
+func (c *Consumer) Advance(ctx context.Context, taskID string) error {
 	if c == nil || c.handler == nil {
 		return nil
 	}
-	return c.handler.Advance(ctx, setID)
+	return c.handler.Advance(ctx, taskID)
 }
 
 func (c *Consumer) CurrentFilterSubjects() []string {
@@ -186,11 +186,11 @@ func (c *Consumer) CurrentFilterSubjects() []string {
 	return append([]string(nil), c.filters...)
 }
 
-func (c *Consumer) LaneStatuses() []trigger.LaneStatus {
+func (c *Consumer) RunnerStatuses() []trigger.RunnerStatus {
 	if c == nil || c.handler == nil {
 		return nil
 	}
-	return c.handler.LaneStatuses()
+	return c.handler.RunnerStatuses()
 }
 
 func (c *Consumer) RefreshFilters(ctx context.Context) error {

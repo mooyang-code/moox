@@ -3,7 +3,7 @@
 //
 // 用法：
 //
-//	moox-replay start --set <因子集合> --instance <策略实例> --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z [--write-factors]
+//	moox-replay start --task <因子任务> --instance <策略实例> --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z [--write-factors]
 //	moox-replay pause|resume|cancel|report|delete --replay <ID>
 //	moox-replay status [--replay <ID>]
 //

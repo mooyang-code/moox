@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
@@ -23,13 +24,14 @@ const DefaultCalendar = "crypto_24x7"
 // 其余带 source_dataset_id 的数据集（例如 Collector 的重采样 K 线）仍由 collector.period.completed 宣布。
 const datasetRoleFactorResult = "factor_result"
 
-// Resolve 在启用时解析绑定：View → 数据集 → 源数据集市场类型 → 列与因子指纹，并编译策略。
-func Resolve(ctx context.Context, client Client, spaceID, viewID string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+// Resolve 在启用时解析绑定：因子任务 → 结果 View → 数据集 → 源数据集市场类型 → 列与成员契约，并编译策略。
+func Resolve(ctx context.Context, client Client, spaceID, taskID string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if client == nil {
 		return Resolved{}, nil, errors.New("Storage 客户端未配置")
 	}
-	if strings.TrimSpace(viewID) == "" {
-		return Resolved{}, nil, errors.New("view_id 不能为空")
+	viewID, err := ViewIDOfTask(taskID)
+	if err != nil {
+		return Resolved{}, nil, fmt.Errorf("因子任务 ID %q 不合法：%w", taskID, err)
 	}
 	if err := dsl.Validate(&strategy); err != nil {
 		return Resolved{}, nil, err
@@ -51,7 +53,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	if err != nil {
 		return Resolved{}, nil, err
 	}
-	resolved := Resolved{ViewID: viewID, DatasetID: view.DatasetID, Bar: strings.ToLower(view.Frequency), Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
+	resolved := Resolved{ViewID: viewID, FactorTaskID: strings.TrimSpace(taskID), DatasetID: view.DatasetID, Bar: strings.ToLower(view.Frequency), Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
 	resolved.Calendar = strings.ToLower(strings.TrimSpace(dataset.Attributes["calendar"]))
 	source := dataset
 	if sourceID := strings.TrimSpace(dataset.Attributes["source_dataset_id"]); sourceID != "" && sourceID != dataset.DatasetID {
@@ -118,41 +120,81 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 	if err != nil {
 		return Resolved{}, nil, err
 	}
-	missing := make([]string, 0)
-	hashes := map[string]string{} // factor_id → definition_hash：同一定义的多个成员只读一次
+	// 先报缺列：任务刚改动成员时结果 View 的列由 Storage 异步补齐，此时可变成员也还看不全，缺列是可重试的暂态。
+	var missing []string
 	for _, name := range referenced {
-		column, ok := columns[name]
-		if !ok {
+		if _, ok := columns[name]; !ok {
 			missing = append(missing, name)
-			continue
 		}
+	}
+	if len(missing) > 0 {
+		// 列名写错是最常见的原因：先给出每个缺失列最接近的几个列名，再附上这个任务的全部列名。
+		hints := make([]string, 0, len(missing))
+		for _, name := range missing {
+			if near := nearestNames(name, resolved.ViewColumns, 3); len(near) > 0 {
+				hints = append(hints, fmt.Sprintf("%s 可能是 %s", name, strings.Join(near, "、")))
+			}
+		}
+		suggestion := ""
+		if len(hints) > 0 {
+			suggestion = "；最接近的列名：" + strings.Join(hints, "；")
+		}
+		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s（因子任务 %s）%s；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), viewID, taskID, suggestion, strings.Join(resolved.ViewColumns, "、"))
+	}
+	members, err := varMembers(ctx, client, view)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	refs, err := dsl.ReferencedParamRefs(strategy)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	if err := CheckFactorParams(strategy, members, refs); err != nil {
+		return Resolved{}, nil, err
+	}
+	resolved.FactorParams = make(map[string][]ParamDecl, len(members))
+	for key, member := range members {
+		resolved.FactorParams[key] = member.Params
+	}
+	contracts := map[string]string{} // factor_id → definition_hash：同一定义的多个成员只读一次
+	bind := func(member, factorID, kind string) (string, error) {
+		if contract, ok := resolved.Factors[member]; ok {
+			return contract, nil
+		}
+		hash, ok := contracts[factorID]
+		if !ok {
+			factor, err := client.GetFactor(ctx, factorID)
+			if err != nil {
+				return "", err
+			}
+			if factor.DefinitionHash == "" {
+				return "", fmt.Errorf("因子 %s 没有 definition_hash，请升级 Factor 管理端", factorID)
+			}
+			hash = factor.DefinitionHash
+			contracts[factorID] = hash
+		}
+		resolved.Factors[member] = readiness.Contract(hash, kind)
+		return hash, nil
+	}
+	for _, name := range referenced {
+		column := columns[name]
 		binding := ColumnBinding{Source: SourceDataset}
-		if member, factorID := factorColumnIdentity(column.Attributes); member != "" {
-			binding = ColumnBinding{Source: SourceFactor, Member: member, FactorID: factorID, FactorOutput: strings.TrimSpace(column.Attributes["factor_output"])}
-			if strings.TrimSpace(column.Attributes["column_kind"]) == "param" {
-				binding.Param = strings.TrimSpace(column.Attributes["param_name"])
+		if identity, isFactor := factorColumnIdentity(column.Attributes); isFactor {
+			hash, err := bind(identity.Member, identity.FactorID, identity.Kind)
+			if err != nil {
+				return Resolved{}, nil, err
 			}
-			hash, ok := resolved.Factors[member]
-			if !ok {
-				if hash, ok = hashes[factorID]; !ok {
-					factor, err := client.GetFactor(ctx, factorID)
-					if err != nil {
-						return Resolved{}, nil, err
-					}
-					if factor.DefinitionHash == "" {
-						return Resolved{}, nil, fmt.Errorf("因子 %s 没有 definition_hash，请升级 Factor 管理端", factorID)
-					}
-					hash = factor.DefinitionHash
-					hashes[factorID] = hash
-				}
-				resolved.Factors[member] = hash
-			}
-			binding.DefinitionHash = hash
+			binding = ColumnBinding{Source: SourceFactor, Member: identity.Member, FactorID: identity.FactorID, OutputName: identity.Output,
+				MemberKind: identity.Kind, DefinitionHash: hash}
 		}
 		resolved.Columns[name] = binding
 	}
-	if len(missing) > 0 {
-		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s；可用列：%s", strings.Join(missing, "、"), viewID, strings.Join(resolved.ViewColumns, "、"))
+	// params() 读取的可变成员也要核对契约：成员被改动（定义变了、被换掉）后，这一期的参数不再是策略启用时看到的那个成员的。
+	for _, ref := range refs {
+		member := members[ref.Member]
+		if _, err := bind(ref.Member, member.FactorID, factorname.KindVar); err != nil {
+			return Resolved{}, nil, err
+		}
 	}
 	program, err := dsl.Compile(strategy, resolved.ViewColumns)
 	if err != nil {
@@ -218,6 +260,8 @@ func referencedTags(strategy dsl.Strategy) []string {
 // CheckCoverage 在启用实例时校验 View 的覆盖（需要读取覆盖统计，统计未缓存时现算）：A 股日线总是校验行键是交易日的
 // 上海零点（按 UTC 零点写行的数据集启用后每一期都会被丢弃）；设置了 min_age_bars 时校验能追溯所需的历史。两者都不
 // 涉及时不读取。
+//
+// 校验的是关联任务的结果 View：它的历史由因子计算与手动补算写出，所以 min_age_bars 需要的历史也要先补算出来。
 func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, now time.Time) error {
 	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
@@ -325,21 +369,47 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	return int((time.Duration(hours) * time.Hour) / duration), true
 }
 
-// factorColumnIdentity 返回因子列（输出列或参数列）的成员别名与定义 ID：成员别名取 member_alias（共享集合的成员别名就是
-// 定义 ID），定义 ID 取 factor_id；不是因子列时别名为空。
-func factorColumnIdentity(attributes map[string]string) (string, string) {
-	member := strings.TrimSpace(attributes["member_alias"])
+// factorIdentity 是因子输出列的身份：成员键、引用的定义、输出名与成员类型。
+type factorIdentity struct {
+	Member, FactorID, Output, Kind string
+}
+
+// factorColumnIdentity 返回因子输出列（column_kind=output）的身份；__params 等不是因子输出的列返回 false。
+func factorColumnIdentity(attributes map[string]string) (factorIdentity, bool) {
+	if strings.TrimSpace(attributes["column_kind"]) != factorname.ColumnKindOutput {
+		return factorIdentity{}, false
+	}
+	member := strings.TrimSpace(attributes["member_key"])
 	if member == "" {
-		member = strings.TrimSpace(attributes["origin_factor_id"])
+		return factorIdentity{}, false
 	}
-	if member == "" {
-		return "", ""
+	return factorIdentity{Member: member, FactorID: strings.TrimSpace(attributes["factor_id"]),
+		Output: strings.TrimSpace(attributes["output_name"]), Kind: strings.TrimSpace(attributes["member_kind"])}, true
+}
+
+// varMembers 从任务结果 View 的列属性里找出任务的可变成员，并读它们的因子定义声明的可调参数。
+func varMembers(ctx context.Context, client Client, view ViewInfo) (map[string]VarMember, error) {
+	members := make(map[string]VarMember)
+	definitions := make(map[string]FactorInfo)
+	for _, column := range view.Columns {
+		identity, ok := factorColumnIdentity(column.Attributes)
+		if !ok || identity.Kind != factorname.KindVar {
+			continue
+		}
+		if _, seen := members[identity.Member]; seen {
+			continue
+		}
+		info, ok := definitions[identity.FactorID]
+		if !ok {
+			var err error
+			if info, err = client.GetFactor(ctx, identity.FactorID); err != nil {
+				return nil, err
+			}
+			definitions[identity.FactorID] = info
+		}
+		members[identity.Member] = VarMember{Key: identity.Member, FactorID: identity.FactorID, Params: info.Params}
 	}
-	factorID := strings.TrimSpace(attributes["factor_id"])
-	if factorID == "" {
-		factorID = member
-	}
-	return member, factorID
+	return members, nil
 }
 
 // previousFactors 返回经 bars[-1] 读取的因子列所属的成员（排序）；没有时返回 nil。
@@ -378,8 +448,8 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if err := json.Unmarshal(raw, &resolved); err != nil {
 		return Resolved{}, &describedError{message: "会话快照的 resolved_json 无法解析", cause: err}
 	}
-	if resolved.ViewID == "" || resolved.Bar == "" || resolved.Calendar == "" || resolved.CompletionKind == "" {
-		return Resolved{}, errors.New("resolved_json 缺少 view_id、bar、calendar 或 completion_kind")
+	if resolved.ViewID == "" || resolved.FactorTaskID == "" || resolved.Bar == "" || resolved.Calendar == "" || resolved.CompletionKind == "" {
+		return Resolved{}, errors.New("resolved_json 缺少 view_id、factor_task_id、bar、calendar 或 completion_kind")
 	}
 	if resolved.Columns == nil {
 		resolved.Columns = map[string]ColumnBinding{}

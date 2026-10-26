@@ -19,24 +19,19 @@ func factorParamChecks(got Overview) map[string]BusinessStatus {
 	return out
 }
 
-// 成员连续沿用参数超过阈值告警（指标为 1），离线冻结只在最近 30 分钟内告警；没有序列时不产生检查项。
-func TestBuilderReportsFactorParamCarryAndOfflineFreeze(t *testing.T) {
+// 策略的参数投递滞后指标为 1 的实例告警；为 0 的不告警；没有序列时不产生检查项。
+func TestBuilderReportsStrategyParamDeliveryStale(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "carry-hot", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"fast"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"slow"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "off-recent", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, float64(now.Add(-5*time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "off-old", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_b"}`, float64(now.Add(-2*time.Hour).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "stale-hot", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i1"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "stale-ok", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i2"}`, 0, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
-	require.Equal(t, "down", checks["carry"].Status)
-	require.Contains(t, checks["carry"].Reason, "fset_a/fast")
-	require.NotContains(t, checks["carry"].Reason, "fset_a/slow")
-	require.Equal(t, "down", checks["offline_freeze"].Status)
-	require.Contains(t, checks["offline_freeze"].Reason, "fset_a")
-	require.NotContains(t, checks["offline_freeze"].Reason, "fset_b")
+	require.Equal(t, "down", checks["delivery"].Status)
+	require.Contains(t, checks["delivery"].Reason, "i1")
+	require.NotContains(t, checks["delivery"].Reason, "i2")
 
 	empty, _ := openOverviewState(t, func(*gorm.DB) {})
 	got, err = (Builder{Metrics: empty, Now: func() time.Time { return now }}).Build(t.Context(), "")
@@ -44,33 +39,30 @@ func TestBuilderReportsFactorParamCarryAndOfflineFreeze(t *testing.T) {
 	require.Empty(t, factorParamChecks(got))
 }
 
-func TestBuilderFactorParamsHealthyWhenAlertsClear(t *testing.T) {
+func TestBuilderStrategyParamDeliveryHealthyWhenAlertsClear(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		seedOverviewMetricForInstance(t, db, "carry-ok", "factor", "factor-mgr@control", "moox_factor_param_carry_alert", `{"space_id":"crypto","set_id":"fset_a","member":"fast"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "off-none", "factor", "factor-mgr@control", "moox_factor_param_offline_freeze_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "stale-ok", "strategy", "strategy@control", "moox_strategy_param_delivery_stale", `{"space_id":"crypto","instance_id":"i1"}`, 0, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
-	checks := factorParamChecks(got)
-	require.Equal(t, "healthy", checks["carry"].Status)
-	require.Equal(t, "healthy", checks["offline_freeze"].Status)
+	require.Equal(t, "healthy", factorParamChecks(got)["delivery"].Status)
 }
 
-// 目录一次最多返回 500 条序列：成员很多时排序靠后的异常成员也要被检查到。
-func TestBuilderFactorParamsReadsAllSeriesPages(t *testing.T) {
+// 目录一次最多返回 500 条序列：实例很多时排序靠后的异常实例也要被检查到。
+func TestBuilderStrategyParamDeliveryReadsAllSeriesPages(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		for i := 0; i < 500; i++ {
-			seedOverviewMetricForInstance(t, db, fmt.Sprintf("carry-%03d", i), "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
-				fmt.Sprintf(`{"space_id":"crypto","set_id":"fset_a","member":"m%03d"}`, i), 0, now)
+			seedOverviewMetricForInstance(t, db, fmt.Sprintf("stale-%03d", i), "strategy", "strategy@control", "moox_strategy_param_delivery_stale",
+				fmt.Sprintf(`{"space_id":"crypto","instance_id":"i%03d"}`, i), 0, now)
 		}
-		seedOverviewMetricForInstance(t, db, "carry-zzz", "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
-			`{"space_id":"crypto","set_id":"fset_a","member":"last"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "stale-zzz", "strategy", "strategy@control", "moox_strategy_param_delivery_stale",
+			`{"space_id":"crypto","instance_id":"last"}`, 1, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	checks := factorParamChecks(got)
-	require.Equal(t, "down", checks["carry"].Status)
-	require.Contains(t, checks["carry"].Reason, "fset_a/last")
+	require.Equal(t, "down", checks["delivery"].Status)
+	require.Contains(t, checks["delivery"].Reason, "last")
 }

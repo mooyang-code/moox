@@ -14,28 +14,28 @@ import (
 // Snapshot assembles the enabled sets with their enabled member definitions
 // (including source) and hashes them. When knownHash matches, notModified is
 // true and sets is nil.
-func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineSet, error) {
-	all, err := h.store.ListSets(ctx)
+func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []domain.EngineTask, error) {
+	all, err := h.store.ListTasks(ctx)
 	if err != nil {
-		return "", false, nil, fmt.Errorf("list factor sets: %w", err)
+		return "", false, nil, fmt.Errorf("list factor tasks: %w", err)
 	}
-	sets := make([]domain.EngineSet, 0, len(all))
+	sets := make([]domain.EngineTask, 0, len(all))
 	for _, set := range all {
-		if set.Status != domain.SetStatusEnabled {
+		if set.Status != domain.TaskStatusEnabled {
 			continue
 		}
-		members, err := h.store.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
+		members, err := h.store.ListMembers(ctx, set.TaskID, domain.MemberStatusEnabled)
 		if err != nil {
-			return "", false, nil, fmt.Errorf("list enabled members of %s: %w", set.SetID, err)
+			return "", false, nil, fmt.Errorf("list enabled members of %s: %w", set.TaskID, err)
 		}
 		defs := make([]domain.MemberDef, 0, len(members))
 		for _, member := range members {
 			defs = append(defs, member.Def())
 		}
-		sort.Slice(defs, func(i, j int) bool { return defs[i].Alias < defs[j].Alias })
-		sets = append(sets, domain.EngineSet{Set: set, Members: defs, ResultReady: h.isReady(set.SetID)})
+		sort.Slice(defs, func(i, j int) bool { return defs[i].Key < defs[j].Key })
+		sets = append(sets, domain.EngineTask{Set: set, Members: defs, ResultReady: h.isReady(set.TaskID)})
 	}
-	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.SetID < sets[j].Set.SetID })
+	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.TaskID < sets[j].Set.TaskID })
 	hash, err := CatalogHash(sets)
 	if err != nil {
 		return "", false, nil, err
@@ -47,47 +47,48 @@ func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []d
 }
 
 type hashedSet struct {
-	SetID           string         `json:"set_id"`
+	TaskID          string         `json:"task_id"`
 	SpaceID         string         `json:"space_id"`
 	SourceDatasetID string         `json:"source_dataset_id"`
 	Freq            string         `json:"freq"`
-	SubjectMode     string         `json:"subject_mode"`
-	Subjects        []string       `json:"subjects"`
 	ResultDatasetID string         `json:"result_dataset_id"`
-	OwnerInstanceID string         `json:"owner_instance_id"`
 	Status          string         `json:"status"`
 	ResultReady     bool           `json:"result_ready"`
 	Members         []hashedMember `json:"members"`
 }
 
 type hashedMember struct {
-	Alias                string `json:"alias"`
+	Key                  string `json:"key"`
+	Kind                 string `json:"kind"`
 	FactorID             string `json:"factor_id"`
 	CategoryID           string `json:"category_id"`
 	Name                 string `json:"name"`
 	SpecHash             string `json:"spec_hash"`
 	DefinitionHash       string `json:"definition_hash"`
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
+	// Params 是成员的固定参数，或可变成员的默认参数；同一成员键删除重加、换参数后目录指纹必须变化，引擎才会重新同步。
+	Params map[string]float64 `json:"params,omitempty"`
 }
 
 // CatalogHash fingerprints everything the engine computes with. Timestamps are
 // excluded so that a write without a semantic change does not force a resync;
 // the spec is covered by its content hash and the computation by definition_hash.
-func CatalogHash(sets []domain.EngineSet) (string, error) {
+func CatalogHash(sets []domain.EngineTask) (string, error) {
 	hashed := make([]hashedSet, 0, len(sets))
 	for _, set := range sets {
 		members := make([]hashedMember, 0, len(set.Members))
 		for _, member := range set.Members {
 			factor := member.Factor
 			members = append(members, hashedMember{
-				Alias: member.Alias, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
+				Key: member.Key, Kind: member.Kind, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
 				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
+				Params: member.Params,
 			})
 		}
 		hashed = append(hashed, hashedSet{
-			SetID: set.Set.SetID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
-			Freq: set.Set.Freq, SubjectMode: set.Set.SubjectMode, Subjects: set.Set.Subjects,
-			ResultDatasetID: set.Set.ResultDatasetID, OwnerInstanceID: set.Set.OwnerInstanceID, Status: set.Set.Status,
+			TaskID: set.Set.TaskID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
+			Freq:            set.Set.Freq,
+			ResultDatasetID: set.Set.ResultDatasetID, Status: set.Set.Status,
 			ResultReady: set.ResultReady, Members: members,
 		})
 	}

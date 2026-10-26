@@ -55,8 +55,8 @@ func TestUpdateDefinitionRequiresDisabledInstances(t *testing.T) {
 	}
 }
 
-// S25（定义部分）：被未删除实例引用的定义不能删除；实例软删除后可以；删除后 Get 仍可读、List 不再出现。
-func TestSoftDeleteDefinitionRequiresNoLiveInstances(t *testing.T) {
+// 被实例引用的定义不能删除（实例永久存在）；没有实例引用的定义可软删除，删除后 Get 仍可读、List 不再出现。
+func TestSoftDeleteDefinitionRequiresNoInstances(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
@@ -66,23 +66,23 @@ func TestSoftDeleteDefinitionRequiresNoLiveInstances(t *testing.T) {
 	if err := repo.SoftDeleteDefinition(ctx, "s1", testNow); err == nil || !strings.Contains(err.Error(), "引用") {
 		t.Fatalf("被引用的定义应拒绝删除：%v", err)
 	}
-	if err := repo.SoftDeleteInstance(ctx, "i1", testNow); err != nil {
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s2", Name: "spare", DSLYaml: "name: spare", DSLHash: "h-spare", CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SoftDeleteDefinition(ctx, "s1", testNow); err != nil {
+	if err := repo.SoftDeleteDefinition(ctx, "s2", testNow); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := repo.GetDefinition(ctx, "s1")
+	deleted, err := repo.GetDefinition(ctx, "s2")
 	if err != nil || deleted.DeletedAt == nil {
 		t.Fatalf("已删除定义仍应可读且带删除时间：%+v err=%v", deleted, err)
 	}
-	if defs, err := repo.ListDefinitions(ctx); err != nil || len(defs) != 0 {
+	if defs, err := repo.ListDefinitions(ctx); err != nil || len(defs) != 1 || defs[0].StrategyID != "s1" {
 		t.Fatalf("列表不应出现已删除定义：%+v err=%v", defs, err)
 	}
-	if err := repo.SoftDeleteDefinition(ctx, "s1", testNow); !errors.Is(err, ErrNotFound) {
+	if err := repo.SoftDeleteDefinition(ctx, "s2", testNow); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("重复删除应返回 ErrNotFound：%v", err)
 	}
-	if err := repo.UpdateDefinition(ctx, Definition{StrategyID: "s1", Name: "x", DSLYaml: "name: x", DSLHash: "hx", UpdatedAt: testNow}); !errors.Is(err, ErrNotFound) {
+	if err := repo.UpdateDefinition(ctx, Definition{StrategyID: "s2", Name: "x", DSLYaml: "name: x", DSLHash: "hx", UpdatedAt: testNow}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("已删除定义不应可修改：%v", err)
 	}
 }

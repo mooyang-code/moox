@@ -45,7 +45,7 @@ func EstimateChunkMemory(members []domain.MemberDef, series, periods, carryColum
 		if err != nil {
 			continue
 		}
-		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Alias, FactorID: def.FactorID, Factor: def.Compiled()})
+		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Key, FactorID: def.FactorID, Factor: def.Compiled()})
 		outputs += len(def.Outputs) + len(def.Compiled().Params)
 	}
 	if len(inputs) == 0 {
@@ -112,7 +112,7 @@ func withinBudget(factors []domain.MemberDef, series, periods, carryColumns int,
 		return err
 	}
 	if budget > 0 && estimate.Total() > budget {
-		return fmt.Errorf("%w：%d 个序列 × %d 期估算 %d 字节（读取 %d、计算 %d、结果 %d、组装 %d），上限 %d；集合里的因子需要拆分",
+		return fmt.Errorf("%w：%d 个序列 × %d 期估算 %d 字节（读取 %d、计算 %d、结果 %d、组装 %d），上限 %d；任务里的因子需要拆分",
 			ErrMemoryBudget, series, periods, estimate.Total(), estimate.Read, estimate.Compute, estimate.Result, estimate.Assemble, budget)
 	}
 	return nil

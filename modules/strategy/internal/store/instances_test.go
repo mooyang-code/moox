@@ -16,26 +16,29 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := "acct-1"
-	first := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: &account, CreatedAt: testNow}
+	first := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: &account, CreatedAt: testNow}
 	second := first
-	second.InstanceID = "i2"
+	second.InstanceID, second.FactorTaskID = "i2", "ftask_b"
 	for _, instance := range []Instance{first, second} {
 		if err := repo.CreateInstance(ctx, instance); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got, err := repo.GetInstance(ctx, "i1")
-	if err != nil || got.Enabled || got.SessionID != nil || got.ViewID != "view_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
+	if err != nil || got.Enabled || got.SessionID != nil || got.FactorTaskID != "ftask_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
 		t.Fatalf("实例不符：%+v err=%v", got, err)
 	}
 	session, secondSession := "session-1", "session-2"
-	for _, opened := range []Session{{SessionID: session, InstanceID: "i1"}, {SessionID: secondSession, InstanceID: "i2"}} {
-		opened.DSLHash, opened.ResolvedJSON, opened.CreatedAt = testHash, `{"view_id":"view_a"}`, testNow
+	for _, opened := range []Session{
+		{SessionID: session, InstanceID: "i1", ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`},
+		{SessionID: secondSession, InstanceID: "i2", ResolvedJSON: `{"view_id":"view_factor_b","factor_task_id":"ftask_b"}`},
+	} {
+		opened.DSLHash, opened.CreatedAt = testHash, testNow
 		if err := repo.OpenSession(ctx, opened, "name: demo"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	attachAndEnable(t, repo, "i1", session, json.RawMessage(`{"view_id":"view_a"}`))
+	attachAndEnable(t, repo, "i1", session, json.RawMessage(`{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`))
 	if err := repo.SetInstanceEnabled(ctx, "i2", false, &secondSession, nil, testNow); err != nil {
 		t.Fatal(err)
 	}
@@ -43,10 +46,10 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		t.Fatal("同一账户不能被两个启用实例占用")
 	}
 	enabled, err := repo.GetInstance(ctx, "i1")
-	if err != nil || !enabled.Enabled || *enabled.SessionID != session || string(enabled.ResolvedJSON) != `{"view_id":"view_a"}` {
+	if err != nil || !enabled.Enabled || *enabled.SessionID != session || string(enabled.ResolvedJSON) != `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}` {
 		t.Fatalf("启用后的实例不符：%+v err=%v", enabled, err)
 	}
-	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_a")
+	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
 	if err != nil || len(byView) != 1 || byView[0].InstanceID != "i1" {
 		t.Fatalf("按 View 路由不符：%+v err=%v", byView, err)
 	}
@@ -64,11 +67,11 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := "acct-1"
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	session := "session-1"
-	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	// 启用前必须先把会话写到实例上（启用流程先写会话再联系 Trade）。
@@ -104,11 +107,8 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if err != nil || pending.Enabled || pending.SessionID == nil {
 		t.Fatalf("停用中应保留会话：%+v err=%v", pending, err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_b", UpdatedAt: testNow}); err == nil {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err == nil {
 		t.Fatal("停用操作未完成时不应可修改")
-	}
-	if err := repo.SoftDeleteInstance(ctx, "i1", testNow); err == nil {
-		t.Fatal("停用操作未完成时不应可删除")
 	}
 	if err := repo.ClearInstanceSession(ctx, "i1", "wrong", testNow); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("会话不匹配时不应清除：%v", err)
@@ -120,11 +120,14 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if err != nil || cleared.SessionID != nil {
 		t.Fatalf("会话应已清空：%+v err=%v", cleared, err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_b", UpdatedAt: testNow}); err != nil {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_b", UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "不能修改") {
+		t.Fatalf("因子任务在创建时写定，不应可改：%v", err)
+	}
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := repo.GetInstance(ctx, "i1")
-	if err != nil || updated.ViewID != "view_b" || updated.LogicalAccountID != nil {
+	if err != nil || updated.FactorTaskID != "ftask_a" || updated.LogicalAccountID != nil {
 		t.Fatalf("修改后的实例不符：%+v err=%v", updated, err)
 	}
 	if err := repo.SetInstanceHealth(ctx, "i1", HealthDegraded, testNow); err != nil {
@@ -133,7 +136,7 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if degraded, err := repo.GetInstance(ctx, "i1"); err != nil || degraded.Health != HealthDegraded {
 		t.Fatalf("健康状态应为 degraded：%+v err=%v", degraded, err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: other, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_b"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: other, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	attachAndEnable(t, repo, "i1", other, nil)
@@ -142,46 +145,12 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	}
 }
 
-// S25（实例部分）：有会话历史的已停用实例可以软删除；列表与路由不再出现；Get 仍可读。
-func TestSoftDeleteInstanceKeepsHistory(t *testing.T) {
-	repo := openTestStore(t)
-	ctx := context.Background()
-	seedEnabledInstance(t, repo, "i1", "session-1", nil)
-	if err := repo.SoftDeleteInstance(ctx, "i1", testNow); err == nil || !strings.Contains(err.Error(), "停用") {
-		t.Fatalf("启用中的实例不应可删除：%v", err)
-	}
-	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SoftDeleteInstance(ctx, "i1", testNow.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	deleted, err := repo.GetInstance(ctx, "i1")
-	if err != nil || deleted.DeletedAt == nil {
-		t.Fatalf("已删除实例仍应可读：%+v err=%v", deleted, err)
-	}
-	if listed, err := repo.ListInstances(ctx, "space", nil); err != nil || len(listed) != 0 {
-		t.Fatalf("列表不应出现已删除实例：%+v err=%v", listed, err)
-	}
-	if routed, err := repo.EnabledInstancesByView(ctx, "space", "view_a"); err != nil || len(routed) != 0 {
-		t.Fatalf("路由不应出现已删除实例：%+v err=%v", routed, err)
-	}
-	sessions, err := repo.ListSessions(ctx, "i1")
-	if err != nil || len(sessions) != 1 || sessions[0].SessionID != "session-1" {
-		t.Fatalf("会话应保留：%+v err=%v", sessions, err)
-	}
-	session := "session-2"
-	if err := repo.SetInstanceEnabled(ctx, "i1", true, &session, nil, testNow); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("已删除实例不应可启用：%v", err)
-	}
-}
-
 func TestSessionLifecycle(t *testing.T) {
 	repo := openTestStore(t)
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
 	session, err := repo.GetSession(ctx, "session-1")
-	if err != nil || session.InstanceID != "i1" || session.DSLHash != testHash || session.ClosedAt != nil || session.ResolvedJSON != `{"view_id":"view_a"}` {
+	if err != nil || session.InstanceID != "i1" || session.DSLHash != testHash || session.ClosedAt != nil || session.ResolvedJSON != `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}` {
 		t.Fatalf("会话不符：%+v err=%v", session, err)
 	}
 	if version, err := repo.GetDefinitionVersion(ctx, testHash); err != nil || version.DSLYaml != "name: demo" {

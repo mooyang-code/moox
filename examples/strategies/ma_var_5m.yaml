@@ -1,0 +1,28 @@
+# 可变参数观察策略：ma 的窗口由本策略逐期提交。
+#
+# 使用方法：因子任务里加一个可变成员 { factor = "ma", var = true }（成员键 ma__var，默认窗口 20），
+# 创建实例时选这个任务，不挂账户（观察实例）。第一期没有提交过，用默认窗口 20；
+# 本策略每期提交窗口 10，从第二期起 __params 里 ma__var 的 window 应为 10。
+name: ma_var_5m
+bar: 5m
+
+universe:
+  min_age_bars: 100
+
+factor_params:
+  ma__var:
+    window: "10"
+
+rules:
+  - id: above_ma
+    name: 站上 ma
+    type: rank
+    filter: "ma__var > 0 && close > ma__var"
+    score: "rank(close / ma__var - 1)"
+    select: {top: 10}
+    weight: {total: 1, method: equal, cap: 0.2}
+
+portfolio:
+  leverage: 1
+  min_universe: 5
+  max_missing: 0.2

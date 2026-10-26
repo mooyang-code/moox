@@ -30,6 +30,10 @@ storage:
   timeout: 20s
 evaluation:
   attempt_budget: 5
+# 可变成员参数的投递告警：实例最近连续这么多期的结果都没有把参数送达因子侧时，导出 moox_strategy_param_delivery_stale=1
+params:
+  stale_alert_periods: 10
+
 retention:
   result_items_days: 90
   replays_days: 90

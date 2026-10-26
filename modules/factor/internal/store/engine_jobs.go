@@ -16,11 +16,11 @@ import (
 const pullableCondition = `(c_status = 'accepted' OR (c_status = 'running' AND c_lease_expires_at <= ?))`
 
 // PullRecalcJob atomically leases the oldest pullable job to engineID. Jobs of
-// sets in skipSets are left for a later pull. The returned job carries the new
+// tasks in skipTasks are left for a later pull. The returned job carries the new
 // lease token; found is false when no job is pullable.
-// maxRunning 是同时运行（租约未过期）的补算任务上限，达到上限时不再发出新任务；0 表示不限制。
-// 补算和回填会整窗口读取源数据，并发多了会打满 Storage（2026-10-14 的 1h 因子集回填），上限与领取在同一个事务里判断。
-func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool, maxRunning int) (RecalcJob, bool, error) {
+// maxRunning 是同时运行（租约未过期）的补算作业上限，达到上限时不再发出新任务；0 表示不限制。
+// 补算和回填会整窗口读取源数据，并发多了会打满 Storage（2026-10-14 的 1h 因子任务回填），上限与领取在同一个事务里判断。
+func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (RecalcJob, bool, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, false, fmt.Errorf("factor database is not open")
 	}
@@ -51,7 +51,7 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 			return err
 		}
 		for _, row := range rows {
-			if skipSets[row.SetID] {
+			if skipTasks[row.TaskID] {
 				continue
 			}
 			progress := max(row.ProgressTime, row.StartTime)
@@ -85,7 +85,8 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 // ReportRecalcProgress records a chunk reported by the engine holding the
 // lease and renews the lease. A cancelled or finished job is returned as is so
 // the engine can stop; a stale token or a progress regression is ErrConflict.
-func (s *Store) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, now time.Time, ttl time.Duration) (RecalcJob, error) {
+// defaultFilled 是引擎到目前为止累计的「按默认参数新补的期次」；nil 表示这次没有变化，非 nil 时整体替换。
+func (s *Store) ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]TimeRange, now time.Time, ttl time.Duration) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
@@ -119,11 +120,18 @@ func (s *Store) ReportRecalcProgress(ctx context.Context, jobID, leaseToken stri
 		if status != RecalcStatusRunning {
 			expires = 0
 		}
+		filledJSON := ""
+		if defaultFilled != nil {
+			if filledJSON, err = encodeDefaultFilled(defaultFilled); err != nil {
+				return err
+			}
+		}
 		if err := tx.Exec(`
 			UPDATE t_factor_recalc_jobs
-			SET c_status = ?, c_progress_time = ?, c_error = ?, c_lease_expires_at = ?, c_mtime = ?
+			SET c_status = ?, c_progress_time = ?, c_error = ?, c_lease_expires_at = ?,
+				c_default_filled_json = CASE WHEN ? = '' THEN c_default_filled_json ELSE ? END, c_mtime = ?
 			WHERE c_job_id = ?
-		`, status, progress, errText, expires, now.UTC(), jobID).Error; err != nil {
+		`, status, progress, errText, expires, filledJSON, filledJSON, now.UTC(), jobID).Error; err != nil {
 			return err
 		}
 		updated, err = readRecalcJob(tx, jobID)

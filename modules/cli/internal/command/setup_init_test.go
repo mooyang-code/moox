@@ -26,7 +26,7 @@ type fakeSetupInitFactor struct {
 
 func (f *fakeSetupInitFactor) Apply(_ context.Context, plan setupFactorPlan) (setupFactorSummary, error) {
 	f.plan = plan
-	return setupFactorSummary{Enabled: true, Definitions: len(plan.Definitions), Members: len(plan.Members), Imported: len(plan.Definitions), MembersAdded: len(plan.Members)}, nil
+	return setupFactorSummary{Enabled: true, Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount(), Imported: len(plan.Definitions), MembersAdded: plan.memberCount()}, nil
 }
 
 func (f *fakeSetupInitFactor) Close() error { return nil }
@@ -65,11 +65,11 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.Factors.Enabled = true
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "Bias", File: "timeseries.yaml"}}
-	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
-		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
+	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "timeseries.yaml"}}
+	snapshot.Manifest.Factors.Tasks = []setupconfig.FactorSetupTask{{
+		ID: "ftask_binance_kline_1m", Name: "行情因子", SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m",
+		Members: []setupconfig.FactorSetupMember{{Factor: "bias", Status: "enabled"}},
 	}}
-	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
 	cmd := newSetupCommand(setupDeps{
 		load:           func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
@@ -80,9 +80,12 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	cmd.SetArgs([]string{"factors", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
 	require.Len(t, factor.plan.Definitions, 1)
-	require.Len(t, factor.plan.Members, 1)
-	assert.Equal(t, "Bias", factor.plan.Definitions[0].FactorID)
-	assert.Equal(t, "fset_binance_kline_1m", factor.plan.Members[0].SetID)
+	require.Len(t, factor.plan.Tasks, 1)
+	require.Len(t, factor.plan.Tasks[0].Members, 1)
+	assert.Equal(t, "bias", factor.plan.Definitions[0].FactorID)
+	assert.Equal(t, "ftask_binance_kline_1m", factor.plan.Tasks[0].TaskID)
+	assert.Equal(t, "行情因子", factor.plan.Tasks[0].Name)
+	assert.Equal(t, "bias", factor.plan.Tasks[0].Members[0].FactorID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 
@@ -388,7 +391,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
-			OriginType: "FACTOR", OriginID: "Bias", ValueType: "DOUBLE",
+			OriginType: "FACTOR", OriginID: "bias", ValueType: "DOUBLE",
 		}},
 	}
 	require.NoError(t, validateSetupMetadataDependencies(seed))

@@ -1,6 +1,6 @@
-import type { FactorSetInfo, RecalcJob, RecalcJobStatus, SubjectMode } from "@/api/factor/types";
+import type { FactorTaskInfo, RecalcJob, RecalcJobStatus, RecalcSubjectMode } from "@/api/factor/types";
 import { freqSeconds } from "@/views/factor/shared/health";
-import { jobProgress, jobSourceLabel, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
+import { jobProgress, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
 
 export type StatusSegment = "all" | "running" | "succeeded" | "failed";
 
@@ -21,11 +21,6 @@ export function segmentStatuses(segment: StatusSegment): RecalcJobStatus[] | und
   }[segment];
 }
 
-/** `factor-enable-` 前缀的请求是启用回填，其余是手动补算。 */
-export function jobSource(job: Pick<RecalcJob, "request_id">): { kind: "enable" | "manual"; label: string } {
-  return jobSourceLabel(job) === "启用回填" ? { kind: "enable", label: "启用回填" } : { kind: "manual", label: "手动" };
-}
-
 /** 成功任务 error 里以 `degraded:` 开头的是降级说明，展示为「部分降级」而不是错误。 */
 export function jobDisplay(job: Pick<RecalcJob, "status" | "error">) {
   const note = splitJobNote(job);
@@ -40,10 +35,8 @@ export function jobDisplay(job: Pick<RecalcJob, "status" | "error">) {
 
 export const progressPercent = jobProgress;
 
-export function enabledMemberIds(info: Pick<FactorSetInfo, "members">): string[] {
-  return (info.members || [])
-    .filter(member => member.status === "enabled")
-    .map(member => member.member_alias || member.factor_id);
+export function enabledMemberIds(info: Pick<FactorTaskInfo, "members">): string[] {
+  return (info.members || []).filter(member => member.status === "enabled").map(member => member.member_key);
 }
 
 export interface TimeRange {
@@ -79,7 +72,7 @@ export interface EstimateInput {
   start?: number;
   end?: number;
   factorCount: number;
-  subjectMode: SubjectMode;
+  subjectMode: RecalcSubjectMode;
   subjectCount: number;
 }
 

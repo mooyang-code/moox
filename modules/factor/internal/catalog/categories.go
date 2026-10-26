@@ -42,8 +42,8 @@ func (s *Service) SetFactorCategory(ctx context.Context, factorID, categoryID st
 	return s.db.GetFactor(ctx, factorID)
 }
 
-// freezeCutoff 返回集合冻结区间的清理点：结果数据集保留期之外再留一个最大回看（超出后补算不再可能，没有读取方）。
-func (s *Service) freezeCutoff(ctx context.Context, set domain.FactorSet, now time.Time) (time.Time, bool) {
+// freezeCutoff 返回任务冻结区间的清理点：结果数据集保留期之外再留一个最大回看（超出后补算不再可能，没有读取方）。
+func (s *Service) freezeCutoff(ctx context.Context, set domain.FactorTask, now time.Time) (time.Time, bool) {
 	if s.metadata == nil {
 		return time.Time{}, false
 	}
@@ -63,7 +63,7 @@ func (s *Service) freezeCutoff(ctx context.Context, set domain.FactorSet, now ti
 	if err != nil {
 		return time.Time{}, false
 	}
-	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	members, err := s.db.ListMembers(ctx, set.TaskID, "")
 	if err != nil {
 		return time.Time{}, false
 	}

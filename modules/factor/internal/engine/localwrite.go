@@ -40,7 +40,7 @@ type seriesStorage interface {
 type localWriter struct {
 	data    *localdata.Data
 	storage seriesStorage
-	sets    interface{ SetIDs() []string }
+	sets    interface{ TaskIDs() []string }
 	now     func() time.Time
 
 	mu     sync.Mutex
@@ -324,12 +324,12 @@ func (w *localWriter) handleBounds(rw http.ResponseWriter, r *http.Request) {
 func (w *localWriter) handleSources(rw http.ResponseWriter, _ *http.Request) {
 	type item struct {
 		Source  string `json:"source"`
-		SetID   string `json:"set_id"`
+		TaskID  string `json:"task_id"`
 		Blocked string `json:"blocked,omitempty"`
 	}
 	var out []item
 	for _, info := range w.data.Sources() {
-		it := item{Source: info.Source.String(), SetID: info.SetID}
+		it := item{Source: info.Source.String(), TaskID: info.TaskID}
 		if err := w.data.Blocked(info.Source); err != nil {
 			it.Blocked = err.Error()
 		}

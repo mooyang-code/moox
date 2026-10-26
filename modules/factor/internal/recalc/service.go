@@ -46,16 +46,16 @@ func NewService(db *store.Store, options ...Option) *Service {
 	return &Service{db: db, cfg: cfg}
 }
 
-func (s *Service) Submit(ctx context.Context, setID string, aliases, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
+func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subjects []string, requestID string, start, end time.Time) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
 	}
 	requestID = strings.TrimSpace(requestID)
-	setID = strings.TrimSpace(setID)
-	if requestID == "" || setID == "" {
-		return store.RecalcJob{}, errors.New("request_id and set_id are required")
+	taskID = strings.TrimSpace(taskID)
+	if requestID == "" || taskID == "" {
+		return store.RecalcJob{}, errors.New("request_id and task_id are required")
 	}
-	set, err := s.db.GetSet(ctx, setID)
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -70,12 +70,12 @@ func (s *Service) Submit(ctx context.Context, setID string, aliases, subjects []
 	if existing, found, err := s.db.FindRecalcJobByRequestID(ctx, requestID); err != nil {
 		return store.RecalcJob{}, err
 	} else if found {
-		if !matchesSubmitRequest(existing, setID, aliases, subjects, start.Unix(), end.Unix()) {
+		if !matchesSubmitRequest(existing, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
 			return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
 		}
 		return existing, nil
 	}
-	set, selected, normalizedSubjects, clock, err := s.selection(ctx, setID, aliases, subjects)
+	set, selected, normalizedSubjects, clock, err := s.selection(ctx, taskID, memberKeys, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -85,30 +85,30 @@ func (s *Service) Submit(ctx context.Context, setID string, aliases, subjects []
 	}
 	ids := make([]string, 0, len(selected))
 	for _, member := range selected {
-		ids = append(ids, member.Alias)
+		ids = append(ids, member.Key)
 	}
 	job, err := s.db.CreateRecalcJob(ctx, store.RecalcJob{
-		JobID: requestID, RequestID: requestID, SetID: setID,
+		JobID: requestID, RequestID: requestID, TaskID: taskID,
 		Members: ids, Subjects: normalizedSubjects,
-		MembersOmitted: len(aliases) == 0, SubjectsOmitted: len(subjects) == 0,
+		MembersOmitted: len(memberKeys) == 0, SubjectsOmitted: len(subjects) == 0,
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	})
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	if !matchesSubmitRequest(job, setID, aliases, subjects, start.Unix(), end.Unix()) {
+	if !matchesSubmitRequest(job, taskID, memberKeys, subjects, start.Unix(), end.Unix()) {
 		return store.RecalcJob{}, fmt.Errorf("request_id %q already belongs to a different recalc request", requestID)
 	}
 	return job, nil
 }
 
-func matchesSubmitRequest(job store.RecalcJob, setID string, aliases, subjects []string, start, end int64) bool {
-	if job.SetID != setID || job.StartTime != start || job.EndTime != end ||
-		job.MembersOmitted != (len(aliases) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
+func matchesSubmitRequest(job store.RecalcJob, taskID string, memberKeys, subjects []string, start, end int64) bool {
+	if job.TaskID != taskID || job.StartTime != start || job.EndTime != end ||
+		job.MembersOmitted != (len(memberKeys) == 0) || job.SubjectsOmitted != (len(subjects) == 0) {
 		return false
 	}
 	if !job.MembersOmitted {
-		normalized, err := normalizeIDs(aliases)
+		normalized, err := normalizeIDs(memberKeys)
 		if err != nil || !sameStrings(job.Members, normalized) {
 			return false
 		}
@@ -122,51 +122,6 @@ func matchesSubmitRequest(job store.RecalcJob, setID string, aliases, subjects [
 	return true
 }
 
-// PrepareEnableBackfill validates and builds the accepted job that must be
-// committed atomically with enabling a disabled set member in the catalog store.
-func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, alias, requestID string, start, end time.Time) (store.RecalcJob, error) {
-	if s == nil || s.db == nil {
-		return store.RecalcJob{}, errors.New("factor recalc store is required")
-	}
-	setID = strings.TrimSpace(setID)
-	alias = strings.TrimSpace(alias)
-	requestID = strings.TrimSpace(requestID)
-	if setID == "" || alias == "" || requestID == "" {
-		return store.RecalcJob{}, errors.New("request_id, set_id and member alias are required")
-	}
-	set, err := s.db.GetSet(ctx, setID)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	if set.Status != domain.SetStatusEnabled {
-		return store.RecalcJob{}, fmt.Errorf("factor set %q is not enabled", set.SetID)
-	}
-	member, err := s.db.GetMember(ctx, setID, alias)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	if member.Status != domain.MemberStatusDisabled {
-		return store.RecalcJob{}, fmt.Errorf("member %q must be disabled in set %q before activation", alias, setID)
-	}
-	clock, err := s.clockFor(set.SpaceID)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	start, end, err = alignRange(clock, set.Freq, start, end)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	subjects, err := s.resolveSubjects(ctx, set, nil)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	return store.RecalcJob{
-		JobID: requestID, RequestID: requestID, SetID: setID,
-		Members: []string{alias}, Subjects: subjects,
-		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
-	}, nil
-}
-
 func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
@@ -174,11 +129,11 @@ func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error
 	return s.db.GetRecalcJob(ctx, jobID)
 }
 
-func (s *Service) List(ctx context.Context, setID string, statuses []string) ([]store.RecalcJob, error) {
+func (s *Service) List(ctx context.Context, taskID string, statuses []string) ([]store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("factor recalc store is required")
 	}
-	return s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{SetID: setID, Statuses: statuses})
+	return s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: statuses})
 }
 
 func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, error) {
@@ -196,55 +151,59 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 	})
 }
 
-func (s *Service) selection(ctx context.Context, setID string, aliases, subjects []string) (domain.FactorSet, []domain.MemberDef, []string, periodclock.Clock, error) {
-	set, err := s.db.GetSet(ctx, setID)
+func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, periodclock.Clock, error) {
+	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.FactorSet{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, nil, err
 	}
-	if set.Status != domain.SetStatusEnabled {
-		return domain.FactorSet{}, nil, nil, nil, fmt.Errorf("factor set %q is not enabled", set.SetID)
+	if set.Status != domain.TaskStatusEnabled {
+		return domain.FactorTask{}, nil, nil, nil, fmt.Errorf("factor task %q is not enabled", set.TaskID)
 	}
 	clock, err := s.clockFor(set.SpaceID)
 	if err != nil {
-		return domain.FactorSet{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, nil, err
 	}
-	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	members, err := s.db.ListMembers(ctx, set.TaskID, "")
 	if err != nil {
-		return domain.FactorSet{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, nil, err
 	}
-	selected, err := domain.SelectEnabledMembers(members, aliases)
+	selected, err := domain.SelectEnabledMembers(members, memberKeys)
 	if err != nil {
-		return domain.FactorSet{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, nil, err
 	}
 	resolved, err := s.resolveSubjects(ctx, set, subjects)
 	if err != nil {
-		return domain.FactorSet{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, nil, err
 	}
 	return set, selected, resolved, clock, nil
 }
 
-func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorSet, requested []string) ([]string, error) {
-	if len(requested) == 0 {
-		if set.SubjectMode == domain.SubjectModeInclude {
-			requested = append([]string(nil), set.Subjects...)
-		} else {
-			if s.cfg.subjects == nil {
-				return nil, errors.New("Storage subject provider is required for an all-subject factor set")
-			}
-			var err error
-			requested, err = s.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
-			if err != nil {
-				return nil, fmt.Errorf("list source dataset subjects: %w", err)
-			}
-		}
+func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorTask, requested []string) ([]string, error) {
+	if s.cfg.subjects == nil {
+		return nil, errors.New("Storage subject provider is required to resolve factor task subjects")
+	}
+	// 任务的标的就是源数据集当前的标的：不指定时取全部，指定时必须都属于源数据集。
+	all, err := s.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("list source dataset subjects: %w", err)
+	}
+	explicit := len(requested) > 0
+	if !explicit {
+		requested = all
 	}
 	resolved, err := normalizeSubjects(requested)
 	if err != nil {
 		return nil, err
 	}
-	for _, subject := range resolved {
-		if !set.InScope(subject) {
-			return nil, fmt.Errorf("subject %q is outside factor set scope", subject)
+	if explicit {
+		inDataset := make(map[string]struct{}, len(all))
+		for _, subject := range all {
+			inDataset[subject] = struct{}{}
+		}
+		for _, subject := range resolved {
+			if _, ok := inDataset[subject]; !ok {
+				return nil, fmt.Errorf("subject %q is not in source dataset %s", subject, set.SourceDatasetID)
+			}
 		}
 	}
 	return resolved, nil

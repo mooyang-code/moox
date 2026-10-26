@@ -6,9 +6,10 @@ import type {
   FactorInput,
   FactorMember,
   FactorRetRsp,
-  FactorSet,
-  ListFactorSetsReq,
-  ListFactorSetsRsp,
+  MemberKind,
+  FactorTask,
+  ListFactorTasksReq,
+  ListFactorTasksRsp,
   ListFactorsReq,
   ListFactorsRsp,
   GetFactorRsp,
@@ -22,40 +23,36 @@ import type {
   RecalcFactorsReq,
   ValidateFactorSpecRsp,
   RecalcJob,
-  SetFactorMemberStatusResult
+  SetTaskMemberStatusResult
 } from "./types";
 
-export type CreateFactorSetInput = Pick<FactorSet, "space_id" | "source_dataset_id" | "freq" | "subject_mode" | "subjects"> &
-  Partial<Pick<FactorSet, "set_id" | "result_dataset_id" | "status">>;
+export type CreateFactorTaskInput = Pick<FactorTask, "space_id" | "source_dataset_id" | "freq" | "name"> &
+  Partial<Pick<FactorTask, "task_id" | "result_dataset_id" | "status">>;
 
-export async function createFactorSet(factorSet: CreateFactorSetInput) {
-  const rsp = await callFactor<{ factor_set: CreateFactorSetInput }, FactorRetRsp<{ factor_set: FactorSet }>>("CreateFactorSet", {
-    factor_set: factorSet
-  });
-  return rsp.factor_set;
-}
-
-export function updateFactorSet(set_id: string, subject_mode: string, subjects: string[]) {
-  return callFactor<{ set_id: string; subject_mode: string; subjects: string[] }, FactorRetRsp<{ factor_set: FactorSet }>>(
-    "UpdateFactorSet",
-    { set_id, subject_mode, subjects }
+export async function createFactorTask(factorTask: CreateFactorTaskInput) {
+  const rsp = await callFactor<{ factor_task: CreateFactorTaskInput }, FactorRetRsp<{ factor_task: FactorTask }>>(
+    "CreateFactorTask",
+    {
+      factor_task: factorTask
+    }
   );
+  return rsp.factor_task;
 }
 
-export async function setFactorSetStatus(set_id: string, status: string) {
-  const rsp = await callFactor<{ set_id: string; status: string }, FactorRetRsp<{ factor_set: FactorSet }>>(
-    "SetFactorSetStatus",
-    { set_id, status }
+export async function setFactorTaskStatus(task_id: string, status: string) {
+  const rsp = await callFactor<{ task_id: string; status: string }, FactorRetRsp<{ factor_task: FactorTask }>>(
+    "SetFactorTaskStatus",
+    { task_id, status }
   );
-  return rsp.factor_set;
+  return rsp.factor_task;
 }
 
-export function deleteFactorSet(set_id: string, purge = false) {
-  return callFactor<{ set_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorSet", { set_id, purge });
+export function deleteFactorTask(task_id: string, purge = false) {
+  return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-export function listFactorSets(params: ListFactorSetsReq = {}) {
-  return callFactor<ListFactorSetsReq, FactorRetRsp<ListFactorSetsRsp>>("ListFactorSets", params);
+export function listFactorTasks(params: ListFactorTasksReq = {}) {
+  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
 }
 
 export async function createFactor(factor: FactorInput) {
@@ -72,29 +69,41 @@ export function listFactors(params: ListFactorsReq = {}) {
   return callFactor<ListFactorsReq, FactorRetRsp<ListFactorsRsp>>("ListFactors", params);
 }
 
-/** 把定义加入因子集；member_alias 缺省时取定义 ID（共享集合不需要别名）。 */
-export async function addFactorToSet(set_id: string, factor_id: string, member_alias?: string) {
-  const body: { set_id: string; factor_id: string; member_alias?: string } = { set_id, factor_id };
-  if (member_alias && member_alias !== factor_id) body.member_alias = member_alias;
-  const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddFactorToSet", body);
+/**
+ * 把定义加入计算任务。kind 缺省按 fixed；params 是固定成员的固定参数、或可变成员的默认参数（没给的参数取定义的默认值，
+ * 加成员之后不再改）。成员键由服务端推导并在响应里返回。
+ */
+export async function addFactorToTask(
+  task_id: string,
+  factor_id: string,
+  kind: MemberKind = "fixed",
+  params?: Record<string, number>
+) {
+  const body: { task_id: string; factor_id: string; kind: MemberKind; params?: Record<string, number> } = {
+    task_id,
+    factor_id,
+    kind
+  };
+  if (params && Object.keys(params).length) body.params = params;
+  const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddTaskMember", body);
   return rsp.member;
 }
 
-/** 成员以集合内唯一的别名标识（共享集合里别名就是定义 ID）。 */
-export function removeFactorFromSet(set_id: string, member_alias: string) {
-  return callFactor<{ set_id: string; member_alias: string }, FactorRetRsp>("RemoveFactorFromSet", { set_id, member_alias });
+/** 成员以任务内唯一的成员键标识。 */
+export function removeFactorFromTask(task_id: string, member_key: string) {
+  return callFactor<{ task_id: string; member_key: string }, FactorRetRsp>("RemoveTaskMember", { task_id, member_key });
 }
 
 export async function setFactorMemberStatus(
-  set_id: string,
-  member_alias: string,
+  task_id: string,
+  member_key: string,
   status: string
-): Promise<SetFactorMemberStatusResult> {
-  const rsp = await callFactor<
-    { set_id: string; member_alias: string; status: string },
-    FactorRetRsp<SetFactorMemberStatusResult>
-  >("SetFactorMemberStatus", { set_id, member_alias, status });
-  return { member: rsp.member, backfill_job: rsp.backfill_job };
+): Promise<SetTaskMemberStatusResult> {
+  const rsp = await callFactor<{ task_id: string; member_key: string; status: string }, FactorRetRsp<SetTaskMemberStatusResult>>(
+    "SetTaskMemberStatus",
+    { task_id, member_key, status }
+  );
+  return { member: rsp.member };
 }
 
 export async function listFactorCategories() {
@@ -128,7 +137,7 @@ export async function setFactorCategory(factor_id: string, category_id: string) 
   return rsp.factor;
 }
 
-/** 读取因子集的冻结记录（每期实际用的参数）与可选的提交审计。 */
+/** 读取因子任务里各可变成员最近一次被接受的提交（只读）。 */
 export function getFactorParams(params: GetFactorParamsReq) {
   return callFactor<GetFactorParamsReq, FactorRetRsp<GetFactorParamsRsp>>("GetFactorParams", params);
 }
@@ -167,7 +176,7 @@ export function validateFactorSpec(spec: string, allow_partial_universe = false)
   });
 }
 
-/** 在因子集的源数据上试算：少量标的、最近若干期，不写结果。 */
+/** 在因子任务的源数据上试算：少量标的、最近若干期，不写结果。 */
 export function previewFactor(params: PreviewFactorReq) {
   return callFactor<PreviewFactorReq, PreviewFactorRsp>("PreviewFactor", params);
 }

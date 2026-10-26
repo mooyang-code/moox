@@ -90,7 +90,7 @@ func TestFollowRefetchesInBatches(t *testing.T) {
 	}
 }
 
-// 被移出集合的标的：变更跟进不再处理它们的修正。
+// 被移出任务的标的：变更跟进不再处理它们的修正。
 func TestFollowIgnoresSubjectsOutOfScope(t *testing.T) {
 	st := newFakeStorage()
 	for _, subject := range []string{"A", "B"} {
@@ -111,5 +111,5 @@ func TestFollowIgnoresSubjectsOutOfScope(t *testing.T) {
 	require.Len(t, res.Applied, 1)
 	require.Equal(t, 1, res.Stats.OutOfScope)
 	require.Equal(t, 502.0, closes(t, s, "A")[2])
-	require.Equal(t, 102.0, closes(t, s, "B")[2], "移出集合的标的不再同步")
+	require.Equal(t, 102.0, closes(t, s, "B")[2], "移出任务的标的不再同步")
 }

@@ -272,3 +272,63 @@ func TestWriteFactorRowsRejectsInactiveDatasetAndRowAttributes(t *testing.T) {
 		})
 	}
 }
+
+// __params 是一列声明过的 json 字段：按 json_value 原样转发给 DataNode，Storage 不解析里面的内容；没注册这一列的数据集照旧拒绝。
+func TestWriteFactorRowsForwardsTheParamsJSONColumn(t *testing.T) {
+	const params = `{"boll":{"window":20},"ema__20_50000":{"span":20,"warmup":50000}}`
+	var forwarded *pb.WriteFactorRowsReq
+	owner := &factorRowsNode{write: func(_ context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
+		forwarded = req
+		return &pb.WriteFactorRowsRsp{RetInfo: successRetInfo(), RowsWritten: uint64(len(req.GetRows()))}, nil
+	}}
+	withParams := func() metadata.RequestSnapshot {
+		snapshot := factorRowsMetadata().(factorRowsSnapshot)
+		snapshot.columns = append(snapshot.columns, &pb.DatasetColumn{ColumnName: "__params", OriginId: "__params", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_JSON})
+		return snapshot
+	}
+	row := func() *pb.RowFieldUpsert {
+		return &pb.RowFieldUpsert{
+			Key: &pb.RowKey{SpaceId: "space", DatasetId: "result", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "5m", DataTime: "2026-10-25T16:35:00Z"}}},
+			Fields: []*pb.FieldValue{
+				{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.5}}},
+				{FieldId: "__params", Value: &pb.TypedValue{Value: &pb.TypedValue_JsonValue{JsonValue: params}}},
+			},
+		}
+	}
+	newService := func(snapshot func() metadata.RequestSnapshot) *Service {
+		svc, err := New(Options{
+			Resolver: func(context.Context, string, string) (DataNodeClient, error) { return owner, nil },
+			Snapshot: snapshot,
+			AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
+				return &pb.AuthInfo{AppId: "factor", AppKey: "signed"}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return svc
+	}
+	request := func() *pb.PrimaryWriteFactorRowsReq {
+		return &pb.PrimaryWriteFactorRowsReq{AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", DatasetId: "result", CommitId: "commit-params", Rows: []*pb.RowFieldUpsert{row()}}
+	}
+
+	rsp, err := newService(withParams).WriteFactorRows(context.Background(), request())
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("registered __params column: response=%v err=%v", rsp, err)
+	}
+	var got string
+	for _, field := range forwarded.GetRows()[0].GetFields() {
+		if field.GetFieldId() == "__params" {
+			got = field.GetValue().GetJsonValue()
+		}
+	}
+	if got != params {
+		t.Fatalf("forwarded __params = %q, want %q", got, params)
+	}
+
+	forwarded = nil
+	rsp, err = newService(factorRowsMetadata).WriteFactorRows(context.Background(), request())
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM || forwarded != nil {
+		t.Fatalf("unregistered __params column: response=%v err=%v forwarded=%v", rsp, err, forwarded)
+	}
+}

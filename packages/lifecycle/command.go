@@ -180,7 +180,7 @@ func (c *Controller) transition(ctx context.Context, req Request) (Object, error
 		c.set(r, StageWarming, "", &changes)
 	case CmdConfirm:
 		if r.Stage != StageWarming {
-			return deny("只有预热中的对象才能确认进入运行")
+			return deny("只有试运行中的对象才能确认进入运行")
 		}
 		if !Passed(checks) {
 			return deny("检查有失败项：" + firstFailure(checks))
@@ -225,7 +225,7 @@ func (c *Controller) transition(ctx context.Context, req Request) (Object, error
 		case ref == (Ref{}) && kind == PauseSystem && r.Stage != StageResetting && r.Stage != StageResetFailed:
 			// 模块自身未就绪时也要能建立系统暂停的门禁（只靠 hold）。
 		default:
-			return deny("只有就绪、预热、运行或恢复追赶中的对象才能暂停")
+			return deny("只有就绪、试运行、运行或恢复追赶中的对象才能暂停")
 		}
 		if ref == (Ref{}) && kind == PauseSystem && (r.Pause == nil || r.Pause.Kind == PauseSystem) {
 			r.Hold = HoldSystemPause

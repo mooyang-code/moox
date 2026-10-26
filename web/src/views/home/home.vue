@@ -158,7 +158,7 @@
                 <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>进度</span></div>
                 <button
                   v-for="row in foldedFactors.shown"
-                  :key="row.setId"
+                  :key="row.taskId"
                   type="button"
                   class="line factor-cols"
                   :title="`${row.label}：${row.factors} 个因子`"
@@ -269,8 +269,8 @@ import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { callControl } from "@/api/admin/http";
 import { listFunctionInstances } from "@/api/function-instance";
-import { listFactorSets } from "@/api/factor";
-import type { FactorSetInfo } from "@/api/factor/types";
+import { listFactorTasks } from "@/api/factor";
+import type { FactorTaskInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets, listAllViews, listDataSources } from "@/api/storage/metadata";
 import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
@@ -320,7 +320,7 @@ const counts = reactive<Record<string, number | null>>({
   sources: null,
   rules: null,
   datasets: null,
-  factorSets: null,
+  factorTasks: null,
   factors: null,
   instances: null,
   accounts: null,
@@ -331,7 +331,7 @@ const spaceLoadGate = new RequestGate();
 // 实时部分：监控概览、因子任务、策略实例与目标、最近动态，定时刷新。
 const overview = ref<HealthOverview>();
 const monitorError = ref("");
-const factorSets = ref<FactorSetInfo[]>([]);
+const factorTasks = ref<FactorTaskInfo[]>([]);
 const factorLoaded = ref(false);
 const instances = ref<StrategyInstance[]>([]);
 const targets = ref<Record<string, StrategyTargetSnapshot>>({});
@@ -341,7 +341,7 @@ const activityItems = ref<ActivityLogItem[]>([]);
 const activityLoaded = ref(false);
 const liveLoadGate = new RequestGate();
 
-const factors = computed(() => factorRows(factorSets.value, selectedSpaceId.value || "", names, nowMs.value));
+const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value));
 const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
 const freshness = computed(() => freshnessRows(overview.value, names, nowMs.value));
 const hosts = computed(() => hostRows(overview.value?.hosts || []));
@@ -418,7 +418,7 @@ const inventory = computed(() => [
   { label: "采集任务", value: counts.rules, path: "/collector/tasks" },
   { label: "采集结果", value: counts.datasets, path: "/collector/tasks?tab=results" },
   { label: "因子", value: counts.factors, path: "/factor/definitions" },
-  { label: "计算任务", value: counts.factorSets, path: "/factor/tasks" },
+  { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
   { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
   { label: "执行账户", value: counts.accounts, path: "/trading/accounts" },
   { label: "云函数实例", value: counts.nodes, path: "/collector/tasks?tab=executors" }
@@ -501,11 +501,11 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
       }),
-    listFactorSets({ page: { page: 1, size: 500 } }).then(rsp => {
+    listFactorTasks({ page: { page: 1, size: 500 } }).then(rsp => {
       if (!isCurrent()) return;
-      factorSets.value = rsp.factor_sets ?? [];
-      const own = factorSets.value.filter(item => item.factor_set.space_id === spaceId);
-      counts.factorSets = own.length;
+      factorTasks.value = rsp.factor_tasks ?? [];
+      const own = factorTasks.value.filter(item => item.factor_task.space_id === spaceId);
+      counts.factorTasks = own.length;
       counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
       factorLoaded.value = true;
     }),
@@ -550,7 +550,7 @@ function resetSpace() {
   names.views = {};
   overview.value = undefined;
   monitorError.value = "";
-  factorSets.value = [];
+  factorTasks.value = [];
   factorLoaded.value = false;
   instances.value = [];
   targets.value = {};

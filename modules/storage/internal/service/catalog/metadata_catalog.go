@@ -595,19 +595,17 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	factorResult := isFactorResultDataset(dataset)
-	factorOutput := factorResult && item.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), factorOutput); err != nil {
+	factorColumn := factorResult && item.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	// 输出列的展示名必须等于列名；参数列 __params 按普通业务列的规则（含中文），展示名叫「因子参数」。
+	factorOutput := factorColumn && factorColumnKind(item.GetAttributes()) != factorColumnKindParams
+	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetColumnName(), item.GetAttributes(), factorOutput); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateColumnFill(item.GetAttributes()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if factorOutput {
-		attrs := item.GetAttributes()
-		factorID := strings.TrimSpace(attrs["origin_factor_id"])
-		output := strings.TrimSpace(attrs["factor_output"])
-		if factorID == "" || factorID != strings.TrimSpace(item.GetOriginId()) || output != strings.TrimSpace(item.GetColumnName()) {
-			err := errors.New("factor result columns require matching origin_factor_id and factor_output")
+	if factorColumn {
+		if err := validateFactorResultColumn(item); err != nil {
 			return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 	}

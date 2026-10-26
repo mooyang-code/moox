@@ -3,7 +3,7 @@
     <a-empty v-if="!binding" :description="emptyText || '实例尚未启用，启用时才会解析绑定'" />
     <template v-else>
       <a-descriptions :column="{ xs: 1, sm: 3 }" bordered size="small" class="binding-summary">
-        <a-descriptions-item label="View"
+        <a-descriptions-item label="结果 View"
           ><span class="mono">{{ binding.view_id }}</span></a-descriptions-item
         >
         <a-descriptions-item label="周期 / 日历">{{ binding.bar }} · {{ binding.calendar }}</a-descriptions-item>
@@ -56,13 +56,13 @@
 import { computed } from "vue";
 import { parseResolved, shortHash } from "@/views/strategy/model";
 
-/** 因子列的来源：成员别名（别名与定义不同时带上定义 ID）；参数列标明是哪个参数。 */
-function factorText(column: { member?: string; param?: string; factor_id: string; factor_output: string }) {
+/** 因子列的来源：成员键（与定义不同时带上定义 ID，可变成员标注“可变”）和输出名。 */
+function factorText(column: { member?: string; member_kind?: string; factor_id: string; output_name: string }) {
   if (!column.factor_id && !column.member) return "-";
   const member = column.member || column.factor_id;
   const definition = column.factor_id && column.factor_id !== member ? `（定义 ${column.factor_id}）` : "";
-  const what = column.param ? `参数 ${column.param}` : column.factor_output || "";
-  return `${member}${definition}${what ? ` · ${what}` : ""}`;
+  const kind = column.member_kind === "var" ? " [可变]" : "";
+  return `${member}${definition}${kind}${column.output_name ? ` · ${column.output_name}` : ""}`;
 }
 const props = defineProps<{ resolvedJson: string; emptyText?: string }>();
 const binding = computed(() => parseResolved(props.resolvedJson));

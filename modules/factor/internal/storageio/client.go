@@ -76,10 +76,9 @@ type PeriodMarker struct {
 // FactorState 是一个成员一期的结果状态：Member 是成员别名（结果数据集内唯一），FactorID 是它引用的定义；
 // ParamsSource、ParamsDigest 是这一期冻结参数的来源与摘要。
 type FactorState struct {
-	Member         string
+	MemberKey      string
+	MemberKind     string
 	FactorID       string
-	ParamsSource   string
-	ParamsDigest   string
 	Status         string
 	FailedSubjects []string
 	SourceHash     string // 填因子定义的 spec_hash；Storage 协议里这个字段仍叫 source_hash

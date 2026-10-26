@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -18,301 +17,250 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 参数冻结（因子动态调参执行计划 2.4、2.6）：开算一期之前向 FactorMgr 冻结这一期的参数，提交与冻结在管理端同一个库里
-// 串行化，冻结记录是唯一事实来源。FactorMgr 在 FreezeTimeout 内都不可达时，引擎在本地按沿用规则冻结（沿用每个成员
-// 最近一次冻结的快照，从来没有过就用默认值），计算不阻塞在参数上；离线冻结持久记在本地，恢复后补报，管理端已有
-// 不同记录的期次以管理端为准并告警。
+// 取参（设计 6.3~6.5）：开算一期之前，引擎向 FactorMgr 读取任务各可变成员最近一次被接受的提交值，把这一期用的值
+// 记成"进行中记录"并落盘，之后才开始计算；这一期的完成标记写成功后才清掉记录。所以同一期重试、写出前重启，
+// 用的都是第一次开算时的参数。FactorMgr 不可达时用本地缓存的最近一次读到的值，计算不阻塞在参数上；
+// 读到的提交值目标期晚于本期（超前）时同样用缓存的值并告警。积压追赶时引擎不等策略。
 
-// FreezeFactorParams 冻结一组集合在 period 这一期的参数。
-func (c *ManagerClient) FreezeFactorParams(ctx context.Context, setIDs []string, period time.Time) (map[string]map[string]domain.ParamFreeze, error) {
-	var rsp factorpb.FreezeFactorParamsRsp
-	req := &factorpb.FreezeFactorParamsReq{Engine: factorwire.EngineIdentityToPB(c.identity), SetIds: setIDs, PeriodTime: period.Unix()}
-	if err := c.call(ctx, "FreezeFactorParams", req, &rsp, rsp.GetRetInfo); err != nil {
+// GetTaskParams 读取任务各可变成员最近一次被接受的提交；只有持有引擎租约的进程能读。
+func (c *ManagerClient) GetTaskParams(ctx context.Context, taskID string) ([]factorwire.MemberParamState, error) {
+	var rsp factorpb.GetTaskParamsRsp
+	req := &factorpb.GetTaskParamsReq{Engine: factorwire.EngineIdentityToPB(c.identity), TaskId: taskID}
+	if err := c.call(ctx, "GetTaskParams", req, &rsp, rsp.GetRetInfo); err != nil {
 		return nil, err
 	}
-	out := make(map[string]map[string]domain.ParamFreeze, len(rsp.GetSets()))
-	for _, set := range rsp.GetSets() {
-		members := make(map[string]domain.ParamFreeze, len(set.GetMembers()))
-		for _, member := range set.GetMembers() {
-			members[member.GetMemberAlias()] = factorwire.FreezeFromPB(set.GetSetId(), period, member)
+	out := make([]factorwire.MemberParamState, 0, len(rsp.GetMembers()))
+	for _, member := range rsp.GetMembers() {
+		state, err := factorwire.MemberParamStateFromPB(member)
+		if err != nil {
+			return nil, err
 		}
-		out[set.GetSetId()] = members
+		out = append(out, state)
 	}
 	return out, nil
 }
 
-// ReportOfflineFreezes 补报离线冻结的期次，返回管理端已有不同记录的期次。
-func (c *ManagerClient) ReportOfflineFreezes(ctx context.Context, freezes []domain.ParamFreeze) ([]domain.ParamFreeze, error) {
-	var rsp factorpb.ReportOfflineFreezesRsp
-	req := &factorpb.ReportOfflineFreezesReq{Engine: factorwire.EngineIdentityToPB(c.identity)}
-	for _, freeze := range freezes {
-		req.Freezes = append(req.Freezes, &factorpb.OfflineFreeze{SetId: freeze.SetID, MemberAlias: freeze.MemberAlias,
-			PeriodTime: freeze.PeriodTime.Unix(), Params: factorwire.SnapshotToPB(freeze.Snapshot), Source: freeze.Source})
-	}
-	if err := c.call(ctx, "ReportOfflineFreezes", req, &rsp, rsp.GetRetInfo); err != nil {
-		return nil, err
-	}
-	conflicts := make([]domain.ParamFreeze, 0, len(rsp.GetConflicts()))
-	for _, item := range rsp.GetConflicts() {
-		snapshot := factorwire.SnapshotFromPB(item.GetParams())
-		conflicts = append(conflicts, domain.ParamFreeze{SetID: item.GetSetId(), MemberAlias: item.GetMemberAlias(),
-			PeriodTime: time.Unix(item.GetPeriodTime(), 0).UTC(), Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: item.GetSource()})
-	}
-	return conflicts, nil
-}
-
-// ListParamIntervals 返回集合在 [from, to] 上的冻结区间（含 from 之前最近的一个）：别名 → 按起点排序。
-func (c *ManagerClient) ListParamIntervals(ctx context.Context, setID string, from, to time.Time) (map[string][]domain.ParamInterval, error) {
-	var rsp factorpb.ListParamIntervalsRsp
-	req := &factorpb.ListParamIntervalsReq{Engine: factorwire.EngineIdentityToPB(c.identity), SetId: setID, From: from.Unix(), To: to.Unix()}
-	if err := c.call(ctx, "ListParamIntervals", req, &rsp, rsp.GetRetInfo); err != nil {
-		return nil, err
-	}
-	out := map[string][]domain.ParamInterval{}
-	for _, item := range rsp.GetIntervals() {
-		interval := factorwire.IntervalFromPB(setID, item)
-		out[interval.MemberAlias] = append(out[interval.MemberAlias], interval)
-	}
-	for alias := range out {
-		sort.Slice(out[alias], func(i, j int) bool { return out[alias][i].Start.Before(out[alias][j].Start) })
-	}
-	return out, nil
-}
-
-// paramManager 是参数冻结用到的管理端接口。
+// paramManager 是取参用到的管理端接口。
 type paramManager interface {
-	FreezeFactorParams(ctx context.Context, setIDs []string, period time.Time) (map[string]map[string]domain.ParamFreeze, error)
-	ReportOfflineFreezes(ctx context.Context, freezes []domain.ParamFreeze) ([]domain.ParamFreeze, error)
-	ListParamIntervals(ctx context.Context, setID string, from, to time.Time) (map[string][]domain.ParamInterval, error)
+	GetTaskParams(ctx context.Context, taskID string) ([]factorwire.MemberParamState, error)
 }
 
-// paramState 是本地持久化的参数状态：每个成员最近一次冻结的快照（离线冻结时沿用）与待补报的离线冻结。
-type paramState struct {
-	Last    map[string]lastFreeze `json:"last"`
-	Offline []offlineFreeze       `json:"offline"`
+// paramCache 是本地持久化的取参状态（data/engine/param_cache.json）。
+type paramCache struct {
+	// Latest 是每个可变成员最近一次读到的、目标期不晚于已开算期次的提交值（键：任务/成员键）；管理端不可达或读到超前提交时用它。
+	Latest map[string]cachedParams `json:"latest"`
+	// InFlight 是每个任务正在计算的一期用的参数（键：任务）；这一期的完成标记写成功后才清掉。
+	InFlight map[string]inFlightParams `json:"in_flight"`
 }
 
-type lastFreeze struct {
-	Period   time.Time            `json:"period"`
+type cachedParams struct {
+	Period   int64                `json:"period"`
 	Snapshot domain.ParamSnapshot `json:"snapshot"`
 }
 
-type offlineFreeze struct {
-	SetID    string               `json:"set_id"`
-	Member   string               `json:"member"`
-	Period   time.Time            `json:"period"`
-	Snapshot domain.ParamSnapshot `json:"snapshot"`
+type inFlightParams struct {
+	Period int64 `json:"period"`
+	// Members 是这一期各可变成员用的快照（成员键 → 快照）；没有提交过的成员不在里面，按成员自己的默认参数计算。
+	Members map[string]domain.ParamSnapshot `json:"members"`
 }
 
-// paramFreezer 实现 trigger.ParamFreezer 与 paramIntervalSource。
-type paramFreezer struct {
+// paramSelector 实现 trigger.ParamSelector。
+type paramSelector struct {
 	manager paramManager
 	file    string
 	timeout time.Duration
 	retry   time.Duration
-	// onOffline 每离线冻结一个成员一期时调用（指标与告警）；onConflict 在补报发现管理端记录不同时调用。
-	onOffline  func(setID string)
-	onConflict func(freeze domain.ParamFreeze)
+	// onStale 在读到超前的提交或管理端不可达而用缓存值时调用（指标与告警）；reason 是 ahead 或 unreachable。
+	onStale func(taskID, reason string)
 
 	mu    sync.Mutex
-	state paramState
-	// lastOffline 是各成员最近一次离线冻结的时间（集合/别名 → 时间），监控据此告警；只在内存里，重启后清空。
-	lastOffline map[string]time.Time
+	cache paramCache
 }
 
-func newParamFreezer(manager paramManager, file string, timeout time.Duration) (*paramFreezer, error) {
-	f := &paramFreezer{manager: manager, file: file, timeout: timeout, retry: 500 * time.Millisecond,
-		state: paramState{Last: map[string]lastFreeze{}}}
+func newParamSelector(manager paramManager, file string, timeout time.Duration) (*paramSelector, error) {
+	s := &paramSelector{manager: manager, file: file, timeout: timeout, retry: 500 * time.Millisecond,
+		cache: paramCache{Latest: map[string]cachedParams{}, InFlight: map[string]inFlightParams{}}}
 	if timeout <= 0 {
-		f.timeout = 5 * time.Second
+		s.timeout = 5 * time.Second
 	}
 	raw, err := os.ReadFile(file)
 	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return f, nil
+	case file == "" || errors.Is(err, os.ErrNotExist):
+		return s, nil
 	case err != nil:
-		return nil, fmt.Errorf("read factor param state: %w", err)
+		return nil, fmt.Errorf("read factor param cache: %w", err)
 	}
-	if err := json.Unmarshal(raw, &f.state); err != nil {
-		return nil, fmt.Errorf("decode factor param state %s: %w", file, err)
+	if err := json.Unmarshal(raw, &s.cache); err != nil {
+		return nil, fmt.Errorf("decode factor param cache %s: %w", file, err)
 	}
-	if f.state.Last == nil {
-		f.state.Last = map[string]lastFreeze{}
+	if s.cache.Latest == nil {
+		s.cache.Latest = map[string]cachedParams{}
 	}
-	return f, nil
+	if s.cache.InFlight == nil {
+		s.cache.InFlight = map[string]inFlightParams{}
+	}
+	return s, nil
 }
 
-func lastKey(setID, alias string) string { return setID + "/" + alias }
+func cacheKey(taskID, memberKey string) string { return taskID + "/" + memberKey }
 
-// Freeze 冻结集合在 period 这一期的参数。FactorMgr 在 timeout 内都不可达时离线冻结；租约冲突（另一个引擎接管）返回错误，
-// 这一期不算。
-func (f *paramFreezer) Freeze(ctx context.Context, set domain.FactorSet, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error) {
-	deadline := time.Now().Add(f.timeout)
+// Select 返回任务在 period 这一期各可变成员用的参数。这一期已有进行中记录时直接用它；否则读取提交值、记成进行中记录并落盘后返回。
+// 租约冲突（另一个引擎接管）返回错误，这一期不算；落盘失败也返回错误（按基础设施错误让这一期重试，不能带着没落盘的参数开算）。
+func (s *paramSelector) Select(ctx context.Context, task domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamSnapshot, error) {
+	var vars []domain.MemberDef
+	for _, member := range members {
+		if member.IsVar() {
+			vars = append(vars, member)
+		}
+	}
+	if len(vars) == 0 {
+		return nil, nil
+	}
+	s.mu.Lock()
+	if record, ok := s.cache.InFlight[task.TaskID]; ok && record.Period == period.Unix() && coversMembers(record, vars) {
+		defer s.mu.Unlock()
+		return cloneSnapshots(record.Members), nil
+	}
+	s.mu.Unlock()
+
+	states, fetchErr := s.fetch(ctx, task.TaskID)
+	if errors.Is(fetchErr, ErrLeaseConflict) || ctx.Err() != nil {
+		if fetchErr == nil {
+			fetchErr = ctx.Err()
+		}
+		return nil, fetchErr
+	}
+	byKey := make(map[string]factorwire.MemberParamState, len(states))
+	for _, state := range states {
+		byKey[state.MemberKey] = state
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	chosen := make(map[string]domain.ParamSnapshot, len(vars))
+	for _, member := range vars {
+		key := cacheKey(task.TaskID, member.Key)
+		state, got := byKey[member.Key]
+		switch {
+		case fetchErr != nil:
+			s.warn(ctx, task.TaskID, member.Key, period, "unreachable", fetchErr)
+		case got && state.LastSubmittedPeriod > period.Unix():
+			s.warn(ctx, task.TaskID, member.Key, period, "ahead", fmt.Errorf("最近一次提交的目标期 %s 晚于本期", time.Unix(state.LastSubmittedPeriod, 0).UTC().Format(time.RFC3339)))
+		case got && state.LastSubmittedPeriod > 0 && len(state.Params) > 0:
+			s.cache.Latest[key] = cachedParams{Period: state.LastSubmittedPeriod, Snapshot: state.Params}
+			chosen[member.Key] = state.Params
+			continue
+		default:
+			continue // 没有提交过：按成员自己的默认参数计算。
+		}
+		if cached, ok := s.cache.Latest[key]; ok {
+			chosen[member.Key] = cached.Snapshot
+		}
+	}
+	s.cache.InFlight[task.TaskID] = inFlightParams{Period: period.Unix(), Members: chosen}
+	if err := s.persistLocked(); err != nil {
+		delete(s.cache.InFlight, task.TaskID)
+		return nil, fmt.Errorf("persist factor param cache: %w", err)
+	}
+	return cloneSnapshots(chosen), nil
+}
+
+// Done 在这一期的完成标记写成功（或发现标记已经存在）后清掉进行中记录。没有记录或记录是别的期次时什么也不做。
+func (s *paramSelector) Done(_ context.Context, taskID string, period time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.cache.InFlight[taskID]
+	if !ok || record.Period != period.Unix() {
+		return nil
+	}
+	delete(s.cache.InFlight, taskID)
+	return s.persistLocked()
+}
+
+// Reset 丢弃全部进行中记录与最近一次读到的提交值并落盘（引擎重置时调用：管理端的提交已一并清除，旧值不能再被复用）。
+func (s *paramSelector) Reset() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cache = paramCache{Latest: map[string]cachedParams{}, InFlight: map[string]inFlightParams{}}
+	return s.persistLocked()
+}
+
+// fetch 在 timeout 内读取提交值，失败按间隔重试；读不到时返回最后一次错误。
+func (s *paramSelector) fetch(ctx context.Context, taskID string) ([]factorwire.MemberParamState, error) {
+	deadline := time.Now().Add(s.timeout)
 	var lastErr error
-	for attempt := 0; ; attempt++ {
+	for {
 		callCtx, cancel := context.WithDeadline(ctx, deadline)
-		frozen, err := f.manager.FreezeFactorParams(callCtx, []string{set.SetID}, period)
+		states, err := s.manager.GetTaskParams(callCtx, taskID)
 		cancel()
 		if err == nil {
-			out := frozen[set.SetID]
-			f.remember(set.SetID, out)
-			return out, nil
+			return states, nil
 		}
 		if errors.Is(err, ErrLeaseConflict) || ctx.Err() != nil {
 			return nil, err
 		}
 		lastErr = err
-		if time.Now().Add(f.retry).After(deadline) {
-			break
+		if time.Now().Add(s.retry).After(deadline) {
+			return nil, lastErr
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(f.retry):
-		}
-	}
-	log.ErrorContextf(ctx, "factor_param_freeze_offline set_id=%s period=%s error=%v", set.SetID, period.UTC().Format(time.RFC3339), lastErr)
-	return f.freezeOffline(set, members, period)
-}
-
-// remember 记下每个成员最近一次冻结的快照（只前进，不回退）并持久化。
-func (f *paramFreezer) remember(setID string, freezes map[string]domain.ParamFreeze) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	changed := false
-	for alias, freeze := range freezes {
-		key := lastKey(setID, alias)
-		if current, ok := f.state.Last[key]; ok && current.Period.After(freeze.PeriodTime) {
-			continue
-		}
-		f.state.Last[key] = lastFreeze{Period: freeze.PeriodTime.UTC(), Snapshot: freeze.Snapshot}
-		changed = true
-	}
-	if changed {
-		if err := f.persistLocked(); err != nil {
-			log.Errorf("factor_param_state_persist_failed error=%v", err)
+		case <-time.After(s.retry):
 		}
 	}
 }
 
-func (f *paramFreezer) freezeOffline(set domain.FactorSet, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make(map[string]domain.ParamFreeze, len(members))
-	for _, member := range members {
-		// 同一期重试（事件重投）沿用已经离线冻结的那一份，不重复记录。
-		snapshot, pending := f.pendingOfflineLocked(set.SetID, member.Alias, period)
-		if !pending {
-			snapshot = domain.DefaultSnapshot(member.Factor)
-			if last, ok := f.state.Last[lastKey(set.SetID, member.Alias)]; ok && last.Snapshot != nil {
-				snapshot = last.Snapshot
-			}
-			f.state.Offline = append(f.state.Offline, offlineFreeze{SetID: set.SetID, Member: member.Alias, Period: period.UTC(), Snapshot: snapshot})
-			if f.lastOffline == nil {
-				f.lastOffline = map[string]time.Time{}
-			}
-			f.lastOffline[lastKey(set.SetID, member.Alias)] = time.Now().UTC()
-			if f.onOffline != nil {
-				f.onOffline(set.SetID)
-			}
-		}
-		out[member.Alias] = domain.ParamFreeze{SetID: set.SetID, MemberAlias: member.Alias, PeriodTime: period.UTC(), Snapshot: snapshot,
-			SnapshotHash: snapshot.Hash(), Source: domain.ParamsCarriedOffline}
+func (s *paramSelector) warn(ctx context.Context, taskID, memberKey string, period time.Time, reason string, cause error) {
+	log.WarnContextf(ctx, "factor_param_stale task_id=%s member=%s period=%s reason=%s error=%v（用本地缓存的最近一次提交值）",
+		taskID, memberKey, period.UTC().Format(time.RFC3339), reason, cause)
+	if s.onStale != nil {
+		s.onStale(taskID, reason)
 	}
-	if err := f.persistLocked(); err != nil {
-		// 离线冻结没能落盘：这一期仍按它计算，但重启后无法补报；按基础设施错误让这一期重试更稳妥。
-		return nil, fmt.Errorf("persist offline param freeze: %w", err)
-	}
-	return out, nil
 }
 
-func (f *paramFreezer) pendingOfflineLocked(setID, alias string, period time.Time) (domain.ParamSnapshot, bool) {
-	for _, item := range f.state.Offline {
-		if item.SetID == setID && item.Member == alias && item.Period.Equal(period) {
-			return item.Snapshot, true
+func coversMembers(record inFlightParams, vars []domain.MemberDef) bool {
+	// 记录只含有提交值的成员，所以不能要求每个成员都在里面；成员集合变化（目录同步）时按新成员重新取参更稳妥，
+	// 但同一期内成员集合变化极少，这里只在记录里出现了不在当前成员里的键时才认为失效。
+	current := make(map[string]struct{}, len(vars))
+	for _, member := range vars {
+		current[member.Key] = struct{}{}
+	}
+	for key := range record.Members {
+		if _, ok := current[key]; !ok {
+			return false
 		}
 	}
-	return nil, false
+	return true
 }
 
-// Flush 补报离线冻结。成功后清掉已补报的记录；冲突的期次以管理端为准，交给 onConflict。
-func (f *paramFreezer) Flush(ctx context.Context) error {
-	f.mu.Lock()
-	pending := append([]offlineFreeze(nil), f.state.Offline...)
-	f.mu.Unlock()
-	if len(pending) == 0 {
+func cloneSnapshots(in map[string]domain.ParamSnapshot) map[string]domain.ParamSnapshot {
+	if len(in) == 0 {
 		return nil
 	}
-	freezes := make([]domain.ParamFreeze, 0, len(pending))
-	for _, item := range pending {
-		freezes = append(freezes, domain.ParamFreeze{SetID: item.SetID, MemberAlias: item.Member, PeriodTime: item.Period,
-			Snapshot: item.Snapshot, SnapshotHash: item.Snapshot.Hash(), Source: domain.ParamsCarriedOffline})
+	out := make(map[string]domain.ParamSnapshot, len(in))
+	for key, snapshot := range in {
+		out[key] = snapshot
 	}
-	conflicts, err := f.manager.ReportOfflineFreezes(ctx, freezes)
+	return out
+}
+
+// persistLocked 原子写入：先写临时文件，fsync 后再 rename，不原地覆盖。
+func (s *paramSelector) persistLocked() error {
+	if s.file == "" {
+		return nil
+	}
+	raw, err := json.Marshal(s.cache)
 	if err != nil {
 		return err
 	}
-	for _, conflict := range conflicts {
-		log.Errorf("factor_param_offline_conflict set_id=%s member=%s period=%s（管理端已有不同的冻结记录，以管理端为准；请对这一期手工重算）",
-			conflict.SetID, conflict.MemberAlias, conflict.PeriodTime.Format(time.RFC3339))
-		if f.onConflict != nil {
-			f.onConflict(conflict)
-		}
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.state.Offline = f.state.Offline[len(pending):]
-	return f.persistLocked()
-}
-
-// LastOffline 返回成员最近一次离线冻结的时间（没有为零值）。
-func (f *paramFreezer) LastOffline(setID, member string) time.Time {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastOffline[lastKey(setID, member)]
-}
-
-// OfflinePending 返回待补报的离线冻结数。
-func (f *paramFreezer) OfflinePending() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.state.Offline)
-}
-
-// Intervals 实现 paramIntervalSource：补算、恢复与回放按冻结记录计算历史周期。
-func (f *paramFreezer) Intervals(ctx context.Context, setID string, from, to time.Time) (map[string][]domain.ParamInterval, error) {
-	return f.manager.ListParamIntervals(ctx, setID, from, to)
-}
-
-// Run 定期补报离线冻结，直到 ctx 结束。
-func (f *paramFreezer) Run(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := f.Flush(ctx); err != nil && ctx.Err() == nil {
-				log.WarnContextf(ctx, "factor_param_offline_flush_failed pending=%d error=%v", f.OfflinePending(), err)
-			}
-		}
-	}
-}
-
-func (f *paramFreezer) persistLocked() error {
-	if f.file == "" {
-		return nil
-	}
-	raw, err := json.Marshal(f.state)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(f.file)
+	dir := filepath.Dir(s.file)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".params-*.json")
+	tmp, err := os.CreateTemp(dir, ".param-cache-*.json")
 	if err != nil {
 		return err
 	}
@@ -328,10 +276,7 @@ func (f *paramFreezer) persistLocked() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), f.file)
+	return os.Rename(tmp.Name(), s.file)
 }
 
-var (
-	_ trigger.ParamFreezer = (*paramFreezer)(nil)
-	_ paramIntervalSource  = (*paramFreezer)(nil)
-)
+var _ trigger.ParamSelector = (*paramSelector)(nil)

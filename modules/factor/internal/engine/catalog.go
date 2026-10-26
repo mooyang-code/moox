@@ -29,16 +29,16 @@ type CatalogCache struct {
 	mu             sync.RWMutex
 	loaded         bool
 	hash           string
-	sets           []domain.EngineSet
+	sets           []domain.EngineTask
 	syncedAt       time.Time
 	syncErrorSince time.Time
 	syncError      string
 }
 
 type catalogState struct {
-	Hash     string             `json:"hash"`
-	SyncedAt time.Time          `json:"synced_at"`
-	Sets     []domain.EngineSet `json:"sets"`
+	Hash     string              `json:"hash"`
+	SyncedAt time.Time           `json:"synced_at"`
+	Sets     []domain.EngineTask `json:"sets"`
 }
 
 func NewCatalogCache(stateFile string) (*CatalogCache, error) {
@@ -64,14 +64,14 @@ func (c *CatalogCache) Load() (bool, error) {
 		return false, fmt.Errorf("decode engine catalog %s: %w", c.stateFile, err)
 	}
 	c.mu.Lock()
-	c.loaded, c.hash, c.sets, c.syncedAt = true, state.Hash, compileSets(sortSets(state.Sets)), state.SyncedAt
+	c.loaded, c.hash, c.sets, c.syncedAt = true, state.Hash, compileTasks(sortTasks(state.Sets)), state.SyncedAt
 	c.mu.Unlock()
 	return true, nil
 }
 
 // Apply installs a sync result. The snapshot is persisted before it becomes
 // visible, so a failure leaves the previous snapshot in place; definitions are
-// compiled when the snapshot is installed (设计 8). changed reports whether the set of factor sets changed.
+// compiled when the snapshot is installed (设计 8). changed reports whether the set of factor tasks changed.
 func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 	now := c.now().UTC()
 	if snapshot.NotModified {
@@ -80,13 +80,13 @@ func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 		c.mu.Unlock()
 		return false, nil
 	}
-	sets := sortSets(snapshot.Sets)
+	sets := sortTasks(snapshot.Sets)
 	if err := c.persist(catalogState{Hash: snapshot.Hash, SyncedAt: now, Sets: sets}); err != nil {
 		return false, err
 	}
-	sets = compileSets(sets)
+	sets = compileTasks(sets)
 	c.mu.Lock()
-	changed := !sameSetIDs(c.sets, sets)
+	changed := !sameTaskIDs(c.sets, sets)
 	c.loaded, c.hash, c.sets = true, snapshot.Hash, sets
 	c.syncedAt, c.syncErrorSince, c.syncError = now, time.Time{}, ""
 	c.mu.Unlock()
@@ -139,11 +139,11 @@ func (c *CatalogCache) Status() CatalogStatus {
 	}
 }
 
-// Sets 返回快照里全部集合（成员是副本）。
-func (c *CatalogCache) Sets() []domain.EngineSet {
+// Sets 返回快照里全部任务（成员是副本）。
+func (c *CatalogCache) Sets() []domain.EngineTask {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]domain.EngineSet, 0, len(c.sets))
+	out := make([]domain.EngineTask, 0, len(c.sets))
 	for _, set := range c.sets {
 		copied := set
 		copied.Members = append([]domain.MemberDef(nil), set.Members...)
@@ -152,29 +152,29 @@ func (c *CatalogCache) Sets() []domain.EngineSet {
 	return out
 }
 
-// SetIDs lists the enabled sets of the snapshot.
-func (c *CatalogCache) SetIDs() []string {
+// TaskIDs lists the enabled sets of the snapshot.
+func (c *CatalogCache) TaskIDs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	ids := make([]string, 0, len(c.sets))
 	for _, set := range c.sets {
-		ids = append(ids, set.Set.SetID)
+		ids = append(ids, set.Set.TaskID)
 	}
 	return ids
 }
 
-// EnabledSetsByDataset implements trigger.SetLocator from the snapshot: every
-// enabled set over the source dataset (各策略实例的私有集合可以共用一个源数据集). A missing
+// EnabledTasksByDataset implements trigger.TaskLocator from the snapshot: every
+// enabled set over the source dataset (各策略实例的私有任务可以共用一个源数据集). A missing
 // snapshot is a transient infrastructure condition so the event is retried
 // rather than dropped; sets whose result dataset is not ready are returned
 // with ResultReady false and retried by the caller.
-func (c *CatalogCache) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineSet, error) {
+func (c *CatalogCache) EnabledTasksByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineTask, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.loaded {
 		return nil, fmt.Errorf("%w: factor catalog has not been loaded", storageio.ErrInfra)
 	}
-	var out []domain.EngineSet
+	var out []domain.EngineTask
 	for _, set := range c.sets {
 		if set.Set.SpaceID != spaceID || set.Set.SourceDatasetID != datasetID || set.Set.Freq != freq {
 			continue
@@ -186,49 +186,49 @@ func (c *CatalogCache) EnabledSetsByDataset(_ context.Context, spaceID, datasetI
 	return out, nil
 }
 
-// EnabledSet implements trigger.SetLocator: the enabled set with this id.
-func (c *CatalogCache) EnabledSet(_ context.Context, setID string) (domain.EngineSet, bool, error) {
-	set, lookup := c.SetByID(setID)
+// EnabledTask implements trigger.TaskLocator: the enabled set with this id.
+func (c *CatalogCache) EnabledTask(_ context.Context, taskID string) (domain.EngineTask, bool, error) {
+	set, lookup := c.SetByID(taskID)
 	switch lookup {
 	case SetFound:
 		return set, true, nil
 	case SetNotReady:
-		return domain.EngineSet{}, false, fmt.Errorf("%w: factor set %s is not ready", storageio.ErrInfra, setID)
+		return domain.EngineTask{}, false, fmt.Errorf("%w: factor task %s is not ready", storageio.ErrInfra, taskID)
 	}
-	return domain.EngineSet{}, false, nil
+	return domain.EngineTask{}, false, nil
 }
 
-// SetLookup 是按集合 ID 查目录的结果。
+// SetLookup 是按任务 ID 查目录的结果。
 type SetLookup int
 
 const (
-	// SetFound：集合已启用且结果数据集就绪。
+	// SetFound：任务已启用且结果数据集就绪。
 	SetFound SetLookup = iota
-	// SetNotReady：目录尚未加载，或集合的结果数据集还没就绪：本轮等待，不能当作集合已经不存在。
+	// SetNotReady：目录尚未加载，或任务的结果数据集还没就绪：本轮等待，不能当作任务已经不存在。
 	SetNotReady
-	// SetGone：目录已加载且里面没有这个启用的集合。
+	// SetGone：目录已加载且里面没有这个启用的任务。
 	SetGone
 )
 
-// SetByID 按集合 ID 取快照里的集合（含因子）。空洞恢复用它在集合锁内重新取得最新的集合与因子定义。
-func (c *CatalogCache) SetByID(setID string) (domain.EngineSet, SetLookup) {
+// SetByID 按任务 ID 取快照里的任务（含因子）。空洞恢复用它在任务锁内重新取得最新的任务与因子定义。
+func (c *CatalogCache) SetByID(taskID string) (domain.EngineTask, SetLookup) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.loaded {
-		return domain.EngineSet{}, SetNotReady
+		return domain.EngineTask{}, SetNotReady
 	}
 	for _, set := range c.sets {
-		if set.Set.SetID != setID {
+		if set.Set.TaskID != taskID {
 			continue
 		}
 		if !set.ResultReady {
-			return domain.EngineSet{}, SetNotReady
+			return domain.EngineTask{}, SetNotReady
 		}
 		copied := set
 		copied.Members = append([]domain.MemberDef(nil), set.Members...)
 		return copied, SetFound
 	}
-	return domain.EngineSet{}, SetGone
+	return domain.EngineTask{}, SetGone
 }
 
 // FilterSubjects renders the collector period subjects of the snapshot's sets.
@@ -239,17 +239,17 @@ func (c *CatalogCache) FilterSubjects(context.Context) ([]string, error) {
 	for _, set := range c.sets {
 		subject, err := c.registry.RenderSubject(events.CollectorPeriodCompleted, set.Set.SpaceID, set.Set.SourceDatasetID)
 		if err != nil {
-			return nil, fmt.Errorf("render collector period subject for set %s: %w", set.Set.SetID, err)
+			return nil, fmt.Errorf("render collector period subject for set %s: %w", set.Set.TaskID, err)
 		}
 		filters = append(filters, subject)
 	}
 	return trigger.NormalizeFilters(filters), nil
 }
 
-// compileSets 编译快照里的全部定义，填充派生字段（类型、输入列、输出列、回看）。编译失败（mgr 与引擎的 expr
-// 版本不一致时才会出现）的定义原样保留，由流水线在计算时按该因子失败处理（设计 7.6），不影响同集合的其他因子。
-func compileSets(sets []domain.EngineSet) []domain.EngineSet {
-	out := make([]domain.EngineSet, len(sets))
+// compileTasks 编译快照里的全部定义，填充派生字段（类型、输入列、输出列、回看）。编译失败（mgr 与引擎的 expr
+// 版本不一致时才会出现）的定义原样保留，由流水线在计算时按该因子失败处理（设计 7.6），不影响同任务的其他因子。
+func compileTasks(sets []domain.EngineTask) []domain.EngineTask {
+	out := make([]domain.EngineTask, len(sets))
 	for i, set := range sets {
 		out[i] = set
 		out[i].Members = CompileMembers(set.Members)
@@ -300,22 +300,22 @@ func (c *CatalogCache) persist(state catalogState) error {
 	return nil
 }
 
-func sortSets(sets []domain.EngineSet) []domain.EngineSet {
-	out := append([]domain.EngineSet(nil), sets...)
-	sort.Slice(out, func(i, j int) bool { return out[i].Set.SetID < out[j].Set.SetID })
+func sortTasks(sets []domain.EngineTask) []domain.EngineTask {
+	out := append([]domain.EngineTask(nil), sets...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Set.TaskID < out[j].Set.TaskID })
 	return out
 }
 
-func sameSetIDs(left, right []domain.EngineSet) bool {
+func sameTaskIDs(left, right []domain.EngineTask) bool {
 	if len(left) != len(right) {
 		return false
 	}
 	for i := range left {
-		if left[i].Set.SetID != right[i].Set.SetID || left[i].Set.SourceDatasetID != right[i].Set.SourceDatasetID {
+		if left[i].Set.TaskID != right[i].Set.TaskID || left[i].Set.SourceDatasetID != right[i].Set.SourceDatasetID {
 			return false
 		}
 	}
 	return true
 }
 
-var _ trigger.SetLocator = (*CatalogCache)(nil)
+var _ trigger.TaskLocator = (*CatalogCache)(nil)

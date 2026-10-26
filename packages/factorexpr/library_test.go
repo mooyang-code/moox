@@ -43,7 +43,7 @@ func TestLibraryMetadataMatchesProduction(t *testing.T) {
 			if !reflect.DeepEqual(factor.InputColumns, entry.Inputs) {
 				t.Errorf("inputs = %v, want %v", factor.InputColumns, entry.Inputs)
 			}
-			if got := factor.OutputNames(); !reflect.DeepEqual(got, entry.Outputs) {
+			if got := factor.OutputNamesFor(entry.FactorID); !reflect.DeepEqual(got, entry.Outputs) {
 				t.Errorf("outputs = %v, want %v", got, entry.Outputs)
 			}
 			if factor.Lookback != entry.Lookback {

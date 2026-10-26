@@ -19,14 +19,14 @@ func testPipelineFactor(id, factorType string, lookback int, partial bool) domai
 	if factorType == domain.FactorTypeCrossSection {
 		expression = "cs_rank(" + expression + ")"
 	}
-	def := domain.MustDefinition(id, id, "outputs:\n  "+id+"_value: "+expression+"\n")
+	def := domain.MustDefinition(id, id, "output: "+expression+"\n")
 	def.AllowPartialUniverse = partial
 	return def
 }
 
 func computePlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
-		Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
+		Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		Members: domain.AsMembers(factors...), TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}
@@ -78,7 +78,7 @@ func valueAt(t *testing.T, item ItemResult, at time.Time) any {
 func TestComputeTimeSeriesComputesTargetRowsOnly(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 3, false)
-	double := domain.MustDefinition("double", "double", "outputs:\n  double_value: close * 2\n")
+	double := domain.MustDefinition("double", "double", "output: close * 2\n")
 	plan := computePlan(target, []domain.FactorDef{mean, double}, []string{"BTC", "ETH"})
 	loaded := framesForBars(plan.Available, target, 3)
 	loaded.Frames["ETH"].Rows = loaded.Frames["ETH"].Rows[1:] // ETH 只有 2 根：窗口不完整
@@ -94,7 +94,7 @@ func TestComputeTimeSeriesComputesTargetRowsOnly(t *testing.T) {
 		require.Len(t, computation.Results[factor.FactorID], 2)
 	}
 	btc := computation.Results["mean"]["BTC"]
-	require.Equal(t, []string{"data_time", "series_tag", "mean_value"}, btc.Columns)
+	require.Equal(t, []string{"data_time", "series_tag", "mean"}, btc.Columns)
 	require.Len(t, btc.Rows, 1, "实时周期只输出目标时刻")
 	require.Equal(t, []any{target, "venue:binance", 101.0}, btc.Rows[0])
 	require.Nil(t, valueAt(t, computation.Results["mean"]["ETH"], target), "严格窗口：不完整时为 null")
@@ -124,7 +124,7 @@ func TestComputeCrossSectionRunsOnAvailableWhenAllowed(t *testing.T) {
 	require.Equal(t, "degraded", computation.FactorStates[factor.FactorID].Status)
 	require.Equal(t, []string{"ETH"}, computation.FactorStates[factor.FactorID].FailedSubjects)
 	item := computation.Results[factor.FactorID][""]
-	require.Equal(t, []string{"data_time", "series_tag", "subject_id", "spread_value"}, item.Columns)
+	require.Equal(t, []string{"data_time", "series_tag", "subject_id", "spread"}, item.Columns)
 	require.Len(t, item.Rows, 2)
 	ranks := map[string]any{}
 	for _, row := range item.Rows {
@@ -153,11 +153,11 @@ func TestComputeRecalcOutputsEveryTargetPeriod(t *testing.T) {
 func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	good := testPipelineFactor("good", domain.FactorTypeTimeSeries, 1, false)
-	broken := domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "outputs:\n  broken_value: from_the_future(close)\n",
-		Outputs: []string{"broken_value"}, LookbackPeriods: 1, FactorType: domain.FactorTypeTimeSeries}
+	broken := domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "output: from_the_future(close)\n",
+		Outputs: []string{"broken"}, LookbackPeriods: 1, FactorType: domain.FactorTypeTimeSeries}
 	var counted atomic.Int32
 	plan := computePlan(target, []domain.FactorDef{good, broken}, []string{"BTC", "ETH"})
-	runner := newComputeRunner(Config{OnCompileError: func(setID, factorID string) {
+	runner := newComputeRunner(Config{OnCompileError: func(taskID, factorID string) {
 		require.Equal(t, "broken", factorID)
 		counted.Add(1)
 	}})
@@ -176,7 +176,7 @@ func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
 // 因子输入列不是数值字段（窗口里没有）：整个程序失败，本期全部因子按计算失败处理。
 func TestComputeRejectsInputColumnMissingFromWindow(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := domain.MustDefinition("lastnote", "lastnote", "outputs:\n  lastnote_value: note * 2\n")
+	factor := domain.MustDefinition("lastnote", "lastnote", "output: note * 2\n")
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, framesFor(plan.Available, target))
 	require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestComputeIsDeterministicAcrossWorkersAndTags(t *testing.T) {
 
 func recalcPlan(start time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
-		Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
+		Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
 		Members: domain.AsMembers(factors...), TargetStart: start, TargetEnd: start.Add(3 * time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}

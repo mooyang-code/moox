@@ -12,8 +12,7 @@ const baseSpec = `# 动量
 params: {window: {type: int, min: 1, max: 60, default: 20}}
 let:
   r: close / delay(close, window) - 1
-outputs:
-  mom: r
+output: r
 `
 
 func baseFactor(t *testing.T) FactorDef {
@@ -39,13 +38,11 @@ func TestDefinitionHashChangesWithEveryContractField(t *testing.T) {
 		"默认窗口": strings.Replace(baseSpec, "default: 20", "default: 30", 1),
 		"窗口范围": strings.Replace(baseSpec, "max: 60", "max: 90", 1),
 		"表达式":  strings.Replace(baseSpec, "close / delay", "open / delay", 1),
-		"输出名":  strings.Replace(baseSpec, "mom: r", "momentum: r", 1),
 	}
 	for name, spec := range changes {
 		require.NotEqual(t, want, DefinitionHash(withSpec(t, spec, false)), name)
 	}
-	cross := `outputs:
-  r: cs_rank(close)
+	cross := `output: cs_rank(close)
 `
 	require.NotEqual(t, DefinitionHash(withSpec(t, cross, false)), DefinitionHash(withSpec(t, cross, true)), "allow_partial_universe")
 }
@@ -58,24 +55,23 @@ func TestDefinitionHashIgnoresNonContractChanges(t *testing.T) {
   window: {type: int, min: 1, max: 60, default: 20}
 let:
   ret: close/delay(close,window)-1   # 改了 let 名与格式
-outputs:
-  mom: ret
+output: ret
 `, false)
 	same.FactorID, same.Name, same.CategoryID = "other", "另一个名字", "momentum"
 	same.CreatedAt, same.UpdatedAt = time.Unix(1, 0), time.Unix(2, 0)
 	require.Equal(t, want, DefinitionHash(same))
 	require.NotEqual(t, base.SpecHash, same.SpecHash, "SpecHash 跟随原文")
 	// 编译失败（expr 版本不一致）时按原文派生稳定、非空的指纹：周期标记与账本要求指纹非空。
-	broken := FactorDef{Spec: "outputs: {x: nope(close)}"}
+	broken := FactorDef{Spec: "output: nope(close)"}
 	require.NotEmpty(t, DefinitionHash(broken))
 	require.Equal(t, DefinitionHash(broken), DefinitionHash(broken))
-	require.NotEqual(t, DefinitionHash(broken), DefinitionHash(FactorDef{Spec: "outputs: {x: nope(open)}"}))
+	require.NotEqual(t, DefinitionHash(broken), DefinitionHash(FactorDef{Spec: "output: nope(open)"}))
 	require.Empty(t, DefinitionHash(FactorDef{}))
 }
 
 func TestSpecHashIsStableAndPrefixed(t *testing.T) {
-	got := SpecHash("outputs: {x: close}\n")
+	got := SpecHash("output: close\n")
 	require.True(t, strings.HasPrefix(got, "sha256:"))
-	require.Equal(t, got, SpecHash("outputs: {x: close}\n"))
-	require.NotEqual(t, got, SpecHash("outputs: {x: open}\n"))
+	require.Equal(t, got, SpecHash("output: close\n"))
+	require.NotEqual(t, got, SpecHash("output: open\n"))
 }

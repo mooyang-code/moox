@@ -10,58 +10,44 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 )
 
-// factorOfflineFreezeWindow 是“引擎离线冻结参数”的告警窗口：最近这段时间内出现过就告警。
-const factorOfflineFreezeWindow = 30 * time.Minute
+// strategyParamStaleMetric 是策略模块导出的参数投递滞后指标（标签 space_id、instance_id）：实例在运行、策略有可变成员，
+// 并且最近连续多期的结果都没有把参数送达因子侧时为 1（设计 6.5、S7）。
+const strategyParamStaleMetric = "moox_strategy_param_delivery_stale"
 
-// buildFactorParamHealth 消费因子管理服务导出的参数指标（因子动态调参执行计划 2.10）：
-//   - 成员连续沿用参数超过阈值（默认 10 期）：参数写入方没有提交新参数，因子在沿用旧值。继续沿用、不自动回退默认值，只告警让人看。
-//   - 引擎离线冻结：FactorMgr 不可达时引擎在本地冻结参数，补报时管理端以自己的记录为准；最近 30 分钟内出现过就告警。
+// buildFactorParamHealth 消费策略模块导出的参数投递滞后指标：投递一直失败或被拒绝时，可变成员在沿用旧参数，
+// 继续沿用、不自动回退默认值，只告警让人看。
 func (b Builder) buildFactorParamHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	carried, carriedSeen, err := b.factorParamSeries(ctx, spaceID, now, "moox_factor_param_carry_alert", func(value float64, _ map[string]string) (string, bool) {
-		return "", value >= 1
-	}, func(labels map[string]string) string { return labels["set_id"] + "/" + labels["member"] })
+	stale, seen, err := b.paramDeliverySeries(ctx, spaceID, now)
 	if err != nil {
 		return nil, err
 	}
-	offline, offlineSeen, err := b.factorParamSeries(ctx, spaceID, now, "moox_factor_param_offline_freeze_timestamp_seconds", func(value float64, _ map[string]string) (string, bool) {
-		if value <= 0 || now.Sub(unixTime(value)) > factorOfflineFreezeWindow {
-			return "", false
-		}
-		return "（最近 " + unixTime(value).Format(time.RFC3339) + "）", true
-	}, func(labels map[string]string) string { return labels["set_id"] })
-	if err != nil {
-		return nil, err
+	spaces := make([]string, 0, len(seen))
+	for space := range seen {
+		spaces = append(spaces, space)
 	}
+	sort.Strings(spaces)
 	var out []BusinessStatus
-	emit := func(seen map[string]bool, alerts map[string][]string, module, down, healthy string) {
-		spaces := make([]string, 0, len(seen))
-		for space := range seen {
-			spaces = append(spaces, space)
+	for _, space := range spaces {
+		if list := stale[space]; len(list) > 0 {
+			sort.Strings(list)
+			out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_params", Module: "delivery", Status: "down",
+				Reason: "策略连续多期没有把参数送达因子侧（可变成员在沿用旧参数）：" + strings.Join(list, "；"), LastCheckedAt: now})
+			continue
 		}
-		sort.Strings(spaces)
-		for _, space := range spaces {
-			if list := alerts[space]; len(list) > 0 {
-				sort.Strings(list)
-				out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_params", Module: module, Status: "down", Reason: down + strings.Join(list, "；"), LastCheckedAt: now})
-				continue
-			}
-			out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_params", Module: module, Status: "healthy", Reason: healthy, LastCheckedAt: now})
-		}
+		out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_params", Module: "delivery", Status: "healthy", Reason: "策略参数投递正常", LastCheckedAt: now})
 	}
-	emit(carriedSeen, carried, "carry", "成员连续沿用参数超过阈值（参数写入方没有提交新参数，因子在沿用旧值）：", "因子参数没有长期沿用")
-	emit(offlineSeen, offline, "offline_freeze", "引擎在 FactorMgr 不可达时离线冻结了参数（补报时以管理端为准）：", "没有离线冻结参数")
 	return out, nil
 }
 
-// factorParamSeries 读取一个指标的全部序列，按空间收集满足 alert 的序列描述；seen 是出现过序列的空间。
-func (b Builder) factorParamSeries(ctx context.Context, spaceID string, now time.Time, metric string, alert func(float64, map[string]string) (string, bool), describe func(map[string]string) string) (map[string][]string, map[string]bool, error) {
-	// 目录一次最多返回 500 条：按 series_id 翻页读完整个指标，成员很多时排序靠后的异常成员也要参与检查。
+// paramDeliverySeries 读取参数投递滞后指标的全部序列，按空间收集告警的实例；seen 是出现过序列的空间。
+func (b Builder) paramDeliverySeries(ctx context.Context, spaceID string, now time.Time) (map[string][]string, map[string]bool, error) {
+	// 目录一次最多返回 500 条：按 series_id 翻页读完整个指标，实例很多时排序靠后的异常实例也要参与检查。
 	var series []monmetrics.MetricSeries
 	for after := ""; ; {
-		page, err := b.Metrics.Catalog().FindMetricSeriesAfterAt(ctx, metric, after, 500, now)
+		page, err := b.Metrics.Catalog().FindMetricSeriesAfterAt(ctx, strategyParamStaleMetric, after, 500, now)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -78,7 +64,7 @@ func (b Builder) factorParamSeries(ctx context.Context, spaceID string, now time
 		}
 		labels, err := datasetLabels(item.LabelsJSON)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s labels for %s: %w", metric, item.SeriesID, err)
+			return nil, nil, fmt.Errorf("%s labels for %s: %w", strategyParamStaleMetric, item.SeriesID, err)
 		}
 		space := strings.TrimSpace(labels["space_id"])
 		if space == "" || (spaceID != "" && space != spaceID) {
@@ -89,8 +75,8 @@ func (b Builder) factorParamSeries(ctx context.Context, spaceID string, now time
 			return nil, nil, err
 		}
 		seen[space] = true
-		if suffix, hit := alert(latest.Value, labels); hit {
-			alerts[space] = append(alerts[space], describe(labels)+suffix)
+		if latest.Value >= 1 {
+			alerts[space] = append(alerts[space], labels["instance_id"])
 		}
 	}
 	return alerts, seen, nil

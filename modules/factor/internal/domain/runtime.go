@@ -4,7 +4,9 @@ import "time"
 
 // FactorPeriodState is one member's outcome for the most recent live period.
 type FactorPeriodState struct {
-	MemberAlias    string
+	MemberKey string
+	// MemberKind 是成员类型：fixed 或 var。
+	MemberKind     string
 	FactorID       string
 	Status         string
 	FailedSubjects []string
@@ -12,15 +14,12 @@ type FactorPeriodState struct {
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string
-	// ParamsSource、ParamsDigest 是这一期冻结参数的来源与摘要。
-	ParamsSource string
-	ParamsDigest string
 }
 
-// SetRunSummary is the latest live period of one factor set as reported by
+// TaskRunSummary is the latest live period of one factor task as reported by
 // the compute engine.
-type SetRunSummary struct {
-	SetID          string
+type TaskRunSummary struct {
+	TaskID         string
 	LastPeriodTime int64
 	// CompletedAt 是引擎写完 LastPeriodTime 这一期的 Unix 秒；0 表示未知（引擎重启前的期次）。
 	CompletedAt    int64
@@ -33,10 +32,10 @@ type SetRunSummary struct {
 	WarmingSubjects int32
 }
 
-// LaneStatus is the backlog of one factor set's serial lane in the engine and
+// RunnerStatus is the backlog of one factor task's serial runner in the engine and
 // how much of the set's universe has its lookback window loaded.
-type LaneStatus struct {
-	SetID            string
+type RunnerStatus struct {
+	TaskID           string
 	Queued           int32
 	Active           bool
 	WarmupState      string
@@ -57,31 +56,17 @@ type EngineStatus struct {
 	ComputeWorkers  int32
 	// ExprVersion 是引擎内置的 expr 语义版本；与管理端不同时两边算出的 definition_hash 不一致。
 	ExprVersion     string
-	Lanes           []LaneStatus
-	RecentRuns      []SetRunSummary
+	Runners         []RunnerStatus
+	RecentRuns      []TaskRunSummary
 	CatalogHash     string
 	CatalogSyncedAt time.Time
-	// Watermarks 是各集合的连续水位与阻塞状态。
+	// Watermarks 是各任务的连续水位与阻塞状态。
 	Watermarks []SetWatermark
-	// ParamHealth 是各成员的参数状态：连续沿用的期数与最近一次离线冻结的时间，监控据此告警。
-	ParamHealth []MemberParamHealth
-	// OfflinePending 是本地还没补报给管理端的离线冻结数。
-	OfflinePending int
 }
 
-// MemberParamHealth 是一个成员的参数状态。CarriedPeriods 是连续沿用（含离线沿用）参数的期数，新提交生效后归零，
-// 从未提交过（默认值）不算沿用；AlertAfter 是超过多少期告警；LastOfflineAt 是最近一次离线冻结的时间（零值表示没有）。
-type MemberParamHealth struct {
-	SetID          string
-	Member         string
-	CarriedPeriods int
-	AlertAfter     int
-	LastOfflineAt  time.Time
-}
-
-// SetWatermark 是一个集合的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。
+// SetWatermark 是一个任务的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。
 type SetWatermark struct {
-	SetID            string
+	TaskID           string
 	CommittedThrough time.Time
 	Target           time.Time
 	BlockedSince     time.Time
@@ -99,11 +84,11 @@ type EngineInfo struct {
 	CatalogInSync   bool
 }
 
-// EngineSet is one enabled factor set as the engine computes it: the set, its
+// EngineTask is one enabled factor task as the engine computes it: the set, its
 // enabled members (alias with definition and source) and whether its result
 // dataset is ready to receive writes.
-type EngineSet struct {
-	Set         FactorSet
+type EngineTask struct {
+	Set         FactorTask
 	Members     []MemberDef
 	ResultReady bool
 }

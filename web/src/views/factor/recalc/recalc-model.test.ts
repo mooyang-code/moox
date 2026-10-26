@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { FactorMember, FactorSetInfo, RecalcJob } from "@/api/factor/types";
+import type { FactorMember, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import {
   defaultRange,
   enabledMemberIds,
   estimateRecalc,
   jobDisplay,
-  jobSource,
   progressPercent,
   quickRange,
   segmentStatuses
@@ -16,8 +15,8 @@ import {
 const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
   job_id: "job-1",
   request_id: "factor-recalc-1",
-  set_id: "set_a",
-  factor_ids: ["Bias"],
+  task_id: "task_a",
+  members: ["Bias"],
   subjects: [],
   start_time: "2026-10-01T00:00:00Z",
   end_time: "2026-10-03T00:00:00Z",
@@ -30,8 +29,10 @@ const job = (patch: Partial<RecalcJob> = {}): RecalcJob => ({
 });
 
 const member = (factorId: string, status: FactorMember["status"]): FactorMember => ({
-  set_id: "set_a",
+  task_id: "task_a",
   factor_id: factorId,
+  member_key: factorId,
+  kind: "fixed",
   status,
   factor: { factor_id: factorId } as FactorMember["factor"],
   created_at: "",
@@ -44,11 +45,6 @@ describe("recalc model", () => {
     expect(segmentStatuses("running")).toEqual(["accepted", "running"]);
     expect(segmentStatuses("succeeded")).toEqual(["succeeded"]);
     expect(segmentStatuses("failed")).toEqual(["failed", "cancelled"]);
-  });
-
-  it("source tag: factor-enable- prefix means 启用回填", () => {
-    expect(jobSource(job({ request_id: "factor-enable-Bias-123" }))).toEqual({ kind: "enable", label: "启用回填" });
-    expect(jobSource(job({ request_id: "factor-recalc-9" }))).toEqual({ kind: "manual", label: "手动" });
   });
 
   it("degraded note renders as 部分降级 not error", () => {
@@ -97,8 +93,8 @@ describe("recalc model", () => {
   });
 
   it("default factor selection is all enabled members", () => {
-    const info: FactorSetInfo = {
-      factor_set: {} as FactorSetInfo["factor_set"],
+    const info: FactorTaskInfo = {
+      factor_task: {} as FactorTaskInfo["factor_task"],
       members: [member("A", "enabled"), member("B", "disabled"), member("C", "enabled")]
     };
     expect(enabledMemberIds(info)).toEqual(["A", "C"]);

@@ -43,7 +43,7 @@ type Runtime struct {
 	gateway  *gatewayclient.Client
 	storage  *storageio.Client
 	manager  *ManagerClient
-	params   *paramFreezer
+	params   *paramSelector
 	catalog  *CatalogCache
 	pipeline *pipeline.Runner
 	runner   *measuredRunner
@@ -52,11 +52,11 @@ type Runtime struct {
 	metrics  *observability.Metrics
 	locks    *setlock.Locks
 	gap      *gapledger.Ledger
-	// continuity 维护各集合的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
+	// continuity 维护各任务的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
 	continuity  *eventconsumer.Continuity
 	watermarks  *watermark.Store
 	advanceKick chan string
-	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各集合的本地数据同步进展。
+	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各任务的本地数据同步进展。
 	appCtx   context.Context
 	catchups catchupTracker
 	filled   *filledPeriods
@@ -145,7 +145,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	pipelineConfig := pipeline.Config{
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
 		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
-		OnCompileError:  func(setID, factorID string) { r.metrics.CompileErrors.WithLabelValues(setID, factorID).Inc() },
+		OnCompileError:  func(taskID, factorID string) { r.metrics.CompileErrors.WithLabelValues(taskID, factorID).Inc() },
 		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax,
 	}
 	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
@@ -157,7 +157,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	logExpired(expired, cfg.Gap.GiveUpAfter)
 	r.metrics.GapGaveUp.Add(float64(len(expired)))
 	log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired))
-	// 记入预热中跳过的项、或者一批预热完成时唤醒跳过恢复：集合预热已就绪时这些项不用再等 Settle。
+	// 记入预热中跳过的项、或者一批预热完成时唤醒跳过恢复：任务预热已就绪时这些项不用再等 Settle。
 	gapKick := make(chan struct{}, 1)
 	kickGap := func() {
 		select {
@@ -176,11 +176,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}); err != nil {
 		return nil, err
 	}
-	if r.params, err = newParamFreezer(r.manager, cfg.Params.StateFile, cfg.Params.FreezeTimeout); err != nil {
+	if r.params, err = newParamSelector(r.manager, cfg.Params.CacheFile, cfg.Params.FetchTimeout); err != nil {
 		return nil, err
 	}
-	r.params.onOffline = func(setID string) { r.metrics.ParamOfflineFreezes.WithLabelValues(setID).Inc() }
-	r.params.onConflict = func(freeze domain.ParamFreeze) { r.metrics.ParamOfflineConflicts.WithLabelValues(freeze.SetID).Inc() }
+	r.params.onStale = func(taskID, reason string) { r.metrics.ParamStale.WithLabelValues(taskID, reason).Inc() }
 	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
 	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
@@ -215,20 +214,21 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate))
-	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, params: r.params,
-		history: func(ctx context.Context, set domain.EngineSet, subjects []string, bars int) error {
-			_, err := r.data.BackfillSet(ctx, set, subjects, bars, nil)
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
+	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
+		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
+			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
 		}}
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers, params: r.params,
+		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
-		onRepaired: func(setID string, period RepairedPeriod) {
-			if r.runs.repair(setID, period, time.Now()) {
-				log.Infof("factor_period_repaired set_id=%s period_time=%s", setID, period.Period.UTC().Format(time.RFC3339))
+		onRepaired: func(taskID string, period RepairedPeriod) {
+			if r.runs.repair(taskID, period, time.Now()) {
+				log.Infof("factor_period_repaired task_id=%s period_time=%s", taskID, period.Period.UTC().Format(time.RFC3339))
 			}
 		},
 	}
@@ -236,7 +236,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		data: r.data, sets: r.catalog, source: r.storage, exec: executor, periods: committedThrough{r.continuity},
 		active: r.active, interval: cfg.Sync.FollowInterval, chunk: cfg.Recalc.ChunkPeriods, now: time.Now,
 		onGapped: func(seriesstore.Source) { r.metrics.SeriesChangeGaps.Inc() }, blocked: map[seriesstore.Source]bool{},
-		params: r.params,
 	}
 
 	r.goRun(appCtx, filler.Run)
@@ -248,9 +247,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
-	r.goRun(appCtx, func(ctx context.Context) { r.params.Run(ctx, cfg.Engine.HeartbeatInterval) })
 	r.replays = newReplayManager(ReplayDeps{
-		Sets: r.catalog, Params: r.params, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 	})
 	r.goRun(appCtx, r.replays.Run)
@@ -345,15 +343,14 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 	}
 	if consumer := r.currentConsumer(); consumer != nil {
 		status.ConsumerRunning = consumer.Ready()
-		for _, lane := range consumer.LaneStatuses() {
-			status.Lanes = append(status.Lanes, domain.LaneStatus{SetID: lane.SetID, Queued: int32(lane.Queued), Active: lane.Active})
+		for _, runner := range consumer.RunnerStatuses() {
+			status.Runners = append(status.Runners, domain.RunnerStatus{TaskID: runner.TaskID, Queued: int32(runner.Queued), Active: runner.Active})
 		}
 	}
-	status.Lanes = withWarmup(status.Lanes, r.catalog.SetIDs(), r.pipeline.WarmupStatuses())
-	status.ParamHealth, status.OfflinePending = r.paramHealth()
+	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
-			status.Watermarks = append(status.Watermarks, domain.SetWatermark{SetID: state.SetID, CommittedThrough: state.CommittedThrough, Target: state.Target,
+			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,
 				BlockedSince: state.BlockedSince, BlockedPeriod: state.BlockedPeriod, BlockedReason: state.BlockedReason})
 		}
 	}
@@ -363,7 +360,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 func (r *Runtime) reportMetrics(ctx context.Context) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	knownSets := make(map[string]struct{})
+	knownTasks := make(map[string]struct{})
 	var gapSkipped int64
 	for {
 		select {
@@ -371,19 +368,19 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.reportGapMetrics(&gapSkipped)
-			currentSets := make(map[string]struct{})
+			currentTasks := make(map[string]struct{})
 			if consumer := r.currentConsumer(); consumer != nil {
-				for _, lane := range consumer.LaneStatuses() {
-					currentSets[lane.SetID] = struct{}{}
-					r.metrics.LaneBacklog.WithLabelValues(lane.SetID).Set(float64(lane.Queued))
+				for _, runner := range consumer.RunnerStatuses() {
+					currentTasks[runner.TaskID] = struct{}{}
+					r.metrics.RunnerBacklog.WithLabelValues(runner.TaskID).Set(float64(runner.Queued))
 				}
 			}
-			for setID := range knownSets {
-				if _, ok := currentSets[setID]; !ok {
-					r.metrics.LaneBacklog.WithLabelValues(setID).Set(0)
+			for taskID := range knownTasks {
+				if _, ok := currentTasks[taskID]; !ok {
+					r.metrics.RunnerBacklog.WithLabelValues(taskID).Set(0)
 				}
 			}
-			knownSets = currentSets
+			knownTasks = currentTasks
 		}
 	}
 }
@@ -419,7 +416,7 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	}
 	details := map[string]any{
 		"reasons": check.Reasons, "engine_id": r.identity.EngineID, "boot_id": r.identity.BootID,
-		"catalog_hash": catalog.Hash, "catalog_sets": catalog.Sets, "consumer_ready": consumerReady,
+		"catalog_hash": catalog.Hash, "catalog_tasks": catalog.Sets, "consumer_ready": consumerReady,
 		"lease_conflict": lease.Conflict,
 	}
 	details["gap_pending"] = r.gap.PendingCount()
@@ -505,37 +502,37 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-// withWarmup 给每个启用因子集的 lane 补上预热状态。只上报目录里启用的因子集：
-// 消费者订阅的是整个采集周期事件族，任何数据集（例如还没有建因子集的 1h K 线）的事件都会让处理器按
-// “数据集+频率”建一条 lane，再去查有没有启用的因子集；没有因子集的 lane 不是计算任务，不能上报，
+// withWarmup 给每个启用因子任务的 runner 补上预热状态。只上报目录里启用的因子任务：
+// 消费者订阅的是整个采集周期事件族，任何数据集（例如还没有建因子任务的 1h K 线）的事件都会让处理器按
+// “数据集+频率”建一条 runner，再去查有没有启用的因子任务；没有因子任务的 runner 不是计算任务，不能上报，
 // 否则它们会被标成 warming，永远等不到首个周期。
-// 目录里的因子集自引擎启动以来还没有周期到达，说明还没有载入任何数据，同样是 warming。
-func withWarmup(lanes []domain.LaneStatus, setIDs []string, warmups []pipeline.WarmupStatus) []domain.LaneStatus {
-	bySet := make(map[string]pipeline.WarmupStatus, len(warmups))
+// 目录里的因子任务自引擎启动以来还没有周期到达，说明还没有载入任何数据，同样是 warming。
+func withWarmup(runners []domain.RunnerStatus, setIDs []string, warmups []pipeline.WarmupStatus) []domain.RunnerStatus {
+	byTask := make(map[string]pipeline.WarmupStatus, len(warmups))
 	for _, warmup := range warmups {
-		bySet[warmup.SetID] = warmup
+		byTask[warmup.TaskID] = warmup
 	}
 	enabled := make(map[string]struct{}, len(setIDs))
-	for _, setID := range setIDs {
-		enabled[setID] = struct{}{}
+	for _, taskID := range setIDs {
+		enabled[taskID] = struct{}{}
 	}
-	kept := make([]domain.LaneStatus, 0, len(enabled))
+	kept := make([]domain.RunnerStatus, 0, len(enabled))
 	index := make(map[string]int, len(enabled))
-	for _, lane := range lanes {
-		if _, ok := enabled[lane.SetID]; !ok {
+	for _, runner := range runners {
+		if _, ok := enabled[runner.TaskID]; !ok {
 			continue
 		}
-		index[lane.SetID] = len(kept)
-		kept = append(kept, lane)
+		index[runner.TaskID] = len(kept)
+		kept = append(kept, runner)
 	}
-	for _, setID := range setIDs {
-		if _, ok := index[setID]; !ok {
-			index[setID] = len(kept)
-			kept = append(kept, domain.LaneStatus{SetID: setID})
+	for _, taskID := range setIDs {
+		if _, ok := index[taskID]; !ok {
+			index[taskID] = len(kept)
+			kept = append(kept, domain.RunnerStatus{TaskID: taskID})
 		}
 	}
-	for setID, i := range index {
-		warmup, ok := bySet[setID]
+	for taskID, i := range index {
+		warmup, ok := byTask[taskID]
 		if !ok {
 			kept[i].WarmupState = pipeline.WarmupWarming
 			continue
@@ -550,9 +547,9 @@ func withWarmup(lanes []domain.LaneStatus, setIDs []string, warmups []pipeline.W
 // committedThrough 把连续水位适配成失效重算需要的「已经算过的最后一期」。
 type committedThrough struct{ c *eventconsumer.Continuity }
 
-func (c committedThrough) CommittedThrough(setID string) (time.Time, bool) {
+func (c committedThrough) CommittedThrough(taskID string) (time.Time, bool) {
 	for _, state := range c.c.States() {
-		if state.SetID == setID && !state.CommittedThrough.IsZero() {
+		if state.TaskID == taskID && !state.CommittedThrough.IsZero() {
 			return state.CommittedThrough, true
 		}
 	}

@@ -14,13 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type replaySets struct{ set domain.EngineSet }
+type replayTasks struct{ set domain.EngineTask }
 
-func (r replaySets) SetByID(id string) (domain.EngineSet, SetLookup) {
-	if id == r.set.Set.SetID {
+func (r replayTasks) SetByID(id string) (domain.EngineTask, SetLookup) {
+	if id == r.set.Set.TaskID {
 		return r.set, SetFound
 	}
-	return domain.EngineSet{}, SetGone
+	return domain.EngineTask{}, SetGone
 }
 
 type replaySource struct{}
@@ -41,12 +41,12 @@ func (replayColumns) ListColumns(context.Context, string, string) ([]storageio.C
 
 var rt0 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
-func newReplayManagerForTest(t *testing.T) (*replayManager, domain.EngineSet) {
+func newReplayManagerForTest(t *testing.T) (*replayManager, domain.EngineTask) {
 	t.Helper()
-	return newReplayManagerWithSet(t, uncompiled(engineSet("fset_replay", "dataset_a", true, "bias")))
+	return newReplayManagerWithTask(t, uncompiled(engineTask("ftask_replay", "dataset_a", true, "bias")))
 }
 
-func newReplayManagerWithSet(t *testing.T, set domain.EngineSet) (*replayManager, domain.EngineSet) {
+func newReplayManagerWithTask(t *testing.T, set domain.EngineTask) (*replayManager, domain.EngineTask) {
 	t.Helper()
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func newReplayManagerWithSet(t *testing.T, set domain.EngineSet) (*replayManager
 	write("GONE", 8) // 数据到不了回放终点：被排除
 	runner := pipeline.NewRunner(nil, nil, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	return newReplayManager(ReplayDeps{
-		Sets: replaySets{set: set}, Source: replaySource{}, Columns: replayColumns{}, Store: store, Runner: runner,
+		Sets: replayTasks{set: set}, Source: replaySource{}, Columns: replayColumns{}, Store: store, Runner: runner,
 	}), set
 }
 
@@ -78,7 +78,7 @@ func TestReplayOpenAndStep(t *testing.T) {
 	m, _ := newReplayManagerForTest(t)
 	ctx := context.Background()
 	open, status, err := m.Open(ctx, ReplayOpenRequest{
-		ReplayID: "r1", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1,
+		ReplayID: "r1", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1,
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status)
@@ -118,17 +118,17 @@ func TestReplayOpenAndStep(t *testing.T) {
 func TestReplayQuoteCloseAndValidation(t *testing.T) {
 	m, _ := newReplayManagerForTest(t)
 	ctx := context.Background()
-	_, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Add(time.Second).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339)})
+	_, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Add(time.Second).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339)})
 	require.Error(t, err, "没有对齐的区间被拒绝")
 	require.Equal(t, http.StatusBadRequest, status)
-	_, status, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(30 * time.Minute).Format(time.RFC3339)})
+	_, status, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(30 * time.Minute).Format(time.RFC3339)})
 	require.Error(t, err, "本地数据到不了终点")
 	require.Equal(t, http.StatusConflict, status)
-	_, status, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", SetID: "missing", From: rt0.Format(time.RFC3339), To: rt0.Add(time.Minute).Format(time.RFC3339)})
+	_, status, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r2", TaskID: "missing", From: rt0.Format(time.RFC3339), To: rt0.Add(time.Minute).Format(time.RFC3339)})
 	require.Error(t, err)
 	require.Equal(t, http.StatusNotFound, status)
 
-	_, _, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r3", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), Quote: "close"})
+	_, _, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r3", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), Quote: "close"})
 	require.NoError(t, err)
 	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "r3", Period: rt0.Add(5 * time.Minute).Format(time.RFC3339)})
 	require.NoError(t, err)
@@ -151,7 +151,7 @@ func TestReplayUniverseExcludesNotYetListedSubjects(t *testing.T) {
 	_, err := store.WriteRange(ctx, src, seriesstore.SubjectWrite{Subject: "LATE", From: rt0.Add(8 * time.Minute), To: rt0.Add(20 * time.Minute), Rows: cols}, seriesstore.WriteOptions{})
 	require.NoError(t, err)
 	m.deps.Source = lateSource{}
-	_, _, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r9", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1})
+	_, _, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r9", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1})
 	require.NoError(t, err)
 
 	early, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "r9", Period: rt0.Add(6 * time.Minute).Format(time.RFC3339)})
@@ -173,7 +173,7 @@ func (lateSource) ListDatasetSubjects(context.Context, string, string) ([]string
 func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
 	m, _ := newReplayManagerForTest(t)
 	ctx := context.Background()
-	req := ReplayOpenRequest{ReplayID: "r10", SetID: "fset_replay", From: rt0.Add(1 * time.Minute).Format(time.RFC3339), To: rt0.Add(5 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1}
+	req := ReplayOpenRequest{ReplayID: "r10", TaskID: "ftask_replay", From: rt0.Add(1 * time.Minute).Format(time.RFC3339), To: rt0.Add(5 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1}
 	_, status, err := m.Open(ctx, req)
 	require.Error(t, err)
 	require.Equal(t, http.StatusConflict, status)

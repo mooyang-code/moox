@@ -8,7 +8,7 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
-        <a-empty v-if="!store.sets.length && !store.loading" description="当前空间没有计算任务">
+        <a-empty v-if="!store.tasks.length && !store.loading" description="当前空间没有计算任务">
           <template #extra>
             <a-button @click="goTasks">前往计算任务</a-button>
           </template>
@@ -17,11 +17,11 @@
         <template v-else>
           <div class="result-toolbar">
             <span class="result-count">
-              共 {{ pagination.total }} 条补算任务
+              共 {{ pagination.total }} 条补算作业
               <InfoTip text="启用因子时的历史回填与手动补算都在这里；有进行中的任务时每 3 秒自动刷新。" />
             </span>
             <a-space wrap>
-              <SetSelect :model-value="store.currentSetId" @change="onSetChange" />
+              <SetSelect :model-value="store.currentTaskId" @change="onSetChange" />
               <a-button :loading="loading" @click="refresh">
                 <template #icon><icon-refresh /></template>
                 刷新
@@ -51,14 +51,11 @@
             @page-change="onPageChange"
             @page-size-change="onPageSizeChange"
           >
-            <template #empty><a-empty description="该计算任务还没有补算任务" /></template>
+            <template #empty><a-empty description="该计算任务还没有补算作业" /></template>
             <template #columns>
               <a-table-column title="任务" :width="260">
                 <template #cell="{ record }">
                   <div class="job-id" :title="record.job.job_id">{{ record.job.job_id }}</div>
-                  <a-tag size="small" :color="record.source.kind === 'enable' ? 'arcoblue' : 'gray'">{{
-                    record.source.label
-                  }}</a-tag>
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
@@ -94,7 +91,7 @@
               </a-table-column>
               <a-table-column title="操作" :width="90" align="center" fixed="right">
                 <template #cell="{ record }">
-                  <a-popconfirm content="取消该补算任务？" @ok="cancel(record.job)">
+                  <a-popconfirm content="取消该补算作业？" @ok="cancel(record.job)">
                     <a-button size="mini" type="text" status="danger" :disabled="!isActiveJob(record.job)">取消</a-button>
                   </a-popconfirm>
                 </template>
@@ -114,24 +111,24 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
-import type { FactorSet, RecalcJob } from "@/api/factor/types";
+import type { FactorTask, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
-import SetSelect from "@/views/factor/shared/set-select.vue";
+import SetSelect from "@/views/factor/shared/task-select.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
-import { STATUS_SEGMENTS, jobDisplay, jobSource, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
 
 defineOptions({ name: "FactorRecalc" });
 
 const route = useRoute();
 const router = useRouter();
-const { store, spaceId, selectSet, navigate, reload } = useFactorScope({ requireSet: true, poll: false });
+const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true, poll: false });
 
-const set = computed<FactorSet | undefined>(() => store.current?.factor_set);
+const set = computed<FactorTask | undefined>(() => store.current?.factor_task);
 const highlightJob = computed(() => {
   const value = route.query.job;
   return typeof value === "string" ? value : "";
@@ -148,7 +145,6 @@ const rows = computed(() =>
   jobs.value.map(job => ({
     job_id: job.job_id,
     job,
-    source: jobSource(job),
     display: jobDisplay(job),
     progress: progressPercent(job)
   }))
@@ -167,7 +163,7 @@ async function load(options: { silent?: boolean } = {}) {
   try {
     const statuses = segmentStatuses(segment.value);
     const rsp = await listRecalcJobs({
-      set_id: current.set_id,
+      task_id: current.task_id,
       ...(statuses ? { statuses } : {}),
       page: { page: pagination.current, size: pagination.pageSize }
     });
@@ -176,7 +172,7 @@ async function load(options: { silent?: boolean } = {}) {
     applyPageResult(pagination, rsp.page_result);
     void scrollToHighlight();
   } catch (error) {
-    if (gate.isCurrent(token) && !options.silent) Message.error(error instanceof Error ? error.message : "补算任务加载失败");
+    if (gate.isCurrent(token) && !options.silent) Message.error(error instanceof Error ? error.message : "补算作业加载失败");
   } finally {
     if (gate.isCurrent(token)) loading.value = false;
   }
@@ -193,8 +189,8 @@ function refresh() {
   return load();
 }
 
-function onSetChange(setId: string) {
-  selectSet(setId);
+function onSetChange(taskId: string) {
+  selectTask(taskId);
 }
 
 function onSegmentChange() {
@@ -216,10 +212,10 @@ function onPageSizeChange(size: number) {
 async function cancel(job: RecalcJob) {
   try {
     await cancelRecalcJob(job.job_id);
-    Message.success("补算任务已取消");
+    Message.success("补算作业已取消");
     await load({ silent: true });
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "取消补算任务失败");
+    Message.error(error instanceof Error ? error.message : "取消补算作业失败");
   }
 }
 
@@ -241,7 +237,7 @@ usePolling(
 );
 
 watch(
-  () => set.value?.set_id,
+  () => set.value?.task_id,
   () => {
     pagination.current = 1;
     void load();

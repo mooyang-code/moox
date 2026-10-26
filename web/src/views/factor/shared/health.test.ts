@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { SetRunSummary } from "@/api/factor/types";
+import type { TaskRunSummary } from "@/api/factor/types";
 import { barLagText, closedBarLag, formatLag, freqSeconds, runBarLag, setHealth } from "./health";
 
 const LAST = 1_699_999_980;
 
-const run = (patch: Partial<SetRunSummary> = {}): SetRunSummary => ({
-  set_id: "s",
+const run = (patch: Partial<TaskRunSummary> = {}): TaskRunSummary => ({
+  task_id: "s",
   // 周期时间都按周期对齐（这里是整分钟）：服务端写入的就是对齐后的开盘时间。
   last_period_time: LAST,
   last_status: "complete",
@@ -27,7 +27,6 @@ describe("setHealth", () => {
 
   it("reports lifecycle states before run state", () => {
     expect(setHealth({ status: "pending", freq: "1m" }, run()).key).toBe("pending");
-    expect(setHealth({ status: "deleting", freq: "1m" }, run()).key).toBe("deleting");
     expect(setHealth({ status: "disabled", freq: "1m" }, run()).key).toBe("disabled");
   });
 

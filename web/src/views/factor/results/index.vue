@@ -24,8 +24,8 @@
               刷新结果
             </a-button>
           </div>
-          <a-tabs v-model:active-key="activeSetId" type="rounded" size="medium" class="result-tabs" @change="onTabChange">
-            <a-tab-pane v-for="tab in tabs" :key="tab.setId" :title="tab.title" />
+          <a-tabs v-model:active-key="activeTaskId" type="rounded" size="medium" class="result-tabs" @change="onTabChange">
+            <a-tab-pane v-for="tab in tabs" :key="tab.taskId" :title="tab.title" />
           </a-tabs>
 
           <a-alert v-if="scopeError" type="error" show-icon class="results-alert">
@@ -107,7 +107,7 @@ import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { listFactorCategories } from "@/api/factor";
-import type { FactorCategory, FactorSetInfo } from "@/api/factor/types";
+import type { FactorCategory, FactorTaskInfo } from "@/api/factor/types";
 import { listAllViewColumns, listViews } from "@/api/storage/metadata";
 import type { TimeSeriesKey, View, ViewColumn } from "@/api/storage/types";
 import { getStrategyDisplaySettings } from "@/api/strategy";
@@ -115,7 +115,7 @@ import type { DisplayHidden } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
-import { pickResultView, resolveActiveSetId, resultSets, resultSummary, resultTabTitle } from "./results-model";
+import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary, resultTabTitle } from "./results-model";
 import { buildFactorScope } from "./factor-scope";
 import { decodeConditions, encodeConditions, toFilterState, type FactorCondition } from "./factor-condition";
 import {
@@ -134,17 +134,19 @@ defineOptions({ name: "FactorResults" });
 
 const route = useRoute();
 const router = useRouter();
-const { store, spaceId, selectSet, navigate, reload } = useFactorScope({ requireSet: true });
+const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true });
 
-const available = computed<FactorSetInfo[]>(() => resultSets(store.sets));
+const available = computed<FactorTaskInfo[]>(() => resultTasks(store.tasks));
 const tabs = computed(() =>
-  available.value.map((info: FactorSetInfo) => ({
-    setId: info.factor_set.set_id,
-    title: resultTabTitle(info, store.setLabel(info.factor_set))
+  available.value.map((info: FactorTaskInfo) => ({
+    taskId: info.factor_task.task_id,
+    title: resultTabTitle(info, store.taskLabel(info.factor_task))
   }))
 );
-const activeSetId = ref("");
-const activeInfo = computed(() => available.value.find((item: FactorSetInfo) => item.factor_set.set_id === activeSetId.value));
+const activeTaskId = ref("");
+const activeInfo = computed(() =>
+  available.value.find((item: FactorTaskInfo) => item.factor_task.task_id === activeTaskId.value)
+);
 const summary = computed(() => resultSummary(activeInfo.value ?? {}));
 
 const resultView = ref<View | null>(null);
@@ -188,7 +190,7 @@ function stamp() {
 }
 
 async function loadResultView() {
-  const current = activeInfo.value?.factor_set;
+  const current = activeInfo.value?.factor_task;
   const token = viewGate.next();
   resultView.value = null;
   scopeReady.value = false;
@@ -215,22 +217,22 @@ async function loadResultView() {
   }
 }
 
-async function loadScope(current: FactorSetInfo["factor_set"], view: View, token: number) {
+async function loadScope(current: FactorTaskInfo["factor_task"], view: View, token: number) {
   try {
     const [columns, categoryList, hidden] = await Promise.all([
       listAllViewColumns(current.space_id, view.view_id),
       // 分类只用于展示名称和排序，读取失败时按 ID 展示。
       listFactorCategories().catch(() => [] as FactorCategory[]),
       // 外显设置只影响展示：读取失败时全部展示。
-      current.owner_instance_id
-        ? getStrategyDisplaySettings(current.owner_instance_id).catch(() => undefined)
+      current.bound_instance_id
+        ? getStrategyDisplaySettings(current.bound_instance_id).catch(() => undefined)
         : Promise.resolve(undefined)
     ]);
     if (!viewGate.isCurrent(token)) return;
     viewColumns.value = columns;
     categories.value = categoryList;
     displayHidden.value = hidden;
-    settings.value = loadColumnSettings(current.set_id, scope.value);
+    settings.value = loadColumnSettings(current.task_id, scope.value);
     applyRouteConditions(true);
     scopeReady.value = true;
   } catch (error) {
@@ -255,8 +257,8 @@ function setConditions(next: FactorCondition[]) {
 
 function updateSettings(next: ColumnSettings) {
   settings.value = next;
-  const setId = activeInfo.value?.factor_set.set_id;
-  if (setId) saveColumnSettings(setId, next);
+  const taskId = activeInfo.value?.factor_task.task_id;
+  if (taskId) saveColumnSettings(taskId, next);
 }
 
 function openValues(rowKey?: TimeSeriesKey) {
@@ -266,7 +268,7 @@ function openValues(rowKey?: TimeSeriesKey) {
 }
 
 function onTabChange(key: string | number) {
-  selectSet(String(key));
+  selectTask(String(key));
 }
 
 async function refreshResults() {
@@ -279,18 +281,18 @@ function goTasks() {
   void router.push("/factor/tasks");
 }
 
-// 选中项跟随 store.currentSetId（?set= 已由 use-factor-scope 同步）；若它不在可浏览集合里，回落到第一个。
+// 选中项跟随 store.currentTaskId（?task= 已由 use-factor-scope 同步）；若它不在可浏览任务里，回落到第一个。
 watch(
-  () => [store.currentSetId, available.value.map((item: FactorSetInfo) => item.factor_set.set_id).join(",")],
+  () => [store.currentTaskId, available.value.map((item: FactorTaskInfo) => item.factor_task.task_id).join(",")],
   () => {
-    const next = resolveActiveSetId(available.value, store.currentSetId);
-    if (next !== activeSetId.value) activeSetId.value = next;
+    const next = resolveActiveTaskId(available.value, store.currentTaskId);
+    if (next !== activeTaskId.value) activeTaskId.value = next;
   },
   { immediate: true }
 );
 
 watch(
-  () => activeInfo.value?.factor_set.result_dataset_id,
+  () => activeInfo.value?.factor_task.result_dataset_id,
   () => void loadResultView(),
   { immediate: true }
 );
@@ -303,7 +305,7 @@ watch(
   }
 );
 
-watch(() => store.sets, stamp, { immediate: true });
+watch(() => store.tasks, stamp, { immediate: true });
 </script>
 
 <style scoped lang="scss">

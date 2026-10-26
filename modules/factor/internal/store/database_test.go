@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorschema "github.com/mooyang-code/moox/modules/factor/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +17,7 @@ func TestOpenCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, s.db.Raw(`
 		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
 	`).Scan(&tables).Error)
-	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_param_freezes", "t_factor_param_frozen_periods", "t_factor_param_requests", "t_factor_param_snapshots", "t_factor_recalc_jobs", "t_factor_set_members", "t_factor_sets"}, tables)
+	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks"}, tables)
 }
 
 // 已有库缺少后来新增的引擎心跳表时，启动时补建，已有数据保留。
@@ -39,7 +40,7 @@ func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	require.NoError(t, s.db.Exec("CREATE TABLE t_factor_old_ledger (c_id TEXT)").Error)
-	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_sets(c_id TEXT)"), "unexpected table t_factor_old_ledger")
+	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_tasks(c_id TEXT)"), "unexpected table t_factor_old_ledger")
 	require.NoError(t, s.Close())
 }
 
@@ -58,24 +59,24 @@ func TestBuildSQLiteDSNUsesForeignKeysAndDurablePragmas(t *testing.T) {
 func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", "disabled")))
+	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", "disabled")))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
-	_, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
+	_, err := s.AddMember(ctx, "task_prices", "factor_close", "factor_close", domain.MemberKindFixed, nil)
 	require.NoError(t, err)
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
-		JobID: "job-1", RequestID: "req-1", SetID: "set_prices", StartTime: 100, EndTime: 200,
+		JobID: "job-1", RequestID: "req-1", TaskID: "task_prices", StartTime: 100, EndTime: 200,
 	})
 	require.NoError(t, err)
 
 	for _, tableAndKey := range []struct{ table, key string }{
-		{"t_factor_sets", "set_prices"},
+		{"t_factor_tasks", "task_prices"},
 		{"t_factor_defs", "factor_close"},
-		{"t_factor_set_members", "factor_close"},
+		{"t_factor_task_members", "factor_close"},
 		{"t_factor_recalc_jobs", "job-1"},
 	} {
 		keyColumn := map[string]string{
-			"t_factor_sets": "c_set_id", "t_factor_defs": "c_factor_id", "t_factor_recalc_jobs": "c_job_id",
-			"t_factor_set_members": "c_factor_id",
+			"t_factor_tasks": "c_task_id", "t_factor_defs": "c_factor_id", "t_factor_recalc_jobs": "c_job_id",
+			"t_factor_task_members": "c_factor_id",
 		}[tableAndKey.table]
 		touched := "c_status = c_status"
 		if tableAndKey.table == "t_factor_defs" {
@@ -94,10 +95,10 @@ func TestApplySchemaRejectsObsoleteDefsColumns(t *testing.T) {
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	require.NoError(t, s.db.Exec("DROP TABLE t_factor_set_members").Error)
+	require.NoError(t, s.db.Exec("DROP TABLE t_factor_task_members").Error)
 	require.NoError(t, s.db.Exec("DROP TABLE t_factor_defs").Error)
 	require.NoError(t, s.db.Exec(`CREATE TABLE t_factor_defs (
-		c_factor_id TEXT NOT NULL PRIMARY KEY, c_set_id TEXT NOT NULL, c_name TEXT NOT NULL,
+		c_factor_id TEXT NOT NULL PRIMARY KEY, c_task_id TEXT NOT NULL, c_name TEXT NOT NULL,
 		c_factor_type TEXT NOT NULL, c_obsolete TEXT NOT NULL,
 		c_input_columns_json TEXT NOT NULL, c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL,
 		c_lookback_periods INTEGER NOT NULL, c_allow_partial_universe INTEGER NOT NULL,

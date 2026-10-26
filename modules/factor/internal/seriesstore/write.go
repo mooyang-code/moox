@@ -258,7 +258,7 @@ func checkRegion(src Source, g grid, w SubjectWrite) error {
 func validateRows(c *Columns) error {
 	n := c.Len()
 	if len(c.Tags) != n || len(c.Filled) != n || len(c.Cols) != len(c.Fields) {
-		return fmt.Errorf("%w：行集合的各列长度不一致", ErrInvalidWrite)
+		return fmt.Errorf("%w：行任务的各列长度不一致", ErrInvalidWrite)
 	}
 	for i, f := range c.Fields {
 		col := c.Cols[i]

@@ -127,7 +127,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		return err
 	}
 	definitions := map[string]string{
-		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子集回填，storage-node 吃掉 4 核主机的
+		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子任务回填，storage-node 吃掉 4 核主机的
 		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 5 分钟都不低于 90%，原来的规则一条告警也没出。
 		hostmetrics.HostMetricCPU:    `{"threshold":80,"recovery_threshold":70}`,
 		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,

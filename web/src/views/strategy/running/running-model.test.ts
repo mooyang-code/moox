@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRunningQuery, emptyKind, instanceDeleteState, listKey, pageAfterRemoval, parseRunningQuery } from "./running-model";
+import { buildRunningQuery, emptyKind, listKey, parseRunningQuery } from "./running-model";
 
 describe("running page model", () => {
   it("normalizes the URL state", () => {
@@ -39,23 +39,11 @@ describe("running page model", () => {
     expect(listKey({ ...base, page: 3 })).not.toBe(listKey(base));
   });
 
-  it("explains why an instance cannot be deleted", () => {
-    expect(instanceDeleteState({ enabled: true, session_id: "s" })).toMatchObject({ disabled: true });
-    expect(instanceDeleteState({ enabled: false, session_id: "s" }).reason).toContain("会话");
-    expect(instanceDeleteState({ enabled: false, session_id: "" })).toEqual({ disabled: false, reason: "" });
-  });
-
   it("distinguishes empty states", () => {
     expect(emptyKind({ loading: true, error: "", count: 0, filtered: false })).toBe("none");
     expect(emptyKind({ loading: false, error: "x", count: 0, filtered: true })).toBe("error");
     expect(emptyKind({ loading: false, error: "", count: 0, filtered: true })).toBe("no-match");
     expect(emptyKind({ loading: false, error: "", count: 0, filtered: false })).toBe("no-instances");
     expect(emptyKind({ loading: false, error: "", count: 2, filtered: false })).toBe("none");
-  });
-
-  it("steps back a page when the last page becomes empty", () => {
-    expect(pageAfterRemoval(3, 0)).toBe(2);
-    expect(pageAfterRemoval(1, 0)).toBe(1);
-    expect(pageAfterRemoval(3, 4)).toBe(3);
   });
 });

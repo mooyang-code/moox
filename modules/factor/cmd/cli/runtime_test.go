@@ -41,24 +41,24 @@ func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	require.Empty(t, cfg.GatewayClient.KeyID)
 }
 
-func TestValidateImportableSetRejectsPendingAndDeleting(t *testing.T) {
-	for _, status := range []string{domain.SetStatusPending, domain.SetStatusDeleting} {
-		err := validateImportableSet(domain.FactorSet{Status: status})
+func TestValidateImportableTaskRejectsPending(t *testing.T) {
+	for _, status := range []string{domain.TaskStatusPending} {
+		err := validateImportableTask(domain.FactorTask{Status: status})
 		require.Error(t, err)
 	}
-	require.NoError(t, validateImportableSet(domain.FactorSet{Status: domain.SetStatusEnabled}))
-	require.NoError(t, validateImportableSet(domain.FactorSet{Status: domain.SetStatusDisabled}))
+	require.NoError(t, validateImportableTask(domain.FactorTask{Status: domain.TaskStatusEnabled}))
+	require.NoError(t, validateImportableTask(domain.FactorTask{Status: domain.TaskStatusDisabled}))
 }
 
 func TestImportLockUsesServiceDatabaseLockDirectory(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "factor.db")
-	unlock, err := lockImport(context.Background(), databasePath, []string{"momentum", "bias", "momentum"}, "set_prices")
+	unlock, err := lockImport(context.Background(), databasePath, []string{"momentum", "bias", "momentum"}, "task_prices")
 	require.NoError(t, err)
 	defer unlock()
 	locks := setlock.New(databasePath + ".locks")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = locks.LockContext(ctx, "set_prices")
+	_, err = locks.LockContext(ctx, "task_prices")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	_, err = locks.LockFactorContext(ctx, "bias")
 	require.ErrorIs(t, err, context.DeadlineExceeded)

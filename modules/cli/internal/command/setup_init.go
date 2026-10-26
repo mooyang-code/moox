@@ -357,22 +357,27 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
+			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Tasks: len(plan.Tasks), Members: plan.memberCount()}
 			reportFactorWarnings(plan.Warnings)
 			if !plan.empty() {
 				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
 				if openErr != nil {
 					return openErr
 				}
-				summary, err = service.Apply(cmd.Context(), plan)
+				var applyErr error
+				summary, applyErr = service.Apply(cmd.Context(), plan)
 				closeErr := service.Close()
-				if err != nil {
-					return err
+				summary.Warnings = plan.Warnings
+				if applyErr != nil {
+					// 冲突时也输出逐项结果，再以错误结束。
+					if len(summary.Items) > 0 {
+						_ = writeSetupJSON(cmd, map[string]any{"status": "failed", "factors": summary})
+					}
+					return applyErr
 				}
 				if closeErr != nil {
 					return closeErr
 				}
-				summary.Warnings = plan.Warnings
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")

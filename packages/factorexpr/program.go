@@ -164,8 +164,9 @@ func NewProgram(inputs []ProgramInput) (*Program, error) {
 			memo[node] = index
 			return index
 		}
-		for _, output := range input.Factor.Outputs {
-			program.Outputs = append(program.Outputs, ProgramOutput{Key: input.Key, FactorID: input.FactorID, Name: output.Name,
+		names := input.Factor.OutputNamesFor(input.FactorID)
+		for i, output := range input.Factor.Outputs {
+			program.Outputs = append(program.Outputs, ProgramOutput{Key: input.Key, FactorID: input.FactorID, Name: names[i],
 				Node: visit(output.Root)})
 		}
 		program.Lookback = max(program.Lookback, input.Factor.Lookback)

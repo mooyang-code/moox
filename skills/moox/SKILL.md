@@ -99,7 +99,7 @@ rows at the next Storage cleanup, so confirm it with the user first. Do not edit
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
-the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
+the Factor durable is `factor_collector_period_v1`. Use task-labeled period and runner metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 
 初始化完成后，如果用户在 macOS 上操作且控制台是 internal TLS，要提醒用户让浏览器信任管理台 CA（命令见 [`references/custom-setup.md`](references/custom-setup.md) 的“macOS：初始化后让浏览器信任管理台证书”），并且不要替用户清理钥匙串里的这张证书。
@@ -127,6 +127,13 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 `scripts/factor_py_check.py run-python` 运行原因子、`scripts/factor-expr.sh eval` 试算 DSL，`factor_py_check.py compare` 按验收规则逐值比较，
 向用户汇报差异并在用户确认后写入（`moox-cli setup factors` 或控制台），最后做写入后验证。
 不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
+
+### Initial Historical Data Import
+
+用户要把一批历史 K 线（CSV）导入某个数据源，让因子有完整的长回看时，读 [`references/initial-import.md`](references/initial-import.md)，按其中的步骤逐步执行：
+预检导入包（`moox-cli import --manifest-pack … --dry-run`）、核对 `series_tag`、屏蔽告警推送（`moox-cli monitor mute`）、补缺口、
+rsync 到因子机后并发写因子机本地存储（全量）、操作机写 Storage 尾部窗口（`--tail-rows`）、等 View 追平、只比边界与行数校验（`scripts/import_verify.py` 逐标的核对 Storage 行数）、解除屏蔽、最后启用（启用不自动补算历史）。
+不要为了追平 View 去重启服务或重建 View（需要用户确认的破坏性运维）；导入包不合格时把预检原文交给用户整理，不要自己改包。
 
 ### Tencent Cloud Firewall
 

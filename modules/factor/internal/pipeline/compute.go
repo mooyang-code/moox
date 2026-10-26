@@ -17,7 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-// Compute 每个集合每期（补算每个参数段的每个分块）调用一次 factorexpr 程序（设计 8）：集合内可计算的成员编译成一个程序，
+// Compute 每个任务每期（补算每个参数段的每个分块）调用一次 factorexpr 程序（设计 8）：任务内可计算的成员编译成一个程序，
 // 按本次的冻结参数在 available 标的的网格面板上算出全部目标时刻，再按源行转换成逐行结果。成员级的判断（严格截面因子
 // 跳过、空洞标的失败）都在这里完成。
 func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Computation, error) {
@@ -54,12 +54,14 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	for _, member := range plan.Members {
 		def, compileErr := r.compile(member.Factor)
 		if compileErr != nil {
-			compileErrs[member.Alias] = fmt.Errorf("成员 %s（因子 %s）在引擎侧编译失败：%w", member.Alias, member.Factor.FactorID, compileErr)
+			compileErrs[member.Key] = fmt.Errorf("成员 %s（因子 %s）在引擎侧编译失败：%w", member.Key, member.Factor.FactorID, compileErr)
 			if r.cfg.OnCompileError != nil {
-				r.cfg.OnCompileError(plan.Set.SetID, member.Factor.FactorID)
+				r.cfg.OnCompileError(plan.Set.TaskID, member.Factor.FactorID)
 			}
 		}
-		compiled[member.Alias] = domain.MemberDef{Alias: member.Alias, Factor: def}
+		withDef := member
+		withDef.Factor = def // 复制原成员，只替换已编译的定义：固定参数等成员属性要保留。
+		compiled[member.Key] = withDef
 		factor := member.Factor
 		status := "complete"
 		failed := uniqueSorted(append([]string(nil), missing...))
@@ -72,24 +74,24 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		if len(failed) > 0 && status != "skipped" {
 			status = "degraded"
 		}
-		computation.Results[member.Alias] = make(map[string]ItemResult)
-		computation.FactorStates[member.Alias] = memberState(plan, compiled[member.Alias], status, failed)
+		computation.Results[member.Key] = make(map[string]ItemResult)
+		computation.FactorStates[member.Key] = memberState(compiled[member.Key], status, failed)
 	}
 
 	// 参与本次程序的成员：时序因子全部参与；截面因子未被整因子跳过才参与。
 	var runnable []domain.MemberDef
 	for _, member := range plan.Members {
 		if member.Factor.FactorType == domain.FactorTypeCrossSection {
-			if computation.FactorStates[member.Alias].Status == "skipped" {
+			if computation.FactorStates[member.Key].Status == "skipped" {
 				continue
 			}
 			computation.crossPeriods(member, targets)
 		}
-		if err := compileErrs[member.Alias]; err != nil {
+		if err := compileErrs[member.Key]; err != nil {
 			computation.fail(member, plan, available, err)
 			continue
 		}
-		runnable = append(runnable, compiled[member.Alias])
+		runnable = append(runnable, compiled[member.Key])
 	}
 	if len(runnable) == 0 || len(available) == 0 {
 		return computation, nil
@@ -126,29 +128,20 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	return computation, nil
 }
 
-// memberState 是成员本期的状态：定义的指纹与这一期冻结参数的来源、摘要。
-func memberState(plan Plan, member domain.MemberDef, status string, failed []string) storageio.FactorState {
-	source, digest := memberParams(plan, member)
+// memberState 是成员本期的状态：成员身份、类型与定义的指纹。本期实际用的参数写在结果行的 __params 列里，不进周期标记。
+func memberState(member domain.MemberDef, status string, failed []string) storageio.FactorState {
 	return storageio.FactorState{
-		Member: member.Alias, FactorID: member.Factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: member.Factor.SpecHash,
-		DefinitionHash: domain.DefinitionHash(member.Factor), ParamsSource: source, ParamsDigest: digest,
+		MemberKey: member.Key, MemberKind: member.Kind, FactorID: member.Factor.FactorID, Status: status, FailedSubjects: failed,
+		SourceHash: member.Factor.SpecHash, DefinitionHash: domain.DefinitionHash(member.Factor),
 	}
-}
-
-// memberParams 返回成员本次计算用的参数来源与摘要；没有冻结记录（启用前的历史回填）时按默认值。
-func memberParams(plan Plan, member domain.MemberDef) (string, string) {
-	if freeze, ok := plan.Params[member.Alias]; ok {
-		return freeze.Source, domain.ParamsDigest(freeze.Snapshot)
-	}
-	return domain.ParamsDefault, domain.ParamsDigest(domain.DefaultSnapshot(member.Factor))
 }
 
 // snapshotOf 返回成员本次计算用的参数快照。
 func snapshotOf(plan Plan, member domain.MemberDef) domain.ParamSnapshot {
-	if freeze, ok := plan.Params[member.Alias]; ok && freeze.Snapshot != nil {
-		return freeze.Snapshot
+	if snapshot, ok := plan.Params[member.Key]; ok && snapshot != nil {
+		return snapshot
 	}
-	return domain.DefaultSnapshot(member.Factor)
+	return domain.MemberSnapshot(member)
 }
 
 // compile 返回编译好的定义。引擎目录里的定义来自 JSON 快照，没有编译结果；按 (factor_id, spec) 缓存编译结果。
@@ -183,7 +176,7 @@ func (g computeGrid) at(t int) time.Time { return g.start.Add(time.Duration(t) *
 
 func (g computeGrid) index(at time.Time) int { return int(at.Sub(g.start) / g.duration) }
 
-// run 构建面板并执行程序。网格从“第一个目标周期的集合回看窗口起点”到最后一个目标周期（设计 7.1）。
+// run 构建面板并执行程序。网格从“第一个目标周期的任务回看窗口起点”到最后一个目标周期（设计 7.1）。
 // 每个成员的参数槽按序列取冻结快照里该标的的值（默认值加按标的覆盖）。
 func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef, subjects []string,
 	view *serieswindow.View) (*exec.Result, computeGrid, error) {
@@ -215,7 +208,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	}
 	inputs := make([]factorexpr.ProgramInput, 0, len(members))
 	for _, member := range members {
-		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Key(plan.Set.SetID), FactorID: member.Factor.FactorID,
+		inputs = append(inputs, factorexpr.ProgramInput{Key: member.ProgramKey(plan.Set.TaskID), FactorID: member.Factor.FactorID,
 			Factor: member.Factor.Compiled()})
 	}
 	program, err := factorexpr.NewProgram(inputs)
@@ -253,7 +246,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 			for i, key := range keys {
 				vector[i] = snapshot.Value(name, key.Subject)
 			}
-			params[factorexpr.ParamSlot(member.Key(plan.Set.SetID), name)] = vector
+			params[factorexpr.ParamSlot(member.ProgramKey(plan.Set.TaskID), name)] = vector
 		}
 	}
 	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers,
@@ -311,8 +304,8 @@ func (r *Runner) failAll(plan Plan, err error) Computation {
 	}
 	expected := uniqueSorted(plan.Expected)
 	for _, member := range plan.Members {
-		computation.Results[member.Alias] = make(map[string]ItemResult)
-		computation.FactorStates[member.Alias] = memberState(plan, member, "degraded", nil)
+		computation.Results[member.Key] = make(map[string]ItemResult)
+		computation.FactorStates[member.Key] = memberState(member, "degraded", nil)
 		if member.Factor.FactorType == domain.FactorTypeCrossSection {
 			computation.crossPeriods(member, targets)
 		}
@@ -387,7 +380,7 @@ func buildPanel(grid computeGrid, columns []string, subjects []string, view *ser
 
 // outputColumns 返回成员各输出在结果里的位置（按定义的输出顺序）。
 func outputColumns(plan Plan, result *exec.Result, member domain.MemberDef) []int {
-	key := member.Key(plan.Set.SetID)
+	key := member.ProgramKey(plan.Set.TaskID)
 	positions := make([]int, 0, len(member.Factor.Outputs))
 	for _, output := range member.Factor.Outputs {
 		for i, column := range result.Columns {
@@ -416,30 +409,30 @@ func (c *Computation) addTimeSeries(plan Plan, member domain.MemberDef, result *
 	positions := outputColumns(plan, result, member)
 	columns := append([]string{"data_time", "series_tag"}, member.OutputColumns()...)
 	for s, key := range result.Series {
-		item := c.Results[member.Alias][key.Subject]
-		item.Member, item.Columns = member.Alias, columns
+		item := c.Results[member.Key][key.Subject]
+		item.Member, item.Columns = member.Key, columns
 		for t := grid.first; t <= grid.last; t++ {
 			if result.Present(s, t) {
 				item.Rows = append(item.Rows, append([]any{grid.at(t), key.Tag}, rowValues(result, positions, s, t)...))
 			}
 		}
-		c.Results[member.Alias][key.Subject] = item
+		c.Results[member.Key][key.Subject] = item
 	}
 }
 
 // crossPeriods 预置截面因子各目标周期的结果为 ok，计算失败时由 fail 改为 failed。
 func (c *Computation) crossPeriods(member domain.MemberDef, targets []time.Time) {
 	for _, period := range targets {
-		setCrossPeriod(c, member.Alias, period, periodOK)
+		setCrossPeriod(c, member.Key, period, periodOK)
 	}
 }
 
 // addCross 把截面因子的结果合成一个以空串为键的结果，跳过记为 gap 的周期。
 func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid) {
 	positions := outputColumns(plan, result, member)
-	item := ItemResult{Member: member.Alias, Columns: append([]string{"data_time", "series_tag", "subject_id"}, member.OutputColumns()...)}
+	item := ItemResult{Member: member.Key, Columns: append([]string{"data_time", "series_tag", "subject_id"}, member.OutputColumns()...)}
 	for t := grid.first; t <= grid.last; t++ {
-		if c.CrossPeriods[member.Alias][grid.at(t).Unix()] != periodOK {
+		if c.CrossPeriods[member.Key][grid.at(t).Unix()] != periodOK {
 			continue
 		}
 		for s, key := range result.Series {
@@ -448,32 +441,32 @@ func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.
 			}
 		}
 	}
-	c.Results[member.Alias][""] = item
+	c.Results[member.Key][""] = item
 }
 
 // fail 记录一个成员本期（本分块）整体计算失败：时序因子对每个标的失败；截面因子未跳过的周期记为 failed，
 // 补算时结果不带错误（各周期的结果由 CrossPeriods 表达）。
 func (c *Computation) fail(member domain.MemberDef, plan Plan, available []string, err error) {
-	state := c.FactorStates[member.Alias]
+	state := c.FactorStates[member.Key]
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
 	state.Status = "degraded"
-	c.FactorStates[member.Alias] = state
+	c.FactorStates[member.Key] = state
 	if member.Factor.FactorType != domain.FactorTypeCrossSection {
 		for _, subject := range available {
-			c.Results[member.Alias][subject] = ItemResult{Member: member.Alias, Err: err}
+			c.Results[member.Key][subject] = ItemResult{Member: member.Key, Err: err}
 		}
 		return
 	}
-	for period, outcome := range c.CrossPeriods[member.Alias] {
+	for period, outcome := range c.CrossPeriods[member.Key] {
 		if outcome == periodOK {
-			c.CrossPeriods[member.Alias][period] = periodFailed
+			c.CrossPeriods[member.Key][period] = periodFailed
 		}
 	}
-	item := ItemResult{Member: member.Alias, Err: err}
+	item := ItemResult{Member: member.Key, Err: err}
 	if plan.Mode == ModeRecalc {
 		item.Err = nil
 	}
-	c.Results[member.Alias][""] = item
+	c.Results[member.Key][""] = item
 }
 
 func planTarget(clock periodclock.Clock, plan Plan) (time.Time, error) {

@@ -43,10 +43,10 @@ seriesstore:
   dir: ./data/seriesstore
   block_cache: 512MiB           # Pebble 块缓存，计入进程内存预算
 
-# 内存列式滑动窗口：每个数据源一份，保留集合内最大回看根数。max_memory 是所有窗口常驻内存的上限，
-# 新启用的集合会超出时拒绝启用；0 表示不限制。初始化（moox-cli setup）按探测到的内存写入。
+# 内存列式滑动窗口：每个数据源一份，保留任务内最大回看根数。max_memory 是所有窗口常驻内存的上限，
+# 新启用的任务会超出时拒绝启用；0 表示不限制。初始化（moox-cli setup）按探测到的内存写入。
 window:
-  lookback: 50000               # 回看数量 N：集合内因子的回看都不能超过它（默认因子 EMA 最长 49995 根）
+  lookback: 50000               # 回看数量 N：任务内因子的回看都不能超过它（默认因子 EMA 最长 49995 根）
   max_memory: 0
   headroom: 0                   # 每个序列数组的余量根数，0 取窗口长度的 1/4（至少 16）
 
@@ -77,17 +77,18 @@ gap:
   settle: 5m                    # 发现后至少等这么久再尝试恢复，给自动补采留时间
   give_up_after: 6h             # 超过它仍补不上：记 gave_up 并告警，交给人工补采与补算
   max_groups_per_sweep: 20      # 每轮最多运行的恢复批数（区间相同的时序分组合并成一批，每批最多 100 个标的）
-  max_span: 60                  # 每组一次最多处理的周期数，避免长时间占住集合锁
+  max_span: 60                  # 每组一次最多处理的周期数，避免长时间占住任务锁
 
-# 连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期（零提交、缺失超过阈值）就停住，不跳期。
+# 连续水位：每个任务从水位下一期逐期推进，前面有还没补到的周期（零提交、缺失超过阈值）就停住，不跳期。
 watermark:
   state_file: ./data/engine/watermarks.json
   max_missing_ratio: 0.1        # 未确认缺失的失败标的 ÷ 期望标的超过它的周期阻塞水位
-  set_ratios: {}                # 按集合 ID 覆盖阈值
+  task_ratios: {}                # 按任务 ID 覆盖阈值
   poll_interval: 10s            # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
   max_periods: 30               # 一次推进最多处理的周期数
 
-# 动态调参：开算前向 FactorMgr 冻结这一期的参数；FactorMgr 不可达时本地按沿用规则冻结，并持久记下待补报的离线冻结。
+# 可变成员的取参：开算前向 FactorMgr 读取策略最近一次提交的参数，记成这一期的"进行中记录"并落盘后才开始计算，
+# 这一期的完成标记写成功后才清掉；FactorMgr 不可达时用本地缓存的最近一次读到的值。
 params:
-  state_file: ./data/engine/params.json
-  freeze_timeout: 5s            # 冻结调用的最长等待（含重试），超时按离线冻结处理
+  cache_file: ./data/engine/param_cache.json
+  fetch_timeout: 5s             # 读取调用的最长等待（含重试），超时用缓存值

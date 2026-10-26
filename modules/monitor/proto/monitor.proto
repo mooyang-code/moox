@@ -88,7 +88,7 @@ message HealthComponent {
   // 模块自己的生命周期状态（设计 6.1）；模块没有生命周期接口时为空。
   HealthLifecycle lifecycle = 12;
 }
-// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子集合、策略实例）。
+// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子任务、策略实例）。
 message HealthLifecycle {
   // 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | resetting | reset_failed | fault。
   string stage = 1;
@@ -392,6 +392,14 @@ message QueryPipelineArrivalHistoryReq {
   string freq = 3;
   // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
   string day = 4;
+  // 因子任务 ID：给了就查它的结果数据集；没给且源数据集上只有一个任务，就查这个任务；有多个任务时只返回任务列表和源数据集这一段。
+  string task_id = 5;
+}
+// ArrivalTask 是源数据集上的一个因子任务（任务 ID 由结果数据集 ID 反解，名称就是结果数据集的名称）。
+message ArrivalTask {
+  string task_id = 1;
+  string name = 2;
+  string result_dataset_id = 3;
 }
 message ArrivalHistoryPoint {
   // 收线时间（UTC，RFC3339）。
@@ -424,6 +432,8 @@ message QueryPipelineArrivalHistoryRsp {
   bool retention_truncated = 7;
   // 记录超过一次查询的上限，曲线只含这一天前面的部分。
   bool truncated = 8;
+  // 这个源数据集 + 周期上的全部因子任务，由页面选择任务后再查。
+  repeated ArrivalTask tasks = 9;
 }
 
 message DoctorExpectedComponent {
@@ -491,6 +501,37 @@ message GetDoctorContextRsp {
   repeated DoctorObservation missing_observations = 12;
 }
 
+// AlertMuteState 是告警屏蔽的当前状态。屏蔽只停推送：探测、入库、告警评估与记录照常，到期自动恢复。
+message AlertMuteState {
+  bool muted = 1;
+  // since 与 expires_at 为 RFC3339 UTC；未屏蔽时为空。
+  string since = 2;
+  string expires_at = 3;
+  string reason = 4;
+  string by = 5;
+}
+// MuteAlertsReq 屏蔽告警推送一段时间，用于初始数据导入等会让数据链路告警暂时失真的操作。
+message MuteAlertsReq {
+  // duration_seconds 取 1～86400（最长 24 小时，防止忘记恢复）。
+  uint32 duration_seconds = 1;
+  string reason = 2;
+}
+message MuteAlertsRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+// UnmuteAlertsReq 提前结束屏蔽；结束时补发一条汇总（仍未恢复的告警，以及屏蔽期间触发后又恢复的）。
+message UnmuteAlertsReq {}
+message UnmuteAlertsRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+message GetAlertMuteReq {}
+message GetAlertMuteRsp {
+  common.RetInfo ret_info = 1;
+  AlertMuteState state = 2;
+}
+
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
   rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
@@ -501,4 +542,7 @@ service MonitorMgr {
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
   rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
+  rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);
+  rpc UnmuteAlerts(UnmuteAlertsReq) returns (UnmuteAlertsRsp);
+  rpc GetAlertMute(GetAlertMuteReq) returns (GetAlertMuteRsp);
 }

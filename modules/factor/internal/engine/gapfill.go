@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -22,7 +21,7 @@ import (
 // 设计见 docs/计划/因子窗口空洞防护详细设计.md 2.6。
 
 type setByID interface {
-	SetByID(setID string) (domain.EngineSet, SetLookup)
+	SetByID(taskID string) (domain.EngineTask, SetLookup)
 }
 
 type chunkWithRunner interface {
@@ -45,24 +44,17 @@ type gapFiller struct {
 	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
-	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在集合锁内。引擎据此把补齐的最新一期记入运行摘要。
-	onRepaired func(setID string, period RepairedPeriod)
+	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在任务锁内。引擎据此把补齐的最新一期记入运行摘要。
+	onRepaired func(taskID string, period RepairedPeriod)
 	// kick 让恢复循环立刻做一轮（预热完成、记入预热中跳过的项时），为 nil 时只按 SweepInterval 轮询。
 	kick <-chan struct{}
-	// warmup 返回各集合的预热状态（可为 nil）：已就绪集合里因预热中跳过的待办不再等 Settle。
+	// warmup 返回各任务的预热状态（可为 nil）：已就绪任务里因预热中跳过的待办不再等 Settle。
 	warmup func() []pipeline.WarmupStatus
-	// filled 判断某集合某一期是否已收到补齐通知（可为 nil）。
-	filled func(setID string, period time.Time) bool
+	// filled 判断某任务某一期是否已收到补齐通知（可为 nil）。
+	filled func(taskID string, period time.Time) bool
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
-	// params 提供历史周期的冻结参数（可为 nil：全部按默认参数）。
-	params paramIntervalSource
-}
-
-// paramIntervalSource 取集合在一段周期上的冻结区间（别名 → 按起点排序，含区间之前最近的一个，供沿用）。
-type paramIntervalSource interface {
-	Intervals(ctx context.Context, setID string, from, to time.Time) (map[string][]domain.ParamInterval, error)
 }
 
 // Run 按 SweepInterval 轮询、或者被唤醒（预热完成、记入预热中跳过的项），直到 ctx 结束。
@@ -98,23 +90,23 @@ func (s warmingKickSink) RecordGaps(ctx context.Context, entries []pipeline.GapE
 	return err
 }
 
-// settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该集合预热就绪后即可恢复，
-// 那一期的源数据在跳过时就已入库，只是窗口还没载入。否则重启后第一期（1h 集合是整整一根）要在预热完成后再等 5～10 分钟才补齐。
+// settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该任务预热就绪后即可恢复，
+// 那一期的源数据在跳过时就已入库，只是窗口还没载入。否则重启后第一期（1h 任务是整整一根）要在预热完成后再等 5～10 分钟才补齐。
 // 上游失败（截止时还没到）的项在收到覆盖该期的补齐通知后也不再等 Settle。
 func settled(entry gapledger.Entry, cutoff time.Time, ready map[string]bool, filled func(string, time.Time) bool) bool {
 	return !entry.FirstSeen.After(cutoff) || (entry.Reason == pipeline.SkipReasonWarming && ready[entry.Set]) ||
 		(entry.Reason == pipeline.SkipReasonUpstream && filled != nil && filled(entry.Set, entry.Period))
 }
 
-// readySets 返回预热已就绪（全部标的窗口已载入、没有排队或在途的预热）的集合。
-func (g *gapFiller) readySets() map[string]bool {
+// readyTasks 返回预热已就绪（全部标的窗口已载入、没有排队或在途的预热）的任务。
+func (g *gapFiller) readyTasks() map[string]bool {
 	if g.warmup == nil {
 		return nil
 	}
 	ready := make(map[string]bool)
 	for _, status := range g.warmup() {
 		if status.State == pipeline.WarmupReady {
-			ready[status.SetID] = true
+			ready[status.TaskID] = true
 		}
 	}
 	return ready
@@ -122,10 +114,10 @@ func (g *gapFiller) readySets() map[string]bool {
 
 // maxFillSubjects 是一次时序恢复最多合并的标的数。恢复区间相同的标的（同一期整体预热跳过、同一段采集中断造成的空洞）
 // 合并成一次只填充重算，不逐个标的各跑一遍：重启后一期约 500 个标的整体预热跳过时，逐个跑要几百次运行、几十分钟才恢复完。
-// 上限避免一次运行占住集合锁太久。
+// 上限避免一次运行占住任务锁太久。
 const maxFillSubjects = 100
 
-// fillBatch 是一次恢复运行：截面因子是一个 (集合, 周期)；时序因子是同一集合里恢复区间相同的若干标的。
+// fillBatch 是一次恢复运行：截面因子是一个 (任务, 周期)；时序因子是同一任务里恢复区间相同的若干标的。
 type fillBatch struct {
 	set        string
 	cross      bool
@@ -135,7 +127,7 @@ type fillBatch struct {
 	names      []string          // 合并进来的组名，轮转用
 }
 
-// tick 做一轮恢复：先把超期的待办记为 gave_up 并告警，再按 (集合, 标的) 与 (集合, 周期) 分组，
+// tick 做一轮恢复：先把超期的待办记为 gave_up 并告警，再按 (任务, 标的) 与 (任务, 周期) 分组，
 // 恢复区间相同的时序分组合并成一批，逐批填充。
 func (g *gapFiller) tick(ctx context.Context) {
 	if g.active != nil && !g.active() {
@@ -143,7 +135,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	}
 	g.expire()
 	cutoff := g.now().UTC().Add(-g.cfg.Settle)
-	ready := g.readySets()
+	ready := g.readyTasks()
 	type groupKey struct {
 		set, subject string
 		cross        bool
@@ -151,7 +143,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	}
 	groups := make(map[groupKey][]gapledger.Entry)
 	var order []groupKey
-	setCache := make(map[string]domain.EngineSet)
+	setCache := make(map[string]domain.EngineTask)
 	lookups := make(map[string]SetLookup)
 	for _, entry := range g.ledger.Pending() {
 		if !settled(entry, cutoff, ready, g.filled) {
@@ -164,9 +156,9 @@ func (g *gapFiller) tick(ctx context.Context) {
 		}
 		switch lookup {
 		case SetNotReady:
-			continue // 目录未加载或结果表未就绪：等待，不能当作集合已经不存在
+			continue // 目录未加载或结果表未就绪：等待，不能当作任务已经不存在
 		case SetGone:
-			g.cancel([]gapledger.Entry{entry}, "set_gone")
+			g.cancel([]gapledger.Entry{entry}, "task_gone")
 			continue
 		}
 		cross := memberIsCross(set, entry.Member)
@@ -215,7 +207,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 		}
 		start, end, err := g.span(setCache[gk.set].Set, groups[gk])
 		if err != nil {
-			log.WarnContextf(ctx, "factor_gap_fill_failed set_id=%s subject=%s error=%v", gk.set, gk.subject, err)
+			log.WarnContextf(ctx, "factor_gap_fill_failed task_id=%s subject=%s error=%v", gk.set, gk.subject, err)
 			continue
 		}
 		sk := spanKey{set: gk.set, start: start.Unix(), end: end.Unix()}
@@ -232,7 +224,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 		batches = batches[:g.cfg.MaxGroupsPerSweep]
 	}
 	for _, batch := range batches {
-		// 租约在一轮中途丢失时不再启动新的写入：另一个引擎已经接手，两个进程的集合锁互不约束。
+		// 租约在一轮中途丢失时不再启动新的写入：另一个引擎已经接手，两个进程的任务锁互不约束。
 		if ctx.Err() != nil || (g.active != nil && !g.active()) {
 			return
 		}
@@ -247,7 +239,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 			err = g.fillSubjects(ctx, set, batch.subjects, batch.start, batch.end)
 		}
 		if err != nil && ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
-			log.WarnContextf(ctx, "factor_gap_fill_failed set_id=%s cross=%t subjects=%d first=%s error=%v", batch.set, batch.cross, len(batch.subjects), firstSubject(batch), err)
+			log.WarnContextf(ctx, "factor_gap_fill_failed task_id=%s cross=%t subjects=%d first=%s error=%v", batch.set, batch.cross, len(batch.subjects), firstSubject(batch), err)
 		}
 	}
 }
@@ -287,28 +279,28 @@ func logExpired(expired []gapledger.Entry, giveUp time.Duration) {
 	}
 }
 
-func memberIsCross(set domain.EngineSet, alias string) bool {
+func memberIsCross(set domain.EngineTask, alias string) bool {
 	for _, member := range set.Members {
-		if member.Alias == alias {
+		if member.Key == alias {
 			return member.Factor.FactorType == domain.FactorTypeCrossSection
 		}
 	}
 	return false
 }
 
-// refresh 在集合锁内按最新的集合与账本重读一组待办：丢掉已终结的，定义哈希与当前不同的记为 cancelled（definition_changed），
-// 成员已不在集合里的记为 cancelled（factor_removed）。返回仍可恢复的待办与对应的成员。
-func (g *gapFiller) refresh(setID string, entries []gapledger.Entry, cross bool) (domain.EngineSet, SetLookup, []gapledger.Entry, []domain.MemberDef) {
-	set, lookup := g.sets.SetByID(setID)
+// refresh 在任务锁内按最新的任务与账本重读一组待办：丢掉已终结的，定义哈希与当前不同的记为 cancelled（definition_changed），
+// 成员已不在任务里的记为 cancelled（factor_removed）。返回仍可恢复的待办与对应的成员。
+func (g *gapFiller) refresh(taskID string, entries []gapledger.Entry, cross bool) (domain.EngineTask, SetLookup, []gapledger.Entry, []domain.MemberDef) {
+	set, lookup := g.sets.SetByID(taskID)
 	if lookup != SetFound {
 		if lookup == SetGone {
-			g.cancel(entries, "set_gone")
+			g.cancel(entries, "task_gone")
 		}
 		return set, lookup, nil, nil
 	}
 	defs := make(map[string]domain.MemberDef, len(set.Members))
 	for _, member := range set.Members {
-		defs[member.Alias] = member
+		defs[member.Key] = member
 	}
 	var use []gapledger.Entry
 	var removed, changed []gapledger.Entry
@@ -333,20 +325,8 @@ func (g *gapFiller) refresh(setID string, entries []gapledger.Entry, cross bool)
 	for _, member := range members {
 		list = append(list, member)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].Alias < list[j].Alias })
+	sort.Slice(list, func(i, j int) bool { return list[i].Key < list[j].Key })
 	return set, SetFound, use, list
-}
-
-// intervals 取集合在 [start, end) 上的冻结区间：恢复的是历史周期，要用当时冻结的参数。
-func (g *gapFiller) intervals(ctx context.Context, setID string, start, end time.Time) (map[string][]domain.ParamInterval, error) {
-	if g.params == nil {
-		return nil, nil
-	}
-	intervals, err := g.params.Intervals(ctx, setID, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
-	}
-	return intervals, nil
 }
 
 func (g *gapFiller) cancel(entries []gapledger.Entry, reason string) {
@@ -363,7 +343,7 @@ func (g *gapFiller) cancel(entries []gapledger.Entry, reason string) {
 }
 
 // span 返回一组待办的恢复区间 [start, end)：最早周期起，最多 MaxSpan 个周期，终点是最后一个周期加一个周期。
-func (g *gapFiller) span(set domain.FactorSet, entries []gapledger.Entry) (time.Time, time.Time, error) {
+func (g *gapFiller) span(set domain.FactorTask, entries []gapledger.Entry) (time.Time, time.Time, error) {
 	duration, err := g.clock.Duration(set.Freq)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
@@ -384,16 +364,16 @@ func (g *gapFiller) span(set domain.FactorSet, entries []gapledger.Entry) (time.
 	return start, end, nil
 }
 
-// fillSubjects 在 [start, end) 上一次恢复一个集合里若干标的的时间序列因子待办。
-func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineSet, subjects []string, start, end time.Time) error {
-	setID := set.Set.SetID
-	pending := func() []gapledger.Entry { return g.ledger.PendingFor(setID, subjects) }
+// fillSubjects 在 [start, end) 上一次恢复一个任务里若干标的的时间序列因子待办。
+func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, subjects []string, start, end time.Time) error {
+	taskID := set.Set.TaskID
+	pending := func() []gapledger.Entry { return g.ledger.PendingFor(taskID, subjects) }
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
-		// 在集合锁内重读：用最新的待办（含最新的 skipID）与最新的集合、因子定义。
+		// 在任务锁内重读：用最新的待办（含最新的 skipID）与最新的任务、因子定义。
 		if g.active != nil && !g.active() {
-			return recalcexec.Selection{}, nil // 取得集合锁后租约已丢失：不运行
+			return recalcexec.Selection{}, nil // 取得任务锁后租约已丢失：不运行
 		}
-		current, lookup, use, members := g.refresh(setID, pending(), false)
+		current, lookup, use, members := g.refresh(taskID, pending(), false)
 		if lookup != SetFound || len(use) == 0 {
 			return recalcexec.Selection{}, nil
 		}
@@ -401,12 +381,8 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineSet, subj
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		intervals, err := g.intervals(ctx, setID, start, end)
-		if err != nil {
-			return recalcexec.Selection{}, err
-		}
 		return recalcexec.Selection{
-			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns, Intervals: intervals,
+			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use),
 		}, nil
 	}
@@ -445,9 +421,9 @@ func entrySubjects(entries []gapledger.Entry) []string {
 	return out
 }
 
-// fillCross 恢复一个集合里一个周期的截面因子待办：用该周期 marker 里冻结的全集重算，不用当前标的池，
+// fillCross 恢复一个任务里一个周期的截面因子待办：用该周期 marker 里冻结的全集重算，不用当前标的池，
 // 也不把单个标的当作完整截面。marker 读不到（例如数据集被删）无法冻结全集，记 gave_up 交给人工。
-func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries []gapledger.Entry) error {
+func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entries []gapledger.Entry) error {
 	period := entries[0].Period
 	trigger := ""
 	for _, entry := range entries {
@@ -475,7 +451,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 		return err
 	}
 	end := period.Add(duration)
-	setID := set.Set.SetID
+	taskID := set.Set.TaskID
 	periodStart := period
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		if g.active != nil && !g.active() {
@@ -483,11 +459,11 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 		}
 		var pending []gapledger.Entry
 		for _, entry := range g.ledger.Pending() {
-			if entry.Set == setID && entry.Period.Equal(periodStart) {
+			if entry.Set == taskID && entry.Period.Equal(periodStart) {
 				pending = append(pending, entry)
 			}
 		}
-		current, lookup, use, members := g.refresh(setID, pending, true)
+		current, lookup, use, members := g.refresh(taskID, pending, true)
 		if lookup != SetFound || len(use) == 0 {
 			return recalcexec.Selection{}, nil
 		}
@@ -495,11 +471,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		intervals, err := g.intervals(ctx, setID, periodStart, end)
-		if err != nil {
-			return recalcexec.Selection{}, err
-		}
-		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns, Intervals: intervals,
+		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use)}, nil
 	}
 	after := func(selection recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
@@ -508,7 +480,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 		}
 		var pending []gapledger.Entry
 		for _, entry := range g.ledger.Pending() {
-			if entry.Set == setID && entry.Period.Equal(periodStart) {
+			if entry.Set == taskID && entry.Period.Equal(periodStart) {
 				pending = append(pending, entry)
 			}
 		}
@@ -518,12 +490,12 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 	return err
 }
 
-// confirm 在集合锁内确认：Selection 里的因子、区间内、逐项结果为 written 的待办追加 repaired。
+// confirm 在任务锁内确认：Selection 里的因子、区间内、逐项结果为 written 的待办追加 repaired。
 // gap 与 failed 保持待恢复，下一轮再试。
 func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Selection, outcome pipeline.Outcome, start, end time.Time) {
 	selected := make(map[string]struct{}, len(selection.Members))
 	for _, member := range selection.Members {
-		selected[member.Alias] = struct{}{}
+		selected[member.Key] = struct{}{}
 	}
 	var repaired []gapledger.Ref
 	for _, entry := range current {
@@ -541,7 +513,7 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 	if len(repaired) == 0 {
 		return
 	}
-	log.Infof("factor_gap_repaired set_id=%s entries=%d window=%s/%s", selection.Set.SetID, len(repaired), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	log.Infof("factor_gap_repaired task_id=%s entries=%d window=%s/%s", selection.Set.TaskID, len(repaired), start.Format(time.RFC3339), end.Format(time.RFC3339))
 	if g.onRepaired == nil {
 		return
 	}
@@ -564,8 +536,8 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 		}
 	}
 	for _, period := range byPeriod {
-		period.Done = !g.ledger.HasPendingIn(selection.Set.SetID, period.Period)
-		g.onRepaired(selection.Set.SetID, *period)
+		period.Done = !g.ledger.HasPendingIn(selection.Set.TaskID, period.Period)
+		g.onRepaired(selection.Set.TaskID, *period)
 	}
 }
 

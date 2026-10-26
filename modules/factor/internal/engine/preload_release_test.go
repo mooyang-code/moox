@@ -9,10 +9,10 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 )
 
-// mutableSets 是可以随时增删集合的目录。
-type mutableSets struct{ sets map[string]domain.EngineSet }
+// mutableSets 是可以随时增删任务的目录。
+type mutableSets struct{ sets map[string]domain.EngineTask }
 
-func (m *mutableSets) SetIDs() []string {
+func (m *mutableSets) TaskIDs() []string {
 	ids := make([]string, 0, len(m.sets))
 	for id := range m.sets {
 		ids = append(ids, id)
@@ -20,23 +20,22 @@ func (m *mutableSets) SetIDs() []string {
 	return ids
 }
 
-func (m *mutableSets) SetByID(id string) (domain.EngineSet, SetLookup) {
+func (m *mutableSets) SetByID(id string) (domain.EngineTask, SetLookup) {
 	set, ok := m.sets[id]
 	if !ok {
-		return domain.EngineSet{}, SetGone
+		return domain.EngineTask{}, SetGone
 	}
 	return set, SetFound
 }
 
-func includeSet(id, dataset string) domain.EngineSet {
-	return domain.EngineSet{Set: domain.FactorSet{SetID: id, SpaceID: "crypto", SourceDatasetID: dataset, Freq: "1m",
-		SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A"}}}
+func includeSet(id, dataset string) domain.EngineTask {
+	return domain.EngineTask{Set: domain.FactorTask{TaskID: id, SpaceID: "crypto", SourceDatasetID: dataset, Freq: "1m"}}
 }
 
-// 集合离开目录（删除、停用）：预载循环取消它在数据源上的登记，数据源没有别的集合用时窗口与同步随之释放。
-func TestPreloadReleasesSetsThatLeftTheCatalog(t *testing.T) {
+// 任务离开目录（删除、停用）：预载循环取消它在数据源上的登记，数据源没有别的任务用时窗口与同步随之释放。
+func TestPreloadReleasesTasksThatLeftTheCatalog(t *testing.T) {
 	ctx := context.Background()
-	catalog := &mutableSets{sets: map[string]domain.EngineSet{"s1": includeSet("s1", "dataset_a")}}
+	catalog := &mutableSets{sets: map[string]domain.EngineTask{"s1": includeSet("s1", "dataset_a")}}
 	data := new(preloadDataFake)
 	p := newPreloader(catalog, includeSubjects{}, data, nil, nil)
 	p.once(ctx)
@@ -48,16 +47,16 @@ func TestPreloadReleasesSetsThatLeftTheCatalog(t *testing.T) {
 
 	require.False(t, p.Ready("s1"))
 	require.Len(t, data.released, 1)
-	require.Equal(t, "s1", data.released[0].SetID)
+	require.Equal(t, "s1", data.released[0].TaskID)
 	require.Equal(t, "dataset_a", data.released[0].SourceDatasetID)
 	p.once(ctx)
-	require.Len(t, data.released, 1, "已释放的集合不会重复释放")
+	require.Len(t, data.released, 1, "已释放的任务不会重复释放")
 }
 
-// 私有因子集随实例改绑 View：集合 ID 不变、数据源变了，先取消旧数据源上的登记，再按新数据源预载。
-func TestPreloadReleasesOldSourceWhenSetIsRebound(t *testing.T) {
+// 私有因子任务随实例改绑 View：任务 ID 不变、数据源变了，先取消旧数据源上的登记，再按新数据源预载。
+func TestPreloadReleasesOldSourceWhenTaskIsRebound(t *testing.T) {
 	ctx := context.Background()
-	catalog := &mutableSets{sets: map[string]domain.EngineSet{"s1": includeSet("s1", "dataset_a")}}
+	catalog := &mutableSets{sets: map[string]domain.EngineTask{"s1": includeSet("s1", "dataset_a")}}
 	data := new(preloadDataFake)
 	p := newPreloader(catalog, includeSubjects{}, data, nil, nil)
 	p.once(ctx)

@@ -40,17 +40,17 @@ func TestAssembleCarriesSourceColumnsOnSourceTagRows(t *testing.T) {
 	computation := successfulComputation(factor, []string{"data_time", "series_tag", factor.Outputs[0]}, [][]any{{target, "venue:binance", 12.0}})
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"close": 10.0, "volume": int64(42), factor.Outputs[0]: 12.0}, rows[0].Fields)
+	require.Equal(t, map[string]any{"close": 10.0, "volume": int64(42), factor.Outputs[0]: 12.0, "__params": storageio.JSONText(`{"momentum":{}}`)}, rows[0].Fields)
 }
 
 func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, true)
-	factor.Outputs = []string{"spread_value"}
+	factor.Outputs = []string{"spread"}
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := Computation{
-		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread_value"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
+		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
 		FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash}},
 	}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
@@ -62,7 +62,7 @@ func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 			derived = row
 		}
 	}
-	require.Equal(t, map[string]any{"spread_value": 1.5}, derived.Fields)
+	require.Equal(t, map[string]any{"spread": 1.5, "__params": storageio.JSONText(`{"spread":{}}`)}, derived.Fields)
 }
 
 func TestAssembleFailedFactorWritesNull(t *testing.T) {
@@ -96,7 +96,7 @@ func TestAssembleRecalcWritesOnlySelectedFactors(t *testing.T) {
 	plan.Mode = ModeRecalc
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := successfulComputation(selected, []string{"data_time", "series_tag", selected.Outputs[0]}, [][]any{{target, "venue:binance", 1.0}})
-	computation.FactorStates[unselected.FactorID] = storageio.FactorState{Member: unselected.FactorID, FactorID: unselected.FactorID, Status: "complete"}
+	computation.FactorStates[unselected.FactorID] = storageio.FactorState{MemberKey: unselected.FactorID, FactorID: unselected.FactorID, Status: "complete"}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
 	require.NoError(t, err)
 	require.NotContains(t, rows[0].Fields, unselected.Outputs[0])
@@ -109,7 +109,7 @@ func TestWriteBatchesRows(t *testing.T) {
 		rows[i] = storageio.ResultRow{SubjectID: "BTC", DataTime: time.Unix(int64(i+1), 0).UTC(), Fields: map[string]any{"close": i}}
 	}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	require.NoError(t, runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), rows, 1000))
+	require.NoError(t, runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), rows, 1000))
 	require.Len(t, store.writeCalls, 3)
 	require.NotEqual(t, store.writeCalls[0].commitID, store.writeCalls[1].commitID)
 	require.NotEqual(t, store.writeCalls[1].commitID, store.writeCalls[2].commitID)
@@ -119,7 +119,7 @@ func TestWriteBatchesRows(t *testing.T) {
 func TestWriteRetriesTransientThenReturnsErrInfra(t *testing.T) {
 	store := &outputStore{writeErr: fmt.Errorf("%w: write unavailable", storageio.ErrInfra)}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	err := runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
+	err := runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Len(t, store.writeCalls, 3)
 }
@@ -127,7 +127,7 @@ func TestWriteRetriesTransientThenReturnsErrInfra(t *testing.T) {
 func TestWritePermanentErrorIsNotRetriedNorInfra(t *testing.T) {
 	store := &outputStore{writeErr: errors.New("column circulating_supply is not defined")}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	err := runner.Write(context.Background(), Plan{Set: domain.FactorSet{SetID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
+	err := runner.Write(context.Background(), Plan{Set: domain.FactorTask{TaskID: "set", SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars"}}, time.Unix(10000, 0), []storageio.ResultRow{{SubjectID: "BTC", DataTime: time.Unix(10000, 0), Fields: map[string]any{"close": 1}}}, 1000)
 	require.Error(t, err)
 	require.False(t, errors.Is(err, storageio.ErrInfra))
 	require.Len(t, store.writeCalls, 1)
@@ -135,14 +135,14 @@ func TestWritePermanentErrorIsNotRetriedNorInfra(t *testing.T) {
 
 func TestOutcomeStatusDegradedWhenAnyFactorFailed(t *testing.T) {
 	factor := domain.FactorDef{FactorID: "bad"}
-	outcome := outcomeFor(Plan{Members: domain.AsMembers(factor)}, LoadResult{}, Computation{FactorStates: map[string]storageio.FactorState{"bad": {Member: "bad", FactorID: "bad", Status: "degraded"}}})
+	outcome := outcomeFor(Plan{Members: domain.AsMembers(factor)}, LoadResult{}, Computation{FactorStates: map[string]storageio.FactorState{"bad": {MemberKey: "bad", FactorID: "bad", Status: "degraded"}}})
 	require.Equal(t, "degraded", outcome.Status)
 }
 
 func TestReportOnlyInLiveMode(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars", SourceDatasetID: "dataset_bars", Freq: "1m"}}
+	plan := Plan{Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", ResultDatasetID: "dataset_factor_bars", SourceDatasetID: "dataset_bars", Freq: "1m"}}
 	require.NoError(t, runner.Report(context.Background(), plan, Outcome{Status: "complete"}))
 	require.Empty(t, store.markers)
 	plan.Mode = ModeLive
@@ -155,7 +155,7 @@ func TestReportOnlyInLiveMode(t *testing.T) {
 func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "complete", outcome.Status)
@@ -167,7 +167,7 @@ func TestNoEnabledFactorsStillReportsComplete(t *testing.T) {
 func TestNoEnabledFactorsWithUpstreamFailureReportsDegraded(t *testing.T) {
 	store := &outputStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
-	plan := Plan{Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
+	plan := Plan{Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"}, TargetEnd: time.Date(2026, 10, 4, 0, 11, 0, 0, time.UTC), TriggerEventID: "event-1", Expected: []string{"BTC", "ETH"}, UpstreamFailed: []string{"ETH"}}
 	outcome, err := runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, "degraded", outcome.Status)

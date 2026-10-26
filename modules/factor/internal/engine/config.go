@@ -39,13 +39,13 @@ type Config struct {
 	Params        ParamsConfig                     `yaml:"params"`
 }
 
-// WatermarkConfig 是连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
+// WatermarkConfig 是连续水位：每个任务从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
 type WatermarkConfig struct {
-	// StateFile 保存各集合的水位与阻塞状态。
+	// StateFile 保存各任务的水位与阻塞状态。
 	StateFile string `yaml:"state_file"`
-	// MaxMissingRatio 是缺失阈值（未确认缺失的失败标的 ÷ 期望标的），超过的周期阻塞水位；SetRatios 按集合 ID 覆盖。
+	// MaxMissingRatio 是缺失阈值（未确认缺失的失败标的 ÷ 期望标的），超过的周期阻塞水位；SetRatios 按任务 ID 覆盖。
 	MaxMissingRatio float64            `yaml:"max_missing_ratio"`
-	SetRatios       map[string]float64 `yaml:"set_ratios"`
+	SetRatios       map[string]float64 `yaml:"task_ratios"`
 	// PollInterval 是阻塞或落后时按读回 Storage 继续推进的间隔（保底）；MaxPeriods 是一次推进最多处理的周期数。
 	PollInterval time.Duration `yaml:"poll_interval"`
 	MaxPeriods   int           `yaml:"max_periods"`
@@ -71,11 +71,11 @@ type CatalogSyncConfig struct {
 	StateFile string        `yaml:"state_file"`
 }
 
-// ParamsConfig 是参数冻结（因子动态调参执行计划 2.4）：开算前向 FactorMgr 冻结参数，FreezeTimeout 内都失败时
-// 在本地按沿用规则冻结（离线冻结记在 StateFile，恢复后补报）。
+// ParamsConfig 是取参（设计 6.3）：开算前向 FactorMgr 读取可变成员最近一次提交的参数，FetchTimeout 内都失败时
+// 用 CacheFile 里缓存的最近一次读到的值；CacheFile 同时记着正在计算的一期用的参数，写完这一期的完成标记后才清掉。
 type ParamsConfig struct {
-	StateFile     string        `yaml:"state_file"`
-	FreezeTimeout time.Duration `yaml:"freeze_timeout"`
+	CacheFile    string        `yaml:"cache_file"`
+	FetchTimeout time.Duration `yaml:"fetch_timeout"`
 }
 
 // LifecycleConfig 是生命周期控制器的配置：阶段持久化文件与检查周期。
@@ -114,11 +114,11 @@ type SeriesStoreConfig struct {
 
 // WindowConfig 是内存列式窗口（设计第 4 节）。
 type WindowConfig struct {
-	// MaxMemory 是所有数据源窗口常驻内存的上限；新启用的集合会超出时拒绝启用。0 表示不限制。
+	// MaxMemory 是所有数据源窗口常驻内存的上限；新启用的任务会超出时拒绝启用。0 表示不限制。
 	MaxMemory ByteSize `yaml:"max_memory"`
 	// Headroom 是每个序列数组余量的根数，0 取窗口长度的 1/4（至少 16）。
 	Headroom int `yaml:"headroom"`
-	// Lookback 是回看数量 N 的全局默认（设计 8.1）：窗口长度、本地要保有的根数、集合内因子回看的上限。默认 1 万。
+	// Lookback 是回看数量 N 的全局默认（设计 8.1）：窗口长度、本地要保有的根数、任务内因子回看的上限。默认 1 万。
 	Lookback int `yaml:"lookback"`
 	// LookbackOverrides 按数据源覆盖 N，键是 "space/dataset/freq"，例如 "crypto/spot_kline_1h/1h": 8000。
 	LookbackOverrides map[string]int `yaml:"lookback_overrides"`
@@ -202,7 +202,7 @@ type GapConfig struct {
 	// GiveUpAfter 是超过多久仍补不上就记 gave_up 并告警，交给人工。
 	GiveUpAfter time.Duration `yaml:"give_up_after"`
 	// MaxGroupsPerSweep 与 MaxSpan 限制一轮恢复的工作量：一轮最多运行 MaxGroupsPerSweep 批（恢复区间相同的时序分组合并成一批），
-	// 每个组一次最多处理 MaxSpan 个周期，避免长时间占住集合锁。
+	// 每个组一次最多处理 MaxSpan 个周期，避免长时间占住任务锁。
 	MaxGroupsPerSweep int `yaml:"max_groups_per_sweep"`
 	MaxSpan           int `yaml:"max_span"`
 }
@@ -265,7 +265,7 @@ func Default() *Config {
 		},
 		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
 		Lifecycle: LifecycleConfig{StateFile: "./data/engine/lifecycle.json", Interval: 30 * time.Second},
-		Params:    ParamsConfig{StateFile: "./data/engine/params.json", FreezeTimeout: 5 * time.Second},
+		Params:    ParamsConfig{CacheFile: "./data/engine/param_cache.json", FetchTimeout: 5 * time.Second},
 	}
 }
 
@@ -308,14 +308,14 @@ func (c *Config) applyDefaults() {
 	setInt(&c.Watermark.MaxPeriods, d.Watermark.MaxPeriods)
 	setString(&c.Lifecycle.StateFile, d.Lifecycle.StateFile)
 	setDuration(&c.Lifecycle.Interval, d.Lifecycle.Interval)
-	setString(&c.Params.StateFile, d.Params.StateFile)
-	setDuration(&c.Params.FreezeTimeout, d.Params.FreezeTimeout)
+	setString(&c.Params.CacheFile, d.Params.CacheFile)
+	setDuration(&c.Params.FetchTimeout, d.Params.FetchTimeout)
 }
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.StateFile,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.CacheFile,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
@@ -359,8 +359,8 @@ func (c *Config) Validate() error {
 	}
 	require(c.Watermark.MaxMissingRatio > 0 && c.Watermark.MaxMissingRatio < 1 && c.Watermark.PollInterval > 0 && c.Watermark.MaxPeriods > 0,
 		"watermark.max_missing_ratio must be within (0, 1), poll_interval and max_periods must be positive")
-	for setID, ratio := range c.Watermark.SetRatios {
-		require(ratio > 0 && ratio < 1, "watermark.set_ratios["+setID+"] must be within (0, 1)")
+	for taskID, ratio := range c.Watermark.SetRatios {
+		require(ratio > 0 && ratio < 1, "watermark.task_ratios["+taskID+"] must be within (0, 1)")
 	}
 	if len(problems) > 0 {
 		return errors.New("invalid factor engine config: " + strings.Join(problems, "; "))

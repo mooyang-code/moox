@@ -22,7 +22,7 @@ func definitionProto(value store.Definition) *strategypb.Strategy {
 
 func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{
-		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, ViewId: value.ViewID,
+		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTaskId: value.FactorTaskID,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
 		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 	}
@@ -35,7 +35,15 @@ func resultProto(value store.Result) *strategypb.StrategyResult {
 		Status: value.Status, SkipReason: value.SkipReason, DslHash: value.DSLHash,
 		Targets: targetProtos(value.TargetsJSON), SummaryJson: string(value.SummaryJSON), InputJson: string(value.InputJSON),
 		RuleStatesJson: string(value.RuleStatesJSON), PublishStatus: string(value.PublishStatus), CreatedAt: formatTime(value.CreatedAt),
+		NextParamsJson: string(value.NextParamsJSON), ParamsError: value.ParamsError, ParamsDeliveredAt: formatOptionalTime(value.ParamsDeliveredAt),
 	}
+}
+
+func formatOptionalTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return formatTime(*value)
 }
 
 func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
@@ -67,7 +75,7 @@ func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 
 func replayProto(value store.Replay) *strategypb.Replay {
 	replay := &strategypb.Replay{
-		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, ViewId: value.ViewID,
+		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, FactorTaskId: value.FactorTaskID, ViewId: value.ViewID,
 		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), FeeBps: value.FeeBps, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar,

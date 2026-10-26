@@ -9,61 +9,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 集合的标的列表变化后，预载要重新做（窗口释放被移出的标的）；只是顺序不同不算变化。
-func TestPreloaderRepreparesWhenSubjectListChanges(t *testing.T) {
+// 任务的数据源（源数据集）变了，预载要重新做；标的清单变化由 subjectsChanged 单独检测。
+func TestPreloaderRepreparesWhenSourceChanges(t *testing.T) {
 	p := newPreloader(nil, nil, nil, nil, nil)
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A", "B"}}}
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
 	require.False(t, p.upToDate(set))
-	p.markPrepared(set, set.Set.Subjects)
+	p.markPrepared(set, nil)
 	require.True(t, p.upToDate(set))
 
-	reordered := set
-	reordered.Set.Subjects = []string{"B", "A"}
-	require.True(t, p.upToDate(reordered))
+	rebound := set
+	rebound.Set.SourceDatasetID = "dataset_b"
+	require.False(t, p.upToDate(rebound), "改绑数据源后要重新预载")
+}
 
-	removed := set
-	removed.Set.Subjects = []string{"A"}
-	require.False(t, p.upToDate(removed), "标的被移出后要重新预载")
+// 源数据集的标的清单变了（上市、下架），subjectsChanged 报告需要重新预载；只是顺序不同不算变化。
+func TestPreloaderDetectsSourceSubjectChanges(t *testing.T) {
+	source := &listSubjects{subjects: []string{"A", "B"}}
+	p := newPreloader(nil, source, nil, nil, nil)
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
+	p.markPrepared(set, source.subjects)
+	require.False(t, p.subjectsChanged(context.Background(), set))
 
-	all := domain.EngineSet{Set: domain.FactorSet{SetID: "s2", SubjectMode: domain.SubjectModeAll}}
-	p.markPrepared(all, nil)
-	require.True(t, p.upToDate(all))
+	source.subjects = []string{"B", "A"}
+	require.False(t, p.subjectsChanged(context.Background(), set), "顺序不同不算变化")
+
+	source.subjects = []string{"A"}
+	require.True(t, p.subjectsChanged(context.Background(), set), "标的被移出后要重新预载")
+}
+
+type listSubjects struct{ subjects []string }
+
+func (l *listSubjects) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (l *listSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), l.subjects...), nil
 }
 
 type flakyPrepare struct{ fail bool }
 
-func (f *flakyPrepare) Prepare(context.Context, domain.EngineSet, []string) error {
+func (f *flakyPrepare) Prepare(context.Context, domain.EngineTask, []string) error {
 	if f.fail {
 		return errors.New("预载失败")
 	}
 	return nil
 }
 
-func (f *flakyPrepare) ReleaseSet(domain.FactorSet) {}
+func (f *flakyPrepare) ReleaseTask(domain.FactorTask) {}
 
-type oneSet struct{ set domain.EngineSet }
+type oneTask struct{ set domain.EngineTask }
 
-func (o oneSet) SetIDs() []string { return []string{o.set.Set.SetID} }
-func (o oneSet) SetByID(string) (domain.EngineSet, SetLookup) {
+func (o oneTask) TaskIDs() []string { return []string{o.set.Set.TaskID} }
+func (o oneTask) SetByID(string) (domain.EngineTask, SetLookup) {
 	return o.set, SetFound
 }
 
-// 重新预载失败后，集合不能还当作已预载：后面按提示改回原来的标的列表时才会重新预载（审查意见 4）。
+// 重新预载失败后，任务不能还当作已预载：后面改回原来的数据源时才会重新预载（审查意见 4）。
 func TestFailedRepreparationClearsPreparedState(t *testing.T) {
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A"}}}
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "s1"}}
 	data := &flakyPrepare{}
-	p := newPreloader(oneSet{set}, includeSubjects{}, data, nil, nil)
+	p := newPreloader(oneTask{set}, includeSubjects{}, data, nil, nil)
 	require.NoError(t, p.PrepareSet(context.Background(), "s1"))
 	require.True(t, p.Ready("s1"))
 
-	set.Set.Subjects = []string{"A", "G"}
-	p.sets = oneSet{set}
+	set.Set.SourceDatasetID = "dataset_b" // 改绑数据源，需要重新预载
+	p.sets = oneTask{set}
 	data.fail = true
 	require.Error(t, p.PrepareSet(context.Background(), "s1"))
-	require.False(t, p.Ready("s1"), "预载失败，集合不再就绪")
+	require.False(t, p.Ready("s1"), "预载失败，任务不再就绪")
 
-	set.Set.Subjects = []string{"A"} // 按提示移除零数据标的，回到原来的列表
-	p.sets = oneSet{set}
+	set.Set.SourceDatasetID = "" // 回到原来的数据源
+	p.sets = oneTask{set}
 	data.fail = false
 	require.NoError(t, p.PrepareSet(context.Background(), "s1"))
 	require.True(t, p.Ready("s1"), "回到原列表也要重新预载成功")
@@ -80,12 +96,12 @@ func (includeSubjects) ListDatasetSubjects(context.Context, string, string) ([]s
 
 type recordingPrepare struct{ calls [][]string }
 
-func (r *recordingPrepare) Prepare(_ context.Context, _ domain.EngineSet, subjects []string) error {
+func (r *recordingPrepare) Prepare(_ context.Context, _ domain.EngineTask, subjects []string) error {
 	r.calls = append(r.calls, append([]string(nil), subjects...))
 	return nil
 }
 
-func (r *recordingPrepare) ReleaseSet(domain.FactorSet) {}
+func (r *recordingPrepare) ReleaseTask(domain.FactorTask) {}
 
 type mutableSubjects struct{ list []string }
 
@@ -96,12 +112,12 @@ func (m *mutableSubjects) ListDatasetSubjects(context.Context, string, string) (
 	return append([]string(nil), m.list...), nil
 }
 
-// 「全部标的」的集合：用户在数据集的标签里删除标的后，清单变了，下一轮预载要重新准备，窗口才会释放它（设计 6.2）。
+// 「全部标的」的任务：用户在数据集的标签里删除标的后，清单变了，下一轮预载要重新准备，窗口才会释放它（设计 6.2）。
 func TestPreloaderRepreparesWhenDatasetSubjectsChange(t *testing.T) {
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeAll}}
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "s1"}}
 	source := &mutableSubjects{list: []string{"A", "B", "C"}}
 	data := &recordingPrepare{}
-	p := newPreloader(oneSet{set}, source, data, nil, nil)
+	p := newPreloader(oneTask{set}, source, data, nil, nil)
 	ctx := context.Background()
 
 	p.once(ctx)
@@ -118,4 +134,28 @@ func TestPreloaderRepreparesWhenDatasetSubjectsChange(t *testing.T) {
 	source.list = []string{"A", "C", "D"} // 新增标的同样会触发
 	p.once(ctx)
 	require.Len(t, data.calls, 3)
+}
+
+type failingSubjects struct{}
+
+func (failingSubjects) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (failingSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("storage unavailable")
+}
+
+// 诊断入口直接写正式结果：显式指定的标的必须属于源数据集；没有指定标的时不查询；查询失败要报错。
+func TestCheckSubjectsInDataset(t *testing.T) {
+	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
+	source := &listSubjects{subjects: []string{"BTC", "ETH"}}
+	ctx := context.Background()
+
+	require.NoError(t, checkSubjectsInDataset(ctx, source, set, nil), "没有指定标的：取源数据集全部，不需要核对")
+	require.NoError(t, checkSubjectsInDataset(ctx, source, set, []string{"ETH", "BTC"}))
+	err := checkSubjectsInDataset(ctx, source, set, []string{"BTC", "DOGE"})
+	require.ErrorContains(t, err, "DOGE")
+	require.ErrorContains(t, err, "dataset_a")
+	require.ErrorContains(t, checkSubjectsInDataset(ctx, failingSubjects{}, set, []string{"BTC"}), "storage unavailable")
+	require.NoError(t, checkSubjectsInDataset(ctx, failingSubjects{}, set, nil), "不指定标的时不会去查询")
 }

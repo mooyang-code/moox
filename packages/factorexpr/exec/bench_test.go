@@ -94,7 +94,7 @@ func syntheticProgram(b *testing.B, count int) *factorexpr.Program {
 	for i := 0; i < count; i++ {
 		window := 5 + (i*7)%56
 		expression := strings.ReplaceAll(templates[i%len(templates)], "{w}", fmt.Sprint(window))
-		factor, err := factorexpr.Compile(fmt.Sprintf("outputs:\n  o%03d: %s\n", i, expression))
+		factor, err := factorexpr.Compile(fmt.Sprintf("output: %s\n", expression))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -128,6 +128,24 @@ func BenchmarkLive11(b *testing.B) {
 	}
 }
 
+// 实时一期：500 标的 × ema(close, 50000, 50000)，每个标的回看 5 万根，只算最后一行。
+func BenchmarkLiveEMA50000(b *testing.B) {
+	factor, err := factorexpr.Compile("output: ema(close, 50000, 50000)\n")
+	if err != nil {
+		b.Fatal(err)
+	}
+	program, err := factorexpr.NewProgram([]factorexpr.ProgramInput{{FactorID: "ema50000", Factor: factor}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	panel := ohlcvPanel(b, 500, program.Lookback)
+	for _, workers := range []int{1, 4, 16} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			benchmarkRun(b, program, panel, program.Lookback-1, program.Lookback-1, workers)
+		})
+	}
+}
+
 // 补算一个分块：500 期 × 500 标的 × 11 个因子（目标 ≤ 2s）。
 func BenchmarkRecalcChunk11(b *testing.B) {
 	program := libraryProgram(b)
@@ -155,7 +173,7 @@ func BenchmarkLive300(b *testing.B) {
 func BenchmarkLiveLongWindow300(b *testing.B) {
 	var inputs []factorexpr.ProgramInput
 	for i := 0; i < 300; i++ {
-		factor, err := factorexpr.Compile(fmt.Sprintf("outputs:\n  o%03d: ts_mean(close, 1440) + %d\n", i, i))
+		factor, err := factorexpr.Compile(fmt.Sprintf("output: ts_mean(close, 1440) + %d\n", i))
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
@@ -34,10 +32,6 @@ type measuredRunner struct {
 	metrics *observability.Metrics
 	health  *Health
 	runs    *runTracker
-
-	// carried 是每个成员连续沿用参数的期数（集合/别名 → 期数），实时周期按冻结来源更新。
-	carriedMu sync.Mutex
-	carried   map[string]int
 }
 
 func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
@@ -52,13 +46,13 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	if periodTime.IsZero() {
 		periodTime = plan.TargetStart
 	}
-	r.health.StartLane(plan.Set.SetID, started)
-	defer r.health.EndLane(plan.Set.SetID)
-	log.InfoContextf(ctx, "factor_period_start set_id=%s period_time=%s mode=%d", plan.Set.SetID, periodTime.UTC().Format(time.RFC3339), plan.Mode)
+	r.health.StartRunner(plan.Set.TaskID, started)
+	defer r.health.EndRunner(plan.Set.TaskID)
+	log.InfoContextf(ctx, "factor_period_start task_id=%s period_time=%s mode=%d", plan.Set.TaskID, periodTime.UTC().Format(time.RFC3339), plan.Mode)
 	outcome, err := r.inner.Run(ctx, plan)
-	setID := plan.Set.SetID
+	taskID := plan.Set.TaskID
 	for stage, duration := range outcome.StageDurations {
-		r.metrics.PeriodDuration.WithLabelValues(setID, stage).Observe(duration.Seconds())
+		r.metrics.PeriodDuration.WithLabelValues(taskID, stage).Observe(duration.Seconds())
 	}
 	status := outcome.Status
 	if err != nil {
@@ -68,13 +62,12 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		status = "complete"
 	}
 	if plan.Mode == pipeline.ModeLive {
-		r.metrics.PeriodTotal.WithLabelValues(setID, status).Inc()
-		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(periodTime).Seconds()))
+		r.metrics.PeriodTotal.WithLabelValues(taskID, status).Inc()
+		r.metrics.PeriodLag.WithLabelValues(taskID).Set(max(0, time.Since(periodTime).Seconds()))
 		if !periodTime.IsZero() && (err == nil || outcome.Status != "") {
-			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(periodTime.Unix()))
-			r.runs.record(setID, periodTime, status, outcome, time.Now())
+			r.metrics.LastPeriodTime.WithLabelValues(taskID).Set(float64(periodTime.Unix()))
+			r.runs.record(taskID, periodTime, status, outcome, time.Now())
 		}
-		r.recordParams(setID, outcome)
 	}
 	for _, factor := range outcome.Factors {
 		if factor.Status != "complete" {
@@ -82,48 +75,17 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			if reason == "" {
 				reason = "failed"
 			}
-			r.metrics.Failures.WithLabelValues(setID, factor.Member, reason).Inc()
-			log.ErrorContextf(ctx, "factor_compute_failed set_id=%s member=%s factor_id=%s reason=%s", setID, factor.Member, factor.FactorID, reason)
+			r.metrics.Failures.WithLabelValues(taskID, factor.MemberKey, reason).Inc()
+			log.ErrorContextf(ctx, "factor_compute_failed task_id=%s member=%s factor_id=%s reason=%s", taskID, factor.MemberKey, factor.FactorID, reason)
 		}
 	}
 	if err != nil {
-		r.metrics.Failures.WithLabelValues(setID, periodFailureFactor, periodFailureReason(err)).Inc()
-		log.ErrorContextf(ctx, "factor_period_failed set_id=%s period_time=%s error=%v", setID, periodTime.UTC().Format(time.RFC3339), err)
+		r.metrics.Failures.WithLabelValues(taskID, periodFailureFactor, periodFailureReason(err)).Inc()
+		log.ErrorContextf(ctx, "factor_period_failed task_id=%s period_time=%s error=%v", taskID, periodTime.UTC().Format(time.RFC3339), err)
 	} else {
-		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
+		log.InfoContextf(ctx, "factor_period_done task_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", taskID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
-}
-
-// recordParams 按每个成员这一期冻结参数的来源计数，并维护连续沿用的期数：沿用（含离线沿用）加一，
-// 新提交生效时归零；默认值（从未提交过）不算沿用。
-func (r *measuredRunner) recordParams(setID string, outcome pipeline.Outcome) {
-	r.carriedMu.Lock()
-	defer r.carriedMu.Unlock()
-	if r.carried == nil {
-		r.carried = map[string]int{}
-	}
-	for _, state := range outcome.Factors {
-		if state.ParamsSource == "" {
-			continue
-		}
-		r.metrics.ParamFreezes.WithLabelValues(setID, state.ParamsSource).Inc()
-		key := setID + "/" + state.Member
-		switch state.ParamsSource {
-		case domain.ParamsCarried, domain.ParamsCarriedOffline:
-			r.carried[key]++
-		default:
-			r.carried[key] = 0
-		}
-		r.metrics.ParamCarriedPeriods.WithLabelValues(setID, state.Member).Set(float64(r.carried[key]))
-	}
-}
-
-// carriedPeriods 返回成员当前连续沿用参数的期数（没有记录为 0）。
-func (r *measuredRunner) carriedPeriods(setID, member string) int {
-	r.carriedMu.Lock()
-	defer r.carriedMu.Unlock()
-	return r.carried[setID+"/"+member]
 }
 
 // pipelineStages is the order a period runs through; the log line lists the

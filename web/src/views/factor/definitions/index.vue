@@ -120,7 +120,7 @@ import {
   setFactorCategory,
   upsertFactorCategory
 } from "@/api/factor";
-import type { FactorCategory, FactorInfo, FactorSetInfo } from "@/api/factor/types";
+import type { FactorCategory, FactorInfo, FactorTaskInfo } from "@/api/factor/types";
 import { RequestGate } from "@/utils/request-gate";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import {
@@ -182,16 +182,16 @@ const emptyText = computed(() =>
   filters.keyword || filters.type || filters.usage !== "all" ? "没有符合条件的因子定义" : "当前范围暂无因子定义"
 );
 
-function setLabelOf(setId: string) {
-  const info = store.sets.find((item: FactorSetInfo) => item.factor_set.set_id === setId);
-  return info ? store.setLabel(info.factor_set) : setId;
+function taskLabelOf(taskId: string) {
+  const info = store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+  return info ? store.taskLabel(info.factor_task) : taskId;
 }
 
 const rows = computed(() =>
   definitionRows(
     filteredWithoutCategory.value.filter(item => !selectedCategory.value || categoryOf(item.factor) === selectedCategory.value),
     categories.value,
-    setLabelOf
+    taskLabelOf
   )
 );
 
@@ -348,8 +348,8 @@ function editFactor(factorId: string) {
   void router.push(`/factor/definitions/${encodeURIComponent(factorId)}/edit`);
 }
 
-function openTask(setId: string) {
-  void router.push({ path: "/factor/tasks", query: { detail: setId } });
+function openTask(taskId: string) {
+  void router.push({ path: "/factor/tasks", query: { detail: taskId } });
 }
 
 async function removeFactor(factorId: string) {

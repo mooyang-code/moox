@@ -1,4 +1,4 @@
-// Package watermark 保存因子集合的连续水位：committed_through 这一期及之前已经连续算完，
+// Package watermark 保存因子任务的连续水位：committed_through 这一期及之前已经连续算完，
 // 引擎据此逐期推进，不跳过任何还没补到的周期（设计见 docs/计划/因子连续水位详细设计.md）。
 package watermark
 
@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// State 是一个集合的推进状态。
+// State 是一个任务的推进状态。
 type State struct {
-	SetID     string `json:"set_id"`
+	TaskID    string `json:"task_id"`
 	SpaceID   string `json:"space_id"`
 	DatasetID string `json:"dataset_id"`
 	Freq      string `json:"freq"`
@@ -38,7 +38,7 @@ type State struct {
 // Behind 判断还有已知的周期没有推进到。
 func (s State) Behind() bool { return s.Target.After(s.CommittedThrough) }
 
-// Store 是持久化在一个 JSON 文件里的全部集合状态；每次修改原子写盘。
+// Store 是持久化在一个 JSON 文件里的全部任务状态；每次修改原子写盘。
 type Store struct {
 	path   string
 	mu     sync.Mutex
@@ -60,7 +60,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("decode factor watermarks %s: %w", path, err)
 	}
 	for _, state := range states {
-		store.states[state.SetID] = state
+		store.states[state.TaskID] = state
 	}
 	return store, nil
 }
@@ -68,23 +68,23 @@ func Open(path string) (*Store, error) {
 // Path 是状态文件路径。
 func (s *Store) Path() string { return s.path }
 
-// Get 返回集合的状态。
-func (s *Store) Get(setID string) (State, bool) {
+// Get 返回任务的状态。
+func (s *Store) Get(taskID string) (State, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state, ok := s.states[setID]
+	state, ok := s.states[taskID]
 	if ok {
 		state.Universe = append([]string(nil), state.Universe...)
 	}
 	return state, ok
 }
 
-// Put 保存集合的状态并写盘。
+// Put 保存任务的状态并写盘。
 func (s *Store) Put(state State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state.Universe = append([]string(nil), state.Universe...)
-	s.states[state.SetID] = state
+	s.states[state.TaskID] = state
 	return s.flushLocked()
 }
 
@@ -96,7 +96,7 @@ func (s *Store) Reset() error {
 	return s.flushLocked()
 }
 
-// All 返回全部状态（按集合 ID 排序）。
+// All 返回全部状态（按任务 ID 排序）。
 func (s *Store) All() []State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,7 +104,7 @@ func (s *Store) All() []State {
 	for _, state := range s.states {
 		out = append(out, state)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
+	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
 	return out
 }
 
@@ -113,7 +113,7 @@ func (s *Store) flushLocked() error {
 	for _, state := range s.states {
 		states = append(states, state)
 	}
-	sort.Slice(states, func(i, j int) bool { return states[i].SetID < states[j].SetID })
+	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })
 	raw, err := json.MarshalIndent(states, "", "  ")
 	if err != nil {
 		return err

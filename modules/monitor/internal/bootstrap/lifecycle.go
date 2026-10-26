@@ -14,7 +14,8 @@ import (
 )
 
 // Monitor 的生命周期：模块级，没有对象。暂停 = **告警静默**：探测、入库、首页聚合照常，只是告警只记录、不推送
-// （发送器返回 nil，和「没有通知渠道」同一条路径）；它没有要追赶的数据。重置见 reset.go。
+// （发送器返回 nil，和「没有通知渠道」同一条路径）；它没有要追赶的数据。静默结束时补发汇总见 mute_summary.go；
+// moox-cli monitor mute 带时长的屏蔽就是这个暂停（rpc/mute.go）。重置见 reset.go。
 
 const monitorLifecycleRefresh = 30 * time.Second
 
@@ -26,7 +27,7 @@ func (r *Runtime) alertSender(ctx context.Context) (notification.Sender, error) 
 	return notifier.Sender(ctx, r.Repositories.Notifications)
 }
 
-func newMonitorLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, error) {
+func newMonitorLifecycle(db *store.Store, dbPath string, onChange func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string)) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Audit:     func(event string) { log.Infof("%s", event) },
 		Module:    "monitor",
@@ -38,10 +39,8 @@ func newMonitorLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller,
 				}
 				return []lifecycle.Check{{Name: "数据库", Status: lifecycle.CheckPass}}
 			},
-			Reset: monitorResetSpec(db, dbPath),
-			OnChange: func(_ lifecycle.Ref, from, to lifecycle.Stage, reason string) {
-				log.Infof("monitor_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
-			},
+			Reset:    monitorResetSpec(db, dbPath),
+			OnChange: onChange,
 		},
 	})
 }

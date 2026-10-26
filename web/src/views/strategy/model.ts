@@ -205,11 +205,12 @@ export function parseSummary(raw?: string): ResultSummary {
 export interface ResolvedColumn {
   name: string;
   source: string;
-  /** 因子列所属的成员别名；参数列另带参数名。 */
+  /** 因子列所属的成员键。 */
   member: string;
-  param: string;
+  /** 成员类型：fixed 或 var。 */
+  member_kind: string;
   factor_id: string;
-  factor_output: string;
+  output_name: string;
   definition_hash: string;
 }
 
@@ -234,9 +235,9 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
       name,
       source: binding?.source ?? "",
       member: binding?.member ?? "",
-      param: binding?.param ?? "",
+      member_kind: binding?.member_kind ?? "",
       factor_id: binding?.factor_id ?? "",
-      factor_output: binding?.factor_output ?? "",
+      output_name: binding?.output_name ?? "",
       definition_hash: binding?.definition_hash ?? ""
     }))
     .sort((a, b) => a.name.localeCompare(b.name));

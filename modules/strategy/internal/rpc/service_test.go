@@ -30,9 +30,10 @@ rules:
     weight: {total: 1}
 `
 
-// fakeResolver 按 View 返回固定的解析结果；swap 结尾的 View 视为合约。view 是回放区间校验使用的覆盖范围。
+// fakeResolver 按因子任务返回固定的解析结果；swap 结尾的任务视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
 	calls       int
+	bound       []string
 	err         error
 	columns     []string
 	loaded      input.Loaded
@@ -49,7 +50,7 @@ func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, ti
 	return f.coverageErr
 }
 
-func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
 	f.calls++
 	if f.onResolve != nil {
 		f.onResolve()
@@ -65,16 +66,26 @@ func (f *fakeResolver) Resolve(_ context.Context, _, viewID string, strategy dsl
 	if err != nil {
 		return input.Resolved{}, nil, err
 	}
-	spot := !strings.HasSuffix(viewID, "swap")
+	viewID, err := input.ViewIDOfTask(taskID)
+	if err != nil {
+		return input.Resolved{}, nil, err
+	}
+	spot := !strings.HasSuffix(taskID, "swap")
 	marketType := "spot"
 	if !spot {
 		marketType = "swap"
 	}
-	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: viewID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: viewID, FactorTaskID: taskID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
 	if f.calendar != "" {
 		resolved.Calendar, resolved.Bar = f.calendar, "1d"
 	}
 	return resolved, program, nil
+}
+
+// ResolveInstance 记下启用时关联任务的实例，其余与 Resolve 相同。
+func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	f.bound = append(f.bound, instanceID+"@"+taskID)
+	return f.Resolve(ctx, spaceID, taskID, strategy)
 }
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {
@@ -151,7 +162,7 @@ func newHarness(t *testing.T) *harness {
 	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
 		t.Fatal(err)
 	}
-	coverage := input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
+	coverage := input.ViewInfo{ViewID: "view_factor_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)}
 	h := &harness{t: t, resolver: &fakeResolver{view: coverage}, owner: &fakeOwner{}, now: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
 	h.service = &Service{Store: repo, Resolver: h.resolver, Owner: h.owner, Now: func() time.Time { return h.now }}
 	ctx := trpc.BackgroundContext()
@@ -187,9 +198,9 @@ func (h *harness) createStrategy(id, raw string) *strategypb.Strategy {
 	return rsp.GetStrategy()
 }
 
-func (h *harness) createInstance(id, strategyID, viewID, account string, enabled bool) *strategypb.CreateStrategyInstanceRsp {
+func (h *harness) createInstance(id, strategyID, taskID, account string, enabled bool) *strategypb.CreateStrategyInstanceRsp {
 	h.t.Helper()
-	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, ViewId: viewID, LogicalAccountId: account, Enabled: enabled}})
+	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTaskId: taskID, LogicalAccountId: account, Enabled: enabled}})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -236,7 +247,7 @@ func TestStrategyDefinitionCRUD(t *testing.T) {
 func TestS14EnableIsIdempotentAndReenableCreatesSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	created := h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	created := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	first := created.GetInstance()
 	if !first.GetEnabled() || first.GetSessionId() == "" || first.GetResolvedJson() == "{}" || len(h.owner.claims) != 1 {
@@ -288,7 +299,7 @@ func TestEnableClaimFailureHandling(t *testing.T) {
 			h := newHarness(t)
 			h.createStrategy("s1", demoDSL)
 			h.owner.claimErr = tc.err
-			rsp := h.createInstance("i1", "s1", "view_a", "acct-1", true)
+			rsp := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 			requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "i1")
 			if rsp.GetInstance().GetInstanceId() != "i1" || rsp.GetInstance().GetEnabled() || (rsp.GetInstance().GetSessionId() != "") != tc.retain {
 				t.Fatalf("失败后的实例状态不符：%+v", rsp.GetInstance())
@@ -307,7 +318,7 @@ func TestEnableClaimFailureHandling(t *testing.T) {
 func TestDisableReleaseFailureIsReconciled(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	h.owner.releaseErr = errors.New("trade unavailable")
 	rsp := h.setEnabled("i1", false)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "释放未确认")
@@ -347,7 +358,7 @@ portfolio:
 `
 	h.createStrategy("s1", levered)
 	h.resolver.err = errors.New("现货 View 不允许 portfolio.leverage 大于 1（当前 1.2）")
-	rsp := h.createInstance("i1", "s1", "view_a", "", true)
+	rsp := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "leverage")
 	if rsp.GetInstance().GetEnabled() || rsp.GetInstance().GetSessionId() != "" {
 		t.Fatalf("解析失败不应留下会话：%+v", rsp.GetInstance())
@@ -357,15 +368,15 @@ portfolio:
 func TestCreateInstanceRetrySemantics(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	first := h.createInstance("i1", "s1", "view_a", "", false)
+	first := h.createInstance("i1", "s1", "ftask_i1", "", false)
 	requireOK(t, int32(first.GetRetInfo().GetCode()), first.GetRetInfo().GetMsg())
-	same := h.createInstance("i1", "s1", "view_a", "", false)
+	same := h.createInstance("i1", "s1", "ftask_i1", "", false)
 	requireOK(t, int32(same.GetRetInfo().GetCode()), same.GetRetInfo().GetMsg())
-	conflict := h.createInstance("i1", "s1", "view_b", "", false)
+	conflict := h.createInstance("i1", "s1", "ftask_other", "", false)
 	requireFail(t, int32(conflict.GetRetInfo().GetCode()), conflict.GetRetInfo().GetMsg(), "冲突")
-	enable := h.createInstance("i1", "s1", "view_a", "", true)
+	enable := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	requireFail(t, int32(enable.GetRetInfo().GetCode()), enable.GetRetInfo().GetMsg(), "SetStrategyInstanceEnabled")
-	missing := h.createInstance("i2", "nope", "view_a", "", false)
+	missing := h.createInstance("i2", "nope", "ftask_i2", "", false)
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "不存在")
 	other := trpc.BackgroundContext()
 	trpc.SetMetaData(other, "x-space-id", []byte("other"))
@@ -373,13 +384,13 @@ func TestCreateInstanceRetrySemantics(t *testing.T) {
 	requireFail(t, int32(scoped.GetRetInfo().GetCode()), scoped.GetRetInfo().GetMsg(), "空间")
 }
 
-// S20 / S25：停用、修改定义、重新启用后，旧会话结果仍按旧 DSL 与旧绑定查看；软删除后列表消失、历史仍可查。
-func TestS20S25HistoryAfterRedefinitionAndDelete(t *testing.T) {
+// S20：停用、修改定义、重新启用后，旧会话结果仍按旧 DSL 与旧绑定查看；被实例引用的定义不能删除。
+func TestS20HistoryAfterRedefinition(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	created := h.createInstance("i1", "s1", "view_a", "", true)
+	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	oldSession := created.GetInstance().GetSessionId()
-	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_a"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
+	result := store.Result{ResultID: "r-old", InstanceID: "i1", SessionID: oldSession, BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{"view_id":"view_factor_i1"}`), TargetsJSON: []byte(`[{"instrument_id":"BTC-USDT","target_weight":"1"}]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	weight := "1"
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Items: []store.ResultItem{{RuleID: "r", InstrumentID: "BTC-USDT", Stage: engine.StageWeighted, Weight: &weight}}, Now: h.now}); err != nil {
 		t.Fatal(err)
@@ -390,40 +401,25 @@ func TestS20S25HistoryAfterRedefinitionAndDelete(t *testing.T) {
 	newDSL := strings.Replace(demoDSL, "name: demo", "name: v2", 1)
 	updated, _ := h.service.UpdateStrategy(h.ctx, &strategypb.UpdateStrategyReq{StrategyId: "s1", DslYaml: newDSL})
 	requireOK(t, int32(updated.GetRetInfo().GetCode()), updated.GetRetInfo().GetMsg())
-	rebound, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", ViewId: "view_b"}})
-	requireOK(t, int32(rebound.GetRetInfo().GetCode()), rebound.GetRetInfo().GetMsg())
 	reenabled := h.setEnabled("i1", true)
 	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
 	got, _ := h.service.GetStrategyResult(h.ctx, &strategypb.GetStrategyResultReq{ResultId: "r-old"})
 	requireOK(t, int32(got.GetRetInfo().GetCode()), got.GetRetInfo().GetMsg())
-	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"view_id":"view_a"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
+	if got.GetDslYaml() != demoDSL || !strings.Contains(got.GetResolvedJson(), `"view_id":"view_factor_i1"`) || len(got.GetItems()) != 1 || got.GetItems()[0].GetWeight() != "1" {
 		t.Fatalf("旧会话结果应按旧 DSL 与旧绑定展示：dsl=%q resolved=%s items=%+v", got.GetDslYaml(), got.GetResolvedJson(), got.GetItems())
 	}
 	targets, _ := h.service.ListStrategyTargets(h.ctx, &strategypb.ListStrategyTargetsReq{InstanceId: "i1"})
 	if len(targets.GetTargets()) != 0 || targets.GetSessionId() != reenabled.GetInstance().GetSessionId() {
 		t.Fatalf("新会话不应返回旧会话的目标：%+v", targets)
 	}
-	// S25：删除定义被拒绝（仍有未删除实例）；停用并删除实例后成功；历史仍可查。
+	// 被实例引用的定义不能删除（实例永久存在）。
 	refused, _ := h.service.DeleteStrategy(h.ctx, &strategypb.DeleteStrategyReq{StrategyId: "s1"})
 	requireFail(t, int32(refused.GetRetInfo().GetCode()), refused.GetRetInfo().GetMsg(), "引用")
-	enabledDelete, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireFail(t, int32(enabledDelete.GetRetInfo().GetCode()), enabledDelete.GetRetInfo().GetMsg(), "停用")
-	h.setEnabled("i1", false)
-	deleted, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
-	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
-	listed, _ := h.service.ListStrategyInstances(h.ctx, &strategypb.ListStrategyInstancesReq{})
-	if listed.GetTotal() != 0 {
-		t.Fatalf("删除后的实例不应出现在列表：%+v", listed)
-	}
 	history, _ := h.service.ListStrategyResults(h.ctx, &strategypb.ListStrategyResultsReq{InstanceId: "i1"})
 	requireOK(t, int32(history.GetRetInfo().GetCode()), history.GetRetInfo().GetMsg())
 	if history.GetTotal() != 1 || history.GetResults()[0].GetResultId() != "r-old" {
-		t.Fatalf("删除实例后历史结果仍应可查：%+v", history)
+		t.Fatalf("旧会话的历史结果仍应可查：%+v", history)
 	}
-	removed, _ := h.service.DeleteStrategy(h.ctx, &strategypb.DeleteStrategyReq{StrategyId: "s1"})
-	requireOK(t, int32(removed.GetRetInfo().GetCode()), removed.GetRetInfo().GetMsg())
-	restart, _ := h.service.SetStrategyInstanceEnabled(h.ctx, &strategypb.SetStrategyInstanceEnabledReq{InstanceId: "i1", Enabled: true})
-	requireFail(t, int32(restart.GetRetInfo().GetCode()), restart.GetRetInfo().GetMsg(), "已删除")
 }
 
 // 验收项 4：ValidateStrategy 对引用不存在列的 DSL 返回明确的列名错误；有数据时返回试算结果与解释。
@@ -432,18 +428,18 @@ func TestValidateStrategy(t *testing.T) {
 	plain, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL})
 	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
 	h.resolver.err = errors.New("列 momentum_99 不存在于 View view_a；可用列：close")
-	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, ViewId: "view_a"})
+	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "momentum_99")
 	h.resolver.err = nil
 	frame := engine.Frame{BarEnd: h.now, Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
 	h.resolver.loaded = input.Loaded{Frame: frame, Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)}}
-	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, ViewId: "view_a"})
+	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
 	requireOK(t, int32(trial.GetRetInfo().GetCode()), trial.GetRetInfo().GetMsg())
 	if trial.GetTrial().GetStatus() != "ok" || len(trial.GetTrial().GetTargets()) != 1 || trial.GetTrial().GetTargets()[0].GetInstrumentId() != "BTC-USDT" || len(trial.GetTrialItems()) != 2 || trial.GetResolvedJson() == "" {
 		t.Fatalf("试算结果不符：%+v", trial)
 	}
 	h.resolver.loadErr = fmt.Errorf("View view_a 最近三个周期都没有数据")
-	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, ViewId: "view_a"})
+	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
 	requireOK(t, int32(empty.GetRetInfo().GetCode()), empty.GetRetInfo().GetMsg())
 	if len(empty.GetDiagnostics()) == 0 || !strings.Contains(empty.GetDiagnostics()[0], "试算未完成") {
 		t.Fatalf("没有数据时应给出诊断：%+v", empty.GetDiagnostics())
@@ -454,11 +450,11 @@ func TestValidateStrategy(t *testing.T) {
 func TestS26StartReplayRejectsSwap(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_swap", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_swap", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
 	requireFail(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg(), "只支持现货")
-	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-01T00:00:00Z"})
+	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-01T00:00:00Z"})
 	requireFail(t, int32(badRange.GetRetInfo().GetCode()), badRange.GetRetInfo().GetMsg(), "晚于")
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02", FeeBps: 10})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02", FeeBps: 10})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	if started.GetReplay().GetStatus() != store.ReplayPending || started.GetReplay().GetDslYaml() != demoDSL || started.GetReplay().GetStrategyId() != "s1" {
 		t.Fatalf("回放任务不符：%+v", started.GetReplay())
@@ -482,7 +478,7 @@ func TestS26StartReplayRejectsSwap(t *testing.T) {
 func TestReenableAfterUnconfirmedReleaseCreatesNewSession(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	first := h.createInstance("i1", "s1", "view_a", "acct-1", true).GetInstance()
+	first := h.createInstance("i1", "s1", "ftask_i1", "acct-1", true).GetInstance()
 	h.owner.releaseErr = errors.New("trade unavailable")
 	disabled := h.setEnabled("i1", false)
 	requireFail(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg(), "释放未确认")
@@ -513,8 +509,8 @@ func TestReenableAfterUnconfirmedReleaseCreatesNewSession(t *testing.T) {
 func TestReconcileEnabledInstancesIsolatesInstances(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "acct-1", true)
-	h.createInstance("i2", "s1", "view_a", "acct-2", true)
+	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
+	h.createInstance("i2", "s1", "ftask_i2", "acct-2", true)
 	h.owner.owner["acct-1"] = "other/session"
 	err := h.service.ReconcileEnabledInstances(h.ctx)
 	if err == nil || !strings.Contains(err.Error(), "已自动停用") {
@@ -560,14 +556,14 @@ func TestStoreErrorsAreNormalized(t *testing.T) {
 func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
-	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
 	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
-	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
-	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})
+	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})
 	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
 	// 最新一根的 bar_start 是 09-03 05:00：它可能还没写完，终点截到它的 bar_start，回放到它之前一根为止。
 	if end := future.GetReplay().GetEndTime(); end != "2026-09-03T05:00:00Z" {
@@ -584,10 +580,10 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	if err != nil || len(bars) != 29 {
 		t.Fatalf("落库往返后仍应是 29 根：%d err=%v", len(bars), err)
 	}
-	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2026-09-02", EndTime: "2026-09-03", FeeBps: 1500})
+	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-03", FeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "fee_bps")
 	h.resolver.view.IndexedFrom = time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
-	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", ViewId: "view_a", StartTime: "2023-01-02", EndTime: "2026-09-30"})
+	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2023-01-02", EndTime: "2026-09-30"})
 	requireFail(t, int32(tooLong.GetRetInfo().GetCode()), tooLong.GetRetInfo().GetMsg(), "20000")
 }
 
@@ -595,7 +591,7 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 func TestDisableTreatsMissingAccountAsReleased(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	h.owner.releaseErr = &tradeowner.ResponseError{Operation: "释放会话", Code: tradepb.ErrorCode(5), Message: "account not found"}
 	rsp := h.setEnabled("i1", false)
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
@@ -608,9 +604,9 @@ func TestDisableTreatsMissingAccountAsReleased(t *testing.T) {
 func TestEnableRejectsAccountHeldByAnotherInstance(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	h.createInstance("i1", "s1", "view_a", "acct-1", true)
+	h.createInstance("i1", "s1", "ftask_i1", "acct-1", true)
 	claims := len(h.owner.claims)
-	second := h.createInstance("i2", "s1", "view_a", "acct-1", true)
+	second := h.createInstance("i2", "s1", "ftask_i2", "acct-1", true)
 	requireFail(t, int32(second.GetRetInfo().GetCode()), second.GetRetInfo().GetMsg(), "已被启用实例 i1 绑定")
 	if len(h.owner.claims) != claims {
 		t.Fatalf("不应向 Trade 认领：%v", h.owner.claims)
@@ -631,7 +627,7 @@ func TestNotFoundIsReportedInChinese(t *testing.T) {
 func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	created := h.createInstance("i1", "s1", "view_a", "", true)
+	created := h.createInstance("i1", "s1", "ftask_i1", "", true)
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: created.GetInstance().GetSessionId(), BarEndTime: h.now.Add(time.Hour), ValidUntil: h.now.Add(3 * time.Hour), Status: store.StatusOK, DSLHash: dsl.Hash([]byte(demoDSL)), InputJSON: []byte(`{}`), TargetsJSON: []byte(`[]`), RuleStatesJSON: []byte(`{}`), SummaryJSON: []byte(`{}`), PublishStatus: store.PublishNone, CreatedAt: h.now}
 	if _, _, err := h.service.Store.CommitResult(h.ctx, store.CommitRequest{Result: result, Now: h.now}); err != nil {
 		t.Fatal(err)

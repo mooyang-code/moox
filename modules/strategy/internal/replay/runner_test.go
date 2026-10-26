@@ -106,14 +106,14 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 		return input.ViewInfo{}, &input.TransportError{Operation: "读取 View", Err: errors.New("connection refused")}
 	}
 	if f.viewDeleted {
-		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View view_a 已不存在", Cause: input.ErrViewNotFound}
+		return input.ViewInfo{}, &input.SkipError{Reason: input.SkipConfigError, Detail: "View view_factor_a 已不存在", Cause: input.ErrViewNotFound}
 	}
 	index := f.currentIndex()
 	generation := index
 	if f.build != "" {
 		generation += "@" + f.build
 	}
-	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"origin_factor_id": "mom", "factor_output": "mom"}}}}, nil
+	return input.ViewInfo{ViewID: "view_factor_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}}}}, nil
 }
 
 func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
@@ -235,7 +235,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, _, err := input.Resolve(context.Background(), &fakeClient{marketType: "spot"}, "crypto", "view_a", strategy)
+	resolved, _, err := input.Resolve(context.Background(), &fakeClient{marketType: "spot"}, "crypto", "ftask_a", strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 
 func startReplay(t *testing.T, repo *store.Store, id, dslYaml string, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: id, DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(time.Duration(2+hours) * time.Hour), FeeBps: 10, Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestReplayRunsEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
 		t.Fatal(err)
 	}
-	if metrics.Bars != 10 || metrics.OKBars != 10 || metrics.InitialEquity != 100 || metrics.Factors["mom"] != "sha256:mom" || len(metrics.Limitations) < 4 || metrics.TotalFee <= 0 {
+	if metrics.Bars != 10 || metrics.OKBars != 10 || metrics.InitialEquity != 100 || metrics.Factors["mom"] != "sha256:mom|fixed" || len(metrics.Limitations) < 4 || metrics.TotalFee <= 0 {
 		t.Fatalf("绩效不符：%+v", metrics)
 	}
 	bars := barsOf(t, repo, "p1")
@@ -432,7 +432,7 @@ func TestReplayRejectsSwapAndEarlyStart(t *testing.T) {
 func TestRunnerDrainsQueueAndWakes(t *testing.T) {
 	repo := openStore(t)
 	for _, id := range []string{"p1", "p2"} {
-		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
+		if err := repo.CreateReplay(context.Background(), store.Replay{ReplayID: id, DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(5 * time.Hour), Factors: pinnedFactors(t, replayDSL), CreatedAt: origin}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -533,7 +533,7 @@ func TestReplayPreviousBarAmbiguitySkips(t *testing.T) {
 // 发起时固化的因子指纹与执行时不一致：拒绝执行，提示重新发起。
 func TestReplayRejectsFactorDrift(t *testing.T) {
 	repo := openStore(t)
-	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", ViewID: "view_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: replayDSL, DSLHash: dsl.Hash([]byte(replayDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(6 * time.Hour), Factors: map[string]string{"mom": "sha256:old"}, CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +773,7 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resolved, program, err := input.Resolve(context.Background(), client, "crypto", "view_a", strategy)
+			resolved, program, err := input.Resolve(context.Background(), client, "crypto", "ftask_a", strategy)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,6 +1,6 @@
 // Package command 是回放命令行的共用实现：moox-replay 与 moox-cli replay 都调用它。
 //
-//	start    [--set <因子集合>] --instance <策略实例> --from <起> --to <止> [--replay <ID>] [--quote next_open|close] [--write-factors] ...
+//	start    [--task <因子任务>] --instance <策略实例> --from <起> --to <止> [--replay <ID>] [--quote next_open|close] [--write-factors] ...
 //	         开始一次回放；用同样的参数（或只给 --replay）再次执行就是续跑。前台运行，Ctrl-C 中断后可续跑。
 //	pause    --replay <ID>   暂停（运行进程在周期边界停下）
 //	resume   --replay <ID>   继续被暂停的回放
@@ -94,7 +94,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	var c common
 	c.bind(fs)
 	var spec seriesreplay.Spec
-	fs.StringVar(&spec.SetID, "set", "", "计算因子帧的因子集合 ID（实例声明了 factors 时可省略，取实例的私有因子集）")
+	fs.StringVar(&spec.TaskID, "task", "", "计算因子帧的因子任务 ID（可省略，取实例关联的因子任务）")
 	fs.StringVar(&spec.InstanceID, "instance", "", "提供策略定义与数据源绑定的策略实例 ID")
 	fs.StringVar(&spec.From, "from", "", "回放起点（RFC3339，含）")
 	fs.StringVar(&spec.To, "to", "", "回放终点（RFC3339，不含）；本地数据必须包含终点之后的一根")
@@ -113,7 +113,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	}
 	defer store.Close()
 	// 只给 --replay：从库里取规格续跑。
-	if c.replayID != "" && spec.SetID == "" && spec.InstanceID == "" && spec.From == "" {
+	if c.replayID != "" && spec.TaskID == "" && spec.InstanceID == "" && spec.From == "" {
 		run, err := store.GetRun(c.replayID)
 		if err != nil {
 			return fmt.Errorf("回放 %s：%w", c.replayID, err)
@@ -125,7 +125,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 			spec.ReplayID = "replay-" + time.Now().UTC().Format("20060102-150405")
 		}
 	}
-	fmt.Fprintf(out, "回放 %s：因子集合 %s，策略实例 %s，区间 [%s, %s)\n", spec.ReplayID, spec.SetID, spec.InstanceID, spec.From, spec.To)
+	fmt.Fprintf(out, "回放 %s：因子任务 %s，策略实例 %s，区间 [%s, %s)\n", spec.ReplayID, spec.TaskID, spec.InstanceID, spec.From, spec.To)
 	runner := &seriesreplay.Runner{
 		Store:    store,
 		Factor:   seriesreplay.FactorClient{Endpoint: c.endpoint("FACTOR", c.factorURL)},
@@ -215,7 +215,7 @@ func status(args []string, out io.Writer) error {
 		if run.CurrentPeriod > 0 {
 			current = time.Unix(run.CurrentPeriod, 0).UTC().Format(time.RFC3339)
 		}
-		fmt.Fprintf(out, "%s  %-9s  %d/%d  当前周期 %s  集合 %s  实例 %s\n", run.ReplayID, run.Status, run.PeriodsDone, run.PeriodsTotal, current, run.Spec.SetID, run.Spec.InstanceID)
+		fmt.Fprintf(out, "%s  %-9s  %d/%d  当前周期 %s  任务 %s  实例 %s\n", run.ReplayID, run.Status, run.PeriodsDone, run.PeriodsTotal, current, run.Spec.TaskID, run.Spec.InstanceID)
 		if run.Error != "" {
 			fmt.Fprintf(out, "    错误：%s\n", run.Error)
 		}

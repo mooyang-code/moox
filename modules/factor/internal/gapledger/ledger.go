@@ -1,6 +1,6 @@
 // Package gapledger 是因子引擎的跳过账本：每次因回看窗口空洞、或实时周期里标的还在预热而跳过的 (标的, 周期, 因子)
 // 都追加一行到按月的 JSONL 文件，永不自动删除。它同时是永久审计（可用 DuckDB 的 read_json_auto 或 jq 分析空洞的频率、
-// 集中的标的与时段、从发现到补齐的耗时；预热跳过的行带 reason=warming）和恢复的待办来源：启动时回放全部账本重建待恢复集合。
+// 集中的标的与时段、从发现到补齐的耗时；预热跳过的行带 reason=warming）和恢复的待办来源：启动时回放全部账本重建待恢复任务。
 // 设计见 docs/计划/因子窗口空洞防护详细设计.md 2.5。
 package gapledger
 
@@ -88,7 +88,7 @@ func refKey(ref Ref) key {
 	return key{set: ref.Set, subject: ref.Subject, period: ref.Period.UTC().Unix(), member: ref.Member, hash: ref.Hash}
 }
 
-// Ledger 是账本。内存里的待恢复集合始终是权威：写盘失败只记错误并标记降级，不影响本进程内的恢复与判断。
+// Ledger 是账本。内存里的待恢复任务始终是权威：写盘失败只记错误并标记降级，不影响本进程内的恢复与判断。
 type Ledger struct {
 	dir  string
 	now  func() time.Time
@@ -106,7 +106,7 @@ type Ledger struct {
 
 // Reset 删除账本目录里的全部账本文件（factor-gap-*.jsonl），返回删除的文件数；目录不存在视为没有账本。
 // 用于数据被整体清空之后：账本里的待恢复项指向已不存在的数据，留着只会让恢复一直白跑、超期后还会告警。
-// 调用方必须保证没有引擎进程在使用该目录：引擎持有打开的文件，并在内存里维护待恢复集合。
+// 调用方必须保证没有引擎进程在使用该目录：引擎持有打开的文件，并在内存里维护待恢复任务。
 func Reset(dir string) (int, error) {
 	if strings.TrimSpace(dir) == "" {
 		return 0, fmt.Errorf("gap ledger directory is required")
@@ -125,7 +125,7 @@ func Reset(dir string) (int, error) {
 	return removed, nil
 }
 
-// Clear 清空账本：关闭当前打开的文件，删除账本文件，清空内存里的待恢复集合（进程内重置用，不需要停引擎）。
+// Clear 清空账本：关闭当前打开的文件，删除账本文件，清空内存里的待恢复任务（进程内重置用，不需要停引擎）。
 func (l *Ledger) Clear() (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -139,7 +139,7 @@ func (l *Ledger) Clear() (int, error) {
 	return removed, err
 }
 
-// Open 打开账本目录并回放全部账本文件重建待恢复集合；giveUp > 0 时，已超过期限的待恢复项立即追加 gave_up
+// Open 打开账本目录并回放全部账本文件重建待恢复任务；giveUp > 0 时，已超过期限的待恢复项立即追加 gave_up
 // 并返回它们（停机期间超期的项不会无声消失，调用方应告警）。
 func Open(dir string, now func() time.Time, giveUp time.Duration) (*Ledger, []Entry, error) {
 	if strings.TrimSpace(dir) == "" {
@@ -199,7 +199,7 @@ func (l *Ledger) replay() error {
 	return nil
 }
 
-// apply 把一行应用到内存里的待恢复集合（回放与实时共用，保证两者一致）。
+// apply 把一行应用到内存里的待恢复任务（回放与实时共用，保证两者一致）。
 func (l *Ledger) apply(entry line) {
 	for _, factor := range entry.Factors {
 		k := key{set: entry.Set, subject: entry.Subject, period: entry.Period.UTC().Unix(), member: factor.ID, hash: factor.Hash}
@@ -242,14 +242,14 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 	var order []groupKey
 	now := l.now().UTC()
 	for _, entry := range entries {
-		gk := groupKey{set: entry.SetID, subject: entry.Subject, reason: entry.Reason, period: entry.Period.UTC().Unix()}
+		gk := groupKey{set: entry.TaskID, subject: entry.Subject, reason: entry.Reason, period: entry.Period.UTC().Unix()}
 		row := groups[gk]
 		if row == nil {
 			skipID, err := newSkipID()
 			if err != nil {
 				return err
 			}
-			row = &line{Event: EventSkip, At: now, Set: entry.SetID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Trigger: entry.TriggerEventID, Reason: entry.Reason}
+			row = &line{Event: EventSkip, At: now, Set: entry.TaskID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Trigger: entry.TriggerEventID, Reason: entry.Reason}
 			groups[gk] = row
 			order = append(order, gk)
 		}
@@ -270,14 +270,14 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 	return l.appendLocked(lines)
 }
 
-// Pending 返回当前全部待恢复项的快照（按集合、标的、周期、因子排序）。
+// Pending 返回当前全部待恢复项的快照（按任务、标的、周期、因子排序）。
 func (l *Ledger) Pending() []Entry {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.pendingLocked(func(Entry) bool { return true })
 }
 
-// PendingFor 返回一个集合下若干标的的待恢复项；恢复在集合锁内用它重读待办，保证用到最新的 skipID。
+// PendingFor 返回一个任务下若干标的的待恢复项；恢复在任务锁内用它重读待办，保证用到最新的 skipID。
 func (l *Ledger) PendingFor(set string, subjects []string) []Entry {
 	wanted := make(map[string]struct{}, len(subjects))
 	for _, subject := range subjects {
@@ -315,7 +315,7 @@ func (l *Ledger) pendingLocked(match func(Entry) bool) []Entry {
 	return out
 }
 
-// HasPendingIn 报告一个集合的某个周期是否还有待恢复项；补算据此判断这一期是否已经补齐。
+// HasPendingIn 报告一个任务的某个周期是否还有待恢复项；补算据此判断这一期是否已经补齐。
 func (l *Ledger) HasPendingIn(set string, period time.Time) bool {
 	at := period.UTC().Unix()
 	l.mu.Lock()
@@ -352,7 +352,7 @@ func (l *Ledger) SkippedTotal() int64 {
 // Ignored 是回放时忽略的无法解析的行数。
 func (l *Ledger) Ignored() int { return l.ignored }
 
-// MarkRepaired 追加 repaired 并从待恢复集合移除（只移除 skipID 一致的项）。
+// MarkRepaired 追加 repaired 并从待恢复任务移除（只移除 skipID 一致的项）。
 func (l *Ledger) MarkRepaired(refs []Ref) error { return l.terminate(EventRepaired, "", refs) }
 
 // MarkCancelled 追加 cancelled。

@@ -246,11 +246,10 @@ func sortedWindow(n int, fn func(sorted []float64) float64) SeriesKernel {
 	}
 }
 
-// truncatedSmoothing 是截断到 K 根的指数平滑（设计第 5 节）：
+// truncatedSmoothing 是截断到 k 根的指数平滑（设计第 5 节）：
 // y_t = (1−α)^(K−1)·x_{t−K+1} + Σ_{j=0}^{K−2} α(1−α)^j·x_{t−j}，等价于在 [t−K+1, t] 上以 x_{t−K+1} 为初值递推。
 // 权重在准备内核时算好，求和从最老到最新、固定顺序。
-func truncatedSmoothing(alpha float64) SeriesKernel {
-	k := factorexpr.RecursiveSpan(alpha)
+func truncatedSmoothing(alpha float64, k int) SeriesKernel {
 	weights := make([]float64, k) // weights[i] 对应窗口第 i 个值（0 为最老）
 	decay := 1.0
 	for j := 0; j < k-1; j++ { // j = 0 是最新一根

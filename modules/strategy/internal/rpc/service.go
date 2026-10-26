@@ -22,17 +22,15 @@ import (
 
 // Resolver 解析绑定、装配最新周期（试算）并校验回放区间。
 type Resolver interface {
-	Resolve(ctx context.Context, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// Resolve 按因子任务解析绑定（只读，不关联任务；校验与研究回放用）。
+	Resolve(ctx context.Context, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// ResolveInstance 启用实例时的解析：先把任务与实例永久关联（幂等），要求任务已启用，再解析绑定。
+	ResolveInstance(ctx context.Context, instanceID, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
 	CheckCoverage(ctx context.Context, spaceID string, resolved input.Resolved, now time.Time) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
 	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引代次。
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error)
-}
-
-// InstanceResolver 是声明了 factors 的策略启用时用的解析：先为实例建立私有因子集，再绑定它的结果 View。
-type InstanceResolver interface {
-	ResolveInstance(ctx context.Context, instanceID, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。
@@ -56,12 +54,10 @@ type ReplayWaker interface {
 type Service struct {
 	Store    *store.Store
 	Resolver Resolver
-	// Factors 是 FactorMgr 的私有因子集接口：停用、改绑与删除实例时同步其私有因子集；nil 表示未接线（没有声明 factors 的部署）。
-	Factors input.FactorSets
-	Owner   Owner
-	Replays ReplayWaker
-	Alerts  Alerter
-	Now     func() time.Time
+	Owner    Owner
+	Replays  ReplayWaker
+	Alerts   Alerter
+	Now      func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex

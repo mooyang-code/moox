@@ -37,8 +37,8 @@
             >{{ store.strategy?.name || definitionHint }} ·
             <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
           >
-          <a-descriptions-item label="View"
-            ><span class="mono">{{ store.instance.view_id }}</span></a-descriptions-item
+          <a-descriptions-item label="因子任务"
+            ><span class="mono">{{ store.instance.factor_task_id }}</span></a-descriptions-item
           >
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
@@ -80,10 +80,10 @@
           @retry="loadResults(resultPage, resultScope)"
         />
         <a-collapse :bordered="false" class="extra-sections">
-          <a-collapse-item key="bindings" header="输入绑定（会话固化的 View 列与因子指纹）"
+          <a-collapse-item key="bindings" header="输入绑定（会话固化的结果 View 列与成员契约）"
             ><ResolvedTable :resolved-json="store.instance.resolved_json"
           /></a-collapse-item>
-          <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（私有因子集、冻结记录、提交记录与外显设置）">
+          <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（最近一次提交、各期投递状态与外显设置）">
             <StrategyFactorParams :instance="store.instance" />
           </a-collapse-item>
           <a-collapse-item key="definition" header="DSL 定义">
@@ -179,7 +179,8 @@ function handleControlFailed() {
   controlUncertain.value = true;
 }
 function openReplay() {
-  if (store.instance) router.push(replayLink({ instanceId: store.instance.instance_id, viewId: store.instance.view_id }));
+  if (store.instance)
+    router.push(replayLink({ instanceId: store.instance.instance_id, factorTaskId: store.instance.factor_task_id }));
 }
 onMounted(start);
 watch(

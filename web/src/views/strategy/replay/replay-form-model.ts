@@ -4,7 +4,7 @@ export interface ReplayFormState {
   strategy_id: string;
   dsl_yaml: string;
   instance_id: string;
-  view_id: string;
+  factor_task_id: string;
   start: string;
   end: string;
   fee_bps: number;
@@ -20,11 +20,11 @@ export function replaySourceOf(
 }
 
 /**
- * 发起前的本地校验，返回第一条错误（没有则为空串）：来源与 View、时间格式、结束晚于开始、手续费范围。
+ * 发起前的本地校验，返回第一条错误（没有则为空串）：来源与因子任务、时间格式、结束晚于开始、手续费范围。
  * parse 把 YYYY-MM-DD HH:mm（UTC）转成 ISO 时间，格式不对返回 null。
  */
 export function validateReplayForm(form: ReplayFormState, parse: (value: string) => string | null): string {
-  if (!form.view_id || !replaySourceOf(form)) return "请选择 View，并选择定义、粘贴 DSL 文本或从实例详情进入";
+  if (!form.factor_task_id || !replaySourceOf(form)) return "请选择因子任务，并选择定义、粘贴 DSL 文本或从实例详情进入";
   const start = parse(form.start);
   const end = parse(form.end);
   if (!start || !end) return "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";

@@ -24,6 +24,8 @@ type collectorTaskCreateFlags struct {
 	Lateness    int
 	Disabled    bool
 	DataNodeID  string
+	Ingest      string
+	Executor    string
 }
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
@@ -51,6 +53,8 @@ func init() {
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.Disabled, "disabled", false, "创建后保持停用")
 	flags.StringVar(&collectorTaskCreateFlagsValue.DataNodeID, "data-node-id", "", "结果数据节点；留空使用默认")
+	flags.StringVar(&collectorTaskCreateFlagsValue.Ingest, "ingest", "", "结果数据集的采集方式初值：stream（WS 推送）或 pull（拉取）；留空用空间默认")
+	flags.StringVar(&collectorTaskCreateFlagsValue.Executor, "executor", "", "结果数据集的执行端初值：scf 或 local；留空用空间默认")
 }
 
 func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorTaskCreateFlags) error {
@@ -65,6 +69,12 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	}
 	if flags.Lateness > 0 {
 		params["allowed_lateness_seconds"] = flags.Lateness
+	}
+	if flags.Ingest != "" {
+		params["ingest"] = flags.Ingest
+	}
+	if flags.Executor != "" {
+		params["executor"] = flags.Executor
 	}
 	structured, err := structpb.NewStruct(params)
 	if err != nil {

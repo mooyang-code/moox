@@ -13,7 +13,7 @@ func TestPlanMemoryFollowsDesignFormula(t *testing.T) {
 	require.Equal(t, 32*gib*6/10, plan.TotalBudget)
 	require.Equal(t, (plan.TotalBudget-512<<20)*4/10, plan.Window)
 	headroom := plan.TotalBudget - plan.Window - plan.BlockCache
-	require.Equal(t, headroom/2/4, plan.Compute, "并行数取集合数与核数的较小值")
+	require.Equal(t, headroom/2/4, plan.Compute, "并行数取任务数与核数的较小值")
 	require.Empty(t, plan.Warnings)
 }
 

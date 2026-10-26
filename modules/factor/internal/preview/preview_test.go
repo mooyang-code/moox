@@ -56,7 +56,7 @@ func newService(source *fakeSource) *Service {
 	return s
 }
 
-var set = domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", SubjectMode: domain.SubjectModeAll}
+var set = domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}
 
 func TestPreviewComputesRecentPeriodsForShownSubjects(t *testing.T) {
 	source := &fakeSource{subjects: []string{"ETH", "BTC", "SOL"}}
@@ -76,7 +76,7 @@ func TestPreviewComputesRecentPeriodsForShownSubjects(t *testing.T) {
 
 func TestPreviewRejectsOversizedRequestsBeforeReading(t *testing.T) {
 	source := &fakeSource{subjects: []string{"BTC"}}
-	def := domain.MustDefinition("draft", "draft", "outputs:\n  m: ts_mean(close, 3)\n")
+	def := domain.MustDefinition("draft", "draft", "output: ts_mean(close, 3)\n")
 	_, err := newService(source).Preview(context.Background(), Request{Set: set, Factor: def, Periods: MaxPeriods + 1})
 	require.ErrorContains(t, err, "periods")
 
@@ -85,8 +85,18 @@ func TestPreviewRejectsOversizedRequestsBeforeReading(t *testing.T) {
 		many[i] = fmt.Sprintf("S%04d", i)
 	}
 	source = &fakeSource{subjects: many}
-	heavy := domain.MustDefinition("draft", "draft", "outputs:\n  r: cs_rank(ts_mean(close, 5000))\n")
+	heavy := domain.MustDefinition("draft", "draft", "output: cs_rank(ts_mean(close, 5000))\n")
 	_, err = newService(source).Preview(context.Background(), Request{Set: set, Factor: heavy, Periods: MaxPeriods})
 	require.ErrorIs(t, err, pipeline.ErrMemoryBudget)
 	require.Zero(t, source.reads, "超限时不读取")
+}
+
+// 显式指定的标的必须属于源数据集：任务的标的就是源数据集当前的标的。
+func TestPreviewRejectsSubjectsOutsideTheSourceDataset(t *testing.T) {
+	source := &fakeSource{subjects: []string{"BTC", "ETH"}}
+	def := domain.MustDefinition("mean", "mean", "output: ts_mean(close, 2)\n")
+	_, err := newService(source).Preview(context.Background(), Request{Set: set, Factor: def, Subjects: []string{"BTC", "DOGE"}, Periods: 4})
+	require.ErrorContains(t, err, "DOGE")
+	require.ErrorContains(t, err, "不在源数据集")
+	require.Zero(t, source.reads, "校验在读取源数据之前")
 }

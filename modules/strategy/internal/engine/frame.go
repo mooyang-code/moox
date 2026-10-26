@@ -13,6 +13,9 @@ import (
 type Row struct {
 	Values   map[string]float64
 	Previous map[string]float64
+	// Params 是这一行各可变成员这一期实际用的参数（成员键 → 参数名 → 值），来自 __params 列；表达式里的
+	// params(成员键, 参数名) 读它，缺值时为 NaN（和缺数一样不满足比较）。
+	Params map[string]map[string]float64
 }
 
 // Frame 是一个周期的全部输入。集合划分由 input 包完成到规则级的预期集合：

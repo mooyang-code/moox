@@ -43,13 +43,13 @@ func seedEnabledInstance(t *testing.T, repo *Store, instanceID, sessionID string
 			t.Fatal(err)
 		}
 	}
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: account, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: account, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: `{"view_id":"view_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
-	attachAndEnable(t, repo, instanceID, sessionID, json.RawMessage(`{"view_id":"view_a"}`))
+	attachAndEnable(t, repo, instanceID, sessionID, json.RawMessage(`{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`))
 }
 
 // attachAndEnable 按启用流程先把会话写到停用的实例上，再启用到该会话。

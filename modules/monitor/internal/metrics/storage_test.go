@@ -22,6 +22,9 @@ func (f *fakeMetadata) GetDataset(context.Context, *storagepb.GetDatasetReq, ...
 	f.datasetCalls++
 	return &storagepb.GetDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Dataset: f.dataset}, nil
 }
+func (f *fakeMetadata) ListDatasets(context.Context, *storagepb.ListDatasetsReq, ...client.Option) (*storagepb.ListDatasetsRsp, error) {
+	return &storagepb.ListDatasetsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+}
 func (f *fakeMetadata) ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
 	f.subjectCalls++
 	return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, DatasetSubjects: f.subjects}, nil

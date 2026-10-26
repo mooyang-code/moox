@@ -1,6 +1,7 @@
 package factorexpr
 
 import (
+	"github.com/mooyang-code/moox/packages/factorname"
 	"math"
 	"runtime"
 	"strconv"
@@ -55,7 +56,7 @@ func TestCanonicalTextMemoryIsLinear(t *testing.T) {
 	for i := 1; i <= 2000; i++ {
 		b.WriteString("  a" + strconv.Itoa(i) + ": a" + strconv.Itoa(i-1) + " + a0\n")
 	}
-	b.WriteString("outputs:\n  o: a2000\n")
+	b.WriteString("output: a2000\n")
 	factor := mustCompile(t, b.String())
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -74,7 +75,8 @@ func TestIdentifierLengthLimit(t *testing.T) {
 	if _, err := Compile(outputSpec(long + " + 1")); err == nil || !strings.Contains(err.Error(), "最长 64 个字符") {
 		t.Fatalf("long input column: err = %v", err)
 	}
-	if _, err := Compile("outputs:\n  " + long + ": close\n"); err == nil || !strings.Contains(err.Error(), "最长 64 个字符") {
+	longOutput := strings.Repeat("x", factorname.MaxOutputLen+1)
+	if _, err := Compile("outputs:\n  " + longOutput + ": close\n  y: open\n"); err == nil || !strings.Contains(err.Error(), "超过 16 个字符") {
 		t.Fatalf("long output column: err = %v", err)
 	}
 }
@@ -105,7 +107,7 @@ func TestWhereSelectsBranch(t *testing.T) {
 		t.Fatalf("where(false, NaN, 3) = %v, want 3", got)
 	}
 	factor := mustCompile(t, outputSpec(`where(true, close, ts_mean(open, 20))`))
-	if factor.CanonicalText() != "o = close\n" || factor.Lookback != 1 || strings.Join(factor.InputColumns, ",") != "close" {
+	if factor.CanonicalText() != "output = close\n" || factor.Lookback != 1 || strings.Join(factor.InputColumns, ",") != "close" {
 		t.Fatalf("factor = %v, canonical %q", factor, factor.CanonicalText())
 	}
 }

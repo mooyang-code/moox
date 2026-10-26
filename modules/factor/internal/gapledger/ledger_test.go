@@ -21,7 +21,7 @@ func gap(subject string, minute int, factors ...string) []pipeline.GapEntry {
 	var out []pipeline.GapEntry
 	for _, factor := range factors {
 		out = append(out, pipeline.GapEntry{
-			SetID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), Member: factor, DefinitionHash: "h-" + factor,
+			TaskID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), Member: factor, DefinitionHash: "h-" + factor,
 			TriggerEventID: "evt",
 		})
 	}
@@ -36,8 +36,8 @@ func open(t *testing.T, dir string, c *clock, giveUp time.Duration) (*Ledger, []
 	return ledger, expired
 }
 
-// 追加后重启回放得到同样的待恢复集合；终结后不再待恢复。
-func TestLedgerReplayRebuildsPendingSet(t *testing.T) {
+// 追加后重启回放得到同样的待恢复任务；终结后不再待恢复。
+func TestLedgerReplayRebuildsPendingTask(t *testing.T) {
 	dir, c := t.TempDir(), &clock{now: t0}
 	ledger, _ := open(t, dir, c, 0)
 	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a", "b"), gap("ETH", 1, "a")...)))
@@ -140,7 +140,7 @@ func TestLedgerDiskFailureKeepsMemoryAndMarksDegraded(t *testing.T) {
 	require.Equal(t, 1, ledger.PendingCount(), "内存里的待办不因写盘失败丢失")
 }
 
-// Reset 只删账本文件，不碰目录里的其他东西；之后重新打开得到空的待恢复集合；目录不存在不算错。
+// Reset 只删账本文件，不碰目录里的其他东西；之后重新打开得到空的待恢复任务；目录不存在不算错。
 func TestResetRemovesLedgerFilesOnly(t *testing.T) {
 	dir := t.TempDir()
 	c := &clock{now: t0}
@@ -172,8 +172,8 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	dir, c := t.TempDir(), &clock{now: t0}
 	ledger, _ := open(t, dir, c, 0)
 	warming := []pipeline.GapEntry{
-		{SetID: "fset", Subject: "ETH", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
-		{SetID: "fset", Subject: "ETH", Period: t0, Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{TaskID: "fset", Subject: "ETH", Period: t0, Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
 	}
 	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), warming...)))
 	require.Equal(t, 3, ledger.PendingCount())
@@ -188,7 +188,7 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	require.Equal(t, map[string]string{"BTC|a": "", "ETH|a": pipeline.SkipReasonWarming, "ETH|b": pipeline.SkipReasonWarming}, reasons)
 }
 
-// HasPendingIn 只看指定集合、指定周期是否还有待办；终结后即为 false。
+// HasPendingIn 只看指定任务、指定周期是否还有待办；终结后即为 false。
 func TestLedgerHasPendingInPeriod(t *testing.T) {
 	ledger, _ := open(t, t.TempDir(), &clock{now: t0}, 0)
 	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), gap("ETH", 1, "a")...)))
@@ -212,7 +212,7 @@ func TestLedgerClearRemovesFilesAndKeepsWorking(t *testing.T) {
 	dir := t.TempDir()
 	ledger, _, err := Open(dir, time.Now, 0)
 	require.NoError(t, err)
-	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "A", Period: time.Unix(60, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{TaskID: "s", Subject: "A", Period: time.Unix(60, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
 	require.Equal(t, 1, ledger.PendingCount())
 
 	removed, err := ledger.Clear()
@@ -222,6 +222,6 @@ func TestLedgerClearRemovesFilesAndKeepsWorking(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(dir, "factor-gap-*.jsonl"))
 	require.Empty(t, files)
 
-	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "B", Period: time.Unix(120, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{TaskID: "s", Subject: "B", Period: time.Unix(120, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
 	require.Equal(t, 1, ledger.PendingCount(), "清空后可以继续记账")
 }

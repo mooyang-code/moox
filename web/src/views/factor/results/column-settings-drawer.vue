@@ -146,7 +146,7 @@ function marketLabel(column: string) {
 
 function pinnedTitle(column: string) {
   const item = props.scope.outputByColumn.get(column);
-  return item ? `${item.alias} · ${item.output}` : column;
+  return item ? `${item.memberKey} · ${item.output}` : column;
 }
 </script>
 

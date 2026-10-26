@@ -1,24 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { FactorSet, FactorSetInfo } from "@/api/factor/types";
+import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import type { View } from "@/api/storage/types";
-import { pickResultView, resolveActiveSetId, resultSets, resultSummary, resultTabTitle } from "./results-model";
+import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary, resultTabTitle } from "./results-model";
 
-const set = (patch: Partial<FactorSet> = {}): FactorSet => ({
-  set_id: "set_a",
+const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
+  task_id: "task_a",
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
   freq: "1m",
-  subject_mode: "all",
-  subjects: [],
-  result_dataset_id: "dataset_factor_set_a",
+  result_dataset_id: "dataset_factor_task_a",
   status: "enabled",
   ...patch
 });
 
-const info = (patch: Partial<FactorSet> = {}, last_run?: FactorSetInfo["last_run"]): FactorSetInfo => ({
-  factor_set: set(patch),
+const info = (patch: Partial<FactorTask> = {}, last_run?: FactorTaskInfo["last_run"]): FactorTaskInfo => ({
+  factor_task: set(patch),
   members: [],
   last_run
 });
@@ -26,8 +24,8 @@ const info = (patch: Partial<FactorSet> = {}, last_run?: FactorSetInfo["last_run
 const view = (patch: Partial<View> & { role?: string } = {}): View =>
   ({
     space_id: "crypto",
-    view_id: "view_factor_set_a",
-    dataset_id: "dataset_factor_set_a",
+    view_id: "view_factor_task_a",
+    dataset_id: "dataset_factor_task_a",
     status: "active",
     attributes: { view_role: "factor_result", owner_module: "factor" },
     ...patch
@@ -47,12 +45,12 @@ describe("results model", () => {
 
   it("pending sets are excluded, disabled sets are labeled", () => {
     const sets = [
-      info({ set_id: "a" }),
-      info({ set_id: "b", status: "pending" }),
-      info({ set_id: "c", status: "disabled" }),
-      info({ set_id: "d", status: "deleting" })
+      info({ task_id: "a" }),
+      info({ task_id: "b", status: "pending" }),
+      info({ task_id: "c", status: "disabled" }),
+      info({ task_id: "d", status: "deleting" })
     ];
-    expect(resultSets(sets).map(item => item.factor_set.set_id)).toEqual(["a", "c"]);
+    expect(resultTasks(sets).map(item => item.factor_task.task_id)).toEqual(["a", "c"]);
     expect(resultTabTitle(sets[0], "现货K线 · 1m")).toBe("现货K线 · 1m");
     expect(resultTabTitle(sets[2], "现货K线 · 1m")).toBe("现货K线 · 1m（已停用）");
   });
@@ -61,7 +59,7 @@ describe("results model", () => {
     const value = info(
       {},
       {
-        set_id: "set_a",
+        task_id: "task_a",
         last_period_time: 1_700_000_000,
         last_status: "degraded",
         lag_seconds: 5,
@@ -78,10 +76,10 @@ describe("results model", () => {
   });
 
   it("resolves the active set: preferred, else first available", () => {
-    const sets = [info({ set_id: "a" }), info({ set_id: "c", status: "disabled" })];
-    expect(resolveActiveSetId(sets, "c")).toBe("c");
-    expect(resolveActiveSetId(sets, "missing")).toBe("a");
-    expect(resolveActiveSetId([], "a")).toBe("");
+    const sets = [info({ task_id: "a" }), info({ task_id: "c", status: "disabled" })];
+    expect(resolveActiveTaskId(sets, "c")).toBe("c");
+    expect(resolveActiveTaskId(sets, "missing")).toBe("a");
+    expect(resolveActiveTaskId([], "a")).toBe("");
   });
 });
 

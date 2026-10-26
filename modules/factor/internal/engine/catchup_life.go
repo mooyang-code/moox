@@ -12,7 +12,7 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 恢复追赶（设计 2.2）：集合暂停之后恢复，先在追赶门禁下把暂停期间缺失的数据补进来、把历史周期补算出来，
+// 恢复追赶（设计 2.2）：任务暂停之后恢复，先在追赶门禁下把暂停期间缺失的数据补进来、把历史周期补算出来，
 // 追平后才放行回到实时计算。
 //
 //	① 同步本地数据：Data.Prepare 做 Follow（已有范围的修正）+ Pull（新增尾部）+ 重载内存窗口，每次恢复只做一次；
@@ -30,35 +30,35 @@ type catchupTracker struct {
 	jobs map[string]*catchupJob
 }
 
-// catchupJob 是一个集合这一次恢复的本地数据同步进展。
+// catchupJob 是一个任务这一次恢复的本地数据同步进展。
 type catchupJob struct {
 	since time.Time
 	state string // syncing | synced
 	err   string
 }
 
-func (t *catchupTracker) get(setID string, since time.Time) *catchupJob {
+func (t *catchupTracker) get(taskID string, since time.Time) *catchupJob {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if job := t.jobs[setID]; job != nil && job.since.Equal(since) {
+	if job := t.jobs[taskID]; job != nil && job.since.Equal(since) {
 		return job
 	}
 	return nil
 }
 
-func (t *catchupTracker) put(setID string, job *catchupJob) {
+func (t *catchupTracker) put(taskID string, job *catchupJob) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.jobs == nil {
 		t.jobs = map[string]*catchupJob{}
 	}
-	t.jobs[setID] = job
+	t.jobs[taskID] = job
 }
 
-func (t *catchupTracker) update(setID string, since time.Time, mutate func(*catchupJob)) {
+func (t *catchupTracker) update(taskID string, since time.Time, mutate func(*catchupJob)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if job := t.jobs[setID]; job != nil && job.since.Equal(since) {
+	if job := t.jobs[taskID]; job != nil && job.since.Equal(since) {
 		mutate(job)
 	}
 }
@@ -70,13 +70,13 @@ func (t *catchupTracker) snapshot(job *catchupJob) (state, errText string) {
 	return job.state, job.err
 }
 
-func (t *catchupTracker) drop(setID string) {
+func (t *catchupTracker) drop(taskID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.jobs, setID)
+	delete(t.jobs, taskID)
 }
 
-// catchupHook 是生命周期的 Catchup 钩子：模块自身没有数据要追赶（由各集合决定），集合走 catchupSet。
+// catchupHook 是生命周期的 Catchup 钩子：模块自身没有数据要追赶（由各任务决定），任务走 catchupSet。
 func (r *Runtime) catchupHook(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
 	if ref == (lifecycle.Ref{}) {
 		return lifecycle.Catchup{CaughtUp: true}, nil
@@ -99,11 +99,11 @@ func catchupTarget(clock periodclock.Clock, freq string, now time.Time) (time.Ti
 	return aligned.Add(-step), step, nil
 }
 
-func (r *Runtime) catchupSet(ctx context.Context, setID string, since, now time.Time) lifecycle.Catchup {
+func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time.Time) lifecycle.Catchup {
 	out := lifecycle.Catchup{Since: since}
-	set, lookup := r.catalog.SetByID(setID)
+	set, lookup := r.catalog.SetByID(taskID)
 	if lookup != SetFound {
-		out.Message = "集合已不在目录里"
+		out.Message = "任务已不在目录里"
 		return out
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
@@ -114,17 +114,17 @@ func (r *Runtime) catchupSet(ctx context.Context, setID string, since, now time.
 	}
 
 	// ① 本地数据同步：每次恢复只做一次，放在后台，进度由 job 状态报告。
-	job := r.catchups.get(setID, since)
+	job := r.catchups.get(taskID, since)
 	if job == nil {
 		job = &catchupJob{since: since, state: "syncing"}
-		r.catchups.put(setID, job)
-		go r.syncForCatchup(setID, since)
+		r.catchups.put(taskID, job)
+		go r.syncForCatchup(taskID, since)
 	}
 	state, errText := r.catchups.snapshot(job)
 	switch {
 	case errText != "":
 		out.Message = "同步本地数据失败：" + errText
-		r.catchups.drop(setID) // 下一次评估重试
+		r.catchups.drop(taskID) // 下一次评估重试
 		return out
 	case state != "synced":
 		out.Message = "同步本地数据中"
@@ -143,20 +143,20 @@ func (r *Runtime) catchupSet(ctx context.Context, setID string, since, now time.
 		return out
 	}
 	out.Target = target
-	if err := r.continuity.NoteTarget(setID, target); err != nil {
+	if err := r.continuity.NoteTarget(taskID, target); err != nil {
 		out.Message = "建立追赶目标失败：" + err.Error()
 		return out
 	}
 
 	// ③ 唤醒连续水位追赶循环。
 	select {
-	case r.advanceKick <- setID:
+	case r.advanceKick <- taskID:
 	default:
 	}
 
 	// ④ 追平判定与进度。
 	for _, state := range r.continuity.States() {
-		if state.SetID != setID {
+		if state.TaskID != taskID {
 			continue
 		}
 		total := int64(target.Sub(since) / step)
@@ -169,21 +169,21 @@ func (r *Runtime) catchupSet(ctx context.Context, setID string, since, now time.
 		out.CaughtUp = !state.CommittedThrough.Before(target)
 		return out
 	}
-	// 集合从未跑过实时周期（没有水位记录）：连续性从第一次实时事件起保证，同步完成即追平。
+	// 任务从未跑过实时周期（没有水位记录）：连续性从第一次实时事件起保证，同步完成即追平。
 	out.CaughtUp = true
 	return out
 }
 
-// syncForCatchup 同步一个集合的本地数据（Follow + Pull + 重载窗口）。
-func (r *Runtime) syncForCatchup(setID string, since time.Time) {
+// syncForCatchup 同步一个任务的本地数据（Follow + Pull + 重载窗口）。
+func (r *Runtime) syncForCatchup(taskID string, since time.Time) {
 	base := r.appCtx
 	if base == nil {
 		base = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(base, preloadTimeout)
 	defer cancel()
-	err := r.preload.Refresh(ctx, setID)
-	r.catchups.update(setID, since, func(job *catchupJob) {
+	err := r.preload.Refresh(ctx, taskID)
+	r.catchups.update(taskID, since, func(job *catchupJob) {
 		if err != nil {
 			job.err = err.Error()
 			return
@@ -191,8 +191,8 @@ func (r *Runtime) syncForCatchup(setID string, since time.Time) {
 		job.state = "synced"
 	})
 	if err != nil {
-		log.WarnContextf(ctx, "factor_catchup_sync_failed set_id=%s error=%v", setID, err)
+		log.WarnContextf(ctx, "factor_catchup_sync_failed task_id=%s error=%v", taskID, err)
 		return
 	}
-	log.InfoContextf(ctx, "factor_catchup_synced set_id=%s since=%s", setID, since.UTC().Format(time.RFC3339))
+	log.InfoContextf(ctx, "factor_catchup_synced task_id=%s since=%s", taskID, since.UTC().Format(time.RFC3339))
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
@@ -23,7 +22,7 @@ func (s *Service) instanceInScope(ctx context.Context, instanceID string) (store
 	if err != nil {
 		return store.Instance{}, err
 	}
-	if instance.SpaceID != scoped || instance.DeletedAt != nil {
+	if instance.SpaceID != scoped {
 		return store.Instance{}, errors.New("实例不在当前空间")
 	}
 	return instance, nil
@@ -65,29 +64,4 @@ func (s *Service) SetStrategyDisplaySettings(ctx context.Context, req *strategyp
 		return &strategypb.SetStrategyDisplaySettingsRsp{RetInfo: invalid(err)}, nil
 	}
 	return &strategypb.SetStrategyDisplaySettingsRsp{RetInfo: success(), Hidden: displayProto(hidden)}, nil
-}
-
-// ListStrategyParamSubmissions 返回实例最近的因子参数提交记录（目标期次倒序）。
-func (s *Service) ListStrategyParamSubmissions(ctx context.Context, req *strategypb.ListStrategyParamSubmissionsReq) (*strategypb.ListStrategyParamSubmissionsRsp, error) {
-	if err := s.ready(); err != nil {
-		return &strategypb.ListStrategyParamSubmissionsRsp{RetInfo: failure(err)}, nil
-	}
-	instance, err := s.instanceInScope(ctx, req.GetInstanceId())
-	if err != nil {
-		return &strategypb.ListStrategyParamSubmissionsRsp{RetInfo: invalid(err)}, nil
-	}
-	submissions, err := s.Store.ListParamSubmissions(ctx, instance.InstanceID, int(req.GetLimit()))
-	if err != nil {
-		return &strategypb.ListStrategyParamSubmissionsRsp{RetInfo: failure(err)}, nil
-	}
-	rsp := &strategypb.ListStrategyParamSubmissionsRsp{RetInfo: success()}
-	for _, item := range submissions {
-		rsp.Submissions = append(rsp.Submissions, &strategypb.ParamSubmission{
-			RequestId: item.RequestID, InstanceId: item.InstanceID, ResultId: item.ResultID, SetId: item.SetID,
-			PeriodTime: item.PeriodTime.UnixMilli(), BasedOnPeriod: item.BasedOnPeriod.UnixMilli(), ParamsJson: string(item.ParamsJSON),
-			Notes: item.Notes, Status: item.Status, Attempts: int32(item.Attempts), OutcomeJson: string(item.OutcomeJSON),
-			CreatedAt: item.CreatedAt.Format(time.RFC3339), UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
-		})
-	}
-	return rsp, nil
 }

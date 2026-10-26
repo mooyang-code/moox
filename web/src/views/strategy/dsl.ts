@@ -1,6 +1,6 @@
 import { parseDocument } from "yaml";
 
-/** 截面选股模板：只用因子库已有的列（Binance 现货因子结果 View）；bias = close / MA（窗口默认 20）。 */
+/** 截面选股模板：假设关联的因子任务里有默认参数的 bias、bias_q、quote_volume_mean、quote_volume_mean_q 成员（列名就是成员键）；bias = close / MA（窗口默认 20）。 */
 export const rankedTemplate = `name: binance_spot_momentum
 bar: 1m
 
@@ -50,32 +50,24 @@ portfolio:
 `;
 
 /**
- * 动态调参模板：策略声明自己的因子成员（同一定义可以用不同别名，参数各自调整），启用实例时自动建立私有因子集；
- * 规则按 <别名>_<输出名> 引用因子值，按 <别名>__<参数名> 读取这一期实际用的参数；factor_params 每期求出下一期的参数
- * （default 是各标的取值的中位数，per_subject 可选，与统一值不同的标的进入覆盖；没有写出的参数取因子定义的默认值）。
+ * 动态调参模板：策略不声明因子，规则直接引用关联因子任务的列名（成员键与列名规则见因子文档）；
+ * 因子任务里要有可变成员 ma__var（加成员时选“可变”），factor_params 每期求出它下一期的参数
+ * （default 是各标的取值的中位数，per_subject 可选，与统一值不同的标的进入覆盖；没有写出的参数取因子定义的默认值），
+ * params("ma__var", "window") 读取这一行实际用的窗口。
  */
-export const tunedTemplate = `name: tuned_bias
-bar: 1m
-
-factors:
-  fast: {factor: Bias}
-  slow: {factor: Bias}
-  vol: {factor: ZfStd}
+export const tunedTemplate = `name: tuned_ma
+bar: 5m
 
 factor_params:
-  fast:
-    window:
-      default: "20"
-      per_subject: "10 + 30 * rank(vol_zf_std)"
-  slow:
-    window: "60"
+  ma__var:
+    window: "20"
 
 rules:
-  - id: bias_spread
-    name: 快慢偏离差
+  - id: above_ma
+    name: 站上可变均线
     type: rank
-    filter: "fast_bias > 0 && slow_bias > 0"
-    score: "rank(fast_bias) - rank(slow_bias)"
+    filter: 'ma__var > 0 && close > ma__var && params("ma__var", "window") >= 10'
+    score: "rank(close / ma__var - 1)"
     select: {top: 5}
     weight: {total: 1, method: equal, cap: 0.3}
 

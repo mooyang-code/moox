@@ -15,15 +15,15 @@ import (
 )
 
 func TestParseImport(t *testing.T) {
-	cfg, err := parseArgs([]string{"import", "--set", "fset_bars_1m", "--file", "./xbx.yaml", "--factor-id", "Bias"})
+	cfg, err := parseArgs([]string{"import", "--task", "ftask_bars_1m", "--file", "./xbx.yaml", "--factor-id", "bias"})
 	require.NoError(t, err)
-	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "ftask_bars_1m", cfg.TaskID)
 	require.Equal(t, "./xbx.yaml", cfg.File)
-	require.Equal(t, "Bias", cfg.FactorID)
+	require.Equal(t, "bias", cfg.FactorID)
 
 	alone, err := parseArgs([]string{"import", "--file", "./xbx.yaml"})
 	require.NoError(t, err)
-	require.Empty(t, alone.SetID)
+	require.Empty(t, alone.TaskID)
 
 	for _, retired := range []string{"--inputs", "--outputs", "--lookback", "--params", "--factor-type"} {
 		_, err := parseArgs([]string{"import", "--file", "./xbx.yaml", retired, "x"})
@@ -31,10 +31,10 @@ func TestParseImport(t *testing.T) {
 	}
 }
 
-func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
-	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
+func TestParseImportCatalogUsesDirectoryAndTask(t *testing.T) {
+	cfg, err := parseArgs([]string{"import-catalog", "--task", "ftask_bars_1m", "--dir", "/opt/factors"})
 	require.NoError(t, err)
-	require.Equal(t, "fset_bars_1m", cfg.SetID)
+	require.Equal(t, "ftask_bars_1m", cfg.TaskID)
 	require.Equal(t, "/opt/factors", cfg.CatalogDir)
 }
 
@@ -46,13 +46,13 @@ func TestParseImportCatalogDefaultsToFactorsDirectory(t *testing.T) {
 
 func TestParseRecalcRangeAndSelectors(t *testing.T) {
 	cfg, err := parseArgs([]string{
-		"recalc", "--set", "fset_bars_1m", "--start", "2026-10-04T00:00:00Z",
-		"--end", "2026-10-04T01:00:00Z", "--member", "Bias", "--member", "Cci",
+		"recalc", "--task", "ftask_bars_1m", "--start", "2026-10-04T00:00:00Z",
+		"--end", "2026-10-04T01:00:00Z", "--member", "bias", "--member", "cci",
 		"--subject", "BTC,ETH",
 	})
 	require.NoError(t, err)
 	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
-	require.Equal(t, []string{"Bias", "Cci"}, cfg.Members)
+	require.Equal(t, []string{"bias", "cci"}, cfg.Members)
 	require.Equal(t, []string{"BTC", "ETH"}, cfg.Subjects)
 	require.Empty(t, cfg.DBPath)
 }
@@ -82,24 +82,22 @@ func TestRunInitCreatesFactorSchema(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.True(t, result.OK)
-	require.Equal(t, []string{"t_factor_sets", "t_factor_defs", "t_factor_set_members", "t_factor_recalc_jobs"}, result.Tables)
+	require.Equal(t, []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_recalc_jobs"}, result.Tables)
 	db, err := store.Open(&store.Options{Path: dbPath})
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 }
 
-const testLibrary = `- factor_id: Bias
-  name: Bias
+const testLibrary = `- factor_id: bias
+  name: bias
   spec: |
     params:
       window: {type: int, min: 2, max: 60, default: 5}
-    outputs:
-      bias: close / ts_mean(close, window)
-- factor_id: Cci
+    output: close / ts_mean(close, window)
+- factor_id: cci
   name: CCI
   spec: |
-    outputs:
-      cci: close
+    output: close
 `
 
 func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
@@ -124,7 +122,7 @@ func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.True(t, result.OK)
 	require.Len(t, result.Imported, 2)
-	require.Equal(t, "Bias", result.Imported[0].FactorID)
+	require.Equal(t, "bias", result.Imported[0].FactorID)
 	require.Empty(t, result.Imported[0].MemberStatus)
 
 	db, err := store.Open(&store.Options{Path: dbPath})
@@ -133,9 +131,9 @@ func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, defs, 2)
 	require.Equal(t, []string{"bias"}, defs[0].Outputs)
-	usages, err := db.ListUsages(t.Context(), "Bias")
+	usages, err := db.ListUsages(t.Context(), "bias")
 	require.NoError(t, err)
-	require.Empty(t, usages["Bias"])
+	require.Empty(t, usages["bias"])
 	require.NoError(t, db.Close())
 
 	output.Reset()
@@ -156,7 +154,7 @@ func TestImportSelectsOneDefinitionFromFile(t *testing.T) {
 	require.ErrorContains(t, err, "--factor-id", "文件里有多个定义时必须指定")
 	err = runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Missing"}, &output)
 	require.ErrorContains(t, err, "没有因子 Missing")
-	require.NoError(t, runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Cci"}, &output))
+	require.NoError(t, runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "cci"}, &output))
 	require.Contains(t, output.String(), `"definition_hash":"sha256:`)
 }
 

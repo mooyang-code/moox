@@ -33,7 +33,7 @@ func rowsAt(at time.Time, values map[string]map[string]float64) []Row {
 
 func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 
 func TestLoadBarMapsViewLevelFailuresToAllColumns(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestLoadBarMapsViewLevelFailuresToAllColumns(t *testing.T) {
 
 func TestLoadBarRejectsAmbiguousSeriesAndPropagatesStale(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestLoadBarRejectsAmbiguousSeriesAndPropagatesStale(t *testing.T) {
 
 func TestLoadBarDetectsConfigDrift(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ rules:
 func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 // View 被停用或删除是确定性的配置问题，记 config_error，不按基础设施错误重试。
 func TestLoadBarRejectsInactiveView(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,5 +247,41 @@ func TestLoadBarRejectsInactiveView(t *testing.T) {
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "disabled") {
 		t.Fatalf("非 active 的 View 应记 config_error：%v", err)
+	}
+}
+
+// 年龄探针读关联任务的结果 View：它的历史由因子计算和补算写出，覆盖只到当期时所有标的都被当作新上市（history_insufficient）；
+// 补算出足够的历史后探针通过，探针查询读的就是结果 View。
+func TestLoadBarProbesAgeOnTheTaskResultView(t *testing.T) {
+	client := newFakeClient("spot")
+	// 结果 View 刚建立：覆盖只到启用的这一期。
+	factorView := client.views["view_factor_1h"]
+	factorView.IndexedFrom, factorView.IndexedTo = barStart, barStart
+	client.views["view_factor_1h"] = factorView
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
+	}
+
+	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient {
+		t.Fatalf("结果 View 只覆盖当期应记 history_insufficient：%v", err)
+	}
+
+	factorView.IndexedFrom = barStart.Add(-500 * time.Hour)
+	client.views["view_factor_1h"] = factorView
+	client.queries = nil
+	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
+		t.Fatalf("结果 View 覆盖足够时应通过年龄探针：%v", err)
+	}
+	for _, query := range client.queries {
+		if query.ViewID != "view_factor_1h" {
+			t.Fatalf("主查询与探针都应读结果 View：%+v", query)
+		}
 	}
 }

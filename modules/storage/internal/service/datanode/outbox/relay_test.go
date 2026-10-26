@@ -556,7 +556,7 @@ func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
 	}
 	payload, err := proto.Marshal(&storageeventpb.FactorPeriodComputed{
 		DatasetId: "result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		UniverseSubjectIds: []string{"BTC"}, Factors: []*storageeventpb.FactorPeriodState{{MemberAlias: "momentum", FactorId: "momentum", ParamsSource: "default", Status: "complete", SourceHash: "hash-1"}},
+		UniverseSubjectIds: []string{"BTC"}, Factors: []*storageeventpb.FactorPeriodState{{MemberKey: "momentum", FactorId: "momentum", MemberKind: "fixed", Status: "complete", SourceHash: "hash-1"}},
 		TriggerEventId: "collector-event", ComputedAt: timestamppb.Now(),
 	})
 	if err != nil {

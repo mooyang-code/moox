@@ -119,3 +119,6 @@ docs/.vitepress/cache/
 /modules/admin/cmd/cli/cli
 /modules/storage/cmd/cli/cli
 /modules/importer/importer
+
+# 误执行 go build 产生的二进制
+/modules/factor/cmd/cli/cli

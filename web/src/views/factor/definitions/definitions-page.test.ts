@@ -28,7 +28,7 @@ vi.mock("@/views/factor/shared/use-factor-scope", async () => {
   mocks.spaceId = vueRef("");
   return {
     useFactorScope: () => ({
-      store: { sets: [], reload: vi.fn(), setLabel: (set: { set_id: string }) => set.set_id },
+      store: { tasks: [], reload: vi.fn(), taskLabel: (set: { task_id: string }) => set.task_id },
       spaceId: mocks.spaceId
     })
   };

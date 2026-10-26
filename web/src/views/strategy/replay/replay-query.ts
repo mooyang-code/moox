@@ -4,7 +4,7 @@ import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 export interface ReplayPrefill {
   strategyId: string;
   instanceId: string;
-  viewId: string;
+  factorTaskId: string;
 }
 
 /** 回放页的 URL 状态：分析对象、两处分页、创建抽屉及其预填。 */
@@ -18,7 +18,7 @@ export interface ReplayQueryState {
 
 type QueryLike = Record<string, unknown>;
 
-export const emptyPrefill: ReplayPrefill = { strategyId: "", instanceId: "", viewId: "" };
+export const emptyPrefill: ReplayPrefill = { strategyId: "", instanceId: "", factorTaskId: "" };
 
 /** 从 URL 解析并规范化：非法页码回到 1；实例与定义同时出现时沿用“实例优先”，清掉定义。 */
 export function parseReplayQuery(query: QueryLike): ReplayQueryState {
@@ -31,7 +31,7 @@ export function parseReplayQuery(query: QueryLike): ReplayQueryState {
     prefill: {
       strategyId: instanceId ? "" : queryString(query.strategy_id as string),
       instanceId,
-      viewId: queryString(query.view_id as string)
+      factorTaskId: queryString(query.factor_task_id as string)
     }
   };
 }
@@ -50,7 +50,7 @@ export function buildReplayQuery(state: ReplayQueryState): Record<string, string
       create: state.create ? "1" : "",
       strategy_id: prefill.instanceId ? "" : prefill.strategyId,
       instance_id: prefill.instanceId,
-      view_id: prefill.viewId
+      factor_task_id: prefill.factorTaskId
     },
     { page: 1, bar_page: 1 }
   );

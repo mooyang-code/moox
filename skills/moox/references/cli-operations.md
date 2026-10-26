@@ -14,25 +14,24 @@
 ## Factor 周期诊断与补算
 
 Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看 JetStream pending、
-最旧事件时间，以及 Factor 的 `factor_period_lag_seconds{set}`、
-`factor_last_period_time{set}`、`factor_lane_backlog{set}`、
-`factor_period_duration_seconds{set,stage}` 和 `factor_failures_total`。不要删除 durable
+最旧事件时间，以及 Factor 的 `factor_period_lag_seconds{task}`、
+`factor_last_period_time{task}`、`factor_runner_backlog{task}`、
+`factor_period_duration_seconds{task,stage}` 和 `factor_failures_total`。不要删除 durable
 来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-factor-mgr-cli recalc --set fset_dasftksvjhj2jom4vhd0_1m \
+moox-factor-mgr-cli recalc --task ftask_spot_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
 Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
-FactorMgr 接口。因子定义与因子集解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--set` 才会
-把它作为 disabled 成员加入因子集；启用成员走 FactorMgr `SetFactorMemberStatus`，不是
-CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
-`[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
-不删除；旧的 `[[factors.items]]` 已移除。
+FactorMgr 接口。因子定义与因子任务解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--task` 才会
+把它作为 disabled 成员加入因子任务；启用成员走 FactorMgr `SetTaskMemberStatus`，不是
+CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.definitions]]` 与 `[[factors.tasks]]`（成员内嵌在任务的 `members` 里）依次补齐定义、任务和成员，
+重复执行只补缺不删除，逐项报告已存在 / 新建 / 冲突并打印每个成员的成员键与列名；配置里已去掉的成员只报告，不自动移除。成员键与列名的规则见 [`factor-dsl.md`](factor-dsl.md)。
 Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、`status` 和 `purge-dataset`。
 `purge-dataset --space <空间> --dataset <数据集> --yes` 用因子管理端自己的网关身份删除一个因子结果数据集（行和元数据，不可恢复）：
-只用于清理没有因子集引用的孤立结果数据集（例如重建因子库后遗留的旧结果），仍被因子集引用的会被拒绝。
+只用于清理没有因子任务引用的孤立结果数据集（例如重建因子库后遗留的旧结果），仍被因子任务引用的会被拒绝。
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
@@ -130,7 +129,7 @@ moox-cli storage force-rebuild-view \
   --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --package-root /home/<user>/moox/storage \
   --space-id crypto \
-	--view-id view_factor_binance_kline_1m \
+	--view-id view_factor_spot_1m \
   --dry-run
 ```
 

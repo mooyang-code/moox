@@ -338,139 +338,95 @@ capacity_check_interval = "30m"
 	require.Equal(t, "30m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 }
 
-func TestFactorSetupParsesDefinitionsAndMembers(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
+const factorSetupHead = `
 [factors]
 enabled = true
 source_dir = "./examples/factors"
 
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
+[[factors.definitions]]
+factor_id = "ema"
+file = "common.yaml"
 
 [[factors.definitions]]
 factor_id = "bias"
 file = "timeseries.yaml"
-
-[[factors.members]]
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-factor_id = "bias"
 `
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+
+const factorSetupTask = `
+[[factors.tasks]]
+id = "ftask_swap5m"
+name = "合约五分钟"
+space_id = "crypto"
+source_dataset_id = "dataset_crypto_kline_5m"
+freq = "5m"
+members = [
+  { factor = "bias" },
+  { factor = "ema" },
+  { factor = "ema", params = { span = 20, warmup = 50000 } },
+  { factor = "bias", var = true, status = "disabled" },
+]
+`
+
+func TestFactorSetupParsesTasksWithEmbeddedMembers(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Load(writeManifest(t, root, validManifest+factorSetupHead+factorSetupTask, 0o600), root)
 	require.NoError(t, err)
-	assert.True(t, snapshot.Manifest.Factors.Enabled)
-	assert.Equal(t, "examples/factors", snapshot.Manifest.Factors.SourceDir)
-	require.Len(t, snapshot.Manifest.Factors.Definitions, 1)
-	require.Len(t, snapshot.Manifest.Factors.Sets, 1)
-	require.Len(t, snapshot.Manifest.Factors.Members, 1)
-	assert.Equal(t, "bias", snapshot.Manifest.Factors.Definitions[0].FactorID)
-	assert.Equal(t, "all", snapshot.Manifest.Factors.Sets[0].SubjectMode)
-	assert.Equal(t, "enabled", snapshot.Manifest.Factors.Members[0].Status)
+	factors := snapshot.Manifest.Factors
+	assert.True(t, factors.Enabled)
+	assert.Equal(t, "examples/factors", factors.SourceDir)
+	require.Len(t, factors.Definitions, 2)
+	require.Len(t, factors.Tasks, 1)
+	task := factors.Tasks[0]
+	assert.Equal(t, "ftask_swap5m", task.ID)
+	assert.Equal(t, "合约五分钟", task.Name)
+	require.Len(t, task.Members, 4)
+	assert.Equal(t, "enabled", task.Members[0].Status, "状态缺省为 enabled")
+	assert.Empty(t, task.Members[1].Params)
+	assert.Equal(t, map[string]float64{"span": 20, "warmup": 50000}, task.Members[2].Params)
+	assert.True(t, task.Members[3].Var)
+	assert.Equal(t, "disabled", task.Members[3].Status)
 }
 
-func TestFactorSetupRejectsMemberWithUnknownFactor(t *testing.T) {
+// 同一个源数据集可以有多个任务。
+func TestFactorSetupAllowsSeveralTasksOnOneSourceDataset(t *testing.T) {
 	root := t.TempDir()
-	body := validManifest + `
-[factors]
-enabled = true
-source_dir = "./examples/factors"
-
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-
-[[factors.members]]
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-factor_id = "ghost"
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "unknown factor_id")
+	second := strings.Replace(factorSetupTask, `ftask_swap5m`, `ftask_swap5m_b`, 1)
+	second = strings.Replace(second, `合约五分钟`, `合约五分钟乙`, 1)
+	snapshot, err := Load(writeManifest(t, root, validManifest+factorSetupHead+factorSetupTask+second, 0o600), root)
+	require.NoError(t, err)
+	assert.Len(t, snapshot.Manifest.Factors.Tasks, 2)
 }
 
-func TestFactorSetupRejectsMemberWithUnknownSet(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[factors]
-enabled = true
-source_dir = "./examples/factors"
-
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-
-[[factors.definitions]]
-factor_id = "Bias"
-file = "timeseries.yaml"
-
-[[factors.members]]
-source_dataset_id = "dataset_other"
-freq = "1m"
-factor_id = "Bias"
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "no matching factor set")
+func TestFactorSetupRejectsBadTasks(t *testing.T) {
+	cases := map[string]struct{ from, to, contains string }{
+		"id 前缀":      {`id = "ftask_swap5m"`, `id = "swap5m"`, "factors.tasks[0].id"},
+		"id 后缀字符":    {`id = "ftask_swap5m"`, `id = "ftask_Swap-5m"`, "factors.tasks[0].id"},
+		"名称没有汉字":     {`name = "合约五分钟"`, `name = "swap5m"`, "must contain Chinese"},
+		"名称过长":       {`name = "合约五分钟"`, `name = "合约五分钟合约五分钟合约五分钟"`, "1-10 characters"},
+		"缺少数据集":      {`source_dataset_id = "dataset_crypto_kline_5m"`, ``, "requires id, name"},
+		"成员引用未声明的因子": {`{ factor = "bias" },`, `{ factor = "ghost" },`, "unknown factor"},
+		"成员状态非法":     {`status = "disabled"`, `status = "paused"`, "status must be"},
+		"相同参数重复":     {`{ factor = "ema" },`, `{ factor = "bias" },`, "repeats factor"},
+		"成员缺因子":      {`{ factor = "ema" },`, `{ params = { span = 5 } },`, "requires factor"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			body := validManifest + factorSetupHead + strings.Replace(factorSetupTask, tc.from, tc.to, 1)
+			_, err := Load(writeManifest(t, root, body, 0o600), root)
+			require.ErrorContains(t, err, tc.contains)
+		})
+	}
 }
 
-func TestFactorSetupRejectsLegacyItemsKeyWithMigrationHint(t *testing.T) {
+func TestFactorSetupRejectsDuplicateTaskIDAndName(t *testing.T) {
 	root := t.TempDir()
-	body := validManifest + `
-[factors]
-enabled = true
-source_dir = "./examples/factors"
+	_, err := Load(writeManifest(t, root, validManifest+factorSetupHead+factorSetupTask+factorSetupTask, 0o600), root)
+	require.ErrorContains(t, err, "duplicated")
 
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-
-[[factors.items]]
-factor_id = "Bias"
-factor_type = "timeseries"
-file = "Bias.py"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-lookback_periods = 20
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "factors.items is no longer supported")
-	require.ErrorContains(t, err, "[[factors.members]]")
-}
-
-func TestFactorSetupRejectsDuplicateMember(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[factors]
-enabled = true
-source_dir = "./examples/factors"
-
-[[factors.sets]]
-space_id = "crypto"
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-
-[[factors.definitions]]
-factor_id = "Bias"
-file = "timeseries.yaml"
-
-[[factors.members]]
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-factor_id = "Bias"
-
-[[factors.members]]
-source_dataset_id = "dataset_crypto_kline_1m"
-freq = "1m"
-factor_id = "Bias"
-status = "disabled"
-`
-	_, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.ErrorContains(t, err, "more than once")
+	other := strings.Replace(factorSetupTask, `ftask_swap5m`, `ftask_other`, 1)
+	_, err = Load(writeManifest(t, root, validManifest+factorSetupHead+factorSetupTask+other, 0o600), root)
+	require.ErrorContains(t, err, `name "合约五分钟" is duplicated`)
 }
 
 func TestLoadDefaultsDisableFactors(t *testing.T) {
@@ -481,14 +437,14 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 }
 
 func TestLoadRejectsRetiredFactorDefinitionFields(t *testing.T) {
-	for _, declaration := range []string{`factor_type = "timeseries"`, `lookback_periods = 20`, `params_json = "{}"`, `name = "Bias"`} {
+	for _, declaration := range []string{`factor_type = "timeseries"`, `lookback_periods = 20`, `params_json = "{}"`, `name = "bias"`} {
 		root := t.TempDir()
 		body := validManifest + `
 [factors]
 enabled = true
 source_dir = "examples/factors"
 [[factors.definitions]]
-factor_id = "Bias"
+factor_id = "bias"
 file = "timeseries.yaml"
 ` + declaration + "\n"
 		_, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -503,8 +459,8 @@ func TestLoadRejectsNonYAMLFactorFile(t *testing.T) {
 enabled = true
 source_dir = "examples/factors"
 [[factors.definitions]]
-factor_id = "Bias"
-file = "Bias.py"
+factor_id = "bias"
+file = "bias.py"
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.ErrorContains(t, err, "YAML factor library file")

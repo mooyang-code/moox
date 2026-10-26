@@ -8,8 +8,8 @@ import (
 
 func smaMember(t *testing.T) MemberDef {
 	t.Helper()
-	def := compiledFactor(t, "Sma", "params:\n  n: {type: int, min: 2, max: 100, default: 20}\n  m: {type: int, min: 1, max: 99, default: 2}\n  k: {type: float, min: 0, max: 5, default: 1}\noutputs:\n  s: sma(close, n, m) * k\n")
-	return MemberDef{Alias: "fast", Factor: def}
+	def := compiledFactor(t, "sma", "params:\n  n: {type: int, min: 2, max: 100, default: 20}\n  m: {type: int, min: 1, max: 99, default: 2}\n  k: {type: float, min: 0, max: 5, default: 1}\noutput: sma(close, n, m) * k\n")
+	return MemberDef{Key: "sma__var", Factor: def, Kind: MemberKindVar}
 }
 
 func TestDefaultSnapshotAndValue(t *testing.T) {
@@ -55,4 +55,57 @@ func TestValidateSnapshotRejects(t *testing.T) {
 		mutate(snapshot)
 		require.Error(t, ValidateSnapshot(member, snapshot, inScope), name)
 	}
+}
+
+// 按标的合并：默认值取本次的；本次带了的标的覆盖旧值，没带的标的保留旧值。
+func TestMergeSnapshots(t *testing.T) {
+	previous := ParamSnapshot{
+		"n": {Default: 20, Overrides: map[string]float64{"BTC": 10, "ETH": 15}},
+		"k": {Default: 1},
+	}
+	submitted := ParamSnapshot{
+		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "SOL": 8}},
+		"k": {Default: 2},
+	}
+	merged := MergeSnapshots(previous, submitted)
+	require.Equal(t, ParamSnapshot{
+		"n": {Default: 30, Overrides: map[string]float64{"BTC": 12, "ETH": 15, "SOL": 8}},
+		"k": {Default: 2},
+	}, merged)
+	// 不改动入参。
+	require.Equal(t, 10.0, previous["n"].Overrides["BTC"])
+	require.Len(t, submitted["n"].Overrides, 2)
+	// 旧快照里本次没有的参数被丢弃；从空开始合并就是本次提交本身。
+	require.Equal(t, submitted.Canonical(), MergeSnapshots(nil, submitted).Canonical())
+	require.NotContains(t, MergeSnapshots(ParamSnapshot{"gone": {Default: 1}}, submitted), "gone")
+}
+
+func TestCheckDefinitionCompatible(t *testing.T) {
+	spec := func(span, k string) string {
+		return "params:\n  span: " + span + "\n  k: " + k + "\noutput: ts_mean(close, span) * k\n"
+	}
+	const spanOK = "{type: int, min: 2, max: 100, default: 20}"
+	const kOK = "{type: float, min: 0, max: 5, default: 1}"
+	base := compiledFactor(t, "ema", spec(spanOK, kOK))
+	compat := func(text string) error {
+		return CheckDefinitionCompatible(base, compiledFactor(t, "ema", text))
+	}
+	// 表达式与范围可以改。
+	require.NoError(t, compat(spec("{type: int, min: 2, max: 200, default: 20}", kOK)))
+	require.NoError(t, compat("params:\n  span: "+spanOK+"\n  k: "+kOK+"\noutput: ts_mean(close, span) * k + 1\n"))
+	for name, text := range map[string]string{
+		"增参数":  "params:\n  span: " + spanOK + "\n  k: " + kOK + "\n  j: {type: float, min: 0, max: 5, default: 1}\noutput: ts_mean(close, span) * k * j\n",
+		"删参数":  "params:\n  span: " + spanOK + "\noutput: ts_mean(close, span)\n",
+		"换顺序":  "params:\n  k: " + kOK + "\n  span: " + spanOK + "\noutput: ts_mean(close, span) * k\n",
+		"改默认值": spec("{type: int, min: 2, max: 100, default: 21}", kOK),
+		"改类型":  spec(spanOK, "{type: int, min: 0, max: 5, default: 1}"),
+		"改参数名": "params:\n  length: " + spanOK + "\n  k: " + kOK + "\noutput: ts_mean(close, length) * k\n",
+	} {
+		require.Error(t, compat(text), name)
+	}
+	// 输出改变：单输出改多输出，多输出增删、改名、重排。
+	multi := compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  low: ts_mean(close, w)\n")
+	require.Error(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  low: ts_mean(close, w)\n  up: ts_mean(close, w)\n")))
+	require.Error(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  mid: ts_mean(close, w)\n  low: ts_mean(close, w)\n")))
+	require.NoError(t, CheckDefinitionCompatible(multi, compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 80, default: 20}}\noutputs:\n  up: ts_mean(close, w) + 1\n  low: ts_mean(close, w)\n")))
 }

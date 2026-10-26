@@ -55,6 +55,12 @@ type RetentionConfig struct {
 	ReplaysMax      int `yaml:"replays_max"`
 }
 
+// ParamsConfig 是可变成员参数投递的告警参数。
+type ParamsConfig struct {
+	// StaleAlertPeriods 是实例最近连续多少期的结果都没有把参数送达因子侧时告警（指标 moox_strategy_param_delivery_stale）。
+	StaleAlertPeriods int `yaml:"stale_alert_periods"`
+}
+
 // ReplayConfig 是回放的读取与账本参数。
 type ReplayConfig struct {
 	ChunkBars                 int `yaml:"chunk_bars"`
@@ -77,6 +83,7 @@ type Config struct {
 	Evaluation EvaluationConfig  `yaml:"evaluation"`
 	Retention  RetentionConfig   `yaml:"retention"`
 	Replay     ReplayConfig      `yaml:"replay"`
+	Params     ParamsConfig      `yaml:"params"`
 }
 
 // Load 读取配置、套用环境变量覆盖与默认值并校验。
@@ -171,6 +178,9 @@ func Load(path string) (Config, error) {
 	if c.Retention.ReplaysMax == 0 {
 		c.Retention.ReplaysMax = 50
 	}
+	if c.Params.StaleAlertPeriods == 0 {
+		c.Params.StaleAlertPeriods = 10
+	}
 	if c.Replay.ChunkBars == 0 {
 		c.Replay.ChunkBars = 50
 	}
@@ -196,6 +206,9 @@ func Load(path string) (Config, error) {
 	}
 	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 {
 		return Config{}, errors.New("retention 的保留天数与 replays_max 必须大于 0")
+	}
+	if c.Params.StaleAlertPeriods < 0 {
+		return Config{}, errors.New("params.stale_alert_periods 不能为负数")
 	}
 	if c.Replay.ChunkBars <= 0 || c.Replay.PageSize <= 0 || c.Replay.MissingPriceLiquidateBars <= 0 {
 		return Config{}, errors.New("replay 的 chunk_bars、page_size 与 missing_price_liquidate_bars 必须大于 0")

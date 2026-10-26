@@ -134,6 +134,6 @@ func (d *frameData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 
 func (*frameData) WindowStatuses() []WarmupStatus { return nil }
 
-var _ = domain.FactorSet{}
+var _ = domain.FactorTask{}
 
 func execKey(subject, tag string) exec.SeriesKey { return exec.SeriesKey{Subject: subject, Tag: tag} }

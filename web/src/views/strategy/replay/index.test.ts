@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   listReplayBars: vi.fn(),
   startReplay: vi.fn(),
   cancelReplay: vi.fn(),
-  listViews: vi.fn(),
+  listFactorTasks: vi.fn(),
   loadAllStrategies: vi.fn(),
   reportControlError: vi.fn(),
   // serverNow 是请求层按 Date 头换算的服务端时间；null 表示还没有读到。
@@ -24,7 +24,7 @@ vi.mock("@/api/strategy", () => ({
   startReplay: api.startReplay,
   cancelReplay: api.cancelReplay
 }));
-vi.mock("@/api/storage/metadata", () => ({ listViews: api.listViews }));
+vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
 // 假路由：push/replace 同步更新响应式 query，并记录导航，页面据此读写 URL 状态。
@@ -72,7 +72,8 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
     strategy_id: "s1",
     dsl_yaml: "name: demo",
     space_id: "crypto",
-    view_id: "view_a",
+    view_id: "view_factor_a",
+    factor_task_id: "ftask_a",
     start_time: "2026-09-01T00:00:00Z",
     end_time: "2026-09-02T00:00:00Z",
     fee_bps: 10,
@@ -205,7 +206,7 @@ describe("strategy replay page", () => {
       api.listReplayBars,
       api.startReplay,
       api.cancelReplay,
-      api.listViews,
+      api.listFactorTasks,
       api.loadAllStrategies,
       api.reportControlError
     ])
@@ -213,7 +214,7 @@ describe("strategy replay page", () => {
     vi.mocked(Message.error).mockClear();
     api.serverNow = null;
     api.loadAllStrategies.mockResolvedValue(undefined);
-    api.listViews.mockResolvedValue({ views: [], page_result: { has_more: false } });
+    api.listFactorTasks.mockResolvedValue({ factor_tasks: [], page_result: { has_more: false } });
     api.listReplayBars.mockResolvedValue(bars);
   });
   afterEach(() => {
@@ -343,16 +344,16 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await vi.advanceTimersByTimeAsync(5000);
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r21", "done", "{}", { view_id: "view_page2" })],
+      items: [replay("r21", "done", "{}", { factor_task_id: "ftask_page2" })],
       page: { total: 30 }
     });
     (wrapper.vm as any).changeReplayPage(2);
     await flushPromises();
-    expect(listText(wrapper)).toContain("view_page2");
+    expect(listText(wrapper)).toContain("ftask_page2");
     slow.resolve({ items: [replay("r1", "running")], page: { total: 30 } });
     await flushPromises();
-    expect(listText(wrapper)).toContain("view_page2");
-    expect(listText(wrapper)).not.toContain("view_a");
+    expect(listText(wrapper)).toContain("ftask_page2");
+    expect(listText(wrapper)).not.toContain("ftask_a");
   });
 
   it("clears list, table and polling errors after a later success", async () => {
@@ -389,15 +390,15 @@ describe("strategy replay page", () => {
   });
 
   it("drops errors of the previous space when the space changes", async () => {
-    api.listViews.mockRejectedValueOnce(new Error("网络错误"));
+    api.listFactorTasks.mockRejectedValueOnce(new Error("网络错误"));
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     const wrapper = mountPage();
     await flushPromises();
-    expect(wrapper.text()).toContain("View 列表加载失败：网络错误");
+    expect(wrapper.text()).toContain("因子任务列表加载失败：网络错误");
     api.space!.selectedSpaceId = "stock";
     await nextTick();
     await flushPromises();
-    expect(wrapper.text()).not.toContain("View 列表加载失败");
+    expect(wrapper.text()).not.toContain("因子任务列表加载失败");
   });
 
   it("starts a replay from an unsaved DSL draft", async () => {
@@ -409,13 +410,13 @@ describe("strategy replay page", () => {
     const vm = wrapper.vm as any;
     vm.form.source = "dsl";
     vm.form.dsl_yaml = "name: draft\n";
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     await nextTick();
     const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
     await startButton!.trigger("click");
     await flushPromises();
     const request = api.startReplay.mock.calls[0][0];
-    expect(request).toMatchObject({ dsl_yaml: "name: draft\n", view_id: "view_a" });
+    expect(request).toMatchObject({ dsl_yaml: "name: draft\n", factor_task_id: "ftask_a" });
     expect(request.strategy_id).toBeUndefined();
     expect(request.instance_id).toBeUndefined();
   });
@@ -490,16 +491,16 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await wrapper.find('[aria-label="刷新回放"]').trigger("click");
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r1", "running", "{}", { view_id: "view_newer" })],
+      items: [replay("r1", "running", "{}", { factor_task_id: "ftask_newer" })],
       page: { total: 1 }
     });
     await pollOnce();
-    expect(listText(wrapper)).toContain("view_newer");
+    expect(listText(wrapper)).toContain("ftask_newer");
     // 手动加载仍在进行：加载态只跟踪手动加载，轮询应用了更新的结果也不结束它。
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).toBe("true");
-    slow.resolve({ items: [replay("r1", "running", "{}", { view_id: "view_older" })], page: { total: 1 } });
+    slow.resolve({ items: [replay("r1", "running", "{}", { factor_task_id: "ftask_older" })], page: { total: 1 } });
     await flushPromises();
-    expect(listText(wrapper)).toContain("view_newer");
+    expect(listText(wrapper)).toContain("ftask_newer");
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).not.toBe("true");
   });
 
@@ -601,10 +602,10 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
-    nextList.resolve({ items: [replay("s1", "done", "{}", { view_id: "view_stock" })], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("s1", "done", "{}", { view_id: "view_stock" }));
+    nextList.resolve({ items: [replay("s1", "done", "{}", { factor_task_id: "ftask_stock" })], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("s1", "done", "{}", { factor_task_id: "ftask_stock" }));
     await flushPromises();
-    expect(listText(wrapper)).toContain("view_stock");
+    expect(listText(wrapper)).toContain("ftask_stock");
     expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("s1");
   });
 
@@ -667,7 +668,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     const vm = wrapper.vm as any;
     vm.form.strategy_id = "s1";
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     await nextTick();
     const list = deferred<unknown>();
     api.listReplays.mockImplementationOnce(() => list.promise);
@@ -1183,7 +1184,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     const vm = wrapper.vm as any;
     vm.form.strategy_id = "s1";
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     await nextTick();
     api.listReplays.mockResolvedValue({ items: [replay("r9", "pending")], page: { total: 1 } });
     await wrapper
@@ -1259,13 +1260,13 @@ describe("strategy replay page URL state and create drawer", () => {
       api.listReplayBars,
       api.startReplay,
       api.cancelReplay,
-      api.listViews,
+      api.listFactorTasks,
       api.loadAllStrategies
     ])
       fn.mockReset();
     api.serverNow = null;
     api.loadAllStrategies.mockResolvedValue(undefined);
-    api.listViews.mockResolvedValue({ views: [], page_result: { has_more: false } });
+    api.listFactorTasks.mockResolvedValue({ factor_tasks: [], page_result: { has_more: false } });
     api.listReplayBars.mockResolvedValue(bars);
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
     api.getReplay.mockImplementation((id: string) => Promise.resolve(replay(id, "done")));
@@ -1341,12 +1342,12 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     vm.form.fee_bps = 25;
     await click(wrapper, "发起回放");
     await click(wrapper, "关闭");
     await click(wrapper, "发起回放");
-    expect(vm.form.view_id).toBe("view_a");
+    expect(vm.form.factor_task_id).toBe("ftask_a");
     expect(vm.form.fee_bps).toBe(25);
   });
 
@@ -1354,7 +1355,7 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     vm.form.strategy_id = "s1";
     vm.form.start = "2026-09-02 00:00";
     vm.form.end = "2026-09-01 00:00";
@@ -1371,7 +1372,7 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
@@ -1453,7 +1454,7 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.view_id = "view_a";
+    vm.form.factor_task_id = "ftask_a";
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
     nav.route.query = { tab: "replay", replay_id: "r2" };

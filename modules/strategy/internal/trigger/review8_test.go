@@ -27,7 +27,7 @@ UPDATE t_strategy_instances SET c_resolved_json = '` + instanceJSON + `' WHERE c
 func stockEvent(eventID, kind string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	message := &eventpb.EventMessage{EventId: eventID, EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}, CompletionKind: kind}
+	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}, CompletionKind: kind}
 	return message, payload
 }
 
@@ -37,7 +37,7 @@ func TestCompileFailedSessionIgnoresOtherCompletionKinds(t *testing.T) {
 rules:
   - {id: r, type: rank, score: "missing_col", select: {top: 1}, weight: 1}
 `
-	resolved := input.Resolved{ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}, CompletionKind: events.FactorPeriodComputed.Name()}
+	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}, CompletionKind: events.FactorPeriodComputed.Name()}
 	h := newHarnessWith(t, brokenDSL, nil, resolved)
 	h.now = time.Date(2026, 10, 9, 7, 5, 0, 0, time.UTC)
 	message, payload := stockEvent("event-kline", events.CollectorPeriodCompleted.Name())
@@ -54,7 +54,7 @@ rules:
 func TestCorruptSessionSnapshotFallsBackToInstanceCopy(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.now = time.Date(2026, 10, 9, 7, 5, 0, 0, time.UTC)
-	stock, _ := json.Marshal(input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}})
+	stock, _ := json.Marshal(input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}})
 	corrupt(t, h, `{}`, string(stock))
 	message, payload := stockEvent("event-stock", events.CollectorPeriodCompleted.Name())
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))

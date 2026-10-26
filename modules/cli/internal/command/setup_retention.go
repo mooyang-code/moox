@@ -30,43 +30,43 @@ func factorRetentionFindings(policy storagepolicy.Policy, plan setupFactorPlan) 
 		factor   string
 		lookback int
 	}
-	bySet := map[string]worst{}
-	for _, member := range plan.Members {
-		if member.Status != "enabled" {
-			continue
-		}
-		lookback, ok := lookbacks[member.FactorID]
-		if !ok {
-			continue
-		}
-		if current, seen := bySet[member.SetID]; !seen || lookback > current.lookback {
-			bySet[member.SetID] = worst{factor: member.FactorID, lookback: lookback}
+	byTask := map[string]worst{}
+	sets := map[string]setupFactorTask{}
+	for _, task := range plan.Tasks {
+		sets[task.TaskID] = task
+		for _, member := range task.Members {
+			if member.Status != "enabled" {
+				continue
+			}
+			lookback, ok := lookbacks[member.FactorID]
+			if !ok {
+				continue
+			}
+			if current, seen := byTask[task.TaskID]; !seen || lookback > current.lookback {
+				byTask[task.TaskID] = worst{factor: member.FactorID, lookback: lookback}
+			}
 		}
 	}
-	setIDs := make([]string, 0, len(bySet))
-	for id := range bySet {
+	setIDs := make([]string, 0, len(byTask))
+	for id := range byTask {
 		setIDs = append(setIDs, id)
 	}
 	sort.Strings(setIDs)
-	sets := map[string]setupFactorSet{}
-	for _, set := range plan.Sets {
-		sets[set.SetID] = set
-	}
 	for _, id := range setIDs {
 		set, ok := sets[id]
 		if !ok {
 			continue
 		}
-		w := bySet[id]
+		w := byTask[id]
 		bars, forever, estimated, err := policy.RetentionBars(set.SpaceID, set.Freq)
 		if err != nil || forever || bars > float64(w.lookback) {
 			continue
 		}
 		need := storagepolicy.MinRetentionFor(set.SpaceID, set.Freq, w.lookback+1)
 		message := fmt.Sprintf(
-			"因子集合 %s（空间 %s，频率 %s）里因子 %s 回看 %d 根，而 [storage_retention] 的保留期只能装下约 %.0f 根：保留期必须大于因子回看根数，否则引擎预载和补算读不到足够的历史。"+
+			"因子任务 %s（空间 %s，频率 %s）里因子 %s 回看 %d 根，而 [storage_retention] 的保留期只能装下约 %.0f 根：保留期必须大于因子回看根数，否则引擎预载和补算读不到足够的历史。"+
 				"请把 storage_retention.spaces.%s.%s（没有空间覆盖时是 storage_retention.defaults.%s）至少调到 %s",
-			set.SetID, set.SpaceID, set.Freq, w.factor, w.lookback, bars, set.SpaceID, set.Freq, set.Freq, need.String())
+			set.TaskID, set.SpaceID, set.Freq, w.factor, w.lookback, bars, set.SpaceID, set.Freq, set.Freq, need.String())
 		if estimated {
 			warnings = append(warnings, message+"（交易时段市场按日历估算，仅作提醒）")
 		} else {

@@ -2,15 +2,12 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/enginehub"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/preview"
@@ -91,8 +88,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
 	catalogService := catalog.NewService(db, storage,
 		catalog.WithLockDir(cfg.Database.Path+".locks"),
-		catalog.WithRecalcSubmitter(recalcSubmitter{service: recalcService}),
-		catalog.WithEarliestPeriodProvider(datasetEarliestPeriodProvider{storage: storage}),
 		catalog.WithReadyRecorder(hub.SetResultReady),
 	)
 
@@ -214,12 +209,6 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 				if err := service.Reconcile(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
 					log.ErrorContextf(reconcileCtx, "factor catalog reconciliation failed: %v", err)
 				}
-				// 参数请求原文与保留期之外的冻结区间顺带清理（因子动态调参执行计划 2.6）。
-				if removed, err := service.CleanupParams(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
-					log.ErrorContextf(reconcileCtx, "factor param cleanup failed: %v", err)
-				} else if removed > 0 {
-					log.InfoContextf(reconcileCtx, "factor_param_cleanup removed=%d", removed)
-				}
 			}
 		}
 	}()
@@ -230,25 +219,15 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 	}, nil
 }
 
-type recalcSubmitter struct{ service *recalc.Service }
-
-func (s recalcSubmitter) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error) {
-	requestID, err := newRequestID()
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	return s.service.PrepareEnableBackfill(ctx, set.SetID, member.Alias, requestID, start, end)
-}
-
 type recalcRPCAdapter struct{ service *recalc.Service }
 
-func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Submit(ctx, setID, members, subjects, requestID, start, end)
+func (a recalcRPCAdapter) Submit(ctx context.Context, taskID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Submit(ctx, taskID, members, subjects, requestID, start, end)
 	return factorrpc.JobFromStore(job), err
 }
 
-func (a recalcRPCAdapter) List(ctx context.Context, setID string, statuses []string) ([]factorrpc.RecalcJob, error) {
-	jobs, err := a.service.List(ctx, setID, statuses)
+func (a recalcRPCAdapter) List(ctx context.Context, taskID string, statuses []string) ([]factorrpc.RecalcJob, error) {
+	jobs, err := a.service.List(ctx, taskID, statuses)
 	if err != nil {
 		return nil, err
 	}
@@ -269,35 +248,4 @@ func (a recalcRPCAdapter) Cancel(ctx context.Context, jobID string) (factorrpc.R
 	return factorrpc.JobFromStore(job), err
 }
 
-func newRequestID() (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", fmt.Errorf("generate recalc request id: %w", err)
-	}
-	return "factor-enable-" + hex.EncodeToString(value[:]), nil
-}
-
-type datasetEarliestPeriodProvider struct {
-	storage *storageio.Client
-}
-
-func (p datasetEarliestPeriodProvider) EarliestDatasetPeriod(ctx context.Context, spaceID, datasetID, freq string) (time.Time, bool, error) {
-	subjects, err := p.storage.ListDatasetSubjects(ctx, spaceID, datasetID)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if len(subjects) == 0 {
-		return time.Time{}, false, nil
-	}
-	columns, err := p.storage.DatasetColumns(ctx, spaceID, datasetID)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if len(columns) == 0 {
-		return time.Time{}, false, fmt.Errorf("source Dataset %s/%s has no readable columns", spaceID, datasetID)
-	}
-	return p.storage.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
-}
-
-var _ catalog.RecalcSubmitter = recalcSubmitter{}
 var _ factorrpc.RecalcAPI = recalcRPCAdapter{}

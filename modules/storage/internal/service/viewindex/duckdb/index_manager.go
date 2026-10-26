@@ -69,10 +69,6 @@ const (
 	defaultDuckDBThreads  = 1
 	defaultMaxOpenConns   = 4
 	defaultMaxIdleConns   = 1
-	// 每条 UPSERT 的行数。DuckDB 解析与绑定大 VALUES 列表的代价是超线性的：基准（TestLiveWriteBaseline，
-	// 500 行 × 18 列）中 256 行/条约 1.2–1.4s，32 行/条约 0.2s，1 行/条反而因逐条开销升到 2.7s。
-	// 所有 View（K 线、因子结果）的实时写入、回填与重建都经过这里。
-	maxWriteRowsPerStatement = 32
 	// internalAttributesColumn keeps row attributes that are not part of the
 	// declared View projection (notably factor.source_hash) available to
 	// downstream readers without exposing them as user columns.
@@ -348,7 +344,7 @@ func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, targ
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
 	writeStart := time.Now()
-	var seriesTook, upsertTook, beginTook time.Duration
+	var beginTook time.Duration
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return err
@@ -379,51 +375,10 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if schemaHash != batch.ViewSchemaHash {
 		return errors.New("view schema hash conflict")
 	}
-	groupsStart := time.Now()
-	for _, group := range groupRowWrites(batch.RowWrites) {
-		seriesStart := time.Now()
-		if err := ensureSeriesRowsAndCounts(ctx, tx, group.writes); err != nil {
-			return err
-		}
-		seriesTook += time.Since(seriesStart)
-		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
-		names = append(names, internalAttributesColumn)
-		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
-			end := start + maxWriteRowsPerStatement
-			if end > len(group.writes) {
-				end = len(group.writes)
-			}
-			writes := group.writes[start:end]
-			args := make([]any, 0, len(writes)*len(names))
-			for _, write := range writes {
-				rowValues, err := rowArgs(columns, names, write, batch.WriteMode)
-				if err != nil {
-					return err
-				}
-				args = append(args, rowValues...)
-			}
-			if _, err := tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, len(writes)), args...); err != nil {
-				// Older DuckDB builds can still reject a multi-value UPSERT when
-				// equivalent physical keys arrive through differently shaped event
-				// fragments. Retry the same rows one at a time so an existing row is
-				// resolved by the conflict clause instead of poisoning the durable
-				// consumer forever. Non-duplicate constraint errors remain fatal.
-				if !isDuplicateConstraintError(err) {
-					return err
-				}
-				for _, write := range writes {
-					rowValues, rowErr := rowArgs(columns, names, write, batch.WriteMode)
-					if rowErr != nil {
-						return rowErr
-					}
-					if _, rowErr = tx.ExecContext(ctx, upsertSQLBatch(names, batch.WriteMode, 1), rowValues...); rowErr != nil {
-						return rowErr
-					}
-				}
-			}
-		}
+	var seriesTook, upsertTook time.Duration
+	if seriesTook, upsertTook, err = writeRowGroups(ctx, tx, columns, batch.RowWrites, batch.WriteMode); err != nil {
+		return err
 	}
-	upsertTook = time.Since(groupsStart) - seriesTook
 	if from, to, ok := batchCoverage(batch.RowWrites); ok {
 		var currentFrom, currentTo string
 		if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
@@ -451,97 +406,6 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 		log.Printf("storage view DuckDB 写入较慢 index=%s 行=%d 开事务=%s 序列行=%s 写入=%s 提交=%s 合计=%s",
 			id, len(batch.RowWrites), beginTook.Round(time.Millisecond), seriesTook.Round(time.Millisecond),
 			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
-	}
-	return nil
-}
-
-func ensureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []viewindex.RowWrite) error {
-	if len(writes) == 0 {
-		return nil
-	}
-	type candidate struct {
-		subject, freq, tag string
-		when               time.Time
-	}
-	unique := make(map[string]candidate, len(writes))
-	for _, write := range writes {
-		key := write.Key.Key.GetTimeSeries()
-		if key == nil {
-			continue
-		}
-		when, err := time.Parse(time.RFC3339Nano, key.GetDataTime())
-		if err != nil {
-			return fmt.Errorf("invalid data_time: %w", err)
-		}
-		when = when.UTC()
-		item := candidate{subject: key.GetSubjectId(), freq: key.GetFreq(), tag: key.GetSeriesTag(), when: when}
-		unique[encodePhysicalKeyParts(item.subject, item.freq, canonicalCoverageTime(when), item.tag)] = item
-	}
-	items := make([]candidate, 0, len(unique))
-	for _, item := range unique {
-		items = append(items, item)
-	}
-	counts := make(map[string]struct {
-		subject string
-		freq    string
-		tag     string
-		count   uint64
-	})
-	for start := 0; start < len(items); start += maxWriteRowsPerStatement {
-		end := min(start+maxWriteRowsPerStatement, len(items))
-		chunk := items[start:end]
-		placeholders := make([]string, 0, len(chunk))
-		args := make([]any, 0, len(chunk)*4)
-		for _, item := range chunk {
-			placeholders = append(placeholders, "(?, ?, ?, ?)")
-			args = append(args, item.subject, item.freq, item.when, item.tag)
-		}
-		query := `INSERT INTO view_rows (subject_id, freq, data_time, series_tag) VALUES ` + strings.Join(placeholders, ",") + ` ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING RETURNING subject_id, freq, data_time, series_tag`
-		rows, err := tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var subject, freq, tag string
-			var when time.Time
-			if err := rows.Scan(&subject, &freq, &when, &tag); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			countKey := subject + "\x00" + freq + "\x00" + tag
-			entry := counts[countKey]
-			entry.subject, entry.freq, entry.tag = subject, freq, tag
-			entry.count++
-			counts[countKey] = entry
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		_ = rows.Close()
-	}
-	countItems := make([]struct {
-		subject string
-		freq    string
-		tag     string
-		count   uint64
-	}, 0, len(counts))
-	for _, item := range counts {
-		countItems = append(countItems, item)
-	}
-	for start := 0; start < len(countItems); start += maxWriteRowsPerStatement {
-		end := min(start+maxWriteRowsPerStatement, len(countItems))
-		chunk := countItems[start:end]
-		values := make([]string, 0, len(chunk))
-		args := make([]any, 0, len(chunk)*4)
-		for _, item := range chunk {
-			values = append(values, "(?, ?, ?, ?)")
-			args = append(args, item.subject, item.freq, item.tag, item.count)
-		}
-		query := `INSERT INTO view_series_counts (subject_id, freq, series_tag, row_count) VALUES ` + strings.Join(values, ",") + ` ON CONFLICT (subject_id, freq, series_tag) DO UPDATE SET row_count = view_series_counts.row_count + excluded.row_count`
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -749,52 +613,6 @@ func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
 		groups[groupIndex].writes = append(groups[groupIndex].writes, write)
 	}
 	return groups
-}
-
-func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) string {
-	if rowCount < 1 {
-		rowCount = 1
-	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
-	values := make([]string, rowCount)
-	for i := range values {
-		values[i] = "(" + placeholders + ")"
-	}
-	sets := make([]string, 0, len(names)-4)
-	for _, name := range names[4:] {
-		// Live writes overwrite complete rows. Backfill only fills missing values.
-		set := fmt.Sprintf("%s = excluded.%s", quote(name), quote(name))
-		if name == internalAttributesColumn {
-			// Dataset events often carry only a subset of provenance attributes.
-			// Merge JSON objects by key so a later factor patch cannot erase hashes
-			// written by earlier factors on the same projected row.
-			set = fmt.Sprintf("%s = CASE WHEN excluded.%s IS NULL THEN view_rows.%s ELSE json_merge_patch(COALESCE(view_rows.%s, '{}'), excluded.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-		}
-		if mode == viewindex.Backfill {
-			if name == internalAttributesColumn {
-				// Backfill must never overwrite live provenance. Put the
-				// backfill object first so existing/live keys win on conflicts.
-				set = fmt.Sprintf("%s = CASE WHEN view_rows.%s IS NULL THEN excluded.%s ELSE json_merge_patch(COALESCE(excluded.%s, '{}'), view_rows.%s) END", quote(name), quote(name), quote(name), quote(name), quote(name))
-			} else {
-				set = fmt.Sprintf("%s = COALESCE(view_rows.%s, excluded.%s)", quote(name), quote(name), quote(name))
-			}
-		}
-		sets = append(sets, set)
-	}
-	conflict := "ON CONFLICT (subject_id, freq, data_time, series_tag) DO NOTHING"
-	if len(sets) > 0 {
-		conflict = "ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET " + strings.Join(sets, ", ")
-	}
-	return fmt.Sprintf("INSERT INTO view_rows (%s) VALUES %s %s", joinQuoted(names), strings.Join(values, ","), conflict)
-}
-
-func isDuplicateConstraintError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "duplicate key") ||
-		(strings.Contains(message, "primary key") && strings.Contains(message, "constraint"))
 }
 
 func rowArgs(columns map[string]pb.FieldValueType, names []string, write viewindex.RowWrite, mode viewindex.WriteMode) ([]any, error) {

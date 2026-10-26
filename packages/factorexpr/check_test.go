@@ -9,7 +9,7 @@ import (
 
 // outputSpec 把一条表达式放进只有一个输出的定义；用块标量，表达式里的引号与花括号不需要转义。
 func outputSpec(expression string) string {
-	return "outputs:\n  o: |\n    " + expression + "\n"
+	return "output: |\n    " + expression + "\n"
 }
 
 func TestSyntaxWhitelistRejects(t *testing.T) {
@@ -42,8 +42,8 @@ func TestSyntaxWhitelistRejects(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tc.want)
 			}
 			var compileErr *Error
-			if !errors.As(err, &compileErr) || compileErr.Path != "outputs.o" {
-				t.Fatalf("err = %#v, want *Error at outputs.o", err)
+			if !errors.As(err, &compileErr) || compileErr.Path != "output" {
+				t.Fatalf("err = %#v, want *Error at output", err)
 			}
 		})
 	}
@@ -86,6 +86,7 @@ func TestTypeAndNameChecks(t *testing.T) {
 		{"huge integer literal", `close * 99999999999999999`, "超出范围"},
 		{"lookback overflow", `ts_mean(ts_mean(close, 60000), 60000)`, "超过上限 100000"},
 		{"recursive lookback overflow", `ema(close, 100000)`, "超过上限 100000"},
+		{"ema explicit k out of range", `ema(close, 20, 100001)`, "0～100000"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,11 +102,11 @@ func TestLetAndParamResolution(t *testing.T) {
 	cases := []struct {
 		name, text, want string
 	}{
-		{"forward reference", "let:\n  a: b + 1\n  b: close\noutputs: {o: a}\n", "之后（或它自身）定义的 let b"},
-		{"self reference", "let:\n  a: a + 1\noutputs: {o: a}\n", "之后（或它自身）定义的 let a"},
-		{"let called as function", "let:\n  tp: close\noutputs: {o: tp(1)}\n", "tp 是 let 中间量，不是函数"},
-		{"param called as function", "params: {w: {type: int, min: 1, max: 9, default: 5}}\noutputs: {o: w(close)}\n", "w 是参数，不是函数"},
-		{"error inside let", "let:\n  m: ts_mean(close)\noutputs: {o: m}\n", "let.m"},
+		{"forward reference", "let:\n  a: b + 1\n  b: close\noutput: a\n", "之后（或它自身）定义的 let b"},
+		{"self reference", "let:\n  a: a + 1\noutput: a\n", "之后（或它自身）定义的 let a"},
+		{"let called as function", "let:\n  tp: close\noutput: tp(1)\n", "tp 是 let 中间量，不是函数"},
+		{"param called as function", "params: {w: {type: int, min: 1, max: 9, default: 5}}\noutput: w(close)\n", "w 是参数，不是函数"},
+		{"error inside let", "let:\n  m: ts_mean(close)\noutput: m\n", "let.m"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,19 +119,19 @@ func TestLetAndParamResolution(t *testing.T) {
 }
 
 func TestErrorPositions(t *testing.T) {
-	_, err := Compile("outputs:\n  o: close + foo(1)\n")
+	_, err := Compile("output: close + foo(1)\n")
 	var compileErr *Error
 	if !errors.As(err, &compileErr) {
 		t.Fatalf("err = %v", err)
 	}
-	if compileErr.Path != "outputs.o" || compileErr.DocLine != 2 || compileErr.Line != 1 || compileErr.Column != 9 {
+	if compileErr.Path != "output" || compileErr.DocLine != 1 || compileErr.Line != 1 || compileErr.Column != 9 {
 		t.Fatalf("position = %+v", compileErr)
 	}
-	_, err = Compile("outputs:\n  o: |\n    close\n    + ts_mean(close, 0)\n")
+	_, err = Compile("output: |\n    close\n    + ts_mean(close, 0)\n")
 	if !errors.As(err, &compileErr) || compileErr.Line != 2 || compileErr.Column != 18 {
 		t.Fatalf("multi-line position = %+v (%v)", compileErr, err)
 	}
-	_, err = Compile("outputs:\n  o: close +\n")
+	_, err = Compile("output: close +\n")
 	if !errors.As(err, &compileErr) || compileErr.Line != 1 || compileErr.Column == 0 {
 		t.Fatalf("syntax error position = %+v (%v)", compileErr, err)
 	}
@@ -153,7 +154,7 @@ func TestExpressionNodeLimits(t *testing.T) {
 	for i := 1; i <= 12; i++ {
 		text += "  a" + strconv.Itoa(i) + ": a" + strconv.Itoa(i-1) + " + a" + strconv.Itoa(i-1) + "\n"
 	}
-	text += "outputs: {o: a12}\n"
+	text += "output: a12\n"
 	_, err = Compile(text)
 	if err == nil || !strings.Contains(err.Error(), "超过 4096 个") {
 		t.Fatalf("err = %v", err)
@@ -189,7 +190,7 @@ func TestConstantFolding(t *testing.T) {
 		}
 	}
 	// 参数参与的逐元素运算不折叠（取值每期才知道），常量部分照常折叠。
-	factor := mustCompile(t, "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutputs:\n  o: close * (k + 1 * 2)\n")
+	factor := mustCompile(t, "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutput: close * (k + 1 * 2)\n")
 	if got := factor.Outputs[0].Root.Canonical(); got != "mul(close,add($k,2))" {
 		t.Fatalf("canonical = %s", got)
 	}
@@ -212,8 +213,8 @@ func TestFactorTypeDerivation(t *testing.T) {
 }
 
 func TestUnusedLetIsAllowedButChecked(t *testing.T) {
-	mustCompile(t, "let:\n  unused: ts_mean(open, 3)\noutputs: {o: close}\n")
-	if _, err := Compile("let:\n  unused: ts_mean(open)\noutputs: {o: close}\n"); err == nil {
+	mustCompile(t, "let:\n  unused: ts_mean(open, 3)\noutput: close\n")
+	if _, err := Compile("let:\n  unused: ts_mean(open)\noutput: close\n"); err == nil {
 		t.Fatal("an invalid unused let should still be rejected")
 	}
 }

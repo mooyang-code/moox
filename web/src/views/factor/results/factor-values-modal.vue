@@ -18,7 +18,21 @@
         </li>
       </ul>
       <div class="values-main">
-        <a-input-search v-model="keyword" allow-clear placeholder="搜索输出列、因子或成员" @input="page = 1" @clear="page = 1" />
+        <div class="values-search">
+          <a-input-search
+            v-model="keyword"
+            allow-clear
+            placeholder="搜索输出列、因子或成员"
+            @input="page = 1"
+            @clear="page = 1"
+          />
+          <a-tooltip :disabled="Boolean(props.scope.paramsColumn)" content="结果视图没有 __params 列">
+            <span>
+              <a-switch v-model="showParams" size="small" :disabled="!props.scope.paramsColumn" />
+              <span class="values-switch-label">显示参数</span>
+            </span>
+          </a-tooltip>
+        </div>
         <a-alert v-if="error" type="error" show-icon>
           {{ error }}<a-button type="text" size="mini" @click="load">重试</a-button>
         </a-alert>
@@ -35,13 +49,13 @@
           <template #columns>
             <a-table-column title="因子" :width="200">
               <template #cell="{ record }"
-                >{{ record.alias
-                }}<span v-if="record.alias !== record.factorId" class="muted">（{{ record.factorId }}）</span></template
+                >{{ record.memberKey
+                }}<span v-if="record.memberKey !== record.factorId" class="muted">（{{ record.factorId }}）</span></template
               >
             </a-table-column>
             <a-table-column title="输出列" data-index="column" :ellipsis="true" :tooltip="true" />
-            <a-table-column title="参数" :width="220" :ellipsis="true" :tooltip="true">
-              <template #cell="{ record }">{{ paramText(props.scope, record.alias, values) || "-" }}</template>
+            <a-table-column v-if="showParams" title="参数" :width="220" :ellipsis="true" :tooltip="true">
+              <template #cell="{ record }">{{ paramText(record.memberKey, values[props.scope.paramsColumn]) || "-" }}</template>
             </a-table-column>
             <a-table-column title="值" :width="160" align="right">
               <template #cell="{ record }">{{ loaded ? formatValue(values[record.column]) : "" }}</template>
@@ -80,6 +94,8 @@ const emit = defineEmits<{ (event: "update:visible", value: boolean): void }>();
 
 const category = ref("");
 const keyword = ref("");
+/** 默认不展示 __params；打开后才读取它，并按成员展开成各成员实际用的参数。 */
+const showParams = ref(false);
 const page = ref(1);
 const values = ref<Record<string, string>>({});
 const loaded = ref(false);
@@ -109,10 +125,10 @@ function selectCategory(id: string) {
   page.value = 1;
 }
 
-/** 每翻一页（或改筛选）只查这一行、这一页输出及其参数列的值。 */
+/** 每翻一页（或改筛选）只查这一行、这一页输出的值；打开“显示参数”时同时读 __params。 */
 async function load() {
   const key = props.rowKey;
-  const columns = valueColumnsFor(props.scope, pageItems.value);
+  const columns = valueColumnsFor(props.scope, pageItems.value, showParams.value);
   const request = guard.begin();
   error.value = "";
   if (!key || !columns.length) {
@@ -151,6 +167,7 @@ watch(
     if (visible) {
       category.value = "";
       keyword.value = "";
+      showParams.value = false;
       page.value = 1;
       values.value = {};
       void load();
@@ -160,6 +177,10 @@ watch(
   },
   { immediate: true }
 );
+
+watch(showParams, () => {
+  if (props.visible) void load();
+});
 
 watch(
   () => pageItems.value.map(item => item.column).join(","),
@@ -227,5 +248,17 @@ watch(
     flex-wrap: wrap;
     max-height: none;
   }
+}
+
+.values-search {
+  display: flex;
+  align-items: center;
+  gap: var(--moox-space-3);
+}
+
+.values-switch-label {
+  margin-left: 6px;
+  color: var(--color-text-2);
+  font-size: 12px;
 }
 </style>

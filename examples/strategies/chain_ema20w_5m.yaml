@@ -1,0 +1,27 @@
+# 全链路耗时观察策略：从 K 线收盘到策略求值完成。
+#
+# 使用方法：先建一个 5m 合约 K 线的因子任务，成员（成员键即列名，规则里直接引用）：
+#   { factor = "ema", params = { span = 20, warmup = 50000 } }   # → 列 ema__20_50000（EMA20，5 万根预热）
+#   { factor = "rsi" }                                            # → 列 rsi
+#   { factor = "boll" }                                           # → 列 boll__mid、boll__up、boll__low、boll__pctb
+# 创建策略实例时选这个因子任务，不挂账户（观察实例）。任务先于策略运行，可以先积累历史；
+# 固定成员的参数从第一期起就是 span=20、warmup=50000，观察耗时不用跳过前几期。
+name: chain_ema20w_5m
+bar: 5m
+
+universe:
+  min_age_bars: 100
+
+rules:
+  - id: above_ema20w
+    name: 站上 EMA20（5 万根预热）、未超买、偏离最大
+    type: rank
+    filter: "ema__20_50000 > 0 && close > ema__20_50000 && rsi < 70 && close > boll__mid"
+    score: "rank(close / ema__20_50000 - 1)"
+    select: {top: 10}
+    weight: {total: 1, method: equal, cap: 0.2}
+
+portfolio:
+  leverage: 1
+  min_universe: 5
+  max_missing: 0.2

@@ -37,8 +37,8 @@
             <a-table-column title="输出列" data-index="column" :ellipsis="true" :tooltip="true" />
             <a-table-column title="因子">
               <template #cell="{ record }"
-                >{{ record.alias
-                }}<span v-if="record.alias !== record.factorId" class="muted">（{{ record.factorId }}）</span></template
+                >{{ record.memberKey
+                }}<span v-if="record.memberKey !== record.factorId" class="muted">（{{ record.factorId }}）</span></template
               >
             </a-table-column>
             <a-table-column title="分类" :width="120">

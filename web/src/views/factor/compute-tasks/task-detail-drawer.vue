@@ -12,7 +12,7 @@
       <div class="detail-head">
         <a-tag :color="statusTag.color">{{ statusTag.label }}</a-tag>
         <HealthTag v-if="health.key !== set.status" :set="set" :last-run="props.info.last_run" />
-        <span class="detail-head__id">{{ set.set_id }}</span>
+        <span class="detail-head__id">{{ set.task_id }}</span>
         <a-space class="detail-head__actions" wrap>
           <a-button v-if="actionKind === 'retry'" size="small" type="primary" :loading="props.busy" @click="emit('retry', set)">
             重试激活
@@ -33,14 +33,14 @@
       <section class="detail-section">
         <h3>基本信息</h3>
         <a-descriptions :column="2" bordered size="small">
-          <a-descriptions-item label="计算任务 ID">{{ set.set_id }}</a-descriptions-item>
+          <a-descriptions-item label="任务名称">{{ set.name || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
-          <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
-          <a-descriptions-item label="对象范围" :span="2">
-            {{ scopeText(set) }}
-            <span v-if="set.subject_mode === 'include'" class="detail-subjects">{{ set.subjects.join(", ") }}</span>
-            <a-button size="mini" type="text" :disabled="locked" @click="emit('editScope', set)">修改</a-button>
+          <a-descriptions-item label="关联策略实例">
+            <template v-if="set.bound_instance_id">{{ set.bound_instance_id }}</template>
+            <span v-else class="detail-hint">尚未关联：创建策略实例时选择这个任务，关联后永久有效</span>
           </a-descriptions-item>
+          <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
           <a-descriptions-item label="结果数据集" :span="2">{{ set.result_dataset_id }}</a-descriptions-item>
           <a-descriptions-item label="结果视图" :span="2">{{ resultViewId || "-" }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTime(set.created_at) }}</a-descriptions-item>
@@ -66,7 +66,9 @@
             <a-button status="danger" :disabled="removeState.disabled" @click="emit('delete', set)">删除计算任务…</a-button>
           </span>
         </a-tooltip>
-        <p class="detail-hint">删除前需要先移除全部因子；可选择同时清理结果数据集（purge，不可恢复）。</p>
+        <p class="detail-hint">
+          删除前需要先停用并移除全部因子；已关联策略实例的任务不能删除；可选择同时清理结果数据集（purge，不可恢复）。
+        </p>
       </section>
     </template>
   </a-drawer>
@@ -75,36 +77,34 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import type { FactorSet, FactorSetInfo } from "@/api/factor/types";
+import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { listViews } from "@/api/storage/metadata";
 import { useFactorStore } from "@/store/modules/factor";
 import { RequestGate } from "@/utils/request-gate";
 import { setHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
-import { setStatusTag } from "@/views/factor/shared/status";
-import { deleteState, ENABLE_ENGINE_HINT, scopeText, setActionKind } from "./compute-tasks-model";
+import { taskStatusTag } from "@/views/factor/shared/status";
+import { deleteState, ENABLE_ENGINE_HINT, setActionKind } from "./compute-tasks-model";
 import MemberSection from "./member-section.vue";
 
 defineOptions({ name: "FactorTaskDetailDrawer" });
 
-const props = defineProps<{ info?: FactorSetInfo; busy?: boolean }>();
+const props = defineProps<{ info?: FactorTaskInfo; busy?: boolean }>();
 const emit = defineEmits<{
   (e: "close"): void;
-  (e: "retry", set: FactorSet): void;
-  (e: "toggleStatus", set: FactorSet, next: "enabled" | "disabled"): void;
-  (e: "editScope", set: FactorSet): void;
-  (e: "delete", set: FactorSet): void;
+  (e: "retry", set: FactorTask): void;
+  (e: "toggleStatus", set: FactorTask, next: "enabled" | "disabled"): void;
+  (e: "delete", set: FactorTask): void;
 }>();
 
 const router = useRouter();
 const store = useFactorStore();
 
-const set = computed(() => props.info?.factor_set as FactorSet);
-const title = computed(() => (props.info ? store.setLabel(set.value) : ""));
-const statusTag = computed(() => setStatusTag(set.value?.status || ""));
+const set = computed(() => props.info?.factor_task as FactorTask);
+const title = computed(() => (props.info ? store.taskLabel(set.value) : ""));
+const statusTag = computed(() => taskStatusTag(set.value?.status || ""));
 const health = computed(() => setHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
 const actionKind = computed(() => (set.value ? setActionKind(set.value) : "none"));
-const locked = computed(() => set.value?.status === "deleting" || set.value?.status === "pending");
 const removeState = computed(() => (props.info ? deleteState(props.info) : { disabled: true, reason: "" }));
 const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
@@ -112,7 +112,7 @@ const sourceName = computed(() =>
 const resultViewId = ref("");
 const viewGate = new RequestGate();
 
-async function loadResultView(current?: FactorSet) {
+async function loadResultView(current?: FactorTask) {
   const token = viewGate.next();
   resultViewId.value = "";
   if (!current) return;
@@ -134,8 +134,8 @@ async function loadResultView(current?: FactorSet) {
 }
 
 watch(
-  () => props.info?.factor_set.set_id,
-  () => void loadResultView(props.info?.factor_set),
+  () => props.info?.factor_task.task_id,
+  () => void loadResultView(props.info?.factor_task),
   { immediate: true }
 );
 
@@ -148,7 +148,7 @@ function goDefinitions() {
 }
 
 function goTab(tab: "results" | "recalc") {
-  void router.push({ path: "/factor/tasks", query: { tab, set: set.value.set_id } });
+  void router.push({ path: "/factor/tasks", query: { tab, task: set.value.task_id } });
 }
 </script>
 
@@ -177,11 +177,6 @@ function goTab(tab: "results" | "recalc") {
   margin: 0 0 var(--moox-space-2);
   font-size: 15px;
   font-weight: 600;
-}
-
-.detail-subjects {
-  margin-left: var(--moox-space-2);
-  color: var(--color-text-3);
 }
 
 .detail-hint {

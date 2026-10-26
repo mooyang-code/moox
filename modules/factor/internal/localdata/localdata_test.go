@@ -168,7 +168,7 @@ type fixture struct {
 	st     *fakeStorage
 	data   *Data
 	runner *pipeline.Runner
-	set    domain.EngineSet
+	set    domain.EngineTask
 	now    time.Time
 }
 
@@ -181,9 +181,9 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 	fx := &fixture{st: st, now: at(10)}
 	fx.data = New(Config{Store: store, Storage: st, Clock: periodclock.Continuous{}, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2, Now: func() time.Time { return fx.now }})
 	fx.runner = pipeline.NewRunner(st, fx.data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	fx.set = domain.EngineSet{
-		Set: domain.FactorSet{SetID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m", SubjectMode: domain.SubjectModeAll,
-			ResultDatasetID: "factor_spot", Status: domain.SetStatusEnabled},
+	fx.set = domain.EngineTask{
+		Set: domain.FactorTask{TaskID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m",
+			ResultDatasetID: "factor_spot", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(factors...),
 	}
 	return fx
@@ -202,7 +202,7 @@ func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipel
 }
 
 func mean3() domain.FactorDef {
-	return domain.MustDefinition("mean", "mean", "outputs:\n  mean3: ts_mean(close, 3)\n")
+	return domain.MustDefinition("mean", "mean", "output: ts_mean(close, 3)\n")
 }
 
 func (fx *fixture) result(subject string, m int) storageio.ResultRow {
@@ -224,11 +224,11 @@ func (s *sink) RecordGaps(_ context.Context, e []pipeline.GapEntry) error {
 }
 
 func mean5() domain.FactorDef {
-	return domain.MustDefinition("mean5", "mean5", "outputs:\n  mean5: ts_mean(close, 5)\n")
+	return domain.MustDefinition("mean5", "mean5", "output: ts_mean(close, 5)\n")
 }
 
 func isFilled() domain.FactorDef {
-	return domain.MustDefinition("isf", "isf", "outputs:\n  isf: is_filled + 0\n")
+	return domain.MustDefinition("isf", "isf", "output: is_filled + 0\n")
 }
 
 // 窗口载入完成之前：实时周期不算、标的按预热处理；Prepare 之后补齐本地并载入窗口，之后每期只拉增量。
@@ -240,13 +240,13 @@ func TestLivePeriodsWarmThenIncrementalSync(t *testing.T) {
 	}
 
 	outcome := fx.live(t, at(9), subjects)
-	require.Equal(t, 2, outcome.Warming, "还没有预载：整个集合预热中")
+	require.Equal(t, 2, outcome.Warming, "还没有预载：整个任务预热中")
 	require.Empty(t, fx.data.WindowStatuses())
 
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
 	status := fx.data.WindowStatuses()
 	require.Len(t, status, 1)
-	require.Equal(t, pipeline.WarmupStatus{SetID: "set1", State: pipeline.WarmupReady, WarmSubjects: 2, ExpectedSubjects: 2}, status[0])
+	require.Equal(t, pipeline.WarmupStatus{TaskID: "set1", State: pipeline.WarmupReady, WarmSubjects: 2, ExpectedSubjects: 2}, status[0])
 	// 本地只拉了回看窗口（3 根），不是全部历史。
 	b, ok, err := fx.data.Store().Bounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, "BTC")
 	require.NoError(t, err)
@@ -257,7 +257,7 @@ func TestLivePeriodsWarmThenIncrementalSync(t *testing.T) {
 	outcome = fx.live(t, at(9), subjects)
 	require.Equal(t, "complete", outcome.Status)
 	require.Equal(t, 0, outcome.Warming)
-	require.InDelta(t, (107+108+109)/3.0, fx.result("BTC", 9).Fields["mean3"], 1e-9)
+	require.InDelta(t, (107+108+109)/3.0, fx.result("BTC", 9).Fields["mean"], 1e-9)
 	require.InDelta(t, 109.0, fx.result("BTC", 9).Fields["close"], 1e-9, "携带列从本地行写出")
 
 	// 下一期：Storage 来了新的一根，同步只拉增量，窗口追加。
@@ -266,7 +266,7 @@ func TestLivePeriodsWarmThenIncrementalSync(t *testing.T) {
 	}
 	outcome = fx.live(t, at(10), subjects)
 	require.Equal(t, "complete", outcome.Status)
-	require.InDelta(t, (108+109+110)/3.0, fx.result("ETH", 10).Fields["mean3"], 1e-9)
+	require.InDelta(t, (108+109+110)/3.0, fx.result("ETH", 10).Fields["mean"], 1e-9)
 	b, _, _ = fx.data.Store().Bounds(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}, "ETH")
 	require.Equal(t, at(10), b.Latest)
 }
@@ -286,7 +286,7 @@ func TestLiveSubjectWithoutTargetBarFailsAndRecordsLedger(t *testing.T) {
 	outcome := fx.live(t, at(10), subjects)
 	require.Equal(t, "degraded", outcome.Status)
 	require.Equal(t, []string{"ETH"}, outcome.FailedSubjects)
-	require.NotZero(t, fx.result("BTC", 10).Fields["mean3"])
+	require.NotZero(t, fx.result("BTC", 10).Fields["mean"])
 	require.Len(t, ledger.entries, 1)
 	require.Equal(t, "ETH", ledger.entries[0].Subject)
 	require.Equal(t, pipeline.SkipReasonUpstream, ledger.entries[0].Reason)
@@ -297,7 +297,7 @@ func TestLiveSubjectWithoutTargetBarFailsAndRecordsLedger(t *testing.T) {
 	}
 	outcome = fx.live(t, at(11), subjects)
 	require.Equal(t, "complete", outcome.Status)
-	require.InDelta(t, (109+109+111)/3.0, fx.result("ETH", 11).Fields["mean3"], 1e-9, "t10 被填充成上一期 close")
+	require.InDelta(t, (109+109+111)/3.0, fx.result("ETH", 11).Fields["mean"], 1e-9, "t10 被填充成上一期 close")
 }
 
 // 交易所缺的周期写成缺失行并带标记：因子默认把填充值当正常值，用 is_filled 可以区分。
@@ -310,7 +310,7 @@ func TestFilledRowsAreMarkedAndUsableInFactors(t *testing.T) {
 	// Prepare 只拉到最新已收盘的一根（第 9 根）；第 11 根在实时周期里补进来，t10 被填充。
 	outcome := fx.live(t, at(11), subjects)
 	require.Equal(t, "complete", outcome.Status)
-	require.InDelta(t, (109+109+111)/3.0, fx.result("BTC", 11).Fields["mean3"], 1e-9)
+	require.InDelta(t, (109+109+111)/3.0, fx.result("BTC", 11).Fields["mean"], 1e-9)
 	require.Equal(t, 0.0, fx.result("BTC", 11).Fields["isf"])
 
 	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(10), TargetEnd: at(11),
@@ -367,7 +367,7 @@ func TestFollowAppliesCorrectionAndRecordsPending(t *testing.T) {
 	fx.st.put("BTC", 100, 10)
 	outcome := fx.live(t, at(10), subjects)
 	require.Equal(t, "complete", outcome.Status)
-	require.InDelta(t, (508+109+110)/3.0, fx.result("BTC", 10).Fields["mean3"], 1e-9)
+	require.InDelta(t, (508+109+110)/3.0, fx.result("BTC", 10).Fields["mean"], 1e-9)
 
 	// 同样内容再被写一次：不改变本地、不新增待办。
 	require.NoError(t, fx.data.Store().ClearPending(src, pending))
@@ -468,7 +468,7 @@ func TestLiveCatchUpOlderPeriodReadsDiskNotTruncatedWindow(t *testing.T) {
 
 	outcome := fx.live(t, at(8), subjects)
 	require.Equal(t, "complete", outcome.Status)
-	require.InDelta(t, (106+107+108)/3.0, fx.result("BTC", 8).Fields["mean3"], 1e-9)
+	require.InDelta(t, (106+107+108)/3.0, fx.result("BTC", 8).Fields["mean"], 1e-9)
 }
 
 // 回看变长后，本地不足的标的在 Prepare 时从 Storage 往前补齐（设计 5.2 启动加载，决定 24）；

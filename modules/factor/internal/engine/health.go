@@ -12,7 +12,7 @@ type Health struct {
 	periodBudgetMax    time.Duration
 	storageWriteErrors int
 	dependencies       map[string]bool
-	lanes              map[string]time.Time
+	runners            map[string]time.Time
 }
 
 type HealthStatus struct {
@@ -24,7 +24,7 @@ func NewHealth(periodBudgetMax time.Duration) *Health {
 	if periodBudgetMax <= 0 {
 		periodBudgetMax = 15 * time.Minute
 	}
-	return &Health{periodBudgetMax: periodBudgetMax, dependencies: make(map[string]bool), lanes: make(map[string]time.Time)}
+	return &Health{periodBudgetMax: periodBudgetMax, dependencies: make(map[string]bool), runners: make(map[string]time.Time)}
 }
 
 func (h *Health) SetDependency(name string, ready bool) {
@@ -49,22 +49,22 @@ func (h *Health) RecordStorageWrite(success bool) {
 	h.storageWriteErrors++
 }
 
-func (h *Health) StartLane(setID string, startedAt time.Time) {
-	if h == nil || strings.TrimSpace(setID) == "" {
+func (h *Health) StartRunner(taskID string, startedAt time.Time) {
+	if h == nil || strings.TrimSpace(taskID) == "" {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.lanes[strings.TrimSpace(setID)] = startedAt
+	h.runners[strings.TrimSpace(taskID)] = startedAt
 }
 
-func (h *Health) EndLane(setID string) {
+func (h *Health) EndRunner(taskID string) {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	delete(h.lanes, strings.TrimSpace(setID))
+	delete(h.runners, strings.TrimSpace(taskID))
 }
 
 func (h *Health) Check(now time.Time) HealthStatus {
@@ -84,10 +84,10 @@ func (h *Health) Check(now time.Time) HealthStatus {
 			status.Reasons = append(status.Reasons, name+" is not ready")
 		}
 	}
-	for setID, startedAt := range h.lanes {
+	for taskID, startedAt := range h.runners {
 		if now.Sub(startedAt) > 2*h.periodBudgetMax {
 			status.Healthy = false
-			status.Reasons = append(status.Reasons, "factor set lane "+setID+" is stuck")
+			status.Reasons = append(status.Reasons, "factor task runner "+taskID+" is stuck")
 		}
 	}
 	sort.Strings(status.Reasons)

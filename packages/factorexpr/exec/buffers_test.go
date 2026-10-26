@@ -20,7 +20,7 @@ func TestPeakBufferHandComputed(t *testing.T) {
 	}
 	var inputs []factorexpr.ProgramInput
 	for i, expression := range []string{"ts_mean(x + 1, 2)", "ts_mean(x + 2, 3)"} {
-		factor, err := factorexpr.Compile(fmt.Sprintf("outputs:\n  o%d: %s\n", i, expression))
+		factor, err := factorexpr.Compile(fmt.Sprintf("output: %s\n", expression))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -16,24 +16,25 @@ import (
 )
 
 type hubFake struct {
-	hash        string
-	notModified bool
-	sets        []domain.EngineSet
-	identity    domain.EngineIdentity
-	status      domain.EngineStatus
-	job         store.RecalcJob
-	pulledSet   domain.EngineSet
-	found       bool
-	progress    time.Time
-	reportedErr string
-	err         error
+	hash          string
+	notModified   bool
+	sets          []domain.EngineTask
+	identity      domain.EngineIdentity
+	status        domain.EngineStatus
+	job           store.RecalcJob
+	pulledTask    domain.EngineTask
+	found         bool
+	progress      time.Time
+	reportedErr   string
+	defaultFilled map[string][]store.TimeRange
+	err           error
 	// noLease 让 HoldsLease 返回 false（调用方不是持有租约的引擎）。
 	noLease bool
 }
 
 func (f *hubFake) HoldsLease(domain.EngineIdentity) bool { return !f.noLease }
 
-func (f *hubFake) Snapshot(_ context.Context, knownHash string) (string, bool, []domain.EngineSet, error) {
+func (f *hubFake) Snapshot(_ context.Context, knownHash string) (string, bool, []domain.EngineTask, error) {
 	if knownHash == f.hash {
 		return f.hash, true, nil, f.err
 	}
@@ -45,11 +46,12 @@ func (f *hubFake) Heartbeat(_ context.Context, id domain.EngineIdentity, status 
 	return 45 * time.Second, f.err
 }
 
-func (f *hubFake) Pull(context.Context, domain.EngineIdentity) (store.RecalcJob, domain.EngineSet, bool, error) {
-	return f.job, f.pulledSet, f.found, f.err
+func (f *hubFake) Pull(context.Context, domain.EngineIdentity) (store.RecalcJob, domain.EngineTask, bool, error) {
+	return f.job, f.pulledTask, f.found, f.err
 }
 
-func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string) (store.RecalcJob, error) {
+func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
+	f.defaultFilled = defaultFilled
 	f.progress, f.reportedErr = progress, errText
 	job := f.job
 	job.Status = status
@@ -58,16 +60,16 @@ func (f *hubFake) Report(_ context.Context, _ domain.EngineIdentity, _, _ string
 
 var testEngine = &factorpb.EngineIdentity{EngineId: "factor-engine@mac", BootId: "boot", Version: "v1"}
 
-func engineSetFixture() domain.EngineSet {
-	return domain.EngineSet{
-		Set:         domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.SetStatusEnabled},
-		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "outputs:\n  bias: close / ts_mean(close, 5)\n")),
+func engineTaskFixture() domain.EngineTask {
+	return domain.EngineTask{
+		Set:         domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", Name: "行情因子", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.TaskStatusEnabled},
+		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "output: close / ts_mean(close, 5)\n")),
 		ResultReady: true,
 	}
 }
 
-func TestSyncEngineCatalogReturnsSetsWithSpec(t *testing.T) {
-	hub := &hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}
+func TestSyncEngineCatalogReturnsTasksWithSpec(t *testing.T) {
+	hub := &hubFake{hash: "hash-1", sets: []domain.EngineTask{engineTaskFixture()}}
 	svc := NewEngineService(hub, nil, nil)
 
 	rsp, err := svc.SyncEngineCatalog(context.Background(), &factorpb.SyncEngineCatalogReq{Engine: testEngine})
@@ -76,19 +78,19 @@ func TestSyncEngineCatalogReturnsSetsWithSpec(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, "hash-1", rsp.GetCatalogHash())
 	require.False(t, rsp.GetNotModified())
-	require.Len(t, rsp.GetSets(), 1)
-	require.True(t, rsp.GetSets()[0].GetResultReady())
-	require.Contains(t, rsp.GetSets()[0].GetMembers()[0].GetFactor().GetSpec(), "ts_mean(close, 5)")
+	require.Len(t, rsp.GetTasks(), 1)
+	require.True(t, rsp.GetTasks()[0].GetResultReady())
+	require.Contains(t, rsp.GetTasks()[0].GetMembers()[0].GetFactor().GetSpec(), "ts_mean(close, 5)")
 }
 
 func TestSyncEngineCatalogNotModified(t *testing.T) {
-	svc := NewEngineService(&hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}, nil, nil)
+	svc := NewEngineService(&hubFake{hash: "hash-1", sets: []domain.EngineTask{engineTaskFixture()}}, nil, nil)
 
 	rsp, err := svc.SyncEngineCatalog(context.Background(), &factorpb.SyncEngineCatalogReq{Engine: testEngine, KnownHash: "hash-1"})
 
 	require.NoError(t, err)
 	require.True(t, rsp.GetNotModified())
-	require.Empty(t, rsp.GetSets())
+	require.Empty(t, rsp.GetTasks())
 }
 
 func TestSyncEngineCatalogRequiresEngineID(t *testing.T) {
@@ -108,8 +110,8 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/1", CatalogHash: "hash-1",
 		CatalogSyncedAt: syncedAt.Format(time.RFC3339Nano),
-		Lanes:           []*factorpb.FactorLaneStatus{{SetId: "fset_a", Queued: 1, Active: true}},
-		RecentRuns:      []*factorpb.SetRunSummary{{SetId: "fset_a", LastPeriodTime: 900, LastStatus: "complete"}},
+		Runners:         []*factorpb.FactorRunnerStatus{{TaskId: "ftask_a", Queued: 1, Active: true}},
+		RecentRuns:      []*factorpb.TaskRunSummary{{TaskId: "ftask_a", LastPeriodTime: 900, LastStatus: "complete"}},
 	}})
 
 	require.NoError(t, err)
@@ -120,7 +122,7 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 	require.Equal(t, int32(8), hub.status.ComputeWorkers)
 	require.Equal(t, "expr/1", hub.status.ExprVersion)
 	require.Equal(t, syncedAt, hub.status.CatalogSyncedAt)
-	require.Equal(t, []domain.LaneStatus{{SetID: "fset_a", Queued: 1, Active: true}}, hub.status.Lanes)
+	require.Equal(t, []domain.RunnerStatus{{TaskID: "ftask_a", Queued: 1, Active: true}}, hub.status.Runners)
 	require.Equal(t, "complete", hub.status.RecentRuns[0].LastStatus)
 }
 
@@ -133,9 +135,9 @@ func TestEngineHeartbeatConflictMapsToRetCode(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode())
 }
 
-func TestPullRecalcJobReturnsLeaseAndSet(t *testing.T) {
-	hub := &hubFake{found: true, pulledSet: engineSetFixture(), job: store.RecalcJob{
-		JobID: "job-1", SetID: "fset_a", StartTime: 60, EndTime: 600, ProgressTime: 120,
+func TestPullRecalcJobReturnsLeaseAndTask(t *testing.T) {
+	hub := &hubFake{found: true, pulledTask: engineTaskFixture(), job: store.RecalcJob{
+		JobID: "job-1", TaskID: "ftask_a", StartTime: 60, EndTime: 600, ProgressTime: 120,
 		Status: store.RecalcStatusRunning, EngineID: "factor-engine@mac", LeaseToken: "token-1",
 	}}
 	svc := NewEngineService(hub, nil, nil)
@@ -148,7 +150,7 @@ func TestPullRecalcJobReturnsLeaseAndSet(t *testing.T) {
 	require.Equal(t, "job-1", rsp.GetJob().GetJobId())
 	require.Equal(t, "factor-engine@mac", rsp.GetJob().GetEngineId())
 	require.Equal(t, time.Unix(120, 0).UTC().Format(time.RFC3339Nano), rsp.GetJob().GetProgressTime())
-	require.Equal(t, "fset_a", rsp.GetSet().GetFactorSet().GetSetId())
+	require.Equal(t, "ftask_a", rsp.GetTask().GetFactorTask().GetTaskId())
 }
 
 func TestPullRecalcJobNotFound(t *testing.T) {
@@ -203,18 +205,18 @@ type engineAPIFake struct {
 	info   domain.EngineInfo
 	status domain.EngineStatus
 	seen   bool
-	runs   map[string]domain.SetRunSummary
+	runs   map[string]domain.TaskRunSummary
 }
 
 func (f *engineAPIFake) Engine(context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {
 	return f.info, f.status, f.seen, nil
 }
 
-func (f *engineAPIFake) LatestRun(setID string) domain.SetRunSummary {
-	if run, ok := f.runs[setID]; ok {
+func (f *engineAPIFake) LatestRun(taskID string) domain.TaskRunSummary {
+	if run, ok := f.runs[taskID]; ok {
 		return run
 	}
-	return domain.SetRunSummary{SetID: setID}
+	return domain.TaskRunSummary{TaskID: taskID}
 }
 
 func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
@@ -225,8 +227,8 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 			Online:         true, LastHeartbeatAt: heartbeat, CatalogHash: "hash-1", CatalogInSync: true,
 		},
 		status: domain.EngineStatus{ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/0",
-			Lanes:      []domain.LaneStatus{{SetID: "fset_a", Queued: 2}},
-			RecentRuns: []domain.SetRunSummary{{SetID: "fset_a", LastPeriodTime: 1900, LastStatus: "complete", LagSeconds: 100}}},
+			Runners:    []domain.RunnerStatus{{TaskID: "ftask_a", Queued: 2}},
+			RecentRuns: []domain.TaskRunSummary{{TaskID: "ftask_a", LastPeriodTime: 1900, LastStatus: "complete", LagSeconds: 100}}},
 	}))
 
 	rsp, err := svc.GetStatus(context.Background(), &factorpb.GetStatusReq{})
@@ -236,7 +238,7 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 	require.Equal(t, int32(8), rsp.GetComputeWorkers())
 	require.Equal(t, "expr/0", rsp.GetEngineExprVersion())
 	require.Equal(t, factorexpr.ExprVersion, rsp.GetManagerExprVersion(), "版本不一致时由控制台提示")
-	require.Len(t, rsp.GetLanes(), 1)
+	require.Len(t, rsp.GetRunners(), 1)
 	require.Equal(t, int64(100), rsp.GetRecentRuns()[0].GetLagSeconds())
 	require.Equal(t, "factor-engine@mac", rsp.GetEngine().GetEngineId())
 	require.True(t, rsp.GetEngine().GetOnline())
@@ -266,13 +268,13 @@ func TestGetStatusReportsCatalogOutOfSync(t *testing.T) {
 	require.False(t, rsp.GetEngine().GetCatalogInSync())
 }
 
-func TestGetFactorSetLastRunFromHeartbeat(t *testing.T) {
-	catalog := &catalogFake{set: domain.FactorSet{SetID: "fset_a", Status: domain.SetStatusEnabled}}
-	svc := NewService(catalog, &recalcFake{}, WithEngineAPI(&engineAPIFake{seen: true, runs: map[string]domain.SetRunSummary{
-		"fset_a": {SetID: "fset_a", LastPeriodTime: 1900, LastStatus: "complete", LagSeconds: 60},
+func TestGetFactorTaskLastRunFromHeartbeat(t *testing.T) {
+	catalog := &catalogFake{set: domain.FactorTask{TaskID: "ftask_a", Status: domain.TaskStatusEnabled}}
+	svc := NewService(catalog, &recalcFake{}, WithEngineAPI(&engineAPIFake{seen: true, runs: map[string]domain.TaskRunSummary{
+		"ftask_a": {TaskID: "ftask_a", LastPeriodTime: 1900, LastStatus: "complete", LagSeconds: 60},
 	}}))
 
-	rsp, err := svc.GetFactorSet(context.Background(), &factorpb.GetFactorSetReq{SetId: "fset_a"})
+	rsp, err := svc.GetFactorTask(context.Background(), &factorpb.GetFactorTaskReq{TaskId: "ftask_a"})
 
 	require.NoError(t, err)
 	require.Equal(t, "complete", rsp.GetLastRun().GetLastStatus())

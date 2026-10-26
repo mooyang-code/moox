@@ -36,6 +36,12 @@ type Target interface {
 	Write(ctx context.Context, chunk Chunk) error
 }
 
+// TailTarget 是可选的目标能力：返回 true 表示这个目标只写文件尾部（Request.TailRows / TailCutoff）。
+// Storage 只放近期窗口（View 保留最近一万根），因子机本地写全量，所以尾部窗口只对 Storage 目标生效。
+type TailTarget interface {
+	TailOnly() bool
+}
+
 // Finisher 是可选的目标能力：所有文件写完之后调用一次（例如 Storage 目标追加同步点、等 View 追平）。
 type Finisher interface {
 	Finish(ctx context.Context) error
@@ -78,6 +84,10 @@ type Request struct {
 	JobID string
 	// Step 是频率对应的周期时长。
 	Step time.Duration
+	// TailRows 大于 0 时，只写入 TailOnly 的目标每个文件最后 TailRows 行；TailCutoff 非零时再跳过早于它的行
+	// （早于保留期的行写进 Storage 也会在下一次清理时被删）。两者都为零表示不限制。
+	TailRows   int
+	TailCutoff time.Time
 }
 
 // FileSummary 是一个文件的结果。
@@ -94,6 +104,9 @@ type FileSummary struct {
 	Batches map[string]int64 `json:"batches,omitempty"`
 	// Skipped 是每个目标因为断点而跳过的批数。
 	Skipped map[string]int64 `json:"skipped_batches,omitempty"`
+	// TailFrom 与 TailRows 是只写尾部的目标实际写入的起点与行数（没有启用尾部窗口时为空）。
+	TailFrom string `json:"tail_from,omitempty"`
+	TailRows int    `json:"tail_rows,omitempty"`
 }
 
 // Summary 是一次导入的结果。
@@ -134,6 +147,8 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		file, subject string
 		report        seriesformat.Report
 		reverse       bool
+		// tailFrom 非零时，TailOnly 的目标只写时间不早于它的行。
+		tailFrom time.Time
 	}
 	var plans []plan
 	for _, file := range files {
@@ -150,7 +165,7 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 				return summary, fmt.Errorf("标的 %s 不在数据集的标签范围内（不会自动绑定，请先登记标的）", subject)
 			}
 		}
-		report, err := scan(ctx, decoder, file, req, meta)
+		report, times, err := scan(ctx, decoder, file, req, meta)
 		if err != nil {
 			return summary, fmt.Errorf("%s：%w", file, err)
 		}
@@ -174,7 +189,11 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 			}
 			reverse = ok && report.Last.Before(earliest)
 		}
-		plans = append(plans, plan{file: file, subject: subject, report: report, reverse: reverse})
+		tailFrom, tailRows := tailWindow(times, req)
+		if !tailFrom.IsZero() {
+			summary.Files[len(summary.Files)-1].TailFrom, summary.Files[len(summary.Files)-1].TailRows = tailFrom.Format(time.RFC3339), tailRows
+		}
+		plans = append(plans, plan{file: file, subject: subject, report: report, reverse: reverse, tailFrom: tailFrom})
 	}
 	if req.DryRun {
 		summary.Status = "dry_run"
@@ -186,7 +205,11 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		fs := &summary.Files[i]
 		fs.Batches, fs.Skipped = map[string]int64{}, map[string]int64{}
 		for _, target := range targets {
-			if err := writeFile(ctx, decoder, p.file, p.subject, p.reverse, req, meta, target, cps, job, fs); err != nil {
+			var tailFrom time.Time
+			if tail, ok := target.(TailTarget); ok && tail.TailOnly() {
+				tailFrom = p.tailFrom
+			}
+			if err := writeFile(ctx, decoder, p.file, p.subject, p.reverse, tailFrom, req, meta, target, cps, job, fs); err != nil {
 				summary.Status = "failed"
 				if cps != nil {
 					_ = cps.Save(job, p.file, target.Name(), fs.Batches[target.Name()]+fs.Skipped[target.Name()], 0, false, err.Error())
@@ -231,40 +254,67 @@ func (r Request) options(meta Meta) seriesformat.Options {
 	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.SeriesTag}
 }
 
-// scan 流式读完一个文件做通用校验，返回连续性报告。
-func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request, meta Meta) (seriesformat.Report, error) {
+// scan 流式读完一个文件做通用校验，返回连续性报告；启用尾部窗口时同时返回最后 TailRows 行的时间（升序，可能含同一时间的多行）。
+func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request, meta Meta) (seriesformat.Report, []time.Time, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return seriesformat.Report{}, err
+		return seriesformat.Report{}, nil, err
 	}
 	defer f.Close()
 	r, err := d.Open(f, req.options(meta))
 	if err != nil {
-		return seriesformat.Report{}, err
+		return seriesformat.Report{}, nil, err
 	}
 	defer r.Close()
 	checker := seriesformat.NewChecker(req.Step)
+	var tail []time.Time
 	for {
 		if err := ctx.Err(); err != nil {
-			return seriesformat.Report{}, err
+			return seriesformat.Report{}, nil, err
 		}
 		batch, err := r.Next(req.batchRows())
 		if batch != nil {
 			if cerr := checker.Check(batch); cerr != nil {
-				return seriesformat.Report{}, cerr
+				return seriesformat.Report{}, nil, cerr
+			}
+			if req.TailRows > 0 {
+				tail = append(tail, batch.Times...)
+				if len(tail) > 2*req.TailRows {
+					tail = append([]time.Time(nil), tail[len(tail)-req.TailRows:]...)
+				}
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return checker.Finish(), nil
+			if len(tail) > req.TailRows && req.TailRows > 0 {
+				tail = tail[len(tail)-req.TailRows:]
+			}
+			return checker.Finish(), tail, nil
 		}
 		if err != nil {
-			return seriesformat.Report{}, err
+			return seriesformat.Report{}, nil, err
 		}
 	}
 }
 
+// tailWindow 返回只写尾部的目标的起点与行数：最后 TailRows 行里不早于 TailCutoff 的部分；没有启用尾部窗口返回零值。
+// 起点取该部分第一行的时间，不会把同一个时间点的行拆开。
+func tailWindow(times []time.Time, req Request) (time.Time, int) {
+	if req.TailRows <= 0 || len(times) == 0 {
+		return time.Time{}, 0
+	}
+	from := 0
+	if !req.TailCutoff.IsZero() {
+		from = sort.Search(len(times), func(i int) bool { return !times[i].Before(req.TailCutoff) })
+	}
+	if from >= len(times) {
+		// 尾部窗口里的行全部早于保留期：什么都不写（起点放到最后一行之后）。
+		return times[len(times)-1].Add(req.Step), 0
+	}
+	return times[from], len(times) - from
+}
+
 // writeFile 把一个文件写到一个目标：按时间边界分批，已经有断点的批跳过。
-func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string, reverse bool, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
+func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string, reverse bool, tailFrom time.Time, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
 	var doneBatches, doneRows int64
 	if cps != nil {
 		b, rows, done, err := cps.Get(job, file, target.Name())
@@ -291,6 +341,21 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 	var batchNo int64
 	var rowsSoFar int64
 	write := func(b *seriesformat.Batch) error {
+		// 只写尾部的目标：丢掉早于尾部起点的行（批号仍按原批次累加，续传时批边界不变）。
+		if !tailFrom.IsZero() {
+			if cut := sort.Search(b.Len(), func(i int) bool { return !b.Times[i].Before(tailFrom) }); cut > 0 {
+				_, rest := splitBatch(b, cut)
+				if rest.Len() == 0 {
+					// 整批都早于尾部起点：不写，但算作跳过的批——失败时记断点用「写完 + 跳过」的批数，批号要对得上。
+					batchNo++
+					rowsSoFar += int64(b.Len())
+					fs.Skipped[target.Name()]++
+					return nil
+				}
+				rowsSoFar += int64(cut)
+				b = rest
+			}
+		}
 		batchNo++
 		rowsSoFar += int64(b.Len())
 		if batchNo <= doneBatches {
@@ -501,7 +566,9 @@ func expand(paths []string, format string) ([]string, error) {
 
 func stableJobID(req Request, files []string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc)
+	// TailRows 进断点身份：同一批文件先按尾部 1000 行导入、再改成 6000 行时，不能沿用「文件已写完」的断点把新增的行跳过。
+	// TailCutoff 随「现在」变化，不进身份，否则每次重跑都换任务、续传失效；它只会单调后移，已写的行不受影响。
+	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t|%d;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc, req.TailRows)
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {

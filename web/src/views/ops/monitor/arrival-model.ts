@@ -33,6 +33,18 @@ export function arrivalChains(overview: HealthOverview | undefined, names: NameB
     .sort((a, b) => a.spaceId.localeCompare(b.spaceId) || a.label.localeCompare(b.label, "zh-CN"));
 }
 
+/** 因子任务选项：一个源数据集上有多个任务时才需要选择（只有一个时服务端默认查它）。 */
+export function arrivalTaskOptions(history: ArrivalHistory | undefined) {
+  return (history?.tasks || [])
+    .filter(task => task.task_id)
+    .map(task => ({ value: task.task_id || "", label: `${task.name || task.task_id}（${task.task_id}）` }));
+}
+
+/** 需要提示用户选择任务：有多个任务，且还没选定（曲线里没有因子环节）。 */
+export function needsTaskChoice(history: ArrivalHistory | undefined, taskId: string): boolean {
+  return (history?.tasks?.length ?? 0) > 1 && !taskId;
+}
+
 const STAGE_NAMES: Record<string, string> = {
   storage: "入库",
   view: "视图",

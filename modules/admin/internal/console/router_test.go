@@ -307,7 +307,7 @@ func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
 		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, false, http.StatusBadRequest},
 		{"space method without space", "/api/admin/storage/ListDatasets", "", `{}`, false, http.StatusBadRequest},
 		{"global storage method without space", "/api/admin/storage/ListDataNodes", "", `{}`, false, http.StatusOK},
-		{"factor blocked by authorizer", "/api/admin/factor-mgr/DeleteFactorSet", "space-1", `{}`, true, http.StatusForbidden},
+		{"factor blocked by authorizer", "/api/admin/factor-mgr/DeleteFactorTask", "space-1", `{}`, true, http.StatusForbidden},
 		{"factor global request without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, false, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

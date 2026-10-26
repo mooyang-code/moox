@@ -1,6 +1,7 @@
-// Package paramsubmit 把策略每期求出的下一期因子参数投递给 FactorMgr：参数与结果在同一个事务里落库（待提交），
-// 这里的循环负责提交并记录终态。提交与冻结在 FactorMgr 的同一个库里串行化，所以这里只管退避重试到
-// 被接受、被拒绝或该期已冻结（too_late）；事件处理不在锁内等待重试。
+// Package paramsubmit 把策略每期求出的下一期可变成员参数投递给 FactorMgr：参数和结果在同一个事务里落库
+// （t_strategy_results.c_next_params_json），这里的循环只投每个启用实例当前会话里最新一条还没送达的结果，
+// request_id 取结果 ID。FactorMgr 只接受目标期不减的提交（同一目标期按 request_id 幂等），所以重试的旧请求即使晚到
+// 也不会让参数倒退；被明确拒绝的记录标为已处理，不再重试。
 package paramsubmit
 
 import (
@@ -8,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
@@ -19,29 +22,41 @@ import (
 const (
 	DefaultInterval   = time.Second
 	DefaultBatch      = 20
-	DefaultMaxAge     = time.Hour
 	DefaultMaxBackoff = 30 * time.Second
 	initialBackoff    = time.Second
-	pausedRecheck     = 10 * time.Second
 	submissionTimeout = 10 * time.Second
 )
 
-// Submitter 投递待提交的因子参数。
+// 投递结果（指标）。
+const (
+	ResultDelivered = "delivered"
+	ResultRejected  = "rejected"
+)
+
+// Submitter 投递待送达的因子参数。
 type Submitter struct {
 	Store   *store.Store
-	Factors input.FactorSets
+	Factors input.FactorTasks
 	Now     func() time.Time
-	// Interval 是轮询待提交记录的间隔；Batch 是每轮最多处理的条数；MaxAge 是记录超过目标期次这么久仍没有结果时放弃。
+	// Interval 是轮询的间隔；Batch 是每轮最多处理的条数；MaxBackoff 是失败重试退避的上限。
 	Interval   time.Duration
 	Batch      int
-	MaxAge     time.Duration
 	MaxBackoff time.Duration
-	// Allowed 返回实例当前是否允许提交参数（模块暂停、实例暂停时不提交，记录保持待提交，因子沿用上一期的参数）；nil 表示总是允许。
+	// Allowed 返回实例当前是否允许提交参数（模块暂停、实例暂停时不提交，记录保持待送达，因子沿用最近一次提交的参数）；nil 表示总是允许。
 	Allowed func(instanceID string) bool
-	// OnResult 在每条记录有了终态时调用（指标）：accepted、too_late、rejected、abandoned。
-	OnResult func(status string)
+	// OnResult 在每条记录有了终态时调用（指标）：delivered、rejected。
+	OnResult func(result string)
 	// OnError 记录投递的异常（同一条记录每次失败都会调用，由调用方决定如何降噪）。
-	OnError func(requestID string, err error)
+	OnError func(resultID string, err error)
+
+	mu sync.Mutex
+	// retries 记下失败过的记录的退避：结果 ID → 已失败次数与下次可重试的时间。只在内存里，重启后立即重试。
+	retries map[string]retryState
+}
+
+type retryState struct {
+	failures int
+	next     time.Time
 }
 
 func (s *Submitter) now() time.Time {
@@ -71,7 +86,7 @@ func (s *Submitter) Run(ctx context.Context) {
 	}
 }
 
-// RunOnce 处理一轮到期的待提交记录，返回处理的条数。
+// RunOnce 处理一轮待送达的记录，返回处理（含因退避或暂停而跳过）的条数。
 func (s *Submitter) RunOnce(ctx context.Context) (int, error) {
 	if s.Store == nil || s.Factors == nil {
 		return 0, errors.New("参数提交需要存储与 Factor 客户端")
@@ -80,95 +95,106 @@ func (s *Submitter) RunOnce(ctx context.Context) (int, error) {
 	if batch <= 0 {
 		batch = DefaultBatch
 	}
-	due, err := s.Store.DuePendingParamSubmissions(ctx, s.now(), batch)
+	pending, err := s.Store.PendingParamDeliveries(ctx, batch)
 	if err != nil {
 		return 0, err
 	}
-	for _, submission := range due {
-		if err := s.deliver(ctx, submission); err != nil && s.OnError != nil {
-			s.OnError(submission.RequestID, err)
+	for _, delivery := range pending {
+		if err := s.deliver(ctx, delivery); err != nil && s.OnError != nil {
+			s.OnError(delivery.ResultID, err)
 		}
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return len(due), nil
+	return len(pending), nil
 }
 
-func (s *Submitter) finish(ctx context.Context, submission store.ParamSubmission, status string, outcome any) error {
-	raw, err := json.Marshal(outcome)
+func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) error {
+	if s.Allowed != nil && !s.Allowed(delivery.InstanceID) {
+		return nil // 暂停时不提交，记录保持待送达。
+	}
+	s.mu.Lock()
+	retry := s.retries[delivery.ResultID]
+	s.mu.Unlock()
+	if retry.failures > 0 && s.now().Before(retry.next) {
+		return nil
+	}
+	instance, err := s.Store.GetInstance(ctx, delivery.InstanceID)
 	if err != nil {
 		return err
 	}
-	if err := s.Store.FinishParamSubmission(ctx, submission.RequestID, status, raw, s.now()); err != nil {
-		return err
-	}
-	if s.OnResult != nil {
-		s.OnResult(status)
-	}
-	return nil
-}
-
-func (s *Submitter) deliver(ctx context.Context, submission store.ParamSubmission) error {
-	// 实例停用、换了会话或已删除后，旧的参数不再有意义：放弃，不去影响私有因子集。
-	instance, err := s.Store.GetInstance(ctx, submission.InstanceID)
-	if err != nil || !instance.Enabled || instance.DeletedAt != nil || instance.SessionID == nil || *instance.SessionID != submission.SessionID {
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		return s.finish(ctx, submission, store.ParamAbandoned, []input.MemberSubmitResult{{Result: store.ParamAbandoned, Reason: "实例已停用或换了会话"}})
-	}
-	if s.now().Sub(submission.PeriodTime) > s.maxAge() {
-		return s.finish(ctx, submission, store.ParamAbandoned, []input.MemberSubmitResult{{Result: store.ParamAbandoned, Reason: "超过重试期限仍没有得到结果"}})
-	}
-	// 暂停（模块或实例）时不提交，因子沿用上一期；推迟扫描，避免暂停实例的积压记录占满每批的前几条，挡住其他实例的投递。
-	if s.Allowed != nil && !s.Allowed(submission.InstanceID) {
-		return s.Store.DeferParamSubmission(ctx, submission.RequestID, s.now().Add(pausedRecheck), s.now())
-	}
 	members := map[string]map[string]input.ParamValue{}
-	if err := json.Unmarshal(submission.ParamsJSON, &members); err != nil {
-		return s.finish(ctx, submission, store.ParamRejected, []input.MemberSubmitResult{{Result: store.ParamRejected, Reason: "待提交的参数无法解析"}})
+	if err := json.Unmarshal(delivery.Members, &members); err != nil {
+		return s.reject(ctx, delivery, "待投递的参数无法解析")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
 	defer cancel()
 	results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
-		RequestID: submission.RequestID, Writer: submission.InstanceID, SetID: submission.SetID,
-		PeriodTime: submission.PeriodTime, BasedOnPeriod: submission.BasedOnPeriod, Members: members,
+		RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: instance.FactorTaskID,
+		PeriodTime: delivery.Period, Members: members,
 	})
 	if err != nil {
 		var service *input.ServiceError
 		if errors.As(err, &service) && service.Code == commonpb.ErrorCode_INVALID_PARAM {
 			// 请求本身被判为无效：重试也不会成功。
-			return s.finish(ctx, submission, store.ParamRejected, []input.MemberSubmitResult{{Result: store.ParamRejected, Reason: err.Error()}})
+			return s.reject(ctx, delivery, err.Error())
 		}
-		next := s.now().Add(s.backoff(submission.Attempts))
-		if retryErr := s.Store.RetryParamSubmission(ctx, submission.RequestID, next, s.now()); retryErr != nil {
-			return errors.Join(err, retryErr)
-		}
-		return fmt.Errorf("提交参数 %s：%w", submission.RequestID, err)
+		s.recordFailure(delivery.ResultID)
+		return fmt.Errorf("提交参数 %s：%w", delivery.ResultID, err)
 	}
-	return s.finish(ctx, submission, terminalStatus(results), results)
+	if reason := rejection(results); reason != "" {
+		return s.reject(ctx, delivery, reason)
+	}
+	if err := s.Store.MarkParamsDelivered(ctx, delivery.ResultID, s.now()); err != nil {
+		return err
+	}
+	s.clear(delivery.ResultID)
+	if s.OnResult != nil {
+		s.OnResult(ResultDelivered)
+	}
+	return nil
 }
 
-// terminalStatus 把逐成员结果归并成一个终态：有被拒绝的记 rejected，否则有晚到的记 too_late，否则 accepted。
-func terminalStatus(results []input.MemberSubmitResult) string {
-	status := store.ParamAccepted
+// reject 把记录标为被拒绝：不再重试，也不算送达。
+func (s *Submitter) reject(ctx context.Context, delivery store.ParamDelivery, reason string) error {
+	if err := s.Store.MarkParamsRejected(ctx, delivery.ResultID, reason); err != nil {
+		return err
+	}
+	s.clear(delivery.ResultID)
+	if s.OnResult != nil {
+		s.OnResult(ResultRejected)
+	}
+	return nil
+}
+
+// rejection 汇总被拒绝的成员及原因；全部成员都被接受（或幂等重复）时返回空串。
+func rejection(results []input.MemberSubmitResult) string {
+	var reasons []string
 	for _, result := range results {
-		switch result.Result {
-		case input.SubmitRejected:
-			return store.ParamRejected
-		case input.SubmitTooLate:
-			status = store.ParamTooLate
+		if result.Result == input.SubmitRejected {
+			reasons = append(reasons, fmt.Sprintf("%s：%s", result.Member, result.Reason))
 		}
 	}
-	return status
+	return strings.Join(reasons, "；")
 }
 
-func (s *Submitter) maxAge() time.Duration {
-	if s.MaxAge > 0 {
-		return s.MaxAge
+func (s *Submitter) recordFailure(resultID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retries == nil {
+		s.retries = map[string]retryState{}
 	}
-	return DefaultMaxAge
+	state := s.retries[resultID]
+	state.failures++
+	state.next = s.now().Add(s.backoff(state.failures - 1))
+	s.retries[resultID] = state
+}
+
+func (s *Submitter) clear(resultID string) {
+	s.mu.Lock()
+	delete(s.retries, resultID)
+	s.mu.Unlock()
 }
 
 // backoff 是第 attempts 次失败后的退避：1 秒起逐次翻倍，不超过上限。

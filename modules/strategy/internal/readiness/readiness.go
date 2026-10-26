@@ -28,11 +28,17 @@ const (
 
 // Binding 是启用时固化的、与就绪判定有关的绑定信息。
 type Binding struct {
-	// Factors 是实例引用的因子成员（别名）及其固化的 definition_hash；只引用源列时为空。
+	// Factors 是实例引用的因子成员（成员键）及其固化的成员契约（见 Contract）；只引用源列时为空。
 	Factors map[string]string
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子：上一根的值可能来自旧版本，需要上一根的版本证据；
 	// 只经 bars[-1] 读取 K 线列时为空。
 	PreviousFactors []string
+}
+
+// Contract 是成员契约：定义哈希加成员类型。成员键已经带了固定参数，所以契约一致就意味着这个成员算的是同一件事；
+// 定义改了表达式、成员从固定换成可变（键也会变）都会让契约不同。
+func Contract(definitionHash, memberKind string) string {
+	return strings.TrimSpace(definitionHash) + "|" + strings.TrimSpace(memberKind)
 }
 
 // Record 是本实例对恰好相邻上一根的可信处理记录（ok 或 skipped 均可）中保存的因子指纹。
@@ -63,14 +69,14 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	// 相邻记录里缺少它们的证据，误记 previous_version_unknown。
 	for _, factorID := range required {
 		state, ok := states[factorID]
-		if !ok || strings.TrimSpace(state.GetDefinitionHash()) == "" {
+		if !ok || strings.TrimSpace(state.GetDefinitionHash()) == "" || strings.TrimSpace(state.GetMemberKind()) == "" {
 			if result.Reason == "" {
 				result.Reason = ReasonFactorMissing
-				result.Detail = fmt.Sprintf("事件中没有因子 %s 的状态或指纹", factorID)
+				result.Detail = fmt.Sprintf("事件中没有成员 %s 的状态或契约", factorID)
 			}
 			continue
 		}
-		result.Hashes[factorID] = state.GetDefinitionHash()
+		result.Hashes[factorID] = Contract(state.GetDefinitionHash(), state.GetMemberKind())
 	}
 	if result.Reason != "" {
 		return result
@@ -78,7 +84,7 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	for _, factorID := range required {
 		if expected, actual := binding.Factors[factorID], result.Hashes[factorID]; actual != expected {
 			result.Reason = ReasonFactorChanged
-			result.Detail = fmt.Sprintf("因子 %s 的指纹已从 %s 变为 %s，需要重新启用实例", factorID, expected, actual)
+			result.Detail = fmt.Sprintf("成员 %s 的契约已从 %s 变为 %s，需要重新启用实例", factorID, expected, actual)
 			return result
 		}
 	}
@@ -92,12 +98,12 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			previous, ok := adjacent.Factors[factorID]
 			if !ok || previous == "" {
 				result.Reason = ReasonPreviousVersionUnknown
-				result.Detail = fmt.Sprintf("上一根的处理记录没有因子 %s 的指纹", factorID)
+				result.Detail = fmt.Sprintf("上一根的处理记录没有成员 %s 的契约", factorID)
 				return result
 			}
 			if previous != result.Hashes[factorID] {
 				result.Reason = ReasonFactorChanged
-				result.Detail = fmt.Sprintf("因子 %s 上一根的指纹 %s 与本期 %s 不同，上一根数据可能属于旧版本", factorID, previous, result.Hashes[factorID])
+				result.Detail = fmt.Sprintf("成员 %s 上一根的契约 %s 与本期 %s 不同，上一根数据可能属于旧版本", factorID, previous, result.Hashes[factorID])
 				return result
 			}
 		}
@@ -107,7 +113,7 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 		switch state.GetStatus() {
 		case statusSkipped:
 			result.Reason = ReasonFactorSkipped
-			result.Detail = fmt.Sprintf("因子 %s 本期被跳过", factorID)
+			result.Detail = fmt.Sprintf("成员 %s 本期被跳过", factorID)
 			return result
 		case statusDegraded:
 			failed := uniqueSorted(state.GetFailedSubjects())
@@ -125,17 +131,14 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	return result
 }
 
-// indexFactors 按成员别名索引事件里的因子状态（同一定义可以用不同别名出现多次）。
+// indexFactors 按成员键索引事件里的因子状态（同一因子可以用不同参数出现多次）。
 func indexFactors(event *storagepb.ViewDataReady) map[string]*storagepb.FactorPeriodState {
 	states := make(map[string]*storagepb.FactorPeriodState, len(event.GetFactors()))
 	for _, state := range event.GetFactors() {
 		if state == nil {
 			continue
 		}
-		id := strings.TrimSpace(state.GetMemberAlias())
-		if id == "" {
-			id = strings.TrimSpace(state.GetFactorId())
-		}
+		id := strings.TrimSpace(state.GetMemberKey())
 		if id == "" {
 			continue
 		}

@@ -18,9 +18,9 @@ import (
 type replayClient struct{}
 
 func (replayClient) GetView(context.Context, string, string) (input.ViewInfo, error) {
-	return input.ViewInfo{ViewID: "view_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "i1", Columns: []input.ViewColumn{
+	return input.ViewInfo{ViewID: "view_factor_a", DatasetID: "ds", Frequency: "1h", Status: "active", ActiveIndexID: "i1", Columns: []input.ViewColumn{
 		{Name: "close", Attributes: map[string]string{}},
-		{Name: "m", Attributes: map[string]string{"origin_factor_id": "f", "factor_output": "m"}},
+		{Name: "m", Attributes: map[string]string{"column_kind": "output", "member_key": "f", "factor_id": "f", "member_kind": "fixed", "output_name": "m"}},
 	}}, nil
 }
 func (replayClient) ViewGeneration(context.Context, string, string) (string, error) { return "g", nil }
@@ -61,7 +61,7 @@ func newReplayEvaluator(t *testing.T) *ReplayEvaluator {
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: rankDSL, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", CreatedAt: bar0}); err != nil {
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
 	return &ReplayEvaluator{Store: repo, Client: replayClient{}}
@@ -83,11 +83,11 @@ func TestReplayEvaluateRanksAndCarriesState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Factors["f"] != "h1" || binding.Bar != "1h" || !binding.Spot || binding.PreviousDepth != 0 {
+	if binding.Factors["f"] != "h1|fixed" || binding.Bar != "1h" || !binding.Spot || binding.PreviousDepth != 0 {
 		t.Fatalf("绑定不符：%+v", binding)
 	}
 	period := barStart(1).Format(time.RFC3339)
-	complete := map[string]ReplayFactorState{"f": {Status: "complete", DefinitionHash: "h1"}}
+	complete := map[string]ReplayFactorState{"f": {Status: "complete", DefinitionHash: "h1", Kind: "fixed"}}
 
 	first, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: binding.DSLHash, Period: period, Rows: replayRows(map[string]float64{"A": 3, "B": 2, "C": 1}), FactorStates: complete})
 	if err != nil {
@@ -122,7 +122,7 @@ func TestReplayEvaluateRanksAndCarriesState(t *testing.T) {
 	}
 
 	// 因子被跳过：本期跳过，规则状态原样带回。
-	skipped, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: binding.DSLHash, Period: barStart(3).Format(time.RFC3339), Rows: replayRows(map[string]float64{"A": 2}), FactorStates: map[string]ReplayFactorState{"f": {Status: "skipped", DefinitionHash: "h1"}}, State: second.State})
+	skipped, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: binding.DSLHash, Period: barStart(3).Format(time.RFC3339), Rows: replayRows(map[string]float64{"A": 2}), FactorStates: map[string]ReplayFactorState{"f": {Status: "skipped", DefinitionHash: "h1", Kind: "fixed"}}, State: second.State})
 	if err != nil || skipped.Status != "skipped" || skipped.SkipReason != "factor_skipped" || len(skipped.Targets) != 0 {
 		t.Fatalf("因子跳过应使本期跳过：%+v err=%v", skipped, err)
 	}
@@ -131,7 +131,7 @@ func TestReplayEvaluateRanksAndCarriesState(t *testing.T) {
 	}
 
 	// 因子指纹与绑定时固定的不同：回放要求重新发起。
-	changed, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: binding.DSLHash, Period: barStart(4).Format(time.RFC3339), Rows: replayRows(map[string]float64{"A": 2}), FactorStates: map[string]ReplayFactorState{"f": {Status: "complete", DefinitionHash: "h2"}}, State: second.State})
+	changed, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: binding.DSLHash, Period: barStart(4).Format(time.RFC3339), Rows: replayRows(map[string]float64{"A": 2}), FactorStates: map[string]ReplayFactorState{"f": {Status: "complete", DefinitionHash: "h2", Kind: "fixed"}}, State: second.State})
 	if err != nil || changed.SkipReason != "factor_changed" {
 		t.Fatalf("因子定义变了应跳过为 factor_changed：%+v err=%v", changed, err)
 	}

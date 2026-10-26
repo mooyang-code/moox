@@ -33,7 +33,7 @@
             <a-empty v-if="!cards.length && !store.loading" description="当前空间没有计算任务">
               <template #extra><a-button @click="go({ path: '/factor/tasks', query: {} })">前往计算任务</a-button></template>
             </a-empty>
-            <article v-for="card in cards" :key="card.setId" class="task-card">
+            <article v-for="card in cards" :key="card.taskId" class="task-card">
               <header class="task-card__head">
                 <a-link class="task-card__title" @click="go(card.links.detail)">{{ card.title }}</a-link>
                 <a-tag size="small" :color="card.health.color">{{ card.health.label }}</a-tag>
@@ -57,7 +57,7 @@
               <h3>待处理</h3>
               <a-empty v-if="!pending.length" description="没有待处理事项" />
               <ul v-else class="side-list">
-                <li v-for="item in pending" :key="`${item.kind}-${item.setId}-${item.target.query.job || ''}`">
+                <li v-for="item in pending" :key="`${item.kind}-${item.taskId}-${item.target.query.job || ''}`">
                   <a-link @click="go(item.target)">{{ item.title }}</a-link>
                   <span class="side-list__text">{{ item.text }}</span>
                 </li>
@@ -85,13 +85,13 @@
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listRecalcJobs } from "@/api/factor";
-import type { FactorSet, FactorSetInfo, RecalcJob } from "@/api/factor/types";
+import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { progressPercent } from "@/views/factor/recalc/recalc-model";
-import { pendingItems, recalcQuerySets, splitRecalcJobs, statsStrip, taskCards, type RouteTarget } from "./overview-model";
+import { pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards, type RouteTarget } from "./overview-model";
 
 defineOptions({ name: "FactorOverview" });
 
@@ -102,26 +102,26 @@ const jobs = ref<RecalcJob[]>([]);
 const refreshing = ref(false);
 const gate = new RequestGate();
 
-const labelOf = (set: FactorSet) => store.setLabel(set);
-const sets = computed<FactorSetInfo[]>(() => store.sets);
+const labelOf = (set: FactorTask) => store.taskLabel(set);
+const sets = computed<FactorTaskInfo[]>(() => store.tasks);
 const cards = computed(() => taskCards(sets.value, labelOf));
 const split = computed(() => splitRecalcJobs(jobs.value));
 const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
 
-/** ListRecalcJobs 必须带 set_id：只对已启用的计算任务扇出，页面失活时不轮询。 */
+/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出，页面失活时不轮询。 */
 async function loadJobs() {
   const token = gate.next();
-  const ids = recalcQuerySets(sets.value);
+  const ids = recalcQueryTasks(sets.value);
   if (!ids.length) {
     jobs.value = [];
     return;
   }
   try {
     const results = await Promise.all(
-      ids.map(setId =>
-        listRecalcJobs({ set_id: setId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
+      ids.map(taskId =>
+        listRecalcJobs({ task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
       )
     );
     if (gate.isCurrent(token)) jobs.value = results.flatMap(rsp => rsp.jobs || []);
@@ -144,12 +144,12 @@ function go(target: RouteTarget) {
 }
 
 function recalcTarget(job: RecalcJob): RouteTarget {
-  return { path: "/factor/tasks", query: { tab: "recalc", set: job.set_id, job: job.job_id } };
+  return { path: "/factor/tasks", query: { tab: "recalc", task: job.task_id, job: job.job_id } };
 }
 
 usePolling(loadJobs, 10_000, () => Boolean(spaceId.value));
 watch(
-  () => recalcQuerySets(sets.value).join(","),
+  () => recalcQueryTasks(sets.value).join(","),
   () => void loadJobs(),
   { immediate: true }
 );

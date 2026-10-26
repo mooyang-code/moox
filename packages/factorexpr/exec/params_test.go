@@ -38,7 +38,7 @@ func constant(count int, value float64) []float64 {
 // 按标的覆盖的窗口：每条序列的结果与“该序列单独用对应的常量窗口”逐位相同（同一套内核）。
 func TestPerSeriesWindowMatchesConstantWindow(t *testing.T) {
 	panel := purityPanel(t, 6, 700, 7)
-	param := compileFactor(t, "params: {w: {type: int, min: 2, max: 40, default: 10}}\noutputs:\n  o: ts_std(x, w) + ema(x, w)\n")
+	param := compileFactor(t, "params: {w: {type: int, min: 2, max: 40, default: 10}}\noutput: ts_std(x, w) + ema(x, w)\n")
 	program := buildProgram(t, factorexpr.ProgramInput{Key: "m", FactorID: "f", Factor: param})
 	windows := []float64{2, 10, 40, 10, 25, 3}
 	result, err := Run(context.Background(), program, panel, Options{Start: 600, End: 699, Workers: 3,
@@ -47,7 +47,7 @@ func TestPerSeriesWindowMatchesConstantWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	for s, window := range windows {
-		fixed := compileFactor(t, "outputs:\n  o: ts_std(x, "+formatInt(window)+") + ema(x, "+formatInt(window)+")\n")
+		fixed := compileFactor(t, "output: ts_std(x, "+formatInt(window)+") + ema(x, "+formatInt(window)+")\n")
 		expected, err := Run(context.Background(), buildProgram(t, factorexpr.ProgramInput{FactorID: "f", Factor: fixed}), panel,
 			Options{Start: 600, End: 699})
 		if err != nil {
@@ -67,7 +67,7 @@ func formatInt(value float64) string { return strconv.Itoa(int(value)) }
 // 补算同一段时只要每期参数相同（一个参数段），结果与逐期实时计算逐位相同，与分块边界无关。
 func TestSnapshotCoversLookbackAndMatchesAcrossChunks(t *testing.T) {
 	panel := purityPanel(t, 4, 120, 11)
-	factor := compileFactor(t, "params: {k: {type: float, min: 0, max: 5, default: 1}}\noutputs:\n  o: ts_mean(x * k, 2) + delay(y, 1) * k\n")
+	factor := compileFactor(t, "params: {k: {type: float, min: 0, max: 5, default: 1}}\noutput: ts_mean(x * k, 2) + delay(y, 1) * k\n")
 	program := buildProgram(t, factorexpr.ProgramInput{Key: "m", Factor: factor})
 	params := map[string][]float64{factorexpr.ParamSlot("m", "k"): {2, 0.5, 3, 1}}
 	whole, err := Run(context.Background(), program, panel, Options{Start: 50, End: 119, Params: params})
@@ -99,7 +99,7 @@ func TestSnapshotCoversLookbackAndMatchesAcrossChunks(t *testing.T) {
 // 两个成员参数取值相同时只算一次；取值不同时各自计算；不含参数的子树始终共享。
 func TestRuntimeDedupByParamValues(t *testing.T) {
 	panel := purityPanel(t, 4, 80, 3)
-	factor := compileFactor(t, "params: {w: {type: int, min: 2, max: 20, default: 5}}\noutputs:\n  o: ts_mean(abs(x), w)\n")
+	factor := compileFactor(t, "params: {w: {type: int, min: 2, max: 20, default: 5}}\noutput: ts_mean(abs(x), w)\n")
 	program := buildProgram(t,
 		factorexpr.ProgramInput{Key: "a", Factor: factor},
 		factorexpr.ProgramInput{Key: "b", Factor: factor})
@@ -147,7 +147,7 @@ func TestCrossSectionRestrictedToUniverse(t *testing.T) {
 		panel.Set(0, s, 0, value)
 		panel.MarkPresent(s, 0)
 	}
-	factor := compileFactor(t, "outputs:\n  r: cs_rank(x)\n")
+	factor := compileFactor(t, "output: cs_rank(x)\n")
 	program := buildProgram(t,
 		factorexpr.ProgramInput{Key: "all", Factor: factor, Universe: "all"},
 		factorexpr.ProgramInput{Key: "ab", Factor: factor, Universe: "ab"})
@@ -175,7 +175,7 @@ func TestInvalidJointParamsYieldNaN(t *testing.T) {
 			panel.Set(0, s, i, float64(i%17))
 		}
 	}
-	factor := compileFactor(t, "params:\n  n: {type: int, min: 2, max: 20, default: 10}\n  m: {type: int, min: 1, max: 19, default: 1}\noutputs:\n  s: sma(x, n, m)\n")
+	factor := compileFactor(t, "params:\n  n: {type: int, min: 2, max: 20, default: 10}\n  m: {type: int, min: 1, max: 19, default: 1}\noutput: sma(x, n, m)\n")
 	program := buildProgram(t, factorexpr.ProgramInput{Key: "m", Factor: factor})
 	result, err := Run(context.Background(), program, panel, Options{Start: 799, End: 799,
 		Params: map[string][]float64{factorexpr.ParamSlot("m", "n"): {10, 5}, factorexpr.ParamSlot("m", "m"): {1, 5}}})
@@ -192,7 +192,7 @@ func TestInvalidJointParamsYieldNaN(t *testing.T) {
 
 func TestRunRejectsWrongParamLength(t *testing.T) {
 	panel := purityPanel(t, 2, 50, 1)
-	factor := compileFactor(t, "params: {w: {type: int, min: 2, max: 5, default: 3}}\noutputs:\n  o: ts_mean(x, w)\n")
+	factor := compileFactor(t, "params: {w: {type: int, min: 2, max: 5, default: 3}}\noutput: ts_mean(x, w)\n")
 	program := buildProgram(t, factorexpr.ProgramInput{Key: "m", Factor: factor})
 	if _, err := Run(context.Background(), program, panel, Options{Start: 40, End: 49,
 		Params: map[string][]float64{factorexpr.ParamSlot("m", "w"): {3}}}); err == nil {

@@ -544,6 +544,9 @@ components:
           - QueryPipelineArrivalHistory
           - GetDoctorContext
           - GetHostPolicy
+          - MuteAlerts
+          - UnmuteAlerts
+          - GetAlertMute
         read_only_methods:
           - GetHealthOverview
           - ListNotificationChannels
@@ -552,6 +555,7 @@ components:
           - QueryPipelineArrivalHistory
           - GetDoctorContext
           - GetHostPolicy
+          - GetAlertMute
         acl:
           - methods:
               - GetHealthOverview
@@ -562,8 +566,14 @@ components:
               - QueryHostMetricHistory
               - QueryPipelineArrivalHistory
               - GetDoctorContext
+              - GetAlertMute
             callers:
               - console
+              - moox-cli
+          - methods:
+              - MuteAlerts
+              - UnmuteAlerts
+            callers:
               - moox-cli
           - methods:
               - GetHostPolicy
@@ -926,19 +936,18 @@ components:
         timeout_ms: 120000
         max_body_bytes: 4194304
         methods:
-          - CreateFactorSet
-          - UpdateFactorSet
-          - SetFactorSetStatus
-          - DeleteFactorSet
-          - GetFactorSet
-          - ListFactorSets
+          - CreateFactorTask
+          - SetFactorTaskStatus
+          - DeleteFactorTask
+          - GetFactorTask
+          - ListFactorTasks
           - CreateFactor
           - UpdateFactor
           - DeleteFactor
           - GetFactor
-          - AddFactorToSet
-          - RemoveFactorFromSet
-          - SetFactorMemberStatus
+          - AddTaskMember
+          - RemoveTaskMember
+          - SetTaskMemberStatus
           - ListFactors
           - RecalcFactors
           - ListRecalcJobs
@@ -953,14 +962,12 @@ components:
           - UpsertFactorCategory
           - DeleteFactorCategory
           - SetFactorCategory
-          - EnsureInstanceFactorSet
-          - SetInstanceFactorSetEnabled
-          - ReleaseInstanceFactorSet
+          - BindFactorTask
           - SubmitFactorParams
           - GetFactorParams
         read_only_methods:
-          - GetFactorSet
-          - ListFactorSets
+          - GetFactorTask
+          - ListFactorTasks
           - GetFactor
           - ListFactors
           - ListRecalcJobs
@@ -973,19 +980,18 @@ components:
           - GetFactorParams
         acl:
           - methods:
-              - CreateFactorSet
-              - UpdateFactorSet
-              - SetFactorSetStatus
-              - DeleteFactorSet
-              - GetFactorSet
-              - ListFactorSets
+              - CreateFactorTask
+              - SetFactorTaskStatus
+              - DeleteFactorTask
+              - GetFactorTask
+              - ListFactorTasks
               - CreateFactor
               - UpdateFactor
               - DeleteFactor
               - GetFactor
-              - AddFactorToSet
-              - RemoveFactorFromSet
-              - SetFactorMemberStatus
+              - AddTaskMember
+              - RemoveTaskMember
+              - SetTaskMemberStatus
               - ListFactors
               - RecalcFactors
               - ListRecalcJobs
@@ -1003,18 +1009,16 @@ components:
             callers:
               - console
               - moox-cli
-          # 策略实例的私有因子集与参数提交（因子动态调参）：只有策略服务是参数写入方。
+          # 策略实例与因子任务的永久关联和参数提交（因子动态调参）：只有策略服务是参数写入方。
           - methods:
-              - GetFactorSet
-              - ListFactorSets
+              - GetFactorTask
+              - ListFactorTasks
               - GetFactor
               - ListFactors
               - ListRecalcJobs
               - GetStatus
               - ListFactorCategories
-              - EnsureInstanceFactorSet
-              - SetInstanceFactorSetEnabled
-              - ReleaseInstanceFactorSet
+              - BindFactorTask
               - SubmitFactorParams
               - GetFactorParams
             callers:
@@ -1033,16 +1037,14 @@ components:
           - EngineHeartbeat
           - PullRecalcJob
           - ReportRecalcProgress
-          - FreezeFactorParams
-          - ReportOfflineFreezes
-          - ListParamIntervals
+          - GetTaskParams
         acl: []
     doctor:
       role: factor-mgr
-      description: Factor catalog manager serving definitions, sets and recalc jobs to the compute engine
+      description: Factor catalog manager serving definitions, tasks and recalc jobs to the compute engine
       duties:
         - manage factor definitions
-        - sets and recalc jobs
+        - tasks and recalc jobs
       inputs:
         - factor inputs
       outputs:
@@ -1195,7 +1197,6 @@ components:
           - GetStrategyInstance
           - ListStrategyInstances
           - SetStrategyInstanceEnabled
-          - DeleteStrategyInstance
           - ListStrategyResults
           - GetStrategyResult
           - ListStrategyTargets
@@ -1206,7 +1207,6 @@ components:
           - CancelReplay
           - GetStrategyDisplaySettings
           - SetStrategyDisplaySettings
-          - ListStrategyParamSubmissions
         read_only_methods:
           - GetStrategy
           - ListStrategies
@@ -1220,7 +1220,6 @@ components:
           - ListReplays
           - ListReplayBars
           - GetStrategyDisplaySettings
-          - ListStrategyParamSubmissions
         acl:
           - methods:
               - CreateStrategy
@@ -1234,7 +1233,6 @@ components:
               - GetStrategyInstance
               - ListStrategyInstances
               - SetStrategyInstanceEnabled
-              - DeleteStrategyInstance
               - ListStrategyResults
               - GetStrategyResult
               - ListStrategyTargets
@@ -1245,7 +1243,6 @@ components:
               - CancelReplay
               - GetStrategyDisplaySettings
               - SetStrategyDisplaySettings
-              - ListStrategyParamSubmissions
             callers:
               - console
               - moox-cli
@@ -2069,9 +2066,7 @@ principals:
           - EngineHeartbeat
           - PullRecalcJob
           - ReportRecalcProgress
-          - FreezeFactorParams
-          - ReportOfflineFreezes
-          - ListParamIntervals
+          - GetTaskParams
   - id: archive-worker
     allow:
       - service: trpc.moox.storage.PrimaryStore

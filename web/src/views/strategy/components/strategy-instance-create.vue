@@ -22,33 +22,46 @@
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
       <a-form-item
-        label="输入 View"
+        label="因子任务"
         required
-        :validate-status="fieldErrors.view_id ? 'error' : undefined"
-        :help="fieldErrors.view_id"
+        :validate-status="fieldErrors.factor_task_id ? 'error' : undefined"
+        :help="fieldErrors.factor_task_id"
       >
         <a-select
-          v-model="form.view_id"
+          v-model="form.factor_task_id"
           allow-search
-          :loading="viewsLoading"
-          placeholder="选择一个 View（通常是因子结果 View）"
-          @change="onViewChange"
+          :loading="tasksLoading"
+          placeholder="选择一个运行中、还没有关联实例的因子任务"
+          @change="onTaskChange"
         >
-          <a-option v-for="view in views" :key="view.view_id" :value="view.view_id">
-            {{ view.name || view.view_id }}（{{ view.view_id }} · {{ view.freq || "无周期" }}）<template
-              v-if="isFactorView(view)"
-            >
-              · 因子结果</template
-            >
+          <a-option v-for="task in tasks" :key="task.taskId" :value="task.taskId">
+            {{ task.name }}（{{ task.taskId }} · {{ task.freq || "无周期" }}）
           </a-option>
         </a-select>
         <template #extra>
-          <span v-if="viewsError" class="meta-error"
-            >View 列表读取失败：{{ viewsError }}<a-link @click="loadViewsList">重试</a-link></span
+          <span v-if="tasksError" class="meta-error"
+            >因子任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link></span
           >
-          <span v-else-if="!viewsLoading && !views.length">当前空间没有可用 View，请先在存储模块创建或发布 View。</span>
+          <span v-else-if="!tasksLoading && !tasks.length"
+            >当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。</span
+          >
+          <span v-else>一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</span>
         </template>
       </a-form-item>
+      <div v-if="selectedTask" class="task-columns">
+        <div class="task-columns__head">
+          <strong>任务的列（DSL 里直接写这些列名）</strong>
+          <a-button size="mini" @click="copyColumns">复制全部列名</a-button>
+        </div>
+        <a-space wrap size="mini">
+          <a-tag v-for="column in selectedTask.columns" :key="column" size="small">{{ column }}</a-tag>
+          <span v-if="!selectedTask.columns.length" class="meta-hint">这个任务还没有成员，先到「因子」模块给任务添加因子。</span>
+        </a-space>
+        <p v-if="selectedTask.varMembers.length" class="meta-hint">
+          可变成员 {{ selectedTask.varMembers.join("、") }}：DSL 的 factor_params 要为每个可变成员给出参数（策略逐期提交），可用
+          params("成员键", "参数名") 读取当期实际参数。
+        </p>
+      </div>
       <a-form-item label="运行模式">
         <a-radio-group v-model="form.mode" type="button" @change="onModeChange">
           <a-radio value="compute">仅计算（不向交易模块发送目标）</a-radio>
@@ -78,8 +91,8 @@
     </a-form>
     <div class="check-head">
       <strong>绑定预检</strong>
-      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !form.view_id" @click="check"
-        >解析列与因子指纹</a-button
+      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !form.factor_task_id" @click="check"
+        >解析列与成员契约</a-button
       >
     </div>
     <a-alert
@@ -91,8 +104,8 @@
     >
     <ResolvedTable v-if="check_result?.resolved_json" :resolved-json="check_result.resolved_json" />
     <a-alert type="info" show-icon class="confirm-note"
-      >创建后实例保持停用。启用时后台会重新解析
-      View、列与因子指纹并固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
+      >创建后实例保持停用。启用时后台会把因子任务与实例永久关联，并重新解析 结果
+      View、列与成员契约，固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
     >
     <template #footer>
       <a-space>
@@ -109,10 +122,11 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
-import { listViews } from "@/api/storage/metadata";
-import type { View } from "@/api/storage/types";
+import { listFactorTasks } from "@/api/factor";
 import { listLogicalAccounts } from "@/api/trade";
 import type { LogicalAccount } from "@/api/trade/types";
+import type { FactorTaskInfo } from "@/api/factor/types";
+import { availableTasks, type TaskOption } from "@/views/strategy/components/task-options";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import { parseDSL } from "@/views/strategy/dsl";
 
@@ -120,28 +134,28 @@ const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: s
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
 const saving = ref(false);
 const checking = ref(false);
-const viewsLoading = ref(false);
+const tasksLoading = ref(false);
 const accountsLoading = ref(false);
-const viewsError = ref("");
+const tasksError = ref("");
 const accountsError = ref("");
 const error = ref("");
-const fieldErrors = reactive<Record<"strategy_id" | "view_id" | "logical_account_id", string>>({
+const fieldErrors = reactive<Record<"strategy_id" | "factor_task_id" | "logical_account_id", string>>({
   strategy_id: "",
-  view_id: "",
+  factor_task_id: "",
   logical_account_id: ""
 });
 // mode 决定是否发送目标：账户读取失败只影响“发送至交易模块”，不阻断仅计算；切换模式不会悄悄改选账户。
 const form = reactive({
   instance_id: "",
   strategy_id: "",
-  view_id: "",
+  factor_task_id: "",
   logical_account_id: "",
   mode: "compute" as "compute" | "trade"
 });
-const views = ref<View[]>([]);
+const tasks = ref<TaskOption[]>([]);
 const accounts = ref<LogicalAccount[]>([]);
 const check_result = ref<ValidateStrategyResult | null>(null);
-let viewsRequest = 0;
+let tasksRequest = 0;
 let accountsRequest = 0;
 let submitRequest = 0;
 let checkRequest = 0;
@@ -149,8 +163,16 @@ let checkRequest = 0;
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
-function isFactorView(view: View) {
-  return view.attributes?.view_role === "factor_result" || view.attributes?.owner_module === "factor";
+const selectedTask = computed(() => tasks.value.find(item => item.taskId === form.factor_task_id));
+
+async function copyColumns() {
+  const text = selectedTask.value?.columns.join("\n") ?? "";
+  try {
+    await navigator.clipboard.writeText(text);
+    Message.success("列名已复制");
+  } catch {
+    Message.warning("浏览器不允许写剪贴板，请手动选择列名复制");
+  }
 }
 
 function close() {
@@ -159,12 +181,12 @@ function close() {
   emit("update:visible", false);
 }
 
-async function loadAllViews(spaceId: string) {
-  const items: View[] = [];
+async function loadAllTasks() {
+  const items: FactorTaskInfo[] = [];
   for (let page = 1; ; page += 1) {
-    const rsp = await listViews({ space_id: spaceId, status: "active", page: { page, size: 200 } });
-    items.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || !(rsp.views || []).length) return items;
+    const rsp = await listFactorTasks({ page: { page, size: 200 } });
+    items.push(...(rsp.factor_tasks || []));
+    if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) return items;
   }
 }
 
@@ -177,22 +199,20 @@ async function loadAllAccounts() {
   }
 }
 
-async function loadViewsList() {
+async function loadTasksList() {
   const spaceId = props.spaceId;
   if (!spaceId) return;
-  const requestId = ++viewsRequest;
-  viewsLoading.value = true;
-  viewsError.value = "";
+  const requestId = ++tasksRequest;
+  tasksLoading.value = true;
+  tasksError.value = "";
   try {
-    const nextViews = await loadAllViews(spaceId);
-    if (requestId !== viewsRequest || props.spaceId !== spaceId) return;
-    views.value = nextViews
-      .filter(view => view.space_id === spaceId)
-      .sort((a, b) => Number(isFactorView(b)) - Number(isFactorView(a)) || a.view_id.localeCompare(b.view_id));
+    const infos = await loadAllTasks();
+    if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
+    tasks.value = availableTasks(infos, spaceId);
   } catch (err) {
-    if (requestId === viewsRequest) viewsError.value = err instanceof Error ? err.message : "元数据加载失败";
+    if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "因子任务加载失败";
   } finally {
-    if (requestId === viewsRequest) viewsLoading.value = false;
+    if (requestId === tasksRequest) tasksLoading.value = false;
   }
 }
 
@@ -214,7 +234,7 @@ async function loadAccountsList() {
 }
 
 function loadMetadata() {
-  void loadViewsList();
+  void loadTasksList();
   void loadAccountsList();
 }
 
@@ -222,8 +242,8 @@ function onStrategyChange() {
   fieldErrors.strategy_id = "";
   resetCheck();
 }
-function onViewChange() {
-  fieldErrors.view_id = "";
+function onTaskChange() {
+  fieldErrors.factor_task_id = "";
   resetCheck();
 }
 function onModeChange() {
@@ -238,11 +258,11 @@ function resetCheck() {
 }
 
 async function check() {
-  if (!selectedStrategy.value || !form.view_id) return;
+  if (!selectedStrategy.value || !form.factor_task_id) return;
   const requestId = ++checkRequest;
   checking.value = true;
   try {
-    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, form.view_id);
+    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, form.factor_task_id);
     if (requestId === checkRequest) check_result.value = result;
   } catch (err) {
     if (requestId === checkRequest)
@@ -262,18 +282,18 @@ function resetForm() {
   saving.value = false;
   form.instance_id = "";
   form.strategy_id = props.presetStrategyId || "";
-  form.view_id = "";
+  form.factor_task_id = "";
   form.logical_account_id = "";
   form.mode = "compute";
-  views.value = [];
+  tasks.value = [];
   accounts.value = [];
-  viewsRequest += 1;
+  tasksRequest += 1;
   accountsRequest += 1;
-  viewsLoading.value = false;
+  tasksLoading.value = false;
   accountsLoading.value = false;
-  viewsError.value = "";
+  tasksError.value = "";
   accountsError.value = "";
-  fieldErrors.strategy_id = fieldErrors.view_id = fieldErrors.logical_account_id = "";
+  fieldErrors.strategy_id = fieldErrors.factor_task_id = fieldErrors.logical_account_id = "";
   error.value = "";
   resetCheck();
 }
@@ -281,9 +301,9 @@ function resetForm() {
 async function submit() {
   error.value = "";
   fieldErrors.strategy_id = form.strategy_id ? "" : "请选择策略定义";
-  fieldErrors.view_id = form.view_id ? "" : "请选择输入 View";
+  fieldErrors.factor_task_id = form.factor_task_id ? "" : "请选择因子任务";
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
-  if (fieldErrors.strategy_id || fieldErrors.view_id || fieldErrors.logical_account_id) return;
+  if (fieldErrors.strategy_id || fieldErrors.factor_task_id || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
@@ -291,7 +311,7 @@ async function submit() {
     const instance = await createInstance({
       instance_id: form.instance_id.trim() || undefined,
       strategy_id: form.strategy_id,
-      view_id: form.view_id,
+      factor_task_id: form.factor_task_id,
       logical_account_id: form.mode === "trade" ? form.logical_account_id : ""
     });
     if (requestId !== submitRequest || props.spaceId !== spaceId) {
@@ -362,6 +382,23 @@ watch(
 }
 .meta-error {
   color: rgb(var(--red-6));
+}
+.meta-hint {
+  margin: 6px 0 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+.task-columns {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+}
+.task-columns__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
 .confirm-note {
   margin-top: 16px;

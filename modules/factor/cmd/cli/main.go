@@ -15,7 +15,7 @@ type cliConfig struct {
 	Command    string
 	ConfigPath string
 	DBPath     string
-	SetID      string
+	TaskID     string
 	File       string
 	CatalogDir string
 	FactorID   string
@@ -77,7 +77,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.SetID, "set", "", "also add the definition to this factor set as a disabled member")
+		fs.StringVar(&cfg.TaskID, "task", "", "also add the definition to this factor task as a disabled member")
 		fs.StringVar(&cfg.File, "file", "", "YAML factor library file ([{factor_id, name, spec}])")
 		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id to import (required when the file has several)")
 	case "import-catalog":
@@ -85,12 +85,12 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "YAML factor library directory (*.yaml)")
-		fs.StringVar(&cfg.SetID, "set", "", "also add the definitions to this factor set as disabled members")
+		fs.StringVar(&cfg.TaskID, "task", "", "also add the definitions to this factor task as disabled members")
 	case "recalc":
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.SetID, "set", "", "factor set id")
+		fs.StringVar(&cfg.TaskID, "task", "", "factor task id")
 		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
 		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
 		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
@@ -120,8 +120,8 @@ func parseArgs(args []string) (cliConfig, error) {
 		}
 	}
 	if cfg.Command == "recalc" {
-		if strings.TrimSpace(cfg.SetID) == "" {
-			return cliConfig{}, errors.New("--set is required")
+		if strings.TrimSpace(cfg.TaskID) == "" {
+			return cliConfig{}, errors.New("--task is required")
 		}
 		var err error
 		cfg.StartTime, err = parseTimeFlag("--start", start)

@@ -30,8 +30,8 @@ func countOps(p *Program, op string) int {
 
 func TestProgramDeduplicatesAcrossFactors(t *testing.T) {
 	p := program(t,
-		"outputs:\n  a: close / ts_mean(close, 20)\n",
-		"outputs:\n  b: ts_rank(close / ts_mean(close, 20) - 1, 20)\n",
+		"output: close / ts_mean(close, 20)\n",
+		"output: ts_rank(close / ts_mean(close, 20) - 1, 20)\n",
 		"outputs:\n  c: ts_mean(close, 5) * 2\n  d: ts_mean(open, 20) * 2\n",
 	)
 	if got := countOps(p, "ts_mean"); got != 3 {
@@ -83,7 +83,7 @@ func TestProgramTopologicalOrderAndLastUse(t *testing.T) {
 }
 
 func TestProgramSharesLetWithinFactor(t *testing.T) {
-	p := program(t, "let:\n  tp: (high + low + close) / 3\n  m: ts_mean(tp, 20)\noutputs:\n  cci: (tp - m) / (0.015 * ts_mean(abs(tp - m), 20))\n")
+	p := program(t, "let:\n  tp: (high + low + close) / 3\n  m: ts_mean(tp, 20)\noutput: (tp - m) / (0.015 * ts_mean(abs(tp - m), 20))\n")
 	if got := countOps(p, "div"); got != 2 {
 		t.Fatalf("div nodes = %d, want 2 (tp and the output)", got)
 	}
@@ -93,8 +93,8 @@ func TestProgramSharesLetWithinFactor(t *testing.T) {
 }
 
 func TestProgramRejects(t *testing.T) {
-	a := mustCompile(t, "outputs:\n  x: close\n")
-	b := mustCompile(t, "outputs:\n  x: open\n")
+	a := mustCompile(t, "output: close\n")
+	b := mustCompile(t, "output: open\n")
 	// 输出列名只在成员内唯一：不同成员可以有同名输出，写入时再映射到各自集合的列名。
 	if _, err := NewProgram([]ProgramInput{{FactorID: "a", Factor: a}, {FactorID: "b", Factor: b}}); err != nil {
 		t.Fatalf("err = %v", err)

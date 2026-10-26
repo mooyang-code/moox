@@ -302,11 +302,12 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 		}
 		commitStart := h.now()
-		params, paramsErr := h.paramSubmission(p, result, *decision, loaded)
+		next, paramsErr := h.nextParams(p, *decision, loaded)
 		if paramsErr != nil {
 			return h.commitSkipped(ctx, p, input.SkipConfigError, paramsErr.Error())
 		}
-		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, ExpectedLatestResultID: &expected, Now: h.now(), Params: params})
+		result.NextParamsJSON = next
+		_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Items: items, ExpectedLatestResultID: &expected, Now: h.now()})
 		p.timing.commit = h.now().Sub(commitStart)
 		switch {
 		case err == nil:

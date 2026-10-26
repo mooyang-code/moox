@@ -268,11 +268,11 @@ func runCheck(args []string, out io.Writer) error {
 			result.OK = true
 			result.FactorType = string(factor.Type)
 			result.InputColumns = factor.InputColumns
-			result.Outputs = factor.OutputNames()
+			result.Outputs = factor.OutputNamesFor(entry.FactorID)
 			result.Lookback = factor.Lookback
 			result.OutputLookbacks = map[string]int{}
-			for _, output := range factor.Outputs {
-				result.OutputLookbacks[output.Name] = max(output.Root.Lookback, 1)
+			for i, output := range factor.Outputs {
+				result.OutputLookbacks[result.Outputs[i]] = max(output.Root.Lookback, 1)
 			}
 			for _, param := range factor.Params {
 				result.Params = append(result.Params, paramInfo{Name: param.Name, Type: string(param.Type), Min: param.Min,

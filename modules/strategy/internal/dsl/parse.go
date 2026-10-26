@@ -171,7 +171,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 		case "portfolio":
 			strategy.Portfolio, err = decodePortfolio(f.value)
 		case "factors":
-			strategy.Factors, err = decodeFactors(f.value)
+			return Strategy{}, errors.New("策略 DSL 不再有 factors 段：策略读取的列来自创建实例时选定的因子任务，规则里直接写列名即可")
 		case "factor_params":
 			strategy.FactorParams, err = decodeFactorParams(f.value)
 		default:

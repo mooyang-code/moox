@@ -36,6 +36,12 @@ type MonitorMgrService interface {
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
 
 	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
+
+	MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error)
+
+	UnmuteAlerts(ctx context.Context, req *UnmuteAlertsReq) (*UnmuteAlertsRsp, error)
+
+	GetAlertMute(ctx context.Context, req *GetAlertMuteReq) (*GetAlertMuteRsp, error)
 }
 
 func MonitorMgrService_GetHealthOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -200,6 +206,60 @@ func MonitorMgrService_GetHostPolicy_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func MonitorMgrService_MuteAlerts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &MuteAlertsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).MuteAlerts(ctx, reqbody.(*MuteAlertsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_UnmuteAlerts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UnmuteAlertsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).UnmuteAlerts(ctx, reqbody.(*UnmuteAlertsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetAlertMute_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetAlertMuteReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetAlertMute(ctx, reqbody.(*GetAlertMuteReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // MonitorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.monitor.MonitorMgr",
@@ -240,6 +300,18 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/GetHostPolicy",
 			Func: MonitorMgrService_GetHostPolicy_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/MuteAlerts",
+			Func: MonitorMgrService_MuteAlerts_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/UnmuteAlerts",
+			Func: MonitorMgrService_UnmuteAlerts_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetAlertMute",
+			Func: MonitorMgrService_GetAlertMute_Handler,
 		},
 	},
 }
@@ -282,6 +354,15 @@ func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *Get
 func (s *UnimplementedMonitorMgr) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error) {
 	return nil, errors.New("rpc GetHostPolicy of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) MuteAlerts(ctx context.Context, req *MuteAlertsReq) (*MuteAlertsRsp, error) {
+	return nil, errors.New("rpc MuteAlerts of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) UnmuteAlerts(ctx context.Context, req *UnmuteAlertsReq) (*UnmuteAlertsRsp, error) {
+	return nil, errors.New("rpc UnmuteAlerts of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetAlertMute(ctx context.Context, req *GetAlertMuteReq) (*GetAlertMuteRsp, error) {
+	return nil, errors.New("rpc GetAlertMute of service MonitorMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -308,6 +389,12 @@ type MonitorMgrClientProxy interface {
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
 
 	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (rsp *GetHostPolicyRsp, err error)
+
+	MuteAlerts(ctx context.Context, req *MuteAlertsReq, opts ...client.Option) (rsp *MuteAlertsRsp, err error)
+
+	UnmuteAlerts(ctx context.Context, req *UnmuteAlertsReq, opts ...client.Option) (rsp *UnmuteAlertsRsp, err error)
+
+	GetAlertMute(ctx context.Context, req *GetAlertMuteReq, opts ...client.Option) (rsp *GetAlertMuteRsp, err error)
 }
 
 type MonitorMgrClientProxyImpl struct {
@@ -493,6 +580,66 @@ func (c *MonitorMgrClientProxyImpl) GetHostPolicy(ctx context.Context, req *GetH
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetHostPolicyRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) MuteAlerts(ctx context.Context, req *MuteAlertsReq, opts ...client.Option) (*MuteAlertsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/MuteAlerts")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("MuteAlerts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &MuteAlertsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) UnmuteAlerts(ctx context.Context, req *UnmuteAlertsReq, opts ...client.Option) (*UnmuteAlertsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/UnmuteAlerts")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("UnmuteAlerts")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UnmuteAlertsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetAlertMute(ctx context.Context, req *GetAlertMuteReq, opts ...client.Option) (*GetAlertMuteRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetAlertMute")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetAlertMute")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetAlertMuteRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

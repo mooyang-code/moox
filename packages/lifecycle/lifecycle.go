@@ -1,6 +1,6 @@
 // Package lifecycle 是各模块共用的生命周期状态机（设计第 6 节）。
 //
-// 每个模块和它管理的对象（因子集合、策略实例……）都有同一套阶段：
+// 每个模块和它管理的对象（因子任务、策略实例……）都有同一套阶段：
 //
 //	未初始化 → 未就绪 / 就绪 → 预热 → 运行；运行中可以暂停、自动暂停、故障。
 //
@@ -31,7 +31,7 @@ const (
 	StageUninitialized Stage = "uninitialized" // 灰：刚部署，初始化未完成
 	StageNotReady      Stage = "not_ready"     // 红：检查有失败项
 	StageReady         Stage = "ready"         // 蓝：检查全部通过，等待用户启动
-	StageWarming       Stage = "warming"       // 黄：预热，用真实数据跑完整链路，不真实下单
+	StageWarming       Stage = "warming"       // 黄：试运行，用真实数据跑完整链路，不真实下单
 	StageRunning       Stage = "running"       // 绿：用户确认后运行
 	StagePaused        Stage = "paused"        // 橙：手动暂停，或受上游故障影响自动暂停
 	StageResuming      Stage = "resuming"      // 青：恢复追赶，补齐暂停期间缺失的数据；不计算、不下单
@@ -225,14 +225,17 @@ type Hooks struct {
 	CheckModule func(ctx context.Context) []Check
 	// CheckObject 检查一个对象能不能运行（数据源就绪、上游没有断档……）。
 	CheckObject func(ctx context.Context, ref Ref) []Check
-	// Objects 列出当前存在的对象（目录里启用的因子集合、策略实例……）。
+	// Objects 列出当前存在的对象（目录里启用的因子任务、策略实例……）。
 	Objects func() []Ref
 	// Init 执行初始化动作（可为 nil）；ref 为空表示模块自身。
 	Init func(ctx context.Context, ref Ref) error
-	// AutoStart 报告对象是否随创建自动推进到预热（init → start）：返回 true 的对象在未初始化、就绪时由周期刷新自动
-	// init、start，不必用户逐个执行命令（例如策略实例的私有因子集、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
-	// 的对象不动，预热到运行的确认（confirm）仍由用户执行。为 nil 表示没有对象自动推进。
+	// AutoStart 报告对象是否随创建自动推进到试运行（init → start）：返回 true 的对象在未初始化、就绪时由周期刷新自动
+	// init、start，不必用户逐个执行命令（例如策略实例的私有因子任务、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
+	// 的对象不动，试运行到运行的确认（confirm）默认仍由用户执行（见 AutoConfirm）。为 nil 表示没有对象自动推进。
 	AutoStart func(ref Ref) bool
+	// AutoConfirm 报告试运行中的对象能否自动确认进入运行；since 是对象进入试运行的时间。只对 AutoStart 认定的对象调用，
+	// 由周期刷新在每次推进时询问；证据（例如试运行之后完整算完的一期）由模块自己保存。为 nil 表示不自动确认。
+	AutoConfirm func(ref Ref, since time.Time) bool
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)

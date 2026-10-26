@@ -12,6 +12,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // RPCClient 经主机网关调用 Storage 的 Metadata / DataView 与 Factor 的 FactorMgr。
@@ -383,15 +384,25 @@ func convertRow(row *storagepb.TimeSeriesRow) (Row, error) {
 		return Row{}, fmt.Errorf("Storage 返回的 data_time %q 不是 RFC3339 时间", row.GetKey().GetDataTime())
 	}
 	values := make(map[string]float64, len(row.GetFields()))
+	var params map[string]map[string]float64
 	for _, field := range row.GetFields() {
 		if field == nil || field.GetValue() == nil {
+			continue
+		}
+		if field.GetFieldId() == factorname.ParamsColumn {
+			// __params 是 JSON 列：解析成「成员键 → 参数名 → 值」；解析不了按这一行没有参数值处理（params() 读到 NaN）。
+			if text := field.GetValue().GetJsonValue(); text != "" {
+				if parsed, err := factorname.ParseParams(text); err == nil {
+					params = parsed
+				}
+			}
 			continue
 		}
 		if number, ok := numericValue(field.GetValue()); ok {
 			values[field.GetFieldId()] = number
 		}
 	}
-	return Row{SubjectID: row.GetKey().GetSubjectId(), SeriesTag: row.GetKey().GetSeriesTag(), DataTime: at.UTC(), Values: values}, nil
+	return Row{SubjectID: row.GetKey().GetSubjectId(), SeriesTag: row.GetKey().GetSeriesTag(), DataTime: at.UTC(), Values: values, Params: params}, nil
 }
 
 // numericValue 把 Storage 的类型值转为 float64；非数值或非有限值视为缺失。

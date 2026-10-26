@@ -9,14 +9,21 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
-// rowEnv 构造一行的表达式环境：列值、截面预计算变量、score、instrument_id 与 bars。
-func rowEnv(id string, row Row, score float64, vars map[string]float64) map[string]any {
-	env := make(map[string]any, len(row.Values)+len(vars)+3)
+// rowEnv 构造一行的表达式环境：列值、截面预计算变量、params() 的参数值、score、instrument_id 与 bars。
+func rowEnv(expression *dsl.Expression, id string, row Row, score float64, vars map[string]float64) map[string]any {
+	env := make(map[string]any, len(row.Values)+len(vars)+len(expression.ParamRefs)+3)
 	for column, value := range row.Values {
 		env[column] = value
 	}
 	for name, value := range vars {
 		env[name] = value
+	}
+	for _, ref := range expression.ParamRefs {
+		value, ok := row.Params[ref.Member][ref.Name]
+		if !ok {
+			value = math.NaN()
+		}
+		env[ref.Variable] = value
 	}
 	env["instrument_id"] = id
 	env["score"] = score
@@ -30,7 +37,7 @@ func rowEnv(id string, row Row, score float64, vars map[string]float64) map[stri
 
 // runBool 对一行执行布尔表达式。
 func runBool(expression *dsl.Expression, id string, row Row, score float64) (bool, error) {
-	value, err := expression.Run(rowEnv(id, row, score, nil))
+	value, err := expression.Run(rowEnv(expression, id, row, score, nil))
 	if err != nil {
 		return false, errExprRuntime
 	}
@@ -81,7 +88,7 @@ func evaluateNumeric(expression *dsl.Expression, ids []string, rows map[string]R
 		}
 	}
 	for _, id := range sample {
-		value, err := expression.Run(rowEnv(id, rows[id], 0, vars[id]))
+		value, err := expression.Run(rowEnv(expression, id, rows[id], 0, vars[id]))
 		if err != nil {
 			result.failed[id] = scoreRuntimeReason
 			continue

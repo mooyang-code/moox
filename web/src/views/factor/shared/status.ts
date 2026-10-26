@@ -1,15 +1,14 @@
-import type { FactorSetStatus, MemberStatus, PeriodFactorStatus, RecalcJob, RecalcJobStatus } from "@/api/factor/types";
+import type { FactorTaskStatus, MemberStatus, PeriodFactorStatus, RecalcJob, RecalcJobStatus } from "@/api/factor/types";
 
 export interface StatusTag {
   label: string;
   color: string;
 }
 
-const setStatusTags: Record<FactorSetStatus, StatusTag> = {
+const taskStatusTags: Record<FactorTaskStatus, StatusTag> = {
   pending: { label: "创建中", color: "blue" },
   enabled: { label: "运行中", color: "green" },
-  disabled: { label: "已停用", color: "orange" },
-  deleting: { label: "清理中", color: "gray" }
+  disabled: { label: "已停用", color: "orange" }
 };
 
 const memberStatusTags: Record<MemberStatus, StatusTag> = {
@@ -33,7 +32,7 @@ const jobStatusTags: Record<RecalcJobStatus, StatusTag> = {
 
 const unknownTag = (value: string): StatusTag => ({ label: value || "-", color: "gray" });
 
-export const setStatusTag = (status: string) => setStatusTags[status as FactorSetStatus] ?? unknownTag(status);
+export const taskStatusTag = (status: string) => taskStatusTags[status as FactorTaskStatus] ?? unknownTag(status);
 export const memberStatusTag = (status: string) => memberStatusTags[status as MemberStatus] ?? unknownTag(status);
 export const periodStatusTag = (status: string) => periodStatusTags[status as PeriodFactorStatus] ?? unknownTag(status);
 export const jobStatusTag = (status: string) => jobStatusTags[status as RecalcJobStatus] ?? unknownTag(status);
@@ -44,7 +43,6 @@ export const factorTypeLabel = (type: string) =>
 export const isActiveJob = (job: Pick<RecalcJob, "status">) => job.status === "accepted" || job.status === "running";
 
 const DEGRADED_PREFIX = "degraded:";
-const ENABLE_REQUEST_PREFIX = "factor-enable-";
 
 /** 后端把分块降级说明写在成功任务的 error 字段，以 `degraded:` 为前缀；它不是错误。 */
 export function splitJobNote(job: Pick<RecalcJob, "status" | "error">) {
@@ -53,9 +51,6 @@ export function splitJobNote(job: Pick<RecalcJob, "status" | "error">) {
   if (text.startsWith(DEGRADED_PREFIX)) return { degraded: text.slice(DEGRADED_PREFIX.length).trim() || "部分降级", error: "" };
   return { degraded: "", error: text };
 }
-
-export const jobSourceLabel = (job: Pick<RecalcJob, "request_id">) =>
-  job.request_id.startsWith(ENABLE_REQUEST_PREFIX) ? "启用回填" : "手动补算";
 
 export function jobProgress(job: Pick<RecalcJob, "status" | "start_time" | "end_time" | "progress_time">) {
   if (job.status === "succeeded") return 100;

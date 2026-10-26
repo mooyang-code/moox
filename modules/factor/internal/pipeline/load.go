@@ -21,9 +21,9 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	}
 	result := LoadResult{Frames: make(map[string]*storageio.Frame)}
 	subjects := uniqueSorted(plan.Available)
-	failedSet := make(map[string]struct{}, len(plan.UpstreamFailed))
+	failedTask := make(map[string]struct{}, len(plan.UpstreamFailed))
 	for _, subject := range plan.UpstreamFailed {
-		failedSet[subject] = struct{}{}
+		failedTask[subject] = struct{}{}
 	}
 	if len(subjects) == 0 {
 		result.FailedSubjects = uniqueSorted(plan.UpstreamFailed)
@@ -41,24 +41,24 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 		result.Frames[subject] = frame
 	}
 	for _, subject := range data.Failed {
-		failedSet[subject] = struct{}{}
+		failedTask[subject] = struct{}{}
 	}
 	for _, subject := range result.WarmingSubjects {
-		failedSet[subject] = struct{}{}
+		failedTask[subject] = struct{}{}
 	}
 	for _, subject := range subjects {
-		if _, failed := failedSet[subject]; !failed {
+		if _, failed := failedTask[subject]; !failed {
 			result.Available = append(result.Available, subject)
 		}
 	}
-	for subject := range failedSet {
+	for subject := range failedTask {
 		result.FailedSubjects = append(result.FailedSubjects, subject)
 	}
 	result.FailedSubjects = uniqueSorted(result.FailedSubjects)
 	return result, nil
 }
 
-// WarmupStatuses 返回各集合内存窗口的载入状态。
+// WarmupStatuses 返回各任务内存窗口的载入状态。
 func (r *Runner) WarmupStatuses() []WarmupStatus {
 	if r == nil || r.data == nil {
 		return nil

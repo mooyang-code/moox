@@ -13,7 +13,7 @@ function scopeWith(outputs: string[], baseMarket = ["open", "close"], otherSourc
   const items = outputs.map(column => ({
     column,
     output: column,
-    alias: column,
+    memberKey: column,
     factorId: column,
     factorName: column,
     categoryId: "c"
@@ -21,7 +21,7 @@ function scopeWith(outputs: string[], baseMarket = ["open", "close"], otherSourc
   return {
     outputs: items,
     outputByColumn: new Map(items.map(item => [item.column, item])),
-    paramsByAlias: new Map(),
+    paramsColumn: "",
     baseMarket,
     otherSource,
     categoryNames: new Map(),
@@ -61,7 +61,7 @@ describe("列设置", () => {
     expect(normalized.pinned[0]).toBe("f0");
   });
 
-  it("按因子集分别读写本地存储；存储不可用或 JSON 无效时回到默认", () => {
+  it("按因子任务分别读写本地存储；存储不可用或 JSON 无效时回到默认", () => {
     const scope = scopeWith(["rsi"]);
     saveColumnSettings("set-a", { hiddenSystem: ["freq"], market: ["close"], pinned: ["rsi"] });
     expect(loadColumnSettings("set-a", scope)).toEqual({ hiddenSystem: ["freq"], market: ["close"], pinned: ["rsi"] });

@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
-// Previewer 在因子集的源数据上试算一个定义。
+// Previewer 在因子任务的源数据上试算一个定义。
 type Previewer interface {
 	Preview(ctx context.Context, req preview.Request) (preview.Result, error)
 }
@@ -20,10 +20,16 @@ type Previewer interface {
 // 校验与试算时临时定义使用的 factor_id 与 name：只用于编译，不落库。
 const draftFactorID, draftFactorName = "draft", "draft"
 
-// draftDefinition 把请求里的 spec 编译成临时定义。
-func draftDefinition(spec string, allowPartial bool) (domain.FactorDef, error) {
+// draftDefinition 把请求里的 spec 编译成临时定义；请求带了因子 ID 就用它（单输出因子的输出名就是因子 ID），否则按草稿处理。
+func draftDefinition(factorID, spec string, allowPartial bool) (domain.FactorDef, error) {
+	name := draftFactorName
+	if factorID == "" {
+		factorID = draftFactorID
+	} else {
+		name = factorID
+	}
 	return domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: draftFactorID, Name: draftFactorName, Spec: spec, AllowPartialUniverse: allowPartial,
+		FactorID: factorID, Name: name, Spec: spec, AllowPartialUniverse: allowPartial,
 	})
 }
 
@@ -32,7 +38,7 @@ func (s *Service) ValidateFactorSpec(_ context.Context, req *factorpb.ValidateFa
 	if req == nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: invalid(errors.New("spec is required"))}, nil
 	}
-	def, err := draftDefinition(req.GetSpec(), req.GetAllowPartialUniverse())
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
 	if err != nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: success(), Valid: false, Diagnostic: diagnosticToPB(err)}, nil
 	}
@@ -57,22 +63,22 @@ func diagnosticToPB(err error) *factorpb.FactorSpecDiagnostic {
 	return &factorpb.FactorSpecDiagnostic{Message: err.Error()}
 }
 
-// PreviewFactor 在指定因子集的源数据上试算一个定义。
+// PreviewFactor 在指定因子任务的源数据上试算一个定义。
 func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactorReq) (*factorpb.PreviewFactorRsp, error) {
-	if req == nil || req.GetSetId() == "" {
-		return &factorpb.PreviewFactorRsp{RetInfo: invalid(errors.New("set_id is required"))}, nil
+	if req == nil || req.GetTaskId() == "" {
+		return &factorpb.PreviewFactorRsp{RetInfo: invalid(errors.New("task_id is required"))}, nil
 	}
 	if s.previewer == nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: inner(errors.New("试算未启用"))}, nil
 	}
-	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	def, err := draftDefinition(req.GetSpec(), req.GetAllowPartialUniverse())
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(fmt.Errorf("定义不合法：%w", err))}, nil
 	}
-	set, _, err := s.catalog.GetSet(ctx, req.GetSetId())
+	set, _, err := s.catalog.GetTask(ctx, req.GetTaskId())
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}

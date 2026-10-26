@@ -20,19 +20,19 @@ var ErrLeaseConflict = errors.New("factor engine lease is held by another engine
 
 // Store is the catalog and job storage the hub reads and leases from.
 type Store interface {
-	ListSets(ctx context.Context) ([]domain.FactorSet, error)
-	GetSet(ctx context.Context, setID string) (domain.FactorSet, error)
-	ListMembers(ctx context.Context, setID, status string) ([]domain.SetMember, error)
-	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipSets map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
-	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, now time.Time, ttl time.Duration) (store.RecalcJob, error)
+	ListTasks(ctx context.Context) ([]domain.FactorTask, error)
+	GetTask(ctx context.Context, taskID string) (domain.FactorTask, error)
+	ListMembers(ctx context.Context, taskID, status string) ([]domain.TaskMember, error)
+	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
+	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time, ttl time.Duration) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
 }
 
 const (
 	DefaultEngineLeaseTTL = 45 * time.Second
 	DefaultJobLeaseTTL    = 15 * time.Minute
-	// DefaultMaxRunningJobs 同时只跑一个补算任务：补算整窗口读取源数据，DataNode 通常只有几个核，
-	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子集同时回填把 storage-node 打到 330% CPU）。
+	// DefaultMaxRunningJobs 同时只跑一个补算作业：补算整窗口读取源数据，DataNode 通常只有几个核，
+	// 并发的回填会让在线计算也读不动（2026-10-14 两个 1h 因子任务同时回填把 storage-node 打到 330% CPU）。
 	DefaultMaxRunningJobs = 1
 )
 
@@ -46,7 +46,7 @@ func WithEngineLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.engi
 // progress report; it must exceed the duration of one recalc chunk.
 func WithJobLeaseTTL(ttl time.Duration) Option { return func(h *Hub) { h.jobTTL = ttl } }
 
-// WithMaxRunningJobs 设置同时运行的补算任务上限（所有引擎合计），0 表示不限制。
+// WithMaxRunningJobs 设置同时运行的补算作业上限（所有引擎合计），0 表示不限制。
 func WithMaxRunningJobs(n int) Option { return func(h *Hub) { h.maxRunningJobs = n } }
 
 type Hub struct {
@@ -54,7 +54,7 @@ type Hub struct {
 	engineTTL time.Duration
 	jobTTL    time.Duration
 	now       func() time.Time
-	// maxRunningJobs 是同时运行的补算任务上限。补算按整窗口读取源数据，同时跑的任务多了会把 Storage 打满。
+	// maxRunningJobs 是同时运行的补算作业上限。补算按整窗口读取源数据，同时跑的任务多了会把 Storage 打满。
 	maxRunningJobs int
 
 	mu     sync.Mutex
@@ -119,9 +119,9 @@ func (h *Hub) Heartbeat(ctx context.Context, id domain.EngineIdentity, status do
 
 // SetResultReady records whether a set's result dataset accepted its columns
 // in the latest reconciliation; the engine only computes ready sets.
-func (h *Hub) SetResultReady(setID string, ready bool) {
+func (h *Hub) SetResultReady(taskID string, ready bool) {
 	h.mu.Lock()
-	h.ready[setID] = ready
+	h.ready[taskID] = ready
 	h.mu.Unlock()
 }
 
@@ -151,22 +151,22 @@ func (h *Hub) Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatu
 }
 
 // LatestRun returns the engine's most recent live period of one set.
-func (h *Hub) LatestRun(setID string) domain.SetRunSummary {
+func (h *Hub) LatestRun(taskID string) domain.TaskRunSummary {
 	now := h.now().UTC()
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.engine != nil {
 		for _, run := range withLag(h.engine.status.RecentRuns, now) {
-			if run.SetID == setID {
+			if run.TaskID == taskID {
 				return run
 			}
 		}
 	}
-	return domain.SetRunSummary{SetID: setID}
+	return domain.TaskRunSummary{TaskID: taskID}
 }
 
-func withLag(runs []domain.SetRunSummary, now time.Time) []domain.SetRunSummary {
-	out := make([]domain.SetRunSummary, len(runs))
+func withLag(runs []domain.TaskRunSummary, now time.Time) []domain.TaskRunSummary {
+	out := make([]domain.TaskRunSummary, len(runs))
 	for i, run := range runs {
 		run.LagSeconds = max(0, now.Unix()-run.LastPeriodTime)
 		out[i] = run
@@ -186,8 +186,8 @@ func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 // HoldsLease 报告 id 是否是当前持有引擎租约的进程（冻结参数等只允许持有租约的引擎调用）。
 func (h *Hub) HoldsLease(id domain.EngineIdentity) bool { return h.holdsLease(id, h.now().UTC()) }
 
-func (h *Hub) isReady(setID string) bool {
+func (h *Hub) isReady(taskID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.ready[setID]
+	return h.ready[taskID]
 }

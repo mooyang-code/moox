@@ -67,7 +67,7 @@ func Validate(s *Strategy) error {
 	if err := validatePortfolio(&s.Portfolio); err != nil {
 		return err
 	}
-	if err := validateFactors(s); err != nil {
+	if err := validateFactorParams(s); err != nil {
 		return err
 	}
 	if len(s.Rules) == 0 {

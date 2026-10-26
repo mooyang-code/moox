@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,7 +128,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -147,7 +148,7 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: dslYaml, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", ViewID: "view_a", LogicalAccountID: account, CreatedAt: bar0}); err != nil {
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: account, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(resolved)
@@ -181,10 +182,14 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 	}
 	factors := make([]*storagepb.FactorPeriodState, 0, len(hashes))
 	for id, hash := range hashes {
-		factors = append(factors, &storagepb.FactorPeriodState{MemberAlias: id, FactorId: id, Status: status, DefinitionHash: hash})
+		kind, factorID := "fixed", id
+		if base, ok := strings.CutSuffix(id, "__var"); ok {
+			kind, factorID = "var", base
+		}
+		factors = append(factors, &storagepb.FactorPeriodState{MemberKey: id, MemberKind: kind, FactorId: factorID, Status: status, DefinitionHash: hash})
 	}
 	message := &eventpb.EventMessage{EventId: fmt.Sprintf("event-%d", n), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}
+	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}
 	return message, payload
 }
 
@@ -469,7 +474,7 @@ func TestHandlePreviousBarVersionEvidence(t *testing.T) {
 		t.Fatalf("首期应为 previous_version_unknown：%+v", first)
 	}
 	var record store.InputRecord
-	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Factors["f"] != "h1" {
+	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Factors["f"] != "h1|fixed" {
 		t.Fatalf("首期应记录本期指纹：%s err=%v", first.InputJSON, err)
 	}
 	h.now = barStart(2).Add(90 * time.Minute)

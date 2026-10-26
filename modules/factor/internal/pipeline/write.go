@@ -35,7 +35,7 @@ func (r *Runner) Write(ctx context.Context, plan Plan, target time.Time, rows []
 			end = len(rows)
 		}
 		batch := rows[start:end]
-		commitID := storageio.CommitIDWithSalt(plan.Set.SetID, target.Unix(), plan.CommitSalt, batch)
+		commitID := storageio.CommitIDWithSalt(plan.Set.TaskID, target.Unix(), plan.CommitSalt, batch)
 		if err := r.writeBatch(ctx, plan, commitID, batch, retries); err != nil {
 			return fmt.Errorf("write factor result rows %d:%d: %w", start, end, err)
 		}

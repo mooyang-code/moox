@@ -29,10 +29,23 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 	return v.validateRow(ctx, row, v.snapshotReader(ctx))
 }
 
+// ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次：快照查询是对全部元数据条目的线性扫描，
+// 逐行查询时一个 1000 行的请求要扫两千遍。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
 func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
+	if v == nil {
+		return fmt.Errorf("metadata validator is not configured")
+	}
 	reader := v.snapshotReader(ctx)
+	schemas := make(map[[2]string]*datasetSchema)
 	for _, row := range rows {
-		if err := v.validateRow(ctx, row, reader); err != nil {
+		key := row.GetKey()
+		id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
+		schema, ok := schemas[id]
+		if !ok {
+			schema = &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+			schemas[id] = schema
+		}
+		if err := schema.check(ctx, row); err != nil {
 			return err
 		}
 	}
@@ -93,7 +106,65 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 		return fmt.Errorf("metadata validator is not configured")
 	}
 	key := row.GetKey()
-	dataset, err := reader.GetDataset(ctx, key.GetSpaceId(), key.GetDatasetId())
+	schema := &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+	return schema.check(ctx, row)
+}
+
+// datasetSchema 按需加载并缓存校验一个数据集的行所需的元数据：先取数据集，用到时再取列定义。
+type datasetSchema struct {
+	reader             metadataReader
+	spaceID, datasetID string
+	dataset            *pb.Dataset
+	datasetLoaded      bool
+	allowed            map[string]*pb.DatasetColumn
+	columnsLoaded      bool
+}
+
+func (d *datasetSchema) loadDataset(ctx context.Context) (*pb.Dataset, error) {
+	if d.reader == nil {
+		return nil, fmt.Errorf("metadata validator is not configured")
+	}
+	if !d.datasetLoaded {
+		dataset, err := d.reader.GetDataset(ctx, d.spaceID, d.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		d.dataset, d.datasetLoaded = dataset, true
+	}
+	return d.dataset, nil
+}
+
+func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.DatasetColumn, error) {
+	if d.columnsLoaded {
+		return d.allowed, nil
+	}
+	const pageSize = uint32(1000)
+	var columns []*pb.DatasetColumn
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := d.reader.ListDatasetColumns(ctx, d.spaceID, d.datasetID, &pb.Page{Page: pageNo, Size: pageSize})
+		if err != nil {
+			return nil, err
+		}
+		columns = append(columns, items...)
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
+	}
+	allowed := make(map[string]*pb.DatasetColumn, len(columns)*2)
+	for _, column := range columns {
+		if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
+			continue
+		}
+		allowed[column.GetColumnName()] = column
+		allowed[column.GetOriginId()] = column
+	}
+	d.allowed, d.columnsLoaded = allowed, true
+	return allowed, nil
+}
+
+func (d *datasetSchema) check(ctx context.Context, row *pb.RowFieldUpsert) error {
+	key := row.GetKey()
+	dataset, err := d.loadDataset(ctx)
 	if err != nil {
 		return err
 	}
@@ -110,25 +181,9 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
 		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
 	}
-	const pageSize = uint32(1000)
-	var columns []*pb.DatasetColumn
-	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), &pb.Page{Page: pageNo, Size: pageSize})
-		if err != nil {
-			return err
-		}
-		columns = append(columns, items...)
-		if page == nil || !page.GetHasMore() || len(items) == 0 {
-			break
-		}
-	}
-	allowed := make(map[string]*pb.DatasetColumn, len(columns)*2)
-	for _, column := range columns {
-		if column == nil || (column.GetStatus() != "" && column.GetStatus() != "active") {
-			continue
-		}
-		allowed[column.GetColumnName()] = column
-		allowed[column.GetOriginId()] = column
+	allowed, err := d.loadColumns(ctx)
+	if err != nil {
+		return err
 	}
 	for _, field := range row.GetFields() {
 		column := allowed[field.GetFieldId()]

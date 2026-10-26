@@ -154,7 +154,7 @@ export function checklistBlockers(items: ChecklistItem[]) {
   return items.filter(entry => !entry.ok).map(entry => entry.message);
 }
 
-/** 提交体：不带派生字段、set_id、status，也不带参考数据集。 */
+/** 提交体：不带派生字段、task_id、status，也不带参考数据集。 */
 export function buildFactorPayload(form: FactorFormState, factorType?: FactorType): FactorInput {
   const payload: FactorInput = {
     factor_id: form.factor_id.trim(),

@@ -4,7 +4,7 @@
       <div class="result-toolbar">
         <span class="result-count">
           共 {{ replayTotal }} 个回放<span v-if="readAt">；状态读取：{{ readAt }}</span>
-          <InfoTip text="基于 View 的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
+          <InfoTip text="基于因子任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
         </span>
         <a-space wrap
           ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
@@ -69,7 +69,7 @@
                 · 实例 <span class="mono">{{ selected.instance_id }}</span
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · View {{ selected.view_id }} · 区间 {{ replayRangeLabel(selected) }} · 手续费 {{ selected.fee_bps }} bps
+              · 因子任务 {{ selected.factor_task_id }} · 区间 {{ replayRangeLabel(selected) }} · 手续费 {{ selected.fee_bps }} bps
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
               >
@@ -240,14 +240,14 @@
         :model-value="form"
         :visible="parsed.create"
         :strategies="strategyStore.strategyCatalog"
-        :views="views"
-        :views-loading="viewsLoading"
+        :tasks="tasks"
+        :tasks-loading="tasksLoading"
         :starting="starting"
-        :errors="{ strategies: errors.strategies, views: errors.views, start: errors.start }"
+        :errors="{ strategies: errors.strategies, tasks: errors.tasks, start: errors.start }"
         @close="closeCreate"
         @start="start"
         @retry-strategies="loadStrategies"
-        @retry-views="loadViews"
+        @retry-tasks="loadTasks"
       />
     </div>
   </div>
@@ -263,8 +263,8 @@ import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } fro
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportControlError, serverNow } from "@/api/admin/http";
-import { listViews } from "@/api/storage/metadata";
-import type { View } from "@/api/storage/types";
+import { listFactorTasks } from "@/api/factor";
+import type { FactorTask } from "@/api/factor/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
@@ -309,7 +309,7 @@ const seriesPageSize = 2000;
 const replays = ref<Replay[]>([]);
 const replayTotal = ref(0);
 const replayPage = ref(parseReplayQuery(route.query).page);
-const views = ref<View[]>([]);
+const tasks = ref<FactorTask[]>([]);
 // series 是 brief 周期记录（只有曲线与摘要字段），tableRows 是表格当前页的完整记录。
 const series = ref<ReplayBar[]>([]);
 const tableRows = ref<ReplayBar[]>([]);
@@ -322,13 +322,13 @@ const detailLoading = ref(false);
 const listLoading = ref(false);
 // readAt 是回放列表最近一次成功读取的时间（轮询也算）。
 const readAt = ref("");
-const viewsLoading = ref(false);
+const tasksLoading = ref(false);
 const starting = ref(false);
 const cancelling = ref(false);
 // 错误按来源分别记录：某一处成功只清除自己的错误，不会误清其它来源的提示；切换空间时全部清空。
-const errors = reactive<Record<"strategies" | "views" | "list" | "detail" | "table" | "start", string>>({
+const errors = reactive<Record<"strategies" | "tasks" | "list" | "detail" | "table" | "start", string>>({
   strategies: "",
-  views: "",
+  tasks: "",
   list: "",
   detail: "",
   table: "",
@@ -347,7 +347,7 @@ const form = reactive<ReplayFormState>({
   strategy_id: String(route.query.strategy_id || ""),
   dsl_yaml: "",
   instance_id: String(route.query.instance_id || ""),
-  view_id: String(route.query.view_id || ""),
+  factor_task_id: String(route.query.factor_task_id || ""),
   start: presetStart,
   end: presetEnd,
   fee_bps: 10
@@ -486,25 +486,26 @@ function changeReplayPage(page: number) {
   loadReplays();
 }
 
-async function loadViews() {
+async function loadTasks() {
   const gen = generation;
   const spaceId = spaceStore.selectedSpaceId;
   if (!spaceId) return;
-  viewsLoading.value = true;
+  tasksLoading.value = true;
   try {
-    const items: View[] = [];
+    const items: FactorTask[] = [];
     for (let page = 1; ; page += 1) {
-      const rsp = await listViews({ space_id: spaceId, status: "active", page: { page, size: 200 } });
+      const rsp = await listFactorTasks({ page: { page, size: 200 } });
       if (gen !== generation) return;
-      items.push(...(rsp.views || []));
-      if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
+      items.push(...(rsp.factor_tasks || []).map(info => info.factor_task));
+      if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
     }
-    views.value = items;
-    errors.views = "";
+    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）。
+    tasks.value = items.filter(task => task.space_id === spaceId && task.status !== "pending");
+    errors.tasks = "";
   } catch (err) {
-    if (gen === generation) errors.views = `View 列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+    if (gen === generation) errors.tasks = `因子任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
-    if (gen === generation) viewsLoading.value = false;
+    if (gen === generation) tasksLoading.value = false;
   }
 }
 
@@ -764,7 +765,7 @@ async function start() {
   try {
     const started = await startReplay({
       ...source,
-      view_id: form.view_id,
+      factor_task_id: form.factor_task_id,
       start_time: startTime,
       end_time: endTime,
       fee_bps: Number(form.fee_bps) || 0
@@ -818,14 +819,14 @@ function closeCreate() {
 }
 /** 建立创建上下文时应用入口预填；之后的翻页、选择、轮询都不会覆盖正在编辑的草稿。 */
 function applyPrefill() {
-  const { strategyId, instanceId, viewId } = parsed.value.prefill;
+  const { strategyId, instanceId, factorTaskId } = parsed.value.prefill;
   if (instanceId) form.instance_id = instanceId;
   else if (strategyId) {
     form.instance_id = "";
     form.strategy_id = strategyId;
     form.source = "definition";
   }
-  if (viewId) form.view_id = viewId;
+  if (factorTaskId) form.factor_task_id = factorTaskId;
 }
 /** URL 里有显式 replay_id 时直接读取它（即使不在当前列表页），失败也不回退到第一条。 */
 function applyRouteSelection() {
@@ -866,7 +867,7 @@ onMounted(() => {
     loadStrategies();
     applyRouteSelection();
   }
-  loadViews();
+  loadTasks();
   loadReplays();
   startPolling();
 });
@@ -918,21 +919,21 @@ watch(
     series.value = [];
     tableRows.value = [];
     tableTotal.value = 0;
-    views.value = [];
+    tasks.value = [];
     // 空间初始化（无 → 有）只是首次加载，保留深链接与预填；真正的 A → B 切换才清空对象、分页、创建上下文。
     if (previous) {
-      form.view_id = "";
+      form.factor_task_id = "";
       form.instance_id = "";
       replayPage.value = 1;
       writeQuery({ replayId: "", page: 1, barPage: 1, create: false });
     }
     listLoading.value = false;
-    viewsLoading.value = false;
+    tasksLoading.value = false;
     tableLoading.value = false;
     pollFailures.value = 0;
     chart?.release();
     chart = null;
-    loadViews();
+    loadTasks();
     loadReplays();
     // 只有空间初始化才按 URL 恢复深链接选择；真实切换时旧空间的 replay_id 不属于新空间，由新列表自动选择。
     if (next && !previous) applyRouteSelection();

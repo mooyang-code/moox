@@ -4,9 +4,11 @@ import {
   arrivalChains,
   arrivalChartSpec,
   arrivalModel,
+  arrivalTaskOptions,
   arrivalWindowAt,
   defaultArrivalAnchor,
   defaultArrivalScale,
+  needsTaskChoice,
   pipelineDisplayNames,
   shiftArrivalAnchor
 } from "./arrival-model";
@@ -203,5 +205,26 @@ describe("arrival window", () => {
     expect(spec.data[0].values).toEqual([]);
     expect(spec.axes.find((axis: any) => axis.orient === "left").max).toBe(12);
     expect(spec.axes.find((axis: any) => axis.orient === "bottom").min).toBe(at("18:11"));
+  });
+});
+
+describe("arrival task choice", () => {
+  const history = (tasks: Array<{ task_id: string; name?: string }>) => ({ series: [], tasks }) as never;
+
+  it("lists the tasks of the source dataset as select options", () => {
+    expect(arrivalTaskOptions(undefined)).toEqual([]);
+    expect(arrivalTaskOptions(history([{ task_id: "ftask_a", name: "现货因子" }, { task_id: "ftask_b" }]))).toEqual([
+      { value: "ftask_a", label: "现货因子（ftask_a）" },
+      { value: "ftask_b", label: "ftask_b（ftask_b）" }
+    ]);
+  });
+
+  it("asks for a choice only when there are several tasks and none is selected", () => {
+    const several = history([{ task_id: "ftask_a" }, { task_id: "ftask_b" }]);
+    expect(needsTaskChoice(several, "")).toBe(true);
+    expect(needsTaskChoice(several, "ftask_a")).toBe(false);
+    expect(needsTaskChoice(history([{ task_id: "ftask_a" }]), "")).toBe(false);
+    expect(needsTaskChoice(history([]), "")).toBe(false);
+    expect(needsTaskChoice(undefined, "")).toBe(false);
   });
 });

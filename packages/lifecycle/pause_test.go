@@ -42,7 +42,7 @@ func (f *catchupFake) hook(_ context.Context, ref Ref, since time.Time) (Catchup
 	return cu, nil
 }
 
-var set2 = Ref{Kind: "factor_set", ID: "set2"}
+var set2 = Ref{Kind: "factor_task", ID: "set2"}
 
 // fixture 是两个运行中的对象加可控的追赶钩子。
 type fixture struct {
@@ -219,7 +219,7 @@ func TestModuleResumeMembersAndManualExclusion(t *testing.T) {
 	fx.c.Refresh(ctx)
 	rep := fx.c.CatchupReport(ctx)
 	require.False(t, rep.CaughtUp)
-	require.Equal(t, "factor_set/set1", rep.Self.Catchup.BlockedBy, "被没追平的参与对象阻塞")
+	require.Equal(t, "factor_task/set1", rep.Self.Catchup.BlockedBy, "被没追平的参与对象阻塞")
 
 	fx.cu.set(Ref{}, true)
 	fx.cu.set(set1, true)
@@ -403,8 +403,8 @@ func TestAutoResumeGoesThroughCatchup(t *testing.T) {
 	require.Equal(t, StageRunning, fx.c.Stage(set1))
 	fx.f.mu.Lock()
 	defer fx.f.mu.Unlock()
-	require.Contains(t, fx.f.changes, "factor_set/set1:paused>resuming")
-	require.Contains(t, fx.f.changes, "factor_set/set1:resuming>running")
+	require.Contains(t, fx.f.changes, "factor_task/set1:paused>resuming")
+	require.Contains(t, fx.f.changes, "factor_task/set1:resuming>running")
 }
 
 func TestStageColorsOfNewStages(t *testing.T) {

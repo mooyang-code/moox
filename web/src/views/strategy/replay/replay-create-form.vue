@@ -32,10 +32,10 @@
         />
       </a-form-item>
     </template>
-    <a-form-item label="View" required>
-      <a-select v-model="form.view_id" allow-search :loading="viewsLoading" placeholder="选择 View（第一版只支持现货）">
-        <a-option v-for="view in views" :key="view.view_id" :value="view.view_id"
-          >{{ view.name || view.view_id }}（{{ view.view_id }} · {{ view.freq || "无周期" }}）</a-option
+    <a-form-item label="因子任务" required>
+      <a-select v-model="form.factor_task_id" allow-search :loading="tasksLoading" placeholder="选择因子任务（第一版只支持现货）">
+        <a-option v-for="task in tasks" :key="task.task_id" :value="task.task_id"
+          >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option
         >
       </a-select>
     </a-form-item>
@@ -52,7 +52,7 @@
           <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
           <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
         </a-space>
-        <div class="muted range-hint">A 股日线 View 按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
+        <div class="muted range-hint">A 股日线任务按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
       </div>
     </a-form-item>
     <a-form-item label="单边手续费（bps）"><a-input-number v-model="form.fee_bps" :min="0" :max="1000" :step="1" /></a-form-item>
@@ -61,13 +61,13 @@
 
 <script setup lang="ts">
 import type { Strategy } from "@/api/strategy-types";
-import type { View } from "@/api/storage/types";
+import type { FactorTask } from "@/api/factor/types";
 import type { ReplayFormState } from "@/views/strategy/replay/replay-form-model";
 import { recentUtcRange } from "@/views/strategy/replay/model";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
-defineProps<{ strategies: Strategy[]; views: View[]; viewsLoading: boolean }>();
+defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLoading: boolean }>();
 
 function applyPreset(days: number) {
   [form.value.start, form.value.end] = recentUtcRange(days);

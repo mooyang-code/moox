@@ -34,8 +34,6 @@ type MigrateOptions struct {
 	TLSModeHost, TLSMode string
 	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
 	FactorsEnabled string
-	// AddDefaultFactors 为 true 时补上内置样例里有、配置里还没有的默认因子定义与成员（--add-default-factors）。
-	AddDefaultFactors bool
 	// RetentionTarget / RetentionValue 非空时设置某个频率的保留期（--set-retention defaults.1m=35d）。
 	RetentionTarget, RetentionValue string
 	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
@@ -113,8 +111,6 @@ type MigrateReport struct {
 	FactorsEnabled string `json:"factors_enabled,omitempty"`
 	// Retention 记录 --set-retention 的结果。
 	Retention map[string]string `json:"retention,omitempty"`
-	// DefaultFactors 记录 --add-default-factors 补上的定义与成员。
-	DefaultFactors *DefaultFactorsReport `json:"default_factors,omitempty"`
 	// Reachability 记录 --set-reachability 的结果。
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
@@ -172,13 +168,6 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.Retention = map[string]string{opts.RetentionTarget: opts.RetentionValue}
-	}
-	if opts.AddDefaultFactors {
-		var added DefaultFactorsReport
-		if migrated, added, err = addDefaultFactors(migrated); err != nil {
-			return report, err
-		}
-		report.DefaultFactors = &added
 	}
 	if opts.ReachabilityHost != "" {
 		if migrated, err = setHostReachability(migrated, opts.ReachabilityHost, opts.Reachability); err != nil {
@@ -403,7 +392,7 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
 	for _, b := range blocks {
 		if b.header == "factors.items" {
-			return nil, errors.New("[[factors.items]] 是更早的格式，需要先手工拆成 [[factors.definitions]] 与 [[factors.members]]")
+			return nil, errors.New("[[factors.items]] 是更早的格式，需要先手工改成 [[factors.definitions]] 与 [[factors.tasks]]")
 		}
 	}
 	if err := renameLegacyPlacements(blocks, report); err != nil {

@@ -11,14 +11,14 @@ import (
 
 func TestResolveExampleStrategy(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if resolved.Bar != "1h" || resolved.Calendar != DefaultCalendar || !resolved.Spot || resolved.MarketType != "spot" || resolved.SourceDatasetID != "ds_kline" {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
-	if resolved.Factors["ma"] != "sha256:ma" || resolved.Factors["bias"] != "sha256:bias" || resolved.Factors["qv"] != "sha256:qv" || len(resolved.Factors) != 3 {
+	if resolved.Factors["ma"] != "sha256:ma|fixed" || resolved.Factors["bias"] != "sha256:bias|fixed" || resolved.Factors["qv"] != "sha256:qv|fixed" || len(resolved.Factors) != 3 {
 		t.Fatalf("因子指纹不符：%v", resolved.Factors)
 	}
 	if binding := resolved.Columns["ma_20"]; binding.Source != SourceFactor || binding.FactorID != "ma" || binding.DefinitionHash != "sha256:ma" {
@@ -52,7 +52,7 @@ func TestResolveExampleStrategy(t *testing.T) {
 		t.Fatalf("重新编译应按程序重算经 bars[-1] 读取的因子：%v", recompiled.PreviousFactors)
 	}
 	binding := resolved.ReadinessBinding()
-	if len(binding.PreviousFactors) != 1 || binding.PreviousFactors[0] != "ma" || binding.Factors["ma"] != "sha256:ma" {
+	if len(binding.PreviousFactors) != 1 || binding.PreviousFactors[0] != "ma" || binding.Factors["ma"] != "sha256:ma|fixed" {
 		t.Fatalf("就绪绑定不符：%+v", binding)
 	}
 }
@@ -68,7 +68,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	_, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	_, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err == nil || !strings.Contains(err.Error(), "momentum_99") || !strings.Contains(err.Error(), "可用列") || !strings.Contains(err.Error(), "ma_20") {
 		t.Fatalf("应报告缺失列并列出可用列：%v", err)
 	}
@@ -77,7 +77,7 @@ rules:
 func TestResolveRejectsBarAssertionMismatch(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "bar: 1h", "bar: 4h", 1))
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy); err == nil || !strings.Contains(err.Error(), "bar 断言") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy); err == nil || !strings.Contains(err.Error(), "bar 断言") {
 		t.Fatalf("bar 断言不符应拒绝：%v", err)
 	}
 }
@@ -99,10 +99,10 @@ rules:
 portfolio:
   leverage: 1.2
 `)
-	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "view_factor_1h", levered); err == nil || !strings.Contains(err.Error(), "leverage") {
+	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "ftask_1h", levered); err == nil || !strings.Contains(err.Error(), "leverage") {
 		t.Fatalf("现货应拒绝杠杆：%v", err)
 	}
-	if resolved, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", "view_factor_1h", levered); err != nil || resolved.Spot {
+	if resolved, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", "ftask_1h", levered); err != nil || resolved.Spot {
 		t.Fatalf("合约应允许杠杆：%+v err=%v", resolved, err)
 	}
 	short := parseStrategy(t, `name: short
@@ -114,10 +114,10 @@ rules:
     weight: {total: 0.5}
     side: short
 `)
-	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "view_factor_1h", short); err == nil || !strings.Contains(err.Error(), "做空") {
+	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "ftask_1h", short); err == nil || !strings.Contains(err.Error(), "做空") {
 		t.Fatalf("现货应拒绝做空：%v", err)
 	}
-	if _, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", "view_factor_1h", short); err != nil {
+	if _, _, err := Resolve(context.Background(), newFakeClient("swap"), "space", "ftask_1h", short); err != nil {
 		t.Fatalf("合约应允许做空：%v", err)
 	}
 }
@@ -125,18 +125,18 @@ rules:
 func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 	client := newFakeClient("spot")
 	tooOld := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 800\n", 1))
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", tooOld); err == nil || !strings.Contains(err.Error(), "保留根数") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", tooOld); err == nil || !strings.Contains(err.Error(), "保留根数") {
 		t.Fatalf("min_age_bars 超过保留根数应拒绝：%v", err)
 	}
 	client.factors["ma"] = FactorInfo{FactorID: "ma"}
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "definition_hash") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "definition_hash") {
 		t.Fatalf("缺少指纹应拒绝：%v", err)
 	}
 	client = newFakeClient("spot")
 	view := client.views["view_factor_1h"]
 	view.Status = "building"
 	client.views["view_factor_1h"] = view
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "active") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "active") {
 		t.Fatalf("非 active 的 View 应拒绝：%v", err)
 	}
 }
@@ -144,30 +144,30 @@ func TestResolveRejectsMinAgeBeyondRetentionAndMissingHash(t *testing.T) {
 // 市场类型：数据集属性优先，否则由源数据集标签判定；标签不一致或未知时拒绝。
 func TestResolveMarketTypeFromAttributesOrTags(t *testing.T) {
 	client := newFakeClient("swap")
-	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil || resolved.Spot || resolved.MarketType != "swap" {
 		t.Fatalf("binance_swap 标签应判定为合约：%+v err=%v", resolved, err)
 	}
 	source := client.datasets["ds_kline"]
 	source.Attributes = map[string]string{"market_type": "spot"}
 	client.datasets["ds_kline"] = source
-	if resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err != nil || !resolved.Spot {
+	if resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err != nil || !resolved.Spot {
 		t.Fatalf("数据集属性应优先：%+v err=%v", resolved, err)
 	}
 	source.Attributes = map[string]string{}
 	source.SubjectTags = []string{"binance_spot", "binance_swap"}
 	client.datasets["ds_kline"] = source
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
 		t.Fatalf("标签不一致应拒绝：%v", err)
 	}
 	source.SubjectTags = nil
 	client.datasets["ds_kline"] = source
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "无法确定市场类型") {
 		t.Fatalf("没有标签与属性应拒绝：%v", err)
 	}
 	source.SubjectTags = []string{"mixed_bad"}
 	client.datasets["ds_kline"] = source
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "不受支持") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err == nil || !strings.Contains(err.Error(), "不受支持") {
 		t.Fatalf("未知市场类型应拒绝：%v", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestResolveChecksAgeProbeColumnAndCoverage(t *testing.T) {
 	view.IndexedTo = barStart
 	view.IndexedFrom = barStart.Add(-100 * time.Hour)
 	client.views["view_factor_1h"] = view
-	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
 	if err != nil {
 		t.Fatalf("Resolve 不应读取覆盖统计：%v", err)
 	}
@@ -242,7 +242,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	if _, _, err := Resolve(context.Background(), noClose, "space", "view_factor_1h", plain); err == nil || !strings.Contains(err.Error(), "close") {
+	if _, _, err := Resolve(context.Background(), noClose, "space", "ftask_1h", plain); err == nil || !strings.Contains(err.Error(), "close") {
 		t.Fatalf("没有 close 列时不能使用 min_age_bars：%v", err)
 	}
 }
@@ -251,14 +251,64 @@ rules:
 func TestResolveChecksTagsAndInstruments(t *testing.T) {
 	client := newFakeClient("spot")
 	typoTag := parseStrategy(t, strings.Replace(exampleDSL, "exclude_tags: [stablecoins]", "exclude_tags: [stablecoin]", 1))
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", typoTag); err == nil || !strings.Contains(err.Error(), "stablecoin") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", typoTag); err == nil || !strings.Contains(err.Error(), "stablecoin") {
 		t.Fatalf("不存在的标签应拒绝：%v", err)
 	}
 	lowercase := parseStrategy(t, strings.Replace(exampleDSL, "pool: [BTC-USDT]", "pool: [btc-usdt]", 1))
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", lowercase); err == nil || !strings.Contains(err.Error(), "btc-usdt") {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", lowercase); err == nil || !strings.Contains(err.Error(), "btc-usdt") {
 		t.Fatalf("大小写不符的标的应拒绝：%v", err)
 	}
-	if _, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL)); err != nil {
+	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err != nil {
 		t.Fatalf("正确的引用应通过：%v", err)
+	}
+}
+
+// min_age_bars 的覆盖检查按关联任务的结果 View 判断：历史要先由因子计算或补算写进结果数据集，
+// 刚建立的结果 View 没有任何行时覆盖范围未知，拒绝启用；补算出足够的历史后才允许。
+func TestCheckCoverageUsesTheTaskResultView(t *testing.T) {
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))
+	client := newFakeClient("spot")
+	// 结果 View 刚建立，还没有任何行。
+	empty := client.views["view_factor_1h"]
+	empty.IndexedFrom, empty.IndexedTo = time.Time{}, time.Time{}
+	client.views["view_factor_1h"] = empty
+	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+		t.Fatalf("空的结果 View 应拒绝：%v", err)
+	}
+	covered := client.views["view_factor_1h"]
+	covered.IndexedFrom, covered.IndexedTo = barStart.Add(-300*time.Hour), barStart
+	client.views["view_factor_1h"] = covered
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err != nil {
+		t.Fatalf("结果 View 覆盖足够时应允许启用：%v", err)
+	}
+	covered.IndexedFrom = barStart.Add(-100 * time.Hour)
+	client.views["view_factor_1h"] = covered
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "当前只覆盖") || !strings.Contains(err.Error(), "view_factor_1h") {
+		t.Fatalf("结果 View 覆盖不足时应拒绝，并指明 View：%v", err)
+	}
+}
+
+// 列名写错时，报错给出最接近的列名和这个任务的全部列名，不能只说“列不存在”。
+func TestResolveMissingColumnSuggestsTheClosestNames(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "bias_q_20", "bias_q_2o", 1))
+	_, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	if err == nil {
+		t.Fatal("引用不存在的列应拒绝")
+	}
+	for _, want := range []string{"bias_q_2o", "最接近的列名", "bias_q_20", "可用列（该任务的全部列）", "quote_volume_mean_20"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("报错应包含 %q：%v", want, err)
+		}
+	}
+	if got := nearestNames("zzzz", []string{"close", "volume"}, 3); got != nil {
+		t.Fatalf("没有接近的列名时不给提示：%v", got)
+	}
+	if got := nearestNames("clos", []string{"close", "closing_price", "volume", "close2"}, 2); len(got) != 2 || got[0] != "close" {
+		t.Fatalf("应按距离给出最接近的列名：%v", got)
 	}
 }

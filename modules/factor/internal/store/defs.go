@@ -111,7 +111,7 @@ func (s *Store) UpdateFactor(ctx context.Context, def domain.FactorDef) error {
 	result := s.db.WithContext(ctx).Exec(`
 		UPDATE t_factor_defs SET c_name = ?, c_category_id = COALESCE(NULLIF(?, ''), c_category_id), c_spec = ?, c_spec_hash = ?, c_allow_partial_universe = ?, c_mtime = ?
 		WHERE c_factor_id = ?
-		 AND NOT EXISTS (SELECT 1 FROM t_factor_set_members WHERE c_factor_id = ? AND c_status = ?)
+		 AND NOT EXISTS (SELECT 1 FROM t_factor_task_members WHERE c_factor_id = ? AND c_status = ?)
 	`, def.Name, def.CategoryID, def.Spec, def.SpecHash, boolInt(def.AllowPartialUniverse), time.Now().UTC(), def.FactorID,
 		def.FactorID, domain.MemberStatusEnabled)
 	if result.Error != nil {
@@ -162,7 +162,7 @@ func (s *Store) DeleteFactor(ctx context.Context, factorID string) error {
 	result := s.db.WithContext(ctx).Exec("DELETE FROM t_factor_defs WHERE c_factor_id = ?", factorID)
 	if result.Error != nil {
 		if isForeignKeyConstraint(result.Error) {
-			return fmt.Errorf("%w: factor %q is still referenced by factor set members", ErrConflict, factorID)
+			return fmt.Errorf("%w: factor %q is still referenced by factor task members", ErrConflict, factorID)
 		}
 		return result.Error
 	}

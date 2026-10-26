@@ -37,11 +37,10 @@ message FactorPeriodState {
   string definition_hash = 5;
   // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
   repeated string gap_subjects = 6;
-  // member_alias 是成员在结果数据集内的唯一身份（同一定义可以用不同别名出现多次）；factor_id 是它引用的定义。
-  string member_alias = 7;
-  // params_source 是这一期冻结参数的来源（requested、carried、carried_offline、default），params_digest 是快照摘要。
-  string params_source = 8;
-  string params_digest = 9;
+  // member_key 是成员在结果数据集内的唯一身份（因子 ID 加参数段，规则见 packages/factorname）；factor_id 是它引用的定义。
+  string member_key = 7;
+  // member_kind 是成员类型：fixed 或 var。这一期实际用的参数记在结果行的 __params 列里，不进周期标记。
+  string member_kind = 8;
 }
 
 // FactorPeriodComputedMarker is appended after all result row writes commit.

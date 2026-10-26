@@ -322,3 +322,114 @@ func TestReverseImportResumesInTheSameDirection(t *testing.T) {
 	require.Equal(t, base, healthy.chunks[0].From)
 	require.Equal(t, base.Add(4*time.Minute), healthy.chunks[0].To)
 }
+
+// tailRecorder 是只写尾部的目标（Storage 的角色）。
+type tailRecorder struct{ recorder }
+
+func (*tailRecorder) TailOnly() bool { return true }
+
+func chunkTimes(chunks []Chunk) []time.Time {
+	var out []time.Time
+	for _, c := range chunks {
+		out = append(out, c.Batch.Times...)
+	}
+	return out
+}
+
+// 尾部窗口：只对 TailOnly 的目标生效，每个文件取最后 TailRows 行；其余目标仍写全量。
+func TestTailRowsOnlyAffectsTailTargets(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	storage, factor := &tailRecorder{recorder{name: "storage"}}, &recorder{name: "factor"}
+	req := baseRequest(file)
+	req.TailRows = 12
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{storage, factor}, nil)
+	require.NoError(t, err)
+
+	storageTimes, factorTimes := chunkTimes(storage.chunks), chunkTimes(factor.chunks)
+	require.Len(t, factorTimes, 50, "因子机本地写全量")
+	require.Len(t, storageTimes, 12, "Storage 只写最后 12 行")
+	require.Equal(t, factorTimes[38], storageTimes[0])
+	require.Equal(t, factorTimes[49], storageTimes[11])
+	require.Equal(t, 12, sum.Files[0].TailRows)
+	require.Equal(t, storageTimes[0].Format(time.RFC3339), sum.Files[0].TailFrom)
+	for _, c := range storage.chunks {
+		require.Equal(t, c.Batch.Times[0], c.From, "切出来的批起点要对上 Chunk.From")
+	}
+}
+
+// 早于保留期的行不写：尾部窗口再按 TailCutoff 截。
+func TestTailCutoffDropsRowsOlderThanRetention(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	storage := &tailRecorder{recorder{name: "storage"}}
+	req := baseRequest(file)
+	req.TailRows = 30
+	req.TailCutoff = time.Date(2026, 10, 1, 0, 40, 0, 0, time.UTC)
+	_, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{storage}, nil)
+	require.NoError(t, err)
+	times := chunkTimes(storage.chunks)
+	require.Len(t, times, 10)
+	require.Equal(t, req.TailCutoff, times[0])
+
+	// 窗口里的行全部早于保留期：什么都不写。
+	empty := &tailRecorder{recorder{name: "storage"}}
+	req.TailCutoff = time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	sum, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{empty}, nil)
+	require.NoError(t, err)
+	require.Empty(t, empty.chunks)
+	require.Equal(t, 0, sum.Files[0].TailRows)
+}
+
+// 尾部窗口按批切边界，批比窗口小也不丢行；断点续传时批边界不变。
+func TestTailRowsResumeKeepsBatchBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	cps, err := checkpoint.Open(filepath.Join(dir, "cp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cps.Close() })
+	req := baseRequest(file)
+	req.TailRows, req.JobID = 13, "tail-job"
+
+	first := &tailRecorder{recorder{name: "storage", failAt: 2}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{first}, cps)
+	require.Error(t, err)
+	resumed := &tailRecorder{recorder{name: "storage"}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{resumed}, cps)
+	require.NoError(t, err)
+
+	all := append(chunkTimes(first.chunks), chunkTimes(resumed.chunks)...)
+	require.Len(t, all, 13, "失败前写的加续传写的，恰好是窗口里的 13 行，不重复不遗漏")
+	for i := 1; i < len(all); i++ {
+		require.True(t, all[i].After(all[i-1]))
+	}
+}
+
+// 尾部窗口行数进断点身份：先按尾部 5 行导入、再改成 12 行并复用同一个断点库时，新增的行必须写进去，
+// 不能因为「文件已写完」的断点被跳过。
+func TestChangingTailRowsDoesNotReuseTheCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	cps, err := checkpoint.Open(filepath.Join(dir, "cp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cps.Close() })
+
+	small := &tailRecorder{recorder{name: "storage"}}
+	req := baseRequest(file)
+	req.TailRows = 5
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{small}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(small.chunks), 5)
+
+	large := &tailRecorder{recorder{name: "storage"}}
+	req.TailRows = 12
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{large}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(large.chunks), 12, "窗口变大后不能沿用旧窗口的断点")
+
+	// 同样的窗口重跑才续传：已写完，什么都不再写。
+	again := &tailRecorder{recorder{name: "storage"}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{again}, cps)
+	require.NoError(t, err)
+	require.Empty(t, again.chunks)
+}

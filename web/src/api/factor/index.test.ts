@@ -4,27 +4,26 @@ vi.mock("./http", () => ({ callFactor: vi.fn() }));
 
 import { callFactor } from "./http";
 import {
-  addFactorToSet,
+  addFactorToTask,
   cancelRecalcJob,
   deleteFactorCategory,
   getFactorParams,
   listFactorCategories,
   upsertFactorCategory,
   createFactor,
-  createFactorSet,
+  createFactorTask,
   deleteFactor,
-  deleteFactorSet,
+  deleteFactorTask,
   getFactor,
   getFactorStatus,
   listFactors,
-  listFactorSets,
+  listFactorTasks,
   recalcFactors,
-  removeFactorFromSet,
+  removeFactorFromTask,
   setFactorCategory,
   setFactorMemberStatus,
-  setFactorSetStatus,
+  setFactorTaskStatus,
   updateFactor,
-  updateFactorSet,
   validateFactorSpec,
   previewFactor,
   listFactorFunctions
@@ -35,25 +34,25 @@ const call = vi.mocked(callFactor);
 describe("FactorMgr factor-set API", () => {
   afterEach(() => vi.resetAllMocks());
 
-  it("creates factor sets through CreateFactorSet", async () => {
-    const factorSet = { set_id: "set-1", status: "pending" };
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_set: factorSet });
+  it("creates factor tasks through CreateFactorTask", async () => {
+    const factorTask = { task_id: "set-1", status: "pending" };
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_task: factorTask });
 
-    await expect(createFactorSet(factorSet as never)).resolves.toEqual(factorSet);
-    expect(call).toHaveBeenCalledWith("CreateFactorSet", { factor_set: factorSet });
+    await expect(createFactorTask(factorTask as never)).resolves.toEqual(factorTask);
+    expect(call).toHaveBeenCalledWith("CreateFactorTask", { factor_task: factorTask });
   });
 
   it("lists sets and factor definitions with their new request fields", async () => {
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_sets: [] });
-    await listFactorSets({ status: "enabled", page: { page: 1, size: 20 } });
-    expect(call).toHaveBeenLastCalledWith("ListFactorSets", { status: "enabled", page: { page: 1, size: 20 } });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_tasks: [] });
+    await listFactorTasks({ status: "enabled", page: { page: 1, size: 20 } });
+    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { status: "enabled", page: { page: 1, size: 20 } });
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factors: [] });
-    await listFactors({ set_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });
-    expect(call).toHaveBeenLastCalledWith("ListFactors", { set_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });
+    await listFactors({ task_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });
+    expect(call).toHaveBeenLastCalledWith("ListFactors", { task_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });
   });
 
-  it("listFactors without set_id requests all definitions", async () => {
+  it("listFactors without task_id requests all definitions", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factors: [{ factor: { factor_id: "f1" }, usages: [] }] });
     const rsp = await listFactors();
     expect(call).toHaveBeenLastCalledWith("ListFactors", {});
@@ -71,57 +70,66 @@ describe("FactorMgr factor-set API", () => {
     await validateFactorSpec("outputs:\n  x: close\n", true);
     expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", { spec: "outputs:\n  x: close\n", allow_partial_universe: true });
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, columns: [], rows: [] });
-    await previewFactor({ set_id: "fset_a", spec: "outputs:\n  x: close\n", periods: 10 });
-    expect(call).toHaveBeenLastCalledWith("PreviewFactor", { set_id: "fset_a", spec: "outputs:\n  x: close\n", periods: 10 });
+    await previewFactor({ task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });
+    expect(call).toHaveBeenLastCalledWith("PreviewFactor", { task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, functions: [], expr_version: "expr/1" });
     await listFactorFunctions();
     expect(call).toHaveBeenLastCalledWith("ListFactorFunctions", {});
   });
 
-  it("createFactor payload has no set_id or status", async () => {
+  it("createFactor payload has no task_id or status", async () => {
     const factor = { factor_id: "f1", name: "F1", spec: "outputs:\n  f1: close\n" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor });
     await createFactor(factor);
     const payload = call.mock.calls.at(-1)?.[1] as { factor: Record<string, unknown> };
     expect(call).toHaveBeenLastCalledWith("CreateFactor", { factor });
-    expect(payload.factor).not.toHaveProperty("set_id");
+    expect(payload.factor).not.toHaveProperty("task_id");
     expect(payload.factor).not.toHaveProperty("status");
   });
 
-  it("addFactorToSet posts set_id and factor_id", async () => {
-    const member = { set_id: "set-1", factor_id: "f1", status: "disabled" };
+  it("addFactorToTask posts task_id and factor_id", async () => {
+    const member = { task_id: "set-1", factor_id: "f1", status: "disabled" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member });
-    await expect(addFactorToSet("set-1", "f1")).resolves.toEqual(member);
-    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "f1" });
+    await expect(addFactorToTask("set-1", "f1")).resolves.toEqual(member);
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "f1", kind: "fixed" });
   });
 
-  it("removeFactorFromSet posts set_id and the member alias", async () => {
+  it("removeFactorFromTask posts task_id and the member key", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
-    await removeFactorFromSet("set-1", "f1");
-    expect(call).toHaveBeenLastCalledWith("RemoveFactorFromSet", { set_id: "set-1", member_alias: "f1" });
+    await removeFactorFromTask("set-1", "f1");
+    expect(call).toHaveBeenLastCalledWith("RemoveTaskMember", { task_id: "set-1", member_key: "f1" });
   });
 
-  it("setFactorMemberStatus returns the backfill job", async () => {
-    const member = { set_id: "set-1", factor_id: "f1", status: "enabled" };
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member, backfill_job: { job_id: "factor-enable-1" } });
-    await expect(setFactorMemberStatus("set-1", "f1", "enabled")).resolves.toEqual({
-      member,
-      backfill_job: { job_id: "factor-enable-1" }
+  it("setFactorMemberStatus returns the member", async () => {
+    const member = { task_id: "set-1", factor_id: "f1", status: "enabled" };
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member });
+    await expect(setFactorMemberStatus("set-1", "f1", "enabled")).resolves.toEqual({ member });
+    expect(call).toHaveBeenLastCalledWith("SetTaskMemberStatus", { task_id: "set-1", member_key: "f1", status: "enabled" });
+  });
+
+  it("addFactorToTask sends the kind and params only when given", async () => {
+    call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, member: { task_id: "set-1" } });
+    await addFactorToTask("set-1", "bias");
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "bias", kind: "fixed" });
+    await addFactorToTask("set-1", "ema", "fixed", { span: 20, warmup: 50000 });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "ema",
+      kind: "fixed",
+      params: { span: 20, warmup: 50000 }
     });
-    expect(call).toHaveBeenLastCalledWith("SetFactorMemberStatus", { set_id: "set-1", member_alias: "f1", status: "enabled" });
+    await addFactorToTask("set-1", "ema", "var", {});
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", { task_id: "set-1", factor_id: "ema", kind: "var" });
+    await addFactorToTask("set-1", "ema", "var", { span: 30 });
+    expect(call).toHaveBeenLastCalledWith("AddTaskMember", {
+      task_id: "set-1",
+      factor_id: "ema",
+      kind: "var",
+      params: { span: 30 }
+    });
   });
 
-  it("addFactorToSet sends an alias only when it differs from the definition id", async () => {
-    call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, member: { set_id: "set-1" } });
-    await addFactorToSet("set-1", "bias");
-    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
-    await addFactorToSet("set-1", "bias", "bias");
-    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
-    await addFactorToSet("set-1", "bias", "fast");
-    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias", member_alias: "fast" });
-  });
-
-  it("manages categories, factor category and parameter history", async () => {
+  it("manages categories, factor category and the submitted params", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, categories: [{ category_id: "momentum", name: "动量类" }] });
     await expect(listFactorCategories()).resolves.toEqual([{ category_id: "momentum", name: "动量类" }]);
     expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {});
@@ -138,29 +146,32 @@ describe("FactorMgr factor-set API", () => {
     await expect(setFactorCategory("bias", "momentum")).resolves.toEqual({ factor_id: "bias", category_id: "momentum" });
     expect(call).toHaveBeenLastCalledWith("SetFactorCategory", { factor_id: "bias", category_id: "momentum" });
 
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, intervals: [], frozen_through: "180" });
-    const rsp = await getFactorParams({ set_id: "set-1", include_requests: true });
-    expect(call).toHaveBeenLastCalledWith("GetFactorParams", { set_id: "set-1", include_requests: true });
-    expect(rsp.frozen_through).toBe("180");
+    call.mockResolvedValueOnce({
+      ret_info: { code: 0, msg: "" },
+      members: [{ member_key: "bias__var", params: { window: { default_value: 20 } }, last_submitted_period: "180" }]
+    });
+    const rsp = await getFactorParams({ task_id: "set-1" });
+    expect(call).toHaveBeenLastCalledWith("GetFactorParams", { task_id: "set-1" });
+    expect(rsp.members[0]).toMatchObject({ member_key: "bias__var", last_submitted_period: "180" });
   });
 
   it("getFactor returns usages", async () => {
     call.mockResolvedValueOnce({
       ret_info: { code: 0, msg: "" },
       factor: { factor_id: "f1" },
-      usages: [{ set_id: "set-1", status: "enabled" }]
+      usages: [{ task_id: "set-1", status: "enabled" }]
     });
     const rsp = await getFactor("f1");
     expect(call).toHaveBeenLastCalledWith("GetFactor", { factor_id: "f1" });
-    expect(rsp.usages).toEqual([{ set_id: "set-1", status: "enabled" }]);
+    expect(rsp.usages).toEqual([{ task_id: "set-1", status: "enabled" }]);
   });
 
   it("sets factor-set status and submits/cancels set-scoped recalculation", async () => {
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_set: { set_id: "set-1", status: "disabled" } });
-    await setFactorSetStatus("set-1", "disabled");
-    expect(call).toHaveBeenLastCalledWith("SetFactorSetStatus", { set_id: "set-1", status: "disabled" });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_task: { task_id: "set-1", status: "disabled" } });
+    await setFactorTaskStatus("set-1", "disabled");
+    expect(call).toHaveBeenLastCalledWith("SetFactorTaskStatus", { task_id: "set-1", status: "disabled" });
 
-    const req = { set_id: "set-1", factor_ids: ["f1"], subjects: ["BTC-USDT"], start_time: "a", end_time: "b" };
+    const req = { task_id: "set-1", factor_ids: ["f1"], subjects: ["BTC-USDT"], start_time: "a", end_time: "b" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, job: { job_id: "job-1" } });
     await recalcFactors(req);
     expect(call).toHaveBeenLastCalledWith("RecalcFactors", req);
@@ -175,17 +186,9 @@ describe("FactorMgr factor-set API", () => {
   });
 
   it("exposes set and factor detail, update, and delete operations", async () => {
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_set: { set_id: "set-1" } });
-    await updateFactorSet("set-1", "include", ["BTC-USDT"]);
-    expect(call).toHaveBeenLastCalledWith("UpdateFactorSet", {
-      set_id: "set-1",
-      subject_mode: "include",
-      subjects: ["BTC-USDT"]
-    });
-
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
-    await deleteFactorSet("set-1", true);
-    expect(call).toHaveBeenLastCalledWith("DeleteFactorSet", { set_id: "set-1", purge: true });
+    await deleteFactorTask("set-1", true);
+    expect(call).toHaveBeenLastCalledWith("DeleteFactorTask", { task_id: "set-1", purge: true });
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor: { factor_id: "f1" } });
     await updateFactor({ factor_id: "f1" } as never);

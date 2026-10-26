@@ -12,7 +12,7 @@ import (
 // bar_end 落在非交易日时给出明确的中文错误；A 股只支持日线。
 func TestResolveCNStockDailyView(t *testing.T) {
 	client := newFakeClient("spot")
-	client.views["view_stock_1d"] = ViewInfo{ViewID: "view_stock_1d", DatasetID: "ds_stock", Frequency: "1d", Status: "active", ActiveIndexID: "idx_s", Columns: []ViewColumn{plainColumn("close")}}
+	client.views["view_factor_stock_1d"] = ViewInfo{ViewID: "view_factor_stock_1d", DatasetID: "ds_stock", Frequency: "1d", Status: "active", ActiveIndexID: "idx_s", Columns: []ViewColumn{plainColumn("close")}}
 	client.datasets["ds_stock"] = DatasetInfo{DatasetID: "ds_stock", Status: "active", Frequency: "1d", Retention: "forever", Attributes: map[string]string{"calendar": "cn_stock", "market_type": "spot"}}
 	client.subjects["ds_stock"] = []Subject{subject("600000.SH", true), subject("600519.SH", true)}
 	strategy := parseStrategy(t, `name: stock_daily
@@ -23,7 +23,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	resolved, _, err := Resolve(context.Background(), client, "space", "view_stock_1d", strategy)
+	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_stock_1d", strategy)
 	if err != nil {
 		t.Fatalf("A 股日线 View 应能解析：%v", err)
 	}
@@ -88,7 +88,7 @@ func TestLoadBarReadsCoverageOnlyForAgeProbe(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestLoadBarReadsCoverageOnlyForAgeProbe(t *testing.T) {
 	if len(client.coverageReads) != 0 {
 		t.Fatalf("没有 min_age_bars 时不应读取覆盖统计：%v", client.coverageReads)
 	}
-	aged, agedProgram, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1)))
+	aged, agedProgram, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestLoadBarSkipsWhenReferencedTagDeleted(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
-	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/factorexpr v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/factorname v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -68,6 +69,8 @@ replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecy
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
+
+replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

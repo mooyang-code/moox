@@ -36,9 +36,9 @@ export function resultsLink(instanceId = ""): StrategyLink {
 
 /** 策略回放 Tab：replayId 打开已有回放；其余参数是发起回放的来源预填，并打开创建抽屉。 */
 export function replayLink(
-  options: { replayId?: string; strategyId?: string; instanceId?: string; viewId?: string } = {}
+  options: { replayId?: string; strategyId?: string; instanceId?: string; factorTaskId?: string } = {}
 ): StrategyLink {
-  const create = Boolean(options.strategyId || options.instanceId || options.viewId);
+  const create = Boolean(options.strategyId || options.instanceId || options.factorTaskId);
   return {
     name: STRATEGY_TASKS_ROUTE,
     query: compact({
@@ -47,7 +47,7 @@ export function replayLink(
       create: create ? "1" : undefined,
       instance_id: options.instanceId,
       strategy_id: options.instanceId ? undefined : options.strategyId,
-      view_id: options.viewId
+      factor_task_id: options.factorTaskId
     })
   };
 }

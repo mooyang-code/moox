@@ -2,7 +2,6 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 import { ControlRequestError } from "@/api/admin/http";
 import {
-  deleteInstance,
   deleteStrategy,
   getInstance,
   getStrategy,
@@ -263,17 +262,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
-  async function removeInstance(instanceId: string) {
-    operationLoading.value = true;
-    try {
-      await deleteInstance(instanceId);
-      instances.value = instances.value.filter(item => item.instance_id !== instanceId);
-      totalInstances.value = Math.max(0, totalInstances.value - 1);
-    } finally {
-      operationLoading.value = false;
-    }
-  }
-
   async function removeStrategy(strategyId: string) {
     operationLoading.value = true;
     try {
@@ -358,7 +346,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     loadResultPage,
     loadResultDetail,
     changeEnabled,
-    removeInstance,
     removeStrategy,
     startPolling,
     stopPolling,

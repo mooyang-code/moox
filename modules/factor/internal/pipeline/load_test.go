@@ -56,7 +56,7 @@ func TestLoadSkipsDataLayerWithoutAvailableSubjects(t *testing.T) {
 
 func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
+	plan := Plan{Mode: ModeRecalc, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		Members:     domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}),
 		TargetStart: start, TargetEnd: start.Add(3 * time.Minute), Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close"}}
 	got, err := ReadStart(periodclock.Continuous{}, plan)
@@ -64,7 +64,7 @@ func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 	require.Equal(t, start.Add(-19*time.Minute), got)
 
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
-		Set:     domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll},
+		Set:     domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.TaskStatusEnabled},
 		Members: domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}), PeriodTime: start, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
 	})
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 
 func loadPlan(subjects []string) Plan {
 	return Plan{
-		Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
+		Mode: ModeLive, Set: domain.FactorTask{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
 		TargetStart: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC), TargetEnd: time.Date(2026, 10, 4, 0, 1, 0, 0, time.UTC),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"},
 	}

@@ -141,8 +141,8 @@ func recordBarArrivals(tx *gorm.DB, samples []Sample) error {
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&records, ingestBatchRows).Error
 }
 
-// BarArrivalChain 选出一条数据链路上的到达记录：入库按源数据集，因子按因子结果数据集，View 按主数据集是两者之一，
-// 策略的输入 Monitor 拿不到，取同空间同周期的全部。
+// BarArrivalChain 选出一条数据链路上的到达记录：入库按源数据集，因子按因子结果数据集（FactorDatasetID 为空表示没有选定任务，
+// 不含因子环节），View 按主数据集是两者之一，策略的输入 Monitor 拿不到，取同空间同周期的全部。
 type BarArrivalChain struct {
 	SpaceID, Freq, SourceDatasetID, FactorDatasetID string
 }
@@ -152,9 +152,13 @@ func (r *MetricMessageStore) ListBarArrivals(ctx context.Context, chain BarArriv
 	if r == nil || r.db == nil {
 		return nil, false, ErrMetricsStoreUnavailable
 	}
-	members := r.db.Where("c_producer = 'storage' AND c_dataset_id = ?", chain.SourceDatasetID).
-		Or("c_producer = 'factor' AND c_dataset_id = ?", chain.FactorDatasetID).
-		Or("c_producer = 'storage_view' AND c_primary_dataset_id IN ?", []string{chain.SourceDatasetID, chain.FactorDatasetID}).
+	primaries := []string{chain.SourceDatasetID}
+	members := r.db.Where("c_producer = 'storage' AND c_dataset_id = ?", chain.SourceDatasetID)
+	if chain.FactorDatasetID != "" {
+		primaries = append(primaries, chain.FactorDatasetID)
+		members = members.Or("c_producer = 'factor' AND c_dataset_id = ?", chain.FactorDatasetID)
+	}
+	members = members.Or("c_producer = 'storage_view' AND c_primary_dataset_id IN ?", primaries).
 		Or("c_producer = 'strategy'")
 	err = r.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_freq = ? AND c_bar_at >= ? AND c_bar_at < ?", chain.SpaceID, chain.Freq, from.UTC(), to.UTC()).

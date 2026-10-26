@@ -229,9 +229,22 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	if err != nil {
 		return nil, err
 	}
+	if sourceEventID != "" {
+		// 带来源事件 ID 的写入要在锁内判重（并发重投只能写一次），整条路径都在锁内。
+		s.outboxMu.Lock()
+		defer s.outboxMu.Unlock()
+		return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, true, event, nil)
+	}
+	// 编码 KV、构造并校验事件与锁无关，放在锁外；锁内只分配 outbox 编号、写变更日志并提交，
+	// 编号与提交顺序仍由 outboxMu 保证一致。
+	prepared, err := s.prepareFieldsWrite(ctx, groupRowsByDataset(normalizedRows), normalizedRows, event)
+	if err != nil {
+		return nil, err
+	}
+	defer prepared.batch.Close()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, true, event, nil)
+	return s.commitFieldsWriteLocked(ctx, prepared, "", true, nil)
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -263,16 +276,17 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 // changeLog 为真时，在同一个 batch 里追加行变更日志（因子结果写入不记：它们不是本地副本的输入）。
 func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, changeLog bool, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
 	grouped := groupRowsByDataset(normalizedRows)
-	for group := range grouped {
-		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
-		if err != nil {
-			return nil, err
-		}
-		if deleted {
-			return nil, ErrDatasetDeleted
-		}
-	}
 	if sourceEventID != "" {
+		// 已删除的数据集先于判重报错：重投一条已处理的事件也要知道数据集没了。
+		for group := range grouped {
+			deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
+			if err != nil {
+				return nil, err
+			}
+			if deleted {
+				return nil, ErrDatasetDeleted
+			}
+		}
 		pending := make(map[datasetGroup][]*pb.RowFieldUpsert, len(grouped))
 		for group, groupRows := range grouped {
 			processed, err := s.hasProcessedSourceEvent(sourceEventID, group)
@@ -292,13 +306,35 @@ func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb
 			normalizedRows = append(normalizedRows, groupRows...)
 		}
 	}
+	prepared, err := s.prepareFieldsWrite(ctx, grouped, normalizedRows, event)
+	if err != nil {
+		return nil, err
+	}
+	defer prepared.batch.Close()
+	return s.commitFieldsWriteLocked(ctx, prepared, sourceEventID, changeLog, decorate)
+}
+
+// preparedFieldsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，以及每个数据集
+// 构造并校验过、还没绑定 outbox 编号的事件。
+type preparedFieldsWrite struct {
+	batch    *cpebble.Batch
+	grouped  map[datasetGroup][]*pb.RowFieldUpsert
+	payloads map[datasetGroup][]byte
+}
+
+// prepareFieldsWrite 只读 Store 的静态配置，不读写 outbox 与变更序号，可以在 outboxMu 之外并发执行。
+func (s *Store) prepareFieldsWrite(ctx context.Context, grouped map[datasetGroup][]*pb.RowFieldUpsert, normalizedRows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) (*preparedFieldsWrite, error) {
 	// One batch preserves all field changes from a request. Dataset event
 	// payloads and source-event markers are staged into the same batch.
 	batch := s.db.NewBatch()
-	defer batch.Close()
+	prepared := &preparedFieldsWrite{batch: batch, grouped: grouped}
+	fail := func(err error) (*preparedFieldsWrite, error) {
+		_ = batch.Close()
+		return nil, err
+	}
 	for _, row := range normalizedRows {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return fail(err)
 		}
 		// Keep a single logical row marker alongside the field/attribute values.
 		// The marker is an ordered, time-first index used by history backfills;
@@ -307,71 +343,96 @@ func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb
 		if row.GetKey().GetTimeSeries() != nil {
 			historyKey, err := encodeHistoryKey(row.GetKey(), s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return fail(err)
 			}
 			if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
-				return nil, err
+				return fail(err)
 			}
 			seriesHistoryKey, err := encodeSeriesHistoryKey(row.GetKey(), s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return fail(err)
 			}
 			if err := batch.Set(seriesHistoryKey, nil, s.writeOptions); err != nil {
-				return nil, err
+				return fail(err)
 			}
 		}
 		for _, field := range row.GetFields() {
 			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return fail(err)
 			}
 			data, err := proto.Marshal(field.GetValue())
 			if err != nil {
-				return nil, fmt.Errorf("marshal field %q: %w", field.GetFieldId(), err)
+				return fail(fmt.Errorf("marshal field %q: %w", field.GetFieldId(), err))
 			}
 			if err := batch.Set(key, data, s.writeOptions); err != nil {
-				return nil, err
+				return fail(err)
 			}
 		}
 		for name, value := range row.GetAttributes() {
 			key, err := encodeAttributeKey(row.GetKey(), name, s.bucketDuration)
 			if err != nil {
-				return nil, err
+				return fail(err)
 			}
 			data, err := proto.Marshal(value)
 			if err != nil {
-				return nil, fmt.Errorf("marshal attribute %q: %w", name, err)
+				return fail(fmt.Errorf("marshal attribute %q: %w", name, err))
 			}
 			if err := batch.Set(key, data, s.writeOptions); err != nil {
-				return nil, err
+				return fail(err)
 			}
 		}
 	}
+	if event == nil {
+		return prepared, nil
+	}
+	prepared.payloads = make(map[datasetGroup][]byte, len(grouped))
+	for _, group := range sortedDatasetGroups(grouped) {
+		payload, err := event(group.spaceID, group.datasetID, grouped[group])
+		if err != nil {
+			return fail(err)
+		}
+		eventMessage := &eventpb.EventMessage{}
+		if err := proto.Unmarshal(payload, eventMessage); err != nil {
+			return fail(fmt.Errorf("unmarshal rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err))
+		}
+		if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
+			return fail(fmt.Errorf("validate rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err))
+		}
+		if eventMessage.GetSpaceId() != group.spaceID || eventMessage.GetSubjectId() != group.datasetID {
+			return fail(fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", eventMessage.GetSpaceId(), eventMessage.GetSubjectId(), group.spaceID, group.datasetID))
+		}
+		prepared.payloads[group] = payload
+	}
+	return prepared, nil
+}
 
+// commitFieldsWriteLocked 在 outboxMu 内完成写入：检查数据集未删除、按数据集顺序分配 outbox 编号并绑定到事件、
+// 追加变更日志与来源事件标记，然后提交。调用方必须持有 outboxMu。
+func (s *Store) commitFieldsWriteLocked(ctx context.Context, prepared *preparedFieldsWrite, sourceEventID string, changeLog bool, decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
+	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	batch, grouped := prepared.batch, prepared.grouped
+	for group := range grouped {
+		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			return nil, ErrDatasetDeleted
+		}
+	}
 	entries := make([]*OutboxEntry, 0, len(grouped))
-	if event != nil {
+	if prepared.payloads != nil {
 		nextID, err := s.nextOutboxID()
 		if err != nil {
 			return nil, err
 		}
 		for _, group := range sortedDatasetGroups(grouped) {
-			groupRows := grouped[group]
-			payload, err := event(group.spaceID, group.datasetID, groupRows)
-			if err != nil {
-				return nil, err
-			}
-			eventMessage := &eventpb.EventMessage{}
-			if err := proto.Unmarshal(payload, eventMessage); err != nil {
-				return nil, fmt.Errorf("unmarshal rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
-			}
-			if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
-				return nil, fmt.Errorf("validate rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err)
-			}
-			if eventMessage.GetSpaceId() != group.spaceID || eventMessage.GetSubjectId() != group.datasetID {
-				return nil, fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", eventMessage.GetSpaceId(), eventMessage.GetSubjectId(), group.spaceID, group.datasetID)
-			}
 			id := nextID
-			payload, err = BindOutboxID(payload, s.nodeID, s.sourceStoreID, id)
+			payload, err := BindOutboxID(prepared.payloads[group], s.nodeID, s.sourceStoreID, id)
 			if err != nil {
 				return nil, err
 			}

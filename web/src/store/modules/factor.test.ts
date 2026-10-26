@@ -1,22 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { getFactorStatus, listFactorSets } from "@/api/factor";
+import { getFactorStatus, listFactorTasks } from "@/api/factor";
 import { listDatasets } from "@/api/storage/metadata";
-import type { FactorSetInfo } from "@/api/factor/types";
+import type { FactorTaskInfo } from "@/api/factor/types";
 import { useFactorStore } from "./factor";
 
-vi.mock("@/api/factor", () => ({ listFactorSets: vi.fn(), getFactorStatus: vi.fn() }));
+vi.mock("@/api/factor", () => ({ listFactorTasks: vi.fn(), getFactorStatus: vi.fn() }));
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: vi.fn() }));
 
-const info = (setId: string, spaceId = "crypto", members: FactorSetInfo["members"] = []): FactorSetInfo => ({
-  factor_set: {
-    set_id: setId,
+const info = (taskId: string, spaceId = "crypto", members: FactorTaskInfo["members"] = []): FactorTaskInfo => ({
+  factor_task: {
+    task_id: taskId,
     space_id: spaceId,
     source_dataset_id: "d",
     freq: "1m",
-    subject_mode: "all",
-    subjects: [],
-    result_dataset_id: `dataset_factor_${setId}`,
+    result_dataset_id: `dataset_factor_${taskId}`,
     status: "enabled"
   },
   members
@@ -28,54 +26,54 @@ const datasetPage = (datasets: Array<{ dataset_id: string; name: string }>) => (
   page_result: { page: 1, size: 500, total: datasets.length, has_more: false, next_cursor: "" }
 });
 
-const page = (sets: FactorSetInfo[], hasMore = false) => ({
+const page = (sets: FactorTaskInfo[], hasMore = false) => ({
   ret_info: { code: 0, msg: "" },
-  factor_sets: sets,
+  factor_tasks: sets,
   page_result: { page: 1, size: 500, total: sets.length, has_more: hasMore, next_cursor: "" }
 });
 
 describe("factor store", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    vi.mocked(listFactorSets).mockReset();
+    vi.mocked(listFactorTasks).mockReset();
     vi.mocked(listDatasets).mockReset();
     vi.mocked(listDatasets).mockResolvedValue(datasetPage([]) as never);
   });
 
   it("loads every page and keeps only the requested space", async () => {
-    vi.mocked(listFactorSets)
+    vi.mocked(listFactorTasks)
       .mockResolvedValueOnce(page([info("a"), info("x", "stockcn")], true))
       .mockResolvedValueOnce(page([info("b")]));
     const store = useFactorStore();
     await store.load("crypto");
-    expect(store.sets.map(item => item.factor_set.set_id)).toEqual(["a", "b"]);
-    expect(store.currentSetId).toBe("a");
+    expect(store.tasks.map(item => item.factor_task.task_id)).toEqual(["a", "b"]);
+    expect(store.currentTaskId).toBe("a");
   });
 
   it("keeps a still-valid selection and falls back when it disappears", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a"), info("b")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a"), info("b")]));
     const store = useFactorStore();
     await store.load("crypto");
     store.select("b");
     await store.load("crypto");
-    expect(store.currentSetId).toBe("b");
+    expect(store.currentTaskId).toBe("b");
 
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     await store.load("crypto");
-    expect(store.currentSetId).toBe("a");
+    expect(store.currentTaskId).toBe("a");
   });
 
   it("ignores unknown ids in select", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     const store = useFactorStore();
     await store.load("crypto");
     store.select("missing");
-    expect(store.currentSetId).toBe("a");
+    expect(store.currentTaskId).toBe("a");
   });
 
   it("drops responses that were superseded by a newer load", async () => {
     let releaseFirst: (value: ReturnType<typeof page>) => void = () => undefined;
-    vi.mocked(listFactorSets)
+    vi.mocked(listFactorTasks)
       .mockReturnValueOnce(
         new Promise(resolve => {
           releaseFirst = resolve as typeof releaseFirst;
@@ -87,21 +85,21 @@ describe("factor store", () => {
     await store.load("stockcn");
     releaseFirst(page([info("stale")]));
     await stale;
-    expect(store.sets.map(item => item.factor_set.set_id)).toEqual(["fresh"]);
+    expect(store.tasks.map(item => item.factor_task.task_id)).toEqual(["fresh"]);
   });
 
   it("reports load failures without clearing existing data", async () => {
-    vi.mocked(listFactorSets).mockResolvedValueOnce(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValueOnce(page([info("a")]));
     const store = useFactorStore();
     await store.load("crypto");
-    vi.mocked(listFactorSets).mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(listFactorTasks).mockRejectedValueOnce(new Error("boom"));
     await store.load("crypto");
     expect(store.loadError).toBe("boom");
-    expect(store.sets).toHaveLength(1);
+    expect(store.tasks).toHaveLength(1);
   });
 
   it("silent reloads do not toggle the loading flag", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     const store = useFactorStore();
     const seen: boolean[] = [];
     const stop = store.$subscribe(() => seen.push(store.loading), { flush: "sync" });
@@ -118,16 +116,16 @@ describe("factor store", () => {
   });
 
   it("clears everything when no space is selected", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     const store = useFactorStore();
     await store.load("crypto");
     await store.load("");
-    expect(store.sets).toEqual([]);
-    expect(store.currentSetId).toBe("");
+    expect(store.tasks).toEqual([]);
+    expect(store.currentTaskId).toBe("");
   });
 
   it("datasetNames maps dataset id to name per space", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     vi.mocked(listDatasets).mockResolvedValueOnce(datasetPage([{ dataset_id: "d", name: "现货K线" }]) as never);
     const store = useFactorStore();
     await store.load("crypto");
@@ -142,52 +140,52 @@ describe("factor store", () => {
     expect(store.datasetNames).toEqual({ e: "A股日线" });
   });
 
-  it("setLabel falls back to source_dataset_id", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+  it("taskLabel falls back to source_dataset_id", async () => {
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     vi.mocked(listDatasets).mockResolvedValueOnce(datasetPage([{ dataset_id: "d", name: "现货K线" }]) as never);
     const store = useFactorStore();
     await store.load("crypto");
-    const set = store.sets[0].factor_set;
-    expect(store.setLabel(set)).toBe("现货K线 · 1m");
-    expect(store.setLabel({ ...set, source_dataset_id: "unknown" })).toBe("unknown · 1m");
+    const set = store.tasks[0].factor_task;
+    expect(store.taskLabel(set)).toBe("现货K线 · 1m");
+    expect(store.taskLabel({ ...set, source_dataset_id: "unknown" })).toBe("unknown · 1m");
   });
 
   it("keeps a failed dataset-name lookup from failing the set load", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     vi.mocked(listDatasets).mockRejectedValueOnce(new Error("meta down"));
     const store = useFactorStore();
     await store.load("crypto");
     expect(store.loadError).toBe("");
-    expect(store.setLabel(store.sets[0].factor_set)).toBe("d · 1m");
+    expect(store.taskLabel(store.tasks[0].factor_task)).toBe("d · 1m");
   });
 
-  it("reload keeps currentSetId when still present", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a"), info("b")]));
+  it("reload keeps currentTaskId when still present", async () => {
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a"), info("b")]));
     const store = useFactorStore();
     await store.load("crypto");
     store.select("b");
     await store.reload();
-    expect(store.currentSetId).toBe("b");
+    expect(store.currentTaskId).toBe("b");
   });
 
-  it("members replace factors on FactorSetInfo", async () => {
+  it("members replace factors on FactorTaskInfo", async () => {
     const member = {
-      set_id: "a",
+      task_id: "a",
       factor_id: "Bias",
       status: "enabled" as const,
       factor: { factor_id: "Bias" } as never,
       created_at: "",
       updated_at: ""
     };
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a", "crypto", [member])]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a", "crypto", [member])]));
     const store = useFactorStore();
     await store.load("crypto");
-    expect(store.sets[0].members.map(item => item.factor_id)).toEqual(["Bias"]);
-    expect(store.sets[0]).not.toHaveProperty("factors");
+    expect(store.tasks[0].members.map(item => item.factor_id)).toEqual(["Bias"]);
+    expect(store.tasks[0]).not.toHaveProperty("factors");
   });
 
   it("tracks which space has been loaded", async () => {
-    vi.mocked(listFactorSets).mockResolvedValue(page([info("a")]));
+    vi.mocked(listFactorTasks).mockResolvedValue(page([info("a")]));
     const store = useFactorStore();
     expect(store.isLoadedFor("crypto")).toBe(false);
     await store.load("crypto");

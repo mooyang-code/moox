@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FactorSetInfo } from "@/api/factor/types";
+import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthOverview } from "@/api/monitor";
 import type { StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import {
@@ -125,24 +125,24 @@ describe("home data rows", () => {
   it("summarizes factor tasks of the current space with health and lag", () => {
     const sets = [
       {
-        factor_set: { set_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
         members: [{ status: "enabled" }, { status: "enabled" }, { status: "disabled" }],
         last_run: {
-          set_id: "a",
+          task_id: "a",
           last_period_time: String(Math.floor((NOW - 60_000) / 1000)),
           last_status: "ok",
           lag_seconds: "8"
         }
       },
       {
-        factor_set: { set_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+        factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
         members: [],
-        last_run: { set_id: "b", last_period_time: "1791900000", last_status: "failed", lag_seconds: "600" }
+        last_run: { task_id: "b", last_period_time: "1791900000", last_status: "failed", lag_seconds: "600" }
       },
-      { factor_set: { set_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
-    ] as unknown as FactorSetInfo[];
+      { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
+    ] as unknown as FactorTaskInfo[];
     const rows = factorRows(sets, "crypto", names, NOW);
-    expect(rows.map(row => [row.setId, row.label, row.factors, row.health.label, row.tone])).toEqual([
+    expect(rows.map(row => [row.taskId, row.label, row.factors, row.health.label, row.tone])).toEqual([
       ["b", "现货K线 · 1m", 0, "失败", "bad"],
       ["a", "现货K线 · 1m", 2, "正常", "ok"]
     ]);
@@ -190,7 +190,7 @@ describe("home data rows", () => {
       freshness: [],
       factors: [
         {
-          setId: "f",
+          taskId: "f",
           label: "现货K线 · 1m",
           factors: 2,
           health: { key: "lagging", label: "滞后", color: "red" },
@@ -302,16 +302,16 @@ describe("home tiles", () => {
     const factors = factorRows(
       [
         {
-          factor_set: { set_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
+          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
           members: [],
           last_run: {
-            set_id: "a",
+            task_id: "a",
             last_period_time: String(Math.floor((NOW - 120_000) / 1000)),
             last_status: "ok",
             lag_seconds: "8"
           }
         }
-      ] as unknown as FactorSetInfo[],
+      ] as unknown as FactorTaskInfo[],
       "crypto",
       names,
       NOW
@@ -383,10 +383,10 @@ describe("home tiles", () => {
 
   it("shows the factor task that is furthest behind, otherwise the freshest close time", () => {
     const set = (id: string, freq: string, openedSecondsAgo: number, status = "ok") => ({
-      factor_set: { set_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq, status: "enabled" },
+      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq, status: "enabled" },
       members: [],
       last_run: {
-        set_id: id,
+        task_id: id,
         last_period_time: String(Math.floor((NOW - openedSecondsAgo * 1000) / 1000)),
         last_status: status,
         // 汇总的“现在”是 上一期时间 + lag_seconds：这里就是服务端读取时距上一期开盘过了多久。
@@ -396,7 +396,7 @@ describe("home tiles", () => {
     const facts = (sets: unknown[]) =>
       bannerFacts({
         strategies: [],
-        factors: factorRows(sets as FactorSetInfo[], "crypto", names, NOW),
+        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW),
         freshness: [],
         nowMs: NOW
       })[1];
@@ -464,10 +464,10 @@ describe("home tiles", () => {
 
   it("writes the close time on the factor and freshness cards and keeps the abnormal count", () => {
     const set = (id: string, openedSecondsAgo: number, status = "ok") => ({
-      factor_set: { set_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
+      factor_task: { task_id: id, space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
       members: [{ status: "enabled" }, { status: "enabled" }],
       last_run: {
-        set_id: id,
+        task_id: id,
         last_period_time: String(Math.floor((NOW - openedSecondsAgo * 1000) / 1000)),
         last_status: status,
         lag_seconds: String(openedSecondsAgo)
@@ -477,7 +477,7 @@ describe("home tiles", () => {
       kpiCards({
         strategies: [],
         strategyLoaded: true,
-        factors: factorRows(sets as FactorSetInfo[], "crypto", names, NOW),
+        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW),
         factorLoaded: true,
         freshness: freshnessRows(
           { generated_at: new Date(NOW).toISOString(), pipeline: [{ name: "存储", datasets }] } as never,
@@ -714,11 +714,11 @@ describe("home tiles", () => {
     const sets = (lagSeconds: string) =>
       [
         {
-          factor_set: { set_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
+          factor_task: { task_id: "a", space_id: "crypto", source_dataset_id: "d", freq: "1m", status: "enabled" },
           members: [],
-          last_run: { set_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: lagSeconds }
+          last_run: { task_id: "a", last_period_time: "1791900000", last_status: "ok", lag_seconds: lagSeconds }
         }
-      ] as unknown as FactorSetInfo[];
+      ] as unknown as FactorTaskInfo[];
     // 上一期开盘后 70 秒、125 秒仍是同一期：1m K 线收盘后才产出，这两个时刻都不是“滞后 1～2 分钟”。
     for (const lag of ["70", "125"])
       expect(factorRows(sets(lag), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
@@ -739,7 +739,7 @@ describe("systemStage", () => {
       issues: [],
       recovered: false
     });
-    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("预热中");
+    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("试运行");
     expect(systemStage({ system: { phase: "ready", color: "blue", health: "healthy" } })?.label).toBe("就绪");
   });
 
@@ -786,12 +786,12 @@ describe("systemStage", () => {
         health: "healthy",
         resuming_modules: 3,
         caught_up_modules: 1,
-        catchup_notes: ["因子引擎：补采 6/10", "策略：被 factor_set/crypto_1m 阻塞"]
+        catchup_notes: ["因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞"]
       }
     });
     expect(resuming?.label).toBe("恢复中 · 追赶 1/3 个模块");
     expect(resuming?.color).toBe("cyan");
-    expect(resuming?.issues).toEqual(["因子引擎：补采 6/10", "策略：被 factor_set/crypto_1m 阻塞"]);
+    expect(resuming?.issues).toEqual(["因子引擎：补采 6/10", "策略：被 factor_task/crypto_1m 阻塞"]);
     const done = systemStage({
       system: { phase: "resuming", color: "cyan", health: "healthy", resuming_modules: 3, caught_up_modules: 3 }
     });

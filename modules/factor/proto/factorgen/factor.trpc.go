@@ -19,17 +19,15 @@ import (
 
 // FactorMgrService defines service.
 type FactorMgrService interface {
-	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error)
+	CreateFactorTask(ctx context.Context, req *CreateFactorTaskReq) (*CreateFactorTaskRsp, error)
 
-	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error)
+	SetFactorTaskStatus(ctx context.Context, req *SetFactorTaskStatusReq) (*SetFactorTaskStatusRsp, error)
 
-	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error)
+	DeleteFactorTask(ctx context.Context, req *DeleteFactorTaskReq) (*DeleteFactorTaskRsp, error)
 
-	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq) (*DeleteFactorSetRsp, error)
+	GetFactorTask(ctx context.Context, req *GetFactorTaskReq) (*GetFactorTaskRsp, error)
 
-	GetFactorSet(ctx context.Context, req *GetFactorSetReq) (*GetFactorSetRsp, error)
-
-	ListFactorSets(ctx context.Context, req *ListFactorSetsReq) (*ListFactorSetsRsp, error)
+	ListFactorTasks(ctx context.Context, req *ListFactorTasksReq) (*ListFactorTasksRsp, error)
 
 	CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error)
 
@@ -39,11 +37,11 @@ type FactorMgrService interface {
 
 	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
 
-	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq) (*AddFactorToSetRsp, error)
+	AddTaskMember(ctx context.Context, req *AddTaskMemberReq) (*AddTaskMemberRsp, error)
 
-	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq) (*RemoveFactorFromSetRsp, error)
+	RemoveTaskMember(ctx context.Context, req *RemoveTaskMemberReq) (*RemoveTaskMemberRsp, error)
 
-	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq) (*SetFactorMemberStatusRsp, error)
+	SetTaskMemberStatus(ctx context.Context, req *SetTaskMemberStatusReq) (*SetTaskMemberStatusRsp, error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
 
@@ -73,25 +71,21 @@ type FactorMgrService interface {
 
 	SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq) (*SetFactorCategoryRsp, error)
 
-	EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq) (*EnsureInstanceFactorSetRsp, error)
-
-	SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq) (*SetInstanceFactorSetEnabledRsp, error)
-
-	ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq) (*ReleaseInstanceFactorSetRsp, error)
+	BindFactorTask(ctx context.Context, req *BindFactorTaskReq) (*BindFactorTaskRsp, error)
 
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error)
 
 	GetFactorParams(ctx context.Context, req *GetFactorParamsReq) (*GetFactorParamsRsp, error)
 }
 
-func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateFactorSetReq{}
+func FactorMgrService_CreateFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CreateFactorTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).CreateFactorSet(ctx, reqbody.(*CreateFactorSetReq))
+		return svr.(FactorMgrService).CreateFactorTask(ctx, reqbody.(*CreateFactorTaskReq))
 	}
 
 	var rsp interface{}
@@ -102,14 +96,14 @@ func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func FactorMgrService_UpdateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateFactorSetReq{}
+func FactorMgrService_SetFactorTaskStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFactorTaskStatusReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).UpdateFactorSet(ctx, reqbody.(*UpdateFactorSetReq))
+		return svr.(FactorMgrService).SetFactorTaskStatus(ctx, reqbody.(*SetFactorTaskStatusReq))
 	}
 
 	var rsp interface{}
@@ -120,14 +114,14 @@ func FactorMgrService_UpdateFactorSet_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func FactorMgrService_SetFactorSetStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetFactorSetStatusReq{}
+func FactorMgrService_DeleteFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFactorTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).SetFactorSetStatus(ctx, reqbody.(*SetFactorSetStatusReq))
+		return svr.(FactorMgrService).DeleteFactorTask(ctx, reqbody.(*DeleteFactorTaskReq))
 	}
 
 	var rsp interface{}
@@ -138,14 +132,14 @@ func FactorMgrService_SetFactorSetStatus_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func FactorMgrService_DeleteFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteFactorSetReq{}
+func FactorMgrService_GetFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).DeleteFactorSet(ctx, reqbody.(*DeleteFactorSetReq))
+		return svr.(FactorMgrService).GetFactorTask(ctx, reqbody.(*GetFactorTaskReq))
 	}
 
 	var rsp interface{}
@@ -156,32 +150,14 @@ func FactorMgrService_DeleteFactorSet_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func FactorMgrService_GetFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFactorSetReq{}
+func FactorMgrService_ListFactorTasks_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorTasksReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).GetFactorSet(ctx, reqbody.(*GetFactorSetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_ListFactorSets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListFactorSetsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ListFactorSets(ctx, reqbody.(*ListFactorSetsReq))
+		return svr.(FactorMgrService).ListFactorTasks(ctx, reqbody.(*ListFactorTasksReq))
 	}
 
 	var rsp interface{}
@@ -264,14 +240,14 @@ func FactorMgrService_GetFactor_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func FactorMgrService_AddFactorToSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &AddFactorToSetReq{}
+func FactorMgrService_AddTaskMember_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AddTaskMemberReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).AddFactorToSet(ctx, reqbody.(*AddFactorToSetReq))
+		return svr.(FactorMgrService).AddTaskMember(ctx, reqbody.(*AddTaskMemberReq))
 	}
 
 	var rsp interface{}
@@ -282,14 +258,14 @@ func FactorMgrService_AddFactorToSet_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
-func FactorMgrService_RemoveFactorFromSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RemoveFactorFromSetReq{}
+func FactorMgrService_RemoveTaskMember_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RemoveTaskMemberReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).RemoveFactorFromSet(ctx, reqbody.(*RemoveFactorFromSetReq))
+		return svr.(FactorMgrService).RemoveTaskMember(ctx, reqbody.(*RemoveTaskMemberReq))
 	}
 
 	var rsp interface{}
@@ -300,14 +276,14 @@ func FactorMgrService_RemoveFactorFromSet_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
-func FactorMgrService_SetFactorMemberStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetFactorMemberStatusReq{}
+func FactorMgrService_SetTaskMemberStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetTaskMemberStatusReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).SetFactorMemberStatus(ctx, reqbody.(*SetFactorMemberStatusReq))
+		return svr.(FactorMgrService).SetTaskMemberStatus(ctx, reqbody.(*SetTaskMemberStatusReq))
 	}
 
 	var rsp interface{}
@@ -570,50 +546,14 @@ func FactorMgrService_SetFactorCategory_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
-func FactorMgrService_EnsureInstanceFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &EnsureInstanceFactorSetReq{}
+func FactorMgrService_BindFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BindFactorTaskReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).EnsureInstanceFactorSet(ctx, reqbody.(*EnsureInstanceFactorSetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_SetInstanceFactorSetEnabled_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetInstanceFactorSetEnabledReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).SetInstanceFactorSetEnabled(ctx, reqbody.(*SetInstanceFactorSetEnabledReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_ReleaseInstanceFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReleaseInstanceFactorSetReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).ReleaseInstanceFactorSet(ctx, reqbody.(*ReleaseInstanceFactorSetReq))
+		return svr.(FactorMgrService).BindFactorTask(ctx, reqbody.(*BindFactorTaskReq))
 	}
 
 	var rsp interface{}
@@ -666,28 +606,24 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*FactorMgrService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.factor.FactorMgr/CreateFactorSet",
-			Func: FactorMgrService_CreateFactorSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/CreateFactorTask",
+			Func: FactorMgrService_CreateFactorTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/UpdateFactorSet",
-			Func: FactorMgrService_UpdateFactorSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/SetFactorTaskStatus",
+			Func: FactorMgrService_SetFactorTaskStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/SetFactorSetStatus",
-			Func: FactorMgrService_SetFactorSetStatus_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/DeleteFactorTask",
+			Func: FactorMgrService_DeleteFactorTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/DeleteFactorSet",
-			Func: FactorMgrService_DeleteFactorSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/GetFactorTask",
+			Func: FactorMgrService_GetFactorTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/GetFactorSet",
-			Func: FactorMgrService_GetFactorSet_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/ListFactorSets",
-			Func: FactorMgrService_ListFactorSets_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/ListFactorTasks",
+			Func: FactorMgrService_ListFactorTasks_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/CreateFactor",
@@ -706,16 +642,16 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_GetFactor_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/AddFactorToSet",
-			Func: FactorMgrService_AddFactorToSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/AddTaskMember",
+			Func: FactorMgrService_AddTaskMember_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/RemoveFactorFromSet",
-			Func: FactorMgrService_RemoveFactorFromSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/RemoveTaskMember",
+			Func: FactorMgrService_RemoveTaskMember_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/SetFactorMemberStatus",
-			Func: FactorMgrService_SetFactorMemberStatus_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/SetTaskMemberStatus",
+			Func: FactorMgrService_SetTaskMemberStatus_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/ListFactors",
@@ -774,16 +710,8 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_SetFactorCategory_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/EnsureInstanceFactorSet",
-			Func: FactorMgrService_EnsureInstanceFactorSet_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/SetInstanceFactorSetEnabled",
-			Func: FactorMgrService_SetInstanceFactorSetEnabled_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorMgr/ReleaseInstanceFactorSet",
-			Func: FactorMgrService_ReleaseInstanceFactorSet_Handler,
+			Name: "/trpc.moox.factor.FactorMgr/BindFactorTask",
+			Func: FactorMgrService_BindFactorTask_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/SubmitFactorParams",
@@ -813,11 +741,7 @@ type FactorEngineService interface {
 
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error)
 
-	FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq) (*FreezeFactorParamsRsp, error)
-
-	ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq) (*ReportOfflineFreezesRsp, error)
-
-	ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq) (*ListParamIntervalsRsp, error)
+	GetTaskParams(ctx context.Context, req *GetTaskParamsReq) (*GetTaskParamsRsp, error)
 }
 
 func FactorEngineService_SyncEngineCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -892,50 +816,14 @@ func FactorEngineService_ReportRecalcProgress_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func FactorEngineService_FreezeFactorParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &FreezeFactorParamsReq{}
+func FactorEngineService_GetTaskParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetTaskParamsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorEngineService).FreezeFactorParams(ctx, reqbody.(*FreezeFactorParamsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorEngineService_ReportOfflineFreezes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportOfflineFreezesReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorEngineService).ReportOfflineFreezes(ctx, reqbody.(*ReportOfflineFreezesReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorEngineService_ListParamIntervals_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListParamIntervalsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorEngineService).ListParamIntervals(ctx, reqbody.(*ListParamIntervalsReq))
+		return svr.(FactorEngineService).GetTaskParams(ctx, reqbody.(*GetTaskParamsReq))
 	}
 
 	var rsp interface{}
@@ -968,16 +856,8 @@ var FactorEngineServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorEngineService_ReportRecalcProgress_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorEngine/FreezeFactorParams",
-			Func: FactorEngineService_FreezeFactorParams_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorEngine/ReportOfflineFreezes",
-			Func: FactorEngineService_ReportOfflineFreezes_Handler,
-		},
-		{
-			Name: "/trpc.moox.factor.FactorEngine/ListParamIntervals",
-			Func: FactorEngineService_ListParamIntervals_Handler,
+			Name: "/trpc.moox.factor.FactorEngine/GetTaskParams",
+			Func: FactorEngineService_GetTaskParams_Handler,
 		},
 	},
 }
@@ -993,23 +873,20 @@ func RegisterFactorEngineService(s server.Service, svr FactorEngineService) {
 
 type UnimplementedFactorMgr struct{}
 
-func (s *UnimplementedFactorMgr) CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error) {
-	return nil, errors.New("rpc CreateFactorSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) CreateFactorTask(ctx context.Context, req *CreateFactorTaskReq) (*CreateFactorTaskRsp, error) {
+	return nil, errors.New("rpc CreateFactorTask of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error) {
-	return nil, errors.New("rpc UpdateFactorSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) SetFactorTaskStatus(ctx context.Context, req *SetFactorTaskStatusReq) (*SetFactorTaskStatusRsp, error) {
+	return nil, errors.New("rpc SetFactorTaskStatus of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error) {
-	return nil, errors.New("rpc SetFactorSetStatus of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) DeleteFactorTask(ctx context.Context, req *DeleteFactorTaskReq) (*DeleteFactorTaskRsp, error) {
+	return nil, errors.New("rpc DeleteFactorTask of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq) (*DeleteFactorSetRsp, error) {
-	return nil, errors.New("rpc DeleteFactorSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) GetFactorTask(ctx context.Context, req *GetFactorTaskReq) (*GetFactorTaskRsp, error) {
+	return nil, errors.New("rpc GetFactorTask of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) GetFactorSet(ctx context.Context, req *GetFactorSetReq) (*GetFactorSetRsp, error) {
-	return nil, errors.New("rpc GetFactorSet of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) ListFactorSets(ctx context.Context, req *ListFactorSetsReq) (*ListFactorSetsRsp, error) {
-	return nil, errors.New("rpc ListFactorSets of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) ListFactorTasks(ctx context.Context, req *ListFactorTasksReq) (*ListFactorTasksRsp, error) {
+	return nil, errors.New("rpc ListFactorTasks of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) CreateFactor(ctx context.Context, req *CreateFactorReq) (*CreateFactorRsp, error) {
 	return nil, errors.New("rpc CreateFactor of service FactorMgr is not implemented")
@@ -1023,14 +900,14 @@ func (s *UnimplementedFactorMgr) DeleteFactor(ctx context.Context, req *DeleteFa
 func (s *UnimplementedFactorMgr) GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error) {
 	return nil, errors.New("rpc GetFactor of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) AddFactorToSet(ctx context.Context, req *AddFactorToSetReq) (*AddFactorToSetRsp, error) {
-	return nil, errors.New("rpc AddFactorToSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) AddTaskMember(ctx context.Context, req *AddTaskMemberReq) (*AddTaskMemberRsp, error) {
+	return nil, errors.New("rpc AddTaskMember of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq) (*RemoveFactorFromSetRsp, error) {
-	return nil, errors.New("rpc RemoveFactorFromSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) RemoveTaskMember(ctx context.Context, req *RemoveTaskMemberReq) (*RemoveTaskMemberRsp, error) {
+	return nil, errors.New("rpc RemoveTaskMember of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq) (*SetFactorMemberStatusRsp, error) {
-	return nil, errors.New("rpc SetFactorMemberStatus of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) SetTaskMemberStatus(ctx context.Context, req *SetTaskMemberStatusReq) (*SetTaskMemberStatusRsp, error) {
+	return nil, errors.New("rpc SetTaskMemberStatus of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error) {
 	return nil, errors.New("rpc ListFactors of service FactorMgr is not implemented")
@@ -1074,14 +951,8 @@ func (s *UnimplementedFactorMgr) DeleteFactorCategory(ctx context.Context, req *
 func (s *UnimplementedFactorMgr) SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq) (*SetFactorCategoryRsp, error) {
 	return nil, errors.New("rpc SetFactorCategory of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq) (*EnsureInstanceFactorSetRsp, error) {
-	return nil, errors.New("rpc EnsureInstanceFactorSet of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq) (*SetInstanceFactorSetEnabledRsp, error) {
-	return nil, errors.New("rpc SetInstanceFactorSetEnabled of service FactorMgr is not implemented")
-}
-func (s *UnimplementedFactorMgr) ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq) (*ReleaseInstanceFactorSetRsp, error) {
-	return nil, errors.New("rpc ReleaseInstanceFactorSet of service FactorMgr is not implemented")
+func (s *UnimplementedFactorMgr) BindFactorTask(ctx context.Context, req *BindFactorTaskReq) (*BindFactorTaskRsp, error) {
+	return nil, errors.New("rpc BindFactorTask of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error) {
 	return nil, errors.New("rpc SubmitFactorParams of service FactorMgr is not implemented")
@@ -1104,14 +975,8 @@ func (s *UnimplementedFactorEngine) PullRecalcJob(ctx context.Context, req *Pull
 func (s *UnimplementedFactorEngine) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error) {
 	return nil, errors.New("rpc ReportRecalcProgress of service FactorEngine is not implemented")
 }
-func (s *UnimplementedFactorEngine) FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq) (*FreezeFactorParamsRsp, error) {
-	return nil, errors.New("rpc FreezeFactorParams of service FactorEngine is not implemented")
-}
-func (s *UnimplementedFactorEngine) ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq) (*ReportOfflineFreezesRsp, error) {
-	return nil, errors.New("rpc ReportOfflineFreezes of service FactorEngine is not implemented")
-}
-func (s *UnimplementedFactorEngine) ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq) (*ListParamIntervalsRsp, error) {
-	return nil, errors.New("rpc ListParamIntervals of service FactorEngine is not implemented")
+func (s *UnimplementedFactorEngine) GetTaskParams(ctx context.Context, req *GetTaskParamsReq) (*GetTaskParamsRsp, error) {
+	return nil, errors.New("rpc GetTaskParams of service FactorEngine is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1122,17 +987,15 @@ func (s *UnimplementedFactorEngine) ListParamIntervals(ctx context.Context, req 
 
 // FactorMgrClientProxy defines service client proxy
 type FactorMgrClientProxy interface {
-	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq, opts ...client.Option) (rsp *CreateFactorSetRsp, err error)
+	CreateFactorTask(ctx context.Context, req *CreateFactorTaskReq, opts ...client.Option) (rsp *CreateFactorTaskRsp, err error)
 
-	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (rsp *UpdateFactorSetRsp, err error)
+	SetFactorTaskStatus(ctx context.Context, req *SetFactorTaskStatusReq, opts ...client.Option) (rsp *SetFactorTaskStatusRsp, err error)
 
-	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq, opts ...client.Option) (rsp *SetFactorSetStatusRsp, err error)
+	DeleteFactorTask(ctx context.Context, req *DeleteFactorTaskReq, opts ...client.Option) (rsp *DeleteFactorTaskRsp, err error)
 
-	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq, opts ...client.Option) (rsp *DeleteFactorSetRsp, err error)
+	GetFactorTask(ctx context.Context, req *GetFactorTaskReq, opts ...client.Option) (rsp *GetFactorTaskRsp, err error)
 
-	GetFactorSet(ctx context.Context, req *GetFactorSetReq, opts ...client.Option) (rsp *GetFactorSetRsp, err error)
-
-	ListFactorSets(ctx context.Context, req *ListFactorSetsReq, opts ...client.Option) (rsp *ListFactorSetsRsp, err error)
+	ListFactorTasks(ctx context.Context, req *ListFactorTasksReq, opts ...client.Option) (rsp *ListFactorTasksRsp, err error)
 
 	CreateFactor(ctx context.Context, req *CreateFactorReq, opts ...client.Option) (rsp *CreateFactorRsp, err error)
 
@@ -1142,11 +1005,11 @@ type FactorMgrClientProxy interface {
 
 	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
 
-	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq, opts ...client.Option) (rsp *AddFactorToSetRsp, err error)
+	AddTaskMember(ctx context.Context, req *AddTaskMemberReq, opts ...client.Option) (rsp *AddTaskMemberRsp, err error)
 
-	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq, opts ...client.Option) (rsp *RemoveFactorFromSetRsp, err error)
+	RemoveTaskMember(ctx context.Context, req *RemoveTaskMemberReq, opts ...client.Option) (rsp *RemoveTaskMemberRsp, err error)
 
-	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq, opts ...client.Option) (rsp *SetFactorMemberStatusRsp, err error)
+	SetTaskMemberStatus(ctx context.Context, req *SetTaskMemberStatusReq, opts ...client.Option) (rsp *SetTaskMemberStatusRsp, err error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 
@@ -1176,11 +1039,7 @@ type FactorMgrClientProxy interface {
 
 	SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq, opts ...client.Option) (rsp *SetFactorCategoryRsp, err error)
 
-	EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq, opts ...client.Option) (rsp *EnsureInstanceFactorSetRsp, err error)
-
-	SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq, opts ...client.Option) (rsp *SetInstanceFactorSetEnabledRsp, err error)
-
-	ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq, opts ...client.Option) (rsp *ReleaseInstanceFactorSetRsp, err error)
+	BindFactorTask(ctx context.Context, req *BindFactorTaskReq, opts ...client.Option) (rsp *BindFactorTaskRsp, err error)
 
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq, opts ...client.Option) (rsp *SubmitFactorParamsRsp, err error)
 
@@ -1196,120 +1055,100 @@ var NewFactorMgrClientProxy = func(opts ...client.Option) FactorMgrClientProxy {
 	return &FactorMgrClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *FactorMgrClientProxyImpl) CreateFactorSet(ctx context.Context, req *CreateFactorSetReq, opts ...client.Option) (*CreateFactorSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) CreateFactorTask(ctx context.Context, req *CreateFactorTaskReq, opts ...client.Option) (*CreateFactorTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/CreateFactorSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/CreateFactorTask")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("CreateFactorSet")
+	msg.WithCalleeMethod("CreateFactorTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CreateFactorSetRsp{}
+	rsp := &CreateFactorTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (*UpdateFactorSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) SetFactorTaskStatus(ctx context.Context, req *SetFactorTaskStatusReq, opts ...client.Option) (*SetFactorTaskStatusRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/UpdateFactorSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorTaskStatus")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("UpdateFactorSet")
+	msg.WithCalleeMethod("SetFactorTaskStatus")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateFactorSetRsp{}
+	rsp := &SetFactorTaskStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq, opts ...client.Option) (*SetFactorSetStatusRsp, error) {
+func (c *FactorMgrClientProxyImpl) DeleteFactorTask(ctx context.Context, req *DeleteFactorTaskReq, opts ...client.Option) (*DeleteFactorTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorSetStatus")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactorTask")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("SetFactorSetStatus")
+	msg.WithCalleeMethod("DeleteFactorTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SetFactorSetStatusRsp{}
+	rsp := &DeleteFactorTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq, opts ...client.Option) (*DeleteFactorSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) GetFactorTask(ctx context.Context, req *GetFactorTaskReq, opts ...client.Option) (*GetFactorTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactorSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetFactorTask")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("DeleteFactorSet")
+	msg.WithCalleeMethod("GetFactorTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &DeleteFactorSetRsp{}
+	rsp := &GetFactorTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) GetFactorSet(ctx context.Context, req *GetFactorSetReq, opts ...client.Option) (*GetFactorSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) ListFactorTasks(ctx context.Context, req *ListFactorTasksReq, opts ...client.Option) (*ListFactorTasksRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetFactorSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorTasks")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("GetFactorSet")
+	msg.WithCalleeMethod("ListFactorTasks")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetFactorSetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) ListFactorSets(ctx context.Context, req *ListFactorSetsReq, opts ...client.Option) (*ListFactorSetsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorSets")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ListFactorSets")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListFactorSetsRsp{}
+	rsp := &ListFactorTasksRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1396,60 +1235,60 @@ func (c *FactorMgrClientProxyImpl) GetFactor(ctx context.Context, req *GetFactor
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) AddFactorToSet(ctx context.Context, req *AddFactorToSetReq, opts ...client.Option) (*AddFactorToSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) AddTaskMember(ctx context.Context, req *AddTaskMemberReq, opts ...client.Option) (*AddTaskMemberRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/AddFactorToSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/AddTaskMember")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("AddFactorToSet")
+	msg.WithCalleeMethod("AddTaskMember")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &AddFactorToSetRsp{}
+	rsp := &AddTaskMemberRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq, opts ...client.Option) (*RemoveFactorFromSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) RemoveTaskMember(ctx context.Context, req *RemoveTaskMemberReq, opts ...client.Option) (*RemoveTaskMemberRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/RemoveFactorFromSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/RemoveTaskMember")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("RemoveFactorFromSet")
+	msg.WithCalleeMethod("RemoveTaskMember")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &RemoveFactorFromSetRsp{}
+	rsp := &RemoveTaskMemberRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq, opts ...client.Option) (*SetFactorMemberStatusRsp, error) {
+func (c *FactorMgrClientProxyImpl) SetTaskMemberStatus(ctx context.Context, req *SetTaskMemberStatusReq, opts ...client.Option) (*SetTaskMemberStatusRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorMemberStatus")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetTaskMemberStatus")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("SetFactorMemberStatus")
+	msg.WithCalleeMethod("SetTaskMemberStatus")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SetFactorMemberStatusRsp{}
+	rsp := &SetTaskMemberStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1736,60 +1575,20 @@ func (c *FactorMgrClientProxyImpl) SetFactorCategory(ctx context.Context, req *S
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq, opts ...client.Option) (*EnsureInstanceFactorSetRsp, error) {
+func (c *FactorMgrClientProxyImpl) BindFactorTask(ctx context.Context, req *BindFactorTaskReq, opts ...client.Option) (*BindFactorTaskRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/EnsureInstanceFactorSet")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/BindFactorTask")
 	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("EnsureInstanceFactorSet")
+	msg.WithCalleeMethod("BindFactorTask")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &EnsureInstanceFactorSetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq, opts ...client.Option) (*SetInstanceFactorSetEnabledRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetInstanceFactorSetEnabled")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("SetInstanceFactorSetEnabled")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &SetInstanceFactorSetEnabledRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq, opts ...client.Option) (*ReleaseInstanceFactorSetRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ReleaseInstanceFactorSet")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("ReleaseInstanceFactorSet")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReleaseInstanceFactorSetRsp{}
+	rsp := &BindFactorTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1846,11 +1645,7 @@ type FactorEngineClientProxy interface {
 
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (rsp *ReportRecalcProgressRsp, err error)
 
-	FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq, opts ...client.Option) (rsp *FreezeFactorParamsRsp, err error)
-
-	ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq, opts ...client.Option) (rsp *ReportOfflineFreezesRsp, err error)
-
-	ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq, opts ...client.Option) (rsp *ListParamIntervalsRsp, err error)
+	GetTaskParams(ctx context.Context, req *GetTaskParamsReq, opts ...client.Option) (rsp *GetTaskParamsRsp, err error)
 }
 
 type FactorEngineClientProxyImpl struct {
@@ -1942,60 +1737,20 @@ func (c *FactorEngineClientProxyImpl) ReportRecalcProgress(ctx context.Context, 
 	return rsp, nil
 }
 
-func (c *FactorEngineClientProxyImpl) FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq, opts ...client.Option) (*FreezeFactorParamsRsp, error) {
+func (c *FactorEngineClientProxyImpl) GetTaskParams(ctx context.Context, req *GetTaskParamsReq, opts ...client.Option) (*GetTaskParamsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/FreezeFactorParams")
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/GetTaskParams")
 	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("factor")
 	msg.WithCalleeService("FactorEngine")
-	msg.WithCalleeMethod("FreezeFactorParams")
+	msg.WithCalleeMethod("GetTaskParams")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &FreezeFactorParamsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorEngineClientProxyImpl) ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq, opts ...client.Option) (*ReportOfflineFreezesRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ReportOfflineFreezes")
-	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorEngine")
-	msg.WithCalleeMethod("ReportOfflineFreezes")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportOfflineFreezesRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorEngineClientProxyImpl) ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq, opts ...client.Option) (*ListParamIntervalsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ListParamIntervals")
-	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorEngine")
-	msg.WithCalleeMethod("ListParamIntervals")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListParamIntervalsRsp{}
+	rsp := &GetTaskParamsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

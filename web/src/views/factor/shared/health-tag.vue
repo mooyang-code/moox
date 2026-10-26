@@ -4,11 +4,11 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { FactorSet, SetRunSummary } from "@/api/factor/types";
+import type { FactorTask, TaskRunSummary } from "@/api/factor/types";
 import { setHealth } from "./health";
 
 defineOptions({ name: "FactorHealthTag" });
 
-const props = defineProps<{ set: Pick<FactorSet, "status" | "freq">; lastRun?: SetRunSummary }>();
+const props = defineProps<{ set: Pick<FactorTask, "status" | "freq">; lastRun?: TaskRunSummary }>();
 const health = computed(() => setHealth(props.set, props.lastRun));
 </script>

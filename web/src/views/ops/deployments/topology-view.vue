@@ -99,7 +99,7 @@
     <p v-else class="muted hint">点击组件查看它的上下游；选中后显示全部类别的直接关系。</p>
     <div class="canvas-scroll">
       <div class="canvas" :style="{ width: `${topology.width}px`, height: `${topology.height}px` }" @click.self="selectedId = ''">
-        <div class="lane-label" :style="{ top: `${topology.externalsY}px` }">外部</div>
+        <div class="runner-label" :style="{ top: `${topology.externalsY}px` }">外部</div>
         <div
           v-for="host in topology.hosts"
           :key="host.host.host_id"
@@ -127,7 +127,7 @@
           class="band"
           :style="{ top: `${band.y}px`, height: `${band.height}px` }"
         >
-          <span class="lane-label">{{ band.label }}</span>
+          <span class="runner-label">{{ band.label }}</span>
         </div>
         <svg class="edges" :width="topology.width" :height="topology.height" aria-hidden="true">
           <defs>
@@ -456,7 +456,7 @@ function box(host: TopologyHost) {
   position: relative;
   margin: 0 auto;
 }
-.lane-label {
+.runner-label {
   position: absolute;
   left: 16px;
   padding-top: 8px;
@@ -470,7 +470,7 @@ function box(host: TopologyHost) {
   border-top: 1px dashed var(--color-border-2);
   pointer-events: none;
 }
-.band .lane-label {
+.band .runner-label {
   top: 0;
 }
 .host-card {
