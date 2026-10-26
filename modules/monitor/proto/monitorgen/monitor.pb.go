@@ -758,7 +758,7 @@ func (x *HealthComponent) GetLifecycle() *HealthLifecycle {
 	return nil
 }
 
-// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子集合、策略实例）。
+// HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子任务、策略实例）。
 type HealthLifecycle struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

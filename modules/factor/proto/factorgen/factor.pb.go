@@ -35,7 +35,7 @@ type FactorTask struct {
 	Status          string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAt       string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       string `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// owner_instance_id 非空时是策略实例的私有集合，该实例是唯一的参数写入方；为空时成员带固定参数。
+	// owner_instance_id 非空时是策略实例的私有任务，该实例是唯一的参数写入方；为空时成员带固定参数。
 	OwnerInstanceId string `protobuf:"bytes,11,opt,name=owner_instance_id,json=ownerInstanceId,proto3" json:"owner_instance_id,omitempty"`
 }
 
@@ -577,7 +577,7 @@ func (x *FactorInfo) GetUsages() []*FactorUsage {
 	return nil
 }
 
-// FactorMember 是定义在因子集中的运行实例，身份是集合内唯一的别名。
+// FactorMember 是定义在因子任务中的运行实例，身份是任务内唯一的别名。
 type FactorMember struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -3636,7 +3636,7 @@ func (x *ValidateFactorSpecRsp) GetParams() []*FactorParamDecl {
 	return nil
 }
 
-// 在指定因子集的源数据上试算：少量标的、最近若干期。管理端直接读 Storage 计算，不经过引擎。
+// 在指定因子任务的源数据上试算：少量标的、最近若干期。管理端直接读 Storage 计算，不经过引擎。
 type PreviewFactorReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -4557,7 +4557,7 @@ func (x *SetFactorCategoryRsp) GetFactor() *FactorDef {
 	return nil
 }
 
-// 策略实例的私有因子集（因子动态调参执行计划 2.3）：启用实例时建立或对齐，停用时停用，删除实例时释放。
+// 策略实例的私有因子任务（因子动态调参执行计划 2.3）：启用实例时建立或对齐，停用时停用，删除实例时释放。
 type InstanceTaskMember struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -5983,7 +5983,7 @@ type EngineRuntimeStatus struct {
 	CatalogSyncedAt string                `protobuf:"bytes,7,opt,name=catalog_synced_at,json=catalogSyncedAt,proto3" json:"catalog_synced_at,omitempty"`
 	ComputeWorkers  int32                 `protobuf:"varint,8,opt,name=compute_workers,json=computeWorkers,proto3" json:"compute_workers,omitempty"`
 	ExprVersion     string                `protobuf:"bytes,9,opt,name=expr_version,json=exprVersion,proto3" json:"expr_version,omitempty"`
-	// watermarks 是各集合的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
+	// watermarks 是各任务的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
 	Watermarks []*TaskWatermarkStatus `protobuf:"bytes,10,rep,name=watermarks,proto3" json:"watermarks,omitempty"`
 	// param_health 是各成员的参数状态；offline_pending 是还没补报给管理端的离线冻结数。
 	ParamHealth    []*MemberParamHealth `protobuf:"bytes,11,rep,name=param_health,json=paramHealth,proto3" json:"param_health,omitempty"`
@@ -6830,7 +6830,7 @@ func (x *ReportRecalcProgressRsp) GetJobStatus() string {
 	return ""
 }
 
-// FreezeFactorParams 在引擎开算一期之前冻结这些集合的参数（因子动态调参执行计划 2.4）：提交与冻结在管理端同一个库里
+// FreezeFactorParams 在引擎开算一期之前冻结这些任务的参数（因子动态调参执行计划 2.4）：提交与冻结在管理端同一个库里
 // 串行化；同一期重复调用返回同一份结果。
 type MemberParamFreeze struct {
 	state         protoimpl.MessageState
