@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,11 +120,14 @@ func TestCatchupSetWithoutWatermarkAndSyncFailure(t *testing.T) {
 
 	r2, _ := newCatchupRuntime(t)
 	r2.preload.data = failingPrepare{err: errors.New("Storage 不可达")}
-	r2.catchupSet(ctx, "ftask_a", since, now)
-	waitSynced(t, r2, "ftask_a", since)
-	got := r2.catchupSet(ctx, "ftask_a", since, now)
+	// 后台同步失败得很快时，发起同步的那次评估自己就会读到失败并丢弃 job，所以不能等 job 出现失败状态，
+	// 而是反复评估直到读到失败原因（每次失败都丢弃，下一次评估重新同步）。
+	var got lifecycle.Catchup
+	require.Eventually(t, func() bool {
+		got = r2.catchupSet(ctx, "ftask_a", since, now)
+		return strings.Contains(got.Message, "Storage 不可达")
+	}, 15*time.Second, 10*time.Millisecond)
 	require.False(t, got.CaughtUp)
-	require.Contains(t, got.Message, "Storage 不可达")
 	require.Nil(t, r2.catchups.get("ftask_a", since), "失败后丢弃，下一次评估重新同步")
 }
 
