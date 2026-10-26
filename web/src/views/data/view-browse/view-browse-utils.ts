@@ -149,8 +149,8 @@ export function buildViewColumnLabels(
     const fromDataset = datasetColumnByName.get(column.origin_id);
     if (fromDataset) {
       labels[column.column_name] =
-        factorOutputName(column.attributes) ||
-        factorOutputName(fromDataset.attributes) ||
+        factorOutputName(column.attributes, column.column_name) ||
+        factorOutputName(fromDataset.attributes, fromDataset.column_name) ||
         displayName(column.attributes) ||
         datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
         datasetColumnLabels[fromDataset.column_name] ||
@@ -158,7 +158,7 @@ export function buildViewColumnLabels(
       continue;
     }
     labels[column.column_name] =
-      factorOutputName(column.attributes) ||
+      factorOutputName(column.attributes, column.column_name) ||
       displayName(column.attributes) ||
       systemViewLabels[column.origin_id] ||
       readableViewColumnLabel(column.column_name);
@@ -333,8 +333,9 @@ function displayName(attributes?: Record<string, string>) {
   return attributes?.display_name?.trim() || "";
 }
 
-function factorOutputName(attributes?: Record<string, string>) {
-  return attributes?.factor_output?.trim() || "";
+/** 因子输出列（column_kind=output）的标签就是它的技术列名（成员键 [__输出名]）。 */
+function factorOutputName(attributes: Record<string, string> | undefined, columnName: string) {
+  return attributes?.column_kind === "output" ? columnName : "";
 }
 
 function isOriginType(value: unknown, name: string, alias: number) {

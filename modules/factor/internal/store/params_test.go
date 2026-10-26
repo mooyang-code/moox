@@ -36,7 +36,7 @@ func submit(t *testing.T, s *Store, period int64, requestID string, key string, 
 }
 
 // 一个因子在同一个任务里最多一个可变成员；固定成员不受限制。
-func TestVarMemberIsUniquePerFactor(t *testing.T) {
+func TestVarMemberLimitedToOnePerFactor(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))

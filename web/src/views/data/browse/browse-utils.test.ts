@@ -128,7 +128,7 @@ describe("view factor column labels", () => {
         {
           column_name: "bias_5",
           origin_id: "bias_5",
-          attributes: { display_name: "乖离率", factor_output: "bias_5" }
+          attributes: { display_name: "乖离率", column_kind: "output", member_key: "bias__5" }
         } as ViewColumn
       ],
       [
@@ -137,7 +137,7 @@ describe("view factor column labels", () => {
           column_name: "bias_5",
           origin_type: 2,
           origin_id: "Bias",
-          attributes: { display_name: "bias_5", factor_output: "bias_5" }
+          attributes: { display_name: "bias_5", column_kind: "output", member_key: "bias__5" }
         } as DatasetColumn
       ],
       [],

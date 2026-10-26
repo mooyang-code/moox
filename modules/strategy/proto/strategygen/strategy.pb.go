@@ -124,7 +124,7 @@ type StrategyInstance struct {
 	LogicalAccountId string `protobuf:"bytes,5,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
 	Enabled          bool   `protobuf:"varint,6,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	SessionId        string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// 启用时固化的解析结果（只读）：bar、日历、市场类型、每列的 origin_factor_id 与 definition_hash
+	// 启用时固化的解析结果（只读）：bar、日历、市场类型、每列所属成员的 member_key 与契约哈希
 	ResolvedJson string `protobuf:"bytes,8,opt,name=resolved_json,json=resolvedJson,proto3" json:"resolved_json,omitempty"`
 	Health       string `protobuf:"bytes,9,opt,name=health,proto3" json:"health,omitempty"` // ok | degraded
 	CreatedAt    string `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`

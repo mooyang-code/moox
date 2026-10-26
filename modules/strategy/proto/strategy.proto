@@ -26,7 +26,7 @@ message StrategyInstance {
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
-  // 启用时固化的解析结果（只读）：bar、日历、市场类型、每列的 origin_factor_id 与 definition_hash
+  // 启用时固化的解析结果（只读）：bar、日历、市场类型、每列所属成员的 member_key 与契约哈希
   string resolved_json = 8;
   string health = 9;                     // ok | degraded
   string created_at = 10;
