@@ -61,6 +61,9 @@ type Outcome struct {
 	StageDurations map[string]time.Duration
 	// Items 是补算与填充的逐 (因子, 标的, 周期) 结果；实时周期不填。
 	Items map[ItemKey]ItemStatus
+	// DefaultFilled 是补算里按默认参数新补的期次（成员键 → 期次）：已有行不存在、或 __params 里没有这个成员。
+	// 由补算执行器填写，管线本身不知道。
+	DefaultFilled map[string][]time.Time
 }
 
 type Config struct {

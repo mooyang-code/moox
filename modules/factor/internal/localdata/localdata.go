@@ -450,7 +450,7 @@ func factorsOverLookback(members []domain.MemberDef, n int) *LookbackExceededErr
 	most := 0
 	for _, member := range members {
 		if member.Factor.LookbackPeriods > n {
-			names = append(names, member.Alias)
+			names = append(names, member.Key)
 			most = max(most, member.Factor.LookbackPeriods)
 		}
 	}

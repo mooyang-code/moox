@@ -35,9 +35,6 @@ type Selection struct {
 	Members  []domain.MemberDef
 	Subjects []string
 	Columns  []string
-	// Intervals 是各成员的冻结区间（别名 → 按起点排序），补算按它分参数段：段内各期每个成员的快照都相同，
-	// 一段一次计算。没有冻结记录的期次沿用它之前最近的区间，再之前没有就用默认参数。
-	Intervals map[string][]domain.ParamInterval
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
 	FillOnly bool
 	// FillCarry 让只填充同时按源数据写 carry 列：预热中被跳过的周期在实时路径上一行都没写，恢复时要把 carry 列一并补上。
@@ -67,7 +64,14 @@ const maxChunkRetryBackoff = 2 * time.Minute
 // ErrGated 表示任务被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
 var ErrGated = errors.New("factor task is gated by lifecycle")
 
+// ParamReader 读取已有结果行的 __params：补算按它还原每一期每个标的当时用的参数（设计 7.4）。
+type ParamReader interface {
+	// ReadRowParams 返回 [start, end) 内这些标的已有行的 __params（行 → 成员键 → 参数名 → 取值）；不存在的行不在结果里。
+	ReadRowParams(ctx context.Context, set domain.FactorTask, subjects []string, start, end time.Time) (map[pipeline.RowKey]map[string]map[string]float64, error)
+}
+
 type config struct {
+	params       ParamReader
 	gate         func(taskID string) bool
 	chunkPeriods int
 	memoryBudget int64
@@ -89,6 +93,9 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 }
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 
+// WithParamReader 设置已有行 __params 的读取方；没有设置时所有期次都按成员自己的参数计算，也不记录按默认参数新补的期次。
+func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }
+
 // WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有任务锁）检查，任务不允许写结果时返回 ErrGated。
 // 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶、重置期间这些后台路径不会越过门禁写结果。
 func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
@@ -97,6 +104,7 @@ func WithLocks(locks SetLocker) Option              { return func(cfg *config) {
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
+	params       ParamReader
 	gate         func(taskID string) bool
 	runner       Runner
 	locks        SetLocker
@@ -121,7 +129,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		gate: cfg.gate, runner: runner, locks: cfg.locks, clock: cfg.clock,
+		params: cfg.params, gate: cfg.gate, runner: runner, locks: cfg.locks, clock: cfg.clock,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -186,17 +194,36 @@ func (e *Executor) runSegments(ctx context.Context, selection Selection, start, 
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
+	base, err := e.readParams(ctx, selection, start, end)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
 	var merged pipeline.Outcome
 	for at := start; at.Before(end); {
-		segmentEnd, params := paramSegment(selection, at, end, duration)
-		outcome, err := e.runner.Run(ctx, plan(selection, params, at, segmentEnd))
+		segment := paramSegment(selection, base, at, end, duration)
+		outcome, err := e.runner.Run(ctx, plan(selection, segment, at))
+		if err == nil && e.params != nil {
+			outcome.DefaultFilled = segment.defaultFilled
+		}
 		merged = mergeOutcome(merged, outcome)
 		if err != nil {
 			return merged, err
 		}
-		at = segmentEnd
+		at = segment.end
 	}
 	return merged, nil
+}
+
+// readParams 读取 [start, end) 内已有行的 __params；没有设置读取方时返回空。
+func (e *Executor) readParams(ctx context.Context, selection Selection, start, end time.Time) (paramRows, error) {
+	if e.params == nil {
+		return paramRows{}, nil
+	}
+	rows, err := e.params.ReadRowParams(ctx, selection.Set, selection.Subjects, start, end)
+	if err != nil {
+		return paramRows{}, fmt.Errorf("读取已有行的 __params：%w", err)
+	}
+	return newParamRows(rows), nil
 }
 
 // RunChunkWith 先取任务锁，再在锁内调用 source 重新取得任务、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
@@ -303,9 +330,16 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
-	segmentEnd, params := paramSegment(selection, start, chunkEnd, duration)
-	outcome, err := e.runner.Run(ctx, plan(selection, params, start, segmentEnd))
-	return segmentEnd, outcome, false, err
+	base, err := e.readParams(ctx, selection, start, chunkEnd)
+	if err != nil {
+		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	segment := paramSegment(selection, base, start, chunkEnd, duration)
+	outcome, err := e.runner.Run(ctx, plan(selection, segment, start))
+	if err == nil && e.params != nil {
+		outcome.DefaultFilled = segment.defaultFilled
+	}
+	return segment.end, outcome, false, err
 }
 
 func (e *Executor) duration(set domain.FactorTask) (time.Duration, error) {
@@ -358,52 +392,108 @@ func (e *Executor) lock(ctx context.Context, taskID string) (func(), error) {
 	return unlock, nil
 }
 
-// paramSegment 返回从 start 起参数不变的一段 [start, segmentEnd)（不超过 limit）与这一段各成员的冻结参数。
-// 某成员在 start 有冻结区间时，段在区间结束处截断；没有时沿用之前最近的区间（没有就用默认参数），段在下一个区间开始处截断。
-func paramSegment(selection Selection, start, limit time.Time, duration time.Duration) (time.Time, map[string]domain.ParamFreeze) {
-	end := limit
-	params := make(map[string]domain.ParamFreeze, len(selection.Members))
-	for _, member := range selection.Members {
-		var previous *domain.ParamInterval
-		covered := false
-		for i := range selection.Intervals[member.Alias] {
-			interval := selection.Intervals[member.Alias][i]
-			switch {
-			case interval.Covers(start):
-				covered = true
-				params[member.Alias] = domain.ParamFreeze{TaskID: selection.Set.TaskID, MemberAlias: member.Alias, PeriodTime: start,
-					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
-				if stop := interval.End.Add(duration); stop.Before(end) {
-					end = stop
-				}
-			case interval.End.Before(start):
-				previous = &selection.Intervals[member.Alias][i]
-			case interval.Start.After(start) && !covered:
-				if interval.Start.Before(end) {
-					end = interval.Start
-				}
-			}
-			if covered || interval.Start.After(start) {
-				break
-			}
-		}
-		if !covered && previous != nil {
-			params[member.Alias] = domain.ParamFreeze{TaskID: selection.Set.TaskID, MemberAlias: member.Alias, PeriodTime: start,
-				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: carriedSource(previous.Source)}
-		}
-	}
-	if !end.After(start) {
-		end = start.Add(duration)
-	}
-	return end, params
+// paramRows 是已有行的 __params，按期次和标的整理：期次 → 标的 → 成员键 → 参数名 → 取值。
+type paramRows struct {
+	rows     map[pipeline.RowKey]map[string]map[string]float64
+	byPeriod map[int64]map[string]map[string]map[string]float64
 }
 
-// carriedSource 是沿用 previous 来源的区间时的来源：从未提交过（默认值）沿用的仍是默认值。
-func carriedSource(previous string) string {
-	if previous == domain.ParamsDefault {
-		return domain.ParamsDefault
+func newParamRows(rows map[pipeline.RowKey]map[string]map[string]float64) paramRows {
+	byPeriod := make(map[int64]map[string]map[string]map[string]float64)
+	for key, members := range rows {
+		at := key.At.UTC().Unix()
+		if byPeriod[at] == nil {
+			byPeriod[at] = make(map[string]map[string]map[string]float64)
+		}
+		byPeriod[at][key.Subject] = members
 	}
-	return domain.ParamsCarried
+	return paramRows{rows: rows, byPeriod: byPeriod}
+}
+
+// segment 是从某期起参数不变的一段 [start, end)：各成员本段用的快照、本段按默认参数新补的期次，以及本段内已有行的 __params。
+type segment struct {
+	end           time.Time
+	params        map[string]domain.ParamSnapshot
+	defaultFilled map[string][]time.Time
+	base          map[pipeline.RowKey]map[string]map[string]float64
+}
+
+// paramSegment 返回从 start 起参数不变的一段（不超过 limit）：段内每一期、每个标的、每个被选成员的已有参数都相同。
+// 已有行里没有这个标的、或没有这个成员时，该成员在这个标的上取成员自己的参数，这一期记为按默认参数新补。
+func paramSegment(selection Selection, base paramRows, start, limit time.Time, duration time.Duration) segment {
+	first := base.byPeriod[start.UTC().Unix()]
+	end := start.Add(duration)
+	for end.Before(limit) && sameParams(selection, first, base.byPeriod[end.UTC().Unix()]) {
+		end = end.Add(duration)
+	}
+	seg := segment{end: end, params: make(map[string]domain.ParamSnapshot, len(selection.Members)), defaultFilled: map[string][]time.Time{}}
+	for _, member := range selection.Members {
+		defaults := domain.MemberSnapshot(member)
+		snapshot := make(domain.ParamSnapshot, len(defaults))
+		for name, value := range defaults {
+			snapshot[name] = domain.ParamValue{Default: value.Default}
+		}
+		for _, subject := range selection.Subjects {
+			stored, ok := first[subject][member.Key]
+			if !ok {
+				continue
+			}
+			for name, value := range stored {
+				declared, known := defaults[name]
+				if !known || value == declared.Default {
+					continue
+				}
+				entry := snapshot[name]
+				if entry.Overrides == nil {
+					entry.Overrides = map[string]float64{}
+				}
+				entry.Overrides[subject] = value
+				snapshot[name] = entry
+			}
+		}
+		seg.params[member.Key] = snapshot
+		for at := start; at.Before(end); at = at.Add(duration) {
+			if missingFor(selection, base.byPeriod[at.UTC().Unix()], member.Key) {
+				seg.defaultFilled[member.Key] = append(seg.defaultFilled[member.Key], at.UTC())
+			}
+		}
+	}
+	seg.base = make(map[pipeline.RowKey]map[string]map[string]float64)
+	for key, members := range base.rows {
+		if !key.At.Before(start) && key.At.Before(end) {
+			seg.base[key] = members
+		}
+	}
+	return seg
+}
+
+// missingFor 报告这一期里有没有哪个被选标的缺少这个成员的已有参数（行不存在，或 __params 里没有这个成员）。
+func missingFor(selection Selection, period map[string]map[string]map[string]float64, memberKey string) bool {
+	for _, subject := range selection.Subjects {
+		if _, ok := period[subject][memberKey]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// sameParams 报告两期里每个被选标的、每个被选成员的已有参数是否完全相同（缺失与缺失相同，缺失与存在不同）。
+func sameParams(selection Selection, left, right map[string]map[string]map[string]float64) bool {
+	for _, subject := range selection.Subjects {
+		for _, member := range selection.Members {
+			l, lok := left[subject][member.Key]
+			r, rok := right[subject][member.Key]
+			if lok != rok || len(l) != len(r) {
+				return false
+			}
+			for name, value := range l {
+				if other, ok := r[name]; !ok || other != value {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // mergeOutcome 合并两个参数段的结果：失败标的取并集、状态取较差的一个、逐项结果合并。
@@ -423,12 +513,18 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 	for key, status := range next.Items {
 		into.Items[key] = status
 	}
+	for key, periods := range next.DefaultFilled {
+		if into.DefaultFilled == nil {
+			into.DefaultFilled = map[string][]time.Time{}
+		}
+		into.DefaultFilled[key] = append(into.DefaultFilled[key], periods...)
+	}
 	byMember := make(map[string]int, len(into.Factors))
 	for i, state := range into.Factors {
-		byMember[state.Member] = i
+		byMember[state.MemberKey] = i
 	}
 	for _, state := range next.Factors {
-		i, ok := byMember[state.Member]
+		i, ok := byMember[state.MemberKey]
 		if !ok {
 			into.Factors = append(into.Factors, state)
 			continue
@@ -441,10 +537,10 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 	return into
 }
 
-func plan(selection Selection, params map[string]domain.ParamFreeze, start, end time.Time) pipeline.Plan {
+func plan(selection Selection, seg segment, start time.Time) pipeline.Plan {
 	return pipeline.Plan{
-		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: params,
-		TargetStart: start, TargetEnd: end,
+		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
+		TargetStart: start, TargetEnd: seg.end,
 		Expected:     append([]string(nil), selection.Subjects...),
 		Available:    append([]string(nil), selection.Subjects...),
 		CarryColumns: selection.Columns, WriteCarry: !selection.FillOnly || selection.FillCarry, FillOnly: selection.FillOnly,
@@ -462,7 +558,7 @@ func DegradedNote(outcome pipeline.Outcome) string {
 	var members []string
 	for _, factor := range outcome.Factors {
 		if factor.Status != "complete" {
-			members = append(members, factor.Member)
+			members = append(members, factor.MemberKey)
 		}
 	}
 	note := fmt.Sprintf("%s failed_subjects=%d", degradedPrefix, len(outcome.FailedSubjects))
