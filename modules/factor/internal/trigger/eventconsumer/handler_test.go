@@ -48,24 +48,28 @@ func (s *handlerTaskLocator) EnabledTask(_ context.Context, taskID string) (doma
 	return domain.EngineTask{}, false, s.err
 }
 
-type handlerParamFreezer struct {
+type handlerParamSelector struct {
 	periods []time.Time
 	sets    []string
+	done    []string
 	err     error
 }
 
-func (f *handlerParamFreezer) Freeze(_ context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamFreeze, error) {
+func (f *handlerParamSelector) Select(_ context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time) (map[string]domain.ParamSnapshot, error) {
 	f.periods, f.sets = append(f.periods, period), append(f.sets, set.TaskID)
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make(map[string]domain.ParamFreeze, len(members))
+	out := make(map[string]domain.ParamSnapshot, len(members))
 	for _, member := range members {
-		snapshot := domain.ParamSnapshot{"window": {Default: 30}}
-		out[member.Alias] = domain.ParamFreeze{TaskID: set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
-			Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
+		out[member.Key] = domain.ParamSnapshot{"window": {Default: 30}}
 	}
 	return out, nil
+}
+
+func (f *handlerParamSelector) Done(_ context.Context, taskID string, _ time.Time) error {
+	f.done = append(f.done, taskID)
+	return nil
 }
 
 func (s *handlerTaskLocator) FilterSubjects(context.Context) ([]string, error) { return nil, nil }
@@ -189,19 +193,19 @@ func TestHandlerAcksDegradedOutcome(t *testing.T) {
 	require.True(t, plan.WriteCarry)
 }
 
-// 同一源数据集上的多个任务（各策略实例的私有任务）各算一份；每个任务开算前冻结自己这一期的参数并带进计划。
-func TestHandlerFansOutToEveryTaskAndFreezesParams(t *testing.T) {
+// 同一源数据集上的多个任务各算一份；每个任务开算前取得自己这一期的参数并带进计划，算完（完成标记写出）后清掉进行中记录。
+func TestHandlerFansOutToEveryTaskAndSelectsParams(t *testing.T) {
 	first := enabledTestTask()
 	second := enabledTestTask()
-	second.TaskID, second.ResultDatasetID = "ftask_i_strategy", "dataset_factor_i_strategy"
+	second.TaskID, second.ResultDatasetID = "ftask_second", "dataset_factor_second"
 	factor := domain.FactorDef{FactorID: "f", InputColumns: []string{"close"}}
 	locator := &handlerTaskLocator{set: first, factors: []domain.FactorDef{factor}, found: true,
-		extra: []domain.EngineTask{{Set: second, Members: []domain.MemberDef{{Alias: "fast", Factor: factor}}, ResultReady: true}}}
+		extra: []domain.EngineTask{{Set: second, Members: []domain.MemberDef{{Key: "fast", Factor: factor, Kind: domain.MemberKindVar}}, ResultReady: true}}}
 	runner := new(handlerRunner)
 	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
 	t.Cleanup(handler.Close)
-	freezer := new(handlerParamFreezer)
-	handler.SetParamFreezer(freezer)
+	selector := new(handlerParamSelector)
+	handler.SetParamSelector(selector)
 
 	result := handler.Handle(context.Background(), collectorDelivery(t, "event-fan"))
 	require.Equal(t, jetstream.ACK, result.Decision)
@@ -212,21 +216,23 @@ func TestHandlerFansOutToEveryTaskAndFreezesParams(t *testing.T) {
 	}
 	require.Contains(t, planned, first.TaskID)
 	require.Contains(t, planned, second.TaskID)
-	require.Equal(t, domain.ParamsRequested, planned[second.TaskID].Params["fast"].Source)
-	require.Equal(t, 30.0, planned[first.TaskID].Params["f"].Snapshot.Value("window", "BTC"))
-	require.ElementsMatch(t, []string{first.TaskID, second.TaskID}, freezer.sets)
-	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), freezer.periods[0])
+	require.Equal(t, 30.0, planned[second.TaskID].Params["fast"].Value("window", "BTC"))
+	require.Equal(t, 30.0, planned[first.TaskID].Params["f"].Value("window", "BTC"))
+	require.ElementsMatch(t, []string{first.TaskID, second.TaskID}, selector.sets)
+	require.ElementsMatch(t, []string{first.TaskID, second.TaskID}, selector.done, "完成标记写出后清掉进行中记录")
+	require.Equal(t, time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC), selector.periods[0])
 }
 
-// 冻结失败是基础设施错误：事件重投，不按默认参数硬算。
-func TestHandlerRetriesWhenFreezeFails(t *testing.T) {
+// 取参失败是基础设施错误：事件重投，不按默认参数硬算。
+func TestHandlerRetriesWhenParamSelectionFails(t *testing.T) {
 	runner := new(handlerRunner)
 	handler := NewHandler(&handlerTaskLocator{set: enabledTestTask(), factors: []domain.FactorDef{{FactorID: "f", InputColumns: []string{"close"}}}, found: true},
 		&handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{NakDelay: time.Second})
 	t.Cleanup(handler.Close)
-	handler.SetParamFreezer(&handlerParamFreezer{err: errors.New("mgr down")})
+	selector := &handlerParamSelector{err: errors.New("mgr down")}
+	handler.SetParamSelector(selector)
 
-	result := handler.Handle(context.Background(), collectorDelivery(t, "event-freeze"))
+	result := handler.Handle(context.Background(), collectorDelivery(t, "event-select"))
 	require.Equal(t, jetstream.RETRY, result.Decision)
 	require.ErrorIs(t, result.Err, storageio.ErrInfra)
 	require.Empty(t, runner.plans)
@@ -311,7 +317,7 @@ func (s *mutableFilterSetSource) EnabledTask(_ context.Context, taskID string) (
 
 func enabledTestTask() domain.FactorTask {
 	return domain.FactorTask{
-		TaskID: "ftask_bars_1m", SpaceID: "crypto", SourceDatasetID: "bars", Freq: "1m",
+		TaskID: "ftask_bars_1m", SpaceID: "crypto", Name: "行情因子", SourceDatasetID: "bars", Freq: "1m",
 		Status: domain.TaskStatusEnabled, ResultDatasetID: "dataset_factor_bars_1m",
 	}
 }

@@ -62,9 +62,10 @@ func TestHeartbeatUnreachableManagerKeepsRunning(t *testing.T) {
 }
 
 type reportCall struct {
-	progress time.Time
-	status   string
-	errText  string
+	progress      time.Time
+	status        string
+	errText       string
+	defaultFilled map[string][]domain.TimeRange
 }
 
 type jobClientFake struct {
@@ -83,8 +84,8 @@ func (f *jobClientFake) PullRecalcJob(context.Context) (PulledJob, bool, error) 
 	return f.job, found, nil
 }
 
-func (f *jobClientFake) ReportRecalcProgress(_ context.Context, _, _ string, progress time.Time, status, errText string) (string, error) {
-	f.reports = append(f.reports, reportCall{progress: progress, status: status, errText: errText})
+func (f *jobClientFake) ReportRecalcProgress(_ context.Context, _, _ string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error) {
+	f.reports = append(f.reports, reportCall{progress: progress, status: status, errText: errText, defaultFilled: defaultFilled})
 	if f.err != nil {
 		return "", f.err
 	}

@@ -16,14 +16,14 @@ func autoRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	cache, _ := newTestCache(t)
 	private := engineTask("ftask_private", "dataset_a", true, "bias")
-	private.Set.OwnerInstanceID = "inst-1"
+	private.Set.BoundInstanceID = "inst-1"
 	shared := engineTask("ftask_shared", "dataset_a", true, "bias", "cci")
 	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineTask{uncompiled(private), uncompiled(shared)}})
 	require.NoError(t, err)
 	return &Runtime{catalog: cache, runs: newRunTracker()}
 }
 
-// 目录里的全部计算任务（共享的与策略实例专属的）随创建自动 init、start，不必手动执行生命周期命令。
+// 目录里的全部计算任务（已关联策略实例的与没有关联的）随创建自动 init、start，不必手动执行生命周期命令。
 func TestAutoStartTaskForEveryTaskInCatalog(t *testing.T) {
 	r := autoRuntime(t)
 	require.True(t, r.autoStartTask(setRef("ftask_private")))
@@ -33,7 +33,7 @@ func TestAutoStartTaskForEveryTaskInCatalog(t *testing.T) {
 	require.False(t, r.autoStartTask(lifecycle.Ref{Kind: "strategy_instance", ID: "ftask_shared"}), "不是因子任务")
 }
 
-// completeState 是成员按当前目录算完一期后的状态（定义指纹与参数摘要与目录一致）。
+// completeState 是成员按当前目录算完一期后的状态（成员键、类型与定义指纹与目录一致）。
 func completeState(member domain.MemberDef) storageio.FactorState {
 	compiled, err := domain.CompileDefinition(member.Factor)
 	if err != nil {
@@ -41,8 +41,8 @@ func completeState(member domain.MemberDef) storageio.FactorState {
 	}
 	member.Factor = compiled
 	return storageio.FactorState{
-		Member: member.Alias, FactorID: member.Factor.FactorID, Status: "complete",
-		DefinitionHash: domain.DefinitionHash(compiled), ParamsDigest: domain.ParamsDigest(domain.MemberSnapshot(member)),
+		MemberKey: member.Key, MemberKind: member.Kind, FactorID: member.Factor.FactorID, Status: "complete",
+		DefinitionHash: domain.DefinitionHash(compiled),
 	}
 }
 
@@ -58,7 +58,7 @@ func recordPeriod(r *Runtime, taskID string, completedAt time.Time, mutate func(
 	r.runs.record(taskID, time.Date(2026, 10, 25, 13, 35, 0, 0, time.UTC), outcome.Status, outcome, completedAt)
 }
 
-// 预热到运行的自动确认：只对非专属任务，且要预热之后有一期所有成员都完整算完。
+// 预热到运行的自动确认：只对还没关联策略实例的任务，且要预热之后有一期所有成员都完整算完。
 func TestAutoConfirmNeedsAFullPeriodAfterWarmupStarted(t *testing.T) {
 	r := autoRuntime(t)
 	ref := setRef("ftask_shared")
@@ -72,7 +72,7 @@ func TestAutoConfirmNeedsAFullPeriodAfterWarmupStarted(t *testing.T) {
 	recordPeriod(r, "ftask_shared", warmingSince.Add(time.Minute), nil)
 	require.True(t, r.autoConfirmTask(ref, warmingSince))
 
-	require.False(t, r.autoConfirmTask(setRef("ftask_private"), warmingSince), "专属任务不自动确认")
+	require.False(t, r.autoConfirmTask(setRef("ftask_private"), warmingSince), "已关联策略实例的任务不自动确认")
 	require.False(t, r.autoConfirmTask(setRef("ftask_missing"), warmingSince))
 	require.False(t, r.autoConfirmTask(lifecycle.Ref{}, warmingSince))
 }
@@ -87,10 +87,10 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 		"成员有失败标的": func(o *pipeline.Outcome) { o.Factors[0].FailedSubjects = []string{"ETH"} },
 		"成员清单缺一个": func(o *pipeline.Outcome) { o.Factors = o.Factors[:1] },
 		"成员清单多一个": func(o *pipeline.Outcome) {
-			o.Factors = append(o.Factors, storageio.FactorState{Member: "extra", Status: "complete"})
+			o.Factors = append(o.Factors, storageio.FactorState{MemberKey: "extra", Status: "complete"})
 		},
 		"定义指纹对不上": func(o *pipeline.Outcome) { o.Factors[0].DefinitionHash = "sha256:other" },
-		"参数摘要对不上": func(o *pipeline.Outcome) { o.Factors[0].ParamsDigest = "sha256:other" },
+		"成员类型对不上": func(o *pipeline.Outcome) { o.Factors[0].MemberKind = "var" },
 	}
 	since := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
 	for name, mutate := range cases {
@@ -102,26 +102,26 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 	}
 }
 
-// 同一别名删除重加成不同的固定参数：目录里的成员变了，预热里已经完成的一期不再是证据，要等按新成员算完的一期。
-func TestAutoConfirmEvidenceIsBoundToMemberContent(t *testing.T) {
+// 同一成员键下定义改了表达式：目录里的成员契约变了，预热里已经完成的一期不再是证据，要等按新定义算完的一期。
+func TestAutoConfirmEvidenceIsBoundToMemberContract(t *testing.T) {
 	cache, _ := newTestCache(t)
-	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, window)\n")
-	build := func(window float64) domain.EngineTask {
+	build := func(spec string) domain.EngineTask {
+		def := domain.MustDefinition("pmean", "pmean", spec)
 		set := engineTask("ftask_shared", "dataset_a", true)
-		set.Members = []domain.MemberDef{{Alias: "pmean", Factor: def, Params: map[string]float64{"window": window}}}
+		set.Members = []domain.MemberDef{{Key: "pmean", Factor: def, Kind: domain.MemberKindFixed, Params: map[string]float64{"window": 5}}}
 		return uncompiled(set)
 	}
-	_, err := cache.Apply(CatalogSnapshot{Hash: "h1", Sets: []domain.EngineTask{build(5)}})
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h1", Sets: []domain.EngineTask{build("params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, window)\n")}})
 	require.NoError(t, err)
 	r := &Runtime{catalog: cache, runs: newRunTracker()}
 	since := time.Date(2026, 10, 25, 13, 36, 0, 0, time.UTC)
 	recordPeriod(r, "ftask_shared", since.Add(time.Minute), nil)
 	require.True(t, r.autoConfirmTask(setRef("ftask_shared"), since), "按当前成员算完的一期是证据")
 
-	_, err = cache.Apply(CatalogSnapshot{Hash: "h2", Sets: []domain.EngineTask{build(10)}})
+	_, err = cache.Apply(CatalogSnapshot{Hash: "h2", Sets: []domain.EngineTask{build("params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, window) + 1\n")}})
 	require.NoError(t, err)
-	require.False(t, r.autoConfirmTask(setRef("ftask_shared"), since), "同一别名换了固定参数，旧的一期不是新成员的证据")
+	require.False(t, r.autoConfirmTask(setRef("ftask_shared"), since), "定义变了，旧的一期不是新契约的证据")
 
 	recordPeriod(r, "ftask_shared", since.Add(2*time.Minute), nil)
-	require.True(t, r.autoConfirmTask(setRef("ftask_shared"), since), "按新成员算完一期之后才确认")
+	require.True(t, r.autoConfirmTask(setRef("ftask_shared"), since), "按新定义算完一期之后才确认")
 }

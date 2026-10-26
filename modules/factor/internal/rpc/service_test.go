@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -143,7 +144,7 @@ func TestListFactorTasksMembersOmitSource(t *testing.T) {
 	catalog := &catalogFake{
 		set: domain.FactorTask{TaskID: "ftask_a", Status: domain.TaskStatusEnabled},
 		members: []domain.TaskMember{{
-			FactorTaskMember: domain.FactorTaskMember{TaskID: "ftask_a", MemberAlias: "a", FactorID: "a", Status: domain.MemberStatusEnabled},
+			FactorTaskMember: domain.FactorTaskMember{TaskID: "ftask_a", MemberKey: "a", FactorID: "a", Status: domain.MemberStatusEnabled},
 			Factor:           domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
 		}},
 		sets: []domain.FactorTask{{TaskID: "ftask_a", Status: domain.TaskStatusEnabled}},
@@ -178,7 +179,7 @@ func TestAddFactorToTaskAndRemoveSurfaceCatalogErrors(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
 
 	catalog.err = errors.New("member is enabled; disable it before removal")
-	removed, err := svc.RemoveTaskMember(context.Background(), &factorpb.RemoveTaskMemberReq{TaskId: "ftask_a", MemberAlias: "a"})
+	removed, err := svc.RemoveTaskMember(context.Background(), &factorpb.RemoveTaskMemberReq{TaskId: "ftask_a", MemberKey: "a"})
 	require.NoError(t, err)
 	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, removed.GetRetInfo().GetCode())
 
@@ -276,11 +277,10 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 	want := []string{
 		"CreateFactorTask", "SetFactorTaskStatus", "DeleteFactorTask", "GetFactorTask", "ListFactorTasks",
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
-		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus",
+		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus", "BindFactorTask",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
-		"EnsureInstanceFactorTask", "SetInstanceFactorTaskEnabled", "ReleaseInstanceFactorTask",
 		"SubmitFactorParams", "GetFactorParams",
 	}
 	got := make([]string, 0, service.Methods().Len())
@@ -299,11 +299,15 @@ type catalogFake struct {
 	listTaskID        string
 	listStatus        string
 	err               error
-	instanceRequest   catalog.InstanceTaskRequest
 	writer            string
-	submissions       []catalog.ParamSubmission
-	intervals         []domain.ParamInterval
-	frozenThrough     time.Time
+	submitTask        string
+	submitPeriod      time.Time
+	submitRequest     string
+	submissions       []catalog.MemberSubmission
+	paramStates       []domain.FactorTaskMember
+	boundTask         string
+	boundInstance     string
+	addKind           string
 }
 
 func (f *catalogFake) CreateTask(_ context.Context, in domain.FactorTask) (domain.FactorTask, error) {
@@ -340,22 +344,24 @@ func (f *catalogFake) ListFactors(_ context.Context, taskID, status string) ([]d
 	f.listTaskID, f.listStatus = taskID, status
 	return f.infos, nil
 }
-func (f *catalogFake) AddTaskMember(_ context.Context, taskID, alias, factorID string, _ map[string]float64) (domain.TaskMember, error) {
+func (f *catalogFake) AddTaskMember(_ context.Context, taskID, factorID, kind string, _ map[string]float64) (domain.TaskMember, error) {
 	if f.err != nil {
 		return domain.TaskMember{}, f.err
 	}
-	if alias == "" {
-		alias = factorID
+	f.addKind = kind
+	key := factorID
+	if kind == domain.MemberKindVar {
+		key = factorID + "__var"
 	}
 	return domain.TaskMember{
-		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberAlias: alias, FactorID: factorID, Status: domain.MemberStatusDisabled},
+		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: key, FactorID: factorID, Kind: kind, Status: domain.MemberStatusDisabled},
 		Factor:           domain.FactorDef{FactorID: factorID},
 	}, nil
 }
 func (f *catalogFake) RemoveTaskMember(context.Context, string, string) error { return f.err }
 func (f *catalogFake) SetTaskMemberStatus(_ context.Context, taskID, factorID, status string) (domain.TaskMember, error) {
 	return domain.TaskMember{
-		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberAlias: factorID, FactorID: factorID, Status: status},
+		FactorTaskMember: domain.FactorTaskMember{TaskID: taskID, MemberKey: factorID, FactorID: factorID, Status: status},
 		Factor:           domain.FactorDef{FactorID: factorID},
 	}, nil
 }
@@ -369,30 +375,22 @@ func (f *catalogFake) DeleteCategory(context.Context, string) error { return f.e
 func (f *catalogFake) SetFactorCategory(_ context.Context, factorID, categoryID string) (domain.FactorDef, error) {
 	return domain.FactorDef{FactorID: factorID, CategoryID: categoryID}, f.err
 }
-func (f *catalogFake) EnsureInstanceTask(_ context.Context, request catalog.InstanceTaskRequest) (catalog.InstanceTask, error) {
-	f.instanceRequest = request
-	return catalog.InstanceTask{Set: domain.FactorTask{TaskID: domain.InstanceTaskID(request.InstanceID), SpaceID: request.SpaceID}}, f.err
+func (f *catalogFake) BindTask(_ context.Context, taskID, instanceID string) (domain.FactorTask, error) {
+	f.boundTask, f.boundInstance = taskID, instanceID
+	task := f.set
+	task.TaskID, task.BoundInstanceID = taskID, instanceID
+	return task, f.err
 }
-func (f *catalogFake) SetInstanceTaskEnabled(context.Context, string, bool) (domain.FactorTask, error) {
-	return f.set, f.err
-}
-func (f *catalogFake) ReleaseInstanceTask(context.Context, string) error { return f.err }
-func (f *catalogFake) SubmitParams(_ context.Context, writer string, submissions []catalog.ParamSubmission) ([]catalog.ParamSubmitResult, error) {
-	f.writer, f.submissions = writer, submissions
-	results := make([]catalog.ParamSubmitResult, 0, len(submissions))
+func (f *catalogFake) SubmitParams(_ context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error) {
+	f.writer, f.submitTask, f.submitPeriod, f.submitRequest, f.submissions = writer, taskID, period, requestID, submissions
+	results := make([]store.ParamSubmitOutcome, 0, len(submissions))
 	for _, submission := range submissions {
-		results = append(results, catalog.ParamSubmitResult{MemberAlias: submission.MemberAlias, Result: catalog.SubmitAccepted})
+		results = append(results, store.ParamSubmitOutcome{MemberKey: submission.MemberKey, Result: store.SubmitAccepted})
 	}
 	return results, f.err
 }
-func (f *catalogFake) ListParamIntervals(context.Context, string, string, time.Time, time.Time) ([]domain.ParamInterval, error) {
-	return f.intervals, f.err
-}
-func (f *catalogFake) ListParamRequests(context.Context, string, string, time.Time, time.Time, int) ([]domain.ParamRequest, error) {
-	return nil, f.err
-}
-func (f *catalogFake) FrozenThrough(context.Context, string) (time.Time, bool, error) {
-	return f.frozenThrough, !f.frozenThrough.IsZero(), f.err
+func (f *catalogFake) GetParams(context.Context, string) ([]domain.FactorTaskMember, error) {
+	return f.paramStates, f.err
 }
 
 type recalcFake struct {
@@ -432,17 +430,17 @@ func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
 func TestTaskTaskMemberStatusEnablesAndDisablesMembers(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 
-	enabled, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberAlias: "momentum", Status: domain.MemberStatusEnabled})
+	enabled, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberKey: "momentum", Status: domain.MemberStatusEnabled})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
 	require.Equal(t, "enabled", enabled.GetMember().GetStatus())
 	require.Equal(t, "ftask_a", enabled.GetMember().GetTaskId())
 
-	disabled, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberAlias: "momentum", Status: domain.MemberStatusDisabled})
+	disabled, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberKey: "momentum", Status: domain.MemberStatusDisabled})
 	require.NoError(t, err)
 	require.Equal(t, "disabled", disabled.GetMember().GetStatus())
 
-	invalid, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberAlias: "momentum", Status: "bogus"})
+	invalid, err := svc.SetTaskMemberStatus(context.Background(), &factorpb.SetTaskMemberStatusReq{TaskId: "ftask_a", MemberKey: "momentum", Status: "bogus"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
 }
