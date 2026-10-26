@@ -34,7 +34,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 		set, err := h.runnableTask(ctx, job)
 		if err != nil {
 			if _, failErr := h.store.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.ProgressTime,
-				store.RecalcStatusFailed, err.Error(), now, h.jobTTL); failErr != nil {
+				store.RecalcStatusFailed, err.Error(), nil, now, h.jobTTL); failErr != nil {
 				return store.RecalcJob{}, domain.EngineTask{}, false, failErr
 			}
 			continue
@@ -47,7 +47,7 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 // Report records a chunk of a leased job and returns the job's current state.
 // Only the engine holding the engine lease may report, so an engine that lost
 // the lease cannot keep a long job alive next to the new lease holder.
-func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error) {
+func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]store.TimeRange) (store.RecalcJob, error) {
 	now := h.now().UTC()
 	if !h.holdsLease(id, now) {
 		return store.RecalcJob{}, ErrLeaseConflict
@@ -60,11 +60,11 @@ func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, lease
 		}
 		if job.LeaseToken == leaseToken && job.Status == store.RecalcStatusRunning {
 			if _, runnableErr := h.runnableTask(ctx, job); runnableErr != nil {
-				return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), now, h.jobTTL)
+				return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now, h.jobTTL)
 			}
 		}
 	}
-	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, now, h.jobTTL)
+	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, defaultFilled, now, h.jobTTL)
 }
 
 func (h *Hub) runnableTask(ctx context.Context, job store.RecalcJob) (domain.EngineTask, error) {

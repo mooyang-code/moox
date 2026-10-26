@@ -33,8 +33,8 @@ type ConsumerConfig struct {
 	Gate func(taskID string) bool
 	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的任务，只允许连续水位追赶（历史周期），实时事件仍不处理。
 	CatchupGate func(taskID string) bool
-	// Params 非空时在开算每一期之前冻结参数；为空时全部按默认参数计算。
-	Params trigger.ParamFreezer
+	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
+	Params trigger.ParamSelector
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -148,7 +148,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	}
 	handler.SetGate(cfg.Gate)
 	handler.SetCatchupGate(cfg.CatchupGate)
-	handler.SetParamFreezer(cfg.Params)
+	handler.SetParamSelector(cfg.Params)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
