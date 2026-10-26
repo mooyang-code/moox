@@ -203,7 +203,7 @@ func (e *Executor) runSegments(ctx context.Context, selection Selection, start, 
 		segment := paramSegment(selection, base, at, end, duration)
 		outcome, err := e.runner.Run(ctx, plan(selection, segment, at))
 		if err == nil && e.params != nil {
-			outcome.DefaultFilled = segment.defaultFilled
+			outcome.DefaultFilled = filterDefaultFilled(selection, base, segment.defaultFilled, outcome.Items)
 		}
 		merged = mergeOutcome(merged, outcome)
 		if err != nil {
@@ -337,7 +337,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	segment := paramSegment(selection, base, start, chunkEnd, duration)
 	outcome, err := e.runner.Run(ctx, plan(selection, segment, start))
 	if err == nil && e.params != nil {
-		outcome.DefaultFilled = filterDefaultFilled(segment.defaultFilled, outcome.Items)
+		outcome.DefaultFilled = filterDefaultFilled(selection, base, segment.defaultFilled, outcome.Items)
 	}
 	return segment.end, outcome, false, err
 }
@@ -568,27 +568,24 @@ func DegradedNote(outcome pipeline.Outcome) string {
 	return note
 }
 
-// filterDefaultFilled 只保留实际有成员值写出的期次：整期所有项都失败的期次没有被补出，不能算作“按默认参数新补”。
+// filterDefaultFilled 只保留确实按默认参数新补出值的期次：该期有某个标的写出了这个成员的值，并且这个标的的已有行里没有它的参数
+// （行不存在，或 __params 里没有这个成员）。候选期次是按“任一被选标的缺参数”生成的，计算失败的标的、原来就有参数的标的都不算新补。
 // 没有逐项结果（Items 为空）时原样返回。
-func filterDefaultFilled(filled map[string][]time.Time, items map[pipeline.ItemKey]pipeline.ItemStatus) map[string][]time.Time {
+func filterDefaultFilled(selection Selection, base paramRows, filled map[string][]time.Time, items map[pipeline.ItemKey]pipeline.ItemStatus) map[string][]time.Time {
 	if len(items) == 0 || len(filled) == 0 {
 		return filled
-	}
-	written := make(map[string]map[int64]bool)
-	for key, status := range items {
-		if status != pipeline.ItemWritten {
-			continue
-		}
-		if written[key.Member] == nil {
-			written[key.Member] = map[int64]bool{}
-		}
-		written[key.Member][key.Period.Unix()] = true
 	}
 	out := make(map[string][]time.Time, len(filled))
 	for member, periods := range filled {
 		for _, at := range periods {
-			if written[member][at.Unix()] {
-				out[member] = append(out[member], at)
+			for _, subject := range selection.Subjects {
+				if items[pipeline.ItemKey{Member: member, Subject: subject, Period: at.UTC()}] != pipeline.ItemWritten {
+					continue
+				}
+				if _, had := base.byPeriod[at.UTC().Unix()][subject][member]; !had {
+					out[member] = append(out[member], at)
+					break
+				}
 			}
 		}
 	}

@@ -130,3 +130,25 @@ func TestAssembleDropsFailedMemberParams(t *testing.T) {
 	require.Nil(t, fields["pmean__var"])
 	require.Equal(t, `{"other__var":{"span":9}}`, string(fields[factorname.ParamsColumn].(storageio.JSONText)))
 }
+
+// 失败成员是行里唯一的参数键时，写出 {}：不写这一列的话 Storage 会保留已有行的旧 __params。
+func TestAssembleWritesEmptyParamsWhenOnlyMemberFailed(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	plan := computePlan(target, nil, []string{"BTC"})
+	variable := pmeanMember(t, domain.MemberKindVar, nil)
+	plan.Members = []domain.MemberDef{variable}
+	plan.Params = map[string]domain.ParamSnapshot{variable.Key: {"window": {Default: 3}}}
+	plan.BaseParams = map[RowKey]map[string]map[string]float64{
+		{Subject: "BTC", At: target, Tag: "venue:binance"}: {"pmean__var": {"window": 2}},
+	}
+	loaded := withView(t, framesForBars(plan.Available, target, 5))
+	runner := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{ComputeWorkers: 1})
+	computation, err := runner.Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	item := computation.Results["pmean__var"]["BTC"]
+	item.Err = errors.New("boom")
+	computation.Results["pmean__var"]["BTC"] = item
+	rows, err := runner.Assemble(plan, loaded, computation)
+	require.NoError(t, err)
+	require.Equal(t, `{}`, string(rowFields(rows, target)["BTC"][factorname.ParamsColumn].(storageio.JSONText)))
+}

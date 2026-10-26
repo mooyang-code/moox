@@ -172,6 +172,12 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	}
 
 	for _, member := range plan.Members {
+		// 整因子跳过的成员（严格全集的截面因子缺标的）没有任何结果项，输出列保持预置的 NULL：它在每一行都没有取得值，也就没有实际用的参数。
+		if !plan.FillOnly && computation.FactorStates[member.Key].Status == "skipped" {
+			for _, row := range rows {
+				delete(row.params, member.Key)
+			}
+		}
 		failedSubjects := failedFactorSubjects[member.Key]
 		if len(failedSubjects) == 0 || plan.FillOnly {
 			continue
@@ -193,7 +199,8 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		if len(row.fields) == 0 {
 			continue // 只填充时没有取得任何有效值的行不写
 		}
-		if len(row.params) > 0 {
+		// 非只填充时成员的参数全被去掉也要写出 {}：Storage 只更新请求带的字段，不写就会留下已有行的旧 __params。
+		if len(row.params) > 0 || (!plan.FillOnly && len(plan.Members) > 0) {
 			encoded, encodeErr := factorname.CanonicalParams(row.params)
 			if encodeErr != nil {
 				return nil, AssembleReport{}, fmt.Errorf("encode %s of subject %q at %s: %w", factorname.ParamsColumn, row.key.subject, row.key.at, encodeErr)
