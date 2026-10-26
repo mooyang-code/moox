@@ -34,8 +34,8 @@ describe("availableTasks", () => {
   it("lists only running, unbound tasks of the space, sorted by name", () => {
     const options = availableTasks(
       [
-        info({ task_id: "ftask_b", name: "乙任务" }),
-        info({ task_id: "ftask_a", name: "甲任务" }),
+        info({ task_id: "ftask_b", name: "B 任务" }),
+        info({ task_id: "ftask_a", name: "A 任务" }),
         info({ task_id: "ftask_bound", name: "已关联", bound_instance_id: "i1" }),
         info({ task_id: "ftask_off", name: "已停用", status: "disabled" }),
         info({ task_id: "ftask_new", name: "创建中", status: "pending" }),
