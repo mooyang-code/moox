@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -104,4 +105,28 @@ func TestAssembleMergesBaseParams(t *testing.T) {
 	require.NoError(t, err)
 	got := string(rowFields(rows, target)["BTC"][factorname.ParamsColumn].(storageio.JSONText))
 	require.Equal(t, `{"other__var":{"span":9},"pmean__var":{"window":3}}`, got)
+}
+
+// 补算时某个成员计算失败：输出列写 NULL，它在 __params 里的记录一并去掉（没有取得值，就没有“实际用的参数”），其他成员的记录不动。
+func TestAssembleDropsFailedMemberParams(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	plan := computePlan(target, nil, []string{"BTC"})
+	variable := pmeanMember(t, domain.MemberKindVar, nil)
+	plan.Members = []domain.MemberDef{variable}
+	plan.Params = map[string]domain.ParamSnapshot{variable.Key: {"window": {Default: 3}}}
+	plan.BaseParams = map[RowKey]map[string]map[string]float64{
+		{Subject: "BTC", At: target, Tag: "venue:binance"}: {"other__var": {"span": 9}, "pmean__var": {"window": 2}},
+	}
+	loaded := withView(t, framesForBars(plan.Available, target, 5))
+	runner := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{ComputeWorkers: 1})
+	computation, err := runner.Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	item := computation.Results["pmean__var"]["BTC"]
+	item.Err = errors.New("boom")
+	computation.Results["pmean__var"]["BTC"] = item
+	rows, err := runner.Assemble(plan, loaded, computation)
+	require.NoError(t, err)
+	fields := rowFields(rows, target)["BTC"]
+	require.Nil(t, fields["pmean__var"])
+	require.Equal(t, `{"other__var":{"span":9}}`, string(fields[factorname.ParamsColumn].(storageio.JSONText)))
 }

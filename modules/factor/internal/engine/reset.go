@@ -55,6 +55,7 @@ func (r *Runtime) resetSpec() *lifecycle.ResetSpec {
 				log.Infof("factor_reset_local_store_wiped")
 				return nil
 			}},
+			{Name: "clear_param_cache", Describe: "清空取参缓存（进行中记录与最近一次读到的提交值）", Run: func(context.Context, string) error { return r.params.Reset() }},
 			{Name: "clear_watermarks", Describe: "清空连续水位", Run: func(context.Context, string) error { return r.watermarks.Reset() }},
 			{Name: "clear_gap_ledger", Describe: "清空空洞账本", Run: func(context.Context, string) error {
 				removed, err := r.gap.Clear()

@@ -337,7 +337,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	segment := paramSegment(selection, base, start, chunkEnd, duration)
 	outcome, err := e.runner.Run(ctx, plan(selection, segment, start))
 	if err == nil && e.params != nil {
-		outcome.DefaultFilled = segment.defaultFilled
+		outcome.DefaultFilled = filterDefaultFilled(segment.defaultFilled, outcome.Items)
 	}
 	return segment.end, outcome, false, err
 }
@@ -566,4 +566,31 @@ func DegradedNote(outcome pipeline.Outcome) string {
 		note += " members=" + strings.Join(members, ",")
 	}
 	return note
+}
+
+// filterDefaultFilled 只保留实际有成员值写出的期次：整期所有项都失败的期次没有被补出，不能算作“按默认参数新补”。
+// 没有逐项结果（Items 为空）时原样返回。
+func filterDefaultFilled(filled map[string][]time.Time, items map[pipeline.ItemKey]pipeline.ItemStatus) map[string][]time.Time {
+	if len(items) == 0 || len(filled) == 0 {
+		return filled
+	}
+	written := make(map[string]map[int64]bool)
+	for key, status := range items {
+		if status != pipeline.ItemWritten {
+			continue
+		}
+		if written[key.Member] == nil {
+			written[key.Member] = map[int64]bool{}
+		}
+		written[key.Member][key.Period.Unix()] = true
+	}
+	out := make(map[string][]time.Time, len(filled))
+	for member, periods := range filled {
+		for _, at := range periods {
+			if written[member][at.Unix()] {
+				out[member] = append(out[member], at)
+			}
+		}
+	}
+	return out
 }

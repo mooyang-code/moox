@@ -226,11 +226,14 @@ func TestLoadSetupFactorsRejectsUnknownFactorAndBadLibrary(t *testing.T) {
 	}}
 	_, err := loadSetupFactors(manifest, root)
 	require.ErrorContains(t, err, `has no factor "missing"`)
-	bad := "- factor_id: X\n  name: X\n  spec: x\n  factor_type: timeseries\n"
+	bad := "- factor_id: x\n  name: X\n  spec: x\n  factor_type: timeseries\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "factors", "bad.yaml"), []byte(bad), 0o600))
-	manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "X", File: "bad.yaml"}}
+	manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "x", File: "bad.yaml"}}
 	_, err = loadSetupFactors(manifest, root)
 	require.ErrorContains(t, err, "factor_type", "unknown library fields are rejected")
+	manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "Bias", File: "lib.yaml"}}
+	_, err = loadSetupFactors(manifest, root)
+	require.ErrorContains(t, err, "factor_id is invalid", "factor IDs follow the factorname rules")
 }
 
 func TestLoadSetupFactorsRequiresExplicitSetup(t *testing.T) {

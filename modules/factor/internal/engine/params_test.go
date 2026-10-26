@@ -225,3 +225,26 @@ func TestPersistLeavesNoTempFiles(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, "param_cache.json", entries[0].Name())
 }
+
+// 引擎重置清掉取参缓存：管理端的提交已一并清除，重置后不能再复用旧的进行中记录或最近一次读到的值，重启后也一样。
+func TestResetClearsParamCache(t *testing.T) {
+	ctx := context.Background()
+	manager := &paramManagerFake{}
+	manager.set(t0.Unix(), 10)
+	selector, file := newTestSelector(t, manager)
+	_, err := selector.Select(ctx, paramTask, varMembers(), t0)
+	require.NoError(t, err)
+	require.NoError(t, selector.Reset())
+
+	manager.states = nil
+	manager.err = errors.New("mgr down")
+	got, err := selector.Select(ctx, paramTask, varMembers(), t0)
+	require.NoError(t, err)
+	require.Empty(t, got, "重置后管理端不可达也不能再用旧提交值")
+
+	restarted, err := newParamSelector(manager, file, 30*time.Millisecond)
+	require.NoError(t, err)
+	require.NoError(t, restarted.Reset())
+	var nilSelector *paramSelector
+	require.NoError(t, nilSelector.Reset())
+}

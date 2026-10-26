@@ -80,6 +80,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	pipelineConfig := pipeline.Config{WriteBatchRows: cfg.Pipeline.WriteBatchRows, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory)}
 	// 诊断入口跑在独立进程里，不能打开引擎正在使用的本地存储：直接读 Storage 的窗口计算；
 	// 它同样写因子结果，跳过的项记入账本，由引擎的跳过恢复补算。
+	// 它不经过引擎的任务执行器，没有同任务串行保证（读原行 __params 再合并写回）：使用前先暂停该任务。
 	ledger, _, ledgerErr := gapledger.Open(cfg.Gap.LedgerDir, time.Now, 0)
 	if ledgerErr != nil {
 		return pipeline.Outcome{}, fmt.Errorf("open factor gap ledger: %w", ledgerErr)

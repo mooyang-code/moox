@@ -8,16 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
 	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/packages/factorname"
 	"gopkg.in/yaml.v3"
 )
-
-var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // setupFactorTask 是配置里的一个因子任务及其成员。
 type setupFactorTask struct {
@@ -176,8 +174,8 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 	libraries := map[string]map[string]libraryEntry{}
 	for index, item := range definitions {
 		factorID := strings.TrimSpace(item.FactorID)
-		if !factorIDPattern.MatchString(factorID) {
-			return plan, fmt.Errorf("factors.definitions[%d].factor_id is invalid", index)
+		if err := factorname.ValidateFactorID(factorID); err != nil {
+			return plan, fmt.Errorf("factors.definitions[%d].factor_id is invalid: %w", index, err)
 		}
 		if _, exists := seen[factorID]; exists {
 			return plan, fmt.Errorf("factor %q is configured more than once", factorID)

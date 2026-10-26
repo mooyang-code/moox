@@ -183,6 +183,8 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 			for _, column := range member.OutputColumns() {
 				row.fields[column] = nil
 			}
+			// 失败的成员这一行写 NULL，没有取得值，也就没有“实际用的参数”：从 __params 里去掉它，其余成员的记录不动。
+			delete(row.params, member.Key)
 		}
 	}
 

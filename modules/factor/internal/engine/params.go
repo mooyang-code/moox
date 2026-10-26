@@ -176,6 +176,17 @@ func (s *paramSelector) Done(_ context.Context, taskID string, period time.Time)
 	return s.persistLocked()
 }
 
+// Reset 丢弃全部进行中记录与最近一次读到的提交值并落盘（引擎重置时调用：管理端的提交已一并清除，旧值不能再被复用）。
+func (s *paramSelector) Reset() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cache = paramCache{Latest: map[string]cachedParams{}, InFlight: map[string]inFlightParams{}}
+	return s.persistLocked()
+}
+
 // fetch 在 timeout 内读取提交值，失败按间隔重试；读不到时返回最后一次错误。
 func (s *paramSelector) fetch(ctx context.Context, taskID string) ([]factorwire.MemberParamState, error) {
 	deadline := time.Now().Add(s.timeout)
