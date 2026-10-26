@@ -291,3 +291,24 @@ func TestCheckCoverageUsesTheTaskResultView(t *testing.T) {
 		t.Fatalf("结果 View 覆盖不足时应拒绝，并指明 View：%v", err)
 	}
 }
+
+// 列名写错时，报错给出最接近的列名和这个任务的全部列名，不能只说“列不存在”。
+func TestResolveMissingColumnSuggestsTheClosestNames(t *testing.T) {
+	client := newFakeClient("spot")
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "bias_q_20", "bias_q_2o", 1))
+	_, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	if err == nil {
+		t.Fatal("引用不存在的列应拒绝")
+	}
+	for _, want := range []string{"bias_q_2o", "最接近的列名", "bias_q_20", "可用列（该任务的全部列）", "quote_volume_mean_20"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("报错应包含 %q：%v", want, err)
+		}
+	}
+	if got := nearestNames("zzzz", []string{"close", "volume"}, 3); got != nil {
+		t.Fatalf("没有接近的列名时不给提示：%v", got)
+	}
+	if got := nearestNames("clos", []string{"close", "closing_price", "volume", "close2"}, 2); len(got) != 2 || got[0] != "close" {
+		t.Fatalf("应按距离给出最接近的列名：%v", got)
+	}
+}

@@ -1,23 +1,13 @@
-# 全链路耗时观察策略：从 K 线收盘到策略求值完成。声明 EMA20（5 万根预热）和几个基础因子，启用实例时自动建立私有因子集，
-# 每期先算因子再求值；绑定 5m 合约 K 线 View，不挂账户（观察实例）。
+# 全链路耗时观察策略：从 K 线收盘到策略求值完成。
 #
-# ema20w 是 ema 因子的一个成员，参数由本策略逐期提交：span=20、warmup=50000。第一期没有提交过，用定义的默认值（warmup=0），
-# 从第二期起按 5 万根预热计算；观察耗时请从第二期看起。
+# 使用方法：先建一个 5m 合约 K 线的因子任务，成员（成员键即列名，规则里直接引用）：
+#   { factor = "ema", params = { span = 20, warmup = 50000 } }   # → 列 ema__20_50000（EMA20，5 万根预热）
+#   { factor = "rsi" }                                            # → 列 rsi
+#   { factor = "boll" }                                           # → 列 boll__mid、boll__up、boll__low、boll__pctb
+# 创建策略实例时选这个因子任务，不挂账户（观察实例）。任务先于策略运行，可以先积累历史；
+# 固定成员的参数从第一期起就是 span=20、warmup=50000，观察耗时不用跳过前几期。
 name: chain_ema20w_5m
 bar: 5m
-
-# 别名与定义 ID 相同时，规则里直接用输出名（rsi、mid……）；别名不同的成员列名是 <别名>_<输出名>（ema20w_ema）。
-factors:
-  ema20w: {factor: ema}
-  ma: {factor: ma}
-  rsi: {factor: rsi}
-  boll: {factor: boll}
-  atr: {factor: atr}
-
-factor_params:
-  ema20w:
-    span: {default: "20"}
-    warmup: {default: "50000"}
 
 universe:
   min_age_bars: 100
@@ -26,8 +16,8 @@ rules:
   - id: above_ema20w
     name: 站上 EMA20（5 万根预热）、未超买、偏离最大
     type: rank
-    filter: "ema20w_ema > 0 && close > ema20w_ema && rsi < 70 && close > mid"
-    score: "rank(close / ema20w_ema - 1)"
+    filter: "ema__20_50000 > 0 && close > ema__20_50000 && rsi < 70 && close > boll__mid"
+    score: "rank(close / ema__20_50000 - 1)"
     select: {top: 10}
     weight: {total: 1, method: equal, cap: 0.2}
 

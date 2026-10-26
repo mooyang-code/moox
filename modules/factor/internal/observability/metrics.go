@@ -29,25 +29,25 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		PeriodDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "factor_period_duration_seconds", Help: "Duration of factor period pipeline stages.",
 			Buckets: prometheus.DefBuckets,
-		}, []string{"set", "stage"}),
+		}, []string{"task", "stage"}),
 		PeriodLag: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_period_lag_seconds", Help: "Lag between the target period and its completion.",
-		}, []string{"set"}),
+		}, []string{"task"}),
 		PeriodTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_period_total", Help: "Number of completed factor periods.",
-		}, []string{"set", "status"}),
+		}, []string{"task", "status"}),
 		Failures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_failures_total", Help: "Number of factor calculation failures.",
-		}, []string{"set", "factor", "reason"}),
+		}, []string{"task", "factor", "reason"}),
 		RunnerBacklog: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_runner_backlog", Help: "Number of queued periods for each factor task runner.",
-		}, []string{"set"}),
+		}, []string{"task"}),
 		CompileErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_compile_errors_total", Help: "引擎侧编译因子定义失败的次数（mgr 与引擎的 expr 版本不一致时出现）。",
 		}, []string{"task_id", "factor_id"}),
 		LastPeriodTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_last_period_time", Help: "Unix timestamp of the most recently computed period.",
-		}, []string{"set"}),
+		}, []string{"task"}),
 		GapPending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "factor_gap_pending", Help: "Number of window-gap entries waiting to be repaired.",
 		}),

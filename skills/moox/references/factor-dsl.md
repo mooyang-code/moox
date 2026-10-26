@@ -30,7 +30,7 @@ CSV 统一格式：`data_time`（RFC3339 UTC）、`subject_id`、`series_tag`、
 | 元数据 | 目录里手填 `factor_type`、`input_columns`、`outputs`、`params`、`lookback_periods` | 只写 spec；类型、输入列、输出列、回看全部由编译推导 |
 | 参数 | `params` 字典，常见 `window` / `windows` / `output_names` | `params:` 声明可调参数（类型、范围、默认值）；输出列名固定，不再有列表参数与 `{参数名}` 列名模板；策略可在运行中每期调整取值 |
 | 中间量 | 局部变量 | `let:`，有序，后面的可以引用前面的 |
-| 输出 | DataFrame 的列 | `outputs:` 输出列名 → 表达式，最多展开成 64 列 |
+| 输出 | DataFrame 的列 | 单输出写 `output: <表达式>`（列名就是成员键）；共用参数的多输出写 `outputs:` 输出名 → 表达式（至少两个），最多 64 个 |
 | 分组 | 时序因子要自己 `groupby("series_tag")`；截面因子自己 `groupby(data_time)` | 自动：时序算子按 (subject_id, series_tag) 序列滚动，截面算子按 (data_time, series_tag) 分组 |
 | 窗口 | `rolling(n, min_periods=…)`，常见 `min_periods=1` | 严格窗口：窗口内有一个 NaN 结果就是 NaN，没有 `min_periods` |
 | 时间轴 | 只有存在的行，`rolling` 按行数滚动 | 按频率的规则网格，缺失的 K 线读作 NaN；流水线还会检查因子回看窗口（从该标的第一根 K 线起算），窗口里缺 K 线时该因子在该标的该期的全部输出都不写 |
@@ -44,21 +44,57 @@ params:                            # 可选：可调参数的声明；type 为 i
   window: {type: int, min: 2, max: 120, default: 20}
 let:                               # 可选：有序中间量，只能引用前面的 let、params 和输入列
   ma: ts_mean(close, window)
-outputs:                           # 必填：输出列名 → 表达式；名字固定，不随参数变化
-  bias: close / ma - 1
+output: close / ma - 1              # 单输出写 output；多输出写 outputs: {输出名: 表达式, …}（输出名固定，不随参数变化）
 ```
 
 - 输入列就是表达式里出现的源数据列名（`open`、`high`、`low`、`close`、`volume`、`quote_volume` 等，以源数据集实际的列为准），不用声明。
-- `params`、`let` 的名字：小写字母开头，只含小写字母、数字、下划线，最长 32 个字符，不能与函数、系统列
-  （`subject_id`、`freq`、`data_time`、`series_tag`）或 `true`/`false`/`nil` 重名。输出列名：字母或下划线开头，只含字母数字下划线，最长 64 个字符。
+- 名字（因子 ID、输出名、参数名）一律小写：`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`，名字内部用单下划线，不能连续下划线（双下划线留给成员键与列名的分段）；
+  因子 ID 最长 24 个字符，输出名与参数名最长 16 个字符。`params`、`let` 的名字也不能与函数、系统列（`subject_id`、`freq`、`data_time`、`series_tag`）或 `true`/`false`/`nil` 重名。
+- 输出：单输出因子写 `output: <表达式>`，没有输出名，列名就是成员键；多输出因子写 `outputs`（至少两个），输出名不能等于因子 ID、不能是 `var`、不能匹配参数值语法（如 `n5`），也不带因子前缀（写 `mid`，不写 `boll_mid`）。
+  只有确实共用同一组参数的输出才放在一个因子里；不共用参数的拆成独立因子，引擎同一期合并公共子表达式，不会多算。
 - 语法：数字、`true`/`false`、标识符、`+ - * / % **`、比较 `== != < <= > >=`、`and`/`or`/`not`、`c ? a : b` 和函数调用；其余一律拒绝。
 - 窗口、位移等结构位置只接受整数字面量或**整数参数**（范围必须落在算子允许范围内），回看按参数范围上限推导，所以策略调参时窗口永远够用；其余数值位置可以放字面量或任意参数。
-- 参数声明进因子指纹（`definition_hash`），取值不进：改范围、默认值会改变指纹，策略调整取值不会。同一定义可用不同成员别名加入因子集多次，各自调参，结果列为 `<别名>_<输出名>`。
+- 参数声明进因子指纹（`definition_hash`），取值不进：改范围、默认值会改变指纹，策略调整取值不会。同一定义可以用不同的固定参数多次加入同一个因子任务（成员键不同），也可以作为可变成员由策略逐期调参，见下一节。
 - NaN 语义：任一输入为 NaN 结果即为 NaN（`where`、`fill_nan`、`is_nan` 除外）；除以 0 为 NaN；比较运算遇到 NaN 结果也是 NaN。
 - 回看由编译推导：`ts_*` 为 L(x)+n−1，`delay`/`delta`/`pct_change` 为 L(x)+k，嵌套相加（`ts_rank(ts_mean(x, 20), 20)` 是 39）；
   `ema`/`sma` 截断到起点权重低于 1e−9 的 K 根（`ema(x, 20)` 为 208）；`ema(x, n, k)` 显式指定预热总根数 K=k（含起点那一根，窗口里最老的一根作为递推初值）：`ema(close, 20, 50000)` 是 EMA20 用 5 万根预热，k 不写或为 0 按通常方式；`ema(close, 50000, 50000)` 的起点权重约 13%，是近似值。
 - 用到任何 `cs_*` 的因子是截面因子，否则是时序因子。
 - 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，最多 16 个参数，展开后最多 64 个输出，窗口 1～5000，回看不超过 5000。
+
+### 成员键与列名
+
+因子加入因子任务后成为「成员」，结果数据集里的列名由「因子 ID + 参数 + 是否可变 + 输出」按规则推导，不存别名。写策略规则、筛选条件或 SQL 时，列名就是这里推导出的名字：
+
+```text
+成员键 = 因子ID [ "__" 参数段 ]      参数段 = "var" | 值 { "_" 值 }      值 = n?[0-9]+(p[0-9]+)?
+列名   = 成员键 [ "__" 输出名 ]       单输出因子没有输出段
+```
+
+- **参数值的写法**：十进制，小数点写 `p`、负号写 `n`（`0.5` → `0p5`，`-1` → `n1`），只写值、不写参数名，顺序是定义里 `params` 的声明顺序。
+- **参数全为默认值时省略参数段**，成员键就是因子 ID（`rsi`、`boll`）；**可变成员（由策略逐期提交参数）固定以 `__var` 结尾**（`ma_fast__var`），一个因子在一个任务里最多一个可变成员，需要多个可变值就注册多个因子（`ma_fast`、`ma_slow`）。
+- **单输出与多输出**：单输出因子的列名就是成员键；多输出因子的列名是成员键加 `__输出名`。
+
+| 成员 | 成员键 | 列名 |
+| --- | --- | --- |
+| `ema`，span=20、warmup=50000（固定） | `ema__20_50000` | `ema__20_50000` |
+| `rsi`，参数全为默认值 | `rsi` | `rsi` |
+| `boll`，参数全为默认值（输出 mid/up/low/pctb） | `boll` | `boll__mid`、`boll__up`、`boll__low`、`boll__pctb` |
+| `boll`，window=30 | `boll__30` | `boll__30__mid` 等 |
+| `ma_fast`（可变） | `ma_fast__var` | `ma_fast__var` |
+
+策略规则里直接用列名；要读可变成员这一行**实际用的**参数，用 `params("成员键", "参数名")`（值来自结果行的系统列 `__params`，记录这一行所有成员实际用的参数，包括固定成员）：
+
+```yaml
+rules:
+  - id: trend
+    type: rank
+    filter: "close > ema__20_50000 && rsi < 70 && close > boll__mid"
+    score: 'rank(ma_fast__var / close) - 0.01 * params("ma_fast__var", "window")'
+    select: {top: 10}
+    weight: {total: 1}
+```
+
+完整规则（含长度上限、`__params` 的结构与可变成员的提交流程）见 `docs/模块/因子.md` 的「成员键与列名」「动态调参」两节与 `docs/模块/策略.md`；加成员时控制台和 `moox-cli setup factors` 都会直接打印成员键与列名。
 
 ### 函数清单
 
@@ -136,7 +172,7 @@ outputs:                           # 必填：输出列名 → 表达式；名�
 | `df.groupby(["data_time", "series_tag"])[x].rank(pct=True)` | `cs_rank(x)` |
 | 截面 `(x - mean) / std`（ddof=1） | `cs_zscore(x)` |
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
-| `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员别名（如 `ma_fast`、`ma_slow`）或一个输出，输出名固定 |
+| `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员（固定参数不同的成员，或可变成员 `ma_fast`、`ma_slow`）或一个共用参数的输出，输出名固定 |
 
 **不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、前向填充（`ffill`）、未来数据（`shift(-k)`）、
 `ewm(adjust=True)`、`rank` 的非 average 并列方式、任意 `rolling().apply(自定义函数)`、跨标的的时序运算、读取外部文件或网络。
@@ -185,22 +221,21 @@ outputs:                           # 必填：输出列名 → 表达式；名�
 ### 7.1 收集原因子
 
 向用户要（或在仓库历史里找）：Python 源码、原目录条目（`factor_id`、`factor_type`、`input_columns`、`outputs`、`params`、`lookback_periods`）、
-原来所在的计算任务（源数据集与频率）。旧库可以从 git 历史取：`git show fd8d3ca3^:modules/factor/factors/<文件>.py`、`git show fd8d3ca3^:modules/factor/factors/catalog.json`。
+原来所在的因子任务（源数据集与频率）。旧库可以从 git 历史取：`git show fd8d3ca3^:modules/factor/factors/<文件>.py`、`git show fd8d3ca3^:modules/factor/factors/catalog.json`。
 
 ### 7.2 写出 DSL
 
 在工作目录（例如 `./factor-convert/<factor_id>/`）新建 `lib.yaml`，内容与正式因子库格式相同：
 
 ```yaml
-- factor_id: ZfAbsMean          # 与原 factor_id 相同
+- factor_id: zf_abs_mean         # 小写 snake_case（原 zf_abs_mean）
   name: 上涨振幅均值分位          # 展示名
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       tp: (close + high + low) / 3
       amp: (high - low) / open
-    outputs:
-      zf_abs_mean: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
+    output: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
 ```
 
 逐条对照第 4、6 节；拿不准某个函数的细节时运行 `factor-expr.sh functions` 看说明。
@@ -209,7 +244,7 @@ outputs:                           # 必填：输出列名 → 表达式；名�
 
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
-"$SKILL_ROOT/scripts/factor-expr.sh" check --library ./factor-convert/ZfAbsMean/lib.yaml
+"$SKILL_ROOT/scripts/factor-expr.sh" check --library ./factor-convert/zf_abs_mean/lib.yaml
 ```
 
 必须 `"ok":true`，并核对：`outputs` 与原输出列完全相同；`input_columns` 都在源数据集里；`factor_type` 与原来一致；记下 `lookback`。
@@ -240,13 +275,13 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" synthetic --subjects 5 --bars 6
 
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
-W=./factor-convert/ZfAbsMean
+W=./factor-convert/zf_abs_mean
 # 原 Python 因子：用用户原来的 Python 环境（需要 pandas、numpy），参数与输入列取原目录的值
-python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python --factor-file "$W/ZfAbsMean.py" \
+python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python --factor-file "$W/zf_abs_mean.py" \
   --params '{"window": 20}' --inputs open,high,low,close --type timeseries --freq 1m \
   --input ./factor-convert/bars.csv --output "$W/py.csv"
 # DSL：--freq 写源数据的频率，缺失的 K 线才会按引擎的网格语义处理
-"$SKILL_ROOT/scripts/factor-expr.sh" eval --library "$W/lib.yaml" --factor-id ZfAbsMean \
+"$SKILL_ROOT/scripts/factor-expr.sh" eval --library "$W/lib.yaml" --factor-id zf_abs_mean \
   --input ./factor-convert/bars.csv --freq 1m --output "$W/dsl.csv"
 ```
 
@@ -258,10 +293,10 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python --factor-file "$W/Zf
 
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
-W=./factor-convert/ZfAbsMean
+W=./factor-convert/zf_abs_mean
 "$SKILL_ROOT/scripts/factor-expr.sh" check --library "$W/lib.yaml" > "$W/check.jsonl"
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" --actual "$W/dsl.csv" \
-  --freq 1m --check "$W/check.jsonl" --factor-id ZfAbsMean --discrete zf_abs_mean --report "$W/report.json"
+  --freq 1m --check "$W/check.jsonl" --factor-id zf_abs_mean --discrete zf_abs_mean --report "$W/report.json"
 ```
 
 真实数据和合成数据都要通过（退出码 0）。未通过时：
@@ -283,7 +318,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 
 1. 把 7.2 的条目追加到 `modules/factor/factors/<库文件>.yaml`（同一文件里 `factor_id` 不能重复），再跑一次 `check` 确认整个库都能编译。
 2. 在用户的 `moox.toml` 里登记定义和成员：`[factors]` 必须是 `enabled = true`（否则命令什么也不导入，却照样返回成功）；
-   `[[factors.sets]]` 已有的不用重复写；成员先写 `status = "disabled"`，核对后再启用：
+   成员写在所属 `[[factors.tasks]]` 的 `members` 里（任务已有的不用重复写），先写 `status = "disabled"`，核对后再启用：
 
    ```toml
    [factors]
@@ -291,14 +326,18 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
    source_dir = "./modules/factor/factors"
 
    [[factors.definitions]]
-   factor_id = "ZfAbsMean"
+   factor_id = "zf_abs_mean"
    file = "xbx.yaml"
 
-   [[factors.members]]
+   [[factors.tasks]]
+   id = "ftask_spot_1m"
+   name = "现货一分钟"
+   space_id = "crypto"
    source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
    freq = "1m"
-   factor_id = "ZfAbsMean"
-   status = "disabled"
+   members = [
+     { factor = "zf_abs_mean", status = "disabled" },   # → 列 zf_abs_mean
+   ]
    ```
 
 3. 执行（运维机，用户的 `moox.toml`）：
@@ -307,40 +346,39 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
    moox-cli setup factors --file ./moox.toml
    ```
 
-   输出 JSON 的 `factors` 里先确认 `enabled` 为 true、`definitions` 等于登记的个数，再看 `imported`、`unchanged`、`members_added`、`members_enabled`
-   的实际变化；FactorMgr 会重新编译定义，编不过会整体报错。
+   输出 JSON 的 `factors` 里先确认 `enabled` 为 true、`definitions` 等于登记的个数，再看每个任务与成员的结果：
+   逐项报告 `exists` / `created` / `conflict`（冲突不影响其余项），并打印每个成员的成员键与列名；配置里已去掉的成员只报告 `orphan`，不自动移除。FactorMgr 会重新编译定义，编不过会整体报错。
    再次执行是幂等的：定义没变时记为 `unchanged`。
 4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-factor-mgr-cli recalc` 指定范围）。
 5. 仓库里的因子库改动按项目规范提交。
 
-**同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个计算任务，
-每个成员带自己的参数，别名按参数生成（全默认沿用因子 ID，否则“因子ID_参数1_参数2…”，按声明顺序写全部参数值）。
-不要为了换参数新建把参数写死的定义（例如 `Ema20Warmup50000`）。`moox.toml` 里的写法：
+**同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个因子任务，
+每个成员带自己的参数，成员键按参数生成（全默认就是因子 ID，否则“因子ID__值1_值2…”，按声明顺序写全部参数值）。
+不要为了换参数新建把参数写死的定义（例如 `ema20_warmup50000`）。`moox.toml` 里的写法：
 
 ```toml
-[[factors.members]]
-source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
-freq = "1m"
-factor_id = "Ema"
-params = { span = 20, warmup = 50000 }   # 没给的参数取定义的默认值；member_alias 缺省按参数生成（这里是 Ema_20_50000）
+members = [
+  { factor = "ema", params = { span = 20, warmup = 50000 } },   # 没给的参数取定义的默认值 → 成员键、列名 ema__20_50000
+  { factor = "ma_fast", var = true },                             # 可变成员，由关联的策略逐期提交参数 → ma_fast__var
+]
 ```
 
-固定参数加成员之后不再改，要换参数就另加一个成员；策略实例专属任务的参数由策略逐期提交，不用固定参数。
+固定参数加成员之后不再改，要换参数就另加一个成员；可变成员的 `params`（可省略）是默认参数，策略还没提交过时用它。
 
 ### 方式 B：控制台
 
 「因子计算 → 因子定义 → 新建」：填 `factor_id` 与名称，把 spec 粘进编辑器（输入时自动校验，显示“编译通过”），
-在「试算」里选择目标计算任务、可选几个标的，点「试算」用生产源数据算最近几期并核对数值，最后「保存因子」。
-保存后的定义不属于任何计算任务：到「因子计算 → 计算任务」里把它添加到对应任务并启用。
+在「试算」里选择目标因子任务、可选几个标的，点「试算」用生产源数据算最近几期并核对数值，最后「保存因子」。
+保存后的定义不属于任何因子任务：到「因子计算 → 因子任务」里把它添加到对应任务（选固定或可变，填参数，页面预览成员键和列名）并启用。
 
 ## 9. 写入后验证
 
 1. **定义**：控制台因子详情（或 `GetFactor`）里的类型、输入列、输出列、回看与 7.3 的 `check` 结果一致。
 2. **引擎**：引擎每分钟第 45 秒同步目录；启用成员后，下一期起结果数据集出现新列。
    控制台「因子计算」总览 / `GetStatus` 里引擎在线、目录一致，`factor_compile_errors_total` 不增长（编译失败只会出现在引擎与管理端的表达式版本不一致时）。
-3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「计算任务」页或 `moox-factor-mgr-cli status` 看任务从排队到完成。
+3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「因子任务」页或 `moox-factor-mgr-cli status` 看任务从排队到完成。
 4. **生产数值复核**：取一段时间的源 K 线和结果列，本地 `eval` 后与生产结果比较，两边是同一个引擎，应当逐值一致。
-   时序因子取一两个标的即可；**截面因子必须导出该计算任务在这段时间的全部标的**（不带 `--subject`，或逐个导出后合并），否则本地排名、标准化的样本不同，
+   时序因子取一两个标的即可；**截面因子必须导出该因子任务在这段时间的全部标的**（不带 `--subject`，或逐个导出后合并），否则本地排名、标准化的样本不同，
    结果必然对不上。源数据要比比较区间提前至少“因子回看”个周期，比较时用 `--start`、`--end` 只比较目标区间：
 
    ```bash
@@ -350,7 +388,7 @@ params = { span = 20, warmup = 50000 }   # 没给的参数取定义的默认值�
      --start-time <起> --end-time <止> --columns zf_abs_mean --output prod.json
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv src.json --output src.csv
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv prod.json --output prod.csv
-   "$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id ZfAbsMean --input src.csv --freq 1m --output local.csv
+   "$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id zf_abs_mean --input src.csv --freq 1m --output local.csv
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected prod.csv --actual local.csv \
      --freq 1m --lookback 40 --start <比较区间起点> --end <止>
    ```
@@ -360,18 +398,18 @@ params = { span = 20, warmup = 50000 }   # 没给的参数取定义的默认值�
 ## 10. 现有 11 个因子的转换（参考样例）
 
 生产因子库 `modules/factor/factors/xbx.yaml` 就是由下列旧因子按本流程转来的；在 400 根 × 4 个标的的合成数据上 `compare` 全部通过
-（ZfAbsMean 有 7 个排名并列跳变，< 1%）。
+（zf_abs_mean 有 7 个排名并列跳变，< 1%）。
 
 | factor_id | 旧 Python 核心（均为 `min_periods=1`，按 series_tag 分组） | DSL 输出 | lookback（window=20 时；生产按参数上限 120 推导） |
 | --- | --- | --- | --- |
-| Bias | `close / rolling_mean(close, w)` | `close / ts_mean(close, window)` | 20 |
-| BiasQ | `rolling_rank(close / mean - 1, w)` | `ts_rank(close / ts_mean(close, window) - 1, window)` | 39 |
-| Cci | `(tp - m) / (0.015 * rolling_mean(abs(tp - m), w))` | 同式，`tp`、`m` 写在 `let` | 39 |
-| MinMax | `(tp - rolling_min) / (rolling_max - rolling_min) - 0.5` | 同式，`ts_min`/`ts_max` | 20 |
-| QuoteVolumeMean | `rolling_mean(quote_volume, w)` | `ts_mean(quote_volume, window)` | 20 |
-| QuoteVolumeMeanQ | `rolling_rank(rolling_mean(quote_volume, w), w)` | `ts_rank(ts_mean(quote_volume, window), window)` | 39 |
-| VolumeMeanQ | `rolling_rank(rolling_mean(volume, w), w)` | `ts_rank(ts_mean(volume, window), window)` | 39 |
-| ZfAbsMean | `rolling_rank(rolling_mean(np.where(pct_change(tp) > 0, amp, 0), w), w)` | `ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)` | 40 |
-| ZfMeanQ | `rolling_rank(rolling_mean((high - low) / open, w), w)` | `ts_rank(ts_mean(amp, window), window)` | 39 |
-| ZfStd | `rolling_std(np.where(pct_change(close) > 0, amp, -amp), w)` | `ts_std(where(pct_change(close) > 0, amp, -amp), window)` | 21 |
-| ZscoreAbsMeanQ | `rolling_rank(rolling_mean(abs((close - m) / s), w), w)` | `ts_rank(ts_mean(abs((close - m) / s), window), window)` | 58 |
+| bias | `close / rolling_mean(close, w)` | `close / ts_mean(close, window)` | 20 |
+| bias_q | `rolling_rank(close / mean - 1, w)` | `ts_rank(close / ts_mean(close, window) - 1, window)` | 39 |
+| cci | `(tp - m) / (0.015 * rolling_mean(abs(tp - m), w))` | 同式，`tp`、`m` 写在 `let` | 39 |
+| min_max | `(tp - rolling_min) / (rolling_max - rolling_min) - 0.5` | 同式，`ts_min`/`ts_max` | 20 |
+| quote_volume_mean | `rolling_mean(quote_volume, w)` | `ts_mean(quote_volume, window)` | 20 |
+| quote_volume_mean_q | `rolling_rank(rolling_mean(quote_volume, w), w)` | `ts_rank(ts_mean(quote_volume, window), window)` | 39 |
+| volume_mean_q | `rolling_rank(rolling_mean(volume, w), w)` | `ts_rank(ts_mean(volume, window), window)` | 39 |
+| zf_abs_mean | `rolling_rank(rolling_mean(np.where(pct_change(tp) > 0, amp, 0), w), w)` | `ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)` | 40 |
+| zf_mean_q | `rolling_rank(rolling_mean((high - low) / open, w), w)` | `ts_rank(ts_mean(amp, window), window)` | 39 |
+| zf_std | `rolling_std(np.where(pct_change(close) > 0, amp, -amp), w)` | `ts_std(where(pct_change(close) > 0, amp, -amp), window)` | 21 |
+| zscore_abs_mean_q | `rolling_rank(rolling_mean(abs((close - m) / s), w), w)` | `ts_rank(ts_mean(abs((close - m) / s), window), window)` | 58 |

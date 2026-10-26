@@ -147,8 +147,8 @@ install -m 0755 <传到因子机的 moox-factor-engine> $D/bin/.moox-factor-engi
 systemctl --user restart moox-factor-engine.service
 ```
 
-- **避开整点前后重启**：重启会丢一个整点周期的计算（`1h` 因子集）。只落盘不重启，等合适时机再重启也可以。
-- 管理端租约 TTL 45 秒：新进程会先报 `lease conflict`，约 45 秒后接管，期间因子不出结果；重启后各因子集要重新预热几分钟，这期间数据集显示“数据积累中”但不告警。
+- **避开整点前后重启**：重启会丢一个整点周期的计算（`1h` 因子任务）。只落盘不重启，等合适时机再重启也可以。
+- 管理端租约 TTL 45 秒：新进程会先报 `lease conflict`，约 45 秒后接管，期间因子不出结果；重启后各因子任务要重新预热几分钟，这期间数据集显示“数据积累中”但不告警。
 - 引擎配置在 `~/moox/factor-engine/config/engine.yaml`，改前备份；账本重置用 `moox-factor-engine reset-gap-ledger`（引擎必须已停止）。
 
 **前端 `web-host`**（本机构建，发布到控制机 `prod` 单元）：

@@ -99,7 +99,7 @@ rows at the next Storage cleanup, so confirm it with the user first. Do not edit
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
-the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
+the Factor durable is `factor_collector_period_v1`. Use task-labeled period and runner metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 
 初始化完成后，如果用户在 macOS 上操作且控制台是 internal TLS，要提醒用户让浏览器信任管理台 CA（命令见 [`references/custom-setup.md`](references/custom-setup.md) 的“macOS：初始化后让浏览器信任管理台证书”），并且不要替用户清理钥匙串里的这张证书。

@@ -12,7 +12,7 @@
 | 监控告警 | Monitor 当前未恢复的告警（`alerts`） | `moox-cli doctor alerts` |
 | 数据 | 告警之外仍不健康的数据集（落后、停止上报） | `moox-cli doctor alerts` |
 | 策略 | 策略实例降级、目标过期等 | 控制台策略页，或 moox-cli 的策略命令 |
-| 因子 | 因子集计算降级、落后 | 控制台因子页，或 `moox-cli doctor diagnose` |
+| 因子 | 因子任务计算降级、落后 | 控制台因子页，或 `moox-cli doctor diagnose` |
 
 `doctor alerts` 只覆盖前两类；策略和因子要另外看，报告末尾的“注”会提醒。
 
@@ -55,8 +55,8 @@
 | 1 小时等低频视图报 `producer stale`，且 Storage 刚重启过 | 视图只在每个周期提交输出时刷新水位指标，重启后要等下一次提交才重新出现指标 | Monitor 对周期不短于 5 分钟的视图已容忍“一个周期加 5 分钟”，一般不会再报；仍报且超过这个时间，才是真的没在提交，按“数据落后”查。**不要为了清除它重启 Storage**——重启会让所有低频视图再空窗一个周期 |
 | 重启或发布期间，采集、采集计划、“采集任务清单控制面数据过期”、某组件探针失败 | 依赖的服务重启或发布中，暂时不可用；Monitor 评估时读不到 | 几分钟内自愈，等 2～3 个评估周期（约 1～3 分钟）再看；不要因此去重启别的组件 |
 | 主机“失联”（`presence`） | 主机采集代理 3 分钟没上报：主机离线、网络断、host-agent 停了；或刚重启 Monitor、EventBus | 看当前 `alerts`；只在 `incidents` 里出现的是历史。持续存在才登录主机看 host-agent 进程和 EventBus 连通 |
-| 因子参数（`factor_params`）报“沿用上期参数”等过期告警 | 离线冻结后，从未请求过参数的成员不应再告警（已修）；仍出现说明确有成员在请求参数却没有新提交 | 看对应策略实例是否停了、参数提交是否失败；参数提交与冻结的表和规则见 [`docs/模块/因子.md`](../../../docs/模块/因子.md) |
-| 新建策略实例的私有因子集一直停在“就绪/预热” | 启用实例后会自动 init、start；confirm 仍需手动，预热需要回补历史 | 不是故障：看回补进度；`min_age_bars` 过大时预热更久。confirm 由用户确认 |
+| “策略参数投递”（`factor_params` 检查）告警 | 策略导出的 `moox_strategy_param_delivery_stale` 为 1：实例在运行、任务有可变成员，但连续多期（默认 10）结果都没有把下一期参数送达因子侧 | 看对应策略实例的结果里 `c_params_error` 与 FactorMgr 是否可达、参数提交是否被拒绝；规则见 [`docs/模块/因子.md`](../../../docs/模块/因子.md) 第 11 节 |
+| 新建的因子任务一直停在“就绪/预热” | 任务启用后引擎自动 init、start、confirm；本地序列不足最长回看（可变成员按参数上限）时停在预热 | 不是故障：看 `lifecycle status` 给出的原因，需要时导入历史（见初始数据导入） |
 | 数据落后（`late_confirmed`、`success stale`、`run stale`） | 生产链路真的慢了：Collector、Storage Primary、View、Factor 之一 | 按 [`view-catchup.md`](view-catchup.md) 分别量 Primary、View、Factor 三段，再决定补算或修复 |
 | 组件“从未收到监控上报”“监控上报已中断” | 进程没起、连不上 EventBus，或凭据不对 | `native-release.sh status --host <别名>` 看进程与就绪；EventBus 凭据问题见 [`eventbus-credentials.md`](eventbus-credentials.md) |
 

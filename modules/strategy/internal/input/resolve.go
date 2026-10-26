@@ -128,7 +128,18 @@ func Resolve(ctx context.Context, client Client, spaceID, taskID string, strateg
 		}
 	}
 	if len(missing) > 0 {
-		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s（因子任务 %s）；可用列：%s", strings.Join(missing, "、"), viewID, taskID, strings.Join(resolved.ViewColumns, "、"))
+		// 列名写错是最常见的原因：先给出每个缺失列最接近的几个列名，再附上这个任务的全部列名。
+		hints := make([]string, 0, len(missing))
+		for _, name := range missing {
+			if near := nearestNames(name, resolved.ViewColumns, 3); len(near) > 0 {
+				hints = append(hints, fmt.Sprintf("%s 可能是 %s", name, strings.Join(near, "、")))
+			}
+		}
+		suggestion := ""
+		if len(hints) > 0 {
+			suggestion = "；最接近的列名：" + strings.Join(hints, "；")
+		}
+		return Resolved{}, nil, fmt.Errorf("列 %s 不存在于 View %s（因子任务 %s）%s；可用列（该任务的全部列）：%s", strings.Join(missing, "、"), viewID, taskID, suggestion, strings.Join(resolved.ViewColumns, "、"))
 	}
 	members, err := varMembers(ctx, client, view)
 	if err != nil {
