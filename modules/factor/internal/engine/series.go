@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -36,8 +35,6 @@ type seriesFollower struct {
 	onGapped func(src seriesstore.Source)
 	// blocked 记录断档的数据源，用于避免每轮重复告警。
 	blocked map[seriesstore.Source]bool
-	// params 提供重算区间的冻结参数（可为 nil：全部按默认参数）。
-	params paramIntervalSource
 }
 
 type seriesSets interface {
@@ -211,14 +208,7 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed
 			}
 		}
 		sort.Strings(subjects)
-		// 失效重算的是已经算过的周期：按当时冻结的参数重算。
-		var intervals map[string][]domain.ParamInterval
-		if f.params != nil {
-			if intervals, err = f.params.Intervals(ctx, current.Set.TaskID, start, end); err != nil {
-				return recalcexec.Selection{}, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
-			}
-		}
-		return recalcexec.Selection{Set: current.Set, Members: current.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
+		return recalcexec.Selection{Set: current.Set, Members: current.Members, Subjects: subjects, Columns: columns}, nil
 	}
 	_, err := f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr == nil && outcome.Status == "degraded" {

@@ -95,7 +95,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 					fields[column] = nil
 				}
 				for _, member := range plan.Members {
-					rowParams[member.Key] = memberParamValues(plan, member, subject)
+					rowParams[member.Key] = MemberParamValues(plan, member, subject)
 				}
 			}
 			if _, exists := rows[key]; exists {
@@ -337,7 +337,7 @@ func applyFactorValues(plan Plan, rows map[resultKey]*assembledRow, key resultKe
 				row.fields[column] = nil
 			}
 			for _, planned := range plan.Members {
-				row.params[planned.Key] = memberParamValues(plan, planned, key.subject)
+				row.params[planned.Key] = MemberParamValues(plan, planned, key.subject)
 			}
 		}
 		rows[key] = row
@@ -352,12 +352,12 @@ func applyFactorValues(plan Plan, rows map[resultKey]*assembledRow, key resultKe
 	for i, column := range columns {
 		row.fields[column] = normalizeNumeric(values[i])
 	}
-	row.params[member.Key] = memberParamValues(plan, member, key.subject)
+	row.params[member.Key] = MemberParamValues(plan, member, key.subject)
 	return true
 }
 
-// memberParamValues 返回成员在标的 subject 上本次计算实际用的参数（参数名 → 取值）；没有参数的成员是空对象。
-func memberParamValues(plan Plan, member domain.MemberDef, subject string) map[string]float64 {
+// MemberParamValues 返回成员在标的 subject 上本次计算实际用的参数（参数名 → 取值）；没有参数的成员是空对象。
+func MemberParamValues(plan Plan, member domain.MemberDef, subject string) map[string]float64 {
 	names := member.ParamNames()
 	values := make(map[string]float64, len(names))
 	if len(names) == 0 {

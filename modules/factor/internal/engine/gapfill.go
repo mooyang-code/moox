@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
-	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -56,13 +55,6 @@ type gapFiller struct {
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
-	// params 提供历史周期的冻结参数（可为 nil：全部按默认参数）。
-	params paramIntervalSource
-}
-
-// paramIntervalSource 取任务在一段周期上的冻结区间（别名 → 按起点排序，含区间之前最近的一个，供沿用）。
-type paramIntervalSource interface {
-	Intervals(ctx context.Context, taskID string, from, to time.Time) (map[string][]domain.ParamInterval, error)
 }
 
 // Run 按 SweepInterval 轮询、或者被唤醒（预热完成、记入预热中跳过的项），直到 ctx 结束。
@@ -289,7 +281,7 @@ func logExpired(expired []gapledger.Entry, giveUp time.Duration) {
 
 func memberIsCross(set domain.EngineTask, alias string) bool {
 	for _, member := range set.Members {
-		if member.Alias == alias {
+		if member.Key == alias {
 			return member.Factor.FactorType == domain.FactorTypeCrossSection
 		}
 	}
@@ -308,7 +300,7 @@ func (g *gapFiller) refresh(taskID string, entries []gapledger.Entry, cross bool
 	}
 	defs := make(map[string]domain.MemberDef, len(set.Members))
 	for _, member := range set.Members {
-		defs[member.Alias] = member
+		defs[member.Key] = member
 	}
 	var use []gapledger.Entry
 	var removed, changed []gapledger.Entry
@@ -333,20 +325,8 @@ func (g *gapFiller) refresh(taskID string, entries []gapledger.Entry, cross bool
 	for _, member := range members {
 		list = append(list, member)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].Alias < list[j].Alias })
+	sort.Slice(list, func(i, j int) bool { return list[i].Key < list[j].Key })
 	return set, SetFound, use, list
-}
-
-// intervals 取任务在 [start, end) 上的冻结区间：恢复的是历史周期，要用当时冻结的参数。
-func (g *gapFiller) intervals(ctx context.Context, taskID string, start, end time.Time) (map[string][]domain.ParamInterval, error) {
-	if g.params == nil {
-		return nil, nil
-	}
-	intervals, err := g.params.Intervals(ctx, taskID, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
-	}
-	return intervals, nil
 }
 
 func (g *gapFiller) cancel(entries []gapledger.Entry, reason string) {
@@ -401,12 +381,8 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, sub
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		intervals, err := g.intervals(ctx, taskID, start, end)
-		if err != nil {
-			return recalcexec.Selection{}, err
-		}
 		return recalcexec.Selection{
-			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns, Intervals: intervals,
+			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use),
 		}, nil
 	}
@@ -495,11 +471,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		intervals, err := g.intervals(ctx, taskID, periodStart, end)
-		if err != nil {
-			return recalcexec.Selection{}, err
-		}
-		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns, Intervals: intervals,
+		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use)}, nil
 	}
 	after := func(selection recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
@@ -523,7 +495,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Selection, outcome pipeline.Outcome, start, end time.Time) {
 	selected := make(map[string]struct{}, len(selection.Members))
 	for _, member := range selection.Members {
-		selected[member.Alias] = struct{}{}
+		selected[member.Key] = struct{}{}
 	}
 	var repaired []gapledger.Ref
 	for _, entry := range current {

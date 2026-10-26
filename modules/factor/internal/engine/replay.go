@@ -43,8 +43,6 @@ type ReplayDeps struct {
 	Sets interface {
 		SetByID(string) (domain.EngineTask, SetLookup)
 	}
-	// Params 提供回放区间的冻结参数（复现历史时用；闭环回放由每期请求带参数）。为 nil 时按默认参数。
-	Params  paramIntervalSource
 	Source  SourceDataset
 	Columns interface {
 		ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
@@ -89,8 +87,6 @@ type replaySession struct {
 	release  func()
 	// quote 是成交价取法：next_open（下一根开盘，默认）或 close（本期收盘）。
 	quote string
-	// intervals 是回放区间（含预热）的冻结参数：请求没有带参数的期次按它计算（复现当时实际用的参数）。
-	intervals map[string][]domain.ParamInterval
 
 	mu       sync.Mutex
 	cache    map[int64]*replayPeriod
@@ -100,17 +96,19 @@ type replaySession struct {
 	applied map[int64]map[string]domain.ParamSnapshot
 }
 
-// ReplayParamRejection 是被拒绝的成员参数：本期沿用上一期实际用的参数（没有就按冻结记录或默认值）。
+// ReplayParamRejection 是被拒绝的成员参数：本期沿用上一期实际用的参数（没有就按成员自己的参数）。
 type ReplayParamRejection struct {
 	Member string `json:"member"`
 	Reason string `json:"reason"`
 }
 
-// replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）；digest 是这一期所用参数的摘要。
+// replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）；digest 是这一期所用参数的摘要；
+// paramValues 是这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值），与实时结果行的 __params 一致，策略的 params() 读它。
 type replayPeriod struct {
-	values pipeline.FactorValues
-	states map[string]ReplayFactorState
-	digest string
+	values      pipeline.FactorValues
+	states      map[string]ReplayFactorState
+	digest      string
+	paramValues map[string]map[string]map[string]float64
 }
 
 // ReplayFactorState 是一个成员本期的状态：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
@@ -119,9 +117,6 @@ type ReplayFactorState struct {
 	FactorID       string   `json:"factor_id"`
 	DefinitionHash string   `json:"definition_hash"`
 	FailedSubjects []string `json:"failed_subjects,omitempty"`
-	// ParamsSource、ParamsDigest 是这一期所用参数的来源（requested 表示由请求带来）与摘要。
-	ParamsSource string `json:"params_source,omitempty"`
-	ParamsDigest string `json:"params_digest,omitempty"`
 }
 
 // ReplayOpenRequest 是 POST /v1/replay/open 的请求体。
@@ -141,13 +136,13 @@ type ReplayOpenRequest struct {
 	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 }
 
-// ReplayFactor 描述回放固定下来的一个成员：Outputs 是它在结果数据集里的列名，Params 是它的参数列名。
+// ReplayFactor 描述回放固定下来的一个成员：Member 是成员键，Kind 是成员类型（fixed 或 var），Outputs 是它在结果数据集里的列名。
 type ReplayFactor struct {
 	Member         string   `json:"member"`
 	FactorID       string   `json:"factor_id"`
+	Kind           string   `json:"kind"`
 	DefinitionHash string   `json:"definition_hash"`
 	Outputs        []string `json:"outputs"`
-	Params         []string `json:"params,omitempty"`
 }
 
 // ReplayExcluded 是被排除出回放的标的及原因。
@@ -343,16 +338,10 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		}
 		types = seriessync.ValueTypes(columns)
 	}
-	var intervals map[string][]domain.ParamInterval
-	if m.deps.Params != nil {
-		if intervals, err = m.deps.Params.Intervals(ctx, set.Set.TaskID, start, to); err != nil {
-			return ReplayOpenResponse{}, http.StatusBadGateway, fmt.Errorf("读取冻结参数：%w", err)
-		}
-	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, intervals: intervals, cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
+		earliest: earliest, release: release, quote: quote, cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
@@ -363,8 +352,8 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric, ShortWarmup: shortCount, ShortSamples: shortSamples,
 	}
 	for _, member := range set.Members {
-		rsp.Factors = append(rsp.Factors, ReplayFactor{Member: member.Alias, FactorID: member.Factor.FactorID,
-			DefinitionHash: domain.DefinitionHash(member.Factor), Outputs: member.OutputColumns(), Params: member.ParamColumns()})
+		rsp.Factors = append(rsp.Factors, ReplayFactor{Member: member.Key, FactorID: member.Factor.FactorID,
+			DefinitionHash: domain.DefinitionHash(member.Factor), Kind: member.Kind, Outputs: member.OutputColumns()})
 	}
 	return rsp, http.StatusOK, nil
 }
@@ -378,8 +367,8 @@ type ReplayStepRequest struct {
 	SourceColumns []string `json:"source_columns,omitempty"`
 	// WriteFactors 为真时把本期因子结果写回结果数据集（会话打开时也要声明 write_factors）。
 	WriteFactors bool `json:"write_factors,omitempty"`
-	// Params 是闭环回放这一期各成员的参数快照（别名 → 快照，因子动态调参执行计划 2.9）：由策略回放在上一期求值后产出。
-	// 没有给出的成员按会话打开时读取的冻结记录计算（复现当时实际用的参数），再没有就用默认值。
+	// Params 是闭环回放这一期各可变成员的参数快照（成员键 → 快照，设计 8.4）：由策略回放在上一期求值后产出，只存在于回放会话里，
+	// 不写成员行。没有给出的成员沿用上一期实际用的参数，再没有就用成员自己的参数（可变成员的默认参数）。
 	Params map[string]domain.ParamSnapshot `json:"params,omitempty"`
 }
 
@@ -388,9 +377,11 @@ type ReplaySubjectFrame struct {
 	// Source 是本期源数据列的值，SourcePrev 是上一根的；缺失的列不出现。
 	Source     map[string]float64 `json:"source"`
 	SourcePrev map[string]float64 `json:"source_prev,omitempty"`
-	// Factors 是各因子各输出列本期的值，FactorsPrev 是上一期的。
+	// Factors 是各成员各输出列本期的值，FactorsPrev 是上一期的。
 	Factors     map[string]map[string]float64 `json:"factors,omitempty"`
 	FactorsPrev map[string]map[string]float64 `json:"factors_prev,omitempty"`
+	// Params 是本期各成员（成员键）实际用的参数（参数名 → 值），与实时结果行的 __params 一致。
+	Params map[string]map[string]float64 `json:"params,omitempty"`
 	// Quote 是回放报价：Close 是本期收盘价，Exec 是成交价（next_open 时为下一根开盘价，close 时为本期收盘价）；没有价格时为 0。
 	Close float64 `json:"close"`
 	Exec  float64 `json:"exec"`
@@ -518,6 +509,7 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 			}
 		}
 		frame.Factors = current.values[subject]
+		frame.Params = current.paramValues[subject]
 		if previous != nil {
 			frame.FactorsPrev = previous.values[subject]
 		}
@@ -577,91 +569,71 @@ func (s *replaySession) sourceColumns(requested []string) []string {
 	return out
 }
 
-// params 返回一期各成员用的参数：请求带来的快照（校验合法）优先，其次是冻结记录（沿用最近的区间），都没有时为默认值。
-// 请求里某个成员的参数不合法（范围、类型、联合约束、标的不在范围内）时，和实时提交被拒绝一样沿用上一期实际用的参数
-// （没有就按冻结记录、默认值），并作为拒绝返回；成员别名不存在是调用方的错误，仍然整期失败。
+// params 返回一期各成员用的参数：请求带来的快照（校验合法）优先，其次是沿用上一期实际用的请求参数，都没有时按成员自己的参数。
+// 请求里某个成员的参数不合法（范围、类型、联合约束，或成员是固定成员）时，和实时提交被拒绝一样沿用上一期实际用的参数，
+// 并作为拒绝返回；成员键不存在是调用方的错误，仍然整期失败。
 // 第二个返回值是本期实际生效的请求参数（来自请求，或沿用上一期请求）。
-func (s *replaySession) params(period time.Time, requested map[string]domain.ParamSnapshot) (map[string]domain.ParamFreeze, map[string]domain.ParamSnapshot, []ReplayParamRejection, error) {
-	for alias := range requested {
+func (s *replaySession) params(period time.Time, requested map[string]domain.ParamSnapshot) (map[string]domain.ParamSnapshot, map[string]domain.ParamSnapshot, []ReplayParamRejection, error) {
+	for key := range requested {
 		found := false
 		for _, member := range s.set.Members {
-			found = found || member.Alias == alias
+			found = found || member.Key == key
 		}
 		if !found {
-			return nil, nil, nil, fmt.Errorf("任务里没有成员 %s", alias)
+			return nil, nil, nil, fmt.Errorf("任务里没有成员 %s", key)
 		}
 	}
-	out := make(map[string]domain.ParamFreeze, len(s.set.Members))
+	out := make(map[string]domain.ParamSnapshot, len(s.set.Members))
 	var applied map[string]domain.ParamSnapshot
 	var rejected []ReplayParamRejection
+	apply := func(key string, snapshot domain.ParamSnapshot) {
+		out[key] = snapshot
+		if applied == nil {
+			applied = map[string]domain.ParamSnapshot{}
+		}
+		applied[key] = snapshot
+	}
 	for _, member := range s.set.Members {
-		if snapshot, ok := requested[member.Alias]; ok {
-			var err error
-			if member.FixedParams() {
-				err = fmt.Errorf("成员 %s 带固定参数，不接受逐期提交的参数", member.Alias)
-			} else if err = domain.CheckSnapshotNumbers(snapshot); err == nil {
+		if !member.IsVar() {
+			if _, ok := requested[member.Key]; ok {
+				rejected = append(rejected, ReplayParamRejection{Member: member.Key, Reason: fmt.Sprintf("成员 %s 是固定成员，不接受逐期提交的参数", member.Key)})
+			}
+			continue
+		}
+		if snapshot, ok := requested[member.Key]; ok {
+			err := domain.CheckSnapshotNumbers(snapshot)
+			if err == nil {
 				err = domain.ValidateSnapshot(member, snapshot, nil)
 			}
 			if err == nil {
-				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
-					SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
-				if applied == nil {
-					applied = map[string]domain.ParamSnapshot{}
-				}
-				applied[member.Alias] = snapshot
+				apply(member.Key, snapshot)
 				continue
 			}
-			rejected = append(rejected, ReplayParamRejection{Member: member.Alias, Reason: err.Error()})
-			if previous, ok := s.applied[period.Add(-s.step).Unix()][member.Alias]; ok {
-				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: previous,
-					SnapshotHash: previous.Hash(), Source: domain.ParamsCarried}
-				if applied == nil {
-					applied = map[string]domain.ParamSnapshot{}
-				}
-				applied[member.Alias] = previous
-				continue
-			}
+			rejected = append(rejected, ReplayParamRejection{Member: member.Key, Reason: err.Error()})
 		}
-		var previous *domain.ParamInterval
-		for i := range s.intervals[member.Alias] {
-			interval := s.intervals[member.Alias][i]
-			if interval.Covers(period) {
-				out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
-					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
-				previous = nil
-				break
-			}
-			if interval.End.Before(period) {
-				previous = &s.intervals[member.Alias][i]
-			}
-		}
-		if _, ok := out[member.Alias]; !ok && previous != nil {
-			source := domain.ParamsCarried
-			if previous.Source == domain.ParamsDefault {
-				source = domain.ParamsDefault
-			}
-			out[member.Alias] = domain.ParamFreeze{TaskID: s.set.Set.TaskID, MemberAlias: member.Alias, PeriodTime: period,
-				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: source}
+		// 沿用上一期实际生效的参数；没有就留空，由成员自己的参数计算。
+		if previous, ok := s.applied[period.Add(-s.step).Unix()][member.Key]; ok {
+			apply(member.Key, previous)
 		}
 	}
 	return out, applied, rejected, nil
 }
 
-func paramsDigest(params map[string]domain.ParamFreeze) string {
-	aliases := make([]string, 0, len(params))
-	for alias := range params {
-		aliases = append(aliases, alias)
+func paramsDigest(params map[string]domain.ParamSnapshot) string {
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
 	}
-	sort.Strings(aliases)
+	sort.Strings(keys)
 	var b strings.Builder
-	for _, alias := range aliases {
-		b.WriteString(alias + "=" + params[alias].Snapshot.Hash() + ";")
+	for _, key := range keys {
+		b.WriteString(key + "=" + params[key].Hash() + ";")
 	}
 	return b.String()
 }
 
 // compute 用快照算一期（实时计算路径）；同一期、同一组参数已经算过时直接取缓存（调用方持有会话锁）。
-func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time, params map[string]domain.ParamFreeze) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
+func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time, params map[string]domain.ParamSnapshot) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
 	digest := paramsDigest(params)
 	cached := s.cache[period.Unix()]
 	if cached != nil && cached.digest != digest {
@@ -700,12 +672,11 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		return nil, plan, computation, err
 	}
 	states := make(map[string]ReplayFactorState, len(computation.FactorStates))
-	for alias, state := range computation.FactorStates {
-		states[alias] = ReplayFactorState{Status: state.Status, FactorID: state.FactorID, DefinitionHash: state.DefinitionHash,
-			FailedSubjects: state.FailedSubjects, ParamsSource: state.ParamsSource, ParamsDigest: state.ParamsDigest}
+	for key, state := range computation.FactorStates {
+		states[key] = ReplayFactorState{Status: state.Status, FactorID: state.FactorID, DefinitionHash: state.DefinitionHash,
+			FailedSubjects: state.FailedSubjects}
 	}
-	addParamValues(values, s.set.Members, universe, params)
-	result := &replayPeriod{values: values, states: states, digest: digest}
+	result := &replayPeriod{values: values, states: states, digest: digest, paramValues: paramValues(plan, universe)}
 	s.cache[period.Unix()] = result
 	return result, plan, computation, nil
 }
@@ -842,33 +813,15 @@ func uniqueStrings(in []string) []string {
 	return out
 }
 
-// addParamValues 把这一期各标的实际用的参数值并进因子帧（成员 → 参数列名 → 值）：与实时结果里的参数列一致，
-// 策略回放读 <别名>__<参数名> 拿到的是这一期真正生效的参数。
-func addParamValues(values pipeline.FactorValues, members []domain.MemberDef, universe []string, params map[string]domain.ParamFreeze) {
-	for _, member := range members {
-		if member.FixedParams() {
-			continue // 带固定参数的成员不写参数列。
+// paramValues 返回这一期各标的各成员实际用的参数（标的 → 成员键 → 参数名 → 值）：与实时结果行的 __params 一致。
+func paramValues(plan pipeline.Plan, universe []string) map[string]map[string]map[string]float64 {
+	out := make(map[string]map[string]map[string]float64, len(universe))
+	for _, subject := range universe {
+		byMember := make(map[string]map[string]float64, len(plan.Members))
+		for _, member := range plan.Members {
+			byMember[member.Key] = pipeline.MemberParamValues(plan, member, subject)
 		}
-		freeze, ok := params[member.Alias]
-		names, columns := member.ParamNames(), member.ParamColumns()
-		for _, subject := range universe {
-			bySubject := values[subject]
-			if bySubject == nil {
-				bySubject = map[string]map[string]float64{}
-				values[subject] = bySubject
-			}
-			byMember := bySubject[member.Alias]
-			if byMember == nil {
-				byMember = map[string]float64{}
-				bySubject[member.Alias] = byMember
-			}
-			for i, name := range names {
-				if ok {
-					byMember[columns[i]] = freeze.Snapshot.Value(name, subject)
-				} else if declared := domain.DefaultSnapshot(member.Factor); declared != nil {
-					byMember[columns[i]] = declared.Value(name, subject)
-				}
-			}
-		}
+		out[subject] = byMember
 	}
+	return out
 }

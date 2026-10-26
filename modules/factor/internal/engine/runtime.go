@@ -43,7 +43,7 @@ type Runtime struct {
 	gateway  *gatewayclient.Client
 	storage  *storageio.Client
 	manager  *ManagerClient
-	params   *paramFreezer
+	params   *paramSelector
 	catalog  *CatalogCache
 	pipeline *pipeline.Runner
 	runner   *measuredRunner
@@ -176,11 +176,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}); err != nil {
 		return nil, err
 	}
-	if r.params, err = newParamFreezer(r.manager, cfg.Params.StateFile, cfg.Params.FreezeTimeout); err != nil {
+	if r.params, err = newParamSelector(r.manager, cfg.Params.CacheFile, cfg.Params.FetchTimeout); err != nil {
 		return nil, err
 	}
-	r.params.onOffline = func(taskID string) { r.metrics.ParamOfflineFreezes.WithLabelValues(taskID).Inc() }
-	r.params.onConflict = func(freeze domain.ParamFreeze) { r.metrics.ParamOfflineConflicts.WithLabelValues(freeze.TaskID).Inc() }
+	r.params.onStale = func(taskID, reason string) { r.metrics.ParamStale.WithLabelValues(taskID, reason).Inc() }
 	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
 	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
@@ -215,8 +214,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate))
-	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, params: r.params,
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
+	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
@@ -224,7 +224,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers, params: r.params,
+		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
 		onRepaired: func(taskID string, period RepairedPeriod) {
 			if r.runs.repair(taskID, period, time.Now()) {
@@ -236,7 +236,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		data: r.data, sets: r.catalog, source: r.storage, exec: executor, periods: committedThrough{r.continuity},
 		active: r.active, interval: cfg.Sync.FollowInterval, chunk: cfg.Recalc.ChunkPeriods, now: time.Now,
 		onGapped: func(seriesstore.Source) { r.metrics.SeriesChangeGaps.Inc() }, blocked: map[seriesstore.Source]bool{},
-		params: r.params,
 	}
 
 	r.goRun(appCtx, filler.Run)
@@ -248,9 +247,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
-	r.goRun(appCtx, func(ctx context.Context) { r.params.Run(ctx, cfg.Engine.HeartbeatInterval) })
 	r.replays = newReplayManager(ReplayDeps{
-		Sets: r.catalog, Params: r.params, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 	})
 	r.goRun(appCtx, r.replays.Run)
@@ -350,7 +348,6 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
-	status.ParamHealth, status.OfflinePending = r.paramHealth()
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
 			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,

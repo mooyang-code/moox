@@ -26,7 +26,7 @@ const (
 // JobClient is the manager surface of the recalc loop.
 type JobClient interface {
 	PullRecalcJob(ctx context.Context) (PulledJob, bool, error)
-	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string) (string, error)
+	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress time.Time, status, errText string, defaultFilled map[string][]domain.TimeRange) (string, error)
 }
 
 // SourceDataset reads the source dataset facts a recalc chunk needs.
@@ -47,8 +47,6 @@ type recalcLoop struct {
 	source   SourceDataset
 	active   func() bool
 	poll     time.Duration
-	// params 提供补算区间的冻结参数（可为 nil：全部按默认参数）。
-	params paramIntervalSource
 	// history 在补算前把本地时序存储的历史延长到能覆盖补算区间加回看（可为 nil：只读已有的本地数据）。
 	history historyExtender
 	// now 取当前时间（测试可替换）。
@@ -91,7 +89,7 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 		// Shutdown: the lease expires and the job resumes from its progress.
 	default:
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
-		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.Window.Progress, jobStatusFailed, err.Error()); reportErr != nil {
+		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
 			log.ErrorContextf(ctx, "factor_recalc_report_failed job_id=%s error=%v", job.JobID, reportErr)
 		}
 	}
@@ -106,6 +104,15 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set.Members = CompileMembers(set.Members)
 	l.extendHistory(ctx, job)
 	lastNote := ""
+	step, stepErr := seriesstore.Step(set.Set.Freq)
+	if stepErr != nil {
+		return stepErr
+	}
+	// 按默认参数新补的期次：接着管理端已记下的累计，每个分块把新补的期次并进去，再整体上报。
+	filled := make(map[string][]domain.TimeRange, len(job.DefaultFilled))
+	for key, ranges := range job.DefaultFilled {
+		filled[key] = append([]domain.TimeRange(nil), ranges...)
+	}
 	report := func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
 		status := jobStatusRunning
 		if !progress.Before(job.Window.End) {
@@ -114,7 +121,15 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		if note := recalcexec.DegradedNote(outcome); note != "" {
 			lastNote = note
 		}
-		current, err := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, progress, status, lastNote)
+		var changed map[string][]domain.TimeRange
+		for key, periods := range outcome.DefaultFilled {
+			for _, period := range periods {
+				filled[key] = append(filled[key], domain.TimeRange{Start: period.Unix(), End: period.Unix()})
+			}
+			filled[key] = domain.MergeTimeRanges(filled[key], int64(step/time.Second))
+			changed = filled
+		}
+		current, err := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, progress, status, lastNote, changed)
 		if err != nil {
 			return true, fmt.Errorf("%w: %w", errReportFailed, err)
 		}
@@ -135,15 +150,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		// 补算按冻结记录计算（因子动态调参执行计划 2.7）。冻结区间在每个分块持锁后重新读取：补算期间实时线程可能
-		// 又冻结了新的期次，用任务开始时的旧区间会把它们当成“没有冻结记录”而错用沿用的参数。
-		var intervals map[string][]domain.ParamInterval
-		if l.params != nil {
-			if intervals, err = l.params.Intervals(ctx, set.Set.TaskID, job.Window.Start, job.Window.End); err != nil {
-				return recalcexec.Selection{}, fmt.Errorf("read frozen params: %w", err)
-			}
-		}
-		return recalcexec.Selection{Set: set.Set, Members: set.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
+		return recalcexec.Selection{Set: set.Set, Members: set.Members, Subjects: subjects, Columns: columns}, nil
 	}
 	return l.runWhenOpen(ctx, func() error { return l.executor.Run(ctx, job.Window, source, report) })
 }

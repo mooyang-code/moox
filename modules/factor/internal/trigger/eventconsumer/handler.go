@@ -196,6 +196,8 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 		return pipeline.Outcome{}, fmt.Errorf("%w: check computed factor period: %v", storageio.ErrInfra, existsErr)
 	}
 	if exists {
+		// 完成标记已经写出：只需清掉可能残留的取参进行中记录（写标记之后、清记录之前进程退出的情况）。
+		h.finishParams(ctx, set, period)
 		return pipeline.Outcome{}, nil
 	}
 	var params map[string]domain.ParamSnapshot
@@ -216,7 +218,29 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	return h.runner.Run(ctx, plan)
+	outcome, err := h.runner.Run(ctx, plan)
+	if err != nil {
+		return outcome, err
+	}
+	h.finishParams(ctx, set, period)
+	return outcome, nil
+}
+
+// finishParams 在这一期的完成标记写成功后清掉取参的进行中记录；清不掉不影响这一期的结果（下次同一期不会再算，
+// 之后的期次覆盖记录），只记日志。
+func (h *Handler) finishParams(ctx context.Context, set domain.FactorTask, period time.Time) {
+	if h.params == nil {
+		return
+	}
+	aligned := period
+	if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
+		if value, err := clock.Align(period, set.Freq); err == nil {
+			aligned = value
+		}
+	}
+	if err := h.params.Done(ctx, set.TaskID, aligned); err != nil {
+		log.ErrorContextf(ctx, "factor_param_inflight_clear_failed task_id=%s period=%s error=%v", set.TaskID, aligned.UTC().Format(time.RFC3339), err)
+	}
 }
 
 func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
