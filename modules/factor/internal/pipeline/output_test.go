@@ -46,11 +46,11 @@ func TestAssembleCarriesSourceColumnsOnSourceTagRows(t *testing.T) {
 func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, true)
-	factor.Outputs = []string{"spread_value"}
+	factor.Outputs = []string{"spread"}
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := Computation{
-		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread_value"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
+		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
 		FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash}},
 	}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
@@ -62,7 +62,7 @@ func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 			derived = row
 		}
 	}
-	require.Equal(t, map[string]any{"spread_value": 1.5}, derived.Fields)
+	require.Equal(t, map[string]any{"spread": 1.5}, derived.Fields)
 }
 
 func TestAssembleFailedFactorWritesNull(t *testing.T) {

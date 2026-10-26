@@ -117,7 +117,7 @@ func addRecalcMember(t *testing.T, db *store.Store, taskID string, member recalc
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {
 	return recalcMember{status: status, def: domain.MustDefinition(id, id,
-		fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, %d)\n", id, lookback))}
+		fmt.Sprintf("output: ts_mean(close, %d)\n", lookback))}
 }
 
 func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {

@@ -381,18 +381,18 @@ source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 
 [[factors.definitions]]
-factor_id = "Ema"
+factor_id = "ema"
 file = "common.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 params = { span = 20, warmup = 50000 }
 `
 
@@ -414,7 +414,7 @@ func TestFactorSetupRejectsDuplicateMemberWithSameParams(t *testing.T) {
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 params = { warmup = 50000, span = 20 }
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -427,7 +427,7 @@ func TestFactorSetupRejectsBadMemberAlias(t *testing.T) {
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 member_alias = "bad__alias"
 params = { span = 30 }
 `
@@ -487,13 +487,13 @@ source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 
 [[factors.definitions]]
-factor_id = "Bias"
+factor_id = "bias"
 file = "timeseries.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_other"
 freq = "1m"
-factor_id = "Bias"
+factor_id = "bias"
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.ErrorContains(t, err, "no matching factor task")
@@ -512,9 +512,9 @@ source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 
 [[factors.items]]
-factor_id = "Bias"
+factor_id = "bias"
 factor_type = "timeseries"
-file = "Bias.py"
+file = "bias.py"
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 lookback_periods = 20
@@ -537,18 +537,18 @@ source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
 
 [[factors.definitions]]
-factor_id = "Bias"
+factor_id = "bias"
 file = "timeseries.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Bias"
+factor_id = "bias"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
 freq = "1m"
-factor_id = "Bias"
+factor_id = "bias"
 status = "disabled"
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -563,14 +563,14 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 }
 
 func TestLoadRejectsRetiredFactorDefinitionFields(t *testing.T) {
-	for _, declaration := range []string{`factor_type = "timeseries"`, `lookback_periods = 20`, `params_json = "{}"`, `name = "Bias"`} {
+	for _, declaration := range []string{`factor_type = "timeseries"`, `lookback_periods = 20`, `params_json = "{}"`, `name = "bias"`} {
 		root := t.TempDir()
 		body := validManifest + `
 [factors]
 enabled = true
 source_dir = "examples/factors"
 [[factors.definitions]]
-factor_id = "Bias"
+factor_id = "bias"
 file = "timeseries.yaml"
 ` + declaration + "\n"
 		_, err := Load(writeManifest(t, root, body, 0o600), root)
@@ -585,8 +585,8 @@ func TestLoadRejectsNonYAMLFactorFile(t *testing.T) {
 enabled = true
 source_dir = "examples/factors"
 [[factors.definitions]]
-factor_id = "Bias"
-file = "Bias.py"
+factor_id = "bias"
+file = "bias.py"
 `
 	_, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.ErrorContains(t, err, "YAML factor library file")

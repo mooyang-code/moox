@@ -12,7 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
 
-var commonFactorIDs = []string{"Ma", "Ema", "Macd", "Rsi", "Roc", "Boll", "Atr", "ReturnStd", "Vwap"}
+var commonFactorIDs = []string{"ma", "ema", "macd", "rsi", "roc", "boll", "atr", "return_std", "vwap"}
 
 // withoutCommonFactors 去掉示例里 9 个常用因子的定义与成员，模拟加入默认因子之前的配置；
 // 同时把 Bias 在一个因子任务里的成员改成 disabled，用来确认已有条目不被改动。
@@ -28,7 +28,7 @@ func withoutCommonFactors(t *testing.T) string {
 		if (b.header == "factors.definitions" || b.header == "factors.members") && b.array && common[blockValue(b, "factor_id")] {
 			continue
 		}
-		if b.header == "factors.members" && b.array && blockValue(b, "factor_id") == "Bias" && !disabledOne {
+		if b.header == "factors.members" && b.array && blockValue(b, "factor_id") == "bias" && !disabledOne {
 			disabledOne = true
 			setBlockKey(&b, "status", `"disabled"`)
 		}
@@ -57,7 +57,7 @@ func TestMigrateAddsMissingDefaultFactorsOnce(t *testing.T) {
 	require.True(t, report.Changed && report.Valid && report.Written)
 	require.Equal(t, commonFactorIDs, report.DefaultFactors.Definitions)
 	require.Len(t, report.DefaultFactors.Members, 18)
-	require.Contains(t, report.DefaultFactors.Members, "dataset_dasftksvjhj2jom4vhd0/1m/Ema")
+	require.Contains(t, report.DefaultFactors.Members, "dataset_dasftksvjhj2jom4vhd0/1m/ema")
 
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -73,13 +73,13 @@ func TestMigrateAddsMissingDefaultFactorsOnce(t *testing.T) {
 	// 已有成员的 status 保持原样
 	disabled := 0
 	for _, member := range manifest.Factors.Members {
-		if member.FactorID == "Bias" && member.Status == "disabled" {
+		if member.FactorID == "bias" && member.Status == "disabled" {
 			disabled++
 		}
 	}
 	require.Equal(t, 1, disabled)
 	// 新定义排在已有定义之后、成员之前
-	require.Less(t, strings.Index(text, "factor_id = \"Vwap\"\nfile"), strings.Index(text, "[[factors.members]]"))
+	require.Less(t, strings.Index(text, "factor_id = \"vwap\"\nfile"), strings.Index(text, "[[factors.members]]"))
 
 	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddDefaultFactors: true, Write: true, Now: now})
 	require.NoError(t, err)

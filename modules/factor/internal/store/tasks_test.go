@@ -27,7 +27,7 @@ func testTask(taskID, status string) domain.FactorTask {
 }
 
 func testFactorDef(factorID string) domain.FactorDef {
-	return domain.MustDefinition(factorID, factorID, "outputs:\n  "+factorID+": close\n")
+	return domain.MustDefinition(factorID, factorID, "output: close\n")
 }
 
 // changedSpec 返回改了表达式的同一个定义（输出列不变）。
@@ -111,7 +111,7 @@ func TestTaskCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, def.CreatedAt)
 	require.NotZero(t, def.UpdatedAt)
-	def = changedSpec(def, "outputs:\n  factor_close: ts_mean(close, 10)\n")
+	def = changedSpec(def, "output: ts_mean(close, 10)\n")
 	require.NoError(t, s.UpdateFactor(ctx, def))
 	def, err = s.GetFactor(ctx, def.FactorID)
 	require.NoError(t, err)

@@ -319,6 +319,8 @@ message GetStatusRsp {
 message ValidateFactorSpecReq {
   string spec = 1;
   bool allow_partial_universe = 2;
+  // factor_id 是这份定义的因子 ID；单输出因子的输出名就是因子 ID，所以要用它推导输出。为空时按草稿处理。
+  string factor_id = 3;
 }
 message FactorSpecDiagnostic {
   string path = 1;
@@ -350,6 +352,8 @@ message PreviewFactorReq {
   bool allow_partial_universe = 5;
   // params 是试算用的参数快照（默认值加按标的覆盖）；为空时用定义的默认值。
   map<string, ParamValue> params = 6;
+  // factor_id 是这份定义的因子 ID（单输出因子的输出名就是因子 ID）；为空时按草稿处理。
+  string factor_id = 7;
 }
 message PreviewRow {
   string subject_id = 1;

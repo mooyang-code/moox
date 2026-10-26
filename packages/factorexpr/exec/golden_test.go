@@ -64,7 +64,7 @@ func compileProgram(t *testing.T, expressions map[string]string) *factorexpr.Pro
 	t.Helper()
 	var inputs []factorexpr.ProgramInput
 	for name, expression := range expressions {
-		factor, err := factorexpr.Compile("outputs:\n  " + name + ": |\n    " + expression + "\n")
+		factor, err := factorexpr.Compile("output: |\n    " + expression + "\n")
 		if err != nil {
 			t.Fatalf("compile %s: %v", expression, err)
 		}

@@ -269,8 +269,8 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 	require.Equal(t, start.Add(3*time.Minute), storage.readRequests[0].End)
 	require.Len(t, storage.written, 3)
 	require.Equal(t, start, storage.written[0].DataTime)
-	require.Equal(t, 7.0, storage.written[0].Fields["long_value"])
-	require.Equal(t, 7.0, storage.written[0].Fields["short_value"])
+	require.Equal(t, 7.0, storage.written[0].Fields["long"])
+	require.Equal(t, 7.0, storage.written[0].Fields["short"])
 }
 
 func TestRecalcDoesNotReportMarker(t *testing.T) {
@@ -326,7 +326,7 @@ type recalcMember struct {
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {
 	return recalcMember{status: status, def: domain.MustDefinition(id, id,
-		fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, %d)\n", id, lookback))}
+		fmt.Sprintf("output: ts_mean(close, %d)\n", lookback))}
 }
 
 // RunChunkWith：先取任务锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。

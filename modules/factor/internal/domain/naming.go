@@ -58,7 +58,7 @@ func CompileDefinition(def FactorDef) (FactorDef, error) {
 	def.compiled = compiled
 	def.FactorType = string(compiled.Type)
 	def.InputColumns = append([]string(nil), compiled.InputColumns...)
-	def.Outputs = compiled.OutputNames()
+	def.Outputs = compiled.OutputNamesFor(def.FactorID)
 	def.LookbackPeriods = compiled.Lookback
 	return def, nil
 }

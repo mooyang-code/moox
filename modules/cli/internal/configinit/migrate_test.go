@@ -34,8 +34,8 @@ func migrateFixture(t *testing.T, text string) (path, root string, keys *configc
 	root = t.TempDir()
 	library := filepath.Join(root, "modules", "factor", "factors")
 	require.NoError(t, os.MkdirAll(library, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(library, "xbx.yaml"), []byte("- factor_id: Bias\n  spec: x\n- factor_id: Cci\n  spec: x\n- factor_id: MinMax\n  spec: x\n- factor_id: QuoteVolumeMean\n  spec: x\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(library, "common.yaml"), []byte("- factor_id: Ma\n  spec: x\n- factor_id: Ema\n  spec: x\n- factor_id: Macd\n  spec: x\n- factor_id: Rsi\n  spec: x\n- factor_id: Roc\n  spec: x\n- factor_id: Boll\n  spec: x\n- factor_id: Atr\n  spec: x\n- factor_id: ReturnStd\n  spec: x\n- factor_id: Vwap\n  spec: x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(library, "xbx.yaml"), []byte("- factor_id: bias\n  spec: x\n- factor_id: cci\n  spec: x\n- factor_id: min_max\n  spec: x\n- factor_id: quote_volume_mean\n  spec: x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(library, "common.yaml"), []byte("- factor_id: ma\n  spec: x\n- factor_id: ema\n  spec: x\n- factor_id: macd\n  spec: x\n- factor_id: rsi\n  spec: x\n- factor_id: roc\n  spec: x\n- factor_id: boll\n  spec: x\n- factor_id: atr\n  spec: x\n- factor_id: atr_pct\n  spec: x\n- factor_id: return_std\n  spec: x\n- factor_id: vwap\n  spec: x\n"), 0o644))
 	keys = &configcrypt.MemoryStore{}
 	sealed, err := configcrypt.Encrypt([]byte(text), keys)
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestMigratePreviewsWithoutWritingAndReportsNoValues(t *testing.T) {
 	require.True(t, report.Encrypted && report.Changed && report.Valid)
 	require.False(t, report.Written)
 	require.Len(t, report.Factors, 4)
-	require.Equal(t, FactorMigration{FactorID: "Bias", File: "xbx.yaml", RemovedKeys: []string{"factor_type", "lookback_periods", "name", "outputs", "params_json"}}, report.Factors[0])
+	require.Equal(t, FactorMigration{FactorID: "bias", File: "xbx.yaml", RemovedKeys: []string{"factor_type", "lookback_periods", "name", "outputs", "params_json"}}, report.Factors[0])
 	require.Equal(t, []HostLabelMigration{{"control", "控制机"}, {"storage", "存储机"}, {"overseas", "海外机"}}, report.Labels)
 	require.Equal(t, &HostRename{From: "legacy-1", To: "overseas", Changes: 2}, report.Rename)
 	after, err := os.ReadFile(path)
@@ -97,9 +97,9 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 
 func TestMigrateRejectsUnknownFactorsAndBadRenames(t *testing.T) {
 	text := legacyText(t)
-	path, root, keys := migrateFixture(t, strings.Replace(text, `factor_id = "Cci"`, `factor_id = "Missing"`, 1))
+	path, root, keys := migrateFixture(t, strings.Replace(text, `factor_id = "cci"`, `factor_id = "missing"`, 1))
 	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
-	require.ErrorContains(t, err, "因子库里没有因子 Missing")
+	require.ErrorContains(t, err, "因子库里没有因子 missing")
 
 	path, root, keys = migrateFixture(t, text)
 	for _, rename := range [][2]string{{"nope", "overseas"}, {"legacy-1", "storage"}, {"legacy-1", "Bad ID"}} {

@@ -108,14 +108,14 @@ func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
 	factor.AllowPartialUniverse = true
 	_, err := ValidateDefinition(factor)
 	require.ErrorContains(t, err, "allow_partial_universe")
-	cross := compiledFactor(t, "cross", "outputs: {cs_value: cs_rank(close)}")
+	cross := compiledFactor(t, "cross", "output: cs_rank(close)")
 	cross.AllowPartialUniverse = true
 	_, err = ValidateDefinition(cross)
 	require.NoError(t, err)
 }
 
 func TestValidateDefinitionDoesNotNeedSourceColumns(t *testing.T) {
-	factor := compiledFactor(t, "f", "outputs: {value: any_column_name}")
+	factor := compiledFactor(t, "f", "output: any_column_name")
 	require.Equal(t, DefaultCategoryID, factor.CategoryID)
 	_, err := ValidateDefinition(factor)
 	require.NoError(t, err)
@@ -126,26 +126,28 @@ var closeColumns = []SourceColumn{{Name: "close", Numeric: true}, {Name: "symbol
 func member(factor FactorDef) MemberDef { return MemberDef{Alias: factor.FactorID, Factor: factor} }
 
 func TestValidateMembershipRejectsUnknownOrNonNumericInput(t *testing.T) {
-	factor := compiledFactor(t, "f", "outputs: {value: missing}")
+	factor := compiledFactor(t, "f", "output: missing")
 	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, nil), "unknown input")
-	factor = compiledFactor(t, "f", "outputs: {value: symbol_name}")
+	factor = compiledFactor(t, "f", "output: symbol_name")
 	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, nil), "not numeric")
 }
 
 func TestValidateMembershipRejectsOutputCollidingWithSourceColumn(t *testing.T) {
-	factor := compiledFactor(t, "f", "outputs: {close: close * 2}")
+	// 单输出因子的输出名就是因子 ID：因子 ID 叫 close，输出列就与源列 close 重名。
+	factor := compiledFactor(t, "close", "output: close * 2")
 	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, nil), "与源列重名")
 }
 
 func TestValidateMembershipRejectsNamesShadowingSourceColumns(t *testing.T) {
-	param := compiledFactor(t, "f", "params: {close: {type: int, min: 2, max: 9, default: 3}}\noutputs:\n  value: ts_mean(open, close)\n")
+	param := compiledFactor(t, "f", "params: {close: {type: int, min: 2, max: 9, default: 3}}\noutput: ts_mean(open, close)\n")
 	columns := append([]SourceColumn{{Name: "open", Numeric: true}}, closeColumns...)
 	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(param), columns, nil, nil), "参数 close")
 }
 
 func TestValidateMembershipRejectsDuplicateColumnInTaskExcludingSelf(t *testing.T) {
 	factor := validFactor(t)
-	sibling := compiledFactor(t, "sibling", "outputs: {value: close + 1}")
+	// 两个输出的因子，其中一个输出与 validFactor 的列重名。
+	sibling := compiledFactor(t, "sibling", "outputs:\n  close_mean: close + 1\n  other: close + 2\n")
 	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{member(sibling)}, nil), "重复")
 	// A member never conflicts with itself.
 	require.NoError(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{member(factor)}, nil))
@@ -153,22 +155,24 @@ func TestValidateMembershipRejectsDuplicateColumnInTaskExcludingSelf(t *testing.
 	fast := MemberDef{Alias: "fast", Factor: factor}
 	slow := MemberDef{Alias: "slow", Factor: factor}
 	require.NoError(t, ValidateMembership(FactorTask{}, fast, closeColumns, []MemberDef{slow}, nil))
+	// 同名成员（别名与因子 ID 相同）输出列重名，要拒绝。
+	require.ErrorContains(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, []MemberDef{{Alias: "sibling", Factor: sibling}}, nil), "重复")
 }
 
 func TestValidateMembershipRejectsColumnOwnedByOtherMember(t *testing.T) {
 	factor := validFactor(t)
-	err := ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, map[string]string{"value": "Other"})
+	err := ValidateMembership(FactorTask{}, member(factor), closeColumns, nil, map[string]string{"close_mean": "Other"})
 	require.ErrorContains(t, err, "已属于")
 }
 
 func TestValidateMembershipAllowsReaddOfSameMember(t *testing.T) {
 	factor := validFactor(t)
 	require.NoError(t, ValidateMembership(FactorTask{}, member(factor), closeColumns, nil,
-		map[string]string{"value": factor.FactorID}))
+		map[string]string{"close_mean": factor.FactorID}))
 }
 
 func TestMemberColumns(t *testing.T) {
-	factor := compiledFactor(t, "Boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  down: ts_mean(close, w) * 2\n")
+	factor := compiledFactor(t, "boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  down: ts_mean(close, w) * 2\n")
 	require.Equal(t, []string{"up", "down"}, member(factor).OutputColumns())
 	fast := MemberDef{Alias: "fast", Factor: factor}
 	require.Equal(t, []string{"fast_up", "fast_down"}, fast.OutputColumns())
@@ -188,5 +192,5 @@ func compiledFactor(t *testing.T, factorID, spec string) FactorDef {
 
 func validFactor(t *testing.T) FactorDef {
 	t.Helper()
-	return compiledFactor(t, "close_mean", "outputs: {value: close}")
+	return compiledFactor(t, "close_mean", "output: close")
 }

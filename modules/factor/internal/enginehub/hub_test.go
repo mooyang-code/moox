@@ -48,7 +48,7 @@ func seedTask(t *testing.T, db *store.Store, taskID string, members map[string]s
 }
 
 func testFactor(factorID string) domain.FactorDef {
-	return domain.MustDefinition(factorID, factorID, "outputs:\n  "+factorID+"_value: close\n")
+	return domain.MustDefinition(factorID, factorID, "output: close\n")
 }
 
 var engineA = domain.EngineIdentity{EngineID: "factor-engine@a", BootID: "boot-a", Version: "v1"}

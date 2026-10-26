@@ -28,7 +28,7 @@ func TestEstimateChunkMemoryGrowsWithPeriodsAndIgnoresUncompilable(t *testing.T)
 	// 回看 200 的节点要在 200 期窗口上计算：实时一期的计算内存也不小。
 	require.Greater(t, one.Compute, int64(500*199*8))
 
-	broken := domain.FactorDef{FactorID: "broken", Spec: "outputs:\n  x: nope(close)\n"}
+	broken := domain.FactorDef{FactorID: "broken", Spec: "output: nope(close)\n"}
 	withBroken, err := EstimateChunkMemory(domain.AsMembers(append(factors, broken)...), 500, 500, 6)
 	require.NoError(t, err)
 	require.Equal(t, many, withBroken)

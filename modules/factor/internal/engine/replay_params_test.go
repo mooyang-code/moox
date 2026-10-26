@@ -13,7 +13,7 @@ import (
 // 闭环回放（因子动态调参执行计划 2.9）：每期请求带来的参数快照真正改变计算；没带的期次按“请求优先、冻结记录、默认值”回退；
 // 因子帧里带上这一期各标的实际用的参数值（<别名>__<参数名>），按标的覆盖逐标的体现。
 func TestReplayStepAppliesRequestedParams(t *testing.T) {
-	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutputs:\n  m: ts_mean(close, window)\n")
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutput: ts_mean(close, window)\n")
 	set := uncompiled(domain.EngineTask{
 		Set: domain.FactorTask{TaskID: "ftask_replay", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m",
 			ResultDatasetID: "result_dataset_a", Status: domain.TaskStatusEnabled, OwnerInstanceID: "inst"},
@@ -29,7 +29,7 @@ func TestReplayStepAppliesRequestedParams(t *testing.T) {
 	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: at})
 	require.NoError(t, err)
 	a := step.Subjects["A"].Factors["fast"]
-	require.InDelta(t, 114.5, a["fast_m"], 1e-9)
+	require.InDelta(t, 114.5, a["fast_pmean"], 1e-9)
 	require.InDelta(t, 2, a["fast__window"], 1e-9, "没有请求的期次实际用的是默认值")
 	require.Equal(t, domain.ParamsDefault, step.States["fast"].ParamsSource)
 
@@ -37,9 +37,9 @@ func TestReplayStepAppliesRequestedParams(t *testing.T) {
 	step, _, err = m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: at,
 		Params: map[string]domain.ParamSnapshot{"fast": {"window": {Default: 2, Overrides: map[string]float64{"A": 4}}}}})
 	require.NoError(t, err)
-	require.InDelta(t, 113.5, step.Subjects["A"].Factors["fast"]["fast_m"], 1e-9, "A 的窗口是 4：(112+113+114+115)/4")
+	require.InDelta(t, 113.5, step.Subjects["A"].Factors["fast"]["fast_pmean"], 1e-9, "A 的窗口是 4：(112+113+114+115)/4")
 	require.InDelta(t, 4, step.Subjects["A"].Factors["fast"]["fast__window"], 1e-9)
-	require.InDelta(t, 114.5, step.Subjects["B"].Factors["fast"]["fast_m"], 1e-9)
+	require.InDelta(t, 114.5, step.Subjects["B"].Factors["fast"]["fast_pmean"], 1e-9)
 	require.InDelta(t, 2, step.Subjects["B"].Factors["fast"]["fast__window"], 1e-9)
 	require.Equal(t, domain.ParamsRequested, step.States["fast"].ParamsSource)
 
@@ -71,7 +71,7 @@ func TestReplayStepAppliesRequestedParams(t *testing.T) {
 
 // 共享任务的成员带固定参数：回放按固定值计算，因子帧里没有参数列，请求里逐期提交的参数被拒绝并沿用固定值。
 func TestReplayFixedParamMemberIgnoresRequestedParams(t *testing.T) {
-	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutputs:\n  m: ts_mean(close, window)\n")
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutput: ts_mean(close, window)\n")
 	set := uncompiled(domain.EngineTask{
 		Set: domain.FactorTask{TaskID: "ftask_replay", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m",
 			ResultDatasetID: "result_dataset_a", Status: domain.TaskStatusEnabled},
@@ -86,7 +86,7 @@ func TestReplayFixedParamMemberIgnoresRequestedParams(t *testing.T) {
 	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "fixed", Period: at})
 	require.NoError(t, err)
 	a := step.Subjects["A"].Factors["fixed4"]
-	require.InDelta(t, 113.5, a["fixed4_m"], 1e-9, "窗口 4：(112+113+114+115)/4")
+	require.InDelta(t, 113.5, a["fixed4_pmean"], 1e-9, "窗口 4：(112+113+114+115)/4")
 	require.NotContains(t, a, "fixed4__window", "固定参数成员不写参数列")
 
 	step, _, err = m.Step(ctx, ReplayStepRequest{ReplayID: "fixed", Period: at,
@@ -94,5 +94,5 @@ func TestReplayFixedParamMemberIgnoresRequestedParams(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, step.RejectedParams, 1)
 	require.Contains(t, step.RejectedParams[0].Reason, "固定参数")
-	require.InDelta(t, 113.5, step.Subjects["A"].Factors["fixed4"]["fixed4_m"], 1e-9, "仍按固定值计算")
+	require.InDelta(t, 113.5, step.Subjects["A"].Factors["fixed4"]["fixed4_pmean"], 1e-9, "仍按固定值计算")
 }

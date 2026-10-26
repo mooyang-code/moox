@@ -13,13 +13,13 @@ import (
 func TestRepositoryLibrariesCompile(t *testing.T) {
 	cases := map[string]map[string]int{
 		"../../factors": {
-			// 回看按窗口上限推导（参数可在范围内逐期调整）：Ema 取 warmup 上限 50000，其余 120。
-			"Bias": 120, "BiasQ": 239, "Cci": 239, "MinMax": 120, "QuoteVolumeMean": 120, "QuoteVolumeMeanQ": 239,
-			"VolumeMeanQ": 239, "ZfAbsMean": 240, "ZfMeanQ": 239, "ZfStd": 121, "ZscoreAbsMeanQ": 358,
+			// 回看按窗口上限推导（参数可在范围内逐期调整）：ema 取 warmup 上限 50000，其余 120。
+			"bias": 120, "bias_q": 239, "cci": 239, "min_max": 120, "quote_volume_mean": 120, "quote_volume_mean_q": 239,
+			"volume_mean_q": 239, "zf_abs_mean": 240, "zf_mean_q": 239, "zf_std": 121, "zscore_abs_mean_q": 358,
 			// 常用技术指标（common.yaml）：EMA、MACD、RSI 带指数衰减，回看按截断到起点权重低于 1e-9 的根数推导。
-			"Ma": 120, "Ema": 50000, "Macd": 362, "Rsi": 2478, "Roc": 121, "Boll": 120, "Atr": 121, "ReturnStd": 121, "Vwap": 120,
+			"ma": 120, "ema": 50000, "macd": 362, "rsi": 2478, "roc": 121, "boll": 120, "atr": 121, "atr_pct": 121, "return_std": 121, "vwap": 120,
 		},
-		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405, "Ema50000": 50000},
+		"../../../../examples/factors": {"bias": 120, "cci": 239, "ma_fast": 60, "ma_slow": 240, "channel": 120},
 	}
 	for dir, lookbacks := range cases {
 		entries, err := LoadDir(dir)

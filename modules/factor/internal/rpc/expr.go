@@ -20,10 +20,16 @@ type Previewer interface {
 // 校验与试算时临时定义使用的 factor_id 与 name：只用于编译，不落库。
 const draftFactorID, draftFactorName = "draft", "draft"
 
-// draftDefinition 把请求里的 spec 编译成临时定义。
-func draftDefinition(spec string, allowPartial bool) (domain.FactorDef, error) {
+// draftDefinition 把请求里的 spec 编译成临时定义；请求带了因子 ID 就用它（单输出因子的输出名就是因子 ID），否则按草稿处理。
+func draftDefinition(factorID, spec string, allowPartial bool) (domain.FactorDef, error) {
+	name := draftFactorName
+	if factorID == "" {
+		factorID = draftFactorID
+	} else {
+		name = factorID
+	}
 	return domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: draftFactorID, Name: draftFactorName, Spec: spec, AllowPartialUniverse: allowPartial,
+		FactorID: factorID, Name: name, Spec: spec, AllowPartialUniverse: allowPartial,
 	})
 }
 
@@ -32,7 +38,7 @@ func (s *Service) ValidateFactorSpec(_ context.Context, req *factorpb.ValidateFa
 	if req == nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: invalid(errors.New("spec is required"))}, nil
 	}
-	def, err := draftDefinition(req.GetSpec(), req.GetAllowPartialUniverse())
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
 	if err != nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: success(), Valid: false, Diagnostic: diagnosticToPB(err)}, nil
 	}
@@ -68,7 +74,7 @@ func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactor
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	def, err := draftDefinition(req.GetSpec(), req.GetAllowPartialUniverse())
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(fmt.Errorf("定义不合法：%w", err))}, nil
 	}

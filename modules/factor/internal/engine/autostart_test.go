@@ -105,7 +105,7 @@ func TestAutoConfirmRejectsIncompletePeriods(t *testing.T) {
 // 同一别名删除重加成不同的固定参数：目录里的成员变了，预热里已经完成的一期不再是证据，要等按新成员算完的一期。
 func TestAutoConfirmEvidenceIsBoundToMemberContent(t *testing.T) {
 	cache, _ := newTestCache(t)
-	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutputs:\n  mean: ts_mean(close, window)\n")
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, window)\n")
 	build := func(window float64) domain.EngineTask {
 		set := engineTask("ftask_shared", "dataset_a", true)
 		set.Members = []domain.MemberDef{{Alias: "pmean", Factor: def, Params: map[string]float64{"window": window}}}

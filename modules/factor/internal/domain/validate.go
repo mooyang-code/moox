@@ -6,11 +6,11 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 var ReservedColumns = []string{"subject_id", "freq", "data_time", "series_tag"}
-
-var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // aliasPattern 是成员别名：与定义 ID 同一字符集，最长 32 个字符（列名“别名__参数名”要留出空间）。
 var aliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
@@ -71,8 +71,8 @@ func ValidateTask(set FactorTask) error {
 // ValidateDefinition checks the static rules of a definition; it does not depend on any dataset.
 // 编译通过即为合法（设计 9.2）；allow_partial_universe 只用于截面因子。返回填好派生字段的定义。
 func ValidateDefinition(def FactorDef) (FactorDef, error) {
-	if !factorIDPattern.MatchString(def.FactorID) {
-		return def, fmt.Errorf("factor_id must match [A-Za-z_][A-Za-z0-9_]*")
+	if err := factorname.ValidateFactorID(def.FactorID); err != nil {
+		return def, err
 	}
 	if err := validateName(def.Name); err != nil {
 		return def, err
@@ -89,6 +89,14 @@ func ValidateDefinition(def FactorDef) (FactorDef, error) {
 	compiled, err := CompileDefinition(def)
 	if err != nil {
 		return def, fmt.Errorf("spec 编译失败：%w", err)
+	}
+	if err := factorname.ValidateOutputs(compiled.FactorID, compiled.Outputs); err != nil {
+		return def, err
+	}
+	for _, output := range compiled.Outputs {
+		if isReservedColumn(output) {
+			return def, fmt.Errorf("输出列名 %s 是系统列", output)
+		}
 	}
 	if compiled.AllowPartialUniverse && compiled.FactorType != FactorTypeCrossSection {
 		return def, fmt.Errorf("allow_partial_universe is only valid for %s factors", FactorTypeCrossSection)

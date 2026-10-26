@@ -62,11 +62,14 @@ func TestAddFactorToTaskRejectsParamsWhenAliasWouldBeTooLong(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
 	ctx := context.Background()
-	_, err := svc.CreateFactor(ctx, factorWithSpec("a_rather_long_factor_identifier", paramSpec))
+	// 因子 ID 最长 24 个字符；多个参数的值都写进别名后超过 32 个字符。
+	longSpec := "params:\n  a: {type: int, min: 1, max: 99999, default: 1}\n  b: {type: int, min: 1, max: 99999, default: 1}\n  c: {type: int, min: 1, max: 99999, default: 1}\noutput: ts_mean(close, a) + b + c\n"
+	_, err := svc.CreateFactor(ctx, factorWithSpec("a_rather_long_factor_id", longSpec))
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "", "a_rather_long_factor_identifier", map[string]float64{"window": 10})
+	long := map[string]float64{"a": 99999, "b": 99999, "c": 99999}
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "", "a_rather_long_factor_id", long)
 	require.ErrorContains(t, err, "手动指定别名")
-	_, err = svc.AddTaskMember(ctx, testTaskID(), "short10", "a_rather_long_factor_identifier", map[string]float64{"window": 10})
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "short10", "a_rather_long_factor_id", long)
 	require.NoError(t, err)
 }
 
@@ -97,19 +100,19 @@ func TestUpdateFactorChecksMemberFixedParams(t *testing.T) {
 	_, err = svc.AddTaskMember(ctx, testTaskID(), "", "pmean", map[string]float64{"window": 10})
 	require.NoError(t, err)
 
-	narrow := "params:\n  window: {type: int, min: 2, max: 8, default: 5}\noutputs:\n  mean: ts_mean(close, window)\n"
+	narrow := "params:\n  window: {type: int, min: 2, max: 8, default: 5}\noutput: ts_mean(close, window)\n"
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", narrow))
 	require.ErrorContains(t, err, "固定参数不再合法")
 
-	renamed := "params:\n  span: {type: int, min: 2, max: 30, default: 5}\noutputs:\n  mean: ts_mean(close, span)\n"
+	renamed := "params:\n  span: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, span)\n"
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", renamed))
 	require.ErrorContains(t, err, "固定参数不再合法", "参数改名后成员的固定参数没有对应的声明")
 
-	extra := "params:\n  window: {type: int, min: 2, max: 30, default: 5}\n  shift: {type: int, min: 0, max: 5, default: 0}\noutputs:\n  mean: ts_mean(close, window)\n"
+	extra := "params:\n  window: {type: int, min: 2, max: 30, default: 5}\n  shift: {type: int, min: 0, max: 5, default: 0}\noutput: ts_mean(close, window)\n"
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", extra))
 	require.ErrorContains(t, err, "新增了参数 shift", "定义新增参数后，旧成员的固定参数不完整，要先移除再重加")
 
-	newDefault := "params:\n  window: {type: int, min: 2, max: 30, default: 6}\noutputs:\n  mean: ts_mean(close, window)\n"
+	newDefault := "params:\n  window: {type: int, min: 2, max: 30, default: 6}\noutput: ts_mean(close, window)\n"
 	_, err = svc.UpdateFactor(ctx, factorWithSpec("pmean", newDefault))
 	require.NoError(t, err)
 	members, err := db.ListMembers(ctx, testTaskID(), "")
@@ -133,8 +136,8 @@ func TestFixedParamMembersWriteNoParamColumns(t *testing.T) {
 		require.NoError(t, err)
 	}
 	shared := resultColumns(meta, testTaskID())
-	require.Contains(t, shared, "mean")
-	require.Contains(t, shared, "pmean_10_mean")
+	require.Contains(t, shared, "pmean")
+	require.Contains(t, shared, "pmean_10_pmean")
 	for name := range shared {
 		require.NotContains(t, name, "__", "共享任务不写参数列：%s", name)
 	}

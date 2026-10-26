@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const paramSpec = "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutputs:\n  mean: ts_mean(close, window)\n"
+const paramSpec = "params:\n  window: {type: int, min: 2, max: 30, default: 5}\noutput: ts_mean(close, window)\n"
 
 func instanceRequest(members ...InstanceMember) InstanceTaskRequest {
 	return InstanceTaskRequest{InstanceID: "inst-1", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
@@ -47,8 +47,8 @@ func TestEnsureInstanceTaskCreatesPrivateTaskWithAliasedMembers(t *testing.T) {
 	}
 
 	columns := resultColumns(meta, taskID)
-	require.Equal(t, ColumnKindOutput, columns["fast_mean"]["column_kind"])
-	require.Equal(t, "fast", columns["fast_mean"]["member_alias"])
+	require.Equal(t, ColumnKindOutput, columns["fast_pmean"]["column_kind"])
+	require.Equal(t, "fast", columns["fast_pmean"]["member_alias"])
 	require.Equal(t, ColumnKindParam, columns["slow__window"]["column_kind"])
 	require.Equal(t, "window", columns["slow__window"]["param_name"])
 
@@ -61,7 +61,7 @@ func TestEnsureInstanceTaskCreatesPrivateTaskWithAliasedMembers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, shrunk.Members, 1)
 	require.Equal(t, "fast", shrunk.Members[0].MemberAlias)
-	require.Contains(t, resultColumns(meta, taskID), "slow_mean", "移出的成员已写入的列保留")
+	require.Contains(t, resultColumns(meta, taskID), "slow_pmean", "移出的成员已写入的列保留")
 
 	// 换源数据集要先删除私有任务。
 	moved := instanceRequest(InstanceMember{Alias: "fast", FactorID: "pmean"})

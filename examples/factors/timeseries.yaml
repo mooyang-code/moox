@@ -1,18 +1,18 @@
 # 时序因子示例（表达式写法，语法见 docs/模块/因子.md）。一个文件可以包含多个因子：
-# factor_id 是全局唯一的标识，name 是展示名，category_id/category_name 是分类（可选），spec 是定义。
+# factor_id 是全局唯一的标识（小写，词与词之间用单个下划线），name 是展示名，category_id/category_name 是分类（可选），spec 是定义。
 # params 声明可调参数：取值类型、范围与默认值。策略每期可以在范围内调整参数（因子动态调参），
-# 回看按范围的最坏情况推导；输出列名固定，不随参数变化。
-- factor_id: Bias
+# 回看按范围的最坏情况推导。
+# 只有一个输出的因子写 output（没有输出名，结果列就是成员键）；有多个输出的因子写 outputs，输出名不带因子前缀。
+- factor_id: bias
   name: Bias
   category_id: momentum
   category_name: 动量类
   spec: |
     params:
       window: {type: int, min: 2, max: 120, default: 20}
-    outputs:
-      bias: close / ts_mean(close, window) - 1
+    output: close / ts_mean(close, window) - 1
 
-- factor_id: Cci
+- factor_id: cci
   name: CCI
   category_id: momentum
   category_name: 动量类
@@ -22,37 +22,35 @@
     let:
       tp: (high + low + close) / 3
       m: ts_mean(tp, window)
-    outputs:
-      cci: (tp - m) / (0.015 * ts_mean(abs(tp - m), window))
+    output: (tp - m) / (0.015 * ts_mean(abs(tp - m), window))
 
-# 同一个定义可以用不同的成员别名加入因子集多次（例如 ma_fast、ma_slow），各自调参，结果列为“别名_输出名”。
-- factor_id: ma
-  name: 移动平均
+# 需要两条各自调参的均线（快线、慢线）时，注册两个因子，各自在策略里作为可变成员。
+- factor_id: ma_fast
+  name: 快速均线
   category_id: trend
   category_name: 趋势类
+  spec: |
+    params:
+      window: {type: int, min: 2, max: 60, default: 5}
+    output: ts_mean(close, window)
+
+- factor_id: ma_slow
+  name: 慢速均线
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    params:
+      window: {type: int, min: 10, max: 240, default: 30}
+    output: ts_mean(close, window)
+
+# 多输出因子：几个输出共用同一组参数和同一份中间计算。
+- factor_id: channel
+  name: 价格通道
+  category_id: volatility
+  category_name: 波动类
   spec: |
     params:
       window: {type: int, min: 2, max: 120, default: 20}
     outputs:
-      ma: ts_mean(close, window)
-
-# 递推平滑移动平均 SMA(close, n, m)：alpha = m / n。递推算子按收敛精度截断回看，SMA(20, 1) 回看 405 期。
-- factor_id: sma
-  name: SMA
-  category_id: trend
-  category_name: 趋势类
-  spec: |
-    params:
-      n: {type: int, min: 5, max: 20, default: 20}
-    outputs:
-      sma: sma(close, n, 1)
-
-# 显式截断的长周期 EMA：ema(x, n, k) 只用最近 k 根（k = n = 50000 时起点权重约 13%，是近似值），
-# 回看恰为 50000 根，用来观察单期 5 万根计算的耗时；需要数据源的回看数量 N ≥ 50000（引擎 window.lookback）。
-- factor_id: Ema50000
-  name: EMA(50000)
-  category_id: trend
-  category_name: 趋势类
-  spec: |
-    outputs:
-      ema50000: ema(close, 50000, 50000)
+      high: ts_max(high, window)
+      low: ts_min(low, window)

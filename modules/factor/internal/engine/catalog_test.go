@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +18,7 @@ import (
 func engineTask(taskID, datasetID string, ready bool, factorIDs ...string) domain.EngineTask {
 	factors := make([]domain.FactorDef, 0, len(factorIDs))
 	for _, id := range factorIDs {
-		factors = append(factors, domain.MustDefinition(id, id, fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, 2)\n", id)))
+		factors = append(factors, domain.MustDefinition(id, id, "output: ts_mean(close, 2)\n"))
 	}
 	return domain.EngineTask{
 		Set: domain.FactorTask{
@@ -91,7 +90,7 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 	require.Equal(t, "ftask_a", sets[0].Set.TaskID)
 	require.Len(t, sets[0].Members, 1)
 	require.NotNil(t, sets[0].Members[0].Factor.Compiled(), "加载快照时重新编译")
-	require.Equal(t, []string{"bias_value"}, sets[0].Members[0].Factor.Outputs)
+	require.Equal(t, []string{"bias"}, sets[0].Members[0].Factor.Outputs)
 }
 
 // 派生字段以编译结果为准：快照里的派生字段即使被改动，也按 spec 重新推导。
@@ -100,12 +99,12 @@ func TestCatalogRederivesFieldsAndKeepsUncompilableDefinitions(t *testing.T) {
 	cache, _ := newTestCache(t)
 	set := uncompiled(engineTask("ftask_a", "dataset_a", true, "bias", "cci"))
 	set.Members[0].Factor.LookbackPeriods, set.Members[0].Factor.Outputs = 999, []string{"forged"}
-	set.Members[1].Factor.Spec = "outputs:\n  cci_value: future_function(close)\n"
+	set.Members[1].Factor.Spec = "output: future_function(close)\n"
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineTask{set}})
 	require.NoError(t, err)
 	got, _ := cache.SetByID("ftask_a")
 	require.Equal(t, 2, got.Members[0].Factor.LookbackPeriods)
-	require.Equal(t, []string{"bias_value"}, got.Members[0].Factor.Outputs)
+	require.Equal(t, []string{"bias"}, got.Members[0].Factor.Outputs)
 	require.Nil(t, got.Members[1].Factor.Compiled())
 }
 

@@ -21,8 +21,7 @@ params:
   k: {type: float, min: 0, max: 5, default: 2.0}
 let:
   ma: ts_mean(close, window)
-outputs:
-  boll_up: ma + k * ts_std(close, window)
+output: ma + k * ts_std(close, window)
 `)
 	if len(factor.Params) != 2 {
 		t.Fatalf("params = %+v", factor.Params)
@@ -46,24 +45,24 @@ outputs:
 
 func TestParamDeclarationRejected(t *testing.T) {
 	cases := []struct{ name, text, want string }{
-		{"list value", "params: {window: [5, 20]}\noutputs:\n  x: ts_mean(close, window)\n", "{type, min, max, default}"},
-		{"scalar value", "params: {window: 20}\noutputs:\n  x: ts_mean(close, window)\n", "{type, min, max, default}"},
-		{"missing type", "params: {window: {min: 1, max: 5, default: 2}}\noutputs:\n  x: ts_mean(close, window)\n", "缺少 type"},
-		{"missing default", "params: {window: {type: int, min: 1, max: 5}}\noutputs:\n  x: ts_mean(close, window)\n", "缺少 default"},
-		{"bad type", "params: {window: {type: string, min: 1, max: 5, default: 2}}\noutputs:\n  x: close\n", "int 或 float"},
-		{"unknown key", "params: {window: {type: int, min: 1, max: 5, default: 2, step: 1}}\noutputs:\n  x: close\n", "未知的键"},
-		{"int with float bound", "params: {window: {type: int, min: 1, max: 5.5, default: 2}}\noutputs:\n  x: close\n", "必须是整数"},
-		{"min above max", "params: {window: {type: int, min: 6, max: 5, default: 5}}\noutputs:\n  x: close\n", "min 不能大于 max"},
-		{"default outside", "params: {window: {type: int, min: 1, max: 5, default: 9}}\noutputs:\n  x: close\n", "默认值"},
-		{"template name", "params: {window: {type: int, min: 1, max: 5, default: 2}}\noutputs:\n  x_{window}: ts_mean(close, window)\n", "不合法"},
-		{"float as window", "params: {w: {type: float, min: 1, max: 5, default: 2}}\noutputs:\n  x: ts_mean(close, w)\n", "整数类型"},
-		{"range beyond window limit", "params: {w: {type: int, min: 1, max: 200000, default: 2}}\noutputs:\n  x: ts_mean(close, w)\n", "范围在"},
-		{"std window below minimum", "params: {w: {type: int, min: 1, max: 20, default: 5}}\noutputs:\n  x: ts_std(close, w)\n", "范围在"},
-		{"expression as window", "params: {w: {type: int, min: 1, max: 20, default: 5}}\noutputs:\n  x: ts_mean(close, w * 2)\n", "单个整数参数"},
-		{"param only output", "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutputs:\n  x: k * 2\n", "只由参数决定"},
-		{"param as series", "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutputs:\n  x: ts_mean(k, 5) + close\n", "不能是常量或参数"},
-		{"quantile out of range", "params: {q: {type: float, min: 0, max: 2, default: 0.5}}\noutputs:\n  x: ts_quantile(close, 5, q)\n", "范围必须在"},
-		{"lookback worst case", "params: {w: {type: int, min: 2, max: 100000, default: 20}}\noutputs:\n  x: ts_mean(ts_std(close, w), 20)\n", "最坏情况"},
+		{"list value", "params: {window: [5, 20]}\noutput: ts_mean(close, window)\n", "{type, min, max, default}"},
+		{"scalar value", "params: {window: 20}\noutput: ts_mean(close, window)\n", "{type, min, max, default}"},
+		{"missing type", "params: {window: {min: 1, max: 5, default: 2}}\noutput: ts_mean(close, window)\n", "缺少 type"},
+		{"missing default", "params: {window: {type: int, min: 1, max: 5}}\noutput: ts_mean(close, window)\n", "缺少 default"},
+		{"bad type", "params: {window: {type: string, min: 1, max: 5, default: 2}}\noutput: close\n", "int 或 float"},
+		{"unknown key", "params: {window: {type: int, min: 1, max: 5, default: 2, step: 1}}\noutput: close\n", "未知的键"},
+		{"int with float bound", "params: {window: {type: int, min: 1, max: 5.5, default: 2}}\noutput: close\n", "必须是整数"},
+		{"min above max", "params: {window: {type: int, min: 6, max: 5, default: 5}}\noutput: close\n", "min 不能大于 max"},
+		{"default outside", "params: {window: {type: int, min: 1, max: 5, default: 9}}\noutput: close\n", "默认值"},
+		{"template name", "params: {window: {type: int, min: 1, max: 5, default: 2}}\noutputs:\n  x_{window}: ts_mean(close, window)\n  y: close\n", "不合法"},
+		{"float as window", "params: {w: {type: float, min: 1, max: 5, default: 2}}\noutput: ts_mean(close, w)\n", "整数类型"},
+		{"range beyond window limit", "params: {w: {type: int, min: 1, max: 200000, default: 2}}\noutput: ts_mean(close, w)\n", "范围在"},
+		{"std window below minimum", "params: {w: {type: int, min: 1, max: 20, default: 5}}\noutput: ts_std(close, w)\n", "范围在"},
+		{"expression as window", "params: {w: {type: int, min: 1, max: 20, default: 5}}\noutput: ts_mean(close, w * 2)\n", "单个整数参数"},
+		{"param only output", "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutput: k * 2\n", "只由参数决定"},
+		{"param as series", "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutput: ts_mean(k, 5) + close\n", "不能是常量或参数"},
+		{"quantile out of range", "params: {q: {type: float, min: 0, max: 2, default: 0.5}}\noutput: ts_quantile(close, 5, q)\n", "范围必须在"},
+		{"lookback worst case", "params: {w: {type: int, min: 2, max: 100000, default: 20}}\noutput: ts_mean(ts_std(close, w), 20)\n", "最坏情况"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,8 +80,7 @@ func TestParamLookbackWorstCaseForSMA(t *testing.T) {
 params:
   n: {type: int, min: 10, max: 100, default: 20}
   m: {type: int, min: 1, max: 9, default: 2}
-outputs:
-  s: sma(close, n, m)
+output: sma(close, n, m)
 `)
 	want := RecursiveSpan(SMAAlpha(100, 1))
 	if factor.Lookback != want {
@@ -95,8 +93,7 @@ func TestCheckParams(t *testing.T) {
 params:
   n: {type: int, min: 2, max: 100, default: 20}
   m: {type: int, min: 1, max: 99, default: 2}
-outputs:
-  s: sma(close, n, m)
+output: sma(close, n, m)
 `)
 	if err := factor.CheckParams(map[string]float64{"n": 30, "m": 5}); err != nil {
 		t.Fatalf("valid: %v", err)
@@ -113,7 +110,7 @@ outputs:
 		}
 	}
 	// 默认值不满足联合约束时编译即拒绝。
-	if _, err := Compile("params:\n  n: {type: int, min: 2, max: 100, default: 5}\n  m: {type: int, min: 1, max: 99, default: 5}\noutputs:\n  s: sma(close, n, m)\n"); err == nil ||
+	if _, err := Compile("params:\n  n: {type: int, min: 2, max: 100, default: 5}\n  m: {type: int, min: 1, max: 99, default: 5}\noutput: sma(close, n, m)\n"); err == nil ||
 		!strings.Contains(err.Error(), "m 必须小于 n") {
 		t.Fatalf("err = %v", err)
 	}
@@ -121,7 +118,7 @@ outputs:
 
 // 参数声明进入规范文本（从而进入 definition_hash），改默认值、范围或类型都会改变它；参数名只是槽位名，同样进入。
 func TestParamDeclarationInCanonicalText(t *testing.T) {
-	base := "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  x: ts_mean(close, w)\n"
+	base := "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutput: ts_mean(close, w)\n"
 	text := mustCompile(t, base).CanonicalText()
 	if !strings.HasPrefix(text, "$w int [2, 50] = 20\n") {
 		t.Fatalf("canonical = %q", text)
@@ -140,8 +137,7 @@ func TestParamDeclarationInCanonicalText(t *testing.T) {
 func TestProgramParamSlotsPerMember(t *testing.T) {
 	factor := mustCompile(t, `
 params: {w: {type: int, min: 2, max: 50, default: 20}}
-outputs:
-  x: ts_mean(close * 2, w)
+output: ts_mean(close * 2, w)
 `)
 	program, err := NewProgram([]ProgramInput{
 		{Key: "set_a/fast", FactorID: "f", Factor: factor},
@@ -174,7 +170,7 @@ outputs:
 
 // 截面依赖节点按标的范围区分，纯时序节点在范围之间共享。
 func TestProgramCrossNodesKeyedByUniverse(t *testing.T) {
-	factor := mustCompile(t, "outputs:\n  r: cs_rank(ts_mean(close, 5))\n")
+	factor := mustCompile(t, "output: cs_rank(ts_mean(close, 5))\n")
 	program, err := NewProgram([]ProgramInput{
 		{Key: "a/r", Factor: factor, Universe: "a"},
 		{Key: "b/r", Factor: factor, Universe: "b"},

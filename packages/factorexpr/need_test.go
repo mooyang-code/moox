@@ -29,7 +29,7 @@ func programTree(p *Program, index int) *Node {
 }
 
 func TestNeedLiveTarget(t *testing.T) {
-	p := program(t, "outputs:\n  o: ts_rank(ts_mean(close, 20), 20)\n")
+	p := program(t, "output: ts_rank(ts_mean(close, 20), 20)\n")
 	need, err := p.Need(100, 100)
 	if err != nil {
 		t.Fatal(err)

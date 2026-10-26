@@ -61,7 +61,7 @@ var testEngine = &factorpb.EngineIdentity{EngineId: "factor-engine@mac", BootId:
 func engineTaskFixture() domain.EngineTask {
 	return domain.EngineTask{
 		Set:         domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.TaskStatusEnabled},
-		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "outputs:\n  bias: close / ts_mean(close, 5)\n")),
+		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "output: close / ts_mean(close, 5)\n")),
 		ResultReady: true,
 	}
 }

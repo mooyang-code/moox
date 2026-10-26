@@ -105,13 +105,13 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 }
 
 const testLibrary = `- factor_id: bias
-  name: Bias 偏离
+  name: bias 偏离
   spec: |
     params:
       window: {type: int, min: 2, max: 60, default: 5}
     outputs:
       bias: close / ts_mean(close, window)
-- factor_id: Cci
+- factor_id: cci
   name: CCI
   spec: |
     outputs:
@@ -136,7 +136,7 @@ func TestLoadSetupFactorsReadsYAMLLibrary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Definitions, 1)
 	require.Equal(t, "bias", plan.Definitions[0].FactorID)
-	require.Equal(t, "Bias 偏离", plan.Definitions[0].Name)
+	require.Equal(t, "bias 偏离", plan.Definitions[0].Name)
 	require.Contains(t, plan.Definitions[0].Spec, "ts_mean(close, window)")
 	require.Len(t, plan.Sets, 1)
 	require.Equal(t, "crypto", plan.Sets[0].SpaceID)
@@ -150,10 +150,10 @@ func TestLoadSetupFactorsRejectsUnknownFactorAndBadLibrary(t *testing.T) {
 	manifest := setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
 		Sets:        []setupconfig.FactorSetupTask{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Missing", File: "lib.yaml"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "missing", File: "lib.yaml"}},
 	}}
 	_, err := loadSetupFactors(manifest, root)
-	require.ErrorContains(t, err, `has no factor "Missing"`)
+	require.ErrorContains(t, err, `has no factor "missing"`)
 	bad := "- factor_id: X\n  name: X\n  spec: x\n  factor_type: timeseries\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "factors", "bad.yaml"), []byte(bad), 0o600))
 	manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "X", File: "bad.yaml"}}
@@ -166,8 +166,8 @@ func TestLoadSetupFactorsRequiresMatchingSet(t *testing.T) {
 	writeLibrary(t, filepath.Join(root, "factors"), "lib.yaml")
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
-		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Cci", File: "lib.yaml"}},
-		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Cci"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "cci", File: "lib.yaml"}},
+		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "cci"}},
 	}}, root)
 	require.ErrorContains(t, err, "no matching set")
 }
@@ -178,8 +178,8 @@ func TestLoadSetupFactorsMatchesFrequencyExactly(t *testing.T) {
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
 		Sets:        []setupconfig.FactorSetupTask{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1mo"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Cci", File: "lib.yaml"}},
-		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Cci"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "cci", File: "lib.yaml"}},
+		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "cci"}},
 	}}, root)
 	require.ErrorContains(t, err, "no matching set")
 }
@@ -221,8 +221,8 @@ func TestLoadSetupFactorsRejectsSymlinkEscape(t *testing.T) {
 func testSetupPlan() setupFactorPlan {
 	return setupFactorPlan{
 		Sets:        []setupFactorTask{{TaskID: "ftask_prices_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
-		Definitions: []setupFactorDefinition{{FactorID: "Bias", Name: "Bias", Spec: "outputs:\n  bias: close / ts_mean(close, 5)\n"}},
-		Members:     []setupFactorMember{{TaskID: "ftask_prices_1m", FactorID: "Bias", Status: "enabled"}},
+		Definitions: []setupFactorDefinition{{FactorID: "bias", Name: "bias", Spec: "output: close / ts_mean(close, 5)\n"}},
+		Members:     []setupFactorMember{{TaskID: "ftask_prices_1m", FactorID: "bias", Status: "enabled"}},
 	}
 }
 
@@ -240,8 +240,8 @@ func TestApplyCreatesTasksThenDefinitionsThenMembers(t *testing.T) {
 		"trpc.moox.factor.FactorMgr/AddTaskMember",
 		"trpc.moox.factor.FactorMgr/SetTaskMemberStatus",
 	}, client.calls)
-	require.Equal(t, []string{"Bias=enabled"}, client.statuses)
-	require.Equal(t, []string{"ftask_prices_1m/Bias=Bias"}, client.addedMembers, "初始化的成员别名就是 factor_id")
+	require.Equal(t, []string{"bias=enabled"}, client.statuses)
+	require.Equal(t, []string{"ftask_prices_1m/bias=bias"}, client.addedMembers, "初始化的成员别名就是 factor_id")
 	require.Equal(t, []string{"ftask_prices_1m"}, client.createdTaskIDs)
 	require.Len(t, client.createdBodies, 1)
 	require.NotContains(t, client.createdBodies[0], "task_id")
@@ -284,14 +284,14 @@ func TestApplySkipsIdenticalDefinition(t *testing.T) {
 	require.Equal(t, 0, result.Imported)
 	require.Equal(t, 1, result.Unchanged)
 	require.Empty(t, client.createdIDs)
-	require.Equal(t, []string{"ftask_prices_1m/Bias=Bias"}, client.addedMembers)
+	require.Equal(t, []string{"ftask_prices_1m/bias=bias"}, client.addedMembers)
 }
 
 // 因子库里的分类先建立（同一分类只调一次），新定义带上分类；已有定义的分类不同时改成因子库里的（分类不进 definition_hash）。
 func TestApplySyncsCategoriesAndIgnoresOtherAliases(t *testing.T) {
 	plan := testSetupPlan()
 	plan.Definitions[0].CategoryID, plan.Definitions[0].CategoryName = "momentum", "动量类"
-	plan.Definitions = append(plan.Definitions, setupFactorDefinition{FactorID: "Cci", Name: "CCI", Spec: "outputs:\n  cci: close\n",
+	plan.Definitions = append(plan.Definitions, setupFactorDefinition{FactorID: "cci", Name: "CCI", Spec: "output: close\n",
 		CategoryID: "momentum", CategoryName: "动量类"})
 	client := &fakeFactorJSONClient{}
 	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
@@ -305,14 +305,14 @@ func TestApplySyncsCategoriesAndIgnoresOtherAliases(t *testing.T) {
 	plan.Definitions = plan.Definitions[:1]
 	_, err = (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Bias=momentum"}, client.movedCategories)
+	require.Equal(t, []string{"bias=momentum"}, client.movedCategories)
 	require.Empty(t, client.addedMembers, "没有参数的因子在同一任务里只能有一个成员：别名 bias_fast 的成员就是它，服务端也会拒绝重复")
 }
 
 func TestApplyComparesDefinitionHashAndName(t *testing.T) {
 	plan := testSetupPlan()
 	got := plan.Definitions[0]
-	got.Spec = "outputs:\n  bias: close / ts_mean(close, 10)\n"
+	got.Spec = "output: close / ts_mean(close, 10)\n"
 	client := &fakeFactorJSONClient{existingTask: &plan.Sets[0], existing: &got}
 	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.ErrorContains(t, err, "different definition")
@@ -351,33 +351,33 @@ func paramPlan(members ...setupFactorMember) setupFactorPlan {
 // 同一个因子带不同固定参数多次加入同一个任务：没给的参数用定义的默认值补全；别名缺省时由服务端生成。
 func TestApplyAddsMembersWithFixedParams(t *testing.T) {
 	plan := paramPlan(
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Status: "enabled"},
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "disabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Status: "enabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "disabled"},
 	)
 	client := &fakeFactorJSONClient{paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}}}
 	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, 3, result.MembersAdded)
-	require.Equal(t, []string{"ftask_prices_1m/Bias=Bias", "ftask_prices_1m/Bias_p=Bias", "ftask_prices_1m/bias_slow=Bias"}, client.addedMembers)
-	require.Equal(t, []string{"Bias=enabled", "Bias_p=enabled"}, client.statuses, "按服务端返回的别名设置状态；配置要求停用的成员保持新增时的停用")
+	require.Equal(t, []string{"ftask_prices_1m/bias=bias", "ftask_prices_1m/bias_p=bias", "ftask_prices_1m/bias_slow=bias"}, client.addedMembers)
+	require.Equal(t, []string{"bias=enabled", "bias_p=enabled"}, client.statuses, "按服务端返回的别名设置状态；配置要求停用的成员保持新增时的停用")
 }
 
 // 再次执行不重复添加：按完整参数（用定义的默认值补全）与现有成员比较，别名相同的成员按别名认。
 func TestApplyMatchesExistingMembersByAliasAndParams(t *testing.T) {
 	plan := paramPlan(
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Status: "enabled"},
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
-		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "enabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Status: "enabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Params: map[string]float64{"window": 10}, Status: "enabled"},
+		setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Alias: "bias_slow", Params: map[string]float64{"window": 30}, Status: "enabled"},
 	)
 	client := &fakeFactorJSONClient{
 		existingTask: &plan.Sets[0], existing: &plan.Definitions[0],
 		paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}},
 		usages: []factorAPIUsage{
-			{TaskID: "ftask_prices_1m", MemberAlias: "Bias", Status: "enabled", Params: map[string]float64{"window": 5}},
-			{TaskID: "ftask_prices_1m", MemberAlias: "Bias_10", Status: "enabled", Params: map[string]float64{"window": 10}},
+			{TaskID: "ftask_prices_1m", MemberAlias: "bias", Status: "enabled", Params: map[string]float64{"window": 5}},
+			{TaskID: "ftask_prices_1m", MemberAlias: "bias_10", Status: "enabled", Params: map[string]float64{"window": 10}},
 			{TaskID: "ftask_prices_1m", MemberAlias: "bias_slow", Status: "disabled", Params: map[string]float64{"window": 30}},
-			{TaskID: "ftask_other_5m", MemberAlias: "Bias", Status: "enabled", Params: map[string]float64{"window": 5}},
+			{TaskID: "ftask_other_5m", MemberAlias: "bias", Status: "enabled", Params: map[string]float64{"window": 5}},
 		},
 	}
 	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
@@ -390,7 +390,7 @@ func TestApplyMatchesExistingMembersByAliasAndParams(t *testing.T) {
 
 // 固定参数加成员后不再改：别名已存在但参数不同时报错，要换参数请换别名。
 func TestApplyRejectsAliasWithDifferentParams(t *testing.T) {
-	plan := paramPlan(setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "Bias", Alias: "bias_slow", Params: map[string]float64{"window": 31}, Status: "enabled"})
+	plan := paramPlan(setupFactorMember{TaskID: "ftask_prices_1m", FactorID: "bias", Alias: "bias_slow", Params: map[string]float64{"window": 31}, Status: "enabled"})
 	client := &fakeFactorJSONClient{
 		existingTask: &plan.Sets[0], existing: &plan.Definitions[0],
 		paramDefaults: []factorAPIParam{{Name: "window", DefaultValue: 5}},
@@ -404,8 +404,8 @@ func TestApplyRejectsAliasWithDifferentParams(t *testing.T) {
 // reads against what protobuf JSON emits for FactorMgr.
 func TestFactorAPIResponseMatchesFactorProtoJSON(t *testing.T) {
 	var get factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor":{"factor_id":"Bias","factor_type":"timeseries","name":"Bias","spec":"outputs: {}","spec_hash":"sha256:x","input_columns":["close"],"outputs":["bias"],"lookback_periods":20,"definition_hash":"sha256:d"},"usages":[{"task_id":"ftask_a_1m","status":"enabled"}]}`), &get))
-	require.Equal(t, "Bias", get.Factor.FactorID)
+	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor":{"factor_id":"bias","factor_type":"timeseries","name":"bias","spec":"outputs: {}","spec_hash":"sha256:x","input_columns":["close"],"outputs":["bias"],"lookback_periods":20,"definition_hash":"sha256:d"},"usages":[{"task_id":"ftask_a_1m","status":"enabled"}]}`), &get))
+	require.Equal(t, "bias", get.Factor.FactorID)
 	require.Equal(t, "sha256:d", get.Factor.DefinitionHash)
 	require.Equal(t, []factorAPIUsage{{TaskID: "ftask_a_1m", Status: "enabled"}}, get.Usages)
 
@@ -415,8 +415,8 @@ func TestFactorAPIResponseMatchesFactorProtoJSON(t *testing.T) {
 	require.Equal(t, "未知函数", validated.Diagnostic.Message)
 
 	var list factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factors":[{"factor":{"factor_id":"Cci"},"usages":[{"task_id":"ftask_a_1m","status":"disabled"}]}]}`), &list))
+	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factors":[{"factor":{"factor_id":"cci"},"usages":[{"task_id":"ftask_a_1m","status":"disabled"}]}]}`), &list))
 	require.Len(t, list.Factors, 1)
-	require.Equal(t, "Cci", list.Factors[0].Factor.FactorID)
+	require.Equal(t, "cci", list.Factors[0].Factor.FactorID)
 	require.Equal(t, "disabled", list.Factors[0].Usages[0].Status)
 }

@@ -66,7 +66,7 @@ func TestFormatParamValue(t *testing.T) {
 }
 
 func TestResolveMemberParams(t *testing.T) {
-	ema := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n")
+	ema := compiledDef(t, "ema", "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutput: ema(close, span, warmup)\n")
 	full, err := ResolveMemberParams(ema, map[string]float64{"warmup": 50000})
 	require.NoError(t, err)
 	require.Equal(t, map[string]float64{"span": 20, "warmup": 50000}, full)
@@ -82,7 +82,7 @@ func TestResolveMemberParams(t *testing.T) {
 		require.Error(t, err, name)
 	}
 
-	plain := compiledDef(t, "Plain", "outputs:\n  o: close\n")
+	plain := compiledDef(t, "Plain", "output: close\n")
 	full, err = ResolveMemberParams(plain, nil)
 	require.NoError(t, err)
 	require.Nil(t, full)
@@ -91,18 +91,18 @@ func TestResolveMemberParams(t *testing.T) {
 }
 
 func TestMemberSnapshotAndParamColumns(t *testing.T) {
-	ema := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n")
+	ema := compiledDef(t, "ema", "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutput: ema(close, span, warmup)\n")
 
-	dynamic := MemberDef{Alias: "Ema", Factor: ema}
+	dynamic := MemberDef{Alias: "ema", Factor: ema}
 	require.False(t, dynamic.FixedParams())
-	require.Equal(t, []string{"Ema__span", "Ema__warmup"}, dynamic.ParamColumns())
+	require.Equal(t, []string{"ema__span", "ema__warmup"}, dynamic.ParamColumns())
 	require.Equal(t, 20.0, MemberSnapshot(dynamic).Value("span", "BTC"))
 	require.Equal(t, 0.0, MemberSnapshot(dynamic).Value("warmup", "BTC"))
 
-	fixed := MemberDef{Alias: "Ema_20_50000", Factor: ema, Params: map[string]float64{"span": 20, "warmup": 50000}}
+	fixed := MemberDef{Alias: "ema_20_50000", Factor: ema, Params: map[string]float64{"span": 20, "warmup": 50000}}
 	require.True(t, fixed.FixedParams())
 	require.Empty(t, fixed.ParamColumns())
-	require.Equal(t, []string{"Ema_20_50000_ema"}, fixed.OutputColumns())
+	require.Equal(t, []string{"ema_20_50000_ema"}, fixed.OutputColumns())
 	snapshot := MemberSnapshot(fixed)
 	require.Equal(t, 50000.0, snapshot.Value("warmup", "BTC"))
 	require.Equal(t, 20.0, snapshot.Value("span", "ETH"))
@@ -110,17 +110,17 @@ func TestMemberSnapshotAndParamColumns(t *testing.T) {
 }
 
 func TestCheckSharedMemberParamsAfterDefinitionChange(t *testing.T) {
-	narrow := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\noutputs:\n  ema: ema(close, span)\n")
+	narrow := compiledDef(t, "ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\noutput: ema(close, span)\n")
 	require.NoError(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 20}))
 	require.Error(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 50}), "超出新范围")
 
 	require.ErrorContains(t, CheckSharedMemberParams(narrow, nil), "新增了参数", "定义现在声明了参数，空的固定参数不完整")
 	require.ErrorContains(t, CheckSharedMemberParams(narrow, map[string]float64{"span": 20, "extra": 1}), "不再声明")
 
-	wider := compiledDef(t, "Ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\n  warmup: {type: int, min: 0, max: 100, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n")
+	wider := compiledDef(t, "ema", "params:\n  span: {type: int, min: 2, max: 30, default: 20}\n  warmup: {type: int, min: 0, max: 100, default: 0}\noutput: ema(close, span, warmup)\n")
 	require.ErrorContains(t, CheckSharedMemberParams(wider, map[string]float64{"span": 20}), "新增了参数 warmup", "定义新增参数后旧成员要重加")
 
-	plain := compiledDef(t, "Plain", "outputs:\n  o: close\n")
+	plain := compiledDef(t, "Plain", "output: close\n")
 	require.NoError(t, CheckSharedMemberParams(plain, nil))
 	require.ErrorContains(t, CheckSharedMemberParams(plain, map[string]float64{"span": 20}), "不再声明")
 }

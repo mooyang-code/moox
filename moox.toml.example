@@ -104,7 +104,7 @@ webhook_url = ""
 # 展示名与表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到；定义是全局的，不含数据集、
 # 频率和状态。成员（factors.members）用 source_dataset_id + freq 指向因子集，一个定义可加入多个因子集。
 # 输出列名同时作为结果列的 display_name，例如 bias_20。
-# 默认因子：xbx.yaml 里的 Bias、Cci、MinMax、QuoteVolumeMean，以及 common.yaml 里的常用技术指标
+# 默认因子：xbx.yaml 里的 bias、cci、min_max、quote_volume_mean，以及 common.yaml 里的常用技术指标
 # （MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）。
 # 关闭默认因子导入请设置 factors.enabled = false；也可以在因子库里新增定义，或复制条目改成自己的数据集与频率。
 [factors]
@@ -124,55 +124,59 @@ source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
 
 [[factors.definitions]]
-factor_id = "Bias"
+factor_id = "bias"
 file = "xbx.yaml"
 
 [[factors.definitions]]
-factor_id = "Cci"
+factor_id = "cci"
 file = "xbx.yaml"
 
 [[factors.definitions]]
-factor_id = "MinMax"
+factor_id = "min_max"
 file = "xbx.yaml"
 
 [[factors.definitions]]
-factor_id = "QuoteVolumeMean"
+factor_id = "quote_volume_mean"
 file = "xbx.yaml"
 
 [[factors.definitions]]
-factor_id = "Ma"
+factor_id = "ma"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Ema"
+factor_id = "ema"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Macd"
+factor_id = "macd"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Rsi"
+factor_id = "rsi"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Roc"
+factor_id = "roc"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Boll"
+factor_id = "boll"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Atr"
+factor_id = "atr"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "ReturnStd"
+factor_id = "atr_pct"
 file = "common.yaml"
 
 [[factors.definitions]]
-factor_id = "Vwap"
+factor_id = "return_std"
+file = "common.yaml"
+
+[[factors.definitions]]
+factor_id = "vwap"
 file = "common.yaml"
 
 # 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
@@ -181,37 +185,37 @@ file = "common.yaml"
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Bias"
+factor_id = "bias"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Cci"
+factor_id = "cci"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "MinMax"
+factor_id = "min_max"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "QuoteVolumeMean"
+factor_id = "quote_volume_mean"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Ma"
+factor_id = "ma"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 status = "enabled"
 
 # 同一个因子可以用不同的固定参数多次加入同一个任务；没给的参数取定义的默认值，member_alias 缺省时由服务端生成
@@ -219,128 +223,140 @@ status = "enabled"
 # [[factors.members]]
 # source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 # freq = "1m"
-# factor_id = "Ema"
+# factor_id = "ema"
 # params = { span = 20, warmup = 50000 }
 # status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Macd"
+factor_id = "macd"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Rsi"
+factor_id = "rsi"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Roc"
+factor_id = "roc"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Boll"
+factor_id = "boll"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Atr"
+factor_id = "atr"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "ReturnStd"
+factor_id = "atr_pct"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
 freq = "1m"
-factor_id = "Vwap"
+factor_id = "return_std"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "vwap"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Bias"
+factor_id = "bias"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Cci"
+factor_id = "cci"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "MinMax"
+factor_id = "min_max"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "QuoteVolumeMean"
+factor_id = "quote_volume_mean"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Ma"
+factor_id = "ma"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Ema"
+factor_id = "ema"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Macd"
+factor_id = "macd"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Rsi"
+factor_id = "rsi"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Roc"
+factor_id = "roc"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Boll"
+factor_id = "boll"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Atr"
+factor_id = "atr"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "ReturnStd"
+factor_id = "atr_pct"
 status = "enabled"
 
 [[factors.members]]
 source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
 freq = "1m"
-factor_id = "Vwap"
+factor_id = "return_std"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "vwap"
 status = "enabled"
 
 # SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。

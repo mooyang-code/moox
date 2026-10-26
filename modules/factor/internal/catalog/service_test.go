@@ -217,7 +217,7 @@ func TestCreateFactorDoesNotNeedTask(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := NewService(db, newMetadataFake())
 
-	factor := factorWithSpec("momentum", "outputs:\n  momentum: any_column_name\n")
+	factor := factorWithSpec("momentum", "output: any_column_name\n")
 	created, err := svc.CreateFactor(context.Background(), factor)
 	require.NoError(t, err)
 	require.Equal(t, "momentum", created.FactorID)
@@ -231,13 +231,14 @@ func TestCreateFactorRunsStaticValidation(t *testing.T) {
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 
-	_, err := svc.CreateFactor(context.Background(), factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close,\n"))
+	_, err := svc.CreateFactor(context.Background(), factorWithSpec("momentum", "output: ts_mean(close,\n"))
 	require.ErrorContains(t, err, "编译失败")
 	_, err = db.GetFactor(context.Background(), "momentum")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
-	_, err = svc.CreateFactor(context.Background(), factorWithSpec("momentum", "outputs:\n  series_tag: close\n"))
-	require.Error(t, err)
+	// 输出名就是因子 ID，系统列不能当因子 ID 用。
+	_, err = svc.CreateFactor(context.Background(), factorWithSpec("series_tag", "output: close\n"))
+	require.ErrorContains(t, err, "系统列")
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 	resultColumns, err := meta.ListColumns(context.Background(), "crypto", domain.ResultDatasetID(domain.TaskID("dataset_prices", "1m")))
@@ -248,18 +249,19 @@ func TestCreateFactorRunsStaticValidation(t *testing.T) {
 func TestAddFactorToTaskValidatesAgainstSourceColumns(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
-	unknown := factorWithSpec("unknown_input", "outputs:\n  unknown_input: missing\n")
+	unknown := factorWithSpec("unknown_input", "output: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
 	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "unknown_input", nil)
 	require.ErrorContains(t, err, "unknown input column")
 
-	collide := factorWithSpec("collide", "outputs:\n  close: close * 2\n")
+	// 单输出因子的输出名就是因子 ID：因子 ID 叫 close，输出列就与源列 close 重名。
+	collide := factorWithSpec("close", "output: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
-	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "collide", nil)
+	_, err = svc.AddTaskMember(context.Background(), testTaskID(), "", "close", nil)
 	require.ErrorContains(t, err, "与源列重名")
-	_, err = db.GetMember(context.Background(), testTaskID(), "collide")
+	_, err = db.GetMember(context.Background(), testTaskID(), "close")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -287,8 +289,9 @@ func TestAddFactorToTaskRejectsOutputOwnedByOtherFactor(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
-	other := testFactor()
-	other.FactorID, other.Name = "other", "other"
+	// other 是两个输出的因子：被移除的 other 成员留下了结果列 momentum 与 extra，它们属于 other。
+	other := factorWithSpec("other", "outputs:\n  momentum: ts_mean(close, 3)\n  extra: ts_mean(close, 5)\n")
+	other.Name = "other"
 	_, err := svc.CreateFactor(context.Background(), other)
 	require.NoError(t, err)
 	// A retained result column from a removed "other" member.
@@ -435,7 +438,7 @@ func TestUpdateFactorRejectedWhenAnyEnabledMember(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	factor := factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close, 3) + 1\n")
+	factor := factorWithSpec("momentum", "output: ts_mean(close, 3) + 1\n")
 
 	_, err := svc.UpdateFactor(context.Background(), factor)
 	require.ErrorIs(t, err, store.ErrConflict)
@@ -457,7 +460,7 @@ func TestUpdateFactorRevalidatesAllReferencingTasksAndNamesTheFailingTask(t *tes
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusDisabled)
-	factor := factorWithSpec("momentum", "outputs:\n  momentum: missing\n")
+	factor := factorWithSpec("momentum", "output: missing\n")
 
 	_, err := svc.UpdateFactor(context.Background(), factor)
 	require.ErrorContains(t, err, testTaskID())
@@ -492,7 +495,7 @@ func TestListFactorsWithAndWithoutTask(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
 	addMember(t, svc, testTaskID(), "momentum", domain.MemberStatusEnabled)
-	loose := factorWithSpec("loose", "outputs:\n  loose: close\n")
+	loose := factorWithSpec("loose", "output: close\n")
 	_, err := svc.CreateFactor(context.Background(), loose)
 	require.NoError(t, err)
 
@@ -650,7 +653,7 @@ func newTask() domain.FactorTask {
 }
 
 func testFactor() domain.FactorDef {
-	return factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close, 3)\n")
+	return factorWithSpec("momentum", "output: ts_mean(close, 3)\n")
 }
 
 // factorWithSpec 返回一个未规范化的请求定义（与接口收到的一样），输出列名由 spec 决定。
@@ -666,7 +669,7 @@ func addMember(t *testing.T, svc *Service, taskID, factorID, status string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := svc.db.GetFactor(ctx, factorID); err != nil {
-		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "outputs:\n  "+factorID+": ts_mean(close, 3)\n"))
+		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "output: ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
 	_, err := svc.AddTaskMember(ctx, taskID, "", factorID, nil)

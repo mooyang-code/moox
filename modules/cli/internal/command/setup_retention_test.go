@@ -10,11 +10,11 @@ import (
 
 func lookbackPlan(spaceID, freq string, window int) setupFactorPlan {
 	// 回看按参数上限推导：上限就是 window。
-	spec := "params:\n  window: {type: int, min: 2, max: " + strconv.Itoa(window) + ", default: 2}\noutputs:\n  bias: close / ts_mean(close, window)\n"
+	spec := "params:\n  window: {type: int, min: 2, max: " + strconv.Itoa(window) + ", default: 2}\noutput: close / ts_mean(close, window)\n"
 	taskID := "ftask_prices_" + freq
 	return setupFactorPlan{
 		Sets:        []setupFactorTask{{TaskID: taskID, SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq}},
-		Definitions: []setupFactorDefinition{{FactorID: "bias", Name: "Bias", Spec: spec}},
+		Definitions: []setupFactorDefinition{{FactorID: "bias", Name: "bias", Spec: spec}},
 		Members:     []setupFactorMember{{TaskID: taskID, FactorID: "bias", Status: "enabled"}},
 	}
 }

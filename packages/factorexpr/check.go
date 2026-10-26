@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/expr-lang/expr/ast"
+	"github.com/mooyang-code/moox/packages/factorname"
 )
 
 // scope 是编译环境：已编译的 let 按名称缓存，被多处引用时共享同一个节点。
@@ -493,12 +494,16 @@ func CompileSpec(spec *Spec) (*Factor, error) {
 	total := 0
 	for _, binding := range spec.Outputs {
 		path := "outputs." + binding.Name
-		if !validColumnName(binding.Name) {
-			return nil, errorf(path, binding.Line, "输出列名 %q 不合法：只能包含字母、数字和下划线，不能以数字开头，最长 %d 个字符",
-				binding.Name, MaxIdentifierRunes)
-		}
-		if isReservedColumn(binding.Name) {
-			return nil, errorf(path, binding.Line, "输出列名 %s 是系统列", binding.Name)
+		if spec.SingleOutput() {
+			path = "output"
+		} else {
+			// 多输出的输出名按因子命名规则校验；是否等于因子 ID 由持有因子 ID 的一层（因子定义校验）负责。
+			if err := factorname.ValidateOutputName("", binding.Name); err != nil {
+				return nil, errorf(path, binding.Line, "%v", err)
+			}
+			if isReservedColumn(binding.Name) {
+				return nil, errorf(path, binding.Line, "输出列名 %s 是系统列", binding.Name)
+			}
 		}
 		parsed, err := parseBinding(path, binding)
 		if err != nil {
@@ -558,11 +563,23 @@ func (f *Factor) derive() {
 	sort.Strings(f.InputColumns)
 }
 
-// OutputNames 返回输出列名，保持定义中的顺序。
+// SingleOutput 报告因子是否是单输出写法（output）：此时输出的 Name 为空，输出名就是因子 ID。
+func (f *Factor) SingleOutput() bool { return f.Spec != nil && f.Spec.SingleOutput() }
+
+// OutputNames 返回输出名，保持定义中的顺序。单输出因子的名字为空，需要因子 ID 的调用方用 OutputNamesFor。
 func (f *Factor) OutputNames() []string {
 	names := make([]string, len(f.Outputs))
 	for i, output := range f.Outputs {
 		names[i] = output.Name
+	}
+	return names
+}
+
+// OutputNamesFor 返回因子 factorID 的输出名：单输出因子是 [factorID]，多输出因子是 outputs 里的名字。
+func (f *Factor) OutputNamesFor(factorID string) []string {
+	names := f.OutputNames()
+	if f.SingleOutput() {
+		names[0] = factorID
 	}
 	return names
 }
@@ -577,7 +594,11 @@ func (f *Factor) CanonicalText() string {
 			formatFloat(param.Default))
 	}
 	for _, output := range f.Outputs {
-		b.WriteString(output.Name)
+		if f.SingleOutput() {
+			b.WriteString("output")
+		} else {
+			b.WriteString(output.Name)
+		}
 		b.WriteString(" = ")
 		output.Root.writeCanonical(&b)
 		b.WriteByte('\n')

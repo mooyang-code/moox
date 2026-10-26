@@ -72,14 +72,14 @@ func TestManagerClientSignsNativeRequestsWithAssignedExternalIdentity(t *testing
 		require.NoError(t, proto.Unmarshal(body, &req))
 		require.Equal(t, "hash-0", req.GetKnownHash())
 		require.Equal(t, "factor-engine@mac", req.GetEngine().GetEngineId())
-		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Tasks: []*factorpb.EngineTask{{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberAlias: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "outputs:\n  bias: close\n"}}}}}}, nil
+		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Tasks: []*factorpb.EngineTask{{FactorTask: &factorpb.FactorTask{TaskId: "ftask_a"}, ResultReady: true, Members: []*factorpb.EngineMember{{MemberAlias: "bias", Factor: &factorpb.FactorDef{FactorId: "bias", Name: "bias", Spec: "output: close\n"}}}}}}, nil
 	})
 	snapshot, err := client.SyncCatalog(t.Context(), "hash-0")
 	require.NoError(t, err)
 	require.Equal(t, "hash-1", snapshot.Hash)
 	require.Len(t, snapshot.Sets, 1)
 	require.True(t, snapshot.Sets[0].ResultReady)
-	require.Equal(t, "outputs:\n  bias: close\n", snapshot.Sets[0].Members[0].Factor.Spec)
+	require.Equal(t, "output: close\n", snapshot.Sets[0].Members[0].Factor.Spec)
 	require.Equal(t, []string{"bias"}, snapshot.Sets[0].Members[0].Factor.Outputs, "接收方编译得到派生字段")
 }
 

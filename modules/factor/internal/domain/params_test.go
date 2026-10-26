@@ -8,7 +8,7 @@ import (
 
 func smaMember(t *testing.T) MemberDef {
 	t.Helper()
-	def := compiledFactor(t, "Sma", "params:\n  n: {type: int, min: 2, max: 100, default: 20}\n  m: {type: int, min: 1, max: 99, default: 2}\n  k: {type: float, min: 0, max: 5, default: 1}\noutputs:\n  s: sma(close, n, m) * k\n")
+	def := compiledFactor(t, "sma", "params:\n  n: {type: int, min: 2, max: 100, default: 20}\n  m: {type: int, min: 1, max: 99, default: 2}\n  k: {type: float, min: 0, max: 5, default: 1}\noutput: sma(close, n, m) * k\n")
 	return MemberDef{Alias: "fast", Factor: def}
 }
 

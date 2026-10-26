@@ -17,14 +17,21 @@ import (
 func TestValidateFactorSpecReturnsDerivedContract(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 	rsp, err := svc.ValidateFactorSpec(context.Background(), &factorpb.ValidateFactorSpecReq{
-		Spec: "params:\n  window: {type: int, min: 5, max: 20, default: 10}\noutputs:\n  m: ts_mean(close, window)\n",
+		Spec: "params:\n  window: {type: int, min: 5, max: 20, default: 10}\noutput: ts_mean(close, window)\n",
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.True(t, rsp.GetValid())
 	require.Equal(t, domain.FactorTypeTimeSeries, rsp.GetFactorType())
 	require.Equal(t, []string{"close"}, rsp.GetInputColumns())
-	require.Equal(t, []string{"m"}, rsp.GetOutputs())
+	require.Equal(t, []string{"draft"}, rsp.GetOutputs(), "草稿没有因子 ID，单输出按草稿命名")
+
+	with, err := svc.ValidateFactorSpec(context.Background(), &factorpb.ValidateFactorSpecReq{
+		Spec: "output: ts_mean(close, 5)\n", FactorId: "ma_fast",
+	})
+	require.NoError(t, err)
+	require.True(t, with.GetValid())
+	require.Equal(t, []string{"ma_fast"}, with.GetOutputs(), "带因子 ID 时单输出的输出名就是因子 ID")
 	require.Equal(t, int32(20), rsp.GetLookbackPeriods(), "回看按参数取值范围的最坏情况")
 	require.Len(t, rsp.GetParams(), 1)
 	require.Equal(t, 10.0, rsp.GetParams()[0].GetDefaultValue())
@@ -35,13 +42,13 @@ func TestValidateFactorSpecReturnsDerivedContract(t *testing.T) {
 func TestValidateFactorSpecReportsDiagnosticWithPosition(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 	rsp, err := svc.ValidateFactorSpec(context.Background(), &factorpb.ValidateFactorSpecReq{
-		Spec: "outputs:\n  value: ts_mean(close, 5) + nope(open)\n",
+		Spec: "output: ts_mean(close, 5) + nope(open)\n",
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "定义不合法不是接口错误")
 	require.False(t, rsp.GetValid())
 	require.Contains(t, rsp.GetDiagnostic().GetMessage(), "nope")
-	require.Equal(t, "outputs.value", rsp.GetDiagnostic().GetPath())
+	require.Equal(t, "output", rsp.GetDiagnostic().GetPath())
 	require.Positive(t, rsp.GetDiagnostic().GetColumn())
 }
 
@@ -83,7 +90,7 @@ func TestPreviewFactorCompilesAndConvertsNulls(t *testing.T) {
 	previewer := &previewerFake{}
 	svc := NewService(&catalogFake{set: set}, &recalcFake{}, WithPreviewer(previewer))
 	rsp, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{
-		TaskId: "ftask_a", Spec: "outputs:\n  m: ts_mean(close, 3)\n", Subjects: []string{"BTC"}, Periods: 2,
+		TaskId: "ftask_a", Spec: "output: ts_mean(close, 3)\n", Subjects: []string{"BTC"}, Periods: 2,
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
@@ -98,16 +105,16 @@ func TestPreviewFactorCompilesAndConvertsNulls(t *testing.T) {
 	require.Equal(t, []bool{true}, rsp.GetRows()[1].GetNulls())
 	require.Equal(t, "2026-10-17T01:02:00Z", rsp.GetRows()[0].GetDataTime())
 
-	bad, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs: {m: nope(close)}"})
+	bad, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "output: nope(close)"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 	previewer.err = errors.New("源数据集没有输入列 close")
-	failed, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs:\n  m: close\n"})
+	failed, err := svc.PreviewFactor(context.Background(), &factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "output: close\n"})
 	require.NoError(t, err)
 	require.Contains(t, failed.GetRetInfo().GetMsg(), "没有输入列")
 
 	disabled, err := NewService(&catalogFake{set: set}, &recalcFake{}).PreviewFactor(context.Background(),
-		&factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "outputs:\n  m: close\n"})
+		&factorpb.PreviewFactorReq{TaskId: "ftask_a", Spec: "output: close\n"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INNER_ERR, disabled.GetRetInfo().GetCode())
 }

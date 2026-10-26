@@ -43,7 +43,7 @@ func TestParamHealthSurvivesWireRoundTrip(t *testing.T) {
 	require.Equal(t, 3, got.OfflinePending)
 	require.Equal(t, status.ParamHealth, got.ParamHealth)
 
-	def := domain.MustDefinition("bias", "bias", "outputs:\n  bias: close\n")
+	def := domain.MustDefinition("bias", "bias", "output: close\n")
 	set := domain.EngineTask{Set: domain.FactorTask{TaskID: "ftask_a"}, Members: []domain.MemberDef{{Alias: "fast", Factor: def, CarryAlertPeriods: 25}}}
 	restored, err := factorwire.EngineTaskFromPB(factorwire.EngineTaskToPB(set))
 	require.NoError(t, err)

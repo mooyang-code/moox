@@ -65,9 +65,9 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.Factors.Enabled = true
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "Bias", File: "timeseries.yaml"}}
+	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "timeseries.yaml"}}
 	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
-		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
+		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "bias",
 	}}
 	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupTask{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
@@ -81,7 +81,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	require.Len(t, factor.plan.Definitions, 1)
 	require.Len(t, factor.plan.Members, 1)
-	assert.Equal(t, "Bias", factor.plan.Definitions[0].FactorID)
+	assert.Equal(t, "bias", factor.plan.Definitions[0].FactorID)
 	assert.Equal(t, "ftask_binance_kline_1m", factor.plan.Members[0].TaskID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }
@@ -388,7 +388,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
-			OriginType: "FACTOR", OriginID: "Bias", ValueType: "DOUBLE",
+			OriginType: "FACTOR", OriginID: "bias", ValueType: "DOUBLE",
 		}},
 	}
 	require.NoError(t, validateSetupMetadataDependencies(seed))

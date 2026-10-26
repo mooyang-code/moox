@@ -22,7 +22,7 @@ func gapFactor(id, factorType string, partial bool) domain.FactorDef {
 	if factorType == domain.FactorTypeCrossSection {
 		expression = "cs_rank(ts_mean(close, 3))"
 	}
-	def := domain.MustDefinition(id, id, "outputs:\n  "+id+"_value: "+expression+"\n")
+	def := domain.MustDefinition(id, id, "output: "+expression+"\n")
 	def.AllowPartialUniverse = partial
 	return def
 }
@@ -179,7 +179,7 @@ func TestGapFillerCancelsWhenDefinitionChangedOrFactorRemoved(t *testing.T) {
 	old := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	removed := gapFactor("rsi", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, old)
-	changed := domain.MustDefinition("ma", "ma", "outputs:\n  ma_value: ts_mean(close, 9)\n") // 定义变化，哈希不同
+	changed := domain.MustDefinition("ma", "ma", "output: ts_mean(close, 9)\n") // 定义变化，哈希不同
 	f.record(t, gapT0, "BTC", 0, "", changed, removed)
 	f.now = gapT0.Add(6 * time.Minute)
 	f.filler.tick(context.Background())

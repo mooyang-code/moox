@@ -78,7 +78,7 @@ func TestUpdateFactorRejectedWhileEnabledMemberExists(t *testing.T) {
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	addTestMember(t, s, "task_prices", "factor_close", domain.MemberStatusEnabled)
 
-	changed := changedSpec(testFactorDef("factor_close"), "outputs:\n  factor_close: close * 2\n")
+	changed := changedSpec(testFactorDef("factor_close"), "output: close * 2\n")
 	require.ErrorIs(t, s.UpdateFactor(ctx, changed), ErrConflict)
 	stored, err := s.GetFactor(ctx, "factor_close")
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestUpdateFactorAllowedWhenOnlyDisabledMembers(t *testing.T) {
 	require.NoError(t, s.CreateTask(ctx, testTask("task_prices", domain.TaskStatusEnabled)))
 	addTestMember(t, s, "task_prices", "factor_close", domain.MemberStatusDisabled)
 
-	changed := changedSpec(testFactorDef("factor_close"), "outputs:\n  factor_close: close * 2\n")
+	changed := changedSpec(testFactorDef("factor_close"), "output: close * 2\n")
 	require.NoError(t, s.UpdateFactor(ctx, changed))
 	stored, err := s.GetFactor(ctx, "factor_close")
 	require.NoError(t, err)

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const testLibrary = `- factor_id: Ma
+const testLibrary = `- factor_id: ma
   name: 均值
   spec: |
     params: {window: {type: int, min: 1, max: 3, default: 2}}
@@ -17,16 +17,14 @@ const testLibrary = `- factor_id: Ma
       ma_2: ts_mean(close, 2)
       ma_3: ts_mean(close, 3)
       ma_w: ts_mean(close, window)
-- factor_id: Rank
+- factor_id: rank
   name: 截面排名
   spec: |
-    outputs:
-      close_rank: cs_rank(close)
-- factor_id: Bad
+    output: cs_rank(close)
+- factor_id: bad
   name: 写错的
   spec: |
-    outputs:
-      x: ts_mean(close)
+    output: ts_mean(close)
 `
 
 func writeFile(t *testing.T, name, content string) string {
@@ -69,7 +67,7 @@ func TestCheckReportsDerivedFieldsAndErrors(t *testing.T) {
 		t.Fatalf("bad = %+v", bad)
 	}
 	out.Reset()
-	if err := run([]string{"check", "--library", library, "--factor-id", "Rank"}, &out); err != nil {
+	if err := run([]string{"check", "--library", library, "--factor-id", "rank"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `"factor_type":"cross_section"`) {
@@ -84,7 +82,7 @@ func TestEvalTimeSeriesStrictWindowAndGrid(t *testing.T) {
 	bars := writeFile(t, "bars.csv", "data_time,close\n"+
 		"2026-10-01T00:00:00Z,1\n2026-10-01T00:01:00Z,2\n2026-10-01T00:02:00Z,4\n2026-10-01T00:04:00Z,8\n2026-10-01T00:05:00Z,10\n")
 	var out bytes.Buffer
-	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m"}, &out); err != nil {
+	if err := run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "1m"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	want := "data_time,subject_id,series_tag,ma_2,ma_3,ma_w\n" +
@@ -98,13 +96,13 @@ func TestEvalTimeSeriesStrictWindowAndGrid(t *testing.T) {
 	}
 	// --param 改变参数取值：ma_w 按 window = 3 计算，与 ma_3 相同。
 	out.Reset()
-	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m", "--param", "Ma.window=3"}, &out); err != nil {
+	if err := run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "1m", "--param", "ma.window=3"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "2026-10-01T00:02:00Z,S,,3,2.3333333333333335,2.3333333333333335\n") {
 		t.Fatalf("param eval = %s", out.String())
 	}
-	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m", "--param", "Ma.window=9"}, &out); err == nil ||
+	if err := run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "1m", "--param", "ma.window=9"}, &out); err == nil ||
 		!strings.Contains(err.Error(), "超出范围") {
 		t.Fatalf("err = %v", err)
 	}
@@ -116,7 +114,7 @@ func TestEvalCrossSectionGroupsByTimeAndTag(t *testing.T) {
 		"2026-10-01T00:00:00Z,A,x,1\n2026-10-01T00:00:00Z,B,x,3\n2026-10-01T00:00:00Z,C,x,2\n"+
 		"2026-10-01T00:00:00Z,A,y,5\n2026-10-01T00:00:00Z,B,y,\n")
 	var out bytes.Buffer
-	if err := run([]string{"eval", "--library", library, "--factor-id", "Rank", "--input", bars, "--freq", "1m"}, &out); err != nil {
+	if err := run([]string{"eval", "--library", library, "--factor-id", "rank", "--input", bars, "--freq", "1m"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
@@ -135,7 +133,7 @@ func TestEvalCrossSectionGroupsByTimeAndTag(t *testing.T) {
 func TestEvalRejectsMissingColumnAndUnknownFactor(t *testing.T) {
 	library := writeFile(t, "lib.yaml", testLibrary)
 	bars := writeFile(t, "bars.csv", "data_time,open\n2026-10-01T00:00:00Z,1\n")
-	err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m"}, &bytes.Buffer{})
+	err := run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "1m"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "缺少因子需要的列 close") {
 		t.Fatalf("err = %v", err)
 	}
@@ -143,11 +141,11 @@ func TestEvalRejectsMissingColumnAndUnknownFactor(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "没有 Nope") {
 		t.Fatalf("err = %v", err)
 	}
-	err = run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "2m"}, &bytes.Buffer{})
+	err = run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "2m"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "--freq 只支持") {
 		t.Fatalf("err = %v", err)
 	}
-	err = run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars}, &bytes.Buffer{})
+	err = run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "--freq") {
 		t.Fatalf("err = %v", err)
 	}
@@ -160,7 +158,7 @@ func TestEvalListingHeadIsNotAGap(t *testing.T) {
 		"2026-10-01T00:00:00Z,A,1\n2026-10-02T00:00:00Z,A,2\n2026-10-03T00:00:00Z,A,3\n2026-10-04T00:00:00Z,A,4\n"+
 		"2026-10-03T00:00:00Z,B,10\n2026-10-04T00:00:00Z,B,20\n")
 	var out bytes.Buffer
-	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1d"}, &out); err != nil {
+	if err := run([]string{"eval", "--library", library, "--factor-id", "ma", "--input", bars, "--freq", "1d"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, line := range []string{

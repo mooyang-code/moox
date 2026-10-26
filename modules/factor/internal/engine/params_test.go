@@ -42,7 +42,7 @@ func (f *paramManagerFake) ListParamIntervals(context.Context, string, time.Time
 }
 
 func paramMember() domain.MemberDef {
-	def := domain.MustDefinition("bias", "bias", "params:\n  window: {type: int, min: 2, max: 60, default: 20}\noutputs:\n  bias: close / ts_mean(close, window)\n")
+	def := domain.MustDefinition("bias", "bias", "params:\n  window: {type: int, min: 2, max: 60, default: 20}\noutput: close / ts_mean(close, window)\n")
 	return domain.MemberDef{Alias: "fast", Factor: def}
 }
 

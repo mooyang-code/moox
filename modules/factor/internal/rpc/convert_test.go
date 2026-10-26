@@ -14,7 +14,7 @@ import (
 func TestConvertFactorDefRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
 	updatedAt := createdAt.Add(time.Minute)
-	want := domain.MustDefinition("rolling_mean", "Rolling mean", "params:\n  window: {type: int, min: 2, max: 3, default: 3}\noutputs:\n  mean_close: cs_rank(ts_mean(close - open, window))\n")
+	want := domain.MustDefinition("rolling_mean", "Rolling mean", "params:\n  window: {type: int, min: 2, max: 3, default: 3}\noutput: cs_rank(ts_mean(close - open, window))\n")
 	want.AllowPartialUniverse, want.CreatedAt, want.UpdatedAt = true, createdAt, updatedAt
 
 	pb := factorwire.DefToPB(want)
@@ -31,7 +31,7 @@ func TestConvertFactorDefRoundTrip(t *testing.T) {
 
 // 派生字段不从请求读取：调用方伪造的类型、输入列、回看会被编译结果覆盖。
 func TestDefFromPBIgnoresClientDerivedFields(t *testing.T) {
-	pb := factorwire.DefToPB(domain.MustDefinition("f", "F", "outputs:\n  f: ts_mean(close, 5)\n"))
+	pb := factorwire.DefToPB(domain.MustDefinition("f", "F", "output: ts_mean(close, 5)\n"))
 	pb.FactorType, pb.InputColumns, pb.LookbackPeriods, pb.Outputs = "cross_section", []string{"volume"}, 99, []string{"x"}
 	got, err := factorwire.DefFromPB(pb)
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestDefFromPBIgnoresClientDerivedFields(t *testing.T) {
 
 // 接收方编译不了时保留发送方的派生字段，组装才能清掉这些输出列上的旧值。
 func TestDefFromPBKeepsSenderDerivedFieldsWhenUncompilable(t *testing.T) {
-	pb := &factorpb.FactorDef{FactorId: "f", Name: "F", Spec: "outputs:\n  f: future_op(close)\n",
+	pb := &factorpb.FactorDef{FactorId: "f", Name: "F", Spec: "output: future_op(close)\n",
 		FactorType: "timeseries", InputColumns: []string{"close"}, Outputs: []string{"f"}, LookbackPeriods: 7}
 	got, err := factorwire.DefFromPB(pb)
 	require.NoError(t, err)
@@ -71,7 +71,7 @@ func requireSameDefinition(t *testing.T, want, got domain.FactorDef) {
 
 func TestConvertMemberRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
-	def := domain.MustDefinition("rolling_mean", "Rolling mean", "outputs:\n  mean_close: cs_rank(ts_mean(close, 3))\n")
+	def := domain.MustDefinition("rolling_mean", "Rolling mean", "output: cs_rank(ts_mean(close, 3))\n")
 	def.AllowPartialUniverse, def.CreatedAt, def.UpdatedAt = true, createdAt, createdAt
 	member := domain.TaskMember{
 		FactorTaskMember: domain.FactorTaskMember{
@@ -94,7 +94,7 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	listed := memberToPB(member, false)
 	require.Empty(t, listed.GetFactor().GetSpec())
 	require.Equal(t, def.SpecHash, listed.GetFactor().GetSpecHash())
-	require.Equal(t, []string{"mean_close"}, listed.GetFactor().GetOutputs(), "列表里仍带派生字段")
+	require.Equal(t, []string{"rolling_mean"}, listed.GetFactor().GetOutputs(), "列表里仍带派生字段")
 }
 
 func TestConvertFactorTaskRoundTrip(t *testing.T) {

@@ -24,7 +24,7 @@ func TestSnapshotOnlyEnabledTasksAndMembersWithSource(t *testing.T) {
 	require.Len(t, sets[0].Members, 1)
 	require.Equal(t, "bias", sets[0].Members[0].Factor.FactorID)
 	require.NotEmpty(t, sets[0].Members[0].Factor.Spec)
-	require.Equal(t, []string{"bias_value"}, sets[0].Members[0].Factor.Outputs)
+	require.Equal(t, []string{"bias"}, sets[0].Members[0].Factor.Outputs)
 	require.False(t, sets[0].ResultReady)
 }
 
@@ -60,7 +60,7 @@ func TestCatalogHashChanges(t *testing.T) {
 	require.NotEqual(t, ready, member, "enabling a member changes the hash")
 
 	require.NoError(t, db.SetMemberStatus(ctx, "task_a", "cci", domain.MemberStatusEnabled, domain.MemberStatusDisabled))
-	edited := domain.MustDefinition("cci", "cci", "outputs:\n  cci_value: close * 2\n")
+	edited := domain.MustDefinition("cci", "cci", "output: close * 2\n")
 	require.NoError(t, db.UpdateFactor(ctx, edited))
 	unchanged, _, _, err := hub.Snapshot(ctx, "")
 	require.NoError(t, err)

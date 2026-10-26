@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mooyang-code/moox/packages/factorname"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,10 +56,14 @@ func isReservedColumn(name string) bool {
 
 // Spec 是解析后的定义文本，保持文档中的书写顺序。
 type Spec struct {
-	Params  []Param
-	Lets    []Binding
+	Params []Param
+	Lets   []Binding
+	// Outputs 是输出：单输出因子（写 output）只有一项，名称为空，输出名就是因子 ID；多输出因子（写 outputs）至少两项。
 	Outputs []Binding
 }
+
+// SingleOutput 报告定义是否是单输出写法（output）。
+func (s *Spec) SingleOutput() bool { return len(s.Outputs) == 1 && s.Outputs[0].Name == "" }
 
 // ParamType 是参数的取值类型。
 type ParamType string
@@ -119,7 +124,7 @@ func (s *Spec) param(name string) (Param, bool) {
 	return Param{}, false
 }
 
-// ParseSpec 解析定义文本：只接受一个 YAML 映射文档，键只能是 params、let、outputs。
+// ParseSpec 解析定义文本：只接受一个 YAML 映射文档，键只能是 params、let，以及 output（单输出）或 outputs（多输出）二选一。
 func ParseSpec(text string) (*Spec, error) {
 	if len(text) > MaxSpecBytes {
 		return nil, errorf("", 0, "定义超过 %d 字节", MaxSpecBytes)
@@ -147,7 +152,7 @@ func ParseSpec(text string) (*Spec, error) {
 		return nil, err
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, errorf("", root.Line, "定义必须是 YAML 映射，包含 params、let、outputs")
+		return nil, errorf("", root.Line, "定义必须是 YAML 映射，包含 params、let，以及 output 或 outputs")
 	}
 	spec := &Spec{}
 	seen := map[string]bool{}
@@ -163,17 +168,28 @@ func ParseSpec(text string) (*Spec, error) {
 			spec.Params, err = parseParams(value)
 		case "let":
 			spec.Lets, err = parseBindings("let", value)
+		case "output":
+			if seen["outputs"] {
+				return nil, errorf(key.Value, key.Line, "output 与 outputs 只能写一个")
+			}
+			spec.Outputs, err = parseSingleOutput(value)
 		case "outputs":
+			if seen["output"] {
+				return nil, errorf(key.Value, key.Line, "output 与 outputs 只能写一个")
+			}
 			spec.Outputs, err = parseBindings("outputs", value)
 		default:
-			err = errorf(key.Value, key.Line, "未知的键，只允许 params、let、outputs")
+			err = errorf(key.Value, key.Line, "未知的键，只允许 params、let、output、outputs")
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
 	if len(spec.Outputs) == 0 {
-		return nil, errorf("outputs", root.Line, "至少需要一个输出")
+		return nil, errorf("outputs", root.Line, "至少需要一个输出：只有一个输出写 output，多个输出写 outputs")
+	}
+	if seen["outputs"] && len(spec.Outputs) < 2 {
+		return nil, errorf("outputs", root.Line, "outputs 至少要有两项；只有一个输出请写 output")
 	}
 	if err := checkNames(spec); err != nil {
 		return nil, err
@@ -336,7 +352,18 @@ func parseBindings(section string, node *yaml.Node) ([]Binding, error) {
 	return bindings, nil
 }
 
-// checkNames 检查 params 与 let 的名称：格式、互不重名、不与函数名和系统列冲突。
+// parseSingleOutput 解析单输出写法：output 的值就是表达式，没有名字（输出名就是因子 ID）。
+func parseSingleOutput(node *yaml.Node) ([]Binding, error) {
+	if node.Kind != yaml.ScalarNode || isNull(node) || strings.TrimSpace(node.Value) == "" {
+		return nil, errorf("output", node.Line, "表达式不能为空")
+	}
+	if utf8.RuneCountInString(node.Value) > MaxExpressionRunes {
+		return nil, errorf("output", node.Line, "表达式超过 %d 个字符", MaxExpressionRunes)
+	}
+	return []Binding{{Source: node.Value, Line: node.Line}}, nil
+}
+
+// checkNames 检查 params 与 let 的名称：格式、互不重名、不与函数名和系统列冲突。参数名按因子命名规则校验（会写进 __params）。
 func checkNames(spec *Spec) error {
 	used := map[string]string{}
 	check := func(path, name string, line int) error {
@@ -359,6 +386,9 @@ func checkNames(spec *Spec) error {
 		return nil
 	}
 	for _, param := range spec.Params {
+		if err := factorname.ValidateParamName(param.Name); err != nil {
+			return errorf("params."+param.Name, param.Line, "%v", err)
+		}
 		if err := check("params."+param.Name, param.Name, param.Line); err != nil {
 			return err
 		}

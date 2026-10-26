@@ -11,7 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 )
 
-const paramMeanSpec = "params:\n  window: {type: int, min: 2, max: 10, default: 3}\noutputs:\n  mean: ts_mean(close, window)\n"
+const paramMeanSpec = "params:\n  window: {type: int, min: 2, max: 10, default: 3}\noutput: ts_mean(close, window)\n"
 
 // 同一个定义带不同固定参数，在一个任务里并行计算：各自的结果与直接写死窗口的表达式一致，不写参数列。
 func TestFixedParamMembersComputeIndependently(t *testing.T) {
@@ -36,8 +36,8 @@ func TestFixedParamMembersComputeIndependently(t *testing.T) {
 
 	for index, row := range sortedRows(store) {
 		base := float64(100 * (index + 1))
-		require.InDelta(t, base+9, row.Fields["mean"], 1e-9, "窗口 3：最近三根的均值")
-		require.InDelta(t, base+8, row.Fields["pmean_5_mean"], 1e-9, "窗口 5：最近五根的均值")
+		require.InDelta(t, base+9, row.Fields["pmean"], 1e-9, "窗口 3：最近三根的均值")
+		require.InDelta(t, base+8, row.Fields["pmean_5_pmean"], 1e-9, "窗口 5：最近五根的均值")
 		for name := range row.Fields {
 			require.NotContains(t, name, "__", "带固定参数的成员不写参数列：%s", name)
 		}
@@ -69,5 +69,5 @@ func TestMembersWithoutFixedParamsStillWriteParamColumns(t *testing.T) {
 	rows := sortedRows(store)
 	require.Len(t, rows, 1)
 	require.InDelta(t, 3.0, rows[0].Fields["fast__window"], 1e-9, "没有冻结记录时取定义的默认值，并写进参数列")
-	require.Contains(t, rows[0].Fields, "fast_mean")
+	require.Contains(t, rows[0].Fields, "fast_pmean")
 }

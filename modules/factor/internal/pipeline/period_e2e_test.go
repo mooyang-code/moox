@@ -106,11 +106,11 @@ var errCommitConflict = errors.New("commit_id replayed with different rows")
 
 // e2eMean 是三期均值；e2eBroken 模拟 mgr 与引擎 expr 版本不一致：派生字段来自 mgr，引擎编译不了 spec。
 func e2eMean() domain.FactorDef {
-	return domain.MustDefinition("mean", "mean", "outputs:\n  mean3: ts_mean(close, 3)\n")
+	return domain.MustDefinition("mean", "mean", "output: ts_mean(close, 3)\n")
 }
 
 func e2eBroken() domain.FactorDef {
-	return domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "outputs:\n  broken_out: newer_function(close)\n",
+	return domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "output: newer_function(close)\n",
 		FactorType: domain.FactorTypeTimeSeries, InputColumns: []string{"close"}, Outputs: []string{"broken_out"}, LookbackPeriods: 3}
 }
 
@@ -160,7 +160,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 			}
 			require.Equal(t, target, row.DataTime)
 			require.InDelta(t, closes[2], row.Fields["close"], 1e-9)
-			require.InDelta(t, (closes[0]+closes[1]+closes[2])/3, row.Fields["mean3"], 1e-9)
+			require.InDelta(t, (closes[0]+closes[1]+closes[2])/3, row.Fields["mean"], 1e-9)
 		}
 		require.Len(t, store.markers, 1)
 		marker := store.markers[0]
@@ -223,7 +223,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 		for _, row := range store.result {
 			require.Contains(t, row.Fields, "broken_out")
 			require.Nil(t, row.Fields["broken_out"])
-			require.NotNil(t, row.Fields["mean3"])
+			require.NotNil(t, row.Fields["mean"])
 		}
 	})
 

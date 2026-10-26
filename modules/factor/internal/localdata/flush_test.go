@@ -25,7 +25,7 @@ func TestHotPathAppendsWindowAndFlushesToDisk(t *testing.T) {
 	outcome := fx.live(t, at(10), []string{"A", "B"})
 	require.Equal(t, "complete", outcome.Status)
 	require.Equal(t, int64(2), fx.data.hotWrites.Load()-hotBefore, "两个标的都走热路径")
-	require.InDelta(t, (108+109+110)/3.0, fx.result("A", 10).Fields["mean3"], 1e-9, "用最近 3 根的均值")
+	require.InDelta(t, (108+109+110)/3.0, fx.result("A", 10).Fields["mean"], 1e-9, "用最近 3 根的均值")
 
 	window := fx.data.st(startupSrc).win.Load()
 	for _, subject := range []string{"A", "B"} {

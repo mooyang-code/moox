@@ -11,7 +11,7 @@ import (
 )
 
 func paramMeanMember(alias string) domain.MemberDef {
-	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 5, default: 2}\noutputs:\n  mean: ts_mean(close, window)\n")
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 5, default: 2}\noutput: ts_mean(close, window)\n")
 	return domain.MemberDef{Alias: alias, Factor: def}
 }
 
@@ -38,7 +38,7 @@ func TestComputeAndAssembleUsePerSubjectParams(t *testing.T) {
 	require.Equal(t, 103.5, valueAt(t, computation.Results["fast"]["BTC"], target), "BTC 用默认窗口 2")
 	require.Equal(t, 202.5, valueAt(t, computation.Results["fast"]["ETH"], target), "ETH 用覆盖窗口 4")
 	require.Equal(t, 102.0, valueAt(t, computation.Results["slow"]["BTC"], target), "另一个别名用窗口 5")
-	require.Equal(t, []string{"data_time", "series_tag", "fast_mean"}, computation.Results["fast"]["BTC"].Columns)
+	require.Equal(t, []string{"data_time", "series_tag", "fast_pmean"}, computation.Results["fast"]["BTC"].Columns)
 	fast := computation.FactorStates["fast"]
 	require.Equal(t, "fast", fast.Member)
 	require.Equal(t, "pmean", fast.FactorID)
@@ -54,7 +54,7 @@ func TestComputeAndAssembleUsePerSubjectParams(t *testing.T) {
 			fields[row.SubjectID] = row.Fields
 		}
 	}
-	require.Equal(t, 202.5, fields["ETH"]["fast_mean"])
+	require.Equal(t, 202.5, fields["ETH"]["fast_pmean"])
 	require.Equal(t, 4.0, fields["ETH"]["fast__window"], "参数列写实际用的值")
 	require.Equal(t, 2.0, fields["BTC"]["fast__window"])
 	require.Equal(t, 5.0, fields["BTC"]["slow__window"])
@@ -70,5 +70,5 @@ func TestComputeWithoutParamsUsesDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 103.5, valueAt(t, computation.Results["pmean"]["ETH"], target))
 	require.Equal(t, domain.ParamsDefault, computation.FactorStates["pmean"].ParamsSource)
-	require.Equal(t, []string{"data_time", "series_tag", "mean"}, computation.Results["pmean"]["ETH"].Columns, "别名与定义 ID 相同时列名就是输出名")
+	require.Equal(t, []string{"data_time", "series_tag", "pmean"}, computation.Results["pmean"]["ETH"].Columns, "别名与定义 ID 相同时列名就是输出名")
 }
