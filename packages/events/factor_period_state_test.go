@@ -13,7 +13,7 @@ func factorPeriodStatePayload() *storagepb.FactorPeriodComputed {
 	return &storagepb.FactorPeriodComputed{
 		DatasetId: "result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1786032000,
 		Status: "complete", UniverseSubjectIds: []string{"BTC", "ETH"},
-		Factors:        []*storagepb.FactorPeriodState{{FactorId: "momentum", MemberAlias: "momentum", ParamsSource: "default", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
+		Factors:        []*storagepb.FactorPeriodState{{FactorId: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
 		TriggerEventId: "collector-event", ComputedAt: timestamppb.Now(),
 	}
 }
@@ -123,8 +123,8 @@ func TestDecodeViewDataReadyFactorStates(t *testing.T) {
 	payload := validViewDataReady(timestamppb.Now())
 	payload.CompletionKind = FactorPeriodComputed.Name()
 	payload.Factors = []*storagepb.FactorPeriodState{
-		{FactorId: "momentum", MemberAlias: "momentum", ParamsSource: "default", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"},
-		{FactorId: "rank", MemberAlias: "rank", ParamsSource: "default", Status: "skipped", SourceHash: "hash-2", DefinitionHash: "def-2"},
+		{FactorId: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"},
+		{FactorId: "rank", MemberKey: "rank", MemberKind: "fixed", Status: "skipped", SourceHash: "hash-2", DefinitionHash: "def-2"},
 	}
 	payload.Status = "degraded"
 	payload.FailedScopeRef = "failed:rank"
@@ -180,7 +180,7 @@ func TestValidateViewDataReadyFactorFailureUniverse(t *testing.T) {
 			payload.FailedScopeRef = "failed:momentum"
 			payload.UniverseSubjectIds = []string{"BTC", "ETH"}
 			payload.Factors = []*storagepb.FactorPeriodState{{
-				FactorId: "momentum", MemberAlias: "momentum", ParamsSource: "default", Status: "degraded", SourceHash: "hash-1", DefinitionHash: "def-1", FailedSubjects: []string{subject},
+				FactorId: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", SourceHash: "hash-1", DefinitionHash: "def-1", FailedSubjects: []string{subject},
 			}}
 			_, err := registry.Encode(ViewDataReady, payload, validationOptions("ready-event", "space", "view-1"))
 			if subject == "unknown" {
@@ -192,8 +192,8 @@ func TestValidateViewDataReadyFactorFailureUniverse(t *testing.T) {
 	}
 }
 
-// 成员身份是 member_alias：同一定义可以用不同别名出现多次；别名重复、缺少别名或参数来源未知都拒绝。
-func TestFactorStatesKeyedByMemberAlias(t *testing.T) {
+// 成员身份是 member_key：同一因子可以用不同参数出现多次；key 重复、缺少 key 或类型未知都拒绝。
+func TestFactorStatesKeyedByMemberKey(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
 	encode := func(states ...*storagepb.FactorPeriodState) error {
@@ -203,11 +203,11 @@ func TestFactorStatesKeyedByMemberAlias(t *testing.T) {
 		_, err := registry.Encode(ViewDataReady, payload, validationOptions("ready-event", "space", "view-1"))
 		return err
 	}
-	state := func(alias, source string) *storagepb.FactorPeriodState {
-		return &storagepb.FactorPeriodState{FactorId: "boll", MemberAlias: alias, ParamsSource: source, Status: "complete", SourceHash: "h", DefinitionHash: "d"}
+	state := func(key, kind string) *storagepb.FactorPeriodState {
+		return &storagepb.FactorPeriodState{FactorId: "boll", MemberKey: key, MemberKind: kind, Status: "complete", SourceHash: "h", DefinitionHash: "d"}
 	}
-	require.NoError(t, encode(state("fast", "requested"), state("slow", "carried")))
-	require.ErrorContains(t, encode(state("fast", "requested"), state("fast", "carried")), "duplicated")
-	require.ErrorContains(t, encode(state("", "requested")), "identity is invalid")
-	require.ErrorContains(t, encode(state("fast", "guessed")), "params_source")
+	require.NoError(t, encode(state("boll__n_20", "fixed"), state("boll__var", "var")))
+	require.ErrorContains(t, encode(state("boll__var", "var"), state("boll__var", "var")), "duplicated")
+	require.ErrorContains(t, encode(state("", "fixed")), "identity is invalid")
+	require.ErrorContains(t, encode(state("boll__var", "guessed")), "member_kind")
 }

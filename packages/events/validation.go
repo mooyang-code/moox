@@ -331,22 +331,22 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
-// validateFactorStates 校验周期标记里逐成员的状态：成员身份是 member_alias（同一定义可以用不同别名出现多次），
-// factor_id 是它引用的定义；参数来源必须是已知的取值。
+// validateFactorStates 校验周期标记里逐成员的状态：成员身份是 member_key（同一因子可以用不同参数出现多次），
+// factor_id 是它引用的定义；member_kind 必须是已知的取值。
 func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[string]struct{}, status, label string) error {
 	seen := make(map[string]struct{}, len(states))
 	for i, state := range states {
-		if state == nil || !validRequiredToken(state.GetFactorId()) || !validRequiredToken(state.GetMemberAlias()) {
+		if state == nil || !validRequiredToken(state.GetFactorId()) || !validRequiredToken(state.GetMemberKey()) {
 			return fmt.Errorf("%s factor %d identity is invalid", label, i)
 		}
-		if _, ok := seen[state.GetMemberAlias()]; ok {
-			return fmt.Errorf("%s member_alias %q is duplicated", label, state.GetMemberAlias())
+		if _, ok := seen[state.GetMemberKey()]; ok {
+			return fmt.Errorf("%s member_key %q is duplicated", label, state.GetMemberKey())
 		}
-		seen[state.GetMemberAlias()] = struct{}{}
-		switch state.GetParamsSource() {
-		case "requested", "carried", "carried_offline", "default":
+		seen[state.GetMemberKey()] = struct{}{}
+		switch state.GetMemberKind() {
+		case "fixed", "var":
 		default:
-			return fmt.Errorf("%s member %q params_source %q is invalid", label, state.GetMemberAlias(), state.GetParamsSource())
+			return fmt.Errorf("%s member %q member_kind %q is invalid", label, state.GetMemberKey(), state.GetMemberKind())
 		}
 		if !validCompletionStatus(state.GetStatus()) && state.GetStatus() != "skipped" {
 			return fmt.Errorf("%s factor %q status %q is invalid", label, state.GetFactorId(), state.GetStatus())
