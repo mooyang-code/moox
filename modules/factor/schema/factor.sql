@@ -1,21 +1,28 @@
 PRAGMA foreign_keys = ON;
 
+-- 因子计算任务：一个源数据集和频率，产出一个结果数据集。c_name 直接用作 Storage 结果数据集的名称
 CREATE TABLE IF NOT EXISTS t_factor_tasks (
     c_task_id TEXT NOT NULL PRIMARY KEY,
     c_space_id TEXT NOT NULL,
+    c_name TEXT NOT NULL,
     c_source_dataset_id TEXT NOT NULL,
     c_freq TEXT NOT NULL,
     c_result_dataset_id TEXT NOT NULL,
-    -- 私有任务所属的策略实例（唯一的参数写入方）；空串表示没有写入方，成员带固定参数
-    c_owner_instance_id TEXT NOT NULL DEFAULT '',
+    -- 关联的策略实例：独占、永久，写入后不能修改或清空；空串表示还没有关联
+    c_bound_instance_id TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
-    UNIQUE (c_result_dataset_id)
+    CHECK (c_status IN ('pending', 'enabled', 'disabled')),
+    UNIQUE (c_result_dataset_id),
+    UNIQUE (c_space_id, c_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_factor_tasks_owner ON t_factor_tasks (c_owner_instance_id);
+CREATE INDEX IF NOT EXISTS idx_t_factor_tasks_source ON t_factor_tasks (c_space_id, c_source_dataset_id, c_freq, c_status);
+-- 关联实例唯一：空串（未关联）不参与
+CREATE UNIQUE INDEX IF NOT EXISTS ux_t_factor_tasks_bound_instance
+ON t_factor_tasks (c_bound_instance_id)
+WHERE c_bound_instance_id <> '';
 
 -- 因子分类（例如动量类、波动类）：只是元数据，用于因子库查找与按类展示
 CREATE TABLE IF NOT EXISTS t_factor_categories (
@@ -45,21 +52,27 @@ CREATE TABLE IF NOT EXISTS t_factor_defs (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_defs_category ON t_factor_defs (c_category_id);
 
--- 因子任务成员：定义在某个因子任务中的运行实例，身份是任务内唯一的别名（同一定义可以用不同别名加入多次），
--- 启停状态属于成员
+-- 因子任务成员：定义在某个因子任务中的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段），启停状态属于成员。
+-- 固定成员的参数在加成员时写定、之后不变；可变成员的默认参数写在 c_params，策略逐期提交的值记在 c_last_submitted_*。
 CREATE TABLE IF NOT EXISTS t_factor_task_members (
     c_task_id TEXT NOT NULL,
-    c_member_alias TEXT NOT NULL,
+    c_member_key TEXT NOT NULL,
     c_factor_id TEXT NOT NULL,
+    c_kind TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'disabled',
-    -- 连续沿用参数多少期后告警
-    c_carry_alert_periods INTEGER NOT NULL DEFAULT 10,
-    -- 成员的固定参数（参数名 → 取值的规范 JSON，加成员时的完整参数，之后不变）；空对象表示参数由写入方逐期提交
+    -- 固定参数，或可变成员的默认参数：加成员时的完整参数（规范 JSON），之后不变
     c_params TEXT NOT NULL DEFAULT '{}',
+    -- 以下四列是可变成员的运行状态，不属于配置：目录同步、目录指纹、成员变化检测都不看它们，提交时也不更新 c_mtime。
+    -- 各标的最近一次提交的参数（默认值加按标的覆盖的规范 JSON，按标的合并），最近一次被接受的目标期（Unix 秒）、请求 ID 与提交时间
+    c_last_submitted_params TEXT NOT NULL DEFAULT '{}',
+    c_last_submitted_period INTEGER NOT NULL DEFAULT 0,
+    c_last_request_id TEXT NOT NULL DEFAULT '',
+    c_last_submitted_at DATETIME,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_task_id, c_member_alias),
-    CHECK (c_carry_alert_periods > 0),
+    PRIMARY KEY (c_task_id, c_member_key),
+    CHECK (c_kind IN ('fixed', 'var')),
+    CHECK (c_kind = 'var' OR (c_last_submitted_period = 0 AND c_last_submitted_params = '{}' AND c_last_request_id = '' AND c_last_submitted_at IS NULL)),
     CHECK (c_status IN ('enabled', 'disabled')),
     FOREIGN KEY (c_task_id) REFERENCES t_factor_tasks (c_task_id),
     FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
@@ -67,6 +80,10 @@ CREATE TABLE IF NOT EXISTS t_factor_task_members (
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_task_members_task ON t_factor_task_members (c_task_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_factor_task_members_factor ON t_factor_task_members (c_factor_id);
+-- 同一个任务里同一个因子最多一个可变成员
+CREATE UNIQUE INDEX IF NOT EXISTS ux_t_factor_task_members_var
+ON t_factor_task_members (c_task_id, c_factor_id)
+WHERE c_kind = 'var';
 
 CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
@@ -81,6 +98,9 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_status TEXT NOT NULL DEFAULT 'accepted',
     c_progress_time INTEGER NOT NULL DEFAULT 0,
     c_error TEXT NOT NULL DEFAULT '',
+    -- 按默认参数新补的期次：补算时原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，
+    -- 与当时的实时结果不保证一致。规范 JSON：成员键 → [[起始秒, 结束秒], ...]（闭区间，相邻期次合并）
+    c_default_filled_json TEXT NOT NULL DEFAULT '{}',
     -- 执行该任务的计算引擎与租约；租约过期后任务可被重新领取
     c_engine_id TEXT NOT NULL DEFAULT '',
     c_lease_token TEXT NOT NULL DEFAULT '',
@@ -108,62 +128,8 @@ CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
     CHECK (c_id = 1)
 );
 
--- 参数请求：写入方为成员某一期提交的完整快照（因子动态调参执行计划 2.4）。c_seq 是库内序号，冻结时按它选
--- 截止前的最后一份；请求原文只用于审计与排查，已应用的参数以冻结记录为准。保留 30 天。
-CREATE TABLE IF NOT EXISTS t_factor_param_requests (
-    c_seq INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_request_id TEXT NOT NULL,
-    c_task_id TEXT NOT NULL,
-    c_member_alias TEXT NOT NULL,
-    c_period_time INTEGER NOT NULL,
-    c_based_on_period INTEGER NOT NULL DEFAULT 0,
-    c_snapshot_hash TEXT NOT NULL,
-    c_writer TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'accepted',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('accepted', 'applied', 'superseded', 'not_applied')),
-    UNIQUE (c_request_id, c_task_id, c_member_alias)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_factor_param_requests_period
-ON t_factor_param_requests (c_task_id, c_member_alias, c_period_time, c_seq);
-CREATE INDEX IF NOT EXISTS idx_t_factor_param_requests_ctime ON t_factor_param_requests (c_ctime);
-
--- 参数快照：按内容摘要去重、不可变；请求与冻结记录都引用它
-CREATE TABLE IF NOT EXISTS t_factor_param_snapshots (
-    c_snapshot_hash TEXT NOT NULL PRIMARY KEY,
-    c_snapshot_json TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- 冻结记录：成员每一期最终采用的参数，是唯一事实来源。快照与来源相同的连续期次压缩成一个区间
--- [c_start_period, c_end_period]（两端都含）；只有每期都改参数的成员才每期一行。
-CREATE TABLE IF NOT EXISTS t_factor_param_freezes (
-    c_task_id TEXT NOT NULL,
-    c_member_alias TEXT NOT NULL,
-    c_start_period INTEGER NOT NULL,
-    c_end_period INTEGER NOT NULL,
-    c_snapshot_hash TEXT NOT NULL,
-    c_source TEXT NOT NULL,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_task_id, c_member_alias, c_start_period),
-    CHECK (c_end_period >= c_start_period),
-    CHECK (c_source IN ('requested', 'carried', 'carried_offline', 'default')),
-    FOREIGN KEY (c_snapshot_hash) REFERENCES t_factor_param_snapshots (c_snapshot_hash)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_factor_param_freezes_end
-ON t_factor_param_freezes (c_task_id, c_member_alias, c_end_period);
-
--- 每个任务已冻结到的最新一期：晚于它的期次才接受参数请求
-CREATE TABLE IF NOT EXISTS t_factor_param_frozen_periods (
-    c_task_id TEXT NOT NULL PRIMARY KEY,
-    c_frozen_through INTEGER NOT NULL,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_tasks_mtime
-AFTER UPDATE ON t_factor_tasks
+AFTER UPDATE OF c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status ON t_factor_tasks
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
@@ -178,13 +144,14 @@ BEGIN
     UPDATE t_factor_defs SET c_mtime = CURRENT_TIMESTAMP WHERE c_factor_id = OLD.c_factor_id;
 END;
 
+-- 只在配置列变化时更新 c_mtime；提交参数只写 c_last_* 运行状态列，不触发
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_task_members_mtime
-AFTER UPDATE ON t_factor_task_members
+AFTER UPDATE OF c_factor_id, c_kind, c_status, c_params ON t_factor_task_members
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_task_members SET c_mtime = CURRENT_TIMESTAMP
-    WHERE c_task_id = OLD.c_task_id AND c_member_alias = OLD.c_member_alias;
+    WHERE c_task_id = OLD.c_task_id AND c_member_key = OLD.c_member_key;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime

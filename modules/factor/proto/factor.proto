@@ -11,12 +11,14 @@ message FactorTask {
   string space_id = 2;
   string source_dataset_id = 3;
   string freq = 4;
+  // name 是任务的展示名，直接用作 Storage 结果数据集的名称（含汉字、不超过 10 个字、空间内唯一）。
+  string name = 5;
   string result_dataset_id = 7;
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // owner_instance_id 非空时是策略实例的私有任务，该实例是唯一的参数写入方；为空时成员带固定参数。
-  string owner_instance_id = 11;
+  // bound_instance_id 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
+  string bound_instance_id = 11;
 }
 
 // FactorParamDecl 是定义声明的一个可调参数（由编译 spec 派生，只读）。
@@ -62,8 +64,8 @@ message FactorDef {
 message FactorUsage {
   string task_id = 1;
   string status = 2;
-  string member_alias = 3;
-  // params 是成员的固定参数（空表示参数由策略实例逐期提交）。
+  string member_key = 3;
+  // params 是成员的固定参数，或可变成员的默认参数。
   map<string, double> params = 4;
 }
 
@@ -72,7 +74,7 @@ message FactorInfo {
   repeated FactorUsage usages = 2;
 }
 
-// FactorMember 是定义在因子任务中的运行实例，身份是任务内唯一的别名。
+// FactorMember 是定义在因子任务中的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段，规则见 packages/factorname）。
 message FactorMember {
   string task_id = 1;
   string factor_id = 2;
@@ -80,13 +82,16 @@ message FactorMember {
   FactorDef factor = 4;
   string created_at = 5;
   string updated_at = 6;
-  string member_alias = 7;
-  int32 carry_alert_periods = 8;
-  // output_columns、param_columns 是成员在结果数据集里的列名（派生，只读）。
+  string member_key = 7;
+  // output_columns 是成员在结果数据集里的列名（由成员键和输出名推导，只读）。
   repeated string output_columns = 9;
-  repeated string param_columns = 10;
-  // params 是成员的固定参数（完整参数，加成员时给定，之后不变；策略实例专属任务的成员为空，参数逐期提交）。
+  // params 是成员的固定参数，或可变成员的默认参数（完整参数，加成员时给定，之后不变）。
   map<string, double> params = 11;
+  // kind 是成员类型：fixed 或 var。
+  string kind = 12;
+  // last_submitted_period、last_submitted_at 是可变成员最近一次被接受的提交的目标期（Unix 秒）和提交时间；从未提交过为 0 和空。
+  int64 last_submitted_period = 13;
+  string last_submitted_at = 14;
 }
 
 message FactorPeriodState {
@@ -97,10 +102,9 @@ message FactorPeriodState {
   string definition_hash = 5;
   // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
   repeated string gap_subjects = 6;
-  string member_alias = 7;
-  // params_source 是这一期冻结参数的来源：requested、carried、carried_offline、default。
-  string params_source = 8;
-  string params_digest = 9;
+  string member_key = 7;
+  // member_kind 是成员类型：fixed 或 var。
+  string member_kind = 8;
 }
 
 message TaskRunSummary {
@@ -137,6 +141,20 @@ message RecalcJob {
   string created_at = 11;
   string updated_at = 12;
   string engine_id = 13;
+  // default_filled 是按默认参数新补的期次：原行不存在、或原行的 __params 里没有这个成员，只能用默认参数算出来，
+  // 与当时的实时结果不保证一致。
+  repeated MemberRanges default_filled = 14;
+}
+
+// TimeRange 是 Unix 秒的闭区间。
+message TimeRange {
+  int64 start = 1;
+  int64 end = 2;
+}
+
+message MemberRanges {
+  string member_key = 1;
+  repeated TimeRange ranges = 2;
 }
 
 message CreateFactorTaskReq { FactorTask factor_task = 1; }
@@ -193,9 +211,9 @@ message UpdateFactorRsp {
 message AddTaskMemberReq {
   string task_id = 1;
   string factor_id = 2;
-  // member_alias 为空时：普通任务按参数生成（全部参数等于默认值时取 factor_id），策略实例专属任务取 factor_id。
-  string member_alias = 3;
-  // params 是成员的固定参数；没给的参数取定义的默认值。策略实例专属任务不能带固定参数。
+  // kind 是成员类型：fixed（固定参数）或 var（参数由关联的策略逐期提交）；为空按 fixed。
+  string kind = 3;
+  // params 是固定成员的固定参数，或可变成员的默认参数；没给的参数取定义的默认值。成员键由服务端推导并在响应里返回。
   map<string, double> params = 4;
 }
 message AddTaskMemberRsp {
@@ -205,13 +223,13 @@ message AddTaskMemberRsp {
 
 message RemoveTaskMemberReq {
   string task_id = 1;
-  string member_alias = 2;
+  string member_key = 2;
 }
 message RemoveTaskMemberRsp { common.RetInfo ret_info = 1; }
 
 message SetTaskMemberStatusReq {
   string task_id = 1;
-  string member_alias = 2;
+  string member_key = 2;
   string status = 3;
 }
 message SetTaskMemberStatusRsp {
@@ -417,38 +435,15 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// 策略实例的私有因子任务（因子动态调参执行计划 2.3）：启用实例时建立或对齐，停用时停用，删除实例时释放。
-message InstanceTaskMember {
-  string member_alias = 1;
-  string factor_id = 2;
+// BindFactorTask 把任务与策略实例永久关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
+message BindFactorTaskReq {
+  string task_id = 1;
+  string instance_id = 2;
 }
-
-message EnsureInstanceFactorTaskReq {
-  string instance_id = 1;
-  string space_id = 2;
-  string source_dataset_id = 3;
-  string freq = 4;
-  repeated InstanceTaskMember members = 7;
-}
-message EnsureInstanceFactorTaskRsp {
-  common.RetInfo ret_info = 1;
-  FactorTask factor_task = 2;
-  repeated FactorMember members = 3;
-  // view_id 是私有结果数据集的默认 View，实例绑定它读取。
-  string view_id = 4;
-}
-
-message SetInstanceFactorTaskEnabledReq {
-  string instance_id = 1;
-  bool enabled = 2;
-}
-message SetInstanceFactorTaskEnabledRsp {
+message BindFactorTaskRsp {
   common.RetInfo ret_info = 1;
   FactorTask factor_task = 2;
 }
-
-message ReleaseInstanceFactorTaskReq { string instance_id = 1; }
-message ReleaseInstanceFactorTaskRsp { common.RetInfo ret_info = 1; }
 
 // ParamValue 是一个参数一期的取值：默认值加按标的覆盖。
 message ParamValue {
@@ -456,25 +451,25 @@ message ParamValue {
   map<string, double> overrides = 2;
 }
 
-// MemberParams 是一个成员一期的完整参数快照。
+// MemberParams 是一个可变成员的一份参数提交：参数名 → 取值（默认值加按标的覆盖）。
 message MemberParams {
-  string member_alias = 1;
+  string member_key = 1;
   map<string, ParamValue> params = 2;
 }
 
-// SubmitFactorParams 由参数写入方（策略实例）为下一期提交参数快照；截止点是引擎开始冻结那一期，晚到返回 too_late。
-// accepted 只表示已接受，某期是否采用以冻结记录为准（GetFactorParams）。
+// SubmitFactorParams 由关联的策略实例为可变成员提交参数。period_time 是参数从哪一期起生效的目标期（Unix 秒）：
+// 目标期不能倒退；同一目标期下同一个 request_id 重复提交按幂等成功，不同 request_id 拒绝。
+// 按标的合并：默认值取本次提交的，本次带了的标的覆盖旧值，没带的标的保留旧值。
 message SubmitFactorParamsReq {
   string writer = 1;
   string task_id = 2;
   int64 period_time = 3;
-  int64 based_on_period = 4;
   string request_id = 5;
   repeated MemberParams members = 6;
 }
 message MemberSubmitResult {
-  string member_alias = 1;
-  string result = 2; // accepted、too_late、rejected
+  string member_key = 1;
+  string result = 2; // accepted、duplicate、rejected
   string reason = 3;
 }
 message SubmitFactorParamsRsp {
@@ -482,41 +477,20 @@ message SubmitFactorParamsRsp {
   repeated MemberSubmitResult results = 2;
 }
 
-// ParamIntervalInfo 是冻结记录：快照与来源相同的连续期次 [start_period, end_period]（两端都含，Unix 秒）。
-message ParamIntervalInfo {
-  string member_alias = 1;
-  int64 start_period = 2;
-  int64 end_period = 3;
-  map<string, ParamValue> params = 4;
-  string source = 5;
-  string snapshot_hash = 6;
+// MemberParamState 是可变成员最近一次被接受的提交（按标的合并后的结果）。
+message MemberParamState {
+  string member_key = 1;
+  map<string, ParamValue> params = 2;
+  int64 last_submitted_period = 3;
+  string last_request_id = 4;
+  string last_submitted_at = 5;
 }
 
-message ParamRequestInfo {
-  int64 seq = 1;
-  string request_id = 2;
-  string member_alias = 3;
-  int64 period_time = 4;
-  int64 based_on_period = 5;
-  map<string, ParamValue> params = 6;
-  string status = 7; // accepted、applied、superseded、not_applied
-  string writer = 8;
-  string created_at = 9;
-}
-
-message GetFactorParamsReq {
-  string task_id = 1;
-  string member_alias = 2; // 为空时全部成员
-  int64 from = 3;
-  int64 to = 4;
-  bool include_requests = 5;
-  int32 limit = 6;
-}
+// GetFactorParams 只读：返回任务里各可变成员最近一次被接受的提交。
+message GetFactorParamsReq { string task_id = 1; }
 message GetFactorParamsRsp {
   common.RetInfo ret_info = 1;
-  repeated ParamIntervalInfo intervals = 2;
-  repeated ParamRequestInfo requests = 3;
-  int64 frozen_through = 4;
+  repeated MemberParamState members = 2;
 }
 
 service FactorMgr {
@@ -546,9 +520,7 @@ service FactorMgr {
   rpc UpsertFactorCategory(UpsertFactorCategoryReq) returns (UpsertFactorCategoryRsp);
   rpc DeleteFactorCategory(DeleteFactorCategoryReq) returns (DeleteFactorCategoryRsp);
   rpc SetFactorCategory(SetFactorCategoryReq) returns (SetFactorCategoryRsp);
-  rpc EnsureInstanceFactorTask(EnsureInstanceFactorTaskReq) returns (EnsureInstanceFactorTaskRsp);
-  rpc SetInstanceFactorTaskEnabled(SetInstanceFactorTaskEnabledReq) returns (SetInstanceFactorTaskEnabledRsp);
-  rpc ReleaseInstanceFactorTask(ReleaseInstanceFactorTaskReq) returns (ReleaseInstanceFactorTaskRsp);
+  rpc BindFactorTask(BindFactorTaskReq) returns (BindFactorTaskRsp);
   rpc SubmitFactorParams(SubmitFactorParamsReq) returns (SubmitFactorParamsRsp);
   rpc GetFactorParams(GetFactorParamsReq) returns (GetFactorParamsRsp);
 }
@@ -562,11 +534,11 @@ message EngineIdentity {
 }
 
 message EngineMember {
-  string member_alias = 1;
+  string member_key = 1;
   FactorDef factor = 2;
-  // carry_alert_periods 是连续沿用参数超过多少期告警（0 取默认值）。
-  int32 carry_alert_periods = 3;
-  // params 是成员的固定参数（空表示参数由策略实例逐期提交）。
+  // kind 是成员类型：fixed 或 var。
+  string kind = 3;
+  // params 是成员的固定参数，或可变成员的默认参数。
   map<string, double> params = 4;
 }
 
@@ -597,17 +569,6 @@ message EngineRuntimeStatus {
   string expr_version = 9;
   // watermarks 是各任务的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
   repeated TaskWatermarkStatus watermarks = 10;
-  // param_health 是各成员的参数状态；offline_pending 是还没补报给管理端的离线冻结数。
-  repeated MemberParamHealth param_health = 11;
-  int32 offline_pending = 12;
-}
-
-message MemberParamHealth {
-  string task_id = 1;
-  string member_alias = 2;
-  int32 carried_periods = 3;
-  int32 alert_after = 4;
-  string last_offline_at = 5;
 }
 
 message TaskWatermarkStatus {
@@ -673,56 +634,14 @@ message ReportRecalcProgressRsp {
   string job_status = 2;
 }
 
-// FreezeFactorParams 在引擎开算一期之前冻结这些任务的参数（因子动态调参执行计划 2.4）：提交与冻结在管理端同一个库里
-// 串行化；同一期重复调用返回同一份结果。
-message MemberParamFreeze {
-  string member_alias = 1;
-  map<string, ParamValue> params = 2;
-  string source = 3;
-  string snapshot_hash = 4;
-  string request_id = 5;
-}
-message TaskParamFreeze {
-  string task_id = 1;
-  repeated MemberParamFreeze members = 2;
-}
-message FreezeFactorParamsReq {
-  EngineIdentity engine = 1;
-  repeated string task_ids = 2;
-  int64 period_time = 3;
-}
-message FreezeFactorParamsRsp {
-  common.RetInfo ret_info = 1;
-  repeated TaskParamFreeze tasks = 2;
-}
-
-// OfflineFreeze 是引擎在管理端不可达时本地按沿用规则冻结的一期。
-message OfflineFreeze {
-  string task_id = 1;
-  string member_alias = 2;
-  int64 period_time = 3;
-  map<string, ParamValue> params = 4;
-  string source = 5;
-}
-message ReportOfflineFreezesReq {
-  EngineIdentity engine = 1;
-  repeated OfflineFreeze freezes = 2;
-}
-message ReportOfflineFreezesRsp {
-  common.RetInfo ret_info = 1;
-  // conflicts 是管理端已有不同记录的期次（以管理端为准，引擎据此重算）。
-  repeated OfflineFreeze conflicts = 2;
-}
-
-message ListParamIntervalsReq {
+// GetTaskParams 由引擎在开算一期前读取任务各可变成员最近一次被接受的提交（只读；只有持有租约的引擎能读）。
+message GetTaskParamsReq {
   EngineIdentity engine = 1;
   string task_id = 2;
-  int64 from = 3;
-  int64 to = 4;
 }
-message ListParamIntervalsRsp {
+message GetTaskParamsRsp {
   common.RetInfo ret_info = 1;
-  repeated ParamIntervalInfo intervals = 2;
+  repeated MemberParamState members = 2;
 }
 
 service FactorEngine {
@@ -730,7 +649,5 @@ service FactorEngine {
   rpc EngineHeartbeat(EngineHeartbeatReq) returns (EngineHeartbeatRsp);
   rpc PullRecalcJob(PullRecalcJobReq) returns (PullRecalcJobRsp);
   rpc ReportRecalcProgress(ReportRecalcProgressReq) returns (ReportRecalcProgressRsp);
-  rpc FreezeFactorParams(FreezeFactorParamsReq) returns (FreezeFactorParamsRsp);
-  rpc ReportOfflineFreezes(ReportOfflineFreezesReq) returns (ReportOfflineFreezesRsp);
-  rpc ListParamIntervals(ListParamIntervalsReq) returns (ListParamIntervalsRsp);
+  rpc GetTaskParams(GetTaskParamsReq) returns (GetTaskParamsRsp);
 }
