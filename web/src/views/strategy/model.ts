@@ -96,6 +96,7 @@ const itemReasons: Record<string, string> = {
   not_rebalanced: "非建仓 bar",
   filter_after: "filter_after 剔除",
   f1_filter_after: "被全部子策略的后置过滤剔除",
+  volume_zero: "本期无成交（volume=0），不作为候选",
   exit: "触发 exit",
   no_entry: "未触发 entry",
   entry_and_exit: "entry 与 exit 同时成立",

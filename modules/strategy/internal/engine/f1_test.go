@@ -74,7 +74,10 @@ func TestF1EvaluateEndToEnd(t *testing.T) {
 			require.Zero(t, got[id].Cmp(truncated), "第 %d 期 %s：%s ≠ %s", i, id, got[id].String(), truncated.String())
 		}
 		for _, item := range decision.Items {
-			require.Contains(t, []string{StageWeighted, StageDropped, StageMissing}, item.Stage)
+			require.Contains(t, []string{StageWeighted, StageDropped, StageMissing, StageIdle}, item.Stage)
+			if item.Stage == StageIdle {
+				require.Equal(t, reasonVolumeZero, item.Reason)
+			}
 		}
 		state = decision.State
 	}

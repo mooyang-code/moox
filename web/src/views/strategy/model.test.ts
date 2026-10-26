@@ -65,6 +65,7 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("not_selected")).toBe("名次未入选（not_selected）");
     expect(itemReasonLabel("f1:37")).toBe("由 37 个子策略持有（f1:37）");
     expect(itemReasonLabel("f1_filter_after")).toBe("被全部子策略的后置过滤剔除（f1_filter_after）");
+    expect(itemReasonLabel("volume_zero")).toBe("本期无成交（volume=0），不作为候选（volume_zero）");
     expect(itemReasonLabel("holding")).toBe("延续批次持有（holding）");
     expect(itemReasonLabel("holding:filter")).toBe("延续批次持有，本期filter 未通过（holding:filter）");
     expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
