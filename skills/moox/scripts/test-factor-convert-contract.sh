@@ -17,6 +17,23 @@ fail() { echo "factor convert contract: $*" >&2; exit 1; }
 grep -q '"factor_id":"zscore_abs_mean_q".*"lookback":358' "${TMP}/check.jsonl" || fail "zscore_abs_mean_q 的回看应按参数上限推导为 358"
 "${FX}" functions --json | python3 -c 'import json,sys; names={f["name"] for f in json.load(sys.stdin)}; assert {"ts_mean","cs_rank","where","ema","ema_partial","ts_mean_partial"} <= names'
 
+# factor-dsl.md 第 4 节 rolling().apply(内置函数) 对照表里的写法都要能编译（逐值等价性已在文档里记录过核对结果）
+cat > "${TMP}/apply.yaml" <<'EOF'
+- factor_id: apply_map
+  name: apply 对照表
+  spec: |
+    params: {n: {type: int, min: 4, max: 100, default: 20}}
+    outputs:
+      np_std: ts_std(close, n) * sqrt((n - 1) / n)
+      np_var: ts_var(close, n) * (n - 1) / n
+      np_argmax: n - 1 - ts_argmax(close, n)
+      np_ptp: ts_max(close, n) - ts_min(close, n)
+      np_pct: ts_quantile(close, n, 0.3)
+      sp_skew: ts_skew(close, n) * (n - 2) / sqrt(n * (n - 1))
+      sp_kurt: (ts_kurt(close, n) * (n - 2) * (n - 3) / (n - 1) - 6) / (n + 1)
+EOF
+"${FX}" check --library "${TMP}/apply.yaml" | grep -q '"ok":true' || fail "apply 对照表里的写法应当全部编译通过"
+
 python3 "${CHECK}" synthetic --subjects 3 --bars 120 --output "${TMP}/bars.csv"
 [[ "$(wc -l < "${TMP}/bars.csv" | tr -d ' ')" == 361 ]] || fail "合成数据应为 3×120 行加表头"
 
