@@ -46,16 +46,16 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		}
 	}
 
-	// 分段计时：规整、去重与指纹、等写锁、准备（字段、行索引与事件）、提交；达到阈值时记一行。
+	// 分段计时：规整、去重与指纹、准备（字段、行索引与事件）、等写锁、提交；达到阈值时记一行。
 	started := time.Now()
-	var fingerprinted, locked, prepared, committed time.Time
+	var fingerprinted, prepared, locked, committed time.Time
 	defer func() {
 		if committed.IsZero() || time.Since(started) < factorWriteLogThreshold {
 			return
 		}
-		log.Printf("storage node 因子写入 dataset=%s 行=%d 规整与指纹=%s 等锁=%s 准备=%s 提交=%s 合计=%s",
-			datasetID, len(rows), fingerprinted.Sub(started).Round(time.Millisecond), locked.Sub(fingerprinted).Round(time.Millisecond),
-			prepared.Sub(locked).Round(time.Millisecond), committed.Sub(prepared).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
+		log.Printf("storage node 因子写入 dataset=%s 行=%d 规整与指纹=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
+			datasetID, len(rows), fingerprinted.Sub(started).Round(time.Millisecond), prepared.Sub(fingerprinted).Round(time.Millisecond),
+			locked.Sub(prepared).Round(time.Millisecond), committed.Sub(locked).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 	}()
 	normalized, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
@@ -83,6 +83,16 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 	fingerprinted = time.Now()
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
+	// 编码 KV、构造并校验事件与锁无关，放在 outboxMu 之外：多个任务同时写入时，别的写入、完成标记与 outbox 转发
+	// 不必排在这一步后面。锁内只查回执并提交；同一 commitID 的重复提交白做一次准备，丢弃即可。
+	write, err := s.prepareFieldsWrite(ctx, groupRowsByDataset(normalized), normalized, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+		return BuildDatasetRowsUpsertedMessageWithKind(s.nodeID, "", WriteKindFactorResult, spaceID, datasetID, rows)
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer write.batch.Close()
+	prepared = time.Now()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
 	locked = time.Now()
@@ -95,14 +105,6 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		return uint64(len(normalized)), nil
 	}
 	var receipt *commitReceipt
-	write, err := s.prepareFieldsWrite(ctx, groupRowsByDataset(normalized), normalized, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessageWithKind(s.nodeID, "", WriteKindFactorResult, spaceID, datasetID, rows)
-	})
-	if err != nil {
-		return 0, err
-	}
-	defer write.batch.Close()
-	prepared = time.Now()
 	entries, err := s.commitFieldsWriteLocked(ctx, write, "", false, func(batch *cpebble.Batch, entries []*OutboxEntry) error {
 		if len(entries) != 1 {
 			return errors.New("factor result write requires one outbox position")

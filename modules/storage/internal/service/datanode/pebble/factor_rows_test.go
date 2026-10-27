@@ -2,7 +2,10 @@ package pebble
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -72,6 +75,47 @@ func TestFactorRowsSameCommitIDIsIdempotent(t *testing.T) {
 	}
 	if rowsEvent.GetWriteKind() != WriteKindFactorResult {
 		t.Fatalf("write_kind=%q", rowsEvent.GetWriteKind())
+	}
+}
+
+// 准备在 outboxMu 之外：同一 commitID 并发写入只提交一次，其余按回执判为成功；不同 commitID 并发写入各占一个 outbox 位置。
+func TestFactorRowsConcurrentWritesCommitOncePerCommitID(t *testing.T) {
+	store := openFactorRowsStore(t)
+	rows := func(value float64) []*pb.RowFieldUpsert {
+		return []*pb.RowFieldUpsert{{Key: factorRowsKey("row-concurrent"), Fields: []*pb.FieldValue{doubleField("close", value)}}}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		commitID, value := "commit-same", 10.0
+		if i%2 == 1 {
+			commitID, value = fmt.Sprintf("commit-%d", i), float64(i)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.WriteFactorRows(context.Background(), "space", "factor_result", commitID, rows(value))
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := store.ListOutbox(context.Background(), 0, 100)
+	if err != nil || len(entries) != 9 {
+		t.Fatalf("outbox entries=%d err=%v", len(entries), err)
+	}
+	for i := 1; i < len(entries); i++ {
+		if entries[i].ID != entries[i-1].ID+1 {
+			t.Fatalf("outbox ids not contiguous: %d then %d", entries[i-1].ID, entries[i].ID)
+		}
+	}
+	if _, err := store.WriteFactorRows(context.Background(), "space", "factor_result", "commit-same", rows(99)); !errors.As(err, new(CommitConflictError)) {
+		t.Fatalf("same commit id with different rows: err=%v", err)
 	}
 }
 
