@@ -412,7 +412,9 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 	}
 	values := make(map[datasetKey]datasetValues, len(enabledSeries))
 	// 生产者当前明确不期望产出的数据集（enabled 为 0）；与它同一数据集的 View 水位不再生成新鲜度检查。
+	// liveScopes 是当前有生产者明确期望产出的数据集：另一个生产者（旧生产者或同生产者的其他实例）留下的 0 不能盖过它。
 	disabledScopes := make(map[string]struct{})
+	liveScopes := make(map[string]struct{})
 	for _, series := range enabledSeries {
 		labels, err := datasetLabels(series.LabelsJSON)
 		if err != nil {
@@ -439,6 +441,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		if !fromCurrentBoot {
 			continue
 		}
+		liveScopes[datasetScopeKey(labels["space_id"], labels["dataset_id"], labels["freq"])] = struct{}{}
 		key := datasetKey{
 			service: series.ServiceName, producer: datasetModuleFromMetric(series.MetricName),
 			instance: series.InstanceID, spaceID: labels["space_id"],
@@ -544,8 +547,11 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				continue
 			}
 			// 生产者已把这个数据集标为不期望产出（因子任务暂停等）：View 水位停在原地是预期的，不检查。
-			if _, off := disabledScopes[datasetScopeKey(viewSpaceID, labels["dataset_id"], freq)]; off {
-				continue
+			scope := datasetScopeKey(viewSpaceID, labels["dataset_id"], freq)
+			if _, off := disabledScopes[scope]; off {
+				if _, live := liveScopes[scope]; !live {
+					continue
+				}
 			}
 			latest, err := b.Metrics.Latest(ctx, series.SeriesID)
 			if err != nil {

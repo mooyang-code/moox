@@ -20,7 +20,7 @@ func TestOverviewSkipsViewsOfDatasetsTheProducerNoLongerExpects(t *testing.T) {
 	datasetLabels := func(dataset string) string {
 		return `{"dataset_id":"` + dataset + `","freq":"1m","space_id":"crypto"}`
 	}
-	seed := func(withPausedMarker bool) func(*gorm.DB) {
+	seed := func(withPausedMarker bool, otherLiveProducer ...bool) func(*gorm.DB) {
 		return func(db *gorm.DB) {
 			for id, item := range map[string][2]string{"paused": {"dataset_factor_paused", "view_factor_paused"}, "live": {"dataset_factor_live", "view_factor_live"}} {
 				seedOverviewMetricForInstance(t, db, "wm-"+id, "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels(item[0], item[1]), float64(watermark.Unix()), now)
@@ -29,6 +29,10 @@ func TestOverviewSkipsViewsOfDatasetsTheProducerNoLongerExpects(t *testing.T) {
 			seedOverviewMetricForInstance(t, db, "live-enabled", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_enabled", datasetLabels("dataset_factor_live"), 1, now)
 			if withPausedMarker {
 				seedOverviewMetricForInstance(t, db, "paused-enabled", "factor-mgr", "factor-mgr@control", "moox_factor_dataset_enabled", datasetLabels("dataset_factor_paused"), 0, now)
+			}
+			if len(otherLiveProducer) > 0 && otherLiveProducer[0] {
+				// 另一个生产者仍明确期望这个数据集：旧生产者留下的 0 不能盖过它。
+				seedOverviewMetricForInstance(t, db, "paused-enabled-other", "collector", "collector@control", "moox_collector_dataset_enabled", datasetLabels("dataset_factor_paused"), 1, now)
 			}
 		}
 	}
@@ -49,4 +53,7 @@ func TestOverviewSkipsViewsOfDatasetsTheProducerNoLongerExpects(t *testing.T) {
 
 	withoutMarker := openOverviewWithStorage(t, &goneMetadata{}, seed(false))
 	require.ElementsMatch(t, []string{"view_factor_live", "view_factor_paused"}, views(withoutMarker))
+
+	bothProducers := openOverviewWithStorage(t, &goneMetadata{}, seed(true, true))
+	require.ElementsMatch(t, []string{"view_factor_live", "view_factor_paused"}, views(bothProducers), "只要还有生产者期望它，View 就照常检查")
 }

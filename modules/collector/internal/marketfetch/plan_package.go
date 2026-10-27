@@ -104,8 +104,13 @@ func (r *PlanReconciler) packageGate(ctx context.Context) error {
 	if err != nil {
 		return r.fail("cloudfunction", fmt.Errorf("cannot tell whether cloud functions need the missing code package: %w", err))
 	}
+	// 创建中、还没标记就绪的预留也算：它们随后就绪时同样要升级到配置的代码包，不能在这个空档里放行。
+	unready, err := r.Cloud.ListUnreadyMarketFetchers(ctx, r.SpaceID, "timer")
+	if err != nil {
+		return r.fail("cloudfunction", fmt.Errorf("cannot tell whether cloud functions need the missing code package: %w", err))
+	}
 	prefix := r.fleetPrefix()
-	for _, node := range nodes {
+	for _, node := range append(nodes, unready...) {
 		if strings.HasPrefix(node.InstanceID, prefix) {
 			_, packageErr := r.requirePackage()
 			return r.fail("package", packageErr)

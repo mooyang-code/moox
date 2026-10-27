@@ -110,7 +110,7 @@ func TestMarkPausedRunnersFollowsTaskLifecycle(t *testing.T) {
 	_, err = r.life.Command(ctx, lifecycle.CmdResume, ref)
 	require.NoError(t, err)
 	markPausedRunners(runners, r.life)
-	require.False(t, runners[0].Paused, "恢复追赶中不算暂停")
+	require.True(t, runners[0].Paused, "恢复追赶中、放行前仍算有意停下，Monitor 不对它做新鲜度检查")
 
 	other := []domain.RunnerStatus{{TaskID: "ftask_a", Paused: true}}
 	markPausedRunners(other, nil)

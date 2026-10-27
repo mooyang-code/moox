@@ -81,3 +81,16 @@ func TestMissingPackageWarningIsThrottled(t *testing.T) {
 	h.r.refreshPackageIfAvailable(t.Context())
 	require.True(t, h.r.packageWarnedAt.After(first))
 }
+
+// 创建中、还没标记就绪的预留同样拦住：它们随后就绪时要升级到配置的代码包。
+func TestMissingPackageAlsoBlocksWhileFunctionsAreStillBeingCreated(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	name := r.fleetPrefix() + "spot-001"
+	h.cloud.unready = map[string]scfinvoker.FunctionInstance{name: {InstanceID: name}}
+
+	err := h.reconcile(r)
+	require.ErrorIs(t, err, errNoCodePackage)
+	require.Empty(t, h.cloud.patches, "不下发新环境")
+}

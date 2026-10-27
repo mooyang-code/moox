@@ -41,7 +41,7 @@ type RunnerStatus struct {
 	WarmupState      string
 	WarmSubjects     int32
 	ExpectedSubjects int32
-	// Paused 表示任务被有意停下（暂停：手动、系统或自动）；恢复追赶中与故障不算。
+	// Paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
 	Paused bool
 }
 

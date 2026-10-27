@@ -234,13 +234,15 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lif
 	}
 }
 
-// markPausedRunners 标出被有意暂停的任务（手动、系统或自动暂停；恢复追赶中与故障不算），随心跳上报给管理端：
-// 管理端据此不再期望它的结果数据集持续产出，Monitor 也就不对它做新鲜度检查。
+// markPausedRunners 标出被有意停下的任务（手动、系统或自动暂停，以及放行前的恢复追赶；故障不算，要照常告警），
+// 随心跳上报给管理端：管理端据此不再期望它的结果数据集持续产出，Monitor 也就不对它做新鲜度检查。
+// 恢复追赶期间任务不计算实时周期，要等放行才开始产出；这段时间若恢复检查，暂停前留下的旧水位会立刻判成过期。
 func markPausedRunners(runners []domain.RunnerStatus, life *lifecycle.Controller) {
 	if life == nil {
 		return
 	}
 	for i := range runners {
-		runners[i].Paused = life.Stage(setRef(runners[i].TaskID)) == lifecycle.StagePaused
+		stage := life.Stage(setRef(runners[i].TaskID))
+		runners[i].Paused = stage == lifecycle.StagePaused || stage == lifecycle.StageResuming
 	}
 }

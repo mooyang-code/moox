@@ -3190,7 +3190,7 @@ type FactorRunnerStatus struct {
 	WarmupState      string `protobuf:"bytes,4,opt,name=warmup_state,json=warmupState,proto3" json:"warmup_state,omitempty"` // warming | ready
 	WarmSubjects     int32  `protobuf:"varint,5,opt,name=warm_subjects,json=warmSubjects,proto3" json:"warm_subjects,omitempty"`
 	ExpectedSubjects int32  `protobuf:"varint,6,opt,name=expected_subjects,json=expectedSubjects,proto3" json:"expected_subjects,omitempty"`
-	// paused 表示任务被有意停下（暂停：手动、系统或自动）；恢复追赶中与故障不算。
+	// paused 表示任务被有意停下（手动、系统或自动暂停，以及放行前的恢复追赶）；故障不算。
 	// 管理端据此不再把它的结果数据集当作应当持续产出的数据，Monitor 也就不对暂停的任务做新鲜度检查。
 	Paused bool `protobuf:"varint,7,opt,name=paused,proto3" json:"paused,omitempty"`
 }
