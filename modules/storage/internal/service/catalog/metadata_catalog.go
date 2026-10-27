@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,8 +15,6 @@ import (
 )
 
 // 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
-
-const factorDatasetDeleteAppID = "moox-factor"
 
 func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSourceReq) (*pb.CreateDataSourceRsp, error) {
 	item := req.GetDataSource()
@@ -115,20 +112,10 @@ func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*p
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
 }
 
-func collectorOwnedDataset(item *pb.Dataset) bool {
-	if item == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
-}
-
 func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
 	item := req.GetDataset()
 	if item == nil || item.GetSpaceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
-	}
-	if strings.TrimSpace(item.GetDataSourceId()) == "" && !collectorOwnedDataset(item) {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_source_id is required unless owner_module is collector"))}, nil
 	}
 	if err := validateDatasetDataNodeID(item.GetDataNodeId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -180,9 +167,6 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err := validateDatasetDataNodeUpdate(current, item.GetDataNodeId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	if err := coremetadata.PreserveDatasetOwnerAttributes(current, item); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
 	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
@@ -198,59 +182,11 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	current, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
-		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if isFactorResultDataset(current) {
-		if err := s.validateFactorDatasetDeleteAuth(req.GetAuthInfo()); err != nil {
-			return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-	} else if collectorOwnedDataset(current) {
-		if err := s.validateCollectorDatasetDeleteAuth(req.GetAuthInfo()); err != nil {
-			return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-	}
 	if err := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataset")
 	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func (s *Service) validateFactorDatasetDeleteAuth(auth *pb.AuthInfo) error {
-	if strings.TrimSpace(s.operatorSecret) == "" {
-		return errors.New("storage auth secret is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("factor service auth is required")
-	}
-	if auth.GetAppId() != factorDatasetDeleteAppID {
-		return errors.New("factor service identity required")
-	}
-	expected := serviceAuthKey(s.operatorSecret, factorDatasetDeleteAppID)
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
-		return errors.New("invalid factor service HMAC")
-	}
-	return nil
-}
-
-func (s *Service) validateCollectorDatasetDeleteAuth(auth *pb.AuthInfo) error {
-	if strings.TrimSpace(s.operatorSecret) == "" {
-		return errors.New("storage auth secret is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("collector service auth is required")
-	}
-	appID := strings.TrimSpace(auth.GetAppId())
-	if appID != "moox-collector" {
-		return errors.New("collector service identity required")
-	}
-	expected := serviceAuthKey(s.operatorSecret, appID)
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
-		return errors.New("invalid collector service HMAC")
-	}
-	return nil
 }
 
 func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {

@@ -57,7 +57,7 @@ func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
 	if _, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
 		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	dataset := &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
 		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"},
 	}
 	if _, err := store.CreateDataset(ctx, dataset); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *tes
 	}
 }
 
-func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
+func TestDatasetMayOmitDataSource(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
@@ -169,12 +169,12 @@ func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
 		t.Fatalf("collector result source persisted as %q, want SQL NULL", source.String)
 	}
 
-	_, err = store.CreateDataset(ctx, &pb.Dataset{
+	// data_source_id 对所有数据集都是可选的。
+	if _, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_missing_source", DataNodeId: "node-a",
 		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-	})
-	if err == nil || !strings.Contains(err.Error(), "data_source_id is required") {
-		t.Fatalf("ordinary dataset without source err = %v", err)
+	}); err != nil {
+		t.Fatalf("dataset without source err = %v", err)
 	}
 }
 

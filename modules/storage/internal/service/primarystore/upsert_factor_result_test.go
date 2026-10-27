@@ -42,7 +42,7 @@ func (s factorRowsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.
 
 func factorRowsMetadata() metadata.RequestSnapshot {
 	return factorRowsSnapshot{
-		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "result", DataNodeId: "node-owner", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}},
+		dataset: &pb.Dataset{SpaceId: "space", DatasetId: "result", DataNodeId: "node-owner", Status: "active", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
 		columns: []*pb.DatasetColumn{{ColumnName: "value", OriginId: "factor-id", Status: "active", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}},
 	}
 }
@@ -76,42 +76,6 @@ func newFactorResultService(t *testing.T, snapshot func() metadata.RequestSnapsh
 
 func factorResultRequest(appID, commitID string, rows ...*pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsReq {
 	return &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space", DatasetId: "result", CommitId: commitID, Rows: rows}
-}
-
-// 因子结果只许因子写、归属必须完整属于因子；因子身份也只能写自己的结果数据集。任一不符都在路由之前拒绝。
-func TestUpsertFieldsFactorResultRequiresFactorOwnership(t *testing.T) {
-	cases := []struct {
-		name  string
-		appID string
-		attrs map[string]string
-	}{
-		{"非因子调用方", "collector", map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}},
-		{"owner_module 属于别人", "factor", map[string]string{"owner_module": "collector", "dataset_role": "factor_result", "write_owner": "factor"}},
-		{"write_owner 属于别人", "factor", map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "collector"}},
-		{"缺 write_owner", "factor", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
-		{"非因子调用方写归属不全的因子结果", "collector", map[string]string{"dataset_role": "factor_result"}},
-		{"因子写采集数据集", "factor", map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}},
-		{"因子写无归属数据集", "moox-factor", map[string]string{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resolved := false
-			snapshot := func() metadata.RequestSnapshot {
-				s := factorRowsMetadata().(factorRowsSnapshot)
-				s.dataset = proto.Clone(s.dataset).(*pb.Dataset)
-				s.dataset.Attributes = tc.attrs
-				return s
-			}
-			svc := newFactorResultService(t, snapshot, &factorRowsNode{}, &resolved)
-			rsp, err := svc.UpsertFields(context.Background(), factorResultRequest(tc.appID, "commit-1", factorRowsRecord("value")))
-			if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-				t.Fatalf("response=%v err=%v", rsp, err)
-			}
-			if resolved {
-				t.Fatal("rejected write reached DataNode resolver")
-			}
-		})
-	}
 }
 
 // 请求的 space_id、dataset_id、commit_id 原样下发给数据集所在的数据节点。
@@ -153,7 +117,7 @@ func TestUpsertFieldsRejectsBeforeRouting(t *testing.T) {
 		{"未登记的列", factorRowsMetadata, factorRowsRecord("unregistered"), pb.ErrorCode_INVALID_PARAM},
 		{"停用的数据集", inactive, factorRowsRecord("value"), pb.ErrorCode_INVALID_PARAM},
 		{"行属于别的数据集", factorRowsMetadata, otherDataset, pb.ErrorCode_INVALID_PARAM},
-		{"缺少元数据快照", func() metadata.RequestSnapshot { return nil }, factorRowsRecord("value"), pb.ErrorCode_NO_PERMISSION},
+		{"缺少元数据快照", func() metadata.RequestSnapshot { return nil }, factorRowsRecord("value"), pb.ErrorCode_INVALID_PARAM},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

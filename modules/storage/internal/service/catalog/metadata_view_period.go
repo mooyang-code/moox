@@ -9,6 +9,9 @@ import (
 )
 
 func (s *Service) UpsertViewPeriodDatasetState(ctx context.Context, req *pb.UpsertViewPeriodDatasetStateReq) (*pb.UpsertViewPeriodDatasetStateRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.UpsertViewPeriodDatasetStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil || req.GetState() == nil {
 		return &pb.UpsertViewPeriodDatasetStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("state is required"))}, nil
 	}
@@ -20,6 +23,9 @@ func (s *Service) UpsertViewPeriodDatasetState(ctx context.Context, req *pb.Upse
 }
 
 func (s *Service) ListViewPeriodDatasetStates(ctx context.Context, req *pb.ListViewPeriodDatasetStatesReq) (*pb.ListViewPeriodDatasetStatesRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ListViewPeriodDatasetStatesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil {
 		return &pb.ListViewPeriodDatasetStatesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
@@ -31,6 +37,9 @@ func (s *Service) ListViewPeriodDatasetStates(ctx context.Context, req *pb.ListV
 }
 
 func (s *Service) RecordViewSyncPoint(ctx context.Context, req *pb.RecordViewSyncPointReq) (*pb.RecordViewSyncPointRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.RecordViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil || req.GetSyncPoint() == nil {
 		return &pb.RecordViewSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("sync_point is required"))}, nil
 	}

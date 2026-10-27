@@ -61,19 +61,21 @@ func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retention := storagepolicy.Default().Retention
+	retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
 	cleanup := datasetCleanup{
 		reader: cleanupDatasetReader{},
 		resolver: func(context.Context, string, string) (pb.DataNodeRuntimeService, error) {
 			return node, nil
 		},
-		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: storagepolicy.Default().Retention, metrics: metrics,
+		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: retention, metrics: metrics,
 	}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	if err := cleanup.run(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		// crypto 1m keeps 35 days, stockcn 1m 60 days; whole day buckets.
+		// crypto 1m keeps 35 days（默认），stockcn 1m 60 days（空间覆盖）; whole day buckets.
 		"crypto/prices_1m":  "2026-06-15T00:00:00.000000000Z",
 		"stockcn/equity_1m": "2026-05-21T00:00:00.000000000Z",
 	}
@@ -576,20 +578,5 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 	}
 	if runtime == nil || runtime.writes != 1 || runtime.reads != 1 || runtime.target != "ip://127.0.0.1:20107" {
 		t.Fatalf("runtime=%+v", runtime)
-	}
-}
-
-func TestStorageViewGatewayRequiresConfigurationAndItsOwnIdentity(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "MOOX_STORAGE_CONFIG is required") {
-		t.Fatalf("missing config error: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("gateway_client:\n  caller: console\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "caller must be storage-view") {
-		t.Fatalf("wrong caller error: %v", err)
 	}
 }

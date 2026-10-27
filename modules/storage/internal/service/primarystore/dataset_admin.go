@@ -16,7 +16,7 @@ type datasetAdminDataNodeClient interface {
 }
 
 // DeleteDatasetRows removes physical rows before Metadata deletes the Dataset.
-// Collector task results and Factor result datasets use separate credentials.
+// 谁能调用由网关 ACL 决定，这里只校验服务签名。
 func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDatasetRowsReq) (*pb.PrimaryDeleteDatasetRowsRsp, error) {
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
@@ -30,15 +30,11 @@ func (s *Service) DeleteDatasetRows(ctx context.Context, req *pb.PrimaryDeleteDa
 	if !found || dataset == nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
 	}
-	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
-	if owner == "" {
-		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
-	}
 	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
 	if ownerNodeID == "" {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.PrimaryDeleteDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
@@ -76,15 +72,11 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 	if !found || dataset == nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, errors.New("dataset not found"))}, nil
 	}
-	owner := datasetRowsOwner(dataset, req.GetAuthInfo())
-	if owner == "" {
-		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("dataset is not owned by the authorized destructive caller"))}, nil
-	}
 	ownerNodeID := strings.TrimSpace(dataset.GetDataNodeId())
 	if ownerNodeID == "" {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset has no owner DataNode"))}, nil
 	}
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId(), owner); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: markerError(err)}, nil
 	}
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
@@ -104,20 +96,4 @@ func (s *Service) RestoreDatasetRows(ctx context.Context, req *pb.PrimaryRestore
 		return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	return &pb.PrimaryRestoreDatasetRowsRsp{RetInfo: response.GetRetInfo()}, nil
-}
-
-func datasetRowsOwner(dataset *pb.Dataset, auth *pb.AuthInfo) string {
-	if dataset == nil || auth == nil {
-		return ""
-	}
-	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
-	attrs := dataset.GetAttributes()
-	if isFactorAppID(appID) && attrEquals(attrs, "dataset_role", "factor_result") && attrEquals(attrs, "write_owner", "factor") {
-		return "factor"
-	}
-	if isOwnedAppID(appID, "collector") && attrEquals(attrs, "owner_module", "collector") &&
-		(strings.TrimSpace(attrs["collector_task_id"]) != "" || strings.TrimSpace(attrs["resample_task_id"]) != "") {
-		return "collector"
-	}
-	return ""
 }

@@ -94,9 +94,6 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
-	if err := coremetadata.PreserveDatasetOwnerAttributes(existing, item); err != nil {
-		return nil, err
-	}
 	if item.GetRevision() != 0 && item.GetRevision() != existing.GetRevision() {
 		return nil, ErrRevisionConflict
 	}
@@ -208,7 +205,7 @@ func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID str
 
 func deleteManagedFactorResultDefaultView(ctx context.Context, tx *sql.Tx, dataset *pb.Dataset) error {
 	attrs := dataset.GetAttributes()
-	if !strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") || !strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
+	if !strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") {
 		return errors.New("factor_result Dataset ownership metadata is invalid")
 	}
 	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
@@ -437,9 +434,6 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
 		return nil, errors.New("space_id, dataset_id, data_node_id and name are required")
 	}
-	if item.GetDataSourceId() == "" && !collectorOwnedDataset(item) {
-		return nil, errors.New("data_source_id is required unless owner_module is collector")
-	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil, errors.New("data_kind must be record or time_series")
 	}
@@ -450,13 +444,6 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
 	}
 	return item, nil
-}
-
-func collectorOwnedDataset(item *pb.Dataset) bool {
-	if item == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
 }
 
 func nullableDatasetSource(sourceID string) any {

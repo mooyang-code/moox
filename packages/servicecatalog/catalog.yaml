@@ -1464,20 +1464,6 @@ components:
             callers:
               - moox-cli
           - methods:
-              - ClaimViewIndexBuild
-              - UpdateViewIndexBuild
-              - ActivateViewIndex
-              - CommitViewSchemaExtension
-              - FailViewIndexBuild
-              - CreateViewRebuildLog
-              - UpdateViewRebuildLog
-              - UpsertSkippedViewRebuildLog
-              - UpsertViewPeriodDatasetState
-              - ListViewPeriodDatasetStates
-              - RecordViewSyncPoint
-            callers:
-              - storage-view
-          - methods:
               - ApplyTagSnapshot
               - ReportTagRunFailure
               - UpdateSubjectAttributes
@@ -1514,7 +1500,6 @@ components:
               - factor-mgr
               - monitor
               - strategy
-              - storage-view
           - methods:
               - CreateDataset
               - UpdateDataset
@@ -1617,12 +1602,11 @@ components:
               - factor-mgr
               - monitor
               - strategy
-              - storage-view
           - methods:
               - UpsertFields
             callers:
               - monitor
-          # collector-stream 的周期提交与补采写入；请求体的 AppId 仍是 moox-collector（周期 RPC 只接受 Collector 身份）。
+          # collector-stream 的周期提交与补采写入。
           - methods:
               - CommitTimeSeriesBatch
               - UpsertFields

@@ -3,7 +3,6 @@ package primarystore
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -21,11 +20,11 @@ type markerDataNodeClient interface {
 }
 
 func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.ReportCollectorPeriodCompletedReq) (*pb.ReportCollectorPeriodCompletedRsp, error) {
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector")
+	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
 	if err != nil {
 		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -49,11 +48,11 @@ func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.Re
 }
 
 func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor")
+	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
 	if err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -78,7 +77,7 @@ func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.Report
 
 func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
 	marker := req.GetSyncPoint()
-	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId(), ""); err != nil {
+	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId()); err != nil {
 		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
 	}
 	if marker.GetRequestId() == "" || (marker.GetSource() != "import" && marker.GetSource() != "catchup") {
@@ -116,7 +115,7 @@ func (s *Service) GetFactorPeriodComputed(ctx context.Context, req *pb.GetFactor
 		return &pb.GetFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	ownerNodeID, err := ownedDatasetNodeID(ctx, req.GetSpaceId(), req.GetDatasetId(), "factor")
+	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
 		return &pb.GetFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -152,30 +151,6 @@ func datasetOwnerNodeID(ctx context.Context, spaceID, datasetID string) (string,
 		return "", errors.New("dataset has no owner DataNode")
 	}
 	return nodeID, nil
-}
-
-func ownedDatasetNodeID(ctx context.Context, spaceID, datasetID, owner string) (string, error) {
-	dataset, err := snapshotDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return "", err
-	}
-	attrs := dataset.GetAttributes()
-	validOwner := false
-	switch owner {
-	case "collector":
-		// Collector 的原始采集结果与重采样结果都由它自己上报周期完成标记。
-		role := strings.ToLower(strings.TrimSpace(attrs["dataset_role"]))
-		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "collector") &&
-			(role == "raw_collection" || role == "kline_resample_result")
-	case "factor":
-		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") &&
-			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") &&
-			strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor")
-	}
-	if !validOwner {
-		return "", markerPermissionError{fmt.Errorf("%s marker requires a %s-owned Dataset", owner, owner)}
-	}
-	return datasetOwnerNodeID(ctx, spaceID, datasetID)
 }
 
 func snapshotDataset(ctx context.Context, spaceID, datasetID string) (*pb.Dataset, error) {
@@ -230,16 +205,12 @@ func (s *Service) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPoi
 	}
 }
 
-func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID, owner string) error {
+func (s *Service) validateMarkerCaller(auth *pb.AuthInfo, spaceID, datasetID string) error {
 	if spaceID == "" || datasetID == "" {
 		return markerValidationError{errors.New("space_id and dataset_id are required")}
 	}
 	if err := s.authorizeRequest(auth); err != nil {
 		return markerPermissionError{err}
-	}
-	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
-	if owner != "" && !isOwnedAppID(appID, owner) {
-		return markerPermissionError{fmt.Errorf("%s marker requires %s caller", owner, owner)}
 	}
 	return nil
 }

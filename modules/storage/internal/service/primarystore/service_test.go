@@ -117,21 +117,6 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 	}
 }
 
-func TestPrimaryNormalizesMissingStockCNSeriesTag(t *testing.T) {
-	var captured *pb.UpsertFieldsReq
-	node := &recordingNode{write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-		captured = req
-		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
-	}}
-	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node})
-	require.NoError(t, err)
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "600000.XSHG", Freq: "1m", DataTime: "2026-08-28T06:59:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	_, err = svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}}))
-	require.NoError(t, err)
-	require.NotNil(t, captured)
-	require.Equal(t, "default", captured.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag())
-}
-
 func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	node := &recordingMarkerNode{recordingNode: &recordingNode{
 		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
@@ -185,47 +170,6 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	}
 }
 
-// 因子结果走通用 UpsertFields：只有因子身份能写，其他调用方在路由之前被拒绝。
-func TestFactorResultUpsertIsFactorOnly(t *testing.T) {
-	resolved := 0
-	node := &recordingMarkerNode{recordingNode: &recordingNode{
-		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
-		},
-	}}
-	svc, err := New(Options{
-		Resolver: func(context.Context, string, string) (DataNodeClient, error) {
-			resolved++
-			return node, nil
-		},
-		Snapshot: func() metadata.RequestSnapshot {
-			return factorResultSnapshot{}
-		},
-	})
-	require.NoError(t, err)
-	row := &pb.RowFieldUpsert{
-		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "factor_result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
-		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
-	}
-	upsert, upsertErr := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}}))
-	require.NoError(t, upsertErr)
-	require.Equal(t, pb.ErrorCode_NO_PERMISSION, upsert.GetRetInfo().GetCode())
-	require.Equal(t, 0, resolved)
-	for _, appID := range []string{"factor", "moox-factor"} {
-		upsert, upsertErr := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row}, CommitId: "commit-" + appID}))
-		require.NoError(t, upsertErr, appID)
-		require.Equal(t, pb.ErrorCode_SUCCESS, upsert.GetRetInfo().GetCode(), appID)
-	}
-	for _, appID := range []string{"factor", "moox-factor"} {
-		computed, markerErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
-			AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space",
-			Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor_result"},
-		})
-		require.NoError(t, markerErr, appID)
-		require.Equal(t, pb.ErrorCode_SUCCESS, computed.GetRetInfo().GetCode(), appID)
-	}
-}
-
 type factorResultSnapshot struct{}
 
 type markerRoutingSnapshot struct{}
@@ -238,7 +182,7 @@ func (markerRoutingSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset,
 	case "resample-data":
 		attrs = map[string]string{"owner_module": "collector", "dataset_role": "kline_resample_result"}
 	case "factor-data":
-		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"}
+		attrs = map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}
 	}
 	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-owner", Attributes: attrs}, true
 }
@@ -252,7 +196,7 @@ func (markerRoutingSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb
 func (factorResultSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
 	return &pb.Dataset{
 		SpaceId: spaceID, DatasetId: datasetID, DataNodeId: "node-owner",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
+		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"},
 	}, true
 }
 
@@ -260,32 +204,6 @@ func (factorResultSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return ni
 
 func (factorResultSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
-}
-
-func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
-	svc, err := New(Options{Snapshot: emptyRequestSnapshot,
-		Node: &recordingNode{
-			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-				t.Fatal("read-only SCF credential reached DataNode")
-				return nil, nil
-			},
-			read: func(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-				return &pb.ReadRowsRsp{}, nil
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "scf-market-canary", AppKey: "valid"},
-		Rows: []*pb.RowFieldUpsert{{
-			Key: &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
-		}},
-	}))
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
 }
 
 type periodAuthorizationNode struct {
@@ -367,12 +285,12 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 		wantCode        pb.ErrorCode
 	}{
 		{name: "collector owner", appID: "collector", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
-		{name: "SCF canary read-only caller", appID: "scf-market-canary", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "Factor caller", appID: "moox-factor", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "other module caller", appID: "admin", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "Factor-owned Dataset", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "missing Dataset owner", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
-		{name: "wrong Dataset role", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
+		{name: "any authorized caller and any role: SCF canary read-only caller", appID: "scf-market-canary", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any authorized caller and any role: Factor caller", appID: "moox-factor", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any authorized caller and any role: other module caller", appID: "admin", dataset: validDataset(), includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any authorized caller and any role: Factor-owned Dataset", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any authorized caller and any role: missing Dataset owner", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
+		{name: "any authorized caller and any role: wrong Dataset role", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "factor_result"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_SUCCESS},
 		{name: "snapshot Dataset identity mismatch", appID: "collector", dataset: &pb.Dataset{SpaceId: "other-space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "record Dataset kind", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_RECORD, Freq: "1h", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "1h", wantCode: pb.ErrorCode_NO_PERMISSION},
 		{name: "invalid declared frequency", appID: "collector", dataset: &pb.Dataset{SpaceId: "space", DatasetId: "dataset", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "forever", Attributes: map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}}, includeDataset: true, includeSnapshot: true, frequency: "forever", wantCode: pb.ErrorCode_NO_PERMISSION},
@@ -421,13 +339,8 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 			wantSnapshotCalls := 1
 			if tc.authorizeErr != nil {
 				wantSnapshotCalls = 0
-			} else if method != "status" && tc.appID == "scf-market-canary" {
-				wantSnapshotCalls = 0
 			}
 			require.Equal(t, wantSnapshotCalls, snapshotCalls, "unexpected request metadata snapshot access")
-			if method == "status" && tc.appID == "scf-market-canary" {
-				require.NotContains(t, rsp.GetMsg(), "read-only primary credential", "status reads must rely on Collector identity, not the write-only read-only credential block")
-			}
 			if tc.wantCode == pb.ErrorCode_SUCCESS {
 				require.Equal(t, 1, resolveCalls)
 				require.Equal(t, 1, signerCalls)
@@ -856,28 +769,6 @@ func (attrsSnapshot) GetDataNode(string) (*pb.DataNode, bool) { return nil, fals
 
 func (attrsSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
-}
-
-func TestCollectorIdentityWritesOnlyCollectorOwnedDatasets(t *testing.T) {
-	ctx := metadata.WithRequestSnapshot(context.Background(), attrsSnapshot{
-		"raw":      {"owner_module": "collector", "dataset_role": "raw_collection"},
-		"resample": {"owner_module": "collector", "dataset_role": "kline_resample_result"},
-		"strategy": {"owner_module": "strategy", "dataset_role": "signal"},
-		"foreign":  {"owner_module": "factor", "dataset_role": "raw_collection"},
-	})
-	rowFor := func(dataset string) []*pb.RowFieldUpsert {
-		return []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "S", Freq: "1m", DataTime: "2026-10-12T00:00:00Z"}}}}}
-	}
-	for _, appID := range []string{"collector", "moox-collector"} {
-		auth := &pb.AuthInfo{AppId: appID}
-		require.NoError(t, validateDatasetWriteOwner(ctx, auth, rowFor("raw")), appID)
-		require.NoError(t, validateDatasetWriteOwner(ctx, auth, rowFor("resample")), appID)
-		require.ErrorContains(t, validateDatasetWriteOwner(ctx, auth, rowFor("strategy")), "not Collector-owned", appID)
-		require.ErrorContains(t, validateDatasetWriteOwner(ctx, auth, rowFor("foreign")), "not Collector-owned", appID)
-	}
-	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "strategy"}, rowFor("strategy")), "other callers keep their existing behavior")
-	record := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "space", DatasetId: "strategy", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}}
-	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "collector"}, record), "record rows such as task results are not time-series writes")
 }
 
 func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {

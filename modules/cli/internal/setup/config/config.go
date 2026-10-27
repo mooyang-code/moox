@@ -186,6 +186,23 @@ type StorageView struct {
 
 // StoragePolicy renders storage-policy.json, the file storage-primary and
 // storage-view load at startup.
+// RecommendedSpaceRetention 是各空间推荐的保留期，只用于 moox.toml 缺省与配置页的「恢复推荐值」；
+// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天，主机资源历史（mooxsys）只留短期。
+func RecommendedSpaceRetention() map[string]map[string]string {
+	sessionMarket := func(minute string) map[string]string {
+		return map[string]string{
+			"1m": minute, "5m": "300d", "15m": "900d",
+			"30m": storagepolicy.Forever, "1h": storagepolicy.Forever, "4h": storagepolicy.Forever,
+		}
+	}
+	return map[string]map[string]string{
+		"stockcn": sessionMarket("60d"),
+		"stockhk": sessionMarket("45d"),
+		"stockus": sessionMarket("40d"),
+		"mooxsys": {"30s": "48h", "1m": "7d"},
+	}
+}
+
 func (m Manifest) StoragePolicy() storagepolicy.Policy {
 	return storagepolicy.Policy{
 		Retention: storagepolicy.Retention{Defaults: m.StorageRetention.Defaults, Spaces: m.StorageRetention.Spaces},
@@ -515,7 +532,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.StorageRetention.Defaults = recommended.Retention.Defaults
 	}
 	if !md.IsDefined("storage_retention", "spaces") {
-		out.StorageRetention.Spaces = recommended.Retention.Spaces
+		out.StorageRetention.Spaces = RecommendedSpaceRetention()
 	}
 	if !md.IsDefined("storage_view", "maintenance_check_interval") {
 		out.StorageView.MaintenanceCheckInterval = "1m"
@@ -642,7 +659,7 @@ func validate(manifest *Manifest) error {
 	if err := policy.Validate(); err != nil {
 		return fmt.Errorf("config_invalid: storage policy: %w", err)
 	}
-	// 交易时段市场的估算只是提示；7×24 市场的保留期装不下 view_rows_per_series 时报错。
+	// 默认保留期装不下 view_rows_per_series 时报错；空间覆盖只提醒。
 	if errs, _ := policy.Coverage(); len(errs) > 0 {
 		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}

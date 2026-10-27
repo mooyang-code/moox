@@ -383,6 +383,7 @@ func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
 	retention, source := service.datasetRetention(&pb.Dataset{DataKind: pb.DataKind_DATA_KIND_RECORD})
 	require.Equal(t, "forever", retention)
 	require.Equal(t, "record", source)
+	service.retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
 	retention, source = service.datasetRetention(&pb.Dataset{SpaceId: "stockcn", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"})
 	require.Equal(t, "1440h", retention)
 	require.Equal(t, "space", source)

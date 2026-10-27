@@ -31,7 +31,7 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
 	require.Equal(t, "factor", meta.createdSpec.Attributes["owner_module"])
-	require.Equal(t, "factor", meta.createdSpec.Attributes["write_owner"])
+	require.NotContains(t, meta.createdSpec.Attributes, "write_owner")
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close"), paramsColumn()}, meta.createdSpec.Columns, "结果数据集创建时同时注册 __params 列")
 	require.Equal(t, "价格因子", meta.createdSpec.Name, "任务名称直接用作结果数据集的名称")
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)

@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Service) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ClaimViewIndexBuildRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ClaimViewIndexBuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	build, resumed, err := s.metadata.ClaimViewIndexBuild(ctx, req)
 	if err != nil {
 		return &pb.ClaimViewIndexBuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -23,6 +26,9 @@ func (s *Service) ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewInde
 }
 
 func (s *Service) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.UpdateViewIndexBuildRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.UpdateViewIndexBuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	build, err := s.metadata.UpdateViewIndexBuild(ctx, req)
 	if err != nil {
 		return &pb.UpdateViewIndexBuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -31,6 +37,9 @@ func (s *Service) UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIn
 }
 
 func (s *Service) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.ActivateViewIndexRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ActivateViewIndexRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	view, err := s.metadata.ActivateViewIndex(ctx, req)
 	if err != nil {
 		return &pb.ActivateViewIndexRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -45,7 +54,7 @@ func (s *Service) CommitViewSchemaExtension(ctx context.Context, req *pb.CommitV
 	if req == nil {
 		return &pb.CommitViewSchemaExtensionRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
-	if err := s.validateViewSchemaExtensionAuth(req.GetAuthInfo()); err != nil {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
 		return &pb.CommitViewSchemaExtensionRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	view, err := s.metadata.CommitViewSchemaExtension(ctx, req)
@@ -58,7 +67,8 @@ func (s *Service) CommitViewSchemaExtension(ctx context.Context, req *pb.CommitV
 	return &pb.CommitViewSchemaExtensionRsp{RetInfo: retinfo.Success("success"), View: view}, nil
 }
 
-func (s *Service) validateViewSchemaExtensionAuth(auth *pb.AuthInfo) error {
+// validateViewServiceAuth 校验 storage-view 的服务签名：storage-view 直连 Metadata，这些方法只给它用。
+func (s *Service) validateViewServiceAuth(auth *pb.AuthInfo) error {
 	if strings.TrimSpace(s.viewAuthSecret) == "" {
 		return errors.New("storage View auth secret is not configured")
 	}
@@ -76,6 +86,9 @@ func (s *Service) validateViewSchemaExtensionAuth(auth *pb.AuthInfo) error {
 }
 
 func (s *Service) FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.FailViewIndexBuildRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.FailViewIndexBuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	build, err := s.metadata.FailViewIndexBuild(ctx, req)
 	if err != nil {
 		return &pb.FailViewIndexBuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

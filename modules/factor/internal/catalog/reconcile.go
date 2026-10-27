@@ -90,7 +90,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		result.DataKind != storageio.DataKindTimeSeries ||
 		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
-		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
+		result.Attributes["source_dataset_id"] != set.SourceDatasetID {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
 	}
 	// The result dataset mirrors its source's subject scope; follow a source

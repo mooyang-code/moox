@@ -47,7 +47,6 @@ type Resolver func(ctx context.Context, spaceID, datasetID string) (DataNodeClie
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
-type ResultDatasetResolver func(context.Context, string, string) (string, error)
 type ViewSyncPointReader interface {
 	MissingViewSyncPointDatasets(context.Context, string, string, string, []string) ([]string, error)
 }
@@ -70,7 +69,6 @@ type Service struct {
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
 	rejection DeadlineRejectionObserver
-	result    ResultDatasetResolver
 	syncPoint ViewSyncPointReader
 }
 
@@ -85,7 +83,6 @@ type Options struct {
 	DatasetMetrics DatasetRunObserver
 	// DeadlineRejections 为空时不记录截止拒绝。
 	DeadlineRejections DeadlineRejectionObserver
-	ResultDataset      ResultDatasetResolver
 	SyncPoints         ViewSyncPointReader
 }
 
@@ -99,7 +96,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections, syncPoint: opts.SyncPoints,
 	}, nil
 }
 
@@ -132,20 +129,14 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
-	}
 	spaceID, datasetID := req.GetSpaceId(), req.GetDatasetId()
 	for _, row := range req.GetRows() {
 		if row == nil || row.GetKey() == nil || row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row dataset identity does not match request"))}, nil
 		}
 	}
-	rows := normalizeStockCNSeriesTags(req.GetRows())
+	rows := req.GetRows()
 	ctx = s.requestContext(ctx)
-	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	validator := requestValidator(ctx, s.validate)
 	for _, row := range rows {
 		if err := validateRow(ctx, row, validator); err != nil {
@@ -173,101 +164,6 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	}
 	s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: rsp.GetKeys()}, nil
-}
-
-const stockCNDefaultSeriesTag = "default"
-
-func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert {
-	rows := make([]*pb.RowFieldUpsert, 0, len(input))
-	for _, row := range input {
-		if row == nil {
-			rows = append(rows, nil)
-			continue
-		}
-		copyRow := proto.Clone(row).(*pb.RowFieldUpsert)
-		key := copyRow.GetKey()
-		series := key.GetTimeSeries()
-		if key.GetSpaceId() == "stockcn" && key.GetDatasetId() == "dataset_stockcn_equity_kline_1m" && series != nil && strings.TrimSpace(series.GetSeriesTag()) == "" {
-			series.SeriesTag = stockCNDefaultSeriesTag
-		}
-		rows = append(rows, copyRow)
-	}
-	return rows
-}
-
-// collectorWritableDataset 判断数据集是否归 Collector 所有：原始采集或重采样结果。
-func collectorWritableDataset(attrs map[string]string) bool {
-	return attrEquals(attrs, "owner_module", "collector") &&
-		(attrEquals(attrs, "dataset_role", "raw_collection") || attrEquals(attrs, "dataset_role", "kline_resample_result"))
-}
-
-func isFactorAppID(appID string) bool {
-	switch strings.ToLower(strings.TrimSpace(appID)) {
-	case "factor", "moox-factor":
-		return true
-	default:
-		return false
-	}
-}
-
-func isOwnedAppID(appID, owner string) bool {
-	appID = strings.ToLower(strings.TrimSpace(appID))
-	owner = strings.ToLower(strings.TrimSpace(owner))
-	if appID == owner || appID == "moox-"+owner {
-		return true
-	}
-	return owner == "factor" && isFactorAppID(appID)
-}
-
-func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
-	snapshot := metadata.RequestSnapshotFromContext(ctx)
-	if snapshot == nil {
-		return errors.New("metadata cache snapshot is unavailable")
-	}
-	checked := make(map[routeKey]struct{})
-	keyHasTimeSeriesRows := make(map[routeKey]bool)
-	for _, row := range rows {
-		if row != nil && row.GetKey() != nil && row.GetKey().GetTimeSeries() != nil {
-			keyHasTimeSeriesRows[routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}] = true
-		}
-	}
-	for _, row := range rows {
-		if row == nil || row.GetKey() == nil {
-			continue
-		}
-		key := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
-		if _, ok := checked[key]; ok {
-			continue
-		}
-		checked[key] = struct{}{}
-		dataset, ok := snapshot.GetDataset(key.spaceID, key.datasetID)
-		if !ok || dataset == nil {
-			continue
-		}
-		attrs := dataset.GetAttributes()
-		factorCaller := isFactorAppID(strings.ToLower(strings.TrimSpace(auth.GetAppId())))
-		// 因子结果与因子身份一一对应：因子结果只许因子写，因子身份也只能写完整归属于因子的结果数据集。
-		if (factorCaller || attrEquals(attrs, "dataset_role", "factor_result")) && !(factorCaller && factorOwnedResult(attrs)) {
-			return fmt.Errorf("dataset %s/%s: factor results are writable only by Factor, and Factor writes only its own results", key.spaceID, key.datasetID)
-		}
-		// Collector 身份（含函数凭据）写时序行时，只能写自己拥有的采集与重采样数据集；
-		// 记录型数据（任务结果等）不受此限制。
-		if isOwnedAppID(auth.GetAppId(), "collector") && keyHasTimeSeriesRows[key] && !collectorWritableDataset(attrs) {
-			return fmt.Errorf("dataset %s/%s is not Collector-owned collection data", key.spaceID, key.datasetID)
-		}
-		if !attrEquals(attrs, "write_owner", "factor") {
-			continue
-		}
-		if !factorCaller {
-			return fmt.Errorf("dataset %s/%s is writable only by Factor", key.spaceID, key.datasetID)
-		}
-	}
-	return nil
-}
-
-// factorOwnedResult 判断数据集是否完整归属于因子的结果数据集：角色、所属模块、写入方都是因子（去空白、忽略大小写）。
-func factorOwnedResult(attrs map[string]string) bool {
-	return attrEquals(attrs, "dataset_role", "factor_result") && attrEquals(attrs, "owner_module", "factor") && attrEquals(attrs, "write_owner", "factor")
 }
 
 func attrEquals(attrs map[string]string, key, want string) bool {

@@ -31,7 +31,6 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -110,25 +109,7 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage deadline rejection metrics: %w", err)
 	}
-	resultDatasetResolver := func(ctx context.Context, spaceID, sourceViewID string) (string, error) {
-		for pageNo := uint32(1); ; pageNo++ {
-			datasets, page, err := cached.ListDatasets(ctx, metadata.DatasetQuery{SpaceID: spaceID, Page: &pb.Page{Page: pageNo, Size: 100}})
-			if err != nil {
-				return "", err
-			}
-			for _, dataset := range datasets {
-				attrs := dataset.GetAttributes()
-				if attrs["dataset_role"] == "factor_result" && attrs["source_view_id"] == sourceViewID {
-					return dataset.GetDatasetId(), nil
-				}
-			}
-			if page == nil || !page.GetHasMore() || len(datasets) == 0 {
-				break
-			}
-		}
-		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
-	}
-	svc, err := primarystore.New(primarystore.Options{DeadlineRejections: deadlineRejections, Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{DeadlineRejections: deadlineRejections, Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -344,12 +325,13 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	gateway, err := openStorageViewGateway(root)
-	if err != nil {
-		return err
-	}
-	defer gateway.Close()
-	metadataProxy := viewservice.NewGatewayMetadataClient(gateway)
+	// 与 PrimaryStore 一样直连同机的 Metadata，服务签名由 View 密钥生成，不经网关。
+	metadataProxy := viewservice.NewDirectMetadataClient(pb.NewMetadataClientProxy(
+		client.WithTarget(envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20100")),
+		client.WithNetwork("tcp"),
+		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
+	), viewSecret)
 	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20102")
 	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	if primarySecret == "" {
@@ -505,24 +487,6 @@ func runViewRole() error {
 		defer stopViewMaintainer()
 	}
 	return <-serveErr
-}
-
-// openStorageViewGateway uses the module's public signing identity and canonical
-// host gateway configuration. Storage-internal data-plane calls remain direct.
-func openStorageViewGateway(dataDirectory string) (*gatewayclient.Client, error) {
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return nil, errors.New("MOOX_STORAGE_CONFIG is required for the storage-view gateway client")
-	}
-	var config storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &config, config.ApplyDefaults); err != nil {
-		return nil, err
-	}
-	if config.GatewayClient.Caller != "storage-view" {
-		return nil, errors.New("storage-view gateway_client.caller must be storage-view")
-	}
-	return config.GatewayClient.OpenInternal(path, dataDirectory, func(err error) { log.Printf("storage-view gateway directory refresh: %v", err) })
 }
 
 // connectStorageViewEventBus keeps the process alive across a transient
