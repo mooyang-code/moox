@@ -197,15 +197,8 @@ func normalizeStockCNSeriesTags(input []*pb.RowFieldUpsert) []*pb.RowFieldUpsert
 
 // collectorWritableDataset 判断数据集是否归 Collector 所有：原始采集或重采样结果。
 func collectorWritableDataset(attrs map[string]string) bool {
-	if strings.TrimSpace(attrs["owner_module"]) != "collector" {
-		return false
-	}
-	switch strings.TrimSpace(attrs["dataset_role"]) {
-	case "raw_collection", "kline_resample_result":
-		return true
-	default:
-		return false
-	}
+	return attrEquals(attrs, "owner_module", "collector") &&
+		(attrEquals(attrs, "dataset_role", "raw_collection") || attrEquals(attrs, "dataset_role", "kline_resample_result"))
 }
 
 func isFactorAppID(appID string) bool {
@@ -262,11 +255,10 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 		if isOwnedAppID(auth.GetAppId(), "collector") && keyHasTimeSeriesRows[key] && !collectorWritableDataset(attrs) {
 			return fmt.Errorf("dataset %s/%s is not Collector-owned collection data", key.spaceID, key.datasetID)
 		}
-		if attrs["write_owner"] != "factor" {
+		if !attrEquals(attrs, "write_owner", "factor") {
 			continue
 		}
-		appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
-		if !isFactorAppID(appID) {
+		if !factorCaller {
 			return fmt.Errorf("dataset %s/%s is writable only by Factor", key.spaceID, key.datasetID)
 		}
 	}

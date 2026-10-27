@@ -112,10 +112,10 @@ func datasetRowsOwner(dataset *pb.Dataset, auth *pb.AuthInfo) string {
 	}
 	appID := strings.ToLower(strings.TrimSpace(auth.GetAppId()))
 	attrs := dataset.GetAttributes()
-	if isFactorAppID(appID) && attrs["dataset_role"] == "factor_result" && attrs["write_owner"] == "factor" {
+	if isFactorAppID(appID) && attrEquals(attrs, "dataset_role", "factor_result") && attrEquals(attrs, "write_owner", "factor") {
 		return "factor"
 	}
-	if isOwnedAppID(appID, "collector") && strings.TrimSpace(attrs["owner_module"]) == "collector" &&
+	if isOwnedAppID(appID, "collector") && attrEquals(attrs, "owner_module", "collector") &&
 		(strings.TrimSpace(attrs["collector_task_id"]) != "" || strings.TrimSpace(attrs["resample_task_id"]) != "") {
 		return "collector"
 	}
