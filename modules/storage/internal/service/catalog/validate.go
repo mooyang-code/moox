@@ -95,19 +95,6 @@ func validateColumnDisplayName(field string, attrs map[string]string) error {
 	return nil
 }
 
-// ColumnFillAttribute 是数据集字段的缺失行填充规则属性（因子机本地存储用，设计 3.4）：
-// prev 取上一期该字段的值（默认），prev_close 取上一期的 close，zero 填 0。
-const ColumnFillAttribute = "fill"
-
-func validateColumnFill(attrs map[string]string) error {
-	value := strings.TrimSpace(attrs[ColumnFillAttribute])
-	switch value {
-	case "", "prev", "prev_close", "zero":
-		return nil
-	}
-	return fmt.Errorf("dataset column attribute %s must be one of prev, prev_close, zero; got %q", ColumnFillAttribute, value)
-}
-
 // isDatasetViewColumn reports whether a View column reads a Dataset column.
 // Metadata stores an unspecified origin type as a dataset column.
 func isDatasetViewColumn(column *pb.ViewColumn) bool {

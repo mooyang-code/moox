@@ -33,7 +33,6 @@ type Metadata interface {
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
 	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
-	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
 	ListSubjects(context.Context, *storagepb.ListSubjectsReq, ...client.Option) (*storagepb.ListSubjectsRsp, error)
 }
 
@@ -154,10 +153,6 @@ func (c *Client) UpdateSubjectAttributes(ctx context.Context, request *storagepb
 
 func (c *Client) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq, options ...client.Option) (*storagepb.GetDataSourceRsp, error) {
 	return invoke[storagepb.GetDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataSource", request, options)
-}
-
-func (c *Client) UpdateDataSource(ctx context.Context, request *storagepb.UpdateDataSourceReq, options ...client.Option) (*storagepb.UpdateDataSourceRsp, error) {
-	return invoke[storagepb.UpdateDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateDataSource", request, options)
 }
 
 func (c *Client) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq, options ...client.Option) (*storagepb.ListSubjectsRsp, error) {

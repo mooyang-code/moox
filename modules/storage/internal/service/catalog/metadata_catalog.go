@@ -510,9 +510,6 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := validateColumnFill(item.GetAttributes()); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil

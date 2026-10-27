@@ -38,17 +38,3 @@ func TestDatasetViewColumnUsesTheBareColumnName(t *testing.T) {
 	column.ColumnName, column.OriginId = "data_time", "data_time"
 	require.ErrorContains(t, validateViewColumnName(column), "reserved system column")
 }
-
-func TestValidateColumnFill(t *testing.T) {
-	for _, ok := range []string{"", "prev", "prev_close", "zero", " zero "} {
-		if err := validateColumnFill(map[string]string{ColumnFillAttribute: ok}); err != nil {
-			t.Fatalf("fill %q should be accepted: %v", ok, err)
-		}
-	}
-	if err := validateColumnFill(nil); err != nil {
-		t.Fatalf("nil attributes: %v", err)
-	}
-	if err := validateColumnFill(map[string]string{ColumnFillAttribute: "next"}); err == nil {
-		t.Fatal("unknown fill rule must be rejected")
-	}
-}
