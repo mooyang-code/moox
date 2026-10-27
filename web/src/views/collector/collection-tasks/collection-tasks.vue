@@ -267,7 +267,7 @@
                 multiple
               >
                 <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
-                  {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
+                  {{ tag.tag_name }}（{{ tagSource(tag) || "-" }} / {{ tagMarketType(tag) || "-" }}）
                 </a-option>
               </a-select>
               <span class="field-hint">Provider 和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。</span>
@@ -535,6 +535,7 @@ import {
 } from "@/api/collector";
 import { getDataset, getView, listDataNodes, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
 import type { DataNode, Field, FieldGroup, Tag } from "@/api/storage/types";
+import { tagMarketType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { storeToRefs } from "pinia";
@@ -812,7 +813,7 @@ function taskTagSummary(task: CollectionTaskRecord): string {
 }
 
 function taskRouteSummary(task: CollectionTaskRecord): string {
-  const routes = [...new Set(tagsForTask(task).map(tag => `${tag.source || "-"} / ${tag.market_type || "-"}`))];
+  const routes = [...new Set(tagsForTask(task).map(tag => `${tagSource(tag) || "-"} / ${tagMarketType(tag) || "-"}`))];
   if (routes.length) return routes.join("；");
   if (task.data_type === "kline_resample") {
     const input = parseCollectionTaskInput(task);
@@ -1051,8 +1052,8 @@ function currentTaskInput(): CollectionTaskInput {
   const firstTag = selectedTags[0];
   return {
     dataType: editor.data_type,
-    provider: firstTag?.source || editor.provider,
-    market: (firstTag?.market_type || editor.market_type) as CollectionTaskMarket,
+    provider: (firstTag && tagSource(firstTag)) || editor.provider,
+    market: ((firstTag && tagMarketType(firstTag)) || editor.market_type) as CollectionTaskMarket,
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,

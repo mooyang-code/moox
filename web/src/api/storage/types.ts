@@ -120,23 +120,17 @@ export interface DataSource {
   space_id: string;
   data_source_id: string;
   name: string;
-  kind: string;
-  market?: string;
-  timezone?: string;
-  config_json?: string;
   status: string;
   created_at?: string;
   updated_at?: string;
+  /** 业务含义放在属性里，Storage 原样保存。 */
   attributes?: Record<string, string>;
 }
 
 export interface Subject {
   space_id: string;
   subject_id: string;
-  subject_type: string;
   name: string;
-  market?: string;
-  currency?: string;
   timezone?: string;
   status: string;
   created_at?: string;
@@ -154,17 +148,12 @@ export interface Tag {
   description?: string;
   mode: TagMode;
   builtin?: boolean;
-  source: string;
-  market_type: string;
-  cron?: string;
-  timezone?: string;
-  last_run_at?: string;
-  last_status?: "" | "success" | "failed";
-  last_error?: string;
   active_count?: number;
   inactive_count?: number;
   created_at?: string;
   updated_at?: string;
+  /** 市场类型与同步配置放在属性里：market_type、sync.source、sync.cron、sync.timezone。 */
+  attributes?: Record<string, string>;
 }
 
 export interface TagMember {
