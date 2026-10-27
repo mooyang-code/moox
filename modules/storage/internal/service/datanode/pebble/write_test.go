@@ -186,3 +186,32 @@ func TestUpsertFieldsRejectsRowsOfAnotherDataset(t *testing.T) {
 		t.Fatalf("outbox entries=%d err=%v", len(entries), err)
 	}
 }
+
+// commit 标记持久化：重开 Pebble 后同一 commit_id 仍判重（内容相同成功且不写入，内容不同冲突）。
+func TestUpsertFieldsCommitMarkerSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db")
+	rows := func(value float64) []*pb.RowFieldUpsert {
+		return []*pb.RowFieldUpsert{{Key: factorRowsKey("row-reopen"), Fields: []*pb.FieldValue{doubleField("close", value)}}}
+	}
+	store, err := Open(Options{Path: path, NodeID: "node-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(Options{Path: path, NodeID: "node-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if entries, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(1)); err != nil || len(entries) != 0 {
+		t.Fatalf("same commit after reopen entries=%d err=%v", len(entries), err)
+	}
+	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-reopen", rows(2)); !errors.As(err, new(CommitConflictError)) {
+		t.Fatalf("different content after reopen err=%v", err)
+	}
+}

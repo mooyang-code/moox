@@ -252,10 +252,10 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 			continue
 		}
 		attrs := dataset.GetAttributes()
-		// 因子结果只许因子写，且数据集的归属必须完整属于因子：缺失或属于别人都拒绝。
-		if attrs["dataset_role"] == "factor_result" &&
-			(!isFactorAppID(strings.ToLower(strings.TrimSpace(auth.GetAppId()))) || attrs["owner_module"] != "factor" || attrs["write_owner"] != "factor") {
-			return fmt.Errorf("dataset %s/%s is a factor result writable only by Factor", key.spaceID, key.datasetID)
+		factorCaller := isFactorAppID(strings.ToLower(strings.TrimSpace(auth.GetAppId())))
+		// 因子结果与因子身份一一对应：因子结果只许因子写，因子身份也只能写完整归属于因子的结果数据集。
+		if (factorCaller || attrEquals(attrs, "dataset_role", "factor_result")) && !(factorCaller && factorOwnedResult(attrs)) {
+			return fmt.Errorf("dataset %s/%s: factor results are writable only by Factor, and Factor writes only its own results", key.spaceID, key.datasetID)
 		}
 		// Collector 身份（含函数凭据）写时序行时，只能写自己拥有的采集与重采样数据集；
 		// 记录型数据（任务结果等）不受此限制。
@@ -271,6 +271,15 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 		}
 	}
 	return nil
+}
+
+// factorOwnedResult 判断数据集是否完整归属于因子的结果数据集：角色、所属模块、写入方都是因子（去空白、忽略大小写）。
+func factorOwnedResult(attrs map[string]string) bool {
+	return attrEquals(attrs, "dataset_role", "factor_result") && attrEquals(attrs, "owner_module", "factor") && attrEquals(attrs, "write_owner", "factor")
+}
+
+func attrEquals(attrs map[string]string, key, want string) bool {
+	return strings.EqualFold(strings.TrimSpace(attrs[key]), want)
 }
 
 func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowFieldUpsert, result string, committed, accepted bool) {

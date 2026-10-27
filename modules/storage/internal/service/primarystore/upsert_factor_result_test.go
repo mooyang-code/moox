@@ -78,7 +78,7 @@ func factorResultRequest(appID, commitID string, rows ...*pb.RowFieldUpsert) *pb
 	return &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, SpaceId: "space", DatasetId: "result", CommitId: commitID, Rows: rows}
 }
 
-// 因子结果只许因子写，且归属必须完整属于因子：调用方、owner_module、write_owner 任一不符都在路由之前拒绝。
+// 因子结果只许因子写、归属必须完整属于因子；因子身份也只能写自己的结果数据集。任一不符都在路由之前拒绝。
 func TestUpsertFieldsFactorResultRequiresFactorOwnership(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -89,6 +89,9 @@ func TestUpsertFieldsFactorResultRequiresFactorOwnership(t *testing.T) {
 		{"owner_module 属于别人", "factor", map[string]string{"owner_module": "collector", "dataset_role": "factor_result", "write_owner": "factor"}},
 		{"write_owner 属于别人", "factor", map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "collector"}},
 		{"缺 write_owner", "factor", map[string]string{"owner_module": "factor", "dataset_role": "factor_result"}},
+		{"非因子调用方写归属不全的因子结果", "collector", map[string]string{"dataset_role": "factor_result"}},
+		{"因子写采集数据集", "factor", map[string]string{"owner_module": "collector", "dataset_role": "raw_collection"}},
+		{"因子写无归属数据集", "moox-factor", map[string]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
