@@ -68,7 +68,7 @@ func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (
 }
 
 func (s *Service) ListDataSources(ctx context.Context, req *pb.ListDataSourcesReq) (*pb.ListDataSourcesRsp, error) {
-	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKind(), req.GetMarket(), req.GetKeyword(), req.GetPage())
+	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKeyword(), req.GetPage())
 	if err != nil {
 		return &pb.ListDataSourcesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -82,9 +82,6 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	if item.SubjectId == "" {
 		item.SubjectId = defaultID(item.GetName(), "subject")
-	}
-	if item.SubjectType == "" {
-		item.SubjectType = "custom"
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
@@ -105,7 +102,7 @@ func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.Ge
 }
 
 func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*pb.ListSubjectsRsp, error) {
-	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectType(), req.GetMarket(), req.GetSubjectIds(), req.GetKeyword(), req.GetPage())
+	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectIds(), req.GetKeyword(), req.GetPage())
 	if err != nil {
 		return &pb.ListSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}

@@ -401,7 +401,7 @@ func seedDatasetParents(t *testing.T, ctx context.Context, store *Store) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"source", "other"} {
-		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: id, Name: id, Kind: "internal"}); err != nil {
+		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: id, Name: id}); err != nil {
 			t.Fatal(err)
 		}
 	}

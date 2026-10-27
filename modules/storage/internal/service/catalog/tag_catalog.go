@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -130,31 +129,12 @@ func (s *Service) ApplyTagSnapshot(ctx context.Context, req *pb.ApplyTagSnapshot
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTagId()) == "" {
 		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and tag_id are required"))}, nil
 	}
-	runAt, err := parseTagRunAt(req.GetRunAt())
-	if err != nil {
-		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	result, err := s.metadata.ApplyTagSnapshot(ctx, req.GetSpaceId(), req.GetTagId(), runAt, req.GetItems())
+	result, err := s.metadata.ApplyTagSnapshot(ctx, req.GetSpaceId(), req.GetTagId(), req.GetItems())
 	if err != nil {
 		return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "ApplyTagSnapshot")
 	return &pb.ApplyTagSnapshotRsp{RetInfo: retinfo.Success("success"), Added: uint32(result.Added), Activated: uint32(result.Activated), Inactivated: uint32(result.Inactivated)}, nil
-}
-
-func (s *Service) ReportTagRunFailure(ctx context.Context, req *pb.ReportTagRunFailureReq) (*pb.ReportTagRunFailureRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTagId()) == "" {
-		return &pb.ReportTagRunFailureRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and tag_id are required"))}, nil
-	}
-	runAt, err := parseTagRunAt(req.GetRunAt())
-	if err != nil {
-		return &pb.ReportTagRunFailureRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := s.metadata.ReportTagRunFailure(ctx, req.GetSpaceId(), req.GetTagId(), runAt, req.GetError()); err != nil {
-		return &pb.ReportTagRunFailureRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "ReportTagRunFailure")
-	return &pb.ReportTagRunFailureRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
 func (s *Service) UpdateSubjectAttributes(ctx context.Context, req *pb.UpdateSubjectAttributesReq) (*pb.UpdateSubjectAttributesRsp, error) {
@@ -178,16 +158,4 @@ func (s *Service) ResolveSubjects(ctx context.Context, req *pb.ResolveSubjectsRe
 		return &pb.ResolveSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ResolveSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items}, nil
-}
-
-func parseTagRunAt(raw string) (time.Time, error) {
-	if strings.TrimSpace(raw) == "" {
-		return time.Now().UTC(), nil
-	}
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
-		if parsed, err := time.Parse(layout, strings.TrimSpace(raw)); err == nil {
-			return parsed.UTC(), nil
-		}
-	}
-	return time.Time{}, errors.New("run_at must be RFC3339 or UTC SQL time")
 }

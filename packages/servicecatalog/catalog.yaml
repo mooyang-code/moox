@@ -1332,7 +1332,6 @@ components:
           - RemoveTagMembers
           - SetTagMemberStatus
           - ApplyTagSnapshot
-          - ReportTagRunFailure
           - UpdateSubjectAttributes
           - ResolveSubjects
           - CreateDataset
@@ -1465,7 +1464,6 @@ components:
               - moox-cli
           - methods:
               - ApplyTagSnapshot
-              - ReportTagRunFailure
               - UpdateSubjectAttributes
             callers:
               - collector

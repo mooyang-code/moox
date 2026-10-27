@@ -136,7 +136,7 @@ message ViewColumn {
   map<string, string> attributes = 11;
 }
 
-// DataSource 表示 Space 内的数据来源，交易所、行情接口、文件导入和内部计算都可作为来源。
+// DataSource 是 Space 内一个可引用的数据来源名字；业务含义放在 attributes，Storage 不解释。
 message DataSource {
   // space_id 是 DataSource 所属 Space。
   string space_id = 1;
@@ -144,25 +144,17 @@ message DataSource {
   string data_source_id = 2;
   // name 是数据来源名称，通常用于管理台展示。
   string name = 3;
-  // kind 表示来源类型，例如 exchange、vendor_api、file_import、manual 或 internal。
-  string kind = 4;
-  // market 是可选市场标识，例如 US、HK、CN 或 crypto。
-  string market = 5;
-  // timezone 是该来源默认时区。
-  string timezone = 6;
-  // config_json 是来源连接和采集配置，服务端应按敏感配置处理。
-  string config_json = 7;
   // status 表示启用、停用、构建中、归档或删除等状态。
-  string status = 8;
+  string status = 4;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
+  string created_at = 5;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 11;
+  string updated_at = 6;
+  // attributes 是写入方维护的扩展属性，Storage 原样保存。
+  map<string, string> attributes = 7;
 }
 
-// Tag 是 Subject 的分组；auto 标签成员由 moox-collector 同步。
+// Tag 是一组 Subject；业务含义（市场、同步配置等）放在 attributes，Storage 不解释。
 message Tag {
   string space_id = 1;
   string tag_id = 2;
@@ -170,19 +162,12 @@ message Tag {
   string description = 4;
   string mode = 5;
   bool builtin = 6;
-  // source 是标签唯一且创建后不可修改的数据来源。
-  string source = 7;
-  // market_type 是标签唯一且创建后不可修改的市场/产品类型。
-  string market_type = 8;
-  string cron = 9;
-  string timezone = 10;
-  string last_run_at = 11;
-  string last_status = 12;
-  string last_error = 13;
-  uint32 active_count = 14;
-  uint32 inactive_count = 15;
-  string created_at = 16;
-  string updated_at = 17;
+  uint32 active_count = 7;
+  uint32 inactive_count = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
+  map<string, string> attributes = 11;
 }
 
 // TagMember 是标签成员；tag_id 为空时 tag_ids 列出所属标签。
@@ -197,11 +182,9 @@ message TagMember {
 
 message TagSnapshotItem {
   string subject_id = 1;
-  string subject_type = 2;
-  string name = 3;
-  string market = 4;
-  string currency = 5;
-  string timezone = 6;
+  string name = 2;
+  string timezone = 3;
+  map<string, string> attributes = 4;
 }
 
 message SubjectAttributes {
@@ -216,30 +199,24 @@ message TagReference {
   string collector_task_id = 3;
 }
 
-// Subject 表示 Space 内的数据对象，交易标的只是其中一种。
+// Subject 表示 Space 内的数据对象；类型、市场、币种等业务字段放在 attributes，Storage 不解释。
 message Subject {
   // space_id 是 Subject 所属 Space。
   string space_id = 1;
   // subject_id 是 Space 内唯一的数据对象 ID。
   string subject_id = 2;
-  // subject_type 是对象类型，例如 stock、crypto_pair、ranking_board、news_source 或 custom。
-  string subject_type = 3;
   // name 是对象名称，通常用于管理台展示。
-  string name = 4;
-  // market 是可选市场标识。
-  string market = 5;
-  // currency 是交易、报价或结算币种。
-  string currency = 6;
+  string name = 3;
   // timezone 是该对象默认时区。
-  string timezone = 7;
+  string timezone = 4;
   // status 取值 active 或 disabled；disabled 仅表示人工停用。
-  string status = 8;
+  string status = 5;
   // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 9;
+  string created_at = 6;
   // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 10;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 11;
+  string updated_at = 7;
+  // attributes 是写入方维护的扩展属性，Storage 原样保存；改动会递增标的修订号。
+  map<string, string> attributes = 8;
 }
 
 // Dataset 是 Space 内可写的事实数据集，定义一类数据及其列契约。
@@ -730,14 +707,10 @@ message ListDataSourcesReq {
   common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
-  // kind 是可选来源类型过滤条件。
-  string kind = 3;
-  // market 是可选市场过滤条件。
-  string market = 4;
   // page 是分页参数。
-  common.Page page = 5;
-  // keyword 是按来源 ID、名称、类型或市场进行模糊搜索的关键词。
-  string keyword = 6;
+  common.Page page = 3;
+  // keyword 是按来源 ID 或名称进行模糊搜索的关键词。
+  string keyword = 4;
 }
 
 // ListDataSourcesRsp 表示列出数据来源的响应。
@@ -790,16 +763,12 @@ message ListSubjectsReq {
   common.AuthInfo auth_info = 1;
   // space_id 是可选使用空间 ID 过滤条件。
   string space_id = 2;
-  // subject_type 是可选对象类型过滤条件。
-  string subject_type = 3;
-  // market 是可选市场过滤条件。
-  string market = 4;
   // subject_ids 是可选对象 ID 白名单。
-  repeated string subject_ids = 5;
+  repeated string subject_ids = 3;
   // page 是分页参数。
-  common.Page page = 6;
-  // keyword 是按对象 ID、类型、名称、市场或币种进行模糊搜索的关键词。
-  string keyword = 7;
+  common.Page page = 4;
+  // keyword 是按对象 ID 或名称进行模糊搜索的关键词。
+  string keyword = 5;
 }
 
 // ListSubjectsRsp 表示列出数据对象的响应。
@@ -832,10 +801,8 @@ message ListTagMembersRsp { common.RetInfo ret_info = 1; repeated TagMember memb
 message TagMembersReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; }
 message TagMembersRsp { common.RetInfo ret_info = 1; uint32 affected = 2; }
 message SetTagMemberStatusReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated string subject_ids = 4; string status = 5; }
-message ApplyTagSnapshotReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; repeated TagSnapshotItem items = 5; }
+message ApplyTagSnapshotReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; repeated TagSnapshotItem items = 4; }
 message ApplyTagSnapshotRsp { common.RetInfo ret_info = 1; uint32 added = 2; uint32 activated = 3; uint32 inactivated = 4; }
-message ReportTagRunFailureReq { common.AuthInfo auth_info = 1; string space_id = 2; string tag_id = 3; string run_at = 4; string error = 5; }
-message ReportTagRunFailureRsp { common.RetInfo ret_info = 1; }
 message UpdateSubjectAttributesReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated SubjectAttributes items = 3; }
 message UpdateSubjectAttributesRsp { common.RetInfo ret_info = 1; uint32 updated = 2; uint32 skipped = 3; }
 message ResolveSubjectsReq { common.AuthInfo auth_info = 1; string space_id = 2; repeated string tag_ids = 3; }
@@ -1616,7 +1583,6 @@ service Metadata {
   rpc RemoveTagMembers(TagMembersReq) returns (TagMembersRsp);
   rpc SetTagMemberStatus(SetTagMemberStatusReq) returns (TagMembersRsp);
   rpc ApplyTagSnapshot(ApplyTagSnapshotReq) returns (ApplyTagSnapshotRsp);
-  rpc ReportTagRunFailure(ReportTagRunFailureReq) returns (ReportTagRunFailureRsp);
   rpc UpdateSubjectAttributes(UpdateSubjectAttributesReq) returns (UpdateSubjectAttributesRsp);
   rpc ResolveSubjects(ResolveSubjectsReq) returns (ResolveSubjectsRsp);
 

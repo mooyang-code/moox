@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -64,8 +63,7 @@ type TagStore interface {
 	AddTagMembers(context.Context, string, string, []string) (int, error)
 	RemoveTagMembers(context.Context, string, string, []string) (int, error)
 	SetTagMemberStatus(context.Context, string, string, []string, string) (int, error)
-	ApplyTagSnapshot(context.Context, string, string, time.Time, []*pb.TagSnapshotItem) (TagSnapshotResult, error)
-	ReportTagRunFailure(context.Context, string, string, time.Time, string) error
+	ApplyTagSnapshot(context.Context, string, string, []*pb.TagSnapshotItem) (TagSnapshotResult, error)
 	UpdateSubjectAttributes(context.Context, string, []*pb.SubjectAttributes) (int, int, error)
 	ResolveSubjects(context.Context, string, []string) ([]*pb.Subject, error)
 }

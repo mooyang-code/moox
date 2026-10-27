@@ -12,7 +12,7 @@ var collectorOwner = map[string]string{"owner_module": "collector", "dataset_rol
 
 func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 	ctx, store := newDatasetSourceStore(t)
-	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "other", Name: "Other", Kind: "internal", Status: "active"}); err != nil {
+	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "other", Name: "Other", Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{

@@ -11,7 +11,7 @@ import (
 )
 
 func testAutoTag(id string) *pb.Tag {
-	return &pb.Tag{SpaceId: "space", TagId: id, TagName: id, Mode: metadata.TagModeAuto, Source: "source", MarketType: "spot"}
+	return &pb.Tag{SpaceId: "space", TagId: id, TagName: id, Mode: metadata.TagModeAuto}
 }
 
 func TestUpsertTagDefaultsAndValidation(t *testing.T) {
@@ -23,19 +23,15 @@ func TestUpsertTagDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetCron() != "0 * * * *" || got.GetTimezone() != "UTC" || got.GetBuiltin() {
+	if got.GetBuiltin() || len(got.GetAttributes()) != 0 {
 		t.Fatalf("defaults not applied: %v", got)
 	}
 
 	cases := map[string]*pb.Tag{
 		"bad id":          {SpaceId: "space", TagId: "Bad-ID", TagName: "x", Mode: metadata.TagModeManual},
 		"bad mode":        {SpaceId: "space", TagId: "x1", TagName: "x1", Mode: "sync"},
-		"missing source":  {SpaceId: "space", TagId: "x2", TagName: "x2", Mode: metadata.TagModeAuto, MarketType: "spot"},
-		"missing market":  {SpaceId: "space", TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual, Source: "source"},
-		"bad market type": {SpaceId: "space", TagId: "x4", TagName: "x4", Mode: metadata.TagModeAuto, Source: "source", MarketType: "option"},
-		"bad cron":        {SpaceId: "space", TagId: "x5", TagName: "x5", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot", Cron: "* * *"},
-		"bad timezone":    {SpaceId: "space", TagId: "x6", TagName: "x6", Mode: metadata.TagModeManual, Source: "source", MarketType: "spot", Timezone: "Mars/Base"},
-		"unknown source":  {SpaceId: "space", TagId: "x7", TagName: "x7", Mode: metadata.TagModeAuto, Source: "missing", MarketType: "spot"},
+		"missing name":    {SpaceId: "space", TagId: "x2", Mode: metadata.TagModeAuto},
+		"missing space":   {TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual},
 	}
 	for name, item := range cases {
 		if _, err := store.UpsertTag(ctx, item); !errors.Is(err, metadata.ErrTagInvalid) {
@@ -141,54 +137,30 @@ func TestDeleteTagProtection(t *testing.T) {
 	}
 }
 
-func TestCreateTagAllowsMissingSubjectListingCapabilityFailOpen(t *testing.T) {
+// 标签的业务含义只在 attributes 里：Storage 原样保存、可以改，不做取值校验。
+func TestTagAttributesRoundTripAndAreMutable(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-
-	// Bootstrap seeds DataSources/Tags before Collector has published
-	// subject_listing. Missing capability metadata is therefore fail-open; the
-	// planner/provider still validates the concrete route before dispatch.
-	if _, err := store.CreateTag(ctx, &pb.Tag{
-		SpaceId: "space", TagId: "legacy_spot", TagName: "legacy spot", Mode: metadata.TagModeAuto, Source: "source", MarketType: "spot",
-	}); err != nil {
-		t.Fatalf("missing subject_listing metadata must remain fail-open: %v", err)
+	item := testAutoTag("binance_spot")
+	item.Attributes = map[string]string{"market_type": "spot", "sync.cron": "13 * * * *"}
+	if _, err := store.CreateTag(ctx, item); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestCreateTagEnforcesPublishedSubjectListingCapabilities(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	_, err := store.UpsertDataSource(ctx, &pb.DataSource{
-		SpaceId: "space", DataSourceId: "capable", Name: "capable", Kind: "internal", Status: "active",
-		Attributes: map[string]string{"subject_listing": `{"instrument_types":["spot"]}`},
-	})
+	got, err := store.GetTag(ctx, "space", "binance_spot")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "capable_spot", TagName: "capable spot", Mode: metadata.TagModeAuto, Source: "capable", MarketType: "spot"}); err != nil {
-		t.Fatalf("supported market type rejected: %v", err)
+	if got.GetAttributes()["market_type"] != "spot" || got.GetAttributes()["sync.cron"] != "13 * * * *" {
+		t.Fatalf("attributes = %v", got.GetAttributes())
 	}
-	_, err = store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "capable_swap", TagName: "capable swap", Mode: metadata.TagModeAuto, Source: "capable", MarketType: "swap"})
-	if !errors.Is(err, metadata.ErrTagInvalid) || !strings.Contains(err.Error(), "does not support market_type") {
-		t.Fatalf("unsupported market type err=%v, want ErrTagInvalid capability diagnostic", err)
-	}
-}
-
-func TestCreateTagRejectsCorruptPublishedSubjectListingCapabilities(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	_, err := store.UpsertDataSource(ctx, &pb.DataSource{
-		SpaceId: "space", DataSourceId: "broken", Name: "broken", Kind: "internal", Status: "active",
-		Attributes: map[string]string{"subject_listing": `{not-json}`},
-	})
+	item = testAutoTag("binance_spot")
+	item.Attributes = map[string]string{"market_type": "swap"}
+	got, err = store.UpsertTag(ctx, item)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.CreateTag(ctx, &pb.Tag{SpaceId: "space", TagId: "broken_spot", TagName: "broken spot", Mode: metadata.TagModeAuto, Source: "broken", MarketType: "spot"})
-	if !errors.Is(err, metadata.ErrTagInvalid) || !strings.Contains(err.Error(), "invalid subject_listing") {
-		t.Fatalf("corrupt capability err=%v, want ErrTagInvalid", err)
+	if got.GetAttributes()["market_type"] != "swap" || len(got.GetAttributes()) != 1 {
+		t.Fatalf("改属性应整体替换：%v", got.GetAttributes())
 	}
 }
