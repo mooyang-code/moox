@@ -1,6 +1,6 @@
 # 通用写入取代 WriteFactorRows 设计
 
-状态：设计稿 v2（2026-10-27），已按 Codex 第一轮审查修订（见第 7 节），未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
+状态：设计稿 v3（2026-10-27），已按 Codex 两轮审查修订（见第 7 节），未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
 
 ## 0. 目标
 
@@ -70,10 +70,10 @@ DataNode `UpsertFieldsReq` 同样加 `space_id`、`dataset_id`、`commit_id`（�
 2. 鉴权：`authorizeRequest`；只读凭据拒绝（现有逻辑）。
 3. 行的数据集一致性：每行 `key.space_id/dataset_id` 等于请求顶层。
 4. `normalizeStockCNSeriesTags`（不在本设计范围，原样保留）。
-5. 写入方：`validateDatasetWriteOwner` 中 `dataset_role = factor_result` 的分支从"一律拒绝、要求走 `WriteFactorRows`"改为"只许因子身份写"；`write_owner = factor` 只许因子身份写的规则保留。这样即使有 `dataset_role = factor_result` 却没带 `write_owner` 的数据集（通用 `CreateDataset` 允许），也只有因子能写，权限与现在相同。请求元数据快照缺失时改为拒绝写入（现在静默跳过所有权检查；`ValidateRows` 同样需要快照，正常写入不受影响）。
+5. 写入方：`validateDatasetWriteOwner` 中 `dataset_role = factor_result` 的分支从"一律拒绝、要求走 `WriteFactorRows`"改为沿用 `WriteFactorRows` 现在的完整规则：调用方必须是因子身份，且数据集的 `owner_module`、`write_owner` 都必须是 `factor`（缺失或属于别人都拒绝）。`write_owner = factor` 只许因子身份写的规则保留。这样权限与现在完全相同。请求元数据快照缺失时改为拒绝写入（现在静默跳过所有权检查；`ValidateRows` 同样需要快照，正常写入不受影响）。
 6. 校验：`ValidateRows`（O2 的请求内缓存校验器）。它覆盖行键类型、频率、active 列、类型匹配与显式 NULL；因子路径独有的 `factorResultColumnNames` 与重复的 active 检查删除。与旧因子路径相比有两处有意放宽、统一按通用规则：数据集状态为空视同 active；字段 ID 既可以是列名也可以是列的 `origin_id`。因子引擎只写列名，行为不变。
 7. 路由到数据集所在的数据节点，原样下发 `space_id/dataset_id/commit_id/source_event_id/write_source`。
-8. 删除 `rejectUnauthorizedUpsertSemantics` / `privilegedWriteSource`（`write_kind` 删除后它不再保护任何东西）。
+8. 删除 `rejectUnauthorizedUpsertSemantics` / `privilegedWriteSource`（`write_kind` 删除后它不再保护任何东西），连同 `CommitTimeSeriesBatch` 里的调用（`primarystore/period.go:98`）。
 
 因子路径原来还拒绝行属性、要求每行有字段：前者是因子的业务约束，通用写入允许属性，因子引擎本来就不写属性，不再单独限制；后者由数据节点"至少一个字段或属性"覆盖。
 
@@ -172,16 +172,17 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID, sourceEventID, writeSource
 
 ## 5. 发布
 
-接口不兼容（旧引擎调用的 `WriteFactorRows` 被删除，新主库要求顶层数据集），服务目录与外部白名单变化，按整体发布执行，并在发布期间暂停所有写入方：
+接口不兼容（旧引擎调用的 `WriteFactorRows` 被删除，新主库要求顶层数据集），服务目录与外部白名单变化，按整体发布执行，并在发布期间暂停能暂停的写入方：
 
-1. 选在一个 5 分钟边界、本期全部任务算完之后（约 B+10 秒）开始。`moox-cli system pause`：按策略 → Trade → 因子引擎 → 采集逐个暂停（1m 采集与 collector-stream 一并暂停）。
+1. 选在一个 5 分钟边界、本期全部任务算完之后（约 B+10 秒）开始。先 `moox-cli system status` 确认策略、Trade、因子引擎、采集四个模块的健康端点都可达（未配置端点的模块会被跳过），再 `moox-cli system pause`：按策略 → Trade → 因子引擎 → 采集逐个暂停。
+   - 不在暂停范围内的写入入口：Monitor 主机指标在新旧版本交替的几分钟里写入失败、留一段指标空缺，可以接受；Web 与 CLI 数据导入是手工操作，发布期间不执行。
 2. 按发布手册"服务目录变化：必须整体发布"：三台主机的 host-gateway 与 host-gateway-cli（控制机最后）→ Admin → Monitor（Monitor 主机指标写入在换装前后短暂失败，换装后恢复）→ 存储机、海外机的 Access。
 3. Storage 三个组件（同一份二进制，view → node → primary）。
 4. 控制机其余换了二进制的组件：collector、collector-stream、factor-mgr、moox-cli、Web。
 5. 因子引擎（因子机），`compute.workers: 32` 保留。
-6. `moox-cli system resume`：采集补采暂停区间、因子同步并补算、策略记录周期，全部追平后统一放行。
+6. `moox-cli system resume`：采集补采暂停区间、追平后自行恢复实时采集；因子同步并补算；策略记录周期；Trade 对账。各模块按自己的追赶进度恢复，不是同时放行。
 7. 验收：
-   - `moox-cli system status` 全部追平；暂停前一期到恢复后第 3 期，5m 任务都有 `factor_period_done status=complete`（暂停区间由恢复追赶补上）。
+   - `moox-cli system status` 各模块都已追平并恢复；暂停前一期到恢复后第 3 期，5m 任务都有 `factor_period_done status=complete`（暂停区间由恢复追赶补上）。
    - `doctor alerts` 当前告警 0（Storage 重启后 1h 数据集的 producer stale 在下一个整点后消失）；Admin 的 `t_host_gateway_status` 三台主机期望与实际哈希一致，Monitor 日志没有 `catalog differs`。
    - 采集：K 线周期提交、补采、Monitor 主机指标写入正常；Web 数据导入页导入一个小文件。
    - 数据节点"storage node 写入"日志：因子写入等锁仍在 0～十几 ms。
@@ -201,7 +202,7 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID, sourceEventID, writeSource
 | 意见 | 处置 |
 |---|---|
 | commit 标记随来源标记按时间过期后，同一 `commit_id` 的旧内容重放会覆盖期间的补算结果；来源标记默认保留期是 192 小时而不是 7 天 | 接受。commit 标记不建时间索引、永久有效，只随删除数据集清理（2.4）；保留期数字更正 |
-| 删除 `factor_result` 分支后，`dataset_role = factor_result` 但无 `write_owner` 的数据集可被任意写入方写；快照缺失时静默跳过所有权检查 | 接受。该分支改为"只许因子身份写"，快照缺失时拒绝（2.2） |
+| 删除 `factor_result` 分支后，`dataset_role = factor_result` 但无 `write_owner` 的数据集可被任意写入方写；快照缺失时静默跳过所有权检查 | 接受。该分支沿用 `WriteFactorRows` 的完整归属规则，快照缺失时拒绝（2.2） |
 | 通用 `ValidateRows` 把空状态视同 active、接受 `origin_id` 作字段 ID，与旧因子路径不同 | 接受，明确为有意放宽、统一按通用规则（2.2） |
 | 因子写入改记变更日志后，`stageChangeLog` 的范围整理会新加进 `outboxMu` 临界区 | 接受。范围整理移到锁外（2.3） |
 | 漏了外部调用方 `factor-engine` 的白名单；整体发布范围不止控制机；发布期间应暂停全部旧写入方 | 接受。补白名单（2.8），第 5 节按整体发布手册重写并用 `system pause/resume` |
@@ -210,3 +211,12 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID, sourceEventID, writeSource
 | `RowsWritten` 描述不准；`CONFLICT` 在引擎不重试 | 接受，更正（2.6） |
 | 依赖清单补 eventmapper、生成代码、Access 测试、文档与指标 | 接受（2.9） |
 | `WriteIDByContent = false` 是默认值、生产构造都显式为 `true` | 接受，补充说明（第 3 节） |
+
+### 第二轮（Codex 复审，2026-10-27）：还需修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| 只检查"因子身份"会放行 `owner_module` 或 `write_owner` 属于别人的 `factor_result` 数据集 | 接受。沿用旧规则：调用方是因子，且 `owner_module`、`write_owner` 都为 `factor`（2.2） |
+| 删除 `rejectUnauthorizedUpsertSemantics` 漏了 `primarystore/period.go:98` 的调用 | 接受，补上（2.2） |
+| `system pause` 只覆盖策略、Trade、因子引擎、采集，未配置健康端点的会被跳过；Monitor 指标与 Web/CLI 导入不在范围内 | 接受。暂停前先核对四个端点；写明其余入口的处理（第 5 节） |
+| `system resume` 时采集追平后自行恢复，并非统一放行 | 接受，更正文案与验收（第 5 节） |
