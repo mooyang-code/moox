@@ -176,7 +176,9 @@ func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.Dataset
 			continue
 		}
 		allowed[column.GetColumnName()] = column
-		allowed[column.GetOriginId()] = column
+		if originID := column.GetOriginId(); originID != "" {
+			allowed[originID] = column
+		}
 	}
 	d.allowed, d.columnsLoaded = allowed, true
 	return allowed, nil

@@ -481,7 +481,7 @@ func (s *Service) checkReaddConsistent(ctx context.Context, task domain.FactorTa
 	}
 	for _, existing := range columns {
 		want, ok := wanted[existing.ColumnName]
-		if !ok || existing.OriginType != storageio.ColumnOriginFactor {
+		if !ok || existing.OriginType != storageio.ColumnOriginCustom {
 			continue
 		}
 		if existing.Attributes["member_kind"] != want.Attributes["member_kind"] ||
@@ -639,8 +639,8 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask,
 	}
 	origins := make(map[string]string)
 	for _, column := range resultColumns {
-		if column.OriginType == storageio.ColumnOriginFactor {
-			origins[column.ColumnName] = column.OriginID
+		if memberKey := column.Attributes["member_key"]; column.OriginType == storageio.ColumnOriginCustom && memberKey != "" {
+			origins[column.ColumnName] = memberKey
 		}
 	}
 	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {

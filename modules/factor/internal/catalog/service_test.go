@@ -266,11 +266,11 @@ func TestAddFactorToTaskRejectsOutputOwnedByOtherMember(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
-	// 被移除的成员留下了结果列 momentum，它属于另一个成员（origin_id 是成员键）。
+	// 被移除的成员留下了结果列 momentum，它属于另一个成员（成员键在列属性 member_key 里）。
 	retained := momentumColumn()
-	retained.OriginID = "gone_member"
+	retained.Attributes = map[string]string{"member_key": "gone_member"}
 	key := resultKey("crypto", testResultDatasetID())
-	meta.columns[key] = append(meta.columns[key], retained) // 直接放进 fake：Storage 本身不会接受 origin_id 与成员键不符的列
+	meta.columns[key] = append(meta.columns[key], retained)
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
@@ -357,8 +357,8 @@ func TestEnableMemberRevalidatesAndAddsColumnsWithoutBackfill(t *testing.T) {
 			output = col
 		}
 	}
-	require.Equal(t, storageio.ColumnOriginFactor, output.OriginType)
-	require.Equal(t, "momentum", output.OriginID, "origin_id 是成员键")
+	require.Equal(t, storageio.ColumnOriginCustom, output.OriginType)
+	require.Empty(t, output.OriginID, "自定义列不带 origin_id")
 	require.Equal(t, map[string]string{
 		"display_name": "momentum", "column_kind": "output", "factor_id": "momentum", "member_key": "momentum", "member_kind": "fixed",
 		"output_name": "momentum", "category_id": domain.DefaultCategoryID, "definition_hash": domain.DefinitionHash(domain.MustDefinition("momentum", "momentum", "output: ts_mean(close, 3)\n")),
@@ -787,7 +787,7 @@ func (f *metadataFake) CreateResultDataset(_ context.Context, spec storageio.Res
 			}
 		}
 		for _, column := range spec.Columns {
-			if err := validateStorageColumn(column); err != nil {
+			if err := validateResultColumnContract(column); err != nil {
 				return err
 			}
 		}
@@ -826,7 +826,7 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 		current[col.ColumnName] = col
 	}
 	for _, col := range cols {
-		if err := validateStorageColumn(col); err != nil {
+		if err := validateResultColumnContract(col); err != nil {
 			return err
 		}
 		current[col.ColumnName] = col
@@ -968,60 +968,52 @@ func validateStorageDatasetName(name string) error {
 	return nil
 }
 
-// validateStorageColumn 复刻 Storage 对因子结果列的校验（modules/storage 的 validateFactorResultColumn 与展示名规则），
-// 让单测在因子侧就能发现上线后才会被 Storage 拒绝的列。只检查来源为 FACTOR 的列。
-func validateStorageColumn(col storageio.ColumnInfo) error {
-	if col.OriginType != storageio.ColumnOriginFactor {
+// validateResultColumnContract 检查因子结果列的命名与类型契约（Storage 只校验通用规则，契约由 factor-mgr 自己保证）：
+// 来源都是 custom 且不带 origin_id，输出列名是成员键或 成员键__输出名、类型 double，__params 类型 json。
+func validateResultColumnContract(col storageio.ColumnInfo) error {
+	if col.OriginType != storageio.ColumnOriginCustom {
 		return nil
 	}
 	attrs := col.Attributes
 	switch attrs["column_kind"] {
 	case "params":
-		if col.ColumnName != "__params" || col.OriginID != "__params" || col.ValueType != storageio.ColumnTypeJSON {
-			return fmt.Errorf("storage 拒绝 params 列 %q", col.ColumnName)
+		if col.ColumnName != "__params" || col.ValueType != storageio.ColumnTypeJSON {
+			return fmt.Errorf("params 列 %q 必须叫 __params 且是 json", col.ColumnName)
 		}
-		if name := attrs["display_name"]; name == "" || !hasHan(name) {
-			return fmt.Errorf("storage 要求 __params 的展示名含汉字，得到 %q", name)
+		if attrs["display_name"] == "" {
+			return fmt.Errorf("__params 需要展示名")
 		}
 		return nil
 	case "output":
 	default:
-		return fmt.Errorf("storage 要求因子列带 column_kind，列 %q 得到 %q", col.ColumnName, attrs["column_kind"])
+		return fmt.Errorf("因子列契约要求因子列带 column_kind，列 %q 得到 %q", col.ColumnName, attrs["column_kind"])
 	}
 	factorID, memberKey, output, kind := attrs["factor_id"], attrs["member_key"], attrs["output_name"], attrs["member_kind"]
 	if factorID == "" || memberKey == "" || output == "" {
-		return fmt.Errorf("storage 要求输出列 %q 带 factor_id、member_key、output_name", col.ColumnName)
+		return fmt.Errorf("因子列契约要求输出列 %q 带 factor_id、member_key、output_name", col.ColumnName)
 	}
 	if kind != "fixed" && kind != "var" {
-		return fmt.Errorf("storage 要求 member_kind 是 fixed 或 var，列 %q 得到 %q", col.ColumnName, kind)
+		return fmt.Errorf("因子列契约要求 member_kind 是 fixed 或 var，列 %q 得到 %q", col.ColumnName, kind)
 	}
 	if memberKey != factorID && !strings.HasPrefix(memberKey, factorID+"__") {
-		return fmt.Errorf("storage 要求 member_key %q 以 factor_id %q 开头", memberKey, factorID)
+		return fmt.Errorf("因子列契约要求 member_key %q 以 factor_id %q 开头", memberKey, factorID)
 	}
 	want := memberKey
 	if output != factorID {
 		want = memberKey + "__" + output
 	}
 	if col.ColumnName != want {
-		return fmt.Errorf("storage 要求输出列名是 %q，得到 %q", want, col.ColumnName)
+		return fmt.Errorf("因子列契约要求输出列名是 %q，得到 %q", want, col.ColumnName)
 	}
-	if col.OriginID != memberKey {
-		return fmt.Errorf("storage 要求输出列 %q 的 origin_id 是成员键 %q，得到 %q", col.ColumnName, memberKey, col.OriginID)
+	if col.OriginID != "" {
+		return fmt.Errorf("自定义列 %q 不带 origin_id，得到 %q", col.ColumnName, col.OriginID)
 	}
 	if col.ValueType != storageio.ColumnTypeDouble {
-		return fmt.Errorf("storage 要求输出列 %q 是 double", col.ColumnName)
+		return fmt.Errorf("因子列契约要求输出列 %q 是 double", col.ColumnName)
 	}
 	if attrs["display_name"] != col.ColumnName {
-		return fmt.Errorf("storage 要求输出列 %q 的展示名等于列名，得到 %q", col.ColumnName, attrs["display_name"])
+		return fmt.Errorf("因子列契约要求输出列 %q 的展示名等于列名，得到 %q", col.ColumnName, attrs["display_name"])
 	}
 	return nil
 }
 
-func hasHan(text string) bool {
-	for _, r := range text {
-		if r >= 0x4e00 && r <= 0x9fff {
-			return true
-		}
-	}
-	return false
-}

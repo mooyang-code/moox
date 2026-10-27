@@ -87,24 +87,12 @@ func validateChineseDisplayName(field string, value string) error {
 	return fmt.Errorf("%s must contain Chinese characters", field)
 }
 
-func validateColumnDisplayName(field string, spaceID string, columnName string, attrs map[string]string, factorOutputColumn bool) error {
-	if attrs == nil {
-		return validateChineseDisplayName(field, "")
+// validateColumnDisplayName 要求列带显示名；显示名由建列的模块写入，Storage 不推断、不按业务规则校验。
+func validateColumnDisplayName(field string, attrs map[string]string) error {
+	if strings.TrimSpace(attrs["display_name"]) == "" {
+		return fmt.Errorf("%s is required", field)
 	}
-	displayName := strings.TrimSpace(attrs["display_name"])
-	if factorOutputColumn {
-		if displayName != strings.TrimSpace(columnName) {
-			return fmt.Errorf("%s must match the column name", field)
-		}
-		return nil
-	}
-	if spaceID == "mooxsys" {
-		if displayName == "" {
-			return fmt.Errorf("%s is required", field)
-		}
-		return nil
-	}
-	return validateChineseDisplayName(field, displayName)
+	return nil
 }
 
 // ColumnFillAttribute 是数据集字段的缺失行填充规则属性（因子机本地存储用，设计 3.4）：
@@ -120,38 +108,6 @@ func validateColumnFill(attrs map[string]string) error {
 	return fmt.Errorf("dataset column attribute %s must be one of prev, prev_close, zero; got %q", ColumnFillAttribute, value)
 }
 
-const factorResultDatasetPrefix = "dataset_factor_"
-
-// normalizeDatasetRole canonicalises the role attribute in place so that every
-// later strict comparison (write guards, default View creation, column sync)
-// sees the same value, then enforces the role-specific contract.
-func normalizeDatasetRole(dataset *pb.Dataset) error {
-	if dataset == nil {
-		return nil
-	}
-	role := strings.ToLower(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]))
-	if dataset.GetAttributes() != nil {
-		if _, ok := dataset.Attributes["dataset_role"]; ok {
-			dataset.Attributes["dataset_role"] = role
-		}
-	}
-	switch role {
-	case "merged_factor":
-		return errors.New("dataset_role merged_factor is retired; use raw_collection or factor_result")
-	case "factor_result":
-		// View consumers route result datasets to the ordered factor durable by
-		// this prefix, so the naming is part of the role contract.
-		if !strings.HasPrefix(dataset.GetDatasetId(), factorResultDatasetPrefix) {
-			return fmt.Errorf("factor_result dataset_id must start with %s", factorResultDatasetPrefix)
-		}
-	}
-	return nil
-}
-
-func isFactorResultDataset(dataset *pb.Dataset) bool {
-	return dataset != nil && strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result")
-}
-
 // isDatasetViewColumn reports whether a View column reads a Dataset column.
 // Metadata stores an unspecified origin type as a dataset column.
 func isDatasetViewColumn(column *pb.ViewColumn) bool {
@@ -163,16 +119,6 @@ func isDatasetViewColumn(column *pb.ViewColumn) bool {
 		return false
 	}
 	return true
-}
-
-func isFactorViewColumn(column *pb.ViewColumn) bool {
-	if !isDatasetViewColumn(column) {
-		return false
-	}
-	attrs := column.GetAttributes()
-	// 因子输出列在 View 里沿用数据集列的名字和属性；参数列 __params 不是因子输出。
-	return factorColumnKind(attrs) == factorColumnKindOutput && strings.TrimSpace(attrs["member_key"]) != "" &&
-		strings.TrimSpace(column.GetOriginId()) == strings.TrimSpace(column.GetColumnName())
 }
 
 func validateLowerSnakeID(field string, value string, maxLen int) error {

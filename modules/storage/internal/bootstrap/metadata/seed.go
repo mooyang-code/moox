@@ -344,8 +344,8 @@ func parseDatasetColumnOriginType(value string) pb.DatasetColumnOriginType {
 	switch value {
 	case "field":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
-	case "factor":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	case "custom":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
 	case "system":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
 	default:

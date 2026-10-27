@@ -21,7 +21,7 @@ const (
 	DatasetStatusDisabled   = "disabled"
 	ColumnStatusActive      = "active"
 	ColumnOriginField       = "field"
-	ColumnOriginFactor      = "factor"
+	ColumnOriginCustom      = "custom"
 	ColumnOriginSystem      = "system"
 	ColumnTypeString        = "string"
 	ColumnTypeInt           = "int"
@@ -554,8 +554,8 @@ func columnOriginFromProto(value storagepb.DatasetColumnOriginType) string {
 	switch value {
 	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
 		return ColumnOriginField
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-		return ColumnOriginFactor
+	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+		return ColumnOriginCustom
 	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM:
 		return ColumnOriginSystem
 	default:
@@ -567,8 +567,8 @@ func columnOriginToProto(value string) storagepb.DatasetColumnOriginType {
 	switch value {
 	case ColumnOriginField:
 		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
-	case ColumnOriginFactor:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	case ColumnOriginCustom:
+		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
 	case ColumnOriginSystem:
 		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
 	default:

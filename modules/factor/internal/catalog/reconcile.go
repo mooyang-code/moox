@@ -174,7 +174,7 @@ func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
 	if existing.OriginType != wanted.OriginType || existing.OriginID != wanted.OriginID || existing.ValueType != wanted.ValueType {
 		return false
 	}
-	if wanted.OriginType == storageio.ColumnOriginFactor {
+	if wanted.OriginType == storageio.ColumnOriginCustom {
 		return existing.Attributes["column_kind"] == wanted.Attributes["column_kind"] &&
 			existing.Attributes["member_key"] == wanted.Attributes["member_key"] &&
 			existing.Attributes["output_name"] == wanted.Attributes["output_name"] &&

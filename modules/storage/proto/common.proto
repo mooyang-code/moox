@@ -157,8 +157,9 @@ enum DatasetColumnOriginType {
   DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED = 0;
   // DATASET_COLUMN_ORIGIN_TYPE_FIELD 表示列来自 Space 内普通字段。
   DATASET_COLUMN_ORIGIN_TYPE_FIELD = 1;
-  // DATASET_COLUMN_ORIGIN_TYPE_FACTOR 表示列来自 Space 内已参数化因子结果。
-  DATASET_COLUMN_ORIGIN_TYPE_FACTOR = 2;
+  // DATASET_COLUMN_ORIGIN_TYPE_CUSTOM 表示数据集自己定义的值列：身份就是列名，不带 origin_id；
+  // 生产者信息由写入方放在列属性里，Storage 不解释。
+  DATASET_COLUMN_ORIGIN_TYPE_CUSTOM = 2;
   // DATASET_COLUMN_ORIGIN_TYPE_SYSTEM 表示列来自系统列，例如 subject_id、data_time 或 freq。
   DATASET_COLUMN_ORIGIN_TYPE_SYSTEM = 3;
 }

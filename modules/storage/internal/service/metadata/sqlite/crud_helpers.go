@@ -268,8 +268,8 @@ func valueTypeSQL(valueType pb.FieldValueType) string {
 
 func datasetOriginSQL(origin pb.DatasetColumnOriginType) string {
 	switch origin {
-	case pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-		return "factor"
+	case pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+		return "custom"
 	case pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM:
 		return "system"
 	default:

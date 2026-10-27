@@ -101,7 +101,7 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 				continue
 			}
 			switch column.GetOriginType() {
-			case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
+			case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
 			default:
 				continue
 			}
@@ -258,8 +258,8 @@ func originName(t storagepb.DatasetColumnOriginType) string {
 	switch t {
 	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
 		return "field"
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-		return "factor"
+	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+		return "custom"
 	default:
 		return ""
 	}

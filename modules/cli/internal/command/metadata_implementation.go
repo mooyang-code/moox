@@ -902,8 +902,8 @@ func parseDatasetColumnOriginType(value string) (pb.DatasetColumnOriginType, err
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_UNSPECIFIED, nil
 	case "FIELD":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, nil
-	case "FACTOR":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, nil
+	case "CUSTOM":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, nil
 	case "SYSTEM":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM, nil
 	default:

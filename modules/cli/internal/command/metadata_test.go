@@ -198,9 +198,9 @@ func TestParseDatasetColumnOriginType(t *testing.T) {
 	typ, err := parseDatasetColumnOriginType("FIELD")
 	require.NoError(t, err)
 	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, typ)
-	typ, err = parseDatasetColumnOriginType("FACTOR")
+	typ, err = parseDatasetColumnOriginType("CUSTOM")
 	require.NoError(t, err)
-	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, typ)
+	assert.Equal(t, pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, typ)
 }
 
 func TestParseColumnOriginType(t *testing.T) {

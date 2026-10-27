@@ -133,9 +133,6 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := normalizeDatasetRole(item); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
 	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -156,9 +153,6 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := normalizeDatasetRole(item); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	current, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
@@ -526,24 +520,14 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
-	dataset, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
-	if err != nil {
+	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	factorResult := isFactorResultDataset(dataset)
-	factorColumn := factorResult && item.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
-	// 输出列的展示名必须等于列名；参数列 __params 按普通业务列的规则（含中文），展示名叫「因子参数」。
-	factorOutput := factorColumn && factorColumnKind(item.GetAttributes()) != factorColumnKindParams
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetColumnName(), item.GetAttributes(), factorOutput); err != nil {
+	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateColumnFill(item.GetAttributes()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if factorColumn {
-		if err := validateFactorResultColumn(item); err != nil {
-			return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {
