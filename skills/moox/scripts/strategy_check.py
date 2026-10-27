@@ -209,6 +209,8 @@ def cmd_compare(args):
         fail('窗口里没有可比的期')
     if bad:
         raise SystemExit(1)
+    if shrink == 0:
+        print('提示：窗口里持仓数从未减少，"整个币退出"的路径没有被检验到；在记录里写明，必要时延长窗口', file=sys.stderr)
     if nonempty == 0 or changed == 0:
         print('警告：窗口里没有持仓或权重从未变化，开仓 / 到期路径没有被检验到，需要更长或更活跃的窗口', file=sys.stderr)
         raise SystemExit(2)

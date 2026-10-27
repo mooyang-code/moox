@@ -105,7 +105,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
 - **期望值必须由原框架实际运行得到**，不能手算。F1 迁移时手算的 `rank(method='first')` 期望值写错过，用 pandas 跑一遍才发现。
 - 每种写法至少一个用例：多空、个数与百分比、每种过滤运算与类型、前后置过滤、并列、NaN、`volume = 0`、多空权重不同的激活组合、逻辑组合（用 `f1_utils` 生成）、多子策略合并，以及持有期到期。
 - 所有用例共用一份 K 线（`bars.json`）以控制体积；F1 的 13 个用例共 804 KB。误差不超过 1e-12。
-- 生成脚本放在 `local/`，用例数据进仓库（`modules/strategy/internal/engine/testdata/<名称>/`）。
+- 生成脚本放在 `local/`，用例数据进仓库（`modules/strategy/internal/engine/testdata/<名称>/`）。在仓库根目录用 `go test ./modules/strategy/internal/engine/ -run "F1"` 运行（F1 的黄金比对是 `TestF1MatchesAlphalibGolden`，另有条件表、逻辑组合、状态体积、重启恢复等用例）。
 
 ### 5.2 因子一致
 
@@ -195,7 +195,8 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" compare --targets out/targets
 **通过条件**：
 
 - 每期持仓集合相同，权重差为 0（或在截断精度内）；
-- 窗口里出现过开仓、按持有期到期、减仓（`compare` 输出的"权重变化"和"持仓数减少"都不能为 0），并且有持仓的期占多数；
+- 有持仓的期占多数，并且权重逐期有变化（`compare` 输出的"权重变化"不能为 0）。F1 每根 K 线都新开一份仓、旧仓按 h 到期，权重变化本身就检验了开仓和到期两条路径；
+- 最好也出现减仓（"持仓数减少"大于 0），这样能检验到"整个币退出"的路径。窗口里一次都没有减仓时，在记录里写明，必要时延长窗口；`compare` 会打印提示，但不因此判失败。F1 迁移时，FH001、FH002 都出现了减仓，FH003 在 51 期里没有出现；
 - 写出**精度边界**：最小子策略占比 ÷ 最长 h，与截断粒度相比。F1 是 5e-4 ÷ 36 ≈ 1.4e-5，小于 1e-4，所以单个子策略偶尔选错，可能被截断吸收。结论只能写"在 1e-4 精度内一致"，不能写"每个 top1 都一致"。
 
 ### 5.5 端到端耗时
@@ -215,6 +216,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" latency --factor-host <因子
   - 总计。
 
   各段含义以 `modules/strategy/internal/trigger/handler.go` 的 `logTiming` 和 `modules/factor/internal/engine/runner.go` 的 `factor_period_done` 为准。
+- **周期长度**：`--bar-minutes` 默认是 5。迁移 1m、15m 等其他周期的策略时必须传入，否则会按错误的 period 关联日志。
 - **冷启动与稳态分开**：冷启动指启用后前 3 期；稳态至少连续 48 期（5m 周期约 4 小时）。各段都报告 p50 / p95。
 - **先核对时钟**：跨主机做差之前，在每台主机上看 `chronyc tracking`。偏差在 50 ms 以内才能跨主机做差，否则只用同一台主机的时间戳。
 - **"因子完成 → 就绪"是 -0.05 秒左右**：这是正常的。策略在因子的 report 阶段就收到了就绪，而 `factor_period_done` 写在 report 之后，所以这一段约等于 0，不是时钟偏差。
