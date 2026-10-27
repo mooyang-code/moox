@@ -23,24 +23,19 @@ const reconnectAfterSubscriptionErrors = 3
 type Config struct {
 	PartitionID      string
 	FilterSubjects   []string
-	PartitionConfigs []Config
 	DatasetRoutes    []DatasetRoute
-	// AllowedDatasetSpaces preserves wildcard-route policy after startup
-	// inventory expansion. Dynamic View consumers may only discover Datasets in
-	// these spaces; an empty list means no dynamic discovery is permitted.
-	AllowedDatasetSpaces []string
-	Consumer             string
-	AckWaitMS            int
-	FetchBatch           int
-	MaxWorkers           int
-	MaxAckPending        int
-	Ordering             string
-	DeliverPolicy        string
-	MaxRetryAttempts     int
-	ErrorReporter        jetstream.ErrorReporter
-	Metrics              *observability.ViewMetrics
-	BeforeProcess        func(context.Context, *jetstream.Delivery) error
-	BoundReporter        func(bool)
+	Consumer         string
+	AckWaitMS        int
+	FetchBatch       int
+	MaxWorkers       int
+	MaxAckPending    int
+	Ordering         string
+	DeliverPolicy    string
+	MaxRetryAttempts int
+	ErrorReporter    jetstream.ErrorReporter
+	Metrics          *observability.ViewMetrics
+	BeforeProcess    func(context.Context, *jetstream.Delivery) error
+	BoundReporter    func(bool)
 }
 
 type DatasetRoute struct {

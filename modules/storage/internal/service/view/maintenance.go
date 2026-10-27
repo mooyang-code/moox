@@ -494,7 +494,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 					return err
 				}
 				if err := validatePhysicalViewContract(view, stats); err != nil {
-					if recovered, recoverErr := s.recoverFactorResultSchemaExtension(ctx, opts, auth, view, engine, stats); recoverErr != nil {
+					if recovered, recoverErr := s.recoverViewSchemaExtension(ctx, opts, auth, view, engine, stats); recoverErr != nil {
 						log.Printf("storage view factor-result schema recovery deferred on restore space=%s view=%s: %v", view.GetSpaceId(), view.GetViewId(), recoverErr)
 						continue
 					} else if recovered {
@@ -618,20 +618,19 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	}
 }
 
+// defaultViewMaintenancePriority 是 View 没有声明 maintenance_priority 时的维护顺序。
+const defaultViewMaintenancePriority = 50
+
+// viewMaintenancePriority 读取 View 属性 maintenance_priority（整数，越小越先维护）；缺失或非法取默认值。
 func viewMaintenancePriority(view *pb.View) int {
 	if view == nil {
 		return 100
 	}
-	// Collection results feed factor computation, so they are maintained
-	// before factor results, and both before everything else.
-	switch {
-	case strings.EqualFold(strings.TrimSpace(view.GetAttributes()["view_role"]), "collection_browse"):
-		return 0
-	case isFactorResultView(view):
-		return 10
-	default:
-		return 50
+	priority, err := strconv.Atoi(strings.TrimSpace(view.GetAttributes()["maintenance_priority"]))
+	if err != nil {
+		return defaultViewMaintenancePriority
 	}
+	return priority
 }
 
 func sortViewsForMaintenance(views []*pb.View) {
@@ -754,7 +753,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				// live runtime we can build a replacement from the still-readable
 				// index; on startup RestoreActiveViews will fail closed and leave
 				// the actionable failed history row below.
-				if extended, recoveryErr := s.recoverFactorResultSchemaExtension(ctx, opts, auth, view, engine, stats); recoveryErr != nil {
+				if extended, recoveryErr := s.recoverViewSchemaExtension(ctx, opts, auth, view, engine, stats); recoveryErr != nil {
 					return fmt.Errorf("retry factor-result active schema recovery: %w", recoveryErr)
 				} else if extended {
 					return nil
@@ -765,7 +764,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 				if err := s.AttachActiveView(ctx, view); err != nil {
 					return err
 				}
-				if extended, err := s.extendActiveFactorResultSchema(ctx, opts, auth, view, engine); err != nil {
+				if extended, err := s.extendActiveViewSchema(ctx, opts, auth, view, engine); err != nil {
 					return err
 				} else if extended {
 					return nil

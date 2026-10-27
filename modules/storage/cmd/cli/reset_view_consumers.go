@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/requestauth"
@@ -101,8 +100,8 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	if err != nil {
 		return err
 	}
-	if err := storage.View.ValidateConsumerPartitions(nil); err != nil {
-		return fmt.Errorf("refusing destructive reset with invalid consumer topology: %w", err)
+	if err := storage.View.ValidateConsumer(); err != nil {
+		return fmt.Errorf("refusing destructive reset with invalid consumer settings: %w", err)
 	}
 	packageRoot := resolveRepairPackageRoot(opts.packageRoot, opts.storageConf)
 	if !opts.maintenanceLockHeld {
@@ -128,7 +127,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		return err
 	}
 	summary := resetViewConsumersSummary{
-		Stream: opts.stream, Consumers: append([]string(nil), events.StorageViewConsumerDurables...),
+		Stream: opts.stream, Consumers: resetConsumerDurables(views),
 		Views: len(views), DryRun: opts.dryRun,
 	}
 	for _, view := range views {
@@ -153,7 +152,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		// Validate the gateway path to Admin, the stream and the purge subjects
 		// before reporting an executable plan so a later destructive run cannot
 		// fail only after writers have been quiesced.
-		if err := preflightResetEventBus(ctx, admin, opts, storage.View, views); err != nil {
+		if err := preflightResetEventBus(ctx, admin, opts, views); err != nil {
 			return fmt.Errorf("preflight EventBus reset: %w", err)
 		}
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "dry_run", Summary: summary})
@@ -161,7 +160,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	// Complete all non-destructive EventBus checks before touching local
 	// metadata or index files. An unreachable Admin, an unavailable stream or a
 	// failed broker connection must remain fully recoverable.
-	if err := preflightResetEventBus(ctx, admin, opts, storage.View, views); err != nil {
+	if err := preflightResetEventBus(ctx, admin, opts, views); err != nil {
 		return fmt.Errorf("preflight EventBus reset: %w", err)
 	}
 	// Metadata and Primary/DataNode share the same deployment transaction as
@@ -220,7 +219,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	summary.ViewMetadataReset = true
 	// Purge the EventBus only after local metadata and physical files have been
 	// staged/reset successfully.
-	mutationStarted, err := resetStorageViewConsumers(ctx, admin, opts, storage.View, views)
+	mutationStarted, err := resetStorageViewConsumers(ctx, admin, opts, views)
 	if err != nil {
 		// Once a broker mutation may have happened, the old local incarnation
 		// cannot be restored safely because its pending events are gone. Keep the
@@ -625,15 +624,15 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 // preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，并且清除主题能渲染出来。
 // preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，
 // 并且要清除的主题都能渲染、都在 Admin 会接受的范围内（否则会在本地状态已经重置之后才被拒绝）。
-func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
-	if _, err := admin.Inspect(ctx, opts.stream, events.StorageViewConsumerDurables); err != nil {
+func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, views []resetViewRecord) error {
+	if _, err := admin.Inspect(ctx, opts.stream, resetConsumerDurables(views)); err != nil {
 		return fmt.Errorf("inspect stream %s: %w", opts.stream, err)
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
-	subjects, err := resetEventSubjects(registry, viewConfig, views)
+	subjects, err := resetEventSubjects(registry, views)
 	if err != nil {
 		return err
 	}
@@ -648,51 +647,84 @@ func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts reset
 // resetStorageViewConsumers 删除 View 消费者并清除数据集事件。mutationStarted 表示 EventBus 是否可能已被改动：
 // 为 false 时失败发生在任何改动之前（Admin 连不上 EventBus 等），本地状态还能安全恢复；为 true 时旧事件可能已经丢失，
 // 旧的本地状态不能再恢复，调用方要保留已重置的状态并让操作员重试。
-func resetStorageViewConsumers(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) (mutationStarted bool, err error) {
+func resetStorageViewConsumers(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, views []resetViewRecord) (mutationStarted bool, err error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return false, err
 	}
-	ordered, err := resetEventSubjects(registry, viewConfig, views)
+	ordered, err := resetEventSubjects(registry, views)
 	if err != nil {
 		return false, err
 	}
-	_, attempted, err := admin.DeleteConsumers(ctx, opts.stream, events.StorageViewConsumerDurables)
-	mutationStarted = attempted
-	if err != nil {
-		return mutationStarted, fmt.Errorf("delete consumers: %w", err)
+	if durables := resetConsumerDurables(views); len(durables) > 0 {
+		_, attempted, err := admin.DeleteConsumers(ctx, opts.stream, durables)
+		mutationStarted = attempted
+		if err != nil {
+			return mutationStarted, fmt.Errorf("delete consumers: %w", err)
+		}
 	}
-	attempted, err = purgeSubjects(ctx, admin, opts.stream, ordered)
-	mutationStarted = mutationStarted || attempted
-	if err != nil {
-		return mutationStarted, fmt.Errorf("purge stream %s: %w", opts.stream, err)
+	if len(ordered) > 0 {
+		attempted, err := purgeSubjects(ctx, admin, opts.stream, ordered)
+		mutationStarted = mutationStarted || attempted
+		if err != nil {
+			return mutationStarted, fmt.Errorf("purge stream %s: %w", opts.stream, err)
+		}
 	}
 	return mutationStarted, nil
 }
 
-func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.StorageView, views []resetViewRecord) ([]string, error) {
+// resetViewDatasets 返回所有 View 引用的（空间，数据集），去重并排序：每个数据集各有一个 View 消费者和一组数据集事件。
+func resetViewDatasets(views []resetViewRecord) []datasetKey {
+	seen := make(map[datasetKey]struct{})
+	for _, view := range views {
+		ids := view.DatasetIDs
+		if len(ids) == 0 && view.PrimaryDatasetID != "" {
+			ids = []string{view.PrimaryDatasetID}
+		}
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				seen[datasetKey{spaceID: view.SpaceID, datasetID: id}] = struct{}{}
+			}
+		}
+	}
+	keys := make([]datasetKey, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b datasetKey) int {
+		if c := strings.Compare(a.spaceID, b.spaceID); c != 0 {
+			return c
+		}
+		return strings.Compare(a.datasetID, b.datasetID)
+	})
+	return keys
+}
+
+type datasetKey struct{ spaceID, datasetID string }
+
+// resetConsumerDurables 返回要删除的 View 消费者：每个数据集一个，名字由（空间，数据集）决定。
+func resetConsumerDurables(views []resetViewRecord) []string {
+	datasets := resetViewDatasets(views)
+	durables := make([]string, 0, len(datasets))
+	for _, dataset := range datasets {
+		durables = append(durables, events.StorageViewConsumerName(dataset.spaceID, dataset.datasetID))
+	}
+	slices.Sort(durables)
+	return slices.Compact(durables)
+}
+
+func resetEventSubjects(registry *events.Registry, views []resetViewRecord) ([]string, error) {
 	// This command is intentionally destructive: all View histories, including
 	// record/Bleve histories, are discarded and recreated from the post-reset
 	// stream. There is no compatibility-preservation exception.
 	subjects := make(map[string]struct{})
-	for _, partition := range viewConfig.ConsumerPartitions {
-		for _, dataset := range partition.Datasets() {
-			datasetIDs := []string{dataset.DatasetID}
-			if dataset.DatasetID == "*" {
-				datasetIDs = datasetIDsForWildcardRoute(dataset.SpaceID, views)
-				if len(datasetIDs) == 0 {
-					return nil, fmt.Errorf("cannot expand wildcard purge route for space %s: no View dataset is known", dataset.SpaceID)
-				}
+	for _, dataset := range resetViewDatasets(views) {
+		for _, event := range events.StorageDatasetEvents {
+			subject, err := registry.RenderSubject(event, dataset.spaceID, dataset.datasetID)
+			if err != nil {
+				return nil, fmt.Errorf("render purge subject %s/%s: %w", dataset.spaceID, dataset.datasetID, err)
 			}
-			for _, datasetID := range datasetIDs {
-				for _, event := range events.StorageDatasetEvents {
-					subject, renderErr := registry.RenderSubject(event, dataset.SpaceID, datasetID)
-					if renderErr != nil {
-						return nil, fmt.Errorf("render purge subject %s/%s: %w", dataset.SpaceID, datasetID, renderErr)
-					}
-					subjects[subject] = struct{}{}
-				}
-			}
+			subjects[subject] = struct{}{}
 		}
 	}
 	ordered := make([]string, 0, len(subjects))
@@ -701,29 +733,4 @@ func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.Stor
 	}
 	slices.Sort(ordered)
 	return ordered, nil
-}
-
-func datasetIDsForWildcardRoute(spaceID string, views []resetViewRecord) []string {
-	seen := make(map[string]struct{})
-	for _, view := range views {
-		if view.SpaceID != spaceID {
-			continue
-		}
-		ids := view.DatasetIDs
-		if len(ids) == 0 && view.PrimaryDatasetID != "" {
-			ids = []string{view.PrimaryDatasetID}
-		}
-		for _, id := range ids {
-			id = strings.TrimSpace(id)
-			if id != "" && id != "*" {
-				seen[id] = struct{}{}
-			}
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for id := range seen {
-		result = append(result, id)
-	}
-	slices.Sort(result)
-	return result
 }

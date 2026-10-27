@@ -201,12 +201,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	}
 	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.event.storage.rows_committed")
-	assert.NotContains(t, storageACL, "storage_view_kline")
-	for _, durable := range []string{"storage_view_factor", "storage_view_misc"} {
-		assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*."+durable)
-		assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE."+durable)
-		assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE."+durable)
-		assert.Contains(t, storageACL, "$JS.ACK.MOOX_STORAGE."+durable+".>")
+	assert.NotContains(t, storageACL, "storage_view_", "View 消费者按数据集动态创建（view_<哈希>），ACL 不再列固定名字")
+	// NATS 通配符只能整段匹配，不能按名字前缀放行：View 消费者的创建、拉取与确认只能限定到 MOOX_STORAGE 流。
+	for _, subject := range []string{
+		"$JS.API.CONSUMER.INFO.*.*",
+		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>",
+		"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>",
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>",
+		"$JS.ACK.MOOX_STORAGE.>",
+	} {
+		assert.Contains(t, storageACL, subject)
 	}
 	assert.NotContains(t, storageACL, "storage_view_period_v1")
 	assert.Contains(t, storageACL, `subscribe: {allow: ["_INBOX.>"]}`)

@@ -48,69 +48,48 @@ func TestCheckedInStorageRoleConfigsShareThePolicyFile(t *testing.T) {
 	}
 }
 
+// View 只有一种消费方式：全局并发参数默认都是 1（同一数据集内按顺序处理）。
 func TestStorageViewConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
-	if cfg.Storage.View.FetchBatch != 1 || cfg.Storage.View.MaxWorkers != 1 || cfg.Storage.View.Ordering != "dataset" {
-		t.Fatalf("view consumer defaults = %+v", cfg.Storage.View)
+	view := cfg.Storage.View
+	if view.FetchBatch != 1 || view.MaxWorkers != 1 || view.MaxAckPending != 1 || view.AckWaitMS != StorageViewAckWaitMS {
+		t.Fatalf("view consumer defaults = %+v", view)
+	}
+	if err := view.ValidateConsumer(); err != nil {
+		t.Fatalf("default consumer settings: %v", err)
 	}
 }
 
-func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
+func TestStorageViewMaxAckPendingFollowsFetchBatchWhenOmitted(t *testing.T) {
+	var cfg RuntimeConfig
+	cfg.Storage.View.FetchBatch = 4
+	cfg.ApplyDefaults()
+	if cfg.Storage.View.MaxAckPending != 4 {
+		t.Fatalf("max_ack_pending = %d, want fetch_batch 4", cfg.Storage.View.MaxAckPending)
+	}
+	if err := cfg.Storage.View.ValidateConsumer(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStorageViewConsumerRejectsInvalidLimits(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
-	partitions := cfg.Storage.View.ConsumerPartitions
-	if len(partitions) != 2 {
-		t.Fatalf("consumer partitions = %+v, want factor/misc", partitions)
+	view := cfg.Storage.View
+	view.FetchBatch, view.MaxAckPending = 8, 4
+	if err := view.ValidateConsumer(); err == nil {
+		t.Fatal("fetch_batch exceeding max_ack_pending was accepted")
 	}
-	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
-		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
-	}
-	if partitions[0].ID != "factor" || partitions[0].Durable != "storage_view_factor" || partitions[0].FetchBatch != 1 || partitions[0].MaxWorkers != 1 || partitions[0].MaxAckPending != 1 {
-		t.Fatalf("factor partition = %+v", partitions[0])
-	}
-	if got := partitions[0].Datasets(); len(got) != 0 {
-		t.Fatalf("factor results bind dynamically; default static routes = %+v", got)
-	}
-	if partitions[1].ID != "misc" || partitions[1].Durable != "storage_view_misc" {
-		t.Fatalf("misc partition = %+v", partitions[1])
-	}
-	wildcards := map[string]bool{}
-	for _, dataset := range partitions[1].Datasets() {
-		if dataset.DatasetID == "*" {
-			wildcards[dataset.SpaceID] = true
-		}
-	}
-	for _, spaceID := range []string{"crypto", "stockcn", "stockhk", "stockus"} {
-		if !wildcards[spaceID] {
-			t.Fatalf("misc partition must route every %s Dataset: %+v", spaceID, partitions[1].Datasets())
-		}
+	view = cfg.Storage.View
+	view.MaxWorkers = 0
+	if err := view.ValidateConsumer(); err == nil {
+		t.Fatal("non-positive max_workers was accepted")
 	}
 }
 
-func TestStorageViewConsumerPartitionsRequireSerialFactorDelivery(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*StorageViewConsumerPartition)
-	}{
-		{name: "fetch_batch", mutate: func(partition *StorageViewConsumerPartition) { partition.FetchBatch = 2 }},
-		{name: "max_workers", mutate: func(partition *StorageViewConsumerPartition) { partition.MaxWorkers = 2 }},
-		{name: "max_ack_pending", mutate: func(partition *StorageViewConsumerPartition) { partition.MaxAckPending = 2 }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var cfg RuntimeConfig
-			cfg.ApplyDefaults()
-			factor := &cfg.Storage.View.ConsumerPartitions[0]
-			tt.mutate(factor)
-			if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err == nil || !strings.Contains(err.Error(), "1/1/1") || !strings.Contains(err.Error(), factor.Durable) {
-				t.Fatalf("ValidateConsumerPartitions() error = %v, want factor durable 1/1/1 constraint", err)
-			}
-		})
-	}
-}
-
-func TestCheckedInFactorViewConsumerProfilesAreSerializedTemplates(t *testing.T) {
+// 仓库里的两份配置（Storage 主机与 View 组件）都使用全局默认的串行消费。
+func TestCheckedInViewConsumerProfilesAreSerial(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
 		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
@@ -121,74 +100,14 @@ func TestCheckedInFactorViewConsumerProfilesAreSerializedTemplates(t *testing.T)
 			if err := loader.LoadConfigWithDefaults(filepath.Base(path), &cfg, cfg.ApplyDefaults); err != nil {
 				t.Fatalf("LoadConfigWithDefaults(%s): %v", path, err)
 			}
-			if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
-				t.Fatalf("ValidateConsumerPartitions(): %v", err)
+			view := cfg.Storage.View
+			if err := view.ValidateConsumer(); err != nil {
+				t.Fatalf("ValidateConsumer(): %v", err)
 			}
-			for _, partition := range cfg.Storage.View.ConsumerPartitions {
-				if partition.ID != "factor" {
-					continue
-				}
-				if partition.FetchBatch != 1 || partition.MaxAckPending != 1 || partition.MaxWorkers != 1 {
-					t.Fatalf("factor broker delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", partition.FetchBatch, partition.MaxAckPending, partition.MaxWorkers)
-				}
-				if got := partition.Datasets(); len(got) != 0 {
-					t.Fatalf("factor results bind dynamically; static routes = %+v", got)
-				}
-				return
+			if view.FetchBatch != 1 || view.MaxAckPending != 1 || view.MaxWorkers != 1 {
+				t.Fatalf("delivery budget = fetch_batch:%d max_ack_pending:%d max_workers:%d, want all 1", view.FetchBatch, view.MaxAckPending, view.MaxWorkers)
 			}
-			t.Fatal("factor consumer partition is missing")
 		})
-	}
-}
-
-func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
-	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "a", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "b", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-	}}
-	if err := view.ValidateConsumerPartitions(nil); err == nil {
-		t.Fatal("overlapping Dataset partition was accepted")
-	}
-	view.ConsumerPartitions[1].DatasetIDs = []string{"other"}
-	view.ConsumerPartitions[1].FetchBatch = 2
-	if err := view.ValidateConsumerPartitions(nil); err == nil {
-		t.Fatal("fetch_batch exceeding max_ack_pending was accepted")
-	}
-}
-
-func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
-	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{{
-		ID: "kline", Durable: "storage.view", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"},
-		FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, AckWaitMS: 1000,
-	}}}
-	if err := view.ValidateConsumerPartitions(nil); err == nil {
-		t.Fatal("invalid durable name was accepted")
-	}
-}
-
-func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
-	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m", "future_dataset", "other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-	}}
-	managed := []StorageViewConsumerDataset{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}
-	if err := view.ValidateConsumerPartitions(managed); err != nil {
-		t.Fatalf("future configured Dataset should not block startup: %v", err)
-	}
-}
-
-func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
-	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "misc", Durable: "storage_view_misc", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_resource"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-	}}
-	if err := view.ValidateConsumerPartitions(nil); err == nil {
-		t.Fatal("partial consumer topology was accepted")
-	}
-	view.ConsumerPartitions = append(view.ConsumerPartitions, StorageViewConsumerPartition{
-		ID: "kline", Durable: "storage_view_kline", SpaceID: "mooxsys", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000,
-	})
-	if err := view.ValidateConsumerPartitions(nil); err == nil {
-		t.Fatal("unmanaged durable was accepted")
 	}
 }
 

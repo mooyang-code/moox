@@ -125,6 +125,9 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 	if err := s.metadata.ActivateDataset(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("activate factor result dataset: %w", err)
 	}
+	if err := s.metadata.EnsureResultView(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
+		return domain.FactorTask{}, fmt.Errorf("create factor result default View（任务 %s 已登记为待创建，可用同一个任务 ID 重试）: %w", in.TaskID, err)
+	}
 	if err := s.db.SetTaskStatus(ctx, in.TaskID, domain.TaskStatusPending, domain.TaskStatusEnabled); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("enable factor task after result dataset activation: %w", err)
 	}

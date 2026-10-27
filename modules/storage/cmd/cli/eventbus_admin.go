@@ -57,6 +57,13 @@ type gatewayInvoker interface {
 	Close() error
 }
 
+// viewConsumerFilterState 是 View 消费者在 EventBus 里的当前状态。
+type viewConsumerFilterState struct {
+	Exists       bool
+	Filters      []string
+	SingleFilter string
+}
+
 type gatewayEventBusAdmin struct {
 	gateway gatewayInvoker
 }
@@ -173,7 +180,7 @@ func checkViewConsumers(durables ...string) error {
 	}
 	for _, durable := range durables {
 		if !events.IsStorageViewDurable(durable) {
-			return fmt.Errorf("不支持的消费者 %q，只允许 %s 及按数据集动态创建的 <misc|factor>_<12位十六进制>", durable, strings.Join(events.StorageViewConsumerDurables, "、"))
+			return fmt.Errorf("不支持的消费者 %q，只允许按数据集动态创建的 view_<12位十六进制>", durable)
 		}
 	}
 	return nil

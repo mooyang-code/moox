@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -434,33 +432,19 @@ func runViewRole() error {
 		return err
 	}
 	defer eventClient.Close()
-	consumerOptions, err := storageViewConsumerOptions()
+	consumerTemplate, err := storageViewConsumerTemplate()
 	if err != nil {
 		return err
 	}
-	// Validate against a temporary expanded topology. Never mutate the static
-	// startup options: the configured wildcard belongs to the dynamic
-	// reconciler, while the durable static misc consumer must keep its stable
-	// exact filter set across restarts.
-	validationOptions := cloneViewConsumerOptions(consumerOptions)
-	if err := validateStorageViewConsumerPartitions(trpc.BackgroundContext(), metadataProxy, &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")}, &validationOptions); err != nil {
-		return err
-	}
-	staticConsumerOptions := cloneViewConsumerOptions(consumerOptions)
-	stripWildcardConsumerRoutes(&staticConsumerOptions)
-	// A durable's filter is immutable in JetStream, so a wildcard partition
-	// cannot follow newly discovered Datasets. Static consumers keep only the
-	// exact, latency-sensitive partitions; the reconciler owns every misc
-	// Dataset with a stable per-Dataset durable instead.
-	stripMiscConsumerPartition(&staticConsumerOptions)
-	dynamicConsumerOptions := cloneViewConsumerOptions(consumerOptions)
-	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, staticConsumerOptions)
+	// 没有静态消费者：每个数据集的消费者（view_<数据集哈希>）都由下面的清单对账动态创建；
+	// 这里只启动就绪事件发布、写入围栏落盘等运行时。
+	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient)
 	if err != nil {
 		return err
 	}
 	defer stopConsumer()
 	dynamicReconciler, err := svc.NewInventoryReconciler(viewservice.InventoryReconcilerOptions{
-		Metadata: metadataProxy, Primary: primaryProxy, EventClient: eventClient, Consumer: dynamicConsumerOptions, Interval: 30 * time.Second,
+		Metadata: metadataProxy, Primary: primaryProxy, EventClient: eventClient, Consumer: consumerTemplate, Interval: 30 * time.Second,
 	})
 	if err != nil {
 		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
@@ -538,55 +522,6 @@ func storageViewMaintenanceDisabled() bool {
 	return value == "1" || strings.EqualFold(value, "true") || strings.EqualFold(value, "yes")
 }
 
-func stripWildcardConsumerRoutes(options *viewservice.EventConsumerOptions) {
-	if options == nil {
-		return
-	}
-	for i := range options.PartitionConfigs {
-		partition := &options.PartitionConfigs[i]
-		routes := partition.DatasetRoutes[:0]
-		for _, route := range partition.DatasetRoutes {
-			if strings.TrimSpace(route.DatasetID) == "*" {
-				continue
-			}
-			routes = append(routes, route)
-		}
-		partition.DatasetRoutes = routes
-	}
-}
-
-func stripMiscConsumerPartition(options *viewservice.EventConsumerOptions) {
-	if options == nil {
-		return
-	}
-	partitions := options.PartitionConfigs[:0]
-	for _, partition := range options.PartitionConfigs {
-		if strings.TrimSpace(partition.Consumer) == events.StorageViewMiscConsumer {
-			continue
-		}
-		partitions = append(partitions, partition)
-	}
-	options.PartitionConfigs = partitions
-}
-
-func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewservice.EventConsumerOptions {
-	clone := options
-	clone.FilterSubjects = append([]string(nil), options.FilterSubjects...)
-	clone.DatasetRoutes = append([]viewservice.DatasetRoute(nil), options.DatasetRoutes...)
-	clone.AllowedDatasetSpaces = append([]string(nil), options.AllowedDatasetSpaces...)
-	clone.PartitionConfigs = make([]viewservice.EventConsumerOptions, len(options.PartitionConfigs))
-	for i, partition := range options.PartitionConfigs {
-		clone.PartitionConfigs[i] = partition
-		clone.PartitionConfigs[i].FilterSubjects = append([]string(nil), partition.FilterSubjects...)
-		clone.PartitionConfigs[i].DatasetRoutes = append([]viewservice.DatasetRoute(nil), partition.DatasetRoutes...)
-		clone.PartitionConfigs[i].PartitionConfigs = nil
-	}
-	return clone
-}
-
-// loadStoragePolicy loads storage-policy.json named by storage.policy_file.
-// Without MOOX_STORAGE_CONFIG (tests and local tools) the recommended policy
-// applies; a configured role refuses to start without a valid file.
 func loadStoragePolicy() (storagepolicy.Policy, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
@@ -609,222 +544,28 @@ func loadStoragePolicy() (storagepolicy.Policy, error) {
 	return storagepolicy.Load(policyPath)
 }
 
-func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy viewservice.ViewInventoryClient, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
-	if options == nil {
-		return errors.New("storage view consumer options are required")
-	}
-	if metadataProxy == nil {
-		return errors.New("storage view metadata client is required for consumer partition validation")
-	}
-	managed := make([]storageconfig.StorageViewConsumerDataset, 0)
-	seen := make(map[string]struct{})
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadataProxy.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
-		if err != nil {
-			return fmt.Errorf("list managed views for consumer partition validation: %w", err)
-		}
-		if rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			if rsp == nil {
-				return errors.New("list managed views for consumer partition validation returned nil response")
-			}
-			return fmt.Errorf("list managed views for consumer partition validation: %s", rsp.GetRetInfo().GetMsg())
-		}
-		for _, view := range rsp.GetViews() {
-			if view == nil {
-				continue
-			}
-			datasetID := strings.TrimSpace(view.GetDatasetId())
-			if datasetID == "" {
-				continue
-			}
-			key := view.GetSpaceId() + "\x00" + datasetID
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			break
-		}
-	}
-	if err := expandStorageViewConsumerRoutes(options, managed); err != nil {
-		return err
-	}
-	partitions := storageconfig.StorageView{ConsumerPartitions: nil}
-	// Options have already been rendered from the normalized config. Rebuild a
-	// minimal topology from those routes for validation without duplicating the
-	// YAML loader in this process.
-	for _, partition := range options.PartitionConfigs {
-		routes := make([]storageconfig.StorageViewConsumerRoute, 0, len(partition.DatasetRoutes))
-		for _, route := range partition.DatasetRoutes {
-			routes = append(routes, storageconfig.StorageViewConsumerRoute{SpaceID: route.SpaceID, DatasetIDs: []string{route.DatasetID}})
-		}
-		partitions.ConsumerPartitions = append(partitions.ConsumerPartitions, storageconfig.StorageViewConsumerPartition{
-			ID: partition.PartitionID, Durable: partition.Consumer, Routes: routes,
-			AckWaitMS: partition.AckWaitMS, FetchBatch: partition.FetchBatch, MaxWorkers: partition.MaxWorkers,
-			MaxAckPending: partition.MaxAckPending, Ordering: partition.Ordering, DeliverPolicy: partition.DeliverPolicy,
-			MaxRetryAttempts: partition.MaxRetryAttempts,
-		})
-	}
-	// A fresh installation can legitimately have no active View metadata yet.
-	// In that state the configured routes are the allow-list for future Views;
-	// enforce the exact inventory match only once metadata has an inventory.
-	var managedInventory []storageconfig.StorageViewConsumerDataset
-	if len(managed) > 0 {
-		managedInventory = managed
-	}
-	if err := partitions.ValidateConsumerPartitions(managedInventory); err != nil {
-		return fmt.Errorf("storage view consumer partition validation failed: %w", err)
-	}
-	return nil
-}
-
-// expandStorageViewConsumerRoutes turns an explicit wildcard route into
-// concrete metadata routes before JetStream subjects are rendered. Exact
-// routes win, so the latency-sensitive Kline and Factor partitions can never
-// be pulled into the catch-all "misc" partition.
-func expandStorageViewConsumerRoutes(options *viewservice.EventConsumerOptions, managed []storageconfig.StorageViewConsumerDataset) error {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	eventFamilies := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
-	explicit := make(map[string]struct{})
-	for _, partition := range options.PartitionConfigs {
-		for _, route := range partition.DatasetRoutes {
-			if route.DatasetID != "*" {
-				explicit[route.SpaceID+"\x00"+route.DatasetID] = struct{}{}
-			}
-		}
-	}
-	for i := range options.PartitionConfigs {
-		partition := &options.PartitionConfigs[i]
-		routes := make([]viewservice.DatasetRoute, 0, len(partition.DatasetRoutes))
-		for _, route := range partition.DatasetRoutes {
-			if route.DatasetID != "*" {
-				routes = append(routes, route)
-				continue
-			}
-			for _, dataset := range managed {
-				if dataset.SpaceID != route.SpaceID {
-					continue
-				}
-				key := dataset.SpaceID + "\x00" + dataset.DatasetID
-				if _, exists := explicit[key]; exists {
-					continue
-				}
-				routes = append(routes, viewservice.DatasetRoute{SpaceID: dataset.SpaceID, DatasetID: dataset.DatasetID})
-				for _, event := range eventFamilies {
-					filter, renderErr := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
-					if renderErr != nil {
-						return fmt.Errorf("render consumer partition %q filter: %w", partition.PartitionID, renderErr)
-					}
-					partition.FilterSubjects = appendUniqueString(partition.FilterSubjects, filter)
-				}
-			}
-		}
-		partition.DatasetRoutes = routes
-	}
-	return nil
-}
-
-func appendUniqueString(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func storageViewConsumerOptions() (viewservice.EventConsumerOptions, error) {
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		var runtimeConfig storageconfig.RuntimeConfig
-		runtimeConfig.ApplyDefaults()
-		return buildStorageViewConsumerOptions(runtimeConfig)
-	}
+// storageViewConsumerTemplate 读取 View 的全局消费参数，作为每个数据集的动态消费者共用的投递模板。
+func storageViewConsumerTemplate() (viewservice.EventConsumerOptions, error) {
 	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
+	if path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG")); path == "" {
+		runtimeConfig.ApplyDefaults()
+	} else {
+		loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+		if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+			return viewservice.EventConsumerOptions{}, fmt.Errorf("load storage view consumer config: %w", err)
+		}
 	}
-	return buildStorageViewConsumerOptions(runtimeConfig)
+	return buildStorageViewConsumerTemplate(runtimeConfig.Storage.View)
 }
 
-func buildStorageViewConsumerOptions(runtimeConfig storageconfig.RuntimeConfig) (viewservice.EventConsumerOptions, error) {
-	registry, err := events.DefaultRegistry()
-	if err != nil {
+func buildStorageViewConsumerTemplate(view storageconfig.StorageView) (viewservice.EventConsumerOptions, error) {
+	if err := view.ValidateConsumer(); err != nil {
 		return viewservice.EventConsumerOptions{}, err
 	}
-	eventFamilies := []events.Event{
-		events.DatasetRowsUpserted,
-		events.CollectorPeriodCompleted,
-		events.FactorPeriodComputed,
-		events.DatasetSyncPoint,
-	}
-	partitions := make([]viewservice.EventConsumerOptions, 0, len(runtimeConfig.Storage.View.ConsumerPartitions))
-	allowedSpaces := make(map[string]struct{})
-	for _, partition := range runtimeConfig.Storage.View.ConsumerPartitions {
-		filters := make([]string, 0, len(partition.Datasets())*len(eventFamilies))
-		for _, dataset := range partition.Datasets() {
-			if dataset.DatasetID == "*" && dataset.SpaceID != "" {
-				allowedSpaces[dataset.SpaceID] = struct{}{}
-			}
-			if dataset.DatasetID == "*" {
-				continue
-			}
-			for _, event := range eventFamilies {
-				filter, err := registry.RenderSubject(event, dataset.SpaceID, dataset.DatasetID)
-				if err != nil {
-					return viewservice.EventConsumerOptions{}, fmt.Errorf("render consumer partition %q filter: %w", partition.ID, err)
-				}
-				filters = append(filters, filter)
-			}
-		}
-		partitions = append(partitions, viewservice.EventConsumerOptions{
-			PartitionID:    partition.ID,
-			FilterSubjects: filters,
-			DatasetRoutes: func() []viewservice.DatasetRoute {
-				routes := make([]viewservice.DatasetRoute, 0, len(partition.Datasets()))
-				for _, dataset := range partition.Datasets() {
-					routes = append(routes, viewservice.DatasetRoute{SpaceID: dataset.SpaceID, DatasetID: dataset.DatasetID})
-				}
-				return routes
-			}(),
-			Consumer:         partition.Durable,
-			AckWaitMS:        partition.AckWaitMS,
-			FetchBatch:       partition.FetchBatch,
-			MaxWorkers:       partition.MaxWorkers,
-			MaxAckPending:    partition.MaxAckPending,
-			Ordering:         partition.Ordering,
-			DeliverPolicy:    storageViewDeliverPolicy(partition.DeliverPolicy),
-			MaxRetryAttempts: partition.MaxRetryAttempts,
-		})
-	}
-	allowed := make([]string, 0, len(allowedSpaces))
-	// Local/integration deployments may create short-lived spaces dynamically.
-	// Keep the checked-in route allow-list closed by default, while permitting
-	// an operator to opt in additional exact space IDs without editing YAML.
-	for _, raw := range strings.Split(os.Getenv("MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES"), ",") {
-		if spaceID := strings.TrimSpace(raw); spaceID != "" {
-			allowedSpaces[spaceID] = struct{}{}
-		}
-	}
-	allowed = allowed[:0]
-	for spaceID := range allowedSpaces {
-		allowed = append(allowed, spaceID)
-	}
-	sort.Strings(allowed)
-	return viewservice.EventConsumerOptions{PartitionConfigs: partitions, AllowedDatasetSpaces: allowed}, nil
-}
-
-func storageViewDeliverPolicy(configured string) string {
-	if strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_REPLAY_PENDING")) == "1" {
-		return "all"
-	}
-	return configured
+	return viewservice.EventConsumerOptions{
+		AckWaitMS: view.AckWaitMS, FetchBatch: view.FetchBatch, MaxWorkers: view.MaxWorkers, MaxAckPending: view.MaxAckPending,
+		Ordering: "dataset", DeliverPolicy: "all", MaxRetryAttempts: -1,
+	}, nil
 }
 
 func storageViewRebuildSettings() (uint64, uint32, bool, bool, error) {

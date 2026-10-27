@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +15,6 @@ import (
 	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
-	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -298,99 +296,53 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 	}
 }
 
-func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
+// 所有数据集的动态消费者共用同一个投递模板：全局并发参数来自配置，新建的 durable 回放完整历史。
+func TestStorageViewConsumerTemplateUsesTheGlobalSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 1\n    max_workers: 1\n    ordering: dataset\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    max_ack_pending: 16\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	opts, err := storageViewConsumerOptions()
+	opts, err := storageViewConsumerTemplate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.PartitionConfigs) != 2 {
-		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
+	if opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 16 || opts.Ordering != "dataset" || opts.DeliverPolicy != "all" || opts.MaxRetryAttempts != -1 {
+		t.Fatalf("consumer template = %+v", opts)
 	}
-	if opts.PartitionConfigs[0].PartitionID != "factor" || opts.PartitionConfigs[0].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[0].FilterSubjects) != 0 || opts.PartitionConfigs[0].FetchBatch != 1 || opts.PartitionConfigs[0].MaxWorkers != 1 || opts.PartitionConfigs[0].MaxAckPending != 1 || len(opts.PartitionConfigs[0].DatasetRoutes) != 0 {
-		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[0])
-	}
-	if opts.PartitionConfigs[1].PartitionID != "misc" || opts.PartitionConfigs[1].Consumer != "storage_view_misc" || opts.PartitionConfigs[1].Ordering != "dataset" || opts.PartitionConfigs[1].DeliverPolicy != "new" {
-		t.Fatalf("misc consumer options = %+v", opts.PartitionConfigs[1])
+	if len(opts.FilterSubjects) != 0 || len(opts.DatasetRoutes) != 0 {
+		t.Fatalf("模板不带任何数据集路由：%+v", opts)
 	}
 }
 
-func TestStorageViewConsumerOptionsAllowExplicitDynamicSpaces(t *testing.T) {
+func TestStorageViewConsumerTemplateRejectsInvalidSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    consumer_partitions:\n      - id: misc\n        durable: storage_view_misc\n        routes:\n          - space_id: crypto\n            dataset_ids: [\"*\"]\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    fetch_batch: 8\n    max_ack_pending: 4\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	t.Setenv("MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES", " factor_e2e, crypto, factor_e2e ")
-	opts, err := storageViewConsumerOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := opts.AllowedDatasetSpaces, []string{"crypto", "factor_e2e"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("allowed dynamic spaces = %v, want %v", got, want)
+	if _, err := storageViewConsumerTemplate(); err == nil {
+		t.Fatal("fetch_batch 超过 max_ack_pending 的配置被接受")
 	}
 }
 
-func TestStorageViewConfigFilesBindFactorResultsDynamically(t *testing.T) {
+func TestStorageViewConfigFilesUseSerialDelivery(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
 		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
 	} {
 		t.Run(path, func(t *testing.T) {
 			t.Setenv("MOOX_STORAGE_CONFIG", path)
-			opts, err := storageViewConsumerOptions()
+			opts, err := storageViewConsumerTemplate()
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			stockRoutes := make(map[string]bool)
-			for _, partition := range opts.PartitionConfigs {
-				for _, route := range partition.DatasetRoutes {
-					if route.SpaceID == "stockcn" {
-						stockRoutes[route.DatasetID] = true
-					}
-				}
-				if partition.PartitionID == "factor" && len(partition.DatasetRoutes) != 0 {
-					t.Fatalf("factor results bind dynamically; static routes = %+v", partition.DatasetRoutes)
-				}
-				if partition.PartitionID == "factor" && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
-					t.Fatalf("factor delivery budget = %+v, want serialized 1/1/1", partition)
-				}
-			}
-			if len(stockRoutes) != 1 || !stockRoutes["*"] {
-				t.Fatalf("stockcn routes = %+v", stockRoutes)
+			if opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 {
+				t.Fatalf("delivery budget = %d/%d/%d, want the serialized 1/1/1", opts.FetchBatch, opts.MaxWorkers, opts.MaxAckPending)
 			}
 		})
-	}
-}
-
-func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
-	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
-			{SpaceID: "crypto", DatasetID: "*"},
-			{SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m"},
-		}},
-	}}
-	stripWildcardConsumerRoutes(&opts)
-	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stockcn" || got[0].DatasetID != "dataset_stockcn_equity_kline_1m" {
-		t.Fatalf("static routes = %+v, want only exact route", got)
-	}
-}
-
-func TestStripMiscConsumerPartitionLeavesExactConsumers(t *testing.T) {
-	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "factor", Consumer: "storage_view_factor"},
-		{PartitionID: "misc", Consumer: "storage_view_misc"},
-	}}
-	stripMiscConsumerPartition(&opts)
-	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_factor" {
-		t.Fatalf("static partitions = %+v, want misc removed", opts.PartitionConfigs)
 	}
 }
 

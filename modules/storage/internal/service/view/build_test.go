@@ -169,9 +169,9 @@ func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 	}
 }
 
-func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
+func TestPrimaryOnlyViewMayStartEmptyBeforeFirstOutput(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"dataset_role": "factor_result"}}
+	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"rebuild_source": "primary"}}
 	svc := newBackfillService(engine, view, "")
 	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 2, defaultMaxHistoryScanRows)
 	if err != nil {
@@ -183,12 +183,12 @@ func TestFactorResultViewMayStartEmptyBeforeFirstFactorPeriod(t *testing.T) {
 	}
 }
 
-func TestFactorResultViewBackfillsExistingPrimaryOutput(t *testing.T) {
+func TestPrimaryOnlyViewBackfillsExistingPrimaryOutput(t *testing.T) {
 	activeKey := timeSeriesTestRowKey("venue:binance")
 	activeKey.DatasetId = "market"
 	activeKey.GetTimeSeries().DataTime = "2026-08-18T00:01:00Z"
 	engine := &primaryHistoryBackfillEngine{queryRows: []*pb.RowFieldValues{{Key: activeKey}}}
-	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"dataset_role": "factor_result"}}
+	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"rebuild_source": "primary"}}
 	svc := newBackfillService(engine, view, "factor-result-view-a")
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:binance"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance"),

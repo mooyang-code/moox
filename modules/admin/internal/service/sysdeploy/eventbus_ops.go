@@ -146,7 +146,7 @@ func checkEventBusStream(stream string) error {
 	return nil
 }
 
-// checkEventBusDurables 只放行 Storage View 的消费者（固定的两个与按数据集动态创建的），去重后返回，保持调用方给出的顺序。
+// checkEventBusDurables 只放行 Storage View 的消费者（按数据集动态创建的 view_<12 位十六进制>），去重后返回，保持调用方给出的顺序。
 func checkEventBusDurables(durables []string) ([]string, error) {
 	if len(durables) == 0 {
 		return nil, errors.New("至少指定一个消费者")
@@ -157,7 +157,7 @@ func checkEventBusDurables(durables []string) ([]string, error) {
 	out := make([]string, 0, len(durables))
 	for _, durable := range durables {
 		if !events.IsStorageViewDurable(durable) {
-			return nil, fmt.Errorf("不支持的消费者 %q，只允许 %s 及按数据集动态创建的 <misc|factor>_<12位十六进制>", durable, strings.Join(events.StorageViewConsumerDurables, "、"))
+			return nil, fmt.Errorf("不支持的消费者 %q，只允许按数据集动态创建的 view_<12位十六进制>", durable)
 		}
 		if !slices.Contains(out, durable) {
 			out = append(out, durable)

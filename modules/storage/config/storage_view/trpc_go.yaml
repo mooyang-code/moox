@@ -108,44 +108,13 @@ storage:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
   view:
     batch_size: 500
-    fetch_batch: 256
-    max_workers: 8
-    ordering: dataset
-    consumer_partitions:
-      - id: factor
-        durable: storage_view_factor
-        # Factor result Datasets are bound dynamically, one durable per result;
-        # this partition has no static routes and only supplies the template.
-        # Keep delivery serialized across process restarts so an unacked row
-        # cannot be overtaken by its FactorPeriodComputed marker.
-        fetch_batch: 1
-        max_workers: 1
-        max_ack_pending: 1
-        ack_wait_ms: 120000
-        ordering: dataset
-        deliver_policy: new
-        max_retry_attempts: -1
-      - id: misc
-        durable: storage_view_misc
-        routes:
-          - space_id: crypto
-            dataset_ids: ["*"]
-          - space_id: mooxsys
-            dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
-          - space_id: stockcn
-            dataset_ids: ["*"]
-          - space_id: stockhk
-            dataset_ids: ["*"]
-          - space_id: stockus
-            dataset_ids: ["*"]
-        fetch_batch: 4
-        max_workers: 2
-        max_ack_pending: 16
-        ack_wait_ms: 120000
-        ordering: dataset
-        deliver_policy: new
-        max_retry_attempts: -1
-    # Serialize Primary requests during large View rebuilds.
+    # View 只有一种消费方式：每个数据集一个动态消费者（view_<数据集哈希>），共用这组全局并发参数。
+    # 默认都是 1：同一数据集内按顺序处理，避免同一行的两次更新先后颠倒；导入历史时追平不够快再调大。
+    fetch_batch: 1
+    max_workers: 1
+    max_ack_pending: 1
+    ack_wait_ms: 120000
+    # 重建时按页读取主库历史并串行请求，避免大修复对 Storage 形成突发压力。
     backfill_page_size: 2000
     backfill_request_interval: 100ms
     rebuild_max_pending: 32

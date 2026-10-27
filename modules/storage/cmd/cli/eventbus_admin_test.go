@@ -13,7 +13,6 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -49,30 +48,30 @@ func TestGatewayEventBusAdminInspectMapsConsumerStates(t *testing.T) {
 	gateway := &fakeGateway{invoke: func(method string, _, rsp interface{}) error {
 		require.Equal(t, "InspectEventBus", method)
 		*rsp.(*adminpb.InspectEventBusRsp) = adminpb.InspectEventBusRsp{RetInfo: okRet(), Consumers: []*adminpb.EventBusConsumerState{
-			{Durable: events.StorageViewFactorConsumer, Exists: true, FilterSubjects: []string{"a", "b"}},
-			{Durable: events.StorageViewMiscConsumer},
+			{Durable: testViewDurableA, Exists: true, FilterSubjects: []string{"a", "b"}},
+			{Durable: testViewDurableB},
 		}}
 		return nil
 	}}
 	admin := gatewayEventBusAdmin{gateway: gateway}
 
-	got, err := admin.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer})
+	got, err := admin.Inspect(t.Context(), events.StorageViewConsumerStream, []string{testViewDurableA, testViewDurableB})
 	require.NoError(t, err)
 	require.Equal(t, sysDeployService, gateway.service)
-	require.Equal(t, viewConsumerFilterState{Exists: true, Filters: []string{"a", "b"}}, got[events.StorageViewFactorConsumer])
-	require.Equal(t, viewConsumerFilterState{}, got[events.StorageViewMiscConsumer])
+	require.Equal(t, viewConsumerFilterState{Exists: true, Filters: []string{"a", "b"}}, got[testViewDurableA])
+	require.Equal(t, viewConsumerFilterState{}, got[testViewDurableB])
 	request := gateway.calls[0].req.(*adminpb.InspectEventBusReq)
 	require.Equal(t, events.StorageViewConsumerStream, request.GetStream())
-	require.Equal(t, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer}, request.GetDurables())
+	require.Equal(t, []string{testViewDurableA, testViewDurableB}, request.GetDurables())
 }
 
 func TestGatewayEventBusAdminInspectRejectsIncompleteAnswer(t *testing.T) {
 	gateway := &fakeGateway{invoke: func(_ string, _, rsp interface{}) error {
-		*rsp.(*adminpb.InspectEventBusRsp) = adminpb.InspectEventBusRsp{RetInfo: okRet(), Consumers: []*adminpb.EventBusConsumerState{{Durable: events.StorageViewFactorConsumer, Exists: true}}}
+		*rsp.(*adminpb.InspectEventBusRsp) = adminpb.InspectEventBusRsp{RetInfo: okRet(), Consumers: []*adminpb.EventBusConsumerState{{Durable: testViewDurableA, Exists: true}}}
 		return nil
 	}}
-	_, err := gatewayEventBusAdmin{gateway: gateway}.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer})
-	require.ErrorContains(t, err, events.StorageViewMiscConsumer, "缺少某个消费者的状态时不能当作它不存在")
+	_, err := gatewayEventBusAdmin{gateway: gateway}.Inspect(t.Context(), events.StorageViewConsumerStream, []string{testViewDurableA, testViewDurableB})
+	require.ErrorContains(t, err, testViewDurableB, "缺少某个消费者的状态时不能当作它不存在")
 }
 
 func TestGatewayEventBusAdminSurfacesAdminFailuresAndTransportErrors(t *testing.T) {
@@ -93,14 +92,14 @@ func TestGatewayEventBusAdminSurfacesAdminFailuresAndTransportErrors(t *testing.
 func TestGatewayEventBusAdminDeleteReturnsDeletedEvenOnFailure(t *testing.T) {
 	gateway := &fakeGateway{invoke: func(_ string, _, rsp interface{}) error {
 		*rsp.(*adminpb.DeleteEventBusConsumersRsp) = adminpb.DeleteEventBusConsumersRsp{
-			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "删除消费者 storage_view_misc 失败"},
-			Deleted: []string{events.StorageViewFactorConsumer},
+			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "删除消费者 view_ba9876543210 失败"},
+			Deleted: []string{testViewDurableA},
 		}
 		return nil
 	}}
-	deleted, _, err := gatewayEventBusAdmin{gateway: gateway}.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
-	require.ErrorContains(t, err, "storage_view_misc")
-	require.Equal(t, []string{events.StorageViewFactorConsumer}, deleted, "失败前已删除的也要告诉调用方")
+	deleted, _, err := gatewayEventBusAdmin{gateway: gateway}.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, testViewDurables)
+	require.ErrorContains(t, err, "view_ba9876543210")
+	require.Equal(t, []string{testViewDurableA}, deleted, "失败前已删除的也要告诉调用方")
 }
 
 // attempted 决定重置失败后本地状态能否恢复：Admin 明确说没发出过变更请求才算“没动过”，
@@ -117,7 +116,7 @@ func TestGatewayEventBusAdminReportsWhetherEventBusMayHaveChanged(t *testing.T) 
 		return nil
 	}}
 	admin := gatewayEventBusAdmin{gateway: notAttempted}
-	_, attempted, err := admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	_, attempted, err := admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, testViewDurables)
 	require.Error(t, err)
 	require.False(t, attempted, "Admin 没发出过删除请求，EventBus 没被改动")
 	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
@@ -134,7 +133,7 @@ func TestGatewayEventBusAdminReportsWhetherEventBusMayHaveChanged(t *testing.T) 
 		return nil
 	}}
 	admin = gatewayEventBusAdmin{gateway: executedThenFailed}
-	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, testViewDurables)
 	require.Error(t, err)
 	require.True(t, attempted)
 	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
@@ -143,7 +142,7 @@ func TestGatewayEventBusAdminReportsWhetherEventBusMayHaveChanged(t *testing.T) 
 
 	noAnswer := &fakeGateway{invoke: func(string, interface{}, interface{}) error { return errors.New("deadline exceeded") }}
 	admin = gatewayEventBusAdmin{gateway: noAnswer}
-	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, testViewDurables)
 	require.Error(t, err)
 	require.True(t, attempted, "没有拿到应答时请求可能已经执行")
 	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
@@ -198,90 +197,90 @@ func useFakeEventBusAdmin(t *testing.T, admin *fakeEventBusAdmin) {
 	openEventBusAdmin = func(string, string) (eventBusAdmin, error) { return admin, nil }
 }
 
-func resetTestViewConfig() storageconfig.StorageView {
-	return storageconfig.StorageView{ConsumerPartitions: []storageconfig.StorageViewConsumerPartition{
-		{Durable: events.StorageViewFactorConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: []string{"ds_a"}}}},
-		{Durable: events.StorageViewMiscConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "stockcn", DatasetIDs: []string{"*"}}}},
-	}}
+// resetTestViews 是两个空间里各一个 View：重置时每个数据集一个消费者、每个数据集四类事件。
+func resetTestViews() []resetViewRecord {
+	return []resetViewRecord{
+		{SpaceID: "crypto", ViewID: "va", PrimaryDatasetID: "ds_a"},
+		{SpaceID: "stockcn", ViewID: "vb", PrimaryDatasetID: "ds_b"},
+	}
 }
 
 func TestResetStorageViewConsumersDeletesConsumersThenPurgesEverySubject(t *testing.T) {
 	admin := &fakeEventBusAdmin{}
-	views := []resetViewRecord{{SpaceID: "stockcn", ViewID: "v", PrimaryDatasetID: "ds_b"}}
+	views := resetTestViews()
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
 
-	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.NoError(t, err)
 	require.True(t, mutated)
-	require.Equal(t, events.StorageViewConsumerDurables, admin.deleted)
+	require.Equal(t, resetConsumerDurables(views), admin.deleted)
+	require.Len(t, admin.deleted, 2, "每个数据集一个 View 消费者")
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	expected, err := resetEventSubjects(registry, resetTestViewConfig(), views)
+	expected, err := resetEventSubjects(registry, views)
 	require.NoError(t, err)
-	require.Len(t, expected, 8, "两个数据集 × 四类事件，通配路由按 View 展开")
+	require.Len(t, expected, 8, "两个数据集 × 四类事件")
 	require.Equal(t, expected, admin.purged)
 	require.Equal(t, 1, admin.purgeCalls, "所有主题一次提交")
 }
 
 func TestResetStorageViewConsumersReportsMutationOnlyWhenBrokerStateMayHaveChanged(t *testing.T) {
-	views := []resetViewRecord{{SpaceID: "stockcn", ViewID: "v", PrimaryDatasetID: "ds_b"}}
+	views := resetTestViews()
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
 
 	// Admin 明确说没发出过删除请求（例如预检之后 EventBus 暂时不可达）：什么都没动，调用方要恢复本地状态。
 	admin := &fakeEventBusAdmin{deleteErr: errors.New("Admin DeleteEventBusConsumers 失败: 连接 EventBus 失败")}
-	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.ErrorContains(t, err, "delete consumers")
 	require.False(t, mutated, "确定没有改动 EventBus 时不能判为已改动，否则本地状态不会被恢复")
 	require.Zero(t, admin.purgeCalls, "删除消费者失败后不再清除消息")
 
 	// 请求发出后失败：可能已经删了一部分，旧事件无法再保证，必须保留重置状态。
 	admin = &fakeEventBusAdmin{deleteErr: errors.New("timeout"), deleteAttempted: true}
-	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.ErrorContains(t, err, "delete consumers")
 	require.True(t, mutated)
 	require.Zero(t, admin.purgeCalls)
 
 	admin = &fakeEventBusAdmin{purgeErr: errors.New("timeout"), purgeAttempted: true}
-	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.ErrorContains(t, err, "purge stream")
 	require.True(t, mutated)
 
 	// 消费者已经删掉后，即使清除请求没发出去，EventBus 也已被改动。
 	admin = &fakeEventBusAdmin{purgeErr: errors.New("Admin PurgeEventBusSubjects 失败: 连接 EventBus 失败")}
-	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.Error(t, err)
 	require.True(t, mutated)
 
-	// 通配路由没有可展开的数据集：连主题都渲染不出，此时还没有动过任何东西。
+	// 没有任何 View：没有消费者要删、没有主题要清，什么都不会动。
 	admin = &fakeEventBusAdmin{}
-	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), nil)
-	require.Error(t, err)
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, nil)
+	require.NoError(t, err)
 	require.False(t, mutated)
 	require.Empty(t, admin.deleted)
+	require.Zero(t, admin.purgeCalls)
 }
 
 // Admin 一次最多接受 256 个主题。数据集多到主题超过上限时必须分批提交，
 // 否则会在本地状态已经重置、消费者已经删除之后被拒绝，把 Storage 留在停止状态。
 func TestResetStorageViewConsumersPurgesLargeTopologiesInBatches(t *testing.T) {
 	const datasets = 70
-	ids := make([]string, 0, datasets)
+	views := make([]resetViewRecord, 0, datasets)
 	for i := 0; i < datasets; i++ {
-		ids = append(ids, fmt.Sprintf("ds_%03d", i))
+		views = append(views, resetViewRecord{SpaceID: "crypto", ViewID: fmt.Sprintf("v_%03d", i), PrimaryDatasetID: fmt.Sprintf("ds_%03d", i)})
 	}
-	config := storageconfig.StorageView{ConsumerPartitions: []storageconfig.StorageViewConsumerPartition{
-		{Durable: events.StorageViewFactorConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: ids}}},
-	}}
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	expected, err := resetEventSubjects(registry, config, nil)
+	expected, err := resetEventSubjects(registry, views)
 	require.NoError(t, err)
 	require.Len(t, expected, datasets*len(events.StorageDatasetEvents))
 	require.Greater(t, len(expected), 256, "夹具要超过 Admin 的单次上限才有意义")
 
 	admin := &fakeEventBusAdmin{}
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
-	require.NoError(t, preflightResetEventBus(t.Context(), admin, opts, config, nil), "预检不能因为主题多而失败")
-	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, config, nil)
+	require.NoError(t, preflightResetEventBus(t.Context(), admin, opts, views), "预检不能因为主题多而失败")
+	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, views)
 	require.NoError(t, err)
 	require.True(t, mutated)
 	require.Equal(t, expected, admin.purged, "所有主题都要清除且顺序不变")
@@ -293,7 +292,7 @@ func TestResetStorageViewConsumersPurgesLargeTopologiesInBatches(t *testing.T) {
 	// 中间一批失败：停止后续批次，并仍然算已改动。
 	admin = &fakeEventBusAdmin{}
 	failing := &failOnPurgeCall{fakeEventBusAdmin: admin, failAt: 2, failAttempted: true}
-	mutated, err = resetStorageViewConsumers(t.Context(), failing, opts, config, nil)
+	mutated, err = resetStorageViewConsumers(t.Context(), failing, opts, views)
 	require.ErrorContains(t, err, "purge stream")
 	require.True(t, mutated)
 	require.Equal(t, 2, admin.purgeCalls, "第二批失败后不再提交第三批")
@@ -333,26 +332,17 @@ func (f *failOnPurgeCall) PurgeSubjects(ctx context.Context, stream string, subj
 	return attempted, err
 }
 
-func TestResetStorageViewConsumersSkipsPurgeWithoutSubjects(t *testing.T) {
-	admin := &fakeEventBusAdmin{}
-	mutated, err := resetStorageViewConsumers(t.Context(), admin, resetViewConsumersOptions{stream: events.StorageViewConsumerStream}, storageconfig.StorageView{}, nil)
-	require.NoError(t, err)
-	require.True(t, mutated)
-	require.Equal(t, events.StorageViewConsumerDurables, admin.deleted)
-	require.Zero(t, admin.purgeCalls, "没有主题时不能向 Admin 发空清除请求")
-}
-
 func TestPreflightResetEventBusChecksStreamThroughAdminWithoutMutating(t *testing.T) {
 	admin := &fakeEventBusAdmin{}
 	views := []resetViewRecord{{SpaceID: "stockcn", ViewID: "v", PrimaryDatasetID: "ds_b"}}
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
-	require.NoError(t, preflightResetEventBus(t.Context(), admin, opts, resetTestViewConfig(), views))
+	require.NoError(t, preflightResetEventBus(t.Context(), admin, opts, views))
 	require.True(t, admin.inspectCalled)
 	require.Empty(t, admin.deleted)
 	require.Zero(t, admin.purgeCalls)
 
 	admin = &fakeEventBusAdmin{inspectErr: errors.New("Admin InspectEventBus 失败: EventBus 流 MOOX_STORAGE 不存在")}
-	err := preflightResetEventBus(t.Context(), admin, opts, resetTestViewConfig(), views)
+	err := preflightResetEventBus(t.Context(), admin, opts, views)
 	require.ErrorContains(t, err, "MOOX_STORAGE", "预检失败要说明是哪条流")
 	require.Empty(t, admin.deleted)
 }
@@ -375,39 +365,27 @@ func TestPurgeDatasetEventSubjectsGoesThroughAdmin(t *testing.T) {
 	require.True(t, admin.closed)
 }
 
-func TestInspectViewConsumerFiltersAsksForTheTwoStaticConsumers(t *testing.T) {
-	admin := &fakeEventBusAdmin{inspect: map[string]viewConsumerFilterState{events.StorageViewFactorConsumer: {Exists: true}}}
-	got, err := inspectViewConsumerFilters(t.Context(), admin, events.StorageViewConsumerStream)
-	require.NoError(t, err)
-	require.True(t, got[events.StorageViewFactorConsumer].Exists)
-
-	admin = &fakeEventBusAdmin{inspectErr: errors.New("denied")}
-	_, err = inspectViewConsumerFilters(t.Context(), admin, events.StorageViewConsumerStream)
-	require.ErrorContains(t, err, "inspect View consumers")
-}
-
 func TestDeleteJetStreamConsumerOnlyAcceptsViewConsumers(t *testing.T) {
 	admin := &fakeEventBusAdmin{}
 	useFakeEventBusAdmin(t, admin)
 
-	deleted, err := deleteJetStreamConsumer(t.Context(), "conf", "root", events.StorageViewConsumerStream, events.StorageViewFactorConsumer)
+	deleted, err := deleteJetStreamConsumer(t.Context(), "conf", "root", events.StorageViewConsumerStream, testViewDurableA)
 	require.NoError(t, err)
 	require.True(t, deleted)
 	require.True(t, admin.closed)
 
 	_, err = deleteJetStreamConsumer(t.Context(), "conf", "root", events.StorageViewConsumerStream, "factor_collector_period_v1")
 	require.ErrorContains(t, err, "不支持的消费者")
-	require.Equal(t, []string{events.StorageViewFactorConsumer}, admin.deleted, "越界的消费者名不能发到 Admin")
+	require.Equal(t, []string{testViewDurableA}, admin.deleted, "越界的消费者名不能发到 Admin")
 }
 
 func TestViewMaintenanceCommandsNoLongerAcceptAdminCredentialFlags(t *testing.T) {
 	const undefined = "flag provided but not defined"
 	for _, flagName := range []string{"--credential-file", "--eventbus-url"} {
 		require.ErrorContains(t, runResetViewConsumers([]string{"--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
-		require.ErrorContains(t, runReconcileViewConsumers([]string{"--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
 		require.ErrorContains(t, runPurgeDatasetEvents(t.Context(), []string{"--space", "s", "--dataset", "d", "--dry-run", flagName, "x"}, &bytes.Buffer{}), undefined, flagName)
-		require.ErrorContains(t, runForceRebuildView([]string{"--space-id", "s", "--view-id", "v", "--consumer", events.StorageViewMiscConsumer, "--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
-		require.ErrorContains(t, runRepairView([]string{"--space-id", "s", "--view-id", "v", "--consumer", events.StorageViewMiscConsumer, "--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
+		require.ErrorContains(t, runForceRebuildView([]string{"--space-id", "s", "--view-id", "v", "--consumer", testViewDurableB, "--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
+		require.ErrorContains(t, runRepairView([]string{"--space-id", "s", "--view-id", "v", "--consumer", testViewDurableB, "--dry-run", flagName, "x"}, &bytes.Buffer{}, &bytes.Buffer{}), undefined, flagName)
 	}
 }
 
@@ -447,7 +425,7 @@ func repairFixture(t *testing.T) repairViewOptions {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "start.sh"), []byte("#!/bin/sh\n"), 0o755))
 	return repairViewOptions{
 		action: "repair-view", spaceID: "space", viewID: "view", storageConf: conf, packageRoot: dir, stream: events.StorageViewConsumerStream,
-		consumer: events.StorageViewFactorConsumer, deliverPolicy: "new", timeout: time.Minute, yes: true, resetConsumer: true, forceRebuild: true, restart: true,
+		consumer: testViewDurableA, deliverPolicy: "new", timeout: time.Minute, yes: true, resetConsumer: true, forceRebuild: true, restart: true,
 	}
 }
 
@@ -476,13 +454,13 @@ func TestRepairViewChecksEventBusBeforeStoppingStorageView(t *testing.T) {
 	require.ErrorContains(t, err, "preflight EventBus")
 	require.Empty(t, lifecycle)
 
-	healthy := &fakeEventBusAdmin{inspect: map[string]viewConsumerFilterState{events.StorageViewFactorConsumer: {Exists: true}}}
+	healthy := &fakeEventBusAdmin{inspect: map[string]viewConsumerFilterState{testViewDurableA: {Exists: true}}}
 	useFakeEventBusAdmin(t, healthy)
 	var stdout bytes.Buffer
 	opts = repairFixture(t)
 	require.NoError(t, runRepairViewOperation(t.Context(), opts, &stdout, &bytes.Buffer{}))
 	require.Equal(t, []string{"stop", "start"}, lifecycle)
-	require.Equal(t, []string{events.StorageViewFactorConsumer}, healthy.deleted)
+	require.Equal(t, []string{testViewDurableA}, healthy.deleted)
 	require.Contains(t, stdout.String(), `"consumer_reset":true`)
 
 	// 不删消费者的修复不需要 EventBus，也就不会去预检。
@@ -493,3 +471,11 @@ func TestRepairViewChecksEventBusBeforeStoppingStorageView(t *testing.T) {
 	require.NoError(t, runRepairViewOperation(t.Context(), opts, &bytes.Buffer{}, &bytes.Buffer{}))
 	require.Equal(t, []string{"stop", "start"}, lifecycle)
 }
+
+// 测试用的两个 View 消费者名（view_<12 位十六进制>）。
+const (
+	testViewDurableA = "view_0123456789ab"
+	testViewDurableB = "view_ba9876543210"
+)
+
+var testViewDurables = []string{testViewDurableA, testViewDurableB}

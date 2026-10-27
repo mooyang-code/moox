@@ -1,40 +1,33 @@
 package events
 
-import "strings"
-
-// Storage View consumer names are part of the EventBus topology contract.
-// Keep them in the events package so Storage, Admin and operational tooling
-// cannot silently drift to different durable names.
-const (
-	StorageViewConsumerStream = "MOOX_STORAGE"
-	StorageViewFactorConsumer = "storage_view_factor"
-	StorageViewMiscConsumer   = "storage_view_misc"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 )
 
-var StorageViewConsumerDurables = []string{
-	StorageViewFactorConsumer,
-	StorageViewMiscConsumer,
+// Storage View 消费者的名字是 EventBus 拓扑契约的一部分，放在 events 包里，
+// 让 Storage、Admin 与运维工具不会各记一份而悄悄漂移。
+const (
+	StorageViewConsumerStream = "MOOX_STORAGE"
+	// StorageViewConsumerPrefix 是每个数据集各一个的 View 消费者名前缀：view_<数据集哈希>。名字里不带任何业务含义。
+	StorageViewConsumerPrefix = "view_"
+)
+
+// StorageViewConsumerName 返回数据集的 View 消费者名：view_<空间与数据集身份哈希的前 12 位十六进制>。
+func StorageViewConsumerName(spaceID, datasetID string) string {
+	hash := sha256.Sum256([]byte(strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)))
+	return StorageViewConsumerPrefix + hex.EncodeToString(hash[:])[:12]
 }
 
 // StorageDatasetEvents 是随数据集产生的四类 Storage 事件：清除某个数据集的历史事件、对齐 View 消费者的过滤主题时，
 // 都按这四类处理。放在这里让 Storage 命令行与 Admin 的 EventBus 维护接口不会各记一份。
 var StorageDatasetEvents = []Event{DatasetRowsUpserted, CollectorPeriodCompleted, FactorPeriodComputed, DatasetSyncPoint}
 
-// IsStorageViewDurable 报告 name 是否是 Storage View 的消费者：两个固定消费者，
-// 或 View 清单协调器按数据集动态创建的 storage_view_misc_<12 位十六进制>、storage_view_factor_<12 位十六进制>
-// （名称由数据集身份哈希得到，见 storage-view 的 dynamicDatasetConsumerIdentityForPartition）。
+// IsStorageViewDurable 报告 name 是否是 Storage View 的消费者：view_<12 位十六进制>。
 func IsStorageViewDurable(name string) bool {
-	for _, durable := range StorageViewConsumerDurables {
-		if name == durable {
-			return true
-		}
-	}
-	for _, prefix := range []string{StorageViewMiscConsumer, StorageViewFactorConsumer} {
-		if suffix, ok := strings.CutPrefix(name, prefix+"_"); ok && len(suffix) == 12 && isLowerHex(suffix) {
-			return true
-		}
-	}
-	return false
+	suffix, ok := strings.CutPrefix(name, StorageViewConsumerPrefix)
+	return ok && len(suffix) == 12 && isLowerHex(suffix)
 }
 
 func isLowerHex(value string) bool {

@@ -280,7 +280,7 @@ func (s *Store) CommitViewSchemaExtension(ctx context.Context, req *pb.CommitVie
 		view.GetDesiredViewRevision() == req.GetExpectedDesiredRevision() &&
 		view.GetActiveIndexId() == req.GetActiveIndexId() && view.GetActiveViewSchemaHash() == req.GetViewSchemaHash() &&
 		view.GetStatus() == "active" && view.GetEngine() == "duckdb" &&
-		view.GetAttributes()["primary_dataset_role"] == "factor_result" &&
+		view.GetAttributes()["follow_dataset_columns"] == "true" &&
 		proto.Equal(&pb.View{ActiveColumns: view.GetActiveColumns()}, &pb.View{ActiveColumns: req.GetColumns()}) {
 		_ = tx.Rollback()
 		return s.GetView(ctx, req.GetSpaceId(), req.GetViewId())
@@ -290,7 +290,7 @@ func (s *Store) CommitViewSchemaExtension(ctx context.Context, req *pb.CommitVie
 		view.GetDesiredViewRevision() != req.GetExpectedDesiredRevision() ||
 		view.GetActiveViewSchemaHash() != req.GetExpectedActiveSchemaHash() ||
 		view.GetEngine() != "duckdb" || view.GetStatus() != "active" ||
-		view.GetAttributes()["primary_dataset_role"] != "factor_result" {
+		view.GetAttributes()["follow_dataset_columns"] != "true" {
 		return nil, metadatastore.ErrViewSchemaExtensionConflict
 	}
 	activeHash := coreviewindex.HashViewIndexSchema(coreviewindex.ViewIndexSchema{

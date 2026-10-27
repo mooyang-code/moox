@@ -394,6 +394,10 @@ type metadataFake struct {
 	subjectPages     []*storagepb.ListDatasetSubjectsRsp
 	updateRequests   []*storagepb.UpdateDatasetReq
 	views            []*storagepb.View
+	viewCalls        []string
+	createViewReqs   []*storagepb.CreateViewReq
+	createViewRsp    *storagepb.CreateViewRsp
+	getViewRsp       *storagepb.GetViewRsp
 }
 
 func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
@@ -655,4 +659,88 @@ func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 
 	_, err = c.ReadDatasetChanges(context.Background(), "", "d", nil, true, 0)
 	require.Error(t, err)
+}
+
+func (f *metadataFake) GetView(_ context.Context, _ *storagepb.GetViewReq, _ ...client.Option) (*storagepb.GetViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "get_view")
+	if f.getViewRsp != nil {
+		return f.getViewRsp, nil
+	}
+	return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}, nil
+}
+
+func (f *metadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq, _ ...client.Option) (*storagepb.CreateViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "create_view")
+	f.createViewReqs = append(f.createViewReqs, req)
+	if f.createViewRsp != nil {
+		return f.createViewRsp, nil
+	}
+	return &storagepb.CreateViewRsp{RetInfo: successRet(), View: req.GetView()}, nil
+}
+
+func (f *metadataFake) DeleteView(_ context.Context, _ *storagepb.DeleteViewReq, _ ...client.Option) (*storagepb.DeleteViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "delete_view")
+	return &storagepb.DeleteViewRsp{RetInfo: successRet()}, nil
+}
+
+func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_btc_1m", Name: "BTC 因子", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		columnPages: []*storagepb.ListDatasetColumnsRsp{{RetInfo: successRet(), Columns: []*storagepb.DatasetColumn{
+			{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "收盘"}},
+			{ColumnName: "old", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "disabled"},
+			{ColumnName: "ema__20", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"member_key": "ema__20"}},
+		}}},
+	}
+	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
+	require.Len(t, metadata.createViewReqs, 1)
+	req := metadata.createViewReqs[0]
+	require.True(t, req.GetCreateOnly())
+	view := req.GetView()
+	require.Equal(t, "view_factor_btc_1m", view.GetViewId())
+	require.Equal(t, "dataset_factor_btc_1m", view.GetDatasetId())
+	require.Equal(t, "1m", view.GetFreq())
+	require.Equal(t, "duckdb", view.GetEngine())
+	require.Equal(t, map[string]string{
+		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "rebuild_source": "primary", "maintenance_priority": "10",
+	}, view.GetAttributes())
+	var names []string
+	for _, column := range view.GetColumns() {
+		names = append(names, column.GetColumnName())
+		require.Equal(t, column.GetColumnName(), column.GetOriginId())
+	}
+	require.Equal(t, []string{"close", "ema__20"}, names, "只带数据集的有效列，保持顺序")
+	require.Equal(t, "ema__20", view.GetColumns()[1].GetAttributes()["member_key"], "列属性随列带进 View")
+}
+
+func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(t *testing.T) {
+	metadata := &metadataFake{getViewRsp: &storagepb.GetViewRsp{RetInfo: successRet(), View: &storagepb.View{ViewId: "view_factor_btc_1m", DatasetId: "dataset_factor_btc_1m"}}}
+	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
+	require.Empty(t, metadata.createViewReqs, "已有就不重建")
+
+	metadata.getViewRsp = &storagepb.GetViewRsp{RetInfo: successRet(), View: &storagepb.View{ViewId: "view_factor_btc_1m", DatasetId: "dataset_other"}}
+	require.ErrorContains(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"), "另一个数据集")
+}
+
+// 删除结果数据集的顺序：先删默认 View，再清空行，最后删数据集（View 外键要求先删 View）。
+func TestDeleteFactorResultDatasetDeletesTheDefaultViewBeforeRowsAndDataset(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_x", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	var order []string
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		views:          []*storagepb.View{{ViewId: "view_factor_x"}},
+	}
+	primary := &primaryFake{}
+	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.DeleteDataset(t.Context(), "crypto", "dataset_factor_x"))
+	order = append(order, metadata.viewCalls...)
+	require.Equal(t, []string{"delete_view"}, order)
+	require.Len(t, metadata.deleteRequests, 1, "最后删数据集")
 }

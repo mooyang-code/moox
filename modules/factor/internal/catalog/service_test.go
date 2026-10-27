@@ -35,7 +35,7 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	require.Equal(t, []storageio.ColumnInfo{sourceColumn("close"), paramsColumn()}, meta.createdSpec.Columns, "结果数据集创建时同时注册 __params 列")
 	require.Equal(t, "价格因子", meta.createdSpec.Name, "任务名称直接用作结果数据集的名称")
 	require.Equal(t, storageio.DatasetStatusActive, meta.datasets[resultKey("crypto", set.ResultDatasetID)].Status)
-	require.Equal(t, []string{"create", "activate"}, meta.writeOps)
+	require.Equal(t, []string{"create", "activate", "ensure_view"}, meta.writeOps, "建结果数据集、激活后由 factor-mgr 自己建默认 View")
 }
 
 func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
@@ -727,6 +727,7 @@ type metadataFake struct {
 	deleteErrs             int
 	getDatasetErr          error
 	writeOps               []string
+	views                  map[string]bool
 }
 
 func newMetadataFake() *metadataFake {
@@ -850,6 +851,27 @@ func (f *metadataFake) ActivateDataset(_ context.Context, spaceID, datasetID str
 	dataset := f.datasets[resultKey(spaceID, datasetID)]
 	dataset.Status = storageio.DatasetStatusActive
 	f.datasets[resultKey(spaceID, datasetID)] = dataset
+	return nil
+}
+
+// EnsureResultView 只在默认 View 不存在时记一次写入，与 Storage 的“已存在就不动”一致。
+func (f *metadataFake) EnsureResultView(_ context.Context, spaceID, datasetID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.views == nil {
+		f.views = map[string]bool{}
+	}
+	if !f.views[resultKey(spaceID, datasetID)] {
+		f.writeOps = append(f.writeOps, "ensure_view")
+		f.views[resultKey(spaceID, datasetID)] = true
+	}
+	return nil
+}
+
+func (f *metadataFake) DeleteResultView(_ context.Context, spaceID, datasetID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.views, resultKey(spaceID, datasetID))
 	return nil
 }
 

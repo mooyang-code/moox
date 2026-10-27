@@ -31,9 +31,10 @@ for config in \
   fi
 done
 
-for durable in storage_view_factor storage_view_misc factor_collector_period_v1; do
-  grep -Fq "${durable}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
-    echo "storage consistency contract failed: generated EventBus ACL is missing durable ${durable}" >&2
+# View 消费者按数据集动态创建（view_<哈希>），ACL 靠 MOOX_STORAGE 流上的通配符放行；因子引擎的消费者仍是固定名字。
+for subject in 'CONSUMER.CREATE.MOOX_STORAGE.>' 'CONSUMER.MSG.NEXT.MOOX_STORAGE.>' 'factor_collector_period_v1'; do
+  grep -Fq "${subject}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
+    echo "storage consistency contract failed: generated EventBus ACL is missing ${subject}" >&2
     exit 1
   }
 done

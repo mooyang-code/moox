@@ -84,6 +84,9 @@ type Metadata interface {
 	ActivateDataset(ctx context.Context, spaceID, datasetID string) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
 	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
+	// EnsureResultView / DeleteResultView 由 factor-mgr 自己维护结果数据集的默认 View。
+	EnsureResultView(ctx context.Context, spaceID, datasetID string) error
+	DeleteResultView(ctx context.Context, spaceID, datasetID string) error
 }
 
 func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
@@ -373,6 +376,10 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 			return err
 		}
 		if err := c.primaryReady("delete factor result rows"); err != nil {
+			return err
+		}
+		// t_views 外键要求先删 View；顺序：删默认 View → 清空行 → 删数据集。
+		if err := c.DeleteResultView(ctx, spaceID, datasetID); err != nil {
 			return err
 		}
 		deleted, err := c.primary.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})

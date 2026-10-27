@@ -198,7 +198,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
 			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
-			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
+			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "maintenance_priority": "0", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
 			return compensate(fmt.Errorf("create target View: %w", createErr))

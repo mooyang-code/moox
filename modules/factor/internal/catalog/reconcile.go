@@ -145,12 +145,15 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		known[col.ColumnName] = col
 		missing = append(missing, col)
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(missing) > 0 {
+		sort.Slice(missing, func(i, j int) bool { return missing[i].ColumnName < missing[j].ColumnName })
+		if err := s.metadata.UpsertColumns(ctx, set.SpaceID, set.ResultDatasetID, missing); err != nil {
+			return fmt.Errorf("upsert factor result columns: %w", err)
+		}
 	}
-	sort.Slice(missing, func(i, j int) bool { return missing[i].ColumnName < missing[j].ColumnName })
-	if err := s.metadata.UpsertColumns(ctx, set.SpaceID, set.ResultDatasetID, missing); err != nil {
-		return fmt.Errorf("upsert factor result columns: %w", err)
+	// 默认 View 由 factor-mgr 自己维护：启动对账补齐缺失的 View（已有的由 Storage 按 follow_dataset_columns 跟随加列）。
+	if err := s.metadata.EnsureResultView(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
+		return fmt.Errorf("ensure factor result default View: %w", err)
 	}
 	return nil
 }

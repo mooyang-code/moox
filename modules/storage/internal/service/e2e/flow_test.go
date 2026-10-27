@@ -185,13 +185,13 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer eventClient.Close()
 	stopConsumer, err := view.StartEventConsumer(ctx, eventClient, viewservice.EventConsumerOptions{
-		PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
+		PartitionID: "misc", Consumer: events.StorageViewConsumerName("quant", "prices"), FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopConsumer()
-	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewMiscConsumer)
+	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewConsumerName("quant", "prices"))
 	if err != nil {
 		t.Fatal(err)
 	}

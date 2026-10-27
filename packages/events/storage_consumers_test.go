@@ -2,17 +2,26 @@ package events
 
 import "testing"
 
+func TestStorageViewConsumerNameIsStableAndRecognized(t *testing.T) {
+	name := StorageViewConsumerName("crypto", "dataset_a")
+	if name != StorageViewConsumerName(" crypto ", " dataset_a ") || name == StorageViewConsumerName("crypto", "dataset_b") || name == StorageViewConsumerName("stockcn", "dataset_a") {
+		t.Fatalf("消费者名必须由（空间，数据集）稳定决定：%s", name)
+	}
+	if !IsStorageViewDurable(name) || len(name) != len("view_")+12 {
+		t.Fatalf("按数据集生成的消费者名应被认可：%s", name)
+	}
+}
+
 func TestIsStorageViewDurable(t *testing.T) {
-	for _, name := range append([]string{"storage_view_misc_0123456789ab", "storage_view_factor_ffffffffffff"}, StorageViewConsumerDurables...) {
+	for _, name := range []string{"view_0123456789ab", "view_ffffffffffff"} {
 		if !IsStorageViewDurable(name) {
 			t.Fatalf("View 消费者 %s 应被认可", name)
 		}
 	}
 	for _, name := range []string{
-		"", "storage_view", "factor_collector_period_v1", "*", ">", "storage_view_*",
-		"storage_view_misc_", "storage_view_misc_0123456789a", "storage_view_misc_0123456789abc",
-		"storage_view_misc_0123456789AB", "storage_view_misc_0123456789ag", "storage_view_misc_01234567.9ab",
-		"storage_view_kline_0123456789ab", "other_storage_view_misc_0123456789ab",
+		"", "view", "view_", "view_0123456789a", "view_0123456789abc", "view_0123456789AB", "view_0123456789ag",
+		"view_01234567.9ab", "view_*", "*", ">", "storage_view_misc_0123456789ab", "storage_view_factor_0123456789ab",
+		"factor_collector_period_v1", "other_view_0123456789ab",
 	} {
 		if IsStorageViewDurable(name) {
 			t.Fatalf("%q 不应被认可", name)

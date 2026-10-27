@@ -19,7 +19,7 @@ func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Engine = "duckdb"
-	view.Attributes = map[string]string{"primary_dataset_role": "factor_result"}
+	view.Attributes = map[string]string{"follow_dataset_columns": "true"}
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
