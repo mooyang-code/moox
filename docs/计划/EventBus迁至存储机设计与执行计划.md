@@ -358,7 +358,7 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 - 排空：停机时只剩一个消费者（`storage_view_factor_3ab1…`）有 1 条在途消息，暂停前就在，View 的待发布数为 0；新 store 丢掉这一条，不影响恢复。
 - **系统恢复在栅栏处等到超时**：暂停跨过新的 K 线周期后，策略要等因子引擎放行、算出最新周期才能追平，因子引擎在等栅栏。30 分钟超时后用 `resume --release-partial --yes` 放行因子引擎与 Trade，策略约 8 分钟后追平，再 `resume` 放行策略。下次暂停窗口要预留这一步，或把恢复的超时缩短到 5 分钟。
 - 新地址下 `moox-cli system pause/resume` 要走 SSH 隧道到各模块健康端口（控制机 11412/11431、海外机 11210、因子机 11417），鉴权密钥取自控制机 `runtime-monitor.json`，只放内存。
-- 暴露了一个原来就有的问题：Collector 重启后每分钟报 `collector fetch plan reconciliation failed space=crypto: no available code package named "moox-collector-crypto-plan"`，Monitor 出一条 `market_fetch:scf_timer` 严重告警。云函数 GC 在 10-25 03:47 清掉了这个代码包，之前的进程没有重新对账所以没暴露。它与 EventBus 位置无关，没有处理。
+- 暴露了一个原来就有的问题：Collector 重启后每分钟报 `collector fetch plan reconciliation failed space=crypto: no available code package named "moox-collector-crypto-plan"`，Monitor 出一条 `market_fetch:scf_timer` 严重告警。云函数 GC 在 10-25 03:47 清掉了这个代码包，之前的进程没有重新对账所以没暴露。它与 EventBus 位置无关。根因是对账器每轮先解析代码包，解析不到整轮失败，而 crypto 的计划已全是推送数据集、云端没有函数，包本来用不上。已修复（`bea87310`：包只在创建或升级云函数时才要求，云端已有计划函数时仍然拦住），04:31 UTC 发布 collector，告警于 04:32 恢复。
 
 未做：故障演练（临时阻断 4222，会影响生产）；SCF 里旧 EventBus CA 的清理；控制机安全组里旧的 4222 规则（到腾讯云控制台删）；控制机上旧 EventBus 数据（`/data/moox/prod/eventbus-move-*/old-eventbus-component`，2.4 GB）与 Admin 库备份，观察满 12 个周期后删。
 
