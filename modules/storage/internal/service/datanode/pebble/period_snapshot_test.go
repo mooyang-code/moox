@@ -14,7 +14,7 @@ import (
 func snapshotSeries(subjects ...string) []seriesset.Series {
 	series := make([]seriesset.Series, 0, len(subjects))
 	for _, subject := range subjects {
-		series = append(series, seriesset.Series{Provider: "binance", SourceID: "spot_http", MarketType: "spot", SubjectID: subject})
+		series = append(series, seriesset.Series{SubjectID: subject})
 	}
 	set, err := seriesset.Canonicalize(series)
 	if err != nil {
@@ -252,7 +252,7 @@ func TestRegisterSeriesSnapshotRejectsFarFutureAndAmbiguousSeries(t *testing.T) 
 	require.ErrorAs(t, err, &stale, "P 不在未来或不晚于最后登记时返回可识别的过期错误")
 
 	// 同一 (subject_id, series_tag) 出现两次，逐行校验会有歧义。
-	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{Provider: "okx", SourceID: "spot_http", MarketType: "spot", SubjectID: "BTC-USDT"})
+	dup := append(snapshotSeries("BTC-USDT"), seriesset.Series{SubjectID: "btc-usdt"})
 	_, err = store.RegisterSeriesSnapshot(ctx, "crypto", "bars", "1m", dup, soon+600)
 	require.Error(t, err)
 }

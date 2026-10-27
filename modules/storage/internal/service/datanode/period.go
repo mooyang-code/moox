@@ -23,7 +23,7 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSe
 	}
 	series := make([]seriesset.Series, len(req.GetSeries()))
 	for i, entry := range req.GetSeries() {
-		series[i] = seriesset.Series{Provider: entry.GetProvider(), SourceID: entry.GetSourceId(), MarketType: entry.GetMarketType(), SubjectID: entry.GetSubjectId(), SeriesTag: entry.GetSeriesTag()}
+		series[i] = seriesset.Series{SubjectID: entry.GetSubjectId(), SeriesTag: entry.GetSeriesTag()}
 	}
 	result, err := s.store.RegisterSeriesSnapshot(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFrequency(), series, req.GetEffectiveFrom())
 	if err != nil {

@@ -11,18 +11,15 @@ import (
 	"strings"
 )
 
-// Series 是一条时间序列的完整身份。
+// Series 是一条时间序列的身份：标的加 series_tag，与行的身份一致；series_tag 由写入方决定，这里不解释。
 type Series struct {
-	Provider   string `json:"provider"`
-	SourceID   string `json:"source_id"`
-	MarketType string `json:"market_type"`
-	SubjectID  string `json:"subject_id"`
-	SeriesTag  string `json:"series_tag"`
+	SubjectID string `json:"subject_id"`
+	SeriesTag string `json:"series_tag"`
 }
 
-// CanonicalKey 返回规范序列键：五项各自去空白、转小写，以 NUL 连接。
-func CanonicalKey(provider, sourceID, marketType, subjectID, seriesTag string) string {
-	parts := []string{provider, sourceID, marketType, subjectID, seriesTag}
+// CanonicalKey 返回规范序列键：两项各自去空白、转小写，以 NUL 连接。
+func CanonicalKey(subjectID, seriesTag string) string {
+	parts := []string{subjectID, seriesTag}
 	for i := range parts {
 		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
 	}
@@ -31,7 +28,7 @@ func CanonicalKey(provider, sourceID, marketType, subjectID, seriesTag string) s
 
 // Key 返回该序列的规范键。
 func (s Series) Key() string {
-	return CanonicalKey(s.Provider, s.SourceID, s.MarketType, s.SubjectID, s.SeriesTag)
+	return CanonicalKey(s.SubjectID, s.SeriesTag)
 }
 
 // Hash 计算已排序规范键集合的 hash。

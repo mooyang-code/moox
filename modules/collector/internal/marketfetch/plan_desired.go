@@ -193,7 +193,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		tag := PlanSeriesTag(spaceID, PlanMarket{Provider: info.sample.Provider, SourceID: info.sample.SourceID, MarketType: info.sample.MarketType})
 		series := make([]seriesset.Series, 0, len(subjectSets[datasetKey]))
 		for subject := range subjectSets[datasetKey] {
-			series = append(series, seriesset.Series{Provider: info.sample.Provider, SourceID: info.sample.SourceID, MarketType: info.sample.MarketType, SubjectID: subject, SeriesTag: tag})
+			series = append(series, seriesset.Series{SubjectID: subject, SeriesTag: tag})
 		}
 		if len(series) == 0 {
 			delete(state.Datasets, datasetKey)

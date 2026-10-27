@@ -91,7 +91,7 @@ func TestBuildDesiredStateHashMatchesSharedPackage(t *testing.T) {
 	dataset := state.Datasets["ds_spot_1m|1m"]
 	series := make([]seriesset.Series, 0, 5)
 	for i := 0; i < 5; i++ {
-		series = append(series, seriesset.Series{Provider: "binance", SourceID: "binance", MarketType: "spot", SubjectID: fmt.Sprintf("S%03d-USDT", i), SeriesTag: PlanSeriesTag("crypto", PlanMarket{Provider: "binance", SourceID: "binance", MarketType: "spot"})})
+		series = append(series, seriesset.Series{SubjectID: fmt.Sprintf("S%03d-USDT", i), SeriesTag: PlanSeriesTag("crypto", PlanMarket{Provider: "binance", SourceID: "binance", MarketType: "spot"})})
 	}
 	set, err := seriesset.Canonicalize(series)
 	if err != nil || set.Hash != dataset.Hash || dataset.Count != 5 {

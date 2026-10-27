@@ -403,7 +403,7 @@ func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket,
 func (t *Task) series(subjects []string) []seriesset.Series {
 	out := make([]seriesset.Series, len(subjects))
 	for i, subject := range subjects {
-		out[i] = seriesset.Series{Provider: t.Params.Provider, MarketType: t.Params.MarketType, SubjectID: subject, SeriesTag: t.Spec.SourceSeriesTag}
+		out[i] = seriesset.Series{SubjectID: subject, SeriesTag: t.Spec.SourceSeriesTag}
 	}
 	return out
 }

@@ -28,13 +28,10 @@ message DatasetPeriodExpectation {
   string reservation_id = 9;
 }
 
-// SeriesSnapshotEntry 是快照中一条序列的完整身份，Storage 用它重算 series_hash。
+// SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。
 message SeriesSnapshotEntry {
-  string provider = 1;
-  string source_id = 2;
-  string market_type = 3;
-  string subject_id = 4;
-  string series_tag = 5;
+  string subject_id = 1;
+  string series_tag = 2;
 }
 
 message RegisterSeriesSnapshotReq {
