@@ -1,8 +1,8 @@
 # EventBus 迁至存储机设计与执行计划
 
 - **日期**：2026-10-27
-- **状态**：待评审，尚未编码
-- **前置文档**：[策略读取变慢排查与修复方案](策略读取变慢排查与修复方案.md)。那份文档定位了存储机 ↔ 控制机公网链路的突发丢包；本文是其中提到的结构性修复。
+- **状态**：代码已完成（分支 `feat/eventbus-on-storage`，单元测试与 Docker 里的 Linux bootstrap 门禁通过，见第 5 节）；**生产迁移尚未执行**，第 6 节是按线上真实运维方式重写后的步骤，等用户确认后执行
+- **前置文档**：[策略读取变慢排查与修复方案](F1策略迁移/策略读取变慢排查与修复方案.md)。那份文档定位了存储机 ↔ 控制机公网链路的突发丢包；本文是其中提到的结构性修复。
 - **约束**：项目尚未上线，可以停机迁移；不考虑兼容、平滑切换和成本；规范和代码都可以改，以设计合理为第一准则。
 
 ## 1. 目标与依据
@@ -112,10 +112,10 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
   - 按部署记录得出的新地址重新生成 CA 和服务端证书。服务端证书的地址包含 EventBus 主机地址、127.0.0.1 和 ::1；
   - 角色令牌不变；
   - 输出的提示写明：所有客户端必须重新部署，才能拿到新 CA。
-- **对外入口是 `moox-cli setup eventbus-rotate-tls --release <REL>`**，不让操作者直接 SSH 去跑 admin CLI。
-  - 现有导出调用的是控制机当前发布里的 `moox-admin-cli`（`export.go:169`）。迁移时控制单元最后才更新，当前发布里的旧 CLI 还没有 `rotate-tls`（`eventbus_credentials.go:98`）。
-  - 所以这条命令从新版本制品里取出 `moox-admin-cli`，上传到控制机的状态目录，再经 `moox-runtime` 在维护锁内对 Admin 库执行。这和导出调用离线 CLI 是同一种方式，不会踩到"自己持锁再启动组件，锁被子进程继承"的坑。
-  - 轮换之后，`ensure`、`export`、`export-clients` 都按新地址校验通过。同一个 `--release` 下未完成的旧操作记录绑定的是旧材料，不能拿来重试；迁移的每一步都用新的 release（6.1）。
+- **对外入口是 `skills/moox/scripts/eventbus-credentials.sh rotate-tls --confirm ...`**（即 Admin CLI），与 `ensure`、`export`、`rotate` 同一个入口，不另做 `moox-cli setup` 子命令：
+  线上凭据本来就只通过这个脚本维护（见 `skills/moox/references/eventbus-credentials.md`），生产也没有 `moox-cli setup` 的状态目录。
+- 控制机上要先用 `native-release.sh install ... --no-restart` 装上新版 `moox-admin-cli`，旧版没有 `rotate-tls`。
+  轮换之后，`ensure`、`export`、`export-clients` 都按新地址校验通过。
 - **CA 私钥继续不保存**：轮换意味着全量重新部署，这对单用户、可以停机的系统可以接受，也不必为了保存 CA 私钥扩大密钥面。
 
 ### D5 客户端地址规则只有一处实现
@@ -162,17 +162,13 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
   - 恢复时为各上报方和主机设定新的计时起点，避免旧的 `last_seen_at` 一恢复就触发告警；
   - Monitor 自己发一条"观测输入中断"告警；
   - 不依赖观测输入的检查照常判定，包括网关心跳、部署探活和 K 线新鲜度里直接读 Storage 的部分。
-- **Doctor**：`doctor` 里把 eventbus 当作关键组件的检查，改为按它的部署主机去定位。
+- **Doctor**：不需要改。`doctor` 按组件 ID 从部署清单里找 eventbus 的健康检查，本来就不假设它在哪台主机。
 
 ### D8 防火墙
 
 - EventBus 端口的公网放行（0.0.0.0/0，凭 TLS 和 NATS 鉴权）移到 EventBus 所在的主机。`setup firewall`，以及 `deploy-host` 对出站主机的放行确认，都改为按 EventBus 主机检查。云接口已经会按主机实际所在的地域重试（`ensureFirewallRuleAtDiscoveredRegion`），不用改。
-- 现有的云接口只能新增或确认规则，没有删除能力。`packages/cloudprovider` 要补上删除（轻量应用服务器的防火墙和 CVM 安全组两种都要）。
-- 新增和删除拆成两个操作：
-  - `setup firewall` 只负责放行，行为不变；
-  - 新增 `setup firewall --prune`，删除不再需要的规则：EventBus 端口只保留在 EventBus 主机上，其余主机上的这条规则删掉。
-  - 这样迁移时可以先放行新主机、验收后再清理旧主机。
-- **删除只针对 MooX 自己建的那条规则**：按协议、端口、来源和描述（"MooX EventBus TLS"）精确匹配。CVM 的规则在安全组上，而安全组可能被多台实例共用（`cvm_firewall.go:136-159`）。所以删除前先核对这个安全组关联了哪些实例；如果 EventBus 主机也在其中，就不删，并给出提示。
+- **删除旧规则没有做**：现有的云接口只能新增或确认规则，没有删除能力；补删除要调腾讯云的删除接口（轻量应用服务器防火墙和 CVM 安全组两种），在没有测试桩的情况下写出来也验证不了。
+  控制机上旧的 4222 规则在迁移验收之后到腾讯云控制台手工删除（按描述"MooX EventBus TLS"找到那一条）。CVM 的规则在安全组上，安全组可能被多台实例共用，删之前先看它关联了哪些实例。
 
 ## 3. 不采用的方案
 
@@ -185,203 +181,167 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 | 行变更事件只发通知，storage-view 从本机 storage-node 取行 | 省下的流量差不多，但要改 Storage 内部的写入和消费模型；因子结果的写入目前也不记行变更日志。搬 EventBus 不改数据模型，改动集中在部署工具 |
 | 控制机和存储机各放一个 EventBus | 两条事件流要么分开治理，要么相互镜像，复杂度远超收益 |
 
-## 4. 代码改动清单
-
-**基线**：生产版本来自 `feat/f1-strategy`，这个分支的 CLI 和 main 有约 30 个文件的差异。先把它合入 main，再在新的 main 上开分支改。
+## 4. 代码改动（已完成，分支 `feat/eventbus-on-storage`，基于 `feat/f1-strategy` 的 7acf8896）
 
 ### 4.1 部署 CLI（`modules/cli/internal`）
 
 | 位置 | 改动 |
 |---|---|
-| `setup/config/topology.go`、`config.go` | 新增 `EventBusURLFor(hostID)`（D5）；EventBus 的对外地址仍由 `[deployments]` 推出 |
-| `setup/unitpackage/package.go` | 新增 `eventbus` profile；control profile 去掉 eventbus |
-| `setup/unitdeploy/core.go` | 核心请求的控制单元只含 admin；更新注释 |
-| `setup/unitbootstrap/request.go:163` | 改为只要求 admin |
-| `setup/unitbootstrap/bootstrap.go` | 核心阶段不再启动 eventbus；控制阶段的启动顺序改为 admin → host-gateway → host-agent → 其余；`eventBusURL` 改用 D5 的函数 |
-| `setup/unitbootstrap/recover.go` | `startStages` 与上一行一致；暂停例外名单去掉 eventbus。就绪判定不改，D2 改的是 HostAgent 自己的就绪语义 |
-| `setup/unitbootstrap/export.go`、`setup/unitbundle/eventbus.go`、`setup/unitdeploy/host.go:339-433`、`hostbundle` 的清单类型 | 按 profile 分流导出；新增服务端材料的清单、校验与传输链路（D3） |
-| `setup/unitbootstrap/bootstrap.go:142`（"不能缩减控制单元"） | 逻辑不改。它只比对 `[deployments]` 里仍属于控制机的组件，把 eventbus 从部署里移走后，这条校验自然放行。补一条测试：已安装的控制单元含 eventbus，部署记录把它移走后，完整控制阶段能装出不含 eventbus 的新发布 |
-| `command/` 新增 `setup eventbus-rotate-tls` | 从新版本制品取出 `moox-admin-cli` 上传到控制机，经 `moox-runtime` 持维护锁执行 `rotate-tls`（D4） |
-| `setup/unitbootstrap/offline.go` | 核心阶段仍执行 `eventbus-credentials ensure`；地址按部署记录取，不再假设是控制机 |
-| `setup/unitinstall/deploy.go` | 第 84 行的 profile 白名单加入 `eventbus`，服务端材料只允许出现在这个 profile 里；`DeploymentHash`、`DeploymentRequestHash` 纳入服务端清单（D3） |
-| `setup/unitinstall/eventbus.go`、`prepare.go` | 保留服务端证书校验；客户端地址取 `EventBusURL`，broker 的 `client_advertise` 改取新增的 `EventBusAdvertise`（D5） |
-| `setup/unitdeploy/host.go:370`、`unit.go:114`、`external.go:155` | EventBus 地址改用 D5 的函数。这三处分别是业务单元、Storage 的 `MOOX_STORAGE_EVENTBUS_URL`、因子引擎的 `--eventbus-url` |
-| `setup/unitwatch/watch.go`、`peer.go`、`alert.go` | 改注释和文案；新增 EventBus 端点检查与告警抑制（D7） |
-| `command/setup_firewall.go`、`command/setup.go` | 防火墙规则按 EventBus 主机下发；新增 `--prune`，精确删除其他主机上的 EventBus 规则（D8） |
-| `command/setup_deploy_unit.go` | 命令说明和 `--profile` 帮助加入 `eventbus` |
-| `configinit/moox.toml.example` | 第二份默认配置模板，与仓库根目录的 `moox.toml.example` 同步修改 |
-| `doctor/diagnose.go`、`doctor/bootstrap.go` | eventbus 按部署主机定位（D7） |
-| `collectorpackager/scf.go`、`command/collector.go` | 删除"可选携带 EventBus CA"及相关校验。SCF 函数已经不连 EventBus，这是死代码 |
-| `setup/unitdeploy/README.md`、`setup/unitinstall/README.md` | 按 D1～D3 重写核心阶段、单元部署和材料扩散规则 |
+| `setup/config/topology.go` | `EventBusClientURL`、`EventBusAdvertiseURL`、`Manifest.EventBusURLFor(hostID)`、`EventBusHost()`（D5）；所有渲染 EventBus 地址的地方都经过它 |
+| `setup/unitpackage/package.go` | 新增 `eventbus` profile，control profile 去掉 eventbus；`setup release build` 也构建 eventbus 包（`unitdeploy/release.go`） |
+| `setup/unitdeploy/core.go`、`unitbootstrap/{request,bootstrap,recover}.go` | 核心阶段的控制单元只有 Admin；拓扑必须把 eventbus 恰好登记在一台主机上（`eventBusHost`）；启动顺序 admin → host-gateway → host-agent → 其余；控制机上的客户端按"是否与 EventBus 同机"选地址 |
+| `setup/unitbootstrap/export.go`、`unitbundle/eventbus.go`、`hostbundle/types.go` | 服务端材料链路（D3）：`ExportRequest.Server`、`ClientMetadata.Server`、`ServerFiles`；清单逐文件校验大小与摘要，没声明 Server 时多带或少带服务端文件都被拒绝 |
+| `setup/unitinstall/{deploy,eventbus,prepare}.go` | profile 白名单加入 `eventbus`；服务端材料只允许 `eventbus` 单元携带（`DeploymentHash` 里校验，摘要因此绑定服务端清单）；新增 `EventBusAdvertise`：broker 的 `client_advertise` 始终是对外地址，拒绝回环地址，证书必须同时覆盖对外地址与本单元客户端实际连接的地址 |
+| `setup/unitdeploy/{host,unit,external}.go` | 业务单元、Storage 的 `MOOX_STORAGE_EVENTBUS_URL`、因子引擎的 `--eventbus-url` 都改用 `EventBusURLFor`；`DeployUnit` 接受 `eventbus` profile，导出时带 `Server` |
+| `setup/unitwatch/{watch,peer,alert,eventbus_peer}.go` | D7：EventBus 端点 TLS 握手检查、`peer-eventbus.json`、"EventBus 不可达/已恢复"告警；EventBus 不可用时抑制依赖它的组件的"持续未就绪"告警（Admin、主机网关、EventBus 自己除外）；control 交叉检查与它共用一套"连续失败约 3 分钟才告警"的状态机 |
+| `command/{setup,setup_firewall}.go` | D8：EventBus 端口规则只放在 EventBus 所在主机，出站主机接入的规则也分到两台主机上 |
+| `configinit/moox.toml.example`、根目录 `moox.toml.example` | `[deployments]` 里 eventbus 从 control 移到 storage |
+| `command/setup_deploy_unit.go` | 命令说明里没有逐个列 profile，无需改动 |
 
-### 4.2 Admin（`modules/admin`）
+### 4.2 Admin（`modules/admin/cmd/cli`）
 
-| 位置 | 改动 |
-|---|---|
-| `cmd/cli/eventbus_credentials.go` | 新增 `rotate-tls`（D4）；删除 `localEventBusRoles`（D5）；删除标注为"待删除"的 `archive-eventbus` 角色及其令牌与用户项 |
-| `internal/service/sysdeploy` | 不改，只补测试：EventBus 不在 Admin 主机时，走登记的对外地址 |
-
-另有 `packages/cloudprovider`：补上删除防火墙规则的能力，轻量应用服务器的防火墙和 CVM 安全组都要（D8）。
+- 新增 `eventbus-credentials rotate-tls --confirm`（D4）：按部署记录里的新地址重新生成 CA 与服务端证书，两条记录在一个事务里更新，角色令牌不变。
+- `export-clients --server`：额外导出 `server.pem`、`server-key.pem`、`users.yaml`，清单标记 `server: true`（D3）；`--server` 只能用于 `export-clients`。
+- 删除 `localEventBusRoles`（导出一律写对外地址，各单元安装时再改写）；删除标注"待删除"的 `archive-eventbus` 角色（令牌、用户项、导出文件）。线上 DB 里已有的 `eventbus_archive` 令牌记录无害，不再被使用。
 
 ### 4.3 其他模块
 
-- **HostAgent**：`internal/app/app.go` 新增独立的采集状态；`internal/app/health.go` 的 `/readyz` 只看采集状态，不再包含 EventBus 连接和发布错误。发布状态仍放在状态接口和指标里（D2）。
-- **Monitor**：观测 ingest 不可用期间暂停依赖观测输入的超时判定，恢复后重新计时，并只发一条"观测输入中断"（D7）。涉及 `bootstrap/metrics_runtime.go`、`metrics/catalog.go`、`bootstrap/business_freshness.go`、`bootstrap/host_presence.go`、`bootstrap/schedule_timers.go`、`hostmetrics/silence.go`。默认配置里的 `nats://127.0.0.1:4222` 只是开发默认值，生产由渲染覆盖，可以不动。
-- **系统暂停与在途目标**（Strategy、Trade、`packages/sysctl`）：
-  - **问题**：系统暂停按"策略 → Trade"的顺序进行，目标权重可能在三个地方被丢：
-    - 策略暂停不等 outbox 发完（`strategy/internal/bootstrap/lifecycle.go`）；
-    - outbox 一经 EventBus 确认就记为已发送（`strategy/internal/outbox/relay.go:69-85`），Trade 是异步消费的；
-    - Trade 暂停后，新收到的目标会因 `system_paused` 被直接终止（TERM，`trade/internal/eventconsumer/target.go:112-114`）。
-    
-    此外，编排器遇到"已暂停，但在途操作没有结束"只记一条警告，就继续暂停下一个模块（`packages/sysctl/sysctl.go:164-177`）。
-  - **改法**：
-    - 策略暂停在 outbox 排空之后才算停下；
-    - Trade 暂停的第一步是等目标持久消费者的积压清零（策略已经停了，不会再有新目标），之后才关闭接收；
-    - 编排器对 Strategy 和 Trade 的"在途操作没有结束"一律按失败处理，停在那里，不再继续暂停上游。
-  - 这是暂停与恢复本身的缺陷，不只影响迁移，所以在代码里修，不在操作步骤里绕过去。
-- **Storage、Collector、Trade、因子引擎**：代码不改，地址都由部署渲染。
+- **HostAgent**：`internal/app` 新增独立的采集状态；`/readyz` 只看采集（至少成功采集过一次，且最近一次采集没有出错），不再包含 EventBus 连接和发布错误（D2）。
+- **Monitor**：观测消费者没连上、或刚重新连上的 5 分钟宽限内，冻结所有依赖观测输入的超时判定（`SilenceScanner` 的主机失联扫描，以及业务新鲜度里的上报方、数据集、业务检查、模块健康）；只留一项"观测输入"检查说明原因；网关、K 线新鲜度、行情探针照常判定（D7）。
+- **Strategy**：暂停的 `Quiesce` 等正在求值的那一期结束，并且 outbox 里的目标都发布到 EventBus。
+- **`packages/sysctl`**：策略的"在途操作没有结束"改为阻断，不再往 Trade 和更上游继续暂停（其他模块仍然只是警告）。
+- **Trade**：暂停期间真实目标不再被 `system_paused` 终止，改为延迟 5 秒重投，放开后照常接收，已过有效期的按过期终止。这与原来文档写的"暂停时目标被拒绝并终止"不同，已更新 `docs/模块/交易.md`。
 
-### 4.4 配置与文档
+### 4.4 文档与技能
 
-- **配置**：
-  - `moox.toml.example`：`[deployments]` 中 eventbus 从 control 移到 storage，注释说明 EventBus 可以部署在任意一台直达主机上；
-  - 生产 `moox.toml` 同步修改。
-- **`docs/总体设计.md`**：部署表、拓扑图，以及"跨模块异步协作统一走 EventBus"一节里 EventBus 的位置。
-- **`docs/部署与运维.md`**：
-  - profile 表、核心阶段和全新安装顺序、防火墙、端口表；
-  - "control 的 EventBus 端口需要对公网开放"改为 EventBus 主机。
-- **`docs/模块/事件总线.md`**：改写"本机服务连接 127.0.0.1，因子机使用公网地址"一句，改成 D5 的规则；补上 `rotate-tls`；删除 `archive-eventbus` 一行。
-- **`docs/模块/存储.md`**：第 3 节"Storage 与 EventBus 跨公网往返一次要近 1 秒"那句，改成同机说明。
-- **`docs/模块/主机代理.md`、`监控.md`、`命令行工具.md`、`因子.md`**：凡写了"EventBus 在 control"或"引擎 → 控制机 4222"的地方都要改；`主机代理.md` 还要写明新的就绪语义。
-- **`skills/moox`**：
-  - `SKILL.md`、`references/eventbus-credentials.md`、`native-release.md`、`host-agent.md`、`custom-setup.md`、`private-network.md`、`host-registry.md`、`view-catchup.md` 中关于 EventBus 位置、凭据和防火墙的描述；
-  - `scripts/eventbus-credentials.sh` 及其契约测试。
-- **编码收尾**：全仓再检索一次 `ControlHost()`、`control.Address`、`4222`、`eventbus`，确认没有遗漏。
-- **记忆**：`prod-deploy-procedure` 里"EventBus 删流"一段的路径改到存储机；`eventbus-store-limit-exact` 补一句 store 已是全新的。
+`docs/总体设计.md`、`部署与运维.md`、`实现状态.md`、`模块/{事件总线,存储,主机代理,监控,命令行工具,因子,交易,策略}.md`，`skills/moox` 里的 `SKILL.md`、`references/{eventbus-credentials,custom-setup,host-registry}.md` 和 `scripts/eventbus-credentials.sh` 都按新位置改过。
 
-## 5. 测试门禁
+### 4.5 没有做的
 
-**单元测试**：
+- **SCF 包里可选携带 EventBus CA 的清理**（`collectorpackager/scf.go`、`command/collector.go`）：涉及 40 多处测试和云函数环境校验，与迁移无关，推迟。
+- **防火墙规则的删除**（`setup firewall --prune`）：见 D8。
+- **`setup eventbus-rotate-tls`**：改走 skill 脚本，见 D4。
+- **`moox-cli doctor`**：不需要改，见 D7。
+- **`unitdeploy/core_linux_test.go`（完整原生核心门禁）已按新布局改过，但没有跑**：它要真实的 Access、出口代理、Trade 和 CGO 构建的 Storage 制品，本机没有备齐。
 
-- `go test ./modules/cli/... ./modules/admin/...`
-- 新增用例：
+## 5. 测试
+
+**已运行并通过**：
+
+- 单元测试：`modules/{cli,admin,hostagent,strategy,trade,monitor}`、`packages/{sysctl,lifecycle,servicecatalog}` 全部 `go test ./...`；`GOOS=linux go vet ./modules/cli/...`。
+- 新增的用例：
   - `EventBusURLFor` 的同机和异机两种情况；
-  - `eventbus` profile 只能在部署了 eventbus 的主机上安装，其他 profile 携带服务端材料时被拒绝；
-  - `rotate-tls` 之后 `ensure`、`export`、`export-clients` 都能通过，旧 CA 不再被信任；
-  - EventBus 还没部署时，HostAgent 照样就绪，`core-ready` 与 `host-ready` 都能拿到；
-  - 本机客户端的地址是 127.0.0.1，broker 的 `client_advertise` 仍是公网地址；远端客户端能连上，断开后能重连；
-  - 服务端材料只能经 `eventbus` profile 传输；
-  - 防火墙对账会删除非 EventBus 主机上的 EventBus 规则；
-  - 守护进程的 EventBus 端点检查与告警抑制；
-  - Monitor 在 ingest 不可用期间不产生 stale、新鲜度和主机上报告警，恢复后重新计时；
-  - 策略暂停在 outbox 排空之后才完成，Trade 暂停在目标积压清零之后才关闭接收，暂停前已发布的目标都能被 Trade 正常接收；
-  - 编排器遇到 Strategy 或 Trade 的在途操作没有结束时，停止暂停，不再继续往上游暂停；
-  - HostAgent 在 EventBus 不可达时照样就绪，发布错误不影响 `/readyz`；
-  - 同一操作重试时，换入另一套服务端材料会被拒绝；
-  - `setup firewall --prune` 只删 MooX 那条规则，安全组同时关联 EventBus 主机时不删；
-  - Monitor 恢复观测后，不因旧的 `last_seen_at` 立即报 `unreachable`。
+  - broker 对外宣告对外地址、拒绝回环和证书不覆盖的地址；
+  - `rotate-tls` 的完整流程：EventBus 换主机后 `ensure`、`export`、`export-clients` 被拒绝，轮换之后通过，令牌不变、CA 换新；
+  - `export-clients --server` 与服务端清单的校验；
+  - HostAgent 在 EventBus 不可达或发布失败时仍然就绪；
+  - 守护的 EventBus 端点检查、告警状态机与抑制；
+  - Monitor 在观测输入中断时冻结、恢复宽限期内仍然冻结、宽限结束后恢复判定；
+  - 策略等 outbox 排空、sysctl 在策略没发完时停在策略这一步、Trade 暂停时延迟重投。
+- **Linux 门禁 `unitbootstrap`（9 个场景全部通过）**：在 Docker 里（arm64）用真实的 Admin、HostGateway、HostAgent、Console Proxy 制品跑 `TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether` 等场景。
+  拓扑把 eventbus 登记在控制机上，但控制单元里没有它、也没有任何 broker 在运行：**HostAgent 照样就绪**，这是 D2 在真实环境里的验证。
 
-**集成门禁**：
+**没有运行**：`test-unit-core-linux`（见 4.5）、`test-unit-install-linux`、`test-unit-runtime-linux`。`eventbus` 单元的真实安装（真实 broker、TLS、跨主机连接）在第 6 节的迁移里首次发生，所以迁移要先在存储机上单独验证它，再停机。
 
-- `make test-unit-core`、`make test-unit-core-linux`、`make test-unit-install-linux`。Linux 场景的三主机拓扑要改成"EventBus 在 storage"，并且真实启动 eventbus 单元。
-- `./scripts/check/verify-event-contracts.sh`
-- `skills/moox/scripts/test-eventbus-credentials-contract.sh`
+## 6. 生产迁移（按线上真实的运维方式；执行前需要用户确认）
 
-**本机预演**（迁移前必须完成）：
+### 6.0 与第一版计划的差别
 
-在 Linux 门禁的隔离网络里按第 6 节完整走一遍：先停写、排空，再用全新 store 启动，然后验证：
+第一版第 6 节用 `deploy-unit`、`bootstrap --stage control` 做重新部署。核实之后发现线上做不了：
 
-- storage-view 不触发任何重建：日志里没有 rebuild 或 reset，View 的水位接着原来的位置推进；
-- 各持久消费者都自动创建出来；
-- strategy、collector、因子引擎、Trade、Monitor 都能收到新事件；
-- **在途目标**：制造"暂停前已经发布、暂停期间才投递到"的目标，确认 Trade 正常接收，没有被 `system_paused` 终止；
-- **迁移后新建的数据集和 View**：确认数据从 Storage 正常补齐。
-  - 按数据集创建的动态消费者用的是 `DeliverAll`，靠重放流里已有的行（`inventory_reconciler.go:325`）。全新 store 里没有迁移前的事件。
-  - 这和现在流保留期（72 小时）以外的历史是同一种情况，理应走从 DataNode 重建的路径，但要实测确认。如果实测需要旧流里的事件，D6 就要重新评估。
+- 线上是原生部署，发布走 `skills/moox/scripts/native-release.sh`（SSH 公钥，逐组件替换二进制并核对）。本机没有 `moox-cli setup` 的状态目录和 core 收据，`deploy-unit`、`bootstrap` 跑不起来；技能文档也明确写了"不要用 `moox-cli` 做发布"（它会用 `moox.toml` 里的 SSH 密码）。
+- 线上 EventBus 的 `users.yaml` 是手工维护的，凭据文档要求"以现有文件为准，只追加新角色的块"。
+- 存储机安全组没有放行 4222：从控制机连 4222 超时，11003、20211 是通的。
+- 新版代码里"eventbus 单元"的目录布局已经确定（`/data/moox/eventbus/releases/<发布>` + `current`），迁移时在存储机上按同样的布局手工搭一份；以后用 `setup deploy-unit --profile eventbus` 重装时，会得到同样的布局。
 
-## 6. 生产迁移步骤
+所以迁移改成：用 `native-release.sh` 换新二进制，手工搭 EventBus 单元，脚本化扇出 CA 与地址，全程只用 SSH 公钥，不读取 `moox.toml` 里的账号密码；只有放开存储机 4222 一步要用 `moox.toml` 里的腾讯云凭据（技能文档规定的做法）。
 
-全程停机。每一步都写明验证方法。
+### 6.1 线上现状（2026-10-27 只读核实）
 
-文中的 `moox-cli system pause/resume` 是系统级的暂停与恢复：先追赶，追平后放行。主机上发布目录里的 `pause.sh`、`resume.sh` 只暂停单元里的进程，不是这里要用的。
+| 主机 | 单元 | 含旧 EventBus 地址 `106.53.107.122:4222` 的文件 | `ca.pem` 副本 |
+|---|---|---|---|
+| 控制机 | `prod`、`host` | 28 个：`runtime-*.json` 8 个，各组件 `secrets/eventbus/*.yaml`，`host-agent/config/eventbus.yaml`，`collector`、`monitor`、`strategy` 的 `config/app.yaml` | 11 个 |
+| 存储机 | `storage`、`access`、`host` | 17 个：`runtime-*.json`，storage 三个组件与 access、host-gateway、host-agent 的 `secrets/eventbus/*.yaml` | 8 个 |
+| 海外机 | `access`、`collector-stream`、`egress-proxy`、`trade`、`host` | 15 个：同上，另有 `trade/config/app.yaml` | 10 个 |
+| 因子机 | 外部程序，`~/moox/factor-engine/` | 引擎配置里的 `factor-eventbus` 角色文件与 `--eventbus-url`（迁移时核实具体文件） | 1 个 |
 
-### 6.1 准备
+（统计命令：在各单元 `current/` 下 `grep -rIl 106.53.107.122:4222`，排除 `data`、`logs`；`find -L ... -name ca.pem -path '*eventbus*'`。）
 
-1. **版本**：`feat/f1-strategy` 合入 main，按第 4 节编码完成，并通过第 5 节的门禁和预演。
-   - 先用 `setup build-linux --module storage` 构建 Storage 的 Linux 制品；
-   - 再用 `setup release build --storage-binary-dir <目录>` 构建发布制品，记下版本号 `<REL>`。不带这个参数的话，发布里不会有 storage 包（`unitdeploy/release.go:113-126`）；
-   - 核对制品清单里有 host、control、eventbus、storage、access、trade、egress-proxy、collector-stream、factor-engine、archive-worker 全部包。
-   - 之后的每一次 `deploy-host`、`deploy-unit`、`bootstrap --stage control`、`eventbus-rotate-tls` 都带 `--release <REL>`。操作记录按"主机 + profile + release"固定首次的拓扑和 CA，用新的 release 可以避开旧记录。
-2. **基线**：记录 chain、FH、5d158293 的"当期与上一根行"p50/p90，以及 storage-view 的投递滞后 p50/p90（统计口径同前置文档第 2 节）。
-3. **收编手工改动**：用新版本渲染出各主机的配置，与主机上现有的配置副本逐个比对，列出全部手工改动。按"合理性第一"，把它们收进仓库模板或 `moox.toml`，不再靠手改维持。已知的有：
-   - 因子机 `engine.yaml` 的 `compute.workers: 32`；
-   - 长回看所需的 `window.lookback` 与 `compute.max_memory`；
-   - 记忆 `swap5m-ema50000-status` 记录的 moox.toml 未同步项。
-4. **登记写入方**：除仓库里已知的写入方，再到各主机逐个确认有没有私有的写入任务，例如 cron 里的导入、补数脚本。有的话一一登记，在第 6 步停掉。
-5. **现场核验容量**：
-   - Storage 重新部署时，会把 current 发布目录里的数据（目前 4.0 GB）复制进候选目录。这是同盘复制，估计几分钟，计入停机窗口；
-   - 停机前现场确认存储机磁盘余量至少是 Storage 数据加上 EventBus 流上限（`MOOX_STORAGE` 为 8 GiB）之和的两倍（目前剩 79 GB）。
+### 6.2 要换的二进制（一律 `native-release.sh`，一次一个组件、一台主机）
 
-### 6.2 停写、排空、停机
+| 二进制 | 主机 | 为什么 |
+|---|---|---|
+| `moox-host-agent` | 控制机、存储机、海外机 | 就绪不依赖 EventBus。不先换的话，迁移期间旧版 HostAgent 重启后连不上 EventBus 会一直起不来 |
+| `moox-runtime`（`host-gateway` 目标产出） | 各主机 host 单元 | 守护的 EventBus 端点检查；就地替换文件，cron 条目不用动 |
+| `moox-strategy` | 控制机 | 暂停等 outbox 发完 |
+| `moox-trade`（及 cli） | 海外机 | 暂停期间目标延迟重投 |
+| `moox-monitor`（及 cli） | 控制机 | 观测输入中断期间冻结判定 |
+| `moox-admin-cli` | 控制机（`--no-restart`） | `rotate-tls`、`export-clients --server` |
+| `moox-eventbus`、`moox-admin` 服务端、Storage 全部 | 不换 | 这次没有改动；存储机上的 EventBus 用控制机当前发布里的同一份二进制 |
 
-6. **系统暂停，并停掉所有写入方**：
-   - `moox-cli system pause`，带上四个模块的健康端点参数或对应的环境变量。按"策略 → Trade → 因子引擎 → 采集"的顺序逐个暂停。
-     - 按 4.3 修复后：策略在 outbox 排空后才算停下；Trade 等目标积压清零后才关闭接收；任何一步没完成，编排器都会停下来报错。出现这种情况时，查清原因后重新执行，不要跳过；
-     - Collector 暂停时会等到云端定时器确认停用，SCF 定时采集随之停止。
-   - 再停掉暂停管不到的写入方：
-     - 控制机的 collector 进程：它的 subject-sync 定时任务只在进程退出时才停，暂停期间仍会写 Storage；
-     - 海外机的 collector-stream；
-     - 两台主机的 access，作为兜底，挡住所有经 Access 进来的写入；
-     - 因子机的 factor-engine、archive-worker；
-     - 第 4 步登记的私有写入任务。
-7. **排空核对**。生产者全部停下、storage-view 等消费者仍在运行时做最终核对；以下全部满足，并且在至少一个 1m 边界和一个 5m 边界之后仍然满足，才继续：
-   - storage-node 的 outbox 为空：`moox_storage_outbox_pending_entries` 为 0，storage-node 的 `/readyz` 里 `outbox_pending_entries` 也为 0；
-   - storage-view 的就绪队列为空：`moox_storage_view_ready_queue_pending` 为 0；
-   - strategy 的 outbox 为空：strategy 健康快照里待发布数为 0；
-   - **持久消费者**：
-     - 先从部署和 View 清单列出应有的集合：storage-view 每个有 View 的数据集各一个，加上 strategy、Trade、factor，以及 collector 的 4 个合成消费者；
-     - 再用 EventBusMgr 的 `ListConsumers` 翻完所有分页，核对 `MOOX_STORAGE`、`MOOX_COLLECTOR`、`MOOX_TRADE` 上的消费者与应有集合一致，每个的待投递数和待确认数都是 0；
-   - **Trade 没有终止过目标**：检查 Trade 的上报和日志，暂停窗口内没有 `system_paused` 或其他终止记录；
-   - `MOOX_OBSERVABILITY` 不在排空范围内。各服务一直在上报指标，而指标丢了也没关系。
-8. **停机**：
-   - **先关守护**：在 Admin 的主机策略里关闭守护（`watchdog.disabled`）。各主机的守护进程每分钟运行一次，会把普通停掉的组件重新拉起（`unitwatch/watch.go:242-285`）。
-     - 验证：各主机 `run/watchdog.log` 的最新一行带 `watchdog_disabled`；
-     - 不要用单元的 `pause.sh` 代替：它会留下持久的暂停标记，之后部署返回完成时，组件仍处于暂停状态（`unitinstall/deploy.go:214-227`）。
-   - **再停组件**：除 Admin 和各主机的 host-gateway 外，所有组件都停掉，包括 storage 三个组件、所有 host-agent 和控制机的 eventbus。
-   - Admin 和 host-gateway 必须一直运行：后面的部署登记同步、凭据轮换与导出、单元部署都要经过它们；
-   - Admin 作为指标发布方，会反复重连已经停掉的 EventBus，这无害；
-### 6.3 切换
+服务目录（`catalog.yaml`）没有改动，不需要整体发布。这些二进制先发布、先观察一个周期，再开始迁移。
 
-9. **改部署登记**：修改 `moox.toml` 的 `[deployments]`，把 eventbus 从 control 移到 storage。
-    - 先执行 `setup sync-deployments --host control`，去掉控制机的 eventbus 登记；
-    - 再执行 `setup sync-deployments --host storage`，加上存储机的登记。
-    - 顺序不能反过来：Admin 的拓扑校验会拒绝同一个单实例组件在两台主机上同时启用。
-    - 验证：Admin 的 `ResolveEventBusEndpoint` 解析到存储机，而且恰好只有一个启用的 EventBus 部署。
-10. **轮换 TLS**：`setup eventbus-rotate-tls --release <REL>`（用新版本的 Admin CLI，见 D4）。
-    - 验证：`ensure`、`export`、`export-clients` 都通过；导出的服务端证书地址包含 146.56.196.204。
-11. **防火墙**：`setup firewall`（不带 `--prune`），放开存储机的 4222，控制机上的旧规则这一步不动。云接口按主机实际所在的地域（ap-nanjing）下发。
-    - 验证：查询存储机的防火墙或安全组，确认规则已经存在。此时 EventBus 还没启动，做不了握手验证。
-12. **部署 EventBus**：`setup deploy-unit --host storage --profile eventbus --release <REL>`。
-    - 验证：readyz 为 ready；`ListStreams` 显示所有声明的流都已建出，且都是空的；从控制机、因子机、海外机都能完成到存储机 4222 的 TLS 握手。
-13. **按依赖重新部署各单元**，把新的 CA 和地址渲染下去，每次都带 `--release <REL>`：
-    1. 各主机的 host 单元：`deploy-host`，依次为 storage、control、overseas、factor；
-    2. `deploy-unit storage`；
-    3. storage 和 overseas 上的 access；
-    4. overseas 上的 trade、egress-proxy、collector-stream；
-    5. factor 上的 factor-engine、archive-worker；
-    6. `bootstrap --stage control`，完整控制单元。新发布不再含 eventbus。
-    - 每一步都确认返回 `<profile>-ready`。HostAgent 的就绪已不依赖 EventBus（D2），但此时 EventBus 已在运行，各主机快照应该都能发出。
-14. **恢复**：
-    - 在 Admin 的主机策略里重新打开守护，确认各主机 `run/watchdog.log` 恢复正常检查；
-    - `moox-cli system resume`，先追赶，追平后放行。
-    - 验证：第 7 步列出的持久消费者都已重新建出，并且在消费；第一个边界的 ViewDataReady 正常送达 strategy；storage-view 日志里没有重建。
-15. **收尾**：观察至少 12 个周期，第 7 节全部通过之后：
-    - 执行 `setup firewall --prune`，删除控制机上的 4222 规则，然后查询控制机的防火墙或安全组确认已删除；
-    - 删除控制机旧发布目录里的 eventbus 数据目录。
+### 6.3 准备（不停机）
 
-### 6.4 回退
+0. **屏蔽告警推送**：`moox-cli monitor mute --for 3h --reason EventBus迁移 --file ./moox.toml`（`references/initial-import.md` 里的做法；`mute-status` 查看）。第 3 步之后 Admin 的部署登记已经把 eventbus 记在存储机上，而它要到切换时才真正在那里运行，期间 Monitor 的部署探活会报"eventbus 未就绪"；切换完成后解除。
+1. **改 `moox.toml`**：把 `[deployments]` 里的 eventbus 从 control 移到 storage。文件是加密的，参照 F1 迁移用过的补丁工具（在本机进程内解密、校验、备份、原子替换，不输出内容）。
+2. **放开存储机 4222**：用新构建的 `moox-cli setup firewall --file moox.toml`（只放行，不删除）。
+   验证：从控制机、海外机、因子机各连一次 `存储机:4222`，没有 EventBus 在监听时应当是"连接被拒绝"，而不是超时。
+3. **同步部署登记**：`setup sync-deployments --host control`，再 `--host storage`（顺序不能反，单实例组件不能同时在两台主机上启用）。
+   验证：Admin 的 `ResolveEventBusEndpoint` 解析到存储机。
+4. **轮换 TLS**：备份 Admin 库（SQLite 在线备份，不要直接复制带 WAL 的文件）；用新版 `moox-admin-cli`：`eventbus-credentials.sh rotate-tls --confirm ...`，再 `export` 到 0700 临时目录。
+   然后**比对线上 `users.yaml` 与新导出的那份**：逐个角色比较令牌和权限块。令牌不会变；线上手工加过的权限不能丢。最终沿用线上现有的 `users.yaml`，只把需要追加的块补上。
+   这一步之后，旧 EventBus 仍然用它磁盘上的旧证书继续工作，不受影响。
+5. **在存储机上搭好 EventBus 单元（不启动）**：`/data/moox/eventbus/releases/eventbus-<时间>/`，布局与 `eventbus` profile 一致：
+   - `bin/moox-eventbus`：从控制机当前发布里拷来（同一份二进制，核对 sha256）；
+   - `eventbus/config/app.yaml`：以控制机现在的那份为底，把 `broker.client_advertise` 改成 `146.56.196.204:4222`，`server_name` 改成 `eventbus-storage`，证书、`users.yaml`、CA 的路径指向新发布目录；
+   - `eventbus/secrets/eventbus/`：新 CA、新服务端证书和私钥（来自第 4 步的导出）、线上的 `users.yaml`、`internal-admin.yaml`（地址 `tls://127.0.0.1:4222`）、`metrics-publisher.yaml`；
+   - `eventbus/data/eventbus/jetstream/`：空目录（全新的 store，D6）；
+   - `secrets/runtime-eventbus.json`、`runtime.json`、`start.sh` 等七个生命周期脚本：以控制机当前发布里的为模板，改主机 ID 为 `storage`、路径指向新发布目录；
+   - `host-gateway` 链接指向 `/data/moox/host/current/host-gateway`；
+   - `prepared.json`：复制存储机 host 单元的 `prepared.json` 里的身份部分，改 profile 为 `eventbus`、组件为 `["eventbus"]`，再执行 `moox-runtime reseal --unit-root /data/moox/eventbus --yes` 重新生成文件清单。
+   先**不建 `current` 链接**，守护进程发现不了它，不会提前拉起。
+6. **单独验证这个单元**：用 `moox-runtime start --plan <新发布>/runtime.json` 手工起来，核对 `/readyz`、`ListStreams`（四个流都在、都是空的）、从控制机和海外机用对外地址做 TLS 握手、用某个角色的新凭据做一次真实连接；然后停掉。此时新 CA 还没有扇出，所以握手时要显式指定新 CA。
+7. **写好扇出脚本并干跑**：对每台主机，在各单元 `current/` 下找出含旧地址的文件和 `secrets/eventbus/ca.pem`，输出"将要改哪些文件"的清单，只读。核对数量与 6.1 一致。
 
-项目尚未上线，不单独设计回退，也不为回退做备份。新版本支持 EventBus 部署在任意主机，如果要换回控制机，就在 `[deployments]` 里改回去，用一个新的 release ID 把本节流程再走一遍。
+### 6.4 切换（停机窗口，预计 30～45 分钟）
+
+1. **关守护**：各主机用户 crontab 里的 `# moox-watchdog` 行先备份再注释掉（四台逐台操作；验证：`crontab -l` 里该行已注释）。不用 `pause.sh`，它会留下持久的暂停标记。
+2. **系统暂停**：`moox-cli system pause`（要带四个模块的健康端点，用 SSH 隧道或在各机上执行）。顺序是策略 → Trade → 因子引擎 → 采集。
+   - 策略要等 outbox 发完才算停下，发不完会停在策略这一步报错，查清原因后重新执行，不要跳过。
+3. **停其余写入方**：
+   - 控制机的 collector 进程（它的 subject-sync 定时任务在暂停期间仍会写 Storage）；
+   - 海外机的 collector-stream；
+   - 两台主机的 access（兜底，挡住所有经 Access 进来的写入）；
+   - 因子机的引擎和归档 Worker；
+   - 已登记的私有写入任务（先在各主机核对 crontab 和 systemd 用户服务）。
+4. **排空核对**：所有条件满足、并且跨过至少一个 1m 边界和一个 5m 边界之后仍然满足，才继续：
+   - storage-node：`moox_storage_outbox_pending_entries` 为 0，`/readyz` 里 `outbox_pending_entries` 也为 0；
+   - storage-view：`moox_storage_view_ready_queue_pending` 为 0；
+   - strategy：待发布数为 0；
+   - 持久消费者：先从 View 清单和各模块列出应有的集合，再用 `ListConsumers` 翻完分页，`MOOX_STORAGE`、`MOOX_COLLECTOR`、`MOOX_TRADE` 三个流上每个消费者的待投递数和待确认数都是 0（`MOOX_OBSERVABILITY` 不在范围内）。
+     Trade 暂停期间到达的目标会延迟重投，所以 `MOOX_TRADE` 上的待投递数可能不是 0；这时等它们过期，不要强行继续。
+5. **停机**：除 Admin 和各主机的 host-gateway 外，所有组件都停掉，包括 storage 三个组件、所有 host-agent、控制机上的 eventbus。
+6. **建 `current` 并启动存储机上的 EventBus**：`ln -sfn` 建 `/data/moox/eventbus/current`，`moox-runtime start --plan`；核对就绪与四个流。
+7. **扇出**：运行第 7 步的脚本，把各主机上的 `ca.pem` 换成新 CA，把 `106.53.107.122:4222` 换成该主机应使用的地址（存储机上的客户端用 `127.0.0.1:4222`，其余用 `146.56.196.204:4222`）；文件权限保持 0600；每个单元改完执行 `moox-runtime reseal`。
+   验证：再 `grep` 一遍，旧地址一个都不剩；每个 `ca.pem` 的 sha256 与新 CA 一致。
+8. **按依赖顺序启动**：
+   1. 存储机：host-agent、storage-primary、storage-node、storage-view、access；
+   2. 控制机：host-agent、monitor、strategy、factor-mgr、collector、cloudfunction、archive-mgr 等其余组件；
+   3. 海外机：host-agent、access、egress-proxy、trade、collector-stream；
+   4. 因子机：引擎、归档 Worker。
+   每一步核对就绪，日志里不能出现 `Authorization Violation`、`certificate`。
+9. **恢复**：`moox-cli system resume`，先追赶后放行。
+10. **开守护并解除屏蔽**：恢复各主机 crontab 里的 `# moox-watchdog` 行；`moox-cli monitor mute` 对应的解除。
+
+没有回退设计（项目未上线）。要换回控制机，就把 `[deployments]` 改回去，用同样的流程再做一遍。
+
+### 6.5 收尾
+
+- 观察至少 12 个周期，第 7 节全部通过之后：到腾讯云控制台删除控制机上旧的 4222 规则（见 D8）；
+- 删除控制机旧发布目录里的 eventbus 数据目录（约 2.3 GB）；
+- 把 `skills/moox/references/native-release.md` 的单元表里 `eventbus` 从控制机 `prod` 单元移到存储机的 `eventbus` 单元，并记下这次手工搭单元的做法；
+- 更新记忆里的 `prod-deploy-procedure`、`eventbus-store-limit-exact` 和迁移进度。
 
 ## 7. 验收
 
@@ -463,4 +423,11 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 
 - EventBus 主机上本机 broker 未就绪时，抑制本机其他客户端的未就绪告警（D7）。
 - 防火墙删除只针对 MooX 建的那条规则；安全组同时关联 EventBus 主机时不删（D8）。
+
+### 9.3 实现阶段的取舍与发现（2026-10-27）
+
+- **线上没有 `moox-cli setup` 的状态目录，且技能文档禁止用 `moox-cli` 发布**：第 6 节整体重写，见 6.0。
+- **HostAgent 的就绪语义**：Docker 里的 Linux bootstrap 门禁验证了"没有 broker 时 HostAgent 照样就绪"；该门禁里原来依赖控制单元含 eventbus 的断言（断言 broker 拒绝无角色的 TLS 客户端、EventBus CA 在控制单元里的路径）已按新布局改写。
+- **Trade 暂停的语义**：第二轮审查建议"Trade 暂停前先等目标积压清零"，但生命周期框架没有"暂停前"的钩子；改为让暂停期间到达的真实目标延迟重投、不终止，同样不会静默丢目标，改动更小。副作用：迁移排空核对时 `MOOX_TRADE` 上可能还有待投递的目标，要等它们过期。
+- **没有写防火墙删除、SCF CA 清理**：见 4.5。
 
