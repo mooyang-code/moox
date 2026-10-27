@@ -243,7 +243,7 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 
 **没有运行**：`test-unit-core-linux`（见 4.5）、`test-unit-install-linux`、`test-unit-runtime-linux`。`eventbus` 单元的真实安装（真实 broker、TLS、跨主机连接）在第 6 节的迁移里首次发生，所以迁移要先在存储机上单独验证它，再停机。
 
-## 6. 生产迁移（按线上真实的运维方式；执行前需要用户确认）
+## 6. 生产迁移（按线上真实的运维方式；已于 2026-10-27 执行，记录见 6.6）
 
 ### 6.0 与第一版计划的差别
 
@@ -343,6 +343,25 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 - 把 `skills/moox/references/native-release.md` 的单元表里 `eventbus` 从控制机 `prod` 单元移到存储机的 `eventbus` 单元，并记下这次手工搭单元的做法；
 - 更新记忆里的 `prod-deploy-procedure`、`eventbus-store-limit-exact` 和迁移进度。
 
+### 6.6 执行记录与偏差（2026-10-27）
+
+时间线（UTC）：02:47～02:50 换完二进制（四台主机的 host-agent、`moox-runtime`，控制机的 strategy、monitor、admin-cli，海外机的 trade）；02:50～02:53 改 `moox.toml`、同步部署登记、轮换 TLS；
+03:17 在存储机搭好单元并单独验证；03:21 关守护并系统暂停；03:27 新 EventBus 启动；03:28～03:29 按顺序拉起；03:30 开始恢复，03:35 采集放行；
+04:02 因子引擎与 Trade 放行；04:10 策略放行。写入方（采集）停了约 12 分钟（03:23～03:35），策略 49 分钟没有出目标（03:21～04:10）。
+
+与计划不同或计划没写到的地方：
+
+- **因子机也有 `host` 单元（host-agent、host-gateway）**，也要换 `moox-host-agent`、`moox-runtime`，也要改地址与 CA；它不在 `native-release.sh` 的主机别名里，用环境变量 `MOOX_RELEASE_HOST_FACTOR` 临时指定。
+- **控制机 `prod` 单元必须摘掉 `eventbus` 组件**：一是看守进程恢复后会把停掉的旧 EventBus 拉起来；二是新版 `moox-runtime reseal` 按 `control` profile 校验，计划里多出 `eventbus` 就报 `preparation receipt requires a valid unit selection`（10 个组件对 9 个）。做法：停旧 EventBus → 改 `runtime.json`、`prepared.json`、`package-manifest.json` 去掉该组件 → 把 `eventbus/` 目录整个移出发布目录（清单边界检查不认识它）→ `reseal --yes`。
+- 防火墙：`setup firewall` 报 18 条规则都已存在、没有新建；实测从控制机、海外机、因子机连存储机 4222 都是"连接被拒绝"（已放行、无人监听），启动后 TLS 握手验证通过。
+- `users.yaml`：线上与新导出的逐角色比对，令牌与权限块全部一致；线上多一个 `archive-eventbus` 角色（代码里已不用），沿用线上文件。
+- 排空：停机时只剩一个消费者（`storage_view_factor_3ab1…`）有 1 条在途消息，暂停前就在，View 的待发布数为 0；新 store 丢掉这一条，不影响恢复。
+- **系统恢复在栅栏处等到超时**：暂停跨过新的 K 线周期后，策略要等因子引擎放行、算出最新周期才能追平，因子引擎在等栅栏。30 分钟超时后用 `resume --release-partial --yes` 放行因子引擎与 Trade，策略约 8 分钟后追平，再 `resume` 放行策略。下次暂停窗口要预留这一步，或把恢复的超时缩短到 5 分钟。
+- 新地址下 `moox-cli system pause/resume` 要走 SSH 隧道到各模块健康端口（控制机 11412/11431、海外机 11210、因子机 11417），鉴权密钥取自控制机 `runtime-monitor.json`，只放内存。
+- 暴露了一个原来就有的问题：Collector 重启后每分钟报 `collector fetch plan reconciliation failed space=crypto: no available code package named "moox-collector-crypto-plan"`，Monitor 出一条 `market_fetch:scf_timer` 严重告警。云函数 GC 在 10-25 03:47 清掉了这个代码包，之前的进程没有重新对账所以没暴露。它与 EventBus 位置无关，没有处理。
+
+未做：故障演练（临时阻断 4222，会影响生产）；SCF 里旧 EventBus CA 的清理；控制机安全组里旧的 4222 规则（到腾讯云控制台删）；控制机上旧 EventBus 数据（`/data/moox/prod/eventbus-move-*/old-eventbus-component`，2.4 GB）与 Admin 库备份，观察满 12 个周期后删。
+
 ## 7. 验收
 
 **流量**：
@@ -366,6 +385,18 @@ F1 上线后，每个 5 分钟边界后的 2～10 秒内，三个 FH 任务的�
 - 控制机只收到一条"EventBus 不可达"（守护进程）和一条"观测输入中断"（Monitor）；
 - 没有逐个组件的未就绪告警，也没有"已停止上报"告警；
 - 恢复后各组件自动重连，Monitor 重新计时，之后不补报误告警。
+
+### 7.1 验收结果（2026-10-27 04:10～04:21 UTC，策略放行后的前两个 5 分钟边界）
+
+| 项 | 结果 | 对照 |
+|---|---|---|
+| 存储机 ↔ 其他主机 4222 流量 | 04:19:55 起 28 秒（跨 5 分钟边界）共 152 KB：控制机 113 KB、海外机 28 KB、因子机 12 KB | 迁移前每个边界约 2 MB |
+| strategy"当期与上一根行" | 04:15、04:20 两个周期各 5 个实例共 10 个样本，209～299 ms，p90 约 0.29 秒 | 迁移前 p50 1.0 秒、p90 2.2 秒；目标 p90 小于 0.5 秒，达到 |
+| storage-view"投递滞后" | 21 个事件：p50 317 ms、p90 509 ms；chain 5m 178 ms | 迁移前 chain 0.72 / 2.67 秒；目标 p50 小于 50 ms、p90 小于 200 ms，**没有达到**，剩下的部分不在 EventBus 往返上，需要另查（事件产生到 View 处理之间的 outbox 与提交路径） |
+| Monitor 告警 | 只剩 `market_fetch:scf_timer` 一项（原有问题，见 6.6）；控制机磁盘使用率回落到 55%，告警已恢复 | |
+| 消费者 | `ListConsumers` 四个流：22 个 View 消费者与策略、Trade、因子消费者都已重建，待投递与待确认为 0 | |
+
+故障演练没有做。
 
 ## 8. 后续评估（不在本计划内）
 
