@@ -183,7 +183,8 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
    - 不在暂停范围内的写入入口：Monitor 主机指标在新旧版本交替的几分钟里写入失败、留一段指标空缺，可以接受；Web 与 CLI 数据导入是手工操作，发布期间不执行。
 2. 按发布手册"服务目录变化：必须整体发布"：三台主机的 host-gateway 与 host-gateway-cli（控制机最后）→ Admin → Monitor（Monitor 主机指标写入在换装前后短暂失败，换装后恢复）→ 存储机、海外机的 Access。
 3. Storage 三个组件（同一份二进制，view → node → primary）。
-4. 控制机其余换了二进制的组件：collector、collector-stream、factor-mgr、moox-cli、Web。
+4. 控制机其余换了二进制的组件：collector、collector-stream、factor-mgr、moox-cli、Web（web-host 内嵌前端）。
+   - 云函数代码包（`modules/collector/cmd/scf`）同样经 Access 直接调用 `UpsertFields` / `CommitTimeSeriesBatch`。生产 crypto 空间自 10-25 起只有 collector-stream 采集单元，没有云函数与代码包（发布前用 `moox-cli collector fetch-plan --space-id crypto` 核对）；以后再创建云函数时上传的新包自然是新协议。若核对时发现有云函数，要先上传新代码包并升级。
 5. 因子引擎（因子机），`compute.workers: 32` 保留。
 6. `moox-cli system resume`：采集补采暂停区间、追平后自行恢复实时采集；因子同步并补算；策略记录周期；Trade 对账。各模块按自己的追赶进度恢复，不是同时放行。
 7. 验收：
