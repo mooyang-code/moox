@@ -1,6 +1,6 @@
 # 通用写入取代 WriteFactorRows 设计
 
-状态：设计稿 v4（2026-10-27）。v2、v3 按 Codex 两轮审查修订；v4 按用户决定删除 `source_event_id` 与 `write_source`（见第 7 节）。未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
+状态：设计稿 v4.1（2026-10-27）。v2、v3 按 Codex 两轮审查修订；v4 按用户决定删除 `source_event_id` 与 `write_source`，v4.1 按 Codex 对 v4 的复审补全清单（见第 7 节）。未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
 
 ## 0. 目标
 
@@ -18,7 +18,7 @@
 5. `source_event_id`：不再为 JetStream 重投去重。重投极少发生，发生时多写一次相同的行、多发一条行变更事件，View 重复应用无害。`UpsertFields` 与 `CommitTimeSeriesBatch` 都删除这个字段，数据节点的"已处理来源事件"标记、时间索引与清理随之删除。
 6. `write_source`：只被写进行变更事件、没有任何消费方读取，一并删除。
 
-不在范围内（见第 6 节）：`CommitTimeSeriesBatch` 周期账本本身的改造、`write_owner` 权限模型改造、`normalizeStockCNSeriesTags`。
+不在范围内（见第 6 节）：`CommitTimeSeriesBatch` 周期账本的语义改造、`write_owner` 权限模型改造、`normalizeStockCNSeriesTags`。
 
 ## 1. 现状对比
 
@@ -101,7 +101,7 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 - 重复提交命中时，锁外准备好的 batch 直接丢弃，代价只是白做一次准备。
 - 变更日志的范围整理（遍历行、按标的与频率合并时间范围、排序）放到锁外，与准备一起完成；锁内只分配变更序号、组装记录并写入 batch。否则因子写入改为记变更日志后，501 个标的的范围整理会新加进临界区。
 - 事件 ID 一律是 outbox 位置；`BuildDatasetRowsUpsertedMessageForSource*` 与 `BindOutboxID` 里来源派生 ID 的分支删除。
-- `CommitTimeSeriesBatch`（`period_progress.go`）去掉来源 ID 参数，行写入走同一条锁外准备的路径。
+- `CommitTimeSeriesBatch`（`period_progress.go`）去掉来源 ID 参数；行的准备移到 `outboxMu` 之前（仍持 `datasetWriteMu` 读锁与 `periodMu`，准备不依赖 outbox 状态），锁内只分配编号、写周期记录与位图、提交。
 - O9 的分段计时日志从 `factor_rows.go` 移到这个通用入口（阈值 50 ms，日志改名为"storage node 写入"，带数据集与是否带 `commit_id`）。
 
 ### 2.4 commit 标记
@@ -135,8 +135,9 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 |---|---|
 | Monitor `hostmetrics/storage_writer.go` | 请求加 `space_id`、`dataset_id`（已按数据集分组），删除 `SourceEventId` |
 | Collector `marketstorage/storage.go`（K 线补采、重采样） | `UpsertFields` 加顶层数据集（调用方本来就逐数据集写，接口里取第一行的数据集并校验一致）；删除 `UpsertFieldsWithSource`、`CommitTimeSeriesBatch` 的来源 ID 参数与 `writeSource` |
-| Collector `marketfetch` | 删除 `sourceStorage` 接口、`writeEventID`、`Request.WriteIDByContent`（`plan.go`、`klinecheck/backfill.go` 的赋值）；`kline_committer` 直接调 `UpsertFields` / `CommitTimeSeriesBatch`。采集任务自己的 `SourceEventID`（抓取请求 ID、结果事件字段）属于采集领域，保留 |
-| Collector `streamapp` | 删除 `WriteSource` 常量及传参 |
+| Collector `marketfetch` | 删除 `sourceStorage` 接口与 `writeEventID`；`kline_committer` 直接调 `UpsertFields` / `CommitTimeSeriesBatch`。`Request.WriteIDByContent` 还兼任"计划构造的请求允许 `MaxPlanItems`（200）项、否则 `MaxRealtimeItems`（40）项"的判断（`contracts.go` 的校验），改名为 `PlanRequest` 只保留这个用途，`plan.go`、`klinecheck/backfill.go` 的赋值同步改名。采集任务自己的 `SourceEventID`（抓取请求 ID、结果事件字段）属于采集领域，保留 |
+| Collector 重采样 | `resample/storage.go`、`resample/engine.go` 改用 `UpsertFields`，周期提交去掉来源参数；`bootstrap/resample.go` 不再传 `write_source` |
+| Collector `write_source` 的间接引用 | `marketfetch.Handler.NewStorage` 工厂签名与各调用点、`NewMarketStorageForMarket` 的参数、`writeSourceForFunctionName`、`streamapp.WriteSource` 常量一并删除 |
 | CLI `import.go` | 请求加顶层数据集 |
 | Web `api/storage/access.ts`、`views/data/import/index.vue` | `upsertFields(spaceId, datasetId, rows)` |
 | Storage `cmd/server/main.go` 的代理 | 透传，无逻辑改动 |
@@ -162,7 +163,7 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 ## 3. 风险与取舍
 
 - **冲突检测保留**：因子的实时 `commit_id` 是内容摘要、补算带盐，理论上不会出现"同 ID 不同内容"，但它能在引擎或序列化出 bug 时立刻暴露问题，代价只是标记里多存 32 字节，保留。
-- **删除 `source_event_id`（用户决定）**：JetStream 重投（写入成功、ACK 失败）时，同一批行会再写一次、多发一条行变更事件；行内容相同，View 重复应用无害。周期提交仍有周期账本兜底，封口后的重复提交不再写入。接受这个小概率的重复，换取只有一种幂等机制（`commit_id`）的简洁协议。需要严格幂等的写入方（因子）用 `commit_id`。
+- **删除 `source_event_id`（用户决定）**：JetStream 重投（写入成功、ACK 失败）时，同一批行会再写一次、多发一条行变更事件。采集重投会重新抓取，内容可能与第一次不同，结果是后写覆盖先写（与正常的修正写入相同）；View 按事件顺序应用，重复或覆盖都无害。周期提交仍有周期账本兜底，封口后的重复提交不再写入。接受这个小概率的重复，换取只有一种幂等机制（`commit_id`）的简洁协议。需要严格幂等的写入方（因子）用 `commit_id`。
 - **单数据集约束**：现有调用方都已是单数据集写入；跨数据集写入的原子性本来就不存在（主库逐个下发、部分成功），收窄后语义更清楚。
 - **重复行键**：只对 `commit_id` 写入强制（指纹需要唯一键）；其他写入保持现状（后写覆盖先写），避免 Web/CLI 导入的历史文件突然被拒。
 
@@ -196,7 +197,6 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 
 ## 6. 后续（不在本设计）
 
-- `CommitTimeSeriesBatch` 的周期批次在 `outboxMu` 内准备，若成为锁等待再处理。
 - `write_owner` 精确匹配、去别名等权限改造（《Storage 去业务耦合设计》2.1）。
 
 ## 7. 审查记录
@@ -228,3 +228,13 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 ### v4（用户决定，2026-10-27）
 
 不再为 JetStream 重投做去重：重投极少发生，View 重复应用相同内容无害；为了协议简洁，删除 `source_event_id`（`UpsertFields`、`CommitTimeSeriesBatch` 两层）及数据节点的来源事件去重，同时删除没有消费方的 `write_source`。幂等只保留 `commit_id` 一种。第 3 节原"`commit_id` 与 `source_event_id` 不合并"的取舍随之作废。
+
+### v4 复审（Codex，2026-10-27）：还需修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| `WriteIDByContent` 还兼任计划请求 200 项上限的判断，直接删除会改变校验 | 接受。改名为 `PlanRequest`，只保留这个用途（2.7） |
+| 漏了重采样链路（`resample/storage.go`、`resample/engine.go`、`bootstrap/resample.go`） | 接受，补入（2.7） |
+| `write_source` 的间接引用（`Handler.NewStorage`、`NewMarketStorageForMarket`、`writeSourceForFunctionName`）未列出 | 接受，补入（2.7） |
+| 2.3 要求周期行在锁外准备，第 6 节仍说在锁内 | 接受。统一为锁外准备，删除第 6 节该条（2.3） |
+| "重投时行内容相同"不成立，采集重投会重新抓取 | 接受，改为后写覆盖先写的表述（第 3 节） |
