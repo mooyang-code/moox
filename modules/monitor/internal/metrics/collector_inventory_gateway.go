@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -28,4 +29,19 @@ func (c *CollectorInventoryGatewayClient) GetTaskResultInventory(ctx context.Con
 		return nil, err
 	}
 	return rsp, nil
+}
+
+// ListTagSyncStatus 读取 Collector 的标签同步运行状态；spaceID 为空表示所有空间。
+func (c *CollectorInventoryGatewayClient) ListTagSyncStatus(ctx context.Context, spaceID string) ([]*collectorpb.TagSyncStatus, error) {
+	if c == nil || c.gateway == nil {
+		return nil, errors.New("collector tag sync status requires the shared gateway")
+	}
+	rsp := &collectorpb.ListTagSyncStatusRsp{}
+	if err := c.gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "ListTagSyncStatus", &collectorpb.ListTagSyncStatusReq{SpaceId: spaceID}, rsp); err != nil {
+		return nil, err
+	}
+	if code := rsp.GetRetInfo().GetCode(); code != 0 {
+		return nil, fmt.Errorf("list tag sync status: %s", rsp.GetRetInfo().GetMsg())
+	}
+	return rsp.GetItems(), nil
 }

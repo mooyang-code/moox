@@ -244,9 +244,9 @@ func TestValidateReservedInternalSpacesAcceptsDeclaredSpace(t *testing.T) {
 func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	seed := metadataSeed{
 		Spaces:         []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
-		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange"}},
+		DataSources:    []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance", Name: "Binance"}},
 		Subjects:       []seedSubject{{SpaceID: "crypto", SubjectID: "BTC", Name: "Bitcoin"}},
-		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Source: "binance", MarketType: "spot"}},
+		Tags:           []seedTag{{SpaceID: "crypto", TagID: "binance_spot", TagName: "Binance Spot", Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}},
 		Datasets:       []seedDataset{{SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1m", SubjectTags: []string{"binance_spot"}}},
 		Fields:         []seedField{{SpaceID: "crypto", FieldID: "close", ValueType: "DOUBLE"}},
 		DatasetColumns: []seedDatasetColumn{{SpaceID: "crypto", DatasetID: "kline", ColumnName: "close", OriginType: "FIELD", ValueType: "DOUBLE"}},
@@ -339,8 +339,8 @@ func TestBuildMetadataImportCallsBackfillsInternalViewColumnDisplayName(t *testi
 
 func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("data_sources",
-		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Status: "active"},
-		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Kind: "exchange", Status: "active"},
+		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"},
+		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"},
 	))
 	assert.True(t, metadataContractsEqual("datasets",
 		&pb.Dataset{SpaceId: "crypto", DatasetId: "kline", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m", Status: "active"},
@@ -764,8 +764,7 @@ func TestRunMetadataApplySecondPassIsUnchanged(t *testing.T) {
 			seedCommon: seedCommon{Status: "active", Attributes: map[string]string{"managed_by": "moox-cli"}},
 		}},
 		DataSources: []seedDataSource{{
-			SpaceID: "crypto", DataSourceID: "binance", Name: "币安", Kind: "exchange",
-			Market: "crypto", Timezone: "UTC", ConfigJSON: "{}",
+			SpaceID: "crypto", DataSourceID: "binance", Name: "币安",
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "binance", Name: "行情",
@@ -912,12 +911,11 @@ func TestApplyProbeResultDatasetColumns(t *testing.T) {
 
 func storageOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }
 
-// Collector 运行后会把 subject_listing 写进数据源属性；初始化重跑时它不算种子契约的差异，其他属性差异仍然冲突。
-func TestMetadataContractsEqualIgnoresCollectorOwnedSubjectListing(t *testing.T) {
-	seed := &pb.DataSource{SpaceId: "stockcn", DataSourceId: "eastmoney", Name: "东方财富", Status: "active", ConfigJson: "{}"}
-	running := proto.Clone(seed).(*pb.DataSource)
-	running.Attributes = map[string]string{"subject_listing": `{"instrument_types":["stock"]}`}
-	assert.True(t, metadataContractsEqual("data_sources", seed, running))
-	running.Attributes["owner"] = "someone"
-	assert.False(t, metadataContractsEqual("data_sources", seed, running))
+// 数据来源只有标识、名称、状态与属性：属性全部属于种子契约，任何差异都算冲突。
+func TestMetadataContractsEqualComparesDataSourceAttributes(t *testing.T) {
+	seed := &pb.DataSource{SpaceId: "stockcn", DataSourceId: "eastmoney", Name: "东方财富", Status: "active"}
+	same := proto.Clone(seed).(*pb.DataSource)
+	assert.True(t, metadataContractsEqual("data_sources", seed, same))
+	same.Attributes = map[string]string{"owner": "someone"}
+	assert.False(t, metadataContractsEqual("data_sources", seed, same))
 }

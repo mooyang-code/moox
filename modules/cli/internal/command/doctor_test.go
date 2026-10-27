@@ -17,19 +17,12 @@ func TestDoctorRegistersOnlyV1Modes(t *testing.T) {
 	for _, child := range cmd.Commands() {
 		names = append(names, child.Name())
 	}
-	require.Equal(t, []string{"alerts", "bootstrap", "diagnose", "repair-view-consumers"}, names)
+	require.Equal(t, []string{"alerts", "bootstrap", "diagnose"}, names)
 	for _, forbidden := range []string{"full", "get", "list", "cancel", "rerun"} {
 		found, _, err := cmd.Find([]string{forbidden})
 		require.Error(t, err)
 		require.NotEqual(t, forbidden, found.Name())
 	}
-}
-
-func TestDoctorRegistersViewConsumerRepairAlias(t *testing.T) {
-	cmd := newDoctorCommand(doctorCommandDeps{})
-	child, _, err := cmd.Find([]string{"repair-storage-view"})
-	require.NoError(t, err)
-	require.Equal(t, "repair-view-consumers", child.Name())
 }
 
 func TestValidateDoctorFlagsAndExitCodes(t *testing.T) {

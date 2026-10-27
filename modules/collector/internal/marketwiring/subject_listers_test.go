@@ -16,5 +16,5 @@ func TestNewSubjectListersCoversBuiltInTagSources(t *testing.T) {
 	require.NoError(t, err)
 	supported := listers.Supported()
 	require.ElementsMatch(t, []string{"spot", "swap"}, supported["binance"])
-	require.Contains(t, supported["eastmoney"], "equity", "the built-in cn_a_share tag must publish a subject_listing capability")
+	require.Contains(t, supported["eastmoney"], "equity", "the built-in cn_a_share tag must be listed by a subject lister")
 }

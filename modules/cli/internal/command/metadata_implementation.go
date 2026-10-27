@@ -601,18 +601,6 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 	return nil
 }
 
-// withoutRuntimeAttributes 去掉由运行中的模块维护的属性：Collector 会把 subject_listing 写进数据源，
-// 初始化重跑时它不属于种子契约，不能因此判成冲突。
-func withoutRuntimeAttributes(attributes map[string]string) map[string]string {
-	out := make(map[string]string, len(attributes))
-	for key, value := range attributes {
-		if key != "subject_listing" {
-			out[key] = value
-		}
-	}
-	return out
-}
-
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
 	if resource == "spaces" {
 		x, y := a.(*pb.Space), b.(*pb.Space)
@@ -623,12 +611,8 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 		return x.GetSpaceId() == y.GetSpaceId() &&
 			x.GetDataSourceId() == y.GetDataSourceId() &&
 			x.GetName() == y.GetName() &&
-			x.GetKind() == y.GetKind() &&
-			x.GetMarket() == y.GetMarket() &&
-			x.GetTimezone() == y.GetTimezone() &&
-			x.GetConfigJson() == y.GetConfigJson() &&
 			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(withoutRuntimeAttributes(x.GetAttributes()), withoutRuntimeAttributes(y.GetAttributes()))
+			maps.Equal(x.GetAttributes(), y.GetAttributes())
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)
@@ -793,15 +777,15 @@ func (s seedSpace) toPB() *pb.Space {
 }
 
 func (s seedDataSource) toPB() *pb.DataSource {
-	return &pb.DataSource{SpaceId: s.SpaceID, DataSourceId: s.DataSourceID, Name: s.Name, Kind: s.Kind, Market: s.Market, Timezone: s.Timezone, ConfigJson: s.ConfigJSON, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.DataSource{SpaceId: s.SpaceID, DataSourceId: s.DataSourceID, Name: s.Name, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedSubject) toPB() *pb.Subject {
-	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, SubjectType: s.SubjectType, Name: s.Name, Market: s.Market, Currency: s.Currency, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
+	return &pb.Subject{SpaceId: s.SpaceID, SubjectId: s.SubjectID, Name: s.Name, Timezone: s.Timezone, Status: s.status(), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: s.Attributes}
 }
 
 func (s seedTag) toPB() *pb.Tag {
-	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Source: s.Source, MarketType: s.MarketType, Cron: s.Cron, Timezone: s.Timezone}
+	return &pb.Tag{SpaceId: s.SpaceID, TagId: s.TagID, TagName: s.TagName, Description: s.Description, Mode: s.Mode, Builtin: s.Builtin, Attributes: s.Attributes}
 }
 
 func (s seedDataset) toPB() (*pb.Dataset, error) {

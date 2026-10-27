@@ -46,7 +46,7 @@ func (s *metadataStub) GetTag(_ context.Context, req *storagepb.GetTagReq, _ ...
 	if s.tagCode != commonpb.ErrorCode_SUCCESS {
 		return &storagepb.GetTagRsp{RetInfo: &commonpb.RetInfo{Code: s.tagCode, Msg: "tag not found"}}, nil
 	}
-	return &storagepb.GetTagRsp{RetInfo: success(), Tag: &storagepb.Tag{TagId: req.GetTagId(), MarketType: "spot"}}, nil
+	return &storagepb.GetTagRsp{RetInfo: success(), Tag: &storagepb.Tag{TagId: req.GetTagId(), Attributes: map[string]string{"market_type": "spot"}}}, nil
 }
 
 // coverageStub 按探测请求的 TotalMode 返回覆盖范围：NONE 时只有已缓存才返回。
