@@ -26,15 +26,15 @@ type Agent struct {
 	collector snapshotCollector
 	// connectMu 串行化建连（可能阻塞到超时）；stateMu 只保护 publisher 指针，持锁期间不做网络操作，
 	// 健康检查只读 stateMu，EventBus 建连停滞不会拖慢 /healthz。
-	connectMu                              sync.Mutex
-	stateMu                                sync.Mutex
-	publisher                              eventpublisher.Publisher
-	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
-	hostname, bootID, version              string
-	latestMu                               sync.RWMutex
-	latest                                 *hostmetricpb.HostSnapshot
-	lastCollect, lastPublish               time.Time
-	lastErr                                string
+	connectMu                 sync.Mutex
+	stateMu                   sync.Mutex
+	publisher                 eventpublisher.Publisher
+	newPublisher              func(context.Context) (eventpublisher.Publisher, error)
+	hostname, bootID, version string
+	latestMu                  sync.RWMutex
+	latest                    *hostmetricpb.HostSnapshot
+	lastCollect, lastPublish  time.Time
+	lastErr                   string
 	// collectErr 只记最近一次采集的错误，发布错误不会写入这里；/readyz 只看它（发布状态另见 lastErr 与 EventBus 连接）。
 	collectErr                             string
 	collected, published, dropped, skipped atomic.Uint64
