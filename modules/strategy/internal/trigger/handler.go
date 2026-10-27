@@ -86,6 +86,23 @@ type Handler struct {
 	dropped map[string]struct{}
 }
 
+// WaitIdle 等正在处理的事件（Handle 持锁期间）结束；没有在处理的事件时立即返回。
+// 暂停门禁关闭之后用它确认不会再有新的目标落库：之后到达的事件只记录周期、不求值。
+func (h *Handler) WaitIdle(ctx context.Context) error {
+	idle := make(chan struct{})
+	go func() {
+		h.mu.Lock()
+		h.mu.Unlock() //nolint:staticcheck // 只是等锁：持锁的 Handle 结束就说明空闲
+		close(idle)
+	}()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Handle 处理一条事件。返回 nil 表示所有绑定实例的本期终态都已落库，可以 ACK；
 // 返回错误表示至少一个实例需要重投；ErrInvalidEvent 表示事件本身不可处理。
 func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {

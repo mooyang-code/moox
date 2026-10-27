@@ -110,7 +110,9 @@ func HandleTarget(
 		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
 	}
 	if opts.Intake != nil && !opts.Intake() {
-		return targetRejection("system_paused", errors.New("trade is paused: new targets are rejected"))
+		// 暂停期间不接收真实目标，但也不销毁它：它可能是策略暂停前刚发布、还在路上的目标。
+		// 留在消费者里延迟重投，放开后照常接收；已过有效期的由上面的过期检查终止。
+		return pausedTargetRetry()
 	}
 	requestHash, err := targetapp.RequestHash(request)
 	if err != nil {
@@ -385,6 +387,17 @@ func unsupportedLogicalTargetInstrument(
 		}
 	}
 	return "", membersReady, nil
+}
+
+// pausedTargetDelay 是暂停期间目标的重投间隔：暂停是人为的、可能持续很久，不需要每秒重试。
+const pausedTargetDelay = 5 * time.Second
+
+func pausedTargetRetry() jetstream.HandlerResult {
+	return jetstream.HandlerResult{
+		Decision: jetstream.RETRY,
+		Delay:    pausedTargetDelay,
+		Err:      errors.New("trade is paused: the target waits until resume or expiry"),
+	}
 }
 
 func retryTarget(err error) jetstream.HandlerResult {

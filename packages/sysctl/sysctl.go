@@ -167,6 +167,11 @@ func (o *Orchestrator) Pause(ctx context.Context, reason string) (PauseResult, e
 		obj, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: reason, By: o.By})
 		switch {
 		case err == nil:
+		case strings.Contains(err.Error(), "已暂停，但在途操作没有结束") && m.Name == Strategy:
+			// 策略的在途操作是还没发布到 EventBus 的目标：不拦住的话，Trade 接着暂停，这些目标就再也送不出去。
+			// 门禁已经关闭，策略保持暂停；停在这里，等目标发完后重新执行（暂停幂等）。
+			result.Paused = append(result.Paused, m.Name)
+			return result, fmt.Errorf("暂停 %s：%w", m.Name, err)
 		case strings.Contains(err.Error(), "已暂停，但在途操作没有结束"):
 			// 门禁已经关闭，只是在途操作还没结束：提示，继续停上游（上游停了不会再有新的数据进来）。
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s：%v", m.Name, err))

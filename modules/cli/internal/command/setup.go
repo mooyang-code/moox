@@ -932,12 +932,18 @@ func setupControlFirewallRulesForTLS(mode tlstrust.TLSMode, address string) []cl
 	return rules[1:]
 }
 
-func setupRuntimeFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
+// setupEventBusFirewallRule 是 EventBus 端口的放行规则：只放在 EventBus 所在主机上（不一定是控制机），
+// 其他主机的客户端和因子机、海外机的出口 IP 都不固定，只能按 0.0.0.0/0 放行，认证由 TLS 与角色凭据完成。
+func setupEventBusFirewallRule(eventBusPort int) cloudtencent.CreateFirewallRulesOptions {
+	return cloudtencent.CreateFirewallRulesOptions{
+		Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0",
+		Action: "ACCEPT", Description: "MooX EventBus TLS",
+	}
+}
+
+// setupRuntimeFirewallRules 是控制机上运行时需要的端口（不含 EventBus，见 setupEventBusFirewallRule）。
+func setupRuntimeFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
-		{
-			Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0",
-			Action: "ACCEPT", Description: "MooX EventBus TLS",
-		},
 		{
 			Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0",
 			Action: "ACCEPT", Description: "MooX service gateway native",

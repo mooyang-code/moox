@@ -67,28 +67,34 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 }
 
 // setupEnsureRelayFirewall 在部署只能出站的主机之前，经腾讯云接口确认 control 的跨主机端口（反向连接）
-// 与 EventBus 端口（出站主机的 HostAgent 上报）对公网开放；出站主机的出口 IP 会变，只能按 0.0.0.0/0 放行，
+// 与 EventBus 主机上的 EventBus 端口（出站主机的 HostAgent 上报）对公网开放；出站主机的出口 IP 会变，只能按 0.0.0.0/0 放行，
 // 认证由 TLS 与签名完成。任何一条规则无法确认都返回错误，不让部署在网络不通的情况下继续。
 func setupEnsureRelayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) (setupFirewallSummary, error) {
 	if snapshot == nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
 	}
-	summary, err := ensureFirewallTargets(ctx, snapshot.Manifest, []setupFirewallTarget{{Host: snapshot.Manifest.ControlHost(), Rules: setupRelayFirewallRules(snapshot.Manifest.EventBus.Port)}})
+	summary, err := ensureFirewallTargets(ctx, snapshot.Manifest, setupRelayFirewallTargets(snapshot.Manifest))
 	if err != nil {
 		return summary, err
 	}
 	if summary.Status != "ready" {
-		return summary, fmt.Errorf("firewall: could not confirm control ports %d and %d are open for outbound hosts; check the Tencent Cloud credentials and the control instance", servicecatalog.HostGatewayRemotePort, snapshot.Manifest.EventBus.Port)
+		return summary, fmt.Errorf("firewall: could not confirm control port %d and EventBus port %d are open for outbound hosts; check the Tencent Cloud credentials and the control and EventBus instances", servicecatalog.HostGatewayRemotePort, snapshot.Manifest.EventBus.Port)
 	}
 	return summary, nil
 }
 
-// setupRelayFirewallRules 是出站主机接入 control 需要的端口。
-func setupRelayFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
-	return []cloudtencent.CreateFirewallRulesOptions{
-		{Protocol: "TCP", Ports: fmt.Sprint(servicecatalog.HostGatewayRemotePort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
-		{Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX EventBus TLS"},
+// setupRelayFirewallTargets 是出站主机接入需要的端口：control 的网关端口，和 EventBus 所在主机的 EventBus 端口。
+// 两者是同一台主机时合并成一个目标。
+func setupRelayFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
+	gateway := cloudtencent.CreateFirewallRulesOptions{Protocol: "TCP", Ports: fmt.Sprint(servicecatalog.HostGatewayRemotePort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"}
+	control, bus := manifest.ControlHost(), manifest.EventBusHost()
+	targets := []setupFirewallTarget{{Host: control, Rules: []cloudtencent.CreateFirewallRulesOptions{gateway}}}
+	busRule := setupEventBusFirewallRule(manifest.EventBus.Port)
+	if bus.Name == control.Name {
+		targets[0].Rules = append(targets[0].Rules, busRule)
+		return targets
 	}
+	return append(targets, setupFirewallTarget{Host: bus, Rules: []cloudtencent.CreateFirewallRulesOptions{busRule}})
 }
 
 func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, targets []setupFirewallTarget) (setupFirewallSummary, error) {
@@ -223,8 +229,12 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
 		tlstrust.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
 	)...)
-	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules(manifest.EventBus.Port)...)
+	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules()...)
 	add(manifest.ControlHost(), controlRules)
+	// EventBus 端口只在 EventBus 所在的主机上放行（与控制机同机时由 add 按地址合并）。
+	if setupconfigHostConfigured(manifest.EventBusHost()) {
+		add(manifest.EventBusHost(), []cloudtencent.CreateFirewallRulesOptions{setupEventBusFirewallRule(manifest.EventBus.Port)})
+	}
 
 	if setupconfigHostConfigured(manifest.StorageHost()) {
 		add(manifest.StorageHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})

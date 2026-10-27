@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -50,6 +51,7 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			AutoStart:   func(ref lifecycle.Ref) bool { return ref.Kind == instanceKind },
 			AutoConfirm: deps.autoConfirm,
 			Catchup:     deps.catchup,
+			Quiesce:     deps.quiesce,
 			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("strategy_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
@@ -69,6 +71,48 @@ func (d lifecycleDeps) autoConfirm(ref lifecycle.Ref, _ time.Time) bool {
 		return false
 	}
 	return instance.LogicalAccountID == nil || strings.TrimSpace(*instance.LogicalAccountID) == ""
+}
+
+// quiesceStep 是等待 outbox 排空时的轮询间隔。
+const quiesceStep = 200 * time.Millisecond
+
+// quiesce 等策略真正停下：正在求值的那一期结束，并且已经落库的目标都发布到了 EventBus（outbox 排空）。
+// 门禁关闭之后不会再有新的目标；这里等的是门禁关闭之前已经产生、还留在 outbox 里的那些。
+// 目标没有发到 EventBus 就停下，下游（Trade）暂停后它们再也送不出去，所以超时必须报出来，由系统暂停编排器拦住后续的暂停。
+func (d lifecycleDeps) quiesce(ctx context.Context, _ lifecycle.Ref) error {
+	if d.handler != nil {
+		if handler := d.handler.Load(); handler != nil {
+			if err := handler.WaitIdle(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	if d.db == nil {
+		return nil
+	}
+	return waitOutboxDrained(ctx, d.db)
+}
+
+// outboxStatsReader 是等待 outbox 排空需要的最小能力（*store.Store 实现），便于测试替换。
+type outboxStatsReader interface {
+	PendingOutboxStats(ctx context.Context) (store.OutboxStats, error)
+}
+
+func waitOutboxDrained(ctx context.Context, reader outboxStatsReader) error {
+	for {
+		stats, err := reader.PendingOutboxStats(ctx)
+		if err != nil {
+			return err
+		}
+		if stats.PendingCount == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("还有 %d 个目标没有发布到 EventBus：%w", stats.PendingCount, ctx.Err())
+		case <-time.After(quiesceStep):
+		}
+	}
 }
 
 func instanceRef(id string) lifecycle.Ref { return lifecycle.Ref{Kind: instanceKind, ID: id} }
