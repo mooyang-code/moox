@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v21（2026-10-27），未编码。v21：按 Codex 审查补全 storage-view 直连 Metadata 的验签范围（含周期状态与同步点）与启动时 `ListViews` 的签名密钥。v20：按用户决定 storage-view 调 Metadata 改为直连、走服务签名，网关 ACL 删除它访问 Storage 的规则，只保留调 Admin 走网关（3.1）。v19：按 Codex 审查补 factor-mgr 删 `write_owner`、storage-view 直连 PrimaryStore 写同步点不经网关。v18：按用户决定删除 `write_owner`，写入权限只靠网关 ACL（读写分开、写方法按实际调用放行），不再统一 AppId（3.1）。v17：按 Codex 复审落实三处代码衔接——`write_owner` 检查放在有调用方身份的 Catalog 层、单模板要改的三处旧拓扑校验、重采样触发器入参换新事件类型。v16：按 Codex 全文审查修正 `write_owner` 经 `CreateDataset` 绕过、单一消费模板的启动与路由发现、重采样归入 `ledger` 并换装其触发消费者。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v22（2026-10-27），未编码。v22：第 5 步补 Collector 两个新只读接口的服务目录声明与 ACL。v21：按 Codex 审查补全 storage-view 直连 Metadata 的验签范围（含周期状态与同步点）与启动时 `ListViews` 的签名密钥。v20：按用户决定 storage-view 调 Metadata 改为直连、走服务签名，网关 ACL 删除它访问 Storage 的规则，只保留调 Admin 走网关（3.1）。v19：按 Codex 审查补 factor-mgr 删 `write_owner`、storage-view 直连 PrimaryStore 写同步点不经网关。v18：按用户决定删除 `write_owner`，写入权限只靠网关 ACL（读写分开、写方法按实际调用放行），不再统一 AppId（3.1）。v17：按 Codex 复审落实三处代码衔接——`write_owner` 检查放在有调用方身份的 Catalog 层、单模板要改的三处旧拓扑校验、重采样触发器入参换新事件类型。v16：按 Codex 全文审查修正 `write_owner` 经 `CreateDataset` 绕过、单一消费模板的启动与路由发现、重采样归入 `ledger` 并换装其触发消费者。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -215,7 +215,7 @@ attributes:
 **表结构与上层**
 
 - `t_tags`、`t_subjects`、`t_data_sources` 删列与 `CHECK`，`t_tags` 加 `c_attrs_json`，随全新部署生效。
-- Collector：标签固定字段的所有读取点改读属性——标的同步的调度与筛选（`subjectsync/tag_runner.go`、`syncer.go:30`）、采集计划分组（`marketfetch/task_groups.go:95`）、建任务校验（`rpc/service.go:1119`）、重采样的来源推导与任务结果记录；运行状态表与 `ListTagSyncStatus`、`ListSubjectListers` 两个只读接口；属性维护任务补齐属性键；快照写属性；序列快照只交两项；删除 `subject_listing` 能力登记；种子与元数据导入。
+- Collector：标签固定字段的所有读取点改读属性——标的同步的调度与筛选（`subjectsync/tag_runner.go`、`syncer.go:30`）、采集计划分组（`marketfetch/task_groups.go:95`）、建任务校验（`rpc/service.go:1119`）、重采样的来源推导与任务结果记录；运行状态表与 `ListTagSyncStatus`、`ListSubjectListers` 两个只读接口（服务目录 `catalog.yaml:627` 一带的 Collector 服务同步声明这两个方法、标为只读，ACL 放行 Monitor 与 Web 所用的 `console` 身份）；属性维护任务补齐属性键；快照写属性；序列快照只交两项；删除 `subject_listing` 能力登记；种子与元数据导入。
 - Strategy：`input/client.go:207` 改读 `tag.attributes["market_type"]`。
 - Monitor：标签检查按上文改用 Collector 的运行状态与标签属性。
 - Trade：经核对不读 Storage 的标签，无需改动（Trade 自己协议里的 `market_type` 与本步无关）。
@@ -235,7 +235,7 @@ attributes:
 | 2 | 元数据校验与列契约、列来源改名（3.3） | Storage、factor-mgr、Archive、CLI、Web |
 | 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、单一消费模板（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置、Admin（EventBus 权限生成里 Storage、Factor、Strategy 的主题与消费者）及其测试 |
-| 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode、缓存、种子初始化）、`packages/seriesset`、Collector、Strategy、Monitor、CLI、Web、种子 |
+| 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode、缓存、种子初始化）、`packages/seriesset`、Collector、服务目录（Collector 新增的两个只读方法）、Strategy、Monitor、CLI、Web、种子 |
 
 理由：第 1 步把"谁能写"整个交给网关，Storage 里按业务角色的权限分支一次删光，后面几步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件；第 5 步与前四步互不依赖，放在最后做，也可以在第 1 步之后任意时间做。
 
@@ -407,3 +407,11 @@ Storage 内部组件之间直连、走服务签名，不经网关 ACL：storage-
 | 启动时 `ListViews` 用 Primary 密钥签名，加验签后会启动失败 | 第 1 步同步改用 View 密钥 |
 
 Codex 确认：v19 两项与代码吻合；Metadata 端口监听本机回环、部署要求 storage-view 与 storage-primary 同机、启动顺序 Primary 在前。
+
+### v22（Codex 全文复审 v21，只看重要问题，2026-10-27）：需要修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| Collector 新增的 `ListTagSyncStatus`、`ListSubjectListers` 未在服务目录声明，网关会拒绝 Monitor 与 Web 的调用 | 第 5 步补服务目录声明、只读标记与 ACL |
+
+Codex 确认：v20、v21 两条意见已正确处理；其余各节未发现矛盾或遗留旧说法。
