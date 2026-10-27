@@ -65,7 +65,10 @@ type File struct {
 	Size   int64  `json:"size"`
 }
 
-// ClientMetadata inventories an immutable EventBus client-only export.
+// ClientMetadata inventories an immutable EventBus export. By default it holds
+// client roles and the public CA only. Server marks the export for the host that
+// runs the broker: it additionally carries server.pem, server-key.pem and
+// users.yaml, and only the eventbus unit may consume such an export.
 // CA is the SHA256 of the original public ca.pem bytes, not a signing key.
 type ClientMetadata struct {
 	Version   int      `json:"version"`
@@ -73,8 +76,12 @@ type ClientMetadata struct {
 	OutputDir string   `json:"output_dir"`
 	Roles     []string `json:"roles"`
 	CA        string   `json:"ca_sha256"`
+	Server    bool     `json:"server,omitempty"`
 	Files     []File   `json:"files"`
 }
+
+// ServerFiles are the extra files of a Server export, in sorted order.
+var ServerFiles = []string{"server-key.pem", "server.pem", "users.yaml"}
 
 type Metadata struct {
 	Version          int             `json:"version"`

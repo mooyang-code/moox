@@ -94,33 +94,59 @@ func probeTLS(ctx context.Context, target, serverName, caFile string) error {
 	return conn.Close()
 }
 
-// observePeer 更新交叉检查状态并返回需要推送的告警。
-func observePeer(report *PeerReport, state *peerState, host string, now time.Time) []notification.Message {
-	if report.Reachable {
+// peerEvent 是一次握手检查之后状态机给出的结论。
+type peerEvent int
+
+const (
+	peerNoEvent peerEvent = iota
+	// peerDown：连续失败达到告警条件，本轮第一次要报失联。
+	peerDown
+	// peerUp：之前报过失联，本轮恢复了。
+	peerUp
+)
+
+// advancePeer 推进一个对端的检查状态：control 网关与 EventBus 端点共用这套“连续失败约 3 分钟才告警、恢复后通知”的规则。
+// 返回的 elapsed 是已连续失败的时长（可达时为恢复前的失联时长，只在 peerUp 时有意义）。
+func advancePeer(state *peerState, reachable bool, errText string, now time.Time) (peerEvent, time.Duration) {
+	if reachable {
 		alerted, since := state.Alerted, state.FailingSince
 		*state = peerState{LastOK: now}
 		if !alerted {
-			return nil
+			return peerNoEvent, 0
 		}
-		return []notification.Message{peerMessage(report, host, now, notification.SeverityInfo, "已恢复",
-			"失联时长："+durationText(now.Sub(since).Round(time.Minute)))}
+		return peerUp, now.Sub(since)
 	}
 	if state.FailingSince.IsZero() {
 		state.FailingSince = now
 	}
 	state.Failures++
-	state.LastError = report.Error
+	state.LastError = errText
 	elapsed := now.Sub(state.FailingSince)
-	report.FailingSeconds = int64(elapsed.Seconds())
 	if state.Alerted || state.Failures < peerAlertMinRuns || elapsed < peerAlertAfter-peerTolerance {
-		return nil
+		return peerNoEvent, elapsed
 	}
 	state.Alerted = true
-	return []notification.Message{peerMessage(report, host, now, notification.SeverityCritical, "失联",
-		fmt.Sprintf("现象：连续 %d 轮（约 %s）无法与 control 网关 %s 完成 TLS 握手", state.Failures, durationText(elapsed.Round(time.Minute)), report.Target),
-		"最近错误："+firstLine(report.Error),
-		"影响：Monitor、EventBus 与推送都在 control 上，期间其他告警可能发不出来",
-		"处理：检查 control 主机是否在线、主机网关进程与安全组；control 自己的守护会在 1 分钟内拉起网关")}
+	return peerDown, elapsed
+}
+
+// observePeer 更新交叉检查状态并返回需要推送的告警。
+func observePeer(report *PeerReport, state *peerState, host string, now time.Time) []notification.Message {
+	event, elapsed := advancePeer(state, report.Reachable, report.Error, now)
+	if !report.Reachable {
+		report.FailingSeconds = int64(elapsed.Seconds())
+	}
+	switch event {
+	case peerUp:
+		return []notification.Message{peerMessage(report, host, now, notification.SeverityInfo, "已恢复",
+			"失联时长："+durationText(elapsed.Round(time.Minute)))}
+	case peerDown:
+		return []notification.Message{peerMessage(report, host, now, notification.SeverityCritical, "失联",
+			fmt.Sprintf("现象：连续 %d 轮（约 %s）无法与 control 网关 %s 完成 TLS 握手", state.Failures, durationText(elapsed.Round(time.Minute)), report.Target),
+			"最近错误："+firstLine(report.Error),
+			"影响：Monitor 与告警推送都在 control 上，期间其他告警可能发不出来",
+			"处理：检查 control 主机是否在线、主机网关进程与安全组；control 自己的守护会在 1 分钟内拉起网关")}
+	}
+	return nil
 }
 
 func peerMessage(report *PeerReport, host string, now time.Time, severity notification.Severity, state string, lines ...string) notification.Message {
@@ -134,9 +160,12 @@ func peerMessage(report *PeerReport, host string, now time.Time, severity notifi
 	}
 }
 
-func (s *store) loadPeer() (*peerState, error) {
+func (s *store) loadPeer() (*peerState, error)   { return s.loadPeerFile("peer-control.json") }
+func (s *store) savePeer(state *peerState) error { return s.savePeerFile("peer-control.json", state) }
+
+func (s *store) loadPeerFile(name string) (*peerState, error) {
 	state := &peerState{}
-	raw, err := os.ReadFile(filepath.Join(s.dir, "peer-control.json"))
+	raw, err := os.ReadFile(filepath.Join(s.dir, name))
 	if os.IsNotExist(err) {
 		return state, nil
 	}
@@ -150,10 +179,10 @@ func (s *store) loadPeer() (*peerState, error) {
 	return state, nil
 }
 
-func (s *store) savePeer(state *peerState) error {
+func (s *store) savePeerFile(name string, state *peerState) error {
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(s.dir, "peer-control.json"), raw)
+	return writeFileAtomic(filepath.Join(s.dir, name), raw)
 }

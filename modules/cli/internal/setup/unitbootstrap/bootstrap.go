@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
@@ -282,7 +282,12 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if !found || len(eventBus.Ports) != 1 {
 		return errors.New("EventBus catalog endpoint is invalid")
 	}
-	eventBusURL := "tls://" + net.JoinHostPort(control.Address, strconv.Itoa(eventBus.Ports[0]))
+	bus, err := eventBusHost(request.Topology)
+	if err != nil {
+		return err
+	}
+	// 控制机上的组件按"是否与 EventBus 同机"选择连接地址：EventBus 不在控制机时，连的是它所在主机的对外地址。
+	eventBusURL := setupconfig.EventBusClientURL(bus.HostID, bus.Address, eventBus.Ports[0], j.HostID)
 	materialOptions := unitbundle.Options{HostID: j.HostID, ControlHostID: j.HostID, Address: control.Address, PrivateAddress: control.PrivateAddress, ControlAddress: control.Address, Components: control.Components, ExpectedCA: metadata.CA.SHA256, ExpectedHash: metadata.ExpectedHash, AllowOperator: true}
 	if _, err := unitbundle.Load(ctx, metadata.BundleDir, materialOptions); err != nil {
 		return err
@@ -404,13 +409,10 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 	if err := writeJournal(root, j, "services-starting"); err != nil {
 		return err
 	}
-	if err := start(ctx, prepared[1].Directory, []string{"eventbus"}, true, lock); err != nil {
-		return err
-	}
 	if err := start(ctx, prepared[0].Directory, []string{"host-agent"}, false, lock); err != nil {
 		return err
 	}
-	if err := start(ctx, prepared[1].Directory, remaining(prepared[1].Components, "admin", "eventbus"), false, lock); err != nil {
+	if err := start(ctx, prepared[1].Directory, remaining(prepared[1].Components, "admin"), false, lock); err != nil {
 		return err
 	}
 	if err := verifyComplete(ctx, *j, lock); err != nil {

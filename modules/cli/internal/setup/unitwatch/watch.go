@@ -38,7 +38,9 @@ const (
 )
 
 // headComponents 是跨单元的启动依赖顺序，与 bootstrap 的恢复顺序一致（unitbootstrap.startStages）：
-// 主机网关要等 Admin 完成同步才就绪，HostAgent 要 EventBus。它们之一没有运行时，其余组件本轮跳过。
+// 主机网关要等 Admin 完成同步才就绪。EventBus 单元所在主机上，eventbus 排在 host-agent 之前。
+// 它们之一没有运行时，其余组件本轮跳过；只在本机实际装有该组件时才有意义，所以控制机上没有 eventbus、
+// 存储机上没有 admin，各自的启动依赖自然是本机装了的那几个。
 var headComponents = []string{"admin", "host-gateway", "eventbus", "host-agent"}
 
 // DefaultSoftDeadline 之后不再开始新的组件检查；已经开始的启停按运行助手自己的预算执行完，
@@ -97,6 +99,8 @@ type Report struct {
 	Components    []ComponentReport          `json:"components"`
 	// PeerControl 是非 control 主机对 control 网关的交叉检查结果。
 	PeerControl *PeerReport `json:"peer_control,omitempty"`
+	// EventBusPeer 是非 EventBus 主机对 EventBus 端点的握手检查结果；EventBus 在本机时没有这一项。
+	EventBusPeer *EventBusReport `json:"eventbus_peer,omitempty"`
 	// WatchdogDisabled 表示中心策略关闭了守护：本轮只检查，不拉起、不重启、不告警。
 	WatchdogDisabled bool `json:"watchdog_disabled,omitempty"`
 	// Alerts 是本轮发出的告警标题；AlertErrors 是策略读取或推送失败的说明。
@@ -153,6 +157,23 @@ func Run(ctx context.Context, opts Options) (report Report, _ error) {
 			}
 			peerMessages = observePeer(peer, ps, hostID, opts.Now())
 			if err := store.savePeer(ps); err != nil {
+				return report, err
+			}
+		}
+	}
+	eventBusPeer, eventBusErr := checkEventBusPeer(ctx, opts.Root, opts.PeerProbe)
+	if eventBusErr != nil {
+		report.AlertErrors = append(report.AlertErrors, "EventBus 端点检查不可用："+eventBusErr.Error())
+	}
+	if eventBusPeer != nil {
+		report.EventBusPeer = eventBusPeer
+		if !opts.DryRun {
+			ps, err := store.loadEventBusPeer()
+			if err != nil {
+				return report, err
+			}
+			peerMessages = append(peerMessages, observeEventBus(eventBusPeer, ps, hostID, opts.Now())...)
+			if err := store.saveEventBusPeer(ps); err != nil {
 				return report, err
 			}
 		}

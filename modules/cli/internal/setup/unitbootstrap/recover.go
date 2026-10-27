@@ -183,7 +183,7 @@ func verifyComplete(ctx context.Context, j journal, lock unitruntime.Options) er
 			if component.ReadinessError != "" {
 				return errors.New("bootstrap readiness probe failed for " + component.ID)
 			}
-			if component.State == "paused" && component.ID != "admin" && component.ID != "host-gateway" && component.ID != "eventbus" {
+			if component.State == "paused" && component.ID != "admin" && component.ID != "host-gateway" {
 				continue
 			}
 			if component.State != "running" || !component.Ready {
@@ -236,11 +236,8 @@ func startStages(ctx context.Context, j journal, controlComponents []string, loc
 	if err := start(ctx, j.Host.Candidate, []string{"host-gateway"}, true, lock); err != nil {
 		return err
 	}
-	if err := start(ctx, j.Control.Candidate, []string{"eventbus"}, true, lock); err != nil {
-		return err
-	}
 	if err := start(ctx, j.Host.Candidate, []string{"host-agent"}, false, lock); err != nil {
 		return err
 	}
-	return start(ctx, j.Control.Candidate, remaining(controlComponents, "admin", "eventbus"), false, lock)
+	return start(ctx, j.Control.Candidate, remaining(controlComponents, "admin"), false, lock)
 }

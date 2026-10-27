@@ -44,6 +44,10 @@ func DeploymentHash(ctx context.Context, options PrepareOptions) (string, error)
 		if err := readGeneratedRequest(filepath.Join(options.EventBusDirectory, "clients.json"), &clients); err != nil {
 			return "", err
 		}
+		// broker 的证书、私钥和用户表只属于 eventbus 单元：别的单元带着它们、或 eventbus 单元没有它们，都拒绝。
+		if clients.Server != (options.Profile == "eventbus") {
+			return "", errors.New("EventBus server material belongs to the eventbus unit only")
+		}
 		if err := unitbundle.LoadEventBusClientsAt(ctx, clients, clients.Roles, options.EventBusDirectory); err != nil {
 			return "", err
 		}
@@ -81,7 +85,7 @@ func DeploymentRequestHash(options PrepareOptions, material hostbundle.Metadata,
 // is recovered before preparing a fresh candidate; mutable retired data is
 // never reused. A completed retry repairs missing processes and preserves pause.
 func Deploy(ctx context.Context, options PrepareOptions) (result Deployment, returnErr error) {
-	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream"}, options.Profile) || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 {
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream", "eventbus"}, options.Profile) || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 {
 		return result, errors.New("deploy requires a client-only host or business unit and a bounded release prefix")
 	}
 	if err := fsutil.ValidateUnitRoots(options.DeploymentRoot, options.UnitRoot); err != nil {

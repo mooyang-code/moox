@@ -5,6 +5,7 @@ import (
 	"net"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -24,6 +25,7 @@ func (m Manifest) HostByID(id string) Host {
 	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: label, PrivateKeyFile: definition.SSH.PrivateKeyFile, PrivateKeyPassphrase: definition.SSH.PrivateKeyPassphrase}
 }
 func (m Manifest) ControlHost() Host  { return m.HostByID(m.ComponentHost("admin")) }
+func (m Manifest) EventBusHost() Host { return m.HostByID(m.ComponentHost("eventbus")) }
 func (m Manifest) StorageHost() Host  { return m.HostByID(m.ComponentHost("storage-primary")) }
 func (m Manifest) ViewHost() Host     { return m.HostByID(m.ComponentHost("storage-view")) }
 func (m Manifest) StrategyHost() Host { return m.HostByID(m.ComponentHost("strategy")) }
@@ -31,6 +33,27 @@ func (m Manifest) StrategyHost() Host { return m.HostByID(m.ComponentHost("strat
 func (m Manifest) HasStorageHost() bool  { return m.StorageHost().Name != "" }
 func (m Manifest) HasViewHost() bool     { return m.ViewHost().Name != "" }
 func (m Manifest) HasStrategyHost() bool { return m.StrategyHost().Name != "" }
+
+// EventBusClientURL 是 EventBus 客户端使用的连接地址：与 EventBus 同机用回环地址，否则用 EventBus 所在主机的对外地址。
+// 所有渲染 EventBus 地址的地方都经过它，不再各自假设"EventBus 在控制机"。
+func EventBusClientURL(busHostID, busAddress string, port int, clientHostID string) string {
+	host := busAddress
+	if clientHostID == busHostID {
+		host = "127.0.0.1"
+	}
+	return "tls://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// EventBusAdvertiseURL 是 EventBus 对外宣告给其他主机的地址（broker 的 client_advertise），始终是 EventBus 主机的对外地址。
+func EventBusAdvertiseURL(busAddress string, port int) string {
+	return "tls://" + net.JoinHostPort(busAddress, strconv.Itoa(port))
+}
+
+// EventBusURLFor 返回 hostID 这台主机上的客户端应使用的 EventBus 地址。
+func (m Manifest) EventBusURLFor(hostID string) string {
+	bus := m.EventBusHost()
+	return EventBusClientURL(bus.Name, bus.Address, m.EventBus.Port, hostID)
+}
 
 func (m Manifest) Hosts() []Host {
 	ids := make([]string, 0, len(m.HostCatalog))

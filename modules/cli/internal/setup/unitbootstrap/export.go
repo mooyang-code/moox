@@ -26,6 +26,8 @@ type ExportRequest struct {
 	ExportID        string             `json:"export_id"`
 	Target          unitbundle.Options `json:"target"`
 	Roles           []string           `json:"roles"`
+	// Server 为 true 时，导出同时带上 broker 的证书、私钥和用户表：只给运行 EventBus 的那台主机（eventbus 单元）使用。
+	Server bool `json:"server,omitempty"`
 }
 
 type ExportResult struct {
@@ -156,6 +158,9 @@ func ExportHost(ctx context.Context, request ExportRequest) (ExportResult, error
 			if _, err := unitbundle.Load(ctx, result.Host.BundleDir, options); err != nil {
 				return err
 			}
+			if result.EventBus.Server != request.Server {
+				return errors.New("saved host export does not match the requested server material")
+			}
 			return unitbundle.LoadEventBusClients(ctx, result.EventBus, request.Roles)
 		}
 		if saved, err := readExportCheckpoint(export, "export.json", 256<<10); err == nil {
@@ -204,6 +209,9 @@ func ExportHost(ctx context.Context, request ExportRequest) (ExportResult, error
 				}
 			}
 			args = []string{"eventbus-credentials", "export-clients", "--db-path", database, "--encryption-key-file", master, "--node-id", request.Target.ControlHostID, "--roles", strings.Join(request.Roles, ","), "--output-dir", filepath.Join(directory, "eventbus")}
+			if request.Server {
+				args = append(args, "--server")
+			}
 			clientRaw, clientErr := readExportCheckpoint(export, "eventbus/clients.json", 128<<10)
 			if clientErr != nil && !os.IsNotExist(clientErr) {
 				return clientErr
@@ -216,7 +224,7 @@ func ExportHost(ctx context.Context, request ExportRequest) (ExportResult, error
 			}
 			decoder = json.NewDecoder(bytes.NewReader(clientRaw))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&result.EventBus) != nil || decoder.Decode(new(any)) != io.EOF || result.EventBus.Version != 1 || result.EventBus.Status != "ok" || result.EventBus.OutputDir != filepath.Join(directory, "eventbus") || !slices.Equal(result.EventBus.Roles, request.Roles) {
+			if decoder.Decode(&result.EventBus) != nil || decoder.Decode(new(any)) != io.EOF || result.EventBus.Version != 1 || result.EventBus.Status != "ok" || result.EventBus.OutputDir != filepath.Join(directory, "eventbus") || !slices.Equal(result.EventBus.Roles, request.Roles) || result.EventBus.Server != request.Server {
 				return errors.New("Admin returned invalid public EventBus client metadata")
 			}
 			if err := validate(); err != nil {

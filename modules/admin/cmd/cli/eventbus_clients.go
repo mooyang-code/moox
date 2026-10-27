@@ -28,9 +28,11 @@ func eventBusClientDigest(raw []byte) string {
 }
 
 // exportEventBusClients takes one database snapshot and publishes only selected
-// client roles plus the public CA. Broker ACLs, server keys and the CA private
-// key never enter this export. It does not create or rotate credentials.
-func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, requested string, stdout io.Writer) error {
+// client roles plus the public CA. The CA private key never enters this export,
+// and neither do broker ACLs or the server key — unless server is set, which is
+// for the one host that runs the EventBus broker: that export also carries the
+// broker certificate, key and user table. It does not create or rotate credentials.
+func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, requested string, server bool, stdout io.Writer) error {
 	roles := strings.Split(requested, ",")
 	files := eventBusRoleFiles()
 	canonical := map[string]string{}
@@ -61,7 +63,25 @@ func exportEventBusClients(ctx context.Context, db *gorm.DB, nodeID, directory, 
 		}
 		ca := []byte(rows["eventbus_tls_ca"].SecretValue)
 		payloads["ca.pem"] = ca
-		result = eventBusClientsResult{Version: 1, Status: "ok", OutputDir: directory, Roles: roles, CA: eventBusClientDigest(ca)}
+		result = eventBusClientsResult{Version: 1, Status: "ok", OutputDir: directory, Roles: roles, CA: eventBusClientDigest(ca), Server: server}
+		if server {
+			tokens := map[string]string{}
+			for _, role := range eventBusRoles {
+				row, ok := rows[eventBusKeys[role]]
+				if !ok {
+					return errors.New("server export requires every EventBus role; run ensure first")
+				}
+				tokens[role] = row.SecretValue
+			}
+			var parts struct {
+				Cert string `json:"cert"`
+				Key  string `json:"key"`
+			}
+			if json.Unmarshal([]byte(rows["eventbus_tls_server"].SecretValue), &parts) != nil || parts.Cert == "" || parts.Key == "" {
+				return errors.New("EventBus TLS server identity is incomplete")
+			}
+			payloads["server.pem"], payloads["server-key.pem"], payloads["users.yaml"] = []byte(parts.Cert), []byte(parts.Key), []byte(usersYAML(tokens))
+		}
 		for _, name := range roles {
 			role := canonical[name]
 			row, ok := rows[eventBusKeys[role]]

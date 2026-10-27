@@ -16,7 +16,8 @@ import (
 )
 
 // FetchEventBusClients relays only the inventoried client roles and public CA.
-// Broker ACLs, server keys and CA signing keys are never accepted.
+// A Server export additionally carries the broker certificate, key and user table
+// (the eventbus unit's own material); CA signing keys are never accepted.
 func FetchEventBusClients(ctx context.Context, download Download, metadata hostbundle.ClientMetadata, roles []string, destination string) error {
 	if download == nil {
 		return errors.New("EventBus clients require verified SSH")
@@ -45,14 +46,24 @@ func LoadEventBusClientsAt(ctx context.Context, metadata hostbundle.ClientMetada
 	return err
 }
 
+func serverFileCount(metadata hostbundle.ClientMetadata) int {
+	if metadata.Server {
+		return len(hostbundle.ServerFiles)
+	}
+	return 0
+}
+
 func readEventBusClients(ctx context.Context, metadata hostbundle.ClientMetadata, roles []string, read func(string, int64) ([]byte, error)) (map[string][]byte, error) {
 	fail := func() (map[string][]byte, error) {
 		return nil, errors.New("EventBus client inventory or material is invalid")
 	}
-	if metadata.Version != 1 || metadata.Status != "ok" || !path.IsAbs(metadata.OutputDir) || path.Clean(metadata.OutputDir) != metadata.OutputDir || len(roles) == 0 || len(roles) > 16 || !slices.Equal(metadata.Roles, roles) || !slices.IsSorted(roles) || len(slices.Compact(slices.Clone(roles))) != len(roles) || len(metadata.Files) != len(roles)+1 {
+	if metadata.Version != 1 || metadata.Status != "ok" || !path.IsAbs(metadata.OutputDir) || path.Clean(metadata.OutputDir) != metadata.OutputDir || len(roles) == 0 || len(roles) > 16 || !slices.Equal(metadata.Roles, roles) || !slices.IsSorted(roles) || len(slices.Compact(slices.Clone(roles))) != len(roles) || len(metadata.Files) != len(roles)+1+serverFileCount(metadata) {
 		return fail()
 	}
 	wanted := []string{"ca.pem"}
+	if metadata.Server {
+		wanted = append(wanted, hostbundle.ServerFiles...)
+	}
 	for _, role := range roles {
 		if role == "" || len(role) > 64 || strings.ContainsFunc(role, func(r rune) bool { return r != '-' && (r < 'a' || r > 'z') && (r < '0' || r > '9') }) {
 			return fail()

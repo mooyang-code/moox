@@ -112,6 +112,7 @@ func planAlerts(report Report, state *watchState, now time.Time, p Policy) []not
 	}
 
 	rebootRound := len(report.BootRecovered) > 0
+	busDown := eventBusDown(report)
 	var rebootStarted, rebootFailed []string
 	for _, c := range report.Components {
 		component := c.Component
@@ -158,7 +159,7 @@ func planAlerts(report Report, state *watchState, now time.Time, p Policy) []not
 					"原因：进程身份与记录不符，运行助手拒绝操作该进程",
 					"处理：确认对应进程后，用 moox-runtime stop --components "+component+" 处理")
 			}
-		case c.Outcome == OutcomeNotReady && c.NotReadySeconds >= int64(p.NotReadyAlert/time.Second):
+		case c.Outcome == OutcomeNotReady && c.NotReadySeconds >= int64(p.NotReadyAlert/time.Second) && !(busDown && dependsOnEventBus(component)):
 			if alerts.due(key(component, alertNotReady), now, manualAlertInterval) {
 				message(component, alertNotReady, notification.SeverityWarning, "【MooX 守护】"+host+" · "+component+" · 持续未就绪",
 					fmt.Sprintf("原因：进程存活，但 /readyz 已连续 %s 未就绪（不自动重启）", durationText(time.Duration(c.NotReadySeconds)*time.Second)),
@@ -187,6 +188,29 @@ func planAlerts(report Report, state *watchState, now time.Time, p Policy) []not
 		message("*", "reboot", severity, "【MooX 自动拉起】"+host+" · 主机重启", lines...)
 	}
 	return messages
+}
+
+// eventBusDown 判断本轮 EventBus 是否整体不可用：远端 EventBus 握手失败，或本机的 eventbus 进程没有就绪。
+// 此时依赖它的组件都会未就绪，只报 EventBus 这一条，不再逐个报“持续未就绪”。
+func eventBusDown(report Report) bool {
+	if report.EventBusPeer != nil && !report.EventBusPeer.Reachable {
+		return true
+	}
+	for _, c := range report.Components {
+		if c.Component == "eventbus" && c.Outcome != OutcomeHealthy {
+			return true
+		}
+	}
+	return false
+}
+
+// dependsOnEventBus 判断组件的就绪是否依赖 EventBus：Admin 与主机网关不依赖，EventBus 自己单独告警，其余都依赖。
+func dependsOnEventBus(component string) bool {
+	switch component {
+	case "admin", "host-gateway", "eventbus":
+		return false
+	}
+	return true
 }
 
 func withEvidence(c ComponentReport, lines ...string) []string {

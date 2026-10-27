@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -107,7 +106,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, errors.New("unit deployment requires an unchanged setup snapshot")
 	}
 	manifest := snapshot.Manifest
-	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream", "factor-engine", "archive-worker"}, options.Profile) {
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream", "eventbus", "factor-engine", "archive-worker"}, options.Profile) {
 		return result, errors.New("unsupported native deployment unit")
 	}
 	unitRoot := path.Join(manifest.Paths.DeployRoot, options.Profile)
@@ -172,7 +171,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	host := manifest.HostByID(options.HostID)
 	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Outbound: host.Reachability != "", Components: slices.Clone(manifest.Deployments[host.Name]), ExpectedCA: pin.CA}
 	slices.Sort(material.Components)
-	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: manifest.Paths.ControlRoot, RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
+	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: manifest.Paths.ControlRoot, RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components), Server: options.Profile == "eventbus"}
 	stateDirectory := filepath.Join(root.Name(), "units", host.Name, options.Profile)
 	if options.Profile == "host" {
 		stateDirectory = filepath.Join(root.Name(), "hosts", host.Name)
@@ -315,7 +314,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		var exported unitbootstrap.ExportResult
 		decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&exported) != nil || decoder.Decode(new(any)) != io.EOF || exported.Version != 1 || exported.RequestSHA256 != "sha256:"+sha(bytes.TrimSuffix(raw, []byte{'\n'})) || path.Dir(exported.Host.BundleDir) != path.Join(manifest.Paths.DeployRoot, "material-exports", operation.Source.ExportID) || exported.EventBus.OutputDir != path.Join(manifest.Paths.DeployRoot, "material-exports", operation.Source.ExportID, "eventbus") {
+		if decoder.Decode(&exported) != nil || decoder.Decode(new(any)) != io.EOF || exported.Version != 1 || exported.RequestSHA256 != "sha256:"+sha(bytes.TrimSuffix(raw, []byte{'\n'})) || path.Dir(exported.Host.BundleDir) != path.Join(manifest.Paths.DeployRoot, "material-exports", operation.Source.ExportID) || exported.EventBus.OutputDir != path.Join(manifest.Paths.DeployRoot, "material-exports", operation.Source.ExportID, "eventbus") || exported.EventBus.Server != operation.Source.Server {
 			return result, errors.New("control returned invalid host export metadata")
 		}
 		operation.Export = &exported
@@ -367,7 +366,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		})
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
-	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}
+	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: manifest.EventBusURLFor(host.Name), EventBusAdvertise: setupconfig.EventBusAdvertiseURL(manifest.EventBusHost().Address, manifest.EventBus.Port)}
 	overrideHashes := map[string]string{}
 	if len(configuration) > 0 {
 		local := filepath.Join(state.Name(), "configuration.yaml")

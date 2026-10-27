@@ -53,13 +53,14 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	fs := flag.NewFlagSet("eventbus-credentials", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	dbPath, keyFile, nodeID, outputDir, credential, roles := "./data/admin.db", "", "", "", "", ""
-	confirm := false
+	confirm, server := false, false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
 	fs.StringVar(&nodeID, "node-id", "", "registered control host (the Admin host); the EventBus location is read from the deployment records")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
 	fs.StringVar(&roles, "roles", "", "comma-separated canonical client roles for export-clients")
+	fs.BoolVar(&server, "server", false, "export-clients only: also export the broker certificate, key and user table for the host that runs EventBus")
 	fs.BoolVar(&confirm, "confirm", false, "confirm rotation (rotate: immediate token invalidation; rotate-tls: new CA)")
 	sub := args[1]
 	if err := fs.Parse(args[2:]); err != nil {
@@ -67,6 +68,9 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	}
 	if roles != "" && sub != "export-clients" {
 		return errors.New("--roles is only valid for export-clients")
+	}
+	if server && sub != "export-clients" {
+		return errors.New("--server is only valid for export-clients")
 	}
 	// A control-plane reset removes admin.db, while an externally managed
 	// EventBus keeps its role files. Reconcile only users.yaml from those
@@ -89,7 +93,7 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	secretDAO := dao.NewSecretDAO(db)
 	switch sub {
 	case "export-clients":
-		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, stdout)
+		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, server, stdout)
 	case "ensure":
 		natsURL, err := eventBusNATSURL(db, nodeID)
 		if err != nil {

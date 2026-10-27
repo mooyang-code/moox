@@ -133,16 +133,18 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 		}
 		return unitbootstrap.Unit{Archive: path.Join(manifest.Paths.DeployRoot, "bootstrap-input/packages", strings.TrimPrefix(result.SHA256, "sha256:"), name+".tar.gz"), SHA256: result.SHA256, UnitRoot: path.Join(manifest.Paths.DeployRoot, name), Environment: env, Overrides: map[string]string{}, Components: components}
 	}
-	request := unitbootstrap.Request{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, Topology: topology, Host: unit(host, "host", []string{"host-gateway", "host-agent"}), Control: unit(control, "control", []string{"admin", "eventbus"})}
+	request := unitbootstrap.Request{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, Topology: topology, Host: unit(host, "host", []string{"host-gateway", "host-agent"}), Control: unit(control, "control", []string{"admin"})}
 	request.Control.UnitRoot = manifest.Paths.ControlRoot
 	request.InitialAdmin = &unitbootstrap.AdminUser{Username: manifest.Admin.Username, Password: manifest.Admin.Password}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
 	return request, nil
 }
 
-// BootstrapCore establishes Admin, EventBus and both host components. Its
-// result deliberately says core-ready: fleet services and Console Proxy are
-// installed by the outer workflow once Storage and other dependencies exist.
+// BootstrapCore establishes Admin and both host components. EventBus is its own
+// unit, installed by deploy-unit on the host that [deployments] names; its
+// credentials are still issued here, inside Admin's database. Its result
+// deliberately says core-ready: fleet services and Console Proxy are installed
+// by the outer workflow once Storage and other dependencies exist.
 func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options CoreOptions) (CoreResult, error) {
 	return bootstrap(ctx, snapshot, options, nil)
 }

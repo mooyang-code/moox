@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -80,6 +81,21 @@ func EventBusRoles(components []string) []string {
 	return slices.Compact(roles)
 }
 
+// advertiseEndpoint 返回 broker 对外宣告的端点：没有单独指定时沿用客户端地址；指定时同样要求是目录里的 TLS 端点。
+func advertiseEndpoint(options *PrepareOptions, client *url.URL, port int) (*url.URL, error) {
+	if options.EventBusAdvertise == "" {
+		return client, nil
+	}
+	advertise, err := url.Parse(options.EventBusAdvertise)
+	if err != nil || advertise.Scheme != "tls" || advertise.Hostname() == "" || advertise.Port() != strconv.Itoa(port) || advertise.User != nil || advertise.Path != "" || advertise.RawQuery != "" || advertise.Fragment != "" {
+		return nil, errors.New("issued EventBus advertise address requires its catalog TLS endpoint")
+	}
+	if ip := net.ParseIP(advertise.Hostname()); ip != nil && ip.IsLoopback() {
+		return nil, errors.New("EventBus must not advertise a loopback address to remote clients")
+	}
+	return advertise, nil
+}
+
 // projectEventBus copies only the selected roles. Runtime configs reference
 // the immutable release copies, never the export directory or another unit.
 func projectEventBus(root *os.Root, options *PrepareOptions, components []string, destination string) error {
@@ -98,6 +114,10 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 	port := component.Ports[0]
 	if err != nil || endpoint.Scheme != "tls" || endpoint.Hostname() == "" || endpoint.Port() != strconv.Itoa(port) || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return errors.New("issued EventBus material requires its catalog TLS endpoint")
+	}
+	advertise, err := advertiseEndpoint(options, endpoint, port)
+	if err != nil {
+		return err
 	}
 	source, err := fsutil.OpenPhysicalRoot(options.EventBusDirectory, true)
 	if err != nil {
@@ -222,8 +242,11 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 			if err != nil {
 				return errors.New("issued EventBus TLS server certificate is invalid")
 			}
-			if _, err := leaf.Verify(x509.VerifyOptions{Roots: trust, DNSName: endpoint.Hostname()}); err != nil {
-				return errors.New("issued EventBus TLS server certificate does not verify for its endpoint")
+			// 证书要同时覆盖对外宣告的地址（远端客户端用）和本单元客户端实际连接的地址（同机时是回环地址）。
+			for _, host := range slices.Compact([]string{advertise.Hostname(), endpoint.Hostname()}) {
+				if _, err := leaf.Verify(x509.VerifyOptions{Roots: trust, DNSName: host}); err != nil {
+					return errors.New("issued EventBus TLS server certificate does not verify for its endpoint")
+				}
 			}
 			for name, content := range map[string][]byte{"server.pem": cert, "server-key.pem": key} {
 				if err := fsutil.WritePrivate(root, relative+name, content, false); err != nil {
@@ -241,7 +264,7 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 				return err
 			}
 			broker := member(document, "broker")
-			for key, value := range map[string]any{"host": "0.0.0.0", "port": port, "client_advertise": endpoint.Host, "server_name": "eventbus-" + options.MaterialOptions.HostID, "auth": map[string]any{"enabled": true, "users_file": filepath.Join(absolute, "users.yaml")}, "tls": map[string]any{"enabled": true, "cert_file": filepath.Join(absolute, "server.pem"), "key_file": filepath.Join(absolute, "server-key.pem"), "ca_file": filepath.Join(absolute, "ca.pem")}} {
+			for key, value := range map[string]any{"host": "0.0.0.0", "port": port, "client_advertise": advertise.Host, "server_name": "eventbus-" + options.MaterialOptions.HostID, "auth": map[string]any{"enabled": true, "users_file": filepath.Join(absolute, "users.yaml")}, "tls": map[string]any{"enabled": true, "cert_file": filepath.Join(absolute, "server.pem"), "key_file": filepath.Join(absolute, "server-key.pem"), "ca_file": filepath.Join(absolute, "ca.pem")}} {
 				if err := setValue(broker, key, value); err != nil {
 					return err
 				}

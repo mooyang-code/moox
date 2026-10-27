@@ -170,3 +170,35 @@ ssh = { username = "ubuntu" }
 	_, err := Load(writeManifest(t, root, validManifest+"[dns_resolver]\ntrade_node = 'compute'\n", 0o600), root)
 	require.ErrorContains(t, err, "[egress_proxy.dns]")
 }
+
+// 客户端与 EventBus 同机用回环地址，其余主机用 EventBus 所在主机的对外地址；
+// 公开地址随 [deployments] 里 eventbus 的位置变化，不再假设 EventBus 在控制机。
+func TestEventBusURLForFollowsEventBusPlacement(t *testing.T) {
+	load := func(body string) Manifest {
+		root := t.TempDir()
+		snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+		require.NoError(t, err)
+		return snapshot.Manifest
+	}
+	onControl := load(validManifest + `
+[hosts.storage]
+address = "192.0.2.20"
+ssh = { username = "ubuntu" }
+`)
+	assert.Equal(t, "control", onControl.EventBusHost().Name)
+	assert.Equal(t, "tls://127.0.0.1:4222", onControl.EventBusURLFor("control"))
+	assert.Equal(t, "tls://192.0.2.10:4222", onControl.EventBusURLFor("storage"))
+	assert.Equal(t, "192.0.2.10", onControl.EventBus.PublicAddress)
+
+	onStorage := load(strings.Replace(validManifest, `control = ["admin", "console-proxy", "web-host", "eventbus"]`, `control = ["admin", "console-proxy", "web-host"]
+storage = ["eventbus"]`, 1) + `
+[hosts.storage]
+address = "192.0.2.20"
+ssh = { username = "ubuntu" }
+`)
+	assert.Equal(t, "storage", onStorage.EventBusHost().Name)
+	assert.Equal(t, "tls://127.0.0.1:4222", onStorage.EventBusURLFor("storage"))
+	assert.Equal(t, "tls://192.0.2.20:4222", onStorage.EventBusURLFor("control"))
+	assert.Equal(t, "192.0.2.20", onStorage.EventBus.PublicAddress)
+	assert.Equal(t, "tls://192.0.2.20:4222", EventBusAdvertiseURL(onStorage.EventBus.PublicAddress, onStorage.EventBus.Port))
+}

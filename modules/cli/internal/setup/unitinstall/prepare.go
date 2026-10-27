@@ -39,7 +39,11 @@ type PrepareOptions struct {
 	// EventBusDirectory contains a closed offline credential export. Only the
 	// selected components' roles and required TLS material enter this release.
 	EventBusDirectory string `json:"eventbus_directory,omitempty"`
-	EventBusURL       string `json:"eventbus_url,omitempty"`
+	// EventBusURL 是本单元里的客户端连接 EventBus 用的地址：与 EventBus 同机是回环地址，否则是 EventBus 主机的对外地址。
+	EventBusURL string `json:"eventbus_url,omitempty"`
+	// EventBusAdvertise 是 broker 对外宣告给其他主机的地址（client_advertise），始终是 EventBus 主机的对外地址，
+	// 只在 eventbus 单元里使用；为空时沿用 EventBusURL。不能把回环地址宣告给远端客户端。
+	EventBusAdvertise string `json:"eventbus_advertise,omitempty"`
 }
 
 func (PrepareOptions) String() string     { return "MooXPrepareOptions{private inputs omitted}" }
