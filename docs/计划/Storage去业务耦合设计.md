@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v10（2026-10-27），未编码。v10 按 Codex 审查 v9 修订（见第 7 节）：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v11（2026-10-27），未编码。v11 按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10 按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -108,10 +108,11 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 ### 3.4 View 由业务模块维护（编码第 3 步）
 
 - **默认 View 由 factor-mgr 自己建、改、删**：删除 `factor_result_view.go`、数据集激活与加列时对托管 View 的检查（含激活重试，`metadata_catalog.go:335`）、删除数据集时自动删托管 View 的逻辑。factor-mgr 与 Collector 一样用 `CreateView`、`UpsertViewColumn`、`DeleteView`（factor-mgr 的 Metadata 客户端 `storageio/client.go:27` 要补这几个方法）。删除因子结果数据集的顺序：删默认 View → 清空行 → 删数据集（`t_views` 外键 `RESTRICT` 要求先删 View）。View 属性里不再有 `managed_by`、`view_role = factor_result`、`primary_dataset_role` 这类 Storage 读取的业务标记。
-- **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集加列后原地扩展 View，复用现有扩展机制；扩展提交条件（`crud_view_index.go:283`）、事件出现未扩展列时暂停消费的屏障（`event_apply.go:444`）、`maintenance_schema_extension.go:125` 的目标判定都改看这个属性。
+- **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集加列后原地扩展 View，复用现有扩展机制；扩展提交条件（`crud_view_index.go:283`）与 `maintenance_schema_extension.go:125` 的目标判定都改看这个属性。**删除事件出现未扩展列时暂停消费的屏障**（`event_apply.go:444` 的 `validateFactorResultEventColumns`），View 不再为等扩展而阻塞消费，见下一条的系统边界。
+- **系统边界：新列在 View 扩展完成之前的值不进 View**（用户决定，2026-10-27）。数据集加列后，View 的扩展在维护循环里异步完成，通常几秒到几十秒。这段时间里到达的行事件按 View 当前的列投影应用，新列直接裁掉，与 View 处理任何不在投影里的列一样；扩展完成后的事件才带上新列。被裁掉的那几期，新列在 View 里永远为空，不补数，主库（Pebble）里的值不受影响。对因子来说，就是新成员在 View 里晚生效一两期，策略在这几期读到空值。需要这几期的值时，扩展完成后对那几期执行 `recalc`，重写的行会带上新列。
 - **重建方式单独声明**：View 属性 `rebuild_source`：`active_then_primary`（默认，先复制活动索引再从主库补）或 `primary`（不复制活动索引、只从主库历史重建，主库没有数据时允许先空着）。`build.go` 按这个属性选分支，factor-mgr 为默认 View 设置 `primary`。
 - **维护顺序由 View 声明**：View 属性 `maintenance_priority`（整数，越小越先，默认 50）取代 `maintenance.go:621` 按 `view_role` 的排序；Collector 的浏览 View 设 0，factor-mgr 的默认 View 设 10。
-- **投递方式由数据集声明**：数据集属性 `view_delivery`：`parallel`（默认）或 `serial`（单并发、`max_ack_pending = 1`）。删除按 `dataset_factor_` 前缀选分区的逻辑；分区模板与 durable 都改名为 `parallel`、`serial`（`storage_view_parallel`、`storage_view_serial`，动态 durable 的前缀随之改为 `parallel` / `serial`），`packages/events/storage_consumers.go`、Storage 的默认分区与部署配置（`config/loader.go:130`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试同步。factor-mgr 为因子结果数据集设置 `serial`。代码默认分区配置里写死的空间与 `mooxsys` 数据集删掉，由部署配置提供。
+- **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `storage_view_<数据集哈希>`，名字里不带业务。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
 
 ### 3.5 周期完成统一（编码第 4 步）
 
@@ -152,7 +153,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 |---|---|---|
 | 1 | 写入方 `write_owner`（3.1）；写入方数据规范、保留策略、死代码（3.2） | Storage、因子引擎、factor-mgr、Collector、collector-stream、Monitor 种子、`packages/storagepolicy`、CLI、部署配置 |
 | 2 | 元数据校验与列契约、列来源改名（3.3） | Storage、factor-mgr、Archive、CLI、Web |
-| 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、投递由数据集声明（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
+| 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、单一消费模板（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置、Admin（EventBus 权限生成里 Storage、Factor、Strategy 的主题与消费者）及其测试 |
 
 理由：第 1 步把"谁能写"从业务角色收敛到 `write_owner`，后面三步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件，放在最后。
@@ -175,20 +176,20 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 | 模块 | 第 1 步 | 第 2 步 | 第 3 步 | 第 4 步 |
 |---|---|---|---|---|
-| factor-mgr | AppId 统一为 `factor`；建结果数据集写 `write_owner = factor` | 建列时自己保证因子列契约与显示名；列来源用 `CUSTOM` | Metadata 客户端补 View 的建、改、删；自己建、改、删默认 View（`follow_dataset_columns = true`、`rebuild_source = primary`、`maintenance_priority = 10`）；结果数据集设置 `view_delivery = serial`；删除数据集按 3.4 的顺序 | 定义 `PeriodDetail` |
+| factor-mgr | AppId 统一为 `factor`；建结果数据集写 `write_owner = factor` | 建列时自己保证因子列契约与显示名；列来源用 `CUSTOM` | Metadata 客户端补 View 的建、改、删；自己建、改、删默认 View（`follow_dataset_columns = true`、`rebuild_source = primary`、`maintenance_priority = 10`）；删除数据集按 3.4 的顺序 | 定义 `PeriodDetail` |
 | 因子引擎 | AppId 统一为 `factor` | — | — | 报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`，按绑定的源数据集与频率筛选，两种来源都接受 |
 | Collector / collector-stream | AppId 统一为 `collector`；建数据集写 `write_owner = collector`；A 股写入自己填 `series_tag` | — | 浏览 View 设置 `maintenance_priority = 0` | 重采样的周期报告改为 `ReportDatasetPeriodCompleted` |
 | Strategy | — | — | — | 订阅 `ViewDataReady` v2；按绑定的 View 与数据集判断相关性，不再按 `completion_kind`；因子明细从 `detail` 解码 |
 | Monitor | 写入用 `monitor`；`metadata.yaml` 中系统数据集写 `write_owner: monitor` | — | — | — |
 | packages / CLI / Web | `storagepolicy` 去掉市场与 `mooxsys` 豁免；CLI `setup retention` 不再估算根数 | CLI、Web 改为 `FIELD / CUSTOM / SYSTEM` | `events` 的 View durable 改名 | `events` 换注册表、删因子校验；`storagepb` 同步 |
-| 部署配置 | `moox.toml` 补各市场与 `mooxsys` 保留期 | — | View 消费分区配置补空间与数据集 | EventBus 流主题 |
+| 部署配置 | `moox.toml` 补各市场与 `mooxsys` 保留期 | — | View 消费配置只剩并发项 | EventBus 流主题 |
 | 服务目录 | — | — | — | PrimaryStore 方法改名与删除；外部身份白名单同步 |
 
 ## 5. 测试
 
 - 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
-- 第 3 步：factor-mgr 建、改、删默认 View；加列后立刻写入新列、扩展还没完成时新列不丢、不提前发就绪；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；`serial` / `parallel` 按数据集属性生效；只有默认 View 时因子结果数据集能完整删除。
+- 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
 - 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
 - 部署：在测试环境把 4.2 走一遍（清空、全新安装、小规模历史导入、建因子与策略、全链路一期）。
 
@@ -239,3 +240,8 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 采集源配置与服务目录说明里还有 `moox-collector` | 接受，补入（3.1） |
 | 换装清单补 archive-worker、CloudFunction；host-agent 不是业务库 | 接受。全新安装覆盖全部组件，清空步骤列出全部状态（4.2） |
 | （复审 v10）本机安装状态 `~/.local/state/moox/setup`、`~/.config/moox` 会复用旧制品与旧 CA 绑定；安装顺序要包含 `bootstrap --stage core` 与创建业务空间；SCF 采集配置与 `scf_environment.go` 的身份校验 | 接受，补入（3.1、4.2） |
+
+### v11（用户决定，2026-10-27）
+
+- View 遇到未扩展的新列时不再暂停消费、不再重投，也不补数：新列直接裁掉，扩展完成前那几期的新列在 View 里为空，作为系统边界写入 3.4。理由：不让一个数据集的加列阻塞 View 的正常消费；因子晚生效一两期可以接受。
+- 删除 `view_delivery` 属性与 parallel / serial 两种模板：每个数据集本来各有一个 durable，只保留一个消费模板和全局并发配置（默认 1）。
