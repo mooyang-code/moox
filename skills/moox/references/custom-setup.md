@@ -51,7 +51,7 @@ not a deployment artifact.
 - `[deployments]` 按主机 ID 列出业务组件；`host-gateway` 与 `host-agent` 由代码为每台部署主机自动补齐；
   因子机列 `factor-engine`、`archive-worker`（外部程序组件）。
 - 构建一律在本机进行（含 CGO 的 Storage 在 Docker 里构建），环境见 `docs/构建手册.md`；`[compile_host]` 已退役，配置里出现会被拒绝。
-- `[eventbus]` 只写公网连接事实（地址、端口、TLS）；账号、token、CA 和私钥由 MooX 在部署时生成。
+- `[eventbus]` 只写端口与 TLS 开关，地址由 `[deployments]` 里 `eventbus` 所在的主机推出（默认放在存储机，它是独立单元，用 `setup deploy-unit --profile eventbus` 安装）；账号、token、CA 和私钥由 MooX 在部署时生成。
 - `[paths]` 统一声明运行时根目录（默认 `/data/moox`）。
 - `[notification]` 的 webhook 地址是凭据：留空时仍采集和展示监控数据，只是不发站外告警。
 

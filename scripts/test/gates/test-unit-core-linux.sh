@@ -37,5 +37,5 @@ for name in required:
         raise SystemExit('required native core scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('native core Linux gate must not skip or fail a scenario')
-print('native core/host/business/full-control Linux gate passed: verified SSH/SFTP, nested control root, trusted HTTPS page/login, all nine real control services, business units including CGO Storage initialization, immutable retries, export recovery, pause/repair, original authorization binding, local build policy; no compilation')
+print('native core/host/business/full-control Linux gate passed: verified SSH/SFTP, nested control root, trusted HTTPS page/login, all eight real control services, business units including CGO Storage initialization, immutable retries, export recovery, pause/repair, original authorization binding, local build policy; no compilation')
 PY

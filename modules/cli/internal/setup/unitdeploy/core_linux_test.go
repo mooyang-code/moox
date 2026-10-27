@@ -286,7 +286,8 @@ compute1 = ["access"]
 	}
 	host, control := status(initial.Bootstrap.HostDirectory), status(initial.Bootstrap.ControlDirectory)
 	require.Len(t, host.Components, 2)
-	require.Len(t, control.Components, 2)
+	// 核心阶段的控制单元只有 Admin：EventBus 是独立单元，HostAgent 的就绪不依赖它，所以这里没有 broker 也全部就绪。
+	require.Len(t, control.Components, 1)
 	for _, item := range append(host.Components, control.Components...) {
 		require.True(t, item.Ready, item.ID)
 		require.Positive(t, item.PID)
@@ -423,7 +424,8 @@ compute1 = ["access"]
 			copyArtifact(t, filepath.Join(directory, binary), filepath.Join(root, "bin", binary), 0o700)
 		}
 		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
-		for _, profile := range []string{"access", "egress-proxy", "trade", "storage"} {
+		// eventbus 在 storage 与完整控制单元之前：control 上的 strategy、monitor 等要连上它才就绪。
+		for _, profile := range []string{"eventbus", "access", "egress-proxy", "trade", "storage"} {
 			deployed, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: options, HostID: "control", Profile: profile})
 			require.NoError(t, err, profile)
 			require.Equal(t, profile+"-ready", deployed.Stage)
@@ -448,7 +450,7 @@ compute1 = ["access"]
 		full, err := BootstrapControl(t.Context(), snapshot, promotion)
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", full.Stage)
-		require.Len(t, full.Components, 9, "every control component must run")
+		require.Len(t, full.Components, 8, "every control component must run（EventBus 已是独立单元，不在控制单元里）")
 		require.NotEqual(t, initial.Bootstrap.ControlDirectory, full.Bootstrap.ControlDirectory)
 		require.Equal(t, initial.Bootstrap.CAFingerprint, full.Bootstrap.CAFingerprint)
 		require.Equal(t, passwordHash, nativeAdminPasswordHash(t, full.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username))
@@ -489,7 +491,7 @@ compute1 = ["access"]
 		_, err = BootstrapControl(t.Context(), snapshot, promotion)
 		require.ErrorContains(t, err, "original private deployment input changed")
 		require.Equal(t, unchanged, status(full.Bootstrap.ControlDirectory))
-		t.Log("all nine control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
+		t.Log("all eight control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
 	} else {
 		t.Fatal("native business Linux gate requires MOOX_BUSINESS_BINARY_DIRECTORY")
 	}

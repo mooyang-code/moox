@@ -152,7 +152,7 @@ topology in `moox.toml` and calls the Tencent Cloud API (Lighthouse firewall or 
 ./bin/moox-cli setup firewall --file ./moox.toml
 ```
 
-`setup deploy-host` also confirms the control host's relay and EventBus ports before deploying an
+`setup deploy-host` also confirms the control host's relay port and the EventBus port (on the host that runs EventBus, by default the storage host) before deploying an
 outbound-only host. Tencent credentials come only from `moox.toml`; never echo them.
 
 ### Tencent Private Network

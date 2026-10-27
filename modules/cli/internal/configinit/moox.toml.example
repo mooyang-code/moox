@@ -302,8 +302,11 @@ ssh = { port = 22, username = "builder" }
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [deployments]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
-storage = ["storage-primary", "storage-node", "storage-view", "access"]
+control = ["console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
+# eventbus 是独立单元，可以放在任意一台直达主机上，用 setup deploy-unit --profile eventbus 安装。放在存储机上最省跨机流量：
+# Storage 内部的行变更事件（storage-node → storage-view）占 EventBus 流量的九成以上，同机之后不再经公网往返。
+# 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
+storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]
 # collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
 overseas = ["trade", "access", "egress-proxy", "collector-stream"]
 # factor-engine 与 archive-worker 是外部程序组件，由 setup deploy-unit 以 systemd 用户服务安装，停用主机或部署时 CLI 同时停掉服务。

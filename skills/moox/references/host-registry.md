@@ -11,7 +11,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 | 主机 ID | 中文名 | 运行 |
 | --- | --- | --- |
-| `control` | 控制机 | Admin、EventBus、Monitor、Collector、CloudFunction、因子管理、策略、控制台 |
+| `control` | 控制机 | Admin、Monitor、Collector、CloudFunction、因子管理、策略、控制台 |
 | `storage` | 存储机 | Storage primary/node/view、Access |
 | `overseas` | 海外机 | Trade、Access、EgressProxy、Collector Stream |
 | `factor` | 因子机 | 因子引擎、归档 Worker（外部程序，只支持 Linux，可以是内网机器） |
