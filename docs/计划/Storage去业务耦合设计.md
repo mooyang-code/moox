@@ -82,7 +82,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - 数据集属性 `write_owner`：允许写入的 AppId 列表（逗号分隔），精确匹配、没有别名。所有写入类接口只看它：`UpsertFields`、`RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`、周期完成报告、`DeleteDatasetRows`、`RestoreDatasetRows`、`DeleteDataset`。读取不受限制。
 - `write_owner` 为空的数据集不限制写入方（操作员手工建的数据集多半如此）；声明了就只许列出的身份写。
 - 操作员身份（`moox-cli`、`console`）是唯一的超级用户，不受 `write_owner` 限制（导入、手工修数据）。
-- **每个模块只用一个 AppId**：`factor`、`collector`、`monitor`（因子引擎与 factor-mgr 共用 `factor`，Collector 与 collector-stream 共用 `collector`）。代码与配置里 `moox-factor`、`moox-collector` 的写法统一改掉（含 `catalog/metadata_catalog.go:20` 写死的 `moox-factor`、采集源配置 `collector/configs/sources/market/*.yaml` 里的 AppId、`packages/servicecatalog/catalog.yaml` 中相关说明）；删除 `isFactorAppID`、`isOwnedAppID` 的别名规则。
+- **每个模块只用一个 AppId**：`factor`、`collector`、`monitor`（因子引擎与 factor-mgr 共用 `factor`，Collector 与 collector-stream 共用 `collector`）。代码与配置里 `moox-factor`、`moox-collector` 的写法统一改掉（含 `catalog/metadata_catalog.go:20` 写死的 `moox-factor`、采集源配置 `collector/configs/sources/market/*.yaml` 与 SCF 专用的 `collector/configs/scf/**/sources/market/*.yaml` 里的 AppId、`packages/cloudprovider/tencent/scf_environment.go:151` 对 `moox-collector` 的校验、`packages/servicecatalog/catalog.yaml` 中相关说明）；删除 `isFactorAppID`、`isOwnedAppID` 的别名规则。
 - 业务模块建数据集时就写上自己的 `write_owner`：factor-mgr 建因子结果数据集写 `factor`；Collector 建采集与重采样数据集写 `collector`；Monitor 的系统数据集由 `config/setup/metadata.yaml` 写 `monitor`。全新部署，不存在要补属性的旧数据集。
 - 只读身份（如 `scf-market-canary`）不在任何数据集的 `write_owner` 里：凡是声明了 `write_owner` 的数据集（由服务写入的数据集都会声明）它都写不了；没有声明的数据集对它和其他身份一样开放。删除写死的名字。
 - 删除 `collectorWritableDataset`、`factorOwnedResult`、`datasetRowsOwner` 与标记接口里按 `owner_module` / `dataset_role` 的分支。
@@ -162,8 +162,8 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 四步编码全部完成后，一次发布：清空生产、按全新安装流程重装（用户已接受删除全部线上数据）。全新安装的步骤以《部署与运维》第 2 节及其"2026-10-24 全新部署补充"为准，那次主机登记统一就是这样上线的；这里只写本次要注意的地方。不写迁移代码，也不用 `system reset`（它按旧表结构清记录、不重建 Storage 元数据库，也不清 EventBus 流的旧主题）。
 
 1. **清空前核对**：Trade 只有纸面账户、没有实盘持仓与未完成订单；`moox.toml`（本机，加密）与各主机的 SSH 访问可用。
-2. **停止并清空**：停四台主机（control、storage、overseas、factor）上的全部组件，清空部署根 `/data/moox`。这一步把所有状态一起删掉：各模块的库（含 Admin、Collector、factor-mgr、Strategy、Trade、Monitor、Archive、CloudFunction）、Storage 元数据库、Pebble 与 View 索引、EventBus 流与消费者、因子机本地存储与补算账本、归档目录。因子机清空后按补充说明重建 `/data/moox`。
-3. **全新安装**（首次安装不带 `--release`）：storage（注册 DataNode、`setup apply`、导入并激活 `mooxsys` 与业务空间的元数据）→ control（internal TLS 带 `--create-proxy-ca`）→ overseas（collector-stream 在 control 就绪之后）→ factor（因子引擎与 archive-worker 作为外部程序部署）。EventBus 的流配置与凭据由新版本的安装生成，自然是新主题、新 durable。
+2. **停止并清空**：停四台主机（control、storage、overseas、factor）上的全部组件，清空部署根 `/data/moox`；本机的安装状态也一起清掉：`~/.local/state/moox/setup/<绑定摘要>`（否则会复用上次保存的安装制品）与 `~/.config/moox` 里旧控制面的 CA 绑定。这一步把所有状态一起删掉：各模块的库（含 Admin、Collector、factor-mgr、Strategy、Trade、Monitor、Archive、CloudFunction）、Storage 元数据库、Pebble 与 View 索引、EventBus 流与消费者、因子机本地存储与补算账本、归档目录。因子机清空后按补充说明重建 `/data/moox`。
+3. **全新安装**（首次安装不带 `--release`，按《部署与运维》第 2 节的顺序）：`setup bootstrap --stage core` → 各业务主机 `setup deploy-host` → EventBus 单元 → storage 单元（注册 DataNode、`setup apply`、导入并激活 `mooxsys` 与业务空间的元数据）→ Access、egress-proxy → `setup bootstrap --stage control`（internal TLS 带 `--create-proxy-ca`）→ 创建业务空间 → overseas 的 collector-stream 与 Trade（在 control 就绪之后）→ factor 的因子引擎与 archive-worker（外部程序）。EventBus 的流配置与凭据由新版本的安装生成，自然是新主题、新 durable。
 4. **采集就绪**：默认采集任务由 Collector 首次启动写入（不足时 `moox-collector-cli init --seed-file` 补种）；crypto 摄取方式切到 collector-stream；确认实时 K 线在写入、周期账本正常定稿。
 5. **导入历史**：按 `skills/moox/references/initial-import.md` 导入长历史（永续 501 个标的的 5m 等）。这时还没有因子任务与策略实例，满足导入的前置条件；等 View 追平。
 6. **建因子与策略**：导入完成、View 追平后再 `setup factors`（它会建任务并启用成员，所以必须放在导入之后），factor-mgr 同时建结果数据集与默认 View；因子引擎自动推进任务生命周期；再建策略定义与实例并启用。
@@ -238,3 +238,4 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 第 3、4 步 durable 与事件的改动清单不全（Storage 配置与按名称分支的代码、Admin 凭据生成） | 接受，补入（3.4、4.1） |
 | 采集源配置与服务目录说明里还有 `moox-collector` | 接受，补入（3.1） |
 | 换装清单补 archive-worker、CloudFunction；host-agent 不是业务库 | 接受。全新安装覆盖全部组件，清空步骤列出全部状态（4.2） |
+| （复审 v10）本机安装状态 `~/.local/state/moox/setup`、`~/.config/moox` 会复用旧制品与旧 CA 绑定；安装顺序要包含 `bootstrap --stage core` 与创建业务空间；SCF 采集配置与 `scf_environment.go` 的身份校验 | 接受，补入（3.1、4.2） |
