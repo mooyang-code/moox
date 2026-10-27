@@ -167,3 +167,32 @@ func TestSilenceScannerDropsPendingLostNoticeOnceANewAgentReports(t *testing.T) 
 	require.NoError(t, scanner.Scan(ctx, t0.Add(3*time.Minute+10*time.Second)))
 	require.Empty(t, sent, "主机已由新采集器接替，不能再补发失联通知")
 }
+
+// 观测输入（主机快照经 EventBus 送达 Monitor）中断期间，所有主机的 last_seen 都是旧的：
+// 冻结期间不判失联，恢复判定之后超时的主机才被判为失联。
+func TestSilenceScannerFreezesWhileObservationIsSuspended(t *testing.T) {
+	ctx := context.Background()
+	db := openRegistryTestDB(t)
+	t0 := time.Date(2026, 10, 27, 1, 0, 0, 0, time.UTC)
+	_, err := NewRegistry(db).Observe(ctx, HostObservation{AgentID: "agent-a", Hostname: "host-a", BootID: "boot-a", OccurredAt: t0, EventID: "event-0"})
+	require.NoError(t, err)
+
+	var got []PresenceTransition
+	scanner := NewSilenceScanner(NewRegistry(db), 90*time.Second, PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) error {
+		got = append(got, transition)
+		return nil
+	}))
+	suspended := true
+	scanner.SetSuspended(func(time.Time) bool { return suspended })
+
+	require.NoError(t, scanner.Scan(ctx, t0.Add(10*time.Minute)))
+	require.Empty(t, got, "观测输入中断期间不能把主机判为失联")
+	status, err := NewRegistry(db).Status(ctx, "agent-a")
+	require.NoError(t, err)
+	require.Equal(t, PresenceReachable, status, "登记的状态也不能被改成失联")
+
+	suspended = false
+	require.NoError(t, scanner.Scan(ctx, t0.Add(10*time.Minute)))
+	require.Len(t, got, 1, "解除冻结后，仍然没有样本的主机才判为失联")
+	require.Equal(t, PresenceUnreachable, got[0].To)
+}

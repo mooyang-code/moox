@@ -263,7 +263,7 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
-	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results}, repositories, nil, 5*time.Minute, evaluator)
+	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results}, repositories, nil, nil, 5*time.Minute, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}
-	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
+	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, nil, time.Second, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
 	}
-	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, time.Second, evaluator)
+	run := buildBusinessFreshnessReporterWithInterval(builder, repositories, nil, nil, time.Second, evaluator)
 	if err := run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +1050,7 @@ func buildBusinessFreshnessReporter(
 	hook func(context.Context, domain.Check, domain.CheckResult),
 	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
 ) func(context.Context) error {
-	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
+	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, nil, 30*time.Second, klineEvaluators...)
 }
 
 func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID, componentID string, enabled bool) {
@@ -1105,7 +1105,7 @@ func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *t
 		// K 线评估间隔 1 小时：同一个 reporter 的后续轮次不重新评估，验证覆盖集合会沿用。
 		return buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 			Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return clock },
-		}, repositories, nil, time.Hour, evaluators...)
+		}, repositories, nil, nil, time.Hour, evaluators...)
 	}
 	enabled := func(checkID string) bool {
 		check, err := repositories.Checks.Get(t.Context(), "crypto", checkID)
@@ -1219,4 +1219,101 @@ func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
 		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
 	}}
+}
+
+// 观测输入（Monitor 的 EventBus 观测消费者）中断期间：依赖服务指标的检查冻结，既不新增"已停止上报"告警，
+// 也只留一条"观测输入"检查说明原因；刚恢复的宽限期内同样冻结，宽限结束后恢复判定。
+func TestBusinessFreshnessReporterFreezesObservationChecksWhileIngestIsDown(t *testing.T) {
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		require.NoError(t, db.Create(&monmetrics.MetricService{
+			ServiceName: "collector", InstanceID: "collector@node-a", BootID: "boot-a", NodeID: "node-a", LastSeenAt: now.Add(-10 * time.Minute),
+		}).Error)
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	seedBusinessTopology(t, repositories, "node-a", "collector", true)
+
+	state := observationState{Suspended: true, Reason: "eventbus unreachable"}
+	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+	}, repositories, nil, func(time.Time) observationState { return state }, 30*time.Second)
+	const reporterCheck = "reporter:node-a:collector"
+	latest := func(checkID string) (domain.CheckResult, bool) {
+		results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, checkID, 1)
+		require.NoError(t, err)
+		if len(results) == 0 {
+			return domain.CheckResult{}, false
+		}
+		return results[0], true
+	}
+
+	// 观测消费者没连上：上报方已经 10 分钟没样本，但这是因为输入断了，不判定；"观测输入"检查失败并带上原因。
+	require.NoError(t, run(t.Context()))
+	_, judged := latest(reporterCheck)
+	require.False(t, judged, "观测输入中断期间不能判定上报方停止上报")
+	ingest, ok := latest(observationIngestCheckID)
+	require.True(t, ok)
+	require.False(t, ingest.Success)
+	require.Contains(t, ingest.ErrorMessage, "观测输入中断")
+	require.Equal(t, "eventbus unreachable", ingest.RawError)
+
+	// 刚重新连上、还在宽限期内：输入已恢复（观测输入检查通过），超时判定继续冻结，等上报方补上样本。
+	state = observationState{Suspended: true, Ready: true}
+	require.NoError(t, run(t.Context()))
+	_, judged = latest(reporterCheck)
+	require.False(t, judged, "恢复宽限期内仍然冻结")
+	ingest, _ = latest(observationIngestCheckID)
+	require.True(t, ingest.Success)
+
+	// 宽限结束，上报方仍然没有样本：这时才是真正的"已停止上报"。
+	state = observationState{Ready: true}
+	require.NoError(t, run(t.Context()))
+	result, judged := latest(reporterCheck)
+	require.True(t, judged)
+	require.False(t, result.Success)
+	require.Equal(t, reporterReasonText("stale"), result.ErrorMessage)
+}
+
+func TestObservationIndependentChecksKeepRunning(t *testing.T) {
+	for _, id := range []string{"gateway:storage:status", "gateway:storage:relay", "kline_freshness:crypto:1m", "market_canary:binance", tagCheckPrefix + "x", observationIngestCheckID} {
+		require.True(t, observationIndependent(id), id)
+	}
+	for _, id := range []string{"reporter:node-a:collector", "dataset:storage:ds:1m", "balance:trade", "data_delivery:storage", "factor_watermark:x"} {
+		require.False(t, observationIndependent(id), id)
+	}
+}
+
+// 观测输入的状态：没连上就冻结；刚连上的宽限期内冻结；宽限结束或没有启用观测输入时不冻结。
+func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
+	r := &Runtime{}
+	now := time.Now()
+	require.False(t, r.observationState(false, now).Suspended, "没有启用观测输入时永远不冻结")
+
+	state := r.observationState(true, now)
+	require.True(t, state.Suspended)
+	require.False(t, state.Ready)
+
+	r.setObservabilityIngestState(false, errors.New("dial timeout"))
+	require.NotEmpty(t, r.observationState(true, now).Reason, "未连接时带上失败原因（已脱敏归类）")
+
+	r.setObservabilityIngestState(true, nil)
+	state = r.observationState(true, time.Now())
+	require.True(t, state.Ready)
+	require.True(t, state.Suspended, "刚连上，处在恢复宽限期内")
+	require.False(t, r.observationState(true, time.Now().Add(observationRecoveryGrace+time.Second)).Suspended, "宽限期结束")
+
+	// 重复的就绪回调不能重置宽限起点。
+	since := r.ingestReadySince.Load()
+	r.setObservabilityIngestState(true, nil)
+	require.Equal(t, since, r.ingestReadySince.Load())
+
+	r.setObservabilityIngestState(false, errors.New("lost"))
+	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
 }

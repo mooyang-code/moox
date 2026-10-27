@@ -40,6 +40,8 @@ type Runtime struct {
 	mutes muteTracker
 
 	ObservabilityIngestReady atomic.Bool
+	// ingestReadySince 是观测消费者最近一次由未连接变为已连接的时刻（Unix 纳秒）；未连接时为 0。
+	ingestReadySince         atomic.Int64
 	MetricsReporterReady     atomic.Bool
 	observabilityIngestError atomic.Value
 	observabilityWriteError  atomic.Value
@@ -129,12 +131,46 @@ func (r *Runtime) setObservabilityIngestState(ready bool, err error) {
 	if r == nil {
 		return
 	}
-	r.ObservabilityIngestReady.Store(ready)
+	if ready {
+		// 只在由未连接变为已连接时记下时刻，之后重复的就绪回调不重置它。
+		if !r.ObservabilityIngestReady.Swap(true) {
+			r.ingestReadySince.Store(time.Now().UnixNano())
+		}
+	} else {
+		r.ObservabilityIngestReady.Store(false)
+		r.ingestReadySince.Store(0)
+	}
 	message := ""
 	if err != nil {
 		message = failureReason(reasonEventbus, err)
 	}
 	r.observabilityIngestError.Store(message)
+}
+
+// observationRecoveryGrace 是观测消费者重新连上之后继续冻结超时判定的时长：
+// 各上报方（每分钟一次的主机快照、周期上报的服务指标）要有机会把中断期间欠下的样本补上，
+// 否则旧的 last_seen 一恢复就会把主机和服务判成"已停止上报"。
+const observationRecoveryGrace = 5 * time.Minute
+
+// observationState 是观测输入当前的状态：Suspended 时所有依赖观测输入的超时判定都要冻结（既不新增告警，也不恢复已有告警）。
+type observationState struct {
+	Suspended bool
+	// Ready 是观测消费者是否已连接；Reason 是未连接的原因，只在 !Ready 时有意义。
+	Ready  bool
+	Reason string
+}
+
+// observationState 在观测消费者未连接，或刚重新连上、还在恢复宽限期内时报告 Suspended。
+// 观测输入没有启用时（没有消费者）永远不冻结。
+func (r *Runtime) observationState(enabled bool, now time.Time) observationState {
+	if !enabled || r == nil {
+		return observationState{Ready: true}
+	}
+	if !r.ObservabilityIngestReady.Load() {
+		return observationState{Suspended: true, Reason: r.observabilityIngestErrorMessage()}
+	}
+	since := r.ingestReadySince.Load()
+	return observationState{Suspended: since != 0 && now.Sub(time.Unix(0, since)) < observationRecoveryGrace, Ready: true}
 }
 
 func (r *Runtime) observabilityIngestErrorMessage() string {
