@@ -626,8 +626,21 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	if st == nil || !st.ready.Load() {
 		return pipeline.DataResult{Warming: subjects}, false, nil
 	}
+	// 分段计时：持锁等待、等上一期写盘、取数（读本地边界、取变更日志链头、并行读批次）、写本地，结束时记一行。
+	var timing struct {
+		lock, settle, pull, commit time.Duration
+		staged                     seriessync.PullTiming
+	}
+	loadStarted := time.Now()
+	defer func() {
+		log.Infof("factor_live_load task=%s source=%s total=%s lock_wait=%s settle=%s pull=%s bounds=%s head=%s fetch=%s batches=%d pulled=%d commit=%s",
+			plan.Set.TaskID, st.spec.Source, time.Since(loadStarted).Round(time.Millisecond), timing.lock.Round(time.Millisecond), timing.settle.Round(time.Millisecond),
+			timing.pull.Round(time.Millisecond), timing.staged.Bounds.Round(time.Millisecond), timing.staged.Head.Round(time.Millisecond),
+			timing.staged.Fetch.Round(time.Millisecond), timing.staged.Batches, timing.staged.Subjects, timing.commit.Round(time.Millisecond))
+	}()
 	d.lockSource(st, "计算前读取")
 	defer st.mu.Unlock()
+	timing.lock = time.Since(loadStarted)
 	if !st.ready.Load() || st.window == nil {
 		return pipeline.DataResult{Warming: subjects}, false, nil
 	}
@@ -638,12 +651,17 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	target := plan.TargetEnd.Add(-step)
 
 	// 上一期的热路径写盘必须先落完：本期的拉取按本地 Latest 决定从哪里拉。
+	began := time.Now()
 	d.settleFlush(st)
+	timing.settle = time.Since(began)
 
+	began = time.Now()
 	staged, err := d.syncer.PullStaged(ctx, st.spec, subjects, plan.TargetEnd)
+	timing.pull = time.Since(began)
 	if err != nil {
 		return pipeline.DataResult{}, false, err
 	}
+	timing.staged = staged.Timing
 	failed := map[string]struct{}{}
 	for _, s := range staged.Failed {
 		failed[s] = struct{}{}
@@ -651,7 +669,9 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	hot, cold := d.splitHot(st, staged.Writes, step)
 	d.hotWrites.Add(int64(len(hot)))
 	d.coldWrites.Add(int64(len(cold)))
+	began = time.Now()
 	written, err := staged.Commit(ctx, cold)
+	timing.commit = time.Since(began)
 	if err != nil {
 		return pipeline.DataResult{}, false, err
 	}

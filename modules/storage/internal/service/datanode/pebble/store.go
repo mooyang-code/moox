@@ -80,15 +80,17 @@ type Store struct {
 	periodFinalizeLastError string
 	outboxPending           atomic.Int64
 	outboxRevision          atomic.Uint64
-	outboxHintKnown         atomic.Bool
-	outboxHintMayHaveMore   atomic.Bool
-	outboxOldestEventNanos  atomic.Int64
-	maintenanceMu           sync.Mutex
-	maintenanceWG           sync.WaitGroup
-	backgroundCtx           context.Context
-	backgroundCancel        context.CancelFunc
-	closing                 bool
-	blockCacheBytes         int64
+	// outboxWake 在 outbox 有新条目提交后收到一个信号（容量 1，合并），转发协程据此立即发布，不等轮询。
+	outboxWake             chan struct{}
+	outboxHintKnown        atomic.Bool
+	outboxHintMayHaveMore  atomic.Bool
+	outboxOldestEventNanos atomic.Int64
+	maintenanceMu          sync.Mutex
+	maintenanceWG          sync.WaitGroup
+	backgroundCtx          context.Context
+	backgroundCancel       context.CancelFunc
+	closing                bool
+	blockCacheBytes        int64
 	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
 	statsStop chan struct{}
 	statsOnce sync.Once
@@ -132,7 +134,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1)}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -1049,6 +1051,9 @@ func (s *Store) applyOutboxHintIfUnchanged(revision uint64, apply func()) {
 	}
 }
 
+// OutboxWake 返回 outbox 提交通知：每次成功提交了 outbox 条目后收到一个信号（多次提交合并为一个）。
+func (s *Store) OutboxWake() <-chan struct{} { return s.outboxWake }
+
 func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
 	if count <= 0 {
 		return
@@ -1070,6 +1075,10 @@ func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
 		}
 	}
 	s.outboxRevision.Add(1)
+	select {
+	case s.outboxWake <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Store) noteOutboxDeleted(count int) {

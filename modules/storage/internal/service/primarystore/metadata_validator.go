@@ -35,21 +35,41 @@ func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFiel
 	if v == nil {
 		return fmt.Errorf("metadata validator is not configured")
 	}
-	reader := v.snapshotReader(ctx)
-	schemas := make(map[[2]string]*datasetSchema)
+	batch := v.Batch(ctx)
 	for _, row := range rows {
-		key := row.GetKey()
-		id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
-		schema, ok := schemas[id]
-		if !ok {
-			schema = &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
-			schemas[id] = schema
-		}
-		if err := schema.check(ctx, row); err != nil {
+		if err := batch.ValidateRow(ctx, row); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Batch 返回一个请求内的逐行校验器：与 ValidateRow 的检查与错误完全相同，只是数据集与列定义按 (space, dataset)
+// 只加载一次。写入路径要逐行穿插自己的检查时（保持原来的检查顺序与错误），用它代替 ValidateRow。
+func (v *MetadataValidator) Batch(ctx context.Context) Validator {
+	if v == nil {
+		return v
+	}
+	return &cachedRowValidator{reader: v.snapshotReader(ctx), schemas: make(map[[2]string]*datasetSchema)}
+}
+
+type cachedRowValidator struct {
+	reader  metadataReader
+	schemas map[[2]string]*datasetSchema
+}
+
+func (c *cachedRowValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUpsert) error {
+	if c.reader == nil {
+		return fmt.Errorf("metadata validator is not configured")
+	}
+	key := row.GetKey()
+	id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
+	schema, ok := c.schemas[id]
+	if !ok {
+		schema = &datasetSchema{reader: c.reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+		c.schemas[id] = schema
+	}
+	return schema.check(ctx, row)
 }
 
 // snapshotReader prefers the request-scoped snapshot so validation and routing

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"sort"
 	"strings"
+	"time"
 
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -44,6 +46,17 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		}
 	}
 
+	// 分段计时：规整、去重与指纹、等写锁、准备（字段、行索引与事件）、提交；达到阈值时记一行。
+	started := time.Now()
+	var fingerprinted, locked, prepared, committed time.Time
+	defer func() {
+		if committed.IsZero() || time.Since(started) < factorWriteLogThreshold {
+			return
+		}
+		log.Printf("storage node 因子写入 dataset=%s 行=%d 规整与指纹=%s 等锁=%s 准备=%s 提交=%s 合计=%s",
+			datasetID, len(rows), fingerprinted.Sub(started).Round(time.Millisecond), locked.Sub(fingerprinted).Round(time.Millisecond),
+			prepared.Sub(locked).Round(time.Millisecond), committed.Sub(prepared).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
+	}()
 	normalized, err := s.normalizeWriteRows(ctx, rows)
 	if err != nil {
 		return 0, err
@@ -67,10 +80,12 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		return 0, err
 	}
 
+	fingerprinted = time.Now()
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
+	locked = time.Now()
 	if existing, body, err := s.loadReceiptLocked(commitID); err != nil {
 		return 0, err
 	} else if existing != nil {
@@ -80,9 +95,15 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		return uint64(len(normalized)), nil
 	}
 	var receipt *commitReceipt
-	entries, err := s.writeFieldsEventLocked(ctx, normalized, "", false, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	write, err := s.prepareFieldsWrite(ctx, groupRowsByDataset(normalized), normalized, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessageWithKind(s.nodeID, "", WriteKindFactorResult, spaceID, datasetID, rows)
-	}, func(batch *cpebble.Batch, entries []*OutboxEntry) error {
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer write.batch.Close()
+	prepared = time.Now()
+	entries, err := s.commitFieldsWriteLocked(ctx, write, "", false, func(batch *cpebble.Batch, entries []*OutboxEntry) error {
 		if len(entries) != 1 {
 			return errors.New("factor result write requires one outbox position")
 		}
@@ -96,11 +117,15 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 	if err != nil {
 		return 0, err
 	}
+	committed = time.Now()
 	if receipt == nil || len(entries) != 1 {
 		return 0, errors.New("factor result write did not persist a receipt")
 	}
 	return uint64(len(normalized)), nil
 }
+
+// factorWriteLogThreshold 是因子写入分段耗时日志的阈值。
+const factorWriteLogThreshold = 50 * time.Millisecond
 
 func canonicalFactorRows(rows []*pb.RowFieldUpsert) []*pb.RowFieldUpsert {
 	canonical := make([]*pb.RowFieldUpsert, len(rows))

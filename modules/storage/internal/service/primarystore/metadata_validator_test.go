@@ -239,3 +239,23 @@ func TestMetadataValidatorValidateRowsReportsRowErrorBeforeColumnLookup(t *testi
 		t.Fatalf("首行已失败，不应查询列定义（查询了 %d 次）", reader.columnCalls)
 	}
 }
+
+// 请求内的逐行校验器：与 ValidateRow 的结果相同，同一数据集的数据集与列定义只查一次。
+func TestMetadataValidatorBatchLooksUpEachDatasetOnceAndKeepsErrors(t *testing.T) {
+	reader := &countingMetadataReader{}
+	validator := NewMetadataValidator(reader)
+	batch := validator.Batch(context.Background())
+	for i := 0; i < 3; i++ {
+		if err := batch.ValidateRow(context.Background(), barsRow("1h")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reader.datasetCalls != 1 || reader.columnCalls != 1 {
+		t.Fatalf("查询次数 dataset=%d columns=%d，期望各 1 次", reader.datasetCalls, reader.columnCalls)
+	}
+	want := validator.ValidateRow(context.Background(), barsRow("5m"))
+	got := batch.ValidateRow(context.Background(), barsRow("5m"))
+	if want == nil || got == nil || want.Error() != got.Error() {
+		t.Fatalf("错误应与逐行校验相同：逐行 %v，请求内 %v", want, got)
+	}
+}

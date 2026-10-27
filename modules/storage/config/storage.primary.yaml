@@ -14,7 +14,6 @@ storage:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
   view:
     batch_size: 500
-    batch_wait_ms: 200
     max_workers: 2
   health:
     addr: ":20210"

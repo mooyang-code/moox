@@ -66,6 +66,8 @@ type Relay struct {
 	startOnce       sync.Once
 	publishFailures int
 	lastReconnect   time.Time
+	// lastListed 是上一次 flush 取到的条目数：取满一批说明可能还有积压，立即再取一批。
+	lastListed int
 }
 
 func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Relay, error) {
@@ -133,8 +135,21 @@ func (r *Relay) Start(ctx context.Context) {
 						return
 					}
 				}
+				if r.lastListed >= r.options.BatchSize {
+					// 积压超过一批：连续排空，仍响应停止。
+					select {
+					case <-r.stop:
+						return
+					case <-ctx.Done():
+						return
+					default:
+					}
+					continue
+				}
 				select {
 				case <-ticker.C:
+				case <-r.store.OutboxWake():
+					// 有新条目提交：立即发布，不等轮询（定时器仍作兜底，覆盖启动前的积压与发布失败后的重试）。
 				case <-r.stop:
 					return
 				case <-ctx.Done():
@@ -181,6 +196,7 @@ func (r *Relay) Close() {
 }
 
 func (r *Relay) flush(ctx context.Context) error {
+	r.lastListed = 0
 	r.observePublisherReady()
 	// A bounded Pebble list initializes and refreshes the atomic hint. Avoid a
 	// restart-time full scan so a large backlog can begin draining immediately.
@@ -194,6 +210,7 @@ func (r *Relay) flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.lastListed = len(entries)
 	// The first bounded list initializes a lower-bound count and oldest age
 	// without a restart-time full scan. This lets a large backlog begin draining
 	// immediately instead of repeatedly failing readiness while rescanning it.

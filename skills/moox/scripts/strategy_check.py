@@ -249,7 +249,7 @@ def parse_tz(text):
 ENGINE_START = re.compile(r'(\S+ \S+)\s.*factor_period_start task_id=(\S+) period_time=(\S+)')
 ENGINE_DONE = re.compile(r'(\S+ \S+)\s.*factor_period_done task_id=(\S+) period_time=(\S+) status=(\S+) .*?duration=(\S+)(.*)')
 STRATEGY_TIMING = re.compile(r'(\S+ \S+)\s.*实例 (\S+) 周期 (\S+) (\S+) 耗时：K线至就绪=(\S+) 就绪等待=(\S+) 读取=(\S+)（.*?） '
-                             r'求值=(\S+) 提交=(\S+) 本期处理=(\S+) 总计=(\S+)')
+                             r'求值=([^\s（]+)(?:（[^）]*）)? 提交=(\S+) 本期处理=(\S+) 总计=(\S+)')
 
 
 def engine_lines(args, tasks):
