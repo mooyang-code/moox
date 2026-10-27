@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v7（2026-10-27），未编码。v7 按 Codex 第一轮审查修订（见第 7 节）；v6 按当前代码重写：
+状态：设计 v8（2026-10-27），未编码。v7、v8 按 Codex 两轮审查修订（见第 7 节）；v6 按当前代码重写：
 
 - 删去已经完成的部分（第 1 节）；
 - 按用户的三条原则（单用户；不过度设计；未上线，不写迁移命令、不设计回退）删去 v5 的一次性迁移命令、静默点快照与回退、新旧事件版本与消费者并存；
@@ -83,7 +83,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - `write_owner` 为空的数据集不限制写入方（操作员手工建的数据集多半如此）；声明了就只许列出的身份写。
 - 操作员身份（`moox-cli`、`console`）是唯一的超级用户，不受 `write_owner` 限制（导入、手工修数据）。
 - **每个模块只用一个 AppId，取现有数据里已经在用的短名**：`factor`、`collector`、`monitor`。因子结果数据集已经是 `write_owner = factor`，不用改；代码里 `moox-factor`、`moox-collector` 的写法统一改成短名（含 `catalog/metadata_catalog.go:20` 写死的 `moox-factor`）。删除 `isFactorAppID`、`isOwnedAppID` 的别名规则。
-- 只读身份（如 `scf-market-canary`）不在任何数据集的 `write_owner` 里，自然写不了，删除写死的名字。
+- 只读身份（如 `scf-market-canary`）不在任何数据集的 `write_owner` 里：凡是声明了 `write_owner` 的数据集（生产上由服务写入的数据集都会声明）它都写不了；没有声明的数据集对它和其他身份一样开放。删除写死的名字。
 - 删除 `collectorWritableDataset`、`factorOwnedResult`、`datasetRowsOwner` 与标记接口里按 `owner_module` / `dataset_role` 的分支。
 - `data_source_id` 对所有数据集都可选，填写时校验引用存在；创建、激活、保存三处（`metadata_catalog.go:130`、`activation.go:182`、`crud_dataset.go:440`）一起改，结果一致。
 - 删除 `dataset_attributes.go` 的不可变约束与 `crud_dataset.go:211` 对因子结果 `write_owner` 的判断。`write_owner` 为空时任何服务身份都可以设置（首次声明）；已有值时只允许其中的调用方或操作员修改。其余业务属性由业务模块自己维护，Storage 不读取。
@@ -148,12 +148,12 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 | 步 | 内容 | 涉及模块 | 协议 / 事件变化 | 发布方式 |
 |---|---|---|---|---|
-| 1 | 写入方 `write_owner`（3.1）；写入方数据规范、保留策略、死代码（3.2） | Storage、因子引擎、factor-mgr、Collector、collector-stream、Monitor 元数据、`packages/storagepolicy`、CLI、部署配置 | 无（只有校验与属性） | 先发业务模块（AppId 统一成短名，旧 Storage 的别名规则两种都认）；再发 Storage；再重启一次 Collector 让启动对账补上 `write_owner`，并 `metadata apply`。不需要暂停 |
+| 1 | 写入方 `write_owner`（3.1）；写入方数据规范、保留策略、死代码（3.2） | Storage、因子引擎、factor-mgr、Collector、collector-stream、Monitor 元数据、`packages/storagepolicy`、CLI、部署配置 | 无（只有校验与属性） | 在两个 5 分钟边界之间连续换装：先业务模块（AppId 统一成短名，旧 Storage 写入的别名规则两种都认），紧接着 Storage；再重启一次 Collector 让启动对账补上 `write_owner`，并 `metadata apply`。旧 Storage 删除数据集时只认 `moox-factor`、`moox-collector`（`metadata_catalog.go:228`、`:246`），所以换装间隔里不做数据集删除。不需要暂停 |
 | 2 | 元数据校验与列契约（3.3） | Storage、factor-mgr | 无 | factor-mgr 先发（建列时自己保证契约与显示名），再发 Storage；不需要暂停 |
 | 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、投递由数据集声明（3.4） | Storage（view、catalog、metadata）、factor-mgr、Collector、部署配置 | 无（View 属性与内部逻辑） | 先发 Storage（新属性缺省时按原来的业务角色推断一次，见下），再发 factor-mgr、Collector 补上属性并接管托管 View；Storage 重启选在两个 5 分钟边界之间 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置与凭据 | 有：事件名、接口、`ViewDataReady` 载荷都变 | `moox-cli system pause` 排空 → 全部换装、重建消费者 → `system resume`（见 4.1） |
 
-第 3 步"新属性缺省时按原来的业务角色推断一次"：Storage 先发时，已有 View 与数据集还没有 `follow_dataset_columns`、`rebuild_source`、`maintenance_priority`、`view_delivery`；这一版在属性缺省时沿用原来的推断（因子结果 → 跟随加列、`primary`、10、`serial`），业务模块补上属性后，下一版 Storage 删除这段推断。这是两次发布之间的过渡，不是长期兼容。
+第 3 步"新属性缺省时按原来的业务角色推断一次"：Storage 先发时，已有 View 与数据集还没有 `follow_dataset_columns`、`rebuild_source`、`maintenance_priority`、`view_delivery`；这一版在属性缺省时沿用原来的推断（因子结果 → 跟随加列、`primary`、维护顺序 10、`serial`；`view_role = collection_browse` → 维护顺序 0），业务模块补上属性后，下一版 Storage 删除这段推断。这是两次发布之间的过渡，不是长期兼容。
 
 理由：
 
@@ -166,9 +166,10 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 1. **暂停并排空**：`system pause` 按下游到上游停下策略、Trade、因子引擎、采集。因子引擎暂停时不等运行中的计算（`engine/lifecycle.go:25`），所以还要等到没有正在运行的期次（日志里每个 `factor_period_start` 都有对应的 `factor_period_done`，`factor_runner_backlog` 为 0）；暂停期间到达的触发事件会被确认而不计算（`trigger/eventconsumer/handler.go:165`），这些期次由恢复时的追赶按水位补算，不依赖事件。然后确认 DataNode outbox 为空、各 View 水位追平、待发布就绪队列为空。
 2. **停 Storage 与全部消费者**，换装：Storage 三组件；EventBus 流配置（`eventbus/config/app.yaml:34` 的主题列表加入 `dataset.period.completed` 与 `view.data.ready.v2`，去掉两个旧完成事件）与用新版 Admin CLI 重新生成的凭据（`admin/cmd/cli/eventbus_credentials.go:446`）；服务目录涉及的网关 / Admin / Monitor / Access；因子引擎、factor-mgr、Collector、collector-stream、Strategy。
 3. **重建消费者**：
-   - JetStream 不能放宽已有 durable 的过滤主题（`packages/jetstream/consumer.go:351`），所以 View 的静态 durable（`storage_view_factor`、`storage_view_misc`）与按数据集动态建的 durable 都要删掉重建。此刻已经排空、生产者都停着，重建时从流的末尾开始（`DeliverNew`），不会漏事件，也不重放历史。由 storage-view 启动时自动处理：发现 durable 的过滤主题与期望不一致，且启动参数带 `--recreate-mismatched-consumers` 时删掉重建；只在这次发布时带这个参数。`reconcile-view-consumers` 目前只检查静态 durable，同步扩展到动态 durable，用来事后核对。
-   - 因子引擎订阅 `DatasetPeriodCompleted`、Strategy 订阅 `ViewDataReady` v2，都用新的 durable（`DeliverNew`），先于生产者启动建好；旧 durable 换装后删除。
-4. **启动生产者**：storage-node → storage-primary → storage-view → 其余组件。
+   - JetStream 不能放宽已有 durable 的过滤主题（`packages/jetstream/consumer.go:351`），所以 View 的静态 durable（`storage_view_factor`、`storage_view_misc`）与按数据集动态建的 durable 都要删掉重建。此刻已经排空、写入方都停着，重建的 durable 从流的末尾开始（起始序号取流当前的最后序号加一），不会漏事件，也不重放历史。
+   - 这由 storage-view 的一次性启动参数 `--recreate-mismatched-consumers` 处理：发现 durable 的过滤主题与期望不一致时删掉，按上面的起点重建；只在这次发布时带。平时（不带参数）新建的动态 durable 仍按现在的规则用 `DeliverAll`（`inventory_reconciler.go:326`），不受影响。`reconcile-view-consumers` 目前只检查静态 durable，同步扩展到动态 durable，用来事后核对。
+   - 因子引擎订阅 `DatasetPeriodCompleted`、Strategy 订阅 `ViewDataReady` v2，都用新的 durable（`DeliverNew`）；旧 durable 换装后删除。
+4. **启动顺序**：采集仍处于系统暂停、DataNode 也没有等待中的周期，所以 Storage 启动后不会产生任何事件，各组件的启动顺序不影响消费完整性。依次启动：storage-node → storage-primary → storage-view（带上面的参数）→ 网关、Admin、Monitor、Access → factor-mgr、Collector、collector-stream → 因子引擎、Strategy。然后用 EventBus 的 consumer 列表确认：View 的静态与动态 durable 过滤主题都是新的，因子引擎与 Strategy 的新 durable 已建好。确认之后才恢复。
 5. **恢复**：`system resume`；栅栏处按惯例先 `--release-partial --yes` 放行因子引擎与 Trade，因子补完暂停区间后再 `resume` 放行策略。从来没有水位的新任务会直接报追平（`engine/catchup_life.go:172`），它们的第一期从恢复后的下一个周期开始算，暂停区间不补；发布时如果有这样的任务，事后用 `recalc` 补。
 6. **DataNode 里旧格式的完成标记**：不转换。新代码只读新格式；旧标记只被"按触发事件查询本期冻结全集"用到（因子截面补算、幂等查询）。新版本上线前的周期如果之后发现空洞，自动截面补算取不到冻结全集会放弃，需要时用 `recalc` 手工补算。项目未上线，可以接受。
 7. 不做回退方案：出问题时修代码重新发布。
@@ -188,10 +189,10 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 ## 5. 测试
 
-- 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写入被拒；空 `write_owner` 可以首次设置、已有值只能由所有者或操作员修改；Monitor 用 `monitor` 写系统数据集；Collector 对账与 `metadata apply` 后已有数据集都有 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
+- 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；空 `write_owner` 可以首次设置、已有值只能由所有者或操作员修改；Monitor 用 `monitor` 写系统数据集；Collector 对账与 `metadata apply` 后已有数据集都有 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约；Storage 不再拒绝非因子命名的自定义列；多输出因子与 `__params` 照常可建。
-- 第 3 步：factor-mgr 建、改、删默认 View；先发 Storage 时已有托管 View 照常工作，factor-mgr 发布后接管；加列后立刻写入新列、扩展还没完成时新列不丢、不提前发就绪；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；`serial` / `parallel` 按数据集属性生效、动态 durable 名不变；只有默认 View 时因子结果数据集能完整删除。
-- 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路；View 静态与动态 durable 重建后过滤主题正确、不重放历史；暂停区间由恢复追赶补齐。
+- 第 3 步：factor-mgr 建、改、删默认 View；先发 Storage 时已有托管 View 照常工作，factor-mgr 发布后接管；加列后立刻写入新列、扩展还没完成时新列不丢、不提前发就绪；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`，属性缺省时与现在一致（浏览 View 0、因子结果 10）；`serial` / `parallel` 按数据集属性生效、动态 durable 名不变；只有默认 View 时因子结果数据集能完整删除。
+- 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路；View 静态与动态 durable 带参数重建后过滤主题正确、从流末尾开始、不重放历史，不带参数时新建的动态 durable 仍是 `DeliverAll`；暂停区间由恢复追赶补齐。
 
 ## 6. 待确认
 
@@ -214,3 +215,13 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 第 4 步 View 消费者切换不完整：静态与动态 durable 都不能放宽过滤主题；EventBus 流配置与凭据要换；新 `ViewDataReady` 的事件名 | 接受。排空后删掉重建、从流末尾开始；流配置与凭据列入换装；`ViewDataReady` 升 v2（3.5、4.1） |
 | "排空"不能证明因子已追平：暂停不等运行中的计算、暂停期间的事件被确认、无水位任务直接报追平 | 接受。写明等运行中期次结束；暂停区间由追赶按水位补算；无水位任务的边界（4.1） |
 | `view_delivery` 不改 durable 名的前提；factor-mgr 客户端缺 View 方法；`storagepolicy` 的 `mooxsys` 与 CLI 估算；`PeriodDetail` 放现有因子 proto；`FACTOR` 暂不改名的表述 | 均接受（3.2、3.4、3.5、第 6 节） |
+
+### v8（Codex 复审 v7，2026-10-27）：还需修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| 旧 Storage 删除数据集只认 `moox-factor`、`moox-collector`，业务模块先改短名会让删除被拒 | 接受。第 1 步在两个边界之间连续换装，换装间隔里不做数据集删除（第 4 节） |
+| 空 `write_owner` 不限写入，与"只读身份自然写不了"矛盾 | 接受。改为只读身份写不了声明了 `write_owner` 的数据集，测试预期同步（3.1、第 5 节） |
+| 第 3 步缺省推断漏了 `collection_browse` 的维护顺序 0 | 接受，补入（第 4 节、第 5 节） |
+| 动态 durable 现在强制 `DeliverAll`，重建时如何从流末尾开始、以后新建如何照旧 | 接受。一次性参数重建时从流末尾开始，平时照旧 `DeliverAll`（4.1） |
+| 消费者建立、组件启动与确认的顺序不清楚 | 接受。写明暂停中不会产生事件、启动顺序与确认步骤（4.1） |
