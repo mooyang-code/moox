@@ -1,6 +1,6 @@
 # 通用写入取代 WriteFactorRows 设计
 
-状态：设计稿 v4.1（2026-10-27）。v2、v3 按 Codex 两轮审查修订；v4 按用户决定删除 `source_event_id` 与 `write_source`，v4.1 按 Codex 对 v4 的复审补全清单（见第 7 节）。未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
+状态：已实现并发布（2026-10-27，见第 8 节）；设计稿 v4.1。v2、v3 按 Codex 两轮审查修订；v4 按用户决定删除 `source_event_id` 与 `write_source`，v4.1 按 Codex 对 v4 的复审补全清单（见第 7 节）。未编码。项目尚未上线，协议、事件、存储格式直接修改，不考虑兼容与迁移。
 
 ## 0. 目标
 
@@ -199,6 +199,29 @@ UpsertFields(ctx, spaceID, datasetID, rows, commitID):
 ## 6. 后续（不在本设计）
 
 - `write_owner` 精确匹配、去别名等权限改造（《Storage 去业务耦合设计》2.1）。
+
+## 8. 实现与发布（2026-10-27）
+
+提交：`bb3d9d67`（实现）、`5769eb9b` 与 `8bd565ba`（按 Codex 实现审查修正）、`1d8bae9d`（web-host 重新打包前端）。
+
+实现审查（Codex）：
+
+| 意见 | 处置 |
+|---|---|
+| 因子身份获得 `UpsertFields` 后可以写非因子数据集（旧 `WriteFactorRows` 只能写完整归属因子的结果数据集） | 修正。因子结果与因子身份一一对应：因子结果只许因子写，因子身份也只能写完整归属于因子的结果数据集（`factorOwnedResult`），补拒绝测试 |
+| 归属属性比较方式不统一 | 修正。写入方、采集归属、数据集管理统一去空白、忽略大小写（`attrEquals`） |
+| 建议补"重开 Pebble 后 commit 标记仍生效"的测试；清理 zstddict 与重采样的过时说明 | 已补、已清理 |
+
+发布（UTC）：12:55 边界算完后 `system pause`（12:57 完成）→ 三台主机 host-gateway 与 cli、Admin、Monitor（12:57～12:59；存储机网关因旧 Admin 的路由快照校验不过而退出，Admin 就绪后手工 `moox-runtime start` 拉起）→ 存储机与海外机 Access → Storage 三组件（13:00）→ collector、factor-mgr、web-host、collector-stream（13:02）→ 因子引擎（13:02，`workers: 32` 保留）→ `system resume`：采集补采约 9 分钟后追平，栅栏处策略等因子、因子等放行，按惯例 `--release-partial --yes` 先放行因子引擎与 Trade，因子补算完 12:55～13:15 后再 `resume` 放行策略（13:23）。
+
+验收：
+
+- 12:55～13:20 每一期五个 5m 任务都 `complete`（暂停区间由恢复追赶补上），13:25 期实时算出；策略 13:25 期五个实例全部 `ok`，暂停区间按设计记为"跳过（catchup）"。
+- `doctor alerts`：HEALTHY，告警 0、事项 0；Admin 的 `t_host_gateway_status` 四台主机期望与实际哈希一致、无错误。
+- 数据节点"storage node 写入"日志：因子写入 `commit=true`，等锁 0；采集 K 线行事件正常流入 View（投递滞后 25～29 ms）。
+- Monitor 主机指标写入只在 21:00（北京时间，新旧版本交替时）失败，之后恢复。
+- 云函数：生产 crypto 只有 collector-stream 采集单元，没有云函数，无需上传代码包。
+- 未做：同一 `commit_id` 手工重放（由单元测试覆盖：同内容成功且不增加 outbox、不同内容冲突、重开后仍生效）；Web 数据导入页的手工导入；变更日志一天后的空间与 `factor_live_load` 拉数耗时对比（待量测）。
 
 ## 7. 审查记录
 
