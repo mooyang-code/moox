@@ -1071,9 +1071,9 @@ func (s tagValidationSource) GetTag(_ context.Context, _, tagID string) (*storag
 
 func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	service := &Service{datasetSrc: tagValidationSource{tags: map[string]*storagepb.Tag{
-		"binance_spot": {TagId: "binance_spot", Source: "binance", MarketType: "spot"},
-		"binance_swap": {TagId: "binance_swap", Source: "binance", MarketType: "swap"},
-		"cn_a_share":   {TagId: "cn_a_share", Source: "eastmoney", MarketType: "equity"},
+		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
+		"binance_swap": {TagId: "binance_swap", Attributes: map[string]string{"sync.source": "binance", "market_type": "swap"}},
+		"cn_a_share":   {TagId: "cn_a_share", Attributes: map[string]string{"sync.source": "eastmoney", "market_type": "equity"}},
 	}}}
 	params := `{"target_dataset_id":"bars","frequency":"1m"}`
 	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", CollectParams: params}
@@ -1087,7 +1087,7 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	}
 
 	// 同一来源与市场的多个标签通过。
-	service.datasetSrc.(tagValidationSource).tags["binance_spot_2"] = &storagepb.Tag{TagId: "binance_spot_2", Source: "binance", MarketType: "spot"}
+	service.datasetSrc.(tagValidationSource).tags["binance_spot_2"] = &storagepb.Tag{TagId: "binance_spot_2", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}
 	task.TagIDs = []string{"binance_spot", "binance_spot_2"}
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
 

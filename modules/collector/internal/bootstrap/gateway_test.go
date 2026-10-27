@@ -215,13 +215,6 @@ func (w *collectorGatewayWire) ApplyTagSnapshot(ctx context.Context, request *st
 	return &storagepb.ApplyTagSnapshotRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) ReportTagRunFailure(ctx context.Context, request *storagepb.ReportTagRunFailureReq) (*storagepb.ReportTagRunFailureRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "ReportTagRunFailure", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.ReportTagRunFailureRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) UpdateSubjectAttributes(ctx context.Context, request *storagepb.UpdateSubjectAttributesReq) (*storagepb.UpdateSubjectAttributesRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.Metadata", "UpdateSubjectAttributes", request); err != nil {
 		return nil, err
@@ -409,10 +402,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.ApplyTagSnapshot(t.Context(), &storagepb.ApplyTagSnapshotReq{AuthInfo: auth})
 		require.Error(t, err)
 	})
-	t.Run("ReportTagRunFailure", func(t *testing.T) {
-		_, err := adapter.ReportTagRunFailure(t.Context(), &storagepb.ReportTagRunFailureReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("UpdateSubjectAttributes", func(t *testing.T) {
 		_, err := adapter.UpdateSubjectAttributes(t.Context(), &storagepb.UpdateSubjectAttributesReq{AuthInfo: auth})
 		require.NoError(t, err)
@@ -456,7 +445,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 28)
+	require.Len(t, wire.calls, 27)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

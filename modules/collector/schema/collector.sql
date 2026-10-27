@@ -266,6 +266,20 @@ CREATE TABLE IF NOT EXISTS t_collector_subject_exclusions (
     PRIMARY KEY (c_space_id, c_subject_id, c_market_type)
 );
 
+-- 标签的标的同步运行状态：同步任务何时跑、结果如何只属于 Collector，不放进 Storage 的标签。
+-- 调度判断读这张表；Monitor 与管理台经 ListTagSyncStatus 读取。
+CREATE TABLE IF NOT EXISTS t_collector_tag_sync_runs (
+    c_space_id TEXT NOT NULL,
+    c_tag_id TEXT NOT NULL,
+    c_last_run_at DATETIME NOT NULL,
+    c_last_status TEXT NOT NULL,
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_last_success_at DATETIME,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_last_status IN ('success', 'failed')),
+    PRIMARY KEY (c_space_id, c_tag_id)
+);
+
 -- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
 -- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
 CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (

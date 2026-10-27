@@ -110,8 +110,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {181, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "afc0ee7b1305cd30cd2f1e17483e3668a7b2535d1157f5c83c8fa0d57cb17ef2"},
-		"storage":  {83, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "619d8bc91b30992df6011c63e4b4b9e5b6c9726a08f6bbca2ef6481169f35c0d"},
+		"control":  {183, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "ba15e4f66fb45eb672d1d86b17c44fd8d804a2139268788dcb9ee6424c4f515e"},
+		"storage":  {82, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "0372e714565b6f4bea08c043119eb074d0c8fb7080e5ef6379d5c0bf1dd25866"},
 		"overseas": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f82ea3d40b5f3cfdfa3188507f36e4c4e6f90a83ec5b724a927b75db19f82a41"},
 	}
 	for _, host := range p.Hosts {

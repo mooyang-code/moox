@@ -3,6 +3,7 @@ package subjectsync
 import (
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -33,21 +34,17 @@ func NewMetrics(registerer prometheus.Registerer) *Metrics {
 	return m
 }
 
-func (m *Metrics) observeTagInventory(tag *pb.Tag) {
+func (m *Metrics) observeTagInventory(tag *pb.Tag, run *store.TagSyncRun) {
 	if m == nil || tag == nil {
 		return
 	}
 	labels := []string{tag.GetSpaceId(), tag.GetTagId()}
 	m.active.WithLabelValues(labels...).Set(float64(tag.GetActiveCount()))
 	m.inactive.WithLabelValues(labels...).Set(float64(tag.GetInactiveCount()))
-	if tag.GetLastStatus() != "success" || tag.GetLastRunAt() == "" {
+	if run == nil || run.LastSuccessAt.IsZero() {
 		return
 	}
-	lastRun, err := time.ParseInLocation(sqliteTimeLayout, tag.GetLastRunAt(), time.UTC)
-	if err != nil {
-		return
-	}
-	m.lastSuccess.WithLabelValues(labels...).Set(float64(lastRun.Unix()))
+	m.lastSuccess.WithLabelValues(labels...).Set(float64(run.LastSuccessAt.Unix()))
 }
 
 func (m *Metrics) observeTagFailure(tag *pb.Tag) {

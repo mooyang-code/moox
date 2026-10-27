@@ -376,7 +376,7 @@ func (s *planSymbolsStub) GetDataset(context.Context, string, string) (storageso
 }
 
 func (s *planSymbolsStub) GetTag(_ context.Context, _, tagID string) (*storagepb.Tag, error) {
-	return &storagepb.Tag{TagId: tagID, Source: "binance", MarketType: "spot"}, nil
+	return &storagepb.Tag{TagId: tagID, Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}}, nil
 }
 
 func (s *planSymbolsStub) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {

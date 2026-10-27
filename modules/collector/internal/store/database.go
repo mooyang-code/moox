@@ -36,6 +36,7 @@ type Store struct {
 	ingest     *IngestModeRepository
 	workers    *StreamWorkerRepository
 	exclusions *SubjectExclusionRepository
+	tagRuns    *TagSyncRunRepository
 	backfill   *BackfillRepository
 	resample   *ResampleStateRepository
 }
@@ -107,6 +108,7 @@ func Open(opts *Options) (*Store, error) {
 	s.ingest = NewIngestModeRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
 	s.exclusions = NewSubjectExclusionRepository(db)
+	s.tagRuns = NewTagSyncRunRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	s.resample = NewResampleStateRepository(db)
 	applySQLitePoolConfig(db, opts)
@@ -152,6 +154,14 @@ func (s *Store) SubjectExclusions() *SubjectExclusionRepository {
 		return nil
 	}
 	return s.exclusions
+}
+
+// TagSyncRuns returns the repository of per-tag subject sync run results.
+func (s *Store) TagSyncRuns() *TagSyncRunRepository {
+	if s == nil {
+		return nil
+	}
+	return s.tagRuns
 }
 
 // Resample returns the repository of resample snapshots, history jobs, backfill notices and the local event outbox.

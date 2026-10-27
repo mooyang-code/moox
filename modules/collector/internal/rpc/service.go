@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strings"
 	"sync"
@@ -1132,10 +1133,10 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		if err != nil {
 			return fmt.Errorf("load tag %s: %w", tagID, err)
 		}
-		source := strings.ToLower(strings.TrimSpace(tag.GetSource()))
-		market := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+		source := tagattr.Source(tag)
+		market := tagattr.MarketType(tag)
 		if source == "" || market == "" {
-			return fmt.Errorf("tag %s must have immutable source and market_type", tagID)
+			return fmt.Errorf("tag %s must have sync.source and market_type attributes", tagID)
 		}
 		// 同一任务的结果数据集只能来自一个市场，否则计划生成会拒绝整个空间。
 		route := source + "/" + market

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"strings"
 	"time"
 
@@ -17,12 +19,18 @@ const sqliteTimeLayout = "2006-01-02 15:04:05"
 
 type TagStore interface {
 	ListTags(context.Context) ([]*pb.Tag, error)
-	ApplyTagSnapshot(context.Context, string, string, time.Time, []*pb.TagSnapshotItem) error
-	ReportTagRunFailure(context.Context, string, string, time.Time, string) error
+	ApplyTagSnapshot(context.Context, string, string, []*pb.TagSnapshotItem) error
+}
+
+// RunStore 保存标签的同步运行结果（Collector 自己的库）：调度判断读它，结果写它。
+type RunStore interface {
+	List(ctx context.Context, spaceID string) ([]store.TagSyncRun, error)
+	Record(ctx context.Context, run store.TagSyncRun) error
 }
 
 type TagRunner struct {
 	Store        TagStore
+	Runs         RunStore
 	Listers      Listers
 	FetchTimeout time.Duration
 	Now          func() time.Time
@@ -38,9 +46,8 @@ func probing(tag *pb.Tag) bool {
 	if tag == nil {
 		return false
 	}
-	// Only auto tags synchronize their authoritative member snapshot. Manual
-	// tags still carry source/market identity, but membership remains operator-owned.
-	return strings.EqualFold(tag.GetMode(), "auto") && tag.GetSource() != "" && tag.GetMarketType() != ""
+	// 只有 auto 标签同步权威成员快照；manual 标签的成员由人维护。
+	return strings.EqualFold(tag.GetMode(), "auto") && tagattr.Source(tag) != "" && tagattr.MarketType(tag) != ""
 }
 
 func parseTagTime(value string) (time.Time, error) {
@@ -50,26 +57,23 @@ func parseTagTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339, value)
 }
 
-func tagDue(tag *pb.Tag, now time.Time) (bool, error) {
-	if tag == nil || tag.GetLastRunAt() == "" {
+// tagDue 判断标签的标的同步是否到期：没有运行记录、标签在上次运行后被改过（含同步配置），或按 cron 到点了。
+func tagDue(tag *pb.Tag, run *store.TagSyncRun, now time.Time) (bool, error) {
+	if tag == nil || run == nil || run.LastRunAt.IsZero() {
 		return true, nil
 	}
-	lastRun, err := parseTagTime(tag.GetLastRunAt())
-	if err != nil {
-		return false, fmt.Errorf("parse last_run_at: %w", err)
-	}
-	if updated, err := parseTagTime(tag.GetUpdatedAt()); err == nil && updated.After(lastRun) {
+	if updated, err := parseTagTime(tag.GetUpdatedAt()); err == nil && updated.After(run.LastRunAt) {
 		return true, nil
 	}
-	schedule, err := cron.ParseStandard(tag.GetCron())
+	schedule, err := cron.ParseStandard(tagattr.Cron(tag))
 	if err != nil {
 		return false, err
 	}
-	loc, err := time.LoadLocation(tag.GetTimezone())
+	loc, err := time.LoadLocation(tagattr.Timezone(tag))
 	if err != nil {
 		return false, err
 	}
-	return !schedule.Next(lastRun.In(loc)).After(now), nil
+	return !schedule.Next(run.LastRunAt.In(loc)).After(now), nil
 }
 
 func (r *TagRunner) RunOnce(ctx context.Context) error {
@@ -85,18 +89,24 @@ func (r *TagRunner) RunOnce(ctx context.Context) error {
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
+	runs, err := r.runsByTag(ctx)
+	if err != nil {
+		log.ErrorContextf(ctx, "list tag sync runs: %v", err)
+		return err
+	}
 	var failures error
 	for _, tag := range tags {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(failures, err)
 		}
+		run := runs[tagKey(tag.GetSpaceId(), tag.GetTagId())]
 		if r.Metrics != nil {
-			r.Metrics.observeTagInventory(tag)
+			r.Metrics.observeTagInventory(tag, run)
 		}
 		if !probing(tag) {
 			continue
 		}
-		due, err := tagDue(tag, now)
+		due, err := tagDue(tag, run, now)
 		if err != nil {
 			log.ErrorContextf(ctx, "tag %s/%s schedule: %v", tag.GetSpaceId(), tag.GetTagId(), err)
 			failures = errors.Join(failures, err)
@@ -110,6 +120,38 @@ func (r *TagRunner) RunOnce(ctx context.Context) error {
 	return failures
 }
 
+func tagKey(spaceID, tagID string) string { return spaceID + "/" + tagID }
+
+// runsByTag 一次读出所有标签的运行记录，按（空间，标签）索引。
+func (r *TagRunner) runsByTag(ctx context.Context) (map[string]*store.TagSyncRun, error) {
+	out := map[string]*store.TagSyncRun{}
+	if r.Runs == nil {
+		return out, nil
+	}
+	runs, err := r.Runs.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range runs {
+		out[tagKey(runs[i].SpaceID, runs[i].TagID)] = &runs[i]
+	}
+	return out, nil
+}
+
+// record 把一次运行结果写进 Collector 的库；写不进去只记日志，不影响本次同步的结果。
+func (r *TagRunner) record(ctx context.Context, tag *pb.Tag, runAt time.Time, runErr error) {
+	if r.Runs == nil {
+		return
+	}
+	run := store.TagSyncRun{SpaceID: tag.GetSpaceId(), TagID: tag.GetTagId(), LastRunAt: runAt, LastStatus: store.TagSyncSuccess}
+	if runErr != nil {
+		run.LastStatus, run.LastError = store.TagSyncFailed, runErr.Error()
+	}
+	if err := r.Runs.Record(ctx, run); err != nil {
+		log.ErrorContextf(ctx, "record tag %s/%s sync run: %v", tag.GetSpaceId(), tag.GetTagId(), err)
+	}
+}
+
 func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (int, error) {
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
@@ -121,14 +163,14 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	if delays == nil {
 		delays = defaultSnapshotRetryDelays
 	}
-	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
+	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
 	for attempt := 0; err != nil && attempt < len(delays) && fetchCtx.Err() == nil; attempt++ {
 		log.WarnContextf(ctx, "tag %s/%s snapshot attempt %d failed, retrying: %v", tag.GetSpaceId(), tag.GetTagId(), attempt+1, err)
 		select {
 		case <-time.After(delays[attempt]):
 		case <-fetchCtx.Done():
 		}
-		instruments, err = FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
+		instruments, err = FetchSnapshot(fetchCtx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
 	}
 	subjects := 0
 	if err == nil {
@@ -137,7 +179,7 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 			items = append(items, snapshotItem(tag, item))
 		}
 		log.InfoContextf(ctx, "tag %s/%s applying snapshot subjects=%d", tag.GetSpaceId(), tag.GetTagId(), len(items))
-		err = r.Store.ApplyTagSnapshot(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, items)
+		err = r.Store.ApplyTagSnapshot(ctx, tag.GetSpaceId(), tag.GetTagId(), items)
 		subjects = len(items)
 	}
 	if err != nil {
@@ -145,12 +187,10 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		if r.Metrics != nil {
 			r.Metrics.observeTagFailure(tag)
 		}
-		if reportErr := r.Store.ReportTagRunFailure(ctx, tag.GetSpaceId(), tag.GetTagId(), runAt, err.Error()); reportErr != nil {
-			log.ErrorContextf(ctx, "report tag %s/%s failure: %v", tag.GetSpaceId(), tag.GetTagId(), reportErr)
-			err = errors.Join(err, reportErr)
-		}
+		r.record(ctx, tag, runAt, err)
 		return 0, err
 	}
+	r.record(ctx, tag, runAt, nil)
 	if r.Metrics != nil {
 		r.Metrics.observeTagSuccess(tag, runAt)
 	}
@@ -197,12 +237,12 @@ func (r *TagRunner) SyncTags(ctx context.Context, filter Filter) ([]TagResult, e
 }
 
 func snapshotItem(tag *pb.Tag, item marketdata.Instrument) *pb.TagSnapshotItem {
-	out := &pb.TagSnapshotItem{SubjectId: item.SubjectID, Name: item.Name}
+	out := &pb.TagSnapshotItem{SubjectId: item.SubjectID, Name: item.Name, Attributes: subjectAttributes(tag.GetSpaceId(), item)}
 	switch tag.GetSpaceId() {
 	case "crypto":
-		out.SubjectType, out.Market, out.Currency, out.Timezone = "crypto_pair", "CRYPTO", strings.ToUpper(item.QuoteAsset), "UTC"
+		out.Timezone = "UTC"
 	case "stockcn":
-		out.SubjectType, out.Market, out.Currency, out.Timezone = "stock", item.Exchange, "CNY", "Asia/Shanghai"
+		out.Timezone = "Asia/Shanghai"
 	}
 	return out
 }

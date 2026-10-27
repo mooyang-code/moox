@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strconv"
 	"strings"
@@ -304,8 +305,8 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 				return rsp.GetRetInfo()
 			}())
 		}
-		tagSource := strings.TrimSpace(rsp.GetTag().GetSource())
-		tagMarket := strings.ToLower(strings.TrimSpace(rsp.GetTag().GetMarketType()))
+		tagSource := tagattr.Source(rsp.GetTag())
+		tagMarket := tagattr.MarketType(rsp.GetTag())
 		if i > 0 && (tagSource != source || tagMarket != marketType) {
 			return "", "", nil
 		}

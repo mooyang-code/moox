@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strings"
 
@@ -92,10 +93,10 @@ func (r *GroupBuilder) groups(ctx context.Context, spaceID string) ([]TaskGroup,
 				valid = false
 				break
 			}
-			provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
-			marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+			provider := tagattr.Source(tag)
+			marketType := tagattr.MarketType(tag)
 			if provider == "" || marketType == "" {
-				log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing immutable source/market_type", task.TaskID, tagID)
+				log.WarnContextf(ctx, "skip collection task=%s: tag=%s missing sync.source or market_type attribute", task.TaskID, tagID)
 				valid = false
 				break
 			}

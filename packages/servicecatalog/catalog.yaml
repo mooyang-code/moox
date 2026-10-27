@@ -640,6 +640,8 @@ components:
           - CancelKlineResampleJob
           - PreviewKlineResampleSource
           - SyncSubjects
+          - ListTagSyncStatus
+          - ListSubjectListers
           - CheckKline
           - SubmitKlineBackfill
           - GetKlineBackfill
@@ -671,6 +673,8 @@ components:
           - GetCollectorStatus
           - GetIngestMode
           - ListSubjectExclusions
+          - ListTagSyncStatus
+          - ListSubjectListers
         acl:
           - methods:
               - GetTaskList
@@ -719,6 +723,18 @@ components:
               - GetTaskResultInventory
             callers:
               - monitor
+          # 标签同步的运行状态：Monitor 的标签检查读；可选的（来源，市场类型）组合给管理台新建自动标签用。
+          - methods:
+              - ListTagSyncStatus
+            callers:
+              - console
+              - moox-cli
+              - monitor
+          - methods:
+              - ListSubjectListers
+            callers:
+              - console
+              - moox-cli
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422

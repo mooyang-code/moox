@@ -31,7 +31,6 @@ type Metadata interface {
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
-	ReportTagRunFailure(context.Context, *storagepb.ReportTagRunFailureReq, ...client.Option) (*storagepb.ReportTagRunFailureRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
 	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
 	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
@@ -147,10 +146,6 @@ func (c *Client) ListTags(ctx context.Context, request *storagepb.ListTagsReq, o
 
 func (c *Client) ApplyTagSnapshot(ctx context.Context, request *storagepb.ApplyTagSnapshotReq, options ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error) {
 	return invoke[storagepb.ApplyTagSnapshotRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ApplyTagSnapshot", request, options)
-}
-
-func (c *Client) ReportTagRunFailure(ctx context.Context, request *storagepb.ReportTagRunFailureReq, options ...client.Option) (*storagepb.ReportTagRunFailureRsp, error) {
-	return invoke[storagepb.ReportTagRunFailureRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ReportTagRunFailure", request, options)
 }
 
 func (c *Client) UpdateSubjectAttributes(ctx context.Context, request *storagepb.UpdateSubjectAttributesReq, options ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error) {
