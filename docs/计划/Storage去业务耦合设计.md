@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v14（2026-10-27），未编码。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v15（2026-10-27），未编码。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -170,7 +170,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - 删除 `source`（含 `t_tags.c_source_id` 及其外键）、`market_type`（含取值白名单 `crud_tag.go:30` 与不可变约束）、`cron`、`timezone`、`last_run_at`、`last_status`、`last_error`；删除 `ReportTagRunFailure`。
 - `ApplyTagSnapshot` 去掉 `run_at`，只表示"把成员设成这份快照"；被移出的成员的 `inactive_at` 取 Storage 收到快照的时间。
 - 标的修订号（`t_space_revisions.c_subjects_revision`，Strategy 靠它刷新标签缓存，`strategy/internal/input/cache.go:104`）的触发器由监听 `c_market_type`（`metadata.sql:461`）改为监听 `c_attrs_json`。
-- 删除 `subject_listing` 能力的整条链路：Storage 的校验（`crud_tag.go:154`）、Collector 启动时的能力登记（`bootstrap/subject_sync.go:50`、`subjectsync/storage_client.go:107`）、CLI 元数据比较里的特殊处理（`metadata_implementation.go:604`）。来源与品种组合是否支持，仍由 Collector 的 lister 判断（`subjectsync/lister.go:28`）。
+- 删除 `subject_listing` 能力的整条链路：Storage 的校验（`crud_tag.go:154`）、Collector 启动时的能力登记（`bootstrap/subject_sync.go:50`、`subjectsync/storage_client.go:107`）、CLI 元数据比较里的特殊处理（`metadata_implementation.go:604`）。来源与品种组合是否支持，仍由 Collector 的 lister 判断（`subjectsync/lister.go:28`）；Web 标签表单原来从数据来源的 `subject_listing` 属性生成可选的来源与品种（`tags-tab.vue:169`），改为调 Collector 新增的只读接口 `ListSubjectListers`，返回 lister 支持的（来源，品种）组合。
 
 **标的同步配置写进标签属性**，由 Collector 解释，标签仍只在种子里定义一处：
 
@@ -194,7 +194,7 @@ attributes:
 **标的的业务字段放进属性**
 
 - `Subject` 只保留 `subject_id`、`name`、`timezone`、`status`、`attributes`；`subject_type`、`market`、`currency` 改为属性键。时区是时间序列对象的通用信息，保留为字段。
-- `TagSnapshotItem` 同样改为 `subject_id`、`name`、`timezone`、`attributes`。与现在一样，快照只为新出现的标的建 Subject 并带上属性；已有标的的属性由 Collector 的属性维护任务（`subjectsync/attr_runner.go`）更新。
+- `TagSnapshotItem` 同样改为 `subject_id`、`name`、`timezone`、`attributes`。与现在一样，快照只为新出现的标的建 Subject 并带上属性；已有标的的属性由 Collector 的属性维护任务（`subjectsync/attr_runner.go:117`）更新，这个任务生成的属性同样要带上 `subject_type`、`market`、`currency`（现在只有 `base`、`quote`、`pair` 或 `exchange`），两条路径写出的属性键一致。
 - 列表与搜索去掉这些字段：`ListSubjectsRequest` 删除 `market`、`subject_type` 过滤（`metadata.proto:787`），SQLite 的标的列表（`crud_subject.go:46`）、标签成员搜索（`crud_tag_member.go:49`）与元数据缓存（`cache/store.go:315`）同步修改；关键词搜索只匹配 ID 与名称。Web 拿到列表后在本地筛选（每个空间几百到一两千个标的）。现有 Go 调用方只按 ID 查标的，不依赖这些过滤。
 
 **数据来源只是一个可引用的名字**
@@ -211,12 +211,12 @@ attributes:
 **表结构与上层**
 
 - `t_tags`、`t_subjects`、`t_data_sources` 删列与 `CHECK`，`t_tags` 加 `c_attrs_json`，随全新部署生效。
-- Collector：标签固定字段的所有读取点改读属性——标的同步的调度与筛选（`subjectsync/tag_runner.go`、`syncer.go:30`）、采集计划分组（`marketfetch/task_groups.go:95`）、建任务校验（`rpc/service.go:1119`）、重采样的来源推导与任务结果记录；运行状态表与 `ListTagSyncStatus`；快照写属性；序列快照只交两项；删除 `subject_listing` 能力登记；种子与元数据导入。
+- Collector：标签固定字段的所有读取点改读属性——标的同步的调度与筛选（`subjectsync/tag_runner.go`、`syncer.go:30`）、采集计划分组（`marketfetch/task_groups.go:95`）、建任务校验（`rpc/service.go:1119`）、重采样的来源推导与任务结果记录；运行状态表与 `ListTagSyncStatus`、`ListSubjectListers` 两个只读接口；属性维护任务补齐属性键；快照写属性；序列快照只交两项；删除 `subject_listing` 能力登记；种子与元数据导入。
 - Strategy：`input/client.go:207` 改读 `tag.attributes["market_type"]`。
 - Monitor：标签检查按上文改用 Collector 的运行状态与标签属性。
 - Trade：经核对不读 Storage 的标签，无需改动（Trade 自己协议里的 `market_type` 与本步无关）。
 - CLI：元数据导入导出（`metadata_implementation.go`，含删除 `subject_listing` 特殊比较）、`metadata tag clone`、`collector subject exclusions`。
-- Web：`api/storage/types.ts`、`metadata.ts` 与标的、标签、数据来源页面改读属性、本地筛选；标签页的运行状态改调 Collector。
+- Web：`api/storage/types.ts`、`metadata.ts` 与标的、标签、数据来源页面改读属性、本地筛选；标签页的运行状态与新建标签时的来源、品种选项改调 Collector。
 - 种子：`config/setup/metadata.yaml` 的标签、标的、数据来源改为属性写法。
 
 ## 4. 编码顺序与发布
@@ -270,7 +270,7 @@ attributes:
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
 - 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
 - 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
-- 第 5 步：标签属性的保存、读取与种子导入，改属性会递增标的修订号、Strategy 刷新缓存并从属性读到 `market_type`；Collector 按 `sync.*` 调度标的同步、运行结果写进自己的表，`ListTagSyncStatus` 驱动 Monitor 的 `failed`/`stale` 检查与 Web 标签页；快照移出的成员 `inactive_at` 为收到快照的时间；标的、数据来源的业务字段读写走属性、列表与搜索只按 ID 和名称；删除 `subject_listing` 后 Collector 正常启动；加密货币（含重采样）与 A 股两类生产者的序列快照只交两项，Collector 与 Storage 算出的 `series_hash` 一致、周期正常定稿；Web 的标的、标签、数据来源页面正常。
+- 第 5 步：标签属性的保存、读取与种子导入，改属性会递增标的修订号、Strategy 刷新缓存并从属性读到 `market_type`；Collector 按 `sync.*` 调度标的同步、运行结果写进自己的表，`ListTagSyncStatus` 驱动 Monitor 的 `failed`/`stale` 检查与 Web 标签页，没有运行记录的标签按 `stale` 处理（与现在一致）；Web 用 `ListSubjectListers` 的选项能新建自动标签；快照移出的成员 `inactive_at` 为收到快照的时间；快照新建的标的与属性维护任务更新的已有标的都带上 `subject_type`、`market`、`currency` 属性；标的、数据来源的业务字段读写走属性、列表与搜索只按 ID 和名称；删除 `subject_listing` 后 Collector 正常启动；加密货币（含重采样）与 A 股两类生产者的序列快照只交两项，Collector 与 Storage 算出的 `series_hash` 一致、周期正常定稿；Web 的标的、标签、数据来源页面正常。
 - 部署：在测试环境把 4.2 走一遍（清空、全新安装、小规模历史导入、建因子与策略、全链路一期）。
 
 ## 6. 待确认
@@ -349,3 +349,13 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 建议："新列永远为空"不准确 | 改为"这些事件不写新列，之后同一行再更新会带上" |
 | 建议：快照对已有标的的属性如何处理 | 写明快照只为新标的建 Subject，已有标的由属性维护任务更新 |
 | 建议：Trade 不读 Storage 标签 | 清单注明无需改动，4.1 涉及模块去掉 Trade |
+
+### v15（Codex 复审 v14，2026-10-27）：需要修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| Web 标签表单靠 `subject_listing` 生成来源与品种选项，删除后无法新建自动标签 | Collector 新增只读接口 `ListSubjectListers`，Web 改调；列入测试 |
+| 属性维护任务只写 `base`/`quote`/`pair`/`exchange`，已有标的拿不到迁入属性的字段 | 属性维护任务同样生成 `subject_type`、`market`、`currency` |
+| 建议：两条属性写入路径分别测试；无运行记录时的 `stale` 判定 | 写入第 5 步测试 |
+
+其余意见已确认处理正确。
