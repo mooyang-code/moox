@@ -1016,4 +1016,3 @@ func validateResultColumnContract(col storageio.ColumnInfo) error {
 	}
 	return nil
 }
-
