@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v8（2026-10-27），未编码。v7、v8 按 Codex 两轮审查修订（见第 7 节）；v6 按当前代码重写：
+状态：设计 v8（2026-10-27），未编码。v7、v8 按 Codex 三轮审查修订（见第 7 节）；v6 按当前代码重写：
 
 - 删去已经完成的部分（第 1 节）；
 - 按用户的三条原则（单用户；不过度设计；未上线，不写迁移命令、不设计回退）删去 v5 的一次性迁移命令、静默点快照与回退、新旧事件版本与消费者并存；
@@ -169,7 +169,11 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
    - JetStream 不能放宽已有 durable 的过滤主题（`packages/jetstream/consumer.go:351`），所以 View 的静态 durable（`storage_view_factor`、`storage_view_misc`）与按数据集动态建的 durable 都要删掉重建。此刻已经排空、写入方都停着，重建的 durable 从流的末尾开始（起始序号取流当前的最后序号加一），不会漏事件，也不重放历史。
    - 这由 storage-view 的一次性启动参数 `--recreate-mismatched-consumers` 处理：发现 durable 的过滤主题与期望不一致时删掉，按上面的起点重建；只在这次发布时带。平时（不带参数）新建的动态 durable 仍按现在的规则用 `DeliverAll`（`inventory_reconciler.go:326`），不受影响。`reconcile-view-consumers` 目前只检查静态 durable，同步扩展到动态 durable，用来事后核对。
    - 因子引擎订阅 `DatasetPeriodCompleted`、Strategy 订阅 `ViewDataReady` v2，都用新的 durable（`DeliverNew`）；旧 durable 换装后删除。
-4. **启动顺序**：采集仍处于系统暂停、DataNode 也没有等待中的周期，所以 Storage 启动后不会产生任何事件，各组件的启动顺序不影响消费完整性。依次启动：storage-node → storage-primary → storage-view（带上面的参数）→ 网关、Admin、Monitor、Access → factor-mgr、Collector、collector-stream → 因子引擎、Strategy。然后用 EventBus 的 consumer 列表确认：View 的静态与动态 durable 过滤主题都是新的，因子引擎与 Strategy 的新 durable 已建好。确认之后才恢复。
+4. **启动顺序：先消费者、后生产者**。DataNode 启动后会按截止时间结束到期的周期并发布完成事件，所以不能假定 Storage 启动不产生事件。依次：
+   - 先启动网关、Admin、Monitor、Access（服务目录）；
+   - 再启动全部消费者：因子引擎、Strategy（建新 durable，读 Storage 失败会退避重试）、storage-view（带上面的参数重建 View 的 durable）；
+   - 用 EventBus 的 consumer 列表确认：因子引擎与 Strategy 的新 durable 已建好，View 的静态与动态 durable 过滤主题都是新的；
+   - 确认之后才启动生产者：storage-node → storage-primary → factor-mgr、Collector、collector-stream（采集仍处于系统暂停）。
 5. **恢复**：`system resume`；栅栏处按惯例先 `--release-partial --yes` 放行因子引擎与 Trade，因子补完暂停区间后再 `resume` 放行策略。从来没有水位的新任务会直接报追平（`engine/catchup_life.go:172`），它们的第一期从恢复后的下一个周期开始算，暂停区间不补；发布时如果有这样的任务，事后用 `recalc` 补。
 6. **DataNode 里旧格式的完成标记**：不转换。新代码只读新格式；旧标记只被"按触发事件查询本期冻结全集"用到（因子截面补算、幂等查询）。新版本上线前的周期如果之后发现空洞，自动截面补算取不到冻结全集会放弃，需要时用 `recalc` 手工补算。项目未上线，可以接受。
 7. 不做回退方案：出问题时修代码重新发布。
@@ -225,3 +229,4 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 第 3 步缺省推断漏了 `collection_browse` 的维护顺序 0 | 接受，补入（第 4 节、第 5 节） |
 | 动态 durable 现在强制 `DeliverAll`，重建时如何从流末尾开始、以后新建如何照旧 | 接受。一次性参数重建时从流末尾开始，平时照旧 `DeliverAll`（4.1） |
 | 消费者建立、组件启动与确认的顺序不清楚 | 接受。写明暂停中不会产生事件、启动顺序与确认步骤（4.1） |
+| （第三轮）DataNode 重启后会按截止时间结束到期周期并发布事件，"启动顺序不影响消费完整性"不成立 | 接受。改为先启动全部消费者并确认 durable，再启动 storage-node 与 storage-primary（4.1） |
