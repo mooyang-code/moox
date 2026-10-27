@@ -192,11 +192,19 @@ type StagedPull struct {
 	// Writes 是要写入本地的行（按标的排序）。Failed 是读取失败的标的（本期按失败处理，之后补算）。
 	Writes []seriesstore.SubjectWrite
 	Failed []string
+	// Timing 是这次取数的分段耗时（实时周期的拉数日志用）。
+	Timing PullTiming
 
 	syncer *Syncer
 	spec   Spec
 	end    time.Time
 	h0     *storageio.ChangeCursor
+}
+
+// PullTiming 是一次 PullStaged 的分段耗时：确定待拉标的（逐个读本地边界）、取变更日志链头、并行读取全部批次。
+type PullTiming struct {
+	Bounds, Head, Fetch time.Duration
+	Batches, Subjects   int
 }
 
 // Commit 把 writes（Writes 的全部或一部分）写进本地存储，同一个 batch 提交，并记下这些区间已被这次拉取反映。
@@ -228,6 +236,7 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 		return nil, err
 	}
 	end = end.UTC()
+	began := time.Now()
 	byFrom := map[time.Time][]string{}
 	for _, subject := range subjects {
 		from := end.Add(-time.Duration(max(spec.Lookback, 1)) * step)
@@ -269,6 +278,8 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 	}
 	// 拉取前先取变更日志的链头位置 H0：之后读到的行至少反映了序号不超过 H0 的全部变更，跟进据此跳过已反映的变更。
 	// 取不到时不记录，跟进按旧办法比对重拉，不影响正确性。
+	staged.Timing.Bounds, staged.Timing.Batches = time.Since(began), len(jobs)
+	began = time.Now()
 	var h0 *storageio.ChangeCursor
 	if len(jobs) > 0 {
 		if head, err := s.Storage.ReadDatasetChanges(ctx, spec.Source.SpaceID, spec.Source.DatasetID, nil, true, 0); err == nil {
@@ -276,6 +287,8 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 			h0 = &c
 		}
 	}
+	staged.Timing.Head = time.Since(began)
+	began = time.Now()
 	results := make(chan fetched, len(subjects))
 	work := make(chan job)
 	var wg sync.WaitGroup
@@ -325,6 +338,7 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	staged.Timing.Fetch, staged.Timing.Subjects = time.Since(began), len(writes)
 	sort.Slice(writes, func(i, j int) bool { return writes[i].Subject < writes[j].Subject })
 	staged.Writes = writes
 	staged.end = end

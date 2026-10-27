@@ -54,6 +54,7 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 		return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
 	rows := make([]*pb.RowFieldUpsert, len(req.GetRows()))
+	validator := requestValidator(ctx, s.validate)
 	for i, row := range req.GetRows() {
 		if row == nil || row.GetKey() == nil || row.GetKey().GetSpaceId() != req.GetSpaceId() || row.GetKey().GetDatasetId() != req.GetDatasetId() {
 			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row dataset identity does not match request"))}, nil
@@ -64,7 +65,7 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.PrimaryWriteFacto
 		if len(row.GetAttributes()) != 0 {
 			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("factor result rows do not support row attributes"))}, nil
 		}
-		if err := validateRow(ctx, row, s.validate); err != nil {
+		if err := validateRow(ctx, row, validator); err != nil {
 			return &pb.PrimaryWriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
 		for _, field := range row.GetFields() {

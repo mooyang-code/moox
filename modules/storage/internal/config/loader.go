@@ -60,11 +60,10 @@ const StorageViewAckWaitMS = 120000
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
-	BatchSize   int    `yaml:"batch_size"`
-	BatchWaitMS int    `yaml:"batch_wait_ms"`
-	FetchBatch  int    `yaml:"fetch_batch"`
-	MaxWorkers  int    `yaml:"max_workers"`
-	Ordering    string `yaml:"ordering"`
+	BatchSize  int    `yaml:"batch_size"`
+	FetchBatch int    `yaml:"fetch_batch"`
+	MaxWorkers int    `yaml:"max_workers"`
+	Ordering   string `yaml:"ordering"`
 	// BackfillPageSize bounds each Primary history page during a View rebuild.
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
 	BackfillPageSize        uint32                         `yaml:"backfill_page_size"`
@@ -298,20 +297,8 @@ func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
-	ServiceName string        `yaml:"service_name"`
-	NodeID      string        `yaml:"node_id"`
-	Outbox      StorageOutbox `yaml:"outbox"`
-}
-
-type StorageOutbox struct {
-	FlushBatchSize  int `yaml:"flush_batch_size"`
-	FlushMaxBytes   int `yaml:"flush_max_bytes"`
-	FlushIntervalMS int `yaml:"flush_interval_ms"`
-	MaxRows         int `yaml:"max_rows"`
-	MaxBytes        int `yaml:"max_bytes"`
-	MaxAgeHours     int `yaml:"max_age_hours"`
-	BackoffBaseMS   int `yaml:"backoff_base_ms"`
-	BackoffMaxMS    int `yaml:"backoff_max_ms"`
+	ServiceName string `yaml:"service_name"`
+	NodeID      string `yaml:"node_id"`
 }
 
 // StorageHealth controls the lightweight HTTP health endpoint.
@@ -348,35 +335,8 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
 	}
-	if c.Primary.Outbox.FlushBatchSize <= 0 {
-		c.Primary.Outbox.FlushBatchSize = 100
-	}
-	if c.Primary.Outbox.FlushMaxBytes <= 0 {
-		c.Primary.Outbox.FlushMaxBytes = 1 << 20
-	}
-	if c.Primary.Outbox.FlushIntervalMS <= 0 {
-		c.Primary.Outbox.FlushIntervalMS = 200
-	}
-	if c.Primary.Outbox.MaxRows <= 0 {
-		c.Primary.Outbox.MaxRows = 100000
-	}
-	if c.Primary.Outbox.MaxBytes <= 0 {
-		c.Primary.Outbox.MaxBytes = 256 * 1024 * 1024
-	}
-	if c.Primary.Outbox.MaxAgeHours <= 0 {
-		c.Primary.Outbox.MaxAgeHours = 24
-	}
-	if c.Primary.Outbox.BackoffBaseMS <= 0 {
-		c.Primary.Outbox.BackoffBaseMS = 200
-	}
-	if c.Primary.Outbox.BackoffMaxMS <= 0 {
-		c.Primary.Outbox.BackoffMaxMS = 30000
-	}
 	if c.View.BatchSize <= 0 {
 		c.View.BatchSize = 500
-	}
-	if c.View.BatchWaitMS <= 0 {
-		c.View.BatchWaitMS = 200
 	}
 	if c.View.FetchBatch <= 0 {
 		c.View.FetchBatch = 1

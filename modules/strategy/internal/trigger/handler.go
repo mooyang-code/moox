@@ -189,10 +189,12 @@ type period struct {
 
 // periodTiming 是一期处理的分段耗时，成功提交时写入一行日志，用来定位“数据就绪到结果落库”的时间花在哪。
 type periodTiming struct {
-	start  time.Time
-	load   time.Duration // 读取输入（View 元数据与行数据）
-	eval   time.Duration // 读取上期状态并求值
-	commit time.Duration // 结果提交
+	start time.Time
+	load  time.Duration // 读取输入（View 元数据与行数据）
+	eval  time.Duration // 读取上期状态并求值
+	// 求值的三段：读上期结果（SQLite）、解析上期规则状态（JSON）、引擎求值。
+	evalLatest, evalDecode, evalRun time.Duration
+	commit                          time.Duration // 结果提交
 }
 
 func (h *Handler) mode(instanceID string) Mode {
@@ -420,15 +422,22 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	evalStart := h.now()
 	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
 	previous := engine.State{}
-	if last, ok, err := h.Store.LatestOk(ctx, p.instance.InstanceID, rt.sessionID); err != nil {
+	last, ok, err := h.Store.LatestOk(ctx, p.instance.InstanceID, rt.sessionID)
+	p.timing.evalLatest = h.now().Sub(evalStart)
+	if err != nil {
 		return nil, input.Loaded{}, err
 	} else if ok {
-		if err := json.Unmarshal(last.RuleStatesJSON, &previous); err != nil {
+		decodeStart := h.now()
+		err := json.Unmarshal(last.RuleStatesJSON, &previous)
+		p.timing.evalDecode = h.now().Sub(decodeStart)
+		if err != nil {
 			h.logf("实例 %s 上期结果 %s 的规则状态无法解析：%v", p.instance.InstanceID, last.ResultID, err)
 			return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, "上期结果的规则状态无法解析（记录已损坏），请停用后重新启用实例")
 		}
 	}
+	runStart := h.now()
 	decision, err := engine.Evaluate(rt.program, loaded.Frame, previous)
+	p.timing.evalRun = h.now().Sub(runStart)
 	if err != nil {
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 	}
@@ -561,10 +570,11 @@ func (h *Handler) logTiming(p *period, payload *storagepb.ViewDataReady, status 
 	for _, step := range steps {
 		detail = append(detail, fmt.Sprintf("%s %s", step.Name, step.Took.Round(time.Millisecond)))
 	}
-	h.logf("实例 %s 周期 %s %s 耗时：K线至就绪=%s 就绪等待=%s 读取=%s（%s） 求值=%s 提交=%s 本期处理=%s 总计=%s",
+	h.logf("实例 %s 周期 %s %s 耗时：K线至就绪=%s 就绪等待=%s 读取=%s（%s） 求值=%s（上期结果 %s，状态解析 %s，规则 %s） 提交=%s 本期处理=%s 总计=%s",
 		p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), status,
 		upstream.Round(time.Millisecond), wait.Round(time.Millisecond), p.timing.load.Round(time.Millisecond), strings.Join(detail, "，"),
-		p.timing.eval.Round(time.Millisecond), p.timing.commit.Round(time.Millisecond),
+		p.timing.eval.Round(time.Millisecond), p.timing.evalLatest.Round(time.Millisecond), p.timing.evalDecode.Round(time.Millisecond),
+		p.timing.evalRun.Round(time.Millisecond), p.timing.commit.Round(time.Millisecond),
 		h.now().Sub(p.timing.start).Round(time.Millisecond), h.now().Sub(p.boundary.BarEnd).Round(time.Millisecond))
 }
 

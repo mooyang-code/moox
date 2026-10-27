@@ -57,19 +57,41 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 	if message == nil || payload == nil {
 		return eventconsumer.Permanent(errors.New("数据集行事件为空"))
 	}
+	handleStart := time.Now()
 	rowEvent, err := eventmapper.ToStorageRows(payload)
 	if err != nil {
 		return eventconsumer.Permanent(err)
 	}
+	applyStart := time.Now()
 	if err := s.applyDatasetEvent(ctx, message.GetSpaceId(), message.GetSubjectId(), rowEvent.GetRows()); err != nil {
 		return err
 	}
 	s.noteAppliedFromPayload(message.GetSpaceId(), payload)
+	fenceStart := time.Now()
 	if err := s.makeAppliedDurableBeforeAck(); err != nil {
 		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
 	}
+	flushStart := time.Now()
 	s.flushReadyAfterRows(ctx, message.GetSpaceId())
+	logRowsApply(message, 1, len(rowEvent.GetRows()), handleStart, applyStart, fenceStart, flushStart)
 	return nil
+}
+
+// logRowsApply 记录行事件的分段耗时：投递滞后（事件发出到本进程开始处理）、解码、写索引、围栏落盘、刷新就绪。
+// 达到阈值才记，避免高频小写入刷屏。
+func logRowsApply(first *eventpb.EventMessage, events, rows int, handleStart, applyStart, fenceStart, flushStart time.Time) {
+	total := time.Since(handleStart)
+	if total < slowIndexApplyLog {
+		return
+	}
+	lag := time.Duration(0)
+	if first != nil && first.GetOccurredAt() != nil {
+		lag = handleStart.Sub(first.GetOccurredAt().AsTime())
+	}
+	log.Printf("storage view 行事件 dataset=%s 事件=%d 行=%d 投递滞后=%s 解码=%s 写索引=%s 围栏落盘=%s 刷新就绪=%s 本事件处理=%s",
+		first.GetSubjectId(), events, rows, lag.Round(time.Millisecond), applyStart.Sub(handleStart).Round(time.Millisecond),
+		fenceStart.Sub(applyStart).Round(time.Millisecond), flushStart.Sub(fenceStart).Round(time.Millisecond),
+		time.Since(flushStart).Round(time.Millisecond), total.Round(time.Millisecond))
 }
 
 // flushReadyAfterRows 在行写入后顺带刷新就绪队列。行已经写入，就绪事件发布失败时留在落盘的队列里由后续刷新与
@@ -86,6 +108,7 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	if len(items) == 0 {
 		return eventconsumer.Permanent(errors.New("数据集行事件批次为空"))
 	}
+	handleStart := time.Now()
 	spaceID, datasetID := "", ""
 	rows := make([]*pb.RowFieldUpsert, 0)
 	for index, item := range items {
@@ -110,11 +133,10 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	if len(rows) == 0 {
 		return eventconsumer.Permanent(errors.New("数据集行事件批次没有任何行"))
 	}
-	batchStart := time.Now()
+	applyStart := time.Now()
 	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
 		return err
 	}
-	applied := time.Since(batchStart)
 	for _, item := range items {
 		s.noteAppliedFromPayload(spaceID, item.Payload)
 	}
@@ -124,16 +146,12 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 	}
 	flushStart := time.Now()
 	s.flushReadyAfterRows(ctx, spaceID)
-	if total := time.Since(batchStart); total >= slowIndexApplyLog {
-		log.Printf("storage view 行事件批次较慢 dataset=%s 事件=%d 行=%d 写索引=%s 围栏落盘=%s 刷新就绪=%s 合计=%s",
-			datasetID, len(items), len(rows), applied.Round(time.Millisecond), flushStart.Sub(fenceStart).Round(time.Millisecond),
-			time.Since(flushStart).Round(time.Millisecond), total.Round(time.Millisecond))
-	}
+	logRowsApply(items[0].Message, len(items), len(rows), handleStart, applyStart, fenceStart, flushStart)
 	return nil
 }
 
 // slowIndexApplyLog 是行写入分段耗时日志的阈值：只记录达到该耗时的写入，避免高频小写入刷屏。
-const slowIndexApplyLog = 200 * time.Millisecond
+const slowIndexApplyLog = 50 * time.Millisecond
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 	s.mu.RLock()

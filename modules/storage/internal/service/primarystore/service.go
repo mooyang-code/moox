@@ -18,6 +18,18 @@ import (
 type Validator interface {
 	ValidateRow(context.Context, *pb.RowFieldUpsert) error
 }
+
+// requestValidator 返回本次请求用的逐行校验器：支持按请求缓存元数据的校验器（MetadataValidator.Batch）用缓存版本，
+// 检查与错误不变，同一数据集的列定义只加载一次。
+func requestValidator(ctx context.Context, v Validator) Validator {
+	if batch, ok := v.(interface {
+		Batch(context.Context) Validator
+	}); ok {
+		return batch.Batch(ctx)
+	}
+	return v
+}
+
 type DataNodeClient interface {
 	UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
 	ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
