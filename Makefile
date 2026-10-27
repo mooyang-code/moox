@@ -141,6 +141,7 @@ test-skill-contracts:
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 	bash skills/moox/scripts/test-native-release.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh
+	bash skills/moox/scripts/test-strategy-check-contract.sh
 	bash skills/moox/scripts/test-monitor-db-check.sh
 
 test-script-e2e:
