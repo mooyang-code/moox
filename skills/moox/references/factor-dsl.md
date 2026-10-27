@@ -180,8 +180,40 @@ rules:
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
 | `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员（固定参数不同的成员，或可变成员 `ma_fast`、`ma_slow`）或一个共用参数的输出，输出名固定 |
 
+### `rolling(n).apply(内置函数)`
+
+引擎没有"窗口加任意函数"的通用写法。apply 里传的是下面这些内置函数时，有逐值等价的写法：
+注意 numpy 和 scipy 的默认参数与 pandas 不同，表里已经写进了修正。窗口参数 `n` 可以直接在表达式里参与数值运算，但作为窗口参数时必须是常量或参数本身。
+
+| pandas / numpy 写法 | DSL | 注意 |
+| --- | --- | --- |
+| `apply(np.mean)` / `np.sum` / `np.min` / `np.max` / `np.median` | `ts_mean(s, n)` / `ts_sum` / `ts_min` / `ts_max` / `ts_median` | — |
+| `apply(np.prod)` | `ts_product(s, n)` | — |
+| `apply(np.std)` | `ts_std(s, n) * sqrt((n - 1) / n)` | numpy 默认 ddof=0，`ts_std` 是 ddof=1；直接写 `.rolling(n).std()` 才是 ddof=1，用 `ts_std(s, n)` |
+| `apply(np.var)` | `ts_var(s, n) * (n - 1) / n` | 同上 |
+| `apply(np.argmax)` / `apply(np.argmin)` | `n - 1 - ts_argmax(s, n)` / `n - 1 - ts_argmin(s, n)` | numpy 从窗口最老的一根算起（0 为最老），`ts_argmax` 是距今根数（0 为当期）；遇到并列，两边都取最早的一根 |
+| `apply(np.ptp)`（极差） | `ts_max(s, n) - ts_min(s, n)` | — |
+| `apply(lambda w: np.percentile(w, p))` | `ts_quantile(s, n, p / 100)` | 只在 numpy 默认的 linear 插值下等价；p 是 0～100，q 是 0～1 |
+| `apply(lambda w: np.polyfit(np.arange(n), w, 1)[0])` | `ts_slope(s, n)` | 回归残差、R² 分别用 `ts_resi`、`ts_rsquare` |
+| 线性权重 1..n 的加权平均 | `ts_decay_linear(s, n)` | 最新一根权重为 n |
+| `apply(scipy.stats.skew)`（默认 `bias=True`） | `ts_skew(s, n) * (n - 2) / sqrt(n * (n - 1))` | `ts_skew` 与 pandas `.rolling(n).skew()` 一样是无偏的；scipy 默认有偏，要换算 |
+| `apply(scipy.stats.kurtosis)`（默认 `bias=True`、`fisher=True`） | `(ts_kurt(s, n) * (n - 2) * (n - 3) / (n - 1) - 6) / (n + 1)` | `ts_kurt` 与 pandas `.rolling(n).kurt()` 一样是无偏超额峰度；n ≥ 4 |
+
+这张表在合成 K 线上用 `run-python` 加 `eval`、`compare` 逐值核对过（n = 20，其中一组数据带大量并列值）：
+全部一致，最大相对误差 ≤ 7e-14。scipy 的两行是按 `bias=True` 的公式（m3/m2^1.5、m4/m2^2 − 3）核对的。
+
+**转不了的 apply**：
+
+- **自定义 lambda 要在窗口内二次遍历**：例如平均绝对偏差 `np.abs(w - w.mean()).mean()`，要先算窗口均值，再逐根处理，表达式写不出来。
+- **跳过 NaN 的函数**：例如 `np.nanmean`、`np.nanstd`。引擎是严格窗口，只有"序列开头的 NaN"能用 `_partial` 算子处理。
+- **非线性的自定义权重**：例如 `np.average(w, weights=...)`。
+- **窗口长度来自运算**：例如窗口写成 `2 * n + 1`。换算要在参数层面做，做法是拆成多个参数，F1 的 Po 就是这样，见 `modules/factor/factors/f1.yaml`。
+
+遇到这些写法，按下面"不支持"的规则处理。确实常用的（如 MAD、`nanmean`），可以在 `packages/factorexpr` 里新增函数。
+新增后要发布 factor-mgr 和因子引擎，并重新编译本机的 `moox-cli`。
+
 **不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、前向填充（`ffill`）、未来数据（`shift(-k)`）、
-`ewm(adjust=True)`、`rank` 的非 average 并列方式、任意 `rolling().apply(自定义函数)`、跨标的的时序运算、读取外部文件或网络。
+`ewm(adjust=True)`、`rank` 的非 average 并列方式、上面列出的那几类 `rolling().apply`、跨标的的时序运算、读取外部文件或网络。
 遇到这些先告诉用户，给出等价或近似的候选写法（例如用足够长的固定窗口代替 `expanding`），由用户决定；绝不悄悄换成近似公式。
 
 ## 5. 验收规则（`compare` 的判定）
