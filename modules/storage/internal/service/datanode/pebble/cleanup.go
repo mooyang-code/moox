@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -187,49 +186,10 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		}
 		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
-	// Source-event dedupe keys are dataset-scoped. Remove both the marker and
-	// its time index so recreating the same task can process the same source
-	// event again without a silent no-op.
-	processedPrefix := processedDatasetEventPrefix(spaceID, datasetID)
-	processedUpper := nextPrefix(processedPrefix)
-	processedKeys := make(map[string]struct{})
-	processedIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: processedPrefix, UpperBound: processedUpper})
-	if err != nil {
+	// commit 标记按数据集存放：随数据集一起删除，重建同名数据集后同一 commit_id 可以重新写入。
+	commitPrefix := datasetCommitPrefix(spaceID, datasetID)
+	if err := batch.DeleteRange(commitPrefix, nextPrefix(commitPrefix), s.writeOptions); err != nil {
 		return 0, err
-	}
-	for valid := processedIter.First(); valid; valid = processedIter.Next() {
-		processedKeys[string(processedIter.Key())] = struct{}{}
-	}
-	if iterErr := processedIter.Error(); iterErr != nil {
-		_ = processedIter.Close()
-		return 0, iterErr
-	}
-	if err := processedIter.Close(); err != nil {
-		return 0, err
-	}
-	if len(processedKeys) > 0 {
-		if err := batch.DeleteRange(processedPrefix, processedUpper, s.writeOptions); err != nil {
-			return 0, err
-		}
-		processedTimeIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventTimePrefix), UpperBound: nextPrefix([]byte(processedEventTimePrefix))})
-		if err != nil {
-			return 0, err
-		}
-		for valid := processedTimeIter.First(); valid; valid = processedTimeIter.Next() {
-			if _, ok := processedKeys[string(processedTimeIter.Value())]; ok {
-				if err := batch.Delete(processedTimeIter.Key(), s.writeOptions); err != nil {
-					_ = processedTimeIter.Close()
-					return 0, err
-				}
-			}
-		}
-		if iterErr := processedTimeIter.Error(); iterErr != nil {
-			_ = processedTimeIter.Close()
-			return 0, iterErr
-		}
-		if err := processedTimeIter.Close(); err != nil {
-			return 0, err
-		}
 	}
 	periodRanges, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID)
 	if err != nil {
@@ -332,37 +292,6 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		return 0, iterErr
 	}
 	if err := outboxIter.Close(); err != nil {
-		return 0, err
-	}
-
-	receiptIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(writeReceiptPrefix), UpperBound: nextPrefix([]byte(writeReceiptPrefix))})
-	if err != nil {
-		return 0, err
-	}
-	for valid := receiptIter.First(); valid; valid = receiptIter.Next() {
-		stored := persistedReceipt{}
-		if json.Unmarshal(receiptIter.Value(), &stored) != nil {
-			continue
-		}
-		belongs := stored.SpaceID == spaceID && stored.DatasetID == datasetID
-		if !belongs {
-			continue
-		}
-		commitID := strings.TrimPrefix(string(receiptIter.Key()), writeReceiptPrefix)
-		if err := batch.Delete(receiptIter.Key(), s.writeOptions); err != nil {
-			_ = receiptIter.Close()
-			return 0, err
-		}
-		if err := batch.Delete([]byte(writeReceiptBodyPref+commitID), s.writeOptions); err != nil {
-			_ = receiptIter.Close()
-			return 0, err
-		}
-	}
-	if iterErr := receiptIter.Error(); iterErr != nil {
-		_ = receiptIter.Close()
-		return 0, iterErr
-	}
-	if err := receiptIter.Close(); err != nil {
 		return 0, err
 	}
 

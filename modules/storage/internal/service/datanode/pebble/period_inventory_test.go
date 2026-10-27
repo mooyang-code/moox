@@ -32,7 +32,7 @@ func TestInspectPeriodLedgerReadOnlyReportsScopedState(t *testing.T) {
 	complete.DeadlineAt = clock.Add(time.Hour).Unix()
 	_, err = store.EnsureDatasetPeriod(context.Background(), complete)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), complete, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(completeAt, "BTC-USDT")}}, "commit-complete", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), complete, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(completeAt, "BTC-USDT")}})
 	require.NoError(t, err)
 
 	degradedAt := time.Date(2026, 9, 30, 13, 0, 0, 0, time.UTC)
@@ -183,7 +183,7 @@ func TestInspectPeriodLedgerCrossChecksMarkerAgainstSnapshotAndBitmap(t *testing
 	exp := periodExpectationForTest(period, 1, "BTC-USDT")
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "commit-marker-check", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -241,7 +241,7 @@ func TestInspectPeriodLedgerCrossChecksFailedSubjectsAgainstFailureBitmap(t *tes
 	exp.DeadlineAt = clock.Add(time.Minute).Unix()
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "commit-degraded-marker", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
 	store.periodMu.Lock()
@@ -334,7 +334,7 @@ func TestInspectPeriodLedgerRejectsMarkerAndOutboxPayloadDivergence(t *testing.T
 	exp := periodExpectationForTest(period, 1, "BTC-USDT")
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "commit-marker-divergence", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -380,7 +380,7 @@ func TestInspectPeriodLedgerRejectsOutboxKeyThatRelayCannotRead(t *testing.T) {
 	exp := periodExpectationForTest(period, 1, "BTC-USDT")
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "commit-outbox-key", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -497,7 +497,7 @@ func TestInspectPeriodLedgerRejectsEventIDNotBoundToMarkerPayload(t *testing.T) 
 	exp := periodExpectationForTest(period, 1, "BTC-USDT")
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "commit-forged-event-id", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 
@@ -577,7 +577,7 @@ func TestInspectPeriodLedgerDoesNotExposeSubjectValuesInMarkerErrors(t *testing.
 	exp := periodExpectationForTest(period, 1, "SECRET-SUBJECT")
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "SECRET-SUBJECT")}}, "commit-sensitive-marker", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "SECRET-SUBJECT")}})
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 

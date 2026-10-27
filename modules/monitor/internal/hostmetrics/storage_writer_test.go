@@ -95,14 +95,13 @@ func TestHostStorageWriterBucketsAndOmitsUnavailableRates(t *testing.T) {
 			t.Fatal("empty dataset request")
 		}
 		datasetID := req.GetRows()[0].GetKey().GetDatasetId()
-		wantSourceID := "event-1:" + datasetID
-		if req.GetSourceEventId() != wantSourceID {
-			t.Fatalf("source_event_id=%q, want %q", req.GetSourceEventId(), wantSourceID)
+		if req.GetSpaceId() != SpaceID || req.GetDatasetId() != datasetID {
+			t.Fatalf("request dataset=%s/%s, want %s/%s", req.GetSpaceId(), req.GetDatasetId(), SpaceID, datasetID)
 		}
-		if _, duplicate := sourceIDs[req.GetSourceEventId()]; duplicate {
-			t.Fatalf("duplicate dataset-scoped source_event_id %q", req.GetSourceEventId())
+		if _, duplicate := sourceIDs[datasetID]; duplicate {
+			t.Fatalf("duplicate request for dataset %q", datasetID)
 		}
-		sourceIDs[req.GetSourceEventId()] = struct{}{}
+		sourceIDs[datasetID] = struct{}{}
 		for _, row := range req.GetRows() {
 			key := row.GetKey().GetTimeSeries()
 			if row.GetKey().GetSpaceId() != SpaceID || key.GetSubjectId() != "agent-1" || key.GetFreq() != "1m" || key.GetDataTime() != "2026-07-11T04:34:00Z" {

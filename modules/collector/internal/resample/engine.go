@@ -35,7 +35,7 @@ const (
 
 // PeriodStorage 是目标数据集的周期提交与快照登记接口。
 type PeriodStorage interface {
-	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow) error
 }
 
 // SnapshotRegistrar 把数据集的标的集合登记到 Storage。
@@ -326,7 +326,7 @@ func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, 
 	if len(plain) == 0 {
 		return committed, nil
 	}
-	if err := e.Primary.UpsertFieldsWithSource(ctx, plain, ""); err != nil {
+	if err := e.Primary.UpsertFields(ctx, plain); err != nil {
 		return committed, fmt.Errorf("write resample rows: %w", err)
 	}
 	// 通知落库失败时整个桶算失败：事件不确认、作业不推进游标，重试时写入是幂等的，下游不会漏掉这次改写。
@@ -396,7 +396,7 @@ func (e *Engine) commit(ctx context.Context, task *Task, bucket barclock.Bucket,
 		SpaceId: task.Spec.SpaceID, DatasetId: task.Spec.TargetDatasetID, Frequency: task.Spec.TargetFrequency.Storage,
 		PeriodTime: bucket.Key.Unix(), SeriesHash: set.Hash, ExpectedCount: uint32(len(set.Series)),
 	}
-	return e.Period.CommitTimeSeriesBatch(ctx, expectation, items, "")
+	return e.Period.CommitTimeSeriesBatch(ctx, expectation, items)
 }
 
 // series 把标的 ID 列表变成目标数据集的序列身份。

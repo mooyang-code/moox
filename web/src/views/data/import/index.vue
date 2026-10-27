@@ -398,7 +398,7 @@ async function importRows() {
         },
         fields: rowFields(row)
       }));
-      await upsertFields(rows);
+      await upsertFields(space_id, form.dataset_id, rows);
     } else {
       const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
@@ -411,7 +411,7 @@ async function importRows() {
         },
         fields: rowFields(row)
       }));
-      await upsertFields(rows);
+      await upsertFields(space_id, form.dataset_id, rows);
     }
     Message.success(`导入完成：${parsedRows.value.length} 行`);
   } finally {

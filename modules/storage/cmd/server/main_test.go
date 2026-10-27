@@ -50,9 +50,6 @@ func (*cleanupNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp,
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return nil, nil
 }
-func (*cleanupNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return nil, nil
-}
 func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	n.requests[req.GetSpaceId()+"/"+req.GetDatasetId()] = req
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, DeletedRanges: 3}, nil
@@ -438,10 +435,6 @@ func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.
 func (*resolverRuntime) CleanupExpiredBuckets(context.Context, *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
-func (*resolverRuntime) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return &pb.WriteFactorRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-
 func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
 	if dataNodeClientTimeout != 5*time.Minute {
 		t.Fatalf("dataNodeClientTimeout = %s, want 5m", dataNodeClientTimeout)
@@ -565,15 +558,15 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 		runtime = &resolverRuntime{target: target}
 		return runtime
 	})
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore()})
+	svc, err := primarystore.New(primarystore.Options{Snapshot: func() metadata.RequestSnapshot { return snapshot }, Resolver: resolver.primaryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller"},
 		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
-	})
+	}))
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write=%v err=%v", write, err)
 	}

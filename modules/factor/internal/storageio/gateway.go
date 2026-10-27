@@ -46,8 +46,8 @@ func (c *gatewayStorageClient) ReadDatasetChanges(ctx context.Context, request *
 	return invokeStorage[storagepb.ReadDatasetChangesRsp](ctx, c.gateway, "PrimaryStore", "ReadDatasetChanges", request, options)
 }
 
-func (c *gatewayStorageClient) WriteFactorRows(ctx context.Context, request *storagepb.PrimaryWriteFactorRowsReq, options ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error) {
-	return invokeStorage[storagepb.PrimaryWriteFactorRowsRsp](ctx, c.gateway, "PrimaryStore", "WriteFactorRows", request, options)
+func (c *gatewayStorageClient) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	return invokeStorage[storagepb.PrimaryUpsertFieldsRsp](ctx, c.gateway, "PrimaryStore", "UpsertFields", request, options)
 }
 
 func (c *gatewayStorageClient) ReportFactorPeriodComputed(ctx context.Context, request *storagepb.ReportFactorPeriodComputedReq, options ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {

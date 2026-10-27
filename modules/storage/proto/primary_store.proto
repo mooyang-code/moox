@@ -31,8 +31,6 @@ message PrimaryCommitTimeSeriesBatchReq {
   common.AuthInfo auth_info = 1;
   DatasetPeriodExpectation expectation = 2;
   repeated TimeSeriesBatchRow items = 3;
-  string source_event_id = 4;
-  string write_source = 5;
 }
 
 message PrimaryCommitTimeSeriesBatchRsp {
@@ -42,24 +40,14 @@ message PrimaryCommitTimeSeriesBatchRsp {
   repeated uint32 accepted_series_indexes = 4;
 }
 
-message PrimaryWriteFactorRowsReq {
+// PrimaryUpsertFieldsReq 写入一个数据集的行：每行的数据集必须与 space_id、dataset_id 一致；一次写入只产生一条行变更事件。
+message PrimaryUpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
-  string commit_id = 4;
-  repeated RowFieldUpsert rows = 5;
-}
-
-message PrimaryWriteFactorRowsRsp {
-  common.RetInfo ret_info = 1;
-  uint64 rows_written = 2;
-}
-
-message PrimaryUpsertFieldsReq {
-  common.AuthInfo auth_info = 1;
-  repeated RowFieldUpsert rows = 2;
-  string source_event_id = 3;
-  string write_source = 4;
+  repeated RowFieldUpsert rows = 4;
+  // 可选。同一数据集内同一 commit_id 只生效一次：内容相同返回成功，内容不同返回 CONFLICT。
+  string commit_id = 5;
 }
 
 message PrimaryUpsertFieldsRsp {
@@ -173,7 +161,6 @@ service PrimaryStore {
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
   rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
-  rpc WriteFactorRows(PrimaryWriteFactorRowsReq) returns (PrimaryWriteFactorRowsRsp);
   rpc ReadRows(PrimaryReadRowsReq) returns (PrimaryReadRowsRsp);
   rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
   rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);

@@ -22,8 +22,6 @@ type DataNodeRuntimeService interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error)
 
-	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error)
-
 	ReadRows(ctx context.Context, req *ReadRowsReq) (*ReadRowsRsp, error)
 
 	GetNodeState(ctx context.Context, req *GetNodeStateReq) (*GetNodeStateRsp, error)
@@ -39,24 +37,6 @@ func DataNodeRuntimeService_UpsertFields_Handler(svr interface{}, ctx context.Co
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataNodeRuntimeService).UpsertFields(ctx, reqbody.(*UpsertFieldsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodeRuntimeService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &WriteFactorRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeRuntimeService).WriteFactorRows(ctx, reqbody.(*WriteFactorRowsReq))
 	}
 
 	var rsp interface{}
@@ -129,10 +109,6 @@ var DataNodeRuntimeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/UpsertFields",
 			Func: DataNodeRuntimeService_UpsertFields_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodeRuntime/WriteFactorRows",
-			Func: DataNodeRuntimeService_WriteFactorRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeRuntime/ReadRows",
@@ -500,9 +476,6 @@ type UnimplementedDataNodeRuntime struct{}
 func (s *UnimplementedDataNodeRuntime) UpsertFields(ctx context.Context, req *UpsertFieldsReq) (*UpsertFieldsRsp, error) {
 	return nil, errors.New("rpc UpsertFields of service DataNodeRuntime is not implemented")
 }
-func (s *UnimplementedDataNodeRuntime) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq) (*WriteFactorRowsRsp, error) {
-	return nil, errors.New("rpc WriteFactorRows of service DataNodeRuntime is not implemented")
-}
 func (s *UnimplementedDataNodeRuntime) ReadRows(ctx context.Context, req *ReadRowsReq) (*ReadRowsRsp, error) {
 	return nil, errors.New("rpc ReadRows of service DataNodeRuntime is not implemented")
 }
@@ -569,8 +542,6 @@ type DataNodeRuntimeClientProxy interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *UpsertFieldsReq, opts ...client.Option) (rsp *UpsertFieldsRsp, err error)
 
-	WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (rsp *WriteFactorRowsRsp, err error)
-
 	ReadRows(ctx context.Context, req *ReadRowsReq, opts ...client.Option) (rsp *ReadRowsRsp, err error)
 
 	GetNodeState(ctx context.Context, req *GetNodeStateReq, opts ...client.Option) (rsp *GetNodeStateRsp, err error)
@@ -601,26 +572,6 @@ func (c *DataNodeRuntimeClientProxyImpl) UpsertFields(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpsertFieldsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodeRuntimeClientProxyImpl) WriteFactorRows(ctx context.Context, req *WriteFactorRowsReq, opts ...client.Option) (*WriteFactorRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRuntime/WriteFactorRows")
-	msg.WithCalleeServiceName(DataNodeRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodeRuntime")
-	msg.WithCalleeMethod("WriteFactorRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &WriteFactorRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

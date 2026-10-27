@@ -1086,9 +1086,6 @@ func (a *dataNodeProxyAdapter) ReadDatasetChanges(ctx context.Context, req *pb.R
 func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return a.proxy.UpsertFields(ctx, req)
 }
-func (a *dataNodeProxyAdapter) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return a.proxy.WriteFactorRows(ctx, req)
-}
 func (a *dataNodeProxyAdapter) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return a.proxy.ReadRows(ctx, req)
 }

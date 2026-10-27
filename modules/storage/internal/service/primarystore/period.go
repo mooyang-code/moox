@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"trpc.group/trpc-go/trpc-go/log"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -95,9 +96,6 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		}
 		rows = append(rows, item.GetRow())
 	}
-	if err := rejectUnauthorizedUpsertSemantics(rows, req.GetWriteSource()); err != nil {
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	rows = normalizeStockCNSeriesTags(rows)
 	if batchValidator, ok := s.validate.(interface {
 		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
@@ -133,7 +131,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: req.GetItems()[i].GetSeriesIndex(), Row: row})
 	}
 	rsp, err := periodNode.CommitTimeSeriesBatch(ctx, &pb.CommitTimeSeriesBatchReq{
-		AuthInfo: auth, Expectation: exp, Items: items, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource(),
+		AuthInfo: auth, Expectation: exp, Items: items,
 		AllowedLatenessSeconds: datasetAllowedLateness(ctx, exp),
 	})
 	if err != nil {

@@ -124,9 +124,10 @@ func (s *Service) requestContext(ctx context.Context) context.Context {
 	return metadata.WithRequestSnapshot(ctx, snapshot)
 }
 
+// UpsertFields 写入一个数据集的行。每行的数据集必须与请求一致；commit_id 可选，语义见 PrimaryUpsertFieldsReq。
 func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
-	if req == nil || len(req.GetRows()) == 0 {
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("rows are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || len(req.GetRows()) == 0 {
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and rows are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
@@ -134,65 +135,44 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsR
 	if req.GetAuthInfo().GetAppId() == "scf-market-canary" {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, errors.New("read-only primary credential"))}, nil
 	}
-	if err := rejectUnauthorizedUpsertSemantics(req.GetRows(), req.GetWriteSource()); err != nil {
-		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	spaceID, datasetID := req.GetSpaceId(), req.GetDatasetId()
+	for _, row := range req.GetRows() {
+		if row == nil || row.GetKey() == nil || row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
+			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row dataset identity does not match request"))}, nil
+		}
 	}
 	rows := normalizeStockCNSeriesTags(req.GetRows())
 	ctx = s.requestContext(ctx)
 	if err := validateDatasetWriteOwner(ctx, req.GetAuthInfo(), rows); err != nil {
 		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	groups := make(map[routeKey][]*pb.RowFieldUpsert)
-	order := make([]routeKey, 0)
-	if batchValidator, ok := s.validate.(interface {
-		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
-	}); ok {
-		if err := batchValidator.ValidateRows(ctx, rows); err != nil {
-			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
-	}
+	validator := requestValidator(ctx, s.validate)
 	for _, row := range rows {
-		validator := s.validate
-		if _, batched := s.validate.(interface {
-			ValidateRows(context.Context, []*pb.RowFieldUpsert) error
-		}); batched {
-			validator = nil
-		}
 		if err := validateRow(ctx, row, validator); err != nil {
 			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 		}
-		group := routeKey{spaceID: row.GetKey().GetSpaceId(), datasetID: row.GetKey().GetDatasetId()}
-		if _, ok := groups[group]; !ok {
-			order = append(order, group)
-		}
-		groups[group] = append(groups[group], row)
 	}
-	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
-	for _, group := range order {
-		rows := groups[group]
-		node, err := s.resolve(ctx, group.spaceID, group.datasetID)
-		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: route %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
-		}
-		auth, err := s.signAuth(req.GetAuthInfo())
-		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, fmt.Errorf("partial success after %d rows: %w", len(keys), err)), Keys: keys}, nil
-		}
-		rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, Rows: rows, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource()})
-		if err != nil {
-			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("partial success after %d rows: write %s/%s: %w", len(keys), group.spaceID, group.datasetID, err)), Keys: keys}, nil
-		}
-		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			s.observeTimeSeriesRows(ctx, rows, "error", false, false)
-			return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(rsp.GetRetInfo().GetCode(), fmt.Errorf("partial success after %d rows: %s", len(keys), rsp.GetRetInfo().GetMsg())), Keys: keys}, nil
-		}
-		keys = append(keys, rsp.GetKeys()...)
-		s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
+	node, err := s.resolve(ctx, spaceID, datasetID)
+	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("route %s/%s: %w", spaceID, datasetID, err))}, nil
 	}
-	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := node.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID, Rows: rows, CommitId: req.GetCommitId()})
+	if err != nil {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("write %s/%s: %w", spaceID, datasetID, err))}, nil
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		s.observeTimeSeriesRows(ctx, rows, "error", false, false)
+		return &pb.PrimaryUpsertFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
+	}
+	s.observeTimeSeriesRows(ctx, rows, "success", true, len(rsp.GetKeys()) == len(rows))
+	return &pb.PrimaryUpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: rsp.GetKeys()}, nil
 }
 
 const stockCNDefaultSeriesTag = "default"
@@ -249,7 +229,7 @@ func isOwnedAppID(appID, owner string) bool {
 func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*pb.RowFieldUpsert) error {
 	snapshot := metadata.RequestSnapshotFromContext(ctx)
 	if snapshot == nil {
-		return nil
+		return errors.New("metadata cache snapshot is unavailable")
 	}
 	checked := make(map[routeKey]struct{})
 	keyHasTimeSeriesRows := make(map[routeKey]bool)
@@ -272,8 +252,10 @@ func validateDatasetWriteOwner(ctx context.Context, auth *pb.AuthInfo, rows []*p
 			continue
 		}
 		attrs := dataset.GetAttributes()
-		if attrs["dataset_role"] == "factor_result" {
-			return fmt.Errorf("dataset %s/%s requires WriteFactorRows", key.spaceID, key.datasetID)
+		// 因子结果只许因子写，且数据集的归属必须完整属于因子：缺失或属于别人都拒绝。
+		if attrs["dataset_role"] == "factor_result" &&
+			(!isFactorAppID(strings.ToLower(strings.TrimSpace(auth.GetAppId()))) || attrs["owner_module"] != "factor" || attrs["write_owner"] != "factor") {
+			return fmt.Errorf("dataset %s/%s is a factor result writable only by Factor", key.spaceID, key.datasetID)
 		}
 		// Collector 身份（含函数凭据）写时序行时，只能写自己拥有的采集与重采样数据集；
 		// 记录型数据（任务结果等）不受此限制。

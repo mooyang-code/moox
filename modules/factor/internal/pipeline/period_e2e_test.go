@@ -15,7 +15,7 @@ import (
 )
 
 // memoryStorage is an in-memory Storage that keeps the same idempotency
-// contract as WriteFactorRows: replaying a commit_id with identical rows is a
+// contract as UpsertFields with commit_id: replaying a commit_id with identical rows is a
 // no-op, replaying it with different rows is a conflict.
 type memoryStorage struct {
 	mu      sync.Mutex

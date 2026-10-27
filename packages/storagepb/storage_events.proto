@@ -12,16 +12,12 @@ message DatasetRowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
-  string write_source = 4;
   // Position assigned in the same durable DataNode outbox batch as the rows.
   // Sequence is comparable only within (node_id, store_id).
   string node_id = 5;
   uint64 sequence = 6;
   // Changes when the underlying DataNode store is recreated.
   string store_id = 7;
-  // Write category assigned by Storage from the authorized RPC, not from a
-  // client-supplied write_source string. Empty means a generic field upsert.
-  string write_kind = 8;
 }
 
 // CommittedPosition identifies one ordered write domain. Sequence is comparable

@@ -53,7 +53,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeS
 	}
 	commitExp := periodExpectation(req.GetExpectation())
 	commitExp.AllowedLatenessSeconds = req.GetAllowedLatenessSeconds()
-	result, err := s.store.CommitTimeSeriesBatch(ctx, commitExp, items, req.GetSourceEventId(), req.GetWriteSource())
+	result, err := s.store.CommitTimeSeriesBatch(ctx, commitExp, items)
 	if err != nil {
 		return &pb.CommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}

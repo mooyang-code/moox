@@ -39,11 +39,12 @@ func (blockingPublisher) PublishMessage(ctx context.Context, _ []byte) error {
 }
 
 type gatedPublisher struct {
-	entered     chan struct{}
-	release     chan struct{}
-	published   chan struct{}
-	enteredOnce sync.Once
-	calls       atomic.Int32
+	entered       chan struct{}
+	release       chan struct{}
+	published     chan struct{}
+	enteredOnce   sync.Once
+	publishedOnce sync.Once
+	calls         atomic.Int32
 }
 
 func (p *gatedPublisher) PublishMessage(ctx context.Context, _ []byte) error {
@@ -51,7 +52,7 @@ func (p *gatedPublisher) PublishMessage(ctx context.Context, _ []byte) error {
 	p.enteredOnce.Do(func() { close(p.entered) })
 	select {
 	case <-p.release:
-		close(p.published)
+		p.publishedOnce.Do(func() { close(p.published) })
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -131,9 +132,7 @@ func TestRelayDropsUnsupportedLegacyOutboxEventsAndPublishesTheRest(t *testing.T
 		t.Fatal(err)
 	}
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &testPublisher{}
@@ -186,7 +185,8 @@ func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
 			Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset-other", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
 		}
-		otherDatasetWrite <- store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row})
+		_, err := store.UpsertFields(context.Background(), "space", "dataset-other", "", []*pb.RowFieldUpsert{row})
+		otherDatasetWrite <- err
 	}()
 	select {
 	case err := <-otherDatasetWrite:
@@ -227,8 +227,9 @@ func TestRelayPublicationIsSerializedWithDatasetPurge(t *testing.T) {
 	if err := relay.flush(context.Background()); err != nil {
 		t.Fatalf("relay flush after purge: %v", err)
 	}
-	if calls := publisher.calls.Load(); calls != 1 {
-		t.Fatalf("publisher calls = %d after purge, want 1", calls)
+	// 被清理数据集的事件不再发布；另一个数据集在发布期间写入的那条事件照常发布。
+	if calls := publisher.calls.Load(); calls != 2 {
+		t.Fatalf("publisher calls = %d after purge, want 2", calls)
 	}
 }
 
@@ -261,9 +262,7 @@ func insertRecordOutboxEvent(t *testing.T, store *pebble.Store, spaceID, dataset
 		Key:    &pb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "value"}}}},
 	}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), spaceID, datasetID, "", rows); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -275,15 +274,11 @@ func TestRelayStopsAtFailedEntryAndRetriesIt(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	_, err = store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	})
+	_, err = store.UpsertFields(context.Background(), "s", "d", "", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	})
+	_, err = store.UpsertFields(context.Background(), "s", "d", "", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,9 +336,7 @@ func TestRelayBoundsPublishAttempt(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	relay, err := NewRelay(store, blockingPublisher{}, RelayOptions{PublishTimeout: 10 * time.Millisecond})
@@ -370,9 +363,7 @@ func TestRelayReconnectsPublisherAfterRepeatedFailures(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &reconnectPublisher{unavailable: true}
@@ -415,9 +406,7 @@ func TestRelayKeepsPublisherUnreadyWhenReconnectVerificationFails(t *testing.T) 
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
@@ -448,9 +437,7 @@ func TestRelayRecordsOutboxSnapshotAndDuplicateAcknowledgement(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	registry := prometheus.NewRegistry()
@@ -482,9 +469,7 @@ func TestRelayRecoversWhenDeleteFailsAfterPublishAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &retryDuplicatePublisher{}
@@ -577,9 +562,7 @@ func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 	publisher := &testPublisher{}
@@ -620,9 +603,7 @@ func TestRelayStopsStartingNewPublishesAfterClose(t *testing.T) {
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
 	for i := 0; i < 3; i++ {
-		if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-			return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-		}); err != nil {
+		if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 			t.Fatal(err)
 		}
 	}

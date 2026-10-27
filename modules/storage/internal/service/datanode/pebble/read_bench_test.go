@@ -43,7 +43,7 @@ func benchData(b *testing.B) *Store {
 			if len(batch) == 0 {
 				return
 			}
-			if err := store.UpsertFields(context.Background(), batch); err != nil {
+			if err := upsertTestRows(store, context.Background(), batch); err != nil {
 				b.Fatal(err)
 			}
 			batch = batch[:0]

@@ -368,7 +368,7 @@ func lifecycleRow() *pb.RowFieldUpsert {
 
 func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, auth *pb.AuthInfo, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
 	t.Helper()
-	rsp, err := service.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}})
+	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}}))
 	if err != nil {
 		t.Fatalf("PrimaryStore write: rsp=%v err=%v", rsp, err)
 	}

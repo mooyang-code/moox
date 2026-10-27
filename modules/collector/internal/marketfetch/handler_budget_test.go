@@ -40,7 +40,7 @@ func (s *slowDeadlineCommitStorage) ListInstrumentNames(ctx context.Context, _ s
 	return map[string]string{"600000.XSHG": "stock"}, ctx.Err()
 }
 
-func (s *slowDeadlineCommitStorage) CommitTimeSeriesBatch(ctx context.Context, _ *storagepb.DatasetPeriodExpectation, _ []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (s *slowDeadlineCommitStorage) CommitTimeSeriesBatch(ctx context.Context, _ *storagepb.DatasetPeriodExpectation, _ []*storagepb.TimeSeriesBatchRow) error {
 	select {
 	case <-time.After(60 * time.Millisecond):
 		return nil
@@ -78,8 +78,8 @@ func TestReservedDeadlineStorageSharesWriteDeadlineAndLeavesPublishReserve(t *te
 	// Reading names must not start the write budget.
 	time.Sleep(110 * time.Millisecond)
 	start := time.Now()
-	require.NoError(t, storage.CommitTimeSeriesBatch(context.Background(), nil, nil, "first"))
-	require.ErrorIs(t, storage.CommitTimeSeriesBatch(context.Background(), nil, nil, "second"), context.DeadlineExceeded)
+	require.NoError(t, storage.CommitTimeSeriesBatch(context.Background(), nil, nil))
+	require.ErrorIs(t, storage.CommitTimeSeriesBatch(context.Background(), nil, nil), context.DeadlineExceeded)
 	require.Less(t, time.Since(start), 150*time.Millisecond, "two destinations share one 100ms write window")
 	require.NoError(t, parent.Err(), "the publisher still owns the reserved parent window")
 	publishCtx, publishCancel := context.WithTimeout(parent, 50*time.Millisecond)

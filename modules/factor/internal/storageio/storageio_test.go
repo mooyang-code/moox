@@ -368,7 +368,7 @@ type primaryFake struct {
 	readRequests        []*storagepb.ReadTimeSeriesRowsReq
 	readErr             error
 	readRet             *commonpb.RetInfo
-	writeRequests       []*storagepb.PrimaryWriteFactorRowsReq
+	writeRequests       []*storagepb.PrimaryUpsertFieldsReq
 	writeErr            error
 	writeRet            *commonpb.RetInfo
 	reportIDs           []string
@@ -502,8 +502,8 @@ func (f *primaryFake) ReadTimeSeriesRows(ctx context.Context, req *storagepb.Rea
 	return page, nil
 }
 
-func (f *primaryFake) WriteFactorRows(_ context.Context, req *storagepb.PrimaryWriteFactorRowsReq, _ ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error) {
-	f.writeRequests = append(f.writeRequests, proto.Clone(req).(*storagepb.PrimaryWriteFactorRowsReq))
+func (f *primaryFake) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	f.writeRequests = append(f.writeRequests, proto.Clone(req).(*storagepb.PrimaryUpsertFieldsReq))
 	if f.writeErr != nil {
 		return nil, f.writeErr
 	}
@@ -511,7 +511,11 @@ func (f *primaryFake) WriteFactorRows(_ context.Context, req *storagepb.PrimaryW
 	if ret == nil {
 		ret = successRet()
 	}
-	return &storagepb.PrimaryWriteFactorRowsRsp{RetInfo: ret, RowsWritten: uint64(len(req.GetRows()))}, nil
+	keys := make([]*storagepb.RowKey, 0, len(req.GetRows()))
+	for _, row := range req.GetRows() {
+		keys = append(keys, row.GetKey())
+	}
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: ret, Keys: keys}, nil
 }
 
 func (f *primaryFake) ReportFactorPeriodComputed(_ context.Context, req *storagepb.ReportFactorPeriodComputedReq, _ ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {

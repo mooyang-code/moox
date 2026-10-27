@@ -382,7 +382,7 @@ func (t *importStorageTarget) Write(ctx context.Context, c runner.Chunk) error {
 	}
 	for start := 0; start < len(rows); start += importStorageBatchRows {
 		end := min(start+importStorageBatchRows, len(rows))
-		if err := t.writer.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{Rows: rows[start:end]}); err != nil {
+		if err := t.writer.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{SpaceId: t.space, DatasetId: t.dataset, Rows: rows[start:end]}); err != nil {
 			return err
 		}
 	}

@@ -60,7 +60,7 @@ func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 	return &pb.PrimaryCommitTimeSeriesBatchReq{
 		AuthInfo:    &pb.AuthInfo{AppId: "collector", AppKey: "caller-key"},
 		Expectation: &pb.DatasetPeriodExpectation{SpaceId: "crypto", DatasetId: "market_kline", Frequency: "1m", PeriodTime: 1, SeriesHash: "h", ExpectedCount: 1},
-		Items:       items, WriteSource: "collector",
+		Items:       items,
 	}
 }
 

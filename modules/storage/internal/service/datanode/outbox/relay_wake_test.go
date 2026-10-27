@@ -22,9 +22,7 @@ func (p *countingPublisher) PublishMessage(context.Context, []byte) error {
 func upsertTestRow(t *testing.T, store *pebble.Store, id string) {
 	t.Helper()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: id, Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return pebble.BuildDatasetRowsUpsertedMessage("node", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := store.UpsertFields(context.Background(), "s", "d", "", rows); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1555,7 +1555,6 @@ components:
           - UpsertFields
           - RegisterSeriesSnapshot
           - CommitTimeSeriesBatch
-          - WriteFactorRows
           - ReadRows
           - DeleteDatasetRows
           - RestoreDatasetRows
@@ -1584,7 +1583,6 @@ components:
           - methods:
               - UpsertFields
               - CommitTimeSeriesBatch
-              - WriteFactorRows
               - ReadRows
               - DeleteDatasetRows
               - RestoreDatasetRows
@@ -1631,7 +1629,7 @@ components:
             callers:
               - collector-stream
           - methods:
-              - WriteFactorRows
+              - UpsertFields
               - ReportFactorPeriodComputed
               - DeleteDatasetRows
               - RestoreDatasetRows
@@ -2052,7 +2050,7 @@ principals:
         methods:
           - ReadTimeSeriesRows
           - ReadDatasetChanges
-          - WriteFactorRows
+          - UpsertFields
           - ReportFactorPeriodComputed
           - GetFactorPeriodComputed
       - service: trpc.moox.storage.Metadata

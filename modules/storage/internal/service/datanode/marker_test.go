@@ -40,9 +40,7 @@ func TestFactorPeriodComputedMarkerRoundTripPreservesFactors(t *testing.T) {
 					Key:    &pb.RowKey{SpaceId: "quant", DatasetId: "result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 					Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_IntValue{IntValue: 1}}}},
 				}
-				_, err := node.Store().UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-					return pebble.BuildDatasetRowsUpsertedMessage("node-a", spaceID, datasetID, rows)
-				})
+				_, err := node.Store().UpsertFields(ctx, "quant", "result", "", []*pb.RowFieldUpsert{row})
 				require.NoError(t, err)
 			}
 			appended, err := node.AppendFactorPeriodComputed(ctx, &pb.AppendFactorPeriodComputedReq{NodeId: "node-a", SpaceId: "quant", AuthInfo: auth, Marker: marker})

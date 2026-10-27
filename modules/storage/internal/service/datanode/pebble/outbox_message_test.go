@@ -23,9 +23,7 @@ func TestSourcePositionSurvivesDataNodeRestart(t *testing.T) {
 	for attempt := 0; attempt < 2; attempt++ {
 		s, err := Open(options)
 		require.NoError(t, err)
-		_, err = s.UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{row}, func(space, dataset string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-			return BuildDatasetRowsUpsertedMessage("node", space, dataset, rows)
-		})
+		_, err = upsertTestRowsEntries(s, ctx, []*pb.RowFieldUpsert{row})
 		require.NoError(t, err)
 		entries, err := s.ListOutbox(ctx, 0, 10)
 		require.NoError(t, err)
@@ -53,7 +51,7 @@ func TestSourcePositionSurvivesDataNodeRestart(t *testing.T) {
 }
 
 func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) {
-	data, err := BuildDatasetRowsUpsertedMessage("node-1", "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
+	data, err := BuildDatasetRowsUpsertedMessage("crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,53 +113,6 @@ func TestBuildCollectorPeriodCompletedMessageChangesIDWhenPayloadChanges(t *test
 	}
 }
 
-func TestBuildDatasetRowsUpsertedMessageCarriesWriteSource(t *testing.T) {
-	data, err := BuildDatasetRowsUpsertedMessageWithSource("node-1", "scf:market-fetch-1", "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err = BindOutboxID(data, "node-1", "store", 8)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message := &eventpb.EventMessage{}
-	if err := proto.Unmarshal(data, message); err != nil {
-		t.Fatal(err)
-	}
-	payload := &storagepb.DatasetRowsUpserted{}
-	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.GetWriteSource() != "scf:market-fetch-1" {
-		t.Fatalf("write_source = %q", payload.GetWriteSource())
-	}
-	if payload.GetWriteKind() != "" {
-		t.Fatalf("generic upsert write_kind = %q", payload.GetWriteKind())
-	}
-}
-
-func TestBuildDatasetRowsUpsertedMessageCarriesWriteKind(t *testing.T) {
-	data, err := BuildDatasetRowsUpsertedMessageWithKind("node-1", "", WriteKindFactorResult, "crypto", "spot_kline", []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "spot_kline", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "v1"}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err = BindOutboxID(data, "node-1", "store", 9)
-	if err != nil {
-		t.Fatal(err)
-	}
-	message := &eventpb.EventMessage{}
-	if err := proto.Unmarshal(data, message); err != nil {
-		t.Fatal(err)
-	}
-	payload := &storagepb.DatasetRowsUpserted{}
-	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.GetWriteKind() != WriteKindFactorResult {
-		t.Fatalf("write_kind = %q", payload.GetWriteKind())
-	}
-}
-
 func TestPrepareOutboxPublicationIsByteStable(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
 	if err != nil {
@@ -169,9 +120,7 @@ func TestPrepareOutboxPublicationIsByteStable(t *testing.T) {
 	}
 	defer store.Close()
 	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), rows, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessage("foo", spaceID, datasetID, rows)
-	}); err != nil {
+	if _, err := upsertTestRowsEntries(store, context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := store.ListOutbox(context.Background(), 0, 1)
@@ -197,90 +146,9 @@ func TestBindOutboxIDRejectsInvalidEnvelope(t *testing.T) {
 	}
 }
 
-func TestSourceDerivedEventIDIsScopedToStoreIncarnation(t *testing.T) {
-	rows := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}}
-	staged, err := BuildDatasetRowsUpsertedMessageForSource("node", "input", "s", "d", rows)
-	require.NoError(t, err)
-	first, err := BindOutboxID(staged, "node", "first-store", 1)
-	require.NoError(t, err)
-	second, err := BindOutboxID(staged, "node", "second-store", 1)
-	require.NoError(t, err)
-	require.NotEqual(t, mustEvent(t, first).EventId, mustEvent(t, second).EventId)
-	replay, err := BindOutboxID(first, "node", "first-store", 1)
-	require.NoError(t, err)
-	require.Equal(t, first, replay)
-	_, err = BindOutboxID(first, "node", "second-store", 1)
-	require.ErrorContains(t, err, "rebind")
-}
-
 func TestValidateNewEventIDRejectsPlaceholder(t *testing.T) {
 	if err := validateNewEventID(&eventpb.EventMessage{EventId: "outbox-pending"}); err == nil {
 		t.Fatal("validateNewEventID() error = nil, want placeholder rejection")
-	}
-}
-
-func TestUpsertFieldsEventRejectsCallbackIdentityMismatch(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
-	if _, err := store.UpsertFieldsEvent(context.Background(), []*pb.RowFieldUpsert{row}, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessage("foo", spaceID, datasetID+"-wrong", rows)
-	}); err == nil {
-		t.Fatal("UpsertFieldsEvent() error = nil, want callback identity rejection")
-	}
-}
-
-func TestUpsertFieldsEventWithSourceIsIdempotentAfterRedelivery(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "5m", DataTime: "2026-07-23T10:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}}}
-	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessageForSource("foo", "market-kline-1", spaceID, datasetID, rows)
-	}
-	first, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
-	if err != nil || len(first) != 1 {
-		t.Fatalf("first source write entries=%v err=%v", first, err)
-	}
-	second, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "market-kline-1", build)
-	if err != nil || len(second) != 0 {
-		t.Fatalf("redelivery source write entries=%v err=%v", second, err)
-	}
-	entries, err := store.ListOutbox(context.Background(), 0, 10)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("outbox entries=%v err=%v", entries, err)
-	}
-	message := mustEvent(t, entries[0].Data)
-	if message.GetEventId() == "" || message.GetEventId() == "outbox-pending" {
-		t.Fatalf("source event id was not persisted: %q", message.GetEventId())
-	}
-}
-
-func TestProcessedSourceEventMarkersExpireAfterRetention(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "foo", ProcessedEventRetention: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "foo", DatasetId: "bar", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "f", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}
-	build := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessageForSource("foo", "source-1", spaceID, datasetID, rows)
-	}
-	if _, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build); err != nil {
-		t.Fatal(err)
-	}
-	removed, err := store.CleanupProcessedSourceEvents(context.Background(), time.Now().UTC().Add(2*time.Hour))
-	if err != nil || removed != 1 {
-		t.Fatalf("cleanup removed=%d err=%v, want one expired marker", removed, err)
-	}
-	entries, err := store.UpsertFieldsEventWithSource(context.Background(), []*pb.RowFieldUpsert{row}, "source-1", build)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("write after marker expiry entries=%v err=%v, want replay to be accepted", entries, err)
 	}
 }
 

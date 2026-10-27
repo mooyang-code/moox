@@ -75,8 +75,7 @@ func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricp
 		}
 		datasetID := group[0].GetKey().GetDatasetId()
 		rsp, err := w.access.UpsertFields(writeCtx, &storagepb.PrimaryUpsertFieldsReq{
-			AuthInfo: w.auth, Rows: group,
-			SourceEventId: messageID + ":" + datasetID,
+			AuthInfo: w.auth, SpaceId: w.cfg.SpaceID, DatasetId: datasetID, Rows: group,
 		})
 		cancel()
 		if err != nil {

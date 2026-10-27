@@ -79,7 +79,7 @@ func seedRangeData(t *testing.T, store *Store) (start time.Time, expected []stri
 			rows = append(rows, tsRow(series.subject, series.tag, at, float64(minute)))
 		}
 	}
-	require.NoError(t, store.UpsertFields(context.Background(), rows))
+	require.NoError(t, upsertTestRows(store, context.Background(), rows))
 	for _, row := range rows {
 		k := row.GetKey().GetTimeSeries()
 		expected = append(expected, outputTime(mustCanonical(k.GetDataTime()))+"|"+k.GetSubjectId()+"|"+k.GetSeriesTag())
@@ -212,7 +212,7 @@ func seedLatestData(t *testing.T, store *Store, bars int) time.Time {
 			rows = append(rows, tsRow(series.subject, series.tag, at, float64(i)))
 		}
 	}
-	require.NoError(t, store.UpsertFields(context.Background(), rows))
+	require.NoError(t, upsertTestRows(store, context.Background(), rows))
 	return start
 }
 
@@ -336,7 +336,7 @@ func TestCountTimeSeriesRowsCountsDistinctTimePointsPerSubject(t *testing.T) {
 func TestReadRowsSkipsMissingKeysAndKeepsRequestOrder(t *testing.T) {
 	store := openReadStore(t)
 	at := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{
+	require.NoError(t, upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{
 		tsRow("A", "", at, 1), tsRow("B", "", at, 2),
 		{Key: tsRow("C", "", at, 0).Key, Attributes: map[string]*pb.TypedValue{"source": {Value: &pb.TypedValue_StringValue{StringValue: "x"}}}},
 	}))
@@ -370,7 +370,7 @@ func TestRangeReadReturnsMoreThanTenThousandRowsWithFewColumns(t *testing.T) {
 			rows = append(rows, tsRow(subject, "", start.Add(time.Duration(i)*time.Minute), float64(i)))
 		}
 	}
-	require.NoError(t, store.UpsertFields(context.Background(), rows))
+	require.NoError(t, upsertTestRows(store, context.Background(), rows))
 	// 一次最近 N 根返回 12500 行（超过 1 万个键），只请求一列。
 	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
 		SpaceId: "s", DatasetId: "d", ColumnNames: []string{"close"}, LatestPerSeries: 2500, Page: &pb.Page{Size: 20000},

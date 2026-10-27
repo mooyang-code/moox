@@ -100,18 +100,18 @@ func TestPrimaryRoutesAndValidatesBeforeDataNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	svc, err := New(Options{Node: node, AuthSigner: func(_ *pb.AuthInfo) (*pb.AuthInfo, error) {
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node, AuthSigner: func(_ *pb.AuthInfo) (*pb.AuthInfo, error) {
 		return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey("node-secret", "primary")}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "ignored"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}})
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "ignored"}, Rows: []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.2}}}}}}}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
-	bad, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}})
+	bad, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{Rows: []*pb.RowFieldUpsert{{Key: key}}}))
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("bad rsp=%v err=%v", bad, err)
 	}
@@ -123,10 +123,10 @@ func TestPrimaryNormalizesMissingStockCNSeriesTag(t *testing.T) {
 		captured = req
 		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
 	}}
-	svc, err := New(Options{Node: node})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node})
 	require.NoError(t, err)
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "600000.XSHG", Freq: "1m", DataTime: "2026-08-28T06:59:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}
-	_, err = svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}})
+	_, err = svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}}))
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	require.Equal(t, "default", captured.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag())
@@ -149,9 +149,9 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "allowed"}}}},
 	}
-	upsert, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	upsert, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row},
-	})
+	}))
 	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
 	}
@@ -185,12 +185,12 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	}
 }
 
-func TestFactorResultRequiresDedicatedWriteRPC(t *testing.T) {
+// 因子结果走通用 UpsertFields：只有因子身份能写，其他调用方在路由之前被拒绝。
+func TestFactorResultUpsertIsFactorOnly(t *testing.T) {
 	resolved := 0
 	node := &recordingMarkerNode{recordingNode: &recordingNode{
-		write: func(_ context.Context, _ *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			t.Fatal("factor_result generic upsert reached DataNode")
-			return nil, nil
+		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
+			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 		},
 	}}
 	svc, err := New(Options{
@@ -207,12 +207,14 @@ func TestFactorResultRequiresDedicatedWriteRPC(t *testing.T) {
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "factor_result", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "row", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}},
 	}
-	for _, appID := range []string{"factor", "moox-factor", "collector"} {
-		upsert, upsertErr := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row}})
+	upsert, upsertErr := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "collector"}, Rows: []*pb.RowFieldUpsert{row}}))
+	require.NoError(t, upsertErr)
+	require.Equal(t, pb.ErrorCode_NO_PERMISSION, upsert.GetRetInfo().GetCode())
+	require.Equal(t, 0, resolved)
+	for _, appID := range []string{"factor", "moox-factor"} {
+		upsert, upsertErr := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: &pb.AuthInfo{AppId: appID}, Rows: []*pb.RowFieldUpsert{row}, CommitId: "commit-" + appID}))
 		require.NoError(t, upsertErr, appID)
-		require.Equal(t, pb.ErrorCode_NO_PERMISSION, upsert.GetRetInfo().GetCode(), appID)
-		require.Contains(t, upsert.GetRetInfo().GetMsg(), "requires WriteFactorRows", appID)
-		require.Equal(t, 0, resolved, appID)
+		require.Equal(t, pb.ErrorCode_SUCCESS, upsert.GetRetInfo().GetCode(), appID)
 	}
 	for _, appID := range []string{"factor", "moox-factor"} {
 		computed, markerErr := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
@@ -261,7 +263,7 @@ func (factorResultSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.
 }
 
 func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
-	svc, err := New(Options{
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot,
 		Node: &recordingNode{
 			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 				t.Fatal("read-only SCF credential reached DataNode")
@@ -275,12 +277,12 @@ func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "scf-market-canary", AppKey: "valid"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}},
 		}},
-	})
+	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
@@ -337,7 +339,7 @@ func TestCommitTimeSeriesBatchWriteAuthorization(t *testing.T) {
 			Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: exp.GetFrequency(), DataTime: "2026-09-30T00:00:00Z"}},
 		}}
 		rsp, err := svc.CommitTimeSeriesBatch(context.Background(), &pb.PrimaryCommitTimeSeriesBatchReq{
-			AuthInfo: auth, Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}}, WriteSource: "collector",
+			AuthInfo: auth, Expectation: exp, Items: []*pb.TimeSeriesBatchRow{{SeriesIndex: 0, Row: row}},
 		})
 		if err != nil {
 			t.Fatalf("CommitTimeSeriesBatch error: %v", err)
@@ -457,7 +459,7 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 		},
 	}
-	svc, err := New(Options{
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot,
 		Resolver: func(_ context.Context, spaceID, datasetID string) (DataNodeClient, error) {
 			resolved = append(resolved, spaceID+"/"+datasetID)
 			return node, nil
@@ -472,12 +474,15 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: record}}}},
 		}
 	}
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Rows:     []*pb.RowFieldUpsert{row("space-a", "a"), row("space-b", "b")},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("write rsp=%v err=%v", rsp, err)
+	// 一次请求只写一个数据集：两个空间里的同名数据集各写一次，分别路由。
+	for _, item := range [][2]string{{"space-a", "a"}, {"space-b", "b"}} {
+		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
+			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+			Rows:     []*pb.RowFieldUpsert{row(item[0], item[1])},
+		}))
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("write %s rsp=%v err=%v", item[0], rsp, err)
+		}
 	}
 	if !reflect.DeepEqual(resolved, []string{"space-a/shared", "space-b/shared"}) {
 		t.Fatalf("resolved=%v", resolved)
@@ -504,7 +509,7 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 		},
 	}
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node, DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,10 +528,10 @@ func TestPrimaryObservesCommittedTimeSeriesWatermarkByFrequency(t *testing.T) {
 	}
 	t1003 := time.Date(2026, 7, 28, 10, 3, 0, 0, time.UTC)
 	t1005 := t1003.Add(2 * time.Minute)
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
 		Rows:     []*pb.RowFieldUpsert{row("1m", t1003), row("1m", t1005), row("5m", t1003)},
-	})
+	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
@@ -550,12 +555,12 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 		return nil, errors.New("write failed")
 	}}
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node, DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 7, 28, 10, 5, 0, 0, time.UTC)
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: &pb.RowKey{
@@ -567,7 +572,7 @@ func TestPrimaryWriteFailureReportsErrorWithoutWatermark(t *testing.T) {
 			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
 				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1},
 			}}},
-		}}})
+		}}}))
 	if err != nil || rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
@@ -585,11 +590,11 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 		return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 	}}
 	metrics := &recordingDatasetMetrics{}
-	svc, err := New(Options{Node: node, DatasetMetrics: metrics})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node, DatasetMetrics: metrics})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "test", AppKey: "test"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: &pb.RowKey{
@@ -600,7 +605,7 @@ func TestPrimaryDoesNotObserveRecordDataset(t *testing.T) {
 				Value: &pb.TypedValue_StringValue{StringValue: "BTC-USDT"},
 			}}},
 		}},
-	})
+	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", rsp, err)
 	}
@@ -622,7 +627,7 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 		},
 	}
-	svc, err := New(Options{Node: node})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,17 +701,17 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 			return nil, nil
 		},
 	}
-	svc, err := New(Options{Node: node})
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot, Node: node})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key:    &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}},
 			Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "x"}}}},
 		}},
-	})
+	}))
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
@@ -721,7 +726,7 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	svc, err := New(Options{
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot,
 		Node: node,
 		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
 			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey("node-secret", "primary")}, nil
@@ -732,7 +737,7 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	}
 	for _, version := range []string{"1", "2"} {
 		key := &pb.RowKey{SpaceId: "space", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: version}}}
-		rsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+		rsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 			AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 			Rows: []*pb.RowFieldUpsert{{
 				Key: key,
@@ -740,7 +745,7 @@ func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 					FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: version}},
 				}},
 			}},
-		})
+		}))
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("write version=%s rsp=%v err=%v", version, rsp, err)
 		}
@@ -767,7 +772,7 @@ func TestPrimaryReadRowsCrossesDataNodePebble(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	svc, err := New(Options{
+	svc, err := New(Options{Snapshot: emptyRequestSnapshot,
 		Node: node,
 		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
 			return &pb.AuthInfo{AppId: "primary", AppKey: datanode.ServiceAuthKey("node-secret", "primary")}, nil
@@ -781,7 +786,7 @@ func TestPrimaryReadRowsCrossesDataNodePebble(t *testing.T) {
 		DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance",
 	}
 	rowKey := timeSeriesRowKey(key)
-	writeRsp, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	writeRsp, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Rows: []*pb.RowFieldUpsert{{
 			Key: rowKey,
@@ -789,7 +794,7 @@ func TestPrimaryReadRowsCrossesDataNodePebble(t *testing.T) {
 				FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 101.25}},
 			}},
 		}},
-	})
+	}))
 	if err != nil || writeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", writeRsp, err)
 	}

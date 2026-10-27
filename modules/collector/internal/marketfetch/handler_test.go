@@ -28,7 +28,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Now: func() time.Time { return now }}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	handler := &Handler{
-		NewStorage: func(string, string) (Storage, error) { return storage, nil },
+		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewStockKlinePipeline: func(s Storage) (*KlinePipeline, error) {
 			pipeline.Storage = s
 			return pipeline, nil
@@ -63,7 +63,7 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	var product marketdata.InstrumentType
 	var gotLimits *FeedLimits
 	handler := &Handler{
-		NewStorage: func(string, string) (Storage, error) { return storage, nil },
+		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, limits *FeedLimits) (*KlinePipeline, error) {
 			product, gotLimits = got, limits
 			return &KlinePipeline{
@@ -105,7 +105,7 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	handler := &Handler{
-		NewStorage: func(string, string) (Storage, error) { return storage, nil },
+		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, _ *FeedLimits) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",

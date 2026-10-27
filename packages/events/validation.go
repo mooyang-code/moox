@@ -70,12 +70,6 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if !validRequiredToken(payload.GetNodeId()) || !validRequiredToken(payload.GetStoreId()) || payload.GetSequence() == 0 {
 		return fmt.Errorf("storage event source position is required")
 	}
-	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
-		return fmt.Errorf("storage event write_source is invalid")
-	}
-	if err := validateStorageWriteKind(payload.GetWriteKind()); err != nil {
-		return err
-	}
 	for i, row := range payload.GetRows() {
 		if row == nil || row.GetKey() == nil {
 			return fmt.Errorf("storage event row %d key is required", i)
@@ -405,18 +399,6 @@ func validateUniqueTokens(values []string, requireNonEmpty bool, label string) (
 
 func validRequiredToken(value string) bool {
 	return strings.TrimSpace(value) != "" && strings.TrimSpace(value) == value
-}
-
-func validateStorageWriteKind(kind string) error {
-	if len(kind) > 64 || strings.TrimSpace(kind) != kind {
-		return fmt.Errorf("storage event write_kind is invalid")
-	}
-	switch kind {
-	case "", "factor_result":
-		return nil
-	default:
-		return fmt.Errorf("storage event write_kind is invalid")
-	}
 }
 
 func validCompletionStatus(status string) bool {

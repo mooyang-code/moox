@@ -471,7 +471,7 @@ type recordingTimerPeriodCommitStorage struct {
 	failDataset string
 }
 
-func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
 	s.commits++
 	s.indexes = make([]uint32, 0, len(rows))
 	for _, row := range rows {
@@ -484,17 +484,12 @@ func (s *recordingTimerPeriodCommitStorage) CommitTimeSeriesBatch(_ context.Cont
 }
 
 type pipelineStorage struct {
-	rows          []*storagepb.RowFieldUpsert
-	sourceEventID string
-	writes        int
+	rows   []*storagepb.RowFieldUpsert
+	writes int
 }
 
-func (s *pipelineStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error {
-	return nil
-}
-func (s *pipelineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
+func (s *pipelineStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	s.rows = rows
-	s.sourceEventID = source
 	s.writes++
 	return nil
 }
@@ -538,7 +533,6 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Equal(t, 1, storage.writes)
-	require.Equal(t, "batch-1", storage.sourceEventID)
 	require.Len(t, storage.rows, 1)
 	row := storage.rows[0]
 	require.Equal(t, StockCNSpaceID, row.GetKey().GetSpaceId())
@@ -617,7 +611,6 @@ func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
 	_, err = pipeline.Execute(context.Background(), Request{BatchID: "retry-attempt-batch", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-retry", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, SourceEventID: "retry-key", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
-	require.Equal(t, "retry-key", storage.sourceEventID)
 }
 
 func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {

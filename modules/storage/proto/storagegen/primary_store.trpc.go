@@ -26,8 +26,6 @@ type PrimaryStoreService interface {
 
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error)
 
-	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error)
-
 	ReadRows(ctx context.Context, req *PrimaryReadRowsReq) (*PrimaryReadRowsRsp, error)
 
 	DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq) (*PrimaryDeleteDatasetRowsRsp, error)
@@ -95,24 +93,6 @@ func PrimaryStoreService_CommitTimeSeriesBatch_Handler(svr interface{}, ctx cont
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(PrimaryStoreService).CommitTimeSeriesBatch(ctx, reqbody.(*PrimaryCommitTimeSeriesBatchReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryWriteFactorRowsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).WriteFactorRows(ctx, reqbody.(*PrimaryWriteFactorRowsReq))
 	}
 
 	var rsp interface{}
@@ -339,10 +319,6 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_CommitTimeSeriesBatch_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
-			Func: PrimaryStoreService_WriteFactorRows_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReadRows",
 			Func: PrimaryStoreService_ReadRows_Handler,
 		},
@@ -410,9 +386,6 @@ func (s *UnimplementedPrimaryStore) RegisterSeriesSnapshot(ctx context.Context, 
 func (s *UnimplementedPrimaryStore) CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error) {
 	return nil, errors.New("rpc CommitTimeSeriesBatch of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error) {
-	return nil, errors.New("rpc WriteFactorRows of service PrimaryStore is not implemented")
-}
 func (s *UnimplementedPrimaryStore) ReadRows(ctx context.Context, req *PrimaryReadRowsReq) (*PrimaryReadRowsRsp, error) {
 	return nil, errors.New("rpc ReadRows of service PrimaryStore is not implemented")
 }
@@ -463,8 +436,6 @@ type PrimaryStoreClientProxy interface {
 	RegisterSeriesSnapshot(ctx context.Context, req *PrimaryRegisterSeriesSnapshotReq, opts ...client.Option) (rsp *PrimaryRegisterSeriesSnapshotRsp, err error)
 
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq, opts ...client.Option) (rsp *PrimaryCommitTimeSeriesBatchRsp, err error)
-
-	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (rsp *PrimaryWriteFactorRowsRsp, err error)
 
 	ReadRows(ctx context.Context, req *PrimaryReadRowsReq, opts ...client.Option) (rsp *PrimaryReadRowsRsp, err error)
 
@@ -552,26 +523,6 @@ func (c *PrimaryStoreClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context,
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &PrimaryCommitTimeSeriesBatchRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (*PrimaryWriteFactorRowsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/WriteFactorRows")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("WriteFactorRows")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PrimaryWriteFactorRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

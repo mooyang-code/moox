@@ -56,7 +56,7 @@ func (p *e2ePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []s
 	return out, nil
 }
 
-func (p *e2ePrimary) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, _ string) error {
+func (p *e2ePrimary) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, row := range rows {

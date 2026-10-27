@@ -31,7 +31,7 @@ func (s *capturedStorage) UpsertFields(_ context.Context, rows []*storagepb.RowF
 	return nil
 }
 
-func (s *capturedStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (s *capturedStorage) CommitTimeSeriesBatch(_ context.Context, _ *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
 	s.committed = append(s.committed, rows...)
 	for _, row := range rows {
 		s.rows = append(s.rows, row.GetRow())
@@ -72,7 +72,7 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 					storage := &capturedStorage{}
 					h := NewHandler()
 					h.Now = func() time.Time { return now }
-					h.NewStorage = func(string, string) (marketfetch.Storage, error) { return storage, nil }
+					h.NewStorage = func(string) (marketfetch.Storage, error) { return storage, nil }
 					// Replace only the network-bound registry. Production factory
 					// selection, pipeline configuration, handler and writes remain real.
 					h.NewMarketKlinePipeline = func(s marketfetch.Storage, market string, instrument marketdata.InstrumentType, provider, source string) (*marketfetch.KlinePipeline, error) {

@@ -65,8 +65,6 @@ message CommitTimeSeriesBatchReq {
   string node_id = 2;
   DatasetPeriodExpectation expectation = 3;
   repeated TimeSeriesBatchRow items = 4;
-  string source_event_id = 5;
-  string write_source = 6;
   // 周期不存在时，按生效表与已登记快照自动建立周期所用的允许迟到时间；由 Primary 从数据集属性带入。
   int64 allowed_lateness_seconds = 7;
 }
@@ -90,26 +88,14 @@ message DatasetPeriodFailureResult {
   PeriodFailureDisposition disposition = 2;
 }
 
-message WriteFactorRowsReq {
+// UpsertFieldsReq 写入一个数据集的行，语义同 PrimaryUpsertFieldsReq。
+message UpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
   string dataset_id = 4;
-  string commit_id = 5;
-  repeated RowFieldUpsert rows = 6;
-}
-
-message WriteFactorRowsRsp {
-  common.RetInfo ret_info = 1;
-  uint64 rows_written = 2;
-}
-
-message UpsertFieldsReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  repeated RowFieldUpsert rows = 3;
-  string source_event_id = 4;
-  string write_source = 5;
+  repeated RowFieldUpsert rows = 5;
+  string commit_id = 6;
 }
 
 message UpsertFieldsRsp {
@@ -248,7 +234,6 @@ message GetFactorPeriodComputedMarkerRsp {
 service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
-  rpc WriteFactorRows(WriteFactorRowsReq) returns (WriteFactorRowsRsp);
 	rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);

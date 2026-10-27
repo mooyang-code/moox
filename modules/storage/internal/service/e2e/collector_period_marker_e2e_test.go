@@ -97,7 +97,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 		}}},
 		Fields: []*storagegen.FieldValue{{FieldId: "close", Value: &storagegen.TypedValue{Value: &storagegen.TypedValue_DoubleValue{DoubleValue: 68000}}}},
 	}
-	_, err = store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}, "period-marker-e2e-row", "collector")
+	_, err = store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}})
 	require.NoError(t, err)
 	failures, err := store.RecordDatasetPeriodFailures(ctx, expectation, []uint32{1})
 	require.NoError(t, err)

@@ -21,9 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// WriteSource 是 collector-stream 在 Storage 写入来源里的名字；请求体的 AppId 仍是 moox-collector。
-const WriteSource = "collector-stream"
-
 // App 是装配好的 collector-stream。
 type App struct {
 	Config    *Config
@@ -54,12 +51,12 @@ func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, e
 	app.dns = dnscache.New(dnscache.Config{Domains: endpointHosts(append(append([]string(nil), streamConfig.SpotEndpoints...), streamConfig.SwapEndpoints...))})
 	storageTimeout := time.Duration(cfg.StorageTimeoutMS) * time.Millisecond
 	newStorage := func(marketType string) (marketfetch.Storage, error) {
-		return marketfetch.NewMarketStorageForMarket(gateway, marketType, WriteSource)
+		return marketfetch.NewMarketStorageForMarket(gateway, marketType)
 	}
 	app.Executor = localexec.New(cfg.SpaceID, cfg.LocalExecutor.Concurrency, func() *marketfetch.Handler {
 		handler := marketwiring.NewHandler()
 		handler.SpaceID = cfg.SpaceID
-		handler.NewStorage = func(marketType, _ string) (marketfetch.Storage, error) { return newStorage(marketType) }
+		handler.NewStorage = newStorage
 		return handler
 	})
 	app.Scheduler = localexec.NewScheduler(app.Executor)

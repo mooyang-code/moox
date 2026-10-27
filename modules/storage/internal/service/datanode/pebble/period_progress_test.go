@@ -32,17 +32,17 @@ func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status.Status)
 
-	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
+	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status.Status)
-	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
+	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status.Status)
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, 1, bitmapCount(progress.Bitmap))
 
-	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth", "collector")
+	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", status.Status)
 	progress, err = store.GetDatasetPeriodProgress(ctx, exp)
@@ -52,7 +52,7 @@ func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
 
 	// A completed period is terminal; repeated reports neither change the
 	// bitmap nor append another completion marker.
-	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth-retry", "collector")
+	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", status.Status)
 	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
@@ -94,7 +94,7 @@ func TestDatasetPeriodWaitingReservationIsExclusiveAcrossRestart(t *testing.T) {
 
 	_, err = store.CommitTimeSeriesBatch(context.Background(), competing, []TimeSeriesBatchItem{{
 		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
-	}}, "release-b", "collector")
+	}})
 	require.ErrorAs(t, err, &conflict, "a different reservation must not commit data into the canary period")
 	_, err = store.GetDatasetPeriodStatus(context.Background(), competing)
 	require.ErrorAs(t, err, &conflict, "a different reservation must not inspect a waiting canary period")
@@ -107,7 +107,7 @@ func TestDatasetPeriodWaitingReservationIsExclusiveAcrossRestart(t *testing.T) {
 
 	statusResult, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{
 		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
-	}}, "release-a", "collector")
+	}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", statusResult.Status)
 
@@ -120,7 +120,7 @@ func TestDatasetPeriodWaitingReservationIsExclusiveAcrossRestart(t *testing.T) {
 	require.Equal(t, "complete", terminal.Status)
 	terminalResult, err := store.CommitTimeSeriesBatch(context.Background(), ordinary, []TimeSeriesBatchItem{{
 		SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT"),
-	}}, "normal-retry", "collector")
+	}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", terminalResult.Status)
 }
@@ -183,7 +183,7 @@ func TestDatasetPeriodEnsureExistingStateIgnoresCurrentMarkerLimit(t *testing.T)
 	}()
 	created, err := store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	completed, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, subject)}}, "source-large", "collector")
+	completed, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, subject)}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", completed.Status)
 	require.NoError(t, store.Close())
@@ -458,7 +458,7 @@ func TestDatasetPeriodDeadlineWinsAgainstConcurrentLateCommit(t *testing.T) {
 	commitErr := make(chan error, 1)
 	go func() {
 		close(commitStarted)
-		status, commitErrValue := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-late", "collector")
+		status, commitErrValue := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 		commitResult <- status.Status
 		commitErr <- commitErrValue
 	}()
@@ -506,10 +506,10 @@ func TestDatasetPeriodLateSuccessClearsFailureAndCompletes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.RecordDatasetPeriodFailures(ctx, exp, []uint32{1})
 	require.NoError(t, err)
-	status, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "source-btc", "collector")
+	status, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status.Status)
-	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}}, "source-eth-late", "collector")
+	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", status.Status)
 
@@ -558,7 +558,7 @@ func TestDatasetPeriodConcurrentBitmapMergeDoesNotLoseBits(t *testing.T) {
 		wg.Add(1)
 		go func(index uint32) {
 			defer wg.Done()
-			_, commitErr := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: index, Row: periodRowForTest(period, exp.SeriesSnapshot[index].SubjectID)}}, "", "collector")
+			_, commitErr := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: index, Row: periodRowForTest(period, exp.SeriesSnapshot[index].SubjectID)}})
 			errs <- commitErr
 		}(i)
 	}
@@ -616,7 +616,7 @@ func TestDatasetPeriodFinalizerMarksDeadlineDegraded(t *testing.T) {
 	exp.DeadlineAt = deadline.Unix()
 	_, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}}, "", "collector")
+	_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}})
 	require.NoError(t, err)
 	status, err := store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(time.Minute))
 	require.NoError(t, err)

@@ -59,7 +59,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	primary, err := primarystore.New(primarystore.Options{
+	primary, err := primarystore.New(primarystore.Options{Snapshot: emptyRequestSnapshot,
 		Resolver: func(_ context.Context, _, dataset string) (primarystore.DataNodeClient, error) {
 			return node, nil
 		},
@@ -85,7 +85,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 			doubleField("volume", float64(10+i)),
 		}})
 	}
-	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes, WriteSource: "scf:e2e-fetcher"}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
+	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
 	read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys, ColumnNames: []string{"close", "volume"}})
@@ -114,7 +114,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.GetEventVersion() != 2 || eventRows.GetWriteSource() != "scf:e2e-fetcher" || len(eventRows.GetRows()) != 3 {
+	if message.GetEventVersion() != 2 || len(eventRows.GetRows()) != 3 {
 		t.Fatalf("DatasetRowsUpserted@2 message=%v rows=%v", message, eventRows.GetRows())
 	}
 	for i, row := range eventRows.GetRows() {
@@ -225,7 +225,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	waitForSelectorStates(t, ctx, view, viewAuth, closes)
 
 	patch := &pb.RowFieldUpsert{Key: keys[1], Fields: []*pb.FieldValue{doubleField("close", 111)}}
-	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{patch}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{patch}})); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("field patch: rsp=%v err=%v", rsp, err)
 	}
 	closes[1] = 111

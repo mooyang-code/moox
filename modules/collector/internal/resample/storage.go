@@ -15,7 +15,6 @@ import (
 var ErrResampleSourceIncomplete = errors.New("resample source window incomplete")
 
 const (
-	writeSource      = "collector:kline_resample"
 	fieldOpen        = "open"
 	fieldHigh        = "high"
 	fieldLow         = "low"
@@ -45,7 +44,7 @@ func sourceFields(spaceID string) []string {
 // unit tests and to keep the remote adapter independent of control-plane state.
 type PrimaryStorage interface {
 	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
-	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
 // SyncPointStorage is the optional catch-up fence used after a historical

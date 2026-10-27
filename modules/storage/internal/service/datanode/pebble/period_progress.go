@@ -230,7 +230,7 @@ func (s *Store) validatePeriodMarkerPayloadSize(raw []byte) error {
 	return nil
 }
 
-func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpectation, items []TimeSeriesBatchItem, sourceEventID, writeSource string) (DatasetPeriodResult, error) {
+func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpectation, items []TimeSeriesBatchItem) (DatasetPeriodResult, error) {
 	exp, err := normalizePeriodExpectation(exp)
 	if err != nil {
 		return DatasetPeriodResult{}, err
@@ -320,14 +320,14 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 		}
 	}
 	allSucceeded := bitmapAllSet(success, exp.ExpectedCount)
-	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		if strings.TrimSpace(sourceEventID) == "" {
-			return BuildDatasetRowsUpsertedMessageWithSource(s.nodeID, writeSource, spaceID, datasetID, rows)
-		}
-		return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, sourceEventID, writeSource, spaceID, datasetID, rows)
+	// 行的准备（编码 KV、构造事件、整理变更范围）不依赖 outbox 状态，放在 outboxMu 之外；周期状态仍由 periodMu 保护。
+	write, err := s.prepareRowsWrite(ctx, exp.SpaceID, exp.DatasetID, normalizedRows)
+	if err != nil {
+		return DatasetPeriodResult{}, err
 	}
+	defer write.batch.Close()
 	s.outboxMu.Lock()
-	_, err = s.writeFieldsEventLocked(ctx, normalizedRows, strings.TrimSpace(sourceEventID), true, writeEvent, func(batch *cpebble.Batch, _ []*OutboxEntry) error {
+	_, err = s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
 		if created {
 			if err := s.writePeriodRecord(batch, base, exp, false); err != nil {
 				return err

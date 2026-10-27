@@ -19,10 +19,6 @@ func (n *factorDatasetAdminNode) UpsertFields(context.Context, *pb.UpsertFieldsR
 	return nil, nil
 }
 
-func (*factorDatasetAdminNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return nil, nil
-}
-
 func (n *factorDatasetAdminNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }

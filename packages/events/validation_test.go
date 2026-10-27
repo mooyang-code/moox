@@ -49,15 +49,6 @@ func TestDatasetRowsUpsertedV1IsRejectedByV2Consumer(t *testing.T) {
 	}
 }
 
-func TestDatasetRowsUpsertedRejectsUnknownWriteKind(t *testing.T) {
-	registry, err := DefaultRegistry()
-	require.NoError(t, err)
-	payload := validRowsEvent()
-	payload.WriteKind = "unrecognized"
-	_, err = registry.Encode(DatasetRowsUpserted, payload, validationOptions("event-1", "space", "dataset"))
-	require.Error(t, err)
-}
-
 func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
