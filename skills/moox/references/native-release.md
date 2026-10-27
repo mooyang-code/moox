@@ -37,12 +37,18 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 | 主机 | 单元 | 组件 id（二进制名 `moox-<id>`） |
 | --- | --- | --- |
-| 控制机 | `prod` | `admin` `eventbus` `monitor` `collector` `cloudfunction` `factor-mgr` `strategy` `web-host` `console-proxy` |
+| 控制机 | `prod` | `admin` `monitor` `collector` `cloudfunction` `factor-mgr` `archive-mgr` `strategy` `web-host` `console-proxy` |
 | Storage 主机 | `storage` | `storage-primary` `storage-node` `storage-view`（**同一份二进制，三个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
+| 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
 | 存储机、海外机 | `access` | `access` |
 | 海外机 | `trade`、`egress-proxy` | `trade`、`egress-proxy` |
 | 因子机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
+
+**EventBus 单元在存储机**（`/data/moox/eventbus/releases/eventbus-manual-20261027` + `current`，2026-10-27 从控制机迁来，手工搭成，布局与 `eventbus` profile 一致）。
+换二进制照常：`install --host storage --unit eventbus --file <moox-eventbus> --restart eventbus`；EventBus 重启会让所有客户端短暂重连，只在需要时做。
+控制机 `prod` 单元的计划里已经没有 `eventbus`（旧目录与旧数据在 `/data/moox/prod/eventbus-move-*/`，验收后删除）。
+装到控制机 `prod` 单元的二进制，`reseal` 依赖这一点：新版 `moox-runtime` 按 `control` profile 校验清单，计划里多出 `eventbus` 会报 `preparation receipt requires a valid unit selection`。
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
 `factor-mgr`、`strategy`、`trade`、`cloudfunction` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。

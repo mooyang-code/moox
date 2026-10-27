@@ -36,6 +36,7 @@ func buildBusinessFreshnessReporterWithInterval(
 	builder *monitorobservability.Builder,
 	repositories *store.Repositories,
 	hook func(context.Context, domain.Check, domain.CheckResult),
+	observation func(now time.Time) observationState,
 	klineInterval time.Duration,
 	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
 ) func(context.Context) error {
@@ -407,6 +408,26 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 			}
 		}
+		// 观测输入（EventBus 上的服务指标与主机快照）中断，或刚恢复、上报方还没补上样本时：依赖它们的检查全部冻结——
+		// 既不新增告警，也不恢复已有告警——只留"观测输入"这一项说明原因；不依赖观测输入的检查（网关、K 线新鲜度……）照常判定。
+		if observation != nil {
+			state := observation(overview.GeneratedAt)
+			if state.Suspended {
+				for key, item := range items {
+					if !observationIndependent(item.checkID) {
+						delete(items, key)
+					}
+				}
+			}
+			ingest := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: observationIngestCheckID, name: "观测输入", success: true, reason: "观测输入正常"}
+			if !state.Ready {
+				ingest.success, ingest.reason = false, "观测输入中断：Monitor 的 EventBus 观测消费者没有连上，依赖服务指标与主机快照的检查已冻结"
+				if state.Reason != "" {
+					ingest.rawError = state.Reason
+				}
+			}
+			items[ingest.spaceID+"\x00"+ingest.checkID] = ingest
+		}
 		if len(items) > maxFreshnessChecks {
 			return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 		}
@@ -503,6 +524,19 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		return errors.Join(errs...)
 	}
+}
+
+// observationIngestCheckID 是"观测输入"检查：观测消费者连上时通过，没连上时失败，说明其他检查为什么冻结。
+const observationIngestCheckID = "observation:ingest"
+
+// observationIndependent 报告一项检查是否不依赖观测输入：网关信号来自 Admin，行情探针与 K 线新鲜度直接读 Storage 与控制面。
+func observationIndependent(checkID string) bool {
+	for _, prefix := range []string{"gateway:", "kline_freshness:", "market_canary:", tagCheckPrefix, observationIngestCheckID} {
+		if strings.HasPrefix(checkID, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // datasetCheckPasses 决定数据集新鲜度检查按通过还是失败记录。数据积累中（warming）页面显示降级，但生产者在正常工作、

@@ -72,12 +72,12 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的部署一致。
-	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
-		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
+	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
+		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}) ||
 		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
 	}
-	if manifest.EventBus.PublicAddress != "198.51.100.10" {
+	if manifest.EventBus.PublicAddress != manifest.HostCatalog["storage"].Address {
 		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
 	}
 	if _, ok := manifest.HostCatalog["factor"]; ok {
@@ -161,8 +161,9 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 		if manifest.HostCatalog[target.host].TLSMode != "auto" {
 			t.Fatalf("%s：管理台的 HTTPS 入口应跟着搬过去，证书模式 %q", target.role, manifest.HostCatalog[target.host].TLSMode)
 		}
-		if manifest.EventBus.PublicAddress != manifest.HostCatalog[target.host].Address {
-			t.Fatalf("%s：EventBus 地址应是共用主机的地址", target.role)
+		// EventBus 是独立单元，默认放在存储机上（Storage 内部的事件流量最大），不跟着管理台组件走。
+		if manifest.ComponentHost("eventbus") != "storage" || manifest.EventBus.PublicAddress != manifest.HostCatalog["storage"].Address {
+			t.Fatalf("%s：EventBus 应在存储机上，地址是存储机的地址：%+v", target.role, manifest.Deployments)
 		}
 	}
 }

@@ -159,9 +159,12 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 			seen[id] = true
 		}
 	}
-	// Host Agent needs EventBus before it can become ready on an empty host.
-	if !slices.Contains(result.components, "admin") || !slices.Contains(result.components, "eventbus") {
-		return result, errors.New("control bootstrap requires Admin and EventBus on the control host")
+	// 控制单元只需要 Admin；EventBus 是独立单元，装在拓扑里登记的那台主机上（见 eventBusHost）。
+	if !slices.Contains(result.components, "admin") {
+		return result, errors.New("control bootstrap requires Admin on the control host")
+	}
+	if _, err := eventBusHost(request.Topology); err != nil {
+		return result, err
 	}
 	if !slices.Contains(result.components, "console-proxy") && request.ProxyCA.Create {
 		return result, errors.New("proxy CA authorization requires a selected console-proxy")
@@ -226,6 +229,20 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 		return result, err
 	}
 	return result, nil
+}
+
+// eventBusHost 返回拓扑里部署了 EventBus 的主机；EventBus 是单实例，必须恰好登记在一台主机上。
+func eventBusHost(topology hostbundle.Topology) (hostbundle.Host, error) {
+	var found []hostbundle.Host
+	for _, host := range topology.Hosts {
+		if slices.Contains(host.Components, "eventbus") {
+			found = append(found, host)
+		}
+	}
+	if len(found) != 1 {
+		return hostbundle.Host{}, errors.New("bootstrap topology must place eventbus on exactly one host")
+	}
+	return found[0], nil
 }
 
 // RequestHash binds normalized input and the captured override bytes. It does

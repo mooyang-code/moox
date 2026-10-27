@@ -26,15 +26,17 @@ type Agent struct {
 	collector snapshotCollector
 	// connectMu 串行化建连（可能阻塞到超时）；stateMu 只保护 publisher 指针，持锁期间不做网络操作，
 	// 健康检查只读 stateMu，EventBus 建连停滞不会拖慢 /healthz。
-	connectMu                              sync.Mutex
-	stateMu                                sync.Mutex
-	publisher                              eventpublisher.Publisher
-	newPublisher                           func(context.Context) (eventpublisher.Publisher, error)
-	hostname, bootID, version              string
-	latestMu                               sync.RWMutex
-	latest                                 *hostmetricpb.HostSnapshot
-	lastCollect, lastPublish               time.Time
-	lastErr                                string
+	connectMu                 sync.Mutex
+	stateMu                   sync.Mutex
+	publisher                 eventpublisher.Publisher
+	newPublisher              func(context.Context) (eventpublisher.Publisher, error)
+	hostname, bootID, version string
+	latestMu                  sync.RWMutex
+	latest                    *hostmetricpb.HostSnapshot
+	lastCollect, lastPublish  time.Time
+	lastErr                   string
+	// collectErr 只记最近一次采集的错误，发布错误不会写入这里；/readyz 只看它（发布状态另见 lastErr 与 EventBus 连接）。
+	collectErr                             string
 	collected, published, dropped, skipped atomic.Uint64
 	running                                atomic.Bool
 }
@@ -86,7 +88,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	snapshot, _, err := a.collector.Collect(ctx)
 	a.collected.Add(1)
 	if err != nil {
-		a.recordError(err)
+		a.recordCollectError(err)
 		a.dropped.Add(1)
 		return &hostagentpb.RunOnceRsp{PublishError: err.Error()}, err
 	}
@@ -94,6 +96,7 @@ func (a *Agent) runOnce(ctx context.Context) (*hostagentpb.RunOnceRsp, error) {
 	a.latestMu.Lock()
 	a.latest = proto.Clone(snapshot).(*hostmetricpb.HostSnapshot)
 	a.lastCollect = occurredAt
+	a.collectErr = ""
 	a.latestMu.Unlock()
 	msgID, err := uuid.NewV7()
 	if err != nil {
@@ -150,6 +153,22 @@ func (a *Agent) eventPublisher(ctx context.Context) (eventpublisher.Publisher, e
 	a.publisher = publisher
 	a.stateMu.Unlock()
 	return publisher, nil
+}
+
+// recordCollectError 同时记入采集错误（决定 /readyz）和 lastErr（状态详情）。
+func (a *Agent) recordCollectError(err error) {
+	a.latestMu.Lock()
+	a.collectErr = truncate(err.Error(), 512)
+	a.lastErr = a.collectErr
+	a.latestMu.Unlock()
+}
+
+// collectionState 返回采集是否正常：至少成功采集过一次，并且最近一次采集没有出错。
+// 就绪不依赖 EventBus：EventBus 不可达只影响发布，不能让组件的启动流程反复杀掉它。
+func (a *Agent) collectionState() (ready bool, collectErr string) {
+	a.latestMu.RLock()
+	defer a.latestMu.RUnlock()
+	return !a.lastCollect.IsZero() && a.collectErr == "", a.collectErr
 }
 
 func (a *Agent) recordError(err error) {

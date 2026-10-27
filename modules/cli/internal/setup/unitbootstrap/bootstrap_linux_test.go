@@ -48,8 +48,10 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	health := func() map[string]string {
 		return map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": "synthetic-monitor", "MOOX_HEALTH_AUTH_SECRET_KEY": "synthetic-bootstrap-health-at-least-32-bytes"}
 	}
-	components := []string{"admin", "eventbus", "web-host", "console-proxy"}
-	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: components}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": health(), "host-agent": health()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}}}
+	// EventBus 是独立单元，不在控制单元里：拓扑把它登记在控制机上（客户端据此得到连接地址），但控制单元只装下面这几个。
+	// 这里没有任何 broker 在运行，HostAgent 照样必须就绪（就绪不依赖 EventBus）。
+	components := []string{"admin", "web-host", "console-proxy"}
+	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: append(append([]string(nil), components...), "eventbus")}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": health(), "host-agent": health()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}, Components: components}}
 	request.ProxyCA.Create = true
 	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-initial-admin-password"}
 	for _, id := range components {
@@ -122,12 +124,8 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	}
 	initialPasswordHash := adminHash(initial.ControlDirectory)
 	require.True(t, mooxsecurity.VerifyPassword(request.InitialAdmin.Password, initialPasswordHash))
-	busCA := filepath.Join(initial.ControlDirectory, "eventbus/secrets/eventbus/ca.pem")
-	unauthenticated, err := jetstream.Connect(t.Context(), jetstream.Config{URLs: []string{"tls://127.0.0.1:4222"}, TLSCAFile: busCA, ConnectTimeout: 2 * time.Second})
-	if unauthenticated != nil {
-		unauthenticated.Close()
-	}
-	require.Error(t, err, "the deployed broker must reject TLS clients without a role")
+	// EventBus 不在控制单元里，没有 broker 在运行；EventBus 身份用 HostAgent 单元里的 CA 副本代表。
+	busCA := filepath.Join(initial.HostDirectory, "host-agent/secrets/eventbus/ca.pem")
 	initialRole, err := jetstream.LoadCredentialFile(filepath.Join(initial.HostDirectory, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, "hostagent-publisher", initialRole.Username)
@@ -143,8 +141,8 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))
 	require.Equal(t, control, runtimeStatus(t, initial.ControlDirectory))
 	partial := request
-	partial.Control.Components = []string{"admin", "eventbus"}
-	partial.Control.Environment = map[string]map[string]string{"admin": request.Control.Environment["admin"], "eventbus": request.Control.Environment["eventbus"]}
+	partial.Control.Components = []string{"admin"}
+	partial.Control.Environment = map[string]map[string]string{"admin": request.Control.Environment["admin"]}
 	partial.Control.Overrides = map[string]string{"admin/config/console.yaml": request.Control.Overrides["admin/config/console.yaml"]}
 	partial.ProxyCA = ProxyCAAuthorization{}
 	_, err = runBootstrap(t, partial, root)
@@ -186,7 +184,7 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	upgradedRole, err := jetstream.LoadCredentialFile(filepath.Join(upgraded.HostDirectory, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, initialRole.EventBusToken, upgradedRole.EventBusToken, "offline reruns reuse issued EventBus role tokens")
-	upgradedBusCA, err := os.ReadFile(filepath.Join(upgraded.ControlDirectory, "eventbus/secrets/eventbus/ca.pem"))
+	upgradedBusCA, err := os.ReadFile(filepath.Join(upgraded.HostDirectory, "host-agent/secrets/eventbus/ca.pem"))
 	require.NoError(t, err)
 	initialBusCA, err := os.ReadFile(busCA)
 	require.NoError(t, err)
@@ -258,7 +256,7 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	require.NoError(t, err)
 	issuedRole, err := jetstream.LoadCredentialFile(filepath.Join(captured.Host.Candidate, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
-	issuedBusCA, err := os.ReadFile(filepath.Join(captured.Control.Candidate, "eventbus/secrets/eventbus/ca.pem"))
+	issuedBusCA, err := os.ReadFile(filepath.Join(captured.Host.Candidate, "host-agent/secrets/eventbus/ca.pem"))
 	require.NoError(t, err)
 	_, err = os.Lstat(filepath.Join(request.DeploymentRoot, "run/bootstrap.json"))
 	require.NoError(t, err)
@@ -281,7 +279,7 @@ func TestBootstrapLinuxSIGKILLAtAdminStartupRecoversWholeHost(t *testing.T) {
 	recoveredRole, err := jetstream.LoadCredentialFile(filepath.Join(recovered.HostDirectory, "host-agent/config/eventbus.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, issuedRole.EventBusToken, recoveredRole.EventBusToken, "SIGKILL recovery must retain issued EventBus roles")
-	recoveredBusCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "eventbus/secrets/eventbus/ca.pem"))
+	recoveredBusCA, err := os.ReadFile(filepath.Join(recovered.HostDirectory, "host-agent/secrets/eventbus/ca.pem"))
 	require.NoError(t, err)
 	require.Equal(t, issuedBusCA, recoveredBusCA, "SIGKILL recovery must retain the EventBus TLS identity")
 	recoveredProxyCA, err := os.ReadFile(filepath.Join(recovered.ControlDirectory, "console-proxy/certs/caddy/root.crt"))

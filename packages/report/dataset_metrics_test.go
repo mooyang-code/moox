@@ -74,6 +74,40 @@ func TestDatasetMetricsReplaceExpectedPublishesDisabledTombstone(t *testing.T) {
 	}
 }
 
+// 暂停项：数据集在清单里但不被期望产出——enabled 为 0、不进 expected；进程重启后第一轮清单里也要有这条 0 序列
+// （Monitor 靠它分辨“被有意停下”和“从没有过”），不要求 Interval。
+func TestDatasetMetricsPausedExpectationPublishesDisabledSeries(t *testing.T) {
+	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "factor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := DatasetKey{SpaceID: "crypto", DatasetID: "factor_live", Freq: "5m"}
+	paused := DatasetKey{SpaceID: "crypto", DatasetID: "factor_paused", Freq: "1m"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: live, Interval: 5 * time.Minute}, {Key: paused, Paused: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("crypto", "factor_live", "5m")); got != 1 {
+		t.Fatalf("live enabled = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("crypto", "factor_paused", "1m")); got != 0 {
+		t.Fatalf("paused enabled = %v, want 0", got)
+	}
+	if _, expected := metrics.expected[paused]; expected {
+		t.Fatal("a paused dataset must not be expected to run")
+	}
+	// 同一个数据集既暂停又正常是清单自相矛盾，整体拒绝。
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: live, Interval: time.Minute}, {Key: live, Paused: true}}); err == nil {
+		t.Fatal("conflicting paused and live expectation was accepted")
+	}
+	// 恢复后重新期望。
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: live, Interval: 5 * time.Minute}, {Key: paused, Interval: time.Minute}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.enabled.WithLabelValues("crypto", "factor_paused", "1m")); got != 1 {
+		t.Fatalf("resumed enabled = %v, want 1", got)
+	}
+}
+
 func TestDatasetMetricsRecordsUpstreamInventoryRefreshError(t *testing.T) {
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "factor")
 	if err != nil {

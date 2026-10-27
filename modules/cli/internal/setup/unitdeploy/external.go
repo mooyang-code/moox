@@ -152,7 +152,7 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 	}
 	switch profile {
 	case "factor-engine":
-		arguments = append(arguments, "--engine-id", "factor-engine@"+in.host.Name, "--eventbus-url", "tls://"+net.JoinHostPort(in.control.Address, "4222"))
+		arguments = append(arguments, "--engine-id", "factor-engine@"+in.host.Name, "--eventbus-url", in.manifest.EventBusURLFor(in.host.Name))
 	case "archive-worker":
 		arguments = append(arguments, "--worker-id", "archive-worker@"+in.host.Name, "--root-dir", in.manifest.Paths.Resolved().ArchiveRoot)
 	}

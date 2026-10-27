@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -131,5 +132,30 @@ func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
 	}
 	if deps.autoConfirm(instanceRef("missing"), time.Time{}) || deps.autoConfirm(lifecycle.Ref{Kind: "factor_task", ID: "observer"}, time.Time{}) {
 		t.Fatal("不存在的实例与别的对象类型都不自动确认")
+	}
+}
+
+type fakeOutbox struct {
+	counts []int
+	calls  int
+}
+
+func (f *fakeOutbox) PendingOutboxStats(context.Context) (store.OutboxStats, error) {
+	count := f.counts[min(f.calls, len(f.counts)-1)]
+	f.calls++
+	return store.OutboxStats{PendingCount: int64(count)}, nil
+}
+
+// 暂停等 outbox 排空：待发布的目标发完就返回；超时没发完要报出还有几个，不能当作已经停下。
+func TestWaitOutboxDrainedWaitsForPublishAndReportsTimeout(t *testing.T) {
+	draining := &fakeOutbox{counts: []int{3, 2, 0}}
+	if err := waitOutboxDrained(context.Background(), draining); err != nil || draining.calls != 3 {
+		t.Fatalf("应轮询到排空：calls=%d err=%v", draining.calls, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := waitOutboxDrained(ctx, &fakeOutbox{counts: []int{2}})
+	if err == nil || !strings.Contains(err.Error(), "还有 2 个目标没有发布到 EventBus") {
+		t.Fatalf("超时应报出剩余数量：%v", err)
 	}
 }

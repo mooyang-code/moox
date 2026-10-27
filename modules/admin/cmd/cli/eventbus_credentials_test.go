@@ -54,8 +54,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 12 {
-		t.Fatalf("eventbus records=%d, want 12", count)
+	if count != 11 {
+		t.Fatalf("eventbus records=%d, want 11（9 个角色令牌 + CA + 服务端证书）", count)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	}
 	require.Equal(t, []string{
 		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
-		"storage-eventbus", "archive-eventbus",
+		"storage-eventbus",
 		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus",
 	}, eventBusRoles)
 	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
@@ -114,7 +114,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.FileExists(t, filepath.Join(exportDir, "hostagent-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "metrics-publisher.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "monitor-observability.yaml"))
-	assert.FileExists(t, filepath.Join(exportDir, "archive-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "trade-eventbus.yaml"))
 	assert.FileExists(t, filepath.Join(exportDir, "factor-eventbus.yaml"))
 	for _, filename := range eventBusRoleFiles() {
@@ -125,13 +124,13 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	info, err := os.Stat(strategyCredential)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	// 导出一律写对外地址；各单元安装时再按"与 EventBus 是否同机"改写成实际连接地址。
 	for name, wantURL := range map[string]string{
-		"internal-admin.yaml":      "tls://127.0.0.1:4222",
-		"metrics-publisher.yaml":   "tls://127.0.0.1:4222",
+		"internal-admin.yaml":      "tls://203.0.113.10:4222",
+		"metrics-publisher.yaml":   "tls://203.0.113.10:4222",
 		"hostagent-publisher.yaml": "tls://203.0.113.10:4222",
 		"storage-eventbus.yaml":    "tls://203.0.113.10:4222",
-		"archive-eventbus.yaml":    "tls://203.0.113.10:4222",
-		"factor-eventbus.yaml":     "tls://127.0.0.1:4222",
+		"factor-eventbus.yaml":     "tls://203.0.113.10:4222",
 	} {
 		credential, loadErr := jetstream.LoadCredentialFile(filepath.Join(exportDir, name))
 		require.NoError(t, loadErr, name)
@@ -146,7 +145,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"storage-eventbus":               "f",
 		"factor-eventbus":                "h",
 		"strategy-eventbus":              "i",
-		"archive-eventbus":               "j",
 		"trade-eventbus":                 "k",
 	})
 	assert.Contains(t, yaml, "eventbus-internal-admin")
@@ -164,7 +162,6 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 		"monitor-observability-consumer": "d",
 		"storage-eventbus":               "f",
 		"factor-eventbus":                "h",
-		"archive-eventbus":               "j",
 		"strategy-eventbus":              "i",
 		"trade-eventbus":                 "k",
 	} {
@@ -216,17 +213,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.API")
 	assert.NotContains(t, aclLine(storageACL, "subscribe:"), "$JS.ACK")
 	assert.NotContains(t, storageACL, "storage_view_rows_committed_v1")
-	archiveACL := eventBusACLBlock(yaml, "archive-eventbus")
-	assert.Contains(t, archiveACL, "password: j")
-	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.INFO.*.moox_archive_kline_v2")
-	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2")
-	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.moox_archive_kline_v2")
-	assert.Contains(t, archiveACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v2")
-	assert.Contains(t, archiveACL, "$JS.ACK.MOOX_STORAGE.moox_archive_kline_v2.>")
-	assert.NotContains(t, archiveACL, "moox_archive_kline_"+"v1")
-	assert.Contains(t, archiveACL, `subscribe: {allow: ["_INBOX.>"]}`)
-	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.API")
-	assert.NotContains(t, aclLine(archiveACL, "subscribe:"), "$JS.ACK")
+	assert.NotContains(t, yaml, "archive-eventbus")
 	factorACL := eventBusACLBlock(yaml, "factor-eventbus")
 	assert.Contains(t, aclLine(factorACL, "publish:"), "$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>", "moox.event.storage.collector.period.completed.v1.>"]}`, aclLine(factorACL, "subscribe:"))
@@ -261,11 +248,10 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	rotateArgs = append(rotateArgs, "--confirm")
 	out.Reset()
 	require.NoError(t, runEventBusCredentialsCommand(rotateArgs, &out, &bytes.Buffer{}))
-	archiveRotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "archive-eventbus", "--confirm"}
+	storageRotateArgs := []string{"eventbus-credentials", "rotate", "--db-path", dbPath, "--encryption-key-file", keyPath, "--credential", "storage-eventbus", "--confirm"}
 	out.Reset()
-	require.NoError(t, runEventBusCredentialsCommand(archiveRotateArgs, &out, &bytes.Buffer{}))
-	assert.Contains(t, out.String(), `"rotated":"archive-eventbus"`)
-	assert.NotContains(t, out.String(), "archive-secret")
+	require.NoError(t, runEventBusCredentialsCommand(storageRotateArgs, &out, &bytes.Buffer{}))
+	assert.Contains(t, out.String(), `"rotated":"storage-eventbus"`)
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	require.NoError(t, err)
@@ -282,7 +268,6 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 		"metrics-publisher.yaml":     "token: metrics-token\n",
 		"monitor-observability.yaml": "monitor_eventbus_token: monitor-token\n",
 		"storage-eventbus.yaml":      "token: storage-token\n",
-		"archive-eventbus.yaml":      "token: archive-token\n",
 		"factor-eventbus.yaml":       "token: factor-token\n",
 		"strategy-eventbus.yaml":     "token: strategy-token\n",
 		"trade-eventbus.yaml":        "token: trade-token\n",
@@ -565,4 +550,94 @@ func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) 
 	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
 	_, err = eventBusNATSURL(db, "control")
 	require.ErrorContains(t, err, "active EventBus deployment not found")
+}
+
+// EventBus 换主机之后：旧 TLS 身份绑定的是旧地址，ensure、export、export-clients 都必须拒绝，
+// 轮换之后全部通过；角色令牌不变，CA 与服务端证书换新。
+func TestEventBusCredentialsRotateTLSAfterEventBusMoves(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "admin.db")
+	keyPath := filepath.Join(dir, "key")
+	require.NoError(t, os.WriteFile(keyPath, []byte("test-encryption-key-for-eventbus"), 0o600))
+	require.NoError(t, applySchema(dbPath, adminschema.AdminSQL()))
+	seedEventBusDeployment(t, dbPath)
+
+	run := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		full := append([]string{"eventbus-credentials", args[0], "--db-path", dbPath, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1"}, args[1:]...)
+		err := runEventBusCredentialsCommand(full, &out, &bytes.Buffer{})
+		return out.String(), err
+	}
+	_, err := run("ensure")
+	require.NoError(t, err)
+	oldDir := filepath.Join(dir, "old")
+	_, err = run("export", "--output-dir", oldDir)
+	require.NoError(t, err)
+	oldCA, err := os.ReadFile(filepath.Join(oldDir, "ca.pem"))
+	require.NoError(t, err)
+	oldUsers, err := os.ReadFile(filepath.Join(oldDir, "users.yaml"))
+	require.NoError(t, err)
+
+	// EventBus 从控制机搬到存储机：先去掉控制机上的登记，同一次同步里加上存储机的登记。
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	require.NoError(t, err)
+	topology, err := sysdeploy.NewTopologyDAO(db, "gateway-node-1")
+	require.NoError(t, err)
+	require.NoError(t, topology.SyncHosts(t.Context(), []sysdeploy.HostSpec{
+		{HostID: "gateway-node-1", Address: "203.0.113.10", Components: []string{"admin", "console-proxy", "web-host"}},
+		{HostID: "storage-node-1", Address: "203.0.113.20", Components: []string{"eventbus"}},
+	}))
+	closeAdminCLIDB(db)
+
+	for _, sub := range []string{"ensure", "export"} {
+		args := []string{sub}
+		if sub == "export" {
+			args = append(args, "--output-dir", filepath.Join(dir, "stale"))
+		}
+		_, err = run(args...)
+		require.Error(t, err, sub)
+		assert.Contains(t, err.Error(), "explicit identity rotation is required", sub)
+	}
+	_, err = run("export-clients", "--output-dir", filepath.Join(dir, "stale-clients"), "--roles", "strategy-eventbus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit identity rotation is required")
+
+	_, err = run("rotate-tls")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--confirm")
+	out, err := run("rotate-tls", "--confirm")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"rotated":"tls"`)
+	assert.Contains(t, out, "tls://203.0.113.20:4222")
+
+	_, err = run("ensure")
+	require.NoError(t, err)
+	newDir := filepath.Join(dir, "new")
+	_, err = run("export", "--output-dir", newDir)
+	require.NoError(t, err)
+	newCA, err := os.ReadFile(filepath.Join(newDir, "ca.pem"))
+	require.NoError(t, err)
+	newUsers, err := os.ReadFile(filepath.Join(newDir, "users.yaml"))
+	require.NoError(t, err)
+	assert.NotEqual(t, string(oldCA), string(newCA), "CA 必须换新")
+	assert.Equal(t, string(oldUsers), string(newUsers), "角色令牌不变")
+	credential, err := jetstream.LoadCredentialFile(filepath.Join(newDir, "strategy-eventbus.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tls://203.0.113.20:4222"}, credential.URLs)
+
+	clientsParent := filepath.Join(dir, "clients-parent")
+	require.NoError(t, os.Mkdir(clientsParent, 0o700))
+	clientsDir := filepath.Join(clientsParent, "clients")
+	_, err = run("export-clients", "--output-dir", clientsDir, "--roles", "strategy-eventbus")
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(clientsDir, "clients.json"))
+
+	// 没有 TLS 身份时没有可轮换的东西。
+	emptyDB := filepath.Join(dir, "empty.db")
+	require.NoError(t, applySchema(emptyDB, adminschema.AdminSQL()))
+	seedEventBusDeployment(t, emptyDB)
+	var buf bytes.Buffer
+	err = runEventBusCredentialsCommand([]string{"eventbus-credentials", "rotate-tls", "--db-path", emptyDB, "--encryption-key-file", keyPath, "--node-id", "gateway-node-1", "--confirm"}, &buf, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "run ensure first")
 }

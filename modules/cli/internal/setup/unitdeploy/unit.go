@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -111,7 +110,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 		values["MOOX_STORAGE_HOME"] = "./var/storage"
 		values["MOOX_STORAGE_ROLE"] = strings.TrimPrefix(id, "storage-")
 		values["MOOX_STORAGE_CONFIG"] = "config/storage.yaml"
-		values["MOOX_STORAGE_EVENTBUS_URL"] = "tls://" + net.JoinHostPort(manifest.ControlHost().Address, "4222")
+		values["MOOX_STORAGE_EVENTBUS_URL"] = manifest.EventBusURLFor(hostID)
 		if id != "storage-view" {
 			values["MOOX_STORAGE_NODE_AUTH_SECRET"] = identity.StorageNodeSecret
 		}

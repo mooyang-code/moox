@@ -156,7 +156,7 @@ func RunnersToPB(runners []domain.RunnerStatus) []*factorpb.FactorRunnerStatus {
 	for _, runner := range runners {
 		out = append(out, &factorpb.FactorRunnerStatus{
 			TaskId: runner.TaskID, Queued: runner.Queued, Active: runner.Active,
-			WarmupState: runner.WarmupState, WarmSubjects: runner.WarmSubjects, ExpectedSubjects: runner.ExpectedSubjects,
+			WarmupState: runner.WarmupState, WarmSubjects: runner.WarmSubjects, ExpectedSubjects: runner.ExpectedSubjects, Paused: runner.Paused,
 		})
 	}
 	return out
@@ -167,7 +167,7 @@ func RunnersFromPB(runners []*factorpb.FactorRunnerStatus) []domain.RunnerStatus
 	for _, runner := range runners {
 		out = append(out, domain.RunnerStatus{
 			TaskID: runner.GetTaskId(), Queued: runner.GetQueued(), Active: runner.GetActive(),
-			WarmupState: runner.GetWarmupState(), WarmSubjects: runner.GetWarmSubjects(), ExpectedSubjects: runner.GetExpectedSubjects(),
+			WarmupState: runner.GetWarmupState(), WarmSubjects: runner.GetWarmSubjects(), ExpectedSubjects: runner.GetExpectedSubjects(), Paused: runner.GetPaused(),
 		})
 	}
 	return out

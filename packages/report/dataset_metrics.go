@@ -33,6 +33,10 @@ type DatasetExpectation struct {
 	// Name 是数据集给人看的名称（例如策略实例名），Monitor 用它命名该数据集的新鲜度检查；为空时 Monitor 退回 Storage
 	// 里登记的数据集名称或数据集 ID。名称不是数据集身份，可以随时变化。
 	Name string
+	// Paused 表示数据集的生产者被有意停下（例如因子任务暂停）：它不再被期望持续产出，Monitor 对它及其下游的新鲜度检查都跳过。
+	// 暂停项必须随清单一起上报：生产者重启后清单里没有它，Monitor 就看不到“被有意停下”，下游检查会重新告警。
+	// 暂停项不要求 Interval，也不进入 expected。
+	Paused bool
 }
 
 type DatasetObservation struct {
@@ -118,17 +122,31 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 	}
 	next := make(map[DatasetKey]time.Duration, len(items))
 	names := make(map[DatasetKey]string, len(items))
+	paused := make(map[DatasetKey]struct{})
 	for i, item := range items {
 		key, err := canonicalDatasetKey(item.Key)
 		if err != nil {
 			m.inventoryRefreshErrors.Inc()
 			return fmt.Errorf("expected dataset %d: %w", i, err)
 		}
+		if item.Paused {
+			_, live := next[key]
+			if _, exists := paused[key]; exists || live {
+				m.inventoryRefreshErrors.Inc()
+				return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
+			}
+			paused[key] = struct{}{}
+			continue
+		}
 		if item.Interval <= 0 {
 			m.inventoryRefreshErrors.Inc()
 			return fmt.Errorf("expected dataset %d interval must be positive", i)
 		}
 		if _, exists := next[key]; exists {
+			m.inventoryRefreshErrors.Inc()
+			return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
+		}
+		if _, exists := paused[key]; exists {
 			m.inventoryRefreshErrors.Inc()
 			return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
 		}
@@ -147,6 +165,9 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 	for key := range next {
 		known[key] = struct{}{}
 	}
+	for key := range paused {
+		known[key] = struct{}{}
+	}
 	if len(known) > MaxDatasetMetricSeries {
 		m.inventoryRefreshErrors.Inc()
 		return fmt.Errorf("dataset metric series exceed limit %d", MaxDatasetMetricSeries)
@@ -155,6 +176,13 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 		if _, remains := next[key]; remains {
 			continue
 		}
+		values := datasetLabelValues(key)
+		m.enabled.WithLabelValues(values...).Set(0)
+		m.expectedInterval.WithLabelValues(values...).Set(0)
+	}
+	// 暂停项在重启后的第一轮清单里也要有 enabled=0 的序列（上面只覆盖进程里已经认识的数据集），
+	// Monitor 靠它知道这是“被有意停下”而不是“不存在”。
+	for key := range paused {
 		values := datasetLabelValues(key)
 		m.enabled.WithLabelValues(values...).Set(0)
 		m.expectedInterval.WithLabelValues(values...).Set(0)

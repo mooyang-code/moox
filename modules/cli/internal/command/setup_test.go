@@ -232,18 +232,19 @@ func TestIsPublicFirewallIPRejectsPrivateAndLoopbackAddresses(t *testing.T) {
 	require.False(t, isPublicFirewallIP("127.0.0.1"))
 }
 
-func TestSetupRuntimeFirewallRulesIncludeEventBusAndServicePorts(t *testing.T) {
-	rules := setupRuntimeFirewallRules(4333)
-	require.Len(t, rules, 4)
-	assert.Equal(t, "4333", rules[0].Ports)
-	assert.Equal(t, "MooX EventBus TLS", rules[0].Description)
-	assert.Equal(t, "11003", rules[1].Ports)
-	assert.Equal(t, "MooX service gateway native", rules[1].Description)
-	assert.Equal(t, "11012", rules[2].Ports)
-	assert.Equal(t, "MooX SCF Gateway readiness", rules[2].Description)
-	assert.Equal(t, "11409", rules[3].Ports)
-	assert.Equal(t, "MooX SCF Monitor readiness", rules[3].Description)
-	for _, rule := range rules {
+func TestSetupRuntimeFirewallRulesAreServicePortsAndEventBusRuleIsSeparate(t *testing.T) {
+	rules := setupRuntimeFirewallRules()
+	require.Len(t, rules, 3, "EventBus 端口不再属于控制机的运行时规则")
+	assert.Equal(t, "11003", rules[0].Ports)
+	assert.Equal(t, "MooX service gateway native", rules[0].Description)
+	assert.Equal(t, "11012", rules[1].Ports)
+	assert.Equal(t, "MooX SCF Gateway readiness", rules[1].Description)
+	assert.Equal(t, "11409", rules[2].Ports)
+	assert.Equal(t, "MooX SCF Monitor readiness", rules[2].Description)
+	busRule := setupEventBusFirewallRule(4333)
+	assert.Equal(t, "4333", busRule.Ports)
+	assert.Equal(t, "MooX EventBus TLS", busRule.Description)
+	for _, rule := range append(rules, busRule) {
 		assert.Equal(t, "TCP", rule.Protocol)
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
 		assert.Equal(t, "ACCEPT", rule.Action)
@@ -297,10 +298,41 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	targets = setupFirewallTargets(manifest)
 	require.Len(t, targets, 2)
 	assert.Nil(t, ports("compute"))
-	relay := setupRelayFirewallRules(4222)
+	relay := setupRelayFirewallTargets(manifest)
+	require.Len(t, relay, 1, "EventBus 与控制机同机时合并成一个目标")
+	require.Len(t, relay[0].Rules, 2)
+	assert.Equal(t, "11003", relay[0].Rules[0].Ports)
+	assert.Equal(t, "4222", relay[0].Rules[1].Ports)
+}
+
+// EventBus 部署在存储机：4222 只在存储机上放行，控制机不再放行；出站主机接入需要的规则也跟着分到两台主机上。
+func TestSetupFirewallTargetsFollowEventBusPlacement(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "factor": {Address: "192.168.0.103", Reachability: "outbound"}},
+		EventBus:    setupconfig.EventBus{Port: 4222},
+		Deployments: map[string][]string{"control": {"admin", "console-proxy", "web-host"}, "storage": {"storage-primary", "eventbus"}, "factor": {"factor-engine"}},
+	}
+	portsOn := func(targets []setupFirewallTarget, name string) []string {
+		for _, target := range targets {
+			if target.Host.Name == name {
+				var ports []string
+				for _, rule := range target.Rules {
+					ports = append(ports, rule.Ports)
+				}
+				return ports
+			}
+		}
+		return nil
+	}
+	targets := setupFirewallTargets(manifest)
+	assert.NotContains(t, portsOn(targets, "control"), "4222")
+	assert.Contains(t, portsOn(targets, "control"), "11003")
+	assert.Contains(t, portsOn(targets, "storage"), "4222")
+
+	relay := setupRelayFirewallTargets(manifest)
 	require.Len(t, relay, 2)
-	assert.Equal(t, "11003", relay[0].Ports)
-	assert.Equal(t, "4222", relay[1].Ports)
+	assert.Equal(t, []string{"11003"}, portsOn(relay, "control"))
+	assert.Equal(t, []string{"4222"}, portsOn(relay, "storage"))
 }
 
 func TestSetupMetadataImportPassesExplicitHostAndSpaces(t *testing.T) {

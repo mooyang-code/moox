@@ -95,7 +95,9 @@ func externalFixture(t *testing.T, profile string, disabled bool) (externalInsta
 		HostCatalog: map[string]setupconfig.HostDefinition{
 			"control": {Address: "198.51.100.10"}, "storage": {Address: "198.51.100.11"}, "factor": {Address: "192.168.0.103", Reachability: "outbound"},
 		},
-		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary", "access"}, "factor": {"factor-engine", "archive-worker"}},
+		// EventBus 部署在存储机：因子机上的引擎连的是存储机，不是控制机。
+		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary", "access", "eventbus"}, "factor": {"factor-engine", "archive-worker"}},
+		EventBus:    setupconfig.EventBus{Port: 4222},
 	}
 	target := &scriptedSSH{uploads: map[string][]byte{}}
 	control := &exportingControl{scriptedSSH: scriptedSSH{uploads: map[string][]byte{}}, caller: profile}
@@ -149,7 +151,7 @@ func TestDeployExternalInstallsFactorEngineWithCredentialsAndStartsIt(t *testing
 		"--dir /data/moox/factor-engine", "--binary " + stage + "/software/bin/moox-factor-engine",
 		"--health-env " + stage + "/secrets/health-auth.env",
 		"--access-address 198.51.100.11:11004", "--access-id access@storage", "--access-key-id assigned-key-17",
-		"--engine-id factor-engine@factor", "--eventbus-url tls://198.51.100.10:4222",
+		"--engine-id factor-engine@factor", "--eventbus-url tls://198.51.100.11:4222",
 	} {
 		assert.Contains(t, line, want)
 	}

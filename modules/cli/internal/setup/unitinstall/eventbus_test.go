@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func eventBusProjectionFixture(t *testing.T) (string, string, PrepareOptions) {
 	require.NoError(t, err)
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	serverTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: caTemplate.NotBefore, NotAfter: caTemplate.NotAfter, DNSNames: []string{"control.example.test"}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	serverTemplate := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: caTemplate.NotBefore, NotAfter: caTemplate.NotAfter, DNSNames: []string{"control.example.test"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
 	require.NoError(t, err)
 	keyDER, err := x509.MarshalECPrivateKey(serverKey)
@@ -132,5 +133,45 @@ func TestStorageEventBusProjectionUsesRoleCredentialWithoutAppConfig(t *testing.
 		require.Equal(t, options.EventBusURL, values["MOOX_STORAGE_EVENTBUS_URL"])
 		require.FileExists(t, filepath.Join(destination, id, "secrets/eventbus/metrics-publisher.yaml"))
 		require.NoFileExists(t, filepath.Join(destination, id, "secrets/eventbus/server-key.pem"))
+	}
+}
+
+// EventBus 与客户端同机时，本机客户端连回环地址；broker 宣告给远端客户端的必须仍是对外地址，
+// 不能把 127.0.0.1 宣告出去，也不能宣告证书不覆盖的地址。
+func TestEventBusBrokerAdvertisesPublicAddressWhileSameHostClientsUseLoopback(t *testing.T) {
+	_, destination, options := eventBusProjectionFixture(t)
+	options.EventBusURL = "tls://127.0.0.1:4222"
+	options.EventBusAdvertise = "tls://control.example.test:4222"
+	root, err := fsutil.OpenPhysicalRoot(destination, true)
+	require.NoError(t, err)
+	defer root.Close()
+	require.NoError(t, projectEventBus(root, &options, []string{"eventbus"}, destination))
+	raw, err := os.ReadFile(filepath.Join(destination, "eventbus/config/app.yaml"))
+	require.NoError(t, err)
+	document, err := yamlDocument(raw)
+	require.NoError(t, err)
+	require.Equal(t, "control.example.test:4222", member(member(document, "broker"), "client_advertise").Value)
+	credential, err := jetstream.LoadCredentialFile(filepath.Join(destination, "eventbus/secrets/eventbus/internal-admin.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"tls://127.0.0.1:4222"}, credential.URLs)
+}
+
+func TestEventBusAdvertiseRefusesLoopbackAndUncoveredAddresses(t *testing.T) {
+	for name, advertise := range map[string]string{
+		"loopback":    "tls://127.0.0.1:4222",
+		"uncovered":   "tls://other.example.test:4222",
+		"plaintext":   "nats://control.example.test:4222",
+		"wrong-port":  "tls://control.example.test:4333",
+		"with-a-path": "tls://control.example.test:4222/x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, destination, options := eventBusProjectionFixture(t)
+			options.EventBusURL = "tls://127.0.0.1:4222"
+			options.EventBusAdvertise = advertise
+			root, err := fsutil.OpenPhysicalRoot(destination, true)
+			require.NoError(t, err)
+			defer root.Close()
+			require.Error(t, projectEventBus(root, &options, []string{"eventbus"}, destination))
+		})
 	}
 }

@@ -132,6 +132,26 @@ func TestPauseStopsAtFailureAndWarnsOnLingeringWork(t *testing.T) {
 	require.Equal(t, []string{Strategy, Trade}, result.Paused, "已暂停的保持暂停，不回滚")
 }
 
+// 策略的在途操作（目标还没发布到 EventBus）没结束：停在策略这一步，Trade 及更上游都不暂停；
+// 策略自己已经暂停（门禁关闭），目标发完后重新执行即可。
+func TestPauseStopsAtStrategyWhenItsTargetsAreNotPublished(t *testing.T) {
+	f := newFixture(t, all...)
+	f.apis[Strategy].pauseErr = errors.New("已暂停，但在途操作没有结束：还有 2 个目标没有发布到 EventBus")
+	result, err := f.o.Pause(context.Background(), "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "暂停 strategy")
+	require.Equal(t, []string{Strategy}, result.Paused)
+	require.Equal(t, []string{"strategy:pause"}, f.log.snapshot(), "Trade、因子引擎、采集都不能在策略的目标发完之前暂停")
+	snap, _ := f.apis[Strategy].Status(context.Background())
+	require.Equal(t, lifecycle.StagePaused, snap.Self.Stage)
+
+	// 目标发完后重新执行：幂等，继续往上游暂停。
+	f.apis[Strategy].pauseErr = nil
+	result, err = f.o.Pause(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, []string{Strategy, Trade, FactorEngine, Collector}, result.Paused)
+}
+
 // 恢复：上游追平后才启动下游；所有模块追平前谁也不放行；放行顺序上游到下游、Trade 先于策略。
 func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	f := newFixture(t, all...)

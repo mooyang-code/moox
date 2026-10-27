@@ -123,6 +123,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	presenceSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate))
 	presenceScannerSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate))
 	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
+	// 观测输入（EventBus 上的主机快照与服务指标）中断或刚恢复时，所有 last_seen 都是旧的：冻结主机失联判定，只由"观测输入中断"这一条告警说明。
+	observation := func(now time.Time) observationState { return runtime.observationState(cfg.Observability.Enabled, now) }
+	hostSilence.SetSuspended(func(now time.Time) bool { return observation(now).Suspended })
 
 	var hostStore *hostmetrics.Store
 	var hostReader *hostmetrics.StorageReader
@@ -253,7 +256,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		MarketFetchThresholds:      marketFetchThresholds,
 		Inventory:                  inventorySource(klineInventory),
-	}, runtime.Repositories, resultHook, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
+	}, runtime.Repositories, resultHook, observation, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
 		if marketCanary != nil {

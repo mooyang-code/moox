@@ -689,3 +689,18 @@ func TestHandleCommitFailureThenExpiryOnRedelivery(t *testing.T) {
 		t.Fatal("过期周期不应产生 ok 决策")
 	}
 }
+
+// WaitIdle 等正在处理的事件结束：处理中被 ctx 截断，处理完立即返回。
+func TestHandlerWaitIdleWaitsForInFlightEvent(t *testing.T) {
+	h := &Handler{}
+	h.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := h.WaitIdle(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("处理中应等到超时：%v", err)
+	}
+	h.mu.Unlock()
+	if err := h.WaitIdle(context.Background()); err != nil {
+		t.Fatalf("空闲时应立即返回：%v", err)
+	}
+}

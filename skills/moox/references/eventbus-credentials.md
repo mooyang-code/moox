@@ -10,8 +10,8 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 
 出现任一情况时先读本文，再发布或宣称完成：
 
-- `eventbus-credentials ensure|export|rotate`
-- EventBus 公网 IP / SAN 变化
+- `eventbus-credentials ensure|export|export-clients|rotate|rotate-tls`
+- EventBus 公网 IP / SAN 变化，或 EventBus 换了主机（例如从控制机搬到存储机）
 - 日志出现 `Authorization Violation`、`certificate signature failure`、`certificate verify failed`
 - EventBus `:4222` 对单一客户端 IP 堆积 `FIN-WAIT-2`，或 Host Agent 因 NATS 失败反复退出
 
@@ -24,11 +24,18 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 
 `rotate --credential <role> --confirm` 会**立刻作废旧 token**。TLS CA 变化时所有客户端的 CA 都必须换。
 
+`rotate-tls --confirm` 按部署记录里 EventBus 当前所在主机的地址，重新生成 CA 与服务端证书（角色令牌不变）。EventBus 的 TLS 身份绑定它的地址（CA 记录里的 `nats_url`），
+换主机之后 `ensure`、`export`、`export-clients` 都会拒绝旧身份，必须先 `rotate-tls`。CA 私钥签完即丢弃，所以只能连 CA 一起换，所有客户端与 EventBus 单元随之重新部署。
+broker 的证书、私钥和用户表只随 `eventbus` 单元下发（`export-clients --server`）。
+
+连接地址：客户端与 EventBus 同机连 `tls://127.0.0.1:4222`，否则连 EventBus 所在主机的对外地址；证书同时覆盖两者。
+
 ## 副本清单（漏一项即未完成）
 
 | 程序 | 副本位置 | 同步方式 |
 |---|---|---|
-| EventBus 与 control 上的服务 | control 各组件发布目录的 `secrets/eventbus/` | `setup bootstrap --stage control --release <版本>` |
+| EventBus 自己 | `eventbus` 单元发布目录的 `eventbus/secrets/eventbus/`（含服务端证书、私钥、用户表） | `setup deploy-unit --profile eventbus --release <版本>` |
+| control 上的服务 | control 各组件发布目录的 `secrets/eventbus/` | `setup bootstrap --stage control --release <版本>` |
 | 每台主机的 Host Agent | `host` 单元发布目录的 `host-agent/config/eventbus.yaml` | 每台主机 `setup deploy-host --release <版本>` |
 | Storage / Trade 等业务单元 | 该单元发布目录的 `<组件>/secrets/eventbus/` | `setup deploy-unit --profile <单元> --release <版本>` |
 | Collector SCF / CloudFunction worker SCF | 函数环境 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64` | **重新发布 SCF 包**；禁止 `MOOX_EVENTBUS_NATS_TLS_CA_FILE` |
@@ -51,7 +58,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 ## 轮换时的强制顺序
 
 1. `rotate` 后立刻 `export`。比较新 CA 的 SHA-256，不要打印 PEM 或 token。
-2. 用 `setup release build` 构建一个版本，先装 control（含 EventBus），确认 control 上的客户端先恢复。
+2. 用 `setup release build` 构建一个版本，先装 EventBus 单元（`setup deploy-unit --profile eventbus`），再装 control，确认 control 上的客户端恢复。
 3. 对 **moox.toml 里每一台主机** 安装 `host` 单元，再安装各业务单元。
 4. 重新发布 SCF，重启外置因子引擎。
 5. 验收全部通过后，才删除本机临时 `0600` 导出文件。

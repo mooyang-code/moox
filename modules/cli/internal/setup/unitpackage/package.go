@@ -83,8 +83,10 @@ type unitComponentSpec struct {
 }
 
 var unitProfiles = map[string][]string{
-	"host":         {"host-gateway", "host-agent"},
-	"control":      {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"},
+	"host":    {"host-gateway", "host-agent"},
+	"control": {"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"},
+	// EventBus 是独立单元：由 [deployments] 决定装在哪台主机（与 Storage 同机最省跨机流量），不再属于控制单元。
+	"eventbus":     {"eventbus"},
 	"storage":      {"storage-primary", "storage-node", "storage-view"},
 	"access":       {"access"},
 	"egress-proxy": {"egress-proxy"},
