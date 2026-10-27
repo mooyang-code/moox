@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v17（2026-10-27），未编码。v17：按 Codex 复审落实三处代码衔接——`write_owner` 检查放在有调用方身份的 Catalog 层、单模板要改的三处旧拓扑校验、重采样触发器入参换新事件类型。v16：按 Codex 全文审查修正 `write_owner` 经 `CreateDataset` 绕过、单一消费模板的启动与路由发现、重采样归入 `ledger` 并换装其触发消费者。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v18（2026-10-27），未编码。v18：按用户决定删除 `write_owner`，写入权限只靠网关 ACL（读写分开、写方法按实际调用放行），不再统一 AppId（3.1）。v17：按 Codex 复审落实三处代码衔接——`write_owner` 检查放在有调用方身份的 Catalog 层、单模板要改的三处旧拓扑校验、重采样触发器入参换新事件类型。v16：按 Codex 全文审查修正 `write_owner` 经 `CreateDataset` 绕过、单一消费模板的启动与路由发现、重采样归入 `ledger` 并换装其触发消费者。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -11,7 +11,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 ## 0. 原则
 
 1. **Storage 只提供通用能力**：空间、数据集、行、周期、视图、事件。它不认识因子、采集、K 线、某个市场或某个数据集。
-2. **权限只看「写入方」**：数据集声明 `write_owner`（允许写入的 AppId 列表），写入、周期报告、清空与恢复只校验调用方是否在其中。
+2. **写入权限只在网关**：哪个模块能调哪些写方法，由服务目录的网关 ACL 决定；Storage 不再判断「谁能写哪个数据集」。
 3. **业务语义由业务模块定义和解释**：Storage 对业务数据只透传（不透明的字节或属性），不做校验、不做分支。
 4. **同一能力一套接口**：幂等写入一套，周期完成一套，就绪事件一套。
 5. **业务模块自己维护自己的资源**：默认 View、列、属性由创建数据集的模块通过 Metadata 接口维护，Storage 不替任何模块「托管」。
@@ -94,18 +94,16 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 ## 3. 方案
 
-### 3.1 写入方（编码第 1 步）
+### 3.1 写入权限只靠网关 ACL（编码第 1 步）
 
-- 数据集属性 `write_owner`：允许写入的 AppId 列表（逗号分隔），精确匹配、没有别名。所有写入类接口只看它：`UpsertFields`、`RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`、周期完成报告、`DeleteDatasetRows`、`RestoreDatasetRows`、`DeleteDataset`。读取不受限制。
-- `write_owner` 为空的数据集不限制写入方（操作员手工建的数据集多半如此）；声明了就只许列出的身份写。
-- 操作员身份（`moox-cli`、`console`）是唯一的超级用户，不受 `write_owner` 限制（导入、手工修数据）。
-- **每个模块只用一个 AppId**：`factor`、`collector`、`monitor`（因子引擎与 factor-mgr 共用 `factor`，Collector 与 collector-stream 共用 `collector`）。代码与配置里 `moox-factor`、`moox-collector` 的写法统一改掉（含 `catalog/metadata_catalog.go:20` 写死的 `moox-factor`、采集源配置 `collector/configs/sources/market/*.yaml` 与 SCF 专用的 `collector/configs/scf/**/sources/market/*.yaml` 里的 AppId、`packages/cloudprovider/tencent/scf_environment.go:151` 对 `moox-collector` 的校验、`packages/servicecatalog/catalog.yaml` 中相关说明）；删除 `isFactorAppID`、`isOwnedAppID` 的别名规则。
-- 业务模块建数据集时就写上自己的 `write_owner`：factor-mgr 建因子结果数据集写 `factor`；Collector 建采集与重采样数据集写 `collector`；Monitor 的系统数据集由 `config/setup/metadata.yaml` 写 `monitor`。全新部署，不存在要补属性的旧数据集。
-- 只读身份（如 `scf-market-canary`）不在任何数据集的 `write_owner` 里：凡是声明了 `write_owner` 的数据集（由服务写入的数据集都会声明）它都写不了；没有声明的数据集对它和其他身份一样开放。删除写死的名字。
-- 删除 `collectorWritableDataset`、`factorOwnedResult`、`datasetRowsOwner` 与标记接口里按 `owner_module` / `dataset_role` 的分支。
+用户决定（2026-10-27）：删除数据集级的写入权限（原方案的 `write_owner`），写入权限只靠网关 ACL。
+
+- **Storage 内不再有按调用方的写入判断**。删除：`validateDatasetWriteOwner`、`factorOwnedResult`、`collectorWritableDataset`、`datasetRowsOwner`（`primarystore/service.go:222` 起）；周期账本只许采集身份与 `raw_collection` 的检查（`primarystore/period.go:150`、`:193`）；完成标记按身份与数据集角色的检查（`primarystore/marker.go:24`、`:52`、`:157`、`:240`）；清空与恢复按因子、采集分别授权（`primarystore/dataset_admin.go:109`）；删除数据集按写死的 `moox-factor` 与采集分别授权（`catalog/metadata_catalog.go:20`、`:209`～`:260`）；写死拒绝 `scf-market-canary` 的两处（`primarystore/service.go:135`、`period.go:151`，代码与配置里已无这个身份）；别名规则 `isFactorAppID`、`isOwnedAppID`。
+- 请求体里的 AppId 只用于服务签名（各服务的共享密钥 HMAC）与日志，不参与授权；因此不必统一各模块的 AppId 写法，`moox-factor`、`moox-collector` 照旧可用。只用于运维的入口（DataNode 登记、手工重建等，见 `metadata_data_node.go:40`、`metadata_space_view.go:215`）的身份校验不变，它们不是数据集写入权限。
+- **网关 ACL 按实际调用收紧**（`packages/servicecatalog/catalog.yaml`）：现在 Metadata 服务把 `CreateDataset`、`UpdateDataset`、`DeleteDataset`、`UpsertTag` 等写方法与读方法放在同一条规则里，一起放行给 collector、factor-mgr、monitor、strategy、storage-view（`catalog.yaml:1431` 一带）。改为读、写分开：读方法照旧；写方法（Metadata 的建、改、删，PrimaryStore 的 `UpsertFields`、`RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`、周期报告、`DeleteDatasetRows`、`RestoreDatasetRows`）只放行编码时按调用点核对出的模块。只读的 strategy、storage-view 不放行任何写方法（storage-view 的索引回报走自己的专用接口）。运维身份（`moox-cli`、`console`）照旧。
+- 已知取舍：同一个写入方能写所有数据集，模块因 bug 写错数据集 ID 时 Storage 不拦。单用户、自己维护的几个模块之间可以接受。
 - `data_source_id` 对所有数据集都可选，填写时校验引用存在；创建、激活、保存三处（`metadata_catalog.go:130`、`activation.go:182`、`crud_dataset.go:440`）一起改，结果一致。
-- 删除 `dataset_attributes.go` 的不可变约束与 `crud_dataset.go:211` 对因子结果 `write_owner` 的判断。`write_owner` 只允许当前 `write_owner` 中的调用方或操作员修改（为空时任何身份都可以设置）；`CreateDataset` 遇到同 ID 会转为更新（`crud_dataset.go:20`），所以两个 RPC 入口在 Catalog 层（`metadata_catalog.go:152` 一带，那里有调用方身份）共用同一个检查函数：读出已有数据集，`write_owner` 有变化时按调用方身份判定，两个入口都不能绕过；其余业务属性由业务模块自己维护，Storage 不读取。
-- 已知限制（不处理）：AppId 是请求体自报、用主库共享密钥签名，`write_owner` 只能防误写、不能防伪造。单用户系统可以接受。
+- 删除 `dataset_attributes.go` 的不可变约束与 `crud_dataset.go:211` 对因子结果的判断：数据集属性全部由业务模块自己维护，Storage 不读取、不锁定。
 
 ### 3.2 写入方的数据规范与保留策略（编码第 1 步）
 
@@ -228,13 +226,13 @@ attributes:
 
 | 步 | 内容 | 涉及模块 |
 |---|---|---|
-| 1 | 写入方 `write_owner`（3.1）；写入方数据规范、保留策略、死代码（3.2） | Storage、因子引擎、factor-mgr、Collector、collector-stream、Monitor 种子、`packages/storagepolicy`、CLI、部署配置 |
+| 1 | 写入权限只靠网关 ACL（3.1）；写入方数据规范、保留策略、死代码（3.2） | Storage、服务目录（网关 ACL）、Collector（A 股 `series_tag`）、`packages/storagepolicy`、CLI、部署配置 |
 | 2 | 元数据校验与列契约、列来源改名（3.3） | Storage、factor-mgr、Archive、CLI、Web |
 | 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、单一消费模板（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置、Admin（EventBus 权限生成里 Storage、Factor、Strategy 的主题与消费者）及其测试 |
 | 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode、缓存、种子初始化）、`packages/seriesset`、Collector、Strategy、Monitor、CLI、Web、种子 |
 
-理由：第 1 步把"谁能写"从业务角色收敛到 `write_owner`，后面几步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件；第 5 步与前四步互不依赖，放在最后做，也可以在第 1 步之后任意时间做。
+理由：第 1 步把"谁能写"整个交给网关，Storage 里按业务角色的权限分支一次删光，后面几步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件；第 5 步与前四步互不依赖，放在最后做，也可以在第 1 步之后任意时间做。
 
 ### 4.2 一次性全新部署
 
@@ -254,20 +252,19 @@ attributes:
 
 | 模块 | 第 1 步 | 第 2 步 | 第 3 步 | 第 4 步 |
 |---|---|---|---|---|
-| factor-mgr | AppId 统一为 `factor`；建结果数据集写 `write_owner = factor` | 建列时自己保证因子列契约与显示名；列来源用 `CUSTOM` | Metadata 客户端补 View 的建、改、删；自己建、改、删默认 View（`follow_dataset_columns = true`、`rebuild_source = primary`、`maintenance_priority = 10`）；删除数据集按 3.4 的顺序 | 定义 `PeriodDetail` |
-| 因子引擎 | AppId 统一为 `factor` | — | — | 报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`，按绑定的源数据集与频率筛选，两种来源都接受 |
-| Collector / collector-stream | AppId 统一为 `collector`；建数据集写 `write_owner = collector`；A 股写入自己填 `series_tag` | — | 浏览 View 设置 `maintenance_priority = 0` | 重采样仍走账本（`ledger`）；重采样触发消费者改订阅 `DatasetPeriodCompleted`；删除无调用方的 `ReportCollectorPeriodCompleted` 客户端 |
+| factor-mgr | — | 建列时自己保证因子列契约与显示名；列来源用 `CUSTOM` | Metadata 客户端补 View 的建、改、删；自己建、改、删默认 View（`follow_dataset_columns = true`、`rebuild_source = primary`、`maintenance_priority = 10`）；删除数据集按 3.4 的顺序 | 定义 `PeriodDetail` |
+| 因子引擎 | — | — | — | 报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`，按绑定的源数据集与频率筛选，两种来源都接受 |
+| Collector / collector-stream | A 股写入自己填 `series_tag` | — | 浏览 View 设置 `maintenance_priority = 0` | 重采样仍走账本（`ledger`）；重采样触发消费者改订阅 `DatasetPeriodCompleted`；删除无调用方的 `ReportCollectorPeriodCompleted` 客户端 |
 | Strategy | — | — | — | 订阅 `ViewDataReady` v2；按绑定的 View 与数据集判断相关性，不再按 `completion_kind`；因子明细从 `detail` 解码 |
-| Monitor | 写入用 `monitor`；`metadata.yaml` 中系统数据集写 `write_owner: monitor` | — | — | — |
 | packages / CLI / Web | `storagepolicy` 去掉市场与 `mooxsys` 豁免；CLI `setup retention` 不再估算根数 | CLI、Web 改为 `FIELD / CUSTOM / SYSTEM` | `events` 的 View durable 改名 | `events` 换注册表、删因子校验；`storagepb` 同步 |
 | 部署配置 | `moox.toml` 补各市场与 `mooxsys` 保留期 | — | View 消费配置只剩并发项 | EventBus 流主题 |
-| 服务目录 | — | — | — | PrimaryStore 方法改名与删除；外部身份白名单同步 |
+| 服务目录 | 网关 ACL 读写分开、写方法按实际调用放行 | — | — | PrimaryStore 方法改名与删除；外部身份白名单同步 |
 
 第 5 步对上层模块的改动见 3.6 末尾的「表结构与上层」。
 
 ## 5. 测试
 
-- 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；非所有者经 `CreateDataset` 同 ID 改 `write_owner` 被拒；保留期从部署配置读取。
+- 第 1 步：Storage 内不再有按调用方的写入判断（任何通过网关的写入方都能写任意数据集，包括数据行、周期账本、标记、清空与恢复、删除数据集）；网关对只读模块（strategy、storage-view）拒绝所有写方法，对各写入方只放行它实际调用的写方法，全链路（采集、重采样、因子、Monitor 系统数据、CLI 导入与运维）都不被误拦；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
 - 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；没有静态路由时 Storage 能启动，活动 View 引用的每个数据集都建出 durable，消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
 - 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；源 K 线周期完成（`ledger`）触发重采样、重采样结果周期完成（`ledger`）→ 因子计算（`producer`）→ Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
@@ -276,7 +273,7 @@ attributes:
 
 ## 6. 待确认
 
-- **`write_owner` 是否改用网关验证过的身份**：单用户系统不需要防伪造，不做。
+- 无。
 
 ## 7. 审查记录
 
@@ -379,3 +376,7 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 重采样消费者接口与 `PeriodTrigger.OnPeriod` 入参仍是旧事件类型 | 第 4 步写明入参与字段读取一起改 |
 
 重采样归入 `ledger` 及 4.3、第 5 节的对应改动已确认一致。
+
+### v18（用户决定，2026-10-27）
+
+删除数据集级写入权限 `write_owner`：网关 ACL 已经按方法限制谁能写，`write_owner` 只多防"写入方之间写错数据集"，单用户系统不值得一套数据集级权限。3.1 改为删除 Storage 内全部按调用方的写入判断、收紧网关 ACL（读写分开）；AppId 不再参与授权，不必统一写法。v16、v17 关于 `write_owner` 检查位置的处理随之作废。
