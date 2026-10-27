@@ -348,6 +348,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
+	markPausedRunners(status.Runners, r.life)
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
 			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,

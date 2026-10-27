@@ -13,8 +13,9 @@ import (
 )
 
 type fakeEngineView struct {
-	sets []domain.EngineTask
-	runs []domain.TaskRunSummary
+	sets    []domain.EngineTask
+	runs    []domain.TaskRunSummary
+	runners []domain.RunnerStatus
 }
 
 func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []domain.EngineTask, error) {
@@ -22,7 +23,7 @@ func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []doma
 }
 
 func (f *fakeEngineView) Engine(context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {
-	return domain.EngineInfo{}, domain.EngineStatus{RecentRuns: f.runs}, true, nil
+	return domain.EngineInfo{}, domain.EngineStatus{RecentRuns: f.runs, Runners: f.runners}, true, nil
 }
 
 func TestFactorDatasetObserverReportsEngineRuns(t *testing.T) {
@@ -188,4 +189,62 @@ func TestDatasetResultClassifiesRunsThatAreIncompleteOnlyBecauseDataIsAccumulati
 
 	require.Equal(t, "error", datasetResult(domain.TaskRunSummary{LastStatus: "failed", WarmingSubjects: 3}))
 	require.Equal(t, "success", datasetResult(domain.TaskRunSummary{LastStatus: "complete"}))
+}
+
+// 暂停的任务不再被期望持续产出：数据集的 enabled 变 0（Monitor 据此跳过它与它下游的新鲜度检查），暂停前的最后一期也不再上报；
+// 恢复后重新进入期望清单。
+func TestFactorDatasetObserverStopsExpectingPausedTasks(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	period := time.Date(2026, 10, 27, 6, 0, 0, 0, time.UTC)
+	task := func(id, dataset string) domain.EngineTask {
+		return domain.EngineTask{Set: domain.FactorTask{TaskID: id, SpaceID: "crypto", ResultDatasetID: dataset, Freq: "1m"}, ResultReady: true}
+	}
+	engine := &fakeEngineView{
+		sets: []domain.EngineTask{task("spot", "dataset_factor_spot"), task("swap", "dataset_factor_swap")},
+		runs: []domain.TaskRunSummary{
+			{TaskID: "spot", LastPeriodTime: period.Unix(), LastStatus: "complete"},
+			{TaskID: "swap", LastPeriodTime: period.Unix(), LastStatus: "complete"},
+		},
+	}
+	observer := newFactorDatasetObserver(engine, datasets)
+	observer.now = func() time.Time { return period.Add(time.Minute) }
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 1)
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_swap", 1)
+
+	// spot 被暂停：它的数据集 enabled 为 0，swap 不受影响。
+	engine.runners = []domain.RunnerStatus{{TaskID: "spot", Paused: true}, {TaskID: "swap"}}
+	engine.runs = []domain.TaskRunSummary{
+		{TaskID: "spot", LastPeriodTime: period.Add(time.Minute).Unix(), LastStatus: "complete"},
+		{TaskID: "swap", LastPeriodTime: period.Add(time.Minute).Unix(), LastStatus: "complete"},
+	}
+	observer.now = func() time.Time { return period.Add(2 * time.Minute) }
+	require.NoError(t, observer.observe(context.Background()), "暂停任务的运行摘要不能让清单刷新失败")
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 0)
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_swap", 1)
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot", float64(period.Unix()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_swap", float64(period.Add(time.Minute).Unix()))
+
+	// 恢复：回到期望清单。
+	engine.runners = []domain.RunnerStatus{{TaskID: "spot"}, {TaskID: "swap"}}
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 1)
+}
+
+// 管理端重启后第一轮清单里，暂停的任务也要有 enabled=0 的序列（而不是没有序列）：
+// Monitor 靠它分辨“被有意停下”和“从没有过”，下游 View 检查才不会重新告警。
+func TestFactorDatasetObserverReportsPausedTasksAfterARestart(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	engine := &fakeEngineView{
+		sets:    []domain.EngineTask{{Set: domain.FactorTask{TaskID: "spot", SpaceID: "crypto", ResultDatasetID: "dataset_factor_spot", Freq: "1m"}, ResultReady: true}},
+		runners: []domain.RunnerStatus{{TaskID: "spot", Paused: true}},
+	}
+	observer := newFactorDatasetObserver(engine, datasets)
+	observer.now = time.Now
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 0)
 }

@@ -305,6 +305,9 @@ message FactorRunnerStatus {
   string warmup_state = 4; // warming | ready
   int32 warm_subjects = 5;
   int32 expected_subjects = 6;
+  // paused 表示任务被有意停下（暂停：手动、系统或自动）；恢复追赶中与故障不算。
+  // 管理端据此不再把它的结果数据集当作应当持续产出的数据，Monitor 也就不对暂停的任务做新鲜度检查。
+  bool paused = 7;
 }
 
 // EngineInfo describes the compute engine as last seen by moox-factor-mgr.

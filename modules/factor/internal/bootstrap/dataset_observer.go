@@ -84,6 +84,17 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		o.metrics.ObserveInventoryRefreshError()
 		return fmt.Errorf("load factor tasks: %w", err)
 	}
+	// 引擎上报的暂停任务：结果数据集不再被期望持续产出，Monitor 对它的新鲜度检查（计算、写入、视图）一并跳过。
+	// 读不到引擎状态时不当作暂停，沿用原来的期望清单。
+	_, status, engineKnown, engineErr := o.engine.Engine(ctx)
+	paused := make(map[string]bool)
+	if engineErr == nil && engineKnown {
+		for _, runner := range status.Runners {
+			if runner.Paused {
+				paused[runner.TaskID] = true
+			}
+		}
+	}
 	keys := make(map[string]report.DatasetKey, len(sets))
 	expected := make([]report.DatasetExpectation, 0, len(sets))
 	for _, set := range sets {
@@ -96,14 +107,13 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 		key := report.DatasetKey{SpaceID: set.Set.SpaceID, DatasetID: set.Set.ResultDatasetID, Freq: set.Set.Freq}
 		keys[set.Set.TaskID] = key
-		expected = append(expected, report.DatasetExpectation{Key: key, Interval: interval})
+		expected = append(expected, report.DatasetExpectation{Key: key, Interval: interval, Paused: paused[set.Set.TaskID]})
 	}
 	if err := o.metrics.ReplaceExpected(expected); err != nil {
 		return fmt.Errorf("replace expected factor datasets: %w", err)
 	}
-	_, status, ok, err := o.engine.Engine(ctx)
-	if err != nil || !ok {
-		return err
+	if engineErr != nil || !engineKnown {
+		return engineErr
 	}
 	if o.blocked != nil {
 		for _, item := range status.Watermarks {
@@ -121,7 +131,8 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	finishedAt := o.now().UTC()
 	for _, run := range status.RecentRuns {
 		key, expected := keys[run.TaskID]
-		if !expected || run.LastPeriodTime <= 0 {
+		// 暂停的任务不在期望清单里（ObserveRun 要求数据集在期望清单里），它暂停前的最后一期不再上报。
+		if !expected || paused[run.TaskID] || run.LastPeriodTime <= 0 {
 			continue
 		}
 		// 到达时间用引擎写完这一期的时刻（补算补齐时是补齐的时刻）；引擎没有给出时（重启前的期次）退回观测时刻。

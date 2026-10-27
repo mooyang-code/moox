@@ -88,3 +88,31 @@ func TestPrepareSetSkipsWhenAlreadyPrepared(t *testing.T) {
 	require.Len(t, fake.prepared, 1)
 	require.Error(t, r.preload.PrepareSet(context.Background(), "missing"))
 }
+
+// 心跳里的任务暂停标记：手动暂停的任务标为暂停，运行中的不标；没有生命周期控制器时都不标。
+func TestMarkPausedRunnersFollowsTaskLifecycle(t *testing.T) {
+	ctx := context.Background()
+	r, _ := newLifecycleRuntime(t)
+	ref := setRef("ftask_a")
+	for _, cmd := range []lifecycle.Command{lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm} {
+		_, err := r.life.Command(ctx, cmd, ref)
+		require.NoError(t, err)
+	}
+	runners := []domain.RunnerStatus{{TaskID: "ftask_a"}}
+	markPausedRunners(runners, r.life)
+	require.False(t, runners[0].Paused, "运行中的任务不是暂停")
+
+	_, err := r.life.Command(ctx, lifecycle.CmdPause, ref)
+	require.NoError(t, err)
+	markPausedRunners(runners, r.life)
+	require.True(t, runners[0].Paused)
+
+	_, err = r.life.Command(ctx, lifecycle.CmdResume, ref)
+	require.NoError(t, err)
+	markPausedRunners(runners, r.life)
+	require.False(t, runners[0].Paused, "恢复追赶中不算暂停")
+
+	other := []domain.RunnerStatus{{TaskID: "ftask_a", Paused: true}}
+	markPausedRunners(other, nil)
+	require.True(t, other[0].Paused, "没有控制器时不改动")
+}
