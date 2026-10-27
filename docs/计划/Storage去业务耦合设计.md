@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v11（2026-10-27），未编码。v11 按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10 按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v12（2026-10-27），未编码。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：v11 按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10 按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -75,6 +75,23 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 | `primarystore/service.go` `normalizeStockCNSeriesTags` | 写死 `stockcn` 空间与 `dataset_stockcn_equity_kline_1m`，把空 `series_tag` 改写成 `default` |
 | `packages/storagepolicy/policy.go:183`、`:245`、`:264` | 内置 stockcn、stockhk、stockus、`mooxsys` 的默认保留期，`mooxsys` 有专门豁免，并按每天交易分钟数估算根数参与校验；CLI `setup_retention.go:61` 用这个估算给出校验与提示 |
 
+### 2.6 标的、标签与数据来源目录
+
+| 位置 | 现在 | 问题 |
+|---|---|---|
+| `Tag`（`metadata.proto:167`、`schema/metadata.sql:285`）、`metadata/sqlite/crud_tag.go:30`、`:154` | 标签带 `source`、`market_type`（创建后不可改，取值写死为 `spot / swap / equity / etf / index / convertible_bond`）；带 `cron`、`timezone`、`last_run_at`、`last_status`、`last_error`；创建标签时按数据来源属性 `subject_listing` 校验来源 | 标签是"一组标的"，却装着采集的标的同步任务（何时跑、跑的结果、从哪个行情源拉什么品种） |
+| `ReportTagRunFailure`、`ApplyTagSnapshot` 的 `run_at` | 采集的标的同步任务向 Storage 报告运行结果 | 采集任务的运行状态存在 Storage |
+| `Subject`（`metadata.proto:199`、`schema/metadata.sql:252`） | 固定字段 `subject_type`（注释举例 stock、crypto_pair）、`market`、`currency`；`ListSubjects` 按 `market` 过滤 | 金融市场的概念成了 Storage 元数据的固定字段 |
+| `DataSource`（`metadata.proto:141`、`schema/metadata.sql:221`～`:236`） | `kind` 的取值写死在 `CHECK`（exchange、vendor_api 等）；`market`；`config_json` 是"来源连接和采集配置" | 采集的连接配置存在 Storage |
+
+### 2.7 周期账本的序列身份
+
+| 位置 | 现在 | 问题 |
+|---|---|---|
+| `data_node.proto:31` `SeriesSnapshotEntry`、`packages/seriesset`、`datanode/period.go:26` | 登记序列快照时，每条序列的身份是 `provider`、`source_id`、`market_type`、`subject_id`、`series_tag` 五项，Storage 用五项重算 `series_hash` | 行的身份只有标的、频率、时间、`series_tag`；行情源、来源、品种是采集内部的维度，Storage 并不用它们定位行 |
+
+另外复查过、不改的：`observability/view_subject_tracker.go:25` 的"标的落后容忍 5 分钟"注释写着与 Monitor 的 K 线规则对齐，但它本身是"落后一根之外再多 5 分钟"的通用阈值，只把注释改成通用表述；代码注释里提到 Collector、Monitor 等调用方的地方不算耦合。
+
 ## 3. 方案
 
 ### 3.1 写入方（编码第 1 步）
@@ -112,7 +129,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - **系统边界：新列在 View 扩展完成之前的值不进 View**（用户决定，2026-10-27）。数据集加列后，View 的扩展在维护循环里异步完成，通常几秒到几十秒。这段时间里到达的行事件按 View 当前的列投影应用，新列直接裁掉，与 View 处理任何不在投影里的列一样；扩展完成后的事件才带上新列。被裁掉的那几期，新列在 View 里永远为空，不补数，主库（Pebble）里的值不受影响。对因子来说，就是新成员在 View 里晚生效一两期，策略在这几期读到空值。需要这几期的值时，扩展完成后对那几期执行 `recalc`，重写的行会带上新列。
 - **重建方式单独声明**：View 属性 `rebuild_source`：`active_then_primary`（默认，先复制活动索引再从主库补）或 `primary`（不复制活动索引、只从主库历史重建，主库没有数据时允许先空着）。`build.go` 按这个属性选分支，factor-mgr 为默认 View 设置 `primary`。
 - **维护顺序由 View 声明**：View 属性 `maintenance_priority`（整数，越小越先，默认 50）取代 `maintenance.go:621` 按 `view_role` 的排序；Collector 的浏览 View 设 0，factor-mgr 的默认 View 设 10。
-- **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `storage_view_<数据集哈希>`，名字里不带业务。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
+- **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `view_<数据集哈希>`，名字里不带业务；EventBus 权限里按前缀放行的规则同步改为 `view_`。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
 
 ### 3.5 周期完成统一（编码第 4 步）
 
@@ -143,6 +160,16 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - 因子把每个因子的状态（现在的 `FactorPeriodState`）放进 `detail`，`detail_type = moox.factor.PeriodDetail.v1`；`PeriodDetail` 定义在因子现有的 proto（`modules/factor/proto`，Strategy 已经依赖它，`strategy/go.mod:8`），不新建包；`packages/events` 中的因子状态校验移到因子模块。
 - `ViewDataReady`：删除 `completion_kind`，`factors[]` 改为透传 `detail_type` 与 `detail`，其余字段不变；载荷不兼容，事件名不变、版本升为 v2（主题 `moox.event.storage.view.data.ready.v2.<空间>.<View>`）。Strategy 按绑定的 View 与数据集判断事件是否相关，不再按来源区分；`detail_type` 是因子明细时解码。
 
+### 3.6 目录模型去掉市场与采集概念（编码第 5 步）
+
+- **标签只是一组标的**：`Tag` 只保留 `tag_id`、`name`、`description`、`mode`、`builtin`、成员与 `attributes`。删除 `source`、`market_type` 及其取值白名单与不可变约束、`cron`、`timezone`、`last_run_at`、`last_status`、`last_error`，删除 `ReportTagRunFailure`，`ApplyTagSnapshot` 去掉 `run_at`（只做"把成员设成这份快照"），删除按 `subject_listing` 的校验。
+  - Collector 的标的同步任务（`subjectsync`）把每个标签的来源、品种、调度、运行结果存在自己的库里，按 `tag_id` 关联；需要在标签上展示的信息放进标签 `attributes`，Storage 不解释。
+- **标的的业务字段放进属性**：`Subject` 只保留 `subject_id`、`name`、`timezone`、`status`、`attributes`；`subject_type`、`market`、`currency` 改为属性（`subject_type`、`market`、`currency` 键），由写入方维护。`ListSubjects` 删除 `market` 过滤，Web 在本地过滤。
+- **数据来源只是一个可引用的名字**：`DataSource` 只保留 `data_source_id`、`name`、`status`、`attributes`；删除 `kind` 及其 `CHECK`、`market`、`timezone`、`config_json`。采集的连接配置本来就在 Collector 的源配置里（`collector/configs/sources/**`），不再在 Storage 存一份；`ListDataSources` 删除 `kind`、`market` 过滤。
+- **序列身份只用 `subject_id` 与 `series_tag`**：`SeriesSnapshotEntry` 只保留这两项，`series_hash` 只按这两项计算；`packages/seriesset` 的规范键同步改为两项，Collector 与 Storage 用同一份实现，两边的哈希自然一致。同一个标的、同一个 `series_tag` 只能有一条序列（这本来就是行身份的约束）。
+- 表结构变化（`t_tags`、`t_subjects`、`t_data_sources` 删列与 `CHECK`），随全新部署生效。
+- 上层：Collector（`subjectsync`、种子、元数据导入、周期登记）、Strategy（`input/client.go` 读标签与标的的地方）、Trade（读 `market_type` 的地方确认是否来自 Storage，来自 Storage 的改读属性）、Monitor（`market_canary.go`）、CLI（元数据导入导出、`metadata tag clone`、`collector subject exclusions`）、Web（`api/storage/types.ts`、`metadata.ts` 与标的、标签、数据来源页面）、`config/setup/metadata.yaml` 种子。
+
 ## 4. 编码顺序与发布
 
 ### 4.1 编码顺序
@@ -155,8 +182,9 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 | 2 | 元数据校验与列契约、列来源改名（3.3） | Storage、factor-mgr、Archive、CLI、Web |
 | 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、单一消费模板（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置、Admin（EventBus 权限生成里 Storage、Factor、Strategy 的主题与消费者）及其测试 |
+| 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode）、`packages/seriesset`、Collector、Strategy、Trade、Monitor、CLI、Web、种子 |
 
-理由：第 1 步把"谁能写"从业务角色收敛到 `write_owner`，后面三步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件，放在最后。
+理由：第 1 步把"谁能写"从业务角色收敛到 `write_owner`，后面几步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件；第 5 步与前四步互不依赖，放在最后做，也可以在第 1 步之后任意时间做。
 
 ### 4.2 一次性全新部署
 
@@ -190,6 +218,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
 - 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
+- 第 5 步：标签只存成员与属性，Collector 的标的同步在自己的库里记录调度与结果；标的、数据来源的业务字段读写都走属性；Collector 与 Storage 按两项算出的 `series_hash` 一致；Web 的标的、标签、数据来源页面正常。
 - 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
 - 部署：在测试环境把 4.2 走一遍（清空、全新安装、小规模历史导入、建因子与策略、全链路一期）。
 
@@ -245,3 +274,8 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 
 - View 遇到未扩展的新列时不再暂停消费、不再重投，也不补数：新列直接裁掉，扩展完成前那几期的新列在 View 里为空，作为系统边界写入 3.4。理由：不让一个数据集的加列阻塞 View 的正常消费；因子晚生效一两期可以接受。
 - 删除 `view_delivery` 属性与 parallel / serial 两种模板：每个数据集本来各有一个 durable，只保留一个消费模板和全局并发配置（默认 1）。
+
+### v12（2026-10-27）
+
+- 用户决定：View 的 durable 名简化为 `view_<数据集哈希>`（3.4）。
+- 全量复查 Storage 的代码、协议、表结构与配置，新增两处耦合：标的、标签与数据来源目录里的市场与采集概念（2.6），周期账本的序列身份带着采集的维度（2.7）；方案见 3.6，列为编码第 5 步。
