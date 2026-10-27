@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v13（2026-10-27），未编码。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v14（2026-10-27），未编码。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -126,7 +126,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 - **默认 View 由 factor-mgr 自己建、改、删**：删除 `factor_result_view.go`、数据集激活与加列时对托管 View 的检查（含激活重试，`metadata_catalog.go:335`）、删除数据集时自动删托管 View 的逻辑。factor-mgr 与 Collector 一样用 `CreateView`、`UpsertViewColumn`、`DeleteView`（factor-mgr 的 Metadata 客户端 `storageio/client.go:27` 要补这几个方法）。删除因子结果数据集的顺序：删默认 View → 清空行 → 删数据集（`t_views` 外键 `RESTRICT` 要求先删 View）。View 属性里不再有 `managed_by`、`view_role = factor_result`、`primary_dataset_role` 这类 Storage 读取的业务标记。
 - **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集加列后原地扩展 View，复用现有扩展机制；扩展提交条件（`crud_view_index.go:283`）与 `maintenance_schema_extension.go:125` 的目标判定都改看这个属性。**删除事件出现未扩展列时暂停消费的屏障**（`event_apply.go:444` 的 `validateFactorResultEventColumns`），View 不再为等扩展而阻塞消费，见下一条的系统边界。
-- **系统边界：新列在 View 扩展完成之前的值不进 View**（用户决定，2026-10-27）。数据集加列后，View 的扩展在维护循环里异步完成，通常几秒到几十秒。这段时间里到达的行事件按 View 当前的列投影应用，新列直接裁掉，与 View 处理任何不在投影里的列一样；扩展完成后的事件才带上新列。被裁掉的那几期，新列在 View 里永远为空，不补数，主库（Pebble）里的值不受影响。对因子来说，就是新成员在 View 里晚生效一两期，策略在这几期读到空值。需要这几期的值时，扩展完成后对那几期执行 `recalc`，重写的行会带上新列。
+- **系统边界：新列在 View 扩展完成之前的值不进 View**（用户决定，2026-10-27）。数据集加列后，View 的扩展在维护循环里异步完成，通常几秒到几十秒。这段时间里到达的行事件按 View 当前的列投影应用，新列直接裁掉，与 View 处理任何不在投影里的列一样；扩展完成后的事件才带上新列。这些事件不会把新列写进 View，不补数（之后同一行若再被更新或重算，会带上新列），主库（Pebble）里的值不受影响。对因子来说，就是新成员在 View 里晚生效一两期，策略在这几期读到空值。需要这几期的值时，扩展完成后对那几期执行 `recalc`，重写的行会带上新列。
 - **重建方式单独声明**：View 属性 `rebuild_source`：`active_then_primary`（默认，先复制活动索引再从主库补）或 `primary`（不复制活动索引、只从主库历史重建，主库没有数据时允许先空着）。`build.go` 按这个属性选分支，factor-mgr 为默认 View 设置 `primary`。
 - **维护顺序由 View 声明**：View 属性 `maintenance_priority`（整数，越小越先，默认 50）取代 `maintenance.go:621` 按 `view_role` 的排序；Collector 的浏览 View 设 0，factor-mgr 的默认 View 设 10。
 - **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `view_<数据集哈希>`，名字里不带业务；EventBus 权限里按前缀放行的规则同步改为 `view_`。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
@@ -166,54 +166,64 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 **标签只是一组标的**
 
-- `Tag` 只保留 `tag_id`、`tag_name`、`description`、`mode`、`builtin`、成员与 `attributes`。删除 `source`、`market_type`（含取值白名单 `crud_tag.go:30` 与不可变约束）、`cron`、`timezone`、`last_run_at`、`last_status`、`last_error`；删除 `ReportTagRunFailure`；`ApplyTagSnapshot` 去掉 `run_at`，只表示"把成员设成这份快照"；删除按数据来源属性 `subject_listing` 的校验（`crud_tag.go:154`）。
-- **标的同步配置写进标签属性**，由 Collector 解释，标签仍只在种子里定义一处：
+- `Tag` 只保留 `tag_id`、`tag_name`、`description`、`mode`、`builtin`、成员统计与 `attributes`。`attributes` 是新增的：`metadata.proto` 的 `Tag` 加字段，`t_tags` 加 `c_attrs_json`，`crud_tag.go` 读写、元数据缓存、Storage 自己的种子初始化（`bootstrap/metadata/seed.go:126`）与 Collector 的种子解析一起改。
+- 删除 `source`（含 `t_tags.c_source_id` 及其外键）、`market_type`（含取值白名单 `crud_tag.go:30` 与不可变约束）、`cron`、`timezone`、`last_run_at`、`last_status`、`last_error`；删除 `ReportTagRunFailure`。
+- `ApplyTagSnapshot` 去掉 `run_at`，只表示"把成员设成这份快照"；被移出的成员的 `inactive_at` 取 Storage 收到快照的时间。
+- 标的修订号（`t_space_revisions.c_subjects_revision`，Strategy 靠它刷新标签缓存，`strategy/internal/input/cache.go:104`）的触发器由监听 `c_market_type`（`metadata.sql:461`）改为监听 `c_attrs_json`。
+- 删除 `subject_listing` 能力的整条链路：Storage 的校验（`crud_tag.go:154`）、Collector 启动时的能力登记（`bootstrap/subject_sync.go:50`、`subjectsync/storage_client.go:107`）、CLI 元数据比较里的特殊处理（`metadata_implementation.go:604`）。来源与品种组合是否支持，仍由 Collector 的 lister 判断（`subjectsync/lister.go:28`）。
 
-  ```yaml
-  tag_id: binance_spot
-  mode: auto
-  attributes:
-    market_type: spot
-    sync.source: binance
-    sync.cron: "13 * * * *"
-    sync.timezone: UTC
-  ```
+**标的同步配置写进标签属性**，由 Collector 解释，标签仍只在种子里定义一处：
 
-- **运行状态回到 Collector 自己的库**：Collector 新增一张表，按（空间，`tag_id`）记录上次运行时间、结果与错误；`subjectsync/tag_runner.go` 的调度判断改读这张表，失败记在自己的库里并打日志、出指标（`subjectsync/metrics.go`），不再报给 Storage。
-- 没有选"同步配置整体搬到 Collector 配置"：那样一个标签要在两处定义（Storage 建集合、Collector 配同步），容易对不上。
+```yaml
+tag_id: binance_spot
+mode: auto
+attributes:
+  market_type: spot
+  sync.source: binance
+  sync.cron: "13 * * * *"
+  sync.timezone: UTC
+```
+
+没有选"同步配置整体搬到 Collector 配置"：那样一个标签要在两处定义（Storage 建集合、Collector 配同步），容易对不上。
+
+**运行状态回到 Collector 自己的库**
+
+- Collector 新增一张表，按（空间，`tag_id`）记录上次运行时间、结果与错误；`subjectsync/tag_runner.go` 的调度判断改读这张表，失败记在这张表里并打日志、出指标（`subjectsync/metrics.go`），不再报给 Storage。
+- Collector 新增只读接口 `ListTagSyncStatus(space_id)` 返回这张表。Monitor 的标签检查（`bootstrap/market_canary.go:31`）照旧做三项：`failed` 与 `stale` 改用这个接口的结果，`stale` 的周期从标签属性 `sync.cron`、`sync.timezone` 算；`no_active_members` 仍用 Storage 的成员统计。Web 的标签页（`views/data/subjects/tags-tab.vue:54`）同样调这个接口显示运行状态。
 
 **标的的业务字段放进属性**
 
 - `Subject` 只保留 `subject_id`、`name`、`timezone`、`status`、`attributes`；`subject_type`、`market`、`currency` 改为属性键。时区是时间序列对象的通用信息，保留为字段。
-- `TagSnapshotItem` 同样改为 `subject_id`、`name`、`timezone`、`attributes`。
-- `ListSubjects` 删除 `market` 过滤，Web 拿到列表后在本地筛选（每个空间几百到一两千个标的）。
+- `TagSnapshotItem` 同样改为 `subject_id`、`name`、`timezone`、`attributes`。与现在一样，快照只为新出现的标的建 Subject 并带上属性；已有标的的属性由 Collector 的属性维护任务（`subjectsync/attr_runner.go`）更新。
+- 列表与搜索去掉这些字段：`ListSubjectsRequest` 删除 `market`、`subject_type` 过滤（`metadata.proto:787`），SQLite 的标的列表（`crud_subject.go:46`）、标签成员搜索（`crud_tag_member.go:49`）与元数据缓存（`cache/store.go:315`）同步修改；关键词搜索只匹配 ID 与名称。Web 拿到列表后在本地筛选（每个空间几百到一两千个标的）。现有 Go 调用方只按 ID 查标的，不依赖这些过滤。
 
 **数据来源只是一个可引用的名字**
 
-- `DataSource` 只保留 `data_source_id`、`name`、`status`、`attributes`；删除 `kind` 及其 `CHECK`、`market`、`timezone`、`config_json`。采集的连接配置本来就在 Collector 的源配置里（`collector/configs/sources/**`）。`ListDataSources` 删除 `kind`、`market` 过滤。
+- `DataSource` 只保留 `data_source_id`、`name`、`status`、`attributes`；删除 `kind` 及其 `CHECK`、`market`、`timezone`、`config_json`。采集的连接配置本来就在 Collector 的源配置里（`collector/configs/sources/**`）。`ListDataSources` 删除 `kind`、`market` 过滤，关键词搜索只匹配 ID 与名称。
 
 **序列身份只用 `subject_id` 与 `series_tag`**
 
 - `SeriesSnapshotEntry` 只保留 `subject_id`、`series_tag`；`packages/seriesset` 的 `Series` 与规范键同步改为两项，Collector（`marketfetch/plan_desired.go:196`、重采样）与 Storage（`datanode/period.go:26`）用同一份实现，`series_hash` 自然一致。
-- 依据：周期账本核对行时本来只用这两项（`DatasetPeriodSeries`）；`series_tag` 由 Collector 用行情源、来源、品种拼成（`defaultMarketSeriesTag`，如 `venue:binance|market:swap|source:swap_http`），三项已含在里面；行的身份也只有标的、频率、时间、`series_tag`。
-- Collector 内部仍记录每个标的用哪个行情源与来源（计划记录 `plan_record.go`），只是不再交给 Storage。附带的好处：A 股 `series_tag` 统一为 `default`，以后切换行情源不会改变序列身份。
+- 依据：周期账本核对行时本来只用这两项（`DatasetPeriodSeries`，同一份快照里 `subject_id + series_tag` 不能重复，`pebble/period_snapshot.go:101`）；行的身份也只有标的、频率、时间、`series_tag`，快照里的另外三项从来不参与行的身份。
+- `series_tag` 由 Collector 决定，Storage 不解释。加密货币由 `defaultMarketSeriesTag`（`kline_pipeline.go:678`）生成：普通现货是 `venue:<provider>`，其他品种或来源再追加 `market:`、`source:`，同一个数据集里不同路由不会撞；重采样沿用源序列的 `series_tag`（`resample/engine.go:403`）。A 股固定写 `default`（`marketfetch/series_tag.go:12`）：同一只股票不论从哪个行情源采到，都写同一行，来源记在行字段里（`kline_pipeline.go:753`）。这是有意共享的序列身份，两项快照与现在的行为一致。
+- Collector 内部仍记录每个标的用哪个行情源与来源（计划记录 `plan_record.go`），只是不再交给 Storage。
 
 **表结构与上层**
 
-- `t_tags`、`t_subjects`、`t_data_sources` 删列与 `CHECK`，随全新部署生效。
-- Collector：标的同步读标签属性、运行状态进自己的库；快照写属性；序列快照只交两项；种子与元数据导入。
+- `t_tags`、`t_subjects`、`t_data_sources` 删列与 `CHECK`，`t_tags` 加 `c_attrs_json`，随全新部署生效。
+- Collector：标签固定字段的所有读取点改读属性——标的同步的调度与筛选（`subjectsync/tag_runner.go`、`syncer.go:30`）、采集计划分组（`marketfetch/task_groups.go:95`）、建任务校验（`rpc/service.go:1119`）、重采样的来源推导与任务结果记录；运行状态表与 `ListTagSyncStatus`；快照写属性；序列快照只交两项；删除 `subject_listing` 能力登记；种子与元数据导入。
 - Strategy：`input/client.go:207` 改读 `tag.attributes["market_type"]`。
-- Monitor：`bootstrap/market_canary.go` 读标签的地方改读属性。
-- Trade：核对读 `market_type` 的地方，凡是来自 Storage 标签的改读属性（Trade 自己协议里的 `market_type` 不动）。
-- CLI：元数据导入导出（`metadata_implementation.go`）、`metadata tag clone`、`collector subject exclusions`。
-- Web：`api/storage/types.ts`、`metadata.ts` 与标的、标签、数据来源页面改读属性、本地筛选。
+- Monitor：标签检查按上文改用 Collector 的运行状态与标签属性。
+- Trade：经核对不读 Storage 的标签，无需改动（Trade 自己协议里的 `market_type` 与本步无关）。
+- CLI：元数据导入导出（`metadata_implementation.go`，含删除 `subject_listing` 特殊比较）、`metadata tag clone`、`collector subject exclusions`。
+- Web：`api/storage/types.ts`、`metadata.ts` 与标的、标签、数据来源页面改读属性、本地筛选；标签页的运行状态改调 Collector。
 - 种子：`config/setup/metadata.yaml` 的标签、标的、数据来源改为属性写法。
 
 ## 4. 编码顺序与发布
 
 ### 4.1 编码顺序
 
-按风险从小到大分四步编码，每一步独立提交、独立通过测试与 Codex 审查；后面的步骤在前一步的基础上做，少处理一些分支：
+按风险从小到大分五步编码，每一步独立提交、独立通过测试与 Codex 审查；后面的步骤在前一步的基础上做，少处理一些分支：
 
 | 步 | 内容 | 涉及模块 |
 |---|---|---|
@@ -221,13 +231,13 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 | 2 | 元数据校验与列契约、列来源改名（3.3） | Storage、factor-mgr、Archive、CLI、Web |
 | 3 | View 由业务模块维护、跟随加列、重建方式与维护顺序、单一消费模板（3.4） | Storage（view、catalog、metadata、server、cli、配置）、factor-mgr、Collector、`packages/events`、Admin（EventBus 权限生成）、部署配置 |
 | 4 | 周期完成与就绪事件统一（3.5） | Storage、因子引擎、factor-mgr、Collector（重采样）、Strategy、`packages/events`、`packages/storagepb`、因子 proto、服务目录、EventBus 流配置、Admin（EventBus 权限生成里 Storage、Factor、Strategy 的主题与消费者）及其测试 |
-| 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode）、`packages/seriesset`、Collector、Strategy、Trade、Monitor、CLI、Web、种子 |
+| 5 | 目录模型去掉市场与采集概念、序列身份只用标的与 `series_tag`（3.6） | Storage（metadata、datanode、缓存、种子初始化）、`packages/seriesset`、Collector、Strategy、Monitor、CLI、Web、种子 |
 
 理由：第 1 步把"谁能写"从业务角色收敛到 `write_owner`，后面几步删除业务分支时都不用再顾及权限；第 2、3 步只动元数据与 View；第 4 步改协议和事件；第 5 步与前四步互不依赖，放在最后做，也可以在第 1 步之后任意时间做。
 
 ### 4.2 一次性全新部署
 
-四步编码全部完成后，一次发布：清空生产、按全新安装流程重装（用户已接受删除全部线上数据）。全新安装的步骤以《部署与运维》第 2 节及其"2026-10-24 全新部署补充"为准，那次主机登记统一就是这样上线的；这里只写本次要注意的地方。不写迁移代码，也不用 `system reset`（它按旧表结构清记录、不重建 Storage 元数据库，也不清 EventBus 流的旧主题）。
+五步编码全部完成后，一次发布：清空生产、按全新安装流程重装（用户已接受删除全部线上数据）。全新安装的步骤以《部署与运维》第 2 节及其"2026-10-24 全新部署补充"为准，那次主机登记统一就是这样上线的；这里只写本次要注意的地方。不写迁移代码，也不用 `system reset`（它按旧表结构清记录、不重建 Storage 元数据库，也不清 EventBus 流的旧主题）。
 
 1. **清空前核对**：Trade 只有纸面账户、没有实盘持仓与未完成订单；`moox.toml`（本机，加密）与各主机的 SSH 访问可用。
 2. **停止并清空**：停四台主机（control、storage、overseas、factor）上的全部组件，清空部署根 `/data/moox`；本机的安装状态也一起清掉：`~/.local/state/moox/setup/<绑定摘要>`（否则会复用上次保存的安装制品）与 `~/.config/moox` 里旧控制面的 CA 绑定。这一步把所有状态一起删掉：各模块的库（含 Admin、Collector、factor-mgr、Strategy、Trade、Monitor、Archive、CloudFunction）、Storage 元数据库、Pebble 与 View 索引、EventBus 流与消费者、因子机本地存储与补算账本、归档目录。因子机清空后按补充说明重建 `/data/moox`。
@@ -252,13 +262,15 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 | 部署配置 | `moox.toml` 补各市场与 `mooxsys` 保留期 | — | View 消费配置只剩并发项 | EventBus 流主题 |
 | 服务目录 | — | — | — | PrimaryStore 方法改名与删除；外部身份白名单同步 |
 
+第 5 步对上层模块的改动见 3.6 末尾的「表结构与上层」。
+
 ## 5. 测试
 
 - 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
 - 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
-- 第 5 步：标签只存成员与属性，Collector 按标签属性 `sync.*` 调度标的同步、在自己的库里记录运行结果；Strategy 从标签属性读 `market_type`；标的、数据来源的业务字段读写都走属性；Collector 与 Storage 按两项算出的 `series_hash` 一致；Web 的标的、标签、数据来源页面正常。
 - 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
+- 第 5 步：标签属性的保存、读取与种子导入，改属性会递增标的修订号、Strategy 刷新缓存并从属性读到 `market_type`；Collector 按 `sync.*` 调度标的同步、运行结果写进自己的表，`ListTagSyncStatus` 驱动 Monitor 的 `failed`/`stale` 检查与 Web 标签页；快照移出的成员 `inactive_at` 为收到快照的时间；标的、数据来源的业务字段读写走属性、列表与搜索只按 ID 和名称；删除 `subject_listing` 后 Collector 正常启动；加密货币（含重采样）与 A 股两类生产者的序列快照只交两项，Collector 与 Storage 算出的 `series_hash` 一致、周期正常定稿；Web 的标的、标签、数据来源页面正常。
 - 部署：在测试环境把 4.2 走一遍（清空、全新安装、小规模历史导入、建因子与策略、全链路一期）。
 
 ## 6. 待确认
@@ -322,3 +334,18 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 ### v13（用户同意，2026-10-27）
 
 3.6 细化：标的同步配置（来源、品种、调度、时区）写进标签 `attributes` 由 Collector 解释，只有运行状态回到 Collector 自己的库；标的的 `subject_type`、`market`、`currency` 与数据来源的业务字段改为属性；序列身份只用 `subject_id` 与 `series_tag`。
+
+### v14（Codex 审查 v13，2026-10-27）：需要修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| 标签目前没有 `attributes`，属性存储链路缺失 | 3.6 补协议字段、`c_attrs_json`、读写、缓存与两套种子 |
+| 运行状态移走后 Monitor 的 `failed`/`stale` 检查和 Web 标签页无处取值 | Collector 新增 `ListTagSyncStatus`，Monitor 与 Web 改调；周期从标签属性算 |
+| 删 `subject_type` 等字段后 Storage 的过滤、搜索与缓存未列 | 补 `ListSubjectsRequest`、SQLite、缓存、关键词搜索的改动 |
+| 修订号触发器监听要删的 `c_market_type`；`run_at` 被用来填 `inactive_at`；`c_source_id` 外键 | 触发器改监听 `c_attrs_json`；`inactive_at` 取收到快照的时间；删列连同外键 |
+| Collector 读标签固定字段的地方与 `subject_listing` 链路列得不全 | 逐处列出；`subject_listing` 从 Storage、Collector、CLI 一起删 |
+| 序列身份论据不准：现货只写 `venue:<provider>`、A 股早已是 `default` 且有意共享 | 更正为按实际生成规则说明，A 股写成有意共享的序列身份 |
+| 第 4 节仍写"四步"、4.3 无第 5 步、测试顺序颠倒且第 5 步覆盖不足 | 改为五步；4.3 指向 3.6 的清单；测试按顺序并扩充 |
+| 建议："新列永远为空"不准确 | 改为"这些事件不写新列，之后同一行再更新会带上" |
+| 建议：快照对已有标的的属性如何处理 | 写明快照只为新标的建 Subject，已有标的由属性维护任务更新 |
+| 建议：Trade 不读 Storage 标签 | 清单注明无需改动，4.1 涉及模块去掉 Trade |
