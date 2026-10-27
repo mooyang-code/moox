@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计 v15（2026-10-27），未编码。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
+状态：设计 v16（2026-10-27），未编码。v16：按 Codex 全文审查修正 `write_owner` 经 `CreateDataset` 绕过、单一消费模板的启动与路由发现、重采样归入 `ledger` 并换装其触发消费者。v15：按 Codex 复审补 Web 标签表单的选项来源（Collector `ListSubjectListers`）与属性维护任务的属性键。v14：按 Codex 审查 v13 补齐第 5 步——标签新增属性存储、运行状态经 Collector 接口供 Monitor 与 Web、修订号与成员失效时间、删除过滤与 `subject_listing` 全链路、序列身份论据更正。v13：按讨论细化 3.6——标的同步配置写进标签属性、只有运行状态回到 Collector 的库，标的与数据来源的业务字段改为属性，序列身份只用两项。v12：View 的 durable 改名为 `view_<数据集哈希>`；全量复查 Storage 后新增两处耦合（标的、标签与数据来源目录；周期账本的序列身份），列为编码第 5 步（2.6、2.7、3.6）。v11：按用户决定：View 不再为新列阻塞消费（新列在扩展完成前直接裁掉，作为系统边界说明），消费只保留一种模板和全局并发配置（3.4）。v10：按 Codex 审查 v9 修订：全新部署改用《部署与运维》的全新安装流程，补齐各步的改动清单。
 
 - v9：用户决定列来源 `FACTOR` 改名为 `CUSTOM`，并接受**全部删除、全新部署**。于是四步只作为编码顺序，最后一次性全新部署（第 4 节）；v7、v8 为分步在线发布准备的过渡（属性缺省推断、消费者从流末尾重建、旧完成标记不转换、模块间换装顺序）全部删去。
 - v7、v8：按 Codex 三轮审查修订（见第 7 节）。
@@ -104,7 +104,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - 只读身份（如 `scf-market-canary`）不在任何数据集的 `write_owner` 里：凡是声明了 `write_owner` 的数据集（由服务写入的数据集都会声明）它都写不了；没有声明的数据集对它和其他身份一样开放。删除写死的名字。
 - 删除 `collectorWritableDataset`、`factorOwnedResult`、`datasetRowsOwner` 与标记接口里按 `owner_module` / `dataset_role` 的分支。
 - `data_source_id` 对所有数据集都可选，填写时校验引用存在；创建、激活、保存三处（`metadata_catalog.go:130`、`activation.go:182`、`crud_dataset.go:440`）一起改，结果一致。
-- 删除 `dataset_attributes.go` 的不可变约束与 `crud_dataset.go:211` 对因子结果 `write_owner` 的判断。`write_owner` 只允许当前 `write_owner` 中的调用方或操作员修改（为空时任何身份都可以设置）；其余业务属性由业务模块自己维护，Storage 不读取。
+- 删除 `dataset_attributes.go` 的不可变约束与 `crud_dataset.go:211` 对因子结果 `write_owner` 的判断。`write_owner` 只允许当前 `write_owner` 中的调用方或操作员修改（为空时任何身份都可以设置）；这项检查放在 `CreateDataset` 与 `UpdateDataset` 共用的更新路径上（`CreateDataset` 遇到同 ID 会转为更新，`crud_dataset.go:20`），两个入口都不能绕过；其余业务属性由业务模块自己维护，Storage 不读取。
 - 已知限制（不处理）：AppId 是请求体自报、用主库共享密钥签名，`write_owner` 只能防误写、不能防伪造。单用户系统可以接受。
 
 ### 3.2 写入方的数据规范与保留策略（编码第 1 步）
@@ -129,7 +129,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 - **系统边界：新列在 View 扩展完成之前的值不进 View**（用户决定，2026-10-27）。数据集加列后，View 的扩展在维护循环里异步完成，通常几秒到几十秒。这段时间里到达的行事件按 View 当前的列投影应用，新列直接裁掉，与 View 处理任何不在投影里的列一样；扩展完成后的事件才带上新列。这些事件不会把新列写进 View，不补数（之后同一行若再被更新或重算，会带上新列），主库（Pebble）里的值不受影响。对因子来说，就是新成员在 View 里晚生效一两期，策略在这几期读到空值。需要这几期的值时，扩展完成后对那几期执行 `recalc`，重写的行会带上新列。
 - **重建方式单独声明**：View 属性 `rebuild_source`：`active_then_primary`（默认，先复制活动索引再从主库补）或 `primary`（不复制活动索引、只从主库历史重建，主库没有数据时允许先空着）。`build.go` 按这个属性选分支，factor-mgr 为默认 View 设置 `primary`。
 - **维护顺序由 View 声明**：View 属性 `maintenance_priority`（整数，越小越先，默认 50）取代 `maintenance.go:621` 按 `view_role` 的排序；Collector 的浏览 View 设 0，factor-mgr 的默认 View 设 10。
-- **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `view_<数据集哈希>`，名字里不带业务；EventBus 权限里按前缀放行的规则同步改为 `view_`。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
+- **只有一种消费方式，并发由全局配置决定**：每个数据集本来就有自己的动态 durable（不同数据集之间并行消费）。删除 `factor` / `misc` 两个分区模板与静态 durable、按 `dataset_factor_` 前缀选模板的逻辑；只保留一个消费模板，配置项 `fetch_batch`、`max_workers`、`max_ack_pending` 全局默认都是 1（同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。动态 durable 统一命名为 `view_<数据集哈希>`，名字里不带业务；EventBus 权限里按前缀放行的规则同步改为 `view_`。同步修改 `packages/events/storage_consumers.go`、Storage 的默认配置与部署配置（`config/loader.go:130`～`:210`、`config/storage.yaml:27`）、按名称分支的代码（`cmd/server/main.go:600`、`cmd/cli/reconcile_view_consumers.go:161`）、Admin 生成 EventBus 权限的代码（`admin/cmd/cli/eventbus_credentials.go`）及其测试。代码默认配置里写死的空间与 `mooxsys` 数据集删掉：单一模板不再有静态路由，启动校验（`config/loader.go:194`、`:224` 只认两种分区 durable、要求非因子分区有路由）随之改为只校验并发项；动态协调器（`inventory_reconciler.go:278`）不再按配置的空间或数据集白名单过滤，凡是活动 View 引用的数据集都建 durable。导入历史时的 View 追平速度上线后实测，不够再调大全局并发。
 
 ### 3.5 周期完成统一（编码第 4 步）
 
@@ -137,8 +137,8 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 
 | 来源 | 谁判定 | 接口 |
 |---|---|---|
-| `ledger` | DataNode 按登记的序列快照与截止时间判定（现在的采集周期账本） | `RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`（不变） |
-| `producer` | 写入方自己报告（现在的重采样与因子） | `ReportDatasetPeriodCompleted`；查询 `GetDatasetPeriodCompleted` |
+| `ledger` | DataNode 按登记的序列快照与截止时间判定（现在的采集与重采样：都登记快照并调用 `CommitTimeSeriesBatch`，`resample/engine.go:307`、`:395`） | `RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`（不变） |
+| `producer` | 写入方自己报告（现在只有因子） | `ReportDatasetPeriodCompleted`；查询 `GetDatasetPeriodCompleted` |
 
 `source` 只描述"这一期是怎么判定完成的"，不是业务分类；消费方按自己绑定的数据集与频率筛选，两种来源都接受。
 
@@ -156,6 +156,7 @@ v1～v5 的审查记录见文末。与 [Storage 读接口收敛设计](Storage�
 | `completed_at` | 完成时间 |
 | `detail_type`、`detail` | 写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析 |
 
+- Collector 里 `ReportCollectorPeriodCompleted` 的客户端代码（`marketstorage/storage.go:134`、`storageio/gateway.go:194`）已无调用方，随接口一起删除。Collector 的重采样触发消费者（`resample/eventconsumer/consumers.go:43`、`:138`）改订阅 `DatasetPeriodCompleted`，按源数据集与频率筛选后交给 `PeriodTrigger`；EventBus 权限同步。
 - 删除 `CollectorPeriodCompleted`、`FactorPeriodComputed` 两种事件，`ReportCollectorPeriodCompleted`、`ReportFactorPeriodComputed`、`GetFactorPeriodComputed` 三个接口，以及 DataNode 对应的三个方法（合并为 `AppendDatasetPeriodCompleted`、`GetDatasetPeriodCompleted`）。
 - 因子把每个因子的状态（现在的 `FactorPeriodState`）放进 `detail`，`detail_type = moox.factor.PeriodDetail.v1`；`PeriodDetail` 定义在因子现有的 proto（`modules/factor/proto`，Strategy 已经依赖它，`strategy/go.mod:8`），不新建包；`packages/events` 中的因子状态校验移到因子模块。
 - `ViewDataReady`：删除 `completion_kind`，`factors[]` 改为透传 `detail_type` 与 `detail`，其余字段不变；载荷不兼容，事件名不变、版本升为 v2（主题 `moox.event.storage.view.data.ready.v2.<空间>.<View>`）。Strategy 按绑定的 View 与数据集判断事件是否相关，不再按来源区分；`detail_type` 是因子明细时解码。
@@ -255,7 +256,7 @@ attributes:
 |---|---|---|---|---|
 | factor-mgr | AppId 统一为 `factor`；建结果数据集写 `write_owner = factor` | 建列时自己保证因子列契约与显示名；列来源用 `CUSTOM` | Metadata 客户端补 View 的建、改、删；自己建、改、删默认 View（`follow_dataset_columns = true`、`rebuild_source = primary`、`maintenance_priority = 10`）；删除数据集按 3.4 的顺序 | 定义 `PeriodDetail` |
 | 因子引擎 | AppId 统一为 `factor` | — | — | 报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`，按绑定的源数据集与频率筛选，两种来源都接受 |
-| Collector / collector-stream | AppId 统一为 `collector`；建数据集写 `write_owner = collector`；A 股写入自己填 `series_tag` | — | 浏览 View 设置 `maintenance_priority = 0` | 重采样的周期报告改为 `ReportDatasetPeriodCompleted` |
+| Collector / collector-stream | AppId 统一为 `collector`；建数据集写 `write_owner = collector`；A 股写入自己填 `series_tag` | — | 浏览 View 设置 `maintenance_priority = 0` | 重采样仍走账本（`ledger`）；重采样触发消费者改订阅 `DatasetPeriodCompleted`；删除无调用方的 `ReportCollectorPeriodCompleted` 客户端 |
 | Strategy | — | — | — | 订阅 `ViewDataReady` v2；按绑定的 View 与数据集判断相关性，不再按 `completion_kind`；因子明细从 `detail` 解码 |
 | Monitor | 写入用 `monitor`；`metadata.yaml` 中系统数据集写 `write_owner: monitor` | — | — | — |
 | packages / CLI / Web | `storagepolicy` 去掉市场与 `mooxsys` 豁免；CLI `setup retention` 不再估算根数 | CLI、Web 改为 `FIELD / CUSTOM / SYSTEM` | `events` 的 View durable 改名 | `events` 换注册表、删因子校验；`storagepb` 同步 |
@@ -266,10 +267,10 @@ attributes:
 
 ## 5. 测试
 
-- 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；保留期从部署配置读取。
+- 第 1 步：声明了 `write_owner` 的数据集只有其中的 AppId 能写（数据行、周期账本、标记、清空与恢复、删除数据集）；没声明的不限；没有别名；操作员身份不受限；只读身份写声明了 `write_owner` 的数据集被拒；`write_owner` 只能由所有者或操作员修改；factor-mgr、Collector、Monitor 种子建出的数据集都带 `write_owner`；`data_source_id` 在创建、激活、保存三处结果一致；A 股写入由 Collector 填 `series_tag`；非所有者经 `CreateDataset` 同 ID 改 `write_owner` 被拒；保留期从部署配置读取。
 - 第 2 步：factor-mgr 建出的因子列满足契约、来源为 `CUSTOM`、不带 `origin_id`；多输出因子与 `__params` 照常可建；多个自定义列互不冲突、同一字段在一个数据集里仍只能出现一次；CLI 导出再导入一致；Web 显示正确。
-- 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
-- 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；重采样结果（`producer`）→ 因子计算 → Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
+- 第 3 步：factor-mgr 建、改、删默认 View；加列后扩展完成之前到达的事件按当前投影应用、新列被裁掉且不阻塞消费，扩展完成之后的事件带上新列；`rebuild_source` 两种重建各自正确；维护顺序按 `maintenance_priority`；没有静态路由时 Storage 能启动，活动 View 引用的每个数据集都建出 durable，消费并发按全局配置生效、动态 durable 名不带业务；只有默认 View 时因子结果数据集能完整删除。
+- 第 4 步：`ledger` 判定与现在的账本一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`；源 K 线周期完成（`ledger`）触发重采样、重采样结果周期完成（`ledger`）→ 因子计算（`producer`）→ Strategy 触发；采集 → 账本完成 → 因子 → View 就绪 → Strategy 全链路。
 - 第 5 步：标签属性的保存、读取与种子导入，改属性会递增标的修订号、Strategy 刷新缓存并从属性读到 `market_type`；Collector 按 `sync.*` 调度标的同步、运行结果写进自己的表，`ListTagSyncStatus` 驱动 Monitor 的 `failed`/`stale` 检查与 Web 标签页，没有运行记录的标签按 `stale` 处理（与现在一致）；Web 用 `ListSubjectListers` 的选项能新建自动标签；快照移出的成员 `inactive_at` 为收到快照的时间；快照新建的标的与属性维护任务更新的已有标的都带上 `subject_type`、`market`、`currency` 属性；标的、数据来源的业务字段读写走属性、列表与搜索只按 ID 和名称；删除 `subject_listing` 后 Collector 正常启动；加密货币（含重采样）与 A 股两类生产者的序列快照只交两项，Collector 与 Storage 算出的 `series_hash` 一致、周期正常定稿；Web 的标的、标签、数据来源页面正常。
 - 部署：在测试环境把 4.2 走一遍（清空、全新安装、小规模历史导入、建因子与策略、全链路一期）。
 
@@ -359,3 +360,12 @@ v1～v5（2026-10-17）：吸收 Codex 五轮评审，主要涉及 `source` 的�
 | 建议：两条属性写入路径分别测试；无运行记录时的 `stale` 判定 | 写入第 5 步测试 |
 
 其余意见已确认处理正确。
+
+### v16（Codex 全文审查 v15，只看重要问题，2026-10-27）：需要修改 → 已修改
+
+| 意见 | 处置 |
+|---|---|
+| `CreateDataset` 同 ID 转为更新，可绕过 `write_owner` 修改检查 | 检查放在两个入口共用的更新路径上；加测试 |
+| 单一消费模板下启动校验仍要求两种分区与路由，动态协调器按白名单过滤 | 3.4 写明：零静态路由、启动只校验并发项、活动 View 引用的数据集都建 durable |
+| 重采样触发消费者订阅的 `CollectorPeriodCompleted` 被删后实时重采样不触发 | 第 4 步改订阅 `DatasetPeriodCompleted` 并按源数据集与频率筛选 |
+| 重采样实际走账本，不是 `producer` | 3.5、4.3、测试改为重采样属 `ledger`；`producer` 现在只有因子；删除无调用方的 Collector 报告客户端 |
