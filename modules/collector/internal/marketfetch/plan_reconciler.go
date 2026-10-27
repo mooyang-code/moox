@@ -199,6 +199,8 @@ type PlanReconciler struct {
 	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
 	resolvedPackage string
 	resolvedAt      time.Time
+	packageErr      error     // 最近一次解析失败的原因（没有可用的缓存时），解析成功后清空
+	packageWarnedAt time.Time // 上一次记"没有可用代码包"警告的时间
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
 	lastUpgradeCheck time.Time
 	goneSeen         map[string]int
@@ -253,6 +255,14 @@ func (r *PlanReconciler) fail(reason string, err error) error {
 		r.Metrics.ObserveAssignmentFailure(r.SpaceID, reason)
 	}
 	return err
+}
+
+// failItem 上报创建函数项失败：缺代码包单独归为 package（Monitor 提示去检查代码包），其余是环境问题。
+func (r *PlanReconciler) failItem(err error) error {
+	if errors.Is(err, errNoCodePackage) {
+		return r.fail("package", err)
+	}
+	return r.fail("environment", err)
 }
 
 // failCloud 上报云端协作类失败：Admin 明确答复「发布租约或在途操作占用仍被持有」时单独归类，
@@ -328,8 +338,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	}
 	defer r.mu.Unlock()
 	defer func() { r.finishRound(err) }()
-	if err := r.refreshPackage(ctx); err != nil {
-		return r.fail("package", err)
+	r.refreshPackageIfAvailable(ctx)
+	if err := r.packageGate(ctx); err != nil {
+		return err
 	}
 	r.refreshAux(ctx)
 	// 代码包升级与采集计划是否在进行无关：计划推进期间也要让落后的函数跟上配置的代码包。
@@ -1257,7 +1268,7 @@ func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchP
 		function := content.Functions[name]
 		item, err := r.createItem(record, content, function)
 		if err != nil {
-			return false, r.fail("environment", fmt.Errorf("function %s: %w", name, err))
+			return false, r.failItem(fmt.Errorf("function %s: %w", name, err))
 		}
 		items = append(items, item)
 		names = append(names, name)
@@ -1444,7 +1455,7 @@ func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
 	if err != nil {
 		return r.fail("cloudfunction", fmt.Errorf("list market fetchers: %w", err))
 	}
-	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
+	prefix := r.fleetPrefix()
 	byName := map[string]scfinvoker.FunctionInstance{}
 	var names []string
 	for _, node := range nodes {
@@ -1515,6 +1526,10 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 	if !ok || network.VPCID == "" || network.SubnetID == "" {
 		return nil, fmt.Errorf("region %s has no VPC and subnet configured", function.Region)
 	}
+	pkg, err := r.requirePackage()
+	if err != nil {
+		return nil, err
+	}
 	environment, err := r.functionEnvironment(function.Region, content.TransitionalPlan(function))
 	if err != nil {
 		return nil, err
@@ -1533,7 +1548,7 @@ func (r *PlanReconciler) createItem(record *store.FetchPlanRecord, content *Fetc
 	reservationID := hex.EncodeToString(reservation[:16])
 	return &cloudfunctionpb.FunctionInstanceCreateItem{
 		CloudAccountId: r.Deploy.CloudAccountID, FunctionType: "scf-event", TriggerType: "timer", Runtime: "Go1", Handler: "main",
-		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: r.packageID(), Environment: environment,
+		Namespace: r.Deploy.NamespaceFor(function.Name), Region: function.Region, PackageId: pkg, Environment: environment,
 		Config: map[string]string{
 			"timeout": timeout, "memory_size": strconv.Itoa(memory), "max_instance_concurrency": "1",
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
@@ -1954,7 +1969,7 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			change := &PlanFunctionChange{Name: name, Region: function.Region, Market: function.Market, Old: function.Plan, New: function.Plan}
 			item, itemErr := r.createItem(&store.FetchPlanRecord{ID: r.now().Unix()}, &FetchPlanContent{}, change)
 			if itemErr != nil {
-				return r.fail("environment", fmt.Errorf("function %s: %w", name, itemErr))
+				return r.failItem(fmt.Errorf("function %s: %w", name, itemErr))
 			}
 			item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
 			items = append(items, item)

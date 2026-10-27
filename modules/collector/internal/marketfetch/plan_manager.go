@@ -492,8 +492,9 @@ var errCodeUpgradePending = errors.New("function code upgrade pending")
 // 升级作业是异步的、失败也只记日志，所以最后要读回云端确认没有任何函数仍在旧代码包上，
 // 否则返回 errCodeUpgradePending，调用方本轮既不启用定时器也不继续对账。
 func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
-	if err := r.refreshPackage(ctx); err != nil {
-		return r.fail("package", err)
+	r.refreshPackageIfAvailable(ctx)
+	if err := r.packageGate(ctx); err != nil {
+		return err
 	}
 	upgradeCtx, cancel := upgradeContext(ctx)
 	upgradeErr := r.upgradeLaggingFunctions(upgradeCtx)
@@ -511,7 +512,7 @@ func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 		// 否则 EnableAll 里按“升级等待”收尾时会把它当成无失败而清掉既有的失败原因。
 		return r.fail("cloudfunction", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
 	}
-	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
+	prefix := r.fleetPrefix()
 	stale := 0
 	for _, node := range nodes {
 		if !strings.HasPrefix(node.InstanceID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
