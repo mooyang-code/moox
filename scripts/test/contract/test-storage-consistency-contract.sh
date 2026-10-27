@@ -5,9 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 
 storage_subjects=(
   'moox.event.storage.dataset.rows.upserted.v2.>'
-  'moox.event.storage.collector.period.completed.v1.>'
-  'moox.event.storage.dataset.factor_period.computed.v1.>'
-  'moox.event.storage.view.data.ready.v1.>'
+  'moox.event.storage.dataset.period.completed.v1.>'
+  'moox.event.storage.view.data.ready.v2.>'
   'moox.event.storage.dataset.sync_point.v1.>'
 )
 for subject in "${storage_subjects[@]}"; do

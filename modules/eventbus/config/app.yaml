@@ -35,9 +35,8 @@ streams:
   - name: MOOX_STORAGE
     subjects:
       - "moox.event.storage.dataset.rows.upserted.v2.>"
-      - "moox.event.storage.collector.period.completed.v1.>"
-      - "moox.event.storage.dataset.factor_period.computed.v1.>"
-      - "moox.event.storage.view.data.ready.v1.>"
+      - "moox.event.storage.dataset.period.completed.v1.>"
+      - "moox.event.storage.view.data.ready.v2.>"
       - "moox.event.storage.dataset.sync_point.v1.>"
     retention: limits
     discard: old

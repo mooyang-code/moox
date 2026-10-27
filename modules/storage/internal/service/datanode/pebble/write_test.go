@@ -112,11 +112,11 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	if _, err := store.UpsertFields(context.Background(), "space", "factor_result", "commit-order", []*pb.RowFieldUpsert{{Key: factorRowsKey("row-order"), Fields: []*pb.FieldValue{doubleField("close", 10)}}}); err != nil {
 		t.Fatal(err)
 	}
-	marker := &pb.FactorPeriodComputedMarker{
-		DatasetId: "factor_result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1,
-		Status: "complete", TriggerEventId: "trigger-1", ComputedAt: timestamppb.Now(),
+	marker := &pb.DatasetPeriodCompletedMarker{
+		DatasetId: "factor_result", Frequency: "1m", PeriodTime: 1,
+		Status: "complete", CauseEventId: "trigger-1", CompletedAt: timestamppb.Now(),
 	}
-	message, _, err := BuildFactorPeriodComputedMessage("space", marker)
+	message, _, err := BuildProducerPeriodCompletedMessage("space", marker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestUpsertFieldsThenMarkerOrdering(t *testing.T) {
 	if err := proto.Unmarshal(entries[1].Data, second); err != nil {
 		t.Fatal(err)
 	}
-	if first.GetEventName() != events.DatasetRowsUpserted.Name() || second.GetEventName() != events.FactorPeriodComputed.Name() {
+	if first.GetEventName() != events.DatasetRowsUpserted.Name() || second.GetEventName() != events.DatasetPeriodCompleted.Name() {
 		t.Fatalf("event order=%q, %q", first.GetEventName(), second.GetEventName())
 	}
 }

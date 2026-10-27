@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -197,12 +198,12 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 	store := NewClient(primary, nil, nil)
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
-	require.Equal(t, "storage-marker-"+shortHash("factor-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
+	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
 	require.Equal(t, primary.reportIDs[0], primary.reportIDs[1])
 }
 
 func TestComputedExistsNotFoundIsFalse(t *testing.T) {
-	for name, rsp := range map[string]*storagepb.GetFactorPeriodComputedRsp{
+	for name, rsp := range map[string]*storagepb.GetDatasetPeriodCompletedRsp{
 		"absent":         {RetInfo: successRet(), Found: false},
 		"not found code": {RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: "not found"}},
 	} {
@@ -372,8 +373,8 @@ type primaryFake struct {
 	writeErr            error
 	writeRet            *commonpb.RetInfo
 	reportIDs           []string
-	computedRsp         *storagepb.GetFactorPeriodComputedRsp
-	computedReq         *storagepb.GetFactorPeriodComputedReq
+	computedRsp         *storagepb.GetDatasetPeriodCompletedRsp
+	computedReq         *storagepb.GetDatasetPeriodCompletedReq
 	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
 	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
 	readDeadlines       []time.Duration
@@ -522,18 +523,18 @@ func (f *primaryFake) UpsertFields(_ context.Context, req *storagepb.PrimaryUpse
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: ret, Keys: keys}, nil
 }
 
-func (f *primaryFake) ReportFactorPeriodComputed(_ context.Context, req *storagepb.ReportFactorPeriodComputedReq, _ ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {
+func (f *primaryFake) ReportDatasetPeriodCompleted(_ context.Context, req *storagepb.ReportDatasetPeriodCompletedReq, _ ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
 	id := computedEventID(req.GetSpaceId(), req.GetMarker())
 	f.reportIDs = append(f.reportIDs, id)
-	return &storagepb.ReportFactorPeriodComputedRsp{RetInfo: successRet(), EventId: id}, nil
+	return &storagepb.ReportDatasetPeriodCompletedRsp{RetInfo: successRet(), EventId: id}, nil
 }
 
-func (f *primaryFake) GetFactorPeriodComputed(_ context.Context, req *storagepb.GetFactorPeriodComputedReq, _ ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error) {
-	f.computedReq = proto.Clone(req).(*storagepb.GetFactorPeriodComputedReq)
+func (f *primaryFake) GetDatasetPeriodCompleted(_ context.Context, req *storagepb.GetDatasetPeriodCompletedReq, _ ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
+	f.computedReq = proto.Clone(req).(*storagepb.GetDatasetPeriodCompletedReq)
 	if f.computedRsp != nil {
 		return f.computedRsp, nil
 	}
-	return &storagepb.GetFactorPeriodComputedRsp{RetInfo: successRet()}, nil
+	return &storagepb.GetDatasetPeriodCompletedRsp{RetInfo: successRet()}, nil
 }
 
 func (f *primaryFake) DeleteDatasetRows(_ context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
@@ -609,10 +610,15 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 
 func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
 	marker := PeriodMarker{
-		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded",
-		Factors: []FactorState{{FactorID: "momentum", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
+		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded", UniverseSubjects: []string{"BTC", "ETH"}, FailedSubjects: []string{"BTC", "ETH"},
+		Factors: []FactorState{{FactorID: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
 	}
-	got := markerToProto(marker).GetFactors()
+	protoMarker, err := markerToProto(marker)
+	require.NoError(t, err)
+	require.Equal(t, PeriodDetailType, protoMarker.GetDetailType())
+	detail := &factorpb.PeriodDetail{}
+	require.NoError(t, proto.Unmarshal(protoMarker.GetDetail(), detail))
+	got := detail.GetFactors()
 	require.Len(t, got, 1)
 	require.Equal(t, []string{"BTC", "ETH"}, got[0].GetFailedSubjects())
 	require.Equal(t, []string{"ETH"}, got[0].GetGapSubjects(), "gap_subjects 与 failed_subjects 一样去重排序")

@@ -266,41 +266,21 @@ func RegisterDataNodeDatasetAdminRuntimeService(s server.Service, svr DataNodeDa
 
 // DataNodeMarkerRuntimeService defines service.
 type DataNodeMarkerRuntimeService interface {
-	AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error)
-
-	AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq) (*AppendFactorPeriodComputedRsp, error)
+	AppendDatasetPeriodCompleted(ctx context.Context, req *AppendDatasetPeriodCompletedReq) (*AppendDatasetPeriodCompletedRsp, error)
 
 	AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq) (*AppendDatasetSyncPointMarkerRsp, error)
 
-	GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq) (*GetFactorPeriodComputedMarkerRsp, error)
+	GetDatasetPeriodCompletedMarker(ctx context.Context, req *GetDatasetPeriodCompletedMarkerReq) (*GetDatasetPeriodCompletedMarkerRsp, error)
 }
 
-func DataNodeMarkerRuntimeService_AppendCollectorPeriodCompleted_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &AppendCollectorPeriodCompletedReq{}
+func DataNodeMarkerRuntimeService_AppendDatasetPeriodCompleted_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AppendDatasetPeriodCompletedReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeMarkerRuntimeService).AppendCollectorPeriodCompleted(ctx, reqbody.(*AppendCollectorPeriodCompletedReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func DataNodeMarkerRuntimeService_AppendFactorPeriodComputed_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &AppendFactorPeriodComputedReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeMarkerRuntimeService).AppendFactorPeriodComputed(ctx, reqbody.(*AppendFactorPeriodComputedReq))
+		return svr.(DataNodeMarkerRuntimeService).AppendDatasetPeriodCompleted(ctx, reqbody.(*AppendDatasetPeriodCompletedReq))
 	}
 
 	var rsp interface{}
@@ -329,14 +309,14 @@ func DataNodeMarkerRuntimeService_AppendDatasetSyncPointMarker_Handler(svr inter
 	return rsp, nil
 }
 
-func DataNodeMarkerRuntimeService_GetFactorPeriodComputedMarker_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFactorPeriodComputedMarkerReq{}
+func DataNodeMarkerRuntimeService_GetDatasetPeriodCompletedMarker_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetDatasetPeriodCompletedMarkerReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(DataNodeMarkerRuntimeService).GetFactorPeriodComputedMarker(ctx, reqbody.(*GetFactorPeriodComputedMarkerReq))
+		return svr.(DataNodeMarkerRuntimeService).GetDatasetPeriodCompletedMarker(ctx, reqbody.(*GetDatasetPeriodCompletedMarkerReq))
 	}
 
 	var rsp interface{}
@@ -353,20 +333,16 @@ var DataNodeMarkerRuntimeServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*DataNodeMarkerRuntimeService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendCollectorPeriodCompleted",
-			Func: DataNodeMarkerRuntimeService_AppendCollectorPeriodCompleted_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendFactorPeriodComputed",
-			Func: DataNodeMarkerRuntimeService_AppendFactorPeriodComputed_Handler,
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendDatasetPeriodCompleted",
+			Func: DataNodeMarkerRuntimeService_AppendDatasetPeriodCompleted_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/AppendDatasetSyncPointMarker",
 			Func: DataNodeMarkerRuntimeService_AppendDatasetSyncPointMarker_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/GetFactorPeriodComputedMarker",
-			Func: DataNodeMarkerRuntimeService_GetFactorPeriodComputedMarker_Handler,
+			Name: "/trpc.moox.storage.DataNodeMarkerRuntime/GetDatasetPeriodCompletedMarker",
+			Func: DataNodeMarkerRuntimeService_GetDatasetPeriodCompletedMarker_Handler,
 		},
 	},
 }
@@ -506,17 +482,14 @@ func (s *UnimplementedDataNodeDatasetAdminRuntime) RestoreDatasetRows(ctx contex
 
 type UnimplementedDataNodeMarkerRuntime struct{}
 
-func (s *UnimplementedDataNodeMarkerRuntime) AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq) (*AppendCollectorPeriodCompletedRsp, error) {
-	return nil, errors.New("rpc AppendCollectorPeriodCompleted of service DataNodeMarkerRuntime is not implemented")
-}
-func (s *UnimplementedDataNodeMarkerRuntime) AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq) (*AppendFactorPeriodComputedRsp, error) {
-	return nil, errors.New("rpc AppendFactorPeriodComputed of service DataNodeMarkerRuntime is not implemented")
+func (s *UnimplementedDataNodeMarkerRuntime) AppendDatasetPeriodCompleted(ctx context.Context, req *AppendDatasetPeriodCompletedReq) (*AppendDatasetPeriodCompletedRsp, error) {
+	return nil, errors.New("rpc AppendDatasetPeriodCompleted of service DataNodeMarkerRuntime is not implemented")
 }
 func (s *UnimplementedDataNodeMarkerRuntime) AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq) (*AppendDatasetSyncPointMarkerRsp, error) {
 	return nil, errors.New("rpc AppendDatasetSyncPointMarker of service DataNodeMarkerRuntime is not implemented")
 }
-func (s *UnimplementedDataNodeMarkerRuntime) GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq) (*GetFactorPeriodComputedMarkerRsp, error) {
-	return nil, errors.New("rpc GetFactorPeriodComputedMarker of service DataNodeMarkerRuntime is not implemented")
+func (s *UnimplementedDataNodeMarkerRuntime) GetDatasetPeriodCompletedMarker(ctx context.Context, req *GetDatasetPeriodCompletedMarkerReq) (*GetDatasetPeriodCompletedMarkerRsp, error) {
+	return nil, errors.New("rpc GetDatasetPeriodCompletedMarker of service DataNodeMarkerRuntime is not implemented")
 }
 
 type UnimplementedDataNodeRangeRuntime struct{}
@@ -752,13 +725,11 @@ func (c *DataNodeDatasetAdminRuntimeClientProxyImpl) RestoreDatasetRows(ctx cont
 
 // DataNodeMarkerRuntimeClientProxy defines service client proxy
 type DataNodeMarkerRuntimeClientProxy interface {
-	AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq, opts ...client.Option) (rsp *AppendCollectorPeriodCompletedRsp, err error)
-
-	AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq, opts ...client.Option) (rsp *AppendFactorPeriodComputedRsp, err error)
+	AppendDatasetPeriodCompleted(ctx context.Context, req *AppendDatasetPeriodCompletedReq, opts ...client.Option) (rsp *AppendDatasetPeriodCompletedRsp, err error)
 
 	AppendDatasetSyncPointMarker(ctx context.Context, req *AppendDatasetSyncPointMarkerReq, opts ...client.Option) (rsp *AppendDatasetSyncPointMarkerRsp, err error)
 
-	GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq, opts ...client.Option) (rsp *GetFactorPeriodComputedMarkerRsp, err error)
+	GetDatasetPeriodCompletedMarker(ctx context.Context, req *GetDatasetPeriodCompletedMarkerReq, opts ...client.Option) (rsp *GetDatasetPeriodCompletedMarkerRsp, err error)
 }
 
 type DataNodeMarkerRuntimeClientProxyImpl struct {
@@ -770,40 +741,20 @@ var NewDataNodeMarkerRuntimeClientProxy = func(opts ...client.Option) DataNodeMa
 	return &DataNodeMarkerRuntimeClientProxyImpl{client: client.DefaultClient, opts: opts}
 }
 
-func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendCollectorPeriodCompleted(ctx context.Context, req *AppendCollectorPeriodCompletedReq, opts ...client.Option) (*AppendCollectorPeriodCompletedRsp, error) {
+func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendDatasetPeriodCompleted(ctx context.Context, req *AppendDatasetPeriodCompletedReq, opts ...client.Option) (*AppendDatasetPeriodCompletedRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendCollectorPeriodCompleted")
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendDatasetPeriodCompleted")
 	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataNodeMarkerRuntime")
-	msg.WithCalleeMethod("AppendCollectorPeriodCompleted")
+	msg.WithCalleeMethod("AppendDatasetPeriodCompleted")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &AppendCollectorPeriodCompletedRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendFactorPeriodComputed(ctx context.Context, req *AppendFactorPeriodComputedReq, opts ...client.Option) (*AppendFactorPeriodComputedRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/AppendFactorPeriodComputed")
-	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("DataNodeMarkerRuntime")
-	msg.WithCalleeMethod("AppendFactorPeriodComputed")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &AppendFactorPeriodComputedRsp{}
+	rsp := &AppendDatasetPeriodCompletedRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -830,20 +781,20 @@ func (c *DataNodeMarkerRuntimeClientProxyImpl) AppendDatasetSyncPointMarker(ctx 
 	return rsp, nil
 }
 
-func (c *DataNodeMarkerRuntimeClientProxyImpl) GetFactorPeriodComputedMarker(ctx context.Context, req *GetFactorPeriodComputedMarkerReq, opts ...client.Option) (*GetFactorPeriodComputedMarkerRsp, error) {
+func (c *DataNodeMarkerRuntimeClientProxyImpl) GetDatasetPeriodCompletedMarker(ctx context.Context, req *GetDatasetPeriodCompletedMarkerReq, opts ...client.Option) (*GetDatasetPeriodCompletedMarkerRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/GetFactorPeriodComputedMarker")
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeMarkerRuntime/GetDatasetPeriodCompletedMarker")
 	msg.WithCalleeServiceName(DataNodeMarkerRuntimeServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("DataNodeMarkerRuntime")
-	msg.WithCalleeMethod("GetFactorPeriodComputedMarker")
+	msg.WithCalleeMethod("GetDatasetPeriodCompletedMarker")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetFactorPeriodComputedMarkerRsp{}
+	rsp := &GetDatasetPeriodCompletedMarkerRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -812,17 +812,14 @@ func (a *dataNodeProxyAdapter) RestoreDatasetRows(ctx context.Context, req *pb.R
 	}
 	return a.adminProxy.RestoreDatasetRows(ctx, req)
 }
-func (a *dataNodeProxyAdapter) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
-	return a.markerProxy.AppendCollectorPeriodCompleted(ctx, req)
-}
-func (a *dataNodeProxyAdapter) AppendFactorPeriodComputed(ctx context.Context, req *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
-	return a.markerProxy.AppendFactorPeriodComputed(ctx, req)
+func (a *dataNodeProxyAdapter) AppendDatasetPeriodCompleted(ctx context.Context, req *pb.AppendDatasetPeriodCompletedReq) (*pb.AppendDatasetPeriodCompletedRsp, error) {
+	return a.markerProxy.AppendDatasetPeriodCompleted(ctx, req)
 }
 func (a *dataNodeProxyAdapter) AppendDatasetSyncPointMarker(ctx context.Context, req *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
 	return a.markerProxy.AppendDatasetSyncPointMarker(ctx, req)
 }
-func (a *dataNodeProxyAdapter) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
-	return a.markerProxy.GetFactorPeriodComputedMarker(ctx, req)
+func (a *dataNodeProxyAdapter) GetDatasetPeriodCompletedMarker(ctx context.Context, req *pb.GetDatasetPeriodCompletedMarkerReq) (*pb.GetDatasetPeriodCompletedMarkerRsp, error) {
+	return a.markerProxy.GetDatasetPeriodCompletedMarker(ctx, req)
 }
 
 // This small role entrypoint intentionally keeps the DataNode process

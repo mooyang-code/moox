@@ -145,7 +145,7 @@ func enqueueReadyPeriods(t *testing.T, service *Service, ids ...string) {
 		at := time.Date(2026, 9, 13, 16, i, 0, 0, time.UTC)
 		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-		if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 			t.Fatalf("%s 应等待行写入：%v", id, err)
 		}
 	}
@@ -197,7 +197,7 @@ func TestEnqueueReadyPersistFailureIsNotAcked(t *testing.T) {
 	at := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-	err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-1", at), payload)
+	err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-1", at), payload)
 	if err == nil || errors.Is(err, ErrViewDataReadyPending) || !strings.Contains(err.Error(), "落盘失败") {
 		t.Fatalf("落盘失败应返回错误、不 ACK：%v", err)
 	}
@@ -205,7 +205,7 @@ func TestEnqueueReadyPersistFailureIsNotAcked(t *testing.T) {
 	if service.pendingReadyContains("prices-ready-1") {
 		t.Fatal("落盘失败的事件不应留在内存队列")
 	}
-	err = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-1", at), payload)
+	err = service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-1", at), payload)
 	if err == nil || errors.Is(err, ErrViewDataReadyPending) || !strings.Contains(err.Error(), "落盘失败") {
 		t.Fatalf("重投时仍应返回落盘失败、不 ACK：%v", err)
 	}

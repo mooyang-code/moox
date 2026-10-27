@@ -84,7 +84,7 @@ func (i *TaskIndex) space(ctx context.Context, spaceID string) ([]*Task, error) 
 	return tasks, nil
 }
 
-// PeriodTrigger 处理源数据集的 CollectorPeriodCompleted：收到桶内最后一个源周期的完成事件，就对该桶按数据集批量合成。
+// PeriodTrigger 处理源数据集的 DatasetPeriodCompleted：收到桶内最后一个源周期的完成事件，就对该桶按数据集批量合成。
 // 传输层（JetStream 解码、确认与重试）在 eventconsumer 子包里，这里只做领域判断；返回错误表示需要重试。
 type PeriodTrigger struct {
 	Index   *TaskIndex
@@ -93,7 +93,7 @@ type PeriodTrigger struct {
 }
 
 // OnPeriod 处理一个源周期完成事件。
-func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *storagepb.CollectorPeriodCompleted) error {
+func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *storagepb.DatasetPeriodCompleted) error {
 	if t.Metrics != nil {
 		t.Metrics.Events.Inc()
 	}

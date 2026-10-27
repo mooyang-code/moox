@@ -149,10 +149,10 @@ func periodHelperServeOutbox(t *testing.T, listener net.Listener, node *datanode
 				http.Error(w, "decode outbox event failed", http.StatusInternalServerError)
 				return
 			}
-			if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+			if message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 				continue
 			}
-			payload := &storageeventpb.CollectorPeriodCompleted{}
+			payload := &storageeventpb.DatasetPeriodCompleted{}
 			if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 				http.Error(w, "decode collector period marker failed", http.StatusInternalServerError)
 				return

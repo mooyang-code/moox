@@ -42,21 +42,28 @@ type periodCompletionInput struct {
 	status             string
 	universeSubjectIDs []string
 	failedSubjects     []string
-	expectedScopeRef   string
+	snapshotRef        string
 	committedPositions []*storageeventpb.CommittedPosition
-	completionKind     string
 }
 
-func (s *Service) HandleCollectorPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.CollectorPeriodCompleted) error {
+// HandleDatasetPeriodCompleted 处理数据集的一期完成。来源只描述怎么判定完成的：
+// ledger（序列账本）要等 View 的各输入数据集都到齐并核对写入位置；producer（写入方自己报告）逐 View 直接就绪并透传明细。
+func (s *Service) HandleDatasetPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("Collector 周期完成事件为空"))
+		return eventconsumer.Permanent(errors.New("数据集周期完成事件为空"))
 	}
-	return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
-		datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
-		status: payload.GetStatus(), universeSubjectIDs: payload.GetUniverseSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
-		expectedScopeRef: payload.GetExpectedScopeRef(), committedPositions: payload.GetCommittedPositions(),
-		completionKind: events.CollectorPeriodCompleted.Name(),
-	})
+	switch payload.GetSource() {
+	case "ledger":
+		return s.applyPeriodCompletion(ctx, message, periodCompletionInput{
+			datasetID: payload.GetDatasetId(), frequency: payload.GetFrequency(), periodTime: payload.GetPeriodTime(),
+			status: payload.GetStatus(), universeSubjectIDs: payload.GetUniverseSubjectIds(), failedSubjects: payload.GetFailedSubjects(),
+			snapshotRef: payload.GetSnapshotRef(), committedPositions: payload.GetCommittedPositions(),
+		})
+	case "producer":
+		return s.applyProducerPeriodCompleted(ctx, message, payload)
+	default:
+		return eventconsumer.Permanent(fmt.Errorf("数据集周期完成事件的来源 %q 不认识", payload.GetSource()))
+	}
 }
 
 func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.EventMessage, completion periodCompletionInput) error {
@@ -135,11 +142,10 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 	return nil
 }
 
-func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.FactorPeriodComputed) error {
+// applyProducerPeriodCompleted：写入方的结果行都已提交（按数据集顺序先于这条完成事件被 View 应用），逐 View 直接就绪；
+// 明细（detail）原样透传，View 不解析。
+func (s *Service) applyProducerPeriodCompleted(ctx context.Context, message *eventpb.EventMessage, payload *storageeventpb.DatasetPeriodCompleted) error {
 	handleStart := time.Now()
-	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("Factor 周期计算事件为空"))
-	}
 	_, publisher := s.periodDependencies()
 	if publisher == nil {
 		return errors.New("View 就绪事件发布器尚未就绪")
@@ -155,22 +161,16 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		}
 		return nil
 	}
-	failed := append([]string(nil), payload.GetFailedSubjects()...)
-	for _, state := range payload.GetFactors() {
-		if state != nil {
-			failed = append(failed, state.GetFailedSubjects()...)
-		}
-	}
 	for _, view := range views {
 		ready := &storageeventpb.ViewDataReady{
 			ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-			CompletionKind: events.FactorPeriodComputed.Name(),
-			DatasetId:      payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, "view:"+view.GetViewId()),
-			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(), FailedScopeRef: degradedScopeRef(payload.GetStatus(), failed),
-			ReadyAt: cloneTimestamp(message.GetOccurredAt()),
-			// 因子状态保留它们冻结的全集，即使 View 过滤了行。
+			DatasetId: payload.GetDatasetId(), Status: payload.GetStatus(), VisibleScope: viewVisibleScope(view, "view:"+view.GetViewId()),
+			Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+			FailedScopeRef: degradedScopeRef(payload.GetStatus(), payload.GetFailedSubjects()),
+			ReadyAt:        cloneTimestamp(message.GetOccurredAt()),
+			// 写入方冻结的标的全集，即使 View 过滤了行。
 			UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
-			Factors:            cloneFactorStates(payload.GetFactors()),
+			DetailType:         payload.GetDetailType(), Detail: append([]byte(nil), payload.GetDetail()...),
 		}
 		eventID := stableViewEventID("data-ready", message.GetEventId(), view.GetViewId())
 		enqueueStart := time.Now()
@@ -184,8 +184,8 @@ func (s *Service) HandleFactorPeriodComputed(ctx context.Context, message *event
 		if s.pendingReadyContains(eventID) {
 			return eventconsumer.Deferred(ErrViewDataReadyPending)
 		}
-		// 分段耗时：投递滞后 = 因子完成事件发出到本进程开始处理；入队含围栏与就绪队列落盘；发布含 ViewDataReady 的 JetStream 发布。
-		log.Printf("storage view 因子结果就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
+		// 分段耗时：投递滞后 = 完成事件发出到本进程开始处理；入队含围栏与就绪队列落盘；发布含 ViewDataReady 的 JetStream 发布。
+		log.Printf("storage view 写入方周期完成就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
 			view.GetViewId(), payload.GetPeriodTime(), handleStart.Sub(message.GetOccurredAt().AsTime()).Round(time.Millisecond), enqueueStart.Sub(handleStart).Round(time.Millisecond),
 			flushStart.Sub(enqueueStart).Round(time.Millisecond), time.Since(flushStart).Round(time.Millisecond), time.Since(handleStart).Round(time.Millisecond))
 	}
@@ -379,8 +379,7 @@ func viewDataReadyPayload(view *pb.View, completion periodCompletionInput, state
 	}
 	return &storageeventpb.ViewDataReady{
 		ViewId: view.GetViewId(), ViewConfigId: viewConfigID(view), CompletionEventId: message.GetEventId(),
-		CompletionKind: firstNonEmpty(completion.completionKind, message.GetEventName()),
-		DatasetId:      completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.expectedScopeRef, "view:"+view.GetViewId())),
+		DatasetId: completion.datasetID, Status: status, VisibleScope: viewVisibleScope(view, firstNonEmpty(completion.snapshotRef, "view:"+view.GetViewId())),
 		Frequency: completion.frequency, PeriodTime: completion.periodTime, FailedScopeRef: degradedScopeRef(status, failed),
 		CommittedPositions: cloneCommittedPositions(completion.committedPositions), ReadyAt: readyAt,
 		UniverseSubjectIds: uniqueSortedStrings(completion.universeSubjectIDs),
@@ -424,16 +423,6 @@ func cloneCommittedPositions(values []*storageeventpb.CommittedPosition) []*stor
 	for _, value := range values {
 		if value != nil {
 			out = append(out, proto.Clone(value).(*storageeventpb.CommittedPosition))
-		}
-	}
-	return out
-}
-
-func cloneFactorStates(values []*storageeventpb.FactorPeriodState) []*storageeventpb.FactorPeriodState {
-	out := make([]*storageeventpb.FactorPeriodState, len(values))
-	for i, value := range values {
-		if value != nil {
-			out[i] = proto.Clone(value).(*storageeventpb.FactorPeriodState)
 		}
 	}
 	return out

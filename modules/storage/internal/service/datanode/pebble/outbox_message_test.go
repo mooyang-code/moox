@@ -82,29 +82,29 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	}
 }
 
-func TestBuildCollectorPeriodCompletedMessageChangesIDWhenPayloadChanges(t *testing.T) {
-	base := &pb.CollectorPeriodCompletedMarker{
-		DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1_725_000_000,
-		Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:spot_kline:1m",
-		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+func TestBuildLedgerPeriodCompletedMessageChangesIDWhenPayloadChanges(t *testing.T) {
+	base := &LedgerPeriodCompleted{
+		DatasetID: "spot_kline", Frequency: "1m", PeriodTime: 1_725_000_000,
+		Status: "complete", SnapshotRef: "cfg-1",
+		UniverseSubjectIDs: []string{"BTC-USDT", "ETH-USDT"},
 		CommittedPositions: []*pb.CommittedPosition{{NodeId: "node-1", StoreId: "store", Sequence: 1}},
-		CollectedAt:        timestamppb.New(time.Unix(1_725_000_001, 0)),
+		CompletedAt:        timestamppb.New(time.Unix(1_725_000_001, 0)),
 	}
-	_, firstID, err := BuildCollectorPeriodCompletedMessage("crypto", base)
+	_, firstID, err := BuildLedgerPeriodCompletedMessage("crypto", base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, retryID, err := BuildCollectorPeriodCompletedMessage("crypto", proto.Clone(base).(*pb.CollectorPeriodCompletedMarker))
+	_, retryID, err := BuildLedgerPeriodCompletedMessage("crypto", cloneLedgerPeriodCompleted(base))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstID != retryID {
 		t.Fatalf("identical marker IDs differ: %q != %q", firstID, retryID)
 	}
-	changed := proto.Clone(base).(*pb.CollectorPeriodCompletedMarker)
+	changed := cloneLedgerPeriodCompleted(base)
 	changed.Status = "degraded"
 	changed.FailedSubjects = []string{"ETH-USDT"}
-	_, changedID, err := BuildCollectorPeriodCompletedMessage("crypto", changed)
+	_, changedID, err := BuildLedgerPeriodCompletedMessage("crypto", changed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,3 +162,11 @@ func mustEvent(t *testing.T, raw []byte) *eventpb.EventMessage {
 }
 
 func nowForTest() time.Time { return time.Now().UTC() }
+
+func cloneLedgerPeriodCompleted(in *LedgerPeriodCompleted) *LedgerPeriodCompleted {
+	out := *in
+	out.UniverseSubjectIDs = append([]string(nil), in.UniverseSubjectIDs...)
+	out.FailedSubjects = append([]string(nil), in.FailedSubjects...)
+	out.CommittedPositions = append([]*pb.CommittedPosition(nil), in.CommittedPositions...)
+	return &out
+}

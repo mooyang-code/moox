@@ -1546,17 +1546,16 @@ components:
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - ReadDatasetChanges
-          - ReportCollectorPeriodCompleted
-          - ReportFactorPeriodComputed
+          - ReportDatasetPeriodCompleted
           - AppendDatasetSyncPoint
-          - GetFactorPeriodComputed
+          - GetDatasetPeriodCompleted
           - WaitViewSyncPoint
         read_only_methods:
           - ReadRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - ReadDatasetChanges
-          - GetFactorPeriodComputed
+          - GetDatasetPeriodCompleted
         # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
         idempotent_methods:
           - CommitTimeSeriesBatch
@@ -1574,17 +1573,15 @@ components:
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
               - ReadDatasetChanges
-              - ReportCollectorPeriodCompleted
-              - ReportFactorPeriodComputed
+              - ReportDatasetPeriodCompleted
               - AppendDatasetSyncPoint
-              - GetFactorPeriodComputed
+              - GetDatasetPeriodCompleted
               - WaitViewSyncPoint
             callers:
               - moox-cli
           - methods:
               - RegisterSeriesSnapshot
               - CommitTimeSeriesBatch
-              - ReportCollectorPeriodCompleted
               - AppendDatasetSyncPoint
               - DeleteDatasetRows
               - RestoreDatasetRows
@@ -1596,7 +1593,7 @@ components:
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
               - WaitViewSyncPoint
-              - GetFactorPeriodComputed
+              - GetDatasetPeriodCompleted
             callers:
               - collector
               - factor-mgr
@@ -1614,7 +1611,7 @@ components:
               - collector-stream
           - methods:
               - UpsertFields
-              - ReportFactorPeriodComputed
+              - ReportDatasetPeriodCompleted
               - DeleteDatasetRows
               - RestoreDatasetRows
             callers:
@@ -2035,8 +2032,8 @@ principals:
           - ReadTimeSeriesRows
           - ReadDatasetChanges
           - UpsertFields
-          - ReportFactorPeriodComputed
-          - GetFactorPeriodComputed
+          - ReportDatasetPeriodCompleted
+          - GetDatasetPeriodCompleted
       - service: trpc.moox.storage.Metadata
         methods:
           - GetDataset

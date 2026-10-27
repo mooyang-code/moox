@@ -50,12 +50,12 @@ func (c *gatewayStorageClient) UpsertFields(ctx context.Context, request *storag
 	return invokeStorage[storagepb.PrimaryUpsertFieldsRsp](ctx, c.gateway, "PrimaryStore", "UpsertFields", request, options)
 }
 
-func (c *gatewayStorageClient) ReportFactorPeriodComputed(ctx context.Context, request *storagepb.ReportFactorPeriodComputedReq, options ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {
-	return invokeStorage[storagepb.ReportFactorPeriodComputedRsp](ctx, c.gateway, "PrimaryStore", "ReportFactorPeriodComputed", request, options)
+func (c *gatewayStorageClient) ReportDatasetPeriodCompleted(ctx context.Context, request *storagepb.ReportDatasetPeriodCompletedReq, options ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
+	return invokeStorage[storagepb.ReportDatasetPeriodCompletedRsp](ctx, c.gateway, "PrimaryStore", "ReportDatasetPeriodCompleted", request, options)
 }
 
-func (c *gatewayStorageClient) GetFactorPeriodComputed(ctx context.Context, request *storagepb.GetFactorPeriodComputedReq, options ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error) {
-	return invokeStorage[storagepb.GetFactorPeriodComputedRsp](ctx, c.gateway, "PrimaryStore", "GetFactorPeriodComputed", request, options)
+func (c *gatewayStorageClient) GetDatasetPeriodCompleted(ctx context.Context, request *storagepb.GetDatasetPeriodCompletedReq, options ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
+	return invokeStorage[storagepb.GetDatasetPeriodCompletedRsp](ctx, c.gateway, "PrimaryStore", "GetDatasetPeriodCompleted", request, options)
 }
 
 func (c *gatewayStorageClient) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {

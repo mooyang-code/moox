@@ -87,7 +87,7 @@ func TestProxyUsesOnlyCatalogGrantsAndRecordsDeniedMethods(t *testing.T) {
 		require.Equal(t, body, response.Data)
 	}
 	require.Equal(t, 2, called)
-	for _, method := range []string{"ReadTimeSeriesRows", "ReportFactorPeriodComputed", "DeleteDatasetRows", "unbounded-untrusted-method"} {
+	for _, method := range []string{"ReadTimeSeriesRows", "ReportDatasetPeriodCompleted", "DeleteDatasetRows", "unbounded-untrusted-method"} {
 		_, err := proxy.Forward(signedContext(t, credential, "access@storage", primaryService, method, body), &codec.Body{Data: body})
 		require.ErrorContains(t, err, "not allowed")
 		label := method

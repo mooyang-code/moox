@@ -8,8 +8,13 @@ import (
 	"sort"
 	"strings"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/proto"
 )
+
+// PeriodDetailType 是因子周期明细在 ViewDataReady.detail_type 里的取值，与因子模块写入时一致。
+const PeriodDetailType = "moox.factor.PeriodDetail.v1"
 
 // 跳过原因。
 const (
@@ -63,7 +68,12 @@ type Result struct {
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
 func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Result {
 	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
-	states := indexFactors(event)
+	states, err := indexFactors(event)
+	if err != nil && len(binding.Factors) > 0 {
+		result.Reason = ReasonFactorMissing
+		result.Detail = fmt.Sprintf("事件里的因子周期明细无法解析：%v", err)
+		return result
+	}
 	required := sortedKeys(binding.Factors)
 	// 先收齐事件里已有的全部指纹再判缺失：缺失的因子不能让其余因子的指纹没有保存，否则下一期经 bars[-1] 读取这些因子时，
 	// 相邻记录里缺少它们的证据，误记 previous_version_unknown。
@@ -125,16 +135,30 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			}
 		}
 	}
-	if len(event.GetFactors()) == 0 && event.GetStatus() == statusDegraded {
+	if len(states) == 0 && event.GetStatus() == statusDegraded {
 		result.FailedSubjects = parseScopeRef(event.GetFailedScopeRef())
 	}
 	return result
 }
 
-// indexFactors 按成员键索引事件里的因子状态（同一因子可以用不同参数出现多次）。
-func indexFactors(event *storagepb.ViewDataReady) map[string]*storagepb.FactorPeriodState {
-	states := make(map[string]*storagepb.FactorPeriodState, len(event.GetFactors()))
-	for _, state := range event.GetFactors() {
+// EncodeDetail 把因子成员状态编码成 ViewDataReady 的 detail_type 与 detail（回放据此构造事件）。
+func EncodeDetail(factors []*factorpb.FactorPeriodState) (string, []byte, error) {
+	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: factors})
+	return PeriodDetailType, raw, err
+}
+
+// indexFactors 解码事件 detail 里的因子周期明细，按成员键索引因子状态（同一因子可以用不同参数出现多次）。
+// 不带因子明细的事件（K 线 View）返回空表。
+func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, error) {
+	if event.GetDetailType() != PeriodDetailType || len(event.GetDetail()) == 0 {
+		return map[string]*factorpb.FactorPeriodState{}, nil
+	}
+	detail := &factorpb.PeriodDetail{}
+	if err := proto.Unmarshal(event.GetDetail(), detail); err != nil {
+		return map[string]*factorpb.FactorPeriodState{}, err
+	}
+	states := make(map[string]*factorpb.FactorPeriodState, len(detail.GetFactors()))
+	for _, state := range detail.GetFactors() {
 		if state == nil {
 			continue
 		}
@@ -144,7 +168,7 @@ func indexFactors(event *storagepb.ViewDataReady) map[string]*storagepb.FactorPe
 		}
 		states[id] = state
 	}
-	return states
+	return states, nil
 }
 
 // parseScopeRef 解析 View 事件的 failed_scope_ref：逗号分隔的标的列表；字面量 degraded 表示没有具体标的。

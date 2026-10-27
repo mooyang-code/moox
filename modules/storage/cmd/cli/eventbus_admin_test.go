@@ -219,7 +219,7 @@ func TestResetStorageViewConsumersDeletesConsumersThenPurgesEverySubject(t *test
 	require.NoError(t, err)
 	expected, err := resetEventSubjects(registry, views)
 	require.NoError(t, err)
-	require.Len(t, expected, 8, "两个数据集 × 四类事件")
+	require.Len(t, expected, 6, "两个数据集 × 三类事件")
 	require.Equal(t, expected, admin.purged)
 	require.Equal(t, 1, admin.purgeCalls, "所有主题一次提交")
 }
@@ -265,7 +265,7 @@ func TestResetStorageViewConsumersReportsMutationOnlyWhenBrokerStateMayHaveChang
 // Admin 一次最多接受 256 个主题。数据集多到主题超过上限时必须分批提交，
 // 否则会在本地状态已经重置、消费者已经删除之后被拒绝，把 Storage 留在停止状态。
 func TestResetStorageViewConsumersPurgesLargeTopologiesInBatches(t *testing.T) {
-	const datasets = 70
+	const datasets = 90
 	views := make([]resetViewRecord, 0, datasets)
 	for i := 0; i < datasets; i++ {
 		views = append(views, resetViewRecord{SpaceID: "crypto", ViewID: fmt.Sprintf("v_%03d", i), PrimaryDatasetID: fmt.Sprintf("ds_%03d", i)})

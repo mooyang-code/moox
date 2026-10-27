@@ -11,34 +11,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) AppendCollectorPeriodCompleted(ctx context.Context, req *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
+// AppendDatasetPeriodCompleted 追加写入方报告的周期完成（source=producer）。账本判定的完成由 DataNode 自己在周期封口时生成。
+func (s *Service) AppendDatasetPeriodCompleted(ctx context.Context, req *pb.AppendDatasetPeriodCompletedReq) (*pb.AppendDatasetPeriodCompletedRsp, error) {
 	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
-		return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: markerRetInfo(err)}, nil
+		return &pb.AppendDatasetPeriodCompletedRsp{RetInfo: markerRetInfo(err)}, nil
 	}
-	raw, _, err := pebble.BuildCollectorPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
+	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
 	if err == nil {
 		var eventID string
 		eventID, err = s.store.AppendDatasetMarker(ctx, raw)
 		if err == nil {
-			return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
+			return &pb.AppendDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 		}
 	}
-	return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
-}
-
-func (s *Service) AppendFactorPeriodComputed(ctx context.Context, req *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
-	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
-		return &pb.AppendFactorPeriodComputedRsp{RetInfo: markerRetInfo(err)}, nil
-	}
-	raw, _, err := pebble.BuildFactorPeriodComputedMessage(req.GetSpaceId(), req.GetMarker())
-	if err == nil {
-		var eventID string
-		eventID, err = s.store.AppendDatasetMarker(ctx, raw)
-		if err == nil {
-			return &pb.AppendFactorPeriodComputedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
-		}
-	}
-	return &pb.AppendFactorPeriodComputedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	return &pb.AppendDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 }
 
 func (s *Service) AppendDatasetSyncPointMarker(ctx context.Context, req *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
@@ -56,39 +42,28 @@ func (s *Service) AppendDatasetSyncPointMarker(ctx context.Context, req *pb.Appe
 	return &pb.AppendDatasetSyncPointMarkerRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 }
 
-func (s *Service) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
+func (s *Service) GetDatasetPeriodCompletedMarker(ctx context.Context, req *pb.GetDatasetPeriodCompletedMarkerReq) (*pb.GetDatasetPeriodCompletedMarkerRsp, error) {
 	if err := s.validateMarkerRequest(req.GetNodeId(), req.GetSpaceId(), req.GetAuthInfo()); err != nil {
-		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: markerRetInfo(err)}, nil
+		return &pb.GetDatasetPeriodCompletedMarkerRsp{RetInfo: markerRetInfo(err)}, nil
 	}
-	message, found, err := s.store.GetFactorPeriodComputedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetTriggerEventId(), req.GetPeriodTime())
+	message, found, err := s.store.GetDatasetPeriodCompletedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCauseEventId(), req.GetPeriodTime())
 	if err != nil {
-		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.GetDatasetPeriodCompletedMarkerRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
 	if !found {
-		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: retinfo.Success("success")}, nil
+		return &pb.GetDatasetPeriodCompletedMarkerRsp{RetInfo: retinfo.Success("success")}, nil
 	}
-	payload := &storageeventpb.FactorPeriodComputed{}
+	payload := &storageeventpb.DatasetPeriodCompleted{}
 	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
-		return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
+		return &pb.GetDatasetPeriodCompletedMarkerRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	factors := make([]*pb.FactorPeriodState, 0, len(payload.GetFactors()))
-	for _, state := range payload.GetFactors() {
-		if state == nil {
-			continue
-		}
-		factors = append(factors, &pb.FactorPeriodState{
-			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
-			SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash(), GapSubjects: append([]string(nil), state.GetGapSubjects()...),
-			MemberKey: state.GetMemberKey(), MemberKind: state.GetMemberKind(),
-		})
-	}
-	return &pb.GetFactorPeriodComputedMarkerRsp{
+	return &pb.GetDatasetPeriodCompletedMarkerRsp{
 		RetInfo: retinfo.Success("success"), Found: true, EventId: message.GetEventId(),
-		Marker: &pb.FactorPeriodComputedMarker{
-			DatasetId: payload.GetDatasetId(), SourceDatasetId: payload.GetSourceDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+		Marker: &pb.DatasetPeriodCompletedMarker{
+			DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 			Status: payload.GetStatus(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
-			FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), Factors: factors,
-			ComputedAt: payload.GetComputedAt(), TriggerEventId: payload.GetTriggerEventId(),
+			FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CauseEventId: payload.GetCauseEventId(),
+			CompletedAt: payload.GetCompletedAt(), DetailType: payload.GetDetailType(), Detail: append([]byte(nil), payload.GetDetail()...),
 		},
 	}, nil
 }

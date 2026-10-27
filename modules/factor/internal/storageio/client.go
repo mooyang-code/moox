@@ -18,8 +18,8 @@ type PrimaryStoreClient interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	ReadDatasetChanges(context.Context, *storagepb.ReadDatasetChangesReq, ...client.Option) (*storagepb.ReadDatasetChangesRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReportFactorPeriodComputed(context.Context, *storagepb.ReportFactorPeriodComputedReq, ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error)
-	GetFactorPeriodComputed(context.Context, *storagepb.GetFactorPeriodComputedReq, ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error)
+	ReportDatasetPeriodCompleted(context.Context, *storagepb.ReportDatasetPeriodCompletedReq, ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error)
+	GetDatasetPeriodCompleted(context.Context, *storagepb.GetDatasetPeriodCompletedReq, ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error)
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
 	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
 }

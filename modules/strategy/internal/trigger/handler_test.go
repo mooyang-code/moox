@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,7 +130,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -180,16 +182,20 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 	if len(statuses) > 0 {
 		status = statuses[0]
 	}
-	factors := make([]*storagepb.FactorPeriodState, 0, len(hashes))
+	factors := make([]*factorpb.FactorPeriodState, 0, len(hashes))
 	for id, hash := range hashes {
 		kind, factorID := "fixed", id
 		if base, ok := strings.CutSuffix(id, "__var"); ok {
 			kind, factorID = "var", base
 		}
-		factors = append(factors, &storagepb.FactorPeriodState{MemberKey: id, MemberKind: kind, FactorId: factorID, Status: status, DefinitionHash: hash})
+		factors = append(factors, &factorpb.FactorPeriodState{MemberKey: id, MemberKind: kind, FactorId: factorID, Status: status, DefinitionHash: hash})
 	}
 	message := &eventpb.EventMessage{EventId: fmt.Sprintf("event-%d", n), EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}
+	detailType, detail, err := readiness.EncodeDetail(factors)
+	if err != nil {
+		panic(err)
+	}
+	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
 	return message, payload
 }
 
@@ -575,43 +581,6 @@ END;`); err != nil {
 	h.noResultAt(1)
 	if got := h.observer.results; len(got) != 1 || got[0] != "02:skipped:config_error" {
 		t.Fatalf("应记一次 config_error 观测：%v", got)
-	}
-}
-
-// 实例只接受启用时确定的完成事件类型；其他类型的 ViewDataReady 不是它的触发信号，忽略且不写记录。
-func TestHandleIgnoresOtherCompletionKinds(t *testing.T) {
-	h := newHarness(t, rankDSL, nil)
-	instance, _ := h.repo.GetInstance(context.Background(), "i1")
-	resolved, err := input.ParseResolved(instance.ResolvedJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved.CompletionKind = events.FactorPeriodComputed.Name()
-	raw, _ := json.Marshal(resolved)
-	h.handler.programs = nil
-	if err := h.repo.DisableInstance(context.Background(), "i1", &h.session, nil, "", bar0); err != nil {
-		t.Fatal(err)
-	}
-	session := "session-2"
-	if err := h.repo.OpenSession(context.Background(), store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", false, &session, raw, bar0); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.repo.SetInstanceEnabled(context.Background(), "i1", true, &session, raw, bar0); err != nil {
-		t.Fatal(err)
-	}
-	h.session = session
-	h.frame(1, map[string]map[string]float64{"A": {"m": 1}})
-	message, payload := h.event(1, map[string]string{"f": "h1"})
-	payload.CompletionKind = events.CollectorPeriodCompleted.Name()
-	expectAck(t, h.handler.Handle(context.Background(), message, payload))
-	h.noResultAt(1)
-	payload.CompletionKind = events.FactorPeriodComputed.Name()
-	expectAck(t, h.handler.Handle(context.Background(), message, payload))
-	if result := h.resultAt(1); result.Status != store.StatusOK {
-		t.Fatalf("匹配的完成事件应正常求值：%+v", result)
 	}
 }
 

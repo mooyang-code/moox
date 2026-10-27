@@ -30,7 +30,7 @@ func TestReadyFlushDoesNotWaitForBusyRuntime(t *testing.T) {
 	for _, dataset := range []string{"prices_a", "prices_b"} {
 		payload := collectorCompleted(dataset, "complete", []string{"BTC-USDT"}, nil, at, 1786032300)
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 5}}
-		if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("ready-"+dataset, at), payload); err == nil {
+		if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("ready-"+dataset, at), payload); err == nil {
 			t.Fatalf("%s 的行还没有写入时应保持待发布", dataset)
 		}
 	}

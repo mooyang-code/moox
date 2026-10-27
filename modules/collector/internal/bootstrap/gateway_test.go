@@ -264,13 +264,6 @@ func (w *collectorGatewayWire) UpsertFields(ctx context.Context, request *storag
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) ReportCollectorPeriodCompleted(ctx context.Context, request *storagepb.ReportCollectorPeriodCompletedReq) (*storagepb.ReportCollectorPeriodCompletedRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReportCollectorPeriodCompleted", request); err != nil {
-		return nil, err
-	}
-	return &storagepb.ReportCollectorPeriodCompletedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-}
-
 func (w *collectorGatewayWire) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error) {
 	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReadRows", request); err != nil {
 		return nil, err
@@ -444,10 +437,6 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.UpsertFields(t.Context(), &storagepb.PrimaryUpsertFieldsReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("ReportCollectorPeriodCompleted", func(t *testing.T) {
-		_, err := adapter.ReportCollectorPeriodCompleted(t.Context(), &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: auth})
-		require.NoError(t, err)
-	})
 	t.Run("ReadRows", func(t *testing.T) {
 		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: auth})
 		require.NoError(t, err)
@@ -467,7 +456,7 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	wire.mu.Lock()
 	require.Equal(t, 2, wire.calls["GetDataset"])
 	require.Equal(t, 1, wire.calls["ApplyTagSnapshot"])
-	require.Len(t, wire.calls, 29)
+	require.Len(t, wire.calls, 28)
 	wire.mu.Unlock()
 	invoker := scfinvoker.New(scfinvoker.Config{Gateway: gateway})
 	lease, err := invoker.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")

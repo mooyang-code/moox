@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -126,39 +125,6 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 			return fmt.Errorf("%w: %v", ErrDatasetPeriodWriteUnconfirmed, err)
 		}
 		return nil
-	})
-}
-
-// ReportCollectorPeriodCompleted appends the terminal collector-period marker
-// that Storage View uses to publish ViewDataReady.
-func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spaceID string, payload *storageeventpb.CollectorPeriodCompleted) error {
-	if w == nil || w.access == nil {
-		return fmt.Errorf("report collector period completed: storage client is required")
-	}
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID == "" || payload == nil || strings.TrimSpace(payload.GetDatasetId()) == "" || strings.TrimSpace(payload.GetFrequency()) == "" || payload.GetPeriodTime() <= 0 {
-		return fmt.Errorf("report collector period completed: space_id, dataset, frequency, period_time and payload are required")
-	}
-	positions := make([]*storagepb.CommittedPosition, 0, len(payload.GetCommittedPositions()))
-	for _, position := range payload.GetCommittedPositions() {
-		if position == nil {
-			continue
-		}
-		positions = append(positions, &storagepb.CommittedPosition{NodeId: position.GetNodeId(), StoreId: position.GetStoreId(), Sequence: position.GetSequence()})
-	}
-	marker := &storagepb.CollectorPeriodCompletedMarker{
-		DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
-		Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
-		ExpectedScopeRef: payload.GetExpectedScopeRef(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
-		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CommittedPositions: positions,
-		CollectedAt: payload.GetCollectedAt(),
-	}
-	return w.runRPC(ctx, func() error {
-		response, err := w.access.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
-		if err != nil {
-			return fmt.Errorf("report collector period completed: %w", err)
-		}
-		return ensureStorageOK("report collector period completed", response.GetRetInfo())
 	})
 }
 

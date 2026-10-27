@@ -37,8 +37,8 @@ func TestConfigDefaults(t *testing.T) {
 
 func TestViewConsumerIgnoresUnknownMergeSubject(t *testing.T) {
 	config := eventConsumerConfig(Config{})
-	if len(config.Events) != 4 {
-		t.Fatalf("subscribed event families=%d, want 4", len(config.Events))
+	if len(config.Events) != 3 {
+		t.Fatalf("subscribed event families=%d, want 3", len(config.Events))
 	}
 	for _, event := range config.Events {
 		if strings.Contains(event.Name(), ".merge.") {

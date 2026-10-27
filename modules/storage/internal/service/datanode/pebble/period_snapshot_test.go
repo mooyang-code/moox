@@ -109,7 +109,7 @@ func TestCommitCreatesPeriodFromRegisteredSnapshot(t *testing.T) {
 	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", result.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestLazyCommitRejectionsAndMissingList(t *testing.T) {
@@ -182,7 +182,7 @@ func TestConcurrentLazyCommitsCreateOnePeriod(t *testing.T) {
 	for _, err := range errs {
 		require.NoError(t, err)
 	}
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestLegacyEnsureAndCommitStillWorkAlongsideLazyPeriods(t *testing.T) {

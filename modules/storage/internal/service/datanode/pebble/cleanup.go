@@ -320,7 +320,7 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 		return 0, err
 	}
 	if len(markerKeys) > 0 {
-		factorIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(factorMarkerPrefix), UpperBound: nextPrefix([]byte(factorMarkerPrefix))})
+		factorIter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(periodMarkerPrefix), UpperBound: nextPrefix([]byte(periodMarkerPrefix))})
 		if err != nil {
 			return 0, err
 		}

@@ -373,7 +373,7 @@ func TestEditorFormOffersRecommendedRetentionAndEverySpace(t *testing.T) {
 	h := startEditor(t, nil)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
 	rec := reply.Form.Retention.Recommended
-	if rec.ViewBars != 10000 || rec.Defaults["1h"] != "10080h" || rec.Spaces["stockcn"]["1m"] != "1440h" || rec.Spaces["mooxsys"]["30s"] != "48h" {
+	if rec.ViewBars != 10000 || rec.Defaults["1h"] != "10080h" || rec.Spaces["stockcn"]["1m"] != "60d" || rec.Spaces["mooxsys"]["30s"] != "48h" {
 		t.Fatalf("推荐值 = %+v", rec)
 	}
 	ids := map[string]bool{}

@@ -9,7 +9,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/events"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -153,31 +152,6 @@ type tagFailingClient struct {
 
 func (c *tagFailingClient) GetTag(context.Context, string, string) (TagInfo, error) {
 	return TagInfo{}, c.err
-}
-
-// 只有 Factor 的结果数据集由 factor_period.computed 宣布完成；Collector 的重采样 K 线虽然也带 source_dataset_id，
-// 仍由 collector.period.completed 宣布，判错会让实例永远不被触发。
-func TestResolveCompletionKindByDatasetRole(t *testing.T) {
-	strategy := parseStrategy(t, exampleDSL)
-	for _, tc := range []struct {
-		role string
-		want string
-	}{
-		{role: "factor_result", want: events.FactorPeriodComputed.Name()},
-		{role: "kline_resample_result", want: events.CollectorPeriodCompleted.Name()},
-	} {
-		client := newFakeClient("spot")
-		dataset := client.datasets["ds_factor"]
-		dataset.Attributes = map[string]string{"source_dataset_id": "ds_kline", "dataset_role": tc.role}
-		client.datasets["ds_factor"] = dataset
-		resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resolved.CompletionKind != tc.want || resolved.SourceDatasetID != "ds_kline" {
-			t.Fatalf("dataset_role=%s 的完成事件应为 %s：%+v", tc.role, tc.want, resolved)
-		}
-	}
 }
 
 // 活跃序列可回溯的起点：索引最早时间可能来自已停更的序列（只会提前），以“最新一根往前 SeriesBars−1 根”为界。

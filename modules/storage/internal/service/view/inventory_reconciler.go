@@ -277,7 +277,7 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 		return dynamicDatasetConsumerSpec{}, err
 	}
 	filters := make([]string, 0, 4)
-	for _, event := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
+	for _, event := range []events.Event{events.DatasetRowsUpserted, events.DatasetPeriodCompleted, events.DatasetSyncPoint} {
 		filter, renderErr := registry.RenderSubject(event, ref.spaceID, ref.datasetID)
 		if renderErr != nil {
 			return dynamicDatasetConsumerSpec{}, fmt.Errorf("生成动态 View 消费者的过滤主题失败：%w", renderErr)

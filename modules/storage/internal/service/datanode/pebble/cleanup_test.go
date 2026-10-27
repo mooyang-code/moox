@@ -102,7 +102,7 @@ func TestDeleteDatasetRowsRemovesCommitMarkersMarkersAndOutbox(t *testing.T) {
 	if _, err := store.UpsertFields(context.Background(), "s", "delete-me", "receipt-1", []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	marker, _, err := BuildCollectorPeriodCompletedMessage("s", &pb.CollectorPeriodCompletedMarker{DatasetId: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", BatchId: "batch-1", ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "scope-1", CollectedAt: timestamppb.New(time.Unix(1, 0))})
+	marker, _, err := BuildLedgerPeriodCompletedMessage("s", &LedgerPeriodCompleted{DatasetID: "delete-me", Frequency: "1m", PeriodTime: 1, Status: "complete", SnapshotRef: "cfg-1", CompletedAt: timestamppb.New(time.Unix(1, 0))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestDeleteDatasetRowsClearsPeriodProgressAndIndexes(t *testing.T) {
 	if finalized != 1 {
 		t.Fatalf("finalized periods=%d, want only unrelated dataset", finalized)
 	}
-	if got := countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()); got != 1 {
+	if got := countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()); got != 1 {
 		t.Fatalf("collector period markers=%d, want only unrelated dataset marker", got)
 	}
 
@@ -220,7 +220,7 @@ func TestRestoreDatasetRowsWithoutTombstonePreservesPeriodProgress(t *testing.T)
 	if finalized != 1 {
 		t.Fatalf("finalized periods=%d after no-op restore, want 1", finalized)
 	}
-	if got := countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()); got != 1 {
+	if got := countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()); got != 1 {
 		t.Fatalf("collector period markers=%d after no-op restore, want 1", got)
 	}
 }

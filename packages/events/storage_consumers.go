@@ -20,9 +20,9 @@ func StorageViewConsumerName(spaceID, datasetID string) string {
 	return StorageViewConsumerPrefix + hex.EncodeToString(hash[:])[:12]
 }
 
-// StorageDatasetEvents 是随数据集产生的四类 Storage 事件：清除某个数据集的历史事件、对齐 View 消费者的过滤主题时，
-// 都按这四类处理。放在这里让 Storage 命令行与 Admin 的 EventBus 维护接口不会各记一份。
-var StorageDatasetEvents = []Event{DatasetRowsUpserted, CollectorPeriodCompleted, FactorPeriodComputed, DatasetSyncPoint}
+// StorageDatasetEvents 是随数据集产生的三类 Storage 事件：清除某个数据集的历史事件、对齐 View 消费者的过滤主题时，
+// 都按这三类处理。放在这里让 Storage 命令行与 Admin 的 EventBus 维护接口不会各记一份。
+var StorageDatasetEvents = []Event{DatasetRowsUpserted, DatasetPeriodCompleted, DatasetSyncPoint}
 
 // IsStorageViewDurable 报告 name 是否是 Storage View 的消费者：view_<12 位十六进制>。
 func IsStorageViewDurable(name string) bool {

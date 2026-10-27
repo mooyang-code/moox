@@ -67,14 +67,9 @@ func (n *recordingNode) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.
 	return n.read(ctx, req)
 }
 
-func (n *recordingMarkerNode) AppendCollectorPeriodCompleted(context.Context, *pb.AppendCollectorPeriodCompletedReq) (*pb.AppendCollectorPeriodCompletedRsp, error) {
-	n.markerCalls = append(n.markerCalls, "collector")
-	return &pb.AppendCollectorPeriodCompletedRsp{RetInfo: successRetInfo()}, nil
-}
-
-func (n *recordingMarkerNode) AppendFactorPeriodComputed(context.Context, *pb.AppendFactorPeriodComputedReq) (*pb.AppendFactorPeriodComputedRsp, error) {
-	n.markerCalls = append(n.markerCalls, "factor")
-	return &pb.AppendFactorPeriodComputedRsp{RetInfo: successRetInfo()}, nil
+func (n *recordingMarkerNode) AppendDatasetPeriodCompleted(context.Context, *pb.AppendDatasetPeriodCompletedReq) (*pb.AppendDatasetPeriodCompletedRsp, error) {
+	n.markerCalls = append(n.markerCalls, "period")
+	return &pb.AppendDatasetPeriodCompletedRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingMarkerNode) AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error) {
@@ -82,8 +77,8 @@ func (n *recordingMarkerNode) AppendDatasetSyncPointMarker(context.Context, *pb.
 	return &pb.AppendDatasetSyncPointMarkerRsp{RetInfo: successRetInfo()}, nil
 }
 
-func (*recordingMarkerNode) GetFactorPeriodComputedMarker(context.Context, *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
-	return &pb.GetFactorPeriodComputedMarkerRsp{RetInfo: successRetInfo()}, nil
+func (*recordingMarkerNode) GetDatasetPeriodCompletedMarker(context.Context, *pb.GetDatasetPeriodCompletedMarkerReq) (*pb.GetDatasetPeriodCompletedMarkerRsp, error) {
+	return &pb.GetDatasetPeriodCompletedMarkerRsp{RetInfo: successRetInfo()}, nil
 }
 
 func (n *recordingNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -140,23 +135,11 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || upsert.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("upsert rsp=%v err=%v", upsert, err)
 	}
-	collected, err := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "collector-data"},
+	completed, err := svc.ReportDatasetPeriodCompleted(context.Background(), &pb.ReportDatasetPeriodCompletedReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.DatasetPeriodCompletedMarker{DatasetId: "factor-data"},
 	})
-	if err != nil || collected.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("collected rsp=%v err=%v", collected, err)
-	}
-	resampled, err := svc.ReportCollectorPeriodCompleted(context.Background(), &pb.ReportCollectorPeriodCompletedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "space", Marker: &pb.CollectorPeriodCompletedMarker{DatasetId: "resample-data"},
-	})
-	if err != nil || resampled.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("resampled rsp=%v err=%v", resampled, err)
-	}
-	computed, err := svc.ReportFactorPeriodComputed(context.Background(), &pb.ReportFactorPeriodComputedReq{
-		AuthInfo: &pb.AuthInfo{AppId: "factor"}, SpaceId: "space", Marker: &pb.FactorPeriodComputedMarker{DatasetId: "factor-data"},
-	})
-	if err != nil || computed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("computed rsp=%v err=%v", computed, err)
+	if err != nil || completed.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		t.Fatalf("completed rsp=%v err=%v", completed, err)
 	}
 	syncPoint, err := svc.AppendDatasetSyncPoint(context.Background(), &pb.AppendDatasetSyncPointReq{
 		AuthInfo: &pb.AuthInfo{AppId: "storage-view"}, SpaceId: "space",
@@ -165,7 +148,7 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 	if err != nil || syncPoint.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("sync point rsp=%v err=%v", syncPoint, err)
 	}
-	if !reflect.DeepEqual(node.markerCalls, []string{"collector", "collector", "factor", "sync-point"}) {
+	if !reflect.DeepEqual(node.markerCalls, []string{"period", "sync-point"}) {
 		t.Fatalf("marker calls=%v", node.markerCalls)
 	}
 }

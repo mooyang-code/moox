@@ -105,26 +105,41 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 		mutate    func(proto.Message)
 	}{
 		{
-			name: "collector route", event: CollectorPeriodCompleted, subjectID: "dataset",
-			payload: validCollectorPeriodCompleted(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.CollectorPeriodCompleted).DatasetId = "other" },
+			name: "ledger route", event: DatasetPeriodCompleted, subjectID: "dataset",
+			payload: validLedgerPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DatasetId = "other" },
 		},
 		{
-			name: "collector failed subject subset", event: CollectorPeriodCompleted, subjectID: "dataset",
+			name: "ledger failed subject subset", event: DatasetPeriodCompleted, subjectID: "dataset",
 			payload: func() proto.Message {
-				payload := validCollectorPeriodCompleted(now)
+				payload := validLedgerPeriodCompleted(now)
 				payload.Status = "degraded"
 				payload.FailedSubjects = []string{"BTC-USDT"}
 				return payload
 			}(),
 			mutate: func(value proto.Message) {
-				value.(*storagepb.CollectorPeriodCompleted).FailedSubjects = []string{"ETH-USDT"}
+				value.(*storagepb.DatasetPeriodCompleted).FailedSubjects = []string{"ETH-USDT"}
 			},
 		},
 		{
-			name: "factor computed trigger", event: FactorPeriodComputed, subjectID: "dataset_result",
-			payload: validFactorPeriodComputed(now),
-			mutate:  func(value proto.Message) { value.(*storagepb.FactorPeriodComputed).TriggerEventId = "" },
+			name: "ledger needs snapshot_ref", event: DatasetPeriodCompleted, subjectID: "dataset",
+			payload: validLedgerPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).SnapshotRef = "" },
+		},
+		{
+			name: "producer needs cause_event_id", event: DatasetPeriodCompleted, subjectID: "dataset_result",
+			payload: validProducerPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).CauseEventId = "" },
+		},
+		{
+			name: "unknown source", event: DatasetPeriodCompleted, subjectID: "dataset_result",
+			payload: validProducerPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).Source = "collector" },
+		},
+		{
+			name: "detail needs a type", event: DatasetPeriodCompleted, subjectID: "dataset_result",
+			payload: validProducerPeriodCompleted(now),
+			mutate:  func(value proto.Message) { value.(*storagepb.DatasetPeriodCompleted).DetailType = "" },
 		},
 		{
 			name: "view data ready route", event: ViewDataReady, subjectID: "view-1",
@@ -151,25 +166,31 @@ func TestStorageCompletionEventValidation(t *testing.T) {
 	}
 }
 
-func TestFactorCompletionRequiresSourceHash(t *testing.T) {
+func TestDatasetPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
-	payload := validFactorPeriodComputed(timestamppb.Now())
-	payload.Factors[0].SourceHash = ""
-	_, err = registry.Encode(FactorPeriodComputed, payload, validationOptions("factor-event-1", "space", "dataset_result"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "source_hash is required")
-}
-
-func TestCollectorPeriodCompletedAllowsEmptySubjectIDs(t *testing.T) {
-	registry, err := DefaultRegistry()
-	require.NoError(t, err)
-	payload := validCollectorPeriodCompleted(timestamppb.Now())
+	payload := validLedgerPeriodCompleted(timestamppb.Now())
 	payload.UniverseSubjectIds = nil
 	payload.Frequency = "1H"
 	payload.PeriodTime = 1
-	_, err = registry.Encode(CollectorPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))
+	_, err = registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset"))
 	require.NoError(t, err)
+}
+
+// 明细对 Storage 是不透明字节：内容怎么写都能通过，只要带类型。
+func TestDatasetPeriodCompletedPassesOpaqueDetailThrough(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	payload := validProducerPeriodCompleted(timestamppb.Now())
+	payload.Detail = []byte{0xff, 0x00, 0x01}
+	encoded, err := registry.Encode(DatasetPeriodCompleted, payload, validationOptions("event-1", "space", "dataset_result"))
+	require.NoError(t, err)
+	raw, err := proto.Marshal(encoded.Message)
+	require.NoError(t, err)
+	_, decoded, err := DecodeDatasetPeriodCompleted(registry, raw, encoded.Subject, "event-1")
+	require.NoError(t, err)
+	require.Equal(t, []byte{0xff, 0x00, 0x01}, decoded.GetDetail())
+	require.Equal(t, "test.Detail.v1", decoded.GetDetailType())
 }
 
 type semanticValidationPublisher struct {

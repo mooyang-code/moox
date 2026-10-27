@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -24,8 +26,11 @@ func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error 
 		strings.TrimSpace(marker.TriggerEventID) == "" || marker.PeriodTime <= 0 {
 		return errors.New("space, result/source dataset, frequency, positive period_time and trigger_event_id are required")
 	}
-	protoMarker := markerToProto(marker)
-	rsp, err := c.primary.ReportFactorPeriodComputed(ctx, &storagepb.ReportFactorPeriodComputedReq{
+	protoMarker, err := markerToProto(marker)
+	if err != nil {
+		return err
+	}
+	rsp, err := c.primary.ReportDatasetPeriodCompleted(ctx, &storagepb.ReportDatasetPeriodCompletedReq{
 		AuthInfo: c.auth, SpaceId: marker.SpaceID, Marker: protoMarker,
 	})
 	if err != nil {
@@ -68,15 +73,15 @@ func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, trigg
 }
 
 // getComputed 读取周期 marker；NOT_FOUND 返回 (nil, nil)。
-func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*storagepb.GetFactorPeriodComputedRsp, error) {
+func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
 	if err := c.primaryReady("get factor period computed"); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(triggerEventID) == "" || periodTime <= 0 {
 		return nil, errors.New("space_id, dataset_id, trigger_event_id and positive period_time are required")
 	}
-	rsp, err := c.primary.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
-		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, TriggerEventId: triggerEventID, PeriodTime: periodTime,
+	rsp, err := c.primary.GetDatasetPeriodCompleted(ctx, &storagepb.GetDatasetPeriodCompletedReq{
+		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, CauseEventId: triggerEventID, PeriodTime: periodTime,
 	})
 	if err != nil {
 		return nil, rpcError("get factor period computed", err)
@@ -94,23 +99,37 @@ func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEve
 	return rsp, nil
 }
 
-func markerToProto(marker PeriodMarker) *storagepb.FactorPeriodComputedMarker {
+// PeriodDetailType 是因子周期明细放进 DatasetPeriodCompleted.detail 时的 detail_type。
+const PeriodDetailType = "moox.factor.PeriodDetail.v1"
+
+// markerToProto 把因子这一期的结果构造成写入方周期完成报告：每个因子成员的状态编码成 PeriodDetail 放进 detail，
+// Storage 与 View 只原样透传，不解析。
+func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker, error) {
 	factors := append([]FactorState(nil), marker.Factors...)
 	sort.Slice(factors, func(i, j int) bool { return factors[i].MemberKey < factors[j].MemberKey })
-	protoFactors := make([]*storagepb.FactorPeriodState, 0, len(factors))
+	detailFactors := make([]*factorpb.FactorPeriodState, 0, len(factors))
 	for _, factor := range factors {
-		protoFactors = append(protoFactors, &storagepb.FactorPeriodState{
+		detailFactors = append(detailFactors, &factorpb.FactorPeriodState{
 			FactorId: factor.FactorID, MemberKey: factor.MemberKey, MemberKind: factor.MemberKind, Status: factor.Status,
-			FailedSubjects: normalizedSorted(factor.FailedSubjects), SourceHash: factor.SourceHash,
+			FailedSubjects: normalizedSorted(factor.FailedSubjects), SpecHash: factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
 		})
 	}
-	return &storagepb.FactorPeriodComputedMarker{
-		DatasetId: marker.ResultDatasetID, SourceDatasetId: marker.SourceDatasetID, Frequency: marker.Frequency,
-		PeriodTime: marker.PeriodTime, Status: marker.Status,
-		UniverseSubjectIds: normalizedSorted(marker.UniverseSubjects), FailedSubjects: normalizedSorted(marker.FailedSubjects),
-		Factors: protoFactors, TriggerEventId: marker.TriggerEventID, ComputedAt: timestamppb.New(marker.ComputedAt.UTC()),
+	detail := &factorpb.PeriodDetail{SourceDatasetId: marker.SourceDatasetID, Factors: detailFactors}
+	universe, failed := normalizedSorted(marker.UniverseSubjects), normalizedSorted(marker.FailedSubjects)
+	if err := ValidatePeriodDetail(detail, universe, marker.Status); err != nil {
+		return nil, err
 	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(detail)
+	if err != nil {
+		return nil, fmt.Errorf("编码因子周期明细: %w", err)
+	}
+	return &storagepb.DatasetPeriodCompletedMarker{
+		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
+		UniverseSubjectIds: universe, FailedSubjects: failed,
+		CauseEventId: marker.TriggerEventID, CompletedAt: timestamppb.New(marker.ComputedAt.UTC()),
+		DetailType: PeriodDetailType, Detail: raw,
+	}, nil
 }
 
 func normalizedSorted(values []string) []string {
@@ -131,9 +150,10 @@ func normalizedSorted(values []string) []string {
 	return out
 }
 
-func computedEventID(spaceID string, marker *storagepb.FactorPeriodComputedMarker) string {
+// computedEventID 是 Storage 为这条写入方周期完成生成的确定性事件 ID（与 Storage 的 producer 标记规则一致）。
+func computedEventID(spaceID string, marker *storagepb.DatasetPeriodCompletedMarker) string {
 	parts := []string{
-		"factor-period", spaceID, marker.GetDatasetId(), marker.GetTriggerEventId(), strconv.FormatInt(marker.GetPeriodTime(), 10),
+		"producer-period", spaceID, marker.GetDatasetId(), marker.GetCauseEventId(), strconv.FormatInt(marker.GetPeriodTime(), 10),
 	}
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "storage-marker-" + hex.EncodeToString(hash[:16])

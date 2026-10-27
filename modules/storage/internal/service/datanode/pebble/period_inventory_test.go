@@ -198,9 +198,9 @@ func TestInspectPeriodLedgerCrossChecksMarkerAgainstSnapshotAndBitmap(t *testing
 
 	message := &eventpb.EventMessage{}
 	require.NoError(t, proto.Unmarshal(markerRaw, message))
-	payload := &storageeventpb.CollectorPeriodCompleted{}
+	payload := &storageeventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
-	payload.ConfigSnapshotId = "wrong-hash"
+	payload.SnapshotRef = "wrong-hash"
 	message.Payload, err = proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	require.NoError(t, err)
 	corruptRaw, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
@@ -227,7 +227,7 @@ func TestInspectPeriodLedgerCrossChecksMarkerAgainstSnapshotAndBitmap(t *testing
 
 	got, err := InspectPeriodLedger(path, "node-a", PeriodLedgerScope{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTimeMin: exp.PeriodTime, PeriodTimeMax: exp.PeriodTime})
 	require.NoError(t, err)
-	require.Contains(t, got.Periods[0].IntegrityErrors, "marker config_snapshot_id or expected_scope_ref does not match series_hash")
+	require.Contains(t, got.Periods[0].IntegrityErrors, "marker snapshot_ref does not match series_hash")
 	require.Contains(t, got.Periods[0].IntegrityErrors, "marker record key does not match event_id")
 }
 
@@ -269,7 +269,7 @@ func TestInspectPeriodLedgerCrossChecksFailedSubjectsAgainstFailureBitmap(t *tes
 	message := &eventpb.EventMessage{}
 	require.NoError(t, proto.Unmarshal(markerIter.Value(), message))
 	require.NoError(t, markerIter.Close())
-	payload := &storageeventpb.CollectorPeriodCompleted{}
+	payload := &storageeventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 	require.Equal(t, []string{"ETH-USDT"}, payload.GetFailedSubjects())
 	payload.FailedSubjects = nil
@@ -347,7 +347,7 @@ func TestInspectPeriodLedgerRejectsMarkerAndOutboxPayloadDivergence(t *testing.T
 	for valid := iter.First(); valid; valid = iter.Next() {
 		candidate := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(iter.Value(), candidate))
-		if candidate.GetEventName() == "event.storage.collector.period.completed" {
+		if candidate.GetEventName() == "event.storage.dataset.period.completed" {
 			key = append([]byte(nil), iter.Key()...)
 			message = candidate
 			break
@@ -355,9 +355,9 @@ func TestInspectPeriodLedgerRejectsMarkerAndOutboxPayloadDivergence(t *testing.T
 	}
 	require.NotNil(t, message)
 	require.NoError(t, iter.Close())
-	payload := &storageeventpb.CollectorPeriodCompleted{}
+	payload := &storageeventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
-	payload.ConfigSnapshotId = "diverged"
+	payload.SnapshotRef = "diverged"
 	message.Payload, err = proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	require.NoError(t, err)
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
@@ -392,7 +392,7 @@ func TestInspectPeriodLedgerRejectsOutboxKeyThatRelayCannotRead(t *testing.T) {
 	for valid := iter.First(); valid; valid = iter.Next() {
 		message := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(iter.Value(), message))
-		if message.GetEventName() == "event.storage.collector.period.completed" {
+		if message.GetEventName() == "event.storage.dataset.period.completed" {
 			key = append([]byte(nil), iter.Key()...)
 			raw = append([]byte(nil), iter.Value()...)
 			break
@@ -521,7 +521,7 @@ func TestInspectPeriodLedgerRejectsEventIDNotBoundToMarkerPayload(t *testing.T) 
 	for valid := outboxIter.First(); valid; valid = outboxIter.Next() {
 		candidate := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(outboxIter.Value(), candidate))
-		if candidate.GetEventName() == "event.storage.collector.period.completed" {
+		if candidate.GetEventName() == "event.storage.dataset.period.completed" {
 			outboxKey = append([]byte(nil), outboxIter.Key()...)
 			break
 		}
@@ -565,8 +565,8 @@ func TestInspectPeriodLedgerRejectsEventIDNotBoundToMarkerPayload(t *testing.T) 
 	require.NoError(t, db.Close())
 	got, err = InspectPeriodLedger(path, "node-a", PeriodLedgerScope{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTimeMin: exp.PeriodTime, PeriodTimeMax: exp.PeriodTime})
 	require.NoError(t, err)
-	require.Contains(t, got.Periods[0].IntegrityErrors, "marker occurred_at does not match collected_at")
-	require.Equal(t, 1, strings.Count(strings.Join(got.Periods[0].IntegrityErrors, "\n"), "marker occurred_at does not match collected_at"))
+	require.Contains(t, got.Periods[0].IntegrityErrors, "marker occurred_at does not match completed_at")
+	require.Equal(t, 1, strings.Count(strings.Join(got.Periods[0].IntegrityErrors, "\n"), "marker occurred_at does not match completed_at"))
 }
 
 func TestInspectPeriodLedgerDoesNotExposeSubjectValuesInMarkerErrors(t *testing.T) {
@@ -590,7 +590,7 @@ func TestInspectPeriodLedgerDoesNotExposeSubjectValuesInMarkerErrors(t *testing.
 	message := &eventpb.EventMessage{}
 	require.NoError(t, proto.Unmarshal(iter.Value(), message))
 	require.NoError(t, iter.Close())
-	payload := &storageeventpb.CollectorPeriodCompleted{}
+	payload := &storageeventpb.DatasetPeriodCompleted{}
 	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
 	payload.FailedSubjects = []string{"PRIVATE-UNIVERSE-LEAK"}
 	message.Payload, err = proto.MarshalOptions{Deterministic: true}.Marshal(payload)

@@ -224,12 +224,6 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return nil
 	}
-	// 因子结果 View 只由 factor_period.computed 驱动，K 线 View 只由 collector.period.completed 驱动；实例绑定哪种 View
-	// 在启用时就确定了，其他类型的完成事件不是这个实例的触发信号，先于其余处理忽略（编译失败的会话也带着快照里的类型）。
-	if want := rt.resolved.CompletionKind; payload.GetCompletionKind() != want {
-		h.logf("实例 %s 只接受 %s 触发，忽略 %s 事件 %s", instance.InstanceID, want, payload.GetCompletionKind(), message.GetEventId())
-		return nil
-	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
 	// 日历换算失败（例如 A 股内嵌日历已过期、周期不在交易日上）无法确定周期与有效期，只能 ACK：
 	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。

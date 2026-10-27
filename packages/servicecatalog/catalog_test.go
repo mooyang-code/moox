@@ -204,7 +204,7 @@ func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string][]Permission{
 		"scf-collector":      {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
-		"factor-engine":      {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams"}}},
+		"factor-engine":      {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "ReadDatasetChanges", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress", "GetTaskParams"}}},
 		"archive-worker":     {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns"}}, {Service: "trpc.moox.archive.ArchiveWorker", Methods: []string{"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}}},
 		"moox-skill":         {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
 		"collector-operator": {{Service: "trpc.moox.collector.CollectMgr", Methods: []string{"SetSubjectExclusions", "ClearSubjectExclusions", "ListSubjectExclusions", "SyncSubjects"}}},
@@ -310,7 +310,7 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		{"trpc.moox.storage.Metadata", "ListDatasetColumns", true},
 		{"trpc.moox.ops.SecretMgr", "GetSecretValue", true},
 		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},
-		{"trpc.moox.storage.PrimaryStore", "ReportFactorPeriodComputed", false},
+		{"trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", false},
 		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
 		{"trpc.moox.egress.Proxy", "Do", false},
 		{GatewayControlPath, "ReportStatus", false},
@@ -332,7 +332,7 @@ func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
 		{"trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
 		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
 		{"trpc.moox.storage.PrimaryStore", "UpsertFields", false},
-		{"trpc.moox.storage.PrimaryStore", "ReportFactorPeriodComputed", false},
+		{"trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", false},
 		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
 		{"trpc.moox.unknown.Service", "CommitTimeSeriesBatch", false},
 	} {
@@ -348,7 +348,7 @@ func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
 func TestFactorInternalStorageMethodsHaveCompleteAndBoundedACL(t *testing.T) {
 	c := mustCatalog(t)
 	for service, methods := range map[string][]string{
-		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportFactorPeriodComputed", "GetFactorPeriodComputed", "DeleteDatasetRows", "RestoreDatasetRows"},
+		"PrimaryStore": {"ReadTimeSeriesRows", "UpsertFields", "ReportDatasetPeriodCompleted", "GetDatasetPeriodCompleted", "DeleteDatasetRows", "RestoreDatasetRows"},
 		"Metadata":     {"GetDataset", "ListDatasetColumns", "CreateDataset", "UpsertDatasetColumn", "ActivateDataset", "DeleteDataset", "UpdateDataset", "ListDatasetSubjects"},
 	} {
 		for _, method := range methods {

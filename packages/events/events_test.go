@@ -21,22 +21,20 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.collector.kline.backfilled@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
-		"event.storage.collector.period.completed@1",
-		"event.storage.dataset.factor_period.computed@1",
+		"event.storage.dataset.period.completed@1",
 		"event.storage.dataset.rows.upserted@2",
 		"event.storage.dataset.sync_point@1",
-		"event.storage.view.data.ready@1",
+		"event.storage.view.data.ready@2",
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
 		"event.collector.kline.backfilled@1":              "collector",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
-		"event.storage.collector.period.completed@1":      "storage",
-		"event.storage.dataset.factor_period.computed@1":  "storage",
+		"event.storage.dataset.period.completed@1":        "storage",
 		"event.storage.dataset.rows.upserted@2":           "storage",
 		"event.storage.dataset.sync_point@1":              "storage",
-		"event.storage.view.data.ready@1":                 "storage",
+		"event.storage.view.data.ready@2":                 "storage",
 		"event.trade.target.weight_requested@1":           "strategy",
 	}
 	events := registry.Events()
@@ -83,11 +81,11 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		decode    func([]byte, string, string) (proto.Message, error)
 	}{
 		{
-			name: "collector period completed", event: CollectorPeriodCompleted,
-			payload:   validCollectorPeriodCompleted(now),
+			name: "dataset period completed (ledger)", event: DatasetPeriodCompleted,
+			payload:   validLedgerPeriodCompleted(now),
 			subjectID: "dataset",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeCollectorPeriodCompleted(registry, raw, subject, id)
+				_, payload, err := DecodeDatasetPeriodCompleted(registry, raw, subject, id)
 				return payload, err
 			},
 		},
@@ -101,11 +99,11 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name: "factor period computed", event: FactorPeriodComputed,
-			payload:   validFactorPeriodComputed(now),
+			name: "dataset period completed (producer)", event: DatasetPeriodCompleted,
+			payload:   validProducerPeriodCompleted(now),
 			subjectID: "dataset_result",
 			decode: func(raw []byte, subject, id string) (proto.Message, error) {
-				_, payload, err := DecodeFactorPeriodComputed(registry, raw, subject, id)
+				_, payload, err := DecodeDatasetPeriodCompleted(registry, raw, subject, id)
 				return payload, err
 			},
 		},
@@ -233,33 +231,32 @@ func TestLogicalAccountTargetWeightRequestedContract(t *testing.T) {
 	}
 }
 
-func validCollectorPeriodCompleted(now *timestamppb.Timestamp) *storagepb.CollectorPeriodCompleted {
-	return &storagepb.CollectorPeriodCompleted{
-		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		BatchId: "batch-1", ConfigSnapshotId: "config-1", ExpectedScopeRef: "universe:dataset:1m",
+func validLedgerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPeriodCompleted {
+	return &storagepb.DatasetPeriodCompleted{
+		DatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "ledger",
+		SnapshotRef:        "series-hash-1",
 		UniverseSubjectIds: []string{"BTC-USDT"},
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 1}},
-		CollectedAt:        now,
+		CompletedAt:        now,
 	}
 }
 
 func validViewDataReady(now *timestamppb.Timestamp) *storagepb.ViewDataReady {
 	return &storagepb.ViewDataReady{
-		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "collector-completed-1",
-		CompletionKind: CollectorPeriodCompleted.Name(),
-		DatasetId:      "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
+		ViewId: "view-1", ViewConfigId: "view-config-1", CompletionEventId: "period-completed-1",
+		DatasetId: "dataset", Status: "complete", VisibleScope: "universe:dataset:1m",
 		Frequency: "1m", PeriodTime: 1786032000,
 		CommittedPositions: []*storagepb.CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 2}},
 		ReadyAt:            now,
 	}
 }
 
-func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeriodComputed {
-	return &storagepb.FactorPeriodComputed{
-		DatasetId: "dataset_result", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		UniverseSubjectIds: []string{"BTC-USDT"},
-		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", MemberKey: "factor-1", MemberKind: "fixed", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
-		ComputedAt:         now, TriggerEventId: "collector-completed-1",
+// validProducerPeriodCompleted 是写入方自己报告的完成：明细是不透明字节，Storage 只要求带类型。
+func validProducerPeriodCompleted(now *timestamppb.Timestamp) *storagepb.DatasetPeriodCompleted {
+	return &storagepb.DatasetPeriodCompleted{
+		DatasetId: "dataset_result", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		UniverseSubjectIds: []string{"BTC-USDT"}, CauseEventId: "period-completed-1", CompletedAt: now,
+		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	}
 }
 

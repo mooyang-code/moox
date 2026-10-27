@@ -55,7 +55,7 @@ func TestDatasetPeriodCommitBitmapIsIdempotentAndCompletesOnce(t *testing.T) {
 	status, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", status.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodExpectationConflictIsRejected(t *testing.T) {
@@ -138,7 +138,7 @@ func TestDatasetPeriodEnsureRejectsNonPositiveDeadlineWithoutSideEffects(t *test
 			query.DeadlineAt = 0
 			_, err = store.GetDatasetPeriodStatus(context.Background(), query)
 			require.ErrorIs(t, err, cpebble.ErrNotFound)
-			require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+			require.Zero(t, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 		})
 	}
 }
@@ -153,7 +153,7 @@ func TestDatasetPeriodEnsureRejectsMarkerOverEventLimit(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds limit")
 	_, err = store.GetDatasetPeriodStatus(context.Background(), exp)
 	require.ErrorIs(t, err, cpebble.ErrNotFound, "an unpublishable period must not be persisted")
-	require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Zero(t, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodEnsurePreflightIncludesMaximumTimestampNanos(t *testing.T) {
@@ -236,7 +236,7 @@ func TestDatasetPeriodFinalizerContinuesAfterOversizedPeriod(t *testing.T) {
 	smallStatus, err := store.GetDatasetPeriodProgress(context.Background(), small)
 	require.NoError(t, err)
 	require.Equal(t, "degraded", smallStatus.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodFinalizerRotatesPastOversizedDeadlineBatch(t *testing.T) {
@@ -329,7 +329,7 @@ func TestDatasetPeriodFinalizerDoesNotAppendOversizedOutboxEntry(t *testing.T) {
 	status, err := store.GetDatasetPeriodStatus(context.Background(), exp)
 	require.NoError(t, err)
 	require.Equal(t, "waiting", status.Status)
-	require.Zero(t, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Zero(t, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodFinalizerRetriesOnlyFailedCursorAfterRestart(t *testing.T) {
@@ -430,7 +430,7 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	status.Status, err = store.FinalizeDatasetPeriod(ctx, exp, deadline.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, "degraded", status.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 
 	marker := collectorPeriodMarkerFromOutbox(t, store)
 	require.Equal(t, "degraded", marker.GetStatus())
@@ -493,7 +493,7 @@ func TestDatasetPeriodDeadlineWinsAgainstConcurrentLateCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "degraded", progress.Status)
 	require.Zero(t, bitmapCount(progress.Bitmap), "a late commit must not change the terminal period result")
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodLateSuccessClearsFailureAndCompletes(t *testing.T) {
@@ -521,7 +521,7 @@ func TestDatasetPeriodLateSuccessClearsFailureAndCompletes(t *testing.T) {
 	require.Equal(t, "complete", marker.GetStatus())
 	require.Empty(t, marker.GetFailedSubjects())
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds())
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodEnsureRetryKeepsOriginalDeadline(t *testing.T) {
@@ -571,7 +571,7 @@ func TestDatasetPeriodConcurrentBitmapMergeDoesNotLoseBits(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int(exp.ExpectedCount), bitmapCount(progress.Bitmap))
 	require.Equal(t, "complete", progress.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodFinalizerRecoversFullWaitingBitmapAfterReopen(t *testing.T) {
@@ -604,7 +604,7 @@ func TestDatasetPeriodFinalizerRecoversFullWaitingBitmapAfterReopen(t *testing.T
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, "complete", progress.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestDatasetPeriodFinalizerMarksDeadlineDegraded(t *testing.T) {
@@ -624,7 +624,7 @@ func TestDatasetPeriodFinalizerMarksDeadlineDegraded(t *testing.T) {
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)
 	require.NoError(t, err)
 	require.Equal(t, "degraded", progress.Status)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestBitmapORMergerSurvivesCompactAndReopen(t *testing.T) {
@@ -675,17 +675,17 @@ func periodExpectationForTest(period time.Time, expected uint32, subjects ...str
 	return DatasetPeriodExpectation{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", PeriodTime: period.Unix(), SeriesHash: "series-hash", ExpectedCount: expected, DeadlineAt: time.Now().UTC().Add(time.Hour).Unix(), SeriesSnapshot: seriesSnapshot}
 }
 
-func collectorPeriodMarkerFromOutbox(t *testing.T, store *Store) *storageeventpb.CollectorPeriodCompleted {
+func collectorPeriodMarkerFromOutbox(t *testing.T, store *Store) *storageeventpb.DatasetPeriodCompleted {
 	t.Helper()
 	entries, err := store.ListOutbox(context.Background(), 0, 1000)
 	require.NoError(t, err)
 	for _, entry := range entries {
 		message := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(entry.Data, message))
-		if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+		if message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 			continue
 		}
-		marker := &storageeventpb.CollectorPeriodCompleted{}
+		marker := &storageeventpb.DatasetPeriodCompleted{}
 		require.NoError(t, proto.Unmarshal(message.GetPayload(), marker))
 		return marker
 	}
@@ -696,11 +696,10 @@ func collectorPeriodMarkerFromOutbox(t *testing.T, store *Store) *storageeventpb
 func periodMarkerPayloadForTest(t *testing.T, exp DatasetPeriodExpectation, collectedAt time.Time) []byte {
 	t.Helper()
 	universe, failed := periodMarkerSubjects(exp, nil, nil)
-	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, &pb.CollectorPeriodCompletedMarker{
-		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime, Status: "degraded",
-		BatchId:          periodCompletionID(periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)),
-		ConfigSnapshotId: exp.SeriesHash, ExpectedScopeRef: exp.SeriesHash,
-		UniverseSubjectIds: universe, FailedSubjects: failed, CollectedAt: timestamppb.New(collectedAt),
+	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, &LedgerPeriodCompleted{
+		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime, Status: "degraded",
+		SnapshotRef:        exp.SeriesHash,
+		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(collectedAt),
 	})
 	require.NoError(t, err)
 	return raw

@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
@@ -20,8 +19,7 @@ import (
 // DefaultCalendar 是没有声明日历的数据集使用的日历。
 const DefaultCalendar = "crypto_24x7"
 
-// datasetRoleFactorResult 是 Factor 写入的结果数据集角色：它的周期完成由 factor_period.computed 宣布。
-// 其余带 source_dataset_id 的数据集（例如 Collector 的重采样 K 线）仍由 collector.period.completed 宣布。
+// datasetRoleFactorResult 是 Factor 写入的结果数据集角色。
 const datasetRoleFactorResult = "factor_result"
 
 // Resolve 在启用时解析绑定：因子任务 → 结果 View → 数据集 → 源数据集市场类型 → 列与成员契约，并编译策略。
@@ -204,10 +202,6 @@ func Resolve(ctx context.Context, client Client, spaceID, taskID string, strateg
 		return Resolved{}, nil, err
 	}
 	resolved.PreviousFactors = previousFactors(resolved.Columns, program)
-	resolved.CompletionKind = events.CollectorPeriodCompleted.Name()
-	if strings.TrimSpace(dataset.Attributes["dataset_role"]) == datasetRoleFactorResult {
-		resolved.CompletionKind = events.FactorPeriodComputed.Name()
-	}
 	return resolved, program, nil
 }
 
@@ -451,7 +445,7 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if err := json.Unmarshal(raw, &resolved); err != nil {
 		return Resolved{}, &describedError{message: "会话快照的 resolved_json 无法解析", cause: err}
 	}
-	if resolved.ViewID == "" || resolved.FactorTaskID == "" || resolved.Bar == "" || resolved.Calendar == "" || resolved.CompletionKind == "" {
+	if resolved.ViewID == "" || resolved.FactorTaskID == "" || resolved.Bar == "" || resolved.Calendar == "" {
 		return Resolved{}, errors.New("resolved_json 缺少 view_id、factor_task_id、bar、calendar 或 completion_kind")
 	}
 	if resolved.Columns == nil {

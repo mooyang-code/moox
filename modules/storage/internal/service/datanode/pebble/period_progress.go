@@ -2,7 +2,6 @@ package pebble
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -209,14 +208,13 @@ func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
 		return nil
 	}
 	universe, _ := periodMarkerSubjects(exp, nil, nil)
-	marker := &pb.CollectorPeriodCompletedMarker{
-		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
-		Status: "degraded", BatchId: periodCompletionID(periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)),
-		ConfigSnapshotId: exp.SeriesHash, ExpectedScopeRef: exp.SeriesHash,
-		UniverseSubjectIds: universe, FailedSubjects: append([]string(nil), universe...),
-		CollectedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
+	completed := &LedgerPeriodCompleted{
+		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
+		Status: "degraded", SnapshotRef: exp.SeriesHash,
+		UniverseSubjectIDs: universe, FailedSubjects: append([]string(nil), universe...),
+		CompletedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
 	}
-	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, marker)
+	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
 		return err
 	}
@@ -537,12 +535,12 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 		return "waiting", nil
 	}
 	universe, failed := periodMarkerSubjects(exp, bitmap, failures)
-	marker := &pb.CollectorPeriodCompletedMarker{
-		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
-		Status: terminal, BatchId: periodCompletionID(base), ConfigSnapshotId: exp.SeriesHash,
-		ExpectedScopeRef: exp.SeriesHash, UniverseSubjectIds: universe, FailedSubjects: failed, CollectedAt: timestamppb.New(now.UTC()),
+	completed := &LedgerPeriodCompleted{
+		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
+		Status: terminal, SnapshotRef: exp.SeriesHash,
+		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(now.UTC()),
 	}
-	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, marker)
+	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
 		return "", err
 	}
@@ -1104,11 +1102,6 @@ func parsePeriodBase(base string) (string, string, string, int64, error) {
 	}
 	periodTime, err := strconv.ParseInt(parts[3], 10, 64)
 	return decoded[0], decoded[1], decoded[2], periodTime, err
-}
-
-func periodCompletionID(base string) string {
-	hash := sha256.Sum256([]byte(base))
-	return "dataset-period-" + hex.EncodeToString(hash[:16])
 }
 
 func periodFieldKey(base, field string) []byte { return []byte(base + field) }

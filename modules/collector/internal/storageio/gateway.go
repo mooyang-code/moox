@@ -44,7 +44,6 @@ type Primary interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReportCollectorPeriodCompleted(context.Context, *storagepb.ReportCollectorPeriodCompletedReq, ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error)
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq, ...client.Option) (*storagepb.WaitViewSyncPointRsp, error)
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
@@ -189,10 +188,6 @@ func (c *Client) CommitTimeSeriesBatch(ctx context.Context, request *storagepb.P
 
 func (c *Client) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	return invoke[storagepb.PrimaryUpsertFieldsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "UpsertFields", request, options)
-}
-
-func (c *Client) ReportCollectorPeriodCompleted(ctx context.Context, request *storagepb.ReportCollectorPeriodCompletedReq, options ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error) {
-	return invoke[storagepb.ReportCollectorPeriodCompletedRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReportCollectorPeriodCompleted", request, options)
 }
 
 func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq, options ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {

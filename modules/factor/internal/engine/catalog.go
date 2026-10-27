@@ -237,7 +237,7 @@ func (c *CatalogCache) FilterSubjects(context.Context) ([]string, error) {
 	defer c.mu.RUnlock()
 	filters := make([]string, 0, len(c.sets))
 	for _, set := range c.sets {
-		subject, err := c.registry.RenderSubject(events.CollectorPeriodCompleted, set.Set.SpaceID, set.Set.SourceDatasetID)
+		subject, err := c.registry.RenderSubject(events.DatasetPeriodCompleted, set.Set.SpaceID, set.Set.SourceDatasetID)
 		if err != nil {
 			return nil, fmt.Errorf("render collector period subject for set %s: %w", set.Set.TaskID, err)
 		}

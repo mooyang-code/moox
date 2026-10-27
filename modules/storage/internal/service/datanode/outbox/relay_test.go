@@ -539,17 +539,17 @@ func TestRelayQuarantinesInvalidOutboxEventsAndPublishesTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := proto.Marshal(&storageeventpb.FactorPeriodComputed{
-		DatasetId: "result", SourceDatasetId: "source", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
-		UniverseSubjectIds: []string{"BTC"}, Factors: []*storageeventpb.FactorPeriodState{{MemberKey: "momentum", FactorId: "momentum", MemberKind: "fixed", Status: "complete", SourceHash: "hash-1"}},
-		TriggerEventId: "collector-event", ComputedAt: timestamppb.Now(),
+	payload, err := proto.Marshal(&storageeventpb.DatasetPeriodCompleted{
+		DatasetId: "result", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+		UniverseSubjectIds: []string{"BTC"}, CompletedAt: timestamppb.Now(), // 缺 cause_event_id：producer 来源的无效载荷
+		DetailType: "test.Detail.v1", Detail: []byte("opaque"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	registered, ok := registry.Lookup(events.FactorPeriodComputed.Name(), events.FactorPeriodComputed.Version())
+	registered, ok := registry.Lookup(events.DatasetPeriodCompleted.Name(), events.DatasetPeriodCompleted.Version())
 	if !ok {
-		t.Fatal("因子周期事件未注册")
+		t.Fatal("周期完成事件未注册")
 	}
 	legacy, err := proto.Marshal(&eventpb.EventMessage{
 		EventId: "legacy-factor-period", EventName: registered.Name(), EventVersion: registered.Version(),

@@ -91,28 +91,15 @@ message PrimaryRestoreDatasetRowsRsp {
   common.RetInfo ret_info = 1;
 }
 
-message ReportCollectorPeriodCompletedReq {
+message ReportDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
-  CollectorPeriodCompletedMarker marker = 3;
+  DatasetPeriodCompletedMarker marker = 3;
 }
-
-message ReportCollectorPeriodCompletedRsp {
+message ReportDatasetPeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
-
-message ReportFactorPeriodComputedReq {
-  common.AuthInfo auth_info = 1;
-  string space_id = 2;
-  FactorPeriodComputedMarker marker = 3;
-}
-
-message ReportFactorPeriodComputedRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message AppendDatasetSyncPointReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -124,21 +111,19 @@ message AppendDatasetSyncPointRsp {
   string event_id = 2;
 }
 
-message GetFactorPeriodComputedReq {
+message GetDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
   string dataset_id = 3;
-  string trigger_event_id = 4;
+  string cause_event_id = 4;
   int64 period_time = 5;
 }
-
-message GetFactorPeriodComputedRsp {
+message GetDatasetPeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   bool found = 2;
   string event_id = 3;
-  FactorPeriodComputedMarker marker = 4;
+  DatasetPeriodCompletedMarker marker = 4;
 }
-
 message WaitViewSyncPointReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -168,9 +153,8 @@ service PrimaryStore {
   rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
   // ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
   rpc ReadDatasetChanges(ReadDatasetChangesReq) returns (ReadDatasetChangesRsp);
-  rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);
-  rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
+  rpc ReportDatasetPeriodCompleted(ReportDatasetPeriodCompletedReq) returns (ReportDatasetPeriodCompletedRsp);
   rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);
-  rpc GetFactorPeriodComputed(GetFactorPeriodComputedReq) returns (GetFactorPeriodComputedRsp);
+  rpc GetDatasetPeriodCompleted(GetDatasetPeriodCompletedReq) returns (GetDatasetPeriodCompletedRsp);
   rpc WaitViewSyncPoint(WaitViewSyncPointReq) returns (WaitViewSyncPointRsp);
 }

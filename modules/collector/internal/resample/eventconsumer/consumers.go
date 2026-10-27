@@ -20,7 +20,7 @@ const defaultNakDelay = 10 * time.Second
 
 // PeriodTrigger 是源周期完成事件的领域处理（resample.PeriodTrigger）；返回错误表示需要重试。
 type PeriodTrigger interface {
-	OnPeriod(ctx context.Context, spaceID string, payload *storagepb.CollectorPeriodCompleted) error
+	OnPeriod(ctx context.Context, spaceID string, payload *storagepb.DatasetPeriodCompleted) error
 }
 
 // BackfillTrigger 是补采完成事件的领域处理（resample.BackfillTrigger）；返回错误表示需要重试。
@@ -40,7 +40,7 @@ func (h *PeriodHandler) Handle(ctx context.Context, delivery *jetstream.Delivery
 	if delivery == nil || delivery.DecodeError != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("resample period event is undecodable")}
 	}
-	message, payload, err := events.DecodeCollectorPeriodCompletedWithContentType(h.Registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	message, payload, err := events.DecodeDatasetPeriodCompletedWithContentType(h.Registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
 	if err != nil || message == nil || payload == nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("reject collector period event: %v", err)}
 	}
@@ -135,7 +135,7 @@ func Start(ctx context.Context, cfg ConsumersConfig, registry *events.Registry, 
 			event   events.Event
 			handler jetstream.DeliveryHandler
 		}{
-			{"collector_resample_period_" + spaceID + "_v1", events.CollectorPeriodCompleted, period},
+			{"collector_resample_period_" + spaceID + "_v1", events.DatasetPeriodCompleted, period},
 			{"collector_resample_backfilled_" + spaceID + "_v1", events.CollectorKlineBackfilled, backfilled},
 		} {
 			consumer, err := events.NewSpaceConsumer(ctx, client, registry, events.SpaceConsumerConfig{

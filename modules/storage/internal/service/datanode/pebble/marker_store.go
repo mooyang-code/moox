@@ -14,13 +14,12 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
 	markerRecordPrefix = "__dataset_marker/"
-	factorMarkerPrefix = "__factor_marker/"
+	periodMarkerPrefix = "__period_marker/"
 )
 
 // AppendDatasetMarker atomically persists a governed marker and its outbox
@@ -69,13 +68,16 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	if err := batch.Set(recordKey, raw, s.writeOptions); err != nil {
 		return "", err
 	}
-	if message.GetEventName() == events.FactorPeriodComputed.Name() {
-		indexKey, err := factorMarkerIndexKey(message)
+	if message.GetEventName() == events.DatasetPeriodCompleted.Name() {
+		// 写入方报告的完成（producer）按 触发事件 + 周期 建索引，供写入方做幂等查询；账本判定的完成不需要。
+		indexKey, indexed, err := producerMarkerIndexKey(message)
 		if err != nil {
 			return "", err
 		}
-		if err := batch.Set(indexKey, recordKey, s.writeOptions); err != nil {
-			return "", err
+		if indexed {
+			if err := batch.Set(indexKey, recordKey, s.writeOptions); err != nil {
+				return "", err
+			}
 		}
 	}
 	if err := batch.Set([]byte(outboxKey(nextID)), raw, s.writeOptions); err != nil {
@@ -91,11 +93,12 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 	return message.GetEventId(), nil
 }
 
-func (s *Store) GetFactorPeriodComputedMarker(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*eventpb.EventMessage, bool, error) {
+// GetDatasetPeriodCompletedMarker 按 触发事件 + 周期 查询写入方报告的周期完成。
+func (s *Store) GetDatasetPeriodCompletedMarker(ctx context.Context, spaceID, datasetID, causeEventID string, periodTime int64) (*eventpb.EventMessage, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	key := factorMarkerLookupKey(spaceID, datasetID, triggerEventID, periodTime)
+	key := periodMarkerLookupKey(spaceID, datasetID, causeEventID, periodTime)
 	recordKey, closer, err := s.db.Get(key)
 	if errors.Is(err, cpebble.ErrNotFound) {
 		return nil, false, nil
@@ -144,49 +147,33 @@ func datasetMarkerRecordKey(eventID string) []byte {
 	return []byte(markerRecordPrefix + hex.EncodeToString(hash[:]))
 }
 
-func factorMarkerIndexKey(message *eventpb.EventMessage) ([]byte, error) {
+// producerMarkerIndexKey 返回 producer 来源的周期完成的查询索引键；其他来源（ledger）返回 indexed=false。
+func producerMarkerIndexKey(message *eventpb.EventMessage) (key []byte, indexed bool, err error) {
 	registry, err := eventsRegistry()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	_, payload, err := decodeRawMarker(registry, message)
+	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return factorMarkerLookupKey(message.GetSpaceId(), payload.datasetID, payload.triggerEventID, payload.periodTime), nil
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+	if err != nil {
+		return nil, false, err
+	}
+	_, payload, err := events.DecodeDatasetPeriodCompleted(registry, raw, subject, message.GetEventId())
+	if err != nil {
+		return nil, false, err
+	}
+	if payload.GetSource() != "producer" {
+		return nil, false, nil
+	}
+	return periodMarkerLookupKey(message.GetSpaceId(), payload.GetDatasetId(), payload.GetCauseEventId(), payload.GetPeriodTime()), true, nil
 }
 
-func factorMarkerLookupKey(spaceID, datasetID, triggerEventID string, periodTime int64) []byte {
-	hash := sha256.Sum256([]byte(strings.Join([]string{spaceID, datasetID, triggerEventID, strconv.FormatInt(periodTime, 10)}, "\x00")))
-	return []byte(factorMarkerPrefix + hex.EncodeToString(hash[:]))
-}
-
-type factorMarkerIdentity struct {
-	datasetID      string
-	triggerEventID string
-	periodTime     int64
+func periodMarkerLookupKey(spaceID, datasetID, causeEventID string, periodTime int64) []byte {
+	hash := sha256.Sum256([]byte(strings.Join([]string{spaceID, datasetID, causeEventID, strconv.FormatInt(periodTime, 10)}, "\x00")))
+	return []byte(periodMarkerPrefix + hex.EncodeToString(hash[:]))
 }
 
 func eventsRegistry() (*events.Registry, error) { return events.DefaultRegistry() }
-
-func decodeRawMarker(registry *events.Registry, message *eventpb.EventMessage) (*eventpb.EventMessage, factorMarkerIdentity, error) {
-	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
-	if err != nil {
-		return nil, factorMarkerIdentity{}, err
-	}
-	subject, err := registry.RenderSubject(events.FactorPeriodComputed, message.GetSpaceId(), message.GetSubjectId())
-	if err != nil {
-		return nil, factorMarkerIdentity{}, err
-	}
-	envelope, value, err := events.DecodeRaw(registry, raw, subject, message.GetEventId(), events.ContentType)
-	if err != nil {
-		return nil, factorMarkerIdentity{}, err
-	}
-	payload, ok := value.(*storageeventpb.FactorPeriodComputed)
-	if !ok {
-		return nil, factorMarkerIdentity{}, fmt.Errorf("unexpected factor marker payload %T", value)
-	}
-	return envelope, factorMarkerIdentity{
-		datasetID: payload.GetDatasetId(), triggerEventID: payload.GetTriggerEventId(), periodTime: payload.GetPeriodTime(),
-	}, nil
-}
