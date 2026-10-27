@@ -383,7 +383,9 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 			return fmt.Errorf("算子 %s 没有时序内核", node.Op)
 		}
 		kernels, bySeries := r.seriesKernels(node, prepare)
-		return r.parallel(seriesCount, length, func(lo, hi int) {
+		// 每条序列的工作量是输出行数加上窗口向前扩展的根数：实时周期只输出 1 行，但 ema(x, n, 50000) 这类节点每行要扫 5 万根，
+		// 只按输出行数估算会让它永远单线程执行。
+		return r.parallel(seriesCount, length+node.Function.Back(node.Ints), func(lo, hi int) {
 			in := make([]ops.Series, len(args))
 			for s := lo; s < hi; s++ {
 				row := out.data[s*length : (s+1)*length]

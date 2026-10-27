@@ -7,8 +7,8 @@ describe("strategy DSL preview", () => {
     expect(ranked.diagnostics).toEqual([]);
     expect(ranked.preview).toMatchObject({ name: "binance_spot_momentum", bar: "1m", leverage: "1" });
     expect(ranked.preview?.rules).toEqual([
-      { id: "long_momentum", name: "多头动量选币", type: "rank" },
-      { id: "btc_trend", name: "BTC 上穿均线", type: "signal" }
+      { id: "long_momentum", name: "多头动量选币", type: "rank", subStrategies: 0 },
+      { id: "btc_trend", name: "BTC 上穿均线", type: "signal", subStrategies: 0 }
     ]);
     expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const signal = parseDSL(signalTemplate);
@@ -20,7 +20,7 @@ describe("strategy DSL preview", () => {
     expect(parseDSL("name: a\nrules: {rank: {}}\n").diagnostics.map(item => item.message)).toContain(
       "rules 必须是非空列表，每条规则包含 id 与 type"
     );
-    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("rank 或 signal");
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("rank、signal 或 f1");
     expect(parseDSL("name: [").preview).toBeNull();
   });
 
@@ -47,5 +47,36 @@ describe("tuned template", () => {
     expect(tunedTemplate).toContain("factor_params:");
     expect(tunedTemplate).toContain("ma__var:");
     expect(tunedTemplate).toContain('params("ma__var", "window")');
+  });
+});
+
+describe("f1 rules", () => {
+  const f1 = `name: f1_demo
+rules:
+  - id: demo
+    type: f1
+    weight: {total: 1}
+    f1:
+      hold_period: "{h}"
+      long_factors: [{factor: "po__{s}"}]
+    params:
+      columns: [h, s]
+      rows:
+        - [1, 49]
+        - [3, 65]
+`;
+  it("accepts f1 rules and counts sub-strategies", () => {
+    const result = parseDSL(f1);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.preview?.rules[0]).toMatchObject({ id: "demo", type: "f1", subStrategies: 2 });
+    expect(summarizeDSL(f1)).toContain("f1，2 个子策略");
+  });
+  it("rejects mixing f1 with other rule types", () => {
+    const mixed =
+      f1 +
+      `  - id: other
+    type: rank
+`;
+    expect(parseDSL(mixed).diagnostics.map(item => item.message)).toContain("含 f1 规则的策略只能全部是 f1 规则");
   });
 });

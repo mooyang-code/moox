@@ -68,6 +68,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if len(strategy.FactorParams) > 0 {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
 	}
+	if strategy.HasF1() {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("f1 规则只用于合约 View，而研究回放第一版只支持现货，暂不支持回放 f1 策略"))}, nil
+	}
 	// 先做一次低成本计数：排队已满时不必再解析绑定、让 Storage 现算覆盖统计；事务内的计数仍是最终判定。
 	if active, err := s.Store.CountActiveReplays(ctx, scoped); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil

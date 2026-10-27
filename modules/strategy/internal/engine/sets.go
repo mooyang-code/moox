@@ -15,6 +15,8 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
+	// inactive 是 f1 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（F1 只保留 volume > 0 的行）。
+	inactive []string
 }
 
 // partitionRule 按规则引用的列划分可用与缺数：行不存在、所需列为空、或该列上游对该标的失败，都算缺数。
@@ -77,9 +79,16 @@ func missingReason(id string, row Row, columns, previousColumns []string, failed
 	return causes[0].text
 }
 
-// items 为年龄剔除、缺数与保持持仓的标的生成解释明细；其余标的的明细由各规则求值产生。
+// reasonVolumeZero 是 f1 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
+const reasonVolumeZero = "volume_zero"
+
+// items 为年龄剔除、缺数、保持持仓与（f1 规则）本期无成交的标的生成解释明细；其余标的的明细由各规则求值产生。
 func (s ruleSets) items(ruleID string) []Item {
-	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen))
+	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen)+len(s.inactive))
+	inactive := make(map[string]struct{}, len(s.inactive))
+	for _, id := range s.inactive {
+		inactive[id] = struct{}{}
+	}
 	for _, id := range s.expected {
 		if _, aged := s.agedOut[id]; aged {
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageAgedOut, Reason: "min_age_bars"})
@@ -91,6 +100,10 @@ func (s ruleSets) items(ruleID string) []Item {
 		}
 		if reason, missing := s.missing[id]; missing {
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageMissing, Reason: reason})
+			continue
+		}
+		if _, idle := inactive[id]; idle {
+			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageIdle, Reason: reasonVolumeZero})
 		}
 	}
 	return items

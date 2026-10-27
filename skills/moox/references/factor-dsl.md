@@ -59,7 +59,7 @@ output: close / ma - 1              # 单输出写 output；多输出写 outputs
 - 回看由编译推导：`ts_*` 为 L(x)+n−1，`delay`/`delta`/`pct_change` 为 L(x)+k，嵌套相加（`ts_rank(ts_mean(x, 20), 20)` 是 39）；
   `ema`/`sma` 截断到起点权重低于 1e−9 的 K 根（`ema(x, 20)` 为 208）；`ema(x, n, k)` 显式指定预热总根数 K=k（含起点那一根，窗口里最老的一根作为递推初值）：`ema(close, 20, 50000)` 是 EMA20 用 5 万根预热，k 不写或为 0 按通常方式；`ema(close, 50000, 50000)` 的起点权重约 13%，是近似值。
 - 用到任何 `cs_*` 的因子是截面因子，否则是时序因子。
-- 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，最多 16 个参数，展开后最多 64 个输出，窗口 1～5000，回看不超过 5000。
+- 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，最多 16 个参数，展开后最多 64 个输出，窗口 1～100000，回看不超过 100000；实际可用的回看还受数据源回看数量、保留期与引擎 `window.lookback` 的限制。
 
 ### 成员键与列名
 
@@ -115,33 +115,38 @@ rules:
 | 逐元素 | `signed_power` | x、e | 各参数回看的最大值 | sign(x) · \|x\|^e |
 | 逐元素 | `sqrt` | x | 各参数回看的最大值 | 平方根；x < 0 时为 NaN |
 | 逐元素 | `where` | c、a、b | 各参数回看的最大值 | 条件选择：c 为真取 a，为假取 b；c 为 NaN 时为 NaN。等价于 c ? a : b |
-| 时序 | `delay` | x（序列）、k（常量 1～5000） | L(x)+k | k 期前的值 |
-| 时序 | `delta` | x（序列）、k（常量 1～5000） | L(x)+k | x − delay(x, k) |
-| 时序 | `ema` | x（序列）、n（常量 1～5000） | L(x)+K−1，K 为让起点权重衰减到 1e−9 以下的根数 | 指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)） |
-| 时序 | `pct_change` | x（序列）、k（常量 1～5000），默认 1 | L(x)+k | x / delay(x, k) − 1；分母为 0 时为 NaN |
-| 时序 | `sma` | x（序列）、n（常量 2～5000）、m（常量 1～5000） | L(x)+K−1，K 为让起点权重衰减到 1e−9 以下的根数 | 国君 SMA：y = (m·x + (n−m)·y₋₁) / n，截断到最近 K 根 |
-| 时序 | `ts_argmax` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内最大值距今的根数（0 为当期，并列取最早的一根） |
-| 时序 | `ts_argmin` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内最小值距今的根数（0 为当期，并列取最早的一根） |
-| 时序 | `ts_corr` | x（序列）、y（序列）、n（常量 2～5000） | L(x)+n−1 | 窗口内相关系数；任一方标准差为 0 时为 NaN |
-| 时序 | `ts_count` | c（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内条件为真的个数 |
-| 时序 | `ts_cov` | x（序列）、y（序列）、n（常量 2～5000） | L(x)+n−1 | 窗口内样本协方差（ddof=1） |
-| 时序 | `ts_decay_linear` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 线性衰减加权平均：最新一根权重为 n，最老一根为 1 |
-| 时序 | `ts_kurt` | x（序列）、n（常量 4～5000） | L(x)+n−1 | 窗口内无偏超额峰度 |
-| 时序 | `ts_max` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内最大值 |
-| 时序 | `ts_mean` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内均值 |
-| 时序 | `ts_median` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内中位数 |
-| 时序 | `ts_min` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内最小值 |
-| 时序 | `ts_product` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内连乘 |
-| 时序 | `ts_quantile` | x（序列）、n（常量 1～5000）、q（常量 0～1） | L(x)+n−1 | 窗口内 q 分位数，线性插值 |
-| 时序 | `ts_rank` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 当期值在窗口内的百分位，并列取平均名次（pandas rank(pct=True)） |
-| 时序 | `ts_resi` | y（序列）、n（常量 2～5000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘后当期的残差 |
-| 时序 | `ts_rsquare` | y（序列）、n（常量 2～5000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘的 R² |
-| 时序 | `ts_skew` | x（序列）、n（常量 3～5000） | L(x)+n−1 | 窗口内无偏偏度 |
-| 时序 | `ts_slope` | y（序列）、n（常量 2～5000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘的斜率 |
-| 时序 | `ts_std` | x（序列）、n（常量 2～5000） | L(x)+n−1 | 窗口内样本标准差（ddof=1） |
-| 时序 | `ts_sum` | x（序列）、n（常量 1～5000） | L(x)+n−1 | 窗口内求和 |
-| 时序 | `ts_var` | x（序列）、n（常量 2～5000） | L(x)+n−1 | 窗口内样本方差（ddof=1） |
-| 时序 | `ts_zscore` | x（序列）、n（常量 2～5000） | L(x)+n−1 | (x − ts_mean) / ts_std；标准差为 0 时为 NaN |
+| 时序 | `delay` | x（序列）、k（常量 1～100000） | L(x)+k | k 期前的值 |
+| 时序 | `delta` | x（序列）、k（常量 1～100000） | L(x)+k | x − delay(x, k) |
+| 时序 | `ema` | x（序列）、n（常量 1～100000）、k（常量 0～100000，可选） | L(x)+K−1，K 为 k；k 不写或为 0 时为让起点权重衰减到 1e−9 以下的根数 | 指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)），窗口里最老的一根作为递推初值 |
+| 时序 | `ema_partial` | 同 `ema` | 同 `ema` | 同 `ema`；窗口开头是 NaN（序列还没开始）时从第一个有效值开始递推，相当于 ewm(span=n, adjust=False) 从序列首根算起；有效值之后再出现 NaN 时为 NaN |
+| 时序 | `pct_change` | x（序列）、k（常量 1～100000），默认 1 | L(x)+k | x / delay(x, k) − 1；分母为 0 时为 NaN |
+| 时序 | `sma` | x（序列）、n（常量 2～100000）、m（常量 1～100000） | L(x)+K−1，K 为让起点权重衰减到 1e−9 以下的根数 | 国君 SMA：y = (m·x + (n−m)·y₋₁) / n，截断到最近 K 根 |
+| 时序 | `ts_argmax` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内最大值距今的根数（0 为当期，并列取最早的一根） |
+| 时序 | `ts_argmin` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内最小值距今的根数（0 为当期，并列取最早的一根） |
+| 时序 | `ts_corr` | x（序列）、y（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内相关系数；任一方标准差为 0 时为 NaN |
+| 时序 | `ts_count` | c（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内条件为真的个数 |
+| 时序 | `ts_cov` | x（序列）、y（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内样本协方差（ddof=1） |
+| 时序 | `ts_decay_linear` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 线性衰减加权平均：最新一根权重为 n，最老一根为 1 |
+| 时序 | `ts_kurt` | x（序列）、n（常量 4～100000） | L(x)+n−1 | 窗口内无偏超额峰度 |
+| 时序 | `ts_max` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内最大值 |
+| 时序 | `ts_max_partial` | x（序列）、n（常量 1～100000）、m（常量 1～100000） | L(x)+n−1 | 窗口内最大值；序列开头的部分窗口：窗口开头是 NaN（序列还没开始）时在不少于 m 个有效值上计算（rolling(n, min_periods=m)）；有效值之后再出现 NaN 时为 NaN |
+| 时序 | `ts_mean` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内均值 |
+| 时序 | `ts_mean_partial` | x（序列）、n（常量 1～100000）、m（常量 1～100000） | L(x)+n−1 | 窗口内均值；序列开头的部分窗口：窗口开头是 NaN（序列还没开始）时在不少于 m 个有效值上计算（rolling(n, min_periods=m)）；有效值之后再出现 NaN 时为 NaN |
+| 时序 | `ts_median` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内中位数 |
+| 时序 | `ts_min` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内最小值 |
+| 时序 | `ts_min_partial` | x（序列）、n（常量 1～100000）、m（常量 1～100000） | L(x)+n−1 | 窗口内最小值；序列开头的部分窗口：窗口开头是 NaN（序列还没开始）时在不少于 m 个有效值上计算（rolling(n, min_periods=m)）；有效值之后再出现 NaN 时为 NaN |
+| 时序 | `ts_product` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内连乘 |
+| 时序 | `ts_quantile` | x（序列）、n（常量 1～100000）、q（常量 0～1） | L(x)+n−1 | 窗口内 q 分位数，线性插值 |
+| 时序 | `ts_rank` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 当期值在窗口内的百分位，并列取平均名次（pandas rank(pct=True)） |
+| 时序 | `ts_resi` | y（序列）、n（常量 2～100000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘后当期的残差 |
+| 时序 | `ts_rsquare` | y（序列）、n（常量 2～100000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘的 R² |
+| 时序 | `ts_skew` | x（序列）、n（常量 3～100000） | L(x)+n−1 | 窗口内无偏偏度 |
+| 时序 | `ts_slope` | y（序列）、n（常量 2～100000） | L(x)+n−1 | 对时间序号 1..n 做最小二乘的斜率 |
+| 时序 | `ts_std` | x（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内样本标准差（ddof=1） |
+| 时序 | `ts_std_partial` | x（序列）、n（常量 2～100000）、m（常量 2～100000） | L(x)+n−1 | 窗口内样本标准差（ddof=1）；序列开头的部分窗口：窗口开头是 NaN（序列还没开始）时在不少于 m 个有效值上计算（rolling(n, min_periods=m)）；有效值之后再出现 NaN 时为 NaN |
+| 时序 | `ts_sum` | x（序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内求和 |
+| 时序 | `ts_var` | x（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内样本方差（ddof=1） |
+| 时序 | `ts_zscore` | x（序列）、n（常量 2～100000） | L(x)+n−1 | (x − ts_mean) / ts_std；标准差为 0 时为 NaN |
 | 截面 | `cs_demean` | x（序列） | L(x) | 截面去均值 x − mean |
 | 截面 | `cs_rank` | x（序列） | L(x) | 截面百分位（名次 / 有效样本数，并列取平均名次）；按 (data_time, series_tag) 分组，排除 NaN |
 | 截面 | `cs_scale` | x（序列） | L(x) | 截面缩放 x / sum(\|x\|)；分母为 0 时为 NaN |
@@ -162,7 +167,8 @@ rules:
 | `s.rolling(n).apply(np.argmax)` 换算成距今根数 | `ts_argmax(s, n)`（0 为当期，并列取最早） |
 | `(s - s.rolling(n).mean()) / s.rolling(n).std()` | `ts_zscore(s, n)` 或照原式写 |
 | `s.shift(k)` / `s.diff(k)` / `s.pct_change(k)` | `delay(s, k)` / `delta(s, k)` / `pct_change(s, k)` |
-| `s.ewm(span=n, adjust=False).mean()` | `ema(s, n)` |
+| `s.ewm(span=n, adjust=False).mean()` | `ema(s, n)`；n 很大、要精确对齐时用 `ema(s, n, k)` 固定预热根数；新上市标的需要从首根递推时用 `ema_partial(s, n, k)`（见第 6 节第 1 条） |
+| `s.rolling(n, min_periods=m).mean()` / `.std()` / `.min()` / `.max()`，下游依赖序列开头的值 | `ts_mean_partial(s, n, m)` / `ts_std_partial` / `ts_min_partial` / `ts_max_partial` |
 | `s.ewm(alpha=m/n, adjust=False).mean()`（国君 SMA） | `sma(s, n, m)` |
 | `np.where(c, a, b)` | `where(c, a, b)` 或 `c ? a : b`（注意第 6 节的 NaN 差异） |
 | `s.clip(lo, hi)` / `s.abs()` / `np.log(s)` / `np.sqrt(s)` / `np.sign(s)` | `clip(s, lo, hi)` / `abs(s)` / `log(s)` / `sqrt(s)` / `sign(s)` |
@@ -174,8 +180,40 @@ rules:
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
 | `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员（固定参数不同的成员，或可变成员 `ma_fast`、`ma_slow`）或一个共用参数的输出，输出名固定 |
 
+### `rolling(n).apply(内置函数)`
+
+引擎没有"窗口加任意函数"的通用写法。apply 里传的是下面这些内置函数时，有逐值等价的写法：
+注意 numpy 和 scipy 的默认参数与 pandas 不同，表里已经写进了修正。窗口参数 `n` 可以直接在表达式里参与数值运算，但作为窗口参数时必须是常量或参数本身。
+
+| pandas / numpy 写法 | DSL | 注意 |
+| --- | --- | --- |
+| `apply(np.mean)` / `np.sum` / `np.min` / `np.max` / `np.median` | `ts_mean(s, n)` / `ts_sum` / `ts_min` / `ts_max` / `ts_median` | — |
+| `apply(np.prod)` | `ts_product(s, n)` | — |
+| `apply(np.std)` | `ts_std(s, n) * sqrt((n - 1) / n)` | numpy 默认 ddof=0，`ts_std` 是 ddof=1；直接写 `.rolling(n).std()` 才是 ddof=1，用 `ts_std(s, n)` |
+| `apply(np.var)` | `ts_var(s, n) * (n - 1) / n` | 同上 |
+| `apply(np.argmax)` / `apply(np.argmin)` | `n - 1 - ts_argmax(s, n)` / `n - 1 - ts_argmin(s, n)` | numpy 从窗口最老的一根算起（0 为最老），`ts_argmax` 是距今根数（0 为当期）；遇到并列，两边都取最早的一根 |
+| `apply(np.ptp)`（极差） | `ts_max(s, n) - ts_min(s, n)` | — |
+| `apply(lambda w: np.percentile(w, p))` | `ts_quantile(s, n, p / 100)` | 只在 numpy 默认的 linear 插值下等价；p 是 0～100，q 是 0～1 |
+| `apply(lambda w: np.polyfit(np.arange(n), w, 1)[0])` | `ts_slope(s, n)` | 回归残差、R² 分别用 `ts_resi`、`ts_rsquare` |
+| 线性权重 1..n 的加权平均 | `ts_decay_linear(s, n)` | 最新一根权重为 n |
+| `apply(scipy.stats.skew)`（默认 `bias=True`） | `ts_skew(s, n) * (n - 2) / sqrt(n * (n - 1))` | `ts_skew` 与 pandas `.rolling(n).skew()` 一样是无偏的；scipy 默认有偏，要换算 |
+| `apply(scipy.stats.kurtosis)`（默认 `bias=True`、`fisher=True`） | `(ts_kurt(s, n) * (n - 2) * (n - 3) / (n - 1) - 6) / (n + 1)` | `ts_kurt` 与 pandas `.rolling(n).kurt()` 一样是无偏超额峰度；n ≥ 4 |
+
+这张表在合成 K 线上用 `run-python` 加 `eval`、`compare` 逐值核对过（n = 20，其中一组数据带大量并列值）：
+全部一致，最大相对误差 ≤ 7e-14。scipy 的两行是按 `bias=True` 的公式（m3/m2^1.5、m4/m2^2 − 3）核对的。
+
+**转不了的 apply**：
+
+- **自定义 lambda 要在窗口内二次遍历**：例如平均绝对偏差 `np.abs(w - w.mean()).mean()`，要先算窗口均值，再逐根处理，表达式写不出来。
+- **跳过 NaN 的函数**：例如 `np.nanmean`、`np.nanstd`。引擎是严格窗口，只有"序列开头的 NaN"能用 `_partial` 算子处理。
+- **非线性的自定义权重**：例如 `np.average(w, weights=...)`。
+- **窗口长度来自运算**：例如窗口写成 `2 * n + 1`。换算要在参数层面做，做法是拆成多个参数，F1 的 Po 就是这样，见 `modules/factor/factors/f1.yaml`。
+
+遇到这些写法，按下面"不支持"的规则处理。确实常用的（如 MAD、`nanmean`），可以在 `packages/factorexpr` 里新增函数。
+新增后要发布 factor-mgr 和因子引擎，并重新编译本机的 `moox-cli`。
+
 **不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、前向填充（`ffill`）、未来数据（`shift(-k)`）、
-`ewm(adjust=True)`、`rank` 的非 average 并列方式、任意 `rolling().apply(自定义函数)`、跨标的的时序运算、读取外部文件或网络。
+`ewm(adjust=True)`、`rank` 的非 average 并列方式、上面列出的那几类 `rolling().apply`、跨标的的时序运算、读取外部文件或网络。
 遇到这些先告诉用户，给出等价或近似的候选写法（例如用足够长的固定窗口代替 `expanding`），由用户决定；绝不悄悄换成近似公式。
 
 ## 5. 验收规则（`compare` 的判定）
@@ -200,7 +238,12 @@ rules:
 
 ## 6. 语义差异与陷阱（转写时逐条检查）
 
-1. **`min_periods=1`**：旧代码几乎都这么写，头几行有值；DSL 是严格窗口，前 lookback−1 行为空。这是允许的差异，不要为了“对上”去拆窗口。
+1. **`min_periods=1`**：旧代码几乎都这么写，头几行有值；DSL 是严格窗口，前 lookback−1 行为空。
+   - **只喂单个因子列**：这是允许的差异，不要为了"对上"去拆窗口。
+   - **下游会用到序列开头的值**：例如截面排名、选币策略要覆盖历史短的新上市标的，或者长回看 EMA 在标的上市不满 K 根时也要有值。这时空值会改变选币结果，不再是允许的差异。
+     - 改用 partial 算子：`ema_partial` 对应 ewm 从首根递推，`ts_*_partial(x, n, m)` 对应 `rolling(n, min_periods=m)`。
+     - 比较时"暖机新空"必须为 0，并且用一个历史很短的标的单独核对序列开头。
+     - 迁移整套策略的做法见 [strategy-migration.md](strategy-migration.md)。
 2. **NaN 参与比较**：pandas 里 `NaN > 0` 是 False，`np.where(change > 0, a, 0)` 在 change 为 NaN（例如第一行）时取 0；DSL 的比较遇到 NaN 得 NaN，`where` 结果也是 NaN。
    通常只影响暖机期；如果用户需要旧行为，写成 `where(fill_nan(change, 0) > 0, a, 0)`，并告诉用户这是有意保留的旧语义。
 3. **空洞**：旧代码按存在的行滚动，跨过缺失 K 线时窗口实际覆盖更长的时间；新系统按规则网格，流水线把回看窗口里缺 K 线的整个因子输出屏蔽掉

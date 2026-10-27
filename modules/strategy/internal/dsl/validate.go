@@ -99,7 +99,7 @@ func Validate(s *Strategy) error {
 	if totalBudget.Cmp(s.Portfolio.Leverage) > 0 {
 		return fmt.Errorf("各规则 weight.total 之和 %s 超过 portfolio.leverage %s", totalBudget.String(), s.Portfolio.Leverage.String())
 	}
-	return nil
+	return validateF1Strategy(s)
 }
 
 // includeOnlyUniverse 返回只由 include 构成的白名单去掉 exclude 后的标的数。
@@ -165,15 +165,20 @@ func validateRule(rule *Rule) error {
 	if rule.Pool.Explicit && len(rule.Pool.Fixed) == 0 && len(rule.Pool.Tags) == 0 {
 		return fmt.Errorf("%s 的 pool 不能为空", prefix)
 	}
+	if rule.F1 != nil && rule.Type != RuleTypeF1 {
+		return fmt.Errorf("%s 不是 f1 规则，不能写 f1 或 params", prefix)
+	}
 	switch rule.Type {
 	case RuleTypeRank:
 		return validateRankRule(prefix, rule)
 	case RuleTypeSignal:
 		return validateSignalRule(prefix, rule)
+	case RuleTypeF1:
+		return validateF1Rule(prefix, rule)
 	case "":
-		return fmt.Errorf("%s 缺少 type（rank 或 signal）", prefix)
+		return fmt.Errorf("%s 缺少 type（rank、signal 或 f1）", prefix)
 	default:
-		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank 或 signal", prefix, rule.Type)
+		return fmt.Errorf("%s 的 type %q 不受支持，只能是 rank、signal 或 f1", prefix, rule.Type)
 	}
 }
 
