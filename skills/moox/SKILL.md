@@ -98,7 +98,7 @@ rows at the next Storage cleanup, so confirm it with the user first. Do not edit
 
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
-Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
+Factor separately. Period completion events drive Factor reads from Storage PrimaryStore (the event is `DatasetPeriodCompleted`);
 the Factor durable is `factor_collector_period_v1`. Use task-labeled period and runner metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 

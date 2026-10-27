@@ -16,7 +16,7 @@
 
 `c_period_time` 是 unix 秒。`t_views.c_mtime` 不是 K 线水位。
 
-每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。每个因子任务的结果 Dataset 与默认 View（`dataset_factor_<后缀>`、`view_factor_<后缀>`）由 Storage 自动维护，一个源 Dataset 可以有多个因子任务。
+每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。每个因子任务的结果 Dataset 与默认 View（`dataset_factor_<后缀>`、`view_factor_<后缀>`）由 factor-mgr 创建与维护（Storage 不托管 View），一个源 Dataset 可以有多个因子任务。
 
 ## 生产路径（不要混用）
 
@@ -24,8 +24,7 @@
 
 - 包根：`/data/moox/storage`
 - `repair-view` 的 `--storage-conf`：`/data/moox/storage/storage/config/storage.yaml`（不要传 `storage-view/config/trpc_go.yaml`，那是 View 进程配置）
-- 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_factor` / `storage_view_misc`（模板），实际消费者是按数据集动态创建的 `storage_view_factor_<hash>` / `storage_view_misc_<hash>`
-- Primary 的 `storage.yaml` 可以很短、没有 `consumer_partitions`，这不代表 View 没用分区
+- View 的消费者是按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个）；并发参数是 View 的 `storage.view.fetch_batch` / `max_workers` / `max_ack_pending`（全局，默认都是 1）
 
 控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
@@ -42,24 +41,24 @@
 - 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是 Collector 周期完成事件，源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
+- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是源数据集的周期完成事件（`DatasetPeriodCompleted`），源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
 
-## Storage View：kline 分区挂死
+## Storage View：数据集消费挂死
 
 信号：
 
 - Primary kline 水位是分钟级，View 停在数小时前
-- `storage_view_kline` 的 `partition_lag_messages` 等于 `max_ack_pending`（常见 64）
+- 该数据集 durable（`view_<hash>`）的 `partition_lag_messages` 等于 `max_ack_pending`
 - `oldest_pending_event_age_seconds` 与水位停滞时长同量级
 - ACK 计数不涨，但 `in_progress` 仍在增加
-- misc / metrics 分区仍在刷 `mooxsys`。分区隔离挡不住同进程的 `pending-subjects` fsync；旧二进制 from-scratch 重建 metrics 时会把 kline ACK 窗口一起占满
+- 其他数据集（如 `mooxsys`）的 durable 仍在刷：每个数据集有自己的 durable，互不占用 ACK 窗口，但挡不住同进程的 `pending-subjects` fsync
 
-这是 durable 被未完成投递占满，不是“没数据”。静态路由的 crypto kline View 共用 `storage_view_kline`；采集任务结果各自使用动态的按 Dataset durable。
+这是 durable 被未完成投递占满，不是“没数据”。每个数据集（采集任务结果、因子结果等）各自使用动态的 `view_<hash>` durable。
 
 在 Storage 主机、用**该机同版本** `moox-cli`：
 
 ```bash
-# 先 dry-run 三个行情 View，确认 db_path / active_index / 下一档 desired revision
+# 先 dry-run 卡住的 View，确认 db_path / active_index / 下一档 desired revision
 moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
@@ -69,7 +68,7 @@ moox-cli storage repair-view \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh --components storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：每个数据集有自己的 durable，所以每个卡住的 View 都用它数据集的 `view_<hash>` 作 `--consumer`、各自删除该 durable 并 bump revision；只有同一数据集的多个 View 共用一个 durable 时，才在第一个之后加 `--reset-consumer=false` 只 bump。最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh --components storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
 ### EventBus 管理权限
 
@@ -78,7 +77,7 @@ moox-cli storage repair-view \
 
 ## Factor 周期诊断
 
-Factor 消费 `CollectorPeriodCompleted`，durable 名为 `factor_collector_period_v1`；对
+Factor 消费 `DatasetPeriodCompleted`，durable 名为 `factor_collector_period_v1`；对
 Storage 的计算输入读取走 PrimaryStore，不读取 View。先看该 durable 的 pending 与
 redelivery，再按 `task` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
 `factor_runner_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子

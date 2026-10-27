@@ -8,7 +8,7 @@ Use this reference when a MooX collector cloud function does not run on its Time
 2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through Access (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The Access address and instance identity are derived from the deployment manifest.
 3. The function never talks to Collector or EventBus. Failed items are reported to CLS (`market_fetch_item_failure`, `market_fetch_batch`); they are not retried online.
 4. Gaps are found by `moox-cli collector kline check` and repaired by `kline backfill` or the Collector's automatic backfill.
-5. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
+5. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `DatasetPeriodCompleted` (`source=ledger`).
 
 ## Inputs
 
