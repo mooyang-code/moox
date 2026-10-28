@@ -307,6 +307,9 @@ func TestScanUdfSourceRejectsUnsafeAndHandWrittenExports(t *testing.T) {
 	assert.ErrorContains(t, scanUdfSource(write("macro_rules! skip { ($($t:tt)*) => { () }; }\nskip!(r#r\"\\\" /*\");\n#[allow(unsafe_code)]\nunsafe { core::ptr::read(v) }")), "unsafe")
 	assert.ErrorContains(t, scanUdfSource(write("fn f(c: char) { let _ = matches!(c, '中'|'\"');\n#[allow(unsafe_code)]\nunsafe { } }")), "unsafe")
 	assert.NoError(t, scanUdfSource(write("fn f(c: char) { let _ = matches!(c, '中'|'x'); let _ = \"unsafe\"; }")))
+	// 只有属性里的名称才算：普通标识符与函数名不误报。
+	assert.NoError(t, scanUdfSource(write("pub fn label(export_name: u32) -> u32 { export_name }")))
+	assert.NoError(t, scanUdfSource(write("pub fn expect(unsafe_code: u32) -> u32 { unsafe_code }")))
 	assert.ErrorContains(t, scanUdfSource(write("#[expect(unsafe_code)]\nfn f() {}")), "unsafe")
 	assert.ErrorContains(t, scanUdfSource(write("#[r#no_mangle]\npub extern \"C\" fn extra() -> i32 { 1 }")), "手写")
 	assert.ErrorContains(t, scanUdfSource(write("#[cfg_attr(all(), no_mangle)]\npub extern \"C\" fn extra() -> i32 { 1 }")), "手写")

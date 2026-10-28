@@ -29,6 +29,10 @@ type udfModules struct {
 	mu     sync.Mutex
 	states map[string]*moduleState
 	pins   map[string]int // 执行中的补算作业绑定的版本（引用计数）：目录不再引用它们，作业没结束之前也不能卸载
+	// retainMu 串行化 Retain 与 Pin：Retain 复制保留集合到卸载完成之间不能有新的 Pin 登记，否则刚登记的版本会被按旧集合卸载。
+	retainMu sync.Mutex
+	// reclaim 在最后一个作业释放 Pin 之后调用：目录已经不再引用的版本这时才能回收，目录不变就没有别的触发。
+	reclaim func()
 }
 
 type moduleState struct {
@@ -171,6 +175,8 @@ func (m *udfModules) Status() []domain.UDFModuleStatus {
 
 // Retain 只保留当前目录引用的版本的状态与已加载模块（卸载不再引用的）；hashes 是仍被引用的版本。
 func (m *udfModules) Retain(ctx context.Context, hashes map[string]bool) {
+	m.retainMu.Lock()
+	defer m.retainMu.Unlock()
 	m.mu.Lock()
 	keep := make(map[string]bool, len(hashes)+len(m.pins))
 	for hash := range hashes {
@@ -196,6 +202,8 @@ func (m *udfModules) Retain(ctx context.Context, hashes map[string]bool) {
 
 // Pin 登记一组版本为使用中（补算作业执行期间），返回释放函数；登记要在备齐模块之前做，这样两者之间的目录同步不会把它们卸载。
 func (m *udfModules) Pin(refs []udfRef) func() {
+	m.retainMu.Lock()
+	defer m.retainMu.Unlock()
 	m.mu.Lock()
 	if m.pins == nil {
 		m.pins = map[string]int{}
@@ -208,11 +216,15 @@ func (m *udfModules) Pin(refs []udfRef) func() {
 	return func() {
 		once.Do(func() {
 			m.mu.Lock()
-			defer m.mu.Unlock()
 			for _, ref := range refs {
 				if m.pins[ref.hash]--; m.pins[ref.hash] <= 0 {
 					delete(m.pins, ref.hash)
 				}
+			}
+			reclaim := m.reclaim
+			m.mu.Unlock()
+			if reclaim != nil {
+				reclaim()
 			}
 		})
 	}

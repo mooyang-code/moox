@@ -80,8 +80,11 @@ func (r *reader) skipConstExpr() error {
 			_, err = r.bytes(4)
 		case 0x44: // f64.const
 			_, err = r.bytes(8)
-		case 0xd0: // ref.null
-			_, err = r.byte()
+		case 0xd0: // ref.null：立即数只认 funcref / externref（单字节）；带堆类型的变长编码与 wazero 的读取位置对不上，一律拒绝
+			var t byte
+			if t, err = r.byte(); err == nil && t != 0x70 && t != 0x6f {
+				return fmt.Errorf("ref.null 的类型 0x%02x 不支持", t)
+			}
 		case 0xfd: // SIMD 前缀：只认 v128.const（0x0c，后跟 16 字节）
 			var sub uint64
 			if sub, err = r.u64(); err == nil {

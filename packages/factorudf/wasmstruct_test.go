@@ -40,6 +40,8 @@ func TestScanRejectsDeclaredSizesLargerThanTheirSection(t *testing.T) {
 		funcs = append(funcs, entry...)
 	}
 	cases["模块局部变量合计"] = forged(10, funcs...)
+	// ref.null 带变长立即数：两种解读的位置不一致，其后的长度字段会错位。
+	cases["ref.null 变长立即数"] = forged(11, 1, 0, 0xd0, 0x80, 0x0b, 0x0b, 0xff, 0xff, 0xff, 0xff, 0x0f, 0, 0, 0, 0, 0, 0)
 	for name, wasm := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := scanWasm(wasm)

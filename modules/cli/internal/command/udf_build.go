@@ -99,8 +99,10 @@ func udfCrates(root string) ([]string, error) {
 }
 
 var (
-	unsafeRE     = regexp.MustCompile(`\bunsafe\b|\b(allow|expect|warn)\s*\([^)]*unsafe_code`)
-	exportAttrRE = regexp.MustCompile(`\b(no_mangle|export_name|link_section)\b`)
+	unsafeRE     = regexp.MustCompile(`\bunsafe\b`)
+	lintAttrRE   = regexp.MustCompile(`\b(allow|expect|warn)\s*\([^)]*unsafe_code`) // 只在属性里匹配：放宽 unsafe_code 的 lint 属性
+	exportAttrRE = regexp.MustCompile(`\b(no_mangle|export_name|link_section)\b`)   // 只在属性里匹配：手写的导出属性
+	attrStartRE  = regexp.MustCompile(`#\s*!?\s*\[`)
 )
 
 // stripRustNonCode 按 Rust 的词法把注释与字符串、字符字面量换成空格（保留换行）：嵌套的块注释、原始字符串 r#"…"#、转义、
@@ -246,6 +248,26 @@ func hasHashes(b []byte, from, n int) bool {
 	return true
 }
 
+// attributesOf 取出源码里全部属性（#[…]、#![…]，括号按嵌套配对，含 cfg_attr 里的内容）连成一个文本，
+// 供只对属性生效的检查使用：普通标识符恰好叫 export_name、函数叫 expect 都不是属性，不能误报。
+func attributesOf(text string) string {
+	var out strings.Builder
+	for _, loc := range attrStartRE.FindAllStringIndex(text, -1) {
+		depth := 1
+		for i := loc[1]; i < len(text) && depth > 0; i++ {
+			switch text[i] {
+			case '[':
+				depth++
+			case ']':
+				depth--
+			}
+			out.WriteByte(text[i])
+		}
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
 // scanUdfSource 是源码层的补充检查（只能在本地做）：用户 crate 里不允许 unsafe 与手写的导出属性——这些都由 SDK 的宏生成。
 // clippy 的 unsafe_code 是 deny 而不是 forbid（宏生成的导出需要局部放开），所以这里扫描兜底；扫描按 Rust 词法去掉注释与字符串。
 func scanUdfSource(crateDir string) error {
@@ -260,10 +282,11 @@ func scanUdfSource(crateDir string) error {
 		}
 		text := stripRustNonCode(string(raw))
 		rel, _ := filepath.Rel(crateDir, path)
-		if unsafeRE.MatchString(text) {
-			problems = append(problems, rel+"：不允许 unsafe（也不允许 allow(unsafe_code)）")
+		attrs := attributesOf(text)
+		if unsafeRE.MatchString(text) || lintAttrRE.MatchString(attrs) {
+			problems = append(problems, rel+"：不允许 unsafe（也不允许 allow / expect / warn 放宽 unsafe_code）")
 		}
-		if exportAttrRE.MatchString(text) {
+		if exportAttrRE.MatchString(attrs) {
 			problems = append(problems, rel+"：不允许手写 no_mangle / export_name / link_section，导出由 #[udf] 宏生成")
 		}
 		return nil
