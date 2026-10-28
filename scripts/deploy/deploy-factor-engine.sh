@@ -143,7 +143,7 @@ eventbus:
   fetch_max_wait: 10s
 
 compute:
-  max_memory: 1GiB
+  max_memory: 4GiB
 
 pipeline:
   write_batch_rows: 1000
