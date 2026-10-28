@@ -36,7 +36,7 @@ var emptyInterval = Interval{Start: 0, End: -1}
 // 常量与只由参数决定的节点按标量（每条序列一个值）广播，不需要行，返回空区间。参数槽按声明范围取最坏扩展
 // （Back 最大、Shift 最小），所以任何合法取值需要的行都在区间内。
 //
-// 需求区间只决定算哪些点，不影响任何一个点的值（点纯性，设计 5.1）。
+// 需求区间只决定算哪些点，不影响任何一个点的值（只依赖窗口，设计 5.1）。
 func (p *Program) Need(targetStart, targetEnd int) ([]Interval, error) {
 	return p.NeedWith(targetStart, targetEnd, func(node *ProgramNode) (int, int) { return node.Back, node.Shift })
 }

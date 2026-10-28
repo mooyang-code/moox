@@ -196,7 +196,7 @@ func median(sorted []float64) float64 {
 }
 
 // sortedWindow 维护窗口内非 NaN 值的有序多重集合，随输出点逐个移入、移出。分位数只取决于窗口内值的多重集合，
-// 与从哪里开始维护无关，所以仍满足点纯性；窗口含 NaN 时输出 NaN。
+// 与从哪里开始维护无关，所以仍满足只依赖窗口的要求；窗口含 NaN 时输出 NaN。
 func sortedWindow(n int, fn func(sorted []float64) float64) SeriesKernel {
 	return func(out []float64, outStart int, in []Series) {
 		x := in[0]
