@@ -162,6 +162,18 @@ export interface StartedReplay {
 }
 
 /** 实例外显设置里隐藏的内容（默认全部展示）：只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据。 */
+/** 策略模板：命名的 DSL 骨架、变量定义与参数表样例行（template_yaml 原文）；columns 为空表示没有参数表。 */
+export interface StrategyTemplate {
+  template_id: string;
+  name: string;
+  description: string;
+  template_yaml: string;
+  columns: string[];
+  variables: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DisplayHidden {
   categories: string[];
   members: string[];
