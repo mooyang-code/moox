@@ -58,16 +58,16 @@
 
 | 源策略 | MooX | 注意 |
 | --- | --- | --- |
-| 因子函数 | 因子库 YAML 的表达式定义（[factor-dsl.md](factor-dsl.md)） | `min_periods`、ewm 从首根递推会影响新上市标的的选币，要用 partial 算子（`ema_partial`、`ts_*_partial`），见 factor-dsl.md 第 6 节第 1 条 |
+| 因子函数 | 因子库 YAML 的表达式定义（[factor-dsl.md](factor-dsl.md)） | `min_periods`、ewm 从首根递推会影响新上市标的的选币，要用 relaxed 算子（`ema_relaxed`、`ts_*_relaxed`），见 factor-dsl.md 第 6 节第 1 条 |
 | 因子参数的不同取值 | 同一定义在因子任务里的多个**固定参数成员**，成员键为 `因子ID__值1_值2` | 参数需要换算时（例如 `com=n` 换成 `span=2n+1`），换算只写在转换脚本里，并在 DSL 头部注释写明 |
-| 长回看（EMA 一类） | `ema(x, n, k)` / `ema_partial(x, n, k)` 固定预热根数 | 受三道限制：Storage 保留期、因子机 `engine.yaml` 的 `window.lookback` 和 `compute.max_memory`，三者都要装得下最长的回看（见 `docs/计划/因子任务与参数模型重构上线清单.md`）。预热根数是用户的决定，F1 定为 5 万 |
+| 长回看（EMA 一类） | `ema(x, n, k)` / `ema_relaxed(x, n, k)` 固定预热根数 | 受三道限制：Storage 保留期、因子机 `engine.yaml` 的 `window.lookback` 和 `compute.max_memory`，三者都要装得下最长的回看（见 `docs/计划/因子任务与参数模型重构上线清单.md`）。预热根数是用户的决定，F1 定为 5 万 |
 | 一个子策略 | `type: f1` 规则的一行 `params` | 一条规则最多 5000 行，整个策略合计最多 10000 个子策略；含参数表的 DSL 上限是 1 MiB |
 | 子策略模板 | `f1:` 一节，用 `{列名}` 占位 | 字段名和默认值与 F1 相同，见 `docs/模块/策略.md` 的"f1 规则" |
 | 加权合并 | `stg_weight` 归一化后乘以规则预算 | `portfolio.leverage` 要留出余量：按数量持有会让 Σw 略大于 1 |
 | 实时运行 | 策略实例（关联因子任务；观察期不挂账户） | f1 规则只能绑定合约 View，不支持回放 |
 
 **有差距时**：先写设计文档，每条语义都对照源码行号；再写执行计划，按阶段排、每个任务给出验收条件；交给审查（例如 Codex），把处置意见记进文档，然后才编码。
-F1 迁移新增的系统能力有：partial 算子、`type: f1` 规则与参数表、`volume = 0` 的 inactive 分类、执行器按窗口长度判断是否并行。
+F1 迁移新增的系统能力有：relaxed 算子、`type: f1` 规则与参数表、`volume = 0` 的 inactive 分类、执行器按窗口长度判断是否并行。
 
 ## 4. 转换
 
@@ -111,7 +111,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
 
 - 按 [factor-dsl.md](factor-dsl.md) 第 7 节的流程，用 `factor_py_check.py run-python` 跑原因子，用 `factor-expr.sh eval` 试算 DSL，再用 `compare` 比较。
 - **数据要覆盖两种标的**：一个历史很长的（不少于预热根数），一个上市不久的（只有几千根），后者用来核对序列开头的部分窗口。
-- 用了 partial 算子时，"暖机新空"必须为 0。
+- 用了 relaxed 算子时，"暖机新空"必须为 0。
 - 长回看截断（例如 EMA 只预热 5 万根）要单独评估：分别在全历史和截断窗口上算一遍，统计每期截面 top1 的一致率。
 - **原因子不是 `compute(df, params, context)` 契约时**（alphalib 是 `signal(df, n, diff, name)`），用一个包装文件适配，再交给 `run-python`：
 
@@ -290,7 +290,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance FH001=<实
 | `min_universe` 把停牌的币算了进去 | `volume = 0` 的行被当成候选 | 改为 inactive 分类，明细里记 `volume_zero` |
 | 原框架在 pandas 2 下报错 | `between(inclusive=bool)` | 在副本里打兼容补丁（5.4 节） |
 | 原框架回测类不接受逻辑组合 | 只有 `f1_utils` 实现了逻辑组合 | 这类黄金用例改用 `f1_utils` 生成 |
-| 新上市标的的因子和原版不一致 | 原版 `min_periods`、ewm 从首根递推，DSL 是严格窗口 | 改用 partial 算子（factor-dsl.md 第 6 节第 1 条） |
+| 新上市标的的因子和原版不一致 | 原版 `min_periods`、ewm 从首根递推，DSL 是严格窗口 | 改用 relaxed 算子（factor-dsl.md 第 6 节第 1 条） |
 | 后台 SSH 任务退出码 255 | 网络抖动导致长连接断开 | 改用 nohup 放到后台，再轮询它的日志 |
 | 验收期间采集出现延迟 | 从采集机整包 rsync | 第 7 节 |
 | 把读取变慢归因成"互相争用" | 没有逐跳证据就下结论 | 5.6 节 |

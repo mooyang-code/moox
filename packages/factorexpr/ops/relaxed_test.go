@@ -29,11 +29,11 @@ func runKernel(kernel SeriesKernel, x []float64, n int) []float64 {
 	return out
 }
 
-// 窗口里没有 NaN 时，partial 算子与对应的严格算子逐位一致。
-func TestPartialEqualsStrictOnFullWindows(t *testing.T) {
+// 窗口里没有 NaN 时，relaxed 算子与对应的严格算子逐位一致。
+func TestRelaxedEqualsStrictOnFullWindows(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 	x := headSeries(rng, 0, 400)
-	for _, pair := range [][2]string{{"ts_mean_partial", "ts_mean"}, {"ts_std_partial", "ts_std"}, {"ts_min_partial", "ts_min"}, {"ts_max_partial", "ts_max"}} {
+	for _, pair := range [][2]string{{"ts_mean_relaxed", "ts_mean"}, {"ts_std_relaxed", "ts_std"}, {"ts_min_relaxed", "ts_min"}, {"ts_max_relaxed", "ts_max"}} {
 		for _, n := range []int{2, 7, 60} {
 			got := runKernel(rolling[pair[0]]([]int{n, 2}, nil), x, n)
 			want := runKernel(rolling[pair[1]]([]int{n}, nil), x, n)
@@ -52,18 +52,18 @@ func TestPartialEqualsStrictOnFullWindows(t *testing.T) {
 		if k > len(x) {
 			continue
 		}
-		got := runKernel(rolling["ema_partial"](args, nil), x, k)
+		got := runKernel(rolling["ema_relaxed"](args, nil), x, k)
 		want := runKernel(rolling["ema"](args, nil), x, k)
 		for i := range got {
 			if got[i] != want[i] {
-				t.Fatalf("ema_partial%v[%d] = %v, ema = %v", args, i, got[i], want[i])
+				t.Fatalf("ema_relaxed%v[%d] = %v, ema = %v", args, i, got[i], want[i])
 			}
 		}
 	}
 }
 
 // 序列开头：结果与"只用已有的有效值"按定义计算一致（pandas 的 min_periods 与 ewm(adjust=False) 从首根递推）。
-func TestPartialHeadMatchesReference(t *testing.T) {
+func TestRelaxedHeadMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 	const n, lead = 30, 45
 	x := headSeries(rng, lead, 200)
@@ -72,10 +72,10 @@ func TestPartialHeadMatchesReference(t *testing.T) {
 		m   int
 		ref func(w []float64) float64
 	}{
-		{"ts_mean_partial", 1, func(w []float64) float64 { return toFloat(bigMean(w)) }},
-		{"ts_std_partial", 2, func(w []float64) float64 { return math.Sqrt(refVariance(w)) }},
-		{"ts_min_partial", 1, func(w []float64) float64 { return windowMin(w) }},
-		{"ts_max_partial", 3, func(w []float64) float64 { return windowMax(w) }},
+		{"ts_mean_relaxed", 1, func(w []float64) float64 { return toFloat(bigMean(w)) }},
+		{"ts_std_relaxed", 2, func(w []float64) float64 { return math.Sqrt(refVariance(w)) }},
+		{"ts_min_relaxed", 1, func(w []float64) float64 { return windowMin(w) }},
+		{"ts_max_relaxed", 3, func(w []float64) float64 { return windowMax(w) }},
 	}
 	for _, c := range cases {
 		out := runKernel(rolling[c.op]([]int{n, c.m}, nil), x, n)
@@ -97,31 +97,31 @@ func TestPartialHeadMatchesReference(t *testing.T) {
 	}
 	alpha := factorexpr.EMAAlpha(20)
 	k := 120
-	out := runKernel(rolling["ema_partial"]([]int{20, k}, nil), x, k)
+	out := runKernel(rolling["ema_relaxed"]([]int{20, k}, nil), x, k)
 	for i, got := range out {
 		tm := k - 1 + i
 		start := max(tm-k+1, lead)
 		if start > tm {
 			if !math.IsNaN(got) {
-				t.Fatalf("ema_partial t=%d: 窗口全是 NaN，应为 NaN", tm)
+				t.Fatalf("ema_relaxed t=%d: 窗口全是 NaN，应为 NaN", tm)
 			}
 			continue
 		}
 		// 按 pandas ewm(adjust=False) 的方式从首个有效值逐根递推。
 		want := refEMA(x[start:tm+1], alpha)
 		if math.Abs(got-want) > 1e-12*math.Abs(want) {
-			t.Fatalf("ema_partial t=%d: got %v, want %v", tm, got, want)
+			t.Fatalf("ema_relaxed t=%d: got %v, want %v", tm, got, want)
 		}
 	}
 }
 
 // 有效值之后再出现 NaN（中途缺失）或窗口左缘之后的 NaN：输出 NaN，与严格窗口一致；NaN 滑出窗口后恢复。
-func TestPartialInternalNaN(t *testing.T) {
+func TestRelaxedInternalNaN(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 	const n = 10
 	x := headSeries(rng, 3, 80)
 	x[40] = nan
-	for _, op := range []string{"ts_mean_partial", "ts_std_partial", "ts_min_partial", "ts_max_partial"} {
+	for _, op := range []string{"ts_mean_relaxed", "ts_std_relaxed", "ts_min_relaxed", "ts_max_relaxed"} {
 		out := runKernel(rolling[op]([]int{n, 2}, nil), x, n)
 		for i, got := range out {
 			tm := n - 1 + i
@@ -144,7 +144,7 @@ func TestPartialInternalNaN(t *testing.T) {
 	for i := range all {
 		all[i] = nan
 	}
-	if out := runKernel(rolling["ema_partial"]([]int{5, 10}, nil), all, 10); !math.IsNaN(out[0]) {
+	if out := runKernel(rolling["ema_relaxed"]([]int{5, 10}, nil), all, 10); !math.IsNaN(out[0]) {
 		t.Fatalf("全 NaN 窗口应为 NaN")
 	}
 }

@@ -1,7 +1,7 @@
 # F1 迁移的因子库（表达式写法）：2 个选币因子、3 个过滤因子，语义与 strategy_share 的 alphalib 版本逐值一致。
 # 设计见 docs/计划/F1策略迁移/F1策略迁移设计.md 第 2、3 节。全部用新 ID（f1_ 前缀），不改现有的 min_max。
 # 默认值取参数下限，不与 FH 参数表里的任何取值重合：参数全为默认值的成员会省略参数段。
-# 序列开头的处理与 F1 一致：EMA 从首根递推（ema_partial），rolling 的 min_periods 用 *_partial 还原。
+# 序列开头的处理与 F1 一致：EMA 从首根递推（ema_relaxed），rolling 的 min_periods 用 *_relaxed 还原。
 - factor_id: f1_po
   name: Po 双均线距离比
   category_id: trend
@@ -14,20 +14,20 @@
       short_span: {type: int, min: 3, max: 4000, default: 3}
       long_span: {type: int, min: 7, max: 12000, default: 7}
     let:
-      short: ema_partial(close, short_span)
-      long: ema_partial(close, long_span, 50000)
+      short: ema_relaxed(close, short_span)
+      long: ema_relaxed(close, long_span, 50000)
     output: (short - long) / (short + long)
 
 - factor_id: f1_mtmstd
   name: 动量均值乘动量波动
   category_id: momentum
   category_name: 动量类
-  # F1 的 rolling 用 min_periods=1（均值）与 2（标准差），用 *_partial 还原序列开头的部分窗口。
+  # F1 的 rolling 用 min_periods=1（均值）与 2（标准差），用 *_relaxed 还原序列开头的部分窗口。
   spec: |
     params: {n: {type: int, min: 2, max: 2000, default: 2}}
     let:
       r: pct_change(close, n)
-    output: ts_mean_partial(r, n, 1) * ts_std_partial(r, n, 2)
+    output: ts_mean_relaxed(r, n, 1) * ts_std_relaxed(r, n, 2)
 
 - factor_id: f1_wick_max
   name: 上影线占比滚动最大（MaxHightDie）
@@ -50,10 +50,10 @@
   name: 区间位置（MinMax，窗口放宽到 2016）
   category_id: momentum
   category_name: 动量类
-  # 与现有 min_max 公式相同，窗口上限放宽到 2016；F1 用 min_periods=1，用 *_partial 还原。
+  # 与现有 min_max 公式相同，窗口上限放宽到 2016；F1 用 min_periods=1，用 *_relaxed 还原。
   spec: |
     params: {window: {type: int, min: 2, max: 2016, default: 2}}
     let:
       tp: (high + low + close) / 3
-      lo: ts_min_partial(tp, window, 1)
-    output: (tp - lo) / (ts_max_partial(tp, window, 1) - lo) - 0.5
+      lo: ts_min_relaxed(tp, window, 1)
+    output: (tp - lo) / (ts_max_relaxed(tp, window, 1) - lo) - 0.5
