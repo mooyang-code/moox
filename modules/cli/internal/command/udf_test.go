@@ -103,6 +103,22 @@ func TestUdfActivatePrintsImpactsAndPrerequisites(t *testing.T) {
 	}
 }
 
+// 没有引用方的切换（首次启用）：提示不需要恢复引擎；有引用方时才提示恢复。
+func TestUdfActivateFollowUpDependsOnImpacts(t *testing.T) {
+	run := func(rsp *factorpb.ActivateUdfRsp) string {
+		useUdfGateway(t, &udfFakeGateway{rsp: rsp})
+		var out bytes.Buffer
+		require.NoError(t, runUdfActivate(context.Background(), &out, udfActivateOptions{Ref: "ts_mean_udf@" + testHash}))
+		return out.String()
+	}
+	first := run(&factorpb.ActivateUdfRsp{RetInfo: udfOK(), Name: "ts_mean_udf", NewHash: testHash, Applied: true})
+	assert.Contains(t, first, "不需要恢复引擎")
+	assert.NotContains(t, first, "lifecycle resume")
+	switched := run(&factorpb.ActivateUdfRsp{RetInfo: udfOK(), Name: "ts_mean_udf", OldHash: "aa", NewHash: testHash, Applied: true,
+		Impacts: []*factorpb.UdfImpact{{FactorId: "f1"}}})
+	assert.Contains(t, switched, "lifecycle resume")
+}
+
 // 前提不满足时服务端返回 CONFLICT 并带着完整的检查结果：命令照样打印检查结果，再返回错误。
 func TestUdfActivateConflictStillPrintsTheChecks(t *testing.T) {
 	g := &udfFakeGateway{rsp: &factorpb.ActivateUdfRsp{

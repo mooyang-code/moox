@@ -191,6 +191,8 @@ func runUdfActivate(ctx context.Context, out io.Writer, opts udfActivateOptions)
 		return invokeErr
 	}
 	switch {
+	case rsp.GetApplied() && len(rsp.GetImpacts()) == 0:
+		fmt.Fprintf(out, "\n已切换 %s：%s → %s。没有因子定义引用它，不需要恢复引擎。\n", name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetApplied():
 		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（lifecycle resume --endpoint <因子引擎地址>），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
 			name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())

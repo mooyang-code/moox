@@ -1,0 +1,26 @@
+# 自定义算子（UDF）演示策略：合约 1m，读取因子任务 ftask_udf_1m 的三个成员。
+#
+# 因子任务里的成员（定义见 skills/moox/references/udf.md 的演示）：
+#   ref_mean  内置 ts_mean(close, 20)
+#   udf_mean  自定义算子 ts_mean_udf(close, 20)，与内置 ts_mean 逐位一致（作验收基准）
+#   udf_kama  自定义算子 kama_trend(close, 10, 200)，考夫曼自适应均线
+#
+# 规则：收盘价在 KAMA 之上、并且 UDF 均值与内置均值一致（逐位相等，不一致说明自定义算子的结果有偏差，那一期该合约不入选）的合约入选，
+# 按偏离度排序、等权，单个最多 5%；不挂账户（观察实例），只计算目标权重、不投递。
+name: udf_kama_swap_1m
+bar: 1m
+
+universe:
+  min_age_bars: 15
+
+rules:
+  - id: above_kama
+    name: 收盘价在 KAMA 之上且 UDF 均值与内置均值一致
+    type: rank
+    filter: "close > udf_kama and udf_mean == ref_mean"
+    score: "rank(close / udf_kama - 1)"
+    select: {top: 10000}
+    weight: {total: 1, method: equal, cap: 0.05}
+
+portfolio:
+  leverage: 1
