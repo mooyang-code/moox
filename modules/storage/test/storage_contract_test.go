@@ -30,7 +30,7 @@ func TestStorageRoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 		"space-a/shared": newNode("node-a"),
 		"space-b/shared": newNode("node-b"),
 	}
-	primary, err := primarystore.New(primarystore.Options{
+	primary, err := primarystore.New(primarystore.Options{Snapshot: emptyRequestSnapshot,
 		Resolver: func(_ context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
 			return nodes[spaceID+"/"+datasetID], nil
 		},
@@ -51,11 +51,13 @@ func TestStorageRoutesSpaceDatasetAndRejectsEmptyRecordVersion(t *testing.T) {
 		}
 	}
 	auth := &pb.AuthInfo{AppId: "storage-primary"}
-	rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "1"), row("space-b", "1")}})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 2 {
-		t.Fatalf("write rsp=%v err=%v", rsp, err)
+	for _, space := range []string{"space-a", "space-b"} {
+		rsp, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row(space, "1")}}))
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 1 {
+			t.Fatalf("write %s rsp=%v err=%v", space, rsp, err)
+		}
 	}
-	bad, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "")}})
+	bad, err := primary.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row("space-a", "")}}))
 	if err != nil || bad.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("empty version rsp=%v err=%v", bad, err)
 	}

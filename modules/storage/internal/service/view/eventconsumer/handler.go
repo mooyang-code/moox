@@ -26,12 +26,8 @@ type DatasetRowsBatchHandler interface {
 	HandleDatasetRowsBatch(context.Context, []DatasetRowsBatchItem) error
 }
 
-type CollectorPeriodCompletedHandler interface {
-	HandleCollectorPeriodCompleted(context.Context, *eventpb.EventMessage, *storagepb.CollectorPeriodCompleted) error
-}
-
-type FactorPeriodComputedHandler interface {
-	HandleFactorPeriodComputed(context.Context, *eventpb.EventMessage, *storagepb.FactorPeriodComputed) error
+type DatasetPeriodCompletedHandler interface {
+	HandleDatasetPeriodCompleted(context.Context, *eventpb.EventMessage, *storagepb.DatasetPeriodCompleted) error
 }
 
 type DatasetSyncPointHandler interface {

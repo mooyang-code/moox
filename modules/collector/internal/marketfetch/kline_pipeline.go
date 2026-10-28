@@ -2,9 +2,6 @@ package marketfetch
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,7 +15,6 @@ import (
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -650,49 +646,6 @@ func metricKlineResult(err error) string {
 	default:
 		return "no_candidate"
 	}
-}
-
-// writeEventID 返回写入使用的来源 ID。WriteIDByContent 时附加本次内容的摘要，
-// 使同一内容的重试幂等、内容变化的重新提交不会被整组跳过。
-func writeEventID(req Request, rows []*storagepb.RowFieldUpsert) string {
-	base := sourceEventID(req)
-	if !req.WriteIDByContent {
-		return base
-	}
-	digest := sha256.New()
-	marshal := proto.MarshalOptions{Deterministic: true}
-	ordered := append([]*storagepb.RowFieldUpsert(nil), rows...)
-	sort.Slice(ordered, func(i, j int) bool {
-		left, right := ordered[i].GetKey().GetTimeSeries(), ordered[j].GetKey().GetTimeSeries()
-		if left.GetSubjectId() != right.GetSubjectId() {
-			return left.GetSubjectId() < right.GetSubjectId()
-		}
-		if left.GetSeriesTag() != right.GetSeriesTag() {
-			return left.GetSeriesTag() < right.GetSeriesTag()
-		}
-		return left.GetDataTime() < right.GetDataTime()
-	})
-	for _, row := range ordered {
-		raw, err := marshal.Marshal(row)
-		if err != nil {
-			continue
-		}
-		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], uint64(len(raw)))
-		_, _ = digest.Write(size[:])
-		_, _ = digest.Write(raw)
-	}
-	return base + "#" + hex.EncodeToString(digest.Sum(nil)[:8])
-}
-
-func sourceEventID(req Request) string {
-	if strings.TrimSpace(req.SyncPointID) != "" {
-		return strings.TrimSpace(req.SyncPointID)
-	}
-	if len(req.Items) == 1 && strings.TrimSpace(req.Items[0].SourceEventID) != "" {
-		return strings.TrimSpace(req.Items[0].SourceEventID)
-	}
-	return req.BatchID
 }
 
 func stockProviderExchange(subjectID string) marketdata.ExchangeID {

@@ -183,7 +183,7 @@ func TestDeepCheckRequiresFields(t *testing.T) {
 }
 
 func seriesOf(subject string) seriesset.Series {
-	return seriesset.Series{Provider: "binance", SourceID: "binance", MarketType: "spot", SubjectID: subject, SeriesTag: "t"}
+	return seriesset.Series{SubjectID: subject, SeriesTag: "t"}
 }
 
 func mustJSON(value any) string {

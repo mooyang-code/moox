@@ -18,7 +18,7 @@ func TestMetadataSchemaV14Contract(t *testing.T) {
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '14')",
+		"VALUES ('schema_version', '15')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -93,7 +93,7 @@ func TestMetadataSchemaV14Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV14DDLExecutes(t *testing.T) {
+func TestMetadataSchemaV15DDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestMetadataSchemaV14DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "14" {
+	if version != "15" {
 		t.Fatalf("persisted schema version = %q, want 14", version)
 	}
 	var foreignKeysEnabled int
@@ -193,8 +193,8 @@ func TestMetadataSchemaV14DDLExecutes(t *testing.T) {
 
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO t_spaces (c_space_id, c_name) VALUES ('space', 'Space');
-		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name, c_kind)
-		VALUES ('space', 'source', 'Source', 'internal');
+		INSERT INTO t_data_sources (c_space_id, c_data_source_id, c_name)
+		VALUES ('space', 'source', 'Source');
 	`); err != nil {
 		t.Fatal(err)
 	}

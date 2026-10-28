@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"strings"
 	"time"
 
@@ -17,29 +18,40 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/robfig/cron"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	tagStaleFactor   = 3
-	tagCheckPrefix   = "subject_tag:"
-	sqliteTimeLayout = "2006-01-02 15:04:05"
+	tagStaleFactor = 3
+	tagCheckPrefix = "subject_tag:"
+	// 标签属性里的同步配置键与缺省 cron，与 Collector 的 internal/tagattr 一致。
+	tagAttrSyncCron     = "sync.cron"
+	tagAttrSyncTimezone = "sync.timezone"
+	defaultTagSyncCron  = "0 * * * *"
 )
 
+// TagSyncStatusSource 读取 Collector 的标签同步运行状态：标签只是一组标的，同步任务的运行结果在 Collector 的库里。
+type TagSyncStatusSource interface {
+	ListTagSyncStatus(ctx context.Context, spaceID string) ([]*collectorpb.TagSyncStatus, error)
+}
+
 // checkTag evaluates the health of one tag definition. Member counts are
-// queried by Storage, while freshness is derived from the tag's own cron and
-// timezone so a slow or failed sync cannot be mistaken for a healthy catalog.
-func checkTag(tag *storagepb.Tag, now time.Time) []string {
+// queried by Storage, run results come from Collector, and freshness is derived
+// from the sync cron and timezone in the tag attributes, so a slow or failed
+// sync cannot be mistaken for a healthy catalog. A tag without a run record
+// counts as stale.
+func checkTag(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time) []string {
 	if tag == nil {
 		return []string{"missing"}
 	}
 	reasons := make([]string, 0, 3)
-	if tag.GetLastStatus() == "failed" {
+	if run.GetLastStatus() == "failed" {
 		reasons = append(reasons, "failed")
 	}
 	if tag.GetActiveCount() == 0 {
 		reasons = append(reasons, "no_active_members")
 	}
-	if tagStale(tag, now) {
+	if tagStale(tag, run, now) {
 		reasons = append(reasons, "stale")
 	}
 	if len(reasons) == 0 {
@@ -48,16 +60,16 @@ func checkTag(tag *storagepb.Tag, now time.Time) []string {
 	return reasons
 }
 
-func tagStale(tag *storagepb.Tag, now time.Time) bool {
-	lastRun, err := time.ParseInLocation(sqliteTimeLayout, tag.GetLastRunAt(), time.UTC)
+func tagStale(tag *storagepb.Tag, run *collectorpb.TagSyncStatus, now time.Time) bool {
+	lastRun, err := time.Parse(time.RFC3339, run.GetLastRunAt())
 	if err != nil {
 		return true
 	}
-	schedule, err := cron.ParseStandard(tag.GetCron())
+	schedule, err := cron.ParseStandard(firstNonEmptyString(tag.GetAttributes()[tagAttrSyncCron], defaultTagSyncCron))
 	if err != nil {
 		return true
 	}
-	loc, err := time.LoadLocation(firstNonEmptyString(tag.GetTimezone(), "UTC"))
+	loc, err := time.LoadLocation(firstNonEmptyString(tag.GetAttributes()[tagAttrSyncTimezone], "UTC"))
 	if err != nil {
 		return true
 	}
@@ -119,6 +131,7 @@ func buildMonitorMarketCanary(
 	cfg *config.Config,
 	runtime *Runtime,
 	metricsStorage *monmetrics.StorageAdapter,
+	tagRuns TagSyncStatusSource,
 	hook func(context.Context, domain.Check, domain.CheckResult),
 ) (func(context.Context) error, func(context.Context) error, error) {
 	if cfg == nil || !cfg.MarketCanary.Enabled {
@@ -216,7 +229,7 @@ func buildMonitorMarketCanary(
 		}
 		return nil
 	}
-	if metricsStorage != nil {
+	if metricsStorage != nil && tagRuns != nil {
 		previousRun := run
 		run = func(runCtx context.Context) error {
 			err := previousRun(runCtx)
@@ -226,6 +239,17 @@ func buildMonitorMarketCanary(
 				if tagErr != nil {
 					err = errors.Join(err, tagErr)
 					continue
+				}
+				statuses, statusErr := tagRuns.ListTagSyncStatus(runCtx, spaceID)
+				if statusErr != nil {
+					// Collector 暂时不可达（启动顺序、重启）时不能让定时器失败：首次运行出错会让 Monitor 整个退出。
+					// Collector 自身的健康检查会报告它不可用，这里只跳过本轮标签检查。
+					log.WarnContextf(runCtx, "monitor skip tag checks for space %s: collector tag sync status unavailable: %v", spaceID, statusErr)
+					continue
+				}
+				runsByTag := make(map[string]*collectorpb.TagSyncStatus, len(statuses))
+				for _, status := range statuses {
+					runsByTag[status.GetTagId()] = status
 				}
 				for _, tag := range tags {
 					if tag == nil || !tag.GetBuiltin() {
@@ -237,7 +261,7 @@ func buildMonitorMarketCanary(
 						err = errors.Join(err, getErr)
 						continue
 					}
-					reasons := checkTag(tag, now)
+					reasons := checkTag(tag, runsByTag[tag.GetTagId()], now)
 					result := domain.CheckResult{ResultID: domain.ScopedResultID(spaceID, checkID, now), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
 					if !result.Success {
 						result.Status = domain.CheckStatusDown

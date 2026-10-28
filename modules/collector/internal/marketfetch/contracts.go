@@ -79,9 +79,8 @@ type Request struct {
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
-	// WriteIDByContent 让写入 ID 带上本次提交内容的摘要：同一内容的重试复用同一个 ID，
-	// 内容变化（例如重复触发时多拿到了标的）则换新 ID，避免被 Storage 当成重复整组跳过。
-	WriteIDByContent bool `json:"write_id_by_content,omitempty"`
+	// PlanRequest 表示由采集计划（或补采）构造的请求：标的上限为 MaxPlanItems，否则为 MaxRealtimeItems。
+	PlanRequest bool `json:"plan_request,omitempty"`
 }
 
 func bindRequestTargetPeriodIdentity(request *Request) {
@@ -212,7 +211,7 @@ func (r *Request) validate() error {
 		r.BatchKind = domain.BatchKindRealtime
 	}
 	maxItems := MaxRealtimeItems
-	if r.WriteIDByContent {
+	if r.PlanRequest {
 		maxItems = MaxPlanItems
 	}
 	switch r.BatchKind {
@@ -296,12 +295,8 @@ type Storage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
-type sourceStorage interface {
-	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
-}
-
 type periodStorage interface {
-	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow) error
 }
 
 // ItemReporter receives final per-item outcomes from the common invocation

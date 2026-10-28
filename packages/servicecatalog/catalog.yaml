@@ -640,6 +640,8 @@ components:
           - CancelKlineResampleJob
           - PreviewKlineResampleSource
           - SyncSubjects
+          - ListTagSyncStatus
+          - ListSubjectListers
           - CheckKline
           - SubmitKlineBackfill
           - GetKlineBackfill
@@ -671,6 +673,8 @@ components:
           - GetCollectorStatus
           - GetIngestMode
           - ListSubjectExclusions
+          - ListTagSyncStatus
+          - ListSubjectListers
         acl:
           - methods:
               - GetTaskList
@@ -719,6 +723,18 @@ components:
               - GetTaskResultInventory
             callers:
               - monitor
+          # 标签同步的运行状态：Monitor 的标签检查读；可选的（来源，市场类型）组合给管理台新建自动标签用。
+          - methods:
+              - ListTagSyncStatus
+            callers:
+              - console
+              - moox-cli
+              - monitor
+          - methods:
+              - ListSubjectListers
+            callers:
+              - console
+              - moox-cli
       # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
       - path: trpc.moox.collector.StreamCollector
         port: 11422
@@ -1345,7 +1361,6 @@ components:
           - RemoveTagMembers
           - SetTagMemberStatus
           - ApplyTagSnapshot
-          - ReportTagRunFailure
           - UpdateSubjectAttributes
           - ResolveSubjects
           - CreateDataset
@@ -1477,22 +1492,7 @@ components:
             callers:
               - moox-cli
           - methods:
-              - ClaimViewIndexBuild
-              - UpdateViewIndexBuild
-              - ActivateViewIndex
-              - CommitViewSchemaExtension
-              - FailViewIndexBuild
-              - CreateViewRebuildLog
-              - UpdateViewRebuildLog
-              - UpsertSkippedViewRebuildLog
-              - UpsertViewPeriodDatasetState
-              - ListViewPeriodDatasetStates
-              - RecordViewSyncPoint
-            callers:
-              - storage-view
-          - methods:
               - ApplyTagSnapshot
-              - ReportTagRunFailure
               - UpdateSubjectAttributes
             callers:
               - collector
@@ -1527,7 +1527,7 @@ components:
               - factor-mgr
               - monitor
               - strategy
-              - storage-view
+          # 写方法按各模块实际的调用点放行：Collector 建改删数据集与浏览 View；factor-mgr 建删结果数据集、列与默认 View。
           - methods:
               - CreateDataset
               - UpdateDataset
@@ -1535,17 +1535,18 @@ components:
               - CreateView
               - UpdateView
               - DeleteView
-              - CreateDataSource
-              - UpdateDataSource
-              - CreateField
-              - UpdateField
-              - CreateFieldGroup
-              - UpdateFieldGroup
-              - UpsertSubject
               - UpsertDatasetColumn
               - UpsertViewColumn
             callers:
               - collector
+          - methods:
+              - CreateDataset
+              - UpdateDataset
+              - DeleteDataset
+              - CreateView
+              - DeleteView
+              - UpsertDatasetColumn
+            callers:
               - factor-mgr
           - methods:
               - ActivateDataset
@@ -1568,24 +1569,22 @@ components:
           - UpsertFields
           - RegisterSeriesSnapshot
           - CommitTimeSeriesBatch
-          - WriteFactorRows
           - ReadRows
           - DeleteDatasetRows
           - RestoreDatasetRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - ReadDatasetChanges
-          - ReportCollectorPeriodCompleted
-          - ReportFactorPeriodComputed
+          - ReportDatasetPeriodCompleted
           - AppendDatasetSyncPoint
-          - GetFactorPeriodComputed
+          - GetDatasetPeriodCompleted
           - WaitViewSyncPoint
         read_only_methods:
           - ReadRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - ReadDatasetChanges
-          - GetFactorPeriodComputed
+          - GetDatasetPeriodCompleted
         # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
         idempotent_methods:
           - CommitTimeSeriesBatch
@@ -1597,24 +1596,21 @@ components:
           - methods:
               - UpsertFields
               - CommitTimeSeriesBatch
-              - WriteFactorRows
               - ReadRows
               - DeleteDatasetRows
               - RestoreDatasetRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
               - ReadDatasetChanges
-              - ReportCollectorPeriodCompleted
-              - ReportFactorPeriodComputed
+              - ReportDatasetPeriodCompleted
               - AppendDatasetSyncPoint
-              - GetFactorPeriodComputed
+              - GetDatasetPeriodCompleted
               - WaitViewSyncPoint
             callers:
               - moox-cli
           - methods:
               - RegisterSeriesSnapshot
               - CommitTimeSeriesBatch
-              - ReportCollectorPeriodCompleted
               - AppendDatasetSyncPoint
               - DeleteDatasetRows
               - RestoreDatasetRows
@@ -1626,26 +1622,25 @@ components:
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
               - WaitViewSyncPoint
-              - GetFactorPeriodComputed
+              - GetDatasetPeriodCompleted
             callers:
               - collector
               - factor-mgr
               - monitor
               - strategy
-              - storage-view
           - methods:
               - UpsertFields
             callers:
               - monitor
-          # collector-stream 的周期提交与补采写入；请求体的 AppId 仍是 moox-collector（周期 RPC 只接受 Collector 身份）。
+          # collector-stream 的周期提交与补采写入。
           - methods:
               - CommitTimeSeriesBatch
               - UpsertFields
             callers:
               - collector-stream
           - methods:
-              - WriteFactorRows
-              - ReportFactorPeriodComputed
+              - UpsertFields
+              - ReportDatasetPeriodCompleted
               - DeleteDatasetRows
               - RestoreDatasetRows
             callers:
@@ -2065,9 +2060,9 @@ principals:
         methods:
           - ReadTimeSeriesRows
           - ReadDatasetChanges
-          - WriteFactorRows
-          - ReportFactorPeriodComputed
-          - GetFactorPeriodComputed
+          - UpsertFields
+          - ReportDatasetPeriodCompleted
+          - GetDatasetPeriodCompleted
       - service: trpc.moox.storage.Metadata
         methods:
           - GetDataset

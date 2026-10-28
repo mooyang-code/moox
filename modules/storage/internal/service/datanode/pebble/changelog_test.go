@@ -29,12 +29,12 @@ func TestChangeLogRecordsWritesInOrder(t *testing.T) {
 	require.Empty(t, head.GetChanges())
 
 	// 一次写入里同一标的的多行合并成一个时间范围，两个数据集各记一条。
-	require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{
 		tsRow("BTCUSDT", "", base, 1), tsRow("BTCUSDT", "", base.Add(2*time.Minute), 2), tsRow("ETHUSDT", "", base.Add(time.Minute), 3),
 	}))
 	other := tsRow("BTCUSDT", "", base, 9)
 	other.Key.DatasetId = "other"
-	require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{other}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{other}))
 
 	got, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: head.GetNextCursor()})
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestChangeLogPagingAndHasMore(t *testing.T) {
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	cursor := &pb.DatasetChangeCursor{NodeId: "node-1", StoreId: mustHead(t, s).GetStoreId()}
 	var seen []uint64
@@ -93,7 +93,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 	s := openChangeLogStore(t, time.Hour)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 4; i++ {
-		require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	head := mustHead(t, s)
 	start := &pb.DatasetChangeCursor{NodeId: head.GetNodeId(), StoreId: head.GetStoreId(), Sequence: 0}
@@ -102,7 +102,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, 4, removed)
-	require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(10*time.Minute), 10)}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(10*time.Minute), 10)}))
 
 	// 游标 0 早于清理到的序号 4：断档。
 	rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: start})
@@ -131,7 +131,7 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 7*24*time.Hour)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}))
+	require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}))
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(-s.ChangeLogRetention()))
 	require.NoError(t, err)
 	require.Equal(t, 0, removed)
@@ -140,13 +140,15 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	require.Len(t, rsp.GetChanges(), 1)
 }
 
-func TestFactorResultWritesAreNotChangeLogged(t *testing.T) {
+// 带 commit_id 的写入与其他时序写入一样记变更日志；同一 commit_id 的重复提交不再写入，也不多记一条。
+func TestCommitWritesAreChangeLoggedOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openChangeLogStore(t, 0)
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	row := tsRow("BTCUSDT", "", base, 1)
-	row.Key.DatasetId = "factor_d"
-	_, err := s.WriteFactorRows(ctx, "s", "factor_d", "commit-1", []*pb.RowFieldUpsert{row})
-	require.NoError(t, err)
-	require.Equal(t, uint64(0), mustHead(t, s).GetSequence(), "因子结果不是本地副本的输入")
+	for i := 0; i < 2; i++ {
+		_, err := s.UpsertFields(ctx, "s", "d", "commit-1", []*pb.RowFieldUpsert{row})
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(1), mustHead(t, s).GetSequence())
 }

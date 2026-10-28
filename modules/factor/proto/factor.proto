@@ -107,6 +107,13 @@ message FactorPeriodState {
   string member_kind = 8;
 }
 
+// PeriodDetail 是因子结果数据集一期完成时放进 DatasetPeriodCompleted.detail 的明细（detail_type = moox.factor.PeriodDetail.v1）。
+// Storage 与 View 只原样透传，Strategy 按 detail_type 解码后判断每个因子成员这一期是否可用。
+message PeriodDetail {
+  string source_dataset_id = 1;
+  repeated FactorPeriodState factors = 2;
+}
+
 message TaskRunSummary {
   string task_id = 1;
   int64 last_period_time = 2;

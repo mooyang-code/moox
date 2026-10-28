@@ -2,9 +2,7 @@ package pebble
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,26 +19,18 @@ import (
 )
 
 const (
-	outboxPrefix             = "__outbox/"
-	datasetDeletedPrefix     = "__dataset_deleted/"
-	processedEventPrefix     = "__processed_event/"
-	processedEventTimePrefix = "__processed_event_time/"
-	metaNextID               = "__meta/next_outbox_id"
-	// The market stream keeps source events for 168 hours. Keep dedupe markers
-	// one day longer so a late redelivery cannot recreate a row after stream
-	// retention has elapsed.
-	defaultProcessedEventRetention = 192 * time.Hour
-	processedEventCleanupBatchSize = 256
+	outboxPrefix         = "__outbox/"
+	datasetDeletedPrefix = "__dataset_deleted/"
+	metaNextID           = "__meta/next_outbox_id"
 )
 
 // Options controls one DataNode Pebble database. A node can host multiple
 // datasets; the dataset identity is part of every physical key.
 type Options struct {
-	Path                    string
-	NodeID                  string
-	BucketDuration          time.Duration
-	MaxEventBytes           int
-	ProcessedEventRetention time.Duration
+	Path           string
+	NodeID         string
+	BucketDuration time.Duration
+	MaxEventBytes  int
 	// ChangeLogRetention 是行变更日志的保留期；为 0 时取 DefaultChangeLogRetention。
 	ChangeLogRetention time.Duration
 	DisableSyncWrites  bool
@@ -67,7 +57,6 @@ type Store struct {
 	sourceStoreID           string
 	bucketDuration          time.Duration
 	maxEventBytes           int
-	processedEventRetention time.Duration
 	changeLogRetention      time.Duration
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
@@ -106,9 +95,6 @@ func Open(opts Options) (*Store, error) {
 	if opts.BucketDuration <= 0 {
 		opts.BucketDuration = 24 * time.Hour
 	}
-	if opts.ProcessedEventRetention <= 0 {
-		opts.ProcessedEventRetention = defaultProcessedEventRetention
-	}
 	if opts.PeriodNow == nil {
 		opts.PeriodNow = time.Now
 	}
@@ -134,7 +120,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1)}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1)}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -189,432 +175,6 @@ func (s *Store) NodeID() string {
 	return s.nodeID
 }
 
-// ProcessedEventRetention returns the configured source-event dedupe window.
-func (s *Store) ProcessedEventRetention() time.Duration {
-	if s == nil || s.processedEventRetention <= 0 {
-		return defaultProcessedEventRetention
-	}
-	return s.processedEventRetention
-}
-
-// UpsertFields upserts each Field/Attribute independently. All values and the
-// corresponding event are committed in one Pebble batch by UpsertFieldsEvent.
-func (s *Store) UpsertFields(ctx context.Context, rows []*pb.RowFieldUpsert) error {
-	_, err := s.UpsertFieldsEvent(ctx, rows, nil)
-	return err
-}
-
-// UpsertFieldsEvent 为本次已提交写入涉及的每个 Dataset 返回一条事件载荷。
-// event 可为空，本地写入调用方因此不会创建 outbox 记录。
-func (s *Store) UpsertFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
-	return s.writeFieldsEvent(ctx, rows, "", event)
-}
-
-// UpsertFieldsEventWithSource atomically records a source EventMessage ID with
-// the row mutation and its outbox entry. A redelivery after a successful write
-// and failed ACK therefore becomes a no-op instead of creating a second
-// DatasetRowsUpserted event.
-func (s *Store) UpsertFieldsEventWithSource(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
-	if strings.TrimSpace(sourceEventID) == "" {
-		return nil, invalid("source_event_id is required")
-	}
-	if event == nil {
-		return nil, invalid("event builder is required for source-id writes")
-	}
-	return s.writeFieldsEvent(ctx, rows, sourceEventID, event)
-}
-
-func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) ([]*OutboxEntry, error) {
-	s.datasetWriteMu.RLock()
-	defer s.datasetWriteMu.RUnlock()
-	normalizedRows, err := s.normalizeWriteRows(ctx, rows)
-	if err != nil {
-		return nil, err
-	}
-	if sourceEventID != "" {
-		// 带来源事件 ID 的写入要在锁内判重（并发重投只能写一次），整条路径都在锁内。
-		s.outboxMu.Lock()
-		defer s.outboxMu.Unlock()
-		return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, true, event, nil)
-	}
-	// 编码 KV、构造并校验事件与锁无关，放在锁外；锁内只分配 outbox 编号、写变更日志并提交，
-	// 编号与提交顺序仍由 outboxMu 保证一致。
-	prepared, err := s.prepareFieldsWrite(ctx, groupRowsByDataset(normalizedRows), normalizedRows, event)
-	if err != nil {
-		return nil, err
-	}
-	defer prepared.batch.Close()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
-	return s.commitFieldsWriteLocked(ctx, prepared, "", true, nil)
-}
-
-func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
-	if s == nil || s.db == nil {
-		return nil, errors.New("pebble store is closed")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, invalid("rows are required")
-	}
-	normalizedRows := make([]*pb.RowFieldUpsert, 0, len(rows))
-	for _, row := range rows {
-		if err := validateUpsert(row); err != nil {
-			return nil, err
-		}
-		key, err := NormalizeRowKey(row.GetKey())
-		if err != nil {
-			return nil, err
-		}
-		clone := proto.Clone(row).(*pb.RowFieldUpsert)
-		clone.Key = key
-		normalizedRows = append(normalizedRows, clone)
-	}
-	return normalizedRows, nil
-}
-
-// changeLog 为真时，在同一个 batch 里追加行变更日志（因子结果写入不记：它们不是本地副本的输入）。
-func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, changeLog bool, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
-	grouped := groupRowsByDataset(normalizedRows)
-	if sourceEventID != "" {
-		// 已删除的数据集先于判重报错：重投一条已处理的事件也要知道数据集没了。
-		for group := range grouped {
-			deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
-			if err != nil {
-				return nil, err
-			}
-			if deleted {
-				return nil, ErrDatasetDeleted
-			}
-		}
-		pending := make(map[datasetGroup][]*pb.RowFieldUpsert, len(grouped))
-		for group, groupRows := range grouped {
-			processed, err := s.hasProcessedSourceEvent(sourceEventID, group)
-			if err != nil {
-				return nil, err
-			}
-			if !processed {
-				pending[group] = groupRows
-			}
-		}
-		grouped = pending
-		if len(grouped) == 0 {
-			return nil, nil
-		}
-		normalizedRows = make([]*pb.RowFieldUpsert, 0, len(normalizedRows))
-		for _, groupRows := range grouped {
-			normalizedRows = append(normalizedRows, groupRows...)
-		}
-	}
-	prepared, err := s.prepareFieldsWrite(ctx, grouped, normalizedRows, event)
-	if err != nil {
-		return nil, err
-	}
-	defer prepared.batch.Close()
-	return s.commitFieldsWriteLocked(ctx, prepared, sourceEventID, changeLog, decorate)
-}
-
-// preparedFieldsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，以及每个数据集
-// 构造并校验过、还没绑定 outbox 编号的事件。
-type preparedFieldsWrite struct {
-	batch    *cpebble.Batch
-	grouped  map[datasetGroup][]*pb.RowFieldUpsert
-	payloads map[datasetGroup][]byte
-}
-
-// prepareFieldsWrite 只读 Store 的静态配置，不读写 outbox 与变更序号，可以在 outboxMu 之外并发执行。
-func (s *Store) prepareFieldsWrite(ctx context.Context, grouped map[datasetGroup][]*pb.RowFieldUpsert, normalizedRows []*pb.RowFieldUpsert, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error)) (*preparedFieldsWrite, error) {
-	// One batch preserves all field changes from a request. Dataset event
-	// payloads and source-event markers are staged into the same batch.
-	batch := s.db.NewBatch()
-	prepared := &preparedFieldsWrite{batch: batch, grouped: grouped}
-	fail := func(err error) (*preparedFieldsWrite, error) {
-		_ = batch.Close()
-		return nil, err
-	}
-	for _, row := range normalizedRows {
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		// Keep a single logical row marker alongside the field/attribute values.
-		// The marker is an ordered, time-first index used by history backfills;
-		// writing it in the same batch makes a committed row immediately visible
-		// to the history reader.
-		if row.GetKey().GetTimeSeries() != nil {
-			historyKey, err := encodeHistoryKey(row.GetKey(), s.bucketDuration)
-			if err != nil {
-				return fail(err)
-			}
-			if err := batch.Set(historyKey, nil, s.writeOptions); err != nil {
-				return fail(err)
-			}
-			seriesHistoryKey, err := encodeSeriesHistoryKey(row.GetKey(), s.bucketDuration)
-			if err != nil {
-				return fail(err)
-			}
-			if err := batch.Set(seriesHistoryKey, nil, s.writeOptions); err != nil {
-				return fail(err)
-			}
-		}
-		for _, field := range row.GetFields() {
-			key, err := encodeFieldKey(row.GetKey(), field.GetFieldId(), s.bucketDuration)
-			if err != nil {
-				return fail(err)
-			}
-			data, err := proto.Marshal(field.GetValue())
-			if err != nil {
-				return fail(fmt.Errorf("marshal field %q: %w", field.GetFieldId(), err))
-			}
-			if err := batch.Set(key, data, s.writeOptions); err != nil {
-				return fail(err)
-			}
-		}
-		for name, value := range row.GetAttributes() {
-			key, err := encodeAttributeKey(row.GetKey(), name, s.bucketDuration)
-			if err != nil {
-				return fail(err)
-			}
-			data, err := proto.Marshal(value)
-			if err != nil {
-				return fail(fmt.Errorf("marshal attribute %q: %w", name, err))
-			}
-			if err := batch.Set(key, data, s.writeOptions); err != nil {
-				return fail(err)
-			}
-		}
-	}
-	if event == nil {
-		return prepared, nil
-	}
-	prepared.payloads = make(map[datasetGroup][]byte, len(grouped))
-	for _, group := range sortedDatasetGroups(grouped) {
-		payload, err := event(group.spaceID, group.datasetID, grouped[group])
-		if err != nil {
-			return fail(err)
-		}
-		eventMessage := &eventpb.EventMessage{}
-		if err := proto.Unmarshal(payload, eventMessage); err != nil {
-			return fail(fmt.Errorf("unmarshal rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err))
-		}
-		if err := validateDatasetRowsUpsertedEvent(eventMessage, ""); err != nil {
-			return fail(fmt.Errorf("validate rows.upserted event for %s/%s: %w", group.spaceID, group.datasetID, err))
-		}
-		if eventMessage.GetSpaceId() != group.spaceID || eventMessage.GetSubjectId() != group.datasetID {
-			return fail(fmt.Errorf("rows.upserted event identity %s/%s does not match write group %s/%s", eventMessage.GetSpaceId(), eventMessage.GetSubjectId(), group.spaceID, group.datasetID))
-		}
-		prepared.payloads[group] = payload
-	}
-	return prepared, nil
-}
-
-// commitFieldsWriteLocked 在 outboxMu 内完成写入：检查数据集未删除、按数据集顺序分配 outbox 编号并绑定到事件、
-// 追加变更日志与来源事件标记，然后提交。调用方必须持有 outboxMu。
-func (s *Store) commitFieldsWriteLocked(ctx context.Context, prepared *preparedFieldsWrite, sourceEventID string, changeLog bool, decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
-	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	batch, grouped := prepared.batch, prepared.grouped
-	for group := range grouped {
-		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
-		if err != nil {
-			return nil, err
-		}
-		if deleted {
-			return nil, ErrDatasetDeleted
-		}
-	}
-	entries := make([]*OutboxEntry, 0, len(grouped))
-	if prepared.payloads != nil {
-		nextID, err := s.nextOutboxID()
-		if err != nil {
-			return nil, err
-		}
-		for _, group := range sortedDatasetGroups(grouped) {
-			id := nextID
-			payload, err := BindOutboxID(prepared.payloads[group], s.nodeID, s.sourceStoreID, id)
-			if err != nil {
-				return nil, err
-			}
-			if s.maxEventBytes > 0 && len(payload) > s.maxEventBytes {
-				return nil, invalidf("event payload size %d exceeds limit %d", len(payload), s.maxEventBytes)
-			}
-			if err := batch.Set([]byte(outboxKey(id)), payload, s.writeOptions); err != nil {
-				return nil, err
-			}
-			if err := s.setNextOutboxID(batch, id+1); err != nil {
-				return nil, err
-			}
-			entries = append(entries, &OutboxEntry{ID: id, Data: append([]byte(nil), payload...), CreatedAt: time.Now().UTC()})
-			if sourceEventID != "" {
-				createdAt := time.Now().UTC()
-				markerKey := processedSourceEventKey(sourceEventID, group)
-				if err := batch.Set(markerKey, encodeProcessedEventTimestamp(createdAt), s.writeOptions); err != nil {
-					return nil, err
-				}
-				if err := batch.Set(processedSourceEventTimeKey(createdAt, markerKey), markerKey, s.writeOptions); err != nil {
-					return nil, err
-				}
-			}
-			nextID++
-		}
-	}
-	if changeLog {
-		if err := s.stageChangeLog(batch, grouped, time.Now()); err != nil {
-			return nil, err
-		}
-	}
-	if decorate != nil {
-		if err := decorate(batch, entries); err != nil {
-			return nil, err
-		}
-	}
-	if err := batch.Commit(s.writeOptions); err != nil {
-		return nil, err
-	}
-	if len(entries) > 0 {
-		s.noteOutboxCommitted(len(entries), entries[0].CreatedAt)
-	}
-	return entries, nil
-}
-
-// CleanupProcessedSourceEvents removes source-event dedupe markers older than
-// the retention window. It serializes with source writes so a marker cannot be
-// deleted between the duplicate check and the corresponding row mutation.
-func (s *Store) CleanupProcessedSourceEvents(ctx context.Context, now time.Time) (int, error) {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	return s.CleanupProcessedSourceEventsBefore(ctx, now.UTC().Add(-s.processedEventRetention))
-}
-
-// CleanupProcessedSourceEventsBefore removes markers created before cutoff.
-// The time index makes cleanup proportional to expired markers rather than the
-// full marker set. Each bounded batch releases outboxMu before the next batch
-// so maintenance cannot hold the write path hostage for an unbounded scan.
-func (s *Store) CleanupProcessedSourceEventsBefore(ctx context.Context, cutoff time.Time) (int, error) {
-	if s == nil || s.db == nil {
-		return 0, errors.New("pebble store is closed")
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	if cutoff.IsZero() {
-		return 0, errors.New("processed event cleanup cutoff is required")
-	}
-	cutoff = cutoff.UTC()
-	removed := 0
-	for {
-		if err := ctx.Err(); err != nil {
-			return removed, err
-		}
-		count, err := s.cleanupProcessedSourceEventBatch(ctx, cutoff)
-		removed += count
-		if err != nil || count < processedEventCleanupBatchSize {
-			return removed, err
-		}
-	}
-}
-
-func (s *Store) cleanupProcessedSourceEventBatch(ctx context.Context, cutoff time.Time) (int, error) {
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
-
-	upperBound := processedSourceEventTimeKey(cutoff, nil)
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: []byte(processedEventTimePrefix), UpperBound: upperBound})
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-	keys := make([][]byte, 0, processedEventCleanupBatchSize)
-	markers := make([][]byte, 0, processedEventCleanupBatchSize)
-	for valid := iter.First(); valid && len(keys) < processedEventCleanupBatchSize; valid = iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		keys = append(keys, append([]byte(nil), iter.Key()...))
-		markers = append(markers, append([]byte(nil), iter.Value()...))
-	}
-	if err := iter.Error(); err != nil {
-		return 0, err
-	}
-	if len(keys) == 0 {
-		return 0, nil
-	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
-	for i, key := range keys {
-		if err := batch.Delete(key, s.writeOptions); err != nil {
-			return 0, err
-		}
-		if len(markers[i]) != 0 {
-			if err := batch.Delete(markers[i], s.writeOptions); err != nil {
-				return 0, err
-			}
-		}
-	}
-	if err := batch.Commit(s.writeOptions); err != nil {
-		return 0, err
-	}
-	return len(keys), nil
-}
-
-func encodeProcessedEventTimestamp(at time.Time) []byte {
-	var value [8]byte
-	binary.BigEndian.PutUint64(value[:], uint64(at.UnixNano()))
-	return value[:]
-}
-
-func (s *Store) hasProcessedSourceEvent(sourceEventID string, group datasetGroup) (bool, error) {
-	value, closer, err := s.db.Get(processedSourceEventKey(sourceEventID, group))
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	closer.Close()
-	return len(value) > 0, nil
-}
-
-func processedSourceEventKey(sourceEventID string, group datasetGroup) []byte {
-	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + group.spaceID + "\x00" + group.datasetID))
-	key := []byte(processedEventPrefix)
-	key = appendRawPart(key, []byte(group.spaceID))
-	key = appendRawPart(key, []byte(group.datasetID))
-	return appendRawPart(key, []byte(hex.EncodeToString(hash[:])))
-}
-
-func processedDatasetEventPrefix(spaceID, datasetID string) []byte {
-	key := []byte(processedEventPrefix)
-	key = appendRawPart(key, []byte(spaceID))
-	return appendRawPart(key, []byte(datasetID))
-}
-
-func processedSourceEventTimeKey(createdAt time.Time, markerKey []byte) []byte {
-	key := processedEventTimePrefix + hex.EncodeToString(encodeProcessedEventTimestamp(createdAt))
-	if len(markerKey) == 0 {
-		return []byte(key)
-	}
-	return []byte(key + "/" + hex.EncodeToString(markerKey))
-}
-
-func sortedDatasetGroups(grouped map[datasetGroup][]*pb.RowFieldUpsert) []datasetGroup {
-	groups := make([]datasetGroup, 0, len(grouped))
-	for group := range grouped {
-		groups = append(groups, group)
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].spaceID == groups[j].spaceID {
-			return groups[i].datasetID < groups[j].datasetID
-		}
-		return groups[i].spaceID < groups[j].spaceID
-	})
-	return groups
-}
-
 func validateUpsert(row *pb.RowFieldUpsert) error {
 	if row == nil || row.GetKey() == nil {
 		return invalid("row key is required")
@@ -638,18 +198,6 @@ func validateUpsert(row *pb.RowFieldUpsert) error {
 		}
 	}
 	return nil
-}
-
-type datasetGroup struct{ spaceID, datasetID string }
-
-func groupRowsByDataset(rows []*pb.RowFieldUpsert) map[datasetGroup][]*pb.RowFieldUpsert {
-	out := make(map[datasetGroup][]*pb.RowFieldUpsert)
-	for _, row := range rows {
-		key := row.GetKey()
-		group := datasetGroup{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
-		out[group] = append(out[group], row)
-	}
-	return out
 }
 
 // pebbleReader 是 *pebble.DB 与 *pebble.Snapshot 共有的只读接口。

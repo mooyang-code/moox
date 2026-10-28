@@ -11,10 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func rowsUpsertedEvent(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return BuildDatasetRowsUpsertedMessageWithSource("node-1", "import", spaceID, datasetID, rows)
-}
-
 // 并发写入时，outbox 事件编号与变更日志序号各自连续，并且彼此顺序一致：编号小的写入，变更序号也小。
 // 事件中继按编号顺序发布、因子引擎按变更序号读取，两者顺序不一致会让读者越过尚未提交的写入。
 func TestConcurrentWritesKeepOutboxIDsAndChangeSequencesInCommitOrder(t *testing.T) {
@@ -32,7 +28,7 @@ func TestConcurrentWritesKeepOutboxIDsAndChangeSequencesInCommitOrder(t *testing
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
 				subject := fmt.Sprintf("S%02d-%02d", w, i)
-				entries, err := s.UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{tsRow(subject, "", base.Add(time.Duration(i)*time.Minute), float64(i))}, rowsUpsertedEvent)
+				entries, err := upsertTestRowsEntries(s, ctx, []*pb.RowFieldUpsert{tsRow(subject, "", base.Add(time.Duration(i)*time.Minute), float64(i))})
 				if err != nil || len(entries) != 1 {
 					t.Errorf("写入 %s: entries=%d err=%v", subject, len(entries), err)
 					return
@@ -76,7 +72,7 @@ func TestWriteCanceledWhileWaitingForLockIsNotCommitted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.UpsertFieldsEvent(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}, rowsUpsertedEvent)
+		_, err := upsertTestRowsEntries(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)})
 		done <- err
 	}()
 	time.Sleep(100 * time.Millisecond) // 让写入完成预处理并阻塞在 outboxMu 上

@@ -522,8 +522,8 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			if err := validateSetupFieldColumnOrigin(fields, item); err != nil {
 				return err
 			}
-		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-			// Factor definitions are owned by FactorMgr, not Storage metadata.
+		case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+			// 自定义列由写入方自己定义，Storage 元数据里不预检。
 		}
 	}
 	views := make(map[string]struct{}, len(seed.Views))

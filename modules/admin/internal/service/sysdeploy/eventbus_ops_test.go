@@ -123,12 +123,12 @@ func TestEventBusOpsRejectOutOfScopeRequestsBeforeConnecting(t *testing.T) {
 	good := datasetSubjects(t, "mooxsys", "kline.1m")[0]
 	tooMany := make([]string, maxEventBusTargets+1)
 	for i := range tooMany {
-		tooMany[i] = events.StorageViewFactorConsumer
+		tooMany[i] = testViewDurableA
 	}
 
 	for name, call := range map[string]func() *pb.RetInfo{
 		"查看-别的流": func() *pb.RetInfo {
-			rsp, _ := service.InspectEventBus(ctx, &pb.InspectEventBusReq{Stream: "MOOX_TRADE", Durables: []string{events.StorageViewFactorConsumer}})
+			rsp, _ := service.InspectEventBus(ctx, &pb.InspectEventBusReq{Stream: "MOOX_TRADE", Durables: []string{testViewDurableA}})
 			return rsp.GetRetInfo()
 		},
 		"查看-别的消费者": func() *pb.RetInfo {
@@ -140,7 +140,7 @@ func TestEventBusOpsRejectOutOfScopeRequestsBeforeConnecting(t *testing.T) {
 			return rsp.GetRetInfo()
 		},
 		"删除-别的流": func() *pb.RetInfo {
-			rsp, _ := service.DeleteEventBusConsumers(ctx, &pb.DeleteEventBusConsumersReq{Stream: "MOOX_OBSERVABILITY", Durables: []string{events.StorageViewFactorConsumer}})
+			rsp, _ := service.DeleteEventBusConsumers(ctx, &pb.DeleteEventBusConsumersReq{Stream: "MOOX_OBSERVABILITY", Durables: []string{testViewDurableA}})
 			return rsp.GetRetInfo()
 		},
 		"删除-通配消费者": func() *pb.RetInfo {
@@ -188,7 +188,7 @@ func TestEventBusOpsRejectOutOfScopeRequestsBeforeConnecting(t *testing.T) {
 }
 
 func TestEventBusOpsAcceptDynamicViewConsumers(t *testing.T) {
-	dynamic := []string{"storage_view_misc_0123456789ab", "storage_view_factor_ffffffffffff"}
+	dynamic := []string{"view_fedcba987654", "view_ffffffffffff"}
 	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{dynamic[0]: {}, dynamic[1]: {}}}
 	service, _ := eventBusTestService(session)
 	rsp, err := service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: dynamic})
@@ -196,7 +196,7 @@ func TestEventBusOpsAcceptDynamicViewConsumers(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Equal(t, dynamic, rsp.GetDeleted(), "按数据集动态创建的 View 消费者可以单独删除（force-rebuild-view 需要）")
 
-	for _, name := range []string{"storage_view_misc_*", "storage_view_misc_0123456789a", "storage_view_misc_0123456789AB"} {
+	for _, name := range []string{"view_*", "view_0123456789a", "view_0123456789AB"} {
 		rsp, err := service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: []string{name}})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode(), name)
@@ -204,13 +204,13 @@ func TestEventBusOpsAcceptDynamicViewConsumers(t *testing.T) {
 }
 
 func TestInspectEventBusReportsConsumersAndMissingStream(t *testing.T) {
-	const dynamicMisc = "storage_view_misc_0123456789ab"
+	const dynamicMisc = "view_fedcba987654"
 	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{
-		events.StorageViewFactorConsumer: {Config: nats.ConsumerConfig{FilterSubjects: []string{"a.b", "c.d"}}},
-		events.StorageViewMiscConsumer:   {Config: nats.ConsumerConfig{FilterSubject: "legacy.single"}},
+		testViewDurableA: {Config: nats.ConsumerConfig{FilterSubjects: []string{"a.b", "c.d"}}},
+		testViewDurableB: {Config: nats.ConsumerConfig{FilterSubject: "legacy.single"}},
 	}}
 	service, _ := eventBusTestService(session)
-	req := &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer, dynamicMisc, events.StorageViewFactorConsumer}}
+	req := &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{testViewDurableA, testViewDurableB, dynamicMisc, testViewDurableA}}
 
 	rsp, err := service.InspectEventBus(t.Context(), req)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestInspectEventBusReportsConsumersAndMissingStream(t *testing.T) {
 	require.True(t, session.closed)
 	require.Len(t, rsp.GetConsumers(), 3, "重复的消费者只查一次")
 	factor, misc, dynamic := rsp.GetConsumers()[0], rsp.GetConsumers()[1], rsp.GetConsumers()[2]
-	require.Equal(t, events.StorageViewFactorConsumer, factor.GetDurable())
+	require.Equal(t, testViewDurableA, factor.GetDurable())
 	require.True(t, factor.GetExists())
 	require.Equal(t, []string{"a.b", "c.d"}, factor.GetFilterSubjects())
 	require.True(t, misc.GetExists())
@@ -235,11 +235,11 @@ func TestInspectEventBusReportsConsumersAndMissingStream(t *testing.T) {
 }
 
 func TestDeleteEventBusConsumersSkipsMissingAndReportsPartialFailure(t *testing.T) {
-	const dynamicMisc = "storage_view_misc_0123456789ab"
-	durables := []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer, dynamicMisc}
+	const dynamicMisc = "view_fedcba987654"
+	durables := []string{testViewDurableA, testViewDurableB, dynamicMisc}
 	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{
-		events.StorageViewFactorConsumer: {},
-		dynamicMisc:                      {},
+		testViewDurableA: {},
+		dynamicMisc:      {},
 	}}
 	service, _ := eventBusTestService(session)
 
@@ -248,13 +248,13 @@ func TestDeleteEventBusConsumersSkipsMissingAndReportsPartialFailure(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, []string{events.StorageViewFactorConsumer, dynamicMisc}, rsp.GetDeleted(), "不存在的 misc 不计入")
+	require.Equal(t, []string{testViewDurableA, dynamicMisc}, rsp.GetDeleted(), "不存在的消费者不计入")
 	require.True(t, rsp.GetAttempted())
 	require.True(t, session.closed)
 
 	session = &fakeEventBusSession{
-		consumers:    map[string]*nats.ConsumerInfo{events.StorageViewFactorConsumer: {}, events.StorageViewMiscConsumer: {}, dynamicMisc: {}},
-		deleteErrors: map[string]error{events.StorageViewMiscConsumer: errors.New("boom")},
+		consumers:    map[string]*nats.ConsumerInfo{testViewDurableA: {}, testViewDurableB: {}, dynamicMisc: {}},
+		deleteErrors: map[string]error{testViewDurableB: errors.New("boom")},
 	}
 	service, _ = eventBusTestService(session)
 	rsp, err = service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{
@@ -262,8 +262,8 @@ func TestDeleteEventBusConsumersSkipsMissingAndReportsPartialFailure(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), events.StorageViewMiscConsumer)
-	require.Equal(t, []string{events.StorageViewFactorConsumer}, rsp.GetDeleted(), "失败前已删除的要返回，调用方才知道动过什么")
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), testViewDurableB)
+	require.Equal(t, []string{testViewDurableA}, rsp.GetDeleted(), "失败前已删除的要返回，调用方才知道动过什么")
 	require.True(t, rsp.GetAttempted())
 	require.NotContains(t, session.deleted, dynamicMisc, "出错后不再继续删除")
 }
@@ -299,7 +299,7 @@ func TestEventBusOpsReportNotAttemptedWhenFailingBeforeAnyMutation(t *testing.T)
 	unreachable := &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) {
 		return nil, errors.New("连接 EventBus 失败")
 	}}
-	deleted, err := unreachable.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	deleted, err := unreachable.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: testViewDurables})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, deleted.GetRetInfo().GetCode())
 	require.False(t, deleted.GetAttempted())
@@ -309,7 +309,7 @@ func TestEventBusOpsReportNotAttemptedWhenFailingBeforeAnyMutation(t *testing.T)
 	require.False(t, purged.GetAttempted())
 
 	service, _ := eventBusTestService(&fakeEventBusSession{})
-	deleted, err = service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: "MOOX_TRADE", Durables: events.StorageViewConsumerDurables})
+	deleted, err = service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: "MOOX_TRADE", Durables: testViewDurables})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, deleted.GetRetInfo().GetCode())
 	require.False(t, deleted.GetAttempted())
@@ -322,18 +322,18 @@ func TestEventBusOpsReportNotAttemptedWhenFailingBeforeAnyMutation(t *testing.T)
 // 否则一个无响应的请求会耗尽整个 RPC 的截止时间，已完成的删除与清除结果也来不及返回。
 func TestEventBusOpsBoundEveryRequestIndependentlyOfTheRPCDeadline(t *testing.T) {
 	subjects := datasetSubjects(t, "mooxsys", "kline.1m")
-	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{events.StorageViewFactorConsumer: {}}}
+	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{testViewDurableA: {}}}
 	service, _ := eventBusTestService(session)
 
 	long, cancelLong := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancelLong()
-	_, err := service.InspectEventBus(long, &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	_, err := service.InspectEventBus(long, &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: testViewDurables})
 	require.NoError(t, err)
-	_, err = service.DeleteEventBusConsumers(long, &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	_, err = service.DeleteEventBusConsumers(long, &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: testViewDurables})
 	require.NoError(t, err)
 	_, err = service.PurgeEventBusSubjects(long, &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: subjects})
 	require.NoError(t, err)
-	require.Len(t, session.deadlines, 1+2*len(events.StorageViewConsumerDurables)+len(subjects), "每次 NATS 请求都要记录到")
+	require.Len(t, session.deadlines, 1+2*len(testViewDurables)+len(subjects), "每次 NATS 请求都要记录到")
 	for i, deadline := range session.deadlines {
 		require.False(t, deadline.IsZero(), "第 %d 次请求没有截止时间", i)
 		require.LessOrEqual(t, time.Until(deadline), eventBusRequestTimeout, "第 %d 次请求的上限超过两分钟", i)
@@ -396,7 +396,7 @@ func TestEventBusOpsReportConnectionFailureWithoutLeakingCredentials(t *testing.
 	service := &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) {
 		return nil, errors.New("连接 EventBus tls://127.0.0.1:4222 失败: refused")
 	}}
-	rsp, err := service.InspectEventBus(t.Context(), &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{events.StorageViewFactorConsumer}})
+	rsp, err := service.InspectEventBus(t.Context(), &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{testViewDurableA}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "连接 EventBus")
@@ -514,9 +514,9 @@ func TestEventBusOpsAgainstTLSEventBus(t *testing.T) {
 	_, err = session.AddStream(&nats.StreamConfig{Name: events.StorageViewConsumerStream, Subjects: []string{"moox.event.storage.>"}})
 	require.NoError(t, err)
 	subjects := datasetSubjects(t, "mooxsys", "kline.1m")
-	const dynamicMisc = "storage_view_misc_0123456789ab"
-	durables := []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer, dynamicMisc}
-	for _, durable := range []string{events.StorageViewFactorConsumer, dynamicMisc} {
+	const dynamicMisc = "view_fedcba987654"
+	durables := []string{testViewDurableA, testViewDurableB, dynamicMisc}
+	for _, durable := range []string{testViewDurableA, dynamicMisc} {
 		_, err = session.AddConsumer(events.StorageViewConsumerStream, &nats.ConsumerConfig{Durable: durable, FilterSubjects: subjects[:2], AckPolicy: nats.AckExplicitPolicy})
 		require.NoError(t, err)
 	}
@@ -550,11 +550,11 @@ func TestEventBusOpsAgainstTLSEventBus(t *testing.T) {
 	deleted, err := service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: durables})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode(), deleted.GetRetInfo().GetMsg())
-	require.Equal(t, []string{events.StorageViewFactorConsumer, dynamicMisc}, deleted.GetDeleted())
+	require.Equal(t, []string{testViewDurableA, dynamicMisc}, deleted.GetDeleted())
 
 	// 流不存在 → NOT_FOUND，而不是笼统的内部错误。
 	require.NoError(t, session.DeleteStream(events.StorageViewConsumerStream))
-	rsp, err := service.InspectEventBus(t.Context(), &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{events.StorageViewFactorConsumer}})
+	rsp, err := service.InspectEventBus(t.Context(), &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: []string{testViewDurableA}})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }
@@ -635,3 +635,11 @@ func TestDeleteConsumerWithRetryGivesUpAfterPersistentConflict(t *testing.T) {
 	require.False(t, removed)
 	require.Equal(t, eventBusDeleteAttempts, session.calls)
 }
+
+// 测试用的两个 View 消费者名（view_<12 位十六进制>）。
+const (
+	testViewDurableA = "view_0123456789ab"
+	testViewDurableB = "view_ba9876543210"
+)
+
+var testViewDurables = []string{testViewDurableA, testViewDurableB}

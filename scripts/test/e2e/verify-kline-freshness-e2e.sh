@@ -21,9 +21,6 @@ printf '\n==> Monitor K-line freshness and market-calendar tests\n'
 printf '\n==> Storage Primary/View K-line freshness tests\n'
 (cd "${ROOT}/modules/storage" && go test -count=1 ./internal/observability ./internal/service/primarystore ./internal/service/view)
 
-printf '\n==> Temporary JetStream/SQLite Storage View event pipeline\n'
-(cd "${ROOT}/modules/storage" && CGO_ENABLED=1 go test -tags cgo -count=1 ./internal/service/e2e -run '^TestViewConsumerPartitionsKeepKlineIndependentFromMetrics$')
-
 printf '\n==> Temporary JetStream/SQLite Monitor metric ingest\n'
 (cd "${ROOT}/modules/monitor" && go test -count=1 ./test -run '^TestEventBusToMonitorHistoryFlow$')
 

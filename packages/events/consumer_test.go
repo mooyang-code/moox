@@ -13,8 +13,7 @@ func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
 	}
 	cfg := ConsumerConfig{Events: []Event{
 		DatasetRowsUpserted,
-		CollectorPeriodCompleted,
-		FactorPeriodComputed,
+		DatasetPeriodCompleted,
 		DatasetSyncPoint,
 	}}
 	stream, filters, err := consumerEventFilters(registry, cfg)
@@ -26,8 +25,7 @@ func TestConsumerEventFiltersSupportOneDurableWithMultipleEvents(t *testing.T) {
 	}
 	want := []string{
 		"moox.event.storage.dataset.rows.upserted.v2.>",
-		"moox.event.storage.collector.period.completed.v1.>",
-		"moox.event.storage.dataset.factor_period.computed.v1.>",
+		"moox.event.storage.dataset.period.completed.v1.>",
 		"moox.event.storage.dataset.sync_point.v1.>",
 	}
 	if !reflect.DeepEqual(filters, want) {
@@ -45,7 +43,7 @@ func TestConsumerEventFiltersRejectAmbiguousOrCrossStreamEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []ConsumerConfig{
-		{Event: DatasetRowsUpserted, Events: []Event{CollectorPeriodCompleted}},
+		{Event: DatasetRowsUpserted, Events: []Event{DatasetPeriodCompleted}},
 		{Events: []Event{DatasetRowsUpserted, DatasetRowsUpserted}},
 		{Events: []Event{DatasetRowsUpserted, ObservabilityHostSnapshotReported}},
 		{},
@@ -66,7 +64,7 @@ func TestConsumerEventFiltersAcceptExactSubjectPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	marker, err := registry.RenderSubject(CollectorPeriodCompleted, "crypto", "dataset_binance_kline_1m")
+	marker, err := registry.RenderSubject(DatasetPeriodCompleted, "crypto", "dataset_binance_kline_1m")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,12 +38,10 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 		{"crypto", "1m", "840h", SourceDefault},
 		{"crypto", "1d", Forever, SourceDefault},
 		{"stockcn", "1m", "1440h", SourceSpace},
-		{"stockhk", "1m", "1080h", SourceSpace},
 		{"stockcn", "1d", Forever, SourceDefault},
-		{"mooxsys", "30s", "48h", SourceSpace},
-		{"mooxsys", "1m", "168h", SourceSpace},
 		{"newspace", "5m", "840h", SourceDefault},
 	}
+	retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "1440h"}}
 	for _, tc := range cases {
 		period, source, err := retention.Resolve(tc.space, tc.freq)
 		if err != nil || period.String() != tc.want || source != tc.source {
@@ -103,7 +101,7 @@ func TestValidateRequiresCompleteDefaultsAndCanonicalKeys(t *testing.T) {
 	mutate := func(edit func(*Policy)) Policy {
 		policy := Default()
 		policy.Retention.Defaults = copyMap(policy.Retention.Defaults)
-		policy.Retention.Spaces = map[string]map[string]string{"stockcn": copyMap(policy.Retention.Spaces["stockcn"])}
+		policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
 		edit(&policy)
 		return policy
 	}
@@ -176,11 +174,11 @@ func TestDefaultPolicyCoversViewBars(t *testing.T) {
 	}
 }
 
-func TestCoverageRejectsShort7x24RetentionAndWarnsForSessionMarkets(t *testing.T) {
+func TestCoverageRejectsShortDefaultsAndOnlyWarnsForSpaceOverrides(t *testing.T) {
 	policy := Default()
 	policy.Retention.Defaults = copyMap(policy.Retention.Defaults)
-	policy.Retention.Defaults["1m"] = "3d" // 4,320 bars < 5,000
-	policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "20d"}}
+	policy.Retention.Defaults["1m"] = "3d" // 4,320 bars < view.bars
+	policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "5d"}}
 	errs, warnings := policy.Coverage()
 	if len(errs) != 1 || !strings.Contains(errs[0], "retention.defaults.1m = 72h") {
 		t.Fatalf("errors = %v", errs)
@@ -190,51 +188,31 @@ func TestCoverageRejectsShort7x24RetentionAndWarnsForSessionMarkets(t *testing.T
 	}
 }
 
-// 系统数据空间（mooxsys）的保留期独立于 K 线：短于 view.bars 也不报覆盖错误；其他空间照常校验。
-func TestCoverageSkipsSystemSpace(t *testing.T) {
-	p := Default()
-	errs, _ := p.Coverage()
-	if len(errs) != 0 {
-		t.Fatalf("默认策略（mooxsys 30s 48h）不应有覆盖错误：%v", errs)
-	}
-	p.Retention.Spaces["crypto"] = map[string]string{"30s": "48h"}
-	if errs, _ := p.Coverage(); len(errs) == 0 {
-		t.Fatal("其他空间的保留期不足仍要报覆盖错误")
-	}
-}
-
-// 保留期能装下的 bar 数：7×24 市场精确，交易时段市场是估算；永久保留不限；向上取整的最小保留期能装下指定根数。
+// 保留期按自然时间能装下的 bar 数；永久保留不限；向上取整的最小保留期能装下指定根数。
 func TestRetentionBarsAndMinRetention(t *testing.T) {
 	policy := Default()
-	bars, forever, estimated, err := policy.RetentionBars("crypto", "1h")
-	if err != nil || forever || estimated || bars != 420*24 {
-		t.Fatalf("crypto 1h: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
+	bars, forever, err := policy.RetentionBars("crypto", "1h")
+	if err != nil || forever || bars != 420*24 {
+		t.Fatalf("crypto 1h: bars=%v forever=%v err=%v", bars, forever, err)
 	}
-	bars, forever, estimated, err = policy.RetentionBars("crypto", "1m")
-	if err != nil || forever || estimated || bars != 35*24*60 {
-		t.Fatalf("crypto 1m: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
+	bars, forever, err = policy.RetentionBars("crypto", "1m")
+	if err != nil || forever || bars != 35*24*60 {
+		t.Fatalf("crypto 1m: bars=%v forever=%v err=%v", bars, forever, err)
 	}
-	if _, forever, _, err = policy.RetentionBars("crypto", "1d"); err != nil || !forever {
+	if _, forever, err = policy.RetentionBars("crypto", "1d"); err != nil || !forever {
 		t.Fatalf("crypto 1d should be forever: forever=%v err=%v", forever, err)
 	}
-	if _, _, estimated, err = policy.RetentionBars("stockcn", "1m"); err != nil || !estimated {
-		t.Fatalf("stockcn 1m should be an estimate: estimated=%v err=%v", estimated, err)
-	}
-	if _, _, _, err = policy.RetentionBars("crypto", "7m"); err == nil {
+	if _, _, err = policy.RetentionBars("crypto", "7m"); err == nil {
 		t.Fatal("unknown frequency should error")
 	}
 
-	need := MinRetentionFor("crypto", "1h", 5000)
+	need := MinRetentionFor("1h", 5000)
 	if need.Duration != 5000*time.Hour {
 		t.Fatalf("5000 1h bars need 5000h, got %v", need.Duration)
 	}
-	need = MinRetentionFor("crypto", "1m", 5000)
+	need = MinRetentionFor("1m", 5000)
 	if want := time.Duration(math.Ceil(5000.0/60)) * time.Hour; need.Duration != want {
 		t.Fatalf("5000 1m bars need %v, got %v", want, need.Duration)
-	}
-	// 交易时段市场按日历折回自然时间，比 7×24 要长。
-	if MinRetentionFor("stockcn", "1m", 5000).Duration <= MinRetentionFor("crypto", "1m", 5000).Duration {
-		t.Fatal("session market needs a longer calendar span for the same bars")
 	}
 }
 
@@ -247,27 +225,28 @@ func mustMarshal(t *testing.T, policy Policy) []byte {
 	return raw
 }
 
-// view.max_age 要装得下 view.bars 根：7×24 市场不足报错，交易时段市场只警告；mooxsys 豁免。
+// view.max_age 要装得下 view.bars 根：默认值不足报错，空间覆盖不足只警告（空间可以有意少留历史）。
 func TestCoverageChecksViewMaxAge(t *testing.T) {
 	policy := Default()
 	policy.View.MaxAge.Defaults = copyMap(policy.View.MaxAge.Defaults)
 	policy.View.MaxAge.Defaults["5m"] = "10d"
-	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "20d"}, "mooxsys": {"1m": "1d"}}
+	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "5d"}, "mooxsys": {"1m": "1d"}}
 	errs, warnings := policy.Coverage()
 	if len(errs) != 1 || !strings.Contains(errs[0], "view.max_age.defaults.5m = 240h") {
 		t.Fatalf("errors = %v", errs)
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "view.max_age.spaces.stockcn.1m") {
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "view.max_age.spaces.mooxsys.1m") || !strings.Contains(warnings[1], "view.max_age.spaces.stockcn.1m") {
 		t.Fatalf("warnings = %v", warnings)
 	}
 }
 
+// 代码里的默认值不含任何业务空间：没有空间覆盖时按默认值解析，空间覆盖来自部署配置。
 func TestDefaultViewMaxAgeResolvesPerFrequency(t *testing.T) {
 	policy := Default()
 	for space, want := range map[string]map[string]string{
 		"crypto":  {"1m": "168h", "5m": "840h", "1d": "forever", "45m": "5040h"},
-		"stockcn": {"1m": "1440h", "5m": "7200h"},
-		"mooxsys": {"1m": "168h", "30s": "48h"},
+		"stockcn": {"1m": "168h", "5m": "840h"},
+		"mooxsys": {"1m": "168h", "30s": "90h"},
 	} {
 		for freq, expected := range want {
 			period, _, err := policy.View.MaxAge.Resolve(space, freq)
@@ -275,6 +254,10 @@ func TestDefaultViewMaxAgeResolvesPerFrequency(t *testing.T) {
 				t.Fatalf("%s %s = %v, %v; want %s", space, freq, period, err, expected)
 			}
 		}
+	}
+	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
+	if period, _, err := policy.View.MaxAge.Resolve("stockcn", "1m"); err != nil || period.String() != "1440h" {
+		t.Fatalf("空间覆盖 stockcn 1m = %v, %v; want 1440h", period, err)
 	}
 }
 
@@ -286,11 +269,13 @@ func TestViewMaxAgeValidationAndRoundTrip(t *testing.T) {
 		t.Fatalf("缺频率应报错: %v", err)
 	}
 	policy = Default()
-	policy.View.MaxAge.Spaces["crypto"] = map[string]string{"1M": "7d"}
+	policy.View.MaxAge.Spaces = map[string]map[string]string{"crypto": {"1M": "7d"}}
 	if err := policy.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.spaces.crypto") {
 		t.Fatalf("非规范频率应报错: %v", err)
 	}
-	raw, err := Default().Encode()
+	withSpace := Default()
+	withSpace.View.MaxAge.Spaces = map[string]map[string]string{"mooxsys": {"1m": "7d"}}
+	raw, err := withSpace.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}

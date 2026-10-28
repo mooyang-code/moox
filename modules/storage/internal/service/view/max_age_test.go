@@ -26,13 +26,16 @@ func maxAgeService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	svc.now = func() time.Time { return maxAgeNow }
-	svc.SetMaxAge(storagepolicy.Default().View.MaxAge)
+	// 代码里的默认值不含业务空间；空间覆盖来自部署配置，这里模拟配置里的两个覆盖。
+	maxAge := storagepolicy.Default().View.MaxAge
+	maxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}, "mooxsys": {"1m": "2d"}}
+	svc.SetMaxAge(maxAge)
 	return svc
 }
 
 func TestDropExpiredWritesBoundaryAndFrequencies(t *testing.T) {
 	svc := maxAgeService(t)
-	// 默认：1m 7d、5m 35d、1d 永久。
+	// 默认：1m 7d、5m 35d、1d 永久；空间覆盖：stockcn 1m 60d、mooxsys 1m 2d。
 	writes := []viewindex.RowWrite{
 		maxAgeWrite("crypto", "k", "5m", maxAgeNow.Add(-35*24*time.Hour)),                                                                             // 恰好等于期限：保留
 		maxAgeWrite("crypto", "k", "5m", maxAgeNow.Add(-35*24*time.Hour-time.Nanosecond)),                                                             // 早 1ns：丢弃
@@ -40,8 +43,8 @@ func TestDropExpiredWritesBoundaryAndFrequencies(t *testing.T) {
 		maxAgeWrite("crypto", "k", "1m", maxAgeNow.Add(-6*24*time.Hour)),                                                                              // 保留
 		maxAgeWrite("crypto", "k", "1d", maxAgeNow.Add(-3000*24*time.Hour)),                                                                           // 永久：保留
 		maxAgeWrite("crypto", "k", "45m", maxAgeNow.Add(-100*24*time.Hour)),                                                                           // 45m 回落到 30m（210d）：保留
-		maxAgeWrite("mooxsys", "host", "1m", maxAgeNow.Add(-8*24*time.Hour)),                                                                          // 空间覆盖：7d，丢弃
-		maxAgeWrite("stockcn", "k", "1m", maxAgeNow.Add(-30*24*time.Hour)),                                                                            // 股票 1m 60d：保留
+		maxAgeWrite("mooxsys", "host", "1m", maxAgeNow.Add(-8*24*time.Hour)),                                                                          // 空间覆盖：2d，丢弃
+		maxAgeWrite("stockcn", "k", "1m", maxAgeNow.Add(-30*24*time.Hour)),                                                                            // 空间覆盖 stockcn 1m 60d：保留
 		{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "r", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "x"}}}}}, // 记录型行：保留
 	}
 	kept := svc.dropExpiredWrites("idx", writes)

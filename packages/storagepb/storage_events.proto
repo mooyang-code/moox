@@ -12,16 +12,12 @@ message DatasetRowsUpserted {
   string space_id = 1;
   string dataset_id = 2;
   repeated RowUpsert rows = 3;
-  string write_source = 4;
   // Position assigned in the same durable DataNode outbox batch as the rows.
   // Sequence is comparable only within (node_id, store_id).
   string node_id = 5;
   uint64 sequence = 6;
   // Changes when the underlying DataNode store is recreated.
   string store_id = 7;
-  // Write category assigned by Storage from the authorized RPC, not from a
-  // client-supplied write_source string. Empty means a generic field upsert.
-  string write_kind = 8;
 }
 
 // CommittedPosition identifies one ordered write domain. Sequence is comparable
@@ -32,55 +28,30 @@ message CommittedPosition {
   uint64 sequence = 3;
 }
 
-// CollectorPeriodCompleted marks a frozen collection set as terminal.
-// complete means every universe subject succeeded; degraded keeps the full
-// universe list and records failures.
-message CollectorPeriodCompleted {
+// DatasetPeriodCompleted 表示数据集的某一期已经完成。source 只描述“这一期是怎么判定完成的”，不是业务分类：
+//   - ledger：DataNode 按登记的序列快照与截止时间判定（采集、重采样走序列账本）；
+//   - producer：写入方自己报告（例如因子）。
+// complete 表示每个标的都成功；degraded 保留完整标的清单并记录失败。
+message DatasetPeriodCompleted {
   string dataset_id = 1;
   string frequency = 2;
   int64 period_time = 3;
-  string status = 4;
-  string batch_id = 5;
-  string config_snapshot_id = 6;
-  string expected_scope_ref = 7;
-  repeated string universe_subject_ids = 8;
-  repeated string failed_subjects = 9;
-  repeated CommittedPosition committed_positions = 10;
-  google.protobuf.Timestamp collected_at = 11;
-}
-
-message FactorPeriodState {
-  string factor_id = 1;
-  string status = 2; // complete | degraded | skipped
-  repeated string failed_subjects = 3;
-  string source_hash = 4;
-  // definition_hash 是因子完整计算契约的指纹，策略据此判断绑定的因子版本是否变化。
-  string definition_hash = 5;
-  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
-  repeated string gap_subjects = 6;
-  // member_key 是成员在结果数据集内的唯一身份（因子 ID 加参数段，规则见 packages/factorname）；factor_id 是它引用的定义。
-  string member_key = 7;
-  // member_kind 是成员类型：fixed 或 var。这一期实际用的参数记在结果行的 __params 列里，不进周期标记。
-  string member_kind = 8;
-}
-
-// FactorPeriodComputed marks all frozen factors for one result Dataset period
-// as terminal. Successful result row writes precede it in the same outbox.
-message FactorPeriodComputed {
-  string dataset_id = 1;
-  string source_dataset_id = 2;
-  string frequency = 3;
-  int64 period_time = 4;
-  string status = 5; // complete | degraded
+  string status = 4; // complete | degraded
+  string source = 5; // ledger | producer
   repeated string universe_subject_ids = 6;
   repeated string failed_subjects = 7;
-  repeated FactorPeriodState factors = 8;
-  string trigger_event_id = 9;
-  google.protobuf.Timestamp computed_at = 10;
+  // committed_positions 是本期写入在 outbox 中的位置，View 用来确认数据已进入索引。
+  repeated CommittedPosition committed_positions = 8;
+  // snapshot_ref：ledger 来源时是序列快照引用。
+  string snapshot_ref = 9;
+  // cause_event_id：producer 来源时是触发本次计算的事件 ID，用于幂等查询。
+  string cause_event_id = 10;
+  google.protobuf.Timestamp completed_at = 11;
+  // detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
+  string detail_type = 12;
+  bytes detail = 13;
 }
 
-// ViewDataReady is published by View after a completion marker's required
-// writes are readable in the named View's visible scope.
 message ViewDataReady {
   string view_id = 1;
   string view_config_id = 2;
@@ -93,15 +64,11 @@ message ViewDataReady {
   string failed_scope_ref = 9;
   repeated CommittedPosition committed_positions = 10;
   google.protobuf.Timestamp ready_at = 11;
-  // Registered completion event name this readiness is associated with, such as
-  // event.storage.collector.period.completed or event.storage.dataset.factor_period.computed.
-  string completion_kind = 12;
-  // Period completions copy the frozen object universe so consumers can lock
-  // the same membership without a second completion event subscription.
-  repeated string universe_subject_ids = 13;
-  // FactorPeriodComputed copies per-factor terminal states so strategies can
-  // decide whether a degraded aggregate is still usable for their pool.
-  repeated FactorPeriodState factors = 14;
+  // 周期完成时复制冻结的标的全集，消费方不用再订阅一次完成事件就能锁定同一批成员。
+  repeated string universe_subject_ids = 12;
+  // detail_type、detail 原样透传周期完成事件里写入方自定义的明细（不透明字节）。
+  string detail_type = 13;
+  bytes detail = 14;
 }
 
 // CollectorKlineBackfilled announces, without row data, that K-line rows of a

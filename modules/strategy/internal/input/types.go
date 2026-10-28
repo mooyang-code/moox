@@ -211,10 +211,8 @@ type Resolved struct {
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的成员（排序）：只有它们需要上一根的版本证据。由编译结果派生
 	// （Resolve 与 Compile 填入），不进快照。
 	PreviousFactors []string `json:"-"`
-	// CompletionKind 是触发本实例的完成事件类型：因子结果 View 为 factor_period.computed，K 线 View 为 collector.period.completed。
-	CompletionKind string   `json:"completion_kind"`
-	MinAgeBars     int      `json:"min_age_bars,omitempty"`
-	ViewColumns    []string `json:"view_columns"`
+	MinAgeBars      int      `json:"min_age_bars,omitempty"`
+	ViewColumns     []string `json:"view_columns"`
 }
 
 // ColumnsOfFactor 返回由某个因子成员（成员键）产出的被引用列。

@@ -11,16 +11,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) extendActiveFactorResultSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (bool, error) {
-	return s.extendFactorResultSchema(ctx, opts, auth, view, engine, false)
+func (s *Service) extendActiveViewSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (bool, error) {
+	return s.extendViewSchema(ctx, opts, auth, view, engine, false)
 }
 
-// recoverFactorResultSchemaExtension handles the durable window where DuckDB
+// recoverViewSchemaExtension handles the durable window where DuckDB
 // committed an append-only revision but the Metadata CAS did not. It accepts
 // only physical revisions that can be a prefix of the current desired schema;
 // ExtendColumns performs the authoritative physical-column validation.
-func (s *Service) recoverFactorResultSchemaExtension(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, stats viewindex.ViewIndexStats) (bool, error) {
-	current, next, _, ok, err := factorResultSchemaExtensionTarget(ctx, opts, auth, view, engine)
+func (s *Service) recoverViewSchemaExtension(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, stats viewindex.ViewIndexStats) (bool, error) {
+	current, next, _, ok, err := viewSchemaExtensionTarget(ctx, opts, auth, view, engine)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -30,15 +30,15 @@ func (s *Service) recoverFactorResultSchemaExtension(ctx context.Context, opts M
 	if stats.ViewVersion == next.ViewVersion && strings.TrimSpace(stats.SchemaHash) != next.SchemaHash {
 		return false, nil
 	}
-	recovered, err := s.extendFactorResultSchema(ctx, opts, auth, view, engine, true)
+	recovered, err := s.extendViewSchema(ctx, opts, auth, view, engine, true)
 	if errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
 		return false, nil
 	}
 	return recovered, err
 }
 
-func (s *Service) extendFactorResultSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
-	current, next, extender, ok, err := factorResultSchemaExtensionTarget(ctx, opts, auth, view, engine)
+func (s *Service) extendViewSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
+	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, opts, auth, view, engine)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -122,11 +122,11 @@ func (s *Service) extendFactorResultSchema(ctx context.Context, opts Maintenance
 	return true, nil
 }
 
-func factorResultSchemaExtensionTarget(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool, error) {
+func viewSchemaExtensionTarget(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool, error) {
 	if view == nil || engine == nil || view.GetIndexBuild() != nil ||
 		view.GetActiveIndexId() == "" || view.GetActiveViewRevision() == 0 ||
 		view.GetDesiredViewRevision() <= view.GetActiveViewRevision() ||
-		!strings.EqualFold(strings.TrimSpace(view.GetAttributes()["primary_dataset_role"]), "factor_result") ||
+		!strings.EqualFold(strings.TrimSpace(view.GetAttributes()["follow_dataset_columns"]), "true") ||
 		!strings.EqualFold(strings.TrimSpace(view.GetEngine()), "duckdb") || engine.Engine() != "duckdb" {
 		return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, nil
 	}

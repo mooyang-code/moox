@@ -27,7 +27,7 @@ func TestDatasetQueueKeyUsesGovernedSubjectForMalformedPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	rowSubject := "moox.event.storage.dataset.rows.upserted.v2." + space + "." + dataset
-	markerSubject := "moox.event.storage.collector.period.completed.v1." + space + "." + dataset
+	markerSubject := "moox.event.storage.dataset.period.completed.v1." + space + "." + dataset
 	row, err := datasetQueueKey(nil, &jetstream.Delivery{Subject: rowSubject, DecodeError: errors.New("bad row")})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ type dispatcherFactorHandler struct {
 	factor func()
 }
 
-func (h dispatcherFactorHandler) HandleFactorPeriodComputed(context.Context, *eventpb.EventMessage, *storagepb.FactorPeriodComputed) error {
+func (h dispatcherFactorHandler) HandleDatasetPeriodCompleted(context.Context, *eventpb.EventMessage, *storagepb.DatasetPeriodCompleted) error {
 	h.factor()
 	return nil
 }
@@ -78,10 +78,10 @@ func TestDatasetDispatcherFailedRowBlocksFactorUntilRedelivery(t *testing.T) {
 	rowEncoded, rowRaw := validDatasetDelivery(t)
 	row := &jetstream.Delivery{Subject: rowEncoded.Subject, RawData: rowRaw, RawMessageID: rowEncoded.Message.GetEventId(), ContentType: events.ContentType, StreamSeq: 10, DeliveryCount: 1}
 	at := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	markerEncoded, err := consumer.registry.Encode(events.FactorPeriodComputed, &storagepb.FactorPeriodComputed{
-		DatasetId: "bar", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"ETH"}, Factors: []*storagepb.FactorPeriodState{{MemberKey: "factor", FactorId: "factor", MemberKind: "fixed", Status: "complete", SourceHash: "hash", DefinitionHash: "def"}},
-		TriggerEventId: "source-ready", ComputedAt: timestamppb.New(at),
+	markerEncoded, err := consumer.registry.Encode(events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
+		DatasetId: "bar", Frequency: "1m", PeriodTime: at.Unix(), Status: "complete", Source: "producer",
+		UniverseSubjectIds: []string{"ETH"}, CauseEventId: "source-ready", CompletedAt: timestamppb.New(at),
+		DetailType: "test.Detail.v1", Detail: []byte("detail"),
 	}, events.PublishOptions{EventID: "factor-marker", OccurredAt: at, SpaceID: "foo", SubjectID: "bar"})
 	if err != nil {
 		t.Fatal(err)

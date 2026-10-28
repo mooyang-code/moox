@@ -103,16 +103,13 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 	// copying the active index can reproduce a short or stale View. Record
 	// Bleve Views retain the active-copy path because they have no time-series
 	// Primary history reader.
-	// Factor result Views are derived outputs. They may legitimately start empty
-	// before the first Factor period, but an existing active index is not
-	// authoritative for rebuild completeness: it can contain only a partial
-	// result set after an interrupted build or a lost event. When Primary history
-	// is available, rebuild directly from that authoritative source instead of
-	// merging it with active rows under Backfill's non-overwrite semantics.
-	factorResultView := isFactorResultView(catalogView)
+	// rebuild_source=primary 的 View 是派生输出（例如因子结果）：可以在第一个周期到来前合法地为空，
+	// 但已有的活动索引不一定完整（中断的构建或丢失的事件会留下部分结果）。主库历史可用时直接从主库重建，
+	// 不与活动索引按 Backfill 的“不覆盖”语义合并。
+	primaryOnly := rebuildsFromPrimaryOnly(catalogView)
 	historyConfigured := bars > 0
-	primaryHistoryRebuild := historyConfigured && factorResultView && reader != nil && rangeReader != nil
-	if activeID != "" && historyConfigured && (!factorResultView || primaryHistoryRebuild) {
+	primaryHistoryRebuild := historyConfigured && primaryOnly && reader != nil && rangeReader != nil
+	if activeID != "" && historyConfigured && (!primaryOnly || primaryHistoryRebuild) {
 		nextEngine, err := s.engineFor(nextID)
 		if err != nil {
 			return 0, err
@@ -201,8 +198,8 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 		}
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
-		} else if factorResultView {
-			written, err = s.backfillFactorResultHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
+		} else if primaryOnly {
+			written, err = s.backfillPrimaryOnlyHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -226,9 +223,9 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 	return written, nil
 }
 
-func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+func (s *Service) backfillPrimaryOnlyHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
-		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
+		log.Printf("storage View %s/%s (rebuild_source=primary) starts empty; waiting for the writer's output", spaceID, viewID)
 		return 0, nil
 	}
 	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
@@ -236,7 +233,7 @@ func (s *Service) backfillFactorResultHistory(ctx context.Context, spaceID, view
 		return written, err
 	}
 	if written == 0 {
-		log.Printf("storage factor result View %s/%s starts empty; waiting for Factor output", spaceID, viewID)
+		log.Printf("storage View %s/%s (rebuild_source=primary) starts empty; waiting for the writer's output", spaceID, viewID)
 	}
 	return written, nil
 }
@@ -342,13 +339,10 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 	}
 }
 
-func isFactorResultView(view *pb.View) bool {
-	if view == nil {
-		return false
-	}
-	attrs := view.GetAttributes()
-	return strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") ||
-		strings.EqualFold(strings.TrimSpace(attrs["view_role"]), "factor_result")
+// rebuildsFromPrimaryOnly 判断 View 是否只从主库历史重建：View 属性 rebuild_source 为 primary；
+// 缺省（active_then_primary）先复制活动索引再从主库补。
+func rebuildsFromPrimaryOnly(view *pb.View) bool {
+	return view != nil && strings.EqualFold(strings.TrimSpace(view.GetAttributes()["rebuild_source"]), "primary")
 }
 
 var errViewBuildFailed = errors.New("view build has been marked failed")

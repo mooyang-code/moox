@@ -19,13 +19,3 @@ func collectionItemSeriesTag(spaceID string, item domain.CollectionItem) string 
 	}
 	return defaultMarketSeriesTag(item.Provider, item.SourceID, item.MarketType)
 }
-
-// writeSourceForFunctionName 给 Storage 的写入事件一个稳定、可扩展的来源标识，
-// 不让公开的事件契约永远绑定腾讯云 SCF。
-func writeSourceForFunctionName(functionName string) string {
-	functionName = strings.TrimSpace(functionName)
-	if functionName == "" {
-		return ""
-	}
-	return "scf:" + functionName
-}

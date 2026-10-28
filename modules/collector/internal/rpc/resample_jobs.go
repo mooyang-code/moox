@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"strings"
 	"time"
 
@@ -66,8 +67,8 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 			if tagErr != nil || tag == nil {
 				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 			}
-			provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
-			marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+			provider := tagattr.Source(tag)
+			marketType := tagattr.MarketType(tag)
 			routes[provider+"/"+marketType] = struct{}{}
 			out.Provider, out.MarketType = provider, marketType
 			out.SeriesTag = marketfetch.TaskSeriesTag(task.SpaceID, params, provider, marketType, s.sourceIDResolver)

@@ -40,7 +40,7 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if err != nil {
 		return nil, fmt.Errorf("metadata client: %w", err)
 	}
-	localStorage, err := marketstorage.NewGatewayResampleStorage(process.gateway, marketstorage.InstTypeSPOT, "collector:kline_resample")
+	localStorage, err := marketstorage.NewGatewayResampleStorage(process.gateway, marketstorage.InstTypeSPOT)
 	if err != nil {
 		return nil, fmt.Errorf("storage client: %w", err)
 	}

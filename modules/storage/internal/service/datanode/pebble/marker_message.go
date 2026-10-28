@@ -17,50 +17,57 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func BuildCollectorPeriodCompletedMessage(spaceID string, marker *pb.CollectorPeriodCompletedMarker) ([]byte, string, error) {
-	if marker == nil {
-		return nil, "", invalid("collector period marker is required")
+// LedgerPeriodCompleted 是序列账本判定出的周期完成结果（source=ledger），由 DataNode 自己在周期封口时生成。
+type LedgerPeriodCompleted struct {
+	DatasetID          string
+	Frequency          string
+	PeriodTime         int64
+	Status             string
+	SnapshotRef        string
+	UniverseSubjectIDs []string
+	FailedSubjects     []string
+	CommittedPositions []*pb.CommittedPosition
+	CompletedAt        *timestamppb.Timestamp
+}
+
+// BuildLedgerPeriodCompletedMessage 把账本的判定结果构造成 DatasetPeriodCompleted（source=ledger）事件。
+func BuildLedgerPeriodCompletedMessage(spaceID string, completed *LedgerPeriodCompleted) ([]byte, string, error) {
+	if completed == nil {
+		return nil, "", invalid("ledger period completion is required")
 	}
-	payload := &storageeventpb.CollectorPeriodCompleted{
-		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: normalizedIDs(marker.GetUniverseSubjectIds()),
-		FailedSubjects:     normalizedIDs(marker.GetFailedSubjects()),
-		CommittedPositions: eventPositions(marker.GetCommittedPositions()),
-		CollectedAt:        marker.GetCollectedAt(),
+	payload := &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: completed.DatasetID, Frequency: completed.Frequency, PeriodTime: completed.PeriodTime,
+		Status: completed.Status, Source: "ledger", SnapshotRef: completed.SnapshotRef,
+		UniverseSubjectIds: normalizedIDs(completed.UniverseSubjectIDs),
+		FailedSubjects:     normalizedIDs(completed.FailedSubjects),
+		CommittedPositions: eventPositions(completed.CommittedPositions),
+		CompletedAt:        completed.CompletedAt,
 	}
 	encodedPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal collector period marker payload: %w", err)
+		return nil, "", fmt.Errorf("marshal ledger period completion payload: %w", err)
 	}
 	payloadHash := sha256.Sum256(encodedPayload)
-	eventID := stableMarkerID("collector-period", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
-	return buildMarkerMessage(events.CollectorPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCollectedAt()), payload)
+	eventID := stableMarkerID("period-completed", "ledger", spaceID, payload.GetDatasetId(), payload.GetFrequency(), strconv.FormatInt(payload.GetPeriodTime(), 10), hex.EncodeToString(payloadHash[:16]))
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
 }
 
-func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodComputedMarker) ([]byte, string, error) {
+// BuildProducerPeriodCompletedMessage 把写入方报告的周期完成构造成 DatasetPeriodCompleted（source=producer）事件；
+// 明细（detail）是不透明字节，原样带入事件。
+func BuildProducerPeriodCompletedMessage(spaceID string, marker *pb.DatasetPeriodCompletedMarker) ([]byte, string, error) {
 	if marker == nil {
-		return nil, "", invalid("factor period marker is required")
+		return nil, "", invalid("dataset period marker is required")
 	}
-	factors := make([]*storageeventpb.FactorPeriodState, 0, len(marker.GetFactors()))
-	for _, state := range marker.GetFactors() {
-		if state == nil {
-			return nil, "", invalid("factor period state is required")
-		}
-		factors = append(factors, &storageeventpb.FactorPeriodState{
-			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
-			SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash(), GapSubjects: append([]string(nil), state.GetGapSubjects()...),
-			MemberKey: state.GetMemberKey(), MemberKind: state.GetMemberKind(),
-		})
+	payload := &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
+		Status: marker.GetStatus(), Source: "producer",
+		UniverseSubjectIds: append([]string(nil), marker.GetUniverseSubjectIds()...),
+		FailedSubjects:     append([]string(nil), marker.GetFailedSubjects()...),
+		CauseEventId:       marker.GetCauseEventId(), CompletedAt: marker.GetCompletedAt(),
+		DetailType: marker.GetDetailType(), Detail: append([]byte(nil), marker.GetDetail()...),
 	}
-	payload := &storageeventpb.FactorPeriodComputed{
-		DatasetId: marker.GetDatasetId(), SourceDatasetId: marker.GetSourceDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), UniverseSubjectIds: append([]string(nil), marker.GetUniverseSubjectIds()...),
-		FailedSubjects: append([]string(nil), marker.GetFailedSubjects()...), Factors: factors,
-		ComputedAt: marker.GetComputedAt(), TriggerEventId: marker.GetTriggerEventId(),
-	}
-	eventID := stableMarkerID("factor-period", spaceID, payload.GetDatasetId(), payload.GetTriggerEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
-	return buildMarkerMessage(events.FactorPeriodComputed, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetComputedAt()), payload)
+	eventID := stableMarkerID("producer-period", spaceID, payload.GetDatasetId(), payload.GetCauseEventId(), strconv.FormatInt(payload.GetPeriodTime(), 10))
+	return buildMarkerMessage(events.DatasetPeriodCompleted, eventID, spaceID, payload.GetDatasetId(), markerTime(payload.GetCompletedAt()), payload)
 }
 
 func BuildDatasetSyncPointMessage(spaceID string, marker *pb.DatasetSyncPointMarker) ([]byte, string, error) {
@@ -158,8 +165,7 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 func isDataNodeOutboxEvent(event events.Event) bool {
 	for _, allowed := range []events.Event{
 		events.DatasetRowsUpserted,
-		events.CollectorPeriodCompleted,
-		events.FactorPeriodComputed,
+		events.DatasetPeriodCompleted,
 		events.DatasetSyncPoint,
 	} {
 		if event.Name() == allowed.Name() && event.Version() == allowed.Version() {

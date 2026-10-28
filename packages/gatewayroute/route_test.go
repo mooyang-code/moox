@@ -154,23 +154,6 @@ func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testi
 	}
 }
 
-func TestValidateStorageMetadataViewBuilderRoute(t *testing.T) {
-	route := Route{
-		ServiceID:      "storage-primary",
-		Address:        "127.0.0.1:20100",
-		ServicePath:    "trpc.moox.storage.Metadata",
-		AllowedMethods: []string{"ClaimViewIndexBuild", "UpdateViewIndexBuild", "ActivateViewIndex", "FailViewIndexBuild"},
-		AllowedCallers: []string{"storage-view"},
-	}
-	if err := ValidateRoute(route); err != nil {
-		t.Fatalf("ValidateRoute rejected the storage-view metadata route: %v", err)
-	}
-	route.AllowedCallers = []string{"admin-gateway", "storage-view"}
-	if err := ValidateRoute(route); err == nil {
-		t.Fatal("ValidateRoute accepted view-builder metadata methods for a broader caller set")
-	}
-}
-
 func TestCanonicalSnapshotHashExcludesGeneratedAt(t *testing.T) {
 	normalized, err := NormalizeAndHash("node-1", []Route{{ServiceID: "admin", Address: "127.0.0.1:8080", ServicePath: "trpc.moox.Admin", AllowedMethods: []string{"*"}, AllowedCallers: []string{"*"}}})
 	if err != nil {

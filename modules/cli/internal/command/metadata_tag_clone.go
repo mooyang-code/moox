@@ -115,7 +115,14 @@ func runMetadataTagClone(ctx context.Context, out io.Writer, flags metadataTagCl
 	if name == "" {
 		name = flags.TagID
 	}
-	tag := &pb.Tag{SpaceId: flags.SpaceID, TagId: flags.TagID, TagName: name, Description: "由 " + flags.From + " 克隆的手动标签", Mode: "manual", Source: source.GetTag().GetSource(), MarketType: source.GetTag().GetMarketType()}
+	// 手动标签不同步成员，只带上采集计划要用的行情源与市场类型，不带 cron、时区。
+	attributes := map[string]string{}
+	for _, key := range []string{"sync.source", "market_type"} {
+		if value := source.GetTag().GetAttributes()[key]; value != "" {
+			attributes[key] = value
+		}
+	}
+	tag := &pb.Tag{SpaceId: flags.SpaceID, TagId: flags.TagID, TagName: name, Description: "由 " + flags.From + " 克隆的手动标签", Mode: "manual", Attributes: attributes}
 	if err := postStorageRaw(ctx, gateway, service, "UpsertTag", &pb.UpsertTagReq{Tag: tag, CreateOnly: true}, &pb.UpsertTagRsp{}); err != nil {
 		// 已存在时 create_only 会失败；继续补齐成员。
 		fmt.Fprintf(out, "UpsertTag: %v\n", err)
@@ -124,7 +131,7 @@ func runMetadataTagClone(ctx context.Context, out io.Writer, flags metadataTagCl
 	if err := postStorageRaw(ctx, gateway, service, "AddTagMembers", &pb.TagMembersReq{SpaceId: flags.SpaceID, TagId: flags.TagID, SubjectIds: subjects}, added); err != nil {
 		return fmt.Errorf("添加标签成员失败: %w", err)
 	}
-	return printJSON(out, map[string]any{"tag_id": flags.TagID, "source": tag.Source, "market_type": tag.MarketType, "members": len(subjects), "affected": added.GetAffected()})
+	return printJSON(out, map[string]any{"tag_id": flags.TagID, "source": attributes["sync.source"], "market_type": attributes["market_type"], "members": len(subjects), "affected": added.GetAffected()})
 }
 
 func runMetadataTagMembers(ctx context.Context, out io.Writer, flags metadataTagMembersFlags) error {

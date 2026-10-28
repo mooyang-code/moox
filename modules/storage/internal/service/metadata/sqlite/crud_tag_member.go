@@ -211,7 +211,7 @@ func (s *Store) SetTagMemberStatus(ctx context.Context, spaceID, tagID string, s
 	return int(n), tx.Commit()
 }
 
-func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, runAt time.Time, items []*pb.TagSnapshotItem) (metadatastore.TagSnapshotResult, error) {
+func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, items []*pb.TagSnapshotItem) (metadatastore.TagSnapshotResult, error) {
 	tx, err := beginImmediate(ctx, s.db)
 	if err != nil {
 		return metadatastore.TagSnapshotResult{}, err
@@ -235,7 +235,7 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 			var existing int
 			err := tx.QueryRowContext(ctx, `SELECT 1 FROM t_subjects WHERE c_space_id = ? AND c_subject_id = ?`, spaceID, item.GetSubjectId()).Scan(&existing)
 			if err == sql.ErrNoRows {
-				subject := &pb.Subject{SpaceId: spaceID, SubjectId: item.GetSubjectId(), SubjectType: item.GetSubjectType(), Name: item.GetName(), Market: item.GetMarket(), Currency: item.GetCurrency(), Timezone: item.GetTimezone(), Status: "active"}
+				subject := &pb.Subject{SpaceId: spaceID, SubjectId: item.GetSubjectId(), Name: item.GetName(), Timezone: item.GetTimezone(), Status: "active", Attributes: item.GetAttributes()}
 				if err := upsertSubject(ctx, tx, subject); err != nil {
 					return metadatastore.TagSnapshotResult{}, err
 				}
@@ -262,7 +262,7 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 		}
 		n, _ := res.RowsAffected()
 		result.Activated = int(n)
-		res, err = tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN `+resultSet, append([]any{formatSQLiteTime(runAt), spaceID, tagID}, stringsToAny(ids)...)...)
+		res, err = tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN `+resultSet, append([]any{formatSQLiteTime(s.nowUTC()), spaceID, tagID}, stringsToAny(ids)...)...)
 		if err != nil {
 			return metadatastore.TagSnapshotResult{}, err
 		}
@@ -278,15 +278,7 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, run
 			_, _ = tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id = ?`, spaceID, tagID, item.GetSubjectId())
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE t_tags SET c_last_run_at = ?, c_last_status = 'success', c_last_error = '' WHERE c_space_id = ? AND c_tag_id = ?`, formatSQLiteTime(runAt), spaceID, tagID); err != nil {
-		return metadatastore.TagSnapshotResult{}, err
-	}
 	return result, tx.Commit()
-}
-
-func (s *Store) ReportTagRunFailure(ctx context.Context, spaceID, tagID string, runAt time.Time, message string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE t_tags SET c_last_run_at = ?, c_last_status = 'failed', c_last_error = ? WHERE c_space_id = ? AND c_tag_id = ?`, formatSQLiteTime(runAt), message, spaceID, tagID)
-	return err
 }
 
 func (s *Store) UpdateSubjectAttributes(ctx context.Context, spaceID string, items []*pb.SubjectAttributes) (int, int, error) {

@@ -815,10 +815,6 @@ func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPo
 }
 
 func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serviceName string, stderr io.Writer) error {
-	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, false, stderr)
-}
-
-func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, replayPending bool, stderr io.Writer) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {
 		return errors.New("storage package root is empty; pass --package-root")
@@ -831,11 +827,7 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	cmd.Dir = packageRoot
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr
-	env := append([]string(nil), os.Environ()...)
-	if replayPending {
-		env = append(env, "MOOX_STORAGE_VIEW_REPLAY_PENDING=1")
-	}
-	cmd.Env = env
+	cmd.Env = append([]string(nil), os.Environ()...)
 	if err := cmd.Run(); err != nil {
 		return err
 	}

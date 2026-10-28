@@ -6,13 +6,7 @@
     </a-tabs>
     <div class="filter-bar">
       <div class="filter-query">
-        <a-input
-          v-model="keyword"
-          class="keyword-input"
-          allow-clear
-          placeholder="搜索对象 ID、名称、类型或市场"
-          @press-enter="onSearch"
-        />
+        <a-input v-model="keyword" class="keyword-input" allow-clear placeholder="搜索对象 ID 或名称" @press-enter="onSearch" />
         <a-select v-model="statusFilter" class="status-select" placeholder="状态">
           <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
         </a-select>
@@ -82,8 +76,12 @@
         <a-table-column title="名称" :width="180">
           <template #cell="{ record }">{{ record.subject?.name || "-" }}</template>
         </a-table-column>
-        <a-table-column title="类型" data-index="subject.subject_type" :width="130" />
-        <a-table-column title="市场" data-index="subject.market" :width="110" />
+        <a-table-column title="类型" :width="130">
+          <template #cell="{ record }">{{ subjectType(record.subject) || "-" }}</template>
+        </a-table-column>
+        <a-table-column title="市场" :width="110">
+          <template #cell="{ record }">{{ subjectMarket(record.subject) || "-" }}</template>
+        </a-table-column>
         <a-table-column title="所属标签" :width="220">
           <template #cell="{ record }">
             <a-space wrap>
@@ -183,6 +181,7 @@ import {
   upsertSubject
 } from "@/api/storage/metadata";
 import type { Subject, Tag, TagMember } from "@/api/storage/types";
+import { mergeAttributes, subjectCurrency, subjectMarket, subjectType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
 
 const props = defineProps<{ spaceId: string; initialTagId?: string }>();
@@ -204,14 +203,18 @@ const selectedAddVisible = ref(false);
 const selectedAddTagId = ref("");
 const subjectVisible = ref(false);
 const subjectEditing = ref(false);
-const subjectForm = reactive<Subject>(emptySubject());
+const subjectForm = reactive<SubjectFormState>(emptySubject());
+// 编辑时保留原对象的全部属性（base、quote、exchange 等），只改表单里维护的三项。
+let subjectFormBase: Subject | undefined;
 
 const ALL_TAG_KEY = "__all__";
 const activeTagKey = computed(() => selectedTagId.value || ALL_TAG_KEY);
 const selectedTag = computed(() => tags.value.find(tag => tag.tag_id === selectedTagId.value));
 const manualTags = computed(() => tags.value.filter(tag => tag.mode === "manual"));
 const canEditMembers = computed(() => selectedTag.value?.mode === "manual");
-const probeEnabled = computed(() => Boolean(selectedTag.value?.mode === "auto" || selectedTag.value?.source));
+const probeEnabled = computed(() =>
+  Boolean(selectedTag.value && (selectedTag.value.mode === "auto" || tagSource(selectedTag.value)))
+);
 const statusOptions = computed(() =>
   selectedTagId.value
     ? [
@@ -226,7 +229,19 @@ const statusOptions = computed(() =>
       ]
 );
 
-function emptySubject(): Subject {
+// 对象类型、市场、币种在 Storage 里是属性，表单里单独列出来编辑。
+interface SubjectFormState {
+  space_id: string;
+  subject_id: string;
+  subject_type: string;
+  name: string;
+  market: string;
+  currency: string;
+  timezone: string;
+  status: string;
+}
+
+function emptySubject(): SubjectFormState {
   return {
     space_id: "",
     subject_id: "",
@@ -236,6 +251,15 @@ function emptySubject(): Subject {
     currency: "",
     timezone: "Asia/Shanghai",
     status: "active"
+  };
+}
+
+function toSubjectPayload(spaceId: string): Subject {
+  const { subject_type, market, currency, ...rest } = subjectForm;
+  return {
+    ...rest,
+    space_id: spaceId,
+    attributes: mergeAttributes(subjectFormBase?.attributes, { subject_type, market, currency })
   };
 }
 
@@ -380,6 +404,7 @@ async function submitSelectedAdd(): Promise<boolean> {
 function openSubjectCreate() {
   subjectFormSpaceId = props.spaceId;
   subjectEditing.value = false;
+  subjectFormBase = undefined;
   Object.assign(subjectForm, emptySubject(), { space_id: props.spaceId });
   subjectVisible.value = true;
 }
@@ -387,7 +412,17 @@ function openSubjectCreate() {
 function openSubjectEdit(subject: Subject) {
   subjectFormSpaceId = props.spaceId;
   subjectEditing.value = true;
-  Object.assign(subjectForm, subject, { timezone: subject.timezone || "Asia/Shanghai" });
+  subjectFormBase = subject;
+  Object.assign(subjectForm, emptySubject(), {
+    space_id: subject.space_id,
+    subject_id: subject.subject_id,
+    name: subject.name,
+    status: subject.status,
+    subject_type: subjectType(subject),
+    market: subjectMarket(subject),
+    currency: subjectCurrency(subject),
+    timezone: subject.timezone || "Asia/Shanghai"
+  });
   subjectVisible.value = true;
 }
 
@@ -402,7 +437,7 @@ async function submitSubject(): Promise<boolean> {
     return false;
   }
   const submission = subjectScope.begin();
-  await upsertSubject({ ...subjectForm, space_id: props.spaceId });
+  await upsertSubject(toSubjectPayload(props.spaceId));
   Message.success("数据对象已保存");
   if (!submission.isCurrent()) return false;
   subjectVisible.value = false;

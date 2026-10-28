@@ -308,7 +308,7 @@ function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field
       if (!column.dataset_id) labels[column.column_name] = label;
       continue;
     }
-    if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_FACTOR", 2)) {
+    if (isOriginType(column.origin_type, "DATASET_COLUMN_ORIGIN_TYPE_CUSTOM", 2)) {
       const label = readableMetadataLabel(column.column_name);
       labels[labelKey] = label;
       if (!column.dataset_id) labels[column.column_name] = label;

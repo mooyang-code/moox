@@ -20,7 +20,7 @@ func TestValidateRepairViewRequiresExplicitReplayForFullReset(t *testing.T) {
 		spaceID:       "space",
 		viewID:        "view",
 		stream:        defaultRepairJSName,
-		consumer:      "storage_view_misc_0123456789ab",
+		consumer:      "view_0123456789ab",
 		deliverPolicy: "new",
 		timeout:       defaultRepairTimeout,
 		yes:           true,

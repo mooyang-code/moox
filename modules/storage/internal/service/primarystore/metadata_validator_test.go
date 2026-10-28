@@ -140,15 +140,15 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 		},
 	}
 	validator := NewMetadataValidator(&snapshotOnlyMetadataReader{snapshot: validatorSnapshot{}})
-	svc, err := New(Options{Node: node, Validator: validator})
+	svc, err := New(Options{Snapshot: func() metadata.RequestSnapshot { return validatorSnapshot{} }, Node: node, Validator: validator})
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller"},
 		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
-	})
+	}))
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
 		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
 	}

@@ -100,20 +100,20 @@ func DecodeDatasetRowsUpsertedWithContentType(registry *Registry, raw []byte, su
 	return message, storagePayload, nil
 }
 
-// DecodeCollectorPeriodCompleted validates and decodes a collector completion marker.
-func DecodeCollectorPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.CollectorPeriodCompleted, error) {
-	return DecodeCollectorPeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
+// DecodeDatasetPeriodCompleted validates and decodes a dataset period completion event.
+func DecodeDatasetPeriodCompleted(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCompleted, error) {
+	return DecodeDatasetPeriodCompletedWithContentType(registry, raw, subject, messageID, ContentType)
 }
 
-// DecodeCollectorPeriodCompletedWithContentType also validates broker content type.
-func DecodeCollectorPeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.CollectorPeriodCompleted, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, CollectorPeriodCompleted)
+// DecodeDatasetPeriodCompletedWithContentType also validates broker content type.
+func DecodeDatasetPeriodCompletedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.DatasetPeriodCompleted, error) {
+	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, DatasetPeriodCompleted)
 	if err != nil {
 		return message, nil, err
 	}
-	storagePayload, ok := payload.(*storagepb.CollectorPeriodCompleted)
+	storagePayload, ok := payload.(*storagepb.DatasetPeriodCompleted)
 	if !ok {
-		return message, nil, fmt.Errorf("collector period completed payload has type %T", payload)
+		return message, nil, fmt.Errorf("dataset period completed payload has type %T", payload)
 	}
 	return message, storagePayload, nil
 }
@@ -134,24 +134,6 @@ func DecodeViewDataReadyWithContentType(registry *Registry, raw []byte, subject,
 		return message, nil, fmt.Errorf("view data ready payload has type %T", payload)
 	}
 	return message, ready, nil
-}
-
-// DecodeFactorPeriodComputed validates and decodes a factor completion marker.
-func DecodeFactorPeriodComputed(registry *Registry, raw []byte, subject, messageID string) (*eventpb.EventMessage, *storagepb.FactorPeriodComputed, error) {
-	return DecodeFactorPeriodComputedWithContentType(registry, raw, subject, messageID, ContentType)
-}
-
-// DecodeFactorPeriodComputedWithContentType also validates broker content type.
-func DecodeFactorPeriodComputedWithContentType(registry *Registry, raw []byte, subject, messageID, contentType string) (*eventpb.EventMessage, *storagepb.FactorPeriodComputed, error) {
-	message, payload, err := decodeStorageEvent(registry, raw, subject, messageID, contentType, FactorPeriodComputed)
-	if err != nil {
-		return message, nil, err
-	}
-	storagePayload, ok := payload.(*storagepb.FactorPeriodComputed)
-	if !ok {
-		return message, nil, fmt.Errorf("factor period computed payload has type %T", payload)
-	}
-	return message, storagePayload, nil
 }
 
 // DecodeDatasetSyncPoint validates and decodes an ordered Dataset sync point.

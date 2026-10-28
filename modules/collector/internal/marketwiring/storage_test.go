@@ -15,7 +15,7 @@ func TestHandlerStorageFactoryPropagatesManagedAuthError(t *testing.T) {
 	setWiringStorageAuthConfig(t)
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "wiring-test-secret")
-	storage, err := marketfetch.NewMarketStorageForMarket(wiringGateway{}, "spot", "test")
+	storage, err := marketfetch.NewMarketStorageForMarket(wiringGateway{}, "spot")
 	require.Error(t, err)
 	require.Nil(t, storage)
 	require.NotContains(t, err.Error(), "wiring-test-secret")
@@ -26,7 +26,7 @@ func TestHandlerStorageFactoryPreservesHostCredentials(t *testing.T) {
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "")
 	require.NoError(t, os.Unsetenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"))
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "wiring-test-secret")
-	storage, err := marketfetch.NewMarketStorageForMarket(wiringGateway{}, "spot", "test")
+	storage, err := marketfetch.NewMarketStorageForMarket(wiringGateway{}, "spot")
 	require.NoError(t, err)
 	require.NotNil(t, storage)
 }

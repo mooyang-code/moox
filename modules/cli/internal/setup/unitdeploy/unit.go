@@ -118,6 +118,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"] = identity.StoragePrimarySecret
 			values["MOOX_STORAGE_VIEW_AUTH_SECRET"] = identity.StorageViewSecret
 			values["MOOX_STORAGE_PRIMARY_TARGET"] = "ip://127.0.0.1:20102"
+			values["MOOX_STORAGE_METADATA_TARGET"] = "ip://127.0.0.1:20100"
 			values["MOOX_STORAGE_VIEW_TARGET"] = "ip://127.0.0.1:20103"
 		}
 		// The prebuilt Storage templates bind internal RPC to loopback. Until

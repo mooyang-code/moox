@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strconv"
 	"strings"
@@ -304,8 +305,8 @@ func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectT
 				return rsp.GetRetInfo()
 			}())
 		}
-		tagSource := strings.TrimSpace(rsp.GetTag().GetSource())
-		tagMarket := strings.ToLower(strings.TrimSpace(rsp.GetTag().GetMarketType()))
+		tagSource := tagattr.Source(rsp.GetTag())
+		tagMarket := tagattr.MarketType(rsp.GetTag())
 		if i > 0 && (tagSource != source || tagMarket != marketType) {
 			return "", "", nil
 		}
@@ -1159,7 +1160,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "maintenance_priority": "0", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}

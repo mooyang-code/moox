@@ -26,19 +26,19 @@ func TestConfigDefaults(t *testing.T) {
 	if _, err := (Config{}).withDefaults(); err == nil {
 		t.Fatal("a consumer without a durable name was accepted")
 	}
-	config, err := (Config{Consumer: events.StorageViewMiscConsumer}).withDefaults()
+	config, err := (Config{Consumer: testDurable}).withDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != events.StorageViewMiscConsumer || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
+	if config.Consumer != testDurable || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
 	}
 }
 
 func TestViewConsumerIgnoresUnknownMergeSubject(t *testing.T) {
 	config := eventConsumerConfig(Config{})
-	if len(config.Events) != 4 {
-		t.Fatalf("subscribed event families=%d, want 4", len(config.Events))
+	if len(config.Events) != 3 {
+		t.Fatalf("subscribed event families=%d, want 3", len(config.Events))
 	}
 	for _, event := range config.Events {
 		if strings.Contains(event.Name(), ".merge.") {
@@ -55,21 +55,21 @@ func TestViewConsumerIgnoresUnknownMergeSubject(t *testing.T) {
 }
 
 func TestConfigNormalizesDeliverPolicy(t *testing.T) {
-	config, err := (Config{Consumer: events.StorageViewMiscConsumer, DeliverPolicy: " NEW "}).withDefaults()
+	config, err := (Config{Consumer: testDurable, DeliverPolicy: " NEW "}).withDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.DeliverPolicy != "new" {
 		t.Fatalf("deliver policy = %q, want new", config.DeliverPolicy)
 	}
-	if _, err := (Config{Consumer: events.StorageViewMiscConsumer, DeliverPolicy: "last"}).withDefaults(); err == nil {
+	if _, err := (Config{Consumer: testDurable, DeliverPolicy: "last"}).withDefaults(); err == nil {
 		t.Fatal("unsupported deliver policy was accepted")
 	}
 }
 
 func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
 	config, err := (Config{
-		Consumer:       events.StorageViewMiscConsumer,
+		Consumer:       testDurable,
 		PartitionID:    "kline",
 		FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"},
 	}).withDefaults()
@@ -82,10 +82,10 @@ func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
 }
 
 func TestConfigAcceptsUnlimitedRetryAttempts(t *testing.T) {
-	if config, err := (Config{Consumer: events.StorageViewMiscConsumer, MaxRetryAttempts: -1}).withDefaults(); err != nil || config.MaxRetryAttempts != -1 {
+	if config, err := (Config{Consumer: testDurable, MaxRetryAttempts: -1}).withDefaults(); err != nil || config.MaxRetryAttempts != -1 {
 		t.Fatalf("unlimited MaxRetryAttempts = %+v, err=%v", config, err)
 	}
-	if _, err := (Config{Consumer: events.StorageViewMiscConsumer, MaxRetryAttempts: -2}).withDefaults(); err == nil {
+	if _, err := (Config{Consumer: testDurable, MaxRetryAttempts: -2}).withDefaults(); err == nil {
 		t.Fatal("invalid negative MaxRetryAttempts was accepted")
 	}
 }
@@ -339,3 +339,5 @@ func validDatasetDelivery(t *testing.T) (events.EncodedEvent, []byte) {
 	}
 	return encoded, raw
 }
+
+const testDurable = "view_0123456789ab"

@@ -27,9 +27,3 @@ func TestValidateSnapshotAlignmentFollowsDatasetAlignment(t *testing.T) {
 	// 日线及以上的边界取决于时区，这一层不检查。
 	require.NoError(t, validateSnapshotAlignment(ctx, request("epoch", "1d", open)))
 }
-
-func TestPeriodDatasetRolesIncludeResampleResult(t *testing.T) {
-	require.True(t, periodDatasetRoles["raw_collection"])
-	require.True(t, periodDatasetRoles["kline_resample_result"])
-	require.False(t, periodDatasetRoles["factor_result"])
-}

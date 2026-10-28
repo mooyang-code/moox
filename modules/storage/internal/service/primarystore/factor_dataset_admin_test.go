@@ -19,10 +19,6 @@ func (n *factorDatasetAdminNode) UpsertFields(context.Context, *pb.UpsertFieldsR
 	return nil, nil
 }
 
-func (*factorDatasetAdminNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return nil, nil
-}
-
 func (n *factorDatasetAdminNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }
@@ -67,7 +63,7 @@ func newFactorDatasetAdminService(t *testing.T, node *factorDatasetAdminNode, ap
 	t.Helper()
 	dataset := &pb.Dataset{
 		SpaceId: "crypto", DatasetId: "dataset_factor_prices_1m", DataNodeId: "factor-node",
-		Attributes: map[string]string{"dataset_role": "factor_result", "write_owner": "factor"},
+		Attributes: map[string]string{"dataset_role": "factor_result"},
 	}
 	service, err := New(Options{
 		Resolver: func(_ context.Context, spaceID, datasetID string) (DataNodeClient, error) {
@@ -104,20 +100,6 @@ func TestDeleteDatasetRowsAllowsFactorResultOwner(t *testing.T) {
 	}
 	if node.deleted != 1 {
 		t.Fatalf("DataNode delete count = %d, want 1", node.deleted)
-	}
-}
-
-func TestDeleteDatasetRowsRejectsNonFactorCallerForFactorResult(t *testing.T) {
-	node := &factorDatasetAdminNode{}
-	service := newFactorDatasetAdminService(t, node, "collector")
-	rsp, err := service.DeleteDatasetRows(context.Background(), &pb.PrimaryDeleteDatasetRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "collector"}, SpaceId: "crypto", DatasetId: "dataset_factor_prices_1m",
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("response=%v err=%v", rsp, err)
-	}
-	if node.deleted != 0 {
-		t.Fatal("unauthorized caller reached DataNode deletion")
 	}
 }
 

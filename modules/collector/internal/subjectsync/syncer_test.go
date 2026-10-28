@@ -8,22 +8,26 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeAttributeStore) {
+func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeRunStore, *fakeAttributeStore) {
 	t.Helper()
 	// binance_spot 刚在整点同步过，按 cron 还没到期；手动同步必须无视这一点。
-	justRun := "2026-09-25 10:00:00"
-	store := &fakeTagStore{
-		tags: []*pb.Tag{
-			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC", LastRunAt: justRun, UpdatedAt: "2026-09-01 00:00:00"},
-			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Source: "binance", MarketType: "swap", Cron: "0 * * * *", Timezone: "UTC", LastRunAt: justRun, UpdatedAt: "2026-09-01 00:00:00"},
-			{SpaceId: "stockcn", TagId: "cn_a_share", Mode: "auto", Source: "eastmoney", MarketType: "equity", Cron: "0 * * * *", Timezone: "UTC", LastRunAt: justRun, UpdatedAt: "2026-09-01 00:00:00"},
-			{SpaceId: "crypto", TagId: "watch", Mode: "manual", Cron: "0 * * * *", Timezone: "UTC"},
-		},
-		applied: map[string]int{}, failures: map[string]string{},
+	justRun := time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
+	tags := []*pb.Tag{
+		autoTag("crypto", "binance_spot", "auto", "binance", "spot"),
+		autoTag("crypto", "binance_swap", "auto", "binance", "swap"),
+		autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity"),
+		autoTag("crypto", "watch", "manual", "", ""),
 	}
+	runs := newFakeRunStore()
+	for _, tag := range tags[:3] {
+		tag.UpdatedAt = "2026-09-01 00:00:00"
+		runs.runs[tag.TagId] = store.TagSyncRun{SpaceID: tag.SpaceId, TagID: tag.TagId, LastRunAt: justRun, LastStatus: store.TagSyncSuccess}
+	}
+	tagStore := &fakeTagStore{tags: tags, applied: map[string]int{}}
 	listers := Listers{
 		{Source: "binance", InstrumentType: "spot"}:     fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}}},
 		{Source: "binance", InstrumentType: "swap"}:     fakeSubjectLister{err: errors.New("HTTP status 302")},
@@ -32,13 +36,13 @@ func newTestSyncer(t *testing.T) (*Syncer, *fakeTagStore, *fakeAttributeStore) {
 	now := func() time.Time { return time.Date(2026, 9, 25, 10, 30, 0, 0, time.UTC) }
 	attributes := &fakeAttributeStore{}
 	return &Syncer{
-		Tags:       &TagRunner{Store: store, Listers: listers, FetchTimeout: time.Second, Now: now},
+		Tags:       &TagRunner{Store: tagStore, Runs: runs, Listers: listers, FetchTimeout: time.Second, Now: now},
 		Attributes: &AttributeRunner{Store: attributes, Listers: listers, FetchTimeout: time.Second, Now: now, Jobs: []AttributeJob{{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "0 3 * * *", Timezone: "UTC"}}},
-	}, store, attributes
+	}, tagStore, runs, attributes
 }
 
 func TestSyncNowRunsTagsThatAreNotDue(t *testing.T) {
-	syncer, store, _ := newTestSyncer(t)
+	syncer, store, runs, _ := newTestSyncer(t)
 	report, err := syncer.SyncNow(context.Background(), Filter{}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -53,8 +57,8 @@ func TestSyncNowRunsTagsThatAreNotDue(t *testing.T) {
 	if r := byTag["binance_spot"]; r.Status != StatusSuccess || r.Subjects != 2 {
 		t.Fatalf("spot result = %+v", r)
 	}
-	if r := byTag["binance_swap"]; r.Status != StatusFailed || r.Message == "" || store.failures["binance_swap"] == "" {
-		t.Fatalf("swap result = %+v failures=%v, want the failure reported and recorded", r, store.failures)
+	if r := byTag["binance_swap"]; r.Status != StatusFailed || r.Message == "" || runs.runs["binance_swap"].LastStatus != "failed" {
+		t.Fatalf("swap result = %+v run=%+v, want the failure reported and recorded", r, runs.runs["binance_swap"])
 	}
 	if r := byTag["watch"]; r.Status != StatusSkipped {
 		t.Fatalf("manual tag result = %+v, want skipped", r)
@@ -68,7 +72,7 @@ func TestSyncNowRunsTagsThatAreNotDue(t *testing.T) {
 }
 
 func TestSyncNowFilterSelectsSpaceAndTag(t *testing.T) {
-	syncer, store, _ := newTestSyncer(t)
+	syncer, store, _, _ := newTestSyncer(t)
 	report, err := syncer.SyncNow(context.Background(), Filter{SpaceID: "crypto", TagID: "binance_spot"}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +91,7 @@ func TestSyncNowFilterSelectsSpaceAndTag(t *testing.T) {
 }
 
 func TestSyncNowIncludesAttributesOnRequestIgnoringCron(t *testing.T) {
-	syncer, _, attributes := newTestSyncer(t)
+	syncer, _, _, attributes := newTestSyncer(t)
 	// 当前 10:30，任务的 cron 是每天 03:00，定时任务此刻不会运行。
 	report, err := syncer.SyncNow(context.Background(), Filter{SpaceID: "crypto"}, true)
 	if err != nil {
@@ -133,7 +137,7 @@ func TestSyncNowRefusesWhileAnotherSyncRuns(t *testing.T) {
 }
 
 func TestRunDueAttributesUsesTriggerTimeCapturedBeforeWaitingForLock(t *testing.T) {
-	syncer, _, attributes := newTestSyncer(t)
+	syncer, _, _, attributes := newTestSyncer(t)
 	var clockMu sync.Mutex
 	current := time.Date(2026, 9, 25, 3, 0, 45, 0, time.UTC) // 计划 03:00 的回调在 03:00:45 进入
 	syncer.Attributes.Now = func() time.Time {

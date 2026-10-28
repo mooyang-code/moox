@@ -66,14 +66,10 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		_ = readyClient.Close()
 		return nil, err
 	}
-	partitionConfigs := opts.PartitionConfigs
-	if len(partitionConfigs) == 0 {
-		single := opts
-		single.PartitionConfigs = nil
-		partitionConfigs = []EventConsumerOptions{single}
-	}
+	// 生产环境没有静态消费者：每个数据集的消费者都由 View 清单对账动态创建。这里只在显式给出过滤主题时
+	// 才启动一个静态消费者（测试与专用场景）。
+	partitionConfigs := []EventConsumerOptions{opts}
 	for i := range partitionConfigs {
-		partitionConfigs[i].PartitionConfigs = nil
 		partitionConfigs[i].Metrics = opts.Metrics
 		if strings.TrimSpace(partitionConfigs[i].PartitionID) == "" {
 			partitionConfigs[i].PartitionID = strings.TrimSpace(partitionConfigs[i].Consumer)
@@ -105,8 +101,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	for _, partition := range partitionConfigs {
 		partition := partition
 		partitionID := partition.PartitionID
-		if len(opts.PartitionConfigs) > 0 && len(partition.FilterSubjects) == 0 {
-			// 没有静态路由的分区只为动态的按数据集消费者提供投递模板。不带过滤主题启动它，会订阅所有数据集事件。
+		if len(partition.FilterSubjects) == 0 {
+			// 没有过滤主题就不启动静态消费者：不带过滤主题启动会订阅所有数据集事件。
 			continue
 		}
 		state := &boundState{}
@@ -318,7 +314,6 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 	}
 	state := &dynamicConsumerBoundState{}
 	config := spec.config
-	config.PartitionConfigs = nil
 	config.PartitionID = spec.partitionID
 	config.Consumer = spec.durable
 	config.FilterSubjects = append([]string(nil), spec.filters...)

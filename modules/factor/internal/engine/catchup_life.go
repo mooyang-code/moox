@@ -143,6 +143,11 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 		return out
 	}
 	out.Target = target
+	// 没有连续水位（不消费事件的运行时，例如测试）：没有需要补齐的周期，同步完成即追平。
+	if r.continuity == nil {
+		out.CaughtUp = true
+		return out
+	}
 	if err := r.continuity.NoteTarget(taskID, target); err != nil {
 		out.Message = "建立追赶目标失败：" + err.Error()
 		return out

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '14')
+VALUES ('schema_version', '15')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -217,23 +217,17 @@ CREATE TABLE IF NOT EXISTS t_data_sources (
     c_space_id TEXT NOT NULL,
     c_data_source_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    c_kind TEXT NOT NULL,
-    c_market TEXT NOT NULL DEFAULT '',
-    c_timezone TEXT NOT NULL DEFAULT '',
-    c_config_json TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_kind IN ('exchange', 'vendor_api', 'file_import', 'manual', 'internal')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_data_source_id),
     UNIQUE (c_space_id, c_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_data_sources_kind ON t_data_sources (c_space_id, c_kind, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_data_sources_market ON t_data_sources (c_space_id, c_market, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_data_sources_status ON t_data_sources (c_space_id, c_status);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_data_sources_mtime
 AFTER UPDATE ON t_data_sources
@@ -247,10 +241,7 @@ CREATE TABLE IF NOT EXISTS t_subjects (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
-    c_subject_type TEXT NOT NULL,
     c_name TEXT NOT NULL DEFAULT '',
-    c_market TEXT NOT NULL DEFAULT '',
-    c_currency TEXT NOT NULL DEFAULT '',
     c_timezone TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
@@ -261,8 +252,7 @@ CREATE TABLE IF NOT EXISTS t_subjects (
     UNIQUE (c_space_id, c_subject_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_subjects_type ON t_subjects (c_space_id, c_subject_type, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_subjects_market ON t_subjects (c_space_id, c_market, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_subjects_status ON t_subjects (c_space_id, c_status);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_subjects_mtime
 AFTER UPDATE ON t_subjects
@@ -272,7 +262,7 @@ BEGIN
     UPDATE t_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 标签：Subject 的分组；auto 标签成员由 moox-collector 按 cron 同步
+-- 标签：一组 Subject；业务含义（市场、同步配置等）放在 c_attrs_json，Storage 不解释
 CREATE TABLE IF NOT EXISTS t_tags (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -281,20 +271,12 @@ CREATE TABLE IF NOT EXISTS t_tags (
     c_description TEXT NOT NULL DEFAULT '',
     c_mode TEXT NOT NULL,
     c_builtin INTEGER NOT NULL DEFAULT 0,
-    c_source_id TEXT NOT NULL,
-    c_market_type TEXT NOT NULL,
-    c_cron TEXT NOT NULL DEFAULT '0 * * * *',
-    c_timezone TEXT NOT NULL DEFAULT 'UTC',
-    c_last_run_at DATETIME NOT NULL DEFAULT '',
-    c_last_status TEXT NOT NULL DEFAULT '',
-    c_last_error TEXT NOT NULL DEFAULT '',
+    c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_mode IN ('auto', 'manual')),
     CHECK (c_builtin IN (0, 1)),
-    CHECK (c_last_status IN ('', 'success', 'failed')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_space_id, c_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     UNIQUE (c_space_id, c_tag_id),
     UNIQUE (c_space_id, c_tag_name),
     UNIQUE (c_tag_id)
@@ -303,7 +285,7 @@ CREATE TABLE IF NOT EXISTS t_tags (
 CREATE TRIGGER IF NOT EXISTS trg_t_tags_mtime
 AFTER UPDATE ON t_tags
 FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime AND NEW.c_last_run_at = OLD.c_last_run_at
+WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
@@ -396,9 +378,9 @@ BEGIN
 END;
 
 -- ************ 标的修订号 ************
--- 按空间单调递增：标的、标签成员、标签市场类型、数据集标的范围任一变化都会递增，
+-- 按空间单调递增：标的、标签成员、标签属性、数据集标的范围任一变化都会递增，
 -- 调用方（Strategy）用它判断缓存的标的绑定、标的详情与标签成员是否过期。
--- 触发器的 UPDATE OF 只列业务列，排除 c_mtime 与标签同步状态，避免 mtime 触发器和同步任务造成多余递增。
+-- 触发器的 UPDATE OF 只列业务列，排除 c_mtime，避免 mtime 触发器造成多余递增。
 CREATE TABLE IF NOT EXISTS t_space_revisions (
     c_space_id TEXT NOT NULL PRIMARY KEY,
     c_subjects_revision INTEGER NOT NULL DEFAULT 0
@@ -414,7 +396,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_update
-AFTER UPDATE OF c_status, c_attrs_json, c_subject_type, c_market ON t_subjects
+AFTER UPDATE OF c_status, c_attrs_json ON t_subjects
 FOR EACH ROW
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
@@ -459,7 +441,7 @@ BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_update
-AFTER UPDATE OF c_market_type ON t_tags
+AFTER UPDATE OF c_attrs_json ON t_tags
 FOR EACH ROW
 BEGIN
     INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
@@ -622,7 +604,7 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_origin_type IN ('field', 'factor', 'system')),
+    CHECK (c_origin_type IN ('field', 'custom', 'system')),
     CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -631,10 +613,10 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
 
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_dataset ON t_dataset_columns (c_space_id, c_dataset_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_origin ON t_dataset_columns (c_space_id, c_origin_type, c_origin_id);
--- 同一因子成员可以同时拥有多个输出列和参数列；字段与系统来源仍然唯一。
-CREATE UNIQUE INDEX IF NOT EXISTS idx_t_dataset_columns_non_factor_origin
+-- 自定义列的身份就是列名，不带来源 ID；字段与系统来源在数据集里仍然唯一。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_t_dataset_columns_origin_unique
 ON t_dataset_columns (c_space_id, c_dataset_id, c_origin_type, c_origin_id)
-WHERE c_origin_type <> 'factor';
+WHERE c_origin_type <> 'custom';
 
 CREATE TRIGGER IF NOT EXISTS trg_t_dataset_columns_mtime
 AFTER UPDATE ON t_dataset_columns

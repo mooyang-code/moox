@@ -181,6 +181,10 @@ type CollectMgrService interface {
 	PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq) (*PreviewKlineResampleSourceRsp, error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error)
+	// ListTagSyncStatus 标签同步的运行状态与可用的（来源，市场类型）组合；都是只读接口。
+	ListTagSyncStatus(ctx context.Context, req *ListTagSyncStatusReq) (*ListTagSyncStatusRsp, error)
+
+	ListSubjectListers(ctx context.Context, req *ListSubjectListersReq) (*ListSubjectListersRsp, error)
 	// CheckKline ----- K 线完整性检查与补采 -----
 	CheckKline(ctx context.Context, req *CheckKlineReq) (*CheckKlineRsp, error)
 
@@ -475,6 +479,42 @@ func CollectMgrService_SyncSubjects_Handler(svr interface{}, ctx context.Context
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).SyncSubjects(ctx, reqbody.(*SyncSubjectsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListTagSyncStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListTagSyncStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListTagSyncStatus(ctx, reqbody.(*ListTagSyncStatusReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListSubjectListers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListSubjectListersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListSubjectListers(ctx, reqbody.(*ListSubjectListersReq))
 	}
 
 	var rsp interface{}
@@ -839,6 +879,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_SyncSubjects_Handler,
 		},
 		{
+			Name: "/trpc.moox.collector.CollectMgr/ListTagSyncStatus",
+			Func: CollectMgrService_ListTagSyncStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListSubjectListers",
+			Func: CollectMgrService_ListSubjectListers_Handler,
+		},
+		{
 			Name: "/trpc.moox.collector.CollectMgr/CheckKline",
 			Func: CollectMgrService_CheckKline_Handler,
 		},
@@ -983,6 +1031,14 @@ func (s *UnimplementedCollectMgr) PreviewKlineResampleSource(ctx context.Context
 // SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 func (s *UnimplementedCollectMgr) SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error) {
 	return nil, errors.New("rpc SyncSubjects of service CollectMgr is not implemented")
+}
+
+// ListTagSyncStatus 标签同步的运行状态与可用的（来源，市场类型）组合；都是只读接口。
+func (s *UnimplementedCollectMgr) ListTagSyncStatus(ctx context.Context, req *ListTagSyncStatusReq) (*ListTagSyncStatusRsp, error) {
+	return nil, errors.New("rpc ListTagSyncStatus of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListSubjectListers(ctx context.Context, req *ListSubjectListersReq) (*ListSubjectListersRsp, error) {
+	return nil, errors.New("rpc ListSubjectListers of service CollectMgr is not implemented")
 }
 
 // CheckKline ----- K 线完整性检查与补采 -----
@@ -1189,6 +1245,10 @@ type CollectMgrClientProxy interface {
 	PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq, opts ...client.Option) (rsp *PreviewKlineResampleSourceRsp, err error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq, opts ...client.Option) (rsp *SyncSubjectsRsp, err error)
+	// ListTagSyncStatus 标签同步的运行状态与可用的（来源，市场类型）组合；都是只读接口。
+	ListTagSyncStatus(ctx context.Context, req *ListTagSyncStatusReq, opts ...client.Option) (rsp *ListTagSyncStatusRsp, err error)
+
+	ListSubjectListers(ctx context.Context, req *ListSubjectListersReq, opts ...client.Option) (rsp *ListSubjectListersRsp, err error)
 	// CheckKline ----- K 线完整性检查与补采 -----
 	CheckKline(ctx context.Context, req *CheckKlineReq, opts ...client.Option) (rsp *CheckKlineRsp, err error)
 
@@ -1526,6 +1586,46 @@ func (c *CollectMgrClientProxyImpl) SyncSubjects(ctx context.Context, req *SyncS
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncSubjectsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListTagSyncStatus(ctx context.Context, req *ListTagSyncStatusReq, opts ...client.Option) (*ListTagSyncStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListTagSyncStatus")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListTagSyncStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListTagSyncStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListSubjectListers(ctx context.Context, req *ListSubjectListersReq, opts ...client.Option) (*ListSubjectListersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListSubjectListers")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListSubjectListers")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListSubjectListersRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

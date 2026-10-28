@@ -8,7 +8,7 @@ Use this reference when a MooX collector cloud function does not run on its Time
 2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through Access (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The Access address and instance identity are derived from the deployment manifest.
 3. The default plan/backfill path does not call Collector or require EventBus; an explicitly configured metrics Reporter can publish to EventBus. Provider requests can retry or switch endpoints within the invocation budget. Final failures are logged to CLS (`market_fetch_item_failure`, `market_fetch_batch`); Collector repairs remaining gaps through backfill instead of re-dispatching an old completion batch.
 4. Gaps are found by `moox-cli collector kline check` and repaired by `kline backfill` or the Collector's automatic backfill.
-5. Storage lazily creates a period on its first valid commit, completes it as soon as all expected series arrive, or finalizes it as degraded at the deadline. A period with zero commits has no ledger or completion event. Crypto defaults to WS/local; use this Timer workflow only for datasets actually assigned to SCF.
+5. Storage lazily creates a period on its first valid commit, completes it as soon as all expected series arrive, or finalizes it as degraded at the deadline; completion is announced with `DatasetPeriodCompleted` (`source=ledger`). A period with zero commits has no ledger or completion event. Crypto defaults to WS/local; use this Timer workflow only for datasets actually assigned to SCF.
 
 ## Inputs
 

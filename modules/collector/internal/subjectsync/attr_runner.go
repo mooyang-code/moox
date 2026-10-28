@@ -99,7 +99,7 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	}
 	items := make([]*pb.SubjectAttributes, 0, len(instruments))
 	for _, instrument := range instruments {
-		items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: attributes(job.SpaceID, instrument)})
+		items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: subjectAttributes(job.SpaceID, instrument)})
 	}
 	if _, _, err := r.Store.UpdateSubjectAttributes(ctx, job.SpaceID, items); err != nil {
 		log.WarnContextf(ctx, "update subject attributes %s failed: %v", job.SpaceID, err)
@@ -114,17 +114,28 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 // SubjectPairAttribute 是标的属性里记录交易所交易对的键，采集计划据此给 WS 推送带出 pair。
 const SubjectPairAttribute = "pair"
 
-func attributes(spaceID string, item marketdata.Instrument) map[string]string {
+// 标的属性键：Storage 不解释这些业务字段，由 Collector 定义。
+const (
+	subjectTypeAttribute = "subject_type"
+	subjectMarketAttr    = "market"
+	subjectCurrencyAttr  = "currency"
+)
+
+// subjectAttributes 生成标的的属性。快照新建标的与属性维护任务更新已有标的走同一个函数，两条路径写出的键一致。
+func subjectAttributes(spaceID string, item marketdata.Instrument) map[string]string {
 	switch spaceID {
 	case "crypto":
-		values := map[string]string{"base": strings.ToUpper(item.BaseAsset), "quote": strings.ToUpper(item.QuoteAsset)}
+		values := map[string]string{
+			subjectTypeAttribute: "crypto_pair", subjectMarketAttr: "CRYPTO", subjectCurrencyAttr: strings.ToUpper(item.QuoteAsset),
+			"base": strings.ToUpper(item.BaseAsset), "quote": strings.ToUpper(item.QuoteAsset),
+		}
 		// 永续合约的交易对：WS 连续合约 K 线按它订阅（目前 USDT 永续与 symbol 相同）。
 		if pair := strings.ToUpper(strings.TrimSpace(item.Pair)); pair != "" {
 			values[SubjectPairAttribute] = pair
 		}
 		return values
 	case "stockcn":
-		return map[string]string{"exchange": item.Exchange}
+		return map[string]string{subjectTypeAttribute: "stock", subjectMarketAttr: item.Exchange, subjectCurrencyAttr: "CNY", "exchange": item.Exchange}
 	default:
 		return nil
 	}

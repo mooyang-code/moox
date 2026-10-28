@@ -137,7 +137,7 @@ func TestBackfillRunsChunksAndVerifiesGaps(t *testing.T) {
 	for _, event := range invoker.events {
 		data := event["data"].(map[string]any)
 		require.Equal(t, "backfill", data["batch_kind"])
-		require.Equal(t, true, data["write_id_by_content"])
+		require.Equal(t, true, data["plan_request"])
 		require.NotContains(t, data, "require_period_commit")
 		item := data["items"].([]any)[0].(map[string]any)
 		require.Contains(t, []any{"BTCUSDT", "ETHUSDT"}, item["symbol"])

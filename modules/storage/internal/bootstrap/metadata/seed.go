@@ -104,8 +104,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	for _, item := range seed.DataSources {
 		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{
 			SpaceId: item.SpaceID, DataSourceId: item.DataSourceID, Name: item.Name,
-			Kind: item.Kind, Market: item.Market, Timezone: item.Timezone,
-			ConfigJson: item.ConfigJSON, Status: item.Status,
+			Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("data_source", item.DataSourceID, err)
 		}
@@ -114,9 +113,8 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 
 	for _, item := range seed.Subjects {
 		if _, err := store.UpsertSubject(ctx, &pb.Subject{
-			SpaceId: item.SpaceID, SubjectId: item.SubjectID, SubjectType: item.SubjectType,
-			Name: item.Name, Market: item.Market, Currency: item.Currency,
-			Timezone: item.Timezone, Status: item.Status,
+			SpaceId: item.SpaceID, SubjectId: item.SubjectID,
+			Name: item.Name, Timezone: item.Timezone, Status: item.Status, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("subject", item.SubjectID, err)
 		}
@@ -126,15 +124,14 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	for _, item := range seed.Tags {
 		if existing, getErr := store.GetTag(ctx, item.SpaceID, item.TagID); getErr == nil && existing != nil {
 			// Tags are operator-owned after the first seed. In particular, do not
-			// reset a customized description, schedule, or source list on restart.
+			// reset a customized description or attributes on restart.
 			continue
 		} else if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
 			return result, seedErr("tag", item.TagID, getErr)
 		}
 		if _, err := store.UpsertTag(ctx, &pb.Tag{
 			SpaceId: item.SpaceID, TagId: item.TagID, TagName: item.TagName, Description: item.Description,
-			Mode: item.Mode, Builtin: item.Builtin, Source: item.Source, MarketType: item.MarketType,
-			Cron: item.Cron, Timezone: item.Timezone,
+			Mode: item.Mode, Builtin: item.Builtin, Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("tag", item.TagID, err)
 		}
@@ -344,8 +341,8 @@ func parseDatasetColumnOriginType(value string) pb.DatasetColumnOriginType {
 	switch value {
 	case "field":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
-	case "factor":
-		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	case "custom":
+		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
 	case "system":
 		return pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
 	default:
@@ -397,40 +394,32 @@ type seedSpace struct {
 
 // seedDataSource 描述待初始化的数据源元数据。
 type seedDataSource struct {
-	SpaceID      string `yaml:"space_id"`
-	DataSourceID string `yaml:"data_source_id"`
-	Name         string `yaml:"name"`
-	Kind         string `yaml:"kind"`
-	Market       string `yaml:"market"`
-	Timezone     string `yaml:"timezone"`
-	ConfigJSON   string `yaml:"config_json"`
-	Status       string `yaml:"status"`
+	SpaceID      string            `yaml:"space_id"`
+	DataSourceID string            `yaml:"data_source_id"`
+	Name         string            `yaml:"name"`
+	Status       string            `yaml:"status"`
+	Attributes   map[string]string `yaml:"attributes"`
 }
 
-// seedSubject 描述待初始化的 Subject 元数据。
+// seedSubject 描述待初始化的 Subject 元数据；类型、市场、币种等业务字段写在 attributes。
 type seedSubject struct {
-	SpaceID     string `yaml:"space_id"`
-	SubjectID   string `yaml:"subject_id"`
-	SubjectType string `yaml:"subject_type"`
-	Name        string `yaml:"name"`
-	Market      string `yaml:"market"`
-	Currency    string `yaml:"currency"`
-	Timezone    string `yaml:"timezone"`
-	Status      string `yaml:"status"`
+	SpaceID    string            `yaml:"space_id"`
+	SubjectID  string            `yaml:"subject_id"`
+	Name       string            `yaml:"name"`
+	Timezone   string            `yaml:"timezone"`
+	Status     string            `yaml:"status"`
+	Attributes map[string]string `yaml:"attributes"`
 }
 
-// seedTag 描述静态标签定义；运行态成员由 subject collector 维护。
+// seedTag 描述静态标签定义；业务含义（市场、同步配置）写在 attributes，运行态成员由写入方维护。
 type seedTag struct {
-	SpaceID     string `yaml:"space_id"`
-	TagID       string `yaml:"tag_id"`
-	TagName     string `yaml:"tag_name"`
-	Description string `yaml:"description"`
-	Mode        string `yaml:"mode"`
-	Builtin     bool   `yaml:"builtin"`
-	Source      string `yaml:"source"`
-	MarketType  string `yaml:"market_type"`
-	Cron        string `yaml:"cron"`
-	Timezone    string `yaml:"timezone"`
+	SpaceID     string            `yaml:"space_id"`
+	TagID       string            `yaml:"tag_id"`
+	TagName     string            `yaml:"tag_name"`
+	Description string            `yaml:"description"`
+	Mode        string            `yaml:"mode"`
+	Builtin     bool              `yaml:"builtin"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedDataset 描述待初始化的 Dataset 元数据。

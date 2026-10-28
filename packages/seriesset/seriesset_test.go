@@ -8,9 +8,9 @@ import (
 
 func TestCanonicalizeSortsDedupesAndHashes(t *testing.T) {
 	set, err := Canonicalize([]Series{
-		{Provider: "Binance", SourceID: "spot_http", MarketType: "spot", SubjectID: "ETH-USDT", SeriesTag: "x"},
-		{Provider: "binance", SourceID: "spot_http", MarketType: "spot", SubjectID: "BTC-USDT", SeriesTag: "x"},
-		{Provider: " binance ", SourceID: "spot_http", MarketType: "spot", SubjectID: "BTC-USDT", SeriesTag: "x"},
+		{SubjectID: "ETH-USDT", SeriesTag: "X"},
+		{SubjectID: "BTC-USDT", SeriesTag: "x"},
+		{SubjectID: " btc-usdt ", SeriesTag: "x"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -28,8 +28,8 @@ func TestCanonicalizeSortsDedupesAndHashes(t *testing.T) {
 }
 
 func TestVerifySortedRejectsUnsortedAndDuplicates(t *testing.T) {
-	a := Series{Provider: "b", SourceID: "s", MarketType: "m", SubjectID: "A", SeriesTag: ""}
-	b := Series{Provider: "b", SourceID: "s", MarketType: "m", SubjectID: "B", SeriesTag: ""}
+	a := Series{SubjectID: "A", SeriesTag: ""}
+	b := Series{SubjectID: "B", SeriesTag: ""}
 	if _, err := VerifySorted([]Series{b, a}); err == nil {
 		t.Fatal("unsorted input must fail")
 	}
@@ -41,7 +41,7 @@ func TestVerifySortedRejectsUnsortedAndDuplicates(t *testing.T) {
 func TestHashMatchesLegacyDefinition(t *testing.T) {
 	// 与 Collector 原 SeriesSetHash 的定义保持一致：每个键后追加单个 0 字节再做 sha256。
 	h := sha256.New()
-	key := CanonicalKey("p", "s", "m", "A", "t")
+	key := CanonicalKey("A", "t")
 	h.Write([]byte(key))
 	h.Write([]byte{0})
 	if got, want := Hash([]string{key}), hex.EncodeToString(h.Sum(nil)); got != want {

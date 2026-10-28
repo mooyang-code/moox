@@ -10,10 +10,8 @@ import (
 
 func TestRowsBoundaryConversionPreservesSeriesTag(t *testing.T) {
 	in := &localpb.RowsUpserted{
-		SpaceId:     "crypto",
-		DatasetId:   "prices",
-		WriteSource: "factor",
-		WriteKind:   "factor_result",
+		SpaceId:   "crypto",
+		DatasetId: "prices",
 		Rows: []*localpb.RowFieldUpsert{
 			{Key: &localpb.RowKey{SpaceId: "crypto", DatasetId: "prices", Kind: &localpb.RowKey_TimeSeries{TimeSeries: &localpb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-23T00:00:00Z", SeriesTag: "venue:okx"}}}, Fields: []*localpb.FieldValue{{FieldId: "close", Value: &localpb.TypedValue{Value: &localpb.TypedValue_DoubleValue{DoubleValue: 101.25}}}}, Attributes: map[string]*localpb.TypedValue{"source": {Value: &localpb.TypedValue_StringValue{StringValue: "binance"}}}},
 			{Key: &localpb.RowKey{SpaceId: "crypto", DatasetId: "prices", Kind: &localpb.RowKey_Record{Record: &localpb.RecordRowKey{RecordId: "r-1", Version: "v1"}}}, Fields: []*localpb.FieldValue{{FieldId: "payload", Value: &localpb.TypedValue{Value: &localpb.TypedValue_BytesValue{BytesValue: []byte{1, 2, 3}}}}}},
@@ -35,9 +33,6 @@ func TestRowsBoundaryConversionPreservesSeriesTag(t *testing.T) {
 	}
 	if got := shared.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag(); got != "venue:okx" {
 		t.Fatalf("shared series_tag = %q", got)
-	}
-	if shared.GetWriteKind() != "factor_result" || shared.GetWriteSource() != "factor" {
-		t.Fatalf("shared write identity kind=%q source=%q", shared.GetWriteKind(), shared.GetWriteSource())
 	}
 
 	local, err := ToStorageRows(shared)

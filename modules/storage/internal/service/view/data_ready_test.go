@@ -24,7 +24,7 @@ func TestViewDataReadyFenceWaitsUntilRowsApplied(t *testing.T) {
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{
 		{NodeId: "node-a", StoreId: "store-a", Sequence: 7},
 	}
-	err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload)
+	err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload)
 	if !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("unapplied completion should retry until rows are applied, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestViewDataReadyFenceRequiresEveryPartition(t *testing.T) {
 		{NodeId: "node-b", StoreId: "store-b", Sequence: 9},
 	}
 	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 4)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("partial apply should retry, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
@@ -83,7 +83,7 @@ func TestViewDataReadyFenceTimeSeriesViewPublishesOwnScope(t *testing.T) {
 	service.NoteAppliedPosition("quant", "swap-view", "swap-a", "node-a", "store-a", 1)
 	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, 1786032120)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-3", at), payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-3", at), payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.byID) != 2 {
@@ -94,7 +94,7 @@ func TestViewDataReadyFenceTimeSeriesViewPublishesOwnScope(t *testing.T) {
 		ready := item.payload.(*storageeventpb.ViewDataReady)
 		scopes[ready.GetViewId()] = ready.GetVisibleScope()
 	}
-	if scopes["spot-view"] == scopes["swap-view"] || scopes["spot-view"] == payload.GetExpectedScopeRef() {
+	if scopes["spot-view"] == scopes["swap-view"] || scopes["spot-view"] == payload.GetSnapshotRef() {
 		t.Fatalf("time-series views must publish their own visible_scope: %v", scopes)
 	}
 }
@@ -113,7 +113,7 @@ func TestViewDataReadyFenceRebuildDoesNotFalsePublish(t *testing.T) {
 	runtime.active = "source-view-b"
 	runtime.mu.Unlock()
 	service.catalogViews[viewRef{spaceID: "quant", viewID: "source-view"}].ActiveIndexId = "source-view-b"
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-4", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-4", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("rebuild switched index generation must retry, got %v", err)
 	}
 	if len(publisher.attempts) != 0 {
@@ -138,10 +138,10 @@ func TestViewDataReadyFencePublishRetryIsIdempotent(t *testing.T) {
 	at := time.Date(2026, 9, 13, 16, 4, 0, 0, time.UTC)
 	message := periodMessage("prices-ready-5", at)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, 1786032240)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, proto.Clone(payload).(*storageeventpb.CollectorPeriodCompleted)); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, proto.Clone(payload).(*storageeventpb.DatasetPeriodCompleted)); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, proto.Clone(payload).(*storageeventpb.CollectorPeriodCompleted)); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, proto.Clone(payload).(*storageeventpb.DatasetPeriodCompleted)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
@@ -162,7 +162,7 @@ func TestViewDataReadySurvivesRestart(t *testing.T) {
 	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, 1786032300)
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-	if err := first.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-restart", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+	if err := first.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-restart", at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("expected pending ready, got %v", err)
 	}
 	if len(firstPublisher.attempts) != 0 {

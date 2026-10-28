@@ -403,15 +403,8 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	}
 	s.mu.RLock()
 	schema := s.schemas[id]
-	viewKey, mapped := s.indexView[id]
-	var catalogView *pb.View
-	if mapped {
-		catalogView = s.catalogViews[viewKey]
-	}
 	s.mu.RUnlock()
-	if err := validateFactorResultEventColumns(catalogView, schema, datasetID, rows); err != nil {
-		return nil, err
-	}
+	// 事件里 View 还没扩展出来的新列直接裁掉（按 schema 投影），不等待、不补数：见设计 3.4 的系统边界。
 	writes := eventWrites(schema, datasetID, rows)
 	if len(writes) == 0 {
 		return nil, nil
@@ -439,33 +432,6 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return rowsWrittenByIndexKeys(rows, complete, schema.PrimaryDatasetID), nil
-}
-
-func validateFactorResultEventColumns(view *pb.View, schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) error {
-	if view == nil || !strings.EqualFold(strings.TrimSpace(view.GetAttributes()["primary_dataset_role"]), "factor_result") ||
-		datasetID != strings.TrimSpace(schema.PrimaryDatasetID) {
-		return nil
-	}
-	known := make(map[string]struct{}, len(schema.Columns))
-	for _, column := range schema.Columns {
-		if field := viewColumnField(column); field != "" {
-			known[field] = struct{}{}
-		}
-	}
-	for _, row := range rows {
-		if row == nil {
-			continue
-		}
-		for _, field := range row.GetFields() {
-			if field == nil {
-				continue
-			}
-			if _, ok := known[field.GetFieldId()]; !ok {
-				return fmt.Errorf("因子结果字段 %q 不在活动 View 的 schema 中，等 schema 维护完成后重试", field.GetFieldId())
-			}
-		}
-	}
-	return nil
 }
 
 func rowsWrittenByIndexKeys(rows []*pb.RowFieldUpsert, writes []viewindex.RowWrite, primaryDatasetID string) []*pb.RowFieldUpsert {

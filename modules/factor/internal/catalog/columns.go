@@ -6,19 +6,21 @@ import (
 	"github.com/mooyang-code/moox/packages/factorname"
 )
 
-// paramsColumnDisplayName 是 __params 列的展示名（Storage 对非因子输出列要求含汉字）。
+// paramsColumnDisplayName 是 __params 列的展示名。
 const paramsColumnDisplayName = "因子参数"
 
 // paramsColumn 是每个因子结果数据集都有的系统列 __params：JSON，记录每一行各成员实际用的参数。
+// 因子结果列的命名与类型契约由这里保证（Storage 只校验通用规则）：来源都是 custom、不带 origin_id，
+// 输出列名是成员键（单输出）或 成员键__输出名（多输出）、类型 double，__params 恰好一列、类型 json。
 func paramsColumn() storageio.ColumnInfo {
 	return storageio.ColumnInfo{
-		ColumnName: factorname.ParamsColumn, OriginType: storageio.ColumnOriginFactor, OriginID: factorname.ParamsColumn,
+		ColumnName: factorname.ParamsColumn, OriginType: storageio.ColumnOriginCustom,
 		ValueType: storageio.ColumnTypeJSON, Status: storageio.ColumnStatusActive,
 		Attributes: map[string]string{"display_name": paramsColumnDisplayName, "column_kind": factorname.ColumnKindParams},
 	}
 }
 
-// factorOutputColumns 返回成员的全部输出列的元数据（设计 5.3）：展示名等于列名；origin_id 是成员键；
+// factorOutputColumns 返回成员的全部输出列的元数据（设计 5.3）：展示名等于列名；成员键写在 member_key 属性里；
 // 属性记录这一列是什么——因子、成员、类型、输出名、分类、定义哈希，以及固定成员的完整参数（规范 JSON）。
 func factorOutputColumns(member domain.MemberDef) []storageio.ColumnInfo {
 	names := member.OutputColumns()
@@ -40,7 +42,7 @@ func factorOutputColumns(member domain.MemberDef) []storageio.ColumnInfo {
 			attributes["factor_params"] = factorParams
 		}
 		columns = append(columns, storageio.ColumnInfo{
-			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: member.Key,
+			ColumnName: column, OriginType: storageio.ColumnOriginCustom,
 			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
 		})
 	}

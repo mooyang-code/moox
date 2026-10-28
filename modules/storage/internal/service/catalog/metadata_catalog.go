@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,8 +15,6 @@ import (
 )
 
 // 本文件聚合数据源、主体、数据集、字段、因子及其列绑定相关的元数据 CRUD 入口。
-
-const factorDatasetDeleteAppID = "moox-factor"
 
 func (s *Service) CreateDataSource(ctx context.Context, req *pb.CreateDataSourceReq) (*pb.CreateDataSourceRsp, error) {
 	item := req.GetDataSource()
@@ -71,7 +68,7 @@ func (s *Service) GetDataSource(ctx context.Context, req *pb.GetDataSourceReq) (
 }
 
 func (s *Service) ListDataSources(ctx context.Context, req *pb.ListDataSourcesReq) (*pb.ListDataSourcesRsp, error) {
-	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKind(), req.GetMarket(), req.GetKeyword(), req.GetPage())
+	items, page, err := s.metadata.ListDataSources(ctx, req.GetSpaceId(), req.GetKeyword(), req.GetPage())
 	if err != nil {
 		return &pb.ListDataSourcesRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -85,9 +82,6 @@ func (s *Service) UpsertSubject(ctx context.Context, req *pb.UpsertSubjectReq) (
 	}
 	if item.SubjectId == "" {
 		item.SubjectId = defaultID(item.GetName(), "subject")
-	}
-	if item.SubjectType == "" {
-		item.SubjectType = "custom"
 	}
 	created, err := s.metadata.UpsertSubject(ctx, item)
 	if err != nil {
@@ -108,27 +102,17 @@ func (s *Service) GetSubject(ctx context.Context, req *pb.GetSubjectReq) (*pb.Ge
 }
 
 func (s *Service) ListSubjects(ctx context.Context, req *pb.ListSubjectsReq) (*pb.ListSubjectsRsp, error) {
-	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectType(), req.GetMarket(), req.GetSubjectIds(), req.GetKeyword(), req.GetPage())
+	items, page, err := s.metadata.ListSubjects(ctx, req.GetSpaceId(), req.GetSubjectIds(), req.GetKeyword(), req.GetPage())
 	if err != nil {
 		return &pb.ListSubjectsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	return &pb.ListSubjectsRsp{RetInfo: retinfo.Success("success"), Subjects: items, PageResult: page}, nil
 }
 
-func collectorOwnedDataset(item *pb.Dataset) bool {
-	if item == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
-}
-
 func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (*pb.CreateDatasetRsp, error) {
 	item := req.GetDataset()
 	if item == nil || item.GetSpaceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
-	}
-	if strings.TrimSpace(item.GetDataSourceId()) == "" && !collectorOwnedDataset(item) {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("data_source_id is required unless owner_module is collector"))}, nil
 	}
 	if err := validateDatasetDataNodeID(item.GetDataNodeId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -145,9 +129,6 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	}
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := normalizeDatasetRole(item); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	created, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
@@ -170,17 +151,11 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := normalizeDatasetRole(item); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
 	current, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateDatasetDataNodeUpdate(current, item.GetDataNodeId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if err := coremetadata.PreserveDatasetOwnerAttributes(current, item); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
 	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
@@ -198,59 +173,11 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	current, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
-		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if isFactorResultDataset(current) {
-		if err := s.validateFactorDatasetDeleteAuth(req.GetAuthInfo()); err != nil {
-			return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-	} else if collectorOwnedDataset(current) {
-		if err := s.validateCollectorDatasetDeleteAuth(req.GetAuthInfo()); err != nil {
-			return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-		}
-	}
 	if err := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataset")
 	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
-}
-
-func (s *Service) validateFactorDatasetDeleteAuth(auth *pb.AuthInfo) error {
-	if strings.TrimSpace(s.operatorSecret) == "" {
-		return errors.New("storage auth secret is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("factor service auth is required")
-	}
-	if auth.GetAppId() != factorDatasetDeleteAppID {
-		return errors.New("factor service identity required")
-	}
-	expected := serviceAuthKey(s.operatorSecret, factorDatasetDeleteAppID)
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
-		return errors.New("invalid factor service HMAC")
-	}
-	return nil
-}
-
-func (s *Service) validateCollectorDatasetDeleteAuth(auth *pb.AuthInfo) error {
-	if strings.TrimSpace(s.operatorSecret) == "" {
-		return errors.New("storage auth secret is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("collector service auth is required")
-	}
-	appID := strings.TrimSpace(auth.GetAppId())
-	if appID != "moox-collector" {
-		return errors.New("collector service identity required")
-	}
-	expected := serviceAuthKey(s.operatorSecret, appID)
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
-		return errors.New("invalid collector service HMAC")
-	}
-	return nil
 }
 
 func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
@@ -325,17 +252,10 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
-	if err := validateFactorResultDatasetContract(dataset); err != nil {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
 	// An active, locked Dataset is the successful terminal state. Return it
 	// before readiness checks so retries remain idempotent even when the node
-	// is temporarily disabled or unreachable. factor_result View creation is
-	// retried here too because it follows the Dataset activation transaction.
+	// is temporarily disabled or unreachable.
 	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
-		if err := s.ensureFactorResultDefaultView(ctx, dataset); err != nil {
-			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but its default factor View is pending; retry activation")), Dataset: dataset}, nil
-		}
 		// 上一次激活可能已提交事务但缓存发布失败：幂等成功前必须确认元数据缓存已发布
 		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
 			return &pb.ActivateDatasetRsp{
@@ -358,12 +278,6 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	activated, err := s.metadata.CommitDatasetActivation(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetExpectedRevision())
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err), Checks: checks}, nil
-	}
-	if err := s.ensureFactorResultDefaultView(ctx, activated); err != nil {
-		return &pb.ActivateDatasetRsp{
-			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but its default factor View is pending; retry activation")),
-			Dataset: s.withRetention(activated), Checks: checks,
-		}, nil
 	}
 	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
 		return &pb.ActivateDatasetRsp{
@@ -590,24 +504,11 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if item == nil || item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetColumnName() == "" {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and column_name are required"))}, nil
 	}
-	dataset, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
-	if err != nil {
+	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	factorResult := isFactorResultDataset(dataset)
-	factorColumn := factorResult && item.GetOriginType() == pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
-	// 输出列的展示名必须等于列名；参数列 __params 按普通业务列的规则（含中文），展示名叫「因子参数」。
-	factorOutput := factorColumn && factorColumnKind(item.GetAttributes()) != factorColumnKindParams
-	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetColumnName(), item.GetAttributes(), factorOutput); err != nil {
+	if err := validateColumnDisplayName("dataset column display_name", item.GetAttributes()); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if err := validateColumnFill(item.GetAttributes()); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	if factorColumn {
-		if err := validateFactorResultColumn(item); err != nil {
-			return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-		}
 	}
 	created, err := s.metadata.UpsertDatasetColumn(ctx, item)
 	if err != nil {

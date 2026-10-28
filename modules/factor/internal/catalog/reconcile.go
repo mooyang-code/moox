@@ -90,7 +90,7 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		result.DataKind != storageio.DataKindTimeSeries ||
 		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
-		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
+		result.Attributes["source_dataset_id"] != set.SourceDatasetID {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
 	}
 	// The result dataset mirrors its source's subject scope; follow a source
@@ -145,12 +145,15 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorTask
 		known[col.ColumnName] = col
 		missing = append(missing, col)
 	}
-	if len(missing) == 0 {
-		return nil
+	if len(missing) > 0 {
+		sort.Slice(missing, func(i, j int) bool { return missing[i].ColumnName < missing[j].ColumnName })
+		if err := s.metadata.UpsertColumns(ctx, set.SpaceID, set.ResultDatasetID, missing); err != nil {
+			return fmt.Errorf("upsert factor result columns: %w", err)
+		}
 	}
-	sort.Slice(missing, func(i, j int) bool { return missing[i].ColumnName < missing[j].ColumnName })
-	if err := s.metadata.UpsertColumns(ctx, set.SpaceID, set.ResultDatasetID, missing); err != nil {
-		return fmt.Errorf("upsert factor result columns: %w", err)
+	// 默认 View 由 factor-mgr 自己维护：启动对账补齐缺失的 View（已有的由 Storage 按 follow_dataset_columns 跟随加列）。
+	if err := s.metadata.EnsureResultView(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
+		return fmt.Errorf("ensure factor result default View: %w", err)
 	}
 	return nil
 }
@@ -174,7 +177,7 @@ func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
 	if existing.OriginType != wanted.OriginType || existing.OriginID != wanted.OriginID || existing.ValueType != wanted.ValueType {
 		return false
 	}
-	if wanted.OriginType == storageio.ColumnOriginFactor {
+	if wanted.OriginType == storageio.ColumnOriginCustom {
 		return existing.Attributes["column_kind"] == wanted.Attributes["column_kind"] &&
 			existing.Attributes["member_key"] == wanted.Attributes["member_key"] &&
 			existing.Attributes["output_name"] == wanted.Attributes["output_name"] &&

@@ -44,136 +44,70 @@ data_sources:
 - space_id: stockcn
   data_source_id: stockcn
   name: A股聚合行情
-  kind: internal
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: quantclass_stock
   name: QuantClass股票数据
-  kind: file_import
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: eastmoney
   name: 东方财富
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: tdx
   name: 通达信
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: tencent
   name: 腾讯行情
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: sina
   name: 新浪财经
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: baidu
   name: 百度行情
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: ths
   name: 同花顺
-  kind: vendor_api
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockcn
   data_source_id: market_data
   name: MooX统一行情
-  kind: internal
-  market: CN
-  timezone: Asia/Shanghai
-  config_json: '{}'
   status: active
 - space_id: stockhk
   data_source_id: eastmoney
   name: 东方财富
-  kind: vendor_api
-  market: HK
-  timezone: Asia/Hong_Kong
-  config_json: '{}'
   status: active
 - space_id: stockhk
   data_source_id: market_data
   name: MooX统一行情
-  kind: internal
-  market: HK
-  timezone: Asia/Hong_Kong
-  config_json: '{}'
   status: active
 - space_id: stockus
   data_source_id: eastmoney
   name: 东方财富
-  kind: vendor_api
-  market: US
-  timezone: America/New_York
-  config_json: '{}'
   status: active
 - space_id: stockus
   data_source_id: market_data
   name: MooX统一行情
-  kind: internal
-  market: US
-  timezone: America/New_York
-  config_json: '{}'
   status: active
 - space_id: crypto
   data_source_id: crypto
   name: 加密货币聚合行情
-  kind: internal
-  market: crypto
-  timezone: UTC
-  config_json: '{}'
   status: active
 - space_id: crypto
   data_source_id: binance
   name: 加密
-  kind: exchange
-  market: crypto
-  timezone: UTC
-  config_json: '{}'
   status: active
 - space_id: crypto
   data_source_id: okx
   name: 欧易
-  kind: exchange
-  market: crypto
-  timezone: UTC
-  config_json: '{}'
   status: active
 - space_id: mooxsys
   data_source_id: moox_host_agent
   name: MooX Host Agent
-  kind: internal
-  timezone: UTC
   status: active
 
 tags:
@@ -183,30 +117,33 @@ tags:
   description: 币安现货全部标的
   mode: auto
   builtin: true
-  source: binance
-  market_type: spot
-  cron: "13 * * * *"
-  timezone: UTC
+  attributes:
+    market_type: spot
+    sync.source: binance
+    sync.cron: "13 * * * *"
+    sync.timezone: UTC
 - space_id: crypto
   tag_id: binance_swap
   tag_name: 币安永续
   description: 币安 U 本位永续全部标的
   mode: auto
   builtin: true
-  source: binance
-  market_type: swap
-  cron: "17 * * * *"
-  timezone: UTC
+  attributes:
+    market_type: swap
+    sync.source: binance
+    sync.cron: "17 * * * *"
+    sync.timezone: UTC
 - space_id: stockcn
   tag_id: cn_a_share
   tag_name: A股全部股票
   description: 沪深北交易所全部股票
   mode: auto
   builtin: true
-  source: eastmoney
-  market_type: equity
-  cron: "23 * * * *"
-  timezone: Asia/Shanghai
+  attributes:
+    market_type: equity
+    sync.source: eastmoney
+    sync.cron: "23 * * * *"
+    sync.timezone: Asia/Shanghai
 
 datasets:
 - space_id: stockcn

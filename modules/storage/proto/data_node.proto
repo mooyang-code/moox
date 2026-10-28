@@ -28,13 +28,10 @@ message DatasetPeriodExpectation {
   string reservation_id = 9;
 }
 
-// SeriesSnapshotEntry 是快照中一条序列的完整身份，Storage 用它重算 series_hash。
+// SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。
 message SeriesSnapshotEntry {
-  string provider = 1;
-  string source_id = 2;
-  string market_type = 3;
-  string subject_id = 4;
-  string series_tag = 5;
+  string subject_id = 1;
+  string series_tag = 2;
 }
 
 message RegisterSeriesSnapshotReq {
@@ -65,8 +62,6 @@ message CommitTimeSeriesBatchReq {
   string node_id = 2;
   DatasetPeriodExpectation expectation = 3;
   repeated TimeSeriesBatchRow items = 4;
-  string source_event_id = 5;
-  string write_source = 6;
   // 周期不存在时，按生效表与已登记快照自动建立周期所用的允许迟到时间；由 Primary 从数据集属性带入。
   int64 allowed_lateness_seconds = 7;
 }
@@ -90,26 +85,14 @@ message DatasetPeriodFailureResult {
   PeriodFailureDisposition disposition = 2;
 }
 
-message WriteFactorRowsReq {
+// UpsertFieldsReq 写入一个数据集的行，语义同 PrimaryUpsertFieldsReq。
+message UpsertFieldsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
   string dataset_id = 4;
-  string commit_id = 5;
-  repeated RowFieldUpsert rows = 6;
-}
-
-message WriteFactorRowsRsp {
-  common.RetInfo ret_info = 1;
-  uint64 rows_written = 2;
-}
-
-message UpsertFieldsReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  repeated RowFieldUpsert rows = 3;
-  string source_event_id = 4;
-  string write_source = 5;
+  repeated RowFieldUpsert rows = 5;
+  string commit_id = 6;
 }
 
 message UpsertFieldsRsp {
@@ -192,30 +175,16 @@ message RestoreDatasetRowsRsp {
   common.RetInfo ret_info = 1;
 }
 
-message AppendCollectorPeriodCompletedReq {
+message AppendDatasetPeriodCompletedReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
-  CollectorPeriodCompletedMarker marker = 4;
+  DatasetPeriodCompletedMarker marker = 4;
 }
-
-message AppendCollectorPeriodCompletedRsp {
+message AppendDatasetPeriodCompletedRsp {
   common.RetInfo ret_info = 1;
   string event_id = 2;
 }
-
-message AppendFactorPeriodComputedReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  string space_id = 3;
-  FactorPeriodComputedMarker marker = 4;
-}
-
-message AppendFactorPeriodComputedRsp {
-  common.RetInfo ret_info = 1;
-  string event_id = 2;
-}
-
 message AppendDatasetSyncPointMarkerReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
@@ -228,27 +197,24 @@ message AppendDatasetSyncPointMarkerRsp {
   string event_id = 2;
 }
 
-message GetFactorPeriodComputedMarkerReq {
+message GetDatasetPeriodCompletedMarkerReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string space_id = 3;
   string dataset_id = 4;
-  string trigger_event_id = 5;
+  string cause_event_id = 5;
   int64 period_time = 6;
 }
-
-message GetFactorPeriodComputedMarkerRsp {
+message GetDatasetPeriodCompletedMarkerRsp {
   common.RetInfo ret_info = 1;
   bool found = 2;
   string event_id = 3;
-  FactorPeriodComputedMarker marker = 4;
+  DatasetPeriodCompletedMarker marker = 4;
 }
-
 // DataNodeRuntime is the storage RPC surface; DataNode names the metadata entity.
 service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
-  rpc WriteFactorRows(WriteFactorRowsReq) returns (WriteFactorRowsRsp);
 	rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
@@ -271,10 +237,9 @@ service DataNodeDatasetAdminRuntime {
 
 // DataNodeMarkerRuntime 是周期标记写入的独立内部接口，与行读写的 DataNodeRuntime 分开授权与演进。
 service DataNodeMarkerRuntime {
-  rpc AppendCollectorPeriodCompleted(AppendCollectorPeriodCompletedReq) returns (AppendCollectorPeriodCompletedRsp);
-  rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);
+  rpc AppendDatasetPeriodCompleted(AppendDatasetPeriodCompletedReq) returns (AppendDatasetPeriodCompletedRsp);
   rpc AppendDatasetSyncPointMarker(AppendDatasetSyncPointMarkerReq) returns (AppendDatasetSyncPointMarkerRsp);
-  rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);
+  rpc GetDatasetPeriodCompletedMarker(GetDatasetPeriodCompletedMarkerReq) returns (GetDatasetPeriodCompletedMarkerRsp);
 }
 
 // DataNodeRangeRuntime 是 DataNode 的区间读取与计数入口，PrimaryStore 对所有调用方转发到这里。

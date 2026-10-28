@@ -48,7 +48,7 @@ func (r *SnapshotRegistrar) RegisterSeriesSnapshot(ctx context.Context, spaceID,
 	}
 	entries := make([]*storagepb.SeriesSnapshotEntry, len(series))
 	for i, item := range series {
-		entries[i] = &storagepb.SeriesSnapshotEntry{Provider: item.Provider, SourceId: item.SourceID, MarketType: item.MarketType, SubjectId: item.SubjectID, SeriesTag: item.SeriesTag}
+		entries[i] = &storagepb.SeriesSnapshotEntry{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag}
 	}
 	response, err := r.access.RegisterSeriesSnapshot(ctx, &storagepb.PrimaryRegisterSeriesSnapshotReq{
 		AuthInfo: r.auth, SpaceId: spaceID, DatasetId: datasetID, Frequency: frequency, Series: entries, EffectiveFrom: effectiveFrom,

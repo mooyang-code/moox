@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v2"
 )
@@ -55,224 +54,38 @@ type StorageEventBus struct {
 	CredentialFile string `yaml:"credential_file"`
 }
 
-// StorageViewAckWaitMS 是 View 消费分区未配置 ack_wait_ms 时的默认值。
+// StorageViewAckWaitMS 是 View 消费者未配置 ack_wait_ms 时的默认值。
 const StorageViewAckWaitMS = 120000
 
 // StorageView 保存 View 服务消费与批处理配置。
+//
+// View 只有一种消费方式：每个数据集一个动态 durable（view_<数据集哈希>），所有 durable 用同一套全局并发参数
+// （fetch_batch、max_workers、max_ack_pending，默认都是 1：同一数据集内按顺序处理，避免同一行的两次更新先后颠倒）。
 type StorageView struct {
-	BatchSize  int    `yaml:"batch_size"`
-	FetchBatch int    `yaml:"fetch_batch"`
-	MaxWorkers int    `yaml:"max_workers"`
-	Ordering   string `yaml:"ordering"`
+	BatchSize     int `yaml:"batch_size"`
+	FetchBatch    int `yaml:"fetch_batch"`
+	MaxWorkers    int `yaml:"max_workers"`
+	MaxAckPending int `yaml:"max_ack_pending"`
+	AckWaitMS     int `yaml:"ack_wait_ms"`
 	// BackfillPageSize bounds each Primary history page during a View rebuild.
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
-	BackfillPageSize        uint32                         `yaml:"backfill_page_size"`
-	BackfillRequestInterval string                         `yaml:"backfill_request_interval"`
-	RebuildMaxPending       uint64                         `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks       uint32                         `yaml:"rebuild_idle_checks"`
-	ConsumerPartitions      []StorageViewConsumerPartition `yaml:"consumer_partitions"`
+	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
+	BackfillRequestInterval string `yaml:"backfill_request_interval"`
+	RebuildMaxPending       uint64 `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks       uint32 `yaml:"rebuild_idle_checks"`
 	rebuildMaxPendingSet    bool
 	rebuildIdleChecksSet    bool
 }
 
-// StorageViewConsumerRoute identifies the Dataset subjects owned by a
-// consumer partition. A route may use dataset_ids: ["*"] as a metadata
-// inventory expansion point; runtime rendering expands it to concrete
-// datasets and always gives explicit routes precedence.
-type StorageViewConsumerRoute struct {
-	SpaceID    string   `yaml:"space_id"`
-	DatasetIDs []string `yaml:"dataset_ids"`
-}
-
-// StorageViewConsumerPartition owns one independent JetStream durable and
-// its delivery budget. A partition may contain several explicit routes, but a
-// Dataset route must occur in exactly one partition.
-type StorageViewConsumerPartition struct {
-	ID               string                     `yaml:"id"`
-	Durable          string                     `yaml:"durable"`
-	SpaceID          string                     `yaml:"space_id"` // shorthand for one route
-	DatasetIDs       []string                   `yaml:"dataset_ids"`
-	Routes           []StorageViewConsumerRoute `yaml:"routes"`
-	AckWaitMS        int                        `yaml:"ack_wait_ms"`
-	FetchBatch       int                        `yaml:"fetch_batch"`
-	MaxWorkers       int                        `yaml:"max_workers"`
-	MaxAckPending    int                        `yaml:"max_ack_pending"`
-	Ordering         string                     `yaml:"ordering"`
-	DeliverPolicy    string                     `yaml:"deliver_policy"`
-	MaxRetryAttempts int                        `yaml:"max_retry_attempts"`
-}
-
-type StorageViewConsumerDataset struct {
-	SpaceID   string
-	DatasetID string
-}
-
-func (p StorageViewConsumerPartition) normalizedRoutes() []StorageViewConsumerRoute {
-	routes := make([]StorageViewConsumerRoute, 0, len(p.Routes)+1)
-	if strings.TrimSpace(p.SpaceID) != "" || len(p.DatasetIDs) != 0 {
-		routes = append(routes, StorageViewConsumerRoute{SpaceID: p.SpaceID, DatasetIDs: p.DatasetIDs})
+// ValidateConsumer 校验全局消费参数：都为正数，且单次拉取数不超过未确认上限。
+func (v StorageView) ValidateConsumer() error {
+	if v.FetchBatch < 1 || v.MaxWorkers < 1 || v.MaxAckPending < 1 || v.AckWaitMS < 1 {
+		return errors.New("storage view fetch_batch, max_workers, max_ack_pending and ack_wait_ms must be positive")
 	}
-	routes = append(routes, p.Routes...)
-	return routes
-}
-
-func (p StorageViewConsumerPartition) Datasets() []StorageViewConsumerDataset {
-	var out []StorageViewConsumerDataset
-	for _, route := range p.normalizedRoutes() {
-		spaceID := strings.TrimSpace(route.SpaceID)
-		for _, datasetID := range route.DatasetIDs {
-			out = append(out, StorageViewConsumerDataset{SpaceID: spaceID, DatasetID: strings.TrimSpace(datasetID)})
-		}
-	}
-	return out
-}
-
-func (v *StorageView) applyConsumerPartitionDefaults() {
-	if len(v.ConsumerPartitions) == 0 {
-		v.ConsumerPartitions = []StorageViewConsumerPartition{
-			// Factor result Datasets are bound dynamically, one durable per result;
-			// this partition only supplies their serialized delivery template.
-			{ID: "factor", Durable: events.StorageViewFactorConsumer, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
-			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
-				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
-				{SpaceID: "crypto", DatasetIDs: []string{"*"}},
-				{SpaceID: "stockcn", DatasetIDs: []string{"*"}},
-				{SpaceID: "stockhk", DatasetIDs: []string{"*"}},
-				{SpaceID: "stockus", DatasetIDs: []string{"*"}},
-			}, FetchBatch: 4, MaxWorkers: 2, MaxAckPending: 16},
-		}
-	}
-	for i := range v.ConsumerPartitions {
-		p := &v.ConsumerPartitions[i]
-		p.ID = strings.TrimSpace(p.ID)
-		p.Durable = strings.TrimSpace(p.Durable)
-		if p.AckWaitMS <= 0 {
-			p.AckWaitMS = StorageViewAckWaitMS
-		}
-		if p.FetchBatch <= 0 {
-			p.FetchBatch = 1
-		}
-		if p.MaxWorkers <= 0 {
-			p.MaxWorkers = 1
-		}
-		if p.MaxAckPending <= 0 {
-			p.MaxAckPending = p.FetchBatch
-		}
-		if strings.TrimSpace(p.Ordering) == "" {
-			p.Ordering = "dataset"
-		}
-		p.Ordering = strings.ToLower(strings.TrimSpace(p.Ordering))
-		if strings.TrimSpace(p.DeliverPolicy) == "" {
-			p.DeliverPolicy = "new"
-		}
-		p.DeliverPolicy = strings.ToLower(strings.TrimSpace(p.DeliverPolicy))
-		if p.MaxRetryAttempts == 0 {
-			p.MaxRetryAttempts = -1
-		}
-	}
-}
-
-// ValidateConsumerPartitions validates partition topology. When managed is
-// non-nil it additionally requires an exact one-to-one assignment with the
-// View source Dataset inventory.
-func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDataset) error {
-	if len(v.ConsumerPartitions) == 0 {
-		return errors.New("storage view consumer_partitions must not be empty")
-	}
-	partitionIDs := make(map[string]struct{}, len(v.ConsumerPartitions))
-	durables := make(map[string]struct{}, len(v.ConsumerPartitions))
-	routes := make(map[string]string)
-	for _, partition := range v.ConsumerPartitions {
-		id := strings.TrimSpace(partition.ID)
-		durable := strings.TrimSpace(partition.Durable)
-		if id == "" || durable == "" {
-			return errors.New("storage view consumer partition id and durable are required")
-		}
-		if !validConsumerName(id) || !validConsumerName(durable) {
-			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
-		}
-		if durable != events.StorageViewFactorConsumer && durable != events.StorageViewMiscConsumer {
-			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
-		}
-		if _, exists := partitionIDs[id]; exists {
-			return fmt.Errorf("storage view consumer partition %q is duplicated", id)
-		}
-		if _, exists := durables[durable]; exists {
-			return fmt.Errorf("storage view durable %q is duplicated", durable)
-		}
-		partitionIDs[id] = struct{}{}
-		durables[durable] = struct{}{}
-		if partition.FetchBatch < 1 || partition.MaxWorkers < 1 || partition.MaxAckPending < 1 || partition.AckWaitMS < 1 {
-			return fmt.Errorf("storage view consumer partition %q has non-positive delivery settings", id)
-		}
-		if durable == events.StorageViewFactorConsumer && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
-			return fmt.Errorf("storage view factor durable %q must keep fetch_batch/max_workers/max_ack_pending at 1/1/1", durable)
-		}
-		if partition.FetchBatch > partition.MaxAckPending {
-			return fmt.Errorf("storage view consumer partition %q fetch_batch %d exceeds max_ack_pending %d", id, partition.FetchBatch, partition.MaxAckPending)
-		}
-		if partition.Ordering != "" && strings.ToLower(strings.TrimSpace(partition.Ordering)) != "dataset" {
-			return fmt.Errorf("storage view consumer partition %q ordering must be dataset", id)
-		}
-		policy := strings.ToLower(strings.TrimSpace(partition.DeliverPolicy))
-		if policy != "" && policy != "all" && policy != "new" {
-			return fmt.Errorf("storage view consumer partition %q deliver_policy %q is unsupported", id, partition.DeliverPolicy)
-		}
-		if partition.MaxRetryAttempts < -1 {
-			return fmt.Errorf("storage view consumer partition %q max_retry_attempts must be -1 or positive", id)
-		}
-		datasets := partition.Datasets()
-		if len(datasets) == 0 && durable != events.StorageViewFactorConsumer {
-			return fmt.Errorf("storage view consumer partition %q has no Dataset routes", id)
-		}
-		for _, dataset := range datasets {
-			if dataset.SpaceID == "" || dataset.DatasetID == "" {
-				return fmt.Errorf("storage view consumer partition %q contains an incomplete Dataset route", id)
-			}
-			if dataset.DatasetID == "*" {
-				continue
-			}
-			key := dataset.SpaceID + "\x00" + dataset.DatasetID
-			if previous, exists := routes[key]; exists {
-				return fmt.Errorf("Dataset %s/%s is assigned to partitions %q and %q", dataset.SpaceID, dataset.DatasetID, previous, id)
-			}
-			routes[key] = id
-		}
-	}
-	if managed != nil {
-		for _, dataset := range managed {
-			key := strings.TrimSpace(dataset.SpaceID) + "\x00" + strings.TrimSpace(dataset.DatasetID)
-			if _, exists := routes[key]; !exists {
-				if _, wildcard := routes[strings.TrimSpace(dataset.SpaceID)+"\x00*"]; wildcard {
-					continue
-				}
-				return fmt.Errorf("managed Dataset %s/%s is not assigned to a consumer partition", dataset.SpaceID, dataset.DatasetID)
-			}
-		}
-		// Configuration is intentionally an allow-list for Views that may be
-		// created later (for example a Factor result Dataset). Only the active
-		// metadata inventory must be covered; rejecting configured-but-not-yet
-		// created routes would make a fresh deployment unable to start before
-		// those optional Views exist.
-	}
-	// 固定 durable 是拓扑契约，不是可选的调优项：factor 只提供因子结果的串行投递模板，
-	// misc 承接其余数据集；缺一个就会让对应数据集无人消费。
-	if len(durables) != 2 {
-		return fmt.Errorf("storage view consumer topology must define exactly two durables (factor, misc); got %d", len(durables))
+	if v.FetchBatch > v.MaxAckPending {
+		return fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", v.FetchBatch, v.MaxAckPending)
 	}
 	return nil
-}
-
-func validConsumerName(value string) bool {
-	if value == "" || len(value) > 128 {
-		return false
-	}
-	for _, r := range value {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
-			return false
-		}
-	}
-	return true
 }
 
 func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
@@ -344,8 +157,11 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.MaxWorkers <= 0 {
 		c.View.MaxWorkers = 1
 	}
-	if c.View.Ordering == "" {
-		c.View.Ordering = "dataset"
+	if c.View.MaxAckPending <= 0 {
+		c.View.MaxAckPending = c.View.FetchBatch
+	}
+	if c.View.AckWaitMS <= 0 {
+		c.View.AckWaitMS = StorageViewAckWaitMS
 	}
 	if c.View.BackfillPageSize == 0 {
 		c.View.BackfillPageSize = 2000
@@ -359,7 +175,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	if c.View.RebuildIdleChecks == 0 && !c.View.rebuildIdleChecksSet {
 		c.View.RebuildIdleChecks = 3
 	}
-	c.View.applyConsumerPartitionDefaults()
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"
 	}

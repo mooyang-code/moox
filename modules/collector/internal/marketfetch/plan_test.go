@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/stretchr/testify/require"
 )
@@ -103,7 +102,7 @@ func TestPlanBuildRequestsDueFrequenciesAndTargets(t *testing.T) {
 	require.Len(t, minute.Request.Targets, 4, "每个目标数据集各一条写入目标")
 	require.Equal(t, 15*time.Second, minute.StorageDeadline.Sub(scheduled))
 	require.Equal(t, 1, int(minute.Request.Items[0].BarLimit))
-	require.True(t, minute.Request.WriteIDByContent)
+	require.True(t, minute.Request.PlanRequest)
 	require.NoError(t, minute.Request.validate())
 	identities := map[string]string{}
 	for _, target := range minute.Request.Targets {
@@ -152,19 +151,6 @@ func TestPlanExchangeSymbol(t *testing.T) {
 	plan.SymbolExceptions = map[string]string{"1000PEPE-USDT": "1000PEPEUSDT"}
 	require.Equal(t, "BTCUSDT", plan.ExchangeSymbol("BTC-USDT"))
 	require.Equal(t, "1000PEPEUSDT", plan.ExchangeSymbol("1000PEPE-USDT"))
-}
-
-func TestWriteEventIDFollowsContent(t *testing.T) {
-	req := Request{BatchID: "fn|1m|100", WriteIDByContent: true}
-	rowA := &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "A", Freq: "1m", DataTime: "2026-10-11T12:00:00Z"}}}}
-	rowB := &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{SubjectId: "B", Freq: "1m", DataTime: "2026-10-11T12:00:00Z"}}}}
-	one := writeEventID(req, []*storagepb.RowFieldUpsert{rowA})
-	require.Equal(t, one, writeEventID(req, []*storagepb.RowFieldUpsert{rowA}), "同一内容的重试复用同一个写入 ID")
-	two := writeEventID(req, []*storagepb.RowFieldUpsert{rowA, rowB})
-	require.NotEqual(t, one, two, "内容变化（重复触发时多拿到了标的）必须换新写入 ID")
-	require.Equal(t, two, writeEventID(req, []*storagepb.RowFieldUpsert{rowB, rowA}), "与行顺序无关")
-	req.WriteIDByContent = false
-	require.Equal(t, "fn|1m|100", writeEventID(req, []*storagepb.RowFieldUpsert{rowA}), "旧路径的写入 ID 不变")
 }
 
 func TestFrequencyDueWeeklyUsesMonday(t *testing.T) {

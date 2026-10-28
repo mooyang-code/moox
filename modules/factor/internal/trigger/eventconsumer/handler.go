@@ -118,16 +118,16 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("factor period delivery is nil")}
 	}
 	if delivery.DecodeError != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("decode collector period event: %w", delivery.DecodeError)}
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("decode dataset period event: %w", delivery.DecodeError)}
 	}
-	message, payload, err := events.DecodeCollectorPeriodCompletedWithContentType(
+	message, payload, err := events.DecodeDatasetPeriodCompletedWithContentType(
 		h.registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType,
 	)
 	if err != nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("reject collector period event: %w", err)}
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("reject dataset period event: %w", err)}
 	}
 	if message == nil || payload == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("collector period event is empty")}
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("dataset period event is empty")}
 	}
 
 	event := periodEvent{
@@ -160,7 +160,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 					return pipeline.Outcome{}, nil
 				}
 				if set.TaskID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
-					return pipeline.Outcome{}, fmt.Errorf("enabled factor task identity does not match collector event")
+					return pipeline.Outcome{}, fmt.Errorf("enabled factor task identity does not match period event")
 				}
 				if h.gate != nil && !h.gate(set.TaskID) {
 					return pipeline.Outcome{}, nil

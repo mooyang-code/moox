@@ -391,7 +391,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
-			OriginType: "FACTOR", OriginID: "bias", ValueType: "DOUBLE",
+			OriginType: "CUSTOM", ValueType: "DOUBLE",
 		}},
 	}
 	require.NoError(t, validateSetupMetadataDependencies(seed))

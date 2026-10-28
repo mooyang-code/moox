@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -20,8 +19,7 @@ var ErrDatasetPeriodWriteUnconfirmed = errors.New("dataset period write was not 
 
 type BatchStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
-	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
-	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
+	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow) error
 }
 
 type periodStorageAccess interface {
@@ -33,7 +31,7 @@ type periodStorageAccess interface {
 // does not need to import a particular exchange package.
 type ResampleStorage interface {
 	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
-	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
 type ResampleViewSyncWaiter interface {
@@ -47,14 +45,13 @@ type ResampleMetadataClient struct {
 }
 
 type storageWriter struct {
-	access      storageio.Primary
-	period      periodStorageAccess
-	metadata    storageio.Metadata
-	authInfo    *storagepb.AuthInfo
-	writeSource string
+	access   storageio.Primary
+	period   periodStorageAccess
+	metadata storageio.Metadata
+	authInfo *storagepb.AuthInfo
 }
 
-func newGatewayWriter(gateway gatewayclient.Invoker, instType, writeSource string) (*storageWriter, error) {
+func newGatewayWriter(gateway gatewayclient.Invoker, instType string) (*storageWriter, error) {
 	if gateway == nil {
 		return nil, fmt.Errorf("collector gateway client is required")
 	}
@@ -63,19 +60,19 @@ func newGatewayWriter(gateway gatewayclient.Invoker, instType, writeSource strin
 		return nil, err
 	}
 	adapter := storageio.NewGatewayClient(gateway)
-	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth, writeSource: strings.TrimSpace(writeSource)}, nil
+	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth}, nil
 }
 
-func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType, writeSource string) (BatchStorage, error) {
-	return newGatewayWriter(gateway, instType, writeSource)
+func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType string) (BatchStorage, error) {
+	return newGatewayWriter(gateway, instType)
 }
 
-func NewGatewayResampleStorage(gateway gatewayclient.Invoker, instType, writeSource string) (ResampleStorage, error) {
-	return newGatewayWriter(gateway, instType, writeSource)
+func NewGatewayResampleStorage(gateway gatewayclient.Invoker, instType string) (ResampleStorage, error) {
+	return newGatewayWriter(gateway, instType)
 }
 
 func NewGatewayResampleMetadataClient(gateway gatewayclient.Invoker, instType string) (*ResampleMetadataClient, error) {
-	writer, err := newGatewayWriter(gateway, instType, "")
+	writer, err := newGatewayWriter(gateway, instType)
 	if err != nil {
 		return nil, err
 	}
@@ -89,16 +86,32 @@ func (w *storageWriter) runRPC(ctx context.Context, operation func() error) erro
 	return operation()
 }
 
+// UpsertFields 写入一个数据集的行：Storage 要求一次请求只写一个数据集，数据集取自第一行，其余行必须一致。
 func (w *storageWriter) UpsertFields(ctx context.Context, rows []*storagepb.RowFieldUpsert) error {
-	return w.UpsertFieldsWithSource(ctx, rows, "")
+	if len(rows) == 0 || rows[0].GetKey() == nil {
+		return fmt.Errorf("write time-series rows: rows are required")
+	}
+	spaceID, datasetID := rows[0].GetKey().GetSpaceId(), rows[0].GetKey().GetDatasetId()
+	for _, row := range rows {
+		if row.GetKey().GetSpaceId() != spaceID || row.GetKey().GetDatasetId() != datasetID {
+			return fmt.Errorf("write time-series rows: rows span more than one dataset")
+		}
+	}
+	return w.runRPC(ctx, func() error {
+		response, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.authInfo, SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
+		if err != nil {
+			return fmt.Errorf("write time-series rows: %w", err)
+		}
+		return ensureStorageOK("write time-series rows", response.GetRetInfo())
+	})
 }
 
-func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, items []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
+func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *storagepb.DatasetPeriodExpectation, items []*storagepb.TimeSeriesBatchRow) error {
 	if expectation == nil || len(items) == 0 {
 		return fmt.Errorf("commit time-series batch: expectation and items are required")
 	}
 	return w.runRPC(ctx, func() error {
-		response, err := w.period.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: w.authInfo, Expectation: expectation, Items: items, SourceEventId: sourceEventID, WriteSource: w.writeSource})
+		response, err := w.period.CommitTimeSeriesBatch(ctx, &storagepb.PrimaryCommitTimeSeriesBatchReq{AuthInfo: w.authInfo, Expectation: expectation, Items: items})
 		if err != nil {
 			return fmt.Errorf("commit time-series batch: %w", err)
 		}
@@ -112,49 +125,6 @@ func (w *storageWriter) CommitTimeSeriesBatch(ctx context.Context, expectation *
 			return fmt.Errorf("%w: %v", ErrDatasetPeriodWriteUnconfirmed, err)
 		}
 		return nil
-	})
-}
-
-func (w *storageWriter) UpsertFieldsWithSource(ctx context.Context, rows []*storagepb.RowFieldUpsert, sourceEventID string) error {
-	return w.runRPC(ctx, func() error {
-		response, err := w.access.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{AuthInfo: w.authInfo, Rows: rows, SourceEventId: sourceEventID, WriteSource: w.writeSource})
-		if err != nil {
-			return fmt.Errorf("write time-series rows: %w", err)
-		}
-		return ensureStorageOK("write time-series rows", response.GetRetInfo())
-	})
-}
-
-// ReportCollectorPeriodCompleted appends the terminal collector-period marker
-// that Storage View uses to publish ViewDataReady.
-func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spaceID string, payload *storageeventpb.CollectorPeriodCompleted) error {
-	if w == nil || w.access == nil {
-		return fmt.Errorf("report collector period completed: storage client is required")
-	}
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID == "" || payload == nil || strings.TrimSpace(payload.GetDatasetId()) == "" || strings.TrimSpace(payload.GetFrequency()) == "" || payload.GetPeriodTime() <= 0 {
-		return fmt.Errorf("report collector period completed: space_id, dataset, frequency, period_time and payload are required")
-	}
-	positions := make([]*storagepb.CommittedPosition, 0, len(payload.GetCommittedPositions()))
-	for _, position := range payload.GetCommittedPositions() {
-		if position == nil {
-			continue
-		}
-		positions = append(positions, &storagepb.CommittedPosition{NodeId: position.GetNodeId(), StoreId: position.GetStoreId(), Sequence: position.GetSequence()})
-	}
-	marker := &storagepb.CollectorPeriodCompletedMarker{
-		DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
-		Status: payload.GetStatus(), BatchId: payload.GetBatchId(), ConfigSnapshotId: payload.GetConfigSnapshotId(),
-		ExpectedScopeRef: payload.GetExpectedScopeRef(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
-		FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CommittedPositions: positions,
-		CollectedAt: payload.GetCollectedAt(),
-	}
-	return w.runRPC(ctx, func() error {
-		response, err := w.access.ReportCollectorPeriodCompleted(ctx, &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: w.authInfo, SpaceId: spaceID, Marker: marker})
-		if err != nil {
-			return fmt.Errorf("report collector period completed: %w", err)
-		}
-		return ensureStorageOK("report collector period completed", response.GetRetInfo())
 	})
 }
 

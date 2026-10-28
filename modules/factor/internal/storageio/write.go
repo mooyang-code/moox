@@ -69,7 +69,7 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID, commitID str
 			Fields: fields,
 		})
 	}
-	rsp, err := c.primary.WriteFactorRows(ctx, &storagepb.PrimaryWriteFactorRowsReq{
+	rsp, err := c.primary.UpsertFields(ctx, &storagepb.PrimaryUpsertFieldsReq{
 		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, CommitId: commitID, Rows: upserts,
 	})
 	if err != nil {
@@ -81,8 +81,8 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID, commitID str
 	if err := responseError("write factor rows", rsp.GetRetInfo()); err != nil {
 		return err
 	}
-	if rsp.GetRowsWritten() != uint64(len(rows)) {
-		return fmt.Errorf("%w: Storage wrote %d of %d factor rows", ErrInfra, rsp.GetRowsWritten(), len(rows))
+	if len(rsp.GetKeys()) != len(rows) {
+		return fmt.Errorf("%w: Storage wrote %d of %d factor rows", ErrInfra, len(rsp.GetKeys()), len(rows))
 	}
 	return nil
 }

@@ -188,7 +188,7 @@ async function mockGateway(route: Route) {
       json: ok({
         columns: [
           { column_name: "close", origin_type: "field", attributes: { display_name: "收盘价", field_kind: "base" } },
-          { column_name: "bias5", origin_type: "factor", attributes: { display_name: "乖离", column_kind: "output" } }
+          { column_name: "bias5", origin_type: "custom", attributes: { display_name: "乖离", column_kind: "output" } }
         ],
         page_result: { page: 1, size: 20, total: 2, has_more: false }
       })

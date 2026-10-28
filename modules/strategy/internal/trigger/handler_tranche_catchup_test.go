@@ -6,7 +6,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/packages/events"
 )
 
 const trancheHoldDSL = `name: tranche_demo
@@ -36,7 +35,7 @@ portfolio:
 
 func newTrancheHarness(t *testing.T) *harness {
 	t.Helper()
-	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
+	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
 	h := newHarnessWith(t, trancheHoldDSL, nil, resolved)
 	// 每期领先的标的轮换：不同周期开不同的仓，漏掉一期就会让持仓记录与持有计数对不上。
 	leaders := []string{"A", "B", "C", "A", "B"}

@@ -23,7 +23,7 @@ type fakeTriggers struct {
 	periodErrs int
 }
 
-func (f *fakeTriggers) OnPeriod(_ context.Context, spaceID string, payload *storagepb.CollectorPeriodCompleted) error {
+func (f *fakeTriggers) OnPeriod(_ context.Context, spaceID string, payload *storagepb.DatasetPeriodCompleted) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.periodErrs > 0 {
@@ -50,7 +50,7 @@ func (f *fakeTriggers) counts() (int, int) {
 func startBus(t *testing.T) *testkit.Server {
 	t.Helper()
 	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.event.storage.collector.period.completed.v1.>"}, Storage: nats.MemoryStorage})
+	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.event.storage.dataset.period.completed.v1.>"}, Storage: nats.MemoryStorage})
 	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_COLLECTOR", Subjects: []string{"moox.event.collector.kline.backfilled.v1.>"}, Storage: nats.MemoryStorage})
 	return server
 }
@@ -78,10 +78,9 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	publisher := publisherFor(t, server, registry)
 
 	period := time.Date(2026, 10, 21, 10, 10, 0, 0, time.UTC)
-	_, err = publisher.Publish(context.Background(), events.CollectorPeriodCompleted, &storagepb.CollectorPeriodCompleted{
+	_, err = publisher.Publish(context.Background(), events.DatasetPeriodCompleted, &storagepb.DatasetPeriodCompleted{
 		DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
-		UniverseSubjectIds: []string{"BTC"}, CollectedAt: timestamppb.New(period.Add(6 * time.Minute)),
-		BatchId: "batch-1", ConfigSnapshotId: "snapshot", ExpectedScopeRef: "scope",
+		UniverseSubjectIds: []string{"BTC"}, Source: "ledger", SnapshotRef: "snapshot", CompletedAt: timestamppb.New(period.Add(6 * time.Minute)),
 	}, events.PublishOptions{EventID: "evt-period", OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 	confirmed := period.Add(time.Hour)

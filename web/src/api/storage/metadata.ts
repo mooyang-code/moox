@@ -35,7 +35,7 @@ export async function updateDataSource(data_source: DataSource) {
   return rsp.data_source;
 }
 
-export function listDataSources(params: { space_id: string; kind?: string; status?: string; keyword?: string; page?: Page }) {
+export function listDataSources(params: { space_id: string; keyword?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { data_sources: DataSource[]; page_result: PageResult }>("ListDataSources", params);
 }
 
@@ -44,14 +44,8 @@ export async function upsertSubject(subject: Subject) {
   return rsp.subject;
 }
 
-export function listSubjects(params: {
-  space_id: string;
-  subject_type?: string;
-  market?: string;
-  status?: string;
-  keyword?: string;
-  page?: Page;
-}) {
+/** 类型、市场等业务筛选不在 Storage 侧做；keyword 只匹配对象 ID 与名称。 */
+export function listSubjects(params: { space_id: string; subject_ids?: string[]; keyword?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { subjects: Subject[]; page_result: PageResult }>("ListSubjects", params);
 }
 

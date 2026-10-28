@@ -8,7 +8,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
-	"github.com/mooyang-code/moox/packages/events"
 )
 
 const tunedDSL = `name: tuned
@@ -29,7 +28,7 @@ portfolio:
 
 func tunedResolved() input.Resolved {
 	return input.Resolved{
-		CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true,
+		ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true,
 		Columns:      map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f__var", FactorID: "f", MemberKind: "var", DefinitionHash: "h1"}},
 		Factors:      map[string]string{"f__var": "h1|var"},
 		ViewColumns:  []string{"close", "m"},

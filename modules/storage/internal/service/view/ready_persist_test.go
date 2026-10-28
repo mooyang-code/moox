@@ -57,7 +57,7 @@ func TestViewDataReadyPersistsOncePerFlush(t *testing.T) {
 		at := time.Date(2026, 9, 13, 16, minute, 0, 0, time.UTC)
 		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: uint64(12 + minute)}}
-		_ = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload)
+		_ = service.HandleDatasetPeriodCompleted(context.Background(), periodMessage(id, at), payload)
 	}
 	service.pendingReadyMu.Lock()
 	first := service.pendingReady[0].opts.EventID

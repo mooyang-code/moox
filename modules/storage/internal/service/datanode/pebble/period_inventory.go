@@ -93,9 +93,7 @@ type periodInventoryRecord struct {
 type periodInventoryMarker struct {
 	raw                []byte
 	status             string
-	batchID            string
-	configSnapshotID   string
-	expectedScopeRef   string
+	snapshotRef        string
 	universeSubjectIDs []string
 	failedSubjects     []string
 	eventIDMatches     bool
@@ -435,7 +433,7 @@ func scanPeriodMarkerLinks(db *cpebble.DB, scope PeriodLedgerScope, records map[
 				return fmt.Errorf("decode %s event: %w", scan.field, err)
 			}
 			linkedMarker, hasLinkedMarker := markerRecordsByEventID[message.GetEventId()]
-			if scan.field == "outbox" && hasLinkedMarker && message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+			if scan.field == "outbox" && hasLinkedMarker && message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 				linkedMarker.record.entry.OutboxCount++
 				linkedMarker.record.entry.IntegrityErrors = append(linkedMarker.record.entry.IntegrityErrors, "outbox event does not match marker record")
 				if !outboxKeyValid {
@@ -443,29 +441,31 @@ func scanPeriodMarkerLinks(db *cpebble.DB, scope PeriodLedgerScope, records map[
 				}
 				continue
 			}
-			if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+			if message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 				continue
 			}
-			subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, message.GetSpaceId(), message.GetSubjectId())
+			subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, message.GetSpaceId(), message.GetSubjectId())
 			if err != nil {
 				_ = iter.Close()
 				return errors.New("render period marker subject: invalid event identity")
 			}
-			_, marker, err := events.DecodeCollectorPeriodCompleted(registry, iter.Value(), subject, message.GetEventId())
+			_, marker, err := events.DecodeDatasetPeriodCompleted(registry, iter.Value(), subject, message.GetEventId())
 			if err != nil {
 				_ = iter.Close()
 				return fmt.Errorf("validate %s period marker: invalid event payload", scan.field)
 			}
+			if marker.GetSource() != "ledger" {
+				continue // 写入方报告的完成（producer）不在序列账本的对账范围内
+			}
 			base := periodBase(message.GetSpaceId(), marker.GetDatasetId(), marker.GetFrequency(), marker.GetPeriodTime())
 			inventoryMarker := periodInventoryMarker{
-				raw: append([]byte(nil), iter.Value()...), status: marker.GetStatus(), batchID: marker.GetBatchId(),
-				configSnapshotID: marker.GetConfigSnapshotId(), expectedScopeRef: marker.GetExpectedScopeRef(),
+				raw: append([]byte(nil), iter.Value()...), status: marker.GetStatus(), snapshotRef: marker.GetSnapshotRef(),
 				universeSubjectIDs: append([]string(nil), marker.GetUniverseSubjectIds()...),
 				failedSubjects:     append([]string(nil), marker.GetFailedSubjects()...),
 			}
-			expectedEventID, idErr := deterministicCollectorPeriodEventID(message.GetSpaceId(), marker)
+			expectedEventID, idErr := deterministicLedgerPeriodEventID(message.GetSpaceId(), marker)
 			inventoryMarker.eventIDMatches = idErr == nil && expectedEventID == message.GetEventId()
-			inventoryMarker.timestampMatches = message.GetOccurredAt() != nil && marker.GetCollectedAt() != nil && message.GetOccurredAt().AsTime().Equal(marker.GetCollectedAt().AsTime())
+			inventoryMarker.timestampMatches = message.GetOccurredAt() != nil && marker.GetCompletedAt() != nil && message.GetOccurredAt().AsTime().Equal(marker.GetCompletedAt().AsTime())
 			if scan.field == "outbox" && hasLinkedMarker {
 				linkedMarker.record.entry.OutboxCount++
 				linkedMarker.record.outboxIDs[message.GetEventId()] = inventoryMarker
@@ -493,10 +493,7 @@ func scanPeriodMarkerLinks(db *cpebble.DB, scope PeriodLedgerScope, records map[
 					record.entry.IntegrityErrors = append(record.entry.IntegrityErrors, "marker event_id does not match deterministic payload hash")
 				}
 				if !inventoryMarker.timestampMatches {
-					record.entry.IntegrityErrors = append(record.entry.IntegrityErrors, "marker occurred_at does not match collected_at")
-				}
-				if marker.GetBatchId() != periodCompletionID(base) {
-					record.entry.IntegrityErrors = append(record.entry.IntegrityErrors, scan.field+" marker has unexpected batch_id")
+					record.entry.IntegrityErrors = append(record.entry.IntegrityErrors, "marker occurred_at does not match completed_at")
 				}
 				if scan.field == "marker_record" {
 					record.entry.MarkerRecordCount++
@@ -652,11 +649,8 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 		if marker.status != entry.Status {
 			entry.IntegrityErrors = append(entry.IntegrityErrors, "marker record status does not match period status")
 		}
-		if marker.batchID != periodCompletionID(periodBase(entry.SpaceID, entry.DatasetID, entry.Frequency, entry.PeriodTime)) {
-			entry.IntegrityErrors = append(entry.IntegrityErrors, "marker record has unexpected batch_id")
-		}
-		if marker.configSnapshotID != entry.SeriesHash || marker.expectedScopeRef != entry.SeriesHash {
-			entry.IntegrityErrors = append(entry.IntegrityErrors, "marker config_snapshot_id or expected_scope_ref does not match series_hash")
+		if marker.snapshotRef != entry.SeriesHash {
+			entry.IntegrityErrors = append(entry.IntegrityErrors, "marker snapshot_ref does not match series_hash")
 		}
 		if markerSnapshotUsable {
 			if !equalStrings(marker.universeSubjectIDs, normalizedIDs(markerUniverse)) {
@@ -688,7 +682,7 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 	}
 }
 
-func deterministicCollectorPeriodEventID(spaceID string, marker *storageeventpb.CollectorPeriodCompleted) (string, error) {
+func deterministicLedgerPeriodEventID(spaceID string, marker *storageeventpb.DatasetPeriodCompleted) (string, error) {
 	positions := make([]*storagegen.CommittedPosition, 0, len(marker.GetCommittedPositions()))
 	for _, position := range marker.GetCommittedPositions() {
 		if position == nil {
@@ -696,11 +690,10 @@ func deterministicCollectorPeriodEventID(spaceID string, marker *storageeventpb.
 		}
 		positions = append(positions, &storagegen.CommittedPosition{NodeId: position.GetNodeId(), StoreId: position.GetStoreId(), Sequence: position.GetSequence()})
 	}
-	_, eventID, err := BuildCollectorPeriodCompletedMessage(spaceID, &storagegen.CollectorPeriodCompletedMarker{
-		DatasetId: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
-		Status: marker.GetStatus(), BatchId: marker.GetBatchId(), ConfigSnapshotId: marker.GetConfigSnapshotId(),
-		ExpectedScopeRef: marker.GetExpectedScopeRef(), UniverseSubjectIds: marker.GetUniverseSubjectIds(),
-		FailedSubjects: marker.GetFailedSubjects(), CommittedPositions: positions, CollectedAt: marker.GetCollectedAt(),
+	_, eventID, err := BuildLedgerPeriodCompletedMessage(spaceID, &LedgerPeriodCompleted{
+		DatasetID: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
+		Status: marker.GetStatus(), SnapshotRef: marker.GetSnapshotRef(), UniverseSubjectIDs: marker.GetUniverseSubjectIds(),
+		FailedSubjects: marker.GetFailedSubjects(), CommittedPositions: positions, CompletedAt: marker.GetCompletedAt(),
 	})
 	return eventID, err
 }

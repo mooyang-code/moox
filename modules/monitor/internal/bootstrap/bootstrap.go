@@ -180,7 +180,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg, runtime.Gateway)
-	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, resultHook)
+	collectorStatus, err := monmetrics.NewCollectorInventoryGatewayClient(runtime.Gateway)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, collectorStatus, resultHook)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err

@@ -78,6 +78,24 @@ export interface GetTaskDetailResponse {
   task?: CollectorTask;
 }
 
+/** 标签同步的最近运行状态；没有运行记录的标签不会出现在结果里。 */
+export interface TagSyncStatus {
+  space_id: string;
+  tag_id: string;
+  /** 上次运行时间（RFC3339，UTC）。 */
+  last_run_at?: string;
+  last_status?: "success" | "failed" | string;
+  last_error?: string;
+  /** 最近一次成功的时间；从未成功过为空。 */
+  last_success_at?: string;
+}
+
+/** 一个数据来源能提供标的快照的市场类型。 */
+export interface SubjectLister {
+  source: string;
+  market_types?: string[];
+}
+
 export interface CreateTaskRequest {
   task: CollectionTaskPayload;
   result_config: CollectionTaskResultConfig;
@@ -189,6 +207,20 @@ export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskLi
 
 export async function GetTaskDetail(params: GetTaskDetailRequest): Promise<GetTaskDetailResponse> {
   return callControl<GetTaskDetailRequest, GetTaskDetailResponse>("collector", "GetTaskDetail", params);
+}
+
+/** 读取标签同步状态；spaceId 为空表示所有空间。 */
+export async function listTagSyncStatus(spaceId = ""): Promise<TagSyncStatus[]> {
+  const rsp = await callControl<{ space_id: string }, { items?: TagSyncStatus[] }>("collector", "ListTagSyncStatus", {
+    space_id: spaceId
+  });
+  return rsp.items || [];
+}
+
+/** 读取可用于标的同步的（来源，市场类型）组合。 */
+export async function listSubjectListers(): Promise<SubjectLister[]> {
+  const rsp = await callControl<Record<string, never>, { listers?: SubjectLister[] }>("collector", "ListSubjectListers", {});
+  return rsp.listers || [];
 }
 
 export async function CreateTask(params: CreateTaskRequest): Promise<CreateTaskResponse> {

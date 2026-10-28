@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"trpc.group/trpc-go/trpc-go/log"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -31,15 +32,12 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if err := rejectCollectorPeriodWriteCredential(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	ctx = s.requestContext(ctx)
 	scope := &pb.DatasetPeriodExpectation{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Frequency: req.GetFrequency()}
-	if err := validateCollectorPeriodDataset(ctx, req.GetAuthInfo(), scope); err != nil {
+	if err := validatePeriodDataset(ctx, scope); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if err := validateSnapshotAlignment(ctx, req); err != nil {
@@ -77,15 +75,12 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if err := rejectCollectorPeriodWriteCredential(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	exp := req.GetExpectation()
 	if strings.TrimSpace(exp.GetSpaceId()) == "" || strings.TrimSpace(exp.GetDatasetId()) == "" {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	ctx = s.requestContext(ctx)
-	if err := validateCollectorPeriodDataset(ctx, req.GetAuthInfo(), exp); err != nil {
+	if err := validatePeriodDataset(ctx, exp); err != nil {
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	rows := make([]*pb.RowFieldUpsert, 0, len(req.GetItems()))
@@ -95,10 +90,6 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		}
 		rows = append(rows, item.GetRow())
 	}
-	if err := rejectUnauthorizedUpsertSemantics(rows, req.GetWriteSource()); err != nil {
-		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rows = normalizeStockCNSeriesTags(rows)
 	if batchValidator, ok := s.validate.(interface {
 		ValidateRows(context.Context, []*pb.RowFieldUpsert) error
 	}); ok {
@@ -133,7 +124,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		items = append(items, &pb.TimeSeriesBatchRow{SeriesIndex: req.GetItems()[i].GetSeriesIndex(), Row: row})
 	}
 	rsp, err := periodNode.CommitTimeSeriesBatch(ctx, &pb.CommitTimeSeriesBatchReq{
-		AuthInfo: auth, Expectation: exp, Items: items, SourceEventId: req.GetSourceEventId(), WriteSource: req.GetWriteSource(),
+		AuthInfo: auth, Expectation: exp, Items: items,
 		AllowedLatenessSeconds: datasetAllowedLateness(ctx, exp),
 	})
 	if err != nil {
@@ -148,16 +139,6 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 	s.observeDeadlineRejection(exp, rsp)
 	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus(), AcceptedSeriesIndexes: rsp.GetAcceptedSeriesIndexes()}, nil
 }
-
-func rejectCollectorPeriodWriteCredential(auth *pb.AuthInfo) error {
-	if strings.EqualFold(strings.TrimSpace(auth.GetAppId()), "scf-market-canary") {
-		return errors.New("read-only primary credential")
-	}
-	return nil
-}
-
-// periodDatasetRoles 是可以使用周期提交与快照登记的数据集角色：采集的原始 K 线，以及合成出来的 K 线。
-var periodDatasetRoles = map[string]bool{"raw_collection": true, "kline_resample_result": true}
 
 // datasetAlignment 是数据集声明的分桶方式：session 表示按交易时段从开盘起切分，其余（含未声明）按 epoch UTC。
 func datasetAlignment(ctx context.Context, spaceID, datasetID string) string {
@@ -192,10 +173,8 @@ func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSerie
 	return nil
 }
 
-func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expectation *pb.DatasetPeriodExpectation) error {
-	if auth == nil || !isOwnedAppID(auth.GetAppId(), "collector") {
-		return errors.New("period RPC requires Collector caller identity")
-	}
+// validatePeriodDataset 检查周期提交与快照登记的目标：数据集存在于请求快照、是时序数据且频率与声明一致。
+func validatePeriodDataset(ctx context.Context, expectation *pb.DatasetPeriodExpectation) error {
 	if expectation == nil || strings.TrimSpace(expectation.GetSpaceId()) == "" || strings.TrimSpace(expectation.GetDatasetId()) == "" {
 		return errors.New("period expectation requires space_id and dataset_id")
 	}
@@ -206,10 +185,6 @@ func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expe
 	dataset, ok := snapshot.GetDataset(expectation.GetSpaceId(), expectation.GetDatasetId())
 	if !ok || dataset == nil || dataset.GetSpaceId() != expectation.GetSpaceId() || dataset.GetDatasetId() != expectation.GetDatasetId() {
 		return errors.New("period Dataset is not present in the request metadata snapshot")
-	}
-	attrs := dataset.GetAttributes()
-	if attrs["owner_module"] != "collector" || !periodDatasetRoles[attrs["dataset_role"]] {
-		return errors.New("period Dataset must be Collector-owned raw_collection or kline_resample_result data")
 	}
 	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("period Dataset must be time_series")

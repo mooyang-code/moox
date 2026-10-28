@@ -7,39 +7,75 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type fakeTagStore struct {
-	tags     []*pb.Tag
-	applied  map[string]int
-	failures map[string]string
+	tags    []*pb.Tag
+	applied map[string]int
 }
 
 func (f *fakeTagStore) ListTags(context.Context) ([]*pb.Tag, error) { return f.tags, nil }
-func (f *fakeTagStore) ApplyTagSnapshot(_ context.Context, _, tagID string, _ time.Time, items []*pb.TagSnapshotItem) error {
+func (f *fakeTagStore) ApplyTagSnapshot(_ context.Context, _, tagID string, items []*pb.TagSnapshotItem) error {
 	f.applied[tagID] = len(items)
 	return nil
 }
-func (f *fakeTagStore) ReportTagRunFailure(_ context.Context, _, tagID string, _ time.Time, message string) error {
-	f.failures[tagID] = message
+
+// fakeRunStore 在内存里保存标签的同步运行结果。
+type fakeRunStore struct{ runs map[string]store.TagSyncRun }
+
+func newFakeRunStore() *fakeRunStore { return &fakeRunStore{runs: map[string]store.TagSyncRun{}} }
+
+func (f *fakeRunStore) List(context.Context, string) ([]store.TagSyncRun, error) {
+	out := make([]store.TagSyncRun, 0, len(f.runs))
+	for _, run := range f.runs {
+		out = append(out, run)
+	}
+	return out, nil
+}
+
+func (f *fakeRunStore) Record(_ context.Context, run store.TagSyncRun) error {
+	f.runs[run.TagID] = run
 	return nil
+}
+
+// autoTag 构造带同步配置属性的标签。
+func autoTag(spaceID, tagID, mode, source, marketType string) *pb.Tag {
+	attributes := map[string]string{}
+	if source != "" {
+		attributes["sync.source"] = source
+	}
+	if marketType != "" {
+		attributes["market_type"] = marketType
+	}
+	return &pb.Tag{SpaceId: spaceID, TagId: tagID, Mode: mode, Attributes: attributes}
 }
 
 func TestTagDue(t *testing.T) {
 	now := time.Date(2026, 9, 25, 10, 30, 0, 0, time.UTC)
+	cron := map[string]string{"sync.cron": "0 * * * *", "sync.timezone": "UTC"}
+	run := func(at string) *store.TagSyncRun {
+		parsed, err := time.Parse("2006-01-02 15:04:05", at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &store.TagSyncRun{LastRunAt: parsed.UTC()}
+	}
 	cases := []struct {
 		name string
 		tag  *pb.Tag
+		run  *store.TagSyncRun
 		want bool
 	}{
-		{"never run", &pb.Tag{Cron: "0 * * * *", Timezone: "UTC", UpdatedAt: "2026-09-25 09:00:00"}, true},
-		{"cron elapsed", &pb.Tag{Cron: "0 * * * *", Timezone: "UTC", LastRunAt: "2026-09-25 09:00:00", UpdatedAt: "2026-09-01 00:00:00"}, true},
-		{"cron not elapsed", &pb.Tag{Cron: "0 * * * *", Timezone: "UTC", LastRunAt: "2026-09-25 10:00:00", UpdatedAt: "2026-09-01 00:00:00"}, false},
-		{"edited after run", &pb.Tag{Cron: "0 * * * *", Timezone: "UTC", LastRunAt: "2026-09-25 10:00:00", UpdatedAt: "2026-09-25 10:10:00"}, true},
+		{"never run", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-25 09:00:00"}, nil, true},
+		{"cron elapsed", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 09:00:00"), true},
+		{"cron not elapsed", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 10:00:00"), false},
+		{"edited after run", &pb.Tag{Attributes: cron, UpdatedAt: "2026-09-25 10:10:00"}, run("2026-09-25 10:00:00"), true},
+		{"default cron when unset", &pb.Tag{UpdatedAt: "2026-09-01 00:00:00"}, run("2026-09-25 09:00:00"), true},
 	}
 	for _, c := range cases {
-		got, err := tagDue(c.tag, now)
+		got, err := tagDue(c.tag, c.run, now)
 		if err != nil || got != c.want {
 			t.Errorf("%s: due = %v, err = %v", c.name, got, err)
 		}
@@ -49,24 +85,28 @@ func TestTagDue(t *testing.T) {
 func TestRunOnceAppliesAndReports(t *testing.T) {
 	store := &fakeTagStore{
 		tags: []*pb.Tag{
-			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
-			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Source: "binance", MarketType: "swap", Cron: "0 * * * *", Timezone: "UTC"},
-			{SpaceId: "crypto", TagId: "watch", Mode: "manual", Cron: "0 * * * *", Timezone: "UTC"},
-			{SpaceId: "crypto", TagId: "manual_bound", Mode: "manual", Source: "binance", MarketType: "spot", Cron: "0 * * * *", Timezone: "UTC"},
+			autoTag("crypto", "binance_spot", "auto", "binance", "spot"),
+			autoTag("crypto", "binance_swap", "auto", "binance", "swap"),
+			autoTag("crypto", "watch", "manual", "", ""),
+			autoTag("crypto", "manual_bound", "manual", "binance", "spot"),
 		},
-		applied: map[string]int{}, failures: map[string]string{},
+		applied: map[string]int{},
 	}
+	runs := newFakeRunStore()
 	listers := Listers{
 		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
 		{Source: "binance", InstrumentType: "swap"}: fakeSubjectLister{err: errors.New("451")},
 	}
-	runner := &TagRunner{Store: store, Listers: listers, FetchTimeout: time.Second, Now: func() time.Time { return time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC) }}
+	runner := &TagRunner{Store: store, Runs: runs, Listers: listers, FetchTimeout: time.Second, Now: func() time.Time { return time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC) }}
 	runner.RunOnce(context.Background())
 	if store.applied["binance_spot"] != 1 {
 		t.Fatalf("applied = %v", store.applied)
 	}
-	if store.failures["binance_swap"] == "" {
-		t.Fatalf("failures = %v", store.failures)
+	if run := runs.runs["binance_swap"]; run.LastStatus != "failed" || run.LastError == "" || !run.LastSuccessAt.IsZero() {
+		t.Fatalf("失败应记录在运行表里: %+v", run)
+	}
+	if run := runs.runs["binance_spot"]; run.LastStatus != "success" || run.LastError != "" {
+		t.Fatalf("成功应记录在运行表里: %+v", run)
 	}
 	if _, ok := store.applied["watch"]; ok {
 		t.Fatal("manual tag without probe must be skipped")
@@ -94,13 +134,14 @@ func (l flakyLister) List(context.Context) ([]marketdata.Instrument, error) {
 func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
 	store := &fakeTagStore{
 		tags: []*pb.Tag{
-			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot"},
-			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Source: "binance", MarketType: "swap"},
+			autoTag("crypto", "binance_spot", "auto", "binance", "spot"),
+			autoTag("crypto", "binance_swap", "auto", "binance", "swap"),
 		},
-		applied: map[string]int{}, failures: map[string]string{},
+		applied: map[string]int{},
 	}
+	runs := newFakeRunStore()
 	calls := 0
-	runner := &TagRunner{Store: store, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond}, Listers: Listers{
+	runner := &TagRunner{Store: store, Runs: runs, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond}, Listers: Listers{
 		{Source: "binance", InstrumentType: "swap"}: flakyLister{calls: &calls, failures: 2, items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
 		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{err: errors.New("must not be called")},
 	}}
@@ -112,7 +153,7 @@ func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
 	store.applied = map[string]int{}
 	runner.Listers[ListerKey{Source: "binance", InstrumentType: "swap"}] = flakyLister{calls: &calls, failures: 3}
 	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "crypto", MarketType: "swap"})
-	if results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || store.failures["binance_swap"] == "" {
+	if results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || runs.runs["binance_swap"].LastStatus != "failed" {
 		t.Fatalf("a failed snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)
 	}
 }

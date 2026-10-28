@@ -149,10 +149,10 @@ func periodHelperServeOutbox(t *testing.T, listener net.Listener, node *datanode
 				http.Error(w, "decode outbox event failed", http.StatusInternalServerError)
 				return
 			}
-			if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+			if message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 				continue
 			}
-			payload := &storageeventpb.CollectorPeriodCompleted{}
+			payload := &storageeventpb.DatasetPeriodCompleted{}
 			if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
 				http.Error(w, "decode collector period marker failed", http.StatusInternalServerError)
 				return
@@ -204,14 +204,14 @@ func periodHelperSeed(t *testing.T, ctx context.Context, meta *metasqlite.Store,
 		t.Fatal(err)
 	}
 	if _, err := meta.UpsertDataSource(ctx, &pb.DataSource{
-		SpaceId: ready.SpaceID, DataSourceId: "binance", Name: "Period E2E source", Kind: "exchange",
-		Market: "crypto", Timezone: "UTC", Status: "active",
+		SpaceId: ready.SpaceID, DataSourceId: "binance", Name: "Period E2E source",
+		Status: "active", Attributes: map[string]string{"market": "crypto"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := meta.CreateTag(ctx, &pb.Tag{
 		SpaceId: ready.SpaceID, TagId: "period_e2e", TagName: "Period E2E", Mode: "auto",
-		Source: "binance", MarketType: "spot",
+		Attributes: map[string]string{"market_type": "spot"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -254,14 +254,14 @@ func periodHelperSeedStockCN(t *testing.T, ctx context.Context, meta *metasqlite
 		t.Fatal(err)
 	}
 	if _, err := meta.UpsertDataSource(ctx, &pb.DataSource{
-		SpaceId: ready.StockSpaceID, DataSourceId: "sina", Name: "StockCN Period E2E source", Kind: "exchange",
-		Market: "stockcn", Timezone: "Asia/Shanghai", Status: "active",
+		SpaceId: ready.StockSpaceID, DataSourceId: "sina", Name: "StockCN Period E2E source",
+		Status: "active", Attributes: map[string]string{"market": "stockcn"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := meta.CreateTag(ctx, &pb.Tag{
 		SpaceId: ready.StockSpaceID, TagId: "stockcn_period_e2e", TagName: "StockCN Period E2E", Mode: "auto",
-		Source: "sina", MarketType: "equity",
+		Attributes: map[string]string{"market_type": "equity"},
 	}); err != nil {
 		t.Fatal(err)
 	}

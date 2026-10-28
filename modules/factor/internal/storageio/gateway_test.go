@@ -22,7 +22,7 @@ func TestGatewayStorageRejectsSDKTargetOverridesBeforeNetwork(t *testing.T) {
 	storage := NewGatewayClient(gateway, nil)
 	_, err := storage.metadata.GetDataset(t.Context(), &storagepb.GetDatasetReq{}, client.WithTarget("ip://192.0.2.99:20100"))
 	require.ErrorContains(t, err, "instead of tRPC client options")
-	_, err = storage.primary.ReportFactorPeriodComputed(t.Context(), &storagepb.ReportFactorPeriodComputedReq{}, client.WithTimeout(1))
+	_, err = storage.primary.ReportDatasetPeriodCompleted(t.Context(), &storagepb.ReportDatasetPeriodCompletedReq{}, client.WithTimeout(1))
 	require.ErrorContains(t, err, "instead of tRPC client options")
 	require.False(t, gateway.called)
 }

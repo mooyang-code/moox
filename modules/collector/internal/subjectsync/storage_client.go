@@ -2,17 +2,12 @@ package subjectsync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -21,10 +16,7 @@ const storagePageSize = 1000
 type metadataClient interface {
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
-	ReportTagRunFailure(context.Context, *storagepb.ReportTagRunFailureReq, ...client.Option) (*storagepb.ReportTagRunFailureRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
-	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
-	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
 }
 
 // StorageClient is the narrow Storage Metadata client used by Collector's
@@ -68,26 +60,15 @@ func (c *StorageClient) ListTags(ctx context.Context) ([]*storagepb.Tag, error) 
 	}
 }
 
-func (c *StorageClient) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, runAt time.Time, items []*storagepb.TagSnapshotItem) error {
+func (c *StorageClient) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, items []*storagepb.TagSnapshotItem) error {
 	if err := c.checkReady(); err != nil {
 		return err
 	}
-	rsp, err := c.client.ApplyTagSnapshot(ctx, &storagepb.ApplyTagSnapshotReq{AuthInfo: c.auth, SpaceId: spaceID, TagId: tagID, RunAt: runAt.UTC().Format(time.RFC3339Nano), Items: items})
+	rsp, err := c.client.ApplyTagSnapshot(ctx, &storagepb.ApplyTagSnapshotReq{AuthInfo: c.auth, SpaceId: spaceID, TagId: tagID, Items: items})
 	if err != nil {
 		return fmt.Errorf("apply tag snapshot %s/%s: %w", spaceID, tagID, err)
 	}
 	return storageOK("apply tag snapshot", rsp.GetRetInfo())
-}
-
-func (c *StorageClient) ReportTagRunFailure(ctx context.Context, spaceID, tagID string, runAt time.Time, message string) error {
-	if err := c.checkReady(); err != nil {
-		return err
-	}
-	rsp, err := c.client.ReportTagRunFailure(ctx, &storagepb.ReportTagRunFailureReq{AuthInfo: c.auth, SpaceId: spaceID, TagId: tagID, RunAt: runAt.UTC().Format(time.RFC3339Nano), Error: message})
-	if err != nil {
-		return fmt.Errorf("report tag run failure %s/%s: %w", spaceID, tagID, err)
-	}
-	return storageOK("report tag run failure", rsp.GetRetInfo())
 }
 
 func (c *StorageClient) UpdateSubjectAttributes(ctx context.Context, spaceID string, items []*storagepb.SubjectAttributes) (int, int, error) {
@@ -102,55 +83,6 @@ func (c *StorageClient) UpdateSubjectAttributes(ctx context.Context, spaceID str
 		return 0, 0, err
 	}
 	return int(rsp.GetUpdated()), int(rsp.GetSkipped()), nil
-}
-
-func (c *StorageClient) RegisterSubjectListing(ctx context.Context, supported map[string][]string) error {
-	if err := c.checkReady(); err != nil {
-		return err
-	}
-	spaces := map[string]string{"binance": "crypto", "sina": "stockcn", "eastmoney": "stockcn", "baidu": "stockcn", "tencent": "stockcn", "tdx": "stockcn"}
-	sources := make([]string, 0, len(supported))
-	for source := range supported {
-		sources = append(sources, source)
-	}
-	sort.Strings(sources)
-	for _, source := range sources {
-		types := supported[source]
-		normalizedSource := strings.ToLower(strings.TrimSpace(source))
-		spaceID, ok := spaces[normalizedSource]
-		if !ok || len(types) == 0 {
-			continue
-		}
-		rsp, err := c.client.GetDataSource(ctx, &storagepb.GetDataSourceReq{AuthInfo: c.auth, SpaceId: spaceID, DataSourceId: source})
-		if err != nil {
-			return fmt.Errorf("get subject listing data source %s/%s: %w", spaceID, normalizedSource, err)
-		}
-		if err := storageOK("get subject listing data source", rsp.GetRetInfo()); err != nil {
-			return err
-		}
-		if rsp.GetDataSource() == nil {
-			return fmt.Errorf("get subject listing data source %s/%s: empty data source", spaceID, normalizedSource)
-		}
-		item := proto.Clone(rsp.GetDataSource()).(*storagepb.DataSource)
-		if item.Attributes == nil {
-			item.Attributes = map[string]string{}
-		}
-		payload, err := json.Marshal(struct {
-			InstrumentTypes []string `json:"instrument_types"`
-		}{InstrumentTypes: append([]string(nil), types...)})
-		if err != nil {
-			return fmt.Errorf("encode subject listing %s: %w", normalizedSource, err)
-		}
-		item.Attributes["subject_listing"] = string(payload)
-		updated, err := c.client.UpdateDataSource(ctx, &storagepb.UpdateDataSourceReq{AuthInfo: c.auth, DataSource: item})
-		if err != nil {
-			return fmt.Errorf("update subject listing %s/%s: %w", spaceID, normalizedSource, err)
-		}
-		if err := storageOK("update subject listing", updated.GetRetInfo()); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (c *StorageClient) checkReady() error {

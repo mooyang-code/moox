@@ -361,17 +361,17 @@ func collectorDelivery(t *testing.T, eventID string) *jetstream.Delivery {
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	payload := &storagepb.CollectorPeriodCompleted{
+	payload := &storagepb.DatasetPeriodCompleted{
 		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: "degraded",
-		BatchId: "batch-1", ConfigSnapshotId: "config-1", ExpectedScopeRef: "scope-1",
+		Source: "ledger", SnapshotRef: "scope-1",
 		UniverseSubjectIds: []string{"ETH", "BTC"}, FailedSubjects: []string{"ETH"},
-		CollectedAt: timestamppb.New(period.Add(time.Minute)),
+		CompletedAt: timestamppb.New(period.Add(time.Minute)),
 	}
-	raw, err := registry.MarshalMessage(events.CollectorPeriodCompleted, payload, events.PublishOptions{
+	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars",
 	})
 	require.NoError(t, err)
-	subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, "crypto", "bars")
+	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, "crypto", "bars")
 	require.NoError(t, err)
 	return &jetstream.Delivery{Subject: subject, RawData: raw, RawMessageID: eventID, ContentType: events.ContentType}
 }
@@ -380,7 +380,7 @@ func collectorPeriodSubject(t *testing.T, spaceID, datasetID string) string {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, spaceID, datasetID)
+	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, spaceID, datasetID)
 	require.NoError(t, err)
 	return subject
 }

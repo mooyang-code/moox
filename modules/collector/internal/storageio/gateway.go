@@ -31,10 +31,8 @@ type Metadata interface {
 	ListDatasetColumns(context.Context, *storagepb.ListDatasetColumnsReq, ...client.Option) (*storagepb.ListDatasetColumnsRsp, error)
 	ListTags(context.Context, *storagepb.ListTagsReq, ...client.Option) (*storagepb.ListTagsRsp, error)
 	ApplyTagSnapshot(context.Context, *storagepb.ApplyTagSnapshotReq, ...client.Option) (*storagepb.ApplyTagSnapshotRsp, error)
-	ReportTagRunFailure(context.Context, *storagepb.ReportTagRunFailureReq, ...client.Option) (*storagepb.ReportTagRunFailureRsp, error)
 	UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error)
 	GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error)
-	UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error)
 	ListSubjects(context.Context, *storagepb.ListSubjectsReq, ...client.Option) (*storagepb.ListSubjectsRsp, error)
 }
 
@@ -44,7 +42,6 @@ type Primary interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReportCollectorPeriodCompleted(context.Context, *storagepb.ReportCollectorPeriodCompletedReq, ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error)
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq, ...client.Option) (*storagepb.WaitViewSyncPointRsp, error)
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
@@ -150,20 +147,12 @@ func (c *Client) ApplyTagSnapshot(ctx context.Context, request *storagepb.ApplyT
 	return invoke[storagepb.ApplyTagSnapshotRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ApplyTagSnapshot", request, options)
 }
 
-func (c *Client) ReportTagRunFailure(ctx context.Context, request *storagepb.ReportTagRunFailureReq, options ...client.Option) (*storagepb.ReportTagRunFailureRsp, error) {
-	return invoke[storagepb.ReportTagRunFailureRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "ReportTagRunFailure", request, options)
-}
-
 func (c *Client) UpdateSubjectAttributes(ctx context.Context, request *storagepb.UpdateSubjectAttributesReq, options ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error) {
 	return invoke[storagepb.UpdateSubjectAttributesRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateSubjectAttributes", request, options)
 }
 
 func (c *Client) GetDataSource(ctx context.Context, request *storagepb.GetDataSourceReq, options ...client.Option) (*storagepb.GetDataSourceRsp, error) {
 	return invoke[storagepb.GetDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "GetDataSource", request, options)
-}
-
-func (c *Client) UpdateDataSource(ctx context.Context, request *storagepb.UpdateDataSourceReq, options ...client.Option) (*storagepb.UpdateDataSourceRsp, error) {
-	return invoke[storagepb.UpdateDataSourceRsp](ctx, c.gateway, "trpc.moox.storage.Metadata", "UpdateDataSource", request, options)
 }
 
 func (c *Client) ListSubjects(ctx context.Context, request *storagepb.ListSubjectsReq, options ...client.Option) (*storagepb.ListSubjectsRsp, error) {
@@ -189,10 +178,6 @@ func (c *Client) CommitTimeSeriesBatch(ctx context.Context, request *storagepb.P
 
 func (c *Client) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	return invoke[storagepb.PrimaryUpsertFieldsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "UpsertFields", request, options)
-}
-
-func (c *Client) ReportCollectorPeriodCompleted(ctx context.Context, request *storagepb.ReportCollectorPeriodCompletedReq, options ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error) {
-	return invoke[storagepb.ReportCollectorPeriodCompletedRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReportCollectorPeriodCompleted", request, options)
 }
 
 func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq, options ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
