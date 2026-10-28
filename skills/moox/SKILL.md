@@ -196,13 +196,16 @@ When initializing a fresh MooX system, follow
 creates repository-root `moox.toml` before deployment (preferably by running
 `moox-cli config init` and filling the local form in their own browser; the
 Agent never fills or reads it). The file is stored encrypted (key in the OS
-keychain); when the user wants to view or change it, run `moox-cli config edit`
-so they can do it on the local config page, and use `moox-cli config encrypt`
-for a hand-written plaintext file. After the initial deployment run
+keychain). The Agent reads it with `moox-cli config get <path>` (secrets masked)
+and changes single values with `moox-cli config set table.key=value` or the
+dedicated `config migrate` flags, as described in
+[`references/config-access.md`](references/config-access.md); for arrays or large
+structures the user runs `moox-cli config edit` on the local config page, and
+`moox-cli config encrypt` handles a hand-written plaintext file. After the initial deployment run
 `moox-cli config backup` once (encrypted with the admin password, stored on the
-user's own Admin); on a new computer run `moox-cli config restore`. The Agent may test only
-whether it exists and must never read, parse, print, copy, or source it outside
-`moox-cli setup`.
+user's own Admin); on a new computer run `moox-cli config restore`. Never `cat`, parse, print, copy, or
+source the file directly; go through `moox-cli config` or `moox-cli setup`, and
+use `config get --reveal` only when a task truly needs a secret.
 
 Run `setup validate`, `setup bootstrap --stage core`, `setup deploy-host` for every
 other host, `setup deploy-unit` for the Storage/Access/egress-proxy/Trade/collector-stream deployments,
