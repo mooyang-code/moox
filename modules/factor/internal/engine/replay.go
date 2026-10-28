@@ -93,6 +93,7 @@ type replaySession struct {
 	udfKey string
 
 	mu       sync.Mutex
+	closed   bool // 已关闭（预算已归还）：此后取得会话指针的请求不能再执行
 	cache    map[int64]*replayPeriod
 	lastUsed time.Time
 	// applied 是各期实际生效的、由请求带来（或沿用上一期请求）的成员参数快照，键是期次的 Unix 秒：
@@ -448,6 +449,9 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ReplayStepResponse{}, http.StatusNotFound, fmt.Errorf("回放会话 %s 已关闭，请重新建立会话", req.ReplayID)
+	}
 	s.lastUsed = m.deps.Now()
 	started := time.Now()
 	params, applied, rejected, err := s.params(period, req.Params)
@@ -781,15 +785,29 @@ func (m *replayManager) handleClose(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, http.StatusOK, map[string]bool{"closed": closed})
 }
 
+// closeSession 等正在执行的 Step 结束之后才归还内存预算并移出会话表（Step 持有会话锁整个过程）：
+// 旧请求还握着整个快照时预算不能先还出去，否则新会话可以再次占用这部分预算；移出会话表也在这之后，
+// 等待期间会话引用的自定义算子版本仍被保留。
 func (m *replayManager) closeSession(id string) bool {
 	m.mu.Lock()
 	s := m.sessions[id]
-	delete(m.sessions, id)
 	m.mu.Unlock()
 	if s == nil {
 		return false
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	s.closed = true
 	s.release()
+	s.mu.Unlock()
+	m.mu.Lock()
+	if m.sessions[id] == s {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
 	return true
 }
 

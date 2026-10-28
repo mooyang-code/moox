@@ -28,6 +28,7 @@ type udfModules struct {
 
 	mu     sync.Mutex
 	states map[string]*moduleState
+	pins   map[string]int // 执行中的补算作业绑定的版本（引用计数）：目录不再引用它们，作业没结束之前也不能卸载
 }
 
 type moduleState struct {
@@ -170,18 +171,51 @@ func (m *udfModules) Status() []domain.UDFModuleStatus {
 
 // Retain 只保留当前目录引用的版本的状态与已加载模块（卸载不再引用的）；hashes 是仍被引用的版本。
 func (m *udfModules) Retain(ctx context.Context, hashes map[string]bool) {
+	m.mu.Lock()
+	keep := make(map[string]bool, len(hashes)+len(m.pins))
+	for hash := range hashes {
+		keep[hash] = true
+	}
+	for hash := range m.pins {
+		keep[hash] = true
+	}
+	m.mu.Unlock()
 	for _, hash := range m.host.Hashes() {
-		if !hashes[hash] {
+		if !keep[hash] {
 			m.host.Unload(ctx, hash)
 		}
 	}
 	m.mu.Lock()
 	for hash := range m.states {
-		if !hashes[hash] {
+		if !keep[hash] {
 			delete(m.states, hash)
 		}
 	}
 	m.mu.Unlock()
+}
+
+// Pin 登记一组版本为使用中（补算作业执行期间），返回释放函数；登记要在备齐模块之前做，这样两者之间的目录同步不会把它们卸载。
+func (m *udfModules) Pin(refs []udfRef) func() {
+	m.mu.Lock()
+	if m.pins == nil {
+		m.pins = map[string]int{}
+	}
+	for _, ref := range refs {
+		m.pins[ref.hash]++
+	}
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			for _, ref := range refs {
+				if m.pins[ref.hash]--; m.pins[ref.hash] <= 0 {
+					delete(m.pins, ref.hash)
+				}
+			}
+		})
+	}
 }
 
 // udfRef 是目录里引用的一个自定义算子版本。
@@ -268,11 +302,18 @@ func (r *Runtime) retainModules() {
 }
 
 // prepareJobModules 是补算领取的入口：作业绑定的模块备齐后才执行；失败时作业报告失败，不写任何分块。
-func (r *Runtime) prepareJobModules(ctx context.Context, set domain.EngineTask) error {
+// 返回的释放函数在作业结束时调用：执行期间这些版本即使被目录同步丢掉引用也不卸载。
+func (r *Runtime) prepareJobModules(ctx context.Context, set domain.EngineTask) (func(), error) {
 	if r.udf == nil {
-		return nil
+		return func() {}, nil
 	}
-	return r.udf.EnsureAll(ctx, refsOfTasks([]domain.EngineTask{set}))
+	refs := refsOfTasks([]domain.EngineTask{set})
+	release := r.udf.Pin(refs)
+	if err := r.udf.EnsureAll(ctx, refs); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
 }
 
 // loadModulesAtStart 是启动恢复的入口：目录从磁盘恢复后，引用的模块正常情况下已在本地；缺失时按退避拉取，

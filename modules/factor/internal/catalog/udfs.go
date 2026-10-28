@@ -365,19 +365,19 @@ func (s *Service) lookbackNotes(r *ActivateResult) {
 
 // prerequisites 检查切换的前提一与前提二。没有已启用成员受影响时两项都不要求。
 func (s *Service) prerequisites(ctx context.Context, enabledImpact bool, tasks []string) []Prerequisite {
-	out := []Prerequisite{s.enginePaused(ctx, enabledImpact), s.noRunningJobs(ctx, tasks)}
+	out := []Prerequisite{s.enginePaused(ctx, enabledImpact, len(tasks) > 0), s.noRunningJobs(ctx, tasks)}
 	return out
 }
 
-func (s *Service) enginePaused(ctx context.Context, required bool) Prerequisite {
+func (s *Service) enginePaused(ctx context.Context, required, referenced bool) Prerequisite {
 	p := Prerequisite{Name: "因子引擎模块已暂停且本次暂停已收敛"}
-	if !required {
+	if !required && referenced && s.engineView != nil {
 		// 数据库里没有已启用的成员引用它，不等于引擎已经停止使用：停用刚发生、引擎还没同步目录时，它仍按缓存的目录运行旧版本。
-		// 引擎在线且目录还没同步到最新时同样要求暂停。
-		if s.engineView != nil {
-			if info, _, seen, err := s.engineView(ctx); err == nil && seen && info.Online && !info.CatalogInSync {
-				required = true
-			}
+		// 引擎目录还没同步到最新、或状态已经不可信（离线、心跳过期、读取失败）时无法确认它没有在用旧版本：同样要求暂停。
+		// 从来没有任何定义引用过它（首次启用）不受影响。
+		info, _, seen, err := s.engineView(ctx)
+		if err != nil || (seen && (!info.Online || !info.CatalogInSync || time.Since(info.LastHeartbeatAt) > engineStatusMaxAge)) {
+			required = true
 		}
 	}
 	if !required {

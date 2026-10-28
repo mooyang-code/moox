@@ -410,3 +410,29 @@ func TestUdfLockSerializesDefinitionChangesWithActivation(t *testing.T) {
 	unlock()
 	require.NoError(t, <-done)
 }
+
+// 没有已启用的成员引用，但引擎状态不可信（离线）：无法确认它没有在按旧目录使用旧版本，仍要求暂停。
+func TestActivationRequiresPauseWhenEngineStateIsUntrustedAndDefinitionsReferenceIt(t *testing.T) {
+	svc, db := newUdfService(t)
+	ctx := context.Background()
+	engine := &fakeEngine{seen: true, info: domain.EngineInfo{Online: false, LastHeartbeatAt: time.Now().Add(-time.Hour)}}
+	WithEngineView(engine.view)(svc)
+	v1, err := svc.PublishUdf(ctx, udfPackage(t, "ts_mean"))
+	require.NoError(t, err)
+	_, err = svc.ActivateUdf(ctx, "ts_mean_udf", v1.Hash, false)
+	require.NoError(t, err)
+	_, err = svc.CreateFactor(ctx, factorWithSpec("f_mean", "output: udf.ts_mean_udf(close, 3)\n"))
+	require.NoError(t, err)
+	_, err = svc.AddTaskMember(ctx, testTaskID(), "f_mean", "", nil) // 成员存在但未启用
+	require.NoError(t, err)
+
+	old, _ := db.GetUdfVersion(ctx, v1.Hash, true)
+	v2 := old
+	v2.Hash = "00" + old.Hash[2:]
+	_, err = db.PutUdfVersion(ctx, v2)
+	require.NoError(t, err)
+	dry, err := svc.ActivateUdf(ctx, "ts_mean_udf", v2.Hash, true)
+	require.NoError(t, err)
+	require.False(t, dry.Prerequisites[0].OK)
+	require.Contains(t, dry.Prerequisites[0].Detail, "离线")
+}

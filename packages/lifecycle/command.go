@@ -93,7 +93,8 @@ func (c *Controller) markQuiesced(ref Ref, obj Object) Object {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r := c.recordFor(ref)
-	if r.Stage != StagePaused || r.Pause == nil || r.Pause != obj.Pause {
+	// 轮次按暂停开始的时间与类型认定（快照里的 Pause 是副本，不能比指针）：同一轮暂停里原因被改写不算新一轮。
+	if r.Stage != StagePaused || r.Pause == nil || obj.Pause == nil || !r.Pause.Since.Equal(obj.Pause.Since) || r.Pause.Kind != obj.Pause.Kind {
 		return c.object(r)
 	}
 	r.QuiescedAt = c.opts.Now().UTC()

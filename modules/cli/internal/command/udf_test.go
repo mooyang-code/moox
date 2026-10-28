@@ -303,6 +303,13 @@ func TestScanUdfSourceRejectsUnsafeAndHandWrittenExports(t *testing.T) {
 	// C 字符串（c"…"、cr#"…"#）与字节串同样按字符串处理：里面的 /* 不是注释、里面的 unsafe 不是代码。
 	assert.NoError(t, scanUdfSource(write("fn f() { let _ = cr#\"unsafe\"#; let _ = c\"unsafe\"; let _ = br\"unsafe\"; }")))
 	assert.ErrorContains(t, scanUdfSource(write("fn f(v: &f64) -> f64 { let _ = cr#\"\" /*\"#;\n#[allow(unsafe_code)]\nunsafe { core::ptr::read(v) } }")), "unsafe")
+	// 原始标识符不是原始字符串；多字节字符字面量按一个字符处理；expect 与 cfg_attr 里的 no_mangle 同样被拒绝。
+	assert.ErrorContains(t, scanUdfSource(write("macro_rules! skip { ($($t:tt)*) => { () }; }\nskip!(r#r\"\\\" /*\");\n#[allow(unsafe_code)]\nunsafe { core::ptr::read(v) }")), "unsafe")
+	assert.ErrorContains(t, scanUdfSource(write("fn f(c: char) { let _ = matches!(c, '中'|'\"');\n#[allow(unsafe_code)]\nunsafe { } }")), "unsafe")
+	assert.NoError(t, scanUdfSource(write("fn f(c: char) { let _ = matches!(c, '中'|'x'); let _ = \"unsafe\"; }")))
+	assert.ErrorContains(t, scanUdfSource(write("#[expect(unsafe_code)]\nfn f() {}")), "unsafe")
+	assert.ErrorContains(t, scanUdfSource(write("#[r#no_mangle]\npub extern \"C\" fn extra() -> i32 { 1 }")), "手写")
+	assert.ErrorContains(t, scanUdfSource(write("#[cfg_attr(all(), no_mangle)]\npub extern \"C\" fn extra() -> i32 { 1 }")), "手写")
 }
 
 func TestSanitizeRemoteStripsCredentials(t *testing.T) {

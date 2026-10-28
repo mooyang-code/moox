@@ -24,6 +24,22 @@ func TestScanRejectsDeclaredSizesLargerThanTheirSection(t *testing.T) {
 		"元素段向量":    forged(9, append([]byte{1, 1, 0}, huge...)...), // 标志 1：元素种类 0，向量个数 4G
 		"名称段映射个数":  forged(0, append(append(append([]byte{4}, "name"...), 1, 6, 1), huge...)...),
 	}
+	// 变长引用类型（堆类型）与未完整消费的 name 子段：预扫描与 wazero 的解码位置对不上，一律拒绝。
+	cases["类型段的引用类型"] = forged(1, 1, 0x60, 1, 0x63, 0, 0xff, 0xff, 0xff, 0xff, 0x0f)
+	cases["局部变量的引用类型"] = forged(10, 1, 0x0b, 2, 0, 0x63, 0, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x7f, 0x0b)
+	cases["name 子段没有消费完"] = forged(0, append([]byte{4, 'n', 'a', 'm', 'e'}, 0, 8, 0, 1, 1, 0xff, 0xff, 0xff, 0xff, 0x0f, 3, 0)...)
+	// 每个函数各自不超过单函数上限，合计超过模块上限。
+	var body []byte
+	body = append(body, leb(1)...)
+	body = append(body, leb(maxLocals)...)
+	body = append(body, 0x7f)
+	entry := append(leb(uint64(len(body))), body...)
+	funcs := []byte{}
+	funcs = append(funcs, leb(uint64(maxModuleLocals/maxLocals+2))...)
+	for i := 0; i < maxModuleLocals/maxLocals+2; i++ {
+		funcs = append(funcs, entry...)
+	}
+	cases["模块局部变量合计"] = forged(10, funcs...)
 	for name, wasm := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := scanWasm(wasm)
@@ -43,6 +59,9 @@ func TestScanAcceptsWellFormedSections(t *testing.T) {
 	elem := forged(9, 1, 0, 0x41, 0x00, 0x0b, 2, 0, 1) // 标志 0：偏移、2 个函数索引
 	_, err = scanWasm(elem)
 	require.NoError(t, err)
+	simd := forged(6, append([]byte{1, 0x7b, 0, 0xfd, 0x0c}, append(make([]byte, 16), 0x0b)...)...) // v128 全局，v128.const 初始化
+	_, err = scanWasm(simd)
+	require.NoError(t, err)
 }
 
 // 记账量取底层数组的容量：增长一页时预留的额外容量也算进预算，预算不会少计。
@@ -57,7 +76,7 @@ func TestAccountedMemoryChargesCapacityNotLength(t *testing.T) {
 	require.Len(t, grown, 16<<20+65536)
 	require.Equal(t, int64(cap(grown)), m.Used(), "已申请量等于底层数组的容量")
 	require.Greater(t, m.Used(), int64(16<<20+65536)-1)
-	// 预算刚好够长度、不够容量：增长被拒绝。
+	// 预算刚好够长度、不够容量：增长被拒绝（搬迁期间新旧数组同时存活，按两者之和申请峰值）。
 	tight := &countingBudget{limit: 16<<20 + 65536}
 	m2 := newMeter(tight)
 	mem2 := &accountedMemory{m: m2}

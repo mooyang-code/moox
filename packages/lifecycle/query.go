@@ -200,6 +200,11 @@ func (c *Controller) object(r *record) Object {
 		Pause: r.Pause, PausedSince: r.PausedSince, QuiescedAt: r.QuiescedAt, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
 	}
+	if r.Pause != nil {
+		// 快照不能暴露内部指针：Refresh 会原地改写自动暂停的原因，调用方在锁外编码快照时会与它竞争。
+		pause := *r.Pause
+		obj.Pause = &pause
+	}
 	if r.catchup != nil {
 		cu := *r.catchup
 		obj.Catchup = &cu

@@ -587,3 +587,4 @@ factorexpr 的 `udf.` 调用、版本绑定与错误通道；因子引擎的三�
 5. **追赶的模块检查是逐任务的**：恢复追赶前检查的是该任务实际引用的模块是否就绪，而不是全部模块；模块暂停期间 `--force` 追赶同样关闭，门禁在模块 `Paused` 时关闭。
 6. **构建的可复现性**：`udf build` 用 `CARGO_ENCODED_RUSTFLAGS` 做路径重映射（工作区、`CARGO_HOME`、sysroot，以及工作区外的 SDK 目录），并清除继承的 `RUSTFLAGS`、`CARGO_TARGET_DIR` 等会改变产物的环境；clippy 与产物使用同一 profile（release）。包记录的来源带 `dirty` 标记，工作区有未提交改动时构建的包不能发布。
 7. **控制台（阶段 7）未实现**：第一期只做命令行（`moox-cli udf …`）与 moox skill；控制台的 UDF 列表、详情与切换页面留待后续。控制台的因子编辑器通过 `ListFactorFunctions` 已能看到已启用的 UDF（作为函数参考）。
+8. **本地构建门禁不是对使用者本人的安全边界**：`udf build` 的源码扫描与环境隔离（清除继承的 `RUSTFLAGS`、profile、目标、wrapper、`CLIPPY_CONF_DIR`、`RUSTC_BOOTSTRAP` 等）是尽早发现错误的便利性检查；工作区自己的 `.cargo/config.toml` 无法隔离。真正的闸门在服务端：模块静态检查（无导入、无 start、段内长度与局部变量上限、值类型白名单）与一致性测试重跑，不信任包里的报告与本地构建环境。

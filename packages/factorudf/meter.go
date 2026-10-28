@@ -95,12 +95,15 @@ func (a *accountedMemory) Reallocate(size uint64) []byte {
 		if a.max != 0 && newCap > a.max {
 			newCap = a.max
 		}
-		if !a.m.resize(int64(newCap)) {
+		// 搬迁期间新旧两个数组同时存活：先按两者之和申请峰值，复制完成、旧数组可回收之后再降到新容量。
+		oldCap := int64(cap(a.buf))
+		if !a.m.resize(oldCap + int64(newCap)) {
 			return nil
 		}
 		grown := make([]byte, size, newCap)
 		copy(grown, a.buf)
 		a.buf = grown
+		a.m.resize(int64(newCap))
 		return a.buf
 	}
 	// 容量内扩展：这段字节从未暴露给 guest（make 时清零，缩小从不发生），仍是零。

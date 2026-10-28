@@ -90,9 +90,13 @@ func (h *Host) Has(hash string) bool {
 }
 
 // Unload 卸载不再被任何目录引用的版本。
+// 与 Ensure 的加载互斥（loadMu）：缓存删除与运行时卸载之间不能让并发的 Ensure 把即将关闭的模块重新放回缓存。
 func (h *Host) Unload(ctx context.Context, hash string) {
+	h.loadMu.Lock()
+	defer h.loadMu.Unlock()
 	h.mu.Lock()
 	delete(h.modules, hash)
+	delete(h.used, hash)
 	h.mu.Unlock()
 	h.rt.Unload(ctx, hash)
 }

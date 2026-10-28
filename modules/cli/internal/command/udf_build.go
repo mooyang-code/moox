@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/factorudf"
@@ -26,11 +27,17 @@ func runCargo(dir string, out io.Writer, args ...string) error {
 func runCargoEnv(dir string, out io.Writer, env []string, args ...string) error {
 	cmd := exec.Command("cargo", args...)
 	cmd.Dir = dir
-	// 去掉会改变构建结果或产物位置的继承环境：产物目录固定在工作区的 target，rustflags 只用 build 自己编码的那一份。
+	// 去掉会改变构建结果或产物位置的继承环境：产物目录固定在工作区的 target，rustflags 只用 build 自己编码的那一份，
+	// profile、目标、wrapper、clippy 配置目录与 RUSTC_BOOTSTRAP 都不继承。工作区自己的 .cargo/config.toml 无法这样隔离：
+	// 本地构建是便利性的门禁而不是对使用者本人的安全边界，服务端对 wasm 的模块检查与一致性复核才是真正的闸门。
 	base := make([]string, 0, len(os.Environ()))
 	for _, kv := range os.Environ() {
-		switch strings.SplitN(kv, "=", 2)[0] {
-		case "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER":
+		name := strings.SplitN(kv, "=", 2)[0]
+		if strings.HasPrefix(name, "CARGO_PROFILE_") || strings.HasPrefix(name, "CARGO_BUILD_") || strings.HasPrefix(name, "CARGO_TARGET_") {
+			continue
+		}
+		switch name {
+		case "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTC_BOOTSTRAP", "CLIPPY_CONF_DIR":
 			continue
 		}
 		base = append(base, kv)
@@ -92,8 +99,8 @@ func udfCrates(root string) ([]string, error) {
 }
 
 var (
-	unsafeRE     = regexp.MustCompile(`\bunsafe\b|\ballow\s*\([^)]*unsafe_code`)
-	exportAttrRE = regexp.MustCompile(`#\s*!?\[\s*(no_mangle|export_name|link_section)\b`)
+	unsafeRE     = regexp.MustCompile(`\bunsafe\b|\b(allow|expect|warn)\s*\([^)]*unsafe_code`)
+	exportAttrRE = regexp.MustCompile(`\b(no_mangle|export_name|link_section)\b`)
 )
 
 // stripRustNonCode 按 Rust 的词法把注释与字符串、字符字面量换成空格（保留换行）：嵌套的块注释、原始字符串 r#"…"#、转义、
@@ -136,6 +143,14 @@ func stripRustNonCode(src string) string {
 			}
 			blank(i, j)
 			i = j
+		case b[i] == 'r' && i+2 < len(b) && b[i+1] == '#' && (i == 0 || !isIdentByte(b[i-1])) && (b[i+2] == '_' || b[i+2] >= 'a' && b[i+2] <= 'z' || b[i+2] >= 'A' && b[i+2] <= 'Z'):
+			// 原始标识符 r#ident：不是原始字符串；去掉 r# 保留标识符本身（r#unsafe 这样的名字按关键字对待，宁可误报）。
+			out[i], out[i+1] = ' ', ' '
+			i += 2
+			for i < len(b) && isIdentByte(b[i]) { // 整个标识符一起消费，后面紧跟的字符串不会被当成它的前缀
+				out[i] = b[i]
+				i++
+			}
 		case isRawStringStart(b, i):
 			j := i
 			if b[j] == 'b' || b[j] == 'c' {
@@ -181,9 +196,9 @@ func stripRustNonCode(src string) string {
 				}
 				blank(i, j+1)
 				i = j + 1
-			} else if j+1 < len(b) && b[j+1] == '\'' {
-				blank(i, j+2)
-				i = j + 2
+			} else if _, size := utf8.DecodeRune(b[j:]); j+size < len(b) && b[j+size] == '\'' && j < len(b) {
+				blank(i, j+size+1) // 单个字符（可能是多字节的 UTF-8）后紧跟闭合引号才是字符字面量
+				i = j + size + 1
 			} else {
 				out[i] = b[i]
 				i++
