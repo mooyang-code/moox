@@ -1,0 +1,27 @@
+# 默认展示策略：合约双均线（5/10 金叉入场、死叉离场），读取币安合约 1m 因子任务（ftask_swap_1m）。
+#
+# 使用方法：合约 1m 因子任务里要有两个固定成员（moox.toml.example 的默认合约任务已包含）：
+#   { factor = "ma", params = { window = 5 } }   # → 列 ma__5，窗口 5，作快线
+#   { factor = "ma", params = { window = 10 } }  # → 列 ma__10，窗口 10，作慢线
+# 创建实例时选这个因子任务，不挂账户（观察实例）：只计算目标权重、不投递，适合作为系统的默认展示。
+#
+# 规则：固定池 BTC、ETH、SOL 三个永续合约；上一根快线不高于慢线、当前根快线高于慢线（金叉）入场，
+# 快线低于慢线（死叉）离场；只做多，三者合计最多满仓（杠杆 1）。
+name: dual_ma_swap_1m
+bar: 1m
+
+universe:
+  min_age_bars: 15
+
+rules:
+  - id: golden_cross
+    name: 5/10 均线金叉
+    type: signal
+    pool: [BTC-USDT, ETH-USDT, SOL-USDT]
+    entry: "bars[-1].ma__5 <= bars[-1].ma__10 && bars[0].ma__5 > bars[0].ma__10"
+    exit: "bars[0].ma__5 < bars[0].ma__10"
+    weight: {total: 1}
+
+portfolio:
+  leverage: 1
+  max_missing: 0.34

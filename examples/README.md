@@ -13,8 +13,11 @@
 moox-cli setup init \
   --file ./moox.toml \
   --config-dir ./config/setup \
-  --storage-host control
+  --storage-host storage
 ```
+
+默认展示策略在 [`strategies/dual_ma_swap_1m.yaml`](./strategies/dual_ma_swap_1m.yaml)：基于币安合约 1m 因子任务的 5/10 双均线（金叉入场、死叉离场），
+不挂账户的观察实例。创建方法见 [`skills/moox/references/fresh-deploy.md`](../skills/moox/references/fresh-deploy.md) 的“默认展示策略”。
 
 行情样例在 [`data/kline/`](./data/kline/)，可执行端到端流程在
 [`e2e/`](./e2e/)。业务运行数据、交易所标的和凭据不进入默认配置。
