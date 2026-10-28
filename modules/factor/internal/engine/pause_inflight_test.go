@@ -124,11 +124,15 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 
 	// 第一块跑完后暂停模块，再下一块被门禁挡住；作业不能等到“门禁重开”。
 	var chunks int
+	pauseDone := make(chan struct{})
 	loop.executor = recalcexec.NewExecutor(&hookRunner{inner: runner, after: func() {
 		chunks++
 		if chunks == 1 {
 			// 暂停命令要等这一块的在途登记结束才返回，所以放在后台，只等它先把门禁关上。
-			go func() { _, _ = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{}) }()
+			go func() {
+				defer close(pauseDone)
+				_, _ = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+			}()
 			require.Eventually(t, func() bool { return !r.life.ModuleOpen() }, 5*time.Second, time.Millisecond)
 		}
 	}}, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
@@ -143,6 +147,7 @@ func TestRecalcJobIsAbandonedWhenTheModulePauses(t *testing.T) {
 	require.Less(t, time.Since(started), 2*time.Second, "不等待门禁重开")
 	require.Len(t, runner.plans, 1, "暂停之后没有再写任何分块")
 	require.NotContains(t, reportedStatuses(client), jobStatusFailed)
+	<-pauseDone // 暂停命令还会写生命周期状态文件：等它结束，临时目录才能干净清理
 }
 
 type hookRunner struct {
