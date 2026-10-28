@@ -231,7 +231,7 @@ func (s *Store) ListMembers(ctx context.Context, taskID, status string) ([]domai
 	}
 	members := make([]domain.TaskMember, 0, len(rows))
 	for _, row := range rows {
-		def, err := row.Def.domain()
+		def, err := s.resolveDef(ctx, s.db, row.Def)
 		if err != nil {
 			return nil, err
 		}

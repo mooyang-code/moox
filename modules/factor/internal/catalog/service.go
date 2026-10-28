@@ -35,6 +35,8 @@ type Service struct {
 	locks       *setlock.Locks
 	now         func() time.Time
 	subjects    SubjectSource
+	verifier    *UDFVerifier
+	engineView  EngineView
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
@@ -255,6 +257,15 @@ func (s *Service) ListTasks(ctx context.Context) ([]domain.FactorTask, error) {
 // CreateFactor registers a standalone definition. It only runs the static
 // checks (compiling the spec); dataset checks wait for AddTaskMember.
 func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
+	unlockUdf, err := s.lockUdfIfReferenced(ctx, "", in.Spec)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
+	defer unlockUdf()
+	in, err = s.withUDFs(ctx, in)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
 	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
 		return domain.FactorDef{}, err
@@ -274,6 +285,15 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 // 声明顺序和默认值，也不允许增删、改名或重排输出（设计 5.4）；新的参数范围必须仍包含所有引用它的成员保存的参数；
 // 新定义还要对每个引用它的任务重新做成员校验，任何一项不通过都拒绝整次更新。
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
+	unlockUdf, err := s.lockUdfIfReferenced(ctx, strings.TrimSpace(in.FactorID), in.Spec)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
+	defer unlockUdf()
+	in, err = s.withUDFs(ctx, in)
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
 	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
 		return domain.FactorDef{}, err

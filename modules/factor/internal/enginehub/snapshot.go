@@ -68,6 +68,9 @@ type hashedMember struct {
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
 	// Params 是成员的固定参数，或可变成员的默认参数；同一成员键删除重加、换参数后目录指纹必须变化，引擎才会重新同步。
 	Params map[string]float64 `json:"params,omitempty"`
+	// UDFs 是定义引用的自定义算子版本（名称@哈希）：definition_hash 已经随版本变化，这里再显式列出，
+	// 让“只切换了版本”在指纹里一目了然，也覆盖编译失败时（definition_hash 取备用值）的变化。
+	UDFs []string `json:"udfs,omitempty"`
 }
 
 // CatalogHash fingerprints everything the engine computes with. Timestamps are
@@ -82,7 +85,7 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 			members = append(members, hashedMember{
 				Key: member.Key, Kind: member.Kind, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
 				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
-				Params: member.Params,
+				Params: member.Params, UDFs: udfRefs(factor),
 			})
 		}
 		hashed = append(hashed, hashedSet{
@@ -98,4 +101,17 @@ func CatalogHash(sets []domain.EngineTask) (string, error) {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// udfRefs 返回定义的自定义算子绑定（名称@哈希，按名称排序）。
+func udfRefs(def domain.FactorDef) []string {
+	if len(def.UDFs) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(def.UDFs))
+	for name, udf := range def.UDFs {
+		refs = append(refs, name+"@"+udf.Hash)
+	}
+	sort.Strings(refs)
+	return refs
 }

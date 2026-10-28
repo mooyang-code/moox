@@ -76,6 +76,14 @@ type FactorMgrService interface {
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error)
 
 	GetFactorParams(ctx context.Context, req *GetFactorParamsReq) (*GetFactorParamsRsp, error)
+	// PublishUdf 自定义算子（wasm UDF）：发布一个版本（未启用）、查看、切换启用版本。
+	PublishUdf(ctx context.Context, req *PublishUdfReq) (*PublishUdfRsp, error)
+
+	ListUdfs(ctx context.Context, req *ListUdfsReq) (*ListUdfsRsp, error)
+
+	GetUdf(ctx context.Context, req *GetUdfReq) (*GetUdfRsp, error)
+
+	ActivateUdf(ctx context.Context, req *ActivateUdfReq) (*ActivateUdfRsp, error)
 }
 
 func FactorMgrService_CreateFactorTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -600,6 +608,78 @@ func FactorMgrService_GetFactorParams_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
+func FactorMgrService_PublishUdf_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PublishUdfReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).PublishUdf(ctx, reqbody.(*PublishUdfReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ListUdfs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListUdfsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListUdfs(ctx, reqbody.(*ListUdfsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_GetUdf_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetUdfReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).GetUdf(ctx, reqbody.(*GetUdfReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ActivateUdf_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ActivateUdfReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ActivateUdf(ctx, reqbody.(*ActivateUdfReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -721,6 +801,22 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.factor.FactorMgr/GetFactorParams",
 			Func: FactorMgrService_GetFactorParams_Handler,
 		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/PublishUdf",
+			Func: FactorMgrService_PublishUdf_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ListUdfs",
+			Func: FactorMgrService_ListUdfs_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/GetUdf",
+			Func: FactorMgrService_GetUdf_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ActivateUdf",
+			Func: FactorMgrService_ActivateUdf_Handler,
+		},
 	},
 }
 
@@ -742,6 +838,8 @@ type FactorEngineService interface {
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error)
 
 	GetTaskParams(ctx context.Context, req *GetTaskParamsReq) (*GetTaskParamsRsp, error)
+	// GetUdfModule GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
+	GetUdfModule(ctx context.Context, req *GetUdfModuleReq) (*GetUdfModuleRsp, error)
 }
 
 func FactorEngineService_SyncEngineCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -834,6 +932,24 @@ func FactorEngineService_GetTaskParams_Handler(svr interface{}, ctx context.Cont
 	return rsp, nil
 }
 
+func FactorEngineService_GetUdfModule_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetUdfModuleReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).GetUdfModule(ctx, reqbody.(*GetUdfModuleReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorEngineServer_ServiceDesc descriptor for server.RegisterService.
 var FactorEngineServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorEngine",
@@ -858,6 +974,10 @@ var FactorEngineServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorEngine/GetTaskParams",
 			Func: FactorEngineService_GetTaskParams_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/GetUdfModule",
+			Func: FactorEngineService_GetUdfModule_Handler,
 		},
 	},
 }
@@ -961,6 +1081,20 @@ func (s *UnimplementedFactorMgr) GetFactorParams(ctx context.Context, req *GetFa
 	return nil, errors.New("rpc GetFactorParams of service FactorMgr is not implemented")
 }
 
+// PublishUdf 自定义算子（wasm UDF）：发布一个版本（未启用）、查看、切换启用版本。
+func (s *UnimplementedFactorMgr) PublishUdf(ctx context.Context, req *PublishUdfReq) (*PublishUdfRsp, error) {
+	return nil, errors.New("rpc PublishUdf of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ListUdfs(ctx context.Context, req *ListUdfsReq) (*ListUdfsRsp, error) {
+	return nil, errors.New("rpc ListUdfs of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) GetUdf(ctx context.Context, req *GetUdfReq) (*GetUdfRsp, error) {
+	return nil, errors.New("rpc GetUdf of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ActivateUdf(ctx context.Context, req *ActivateUdfReq) (*ActivateUdfRsp, error) {
+	return nil, errors.New("rpc ActivateUdf of service FactorMgr is not implemented")
+}
+
 type UnimplementedFactorEngine struct{}
 
 func (s *UnimplementedFactorEngine) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error) {
@@ -977,6 +1111,11 @@ func (s *UnimplementedFactorEngine) ReportRecalcProgress(ctx context.Context, re
 }
 func (s *UnimplementedFactorEngine) GetTaskParams(ctx context.Context, req *GetTaskParamsReq) (*GetTaskParamsRsp, error) {
 	return nil, errors.New("rpc GetTaskParams of service FactorEngine is not implemented")
+}
+
+// GetUdfModule GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
+func (s *UnimplementedFactorEngine) GetUdfModule(ctx context.Context, req *GetUdfModuleReq) (*GetUdfModuleRsp, error) {
+	return nil, errors.New("rpc GetUdfModule of service FactorEngine is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1044,6 +1183,14 @@ type FactorMgrClientProxy interface {
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq, opts ...client.Option) (rsp *SubmitFactorParamsRsp, err error)
 
 	GetFactorParams(ctx context.Context, req *GetFactorParamsReq, opts ...client.Option) (rsp *GetFactorParamsRsp, err error)
+	// PublishUdf 自定义算子（wasm UDF）：发布一个版本（未启用）、查看、切换启用版本。
+	PublishUdf(ctx context.Context, req *PublishUdfReq, opts ...client.Option) (rsp *PublishUdfRsp, err error)
+
+	ListUdfs(ctx context.Context, req *ListUdfsReq, opts ...client.Option) (rsp *ListUdfsRsp, err error)
+
+	GetUdf(ctx context.Context, req *GetUdfReq, opts ...client.Option) (rsp *GetUdfRsp, err error)
+
+	ActivateUdf(ctx context.Context, req *ActivateUdfReq, opts ...client.Option) (rsp *ActivateUdfRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -1635,6 +1782,86 @@ func (c *FactorMgrClientProxyImpl) GetFactorParams(ctx context.Context, req *Get
 	return rsp, nil
 }
 
+func (c *FactorMgrClientProxyImpl) PublishUdf(ctx context.Context, req *PublishUdfReq, opts ...client.Option) (*PublishUdfRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/PublishUdf")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("PublishUdf")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PublishUdfRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ListUdfs(ctx context.Context, req *ListUdfsReq, opts ...client.Option) (*ListUdfsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListUdfs")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListUdfs")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListUdfsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) GetUdf(ctx context.Context, req *GetUdfReq, opts ...client.Option) (*GetUdfRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetUdf")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("GetUdf")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetUdfRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ActivateUdf(ctx context.Context, req *ActivateUdfReq, opts ...client.Option) (*ActivateUdfRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ActivateUdf")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ActivateUdf")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ActivateUdfRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorEngineClientProxy defines service client proxy
 type FactorEngineClientProxy interface {
 	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (rsp *SyncEngineCatalogRsp, err error)
@@ -1646,6 +1873,8 @@ type FactorEngineClientProxy interface {
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (rsp *ReportRecalcProgressRsp, err error)
 
 	GetTaskParams(ctx context.Context, req *GetTaskParamsReq, opts ...client.Option) (rsp *GetTaskParamsRsp, err error)
+	// GetUdfModule GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
+	GetUdfModule(ctx context.Context, req *GetUdfModuleReq, opts ...client.Option) (rsp *GetUdfModuleRsp, err error)
 }
 
 type FactorEngineClientProxyImpl struct {
@@ -1751,6 +1980,26 @@ func (c *FactorEngineClientProxyImpl) GetTaskParams(ctx context.Context, req *Ge
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetTaskParamsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) GetUdfModule(ctx context.Context, req *GetUdfModuleReq, opts ...client.Option) (*GetUdfModuleRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/GetUdfModule")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("GetUdfModule")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetUdfModuleRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

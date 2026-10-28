@@ -22,8 +22,8 @@ import (
 // Storage 里的因子结果数据集是另一份数据（它们的重置是 Storage 的事）；引擎的本地缓存由引擎自己重置。
 
 var (
-	mgrDataTables   = []string{"t_factor_recalc_jobs", "t_factor_engine_heartbeat"}
-	mgrConfigTables = []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_categories"}
+	mgrDataTables   = []string{"t_factor_recalc_job_bindings", "t_factor_recalc_jobs", "t_factor_engine_heartbeat"}
+	mgrConfigTables = []string{"t_factor_tasks", "t_factor_defs", "t_factor_task_members", "t_factor_categories", "t_factor_udf_versions", "t_factor_udfs"}
 )
 
 func mgrResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
@@ -49,7 +49,7 @@ func mgrResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
 		if scope == lifecycle.ResetAll {
 			tables = append(tables, mgrConfigTables...)
 		} else {
-			info.Keeps = append(info.Keeps, "因子任务、因子定义、任务成员、因子分类（配置）")
+			info.Keeps = append(info.Keeps, "因子任务、因子定义、任务成员、因子分类、自定义算子及其版本（配置）")
 		}
 		if rows, err := lifecycle.TableRows(ctx, sqlDB, tables); err == nil {
 			info.Stats = map[string]any{"rows": rows}

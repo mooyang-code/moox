@@ -20,8 +20,15 @@ type Previewer interface {
 // 校验与试算时临时定义使用的 factor_id 与 name：只用于编译，不落库。
 const draftFactorID, draftFactorName = "draft", "draft"
 
+// UdfEnvAPI 是校验与试算解析自定义算子的来源（由目录服务实现）。
+type UdfEnvAPI interface {
+	UDFEnvFor(ctx context.Context, spec string, overrides map[string]string) (map[string]factorexpr.UDF, error)
+	EnabledUDFEnv(ctx context.Context) (factorexpr.UDFs, error)
+}
+
 // draftDefinition 把请求里的 spec 编译成临时定义；请求带了因子 ID 就用它（单输出因子的输出名就是因子 ID），否则按草稿处理。
-func draftDefinition(factorID, spec string, allowPartial bool) (domain.FactorDef, error) {
+// udfs 是 spec 引用的自定义算子的解析环境（请求级覆盖已经应用）。
+func draftDefinition(factorID, spec string, allowPartial bool, udfs map[string]factorexpr.UDF) (domain.FactorDef, error) {
 	name := draftFactorName
 	if factorID == "" {
 		factorID = draftFactorID
@@ -29,16 +36,29 @@ func draftDefinition(factorID, spec string, allowPartial bool) (domain.FactorDef
 		name = factorID
 	}
 	return domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: factorID, Name: name, Spec: spec, AllowPartialUniverse: allowPartial,
+		FactorID: factorID, Name: name, Spec: spec, AllowPartialUniverse: allowPartial, UDFs: udfs,
 	})
 }
 
+// draftUDFs 按当前启用版本解析 spec 引用的自定义算子，请求级覆盖（名称 → 版本哈希）优先；只作用于这次请求。
+func (s *Service) draftUDFs(ctx context.Context, spec string, overrides map[string]string) (map[string]factorexpr.UDF, error) {
+	api, ok := s.catalog.(UdfEnvAPI)
+	if !ok || len(domain.UDFNames(spec)) == 0 {
+		return nil, nil
+	}
+	return api.UDFEnvFor(ctx, spec, overrides)
+}
+
 // ValidateFactorSpec 编译一个定义并返回诊断与派生元数据；定义不合法时 valid=false 且 ret_info 仍为成功。
-func (s *Service) ValidateFactorSpec(_ context.Context, req *factorpb.ValidateFactorSpecReq) (*factorpb.ValidateFactorSpecRsp, error) {
+func (s *Service) ValidateFactorSpec(ctx context.Context, req *factorpb.ValidateFactorSpecReq) (*factorpb.ValidateFactorSpecRsp, error) {
 	if req == nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: invalid(errors.New("spec is required"))}, nil
 	}
-	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
+	udfs, err := s.draftUDFs(ctx, req.GetSpec(), req.GetUdfVersions())
+	if err != nil {
+		return &factorpb.ValidateFactorSpecRsp{RetInfo: success(), Valid: false, Diagnostic: diagnosticToPB(err)}, nil
+	}
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse(), udfs)
 	if err != nil {
 		return &factorpb.ValidateFactorSpecRsp{RetInfo: success(), Valid: false, Diagnostic: diagnosticToPB(err)}, nil
 	}
@@ -74,7 +94,11 @@ func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactor
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse())
+	udfs, err := s.draftUDFs(ctx, req.GetSpec(), req.GetUdfVersions())
+	if err != nil {
+		return &factorpb.PreviewFactorRsp{RetInfo: invalid(fmt.Errorf("解析自定义算子：%w", err))}, nil
+	}
+	def, err := draftDefinition(req.GetFactorId(), req.GetSpec(), req.GetAllowPartialUniverse(), udfs)
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(fmt.Errorf("定义不合法：%w", err))}, nil
 	}
@@ -108,8 +132,14 @@ func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactor
 }
 
 // ListFactorFunctions 返回表达式可用的函数及其说明，供控制台的编辑器提示与文档使用。
-func (s *Service) ListFactorFunctions(context.Context, *factorpb.ListFactorFunctionsReq) (*factorpb.ListFactorFunctionsRsp, error) {
-	docs := factorexpr.FunctionDocs()
+func (s *Service) ListFactorFunctions(ctx context.Context, _ *factorpb.ListFactorFunctionsReq) (*factorpb.ListFactorFunctionsRsp, error) {
+	var env factorexpr.UDFEnv
+	if api, ok := s.catalog.(UdfEnvAPI); ok {
+		if enabled, err := api.EnabledUDFEnv(ctx); err == nil && len(enabled) > 0 {
+			env = enabled
+		}
+	}
+	docs := factorexpr.FunctionDocsWith(env)
 	functions := make([]*factorpb.FactorFunction, 0, len(docs))
 	for _, doc := range docs {
 		args := make([]*factorpb.FactorFunctionArg, 0, len(doc.Args))

@@ -31,7 +31,13 @@ func (h *Hub) Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJ
 		if err != nil || !found {
 			return store.RecalcJob{}, domain.EngineTask{}, false, err
 		}
-		set, err := h.runnableTask(ctx, job)
+		// 绑定在首次领取时固化：续跑、租约过期后重新领取、管理端重启后都用同一份，不再按当前启用版本解析。
+		// 固化发生在任何分块下发之前；切换自定义算子版本要求没有已领取的作业，所以领取与固化之间不会发生切换。
+		pinned, err := h.jobBindings(ctx, job)
+		if err != nil {
+			return store.RecalcJob{}, domain.EngineTask{}, false, err
+		}
+		set, err := h.runnableTask(store.WithUDFPins(ctx, pinned), job)
 		if err != nil {
 			if _, failErr := h.store.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.ProgressTime,
 				store.RecalcStatusFailed, err.Error(), nil, now, h.jobTTL); failErr != nil {
@@ -59,12 +65,28 @@ func (h *Hub) Report(ctx context.Context, id domain.EngineIdentity, jobID, lease
 			return store.RecalcJob{}, err
 		}
 		if job.LeaseToken == leaseToken && job.Status == store.RecalcStatusRunning {
-			if _, runnableErr := h.runnableTask(ctx, job); runnableErr != nil {
+			pinned, _, bindErr := h.store.JobBindings(ctx, job.JobID)
+			if bindErr != nil {
+				return store.RecalcJob{}, bindErr
+			}
+			if _, runnableErr := h.runnableTask(store.WithUDFPins(ctx, pinned), job); runnableErr != nil {
 				return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), store.RecalcStatusFailed, runnableErr.Error(), nil, now, h.jobTTL)
 			}
 		}
 	}
 	return h.store.ReportRecalcProgress(ctx, jobID, leaseToken, progress.Unix(), status, errText, defaultFilled, now, h.jobTTL)
+}
+
+// jobBindings 返回作业固化的绑定；第一次领取时按当前启用版本解析并写下。
+func (h *Hub) jobBindings(ctx context.Context, job store.RecalcJob) (map[string]string, error) {
+	if bindings, found, err := h.store.JobBindings(ctx, job.JobID); err != nil || found {
+		return bindings, err
+	}
+	live := map[string]string{}
+	if set, err := h.runnableTask(ctx, job); err == nil {
+		live = store.UDFBindingsOf(set.Members)
+	}
+	return h.store.SaveJobBindings(ctx, job.JobID, live)
 }
 
 func (h *Hub) runnableTask(ctx context.Context, job store.RecalcJob) (domain.EngineTask, error) {

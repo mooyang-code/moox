@@ -59,6 +59,18 @@ message FactorDef {
   string category_id = 18;
   // params 是 spec 声明的可调参数（派生，只读）。
   repeated FactorParamDecl params = 19;
+  // udfs 是这份定义引用的自定义算子在本次编译所用的版本与元数据（只读，管理端读取时按启用版本或补算作业固化的绑定解析）；
+  // 随目录快照与补算任务下发，引擎据此编译。
+  repeated UdfDef udfs = 20;
+}
+
+// UdfDef 是一个自定义算子版本的编译所需信息：manifest 是 wasm 自定义段里的语义元数据（JSON），doc、example 是说明。
+message UdfDef {
+  string name = 1;
+  string hash = 2;
+  string manifest = 3;
+  string doc = 4;
+  string example = 5;
 }
 
 message FactorUsage {
@@ -351,6 +363,8 @@ message ValidateFactorSpecReq {
   bool allow_partial_universe = 2;
   // factor_id 是这份定义的因子 ID；单输出因子的输出名就是因子 ID，所以要用它推导输出。为空时按草稿处理。
   string factor_id = 3;
+  // udf_versions 是请求级的自定义算子版本覆盖（名称 → 版本哈希）：只作用于这次请求，用来校验还没有启用的版本。
+  map<string, string> udf_versions = 4;
 }
 message FactorSpecDiagnostic {
   string path = 1;
@@ -384,6 +398,8 @@ message PreviewFactorReq {
   map<string, ParamValue> params = 6;
   // factor_id 是这份定义的因子 ID（单输出因子的输出名就是因子 ID）；为空时按草稿处理。
   string factor_id = 7;
+  // udf_versions 是请求级的自定义算子版本覆盖（名称 → 版本哈希）：用未启用的版本试算。
+  map<string, string> udf_versions = 8;
 }
 message PreviewRow {
   string subject_id = 1;
@@ -535,6 +551,110 @@ service FactorMgr {
   rpc BindFactorTask(BindFactorTaskReq) returns (BindFactorTaskRsp);
   rpc SubmitFactorParams(SubmitFactorParamsReq) returns (SubmitFactorParamsRsp);
   rpc GetFactorParams(GetFactorParamsReq) returns (GetFactorParamsRsp);
+  // 自定义算子（wasm UDF）：发布一个版本（未启用）、查看、切换启用版本。
+  rpc PublishUdf(PublishUdfReq) returns (PublishUdfRsp);
+  rpc ListUdfs(ListUdfsReq) returns (ListUdfsRsp);
+  rpc GetUdf(GetUdfReq) returns (GetUdfRsp);
+  rpc ActivateUdf(ActivateUdfReq) returns (ActivateUdfRsp);
+}
+
+// ---- 自定义算子（wasm UDF）
+
+message PublishUdfReq {
+  // package 是 .udfpkg（tar：module.wasm、manifest.json、fixtures/、report.json），整包不超过 2 MiB。
+  bytes package = 1;
+}
+message PublishUdfRsp {
+  common.RetInfo ret_info = 1;
+  string name = 2;
+  string hash = 3;
+  // created 为假表示这个版本已经存在（只更新了说明与示例）。
+  bool created = 4;
+  // report 是服务端一致性测试报告（JSON）。
+  string report = 5;
+}
+
+message UdfVersionInfo {
+  string hash = 1;
+  string name = 2;
+  // manifest 是包内 manifest.json（语义元数据加说明、示例、来源）。
+  string manifest = 3;
+  string source_ref = 4;
+  string sdk_version = 5;
+  string toolchain = 6;
+  string report = 7;
+  string created_at = 8;
+  bool active = 9;
+}
+message UdfInfo {
+  string name = 1;
+  string active_hash = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  repeated UdfVersionInfo versions = 5;
+  // referenced_by 是引用这个名称的因子定义 ID。
+  repeated string referenced_by = 6;
+  // modules 是引擎上报的各版本模块状态。
+  repeated UdfModuleStatus modules = 7;
+}
+message ListUdfsReq {}
+message ListUdfsRsp {
+  common.RetInfo ret_info = 1;
+  repeated UdfInfo udfs = 2;
+}
+message GetUdfReq {
+  string name = 1;
+}
+message GetUdfRsp {
+  common.RetInfo ret_info = 1;
+  UdfInfo udf = 2;
+}
+
+message ActivateUdfReq {
+  string name = 1;
+  string hash = 2;
+  // dry_run 只返回影响清单与各前提的检查结果，不修改任何东西。
+  bool dry_run = 3;
+}
+message UdfImpact {
+  string factor_id = 1;
+  string old_definition_hash = 2;
+  string new_definition_hash = 3;
+  int32 old_lookback = 4;
+  int32 new_lookback = 5;
+  repeated string input_columns = 6;
+  // members 是引用这个定义的成员（任务/成员键）。
+  repeated string members = 7;
+  // error 非空表示用新版本重新编译或成员校验失败。
+  string error = 8;
+}
+message UdfPrerequisite {
+  string name = 1;
+  bool ok = 2;
+  string detail = 3;
+}
+message ActivateUdfRsp {
+  common.RetInfo ret_info = 1;
+  string name = 2;
+  string old_hash = 3;
+  string new_hash = 4;
+  bool dry_run = 5;
+  // applied 为真表示已经切换。
+  bool applied = 6;
+  repeated UdfImpact impacts = 7;
+  repeated string tasks = 8;
+  repeated string instances = 9;
+  repeated UdfPrerequisite prerequisites = 10;
+  repeated string notes = 11;
+}
+
+// UdfModuleStatus 是引擎上报的一个自定义算子模块（版本）的状态。
+message UdfModuleStatus {
+  string hash = 1;
+  string name = 2;
+  // state：ready 已拉取并编译、fetching 拉取中、fetch_failed 拉取失败、compile_failed 编译失败。
+  string state = 3;
+  string error = 4;
 }
 
 // FactorEngine is the internal contract between moox-factor-mgr and the
@@ -581,6 +701,8 @@ message EngineRuntimeStatus {
   string expr_version = 9;
   // watermarks 是各任务的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
   repeated TaskWatermarkStatus watermarks = 10;
+  // udf_modules 是引擎当前目录引用的各自定义算子模块的状态。
+  repeated UdfModuleStatus udf_modules = 12;
   // lifecycle 是模块级生命周期状态：管理端切换自定义算子版本之前，据此确认本次暂停已收敛。
   EngineLifecycleStatus lifecycle = 11;
 }
@@ -680,4 +802,16 @@ service FactorEngine {
   rpc PullRecalcJob(PullRecalcJobReq) returns (PullRecalcJobRsp);
   rpc ReportRecalcProgress(ReportRecalcProgressReq) returns (ReportRecalcProgressRsp);
   rpc GetTaskParams(GetTaskParamsReq) returns (GetTaskParamsRsp);
+  // GetUdfModule 按版本哈希取一个自定义算子模块的 wasm 字节。
+  rpc GetUdfModule(GetUdfModuleReq) returns (GetUdfModuleRsp);
+}
+
+message GetUdfModuleReq {
+  EngineIdentity engine = 1;
+  string hash = 2;
+}
+message GetUdfModuleRsp {
+  common.RetInfo ret_info = 1;
+  string name = 2;
+  bytes wasm = 3;
 }

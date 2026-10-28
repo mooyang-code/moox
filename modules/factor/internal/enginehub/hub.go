@@ -26,6 +26,9 @@ type Store interface {
 	PullRecalcJob(ctx context.Context, engineID string, now time.Time, ttl time.Duration, skipTasks map[string]bool, maxRunning int) (store.RecalcJob, bool, error)
 	ReportRecalcProgress(ctx context.Context, jobID, leaseToken string, progress int64, status, errText string, defaultFilled map[string][]store.TimeRange, now time.Time, ttl time.Duration) (store.RecalcJob, error)
 	GetRecalcJob(ctx context.Context, jobID string) (store.RecalcJob, error)
+	// JobBindings、SaveJobBindings 读写补算作业首次领取时固化的自定义算子绑定。
+	JobBindings(ctx context.Context, jobID string) (map[string]string, bool, error)
+	SaveJobBindings(ctx context.Context, jobID string, bindings map[string]string) (map[string]string, error)
 }
 
 const (

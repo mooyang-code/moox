@@ -17,7 +17,7 @@ func TestOpenCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, s.db.Raw(`
 		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
 	`).Scan(&tables).Error)
-	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks"}, tables)
+	require.Equal(t, []string{"t_factor_categories", "t_factor_defs", "t_factor_engine_heartbeat", "t_factor_recalc_job_bindings", "t_factor_recalc_jobs", "t_factor_task_members", "t_factor_tasks", "t_factor_udf_versions", "t_factor_udfs"}, tables)
 }
 
 // 已有库缺少后来新增的引擎心跳表时，启动时补建，已有数据保留。
@@ -33,6 +33,26 @@ func TestApplySchemaAddsMissingHeartbeatTable(t *testing.T) {
 	_, ok, err := s.LastEngineHeartbeat(context.Background())
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+// 已有库（没有自定义算子相关的三张表）启动时补建新表，已有的表与数据不变：新表不改动任何已有表，所以现有的 ApplySchema
+// 严格校验不会让新版本在现有库上启动失败。
+func TestApplySchemaAddsUdfTablesToAnExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "factor.db")
+	s, err := Open(&Options{Path: path})
+	require.NoError(t, err)
+	require.NoError(t, s.CreateFactor(context.Background(), domain.FactorDef{FactorID: "f", Name: "n", Spec: "x", SpecHash: "h"}))
+	for _, table := range []string{"t_factor_recalc_job_bindings", "t_factor_udf_versions", "t_factor_udfs"} {
+		require.NoError(t, s.db.Exec("DROP TABLE "+table).Error)
+	}
+	require.NoError(t, s.Close())
+	s, err = Open(&Options{Path: path})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	var n int
+	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_factor_udfs").Scan(&n).Error)
+	_, err = s.GetFactor(context.Background(), "f")
+	require.NoError(t, err, "已有数据保留")
 }
 
 func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {

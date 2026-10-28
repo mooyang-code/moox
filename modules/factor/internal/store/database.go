@@ -127,6 +127,15 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 		"t_factor_engine_heartbeat": {
 			"c_id", "c_engine_id", "c_boot_id", "c_heartbeat_at", "c_mtime",
 		},
+		"t_factor_udfs": {
+			"c_name", "c_active_hash", "c_ctime", "c_mtime",
+		},
+		"t_factor_udf_versions": {
+			"c_hash", "c_name", "c_manifest", "c_wasm", "c_source_ref", "c_sdk_version", "c_toolchain", "c_report", "c_ctime",
+		},
+		"t_factor_recalc_job_bindings": {
+			"c_job_id", "c_bindings", "c_ctime",
+		},
 	}
 	if requireAll && len(tables) != len(expected) {
 		return fmt.Errorf("factor database must contain only the current factor tables; create a fresh database")

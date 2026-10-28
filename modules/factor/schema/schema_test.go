@@ -48,8 +48,8 @@ func TestFactorSchemaContainsExpectedTables(t *testing.T) {
 	if strings.Contains(sql, "UNIQUE (c_space_id, c_source_dataset_id, c_freq)") {
 		t.Fatal("t_factor_tasks must allow several sets over one source dataset")
 	}
-	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 6 {
-		t.Fatalf("factor schema creates %d tables, want exactly 6", got)
+	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 9 {
+		t.Fatalf("factor schema creates %d tables, want exactly 9", got)
 	}
 }
 

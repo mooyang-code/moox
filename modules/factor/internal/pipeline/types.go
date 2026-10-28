@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/factorexpr/exec"
 )
 
 type Mode int
@@ -81,6 +82,8 @@ type Config struct {
 	MemoryAdmission Admission
 	// AdmissionTimeout 是等待内存预留的最长时间；0 表示不超时（受 ctx 限制）。
 	AdmissionTimeout time.Duration
+	// UDF 是自定义算子的执行宿主；定义里没有 udf. 调用时不需要。
+	UDF exec.UDFHost
 	// GapSink 接收每次本期没有算的记录（账本）：上游失败、窗口还没载入完成、本期数据取不到；nil 不记录。
 	GapSink GapSink
 }

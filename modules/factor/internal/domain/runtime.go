@@ -66,6 +66,24 @@ type EngineStatus struct {
 	Watermarks []SetWatermark
 	// Lifecycle 是引擎模块自身的生命周期状态（暂停是否已收敛、追赶前置条件）。
 	Lifecycle EngineLifecycle
+	// UDFModules 是引擎当前目录引用的各自定义算子模块（版本）的状态。
+	UDFModules []UDFModuleStatus
+}
+
+// 自定义算子模块在引擎上的状态。
+const (
+	UDFModuleReady         = "ready"
+	UDFModuleFetching      = "fetching"
+	UDFModuleFetchFailed   = "fetch_failed"
+	UDFModuleCompileFailed = "compile_failed"
+)
+
+// UDFModuleStatus 是引擎上报的一个自定义算子模块（版本）的状态。
+type UDFModuleStatus struct {
+	Hash  string
+	Name  string
+	State string
+	Error string
 }
 
 // EngineLifecycle 是引擎模块级的生命周期状态。Quiesced 为真表示本次暂停已收敛（在途写结果操作都已结束）。

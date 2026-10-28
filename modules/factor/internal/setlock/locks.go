@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// Lock order: a definition lock (LockFactorContext) is always taken before any
-// set lock, and several set locks are taken in ascending task_id order.
+// Lock order: the global udf lock (LockUdfContext) comes first, then a definition
+// lock (LockFactorContext), then set locks:
+// a definition lock (LockFactorContext) is always taken before any set lock, and several set locks are taken in ascending task_id order.
 
 // Locks serializes catalog changes with live and recalculation work for a set.
 // The in-process lock is a one-slot channel: blocked acquirers are served in
@@ -117,7 +118,16 @@ func (l *Locks) LockFactorContext(ctx context.Context, factorID string) (func(),
 	return l.LockContext(ctx, factorLockPrefix+factorID)
 }
 
-const factorLockPrefix = "factor:"
+// LockUdfContext 取全局的自定义算子锁（单用户，不按名称细分）。锁顺序：自定义算子锁 → 定义锁 → 任务锁。
+// 发布、切换启用版本，以及新旧定义文本任一方引用自定义算子的创建、修改定义都先取它。
+func (l *Locks) LockUdfContext(ctx context.Context) (func(), error) {
+	return l.LockContext(ctx, udfLockKey)
+}
+
+const (
+	factorLockPrefix = "factor:"
+	udfLockKey       = "udf:global"
+)
 
 func (l *Locks) openFileLock(taskID string) (*fileLock, error) {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {

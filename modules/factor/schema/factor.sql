@@ -117,6 +117,40 @@ ON t_factor_recalc_jobs (c_status, c_mtime);
 CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_pull
 ON t_factor_recalc_jobs (c_status, c_lease_expires_at);
 
+-- 自定义算子（wasm UDF）：名称指向当前启用的版本，空串表示还没有启用
+CREATE TABLE IF NOT EXISTS t_factor_udfs (
+    c_name TEXT NOT NULL PRIMARY KEY,
+    c_active_hash TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 自定义算子的版本：不可变，主键是 wasm 字节的 sha256；c_manifest 含说明与示例（可随重复上传更新），
+-- c_source_ref 是私有仓库与提交号，c_report 是服务端一致性测试报告
+CREATE TABLE IF NOT EXISTS t_factor_udf_versions (
+    c_hash TEXT NOT NULL PRIMARY KEY,
+    c_name TEXT NOT NULL,
+    c_manifest TEXT NOT NULL,
+    c_wasm BLOB NOT NULL,
+    c_source_ref TEXT NOT NULL,
+    c_sdk_version TEXT NOT NULL,
+    c_toolchain TEXT NOT NULL,
+    c_report TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_name) REFERENCES t_factor_udfs (c_name) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_udf_versions_name ON t_factor_udf_versions (c_name, c_ctime);
+
+-- 补算作业首次领取时固化的自定义算子绑定（名称 → 版本哈希的 JSON）：续跑、租约过期后重新领取都用它，
+-- 不再按当前启用版本解析；作业没有引用自定义算子时不写
+CREATE TABLE IF NOT EXISTS t_factor_recalc_job_bindings (
+    c_job_id TEXT NOT NULL PRIMARY KEY,
+    c_bindings TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_job_id) REFERENCES t_factor_recalc_jobs (c_job_id) ON DELETE CASCADE
+);
+
 -- 最近一次被接受的引擎心跳（单行）：引擎租约只有 45 秒，离线告警按最近心跳判断；
 -- 落库后管理端重启也能判定“引擎一直没回来”
 CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
@@ -168,4 +202,12 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_categories SET c_mtime = CURRENT_TIMESTAMP WHERE c_category_id = OLD.c_category_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_udfs_mtime
+AFTER UPDATE ON t_factor_udfs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_udfs SET c_mtime = CURRENT_TIMESTAMP WHERE c_name = OLD.c_name;
 END;

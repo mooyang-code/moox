@@ -18,6 +18,8 @@ type Host struct {
 
 	mu      sync.RWMutex
 	modules map[string]*factorudf.Module
+	// loadMu 串行化 Ensure 的加载，避免同一版本被并发地拉取与编译。
+	loadMu sync.Mutex
 }
 
 // New 创建宿主；运行时由调用方创建并负责关闭。
@@ -38,6 +40,28 @@ func (h *Host) Load(ctx context.Context, wasm []byte) (*factorudf.Module, error)
 	h.modules[m.Info.Hash] = m
 	h.mu.Unlock()
 	return m, nil
+}
+
+// Ensure 确保版本已加载：没有就用 fetch 取字节并加载（完整模块检查），并核对字节的哈希与要求的一致。
+// 同一时刻只加载一次（串行），已加载的直接返回。
+func (h *Host) Ensure(ctx context.Context, hash string, fetch func(ctx context.Context, hash string) ([]byte, error)) error {
+	if h.Has(hash) {
+		return nil
+	}
+	h.loadMu.Lock()
+	defer h.loadMu.Unlock()
+	if h.Has(hash) {
+		return nil
+	}
+	wasm, err := fetch(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("取自定义算子版本 %s：%w", short(hash), err)
+	}
+	if got := factorudf.Hash(wasm); got != hash {
+		return fmt.Errorf("自定义算子版本 %s 的字节哈希是 %s", short(hash), short(got))
+	}
+	_, err = h.Load(ctx, wasm)
+	return err
 }
 
 // Module 返回已加载的版本。
@@ -122,3 +146,40 @@ func UDFFromManifest(m *factorudf.Manifest, hash string, d Describe) (factorexpr
 	}
 	return u, nil
 }
+
+// Budget 是一个固定上限的内存预算（factorudf.Budget 的简单实现）：管理端的发布复核与试算各用一个，与引擎分开计算。
+type Budget struct {
+	mu    sync.Mutex
+	limit int64
+	used  int64
+}
+
+// NewBudget 创建上限为 limit 字节的预算。
+func NewBudget(limit int64) *Budget { return &Budget{limit: limit} }
+
+// Acquire 申请 bytes 字节；超过上限拒绝。
+func (b *Budget) Acquire(bytes int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+bytes > b.limit {
+		return fmt.Errorf("需要 %d 字节，已用 %d、上限 %d", bytes, b.used, b.limit)
+	}
+	b.used += bytes
+	return nil
+}
+
+// Release 归还 bytes 字节。
+func (b *Budget) Release(bytes int64) {
+	b.mu.Lock()
+	b.used = max(b.used-bytes, 0)
+	b.mu.Unlock()
+}
+
+// Used 返回已用字节数（指标与测试用）。
+func (b *Budget) Used() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+var _ factorudf.Budget = (*Budget)(nil)
