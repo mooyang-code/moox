@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, 全新部署, 清空重装, fresh install, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, 选币策略, 批次持仓, 止损止盈, 策略模板, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, 全新部署, 清空重装, fresh install, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), strategy DSL (策略 DSL, rank/signal/tranche 规则, ValidateStrategy, 策略实例), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, 选币策略, 批次持仓, 止损止盈, 策略模板, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -147,6 +147,12 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
 修改已注册因子的定义（改表达式、参数范围）时，读同一文档“修改已有因子的定义”：被启用成员引用的定义不能改，
 引用时不能增删改参数与输出；加参数组合只需加成员，改逻辑优先新建因子并行切换。
+
+### Strategy DSL
+
+用户要写、改或校验策略 DSL（`rank` / `signal` / `tranche` 规则、止损止盈、策略模板、参数表）、创建策略定义与观察实例时，读
+[`references/strategy-dsl.md`](references/strategy-dsl.md)：语法速查、表达式限制、`ValidateStrategy` 校验、创建与启用的顺序、改已有策略的注意点。
+完整语义以 `docs/模块/策略.md` 第 3 节为准。
 
 ### Python Factor Strategy Migration
 
