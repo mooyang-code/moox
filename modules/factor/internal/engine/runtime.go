@@ -140,7 +140,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.udf, err = newUDFModules(appCtx, cfg.UDF, cfg.Compute.Workers, r.admit, r.manager.GetUdfModule); err != nil {
 		return nil, fmt.Errorf("create udf modules: %w", err)
 	}
-	r.udf.reclaim = r.retainModules
+	r.udf.reclaim = r.reclaimModules
 	r.udf.Host().SetObserver(r.observeUDF)
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)

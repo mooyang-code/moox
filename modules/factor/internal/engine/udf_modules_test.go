@@ -300,3 +300,35 @@ func TestEngineHostExecutesLoadedModule(t *testing.T) {
 	require.NoError(t, module.Eval(context.Background(), b))
 	require.Equal(t, []float64{2, 3}, b.Out)
 }
+
+// 目录同步正在准备的新版本，不能被其他入口（补算作业结束的回收）卸载；新目录应用之后保留集合以它为准。
+func TestSyncPreparedModulesSurviveAReclaimBeforeTheCatalogIsApplied(t *testing.T) {
+	wasm := exampleWasm(t, "ts_mean")
+	task, hash := udfTask(t, wasm)
+	f := &fakeFetcher{files: map[string][]byte{hash: wasm}}
+	r, _ := newLifecycleRuntime(t)
+	r.udf = newModules(t, f)
+	r.udf.reclaim = r.reclaimModules
+	ctx := context.Background()
+
+	snapshot := CatalogSnapshot{Hash: "h-udf", Sets: []domain.EngineTask{task}}
+	require.NoError(t, r.prepareSnapshot(ctx, snapshot))
+	require.True(t, r.udf.host.Has(hash))
+
+	// 此时有一个补算作业结束，触发回收：目录还没应用，保留集合里没有新版本。
+	release := r.udf.Pin([]udfRef{{name: "other", hash: "other-hash"}})
+	release()
+	require.True(t, r.udf.host.Has(hash), "同步准备中的版本不能被回收卸载")
+
+	_, err := r.catalog.Apply(snapshot)
+	require.NoError(t, err)
+	r.retainModules()
+	require.True(t, r.udf.host.Has(hash), "新目录引用它，应用之后仍保留")
+	require.Nil(t, r.udf.syncPin, "应用之后同步登记已释放")
+
+	// 目录不再引用：下一次应用之后卸载。
+	_, err = r.catalog.Apply(CatalogSnapshot{Hash: "h-empty", Sets: nil})
+	require.NoError(t, err)
+	r.retainModules()
+	require.False(t, r.udf.host.Has(hash))
+}

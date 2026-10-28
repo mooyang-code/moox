@@ -373,10 +373,11 @@ func (s *Service) enginePaused(ctx context.Context, required, hadActive bool) Pr
 	p := Prerequisite{Name: "因子引擎模块已暂停且本次暂停已收敛"}
 	if !required && hadActive && s.engineView != nil {
 		// 数据库里没有已启用的成员引用它，不等于引擎已经停止使用：停用刚发生、引擎还没同步目录时，它仍按缓存的目录运行旧版本。
-		// 引擎目录还没同步到最新、或状态已经不可信（离线、心跳过期、读取失败）时无法确认它没有在用旧版本：同样要求暂停。
+		// 引擎目录还没同步到最新、或状态已经不可信（没收到过心跳——管理端重启后心跳状态在内存里，离线、心跳过期、读取失败）时
+		// 无法确认它没有在用旧版本：同样要求暂停。
 		// 这个名称从来没有启用过版本（首次启用）时引擎不可能在用它，不受影响；已有启用版本时，成员被停用或移除也不等于引擎已经不再使用。
 		info, _, seen, err := s.engineView(ctx)
-		if err != nil || (seen && (!info.Online || !info.CatalogInSync || time.Since(info.LastHeartbeatAt) > engineStatusMaxAge)) {
+		if err != nil || !seen || !info.Online || !info.CatalogInSync || time.Since(info.LastHeartbeatAt) > engineStatusMaxAge {
 			required = true
 		}
 	}

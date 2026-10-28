@@ -33,6 +33,8 @@ type udfModules struct {
 	retainMu sync.Mutex
 	// reclaim 在最后一个作业释放 Pin 之后调用：目录已经不再引用的版本这时才能回收，目录不变就没有别的触发。
 	reclaim func()
+	// syncPin 保护目录同步正在准备的新版本：从准备开始到新目录应用之前，其他入口触发的回收不能把它们卸载。
+	syncPin func()
 }
 
 type moduleState struct {
@@ -200,6 +202,29 @@ func (m *udfModules) Retain(ctx context.Context, hashes map[string]bool) {
 	m.mu.Unlock()
 }
 
+// holdForSync 把一组版本登记为目录同步准备中的版本（替换上一次同步留下的登记）；新目录应用之后由 dropSyncPin 释放。
+func (m *udfModules) holdForSync(refs []udfRef) {
+	pin := m.Pin(refs)
+	m.mu.Lock()
+	old := m.syncPin
+	m.syncPin = pin
+	m.mu.Unlock()
+	if old != nil {
+		old()
+	}
+}
+
+// dropSyncPin 释放目录同步的登记（新目录已经应用，保留集合以新目录为准）。
+func (m *udfModules) dropSyncPin() {
+	m.mu.Lock()
+	pin := m.syncPin
+	m.syncPin = nil
+	m.mu.Unlock()
+	if pin != nil {
+		pin()
+	}
+}
+
 // Pin 登记一组版本为使用中（补算作业执行期间），返回释放函数；登记要在备齐模块之前做，这样两者之间的目录同步不会把它们卸载。
 func (m *udfModules) Pin(refs []udfRef) func() {
 	m.retainMu.Lock()
@@ -292,6 +317,7 @@ func (r *Runtime) prepareSnapshot(ctx context.Context, snapshot CatalogSnapshot)
 	if len(refs) == 0 {
 		return nil
 	}
+	r.udf.holdForSync(refs)
 	if err := r.udf.EnsureAll(ctx, refs); err != nil {
 		return fmt.Errorf("自定义算子模块没有全部就绪，不应用新目录：%w", err)
 	}
@@ -300,6 +326,16 @@ func (r *Runtime) prepareSnapshot(ctx context.Context, snapshot CatalogSnapshot)
 
 // retainModules 在新目录应用之后卸载不再引用的模块与状态。
 func (r *Runtime) retainModules() {
+	if r.udf == nil {
+		return
+	}
+	r.udf.dropSyncPin() // 新目录已经应用：保留集合以它为准
+	r.reclaimModules()
+}
+
+// reclaimModules 卸载目录、回放会话与执行中的补算作业都不再引用的模块与状态（补算作业结束时也调用；
+// 目录同步准备中的版本由 syncPin 保护，不在这里释放）。
+func (r *Runtime) reclaimModules() {
 	if r.udf == nil {
 		return
 	}
