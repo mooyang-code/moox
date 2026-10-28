@@ -57,7 +57,7 @@ const (
 	ModeShadow
 	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
 	ModeOff
-	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不求值、不发目标。引用上一周期因子列的策略需要相邻周期的记录，
+	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标，但求值并推进规则状态。引用上一周期因子列的策略需要相邻周期的记录，
 	// 追赶期间不记的话，放行后第一个周期会因 previous_version_unknown 被跳过。
 	ModeCatchup
 )
@@ -270,9 +270,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
-	if mode != ModeCatchup && !validUntil.After(h.now()) {
-		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil)))
-	}
+	expired := mode != ModeCatchup && !validUntil.After(h.now())
 	var adjacent *readiness.Record
 	if len(rt.resolved.PreviousFactors) > 0 {
 		previousEnd, err := advance(calendar, bar, boundary.BarEnd, -1)
@@ -289,14 +287,22 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	ready := readiness.Check(rt.resolved.ReadinessBinding(), adjacent, payload)
 	p.input.Factors = ready.Hashes
+	if expired {
+		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（f1 的开仓记录与持有计数、持仓集合），跳过会让后续周期的状态缺口。
+		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
+		if ready.Reason != "" {
+			return h.commitSkipped(ctx, p, store.SkipExpired, detail)
+		}
+		return h.advanceState(ctx, p, payload, ready, store.SkipExpired, detail)
+	}
 	if mode == ModeCatchup && ready.Reason != readiness.ReasonFactorChanged {
 		// 追赶中的周期统一记为 catchup（附上 readiness 的结论供排查）：它们的作用是留下因子指纹，让放行后的第一个周期有相邻记录；
+		// 追赶期的周期也求值、推进规则状态（不发目标），不然放行后的持仓状态就缺了追赶期里的变化；
 		// 因子定义变了（factor_changed）仍按原因记录，那需要人工重新启用实例。
-		detail := "恢复追赶：只记录周期，不求值、不发目标"
-		if ready.Reason != "" {
-			detail += "（" + ready.Reason + "：" + ready.Detail + "）"
+		if ready.Reason == "" {
+			return h.advanceState(ctx, p, payload, ready, store.SkipCatchup, "恢复追赶：不发目标，只推进规则状态")
 		}
-		return h.commitSkipped(ctx, p, store.SkipCatchup, detail)
+		return h.commitSkipped(ctx, p, store.SkipCatchup, "恢复追赶：只记录周期，不求值、不发目标（"+ready.Reason+"："+ready.Detail+"）")
 	}
 	if ready.Reason != "" {
 		return h.commitSkipped(ctx, p, ready.Reason, ready.Detail)
@@ -314,7 +320,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return nil
 		}
 		if !validUntil.After(h.now()) {
-			return h.commitSkipped(ctx, p, store.SkipExpired, "求值完成时有效期已过")
+			return h.commitStateOnly(ctx, p, *decision, loaded, store.SkipExpired, "求值完成时有效期已过")
 		}
 		result, items, err := h.buildResult(p, *decision, loaded)
 		if err != nil {
@@ -355,7 +361,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 				return fmt.Errorf("结果提交连续冲突：%w", err)
 			}
 		case errors.Is(err, store.ErrResultExpired):
-			return h.commitSkipped(ctx, p, store.SkipExpired, "提交时有效期已过")
+			return h.commitStateOnly(ctx, p, *decision, loaded, store.SkipExpired, "提交时有效期已过")
 		case errors.Is(err, store.ErrResultOlder):
 			return h.commitSkipped(ctx, p, store.SkipOutOfOrder, "提交时已有更新的周期")
 		case errors.Is(err, store.ErrResultInstanceNotActive):
@@ -422,7 +428,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	evalStart := h.now()
 	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
 	previous := engine.State{}
-	last, ok, err := h.Store.LatestOk(ctx, p.instance.InstanceID, rt.sessionID)
+	last, ok, err := h.Store.LatestState(ctx, p.instance.InstanceID, rt.sessionID)
 	p.timing.evalLatest = h.now().Sub(evalStart)
 	if err != nil {
 		return nil, input.Loaded{}, err
@@ -442,6 +448,35 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 	}
 	return &decision, loaded, nil
+}
+
+// advanceState 对不发目标的迟到周期（追赶、有效期已过）求值并只记录推进后的规则状态，记为 skipped(reason)。
+// 求值没有给出 ok 决策时与原来一致，只记 skipped(reason)。
+func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready readiness.Result, reason, detail string) error {
+	decision, loaded, err := h.evaluate(ctx, p, payload, ready)
+	if err != nil || decision == nil {
+		return err
+	}
+	return h.commitStateOnly(ctx, p, *decision, loaded, reason, detail)
+}
+
+// commitStateOnly 把一次求值只当作状态推进写成 skipped(reason)：不带目标、不投递，规则状态留给下一期恢复。
+// 决策不是 ok（守门跳过）时只记 skipped(reason)。
+func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engine.Decision, loaded input.Loaded, reason, detail string) error {
+	if decision.Status != engine.StatusOK {
+		return h.commitSkipped(ctx, p, reason, detail)
+	}
+	decision.Status, decision.SkipReason, decision.Targets = engine.StatusSkipped, reason, nil
+	result, _, err := h.buildResult(p, decision, loaded)
+	if err != nil {
+		return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
+	}
+	record := p.input
+	record.Detail = detail
+	if result.InputJSON, err = json.Marshal(record); err != nil {
+		return err
+	}
+	return h.commitSkippedResult(ctx, p, result, reason, detail)
 }
 
 // buildResult 把决策转成存储行；ok 且绑定账户的结果携带目标事件。
@@ -509,6 +544,11 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`),
 		PublishStatus: store.PublishNone, CreatedAt: h.now(),
 	}
+	return h.commitSkippedResult(ctx, p, result, reason, detail)
+}
+
+// commitSkippedResult 写入已构造好的 skipped 记录；实例已停用时视为无事可做。
+func (h *Handler) commitSkippedResult(ctx context.Context, p *period, result store.Result, reason, detail string) error {
 	_, created, err := h.Store.CommitResult(ctx, store.CommitRequest{Result: result, Now: h.now()})
 	if err != nil {
 		if errors.Is(err, store.ErrResultInstanceNotActive) {
