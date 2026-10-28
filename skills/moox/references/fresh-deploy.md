@@ -128,7 +128,7 @@ ssh ubuntu@<存储机> 'cd /data/moox/storage/current
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略）加上 `moox.toml` 里默认的因子任务。Collector 首次启动会把随发布安装的 `collector/config/collection-tasks.yaml` 写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。crypto 的采集方式默认就是 collector-stream（stream + local），不需要手工切换，用 `moox-cli collector ingest-mode get --space-id crypto` 确认。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间，默认启用）和 A 股（stockcn，默认停用）；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。crypto 的采集方式默认就是 collector-stream（stream + local），不需要手工切换，用 `moox-cli collector ingest-mode get --space-id crypto` 确认。
 
 ### 默认展示策略（合约双均线）
 
