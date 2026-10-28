@@ -115,3 +115,45 @@ func TestExpiredPeriodAdvancesF1State(t *testing.T) {
 		t.Fatalf("迟到周期之后的结果应与连续运行一致：\n got  %s\n want %s", got.TargetsJSON, want.TargetsJSON)
 	}
 }
+
+// 追赶期求值不是 f1 专属：带持仓缓冲的 rank 策略，追赶期的持仓集合也要推进，放行后与连续运行一致。
+func TestCatchupAdvancesStateForRankStrategy(t *testing.T) {
+	build := func() *harness {
+		h := newHarness(t, rankDSL, nil)
+		scores := []map[string]float64{
+			{"A": 9, "B": 8, "C": 1, "D": 0},
+			{"A": 1, "B": 2, "C": 9, "D": 8},
+			{"A": 1, "B": 2, "C": 3, "D": 9},
+		}
+		for n, score := range scores {
+			rows := map[string]map[string]float64{}
+			for id, m := range score {
+				rows[id] = map[string]float64{"close": 10, "volume": 100, "m": m}
+			}
+			h.frame(n+1, rows)
+		}
+		return h
+	}
+	control := build()
+	for n := 1; n <= 3; n++ {
+		control.now = barStart(n).Add(90 * time.Minute)
+		expectAck(t, control.deliver(n))
+	}
+	h := build()
+	mode := ModeLive
+	h.handler.Gate = func(string) Mode { return mode }
+	h.now = barStart(1).Add(90 * time.Minute)
+	expectAck(t, h.deliver(1))
+	mode = ModeCatchup
+	h.now = barStart(2).Add(90 * time.Minute)
+	expectAck(t, h.deliver(2))
+	if got := h.resultAt(2); got.SkipReason != store.SkipCatchup || len(got.EventData) != 0 || string(got.RuleStatesJSON) == "{}" {
+		t.Fatalf("追赶期应记为带状态、不发目标的 skipped(catchup)：%+v", got)
+	}
+	mode = ModeLive
+	h.now = barStart(3).Add(90 * time.Minute)
+	expectAck(t, h.deliver(3))
+	if got, want := h.resultAt(3), control.resultAt(3); string(got.RuleStatesJSON) != string(want.RuleStatesJSON) || string(got.TargetsJSON) != string(want.TargetsJSON) {
+		t.Fatalf("追赶后的结果应与连续运行一致：\n got  %s\n want %s", got.TargetsJSON, want.TargetsJSON)
+	}
+}

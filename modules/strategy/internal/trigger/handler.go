@@ -57,7 +57,7 @@ const (
 	ModeShadow
 	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
 	ModeOff
-	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标；含 f1 规则的策略还要求值、推进规则状态，其他策略不求值。引用上一周期因子列的策略需要相邻周期的记录，
+	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标，但求值并推进规则状态。引用上一周期因子列的策略需要相邻周期的记录，
 	// 追赶期间不记的话，放行后第一个周期会因 previous_version_unknown 被跳过。
 	ModeCatchup
 )
@@ -271,10 +271,6 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
 	expired := mode != ModeCatchup && !validUntil.After(h.now())
-	stateful := carriesPeriodState(rt.program)
-	if expired && !stateful {
-		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil)))
-	}
 	var adjacent *readiness.Record
 	if len(rt.resolved.PreviousFactors) > 0 {
 		previousEnd, err := advance(calendar, bar, boundary.BarEnd, -1)
@@ -292,7 +288,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	ready := readiness.Check(rt.resolved.ReadinessBinding(), adjacent, payload)
 	p.input.Factors = ready.Hashes
 	if expired {
-		// 迟到周期（有效期已过）不发目标；带逐期状态的规则（f1）仍要求值并只推进状态，否则这些周期里的开仓记录与持有计数就缺了。
+		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（f1 的开仓记录与持有计数、持仓集合），跳过会让后续周期的状态缺口。
 		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
 		if ready.Reason != "" {
 			return h.commitSkipped(ctx, p, store.SkipExpired, detail)
@@ -301,13 +297,13 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	if mode == ModeCatchup && ready.Reason != readiness.ReasonFactorChanged {
 		// 追赶中的周期统一记为 catchup（附上 readiness 的结论供排查）：它们的作用是留下因子指纹，让放行后的第一个周期有相邻记录；
-		// 带逐期状态的规则（f1）在这里还要求值、推进状态，不然放行后的持仓就缺了追赶期里的开仓；
+		// 追赶期的周期也求值、推进规则状态（不发目标），不然放行后的持仓状态就缺了追赶期里的变化；
 		// 因子定义变了（factor_changed）仍按原因记录，那需要人工重新启用实例。
 		detail := "恢复追赶：只记录周期，不求值、不发目标"
 		if ready.Reason != "" {
 			detail += "（" + ready.Reason + "：" + ready.Detail + "）"
 		}
-		if ready.Reason == "" && stateful {
+		if ready.Reason == "" {
 			return h.advanceState(ctx, p, payload, ready, store.SkipCatchup, detail)
 		}
 		return h.commitSkipped(ctx, p, store.SkipCatchup, detail)
@@ -458,19 +454,6 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	return &decision, loaded, nil
 }
 
-// carriesPeriodState 判断策略是否含逐期累积状态的规则（f1：开仓记录与持有计数只在求值的周期推进）。
-func carriesPeriodState(program *dsl.Program) bool {
-	if program == nil {
-		return false
-	}
-	for i := range program.Rules {
-		if program.Rules[i].Rule.Type == dsl.RuleTypeF1 {
-			return true
-		}
-	}
-	return false
-}
-
 // advanceState 对不发目标的迟到周期（追赶、有效期已过）求值并只记录推进后的规则状态，记为 skipped(reason)。
 // 求值没有给出 ok 决策时与原来一致，只记 skipped(reason)。
 func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready readiness.Result, reason, detail string) error {
@@ -482,9 +465,9 @@ func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagep
 }
 
 // commitStateOnly 把一次求值只当作状态推进写成 skipped(reason)：不带目标、不投递，规则状态留给下一期恢复。
-// 决策不是 ok（守门跳过）或策略没有逐期状态时，只记 skipped(reason)。
+// 决策不是 ok（守门跳过）时只记 skipped(reason)。
 func (h *Handler) commitStateOnly(ctx context.Context, p *period, decision engine.Decision, loaded input.Loaded, reason, detail string) error {
-	if decision.Status != engine.StatusOK || !carriesPeriodState(p.runtime.program) {
+	if decision.Status != engine.StatusOK {
 		return h.commitSkipped(ctx, p, reason, detail)
 	}
 	decision.Status, decision.SkipReason, decision.Targets = engine.StatusSkipped, reason, nil

@@ -315,7 +315,7 @@ func TestHandleDuplicateAndOutOfOrderDeliveries(t *testing.T) {
 	}
 }
 
-// S16：首次收到已过期周期：skipped(expired)，允许过去的 valid_until，不读输入、不更新状态。
+// S16：首次收到已过期周期：skipped(expired)，允许过去的 valid_until，不发目标、不产生 ok 决策（求值只为推进状态，这里没有输入数据，仍记 expired）。
 func TestHandleExpiredPeriodOnFirstDelivery(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.now = barStart(1).Add(time.Hour).Add(2 * time.Hour)
@@ -323,9 +323,6 @@ func TestHandleExpiredPeriodOnFirstDelivery(t *testing.T) {
 	expired := h.resultAt(1)
 	if expired.Status != store.StatusSkipped || expired.SkipReason != store.SkipExpired || !expired.ValidUntil.Equal(barStart(1).Add(3*time.Hour)) {
 		t.Fatalf("应为 skipped(expired)：%+v", expired)
-	}
-	if h.loader.calls != 0 {
-		t.Fatal("过期周期不应读取输入")
 	}
 	if _, ok, _ := h.repo.LatestOk(context.Background(), "i1", h.session); ok {
 		t.Fatal("过期周期不应产生 ok 决策")
