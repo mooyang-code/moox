@@ -14,7 +14,7 @@
 | 策略 | 策略实例降级、目标过期等 | 控制台策略页，或 moox-cli 的策略命令 |
 | 因子 | 因子任务计算降级、落后 | 控制台因子页，或 `moox-cli doctor diagnose` |
 
-`doctor alerts` 只覆盖前两类；策略和因子要另外看，报告末尾的“注”会提醒。
+`doctor alerts` 基于 Monitor 概览，除当前告警与数据集外，还列出不健康的业务检查、组件和主机（`business_check`、`component`、`host`）。首页直接读取的策略实例与因子任务细节仍需另外查看，报告末尾的“注”会提醒。
 
 ## 流程
 
@@ -51,10 +51,10 @@
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 已删除的策略实例、视图、数据集还留着告警，或显示“数据生产端长时间未更新”（`producer stale`） | Prometheus 的指标序列删对象后不会自己消失；Monitor 里对应的自动检查、告警规则也一直留着 | 已自动处理，等即可：新版 Storage（进程重启后生效）删除 View 后不再导出它的水位指标；Monitor 对指向已删除数据集的视图序列不显示（Storage 读取失败时按“还在”处理）；Monitor 清理定时器每 5 分钟清掉“持续不再检查”超过 1 小时且没有未恢复告警的自动检查，停用超过 7 天的也清掉，连同规则、状态和结果；规则存在但关闭了 K 线新鲜度监控的检查（页面显示“已关闭”）会被每轮评估补建，不清理，`monitor-db-check.sh` 的“失效但还没被清理”里出现它们是正常的。`monitor-db-check.sh` 的“失效但还没被清理”一节持续有内容超过 1 小时，再查 Monitor 日志里有没有 `monitor_stale_checks_pruned` / `monitor_orphan_rules_pruned`。**不要手改 `monitor.db`、不要手删检查或规则** |
+| 已停用的策略实例、已删除的视图或数据集还留着告警，或显示“数据生产端长时间未更新”（`producer stale`） | 指标与自动检查可能在下一次上报、评估或清理前仍保留；策略实例当前没有删除接口 | 已自动处理，等即可：新版 Storage（进程重启后生效）删除 View 后不再导出它的水位指标；Monitor 对指向已删除数据集的视图序列不显示（Storage 读取失败时按“还在”处理）；Monitor 清理定时器每 5 分钟清掉“持续不再检查”超过 1 小时且没有未恢复告警的自动检查，停用超过 7 天的也清掉，连同规则、状态和结果；规则存在但关闭了 K 线新鲜度监控的检查（页面显示“已关闭”）会被每轮评估补建，不清理，`monitor-db-check.sh` 的“失效但还没被清理”里出现它们是正常的。`monitor-db-check.sh` 的“失效但还没被清理”一节持续有内容超过 1 小时，再查 Monitor 日志里有没有 `monitor_stale_checks_pruned` / `monitor_orphan_rules_pruned`。**不要手改 `monitor.db`、不要手删检查或规则** |
 | 1 小时等低频视图报 `producer stale`，且 Storage 刚重启过 | 视图只在每个周期提交输出时刷新水位指标，重启后要等下一次提交才重新出现指标 | Monitor 对周期不短于 5 分钟的视图已容忍“一个周期加 5 分钟”，一般不会再报；仍报且超过这个时间，才是真的没在提交，按“数据落后”查。**不要为了清除它重启 Storage**——重启会让所有低频视图再空窗一个周期 |
 | 重启或发布期间，采集、采集计划、“采集任务清单控制面数据过期”、某组件探针失败 | 依赖的服务重启或发布中，暂时不可用；Monitor 评估时读不到 | 几分钟内自愈，等 2～3 个评估周期（约 1～3 分钟）再看；不要因此去重启别的组件 |
-| 主机“失联”（`presence`） | 主机采集代理 3 分钟没上报：主机离线、网络断、host-agent 停了；或刚重启 Monitor、EventBus | 看当前 `alerts`；只在 `incidents` 里出现的是历史。持续存在才登录主机看 host-agent 进程和 EventBus 连通 |
+| 主机“失联”或“host-agent 停止上报”（`presence`） | 主机采集代理超过 3 分钟没上报；网关心跳也停止时判整机失联，心跳正常时判 HostAgent 停报。Monitor 的观测消费者断连或重连宽限内会冻结该判定 | 看当前 `alerts`；只在 `incidents` 里出现的是历史。持续存在时按原因检查主机、host-agent、网关心跳和 EventBus 连通 |
 | “策略参数投递”（`factor_params` 检查）告警 | 策略导出的 `moox_strategy_param_delivery_stale` 为 1：实例在运行、任务有可变成员，但连续多期（默认 10）结果都没有把下一期参数送达因子侧 | 看对应策略实例的结果里 `c_params_error` 与 FactorMgr 是否可达、参数提交是否被拒绝；规则见 [`docs/模块/因子.md`](../../../docs/模块/因子.md) 第 11 节 |
 | 新建的因子任务一直停在“就绪/试运行” | 任务启用后引擎自动 init、start、confirm；本地序列不足最长回看（可变成员按参数上限）时停在试运行 | 不是故障：看 `lifecycle status` 给出的原因，需要时导入历史（见初始数据导入） |
 | 数据落后（`late_confirmed`、`success stale`、`run stale`） | 生产链路真的慢了：Collector、Storage Primary、View、Factor 之一 | 按 [`view-catchup.md`](view-catchup.md) 分别量 Primary、View、Factor 三段，再决定补算或修复 |

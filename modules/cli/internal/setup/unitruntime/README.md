@@ -20,7 +20,7 @@
 }
 ```
 
-根路径必须是现有、由当前用户持有、无组或其他用户写权限的物理目录。命令可通过 `current/runtime.json` 的目录视图读取，但计划文件自身必须是普通文件。组件 ID、二进制名和健康端口来自同一内嵌服务目录；重复/未知组件、错误目录摘要、越界环境路径及非普通文件拒绝执行。组件工作目录为 `<release_root>/<组件ID>`，二进制为 `<release_root>/bin/<目录中的二进制名>`。环境文件为 0600 JSON 字符串映射，只接受 `MOOX_*`；必须包含三项健康 HMAC 配置。助手重新计算制品摘要并注入进程身份，过滤调用进程遗留的 `MOOX_*` 环境变量。签名与探针密钥不进入参数、PID 清单或命令结果。
+根路径必须是现有、由当前用户持有、无组或其他用户写权限的物理目录。命令可通过 `current/runtime.json` 的目录视图读取，但计划文件自身必须是普通文件。组件 ID、二进制名和健康端口来自该发布的 `config/servicecatalog/catalog.yaml`，其摘要必须同时匹配运行计划和 `package-manifest.json`；新候选还须匹配助手内嵌目录。重复/未知组件、错误目录摘要、越界环境路径及非普通文件拒绝执行。组件工作目录为 `<release_root>/<组件ID>`，二进制为 `<release_root>/bin/<目录中的二进制名>`。环境文件为 0600 JSON 字符串映射，只接受 `MOOX_*`；必须包含三项健康 HMAC 配置。助手重新计算制品摘要并注入进程身份，过滤调用进程遗留的 `MOOX_*` 环境变量。签名与探针密钥不进入参数、PID 清单或命令结果。
 
 支持 `start`、`stop`、`restart`、`pause`、`resume`、`healthcheck`、`status`，用 `--plan PATH` 指定计划，`--components ID,...` 可选择该计划中的组件。计划顺序为启动顺序，整组停止与暂停逆序执行；整组重启先停止全部目标，再启动。运行时状态统一放在 `<deployment_root>/run`，不随业务或主机发布目录切换：
 
@@ -62,4 +62,4 @@ MOOX_RUNTIME_PROXY_BINARY=/absolute/path/moox-console-proxy \
 make test-unit-runtime-linux
 ```
 
-门禁要求十四组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署、bootstrap 和 `setup pause/resume` 仍须由 G2/G3/G6/G11 接线；这些进展不代表完整安装或正式发布已经完成。
+门禁要求十四组 Linux 内核/真实代理场景全部执行，不允许跳过。普通模块测试缺少真实代理制品时会跳过那一项，不能作为完整门禁证据。测试需要独占合成服务的健康端口；已有业务占用时，可在支持的 Linux 上用 `bwrap --unshare-net --bind / / --dev /dev --proc /proc -- bash scripts/test/gates/test-unit-runtime-linux.sh` 隔离运行，不停止现有业务。[发布准备层](../unitinstall/README.md) 已生成七个生命周期包装脚本，并在同一维护锁下写入身份、私密运行计划和环境；`prepare --request PATH` 准备新发布，`inspect-release --directory PATH` 核验尚未启动的候选目录。发布激活/回滚已共用本运行层，并以持久安装标记保护安装器退出后的恢复。实际 CLI 部署和 bootstrap 已由 `unitdeploy` 接线；进程暂停/恢复直接使用本助手的 `pause/resume`，没有 `setup pause/resume` 命令。Linux 门禁通过仍不代表跨主机业务或生产验收完成。

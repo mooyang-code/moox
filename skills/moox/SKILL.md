@@ -9,17 +9,17 @@ Use this skill when working inside the MooX monorepo, especially for quant data 
 
 ## What MooX Is
 
-MooX is the unified repository for a personal quant data platform. It groups storage, collection, cloud node execution, factor calculation, trade, and control-plane modules in one Go workspace.
+MooX is the unified repository for a personal quant data platform. It groups storage, collection, cloud function execution, factor calculation, trade, and control-plane modules in one Go workspace.
 
 Core concepts:
 
-- Space: an isolated user or strategy domain.
+- Space: a market or system domain, such as `crypto`, `stockcn`, or `mooxsys`, in this single-user system.
 - DataSource: a concrete upstream source, such as BINANCE spot, OKX spot, HKEX, NASDAQ, or a custom feed.
 - Subject: the business object stored in a Space, such as APT-USDT, a stock, a ranking item, or a document subject.
 - DataSet: a source-bound logical kind of data, such as kline, ticker, company profile, ranking, event, or factor values.
-- Field and Factor: Space-scoped reusable column definitions selected by DataSet columns.
-- View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
-- DataNode: the Storage node a fact Dataset is bound to at activation; it persists field-level facts in Pebble and publishes row changes through its outbox. DuckDB/Bleve views and Parquet archive are derived asynchronously from those changes.
+- Field: a reusable field definition scoped to a Space. Factor: a global expression definition, reused through members of Space-scoped factor tasks.
+- View: a query-facing, asynchronously built index of exactly one Dataset; columns come from that Dataset, expressions, or system fields.
+- DataNode: the Storage node a fact Dataset is bound to at activation; it persists field-level facts in Pebble and publishes row changes through its outbox. DuckDB/Bleve views consume those changes; Archive independently reads facts on a schedule and exports local CSV/CSV.GZ partitions.
 
 Host Agent and EventBus credentials:
 
@@ -29,7 +29,7 @@ Host Agent and EventBus credentials:
 
 ## Deployment Status
 
-线上运行的是**原生部署**（`/data/moox/<单元>/current`，`moox-runtime` 管理进程；控制机 `prod`、Storage 主机 `storage`、每台主机 `host`）。
+当前操作流程使用**原生部署**（`/data/moox/<单元>/current`，`moox-runtime` 管理进程；控制机单元 `prod`、Storage 单元 `storage`、每台主机的基础单元 `host`；单元名不等于主机 ID）。
 **发布、更新线上二进制时读 [`references/native-release.md`](references/native-release.md)**，并用 `skills/moox/scripts/native-release.sh`
 （构建、安装、回滚、状态、台账、服务目录变更检测）；服务目录（`catalog.yaml`）变化必须整体发布，配置文件不随二进制更新，文档里有顺序和陷阱。
 只有用户明确要求“发布/上线”时才发布，并且只发布他点名的组件。
@@ -46,12 +46,12 @@ core → 各主机 → EventBus、Storage、元数据导入与激活、Access（
 - `modules/cli`: `moox-cli` (setup, host registration and native unit deployment, SCF publish, data import, doctor).
 - `modules/admin`: control plane (auth, spaces, component catalog, host registry and deployments, gateway control, PKI and keys, console SSH, setup) and the browser API gateway.
 - `modules/hostgateway`: per-host service gateway (signed native tRPC: loopback `11002`, cross-host TLS `11003`); the only gateway.
-- `modules/access`: signed entry for external callers (SCF, factor engine, Skill) on `11004`, with per-caller method allowlists from `packages/servicecatalog`.
+- `modules/access`: signed entry for external callers (SCF, factor engine, archive worker, collector operator, Skill) on `11004`, with per-caller method allowlists from `packages/servicecatalog`.
 - `modules/egressproxy`: restricted HTTPS egress and DNS resolution for Collector.
 - `modules/consoleproxy`: embedded-Caddy HTTPS proxy for the console (`9527`).
 - `modules/eventbus`: embedded NATS JetStream broker.
 - `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view).
-- `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
+- `modules/collector`: collection tasks, fetch-plan reconciliation, SCF Timer and WS stream runtimes, backfill and K-line resampling.
 - `modules/cloudfunction`: cloud accounts, SCF nodes, code packages and function publishing.
 - `modules/factor`: factor manager and the expression factor engine (`packages/factorexpr`).
 - `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
@@ -100,9 +100,10 @@ operation is available.
 
 **View memory reminder (say this whenever the user creates a View, adds subjects/factor result datasets that
 create Views, raises `view_rows_per_series`, or loosens `[storage_view.max_age]`):** `moox-storage-view` has no
-process-wide memory budget. Its resident memory is about 2.5–3× the total size of all View index files
-(DuckDB decompresses into the buffer pool and does not give it back), plus 1–1.5× the largest index during
-rebuild/backfill. Production on 2026-10-28: 2.7GB of index files → 7.8GB RSS on a 15.5GB Storage host. Estimate
+process-wide memory budget. Historical capacity measurements suggested about 2.5–3× the total size of View index files,
+plus 1–1.5× the largest index during rebuild/backfill; this is a planning estimate, not a code-level bound
+or a guarantee about DuckDB memory release. The recorded 2026-10-28 deployment had 2.7GB of index files
+and 7.8GB RSS on a 15.5GB Storage host. Estimate
 the new View as subjects × `view_rows_per_series` rows (~100–150 bytes/row on disk), compare against the host
 using the formula in `docs/部署与运维.md` ("Storage 主机内存要求"), and warn the user before proceeding if the
 headroom is thin; the remedies are a bigger host, fewer bars, a shorter `[storage_view.max_age]`, or fewer Views.
@@ -115,7 +116,7 @@ rows at the next Storage cleanup, so confirm it with the user first. Do not edit
 
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
-Factor separately. Period completion events drive Factor reads from Storage PrimaryStore (the event is `DatasetPeriodCompleted`);
+Factor separately. Period completion events (`DatasetPeriodCompleted`) drive Factor computation from its local series store; Storage PrimaryStore supplies incremental synchronization and corrections;
 the Factor durable is `factor_collector_period_v1`. Use task-labeled period and runner metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 
@@ -175,13 +176,13 @@ outbound-only host. Tencent credentials come only from `moox.toml`; never echo t
 ### Tencent Private Network
 
 SCF functions run inside each region's VPC and reach MooX only through the same-region
-Access host's private address (`11004`); they never connect to Storage or EventBus directly.
+Access host's private address (`11004`); business reads/writes do not connect to Storage directly and do not require EventBus. Explicitly enabled SCF metrics reporting is a separate optional EventBus client.
 Every SCF region in `[scf_plan]` needs an Access host with `region` and `private_address`.
 Do not create CCN. Keep `public_net_status=ENABLE` when the function must reach public market
 providers. Follow [`references/private-network.md`](references/private-network.md) for the
 configuration rules and evidence requirements.
 
-Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
+The examples contain seed and sample data, not a backup of runtime history. Rebuilding a View requires retained facts; restoring long local factor history requires the original import data or archive. Do not reintroduce standalone acceptance CSV scripts.
 
 ## Development Rules
 
@@ -191,7 +192,7 @@ Runtime data can be deleted and rebuilt from `examples/` and service flows. Do n
 - Use `subject_id` for normalized subject identity. Source-specific symbols are derived by each collector adapter from the canonical subject ID; do not persist source symbol mappings in metadata.
 - Use `start_time`, `end_time`, and `snapshot_time`; avoid suffixes such as `_ms`.
 - Keep `series_tag` as one optional scalar user label and part of time-series identity, for example `venue:binance`. Do not reintroduce map-style dimensions.
-- Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
+- Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. The current Archive worker exports CSV/CSV.GZ; Parquet is not an implemented export format. Treat Bleve as text search.
 
 See `references/` for more detailed notes.
 
@@ -253,5 +254,5 @@ credentials are provisioned, exported, and rotated only through Admin using
 `scripts/eventbus-credentials.sh`; do not put tokens or private keys in a
 release archive, command line, or checked-in config. After CA or role-token
 rotation, follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md)
-and fan-out to every EventBus client: control services, Storage, every Host Agent
-host, and SCF. Control `export` does not update Host Agents on other machines.
+and fan-out to every EventBus client: control services, Storage, Factor Engine, and every Host Agent
+host. SCF normally uses Access without EventBus credentials; if its optional metrics Reporter was explicitly enabled through EventBus environment variables, include that configured client too. Control `export` does not update Host Agents on other machines.

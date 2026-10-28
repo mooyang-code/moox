@@ -42,8 +42,8 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
 | 存储机、海外机 | `access` | `access` |
-| 海外机 | `trade`、`egress-proxy` | `trade`、`egress-proxy` |
-| 因子机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
+| 海外机 | `trade`、`egress-proxy`、`collector-stream` | `trade`、`egress-proxy`、`collector-stream` |
+| 因子机 | systemd 用户单元 | `moox-factor-engine`、`moox-archive-worker`（原生安装目录为 `<部署根>/<组件>`，见下） |
 
 **EventBus 单元在存储机**（`/data/moox/eventbus/releases/eventbus-manual-20261027` + `current`，2026-10-27 从控制机迁来，手工搭成，布局与 `eventbus` profile 一致）。
 换二进制照常：`install --host storage --unit eventbus --file <moox-eventbus> --restart eventbus`；EventBus 重启会让所有客户端短暂重连，只在需要时做。
@@ -52,7 +52,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
 `factor-mgr`、`strategy`、`trade`、`cloudfunction` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
-CGO 只有 Storage 需要（DuckDB），脚本对 `storage*` 目标自动在 Docker 编译镜像里开启 CGO 构建，其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
+CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary`、`storage-node` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）
 
@@ -103,12 +103,12 @@ $S catalog-changed --since <上次整体发布目录的提交>   # 退出码 10 
 $S catalog-changed --host control                    # 用台账里最近一次 moox-admin 的提交；台账还没有记录时用 --since
 ```
 
-台账只记录用本脚本装的二进制；在此之前手工装的没有记录。最近一次整体发布目录对应的提交是 `defc05c7`（2026-10-15）。
+台账只记录用本脚本装的二进制；在此之前手工装的没有记录。`defc05c7`（2026-10-15）只是早期整体发布记录，不能作为当前发布基线；应从目标环境台账确认实际提交。
 
 顺序（缺一不可）：
 
 1. 构建 `host-gateway admin monitor`（同一个提交）。
-2. 三台主机的 `host` 单元：**`moox-host-gateway` 和 `moox-host-gateway-cli` 都装**（旧 cli 会拒绝新快照），重启 `host-gateway`；一台一台来，间隔约 15 秒，控制机最后。
+2. 每台登记主机的 `host` 单元（包括因子机等只出站主机）：**`moox-host-gateway` 和 `moox-host-gateway-cli` 都装**（旧 cli 会拒绝新快照），重启 `host-gateway`；一台一台来，间隔约 15 秒，控制机最后。
 3. Admin 与 Monitor 连着装（先 Admin 后 Monitor），间隔不超过 1～2 分钟：两者之间 Monitor 与 Admin 的目录不一致，部署同步会停摆，窗口越短越好。
    **控制机的 host-gateway 装完后可能起不来**：它启动时从还是旧版的 Admin 取初始路由快照，新目录校验不过就退出
    （日志 `initial host snapshot unavailable: invalid host gateway snapshot: route differs from catalog or directory`，`status` 里 `host-gateway stopped`，
@@ -116,7 +116,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
    `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
    存储机和海外机的网关不受影响。
 4. 外部白名单有变化时，再装存储机与海外机的 `access`（构建目标 `access`，一台一台来）。
-5. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `monitor deployment sync updated N checks`、没有 `catalog differs`。
+5. 核对：Admin 数据库的 `t_host_gateway_status` 里所有已启用主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `monitor deployment sync updated N checks`、没有 `catalog differs`。
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。
 
@@ -144,10 +144,12 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 ## 不走 `native-release.sh` 的组件
 
-**因子引擎**（因子机上的 systemd 用户单元 `moox-factor-engine.service`，安装在 `~/moox/factor-engine/`）：构建目标 `factor-engine`，在本机构建后用 scp 传到因子机，再在因子机上替换。
+**因子引擎与归档 Worker** 使用 systemd 用户单元 `moox-factor-engine.service` / `moox-archive-worker.service`。原生安装器写入 `<paths.deploy_root>/<组件>`，默认 `/data/moox/factor-engine` 与 `/data/moox/archive-worker`；旧手工安装可能位于家目录，先用 `systemctl --user cat <服务>` 核对实际路径。
+
+二进制单独更新可在本机构建对应目标后用 scp 上传，再在目标机替换。以下以默认因子引擎路径为例；需要重建配置或分发凭据时可使用 `setup release build` 与 `setup deploy-unit --host factor --profile <组件> --release <ID>`；因子引擎安装脚本会完整重写 `engine.yaml`，应先备份并核对、恢复现有内存与窗口调参，单纯升级二进制沿用下面的替换流程。
 
 ```bash
-D=~/moox/factor-engine; TS=$(date +%Y%m%d%H%M%S)
+D=/data/moox/factor-engine; TS=$(date +%Y%m%d%H%M%S)
 mkdir -p $D/bin-backup-$TS && cp -p $D/bin/moox-factor-engine $D/bin-backup-$TS/
 install -m 0755 <传到因子机的 moox-factor-engine> $D/bin/.moox-factor-engine.new && mv -f $D/bin/.moox-factor-engine.new $D/bin/moox-factor-engine
 systemctl --user restart moox-factor-engine.service
@@ -155,7 +157,7 @@ systemctl --user restart moox-factor-engine.service
 
 - **避开整点前后重启**：重启会丢一个整点周期的计算（`1h` 因子任务）。只落盘不重启，等合适时机再重启也可以。
 - 管理端租约 TTL 45 秒：新进程会先报 `lease conflict`，约 45 秒后接管，期间因子不出结果；重启后各因子任务要重新预热几分钟，这期间数据集显示“数据积累中”但不告警。
-- 引擎配置在 `~/moox/factor-engine/config/engine.yaml`，改前备份；账本重置用 `moox-factor-engine reset-gap-ledger`（引擎必须已停止）。
+- 引擎配置在 `<安装目录>/config/engine.yaml`，改前备份；账本重置用 `moox-factor-engine reset-gap-ledger`（引擎必须已停止）。
 
 **前端 `web-host`**（本机构建，发布到控制机 `prod` 单元）：
 
@@ -191,10 +193,10 @@ EOF
 - **构建的是工作区，不是提交**：未提交的改动会被编进二进制，线上二进制就对不上任何提交。`build` 要求工作区干净且提交已推送。
 - **Go 版本**：用 `.go-version` 指定的 toolchain（`$HOME/.local/go<版本>/bin`，没有就运行 `bash scripts/build/install-go.sh`），并设 `GOTOOLCHAIN=local`，不要联网下载 toolchain。`-buildvcs=false`。
 - **`restart.sh` 输出多行日志，最后一行才是 JSON**；`status.sh` 同理。
-- **host 单元每台主机都有**，控制机上也有；改了网关就三台都要装，而且 cli 也要装。
+- **host 单元每台主机都有**，控制机上也有；改了网关就每台登记主机都要装，而且 cli 也要装。
 - **服务目录只发布一半**：见上节，会让三台主机同时出“网关心跳”告警。
 - **配置改动不会随二进制上线**：见上节。
-- **不要用 `moox-cli` 做发布**：它会用 `moox.toml` 里的 SSH 密码；本流程只用 SSH 密钥。
+- **本二进制替换流程只用 SSH 公钥**：`native-release.sh` 不读 `moox.toml`。需要版本制品、配置和身份一起更新时，使用 `moox-cli setup ... --release`；该入口按用户配置选择 SSH 私钥或密码。
 - **不要把中转文件、备份目录留在 `/tmp`**：脚本会清理上传的临时文件；备份目录保留在单元根下，隔几天清理旧的，别删最近一次。
 - **同一秒内连续安装**：备份目录名带时间戳，脚本保证每次都新建，不会覆盖前一次的备份。
 - **重启代价**：Storage 的 primary/node 重启会让周期提交失败片刻；因子引擎重启丢一个整点周期并要预热；`factor-mgr` 重启时如果引擎正在上报补算进度，这次上报会失败（任务租约 15 分钟后重领，从已上报的进度续跑）。
@@ -207,4 +209,4 @@ $S rollback --host <别名> --unit <单元> --backup <install 输出的 BACKUP> 
 ```
 
 只接受该单元下的 `binary-backup-*` 目录，把里面的 `moox-*` 装回去并重启，写台账（提交列显示 `rollback:<备份目录名>`，此时 `catalog-changed --host` 无法判断，需要用 `--since`）。
-配置文件的回滚用发布前备份的那份手工还原。服务目录整体发布失败时，也按“三台网关 → Admin → Monitor”的顺序整体回滚，不要只回滚一部分。
+配置文件的回滚用发布前备份的那份手工还原。服务目录整体发布失败时，也按“每台主机的网关 → Admin → Monitor”（外部白名单变化时还包括 Access）的顺序整体回滚，不要只回滚一部分。

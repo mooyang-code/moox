@@ -21,6 +21,13 @@
 
 未完成以上证据的扩展 Source 只能保持 `catalog_only`，不能被 Market manifest 选为唯一生产来源。尤其不能把 classic 7727 和 mac 7727 当成同一协议，也不能把未确认的扩展字段写入 canonical amount/volume。
 
+## 当前接入与历史证据
+
+当前 Collector 的 `config/markets/stockcn/route.yaml` 将 `normal_7709` 列为 1m 行情的 fallback，
+运行时候选链由 `internal/marketwiring/stock_runtime.go` 组装；时序数据写入采集任务独占的
+`dataset_<task_id>`，不固定写入旧 `dataset_stockcn_equity_kline_1m`。
+下列日期段保留当时的开发线路观测与验收边界，不代表本次重新探测，也不保证临时抓包目录仍存在。
+
 ## 2026-09-01 探测记录
 
 本机探测是单线路、单会话的开发环境证据，不能替代 SCF 地域验证，也不构成频控结论：
@@ -55,7 +62,8 @@ SCF 不做主动限频、全局配额或冷却。随机公网出口是部署事�
 `packages/tdx/cmd/wire-spike` 用于对一条指定线路执行一次完整会话并保存原始字节流，不会遍历节点或重复重试：
 
 ```bash
-go run ./cmd/wire-spike \
+# 从仓库根目录运行
+go run ./packages/tdx/cmd/wire-spike \
   -host 113.105.73.88 -port 7709 -variant normal \
   -timeout 8s -out /tmp/tdx-wire-spike-normal
 ```

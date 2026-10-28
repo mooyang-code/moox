@@ -30,7 +30,7 @@ go test -count=1 ./modules/admin/...
 
 离线恢复使用 `host set-status` 或 `deployment set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 
-共享客户端已使用规范主机网关路径；SSH 取回、安装配置注入、操作员身份本机安装和实际五步首次部署仍由执行计划 G/J 验收。
+原生部署 CLI 已通过 `unitbootstrap`、`unitdeploy` 和 `unitinstall` 接入 SSH 导出取回、摘要校验、配置身份注入及操作员身份安装；部署操作见[部署与运维](../../docs/部署与运维.md)。代码能力不代表任一环境已经完成部署，实际状态以部署记录与就绪检查为准。
 
 ## 证书巡检
 
@@ -38,4 +38,4 @@ Admin 启动时及每天检查 MooX CA 和数据库中全部主机的公有证�
 
 `MOOX_ADMIN_PKI_DIR` 指向 bootstrap 的持久 `--pki-dir`；未设置时使用 Admin 主密钥文件同目录下的 `pki/`，未提供主密钥文件路径时默认为 `../secrets/pki`。巡检只读取 `ca.crt` 与 `hosts/<host-id>.crt`，不读取私钥或签名密钥，不创建或修复文件。首次初始化时其他主机可能尚未签发证书，这类发现会告警并保留定时巡检，允许控制面启动，以便后续部署和换发证书。
 
-Admin 的 Auth、Ssh、SpaceMgr、SecretMgr、SysDeploy、Setup 与 CollectorPublishLease 七个内部服务仅在 loopback 提供原生 tRPC，沿用 11100、11106～11111 端口；Setup 启动预检同时校验此协议。Console 与健康接口继续使用 HTTP。浏览器调用由生成的 handler 在进程内分派，机器调用经主机网关校验各自身份。
+Admin 的 Auth、Ssh、SpaceMgr、SecretMgr、SysDeploy、Setup、CollectorPublishLease、GatewayControl 与 ActivityLog 九个内部服务仅在 loopback 提供原生 tRPC，端口为 11100、11106～11113；Setup 启动预检同时校验此协议。Console 与健康接口继续使用 HTTP。浏览器调用由生成的 handler 在进程内分派，机器调用经主机网关校验各自身份。

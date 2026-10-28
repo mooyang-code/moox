@@ -10,7 +10,7 @@
 |---|---|---|
 | Primary | `moox_storage_dataset_output_watermark_timestamp_seconds` | 事实是否已写入。`data kline get` 走 Primary，不代表 View |
 | View 索引 | `moox_storage_view_output_watermark_timestamp_seconds` | DuckDB 已提交的业务时间 |
-| View period 表 | `t_view_period_dataset_states` 的 `MAX(c_period_time)` / `c_updated_at` | period-ready / Factor 触发水位；可与索引水位短暂不一致 |
+| View period 表 | `t_view_period_dataset_states` 的 `MAX(c_period_time)` / `c_updated_at` | View 就绪 / Strategy 触发水位；Factor 直接订阅 Collector 周期事件 |
 | Factor 计算 | `factor_period_total{task,status}`、`factor_period_lag_seconds{task}`、`factor_last_period_time{task}` | 各因子任务是否在算、是否在写 |
 | JetStream | View：`moox_storage_view_consumer_partition_lag_messages` + `oldest_pending_event_age_seconds`；Factor durable：`factor_collector_period_v1` pending/redelivered | 积压还是处理挂死 |
 
@@ -20,17 +20,20 @@
 
 ## 生产路径（不要混用）
 
-独立 Storage 主机（常见）：
+原生 Storage 单元的路径按部署清单解析，常见示例：
 
-- 包根：`/data/moox/storage`
-- `repair-view` 的 `--storage-conf`：`/data/moox/storage/storage/config/storage.yaml`（不要传 `storage-view/config/trpc_go.yaml`，那是 View 进程配置）
+- 包根 `--package-root /data/moox/storage/current`，其中包含 `start.sh` / `stop.sh` / `status.sh`。
+- 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`；不要传 `trpc_go.yaml`。
 - View 的消费者是按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个）；并发参数是 View 的 `storage.view.fetch_batch` / `max_workers` / `max_ack_pending`（全局，默认都是 1）
+- 元数据库与 Pebble 分别属于 `storage-primary` 与 `storage-node` 组件。不要把旧平铺目录或操作机的路径当作当前主机路径。
 
 控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
 ## Storage View 容量检查
 
-有界保留的时序 View 重建后，每个 `(subject_id, frequency, series_tag)` 默认只保留最近 **5,000 根**完整 K 线；任一序列达到 **6,001 根**（严格超过 6,000）触发 A/B 安全重建。新索引完成回溯并追平后才切换，旧索引继续服务到无引用清理；此操作不删除 Primary 历史。1 GiB 文件阈值可独立触发有界保留 View 的重建；永久 View 超限时只产生 `moox_storage_view_permanent_view_capacity_over_limit` 告警，不自动截断历史。
+时序 View 重建时，每个 `(subject_id, freq, series_tag)` 默认从 Primary 读取最近 **10000 根**，再过滤超过 `[storage_view.max_age]` 的行，实际根数可少于 10000；任一序列严格超过 **12000 根**触发 A/B 整理。新索引完成回填并追平后才切换，旧索引继续服务；此操作不删除 Primary 历史。文件达到默认 **4GiB** 阈值也可触发容量重建；记录 View 超限只告警，不自动截断。实际阈值以部署 policy 为准。
+
+实时、补采、导入与因子重算写入也受同一年龄过滤：`data_time` 严格早于“处理时刻 − 期限”时丢弃，等于截止点保留，整批超期仍按处理成功返回。默认 crypto 1m 只写近 7d、5m 近 35d；Primary 1m 默认保留 35d，两层范围不同。先看 `moox_storage_view_expired_rows_dropped_total{space,freq}` 与 `storage view 丢弃超过最长保留期的行` 日志，避免把符合策略的历史缺行判成消费者停滞；重试或重建不会恢复超期行。已有索引不会随时钟推进主动按年龄清理，重建时才重新过滤；`retained_rows_per_series` 也不保证实际行数或历史覆盖范围。
 
 容量统计由 Storage View Maintainer 执行。轻量维护仍每分钟检查，但对每个 View 的 active index，昂贵的逐序列容量扫描最多每小时一次。进程首次看到该 View/index 时先独立随机等待 `[0, 1h)`；进程重启或 active index 切换后重新抽取首次偏移。扫描之后按扫描开始时间加一小时调度，不按整点对齐。失败或超时也占用本次周期，不会被每分钟维护循环热重试。
 
@@ -41,34 +44,25 @@
 - 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是源数据集的周期完成事件（`DatasetPeriodCompleted`），源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
+- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
 
-## Storage View：数据集消费挂死
+## Storage View：单数据集消费停滞
 
-信号：
+Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `view_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、重建占用与进程问题。
 
-- Primary kline 水位是分钟级，View 停在数小时前
-- 该数据集 durable（`view_<hash>`）的 `partition_lag_messages` 等于 `max_ack_pending`
-- `oldest_pending_event_age_seconds` 与水位停滞时长同量级
-- ACK 计数不涨，但 `in_progress` 仍在增加
-- 其他数据集（如 `mooxsys`）的 durable 仍在刷：每个数据集有自己的 durable，互不占用 ACK 窗口，但挡不住同进程的 `pending-subjects` fsync
-
-这是 durable 被未完成投递占满，不是“没数据”。每个数据集（采集任务结果、因子结果等）各自使用动态的 `view_<hash>` durable。
-
-在 Storage 主机、用**该机同版本** `moox-cli`：
+确需修复索引时，在 Storage 主机使用同版本 CLI，先只读预演：
 
 ```bash
-# 先 dry-run 卡住的 View，确认 db_path / active_index / 下一档 desired revision
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
-  --package-root /data/moox/storage \
+  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
+  --package-root /data/moox/storage/current \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer <View 消费者名> \
+  --consumer <该数据集的实际消费者名> \
   --dry-run
 ```
 
-执行时：每个数据集有自己的 durable，所以每个卡住的 View 都用它数据集的 `view_<hash>` 作 `--consumer`、各自删除该 durable 并 bump revision；只有同一数据集的多个 View 共用一个 durable 时，才在第一个之后加 `--reset-consumer=false` 只 bump。最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh --components storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+核对目标、备份路径与 desired revision 后，按既有授权执行对应 `--yes` 命令。默认删除所指定的消费者、提高 desired revision 并重启 storage-view；`deliver_policy=new`，历史窗口由 A/B 从 Primary 回填。每个数据集有自己的消费者，不能套用“第一个 View 重置共享 kline durable，其余跳过”的旧流程；不要把 `--reset-view-indexes` 当普通追平选项。
 
 ### EventBus 管理权限
 
@@ -77,8 +71,8 @@ moox-cli storage repair-view \
 
 ## Factor 周期诊断
 
-Factor 消费 `DatasetPeriodCompleted`，durable 名为 `factor_collector_period_v1`；对
-Storage 的计算输入读取走 PrimaryStore，不读取 View。先看该 durable 的 pending 与
+Factor 消费 `DatasetPeriodCompleted`，durable 名为 `factor_collector_period_v1`；
+计算窗口来自本地 Pebble / 内存窗口，PrimaryStore 提供增量、变更与核对读取，不读取 View。先看该 durable 的 pending 与
 redelivery，再按 `task` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
 `factor_runner_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子
 与原因；`factor_compile_errors_total` 非零说明管理端与引擎的 expr 版本不一致。
@@ -88,6 +82,7 @@ redelivery，再按 `task` 查看 `factor_period_lag_seconds`、`factor_last_per
 | durable pending 持续增长，最旧事件周期远早于当前时间 | 输入周期积压 | 检查 Factor 是否运行、因子任务是否 enabled、Storage Gateway 可达性和 `AckWait`；不要删除 consumer，恢复后由 JetStream 重投 |
 | pending 低但 lag 或任务执行器 backlog 高 | 单个或多个因子任务处理较慢 | 对照 `factor_period_duration_seconds{task,stage}` 定位 read、compute、write 或 report 阶段 |
 | `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
+| pending 低但水位停住，`blocked_since` 非零 | 连续水位被零提交或超阈值缺失阻塞 | 看任务水位与缺失标的，先补采或确认行情源缺失，不能以 pending 低判健康 |
 | 实时已追平但历史值需修正 | 历史补算 | 提交有界 Recalc 范围；已完成分块不会回滚 |
 
 

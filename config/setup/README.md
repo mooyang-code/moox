@@ -1,6 +1,6 @@
 # 系统初始化配置
 
-这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，只识别四个固定文件；
+这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，包含三个固定种子文件；
 因子由用户配置文件 `moox.toml` 的 `[factors]` 配置控制：
 
 | 文件 | 消费方 | 内容 |
@@ -30,8 +30,8 @@ moox-cli setup init \
 ```
 
 `--storage-host` 必须是 `moox.toml` 中已经部署 Storage 的主机名。`setup init` 读取
-`metadata.yaml` 完成 Storage 初始化；Monitor、Admin 和 Collector 分别读取其余三个
-职责专属配置文件。
+`metadata.yaml` 创建 Admin 业务空间并完成 Storage 元数据初始化；Monitor 的
+`dataset-health-policy.yaml` 和 Collector 的 `collection-tasks.yaml` 由打包与原生安装流程放入各组件配置目录，分别在模块启动时读取。
 
 启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
 Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。

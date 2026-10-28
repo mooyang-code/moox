@@ -53,7 +53,7 @@ not a deployment artifact.
 - 构建一律在本机进行（含 CGO 的 Storage 在 Docker 里构建），环境见 `docs/构建手册.md`；`[compile_host]` 已退役，配置里出现会被拒绝。
 - `[eventbus]` 只写端口与 TLS 开关，地址由 `[deployments]` 里 `eventbus` 所在的主机推出（默认放在存储机，它是独立单元，用 `setup deploy-unit --profile eventbus` 安装）；账号、token、CA 和私钥由 MooX 在部署时生成。
 - `[paths]` 统一声明运行时根目录（默认 `/data/moox`）。
-- `[notification]` 的 webhook 地址是凭据：留空时仍采集和展示监控数据，只是不发站外告警。
+- `[notification]` 的 webhook 地址是凭据：`setup init`、主机守护安装和告警渠道发布要求已配置渠道；留空会在这些入口被拒绝。
 
 ## Phase 1: Native Initialization
 
@@ -64,12 +64,14 @@ test -e ./moox.toml || exit 2
 ./bin/moox-cli setup validate --file ./moox.toml
 ./bin/moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir .
 ./bin/moox-cli setup deploy-host --file ./moox.toml --source-dir . --host <主机ID>      # 每台非 control 主机
+./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <EventBus主机ID> --profile eventbus
 ./bin/moox-cli setup build-linux --module storage --source-dir .
 ./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile storage --binary-dir ./bin
-./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile access   # 以及 egress-proxy、trade、collector-stream
+./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile access   # 以及 egress-proxy、trade
 ./bin/moox-cli setup bootstrap --stage control --file ./moox.toml --source-dir .
 ```
 
+- `collector-stream` 等 control 就绪后再部署，以便首次心跳和就绪检查能连接 Collector。
 - 每个 `deploy-unit` 只安装 `[deployments]` 里登记在该主机上的单元；按实际部署逐台执行，不要自行挑主机。
 - 因子机的 `factor-engine`、`archive-worker` 在 `setup init` 之后用 `setup deploy-unit --profile factor-engine|archive-worker --release <ID>` 部署，详见 [`host-registry.md`](host-registry.md)。
 - 控制主机 `tls_mode = "internal"` 的首次安装要给 `bootstrap --stage control` 加 `--create-proxy-ca`；公网模式不加。
@@ -84,7 +86,7 @@ reported it.
 
 ### macOS：初始化后让浏览器信任管理台证书
 
-`setup init` 末尾的“浏览器信任”只检查证书是否进了钥匙串，不保证浏览器真的信任它。用户在 Mac 上操作时，初始化完成后要**主动提醒用户**这一步（internal TLS 才需要）：
+`setup init` 写入业务资源前执行的“浏览器信任”只检查证书是否进了钥匙串，不保证浏览器真的信任它。用户在 Mac 上操作时，初始化完成后要**主动提醒用户**这一步（internal TLS 才需要）：
 
 ```bash
 security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
@@ -105,8 +107,8 @@ their Dataset and Field contracts, and the internal monitoring metadata:
   --storage-host <主机ID>
 ```
 
-Only `setup init` may use the manifest to open the SSH tunnels to Admin and the
-selected Storage host. It creates or verifies the Admin business spaces and all
+`setup init` uses the manifest to open trusted SSH tunnels to Admin and the
+selected Storage host, as do other authorized CLI commands. It creates or verifies the Admin business spaces and all
 Storage metadata, activates ready Datasets, and verifies the result. Never
 construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 `setup metadata-import` only when the user explicitly requests a partial import.
@@ -118,7 +120,7 @@ construct a filtered YAML file in the Agent context. Use `metadata spaces` and
 禁止 Agent 把 `moox.toml` 全文读入对话、复制、打印或 `source`。In particular, never use `cat moox.toml`,
 `sed moox.toml`、`rg moox.toml`，不要把整个文件 Python 读取进对话，or `source moox.toml`。
 Do not copy it into an archive, pipe it through another process, print it, or
-derive shell variables from it. Only `moox-cli setup` may read secrets in the manifest.
+derive shell variables from it. Only the authorized `moox-cli` configuration and operation commands may read secrets in the manifest; do not extract them with general-purpose tools.
 
 EventBus、控制台代理和 `MOOX_PUBLIC_HOST` 按各自协议和证书配置，不因 SCF 网络改变。
 

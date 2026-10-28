@@ -5,7 +5,7 @@ MooX 管理台前端，基于 Vue 3、Vite 5、TypeScript、Pinia 与 Arco Desig
 
 ## 运行环境
 
-- Node.js >= 18.12（jsdom 测试需要 Node 20.19+ 或 22.12+）
+- Node.js `^20.19.0 || ^22.13.0 || >=24.0.0`（与 `package.json` 的 engines 一致）；推荐按 `.nvmrc` 使用 Node 24
 - pnpm >= 8.7
 
 ## 常用命令
@@ -22,9 +22,9 @@ pnpm check:menu               # 其余 check:* 为页面结构契约检查脚本
 
 ## 本地联调
 
-前端只调用同源的 `/api/admin/{service}/{method}`，不使用 Vite 代理，也不直接访问业务服务。
+生产构建只调用同源的 `/api/admin/{service}/{method}`，不使用 Vite 代理，也不直接访问业务服务。
 本地 `pnpm dev` 时在 `.env.development` 中设置 `VITE_ADMIN_ORIGIN` 指向一个可用的管理入口
-（例如 `https://127.0.0.1:9527`），请求就会发往该地址；留空则使用当前页面的 origin。
+（例如 `https://127.0.0.1:9527`），开发模式的 HTTP 与 WebSocket 请求都会发往该地址；留空则使用当前页面的 origin。生产构建忽略这个覆盖项。跨域联调时，Admin 的 CORS 配置须允许开发页面的 origin，浏览器也须信任入口证书。
 
 - 管理接口：`/api/admin/{service}/{method}`
 - Storage：`/api/admin/storage/{method}`（Admin 的 Storage BFF）

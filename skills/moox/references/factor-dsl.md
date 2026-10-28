@@ -12,7 +12,7 @@ MooX 的因子用一份 YAML 表达式定义（spec）描述，由 Go 写的表�
 | --- | --- | --- |
 | `"$SKILL_ROOT/scripts/factor-expr.sh" functions [--json]` | 列出全部函数、参数范围、回看规则（权威清单，与引擎同一份注册表） | Go 工具链 |
 | `"$SKILL_ROOT/scripts/factor-expr.sh" check --library lib.yaml [--factor-id ID]` | 编译定义，输出类型、输入列、输出列、因子回看与每个输出的回看、规范文本；失败时给字段路径与行列 | Go 工具链 |
-| `"$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id ID --input bars.csv --freq 1m --output dsl.csv` | 用引擎的编译器与执行器在 K 线 CSV 上试算：按频率建规则网格（`--freq` 必填，1m/5m/15m/30m/1h/4h/1d），并像流水线一样屏蔽回看窗口有空洞的结果 | Go 工具链 |
+| `"$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id ID --input bars.csv --freq 1m --output dsl.csv` | 共用生产编译器与执行器，按频率建规则网格（`--freq` 必填，1m/5m/15m/30m/1h/4h/1d）；原始 CSV 缺期仍按离线工具的空洞规则屏蔽 | Go 工具链 |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" synthetic` | 生成合成 OHLCV K 线 | 标准库 |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv` | 把 `data-kline.sh`、`moox-cli data rows export` 的 JSON 转成 CSV | 标准库 |
 | `python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python` | 按旧契约运行原 Python 因子，context 与旧 worker 相同（见第 6 节第 10 条） | pandas、numpy（用用户原来的环境） |
@@ -21,6 +21,8 @@ MooX 的因子用一份 YAML 表达式定义（spec）描述，由 Go 写的表�
 `factor-expr.sh` 在 Skill 所在的 MooX 仓库里构建 `packages/factorexpr/cmd/factorexpr`，相对路径按调用时的工作目录解析；
 打包分发的 Skill（`dist/moox-skill.tar.gz`）不含仓库源码，这时要在 MooX 仓库里使用它，`factor_py_check.py` 则可以单独使用。
 CSV 统一格式：`data_time`（RFC3339 UTC）、`subject_id`、`series_tag`、各数值列，空值写空串。
+
+**离线边界：** `eval` 不连接引擎本地存储，当前仍对原始 CSV 执行 `gapMask`；生产同步器会按字段 `fill` 规则填充缺失周期。含缺期或依赖 `is_filled` 的因子必须单独核对生产实际输入，不能承诺原始 CSV 的 eval 结果复现生产。
 
 ## 2. 新旧对照
 
@@ -33,7 +35,7 @@ CSV 统一格式：`data_time`（RFC3339 UTC）、`subject_id`、`series_tag`、
 | 输出 | DataFrame 的列 | 单输出写 `output: <表达式>`（列名就是成员键）；共用参数的多输出写 `outputs:` 输出名 → 表达式（至少两个），最多 64 个 |
 | 分组 | 时序因子要自己 `groupby("series_tag")`；截面因子自己 `groupby(data_time)` | 自动：时序算子按 (subject_id, series_tag) 序列滚动，截面算子按 (data_time, series_tag) 分组 |
 | 窗口 | `rolling(n, min_periods=…)`，常见 `min_periods=1` | 严格窗口：窗口内有一个 NaN 结果就是 NaN，没有 `min_periods` |
-| 时间轴 | 只有存在的行，`rolling` 按行数滚动 | 按频率的规则网格，缺失的 K 线读作 NaN；流水线还会检查因子回看窗口（从该标的第一根 K 线起算），窗口里缺 K 线时该因子在该标的该期的全部输出都不写 |
+| 时间轴 | 只有存在的行，`rolling` 按行数滚动 | 生产本地存储按字段 `fill` 规则补成连续网格；离线 `eval` 不做这层填充，仍把原始 CSV 的缺期窗口屏蔽为空 |
 | 空值 | NaN / ±Inf 写成 null | 同样：NaN、±Inf 一律记为 NaN，写入时为 null |
 | 截面全集 | `allow_partial_universe` | 不变：false 时本期全集不完整就整因子跳过，true 时剔除不可用标的照常计算（只对截面因子有效） |
 
@@ -238,7 +240,7 @@ rules:
 | 一致 | 两边都有值，`|a−b| ≤ atol + rtol·max(|a|,|b|)`（默认 rtol 1e−9、atol 1e−12） | 必须有 |
 | 双空 | 两边都是 null | 允许 |
 | 暖机新空 | 原来有值、DSL 为空，且距该序列第一根 K 线不足“该输出的回看 − 1”个周期（旧的 `min_periods=1`） | 允许，这是严格窗口的预期差异 |
-| 空洞新空 | 原来有值、DSL 为空，且按因子回看的窗口里缺了 K 线 | 允许，这是流水线的空洞屏蔽 |
+| 空洞新空 | 原来有值、DSL 为空，且按因子回看的窗口里缺了 K 线 | 允许，这是离线 eval 的空洞屏蔽，不能据此判断生产也为空 |
 | 其余新空 | 原来有值、DSL 为空，不属于上面两类 | 默认失败；只有逐条确认是退化窗口（分母为 0、窗口内常数等）后，才加 `--allow-new-null` |
 | 旧空新值 | 原来为空、DSL 有值 | 失败，说明写法不等价 |
 | 离散跳变 | 排名类列（`--discrete`）超出容差 | 不超过双方有值点的 1%（`--max-discrete-ratio`）时允许 |
@@ -259,8 +261,8 @@ rules:
      - 迁移整套策略的做法见 [strategy-migration.md](strategy-migration.md)。
 2. **NaN 参与比较**：pandas 里 `NaN > 0` 是 False，`np.where(change > 0, a, 0)` 在 change 为 NaN（例如第一行）时取 0；DSL 的比较遇到 NaN 得 NaN，`where` 结果也是 NaN。
    通常只影响暖机期；如果用户需要旧行为，写成 `where(fill_nan(change, 0) > 0, a, 0)`，并告诉用户这是有意保留的旧语义。
-3. **空洞**：旧代码按存在的行滚动，跨过缺失 K 线时窗口实际覆盖更长的时间；新系统按规则网格，流水线把回看窗口里缺 K 线的整个因子输出屏蔽掉
-   （`eval` 复现了这一点）。主验收用无空洞的数据；带空洞的数据只用来展示这类差异（`synthetic --gaps N`），它们会落在“空洞新空”。
+3. **空洞**：旧代码按存在的行滚动，跨过缺失 K 线时窗口实际覆盖更长的时间；离线 `eval` 在规则网格上屏蔽缺期窗口，生产引擎则先按 `fill` 规则生成填充行再计算。
+   主验收用连续且与生产实际输入一致的数据；带空洞的原始 CSV 只验证离线工具行为（`synthetic --gaps N`），不能证明与生产结果等价。
    空洞会让一致样本变少，排名类的跳变比例可能超过 1%，这不代表写法错误。
 4. **公式照抄，不“修正”**：例如旧 Bias 是 `close / 均值`（没有减 1），转写时保持 `close / ts_mean(close, window)`；要改公式是另一件事，必须用户明确要求。
 5. **输出列名不变**：结果列按名字落盘，改名等于新因子，历史数据接不上。`output_names` 的取值要原样写进列名模板或单独的输出里。
@@ -313,7 +315,8 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 "$SKILL_ROOT/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT --interval 1m \
-  --start-time 2026-10-17T00:00:00Z --end-time 2026-10-17T16:00:00Z --limit 1000 --output ./factor-convert/btc-1.json
+  --start-time 2026-10-17T00:00:00Z --end-time 2026-10-17T16:00:00Z --limit 1000 \
+  --columns open,high,low,close,volume,quote_volume,trade_num --output ./factor-convert/btc-1.json
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv ./factor-convert/*.json --output ./factor-convert/bars.csv
 ```
 
@@ -325,7 +328,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" synthetic --subjects 5 --bars 600 --output ./factor-convert/synthetic.csv
 ```
 
-真实数据里有缺失的 K 线时，`compare` 会把空洞窗口归入“其后新空”；挑无空洞的时间段做主验收。
+真实数据有缺失 K 线时，`compare` 会把符合窗口判定的差异归入“空洞新空”；挑无空洞且字段有效的时间段做主验收。
 
 ### 7.5 两边各算一遍
 
@@ -342,8 +345,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" run-python --factor-file "$W/zf
 ```
 
 截面因子用 `--type cross_section`（旧契约：一次拿到全部标的，多一列 `subject_id`）。
-`eval` 复现表达式计算和时序窗口的空洞屏蔽，但不模拟截面因子的全集判断：生产里严格截面因子（`allow_partial_universe: false`）遇到本期全集不完整
-或有标的空洞时整期跳过，本地照常计算。所以截面因子的主验收数据要求每个时刻全部标的齐全。
+`eval` 共用表达式编译器与执行器，但不模拟生产的本地填充、任务生命周期、连续水位和截面全集门禁。生产里严格截面因子（`allow_partial_universe: false`）遇到本期可用标的不全会整因子跳过；截面主验收要求每个时刻全部标的齐全。
 
 ### 7.6 比较
 
@@ -430,10 +432,10 @@ members = [
 ## 9. 写入后验证
 
 1. **定义**：控制台因子详情（或 `GetFactor`）里的类型、输入列、输出列、回看与 7.3 的 `check` 结果一致。
-2. **引擎**：引擎每分钟第 45 秒同步目录；启用成员后，下一期起结果数据集出现新列。
+2. **引擎**：引擎默认每分钟第 45 秒同步目录；成员启用时管理端对齐结果列，实际数据要等目录同步、窗口就绪和任务进入试运行或运行之后产生。
    控制台「因子计算」总览 / `GetStatus` 里引擎在线、目录一致，`factor_compile_errors_total` 不增长（编译失败只会出现在引擎与管理端的表达式版本不一致时）。
 3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「因子任务」页或 `moox-factor-mgr-cli status` 看任务从排队到完成。
-4. **生产数值复核**：取一段时间的源 K 线和结果列，本地 `eval` 后与生产结果比较，两边是同一个引擎，应当逐值一致。
+4. **生产数值复核**：取一段时间的源 K 线和结果列，本地 `eval` 后与生产结果比较。须保证输入、成员参数、截面全集与预热长度一致；有填充或历史修正时，原始 Storage 导出不一定等于生产当时的本地窗口。
    时序因子取一两个标的即可；**截面因子必须导出该因子任务在这段时间的全部标的**（不带 `--subject`，或逐个导出后合并），否则本地排名、标准化的样本不同，
    结果必然对不上。源数据要比比较区间提前至少“因子回看”个周期，比较时用 `--start`、`--end` 只比较目标区间：
 

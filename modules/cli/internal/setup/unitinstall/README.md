@@ -21,7 +21,7 @@
 
 `ReadPrepared` 与 `moox-runtime inspect-release --directory /absolute/unit/releases/ID` 用于安装切换前核验候选发布：要求物理私密目录、规范收据、匹配的主机/组件/运行计划，以及逐文件完整性。未列出的文件、缺失或改动的文件、权限变化和非法链接都会失败。它用于尚未启动或复制运行状态的候选目录；已运行的发布包含可变数据，不能再次视为全新候选。
 
-生成的 `start/stop/restart/pause/resume/healthcheck/status.sh` 只定位实际发布目录并调用 host 包的共用 `moox-runtime`，不复制停止等待或强杀逻辑。脚本将带空格、引号或 shell 特殊字符的主机路径作为字面值传递。生命周期按依赖排序：Admin、EventBus 等服务先于 Web Host 和 Console Proxy 启动，停止时反序。实际 `setup` 部署入口、原生 CLI 的 bootstrap 和 `setup pause/resume` 接线仍由后续阶段完成；目标主机编排由相邻 `unitbootstrap` 包调用这些接口。
+生成的 `start/stop/restart/pause/resume/healthcheck/status.sh` 只定位实际发布目录并调用 host 包的共用 `moox-runtime`，不复制停止等待或强杀逻辑。脚本将带空格、引号或 shell 特殊字符的主机路径作为字面值传递。生命周期按依赖排序：Admin、EventBus 等服务先于 Web Host 和 Console Proxy 启动，停止时反序。实际 `setup deploy-host/deploy-unit` 和 `setup bootstrap` 已由 `unitdeploy` 接线；目标主机编排由相邻 `unitbootstrap` 包调用这些接口。进程暂停/恢复使用目标主机的 `moox-runtime pause/resume`，没有 `setup pause/resume` 命令。
 
 `moox-runtime activate --directory DIR` 激活完整单元，`--components ID,...` 可指定启动子集，`--no-start` 只切换目录，供五步 bootstrap 分阶段启动。重复激活已完成的当前发布会核验静态内容，不重新启动服务。`ReadInstalled` 验证已运行发布的静态清单，同时允许组件的 data/var/log/logs 与代理 certs 目录；`ReadPrepared` 仍要求未复制状态的候选。
 
@@ -31,9 +31,9 @@
 
 离线状态通过 `SealState` / `moox-runtime seal-state --request PATH` 封存。0600 规范 JSON 请求对应 `SealStateOptions`，显式指定 `directory`、`release_directory`、`previous_directory` 和 `paths`；首装的 previous_directory 为空。源目录必须是 `<UnitRoot>/state-imports/<ID>` 下的物理 0700 目录，仅接受所选组件的 data/var、代理 certs 或全局 data，文件为拥有者的 0600 常规文件，拒绝链接、硬链接、配置、身份及无关内容。生产者须先结束离线初始化，或完成一致性备份并关闭数据库；封存不执行运行中数据库的文件复制。清单至多 1 MiB、4096 个文件、8192 个对象，文件内容流式校验且不限制数据字节总量。
 
-封存结果仅输出源目录和收据摘要。`activate --directory DIR --state-seed SOURCE --state-seed-sha256 SHA256` 在停机前核对收据、逐文件内容、目标发布和预期旧 current；复制后再次核对新发布里的全部导入字节。导入目录替代相应旧状态，其余状态仍从停机后的旧发布独立复制。源或 current 变化都会拒绝，失败恢复不依赖源目录；升级前快照保持独立。重复激活已完成发布可复用原摘要，不能用不同摘要替换已激活的数据。Admin 主密钥、MooX CA 私钥和操作员材料继续存放在各自的持久私密目录，不通过状态导入扩散到发布。目标主机 `unitbootstrap` 已串联停止、关闭数据库的独立复制、离线初始化、封存及分阶段激活；原生 CLI 部署入口仍须接通。
+封存结果仅输出源目录和收据摘要。`activate --directory DIR --state-seed SOURCE --state-seed-sha256 SHA256` 在停机前核对收据、逐文件内容、目标发布和预期旧 current；复制后再次核对新发布里的全部导入字节。导入目录替代相应旧状态，其余状态仍从停机后的旧发布独立复制。源或 current 变化都会拒绝，失败恢复不依赖源目录；升级前快照保持独立。重复激活已完成发布可复用原摘要，不能用不同摘要替换已激活的数据。Admin 主密钥、MooX CA 私钥和操作员材料继续存放在各自的持久私密目录，不通过状态导入扩散到发布。目标主机 `unitbootstrap` 已串联停止、关闭数据库的独立复制、离线初始化、封存及分阶段激活；原生 CLI 部署入口已由 `unitdeploy` 接通。
 
-代理配置不接受 initialize_ca，状态路径固定为组件内 `data/caddy/caddy`、`data/caddy/internal-ca.sha256`、`certs/caddy`。使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹；首次激活即使不启动也须携带有效的离线状态。检查命令不生成证书或写入旧基线。首次授权的持久消费与规范历史状态导入由 `unitbootstrap` 负责，原生 CLI/SSH、生产历史目录归档和正式部署仍须完成。
+代理配置不接受 initialize_ca，状态路径固定为组件内 `data/caddy/caddy`、`data/caddy/internal-ca.sha256`、`certs/caddy`。使用真实 `moox-console-proxy check-state` 在停机前后、复制后和启动后校验 CA 指纹；首次激活即使不启动也须携带有效的离线状态。检查命令不生成证书或写入旧基线。首次授权的持久消费与规范历史状态导入由 `unitbootstrap` 负责，原生 CLI/SSH 已通过 `unitdeploy` 接入；历史目录归档和现场验收属于具体部署流程。
 
 验证入口：
 
@@ -47,6 +47,6 @@ Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建
 
 复合初始化使用 `ReadActivation` 检查单元阶段、`Abort` 撤销日志指定的候选，可撤销首次安装但不会删除退役数据；普通 `Rollback` 仍拒绝没有旧快照的首次安装。`CopyOfflineState` 是关闭后状态的独立复制接口，调用者必须持有维护锁并保证所有写入者已退出，不提供在线数据库备份。
 
-`Deploy` / `moox-runtime deploy --request PATH` 负责 host、Access、出口代理、Trade 和 Storage 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 和 `setup deploy-unit` 已调用此流程，整个发布的回滚仍须外层编排。
+`Deploy` / `moox-runtime deploy --request PATH` 负责 host、EventBus、Access、出口代理、Trade、Collector Stream 和 Storage 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 和 `setup deploy-unit` 已调用此流程，整个发布的回滚仍须外层编排。
 
 包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 或 Node 的 Storage 部署不初始化主库。

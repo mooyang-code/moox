@@ -12,9 +12,9 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 | 主机 ID | 中文名 | 运行 |
 | --- | --- | --- |
 | `control` | 控制机 | Admin、Monitor、Collector、CloudFunction、因子管理、策略、控制台 |
-| `storage` | 存储机 | Storage primary/node/view、Access |
+| `storage` | 存储机 | Storage primary/node/view、EventBus、Access |
 | `overseas` | 海外机 | Trade、Access、EgressProxy、Collector Stream |
-| `factor` | 因子机 | 因子引擎、归档 Worker（外部程序，只支持 Linux，可以是内网机器） |
+| `factor` | 因子机 | 因子引擎、归档 Worker（外部程序，原生部署使用 Linux，可以是内网机器） |
 
 `moox.toml` 里 `[hosts.<ID>]` 写 `label`（不写时按 ID 生成）、`address`、`region`、`ssh = { port, username }`；
 `[deployments]` 按主机 ID 列出业务组件，`host-gateway` 与 `host-agent` 自动补齐。控制台终端只对配了 SSH 密码或私钥文件、
@@ -22,7 +22,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 ## 新增并部署一台机器
 
-1. 在 `moox.toml` 增加 `[hosts.<ID>]` 与 `[deployments]` 条目（用户自己改：`moox-cli config edit`；Agent 不读不改）。
+1. 由用户准备含新 `[hosts.<ID>]` 与 `[deployments]` 的配置。当前 `config edit` 只能修改既有主机的 SSH 登录方式，地址、地域、用途只读，不能新增主机；明文配置可由用户自行编辑后用 `config encrypt` 加密，已有加密配置目前没有新增主机的表单入口。Agent 不读取或代改秘密配置。
 2. `moox-cli setup validate --file ./moox.toml`；`host_key_unknown` 时按 [`custom-setup.md`](custom-setup.md) 通过独立可信渠道核对指纹后 `setup trust-host`。
 3. `moox-cli setup deploy-host --host <ID>` 安装 Host Gateway 与 Host Agent，并把主机登记到 Admin。
 4. 按该主机登记的业务组件逐个 `setup deploy-unit --host <ID> --profile <单元>`；命令只安装 `[deployments]` 里登记在该主机上的单元。

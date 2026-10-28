@@ -12,8 +12,11 @@ Host Agent 与 Host Gateway 一起组成每台主机的 `host` 单元（`/data/m
 ## 验收和升级
 
 ```bash
-curl --fail http://127.0.0.1:11425/healthz
+/data/moox/host/current/bin/moox-runtime status \
+  --plan /data/moox/host/current/runtime.json --components host-agent
 ```
+
+健康端口即使通过 loopback 访问也要求 health HMAC，普通 `curl` 会被拒绝；运行助手自动读取发布环境并签名探测。
 
 升级二进制按 [`native-release.md`](native-release.md) 发布 `host` 单元；只换二进制不更新配置和凭据。
 
