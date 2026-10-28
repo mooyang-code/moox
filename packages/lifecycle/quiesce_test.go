@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -207,4 +209,48 @@ func TestHaltedStaysTrueForARestoredPauseAwaitingChecks(t *testing.T) {
 	again.Refresh(ctx)
 	require.Equal(t, StageNotReady, again.Stage(Ref{}))
 	require.True(t, again.Halted(Ref{}), "待恢复的暂停仍然是被有意停下")
+}
+
+// 上一轮恢复追赶迟到的“已追平”结果，不能覆盖新一轮、更不能放行新一轮。
+func TestLateCatchupResultFromAnEarlierRoundDoesNotReleaseTheNextRound(t *testing.T) {
+	f := newFake()
+	var mu sync.Mutex
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	tick := func() { mu.Lock(); now = now.Add(time.Minute); mu.Unlock() }
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls int32
+	hooks := f.hooks()
+	hooks.Catchup = func(context.Context, Ref, time.Time) (Catchup, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			close(entered)
+			<-release
+			return Catchup{CaughtUp: true}, nil // 上一轮的旧结果
+		}
+		return Catchup{CaughtUp: false, Message: "新一轮还没追平"}, nil
+	}
+	c, err := New(Options{Module: "m", Now: clock, Hooks: hooks})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+	_, err = c.Command(ctx, CmdPause, Ref{})
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.Command(ctx, CmdResume, Ref{}) // 第一轮：卡在 Catchup 钩子里
+	}()
+	<-entered
+	tick()
+	_, err = c.Command(ctx, CmdPause, Ref{})
+	require.NoError(t, err)
+	tick()
+	obj, err := c.Command(ctx, CmdResume, Ref{}) // 第二轮：钩子返回未追平
+	require.NoError(t, err)
+	require.Equal(t, StageResuming, obj.Stage)
+
+	close(release) // 第一轮的旧结果迟到
+	<-done
+	require.Equal(t, StageResuming, c.Stage(Ref{}), "迟到的旧结果不能放行新一轮")
 }

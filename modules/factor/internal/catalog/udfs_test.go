@@ -127,6 +127,16 @@ func TestPublishRejectsUnqualifiedPackages(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.PublishUdf(ctx, forged)
 	require.ErrorContains(t, err, "摘要不一致")
+
+	// 脏工作区构建的包：服务端也拒绝，不能只靠命令行把关。
+	dirty, err := factorudf.ReadPackage(good, factorudf.Limits{})
+	require.NoError(t, err)
+	dirty.Manifest.Source.Dirty = true
+	dirtyRaw, err := factorudf.WritePackage(dirty)
+	require.NoError(t, err)
+	_, err = svc.PublishUdf(ctx, dirtyRaw)
+	require.ErrorIs(t, err, ErrInvalidUdf)
+	require.ErrorContains(t, err, "未提交改动")
 }
 
 // 首次启用没有引用方，不要求暂停引擎；之后因子定义才能引用它。

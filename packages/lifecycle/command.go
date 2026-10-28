@@ -301,6 +301,19 @@ func (c *Controller) endCatchup(r *record) {
 	}
 }
 
+// roundID 标识一次恢复追赶：模块的阶段时间、对象自己的阶段时间与暂停信息。再次暂停、恢复之后三者之一必然改变，
+// settle 在锁外读追赶进度，回写时靠它丢弃上一轮迟到的结果（不能用旧结果覆盖新一轮、更不能据此放行）。
+type roundID struct {
+	self, own time.Time
+	pause     *PauseInfo
+}
+
+// roundOf 读取 ref 当前的恢复轮次标识；调用方持有锁。
+func (c *Controller) roundOf(ref Ref) roundID {
+	r := c.recordFor(ref)
+	return roundID{self: c.self.Since, own: r.Since, pause: r.Pause}
+}
+
 // settle 推进恢复追赶：对恢复追赶中的记录（和模块恢复追赶时参与追赶的对象）调用 Catchup 钩子，
 // 追平且检查通过的、设为自动放行的记录回到暂停前的阶段；系统级恢复的记录停在「已追平待放行」，等 release。
 func (c *Controller) settle(ctx context.Context) {
@@ -315,7 +328,9 @@ func (c *Controller) settle(ctx context.Context) {
 		}
 	}
 	since := map[string]time.Time{}
+	rounds := map[string]roundID{}
 	for _, ref := range refs {
+		rounds[ref.key()] = c.roundOf(ref)
 		since[ref.key()] = c.recordFor(ref).PausedSince
 		if since[ref.key()].IsZero() {
 			// 模块恢复追赶时，参与追赶的对象继续运行阶段、没有自己的暂停时间：取模块的暂停时间作为追赶起点。
@@ -342,7 +357,12 @@ func (c *Controller) settle(ctx context.Context) {
 
 	c.mu.Lock()
 	var changes []change
+	stale := map[string]bool{}
 	for _, ref := range refs {
+		if rounds[ref.key()] != c.roundOf(ref) {
+			stale[ref.key()] = true // 这一轮已经结束或被新一轮取代：结果作废
+			continue
+		}
 		r := c.recordFor(ref)
 		res := results[ref.key()]
 		cu := res.catchup
@@ -355,7 +375,7 @@ func (c *Controller) settle(ctx context.Context) {
 		c.checks[ref.key()] = res.checks
 	}
 	// 模块自身：自己和所有参与追赶的对象都追平，并且自身检查没有失败项，才算追平。
-	if c.self.Stage == StageResuming && c.self.catchup != nil {
+	if c.self.Stage == StageResuming && c.self.catchup != nil && !stale[c.self.key()] {
 		self := c.self
 		caught := self.catchup.CaughtUp && Passed(c.checks[self.key()])
 		for _, o := range c.objects {
@@ -370,7 +390,7 @@ func (c *Controller) settle(ctx context.Context) {
 	}
 	for _, ref := range refs {
 		r := c.recordFor(ref)
-		if r.Stage != StageResuming || !r.autoRelease || r.catchup == nil || !r.catchup.CaughtUp {
+		if stale[ref.key()] || r.Stage != StageResuming || !r.autoRelease || r.catchup == nil || !r.catchup.CaughtUp {
 			continue
 		}
 		if !Passed(c.checks[ref.key()]) {

@@ -67,6 +67,9 @@ func (s *Service) PublishUdf(ctx context.Context, raw []byte) (*PublishResult, e
 	if !pkg.Report.Passed {
 		return nil, fmt.Errorf("%w: 包里的本地测试报告显示测试没有通过", ErrInvalidUdf)
 	}
+	if pkg.Manifest.Source.Dirty {
+		return nil, fmt.Errorf("%w: 包是在工作区有未提交改动时构建的，产物与记录的提交对不上：提交之后重新 build", ErrInvalidUdf)
+	}
 	unlock, err := s.locks.LockUdfContext(ctx)
 	if err != nil {
 		return nil, err

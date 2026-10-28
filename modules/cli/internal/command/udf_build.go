@@ -138,7 +138,7 @@ func stripRustNonCode(src string) string {
 			i = j
 		case isRawStringStart(b, i):
 			j := i
-			if b[j] == 'b' {
+			if b[j] == 'b' || b[j] == 'c' {
 				j++
 			}
 			j++ // r
@@ -158,9 +158,9 @@ func stripRustNonCode(src string) string {
 			}
 			blank(i, end)
 			i = end
-		case b[i] == '"' || (b[i] == 'b' && i+1 < len(b) && b[i+1] == '"'):
+		case b[i] == '"' || ((b[i] == 'b' || b[i] == 'c') && i+1 < len(b) && b[i+1] == '"' && (i == 0 || !isIdentByte(b[i-1]))):
 			j := i + 1
-			if b[i] == 'b' {
+			if b[i] != '"' {
 				j++
 			}
 			for j < len(b) && b[j] != '"' {
@@ -198,7 +198,7 @@ func stripRustNonCode(src string) string {
 
 func isRawStringStart(b []byte, i int) bool {
 	j := i
-	if b[j] == 'b' {
+	if b[j] == 'b' || b[j] == 'c' { // br"…"（字节串）与 cr"…"（C 字符串）
 		j++
 	}
 	if j >= len(b) || b[j] != 'r' {
@@ -358,18 +358,10 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 	if err := scanUdfSource(crateDir); err != nil {
 		return nil, err
 	}
-	step("cargo clippy --release --locked -- -D warnings")
-	// clippy 用与最终产物相同的 profile（release）与目标：只在 release 下编译的分支（cfg(not(debug_assertions))）也要过禁用清单。
-	if err := runCargo(root, logOut, "clippy", "--release", "--locked", "-p", name, "--target", "wasm32-unknown-unknown", "--", "-D", "warnings"); err != nil {
-		return nil, err
-	}
-	if !opts.SkipNativeTests {
-		step("cargo test --locked（原生环境的单元测试与 fixtures）")
-		if err := runCargo(root, logOut, "test", "--locked", "-p", name); err != nil {
-			return nil, err
-		}
-	}
-	step("cargo build --release --locked --target wasm32-unknown-unknown")
+	// rustflags 只用 build 自己编码的这一份（CARGO_ENCODED_RUSTFLAGS 优先于环境变量与 .cargo/config 里的任何 rustflags），
+	// clippy、测试与最终构建用同一份：否则用户环境里的 rustflags（例如目标专用的 -Cdebug-assertions）会让 clippy 与产物编译出不同的条件分支。
+	// 路径重映射：产物与构建目录、用户目录无关（panic 信息里的源码路径不会带进 wasm），同样的源码在任何机器上得到同样的字节；
+	// 参数用 0x1f 分隔，路径里有空格也不会被拆开；--sdk-path 指向的工作区外的 SDK 也一并重映射。
 	sysroot, err := commandOutput(root, "rustc", "--print", "sysroot")
 	if err != nil {
 		return nil, err
@@ -379,8 +371,6 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 		home, _ := os.UserHomeDir()
 		cargoHome = filepath.Join(home, ".cargo")
 	}
-	// 路径重映射：产物与构建目录、用户目录无关（panic 信息里的源码路径不会带进 wasm），同样的源码在任何机器上得到同样的字节。
-	// 参数用 CARGO_ENCODED_RUSTFLAGS（0x1f 分隔）传，路径里有空格也不会被拆开；--sdk-path 指向的工作区外的 SDK 也一并重映射。
 	remaps := []string{root + "=/udf-src", cargoHome + "=/cargo", sysroot + "=/rustc"}
 	if sdk := udfSDKRoot(crateDir); sdk != "" {
 		remaps = append(remaps, sdk+"=/moox-udf-sdk")
@@ -389,7 +379,21 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 	for _, remap := range remaps {
 		flags = append(flags, "--remap-path-prefix="+remap)
 	}
-	if err := runCargoEnv(root, logOut, []string{"CARGO_ENCODED_RUSTFLAGS=" + strings.Join(flags, "\x1f")}, "build", "--release", "--locked", "--target", "wasm32-unknown-unknown", "-p", name); err != nil {
+	flagsEnv := []string{"CARGO_ENCODED_RUSTFLAGS=" + strings.Join(flags, "\x1f")}
+
+	step("cargo clippy --release --locked -- -D warnings")
+	// clippy 用与最终产物相同的 profile（release）与目标：只在 release 下编译的分支（cfg(not(debug_assertions))）也要过禁用清单。
+	if err := runCargoEnv(root, logOut, flagsEnv, "clippy", "--release", "--locked", "-p", name, "--target", "wasm32-unknown-unknown", "--", "-D", "warnings"); err != nil {
+		return nil, err
+	}
+	if !opts.SkipNativeTests {
+		step("cargo test --locked（原生环境的单元测试与 fixtures）")
+		if err := runCargoEnv(root, logOut, flagsEnv, "test", "--locked", "-p", name); err != nil {
+			return nil, err
+		}
+	}
+	step("cargo build --release --locked --target wasm32-unknown-unknown")
+	if err := runCargoEnv(root, logOut, flagsEnv, "build", "--release", "--locked", "--target", "wasm32-unknown-unknown", "-p", name); err != nil {
 		return nil, err
 	}
 	wasm, err := os.ReadFile(filepath.Join(root, "target", "wasm32-unknown-unknown", "release", strings.ReplaceAll(name, "-", "_")+".wasm"))

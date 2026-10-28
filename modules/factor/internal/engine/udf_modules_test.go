@@ -221,9 +221,18 @@ func TestCatchupWaitsForModules(t *testing.T) {
 	require.False(t, r.catchupGate("ftask_u"))
 	require.Contains(t, r.lifecycleStatus().CatchupBlocked, "自定义算子", "上报里带出阻塞原因")
 
+	// 模块级的追赶钩子同样要满足前置条件：任务在重启后还没有预载（不在任务级追赶范围里）时，不能因此直接放行模块。
+	moduleCatchup, err := r.catchupHook(ctx, lifecycle.Ref{}, time.Now())
+	require.NoError(t, err)
+	require.False(t, moduleCatchup.CaughtUp)
+	require.Contains(t, moduleCatchup.Message, "自定义算子")
+
 	require.NoError(t, r.udf.Ensure(ctx, hash, "ts_mean_udf"))
 	require.Empty(t, r.catchupPrecondition("ftask_u"))
 	require.Empty(t, r.lifecycleStatus().CatchupBlocked)
+	moduleCatchup, err = r.catchupHook(ctx, lifecycle.Ref{}, time.Now())
+	require.NoError(t, err)
+	require.True(t, moduleCatchup.CaughtUp)
 }
 
 // 补算领取：作业绑定的模块准备失败，作业报告失败、没有写任何分块；准备好后可以重新发起。

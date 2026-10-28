@@ -452,6 +452,10 @@ func (c *Computation) fail(member domain.MemberDef, plan Plan, available []strin
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
 	state.Status = "degraded"
 	c.FactorStates[member.Key] = state
+	if c.Failures == nil {
+		c.Failures = map[string]error{}
+	}
+	c.Failures[member.Key] = err
 	if member.Factor.FactorType != domain.FactorTypeCrossSection {
 		for _, subject := range available {
 			c.Results[member.Key][subject] = ItemResult{Member: member.Key, Err: err}

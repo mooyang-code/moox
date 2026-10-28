@@ -519,6 +519,10 @@ func (c *conformance) runParamSet(shared **Instance, params []float64) (done boo
 
 	// 空值：规则规定必须是 NaN 的位置（严格：窗口含 NaN；relaxed：见设计第 5 节）。
 	c.checkNaN(d, ref, params)
+	if err := c.checkCommonStart(in, d, params, full); err != nil {
+		c.fail(testNaN, "参数 %v：%v", params, err)
+		return true, nil
+	}
 
 	// 确定性：两个新实例各跑两次，逐位相同（并且与参考输出相同）。
 	for i := 0; i < 2; i++ {
@@ -611,6 +615,52 @@ func (c *conformance) checkNaN(d *dataSet, ref *Batch, params []float64) {
 			}
 		}
 	}
+}
+
+// commonStart 返回 relaxed 规则下序列 s 在窗口 [a, a+l) 里的共同有效段起点（相对窗口）：各输入开头的 NaN 段取最长的那个。
+func commonStart(d *dataSet, s, a, l int) int {
+	start := 0
+	for k := range d.inputs {
+		i := 0
+		for i < l && math.IsNaN(d.inputs[k][s][a+i]) {
+			i++
+		}
+		start = max(start, i)
+	}
+	return start
+}
+
+// checkCommonStart 只对 relaxed 多输入模块：共同有效段之前的值（某个输入已经有值、但别的输入还没有的那些位置）不能影响输出。
+// 取几个输出位置，把这些位置上的有限值换成别的有限值，输出必须逐位不变。
+func (c *conformance) checkCommonStart(in *Instance, d *dataSet, params []float64, full func(s, j int) float64) error {
+	man := c.m.Info.Manifest
+	if man.NaN != NaNRelaxed || len(d.inputs) < 2 {
+		return nil
+	}
+	l := int(d.l)
+	junk := splitmix(uint64(l) + 17)
+	for _, j := range []int{0, d.outLen / 3, d.outLen - 1} {
+		order := make([]int, d.series())
+		for s := range order {
+			order[s] = s
+		}
+		b := d.batch(order, j, 1, func(k, s int, win []float64) {
+			for i := 0; i < commonStart(d, s, j, l); i++ {
+				if !math.IsNaN(win[i]) {
+					win[i] = float64(int64(junk.next()%2001)-1000) * 1e3
+				}
+			}
+		})
+		if err := c.run(in, b); err != nil {
+			return fmt.Errorf("共同有效段检查执行失败：%v", err)
+		}
+		for s := range order {
+			if got, want := b.Out[s], full(s, j); !sameBits(got, want) {
+				return fmt.Errorf("序列 %d、输出 %d：改动共同有效段之前的值后输出变了：%v → %v（relaxed 规则下各输入先按共同有效段对齐，之前的值不能参与计算）", s, j, want, got)
+			}
+		}
+	}
+	return nil
 }
 
 // mustBeNaN 按第 5 节的规则判断输出 (s, j) 是否必须是 NaN。

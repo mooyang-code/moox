@@ -85,24 +85,26 @@ func (a *accountedMemory) Reallocate(size uint64) []byte {
 	if a.max != 0 && size > a.max {
 		return nil
 	}
-	if size > uint64(1)<<40 || !a.m.resize(int64(size)) {
+	if size > uint64(1)<<40 {
 		return nil
 	}
-	switch {
-	case size <= uint64(len(a.buf)):
-		a.buf = a.buf[:size]
-	case size <= uint64(cap(a.buf)):
-		// 容量内扩展：这段字节从未暴露给 guest（make 时清零，缩小从不发生），仍是零。
-		a.buf = a.buf[:size]
-	default:
-		newCap := max(size, uint64(cap(a.buf))*2)
+	// 底层数组按它的容量占用内存：记账量取容量而不是逻辑长度，预算不会因为翻倍预留而少计。
+	// 容量只在需要增长时才变大（按 1.25 倍，不超过声明的最大值），容量内的扩展不再申请。
+	if size > uint64(cap(a.buf)) {
+		newCap := max(size, uint64(cap(a.buf))+uint64(cap(a.buf))/4)
 		if a.max != 0 && newCap > a.max {
 			newCap = a.max
+		}
+		if !a.m.resize(int64(newCap)) {
+			return nil
 		}
 		grown := make([]byte, size, newCap)
 		copy(grown, a.buf)
 		a.buf = grown
+		return a.buf
 	}
+	// 容量内扩展：这段字节从未暴露给 guest（make 时清零，缩小从不发生），仍是零。
+	a.buf = a.buf[:size]
 	return a.buf
 }
 

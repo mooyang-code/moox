@@ -26,6 +26,8 @@ packages=()
 for entry in "${modules[@]}"; do
 	packages+=(-p "${entry#*:}")
 done
+# 固定输出目录：用户环境里的 CARGO_TARGET_DIR / build.target-dir 不能让下面复制到旧产物。
+export CARGO_TARGET_DIR="${PWD}/target"
 cargo build --release --locked --target wasm32-unknown-unknown "${packages[@]}"
 mkdir -p "${OUT}"
 for entry in "${modules[@]}"; do

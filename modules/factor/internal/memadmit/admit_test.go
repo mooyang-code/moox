@@ -146,15 +146,17 @@ func TestReserveReadsPriorityFromContext(t *testing.T) {
 	require.Equal(t, "background", <-got)
 }
 
-func TestCanAdmitResidentCountsReservedCompute(t *testing.T) {
+func TestTrySetResidentCountsReservedComputeAtomically(t *testing.T) {
 	a := New(100)
 	a.SetResident("w", 30)
 	hold, err := a.Reserve(context.Background(), 40)
 	require.NoError(t, err)
-	require.True(t, a.CanAdmitResident("m", 30), "30+40+30 刚好等于预算")
-	require.False(t, a.CanAdmitResident("m", 31), "再多 1 字节就挤占了已预留的计算内存")
-	require.True(t, a.CanAdmitResident("w", 60), "同名覆盖时不重复计")
+	require.True(t, a.TrySetResident("m", 30), "30+40+30 刚好等于预算")
+	require.False(t, a.TrySetResident("m2", 1), "预算已满，再多 1 字节就挤占了已预留的计算内存")
+	require.Equal(t, int64(60), a.Stats().Resident, "被拒绝的申请不登记")
+	require.True(t, a.TrySetResident("m", 10), "减少总是成功")
+	require.True(t, a.TrySetResident("w", 30), "同名不变也成功")
 	hold()
-	require.True(t, a.CanAdmitResident("m", 70))
-	require.True(t, New(0).CanAdmitResident("m", 1<<40), "预算为 0 表示不限制")
+	require.True(t, a.TrySetResident("m", 70))
+	require.True(t, New(0).TrySetResident("m", 1<<40), "预算为 0 表示不限制")
 }

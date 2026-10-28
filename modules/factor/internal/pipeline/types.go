@@ -127,7 +127,9 @@ type Computation struct {
 	CrossPeriods map[string]map[int64]periodOutcome
 	Results      map[string]map[string]ItemResult
 	FactorStates map[string]storageio.FactorState
-	BudgetHit    bool
+	// Failures 记录成员整体计算失败的原因（补算模式下截面因子的逐行结果不带错误，原因放在这里供试算等调用方报告）。
+	Failures  map[string]error
+	BudgetHit bool
 }
 
 // ItemResult 是一个成员在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、

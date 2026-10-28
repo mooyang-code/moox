@@ -525,7 +525,11 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		rsp.Subjects[subject] = frame
 	}
 	if req.WriteFactors {
-		if current, lookup := m.deps.Sets.SetByID(s.set.Set.TaskID); lookup == SetFound && taskUDFKey(current) != s.udfKey {
+		current, lookup := m.deps.Sets.SetByID(s.set.Set.TaskID)
+		if lookup != SetFound {
+			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务已不在目录里（停用或删除），写回被拒绝：请关闭会话")
+		}
+		if taskUDFKey(current) != s.udfKey {
 			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务引用的自定义算子版本已经切换，写回被拒绝：请关闭会话并重新打开")
 		}
 		release := func() {}

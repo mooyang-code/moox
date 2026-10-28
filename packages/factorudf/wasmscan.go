@@ -111,19 +111,10 @@ func scanWasm(wasm []byte) (*wasmInfo, error) {
 			return nil, err
 		}
 		sec := &reader{b: body}
-		// 向量段（类型、导入、函数、表、内存、全局、导出、元素、代码、数据）开头是元素个数，每个元素至少占一个字节：
-		// 个数比段内字节数还大的段一定是畸形的。不在这里拒绝，后面的 wazero 会先按声明的个数分配 map 与切片再检查实际内容，
-		// 一个几字节的段就能让宿主分配出几十 GiB。
-		switch id {
-		case 1, 2, 3, 4, 5, 6, 7, 9, 10, 11:
-			probe := &reader{b: body}
-			n, err := probe.u64()
-			if err != nil {
-				return nil, err
-			}
-			if n > uint64(len(body)-probe.pos) {
-				return nil, fmt.Errorf("段 %d 声明了 %d 个元素，比段内的字节数还多", id, n)
-			}
+		// 各段内部的个数与长度先做界限校验（见 wasmstruct.go）：wazero 先按声明的个数/长度分配再读内容，
+		// 一个几字节的畸形段就能让宿主分配出几 GiB。
+		if err := validateSection(id, body); err != nil {
+			return nil, fmt.Errorf("段 %d：%w", id, err)
 		}
 		switch id {
 		case 0:

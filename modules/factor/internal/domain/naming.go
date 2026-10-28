@@ -77,17 +77,17 @@ func CompileDefinition(def FactorDef) (FactorDef, error) {
 	if err != nil {
 		return def, err
 	}
-	// 绑定只保留编译结果里实际引用的版本：文本扫描会把注释里的 udf.<名称>( 也算进来（多算无害，但没有启用版本的名称不能带到引擎去），
-	// 裁剪之后随目录快照、补算任务下发的就是精确的引用集合。
+	// 没有启用版本的名称只是解析环境里的占位（文本扫描会把注释里的 udf.<名称>( 也算进来），不带到引擎去。
+	// 有版本的绑定一律保留：引擎拿原文重新编译，常量折叠掉的分支里的调用也要能解析（只看最终输出树的引用集合会漏掉它们）。
 	if len(def.UDFs) > 0 {
-		used := make(map[string]factorexpr.UDF, len(compiled.UDFs))
-		for _, ref := range compiled.UDFs {
-			if udf, ok := def.UDFs[ref.Name]; ok {
-				used[ref.Name] = udf
+		bound := make(map[string]factorexpr.UDF, len(def.UDFs))
+		for name, udf := range def.UDFs {
+			if udf.Hash != "" {
+				bound[name] = udf
 			}
 		}
-		def.UDFs = used
-		key = UDFKey(used)
+		def.UDFs = bound
+		key = UDFKey(bound)
 	}
 	def.compiled, def.compiledKey = compiled, key
 	def.FactorType = string(compiled.Type)

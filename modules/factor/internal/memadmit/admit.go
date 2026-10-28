@@ -87,15 +87,21 @@ func (a *Admitter) CanResident(name string, extra int64) bool {
 	return a.residentLocked()-a.resident[name]+extra <= a.budget
 }
 
-// CanAdmitResident 判断再增加 extra 字节常驻内存之后，常驻加已预留的计算内存是否仍在预算之内（运行中增加常驻内存前检查：
-// 计算已经预留的部分不能被挤占）。name 已登记的常驻量按覆盖计算。
-func (a *Admitter) CanAdmitResident(name string, extra int64) bool {
+// TrySetResident 把 name 的常驻内存改为 bytes：增加之后常驻加已预留的计算内存超出预算就拒绝（返回 false、不登记），
+// 否则登记。检查与登记在同一把锁里完成，并发的预留与常驻申请不会重复放行同一份预算；减少或不变总是成功。
+func (a *Admitter) TrySetResident(name string, bytes int64) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.budget <= 0 {
-		return true
+	if a.budget > 0 && bytes > a.resident[name] && a.residentLocked()-a.resident[name]+bytes+a.reserved > a.budget {
+		return false
 	}
-	return a.residentLocked()-a.resident[name]+extra+a.reserved <= a.budget
+	if bytes <= 0 {
+		delete(a.resident, name)
+	} else {
+		a.resident[name] = bytes
+	}
+	a.dispatchLocked()
+	return true
 }
 
 type priorityKey struct{}

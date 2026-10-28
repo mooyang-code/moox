@@ -184,3 +184,22 @@ func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, rsp.ShortWarmup, "A、B、GONE 都从第 0 分钟起，早于预热起点的数据都不存在")
 }
+
+// 任务离开目录（停用或删除）之后，旧会话不能再写回结果：版本校验不能因为查不到任务而被跳过。
+func TestReplayWriteBackIsRejectedAfterTheTaskLeavesTheCatalog(t *testing.T) {
+	m, set := newReplayManagerForTest(t)
+	ctx := context.Background()
+	_, status, err := m.Open(ctx, ReplayOpenRequest{
+		ReplayID: "rw", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339),
+		ExtraPeriods: 1, WriteFactors: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+
+	m.deps.Sets = replayTasks{set: domain.EngineTask{Set: domain.FactorTask{TaskID: "other"}}} // 目录里已经没有这个任务
+	_ = set
+	_, status, err = m.Step(ctx, ReplayStepRequest{ReplayID: "rw", Period: rt0.Add(5 * time.Minute).Format(time.RFC3339), WriteFactors: true})
+	require.Error(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Contains(t, err.Error(), "不在目录")
+}

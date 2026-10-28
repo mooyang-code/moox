@@ -214,7 +214,7 @@ func udfReferences(ctx context.Context, db *gorm.DB, name string) ([]string, err
 		ID   string `gorm:"column:c_factor_id"`
 		Spec string `gorm:"column:c_spec"`
 	}
-	if err := db.WithContext(ctx).Raw(`SELECT c_factor_id, c_spec FROM t_factor_defs WHERE c_spec LIKE ? ORDER BY c_factor_id`, "%udf."+name+"%").Scan(&rows).Error; err != nil {
+	if err := db.WithContext(ctx).Raw(`SELECT c_factor_id, c_spec FROM t_factor_defs WHERE c_spec LIKE ? ORDER BY c_factor_id`, "%"+name+"%").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	var ids []string

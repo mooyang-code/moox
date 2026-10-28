@@ -312,7 +312,7 @@ func digestBools(mask []bool) string {
 type runner struct {
 	ctx       context.Context
 	udf       UDFHost
-	bigBatch  sync.Mutex // 一条序列就超过 worker 份额的自定义算子批一次只跑一个
+	batchGate sync.RWMutex // 自定义算子批：普通批共享，一条序列就超过 worker 份额的大批独占（大批与任何其他批都不并行）
 	program   *factorexpr.Program
 	panel     *Panel
 	need      []factorexpr.Interval

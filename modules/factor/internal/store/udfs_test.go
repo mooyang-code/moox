@@ -208,3 +208,16 @@ func mapKeys(m map[string]factorexpr.UDF) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// 引用查询不能依赖 "udf." 的精确写法：点前后带空白的调用同样算引用（激活前提检查靠它）。
+func TestUdfReferencesFindCallsWrittenWithWhitespace(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	v := putExample(t, s, "ts_mean")
+	require.NoError(t, s.SetActiveUdf(ctx, v.Name, v.Hash))
+	spec := "output: udf .ts_mean_udf(close, 5)"
+	require.NoError(t, s.CreateFactor(ctx, domain.FactorDef{FactorID: "f_ws", Name: "n", Spec: spec, SpecHash: domain.SpecHash(spec)}))
+	refs, err := s.UdfReferences(ctx, v.Name)
+	require.NoError(t, err)
+	require.Equal(t, []string{"f_ws"}, refs)
+}

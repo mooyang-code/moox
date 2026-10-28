@@ -300,6 +300,9 @@ func TestScanUdfSourceRejectsUnsafeAndHandWrittenExports(t *testing.T) {
 	// 字符串里的 /* 不能骗过扫描：之后的真 unsafe 必须被发现。
 	assert.ErrorContains(t, scanUdfSource(write("fn f() { let _ = \"/*\"; }\nfn g() { unsafe {} }")), "unsafe")
 	assert.ErrorContains(t, scanUdfSource(write("fn f<'a>(x: &'a str) { unsafe {} }")), "unsafe")
+	// C 字符串（c"…"、cr#"…"#）与字节串同样按字符串处理：里面的 /* 不是注释、里面的 unsafe 不是代码。
+	assert.NoError(t, scanUdfSource(write("fn f() { let _ = cr#\"unsafe\"#; let _ = c\"unsafe\"; let _ = br\"unsafe\"; }")))
+	assert.ErrorContains(t, scanUdfSource(write("fn f(v: &f64) -> f64 { let _ = cr#\"\" /*\"#;\n#[allow(unsafe_code)]\nunsafe { core::ptr::read(v) } }")), "unsafe")
 }
 
 func TestSanitizeRemoteStripsCredentials(t *testing.T) {

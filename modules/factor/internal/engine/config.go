@@ -48,7 +48,7 @@ type UDFConfig struct {
 	CallTimeout time.Duration `yaml:"call_timeout"`
 	// InstanceMemory 是单个实例线性内存的上限，默认 512MiB。
 	InstanceMemory ByteSize `yaml:"instance_memory"`
-	// BatchBytes 是每批输入输出的字节预算，默认 64MiB。
+	// BatchBytes 是每批输入输出的字节预算，默认 64MiB，也是上限（内存估算按这个上限计）。
 	BatchBytes ByteSize `yaml:"batch_bytes"`
 	// IdleTimeout 是实例空闲多久后关闭，默认 5 分钟。
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
@@ -371,8 +371,8 @@ func (c *Config) Validate() error {
 	require(c.Compute.Workers > 0 && c.Compute.MaxMemory > 0, "compute.workers and compute.max_memory must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")
 	require(c.Recalc.ChunkPeriods > 0, "recalc.chunk_periods must be positive")
-	require(c.UDF.CallTimeout > 0 && c.UDF.InstanceMemory >= 1<<20 && c.UDF.BatchBytes >= 1<<20 && c.UDF.IdleTimeout > 0 && strings.TrimSpace(c.UDF.Dir) != "",
-		"udf.dir、udf.call_timeout、udf.idle_timeout must be set, udf.instance_memory and udf.batch_bytes must be at least 1MiB")
+	require(c.UDF.CallTimeout > 0 && c.UDF.InstanceMemory >= 1<<20 && c.UDF.BatchBytes >= 1<<20 && c.UDF.BatchBytes <= 64<<20 && c.UDF.IdleTimeout > 0 && strings.TrimSpace(c.UDF.Dir) != "",
+		"udf.dir、udf.call_timeout、udf.idle_timeout must be set, udf.instance_memory must be at least 1MiB, udf.batch_bytes must be between 1MiB and 64MiB")
 	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
 	require(c.Gap.MaxGroupsPerSweep > 0 && c.Gap.MaxSpan > 0, "gap.max_groups_per_sweep and gap.max_span must be positive")
 	require(strings.TrimSpace(c.SeriesStore.Dir) != "" && c.SeriesStore.BlockCache > 0, "seriesstore.dir and seriesstore.block_cache are required")

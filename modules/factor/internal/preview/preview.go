@@ -228,6 +228,9 @@ func collect(factor domain.FactorDef, computation pipeline.Computation, shown []
 		wanted[subject] = true
 	}
 	result := Result{Columns: append([]string(nil), factor.Outputs...)}
+	if err := computation.Failures[factor.FactorID]; err != nil {
+		return Result{}, err
+	}
 	for key, item := range computation.Results[factor.FactorID] { // 试算的成员别名就是定义 ID
 		if item.Err != nil {
 			return Result{}, item.Err
