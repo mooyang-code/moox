@@ -26,7 +26,16 @@ func runCargo(dir string, out io.Writer, args ...string) error {
 func runCargoEnv(dir string, out io.Writer, env []string, args ...string) error {
 	cmd := exec.Command("cargo", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	// 去掉会改变构建结果或产物位置的继承环境：产物目录固定在工作区的 target，rustflags 只用 build 自己编码的那一份。
+	base := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		switch strings.SplitN(kv, "=", 2)[0] {
+		case "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_RUSTFLAGS", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER":
+			continue
+		}
+		base = append(base, kv)
+	}
+	cmd.Env = append(append(base, "CARGO_TARGET_DIR="+filepath.Join(dir, "target")), env...)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("cargo %s：%w", strings.Join(args, " "), err)
@@ -83,16 +92,147 @@ func udfCrates(root string) ([]string, error) {
 }
 
 var (
-	unsafeRE       = regexp.MustCompile(`\bunsafe\b|\ballow\s*\([^)]*unsafe_code`)
-	exportAttrRE   = regexp.MustCompile(`#\s*\[\s*(no_mangle|export_name|link_section)\b`)
-	lineCommentRE  = regexp.MustCompile(`//[^\n]*`)
-	blockCommentRE = regexp.MustCompile(`(?s)/\*.*?\*/`)
-	stringRE       = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
+	unsafeRE     = regexp.MustCompile(`\bunsafe\b|\ballow\s*\([^)]*unsafe_code`)
+	exportAttrRE = regexp.MustCompile(`#\s*!?\[\s*(no_mangle|export_name|link_section)\b`)
 )
 
+// stripRustNonCode 按 Rust 的词法把注释与字符串、字符字面量换成空格（保留换行）：嵌套的块注释、原始字符串 r#"…"#、转义、
+// 字符字面量与生命周期（'a）都按语言规则处理，不会被字符串里的 /* 骗过，也不会把字符串里的词当成代码。
+func stripRustNonCode(src string) string {
+	b := []byte(src)
+	out := make([]byte, len(b))
+	blank := func(from, to int) {
+		for i := from; i < to && i < len(b); i++ {
+			if b[i] == '\n' {
+				out[i] = '\n'
+			} else {
+				out[i] = ' '
+			}
+		}
+	}
+	i := 0
+	for i < len(b) {
+		switch {
+		case b[i] == '/' && i+1 < len(b) && b[i+1] == '/':
+			j := i
+			for j < len(b) && b[j] != '\n' {
+				j++
+			}
+			blank(i, j)
+			i = j
+		case b[i] == '/' && i+1 < len(b) && b[i+1] == '*':
+			depth, j := 1, i+2
+			for j < len(b) && depth > 0 {
+				switch {
+				case b[j] == '/' && j+1 < len(b) && b[j+1] == '*':
+					depth++
+					j += 2
+				case b[j] == '*' && j+1 < len(b) && b[j+1] == '/':
+					depth--
+					j += 2
+				default:
+					j++
+				}
+			}
+			blank(i, j)
+			i = j
+		case isRawStringStart(b, i):
+			j := i
+			if b[j] == 'b' {
+				j++
+			}
+			j++ // r
+			hashes := 0
+			for j < len(b) && b[j] == '#' {
+				hashes++
+				j++
+			}
+			j++ // 开头的 "
+			end := j
+			for end < len(b) {
+				if b[end] == '"' && hasHashes(b, end+1, hashes) {
+					end += 1 + hashes
+					break
+				}
+				end++
+			}
+			blank(i, end)
+			i = end
+		case b[i] == '"' || (b[i] == 'b' && i+1 < len(b) && b[i+1] == '"'):
+			j := i + 1
+			if b[i] == 'b' {
+				j++
+			}
+			for j < len(b) && b[j] != '"' {
+				if b[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			blank(i, j+1)
+			i = j + 1
+		case b[i] == '\'':
+			// 字符字面量（'x'、'\n'、'\u{..}'）与生命周期（'a）：后面紧跟闭合引号才是字面量。
+			j := i + 1
+			if j < len(b) && b[j] == '\\' {
+				j += 2
+				for j < len(b) && b[j] != '\'' {
+					j++
+				}
+				blank(i, j+1)
+				i = j + 1
+			} else if j+1 < len(b) && b[j+1] == '\'' {
+				blank(i, j+2)
+				i = j + 2
+			} else {
+				out[i] = b[i]
+				i++
+			}
+		default:
+			out[i] = b[i]
+			i++
+		}
+	}
+	return string(out)
+}
+
+func isRawStringStart(b []byte, i int) bool {
+	j := i
+	if b[j] == 'b' {
+		j++
+	}
+	if j >= len(b) || b[j] != 'r' {
+		return false
+	}
+	// r 前面不能是标识符的一部分（例如 for"…" 不存在，但 bar#"…" 也不是原始字符串）。
+	if i > 0 && (isIdentByte(b[i-1])) {
+		return false
+	}
+	j++
+	for j < len(b) && b[j] == '#' {
+		j++
+	}
+	return j < len(b) && b[j] == '"'
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func hasHashes(b []byte, from, n int) bool {
+	if from+n > len(b) {
+		return false
+	}
+	for k := 0; k < n; k++ {
+		if b[from+k] != '#' {
+			return false
+		}
+	}
+	return true
+}
+
 // scanUdfSource 是源码层的补充检查（只能在本地做）：用户 crate 里不允许 unsafe 与手写的导出属性——这些都由 SDK 的宏生成。
-// 去掉注释与字符串再匹配，避免说明文字里的词误报。clippy 的 unsafe_code 是 deny 而不是 forbid（宏生成的导出需要局部放开），
-// 所以这里扫描兜底。
+// clippy 的 unsafe_code 是 deny 而不是 forbid（宏生成的导出需要局部放开），所以这里扫描兜底；扫描按 Rust 词法去掉注释与字符串。
 func scanUdfSource(crateDir string) error {
 	var problems []string
 	err := filepath.WalkDir(filepath.Join(crateDir, "src"), func(path string, d os.DirEntry, err error) error {
@@ -103,9 +243,7 @@ func scanUdfSource(crateDir string) error {
 		if err != nil {
 			return err
 		}
-		text := blockCommentRE.ReplaceAllString(string(raw), "")
-		text = lineCommentRE.ReplaceAllString(text, "")
-		text = stringRE.ReplaceAllString(text, `""`)
+		text := stripRustNonCode(string(raw))
 		rel, _ := filepath.Rel(crateDir, path)
 		if unsafeRE.MatchString(text) {
 			problems = append(problems, rel+"：不允许 unsafe（也不允许 allow(unsafe_code)）")
@@ -160,15 +298,32 @@ type udfDescription struct {
 	Example string `toml:"example"`
 }
 
-// gitState 返回仓库的来源（远程地址）、提交号与工作区是否有未提交的改动；不在 git 仓库里时 commit 为空。
-func gitState(dir string) (remote, commit string, dirty bool) {
-	commit, err := commandOutput(dir, "git", "rev-parse", "HEAD")
-	if err != nil {
-		return "", "", false
+// sanitizeRemote 去掉远程地址里的认证信息（https://user:token@host/…），记录来源不能把凭据带进包与服务端。
+func sanitizeRemote(remote string) string {
+	if i := strings.Index(remote, "://"); i >= 0 {
+		rest := remote[i+3:]
+		if at := strings.LastIndex(strings.SplitN(rest, "/", 2)[0], "@"); at >= 0 {
+			return remote[:i+3] + rest[at+1:]
+		}
+	}
+	return remote
+}
+
+// gitState 返回仓库的来源（远程地址，已去凭据）、提交号与工作区是否有未提交的改动；不在 git 仓库里时 commit 为空。
+// 状态用显式参数取（所有未跟踪文件、不忽略子模块的改动），不受用户的 git 配置影响；git 命令出错时返回错误，不当作干净。
+func gitState(dir string) (remote, commit string, dirty bool, err error) {
+	if _, probe := commandOutput(dir, "git", "rev-parse", "--git-dir"); probe != nil {
+		return "", "", false, nil // 不在 git 仓库里
+	}
+	if commit, err = commandOutput(dir, "git", "rev-parse", "HEAD"); err != nil {
+		return "", "", false, err
 	}
 	remote, _ = commandOutput(dir, "git", "remote", "get-url", "origin")
-	status, _ := commandOutput(dir, "git", "status", "--porcelain")
-	return remote, commit, status != ""
+	status, err := commandOutput(dir, "git", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none")
+	if err != nil {
+		return "", "", false, err
+	}
+	return sanitizeRemote(remote), commit, status != "", nil
 }
 
 // runUdfBuild 在本地跑完全部门禁并打包：源码检查 → clippy（-D warnings）→ 原生测试 → 编译 wasm（锁定工具链、路径重映射）→
@@ -203,8 +358,9 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 	if err := scanUdfSource(crateDir); err != nil {
 		return nil, err
 	}
-	step("cargo clippy --locked -- -D warnings")
-	if err := runCargo(root, logOut, "clippy", "--locked", "-p", name, "--target", "wasm32-unknown-unknown", "--", "-D", "warnings"); err != nil {
+	step("cargo clippy --release --locked -- -D warnings")
+	// clippy 用与最终产物相同的 profile（release）与目标：只在 release 下编译的分支（cfg(not(debug_assertions))）也要过禁用清单。
+	if err := runCargo(root, logOut, "clippy", "--release", "--locked", "-p", name, "--target", "wasm32-unknown-unknown", "--", "-D", "warnings"); err != nil {
 		return nil, err
 	}
 	if !opts.SkipNativeTests {
@@ -224,8 +380,16 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 		cargoHome = filepath.Join(home, ".cargo")
 	}
 	// 路径重映射：产物与构建目录、用户目录无关（panic 信息里的源码路径不会带进 wasm），同样的源码在任何机器上得到同样的字节。
-	flags := fmt.Sprintf("--remap-path-prefix=%s=/udf-src --remap-path-prefix=%s=/cargo --remap-path-prefix=%s=/rustc", root, cargoHome, sysroot)
-	if err := runCargoEnv(root, logOut, []string{"RUSTFLAGS=" + flags}, "build", "--release", "--locked", "--target", "wasm32-unknown-unknown", "-p", name); err != nil {
+	// 参数用 CARGO_ENCODED_RUSTFLAGS（0x1f 分隔）传，路径里有空格也不会被拆开；--sdk-path 指向的工作区外的 SDK 也一并重映射。
+	remaps := []string{root + "=/udf-src", cargoHome + "=/cargo", sysroot + "=/rustc"}
+	if sdk := udfSDKRoot(crateDir); sdk != "" {
+		remaps = append(remaps, sdk+"=/moox-udf-sdk")
+	}
+	var flags []string
+	for _, remap := range remaps {
+		flags = append(flags, "--remap-path-prefix="+remap)
+	}
+	if err := runCargoEnv(root, logOut, []string{"CARGO_ENCODED_RUSTFLAGS=" + strings.Join(flags, "\x1f")}, "build", "--release", "--locked", "--target", "wasm32-unknown-unknown", "-p", name); err != nil {
 		return nil, err
 	}
 	wasm, err := os.ReadFile(filepath.Join(root, "target", "wasm32-unknown-unknown", "release", strings.ReplaceAll(name, "-", "_")+".wasm"))
@@ -268,18 +432,29 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 			return nil, fmt.Errorf("udf.toml：%w", err)
 		}
 	}
-	remote, commit, dirty := gitState(root)
+	remote, commit, dirty, err := gitState(root)
+	if err != nil {
+		return nil, fmt.Errorf("读取 git 状态失败：%w", err)
+	}
 	toolchain, _ := commandOutput(root, "rustc", "--version")
 	pkg := &factorudf.Package{
 		Wasm: wasm, Fixtures: fixtures, Report: report,
 		Manifest: factorudf.PackageManifest{
 			Manifest: *module.Info.Manifest, Doc: describe.Doc, Example: describe.Example,
-			Source: factorudf.SourceRef{Repo: remote, Commit: commit}, Toolchain: toolchain,
+			Source: factorudf.SourceRef{Repo: remote, Commit: commit, Dirty: dirty}, Toolchain: toolchain,
 		},
 	}
 	raw, err := factorudf.WritePackage(pkg)
 	if err != nil {
 		return nil, err
+	}
+	// 与 publish 同一套包结构校验：build 成功的包，publish 不会因为结构问题（文件个数、大小、manifest 不一致）再拒绝。
+	checked, err := factorudf.ReadPackage(raw, factorudf.Limits{})
+	if err != nil {
+		return nil, fmt.Errorf("生成的包不合格：%w", err)
+	}
+	if _, err := factorudf.VerifyPackage(checked, factorudf.Limits{}); err != nil {
+		return nil, fmt.Errorf("生成的包不合格：%w", err)
 	}
 	dist := filepath.Join(root, "dist")
 	if err := os.MkdirAll(dist, 0o755); err != nil {
@@ -305,4 +480,26 @@ func runUdfBuild(ctx context.Context, out io.Writer, opts udfBuildOptions) (*udf
 		fmt.Fprintln(out, "  注意：不在 git 仓库里，包里没有提交号；publish 要求源码在 git 仓库里")
 	}
 	return result, nil
+}
+
+// udfSDKRoot 返回 crate 的 moox-udf 依赖是本地 path 依赖时 SDK 的根目录（path 的上一级，即 moox 仓库的 sdk/rust）；git 依赖返回空串。
+func udfSDKRoot(crateDir string) string {
+	var manifest struct {
+		Dependencies map[string]any `toml:"dependencies"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(crateDir, "Cargo.toml"), &manifest); err != nil {
+		return ""
+	}
+	dep, ok := manifest.Dependencies["moox-udf"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	path, ok := dep["path"].(string)
+	if !ok || path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(crateDir, path)
+	}
+	return filepath.Dir(filepath.Clean(path))
 }

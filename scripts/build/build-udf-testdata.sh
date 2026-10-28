@@ -20,6 +20,7 @@ modules=(
 	bad_state:udf_bad_state
 	bad_past:udf_bad_past
 	bad_future:udf_bad_future
+	bad_cache:udf_bad_cache
 )
 packages=()
 for entry in "${modules[@]}"; do

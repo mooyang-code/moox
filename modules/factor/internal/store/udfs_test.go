@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
 	"github.com/stretchr/testify/require"
@@ -169,4 +171,40 @@ func TestCompiledDefinitionIsRecompiledWhenOnlyTheBindingChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, recompiled.Compiled().CanonicalText(), "@11", "复制后换了绑定，必须按新绑定重新编译，不能命中旧的编译结果")
 	require.NotEqual(t, domain.DefinitionHash(def), domain.DefinitionHash(copied))
+}
+
+// 定义文本里只在注释中出现的算子名没有启用版本：不会让定义编译失败，也不会进入绑定与下发的集合。
+func TestCommentOnlyReferencesDoNotEnterBindings(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	v := putExample(t, s, "ts_mean")
+	require.NoError(t, s.SetActiveUdf(ctx, v.Name, v.Hash))
+	spec := "# 以前用 udf.not_activated(close, 3)\noutput: udf.ts_mean_udf(close, 5)"
+	require.NoError(t, s.CreateFactor(ctx, domain.FactorDef{FactorID: "f_c", Name: "n", Spec: spec, SpecHash: domain.SpecHash(spec)}))
+	def, err := s.GetFactor(ctx, "f_c")
+	require.NoError(t, err)
+	require.NotNil(t, def.Compiled())
+	require.Equal(t, []string{"ts_mean_udf"}, mapKeys(def.UDFs))
+	require.Len(t, factorwire.UDFsToPB(def.UDFs), 1)
+}
+
+func TestUDFNamesToleratesWhitespaceAroundTheDot(t *testing.T) {
+	require.Equal(t, []string{"ts_mean_udf"}, domain.UDFNames("output: udf .ts_mean_udf(close, 5)"))
+	require.Equal(t, []string{"ts_mean_udf"}, domain.UDFNames("output: udf. ts_mean_udf (close, 5)"))
+	require.Empty(t, domain.UDFNames("output: close"))
+}
+
+func TestUDFsToPBSkipsPlaceholdersWithoutAVersion(t *testing.T) {
+	out := factorwire.UDFsToPB(map[string]factorexpr.UDF{"a": {Name: "a", Hash: "ab"}, "b": {Name: "b"}})
+	require.Len(t, out, 1)
+	require.Equal(t, "a", out[0].GetName())
+}
+
+func mapKeys(m map[string]factorexpr.UDF) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

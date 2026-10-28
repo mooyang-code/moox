@@ -1,6 +1,7 @@
 package factorudf
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -323,4 +324,81 @@ func TestConformanceDigestIsStable(t *testing.T) {
 		}
 		digests["ts_mean"] = rep.Digest
 	}
+}
+
+// B1：畸形模块里声明的元素个数比段内字节数还大：静态检查就拒绝，不能交给 wazero 先按声明的个数分配。
+func TestRejectsSectionsDeclaringMoreElementsThanBytes(t *testing.T) {
+	rt := newTestRuntime(t, Options{})
+	b := validBuilder()
+	good := b.build()
+	// 把导出段（id 7）的元素个数改成 0xffffffff（LEB128：ff ff ff ff 0f），段长不变太小，所以重新拼一个段。
+	i := bytes.Index(good, []byte{7})
+	require.Positive(t, i)
+	var forged []byte
+	forged = append(forged, good[:8]...) // 魔数与版本
+	forged = append(forged, 1, 6, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x60)
+	_, err := rt.Load(context.Background(), forged)
+	var ce *CheckError
+	require.True(t, errors.As(err, &ce), "%v", err)
+	require.Contains(t, err.Error(), "元素")
+}
+
+// B3/B4：预算在线性内存增长发生时准入；失败的调用不残留已申请的预算。
+func TestBudgetIsEnforcedWhenMemoryGrowsAndNothingLeaksOnFailure(t *testing.T) {
+	budget := &countingBudget{limit: 6 << 20} // 6 MiB：够实例化，不够 guest 自己申请的 1 GiB
+	// 单实例页数上限放大到 2 GiB，让 guest 的增长请求先到预算这一关（否则先撞上页数上限，与预算无关）。
+	rt, err := NewRuntime(context.Background(), Options{Budget: budget, Limits: Limits{MemoryLimitPages: 32768}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	m, err := rt.Load(ctx, testWasm(t, "faulty"))
+	require.NoError(t, err)
+	used, _ := budget.get()
+	require.Zero(t, used, "模块检查阶段的探测实例用完即释放")
+
+	w := window(4, 1)
+	w[0] = -9999999.0 // guest 内部申请 1 GiB
+	err = m.Eval(ctx, faultyBatch(w))
+	var ce *CallError
+	require.True(t, errors.As(err, &ce), "%v", err)
+	require.Equal(t, ReasonBudget, ce.Reason, "被预算拒绝，而不是等到 guest 真的分配出来之后才发现")
+	require.ErrorIs(t, err, ErrBudget)
+	_, peak := budget.get()
+	require.LessOrEqual(t, peak, budget.limit, "任何时刻都不超过预算")
+	used, _ = budget.get()
+	require.Zero(t, used, "出错的实例被丢弃，已申请的预算全部归还")
+
+	// 之后的正常调用不受影响。
+	require.NoError(t, m.Eval(ctx, faultyBatch(window(4, 1))))
+	used, _ = budget.get()
+	require.Positive(t, used)
+	require.NoError(t, rt.Close(ctx))
+	used, _ = budget.get()
+	require.Zero(t, used)
+}
+
+// 预算连实例化都不够：申请被拒绝，不 panic。
+func TestInstantiationIsAdmittedAgainstTheBudget(t *testing.T) {
+	budget := &countingBudget{limit: 1 << 20}
+	rt, err := NewRuntime(context.Background(), Options{Budget: budget})
+	require.NoError(t, err)
+	defer rt.Close(context.Background())
+	_, err = rt.Load(context.Background(), testWasm(t, "ts_mean"))
+	require.ErrorIs(t, err, ErrBudget)
+	used, _ := budget.get()
+	require.Zero(t, used)
+}
+
+// B7：同一个实例被不同参数复用时才暴露的跨调用状态，由共用实例的一致性测试抓出来。
+func TestConformanceCatchesStateCachedAcrossParameterSets(t *testing.T) {
+	rt := newTestRuntime(t, Options{})
+	m, err := rt.Load(context.Background(), testWasm(t, "bad_cache"))
+	require.NoError(t, err)
+	rep, err := RunConformance(context.Background(), rt, m, nil, ConformanceOptions{})
+	require.NoError(t, err)
+	require.False(t, rep.Passed)
+	var failed []string
+	for _, f := range rep.Failures() {
+		failed = append(failed, f.Name)
+	}
+	require.Contains(t, failed, testDeterminism)
 }

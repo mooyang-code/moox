@@ -222,6 +222,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "udf_bad_cache"
+version = "0.1.0"
+dependencies = [
+ "moox-udf",
+]
+
+[[package]]
 name = "udf_bad_future"
 version = "0.1.0"
 dependencies = [

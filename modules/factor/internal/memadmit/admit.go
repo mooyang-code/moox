@@ -87,6 +87,17 @@ func (a *Admitter) CanResident(name string, extra int64) bool {
 	return a.residentLocked()-a.resident[name]+extra <= a.budget
 }
 
+// CanAdmitResident 判断再增加 extra 字节常驻内存之后，常驻加已预留的计算内存是否仍在预算之内（运行中增加常驻内存前检查：
+// 计算已经预留的部分不能被挤占）。name 已登记的常驻量按覆盖计算。
+func (a *Admitter) CanAdmitResident(name string, extra int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.budget <= 0 {
+		return true
+	}
+	return a.residentLocked()-a.resident[name]+extra+a.reserved <= a.budget
+}
+
 type priorityKey struct{}
 
 // WithPriority 在 ctx 里带上预留的优先级：管线只通过 Reserve(ctx, bytes) 预留，实时周期与补算由调用方用它区分。

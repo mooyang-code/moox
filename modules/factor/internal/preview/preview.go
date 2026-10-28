@@ -31,6 +31,9 @@ const (
 	MaxMemory = 256 << 20
 )
 
+// udfIdleUnload 是试算用的自定义算子版本空闲多久后卸载（释放它占用的试算预算）。
+const udfIdleUnload = 10 * time.Minute
+
 // Source 是试算需要的 Storage 读取能力。
 type Source interface {
 	storageio.Store
@@ -109,6 +112,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		if s.udf == nil || s.fetch == nil {
 			return Result{}, errors.New("试算未启用自定义算子")
 		}
+		s.udf.Sweep(ctx, udfIdleUnload)
 		for _, ref := range compiled.UDFs {
 			if err := s.udf.Ensure(ctx, ref.Hash, s.fetch); err != nil {
 				return Result{}, err

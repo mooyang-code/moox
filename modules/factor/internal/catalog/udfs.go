@@ -199,9 +199,39 @@ func (s *Service) ActivateUdf(ctx context.Context, name, hash string, dryRun boo
 	if err != nil {
 		return nil, err
 	}
+	// 引用清单在全局 UDF 锁下是稳定的（改变引用关系的入口都要先取它）；成员的增删与启停、任务的启停另有各自的锁，
+	// 所以再按锁顺序取引用它的定义的锁与受影响任务的锁（定义锁 → 任务锁，各自按 ID 升序）：校验与提交期间不会有成员或任务
+	// 在别处启用，“没有已启用成员所以不要求暂停引擎”的判断才不会被并发的启用推翻。
+	sortedRefs := append([]string(nil), refs...)
+	sort.Strings(sortedRefs)
+	for _, factorID := range sortedRefs {
+		unlockFactor, err := s.locks.LockFactorContext(ctx, factorID)
+		if err != nil {
+			return nil, err
+		}
+		defer unlockFactor()
+	}
 	usages, err := s.db.ListUsages(ctx, refs...)
 	if err != nil {
 		return nil, err
+	}
+	taskIDs := map[string]bool{}
+	for _, list := range usages {
+		for _, usage := range list {
+			taskIDs[usage.TaskID] = true
+		}
+	}
+	sortedTasks := make([]string, 0, len(taskIDs))
+	for id := range taskIDs {
+		sortedTasks = append(sortedTasks, id)
+	}
+	sort.Strings(sortedTasks)
+	for _, taskID := range sortedTasks {
+		unlockTask, err := s.locks.LockContext(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		defer unlockTask()
 	}
 	taskSet := map[string]domain.FactorTask{}
 	enabledImpact := false
@@ -339,7 +369,16 @@ func (s *Service) prerequisites(ctx context.Context, enabledImpact bool, tasks [
 func (s *Service) enginePaused(ctx context.Context, required bool) Prerequisite {
 	p := Prerequisite{Name: "因子引擎模块已暂停且本次暂停已收敛"}
 	if !required {
-		p.OK, p.Detail = true, "没有已启用的成员引用它，没有计算在用旧版本，不要求暂停引擎"
+		// 数据库里没有已启用的成员引用它，不等于引擎已经停止使用：停用刚发生、引擎还没同步目录时，它仍按缓存的目录运行旧版本。
+		// 引擎在线且目录还没同步到最新时同样要求暂停。
+		if s.engineView != nil {
+			if info, _, seen, err := s.engineView(ctx); err == nil && seen && info.Online && !info.CatalogInSync {
+				required = true
+			}
+		}
+	}
+	if !required {
+		p.OK, p.Detail = true, "没有已启用的成员引用它，引擎的目录也已同步，没有计算在用旧版本，不要求暂停引擎"
 		return p
 	}
 	if s.engineView == nil {

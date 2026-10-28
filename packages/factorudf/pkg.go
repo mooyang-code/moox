@@ -27,6 +27,8 @@ const (
 type SourceRef struct {
 	Repo   string `json:"repo"`
 	Commit string `json:"commit"`
+	// Dirty 为真表示构建时工作区有未提交的改动：这样的包不能发布（产物与记录的提交对不上）。
+	Dirty bool `json:"dirty,omitempty"`
 }
 
 // PackageManifest 是包内的 manifest.json：语义字段（必须与 wasm 自定义段一致）加说明、示例、来源与工具链。
@@ -82,6 +84,9 @@ func WritePackage(p *Package) ([]byte, error) {
 	}
 	if err := add(PkgReport, report); err != nil {
 		return nil, err
+	}
+	if n := 3 + len(p.Fixtures); n > maxPkgFiles {
+		return nil, fmt.Errorf("包里有 %d 个文件，超过上限 %d：合并 fixtures 文件", n, maxPkgFiles)
 	}
 	if err := tw.Close(); err != nil {
 		return nil, err

@@ -97,32 +97,12 @@ func fillJunk(dst []byte, seed *splitmix) {
 	}
 }
 
-// grow 在调用前向预算申请这次可能新增的线性内存，返回已申请的字节数（调用后据实际增长结算）。
-func (in *Instance) grow(need int64) (int64, error) {
-	if need <= in.scratch {
-		return 0, nil
+// classifyCall 把 wazero 返回的调用错误归类；预算在分配或增长时拒绝过时，失败原因是预算（guest 的增长失败会表现成 trap）。
+func (in *Instance) classifyCall(ctx context.Context, err error) *CallError {
+	if in.meter.Denied() {
+		return &CallError{Reason: ReasonBudget, Err: fmt.Errorf("%w：线性内存增长被预算拒绝", ErrBudget)}
 	}
-	extra := (need - in.scratch + 0xffff) &^ 0xffff
-	if err := in.m.rt.budget.Acquire(extra); err != nil {
-		return 0, &CallError{Reason: ReasonBudget, Err: fmt.Errorf("%w：%v", ErrBudget, err)}
-	}
-	return extra, nil
-}
-
-// settle 按实际的内存大小结算预算。
-func (in *Instance) settle(prepaid int64) error {
-	actual := int64(in.mem.Size())
-	delta := actual - in.accounted
-	switch {
-	case delta > prepaid:
-		if err := in.m.rt.budget.Acquire(delta - prepaid); err != nil {
-			return &CallError{Reason: ReasonBudget, Err: fmt.Errorf("%w：%v", ErrBudget, err)}
-		}
-	case delta < prepaid:
-		in.m.rt.budget.Release(prepaid - delta)
-	}
-	in.accounted = actual
-	return nil
+	return classify(ctx, err)
 }
 
 // Eval 在实例上执行一批。出错（trap、超时、预算、非零返回码）后实例不可再用，调用方要丢弃。
@@ -147,22 +127,18 @@ func (in *Instance) Eval(ctx context.Context, b *Batch) error {
 	if err != nil {
 		return &CallError{Reason: ReasonInput, Err: err}
 	}
-	prepaid, err := in.grow(size)
-	if err != nil {
-		return err
-	}
 	cctx, cancel := context.WithTimeout(ctx, in.m.rt.limits.CallTimeout)
 	defer cancel()
 
 	res, err := in.reserve.Call(cctx, uint64(uint32(size)))
 	if err != nil {
-		return classify(cctx, err)
-	}
-	if serr := in.settle(prepaid); serr != nil {
-		return serr
+		return in.classifyCall(cctx, err)
 	}
 	base := uint32(res[0])
 	if base == 0 {
+		if in.meter.Denied() {
+			return &CallError{Reason: ReasonBudget, Err: fmt.Errorf("%w：暂存区申请被预算拒绝", ErrBudget)}
+		}
 		return &CallError{Reason: ReasonMemory}
 	}
 	if int64(size) > in.scratch {
@@ -207,10 +183,7 @@ func (in *Instance) Eval(ctx context.Context, b *Batch) error {
 	}
 	rc, err := in.eval.Call(cctx, args...)
 	if err != nil {
-		return classify(cctx, err)
-	}
-	if serr := in.settle(0); serr != nil {
-		return serr
+		return in.classifyCall(cctx, err)
 	}
 	if code := int32(rc[0]); code != 0 {
 		return &CallError{Reason: ReasonCode, Code: code}

@@ -29,7 +29,8 @@ func TestRejectsUnqualifiedModules(t *testing.T) {
 		{"初始内存过大", func(b *modBuilder) { b.memory = []byte{0x00, 0x80, 0x10} }, "初始内存"},
 		{"两个内存", func(b *modBuilder) { b.memories = [][]byte{{0x00, 0x01}} }, "要恰好一个"},
 		{"没有内存", func(b *modBuilder) { b.memory = nil; b.exports = b.exports[1:] }, "没有定义内存"},
-		{"表过大", func(b *modBuilder) { b.tables = [][]byte{{0x70, 0x00, 0x80, 0x20}} }, "表初始"},
+		{"表没有最大值", func(b *modBuilder) { b.tables = [][]byte{{0x70, 0x00, 0x02}} }, "没有声明最大元素数"},
+		{"表过大", func(b *modBuilder) { b.tables = [][]byte{{0x70, 0x01, 0x80, 0x20, 0x80, 0x20}} }, "超过上限"},
 		{"缺少元数据", func(b *modBuilder) { b.customs = nil }, "缺少自定义段"},
 		{"元数据不是 JSON", func(b *modBuilder) { b.customs = [][2][]byte{{[]byte(CustomSection), []byte("not json")}} }, "元数据"},
 		{"回看公式不合规", func(b *modBuilder) {

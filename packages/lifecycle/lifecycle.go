@@ -450,6 +450,10 @@ func (c *Controller) set(r *record, to Stage, reason string, changes *[]change) 
 		if to != StagePaused {
 			r.QuiescedAt = time.Time{}
 		}
+		if to != StageNotReady {
+			// 待恢复的阶段只在“重启后等检查”这一段有意义；用户显式 init/start 或检查通过后离开未就绪，它就作废。
+			r.Pending = ""
+		}
 		r.Since = c.opts.Now().UTC()
 		*changes = append(*changes, change{ref: r.Ref, from: from, to: to, reason: reason})
 	}

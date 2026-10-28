@@ -162,6 +162,16 @@ func gitCommit(t *testing.T, dir string) string {
 
 func udfTestPackage(t *testing.T, dir, commit string) string {
 	t.Helper()
+	return udfTestPackageWith(t, dir, commit, false)
+}
+
+func udfTestPackageDirty(t *testing.T, dir, commit string) string {
+	t.Helper()
+	return udfTestPackageWith(t, dir, commit, true)
+}
+
+func udfTestPackageWith(t *testing.T, dir, commit string, dirty bool) string {
+	t.Helper()
 	wasm, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "factorudf", "testdata", "ts_mean.wasm"))
 	require.NoError(t, err)
 	rt, err := factorudf.NewRuntime(context.Background(), factorudf.Options{})
@@ -171,7 +181,7 @@ func udfTestPackage(t *testing.T, dir, commit string) string {
 	require.NoError(t, err)
 	rep, err := factorudf.RunConformance(context.Background(), rt, m, nil, factorudf.ConformanceOptions{})
 	require.NoError(t, err)
-	raw, err := factorudf.WritePackage(&factorudf.Package{Wasm: wasm, Report: rep, Manifest: factorudf.PackageManifest{Manifest: *m.Info.Manifest, Source: factorudf.SourceRef{Repo: "r", Commit: commit}}})
+	raw, err := factorudf.WritePackage(&factorudf.Package{Wasm: wasm, Report: rep, Manifest: factorudf.PackageManifest{Manifest: *m.Info.Manifest, Source: factorudf.SourceRef{Repo: "r", Commit: commit, Dirty: dirty}}})
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "dist"), 0o755))
 	path := filepath.Join(dir, "dist", "ts_mean_udf.udfpkg")
@@ -212,6 +222,11 @@ func TestUdfPublishRequiresACleanWorkspaceAtTheBuiltCommit(t *testing.T) {
 	gitCommit(t, dir)
 	err = runUdfPublish(context.Background(), &out, udfPublishOptions{Package: pkg})
 	require.ErrorContains(t, err, "重新 build")
+
+	// 包是在脏工作区构建出来的：即使提交号一致也拒绝。
+	dirtyPkg := udfTestPackageDirty(t, dir, gitCommit(t, dir))
+	err = runUdfPublish(context.Background(), &out, udfPublishOptions{Package: dirtyPkg})
+	require.ErrorContains(t, err, "未提交改动时构建")
 
 	// 包里没有提交号：拒绝。
 	pkgNoCommit := udfTestPackage(t, dir, "")
@@ -277,6 +292,27 @@ func TestScanUdfSourceRejectsUnsafeAndHandWrittenExports(t *testing.T) {
 	assert.ErrorContains(t, scanUdfSource(write("#![allow(unsafe_code)]\nfn f() {}")), "unsafe")
 	assert.ErrorContains(t, scanUdfSource(write("#[no_mangle]\npub extern \"C\" fn x() {}")), "手写")
 	assert.ErrorContains(t, scanUdfSource(write("#[link_section = \"moox.udf\"]\nstatic X: [u8; 1] = [0];")), "手写")
+
+	// 词法层面：嵌套块注释、原始字符串、字符字面量与生命周期都按 Rust 规则处理。
+	assert.NoError(t, scanUdfSource(write("/* 外层 /* 嵌套 unsafe */ 仍在注释里 unsafe */\nfn f() {}")))
+	assert.NoError(t, scanUdfSource(write("fn f() { let _ = r#\"unsafe \" 还在字符串里\"#; }")))
+	assert.NoError(t, scanUdfSource(write("fn f<'a>(x: &'a str) { let _ = '\"'; let _ = \"/*\"; }\nfn g() {}")))
+	// 字符串里的 /* 不能骗过扫描：之后的真 unsafe 必须被发现。
+	assert.ErrorContains(t, scanUdfSource(write("fn f() { let _ = \"/*\"; }\nfn g() { unsafe {} }")), "unsafe")
+	assert.ErrorContains(t, scanUdfSource(write("fn f<'a>(x: &'a str) { unsafe {} }")), "unsafe")
+}
+
+func TestSanitizeRemoteStripsCredentials(t *testing.T) {
+	assert.Equal(t, "https://github.com/a/b.git", sanitizeRemote("https://user:token@github.com/a/b.git"))
+	assert.Equal(t, "https://github.com/a/b.git", sanitizeRemote("https://token@github.com/a/b.git"))
+	assert.Equal(t, "https://github.com/a/b.git", sanitizeRemote("https://github.com/a/b.git"))
+	assert.Equal(t, "git@github.com:a/b.git", sanitizeRemote("git@github.com:a/b.git"))
+}
+
+func TestUdfNewRejectsRustKeywordNames(t *testing.T) {
+	var out bytes.Buffer
+	err := runUdfNew(&out, udfNewOptions{Dir: t.TempDir(), Name: "match", NoLock: true})
+	require.ErrorContains(t, err, "关键字")
 }
 
 // T6.8：在独立的空目录（不依赖 moox 源码树里的任何工作区文件）执行 udf new → build，产出的包能通过 factorudf 的检查。

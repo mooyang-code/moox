@@ -29,12 +29,12 @@ func SpecHash(spec string) string {
 }
 
 // udfRef 匹配定义文本里的自定义算子调用 udf.<名称>(。
-var udfRef = regexp.MustCompile(`\budf\.([a-z][a-z0-9_]{0,47})\s*\(`)
+var udfRef = regexp.MustCompile(`\budf\s*\.\s*([a-z][a-z0-9_]{0,47})\s*\(`)
 
 // UDFNames 返回定义文本里引用的自定义算子名称（去重、排序）。按文本扫描，注释里的写法也会被算进去（只会多算，
 // 不会漏掉），精确的引用由编译结果给出（Compiled().UDFs）。
 func UDFNames(spec string) []string {
-	if !strings.Contains(spec, "udf.") {
+	if !strings.Contains(spec, "udf") {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -76,6 +76,18 @@ func CompileDefinition(def FactorDef) (FactorDef, error) {
 	compiled, err := factorexpr.CompileWith(def.Spec, env)
 	if err != nil {
 		return def, err
+	}
+	// 绑定只保留编译结果里实际引用的版本：文本扫描会把注释里的 udf.<名称>( 也算进来（多算无害，但没有启用版本的名称不能带到引擎去），
+	// 裁剪之后随目录快照、补算任务下发的就是精确的引用集合。
+	if len(def.UDFs) > 0 {
+		used := make(map[string]factorexpr.UDF, len(compiled.UDFs))
+		for _, ref := range compiled.UDFs {
+			if udf, ok := def.UDFs[ref.Name]; ok {
+				used[ref.Name] = udf
+			}
+		}
+		def.UDFs = used
+		key = UDFKey(used)
 	}
 	def.compiled, def.compiledKey = compiled, key
 	def.FactorType = string(compiled.Type)

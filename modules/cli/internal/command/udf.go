@@ -98,8 +98,13 @@ func runUdfPublish(ctx context.Context, out io.Writer, opts udfPublishOptions) e
 		repo = filepath.Dir(filepath.Dir(opts.Package))
 	}
 	// 系统里的每个版本都要能对应到私有仓库的一次提交：要求包里有提交号、工作区干净、HEAD 就是构建时的提交。
-	_, commit, dirty := gitState(repo)
+	_, commit, dirty, gitErr := gitState(repo)
+	if gitErr != nil {
+		return fmt.Errorf("读取 %s 的 git 状态失败：%w", repo, gitErr)
+	}
 	switch {
+	case pkg.Manifest.Source.Dirty:
+		return errors.New("包是在工作区有未提交改动时构建的：提交之后重新 build（产物要与记录的提交一致）")
 	case pkg.Manifest.Source.Commit == "" || commit == "":
 		return errors.New("包里没有提交号，或 " + repo + " 不在 git 仓库里：UDF 源码要放在 git 仓库里，提交后重新 build")
 	case dirty:

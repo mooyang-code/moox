@@ -20,6 +20,7 @@ type Host struct {
 
 	mu      sync.RWMutex
 	modules map[string]*factorudf.Module
+	used    map[string]time.Time // 各版本最近一次被借用或加载的时间（Sweep 用）
 	// loadMu 串行化 Ensure 的加载，避免同一版本被并发地拉取与编译。
 	loadMu sync.Mutex
 	// observe 在每批调用结束后调用（耗时、拷进模块的字节数、失败原因；成功时 reason 为空），可为 nil。
@@ -33,7 +34,7 @@ func (h *Host) SetObserver(observe func(udf string, elapsed time.Duration, copie
 
 // New 创建宿主；运行时由调用方创建并负责关闭。
 func New(rt *factorudf.Runtime) *Host {
-	return &Host{rt: rt, modules: map[string]*factorudf.Module{}}
+	return &Host{rt: rt, modules: map[string]*factorudf.Module{}, used: map[string]time.Time{}}
 }
 
 // Runtime 返回底层运行时。
@@ -47,6 +48,7 @@ func (h *Host) Load(ctx context.Context, wasm []byte) (*factorudf.Module, error)
 	}
 	h.mu.Lock()
 	h.modules[m.Info.Hash] = m
+	h.used[m.Info.Hash] = time.Now()
 	h.mu.Unlock()
 	return m, nil
 }
@@ -95,6 +97,29 @@ func (h *Host) Unload(ctx context.Context, hash string) {
 	h.rt.Unload(ctx, hash)
 }
 
+// Sweep 清理长期不用的版本：空闲超过 idle 的版本整个卸载（关闭它的实例、释放预算、编译产物），其余版本关闭各自空闲超时的实例。
+// 试算宿主不能像引擎那样随目录卸载（它的版本是请求带来的），每次试算前顺带调用即可。
+func (h *Host) Sweep(ctx context.Context, idle time.Duration) {
+	now := time.Now()
+	h.mu.RLock()
+	var stale []string
+	var live []*factorudf.Module
+	for hash, m := range h.modules {
+		if now.Sub(h.used[hash]) > idle {
+			stale = append(stale, hash)
+		} else {
+			live = append(live, m)
+		}
+	}
+	h.mu.RUnlock()
+	for _, hash := range stale {
+		h.Unload(ctx, hash)
+	}
+	for _, m := range live {
+		m.Reap(ctx, now)
+	}
+}
+
 // Hashes 返回已加载的版本。
 func (h *Host) Hashes() []string {
 	h.mu.RLock()
@@ -112,6 +137,9 @@ func (h *Host) Eval(ctx context.Context, call *exec.UDFCall) error {
 	if !ok {
 		return fmt.Errorf("自定义算子版本 %s 的模块没有加载", short(call.Hash))
 	}
+	h.mu.Lock()
+	h.used[call.Hash] = time.Now()
+	h.mu.Unlock()
 	started := time.Now()
 	err := m.Eval(ctx, &factorudf.Batch{
 		NSeries: call.NSeries, InLen: call.InLen, OutLen: call.OutLen,

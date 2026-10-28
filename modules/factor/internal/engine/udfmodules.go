@@ -49,7 +49,7 @@ const udfResidentName = "udf_instances"
 func (b *admitBudget) Acquire(bytes int64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.admit.CanResident(udfResidentName, b.used+bytes) {
+	if !b.admit.CanAdmitResident(udfResidentName, b.used+bytes) {
 		return fmt.Errorf("自定义算子实例需要 %d 字节常驻内存，超出进程内存预算（已用 %d）", bytes, b.used)
 	}
 	b.used += bytes
@@ -261,6 +261,9 @@ func (r *Runtime) retainModules() {
 	keep := map[string]bool{}
 	for _, ref := range refsOfTasks(r.catalog.Sets()) {
 		keep[ref.hash] = true
+	}
+	for hash := range r.replays.udfHashes() {
+		keep[hash] = true
 	}
 	r.udf.Retain(context.Background(), keep)
 }

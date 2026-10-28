@@ -213,6 +213,9 @@ fn parse_lookback(lit: &LitStr, params: &[ParamDecl]) -> syn::Result<(i64, Optio
     match params.iter().find(|p| p.name == name) {
         None => Err(err(format!("回看公式引用了未声明的参数 {name:?}"))),
         Some(p) if p.ty != Ty::Int => Err(err(format!("回看公式引用的参数 {name:?} 要是整数参数"))),
+        Some(p) if p.min < 0.0 => Err(err(format!(
+            "回看公式引用的参数 {name:?} 的下限要 ≥ 0（窗口长度随参数单调不减）"
+        ))),
         Some(_) => Ok((a, Some(name.to_string()), b)),
     }
 }
@@ -348,12 +351,12 @@ fn expand(args: Args, func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         let (min, max) = (f64_lit(p.min), f64_lit(p.max));
         match p.ty {
             Ty::Int => quote! {
-                let #n = v[#i];
+                let #n = __moox_values[#i];
                 if !(#n.is_finite() && #n == #n.trunc() && (#min..=#max).contains(&#n)) { return None; }
                 let #n = #n as i64;
             },
             Ty::Float => quote! {
-                let #n = v[#i];
+                let #n = __moox_values[#i];
                 if !(#n.is_finite() && (#min..=#max).contains(&#n)) { return None; }
             },
         }
@@ -378,7 +381,7 @@ fn expand(args: Args, func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
         quote!()
     };
     let parse_fn_body = if n_params == 0 {
-        quote!(let _ = v; Some(#params_ty {}))
+        quote!(let _ = __moox_values; Some(#params_ty {}))
     } else {
         quote!(#(#parse_stmts)* Some(#params_ty { #(#field_names),* }))
     };
@@ -403,7 +406,7 @@ fn expand(args: Args, func: ItemFn) -> syn::Result<proc_macro2::TokenStream> {
                 n_inputs: #n_inputs, n_params: #n_params, relaxed: #relaxed, min_valid: #min_valid,
             };
 
-            pub(super) fn parse(v: &[f64]) -> Option<#params_ty> { #parse_fn_body }
+            pub(super) fn parse(__moox_values: &[f64]) -> Option<#params_ty> { #parse_fn_body }
             pub(super) fn lookback(p: &#params_ty) -> i64 { #unused_p #lookback_expr }
             pub(super) fn call(w: &[&[f64]], p: &#params_ty) -> f64 { #unused_p #fn_name(#call_args) }
         }

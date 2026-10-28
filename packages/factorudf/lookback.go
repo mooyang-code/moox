@@ -65,6 +65,9 @@ func ParseLookback(expr string, params []Param) (Lookback, error) {
 			if params[i].Type != ParamInt {
 				return Lookback{}, fmt.Errorf("回看公式引用的参数 %s 要是整数参数", name)
 			}
+			if params[i].Min < 0 {
+				return Lookback{}, fmt.Errorf("回看公式引用的参数 %s 的下限 %v 要 ≥ 0（窗口长度随参数单调不减才能只看端点）", name, params[i].Min)
+			}
 			lb.Param, lb.p = name, &params[i]
 			return lb, nil
 		}

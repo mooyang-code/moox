@@ -145,3 +145,16 @@ func TestReserveReadsPriorityFromContext(t *testing.T) {
 	require.Equal(t, "realtime", <-got)
 	require.Equal(t, "background", <-got)
 }
+
+func TestCanAdmitResidentCountsReservedCompute(t *testing.T) {
+	a := New(100)
+	a.SetResident("w", 30)
+	hold, err := a.Reserve(context.Background(), 40)
+	require.NoError(t, err)
+	require.True(t, a.CanAdmitResident("m", 30), "30+40+30 刚好等于预算")
+	require.False(t, a.CanAdmitResident("m", 31), "再多 1 字节就挤占了已预留的计算内存")
+	require.True(t, a.CanAdmitResident("w", 60), "同名覆盖时不重复计")
+	hold()
+	require.True(t, a.CanAdmitResident("m", 70))
+	require.True(t, New(0).CanAdmitResident("m", 1<<40), "预算为 0 表示不限制")
+}

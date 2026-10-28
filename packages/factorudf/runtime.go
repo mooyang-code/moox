@@ -123,7 +123,7 @@ func (r *Runtime) Load(ctx context.Context, wasm []byte) (*Module, error) {
 		_ = compiled.Close(ctx)
 		return nil, err
 	}
-	if err := checkABI(ctx, r.rt, compiled, r.limits); err != nil {
+	if err := checkABI(ctx, r.rt, compiled, r.limits, r.budget, info.InitialPage); err != nil {
 		_ = compiled.Close(ctx)
 		return nil, err
 	}
@@ -158,49 +158,38 @@ func (r *Runtime) Unload(ctx context.Context, hash string) {
 
 // Instance 是一个 wasm 实例。同一时刻只能被一个调用方使用。
 type Instance struct {
-	m         *Module
-	mod       api.Module
-	mem       api.Memory
-	reserve   api.Function
-	eval      api.Function
-	accounted int64 // 已向预算申请的字节数（线性内存当前大小）
-	scratch   int64 // 已经成功 reserve 过的最大字节数
-	lastUsed  time.Time
-	closed    bool
+	m        *Module
+	mod      api.Module
+	mem      api.Memory
+	reserve  api.Function
+	eval     api.Function
+	meter    *meter // 线性内存的记账：分配与增长发生时向预算申请
+	scratch  int64  // 已经成功 reserve 过的最大字节数
+	lastUsed time.Time
+	closed   bool
 }
 
 // MemoryBytes 返回实例线性内存的当前大小。
 func (in *Instance) MemoryBytes() int64 { return int64(in.mem.Size()) }
 
-// instantiate 创建实例：先向预算申请初始内存，再实例化（带截止时间）。
+// instantiate 创建实例：实例化在带截止时间的上下文里执行，初始内存经分配器向预算申请，超预算拒绝。
 func (m *Module) instantiate(ctx context.Context) (*Instance, error) {
-	initial := int64(m.Info.InitialPage) << 16
-	if err := m.rt.budget.Acquire(initial); err != nil {
+	meter := newMeter(m.rt.budget)
+	if err := meter.precharge(int64(m.Info.InitialPage) << 16); err != nil {
 		return nil, fmt.Errorf("%w：%v", ErrBudget, err)
 	}
-	cctx, cancel := context.WithTimeout(ctx, m.rt.limits.CallTimeout)
+	cctx, cancel := context.WithTimeout(meter.context(ctx), m.rt.limits.CallTimeout)
 	defer cancel()
 	mod, err := m.rt.rt.InstantiateModule(cctx, m.compiled, wazero.NewModuleConfig().WithName("").WithStartFunctions())
 	if err != nil {
-		m.rt.budget.Release(initial)
+		meter.release()
+		if meter.Denied() {
+			return nil, fmt.Errorf("%w：实例化时申请内存被拒绝", ErrBudget)
+		}
 		return nil, &CallError{Reason: ReasonInstantiate, Err: err}
 	}
-	in := &Instance{m: m, mod: mod, mem: mod.Memory(), reserve: mod.ExportedFunction(exportReserve), eval: mod.ExportedFunction(exportEval), lastUsed: time.Now()}
-	// 实际初始大小可能与声明不同（例如 data 段把内存撑大）：以实际为准补申请。
-	in.accounted = initial
-	if actual := int64(in.mem.Size()); actual != initial {
-		if actual > initial {
-			if err := m.rt.budget.Acquire(actual - initial); err != nil {
-				in.accounted = initial
-				in.close(ctx)
-				return nil, fmt.Errorf("%w：%v", ErrBudget, err)
-			}
-		} else {
-			m.rt.budget.Release(initial - actual)
-		}
-		in.accounted = actual
-	}
-	return in, nil
+	return &Instance{m: m, mod: mod, mem: mod.Memory(), reserve: mod.ExportedFunction(exportReserve), eval: mod.ExportedFunction(exportEval),
+		meter: meter, lastUsed: time.Now()}, nil
 }
 
 func (in *Instance) close(ctx context.Context) {
@@ -208,9 +197,8 @@ func (in *Instance) close(ctx context.Context) {
 		return
 	}
 	in.closed = true
-	_ = in.mod.Close(ctx)
-	in.m.rt.budget.Release(in.accounted)
-	in.accounted = 0
+	_ = in.mod.Close(ctx) // 关闭模块时 wazero 调用 Free，归还记账的全部内存
+	in.meter.release()
 }
 
 // 失败原因（CallError.Reason）。

@@ -89,8 +89,10 @@ func UDFsToPB(udfs map[string]factorexpr.UDF) []*factorpb.UdfDef {
 		return nil
 	}
 	names := make([]string, 0, len(udfs))
-	for name := range udfs {
-		names = append(names, name)
+	for name, udf := range udfs {
+		if udf.Hash != "" { // 没有启用版本的名称只是解析环境里的占位，不下发
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	out := make([]*factorpb.UdfDef, 0, len(names))

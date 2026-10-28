@@ -98,6 +98,8 @@ type conformance struct {
 	points    int64
 	elapsed   time.Duration
 	peakBytes int64
+	// broken 为真表示共用实例在上一次调用里出了错（调用出错后实例不可再用），下一次使用前要重建。
+	broken bool
 }
 
 func (c *conformance) fail(test, format string, args ...any) {
@@ -137,18 +139,28 @@ func RunConformance(ctx context.Context, rt *Runtime, m *Module, fixtures Fixtur
 	man := m.Info.Manifest
 	sets := paramSets(man)
 	ran := 0
+	// 全部参数组合共用一个长寿实例（与生产的实例池一致：实例会被不同参数的调用复用）。把第一次收到的参数缓存起来的模块，
+	// 在后面的组合上算出的结果会与全新实例对不上，由确定性测试抓出来。
+	shared, err := c.newInstance()
+	if err != nil {
+		return nil, fmt.Errorf("创建测试实例：%w", err)
+	}
+	defer func() { shared.close(ctx) }()
 	for _, params := range sets {
 		if ctx.Err() != nil {
 			c.fail(testResource, "一致性测试超过总时限 %s", opts.Timeout)
 			break
 		}
-		done, err := c.runParamSet(params)
+		done, err := c.runParamSet(&shared, params)
 		if err != nil {
 			return nil, err
 		}
 		if done {
 			ran++
 		}
+	}
+	if err := c.runMixedParams(&shared, sets); err != nil {
+		return nil, err
 	}
 	if err := c.runFixtures(fixtures); err != nil {
 		return nil, err
@@ -174,12 +186,20 @@ func RunConformance(ctx context.Context, rt *Runtime, m *Module, fixtures Fixtur
 // 取值都是精确可表示的（整数，或端点按二的幂分割），在 arm64 与 amd64 上一致。
 func paramSets(man *Manifest) [][]float64 {
 	at := func(p Param, num, den int) float64 {
+		// 端点直接用声明值；中间值按 Min/den*(den−num) + Max/den*num 取（den 是二的幂，除法精确），落在 [Min, Max] 内且不会溢出。
+		switch {
+		case num == 0:
+			return p.Min
+		case num == den:
+			return p.Max
+		}
 		if p.Type == ParamInt {
 			span := int64(p.Max) - int64(p.Min)
 			return float64(int64(p.Min) + span*int64(num)/int64(den))
 		}
-		span := float64(p.Max - p.Min)
-		return float64(float64(p.Min) + float64(span*float64(num))/float64(den))
+		d, n := float64(den), float64(num)
+		v := p.Min/d*(d-n) + p.Max/d*n
+		return math.Min(math.Max(v, p.Min), p.Max)
 	}
 	var sets [][]float64
 	seen := map[string]bool{}
@@ -282,17 +302,20 @@ func (c *conformance) buildData(params []float64) (*dataSet, bool) {
 	outLen := conformanceOutLen
 	series := conformanceSeries
 	switch {
-	case l > 200000:
-		outLen, series = 4, 2
 	case l > 8192:
-		outLen, series = 8, 3
+		outLen = 8
 	case l > 1024:
 		outLen = 24
 	}
 	d := &dataSet{l: l, inLen: outLen + int(l) - 1, outLen: outLen, params: params}
-	b := &Batch{NSeries: series, InLen: d.inLen, OutLen: outLen, Inputs: make([][]float64, len(man.Inputs))}
-	size, err := b.bytes(len(man.Params))
-	if err != nil || size > c.opts.MaxBatchBytes {
+	// 序列种类保持齐全（含开头 NaN 与中途 NaN，否则空值规则的测试会空转）；放不下批字节上限时才减序列数，最少保留前四种。
+	for ; series >= 4; series-- {
+		b := &Batch{NSeries: series, InLen: d.inLen, OutLen: outLen, Inputs: make([][]float64, len(man.Inputs))}
+		if size, err := b.bytes(len(man.Params)); err == nil && size <= c.opts.MaxBatchBytes {
+			break
+		}
+	}
+	if series < 4 {
 		c.skipped = append(c.skipped, fmt.Sprintf("参数 %v：窗口长度 %d 需要的批太大", params, l))
 		return nil, false
 	}
@@ -342,6 +365,9 @@ func sameBits(a, b float64) bool {
 func (c *conformance) run(in *Instance, b *Batch) error {
 	start := time.Now()
 	err := in.Eval(c.ctx, b)
+	if err != nil {
+		c.broken = true
+	}
 	c.elapsed += time.Since(start)
 	c.points += int64(b.NSeries * b.OutLen)
 	if sz := int64(in.mem.Size()); sz > c.peakBytes {
@@ -354,16 +380,20 @@ func (c *conformance) run(in *Instance, b *Batch) error {
 func (c *conformance) newInstance() (*Instance, error) { return c.m.instantiate(c.ctx) }
 
 // runParamSet 在一个参数组合下跑全部测试；done 为假表示这个组合被跳过。
-func (c *conformance) runParamSet(params []float64) (done bool, err error) {
+func (c *conformance) runParamSet(shared **Instance, params []float64) (done bool, err error) {
 	d, ok := c.buildData(params)
 	if !ok {
 		return false, nil
 	}
-	in, err := c.newInstance()
-	if err != nil {
-		return false, fmt.Errorf("创建测试实例：%w", err)
+	if c.broken {
+		(*shared).close(c.ctx)
+		fresh, err := c.newInstance()
+		if err != nil {
+			return false, fmt.Errorf("重建测试实例：%w", err)
+		}
+		*shared, c.broken = fresh, false
 	}
-	defer in.close(c.ctx)
+	in := *shared
 
 	n := d.series()
 	order := make([]int, n)
@@ -517,6 +547,55 @@ func (c *conformance) runParamSet(params []float64) (done bool, err error) {
 	return true, nil
 }
 
+// runMixedParams 检查同一批里不同序列用不同参数：窗口长度相同（能混批）而参数不同的两个组合，各取一条序列放进同一批，
+// 结果要与分别单独计算逐位相同（抓“整批都按第一条序列的参数计算”的实现）。
+func (c *conformance) runMixedParams(shared **Instance, sets [][]float64) error {
+	man := c.m.Info.Manifest
+	if len(man.Params) == 0 {
+		return nil
+	}
+	pairs := 0
+	for i := 0; i < len(sets) && pairs < 6; i++ {
+		for j := i + 1; j < len(sets) && pairs < 6 && c.ctx.Err() == nil; j++ {
+			li, errI := man.LookbackFor(sets[i])
+			lj, errJ := man.LookbackFor(sets[j])
+			if errI != nil || errJ != nil || li != lj {
+				continue
+			}
+			d, ok := c.buildData(sets[i])
+			if !ok {
+				continue
+			}
+			pairs++
+			if c.broken {
+				(*shared).close(c.ctx)
+				fresh, err := c.newInstance()
+				if err != nil {
+					return fmt.Errorf("重建测试实例：%w", err)
+				}
+				*shared, c.broken = fresh, false
+			}
+			in := *shared
+			first := d.batch([]int{0}, 0, d.outLen, nil)
+			second := d.batch([]int{1}, 0, d.outLen, nil)
+			second.Params = append([]float64(nil), sets[j]...)
+			mixed := d.batch([]int{0, 1}, 0, d.outLen, nil)
+			mixed.Params = append(append([]float64(nil), sets[i]...), sets[j]...)
+			if c.run(in, first) != nil || c.run(in, second) != nil || c.run(in, mixed) != nil {
+				c.fail(testBatch, "参数 %v 与 %v 混批执行失败", sets[i], sets[j])
+				continue
+			}
+			for k := 0; k < d.outLen; k++ {
+				if !sameBits(mixed.Out[k], first.Out[k]) || !sameBits(mixed.Out[d.outLen+k], second.Out[k]) {
+					c.fail(testBatch, "参数 %v 与 %v 放在同一批：输出 %d 与分别单独计算的结果不同（批内各序列要用各自的参数）", sets[i], sets[j], k)
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // checkNaN 检查必须是 NaN 的位置。
 func (c *conformance) checkNaN(d *dataSet, ref *Batch, params []float64) {
 	man := c.m.Info.Manifest
@@ -573,7 +652,7 @@ func (c *conformance) runFixtures(fixtures FixtureSet) error {
 	if err != nil {
 		return fmt.Errorf("创建测试实例：%w", err)
 	}
-	defer in.close(c.ctx)
+	defer func() { in.close(c.ctx) }() // 出错重建实例后要关的是最新的那个
 	man := c.m.Info.Manifest
 	for _, name := range fixtures.names() {
 		var f FixtureFile

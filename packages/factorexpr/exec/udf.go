@@ -83,6 +83,9 @@ func (r *runner) computeUDF(node *factorexpr.ProgramNode, udf *factorexpr.UDF, a
 		if budget <= 0 {
 			budget = DefaultUDFBatchBytes
 		}
+		// 批字节预算是整次运行同时在途的拷贝缓冲的上限（内存估算按它计）：并行的 worker 均分它，每个 worker 的批不超过自己的份额。
+		// 一条序列放不进份额、但放得进整个预算时（回看很长），这样的批一次只允许一个（bigBatch 互斥），总量仍不超过预算。
+		share := max(budget/int64(max(r.workers, 1)), 1)
 		for _, l := range lens {
 			group := byLen[l]
 			inLen := length + l - 1
@@ -90,10 +93,18 @@ func (r *runner) computeUDF(node *factorexpr.ProgramNode, udf *factorexpr.UDF, a
 			if per <= 0 || per > budget {
 				return fmt.Errorf("自定义算子 %s：单条序列需要 %d 字节，超过批字节上限 %d（回看 %d）", udf.CallName(), per, budget, l)
 			}
-			capacity := int(max(budget/per, 1))
+			capacity := int(max(share/per, 1))
+			oversized := per > share
 			for from := 0; from < len(group); from += capacity {
 				batch := group[from:min(from+capacity, len(group))]
-				if err := r.udfBatch(udf, args, out, interval, l, batch, params, lo, nParams); err != nil {
+				if oversized {
+					r.bigBatch.Lock()
+				}
+				err := r.udfBatch(udf, args, out, interval, l, batch, params, lo, nParams)
+				if oversized {
+					r.bigBatch.Unlock()
+				}
+				if err != nil {
 					return err
 				}
 			}

@@ -14,6 +14,16 @@ import (
 // udfNameRE 与 packages/factorudf 的名称规则一致：^[a-z][a-z0-9_]{0,47}$。
 var udfNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
 
+// rustKeywords 是不能当函数名与 crate 名用的 Rust 关键字：模板把 UDF 名直接用作函数名。
+var rustKeywords = map[string]bool{
+	"as": true, "async": true, "await": true, "break": true, "const": true, "continue": true, "crate": true, "dyn": true, "else": true,
+	"enum": true, "extern": true, "false": true, "fn": true, "for": true, "if": true, "impl": true, "in": true, "let": true, "loop": true,
+	"match": true, "mod": true, "move": true, "mut": true, "pub": true, "ref": true, "return": true, "self": true, "static": true,
+	"struct": true, "super": true, "trait": true, "true": true, "type": true, "unsafe": true, "use": true, "where": true, "while": true,
+	"abstract": true, "become": true, "box": true, "do": true, "final": true, "gen": true, "macro": true, "override": true, "priv": true,
+	"try": true, "typeof": true, "unsized": true, "virtual": true, "yield": true,
+}
+
 // SDK 作为 git 依赖：仓库地址 + 标签（udf-sdk-v<版本>）。SDK 发布时打这个标签；本地开发用 --sdk-path 指向 sdk/rust。
 const (
 	udfSDKRepo = "https://github.com/mooyang-code/moox"
@@ -44,6 +54,9 @@ func udfParamsType(name string) string {
 func runUdfNew(out io.Writer, opts udfNewOptions) error {
 	if !udfNameRE.MatchString(opts.Name) {
 		return fmt.Errorf("名称 %q 不合法：要匹配 %s（小写字母开头，只含小写字母、数字、下划线，最长 48）", opts.Name, udfNameRE)
+	}
+	if rustKeywords[opts.Name] {
+		return fmt.Errorf("名称 %q 是 Rust 关键字，不能用作 UDF 名（模板把它直接用作函数名）：换一个", opts.Name)
 	}
 	root, err := filepath.Abs(opts.Dir)
 	if err != nil {

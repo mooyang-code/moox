@@ -179,3 +179,23 @@ mod finiteness {
         assert!(out[2].is_nan());
     }
 }
+
+mod shadowing {
+    use super::*;
+
+    // 用户的参数名可以叫 v、w、p：宏内部的变量名不能与它们冲突。
+    #[udf(name = "shadow_check", inputs = [x], params = { v: int(1..=2), w: int(1..=3), p: float(0.0..=1.0) }, lookback = "w")]
+    fn shadow_check(x: &Window, params: &ShadowCheckParams) -> f64 {
+        x.last() * params.v as f64 + params.p
+    }
+
+    #[test]
+    fn user_params_named_like_internals_compile_and_parse_in_order() {
+        let mut out = vec![0.0; 1];
+        assert_eq!(
+            __moox_udf_native(1, 3, 1, &[2.0, 3.0, 0.5], &[&[1.0, 2.0, 3.0]], &mut out),
+            0
+        );
+        assert_eq!(out[0], 3.0 * 2.0 + 0.5);
+    }
+}

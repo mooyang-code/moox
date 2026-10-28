@@ -176,7 +176,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	taskErrs := make([]error, len(sets))
 	var wg sync.WaitGroup
 	for index, engineTask := range sets {
-		set, members := engineTask.Set, engineTask.Members
+		set := engineTask.Set
 		if !engineTask.ResultReady {
 			taskErrs[index] = fmt.Errorf("%w: result dataset of factor task %s is not ready", storageio.ErrInfra, set.TaskID)
 			continue
@@ -197,18 +197,19 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				}
 				defer release()
 				// 任务与成员在入队之前取得，排队期间可能暂停、切换版本又恢复：登记之后按目录当前的内容重新取一次，
-				// 不能用跨过暂停的旧快照写结果。
-				if fresh, found, lookupErr := h.sets.EnabledTask(runnerCtx, set.TaskID); lookupErr != nil {
+				// 不能用跨过暂停的旧快照写结果。刷新后的值只放在闭包局部变量里，外层（Do 提前返回时仍在读 set）不受影响。
+				fresh, found, lookupErr := h.sets.EnabledTask(runnerCtx, set.TaskID)
+				if lookupErr != nil {
 					return pipeline.Outcome{}, fmt.Errorf("%w: reload factor task %s: %v", storageio.ErrInfra, set.TaskID, lookupErr)
-				} else if !found {
+				}
+				if !found {
 					return pipeline.Outcome{}, nil
-				} else {
-					set, members = fresh.Set, fresh.Members
 				}
+				current, currentMembers := fresh.Set, fresh.Members
 				if h.continuity != nil {
-					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, set, members, event)
+					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, current, currentMembers, event)
 				}
-				return h.computePeriod(runnerCtx, set, members, event.periodTime, event.universe, event.failed, event.eventID)
+				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.universe, event.failed, event.eventID)
 			})
 			if setErr != nil {
 				taskErrs[index] = fmt.Errorf("factor task %s: %w", set.TaskID, setErr)

@@ -552,6 +552,22 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	return rsp, http.StatusOK, nil
 }
 
+// udfHashes 返回现有回放会话引用的自定义算子版本：目录切换后这些版本仍不能卸载（会话的计算还要用）。
+func (m *replayManager) udfHashes() map[string]bool {
+	out := map[string]bool{}
+	if m == nil {
+		return out
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		for _, ref := range refsOfTasks([]domain.EngineTask{s.set}) {
+			out[ref.hash] = true
+		}
+	}
+	return out
+}
+
 func (m *replayManager) batch() int {
 	if m.deps.BatchOK != nil {
 		if n := m.deps.BatchOK(); n > 0 {

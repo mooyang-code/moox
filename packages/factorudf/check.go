@@ -88,8 +88,12 @@ func Inspect(wasm []byte, l Limits) (*ModuleInfo, error) {
 		return nil, checkFail("模块有 %d 个表，最多一个", len(info.tables))
 	}
 	for _, t := range info.tables {
-		if t.min > uint64(l.MaxTableElems) {
-			return nil, checkFail("表初始 %d 个元素，超过上限 %d", t.min, l.MaxTableElems)
+		// wazero 的表是宿主的 Go 切片，table.grow 既不受线性内存页数限制也不计入预算：必须声明最大值，并且最大值不超过上限。
+		if !t.hasMax {
+			return nil, checkFail("表没有声明最大元素数：table.grow 会不受限制地扩张")
+		}
+		if t.max > uint64(l.MaxTableElems) || t.min > uint64(l.MaxTableElems) {
+			return nil, checkFail("表声明了 %d～%d 个元素，超过上限 %d", t.min, t.max, l.MaxTableElems)
 		}
 	}
 	if n := info.customCount[CustomSection]; n != 1 {
@@ -134,11 +138,19 @@ func checkExports(compiled wazero.CompiledModule) error {
 }
 
 // checkABI 实例化并调用 moox_udf_abi，确认 ABI 版本。
-func checkABI(ctx context.Context, rt wazero.Runtime, compiled wazero.CompiledModule, l Limits) error {
-	cctx, cancel := context.WithTimeout(ctx, l.CallTimeout)
+func checkABI(ctx context.Context, rt wazero.Runtime, compiled wazero.CompiledModule, l Limits, budget Budget, initialPages uint32) error {
+	meter := newMeter(budget)
+	defer meter.release()
+	if err := meter.precharge(int64(initialPages) << 16); err != nil {
+		return fmt.Errorf("%w：检查模块时申请内存被拒绝：%v", ErrBudget, err)
+	}
+	cctx, cancel := context.WithTimeout(meter.context(ctx), l.CallTimeout)
 	defer cancel()
 	mod, err := rt.InstantiateModule(cctx, compiled, wazero.NewModuleConfig().WithName("").WithStartFunctions())
 	if err != nil {
+		if meter.Denied() {
+			return fmt.Errorf("%w：检查模块时申请内存被拒绝", ErrBudget)
+		}
 		return checkFail("实例化失败：%v", err)
 	}
 	defer mod.Close(ctx)
