@@ -104,10 +104,17 @@ const itemReasons: Record<string, string> = {
   no_row: "本期无行",
   score_invalid: "分数无效",
   not_expected: "已不在预期集合",
-  holding: "延续批次持有"
+  holding: "延续批次持有",
+  stop_loss: "固定止损",
+  trailing_stop: "跟踪止损",
+  take_profit: "止盈",
+  cooldown: "止损后冷却中，不能入场"
 };
 
 function reasonText(reason: string): string {
+  // 止损的标的会在原因后附上原有原因（例如 stop_loss;missing:x、tranche:2;stopped:1），逐段翻译。
+  if (reason.includes(";")) return reason.split(";").map(reasonText).join("；");
+  if (/^stopped:\d+$/.test(reason)) return `本期有 ${reason.slice("stopped:".length)} 个持仓单位止损`;
   if (reason.startsWith("holding:")) return `延续批次持有，本期${reasonText(reason.slice("holding:".length))}`;
   if (/^tranche:\d+$/.test(reason)) return `由 ${reason.slice("tranche:".length)} 个子策略持有`;
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
@@ -131,7 +138,8 @@ const stages: Record<string, { label: string; color: string }> = {
   scored: { label: "未入选", color: "blue" },
   idle: { label: "未触发", color: "gray" },
   weighted: { label: "入选", color: "green" },
-  dropped: { label: "被剔除", color: "orange" }
+  dropped: { label: "被剔除", color: "orange" },
+  stopped: { label: "止损止盈", color: "red" }
 };
 
 export function stageLabel(stage: string): string {
@@ -142,8 +150,8 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
-/** 解释明细的阶段顺序：入选的放最前面，其次是被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
-const stageOrder: Record<string, number> = { weighted: 0, dropped: 1, scored: 2, missing: 3, idle: 4, filtered: 5, aged_out: 6 };
+/** 解释明细的阶段顺序：入选的放最前面，其次是止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+const stageOrder: Record<string, number> = { weighted: 0, stopped: 1, dropped: 2, scored: 3, missing: 4, idle: 5, filtered: 6, aged_out: 7 };
 
 /** 解释明细排序：按阶段，再按名次（无名次的在后），最后按标的；入选的几个标的不会淹没在几百个被过滤的标的里。 */
 export function sortResultItems<T extends { stage: string; rank?: number; instrument_id: string; rule_id: string }>(
@@ -170,6 +178,10 @@ export interface RuleSummary {
   weighted: number;
   budget: string;
   allocated: string;
+  /** 本期触发的持仓单位数（开了 stop 的规则才有）。 */
+  stop_loss?: number;
+  trailing_stop?: number;
+  take_profit?: number;
 }
 
 export interface ResultSummary {

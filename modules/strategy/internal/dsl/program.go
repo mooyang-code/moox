@@ -133,6 +133,13 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 		for _, column := range compiled.Columns() {
 			allColumns[column] = struct{}{}
 		}
+		// 止损的价格列是可选列：一并读取，但不进规则的必需列（缺值不算缺数）；View 必须提供它们。
+		for _, column := range rule.StopColumns() {
+			if _, ok := available[column]; !ok {
+				return nil, fmt.Errorf("规则 %s 的 stop 需要列 %q，绑定的 View 没有", rule.ID, column)
+			}
+			allColumns[column] = struct{}{}
+		}
 		for _, column := range compiled.PreviousColumns() {
 			allPrevious[column] = struct{}{}
 		}
@@ -173,6 +180,9 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 func ReferencedColumns(strategy Strategy) ([]string, error) {
 	set := make(map[string]struct{})
 	for _, rule := range strategy.Rules {
+		for _, column := range rule.StopColumns() {
+			set[column] = struct{}{}
+		}
 		if rule.Type == RuleTypeTranche {
 			for _, column := range rule.TrancheColumns() {
 				set[column] = struct{}{}

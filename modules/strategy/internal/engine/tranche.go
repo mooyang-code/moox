@@ -26,6 +26,8 @@ const (
 // TrancheState 是 tranche 规则下一期需要的状态：按排名签名分组的开仓记录（设计 7.4）。
 type TrancheState struct {
 	Groups []TrancheGroupState `json:"groups"`
+	// Cooldown 是按子策略（TrancheSpec.Subs 的下标）的冷却截止 bar 序号（含）：冷却中该子策略不为这个标的的新开仓取权重。
+	Cooldown map[string]map[string]int64 `json:"cooldown,omitempty"`
 }
 
 // TrancheGroupState 是一个排名签名的开仓记录；StateKey 同时覆盖签名与组内子策略，组成员变化时旧记录不再使用。
@@ -43,6 +45,10 @@ type TranchePick struct {
 	Denom int    `json:"denom"`
 	Rows  int    `json:"rows"`
 	Pass  string `json:"pass"`
+	// Peak 是开仓以来此前最有利的价格（组内有子策略开了 stop 时记录）；Stopped 是已止损子策略的位图（与 Pass 同样编号），
+	// 冷却中开的仓在开仓时就标记，该子策略不从这条记录取权重。
+	Peak    string `json:"peak,omitempty"`
+	Stopped string `json:"stopped,omitempty"`
 }
 
 // partitionTranche 是 tranche 规则专用的集合划分：缺数只算没有行、close（require_volume 时还有 volume）为空、
@@ -110,7 +116,10 @@ func heldCount(p TranchePick, sub dsl.TrancheSub, barIndex int64) int {
 
 // trancheRecordAlive 判断开仓记录下一期是否仍可能对组内某个子策略有贡献。
 func trancheRecordAlive(p TranchePick, subs []dsl.TrancheSub, members []int, barIndex int64) bool {
-	for _, index := range members {
+	for position, index := range members {
+		if passBit(p.Stopped, position) {
+			continue
+		}
 		if heldCount(p, subs[index], barIndex) < subs[index].HoldPeriod {
 			return true
 		}
@@ -472,6 +481,19 @@ func passAfter(sample trancheSample, picks []TranchePick, subs []dsl.TrancheSub,
 	return out
 }
 
+// setBit 在位图（十六进制，按位置编号）上置位，长度按组内子策略数补足。
+func setBit(bitmap string, position, members int) string {
+	raw, err := hex.DecodeString(bitmap)
+	if err != nil {
+		raw = nil
+	}
+	if size := (members + 7) / 8; len(raw) < size {
+		raw = append(raw, make([]byte, size-len(raw))...)
+	}
+	raw[position/8] |= 1 << (position % 8)
+	return hex.EncodeToString(raw)
+}
+
 func passBit(pass string, position int) bool {
 	raw, err := hex.DecodeString(pass)
 	if err != nil || position/8 >= len(raw) {
@@ -522,6 +544,23 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 	holders := make(map[string]map[int]struct{}) // 标的 → 持有它的子策略
 	newlyPicked := make(map[string]bool)         // 本期选中的标的 → 是否至少一个子策略通过后置过滤
 	state := &TrancheState{}
+	cooldown := make(map[string]map[string]int64)
+	if previous.Tranche != nil {
+		for sub, ids := range previous.Tranche.Cooldown {
+			for id, until := range ids {
+				if until >= frame.BarIndex {
+					if cooldown[sub] == nil {
+						cooldown[sub] = make(map[string]int64)
+					}
+					cooldown[sub][id] = until
+				}
+			}
+		}
+	}
+	stoppedReason := make(map[string]string) // 本期止损的标的 → 首个原因
+	stoppedUnits := make(map[string]int)     // 标的 → 本期止损的（开仓记录, 子策略）数
+	cooldownBlocked := make(map[string]bool) // 本期选中、但所有通过后置过滤的子策略都在冷却中的标的
+	result.stops = make(map[string]int)
 	for _, group := range rule.TrancheGroups {
 		representative := subs[group.Subs[0]]
 		// 2～5. 排名、候选、前置过滤、选币（签名相同的子策略只算一次）。
@@ -551,8 +590,57 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			}
 			picks = append(picks, old)
 		}
+		// 止损（设计 4.2～4.4）：组内子策略的价格口径相同（stop.price 在排名签名里），共用开仓记录的入场价与最有利价格，
+		// 各子策略按自己的阈值判断；止损先于本期贡献，最有利价格在判断之后更新。
+		if stop := representative.Stop; stop != nil {
+			for k := range picks {
+				p := &picks[k]
+				row, hasRow := frame.Rows[p.ID]
+				prices, ok := readStopPrices(row, hasRow, p.Short, stop.Price)
+				if !ok {
+					continue
+				}
+				entry := StopEntry{Price: p.Close, Peak: p.Peak}
+				for position, index := range group.Subs {
+					sub := subs[index]
+					if sub.Stop == nil || passBit(p.Stopped, position) || !passBit(p.Pass, position) || heldCount(*p, sub, frame.BarIndex) > sub.HoldPeriod {
+						continue
+					}
+					reason := evaluateStop(sub.Stop, entry, prices, p.Short)
+					if reason == "" {
+						continue
+					}
+					p.Stopped = setBit(p.Stopped, position, len(group.Subs))
+					key := strconv.Itoa(index)
+					if cooldown[key] == nil {
+						cooldown[key] = make(map[string]int64)
+					}
+					cooldown[key][p.ID] = frame.BarIndex + int64(sub.Stop.CooldownBars)
+					if _, seen := stoppedReason[p.ID]; !seen {
+						stoppedReason[p.ID] = reason
+					}
+					stoppedUnits[p.ID]++
+					result.stops[reason]++
+				}
+				p.Peak = advancePeak(entry, prices, p.Short).Peak
+			}
+			for k := range selection.picks {
+				p := &selection.picks[k]
+				p.Peak = p.Close
+				blocked := false
+				for position, index := range group.Subs {
+					if subs[index].Stop != nil && passBit(p.Pass, position) && inCooldown(cooldown[strconv.Itoa(index)], p.ID, frame.BarIndex) {
+						p.Stopped = setBit(p.Stopped, position, len(group.Subs))
+						blocked = true
+					}
+				}
+				if blocked {
+					cooldownBlocked[p.ID] = true
+				}
+			}
+		}
 		picks = append(picks, selection.picks...)
-		// 7.2 贡献：持有计数 ≤ h 且本期有候选行。
+		// 7.2 贡献：持有计数 ≤ h、本期有候选行且该子策略没有止损。
 		for _, p := range picks {
 			if _, ok := inB[p.ID]; !ok {
 				continue
@@ -564,7 +652,7 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			nowClose := frame.Rows[p.ID].Values["close"]
 			for position, index := range group.Subs {
 				sub := subs[index]
-				if heldCount(p, sub, frame.BarIndex) > sub.HoldPeriod || !passBit(p.Pass, position) {
+				if heldCount(p, sub, frame.BarIndex) > sub.HoldPeriod || !passBit(p.Pass, position) || passBit(p.Stopped, position) {
 					continue
 				}
 				sideWeight := sub.LongWeight
@@ -636,6 +724,29 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 		}
 	}
 	result.selected = len(newlyPicked)
+	weighted := make(map[string]bool, len(result.weights))
+	for id := range result.weights {
+		weighted[id] = true
+	}
+	for id := range cooldownBlocked {
+		if _, has := explain.items[id]; !has && !weighted[id] {
+			explain.reject(id, StageDropped, reasonCooldown, nil, 0)
+		}
+	}
+	applyStopItems(explain, weighted, stoppedReason, stoppedUnits)
+	for sub, ids := range cooldown {
+		for id, until := range ids {
+			if until > frame.BarIndex {
+				if state.Cooldown == nil {
+					state.Cooldown = make(map[string]map[string]int64)
+				}
+				if state.Cooldown[sub] == nil {
+					state.Cooldown[sub] = make(map[string]int64)
+				}
+				state.Cooldown[sub][id] = until
+			}
+		}
+	}
 	result.state = RuleState{Held: held, Tranche: state}
 	// 开仓记录只在该币累计满 h 个候选行后删除：长期没有候选行的币会让记录一直保留（截断会改变结果，所以只提示）。
 	if raw, err := json.Marshal(state); err == nil && len(raw) > trancheStateNoteBytes {

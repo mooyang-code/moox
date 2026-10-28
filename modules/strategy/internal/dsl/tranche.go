@@ -102,6 +102,7 @@ type TrancheSub struct {
 	FilterBefore []TrancheFilter `json:"filter_before"`
 	FilterAfter  []TrancheFilter `json:"filter_after"`
 	StgWeight    float64         `json:"stg_weight"`
+	Stop         *Stop           `json:"stop,omitempty"`
 }
 
 // TrancheSpec 是一条 tranche 规则的预设、候选选项、子策略模板与参数表；Subs 是校验时展开的结果。
@@ -405,6 +406,14 @@ func scalarBool(node *yaml.Node, path string) (bool, error) {
 	return strconv.ParseBool(strings.TrimSpace(node.Value))
 }
 
+// StopPrice 是子策略止损的价格口径；没有止损时为空。它进入排名签名：同组共用的最有利价格必须按同一口径更新。
+func (s TrancheSub) StopPrice() string {
+	if s.Stop == nil {
+		return ""
+	}
+	return s.Stop.Price
+}
+
 // trancheDefaults 返回子策略的默认值：preset: f1 与 F1StrategyConfig 相同（hold_period=12、enable_seal999=True、
 // 两边权重与个数都为 1，按候选行计数、按数量持有、份额系数 0.5）；不写 preset 时按"对新策略最不意外"：只做多、
 // 因子空值不参与排名、持有期按 K 线根数、每批份额固定，hold_period 必填。
@@ -465,6 +474,8 @@ func decodeTrancheSub(node *yaml.Node, path, preset string) (TrancheSub, error) 
 			sub.FilterAfter, err = decodeTrancheFilters(f.value, fieldPath)
 		case "stg_weight":
 			sub.StgWeight, err = scalarFloat(f.value, fieldPath)
+		case "stop":
+			sub.Stop, err = decodeStop(f.value, fieldPath)
 		default:
 			return TrancheSub{}, fmt.Errorf("%s 的 tranche 包含未知字段 %q", path, f.key)
 		}
@@ -952,12 +963,13 @@ func (s *TrancheSpec) TrancheGroups() []TrancheGroup {
 		FilterBefore []TrancheFilter `json:"fb"`
 		LongActive   bool            `json:"la"`
 		ShortActive  bool            `json:"sa"`
+		StopPrice    string          `json:"sp,omitempty"`
 	}
 	index := make(map[string]int)
 	var groups []TrancheGroup
 	for i, sub := range s.Subs {
 		raw, _ := json.Marshal(signature{sub.ScoreMethod, sub.ScoreMissing, sub.LongFactors, sub.ShortFactors, sub.LongCoinNum, sub.ShortCoinNum,
-			sub.LongWhite, sub.LongBlack, sub.ShortWhite, sub.ShortBlack, sub.FilterBefore, sub.LongWeight > 0, sub.ShortWeight > 0})
+			sub.LongWhite, sub.LongBlack, sub.ShortWhite, sub.ShortBlack, sub.FilterBefore, sub.LongWeight > 0, sub.ShortWeight > 0, sub.StopPrice()})
 		key := Hash(raw)
 		at, ok := index[key]
 		if !ok {

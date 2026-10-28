@@ -59,7 +59,7 @@ func TestTrancheGenericDefaults(t *testing.T) {
 	})
 	require.Equal(t, map[string]string{"A-USDT": "0.5"}, got[0])
 	require.Equal(t, map[string]string{"A-USDT": "0.5", "B-USDT": "0.5"}, got[1]) // A 的价格翻倍，权重不变
-	require.Equal(t, map[string]string{"B-USDT": "1"}, got[2])                   // A 持满 2 根到期，B 两批叠加
+	require.Equal(t, map[string]string{"B-USDT": "1"}, got[2])                    // A 持满 2 根到期，B 两批叠加
 }
 
 // hold_count: bars 下，标的中途没有候选行（volume = 0）也计根数；candidate_rows 下不计。
@@ -111,19 +111,4 @@ func TestTrancheSizingQuantity(t *testing.T) {
 	require.Equal(t, "0.375", got[1]["A-USDT"]) // 0.125 × 20/10 + 本期新开 0.125
 }
 
-func sortedKeysOf(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sortStrings(keys)
-	return keys
-}
-
-func sortStrings(values []string) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
-	}
-}
+func sortedKeysOf(m map[string]string) []string { return sortedStringKeys(m) }

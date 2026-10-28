@@ -165,6 +165,9 @@ func validateRule(rule *Rule) error {
 	if rule.Pool.Explicit && len(rule.Pool.Fixed) == 0 && len(rule.Pool.Tags) == 0 {
 		return fmt.Errorf("%s 的 pool 不能为空", prefix)
 	}
+	if rule.Stop != nil && rule.Type == RuleTypeTranche {
+		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
+	}
 	if rule.Tranche != nil && rule.Type != RuleTypeTranche {
 		return fmt.Errorf("%s 不是 tranche 规则，不能写 preset、candidates、tranche 或 params", prefix)
 	}

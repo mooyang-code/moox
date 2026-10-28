@@ -19,6 +19,8 @@ type ruleResult struct {
 	selected int
 	// notes 是写进本期摘要的说明（tranche 状态体积提示）。
 	notes []string
+	// stops 是本期止损止盈触发的持仓单位数，按原因计。
+	stops map[string]int
 }
 
 // 明细原因：holding 规则下只由延续批次持有的标的记 holding，本期又在某个阶段被淘汰时记 holding:<原因>；
@@ -81,6 +83,24 @@ func (e *explanation) list() []Item {
 func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
 	explain := newExplanation(rule.Rule.ID, tolerance)
+	// 止损先于选币（设计 4.3）：本期触发与冷却中的标的不能入选；holding 规则在 evaluateHolding 里按批次成员判断。
+	stops := newStopTracker(rule, frame, previous)
+	entries := make(map[string]StopEntry)
+	if stops != nil && rule.Rule.Holding == nil {
+		for _, id := range previous.Held {
+			entry, ok := previous.Entries[id]
+			if !ok {
+				continue
+			}
+			if _, isFrozen := sets.frozen[id]; isFrozen {
+				entries[id] = entry
+				continue
+			}
+			if updated, hit := stops.check(id, entry); !hit {
+				entries[id] = updated
+			}
+		}
+	}
 	// filter：引用列已由集合划分保证存在。
 	passed := make([]string, 0, len(sets.available))
 	for _, id := range sets.available {
@@ -157,7 +177,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	fresh := make(map[string]struct{})
 	notChosenReason := reasonNotSelected
 	if rule.Rule.Holding != nil {
-		outcome, err := evaluateHolding(rule, frame, sets, previous, rebuild, ordered, scored.values, count, explain, rankOf)
+		outcome, err := evaluateHolding(rule, frame, sets, previous, rebuild, ordered, scored.values, count, explain, rankOf, stops)
 		if err != nil {
 			return ruleResult{}, err
 		}
@@ -166,7 +186,12 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			notChosenReason = reasonNotRebalanced
 		}
 	} else {
-		chosen = selectWithBuffer(ordered, rankOf, count, rule.Rule.Select.Buffer, previous.Held)
+		// 先在完整样本上打分定名次，再从选币输入与 buffer 的上期持有里排除本期止损与冷却中的标的，由后面的名次补位。
+		eligible, bufferHeld := ordered, previous.Held
+		if stops != nil {
+			eligible, bufferHeld = withoutExcluded(ordered, stops), withoutExcluded(previous.Held, stops)
+		}
+		chosen = selectWithBuffer(eligible, rankOf, count, rule.Rule.Select.Buffer, bufferHeld)
 		weights = allocate(chosen, rule.Rule.Weight)
 		for _, id := range chosen {
 			if rule.FilterAfter != nil {
@@ -191,6 +216,14 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	}
 	for _, id := range ordered {
 		if _, ok := chosenSet[id]; !ok {
+			if stops.justStopped(id) {
+				explain.reject(id, StageScored, "", scoreOf(id), rankOf[id]) // 由 applyStopItems 改写为 stopped，保留分数与名次
+				continue
+			}
+			if stops.excluded(id) {
+				explain.reject(id, StageDropped, reasonCooldown, scoreOf(id), rankOf[id])
+				continue
+			}
 			explain.reject(id, StageScored, notChosenReason, scoreOf(id), rankOf[id])
 		}
 	}
@@ -223,8 +256,52 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	sort.Strings(held)
 	result.state.Held = held
 	result.weights = weights
+	if stops != nil {
+		weighted := make(map[string]bool, len(weights))
+		for id := range weights {
+			weighted[id] = true
+		}
+		applyStopItems(explain, weighted, stops.stopped, stops.units)
+		if rule.Rule.Holding == nil {
+			// 持有标的的入场记录：延续的沿用，新入场的记本期 close；冻结的原样保留。
+			state := make(map[string]StopEntry, len(held))
+			for _, id := range held {
+				if entry, ok := entries[id]; ok {
+					state[id] = entry
+				} else if entry, ok := stops.open(id); ok {
+					state[id] = entry
+				}
+			}
+			if len(state) > 0 {
+				result.state.Entries = state
+			}
+		}
+		result.state.Cooldown = stops.cooldownState()
+		result.stops = stops.counts
+	}
 	result.items = explain.list()
 	return result, nil
+}
+
+// sortedStringKeys 返回 map 的键（排序），让止损计数与冷却的处理顺序确定。
+func sortedStringKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// withoutExcluded 去掉本期止损与冷却中的标的，保持原有顺序。
+func withoutExcluded(ids []string, stops *stopTracker) []string {
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !stops.excluded(id) {
+			kept = append(kept, id)
+		}
+	}
+	return kept
 }
 
 // holdingRebuilds 按配置顺序返回本期要建立或重建的批次 offset：bar 序号对 bars 取模落在其上的批次；还没有建立的
@@ -259,8 +336,35 @@ type holdingOutcome struct {
 // 满 bars 根的批次到期并在同一 bar 重建。启用后的第一根 ok bar 上建立全部批次；建仓 bar 没有产生 ok 决策（守门跳过、
 // 无数据、停机）时，到期的批次不会被丢弃清仓，而是在之后第一根 ok bar 上补建。补建与首次建立的批次，建仓序号都按
 // 各自的 offset 对齐到最近一个应建仓的 bar，下一次照常在 offset 上重建。rebuild 是 holdingRebuilds 给出的本期批次。
-func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int) (holdingOutcome, error) {
+func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int, stops *stopTracker) (holdingOutcome, error) {
 	holding := rule.Rule.Holding
+	// 止损：先判断上期全部批次的成员（含本期要重建的批次，触发后同样进入冷却），冻结成员不判断。
+	stoppedIn := make(map[int]map[string]bool)
+	updatedIn := make(map[int]map[string]StopEntry)
+	if stops != nil {
+		for _, batch := range previous.Batches {
+			stoppedIn[batch.Offset], updatedIn[batch.Offset] = map[string]bool{}, map[string]StopEntry{}
+			for _, id := range sortedStringKeys(batch.BaseWeights) {
+				entry, has := batch.Entries[id]
+				_, isFrozen := sets.frozen[id]
+				switch {
+				case !has:
+					if opened, ok := stops.open(id); ok && !isFrozen {
+						updatedIn[batch.Offset][id] = opened // 建仓时没有价格，补记入场价
+					}
+				case isFrozen:
+					updatedIn[batch.Offset][id] = entry
+				default:
+					updated, hit := stops.check(id, entry)
+					if hit {
+						stoppedIn[batch.Offset][id] = true
+					} else {
+						updatedIn[batch.Offset][id] = updated
+					}
+				}
+			}
+		}
+	}
 	outcome := holdingOutcome{fresh: map[string]struct{}{}}
 	availableSet := make(map[string]struct{}, len(sets.available)+len(sets.frozen))
 	for _, id := range sets.available {
@@ -281,16 +385,29 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			continue
 		}
 		kept := make(map[string]string, len(batch.BaseWeights))
+		var keptEntries map[string]StopEntry
 		for id, raw := range batch.BaseWeights {
+			if stoppedIn[batch.Offset][id] {
+				continue // 止损的份额留现金，到该批次下次重建
+			}
 			if _, ok := availableSet[id]; ok {
 				kept[id] = raw
+				if entry, ok := updatedIn[batch.Offset][id]; ok {
+					if keptEntries == nil {
+						keptEntries = make(map[string]StopEntry)
+					}
+					keptEntries[id] = entry
+				}
 			}
 		}
-		batches = append(batches, HoldingBatch{Offset: batch.Offset, EstablishedBar: batch.EstablishedBar, BaseWeights: kept})
+		batches = append(batches, HoldingBatch{Offset: batch.Offset, EstablishedBar: batch.EstablishedBar, BaseWeights: kept, Entries: keptEntries})
 	}
 	if len(rebuild) > 0 {
 		outcome.rebuilt = true
 		chosen := ordered
+		if stops != nil {
+			chosen = withoutExcluded(ordered, stops)
+		}
 		if count < len(chosen) {
 			chosen = chosen[:count]
 		}
@@ -322,10 +439,21 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			// 补建与首次建立的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
 			established := frame.BarIndex - ((frame.BarIndex-int64(target))%int64(holding.Bars)+int64(holding.Bars))%int64(holding.Bars)
 			weights := make(map[string]string, len(raw))
+			var opened map[string]StopEntry
 			for id, value := range raw {
 				weights[id] = value
+				if stops == nil {
+					continue
+				}
+				// 入场价取实际进入批次的本期 close，不用回填的 EstablishedBar。
+				if entry, ok := stops.open(id); ok {
+					if opened == nil {
+						opened = make(map[string]StopEntry)
+					}
+					opened[id] = entry
+				}
 			}
-			batches = append(batches, HoldingBatch{Offset: target, EstablishedBar: established, BaseWeights: weights})
+			batches = append(batches, HoldingBatch{Offset: target, EstablishedBar: established, BaseWeights: weights, Entries: opened})
 		}
 	}
 	sort.Slice(batches, func(i, j int) bool { return batches[i].Offset < batches[j].Offset })

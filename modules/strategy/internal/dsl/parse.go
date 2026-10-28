@@ -278,6 +278,8 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			var holding Holding
 			holding, err = decodeHolding(f.value, fieldPath)
 			rule.Holding = &holding
+		case "stop":
+			rule.Stop, err = decodeStop(f.value, fieldPath)
 		case "preset":
 			err = decodeTranchePreset(f.value, fieldPath, &rule)
 		case "candidates":
