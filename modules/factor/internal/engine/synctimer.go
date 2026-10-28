@@ -33,6 +33,19 @@ type catalogSyncer struct {
 	offset   time.Duration
 	onChange func()
 	now      func() time.Time
+	// kick 让同步循环不等定时器立刻同步一次（容量 1，多次请求合并）；恢复追赶用它尽快确认目录。
+	kick chan struct{}
+}
+
+// SyncSoon 请求尽快同步一次目录；已有待执行的请求时合并。
+func (s *catalogSyncer) SyncSoon() {
+	if s == nil || s.kick == nil {
+		return
+	}
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
 }
 
 func (s *catalogSyncer) SyncOnce(ctx context.Context) error {
@@ -61,6 +74,8 @@ func (s *catalogSyncer) Run(ctx context.Context) {
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-s.kick:
+			timer.Stop()
 		}
 		syncCtx, cancel := context.WithTimeout(ctx, s.interval)
 		_ = s.SyncOnce(syncCtx)

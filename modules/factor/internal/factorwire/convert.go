@@ -195,6 +195,28 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
+		Lifecycle: LifecycleToPB(status.Lifecycle),
+	}
+}
+
+// LifecycleToPB 转换引擎模块级的生命周期状态。
+func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
+	return &factorpb.EngineLifecycleStatus{
+		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince), QuiescedAt: FormatTime(life.QuiescedAt),
+		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked,
+	}
+}
+
+// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（旧引擎或没有上报）时为零值，即“未收敛”。
+func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle {
+	if pb == nil {
+		return domain.EngineLifecycle{}
+	}
+	pausedSince, _ := ParseTime(pb.GetPausedSince())
+	quiescedAt, _ := ParseTime(pb.GetQuiescedAt())
+	return domain.EngineLifecycle{
+		Stage: pb.GetStage(), PausedSince: pausedSince, QuiescedAt: quiescedAt,
+		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(),
 	}
 }
 
@@ -218,6 +240,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
+		Lifecycle: LifecycleFromPB(pb.GetLifecycle()),
 	}, nil
 }
 

@@ -72,6 +72,10 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 			if qerr != nil {
 				return obj, fmt.Errorf("已暂停，但在途操作没有结束：%w", qerr)
 			}
+			obj = c.markQuiesced(req.Ref, obj)
+		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused:
+			// 没有需要等待的在途操作：暂停即收敛。
+			obj = c.markQuiesced(req.Ref, obj)
 		}
 		if err == nil {
 			c.audit("lifecycle_%s module=%s ref=%s/%s kind=%s by=%s reason=%q", req.Command, c.opts.Module, req.Ref.Kind, req.Ref.ID, req.PauseKind, req.By, req.Reason)
@@ -81,6 +85,19 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 		return c.release(ctx, req.Ref)
 	}
 	return Object{}, fmt.Errorf("未知命令 %q", req.Command)
+}
+
+// markQuiesced 写入收敛时间并返回更新后的对象；暂停已被其他命令改变（例如已恢复）时不写。
+func (c *Controller) markQuiesced(ref Ref, obj Object) Object {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.recordFor(ref)
+	if r.Stage != StagePaused {
+		return obj
+	}
+	r.QuiescedAt = c.opts.Now().UTC()
+	_ = c.save()
+	return c.object(r)
 }
 
 func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {

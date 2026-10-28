@@ -68,6 +68,7 @@ type Runtime struct {
 	admit    *memadmit.Admitter
 	health   *factorhealth.State
 	life     *lifecycle.Controller
+	writes   *inflight
 	replays  *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
@@ -97,7 +98,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		return nil, err
 	}
 	r := &Runtime{
-		cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
+		writes: newInflight(), cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
 		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(""),
 		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
 	}
@@ -193,7 +194,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
-		onChange: r.reconcileConsumer, now: time.Now,
+		onChange: r.reconcileConsumer, now: time.Now, kick: make(chan struct{}, 1),
 	}
 	beat := &heartbeater{
 		client: r.manager, lease: r.lease, status: r.engineStatus, interval: cfg.Engine.HeartbeatInterval,
@@ -215,8 +216,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
+		leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
@@ -250,6 +253,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.replays = newReplayManager(ReplayDeps{
 		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
+		Begin:   r.beginReplayWrite,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {
@@ -288,6 +292,9 @@ func (r *Runtime) reconcileConsumer() {
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
+				return r.beginWrite(ctx, taskID, true, !live)
+			},
 			Params: r.params,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
@@ -349,6 +356,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
 	markPausedRunners(status.Runners, r.life)
+	status.Lifecycle = r.lifecycleStatus()
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
 			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,

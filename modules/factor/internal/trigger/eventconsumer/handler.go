@@ -39,6 +39,9 @@ type Handler struct {
 	gate func(taskID string) bool
 	// catchupGate 非空时，实时门禁关闭的任务在恢复追赶中仍可推进连续水位（只写历史周期）。
 	catchupGate func(taskID string) bool
+	// begin 非空时取代 gate/catchupGate 的二次检查：先登记在途、再检查门禁，返回的函数在这次计算结束后注销。
+	// live 为真是实时事件（只看实时门禁），否则是追赶推进（实时门禁或追赶门禁放行都可以）。
+	begin func(ctx context.Context, taskID string, live bool) (func(), bool)
 	// params 在开算一期之前取得任务各可变成员用的参数（设计 6.3）；为空时全部按成员自己的参数计算。
 	params trigger.ParamSelector
 }
@@ -48,6 +51,26 @@ func (h *Handler) SetParamSelector(params trigger.ParamSelector) { h.params = pa
 
 // SetGate 设置生命周期门禁；必须在开始消费之前调用。
 func (h *Handler) SetGate(gate func(taskID string) bool) { h.gate = gate }
+
+// SetBegin 设置登记式门禁；任务串行队列里的闭包在真正执行前用它再检查一次。必须在开始消费之前调用。
+func (h *Handler) SetBegin(begin func(ctx context.Context, taskID string, live bool) (func(), bool)) {
+	h.begin = begin
+}
+
+// enter 在写结果之前登记并检查门禁；没有设置 begin 时沿用 gate/catchupGate。
+func (h *Handler) enter(ctx context.Context, taskID string, live bool) (func(), bool) {
+	if h.begin != nil {
+		return h.begin(ctx, taskID, live)
+	}
+	open := h.gate == nil || h.gate(taskID)
+	if !open && !live && h.catchupGate != nil {
+		open = h.catchupGate(taskID)
+	}
+	if !open {
+		return nil, false
+	}
+	return func() {}, true
+}
 
 // SetCatchupGate 设置恢复追赶的门禁：Advance（连续水位追赶）在实时门禁关闭时，只要追赶门禁放行就可以推进。
 func (h *Handler) SetCatchupGate(gate func(taskID string) bool) { h.catchupGate = gate }
@@ -64,6 +87,12 @@ func (h *Handler) Advance(ctx context.Context, taskID string) error {
 		return nil
 	}
 	_, err := h.runners.Do(ctx, taskID, func(runnerCtx context.Context) (pipeline.Outcome, error) {
+		// 排队期间可能已经暂停：真正执行前登记并再检查一次门禁。
+		release, ok := h.enter(runnerCtx, taskID, false)
+		if !ok {
+			return pipeline.Outcome{}, nil
+		}
+		defer release()
 		return pipeline.Outcome{}, h.continuity.advanceTask(runnerCtx, h, taskID)
 	})
 	return err
@@ -162,9 +191,11 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				if set.TaskID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
 					return pipeline.Outcome{}, fmt.Errorf("enabled factor task identity does not match period event")
 				}
-				if h.gate != nil && !h.gate(set.TaskID) {
+				release, ok := h.enter(runnerCtx, set.TaskID, true)
+				if !ok {
 					return pipeline.Outcome{}, nil
 				}
+				defer release()
 				if h.continuity != nil {
 					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, set, members, event)
 				}

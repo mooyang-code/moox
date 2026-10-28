@@ -106,6 +106,11 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 		out.Message = "任务已不在目录里"
 		return out
 	}
+	if reason := r.catchupPrecondition(taskID); reason != "" {
+		out.BlockedBy = "追赶前置条件"
+		out.Message = reason
+		return out
+	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 	if err := r.data.Blocked(src); err != nil {
 		out.BlockedBy = "变更日志断档"

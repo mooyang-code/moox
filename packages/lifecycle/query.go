@@ -49,6 +49,39 @@ func (c *Controller) moduleOpen() bool {
 	return false
 }
 
+// ModuleOpen 报告模块自身是否放行（没有控制意图，且自身阶段是就绪、预热或运行）：后台的领取类动作（例如补算领取）用它做门禁。
+func (c *Controller) ModuleOpen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trackOpen()
+	return c.moduleOpen()
+}
+
+// ModuleGeneration 返回模块的暂停代次：模块每次从放行变为不放行加一。
+// 在途的长任务（补算作业）记下领取时的代次，代次变化说明期间发生过暂停，不能再沿用旧的执行上下文写结果。
+func (c *Controller) ModuleGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trackOpen()
+	return c.generation
+}
+
+// trackOpen 在模块由放行变为不放行时推进代次；调用方持有锁。每次状态变更落盘前与每次查询时都会调用，
+// 所以两次观察之间的任何一次关闭都会被计入。
+func (c *Controller) trackOpen() {
+	open := c.moduleOpen()
+	if c.wasOpen && !open {
+		c.generation++
+	}
+	c.wasOpen = open
+}
+
+// Quiesced 报告对象本次暂停是否已经收敛：处于暂停、有暂停详情，并且收敛时间不早于本次暂停的开始时间。
+// 没有 Quiesce 钩子的模块，暂停命令成功即写入收敛时间。
+func (o Object) Quiesced() bool {
+	return o.Stage == StagePaused && o.Pause != nil && !o.QuiescedAt.IsZero() && !o.QuiescedAt.Before(o.Pause.Since)
+}
+
 // Allowed 报告对象是否在做实时计算（预热或运行）：处理周期事件前用它做门禁。
 // ref 为空时指模块自身（没有对象的模块，例如 Trade）：自身处于预热或运行。
 // 模块自身暂停、恢复追赶、重置或故障时整个模块都不计算，不管对象各自处于什么阶段。
@@ -155,7 +188,7 @@ func (c *Controller) effective(r *record) Stage {
 func (c *Controller) object(r *record) Object {
 	obj := Object{
 		Ref: r.Ref, Stage: r.Stage, Effective: c.effective(r), Color: c.effective(r).Color(), Reason: r.Reason, Since: r.Since,
-		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
+		Pause: r.Pause, PausedSince: r.PausedSince, QuiescedAt: r.QuiescedAt, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
 	}
 	if r.catchup != nil {

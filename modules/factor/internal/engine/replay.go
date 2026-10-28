@@ -52,6 +52,8 @@ type ReplayDeps struct {
 	Admit   *memadmit.Admitter
 	Now     func() time.Time
 	BatchOK func() int
+	// Begin 非空时是写回的登记式门禁：先登记在途、再检查门禁；不允许时拒绝写回（暂停、恢复追赶、重置期间）。
+	Begin func(ctx context.Context, taskID string) (func(), bool)
 }
 
 type replayManager struct {
@@ -521,7 +523,15 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		rsp.Subjects[subject] = frame
 	}
 	if req.WriteFactors {
+		release := func() {}
+		if m.deps.Begin != nil {
+			var ok bool
+			if release, ok = m.deps.Begin(ctx, s.set.Set.TaskID); !ok {
+				return ReplayStepResponse{}, http.StatusConflict, errors.New("因子任务当前不允许写结果（暂停、恢复追赶或重置中），回放写回被拒绝")
+			}
+		}
 		rows, err := s.write(ctx, m.deps.Runner, plan, comp, period, m.batch())
+		release()
 		if err != nil {
 			return ReplayStepResponse{}, http.StatusBadGateway, err
 		}

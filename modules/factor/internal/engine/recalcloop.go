@@ -47,6 +47,15 @@ type recalcLoop struct {
 	source   SourceDataset
 	active   func() bool
 	poll     time.Duration
+	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶、重置期间不领取，也不续跑）。
+	leaseAllowed func() bool
+	// generation 返回模块的暂停代次；作业领取时记下，代次变化后旧的执行上下文不再写任何分块。
+	generation func() uint64
+	// pulling 登记在途的领取请求：暂停的等待收敛要等它返回，领取回来的作业再按代次判断是否仍然有效。
+	pulling func() func()
+	// moduleOpen 报告模块级生命周期是否放行；为空时视为一直放行。runWhenOpen 据此区分“任务刚建立、门禁稍后放行”（可以等）
+	// 与“模块暂停了”（立刻放弃作业）。
+	moduleOpen func() bool
 	// history 在补算前把本地时序存储的历史延长到能覆盖补算区间加回看（可为 nil：只读已有的本地数据）。
 	history historyExtender
 	// now 取当前时间（测试可替换）。
@@ -69,9 +78,27 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	if l.active != nil && !l.active() {
 		return false, nil
 	}
+	// 先登记领取在途、再检查模块门禁：登记之后门禁才关闭的，暂停的收敛会等这次领取返回；已经关闭的不领取。
+	done := func() {}
+	if l.pulling != nil {
+		done = l.pulling()
+	}
+	if l.leaseAllowed != nil && !l.leaseAllowed() {
+		done()
+		return false, nil
+	}
+	var generation uint64
+	if l.generation != nil {
+		generation = l.generation()
+	}
 	job, found, err := l.client.PullRecalcJob(ctx)
+	// 领取返回就注销在途登记：作业此后的写入由分块各自登记，领取到的作业再由代次判断是否仍然有效。
+	done()
 	if err != nil || !found {
 		return false, err
+	}
+	if l.generation != nil {
+		ctx = withLeaseGeneration(ctx, generation)
 	}
 	log.InfoContextf(ctx, "factor_recalc_start job_id=%s task_id=%s start=%s end=%s progress=%s", job.JobID, job.Set.Set.TaskID,
 		job.Window.Start.Format(time.RFC3339), job.Window.End.Format(time.RFC3339), job.Window.Progress.Format(time.RFC3339))
@@ -169,6 +196,14 @@ func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
 	for {
 		err := run()
 		if !errors.Is(err, recalcexec.ErrGated) || !time.Now().Before(deadline) {
+			return err
+		}
+		// 模块暂停（或这个上下文领取之后暂停过）：立刻放弃，不在门禁重开后用旧的上下文继续写；
+		// 作业租约到期后只能重新领取（重新领取时用固化的绑定）。
+		if l.moduleOpen != nil && !l.moduleOpen() {
+			return err
+		}
+		if gen, ok := ctx.Value(leaseGenerationKey{}).(uint64); ok && l.generation != nil && gen != l.generation() {
 			return err
 		}
 		select {

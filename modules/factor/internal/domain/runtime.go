@@ -64,6 +64,17 @@ type EngineStatus struct {
 	CatalogSyncedAt time.Time
 	// Watermarks 是各任务的连续水位与阻塞状态。
 	Watermarks []SetWatermark
+	// Lifecycle 是引擎模块自身的生命周期状态（暂停是否已收敛、追赶前置条件）。
+	Lifecycle EngineLifecycle
+}
+
+// EngineLifecycle 是引擎模块级的生命周期状态。Quiesced 为真表示本次暂停已收敛（在途写结果操作都已结束）。
+type EngineLifecycle struct {
+	Stage          string
+	PausedSince    time.Time
+	QuiescedAt     time.Time
+	Quiesced       bool
+	CatchupBlocked string
 }
 
 // SetWatermark 是一个任务的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。

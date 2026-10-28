@@ -73,6 +73,7 @@ type ParamReader interface {
 type config struct {
 	params       ParamReader
 	gate         func(taskID string) bool
+	begin        func(ctx context.Context, taskID string) (func(), bool)
 	chunkPeriods int
 	memoryBudget int64
 	chunkRetries int
@@ -99,13 +100,20 @@ func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg
 // WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有任务锁）检查，任务不允许写结果时返回 ErrGated。
 // 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶、重置期间这些后台路径不会越过门禁写结果。
 func WithGate(gate func(taskID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
-func WithLocks(locks SetLocker) Option              { return func(cfg *config) { cfg.locks = locks } }
+
+// WithWriteScope 设置写结果的登记式门禁，设置后取代 WithGate：begin 先登记在途、再检查门禁，不允许写时返回 false，
+// 允许时返回的函数在这次写结果的操作结束后注销登记。暂停的等待收敛据此知道还有写操作在途。
+func WithWriteScope(begin func(ctx context.Context, taskID string) (func(), bool)) Option {
+	return func(cfg *config) { cfg.begin = begin }
+}
+func WithLocks(locks SetLocker) Option { return func(cfg *config) { cfg.locks = locks } }
 
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
 	params       ParamReader
 	gate         func(taskID string) bool
+	begin        func(ctx context.Context, taskID string) (func(), bool)
 	runner       Runner
 	locks        SetLocker
 	clock        periodclock.Clock
@@ -129,7 +137,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		params: cfg.params, gate: cfg.gate, runner: runner, locks: cfg.locks, clock: cfg.clock,
+		params: cfg.params, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks, clock: cfg.clock,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -256,9 +264,11 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if len(selection.Subjects) == 0 {
 		return pipeline.Outcome{}, nil
 	}
-	if e.gate != nil && !e.gate(selection.Set.TaskID) {
+	release, ok := e.enter(ctx, selection.Set.TaskID)
+	if !ok {
 		return pipeline.Outcome{}, ErrGated
 	}
+	defer release()
 	outcome, runErr := e.runSegments(ctx, selection, start, end)
 	if after != nil {
 		after(selection, outcome, runErr)
@@ -322,9 +332,11 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
-	if e.gate != nil && !e.gate(selection.Set.TaskID) {
+	release, ok := e.enter(ctx, selection.Set.TaskID)
+	if !ok {
 		return time.Time{}, pipeline.Outcome{}, false, ErrGated
 	}
+	defer release()
 	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
 	duration, err := e.duration(selection.Set)
 	if err != nil {
@@ -340,6 +352,17 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 		outcome.DefaultFilled = filterDefaultFilled(selection, base, segment.defaultFilled, outcome.Items)
 	}
 	return segment.end, outcome, false, err
+}
+
+// enter 在写结果之前登记并检查门禁；没有配置任何门禁时直接放行。
+func (e *Executor) enter(ctx context.Context, taskID string) (func(), bool) {
+	switch {
+	case e.begin != nil:
+		return e.begin(ctx, taskID)
+	case e.gate != nil && !e.gate(taskID):
+		return nil, false
+	}
+	return func() {}, true
 }
 
 func (e *Executor) duration(set domain.FactorTask) (time.Duration, error) {
