@@ -18,6 +18,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/robfig/cron"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -241,7 +242,9 @@ func buildMonitorMarketCanary(
 				}
 				statuses, statusErr := tagRuns.ListTagSyncStatus(runCtx, spaceID)
 				if statusErr != nil {
-					err = errors.Join(err, statusErr)
+					// Collector 暂时不可达（启动顺序、重启）时不能让定时器失败：首次运行出错会让 Monitor 整个退出。
+					// Collector 自身的健康检查会报告它不可用，这里只跳过本轮标签检查。
+					log.WarnContextf(runCtx, "monitor skip tag checks for space %s: collector tag sync status unavailable: %v", spaceID, statusErr)
 					continue
 				}
 				runsByTag := make(map[string]*collectorpb.TagSyncStatus, len(statuses))
