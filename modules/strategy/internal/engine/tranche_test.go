@@ -13,7 +13,7 @@ import (
 
 func loadGoldenCase(t *testing.T, name string) trancheGolden {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "f1", name+".json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "reference", name+".json"))
 	require.NoError(t, err)
 	var golden trancheGolden
 	require.NoError(t, json.Unmarshal(raw, &golden))

@@ -13,10 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// tranche 规则：语义与 alphalib F1 框架的 F1StrategyConfig / F1MultiStrategy 一致（docs/计划/F1策略迁移/F1策略迁移设计.md 第 1、7 节）。
+// tranche（批次持仓）规则：每根 K 线按本期选币新开一批仓位，每批持有 h 期，多批叠加（docs/计划/批次持仓规则与止损设计.md）。
 // 一条 tranche 规则由一个子策略模板和可选的参数表组成：参数表每行展开为一个子策略，模板里的 "{列名}" 取该行的值。
 
-// RuleTypeTranche 是语义与 F1 框架一致的截面选币规则。
+// RuleTypeTranche 是批次持仓的截面选币规则。
 const RuleTypeTranche = "tranche"
 
 // tranche 的取值上限。
@@ -26,11 +26,11 @@ const (
 	MaxTrancheFactors       = 16    // 每边因子个数上限
 	MaxTrancheFilters       = 32    // 每个子策略的前置与后置过滤条件合计上限
 	MaxTrancheHoldPeriod    = 2016  // hold_period 上限（5m 下一周）
-	maxTrancheGroupItems    = 9     // 逻辑组合里的条件数：F1 用单个数字编号
-	trancheBound            = 1e100 // F1 把 lt/gt 一类写成以 ±1e100 为边界的 between
+	maxTrancheGroupItems    = 9     // 逻辑组合里的条件数：编号是单个数字
+	trancheBound            = 1e100 // lt/gt 一类写成以 ±1e100 为边界的 between
 )
 
-// 过滤类型与比较方式（F1 的 filter_type 与 compare_operator）。
+// 过滤类型与比较方式。
 const (
 	TrancheFilterValue = "value"
 	TrancheFilterRank  = "rank"
@@ -47,7 +47,7 @@ type TrancheFactor struct {
 }
 
 // TrancheFilter 是一个过滤条件，或带逻辑组合的一组条件（Logic 非空时 Items 是组内条件）。
-// 单个条件已按 F1 规范化：between(Lo, Hi, Inclusive)，Negate 为真时取反（F1 的 nb* 与 ne）。
+// 单个条件已规范化为 between(Lo, Hi, Inclusive)，Negate 为真时取反（nb* 与 ne）。
 type TrancheFilter struct {
 	Short         bool            `json:"short,omitempty"`
 	Column        string          `json:"column,omitempty"`
@@ -64,22 +64,20 @@ type TrancheFilter struct {
 
 // tranche 的预设与选项取值（设计 3.1）。
 const (
-	PresetF1 = "f1"
-
-	ScoreRankSum = "rank_sum" // 各因子截面名次加权求和（F1 的 cross）
-	ScoreRawSum  = "raw_sum"  // 因子原值加权求和（F1 的 vertical）
+	ScoreRankSum = "rank_sum" // 各因子截面名次加权求和
+	ScoreRawSum  = "raw_sum"  // 因子原值加权求和
 
 	MissingMedian = "median" // 因子空值补同期名次中位数
 	MissingDrop   = "drop"   // 因子空值不参与本期排名
 
-	HoldCountCandidateRows = "candidate_rows" // 该标的本期是候选才计数（F1）
+	HoldCountCandidateRows = "candidate_rows" // 该标的本期是候选才计数
 	HoldCountBars          = "bars"           // 每根 K 线都计数
 
-	SizingQuantity = "quantity" // 开仓时定数量，权重随价格变动（F1）
+	SizingQuantity = "quantity" // 开仓时定数量，权重随价格变动
 	SizingWeight   = "weight"   // 每批份额固定
 )
 
-// TrancheSub 是展开后的一个子策略（preset: f1 时对应一个 F1StrategyConfig）。
+// TrancheSub 是展开后的一个子策略。
 type TrancheSub struct {
 	Row          int             `json:"row"` // 参数表行号（从 1 数）；没有参数表时为 0
 	HoldPeriod   int             `json:"hold_period"`
@@ -88,7 +86,6 @@ type TrancheSub struct {
 	ScoreMissing string          `json:"score_missing"`
 	SizingMethod string          `json:"sizing_method"`
 	SizingScale  float64         `json:"sizing_scale"`
-	Seal999      bool            `json:"seal999"`
 	LongFactors  []TrancheFactor `json:"long_factors"`
 	ShortFactors []TrancheFactor `json:"short_factors"`
 	LongWeight   float64         `json:"long_weight"`
@@ -105,9 +102,8 @@ type TrancheSub struct {
 	Stop         *Stop           `json:"stop,omitempty"`
 }
 
-// TrancheSpec 是一条 tranche 规则的预设、候选选项、子策略模板与参数表；Subs 是校验时展开的结果。
+// TrancheSpec 是一条 tranche 规则的候选选项、子策略模板与参数表；Subs 是校验时展开的结果。
 type TrancheSpec struct {
-	Preset string
 	// RequireVolume 为真时候选还要求 volume 非空且 > 0（volume = 0 记 idle）；为假时不读 volume。
 	RequireVolume bool
 	hasCandidates bool
@@ -135,18 +131,6 @@ func ensureTranche(rule *Rule) *TrancheSpec {
 		rule.Tranche = &TrancheSpec{RequireVolume: true}
 	}
 	return rule.Tranche
-}
-
-func decodeTranchePreset(node *yaml.Node, path string, rule *Rule) error {
-	preset, err := scalarRequiredText(node, path)
-	if err != nil {
-		return err
-	}
-	if preset != PresetF1 {
-		return fmt.Errorf("%s 只能是 %s", path, PresetF1)
-	}
-	ensureTranche(rule).Preset = preset
-	return nil
 }
 
 func decodeTrancheCandidates(node *yaml.Node, path string, rule *Rule) error {
@@ -251,7 +235,7 @@ func (s Strategy) HasTranche() bool {
 // validateTrancheRule 校验 tranche 规则并展开子策略。
 func validateTrancheRule(prefix string, rule *Rule) error {
 	if rule.Pool.Explicit || rule.Filter != "" || rule.Score != "" || rule.HasSelect || rule.FilterAfter != "" || rule.Holding != nil || rule.Entry != "" || rule.Exit != "" {
-		return fmt.Errorf("%s 是 tranche 规则，只能使用 id、name、type、weight、preset、candidates、tranche、params", prefix)
+		return fmt.Errorf("%s 是 tranche 规则，只能使用 id、name、type、weight、candidates、tranche、params", prefix)
 	}
 	if rule.Side != SideLong {
 		return fmt.Errorf("%s 是 tranche 规则，多空方向写在 tranche 模板里（long_*、short_*），不能写 side", prefix)
@@ -296,7 +280,7 @@ func validateTrancheRule(prefix string, rule *Rule) error {
 			}
 		}
 		node := substitute(spec.Template, columnIndex, row)
-		sub, err := decodeTrancheSub(node, where, spec.Preset)
+		sub, err := decodeTrancheSub(node, where)
 		if err != nil {
 			return err
 		}
@@ -309,34 +293,20 @@ func validateTrancheRule(prefix string, rule *Rule) error {
 	return nil
 }
 
-// validateTrancheStrategy 做跨规则的校验：tranche 规则不与其他类型混用、seal999 一致、子策略总数、不能用 factor_params。
+// validateTrancheStrategy 做跨规则的校验：tranche 规则不与其他类型混用、子策略总数、不能用 factor_params。
 func validateTrancheStrategy(s *Strategy) error {
 	if !s.HasTranche() {
 		return nil
 	}
 	total := 0
-	seal := -1
 	for _, rule := range s.Rules {
 		if rule.Type != RuleTypeTranche {
 			return fmt.Errorf("含 tranche 规则的策略只能全部是 tranche 规则，规则 %s 是 %s", rule.ID, rule.Type)
 		}
 		total += len(rule.Tranche.Subs)
-		for _, sub := range rule.Tranche.Subs {
-			value := 0
-			if sub.Seal999 {
-				value = 1
-			}
-			if seal >= 0 && seal != value {
-				return errors.New("同一份策略里所有 tranche 子策略的 seal999 必须相同（年龄判定是策略级的）")
-			}
-			seal = value
-		}
 	}
 	if total > MaxTrancheSubStrategies {
 		return fmt.Errorf("tranche 子策略合计 %d 个，超过上限 %d", total, MaxTrancheSubStrategies)
-	}
-	if seal == 1 && s.Universe.MinAgeBars < 999 {
-		return errors.New("tranche 子策略开启了 seal999，需要 universe.min_age_bars ≥ 999（近似 F1 的去掉每个标的前 999 根）")
 	}
 	if len(s.FactorParams) > 0 {
 		return errors.New("含 tranche 规则的策略不支持 factor_params")
@@ -414,24 +384,19 @@ func (s TrancheSub) StopPrice() string {
 	return s.Stop.Price
 }
 
-// trancheDefaults 返回子策略的默认值：preset: f1 与 F1StrategyConfig 相同（hold_period=12、enable_seal999=True、
-// 两边权重与个数都为 1，按候选行计数、按数量持有、份额系数 0.5）；不写 preset 时按"对新策略最不意外"：只做多、
-// 因子空值不参与排名、持有期按 K 线根数、每批份额固定，hold_period 必填。
-func trancheDefaults(preset string) TrancheSub {
-	if preset == PresetF1 {
-		return TrancheSub{HoldPeriod: 12, HoldCount: HoldCountCandidateRows, ScoreMethod: ScoreRankSum, ScoreMissing: MissingMedian,
-			SizingMethod: SizingQuantity, SizingScale: 0.5, Seal999: true, LongWeight: 1, ShortWeight: 1, LongCoinNum: 1, ShortCoinNum: 1, StgWeight: 1}
-	}
+// trancheDefaults 返回子策略的默认值：只做多、因子空值不参与排名、持有期按 K 线根数、每批份额固定；hold_period 必填。
+// 其他做法（按候选行计数、按数量持有、空值补中位数名次等）都要在 DSL 里显式写出。
+func trancheDefaults() TrancheSub {
 	return TrancheSub{HoldCount: HoldCountBars, ScoreMethod: ScoreRankSum, ScoreMissing: MissingDrop,
 		SizingMethod: SizingWeight, SizingScale: 1, LongWeight: 1, LongCoinNum: 1, StgWeight: 1}
 }
 
-func decodeTrancheSub(node *yaml.Node, path, preset string) (TrancheSub, error) {
+func decodeTrancheSub(node *yaml.Node, path string) (TrancheSub, error) {
 	fields, err := mappingFields(node, path+" 的 tranche")
 	if err != nil {
 		return TrancheSub{}, err
 	}
-	sub := trancheDefaults(preset)
+	sub := trancheDefaults()
 	for _, f := range fields {
 		fieldPath := path + " 的 tranche." + f.key
 		switch f.key {
@@ -443,11 +408,6 @@ func decodeTrancheSub(node *yaml.Node, path, preset string) (TrancheSub, error) 
 			err = decodeTrancheScore(f.value, fieldPath, &sub)
 		case "sizing":
 			err = decodeTrancheSizing(f.value, fieldPath, &sub)
-		case "seal999":
-			if preset != PresetF1 {
-				return TrancheSub{}, fmt.Errorf("%s 只在 preset: f1 时可用（其他情况用 universe.min_age_bars）", fieldPath)
-			}
-			sub.Seal999, err = scalarBool(f.value, fieldPath)
 		case "long_factors":
 			sub.LongFactors, err = decodeTrancheFactors(f.value, fieldPath)
 		case "short_factors":
@@ -533,7 +493,7 @@ func decodeTrancheSizing(node *yaml.Node, path string, sub *TrancheSub) error {
 
 func validateTrancheSub(path string, sub *TrancheSub) error {
 	if sub.HoldPeriod < 1 || sub.HoldPeriod > MaxTrancheHoldPeriod {
-		return fmt.Errorf("%s 的 hold_period 必须在 1 到 %d 之间（不写 preset 时必填）", path, MaxTrancheHoldPeriod)
+		return fmt.Errorf("%s 的 hold_period 必须在 1 到 %d 之间（必填）", path, MaxTrancheHoldPeriod)
 	}
 	if sub.HoldCount != HoldCountCandidateRows && sub.HoldCount != HoldCountBars {
 		return fmt.Errorf("%s 的 hold_count 只能是 %s 或 %s", path, HoldCountCandidateRows, HoldCountBars)
@@ -709,19 +669,16 @@ func decodeTrancheFilter(node *yaml.Node, path string, allowGroup bool) (Tranche
 		filter.logic = logic
 		return filter, nil
 	}
-	// 默认值与 F1FilterParams 相同（direction=df1、filter_type=value、compare_operator=lt、filter_value=0.2）。
+	// direction 默认 long、type 默认 value；op 与 value 必填。
 	if op == "" {
-		op = "lt"
-	}
-	if valueNode == nil {
-		valueNode = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: "0.2"}
+		return TrancheFilter{}, fmt.Errorf("%s 缺少 op", path)
 	}
 	switch direction {
-	case "", "long", "df1":
-	case "short", "df2":
+	case "", "long":
+	case "short":
 		filter.Short = true
 	default:
-		return TrancheFilter{}, fmt.Errorf("%s.direction 必须是 long 或 short（也接受 df1、df2）", path)
+		return TrancheFilter{}, fmt.Errorf("%s.direction 必须是 long 或 short", path)
 	}
 	if column == "" {
 		return TrancheFilter{}, fmt.Errorf("%s 缺少 factor（列名）", path)
@@ -737,7 +694,7 @@ func decodeTrancheFilter(node *yaml.Node, path string, allowGroup bool) (Tranche
 	}
 	filter.Column, filter.Type, filter.RankAscending = column, ftype, rankAscending
 	if ftype == TrancheFilterPct {
-		filter.RankAscending = true // F1：pct 固定从小到大
+		filter.RankAscending = true // pct 固定从小到大
 	}
 	if err := normalizeTrancheCompare(&filter, op, valueNode, path); err != nil {
 		return TrancheFilter{}, err
@@ -745,7 +702,8 @@ func decodeTrancheFilter(node *yaml.Node, path string, allowGroup bool) (Tranche
 	return filter, nil
 }
 
-// normalizeTrancheCompare 按 f1_utils.filter_generate 把比较方式规范化为 between(Lo, Hi, Inclusive) 与是否取反。
+// normalizeTrancheCompare 把比较方式规范化为 between(Lo, Hi, Inclusive) 与是否取反：以 e 结尾的是闭区间，lt/gt 一类用 ±1e100 的有限边界，
+// nb* 与 ne 取反（所以 NaN 在它们下为真）。
 func normalizeTrancheCompare(filter *TrancheFilter, op string, valueNode *yaml.Node, path string) error {
 	if valueNode == nil {
 		return fmt.Errorf("%s 缺少 value", path)

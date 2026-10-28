@@ -53,11 +53,10 @@ describe("tuned template", () => {
 });
 
 describe("tranche rules", () => {
-  const f1 = `name: f1_demo
+  const tranche = `name: tranche_demo
 rules:
   - id: demo
     type: tranche
-    preset: f1
     weight: {total: 1}
     tranche:
       hold_period: "{h}"
@@ -69,14 +68,14 @@ rules:
         - [3, 65]
 `;
   it("accepts tranche rules and counts sub-strategies", () => {
-    const result = parseDSL(f1);
+    const result = parseDSL(tranche);
     expect(result.diagnostics).toEqual([]);
     expect(result.preview?.rules[0]).toMatchObject({ id: "demo", type: "tranche", subStrategies: 2 });
-    expect(summarizeDSL(f1)).toContain("tranche，2 个子策略");
+    expect(summarizeDSL(tranche)).toContain("tranche，2 个子策略");
   });
   it("rejects mixing tranche with other rule types", () => {
     const mixed =
-      f1 +
+      tranche +
       `  - id: other
     type: rank
 `;

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 通用默认与各选项（设计 3.1、3.2）：不写 preset 时只做多、因子空值不参与排名、持有期按根数、每批份额固定。
+// 默认值与各选项（设计 3.1、3.2）：只做多、因子空值不参与排名、持有期按根数、每批份额固定。
 
 func compileTranche(t *testing.T, body string, columns ...string) *dsl.Program {
 	t.Helper()
@@ -42,13 +42,9 @@ func trancheRow(close, volume, x float64) map[string]float64 {
 }
 
 func TestTrancheGenericDefaults(t *testing.T) {
-	// 不写 preset：hold_period 必填，seal999 不可用。
+	// hold_period 必填。
 	_, err := dsl.Parse([]byte("name: t\nrules:\n  - id: g\n    type: tranche\n    weight: 1\n    tranche:\n      long_factors: [{factor: x}]\n"))
 	require.ErrorContains(t, err, "hold_period")
-	_, err = dsl.Parse([]byte("name: t\nrules:\n  - id: g\n    type: tranche\n    weight: 1\n    tranche:\n      hold_period: 2\n      seal999: false\n      long_factors: [{factor: x}]\n"))
-	require.ErrorContains(t, err, "preset: f1")
-	_, err = dsl.Parse([]byte("name: t\nrules:\n  - id: g\n    type: tranche\n    weight: 1\n    preset: other\n    tranche:\n      hold_period: 2\n      long_factors: [{factor: x}]\n"))
-	require.ErrorContains(t, err, "preset")
 
 	// 每批份额 = 1 × 1 / h(2) / 1 = 0.5，不随价格变动；只做多。x 小者优先（descending: false）。
 	program := compileTranche(t, "    tranche:\n      hold_period: 2\n      long_factors: [{factor: x, descending: false}]\n", "x")

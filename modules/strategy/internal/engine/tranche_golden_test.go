@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 黄金用例：期望值由 alphalib F1 框架（alphalib-dev 的 F1Strategy / F1MultiStrategy 与 f1_utils）在合成数据上算出，
-// 生成脚本不在仓库里（它运行第三方代码）；用例只含合成数据与合成参数。见 docs/计划/F1策略迁移/F1策略迁移执行计划.md P4。
+// 黄金用例：期望值由一个外部参考实现（pandas 写的批次持仓选币框架）在合成数据上算出，生成脚本不在仓库里；
+// 用例只含合成数据与合成参数，DSL 显式写出参考实现的选项（按候选行计数、空值补中位数名次、按数量持有、份额系数 0.5）。
 
 type trancheGolden struct {
 	Name     string               `json:"name"`
@@ -24,7 +24,7 @@ type trancheGolden struct {
 
 func loadTrancheBars(t *testing.T) []map[string]map[string]float64 {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "f1", "bars.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "reference", "bars.json"))
 	require.NoError(t, err)
 	var bars []map[string]map[string]float64
 	require.NoError(t, json.Unmarshal(raw, &bars))
@@ -59,10 +59,10 @@ func columnsOf(bars []map[string]map[string]float64) []string {
 	return columns
 }
 
-func TestTrancheMatchesAlphalibGolden(t *testing.T) {
+func TestTrancheMatchesReferenceGolden(t *testing.T) {
 	bars := loadTrancheBars(t)
 	columns := columnsOf(bars)
-	files, err := filepath.Glob(filepath.Join("testdata", "f1", "*.json"))
+	files, err := filepath.Glob(filepath.Join("testdata", "reference", "*.json"))
 	require.NoError(t, err)
 	cases := 0
 	for _, path := range files {
@@ -101,7 +101,7 @@ func TestTrancheMatchesAlphalibGolden(t *testing.T) {
 						got, _ = weight.Rat().Float64()
 					}
 					if math.Abs(got-want[id]) > 1e-12 {
-						t.Fatalf("第 %d 期 %s：moox %.15g，F1 %.15g", i, id, got, want[id])
+						t.Fatalf("第 %d 期 %s：moox %.15g，参考 %.15g", i, id, got, want[id])
 					}
 				}
 			}
@@ -111,10 +111,10 @@ func TestTrancheMatchesAlphalibGolden(t *testing.T) {
 	require.GreaterOrEqual(t, cases, 12)
 }
 
-// 逻辑组合：TrancheStrategy 不接受元组写法，语义来自 f1_utils.filter_generate；期望值是它在每期样本上保留的标的。
-func TestTrancheLogicGroupMatchesF1Utils(t *testing.T) {
+// 逻辑组合：期望值是参考实现在每期样本上保留的标的。
+func TestTrancheLogicGroupMatchesReference(t *testing.T) {
 	bars := loadTrancheBars(t)
-	raw, err := os.ReadFile(filepath.Join("testdata", "f1", "logic_group_filter.json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "reference", "logic_group_filter.json"))
 	require.NoError(t, err)
 	var golden struct {
 		Logic string     `json:"logic"`
@@ -125,10 +125,12 @@ func TestTrancheLogicGroupMatchesF1Utils(t *testing.T) {
 rules:
   - id: g
     type: tranche
-    preset: f1
     weight: 1
     tranche:
-      seal999: false
+      hold_period: 12
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       long_factors: [{factor: x1}]
       short_weight: 0
       filter_before:

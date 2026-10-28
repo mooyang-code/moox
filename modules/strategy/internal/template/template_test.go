@@ -11,35 +11,35 @@ import (
 
 func loadBuiltin(t *testing.T) *Template {
 	t.Helper()
-	raw, err := os.ReadFile("../../templates/f1.yaml")
+	raw, err := os.ReadFile("../../templates/tranche_example.yaml")
 	require.NoError(t, err)
 	tpl, err := Parse(raw)
 	require.NoError(t, err)
 	return tpl
 }
 
-// 内置 f1 模板：变量按类型写入，参数表行按字面量类型填入，生成的 DSL 通过校验并展开成子策略。
-func TestRenderBuiltinF1(t *testing.T) {
+// 内置示例模板：变量按类型写入，参数表行按字面量类型填入，生成的 DSL 通过校验并展开成子策略。
+func TestRenderBuiltinExample(t *testing.T) {
 	tpl := loadBuiltin(t)
-	require.Equal(t, []string{"h", "s", "l", "n2", "p2", "w"}, tpl.Columns())
-	rows, err := tpl.ParseRows("h,s,l,n2,p2,w\n1,65,193,24,0.1,0.5\n3,109,325,12,0.2,0.5\n")
+	require.Equal(t, []string{"h", "n", "m", "p", "w"}, tpl.Columns())
+	rows, err := tpl.ParseRows("h,n,m,p,w\n1,20,24,0.1,0.5\n3,60,12,0.2,0.5\n")
 	require.NoError(t, err)
-	text, err := tpl.Render(map[string]string{"name": "FH003", "leverage": "3"}, rows)
+	text, err := tpl.Render(map[string]string{"name": "demo", "leverage": "3"}, rows)
 	require.NoError(t, err)
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
-	require.Equal(t, "FH003", strategy.Name)
+	require.Equal(t, "demo", strategy.Name)
 	require.Equal(t, "3", strategy.Portfolio.Leverage.String())
 	subs := strategy.Rules[0].Tranche.Subs
 	require.Len(t, subs, 2)
 	require.Equal(t, 3, subs[1].HoldPeriod)
-	require.Equal(t, "f1_po__109_325", subs[1].LongFactors[0].Column)
+	require.Equal(t, "momentum__60", subs[1].LongFactors[0].Column)
 	require.Equal(t, 0.5, subs[1].StgWeight)
 }
 
 func TestRenderRejects(t *testing.T) {
 	tpl := loadBuiltin(t)
-	rows := [][]string{{"1", "65", "193", "24", "0.1", "0.5"}}
+	rows := [][]string{{"1", "20", "24", "0.1", "0.5"}}
 	cases := map[string]struct {
 		vars map[string]string
 		rows [][]string
@@ -53,8 +53,8 @@ func TestRenderRejects(t *testing.T) {
 		"内嵌花括号":      {map[string]string{"name": "foo{h}"}, rows, "花括号"},
 		"空参数表":       {map[string]string{"name": "a"}, nil, "参数表不能为空"},
 		"列数不符":       {map[string]string{"name": "a"}, [][]string{{"1"}}, "有 1 列"},
-		"单元格含花括号":    {map[string]string{"name": "a"}, [][]string{{"1", "65", "193", "24", "0.1", "{w}"}}, "花括号"},
-		"生成的 DSL 无效": {map[string]string{"name": "a"}, [][]string{{"0", "65", "193", "24", "0.1", "0.5"}}, "hold_period"},
+		"单元格含花括号":    {map[string]string{"name": "a"}, [][]string{{"1", "20", "24", "0.1", "{w}"}}, "花括号"},
+		"生成的 DSL 无效": {map[string]string{"name": "a"}, [][]string{{"0", "20", "24", "0.1", "0.5"}}, "hold_period"},
 	}
 	for name, c := range cases {
 		_, err := tpl.Render(c.vars, c.rows)

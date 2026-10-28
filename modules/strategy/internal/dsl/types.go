@@ -80,7 +80,7 @@ type Holding struct {
 }
 
 // Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；
-// signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 F1。
+// signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 Tranche。
 type Rule struct {
 	ID          string
 	Name        string

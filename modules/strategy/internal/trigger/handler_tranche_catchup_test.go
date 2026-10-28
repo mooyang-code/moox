@@ -9,21 +9,22 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 )
 
-const trancheHoldDSL = `name: f1_demo
+const trancheHoldDSL = `name: tranche_demo
 bar: 1h
 universe: {}
 rules:
   - id: r
     type: tranche
-    preset: f1
     weight: {total: 1}
     tranche:
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       hold_period: 3
       long_weight: 2
       short_weight: 0
       long_coin_num: 1
       short_coin_num: 0
-      seal999: false
       long_factors: [{factor: "m", descending: true, weight: 1.0}]
       short_factors: []
       filter_before: []
@@ -54,7 +55,7 @@ func newTrancheHarness(t *testing.T) *harness {
 }
 
 // 追赶中的周期对 tranche 规则也求值、推进状态（记为 skipped(catchup)，不发目标）：放行后第一个正式周期的结果与从未中断一致。
-func TestCatchupAdvancesF1StateSoLiveResultMatchesUninterruptedRun(t *testing.T) {
+func TestCatchupAdvancesTrancheStateSoLiveResultMatchesUninterruptedRun(t *testing.T) {
 	control := newTrancheHarness(t)
 	for n := 1; n <= 4; n++ {
 		control.now = barStart(n).Add(90 * time.Minute)
@@ -94,7 +95,7 @@ func TestCatchupAdvancesF1StateSoLiveResultMatchesUninterruptedRun(t *testing.T)
 }
 
 // 有效期已过的迟到周期同样推进 tranche 状态（系统停机后事件延迟到达的情形），记为 skipped(expired)。
-func TestExpiredPeriodAdvancesF1State(t *testing.T) {
+func TestExpiredPeriodAdvancesTrancheState(t *testing.T) {
 	control := newTrancheHarness(t)
 	for n := 1; n <= 3; n++ {
 		control.now = barStart(n).Add(90 * time.Minute)
@@ -117,7 +118,7 @@ func TestExpiredPeriodAdvancesF1State(t *testing.T) {
 	}
 }
 
-// 追赶期求值不是 f1 专属：带持仓缓冲的 rank 策略，追赶期的持仓集合也要推进，放行后与连续运行一致。
+// 追赶期求值不是 tranche 专属：带持仓缓冲的 rank 策略，追赶期的持仓集合也要推进，放行后与连续运行一致。
 func TestCatchupAdvancesStateForRankStrategy(t *testing.T) {
 	build := func() *harness {
 		h := newHarness(t, rankDSL, nil)

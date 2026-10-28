@@ -8,18 +8,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// trancheDSL 是一个 FH 形状的 tranche 规则（参数为合成值）：Po 选最大 1 个做多，后置过滤 wick ≤ p2 时清仓。
+// trancheDSL 是一个典型形状的 tranche 规则（参数为合成值）：Po 选最大 1 个做多，后置过滤 wick ≤ p2 时清仓。
 func trancheDSL(rows string, extra string) string {
-	return `name: f1_demo
+	return `name: tranche_demo
 bar: 5m
 rules:
   - id: demo
     type: tranche
-    preset: f1
     weight: {total: 1}
     tranche:
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       hold_period: "{h}"
-      seal999: false
       long_factors:
         - {factor: "po__{s}_{l}", descending: true, weight: 1}
       short_factors: []
@@ -54,7 +55,6 @@ func TestTrancheParseExpandsRows(t *testing.T) {
 	require.Equal(t, 1, first.Row)
 	require.Equal(t, 1, first.HoldPeriod)
 	require.Equal(t, ScoreRankSum, first.ScoreMethod)
-	require.False(t, first.Seal999)
 	require.Equal(t, []TrancheFactor{{Column: "po__49_145", Descending: true, Weight: 1}}, first.LongFactors)
 	require.Equal(t, 2.0, first.LongWeight)
 	require.Equal(t, 0.0, first.ShortCoinNum)
@@ -78,32 +78,28 @@ func TestTrancheParseExpandsRows(t *testing.T) {
 	require.ElementsMatch(t, []int{2, 1}, sizes)
 }
 
-func TestTrancheDefaultsFollowF1(t *testing.T) {
+// 默认值：只做多、空值不参与排名、按根数计持有、每批份额固定；过滤条件 direction 默认 long、type 默认 value，op 与 value 必填。
+func TestTrancheDefaults(t *testing.T) {
 	strategy, err := Parse([]byte(`name: d
-universe: {min_age_bars: 999}
 rules:
   - id: d
     type: tranche
-    preset: f1
     weight: {total: 1}
     tranche:
+      hold_period: 3
       long_factors: [{factor: a}]
-      short_factors: [{factor: a}]
       filter_before:
-        - {factor: b}
-portfolio: {leverage: 2}
+        - {factor: b, op: lt, value: 0.2}
 `))
 	require.NoError(t, err)
 	sub := strategy.Rules[0].Tranche.Subs[0]
-	require.Equal(t, 12, sub.HoldPeriod)
-	require.True(t, sub.Seal999)
-	require.Equal(t, 1.0, sub.LongWeight)
-	require.Equal(t, 1.0, sub.ShortWeight)
-	require.Equal(t, 1.0, sub.LongCoinNum)
-	require.Equal(t, 1.0, sub.StgWeight)
-	require.Equal(t, TrancheFactor{Column: "a", Descending: true, Weight: 1}, sub.LongFactors[0])
-	// F1FilterParams 的默认值：df1、value、lt、0.2。
-	require.Equal(t, TrancheFilter{Column: "b", Type: TrancheFilterValue, Lo: -1e100, Hi: 0.2}, sub.FilterBefore[0])
+	require.Equal(t, TrancheSub{HoldPeriod: 3, HoldCount: HoldCountBars, ScoreMethod: ScoreRankSum, ScoreMissing: MissingDrop, SizingMethod: SizingWeight, SizingScale: 1,
+		LongFactors: []TrancheFactor{{Column: "a", Descending: true, Weight: 1}}, LongWeight: 1, LongCoinNum: 1, StgWeight: 1,
+		FilterBefore: []TrancheFilter{{Column: "b", Type: TrancheFilterValue, Lo: -1e100, Hi: 0.2}}}, sub)
+	_, err = Parse([]byte("name: d\nrules:\n  - id: d\n    type: tranche\n    weight: 1\n    tranche:\n      hold_period: 3\n      long_factors: [{factor: a}]\n      filter_before:\n        - {factor: b}\n"))
+	require.ErrorContains(t, err, "缺少 op")
+	_, err = Parse([]byte("name: d\nrules:\n  - id: d\n    type: tranche\n    weight: 1\n    tranche:\n      hold_period: 3\n      long_factors: [{factor: a}]\n      filter_before:\n        - {direction: df1, factor: b, op: lt, value: 1}\n"))
+	require.ErrorContains(t, err, "direction")
 }
 
 func TestTrancheCompareNormalization(t *testing.T) {
@@ -118,7 +114,7 @@ func TestTrancheCompareNormalization(t *testing.T) {
 		{"gte", "0.5", 0.5, 1e100, true, false},
 		{"bt", "[0.1, 0.9]", 0.1, 0.9, false, false},
 		{"bte", "[0.1, 0.9]", 0.1, 0.9, true, false},
-		// nb*：先把开闭取反再对结果取反（f1_utils：inclusive = not inclusive; reverse = '~'）。
+		// nb*：先把开闭取反再对结果取反。
 		{"nbt", "[0.1, 0.9]", 0.1, 0.9, true, true},
 		{"nbte", "[0.1, 0.9]", 0.1, 0.9, false, true},
 		{"eq", "0.5", 0.5, 0.5, true, false},
@@ -129,14 +125,16 @@ func TestTrancheCompareNormalization(t *testing.T) {
 rules:
   - id: c
     type: tranche
-    preset: f1
     weight: 1
     tranche:
-      seal999: false
+      hold_period: 12
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       long_factors: [{factor: a}]
       short_weight: 0
       filter_before:
-        - {direction: df1, factor: b, op: %s, value: %s}
+        - {direction: long, factor: b, op: %s, value: %s}
 `, c.op, c.value)
 		strategy, err := Parse([]byte(text))
 		require.NoError(t, err, c.op)
@@ -153,10 +151,12 @@ func TestTrancheLogicGroups(t *testing.T) {
 rules:
   - id: g
     type: tranche
-    preset: f1
     weight: 1
     tranche:
-      seal999: false
+      hold_period: 12
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       long_factors: [{factor: a}]
       short_weight: 0
       filter_before:
@@ -183,18 +183,20 @@ rules:
 }
 
 func TestTrancheRejects(t *testing.T) {
-	base := func(f1 string) string {
+	base := func(extra string) string {
 		return `name: r
 rules:
   - id: r
     type: tranche
-    preset: f1
     weight: 1
     tranche:
-      seal999: false
+      hold_period: 12
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       long_factors: [{factor: a}]
       short_weight: 0
-` + f1
+` + extra
 	}
 	cases := map[string]string{
 		"hold_period 越界": base("      hold_period: 0\n"),
@@ -226,10 +228,7 @@ rules:
     weight: {total: 0.5}
 `)))
 	require.ErrorContains(t, err, "只能全部是 tranche 规则")
-	// seal999 为真时要求 min_age_bars ≥ 999。
-	_, err = Parse([]byte("name: s\nrules:\n  - id: s\n    type: tranche\n    preset: f1\n    weight: 1\n    tranche:\n      long_factors: [{factor: a}]\n      short_weight: 0\n"))
-	require.ErrorContains(t, err, "seal999")
-	// rank 规则不能写 f1。
+	// rank 规则不能写 tranche。
 	_, err = Parse([]byte("name: x\nrules:\n  - id: x\n    type: rank\n    score: a\n    select: {top: 1}\n    weight: 1\n    tranche: {hold_period: 1}\n"))
 	require.ErrorContains(t, err, "不是 tranche 规则")
 }
@@ -265,7 +264,7 @@ func TestTrancheCompileChecksColumns(t *testing.T) {
 
 func TestTrancheRejectsNonFiniteNumbers(t *testing.T) {
 	for _, value := range []string{".nan", ".inf", "-.inf", "!!float NaN"} {
-		text := "name: n\nrules:\n  - id: n\n    type: tranche\n    preset: f1\n    weight: 1\n    tranche:\n      seal999: false\n      long_factors: [{factor: a}]\n      short_weight: 0\n      stg_weight: " + value + "\n"
+		text := "name: n\nrules:\n  - id: n\n    type: tranche\n    weight: 1\n    tranche:\n      hold_period: 12\n      hold_count: candidate_rows\n      score: {method: rank_sum, missing: median}\n      sizing: {method: quantity, scale: 0.5}\n      long_factors: [{factor: a}]\n      short_weight: 0\n      stg_weight: " + value + "\n"
 		_, err := Parse([]byte(text))
 		require.ErrorContains(t, err, "有限的数字", value)
 	}

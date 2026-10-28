@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fh003Shape 生成与 FH003 同等规模的 tranche 规则（合成参数）：32 个选币因子列 × 13 个过滤窗口 × 8 种持有期 × 若干阈值，共 1960 个子策略。
-func fh003Shape() (string, []string) {
+// largeShape 生成大规模的 tranche 规则（合成参数）：32 个选币因子列 × 13 个过滤窗口 × 8 种持有期 × 若干阈值，共 1960 个子策略。
+func largeShape() (string, []string) {
 	holds := []int{1, 2, 3, 4, 6, 12, 24, 36}
 	var rows strings.Builder
 	count := 0
@@ -21,15 +21,16 @@ func fh003Shape() (string, []string) {
 		fmt.Fprintf(&rows, "        - [%d, %d, %d, %g, %g]\n", holds[i%len(holds)], i%32, (i/32)%13, 0.05+0.025*float64(i%10), 0.0005)
 		count++
 	}
-	text := `name: fh003_shape
+	text := `name: large_shape
 rules:
-  - id: fh003
+  - id: large
     type: tranche
-    preset: f1
     weight: {total: 1}
     tranche:
+      hold_count: candidate_rows
+      score: {method: rank_sum, missing: median}
+      sizing: {method: quantity, scale: 0.5}
       hold_period: "{h}"
-      seal999: false
       long_factors: [{factor: "po__{n1}", descending: true, weight: 1}]
       short_factors: []
       long_weight: 2
@@ -62,7 +63,7 @@ type trancheScaleRun struct {
 }
 
 func newTrancheScaleRun(t testing.TB) *trancheScaleRun {
-	text, columns := fh003Shape()
+	text, columns := largeShape()
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
 	program, err := dsl.Compile(strategy, columns)
@@ -108,8 +109,8 @@ func (r *trancheScaleRun) frameWithGaps(bar int, previous map[string]map[string]
 	return Frame{BarIndex: int64(bar), Rows: rows, Universe: r.ids, Expected: map[string][]string{r.rule.Rule.ID: r.ids}, AgedOut: map[string][]string{}}, values
 }
 
-// 稳态状态体积：FH003 规模下跑 120 期（超过最长持有期 36 根），状态 JSON 不超过 256 KB。
-func TestTrancheStateSizeAtFH003Scale(t *testing.T) {
+// 稳态状态体积：大规模下跑 120 期（超过最长持有期 36 根），状态 JSON 不超过 256 KB。
+func TestTrancheStateSizeAtLargeScale(t *testing.T) {
 	run := newTrancheScaleRun(t)
 	var state RuleState
 	var previous map[string]map[string]float64
@@ -126,7 +127,7 @@ func TestTrancheStateSizeAtFH003Scale(t *testing.T) {
 		largest = max(largest, len(raw))
 	}
 	require.LessOrEqual(t, largest, trancheStateNoteBytes)
-	t.Logf("FH003 规模稳态状态最大 %d 字节", largest)
+	t.Logf("大规模稳态状态最大 %d 字节", largest)
 }
 
 // 多个币先后被选中、又轮流长期没有成交：开仓记录随之保留，状态体积仍在观察阈值内，明细给出 volume_zero。
@@ -175,8 +176,8 @@ func TestTrancheStateSizeWithRotatingGaps(t *testing.T) {
 	t.Logf("轮流长期缺行时状态最大 %d 字节", largest)
 }
 
-// BenchmarkTrancheEvaluateFH003Scale：FH003 规模的单期求值（含状态读写）。本机实测约 25 ms/期。
-func BenchmarkTrancheEvaluateFH003Scale(b *testing.B) {
+// BenchmarkTrancheEvaluateLargeScale：大规模的单期求值（含状态读写）。本机实测约 25 ms/期。
+func BenchmarkTrancheEvaluateLargeScale(b *testing.B) {
 	run := newTrancheScaleRun(b)
 	var state RuleState
 	var previous map[string]map[string]float64

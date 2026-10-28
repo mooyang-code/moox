@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-// tranche 规则的求值：语义与 alphalib F1 框架一致（docs/计划/F1策略迁移/F1策略迁移设计.md 第 1、7 节，F1-1～F1-14）。
+// tranche 规则的求值（docs/计划/批次持仓规则与止损设计.md 第 3 节）。
 
 const (
 	reasonTrancheFilterAfter = "tranche_filter_after"
@@ -127,10 +127,10 @@ func trancheRecordAlive(p TranchePick, subs []dsl.TrancheSub, members []int, bar
 	return false
 }
 
-// trancheKey 是同分时的排序键：F1 按 symbol（BTCUSDT）排序，moox 的标的 ID 是 BTC-USDT，去掉 "-" 后比较。
+// trancheKey 是同分时的排序键：标的 ID（BTC-USDT）去掉 "-" 后比较。
 func trancheKey(id string) string { return strings.ReplaceAll(id, "-", "") }
 
-// trancheSample 是一期的样本：按 F1 的行顺序（symbol 升序）排好的标的，以及取列值的方法。
+// trancheSample 是一期的样本：按 trancheKey 升序排好的标的，以及取列值的方法。
 type trancheSample struct {
 	ids   []string
 	frame Frame
@@ -198,7 +198,7 @@ func firstRanks(values []float64, ascending, pct bool) []float64 {
 	return ranks
 }
 
-// fillMedian 用非 NaN 值的中位数补上 NaN（F1：groupby(...).transform('median') 后 fillna）；全是 NaN 时保持 NaN。
+// fillMedian 用非 NaN 值的中位数补上 NaN（同一期内的截面中位数）；全是 NaN 时保持 NaN。
 func fillMedian(values []float64) []float64 {
 	valid := make([]float64, 0, len(values))
 	for _, v := range values {
@@ -223,7 +223,7 @@ func fillMedian(values []float64) []float64 {
 	return out
 }
 
-// trancheScores 按 F1-2、F1-3 计算多空两边的合成分数（在全部候选行 B 上）。cross 模式下多空因子不同时分两遍原地改写：
+// trancheScores 计算多空两边的合成分数（在全部候选行 B 上）。rank_sum 下多空因子不同时分两遍原地改写：
 // 先排多头列表的列并算多头分数，再在当前值（共用的列已经是名次）上排空头列表的列并算空头分数。
 func trancheScores(sample trancheSample, sub dsl.TrancheSub) (long, short []float64) {
 	current := make(map[string][]float64)
@@ -288,7 +288,7 @@ func sameTrancheFactors(a, b []dsl.TrancheFactor) bool {
 	return true
 }
 
-// trancheCondition 按 F1-8、F1-9 在样本上计算一个条件：rank / pct 在样本内排名后比较，between 的开闭与取反已在 DSL 里规范化。
+// trancheCondition 在样本上计算一个条件：rank / pct 在样本内排名后比较，between 的开闭与取反已在 DSL 里规范化。
 func trancheCondition(sample []string, values func(id string) float64, filter dsl.TrancheFilter) []bool {
 	raw := make([]float64, len(sample))
 	for i, id := range sample {
@@ -360,7 +360,7 @@ func listFilter(ids []string, white, black []string) []string {
 	return out
 }
 
-// trancheSelection 是一个排名签名本期的选币结果（F1-4～F1-10）。
+// trancheSelection 是一个排名签名本期的选币结果。
 type trancheSelection struct {
 	picks        []TranchePick
 	beforeFilter int // 被前置过滤（含名单）去掉的候选数，多空合计
@@ -427,7 +427,7 @@ func selectTrancheGroup(sample trancheSample, sub dsl.TrancheSub, barIndex int64
 	return selection
 }
 
-// passAfter 计算组内每个子策略的后置过滤（F1-11）：在本期选中的样本上一次性判断，任一条件成立就剔除。
+// passAfter 计算组内每个子策略的后置过滤：在本期选中的样本上一次性判断，任一条件成立就剔除。
 // 返回每个开仓记录的通过位图（组内子策略按 group.Subs 的顺序编号）。
 func passAfter(sample trancheSample, picks []TranchePick, subs []dsl.TrancheSub, members []int) []string {
 	bits := make([][]byte, len(picks))
@@ -513,7 +513,7 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 	for _, id := range sets.expected {
 		expected[id] = struct{}{}
 	}
-	// 1. 候选行 B：可用集合（有行且 volume > 0），按 F1 的行顺序（symbol 升序）排列。
+	// 1. 候选行 B：可用集合（有行且 volume > 0），按 trancheKey 升序排列。
 	candidates := append([]string(nil), sets.available...)
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := trancheKey(candidates[i]), trancheKey(candidates[j])

@@ -15,7 +15,7 @@
       </a-form-item>
       <template v-if="selected">
         <a-form-item label="策略名" required>
-          <a-input v-model="name" placeholder="生成的策略名，例如 FH003" />
+          <a-input v-model="name" placeholder="生成的策略名" />
         </a-form-item>
         <a-form-item v-for="variable in selected.variables" :key="variable" :label="variable">
           <a-input v-model="variables[variable]" placeholder="留空用模板的默认值" />

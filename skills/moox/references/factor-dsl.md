@@ -160,7 +160,7 @@ rules:
 - `ts_*_relaxed(x, n, m)` 对应 pandas `rolling(n, min_periods=m)`：窗口开头是 NaN（序列还没开始）时，有效值不少于 `m` 个就出值；`m ≤ n`，`ts_std_relaxed` 的 `m ≥ 2`。
 - `ema_relaxed(x, n, k)` 对应 `ewm(span=n, adjust=False)` 从序列首根递推；`k` 的含义同 `ema`。
 - 有效值之后再出现 NaN 仍为 NaN（pandas 的 `min_periods` 会跳过中途 NaN，这里不跳过）；窗口没有 NaN 时与严格算子逐位一致，只影响序列开头。
-- **何时用**：只在需要与外部（pandas）因子在上市初期逐值对齐时用，例如 F1 迁移。**新写因子默认用严格算子。**
+- **何时用**：只在需要与外部（pandas）因子在上市初期逐值对齐时用。**新写因子默认用严格算子。**
 - **为什么不默认用**：用 1～2 根数据算的均值、标准差噪声很大，`ema_relaxed` 的开头值带起点偏差；截面排名里新上市标的会从第一根就参与并容易被噪声推到极端位置。
   需要排除历史不足的标的时，优先在策略里用年龄剔除（`aged_out`）与 `min_universe`，不要靠因子本身。
 - 用了宽松算子的因子，验收时"暖机新空"必须为 0，并用一个历史很短的标的单独核对序列开头。
@@ -220,7 +220,7 @@ rules:
 - **自定义 lambda 要在窗口内二次遍历**：例如平均绝对偏差 `np.abs(w - w.mean()).mean()`，要先算窗口均值，再逐根处理，表达式写不出来。
 - **跳过 NaN 的函数**：例如 `np.nanmean`、`np.nanstd`。引擎是严格窗口，只有"序列开头的 NaN"能用 `_relaxed` 算子处理。
 - **非线性的自定义权重**：例如 `np.average(w, weights=...)`。
-- **窗口长度来自运算**：例如窗口写成 `2 * n + 1`。换算要在参数层面做，做法是拆成多个参数，F1 的 Po 就是这样，见 `modules/factor/factors/f1.yaml`。
+- **窗口长度来自运算**：例如窗口写成 `2 * n + 1`。换算要在参数层面做，做法是拆成多个参数，例如 `ewm(com=n)` 与 `ewm(com=3n)` 换成 `ema(close, short_span)` 与 `ema(close, long_span)`，转换脚本里按 `span = 2·com + 1` 换算后写进成员参数。
 
 遇到这些写法，按下面"不支持"的规则处理。确实常用的（如 MAD、`nanmean`），可以在 `packages/factorexpr` 里新增函数。
 新增后要发布 factor-mgr 和因子引擎，并重新编译本机的 `moox-cli`。

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 比较方式 × 区间边界 × NaN 的独立求值表（不串联，避免前面的条件掩盖后面的边界）。期望值按 f1_utils：
+// 比较方式 × 区间边界 × NaN 的独立求值表（不串联，避免前面的条件掩盖后面的边界）。期望值按参考实现：
 // pandas between(lo, hi, inclusive) 对 NaN 为假，nb* 与 ne 再取反，所以 NaN 在 nb* 与 ne 下为真。
 func TestTrancheConditionTable(t *testing.T) {
 	nan := math.NaN()
@@ -40,7 +40,7 @@ func TestTrancheConditionTable(t *testing.T) {
 		return values[index]
 	}
 	for _, c := range cases {
-		text := fmt.Sprintf("name: c\nrules:\n  - id: c\n    type: tranche\n    preset: f1\n    weight: 1\n    tranche:\n      seal999: false\n      long_factors: [{factor: a}]\n      short_weight: 0\n      filter_before:\n        - {factor: b, op: %s, value: %s}\n", c.op, c.value)
+		text := fmt.Sprintf("name: c\nrules:\n  - id: c\n    type: tranche\n    weight: 1\n    tranche:\n      hold_period: 12\n      hold_count: candidate_rows\n      score: {method: rank_sum, missing: median}\n      sizing: {method: quantity, scale: 0.5}\n      long_factors: [{factor: a}]\n      short_weight: 0\n      filter_before:\n        - {factor: b, op: %s, value: %s}\n", c.op, c.value)
 		strategy, err := dsl.Parse([]byte(text))
 		require.NoError(t, err, c.op)
 		got := trancheCondition(ids, lookup, strategy.Rules[0].Tranche.Subs[0].FilterBefore[0])

@@ -15,7 +15,7 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
-	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（F1 只保留 volume > 0 的行）。
+	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（require_volume 时只有 volume > 0 的行是候选）。
 	inactive []string
 }
 

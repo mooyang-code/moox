@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
-// 等价基准（设计 3.4）：重构前用旧 f1 求值生成每期的目标权重与开仓记录，重构后用 tranche + preset: f1 逐期比较。
+// 等价基准（设计 3.4）：重构前用旧实现生成每期的目标权重与开仓记录，重构后用显式写出参考选项的 tranche 规则逐期比较。
 // 基准文件不进仓库，用 TRANCHE_BASELINE_IN 指定；没有设置时跳过。
 
 type trancheBaselineBar struct {
@@ -36,22 +36,128 @@ type trancheBaselineScenario struct {
 	Bars    []trancheBaselineBar `json:"bars"`
 }
 
-var (
-	legacyTypePattern = regexp.MustCompile(`type: f1\n([ \t]*)`)
-	legacyKeyPattern  = regexp.MustCompile(`\n([ \t]+)f1:`)
-	legacyCalcPattern = regexp.MustCompile(`calc_factor_type: "?(cross|vertical)"?`)
-)
-
-// legacyToTranche 把旧 f1 写法改成 tranche + preset: f1。
-func legacyToTranche(text string) string {
-	text = legacyTypePattern.ReplaceAllString(text, "type: tranche\n${1}preset: f1\n${1}")
-	text = legacyKeyPattern.ReplaceAllString(text, "\n${1}tranche:")
-	return legacyCalcPattern.ReplaceAllStringFunc(text, func(match string) string {
-		if strings.Contains(match, "vertical") {
-			return "score: {method: raw_sum}"
+// legacyToTranche 把基准里的旧写法（type: f1，默认值按参考实现）改成显式写出全部选项的 tranche 规则。
+func legacyToTranche(t *testing.T, text string) string {
+	t.Helper()
+	var doc yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(text), &doc))
+	root := doc.Content[0]
+	if rules := yamlValue(root, "rules"); rules != nil {
+		for _, rule := range rules.Content {
+			if kind := yamlValue(rule, "type"); kind != nil && (kind.Value == "f1" || kind.Value == "tranche") {
+				kind.Value = "tranche"
+				yamlDelete(rule, "preset")
+				for i := 0; i+1 < len(rule.Content); i += 2 {
+					if rule.Content[i].Value == "f1" {
+						rule.Content[i].Value = "tranche"
+					}
+				}
+				if template := yamlValue(rule, "tranche"); template != nil {
+					explicitReferenceOptions(template)
+				}
+			}
 		}
-		return "score: {method: rank_sum}"
-	})
+	}
+	raw, err := yaml.Marshal(root)
+	require.NoError(t, err)
+	return string(raw)
+}
+
+// explicitReferenceOptions 写出参考实现的默认值：持有 12 期、按候选行计数、空值补中位数名次、按数量持有（份额系数 0.5）、
+// 多空权重与个数都为 1；过滤条件 op 默认 lt、value 默认 0.2，df1/df2 写成 long/short。
+func explicitReferenceOptions(template *yaml.Node) {
+	yamlDelete(template, "seal999")
+	method := "rank_sum"
+	if calc := yamlValue(template, "calc_factor_type"); calc != nil {
+		if strings.Trim(calc.Value, `"`) == "vertical" {
+			method = "raw_sum"
+		}
+		yamlDelete(template, "calc_factor_type")
+	}
+	if score := yamlValue(template, "score"); score != nil {
+		if m := yamlValue(score, "method"); m != nil {
+			method = m.Value
+		}
+		yamlDelete(template, "score")
+	}
+	defaults := []struct{ key, value string }{
+		{"hold_period", "12"}, {"long_weight", "1"}, {"short_weight", "1"}, {"long_coin_num", "1"}, {"short_coin_num", "1"},
+	}
+	for _, d := range defaults {
+		if yamlValue(template, d.key) == nil {
+			yamlSet(template, d.key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: d.value})
+		}
+	}
+	yamlSet(template, "hold_count", &yaml.Node{Kind: yaml.ScalarNode, Value: "candidate_rows"})
+	yamlSet(template, "score", yamlMap("method", method, "missing", "median"))
+	yamlSet(template, "sizing", yamlMap("method", "quantity", "scale", "0.5"))
+	for _, key := range []string{"filter_before", "filter_after"} {
+		if filters := yamlValue(template, key); filters != nil {
+			explicitFilters(filters)
+		}
+	}
+}
+
+func explicitFilters(list *yaml.Node) {
+	for _, filter := range list.Content {
+		if items := yamlValue(filter, "items"); items != nil {
+			explicitFilters(items)
+			continue
+		}
+		if direction := yamlValue(filter, "direction"); direction != nil {
+			switch direction.Value {
+			case "df1":
+				direction.Value = "long"
+			case "df2":
+				direction.Value = "short"
+			}
+		}
+		if yamlValue(filter, "op") == nil {
+			yamlSet(filter, "op", &yaml.Node{Kind: yaml.ScalarNode, Value: "lt"})
+		}
+		if yamlValue(filter, "value") == nil {
+			yamlSet(filter, "value", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: "0.2"})
+		}
+	}
+}
+
+func yamlValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func yamlDelete(node *yaml.Node, key string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content = append(node.Content[:i], node.Content[i+2:]...)
+			return
+		}
+	}
+}
+
+func yamlSet(node *yaml.Node, key string, value *yaml.Node) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1] = value
+			return
+		}
+	}
+	node.Content = append(node.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: key}, value)
+}
+
+func yamlMap(pairs ...string) *yaml.Node {
+	out := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out.Content = append(out.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: pairs[i]}, &yaml.Node{Kind: yaml.ScalarNode, Value: pairs[i+1]})
+	}
+	return out
 }
 
 func TestTrancheMatchesLegacyBaseline(t *testing.T) {
@@ -66,7 +172,7 @@ func TestTrancheMatchesLegacyBaseline(t *testing.T) {
 	require.NotEmpty(t, scenarios)
 	for _, scenario := range scenarios {
 		t.Run(scenario.Name, func(t *testing.T) {
-			strategy, err := dsl.Parse([]byte(legacyToTranche(scenario.DSL)))
+			strategy, err := dsl.Parse([]byte(legacyToTranche(t, scenario.DSL)))
 			require.NoError(t, err)
 			program, err := dsl.Compile(strategy, scenario.Columns)
 			require.NoError(t, err)

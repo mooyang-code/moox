@@ -169,7 +169,7 @@ func validateRule(rule *Rule) error {
 		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
 	}
 	if rule.Tranche != nil && rule.Type != RuleTypeTranche {
-		return fmt.Errorf("%s 不是 tranche 规则，不能写 preset、candidates、tranche 或 params", prefix)
+		return fmt.Errorf("%s 不是 tranche 规则，不能写 candidates、tranche 或 params", prefix)
 	}
 	switch rule.Type {
 	case RuleTypeRank:

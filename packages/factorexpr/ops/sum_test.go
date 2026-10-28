@@ -229,8 +229,8 @@ func emaTerms(span int, k int) []float64 {
 	return out
 }
 
-// FH003 的 32 个 Po 成员（n 取自线上会话快照）：短线 ema_relaxed(close, 2n+1)，长线 ema_relaxed(close, 6n+1, 50000)。
-func BenchmarkFH003Members(b *testing.B) {
+// 一个大型选币任务的 32 组长短 EMA 成员（n 取自线上会话快照）：短线 ema_relaxed(close, 2n+1)，长线 ema_relaxed(close, 6n+1, 50000)。
+func BenchmarkLongEMAMembers(b *testing.B) {
 	ns := []int{65, 85, 109, 137, 169, 205, 245, 289, 445, 949, 1037, 1129, 1225, 1325, 1429, 1537, 1649, 1765, 1885, 2009, 2137, 2269, 2405, 2545, 2689, 2837, 2989, 3145, 3305, 3637, 3809, 3985}
 	var sets [][]float64
 	for _, n := range ns {
