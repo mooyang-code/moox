@@ -145,6 +145,8 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 `scripts/factor_py_check.py run-python` 运行原因子、`scripts/factor-expr.sh eval` 试算 DSL，`factor_py_check.py compare` 按验收规则逐值比较，
 向用户汇报差异并在用户确认后写入（`moox-cli setup factors` 或控制台），最后做写入后验证。
 不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
+修改已注册因子的定义（改表达式、参数范围）时，读同一文档“修改已有因子的定义”：被启用成员引用的定义不能改，
+引用时不能增删改参数与输出；加参数组合只需加成员，改逻辑优先新建因子并行切换。
 
 ### Python Factor Strategy Migration
 
