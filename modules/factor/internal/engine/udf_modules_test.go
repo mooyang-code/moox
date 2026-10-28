@@ -332,3 +332,26 @@ func TestSyncPreparedModulesSurviveAReclaimBeforeTheCatalogIsApplied(t *testing.
 	r.retainModules()
 	require.False(t, r.udf.host.Has(hash))
 }
+
+// 准备失败遗留的同步登记，在下一次同步成功（哪怕目录没有变化）时释放，之后回收照常进行。
+func TestStaleSyncPinIsReleasedWhenTheNextSyncIsNotModified(t *testing.T) {
+	wasm := exampleWasm(t, "ts_mean")
+	task, hash := udfTask(t, wasm)
+	f := &fakeFetcher{files: map[string][]byte{hash: wasm}}
+	r, _ := newLifecycleRuntime(t)
+	r.udf = newModules(t, f)
+	r.udf.reclaim = r.reclaimModules
+	ctx := context.Background()
+
+	// 准备目录 B 之后没有应用（应用失败或管理端撤销了变更）：登记遗留。
+	require.NoError(t, r.prepareSnapshot(ctx, CatalogSnapshot{Hash: "h-b", Sets: []domain.EngineTask{task}}))
+	require.True(t, r.udf.host.Has(hash))
+	require.NotNil(t, r.udf.syncPin)
+
+	// 下一次同步目录没变：应用回调仍然被调用，登记释放、不再被目录引用的模块被回收。
+	client := &catalogClientFake{snapshots: []CatalogSnapshot{{NotModified: true, Hash: r.catalog.Status().Hash}}}
+	syncer := &catalogSyncer{client: client, cache: r.catalog, prepare: r.prepareSnapshot, applied: r.retainModules}
+	require.NoError(t, syncer.SyncOnce(ctx))
+	require.Nil(t, r.udf.syncPin)
+	require.False(t, r.udf.host.Has(hash))
+}

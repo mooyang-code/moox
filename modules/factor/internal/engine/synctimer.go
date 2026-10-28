@@ -35,7 +35,7 @@ type catalogSyncer struct {
 	onChange func()
 	now      func() time.Time
 	// prepare 在新快照应用之前调用：把快照引用的自定义算子模块备齐（拉取、校验、编译）。返回错误时不应用快照、不记下快照哈希，
-	// 下次同步会重新取得。applied 在快照应用之后调用（卸载不再引用的模块）。都可为 nil。
+	// 下次同步会重新取得。applied 在每次同步成功之后调用（释放同步登记，卸载不再引用的模块）。都可为 nil。
 	prepare func(ctx context.Context, snapshot CatalogSnapshot) error
 	applied func()
 	// okAt 是最近一次成功同步的请求发出的时间：恢复追赶的前置条件要的是“恢复之后发出的请求”成功过，而不是响应在恢复之后到达
@@ -79,7 +79,8 @@ func (s *catalogSyncer) SyncOnce(ctx context.Context) error {
 	if err == nil {
 		var changed bool
 		if changed, err = s.cache.Apply(snapshot); err == nil {
-			if !snapshot.NotModified && s.applied != nil {
+			// 目录没变（NotModified）也要调用：上一次准备失败遗留的同步登记要在这里释放，保留集合以当前目录为准。
+			if s.applied != nil {
 				s.applied()
 			}
 			s.mu.Lock()

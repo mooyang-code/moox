@@ -175,10 +175,12 @@ func (m *udfModules) Status() []domain.UDFModuleStatus {
 	return out
 }
 
-// Retain 只保留当前目录引用的版本的状态与已加载模块（卸载不再引用的）；hashes 是仍被引用的版本。
-func (m *udfModules) Retain(ctx context.Context, hashes map[string]bool) {
+// Retain 只保留当前目录引用的版本的状态与已加载模块（卸载不再引用的）；referenced 返回仍被引用的版本，
+// 在持有 retainMu 之后才调用：保留集合的读取与卸载必须在同一次串行区间内，否则读到旧目录之后目录又被应用，旧集合会把新版本卸载。
+func (m *udfModules) Retain(ctx context.Context, referenced func() map[string]bool) {
 	m.retainMu.Lock()
 	defer m.retainMu.Unlock()
+	hashes := referenced()
 	m.mu.Lock()
 	keep := make(map[string]bool, len(hashes)+len(m.pins))
 	for hash := range hashes {
@@ -215,11 +217,14 @@ func (m *udfModules) holdForSync(refs []udfRef) {
 }
 
 // dropSyncPin 释放目录同步的登记（新目录已经应用，保留集合以新目录为准）。
+// 要等正在进行的 Retain 结束：它可能读的是应用之前的目录，这时还靠同步登记保护新版本。
 func (m *udfModules) dropSyncPin() {
+	m.retainMu.Lock()
 	m.mu.Lock()
 	pin := m.syncPin
 	m.syncPin = nil
 	m.mu.Unlock()
+	m.retainMu.Unlock()
 	if pin != nil {
 		pin()
 	}
@@ -339,14 +344,16 @@ func (r *Runtime) reclaimModules() {
 	if r.udf == nil {
 		return
 	}
-	keep := map[string]bool{}
-	for _, ref := range refsOfTasks(r.catalog.Sets()) {
-		keep[ref.hash] = true
-	}
-	for hash := range r.replays.udfHashes() {
-		keep[hash] = true
-	}
-	r.udf.Retain(context.Background(), keep)
+	r.udf.Retain(context.Background(), func() map[string]bool {
+		keep := map[string]bool{}
+		for _, ref := range refsOfTasks(r.catalog.Sets()) {
+			keep[ref.hash] = true
+		}
+		for hash := range r.replays.udfHashes() {
+			keep[hash] = true
+		}
+		return keep
+	})
 }
 
 // prepareJobModules 是补算领取的入口：作业绑定的模块备齐后才执行；失败时作业报告失败，不写任何分块。
