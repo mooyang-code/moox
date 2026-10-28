@@ -616,9 +616,7 @@ func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 						cooldown[key] = make(map[string]int64)
 					}
 					cooldown[key][p.ID] = frame.BarIndex + int64(sub.Stop.CooldownBars)
-					if _, seen := stoppedReason[p.ID]; !seen {
-						stoppedReason[p.ID] = reason
-					}
+					stoppedReason[p.ID] = strongerStopReason(stoppedReason[p.ID], reason)
 					stoppedUnits[p.ID]++
 					result.stops[reason]++
 				}

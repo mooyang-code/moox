@@ -59,6 +59,9 @@ const dsl = ref("");
 const error = ref("");
 const rendering = ref(false);
 const creating = ref(false);
+// 预览请求的版本号：输入变化或重新生成后，晚到的旧响应不写回预览，避免创建出与当前表单不一致的策略。
+let renderVersion = 0;
+let lastRequest = 0;
 const selected = computed(() => templates.value.find(item => item.template_id === templateId.value));
 
 function message(err: unknown) {
@@ -85,19 +88,30 @@ async function onFile(event: Event) {
   if (file) paramsCsv.value = await file.text();
 }
 // 输入变化后旧预览作废，必须重新生成才能创建。
-watch([name, paramsCsv, () => ({ ...variables })], () => (dsl.value = ""), { deep: true });
+watch(
+  [templateId, name, paramsCsv, () => ({ ...variables })],
+  () => {
+    renderVersion++;
+    dsl.value = "";
+  },
+  { deep: true }
+);
 async function render() {
   if (!selected.value) return;
   error.value = "";
   rendering.value = true;
+  const version = ++renderVersion;
+  lastRequest = version;
   try {
     const values: Record<string, string> = { name: name.value.trim() };
     for (const [key, value] of Object.entries(variables)) if (value.trim()) values[key] = value.trim();
-    dsl.value = await renderStrategyTemplate(selected.value.template_id, values, paramsCsv.value);
+    const text = await renderStrategyTemplate(selected.value.template_id, values, paramsCsv.value);
+    if (version === renderVersion) dsl.value = text;
   } catch (err) {
-    error.value = message(err);
+    if (version === renderVersion) error.value = message(err);
   } finally {
-    rendering.value = false;
+    // 只有最后一次发出的请求结束时才取消加载状态；输入变化不会发请求，所以它也会在这里复位。
+    if (version === lastRequest) rendering.value = false;
   }
 }
 async function create() {

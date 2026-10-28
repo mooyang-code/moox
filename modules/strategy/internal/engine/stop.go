@@ -88,7 +88,10 @@ func evaluateStop(stop *dsl.Stop, entry StopEntry, prices stopPrices, short bool
 	if short {
 		lossMove, trailMove, profitMove = prices.adverse/price-1, prices.adverse/peak-1, 1-prices.favorable/price
 	}
-	reached := func(move, threshold float64) bool { return threshold > 0 && move >= threshold-stopEpsilon }
+	// 余量取阈值的一半与 stopEpsilon 的较小者，极小的阈值在价格不变时也不会触发。
+	reached := func(move, threshold float64) bool {
+		return threshold > 0 && move >= threshold-math.Min(stopEpsilon, threshold/2)
+	}
 	switch {
 	case reached(lossMove, stop.Loss):
 		return reasonStopLoss
@@ -98,6 +101,17 @@ func evaluateStop(stop *dsl.Stop, entry StopEntry, prices stopPrices, short bool
 		return reasonTakeProfit
 	}
 	return ""
+}
+
+// stopReasonRank 是同一标的多个持仓单位同期触发时，明细原因的优先级（设计 4.3）。
+var stopReasonRank = map[string]int{reasonStopLoss: 3, reasonTrailingStop: 2, reasonTakeProfit: 1}
+
+// strongerStopReason 返回两个原因中优先级高的一个（空串最低），不随批次或开仓记录的处理顺序变化。
+func strongerStopReason(current, next string) string {
+	if stopReasonRank[next] > stopReasonRank[current] {
+		return next
+	}
+	return current
 }
 
 // advancePeak 在判断之后用本期有利方向的价格更新最有利价格。
@@ -153,9 +167,7 @@ func (t *stopTracker) check(id string, entry StopEntry) (StopEntry, bool) {
 		return entry, false
 	}
 	if reason := evaluateStop(t.stop, entry, prices, t.short); reason != "" {
-		if _, seen := t.stopped[id]; !seen {
-			t.stopped[id] = reason
-		}
+		t.stopped[id] = strongerStopReason(t.stopped[id], reason)
 		t.units[id]++
 		t.counts[reason]++
 		t.cooldown[id] = t.frame.BarIndex + int64(t.stop.CooldownBars)

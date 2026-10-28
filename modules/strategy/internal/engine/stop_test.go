@@ -23,6 +23,13 @@ func TestEvaluateStopLongAndShort(t *testing.T) {
 	require.Equal(t, reasonTakeProfit, evaluateStop(profit, entry, close(110), false))
 	require.Equal(t, reasonTakeProfit, evaluateStop(profit, entry, close(90), true))
 
+	// 极小阈值：价格不变不触发。
+	tiny := &dsl.Stop{Loss: 1e-13, Price: dsl.StopPriceClose}
+	require.Equal(t, "", evaluateStop(tiny, entry, close(100), false))
+	require.Equal(t, reasonTakeProfit, strongerStopReason("", reasonTakeProfit))
+	require.Equal(t, reasonStopLoss, strongerStopReason(reasonTakeProfit, reasonStopLoss))
+	require.Equal(t, reasonStopLoss, strongerStopReason(reasonStopLoss, reasonTrailingStop))
+
 	// 同期止损与止盈都满足（只可能在 extreme 下）：按止损记。
 	both := &dsl.Stop{Loss: 0.05, Profit: 0.1, Price: dsl.StopPriceExtreme}
 	require.Equal(t, reasonStopLoss, evaluateStop(both, entry, stopPrices{close: 100, adverse: 94, favorable: 111}, false))
