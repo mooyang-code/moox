@@ -20,7 +20,9 @@ describe("strategy DSL preview", () => {
     expect(parseDSL("name: a\nrules: {rank: {}}\n").diagnostics.map(item => item.message)).toContain(
       "rules 必须是非空列表，每条规则包含 id 与 type"
     );
-    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("rank、signal 或 tranche");
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain(
+      "rank、signal 或 tranche"
+    );
     expect(parseDSL("name: [").preview).toBeNull();
   });
 

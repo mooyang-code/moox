@@ -151,7 +151,16 @@ export function stageColor(stage: string): string {
 }
 
 /** 解释明细的阶段顺序：入选的放最前面，其次是止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
-const stageOrder: Record<string, number> = { weighted: 0, stopped: 1, dropped: 2, scored: 3, missing: 4, idle: 5, filtered: 6, aged_out: 7 };
+const stageOrder: Record<string, number> = {
+  weighted: 0,
+  stopped: 1,
+  dropped: 2,
+  scored: 3,
+  missing: 4,
+  idle: 5,
+  filtered: 6,
+  aged_out: 7
+};
 
 /** 解释明细排序：按阶段，再按名次（无名次的在后），最后按标的；入选的几个标的不会淹没在几百个被过滤的标的里。 */
 export function sortResultItems<T extends { stage: string; rank?: number; instrument_id: string; rule_id: string }>(

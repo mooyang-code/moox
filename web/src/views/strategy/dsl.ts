@@ -160,7 +160,10 @@ export function summarizeDSL(source: string): string {
   if (!preview) return "DSL 无法解析";
   if (!preview.rules.length) return "DSL 没有规则";
   const rules = preview.rules
-    .map(rule => `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}）`)
+    .map(
+      rule =>
+        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}）`
+    )
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }
