@@ -132,8 +132,8 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if err != nil {
 		return ReplayBinding{}, err
 	}
-	if strategy.HasF1() {
-		return ReplayBinding{}, errors.New("f1 规则只用于合约 View，而闭环回放第一版只支持现货，暂不支持回放 f1 策略")
+	if strategy.HasTranche() {
+		return ReplayBinding{}, errors.New("tranche 规则只用于合约 View，而闭环回放第一版只支持现货，暂不支持回放 tranche 策略")
 	}
 	resolved, program, err := e.resolveForReplay(ctx, instance, strategy)
 	if err != nil {

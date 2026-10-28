@@ -80,7 +80,7 @@ type Holding struct {
 }
 
 // Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；
-// signal 规则使用 Pool、Entry、Exit、Weight；f1 规则使用 Weight（只有 total）与 F1。
+// signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 Tranche。
 type Rule struct {
 	ID          string
 	Name        string
@@ -96,8 +96,10 @@ type Rule struct {
 	Entry       string
 	Exit        string
 	Holding     *Holding
-	// F1 是 f1 规则的子策略模板与参数表（见 f1.go）。
-	F1 *F1Spec
+	// Stop 是 rank、signal 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
+	Stop *Stop
+	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。
+	Tranche *TrancheSpec
 }
 
 // Portfolio 是组合级约束与守门参数。

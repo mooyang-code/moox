@@ -1,0 +1,37 @@
+# 内置示例模板：批次持仓（tranche）截面选币，参数表每行一个子策略。
+# 列：h 持有期、n 选币因子的窗口参数、m 后置过滤因子的窗口参数、p 后置过滤阈值、w 子策略权重 stg_weight。
+# 因子列名 momentum__{n}、shadow__{m} 只是示例：用模板前把它们改成因子任务里真实的成员键。
+# 保存：moox-cli gateway call trpc.moox.strategy.StrategyMgr SaveStrategyTemplate --data '{"template_yaml": "..."}'（见 docs/模块/策略.md）。
+template_id: tranche_example
+name: 批次持仓截面选币（示例）
+description: 每根 K 线按动量因子选币开一批仓位，持有 h 期，后置过滤剔除影线过长的标的；参数表每行一个子策略
+variables:
+  - {name: total, type: number, min: 0, max: 10, default: "1", doc: 规则预算 weight.total}
+  - {name: leverage, type: number, min: 0, max: 10, default: "2", doc: 组合杠杆上限（按数量持有会让 Σw 略大于 1）}
+  - {name: max_missing, type: number, min: 0, max: 1, default: "1", doc: 缺数守门比例}
+sample_row: ["1", "20", "24", "0.1", "0.5"]
+dsl: |
+  name: "{{name}}"
+  bar: 5m
+  universe: {}
+  rules:
+    - id: main
+      type: tranche
+      weight: {total: "{{total}}"}
+      tranche:
+        hold_period: "{h}"
+        hold_count: candidate_rows
+        score: {method: rank_sum, missing: median}
+        sizing: {method: quantity, scale: 0.5}
+        long_factors: [{factor: "momentum__{n}", descending: true, weight: 1}]
+        long_weight: 2
+        long_coin_num: 1
+        filter_after:
+          - {direction: long, factor: "shadow__{m}", type: value, op: lte, value: "{p}"}
+        stg_weight: "{w}"
+      params:
+        columns: [h, n, m, p, w]
+        rows: []
+  portfolio:
+    leverage: "{{leverage}}"
+    max_missing: "{{max_missing}}"

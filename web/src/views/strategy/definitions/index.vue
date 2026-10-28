@@ -10,6 +10,7 @@
           <a-button :loading="store.listLoading" aria-label="刷新策略定义" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
+          <a-button type="primary" status="success" @click="templateVisible = true">从模板新建</a-button>
           <a-button type="primary" status="success" @click="router.push({ name: 'strategy-definition-new' })"
             ><template #icon><icon-plus /></template>新建策略</a-button
           >
@@ -85,12 +86,13 @@
         @create-instance="goCreateInstance"
         @replay="goReplay"
       />
+      <StrategyTemplateCreate :visible="templateVisible" @close="templateVisible = false" @created="onTemplateCreated" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
@@ -99,6 +101,7 @@ import type { Strategy } from "@/api/strategy-types";
 import { summarizeDSL } from "@/views/strategy/dsl";
 import { formatStrategyTime, shortHash } from "@/views/strategy/model";
 import StrategyDefinitionDrawer from "@/views/strategy/definitions/strategy-definition-drawer.vue";
+import StrategyTemplateCreate from "@/views/strategy/definitions/strategy-template-create.vue";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
@@ -126,6 +129,13 @@ function changePage(page: number) {
 }
 function openDetail(strategyId: string) {
   void router.push({ name: ROUTE_NAME, query: stateQuery({ definition_id: strategyId }) });
+}
+const templateVisible = ref(false);
+// 从模板生成的策略是普通定义：创建后打开编辑页，可以继续改 DSL。
+function onTemplateCreated(strategyId: string) {
+  templateVisible.value = false;
+  void refresh();
+  edit(strategyId);
 }
 function closeDetail() {
   void router.replace({ name: ROUTE_NAME, query: stateQuery({ definition_id: "" }) });

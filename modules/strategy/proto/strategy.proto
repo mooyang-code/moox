@@ -202,6 +202,32 @@ message GetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidd
 message SetStrategyDisplaySettingsReq { string instance_id = 1; DisplayHidden hidden = 2; }
 message SetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
 
+// StrategyTemplate 是策略模板：命名的 DSL 骨架、变量定义与参数表样例行（template_yaml 原文）。
+// columns 是骨架里参数表的列（没有参数表时为空），variables 是声明的变量名（不含内置的 name）。
+message StrategyTemplate {
+  string template_id = 1;
+  string name = 2;
+  string description = 3;
+  string template_yaml = 4;
+  repeated string columns = 5;
+  repeated string variables = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message ListStrategyTemplatesReq {}
+message ListStrategyTemplatesRsp { common.RetInfo ret_info = 1; repeated StrategyTemplate templates = 2; }
+message GetStrategyTemplateReq { string template_id = 1; }
+message GetStrategyTemplateRsp { common.RetInfo ret_info = 1; StrategyTemplate template = 2; }
+// SaveStrategyTemplateReq 按 template_yaml 里的 template_id 新建或整体替换；保存前用默认值与 sample_row 试渲染并校验 DSL。
+message SaveStrategyTemplateReq { string template_yaml = 1; }
+message SaveStrategyTemplateRsp { common.RetInfo ret_info = 1; StrategyTemplate template = 2; }
+message DeleteStrategyTemplateReq { string template_id = 1; }
+message DeleteStrategyTemplateRsp { common.RetInfo ret_info = 1; }
+// RenderStrategyTemplateReq 给定变量（含策略名 name）与参数表 CSV（第一行是表头），返回生成的 DSL；不落库。
+message RenderStrategyTemplateReq { string template_id = 1; map<string, string> variables = 2; string params_csv = 3; }
+message RenderStrategyTemplateRsp { common.RetInfo ret_info = 1; string dsl_yaml = 2; }
+
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
   rpc UpdateStrategy(UpdateStrategyReq) returns (UpdateStrategyRsp);
@@ -224,4 +250,9 @@ service StrategyMgr {
   rpc CancelReplay(CancelReplayReq) returns (CancelReplayRsp);
   rpc GetStrategyDisplaySettings(GetStrategyDisplaySettingsReq) returns (GetStrategyDisplaySettingsRsp);
   rpc SetStrategyDisplaySettings(SetStrategyDisplaySettingsReq) returns (SetStrategyDisplaySettingsRsp);
+  rpc ListStrategyTemplates(ListStrategyTemplatesReq) returns (ListStrategyTemplatesRsp);
+  rpc GetStrategyTemplate(GetStrategyTemplateReq) returns (GetStrategyTemplateRsp);
+  rpc SaveStrategyTemplate(SaveStrategyTemplateReq) returns (SaveStrategyTemplateRsp);
+  rpc DeleteStrategyTemplate(DeleteStrategyTemplateReq) returns (DeleteStrategyTemplateRsp);
+  rpc RenderStrategyTemplate(RenderStrategyTemplateReq) returns (RenderStrategyTemplateRsp);
 }

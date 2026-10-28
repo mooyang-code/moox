@@ -14,8 +14,8 @@ type CompiledRule struct {
 	FilterAfter *Expression
 	Entry       *Expression
 	Exit        *Expression
-	// F1Groups 是 f1 规则按排名签名分好的子策略组（见 f1.go）；其他类型为空。
-	F1Groups []F1Group
+	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
+	TrancheGroups []TrancheGroup
 }
 
 // stageSource 是规则一个阶段的表达式文本。
@@ -49,8 +49,8 @@ func (r *CompiledRule) Expressions() []*Expression {
 
 // Columns 返回该规则引用的全部当期列。
 func (r *CompiledRule) Columns() []string {
-	if r.Rule.Type == RuleTypeF1 {
-		return r.Rule.F1Columns()
+	if r.Rule.Type == RuleTypeTranche {
+		return r.Rule.TrancheColumns()
 	}
 	set := make(map[string]struct{})
 	for _, expression := range r.Expressions() {
@@ -122,15 +122,22 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
 		}
-		if rule.Type == RuleTypeF1 {
-			for _, column := range rule.F1Columns() {
+		if rule.Type == RuleTypeTranche {
+			for _, column := range rule.TrancheColumns() {
 				if _, ok := available[column]; !ok {
 					return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
 				}
 			}
-			compiled.F1Groups = rule.F1.F1Groups()
+			compiled.TrancheGroups = rule.Tranche.TrancheGroups()
 		}
 		for _, column := range compiled.Columns() {
+			allColumns[column] = struct{}{}
+		}
+		// 止损的价格列是可选列：一并读取，但不进规则的必需列（缺值不算缺数）；View 必须提供它们。
+		for _, column := range rule.StopColumns() {
+			if _, ok := available[column]; !ok {
+				return nil, fmt.Errorf("规则 %s 的 stop 需要列 %q，绑定的 View 没有", rule.ID, column)
+			}
 			allColumns[column] = struct{}{}
 		}
 		for _, column := range compiled.PreviousColumns() {
@@ -173,8 +180,11 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 func ReferencedColumns(strategy Strategy) ([]string, error) {
 	set := make(map[string]struct{})
 	for _, rule := range strategy.Rules {
-		if rule.Type == RuleTypeF1 {
-			for _, column := range rule.F1Columns() {
+		for _, column := range rule.StopColumns() {
+			set[column] = struct{}{}
+		}
+		if rule.Type == RuleTypeTranche {
+			for _, column := range rule.TrancheColumns() {
 				set[column] = struct{}{}
 			}
 			continue

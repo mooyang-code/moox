@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as alphalib F1 cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, alphalib, F1 策略, 选币策略, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, 选币策略, 批次持仓, 止损止盈, 策略模板, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -140,9 +140,9 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 
 ### Python Factor Strategy Migration
 
-用户要把一整套 Python 因子策略（例如基于 alphalib F1 的截面选币策略：左右因子、前置与后置过滤、上千个子策略的参数表）按完全相同的参数迁到 MooX 运行时，读
+用户要把一整套 Python 因子策略（例如截面选币策略：左右因子、前置与后置过滤、上千个子策略的参数表）按完全相同的参数迁到 MooX 运行时，读
 [`references/strategy-migration.md`](references/strategy-migration.md)，按其中的五步执行：拆解源策略并逐条对照源码确认语义、找出能力差距（有差距先写设计文档并审查）、
-用只读 AST 的转换脚本生成因子任务成员与 `type: f1` 策略 DSL（第三方参数放 `local/`，不进仓库）、逐层验证、观察实例分批上线。
+用只读 AST 的转换脚本生成因子任务成员与 `type: tranche` 策略 DSL（同类策略可用策略模板渲染，示例 `modules/strategy/templates/tranche_example.yaml`）（第三方参数放 `local/`，不进仓库）、逐层验证、观察实例分批上线。
 验证用 `scripts/strategy_check.py`（只读：导出目标权重、与原框架逐期比对、端到端分段耗时、对现有任务的影响、结果与状态体积；契约测试 `scripts/test-strategy-check-contract.sh`）；
 两边必须从同一根 K 线、同为空状态开始比，结论要写明精度边界；没有逐跳证据不要给耗时变化归因；不要在生产采集机上大批量下载或整包传输数据。
 

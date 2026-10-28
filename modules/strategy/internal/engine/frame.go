@@ -50,6 +50,9 @@ type HoldingBatch struct {
 	Offset         int               `json:"offset"`
 	EstablishedBar int64             `json:"established_bar"`
 	BaseWeights    map[string]string `json:"base_weights"`
+	// Entries 是批次成员实际进入该批次时的入场价与最有利价格（规则开了 stop 时才记录）；补建批次的 EstablishedBar
+	// 会回填到 offset 对齐的旧序号，不能用它取入场价。
+	Entries map[string]StopEntry `json:"entries,omitempty"`
 }
 
 // RuleState 是一条规则下一期需要的理论状态：rank 规则记录本期持有（供 buffer 使用）与批次，
@@ -57,8 +60,12 @@ type HoldingBatch struct {
 type RuleState struct {
 	Held    []string       `json:"held,omitempty"`
 	Batches []HoldingBatch `json:"batches,omitempty"`
-	// F1 是 f1 规则的开仓记录（见 f1.go）。
-	F1 *F1State `json:"f1,omitempty"`
+	// Entries 是 rank（无 holding）与 signal 规则持有标的的入场价与最有利价格；Cooldown 是冷却截止的 bar 序号（含）。
+	// 只在规则开了 stop 时记录（见 stop.go）。
+	Entries  map[string]StopEntry `json:"entries,omitempty"`
+	Cooldown map[string]int64     `json:"cooldown,omitempty"`
+	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
+	Tranche *TrancheState `json:"tranche,omitempty"`
 }
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。
@@ -100,6 +107,10 @@ type RuleSummary struct {
 	Weighted  int    `json:"weighted"`
 	Budget    string `json:"budget"`
 	Allocated string `json:"allocated,omitempty"`
+	// 本期触发的持仓单位数（不是标的数）：固定止损、跟踪止损、止盈。
+	StopLoss     int `json:"stop_loss,omitempty"`
+	TrailingStop int `json:"trailing_stop,omitempty"`
+	TakeProfit   int `json:"take_profit,omitempty"`
 }
 
 // Summary 是本期摘要。

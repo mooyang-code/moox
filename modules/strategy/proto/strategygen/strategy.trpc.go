@@ -60,6 +60,16 @@ type StrategyMgrService interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error)
+
+	ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq) (*ListStrategyTemplatesRsp, error)
+
+	GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq) (*GetStrategyTemplateRsp, error)
+
+	SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq) (*SaveStrategyTemplateRsp, error)
+
+	DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq) (*DeleteStrategyTemplateRsp, error)
+
+	RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq) (*RenderStrategyTemplateRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -440,6 +450,96 @@ func StrategyMgrService_SetStrategyDisplaySettings_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
+func StrategyMgrService_ListStrategyTemplates_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListStrategyTemplatesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).ListStrategyTemplates(ctx, reqbody.(*ListStrategyTemplatesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_GetStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetStrategyTemplateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).GetStrategyTemplate(ctx, reqbody.(*GetStrategyTemplateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_SaveStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SaveStrategyTemplateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).SaveStrategyTemplate(ctx, reqbody.(*SaveStrategyTemplateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_DeleteStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteStrategyTemplateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).DeleteStrategyTemplate(ctx, reqbody.(*DeleteStrategyTemplateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_RenderStrategyTemplate_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RenderStrategyTemplateReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).RenderStrategyTemplate(ctx, reqbody.(*RenderStrategyTemplateReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -529,6 +629,26 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
 			Func: StrategyMgrService_SetStrategyDisplaySettings_Handler,
 		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyTemplates",
+			Func: StrategyMgrService_ListStrategyTemplates_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/GetStrategyTemplate",
+			Func: StrategyMgrService_GetStrategyTemplate_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/SaveStrategyTemplate",
+			Func: StrategyMgrService_SaveStrategyTemplate_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/DeleteStrategyTemplate",
+			Func: StrategyMgrService_DeleteStrategyTemplate_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/RenderStrategyTemplate",
+			Func: StrategyMgrService_RenderStrategyTemplate_Handler,
+		},
 	},
 }
 
@@ -606,6 +726,21 @@ func (s *UnimplementedStrategyMgr) GetStrategyDisplaySettings(ctx context.Contex
 func (s *UnimplementedStrategyMgr) SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error) {
 	return nil, errors.New("rpc SetStrategyDisplaySettings of service StrategyMgr is not implemented")
 }
+func (s *UnimplementedStrategyMgr) ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq) (*ListStrategyTemplatesRsp, error) {
+	return nil, errors.New("rpc ListStrategyTemplates of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq) (*GetStrategyTemplateRsp, error) {
+	return nil, errors.New("rpc GetStrategyTemplate of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq) (*SaveStrategyTemplateRsp, error) {
+	return nil, errors.New("rpc SaveStrategyTemplate of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq) (*DeleteStrategyTemplateRsp, error) {
+	return nil, errors.New("rpc DeleteStrategyTemplate of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq) (*RenderStrategyTemplateRsp, error) {
+	return nil, errors.New("rpc RenderStrategyTemplate of service StrategyMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -656,6 +791,16 @@ type StrategyMgrClientProxy interface {
 	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *GetStrategyDisplaySettingsRsp, err error)
 
 	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *SetStrategyDisplaySettingsRsp, err error)
+
+	ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq, opts ...client.Option) (rsp *ListStrategyTemplatesRsp, err error)
+
+	GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq, opts ...client.Option) (rsp *GetStrategyTemplateRsp, err error)
+
+	SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq, opts ...client.Option) (rsp *SaveStrategyTemplateRsp, err error)
+
+	DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq, opts ...client.Option) (rsp *DeleteStrategyTemplateRsp, err error)
+
+	RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq, opts ...client.Option) (rsp *RenderStrategyTemplateRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -1081,6 +1226,106 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyDisplaySettings(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetStrategyDisplaySettingsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) ListStrategyTemplates(ctx context.Context, req *ListStrategyTemplatesReq, opts ...client.Option) (*ListStrategyTemplatesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ListStrategyTemplates")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("ListStrategyTemplates")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListStrategyTemplatesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) GetStrategyTemplate(ctx context.Context, req *GetStrategyTemplateReq, opts ...client.Option) (*GetStrategyTemplateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetStrategyTemplate")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("GetStrategyTemplate")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetStrategyTemplateRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) SaveStrategyTemplate(ctx context.Context, req *SaveStrategyTemplateReq, opts ...client.Option) (*SaveStrategyTemplateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/SaveStrategyTemplate")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("SaveStrategyTemplate")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SaveStrategyTemplateRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) DeleteStrategyTemplate(ctx context.Context, req *DeleteStrategyTemplateReq, opts ...client.Option) (*DeleteStrategyTemplateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/DeleteStrategyTemplate")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("DeleteStrategyTemplate")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteStrategyTemplateRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) RenderStrategyTemplate(ctx context.Context, req *RenderStrategyTemplateReq, opts ...client.Option) (*RenderStrategyTemplateRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/RenderStrategyTemplate")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("RenderStrategyTemplate")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RenderStrategyTemplateRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
