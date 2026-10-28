@@ -101,7 +101,7 @@ func columnByName(result *Result, name string) int {
 	return -1
 }
 
-// 点纯性（设计 5.1）：同一个点在单独计算、与其他因子共享节点（需求区间被拉宽）、实时只算一行、补算分块等上下文中逐位相同。
+// 只依赖窗口（设计 5.1）：同一个点在单独计算、与其他因子共享节点（需求区间被拉宽）、实时只算一行、补算分块等上下文中逐位相同。
 func TestPointPurityAcrossContexts(t *testing.T) {
 	const length = 420
 	panel := purityPanel(t, 6, length, 1)

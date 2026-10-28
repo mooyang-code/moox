@@ -10,7 +10,7 @@ import (
 // 相当于 pandas 的 rolling(n, min_periods=m) 与 ewm(adjust=False) 作用在从首根开始的序列上；有效值之后再出现 NaN
 // 时输出 NaN，与严格窗口一致（pandas 的 min_periods 会跳过中途的 NaN，这里不跳过）。
 // 本地时序存储保证每条序列在 [Earliest, Latest] 上连续，缺失周期写成填充行，所以输入列的 NaN 只会在序列开始之前。
-// 结果只取决于固定窗口的内容，仍满足点纯性（设计 5.1）。
+// 结果只取决于固定窗口的内容，仍满足只依赖窗口的要求（设计 5.1）。
 
 // validTail 返回窗口里 NaN 前缀之后的有效段；有效段里还有 NaN 或整个窗口都是 NaN 时返回 nil。
 func validTail(w []float64) []float64 {

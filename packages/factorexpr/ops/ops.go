@@ -1,7 +1,7 @@
 // Package ops 是因子表达式的算子内核：时序算子按一条序列计算，截面算子按一个截面计算；逐元素算子直接使用
 // factorexpr.Scalar。
 //
-// 所有内核都满足点纯性（设计 5.1）：时刻 t 的输出只由它自己窗口内的输入决定，并按固定顺序计算，与需求区间从哪里
+// 所有内核都满足只依赖窗口的要求（设计 5.1）：时刻 t 的输出只由它自己窗口内的输入决定，并按固定顺序计算，与需求区间从哪里
 // 开始、是否与别的因子共享、补算怎样分块、工作线程数都无关。因此这里不使用跨点延续状态的滑动累加器——它的舍入误差
 // 取决于从哪里开始累加。窗口里只要有 NaN，输出就是 NaN（严格窗口）。
 package ops
@@ -43,7 +43,7 @@ func RollingKernel(op string) Rolling { return rolling[op] }
 func CrossKernel(op string) Cross { return cross[op] }
 
 // nanCount 返回以 outStart 结尾、长度为 n 的第一个窗口里的 NaN 个数。之后逐点推进时，移入的加一、移出的减一：
-// 计数是整数、精确，与从哪里开始统计无关，不影响点纯性，也不需要额外分配内存。
+// 计数是整数、精确，与从哪里开始统计无关，不影响“只依赖窗口”，也不需要额外分配内存。
 func nanCount(x Series, outStart, n int) int {
 	count := 0
 	for t := outStart - n + 1; t <= outStart; t++ {
