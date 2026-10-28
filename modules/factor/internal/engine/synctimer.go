@@ -33,6 +33,10 @@ type catalogSyncer struct {
 	offset   time.Duration
 	onChange func()
 	now      func() time.Time
+	// prepare 在新快照应用之前调用：把快照引用的自定义算子模块备齐（拉取、校验、编译）。返回错误时不应用快照、不记下快照哈希，
+	// 下次同步会重新取得。applied 在快照应用之后调用（卸载不再引用的模块）。都可为 nil。
+	prepare func(ctx context.Context, snapshot CatalogSnapshot) error
+	applied func()
 	// kick 让同步循环不等定时器立刻同步一次（容量 1，多次请求合并）；恢复追赶用它尽快确认目录。
 	kick chan struct{}
 }
@@ -50,9 +54,15 @@ func (s *catalogSyncer) SyncSoon() {
 
 func (s *catalogSyncer) SyncOnce(ctx context.Context) error {
 	snapshot, err := s.client.SyncCatalog(ctx, s.cache.Status().Hash)
+	if err == nil && !snapshot.NotModified && s.prepare != nil {
+		err = s.prepare(ctx, snapshot)
+	}
 	if err == nil {
 		var changed bool
 		if changed, err = s.cache.Apply(snapshot); err == nil {
+			if !snapshot.NotModified && s.applied != nil {
+				s.applied()
+			}
 			if changed && s.onChange != nil {
 				s.onChange()
 			}

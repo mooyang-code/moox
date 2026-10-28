@@ -4,8 +4,10 @@ package udfhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
@@ -20,6 +22,13 @@ type Host struct {
 	modules map[string]*factorudf.Module
 	// loadMu 串行化 Ensure 的加载，避免同一版本被并发地拉取与编译。
 	loadMu sync.Mutex
+	// observe 在每批调用结束后调用（耗时、拷进模块的字节数、失败原因；成功时 reason 为空），可为 nil。
+	observe func(udf string, elapsed time.Duration, copied int64, reason string)
+}
+
+// SetObserver 设置调用观察者（指标）；必须在开始执行之前调用。
+func (h *Host) SetObserver(observe func(udf string, elapsed time.Duration, copied int64, reason string)) {
+	h.observe = observe
 }
 
 // New 创建宿主；运行时由调用方创建并负责关闭。
@@ -103,10 +112,34 @@ func (h *Host) Eval(ctx context.Context, call *exec.UDFCall) error {
 	if !ok {
 		return fmt.Errorf("自定义算子版本 %s 的模块没有加载", short(call.Hash))
 	}
-	return m.Eval(ctx, &factorudf.Batch{
+	started := time.Now()
+	err := m.Eval(ctx, &factorudf.Batch{
 		NSeries: call.NSeries, InLen: call.InLen, OutLen: call.OutLen,
 		Inputs: call.Inputs, Params: call.Params, Out: call.Out,
 	})
+	if h.observe != nil {
+		copied := int64(len(call.Params)) * 8
+		for _, in := range call.Inputs {
+			copied += int64(len(in)) * 8
+		}
+		h.observe(m.Info.Manifest.Name, time.Since(started), copied, failureReason(err))
+	}
+	return err
+}
+
+// failureReason 把调用错误归成指标用的原因；成功为空串。
+func failureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ce *factorudf.CallError
+	if errors.As(err, &ce) {
+		return ce.Reason
+	}
+	if errors.Is(err, factorudf.ErrBudget) {
+		return factorudf.ReasonBudget
+	}
+	return "other"
 }
 
 // BatchBytes 实现 exec.UDFHost。

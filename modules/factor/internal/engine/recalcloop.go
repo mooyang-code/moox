@@ -47,6 +47,8 @@ type recalcLoop struct {
 	source   SourceDataset
 	active   func() bool
 	poll     time.Duration
+	// prepare 在作业执行之前备齐它绑定的自定义算子模块；失败时作业报告失败，不写任何分块。
+	prepare func(ctx context.Context, set domain.EngineTask) error
 	// leaseAllowed 非空时，模块级生命周期放行才领取作业（暂停、恢复追赶、重置期间不领取，也不续跑）。
 	leaseAllowed func() bool
 	// generation 返回模块的暂停代次；作业领取时记下，代次变化后旧的执行上下文不再写任何分块。
@@ -129,6 +131,11 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set := job.Set
 	// 补算作业自带定义，领取时现场编译（设计 8）。
 	set.Members = CompileMembers(set.Members)
+	if l.prepare != nil {
+		if err := l.prepare(ctx, set); err != nil {
+			return fmt.Errorf("准备自定义算子模块：%w", err)
+		}
+	}
 	l.extendHistory(ctx, job)
 	lastNote := ""
 	step, stepErr := seriesstore.Step(set.Set.Freq)

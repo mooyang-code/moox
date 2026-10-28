@@ -73,7 +73,14 @@ func (r *Runtime) resumeStartedAt(taskID string) time.Time {
 // 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（诊断入口、测试）不要求。
 func (r *Runtime) catchupPrecondition(taskID string) string {
 	started := r.resumeStartedAt(taskID)
-	if started.IsZero() || r.syncer == nil {
+	if started.IsZero() {
+		return ""
+	}
+	// 追赶写结果之前，目录里引用的自定义算子模块必须全部就绪：不会拿旧版本、或还没编译好的版本计算。
+	if reason := r.catchupModulesPending(taskID); reason != "" {
+		return reason
+	}
+	if r.syncer == nil {
 		return ""
 	}
 	if !r.catalog.Status().SyncedAt.Before(started) {
@@ -81,6 +88,26 @@ func (r *Runtime) catchupPrecondition(taskID string) string {
 	}
 	r.syncer.SyncSoon()
 	return "等待本次恢复之后的目录同步（管理端不可达时会一直等待）"
+}
+
+// catchupModulesPending 返回恢复追赶时引用的自定义算子模块还没有全部就绪的原因，就绪或没有引用时为空。
+// taskID 为空时检查目录里全部任务（模块级恢复）。
+func (r *Runtime) catchupModulesPending(taskID string) string {
+	if r.udf == nil || r.catalog == nil {
+		return ""
+	}
+	var tasks []domain.EngineTask
+	if taskID == "" {
+		tasks = r.catalog.Sets()
+	} else if set, lookup := r.catalog.SetByID(taskID); lookup == SetFound {
+		tasks = []domain.EngineTask{set}
+	}
+	for _, ref := range refsOfTasks(tasks) {
+		if !r.udf.Ready(ref.hash) {
+			return fmt.Sprintf("自定义算子 %s@%.12s 的模块还没有就绪（拉取或编译中、或失败，见引擎状态的模块列表）", ref.name, ref.hash)
+		}
+	}
+	return ""
 }
 
 // writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
@@ -173,6 +200,9 @@ func (r *Runtime) checkTask(ctx context.Context, ref lifecycle.Ref) []lifecycle.
 		checks = append(checks, r.coverageCheck(ctx, src))
 	}
 	checks = append(checks, r.blockedCheck(src, ref.ID))
+	if check, ok := r.modulesCheck(set); ok {
+		checks = append(checks, check)
+	}
 	if gaps := r.data.LongGaps(src); len(gaps) > 0 {
 		first := gaps[0]
 		checks = append(checks, lifecycle.Check{

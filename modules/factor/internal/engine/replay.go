@@ -89,6 +89,8 @@ type replaySession struct {
 	release  func()
 	// quote 是成交价取法：next_open（下一根开盘，默认）或 close（本期收盘）。
 	quote string
+	// udfKey 是会话建立时任务成员引用的自定义算子绑定：写回时与引擎当前目录比较，不同（期间切换过版本）就拒绝，要求重新打开会话。
+	udfKey string
 
 	mu       sync.Mutex
 	cache    map[int64]*replayPeriod
@@ -345,7 +347,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
+		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
@@ -523,6 +525,9 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		rsp.Subjects[subject] = frame
 	}
 	if req.WriteFactors {
+		if current, lookup := m.deps.Sets.SetByID(s.set.Set.TaskID); lookup == SetFound && taskUDFKey(current) != s.udfKey {
+			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务引用的自定义算子版本已经切换，写回被拒绝：请关闭会话并重新打开")
+		}
 		release := func() {}
 		if m.deps.Begin != nil {
 			var ok bool
@@ -836,4 +841,16 @@ func paramValues(plan pipeline.Plan, universe []string) map[string]map[string]ma
 		out[subject] = byMember
 	}
 	return out
+}
+
+// taskUDFKey 是任务成员引用的自定义算子绑定的指纹（成员键 → 名称@哈希）：回放会话据此判断期间是否切换过版本。
+func taskUDFKey(set domain.EngineTask) string {
+	var parts []string
+	for _, member := range set.Members {
+		if key := domain.UDFKey(member.Factor.UDFs); key != "" {
+			parts = append(parts, member.Key+"="+key)
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }
