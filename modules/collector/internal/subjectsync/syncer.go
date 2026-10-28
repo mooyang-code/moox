@@ -3,6 +3,7 @@ package subjectsync
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"strings"
 	"sync"
 
@@ -29,7 +30,7 @@ type Filter struct {
 
 func (f Filter) matchTag(tag *pb.Tag) bool {
 	return tag != nil && (f.SpaceID == "" || f.SpaceID == tag.GetSpaceId()) && (f.TagID == "" || f.TagID == tag.GetTagId()) &&
-		(f.MarketType == "" || strings.EqualFold(f.MarketType, tag.GetMarketType()))
+		(f.MarketType == "" || strings.EqualFold(f.MarketType, tagattr.MarketType(tag)))
 }
 
 // TagResult is the outcome for one tag.
@@ -91,6 +92,14 @@ func (s *Syncer) RunDueAttributes(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Attributes.RunOnceAt(ctx, triggeredAt)
+}
+
+// SupportedListers 返回各数据来源能提供标的快照的市场类型。
+func (s *Syncer) SupportedListers() map[string][]string {
+	if s == nil || s.Tags == nil {
+		return map[string][]string{}
+	}
+	return s.Tags.Listers.Supported()
 }
 
 // SyncNow runs the selected tags (and optionally attribute jobs) immediately.

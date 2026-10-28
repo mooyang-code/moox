@@ -51,17 +51,12 @@ func TestFactorRetentionFindingsCrypto(t *testing.T) {
 }
 
 // 交易时段市场按日历估算，装不下只提醒不报错；停用的成员不参与；表达式不合法的由导入时报错，这里跳过。
-func TestFactorRetentionFindingsSessionMarketAndDisabledMembers(t *testing.T) {
+func TestFactorRetentionFindingsDisabledMembersAndInvalidSpecAreIgnored(t *testing.T) {
 	policy := storagepolicy.Default()
 	policy.Retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "24h"}}
-	errs, warnings := factorRetentionFindings(policy, lookbackPlan("stockcn", "1m", 500))
-	require.Empty(t, errs)
-	require.Len(t, warnings, 1)
-	require.Contains(t, warnings[0], "仅作提醒")
-
 	plan := lookbackPlan("stockcn", "1m", 500)
 	plan.Tasks[0].Members[0].Status = "disabled"
-	errs, warnings = factorRetentionFindings(policy, plan)
+	errs, warnings := factorRetentionFindings(policy, plan)
 	require.Empty(t, errs)
 	require.Empty(t, warnings)
 

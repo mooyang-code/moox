@@ -327,6 +327,9 @@ func (s *Service) ListViewRebuildLogs(ctx context.Context, req *pb.ListViewRebui
 }
 
 func (s *Service) CreateViewRebuildLog(ctx context.Context, req *pb.CreateViewRebuildLogReq) (*pb.CreateViewRebuildLogRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil || req.GetLog() == nil {
 		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
 	}
@@ -338,6 +341,9 @@ func (s *Service) CreateViewRebuildLog(ctx context.Context, req *pb.CreateViewRe
 }
 
 func (s *Service) UpdateViewRebuildLog(ctx context.Context, req *pb.UpdateViewRebuildLogReq) (*pb.UpdateViewRebuildLogRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil || req.GetLog() == nil {
 		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
 	}
@@ -349,6 +355,9 @@ func (s *Service) UpdateViewRebuildLog(ctx context.Context, req *pb.UpdateViewRe
 }
 
 func (s *Service) UpsertSkippedViewRebuildLog(ctx context.Context, req *pb.UpsertSkippedViewRebuildLogReq) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
+	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
+		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
 	if req == nil || req.GetLog() == nil {
 		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
 	}
@@ -364,7 +373,7 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, view_id and column_name are required"))}, nil
 	}
-	if err := validateColumnDisplayName("view column display_name", column.GetSpaceId(), column.GetColumnName(), column.GetAttributes(), isFactorViewColumn(column)); err != nil {
+	if err := validateColumnDisplayName("view column display_name", column.GetAttributes()); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {

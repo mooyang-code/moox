@@ -1,8 +1,6 @@
 package pebble
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,48 +16,15 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// BuildDatasetRowsUpsertedMessage creates the new governed EventMessage persisted by
+// BuildDatasetRowsUpsertedMessage creates the governed EventMessage persisted by
 // the DataNode outbox. occurred_at is the event-construction timestamp; the
 // outbox write is the commit boundary. The event_id is replaced with the
-// Pebble outbox id by BindOutboxID after the write batch has reserved that id.
-func BuildDatasetRowsUpsertedMessage(nodeID string, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return buildDatasetRowsUpsertedMessage(nodeID, "", "", "outbox-pending", spaceID, datasetID, rows)
-}
-
-// BuildDatasetRowsUpsertedMessageWithSource persists the upstream write source
-// in the public storage change event.
-func BuildDatasetRowsUpsertedMessageWithSource(nodeID, writeSource, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return buildDatasetRowsUpsertedMessage(nodeID, writeSource, "", "outbox-pending", spaceID, datasetID, rows)
-}
-
-// BuildDatasetRowsUpsertedMessageWithKind records the Storage-assigned write
-// category. Callers must derive writeKind from the authorized RPC.
-func BuildDatasetRowsUpsertedMessageWithKind(nodeID, writeSource, writeKind, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return buildDatasetRowsUpsertedMessage(nodeID, writeSource, writeKind, "outbox-pending", spaceID, datasetID, rows)
-}
-
-// BuildDatasetRowsUpsertedMessageForSource derives a stable output ID from the
-// source event and write identity. It is used by consumers whose input can be
-// redelivered after the local write has already committed.
-func BuildDatasetRowsUpsertedMessageForSource(nodeID, sourceEventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(nodeID, sourceEventID, "", spaceID, datasetID, rows)
-}
-
-// BuildDatasetRowsUpsertedMessageForSourceWithWriteSource preserves the source
-// event identity and carries the upstream writer into the outbox payload.
-func BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(nodeID, sourceEventID, writeSource, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-	if sourceEventID == "" {
-		return nil, fmt.Errorf("source_event_id is required")
-	}
-	hash := sha256.Sum256([]byte(sourceEventID + "\x00" + spaceID + "\x00" + datasetID))
-	return buildDatasetRowsUpsertedMessage(nodeID, writeSource, "", "storage-source-"+hex.EncodeToString(hash[:16]), spaceID, datasetID, rows)
-}
-
-func buildDatasetRowsUpsertedMessage(nodeID, writeSource, writeKind, eventID, spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+// Pebble outbox position by BindOutboxID after the write batch has reserved it.
+func BuildDatasetRowsUpsertedMessage(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 	if spaceID == "" || datasetID == "" {
 		return nil, fmt.Errorf("space_id and dataset_id are required")
 	}
-	rowPayload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows, WriteSource: writeSource, WriteKind: writeKind})
+	rowPayload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: spaceID, DatasetId: datasetID, Rows: rows})
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +34,7 @@ func buildDatasetRowsUpsertedMessage(nodeID, writeSource, writeKind, eventID, sp
 	}
 	// This is an internal staging envelope, not yet publishable. BindOutboxID
 	// assigns its durable position and validates the complete public contract.
-	_ = nodeID
-	return proto.MarshalOptions{Deterministic: true}.Marshal(&eventpb.EventMessage{EventId: eventID, EventName: events.DatasetRowsUpserted.Name(), EventVersion: events.DatasetRowsUpserted.Version(), SpaceId: spaceID, SubjectId: datasetID, OccurredAt: timestamppb.New(time.Now().UTC()), Payload: payload})
+	return proto.MarshalOptions{Deterministic: true}.Marshal(&eventpb.EventMessage{EventId: "outbox-pending", EventName: events.DatasetRowsUpserted.Name(), EventVersion: events.DatasetRowsUpserted.Version(), SpaceId: spaceID, SubjectId: datasetID, OccurredAt: timestamppb.New(time.Now().UTC()), Payload: payload})
 }
 
 // BindOutboxID assigns the stable transport id after the atomic Pebble batch
@@ -98,9 +62,6 @@ func BindOutboxID(data []byte, nodeID, storeID string, outboxID uint64) ([]byte,
 		if rows.StoreId != storeID || rows.NodeId != nodeID || rows.Sequence != outboxID {
 			return nil, fmt.Errorf("cannot rebind an assigned outbox source position")
 		}
-	} else if strings.HasPrefix(eventMessage.EventId, "storage-source-") {
-		// Source-derived dedupe IDs must not cross a recreated DataNode store.
-		eventMessage.EventId += "-" + storeID
 	}
 	rows.NodeId, rows.Sequence = nodeID, outboxID
 	rows.StoreId = storeID

@@ -38,7 +38,7 @@ func planHandler(observed *[]marketfetch.Request, now *time.Time) *Handler {
 	return &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
 			Now:        func() time.Time { return *now },
-			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			NewStorage: func(string) (marketfetch.Storage, error) { return timerStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				*observed = append(*observed, request)
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil
@@ -68,7 +68,7 @@ func TestHandlerTimerBuildsRequestsFromThePlanWithoutClaimOrCompletion(t *testin
 	require.Equal(t, "2026-10-11T12:59:00Z", minute.Items[0].TargetDataTime)
 	require.Equal(t, "2026-10-11T12:00:00Z", hour.Items[0].TargetDataTime)
 	require.True(t, minute.RequirePeriodCommit)
-	require.True(t, minute.WriteIDByContent)
+	require.True(t, minute.PlanRequest)
 	require.Len(t, minute.Items, 2)
 	require.Len(t, minute.Targets, 2)
 	require.Equal(t, "h1", minute.Targets[0].SeriesHash)
@@ -134,7 +134,7 @@ func TestHandlerManualInvokeWritesRowsOnly(t *testing.T) {
 	var observed marketfetch.Request
 	handler := &Handler{NewMarketFetch: func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string, string) (marketfetch.Storage, error) { return timerStorage{}, nil },
+			NewStorage: func(string) (marketfetch.Storage, error) { return timerStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				observed = request
 				return &marketfetchpb.MarketFetchBatchCompleted{BatchId: request.BatchID, Status: "succeeded"}, nil

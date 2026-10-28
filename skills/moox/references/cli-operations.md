@@ -5,7 +5,7 @@
 ## 前置条件
 
 - `moox-cli`、`moox-factor-mgr-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
-- Storage 维护命令（`repair-view`、`force-rebuild-view`、`reconcile-view-consumers`、`reset-view-consumers`、`purge-dataset-events`）不需要任何 EventBus 凭据：
+- Storage 维护命令（`repair-view`、`force-rebuild-view`、`reset-view-consumers`、`purge-dataset-events`）不需要任何 EventBus 凭据：
   它们用 `--storage-conf` 指向的 storage-view 配置里的网关身份调用 Admin，由 Admin 代为连接 EventBus 执行；Storage 主机上不要放 EventBus 管理员凭据，也没有 `--credential-file`、`--eventbus-url` 参数。
 - 不要把任何 token、HMAC 写进命令、脚本、日志或 Skill。
 - `--yes` 才会执行修改；没有 `--yes` 的命令只能用于查看帮助或失败退出。
@@ -35,7 +35,7 @@ Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 
 ## 清理 Storage View 积压并触发 A/B 重建
 
-当某个 Storage View 分区积压、View 不再追赶 Source，或需要重新触发一次安全重建时，使用：
+当某个 Storage View 的消费积压、View 不再追赶 Source，或需要重新触发一次安全重建时，使用：
 
 ```bash
 moox-cli storage repair-view \
@@ -47,13 +47,13 @@ moox-cli storage repair-view \
   --yes
 ```
 
-原生 Storage 部署显式指定上面的 `current/storage-view/config/storage.yaml` 和 `current` 包根；默认配置搜索仍包含旧平铺路径假设，不要依赖自动推导，也不要传 `trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
+原生 Storage 部署显式指定上面的 `current/storage-view/config/storage.yaml` 和 `current` 包根（默认配置搜索仍包含旧平铺路径假设，不要依赖自动推导），不要传 `trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个，其他名称在发出请求前就会被拒绝）。同一数据集的多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`；不同数据集的 View 各用各的消费者。
 
 默认流程：
 
 1. 停止 `storage-view`。
 2. 备份 Metadata SQLite。
-3. 删除目标 View 对应的 durable consumer（上文列出的 misc/factor 及其数据集分片之一）。
+3. 删除目标数据集对应的 durable consumer（`view_<12 位十六进制>`）。
 4. 递增 View desired revision，交由服务正常执行 A/B 构建和切换。
 5. 重启 `storage-view`。
 
@@ -104,8 +104,8 @@ moox-cli storage repair-view ... \
 
 ## 精确清理单个 Dataset 的历史事件
 
-当一个可丢弃的运维 Dataset（例如主机资源快照 `dataset_mooxsys_host_resource`）占满共享 Storage View durable，
-但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
+当一个可丢弃的运维 Dataset（例如主机资源快照 `dataset_mooxsys_host_resource`）的积压事件需要清掉，
+但业务 Dataset 的历史事件必须保留时，不要删除整个 stream 或 consumer。先检查精确 subject：
 
 ```bash
 /data/moox/storage/current/bin/moox-storage-cli purge-dataset-events \
@@ -116,7 +116,7 @@ moox-cli storage repair-view ... \
 ```
 
 确认后增加 `--yes`。该命令只从 `MOOX_STORAGE` stream 删除这个 Space/Dataset 的
-rows、period、factor-computed 和 sync-point 事件；不会删除 durable consumer，也不会删除
+rows、period 和 sync-point 事件；不会删除 durable consumer，也不会删除
 其他 Dataset 的历史事件。只允许用于已确认可由后续采样重新生成的运维数据，行情、交易和
 因子业务 Dataset 不得使用。
 

@@ -140,7 +140,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 
 // Upsert 用普通写入写一批 K 线（补采）：不涉及周期状态。
 func (c *KlineCommitter) Upsert(ctx context.Context, batch KlineBatch) error {
-	req := Request{SpaceID: batch.SpaceID, DatasetID: batch.Dataset.DatasetID, Frequency: batch.Dataset.Frequency, BatchID: batch.BatchID, WriteIDByContent: true,
+	req := Request{SpaceID: batch.SpaceID, DatasetID: batch.Dataset.DatasetID, Frequency: batch.Dataset.Frequency, BatchID: batch.BatchID, PlanRequest: true,
 		MarketID: batch.Market.MarketID, InstrumentType: batch.Market.InstrumentType, MarketType: batch.Market.MarketType, Provider: batch.Market.Provider, SourceID: batch.Market.SourceID}
 	var rows []*storagepb.RowFieldUpsert
 	for _, bar := range batch.Bars {
@@ -241,10 +241,8 @@ func (c *KlineCommitter) writeDatasets(ctx context.Context, req Request, targetR
 			if !ok {
 				err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
 			} else {
-				err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, writeEventID(req, datasetRows))
+				err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems)
 			}
-		} else if storage, ok := c.Storage.(sourceStorage); ok {
-			err = storage.UpsertFieldsWithSource(ctx, datasetRows, writeEventID(req, datasetRows))
 		} else {
 			err = c.Storage.UpsertFields(ctx, datasetRows)
 		}

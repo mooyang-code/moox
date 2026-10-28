@@ -21,7 +21,7 @@ func TestReadRowsReturnsOneCommitUnderConcurrentUpdates(t *testing.T) {
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}
 	write := func(v float64) error {
 		value := func() *pb.TypedValue { return &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: v}} }
-		return store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{
+		return upsertTestRows(store, context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{
 			{FieldId: "high", Value: value()}, {FieldId: "close", Value: value()}, {FieldId: "low", Value: value()},
 		}}})
 	}

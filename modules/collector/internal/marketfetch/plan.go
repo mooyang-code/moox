@@ -418,7 +418,7 @@ func (p *Plan) buildFrequencyRequest(spaceID, functionName, requestID, frequency
 		BatchID: fmt.Sprintf("%s|%s|%d", functionName, frequencyName, period.Unix()), BatchKind: domain.BatchKindRealtime, SpaceID: spaceID,
 		MarketID: p.Market.MarketID, InstrumentType: p.Market.InstrumentType, DatasetID: firstDataset, Frequency: frequencyName,
 		Provider: p.Market.Provider, SourceID: p.Market.SourceID, MarketType: p.Market.MarketType, NodeID: functionName, FunctionName: functionName,
-		RequestID: requestID, RequirePeriodCommit: true, WriteIDByContent: true, Concurrency: p.Fetch.Concurrency, Items: items, Targets: targets,
+		RequestID: requestID, RequirePeriodCommit: true, PlanRequest: true, Concurrency: p.Fetch.Concurrency, Items: items, Targets: targets,
 	}
 	bindRequestTargetPeriodIdentity(&request)
 	deadline := frequency.BarEnd(period.UTC()).Add(time.Duration(lateness) * time.Second)

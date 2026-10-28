@@ -24,7 +24,7 @@ func TestSingleDatasetView(t *testing.T) {
 
 	_, err = store.UpsertSpace(ctx, &pb.Space{SpaceId: "space", Name: "空间"})
 	require.NoError(t, err)
-	_, err = store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "source", Name: "来源", Kind: "internal"})
+	_, err = store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "source", Name: "来源"})
 	require.NoError(t, err)
 	_, err = store.RegisterDataNode(ctx, "node-a", "trpc://node-a", "node-a")
 	require.NoError(t, err)

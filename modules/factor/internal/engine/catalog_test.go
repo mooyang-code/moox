@@ -223,7 +223,7 @@ func TestCatalogFilterSubjects(t *testing.T) {
 	require.NoError(t, err)
 	var want []string
 	for _, dataset := range []string{"dataset_a", "dataset_b"} {
-		subject, renderErr := registry.RenderSubject(events.CollectorPeriodCompleted, "crypto", dataset)
+		subject, renderErr := registry.RenderSubject(events.DatasetPeriodCompleted, "crypto", dataset)
 		require.NoError(t, renderErr)
 		want = append(want, subject)
 	}

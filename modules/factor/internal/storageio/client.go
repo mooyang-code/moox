@@ -17,9 +17,9 @@ var ErrInfra = errors.New("storage infrastructure failure")
 type PrimaryStoreClient interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 	ReadDatasetChanges(context.Context, *storagepb.ReadDatasetChangesReq, ...client.Option) (*storagepb.ReadDatasetChangesRsp, error)
-	WriteFactorRows(context.Context, *storagepb.PrimaryWriteFactorRowsReq, ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error)
-	ReportFactorPeriodComputed(context.Context, *storagepb.ReportFactorPeriodComputedReq, ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error)
-	GetFactorPeriodComputed(context.Context, *storagepb.GetFactorPeriodComputedReq, ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error)
+	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
+	ReportDatasetPeriodCompleted(context.Context, *storagepb.ReportDatasetPeriodCompletedReq, ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error)
+	GetDatasetPeriodCompleted(context.Context, *storagepb.GetDatasetPeriodCompletedReq, ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error)
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
 	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
 }
@@ -32,6 +32,9 @@ type MetadataClient interface {
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
 	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
+	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
+	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
+	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
 	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
 	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
 }

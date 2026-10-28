@@ -14,8 +14,8 @@ func TestMetadataSchemaVersionIsExact(t *testing.T) {
 			t.Fatalf("test case %q unexpectedly equals current schema version", version)
 		}
 	}
-	if metadataSchemaVersion != "14" {
-		t.Fatalf("metadata schema version = %q, want 14", metadataSchemaVersion)
+	if metadataSchemaVersion != "15" {
+		t.Fatalf("metadata schema version = %q, want 15", metadataSchemaVersion)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestInitSchemaAcceptsFreshDatabase(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "14" {
-		t.Fatalf("fresh database schema version = %q, want 14", version)
+	if version != "15" {
+		t.Fatalf("fresh database schema version = %q, want 15", version)
 	}
 }
 

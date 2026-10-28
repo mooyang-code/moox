@@ -27,7 +27,7 @@ func backfillEvent(t *testing.T) []byte {
 	item := domain.CollectionItem{InstanceID: "backfill|1m|BTC-USDT", SubjectID: "BTC-USDT", Symbol: "BTCUSDT", StartTime: from.Format(time.RFC3339), EndTime: from.Add(10 * time.Minute).Format(time.RFC3339), BarLimit: 10,
 		Provider: "binance", SourceID: "spot_http", MarketID: "crypto", InstrumentType: "spot", MarketType: "spot", DataType: "kline", DatasetID: "bars_1m", Frequency: "1m"}
 	request := marketfetch.Request{BatchID: "bf|1", BatchKind: domain.BatchKindBackfill, SpaceID: "crypto", MarketID: "crypto", InstrumentType: "spot", DatasetID: "bars_1m", Frequency: "1m",
-		Provider: "binance", SourceID: "spot_http", MarketType: "spot", NodeID: "n", FunctionName: "n", RequestID: "bf|1", WriteIDByContent: true, Concurrency: 1,
+		Provider: "binance", SourceID: "spot_http", MarketType: "spot", NodeID: "n", FunctionName: "n", RequestID: "bf|1", PlanRequest: true, Concurrency: 1,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{{ID: "bars_1m|1m|BTC-USDT", SpaceID: "crypto", InstanceID: item.InstanceID, TaskID: "bars_1m", DatasetID: "bars_1m", Frequency: "1m"}}}
 	event, err := marketfetch.MarketFetchEvent(request)
 	require.NoError(t, err)
@@ -39,7 +39,7 @@ func backfillEvent(t *testing.T) []byte {
 func recordingHandler(observed *[]marketfetch.Request, mu *sync.Mutex) func() *marketfetch.Handler {
 	return func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string, string) (marketfetch.Storage, error) { return nopStorage{}, nil },
+			NewStorage: func(string) (marketfetch.Storage, error) { return nopStorage{}, nil },
 			Execute: func(_ context.Context, request marketfetch.Request, _ marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				mu.Lock()
 				*observed = append(*observed, request)
@@ -91,7 +91,7 @@ func TestLocalExecutorLimitsConcurrency(t *testing.T) {
 	var running, peak atomic.Int32
 	executor := New("crypto", 2, func() *marketfetch.Handler {
 		return &marketfetch.Handler{
-			NewStorage: func(string, string) (marketfetch.Storage, error) { return nopStorage{}, nil },
+			NewStorage: func(string) (marketfetch.Storage, error) { return nopStorage{}, nil },
 			Execute: func(context.Context, marketfetch.Request, marketfetch.Storage) (*marketfetchpb.MarketFetchBatchCompleted, error) {
 				current := running.Add(1)
 				for {

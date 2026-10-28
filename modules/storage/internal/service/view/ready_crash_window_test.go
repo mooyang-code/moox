@@ -59,7 +59,7 @@ func TestAppliedFenceDurableWhenCrashAfterAckBeforeReadyEnqueue(t *testing.T) {
 	at := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-	if err := reloaded.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-after-restart", at), payload); err != nil {
+	if err := reloaded.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-after-restart", at), payload); err != nil {
 		t.Fatalf("位置已落盘，周期事件到达后应直接放行：%v", err)
 	}
 	if len(publisher.byID) != 1 || reloaded.hasPendingReady() {
@@ -76,7 +76,7 @@ func TestAppliedFenceFlushedBeforePendingReadyPersisted(t *testing.T) {
 	at := time.Date(2026, 9, 13, 16, 0, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-	_ = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-late", at), payload)
+	_ = service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-late", at), payload)
 	if _, err := os.Stat(filepath.Join(dir, "applied.json")); err != nil {
 		t.Fatalf("就绪事件落盘前围栏必须先落盘：%v", err)
 	}

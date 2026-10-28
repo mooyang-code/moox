@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/view/eventconsumer"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -128,17 +129,17 @@ func periodMessage(eventID string, occurredAt time.Time) *eventpb.EventMessage {
 	return &eventpb.EventMessage{EventId: eventID, SpaceId: "quant", OccurredAt: timestamppb.New(occurredAt.UTC())}
 }
 
-func collectorCompleted(dataset, status string, subjects, failed []string, at time.Time, periodTime int64) *storageeventpb.CollectorPeriodCompleted {
-	return &storageeventpb.CollectorPeriodCompleted{
-		DatasetId: dataset, Frequency: "1m", PeriodTime: periodTime, Status: status,
-		BatchId: "batch-" + dataset, ConfigSnapshotId: "cfg-1", ExpectedScopeRef: "universe:" + dataset + ":1m",
+func collectorCompleted(dataset, status string, subjects, failed []string, at time.Time, periodTime int64) *storageeventpb.DatasetPeriodCompleted {
+	return &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: dataset, Frequency: "1m", PeriodTime: periodTime, Status: status, Source: "ledger",
+		SnapshotRef:        "universe:" + dataset + ":1m",
 		UniverseSubjectIds: subjects, FailedSubjects: failed,
 		CommittedPositions: []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 1}},
-		CollectedAt:        timestamppb.New(at),
+		CompletedAt:        timestamppb.New(at),
 	}
 }
 
-func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *testing.T) {
+func TestHandleLedgerPeriodCompletedPublishesSingleDatasetIdempotently(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
@@ -146,7 +147,7 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	})
 	periodTime := int64(1786032000)
 	otherAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("fundamentals-ready", otherAt), collectorCompleted("fundamentals", "complete", []string{"ETH-USDT"}, nil, otherAt, periodTime)); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("fundamentals-ready", otherAt), collectorCompleted("fundamentals", "complete", []string{"ETH-USDT"}, nil, otherAt, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 0 {
@@ -157,10 +158,10 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	message := periodMessage("prices-ready", secondAt)
 	payload := collectorCompleted("prices", "degraded", []string{"ETH-USDT", "BTC-USDT", "BTC-USDT"}, []string{"ETH-USDT"}, secondAt, periodTime)
 	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatalf("idempotent marker retry failed: %v", err)
 	}
 	if len(metadata.states) != 1 || len(publisher.attempts) != 2 || len(publisher.byID) != 1 {
@@ -175,9 +176,6 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 	}
 	if ready.GetViewId() != "source-view" || ready.GetStatus() != "degraded" || ready.GetDatasetId() != "prices" || ready.GetFailedScopeRef() != "ETH-USDT" {
 		t.Fatalf("ready payload=%v", ready)
-	}
-	if ready.GetCompletionKind() != events.CollectorPeriodCompleted.Name() {
-		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
 	}
 	if ready.GetViewConfigId() == "" || ready.GetVisibleScope() == "" || len(ready.GetCommittedPositions()) == 0 {
 		t.Fatalf("ready identity incomplete=%v", ready)
@@ -197,7 +195,7 @@ func TestHandleCollectorPeriodCompletedPublishesSingleDatasetIdempotently(t *tes
 // Collector may report the same period again (for example after a restart)
 // with a new event ID. The first report decided the period; the re-report must
 // succeed without republishing so the Dataset's ordered lane keeps moving.
-func TestHandleCollectorPeriodCompletedAcceptsReReportedPeriod(t *testing.T) {
+func TestHandleLedgerPeriodCompletedAcceptsReReportedPeriod(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
@@ -206,12 +204,12 @@ func TestHandleCollectorPeriodCompletedAcceptsReReportedPeriod(t *testing.T) {
 	periodTime := int64(1786032000)
 	firstAt := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
 	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready", firstAt),
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready", firstAt),
 		collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, firstAt, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	reportedAt := firstAt.Add(11 * time.Minute)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-again", reportedAt),
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-again", reportedAt),
 		collectorCompleted("prices", "degraded", []string{"BTC-USDT", "ETH-USDT"}, []string{"ETH-USDT"}, reportedAt, periodTime)); err != nil {
 		t.Fatalf("re-reported period must not fail: %v", err)
 	}
@@ -220,7 +218,7 @@ func TestHandleCollectorPeriodCompletedAcceptsReReportedPeriod(t *testing.T) {
 	}
 }
 
-func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
+func TestHandleLedgerPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
@@ -237,7 +235,7 @@ func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T)
 	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
 	message := periodMessage("prices-ready", at)
 	service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 1)
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime)); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, periodTime)); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
@@ -245,27 +243,25 @@ func TestHandleCollectorPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T)
 	}
 }
 
-func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
+// 写入方（producer）报告的周期完成：逐 View 直接就绪，明细字节原样透传，View 不解析。
+func TestHandleProducerPeriodCompletedPublishesResultViewReadyWithDetail(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-view-a",
 	})
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
-	message := periodMessage("factor-marker-1", occurredAt)
-	payload := &storageeventpb.FactorPeriodComputed{
-		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
-		Factors: []*storageeventpb.FactorPeriodState{
-			{MemberKey: "z-factor", FactorId: "z-factor", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z", DefinitionHash: "def-z", GapSubjects: []string{"BTC-USDT"}},
-			{MemberKey: "a-factor", FactorId: "a-factor", MemberKind: "fixed", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
-		},
-		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
+	message := periodMessage("producer-marker-1", occurredAt)
+	payload := &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "producer",
+		UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
+		CompletedAt: timestamppb.New(occurredAt), CauseEventId: "source-ready-1",
+		DetailType: "test.Detail.v1", Detail: []byte{0x0a, 0x03, 'a', 'b', 'c'},
 	}
-	if err := service.HandleFactorPeriodComputed(context.Background(), message, payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.HandleFactorPeriodComputed(context.Background(), message, payload); err != nil {
-		t.Fatalf("idempotent factor marker retry failed: %v", err)
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload); err != nil {
+		t.Fatalf("idempotent producer marker retry failed: %v", err)
 	}
 	if len(publisher.attempts) != 2 || len(publisher.byID) != 1 || publisher.attempts[0].opts.EventID != publisher.attempts[1].opts.EventID {
 		t.Fatalf("publish attempts=%d unique=%d", len(publisher.attempts), len(publisher.byID))
@@ -274,67 +270,56 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 	if !ok || publisher.attempts[0].event.Name() != events.ViewDataReady.Name() {
 		t.Fatalf("published event=%s payload=%T", publisher.attempts[0].event.Name(), publisher.attempts[0].payload)
 	}
-	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "BTC-USDT,ETH-USDT" {
-		t.Fatalf("factor ready payload=%v", ready)
-	}
-	if ready.GetCompletionKind() != events.FactorPeriodComputed.Name() {
-		t.Fatalf("completion_kind=%q", ready.GetCompletionKind())
+	if ready.GetViewId() != "result-view" || ready.GetDatasetId() != "factor-results" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "BTC-USDT" {
+		t.Fatalf("producer ready payload=%v", ready)
 	}
 	if got := ready.GetUniverseSubjectIds(); !reflect.DeepEqual(got, payload.GetUniverseSubjectIds()) {
-		t.Fatalf("factor universe_subject_ids=%v", got)
+		t.Fatalf("producer universe_subject_ids=%v", got)
 	}
-	if len(ready.GetFactors()) != len(payload.GetFactors()) {
-		t.Fatalf("factor count=%d, want %d", len(ready.GetFactors()), len(payload.GetFactors()))
+	if ready.GetDetailType() != "test.Detail.v1" || !reflect.DeepEqual(ready.GetDetail(), payload.GetDetail()) {
+		t.Fatalf("detail not passed through: type=%q detail=%v", ready.GetDetailType(), ready.GetDetail())
 	}
-	for i, state := range payload.GetFactors() {
-		if !proto.Equal(state, ready.GetFactors()[i]) {
-			t.Fatalf("factor %d changed: got=%v want=%v", i, ready.GetFactors()[i], state)
-		}
-	}
-	payload.Factors[0].FailedSubjects[0] = "changed-after-handling"
-	if ready.Factors[0].FailedSubjects[0] != "ETH-USDT" {
-		t.Fatal("ready factor state aliases input payload")
-	}
-	payload.Factors[0].GapSubjects[0] = "changed-after-handling"
-	if ready.Factors[0].GapSubjects[0] != "BTC-USDT" {
-		t.Fatal("ready factor gap_subjects aliases input payload")
+	payload.Detail[0] = 0xff
+	if ready.GetDetail()[0] == 0xff {
+		t.Fatal("ready detail aliases the input payload")
 	}
 }
 
-func TestHandleFactorPeriodComputedEmptyFactorsPublishesDegradedReady(t *testing.T) {
+func TestHandleProducerPeriodCompletedWithoutDetailPublishesReady(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "result-view", DatasetId: "factor-results", ActiveIndexId: "result-view-a",
 	})
 	occurredAt := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
-	payload := &storageeventpb.FactorPeriodComputed{
-		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
+	payload := &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "producer",
+		UniverseSubjectIds: []string{"ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CauseEventId: "source-ready-1",
+		CompletedAt: timestamppb.New(occurredAt),
 	}
-	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-empty", occurredAt), payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("producer-empty", occurredAt), payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
-		t.Fatalf("empty degraded factors did not publish ViewDataReady: %d", len(publisher.attempts))
+		t.Fatalf("producer completion without detail did not publish ViewDataReady: %d", len(publisher.attempts))
 	}
 	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
-	if len(ready.GetFactors()) != 0 || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
-		t.Fatalf("empty factors ready=%v", ready)
+	if len(ready.GetDetail()) != 0 || ready.GetDetailType() != "" || ready.GetStatus() != "degraded" || ready.GetFailedScopeRef() != "ETH-USDT" {
+		t.Fatalf("ready without detail=%v", ready)
 	}
 }
 
-func TestHandleFactorPeriodComputedViewPreservesFactorUniverse(t *testing.T) {
+func TestHandleProducerPeriodCompletedViewPreservesUniverse(t *testing.T) {
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(nil, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "factor-result", DatasetId: "factor-results", ActiveIndexId: "factor-result-a", Freq: "1m",
 	})
 	at := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
-	payload := &storageeventpb.FactorPeriodComputed{
-		DatasetId: "factor-results", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded",
-		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
-		Factors: []*storageeventpb.FactorPeriodState{{MemberKey: "factor", FactorId: "factor", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash", DefinitionHash: "def"}},
+	payload := &storageeventpb.DatasetPeriodCompleted{
+		DatasetId: "factor-results", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded", Source: "producer", CauseEventId: "source-ready",
+		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"}, CompletedAt: timestamppb.New(at),
+		DetailType: "test.Detail.v1", Detail: []byte("detail"),
 	}
-	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-result", at), payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("factor-result", at), payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.attempts) != 1 {
@@ -347,14 +332,22 @@ func TestHandleFactorPeriodComputedViewPreservesFactorUniverse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := registry.Encode(attempt.event, ready, attempt.opts); err != nil {
-		t.Fatalf("factor ready violates event contract: %v", err)
+		t.Fatalf("producer ready violates event contract: %v", err)
 	}
 	if ready.GetVisibleScope() != "view:factor-result" || !reflect.DeepEqual(ready.GetUniverseSubjectIds(), payload.GetUniverseSubjectIds()) {
-		t.Fatalf("factor ready scope/universe=%v", ready)
+		t.Fatalf("producer ready scope/universe=%v", ready)
 	}
 }
 
-func TestHandleCollectorPeriodCompletedKeepsObjectUniverse(t *testing.T) {
+func TestHandleDatasetPeriodCompletedRejectsUnknownSource(t *testing.T) {
+	service := newPeriodTestService(nil, newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "v", DatasetId: "d", ActiveIndexId: "v-a"})
+	err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("x", time.Now()), &storageeventpb.DatasetPeriodCompleted{DatasetId: "d", Source: "other"})
+	if err == nil || !eventconsumer.IsPermanent(err) {
+		t.Fatalf("unknown source must be a permanent error, got %v", err)
+	}
+}
+
+func TestHandleLedgerPeriodCompletedKeepsObjectUniverse(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher, &pb.View{
@@ -363,7 +356,7 @@ func TestHandleCollectorPeriodCompletedKeepsObjectUniverse(t *testing.T) {
 	service.NoteAppliedPosition("quant", "kline-view", "kline-a", "node-a", "store-a", 1)
 	at := time.Date(2026, 9, 13, 16, 2, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT", "ETH-USDT"}, nil, at, at.Unix())
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("kline-ready", at), payload); err != nil {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("kline-ready", at), payload); err != nil {
 		t.Fatal(err)
 	}
 	ready := publisher.attempts[0].payload.(*storageeventpb.ViewDataReady)
@@ -441,7 +434,7 @@ func TestViewDataReadyPublishFailureKeepsLaterPendingEvents(t *testing.T) {
 		at := time.Date(2026, 9, 13, 16, i, 0, 0, time.UTC)
 		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-		if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+		if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 			t.Fatalf("%s 应等待行写入：%v", id, err)
 		}
 	}
@@ -486,7 +479,7 @@ func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
 	service := newPeriodTestService(metadata, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	completed := func(id string, minute int) (*eventpb.EventMessage, *storageeventpb.CollectorPeriodCompleted) {
+	completed := func(id string, minute int) (*eventpb.EventMessage, *storageeventpb.DatasetPeriodCompleted) {
 		at := time.Date(2026, 9, 13, 16, minute, 0, 0, time.UTC)
 		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
@@ -494,7 +487,7 @@ func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
 	}
 	for i, id := range []string{"prices-ready-1", "prices-ready-2"} {
 		message, payload := completed(id, i)
-		if err := service.HandleCollectorPeriodCompleted(context.Background(), message, payload); !errors.Is(err, ErrViewDataReadyPending) {
+		if err := service.HandleDatasetPeriodCompleted(context.Background(), message, payload); !errors.Is(err, ErrViewDataReadyPending) {
 			t.Fatalf("%s 应等待行写入：%v", id, err)
 		}
 	}
@@ -504,7 +497,7 @@ func TestViewDataReadyRestoresFailedEventsBeforeNewOnes(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			message, payload := completed("prices-ready-3", 2)
-			_ = service.HandleCollectorPeriodCompleted(context.Background(), message, payload)
+			_ = service.HandleDatasetPeriodCompleted(context.Background(), message, payload)
 		}()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
@@ -552,7 +545,7 @@ func readyTestPeriod(t *testing.T, service *Service, id string, minute int) {
 	at := time.Date(2026, 9, 13, 16, minute, 0, 0, time.UTC)
 	payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 	payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 12}}
-	if err := service.HandleCollectorPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage(id, at), payload); !errors.Is(err, ErrViewDataReadyPending) {
 		t.Fatalf("%s 应等待行写入：%v", id, err)
 	}
 }
@@ -577,7 +570,7 @@ func TestViewDataReadyKeepsInFlightEventPersisted(t *testing.T) {
 		at := time.Date(2026, 9, 13, 16, 1, 0, 0, time.UTC)
 		payload := collectorCompleted("prices", "complete", []string{"BTC-USDT"}, nil, at, at.Unix())
 		payload.CommittedPositions = []*storageeventpb.CommittedPosition{{NodeId: "node-a", StoreId: "store-a", Sequence: 99}}
-		_ = service.HandleCollectorPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload)
+		_ = service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("prices-ready-2", at), payload)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

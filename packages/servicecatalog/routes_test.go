@@ -110,8 +110,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {186, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "c1c7a90a5fed1a7b3abd26bea128125809de1d382b251c0e351795432639fca7"},
-		"storage":  {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "ed85207e84fe8c3ba34c9638268b9f5f765effc110b349c11ae9273285ccfeb0"},
+		"control":  {188, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "96c1c2f984748922148e697e4e0f56632d8f91de556de33489e7c7107d4aeaff"},
+		"storage":  {82, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "e0effeb80dbfc814badc9ea9bc7e5c934d838b18ce9a1069fa8b1e30a8d7f520"},
 		"overseas": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f82ea3d40b5f3cfdfa3188507f36e4c4e6f90a83ec5b724a927b75db19f82a41"},
 	}
 	for _, host := range p.Hosts {
@@ -351,7 +351,7 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	}
 	if !c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
 		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
-		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "WriteFactorRows") ||
+		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "UpsertFields") ||
 		c.PrincipalAllowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
 		t.Fatal("archive-worker 的外部白名单边界不对")
 	}

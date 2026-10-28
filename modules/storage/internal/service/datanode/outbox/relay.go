@@ -33,12 +33,12 @@ type PublishAckPublisher interface {
 }
 
 type RelayOptions struct {
-	PollInterval                  time.Duration
-	BatchSize                     int
-	PublishTimeout                time.Duration
-	Metrics                       *observability.ViewMetrics
-	ProcessedEventCleanupInterval time.Duration
-	ProcessedEventRetention       time.Duration
+	PollInterval   time.Duration
+	BatchSize      int
+	PublishTimeout time.Duration
+	Metrics        *observability.ViewMetrics
+	// ChangeLogCleanupInterval 是清理过期行变更日志的间隔，默认 1 小时。
+	ChangeLogCleanupInterval time.Duration
 	// ReconnectAfterFailures lets a long-lived relay replace a stale NATS
 	// connection after EventBus restarts instead of waiting for the process to
 	// be restarted manually. It is ignored when the publisher does not expose
@@ -87,11 +87,8 @@ func NewRelay(store *pebble.Store, publisher Publisher, opts RelayOptions) (*Rel
 		// view stale even though the broker is reachable.
 		opts.PublishTimeout = 30 * time.Second
 	}
-	if opts.ProcessedEventCleanupInterval <= 0 {
-		opts.ProcessedEventCleanupInterval = time.Hour
-	}
-	if opts.ProcessedEventRetention <= 0 {
-		opts.ProcessedEventRetention = store.ProcessedEventRetention()
+	if opts.ChangeLogCleanupInterval <= 0 {
+		opts.ChangeLogCleanupInterval = time.Hour
 	}
 	if opts.ReconnectAfterFailures <= 0 {
 		opts.ReconnectAfterFailures = 3
@@ -117,10 +114,10 @@ func (r *Relay) Start(ctx context.Context) {
 			defer close(r.done)
 			ticker := time.NewTicker(r.options.PollInterval)
 			defer ticker.Stop()
-			cleanupTicker := time.NewTicker(r.options.ProcessedEventCleanupInterval)
+			cleanupTicker := time.NewTicker(r.options.ChangeLogCleanupInterval)
 			defer cleanupTicker.Stop()
-			if err := r.cleanupProcessedSourceEvents(ctx); err != nil {
-				r.report(fmt.Errorf("cleanup processed source events: %w", err))
+			if err := r.cleanupChangeLog(ctx); err != nil {
+				r.report(fmt.Errorf("cleanup change log: %w", err))
 			}
 			for {
 				if err := r.flush(ctx); err != nil {
@@ -155,8 +152,8 @@ func (r *Relay) Start(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case <-cleanupTicker.C:
-					if err := r.cleanupProcessedSourceEvents(ctx); err != nil {
-						r.report(fmt.Errorf("cleanup processed source events: %w", err))
+					if err := r.cleanupChangeLog(ctx); err != nil {
+						r.report(fmt.Errorf("cleanup change log: %w", err))
 					}
 				}
 			}
@@ -164,12 +161,9 @@ func (r *Relay) Start(ctx context.Context) {
 	})
 }
 
-func (r *Relay) cleanupProcessedSourceEvents(ctx context.Context) error {
-	now := time.Now().UTC()
-	_, err := r.store.CleanupProcessedSourceEventsBefore(ctx, now.Add(-r.options.ProcessedEventRetention))
-	// 行变更日志与去重标记同一节奏清理。
-	_, changeErr := r.store.CleanupChangeLog(ctx, now.Add(-r.store.ChangeLogRetention()))
-	return errors.Join(err, changeErr)
+func (r *Relay) cleanupChangeLog(ctx context.Context) error {
+	_, err := r.store.CleanupChangeLog(ctx, time.Now().UTC().Add(-r.store.ChangeLogRetention()))
+	return err
 }
 
 func (r *Relay) report(err error) {

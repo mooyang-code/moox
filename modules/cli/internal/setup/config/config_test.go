@@ -84,7 +84,9 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 	assert.Equal(t, int64(4<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
 	policy := snapshot.Manifest.StoragePolicy()
-	assert.Equal(t, storagepolicy.Default().Retention, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
+	recommended := storagepolicy.Default().Retention
+	recommended.Spaces = RecommendedSpaceRetention()
+	assert.Equal(t, recommended, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
 	assert.Equal(t, uint64(10000), policy.View.Bars)
 	assert.Equal(t, uint64(12000), policy.View.TrimBars)
 	require.NoError(t, policy.Validate())
@@ -263,7 +265,7 @@ func TestLoadRejectsInvalidStorageViewMaxAge(t *testing.T) {
 		{name: "incomplete defaults", body: "[storage_view.max_age.defaults]\n\"1m\" = \"7d\"", want: "view.max_age.defaults must cover every standard frequency"},
 		{name: "alias frequency", body: "[storage_view.max_age.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
 		{name: "invalid period", body: "[storage_view.max_age.spaces.crypto]\n\"1m\" = \"7 days\"", want: "view.max_age"},
-		{name: "shorter than view bars", body: "[storage_view.max_age.spaces.crypto]\n\"5m\" = \"10d\"", want: "view.max_age.spaces.crypto.5m"},
+		{name: "default shorter than view bars", body: "[storage_view.max_age.defaults]\n\"30s\" = \"90h\"\n\"1m\" = \"7d\"\n\"5m\" = \"10d\"\n\"15m\" = \"105d\"\n\"30m\" = \"210d\"\n\"1h\" = \"420d\"\n\"4h\" = \"1700d\"\n\"1d\" = \"forever\"\n\"1w\" = \"forever\"\n\"1mo\" = \"forever\"", want: "view.max_age.defaults.5m"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -273,6 +275,14 @@ func TestLoadRejectsInvalidStorageViewMaxAge(t *testing.T) {
 			require.Contains(t, err.Error(), tt.want)
 		})
 	}
+}
+
+// 空间覆盖得比 view.bars 短只是警告：空间可以有意少留历史，不拒绝加载。
+func TestLoadAcceptsSpaceViewMaxAgeShorterThanViewBars(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + "\n[storage_view.max_age.spaces.crypto]\n\"5m\" = \"10d\"\n"
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
 }
 
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
@@ -340,7 +350,7 @@ func TestLoadRejectsInvalidStorageRetention(t *testing.T) {
 		{name: "incomplete defaults", body: "[storage_retention.defaults]\n\"1m\" = \"7d\"", want: "must cover every standard frequency"},
 		{name: "alias frequency", body: "[storage_retention.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
 		{name: "invalid period", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"7 days\"", want: "retention"},
-		{name: "retention shorter than view bars", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"3d\"", want: "fewer than view.bars"},
+		{name: "default retention shorter than view bars", body: "[storage_retention.defaults]\n\"30s\" = \"90h\"\n\"1m\" = \"3d\"\n\"5m\" = \"35d\"\n\"15m\" = \"105d\"\n\"30m\" = \"210d\"\n\"1h\" = \"420d\"\n\"4h\" = \"1700d\"\n\"1d\" = \"forever\"\n\"1w\" = \"forever\"\n\"1mo\" = \"forever\"", want: "fewer than view.bars"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -35,14 +35,18 @@
         </a-table-column>
         <a-table-column title="探测配置" :width="220">
           <template #cell="{ record }">
-            <span v-if="record.source">{{ record.source }} · {{ record.market_type || "-" }}</span>
+            <span v-if="tagSource(record)">{{ tagSource(record) }} · {{ tagMarketType(record) || "-" }}</span>
+            <span v-else-if="tagMarketType(record)">{{ tagMarketType(record) }}</span>
             <span v-else class="muted">—</span>
           </template>
         </a-table-column>
         <a-table-column title="调度" :width="180">
           <template #cell="{ record }">
-            <span>{{ record.cron || "0 * * * *" }}</span>
-            <span class="muted">{{ record.timezone || "UTC" }}</span>
+            <template v-if="record.mode === 'auto'">
+              <span>{{ tagCron(record) }}</span>
+              <span class="muted">{{ tagTimezone(record) }}</span>
+            </template>
+            <span v-else class="muted">—</span>
           </template>
         </a-table-column>
         <a-table-column title="成员" :width="110">
@@ -53,13 +57,17 @@
         </a-table-column>
         <a-table-column title="最近运行" :width="190">
           <template #cell="{ record }">
-            <a-tooltip v-if="record.last_status === 'failed' && record.last_error" :content="record.last_error">
-              <span class="run-status run-status--failed">失败 · {{ formatTime(record.last_run_at) }}</span>
+            <a-tooltip
+              v-if="syncStatusOf(record.tag_id)?.last_status === 'failed'"
+              :content="syncStatusOf(record.tag_id)?.last_error || '同步失败'"
+            >
+              <span class="run-status run-status--failed">失败 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at) }}</span>
             </a-tooltip>
-            <span v-else-if="record.last_status === 'success'" class="run-status run-status--success">
-              成功 · {{ formatTime(record.last_run_at) }}
+            <span v-else-if="syncStatusOf(record.tag_id)?.last_status === 'success'" class="run-status run-status--success">
+              成功 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at) }}
             </span>
-            <span v-else class="muted">未运行</span>
+            <span v-else-if="syncStatusFailed" class="muted">状态获取失败</span>
+            <span v-else class="muted">从未运行</span>
           </template>
         </a-table-column>
         <a-table-column title="操作" :width="180" align="center" fixed="right">
@@ -96,18 +104,19 @@
           </a-radio-group>
         </a-form-item>
         <a-form-item field="source" label="数据源" required>
-          <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
-            <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
-              {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
-            </a-option>
+          <a-select v-model="form.source" allow-search placeholder="选择标的列表数据源" @change="onSourceChange">
+            <a-option v-for="source in sourceOptions" :key="source" :value="source">{{ source }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item field="market_type" label="市场类型" required>
-          <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
-            <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
+          <a-select v-model="form.market_type" placeholder="选择市场类型">
+            <a-option v-for="type in marketTypeOptions" :key="type" :value="type">{{ type }}</a-option>
           </a-select>
         </a-form-item>
-        <a-row :gutter="16">
+        <a-alert v-if="listersFailed" type="warning" show-icon class="lister-alert">
+          未能读取可用的数据来源与市场类型，请稍后刷新重试。
+        </a-alert>
+        <a-row v-if="form.mode === 'auto'" :gutter="16">
           <a-col :span="12">
             <a-form-item field="cron" label="定时更新" required>
               <a-input v-model="form.cron" placeholder="0 * * * *" />
@@ -121,7 +130,7 @@
             </a-form-item>
           </a-col>
         </a-row>
-        <div class="next-runs">
+        <div v-if="form.mode === 'auto'" class="next-runs">
           <span class="muted">接下来运行</span>
           <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
           <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
@@ -147,8 +156,10 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
-import { deleteTag, listDataSources, listTags, upsertTag } from "@/api/storage/metadata";
-import type { DataSource, Tag, TagReference } from "@/api/storage/types";
+import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
+import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
+import type { Tag, TagReference } from "@/api/storage/types";
+import { tagCron, tagMarketType, tagSource, tagTimezone } from "@/views/data/shared/catalog-attributes";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { nextRuns, tagToFormState, toTagPayload, validateTagForm, type TagFormState } from "./tag-form";
 
@@ -156,7 +167,10 @@ const props = defineProps<{ spaceId: string }>();
 const emit = defineEmits<{ (event: "openMembers", tagId: string): void }>();
 
 const rows = ref<Tag[]>([]);
-const dataSources = ref<DataSource[]>([]);
+const listers = ref<SubjectLister[]>([]);
+const listersFailed = ref(false);
+const syncStatuses = ref<Record<string, TagSyncStatus>>({});
+const syncStatusFailed = ref(false);
 const loading = ref(false);
 const visible = ref(false);
 const editing = ref(false);
@@ -166,11 +180,18 @@ const referenceVisible = ref(false);
 const references = ref<TagReference[]>([]);
 const form = reactive<TagFormState>(emptyForm());
 
-const listingSources = computed(() => dataSources.value.filter(source => parseListing(source).length > 0));
-const instrumentTypes = computed(() => {
-  const values = new Set<string>();
-  for (const source of listingSources.value) parseListing(source).forEach(item => values.add(item));
-  return [...values];
+// 来源与市场类型选项来自 Collector 能提供标的快照的（来源，市场类型）组合；
+// 编辑时当前值若已不在组合里仍要保留，否则表单会把它显示成空白。
+const sourceOptions = computed(() =>
+  withCurrent(
+    listers.value.map(item => item.source),
+    form.source
+  )
+);
+const marketTypeOptions = computed(() => {
+  const matched = listers.value.find(item => item.source === form.source);
+  const values = matched ? matched.market_types || [] : listers.value.flatMap(item => item.market_types || []);
+  return withCurrent([...new Set(values)], form.market_type);
 });
 const previewRuns = computed(() => (form.mode === "auto" ? nextRuns(form.cron, form.timezone, 3) : []));
 const timezoneOptions = ["UTC", "Asia/Shanghai", "Asia/Tokyo", "Asia/Singapore", "America/New_York", "Europe/London"];
@@ -188,14 +209,18 @@ function emptyForm(): TagFormState {
   };
 }
 
-function parseListing(source: DataSource): string[] {
-  try {
-    const value = source.attributes?.subject_listing;
-    const parsed = value ? JSON.parse(value) : undefined;
-    return Array.isArray(parsed?.instrument_types) ? parsed.instrument_types.map(String).filter(Boolean) : [];
-  } catch {
-    return [];
-  }
+function withCurrent(options: string[], current: string): string[] {
+  return current && !options.includes(current) ? [...options, current] : options;
+}
+
+function onSourceChange() {
+  // 换来源后，原市场类型不在新来源提供的范围内就清空，避免提交一个不存在的组合。
+  const matched = listers.value.find(item => item.source === form.source);
+  if (matched && form.market_type && !(matched.market_types || []).includes(form.market_type)) form.market_type = "";
+}
+
+function syncStatusOf(tagId: string): TagSyncStatus | undefined {
+  return syncStatuses.value[tagId];
 }
 
 // 空间切换后，旧空间迟到的响应不能覆盖新空间的列表；编辑/删除都固定在打开时的空间，提交前再校验。
@@ -208,13 +233,24 @@ async function load() {
   const spaceId = props.spaceId;
   loading.value = true;
   try {
-    const [tagRsp, sourceRsp] = await Promise.all([
+    // 运行状态与来源选项来自 Collector：它们不可用时标签列表仍要显示，只在对应位置提示。
+    const [tagRsp, statusResult, listerResult] = await Promise.all([
       listTags(spaceId, { page: pagination.current, size: 200 }),
-      listDataSources({ space_id: spaceId, page: { page: 1, size: 200 } })
+      listTagSyncStatus(spaceId).then(
+        items => ({ items }),
+        () => undefined
+      ),
+      listSubjectListers().then(
+        items => ({ items }),
+        () => undefined
+      )
     ]);
     if (!request.isLatest() || spaceId !== props.spaceId) return;
     rows.value = tagRsp.tags || [];
-    dataSources.value = sourceRsp.data_sources || [];
+    syncStatusFailed.value = !statusResult;
+    syncStatuses.value = Object.fromEntries((statusResult?.items || []).map(item => [item.tag_id, item]));
+    listersFailed.value = !listerResult;
+    listers.value = listerResult?.items || [];
     pagination.total = tagRsp.page_result?.total ?? rows.value.length;
   } finally {
     if (request.isLatest()) loading.value = false;
@@ -246,6 +282,7 @@ async function submit(): Promise<boolean> {
   const submission = tagScope.begin();
   const isEditing = editing.value;
   const formSnapshot = { ...form };
+  const activeTagSnapshot = activeTag.value;
   const spaceId = props.spaceId;
   if (editSpaceId && editSpaceId !== spaceId) {
     Message.warning("空间已切换，请重新打开编辑窗口");
@@ -276,7 +313,7 @@ async function submit(): Promise<boolean> {
     }
   }
   try {
-    await upsertTag(toTagPayload(spaceId, formSnapshot), !isEditing);
+    await upsertTag(toTagPayload(spaceId, formSnapshot, activeTagSnapshot), !isEditing);
   } catch (error) {
     const message = error instanceof Error ? error.message : "标签保存失败";
     if (!isEditing && /tag name .* already exists/i.test(message)) {
@@ -326,6 +363,8 @@ watch(
   () => {
     loadRequests.invalidate();
     rows.value = [];
+    syncStatuses.value = {};
+    syncStatusFailed.value = false;
     visible.value = false;
     activeTag.value = undefined;
     pagination.current = 1;
@@ -391,6 +430,10 @@ watch(visible, () => tagScope.invalidate());
 .next-runs {
   flex-wrap: wrap;
   margin: -4px 0 16px 96px;
+}
+
+.lister-alert {
+  margin-bottom: 16px;
 }
 
 .reference-table {

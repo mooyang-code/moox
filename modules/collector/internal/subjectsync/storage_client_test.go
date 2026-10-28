@@ -2,7 +2,6 @@ package subjectsync
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,19 +64,7 @@ func (*fakeMetadataClient) ApplyTagSnapshot(context.Context, *storagepb.ApplyTag
 	return nil, nil
 }
 
-func (*fakeMetadataClient) ReportTagRunFailure(context.Context, *storagepb.ReportTagRunFailureReq, ...client.Option) (*storagepb.ReportTagRunFailureRsp, error) {
-	return nil, nil
-}
-
 func (*fakeMetadataClient) UpdateSubjectAttributes(context.Context, *storagepb.UpdateSubjectAttributesReq, ...client.Option) (*storagepb.UpdateSubjectAttributesRsp, error) {
-	return nil, nil
-}
-
-func (*fakeMetadataClient) GetDataSource(context.Context, *storagepb.GetDataSourceReq, ...client.Option) (*storagepb.GetDataSourceRsp, error) {
-	return nil, nil
-}
-
-func (*fakeMetadataClient) UpdateDataSource(context.Context, *storagepb.UpdateDataSourceReq, ...client.Option) (*storagepb.UpdateDataSourceRsp, error) {
 	return nil, nil
 }
 
@@ -150,46 +137,4 @@ type subjectGatewayFunc func(context.Context, string, string, any, any) error
 
 func (f subjectGatewayFunc) Invoke(ctx context.Context, service, method string, request, response any) error {
 	return f(ctx, service, method, request, response)
-}
-
-func TestRegisterSubjectListingUsesSharedGatewayAndPreservesAttributes(t *testing.T) {
-	setSubjectSyncStorageConfig(t)
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", `{"moox-collector":"`+strings.Repeat("a", 64)+`"}`)
-	updates := map[string]*storagepb.DataSource{}
-	calls := 0
-	gateway := subjectGatewayFunc(func(_ context.Context, service, method string, request, response any) error {
-		calls++
-		require.Equal(t, "trpc.moox.storage.Metadata", service)
-		switch method {
-		case "GetDataSource":
-			req := request.(*storagepb.GetDataSourceReq)
-			require.Equal(t, "moox-collector", req.AuthInfo.AppId)
-			rsp := response.(*storagepb.GetDataSourceRsp)
-			rsp.RetInfo = storageSuccess()
-			rsp.DataSource = &storagepb.DataSource{SpaceId: req.SpaceId, DataSourceId: req.DataSourceId, Attributes: map[string]string{"keep": "value"}}
-		case "UpdateDataSource":
-			req := request.(*storagepb.UpdateDataSourceReq)
-			require.Equal(t, "moox-collector", req.AuthInfo.AppId)
-			updates[req.DataSource.DataSourceId] = req.DataSource
-			response.(*storagepb.UpdateDataSourceRsp).RetInfo = storageSuccess()
-		default:
-			t.Fatalf("unexpected metadata method %s", method)
-		}
-		return nil
-	})
-	storage, err := NewStorageClient(gateway)
-	require.NoError(t, err)
-	require.NoError(t, storage.RegisterSubjectListing(context.Background(), map[string][]string{
-		"binance": {"spot", "swap"}, "eastmoney": {"equity"}, "unknown": {"equity"},
-	}))
-	require.Equal(t, 4, calls)
-	require.Len(t, updates, 2)
-	for source, want := range map[string][]string{"binance": {"spot", "swap"}, "eastmoney": {"equity"}} {
-		require.Equal(t, "value", updates[source].Attributes["keep"])
-		var listing struct {
-			Types []string `json:"instrument_types"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(updates[source].Attributes["subject_listing"]), &listing))
-		require.Equal(t, want, listing.Types)
-	}
 }

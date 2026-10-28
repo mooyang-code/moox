@@ -48,13 +48,6 @@ var storageInternalMethods = map[string]struct{}{
 	"GetShardState":        {},
 }
 
-var storageViewMetadataMethods = map[string]struct{}{
-	"ClaimViewIndexBuild":  {},
-	"UpdateViewIndexBuild": {},
-	"ActivateViewIndex":    {},
-	"FailViewIndexBuild":   {},
-}
-
 var storagePrivilegedMethods = map[string]map[string]struct{}{
 	"trpc.moox.storage.DataShard": {
 		"MergeRows":     {},
@@ -143,7 +136,7 @@ func ValidateRoute(route Route) error {
 			}
 			_, internal := storageInternalMethods[method]
 			_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
-			if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+			if internal && !dataShardPrivileged {
 				return fmt.Errorf("storage method %q is internal and cannot be routed", method)
 			}
 		}
@@ -166,7 +159,7 @@ func ValidateRoute(route Route) error {
 	for _, method := range route.AllowedMethods {
 		_, internal := storageInternalMethods[method]
 		_, dataShardPrivileged := storagePrivilegedMethods[route.ServicePath][method]
-		if internal && !dataShardPrivileged && !allowsStorageViewMetadataMethod(route, method) {
+		if internal && !dataShardPrivileged {
 			return fmt.Errorf("storage method %q is internal and cannot be routed", method)
 		}
 	}
@@ -179,16 +172,6 @@ func ValidateRoute(route Route) error {
 		}
 	}
 	return nil
-}
-
-func allowsStorageViewMetadataMethod(route Route, method string) bool {
-	if route.ServiceID != "storage-primary" || route.ServicePath != "trpc.moox.storage.Metadata" {
-		return false
-	}
-	if _, ok := storageViewMetadataMethods[method]; !ok || len(route.AllowedCallers) != 1 {
-		return false
-	}
-	return route.AllowedCallers[0] == "storage-view"
 }
 
 func validateLoopbackAddress(address string) error {

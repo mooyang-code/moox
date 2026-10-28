@@ -85,10 +85,10 @@ type Reader interface {
 	ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error)
 
 	GetDataSource(ctx context.Context, spaceID string, dataSourceID string) (*pb.DataSource, error)
-	ListDataSources(ctx context.Context, spaceID string, kind string, market string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error)
+	ListDataSources(ctx context.Context, spaceID string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error)
 
 	GetSubject(ctx context.Context, spaceID string, subjectID string) (*pb.Subject, error)
-	ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error)
+	ListSubjects(ctx context.Context, spaceID string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error)
 
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
 	ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)

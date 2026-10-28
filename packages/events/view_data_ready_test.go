@@ -27,12 +27,16 @@ func TestViewDataReadyContract(t *testing.T) {
 
 	t.Run("required replacement events are registered", func(t *testing.T) {
 		for _, name := range []string{
-			"event.storage.collector.period.completed",
-			"event.storage.dataset.factor_period.computed",
-			"event.storage.view.data.ready",
+			"event.storage.dataset.period.completed",
 		} {
 			_, ok := registry.Lookup(name, 1)
 			require.True(t, ok, "required event %s must be registered", name)
+		}
+		_, ok := registry.Lookup("event.storage.view.data.ready", 2)
+		require.True(t, ok, "ViewDataReady v2 must be registered")
+		for _, name := range []string{"event.storage.collector.period.completed", "event.storage.dataset.factor_period.computed"} {
+			_, ok := registry.Lookup(name, 1)
+			require.False(t, ok, "%s 已被 DatasetPeriodCompleted 取代", name)
 		}
 	})
 
@@ -41,7 +45,6 @@ func TestViewDataReadyContract(t *testing.T) {
 		ViewId:             "view-1",
 		ViewConfigId:       "view-config-1",
 		CompletionEventId:  "collector-completed-1",
-		CompletionKind:     CollectorPeriodCompleted.Name(),
 		DatasetId:          "dataset_kline_1m",
 		Status:             "complete",
 		VisibleScope:       "universe:crypto:usdt",
@@ -57,7 +60,7 @@ func TestViewDataReadyContract(t *testing.T) {
 			mutate func(*storagepb.ViewDataReady)
 		}{
 			{name: "completion_event_id", mutate: func(v *storagepb.ViewDataReady) { v.CompletionEventId = "" }},
-			{name: "completion_kind", mutate: func(v *storagepb.ViewDataReady) { v.CompletionKind = "" }},
+			{name: "detail_type", mutate: func(v *storagepb.ViewDataReady) { v.Detail = []byte("x") }},
 			{name: "view_id", mutate: func(v *storagepb.ViewDataReady) { v.ViewId = "" }},
 			{name: "dataset_id", mutate: func(v *storagepb.ViewDataReady) { v.DatasetId = "" }},
 			{name: "committed_positions", mutate: func(v *storagepb.ViewDataReady) {

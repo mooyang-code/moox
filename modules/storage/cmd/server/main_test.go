@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +15,6 @@ import (
 	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
-	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,9 +48,6 @@ func (*cleanupNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp,
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return nil, nil
 }
-func (*cleanupNode) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return nil, nil
-}
 func (n *cleanupNode) CleanupExpiredBuckets(_ context.Context, req *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	n.requests[req.GetSpaceId()+"/"+req.GetDatasetId()] = req
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, DeletedRanges: 3}, nil
@@ -64,19 +59,21 @@ func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retention := storagepolicy.Default().Retention
+	retention.Spaces = map[string]map[string]string{"stockcn": {"1m": "60d"}}
 	cleanup := datasetCleanup{
 		reader: cleanupDatasetReader{},
 		resolver: func(context.Context, string, string) (pb.DataNodeRuntimeService, error) {
 			return node, nil
 		},
-		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: storagepolicy.Default().Retention, metrics: metrics,
+		auth: &pb.AuthInfo{AppId: "primary", AppKey: "key"}, retention: retention, metrics: metrics,
 	}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	if err := cleanup.run(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		// crypto 1m keeps 35 days, stockcn 1m 60 days; whole day buckets.
+		// crypto 1m keeps 35 days（默认），stockcn 1m 60 days（空间覆盖）; whole day buckets.
 		"crypto/prices_1m":  "2026-06-15T00:00:00.000000000Z",
 		"stockcn/equity_1m": "2026-05-21T00:00:00.000000000Z",
 	}
@@ -299,99 +296,53 @@ func TestStorageEventBusConfigLoadsCredentialFromStorageConfig(t *testing.T) {
 	}
 }
 
-func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
+// 所有数据集的动态消费者共用同一个投递模板：全局并发参数来自配置，新建的 durable 回放完整历史。
+func TestStorageViewConsumerTemplateUsesTheGlobalSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 1\n    max_workers: 1\n    ordering: dataset\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  eventbus:\n    credential_file: \"\"\n  view:\n    fetch_batch: 4\n    max_workers: 2\n    max_ack_pending: 16\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	opts, err := storageViewConsumerOptions()
+	opts, err := storageViewConsumerTemplate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.PartitionConfigs) != 2 {
-		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
+	if opts.FetchBatch != 4 || opts.MaxWorkers != 2 || opts.MaxAckPending != 16 || opts.Ordering != "dataset" || opts.DeliverPolicy != "all" || opts.MaxRetryAttempts != -1 {
+		t.Fatalf("consumer template = %+v", opts)
 	}
-	if opts.PartitionConfigs[0].PartitionID != "factor" || opts.PartitionConfigs[0].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[0].FilterSubjects) != 0 || opts.PartitionConfigs[0].FetchBatch != 1 || opts.PartitionConfigs[0].MaxWorkers != 1 || opts.PartitionConfigs[0].MaxAckPending != 1 || len(opts.PartitionConfigs[0].DatasetRoutes) != 0 {
-		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[0])
-	}
-	if opts.PartitionConfigs[1].PartitionID != "misc" || opts.PartitionConfigs[1].Consumer != "storage_view_misc" || opts.PartitionConfigs[1].Ordering != "dataset" || opts.PartitionConfigs[1].DeliverPolicy != "new" {
-		t.Fatalf("misc consumer options = %+v", opts.PartitionConfigs[1])
+	if len(opts.FilterSubjects) != 0 || len(opts.DatasetRoutes) != 0 {
+		t.Fatalf("模板不带任何数据集路由：%+v", opts)
 	}
 }
 
-func TestStorageViewConsumerOptionsAllowExplicitDynamicSpaces(t *testing.T) {
+func TestStorageViewConsumerTemplateRejectsInvalidSettings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    consumer_partitions:\n      - id: misc\n        durable: storage_view_misc\n        routes:\n          - space_id: crypto\n            dataset_ids: [\"*\"]\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("storage:\n  view:\n    fetch_batch: 8\n    max_ack_pending: 4\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	t.Setenv("MOOX_STORAGE_VIEW_ALLOWED_DATASET_SPACES", " factor_e2e, crypto, factor_e2e ")
-	opts, err := storageViewConsumerOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := opts.AllowedDatasetSpaces, []string{"crypto", "factor_e2e"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("allowed dynamic spaces = %v, want %v", got, want)
+	if _, err := storageViewConsumerTemplate(); err == nil {
+		t.Fatal("fetch_batch 超过 max_ack_pending 的配置被接受")
 	}
 }
 
-func TestStorageViewConfigFilesBindFactorResultsDynamically(t *testing.T) {
+func TestStorageViewConfigFilesUseSerialDelivery(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "config", "storage.yaml"),
 		filepath.Join("..", "..", "config", "storage_view", "trpc_go.yaml"),
 	} {
 		t.Run(path, func(t *testing.T) {
 			t.Setenv("MOOX_STORAGE_CONFIG", path)
-			opts, err := storageViewConsumerOptions()
+			opts, err := storageViewConsumerTemplate()
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			stockRoutes := make(map[string]bool)
-			for _, partition := range opts.PartitionConfigs {
-				for _, route := range partition.DatasetRoutes {
-					if route.SpaceID == "stockcn" {
-						stockRoutes[route.DatasetID] = true
-					}
-				}
-				if partition.PartitionID == "factor" && len(partition.DatasetRoutes) != 0 {
-					t.Fatalf("factor results bind dynamically; static routes = %+v", partition.DatasetRoutes)
-				}
-				if partition.PartitionID == "factor" && (partition.FetchBatch != 1 || partition.MaxWorkers != 1 || partition.MaxAckPending != 1) {
-					t.Fatalf("factor delivery budget = %+v, want serialized 1/1/1", partition)
-				}
-			}
-			if len(stockRoutes) != 1 || !stockRoutes["*"] {
-				t.Fatalf("stockcn routes = %+v", stockRoutes)
+			if opts.FetchBatch != 1 || opts.MaxWorkers != 1 || opts.MaxAckPending != 1 {
+				t.Fatalf("delivery budget = %d/%d/%d, want the serialized 1/1/1", opts.FetchBatch, opts.MaxWorkers, opts.MaxAckPending)
 			}
 		})
-	}
-}
-
-func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
-	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []viewservice.DatasetRoute{
-			{SpaceID: "crypto", DatasetID: "*"},
-			{SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m"},
-		}},
-	}}
-	stripWildcardConsumerRoutes(&opts)
-	if got := opts.PartitionConfigs[0].DatasetRoutes; len(got) != 1 || got[0].SpaceID != "stockcn" || got[0].DatasetID != "dataset_stockcn_equity_kline_1m" {
-		t.Fatalf("static routes = %+v, want only exact route", got)
-	}
-}
-
-func TestStripMiscConsumerPartitionLeavesExactConsumers(t *testing.T) {
-	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "factor", Consumer: "storage_view_factor"},
-		{PartitionID: "misc", Consumer: "storage_view_misc"},
-	}}
-	stripMiscConsumerPartition(&opts)
-	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_factor" {
-		t.Fatalf("static partitions = %+v, want misc removed", opts.PartitionConfigs)
 	}
 }
 
@@ -438,10 +389,6 @@ func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.
 func (*resolverRuntime) CleanupExpiredBuckets(context.Context, *pb.CleanupExpiredBucketsReq) (*pb.CleanupExpiredBucketsRsp, error) {
 	return &pb.CleanupExpiredBucketsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
-func (*resolverRuntime) WriteFactorRows(context.Context, *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	return &pb.WriteFactorRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
-}
-
 func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
 	if dataNodeClientTimeout != 5*time.Minute {
 		t.Fatalf("dataNodeClientTimeout = %s, want 5m", dataNodeClientTimeout)
@@ -565,15 +512,15 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 		runtime = &resolverRuntime{target: target}
 		return runtime
 	})
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore()})
+	svc, err := primarystore.New(primarystore.Options{Snapshot: func() metadata.RequestSnapshot { return snapshot }, Resolver: resolver.primaryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "dataset", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "record", Version: "1"}}}
-	write, err := svc.UpsertFields(context.Background(), &pb.PrimaryUpsertFieldsReq{
+	write, err := svc.UpsertFields(context.Background(), fillDataset(&pb.PrimaryUpsertFieldsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller"},
 		Rows:     []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "ok"}}}}}},
-	})
+	}))
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write=%v err=%v", write, err)
 	}
@@ -583,20 +530,5 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 	}
 	if runtime == nil || runtime.writes != 1 || runtime.reads != 1 || runtime.target != "ip://127.0.0.1:20107" {
 		t.Fatalf("runtime=%+v", runtime)
-	}
-}
-
-func TestStorageViewGatewayRequiresConfigurationAndItsOwnIdentity(t *testing.T) {
-	t.Setenv("MOOX_STORAGE_CONFIG", "")
-	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "MOOX_STORAGE_CONFIG is required") {
-		t.Fatalf("missing config error: %v", err)
-	}
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	if err := os.WriteFile(path, []byte("gateway_client:\n  caller: console\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, err := openStorageViewGateway(t.TempDir()); err == nil || !strings.Contains(err.Error(), "caller must be storage-view") {
-		t.Fatalf("wrong caller error: %v", err)
 	}
 }

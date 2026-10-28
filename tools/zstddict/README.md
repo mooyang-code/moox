@@ -17,7 +17,7 @@ go run ./tools/zstddict scan  -dict default-v2.zdict
 
 | 来源子目录 | 内容 |
 |---|---|
-| `rpc-write` | 写请求：`CommitTimeSeriesBatch`、`WriteFactorRows`、`UpsertFields` 等 |
+| `rpc-write` | 写请求：`CommitTimeSeriesBatch`、`UpsertFields` 等 |
 | `rpc-read` | 读请求与响应：`Read*`、`Query*`、`Count*` |
 | `rpc-meta` | `Metadata` 服务的请求与响应 |
 | `rpc-ctl` | 其他控制面调用与写调用的响应 |

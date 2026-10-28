@@ -143,7 +143,7 @@ eventbus:
   fetch_max_wait: 10s
 
 compute:
-  max_memory: 1GiB
+  max_memory: 4GiB
 
 pipeline:
   write_batch_rows: 1000
@@ -155,6 +155,11 @@ recalc:
   poll_interval: 5s
 EOF
 umask 022
+
+# 窗口与进程内存预算按本机内存校准后写入（tune 只写还没设置的项）；失败只告警，引擎仍可按默认值（不限制）运行。
+if ! "${DEPLOY_DIR}/bin/moox-factor-engine" tune --config "${DEPLOY_DIR}/config/engine.yaml" --write >/dev/null 2>&1; then
+  log "WARN: moox-factor-engine tune failed; run it manually: moox-factor-engine tune --config ${DEPLOY_DIR}/config/engine.yaml --write"
+fi
 
 # 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
 health_env="${SECRETS_DIR}/health-auth.env"

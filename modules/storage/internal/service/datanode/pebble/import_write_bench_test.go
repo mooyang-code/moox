@@ -42,9 +42,6 @@ func TestImportUpsertThroughput(t *testing.T) {
 		}
 		return rows
 	}
-	event := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessageWithSource("bench", "import", spaceID, datasetID, rows)
-	}
 	for _, workers := range []int{1, 4, 8} {
 		store, err := Open(Options{Path: t.TempDir(), NodeID: "bench"})
 		if err != nil {
@@ -68,7 +65,7 @@ func TestImportUpsertThroughput(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for n := range queue {
-					if _, err := store.UpsertFieldsEvent(context.Background(), prepared[n], event); err != nil {
+					if _, err := upsertTestRowsEntries(store, context.Background(), prepared[n]); err != nil {
 						mu.Lock()
 						failed = err
 						mu.Unlock()

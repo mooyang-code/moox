@@ -439,7 +439,7 @@ func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTa
 	if !ok {
 		return &storagepb.GetTagRsp{RetInfo: resultNotFound()}, nil
 	}
-	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Source: source}}, nil
+	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Attributes: map[string]string{"sync.source": source}}}, nil
 }
 
 func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {

@@ -83,7 +83,7 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 	store := openSeedTestStore(t)
 	seed := seedFile{
 		Spaces:      []seedSpace{{SpaceID: "space", Name: "Space", Status: "active"}},
-		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Kind: "internal", Status: "active"}},
+		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
 			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", Status: "active",

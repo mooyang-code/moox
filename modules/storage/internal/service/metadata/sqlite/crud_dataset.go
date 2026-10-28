@@ -94,9 +94,6 @@ func (s *Store) UpdateDataset(ctx context.Context, item *pb.Dataset) (*pb.Datase
 	if err != nil {
 		return nil, err
 	}
-	if err := coremetadata.PreserveDatasetOwnerAttributes(existing, item); err != nil {
-		return nil, err
-	}
 	if item.GetRevision() != 0 && item.GetRevision() != existing.GetRevision() {
 		return nil, ErrRevisionConflict
 	}
@@ -183,14 +180,8 @@ func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID str
 		return err
 	}
 	defer tx.Rollback()
-	dataset, err := getDatasetTx(ctx, tx, spaceID, datasetID)
-	if err != nil {
+	if _, err := getDatasetTx(ctx, tx, spaceID, datasetID); err != nil {
 		return err
-	}
-	if strings.EqualFold(strings.TrimSpace(dataset.GetAttributes()["dataset_role"]), "factor_result") {
-		if err := deleteManagedFactorResultDefaultView(ctx, tx, dataset); err != nil {
-			return err
-		}
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
 	if err != nil {
@@ -204,48 +195,6 @@ func (s *Store) DeleteDataset(ctx context.Context, spaceID string, datasetID str
 		return sql.ErrNoRows
 	}
 	return tx.Commit()
-}
-
-func deleteManagedFactorResultDefaultView(ctx context.Context, tx *sql.Tx, dataset *pb.Dataset) error {
-	attrs := dataset.GetAttributes()
-	if !strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") || !strings.EqualFold(strings.TrimSpace(attrs["write_owner"]), "factor") {
-		return errors.New("factor_result Dataset ownership metadata is invalid")
-	}
-	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`,
-		[]any{dataset.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !isManagedFactorResultDefaultView(dataset, view) {
-		return fmt.Errorf("factor_result default View %s/%s does not match its managed contract", dataset.GetSpaceId(), viewID)
-	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, dataset.GetSpaceId(), viewID)
-	return err
-}
-
-func isManagedFactorResultDefaultView(dataset *pb.Dataset, view *pb.View) bool {
-	if dataset == nil || view == nil || dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES || dataset.GetFreq() == "" {
-		return false
-	}
-	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
-	if err != nil || view.GetViewId() != viewID || view.GetDatasetId() != dataset.GetDatasetId() || view.GetStatus() != "active" ||
-		view.GetEngine() != "duckdb" ||
-		!equalStrings(view.GetGrainKeys(), []string{"subject_id", "freq", "data_time", "series_tag"}) {
-		return false
-	}
-	viewAttrs := view.GetAttributes()
-	if viewAttrs["owner_module"] != "factor" || viewAttrs["view_role"] != "factor_result" ||
-		viewAttrs["managed_by"] != "storage" || viewAttrs["primary_dataset_role"] != "factor_result" {
-		return false
-	}
-	return view.GetFreq() == dataset.GetFreq()
 }
 
 func equalStrings(left, right []string) bool {
@@ -437,9 +386,6 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	if item.GetSpaceId() == "" || item.GetDatasetId() == "" || item.GetDataNodeId() == "" || item.GetName() == "" {
 		return nil, errors.New("space_id, dataset_id, data_node_id and name are required")
 	}
-	if item.GetDataSourceId() == "" && !collectorOwnedDataset(item) {
-		return nil, errors.New("data_source_id is required unless owner_module is collector")
-	}
 	if item.GetDataKind() != pb.DataKind_DATA_KIND_RECORD && item.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return nil, errors.New("data_kind must be record or time_series")
 	}
@@ -450,13 +396,6 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
 	}
 	return item, nil
-}
-
-func collectorOwnedDataset(item *pb.Dataset) bool {
-	if item == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(item.GetAttributes()["owner_module"]), "collector")
 }
 
 func nullableDatasetSource(sourceID string) any {
@@ -706,12 +645,12 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		return nil, err
 	}
 	if (newColumn || projectionChanged) && isActive {
-		if err := addFactorResultViewColumn(ctx, tx, item); err != nil {
+		if err := addColumnToFollowingViews(ctx, tx, item); err != nil {
 			return nil, err
 		}
 	} else if isActive && wasActive && getErr == nil && !maps.Equal(existing.GetAttributes(), item.GetAttributes()) {
-		// 已有列只改了属性（例如成员换绑了另一个因子定义，列的 factor_id、分类随之变化）：View 列要带上新属性。
-		if err := refreshFactorResultViewColumnAttributes(ctx, tx, item); err != nil {
+		// 已有列只改了属性：跟随它的 View 的列要带上新属性。
+		if err := refreshFollowingViewColumnAttributes(ctx, tx, item); err != nil {
 			return nil, err
 		}
 	}
@@ -726,82 +665,86 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 	return item, nil
 }
 
-func addFactorResultViewColumn(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
-	dataset, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+// followingViewIDs 返回数据集上声明了 follow_dataset_columns=true 的活动 View：这些 View 跟随数据集加列。
+func followingViewIDs(ctx context.Context, tx *sql.Tx, spaceID, datasetID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT c_view_id FROM t_views
+		WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'active'
+		  AND json_extract(c_attrs_json, '$.attributes.follow_dataset_columns') = 'true'
+		ORDER BY c_view_id`, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// addColumnToFollowingViews 把数据集的新列（或重新启用的列）加进跟随它的 View，并提升 View 版本触发原地扩展。
+func addColumnToFollowingViews(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
+	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
 		return err
 	}
-	if dataset.GetAttributes()["dataset_role"] != "factor_result" || dataset.GetStatus() != "active" || !dataset.GetBindingLocked() {
-		return nil
-	}
-	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	view, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, []any{item.GetSpaceId(), viewID}, func() *pb.View { return &pb.View{} })
-	if err != nil {
-		return fmt.Errorf("factor result default View %s/%s must exist before adding columns: %w", item.GetSpaceId(), viewID, err)
-	}
-	if view.GetDatasetId() != item.GetDatasetId() || view.GetStatus() != "active" {
-		return fmt.Errorf("factor result default View %s/%s is not active for its Dataset", item.GetSpaceId(), viewID)
-	}
-	var sortOrder uint32
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
-		return err
-	}
-	changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
-		SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
-		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: item.GetColumnName(),
-		ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
-	})
-	if err != nil {
-		return err
-	}
-	if changed {
-		return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
+	for _, viewID := range viewIDs {
+		var sortOrder uint32
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
+			return err
+		}
+		changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
+			SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
+			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: item.GetColumnName(),
+			ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
+		})
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// refreshFactorResultViewColumnAttributes 把数据集列的新属性同步到默认结果 View 的同名列：只改属性，排序与其他字段不动；
+// refreshFollowingViewColumnAttributes 把数据集列的新属性同步到跟随它的 View 的同名列：只改属性，排序与其他字段不动；
 // View 里还没有这一列（没有加进 View）时什么都不做。属性变了要提升 View 版本，下游缓存才会刷新。
-func refreshFactorResultViewColumnAttributes(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
-	dataset, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+func refreshFollowingViewColumnAttributes(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
+	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
 		return err
 	}
-	if dataset.GetAttributes()["dataset_role"] != "factor_result" || dataset.GetStatus() != "active" || !dataset.GetBindingLocked() {
-		return nil
+	for _, viewID := range viewIDs {
+		column, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
+			[]any{item.GetSpaceId(), viewID, item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		column.Attributes = cloneMetadataStringMap(item.GetAttributes())
+		raw, err := marshal(column)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE t_view_columns SET c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
+			raw, item.GetSpaceId(), viewID, item.GetColumnName()); err != nil {
+			return err
+		}
+		if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID); err != nil {
+			return err
+		}
 	}
-	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	column, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
-		[]any{item.GetSpaceId(), viewID, item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	column.Attributes = cloneMetadataStringMap(item.GetAttributes())
-	raw, err := marshal(column)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE t_view_columns SET c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
-		raw, item.GetSpaceId(), viewID, item.GetColumnName()); err != nil {
-		return err
-	}
-	return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
-}
-
-func factorResultDefaultViewID(datasetID string) (string, error) {
-	if !strings.HasPrefix(datasetID, "dataset_") || len(datasetID) == len("dataset_") {
-		return "", fmt.Errorf("factor_result Dataset ID %q must start with dataset_ and include a suffix", datasetID)
-	}
-	return "view_" + strings.TrimPrefix(datasetID, "dataset_"), nil
+	return nil
 }
 
 func cloneMetadataStringMap(input map[string]string) map[string]string {

@@ -16,7 +16,7 @@
 
 `c_period_time` 是 unix 秒。`t_views.c_mtime` 不是 K 线水位。
 
-每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。每个因子任务的结果 Dataset 与默认 View（`dataset_factor_<后缀>`、`view_factor_<后缀>`）由 Storage 自动维护，一个源 Dataset 可以有多个因子任务。
+每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。每个因子任务的结果 Dataset 与默认 View（`dataset_factor_<后缀>`、`view_factor_<后缀>`）由 factor-mgr 创建与维护（Storage 不托管 View），一个源 Dataset 可以有多个因子任务。
 
 ## 生产路径（不要混用）
 
@@ -24,8 +24,10 @@
 
 - 包根 `--package-root /data/moox/storage/current`，其中包含 `start.sh` / `stop.sh` / `status.sh`。
 - 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`；不要传 `trpc_go.yaml`。
-- `consumer_partitions` 在 View 的 `storage.yaml`，两个模板 durable 是 `storage_view_factor` / `storage_view_misc`；实际消费者按数据集动态创建为 `storage_view_factor_<hash>` / `storage_view_misc_<hash>`。
+- View 的消费者是按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个）；并发参数是 View 的 `storage.view.fetch_batch` / `max_workers` / `max_ack_pending`（全局，默认都是 1）
 - 元数据库与 Pebble 分别属于 `storage-primary` 与 `storage-node` 组件。不要把旧平铺目录或操作机的路径当作当前主机路径。
+
+控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
 ## Storage View 容量检查
 
@@ -42,11 +44,11 @@
 - 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是 Collector 周期完成事件，计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
+- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
 
 ## Storage View：单数据集消费停滞
 
-Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `storage_view_misc_<hash>` 或 `storage_view_factor_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、重建占用与进程问题。
+Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `view_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、重建占用与进程问题。
 
 确需修复索引时，在 Storage 主机使用同版本 CLI，先只读预演：
 
@@ -69,7 +71,7 @@ moox-cli storage repair-view \
 
 ## Factor 周期诊断
 
-Factor 消费 `CollectorPeriodCompleted`，durable 名为 `factor_collector_period_v1`；
+Factor 消费 `DatasetPeriodCompleted`，durable 名为 `factor_collector_period_v1`；
 计算窗口来自本地 Pebble / 内存窗口，PrimaryStore 提供增量、变更与核对读取，不读取 View。先看该 durable 的 pending 与
 redelivery，再按 `task` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
 `factor_runner_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子

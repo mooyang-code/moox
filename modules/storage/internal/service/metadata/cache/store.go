@@ -54,31 +54,27 @@ type Store struct {
 
 // entry 保存一个缓存条目的值与错误信息。
 type entry struct {
-	Kind           string   `json:"kind"`
-	SpaceID        string   `json:"space_id,omitempty"`
-	ID             string   `json:"id,omitempty"`
-	Owner          string   `json:"owner,omitempty"`
-	Status         string   `json:"status,omitempty"`
-	Name           string   `json:"name,omitempty"`
-	Currency       string   `json:"currency,omitempty"`
-	DataSourceID   string   `json:"data_source_id,omitempty"`
-	DataSourceKind string   `json:"data_source_kind,omitempty"`
-	Market         string   `json:"market,omitempty"`
-	SubjectType    string   `json:"subject_type,omitempty"`
-	SubjectID      string   `json:"subject_id,omitempty"`
-	DatasetID      string   `json:"dataset_id,omitempty"`
-	GroupID        string   `json:"group_id,omitempty"`
-	ParentGroupID  string   `json:"parent_group_id,omitempty"`
-	DatasetIDs     []string `json:"dataset_ids,omitempty"`
-	DataKind       int32    `json:"data_kind,omitempty"`
-	Freq           string   `json:"freq,omitempty"`
-	DataNodeID     string   `json:"data_node_id,omitempty"`
-	BindingLocked  bool     `json:"binding_locked,omitempty"`
-	Revision       uint64   `json:"revision,omitempty"`
-	ViewID         string   `json:"view_id,omitempty"`
-	ValueType      int32    `json:"value_type,omitempty"`
-	Engine         string   `json:"engine,omitempty"`
-	Payload        []byte   `json:"payload"`
+	Kind          string   `json:"kind"`
+	SpaceID       string   `json:"space_id,omitempty"`
+	ID            string   `json:"id,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Name          string   `json:"name,omitempty"`
+	DataSourceID  string   `json:"data_source_id,omitempty"`
+	SubjectID     string   `json:"subject_id,omitempty"`
+	DatasetID     string   `json:"dataset_id,omitempty"`
+	GroupID       string   `json:"group_id,omitempty"`
+	ParentGroupID string   `json:"parent_group_id,omitempty"`
+	DatasetIDs    []string `json:"dataset_ids,omitempty"`
+	DataKind      int32    `json:"data_kind,omitempty"`
+	Freq          string   `json:"freq,omitempty"`
+	DataNodeID    string   `json:"data_node_id,omitempty"`
+	BindingLocked bool     `json:"binding_locked,omitempty"`
+	Revision      uint64   `json:"revision,omitempty"`
+	ViewID        string   `json:"view_id,omitempty"`
+	ValueType     int32    `json:"value_type,omitempty"`
+	Engine        string   `json:"engine,omitempty"`
+	Payload       []byte   `json:"payload"`
 }
 
 // MetadataSnapshot is an immutable read view captured from one cache
@@ -312,13 +308,11 @@ func (s *Store) GetDataSource(ctx context.Context, spaceID string, dataSourceID 
 	return getProto(s, ctx, kindDataSource, spaceID, dataSourceID, func() *pb.DataSource { return &pb.DataSource{} })
 }
 
-func (s *Store) ListDataSources(ctx context.Context, spaceID string, kind string, market string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+func (s *Store) ListDataSources(ctx context.Context, spaceID string, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	items, err := decodeEntries(s.list(kindDataSource, func(item entry) bool {
 		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(kind == "" || item.DataSourceKind == kind) &&
-			(market == "" || item.Market == market) &&
-			(keyword == "" || strings.Contains(strings.ToLower(item.ID), keyword) || strings.Contains(strings.ToLower(item.Name), keyword) || strings.Contains(strings.ToLower(item.DataSourceKind), keyword) || strings.Contains(strings.ToLower(item.Market), keyword))
+			(keyword == "" || strings.Contains(strings.ToLower(item.ID), keyword) || strings.Contains(strings.ToLower(item.Name), keyword))
 	}), func() *pb.DataSource { return &pb.DataSource{} })
 	if err != nil {
 		return nil, nil, err
@@ -330,15 +324,13 @@ func (s *Store) GetSubject(ctx context.Context, spaceID string, subjectID string
 	return getProto(s, ctx, kindSubject, spaceID, subjectID, func() *pb.Subject { return &pb.Subject{} })
 }
 
-func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectType string, market string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+func (s *Store) ListSubjects(ctx context.Context, spaceID string, subjectIDs []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	keyword = strings.ToLower(strings.TrimSpace(keyword))
 	allow := stringSet(subjectIDs)
 	items, err := decodeEntries(s.list(kindSubject, func(item entry) bool {
 		return (spaceID == "" || item.SpaceID == spaceID) &&
-			(subjectType == "" || item.SubjectType == subjectType) &&
-			(market == "" || item.Market == market) &&
 			(len(allow) == 0 || allow[item.ID]) &&
-			(keyword == "" || strings.Contains(strings.ToLower(item.ID), keyword) || strings.Contains(strings.ToLower(item.SubjectType), keyword) || strings.Contains(strings.ToLower(item.Name), keyword) || strings.Contains(strings.ToLower(item.Market), keyword))
+			(keyword == "" || strings.Contains(strings.ToLower(item.ID), keyword) || strings.Contains(strings.ToLower(item.Name), keyword))
 	}), func() *pb.Subject { return &pb.Subject{} })
 	if err != nil {
 		return nil, nil, err
@@ -665,13 +657,13 @@ func (s *Store) fetchSpaces(ctx context.Context, out []entry) ([]entry, error) {
 
 func (s *Store) fetchDataSources(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
-		return s.base.ListDataSources(ctx, "", "", "", "", page)
+		return s.base.ListDataSources(ctx, "", "", page)
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataSource, SpaceID: item.GetSpaceId(), ID: item.GetDataSourceId(), Name: item.GetName(), DataSourceKind: item.GetKind(), Market: item.GetMarket(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataSource, SpaceID: item.GetSpaceId(), ID: item.GetDataSourceId(), Name: item.GetName(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -681,13 +673,13 @@ func (s *Store) fetchDataSources(ctx context.Context, out []entry) ([]entry, err
 
 func (s *Store) fetchSubjects(ctx context.Context, out []entry) ([]entry, error) {
 	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
-		return s.base.ListSubjects(ctx, "", "", "", nil, "", page)
+		return s.base.ListSubjects(ctx, "", nil, "", page)
 	})
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindSubject, SpaceID: item.GetSpaceId(), ID: item.GetSubjectId(), Name: item.GetName(), SubjectType: item.GetSubjectType(), Market: item.GetMarket(), Currency: item.GetCurrency(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindSubject, SpaceID: item.GetSpaceId(), ID: item.GetSubjectId(), Name: item.GetName(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

@@ -97,17 +97,18 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 	form.Retention.Defaults = copyMap(m.StorageRetention.Defaults)
 	recommended := storagepolicy.Default()
 	form.Retention.Recommended = FormRecommended{ViewBars: recommended.View.Bars, ViewFileBytes: recommended.View.MaxViewFileBytes, Defaults: copyMap(recommended.Retention.Defaults), Spaces: map[string]map[string]string{}}
-	for id, values := range recommended.Retention.Spaces {
+	recommendedSpaces := setupconfig.RecommendedSpaceRetention()
+	for id, values := range recommendedSpaces {
 		form.Retention.Recommended.Spaces[id] = copyMap(values)
 	}
 	// 表格列 = 当前配置里有的空间 ∪ 推荐里有的空间：配置里被清空的空间也要能重新填回来。
 	known := map[string]bool{}
-	ids := make([]string, 0, len(m.StorageRetention.Spaces)+len(recommended.Retention.Spaces))
+	ids := make([]string, 0, len(m.StorageRetention.Spaces)+len(recommendedSpaces))
 	for id := range m.StorageRetention.Spaces {
 		known[id] = true
 		ids = append(ids, id)
 	}
-	for id := range recommended.Retention.Spaces {
+	for id := range recommendedSpaces {
 		if !known[id] {
 			ids = append(ids, id)
 		}
@@ -203,7 +204,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	}
 	for _, space := range form.Retention.Spaces {
 		_, inCurrent := current.StorageRetention.Spaces[space.ID]
-		_, inRecommended := storagepolicy.Default().Retention.Spaces[space.ID]
+		_, inRecommended := setupconfig.RecommendedSpaceRetention()[space.ID]
 		if !inCurrent && !inRecommended {
 			return nil, fmt.Errorf("配置里没有空间 %q 的保留期", space.ID)
 		}

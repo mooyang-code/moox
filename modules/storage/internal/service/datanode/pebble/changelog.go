@@ -72,35 +72,27 @@ func (s *Store) nextChangeSeq() (uint64, error) {
 	return next, nil
 }
 
-// stageChangeLog 把一次写入的变更记录追加进 batch。只记录时间序列行；同一个标的在一次写入里的多行合并成一个时间范围。
-func (s *Store) stageChangeLog(batch *cpebble.Batch, grouped map[datasetGroup][]*pb.RowFieldUpsert, now time.Time) error {
+// stageChangeLog 把一次写入的变更记录追加进 batch。ranges 由 changeRanges 在锁外算好（只含时间序列行，
+// 同一个标的在一次写入里的多行合并成一个时间范围）；没有时间序列行时不记。调用方必须持有 outboxMu。
+func (s *Store) stageChangeLog(batch *cpebble.Batch, spaceID, datasetID string, ranges []*pb.DatasetChangeRange, now time.Time) error {
+	if len(ranges) == 0 {
+		return nil
+	}
 	seq, err := s.nextChangeSeq()
 	if err != nil {
 		return err
 	}
-	staged := false
-	for _, group := range sortedDatasetGroups(grouped) {
-		ranges := changeRanges(grouped[group])
-		if len(ranges) == 0 {
-			continue
-		}
-		raw, err := proto.Marshal(&pb.DatasetChange{
-			Sequence: seq, SpaceId: group.spaceID, DatasetId: group.datasetID, Ranges: ranges,
-			CreatedAt: now.UTC().Format(time.RFC3339Nano),
-		})
-		if err != nil {
-			return err
-		}
-		if err := batch.Set(changeLogKey(seq), raw, s.writeOptions); err != nil {
-			return err
-		}
-		seq++
-		staged = true
+	raw, err := proto.Marshal(&pb.DatasetChange{
+		Sequence: seq, SpaceId: spaceID, DatasetId: datasetID, Ranges: ranges,
+		CreatedAt: now.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return err
 	}
-	if !staged {
-		return nil
+	if err := batch.Set(changeLogKey(seq), raw, s.writeOptions); err != nil {
+		return err
 	}
-	return setUint64Meta(batch, metaNextChangeSeq, seq, s.writeOptions)
+	return setUint64Meta(batch, metaNextChangeSeq, seq+1, s.writeOptions)
 }
 
 // changeRanges 按 (标的, 频率) 合并一次写入里时间序列行的 data_time 范围。

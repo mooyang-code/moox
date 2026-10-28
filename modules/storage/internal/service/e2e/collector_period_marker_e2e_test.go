@@ -42,7 +42,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	)
 	const storageSubject = "moox.event.storage.>"
 	bus.AddStream(t, &nats.StreamConfig{Name: stream, Subjects: []string{storageSubject}, Storage: nats.MemoryStorage, Retention: nats.LimitsPolicy})
-	markerSubject, err := registry.RenderSubject(events.CollectorPeriodCompleted, "crypto", "dataset-period-marker-e2e")
+	markerSubject, err := registry.RenderSubject(events.DatasetPeriodCompleted, "crypto", "dataset-period-marker-e2e")
 	require.NoError(t, err)
 	_, err = bus.JetStream().AddConsumer(stream, &nats.ConsumerConfig{
 		Name: durable, Durable: durable, FilterSubject: markerSubject,
@@ -97,7 +97,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 		}}},
 		Fields: []*storagegen.FieldValue{{FieldId: "close", Value: &storagegen.TypedValue{Value: &storagegen.TypedValue_DoubleValue{DoubleValue: 68000}}}},
 	}
-	_, err = store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}, "period-marker-e2e-row", "collector")
+	_, err = store.CommitTimeSeriesBatch(ctx, expectation, []pebble.TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}})
 	require.NoError(t, err)
 	failures, err := store.RecordDatasetPeriodFailures(ctx, expectation, []uint32{1})
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	message := messages[0]
 	metadata, err := message.Metadata()
 	require.NoError(t, err)
-	envelope, marker, err := events.DecodeCollectorPeriodCompletedWithContentType(
+	envelope, marker, err := events.DecodeDatasetPeriodCompletedWithContentType(
 		registry, message.Data, message.Subject, message.Header.Get(nats.MsgIdHdr), message.Header.Get("Content-Type"),
 	)
 	require.NoError(t, err)
@@ -133,7 +133,8 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	require.Equal(t, "degraded", marker.GetStatus())
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds())
 	require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects())
-	require.Equal(t, expectation.SeriesHash, marker.GetExpectedScopeRef())
+	require.Equal(t, expectation.SeriesHash, marker.GetSnapshotRef())
+	require.Equal(t, "ledger", marker.GetSource())
 	require.NoError(t, message.AckSync())
 
 	consumerInfo, err := bus.JetStream().ConsumerInfo(stream, durable)
@@ -146,7 +147,7 @@ func TestCollectorPeriodMarkerJetStreamAckE2E(t *testing.T) {
 	for _, entry := range entries {
 		pending := new(eventpb.EventMessage)
 		require.NoError(t, proto.Unmarshal(entry.Data, pending))
-		if pending.GetEventName() == events.CollectorPeriodCompleted.Name() {
+		if pending.GetEventName() == events.DatasetPeriodCompleted.Name() {
 			markerStillPending = true
 		}
 	}
@@ -181,7 +182,7 @@ func (p *gatedPeriodMarkerPublisher) PublishMessage(ctx context.Context, data []
 	if err := proto.Unmarshal(data, message); err != nil {
 		return err
 	}
-	if message.GetEventName() != events.CollectorPeriodCompleted.Name() {
+	if message.GetEventName() != events.DatasetPeriodCompleted.Name() {
 		return nil
 	}
 	p.enteredOnce.Do(func() { close(p.entered) })

@@ -2,7 +2,6 @@ package pebble
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -209,14 +208,13 @@ func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
 		return nil
 	}
 	universe, _ := periodMarkerSubjects(exp, nil, nil)
-	marker := &pb.CollectorPeriodCompletedMarker{
-		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
-		Status: "degraded", BatchId: periodCompletionID(periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)),
-		ConfigSnapshotId: exp.SeriesHash, ExpectedScopeRef: exp.SeriesHash,
-		UniverseSubjectIds: universe, FailedSubjects: append([]string(nil), universe...),
-		CollectedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
+	completed := &LedgerPeriodCompleted{
+		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
+		Status: "degraded", SnapshotRef: exp.SeriesHash,
+		UniverseSubjectIDs: universe, FailedSubjects: append([]string(nil), universe...),
+		CompletedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
 	}
-	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, marker)
+	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
 		return err
 	}
@@ -230,7 +228,7 @@ func (s *Store) validatePeriodMarkerPayloadSize(raw []byte) error {
 	return nil
 }
 
-func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpectation, items []TimeSeriesBatchItem, sourceEventID, writeSource string) (DatasetPeriodResult, error) {
+func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpectation, items []TimeSeriesBatchItem) (DatasetPeriodResult, error) {
 	exp, err := normalizePeriodExpectation(exp)
 	if err != nil {
 		return DatasetPeriodResult{}, err
@@ -320,14 +318,14 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 		}
 	}
 	allSucceeded := bitmapAllSet(success, exp.ExpectedCount)
-	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		if strings.TrimSpace(sourceEventID) == "" {
-			return BuildDatasetRowsUpsertedMessageWithSource(s.nodeID, writeSource, spaceID, datasetID, rows)
-		}
-		return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, sourceEventID, writeSource, spaceID, datasetID, rows)
+	// 行的准备（编码 KV、构造事件、整理变更范围）不依赖 outbox 状态，放在 outboxMu 之外；周期状态仍由 periodMu 保护。
+	write, err := s.prepareRowsWrite(ctx, exp.SpaceID, exp.DatasetID, normalizedRows)
+	if err != nil {
+		return DatasetPeriodResult{}, err
 	}
+	defer write.batch.Close()
 	s.outboxMu.Lock()
-	_, err = s.writeFieldsEventLocked(ctx, normalizedRows, strings.TrimSpace(sourceEventID), true, writeEvent, func(batch *cpebble.Batch, _ []*OutboxEntry) error {
+	_, err = s.commitRowsWriteLocked(ctx, write, func(batch *cpebble.Batch) error {
 		if created {
 			if err := s.writePeriodRecord(batch, base, exp, false); err != nil {
 				return err
@@ -537,12 +535,12 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 		return "waiting", nil
 	}
 	universe, failed := periodMarkerSubjects(exp, bitmap, failures)
-	marker := &pb.CollectorPeriodCompletedMarker{
-		DatasetId: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
-		Status: terminal, BatchId: periodCompletionID(base), ConfigSnapshotId: exp.SeriesHash,
-		ExpectedScopeRef: exp.SeriesHash, UniverseSubjectIds: universe, FailedSubjects: failed, CollectedAt: timestamppb.New(now.UTC()),
+	completed := &LedgerPeriodCompleted{
+		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
+		Status: terminal, SnapshotRef: exp.SeriesHash,
+		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(now.UTC()),
 	}
-	raw, _, err := BuildCollectorPeriodCompletedMessage(exp.SpaceID, marker)
+	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
 		return "", err
 	}
@@ -1104,11 +1102,6 @@ func parsePeriodBase(base string) (string, string, string, int64, error) {
 	}
 	periodTime, err := strconv.ParseInt(parts[3], 10, 64)
 	return decoded[0], decoded[1], decoded[2], periodTime, err
-}
-
-func periodCompletionID(base string) string {
-	hash := sha256.Sum256([]byte(base))
-	return "dataset-period-" + hex.EncodeToString(hash[:16])
 }
 
 func periodFieldKey(base, field string) []byte { return []byte(base + field) }

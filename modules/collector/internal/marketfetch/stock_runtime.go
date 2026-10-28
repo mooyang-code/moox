@@ -9,11 +9,11 @@ import (
 )
 
 // NewMarketStorageForMarket borrows the invocation's single Access client.
-func NewMarketStorageForMarket(gateway gatewayclient.Invoker, marketType, writeSource string) (Storage, error) {
+func NewMarketStorageForMarket(gateway gatewayclient.Invoker, marketType string) (Storage, error) {
 	if strings.EqualFold(strings.TrimSpace(marketType), "equity") || strings.EqualFold(strings.TrimSpace(marketType), StockCNSpaceID) {
 		marketType = marketstorage.InstTypeSPOT
 	}
-	storage, err := marketstorage.NewGatewayBatchStorage(gateway, marketType, writeSource)
+	storage, err := marketstorage.NewGatewayBatchStorage(gateway, marketType)
 	if err != nil {
 		return nil, fmt.Errorf("create market storage: %w", err)
 	}

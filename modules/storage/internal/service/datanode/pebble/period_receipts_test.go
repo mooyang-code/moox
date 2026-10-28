@@ -44,7 +44,7 @@ func TestPeriodFailureDeadlineFence(t *testing.T) {
 					require.Equal(t, "waiting", result.Status)
 					require.Equal(t, []uint32{0, 1}, progress.FailedSeriesIndexes)
 					assertPeriodFailureReceipt(t, result, []uint32{0, 1}, recordedFailure, recordedFailure)
-					require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+					require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 					continue
 				}
 				require.Equal(t, "degraded", result.Status)
@@ -52,7 +52,7 @@ func TestPeriodFailureDeadlineFence(t *testing.T) {
 				assertPeriodFailureReceipt(t, result, []uint32{0, 1}, missedFailure, missedFailure)
 				_, err = store.FinalizeDatasetPeriod(context.Background(), exp, time.Time{})
 				require.NoError(t, err)
-				require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+				require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 				message := periodReceiptMarker(t, store)
 				record, err := store.readPeriodValue(datasetMarkerRecordKey(message.GetEventId()))
 				require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPeriodFailureTerminalValidatesIndexes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.RecordDatasetPeriodFailures(context.Background(), exp, []uint32{0, 1})
 	require.Error(t, err, "terminal replay must not bypass complete index validation")
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 	progress, err := store.GetDatasetPeriodProgress(context.Background(), exp)
 	require.NoError(t, err)
 	require.Empty(t, progress.FailedSeriesIndexes)
@@ -101,7 +101,7 @@ func TestPeriodFailureTerminalValidatesIndexes(t *testing.T) {
 	progress, err = store.GetDatasetPeriodProgress(context.Background(), exp)
 	require.NoError(t, err)
 	require.Empty(t, progress.FailedSeriesIndexes, "an illegal index must reject all valid indexes in the same request")
-	require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 	exp.DeadlineAt = exp.PeriodTime
 	clock := newPeriodReceiptClock(time.Unix(exp.DeadlineAt, 0))
 	store = newPeriodReceiptStore(t, clock)
@@ -113,7 +113,7 @@ func TestPeriodFailureTerminalValidatesIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "waiting", progress.Status, "invalid requests must not finalize even an expired period")
 	require.Empty(t, progress.FailedSeriesIndexes)
-	require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestPeriodCommitAcceptedIndexes(t *testing.T) {
@@ -129,25 +129,25 @@ func TestPeriodCommitAcceptedIndexes(t *testing.T) {
 	_, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
 	items := []TimeSeriesBatchItem{{SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}, {SeriesIndex: 0, Row: periodRowForTest(period, "BTC-USDT")}, {SeriesIndex: 1, Row: periodRowForTest(period, "ETH-USDT")}, {SeriesIndex: 2, Row: periodRowForTest(period.Add(-time.Minute), "SOL-USDT")}}
-	result, err := store.CommitTimeSeriesBatch(ctx, exp, items, "source", "collector")
+	result, err := store.CommitTimeSeriesBatch(ctx, exp, items)
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 1}, result.AcceptedSeriesIndexes, "historical physical rows do not acknowledge target-period progress")
 	clock.set(deadline)
-	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 2, Row: periodRowForTest(period, "SOL-USDT")}}, "late", "collector")
+	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 2, Row: periodRowForTest(period, "SOL-USDT")}})
 	require.NoError(t, err)
 	require.Equal(t, "degraded", result.Status)
 	require.Empty(t, result.AcceptedSeriesIndexes)
-	result, err = store.CommitTimeSeriesBatch(ctx, exp, items, "source", "collector")
+	result, err = store.CommitTimeSeriesBatch(ctx, exp, items)
 	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 1}, result.AcceptedSeriesIndexes)
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 
 	for _, offset := range []time.Duration{0, time.Nanosecond} {
 		clock := newPeriodReceiptClock(deadline.Add(offset))
 		store := newPeriodReceiptStore(t, clock)
 		_, err := store.EnsureDatasetPeriod(ctx, exp)
 		require.NoError(t, err)
-		result, err := store.CommitTimeSeriesBatch(ctx, exp, items, "late", "collector")
+		result, err := store.CommitTimeSeriesBatch(ctx, exp, items)
 		require.NoError(t, err)
 		require.Empty(t, result.AcceptedSeriesIndexes)
 		progress, err := store.GetDatasetPeriodProgress(ctx, exp)
@@ -155,18 +155,6 @@ func TestPeriodCommitAcceptedIndexes(t *testing.T) {
 		require.Zero(t, bitmapCount(progress.Bitmap))
 	}
 
-	clock.set(deadline.Add(-time.Second))
-	store = newPeriodReceiptStore(t, clock)
-	_, err = store.EnsureDatasetPeriod(ctx, exp)
-	require.NoError(t, err)
-	row := periodRowForTest(period, "BTC-USDT")
-	_, err = store.UpsertFieldsEventWithSource(ctx, []*pb.RowFieldUpsert{row}, "generic-source", func(space, dataset string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource("node-a", "generic-source", "collector", space, dataset, rows)
-	})
-	require.NoError(t, err)
-	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}, "generic-source", "collector")
-	require.NoError(t, err)
-	require.Empty(t, result.AcceptedSeriesIndexes, "source-event dedupe and physical row existence cannot fabricate a period bit")
 }
 
 func TestPeriodCommitRejectsWrongSeriesBinding(t *testing.T) {
@@ -177,7 +165,7 @@ func TestPeriodCommitRejectsWrongSeriesBinding(t *testing.T) {
 	require.NoError(t, err)
 	row := periodRowForTest(period, "BTC-USDT")
 	row.Key.GetTimeSeries().SeriesTag = "binance"
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}}, "", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: row}})
 	require.Error(t, err, "empty expected tag is a real default series, not a wildcard")
 	progress, err := store.GetDatasetPeriodProgress(context.Background(), exp)
 	require.NoError(t, err)
@@ -199,37 +187,37 @@ func TestPeriodCommitRejectsWrongSeriesBinding(t *testing.T) {
 		{{SeriesIndex: 1, Row: binance}, {SeriesIndex: 0, Row: binance}},
 		{{SeriesIndex: 0, Row: okx}, {SeriesIndex: 2, Row: binance}},
 	} {
-		_, err = store.CommitTimeSeriesBatch(context.Background(), exp, items, "", "collector")
+		_, err = store.CommitTimeSeriesBatch(context.Background(), exp, items)
 		require.Error(t, err)
 		progress, err = store.GetDatasetPeriodProgress(context.Background(), exp)
 		require.NoError(t, err)
 		require.Zero(t, bitmapCount(progress.Bitmap))
 		require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetRowsUpserted.Name()))
-		require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+		require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 	}
-	result, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: binance}, {SeriesIndex: 0, Row: okx}}, "", "collector")
+	result, err := store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: binance}, {SeriesIndex: 0, Row: okx}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", result.Status)
 	require.Equal(t, []uint32{0, 1}, result.AcceptedSeriesIndexes)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: binance}}, "", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: binance}})
 	require.Error(t, err, "terminal replay still validates the persisted subject/tag binding")
 	result, err = store.RecordDatasetPeriodFailures(context.Background(), exp, []uint32{1, 0, 1})
 	require.NoError(t, err)
 	assertPeriodFailureReceipt(t, result, []uint32{0, 1}, succeededFailure, succeededFailure)
 	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetRowsUpserted.Name()))
-	require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 	exp.DeadlineAt = exp.PeriodTime
 	clock := newPeriodReceiptClock(time.Unix(exp.DeadlineAt, 0))
 	store = newPeriodReceiptStore(t, clock)
 	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
 	require.NoError(t, err)
-	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: binance}, {SeriesIndex: 0, Row: binance}}, "", "collector")
+	_, err = store.CommitTimeSeriesBatch(context.Background(), exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: binance}, {SeriesIndex: 0, Row: binance}})
 	require.Error(t, err)
 	progress, err = store.GetDatasetPeriodProgress(context.Background(), exp)
 	require.NoError(t, err)
 	require.Equal(t, "waiting", progress.Status)
 	require.Zero(t, bitmapCount(progress.Bitmap))
-	require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+	require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 }
 
 func TestPeriodCommitRejectsPhysicalIdentityAliases(t *testing.T) {
@@ -274,12 +262,12 @@ func TestPeriodCommitRejectsPhysicalIdentityAliases(t *testing.T) {
 					row.Key.GetTimeSeries().SeriesTag = exp.SeriesSnapshot[index].SeriesTag
 				}
 				if terminal {
-					_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: rows[0]}, {SeriesIndex: 1, Row: rows[1]}}, "initial", "collector")
+					_, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: rows[0]}, {SeriesIndex: 1, Row: rows[1]}})
 					require.NoError(t, err)
 				}
 				bad := proto.Clone(rows[1]).(*pb.RowFieldUpsert)
 				test.mutate(bad.Key)
-				result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: rows[0]}, {SeriesIndex: 1, Row: bad}}, "alias", "collector")
+				result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: rows[0]}, {SeriesIndex: 1, Row: bad}})
 				require.Error(t, err, "period acceptance must match the physical RowKey, not a trim/lower/Unix alias")
 				require.Empty(t, result.AcceptedSeriesIndexes)
 				progress, err := store.GetDatasetPeriodProgress(ctx, exp)
@@ -288,11 +276,11 @@ func TestPeriodCommitRejectsPhysicalIdentityAliases(t *testing.T) {
 				if terminal {
 					require.Equal(t, 2, bitmapCount(progress.Bitmap))
 					require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetRowsUpserted.Name()))
-					require.Equal(t, 1, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+					require.Equal(t, 1, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 				} else {
 					require.Zero(t, bitmapCount(progress.Bitmap))
 					require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetRowsUpserted.Name()))
-					require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
+					require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()))
 					if _, err := NormalizeRowKey(bad.Key); err == nil {
 						existing, err := store.ReadRows(ctx, []*pb.RowKey{rows[0].Key, bad.Key}, []string{"close"}, nil)
 						require.NoError(t, err)
@@ -313,7 +301,7 @@ func TestPeriodCommitAcceptedIndexesPreservesHistoricalBars(t *testing.T) {
 	_, err := store.EnsureDatasetPeriod(ctx, exp)
 	require.NoError(t, err)
 	historical := periodRowForTest(period.Add(-time.Minute), "BTC-USDT")
-	result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: historical}}, "history", "collector")
+	result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: historical}})
 	require.NoError(t, err)
 	require.Equal(t, "waiting", result.Status)
 	require.Empty(t, result.AcceptedSeriesIndexes)
@@ -325,7 +313,7 @@ func TestPeriodCommitAcceptedIndexesPreservesHistoricalBars(t *testing.T) {
 	require.Zero(t, bitmapCount(progress.Bitmap))
 	target := periodRowForTest(period, "BTC-USDT")
 	target.Key.GetTimeSeries().DataTime = period.In(time.FixedZone("UTC+8", 8*60*60)).Format(time.RFC3339Nano)
-	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: target}}, "target", "collector")
+	result, err = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: target}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", result.Status)
 	require.Equal(t, []uint32{0}, result.AcceptedSeriesIndexes, "equivalent timestamp notation is canonicalized before exact target comparison")
@@ -348,17 +336,17 @@ func TestPeriodMonthFrequencyDoesNotAliasMinute(t *testing.T) {
 
 	monthRow := periodRowForTest(period, "BTC-USDT")
 	monthRow.Key.GetTimeSeries().Freq = "1mo"
-	monthResult, err := store.CommitTimeSeriesBatch(ctx, month, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: monthRow}}, "month-row", "collector")
+	monthResult, err := store.CommitTimeSeriesBatch(ctx, month, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: monthRow}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", monthResult.Status)
 	require.Equal(t, []uint32{0}, monthResult.AcceptedSeriesIndexes)
 
 	minuteRow := periodRowForTest(period, "BTC-USDT")
-	minuteResult, err := store.CommitTimeSeriesBatch(ctx, minute, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: minuteRow}}, "minute-row", "collector")
+	minuteResult, err := store.CommitTimeSeriesBatch(ctx, minute, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: minuteRow}})
 	require.NoError(t, err)
 	require.Equal(t, "complete", minuteResult.Status)
 	require.Equal(t, []uint32{0}, minuteResult.AcceptedSeriesIndexes)
-	require.Equal(t, 2, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()), "minute and month are distinct period identities at the same timestamp")
+	require.Equal(t, 2, countOutboxEvent(t, store, events.DatasetPeriodCompleted.Name()), "minute and month are distinct period identities at the same timestamp")
 }
 
 func TestPeriodEnsureRejectsInvalidSeriesTagsWithoutSideEffects(t *testing.T) {
@@ -495,7 +483,7 @@ func periodReceiptMarker(t *testing.T, store *Store) *eventpb.EventMessage {
 	for _, entry := range entries {
 		message := &eventpb.EventMessage{}
 		require.NoError(t, proto.Unmarshal(entry.Data, message))
-		if message.GetEventName() == events.CollectorPeriodCompleted.Name() {
+		if message.GetEventName() == events.DatasetPeriodCompleted.Name() {
 			return message
 		}
 	}

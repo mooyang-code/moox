@@ -11,7 +11,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
+func TestFollowingViewColumnAddDoesNotRebuild(t *testing.T) {
 	ctx := context.Background()
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -70,7 +70,7 @@ func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
 		ActiveViewRevision: 1, DesiredViewRevision: 2, ActiveViewSchemaHash: activeSchema.SchemaHash,
 		ActiveColumns: []*pb.ViewColumn{closeColumn}, Columns: []*pb.ViewColumn{closeColumn, biasColumn},
 		Status: "active", Attributes: map[string]string{
-			"dataset_role": "factor_result", "view_role": "factor_result", "primary_dataset_role": "factor_result",
+			"follow_dataset_columns": "true",
 			activePrimaryDatasetAttr: datasetID,
 		},
 	}}}
@@ -84,8 +84,9 @@ func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
 			{FieldId: "bias_20", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 0.5}}},
 		},
 	}
-	if _, err := svc.applyEventToIndex(ctx, indexID, datasetID, []*pb.RowFieldUpsert{newFieldEvent}); err == nil {
-		t.Fatal("event with a not-yet-active factor column was accepted")
+	// 事件里 View 还没扩展出来的新列直接裁掉：不阻塞消费，扩展完成后这一行的新列为空（系统边界，见设计 3.4）。
+	if _, err := svc.applyEventToIndex(ctx, indexID, datasetID, []*pb.RowFieldUpsert{newFieldEvent}); err != nil {
+		t.Fatalf("event with a not-yet-active column must be applied with the new column trimmed: %v", err)
 	}
 
 	if err := svc.maintainView(ctx, MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
@@ -116,7 +117,7 @@ func TestFactorResultColumnAddDoesNotRebuild(t *testing.T) {
 	}
 }
 
-func TestRestoreRecoversFactorResultSchemaExtensionAfterRestart(t *testing.T) {
+func TestRestoreRecoversViewSchemaExtensionAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "views")
 	first, err := New(root, "view-secret")
@@ -177,7 +178,7 @@ func TestRestoreRecoversFactorResultSchemaExtensionAfterRestart(t *testing.T) {
 		ActiveViewRevision: 1, DesiredViewRevision: 2, ActiveViewSchemaHash: activeSchema.SchemaHash,
 		ActiveColumns: []*pb.ViewColumn{closeColumn}, Columns: []*pb.ViewColumn{closeColumn, biasColumn},
 		Status: "active", Attributes: map[string]string{
-			"dataset_role": "factor_result", "view_role": "factor_result", "primary_dataset_role": "factor_result",
+			"follow_dataset_columns": "true",
 			activePrimaryDatasetAttr: datasetID,
 		},
 	}}}

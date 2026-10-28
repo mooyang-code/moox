@@ -130,7 +130,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	// by a process that died without releasing it stays stuck.
 	ackWait := ackWaitHeartbeats * cfg.InProgressInterval
 	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
-		Name: ConsumerName, Event: events.CollectorPeriodCompleted,
+		Name: ConsumerName, Event: events.DatasetPeriodCompleted,
 		AckWait: ackWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending,
 		FetchMaxWait: cfg.FetchMaxWait, DeliverPolicy: nats.DeliverNewPolicy,
 		DeliverDecodeErrors: true,

@@ -160,22 +160,15 @@ type seedDataSource struct {
 	SpaceID      string `yaml:"space_id"`
 	DataSourceID string `yaml:"data_source_id"`
 	Name         string `yaml:"name"`
-	Kind         string `yaml:"kind"`
-	Market       string `yaml:"market"`
-	Timezone     string `yaml:"timezone"`
-	ConfigJSON   string `yaml:"config_json"`
 	seedCommon   `yaml:",inline"`
 }
 
 type seedSubject struct {
-	SpaceID     string `yaml:"space_id"`
-	SubjectID   string `yaml:"subject_id"`
-	SubjectType string `yaml:"subject_type"`
-	Name        string `yaml:"name"`
-	Market      string `yaml:"market"`
-	Currency    string `yaml:"currency"`
-	Timezone    string `yaml:"timezone"`
-	seedCommon  `yaml:",inline"`
+	SpaceID    string `yaml:"space_id"`
+	SubjectID  string `yaml:"subject_id"`
+	Name       string `yaml:"name"`
+	Timezone   string `yaml:"timezone"`
+	seedCommon `yaml:",inline"`
 }
 
 type seedTag struct {
@@ -185,10 +178,8 @@ type seedTag struct {
 	Description string `yaml:"description"`
 	Mode        string `yaml:"mode"`
 	Builtin     bool   `yaml:"builtin"`
-	Source      string `yaml:"source"`
-	MarketType  string `yaml:"market_type"`
-	Cron        string `yaml:"cron"`
-	Timezone    string `yaml:"timezone"`
+	// Attributes 是写入方维护的业务含义（市场类型、同步配置等），Storage 原样保存。
+	Attributes map[string]string `yaml:"attributes"`
 }
 
 type seedDataset struct {

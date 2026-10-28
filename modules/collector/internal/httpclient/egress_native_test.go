@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
+	collectorstore "github.com/mooyang-code/moox/modules/collector/internal/store"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -105,23 +106,31 @@ func (s directoryFixture) Fetch(_ context.Context, version string) (gatewayclien
 }
 
 type tagSnapshotFixture struct {
-	tags     []*storagepb.Tag
-	applied  map[string][]*storagepb.TagSnapshotItem
-	failures map[string]string
+	tags    []*storagepb.Tag
+	applied map[string][]*storagepb.TagSnapshotItem
 }
 
 func (f *tagSnapshotFixture) ListTags(context.Context) ([]*storagepb.Tag, error) { return f.tags, nil }
-func (f *tagSnapshotFixture) ApplyTagSnapshot(_ context.Context, _, tag string, runAt time.Time, items []*storagepb.TagSnapshotItem) error {
+func (f *tagSnapshotFixture) ApplyTagSnapshot(_ context.Context, _, tag string, items []*storagepb.TagSnapshotItem) error {
 	f.applied[tag] = items
-	for _, item := range f.tags {
-		if item.TagId == tag {
-			item.LastRunAt = runAt.Format(time.RFC3339)
-		}
-	}
 	return nil
 }
-func (f *tagSnapshotFixture) ReportTagRunFailure(_ context.Context, _, tag string, _ time.Time, message string) error {
-	f.failures[tag] = message
+
+// memoryRuns 在内存里保存标签的同步运行结果。
+type memoryRuns struct {
+	runs map[string]collectorstore.TagSyncRun
+}
+
+func (m *memoryRuns) List(context.Context, string) ([]collectorstore.TagSyncRun, error) {
+	out := make([]collectorstore.TagSyncRun, 0, len(m.runs))
+	for _, run := range m.runs {
+		out = append(out, run)
+	}
+	return out, nil
+}
+
+func (m *memoryRuns) Record(_ context.Context, run collectorstore.TagSyncRun) error {
+	m.runs[run.TagID] = run
 	return nil
 }
 
@@ -223,12 +232,13 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			require.Equal(t, int64(32<<20), rsp.ContentLength)
 			listers, err := marketwiring.NewSubjectListers(client)
 			require.NoError(t, err)
-			store := &tagSnapshotFixture{applied: map[string][]*storagepb.TagSnapshotItem{}, failures: map[string]string{}}
+			store := &tagSnapshotFixture{applied: map[string][]*storagepb.TagSnapshotItem{}}
+			runs := &memoryRuns{runs: map[string]collectorstore.TagSyncRun{}}
 			for _, kind := range []string{"spot", "swap"} {
-				store.tags = append(store.tags, &storagepb.Tag{SpaceId: "crypto", TagId: kind, Mode: "auto", Source: "binance", MarketType: kind, Cron: "0 * * * *", Timezone: "UTC"})
+				store.tags = append(store.tags, &storagepb.Tag{SpaceId: "crypto", TagId: kind, Mode: "auto", Attributes: map[string]string{"sync.source": "binance", "market_type": kind, "sync.cron": "0 * * * *", "sync.timezone": "UTC"}})
 			}
 			now := time.Date(2026, 10, 9, 10, 0, 30, 0, time.UTC)
-			runner := &subjectsync.TagRunner{Store: store, Listers: listers, Now: func() time.Time { return now }}
+			runner := &subjectsync.TagRunner{Store: store, Runs: runs, Listers: listers, Now: func() time.Time { return now }}
 			require.NoError(t, runner.RunOnce(context.Background()))
 			require.Len(t, store.applied, 2)
 			for _, kind := range []string{"spot", "swap"} {
@@ -245,7 +255,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 				failureCtx, cancelFailure := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancelFailure()
 				require.Error(t, runner.RunOnce(failureCtx), "stopped Egress must fail without direct fallback")
-				require.NotEmpty(t, store.failures, "proxy failure must be reported to Storage")
+				require.Equal(t, collectorstore.TagSyncFailed, runs.runs["spot"].LastStatus, "proxy failure must be recorded in the Collector database")
 				require.Equal(t, before, backend.calls.Load())
 			}
 		})

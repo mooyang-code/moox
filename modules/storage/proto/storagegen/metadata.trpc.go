@@ -104,8 +104,6 @@ type MetadataService interface {
 
 	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq) (*ApplyTagSnapshotRsp, error)
 
-	ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq) (*ReportTagRunFailureRsp, error)
-
 	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error)
 
 	ResolveSubjects(ctx context.Context, req *ResolveSubjectsReq) (*ResolveSubjectsRsp, error)
@@ -927,24 +925,6 @@ func MetadataService_ApplyTagSnapshot_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func MetadataService_ReportTagRunFailure_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReportTagRunFailureReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ReportTagRunFailure(ctx, reqbody.(*ReportTagRunFailureReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func MetadataService_UpdateSubjectAttributes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &UpdateSubjectAttributesReq{}
 	filters, err := f(req)
@@ -1695,10 +1675,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 			Func: MetadataService_ApplyTagSnapshot_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.Metadata/ReportTagRunFailure",
-			Func: MetadataService_ReportTagRunFailure_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.Metadata/UpdateSubjectAttributes",
 			Func: MetadataService_UpdateSubjectAttributes_Handler,
 		},
@@ -2021,9 +1997,6 @@ func (s *UnimplementedMetadata) SetTagMemberStatus(ctx context.Context, req *Set
 func (s *UnimplementedMetadata) ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq) (*ApplyTagSnapshotRsp, error) {
 	return nil, errors.New("rpc ApplyTagSnapshot of service Metadata is not implemented")
 }
-func (s *UnimplementedMetadata) ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq) (*ReportTagRunFailureRsp, error) {
-	return nil, errors.New("rpc ReportTagRunFailure of service Metadata is not implemented")
-}
 func (s *UnimplementedMetadata) UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq) (*UpdateSubjectAttributesRsp, error) {
 	return nil, errors.New("rpc UpdateSubjectAttributes of service Metadata is not implemented")
 }
@@ -2273,8 +2246,6 @@ type MetadataClientProxy interface {
 	SetTagMemberStatus(ctx context.Context, req *SetTagMemberStatusReq, opts ...client.Option) (rsp *TagMembersRsp, err error)
 
 	ApplyTagSnapshot(ctx context.Context, req *ApplyTagSnapshotReq, opts ...client.Option) (rsp *ApplyTagSnapshotRsp, err error)
-
-	ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq, opts ...client.Option) (rsp *ReportTagRunFailureRsp, err error)
 
 	UpdateSubjectAttributes(ctx context.Context, req *UpdateSubjectAttributesReq, opts ...client.Option) (rsp *UpdateSubjectAttributesRsp, err error)
 
@@ -3184,26 +3155,6 @@ func (c *MetadataClientProxyImpl) ApplyTagSnapshot(ctx context.Context, req *App
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ApplyTagSnapshotRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) ReportTagRunFailure(ctx context.Context, req *ReportTagRunFailureReq, opts ...client.Option) (*ReportTagRunFailureRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ReportTagRunFailure")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ReportTagRunFailure")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ReportTagRunFailureRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

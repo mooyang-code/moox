@@ -17,7 +17,8 @@ describe("Storage tag APIs", () => {
       space_id: "crypto",
       tag_id: "crypto_spot",
       tag_name: "加密现货",
-      mode: "manual" as const
+      mode: "manual" as const,
+      attributes: { market_type: "spot", "sync.source": "binance" }
     };
 
     await listTags("crypto", { page: 2, size: 50 });

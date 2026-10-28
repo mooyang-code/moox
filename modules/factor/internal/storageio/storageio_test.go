@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
@@ -197,12 +198,12 @@ func TestReportComputedBuildsDeterministicEventID(t *testing.T) {
 	store := NewClient(primary, nil, nil)
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
 	require.NoError(t, store.ReportComputed(context.Background(), marker))
-	require.Equal(t, "storage-marker-"+shortHash("factor-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
+	require.Equal(t, "storage-marker-"+shortHash("producer-period", "crypto", "factor_result", "collector-event", "1791115200"), primary.reportIDs[0])
 	require.Equal(t, primary.reportIDs[0], primary.reportIDs[1])
 }
 
 func TestComputedExistsNotFoundIsFalse(t *testing.T) {
-	for name, rsp := range map[string]*storagepb.GetFactorPeriodComputedRsp{
+	for name, rsp := range map[string]*storagepb.GetDatasetPeriodCompletedRsp{
 		"absent":         {RetInfo: successRet(), Found: false},
 		"not found code": {RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: "not found"}},
 	} {
@@ -368,12 +369,12 @@ type primaryFake struct {
 	readRequests        []*storagepb.ReadTimeSeriesRowsReq
 	readErr             error
 	readRet             *commonpb.RetInfo
-	writeRequests       []*storagepb.PrimaryWriteFactorRowsReq
+	writeRequests       []*storagepb.PrimaryUpsertFieldsReq
 	writeErr            error
 	writeRet            *commonpb.RetInfo
 	reportIDs           []string
-	computedRsp         *storagepb.GetFactorPeriodComputedRsp
-	computedReq         *storagepb.GetFactorPeriodComputedReq
+	computedRsp         *storagepb.GetDatasetPeriodCompletedRsp
+	computedReq         *storagepb.GetDatasetPeriodCompletedReq
 	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
 	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
 	readDeadlines       []time.Duration
@@ -394,6 +395,10 @@ type metadataFake struct {
 	subjectPages     []*storagepb.ListDatasetSubjectsRsp
 	updateRequests   []*storagepb.UpdateDatasetReq
 	views            []*storagepb.View
+	viewCalls        []string
+	createViewReqs   []*storagepb.CreateViewReq
+	createViewRsp    *storagepb.CreateViewRsp
+	getViewRsp       *storagepb.GetViewRsp
 }
 
 func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
@@ -502,8 +507,8 @@ func (f *primaryFake) ReadTimeSeriesRows(ctx context.Context, req *storagepb.Rea
 	return page, nil
 }
 
-func (f *primaryFake) WriteFactorRows(_ context.Context, req *storagepb.PrimaryWriteFactorRowsReq, _ ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error) {
-	f.writeRequests = append(f.writeRequests, proto.Clone(req).(*storagepb.PrimaryWriteFactorRowsReq))
+func (f *primaryFake) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	f.writeRequests = append(f.writeRequests, proto.Clone(req).(*storagepb.PrimaryUpsertFieldsReq))
 	if f.writeErr != nil {
 		return nil, f.writeErr
 	}
@@ -511,21 +516,25 @@ func (f *primaryFake) WriteFactorRows(_ context.Context, req *storagepb.PrimaryW
 	if ret == nil {
 		ret = successRet()
 	}
-	return &storagepb.PrimaryWriteFactorRowsRsp{RetInfo: ret, RowsWritten: uint64(len(req.GetRows()))}, nil
+	keys := make([]*storagepb.RowKey, 0, len(req.GetRows()))
+	for _, row := range req.GetRows() {
+		keys = append(keys, row.GetKey())
+	}
+	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: ret, Keys: keys}, nil
 }
 
-func (f *primaryFake) ReportFactorPeriodComputed(_ context.Context, req *storagepb.ReportFactorPeriodComputedReq, _ ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {
+func (f *primaryFake) ReportDatasetPeriodCompleted(_ context.Context, req *storagepb.ReportDatasetPeriodCompletedReq, _ ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
 	id := computedEventID(req.GetSpaceId(), req.GetMarker())
 	f.reportIDs = append(f.reportIDs, id)
-	return &storagepb.ReportFactorPeriodComputedRsp{RetInfo: successRet(), EventId: id}, nil
+	return &storagepb.ReportDatasetPeriodCompletedRsp{RetInfo: successRet(), EventId: id}, nil
 }
 
-func (f *primaryFake) GetFactorPeriodComputed(_ context.Context, req *storagepb.GetFactorPeriodComputedReq, _ ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error) {
-	f.computedReq = proto.Clone(req).(*storagepb.GetFactorPeriodComputedReq)
+func (f *primaryFake) GetDatasetPeriodCompleted(_ context.Context, req *storagepb.GetDatasetPeriodCompletedReq, _ ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
+	f.computedReq = proto.Clone(req).(*storagepb.GetDatasetPeriodCompletedReq)
 	if f.computedRsp != nil {
 		return f.computedRsp, nil
 	}
-	return &storagepb.GetFactorPeriodComputedRsp{RetInfo: successRet()}, nil
+	return &storagepb.GetDatasetPeriodCompletedRsp{RetInfo: successRet()}, nil
 }
 
 func (f *primaryFake) DeleteDatasetRows(_ context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq, _ ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
@@ -601,10 +610,15 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 
 func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
 	marker := PeriodMarker{
-		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded",
-		Factors: []FactorState{{FactorID: "momentum", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
+		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded", UniverseSubjects: []string{"BTC", "ETH"}, FailedSubjects: []string{"BTC", "ETH"},
+		Factors: []FactorState{{FactorID: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
 	}
-	got := markerToProto(marker).GetFactors()
+	protoMarker, err := markerToProto(marker)
+	require.NoError(t, err)
+	require.Equal(t, PeriodDetailType, protoMarker.GetDetailType())
+	detail := &factorpb.PeriodDetail{}
+	require.NoError(t, proto.Unmarshal(protoMarker.GetDetail(), detail))
+	got := detail.GetFactors()
 	require.Len(t, got, 1)
 	require.Equal(t, []string{"BTC", "ETH"}, got[0].GetFailedSubjects())
 	require.Equal(t, []string{"ETH"}, got[0].GetGapSubjects(), "gap_subjects 与 failed_subjects 一样去重排序")
@@ -651,4 +665,88 @@ func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 
 	_, err = c.ReadDatasetChanges(context.Background(), "", "d", nil, true, 0)
 	require.Error(t, err)
+}
+
+func (f *metadataFake) GetView(_ context.Context, _ *storagepb.GetViewReq, _ ...client.Option) (*storagepb.GetViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "get_view")
+	if f.getViewRsp != nil {
+		return f.getViewRsp, nil
+	}
+	return &storagepb.GetViewRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_VIEW_NOT_FOUND}}, nil
+}
+
+func (f *metadataFake) CreateView(_ context.Context, req *storagepb.CreateViewReq, _ ...client.Option) (*storagepb.CreateViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "create_view")
+	f.createViewReqs = append(f.createViewReqs, req)
+	if f.createViewRsp != nil {
+		return f.createViewRsp, nil
+	}
+	return &storagepb.CreateViewRsp{RetInfo: successRet(), View: req.GetView()}, nil
+}
+
+func (f *metadataFake) DeleteView(_ context.Context, _ *storagepb.DeleteViewReq, _ ...client.Option) (*storagepb.DeleteViewRsp, error) {
+	f.viewCalls = append(f.viewCalls, "delete_view")
+	return &storagepb.DeleteViewRsp{RetInfo: successRet()}, nil
+}
+
+func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_btc_1m", Name: "BTC 因子", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		columnPages: []*storagepb.ListDatasetColumnsRsp{{RetInfo: successRet(), Columns: []*storagepb.DatasetColumn{
+			{ColumnName: "close", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"display_name": "收盘"}},
+			{ColumnName: "old", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "disabled"},
+			{ColumnName: "ema__20", ValueType: storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active", Attributes: map[string]string{"member_key": "ema__20"}},
+		}}},
+	}
+	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
+	require.Len(t, metadata.createViewReqs, 1)
+	req := metadata.createViewReqs[0]
+	require.True(t, req.GetCreateOnly())
+	view := req.GetView()
+	require.Equal(t, "view_factor_btc_1m", view.GetViewId())
+	require.Equal(t, "dataset_factor_btc_1m", view.GetDatasetId())
+	require.Equal(t, "1m", view.GetFreq())
+	require.Equal(t, "duckdb", view.GetEngine())
+	require.Equal(t, map[string]string{
+		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "rebuild_source": "primary", "maintenance_priority": "10",
+	}, view.GetAttributes())
+	var names []string
+	for _, column := range view.GetColumns() {
+		names = append(names, column.GetColumnName())
+		require.Equal(t, column.GetColumnName(), column.GetOriginId())
+	}
+	require.Equal(t, []string{"close", "ema__20"}, names, "只带数据集的有效列，保持顺序")
+	require.Equal(t, "ema__20", view.GetColumns()[1].GetAttributes()["member_key"], "列属性随列带进 View")
+}
+
+func TestEnsureResultViewLeavesAnExistingViewAloneButRejectsAnotherDatasetsView(t *testing.T) {
+	metadata := &metadataFake{getViewRsp: &storagepb.GetViewRsp{RetInfo: successRet(), View: &storagepb.View{ViewId: "view_factor_btc_1m", DatasetId: "dataset_factor_btc_1m"}}}
+	c := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"))
+	require.Empty(t, metadata.createViewReqs, "已有就不重建")
+
+	metadata.getViewRsp = &storagepb.GetViewRsp{RetInfo: successRet(), View: &storagepb.View{ViewId: "view_factor_btc_1m", DatasetId: "dataset_other"}}
+	require.ErrorContains(t, c.EnsureResultView(t.Context(), "crypto", "dataset_factor_btc_1m"), "另一个数据集")
+}
+
+// 删除结果数据集的顺序：先删默认 View，再清空行，最后删数据集（View 外键要求先删 View）。
+func TestDeleteFactorResultDatasetDeletesTheDefaultViewBeforeRowsAndDataset(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_factor_x", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	var order []string
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		views:          []*storagepb.View{{ViewId: "view_factor_x"}},
+	}
+	primary := &primaryFake{}
+	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "k"})
+	require.NoError(t, c.DeleteDataset(t.Context(), "crypto", "dataset_factor_x"))
+	order = append(order, metadata.viewCalls...)
+	require.Equal(t, []string{"delete_view"}, order)
+	require.Len(t, metadata.deleteRequests, 1, "最后删数据集")
 }

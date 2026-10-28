@@ -23,7 +23,7 @@ import (
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage func(string, string) (Storage, error)
+	NewStorage func(string) (Storage, error)
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
@@ -77,8 +77,8 @@ func (h *Handler) prepareInvocation() (*Handler, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	invocation.NewStorage = func(market, source string) (Storage, error) {
-		return NewMarketStorageForMarket(gateway, market, source)
+	invocation.NewStorage = func(market string) (Storage, error) {
+		return NewMarketStorageForMarket(gateway, market)
 	}
 	return &invocation, func() { _ = gateway.Close() }, nil
 }
@@ -212,7 +212,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(req.MarketType, writeSourceForFunctionName(req.FunctionName))
+	storage, err := h.NewStorage(req.MarketType)
 	if err != nil {
 		return nil, err
 	}
@@ -374,23 +374,14 @@ func (s *reservedDeadlineStorage) UpsertFields(_ context.Context, rows []*storag
 	return s.Storage.UpsertFields(ctx, rows)
 }
 
-func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, source string) error {
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	if storage, ok := s.Storage.(sourceStorage); ok {
-		return storage.UpsertFieldsWithSource(ctx, rows, source)
-	}
-	return s.Storage.UpsertFields(ctx, rows)
-}
-
-func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
+func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
 	storage, err := s.periodStorage("CommitTimeSeriesBatch")
 	if err != nil {
 		return err
 	}
 	ctx, cancel := s.storageContext()
 	defer cancel()
-	return storage.CommitTimeSeriesBatch(ctx, expectation, rows, sourceEventID)
+	return storage.CommitTimeSeriesBatch(ctx, expectation, rows)
 }
 
 func (s *reservedDeadlineStorage) periodStorage(method string) (periodStorage, error) {

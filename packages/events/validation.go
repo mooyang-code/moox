@@ -70,12 +70,6 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if !validRequiredToken(payload.GetNodeId()) || !validRequiredToken(payload.GetStoreId()) || payload.GetSequence() == 0 {
 		return fmt.Errorf("storage event source position is required")
 	}
-	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {
-		return fmt.Errorf("storage event write_source is invalid")
-	}
-	if err := validateStorageWriteKind(payload.GetWriteKind()); err != nil {
-		return err
-	}
 	for i, row := range payload.GetRows() {
 		if row == nil || row.GetKey() == nil {
 			return fmt.Errorf("storage event row %d key is required", i)
@@ -91,68 +85,48 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	return nil
 }
 
-func validateCollectorPeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.CollectorPeriodCompleted)
+func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.DatasetPeriodCompleted)
 	if !ok {
-		return fmt.Errorf("collector period completed payload has type %T", value)
+		return fmt.Errorf("dataset period completed payload has type %T", value)
 	}
-	return validatePeriodCompletion(message, periodCompletion{
-		label:              "collector period completed",
-		datasetID:          payload.GetDatasetId(),
-		frequency:          payload.GetFrequency(),
-		periodTime:         payload.GetPeriodTime(),
-		status:             payload.GetStatus(),
-		batchID:            payload.GetBatchId(),
-		configSnapshotID:   payload.GetConfigSnapshotId(),
-		expectedScopeRef:   payload.GetExpectedScopeRef(),
-		universeSubjectIDs: payload.GetUniverseSubjectIds(),
-		failedSubjects:     payload.GetFailedSubjects(),
-		committedPositions: payload.GetCommittedPositions(),
-		timestamp:          payload.GetCollectedAt(),
-	})
-}
-
-func validateFactorPeriodComputed(message *eventpb.EventMessage, value proto.Message) error {
-	payload, ok := value.(*storagepb.FactorPeriodComputed)
-	if !ok {
-		return fmt.Errorf("factor period computed payload has type %T", value)
-	}
-	if !validRequiredToken(payload.GetTriggerEventId()) {
-		return fmt.Errorf("factor period computed trigger_event_id is required")
-	}
-	if !validRequiredToken(payload.GetSourceDatasetId()) {
-		return fmt.Errorf("factor period computed source_dataset_id is required")
-	}
-	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetComputedAt(), "factor period computed"); err != nil {
+	const label = "dataset period completed"
+	if err := validateStoragePeriod(message, payload.GetDatasetId(), payload.GetFrequency(), payload.GetPeriodTime(), payload.GetStatus(), payload.GetCompletedAt(), label); err != nil {
 		return err
 	}
-	subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "factor period computed universe_subject_ids")
+	switch payload.GetSource() {
+	case "ledger":
+		if !validRequiredToken(payload.GetSnapshotRef()) {
+			return fmt.Errorf("%s snapshot_ref is required for source ledger", label)
+		}
+	case "producer":
+		if !validRequiredToken(payload.GetCauseEventId()) {
+			return fmt.Errorf("%s cause_event_id is required for source producer", label)
+		}
+	default:
+		return fmt.Errorf("%s source %q is invalid", label, payload.GetSource())
+	}
+	subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, label+" universe_subject_ids")
 	if err != nil {
 		return err
 	}
-	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, "factor period computed failed_subjects")
+	failed, err := validateUniqueTokens(payload.GetFailedSubjects(), false, label+" failed_subjects")
 	if err != nil {
 		return err
 	}
 	for subject := range failed {
 		if _, ok := subjects[subject]; !ok {
-			return fmt.Errorf("factor period computed failed_subject %q is not in universe_subject_ids", subject)
+			return fmt.Errorf("%s failed_subject %q is not in universe_subject_ids", label, subject)
 		}
 	}
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
-		return fmt.Errorf("factor period computed complete status has failed_subjects")
+		return fmt.Errorf("%s complete status has failed_subjects", label)
 	}
-	if err := validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "factor period computed"); err != nil {
-		return err
+	// 明细对 Storage 是不透明字节：只要求有明细就有类型，不解析内容。
+	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") || (payload.GetDetailType() != "" && !validRequiredToken(payload.GetDetailType())) {
+		return fmt.Errorf("%s detail and detail_type must be provided together", label)
 	}
-	hasDegraded := len(failed) != 0
-	for _, factor := range payload.GetFactors() {
-		hasDegraded = hasDegraded || factor.GetStatus() != "complete"
-	}
-	if (payload.GetStatus() == "degraded") != hasDegraded {
-		return fmt.Errorf("factor period computed status does not match factors and failed_subjects")
-	}
-	return nil
+	return validateCommittedPositions(payload.GetCommittedPositions(), label)
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
@@ -175,9 +149,6 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	if !validRequiredToken(payload.GetVisibleScope()) {
 		return fmt.Errorf("view data ready visible_scope is required")
 	}
-	if err := validateViewCompletionKind(payload.GetCompletionKind()); err != nil {
-		return err
-	}
 	if err := validateCommittedPositions(payload.GetCommittedPositions(), "view data ready"); err != nil {
 		return err
 	}
@@ -187,61 +158,13 @@ func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) e
 	if payload.GetStatus() == "degraded" && !validRequiredToken(payload.GetFailedScopeRef()) {
 		return fmt.Errorf("view data ready degraded status requires failed_scope_ref")
 	}
-	if payload.GetCompletionKind() == FactorPeriodComputed.Name() {
-		subjects, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids")
-		if err != nil {
-			return err
-		}
-		return validateFactorStates(payload.GetFactors(), subjects, payload.GetStatus(), "view data ready")
+	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") {
+		return fmt.Errorf("view data ready detail and detail_type must be provided together")
+	}
+	if _, err := validateUniqueTokens(payload.GetUniverseSubjectIds(), false, "view data ready universe_subject_ids"); err != nil {
+		return err
 	}
 	return nil
-}
-
-type periodCompletion struct {
-	label              string
-	datasetID          string
-	frequency          string
-	periodTime         int64
-	status             string
-	batchID            string
-	configSnapshotID   string
-	expectedScopeRef   string
-	universeSubjectIDs []string
-	failedSubjects     []string
-	committedPositions []*storagepb.CommittedPosition
-	timestamp          *timestamppb.Timestamp
-}
-
-func validatePeriodCompletion(message *eventpb.EventMessage, completion periodCompletion) error {
-	if err := validateStoragePeriod(message, completion.datasetID, completion.frequency, completion.periodTime, completion.status, completion.timestamp, completion.label); err != nil {
-		return err
-	}
-	if !validRequiredToken(completion.batchID) {
-		return fmt.Errorf("%s batch_id is required", completion.label)
-	}
-	if !validRequiredToken(completion.configSnapshotID) {
-		return fmt.Errorf("%s config_snapshot_id is required", completion.label)
-	}
-	if !validRequiredToken(completion.expectedScopeRef) {
-		return fmt.Errorf("%s expected_scope_ref is required", completion.label)
-	}
-	subjects, err := validateUniqueTokens(completion.universeSubjectIDs, false, completion.label+" universe_subject_ids")
-	if err != nil {
-		return err
-	}
-	failed, err := validateUniqueTokens(completion.failedSubjects, false, completion.label+" failed_subjects")
-	if err != nil {
-		return err
-	}
-	for subject := range failed {
-		if _, ok := subjects[subject]; !ok {
-			return fmt.Errorf("%s failed_subject %q is not in universe_subject_ids", completion.label, subject)
-		}
-	}
-	if completion.status == "complete" && len(failed) != 0 {
-		return fmt.Errorf("%s complete status has failed_subjects", completion.label)
-	}
-	return validateCommittedPositions(completion.committedPositions, completion.label)
 }
 
 func validateCommittedPositions(positions []*storagepb.CommittedPosition, label string) error {
@@ -331,61 +254,6 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
-// validateFactorStates 校验周期标记里逐成员的状态：成员身份是 member_key（同一因子可以用不同参数出现多次），
-// factor_id 是它引用的定义；member_kind 必须是已知的取值。
-func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[string]struct{}, status, label string) error {
-	seen := make(map[string]struct{}, len(states))
-	for i, state := range states {
-		if state == nil || !validRequiredToken(state.GetFactorId()) || !validRequiredToken(state.GetMemberKey()) {
-			return fmt.Errorf("%s factor %d identity is invalid", label, i)
-		}
-		if _, ok := seen[state.GetMemberKey()]; ok {
-			return fmt.Errorf("%s member_key %q is duplicated", label, state.GetMemberKey())
-		}
-		seen[state.GetMemberKey()] = struct{}{}
-		switch state.GetMemberKind() {
-		case "fixed", "var":
-		default:
-			return fmt.Errorf("%s member %q member_kind %q is invalid", label, state.GetMemberKey(), state.GetMemberKind())
-		}
-		if !validCompletionStatus(state.GetStatus()) && state.GetStatus() != "skipped" {
-			return fmt.Errorf("%s factor %q status %q is invalid", label, state.GetFactorId(), state.GetStatus())
-		}
-		if !validRequiredToken(state.GetSourceHash()) {
-			return fmt.Errorf("%s factor %q source_hash is required", label, state.GetFactorId())
-		}
-		if !validRequiredToken(state.GetDefinitionHash()) {
-			return fmt.Errorf("%s factor %q definition_hash is required", label, state.GetFactorId())
-		}
-		failed, err := validateUniqueTokens(state.GetFailedSubjects(), false, fmt.Sprintf("%s factor %q failed_subjects", label, state.GetFactorId()))
-		if err != nil {
-			return err
-		}
-		for subject := range failed {
-			if _, ok := subjects[subject]; !ok {
-				return fmt.Errorf("%s factor %q failed_subject %q is not in universe_subject_ids", label, state.GetFactorId(), subject)
-			}
-		}
-		// gap_subjects 是 failed_subjects 的子集：因回看窗口 K 线空洞而失败的标的。
-		gaps, err := validateUniqueTokens(state.GetGapSubjects(), false, fmt.Sprintf("%s factor %q gap_subjects", label, state.GetFactorId()))
-		if err != nil {
-			return err
-		}
-		for subject := range gaps {
-			if _, ok := failed[subject]; !ok {
-				return fmt.Errorf("%s factor %q gap_subject %q is not in failed_subjects", label, state.GetFactorId(), subject)
-			}
-		}
-		if state.GetStatus() == "complete" && len(failed) != 0 {
-			return fmt.Errorf("%s complete factor %q has failed subjects", label, state.GetFactorId())
-		}
-		if status == "complete" && state.GetStatus() != "complete" {
-			return fmt.Errorf("%s complete status has non-complete factor %q", label, state.GetFactorId())
-		}
-	}
-	return nil
-}
-
 func validateUniqueTokens(values []string, requireNonEmpty bool, label string) (map[string]struct{}, error) {
 	if requireNonEmpty && len(values) == 0 {
 		return nil, fmt.Errorf("%s are required", label)
@@ -407,29 +275,8 @@ func validRequiredToken(value string) bool {
 	return strings.TrimSpace(value) != "" && strings.TrimSpace(value) == value
 }
 
-func validateStorageWriteKind(kind string) error {
-	if len(kind) > 64 || strings.TrimSpace(kind) != kind {
-		return fmt.Errorf("storage event write_kind is invalid")
-	}
-	switch kind {
-	case "", "factor_result":
-		return nil
-	default:
-		return fmt.Errorf("storage event write_kind is invalid")
-	}
-}
-
 func validCompletionStatus(status string) bool {
 	return status == "complete" || status == "degraded"
-}
-
-func validateViewCompletionKind(kind string) error {
-	switch kind {
-	case CollectorPeriodCompleted.Name(), FactorPeriodComputed.Name():
-		return nil
-	default:
-		return fmt.Errorf("view data ready completion_kind is invalid")
-	}
 }
 
 const maxTargetWeightLength = 256

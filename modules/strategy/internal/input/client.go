@@ -204,7 +204,7 @@ func (c *RPCClient) GetTag(ctx context.Context, spaceID, tagID string) (TagInfo,
 	if tag == nil {
 		return TagInfo{}, fmt.Errorf("%w：%s", ErrTagNotFound, tagID)
 	}
-	return TagInfo{MarketType: strings.ToLower(strings.TrimSpace(tag.GetMarketType()))}, nil
+	return TagInfo{MarketType: strings.ToLower(strings.TrimSpace(tag.GetAttributes()["market_type"]))}, nil
 }
 
 // ListDatasetSubjects 读取数据集的全部标的绑定（含停用的）及标的详情。

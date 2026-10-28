@@ -46,16 +46,16 @@ func (c *gatewayStorageClient) ReadDatasetChanges(ctx context.Context, request *
 	return invokeStorage[storagepb.ReadDatasetChangesRsp](ctx, c.gateway, "PrimaryStore", "ReadDatasetChanges", request, options)
 }
 
-func (c *gatewayStorageClient) WriteFactorRows(ctx context.Context, request *storagepb.PrimaryWriteFactorRowsReq, options ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error) {
-	return invokeStorage[storagepb.PrimaryWriteFactorRowsRsp](ctx, c.gateway, "PrimaryStore", "WriteFactorRows", request, options)
+func (c *gatewayStorageClient) UpsertFields(ctx context.Context, request *storagepb.PrimaryUpsertFieldsReq, options ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
+	return invokeStorage[storagepb.PrimaryUpsertFieldsRsp](ctx, c.gateway, "PrimaryStore", "UpsertFields", request, options)
 }
 
-func (c *gatewayStorageClient) ReportFactorPeriodComputed(ctx context.Context, request *storagepb.ReportFactorPeriodComputedReq, options ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error) {
-	return invokeStorage[storagepb.ReportFactorPeriodComputedRsp](ctx, c.gateway, "PrimaryStore", "ReportFactorPeriodComputed", request, options)
+func (c *gatewayStorageClient) ReportDatasetPeriodCompleted(ctx context.Context, request *storagepb.ReportDatasetPeriodCompletedReq, options ...client.Option) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
+	return invokeStorage[storagepb.ReportDatasetPeriodCompletedRsp](ctx, c.gateway, "PrimaryStore", "ReportDatasetPeriodCompleted", request, options)
 }
 
-func (c *gatewayStorageClient) GetFactorPeriodComputed(ctx context.Context, request *storagepb.GetFactorPeriodComputedReq, options ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error) {
-	return invokeStorage[storagepb.GetFactorPeriodComputedRsp](ctx, c.gateway, "PrimaryStore", "GetFactorPeriodComputed", request, options)
+func (c *gatewayStorageClient) GetDatasetPeriodCompleted(ctx context.Context, request *storagepb.GetDatasetPeriodCompletedReq, options ...client.Option) (*storagepb.GetDatasetPeriodCompletedRsp, error) {
+	return invokeStorage[storagepb.GetDatasetPeriodCompletedRsp](ctx, c.gateway, "PrimaryStore", "GetDatasetPeriodCompleted", request, options)
 }
 
 func (c *gatewayStorageClient) DeleteDatasetRows(ctx context.Context, request *storagepb.PrimaryDeleteDatasetRowsReq, options ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
@@ -100,4 +100,16 @@ func (c *gatewayStorageClient) UpdateDataset(ctx context.Context, request *stora
 
 func (c *gatewayStorageClient) ListDatasetSubjects(ctx context.Context, request *storagepb.ListDatasetSubjectsReq, options ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
 	return invokeStorage[storagepb.ListDatasetSubjectsRsp](ctx, c.gateway, "Metadata", "ListDatasetSubjects", request, options)
+}
+
+func (c *gatewayStorageClient) GetView(ctx context.Context, request *storagepb.GetViewReq, options ...client.Option) (*storagepb.GetViewRsp, error) {
+	return invokeStorage[storagepb.GetViewRsp](ctx, c.gateway, "Metadata", "GetView", request, options)
+}
+
+func (c *gatewayStorageClient) CreateView(ctx context.Context, request *storagepb.CreateViewReq, options ...client.Option) (*storagepb.CreateViewRsp, error) {
+	return invokeStorage[storagepb.CreateViewRsp](ctx, c.gateway, "Metadata", "CreateView", request, options)
+}
+
+func (c *gatewayStorageClient) DeleteView(ctx context.Context, request *storagepb.DeleteViewReq, options ...client.Option) (*storagepb.DeleteViewRsp, error) {
+	return invokeStorage[storagepb.DeleteViewRsp](ctx, c.gateway, "Metadata", "DeleteView", request, options)
 }

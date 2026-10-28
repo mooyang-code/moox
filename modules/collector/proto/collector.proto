@@ -360,6 +360,42 @@ message SyncSubjectsRsp {
   repeated SubjectAttributeSyncResult attributes = 3;
 }
 
+// TagSyncStatus 是一个标签上一次标的同步的运行结果，只存在 Collector 自己的库里。
+message TagSyncStatus {
+  string space_id = 1;
+  string tag_id = 2;
+  // 上次运行时间（RFC3339，UTC）与结果（success / failed）。
+  string last_run_at = 3;
+  string last_status = 4;
+  string last_error = 5;
+  // 最近一次成功的时间；从未成功过为空。
+  string last_success_at = 6;
+}
+
+message ListTagSyncStatusReq {
+  // 为空表示所有空间。
+  string space_id = 1;
+}
+
+message ListTagSyncStatusRsp {
+  common.RetInfo ret_info = 1;
+  // 没有运行记录的标签不出现在这里。
+  repeated TagSyncStatus items = 2;
+}
+
+// SubjectLister 是一个数据来源能提供标的快照的市场类型。
+message SubjectLister {
+  string source = 1;
+  repeated string market_types = 2;
+}
+
+message ListSubjectListersReq {}
+
+message ListSubjectListersRsp {
+  common.RetInfo ret_info = 1;
+  repeated SubjectLister listers = 2;
+}
+
 // ===== K 线完整性检查与补采 =====
 
 message CheckKlineReq {
@@ -890,6 +926,9 @@ service CollectMgr {
   rpc PreviewKlineResampleSource(PreviewKlineResampleSourceReq) returns (PreviewKlineResampleSourceRsp);
   // 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
   rpc SyncSubjects(SyncSubjectsReq) returns (SyncSubjectsRsp);
+  // 标签同步的运行状态与可用的（来源，市场类型）组合；都是只读接口。
+  rpc ListTagSyncStatus(ListTagSyncStatusReq) returns (ListTagSyncStatusRsp);
+  rpc ListSubjectListers(ListSubjectListersReq) returns (ListSubjectListersRsp);
 
   // ----- K 线完整性检查与补采 -----
   rpc CheckKline(CheckKlineReq) returns (CheckKlineRsp);

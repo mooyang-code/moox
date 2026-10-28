@@ -52,15 +52,3 @@ func TestStockEnableWithoutMinAgeOnlyChecksRowKey(t *testing.T) {
 		}
 	}
 }
-
-// 绑定快照必须带完成事件类型：没有它就不知道实例该由哪种事件触发，按无法解析处理（不再把缺失当作“接受任何事件”）。
-func TestParseResolvedRequiresCompletionKind(t *testing.T) {
-	const body = `"view_id":"view_factor_a","factor_task_id":"ftask_a","bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]`
-	if _, err := ParseResolved([]byte(`{` + body + `}`)); err == nil || !strings.Contains(err.Error(), "completion_kind") {
-		t.Fatalf("缺少 completion_kind 应无法解析：%v", err)
-	}
-	resolved, err := ParseResolved([]byte(`{"completion_kind":"collector.period.completed",` + body + `}`))
-	if err != nil || resolved.CompletionKind != "collector.period.completed" {
-		t.Fatalf("带 completion_kind 的快照应能解析：%+v err=%v", resolved, err)
-	}
-}

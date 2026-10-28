@@ -5,9 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 
 storage_subjects=(
   'moox.event.storage.dataset.rows.upserted.v2.>'
-  'moox.event.storage.collector.period.completed.v1.>'
-  'moox.event.storage.dataset.factor_period.computed.v1.>'
-  'moox.event.storage.view.data.ready.v1.>'
+  'moox.event.storage.dataset.period.completed.v1.>'
+  'moox.event.storage.view.data.ready.v2.>'
   'moox.event.storage.dataset.sync_point.v1.>'
 )
 for subject in "${storage_subjects[@]}"; do
@@ -31,9 +30,10 @@ for config in \
   fi
 done
 
-for durable in storage_view_factor storage_view_misc factor_collector_period_v1; do
-  grep -Fq "${durable}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
-    echo "storage consistency contract failed: generated EventBus ACL is missing durable ${durable}" >&2
+# View 消费者按数据集动态创建（view_<哈希>），ACL 靠 MOOX_STORAGE 流上的通配符放行；因子引擎的消费者仍是固定名字。
+for subject in 'CONSUMER.CREATE.MOOX_STORAGE.>' 'CONSUMER.MSG.NEXT.MOOX_STORAGE.>' 'factor_collector_period_v1'; do
+  grep -Fq "${subject}" "${repo_root}/modules/admin/cmd/cli/eventbus_credentials.go" || {
+    echo "storage consistency contract failed: generated EventBus ACL is missing ${subject}" >&2
     exit 1
   }
 done

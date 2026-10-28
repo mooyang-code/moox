@@ -20,7 +20,7 @@ const (
 	subjectSyncTimeout            = 10 * time.Minute
 )
 
-func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime) (*subjectsync.Syncer, error) {
+func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime, runs subjectsync.RunStore) (*subjectsync.Syncer, error) {
 	http, err := httpclient.NewEgressHTTPClient(process.gateway, cfg.EgressProxy.Domains)
 	if err != nil {
 		return nil, fmt.Errorf("initialize subject HTTP client: %w", err)
@@ -45,13 +45,8 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime)
 			}
 		}
 	}
-	registrationCtx, cancel := context.WithTimeout(process.ctx, cfg.SubjectSync.FetchTimeout)
-	defer cancel()
-	if err := storage.RegisterSubjectListing(registrationCtx, listers.Supported()); err != nil {
-		return nil, fmt.Errorf("register subject listing: %w", err)
-	}
 	metrics := subjectsync.NewMetrics(prometheus.DefaultRegisterer)
-	tags := &subjectsync.TagRunner{Store: storage, Listers: listers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
+	tags := &subjectsync.TagRunner{Store: storage, Runs: runs, Listers: listers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	attributes := &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.SubjectSync.Attributes, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	syncer := &subjectsync.Syncer{Tags: tags, Attributes: attributes}
 	if err := registerSubjectSyncTimers(s, process, syncer.RunDueTags, syncer.RunDueAttributes); err != nil {

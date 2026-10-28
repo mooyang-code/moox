@@ -35,9 +35,6 @@ const (
 	// 否则会反复触发「达到容量上限、重建只保留最新」。
 	DefaultMaxViewFileBytes = int64(4) << 30
 
-	// systemSpace 是 MooX 系统数据空间，保留期不受 view.bars 覆盖校验约束。
-	systemSpace = "mooxsys"
-
 	maxBars = 1_000_000
 	// maxViewBars 是 View 每序列保留行数的上限，与读接口单次 latest_per_series 的上限一致，重建回填才能兑现配置。
 	maxViewBars = 10_000
@@ -166,28 +163,15 @@ func TrimBarsFor(bars uint64) uint64 {
 	return (bars*6 + 4) / 5
 }
 
-// Default returns the recommended policy for an online quant system: 7×24
-// markets as the default, trading-session markets keep more calendar days
-// for the same number of bars, daily and longer bars are kept forever.
+// Default returns the generic policy: every standard frequency has a default
+// retention. Space overrides are deployment configuration (moox.toml), not
+// part of the package.
 func Default() Policy {
-	sessionMarket := func(minute string) map[string]string {
-		return map[string]string{
-			"1m": minute, "5m": "300d", "15m": "900d",
-			"30m": Forever, "1h": Forever, "4h": Forever,
-		}
-	}
 	policy := Policy{
 		Retention: Retention{
 			Defaults: map[string]string{
 				"30s": "90h", "1m": "35d", "5m": "35d", "15m": "105d", "30m": "210d",
 				"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
-			},
-			Spaces: map[string]map[string]string{
-				"stockcn": sessionMarket("60d"),
-				"stockhk": sessionMarket("45d"),
-				"stockus": sessionMarket("40d"),
-				// 主机资源历史（1m）只保留短期：排障看最近几天，长期趋势不靠它。
-				"mooxsys": {"30s": "48h", "1m": "7d"},
 			},
 		},
 		View: View{
@@ -207,25 +191,14 @@ func Default() Policy {
 	return normalized
 }
 
-// defaultViewMaxAge 是 View 最长保留期的推荐值：恰好装下 DefaultViewBars 根（7×24 市场精确，交易时段市场按日历估算），
+// defaultViewMaxAge 是 View 最长保留期的通用推荐值：7×24 市场恰好装下 DefaultViewBars 根，
 // 与 Dataset 保留期的区别只是 1m 不必留到因子的最大回看（35d），View 只服务截面与展示。
+// 各市场（交易时段更长）与系统空间的覆盖属于部署配置（moox.toml 的 [storage_view.max_age.spaces.*]），不写在代码里。
 func defaultViewMaxAge() Retention {
-	sessionMarket := func(minute string) map[string]string {
-		return map[string]string{
-			"1m": minute, "5m": "300d", "15m": "900d",
-			"30m": Forever, "1h": Forever, "4h": Forever,
-		}
-	}
 	return Retention{
 		Defaults: map[string]string{
 			"30s": "90h", "1m": "7d", "5m": "35d", "15m": "105d", "30m": "210d",
 			"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
-		},
-		Spaces: map[string]map[string]string{
-			"stockcn": sessionMarket("60d"),
-			"stockhk": sessionMarket("45d"),
-			"stockus": sessionMarket("40d"),
-			"mooxsys": {"30s": "48h", "1m": "7d"},
 		},
 	}
 }
@@ -236,33 +209,33 @@ func (p Policy) Validate() error {
 	return err
 }
 
-// Coverage checks whether retention and view.max_age can supply view.bars. Defaults and 7×24
-// markets have a deterministic rate; session markets are calendar estimates
-// and produce warnings rather than rejecting an otherwise valid policy.
+// Coverage checks whether retention and view.max_age can supply view.bars by calendar time.
+// A default that cannot is an error; a space override that cannot is only a
+// warning, since a space may deliberately keep less history.
 func (p Policy) Coverage() (errs, warnings []string) {
 	normalized, err := p.normalized()
 	if err != nil {
 		return []string{err.Error()}, nil
 	}
-	check := func(path, raw, freq, space string) {
+	check := func(path, raw, freq string, isDefault bool) {
 		period, _ := ParsePeriod(raw)
 		if period.Forever {
 			return
 		}
-		bars, estimated := barsWithin(period, freq, space)
+		bars := barsWithin(period, freq)
 		if bars >= float64(normalized.View.Bars) {
 			return
 		}
 		message := fmt.Sprintf("%s = %s provides approximately %.0f bars, fewer than view.bars = %d", path, raw, bars, normalized.View.Bars)
-		if estimated {
-			warnings = append(warnings, message)
-		} else {
+		if isDefault {
 			errs = append(errs, message)
+		} else {
+			warnings = append(warnings, message)
 		}
 	}
 	checkAll := func(prefix string, retention Retention) {
 		for _, freq := range sortedKeys(retention.Defaults) {
-			check(prefix+".defaults."+freq, retention.Defaults[freq], freq, "")
+			check(prefix+".defaults."+freq, retention.Defaults[freq], freq, true)
 		}
 		spaces := make([]string, 0, len(retention.Spaces))
 		for space := range retention.Spaces {
@@ -270,12 +243,8 @@ func (p Policy) Coverage() (errs, warnings []string) {
 		}
 		sort.Strings(spaces)
 		for _, space := range spaces {
-			// 系统数据空间（主机资源历史）的保留期独立于 K 线：只保留短期供排障，不要求装满 View 的根数。
-			if space == systemSpace {
-				continue
-			}
 			for _, freq := range sortedKeys(retention.Spaces[space]) {
-				check(prefix+".spaces."+space+"."+freq, retention.Spaces[space][freq], freq, space)
+				check(prefix+".spaces."+space+"."+freq, retention.Spaces[space][freq], freq, false)
 			}
 		}
 	}
@@ -284,42 +253,32 @@ func (p Policy) Coverage() (errs, warnings []string) {
 	return errs, warnings
 }
 
-// barsWithin 估算保留期能装下多少根 bar。7×24 市场按固定速率精确计算；交易时段市场（股票）按日历估算，estimated 为真。
-func barsWithin(period Period, freq, space string) (bars float64, estimated bool) {
+// barsWithin 按自然时间估算保留期能装下多少根 bar（不考虑交易时段：交易时段市场的实际根数更少，配置时自行留余量）。
+func barsWithin(period Period, freq string) float64 {
 	f, _ := frequencypkg.Parse(freq)
 	barLength := f.Duration()
 	if barLength == 0 {
 		barLength = 31 * 24 * time.Hour
 	}
-	bars = float64(period.Duration) / float64(barLength)
-	minutes := map[string]float64{"stockcn": 240, "stockhk": 330, "stockus": 390}[space]
-	if minutes > 0 {
-		if barLength < 24*time.Hour {
-			bars *= minutes / (24 * 60) * 5 / 7
-		} else if barLength == 24*time.Hour {
-			bars *= 5.0 / 7
-		}
-	}
-	return bars, minutes > 0
+	return float64(period.Duration) / float64(barLength)
 }
 
-// RetentionBars 返回空间 × 频率的保留期大约能装下多少根 bar；永久保留时 forever 为真。
+// RetentionBars 返回空间 × 频率的保留期按自然时间大约能装下多少根 bar；永久保留时 forever 为真。
 // 保留期要覆盖 View 的根数，也要大于因子的最大回看根数（引擎要从 Storage 预载这么多历史）。
-func (p Policy) RetentionBars(spaceID, freq string) (bars float64, forever, estimated bool, err error) {
+func (p Policy) RetentionBars(spaceID, freq string) (bars float64, forever bool, err error) {
 	period, _, err := p.Retention.Resolve(spaceID, freq)
 	if err != nil {
-		return 0, false, false, err
+		return 0, false, err
 	}
 	if period.Forever {
-		return 0, true, false, nil
+		return 0, true, nil
 	}
-	bars, estimated = barsWithin(period, freq, spaceID)
-	return bars, false, estimated, nil
+	return barsWithin(period, freq), false, nil
 }
 
-// MinRetentionFor 返回装下 bars 根 bar 至少需要的保留期（7×24 市场精确，交易时段市场按日历估算折回自然时间），向上取整到整小时。
-func MinRetentionFor(spaceID, freq string, bars int) Period {
-	one, _ := barsWithin(Period{Duration: time.Hour * 24 * 365}, freq, spaceID)
+// MinRetentionFor 返回按自然时间装下 bars 根 bar 至少需要的保留期，向上取整到整小时。
+func MinRetentionFor(freq string, bars int) Period {
+	one := barsWithin(Period{Duration: time.Hour * 24 * 365}, freq)
 	if one <= 0 {
 		return Period{}
 	}

@@ -49,38 +49,6 @@ func TestDatasetCreateDefaultsAndRequiresActiveDataNode(t *testing.T) {
 	}
 }
 
-func TestDeleteDatasetRemovesOnlyManagedFactorResultDefaultView(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	if _, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CreateView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result",
-		DatasetId: "dataset_factor_result", Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-		Freq: "1h", Attributes: map[string]string{
-			"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.DeleteDataset(ctx, "space", "dataset_factor_result"); err != nil {
-		t.Fatalf("DeleteDataset() error = %v", err)
-	}
-	if _, err := store.GetDataset(ctx, "space", "dataset_factor_result"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("GetDataset() error = %v, want no rows", err)
-	}
-	if _, err := store.GetView(ctx, "space", "view_factor_result"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("GetView() error = %v, want no rows", err)
-	}
-}
-
 func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
@@ -108,43 +76,7 @@ func TestDeleteDatasetRejectsReferencedOrdinaryDatasetWithoutDeletingView(t *tes
 	}
 }
 
-func TestDeleteFactorResultWithAdditionalViewRollsBackManagedViewDeletion(t *testing.T) {
-	ctx := context.Background()
-	store := openTestStore(t, ctx)
-	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
-	dataset := &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_factor_result", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Factor result", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h",
-		Attributes: map[string]string{"owner_module": "factor", "dataset_role": "factor_result", "write_owner": "factor"},
-	}
-	if _, err := store.CreateDataset(ctx, dataset); err != nil {
-		t.Fatal(err)
-	}
-	managedAttrs := map[string]string{"owner_module": "factor", "view_role": "factor_result", "managed_by": "storage", "primary_dataset_role": "factor_result"}
-	for _, view := range []*pb.View{
-		{
-			SpaceId: "space", ViewId: "view_factor_result", Name: "Factor result", DatasetId: dataset.GetDatasetId(),
-			Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
-			Freq: "1h", Attributes: managedAttrs,
-		},
-		{SpaceId: "space", ViewId: "view_factor_extra", Name: "Extra view", DatasetId: dataset.GetDatasetId(), Engine: "duckdb"},
-	} {
-		if _, err := store.CreateView(ctx, view); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.DeleteDataset(ctx, "space", dataset.GetDatasetId()); err == nil {
-		t.Fatal("DeleteDataset() succeeded while another View references the Dataset")
-	}
-	for _, viewID := range []string{"view_factor_result", "view_factor_extra"} {
-		if _, err := store.GetView(ctx, "space", viewID); err != nil {
-			t.Fatalf("View %s was deleted after rollback: %v", viewID, err)
-		}
-	}
-}
-
-func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
+func TestDatasetMayOmitDataSource(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
@@ -169,12 +101,12 @@ func TestCollectorOwnedDatasetMayOmitDataSource(t *testing.T) {
 		t.Fatalf("collector result source persisted as %q, want SQL NULL", source.String)
 	}
 
-	_, err = store.CreateDataset(ctx, &pb.Dataset{
+	// data_source_id 对所有数据集都是可选的。
+	if _, err = store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "space", DatasetId: "dataset_missing_source", DataNodeId: "node-a",
 		Name: "Missing Source", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
-	})
-	if err == nil || !strings.Contains(err.Error(), "data_source_id is required") {
-		t.Fatalf("ordinary dataset without source err = %v", err)
+	}); err != nil {
+		t.Fatalf("dataset without source err = %v", err)
 	}
 }
 
@@ -469,7 +401,7 @@ func seedDatasetParents(t *testing.T, ctx context.Context, store *Store) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"source", "other"} {
-		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: id, Name: id, Kind: "internal"}); err != nil {
+		if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: id, Name: id}); err != nil {
 			t.Fatal(err)
 		}
 	}

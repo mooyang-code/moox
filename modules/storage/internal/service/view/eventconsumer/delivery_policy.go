@@ -492,18 +492,12 @@ func (c *Consumer) applyDelivery(ctx context.Context, delivery *jetstream.Delive
 	switch value := payload.(type) {
 	case *storagepb.DatasetRowsUpserted:
 		return c.handler.HandleDatasetRows(ctx, message, value)
-	case *storagepb.CollectorPeriodCompleted:
-		handler, ok := c.handler.(CollectorPeriodCompletedHandler)
+	case *storagepb.DatasetPeriodCompleted:
+		handler, ok := c.handler.(DatasetPeriodCompletedHandler)
 		if !ok {
-			return Permanent(errors.New("storage view collector-period handler is unavailable"))
+			return Permanent(errors.New("storage view period-completed handler is unavailable"))
 		}
-		return handler.HandleCollectorPeriodCompleted(ctx, message, value)
-	case *storagepb.FactorPeriodComputed:
-		handler, ok := c.handler.(FactorPeriodComputedHandler)
-		if !ok {
-			return Permanent(errors.New("storage view factor-period handler is unavailable"))
-		}
-		return handler.HandleFactorPeriodComputed(ctx, message, value)
+		return handler.HandleDatasetPeriodCompleted(ctx, message, value)
 	case *storagepb.DatasetSyncPoint:
 		handler, ok := c.handler.(DatasetSyncPointHandler)
 		if !ok {

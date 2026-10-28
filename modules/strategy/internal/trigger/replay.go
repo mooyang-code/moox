@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
@@ -289,12 +290,17 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	}
 
 	// 就绪判定：回放固定了因子版本，上一根的版本证据取固定下来的指纹。
-	event := &storagepb.ViewDataReady{Status: "complete"}
+	factorStates := make([]*factorpb.FactorPeriodState, 0, len(req.FactorStates))
 	for member, factorState := range req.FactorStates {
-		event.Factors = append(event.Factors, &storagepb.FactorPeriodState{
+		factorStates = append(factorStates, &factorpb.FactorPeriodState{
 			MemberKey: member, MemberKind: factorState.Kind, FactorId: member, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
 		})
 	}
+	detailType, detail, err := readiness.EncodeDetail(factorStates)
+	if err != nil {
+		return ReplayDecision{}, err
+	}
+	event := &storagepb.ViewDataReady{Status: "complete", DetailType: detailType, Detail: detail}
 	var adjacent *readiness.Record
 	if len(resolved.PreviousFactors) > 0 {
 		adjacent = &readiness.Record{Factors: resolved.Factors}

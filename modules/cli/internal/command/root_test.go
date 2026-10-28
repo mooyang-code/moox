@@ -34,7 +34,7 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 	seed := metadataSeed{
 		Spaces: []seedSpace{{SpaceID: "crypto", Name: "Crypto", seedCommon: seedCommon{Status: "active"}}},
 		DataSources: []seedDataSource{{
-			SpaceID: "crypto", DataSourceID: "binance", Name: "Binance", Kind: "exchange",
+			SpaceID: "crypto", DataSourceID: "binance", Name: "Binance",
 			seedCommon: seedCommon{Status: "active"},
 		}},
 		Datasets: []seedDataset{{

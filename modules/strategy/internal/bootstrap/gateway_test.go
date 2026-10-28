@@ -149,7 +149,7 @@ func (w *strategyGatewayWire) GetTag(ctx context.Context, req *storagepb.GetTagR
 	if err := w.verifyStorage(ctx, "Metadata", "GetTag", req); err != nil {
 		return nil, err
 	}
-	return &storagepb.GetTagRsp{RetInfo: &commonpb.RetInfo{}, Tag: &storagepb.Tag{TagId: req.GetTagId(), MarketType: "spot"}}, nil
+	return &storagepb.GetTagRsp{RetInfo: &commonpb.RetInfo{}, Tag: &storagepb.Tag{TagId: req.GetTagId(), Attributes: map[string]string{"market_type": "spot"}}}, nil
 }
 
 func (w *strategyGatewayWire) ListDatasetSubjects(ctx context.Context, req *storagepb.ListDatasetSubjectsReq) (*storagepb.ListDatasetSubjectsRsp, error) {

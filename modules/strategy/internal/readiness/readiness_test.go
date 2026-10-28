@@ -4,21 +4,27 @@ import (
 	"reflect"
 	"testing"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/proto"
 )
 
-func factorEvent(states ...*storagepb.FactorPeriodState) *storagepb.ViewDataReady {
+func factorEvent(states ...*factorpb.FactorPeriodState) *storagepb.ViewDataReady {
 	status := "complete"
 	for _, state := range states {
 		if state.GetStatus() != "complete" {
 			status = "degraded"
 		}
 	}
-	return &storagepb.ViewDataReady{ViewId: "view_1", Status: status, Factors: states}
+	raw, err := proto.Marshal(&factorpb.PeriodDetail{Factors: states})
+	if err != nil {
+		panic(err)
+	}
+	return &storagepb.ViewDataReady{ViewId: "view_1", Status: status, DetailType: PeriodDetailType, Detail: raw}
 }
 
-func state(id, status, hash string, failed ...string) *storagepb.FactorPeriodState {
-	return &storagepb.FactorPeriodState{MemberKey: id, MemberKind: "fixed", FactorId: id, Status: status, DefinitionHash: hash, FailedSubjects: failed}
+func state(id, status, hash string, failed ...string) *factorpb.FactorPeriodState {
+	return &factorpb.FactorPeriodState{MemberKey: id, MemberKind: "fixed", FactorId: id, Status: status, DefinitionHash: hash, FailedSubjects: failed}
 }
 
 // 设计文档 3.3 表格逐行覆盖。
@@ -119,7 +125,7 @@ func TestS19MissingAdjacentRecordOnlyMattersWithPreviousBar(t *testing.T) {
 }
 
 func TestCheckIgnoresNilAndBlankFactorStates(t *testing.T) {
-	event := &storagepb.ViewDataReady{Status: "complete", Factors: []*storagepb.FactorPeriodState{nil, {MemberKey: " ", FactorId: " ", Status: "complete"}, state("ma", "complete", "h1")}}
+	event := factorEvent(&factorpb.FactorPeriodState{MemberKey: " ", FactorId: " ", Status: "complete"}, state("ma", "complete", "h1"))
 	if result := Check(Binding{Factors: map[string]string{"ma": "h1|fixed"}}, nil, event); result.Reason != "" {
 		t.Fatalf("空状态应被忽略：%+v", result)
 	}

@@ -3,12 +3,13 @@ package marketfetch
 import (
 	"context"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"

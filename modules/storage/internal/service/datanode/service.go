@@ -91,22 +91,10 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*p
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
 		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	writeEvent := func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
-		if req.GetSourceEventId() == "" {
-			return pebble.BuildDatasetRowsUpsertedMessageWithSource(s.nodeID, req.GetWriteSource(), spaceID, datasetID, rows)
-		}
-		return pebble.BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, req.GetSourceEventId(), req.GetWriteSource(), spaceID, datasetID, rows)
-	}
-	var entries []*pebble.OutboxEntry
-	var err error
-	if req.GetSourceEventId() == "" {
-		entries, err = s.store.UpsertFieldsEvent(ctx, req.GetRows(), writeEvent)
-	} else {
-		entries, err = s.store.UpsertFieldsEventWithSource(ctx, req.GetRows(), req.GetSourceEventId(), writeEvent)
-	}
-	if err != nil {
+	if _, err := s.store.UpsertFields(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCommitId(), req.GetRows()); err != nil {
 		return &pb.UpsertFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
+	// 写入已持久化，事件由节点的 outbox 转发协程异步发布。重复提交命中时同样返回全部行键。
 	keys := make([]*pb.RowKey, 0, len(req.GetRows()))
 	for _, row := range req.GetRows() {
 		key, err := pebble.NormalizeRowKey(row.GetKey())
@@ -115,25 +103,7 @@ func (s *Service) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*p
 		}
 		keys = append(keys, key)
 	}
-	_ = entries // entries are durable and relayed asynchronously by the node.
 	return &pb.UpsertFieldsRsp{RetInfo: retinfo.Success("success"), Keys: keys}, nil
-}
-
-func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
-	if req == nil {
-		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
-	}
-	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
-	}
-	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	rowsWritten, err := s.store.WriteFactorRows(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCommitId(), req.GetRows())
-	if err != nil {
-		return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
-	}
-	return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Success("success"), RowsWritten: rowsWritten}, nil
 }
 
 func (s *Service) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {

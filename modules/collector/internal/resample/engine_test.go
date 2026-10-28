@@ -52,7 +52,7 @@ func (f *fakeStorage) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []
 	return out, nil
 }
 
-func (f *fakeStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, _ string) error {
+func (f *fakeStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.upserts = append(f.upserts, rows)
@@ -62,7 +62,7 @@ func (f *fakeStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagep
 	return nil
 }
 
-func (f *fakeStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, items []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (f *fakeStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, items []*storagepb.TimeSeriesBatchRow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.commitErr != nil {

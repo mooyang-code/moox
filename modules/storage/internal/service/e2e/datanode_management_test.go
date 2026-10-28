@@ -233,7 +233,7 @@ func seedLifecycleParents(t *testing.T, ctx context.Context, store *metasqlite.S
 	if _, err := store.UpsertSpace(ctx, &pb.Space{SpaceId: "quant", Name: "量化空间"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "quant", DataSourceId: "source_a", Name: "内部行情", Kind: "internal"}); err != nil {
+	if _, err := store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "quant", DataSourceId: "source_a", Name: "内部行情"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -368,7 +368,7 @@ func lifecycleRow() *pb.RowFieldUpsert {
 
 func primaryWrite(t *testing.T, ctx context.Context, service *primarystore.Service, auth *pb.AuthInfo, row *pb.RowFieldUpsert) *pb.PrimaryUpsertFieldsRsp {
 	t.Helper()
-	rsp, err := service.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}})
+	rsp, err := service.UpsertFields(ctx, fillDataset(&pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: []*pb.RowFieldUpsert{row}}))
 	if err != nil {
 		t.Fatalf("PrimaryStore write: rsp=%v err=%v", rsp, err)
 	}
@@ -436,17 +436,17 @@ func (s *countingPanicStore) GetDataSource(ctx context.Context, space, source st
 	s.guard("GetDataSource")
 	return s.Store.GetDataSource(ctx, space, source)
 }
-func (s *countingPanicStore) ListDataSources(ctx context.Context, space, kind, market, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
+func (s *countingPanicStore) ListDataSources(ctx context.Context, space, keyword string, page *pb.Page) ([]*pb.DataSource, *pb.PageResult, error) {
 	s.guard("ListDataSources")
-	return s.Store.ListDataSources(ctx, space, kind, market, keyword, page)
+	return s.Store.ListDataSources(ctx, space, keyword, page)
 }
 func (s *countingPanicStore) GetSubject(ctx context.Context, space, subject string) (*pb.Subject, error) {
 	s.guard("GetSubject")
 	return s.Store.GetSubject(ctx, space, subject)
 }
-func (s *countingPanicStore) ListSubjects(ctx context.Context, space, kind, market string, ids []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
+func (s *countingPanicStore) ListSubjects(ctx context.Context, space string, ids []string, keyword string, page *pb.Page) ([]*pb.Subject, *pb.PageResult, error) {
 	s.guard("ListSubjects")
-	return s.Store.ListSubjects(ctx, space, kind, market, ids, keyword, page)
+	return s.Store.ListSubjects(ctx, space, ids, keyword, page)
 }
 func (s *countingPanicStore) GetDataset(ctx context.Context, space, dataset string) (*pb.Dataset, error) {
 	s.guard("GetDataset")

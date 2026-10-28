@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"testing"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
@@ -52,7 +51,7 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectChange("insert subject", func() {
-		execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type) VALUES ('space', 'AAA', 'crypto')`)
+		execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id) VALUES ('space', 'AAA')`)
 	})
 	expectChange("subject status", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_subjects SET c_status = 'disabled' WHERE c_subject_id = 'AAA'`)
@@ -70,8 +69,8 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 		execRevisionSQL(t, ctx, store, `DELETE FROM t_subject_tags WHERE c_subject_id = 'AAA'`)
 	})
 	expectChange("tag snapshot adds members", func() {
-		if _, err := store.ApplyTagSnapshot(ctx, "space", "assets", time.Date(2026, 9, 25, 1, 0, 0, 0, time.UTC), []*pb.TagSnapshotItem{
-			{SubjectId: "BTC-USDT", SubjectType: "crypto", Name: "BTC"},
+		if _, err := store.ApplyTagSnapshot(ctx, "space", "assets", []*pb.TagSnapshotItem{
+			{SubjectId: "BTC-USDT", Name: "BTC"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -79,11 +78,11 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	expectChange("member inactive", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_subject_tags SET c_status = 'inactive' WHERE c_subject_id = 'BTC-USDT'`)
 	})
-	expectSame("tag sync status only", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_last_run_at = '2026-09-25 02:00:00', c_last_status = 'success' WHERE c_tag_id = 'assets'`)
+	expectSame("tag description only", func() {
+		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_description = 'x' WHERE c_tag_id = 'assets'`)
 	})
-	expectChange("tag market type", func() {
-		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_market_type = 'swap' WHERE c_tag_id = 'assets'`)
+	expectChange("tag attributes", func() {
+		execRevisionSQL(t, ctx, store, `UPDATE t_tags SET c_attrs_json = '{"market_type":"swap"}' WHERE c_tag_id = 'assets'`)
 	})
 
 	// 数据集：创建、改标的范围、删除后以同 ID 重建，都必须递增（缓存键是 space+dataset）。
@@ -107,7 +106,7 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type) VALUES ('space', 'ROLLED', 'crypto')`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_subjects (c_space_id, c_subject_id) VALUES ('space', 'ROLLED')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Rollback(); err != nil {
@@ -123,7 +122,7 @@ func TestInitSchemaIsRepeatableOnPopulatedDatabase(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type) VALUES ('space', 'AAA', 'crypto')`)
+	execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id) VALUES ('space', 'AAA')`)
 	before := subjectsRevision(t, ctx, store)
 	for i := 0; i < 2; i++ {
 		if err := store.InitSchema(ctx); err != nil {
@@ -143,7 +142,7 @@ func TestInitSchemaUpgradesDatabaseWithoutRevisionObjects(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id, c_subject_type) VALUES ('space', 'AAA', 'crypto')`)
+	execRevisionSQL(t, ctx, store, `INSERT INTO t_subjects (c_space_id, c_subject_id) VALUES ('space', 'AAA')`)
 	rows, err := store.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg\_%\_rev\_%' ESCAPE '\'`)
 	if err != nil {
 		t.Fatal(err)

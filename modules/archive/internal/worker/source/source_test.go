@@ -44,8 +44,8 @@ func col(name string, origin storagepb.DatasetColumnOriginType, typ storagepb.Fi
 	return &storagepb.DatasetColumn{ColumnName: name, OriginType: origin, ValueType: typ, Status: status}
 }
 
-func TestColumnsKeepsFieldAndFactorColumnsSortedAndSkipsSystemAndDisabled(t *testing.T) {
-	field, factor, system := storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
+func TestColumnsKeepsFieldAndCustomColumnsSortedAndSkipsSystemAndDisabled(t *testing.T) {
+	field, custom, system := storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM, storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
 	gw := &fakeGateway{columns: []*storagepb.ListDatasetColumnsRsp{
 		{RetInfo: ok(), PageResult: &commonpb.PageResult{HasMore: true}, Columns: []*storagepb.DatasetColumn{
 			col("volume", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
@@ -54,7 +54,7 @@ func TestColumnsKeepsFieldAndFactorColumnsSortedAndSkipsSystemAndDisabled(t *tes
 		}},
 		{RetInfo: ok(), Columns: []*storagepb.DatasetColumn{
 			col("close", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, ""),
-			col("zscore", factor, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
+			col("zscore", custom, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "active"),
 			col("tag", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING, "active"),
 			col("n", field, storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "active"),
 		}},

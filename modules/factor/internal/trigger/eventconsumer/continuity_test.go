@@ -82,13 +82,13 @@ func periodDelivery(t *testing.T, eventID string, period time.Time, universe, fa
 	if len(failed) > 0 {
 		status = "degraded"
 	}
-	payload := &storagepb.CollectorPeriodCompleted{
-		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, BatchId: "b", ConfigSnapshotId: "c", ExpectedScopeRef: "s",
-		UniverseSubjectIds: universe, FailedSubjects: failed, CollectedAt: timestamppb.New(period.Add(time.Minute)),
+	payload := &storagepb.DatasetPeriodCompleted{
+		DatasetId: "bars", Frequency: "1m", PeriodTime: period.Unix(), Status: status, Source: "ledger", SnapshotRef: "scope-1",
+		UniverseSubjectIds: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(period.Add(time.Minute)),
 	}
-	raw, err := registry.MarshalMessage(events.CollectorPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
+	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{EventID: eventID, OccurredAt: period.Add(time.Minute), SpaceID: "crypto", SubjectID: "bars"})
 	require.NoError(t, err)
-	subject, err := registry.RenderSubject(events.CollectorPeriodCompleted, "crypto", "bars")
+	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, "crypto", "bars")
 	require.NoError(t, err)
 	return &jetstream.Delivery{Subject: subject, RawData: raw, RawMessageID: eventID, ContentType: events.ContentType}
 }

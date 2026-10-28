@@ -111,8 +111,8 @@ func (w *factorGatewayWire) ActivateDataset(ctx context.Context, req *storagepb.
 	return nil, errs.NewFrameError(errs.RetServerNoService, "activation must not retry")
 }
 
-func (w *factorGatewayWire) ReportFactorPeriodComputed(ctx context.Context, req *storagepb.ReportFactorPeriodComputedReq) (*storagepb.ReportFactorPeriodComputedRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReportFactorPeriodComputed", req); err != nil {
+func (w *factorGatewayWire) ReportDatasetPeriodCompleted(ctx context.Context, req *storagepb.ReportDatasetPeriodCompletedReq) (*storagepb.ReportDatasetPeriodCompletedRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReportDatasetPeriodCompleted", req); err != nil {
 		return nil, err
 	}
 	if !proto.Equal(req.GetAuthInfo(), storageio.AuthInfo("fixture-factor-request")) {

@@ -15,7 +15,6 @@ import (
 var ErrResampleSourceIncomplete = errors.New("resample source window incomplete")
 
 const (
-	writeSource      = "collector:kline_resample"
 	fieldOpen        = "open"
 	fieldHigh        = "high"
 	fieldLow         = "low"
@@ -40,12 +39,12 @@ func sourceFields(spaceID string) []string {
 	return append(fields, fieldAmount)
 }
 
-// PrimaryStorage is the exact-read and idempotent-write surface required by a
-// local resample worker. The interface is intentionally small for deterministic
+// PrimaryStorage is the exact-read and write surface required by a local
+// resample worker; rewriting the same bucket simply overwrites it. The interface is intentionally small for deterministic
 // unit tests and to keep the remote adapter independent of control-plane state.
 type PrimaryStorage interface {
 	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
-	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
+	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
 // SyncPointStorage is the optional catch-up fence used after a historical

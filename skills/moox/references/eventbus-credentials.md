@@ -40,7 +40,7 @@ broker 的证书、私钥和用户表只随 `eventbus` 单元下发（`export-cl
 | control 上的服务 | control 单元发布目录的 `<组件>/secrets/eventbus/` | `setup bootstrap --stage control --release <版本>` |
 | 每台主机的 Host Agent | `host` 单元发布目录的 `host-agent/config/eventbus.yaml` | 每台主机 `setup deploy-host --release <版本>` |
 | Storage / Trade 等业务单元 | 该单元发布目录的 `<组件>/secrets/eventbus/` | `setup deploy-unit --profile <单元> --release <版本>` |
-| 显式启用指标 Reporter 的定制 SCF（可选） | 实际环境中的指标 EventBus URL、凭据与 CA | 仅此类定制函数需要更新其实际配置并重新发布；当前计划采集与补采 SCF 的标准部署不连接 EventBus |
+| 显式启用指标 Reporter 的定制 SCF（可选） | 函数环境里的 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64`（指标 EventBus URL、凭据与 CA） | 仅此类定制函数需要更新其实际配置并重新发布；当前计划采集与补采 SCF 的标准部署不连接 EventBus |
 | 外置因子引擎 | 发布目录 `secrets/factor-eventbus.yaml`、`ca.pem`，由引擎配置引用 | `setup deploy-unit --profile factor-engine` 重新导出、安装并重启 |
 
 [`native-release.md`](native-release.md) 的二进制发布不更新配置和凭据：只发布二进制，各主机会继续用旧 CA 和旧 token。

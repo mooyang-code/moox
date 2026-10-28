@@ -202,6 +202,8 @@ members = [
   { factor = "min_max" },
   { factor = "quote_volume_mean" },
   { factor = "ma" },
+  { factor = "ma", params = { window = 5 } },   # 成员键 ma__5、ma__10：默认展示策略 dual_ma_swap_1m 的快线与慢线
+  { factor = "ma", params = { window = 10 } },
   { factor = "ema" },
   { factor = "macd" },
   { factor = "rsi" },

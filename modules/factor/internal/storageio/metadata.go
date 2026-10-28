@@ -21,7 +21,7 @@ const (
 	DatasetStatusDisabled   = "disabled"
 	ColumnStatusActive      = "active"
 	ColumnOriginField       = "field"
-	ColumnOriginFactor      = "factor"
+	ColumnOriginCustom      = "custom"
 	ColumnOriginSystem      = "system"
 	ColumnTypeString        = "string"
 	ColumnTypeInt           = "int"
@@ -84,6 +84,9 @@ type Metadata interface {
 	ActivateDataset(ctx context.Context, spaceID, datasetID string) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
 	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
+	// EnsureResultView / DeleteResultView 由 factor-mgr 自己维护结果数据集的默认 View。
+	EnsureResultView(ctx context.Context, spaceID, datasetID string) error
+	DeleteResultView(ctx context.Context, spaceID, datasetID string) error
 }
 
 func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
@@ -375,6 +378,10 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 		if err := c.primaryReady("delete factor result rows"); err != nil {
 			return err
 		}
+		// t_views 外键要求先删 View；顺序：删默认 View → 清空行 → 删数据集。
+		if err := c.DeleteResultView(ctx, spaceID, datasetID); err != nil {
+			return err
+		}
 		deleted, err := c.primary.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
 		if err != nil {
 			return rpcError("delete factor result rows", err)
@@ -554,8 +561,8 @@ func columnOriginFromProto(value storagepb.DatasetColumnOriginType) string {
 	switch value {
 	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
 		return ColumnOriginField
-	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
-		return ColumnOriginFactor
+	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM:
+		return ColumnOriginCustom
 	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM:
 		return ColumnOriginSystem
 	default:
@@ -567,8 +574,8 @@ func columnOriginToProto(value string) storagepb.DatasetColumnOriginType {
 	switch value {
 	case ColumnOriginField:
 		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD
-	case ColumnOriginFactor:
-		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR
+	case ColumnOriginCustom:
+		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_CUSTOM
 	case ColumnOriginSystem:
 		return storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM
 	default:

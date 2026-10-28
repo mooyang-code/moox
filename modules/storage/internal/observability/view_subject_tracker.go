@@ -19,9 +19,8 @@ const (
 	// the count metric still covers all of them.
 	ViewLaggingSubjectsReported = 200
 	// viewSubjectLagTolerance is how far past one bar a subject may trail its
-	// View's latest bar before it counts as lagging. It matches Monitor's
-	// K-line stale_after, so a lagging subject is one Monitor would call stale
-	// while the View itself is fresh.
+	// View's latest bar before it counts as lagging: a generic tolerance that
+	// does not depend on what the data is.
 	viewSubjectLagTolerance = 5 * time.Minute
 )
 

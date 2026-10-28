@@ -125,6 +125,9 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 	if err := s.metadata.ActivateDataset(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("activate factor result dataset: %w", err)
 	}
+	if err := s.metadata.EnsureResultView(ctx, in.SpaceID, in.ResultDatasetID); err != nil {
+		return domain.FactorTask{}, fmt.Errorf("create factor result default View（任务 %s 已登记为待创建，可用同一个任务 ID 重试）: %w", in.TaskID, err)
+	}
 	if err := s.db.SetTaskStatus(ctx, in.TaskID, domain.TaskStatusPending, domain.TaskStatusEnabled); err != nil {
 		return domain.FactorTask{}, fmt.Errorf("enable factor task after result dataset activation: %w", err)
 	}
@@ -481,7 +484,7 @@ func (s *Service) checkReaddConsistent(ctx context.Context, task domain.FactorTa
 	}
 	for _, existing := range columns {
 		want, ok := wanted[existing.ColumnName]
-		if !ok || existing.OriginType != storageio.ColumnOriginFactor {
+		if !ok || existing.OriginType != storageio.ColumnOriginCustom {
 			continue
 		}
 		if existing.Attributes["member_kind"] != want.Attributes["member_kind"] ||
@@ -639,8 +642,8 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask,
 	}
 	origins := make(map[string]string)
 	for _, column := range resultColumns {
-		if column.OriginType == storageio.ColumnOriginFactor {
-			origins[column.ColumnName] = column.OriginID
+		if memberKey := column.Attributes["member_key"]; column.OriginType == storageio.ColumnOriginCustom && memberKey != "" {
+			origins[column.ColumnName] = memberKey
 		}
 	}
 	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {
@@ -677,7 +680,7 @@ func resultDatasetSpec(task domain.FactorTask, source storageio.DatasetInfo, col
 		DataSourceID: source.DataSourceID, DataNodeID: source.DataNodeID,
 		DataKind: storageio.DataKindTimeSeries, Frequency: task.Freq,
 		SubjectTags: append([]string(nil), source.SubjectTags...), Attributes: map[string]string{
-			"owner_module": "factor", "dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID, "write_owner": "factor",
+			"owner_module": "factor", "dataset_role": storageio.DatasetRoleFactorResult, "source_dataset_id": source.DatasetID,
 		},
 		Columns: append(append([]storageio.ColumnInfo(nil), columns...), paramsColumn()),
 	}

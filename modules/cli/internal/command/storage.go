@@ -26,7 +26,6 @@ var storageCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(storageCmd)
 	storageCmd.AddCommand(storageRepairViewCmd)
-	storageCmd.AddCommand(storageReconcileViewConsumersCmd)
 	storageCmd.AddCommand(storageForceRebuildViewCmd)
 	storageCmd.AddCommand(storageResetViewConsumersCmd)
 	storageCmd.AddCommand(storageResetMetadataCmd)
@@ -44,16 +43,6 @@ var storageRepairViewCmd = &cobra.Command{
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStorageMaintenanceBinary(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), args)
-	},
-}
-
-var storageReconcileViewConsumersCmd = &cobra.Command{
-	Use:                "reconcile-view-consumers [flags]",
-	Aliases:            []string{"校正视图消费", "修复消费过滤"},
-	Short:              "检查并修复 View durable consumer 的过滤范围漂移",
-	DisableFlagParsing: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "reconcile-view-consumers", args)
 	},
 }
 

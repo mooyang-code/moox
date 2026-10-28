@@ -80,13 +80,13 @@ func assertStorageAuthConstructorsFailBeforeProxy(t *testing.T) {
 	t.Helper()
 	access := &authPeriodClient{}
 	gateway := storageGatewayFunc(func(context.Context, string, string, any, any) error { access.calls++; return nil })
-	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "test")
+	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT)
 	require.Error(t, err)
 	require.Nil(t, writer)
 	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.Error(t, err)
 	require.Nil(t, metadata)
-	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT, "test")
+	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.Error(t, err)
 	require.Nil(t, resample)
 	auth, err := ResolveStorageAuthInfo(InstTypeSPOT)
@@ -117,15 +117,15 @@ func TestStorageRuntimeManagedAuthCompletesPeriodCommit(t *testing.T) {
 		}
 		return nil
 	})
-	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "test")
+	writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT)
 	require.NoError(t, err)
 	expectation := validStorageExpectation(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, writer.CommitTimeSeriesBatch(context.Background(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "test-event"))
+	require.NoError(t, writer.CommitTimeSeriesBatch(context.Background(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}))
 	require.Equal(t, 1, access.calls)
 	metadata, err := NewGatewayResampleMetadataClient(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.NoError(t, err)
 	require.Equal(t, key, metadata.Auth.AppKey)
-	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT, "test")
+	resample, err := NewGatewayResampleStorage(storageGatewayFunc(func(context.Context, string, string, any, any) error { return nil }), InstTypeSPOT)
 	require.NoError(t, err)
 	require.Equal(t, key, resample.(*storageWriter).authInfo.AppKey)
 }
@@ -193,9 +193,12 @@ func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
 		call func(BatchStorage) error
 	}{
 		{"CommitTimeSeriesBatch", func(w BatchStorage) error {
-			return w.CommitTimeSeriesBatch(t.Context(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}}, "stable-event")
+			return w.CommitTimeSeriesBatch(t.Context(), expectation, []*storagepb.TimeSeriesBatchRow{{SeriesIndex: 0}})
 		}},
-		{"UpsertFields", func(w BatchStorage) error { return w.UpsertFields(t.Context(), nil) }},
+		{"UpsertFields", func(w BatchStorage) error {
+			row := &storagepb.RowFieldUpsert{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset"}}
+			return w.UpsertFields(t.Context(), []*storagepb.RowFieldUpsert{row})
+		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			calls := 0
@@ -205,7 +208,7 @@ func TestInternalGatewayWriterDoesNotRepeatFailedCalls(t *testing.T) {
 				require.Equal(t, operation.name, method)
 				return context.DeadlineExceeded
 			})
-			writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT, "collector")
+			writer, err := NewGatewayBatchStorage(gateway, InstTypeSPOT)
 			require.NoError(t, err)
 			require.ErrorIs(t, operation.call(writer), context.DeadlineExceeded)
 			require.Equal(t, 1, calls)

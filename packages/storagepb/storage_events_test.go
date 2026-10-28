@@ -37,46 +37,37 @@ func TestStorageCompletionEventsRoundTrip(t *testing.T) {
 		new     func() proto.Message
 	}{
 		{
-			name: "collector period completed",
-			payload: &CollectorPeriodCompleted{
-				DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000,
-				Status: "degraded", BatchId: "batch-1", ConfigSnapshotId: "config-1",
-				ExpectedScopeRef: "universe:spot_kline:1m", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
+			name: "dataset period completed (ledger)",
+			payload: &DatasetPeriodCompleted{
+				DatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "ledger",
+				SnapshotRef: "series-hash-1", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
 				FailedSubjects:     []string{"ETH-USDT"},
 				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 9}},
-				CollectedAt:        now,
+				CompletedAt:        now,
 			},
-			new: func() proto.Message { return new(CollectorPeriodCompleted) },
+			new: func() proto.Message { return new(DatasetPeriodCompleted) },
+		},
+		{
+			name: "dataset period completed (producer)",
+			payload: &DatasetPeriodCompleted{
+				DatasetId: "result_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded", Source: "producer",
+				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
+				CauseEventId: "collector-event-1", CompletedAt: now,
+				DetailType: "moox.factor.PeriodDetail.v1", Detail: []byte{0x0a, 0x01, 0x78},
+			},
+			new: func() proto.Message { return new(DatasetPeriodCompleted) },
 		},
 		{
 			name: "view data ready",
 			payload: &ViewDataReady{
-				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "factor-event-1",
-				CompletionKind: "event.storage.dataset.factor_period.computed",
-				DatasetId:      "result_kline", Status: "degraded", VisibleScope: "universe:result:1m",
+				ViewId: "view_kline", ViewConfigId: "view-config", CompletionEventId: "period-event-1",
+				DatasetId: "result_kline", Status: "degraded", VisibleScope: "universe:result:1m",
 				Frequency: "1m", PeriodTime: 1786032000,
 				CommittedPositions: []*CommittedPosition{{NodeId: "node", StoreId: "store", Sequence: 10}},
-				ReadyAt:            now,
-				Factors: []*FactorPeriodState{{
-					FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
-					FailedSubjects: []string{"ETH-USDT"},
-				}},
+				ReadyAt:            now, UniverseSubjectIds: []string{"BTC-USDT"},
+				DetailType: "moox.factor.PeriodDetail.v1", Detail: []byte{0x0a, 0x01, 0x78},
 			},
 			new: func() proto.Message { return new(ViewDataReady) },
-		},
-		{
-			name: "factor period computed",
-			payload: &FactorPeriodComputed{
-				DatasetId: "result_kline", SourceDatasetId: "spot_kline", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
-				UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"},
-				FailedSubjects:     []string{"ETH-USDT"},
-				Factors: []*FactorPeriodState{{
-					FactorId: "factor-1", Status: "degraded", SourceHash: "hash-1",
-					FailedSubjects: []string{"BTC-USDT"},
-				}},
-				ComputedAt: now, TriggerEventId: "collector-event-1",
-			},
-			new: func() proto.Message { return new(FactorPeriodComputed) },
 		},
 		{
 			name:    "dataset sync point",

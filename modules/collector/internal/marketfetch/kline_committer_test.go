@@ -18,13 +18,13 @@ type capturingPeriodStorage struct {
 	upserts      [][]*storagepb.RowFieldUpsert
 }
 
-func (s *capturingPeriodStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, _ string) error {
+func (s *capturingPeriodStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow) error {
 	s.expectations = append(s.expectations, expectation)
 	s.rows = append(s.rows, rows)
 	return nil
 }
 
-func (s *capturingPeriodStorage) UpsertFieldsWithSource(_ context.Context, rows []*storagepb.RowFieldUpsert, _ string) error {
+func (s *capturingPeriodStorage) UpsertFields(_ context.Context, rows []*storagepb.RowFieldUpsert) error {
 	s.upserts = append(s.upserts, rows)
 	return nil
 }

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ const subjectSyncTimeout = 170 * time.Second
 // SubjectSyncer runs a subject sync immediately.
 type SubjectSyncer interface {
 	SyncNow(ctx context.Context, filter subjectsync.Filter, includeAttributes bool) (subjectsync.Report, error)
+	// SupportedListers 返回数据来源能提供标的快照的市场类型。
+	SupportedListers() map[string][]string
 }
 
 // SetSubjectSyncer wires the syncer shared with the scheduled timers. It is
@@ -57,6 +60,45 @@ func (s *Service) SyncSubjects(ctx context.Context, req *pb.SyncSubjectsReq) (*p
 	}
 	if len(rsp.Tags) == 0 && len(rsp.Attributes) == 0 {
 		rsp.RetInfo = retErr(pb.ErrorCode_NOT_FOUND, "no tag or attribute job matches the filter")
+	}
+	return rsp, nil
+}
+
+// ListTagSyncStatus 返回标签的标的同步运行结果（Collector 自己的库）。没有运行记录的标签不在其中，
+// 调用方（Monitor、管理台）把它们按“从未运行”处理。
+func (s *Service) ListTagSyncStatus(ctx context.Context, req *pb.ListTagSyncStatusReq) (*pb.ListTagSyncStatusRsp, error) {
+	if s.persistence == nil || s.persistence.TagSyncRuns() == nil {
+		return &pb.ListTagSyncStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "tag sync status is not configured")}, nil
+	}
+	runs, err := s.persistence.TagSyncRuns().List(ctx, strings.TrimSpace(req.GetSpaceId()))
+	if err != nil {
+		return &pb.ListTagSyncStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	rsp := &pb.ListTagSyncStatusRsp{RetInfo: retOK()}
+	for _, run := range runs {
+		item := &pb.TagSyncStatus{SpaceId: run.SpaceID, TagId: run.TagID, LastRunAt: run.LastRunAt.Format(time.RFC3339), LastStatus: run.LastStatus, LastError: run.LastError}
+		if !run.LastSuccessAt.IsZero() {
+			item.LastSuccessAt = run.LastSuccessAt.Format(time.RFC3339)
+		}
+		rsp.Items = append(rsp.Items, item)
+	}
+	return rsp, nil
+}
+
+// ListSubjectListers 返回能提供标的快照的（数据来源，市场类型）组合，管理台新建自动标签时据此给出选项。
+func (s *Service) ListSubjectListers(ctx context.Context, _ *pb.ListSubjectListersReq) (*pb.ListSubjectListersRsp, error) {
+	if s.subjectSyncer == nil {
+		return &pb.ListSubjectListersRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "subject sync is not configured")}, nil
+	}
+	supported := s.subjectSyncer.SupportedListers()
+	sources := make([]string, 0, len(supported))
+	for source := range supported {
+		sources = append(sources, source)
+	}
+	sort.Strings(sources)
+	rsp := &pb.ListSubjectListersRsp{RetInfo: retOK()}
+	for _, source := range sources {
+		rsp.Listers = append(rsp.Listers, &pb.SubjectLister{Source: source, MarketTypes: append([]string(nil), supported[source]...)})
 	}
 	return rsp, nil
 }

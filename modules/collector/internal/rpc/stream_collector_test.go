@@ -16,6 +16,8 @@ import (
 
 type recordingSyncer struct{ filters chan subjectsync.Filter }
 
+func (s *recordingSyncer) SupportedListers() map[string][]string { return nil }
+
 func (s *recordingSyncer) SyncNow(_ context.Context, filter subjectsync.Filter, _ bool) (subjectsync.Report, error) {
 	s.filters <- filter
 	return subjectsync.Report{}, nil
