@@ -9,6 +9,8 @@ go run ./tools/zstddict eval  -corpus <评估语料> -dict default-v2.zdict
 go run ./tools/zstddict scan  -dict default-v2.zdict
 ```
 
+`-size` 的单位为 KiB（默认 224），`-cap` 是每类来源的抽样上限 MiB（默认 3）；`-id` 为写入帧头的十六进制字典 ID，必须至少为 `0x8000`。
+
 ## 语料
 
 目录按来源分子目录，每个样本一个 `.bin` 文件（未压缩的原始字节）：
@@ -41,4 +43,4 @@ go run ./tools/zstddict scan  -dict default-v2.zdict
 
 ## 依赖
 
-训练需要 zstd 命令行（`--train`，因子机 192.168.0.103 已有 1.5.7）。`zstd.BuildDict` 需要调用方自己提供字典主体，不做片段选择，所以不用它。
+训练需要本机 PATH 中可执行的 zstd 命令行（`--train`）；工具通过 `exec.LookPath("zstd")` 检查，不代装依赖。`zstd.BuildDict` 需要调用方自己提供字典主体，不做片段选择，所以不用它。

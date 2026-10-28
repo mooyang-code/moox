@@ -43,8 +43,8 @@ web-host/
 - `make build` - 使用当前已嵌入的 statik 文件构建 Go 二进制文件
 - `make statik` - 仅生成 statik 文件（前端更新后使用）
 - `make build-linux` / `make build-darwin` - 交叉构建到仓库根目录 `bin/moox-web-host`
-- `make clean` - 清理构建产物
-- `make deps` - 下载和整理依赖
+- `make clean` - 仅删除 `web-host/bin` 与 `web-host/release`；不会删除根目录 `bin/moox-web-host`
+- `make deps` - 执行 `go mod download` 下载依赖（不执行 `go mod tidy`）
 - `make lint` - `go vet ./...`
 
 ## 开发流程

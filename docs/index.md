@@ -24,7 +24,7 @@ hero:
 
 features:
   - title: 云函数采集
-    details: Collector 规划周期批次，腾讯云 SCF 分别通过 Invoke 函数池和 Timer fleet 抓取加密货币与 A 股 K 线，逐序列提交到 Storage，失败序列自动重试。
+    details: Collector 下发采集计划，执行端通过 WS 推送或 SCF Timer 拉取收盘 K 线并提交到 Storage，缺口由检查与补采修复。
   - title: 字段级事实存储
     details: DataNode 以 Pebble 保存字段级事实并通过 Outbox 发布变更；DuckDB / Bleve View 是可重建的查询索引。
   - title: 因子与策略

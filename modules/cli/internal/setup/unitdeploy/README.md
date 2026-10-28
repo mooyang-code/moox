@@ -14,10 +14,10 @@
 部署、材料导出与恢复统一采用 `paths.control_root`，可位于部署根下的嵌套目录。host 与
 control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`identity`、`run` 状态
 命名空间；使用自定义路径不会额外创建硬编码的 `control/`。Storage 根仍须位于部署根下，
-其跨部署根布局与跨主机角色路由继续由 G13 完成。
+当前安装器不支持 Storage 跨部署根或三个角色分散到多台主机。
 
-核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、EventBus、Host Gateway、
-Host Agent。输出 `stage=core-ready`，不能据此认定完整部署成功。待 Storage、Access、
+核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、Host Gateway、Host Agent。EventBus 的身份在 core 阶段签发，
+broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `stage=core-ready`，不能据此认定完整部署成功。待 Storage、Access、
 出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 部署并激活 Console Proxy。
 已有的完整控制服务不能通过核心请求被缩减。
 
@@ -40,7 +40,7 @@ Host Agent。输出 `stage=core-ready`，不能据此认定完整部署成功。
 `MOOX_BOOTSTRAP_HOST_ARCHIVE`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`、只含公开模板的
 合成 Git 仓库 `MOOX_CORE_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
 Access、出口代理、Trade/Trade CLI 和四个 Storage 二进制（仅三个服务需要 CGO）。真实 SSH/SFTP 场景从首次制品准备开始，使用
-完整三主机拓扑核验四个核心服务、主机指纹拒绝、操作员身份范围、重复执行 PID 保持、
+完整三主机拓扑核验三个核心服务、主机指纹拒绝、操作员身份范围、重复执行 PID 保持、
 本机状态丢失拒绝替换凭据。其余主机只参与拓扑与签发，未在此场景启动。
 
 核心成功后在本机保存 `core-ready.json` 完成收据。`setup deploy-host --host HOST` 使用同一
@@ -61,7 +61,7 @@ Linux 场景还在运行中的控制主机验证真实主机部署、按角色�
 PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回滚后新建候选。其他两台主机仍
 只参与拓扑；这不是三主机实际安装验收。
 
-`setup deploy-unit --host HOST --profile access|egress-proxy|trade|collector-stream|storage|factor-engine|archive-worker` 使用同一持久
+`setup deploy-unit --host HOST --profile eventbus|access|egress-proxy|trade|collector-stream|storage|factor-engine|archive-worker` 使用同一持久
 状态与操作员身份，只选择该主机在对应软件包内实际部署的组件。`factor-engine`、`archive-worker` 是外部程序：软件包随 release 交付，
 经 SSH 以 systemd 用户服务安装并核对 linger，主机或部署已停用时只安装文件、不启动。出口配置和 Storage
 策略由可信配置快照产生，配置字节及私有环境摘要绑定原始操作；重试拒绝变更后重新接管。
@@ -79,8 +79,6 @@ Access、出口代理和 Trade 默认在本机关闭 CGO 构建。Storage 必须
 业务单元只有实际就绪才返回 `<profile>-ready`；暂停返回 `<profile>-paused`。Linux 场景在
 隔离网络内启动四类实际业务单元（包括 Storage 三个角色及首次建库），核验重复执行保持
 发布/PID、签名身份范围和核心服务 PID。全部服务集中在合成控制主机，另外两台只参与拓扑；
-独立主机运行、跨架构运行和真实业务读写仍须验收。此入口负责一次部署操作的恢复，通用
-版本升级、整个发布回滚和旧部署命令替换仍由外层流程完成。
+独立主机运行、跨架构运行和真实业务读写仍须验收。此入口负责一次部署操作的恢复；版本升级通过同包的 release 流程与 `--release` 接入，整个多单元发布回滚仍需外层编排。
 
-完整 control 与外层 bootstrap 编排、生产历史状态迁移、云资源/防火墙、完整系统验收、
-全部编码后的独立 Agent 审查和正式发布仍待接通。
+`setup bootstrap --stage control` 已连接完整控制单元，`setup release build` 与部署命令的 `--release` 已连接版本升级；Storage 制品只在 release build 提供 `--storage-binary-dir` 时加入。防火墙由独立 `setup firewall` 或 `setup init` 处理，部署命令本身不等同于完整云资源编排。跨主机、跨架构、历史状态迁移与生产业务验收仍需另行验证。

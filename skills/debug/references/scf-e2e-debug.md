@@ -6,9 +6,9 @@ Use this reference when a MooX collector cloud function does not run on its Time
 
 1. Collector (one reconciler per space) computes the fetch plan, registers series snapshots in Storage and writes the plan into each function's SCF environment (`MOOX_*` variables). Functions keep their Timer trigger enabled.
 2. At each Timer tick the function derives the (dataset, subject) work from the plan and the event time, fetches the providers concurrently, and writes through Access (`11004`) as the `scf-collector` external identity: `CommitTimeSeriesBatch` (and `UpsertFields` for backfill rows). The Access address and instance identity are derived from the deployment manifest.
-3. The function never talks to Collector or EventBus. Failed items are reported to CLS (`market_fetch_item_failure`, `market_fetch_batch`); they are not retried online.
+3. The default plan/backfill path does not call Collector or require EventBus; an explicitly configured metrics Reporter can publish to EventBus. Provider requests can retry or switch endpoints within the invocation budget. Final failures are logged to CLS (`market_fetch_item_failure`, `market_fetch_batch`); Collector repairs remaining gaps through backfill instead of re-dispatching an old completion batch.
 4. Gaps are found by `moox-cli collector kline check` and repaired by `kline backfill` or the Collector's automatic backfill.
-5. At the period deadline the Storage DataNode marks the period `complete` or `degraded` and emits `CollectorPeriodCompleted`.
+5. Storage lazily creates a period on its first valid commit, completes it as soon as all expected series arrive, or finalizes it as degraded at the deadline. A period with zero commits has no ledger or completion event. Crypto defaults to WS/local; use this Timer workflow only for datasets actually assigned to SCF.
 
 ## Inputs
 
@@ -27,7 +27,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 2. No function or Timer disabled: FunctionInstance node batch or Tencent SCF API failed.
 3. Timer fires but nothing is fetched: the plan in the function environment has no entry for this period (check `moox-cli collector fetch-plan`), or the event time is past the lateness deadline.
 4. Fetch succeeds but no Storage rows: Access write failed (principal/method allowlist, wrong Storage application key).
-5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs.
+5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs. For historical backfills, first check `[storage_view.max_age]` and `moox_storage_view_expired_rows_dropped_total{space,freq}`: expired rows are deliberately dropped at View write time, including factor results, while processing still succeeds. Primary retention is independent (default crypto 1m: Primary 35d, View 7d).
 6. Preserve `git status --short` before touching code.
 
 ## Build And Package
@@ -36,14 +36,14 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 moox-cli collector function upload --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
 ```
 
-The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and FunctionInstance. Uploading a new version under the same package name makes Collector roll the functions forward (it resolves the latest package every 30 seconds).
+The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and FunctionInstance. Uploading a new version under the same package name makes Collector roll the functions forward (resolution happens during reconciliation/backfill preparation and successful results are cached for at least 30 seconds; normal reconciliation runs once per minute).
 
 ## Inspect Functions
 
 ```bash
 bin/moox-cli collector fetch-plan --file ./moox.toml --space-id crypto
 bin/moox-cli collector function timer-inventory \
-  --control-url http://127.0.0.1:11002 --file ./moox.toml \
+  --file ./moox.toml \
   --space-id crypto --cloud-account-id <account-id> --namespace <namespace> --region <region>
 ```
 

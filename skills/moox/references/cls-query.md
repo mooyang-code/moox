@@ -9,7 +9,7 @@
 
 1. `--secret-id` / `--secret-key`
 2. `CLS_SECRET_ID` / `CLS_SECRET_KEY`
-3. 当前目录或 `skills/moox/.env`
+3. 当前目录或 `skills/moox/.env`（需安装可选依赖 `python-dotenv`）
 
 仓库不保存凭证。默认 API 端点是
 `cls.internal.tencentcloudapi.com`，地域默认 `ap-guangzhou`。

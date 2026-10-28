@@ -229,6 +229,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 ```
 
 - **结果状态**：从启用起连续 24 小时没有 `config_error`；每个 skipped 的 `skip_reason`（`expired` 等）都要说得出原因。
+- **追赶与迟到周期**：当前实现对所有规则类型在输入就绪且成功求值时推进状态，即使结果记为 `skipped(catchup / expired)`；这些周期没有交易目标、逐标的解释明细或下一期因子参数。核对 `c_rule_states_json` 是否非空及后续周期是否正确延续，不要把所有 skipped 都当成状态未变。与连续运行比较时要保证周期按序送达且成功求值；暂停时已忽略的事件、守门跳过和缺期不会自动补齐，理论状态一致也不代表实盘成交一致。
 - **规则状态体积**：在达到最长持有期之后不再增长（"最近 N 期波动"很小）；超过 256 KB 的期次要逐个说明原因。
 - **24 小时还没满时**：如实写"进行中"，注明起点和复核命令，不要提前宣布通过。
 
@@ -257,7 +258,7 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 
 ## 7. 数据获取与操作安全
 
-- Skill 的 K 线查询（[data-query.md](data-query.md)）只支持 1m，不能用来给 5.4 节准备数据。参考数据用两部分拼起来：
+- Skill 的 K 线查询（[data-query.md](data-query.md)）只能读取打包目录里已登记的市场与频率；当前默认目录的 crypto/binance 现货含 1m、1h，stockcn/cn_a_share 含 1m，不包含本例的 5m 合约数据。按实际目录检查所需频率与市场，不能把 1m 数据当成 5m。目录不能满足时，参考数据用两部分拼起来：
   - 用户的历史导入包（[initial-import.md](initial-import.md) 用的那份 CSV）；
   - 交易所公开行情接口拉到的近期 K 线（不需要凭据）。
 - **不要在生产采集机上大批量下载，也不要从它往外整包传输**：海外机（collector-stream 所在）的上行带宽很小。2026-10-26 一次 81 MB 的 rsync，让采集写入 Storage 和币安 WS 接连超时，1m 因子最多晚了 8 分钟。

@@ -39,21 +39,21 @@ Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
-  --package-root /data/moox/storage \
+  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
+  --package-root /data/moox/storage/current \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer <View 消费者名> \
   --yes
 ```
 
-独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
+原生 Storage 部署显式指定上面的 `current/storage-view/config/storage.yaml` 和 `current` 包根；默认配置搜索仍包含旧平铺路径假设，不要依赖自动推导，也不要传 `trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
 
 默认流程：
 
 1. 停止 `storage-view`。
 2. 备份 Metadata SQLite。
-3. 删除目标分区对应的 durable consumer（Kline/metrics/other 之一）。
+3. 删除目标 View 对应的 durable consumer（上文列出的 misc/factor 及其数据集分片之一）。
 4. 递增 View desired revision，交由服务正常执行 A/B 构建和切换。
 5. 重启 `storage-view`。
 
@@ -63,8 +63,8 @@ moox-cli storage repair-view \
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/storage/config/storage.yaml \
-  --package-root /data/moox/storage \
+  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
+  --package-root /data/moox/storage/current \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
   --consumer <View 消费者名> \
@@ -108,10 +108,10 @@ moox-cli storage repair-view ... \
 但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
 
 ```bash
-/home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
+/data/moox/storage/current/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
   --dataset dataset_mooxsys_host_resource \
-  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
+  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
   --dry-run
 ```
 
@@ -126,8 +126,8 @@ rows、period、factor-computed 和 sync-point 事件；不会删除 durable con
 
 ```bash
 moox-cli storage force-rebuild-view \
-  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
-  --package-root /home/<user>/moox/storage \
+  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
+  --package-root /data/moox/storage/current \
   --space-id crypto \
 	--view-id view_factor_spot_1m \
   --dry-run
@@ -136,10 +136,10 @@ moox-cli storage force-rebuild-view \
 确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
 删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
 重新消费 Source 事件；原 View 历史数据不可恢复。
-**新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要提醒内存风险**：`storage-view` 没有进程级内存上限，
-常驻约为全部 View 索引文件之和的 2.5～3 倍（线上 2026-10-28：文件 2.7GB → 常驻 7.8GB，主机 15.5GB），重建/回填时最大索引再加 1～1.5 倍。
-按“标的数 × `view_rows_per_series` 行、约 100～150 字节/行”估算新增文件大小，用 `docs/部署与运维.md`“Storage 主机内存要求”的公式核对余量；余量不足先升配或缩小 View，不要靠调大单索引内存上限。重建按 `view_rows_per_series` 从 Primary 回填每个序列最近的
-K 线，历史不足时以现有数据激活。
+**新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要核对内存余量**：`storage-view` 没有代码配置的进程级总预算，单索引 `memory_limit` 也不是进程 RSS 的硬上界。
+历史记录（2026-10-28，未在本次审查中重测）为文件 2.7GB、常驻 7.8GB、主机 15.5GB；稳态 2.5～3 倍、重建/回填额外预留最大索引的 1～1.5 倍，只是相近负载的粗估，不是源码保证。
+可按“序列数 × `view_rows_per_series` 行”初估行数；每行 100～150 字节是历史压缩样本，实际取决于字段和数据。用 `docs/部署与运维.md`“Storage 主机内存要求”的经验公式起步，再测量目标负载的 RSS 和重建峰值；余量不足先升配或缩小 View。
+重建按 `view_rows_per_series` 从 Primary 读取每个序列最近的行，再按 `max_age` 过滤；历史不足或行已超龄时，以实际留下的数据激活，不保证凑满 N 根。
 
 ## 下线单个 View
 
@@ -147,9 +147,9 @@ K 线，历史不足时以现有数据激活。
 （直接 stop 会在一分钟内被主机守护拉起，用 `moox-runtime pause`），再离线删除这一个 View 的元数据：
 
 ```bash
-/home/<user>/moox/storage/bin/moox-storage-cli delete-view \
-  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
-  --package-root /home/<user>/moox/storage \
+/data/moox/storage/current/bin/moox-storage-cli delete-view \
+  --metadata-db /data/moox/storage/current/storage-primary/var/storage/metadata/storage_metadata.db \
+  --package-root /data/moox/storage/current \
   --view mooxsys/view_mooxsys_service_metrics \
   --yes
 ```
@@ -159,13 +159,12 @@ K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
-新项目只保留三个行情 View 和四个主机监控 View。需要删除其他 View 定义时，先停止
-`storage-view`，再执行一次性元数据收敛命令：
+`retain-views` 是面向固定七个 View 布局的一次性收敛工具：参数仍要求恰好七个活动 View，所有未列出的 View 都会删除。当前采集任务与因子任务还会创建自己的 View，因此下面这份历史七项清单不能用于已有动态业务 View 的环境。只有确认环境确实只需要这七项时，先暂停 `storage-view` 防止守护重新拉起，再执行：
 
 ```bash
-/home/<user>/moox/storage/bin/moox-storage-cli retain-views \
-  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
-  --package-root /home/<user>/moox/storage \
+/data/moox/storage/current/bin/moox-storage-cli retain-views \
+  --metadata-db /data/moox/storage/current/storage-primary/var/storage/metadata/storage_metadata.db \
+  --package-root /data/moox/storage/current \
   --keep-view crypto/view_dasftksvjhj2jom4vhd0_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \
@@ -180,12 +179,13 @@ K 线，历史不足时以现有数据激活。
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 
-Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序列超过 `6000`（ceil(1.2 × 5000)）根时触发安全重建。
+Storage 服务的时序 View 默认按所有频率回溯 `10000` 根；任一序列超过 `12000`（ceil(1.2 × 10000)）根时触发安全重建。
 昂贵的序列容量扫描默认每个 Storage View 进程、View 和 active index 每小时至多执行一次，首次扫描
 在一小时范围内随机错峰；轻量 View Maintainer 仍按 `maintenance_check_interval` 默认每分钟运行。可在根目录
 `moox.toml` 的 `[storage_retention] view_rows_per_series` 统一调整，适用于自动 A/B、启动恢复和手动
-重建。回填对每个标的只读一次：DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，耗时只与
-「标的数 × 根数」有关、与历史长度无关。Primary 历史不足配置根数时以现有数据激活，之后由实时事件补齐。
+重建。回填按游标分页，同一标的可以跨页；DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，扫描量按
+「序列数 × 根数」增长，不扫描全部历史。Primary 历史不足配置根数，或回填行被 `[storage_view.max_age]` 过滤时，以实际留下的数据激活；后续实时事件继续更新，但不保证填满 N 根。
+年龄过滤以处理批次时的时钟为准，早于截止点的行被丢弃，等于截止点保留；全部被过滤仍返回成功，不代表这些行已进入 View。此过滤不主动清理已有索引行，不改变 Primary 或因子机本地存储的保留行为。
 记录型 View（Bleve）不按根数，整体重建。
 
 ## Agent 处理顺序

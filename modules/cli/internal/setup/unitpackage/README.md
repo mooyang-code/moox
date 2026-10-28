@@ -1,12 +1,12 @@
 # 部署软件包
 
-`unitpackage` 统一六类软件包的构建、检查和解包，供操作员 CLI 与远端 `moox-runtime` 共用。它不依赖旧部署器，不读取 `moox.toml`、SSH 凭据、运行密钥或数据。Linux amd64/arm64 的软件制品须预先构建；该包不会隐式编译或启动服务。
+`unitpackage` 统一十类软件包的构建、检查和解包，供操作员 CLI 与远端 `moox-runtime` 共用。它不依赖旧部署器，不读取 `moox.toml`、SSH 凭据、运行密钥或数据。Linux amd64/arm64 的软件制品须预先构建；该包不会隐式编译或启动服务。
 
 - `Package(ctx, Options)` 只收集已编译的 Linux ELF 和 Git 跟踪的公开模板，输出可重复的 `.tar.gz` 与摘要。
 - `Inspect(ctx, archive)` 校验归档，不写文件。
 - `Extract(ctx, ExtractOptions)` 在私密暂存目录内复用同一流式校验器，全部成功后原子发布到新的目标目录。
 
-软件包类型为 `host`、`control`、`storage`、`access`、`egress-proxy`、`trade`。`Components(profile)` 给出服务边界，`Binaries(profile)` 同时包含相应 CLI/助手。主机网关、Host Agent 和共用运行助手只进入 host 包；业务包不携带主机服务。归档只包含二进制、共享服务目录、配置/资源模板和 schema，不含凭据、持久数据或生命周期脚本。安装器负责生成后者。
+软件包类型为 `host`、`control`、`eventbus`、`storage`、`access`、`egress-proxy`、`trade`、`collector-stream`、`factor-engine`、`archive-worker`。`Components(profile)` 给出服务边界，`Binaries(profile)` 同时包含相应 CLI/助手。主机网关、Host Agent 和共用运行助手只进入 host 包；业务包不携带主机服务。归档只包含二进制、共享服务目录、配置/资源模板和 schema，不含凭据或持久数据。原生单元生命周期包装脚本由安装器生成；外部程序包另携带 systemd 用户服务模板与安装脚本。
 
 `package-manifest.json` 使用唯一的规范 JSON 编码，包含版本、平台、目录摘要、组件及逐文件路径/权限/长度/SHA256。检查器拒绝越界路径、链接、重复条目、无效 ELF、错误平台或组件、清单缺项、额外文件、多余 tar/gzip 载荷及流中断。归档大小与展开文件内容总量各不超过 1 GiB，单文件不超过 512 MiB，载荷最多 4096 个文件。
 
@@ -29,7 +29,7 @@ moox-runtime extract --archive /absolute/path/host.tar.gz \
   --destination /absolute/physical/releases/new-release
 ```
 
-`extract` 只准备软件，不写 `current`、暂停/PID 状态、身份、数据或私密运行计划。准备阶段不占用维护锁；安装器在配置注入、停止旧实例、复制持久状态和切换目录时必须持有共用维护锁。业务配置渲染、身份注入、数据与 CA 保留、激活、回滚、bootstrap 和实际部署仍须接入，软件解包通过不等于完整安装验收。
+`extract` 只准备软件，不写 `current`、暂停/PID 状态、身份、数据或私密运行计划。准备阶段不占用维护锁；安装器在配置注入、停止旧实例、复制持久状态和切换目录时必须持有共用维护锁。业务配置渲染、身份注入、数据与 CA 保留、激活、回滚和 bootstrap 已由 `unitinstall`、`unitbootstrap`、`unitdeploy` 接入；软件解包通过仍不等于完整安装验收。
 
 本机基础测试为 `make test-deployment-packages`。Linux 完整门禁执行本机预构建的测试制品、助手和实际 host 软件包，不在执行主机编译：
 
@@ -41,4 +41,4 @@ MOOX_HOST_PACKAGE_SHA256='sha256:<软件生产端摘要>' \
 make test-unit-package-linux
 ```
 
-门禁要求十组软件包/解包场景全部执行且无跳过，包括实际 host 包解包及包内助手执行、错误架构拒绝、六类双架构边界、篡改拒绝、现有对象保留与并发发布。普通 Linux 模块测试在缺少实际助手或 host 包时跳过两项集成场景，不能作为完整门禁证据。
+门禁要求十组软件包/解包场景全部执行且无跳过，包括实际 host 包解包及包内助手执行、错误架构拒绝、各 profile 的双架构边界、篡改拒绝、现有对象保留与并发发布。普通 Linux 模块测试在缺少实际助手或 host 包时跳过两项集成场景，不能作为完整门禁证据。

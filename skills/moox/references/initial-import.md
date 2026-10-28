@@ -3,8 +3,8 @@
 数据源（空间 + 数据集 + 频率）第一次接入时，把用户提供的历史 K 线一次灌进系统，让因子从第一期起就有完整的长回看（例如 EMA(50000)），
 而不是上线后再等实时数据慢慢积累。设计与取舍见 [`docs/计划/初始数据导入执行计划.md`](../../../docs/计划/初始数据导入执行计划.md)。
 
-**两层写入：** 因子机本地存储写**全量**历史并永久保留；Storage（与 View）只写每个文件**最后 6000 根**中仍在保留期内的部分，
-之后由实时采集与补采接上。导入**不触发**历史因子与策略结果的计算，也**不推送告警**（导入期间屏蔽 Monitor 告警推送）。
+**两层写入：** 因子机本地存储写**全量**历史（不自动淘汰，显式 reset 可清空）；Storage Primary 只写每个文件**最后 6000 根**中仍在 Primary 保留期内的部分，
+之后由实时采集与补采接上。View 消费时还会按自己的 `[storage_view.max_age]` 丢弃超期行，因此可能只包含导入尾部的一部分，甚至为空；默认 crypto 1m 的 View 上限为 7d，Primary 为 35d。导入**不触发**历史因子与策略结果的计算，也**不推送告警**（导入期间屏蔽 Monitor 告警推送）。
 
 Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入下一步；任何一步出错先停下来向用户汇报，不要跳步。
 
@@ -13,7 +13,7 @@ Agent 按下面的步骤逐步执行，每一步的输出都要核对再进入�
 - 数据集与采集任务已建好（K 线数据集由采集任务创建，见 `moox-cli collector task create`），标签成员已就绪，实时采集（WS 或拉取）已在写入。
 - 该数据源**还没有启用的因子任务与策略实例**（初始导入期间本数据集的 View 会积压，追平之后再启用）。
 - 工具：`moox-cli` 必须是仓库当前版本（`go build -o <临时目录>/moox-cli ./cmd/moox-cli`，在 `modules/cli`）；`bin/` 里的旧版读不了新的 `moox.toml`。
-- 用 `env -u HTTP_PROXY -u HTTPS_PROXY` 运行 `moox-cli`（git 才需要代理）。
+- 代理是否保留以当前网络环境为准；下面的示例对 MooX 内网 / SSH 调用移除 HTTP(S) 代理，不代表其他工具只有 git 才能使用代理。
 
 ## 1. 导入包（用户按这个格式整理）
 
@@ -94,7 +94,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./
 ## 6. 传文件到因子机（rsync）
 
 ```bash
-# 因子机地址与 SSH 用户见 moox.toml 的 [hosts.factor]（不要读不要改 moox.toml，向用户确认）
+# 因子机地址与 SSH 用户按既有主机清单解析；不要输出凭据或改动部署配置。
 env -u HTTP_PROXY -u HTTPS_PROXY TARGET_GOOS=linux TARGET_GOARCH=amd64 scripts/build/build.sh cli   # 产出 linux 版 moox-cli，目录见脚本输出
 rsync -a --partial <包目录>/ <用户>@<因子机>:<导入目录>/pack/
 rsync -a <linux 版 moox-cli> <用户>@<因子机>:<导入目录>/moox-cli
@@ -136,19 +136,20 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
 
 输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
 
-只写每个文件最后 6000 行中仍在保留期内的部分。Storage 写入在 DataNode 内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
+只写每个文件最后 6000 行中仍在 Primary 保留期内的部分。输出的 `tail_from` / `tail_rows` 是 Primary 导入窗口，未包含 View 消费时按当前时钟进行的年龄过滤。Storage 写入在 DataNode 内串行，单进程即可；要并发也不超过 2～4 路（再多只是排队）。
 `--job-db` 保留着，中断后原样重跑自动续传。失败的批（Storage 写超时）重跑即可。
 
 ## 9. 等本数据集的 View 追平
 
 - `moox-cli doctor alerts --file ./moox.toml` 里该 View 不再报“等待中”（屏蔽期间告警仍照常评估与记录，只是不推送）；
-- 或 View 最新一根等于数据集最新一根（`data kline get` 的 `--limit 1`）。
+- 对比 View 与 Primary 的输出水位指标，或通过 DataView 查询目标 View；`data kline get --limit 1` 只读 Primary，不能证明 View 已追平。
+- 历史行已超过 View 年龄上限时，缺行属于预期；查看 `moox_storage_view_expired_rows_dropped_total{space,freq}`，用未超期的补采或实时行验证 View 追平，不要求 View 与整个 Primary 导入尾窗行数相等。
 
 追不平就停下汇报，不要靠重启或重建 View 解决（`repair-view` 是破坏性运维，需要用户确认，见 `cli-operations.md`）。
 
 ## 10. 校验（只比边界与行数）
 
-- **Storage**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；**每个标的**在 `[tail_from, 文件末根]` 内的行数等于 CSV 在同一区间内的行数——
+- **Storage Primary**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；**每个标的**在 `[tail_from, 文件末根]` 内的行数等于 CSV 在同一区间内的行数（不以 View 做这项全窗口核对）——
   用脚本逐个核对（`tail_from` 取自第 8 步**实际导入**的输出 `storage-import.json`，已经包含了保留期截止点；不要用第 2 步的预检输出——截止点每次运行都重新计算，两步相隔久了会后移）：
 
   ```bash
@@ -170,7 +171,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 ## 12. 启用
 
 建因子任务或策略实例。**启用不会自动补算历史**：因子从引擎同步到新目录之后的周期开始计算（目录每分钟第 45 秒同步一次，
-本地窗口完整，同步之后的第一期就能算出所有标的）；启用到同步之间收盘的周期不会补算，预热期间跳过的周期会由引擎的跳过账本自动补上，其余的需要时手动补算。
+实际要等本地窗口就绪、任务进入试运行或运行，且该期输入与成员预热要求满足后才出结果）；启用到同步之间收盘的周期不会补算，预热期间跳过的周期由引擎的跳过账本尝试恢复，其余的需要时手动补算。
 
 - **新建的因子任务由引擎自动推进**，不用在因子机手动执行 `lifecycle` 命令：引擎每 30 秒对目录里的任务自动 init、start（进入试运行，因子已经在算），
   试运行之后有一期所有启用成员都完整算完时自动确认进入运行。时间线：任务建好后，引擎在每分钟第 45 秒同步目录，预加载本地窗口

@@ -15,14 +15,14 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | [EventBus](docs/模块/事件总线.md) | `moox-eventbus` | 内嵌 NATS JetStream，模块间的异步事件 |
 | [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view}` | 元数据、字段级事实存储、可重建 View |
 | [Access](modules/access/README.md) | `moox-access` | 外部签名 tRPC 接入、逐方法权限与防重放，经主机网关调用服务 |
-| [Collector](docs/模块/采集.md) | `moox-collector`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |
+| [Collector](docs/模块/采集.md) | `moox-collector`、`moox-collector-stream`、SCF 函数 | 采集计划与对账、WS 推送与 Timer 拉取、补采与重采样、标的同步 |
 | [CloudFunction](docs/模块/云函数管理.md) | `moox-cloudfunction` | 云账户、SCF 实例、代码包与发布 |
 | [Factor](docs/模块/因子.md) | `moox-factor-mgr`、`moox-factor-engine` | 因子表达式定义与计算任务、增量计算与补算 |
 | [Strategy](docs/模块/策略.md) | `moox-strategy` | 声明式策略 DSL，按周期产出目标权重 |
 | [Trade](docs/模块/交易.md) | `moox-trade` | 账户、目标收敛下单、订单成交持仓、模拟盘 |
 | [Monitor](docs/模块/监控.md) | `moox-monitor` | 健康检查、指标接入、数据新鲜度、告警 |
 | [HostAgent](docs/模块/主机代理.md) | `moox-host-agent` | 主机资源采集 |
-| Archive（旧实现已删除，新实现建设中） | — | 定时归档为本地 CSV，见[数据归档设计](docs/计划/数据归档设计.md) |
+| [Archive](docs/模块/归档.md) | `moox-archive-mgr`、`moox-archive-worker` | 定时读取事实、SQLite 暂存、按日/月分区导出 CSV 或 CSV.GZ |
 | [Web](docs/模块/前端.md) | `moox-web-host` | 管理台前端 |
 | [CLI](docs/模块/命令行工具.md) | `moox-cli` | 初始化、部署、数据导入、诊断 |
 
@@ -33,12 +33,13 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 - [总体设计](docs/总体设计.md)：设计原则、系统全景、部署拓扑、核心数据流、事件与安全
 - [部署与运维](docs/部署与运维.md)：初始化、发布、证书、凭据、数据保留与日常检查
 - [模块设计](docs/README.md)：各模块的详细设计
+- [当前实现与文档边界](docs/实现状态.md)：源码核对基线、已实现能力和部署限制
 
 ## 快速开始
 
 ```bash
-cp moox.toml.example moox.toml && chmod 600 moox.toml   # 填写主机、云账户等
-make build                                              # 构建全部二进制到 bin/
+./scripts/build/build.sh cli                            # 先构建本机 moox-cli 到 bin/
+./bin/moox-cli config init                              # 在本机表单填写配置，加密保存 moox.toml
 
 ./bin/moox-cli setup validate --file ./moox.toml
 ./bin/moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir .
@@ -50,7 +51,7 @@ make build                                              # 构建全部二进制�
 ## 开发
 
 ```bash
-make build      # 构建
+make build      # 构建默认目标；平台限制和额外目标见构建手册
 make test       # Go 与前端测试
 make proto      # 重新生成 Protobuf 代码
 make verify     # 提交前的完整检查（CI 同款）

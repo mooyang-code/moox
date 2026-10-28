@@ -28,13 +28,13 @@ Never pass `--config`, rely on the CLI's relative default config path, or use `M
 
 ## Map the request
 
-- Always provide `--data-type`. Map 加密货币 or crypto to `crypto`.
+- Always provide `--data-type`. Map 加密货币 or crypto to `crypto`, and A 股 to `stockcn`.
 - Add `--exchange` when the user names one. Otherwise omit it so the data type's configured default is used; `crypto` currently defaults to `binance`.
 - Pass the user's `--symbol` unchanged. Do not rewrite `BTC-USDT` as `BTCUSDT`, change case, or guess a pair.
-- Pass the requested `--interval`; the first catalog contains `1m` only.
+- Pass the requested `--interval` and use the packaged catalog exactly. The current seed exports Binance spot `1m` and `1h`, and A-share `1m`; an older package can have fewer entries. Regenerate the package after changing collection tasks.
 - Use `--limit` for a requested count (`1..1000`); otherwise the CLI default is `100`.
-- Use RFC3339 `--start-time` and `--end-time` only when the user supplies a time range. The start must not be after the end.
-- Use `--timeout` only when the caller needs to override the default RPC timeout. Use `--output` only when a result file was requested.
+- Use RFC3339 `--start-time` and `--end-time` only when the user supplies a time range. The start must be strictly before the end.
+- Use `--columns` for required extra fields (comma-separated); the default is `open,high,low,close,volume`, so `quote_volume` and `trade_num` need explicit selection. Use `--timeout` to override the default 15-second RPC budget and `--output` only when a result file was requested.
 
 Examples follow the same replacement rule. Each block is independently executable after resolving its own `SKILL_ROOT`.
 
@@ -66,6 +66,6 @@ The CLI resolves `data-type + exchange + interval` by exact lookup in the packag
 
 ## Handle the result
 
-On success, parse the protobuf JSON response and summarize the resolved data type, exchange, symbol, interval, row count, and returned time range. Preserve the CLI's descending time order. An empty row set is a successful query with no collected data, not an RPC failure.
+On success, parse the protobuf JSON response and summarize the resolved data type, exchange, symbol, interval, row count, and returned time range. Preserve the returned order: latest queries without a time range are descending; queries with either time bound are ascending and return the earliest matching `limit` rows. Missing start defaults to the Unix epoch, and missing end defaults to the current time. The range is `[start, end)`. An empty row set is a successful query with no collected data, not an RPC failure.
 
 Never include Gateway secrets, Storage app keys, request signatures, the config contents, or complete authenticated requests in output or diagnostics.

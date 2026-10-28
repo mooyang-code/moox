@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Use when diagnosing MooX end-to-end failures involving collector SCF build/package/publish, Tencent COS or SCF creation, Timer triggers and batch claims, CLS log analysis, remote MooX deployment, or storage write verification.
+description: Use when diagnosing MooX end-to-end failures involving collector SCF build/package/publish, Tencent COS or SCF creation, Timer plans and period commits, CLS log analysis, remote MooX deployment, or storage write verification.
 ---
 
 # MooX Debug
@@ -31,8 +31,8 @@ Use this order unless evidence points elsewhere:
 1. Local build: the SCF package contains `main`, `sources/` and (for stockcn) market assets.
 2. Package upload: COS object exists and region/bucket/key match the publish request.
 3. SCF function: name, namespace, region, runtime, handler and environment match the FunctionInstance node.
-4. Timer: the trigger is enabled with the expected cron (`collector function timer-inventory`).
-5. Plan: the function environment carries the current fetch plan (`collector fetch-plan`).
+4. Timer path: the trigger is enabled with the expected cron (`collector function timer-inventory`).
+5. Plan: confirm the dataset uses SCF (stream/local has a separate executor); the function environment carries the current fetch plan (`collector fetch-plan`).
 6. Execution: CLS logs show per-subject provider results.
 7. Storage: `CommitTimeSeriesBatch` succeeds through access.
 8. Result: rows appear in the task's result View for the space, subject and frequency.
@@ -49,7 +49,7 @@ Use this order unless evidence points elsewhere:
 
 ## Common Mistakes
 
-- Assuming a Timer fired because the function exists; check the Timer state and the claimed batch.
+- Assuming a Timer fired because the function exists; check the Timer readback, effective fetch plan, and invocation logs.
 - Rebuilding collector code from an old standalone checkout instead of `modules/collector`.
-- Looking only at Storage rows without checking the period state (`complete`/`degraded`) and the completion consumer.
+- Looking only at Storage rows without checking the period state (`complete`/`degraded`) and the downstream period event.
 - Debugging frontend 404s against service paths when the frontend must use `/api/admin`.
