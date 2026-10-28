@@ -30,8 +30,18 @@ var argKindNames = map[ArgKind]string{
 }
 
 // FunctionDocs 返回全部可调用函数的说明，顺序与 Functions 相同。
-func FunctionDocs() []FunctionDoc {
+func FunctionDocs() []FunctionDoc { return FunctionDocsWith(nil) }
+
+// FunctionDocsWith 在内置函数之后附上环境里的自定义算子：类别是 timeseries，签名带 udf. 前缀。
+func FunctionDocsWith(env UDFEnv) []FunctionDoc {
 	list := Functions()
+	if env != nil {
+		for _, u := range env.ListUDFs() {
+			if u.Hash != "" {
+				list = append(list, udfFunction(u))
+			}
+		}
+	}
 	docs := make([]FunctionDoc, 0, len(list))
 	for _, fn := range list {
 		doc := FunctionDoc{Name: fn.Name, Category: fn.Category.String(), Lookback: fn.Lookback, Doc: fn.Doc, Example: fn.Example,

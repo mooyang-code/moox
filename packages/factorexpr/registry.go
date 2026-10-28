@@ -74,6 +74,8 @@ type Function struct {
 	// validate 做参数之间的联合校验（例如 sma 的 m < n）。
 	validate func(ints []int, floats []float64) string
 	operator bool
+	// udf 非空表示这是自定义算子（只存在于一次编译的环境里，不在全局注册表中）。
+	udf *UDF
 }
 
 // KindResult 是算子结果的类型。
