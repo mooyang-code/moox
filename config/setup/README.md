@@ -26,7 +26,7 @@ SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的
 moox-cli setup init \
   --file ./moox.toml \
   --config-dir ./config/setup \
-  --storage-host control
+  --storage-host storage
 ```
 
 `--storage-host` 必须是 `moox.toml` 中已经部署 Storage 的主机名。`setup init` 读取

@@ -17,6 +17,10 @@ statik:
 		echo "../web/dist not found; run frontend build first"; \
 		exit 1; \
 	fi
+	@if [ ! -d "$(ROOT)/web/dist/static/js" ]; then \
+		echo "../web/dist/static/js not found: the frontend build is incomplete (placeholder pages would be embedded); build web on the compile host first"; \
+		exit 1; \
+	fi
 	@go run github.com/rakyll/statik@$(STATIK_VERSION) -src=$(ROOT)/web/dist -dest=./internal
 
 build:

@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as alphalib F1 cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, alphalib, F1 策略, 选币策略, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, 全新部署, 清空重装, fresh install, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, migrating whole Python factor strategies such as alphalib F1 cross-sectional coin-selection strategies with sub-strategy parameter tables (策略迁移, 因子策略迁移, alphalib, F1 策略, 选币策略, 子策略参数表, 前置过滤/后置过滤) including golden tests, semantic comparison against the original framework, end-to-end latency and stability acceptance, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -33,6 +33,13 @@ Host Agent and EventBus credentials:
 **发布、更新线上二进制时读 [`references/native-release.md`](references/native-release.md)**，并用 `skills/moox/scripts/native-release.sh`
 （构建、安装、回滚、状态、台账、服务目录变更检测）；服务目录（`catalog.yaml`）变化必须整体发布，配置文件不随二进制更新，文档里有顺序和陷阱。
 只有用户明确要求“发布/上线”时才发布，并且只发布他点名的组件。
+
+### Fresh Deployment
+
+用户要求“全新部署 / 清空生产重装 / 数据全部可以删、按默认配置重新初始化”时，读 [`references/fresh-deploy.md`](references/fresh-deploy.md)，
+按其中的顺序执行：核对前提（Trade 无实盘）→ 备份 `moox.toml` → 先构建全部制品（Storage CGO、真实的前端 dist）→ 停机并清空 `/data/moox`（保留目录本身，先去掉 cron watchdog）→ 清本机状态 →
+core → 各主机 → EventBus、Storage、元数据导入与激活、Access（存储机和海外机）→ control → 信任内部 CA → `setup init` → collector-stream、Trade、因子机程序 → 验收。
+这是破坏性运维，必须先得到用户明确确认；首次安装的命令都不带 `--release`；control 重试不会带上新代码，换制品要换新的状态目录从 core 重来。长历史导入与策略实例不属于默认配置，只在汇报里列出命令。
 
 ## Repository Layout
 
