@@ -17,7 +17,7 @@ type ruleResult struct {
 	filtered int
 	scored   int
 	selected int
-	// notes 是写进本期摘要的说明（f1 状态体积提示）。
+	// notes 是写进本期摘要的说明（tranche 状态体积提示）。
 	notes []string
 }
 

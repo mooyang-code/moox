@@ -53,8 +53,8 @@
                       ? "截面选股"
                       : rule.type === "signal"
                         ? "固定池择时"
-                        : rule.type === "f1"
-                          ? `F1 截面选币（${rule.subStrategies} 个子策略）`
+                        : rule.type === "tranche"
+                          ? `批次持仓（${rule.subStrategies} 个子策略）`
                           : rule.type
                   }}
                 </div></a-descriptions-item

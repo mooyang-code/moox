@@ -36,8 +36,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 	for i := range program.Rules {
 		rule := &program.Rules[i]
 		var sets ruleSets
-		if rule.Rule.Type == dsl.RuleTypeF1 {
-			sets = partitionF1(rule, frame, previous.Rules[rule.Rule.ID].Held)
+		if rule.Rule.Type == dsl.RuleTypeTranche {
+			sets = partitionTranche(rule, frame, previous.Rules[rule.Rule.ID].Held)
 		} else {
 			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen)
 		}
@@ -77,8 +77,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		case dsl.RuleTypeSignal:
 			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		case dsl.RuleTypeF1:
-			result, err = evaluateF1(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+		case dsl.RuleTypeTranche:
+			result, err = evaluateTranche(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		default:
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
@@ -127,7 +127,7 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 // too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。
 func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
 	denominator := len(sets.expected) - len(sets.agedOut)
-	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeF1) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
+	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeTranche) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
 		return SkipUniverseTooSmall
 	}
 	// 冻结（保持持仓）的标的仍计入缺数比例：保护中的标的不能伪装成可用。

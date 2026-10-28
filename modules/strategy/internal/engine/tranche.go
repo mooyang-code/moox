@@ -14,28 +14,28 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-// f1 规则的求值：语义与 alphalib F1 框架一致（docs/计划/F1策略迁移/F1策略迁移设计.md 第 1、7 节，F1-1～F1-14）。
+// tranche 规则的求值：语义与 alphalib F1 框架一致（docs/计划/F1策略迁移/F1策略迁移设计.md 第 1、7 节，F1-1～F1-14）。
 
 const (
-	reasonF1FilterAfter = "f1_filter_after"
-	f1ReasonPrefix      = "f1:"
-	// f1StateNoteBytes 是 f1 状态的观察阈值：超过时在本期摘要里说明（不截断）。
-	f1StateNoteBytes = 256 << 10
+	reasonTrancheFilterAfter = "tranche_filter_after"
+	trancheReasonPrefix      = "tranche:"
+	// trancheStateNoteBytes 是 tranche 状态的观察阈值：超过时在本期摘要里说明（不截断）。
+	trancheStateNoteBytes = 256 << 10
 )
 
-// F1State 是 f1 规则下一期需要的状态：按排名签名分组的开仓记录（设计 7.4）。
-type F1State struct {
-	Groups []F1GroupState `json:"groups"`
+// TrancheState 是 tranche 规则下一期需要的状态：按排名签名分组的开仓记录（设计 7.4）。
+type TrancheState struct {
+	Groups []TrancheGroupState `json:"groups"`
 }
 
-// F1GroupState 是一个排名签名的开仓记录；StateKey 同时覆盖签名与组内子策略，组成员变化时旧记录不再使用。
-type F1GroupState struct {
-	Key   string   `json:"key"`
-	Picks []F1Pick `json:"picks"`
+// TrancheGroupState 是一个排名签名的开仓记录；StateKey 同时覆盖签名与组内子策略，组成员变化时旧记录不再使用。
+type TrancheGroupState struct {
+	Key   string        `json:"key"`
+	Picks []TranchePick `json:"picks"`
 }
 
-// F1Pick 是一条开仓记录：开仓 bar、标的、方向、开仓 close、资金分母、自开仓以来的候选行数，以及组内各子策略的后置过滤通过位图。
-type F1Pick struct {
+// TranchePick 是一条开仓记录：开仓 bar、标的、方向、开仓 close、资金分母、自开仓以来的候选行数，以及组内各子策略的后置过滤通过位图。
+type TranchePick struct {
 	Bar   int64  `json:"bar"`
 	ID    string `json:"id"`
 	Short bool   `json:"short,omitempty"`
@@ -45,10 +45,10 @@ type F1Pick struct {
 	Pass  string `json:"pass"`
 }
 
-// partitionF1 是 f1 规则专用的集合划分：缺数只算没有行、close 或 volume 为空、或 K 线对该标的失败；
-// 因子列为空不算缺数（F1 用中位数名次补上，过滤按 between 语义计算）。volume 为 0 的标的既不可用也不缺数（inactive），
-// 所以可用集合就是候选行 B，min_universe 按它守门。
-func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
+// partitionTranche 是 tranche 规则专用的集合划分：缺数只算没有行、close（require_volume 时还有 volume）为空、
+// 或 K 线对该标的失败；因子列为空不算缺数（按 score.missing 处理，过滤按 between 语义计算）。require_volume 时
+// volume 为 0 的标的既不可用也不缺数（inactive），所以可用集合就是候选行 B，min_universe 按它守门。
+func partitionTranche(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{})}
 	heldSet := make(map[string]struct{}, len(held))
 	for _, id := range held {
@@ -62,6 +62,7 @@ func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)
 	sort.Strings(expected)
 	sets.expected = expected
+	requireVolume := rule.Rule.Tranche == nil || rule.Rule.Tranche.RequireVolume
 	for _, id := range expected {
 		if _, aged := sets.agedOut[id]; aged {
 			continue
@@ -71,8 +72,12 @@ func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 			sets.missing[id] = "no_row"
 			continue
 		}
+		columns := []string{"close"}
+		if requireVolume {
+			columns = append(columns, "volume")
+		}
 		reason := ""
-		for _, column := range []string{"close", "volume"} {
+		for _, column := range columns {
 			if failure, failed := frame.FailedColumns[column][id]; failed {
 				reason = failure + ":" + column
 				break
@@ -86,7 +91,7 @@ func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 			sets.missing[id] = reason
 			continue
 		}
-		if row.Values["volume"] <= 0 {
+		if requireVolume && row.Values["volume"] <= 0 {
 			sets.inactive = append(sets.inactive, id)
 			continue
 		}
@@ -95,16 +100,34 @@ func partitionF1(rule *dsl.CompiledRule, frame Frame, held []string) ruleSets {
 	return sets
 }
 
-// f1Key 是同分时的排序键：F1 按 symbol（BTCUSDT）排序，moox 的标的 ID 是 BTC-USDT，去掉 "-" 后比较。
-func f1Key(id string) string { return strings.ReplaceAll(id, "-", "") }
+// heldCount 是开仓记录对子策略的持有计数：candidate_rows 是累计的候选行数（开仓当期为 1），bars 是开仓以来的 K 线根数（含当期）。
+func heldCount(p TranchePick, sub dsl.TrancheSub, barIndex int64) int {
+	if sub.HoldCount == dsl.HoldCountBars {
+		return int(barIndex - p.Bar + 1)
+	}
+	return p.Rows
+}
 
-// f1Sample 是一期的样本：按 F1 的行顺序（symbol 升序）排好的标的，以及取列值的方法。
-type f1Sample struct {
+// trancheRecordAlive 判断开仓记录下一期是否仍可能对组内某个子策略有贡献。
+func trancheRecordAlive(p TranchePick, subs []dsl.TrancheSub, members []int, barIndex int64) bool {
+	for _, index := range members {
+		if heldCount(p, subs[index], barIndex) < subs[index].HoldPeriod {
+			return true
+		}
+	}
+	return false
+}
+
+// trancheKey 是同分时的排序键：F1 按 symbol（BTCUSDT）排序，moox 的标的 ID 是 BTC-USDT，去掉 "-" 后比较。
+func trancheKey(id string) string { return strings.ReplaceAll(id, "-", "") }
+
+// trancheSample 是一期的样本：按 F1 的行顺序（symbol 升序）排好的标的，以及取列值的方法。
+type trancheSample struct {
 	ids   []string
 	frame Frame
 }
 
-func (s f1Sample) value(id, column string) float64 {
+func (s trancheSample) value(id, column string) float64 {
 	if v, ok := s.frame.Rows[id].Values[column]; ok {
 		return v
 	}
@@ -191,9 +214,9 @@ func fillMedian(values []float64) []float64 {
 	return out
 }
 
-// f1Scores 按 F1-2、F1-3 计算多空两边的合成分数（在全部候选行 B 上）。cross 模式下多空因子不同时分两遍原地改写：
+// trancheScores 按 F1-2、F1-3 计算多空两边的合成分数（在全部候选行 B 上）。cross 模式下多空因子不同时分两遍原地改写：
 // 先排多头列表的列并算多头分数，再在当前值（共用的列已经是名次）上排空头列表的列并算空头分数。
-func f1Scores(sample f1Sample, sub dsl.F1Sub) (long, short []float64) {
+func trancheScores(sample trancheSample, sub dsl.TrancheSub) (long, short []float64) {
 	current := make(map[string][]float64)
 	column := func(name string) []float64 {
 		if values, ok := current[name]; ok {
@@ -206,15 +229,19 @@ func f1Scores(sample f1Sample, sub dsl.F1Sub) (long, short []float64) {
 		current[name] = values
 		return values
 	}
-	pass := func(factors []dsl.F1Factor) []float64 {
-		if sub.CalcType == "cross" {
+	pass := func(factors []dsl.TrancheFactor) []float64 {
+		if sub.ScoreMethod == dsl.ScoreRankSum {
 			ranked := make(map[string]bool)
 			for _, factor := range factors {
 				if ranked[factor.Column] {
 					continue // 同一列表里重复的列只排一次（pandas 对 df[factor_list] 整体排名）
 				}
 				ranked[factor.Column] = true
-				current[factor.Column] = fillMedian(averageRanks(column(factor.Column)))
+				ranks := averageRanks(column(factor.Column))
+				if sub.ScoreMissing == dsl.MissingMedian {
+					ranks = fillMedian(ranks)
+				}
+				current[factor.Column] = ranks
 			}
 		}
 		score := make([]float64, len(sample.ids))
@@ -231,7 +258,7 @@ func f1Scores(sample f1Sample, sub dsl.F1Sub) (long, short []float64) {
 		}
 		return score
 	}
-	if sameF1Factors(sub.LongFactors, sub.ShortFactors) {
+	if sameTrancheFactors(sub.LongFactors, sub.ShortFactors) {
 		score := pass(sub.LongFactors)
 		return score, score
 	}
@@ -240,7 +267,7 @@ func f1Scores(sample f1Sample, sub dsl.F1Sub) (long, short []float64) {
 	return long, short
 }
 
-func sameF1Factors(a, b []dsl.F1Factor) bool {
+func sameTrancheFactors(a, b []dsl.TrancheFactor) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -252,16 +279,16 @@ func sameF1Factors(a, b []dsl.F1Factor) bool {
 	return true
 }
 
-// f1Condition 按 F1-8、F1-9 在样本上计算一个条件：rank / pct 在样本内排名后比较，between 的开闭与取反已在 DSL 里规范化。
-func f1Condition(sample []string, values func(id string) float64, filter dsl.F1Filter) []bool {
+// trancheCondition 按 F1-8、F1-9 在样本上计算一个条件：rank / pct 在样本内排名后比较，between 的开闭与取反已在 DSL 里规范化。
+func trancheCondition(sample []string, values func(id string) float64, filter dsl.TrancheFilter) []bool {
 	raw := make([]float64, len(sample))
 	for i, id := range sample {
 		raw[i] = values(id)
 	}
 	switch filter.Type {
-	case dsl.F1FilterRank:
+	case dsl.TrancheFilterRank:
 		raw = firstRanks(raw, filter.RankAscending, false)
-	case dsl.F1FilterPct:
+	case dsl.TrancheFilterPct:
 		raw = firstRanks(raw, true, true)
 	}
 	out := make([]bool, len(sample))
@@ -279,14 +306,14 @@ func f1Condition(sample []string, values func(id string) float64, filter dsl.F1F
 	return out
 }
 
-// f1Match 计算一个过滤项（单个条件或逻辑组合）在样本上的结果。
-func f1Match(sample []string, values func(column string) func(id string) float64, filter dsl.F1Filter) []bool {
+// trancheMatch 计算一个过滤项（单个条件或逻辑组合）在样本上的结果。
+func trancheMatch(sample []string, values func(column string) func(id string) float64, filter dsl.TrancheFilter) []bool {
 	if filter.Logic == "" {
-		return f1Condition(sample, values(filter.Column), filter)
+		return trancheCondition(sample, values(filter.Column), filter)
 	}
 	results := make([][]bool, len(filter.Items))
 	for i, item := range filter.Items {
-		results[i] = f1Condition(sample, values(item.Column), item)
+		results[i] = trancheCondition(sample, values(item.Column), item)
 	}
 	tree := filter.LogicTree()
 	out := make([]bool, len(sample))
@@ -324,14 +351,14 @@ func listFilter(ids []string, white, black []string) []string {
 	return out
 }
 
-// f1Selection 是一个排名签名本期的选币结果（F1-4～F1-10）。
-type f1Selection struct {
-	picks        []F1Pick
+// trancheSelection 是一个排名签名本期的选币结果（F1-4～F1-10）。
+type trancheSelection struct {
+	picks        []TranchePick
 	beforeFilter int // 被前置过滤（含名单）去掉的候选数，多空合计
 }
 
-func selectF1Group(sample f1Sample, sub dsl.F1Sub, barIndex int64) f1Selection {
-	longScore, shortScore := f1Scores(sample, sub)
+func selectTrancheGroup(sample trancheSample, sub dsl.TrancheSub, barIndex int64) trancheSelection {
+	longScore, shortScore := trancheScores(sample, sub)
 	position := make(map[string]int, len(sample.ids))
 	for i, id := range sample.ids {
 		position[id] = i
@@ -347,7 +374,7 @@ func selectF1Group(sample f1Sample, sub dsl.F1Sub, barIndex int64) f1Selection {
 		if filter.Short {
 			target = &shortIDs
 		}
-		keep := f1Match(*target, columnValues, filter)
+		keep := trancheMatch(*target, columnValues, filter)
 		kept := make([]string, 0, len(*target))
 		for i, id := range *target {
 			if keep[i] {
@@ -357,7 +384,7 @@ func selectF1Group(sample f1Sample, sub dsl.F1Sub, barIndex int64) f1Selection {
 		removed += len(*target) - len(kept)
 		*target = kept
 	}
-	selection := f1Selection{beforeFilter: removed}
+	selection := trancheSelection{beforeFilter: removed}
 	pick := func(ids []string, scores []float64, coinNum float64, short bool) {
 		values := make([]float64, len(ids))
 		for i, id := range ids {
@@ -377,7 +404,7 @@ func selectF1Group(sample f1Sample, sub dsl.F1Sub, barIndex int64) f1Selection {
 		}
 		for _, id := range chosen {
 			closeValue := sample.value(id, "close")
-			selection.picks = append(selection.picks, F1Pick{
+			selection.picks = append(selection.picks, TranchePick{
 				Bar: barIndex, ID: id, Short: short, Close: strconv.FormatFloat(closeValue, 'g', -1, 64), Denom: denom, Rows: 1,
 			})
 		}
@@ -393,7 +420,7 @@ func selectF1Group(sample f1Sample, sub dsl.F1Sub, barIndex int64) f1Selection {
 
 // passAfter 计算组内每个子策略的后置过滤（F1-11）：在本期选中的样本上一次性判断，任一条件成立就剔除。
 // 返回每个开仓记录的通过位图（组内子策略按 group.Subs 的顺序编号）。
-func passAfter(sample f1Sample, picks []F1Pick, subs []dsl.F1Sub, members []int) []string {
+func passAfter(sample trancheSample, picks []TranchePick, subs []dsl.TrancheSub, members []int) []string {
 	bits := make([][]byte, len(picks))
 	for i := range bits {
 		bits[i] = make([]byte, (len(members)+7)/8)
@@ -424,7 +451,7 @@ func passAfter(sample f1Sample, picks []F1Pick, subs []dsl.F1Sub, members []int)
 				if filter.Short != side.short || len(ids) == 0 {
 					continue
 				}
-				match := f1Match(ids, columnValues, filter)
+				match := trancheMatch(ids, columnValues, filter)
 				for k, i := range side.index {
 					if match[k] {
 						removed[i] = true
@@ -455,11 +482,11 @@ func passBit(pass string, position int) bool {
 
 func ratFloat(v float64) *big.Rat { return new(big.Rat).SetFloat64(v) }
 
-// evaluateF1 实现 f1 规则一期的求值（设计 7.2 第 1～7 步）。
-func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
+// evaluateTranche 实现 tranche 规则一期的求值（设计 7.2 第 1～7 步）。
+func evaluateTranche(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
 	result := ruleResult{weights: map[string]quant.Decimal{}}
 	explain := newExplanation(rule.Rule.ID, tolerance)
-	subs := rule.Rule.F1.Subs
+	subs := rule.Rule.Tranche.Subs
 	expected := make(map[string]struct{}, len(sets.expected))
 	for _, id := range sets.expected {
 		expected[id] = struct{}{}
@@ -467,7 +494,7 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 	// 1. 候选行 B：可用集合（有行且 volume > 0），按 F1 的行顺序（symbol 升序）排列。
 	candidates := append([]string(nil), sets.available...)
 	sort.SliceStable(candidates, func(i, j int) bool {
-		a, b := f1Key(candidates[i]), f1Key(candidates[j])
+		a, b := trancheKey(candidates[i]), trancheKey(candidates[j])
 		if a != b {
 			return a < b
 		}
@@ -477,12 +504,12 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 	for _, id := range candidates {
 		inB[id] = struct{}{}
 	}
-	sample := f1Sample{ids: candidates, frame: frame}
+	sample := trancheSample{ids: candidates, frame: frame}
 	result.scored = len(candidates)
 
-	previousGroups := make(map[string]F1GroupState)
-	if previous.F1 != nil {
-		for _, group := range previous.F1.Groups {
+	previousGroups := make(map[string]TrancheGroupState)
+	if previous.Tranche != nil {
+		for _, group := range previous.Tranche.Groups {
 			previousGroups[group.Key] = group
 		}
 	}
@@ -494,15 +521,11 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 	contributions := make(map[string]*big.Rat)
 	holders := make(map[string]map[int]struct{}) // 标的 → 持有它的子策略
 	newlyPicked := make(map[string]bool)         // 本期选中的标的 → 是否至少一个子策略通过后置过滤
-	state := &F1State{}
-	for _, group := range rule.F1Groups {
+	state := &TrancheState{}
+	for _, group := range rule.TrancheGroups {
 		representative := subs[group.Subs[0]]
-		maxHold := 0
-		for _, index := range group.Subs {
-			maxHold = max(maxHold, subs[index].HoldPeriod)
-		}
 		// 2～5. 排名、候选、前置过滤、选币（签名相同的子策略只算一次）。
-		selection := selectF1Group(sample, representative, frame.BarIndex)
+		selection := selectTrancheGroup(sample, representative, frame.BarIndex)
 		result.filtered += selection.beforeFilter
 		// 6. 后置过滤：每个子策略在本期选中的样本上判断。
 		passes := passAfter(sample, selection.picks, subs, group.Subs)
@@ -518,7 +541,7 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 			newlyPicked[selection.picks[i].ID] = newlyPicked[selection.picks[i].ID] || passed
 		}
 		// 7.1 计数：旧记录的币本期有候选行就加 1；不在预期集合里的删除。
-		picks := make([]F1Pick, 0)
+		picks := make([]TranchePick, 0)
 		for _, old := range previousGroups[group.StateKey].Picks {
 			if _, ok := expected[old.ID]; !ok {
 				continue
@@ -529,7 +552,7 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 			picks = append(picks, old)
 		}
 		picks = append(picks, selection.picks...)
-		// 7.2 贡献：Rows ≤ h 且本期有候选行。
+		// 7.2 贡献：持有计数 ≤ h 且本期有候选行。
 		for _, p := range picks {
 			if _, ok := inB[p.ID]; !ok {
 				continue
@@ -541,18 +564,24 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 			nowClose := frame.Rows[p.ID].Values["close"]
 			for position, index := range group.Subs {
 				sub := subs[index]
-				if p.Rows > sub.HoldPeriod || !passBit(p.Pass, position) {
+				if heldCount(p, sub, frame.BarIndex) > sub.HoldPeriod || !passBit(p.Pass, position) {
 					continue
 				}
 				sideWeight := sub.LongWeight
 				if p.Short {
 					sideWeight = sub.ShortWeight
 				}
-				// 数量 = 0.5 × side_weight / h / 分母 / 开仓 close；贡献 = 数量 × 本期 close × stg_weight。
-				amount := new(big.Rat).Mul(ratFloat(0.5*sideWeight), ratFloat(nowClose))
+				// 份额 = scale × side_weight / h / 分母；quantity 按数量持有：贡献 = 份额 × 本期 close / 开仓 close × stg_weight，
+				// weight 按份额持有：贡献 = 份额 × stg_weight。
+				amount := ratFloat(sub.SizingScale * sideWeight)
+				if sub.SizingMethod == dsl.SizingQuantity {
+					amount.Mul(amount, ratFloat(nowClose))
+				}
 				amount.Mul(amount, ratFloat(sub.StgWeight))
 				amount.Quo(amount, new(big.Rat).SetInt64(int64(sub.HoldPeriod)*int64(p.Denom)))
-				amount.Quo(amount, ratFloat(openClose))
+				if sub.SizingMethod == dsl.SizingQuantity {
+					amount.Quo(amount, ratFloat(openClose))
+				}
 				if p.Short {
 					amount.Neg(amount)
 				}
@@ -564,10 +593,10 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 				holders[p.ID][index] = struct{}{}
 			}
 		}
-		// 7.4 清理：Rows ≥ 组内最大 h 的记录不再有贡献。
+		// 7.4 清理：组内每个子策略分别判断，下一期对所有子策略都不再有贡献（持有计数 ≥ 各自的 h）的记录删除。
 		kept := picks[:0]
 		for _, p := range picks {
-			if p.Rows < maxHold {
+			if trancheRecordAlive(p, subs, group.Subs, frame.BarIndex) {
 				kept = append(kept, p)
 			}
 		}
@@ -580,7 +609,7 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 			}
 			return !kept[i].Short && kept[j].Short
 		})
-		state.Groups = append(state.Groups, F1GroupState{Key: group.StateKey, Picks: append([]F1Pick(nil), kept...)})
+		state.Groups = append(state.Groups, TrancheGroupState{Key: group.StateKey, Picks: append([]TranchePick(nil), kept...)})
 	}
 	// 7.3 合成：Σ 子策略 stg_weight × 贡献 / Σ stg_weight × weight.total。
 	ids := make([]string, 0, len(contributions))
@@ -598,19 +627,19 @@ func evaluateF1(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous Rul
 		held = append(held, id)
 		explain.weight(id, weight, nil, 0, true)
 		item := explain.items[id]
-		item.Reason = f1ReasonPrefix + strconv.Itoa(len(holders[id]))
+		item.Reason = trancheReasonPrefix + strconv.Itoa(len(holders[id]))
 		explain.items[id] = item
 	}
 	for id, passed := range newlyPicked {
 		if _, weighted := result.weights[id]; !weighted && !passed {
-			explain.reject(id, StageDropped, reasonF1FilterAfter, nil, 0)
+			explain.reject(id, StageDropped, reasonTrancheFilterAfter, nil, 0)
 		}
 	}
 	result.selected = len(newlyPicked)
-	result.state = RuleState{Held: held, F1: state}
+	result.state = RuleState{Held: held, Tranche: state}
 	// 开仓记录只在该币累计满 h 个候选行后删除：长期没有候选行的币会让记录一直保留（截断会改变结果，所以只提示）。
-	if raw, err := json.Marshal(state); err == nil && len(raw) > f1StateNoteBytes {
-		result.notes = append(result.notes, fmt.Sprintf("规则 %s 的 f1 状态有 %d 字节，超过 %d 字节：有标的长期没有候选行，开仓记录一直保留", rule.Rule.ID, len(raw), f1StateNoteBytes))
+	if raw, err := json.Marshal(state); err == nil && len(raw) > trancheStateNoteBytes {
+		result.notes = append(result.notes, fmt.Sprintf("规则 %s 的 tranche 状态有 %d 字节，超过 %d 字节：有标的长期没有候选行，开仓记录一直保留", rule.Rule.ID, len(raw), trancheStateNoteBytes))
 	}
 	result.items = explain.list()
 	return result, nil

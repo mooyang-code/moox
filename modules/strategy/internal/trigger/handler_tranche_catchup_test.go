@@ -9,14 +9,15 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 )
 
-const f1HoldDSL = `name: f1_demo
+const trancheHoldDSL = `name: f1_demo
 bar: 1h
 universe: {}
 rules:
   - id: r
-    type: f1
+    type: tranche
+    preset: f1
     weight: {total: 1}
-    f1:
+    tranche:
       hold_period: 3
       long_weight: 2
       short_weight: 0
@@ -32,10 +33,10 @@ portfolio:
   max_missing: 1
 `
 
-func newF1Harness(t *testing.T) *harness {
+func newTrancheHarness(t *testing.T) *harness {
 	t.Helper()
 	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "volume", "m"}}
-	h := newHarnessWith(t, f1HoldDSL, nil, resolved)
+	h := newHarnessWith(t, trancheHoldDSL, nil, resolved)
 	// 每期领先的标的轮换：不同周期开不同的仓，漏掉一期就会让持仓记录与持有计数对不上。
 	leaders := []string{"A", "B", "C", "A", "B"}
 	for n := 1; n <= len(leaders); n++ {
@@ -52,15 +53,15 @@ func newF1Harness(t *testing.T) *harness {
 	return h
 }
 
-// 追赶中的周期对 f1 规则也求值、推进状态（记为 skipped(catchup)，不发目标）：放行后第一个正式周期的结果与从未中断一致。
+// 追赶中的周期对 tranche 规则也求值、推进状态（记为 skipped(catchup)，不发目标）：放行后第一个正式周期的结果与从未中断一致。
 func TestCatchupAdvancesF1StateSoLiveResultMatchesUninterruptedRun(t *testing.T) {
-	control := newF1Harness(t)
+	control := newTrancheHarness(t)
 	for n := 1; n <= 4; n++ {
 		control.now = barStart(n).Add(90 * time.Minute)
 		expectAck(t, control.deliver(n))
 	}
 
-	h := newF1Harness(t)
+	h := newTrancheHarness(t)
 	mode := ModeLive
 	h.handler.Gate = func(string) Mode { return mode }
 	h.now = barStart(1).Add(90 * time.Minute)
@@ -92,15 +93,15 @@ func TestCatchupAdvancesF1StateSoLiveResultMatchesUninterruptedRun(t *testing.T)
 	}
 }
 
-// 有效期已过的迟到周期同样推进 f1 状态（系统停机后事件延迟到达的情形），记为 skipped(expired)。
+// 有效期已过的迟到周期同样推进 tranche 状态（系统停机后事件延迟到达的情形），记为 skipped(expired)。
 func TestExpiredPeriodAdvancesF1State(t *testing.T) {
-	control := newF1Harness(t)
+	control := newTrancheHarness(t)
 	for n := 1; n <= 3; n++ {
 		control.now = barStart(n).Add(90 * time.Minute)
 		expectAck(t, control.deliver(n))
 	}
 
-	h := newF1Harness(t)
+	h := newTrancheHarness(t)
 	h.now = barStart(1).Add(90 * time.Minute)
 	expectAck(t, h.deliver(1))
 	h.now = barStart(2).Add(10 * time.Hour) // 远超有效期

@@ -11,18 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func loadGoldenCase(t *testing.T, name string) f1Golden {
+func loadGoldenCase(t *testing.T, name string) trancheGolden {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "f1", name+".json"))
 	require.NoError(t, err)
-	var golden f1Golden
+	var golden trancheGolden
 	require.NoError(t, json.Unmarshal(raw, &golden))
 	return golden
 }
 
 // 每期的状态经 JSON 写入、读回再传给下一期（相当于每期重启进程），结果与不经序列化完全相同。
-func TestF1StateSurvivesRestart(t *testing.T) {
-	bars := loadF1Bars(t)
+func TestTrancheStateSurvivesRestart(t *testing.T) {
+	bars := loadTrancheBars(t)
 	golden := loadGoldenCase(t, "multi_sub_merge")
 	strategy, err := dsl.Parse([]byte(golden.DSL))
 	require.NoError(t, err)
@@ -31,10 +31,10 @@ func TestF1StateSurvivesRestart(t *testing.T) {
 	rule := &program.Rules[0]
 	var direct, restarted RuleState
 	for i, bar := range bars {
-		frame := f1Frame(bar, int64(i), rule.Rule.ID)
-		a, err := evaluateF1(rule, frame, partitionF1(rule, frame, direct.Held), direct, noise)
+		frame := trancheFrame(bar, int64(i), rule.Rule.ID)
+		a, err := evaluateTranche(rule, frame, partitionTranche(rule, frame, direct.Held), direct, noise)
 		require.NoError(t, err)
-		b, err := evaluateF1(rule, frame, partitionF1(rule, frame, restarted.Held), restarted, noise)
+		b, err := evaluateTranche(rule, frame, partitionTranche(rule, frame, restarted.Held), restarted, noise)
 		require.NoError(t, err)
 		require.Equal(t, len(a.weights), len(b.weights), "第 %d 期", i)
 		for id, w := range a.weights {
@@ -47,14 +47,14 @@ func TestF1StateSurvivesRestart(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &restarted))
 	}
 	// 状态只保留仍可能有贡献的开仓记录：组内最大 h 为 36，每组记录数不超过 36 × 选币数。
-	for _, group := range direct.F1.Groups {
+	for _, group := range direct.Tranche.Groups {
 		require.LessOrEqual(t, len(group.Picks), 36)
 	}
 }
 
 // 完整求值：守门、组合层截断到 1e-4、按数量持有让 Σw 略大于 1 时 leverage 上限只作约束不缩放。
-func TestF1EvaluateEndToEnd(t *testing.T) {
-	bars := loadF1Bars(t)
+func TestTrancheEvaluateEndToEnd(t *testing.T) {
+	bars := loadTrancheBars(t)
 	golden := loadGoldenCase(t, "hold_36_volume_gap")
 	strategy, err := dsl.Parse([]byte(golden.DSL))
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestF1EvaluateEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	var state State
 	for i, bar := range bars {
-		decision, err := Evaluate(program, f1Frame(bar, int64(i), "g"), state)
+		decision, err := Evaluate(program, trancheFrame(bar, int64(i), "g"), state)
 		require.NoError(t, err)
 		require.Equal(t, StatusOK, decision.Status, "第 %d 期：%v", i, decision.Summary.Notes)
 		got := map[string]quant.Decimal{}
@@ -86,7 +86,7 @@ func TestF1EvaluateEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	program, err = dsl.Compile(strict, columnsOf(bars))
 	require.NoError(t, err)
-	frame := f1Frame(bars[0], 0, "g")
+	frame := trancheFrame(bars[0], 0, "g")
 	delete(frame.Rows, "AAA-USDT")
 	decision, err := Evaluate(program, frame, State{})
 	require.NoError(t, err)

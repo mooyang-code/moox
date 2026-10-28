@@ -16,13 +16,13 @@ import (
 // 黄金用例：期望值由 alphalib F1 框架（alphalib-dev 的 F1Strategy / F1MultiStrategy 与 f1_utils）在合成数据上算出，
 // 生成脚本不在仓库里（它运行第三方代码）；用例只含合成数据与合成参数。见 docs/计划/F1策略迁移/F1策略迁移执行计划.md P4。
 
-type f1Golden struct {
+type trancheGolden struct {
 	Name     string               `json:"name"`
 	DSL      string               `json:"dsl"`
 	Expected []map[string]float64 `json:"expected"`
 }
 
-func loadF1Bars(t *testing.T) []map[string]map[string]float64 {
+func loadTrancheBars(t *testing.T) []map[string]map[string]float64 {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "f1", "bars.json"))
 	require.NoError(t, err)
@@ -31,7 +31,7 @@ func loadF1Bars(t *testing.T) []map[string]map[string]float64 {
 	return bars
 }
 
-func f1Frame(bar map[string]map[string]float64, index int64, ruleID string) Frame {
+func trancheFrame(bar map[string]map[string]float64, index int64, ruleID string) Frame {
 	ids := make([]string, 0, len(bar))
 	rows := make(map[string]Row, len(bar))
 	for id, values := range bar {
@@ -59,8 +59,8 @@ func columnsOf(bars []map[string]map[string]float64) []string {
 	return columns
 }
 
-func TestF1MatchesAlphalibGolden(t *testing.T) {
-	bars := loadF1Bars(t)
+func TestTrancheMatchesAlphalibGolden(t *testing.T) {
+	bars := loadTrancheBars(t)
 	columns := columnsOf(bars)
 	files, err := filepath.Glob(filepath.Join("testdata", "f1", "*.json"))
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestF1MatchesAlphalibGolden(t *testing.T) {
 		}
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
-		var golden f1Golden
+		var golden trancheGolden
 		require.NoError(t, json.Unmarshal(raw, &golden))
 		t.Run(golden.Name, func(t *testing.T) {
 			strategy, err := dsl.Parse([]byte(golden.DSL))
@@ -82,9 +82,9 @@ func TestF1MatchesAlphalibGolden(t *testing.T) {
 			rule := &program.Rules[0]
 			var state RuleState
 			for i, bar := range bars {
-				frame := f1Frame(bar, int64(i), rule.Rule.ID)
-				sets := partitionF1(rule, frame, state.Held)
-				result, err := evaluateF1(rule, frame, sets, state, noise)
+				frame := trancheFrame(bar, int64(i), rule.Rule.ID)
+				sets := partitionTranche(rule, frame, state.Held)
+				result, err := evaluateTranche(rule, frame, sets, state, noise)
 				require.NoError(t, err)
 				state = result.state
 				want := golden.Expected[i]
@@ -111,9 +111,9 @@ func TestF1MatchesAlphalibGolden(t *testing.T) {
 	require.GreaterOrEqual(t, cases, 12)
 }
 
-// 逻辑组合：F1Strategy 不接受元组写法，语义来自 f1_utils.filter_generate；期望值是它在每期样本上保留的标的。
-func TestF1LogicGroupMatchesF1Utils(t *testing.T) {
-	bars := loadF1Bars(t)
+// 逻辑组合：TrancheStrategy 不接受元组写法，语义来自 f1_utils.filter_generate；期望值是它在每期样本上保留的标的。
+func TestTrancheLogicGroupMatchesF1Utils(t *testing.T) {
+	bars := loadTrancheBars(t)
 	raw, err := os.ReadFile(filepath.Join("testdata", "f1", "logic_group_filter.json"))
 	require.NoError(t, err)
 	var golden struct {
@@ -124,9 +124,10 @@ func TestF1LogicGroupMatchesF1Utils(t *testing.T) {
 	strategy, err := dsl.Parse([]byte(`name: g
 rules:
   - id: g
-    type: f1
+    type: tranche
+    preset: f1
     weight: 1
-    f1:
+    tranche:
       seal999: false
       long_factors: [{factor: x1}]
       short_weight: 0
@@ -138,13 +139,13 @@ rules:
             - {direction: long, factor: y3, type: pct, op: gte, value: 0.6}
 `))
 	require.NoError(t, err)
-	filter := strategy.Rules[0].F1.Subs[0].FilterBefore[0]
+	filter := strategy.Rules[0].Tranche.Subs[0].FilterBefore[0]
 	for i, bar := range bars {
-		frame := f1Frame(bar, int64(i), "g")
+		frame := trancheFrame(bar, int64(i), "g")
 		ids := append([]string(nil), frame.Universe...)
-		sort.SliceStable(ids, func(a, b int) bool { return f1Key(ids[a]) < f1Key(ids[b]) })
-		sample := f1Sample{ids: ids, frame: frame}
-		match := f1Match(ids, func(column string) func(id string) float64 {
+		sort.SliceStable(ids, func(a, b int) bool { return trancheKey(ids[a]) < trancheKey(ids[b]) })
+		sample := trancheSample{ids: ids, frame: frame}
+		match := trancheMatch(ids, func(column string) func(id string) float64 {
 			return func(id string) float64 { return sample.value(id, column) }
 		}, filter)
 		var kept []string

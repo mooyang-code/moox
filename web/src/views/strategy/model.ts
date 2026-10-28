@@ -95,7 +95,7 @@ const itemReasons: Record<string, string> = {
   not_selected: "名次未入选",
   not_rebalanced: "非建仓 bar",
   filter_after: "filter_after 剔除",
-  f1_filter_after: "被全部子策略的后置过滤剔除",
+  tranche_filter_after: "被全部子策略的后置过滤剔除",
   volume_zero: "本期无成交（volume=0），不作为候选",
   exit: "触发 exit",
   no_entry: "未触发 entry",
@@ -109,7 +109,7 @@ const itemReasons: Record<string, string> = {
 
 function reasonText(reason: string): string {
   if (reason.startsWith("holding:")) return `延续批次持有，本期${reasonText(reason.slice("holding:".length))}`;
-  if (/^f1:\d+$/.test(reason)) return `由 ${reason.slice("f1:".length)} 个子策略持有`;
+  if (/^tranche:\d+$/.test(reason)) return `由 ${reason.slice("tranche:".length)} 个子策略持有`;
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
   if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
@@ -117,7 +117,7 @@ function reasonText(reason: string): string {
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、f1:、missing:、factor_failed:、source_failed:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、score_error:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);

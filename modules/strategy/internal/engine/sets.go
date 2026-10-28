@@ -15,7 +15,7 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
-	// inactive 是 f1 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（F1 只保留 volume > 0 的行）。
+	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（F1 只保留 volume > 0 的行）。
 	inactive []string
 }
 
@@ -79,10 +79,10 @@ func missingReason(id string, row Row, columns, previousColumns []string, failed
 	return causes[0].text
 }
 
-// reasonVolumeZero 是 f1 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
+// reasonVolumeZero 是 tranche 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
 const reasonVolumeZero = "volume_zero"
 
-// items 为年龄剔除、缺数、保持持仓与（f1 规则）本期无成交的标的生成解释明细；其余标的的明细由各规则求值产生。
+// items 为年龄剔除、缺数、保持持仓与（tranche 规则）本期无成交的标的生成解释明细；其余标的的明细由各规则求值产生。
 func (s ruleSets) items(ruleID string) []Item {
 	items := make([]Item, 0, len(s.agedOut)+len(s.missing)+len(s.frozen)+len(s.inactive))
 	inactive := make(map[string]struct{}, len(s.inactive))

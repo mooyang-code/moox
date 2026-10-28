@@ -57,8 +57,8 @@ type HoldingBatch struct {
 type RuleState struct {
 	Held    []string       `json:"held,omitempty"`
 	Batches []HoldingBatch `json:"batches,omitempty"`
-	// F1 是 f1 规则的开仓记录（见 f1.go）。
-	F1 *F1State `json:"f1,omitempty"`
+	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
+	Tranche *TrancheState `json:"tranche,omitempty"`
 }
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。

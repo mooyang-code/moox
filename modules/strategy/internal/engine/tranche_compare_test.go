@@ -11,7 +11,7 @@ import (
 
 // 比较方式 × 区间边界 × NaN 的独立求值表（不串联，避免前面的条件掩盖后面的边界）。期望值按 f1_utils：
 // pandas between(lo, hi, inclusive) 对 NaN 为假，nb* 与 ne 再取反，所以 NaN 在 nb* 与 ne 下为真。
-func TestF1ConditionTable(t *testing.T) {
+func TestTrancheConditionTable(t *testing.T) {
 	nan := math.NaN()
 	values := []float64{0.1, 0.2, 0.5, 0.8, 0.9, nan}
 	cases := []struct {
@@ -40,16 +40,16 @@ func TestF1ConditionTable(t *testing.T) {
 		return values[index]
 	}
 	for _, c := range cases {
-		text := fmt.Sprintf("name: c\nrules:\n  - id: c\n    type: f1\n    weight: 1\n    f1:\n      seal999: false\n      long_factors: [{factor: a}]\n      short_weight: 0\n      filter_before:\n        - {factor: b, op: %s, value: %s}\n", c.op, c.value)
+		text := fmt.Sprintf("name: c\nrules:\n  - id: c\n    type: tranche\n    preset: f1\n    weight: 1\n    tranche:\n      seal999: false\n      long_factors: [{factor: a}]\n      short_weight: 0\n      filter_before:\n        - {factor: b, op: %s, value: %s}\n", c.op, c.value)
 		strategy, err := dsl.Parse([]byte(text))
 		require.NoError(t, err, c.op)
-		got := f1Condition(ids, lookup, strategy.Rules[0].F1.Subs[0].FilterBefore[0])
+		got := trancheCondition(ids, lookup, strategy.Rules[0].Tranche.Subs[0].FilterBefore[0])
 		require.Equal(t, c.want, got, c.op)
 	}
 }
 
 // rank 与 pct 的 method='first'：并列按样本顺序先到先得，NaN 不参与排名、比较为假。
-func TestF1RankFirst(t *testing.T) {
+func TestTrancheRankFirst(t *testing.T) {
 	nan := math.NaN()
 	require.Equal(t, []float64{1, 3, 2, 4}, firstRanks([]float64{1, 2, 1, 5}, true, false))
 	// pandas Series([1, 2, 1, 5]).rank(method="first", ascending=False) == [3, 2, 4, 1]

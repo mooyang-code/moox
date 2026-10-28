@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fh003Shape 生成与 FH003 同等规模的 f1 规则（合成参数）：32 个选币因子列 × 13 个过滤窗口 × 8 种持有期 × 若干阈值，共 1960 个子策略。
+// fh003Shape 生成与 FH003 同等规模的 tranche 规则（合成参数）：32 个选币因子列 × 13 个过滤窗口 × 8 种持有期 × 若干阈值，共 1960 个子策略。
 func fh003Shape() (string, []string) {
 	holds := []int{1, 2, 3, 4, 6, 12, 24, 36}
 	var rows strings.Builder
@@ -24,9 +24,10 @@ func fh003Shape() (string, []string) {
 	text := `name: fh003_shape
 rules:
   - id: fh003
-    type: f1
+    type: tranche
+    preset: f1
     weight: {total: 1}
-    f1:
+    tranche:
       hold_period: "{h}"
       seal999: false
       long_factors: [{factor: "po__{n1}", descending: true, weight: 1}]
@@ -52,7 +53,7 @@ rules:
 	return text, columns
 }
 
-type f1ScaleRun struct {
+type trancheScaleRun struct {
 	rule   *dsl.CompiledRule
 	ids    []string
 	closes []float64
@@ -60,19 +61,19 @@ type f1ScaleRun struct {
 	cols   []string
 }
 
-func newF1ScaleRun(t testing.TB) *f1ScaleRun {
+func newTrancheScaleRun(t testing.TB) *trancheScaleRun {
 	text, columns := fh003Shape()
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
 	program, err := dsl.Compile(strategy, columns)
 	require.NoError(t, err)
-	require.Len(t, program.Rules[0].F1Groups, 32)
+	require.Len(t, program.Rules[0].TrancheGroups, 32)
 	ids := make([]string, 501)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("C%03d-USDT", i)
 	}
 	sort.Strings(ids)
-	run := &f1ScaleRun{rule: &program.Rules[0], ids: ids, closes: make([]float64, len(ids)), rng: rand.New(rand.NewSource(1)), cols: columns}
+	run := &trancheScaleRun{rule: &program.Rules[0], ids: ids, closes: make([]float64, len(ids)), rng: rand.New(rand.NewSource(1)), cols: columns}
 	for i := range run.closes {
 		run.closes[i] = 1 + run.rng.Float64()*100
 	}
@@ -80,12 +81,12 @@ func newF1ScaleRun(t testing.TB) *f1ScaleRun {
 }
 
 // frame 生成一期数据：因子值有持续性（每期小幅变化），1% 的标的本期没有成交。
-func (r *f1ScaleRun) frame(bar int, previous map[string]map[string]float64) (Frame, map[string]map[string]float64) {
+func (r *trancheScaleRun) frame(bar int, previous map[string]map[string]float64) (Frame, map[string]map[string]float64) {
 	return r.frameWithGaps(bar, previous, nil)
 }
 
 // frameWithGaps 同 frame，idle 里的标的本期没有成交（模拟长期缺行）。
-func (r *f1ScaleRun) frameWithGaps(bar int, previous map[string]map[string]float64, idle map[string]bool) (Frame, map[string]map[string]float64) {
+func (r *trancheScaleRun) frameWithGaps(bar int, previous map[string]map[string]float64, idle map[string]bool) (Frame, map[string]map[string]float64) {
 	rows := make(map[string]Row, len(r.ids))
 	values := make(map[string]map[string]float64, len(r.ids))
 	for i, id := range r.ids {
@@ -108,15 +109,15 @@ func (r *f1ScaleRun) frameWithGaps(bar int, previous map[string]map[string]float
 }
 
 // 稳态状态体积：FH003 规模下跑 120 期（超过最长持有期 36 根），状态 JSON 不超过 256 KB。
-func TestF1StateSizeAtFH003Scale(t *testing.T) {
-	run := newF1ScaleRun(t)
+func TestTrancheStateSizeAtFH003Scale(t *testing.T) {
+	run := newTrancheScaleRun(t)
 	var state RuleState
 	var previous map[string]map[string]float64
 	largest := 0
 	for bar := 0; bar < 120; bar++ {
 		frame, values := run.frame(bar, previous)
 		previous = values
-		result, err := evaluateF1(run.rule, frame, partitionF1(run.rule, frame, state.Held), state, noise)
+		result, err := evaluateTranche(run.rule, frame, partitionTranche(run.rule, frame, state.Held), state, noise)
 		require.NoError(t, err)
 		require.Empty(t, result.notes)
 		state = result.state
@@ -124,13 +125,13 @@ func TestF1StateSizeAtFH003Scale(t *testing.T) {
 		require.NoError(t, err)
 		largest = max(largest, len(raw))
 	}
-	require.LessOrEqual(t, largest, f1StateNoteBytes)
+	require.LessOrEqual(t, largest, trancheStateNoteBytes)
 	t.Logf("FH003 规模稳态状态最大 %d 字节", largest)
 }
 
 // 多个币先后被选中、又轮流长期没有成交：开仓记录随之保留，状态体积仍在观察阈值内，明细给出 volume_zero。
-func TestF1StateSizeWithRotatingGaps(t *testing.T) {
-	run := newF1ScaleRun(t)
+func TestTrancheStateSizeWithRotatingGaps(t *testing.T) {
+	run := newTrancheScaleRun(t)
 	var state RuleState
 	var previous map[string]map[string]float64
 	idle := map[string]bool{}
@@ -150,11 +151,11 @@ func TestF1StateSizeWithRotatingGaps(t *testing.T) {
 		}
 		frame, values := run.frameWithGaps(bar, previous, idle)
 		previous = values
-		sets := partitionF1(run.rule, frame, state.Held)
+		sets := partitionTranche(run.rule, frame, state.Held)
 		for id := range idle {
 			require.NotContains(t, sets.available, id)
 		}
-		result, err := evaluateF1(run.rule, frame, sets, state, noise)
+		result, err := evaluateTranche(run.rule, frame, sets, state, noise)
 		require.NoError(t, err)
 		state = result.state
 		raw, err := json.Marshal(state)
@@ -170,13 +171,13 @@ func TestF1StateSizeWithRotatingGaps(t *testing.T) {
 			require.True(t, found)
 		}
 	}
-	require.LessOrEqual(t, largest, f1StateNoteBytes)
+	require.LessOrEqual(t, largest, trancheStateNoteBytes)
 	t.Logf("轮流长期缺行时状态最大 %d 字节", largest)
 }
 
-// BenchmarkF1EvaluateFH003Scale：FH003 规模的单期求值（含状态读写）。本机实测约 25 ms/期。
-func BenchmarkF1EvaluateFH003Scale(b *testing.B) {
-	run := newF1ScaleRun(b)
+// BenchmarkTrancheEvaluateFH003Scale：FH003 规模的单期求值（含状态读写）。本机实测约 25 ms/期。
+func BenchmarkTrancheEvaluateFH003Scale(b *testing.B) {
+	run := newTrancheScaleRun(b)
 	var state RuleState
 	var previous map[string]map[string]float64
 	frames := make([]Frame, 60)
@@ -187,7 +188,7 @@ func BenchmarkF1EvaluateFH003Scale(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		frame := frames[i%len(frames)]
 		frame.BarIndex = int64(i)
-		result, err := evaluateF1(run.rule, frame, partitionF1(run.rule, frame, state.Held), state, noise)
+		result, err := evaluateTranche(run.rule, frame, partitionTranche(run.rule, frame, state.Held), state, noise)
 		if err != nil {
 			b.Fatal(err)
 		}
