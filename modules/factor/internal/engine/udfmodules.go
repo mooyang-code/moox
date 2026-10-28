@@ -245,6 +245,9 @@ func (m *udfModules) Pin(refs []udfRef) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			// 释放也要经过 retainMu：Retain 读取“目录、回放会话”与“登记”两个集合之间不能有登记被释放，
+			// 否则刚交接给会话表的版本会在它读完会话表之后、读登记之前失去保护。
+			m.retainMu.Lock()
 			m.mu.Lock()
 			for _, ref := range refs {
 				if m.pins[ref.hash]--; m.pins[ref.hash] <= 0 {
@@ -253,6 +256,7 @@ func (m *udfModules) Pin(refs []udfRef) func() {
 			}
 			reclaim := m.reclaim
 			m.mu.Unlock()
+			m.retainMu.Unlock()
 			if reclaim != nil {
 				reclaim()
 			}
