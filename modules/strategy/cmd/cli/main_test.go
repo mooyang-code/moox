@@ -48,3 +48,29 @@ func TestValidateRejectsInvalidDSL(t *testing.T) {
 		t.Fatalf("未知子命令应提示用法：%v", err)
 	}
 }
+
+func TestTemplateCheckAndRender(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := runCLI([]string{"template", "check", "../../templates/f1.yaml"}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "template_id=f1") || !strings.Contains(out.String(), "h、s、l、n2、p2、w") {
+		t.Fatalf("check 输出：%s", out.String())
+	}
+	params := filepath.Join(t.TempDir(), "params.csv")
+	if err := os.WriteFile(params, []byte("h,s,l,n2,p2,w\n1,65,193,24,0.1,0.5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runCLI([]string{"template", "render", "../../templates/f1.yaml", "--name", "FH003", "--var", "leverage=3", "--params", params}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`name: "FH003"`, "type: tranche", "leverage: 3", "[1, 65, 193, 24, 0.1, 0.5]"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("render 输出缺少 %q：%s", want, out.String())
+		}
+	}
+	if err := runCLI([]string{"template", "render", "../../templates/f1.yaml", "--name", "x"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), "参数表不能为空") {
+		t.Fatalf("没有参数表应报错：%v", err)
+	}
+}

@@ -12,7 +12,7 @@ import (
 // 策略模块的重置（设计 5.2）。
 //
 //	data：清运行数据——结果与明细、回放、年龄通过记录；保留策略定义、实例与会话（配置）；
-//	all ：再清策略定义与版本、实例、会话，回到新部署的空白状态（策略没有种子）。
+//	all ：再清策略定义与版本、实例、会话与模板，回到新部署的空白状态（策略没有种子）。
 //
 // 重置不会替 Trade 解除实例对逻辑账户的认领：那是系统级重置的事（先重置策略再重置 Trade，Trade 的逻辑账户一并清掉）。
 
@@ -22,7 +22,7 @@ var (
 		"t_strategy_results", "t_strategy_result_items", "t_strategy_replays", "t_strategy_replay_bars", "t_strategy_age_passed",
 	}
 	strategyConfigTables = []string{
-		"t_strategy_defs", "t_strategy_def_versions", "t_strategy_instances", "t_strategy_sessions", "t_strategy_display_settings",
+		"t_strategy_defs", "t_strategy_def_versions", "t_strategy_instances", "t_strategy_sessions", "t_strategy_display_settings", "t_strategy_templates",
 	}
 )
 

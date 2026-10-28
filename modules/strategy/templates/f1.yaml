@@ -1,0 +1,38 @@
+# 内置模板：alphalib F1 截面选币迁移（tranche + preset: f1）。参数表每行一个子策略，列与 FH003 一致：
+# h 持有期、s/l 是 f1_po 的短长周期参数、n2/p2 是 f1_upper_shadow 后置过滤的窗口与阈值、w 是子策略权重 stg_weight。
+# 导入：moox-cli gateway call trpc.moox.strategy.StrategyMgr SaveStrategyTemplate --data '{"template_yaml": "..."}'（见 docs/模块/策略.md）。
+template_id: f1
+name: F1 截面选币（批次持仓）
+description: alphalib F1 子策略参数表迁移：f1_po 选币、f1_upper_shadow 后置过滤，参数表每行一个子策略
+variables:
+  - {name: total, type: number, min: 0, max: 10, default: "1", doc: 规则预算 weight.total}
+  - {name: leverage, type: number, min: 0, max: 10, default: "2", doc: 组合杠杆上限（按数量持有会让 Σw 略大于 1）}
+  - {name: max_missing, type: number, min: 0, max: 1, default: "1", doc: 缺数守门比例}
+sample_row: ["1", "65", "193", "24", "0.1", "0.0033"]
+dsl: |
+  name: "{{name}}"
+  bar: 5m
+  universe: {}
+  rules:
+    - id: main
+      type: tranche
+      preset: f1
+      weight: {total: "{{total}}"}
+      tranche:
+        hold_period: "{h}"
+        seal999: false
+        long_factors: [{factor: "f1_po__{s}_{l}", descending: true, weight: 1}]
+        short_factors: []
+        long_weight: 2
+        short_weight: 0
+        long_coin_num: 1
+        short_coin_num: 0
+        filter_after:
+          - {direction: long, factor: "f1_upper_shadow__{n2}", type: value, op: lte, value: "{p2}"}
+        stg_weight: "{w}"
+      params:
+        columns: [h, s, l, n2, p2, w]
+        rows: []
+  portfolio:
+    leverage: "{{leverage}}"
+    max_missing: "{{max_missing}}"
