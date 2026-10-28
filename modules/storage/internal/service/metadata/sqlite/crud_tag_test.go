@@ -28,10 +28,10 @@ func TestUpsertTagDefaultsAndValidation(t *testing.T) {
 	}
 
 	cases := map[string]*pb.Tag{
-		"bad id":          {SpaceId: "space", TagId: "Bad-ID", TagName: "x", Mode: metadata.TagModeManual},
-		"bad mode":        {SpaceId: "space", TagId: "x1", TagName: "x1", Mode: "sync"},
-		"missing name":    {SpaceId: "space", TagId: "x2", Mode: metadata.TagModeAuto},
-		"missing space":   {TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual},
+		"bad id":        {SpaceId: "space", TagId: "Bad-ID", TagName: "x", Mode: metadata.TagModeManual},
+		"bad mode":      {SpaceId: "space", TagId: "x1", TagName: "x1", Mode: "sync"},
+		"missing name":  {SpaceId: "space", TagId: "x2", Mode: metadata.TagModeAuto},
+		"missing space": {TagId: "x3", TagName: "x3", Mode: metadata.TagModeManual},
 	}
 	for name, item := range cases {
 		if _, err := store.UpsertTag(ctx, item); !errors.Is(err, metadata.ErrTagInvalid) {
