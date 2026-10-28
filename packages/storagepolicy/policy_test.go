@@ -246,3 +246,59 @@ func mustMarshal(t *testing.T, policy Policy) []byte {
 	}
 	return raw
 }
+
+// view.max_age 要装得下 view.bars 根：7×24 市场不足报错，交易时段市场只警告；mooxsys 豁免。
+func TestCoverageChecksViewMaxAge(t *testing.T) {
+	policy := Default()
+	policy.View.MaxAge.Defaults = copyMap(policy.View.MaxAge.Defaults)
+	policy.View.MaxAge.Defaults["5m"] = "10d"
+	policy.View.MaxAge.Spaces = map[string]map[string]string{"stockcn": {"1m": "20d"}, "mooxsys": {"1m": "1d"}}
+	errs, warnings := policy.Coverage()
+	if len(errs) != 1 || !strings.Contains(errs[0], "view.max_age.defaults.5m = 240h") {
+		t.Fatalf("errors = %v", errs)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "view.max_age.spaces.stockcn.1m") {
+		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+func TestDefaultViewMaxAgeResolvesPerFrequency(t *testing.T) {
+	policy := Default()
+	for space, want := range map[string]map[string]string{
+		"crypto":  {"1m": "168h", "5m": "840h", "1d": "forever", "45m": "5040h"},
+		"stockcn": {"1m": "1440h", "5m": "7200h"},
+		"mooxsys": {"1m": "168h", "30s": "48h"},
+	} {
+		for freq, expected := range want {
+			period, _, err := policy.View.MaxAge.Resolve(space, freq)
+			if err != nil || period.String() != expected {
+				t.Fatalf("%s %s = %v, %v; want %s", space, freq, period, err, expected)
+			}
+		}
+	}
+}
+
+func TestViewMaxAgeValidationAndRoundTrip(t *testing.T) {
+	policy := Default()
+	policy.View.MaxAge.Defaults = copyMap(policy.View.MaxAge.Defaults)
+	delete(policy.View.MaxAge.Defaults, "15m")
+	if err := policy.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.defaults must cover every standard frequency") {
+		t.Fatalf("缺频率应报错: %v", err)
+	}
+	policy = Default()
+	policy.View.MaxAge.Spaces["crypto"] = map[string]string{"1M": "7d"}
+	if err := policy.Validate(); err == nil || !strings.Contains(err.Error(), "view.max_age.spaces.crypto") {
+		t.Fatalf("非规范频率应报错: %v", err)
+	}
+	raw, err := Default().Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.View.MaxAge.Defaults["5m"] != "840h" || parsed.View.MaxAge.Spaces["mooxsys"]["1m"] != "168h" {
+		t.Fatalf("round trip lost view.max_age: %+v", parsed.View.MaxAge)
+	}
+}

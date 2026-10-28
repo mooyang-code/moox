@@ -175,13 +175,25 @@ type StorageRetention struct {
 	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
 }
 
-// StorageView is the [storage_view] table: the View maintenance schedule
-// and the View file size limit.
+// ViewMaxAge is the [storage_view.max_age] table: how many days of history a
+// View keeps by space and frequency. Rows older than that are not written to
+// the View, whatever brought them in (backfill, import, factor recompute);
+// Datasets are unaffected. An omitted table takes the recommended values from
+// storagepolicy.Default; a given defaults table must cover every standard
+// frequency.
+type ViewMaxAge struct {
+	Defaults map[string]string            `toml:"defaults" json:"defaults"`
+	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
+}
+
+// StorageView is the [storage_view] table: the View maintenance schedule,
+// the View file size limit and the per-frequency maximum age.
 type StorageView struct {
-	MaintenanceCheckInterval string `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
-	CapacityCheckInterval    string `toml:"capacity_check_interval" json:"capacity_check_interval"`
-	CapacityCheckJitter      string `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
-	MaxViewFileBytes         int64  `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
+	MaxAge                   ViewMaxAge `toml:"max_age" json:"max_age"`
+	MaintenanceCheckInterval string     `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
+	CapacityCheckInterval    string     `toml:"capacity_check_interval" json:"capacity_check_interval"`
+	CapacityCheckJitter      string     `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
+	MaxViewFileBytes         int64      `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
 }
 
 // StoragePolicy renders storage-policy.json, the file storage-primary and
@@ -190,6 +202,7 @@ func (m Manifest) StoragePolicy() storagepolicy.Policy {
 	return storagepolicy.Policy{
 		Retention: storagepolicy.Retention{Defaults: m.StorageRetention.Defaults, Spaces: m.StorageRetention.Spaces},
 		View: storagepolicy.View{
+			MaxAge:                   storagepolicy.Retention{Defaults: m.StorageView.MaxAge.Defaults, Spaces: m.StorageView.MaxAge.Spaces},
 			Bars:                     m.StorageRetention.ViewBars,
 			TrimBars:                 storagepolicy.TrimBarsFor(m.StorageRetention.ViewBars),
 			MaintenanceCheckInterval: m.StorageView.MaintenanceCheckInterval,
@@ -516,6 +529,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	}
 	if !md.IsDefined("storage_retention", "spaces") {
 		out.StorageRetention.Spaces = recommended.Retention.Spaces
+	}
+	if !md.IsDefined("storage_view", "max_age", "defaults") {
+		out.StorageView.MaxAge.Defaults = recommended.View.MaxAge.Defaults
+	}
+	if !md.IsDefined("storage_view", "max_age", "spaces") {
+		out.StorageView.MaxAge.Spaces = recommended.View.MaxAge.Spaces
 	}
 	if !md.IsDefined("storage_view", "maintenance_check_interval") {
 		out.StorageView.MaintenanceCheckInterval = "1m"

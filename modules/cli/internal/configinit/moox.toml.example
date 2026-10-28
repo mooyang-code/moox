@@ -83,6 +83,50 @@ capacity_check_interval = "1h"
 capacity_check_jitter = "1h"
 max_view_file_bytes = 4294967296
 
+# View 按空间 × 频率限制最长历史：data_time 早于“当前时间 − 期限”的行不写入 View，
+# 补采、导入、因子历史重算带来的旧行同样丢弃（Dataset 与因子本地存储照常保留全部历史）。
+# 期限写法同 [storage_retention]；要装得下 view_rows_per_series 根（默认值恰好装下 1 万根）。
+# 已在 View 里的过期行由整理按每序列根数裁掉。
+[storage_view.max_age.defaults]
+"30s" = "90h"
+"1m" = "7d"
+"5m" = "35d"
+"15m" = "105d"
+"30m" = "210d"
+"1h" = "420d"
+"4h" = "1700d"
+"1d" = "forever"
+"1w" = "forever"
+"1mo" = "forever"
+
+[storage_view.max_age.spaces.stockcn]
+"1m" = "60d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_view.max_age.spaces.stockhk]
+"1m" = "45d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_view.max_age.spaces.stockus]
+"1m" = "40d"
+"5m" = "300d"
+"15m" = "900d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_view.max_age.spaces.mooxsys]
+"30s" = "48h"
+"1m" = "7d"
+
 # Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
 # 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。
 # 清理在每个周期的 maintenance_offset 处开始，且必须在下一个整点前结束

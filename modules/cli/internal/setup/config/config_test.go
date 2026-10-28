@@ -226,6 +226,55 @@ view_rows_per_series = 777
 	assert.Equal(t, storagepolicy.SourceDefault, source)
 }
 
+func TestLoadStorageViewMaxAge(t *testing.T) {
+	root := t.TempDir()
+	// 省略时用推荐值；给了 spaces 表就整体替换推荐的空间覆盖。
+	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	policy := snapshot.Manifest.StoragePolicy()
+	period, _, err := policy.View.MaxAge.Resolve("crypto", "5m")
+	require.NoError(t, err)
+	assert.Equal(t, "840h", period.String())
+
+	body := validManifest + `
+[storage_view.max_age.spaces.crypto]
+"5m" = "60d"
+`
+	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	policy = snapshot.Manifest.StoragePolicy()
+	period, _, err = policy.View.MaxAge.Resolve("crypto", "5m")
+	require.NoError(t, err)
+	assert.Equal(t, "1440h", period.String())
+	period, _, err = policy.View.MaxAge.Resolve("stockcn", "5m")
+	require.NoError(t, err)
+	assert.Equal(t, "840h", period.String(), "给了 spaces 表后不再合并推荐的空间覆盖")
+	raw, err := policy.Encode()
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"max_age"`)
+}
+
+func TestLoadRejectsInvalidStorageViewMaxAge(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "incomplete defaults", body: "[storage_view.max_age.defaults]\n\"1m\" = \"7d\"", want: "view.max_age.defaults must cover every standard frequency"},
+		{name: "alias frequency", body: "[storage_view.max_age.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
+		{name: "invalid period", body: "[storage_view.max_age.spaces.crypto]\n\"1m\" = \"7 days\"", want: "view.max_age"},
+		{name: "shorter than view bars", body: "[storage_view.max_age.spaces.crypto]\n\"5m\" = \"10d\"", want: "view.max_age.spaces.crypto.5m"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := Load(writeManifest(t, root, validManifest+"\n"+tt.body+"\n", 0o600), root)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := Load(writeManifest(t, root, validManifest, 0o600), root)
