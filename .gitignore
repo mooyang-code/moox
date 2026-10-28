@@ -122,3 +122,4 @@ docs/.vitepress/cache/
 
 # 误执行 go build 产生的二进制
 /modules/factor/cmd/cli/cli
+sdk/rust/target/

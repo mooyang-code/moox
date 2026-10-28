@@ -1,0 +1,15 @@
+[package]
+name = "moox-udf"
+version = "0.1.0"
+edition = "2021"
+description = "moox 因子自定义算子（wasm UDF）的 Rust SDK：窗口视图、空值规则、ABI 与测试工具"
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+moox-udf-macros = { path = "../moox-udf-macros", version = "0.1.0" }
+serde_json = { version = "1", optional = true }
+
+[features]
+# testing 打开后提供在原生环境下运行用户函数与 fixtures 的工具；只放在 dev-dependencies 里使用。
+testing = ["dep:serde_json"]

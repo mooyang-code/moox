@@ -72,7 +72,19 @@ test-docs-architecture:
 test-greenfield-contract:
 	bash scripts/test/contract/test-greenfield-contract.sh
 
-test: test-go test-web
+test: test-go test-web test-rust
+
+# Rust SDK、示例与测试样本：格式、clippy（-D warnings）、单元测试、宏的编译期错误用例；
+# 然后重新构建测试 wasm 并要求与已提交的产物逐字节一致（构建与路径无关，见 scripts/build/build-udf-testdata.sh）。
+.PHONY: test-rust udf-testdata
+test-rust: udf-testdata
+	cd sdk/rust && cargo fmt --all -- --check
+	cd sdk/rust && cargo clippy --workspace --all-targets --locked -- -D warnings
+	cd sdk/rust && cargo test --workspace --locked
+	@test -z "$$(git status --porcelain -- packages/factorudf/testdata)" || { echo 'packages/factorudf/testdata 与 sdk/rust 源码不一致：运行 make udf-testdata 并提交' >&2; git status --short -- packages/factorudf/testdata >&2; exit 1; }
+
+udf-testdata:
+	bash scripts/build/build-udf-testdata.sh
 
 test-go:
 	./scripts/test/contract/test-go-workspace.sh

@@ -1,0 +1,7 @@
+error: 缺少 lookback
+ --> tests/ui/missing_lookback.rs:2:1
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(1..=5) })]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `udf` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,5 @@
+error: 参数范围要写成闭区间 下限..=上限
+ --> tests/ui/open_range.rs:2:51
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(1..5) }, lookback = "n")]
+  |                                                   ^

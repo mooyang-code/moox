@@ -1,0 +1,5 @@
+error: 回看公式 "n*n" 不合法：系数要是非负整数常量
+ --> tests/ui/bad_lookback.rs:2:72
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(1..=5) }, lookback = "n*n")]
+  |                                                                        ^^^^^

@@ -1,0 +1,13 @@
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+ --> tests/ui/wrong_arity.rs:3:4
+  |
+2 | #[udf(name = "f", inputs = [x, y], params = { n: int(1..=5) }, lookback = "n")]
+  | ------------------------------------------------------------------------------- unexpected argument #2 of type `&moox_udf::Window<'_>`
+3 | fn f(x: &Window, p: &FParams) -> f64 { let _ = p; x.last() }
+  |    ^
+  |
+note: function defined here
+ --> tests/ui/wrong_arity.rs:3:4
+  |
+3 | fn f(x: &Window, p: &FParams) -> f64 { let _ = p; x.last() }
+  |    ^
