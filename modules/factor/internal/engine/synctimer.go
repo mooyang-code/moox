@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -37,6 +38,10 @@ type catalogSyncer struct {
 	// 下次同步会重新取得。applied 在快照应用之后调用（卸载不再引用的模块）。都可为 nil。
 	prepare func(ctx context.Context, snapshot CatalogSnapshot) error
 	applied func()
+	// okAt 是最近一次成功同步的请求发出的时间：恢复追赶的前置条件要的是“恢复之后发出的请求”成功过，而不是响应在恢复之后到达
+	// （恢复前发出、延迟到达的旧响应不能算数）。
+	mu   sync.Mutex
+	okAt time.Time
 	// kick 让同步循环不等定时器立刻同步一次（容量 1，多次请求合并）；恢复追赶用它尽快确认目录。
 	kick chan struct{}
 }
@@ -52,7 +57,21 @@ func (s *catalogSyncer) SyncSoon() {
 	}
 }
 
+// SyncedSince 返回最近一次成功同步的请求发出的时间（没有成功过为零）。
+func (s *catalogSyncer) SyncedSince() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.okAt
+}
+
 func (s *catalogSyncer) SyncOnce(ctx context.Context) error {
+	began := time.Now()
+	if s.now != nil {
+		began = s.now()
+	}
 	snapshot, err := s.client.SyncCatalog(ctx, s.cache.Status().Hash)
 	if err == nil && !snapshot.NotModified && s.prepare != nil {
 		err = s.prepare(ctx, snapshot)
@@ -63,6 +82,9 @@ func (s *catalogSyncer) SyncOnce(ctx context.Context) error {
 			if !snapshot.NotModified && s.applied != nil {
 				s.applied()
 			}
+			s.mu.Lock()
+			s.okAt = began
+			s.mu.Unlock()
 			if changed && s.onChange != nil {
 				s.onChange()
 			}

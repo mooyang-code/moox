@@ -140,6 +140,15 @@ func (c *Controller) Halted(ref Ref) bool {
 	if c.self.Hold != HoldNone {
 		return true
 	}
+	// 重启后待恢复的暂停（启动前检查还没通过）仍然是被有意停下的：不能因为检查暂时不过就放开写路径。
+	if c.self.Pending == StagePaused {
+		return true
+	}
+	if ref != (Ref{}) {
+		if o := c.objects[ref.key()]; o != nil && o.Pending == StagePaused {
+			return true
+		}
+	}
 	switch c.self.Stage {
 	case StagePaused, StageResuming, StageResetting, StageResetFailed, StageFault:
 		return true

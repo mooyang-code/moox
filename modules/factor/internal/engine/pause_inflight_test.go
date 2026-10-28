@@ -164,12 +164,18 @@ func reportedStatuses(c *jobClientFake) []string {
 	return out
 }
 
-// 追赶前置条件：恢复开始之后目录至少成功同步过一次才允许追赶写；之前（含暂停前的同步）都不算。
+// 追赶前置条件：恢复开始之后**发出**的目录同步请求成功过才允许追赶写；暂停前发出、恢复后才到达的旧响应不算。
 func TestCatchupWaitsForACatalogSyncAfterResume(t *testing.T) {
 	r, _ := newLifecycleRuntime(t)
 	startRunningModule(t, r)
 	ctx := context.Background()
-	r.syncer = &catalogSyncer{cache: r.catalog, kick: make(chan struct{}, 1), now: time.Now}
+	client := &gatedCatalogClient{release: make(chan struct{}), started: make(chan struct{}, 2)}
+	r.syncer = &catalogSyncer{client: client, cache: r.catalog, kick: make(chan struct{}, 1), now: time.Now}
+
+	// 暂停前发出一个请求，响应被卡住。
+	oldDone := make(chan error, 1)
+	go func() { oldDone <- r.syncer.SyncOnce(ctx) }()
+	<-client.started
 
 	_, err := r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
 	require.NoError(t, err)
@@ -177,8 +183,11 @@ func TestCatchupWaitsForACatalogSyncAfterResume(t *testing.T) {
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: lifecycle.Ref{}, ManualRelease: true})
 	require.NoError(t, err)
 
-	require.NotEmpty(t, r.catchupPrecondition("ftask_a"))
-	require.False(t, r.catchupGate("ftask_a"), "恢复之后还没同步过目录：追赶不写")
+	// 旧响应在恢复之后才到达并被应用：不能满足前置条件。
+	client.release <- struct{}{}
+	require.NoError(t, <-oldDone)
+	require.NotEmpty(t, r.catchupPrecondition("ftask_a"), "恢复前发出的请求，响应晚到也不算")
+	require.False(t, r.catchupGate("ftask_a"))
 	require.NotEmpty(t, r.lifecycleStatus().CatchupBlocked)
 	select {
 	case <-r.syncer.kick:
@@ -186,13 +195,48 @@ func TestCatchupWaitsForACatalogSyncAfterResume(t *testing.T) {
 		t.Fatal("恢复时应请求一次目录同步")
 	}
 
-	// 恢复之后同步成功（未变化也算）：放行追赶。
+	// 恢复之后发出的请求成功：放行追赶。
 	time.Sleep(5 * time.Millisecond)
-	_, err = r.catalog.Apply(CatalogSnapshot{NotModified: true})
-	require.NoError(t, err)
+	go func() { client.release <- struct{}{} }()
+	require.NoError(t, r.syncer.SyncOnce(ctx))
 	require.Empty(t, r.catchupPrecondition("ftask_a"))
 	require.True(t, r.catchupGate("ftask_a"))
 	require.Empty(t, r.lifecycleStatus().CatchupBlocked)
+}
+
+// gatedCatalogClient 的 SyncCatalog 发出请求后等 release，用来构造“响应晚到”。
+type gatedCatalogClient struct {
+	release chan struct{}
+	started chan struct{}
+}
+
+func (g *gatedCatalogClient) SyncCatalog(ctx context.Context, _ string) (CatalogSnapshot, error) {
+	g.started <- struct{}{}
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return CatalogSnapshot{}, ctx.Err()
+	}
+	return CatalogSnapshot{NotModified: true}, nil
+}
+
+// 模块暂停期间，任务级 resume --force 不再放开追赶写（否则已上报收敛的模块会重新开始写结果）。
+func TestPausedModuleKeepsCatchupClosedEvenForForcedTasks(t *testing.T) {
+	r, _ := newLifecycleRuntime(t)
+	startRunningModule(t, r)
+	ctx := context.Background()
+	_, err := r.life.Command(ctx, lifecycle.CmdPause, setRef("ftask_a"))
+	require.NoError(t, err)
+	_, err = r.life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	require.NoError(t, err)
+	require.True(t, r.life.Snapshot().Self.Quiesced())
+	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: setRef("ftask_a"), Force: true})
+	require.NoError(t, err)
+	require.Equal(t, lifecycle.StageResuming, r.life.Stage(setRef("ftask_a")))
+	require.True(t, r.life.CatchupAllowed(setRef("ftask_a")), "生命周期本身允许强制放行的任务追赶")
+	require.False(t, r.catchupGate("ftask_a"), "引擎在模块暂停期间一律不放行追赶写")
+	_, ok := r.beginWrite(ctx, "ftask_a", true, true)
+	require.False(t, ok)
 }
 
 // 上报的状态与未暂停时：没有收敛证据。

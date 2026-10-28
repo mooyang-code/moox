@@ -244,7 +244,7 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if source == nil {
 		return pipeline.Outcome{}, errors.New("recalc selection source is required")
 	}
-	// 先在锁外取一次，只为知道要锁哪个任务；真正使用的选择在锁内重读。
+	// 先在锁外取一次，只为知道要锁哪个任务；真正使用的选择在登记在途之后重读。
 	probe, err := source(ctx)
 	if err != nil {
 		return pipeline.Outcome{}, err
@@ -257,6 +257,13 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if err := ctx.Err(); err != nil {
 		return pipeline.Outcome{}, err
 	}
+	// 先登记在途并检查门禁，再读取任务的定义与标的：读取之后才暂停的，暂停会等这次写入结束；
+	// 读取在门禁检查之前发生的话，暂停、切换版本、恢复都可能夹在读取与写入之间，写出用旧定义算的结果。
+	release, ok := e.enter(ctx, probe.Set.TaskID)
+	if !ok {
+		return pipeline.Outcome{}, ErrGated
+	}
+	defer release()
 	selection, err := source(ctx)
 	if err != nil {
 		return pipeline.Outcome{}, err
@@ -264,11 +271,6 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if len(selection.Subjects) == 0 {
 		return pipeline.Outcome{}, nil
 	}
-	release, ok := e.enter(ctx, selection.Set.TaskID)
-	if !ok {
-		return pipeline.Outcome{}, ErrGated
-	}
-	defer release()
 	outcome, runErr := e.runSegments(ctx, selection, start, end)
 	if after != nil {
 		after(selection, outcome, runErr)
@@ -318,6 +320,12 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err := ctx.Err(); err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
+	// 先登记在途并检查门禁，再读取定义与标的（理由同 Run）。
+	release, ok := e.enter(ctx, selection.Set.TaskID)
+	if !ok {
+		return time.Time{}, pipeline.Outcome{}, false, ErrGated
+	}
+	defer release()
 	// The selection may have changed while waiting for the lock (a member was
 	// disabled or the job cancelled), so it is consulted again under the lock.
 	selection, err = source(ctx)
@@ -332,11 +340,6 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
-	release, ok := e.enter(ctx, selection.Set.TaskID)
-	if !ok {
-		return time.Time{}, pipeline.Outcome{}, false, ErrGated
-	}
-	defer release()
 	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
 	duration, err := e.duration(selection.Set)
 	if err != nil {

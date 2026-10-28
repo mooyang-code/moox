@@ -196,6 +196,15 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 					return pipeline.Outcome{}, nil
 				}
 				defer release()
+				// 任务与成员在入队之前取得，排队期间可能暂停、切换版本又恢复：登记之后按目录当前的内容重新取一次，
+				// 不能用跨过暂停的旧快照写结果。
+				if fresh, found, lookupErr := h.sets.EnabledTask(runnerCtx, set.TaskID); lookupErr != nil {
+					return pipeline.Outcome{}, fmt.Errorf("%w: reload factor task %s: %v", storageio.ErrInfra, set.TaskID, lookupErr)
+				} else if !found {
+					return pipeline.Outcome{}, nil
+				} else {
+					set, members = fresh.Set, fresh.Members
+				}
 				if h.continuity != nil {
 					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, set, members, event)
 				}

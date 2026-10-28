@@ -85,13 +85,15 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	if l.pulling != nil {
 		done = l.pulling()
 	}
-	if l.leaseAllowed != nil && !l.leaseAllowed() {
-		done()
-		return false, nil
-	}
+	// 先读代次、再查门禁：两次读取之间暂停了，代次是旧的，领取回来的作业之后任何写入都会因代次不符被拒绝；
+	// 反过来（先查门禁再读代次）会把新代次盖在一个暂停前发出的领取请求上。
 	var generation uint64
 	if l.generation != nil {
 		generation = l.generation()
+	}
+	if l.leaseAllowed != nil && !l.leaseAllowed() {
+		done()
+		return false, nil
 	}
 	job, found, err := l.client.PullRecalcJob(ctx)
 	// 领取返回就注销在途登记：作业此后的写入由分块各自登记，领取到的作业再由代次判断是否仍然有效。

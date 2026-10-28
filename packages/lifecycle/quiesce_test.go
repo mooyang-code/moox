@@ -149,3 +149,62 @@ func TestModuleGenerationAdvancesOnEachClose(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, g1+1, c.ModuleGeneration())
 }
+
+// 等待是针对某一轮暂停做的：上一轮的等待结果在期间恢复又暂停之后，不能把下一轮误报为已收敛。
+func TestLateQuiesceOfAnEarlierRoundDoesNotConfirmTheNextRound(t *testing.T) {
+	f := newFake()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	round := 0
+	hooks := f.hooks()
+	hooks.Quiesce = func(ctx context.Context, _ Ref) error {
+		round++
+		if round == 1 {
+			close(entered)
+			<-release // 第一轮的等待被卡住
+			return nil
+		}
+		return errors.New("第二轮还有在途操作")
+	}
+	c, err := New(Options{Module: "m", Hooks: hooks, QuiesceTimeout: time.Minute})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+
+	first := make(chan error, 1)
+	go func() { _, err := c.Command(ctx, CmdPause, Ref{}); first <- err }()
+	<-entered
+	_, err = c.Command(ctx, CmdResume, Ref{})
+	require.NoError(t, err)
+	c.Refresh(ctx)
+	_, err = c.Command(ctx, CmdPause, Ref{})
+	require.Error(t, err, "第二轮收敛超时")
+	require.False(t, c.Snapshot().Self.Quiesced())
+
+	close(release)
+	require.NoError(t, <-first)
+	require.False(t, c.Snapshot().Self.Quiesced(), "第一轮迟到的等待结果不能确认第二轮")
+	require.True(t, c.Snapshot().Self.QuiescedAt.IsZero())
+}
+
+// 重启后待恢复的暂停（启动前检查还没通过）仍算被有意停下，写路径不能因此放开。
+func TestHaltedStaysTrueForARestoredPauseAwaitingChecks(t *testing.T) {
+	f := newFake()
+	state := filepath.Join(t.TempDir(), "life.json")
+	c, err := New(Options{Module: "m", StateFile: state, Hooks: f.hooks()})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+	_, err = c.Command(ctx, CmdPause, Ref{})
+	require.NoError(t, err)
+
+	// 重启后模块自身的检查暂时不过：控制器是“未就绪、待恢复暂停”。
+	f.mu.Lock()
+	f.module = []Check{fail("依赖", "暂不可用")}
+	f.mu.Unlock()
+	again, err := New(Options{Module: "m", StateFile: state, Hooks: f.hooks()})
+	require.NoError(t, err)
+	again.Refresh(ctx)
+	require.Equal(t, StageNotReady, again.Stage(Ref{}))
+	require.True(t, again.Halted(Ref{}), "待恢复的暂停仍然是被有意停下")
+}

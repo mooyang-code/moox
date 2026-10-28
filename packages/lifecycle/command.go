@@ -87,13 +87,14 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 	return Object{}, fmt.Errorf("未知命令 %q", req.Command)
 }
 
-// markQuiesced 写入收敛时间并返回更新后的对象；暂停已被其他命令改变（例如已恢复）时不写。
+// markQuiesced 写入收敛时间并返回更新后的对象。等待是针对 obj 所属的那一轮暂停做的：期间恢复过、又暂停过（新的一轮有新的
+// 暂停详情）时不写，否则上一轮的等待结果会把还没收敛的下一轮误报为已收敛。
 func (c *Controller) markQuiesced(ref Ref, obj Object) Object {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	r := c.recordFor(ref)
-	if r.Stage != StagePaused {
-		return obj
+	if r.Stage != StagePaused || r.Pause == nil || r.Pause != obj.Pause {
+		return c.object(r)
 	}
 	r.QuiescedAt = c.opts.Now().UTC()
 	_ = c.save()

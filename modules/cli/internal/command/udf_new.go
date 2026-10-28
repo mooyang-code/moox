@@ -105,7 +105,7 @@ func runUdfNew(out io.Writer, opts udfNewOptions) error {
 	}
 	fmt.Fprintf(out, "下一步：编辑 udfs/%s/src/lib.rs、udf.toml 与 tests/fixtures，然后 moox-cli udf build %s\n", opts.Name, opts.Name)
 	if newWorkspace {
-		fmt.Fprintln(out, "提示：先 git init 并提交；cargo generate-lockfile 已在 build 时按需执行，Cargo.lock 也要提交（build 使用 --locked）。")
+		fmt.Fprintln(out, "提示：先 git init 并提交；Cargo.lock 已生成，要一并提交（build 使用 --locked）。")
 	}
 	return nil
 }
