@@ -2,7 +2,6 @@ package configinit
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -204,25 +203,11 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 		}
 		return report, nil
 	}
-	current, err := readConfigFile(path)
+	backup, err := sealAndReplace(path, raw, migrated, opts.Keys, opts.Now)
 	if err != nil {
-		return report, err
-	}
-	if sha256.Sum256(current) != sha256.Sum256(raw) {
-		return report, errors.New("moox.toml 在迁移过程中被改动过，未写回；请重新运行")
-	}
-	backup := fmt.Sprintf("%s.bak-%s", path, opts.Now().Format("20060102150405"))
-	if err := writeExclusive(backup, raw); err != nil {
 		return report, err
 	}
 	report.Backup = backup
-	sealed, err := configcrypt.Encrypt(migrated, opts.Keys)
-	if err != nil {
-		return report, fmt.Errorf("加密失败：%w", err)
-	}
-	if err := replaceFile(path, sealed); err != nil {
-		return report, err
-	}
 	report.Written = true
 	report.NextAction = "运行一次 moox-cli config backup 更新管理后台的备份"
 	return report, nil

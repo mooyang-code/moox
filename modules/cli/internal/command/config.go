@@ -18,6 +18,6 @@ config backup 把配置用管理员密码加密备份到管理后台，config re
 config notification 对比 moox.toml 与 Monitor 的告警渠道（唯一来源），确认后写入 Monitor，并显示各主机策略缓存的版本。`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigMigrateCommand(), newConfigBackupCommand(), newConfigRestoreCommand(), newConfigNotificationCommand(defaultNotificationDeps()))
+	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigMigrateCommand(), newConfigGetCommand(), newConfigSetCommand(), newConfigBackupCommand(), newConfigRestoreCommand(), newConfigNotificationCommand(defaultNotificationDeps()))
 	return cmd
 }
