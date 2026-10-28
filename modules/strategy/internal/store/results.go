@@ -345,6 +345,19 @@ func (s *Store) LatestOk(ctx context.Context, instanceID, sessionID string) (Res
 	return row.result(), true, nil
 }
 
+// LatestState 返回本会话最近一条带规则状态的记录：ok 决策，以及迟到周期（追赶、有效期已过）只推进状态的 skipped 记录。
+// 其他 skipped 记录的规则状态是空对象，不参与。规则状态从它恢复，状态才不会因为跳过的周期而缺口。
+func (s *Store) LatestState(ctx context.Context, instanceID, sessionID string) (Result, bool, error) {
+	var row resultRow
+	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_rule_states_json <> '{}' ORDER BY c_bar_end_time DESC LIMIT 1`, instanceID, sessionID).Scan(&row).Error; err != nil {
+		return Result{}, false, err
+	}
+	if row.ResultID == "" {
+		return Result{}, false, nil
+	}
+	return row.result(), true, nil
+}
+
 // LatestBarEnds 返回实例（不分会话）最近处理的一根与最近一个 ok 的一根的 bar_end；没有记录时为零值。Monitor 的
 // 期望间隔以它们为基准，进程重启或重新启用后从库里恢复，而不是退回偏宽或偏紧的估计。
 func (s *Store) LatestBarEnds(ctx context.Context, instanceID string) (processed, ok time.Time, err error) {

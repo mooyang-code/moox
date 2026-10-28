@@ -22,6 +22,7 @@ import (
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -87,6 +88,10 @@ type Service struct {
 	appliedDirty     bool
 	// seriesBars 是时序 View 每个序列保留的根数，随查询响应告知调用方。
 	seriesBars uint64
+	// maxAge 是 View 按空间 × 频率的最长保留历史，超期的行不写入；maxAgeEnabled 为假时不限制。now 只供测试替换时钟。
+	maxAge        storagepolicy.Retention
+	maxAgeEnabled bool
+	now           func() time.Time
 }
 
 type pendingRebuildLog struct {
@@ -462,6 +467,10 @@ func (s *Service) writeIndex(ctx context.Context, indexID string, engine viewind
 	defer release()
 	if wait := time.Since(gateStart); wait >= 100*time.Millisecond {
 		log.Printf("storage view 索引写入闸门等待较久 index=%s 等待=%s", indexID, wait.Round(time.Millisecond))
+	}
+	// 所有写入路径（实时事件、补采、重建回填）都经过这里，统一丢弃超过最长保留期的行。
+	if batch.RowWrites = s.dropExpiredWrites(indexID, batch.RowWrites); len(batch.RowWrites) == 0 {
+		return nil
 	}
 	if err := engine.Write(ctx, indexID, batch); err != nil {
 		return err

@@ -17,6 +17,8 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	for _, id := range sets.available {
 		availableSet[id] = struct{}{}
 	}
+	stops := newStopTracker(rule, frame, previous)
+	entries := make(map[string]StopEntry)
 	heldBefore := make(map[string]struct{}, len(previous.Held))
 	held := make([]string, 0, len(previous.Held)+len(sets.available))
 	// 冻结的持仓（因 K 线空洞缺数）不判 exit、不参与平分，但仍记在理论持仓里，保持结束后照常延续。
@@ -25,7 +27,19 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 		heldBefore[id] = struct{}{}
 		if _, isFrozen := sets.frozen[id]; isFrozen {
 			frozenHeld = append(frozenHeld, id)
+			if entry, ok := previous.Entries[id]; ok {
+				entries[id] = entry
+			}
 			continue
+		}
+		// 止损等同 exit，先于 exit 判断；只看价格，exit 的输入缺失不影响（设计 4.2）。
+		if entry, ok := previous.Entries[id]; ok && stops != nil {
+			updated, hit := stops.check(id, entry)
+			if hit {
+				result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageStopped, Reason: stops.stopped[id]})
+				continue
+			}
+			entries[id] = updated
 		}
 		if _, ok := availableSet[id]; !ok {
 			// exit 输入缺失的持仓按清仓处理；明细已由集合划分记录为 missing。
@@ -43,6 +57,10 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	}
 	for _, id := range sets.available {
 		if _, was := heldBefore[id]; was {
+			continue
+		}
+		if stops.excluded(id) {
+			result.items = append(result.items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageDropped, Reason: reasonCooldown})
 			continue
 		}
 		entry, err := runBool(rule.Entry, id, frame.Rows[id], 0)
@@ -79,5 +97,20 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	result.weights = weights
 	result.state.Held = append(append([]string(nil), held...), frozenHeld...)
 	sort.Strings(result.state.Held)
+	if stops != nil {
+		state := make(map[string]StopEntry, len(result.state.Held))
+		for _, id := range result.state.Held {
+			if entry, ok := entries[id]; ok {
+				state[id] = entry
+			} else if entry, ok := stops.open(id); ok {
+				state[id] = entry
+			}
+		}
+		if len(state) > 0 {
+			result.state.Entries = state
+		}
+		result.state.Cooldown = stops.cooldownState()
+		result.stops = stops.counts
+	}
 	return result, nil
 }

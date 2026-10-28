@@ -12,17 +12,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// maxDSLBytes 是 DSL 文本的大小上限；含 f1 参数表的 DSL 放宽到 maxF1DSLBytes。
+// maxDSLBytes 是 DSL 文本的大小上限；含 tranche 参数表的 DSL 放宽到 maxTrancheDSLBytes。
 const (
-	maxDSLBytes   = 64 << 10
-	maxF1DSLBytes = 1 << 20
+	maxDSLBytes        = 64 << 10
+	maxTrancheDSLBytes = 1 << 20
 )
 
 // Parse 解析并校验一份 DSL。解析经由 yaml.Node 完成：拒绝重复键、未知字段和多文档，
 // 让配置错误在保存时就暴露，而不是等到求值。
 func Parse(raw []byte) (Strategy, error) {
-	if len(raw) > maxF1DSLBytes {
-		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（含 f1 参数表时）", maxF1DSLBytes>>10)
+	if len(raw) > maxTrancheDSLBytes {
+		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（含 tranche 参数表时）", maxTrancheDSLBytes>>10)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	var document yaml.Node
@@ -46,8 +46,8 @@ func Parse(raw []byte) (Strategy, error) {
 	if err != nil {
 		return Strategy{}, err
 	}
-	if len(raw) > maxDSLBytes && !strategy.hasF1Params() {
-		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（只有含 f1 参数表时放宽到 %d KiB）", maxDSLBytes>>10, maxF1DSLBytes>>10)
+	if len(raw) > maxDSLBytes && !strategy.hasTrancheParams() {
+		return Strategy{}, fmt.Errorf("策略 DSL 超过 %d KiB 上限（只有含 tranche 参数表时放宽到 %d KiB）", maxDSLBytes>>10, maxTrancheDSLBytes>>10)
 	}
 	if err := Validate(&strategy); err != nil {
 		return Strategy{}, err
@@ -278,10 +278,14 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			var holding Holding
 			holding, err = decodeHolding(f.value, fieldPath)
 			rule.Holding = &holding
-		case "f1":
-			err = decodeF1(f.value, fieldPath, &rule)
+		case "stop":
+			rule.Stop, err = decodeStop(f.value, fieldPath)
+		case "candidates":
+			err = decodeTrancheCandidates(f.value, fieldPath, &rule)
+		case "tranche":
+			err = decodeTranche(f.value, fieldPath, &rule)
 		case "params":
-			err = decodeF1Params(f.value, fieldPath, &rule)
+			err = decodeTrancheParams(f.value, fieldPath, &rule)
 		default:
 			return Rule{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}

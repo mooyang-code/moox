@@ -185,3 +185,13 @@ CREATE TABLE IF NOT EXISTS t_strategy_display_settings (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id) ON DELETE CASCADE
 );
+
+-- 策略模板：命名的 DSL 骨架、变量定义与参数表样例行（YAML 原文）。只用于生成策略 DSL，生成的策略与模板脱钩
+CREATE TABLE IF NOT EXISTS t_strategy_templates (
+    c_template_id TEXT NOT NULL PRIMARY KEY,
+    c_name TEXT NOT NULL,
+    c_description TEXT NOT NULL DEFAULT '',
+    c_template_yaml TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

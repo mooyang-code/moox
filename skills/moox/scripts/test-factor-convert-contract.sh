@@ -15,7 +15,7 @@ fail() { echo "factor convert contract: $*" >&2; exit 1; }
 "${FX}" check --library "${REPO_ROOT}/modules/factor/factors/xbx.yaml" > "${TMP}/check.jsonl"
 [[ "$(grep -c '"ok":true' "${TMP}/check.jsonl")" == 11 ]] || fail "生产因子库应当 11 个全部编译通过"
 grep -q '"factor_id":"zscore_abs_mean_q".*"lookback":358' "${TMP}/check.jsonl" || fail "zscore_abs_mean_q 的回看应按参数上限推导为 358"
-"${FX}" functions --json | python3 -c 'import json,sys; names={f["name"] for f in json.load(sys.stdin)}; assert {"ts_mean","cs_rank","where","ema","ema_partial","ts_mean_partial"} <= names'
+"${FX}" functions --json | python3 -c 'import json,sys; names={f["name"] for f in json.load(sys.stdin)}; assert {"ts_mean","cs_rank","where","ema","ema_relaxed","ts_mean_relaxed"} <= names'
 
 # factor-dsl.md 第 4 节 rolling().apply(内置函数) 对照表里的写法都要能编译（逐值等价性已在文档里记录过核对结果）
 cat > "${TMP}/apply.yaml" <<'EOF'

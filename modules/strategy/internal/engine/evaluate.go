@@ -36,8 +36,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 	for i := range program.Rules {
 		rule := &program.Rules[i]
 		var sets ruleSets
-		if rule.Rule.Type == dsl.RuleTypeF1 {
-			sets = partitionF1(rule, frame, previous.Rules[rule.Rule.ID].Held)
+		if rule.Rule.Type == dsl.RuleTypeTranche {
+			sets = partitionTranche(rule, frame, previous.Rules[rule.Rule.ID].Held)
 		} else {
 			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen)
 		}
@@ -77,8 +77,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		case dsl.RuleTypeSignal:
 			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
-		case dsl.RuleTypeF1:
-			result, err = evaluateF1(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+		case dsl.RuleTypeTranche:
+			result, err = evaluateTranche(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		default:
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
@@ -97,16 +97,42 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		summary := decision.Summary.Rules[rule.Rule.ID]
 		summary.Filtered, summary.Scored, summary.Selected, summary.Weighted = result.filtered, result.scored, result.selected, len(result.weights)
 		summary.Allocated = allocated.String()
+		summary.StopLoss, summary.TrailingStop, summary.TakeProfit = result.stops[reasonStopLoss], result.stops[reasonTrailingStop], result.stops[reasonTakeProfit]
 		decision.Summary.Rules[rule.Rule.ID] = summary
 		decision.State.Rules[rule.Rule.ID] = result.state
 		decision.Summary.Notes = append(decision.Summary.Notes, result.notes...)
-		decision.Items = append(decision.Items, result.items...)
+		decision.Items = mergeStopItems(decision.Items, result.items)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
 	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, frozen, previous, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision
+}
+
+// mergeStopItems 追加规则的求值明细。止损的标的可能已经有集合划分给出的明细（例如 signal 持仓的 exit 因子缺失、
+// 但 close 已达止损线）：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
+func mergeStopItems(items, ruleItems []Item) []Item {
+	var index map[string]int
+	for _, item := range ruleItems {
+		if item.Stage == StageStopped {
+			if index == nil {
+				index = make(map[string]int, len(items))
+				for i, existing := range items {
+					index[existing.RuleID+"\x00"+existing.InstrumentID] = i
+				}
+			}
+			if at, ok := index[item.RuleID+"\x00"+item.InstrumentID]; ok {
+				if items[at].Reason != "" {
+					item.Reason += ";" + items[at].Reason
+				}
+				items[at] = item
+				continue
+			}
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 // skipped 把决策改为跳过：无目标、状态沿用前序，并追加说明。
@@ -127,7 +153,7 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 // too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。
 func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
 	denominator := len(sets.expected) - len(sets.agedOut)
-	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeF1) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
+	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeTranche) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
 		return SkipUniverseTooSmall
 	}
 	// 冻结（保持持仓）的标的仍计入缺数比例：保护中的标的不能伪装成可用。

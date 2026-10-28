@@ -135,7 +135,10 @@ moox-cli storage force-rebuild-view \
 
 确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
 删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
-重新消费 Source 事件；原 View 历史数据不可恢复。重建按 `view_rows_per_series` 从 Primary 回填每个序列最近的
+重新消费 Source 事件；原 View 历史数据不可恢复。
+**新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要提醒内存风险**：`storage-view` 没有进程级内存上限，
+常驻约为全部 View 索引文件之和的 2.5～3 倍（线上 2026-10-28：文件 2.7GB → 常驻 7.8GB，主机 15.5GB），重建/回填时最大索引再加 1～1.5 倍。
+按“标的数 × `view_rows_per_series` 行、约 100～150 字节/行”估算新增文件大小，用 `docs/部署与运维.md`“Storage 主机内存要求”的公式核对余量；余量不足先升配或缩小 View，不要靠调大单索引内存上限。重建按 `view_rows_per_series` 从 Primary 回填每个序列最近的
 K 线，历史不足时以现有数据激活。
 
 ## 下线单个 View

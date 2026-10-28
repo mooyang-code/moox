@@ -85,7 +85,7 @@ export interface DSLRulePreview {
   id: string;
   name: string;
   type: string;
-  /** f1 规则展开后的子策略数（参数表行数，没有参数表时为 1）；其他类型为 0。 */
+  /** tranche 规则展开后的子策略数（参数表行数，没有参数表时为 1）；其他类型为 0。 */
   subStrategies: number;
 }
 
@@ -121,14 +121,14 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       const id = typeof rule?.id === "string" ? rule.id : "";
       const type = typeof rule?.type === "string" ? rule.type : "";
       if (!id) diagnostics.push({ message: `rules[${index}] 缺少 id` });
-      if (type !== "rank" && type !== "signal" && type !== "f1")
-        diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank、signal 或 f1` });
+      if (type !== "rank" && type !== "signal" && type !== "tranche")
+        diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank、signal 或 tranche` });
       const rows = rule?.params?.rows;
-      const subStrategies = type === "f1" ? (Array.isArray(rows) ? rows.length : 1) : 0;
+      const subStrategies = type === "tranche" ? (Array.isArray(rows) ? rows.length : 1) : 0;
       rules.push({ id: id || `#${index + 1}`, name: typeof rule?.name === "string" ? rule.name : "", type, subStrategies });
     });
-    if (rules.some(rule => rule.type === "f1") && rules.some(rule => rule.type !== "f1"))
-      diagnostics.push({ message: "含 f1 规则的策略只能全部是 f1 规则" });
+    if (rules.some(rule => rule.type === "tranche") && rules.some(rule => rule.type !== "tranche"))
+      diagnostics.push({ message: "含 tranche 规则的策略只能全部是 tranche 规则" });
   }
   const universe = value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的";
   return {
@@ -160,7 +160,10 @@ export function summarizeDSL(source: string): string {
   if (!preview) return "DSL 无法解析";
   if (!preview.rules.length) return "DSL 没有规则";
   const rules = preview.rules
-    .map(rule => `${rule.name || rule.id}（${rule.type === "f1" ? `f1，${rule.subStrategies} 个子策略` : rule.type || "?"}）`)
+    .map(
+      rule =>
+        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}）`
+    )
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }

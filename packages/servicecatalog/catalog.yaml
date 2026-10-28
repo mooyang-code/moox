@@ -1223,6 +1223,11 @@ components:
           - CancelReplay
           - GetStrategyDisplaySettings
           - SetStrategyDisplaySettings
+          - ListStrategyTemplates
+          - GetStrategyTemplate
+          - SaveStrategyTemplate
+          - DeleteStrategyTemplate
+          - RenderStrategyTemplate
         read_only_methods:
           - GetStrategy
           - ListStrategies
@@ -1236,6 +1241,9 @@ components:
           - ListReplays
           - ListReplayBars
           - GetStrategyDisplaySettings
+          - ListStrategyTemplates
+          - GetStrategyTemplate
+          - RenderStrategyTemplate
         acl:
           - methods:
               - CreateStrategy
@@ -1259,6 +1267,11 @@ components:
               - CancelReplay
               - GetStrategyDisplaySettings
               - SetStrategyDisplaySettings
+              - ListStrategyTemplates
+              - GetStrategyTemplate
+              - SaveStrategyTemplate
+              - DeleteStrategyTemplate
+              - RenderStrategyTemplate
             callers:
               - console
               - moox-cli

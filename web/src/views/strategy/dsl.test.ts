@@ -20,7 +20,9 @@ describe("strategy DSL preview", () => {
     expect(parseDSL("name: a\nrules: {rank: {}}\n").diagnostics.map(item => item.message)).toContain(
       "rules 必须是非空列表，每条规则包含 id 与 type"
     );
-    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain("rank、signal 或 f1");
+    expect(parseDSL("name: a\nrules:\n  - id: r\n    type: ranked\n").diagnostics[0].message).toContain(
+      "rank、signal 或 tranche"
+    );
     expect(parseDSL("name: [").preview).toBeNull();
   });
 
@@ -50,13 +52,13 @@ describe("tuned template", () => {
   });
 });
 
-describe("f1 rules", () => {
-  const f1 = `name: f1_demo
+describe("tranche rules", () => {
+  const tranche = `name: tranche_demo
 rules:
   - id: demo
-    type: f1
+    type: tranche
     weight: {total: 1}
-    f1:
+    tranche:
       hold_period: "{h}"
       long_factors: [{factor: "po__{s}"}]
     params:
@@ -65,18 +67,18 @@ rules:
         - [1, 49]
         - [3, 65]
 `;
-  it("accepts f1 rules and counts sub-strategies", () => {
-    const result = parseDSL(f1);
+  it("accepts tranche rules and counts sub-strategies", () => {
+    const result = parseDSL(tranche);
     expect(result.diagnostics).toEqual([]);
-    expect(result.preview?.rules[0]).toMatchObject({ id: "demo", type: "f1", subStrategies: 2 });
-    expect(summarizeDSL(f1)).toContain("f1，2 个子策略");
+    expect(result.preview?.rules[0]).toMatchObject({ id: "demo", type: "tranche", subStrategies: 2 });
+    expect(summarizeDSL(tranche)).toContain("tranche，2 个子策略");
   });
-  it("rejects mixing f1 with other rule types", () => {
+  it("rejects mixing tranche with other rule types", () => {
     const mixed =
-      f1 +
+      tranche +
       `  - id: other
     type: rank
 `;
-    expect(parseDSL(mixed).diagnostics.map(item => item.message)).toContain("含 f1 规则的策略只能全部是 f1 规则");
+    expect(parseDSL(mixed).diagnostics.map(item => item.message)).toContain("含 tranche 规则的策略只能全部是 tranche 规则");
   });
 });

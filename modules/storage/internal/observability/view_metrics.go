@@ -51,6 +51,7 @@ type ViewMetrics struct {
 	now                              func() time.Time
 	viewSubjects                     *viewSubjectTracker
 	readyPublishRetry                *prometheus.CounterVec
+	expiredRowsDropped               *prometheus.CounterVec
 	readyQueuePending                prometheus.Gauge
 	readyQueueOldestAge              prometheus.GaugeFunc
 	readyPublishBackoff              prometheus.Gauge
@@ -264,6 +265,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
 			Help: "View source/result ready event publishes that need retry.",
 		}, []string{"view", "event"}),
+		expiredRowsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "expired_rows_dropped_total",
+			Help: "Rows not written to a View because data_time is older than the maximum View age of its frequency.",
+		}, []string{"space", "freq"}),
 		readyQueuePending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_pending",
 			Help: "View ready events waiting to be published.",
@@ -435,6 +440,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.readyPublishRetry, err = registerOrReuse(registerer, metrics.readyPublishRetry); err != nil {
 		return nil, err
 	}
+	if metrics.expiredRowsDropped, err = registerOrReuse(registerer, metrics.expiredRowsDropped); err != nil {
+		return nil, err
+	}
 	if metrics.readyQueuePending, err = registerOrReuse(registerer, metrics.readyQueuePending); err != nil {
 		return nil, err
 	}
@@ -583,6 +591,14 @@ func (m *ViewMetrics) ObserveReadyPublishRetry(view, event string) {
 		return
 	}
 	m.readyPublishRetry.WithLabelValues(view, event).Inc()
+}
+
+// ObserveViewExpiredRowsDropped 累计因超过最长保留期而未写入 View 的行数。
+func (m *ViewMetrics) ObserveViewExpiredRowsDropped(space, freq string, rows int) {
+	if m == nil || rows <= 0 {
+		return
+	}
+	m.expiredRowsDropped.WithLabelValues(space, freq).Add(float64(rows))
 }
 
 // SetReadyQueue 记录就绪队列的深度与最老事件的时间（队列为空时 oldest 为零值）。
