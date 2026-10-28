@@ -59,6 +59,9 @@ type Retention struct {
 
 // View holds the View maintenance limits.
 type View struct {
+	// MaxAge 是 View 按空间 × 频率保留的最长历史：data_time 早于“当前时间 − 最长保留期”的行不写入 View，
+	// 补采、导入和因子历史重算带来的旧行同样丢弃。Dataset 与因子本地存储不受影响。
+	MaxAge Retention `json:"max_age"`
 	// Bars is the number of most recent bars a series View keeps.
 	Bars uint64 `json:"bars"`
 	// TrimBars is the per-series count above which a View is trimmed back to
@@ -188,6 +191,7 @@ func Default() Policy {
 			},
 		},
 		View: View{
+			MaxAge:                   defaultViewMaxAge(),
 			Bars:                     DefaultViewBars,
 			TrimBars:                 TrimBarsFor(DefaultViewBars),
 			MaintenanceCheckInterval: "1m",
@@ -203,13 +207,36 @@ func Default() Policy {
 	return normalized
 }
 
+// defaultViewMaxAge 是 View 最长保留期的推荐值：恰好装下 DefaultViewBars 根（7×24 市场精确，交易时段市场按日历估算），
+// 与 Dataset 保留期的区别只是 1m 不必留到因子的最大回看（35d），View 只服务截面与展示。
+func defaultViewMaxAge() Retention {
+	sessionMarket := func(minute string) map[string]string {
+		return map[string]string{
+			"1m": minute, "5m": "300d", "15m": "900d",
+			"30m": Forever, "1h": Forever, "4h": Forever,
+		}
+	}
+	return Retention{
+		Defaults: map[string]string{
+			"30s": "90h", "1m": "7d", "5m": "35d", "15m": "105d", "30m": "210d",
+			"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
+		},
+		Spaces: map[string]map[string]string{
+			"stockcn": sessionMarket("60d"),
+			"stockhk": sessionMarket("45d"),
+			"stockus": sessionMarket("40d"),
+			"mooxsys": {"30s": "48h", "1m": "7d"},
+		},
+	}
+}
+
 // Validate reports whether the policy is complete and within limits.
 func (p Policy) Validate() error {
 	_, err := p.normalized()
 	return err
 }
 
-// Coverage checks whether retention can supply view.bars. Defaults and 7×24
+// Coverage checks whether retention and view.max_age can supply view.bars. Defaults and 7×24
 // markets have a deterministic rate; session markets are calendar estimates
 // and produce warnings rather than rejecting an otherwise valid policy.
 func (p Policy) Coverage() (errs, warnings []string) {
@@ -233,23 +260,27 @@ func (p Policy) Coverage() (errs, warnings []string) {
 			errs = append(errs, message)
 		}
 	}
-	for _, freq := range sortedKeys(normalized.Retention.Defaults) {
-		check("retention.defaults."+freq, normalized.Retention.Defaults[freq], freq, "")
-	}
-	spaces := make([]string, 0, len(normalized.Retention.Spaces))
-	for space := range normalized.Retention.Spaces {
-		spaces = append(spaces, space)
-	}
-	sort.Strings(spaces)
-	for _, space := range spaces {
-		// 系统数据空间（主机资源历史）的保留期独立于 K 线：只保留短期供排障，不要求装满 View 的根数。
-		if space == systemSpace {
-			continue
+	checkAll := func(prefix string, retention Retention) {
+		for _, freq := range sortedKeys(retention.Defaults) {
+			check(prefix+".defaults."+freq, retention.Defaults[freq], freq, "")
 		}
-		for _, freq := range sortedKeys(normalized.Retention.Spaces[space]) {
-			check("retention.spaces."+space+"."+freq, normalized.Retention.Spaces[space][freq], freq, space)
+		spaces := make([]string, 0, len(retention.Spaces))
+		for space := range retention.Spaces {
+			spaces = append(spaces, space)
+		}
+		sort.Strings(spaces)
+		for _, space := range spaces {
+			// 系统数据空间（主机资源历史）的保留期独立于 K 线：只保留短期供排障，不要求装满 View 的根数。
+			if space == systemSpace {
+				continue
+			}
+			for _, freq := range sortedKeys(retention.Spaces[space]) {
+				check(prefix+".spaces."+space+"."+freq, retention.Spaces[space][freq], freq, space)
+			}
 		}
 	}
+	checkAll("retention", normalized.Retention)
+	checkAll("view.max_age", normalized.View.MaxAge)
 	return errs, warnings
 }
 
@@ -299,50 +330,57 @@ func MinRetentionFor(spaceID, freq string, bars int) Period {
 
 // normalized validates the policy and renders every period canonically.
 func (p Policy) normalized() (Policy, error) {
-	out := Policy{View: p.View, Retention: Retention{Defaults: map[string]string{}}}
+	retention, err := p.Retention.normalized("retention")
+	if err != nil {
+		return Policy{}, err
+	}
+	if err := p.View.validate(); err != nil {
+		return Policy{}, err
+	}
+	out := Policy{View: p.View, Retention: retention}
+	if out.View.MaxAge, err = p.View.MaxAge.normalized("view.max_age"); err != nil {
+		return Policy{}, err
+	}
+	return out, nil
+}
+
+// normalized 校验并把每个期限渲染成规范形式；path 是错误信息里的配置路径前缀。
+func (r Retention) normalized(path string) (Retention, error) {
+	out := Retention{Defaults: map[string]string{}}
 	for _, freq := range frequencypkg.StandardStrings() {
-		raw, ok := p.Retention.Defaults[freq]
-		if !ok {
-			return Policy{}, fmt.Errorf("retention.defaults must cover every standard frequency; %q is missing", freq)
+		if _, ok := r.Defaults[freq]; !ok {
+			return Retention{}, fmt.Errorf("%s.defaults must cover every standard frequency; %q is missing", path, freq)
 		}
-		period, err := ParsePeriod(raw)
-		if err != nil {
-			return Policy{}, fmt.Errorf("retention.defaults.%s: %w", freq, err)
-		}
-		out.Retention.Defaults[freq] = period.String()
 	}
-	for freq, raw := range p.Retention.Defaults {
+	for freq, raw := range r.Defaults {
 		if !frequencypkg.IsCanonical(freq) {
-			return Policy{}, fmt.Errorf("retention.defaults: %q is not a canonical frequency", freq)
+			return Retention{}, fmt.Errorf("%s.defaults: %q is not a canonical frequency", path, freq)
 		}
 		period, err := ParsePeriod(raw)
 		if err != nil {
-			return Policy{}, fmt.Errorf("retention.defaults.%s: %w", freq, err)
+			return Retention{}, fmt.Errorf("%s.defaults.%s: %w", path, freq, err)
 		}
-		out.Retention.Defaults[freq] = period.String()
+		out.Defaults[freq] = period.String()
 	}
-	if len(p.Retention.Spaces) > 0 {
-		out.Retention.Spaces = make(map[string]map[string]string, len(p.Retention.Spaces))
+	if len(r.Spaces) > 0 {
+		out.Spaces = make(map[string]map[string]string, len(r.Spaces))
 	}
-	for spaceID, overrides := range p.Retention.Spaces {
+	for spaceID, overrides := range r.Spaces {
 		if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(spaceID) != spaceID {
-			return Policy{}, fmt.Errorf("retention.spaces: invalid space id %q", spaceID)
+			return Retention{}, fmt.Errorf("%s.spaces: invalid space id %q", path, spaceID)
 		}
 		space := make(map[string]string, len(overrides))
 		for freq, raw := range overrides {
 			if !frequencypkg.IsCanonical(freq) {
-				return Policy{}, fmt.Errorf("retention.spaces.%s: %q is not a canonical frequency", spaceID, freq)
+				return Retention{}, fmt.Errorf("%s.spaces.%s: %q is not a canonical frequency", path, spaceID, freq)
 			}
 			period, err := ParsePeriod(raw)
 			if err != nil {
-				return Policy{}, fmt.Errorf("retention.spaces.%s.%s: %w", spaceID, freq, err)
+				return Retention{}, fmt.Errorf("%s.spaces.%s.%s: %w", path, spaceID, freq, err)
 			}
 			space[freq] = period.String()
 		}
-		out.Retention.Spaces[spaceID] = space
-	}
-	if err := p.View.validate(); err != nil {
-		return Policy{}, err
+		out.Spaces[spaceID] = space
 	}
 	return out, nil
 }
