@@ -356,6 +356,14 @@ func (r *Runtime) reclaimModules() {
 	})
 }
 
+// pinTaskModules 在一段操作期间固定任务引用的自定义算子模块（回放会话建立用），返回释放函数。
+func (r *Runtime) pinTaskModules(set domain.EngineTask) func() {
+	if r.udf == nil {
+		return func() {}
+	}
+	return r.udf.Pin(refsOfTasks([]domain.EngineTask{set}))
+}
+
 // prepareJobModules 是补算领取的入口：作业绑定的模块备齐后才执行；失败时作业报告失败，不写任何分块。
 // 返回的释放函数在作业结束时调用：执行期间这些版本即使被目录同步丢掉引用也不卸载。
 func (r *Runtime) prepareJobModules(ctx context.Context, set domain.EngineTask) (func(), error) {

@@ -54,6 +54,9 @@ type ReplayDeps struct {
 	BatchOK func() int
 	// Begin 非空时是写回的登记式门禁：先登记在途、再检查门禁；不允许时拒绝写回（暂停、恢复追赶、重置期间）。
 	Begin func(ctx context.Context, taskID string) (func(), bool)
+	// Pin 非空时在会话建立期间固定任务引用的自定义算子模块（返回释放函数）：从读取任务到会话登记之间目录可能切换版本，
+	// 没有它，这段时间里的回收会把会话马上要用的版本卸载。
+	Pin func(set domain.EngineTask) func()
 }
 
 type replayManager struct {
@@ -240,6 +243,14 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子任务 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.TaskID)
 	}
 	set.Members = CompileMembers(set.Members)
+	if m.deps.Pin != nil {
+		release := m.deps.Pin(set)
+		defer release() // 会话登记之后由会话表保留它引用的版本（udfHashes）
+		// 固定之前目录可能已经切换了版本：以固定之后的目录为准，不一致就让调用方重试。
+		if current, lookup := m.deps.Sets.SetByID(req.TaskID); lookup != SetFound || taskUDFKey(current) != taskUDFKey(set) {
+			return ReplayOpenResponse{}, http.StatusConflict, errors.New("目录刚刚发生变化（任务引用的自定义算子版本切换或任务离开目录），请重试")
+		}
+	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, err
