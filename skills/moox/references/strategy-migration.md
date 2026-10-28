@@ -253,8 +253,9 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" summary --instance <策略名
 6. **首期检查**：子策略数、签名数、选中币数符合预期；状态在 256 KB 以内。
 7. **撤回**：先停用实例，再停用任务（不能删除）。二进制用备份回滚。
 
-已在运行的因子要改定义（例如换算子名）时：被已启用成员引用的定义不能改，先停用这些成员（管理台或 `gateway call ... SetTaskMemberStatus`），
-再用 `gateway call trpc.moox.factor.FactorMgr UpdateFactor` 更新，重新启用并等预热完成；定义哈希变了的因子，引用它的策略实例要重新启用。
+已在运行的因子要改定义（例如换算子名）时：被已启用成员引用的定义不能改，先停用这些成员，再 `UpdateFactor`，重新启用并等预热完成；
+定义哈希变了的因子，引用它的策略实例要重新启用。完整流程、兼容限制（不能增删改参数与输出）和“新建因子并行切换”的替代做法见
+[factor-dsl.md](factor-dsl.md) 的“修改已有因子的定义”。
 
 ## 7. 数据获取与操作安全
 
