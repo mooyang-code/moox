@@ -299,14 +299,10 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		// 追赶中的周期统一记为 catchup（附上 readiness 的结论供排查）：它们的作用是留下因子指纹，让放行后的第一个周期有相邻记录；
 		// 追赶期的周期也求值、推进规则状态（不发目标），不然放行后的持仓状态就缺了追赶期里的变化；
 		// 因子定义变了（factor_changed）仍按原因记录，那需要人工重新启用实例。
-		detail := "恢复追赶：只记录周期，不求值、不发目标"
-		if ready.Reason != "" {
-			detail += "（" + ready.Reason + "：" + ready.Detail + "）"
-		}
 		if ready.Reason == "" {
-			return h.advanceState(ctx, p, payload, ready, store.SkipCatchup, detail)
+			return h.advanceState(ctx, p, payload, ready, store.SkipCatchup, "恢复追赶：不发目标，只推进规则状态")
 		}
-		return h.commitSkipped(ctx, p, store.SkipCatchup, detail)
+		return h.commitSkipped(ctx, p, store.SkipCatchup, "恢复追赶：只记录周期，不求值、不发目标（"+ready.Reason+"："+ready.Detail+"）")
 	}
 	if ready.Reason != "" {
 		return h.commitSkipped(ctx, p, ready.Reason, ready.Detail)
