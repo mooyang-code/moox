@@ -8,6 +8,10 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 
 replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ../archive/proto/archivegen
 
+replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
+
+replace github.com/mooyang-code/moox/packages/factorudf => ../../packages/factorudf
+
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
 replace github.com/mooyang-code/moox/packages/seriesimport => ../../packages/seriesimport
@@ -29,6 +33,9 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/archive/proto/archivegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/factorudf v0.0.0-00010101000000-000000000000
+	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000

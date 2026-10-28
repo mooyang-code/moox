@@ -1,0 +1,36 @@
+//! [[.Name]]：示例实现（滑动窗口最大值与最小值的中点）。换成你的算法。
+#![deny(unsafe_code)]
+
+use moox_udf::prelude::*;
+
+#[udf(
+    name = "[[.Name]]",
+    inputs = [x],
+    params = { n: int(2..=500) },
+    lookback = "n",
+)]
+fn [[.Name]](x: &Window, p: &[[.ParamsType]]) -> f64 {
+    let _ = p;
+    let mut lo = x.first();
+    let mut hi = x.first();
+    for v in x.iter() {
+        if v < lo {
+            lo = v;
+        }
+        if v > hi {
+            hi = v;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moox_udf::testing;
+
+    #[test]
+    fn fixtures() {
+        testing::run_fixtures(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"), __moox_udf_native);
+    }
+}

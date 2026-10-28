@@ -1,0 +1,36 @@
+# 确定性与只依赖窗口的禁用清单（moox-cli udf build 以 -D warnings 执行）。
+# NaN 的符号与负载在 wasm 里不确定，业务结果不得依赖它；融合乘加、时间、随机、线程、环境、跨调用状态一律禁用。
+disallowed-methods = [
+    { path = "f64::mul_add", reason = "融合乘加在不同平台上的舍入可能不同，确定性要求逐位一致" },
+    { path = "f64::to_bits", reason = "NaN 的位模式不可观察" },
+    { path = "f64::from_bits", reason = "NaN 的位模式不可观察" },
+    { path = "f64::copysign", reason = "NaN 的符号不可观察" },
+    { path = "f64::is_sign_negative", reason = "NaN 的符号不可观察" },
+    { path = "f64::is_sign_positive", reason = "NaN 的符号不可观察" },
+    { path = "std::time::Instant::now", reason = "不能读时间" },
+    { path = "std::time::SystemTime::now", reason = "不能读时间" },
+    { path = "std::env::var", reason = "不能读环境" },
+    { path = "std::thread::spawn", reason = "不能用线程" },
+    { path = "std::collections::HashMap::iter", reason = "HashMap 遍历顺序不确定，需要有序遍历用 BTreeMap" },
+    { path = "std::collections::HashMap::iter_mut", reason = "HashMap 遍历顺序不确定，需要有序遍历用 BTreeMap" },
+    { path = "std::collections::HashMap::keys", reason = "HashMap 遍历顺序不确定，需要有序遍历用 BTreeMap" },
+    { path = "std::collections::HashMap::values", reason = "HashMap 遍历顺序不确定，需要有序遍历用 BTreeMap" },
+    { path = "std::collections::HashMap::drain", reason = "HashMap 遍历顺序不确定，需要有序遍历用 BTreeMap" },
+    { path = "std::collections::HashSet::iter", reason = "HashSet 遍历顺序不确定，需要有序遍历用 BTreeSet" },
+    { path = "std::collections::HashSet::drain", reason = "HashSet 遍历顺序不确定，需要有序遍历用 BTreeSet" },
+]
+disallowed-types = [
+    { path = "std::cell::Cell", reason = "不能保留跨调用状态" },
+    { path = "std::cell::RefCell", reason = "不能保留跨调用状态" },
+    { path = "std::cell::OnceCell", reason = "不能保留跨调用状态" },
+    { path = "std::sync::OnceLock", reason = "不能保留跨调用状态" },
+    { path = "std::sync::Mutex", reason = "不能用同步原语或全局可变状态" },
+    { path = "std::sync::RwLock", reason = "不能用同步原语或全局可变状态" },
+    { path = "std::sync::atomic::AtomicBool", reason = "不能保留跨调用状态" },
+    { path = "std::sync::atomic::AtomicI64", reason = "不能保留跨调用状态" },
+    { path = "std::sync::atomic::AtomicU64", reason = "不能保留跨调用状态" },
+    { path = "std::sync::atomic::AtomicUsize", reason = "不能保留跨调用状态" },
+]
+disallowed-macros = [
+    { path = "std::thread_local", reason = "不能保留跨调用状态" },
+]

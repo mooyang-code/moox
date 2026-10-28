@@ -1,0 +1,40 @@
+# 自定义算子（wasm UDF）编写规范
+
+这个仓库里的每个 crate 是一个自定义算子（UDF），编译成 wasm 后发布到 moox，在因子表达式里写成 `udf.<名称>(...)` 调用。
+UDF 是 DSL 的**时序算子**：只做 DSL 写不出来的那一步算法，其余部分留在 DSL 里由内置算子计算。
+
+## 工作流
+
+```text
+moox-cli udf new <名称>            # 生成骨架（已有工作区时只添加 crate）
+# 编辑 udfs/<名称>/src/lib.rs、udf.toml、tests/fixtures/*.json
+moox-cli udf build [<名称>]        # clippy → 原生测试 → 编译 wasm → 模块检查 → 一致性测试 → 打包 dist/*.udfpkg
+git commit                         # publish 要求工作区干净（系统记录提交号）
+moox-cli udf publish dist/<名称>-<哈希>.udfpkg
+moox-cli udf preview <名称>@<哈希> --spec <因子定义> --task <因子任务>   # 在真实数据上试算
+moox-cli udf activate <名称>@<哈希> --dry-run                            # 看影响清单与前提，再按 skill 的步骤切换
+```
+
+## 语义契约（门禁会检查，违反即失败）
+
+- **只依赖窗口**：t 的输出只取决于 `[t−L+1, t]` 的窗口内容；不保留跨调用状态，不用全局可变状态。
+- **回看如实**：只读 `Window` 里的数据，越界即 panic（失败）。回看公式只允许常量，或 `a*<整数参数>+b`（`4*n`、`n+1`）。
+- **空值**：默认严格——窗口内任一输入有 NaN 时输出 NaN，不调用你的函数。`nan = "relaxed"` 时每个输入的 NaN 只能出现在窗口开头，
+  各输入取共同有效段交给你的函数，有效段短于 `min_valid` 时输出 NaN。
+- **有限性**：输出只能是有限值或 NaN（±Inf 记为 NaN）。无法计算就返回 NaN；不可能出现的情况才 panic。
+- **确定性**：同一个 wasm 在 arm64 与 amd64 上逐位相同。禁用融合乘加、`to_bits`/`from_bits`、`copysign`、
+  `is_sign_negative`/`is_sign_positive`（NaN 的符号与位模式不可观察），禁用时间、随机、线程、环境、文件与网络、跨调用状态、
+  `HashMap`/`HashSet` 的遍历（需要有序遍历用 `BTreeMap`）。清单在 `clippy.toml`，`udf build` 以 `-D warnings` 执行。
+- **没有 `unsafe`**：`#![deny(unsafe_code)]`，`udf build` 还会扫描源码，出现 `unsafe` 或 `allow(unsafe_code)` 直接失败。
+
+## 编写原则
+
+- 优先写朴素循环：手工展开、多路累加在 wasm 里反而更慢；热路径不分配内存。
+- 不默认使用精确求和；确实需要和内置算子逐位一致时再用 `moox_udf::exact`。
+- 不要在 UDF 里做截面计算：截面写在外层，例如 `cs_rank(udf.xxx(...))`。
+- 一个 crate 一个 UDF。说明与示例写在 `udf.toml`（不进 wasm、不产生新版本）。
+- 在 `tests/fixtures/*.json` 里放对拍样本（可用 pandas 等参考实现生成；NaN 写成 null）。
+
+## 依赖
+
+只允许依赖 `moox-udf` 与本仓库的 path 依赖。数学函数（`exp`、`ln` 等）会编进 wasm，跨平台一致，可以使用。

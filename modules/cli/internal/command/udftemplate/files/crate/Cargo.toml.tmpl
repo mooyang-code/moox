@@ -1,0 +1,14 @@
+[package]
+name = "[[.Name]]"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+moox-udf = [[.SDKDep]]
+
+[dev-dependencies]
+moox-udf = [[.SDKDevDep]]
