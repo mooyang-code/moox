@@ -10,7 +10,7 @@
           <a-button :loading="store.listLoading" aria-label="刷新策略定义" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
-          <a-button @click="templateVisible = true">从模板新建</a-button>
+          <a-button type="primary" status="success" @click="templateVisible = true">从模板新建</a-button>
           <a-button type="primary" status="success" @click="router.push({ name: 'strategy-definition-new' })"
             ><template #icon><icon-plus /></template>新建策略</a-button
           >

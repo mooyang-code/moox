@@ -29,7 +29,7 @@
         </a-form-item>
         <a-space>
           <a-button :loading="rendering" @click="render">生成预览</a-button>
-          <a-button type="primary" :disabled="!dsl" :loading="creating" @click="create">创建策略</a-button>
+          <a-button type="primary" status="success" :disabled="!dsl" :loading="creating" @click="create">创建策略</a-button>
         </a-space>
         <a-form-item v-if="dsl" label="生成的 DSL" class="preview">
           <a-textarea :model-value="dsl" readonly :auto-size="{ minRows: 8, maxRows: 24 }" class="mono" />
