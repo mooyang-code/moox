@@ -91,6 +91,16 @@ View bar budget (`[storage_retention] view_rows_per_series`), and the high-risk 
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 
+**View memory reminder (say this whenever the user creates a View, adds subjects/factor result datasets that
+create Views, raises `view_rows_per_series`, or loosens `[storage_view.max_age]`):** `moox-storage-view` has no
+process-wide memory budget. Its resident memory is about 2.5–3× the total size of all View index files
+(DuckDB decompresses into the buffer pool and does not give it back), plus 1–1.5× the largest index during
+rebuild/backfill. Production on 2026-10-28: 2.7GB of index files → 7.8GB RSS on a 15.5GB Storage host. Estimate
+the new View as subjects × `view_rows_per_series` rows (~100–150 bytes/row on disk), compare against the host
+using the formula in `docs/部署与运维.md` ("Storage 主机内存要求"), and warn the user before proceeding if the
+headroom is thin; the remedies are a bigger host, fewer bars, a shorter `[storage_view.max_age]`, or fewer Views.
+Do not suggest raising the per-index DuckDB limit as a fix.
+
 `moox.toml` changes (for example `[storage_retention]` or `[storage_view]`) reach a native unit
 only through a new installation of that unit (`setup release build` plus the unit's setup command
 with `--release`); binary-only releases keep the installed configuration. A retention shrink deletes
