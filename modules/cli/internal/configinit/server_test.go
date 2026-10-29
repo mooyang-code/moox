@@ -451,32 +451,69 @@ func TestTencentEndpointsVerifyKeysAndRecognizeServers(t *testing.T) {
 	h.wait()
 }
 
-func TestFactorCheckAsksToConfirmTheHostKeyFirst(t *testing.T) {
+func TestSSHLoginFlowConfirmsHostKeyThenInstallsTheKey(t *testing.T) {
 	h := start(t, time.Minute)
-	h.prober.hostKey = "SHA256:abcdef"
-	target := FactorServer{Address: "192.168.0.103", SSHUser: "builder", SSHPassword: "pw-build"}
-	status, reply := h.post("factor/check", target)
-	if status != http.StatusOK || reply.Report == nil || reply.Report.HostKey != "SHA256:abcdef" || len(reply.Report.Items) != 0 {
+	t.Setenv("HOME", t.TempDir())
+	h.prober.hostKey, h.prober.needKey, h.prober.password = "SHA256:abcdef", true, "pw-build"
+	target := SSHTarget{Address: "192.168.0.103", SSHUser: "builder"}
+	status, reply := h.post("ssh/check", target)
+	if status != http.StatusOK || reply.Login == nil || reply.Login.Ready || reply.Login.HostKey != "SHA256:abcdef" {
 		t.Fatalf("首次连接应返回指纹待确认: %d %+v", status, reply)
 	}
-	if status, reply := h.post("factor/trust", map[string]any{"target": target, "fingerprint": "SHA256:other"}); status != http.StatusUnprocessableEntity || reply.OK {
+	if status, reply := h.post("ssh/trust", map[string]any{"target": target, "fingerprint": "SHA256:other"}); status != http.StatusUnprocessableEntity || reply.OK {
 		t.Fatalf("指纹对不上应拒绝: %d %+v", status, reply)
 	}
-	status, reply = h.post("factor/trust", map[string]any{"target": target, "fingerprint": "SHA256:abcdef"})
-	if status != http.StatusOK || reply.Report == nil || !reply.Report.OK || reply.Report.OS != "linux" {
-		t.Fatalf("确认指纹后应完成检测: %d %+v", status, reply)
+	status, reply = h.post("ssh/trust", map[string]any{"target": target, "fingerprint": "SHA256:abcdef"})
+	if status != http.StatusOK || reply.Login == nil || reply.Login.Ready || reply.Login.HostKey != "" || !strings.Contains(reply.Login.CopyID, "ssh-copy-id -i ") || !strings.Contains(reply.Login.CopyID, "builder@192.168.0.103") {
+		t.Fatalf("确认指纹后应提示安装公钥并给出 ssh-copy-id 命令: %d %+v", status, reply)
 	}
-	if status, reply := h.post("factor/check", FactorServer{Address: "192.168.0.103"}); status != http.StatusUnprocessableEntity || reply.OK {
-		t.Fatalf("缺少 SSH 信息应 422: %d %+v", status, reply)
+	if status, reply := h.post("ssh/authorize", map[string]any{"target": target, "password": "wrong"}); status != http.StatusUnprocessableEntity || reply.OK {
+		t.Fatalf("密码错误应拒绝: %d %+v", status, reply)
+	}
+	status, reply = h.post("ssh/authorize", map[string]any{"target": target, "password": "pw-build"})
+	if status != http.StatusOK || reply.Login == nil || !reply.Login.Ready {
+		t.Fatalf("安装公钥后应能免密登录: %d %+v", status, reply)
+	}
+	status, reply = h.post("factor/check", target)
+	if status != http.StatusOK || reply.Report == nil || !reply.Report.OK || reply.Report.OS != "linux" {
+		t.Fatalf("免密登录后应完成环境检测: %d %+v", status, reply)
+	}
+	if status, reply := h.post("ssh/check", SSHTarget{Address: "192.168.0.103"}); status != http.StatusUnprocessableEntity || reply.OK {
+		t.Fatalf("缺少 SSH 用户名应 422: %d %+v", status, reply)
 	}
 	if strings.Contains(h.notice.String(), "pw-build") {
 		t.Fatal("提示里不应出现密码")
 	}
 }
 
+func TestSSHKeyIsGeneratedOnceAndReused(t *testing.T) {
+	h := start(t, time.Minute)
+	t.Setenv("HOME", t.TempDir())
+	status, first := h.post("ssh/key", map[string]any{})
+	if status != http.StatusOK || first.Key == nil || !strings.HasPrefix(first.Key.PublicKey, "ssh-ed25519 ") || !strings.HasSuffix(first.Key.Path, sshKeyName) {
+		t.Fatalf("应生成 MooX 密钥: %d %+v", status, first)
+	}
+	info, err := os.Stat(first.Key.Path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("私钥权限应为 0600: %v %v", info, err)
+	}
+	if _, second := h.post("ssh/key", map[string]any{}); second.Key == nil || second.Key.PublicKey != first.Key.PublicKey {
+		t.Fatalf("再次读取应复用同一把密钥: %+v", second)
+	}
+}
+
+func TestSubmitRequiresKeyLoginOnEveryServer(t *testing.T) {
+	h := start(t, time.Minute)
+	h.prober.needKey = true
+	resp, text := h.request(http.MethodPost, "submit", nil, validBody(t))
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(text, "免密登录") {
+		t.Fatalf("还没开通免密登录时应拒绝提交: %d %s", resp.StatusCode, text)
+	}
+}
+
 func TestAPIEndpointsShareTheRequestChecks(t *testing.T) {
 	h := start(t, time.Minute)
-	for _, path := range []string{"tencent/verify", "tencent/lookup", "factor/check", "factor/trust"} {
+	for _, path := range []string{"tencent/verify", "tencent/lookup", "ssh/check", "ssh/trust", "ssh/authorize", "factor/check"} {
 		resp, _ := h.request(http.MethodPost, path, func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }, []byte(`{}`))
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("%s：跨站请求状态 %d，应为 403", path, resp.StatusCode)

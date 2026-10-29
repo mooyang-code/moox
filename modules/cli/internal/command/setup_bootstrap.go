@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	"github.com/spf13/cobra"
@@ -109,10 +110,28 @@ func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, opti
 	if err != nil {
 		return err
 	}
+	if err := defaultBundleBinaries(options.RepositoryRoot, &options.BinaryDirectory); err != nil {
+		return err
+	}
 	if options.BinaryDirectory != "" {
 		options.BinaryDirectory, err = filepath.Abs(options.BinaryDirectory)
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// defaultBundleBinaries 在源目录是解压后的产物包、且没有显式指定二进制目录时，改用包内预编译的 Linux 二进制，
+// 部署不再在本机构建。
+func defaultBundleBinaries(root string, directories ...*string) error {
+	manifest, ok, err := bundle.Load(root)
+	if err != nil || !ok {
+		return err
+	}
+	for _, directory := range directories {
+		if *directory == "" {
+			*directory = manifest.BinaryPath(root)
 		}
 	}
 	return nil

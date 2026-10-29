@@ -11,32 +11,30 @@ import (
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
-// FactorServer 是因子机的填写内容：用 SSH 登录的一台 Linux 机器（可以是局域网地址）。
-// 因子机只能出站，登记成只能出站的普通部署主机，经 control 网关的反向连接中转。
-type FactorServer struct {
-	Address     string `json:"address"`
-	SSHPort     int    `json:"ssh_port"`
-	SSHUser     string `json:"ssh_user"`
-	SSHPassword string `json:"ssh_password"`
+// SSHTarget 是一台要用 SSH 登录的服务器：腾讯云服务器或因子机（因子机可以是局域网地址）。
+// 不含密码：登录一律用本机的 MooX 密钥，密码只在开通免密登录时用一次。
+type SSHTarget struct {
+	Address string `json:"address"`
+	SSHPort int    `json:"ssh_port"`
+	SSHUser string `json:"ssh_user"`
 }
 
-func (f FactorServer) normalize() (FactorServer, error) {
-	f.Address = strings.TrimSpace(f.Address)
-	f.SSHUser = strings.TrimSpace(f.SSHUser)
+func (t SSHTarget) normalize(title string) (SSHTarget, error) {
+	t.Address = strings.TrimSpace(t.Address)
+	t.SSHUser = strings.TrimSpace(t.SSHUser)
 	for _, field := range []struct{ name, value string }{
-		{"因子机的 IP 地址", f.Address}, {"因子机的 SSH 用户名", f.SSHUser}, {"因子机的 SSH 密码", f.SSHPassword},
+		{title + "的 IP 地址", t.Address}, {title + "的 SSH 用户名", t.SSHUser},
 	} {
 		if err := checkText(field.name, field.value, true); err != nil {
-			return FactorServer{}, err
+			return SSHTarget{}, err
 		}
 	}
-	if f.SSHPort == 0 {
-		f.SSHPort = 22
+	port, err := sshPort(title, t.SSHPort)
+	if err != nil {
+		return SSHTarget{}, err
 	}
-	if f.SSHPort < 1 || f.SSHPort > 65535 {
-		return FactorServer{}, fmt.Errorf("因子机的 SSH 端口 %d 不合法", f.SSHPort)
-	}
-	return f, nil
+	t.SSHPort = port
+	return t, nil
 }
 
 // 检测项的结果。
@@ -53,18 +51,23 @@ type CheckItem struct {
 	Detail string `json:"detail"`
 }
 
-// ProbeReport 是因子机的环境检测结果。HostKey 不为空时表示首次连接，需要用户确认指纹后再检测。
+// ProbeReport 是因子机的环境检测结果。
 type ProbeReport struct {
-	OK      bool        `json:"ok"`
-	OS      string      `json:"os,omitempty"`
-	Items   []CheckItem `json:"items,omitempty"`
-	HostKey string      `json:"host_key,omitempty"`
+	OK    bool        `json:"ok"`
+	OS    string      `json:"os,omitempty"`
+	Items []CheckItem `json:"items,omitempty"`
 }
 
-// Prober 检测因子机的环境；测试里替换。
+// Prober 负责录入页里的 SSH 操作；测试里替换。
 type Prober interface {
-	Probe(ctx context.Context, target FactorServer) (ProbeReport, error)
-	Trust(ctx context.Context, target FactorServer, fingerprint string) error
+	// Login 用 MooX 密钥登录，报告免密登录是否可用、是否需要先确认主机指纹。
+	Login(ctx context.Context, target SSHTarget) (LoginReport, error)
+	// Trust 在用户确认后记录主机指纹。
+	Trust(ctx context.Context, target SSHTarget, fingerprint string) error
+	// Authorize 用一次性密码登录并安装 MooX 公钥。
+	Authorize(ctx context.Context, target SSHTarget, password string) error
+	// Probe 用 MooX 密钥登录因子机，检测环境。
+	Probe(ctx context.Context, target SSHTarget) (ProbeReport, error)
 }
 
 type systemProber struct{}
@@ -72,18 +75,19 @@ type systemProber struct{}
 // facts 是检测脚本输出的 key=value。
 type facts map[string]string
 
-func (systemProber) Probe(ctx context.Context, target FactorServer) (ProbeReport, error) {
+func (systemProber) Probe(ctx context.Context, target SSHTarget) (ProbeReport, error) {
+	key, err := ensureSSHKey()
+	if err != nil {
+		return ProbeReport{}, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	client, err := setupssh.Dial(ctx, sshTarget(target), target.SSHPassword, setupssh.Options{Timeout: 15 * time.Second})
+	client, err := setupssh.Dial(ctx, sshTarget(target), "", keyOnly(key))
 	switch {
-	case errors.Is(err, setupssh.ErrHostKeyUnknown):
-		_, fingerprint, _ := strings.Cut(err.Error(), ": ")
-		return ProbeReport{HostKey: strings.TrimSpace(fingerprint)}, nil
-	case errors.Is(err, setupssh.ErrAuthFailed):
-		return ProbeReport{}, fmt.Errorf("SSH 登录 %s 失败，请检查用户名和密码", target.Address)
+	case errors.Is(err, setupssh.ErrHostKeyUnknown), errors.Is(err, setupssh.ErrAuthFailed):
+		return ProbeReport{}, fmt.Errorf("还不能免密登录 %s，请先在「免密登录」一步完成授权", target.Address)
 	case err != nil:
-		return ProbeReport{}, fmt.Errorf("连不上 %s:%d，请确认机器已开机、SSH 服务已打开，并且这台电脑能访问它", target.Address, target.SSHPort)
+		return ProbeReport{}, unreachable(target)
 	}
 	defer client.Close()
 	output, err := runRemote(ctx, client)
@@ -91,19 +95,6 @@ func (systemProber) Probe(ctx context.Context, target FactorServer) (ProbeReport
 		return ProbeReport{}, fmt.Errorf("已登录 %s，但读取系统信息失败", target.Address)
 	}
 	return evaluate(parseFacts(output)), nil
-}
-
-func (systemProber) Trust(ctx context.Context, target FactorServer, fingerprint string) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := setupssh.TrustHost(ctx, sshTarget(target), strings.TrimSpace(fingerprint), setupssh.Options{Timeout: 15 * time.Second}); err != nil {
-		return fmt.Errorf("没能记录 %s 的主机指纹：机器的指纹可能已经变化，请重新检测", target.Address)
-	}
-	return nil
-}
-
-func sshTarget(target FactorServer) setupssh.Target {
-	return setupssh.Target{Name: "factor", Address: target.Address, Port: target.SSHPort, Username: target.SSHUser}
 }
 
 // posixProbe 收集系统信息。非交互 SSH 的 PATH 往往不含 Go、uv 等常见安装位置，先补上。

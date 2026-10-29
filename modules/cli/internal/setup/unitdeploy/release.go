@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
@@ -229,6 +230,11 @@ func packageHasHelper(host unitpackage.Result, digest string) bool {
 
 // cleanCommit 返回仓库当前提交；工作区有未提交改动时拒绝，保证版本制品能对应到一个提交。
 func cleanCommit(ctx context.Context, repository string) (string, error) {
+	if manifest, ok, err := bundle.Load(repository); err != nil {
+		return "", err
+	} else if ok {
+		return manifest.Commit, nil
+	}
 	status, err := exec.CommandContext(ctx, "git", "-C", repository, "status", "--porcelain").Output()
 	if err != nil {
 		return "", errors.New("release build requires a git worktree")

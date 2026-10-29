@@ -21,9 +21,9 @@ func sampleRequest() Request {
 	request.Tencent = Keys{SecretID: "AKIDexample", SecretKey: "key-example"}
 	request.Notification.ChannelType = "wecom"
 	request.Notification.WebhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
-	request.Servers.Storage = &Server{Address: "198.51.100.11", SSHUser: "ubuntu", SSHPassword: "pw-storage"}
-	request.Servers.Control = &Server{Address: "198.51.100.10", SSHUser: "ubuntu", SSHPassword: "pw-control"}
-	request.Servers.Overseas = &Server{Address: "198.51.100.12", SSHUser: "ubuntu", SSHPassword: "pw-compute"}
+	request.Servers.Storage = &Server{SSHTarget: SSHTarget{Address: "198.51.100.11", SSHUser: "ubuntu"}}
+	request.Servers.Control = &Server{SSHTarget: SSHTarget{Address: "198.51.100.10", SSHUser: "ubuntu"}}
+	request.Servers.Overseas = &Server{SSHTarget: SSHTarget{Address: "198.51.100.12", SSHUser: "ubuntu"}}
 	return request
 }
 
@@ -68,7 +68,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if manifest.Notification.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc" {
 		t.Fatalf("通知 = %+v", manifest.Notification)
 	}
-	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.Password != "pw-storage" || manifest.HostCatalog["control"].Address != "198.51.100.10" {
+	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.Password != "" || manifest.HostCatalog["storage"].SSH.PrivateKeyFile != sshKeyTOMLPath || manifest.HostCatalog["control"].Address != "198.51.100.10" {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的部署一致。
@@ -171,10 +171,10 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 // 因子机是只能出站的普通部署主机，部署 factor-engine 与 archive-worker，带中文名；不是腾讯云服务器，不写地域和云厂商。
 func TestFactorMachineIsAnOutboundDeploymentHost(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
+	request.Servers.Factor = &SSHTarget{Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder"}
 	manifest := render(t, request)
 	host := manifest.HostByID("factor")
-	if host.Port != 2222 || host.Password != "pw-build" || host.Reachability != "outbound" || host.Label != "因子机" {
+	if host.Port != 2222 || host.Password != "" || host.PrivateKeyFile != sshKeyTOMLPath || host.Reachability != "outbound" || host.Label != "因子机" {
 		t.Fatalf("因子机 = %+v", host)
 	}
 	if definition := manifest.HostCatalog["factor"]; definition.Region != "" || definition.Provider != "" || definition.Label != "因子机" {
@@ -203,7 +203,7 @@ func TestRenderedHostsCarryChineseLabels(t *testing.T) {
 
 func TestNonLinuxFactorMachineIsRejected(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Address: "192.168.0.20", SSHUser: "me", SSHPassword: "pw"}
+	request.Servers.Factor = &SSHTarget{Address: "192.168.0.20", SSHUser: "me"}
 	macOS := &fakeProber{report: ProbeReport{OK: false, OS: "darwin", Items: []CheckItem{{Name: "系统", Status: CheckFail, Detail: "macOS。因子引擎只支持 Linux"}}}}
 	if err := renderErr(request, macOS); err == nil || !strings.Contains(err.Error(), "只支持 Linux") {
 		t.Fatalf("非 Linux 的因子机应被拒绝并说明原因，实际 %v", err)
@@ -212,14 +212,14 @@ func TestNonLinuxFactorMachineIsRejected(t *testing.T) {
 
 func TestFactorMachineMustPassTheEnvironmentCheck(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Address: "192.168.0.103", SSHUser: "u", SSHPassword: "p"}
+	request.Servers.Factor = &SSHTarget{Address: "192.168.0.103", SSHUser: "u"}
 	failing := &fakeProber{report: ProbeReport{OK: false, Items: []CheckItem{{Name: "内存", Status: CheckFail, Detail: "内存不足"}}}}
 	if err := renderErr(request, failing); err == nil || !strings.Contains(err.Error(), "内存") {
 		t.Fatalf("环境检测失败时应拒绝并说明原因，实际 %v", err)
 	}
 	unknown := &fakeProber{report: linuxReport(), hostKey: "SHA256:abc"}
-	if err := renderErr(request, unknown); err == nil || !strings.Contains(err.Error(), "主机指纹") {
-		t.Fatalf("没确认指纹时应提示，实际 %v", err)
+	if err := renderErr(request, unknown); err == nil || !strings.Contains(err.Error(), "免密登录") {
+		t.Fatalf("没确认指纹、不能免密登录时应提示，实际 %v", err)
 	}
 	unreachable := &fakeProber{err: errors.New("连不上 192.168.0.103:22")}
 	if err := renderErr(request, unreachable); err == nil || !strings.Contains(err.Error(), "连不上") {
@@ -239,7 +239,7 @@ func TestSameAddressIsExplained(t *testing.T) {
 		t.Fatalf("存储与海外同 IP 时应说明需要分开，实际 %v", err)
 	}
 	request = sampleRequest()
-	request.Servers.Factor = &FactorServer{Address: "198.51.100.11", SSHUser: "u", SSHPassword: "p"}
+	request.Servers.Factor = &SSHTarget{Address: "198.51.100.11", SSHUser: "u"}
 	if err := renderErr(request, nil); err == nil || !strings.Contains(err.Error(), "因子机") {
 		t.Fatalf("因子机和存储服务器同 IP 时应拒绝，实际 %v", err)
 	}
@@ -281,7 +281,6 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 	for _, secret := range secrets {
 		request := sampleRequest()
 		request.Admin.Password = secret
-		request.Servers.Control.SSHPassword = secret
 		request.Tencent.SecretKey = secret
 		_, raw := renderWith(t, request, nil)
 		var decoded struct {
@@ -289,14 +288,11 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 			Tencent struct {
 				SecretKey string `toml:"secret_key"`
 			} `toml:"tencent_cloud"`
-			Hosts map[string]struct {
-				SSH struct{ Password string }
-			}
 		}
 		if _, err := toml.Decode(raw, &decoded); err != nil {
 			t.Fatalf("%q: 渲染结果不是合法 TOML: %v", secret, err)
 		}
-		if decoded.Admin.Password != secret || decoded.Tencent.SecretKey != secret || decoded.Hosts["control"].SSH.Password != secret {
+		if decoded.Admin.Password != secret || decoded.Tencent.SecretKey != secret {
 			t.Fatalf("%q 没有原样往返: %+v", secret, decoded)
 		}
 	}
@@ -305,8 +301,7 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 	cases := map[string]func(*Request){
 		"管理员密码含换行":        func(r *Request) { r.Admin.Password = "a\nb" },
-		"SSH 密码含换行":       func(r *Request) { r.Servers.Control.SSHPassword = "x\r\n[hosts.evil]" },
-		"SSH 密码含制表符":      func(r *Request) { r.Servers.Control.SSHPassword = "a\tb" },
+		"SSH 用户名含换行":      func(r *Request) { r.Servers.Control.SSHUser = "x\r\n[hosts.evil]" },
 		"SecretKey 含控制字符": func(r *Request) { r.Tencent.SecretKey = "a\x00b" },
 		"管理员密码为空":         func(r *Request) { r.Admin.Password = "" },
 		"缺少存储服务器":         func(r *Request) { r.Servers.Storage = nil },
@@ -314,14 +309,11 @@ func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 		"存储服务器不能共用":       func(r *Request) { r.Servers.Storage.SharedWith = RoleOverseas },
 		"管理台共用未知角色":       func(r *Request) { r.Servers.Control.SharedWith = "nowhere" },
 		"管理台不能与因子机共用":     func(r *Request) { r.Servers.Control.SharedWith = RoleFactor },
-		"因子机缺地址":          func(r *Request) { r.Servers.Factor = &FactorServer{SSHUser: "u", SSHPassword: "p"} },
-		"因子机缺密码": func(r *Request) {
-			r.Servers.Factor = &FactorServer{Address: "192.168.0.9", SSHUser: "u"}
-		},
-		"SSH 端口越界":       func(r *Request) { r.Servers.Storage.SSHPort = 70000 },
-		"webhook 不是官方域名": func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },
-		"管理员密码超过 72 字节":  func(r *Request) { r.Admin.Password = strings.Repeat("x", 73) },
-		"字段超长":           func(r *Request) { r.Servers.Control.SSHUser = strings.Repeat("a", 600) },
+		"因子机缺地址":          func(r *Request) { r.Servers.Factor = &SSHTarget{SSHUser: "u"} },
+		"SSH 端口越界":        func(r *Request) { r.Servers.Storage.SSHPort = 70000 },
+		"webhook 不是官方域名":  func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },
+		"管理员密码超过 72 字节":   func(r *Request) { r.Admin.Password = strings.Repeat("x", 73) },
+		"字段超长":            func(r *Request) { r.Servers.Control.SSHUser = strings.Repeat("a", 600) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

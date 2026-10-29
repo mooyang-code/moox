@@ -18,6 +18,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	metricsreport "github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
@@ -756,9 +757,23 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 	}
 }
 
+// collectorSCFBinaryName 是产物包里预编译的 SCF 采集函数程序。
+const collectorSCFBinaryName = "moox-collector-scf-market_data"
+
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
 	if entrypoint != "market_data" {
 		return fmt.Errorf("unsupported collector SCF entrypoint %q", entrypoint)
+	}
+	// 产物包里已有预编译的函数程序，直接使用，不需要本机 Go。
+	root := filepath.Join(collectorRoot, "..", "..")
+	if manifest, ok, err := bundle.Load(root); err != nil {
+		return err
+	} else if ok {
+		raw, err := os.ReadFile(filepath.Join(manifest.BinaryPath(root), collectorSCFBinaryName))
+		if err != nil {
+			return fmt.Errorf("产物包缺少 SCF 采集函数程序: %w", err)
+		}
+		return os.WriteFile(outPath, raw, 0o755)
 	}
 	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-ldflags", fmt.Sprintf("-s -w -X main.Version=%s", version), "-o", outPath, "./cmd/scf/"+entrypoint)
 	cmd.Dir = collectorRoot

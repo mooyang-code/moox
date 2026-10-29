@@ -132,6 +132,10 @@ button.small { height: 28px; padding: 0 10px; font-size: 12.5px; }
 .trust code { display: block; margin: 6px 0 10px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; color: var(--ink); }
 .actions-inline { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; }
 .actions-inline .hint { color: var(--faint); font-size: 12.5px; }
+.keybox { grid-column: 1 / -1; font-size: 13px; color: var(--ink-2); }
+.keybox code, .copyid code { display: block; margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: var(--hover); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; color: var(--ink); }
+.copyid { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.login-state { grid-column: 1 / -1; }
 
 table.review { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.review th { text-align: left; font-weight: 500; color: var(--muted); width: 160px; padding: 11px 0; vertical-align: top; }
@@ -208,11 +212,21 @@ button.ghost.away { visibility: hidden; }
 
     <section class="page" id="page-2" hidden>
       <h1>服务器</h1>
-      <p class="lede">填写每台服务器的公网 IP 和登录方式，地域和规格会自动从腾讯云识别。服务会按用途自动安装到对应的服务器上。</p>
+      <p class="lede">填写每台服务器的公网 IP 和 SSH 用户名，地域和规格会自动从腾讯云识别；下一步给它们开通免密登录。服务会按用途自动安装到对应的服务器上。</p>
       <div id="servers"></div>
     </section>
 
     <section class="page" id="page-3" hidden>
+      <h1>免密登录</h1>
+      <p class="lede">MooX 用这台电脑上的一把专用密钥登录各台服务器。每台服务器只需开通一次：确认主机指纹，再输入一次 SSH 密码装上公钥。密码只用这一次，不保存、不发给 AI。</p>
+      <div class="block">
+        <div><h2>MooX 密钥</h2><p>只给 MooX 使用，没有就自动生成。管理台的网页终端也用它登录服务器。</p></div>
+        <div class="fields two"><div class="keybox" id="ssh-key">正在读取…</div></div>
+      </div>
+      <div id="logins"></div>
+    </section>
+
+    <section class="page" id="page-4" hidden>
       <h1>管理员与告警</h1>
       <p class="lede">登录管理台的账号，以及出问题时通知你的方式。</p>
       <div class="block">
@@ -231,14 +245,14 @@ button.ghost.away { visibility: hidden; }
       </div>
     </section>
 
-    <section class="page" id="page-4" hidden>
+    <section class="page" id="page-5" hidden>
       <h1>确认</h1>
       <p class="lede">检查一遍，确认后就可以回到 Agent 开始部署。密码和密钥不在这里显示。</p>
       <div class="block"><div><h2>服务器</h2></div><table class="review" id="review-servers"></table></div>
       <div class="block"><div><h2>账号与通知</h2></div><table class="review" id="review-account"></table></div>
     </section>
 
-    <section class="page finish" id="page-5" hidden>
+    <section class="page finish" id="page-6" hidden>
       <div class="mark">✓</div>
       <h1>配置完成</h1>
       <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续部署；以后想查看或修改配置，告诉 Agent「打开配置页」；换了电脑，告诉 Agent「恢复配置」，用管理员账号登录管理台即可取回。</p>
@@ -248,7 +262,7 @@ button.ghost.away { visibility: hidden; }
 
 <div class="footer" id="footer">
   <div class="footer-in">
-    <span class="note privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>你填写的密码和密钥会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>），<b>不会发给 AI，也不会发给 MooX 开发者</b>。部署完成后，整份配置会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。</span></span>
+    <span class="note privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>你填写的密码和密钥会加密保存在这台电脑上（SSH 密码只用来开通免密登录，不保存）（解密密钥存放在<span id="key-store">系统钥匙串</span>），<b>不会发给 AI，也不会发给 MooX 开发者</b>。部署完成后，整份配置会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。</span></span>
     <button type="button" class="ghost" id="back">上一步</button>
     <button type="button" class="primary" id="next">下一步</button>
   </div>
@@ -259,8 +273,8 @@ button.ghost.away { visibility: hidden; }
 (function () {
   'use strict';
   var boot = JSON.parse(document.getElementById('boot').textContent);
-  var STEPS = ['腾讯云账号', '服务器', '管理员与告警', '确认'];
-  var state = { step: 1, account: null, found: {}, report: null, finished: false };
+  var STEPS = ['腾讯云账号', '服务器', '免密登录', '管理员与告警', '确认'];
+  var state = { step: 1, account: null, found: {}, login: {}, report: null, finished: false };
   var blocks = {};
 
   function $(id) { return document.getElementById(id); }
@@ -302,10 +316,11 @@ button.ghost.away { visibility: hidden; }
   }
   function go(n) {
     state.step = n;
-    for (var i = 1; i <= 5; i++) $('page-' + i).hidden = i !== n;
+    for (var i = 1; i <= 6; i++) $('page-' + i).hidden = i !== n;
     $('back').classList.toggle('away', n === 1);
-    $('next').textContent = n === 4 ? '确认并完成' : '下一步';
-    if (n === 4) renderReview();
+    $('next').textContent = n === 5 ? '确认并完成' : '下一步';
+    if (n === 3) renderLogins();
+    if (n === 5) renderReview();
     showAlert('');
     renderSteps();
     window.scrollTo(0, 0);
@@ -321,8 +336,7 @@ button.ghost.away { visibility: hidden; }
     var ip = field(r.key === 'factor' ? 'IP 地址' : '公网 IP', { 'data-full': '1', placeholder: r.key === 'factor' ? '局域网地址也可以，例如 192.168.1.20' : '例如 106.53.10.20' });
     var user = field('SSH 用户名', { value: r.ssh_user || '' });
     var port = field('端口', { type: 'number', value: '22', min: '1', max: '65535' });
-    var pass = field('SSH 密码', { type: 'password', autocomplete: 'new-password' }, '只用于首次登录安装');
-    return { ip: ip, user: user, port: port, pass: pass, wrap: el('div', { class: 'fields' }, [ip.label, user.label, port.label, pass.label]) };
+    return { ip: ip, user: user, port: port, wrap: el('div', { class: 'fields' }, [ip.label, user.label, port.label]) };
   }
   function specText(inst) {
     var parts = [];
@@ -403,7 +417,6 @@ button.ghost.away { visibility: hidden; }
 
   function renderChecks(container, report) {
     container.replaceChildren();
-    if (report.host_key) return;
     var marks = { ok: '✓', warn: '!', fail: '✕' };
     report.items.forEach(function (item) {
       container.append(el('div', { class: 'row' }, [el('span', { class: 's-' + item.status, text: marks[item.status] }), el('span', { class: 'name', text: item.name }), el('span', { class: 'detail', text: item.detail })]));
@@ -415,47 +428,107 @@ button.ghost.away { visibility: hidden; }
     var right = el('div');
     b.toggle = el('input', { type: 'checkbox' }); b.toggle.checked = true;
     right.append(el('label', { class: 'toggle' }, [b.toggle, el('span', {}, [el('b', { text: r.toggle.label }), el('small', { text: r.toggle.hint })])]));
-    var body = el('div');
     b.ssh = sshFields(r);
-    [b.ssh.ip, b.ssh.user, b.ssh.port, b.ssh.pass].forEach(function (f) { f.input.addEventListener('input', resetReport); });
-    b.trust = el('div', { class: 'trust' }); b.trust.hidden = true;
-    b.checks = el('div', { class: 'checks' }); b.checks.hidden = true;
-    b.check = el('button', { type: 'button', text: '检测环境' });
-    b.hint = el('span', { class: 'hint', text: '检测系统、CPU、内存和磁盘是否满足要求' });
-    var checkRow = el('div', { class: 'fields two' }, [b.trust, b.checks, el('div', { class: 'actions-inline' }, [b.check, b.hint])]);
-    body.append(b.ssh.wrap, checkRow);
-    right.append(body);
-    b.toggle.addEventListener('change', function () { body.hidden = !b.toggle.checked; });
-    b.check.addEventListener('click', function () { runCheck('factor/check', factorTarget()); });
+    right.append(b.ssh.wrap);
+    b.toggle.addEventListener('change', function () { b.ssh.wrap.hidden = !b.toggle.checked; });
     blocks.factor = b;
     return right;
   }
-  function factorTarget() {
-    var b = blocks.factor;
-    return { address: b.ssh.ip.input.value.trim(), ssh_port: parseInt(b.ssh.port.input.value, 10) || 22, ssh_user: b.ssh.user.input.value.trim(), ssh_password: b.ssh.pass.input.value };
+  function targetOf(key) {
+    var b = blocks[key];
+    return { address: b.ssh.ip.input.value.trim(), ssh_port: parseInt(b.ssh.port.input.value, 10) || 22, ssh_user: b.ssh.user.input.value.trim() };
   }
-  function resetReport() { var b = blocks.factor; state.report = null; b.checks.hidden = true; b.trust.hidden = true; }
-  function runCheck(path, body) {
-    var b = blocks.factor;
-    b.check.disabled = true; b.check.textContent = '检测中…'; b.trust.hidden = true;
-    post(path, body).then(function (data) {
-      var report = data.report;
-      if (report.host_key) {
-        state.report = null;
-        b.checks.hidden = true;
-        var confirm = el('button', { type: 'button', text: '是我的机器，继续检测' });
-        confirm.addEventListener('click', function () { runCheck('factor/trust', { target: factorTarget(), fingerprint: report.host_key }); });
-        b.trust.replaceChildren('第一次连接这台机器。请确认下面的主机指纹属于你的机器（可以在那台机器上运行 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 对照）：', el('code', { text: report.host_key }), confirm);
-        b.trust.hidden = false;
-        return;
-      }
-      state.report = report;
-      renderChecks(b.checks, report);
-    }, function (err) {
-      state.report = null;
-      b.checks.replaceChildren(el('div', { class: 'row' }, [el('span', { class: 's-fail', text: '✕' }), el('span', { class: 'name', text: '连接' }), el('span', { class: 'detail', text: err.message })]));
-      b.checks.hidden = false;
-    }).finally(function () { b.check.disabled = false; b.check.textContent = '重新检测'; });
+  function factorTarget() { return targetOf('factor'); }
+
+  // ---------- 免密登录 ----------
+  function loginTargets() {
+    var list = [];
+    ['storage', 'control', 'overseas'].forEach(function (key) { if (cloudEnabled(key)) list.push(key); });
+    if (blocks.factor.toggle.checked) list.push('factor');
+    return list;
+  }
+  function renderLogins() {
+    var box = $('ssh-key');
+    post('ssh/key', {}).then(function (data) {
+      box.replaceChildren('私钥保存在 ', el('b', { text: data.key.path }), '，公钥：', el('code', { text: data.key.public_key }));
+    }, function (err) { box.replaceChildren(el('span', { class: 'low', text: err.message })); });
+    var list = $('logins');
+    list.replaceChildren();
+    state.login = {};
+    state.report = null;
+    loginTargets().forEach(function (key) {
+      var r = role(key), target = targetOf(key);
+      var ui = { state: el('div', { class: 'login-state' }), action: el('div', { class: 'fields two' }) };
+      if (key === 'factor') { ui.checks = el('div', { class: 'checks' }); ui.checks.hidden = true; }
+      var left = el('div', {}, [el('h2', { text: r.title }), el('p', {}, [el('span', { class: 'mono', text: target.ssh_user + '@' + target.address + ':' + target.ssh_port })])]);
+      var right = el('div', {}, [ui.state, ui.action, ui.checks]);
+      list.append(el('div', { class: 'block' }, [left, right]));
+      login(key, ui, 'ssh/check', target);
+    });
+  }
+  function setState(ui, cls, label, detail) {
+    ui.state.replaceChildren(el('div', { class: 'found ' + cls }, [el('span', { class: 'k', text: label }), el('span', { class: 'v', text: detail })]));
+  }
+  function login(key, ui, path, body) {
+    state.login[key] = false;
+    setState(ui, 'wait', '检测中…', '正在用 MooX 密钥登录');
+    ui.action.replaceChildren();
+    post(path, body).then(function (data) { showLogin(key, ui, data.login); }, function (err) {
+      setState(ui, 'err', '失败', err.message);
+      var retry = el('button', { type: 'button', text: '重新检测' });
+      retry.addEventListener('click', function () { login(key, ui, 'ssh/check', targetOf(key)); });
+      ui.action.replaceChildren(el('div', { class: 'actions-inline' }, [retry]));
+    });
+  }
+  function showLogin(key, ui, result) {
+    var target = targetOf(key);
+    if (result.ready) {
+      state.login[key] = true;
+      setState(ui, '', '已开通', '可以免密登录');
+      ui.action.replaceChildren();
+      if (key === 'factor') factorCheck(ui);
+      return;
+    }
+    if (result.host_key) {
+      setState(ui, 'wait', '待确认', '第一次连接这台机器，请核对主机指纹');
+      var confirm = el('button', { type: 'button', text: '是我的机器，继续' });
+      confirm.addEventListener('click', function () { login(key, ui, 'ssh/trust', { target: target, fingerprint: result.host_key }); });
+      ui.action.replaceChildren(el('div', { class: 'trust' }, ['主机指纹（可以在腾讯云控制台登录这台机器，运行 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 对照）：', el('code', { text: result.host_key }), confirm]));
+      return;
+    }
+    setState(ui, 'wait', '未开通', '这台服务器还没有装上 MooX 公钥');
+    var pass = field('SSH 密码', { type: 'password', autocomplete: 'new-password' }, '只用这一次，不保存');
+    var install = el('button', { type: 'button', class: 'primary', text: '安装公钥' });
+    install.addEventListener('click', function () {
+      var password = pass.input.value;
+      if (!password) { pass.input.classList.add('bad'); return; }
+      pass.input.value = '';
+      login(key, ui, 'ssh/authorize', { target: target, password: password });
+    });
+    var again = el('button', { type: 'button', text: '我已执行，重新检测' });
+    again.addEventListener('click', function () { login(key, ui, 'ssh/check', target); });
+    var parts = [pass.label, el('div', { class: 'actions-inline' }, [install])];
+    if (result.copy_id) parts.push(el('div', { class: 'copyid' }, ['不想在页面里输密码，也可以在这台电脑的终端里执行下面的命令，再点「重新检测」：', el('code', { text: result.copy_id }), again]));
+    ui.action.replaceChildren.apply(ui.action, parts);
+  }
+  function factorCheck(ui) {
+    setState(ui, 'wait', '检测中…', '已开通免密登录，正在检测系统、CPU、内存和磁盘');
+    post('factor/check', factorTarget()).then(function (data) {
+      state.report = data.report;
+      setState(ui, data.report.ok ? '' : 'err', data.report.ok ? '已开通' : '不满足', data.report.ok ? '可以免密登录，环境检测通过' : '环境检测没有通过');
+      renderChecks(ui.checks, data.report);
+    }, function (err) { state.report = null; setState(ui, 'err', '失败', err.message); });
+  }
+  function checkLogins() {
+    var keys = loginTargets();
+    for (var i = 0; i < keys.length; i++) {
+      if (!state.login[keys[i]]) return role(keys[i]).title + '还没有开通免密登录';
+    }
+    if (blocks.factor.toggle.checked) {
+      if (!state.report) return '因子机的环境检测还没有完成';
+      if (!state.report.ok) return '因子机的环境检测没有通过';
+    }
+    return '';
   }
 
   function renderServers() {
@@ -487,19 +560,19 @@ button.ghost.away { visibility: hidden; }
       var b = blocks[key], r = b.role, f = state.found[key];
       if (!b.ssh.ip.input.value.trim()) problems.push('请填写' + r.title + '的公网 IP');
       else if (!f || f.address !== b.ssh.ip.input.value.trim()) problems.push(r.title + '还没有识别成功');
-      if (!b.ssh.user.input.value.trim() || !b.ssh.pass.input.value) problems.push('请填写' + r.title + '的 SSH 用户名和密码');
+      if (!b.ssh.user.input.value.trim()) problems.push('请填写' + r.title + '的 SSH 用户名');
     });
     if (blocks.factor.toggle.checked) {
-      if (!state.report) problems.push('请先给因子机做一次环境检测');
-      else if (!state.report.ok) problems.push('因子机的环境检测还没有通过');
+      var f = factorTarget();
+      if (!f.address || !f.ssh_user) problems.push('请填写因子机的 IP 地址和 SSH 用户名');
     }
     return problems[0] || '';
   }
   function serverPayload(key) {
     var b = blocks[key];
-    if (key === 'control' && sharedWith()) return { shared_with: sharedWith(), address: '', ssh_port: 0, ssh_user: '', ssh_password: '' };
+    if (key === 'control' && sharedWith()) return { shared_with: sharedWith(), address: '', ssh_port: 0, ssh_user: '' };
     if (!cloudEnabled(key)) return null;
-    return { shared_with: '', address: b.ssh.ip.input.value.trim(), ssh_port: parseInt(b.ssh.port.input.value, 10) || 22, ssh_user: b.ssh.user.input.value.trim(), ssh_password: b.ssh.pass.input.value };
+    return Object.assign({ shared_with: '' }, targetOf(key));
   }
   function gather() {
     return {
@@ -559,16 +632,22 @@ button.ghost.away { visibility: hidden; }
       return;
     }
     if (state.step === 3) {
-      if (!$('admin-username').value.trim() || !$('admin-password').value) { showAlert('请填写管理员用户名和密码'); return; }
-      if (!$('notify-url').value.trim()) { showAlert('请填写告警机器人的 Webhook 地址'); return; }
+      var pending = checkLogins();
+      if (pending) { showAlert(pending); return; }
       go(4);
       return;
     }
     if (state.step === 4) {
+      if (!$('admin-username').value.trim() || !$('admin-password').value) { showAlert('请填写管理员用户名和密码'); return; }
+      if (!$('notify-url').value.trim()) { showAlert('请填写告警机器人的 Webhook 地址'); return; }
+      go(5);
+      return;
+    }
+    if (state.step === 5) {
       button.disabled = true; button.textContent = '正在完成…';
       post('submit', gather()).then(function () {
         state.finished = true;
-        go(5);
+        go(6);
         $('footer').hidden = true; $('steps').hidden = true; $('timer').hidden = true;
       }, function (err) { showAlert(err.message); button.textContent = '确认并完成'; }).finally(function () { button.disabled = false; });
     }

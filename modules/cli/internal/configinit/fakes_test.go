@@ -45,34 +45,60 @@ func (f *fakeCloud) count() int {
 	return f.lookups
 }
 
-// fakeProber 返回预置的检测结果；hostKey 不为空且还没 Trust 时要求先确认指纹。
+// fakeProber 模拟录入页的 SSH 操作：hostKey 不为空且还没 Trust 时要求先确认指纹；
+// needKey 为 true 时，只有用正确的 password 执行过 Authorize 的服务器才能免密登录。
 type fakeProber struct {
-	mu      sync.Mutex
-	report  ProbeReport
-	err     error
-	hostKey string
-	trusted string
-	targets []FactorServer
+	mu         sync.Mutex
+	report     ProbeReport
+	err        error
+	hostKey    string
+	trusted    string
+	needKey    bool
+	password   string
+	authorized map[string]bool
+	targets    []SSHTarget
 }
 
 func linuxReport() ProbeReport {
 	return ProbeReport{OK: true, OS: "linux", Items: []CheckItem{{Name: "系统", Status: CheckOK, Detail: "Ubuntu 26.04"}}}
 }
 
-func (p *fakeProber) Probe(_ context.Context, target FactorServer) (ProbeReport, error) {
+func (p *fakeProber) Login(_ context.Context, target SSHTarget) (LoginReport, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.hostKey != "" && p.trusted != p.hostKey {
+		return LoginReport{HostKey: p.hostKey}, nil
+	}
+	return LoginReport{Ready: !p.needKey || p.authorized[target.Address]}, nil
+}
+
+func (p *fakeProber) Authorize(_ context.Context, target SSHTarget, password string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.hostKey != "" && p.trusted != p.hostKey {
+		return errors.New("请先确认主机指纹")
+	}
+	if password != p.password {
+		return errors.New("用密码登录失败")
+	}
+	if p.authorized == nil {
+		p.authorized = map[string]bool{}
+	}
+	p.authorized[target.Address] = true
+	return nil
+}
+
+func (p *fakeProber) Probe(_ context.Context, target SSHTarget) (ProbeReport, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.targets = append(p.targets, target)
 	if p.err != nil {
 		return ProbeReport{}, p.err
 	}
-	if p.hostKey != "" && p.trusted != p.hostKey {
-		return ProbeReport{HostKey: p.hostKey}, nil
-	}
 	return p.report, nil
 }
 
-func (p *fakeProber) Trust(_ context.Context, _ FactorServer, fingerprint string) error {
+func (p *fakeProber) Trust(_ context.Context, _ SSHTarget, fingerprint string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if fingerprint != p.hostKey {
@@ -86,8 +112,9 @@ func testEnv(cloud Cloud, prober Prober) Environment {
 	cache := newCloudCache(cloud)
 	return Environment{
 		Lookup: cache.lookup,
-		Probe: func(ctx context.Context, target FactorServer) (ProbeReport, error) {
-			target, err := target.normalize()
+		Login:  prober.Login,
+		Probe: func(ctx context.Context, target SSHTarget) (ProbeReport, error) {
+			target, err := target.normalize("因子机")
 			if err != nil {
 				return ProbeReport{}, err
 			}

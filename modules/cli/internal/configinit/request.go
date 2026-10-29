@@ -23,10 +23,10 @@ type Request struct {
 	} `json:"notification"`
 	// Servers 按用途收集服务器；海外服务器和因子机可选（nil 表示不配置）。
 	Servers struct {
-		Storage  *Server       `json:"storage"`
-		Control  *Server       `json:"control"`
-		Overseas *Server       `json:"overseas"`
-		Factor   *FactorServer `json:"factor"`
+		Storage  *Server    `json:"storage"`
+		Control  *Server    `json:"control"`
+		Overseas *Server    `json:"overseas"`
+		Factor   *SSHTarget `json:"factor"`
 	} `json:"servers"`
 
 	// 以下由 normalize 算出，供渲染使用。
@@ -37,32 +37,41 @@ type Request struct {
 // Server 是一台腾讯云服务器的填写内容；地域等信息由公网 IP 识别得到，不让用户填。
 type Server struct {
 	// SharedWith 不为空时表示与该角色共用同一台服务器（只有管理台服务器可以），其余字段忽略。
-	SharedWith  string `json:"shared_with"`
-	Address     string `json:"address"`
-	SSHPort     int    `json:"ssh_port"`
-	SSHUser     string `json:"ssh_user"`
-	SSHPassword string `json:"ssh_password"`
+	SharedWith string `json:"shared_with"`
+	SSHTarget
 }
 
 // Host 是渲染进 moox.toml 的一台主机。
 type Host struct {
-	ID          string
-	Address     string
-	Region      string
-	Provider    string
-	TLSMode     string
-	SSHPort     int
-	SSHUser     string
-	SSHPassword string
+	ID       string
+	Address  string
+	Region   string
+	Provider string
+	TLSMode  string
+	SSHPort  int
+	SSHUser  string
 	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
 	Outbound   bool
 	Components []string
 }
 
-// Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、检测因子机。
+// Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、确认免密登录、检测因子机。
 type Environment struct {
 	Lookup func(ctx context.Context, keys Keys, address string) (Instance, error)
-	Probe  func(ctx context.Context, target FactorServer) (ProbeReport, error)
+	Login  func(ctx context.Context, target SSHTarget) (LoginReport, error)
+	Probe  func(ctx context.Context, target SSHTarget) (ProbeReport, error)
+}
+
+// requireLogin 确认这台服务器已经能用 MooX 密钥免密登录。
+func (env Environment) requireLogin(ctx context.Context, title string, target SSHTarget) error {
+	report, err := env.Login(ctx, target)
+	if err != nil {
+		return fmt.Errorf("%s：%w", title, err)
+	}
+	if !report.Ready {
+		return fmt.Errorf("%s还不能免密登录，请回到「免密登录」一步完成授权", title)
+	}
+	return nil
 }
 
 const maxFieldBytes = 512
@@ -181,19 +190,11 @@ func canShare(role Role, with string) bool {
 
 // host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件部署的主机。
 func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role, catalog servicecatalog.Catalog) (Host, error) {
-	s.Address = strings.TrimSpace(s.Address)
-	s.SSHUser = strings.TrimSpace(s.SSHUser)
-	for _, field := range []struct{ name, value string }{
-		{"公网 IP", s.Address}, {"SSH 用户名", s.SSHUser}, {"SSH 密码", s.SSHPassword},
-	} {
-		if err := checkText(role.Title+"的"+field.name, field.value, true); err != nil {
-			return Host{}, err
-		}
-	}
-	port, err := sshPort(role.Title, s.SSHPort)
+	target, err := s.SSHTarget.normalize(role.Title)
 	if err != nil {
 		return Host{}, err
 	}
+	s.SSHTarget = target
 	for _, id := range role.components {
 		if component, ok := catalog.Component(id); !ok || component.Scope == servicecatalog.ScopeHost {
 			return Host{}, fmt.Errorf("%s的组件 %q 不在服务目录里，请同步模板", role.Title, id)
@@ -203,15 +204,18 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	if err != nil {
 		return Host{}, fmt.Errorf("%s：%w", role.Title, err)
 	}
+	if err := env.requireLogin(ctx, role.Title, target); err != nil {
+		return Host{}, err
+	}
 	return Host{
 		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent", TLSMode: role.tlsMode,
-		SSHPort: port, SSHUser: s.SSHUser, SSHPassword: s.SSHPassword, Components: append([]string(nil), role.components...),
+		SSHPort: target.SSHPort, SSHUser: target.SSHUser, Components: append([]string(nil), role.components...),
 	}, nil
 }
 
 // factorHost 检测因子机并换算成只能出站的部署主机，部署 factor-engine 与 archive-worker。
 func (r *Request) factorHost(ctx context.Context, env Environment, role Role, catalog servicecatalog.Catalog) (Host, error) {
-	target, err := r.Servers.Factor.normalize()
+	target, err := r.Servers.Factor.normalize(role.Title)
 	if err != nil {
 		return Host{}, err
 	}
@@ -220,12 +224,12 @@ func (r *Request) factorHost(ctx context.Context, env Environment, role Role, ca
 			return Host{}, fmt.Errorf("%s的组件 %q 不在服务目录里，请同步模板", role.Title, id)
 		}
 	}
+	if err := env.requireLogin(ctx, role.Title, target); err != nil {
+		return Host{}, err
+	}
 	report, err := env.Probe(ctx, target)
 	if err != nil {
 		return Host{}, err
-	}
-	if report.HostKey != "" {
-		return Host{}, fmt.Errorf("第一次连接%s，请先点「检测环境」并确认它的主机指纹", role.Title)
 	}
 	if !report.OK {
 		for _, item := range report.Items {
@@ -236,7 +240,7 @@ func (r *Request) factorHost(ctx context.Context, env Environment, role Role, ca
 		return Host{}, fmt.Errorf("%s环境检测没有通过", role.Title)
 	}
 	return Host{
-		ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser, SSHPassword: target.SSHPassword,
+		ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser,
 		Outbound: true, Components: append([]string(nil), role.components...),
 	}, nil
 }

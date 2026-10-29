@@ -47,6 +47,9 @@ func newSetupReleaseCommand(deps setupDeps) *cobra.Command {
 		if options.RepositoryRoot, err = filepath.Abs(source); err != nil {
 			return err
 		}
+		if err := defaultBundleBinaries(options.RepositoryRoot, &options.BinaryDirectory, &options.StorageBinaryDirectory); err != nil {
+			return err
+		}
 		for _, directory := range []*string{&options.BinaryDirectory, &options.StorageBinaryDirectory} {
 			if *directory != "" {
 				if *directory, err = filepath.Abs(*directory); err != nil {
