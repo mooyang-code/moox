@@ -5,9 +5,9 @@
 
 ## 0. 先跟用户确认
 
-- **腾讯云账号**：MooX 目前只支持腾讯云。需要一个子用户的 API 密钥，授权 6 个预设策略：
+- **云账号**：需要调用云厂商接口的操作（识别服务器、防火墙、采集云函数、日志服务）目前对接腾讯云 API，其他云厂商后续接入。需要一个腾讯云子用户的 API 密钥，授权 6 个预设策略：
   `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess`。
-- **服务器**（腾讯云轻量应用服务器或 CVM，Linux x86_64，SSH 能登录，有 sudo 或 `/data` 可写）：
+- **服务器**（Linux x86_64，SSH 能登录，有 sudo 或 `/data` 可写；目前需要是上面腾讯云账号下的轻量应用服务器或 CVM，`config init` 按 IP 识别地域与规格）：
 
   | 角色 | 必需 | 建议配置 | 跑什么 |
   | --- | --- | --- | --- |
