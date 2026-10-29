@@ -42,7 +42,7 @@ func init() {
 }
 
 func newDoctorCommand(deps doctorCommandDeps) *cobra.Command {
-	cmd := &cobra.Command{Use: "doctor", Short: "Run bounded MooX deployment checks", SilenceUsage: true}
+	cmd := &cobra.Command{Use: "doctor", Short: "部署与运行诊断：告警、新部署检查、按监控事实诊断模块", SilenceUsage: true}
 	cmd.AddCommand(newDoctorModeCommand("bootstrap", deps), newDoctorModeCommand("diagnose", deps), newDoctorAlertsCommand(deps))
 	return cmd
 }
@@ -103,7 +103,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
-		Short:        map[string]string{"bootstrap": "Check a new local deployment", "diagnose": "Interpret bounded Monitor facts"}[mode],
+		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断模块"}[mode],
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, _ []string) error {

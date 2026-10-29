@@ -758,7 +758,7 @@ func metadataIntValue(metadata map[string]any, key string) (int, bool) {
 }
 
 // collectorSCFBinaryName 是产物包里预编译的 SCF 采集函数程序。
-const collectorSCFBinaryName = "moox-collector-scf-market_data"
+const collectorSCFBinaryName = "moox-collector-scf"
 
 func buildCollectorLinuxBinary(ctx context.Context, collectorRoot, outPath, version, entrypoint string) error {
 	if entrypoint != "market_data" {
