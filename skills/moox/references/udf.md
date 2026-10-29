@@ -48,5 +48,6 @@ moox-cli udf activate <名称>@<哈希> --dry-run       # 影响清单与前提�
 
 ## 失败语义
 
-UDF 失败（panic、超时、内存超限）只让这一次计算失败，本次运行的成员全部记失败，**不写 NaN**；引擎与其他任务不受影响。
+UDF 失败（panic、超时、内存超限）只让这一次计算失败：同一任务本期的成员结果全部为空值（NULL，**不写 NaN**），任务状态 `degraded`，`GetStatus` 的 `failed_subjects` 列出失败标的；引擎与其他任务不受影响，故障成员撤掉后下一期恢复。
+失败原因看引擎指标 `factor_udf_failures_total{udf,reason}`（`trap`、`timeout` 等），日志里只有 `reason=degraded`。
 在 `fill_nan`、`cs_rank` 里调用 UDF，失败同样整体失败，不会被吞成空值。
