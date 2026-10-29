@@ -1,6 +1,5 @@
 // Package factorexpr 是因子表达式引擎：解析 YAML 定义（params / let / outputs），把 BRAIN 风格的表达式编译成
 // 带类型的表达式树，推导输入列、回看与因子类型，并把一个因子集的全部因子合并成去重后的计算图。
-// 设计见 docs/计划/因子表达式引擎详细设计.md。
 package factorexpr
 
 import (

@@ -327,7 +327,7 @@ type FactorSetupTask struct {
 	Members         []FactorSetupMember `toml:"members"`
 }
 
-// FactorSetupDefinition 引用 YAML 因子库文件里的一个定义（docs/计划/因子表达式引擎详细设计.md 9.5）：
+// FactorSetupDefinition 引用 YAML 因子库文件里的一个定义：
 // 展示名、表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到。定义不含数据集、频率和状态。
 type FactorSetupDefinition struct {
 	FactorID string `toml:"factor_id"`

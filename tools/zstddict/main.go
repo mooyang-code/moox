@@ -6,7 +6,6 @@
 //
 // 语料目录按来源分子目录（写、读、元数据、控制面、事件行、指标快照、事件其他、计划等），每个样本一个文件。
 // 训练调用 zstd 命令行的 --train（COVER 系列）：klauspost 的 zstd.BuildDict 需要调用方自己提供字典主体，不做片段选择。
-// 详见 docs/计划/统一压缩算法（zstd字典）执行计划.md 第 6 节。
 package main
 
 import (

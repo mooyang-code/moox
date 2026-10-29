@@ -1,5 +1,5 @@
 // Package watermark 保存因子任务的连续水位：committed_through 这一期及之前已经连续算完，
-// 引擎据此逐期推进，不跳过任何还没补到的周期（设计见 docs/计划/因子连续水位详细设计.md）。
+// 引擎据此逐期推进，不跳过任何还没补到的周期。
 package watermark
 
 import (

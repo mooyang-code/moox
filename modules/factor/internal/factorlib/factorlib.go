@@ -1,4 +1,4 @@
-// Package factorlib 读取 YAML 因子库（docs/计划/因子表达式引擎详细设计.md 9.5）：每个 *.yaml 文件是
+// Package factorlib 读取 YAML 因子库：每个 *.yaml 文件是
 // [{factor_id, name, category_id, category_name, spec}] 列表，一个文件可以包含多个因子。
 package factorlib
 

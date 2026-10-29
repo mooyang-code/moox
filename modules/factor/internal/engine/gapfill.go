@@ -18,7 +18,6 @@ import (
 // 跳过恢复：引擎每隔一段时间扫描账本里待恢复的 (标的, 周期, 因子)，在进程内用补算执行器做「只填充」重算：
 // 窗口检查通过才计算并写入，仍有洞就什么都不写（该键最初跳过时已写成 NULL）。写入确认后追加 repaired。
 // 待办有两种来源：回看窗口有空洞，或者实时周期里标的还在预热（reason=warming，本期没有算）。
-// 设计见 docs/计划/因子窗口空洞防护详细设计.md 2.6。
 
 type setByID interface {
 	SetByID(taskID string) (domain.EngineTask, SetLookup)

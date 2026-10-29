@@ -16,7 +16,7 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
-// 初始数据导入包（docs/计划/初始数据导入执行计划.md 第 3 节）：
+// 初始数据导入包：
 //
 //	import-pack/
 //	  manifest.json

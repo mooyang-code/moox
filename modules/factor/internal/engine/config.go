@@ -54,7 +54,7 @@ type UDFConfig struct {
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
-// WatermarkConfig 是连续水位：每个任务从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
+// WatermarkConfig 是连续水位：每个任务从水位下一期逐期推进，前面有还没补到的周期就停住。
 type WatermarkConfig struct {
 	// StateFile 保存各任务的水位与阻塞状态。
 	StateFile string `yaml:"state_file"`

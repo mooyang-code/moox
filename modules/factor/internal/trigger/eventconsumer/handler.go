@@ -32,7 +32,7 @@ type Handler struct {
 	registry *events.Registry
 	initErr  error
 	cfg      HandlerConfig
-	// continuity 非空时按连续水位逐期推进（设计见 docs/计划/因子连续水位详细设计.md）。
+	// continuity 非空时按连续水位逐期推进。
 	continuity *Continuity
 	// gate 非空时，任务没有处于预热或运行（生命周期门禁）就不计算：事件直接 ACK，水位不前进，
 	// 启动之后由下一个事件和追赶循环从水位下一期补算。
