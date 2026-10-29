@@ -6,7 +6,7 @@ description: Use for everything about the MooX quant system (MooX 量化系统) 
 # MooX
 
 MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 → 因子计算 → 策略目标 → 交易执行，配全链路监控、Web 管理台和 `moox-cli`。
-部署在用户自己的腾讯云服务器上（可加一台局域网因子机）。用户只装这个 skill，部署、初始化和日常管理都由 Agent 用 `moox-cli` 完成。
+部署在用户自己的云服务器上（可加一台局域网因子机）；需要调用云厂商接口的操作目前对接腾讯云 API，其他云厂商后续接入。用户只装这个 skill，部署、初始化和日常管理都由 Agent 用 `moox-cli` 完成。
 
 ## 安全边界（每次都要遵守）
 

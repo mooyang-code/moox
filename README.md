@@ -3,7 +3,7 @@
 面向个人的自托管量化系统：行情采集、数据存储、因子计算、策略目标、交易执行和全链路监控，
 提供 Web 管理台和 `moox-cli` 命令行。**装上 MooX 的 Agent skill，部署、初始化和日常管理都可以交给 AI Agent 完成。**
 
-MooX 是单用户系统：唯一的登录用户拥有全部管理能力；登录、会话、请求签名、防重放和配置加密始终开启。目前只支持部署在腾讯云上。
+MooX 是单用户系统：唯一的登录用户拥有全部管理能力；登录、会话、请求签名、防重放和配置加密始终开启。部署在你自己的云服务器上；需要调用云厂商接口的操作（识别服务器、开放防火墙端口、部署采集云函数、日志服务）目前对接腾讯云 API，其他云厂商后续接入。
 
 ## 功能
 
@@ -38,32 +38,18 @@ MooX 的特点：
 - **为 Agent 设计**：管理台的功能在命令行里都有对应入口，skill 告诉 Agent 怎么部署、怎么排查、哪些操作要先问用户；密码与密钥只在用户本机的页面里输入，不经过 AI。
 - **弹性采集**：海外机收 WebSocket 推送保证实时性，云函数按地域横向扩展拉取，自动补采缺口。
 
-不适合的场景：高频与盘口级交易（最小周期 1 分钟）、需要大规模参数寻优的研究、不用腾讯云的部署；交易所目前接入 Binance、OKX 和模拟盘，行情源目前是币安与东方财富。
+不适合的场景：高频与盘口级交易（最小周期 1 分钟）、需要大规模参数寻优的研究；交易所目前接入 Binance、OKX 和模拟盘，行情源目前是币安与东方财富。
 
 ## 架构
 
-```text
-              本机：moox-cli（Agent 通过 skill 调用） · 浏览器：Web 管理台
-                                   │ SSH 隧道 / HTTPS
-┌──────────────────────────── 管理台机 ─────────────────────────────┐
-│ 管理后台 Admin · 控制台代理 · 监控 · 采集调度 · 云函数管理 · 因子管理 · 策略 │
-└───────────────────────────────┬──────────────────────────────────┘
-          主机网关（每台主机一个，签名校验 + 方法级 ACL）  事件总线 EventBus
-┌────────────── 存储机 ──────────────┐   ┌────────── 海外机（可选）──────────┐
-│ Storage（元数据 / 事实 / View）       │   │ WS 行情推送 · 出口代理 · 交易执行   │
-│ EventBus · 外部接入 Access            │   │ 外部接入 Access                     │
-└───────────────────────────────────┘   └───────────────────────────────────┘
-┌────────── 因子机（可选，局域网 Linux）──────────┐   腾讯云 SCF：按地域定时拉取行情
-│ 因子引擎（本地 K 线副本 + 增量计算） · 归档 Worker │
-└──────────────────────────────────────────────┘
-```
+![MooX 系统架构](docs/public/architecture.svg)
 
 详见 [总体设计](docs/总体设计.md)。
 
 ## 前置条件
 
-- **腾讯云账号**：建一个子用户的 API 密钥，授权 `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess` 六个预设策略。
-- **服务器**（腾讯云轻量应用服务器或 CVM，Linux x86_64）：
+- **云账号**：云上的自动化操作目前通过腾讯云 API 完成（其他云厂商后续接入）。建一个腾讯云子用户的 API 密钥，授权 `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess` 六个预设策略。
+- **服务器**（Linux x86_64；目前需要是上面这个腾讯云账号下的轻量应用服务器或 CVM，以便自动识别地域规格、开放防火墙）：
 
   | 角色 | 是否必需 | 建议配置 |
   | --- | --- | --- |
@@ -77,8 +63,6 @@ MooX 的特点：
 
 ## 快速开始
 
-### 用 AI Agent 安装（推荐）
-
 把下面这段话发给你的 Agent（Claude Code、Codex 等能执行命令的 Agent）：
 
 ```text
@@ -87,39 +71,13 @@ MooX 的特点：
    下载最新版本的 moox-bundle_<版本>_linux_amd64.tar.gz、适合我这台电脑的 moox-cli_<版本>_<系统>_<架构> 和 SHA256SUMS，校验后解压：
    产物包解压出 moox-<版本>/ 目录，把 moox-cli 放进 moox-<版本>/bin/。之后所有命令都在 moox-<版本>/ 目录里执行。
 2. 把 moox-<版本>/skills/moox 安装成你的 skill（Claude Code：复制或软链到 ~/.claude/skills/moox），然后读取其中的 SKILL.md，按 references/install.md 执行。
-3. 运行 ./bin/moox-cli config init，让我在自己的浏览器里填写腾讯云密钥、服务器 IP、开通 SSH 免密登录、设置管理员和告警。
+3. 运行 ./bin/moox-cli config init，让我在自己的浏览器里填写云账号密钥、服务器 IP、开通 SSH 免密登录、设置管理员和告警。
    你不要打开、填写或读取这个页面和生成的 moox.toml。
 4. 我填完后，按 skill 依次完成部署、初始化和验收，最后告诉我管理台地址和还需要我做的事。
 所有写操作先给我预览，删除、清空、重置等操作必须等我确认。
 ```
 
-### 手动安装
-
-```bash
-VER=v0.2.0
-OS=darwin_arm64            # darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64 / windows_amd64
-BASE=https://github.com/mooyang-code/moox/releases/download/${VER}
-curl -fLO ${BASE}/moox-bundle_${VER}_linux_amd64.tar.gz
-curl -fLO ${BASE}/moox-cli_${VER}_${OS}.tar.gz      # Windows 是 .zip
-curl -fLO ${BASE}/SHA256SUMS && shasum -a 256 -c SHA256SUMS --ignore-missing
-tar -xzf moox-bundle_${VER}_linux_amd64.tar.gz
-tar -xzf moox-cli_${VER}_${OS}.tar.gz -C moox-${VER}/bin
-cd moox-${VER}
-
-./bin/moox-cli config init                                   # 浏览器里填写配置、开通免密登录
-./bin/moox-cli setup validate
-./bin/moox-cli setup bootstrap --stage core
-./bin/moox-cli setup deploy-host --host storage              # 每台非管理台主机执行一次
-./bin/moox-cli setup deploy-unit --host storage --profile eventbus
-./bin/moox-cli setup deploy-unit --host storage --profile storage
-./bin/moox-cli setup deploy-unit --host storage --profile access
-./bin/moox-cli setup bootstrap --stage control --create-proxy-ca
-./bin/moox-cli setup init --config-dir ./config/setup --storage-host storage
-./bin/moox-cli doctor alerts --format text
-```
-
-有海外机、因子机时还要部署对应单元，完整顺序和说明见 [安装与初始化](skills/moox/references/install.md)。
-部署完成后用浏览器打开 `https://<管理台地址>:9527`。
+Agent 会按 [安装与初始化](skills/moox/references/install.md) 逐步完成，部署完成后用浏览器打开 `https://<管理台地址>:9527`。
 
 ## 管理台
 
@@ -165,3 +123,10 @@ scripts/release/build-release.sh vX.Y.Z               # 生成发布产物
 ```
 
 仓库是 Go Workspace（`go.work`），每个模块、共享包都是独立的 Go module；模块之间只通过 RPC 和事件交互。构建环境见 [构建手册](docs/构建手册.md)。
+
+## 许可证
+
+[MIT License](LICENSE)：可以自由用于学习、研究和其他用途，可以修改和再分发。基于本项目修改或再分发时，
+请保留 LICENSE 中的版权与许可声明，并注明来源（https://github.com/mooyang-code/moox）。
+
+本项目不构成任何投资建议。量化交易有亏损风险，实盘使用前请充分验证，风险自负。

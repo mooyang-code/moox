@@ -113,7 +113,7 @@ export default defineConfig({
     ],
 
     footer: {
-      message: '基于 CC BY-NC-SA 4.0 发布',
+      message: '基于 MIT License 发布',
       copyright: 'Copyright © 2026 mooyang-code',
     },
   },
