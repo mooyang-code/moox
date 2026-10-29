@@ -126,7 +126,7 @@ scripts/release/build-release.sh vX.Y.Z               # 生成发布产物
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)：可以自由用于学习、研究和其他用途，可以修改和再分发。基于本项目修改或再分发时，
-请保留 [NOTICE](NOTICE) 中的来源声明，并在修改过的文件中注明已修改。
+[MIT License](LICENSE)：可以自由用于学习、研究和其他用途，可以修改和再分发。基于本项目修改或再分发时，
+请保留 LICENSE 中的版权与许可声明，并注明来源（https://github.com/mooyang-code/moox）。
 
 本项目不构成任何投资建议。量化交易有亏损风险，实盘使用前请充分验证，风险自负。
