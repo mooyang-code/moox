@@ -348,4 +348,4 @@ FactorMgr 的表结构校验是严格的（遇到不认识的表或列拒绝启�
 - 撤掉故障成员后，下一期恢复 `complete`，结果恢复为有值。
 - 演练后删掉了测试任务与因子定义（先停用任务、再移除成员、再删任务、最后删因子定义）；故障示例 `faulty_mean` 留在目录里（没有引用方，没有删除 UDF 的接口），测试结果数据集 `dataset_factor_udf_fault_1m` 仍在存储里。
 
-演练发现的不足（未改）：失败原因（trap、timeout、memory）只在指标 `factor_udf_failures_total{reason}` 里，引擎日志的 `factor_compute_failed` 只写 `reason=degraded`，排查时要去看指标；需要时在引擎里补一行带原因的日志，随下次引擎发布带上。
+演练发现的不足：失败原因（trap、timeout、memory）只在指标 `factor_udf_failures_total{reason}` 里，引擎日志的 `factor_compute_failed` 只写 `reason=degraded`。已补：引擎在每批失败的调用后打一行 `factor_udf_call_failed udf=… reason=… elapsed=… error=…`（一批一行，不随标的数放大）。这一行在代码里，线上引擎要随下次发布才有。

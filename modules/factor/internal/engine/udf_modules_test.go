@@ -288,7 +288,7 @@ func TestEngineHostExecutesLoadedModule(t *testing.T) {
 	m := newModules(t, f)
 	require.NoError(t, m.Ensure(context.Background(), hash, "ts_mean_udf"))
 	var calls atomic.Int32
-	m.Host().SetObserver(func(udf string, _ time.Duration, copied int64, reason string) {
+	m.Host().SetObserver(func(_ context.Context, udf string, _ time.Duration, copied int64, reason string, _ error) {
 		require.Equal(t, "ts_mean_udf", udf)
 		require.Positive(t, copied)
 		require.Empty(t, reason)

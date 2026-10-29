@@ -442,8 +442,11 @@ func (r *Runtime) modulesCheck(set domain.EngineTask) (lifecycle.Check, bool) {
 	return lifecycle.Check{Name: "自定义算子模块", Status: lifecycle.CheckPass}, true
 }
 
-// observeUDF 记录一批自定义算子调用的指标。
-func (r *Runtime) observeUDF(udf string, elapsed time.Duration, copied int64, reason string) {
+// observeUDF 记录一批自定义算子调用的指标；失败时打一行带原因的日志（一批调用一行，不随标的数放大）。
+func (r *Runtime) observeUDF(ctx context.Context, udf string, elapsed time.Duration, copied int64, reason string, err error) {
+	if reason != "" {
+		log.ErrorContextf(ctx, "factor_udf_call_failed udf=%s reason=%s elapsed=%s error=%v", udf, reason, elapsed.Round(time.Millisecond), err)
+	}
 	if r.metrics == nil {
 		return
 	}

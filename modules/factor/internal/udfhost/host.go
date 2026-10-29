@@ -23,12 +23,12 @@ type Host struct {
 	used    map[string]time.Time // 各版本最近一次被借用或加载的时间（Sweep 用）
 	// loadMu 串行化 Ensure 的加载，避免同一版本被并发地拉取与编译。
 	loadMu sync.Mutex
-	// observe 在每批调用结束后调用（耗时、拷进模块的字节数、失败原因；成功时 reason 为空），可为 nil。
-	observe func(udf string, elapsed time.Duration, copied int64, reason string)
+	// observe 在每批调用结束后调用（耗时、拷进模块的字节数、失败原因与错误；成功时 reason 为空、err 为 nil），可为 nil。
+	observe func(ctx context.Context, udf string, elapsed time.Duration, copied int64, reason string, err error)
 }
 
-// SetObserver 设置调用观察者（指标）；必须在开始执行之前调用。
-func (h *Host) SetObserver(observe func(udf string, elapsed time.Duration, copied int64, reason string)) {
+// SetObserver 设置调用观察者（指标与失败日志）；必须在开始执行之前调用。
+func (h *Host) SetObserver(observe func(ctx context.Context, udf string, elapsed time.Duration, copied int64, reason string, err error)) {
 	h.observe = observe
 }
 
@@ -154,7 +154,7 @@ func (h *Host) Eval(ctx context.Context, call *exec.UDFCall) error {
 		for _, in := range call.Inputs {
 			copied += int64(len(in)) * 8
 		}
-		h.observe(m.Info.Manifest.Name, time.Since(started), copied, failureReason(err))
+		h.observe(ctx, m.Info.Manifest.Name, time.Since(started), copied, failureReason(err), err)
 	}
 	return err
 }
