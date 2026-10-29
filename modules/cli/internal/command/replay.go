@@ -21,6 +21,10 @@ var replayCmd = &cobra.Command{
 	DisableFlagParsing: true,
 	SilenceUsage:       true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// 参数交给回放自己解析，所以 --help 要在这里接住。
+		if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+			return cmd.Help()
+		}
 		return command.Run(cmd.Context(), args, cmd.OutOrStdout())
 	},
 }

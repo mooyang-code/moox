@@ -23,7 +23,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 ## 新增并部署一台机器
 
 1. 由用户准备含新 `[hosts.<ID>]` 与 `[deployments]` 的配置。当前 `config edit` 只能修改既有主机的 SSH 登录方式，地址、地域、用途只读，不能新增主机；明文配置可由用户自行编辑后用 `config encrypt` 加密，已有加密配置目前没有新增主机的表单入口。Agent 不读取或代改秘密配置。
-2. `moox-cli setup validate --file ./moox.toml`；`host_key_unknown` 时按 [`custom-setup.md`](custom-setup.md) 通过独立可信渠道核对指纹后 `setup trust-host`。
+2. `moox-cli setup validate --file ./moox.toml`；`host_key_unknown` 时按 [`install.md`](install.md) 通过独立可信渠道核对指纹后 `setup trust-host`。
 3. `moox-cli setup deploy-host --host <ID>` 安装 Host Gateway 与 Host Agent，并把主机登记到 Admin。
 4. 按该主机登记的业务组件逐个 `setup deploy-unit --host <ID> --profile <单元>`；命令只安装 `[deployments]` 里登记在该主机上的单元。
 5. 需要调整已登记主机的组件清单时，`setup sync-deployments --host <ID>` 把 `moox.toml` 里的完整部署同步给 Admin（保留已有的启停状态）。
@@ -68,7 +68,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 1. 停止各主机的守护与全部单元，删除 `/data/moox`；因子机上停止并删除两个外部程序的服务与安装目录。
 2. 清理云上由系统创建的 SCF 函数与触发器；删除本机 CLI 的部署状态目录与操作员身份目录（或改用空目录）。
-3. 按 [`custom-setup.md`](custom-setup.md) 的顺序重新初始化，外部程序放在 `setup init` 之后部署。
+3. 按 [`install.md`](install.md) 的顺序重新初始化，外部程序放在 `setup init` 之后部署。
 
 ## 主机监控
 

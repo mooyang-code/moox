@@ -2,8 +2,6 @@
 
 每台主机一个的服务网关：按原始 PB/JSON 字节校验 HMAC，依据 Admin 下发的完整快照和 `servicecatalog` ACL，将请求转发到本机固定 loopback 端口。
 
-执行计划：[网关与服务部署重构](../../docs/计划/网关与服务部署重构执行计划.md)。
-
 ## 构建与测试
 
 ```bash

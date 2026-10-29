@@ -1,7 +1,6 @@
 # zstddict
 
-训练、评估和审查 `packages/wirecompress` 使用的 zstd 字典。完整流程见
-[统一压缩算法（zstd字典）执行计划](../../docs/计划/统一压缩算法（zstd字典）执行计划.md) 第 6 节。
+训练、评估和审查 `packages/wirecompress` 使用的 zstd 字典。
 
 ```bash
 go run ./tools/zstddict train -corpus <训练语料> -out default-v2.zdict -id 0x4D580003 -size 224

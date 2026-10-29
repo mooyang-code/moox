@@ -132,8 +132,11 @@ func newSession(addr, output string, deadline time.Time, keys configcrypt.KeySto
 		"submit":         s.submit,
 		"tencent/verify": s.verifyTencent,
 		"tencent/lookup": s.lookupServer,
+		"ssh/key":        s.sshKey,
+		"ssh/check":      s.checkLogin,
+		"ssh/trust":      s.trustHost,
+		"ssh/authorize":  s.authorize,
 		"factor/check":   s.checkFactor,
-		"factor/trust":   s.trustFactor,
 	}
 	return s, nil
 }
@@ -167,38 +170,93 @@ func (s *session) lookupServer(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, response{OK: true, Instance: &instance})
 }
 
-func (s *session) checkFactor(w http.ResponseWriter, r *http.Request) {
-	var target FactorServer
+// sshKey 返回本机的 MooX 公钥（没有时生成），页面展示给用户并用于生成 ssh-copy-id 命令。
+func (s *session) sshKey(w http.ResponseWriter, r *http.Request) {
+	key, err := ensureSSHKey()
+	if err != nil {
+		reply(w, http.StatusInternalServerError, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Key: &key})
+}
+
+func (s *session) checkLogin(w http.ResponseWriter, r *http.Request) {
+	var target SSHTarget
 	if !s.decode(w, r, &target) {
 		return
 	}
-	s.checkTarget(w, r, target)
+	s.replyLogin(w, r, target, func(SSHTarget) error { return nil })
 }
 
-// trustFactor 在用户确认指纹后记录因子机的主机密钥，再检测一次。
-func (s *session) trustFactor(w http.ResponseWriter, r *http.Request) {
+// trustHost 在用户确认指纹后记录服务器的主机密钥，再检测一次免密登录。
+func (s *session) trustHost(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Target      FactorServer `json:"target"`
-		Fingerprint string       `json:"fingerprint"`
+		Target      SSHTarget `json:"target"`
+		Fingerprint string    `json:"fingerprint"`
 	}
 	if !s.decode(w, r, &request) {
 		return
 	}
-	target, err := request.Target.normalize()
-	if err == nil {
-		err = checkText("主机指纹", strings.TrimSpace(request.Fingerprint), true)
+	s.replyLogin(w, r, request.Target, func(target SSHTarget) error {
+		if err := checkText("主机指纹", strings.TrimSpace(request.Fingerprint), true); err != nil {
+			return err
+		}
+		return s.prober.Trust(r.Context(), target, request.Fingerprint)
+	})
+}
+
+// authorize 用一次性的密码安装 MooX 公钥，再检测一次免密登录。密码不保存、不写日志。
+func (s *session) authorize(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Target   SSHTarget `json:"target"`
+		Password string    `json:"password"`
 	}
+	if !s.decode(w, r, &request) {
+		return
+	}
+	defer func() { request.Password = "" }()
+	s.replyLogin(w, r, request.Target, func(target SSHTarget) error {
+		if err := checkText("SSH 密码", request.Password, true); err != nil {
+			return err
+		}
+		return s.prober.Authorize(r.Context(), target, request.Password)
+	})
+}
+
+// replyLogin 校验目标、先执行 before（记录指纹或安装公钥），再报告免密登录状态和手工开通的命令。
+func (s *session) replyLogin(w http.ResponseWriter, r *http.Request, target SSHTarget, before func(SSHTarget) error) {
+	target, err := target.normalize("服务器")
 	if err == nil {
-		err = s.prober.Trust(r.Context(), target, request.Fingerprint)
+		err = before(target)
+	}
+	var report LoginReport
+	if err == nil {
+		report, err = s.prober.Login(r.Context(), target)
 	}
 	if err != nil {
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
-	s.checkTarget(w, r, target)
+	login := loginReply{LoginReport: report}
+	if !report.Ready && report.HostKey == "" {
+		if key, err := ensureSSHKey(); err == nil {
+			login.CopyID = copyIDCommand(key, target)
+		}
+	}
+	reply(w, http.StatusOK, response{OK: true, Login: &login})
 }
 
-func (s *session) checkTarget(w http.ResponseWriter, r *http.Request, target FactorServer) {
+// loginReply 在还没安装公钥时附带用户可以自己在终端执行的 ssh-copy-id 命令。
+type loginReply struct {
+	LoginReport
+	CopyID string `json:"copy_id,omitempty"`
+}
+
+func (s *session) checkFactor(w http.ResponseWriter, r *http.Request) {
+	var target SSHTarget
+	if !s.decode(w, r, &target) {
+		return
+	}
 	report, err := s.probe(r.Context(), target)
 	if err != nil {
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
@@ -207,12 +265,16 @@ func (s *session) checkTarget(w http.ResponseWriter, r *http.Request, target Fac
 	reply(w, http.StatusOK, response{OK: true, Report: &report})
 }
 
-func (s *session) probe(ctx context.Context, target FactorServer) (ProbeReport, error) {
-	target, err := target.normalize()
+func (s *session) probe(ctx context.Context, target SSHTarget) (ProbeReport, error) {
+	target, err := target.normalize("因子机")
 	if err != nil {
 		return ProbeReport{}, err
 	}
 	return s.prober.Probe(ctx, target)
+}
+
+func (s *session) login(ctx context.Context, target SSHTarget) (LoginReport, error) {
+	return s.prober.Login(ctx, target)
 }
 
 func (s *session) submit(w http.ResponseWriter, r *http.Request) {
@@ -220,7 +282,7 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &request) {
 		return
 	}
-	raw, err := Render(r.Context(), &request, Environment{Lookup: s.cloud.lookup, Probe: s.probe})
+	raw, err := Render(r.Context(), &request, Environment{Lookup: s.cloud.lookup, Login: s.login, Probe: s.probe})
 	if err != nil {
 		// 校验没过不消耗令牌：用户改完可以直接再提交。
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})

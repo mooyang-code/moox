@@ -132,6 +132,8 @@ type response struct {
 	Account  *Account     `json:"account,omitempty"`
 	Instance *Instance    `json:"instance,omitempty"`
 	Report   *ProbeReport `json:"report,omitempty"`
+	Key      *SSHKey      `json:"key,omitempty"`
+	Login    *loginReply  `json:"login,omitempty"`
 	Overview *Overview    `json:"overview,omitempty"`
 	Form     *ConfigForm  `json:"form,omitempty"`
 	Value    string       `json:"value,omitempty"`

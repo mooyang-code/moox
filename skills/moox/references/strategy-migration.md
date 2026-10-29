@@ -59,7 +59,7 @@
 | --- | --- | --- |
 | 因子函数 | 因子定义（表达式，[factor-dsl.md](factor-dsl.md)），用户自己的因子不进仓库的因子库，直接写入系统 | `min_periods`、ewm 从首根递推会影响新上市标的的选币，要用 relaxed 算子（`ema_relaxed`、`ts_*_relaxed`），见 factor-dsl.md |
 | 因子参数的不同取值 | 同一定义在因子任务里的多个**固定参数成员**，成员键为 `因子ID__值1_值2` | 参数需要换算时（例如 `com=n` 换成 `span=2n+1`），换算只写在转换脚本里，并在 DSL 头部注释写明 |
-| 长回看（EMA 一类） | `ema(x, n, k)` / `ema_relaxed(x, n, k)` 固定预热根数 | 受三道限制：Storage 保留期、因子机 `engine.yaml` 的 `window.lookback` 和 `compute.max_memory`，三者都要装得下最长的回看（见 `docs/计划/因子任务与参数模型重构上线清单.md`）。预热根数是用户的决定 |
+| 长回看（EMA 一类） | `ema(x, n, k)` / `ema_relaxed(x, n, k)` 固定预热根数 | 受三道限制：Storage 保留期、因子机 `engine.yaml` 的 `window.lookback` 和 `compute.max_memory`，三者都要装得下最长的回看。预热根数是用户的决定 |
 | 一个子策略 | `type: tranche` 规则的一行 `params` | 一条规则最多 5000 行，整个策略合计最多 10000 个子策略；含参数表的 DSL 上限是 1 MiB |
 | 子策略模板 | `tranche:` 一节，用 `{列名}` 占位 | 选项（`hold_count`、`score`、`sizing`、`candidates.require_volume`）都要显式写出与原框架一致的取值，见 `docs/模块/策略.md` 的"tranche 规则"；同类策略可以做成策略模板（"策略模板"一节） |
 | 加权合并 | `stg_weight` 归一化后乘以规则预算 | `portfolio.leverage` 要留出余量：按数量持有会让 Σw 略大于 1 |
@@ -83,7 +83,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
   apply_moox_toml.sh               # 把片段合入用户的 moox.toml（演练 / --apply，写前备份，不打印配置内容）
 ```
 
-用户的 `moox.toml` 是加密文件。按 [custom-setup.md](custom-setup.md) 的规则，Agent 不读取、不打印它的内容，只通过 CLI 写入片段。
+用户的 `moox.toml` 是加密文件。按 [install.md](install.md) 的规则，Agent 不读取、不打印它的内容，只通过 CLI 写入片段。
 
 ### 4.2 转换脚本的要求
 

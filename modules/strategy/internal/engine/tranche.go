@@ -14,7 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-// tranche 规则的求值（docs/计划/批次持仓规则与止损设计.md 第 3 节）。
+// tranche 规则的求值。
 
 const (
 	reasonTrancheFilterAfter = "tranche_filter_after"

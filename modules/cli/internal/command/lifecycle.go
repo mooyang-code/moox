@@ -97,10 +97,21 @@ func init() {
 			return runLifecycleCatchup(cmd.Context(), lifecycleFlags, cmd.OutOrStdout())
 		},
 	})
-	for _, name := range []lifecycle.Command{lifecycle.CmdCheck, lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm, lifecycle.CmdPause, lifecycle.CmdResume, lifecycle.CmdRelease} {
-		name := name
+	for _, item := range []struct {
+		name  lifecycle.Command
+		short string
+	}{
+		{lifecycle.CmdCheck, "启动前检查：列出不通过的项和处理办法，不改变阶段"},
+		{lifecycle.CmdInit, "初始化：未就绪 → 就绪（准备本地状态与历史）"},
+		{lifecycle.CmdStart, "启动：就绪 → 试运行（完整计算，但不真实下单）"},
+		{lifecycle.CmdConfirm, "确认：试运行 → 运行"},
+		{lifecycle.CmdPause, "暂停：不再计算新周期（--for 可设定自动恢复）"},
+		{lifecycle.CmdResume, "恢复：先追赶暂停期间的周期，追平后放行"},
+		{lifecycle.CmdRelease, "放行：追赶已追平的对象回到暂停前的阶段"},
+	} {
+		name := item.name
 		lifecycleCmd.AddCommand(&cobra.Command{
-			Use: string(name), Short: "生命周期命令：" + string(name), Args: cobra.NoArgs,
+			Use: string(name), Short: item.short, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return runLifecycleCommand(cmd.Context(), lifecycleFlags, name, cmd.OutOrStdout())
 			},

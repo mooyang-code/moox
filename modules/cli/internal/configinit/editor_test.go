@@ -36,10 +36,24 @@ type editorOutcome struct {
 }
 
 // sampleText 是一份合法的明文配置（与 sampleRequest 同构）。
+// sampleText 是一份用 SSH 密码登录的配置：录入页生成的配置只用 MooX 密钥，
+// 但手写或旧的配置仍可以用密码，编辑页两种都要支持。
 func sampleText(t *testing.T) string {
 	t.Helper()
 	_, text := renderWith(t, sampleRequest(), nil)
-	return text
+	passwords := map[string]string{"control": "pw-control", "storage": "pw-storage", "overseas": "pw-compute"}
+	var out []string
+	host := ""
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "[hosts.") {
+			host = strings.TrimSuffix(strings.TrimPrefix(line, "[hosts."), "]")
+		}
+		if strings.HasPrefix(line, "ssh = ") {
+			line = strings.Replace(line, "private_key_file = "+tomlString(sshKeyTOMLPath), "password = "+tomlString(passwords[host]), 1)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func startEditor(t *testing.T, content []byte) *editorHarness {
@@ -431,5 +445,21 @@ func TestEditorPageHasASaveSuccessDialog(t *testing.T) {
 		if !strings.Contains(editorSource, want) {
 			t.Fatalf("配置页缺少 %q", want)
 		}
+	}
+}
+
+// 录入页生成的配置用 MooX 密钥登录，编辑页保存时要原样保留 private_key_file。
+func TestEditorKeepsThePrivateKeyFile(t *testing.T) {
+	_, generated := renderWith(t, sampleRequest(), nil)
+	h := startEditor(t, []byte(generated))
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	form := *reply.Form
+	form.Hosts[0].SSHPort = 2200
+	if status, reply, _ := h.call("config/update", form, nil); status != http.StatusOK {
+		t.Fatalf("保存: %d %+v", status, reply)
+	}
+	plain := h.plain()
+	if strings.Count(plain, "private_key_file = "+tomlString(sshKeyTOMLPath)) != 3 || !strings.Contains(plain, "port = 2200") {
+		t.Fatalf("保存后应保留每台主机的私钥路径:\n%s", plain)
 	}
 }

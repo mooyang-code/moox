@@ -103,7 +103,7 @@ if [[ ${#cgo_targets[@]} -gt 0 ]]; then
   tar -C "${ROOT}" --exclude=./.git --exclude=./bin --exclude=node_modules --exclude=./web/dist --exclude='./.claude' -cf - . \
     | "${DOCKER}" run --rm -i \
         -v moox-go-mod-cache:/root/go/pkg/mod -v moox-go-build-cache:/root/.cache/go-build \
-        -e "VERSION=${version}" -e "GIT_COMMIT=${commit}" \
+        -e "VERSION=${version}" -e "GIT_COMMIT=${commit}" -e "GO_STRIP=${GO_STRIP:-}" \
         -e "GOPROXY=${MOOX_BUILD_GOPROXY:-https://mirrors.tencent.com/go,direct}" -e GOFLAGS=-buildvcs=false \
         "${image}" bash -c 'mkdir -p /src /out && tar -x -C /src && bash /src/scripts/build/docker/container-build.sh "$@" && tar -C /out -cf - .' container-build "${cgo_targets[@]}" \
     | tar -x -C "${STAGE}"

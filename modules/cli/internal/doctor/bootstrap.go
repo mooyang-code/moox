@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -391,7 +390,7 @@ func processAlive(path string) bool {
 	if err != nil || pid <= 0 {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil
+	return pidAlive(pid)
 }
 
 func newRunID() string {

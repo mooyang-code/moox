@@ -700,7 +700,43 @@ func defaultOpenSetupInitStorage(
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureNativeDataNode(ctx, session.metadata, session.auth, session.nodeAuth); err != nil {
+		session.Close()
+		_ = transport.Close()
+		return nil, err
+	}
 	return &remoteSetupInitStorage{transport: transport, session: session}, nil
+}
+
+// 原生安装的 Storage 只有一个 DataNode：ID 固定（种子里的数据集都绑定它），运行端口见 storage 的 trpc_go.node.yaml。
+const (
+	nativeDataNodeID     = "storage-node-0"
+	nativeDataNodeTarget = "ip://127.0.0.1:20107"
+)
+
+type dataNodeRegistry interface {
+	ListDataNodes(context.Context, *storagepb.ListDataNodesReq) (*storagepb.ListDataNodesRsp, error)
+	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
+}
+
+// ensureNativeDataNode 在 Metadata 里登记 Storage 主机上的 DataNode，已登记则不动。
+func ensureNativeDataNode(ctx context.Context, api dataNodeRegistry, auth, nodeAuth *storagepb.AuthInfo) error {
+	list, err := api.ListDataNodes(ctx, &storagepb.ListDataNodesReq{AuthInfo: auth})
+	if err != nil || list.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return fmt.Errorf("data_node_list_failed")
+	}
+	for _, item := range list.GetItems() {
+		if item.GetNode().GetNodeId() == nativeDataNodeID {
+			return nil
+		}
+	}
+	rsp, err := api.RegisterDataNode(ctx, &storagepb.RegisterDataNodeReq{
+		AuthInfo: nodeAuth, NodeId: nativeDataNodeID, ServiceTarget: nativeDataNodeTarget, InitialName: "存储节点",
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return fmt.Errorf("data_node_register_failed: %s", rsp.GetRetInfo().GetMsg())
+	}
+	return nil
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {

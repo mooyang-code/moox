@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	xssh "golang.org/x/crypto/ssh"
@@ -36,7 +37,8 @@ func authentication(ctx context.Context, password string, opts Options) ([]xssh.
 	files := opts.IdentityFiles
 	if files == nil {
 		if homeDir, err := os.UserHomeDir(); err == nil {
-			for _, name := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
+			// moox_ed25519 是 moox-cli config init 生成并装到各服务器上的 MooX 专用密钥。
+			for _, name := range []string{"moox_ed25519", "id_ed25519", "id_ecdsa", "id_rsa"} {
 				files = append(files, filepath.Join(homeDir, ".ssh", name))
 			}
 		}
@@ -44,7 +46,8 @@ func authentication(ctx context.Context, password string, opts Options) ([]xssh.
 	var signers []xssh.Signer
 	for _, path := range files {
 		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		// Windows 不用 Unix 权限位表示私有文件，只在其他系统上要求私钥不对组和其他用户开放。
+		if err != nil || !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
 			continue
 		}
 		raw, err := os.ReadFile(path)

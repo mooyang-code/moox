@@ -1,6 +1,6 @@
 # 协议与命名边界
 
-Storage 当前元数据 Schema 为 **v14**，由 `modules/storage/schema/metadata.sql` 和
+Storage 当前元数据 Schema 为 **v15**，由 `modules/storage/schema/metadata.sql` 和
 `internal/service/metadata/sqlite/store.go` 严格校验。Dataset 直接保存 `data_node_id`，
 Metadata 保存 DataNode 的 `service_target`。部署负责注册 DataNode；激活条件由服务端校验，
 Doctor 只读诊断。首次激活前可解绑，激活后绑定不可变；不自动迁移旧 Schema。

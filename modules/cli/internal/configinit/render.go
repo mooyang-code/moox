@@ -109,7 +109,7 @@ func renderHost(host Host) []string {
 	if host.TLSMode != "" {
 		out = append(out, "tls_mode = "+tomlString(host.TLSMode))
 	}
-	return append(out, "ssh = { port = "+strconv.Itoa(host.SSHPort)+", username = "+tomlString(host.SSHUser)+", password = "+tomlString(host.SSHPassword)+" }")
+	return append(out, "ssh = { port = "+strconv.Itoa(host.SSHPort)+", username = "+tomlString(host.SSHUser)+", private_key_file = "+tomlString(sshKeyTOMLPath)+" }")
 }
 
 // tomlString 渲染 TOML 基本字符串。normalize 已经拒绝了控制字符，这里仍按规范转义，作为第二道防线。

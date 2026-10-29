@@ -24,7 +24,7 @@ var keyColumnTypes = []string{"VARCHAR", "VARCHAR", "TIMESTAMP_NS", "VARCHAR"}
 // writeRowGroups 把一批已按键合并的行写进 view_rows 并维护 view_series_counts。
 // 每组（携带同一组字段的行）只执行两条语句：先对不存在的键按序列累加计数，再整批 UPSERT。
 // 每个列绑定成一个 LIST 参数并用 unnest 展开，不再按 32 行拆成多条 VALUES 语句——后者在线上历史导入时
-// 每行要经过两轮 SQL，View 约 1100 行/秒（见 docs/计划/初始数据导入执行计划.md 第 6 节）。
+// 每行要经过两轮 SQL，View 约 1100 行/秒。
 // 返回计数阶段与写行阶段各自的耗时，供慢日志使用。
 func writeRowGroups(ctx context.Context, tx *sql.Tx, columns map[string]pb.FieldValueType, writes []viewindex.RowWrite, mode viewindex.WriteMode) (seriesTook, upsertTook time.Duration, err error) {
 	for _, group := range groupRowWrites(writes) {

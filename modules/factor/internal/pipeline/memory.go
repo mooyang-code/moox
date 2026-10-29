@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
 )
 
-// 每格开销的估算常量（字节，带余量），见 docs/计划/因子表达式引擎详细设计.md 7.5：
+// 每格开销的估算常量（字节，带余量）：
 //   - frameCellBytes：storageio.Frame 行式数据的一个单元（interface 值、装箱的 float64、切片分摊），现在只用于目标区间的行；
 //   - resultCellBytes：计算结果转换成逐行结果后的一个单元（ItemResult.Rows 里的值与行切片分摊）；
 //   - fieldBytes：组装与写入阶段一行里的一个字段（map 项、键、装箱值）。

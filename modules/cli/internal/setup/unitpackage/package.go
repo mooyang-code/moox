@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -426,10 +427,19 @@ func validUnitPath(name string) bool {
 	return name != "" && name != "." && path.Clean(name) == name && !path.IsAbs(name) && name != ".." && !strings.HasPrefix(name, "../") && !strings.ContainsAny(name, "\\\x00\r\n")
 }
 func unitTrackedFiles(ctx context.Context, root string) (map[string]bool, error) {
+	if manifest, ok, err := bundle.Load(root); err != nil {
+		return nil, err
+	} else if ok {
+		files := make(map[string]bool, len(manifest.Files))
+		for _, name := range manifest.Files {
+			files[name] = true
+		}
+		return files, nil
+	}
 	command := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-z")
 	raw, err := command.Output()
 	if err != nil {
-		return nil, fmt.Errorf("deployment source requires a Git checkout: %w", err)
+		return nil, fmt.Errorf("部署源目录必须是 git 仓库或解压后的产物包: %w", err)
 	}
 	files := make(map[string]bool)
 	for _, name := range strings.Split(string(raw), "\x00") {

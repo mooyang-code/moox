@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +23,7 @@ func newGatewayCallCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "call <service> <method>",
 		Short: "调用内部服务方法（JSON）",
-		Long:  "service 写完整服务名，例如 trpc.moox.strategy.StrategyMgr；--data 为 JSON 文本，@文件 读取文件，- 读取标准输入。",
+		Long:  "service 写完整服务名，例如 trpc.moox.strategy.StrategyMgr（可用的服务与方法见 gateway methods）；--data 为 JSON 文本，@文件 读取文件，- 读取标准输入。请求与返回的字段见各模块 proto 与 skill 的接口配方。",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body, err := readGatewayCallBody(data)
@@ -55,6 +57,56 @@ func newGatewayCallCommand() *cobra.Command {
 	return cmd
 }
 
+// newGatewayMethodsCommand 从内嵌的服务目录列出内部服务与方法，标出只读方法和 moox-cli 是否有权调用；不连网。
+func newGatewayMethodsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "methods [服务名关键字]",
+		Short: "列出 gateway call 可调用的内部服务与方法（只读，不连网）",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			catalog, err := servicecatalog.LoadEmbedded()
+			if err != nil {
+				return err
+			}
+			keyword := ""
+			if len(args) == 1 {
+				keyword = strings.ToLower(args[0])
+			}
+			out := cmd.OutOrStdout()
+			for _, component := range catalog.Components {
+				for _, service := range component.Services {
+					if keyword != "" && !strings.Contains(strings.ToLower(service.Path), keyword) {
+						continue
+					}
+					allowed := map[string]bool{}
+					for _, grant := range service.ACL {
+						if slices.Contains(grant.Callers, "moox-cli") {
+							for _, method := range grant.Methods {
+								allowed[method] = true
+							}
+						}
+					}
+					if len(allowed) == 0 {
+						continue
+					}
+					fmt.Fprintf(out, "%s（组件 %s）\n", service.Path, component.ID)
+					for _, method := range service.Methods {
+						kind := "写"
+						if slices.Contains(service.ReadOnlyMethods, method) {
+							kind = "只读"
+						}
+						if !allowed[method] {
+							kind += "，moox-cli 无权调用"
+						}
+						fmt.Fprintf(out, "  %-36s %s\n", method, kind)
+					}
+				}
+			}
+			return nil
+		},
+	}
+}
+
 func readGatewayCallBody(data string) ([]byte, error) {
 	switch {
 	case data == "-":
@@ -67,7 +119,7 @@ func readGatewayCallBody(data string) ([]byte, error) {
 }
 
 func init() {
-	gatewayCmd := &cobra.Command{Use: "gateway", Short: "内部网关调试工具"}
-	gatewayCmd.AddCommand(newGatewayCallCommand())
+	gatewayCmd := &cobra.Command{Use: "gateway", Short: "直接调用内部服务（没有专用命令的管理接口）"}
+	gatewayCmd.AddCommand(newGatewayCallCommand(), newGatewayMethodsCommand())
 	rootCmd.AddCommand(gatewayCmd)
 }

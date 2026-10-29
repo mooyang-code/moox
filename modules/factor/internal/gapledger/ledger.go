@@ -1,7 +1,6 @@
 // Package gapledger 是因子引擎的跳过账本：每次因回看窗口空洞、或实时周期里标的还在预热而跳过的 (标的, 周期, 因子)
 // 都追加一行到按月的 JSONL 文件，永不自动删除。它同时是永久审计（可用 DuckDB 的 read_json_auto 或 jq 分析空洞的频率、
 // 集中的标的与时段、从发现到补齐的耗时；预热跳过的行带 reason=warming）和恢复的待办来源：启动时回放全部账本重建待恢复任务。
-// 设计见 docs/计划/因子窗口空洞防护详细设计.md 2.5。
 package gapledger
 
 import (

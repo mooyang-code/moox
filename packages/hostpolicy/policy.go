@@ -1,6 +1,6 @@
 // Package hostpolicy 定义每台主机上的策略缓存文件 <部署根>/run/host-policy.json：告警渠道与主机守护参数。
 // 部署时用 moox.toml 的 [notification] 写一份种子，之后由 HostAgent 定期从 Monitor 拉取最新值覆盖；
-// moox-runtime watch 与 Admin 的证书巡检只读这个文件，不联网。设计见 docs/计划/主机守护与告警高可用执行计划.md 第 4.4 节。
+// moox-runtime watch 与 Admin 的证书巡检只读这个文件，不联网。
 package hostpolicy
 
 import (

@@ -69,13 +69,13 @@ func TestEvaluateRejectsNonLinuxSystems(t *testing.T) {
 	}
 }
 
-func TestFactorServerNormalize(t *testing.T) {
-	remote, err := FactorServer{Address: " 192.168.0.9 ", SSHUser: " me ", SSHPassword: " pw "}.normalize()
-	if err != nil || remote.Address != "192.168.0.9" || remote.SSHUser != "me" || remote.SSHPassword != " pw " || remote.SSHPort != 22 {
+func TestSSHTargetNormalize(t *testing.T) {
+	remote, err := SSHTarget{Address: " 192.168.0.9 ", SSHUser: " me "}.normalize("因子机")
+	if err != nil || remote.Address != "192.168.0.9" || remote.SSHUser != "me" || remote.SSHPort != 22 {
 		t.Fatalf("remote = %+v %v", remote, err)
 	}
-	for _, bad := range []FactorServer{{}, {SSHUser: "u", SSHPassword: "p"}, {Address: "a", SSHUser: "u", SSHPassword: "p", SSHPort: 70000}} {
-		if _, err := bad.normalize(); err == nil {
+	for _, bad := range []SSHTarget{{}, {SSHUser: "u"}, {Address: "a", SSHUser: "u", SSHPort: 70000}} {
+		if _, err := bad.normalize("因子机"); err == nil {
 			t.Fatalf("%+v 应被拒绝", bad)
 		}
 	}

@@ -1,6 +1,6 @@
 // Package unitwatch 是主机级守护：由 crontab 每分钟调用一次 `moox-runtime watch`，遍历本机部署根下全部单元，
 // 按依赖顺序对每个组件执行运行助手的 healthcheck（拉起停止的组件、重启存活检查失败的组件），
-// 给出结构化结果，维护持续崩溃的退避状态与台账。设计见 docs/计划/主机守护与告警高可用执行计划.md 第 4.1 节。
+// 给出结构化结果，维护持续崩溃的退避状态与台账。
 package unitwatch
 
 import (

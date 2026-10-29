@@ -180,6 +180,13 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		if host.SSHPassword != "" {
 			ssh += ", password = " + tomlString(host.SSHPassword)
 		}
+		// 表单不编辑私钥登录方式，原样保留。
+		if existing := current.HostCatalog[host.ID].SSH; existing.PrivateKeyFile != "" {
+			ssh += ", private_key_file = " + tomlString(existing.PrivateKeyFile)
+			if existing.PrivateKeyPassphrase != "" {
+				ssh += ", private_key_passphrase = " + tomlString(existing.PrivateKeyPassphrase)
+			}
+		}
 		set("hosts."+host.ID, "ssh", ssh+" }")
 	}
 
