@@ -227,8 +227,11 @@ func (g *gatedCatalogClient) SyncCatalog(ctx context.Context, _ string) (Catalog
 
 // 模块暂停期间，任务级 resume --force 不再放开追赶写（否则已上报收敛的模块会重新开始写结果）。
 func TestPausedModuleKeepsCatchupClosedEvenForForcedTasks(t *testing.T) {
-	r, _ := newLifecycleRuntime(t)
+	r, fake := newLifecycleRuntime(t)
 	startRunningModule(t, r)
+	// 恢复追赶的本地同步在后台进行；让它停在“同步中”，否则同步抢先完成时任务会直接追平放行、离开恢复追赶阶段。
+	fake.hold = make(chan struct{})
+	t.Cleanup(func() { close(fake.hold) })
 	ctx := context.Background()
 	_, err := r.life.Command(ctx, lifecycle.CmdPause, setRef("ftask_a"))
 	require.NoError(t, err)

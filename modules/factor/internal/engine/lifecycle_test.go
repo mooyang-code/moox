@@ -14,11 +14,20 @@ import (
 type preloadDataFake struct {
 	prepared []string
 	released []domain.FactorTask
+	// hold 不为空时 Prepare 等它关闭才返回，用来让恢复追赶的本地同步停在“同步中”。
+	hold chan struct{}
 }
 
 func (f *preloadDataFake) ReleaseTask(set domain.FactorTask) { f.released = append(f.released, set) }
 
-func (f *preloadDataFake) Prepare(_ context.Context, set domain.EngineTask, _ []string) error {
+func (f *preloadDataFake) Prepare(ctx context.Context, set domain.EngineTask, _ []string) error {
+	if f.hold != nil {
+		select {
+		case <-f.hold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	f.prepared = append(f.prepared, set.Set.TaskID)
 	return nil
 }
