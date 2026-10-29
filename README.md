@@ -123,9 +123,29 @@ cd moox-${VER}
 
 ## 管理台
 
-<!-- 截图待补：首页、监控、采集任务、因子定义与编辑器、因子计算任务、策略定义、策略运行、策略回放 -->
+首页汇总系统健康、策略目标与持仓、因子计算进度、数据新鲜度、主机资源和“需要处理”的事项：
 
-截图待补充。
+![首页](docs/public/screenshots/home.webp)
+
+采集结果：按数据集查看入库的 K 线，支持按标的、时间、价格条件检索，并可触发重建 View：
+
+![采集结果](docs/public/screenshots/collect-results.webp)
+
+因子定义：按分类管理因子，查看每个因子的参数、输出列、最大回看周期和被哪些计算任务使用：
+
+![因子定义](docs/public/screenshots/factor-definitions.webp)
+
+策略运行：当前目标权重、每期运行结果、换手与产出延迟，可以直接解释某一期为什么选了这些标的：
+
+![策略运行](docs/public/screenshots/strategy-run.webp)
+
+监控告警：最近 48 小时的告警经过，以及组件、主机、数据链路和业务检查的分层健康：
+
+![监控告警](docs/public/screenshots/monitor.webp)
+
+服务拓扑：数据流与调用关系按主机展示；机器和部署的增删启停只通过 `moox-cli`（Agent 使用 skill 完成），管理台只读展示：
+
+![服务拓扑](docs/public/screenshots/topology.webp)
 
 ## 文档
 
