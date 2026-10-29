@@ -2,6 +2,7 @@
 
 适用：用户明确说“全新部署 / 清空重装 / 数据全部可以删、配置重建”，并要求用仓库默认配置初始化。
 这是破坏性运维：**必须先得到用户的明确确认**，并复述要清空的主机和数据。升级已安装的单元不走这里，见 [`native-release.md`](native-release.md)。
+本文是维护者在源码仓库里重装自己生产环境的记录（四台主机、从源码构建）；外部用户第一次安装按 [`install.md`](install.md)，用发布产物，不需要构建。
 
 整体顺序：核对前提 → 备份 → 构建制品 → 停机清空 → 本机状态清理 → 安装（core → 主机 → 单元 → control）→ 默认初始化 → 验收。
 耗时的命令都放后台运行，用日志文件加 Monitor 盯结果（一次完整安装约 20 分钟，另加 5 分钟构建）。
@@ -156,7 +157,7 @@ $CALL SetStrategyInstanceEnabled --data '{"instance_id": "<instance_id>", "enabl
 不在默认配置里、要另外做的事（汇报时列给用户，并附命令）：
 
 - 长历史导入（例如永续 501 个标的的 5m）：见 [`initial-import.md`](initial-import.md)。导入前不要启用依赖长回看的因子任务；默认的 1m 因子任务在历史不足时按“降级/预热”运行，不影响实时链路。
-- F1 等策略实例及其参数表：见 [`strategy-migration.md`](strategy-migration.md)，参数放 `local/`，不进仓库。
+- 迁移来的策略实例及其参数表：见 [`strategy-migration.md`](strategy-migration.md)，参数放 `local/`，不进仓库。
 - 手工建的采集任务和标签、自定义因子任务。
 
 ## 6. 验收

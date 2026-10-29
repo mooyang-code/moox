@@ -83,7 +83,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
   apply_moox_toml.sh               # 把片段合入用户的 moox.toml（演练 / --apply，写前备份，不打印配置内容）
 ```
 
-用户的 `moox.toml` 是加密文件。按 [custom-setup.md](custom-setup.md) 的规则，Agent 不读取、不打印它的内容，只通过 CLI 写入片段。
+用户的 `moox.toml` 是加密文件。按 [install.md](install.md) 的规则，Agent 不读取、不打印它的内容，只通过 CLI 写入片段。
 
 ### 4.2 转换脚本的要求
 

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SKILL="${ROOT}/skills/moox/SKILL.md"
 REFERENCE="${ROOT}/skills/moox/references/private-network.md"
-CUSTOM_SETUP="${ROOT}/skills/moox/references/custom-setup.md"
+INSTALL="${ROOT}/skills/moox/references/install.md"
 TEMPLATE="${ROOT}/moox.toml.example"
 
 fail() {
@@ -15,7 +15,7 @@ fail() {
 [[ -f "${REFERENCE}" ]] || fail "private network reference is missing"
 grep -Fq 'references/private-network.md' "${SKILL}" || fail "SKILL.md does not route private-network to the reference"
 grep -Fq '### Tencent Private Network' "${SKILL}" || fail "SKILL.md is missing the private network section"
-grep -Fq 'references/private-network.md' "${CUSTOM_SETUP}" || fail "custom-setup does not point agents at private-network.md"
+grep -Fq 'references/private-network.md' "${INSTALL}" || fail "install.md does not point agents at private-network.md"
 
 description="$(sed -n 's/^description: //p' "${SKILL}" | head -1)"
 for trigger in 'CCN' '云联网' 'SCF 公网' 'SCF VPC' '内网组网' 'private-network' 'MOOX_ACCESS_ADDRESS'; do
