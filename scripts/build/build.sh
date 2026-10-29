@@ -8,6 +8,9 @@ VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
+LDFLAGS="-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
+# GO_STRIP=1 去掉符号表与调试信息（发布产物用，体积约减半；panic 堆栈仍然完整）。
+if [[ "${GO_STRIP:-}" == "1" ]]; then LDFLAGS="-s -w ${LDFLAGS}"; fi
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 TARGET_MODULE="${1:-all}"
@@ -31,11 +34,11 @@ build_go() {
     cd "${ROOT}/${module}"
     if [[ -n "${tags}" ]]; then
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${cgo}" go build -tags "${tags}" \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+        -ldflags "${LDFLAGS}" \
         -o "${BIN_DIR}/$(binary_name "${output}")" "${package}"
     else
       GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${cgo}" go build \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+        -ldflags "${LDFLAGS}" \
         -o "${BIN_DIR}/$(binary_name "${output}")" "${package}"
     fi
   )
@@ -60,11 +63,11 @@ build_storage() {
 	    for role in primary node view; do
 	      if ((${#tags[@]})); then
 	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build "${tags[@]}" \
-	          -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+	          -ldflags "${LDFLAGS}" \
 	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
 	      else
 	        GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
-	          -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+	          -ldflags "${LDFLAGS}" \
 	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
 	      fi
 	    done
@@ -76,7 +79,7 @@ build_storage_node() {
 	(
 		cd "${ROOT}/modules/storage"
 		GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED="${storage_cgo}" go build \
-			-ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+			-ldflags "${LDFLAGS}" \
 			-o "${BIN_DIR}/$(binary_name moox-storage-node)" ./cmd/server
 	)
 }
@@ -90,7 +93,7 @@ build_web_host() {
   (
     cd "${ROOT}/web-host"
     GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
-      -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
+      -ldflags "${LDFLAGS}" \
       -o "${BIN_DIR}/$(binary_name moox-web-host)" .
   )
 }

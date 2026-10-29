@@ -23,6 +23,9 @@ if [[ -d "${HOME}/.local/go${go_version}/bin" ]]; then
   export PATH="${HOME}/.local/go${go_version}/bin:${PATH}"
 fi
 
+# 发布产物去掉符号表，体积约减半。
+export GO_STRIP=1
+
 mkdir -p "${OUT}"
 OUT="$(cd "${OUT}" && pwd)"
 [[ -z "$(ls -A "${OUT}")" ]] || die "输出目录 ${OUT} 不是空的"
