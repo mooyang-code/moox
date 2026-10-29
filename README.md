@@ -42,7 +42,13 @@ MooX 的特点：
 
 ## 架构
 
-![MooX 系统架构](docs/public/architecture.svg)
+### 数据处理
+
+![MooX 数据处理架构](docs/public/data-flow.svg)
+
+### 部署
+
+![MooX 部署架构](docs/public/deployment.svg)
 
 详见 [总体设计](docs/总体设计.md)。
 

@@ -1,11 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 790" width="1200" height="790" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-  <title>MooX 系统架构</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <title>MooX 部署架构</title>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
-    </marker>
-    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="#15803d"/>
     </marker>
     <style>
       .band { fill: #f8fafc; stroke: #cbd5e1; }
@@ -21,15 +18,12 @@
       .local { fill: #eff6ff; stroke: #93c5fd; }
       .label { font-size: 12px; fill: #1d4ed8; }
       .section { font-size: 13px; font-weight: 600; fill: #475569; }
-      .flow { fill: #f0fdf4; stroke: #86efac; }
-      .flow-text { font-size: 13px; font-weight: 600; fill: #14532d; }
-      .flow-note { font-size: 11px; fill: #166534; }
       .foot { font-size: 12px; fill: #475569; }
       .line { stroke: #2563eb; stroke-width: 1.5; fill: none; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="790" fill="#ffffff"/>
+  <rect x="0" y="0" width="1200" height="680" fill="#ffffff"/>
 
   <!-- 第一层：你的电脑与外部服务 -->
   <rect class="local" x="30" y="20" width="560" height="96" rx="10"/>
@@ -87,7 +81,7 @@
   <rect class="chip" x="336" y="226" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="246">存储主服务（元数据目录）</text>
   <rect class="chip" x="336" y="264" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="284">存储数据节点（字段级事实）</text>
   <rect class="chip" x="336" y="302" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="322">存储视图（可重建的宽表 View）</text>
-  <rect class="chip" x="336" y="340" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="360">事件总线 EventBus</text>
+  <rect class="chip" x="336" y="340" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="360">事件总线</text>
   <rect class="chip" x="336" y="378" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="398">外部接入 Access</text>
   <rect class="infra" x="336" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="455" y="518" text-anchor="middle">主机网关 · 主机代理</text>
 
@@ -109,30 +103,8 @@
   <rect class="chip" x="916" y="278" width="238" height="44" rx="5"/><text class="chip-text" x="928" y="297">归档 Worker</text><text class="chip-note" x="928" y="314">按日 / 月导出 CSV</text>
   <rect class="infra" x="916" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="1035" y="518" text-anchor="middle">主机网关 · 主机代理</text>
 
-  <!-- 第三层：主数据流 -->
-  <text class="section" x="30" y="582">主数据流</text>
-  <rect class="flow" x="30" y="594" width="196" height="54" rx="8"/>
-  <text class="flow-text" x="128" y="617" text-anchor="middle">行情采集</text>
-  <text class="flow-note" x="128" y="636" text-anchor="middle">海外机 WS 推送 / SCF 拉取</text>
-  <path d="M226,621 L262,621" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <rect class="flow" x="264" y="594" width="196" height="54" rx="8"/>
-  <text class="flow-text" x="362" y="617" text-anchor="middle">存储</text>
-  <text class="flow-note" x="362" y="636" text-anchor="middle">事实入库 · 周期完成事件</text>
-  <path d="M460,621 L496,621" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <rect class="flow" x="498" y="594" width="196" height="54" rx="8"/>
-  <text class="flow-text" x="596" y="617" text-anchor="middle">因子计算</text>
-  <text class="flow-note" x="596" y="636" text-anchor="middle">因子机计算 · 结果写回存储</text>
-  <path d="M694,621 L730,621" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <rect class="flow" x="732" y="594" width="196" height="54" rx="8"/>
-  <text class="flow-text" x="830" y="617" text-anchor="middle">策略目标</text>
-  <text class="flow-note" x="830" y="636" text-anchor="middle">读取因子 View · 输出目标权重</text>
-  <path d="M928,621 L964,621" stroke="#15803d" stroke-width="1.5" marker-end="url(#arrow-green)"/>
-  <rect class="flow" x="966" y="594" width="204" height="54" rx="8"/>
-  <text class="flow-text" x="1068" y="617" text-anchor="middle">交易执行</text>
-  <text class="flow-note" x="1068" y="636" text-anchor="middle">换算数量 · 下单收敛到目标</text>
-
-  <text class="foot" x="30" y="690">模块之间只通过两种方式交互：经主机网关的签名 RPC（按服务目录做方法级权限控制），以及 EventBus 事件。</text>
-  <text class="foot" x="30" y="712">监控覆盖每个组件、主机与数据链路；单个模块可以单独暂停、恢复与升级。管理台只读展示主机与部署，增删启停由 moox-cli 完成。</text>
-  <text class="foot" x="30" y="734">主机角色可以合并：管理台可与存储机或海外机共用一台服务器。</text>
+  <text class="foot" x="30" y="586">模块间仅通过两种方式交互：经主机网关的签名 RPC（按服务目录做方法级权限控制）与事件总线。</text>
+  <text class="foot" x="30" y="608">监控覆盖全部组件、主机与数据链路；各模块可独立暂停、恢复与升级；主机与部署的变更统一由 moox-cli 执行，管理台只读展示。</text>
+  <text class="foot" x="30" y="630">主机角色可合并部署：管理台可与存储机或海外机共用一台服务器。</text>
   </g>
 </svg>
