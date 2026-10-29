@@ -1,110 +1,129 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" width="1200" height="680" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 790" width="1200" height="790" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title>MooX 部署架构</title>
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
-    </marker>
+    <marker id="m-end" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <marker id="m-start" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="125%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.07"/></filter>
     <style>
-      .band { fill: #f8fafc; stroke: #cbd5e1; }
-      .host { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
-      .host-head { font-size: 16px; font-weight: 600; fill: #0f172a; }
-      .host-sub { font-size: 12px; fill: #64748b; }
-      .chip { fill: #f1f5f9; stroke: #cbd5e1; }
-      .chip-text { font-size: 13px; fill: #1e293b; }
+      .title { font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .lead { font-size: 12.5px; fill: #64748b; }
+      .head { font-size: 15px; font-weight: 600; }
+      .tag { font-size: 11px; font-weight: 500; }
+      .sub { font-size: 12px; fill: #64748b; }
+      .chip-text { font-size: 13px; font-weight: 500; fill: #1e293b; }
       .chip-note { font-size: 11px; fill: #64748b; }
-      .infra { fill: #ffffff; stroke: #94a3b8; stroke-dasharray: 4 3; }
-      .infra-text { font-size: 12px; fill: #475569; }
-      .ext { fill: #fff7ed; stroke: #fdba74; }
-      .local { fill: #eff6ff; stroke: #93c5fd; }
-      .label { font-size: 12px; fill: #1d4ed8; }
-      .section { font-size: 13px; font-weight: 600; fill: #475569; }
-      .foot { font-size: 12px; fill: #475569; }
-      .line { stroke: #2563eb; stroke-width: 1.5; fill: none; }
+      .gw { font-size: 12px; fill: #64748b; }
+      .data { stroke: #475569; stroke-width: 1.6; fill: none; }
+      .l-data { font-size: 11px; fill: #334155; }
     </style>
   </defs>
-
-  <rect x="0" y="0" width="1200" height="680" fill="#ffffff"/>
-
-  <!-- 第一层：你的电脑与外部服务 -->
-  <rect class="local" x="30" y="20" width="560" height="96" rx="10"/>
-  <text class="section" x="46" y="42">你的电脑</text>
-  <rect class="chip" x="46" y="56" width="200" height="44" rx="6" fill="#ffffff"/>
-  <text class="chip-text" x="146" y="75" text-anchor="middle">AI Agent + moox skill</text>
-  <text class="chip-note" x="146" y="91" text-anchor="middle">部署、初始化、日常管理</text>
-  <path class="line" d="M246,78 L292,78" marker-end="url(#arrow)"/>
-  <rect class="chip" x="296" y="56" width="130" height="44" rx="6" fill="#ffffff"/>
-  <text class="chip-text" x="361" y="75" text-anchor="middle">moox-cli</text>
-  <text class="chip-note" x="361" y="91" text-anchor="middle">加密的 moox.toml</text>
-  <rect class="chip" x="446" y="56" width="128" height="44" rx="6" fill="#ffffff"/>
-  <text class="chip-text" x="510" y="75" text-anchor="middle">浏览器</text>
-  <text class="chip-note" x="510" y="91" text-anchor="middle">Web 管理台</text>
-
-  <rect class="ext" x="620" y="20" width="550" height="96" rx="10"/>
-  <text class="section" x="636" y="42">外部服务</text>
-  <rect class="chip" x="636" y="56" width="250" height="44" rx="6" fill="#ffffff"/>
-  <text class="chip-text" x="761" y="75" text-anchor="middle">交易所</text>
-  <text class="chip-note" x="761" y="91" text-anchor="middle">行情与下单：Binance、OKX</text>
-  <rect class="chip" x="904" y="56" width="250" height="44" rx="6" fill="#ffffff"/>
-  <text class="chip-text" x="1029" y="75" text-anchor="middle">云厂商 API（目前为腾讯云）</text>
-  <text class="chip-note" x="1029" y="91" text-anchor="middle">SCF 采集云函数 · 防火墙 · 日志服务</text>
-
-  <!-- 第一层到主机的连线（主机区整体下移 30） -->
-  <path class="line" d="M1029,100 L1029,185 L500,185 L500,200" marker-end="url(#arrow)"/>
-  <text class="label" x="868" y="179">SCF 拉取行情 · 写入存储</text>
-  <path d="M761,104 L761,196" stroke="#ffffff" stroke-width="7"/>
-  <path class="line" d="M761,100 L761,200" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
-  <text class="label" x="768" y="150">行情推送 · 下单</text>
-  <path class="line" d="M361,100 L361,140 L200,140 L200,200" marker-end="url(#arrow)"/>
-  <text class="label" x="208" y="134">SSH 隧道 · 签名调用</text>
-  <path class="line" d="M510,100 L510,168 L260,168 L260,200" marker-end="url(#arrow)"/>
-  <text class="label" x="268" y="186">HTTPS :9527</text>
-
-  <g transform="translate(0,30)">
-  <!-- 第二层：四台主机 -->
-  <!-- 管理台机 -->
-  <rect class="host" x="30" y="170" width="270" height="372" rx="10"/>
-  <text class="host-head" x="46" y="196">管理台机</text>
-  <text class="host-sub" x="46" y="214">控制面与业务服务</text>
-  <rect class="chip" x="46" y="226" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="246">控制台代理 · Web 管理台</text>
-  <rect class="chip" x="46" y="264" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="284">管理后台（认证、密钥、主机登记）</text>
-  <rect class="chip" x="46" y="302" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="322">监控（健康、新鲜度、告警推送）</text>
-  <rect class="chip" x="46" y="340" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="360">采集调度（计划、补采、重采样）</text>
-  <rect class="chip" x="46" y="378" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="398">云函数管理</text>
-  <rect class="chip" x="46" y="416" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="436">因子管理（定义、任务、补算）</text>
-  <rect class="chip" x="46" y="454" width="238" height="30" rx="5"/><text class="chip-text" x="58" y="474">策略（DSL 求值、目标权重、回放）</text>
-  <rect class="infra" x="46" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="165" y="518" text-anchor="middle">主机网关 · 主机代理</text>
-
-  <!-- 存储机 -->
-  <rect class="host" x="320" y="170" width="270" height="372" rx="10"/>
-  <text class="host-head" x="336" y="196">存储机</text>
-  <text class="host-sub" x="336" y="214">数据与事件</text>
-  <rect class="chip" x="336" y="226" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="246">存储主服务（元数据目录）</text>
-  <rect class="chip" x="336" y="264" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="284">存储数据节点（字段级事实）</text>
-  <rect class="chip" x="336" y="302" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="322">存储视图（可重建的宽表 View）</text>
-  <rect class="chip" x="336" y="340" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="360">事件总线</text>
-  <rect class="chip" x="336" y="378" width="238" height="30" rx="5"/><text class="chip-text" x="348" y="398">外部接入 Access</text>
-  <rect class="infra" x="336" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="455" y="518" text-anchor="middle">主机网关 · 主机代理</text>
-
-  <!-- 海外机 -->
-  <rect class="host" x="610" y="170" width="270" height="372" rx="10"/>
-  <text class="host-head" x="626" y="196">海外机 <tspan class="host-sub">（可选）</tspan></text>
-  <text class="host-sub" x="626" y="214">行情接入与交易执行</text>
-  <rect class="chip" x="626" y="226" width="238" height="30" rx="5"/><text class="chip-text" x="638" y="246">行情推送采集（WebSocket）</text>
-  <rect class="chip" x="626" y="264" width="238" height="30" rx="5"/><text class="chip-text" x="638" y="284">出口代理（受限 HTTPS 与 DNS）</text>
-  <rect class="chip" x="626" y="302" width="238" height="30" rx="5"/><text class="chip-text" x="638" y="322">交易执行（目标收敛、模拟盘）</text>
-  <rect class="chip" x="626" y="340" width="238" height="30" rx="5"/><text class="chip-text" x="638" y="360">外部接入 Access</text>
-  <rect class="infra" x="626" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="745" y="518" text-anchor="middle">主机网关 · 主机代理</text>
-
-  <!-- 因子机 -->
-  <rect class="host" x="900" y="170" width="270" height="372" rx="10"/>
-  <text class="host-head" x="916" y="196">因子机 <tspan class="host-sub">（可选，局域网 Linux）</tspan></text>
-  <text class="host-sub" x="916" y="214">只出站，经管理台机网关中转</text>
-  <rect class="chip" x="916" y="226" width="238" height="44" rx="5"/><text class="chip-text" x="928" y="245">因子引擎</text><text class="chip-note" x="928" y="262">本地 K 线副本，每周期增量计算</text>
-  <rect class="chip" x="916" y="278" width="238" height="44" rx="5"/><text class="chip-text" x="928" y="297">归档 Worker</text><text class="chip-note" x="928" y="314">按日 / 月导出 CSV</text>
-  <rect class="infra" x="916" y="498" width="238" height="30" rx="5"/><text class="infra-text" x="1035" y="518" text-anchor="middle">主机网关 · 主机代理</text>
-
-  <text class="foot" x="30" y="586">模块间仅通过两种方式交互：经主机网关的签名 RPC（按服务目录做方法级权限控制）与事件总线。</text>
-  <text class="foot" x="30" y="608">监控覆盖全部组件、主机与数据链路；各模块可独立暂停、恢复与升级；主机与部署的变更统一由 moox-cli 执行，管理台只读展示。</text>
-  <text class="foot" x="30" y="630">主机角色可合并部署：管理台可与存储机或海外机共用一台服务器。</text>
-  </g>
+  <rect x="0" y="0" width="1200" height="790" fill="#ffffff"/>
+  <text class="title" x="30" y="42">MooX 部署架构</text>
+  <text class="lead" x="30" y="66">主机按角色分工，可合并部署；所有调用经各主机网关签名校验后转发至本机服务。</text>
+  <rect x="30" y="86" width="560" height="112" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M42,86 H578 Q590,86 590,98 V120 H30 V98 Q30,86 42,86 Z" fill="#f1f5f9"/>
+  <path d="M30,120 H590" stroke="#cbd5e1" stroke-width="1"/>
+  <text class="head" x="46" y="109" fill="#334155">本机</text>
+  <rect x="46" y="130" width="200" height="50" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-opacity="0.7"/>
+  <text class="chip-text" x="146" y="152.0" text-anchor="middle">AI Agent + moox skill</text>
+  <text class="chip-note" x="146" y="168.0" text-anchor="middle">部署、初始化与日常管理</text>
+  <rect x="296" y="130" width="130" height="50" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-opacity="0.7"/>
+  <text class="chip-text" x="361" y="152.0" text-anchor="middle">moox-cli</text>
+  <text class="chip-note" x="361" y="168.0" text-anchor="middle">加密的 moox.toml</text>
+  <rect x="446" y="130" width="128" height="50" rx="7" fill="#f8fafc" stroke="#cbd5e1" stroke-opacity="0.7"/>
+  <text class="chip-text" x="510" y="152.0" text-anchor="middle">浏览器</text>
+  <text class="chip-note" x="510" y="168.0" text-anchor="middle">Web 管理台</text>
+  <path class="data" d="M246,155 L292,155" marker-end="url(#m-end)"/>
+  <rect x="620" y="86" width="550" height="112" rx="12" fill="#ffffff" stroke="#fdba74" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M632,86 H1158 Q1170,86 1170,98 V120 H620 V98 Q620,86 632,86 Z" fill="#ffedd5"/>
+  <path d="M620,120 H1170" stroke="#fdba74" stroke-width="1"/>
+  <text class="head" x="636" y="109" fill="#c2410c">外部服务</text>
+  <rect x="636" y="130" width="250" height="50" rx="7" fill="#fff7ed" stroke="#fdba74" stroke-opacity="0.7"/>
+  <text class="chip-text" x="761" y="152.0" text-anchor="middle">交易所</text>
+  <text class="chip-note" x="761" y="168.0" text-anchor="middle">行情与下单：Binance、OKX</text>
+  <rect x="904" y="130" width="250" height="50" rx="7" fill="#fff7ed" stroke="#fdba74" stroke-opacity="0.7"/>
+  <text class="chip-text" x="1029" y="152.0" text-anchor="middle">云厂商 API（目前为腾讯云）</text>
+  <text class="chip-note" x="1029" y="168.0" text-anchor="middle">SCF 云函数 · 防火墙 · 日志服务</text>
+  <path class="data" d="M361,180 L361,232 L200,232 L200,288" marker-end="url(#m-end)"/>
+  <text class="l-data" x="208" y="226">SSH 隧道 · 签名调用</text>
+  <path class="data" d="M510,180 L510,260 L260,260 L260,288" marker-end="url(#m-end)"/>
+  <text class="l-data" x="268" y="254">HTTPS :9527</text>
+  <path class="data" d="M1029,180 L1029,272 L500,272 L500,288" marker-end="url(#m-end)"/>
+  <text class="l-data" x="1021" y="240" text-anchor="end">SCF 拉取行情 · 写入存储</text>
+  <path d="M761,265 L761,279" stroke="#ffffff" stroke-width="7"/>
+  <path class="data" d="M761,182 L761,288" marker-end="url(#m-end)" marker-start="url(#m-start)"/>
+  <text class="l-data" x="769" y="240">行情推送 · 下单</text>
+  <rect x="30" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M42,290 H288 Q300,290 300,302 V324 H30 V302 Q30,290 42,290 Z" fill="#ede9fe"/>
+  <path d="M30,324 H300" stroke="#c4b5fd" stroke-width="1"/>
+  <text class="head" x="46" y="313" fill="#6d28d9">管理台机</text>
+  <text class="sub" x="46" y="344">控制面与业务服务</text>
+  <rect x="46" y="354" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="374.5" text-anchor="middle">控制台代理 · Web 管理台</text>
+  <rect x="46" y="394" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="414.5" text-anchor="middle">管理后台（认证、密钥、主机登记）</text>
+  <rect x="46" y="434" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="454.5" text-anchor="middle">监控（健康、时效、告警推送）</text>
+  <rect x="46" y="474" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="494.5" text-anchor="middle">采集调度（计划、补采、重采样）</text>
+  <rect x="46" y="514" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="534.5" text-anchor="middle">云函数管理</text>
+  <rect x="46" y="554" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="574.5" text-anchor="middle">因子管理（定义、任务、补算）</text>
+  <rect x="46" y="594" width="238" height="32" rx="7" fill="#f5f3ff" stroke="#c4b5fd" stroke-opacity="0.7"/>
+  <text class="chip-text" x="165" y="614.5" text-anchor="middle">策略（DSL 求值、目标权重、回放）</text>
+  <rect x="46" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#c4b5fd" stroke-dasharray="5 3"/>
+  <text class="gw" x="165" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
+  <rect x="320" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#a5b4fc" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M332,290 H578 Q590,290 590,302 V324 H320 V302 Q320,290 332,290 Z" fill="#e0e7ff"/>
+  <path d="M320,324 H590" stroke="#a5b4fc" stroke-width="1"/>
+  <text class="head" x="336" y="313" fill="#4338ca">存储机</text>
+  <text class="sub" x="336" y="344">数据与事件</text>
+  <rect x="336" y="354" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="455" y="374.5" text-anchor="middle">存储主服务（元数据目录）</text>
+  <rect x="336" y="394" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="455" y="414.5" text-anchor="middle">存储数据节点（字段级事实）</text>
+  <rect x="336" y="434" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="455" y="454.5" text-anchor="middle">存储视图（可重建的查询视图）</text>
+  <rect x="336" y="474" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="455" y="494.5" text-anchor="middle">事件总线</text>
+  <rect x="336" y="514" width="238" height="32" rx="7" fill="#eef2ff" stroke="#a5b4fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="455" y="534.5" text-anchor="middle">外部接入 Access</text>
+  <rect x="336" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#a5b4fc" stroke-dasharray="5 3"/>
+  <text class="gw" x="455" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
+  <rect x="610" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#7dd3fc" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M622,290 H868 Q880,290 880,302 V324 H610 V302 Q610,290 622,290 Z" fill="#e0f2fe"/>
+  <path d="M610,324 H880" stroke="#7dd3fc" stroke-width="1"/>
+  <text class="head" x="626" y="313" fill="#0369a1">海外机</text>
+  <rect x="832.0" y="298" width="36.0" height="19" rx="9.5" fill="#ffffff" stroke="#7dd3fc"/>
+  <text class="tag" x="850.0" y="311.5" text-anchor="middle" fill="#0369a1">可选</text>
+  <text class="sub" x="626" y="344">行情接入与交易执行</text>
+  <rect x="626" y="354" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="745" y="374.5" text-anchor="middle">行情推送采集（WebSocket）</text>
+  <rect x="626" y="394" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="745" y="414.5" text-anchor="middle">出口代理（受限 HTTPS 与 DNS）</text>
+  <rect x="626" y="434" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="745" y="454.5" text-anchor="middle">交易执行（目标收敛、模拟盘）</text>
+  <rect x="626" y="474" width="238" height="32" rx="7" fill="#f0f9ff" stroke="#7dd3fc" stroke-opacity="0.7"/>
+  <text class="chip-text" x="745" y="494.5" text-anchor="middle">外部接入 Access</text>
+  <rect x="626" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#7dd3fc" stroke-dasharray="5 3"/>
+  <text class="gw" x="745" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
+  <rect x="900" y="290" width="270" height="404" rx="12" fill="#ffffff" stroke="#fcd34d" stroke-width="1.3" filter="url(#shadow)"/>
+  <path d="M912,290 H1158 Q1170,290 1170,302 V324 H900 V302 Q900,290 912,290 Z" fill="#fef3c7"/>
+  <path d="M900,324 H1170" stroke="#fcd34d" stroke-width="1"/>
+  <text class="head" x="916" y="313" fill="#b45309">因子机</text>
+  <rect x="1033.2" y="298" width="124.8" height="19" rx="9.5" fill="#ffffff" stroke="#fcd34d"/>
+  <text class="tag" x="1095.6" y="311.5" text-anchor="middle" fill="#b45309">可选 · 局域网 Linux</text>
+  <text class="sub" x="916" y="344">仅出站连接，经管理台机网关中转</text>
+  <rect x="916" y="354" width="238" height="46" rx="7" fill="#fffbeb" stroke="#fcd34d" stroke-opacity="0.7"/>
+  <text class="chip-text" x="1035" y="374.0" text-anchor="middle">因子引擎</text>
+  <text class="chip-note" x="1035" y="390.0" text-anchor="middle">本地时序副本，增量计算</text>
+  <rect x="916" y="408" width="238" height="46" rx="7" fill="#fffbeb" stroke="#fcd34d" stroke-opacity="0.7"/>
+  <text class="chip-text" x="1035" y="428.0" text-anchor="middle">归档 Worker</text>
+  <text class="chip-note" x="1035" y="444.0" text-anchor="middle">按日 / 月导出 CSV</text>
+  <rect x="916" y="646" width="238" height="32" rx="7" fill="#ffffff" stroke="#fcd34d" stroke-dasharray="5 3"/>
+  <text class="gw" x="1035" y="666.5" text-anchor="middle">主机网关 · 主机代理</text>
+  <text class="lead" x="30" y="728">模块间仅通过两种方式交互：经主机网关的签名 RPC（按服务目录做方法级权限控制）与事件总线。</text>
+  <text class="lead" x="30" y="750">监控覆盖全部组件、主机与数据链路；各模块可独立暂停、恢复与升级；主机与部署的变更统一由 moox-cli 执行，管理台只读展示。</text>
+  <text class="lead" x="30" y="772">主机角色可合并部署：管理台可与存储机或海外机共用一台服务器。</text>
 </svg>
