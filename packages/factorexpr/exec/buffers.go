@@ -53,7 +53,8 @@ func EstimateMemory(program *factorexpr.Program, series, length, start, end int)
 		if computed(node) && !need[index].Empty() {
 			sizes[index] = int64(series) * int64(need[index].Len()) * 8
 			live += sizes[index]
-			estimate.PeakBuffers = max(estimate.PeakBuffers, live)
+			// 自定义算子每次调用要把窗口拷进暂存缓冲（设计 11.3）：只在这个节点计算期间存在。
+			estimate.PeakBuffers = max(estimate.PeakBuffers, live+udfCopyBytes(node, series, need[index].Len()))
 		}
 		for _, arg := range node.Args {
 			if program.Nodes[arg].LastUse == index && sizes[arg] > 0 {

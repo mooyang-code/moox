@@ -1,0 +1,11 @@
+[package]
+name = "udf_bad_cache"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+moox-udf = { path = "../../moox-udf" }

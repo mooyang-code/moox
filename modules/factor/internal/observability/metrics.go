@@ -19,6 +19,11 @@ type Metrics struct {
 	SeriesChangeGaps prometheus.Counter
 	// ParamStale 是开算一期时没能用上最新提交值、改用本地缓存值的次数，按原因（ahead：读到超前的提交；unreachable：管理端不可达）。
 	ParamStale *prometheus.CounterVec
+	// 自定义算子（wasm UDF）：每批调用耗时、失败次数（按原因）、拷进模块的字节数、各版本模块的状态（1 表示处于该状态）。
+	UDFCallSeconds *prometheus.HistogramVec
+	UDFFailures    *prometheus.CounterVec
+	UDFCopyBytes   *prometheus.CounterVec
+	UDFModuleState *prometheus.GaugeVec
 }
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
@@ -66,6 +71,18 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		ParamStale: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "factor_param_stale_total", Help: "开算一期时用本地缓存的提交值而不是最新提交值的次数，按原因（ahead、unreachable）。",
 		}, []string{"task_id", "reason"}),
+		UDFCallSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "factor_udf_call_seconds", Help: "Duration of one batched custom operator (wasm UDF) call.", Buckets: prometheus.DefBuckets,
+		}, []string{"udf"}),
+		UDFFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_udf_failures_total", Help: "Number of failed custom operator calls, by reason (timeout, trap, memory, budget, code, instantiate, input, other).",
+		}, []string{"udf", "reason"}),
+		UDFCopyBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_udf_copy_bytes_total", Help: "Bytes copied into custom operator instances (window inputs and parameters).",
+		}, []string{"udf"}),
+		UDFModuleState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "factor_udf_module_state", Help: "1 for the state each custom operator module version is in (ready, fetching, fetch_failed, compile_failed).",
+		}, []string{"udf", "hash", "state"}),
 	}
 	if err := registerer.Register(metrics.PeriodDuration); err != nil {
 		return nil, err
@@ -73,7 +90,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	collectors := []prometheus.Collector{
 		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.RunnerBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
 		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded, metrics.SeriesChangeGaps,
-		metrics.ParamStale,
+		metrics.ParamStale, metrics.UDFCallSeconds, metrics.UDFFailures, metrics.UDFCopyBytes, metrics.UDFModuleState,
 	}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {

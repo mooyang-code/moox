@@ -1,0 +1,7 @@
+error: 严格模式不使用 min_valid
+ --> tests/ui/strict_min_valid.rs:2:1
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(1..=5) }, lookback = "n", min_valid = 3)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `udf` (in Nightly builds, run with -Z macro-backtrace for more info)

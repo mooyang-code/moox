@@ -1,0 +1,5 @@
+error: 回看公式引用了未声明的参数 "m"
+ --> tests/ui/lookback_undeclared.rs:2:72
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(1..=5) }, lookback = "m")]
+  |                                                                        ^^^

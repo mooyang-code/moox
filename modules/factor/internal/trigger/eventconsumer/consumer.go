@@ -33,6 +33,8 @@ type ConsumerConfig struct {
 	Gate func(taskID string) bool
 	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的任务，只允许连续水位追赶（历史周期），实时事件仍不处理。
 	CatchupGate func(taskID string) bool
+	// Begin 非空时是登记式门禁，取代任务队列里对 Gate/CatchupGate 的二次检查（见 Handler.SetBegin）。
+	Begin func(ctx context.Context, taskID string, live bool) (func(), bool)
 	// Params 非空时在开算每一期之前取参；为空时全部按成员自己的参数计算。
 	Params trigger.ParamSelector
 }
@@ -148,6 +150,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.TaskLocat
 	}
 	handler.SetGate(cfg.Gate)
 	handler.SetCatchupGate(cfg.CatchupGate)
+	handler.SetBegin(cfg.Begin)
 	handler.SetParamSelector(cfg.Params)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel

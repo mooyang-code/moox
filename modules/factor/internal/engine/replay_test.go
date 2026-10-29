@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -183,4 +184,65 @@ func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
 	rsp, _, err := m.Open(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, 3, rsp.ShortWarmup, "A、B、GONE 都从第 0 分钟起，早于预热起点的数据都不存在")
+}
+
+// 任务离开目录（停用或删除）之后，旧会话不能再写回结果：版本校验不能因为查不到任务而被跳过。
+func TestReplayWriteBackIsRejectedAfterTheTaskLeavesTheCatalog(t *testing.T) {
+	m, set := newReplayManagerForTest(t)
+	ctx := context.Background()
+	_, status, err := m.Open(ctx, ReplayOpenRequest{
+		ReplayID: "rw", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339),
+		ExtraPeriods: 1, WriteFactors: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+
+	m.deps.Sets = replayTasks{set: domain.EngineTask{Set: domain.FactorTask{TaskID: "other"}}} // 目录里已经没有这个任务
+	_ = set
+	_, status, err = m.Step(ctx, ReplayStepRequest{ReplayID: "rw", Period: rt0.Add(5 * time.Minute).Format(time.RFC3339), WriteFactors: true})
+	require.Error(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Contains(t, err.Error(), "不在目录")
+}
+
+// 会话建立期间固定任务引用的模块，登记之后释放；固定之后目录已经切换版本的，要求重试。
+func TestReplayOpenPinsModulesAndRejectsAConcurrentVersionSwitch(t *testing.T) {
+	m, set := newReplayManagerForTest(t)
+	ctx := context.Background()
+	pins, releases := 0, 0
+	m.deps.Pin = func(domain.EngineTask) func() { pins++; return func() { releases++ } }
+	req := ReplayOpenRequest{
+		ReplayID: "rp", TaskID: "ftask_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1,
+	}
+	_, status, err := m.Open(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 1, pins)
+	require.Equal(t, 1, releases, "登记之后释放")
+
+	// 固定之后目录里的任务引用的版本变了：拒绝，也不泄漏固定。
+	switched := set
+	switched.Members = append([]domain.MemberDef(nil), set.Members...)
+	switched.Members[0].Factor.UDFs = map[string]factorexpr.UDF{"x": {Name: "x", Hash: "ab"}}
+	m.deps.Sets = &switchingTasks{first: set, then: switched}
+	req.ReplayID = "rp2"
+	_, status, err = m.Open(ctx, req)
+	require.Error(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Equal(t, 2, pins)
+	require.Equal(t, 2, releases)
+}
+
+// switchingTasks 第一次查询返回 first，之后返回 then。
+type switchingTasks struct {
+	first, then domain.EngineTask
+	calls       int
+}
+
+func (s *switchingTasks) SetByID(string) (domain.EngineTask, SetLookup) {
+	s.calls++
+	if s.calls == 1 {
+		return s.first, SetFound
+	}
+	return s.then, SetFound
 }

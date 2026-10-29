@@ -1,0 +1,5 @@
+error: 名字 "x" 重复
+ --> tests/ui/duplicate_names.rs:2:44
+  |
+2 | #[udf(name = "f", inputs = [x], params = { x: int(1..=5) }, lookback = "x")]
+  |                                            ^

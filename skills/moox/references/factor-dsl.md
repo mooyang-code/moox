@@ -515,3 +515,9 @@ members = [
 | zf_mean_q | `rolling_rank(rolling_mean((high - low) / open, w), w)` | `ts_rank(ts_mean(amp, window), window)` | 39 |
 | zf_std | `rolling_std(np.where(pct_change(close) > 0, amp, -amp), w)` | `ts_std(where(pct_change(close) > 0, amp, -amp), window)` | 21 |
 | zscore_abs_mean_q | `rolling_rank(rolling_mean(abs((close - m) / s), w), w)` | `ts_rank(ts_mean(abs((close - m) / s), window), window)` | 58 |
+
+## 自定义算子（`udf.`）
+
+DSL 写不出来的那一步算法（递归滤波、带分支与迭代的状态更新等），可以用 Rust 写成自定义算子，在表达式里写成 `udf.<名称>(<序列输入>..., <参数>...)`。
+它是时序算子，可以和内置算子任意组合（输入是任意数值表达式，截面写在外层，例如 `cs_rank(udf.xxx(...))`）。
+编写、发布、切换版本的完整流程见 [`references/udf.md`](udf.md)；`ListFactorFunctions` 与控制台的函数参考会列出已启用的自定义算子（类别 `timeseries`，签名带 `udf.` 前缀）。

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 )
 
 const (
@@ -29,6 +30,9 @@ const (
 	// MaxMemory 是一次试算估算峰值内存的上限：试算跑在管理端进程里，与正式计算分开限额。
 	MaxMemory = 256 << 20
 )
+
+// udfIdleUnload 是试算用的自定义算子版本空闲多久后卸载（释放它占用的试算预算）。
+const udfIdleUnload = 10 * time.Minute
 
 // Source 是试算需要的 Storage 读取能力。
 type Source interface {
@@ -66,12 +70,33 @@ type Service struct {
 	clock  periodclock.Clock
 	now    func() time.Time
 	runner *pipeline.Runner
+	udf    *udfhost.Host
+	fetch  func(ctx context.Context, hash string) ([]byte, error)
 }
 
-func New(source Source, workers int) *Service {
+// Option 配置试算服务。
+type Option func(*Service)
+
+// WithUDF 让试算能执行自定义算子：host 是试算专用的宿主（有自己的运行时、预算与时限，与引擎、发布复核分开），
+// fetch 按版本哈希取 wasm 字节（定义里的版本可能还没有启用，所以不能只看启用版本）。
+func WithUDF(host *udfhost.Host, fetch func(ctx context.Context, hash string) ([]byte, error)) Option {
+	return func(s *Service) { s.udf, s.fetch = host, fetch }
+}
+
+func New(source Source, workers int, options ...Option) *Service {
 	clock := periodclock.Continuous{}
-	return &Service{source: source, clock: clock, now: time.Now,
-		runner: pipeline.NewRunner(source, pipeline.NewStorageData(source), clock, pipeline.Config{ComputeWorkers: workers, MaxMemory: MaxMemory})}
+	s := &Service{source: source, clock: clock, now: time.Now}
+	for _, option := range options {
+		if option != nil {
+			option(s)
+		}
+	}
+	cfg := pipeline.Config{ComputeWorkers: workers, MaxMemory: MaxMemory}
+	if s.udf != nil {
+		cfg.UDF = s.udf
+	}
+	s.runner = pipeline.NewRunner(source, pipeline.NewStorageData(source), clock, cfg)
+	return s
 }
 
 // Preview 计算 [对齐后的当前周期 - Periods 期, 当前周期) 的结果。
@@ -82,6 +107,17 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	factor := req.Factor
 	if factor.Compiled() == nil {
 		return Result{}, errors.New("定义尚未编译")
+	}
+	if compiled := factor.Compiled(); compiled != nil && len(compiled.UDFs) > 0 {
+		if s.udf == nil || s.fetch == nil {
+			return Result{}, errors.New("试算未启用自定义算子")
+		}
+		s.udf.Sweep(ctx, udfIdleUnload)
+		for _, ref := range compiled.UDFs {
+			if err := s.udf.Ensure(ctx, ref.Hash, s.fetch); err != nil {
+				return Result{}, err
+			}
+		}
 	}
 	member := domain.MemberDef{Key: factor.FactorID, Factor: factor, Kind: domain.MemberKindFixed}
 	params := map[string]domain.ParamSnapshot{}
@@ -192,6 +228,9 @@ func collect(factor domain.FactorDef, computation pipeline.Computation, shown []
 		wanted[subject] = true
 	}
 	result := Result{Columns: append([]string(nil), factor.Outputs...)}
+	if err := computation.Failures[factor.FactorID]; err != nil {
+		return Result{}, err
+	}
 	for key, item := range computation.Results[factor.FactorID] { // 试算的成员别名就是定义 ID
 		if item.Err != nil {
 			return Result{}, item.Err

@@ -1,0 +1,5 @@
+error: 参数范围的下限大于上限
+ --> tests/ui/bad_range.rs:2:51
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(5..=1) }, lookback = "n")]
+  |                                                   ^

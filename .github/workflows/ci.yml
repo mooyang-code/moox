@@ -118,6 +118,34 @@ jobs:
           MOOX_GO_SHARD: ${{ matrix.shard }}/3
         run: make test-go
 
+  # Rust SDK、示例与测试样本：工具链版本锁在 sdk/rust/rust-toolchain.toml，所有非纯文档变更都运行。
+  verify-rust:
+    name: verify-rust
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Install pinned Rust toolchain
+        working-directory: sdk/rust
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sdk/rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('sdk/rust/Cargo.lock', 'sdk/rust/rust-toolchain.toml') }}
+      - name: Run make test-rust
+        run: make test-rust
+      - name: UDF host package tests (including the cross-architecture digest check)
+        run: cd packages/factorudf && go test -count=1 ./...
+
   verify-docs:
     name: verify-docs
     needs: changes
@@ -144,7 +172,7 @@ jobs:
 
   verify-pr:
     name: verify-pr
-    needs: [changes, verify, verify-go, verify-docs]
+    needs: [changes, verify, verify-go, verify-rust, verify-docs]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -155,15 +183,16 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           VERIFY: ${{ needs.verify.result }}
           VERIFY_GO: ${{ needs.verify-go.result }}
+          VERIFY_RUST: ${{ needs.verify-rust.result }}
           VERIFY_DOCS: ${{ needs.verify-docs.result }}
         run: |
-          echo "changes=${CHANGES} docs_only=${DOCS_ONLY} verify=${VERIFY} verify-go=${VERIFY_GO} verify-docs=${VERIFY_DOCS}"
+          echo "changes=${CHANGES} docs_only=${DOCS_ONLY} verify=${VERIFY} verify-go=${VERIFY_GO} verify-rust=${VERIFY_RUST} verify-docs=${VERIFY_DOCS}"
           # changes 没成功就无法确定该跑哪些作业，不能把“全部跳过”当成通过。
           [[ "${CHANGES}" == success ]] || { echo '改动判断作业没有成功' >&2; exit 1; }
           if [[ "${DOCS_ONLY}" == true ]]; then
             [[ "${VERIFY_DOCS}" == success ]] || { echo '文档检查没有通过' >&2; exit 1; }
           else
-            [[ "${VERIFY}" == success && "${VERIFY_GO}" == success ]] || { echo '验证作业没有全部通过' >&2; exit 1; }
+            [[ "${VERIFY}" == success && "${VERIFY_GO}" == success && "${VERIFY_RUST}" == success ]] || { echo '验证作业没有全部通过' >&2; exit 1; }
           fi
 
   # 外部程序只支持 Linux；这里只保留 packages/security 的 Windows 私密文件 ACL 测试（Windows 运维机上的 moox-cli 仍会用到）。

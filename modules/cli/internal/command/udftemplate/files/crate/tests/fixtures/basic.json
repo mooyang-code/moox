@@ -1,0 +1,4 @@
+{"cases": [
+  {"name": "基础", "params": [3], "inputs": [[1, 5, 3, 4, 2]], "expected": [3, 4, 3]},
+  {"name": "窗口内有 NaN 输出 NaN", "params": [2], "inputs": [[1, null, 3, 4]], "expected": [null, null, 3.5]}
+]}

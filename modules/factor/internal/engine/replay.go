@@ -52,6 +52,11 @@ type ReplayDeps struct {
 	Admit   *memadmit.Admitter
 	Now     func() time.Time
 	BatchOK func() int
+	// Begin 非空时是写回的登记式门禁：先登记在途、再检查门禁；不允许时拒绝写回（暂停、恢复追赶、重置期间）。
+	Begin func(ctx context.Context, taskID string) (func(), bool)
+	// Pin 非空时在会话建立期间固定任务引用的自定义算子模块（返回释放函数）：从读取任务到会话登记之间目录可能切换版本，
+	// 没有它，这段时间里的回收会把会话马上要用的版本卸载。
+	Pin func(set domain.EngineTask) func()
 }
 
 type replayManager struct {
@@ -87,8 +92,11 @@ type replaySession struct {
 	release  func()
 	// quote 是成交价取法：next_open（下一根开盘，默认）或 close（本期收盘）。
 	quote string
+	// udfKey 是会话建立时任务成员引用的自定义算子绑定：写回时与引擎当前目录比较，不同（期间切换过版本）就拒绝，要求重新打开会话。
+	udfKey string
 
 	mu       sync.Mutex
+	closed   bool // 已关闭（预算已归还）：此后取得会话指针的请求不能再执行
 	cache    map[int64]*replayPeriod
 	lastUsed time.Time
 	// applied 是各期实际生效的、由请求带来（或沿用上一期请求）的成员参数快照，键是期次的 Unix 秒：
@@ -235,6 +243,14 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子任务 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.TaskID)
 	}
 	set.Members = CompileMembers(set.Members)
+	if m.deps.Pin != nil {
+		release := m.deps.Pin(set)
+		defer release() // 会话登记之后由会话表保留它引用的版本（udfHashes）
+		// 固定之前目录可能已经切换了版本：以固定之后的目录为准，不一致就让调用方重试。
+		if current, lookup := m.deps.Sets.SetByID(req.TaskID); lookup != SetFound || taskUDFKey(current) != taskUDFKey(set) {
+			return ReplayOpenResponse{}, http.StatusConflict, errors.New("目录刚刚发生变化（任务引用的自定义算子版本切换或任务离开目录），请重试")
+		}
+	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, err
@@ -343,7 +359,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
+		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
@@ -444,6 +460,9 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ReplayStepResponse{}, http.StatusNotFound, fmt.Errorf("回放会话 %s 已关闭，请重新建立会话", req.ReplayID)
+	}
 	s.lastUsed = m.deps.Now()
 	started := time.Now()
 	params, applied, rejected, err := s.params(period, req.Params)
@@ -521,7 +540,22 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		rsp.Subjects[subject] = frame
 	}
 	if req.WriteFactors {
+		current, lookup := m.deps.Sets.SetByID(s.set.Set.TaskID)
+		if lookup != SetFound {
+			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务已不在目录里（停用或删除），写回被拒绝：请关闭会话")
+		}
+		if taskUDFKey(current) != s.udfKey {
+			return ReplayStepResponse{}, http.StatusConflict, errors.New("回放会话建立之后，任务引用的自定义算子版本已经切换，写回被拒绝：请关闭会话并重新打开")
+		}
+		release := func() {}
+		if m.deps.Begin != nil {
+			var ok bool
+			if release, ok = m.deps.Begin(ctx, s.set.Set.TaskID); !ok {
+				return ReplayStepResponse{}, http.StatusConflict, errors.New("因子任务当前不允许写结果（暂停、恢复追赶或重置中），回放写回被拒绝")
+			}
+		}
 		rows, err := s.write(ctx, m.deps.Runner, plan, comp, period, m.batch())
+		release()
 		if err != nil {
 			return ReplayStepResponse{}, http.StatusBadGateway, err
 		}
@@ -535,6 +569,22 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		}
 	}
 	return rsp, http.StatusOK, nil
+}
+
+// udfHashes 返回现有回放会话引用的自定义算子版本：目录切换后这些版本仍不能卸载（会话的计算还要用）。
+func (m *replayManager) udfHashes() map[string]bool {
+	out := map[string]bool{}
+	if m == nil {
+		return out
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		for _, ref := range refsOfTasks([]domain.EngineTask{s.set}) {
+			out[ref.hash] = true
+		}
+	}
+	return out
 }
 
 func (m *replayManager) batch() int {
@@ -746,15 +796,29 @@ func (m *replayManager) handleClose(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, http.StatusOK, map[string]bool{"closed": closed})
 }
 
+// closeSession 等正在执行的 Step 结束之后才归还内存预算并移出会话表（Step 持有会话锁整个过程）：
+// 旧请求还握着整个快照时预算不能先还出去，否则新会话可以再次占用这部分预算；移出会话表也在这之后，
+// 等待期间会话引用的自定义算子版本仍被保留。
 func (m *replayManager) closeSession(id string) bool {
 	m.mu.Lock()
 	s := m.sessions[id]
-	delete(m.sessions, id)
 	m.mu.Unlock()
 	if s == nil {
 		return false
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	s.closed = true
 	s.release()
+	s.mu.Unlock()
+	m.mu.Lock()
+	if m.sessions[id] == s {
+		delete(m.sessions, id)
+	}
+	m.mu.Unlock()
 	return true
 }
 
@@ -826,4 +890,16 @@ func paramValues(plan pipeline.Plan, universe []string) map[string]map[string]ma
 		out[subject] = byMember
 	}
 	return out
+}
+
+// taskUDFKey 是任务成员引用的自定义算子绑定的指纹（成员键 → 名称@哈希）：回放会话据此判断期间是否切换过版本。
+func taskUDFKey(set domain.EngineTask) string {
+	var parts []string
+	for _, member := range set.Members {
+		if key := domain.UDFKey(member.Factor.UDFs); key != "" {
+			parts = append(parts, member.Key+"="+key)
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }

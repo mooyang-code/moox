@@ -15,7 +15,9 @@ import (
 	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/factorudf"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -37,6 +39,7 @@ type Runtime struct {
 	store       *store.Store
 	stopCatalog func() error
 	cancel      context.CancelFunc
+	udfRuntimes []*factorudf.Runtime
 	health      *factorhealth.State
 	once        sync.Once
 	err         error
@@ -86,10 +89,31 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 
 	hub := enginehub.New(db, enginehub.WithEngineLeaseTTL(cfg.Engine.LeaseTTL), enginehub.WithJobLeaseTTL(cfg.Engine.JobLeaseTTL), enginehub.WithHeartbeatStore(db))
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
+	// 自定义算子（wasm UDF）：发布复核与试算各有自己的运行时、内存预算与时限，与引擎分开计算；管理端不常驻实例。
+	verifyRuntime, err := factorudf.NewRuntime(appCtx, factorudf.Options{
+		Budget: udfhost.NewBudget(udfVerifyMemory), Limits: factorudf.Limits{PoolSize: 2, MemoryLimitPages: udfInstancePages},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create udf verify runtime: %w", err)
+	}
+	runtime.udfRuntimes = append(runtime.udfRuntimes, verifyRuntime)
+	previewRuntime, err := factorudf.NewRuntime(appCtx, factorudf.Options{
+		Budget: udfhost.NewBudget(udfPreviewMemory), Limits: factorudf.Limits{PoolSize: previewWorkers, MemoryLimitPages: udfInstancePages},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create udf preview runtime: %w", err)
+	}
+	runtime.udfRuntimes = append(runtime.udfRuntimes, previewRuntime)
 	catalogService := catalog.NewService(db, storage,
 		catalog.WithLockDir(cfg.Database.Path+".locks"),
 		catalog.WithReadyRecorder(hub.SetResultReady),
+		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
+		catalog.WithEngineView(hub.Engine),
 	)
+	fetchModule := func(ctx context.Context, hash string) ([]byte, error) {
+		_, wasm, err := catalogService.UdfModule(ctx, hash)
+		return wasm, err
+	}
 
 	if err := reconcileAtStartup(appCtx, catalogService, startupReconcileAttempts, startupReconcileBackoff); err != nil {
 		return nil, fmt.Errorf("reconcile factor result datasets at startup: %w", err)
@@ -102,7 +126,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 
 	filled := factorrpc.NewFilledInbox()
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
-		factorrpc.WithPreviewer(preview.New(storage, previewWorkers)), factorrpc.WithFilledInbox(filled))
+		factorrpc.WithPreviewer(preview.New(storage, previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))), factorrpc.WithFilledInbox(filled))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService, filled))
 
@@ -133,6 +157,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.gateway != nil {
 			r.err = errors.Join(r.err, r.gateway.Close())
+		}
+		for _, rt := range r.udfRuntimes {
+			r.err = errors.Join(r.err, rt.Close(context.Background()))
 		}
 		if r.store != nil {
 			r.err = errors.Join(r.err, r.store.Close())
@@ -165,6 +192,12 @@ const (
 	startupReconcileBackoff  = 2 * time.Second
 	// previewWorkers 是 PreviewFactor 试算的并行度：只算少量标的，管理端所在的 control 主机核数少。
 	previewWorkers = 2
+	// 自定义算子在管理端的限额：发布复核（一致性测试，串行执行）与试算各自的实例内存预算、单实例内存页数上限（64 KiB 一页）
+	// 与一致性测试的总时限。
+	udfVerifyMemory  = 512 << 20
+	udfPreviewMemory = 256 << 20
+	udfInstancePages = 2048 // 128 MiB
+	udfVerifyTimeout = 2 * time.Minute
 )
 
 // reconcileAtStartup tolerates a Storage that is still coming up: a set is

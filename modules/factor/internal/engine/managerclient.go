@@ -133,6 +133,16 @@ func (c *ManagerClient) ReportRecalcProgress(ctx context.Context, jobID, leaseTo
 	return rsp.GetJobStatus(), nil
 }
 
+// GetUdfModule 按版本哈希向管理端取一个自定义算子模块的 wasm 字节。
+func (c *ManagerClient) GetUdfModule(ctx context.Context, hash string) ([]byte, error) {
+	var rsp factorpb.GetUdfModuleRsp
+	req := &factorpb.GetUdfModuleReq{Engine: factorwire.EngineIdentityToPB(c.identity), Hash: hash}
+	if err := c.call(ctx, "GetUdfModule", req, &rsp, rsp.GetRetInfo); err != nil {
+		return nil, err
+	}
+	return rsp.GetWasm(), nil
+}
+
 func (c *ManagerClient) call(ctx context.Context, method string, req, rsp proto.Message, retInfo func() *commonpb.RetInfo) error {
 	if c == nil || c.gateway == nil {
 		return errors.New("factor manager gateway is unavailable")

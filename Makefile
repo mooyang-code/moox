@@ -72,7 +72,20 @@ test-docs-architecture:
 test-greenfield-contract:
 	bash scripts/test/contract/test-greenfield-contract.sh
 
-test: test-go test-web
+test: test-go test-web test-rust
+
+# Rust SDK、示例与测试样本：格式、clippy（-D warnings）、单元测试、宏的编译期错误用例；
+# 然后重新构建测试 wasm，并要求它们的一致性测试输出摘要与固定在 packages/factorudf/testdata/digests.json 里的预期值相同
+# （摘要只取决于行为，不取决于 wasm 字节：不同平台构建出的字节可能不同，行为必须相同）。
+.PHONY: test-rust udf-testdata
+test-rust: udf-testdata
+	cd sdk/rust && cargo fmt --all -- --check
+	cd sdk/rust && cargo clippy --workspace --all-targets --locked -- -D warnings
+	cd sdk/rust && cargo test --workspace --locked
+	cd packages/factorudf && go test -count=1 -run 'TestPinnedConformanceDigests' ./...
+
+udf-testdata:
+	bash scripts/build/build-udf-testdata.sh
 
 test-go:
 	./scripts/test/contract/test-go-workspace.sh

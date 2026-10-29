@@ -1,0 +1,5 @@
+error: 回看公式引用的参数 "q" 要是整数参数
+ --> tests/ui/lookback_float_param.rs:2:78
+  |
+2 | #[udf(name = "f", inputs = [x], params = { q: float(0.0..=1.0) }, lookback = "q")]
+  |                                                                              ^^^

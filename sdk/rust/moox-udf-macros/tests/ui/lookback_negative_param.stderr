@@ -1,0 +1,5 @@
+error: 回看公式引用的参数 "n" 的下限要 ≥ 0（窗口长度随参数单调不减）
+ --> tests/ui/lookback_negative_param.rs:2:73
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(-2..=5) }, lookback = "n+3")]
+  |                                                                         ^^^^^

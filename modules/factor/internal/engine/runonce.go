@@ -78,6 +78,21 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 		return pipeline.Outcome{}, err
 	}
 	pipelineConfig := pipeline.Config{WriteBatchRows: cfg.Pipeline.WriteBatchRows, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory)}
+	// 任务引用自定义算子时，先备齐模块（本地命中或向管理端拉取），再用同一套宿主计算。
+	if refs := refsOfTasks([]domain.EngineTask{set}); len(refs) > 0 {
+		if managerErr != nil {
+			return pipeline.Outcome{}, fmt.Errorf("任务引用了自定义算子，但管理端客户端不可用：%w", managerErr)
+		}
+		modules, err := newUDFModules(ctx, cfg.UDF, cfg.Compute.Workers, nil, manager.GetUdfModule)
+		if err != nil {
+			return pipeline.Outcome{}, err
+		}
+		defer modules.Close(context.Background())
+		if err := modules.EnsureAll(ctx, refs); err != nil {
+			return pipeline.Outcome{}, err
+		}
+		pipelineConfig.UDF = modules.Host()
+	}
 	// 诊断入口跑在独立进程里，不能打开引擎正在使用的本地存储：直接读 Storage 的窗口计算；
 	// 它同样写因子结果，跳过的项记入账本，由引擎的跳过恢复补算。
 	// 它不经过引擎的任务执行器，没有同任务串行保证（读原行 __params 再合并写回）：使用前先暂停该任务。

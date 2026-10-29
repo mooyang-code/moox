@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/factorexpr/exec"
 )
 
 type Mode int
@@ -81,6 +82,8 @@ type Config struct {
 	MemoryAdmission Admission
 	// AdmissionTimeout 是等待内存预留的最长时间；0 表示不超时（受 ctx 限制）。
 	AdmissionTimeout time.Duration
+	// UDF 是自定义算子的执行宿主；定义里没有 udf. 调用时不需要。
+	UDF exec.UDFHost
 	// GapSink 接收每次本期没有算的记录（账本）：上游失败、窗口还没载入完成、本期数据取不到；nil 不记录。
 	GapSink GapSink
 }
@@ -124,7 +127,9 @@ type Computation struct {
 	CrossPeriods map[string]map[int64]periodOutcome
 	Results      map[string]map[string]ItemResult
 	FactorStates map[string]storageio.FactorState
-	BudgetHit    bool
+	// Failures 记录成员整体计算失败的原因（补算模式下截面因子的逐行结果不带错误，原因放在这里供试算等调用方报告）。
+	Failures  map[string]error
+	BudgetHit bool
 }
 
 // ItemResult 是一个成员在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、

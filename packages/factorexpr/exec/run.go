@@ -28,6 +28,8 @@ type Options struct {
 	// Universes 是标的范围标识到序列成员掩码的映射（按 Panel.Series 的顺序）：截面算子只在掩码为真的序列之间计算，
 	// 范围外的序列结果为 NaN。没有给出的范围（包括空串）表示全部序列。
 	Universes map[string][]bool
+	// UDF 是自定义算子的执行宿主；程序里没有自定义算子时不需要。
+	UDF UDFHost
 }
 
 // smallWork 以下的节点不拆分并行，免得调度开销超过计算本身。
@@ -94,7 +96,7 @@ func Run(ctx context.Context, program *factorexpr.Program, panel *Panel, opts Op
 		return nil, err
 	}
 	alias, lastUse, need := dedup(program, params, universes, need)
-	run := &runner{program: program, panel: panel, need: need, workers: opts.Workers, pool: newPool(), params: params,
+	run := &runner{ctx: ctx, udf: opts.UDF, program: program, panel: panel, need: need, workers: opts.Workers, pool: newPool(), params: params,
 		universes: universes, alias: alias, nodes: make([]values, len(program.Nodes)), owned: make([]bool, len(program.Nodes))}
 	for index, node := range program.Nodes {
 		if err := ctx.Err(); err != nil {
@@ -308,6 +310,9 @@ func digestBools(mask []bool) string {
 }
 
 type runner struct {
+	ctx       context.Context
+	udf       UDFHost
+	batchGate sync.RWMutex // 自定义算子批：普通批共享，一条序列就超过 worker 份额的大批独占（大批与任何其他批都不并行）
 	program   *factorexpr.Program
 	panel     *Panel
 	need      []factorexpr.Interval
@@ -378,6 +383,9 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 			}
 		})
 	case factorexpr.CategoryTimeSeries:
+		if udf := node.Function.UDF(); udf != nil {
+			return r.computeUDF(node, udf, args, out, interval)
+		}
 		prepare := ops.RollingKernel(node.Op)
 		if prepare == nil {
 			return fmt.Errorf("算子 %s 没有时序内核", node.Op)
@@ -482,6 +490,38 @@ func (r *runner) seriesKernels(node *factorexpr.ProgramNode, prepare ops.Rolling
 		bySeries[s] = group
 	}
 	return kernels, bySeries
+}
+
+// parallelErr 与 parallel 相同，只是 fn 可以返回错误（自定义算子执行失败要让整次运行失败）；多个错误取最先返回的一个。
+func (r *runner) parallelErr(n, perItem int, fn func(lo, hi int) error) error {
+	workers := r.workers
+	if workers > n {
+		workers = n
+	}
+	if workers <= 1 || n*perItem < smallWork {
+		return fn(0, n)
+	}
+	chunk := (n + workers - 1) / workers
+	var wg sync.WaitGroup
+	var once sync.Once
+	var failure error
+	for lo := 0; lo < n; lo += chunk {
+		hi := min(n, lo+chunk)
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					once.Do(func() { failure = fmt.Errorf("因子计算内部错误：%v\n%s", recovered, debug.Stack()) })
+				}
+			}()
+			if err := fn(lo, hi); err != nil {
+				once.Do(func() { failure = err })
+			}
+		}(lo, hi)
+	}
+	wg.Wait()
+	return failure
 }
 
 // parallel 把 [0, n) 分块交给 workers 个 goroutine；perItem 是每一项的工作量，用来判断是否值得并行。

@@ -531,6 +531,7 @@ func (s *Service) GetStatus(ctx context.Context, _ *factorpb.GetStatusReq) (*fac
 	return &factorpb.GetStatusRsp{
 		RetInfo: success(), ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers,
 		EngineExprVersion: status.ExprVersion, ManagerExprVersion: factorexpr.ExprVersion, Runners: factorwire.RunnersToPB(status.Runners), RecentRuns: recent,
+		Lifecycle: factorwire.LifecycleToPB(status.Lifecycle),
 		Engine: &factorpb.EngineInfo{
 			EngineId: info.EngineID, BootId: info.BootID, Version: info.Version, Online: info.Online,
 			LastHeartbeatAt: factorwire.FormatTime(info.LastHeartbeatAt), CatalogHash: info.CatalogHash,

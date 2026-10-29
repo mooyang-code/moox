@@ -3,11 +3,16 @@
 package factorwire
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/udfhost"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/factorudf"
 )
 
 func SetToPB(set domain.FactorTask) *factorpb.FactorTask {
@@ -74,7 +79,74 @@ func DefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 		DefinitionHash:       domain.DefinitionHash(factor),
 		CreatedAt:            FormatTime(factor.CreatedAt),
 		UpdatedAt:            FormatTime(factor.UpdatedAt),
+		Udfs:                 UDFsToPB(factor.UDFs),
 	}
+}
+
+// UDFsToPB 转换定义引用的自定义算子版本（按名称排序，保证同一份内容产出同一份序列化）。
+func UDFsToPB(udfs map[string]factorexpr.UDF) []*factorpb.UdfDef {
+	if len(udfs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(udfs))
+	for name, udf := range udfs {
+		if udf.Hash != "" { // 没有启用版本的名称只是解析环境里的占位，不下发
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	out := make([]*factorpb.UdfDef, 0, len(names))
+	for _, name := range names {
+		u := udfs[name]
+		out = append(out, &factorpb.UdfDef{Name: u.Name, Hash: u.Hash, Manifest: udfManifest(u), Doc: u.Doc, Example: u.Example})
+	}
+	return out
+}
+
+// udfManifest 把自定义算子定义写成传输用的元数据 JSON（语义字段，与 wasm 自定义段同一个结构）。
+func udfManifest(u factorexpr.UDF) string {
+	m := factorudf.Manifest{ABI: factorudf.ABIVersion, Name: u.Name, Kind: "series", Inputs: u.Inputs, NaN: factorudf.NaNStrict, MinValid: 1}
+	if u.Relaxed {
+		m.NaN, m.MinValid = factorudf.NaNRelaxed, max(u.MinValid, 1)
+	}
+	for _, p := range u.Params {
+		typ := factorudf.ParamFloat
+		if p.Int {
+			typ = factorudf.ParamInt
+		}
+		m.Params = append(m.Params, factorudf.Param{Name: p.Name, Type: typ, Min: p.Min, Max: p.Max})
+	}
+	switch {
+	case u.LookbackParam == "":
+		m.Lookback = fmt.Sprintf("%d", u.LookbackB)
+	default:
+		m.Lookback = fmt.Sprintf("%d*%s+%d", u.LookbackA, u.LookbackParam, u.LookbackB)
+	}
+	raw, _ := json.Marshal(m)
+	return string(raw)
+}
+
+// UDFsFromPB 还原定义引用的自定义算子版本；元数据不合法返回错误（发送方保证合法，接收方不信任）。
+func UDFsFromPB(list []*factorpb.UdfDef) (map[string]factorexpr.UDF, error) {
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]factorexpr.UDF, len(list))
+	for _, item := range list {
+		m, err := factorudf.ParseManifest([]byte(item.GetManifest()))
+		if err != nil {
+			return nil, fmt.Errorf("自定义算子 %s 的元数据不合法：%w", item.GetName(), err)
+		}
+		if m.Name != item.GetName() {
+			return nil, fmt.Errorf("自定义算子 %s 的元数据名称是 %s", item.GetName(), m.Name)
+		}
+		u, err := udfhost.UDFFromManifest(m, item.GetHash(), udfhost.Describe{Doc: item.GetDoc(), Example: item.GetExample()})
+		if err != nil {
+			return nil, err
+		}
+		out[u.Name] = u
+	}
+	return out, nil
 }
 
 func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
@@ -100,6 +172,11 @@ func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 		CreatedAt:            createdAt,
 		UpdatedAt:            updatedAt,
 	}
+	udfs, err := UDFsFromPB(pb.GetUdfs())
+	if err != nil {
+		return domain.FactorDef{}, err
+	}
+	def.UDFs = udfs
 	if compiled, err := domain.CompileDefinition(def); err == nil {
 		def = compiled
 	} else {
@@ -195,6 +272,46 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Runners: RunnersToPB(status.Runners), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
+		Lifecycle: LifecycleToPB(status.Lifecycle), UdfModules: UDFModulesToPB(status.UDFModules),
+	}
+}
+
+// UDFModulesToPB 转换引擎上报的自定义算子模块状态。
+func UDFModulesToPB(modules []domain.UDFModuleStatus) []*factorpb.UdfModuleStatus {
+	out := make([]*factorpb.UdfModuleStatus, 0, len(modules))
+	for _, m := range modules {
+		out = append(out, &factorpb.UdfModuleStatus{Hash: m.Hash, Name: m.Name, State: m.State, Error: m.Error})
+	}
+	return out
+}
+
+// UDFModulesFromPB 还原引擎上报的自定义算子模块状态。
+func UDFModulesFromPB(modules []*factorpb.UdfModuleStatus) []domain.UDFModuleStatus {
+	out := make([]domain.UDFModuleStatus, 0, len(modules))
+	for _, m := range modules {
+		out = append(out, domain.UDFModuleStatus{Hash: m.GetHash(), Name: m.GetName(), State: m.GetState(), Error: m.GetError()})
+	}
+	return out
+}
+
+// LifecycleToPB 转换引擎模块级的生命周期状态。
+func LifecycleToPB(life domain.EngineLifecycle) *factorpb.EngineLifecycleStatus {
+	return &factorpb.EngineLifecycleStatus{
+		Stage: life.Stage, PausedSince: FormatTime(life.PausedSince), QuiescedAt: FormatTime(life.QuiescedAt),
+		Quiesced: life.Quiesced, CatchupBlocked: life.CatchupBlocked,
+	}
+}
+
+// LifecycleFromPB 还原引擎模块级的生命周期状态；缺失（旧引擎或没有上报）时为零值，即“未收敛”。
+func LifecycleFromPB(pb *factorpb.EngineLifecycleStatus) domain.EngineLifecycle {
+	if pb == nil {
+		return domain.EngineLifecycle{}
+	}
+	pausedSince, _ := ParseTime(pb.GetPausedSince())
+	quiescedAt, _ := ParseTime(pb.GetQuiescedAt())
+	return domain.EngineLifecycle{
+		Stage: pb.GetStage(), PausedSince: pausedSince, QuiescedAt: quiescedAt,
+		Quiesced: pb.GetQuiesced(), CatchupBlocked: pb.GetCatchupBlocked(),
 	}
 }
 
@@ -218,6 +335,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Runners: RunnersFromPB(pb.GetRunners()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
+		Lifecycle: LifecycleFromPB(pb.GetLifecycle()), UDFModules: UDFModulesFromPB(pb.GetUdfModules()),
 	}, nil
 }
 

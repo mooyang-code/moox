@@ -151,6 +151,8 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 ### Strategy DSL
 
 用户要写、改或校验策略 DSL（`rank` / `signal` / `tranche` 规则、止损止盈、策略模板、参数表）、创建策略定义与观察实例时，读
+[`references/udf.md`](references/udf.md)：自定义算子（wasm UDF）——DSL 表达不了的那一步算法用 Rust 写成 UDF，经 `moox-cli udf new/build/publish/preview/activate` 发布与切换版本（切换要在因子引擎暂停期间进行）。
+
 [`references/strategy-dsl.md`](references/strategy-dsl.md)：语法速查、表达式限制、`ValidateStrategy` 校验、创建与启用的顺序、改已有策略的注意点。
 完整语义以 `docs/模块/策略.md` 第 3 节为准。
 

@@ -35,8 +35,13 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			AutoStart:   r.autoStartTask,
 			AutoConfirm: r.autoConfirmTask,
 			Catchup:     r.catchupHook,
+			Quiesce:     r.quiesce,
 			Reset:       r.resetSpec(),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
+				if to == lifecycle.StageResuming {
+					// 恢复一开始就同步目录：追赶的前置条件要等本次恢复之后的同步。
+					r.syncer.SyncSoon()
+				}
 				log.Infof("factor_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},
 		},
@@ -47,11 +52,119 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 func (r *Runtime) gate(taskID string) bool { return r.life.Allowed(setRef(taskID)) }
 
 // catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算）；暂停、重置期间一律关闭。
-func (r *Runtime) catchupGate(taskID string) bool { return r.life.CatchupAllowed(setRef(taskID)) }
+// 除生命周期允许外还要满足追赶前置条件：本次恢复之后至少成功同步过一次目录（见 catchupPrecondition），
+// 否则可能先用暂停前的旧目录写出结果。
+// 模块处于暂停时一律关闭：任务级的 resume --force 在模块暂停期间原本可以只放行这个任务的追赶，但那会让已经上报“本次暂停已收敛”
+// 的模块重新开始写结果，收敛证据就失效了（切换自定义算子版本依赖它）；要追赶先恢复模块。
+func (r *Runtime) catchupGate(taskID string) bool {
+	if r.life.Stage(lifecycle.Ref{}) == lifecycle.StagePaused {
+		return false
+	}
+	return r.life.CatchupAllowed(setRef(taskID)) && r.catchupPrecondition(taskID) == ""
+}
+
+// resumeStartedAt 是这个任务本次恢复追赶开始的时间：模块在恢复追赶就取模块的，否则取任务自己的；不在恢复追赶时为零。
+func (r *Runtime) resumeStartedAt(taskID string) time.Time {
+	if r.life.Stage(lifecycle.Ref{}) == lifecycle.StageResuming {
+		return r.life.StageSince(lifecycle.Ref{})
+	}
+	if r.life.Stage(setRef(taskID)) == lifecycle.StageResuming {
+		return r.life.StageSince(setRef(taskID))
+	}
+	return time.Time{}
+}
+
+// catchupPrecondition 返回追赶前置条件未满足的原因，满足时为空。追赶在写任何结果（推进水位、后台补算）之前都要满足：
+// 本次恢复开始之后目录至少成功同步过一次（返回已应用或未变化都算）。没有目录同步器的运行时（诊断入口、测试）不要求。
+func (r *Runtime) catchupPrecondition(taskID string) string {
+	started := r.resumeStartedAt(taskID)
+	if started.IsZero() {
+		return ""
+	}
+	// 追赶写结果之前，目录里引用的自定义算子模块必须全部就绪：不会拿旧版本、或还没编译好的版本计算。
+	if reason := r.catchupModulesPending(taskID); reason != "" {
+		return reason
+	}
+	if r.syncer == nil {
+		return ""
+	}
+	if !r.syncer.SyncedSince().Before(started) {
+		return ""
+	}
+	r.syncer.SyncSoon()
+	return "等待本次恢复之后的目录同步（管理端不可达时会一直等待）"
+}
+
+// catchupModulesPending 返回恢复追赶时引用的自定义算子模块还没有全部就绪的原因，就绪或没有引用时为空。
+// taskID 为空时检查目录里全部任务（模块级恢复）。
+func (r *Runtime) catchupModulesPending(taskID string) string {
+	if r.udf == nil || r.catalog == nil {
+		return ""
+	}
+	var tasks []domain.EngineTask
+	if taskID == "" {
+		tasks = r.catalog.Sets()
+	} else if set, lookup := r.catalog.SetByID(taskID); lookup == SetFound {
+		tasks = []domain.EngineTask{set}
+	}
+	for _, ref := range refsOfTasks(tasks) {
+		if !r.udf.Ready(ref.hash) {
+			return fmt.Sprintf("自定义算子 %s@%.12s 的模块还没有就绪（拉取或编译中、或失败，见引擎状态的模块列表）", ref.name, ref.hash)
+		}
+	}
+	return ""
+}
 
 // writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
 // 这几条路径原先只看目录与租约（active），任务暂停后仍会写结果，现在统一并入生命周期门禁。
 func (r *Runtime) writeGate(taskID string) bool { return r.gate(taskID) || r.catchupGate(taskID) }
+
+// leaseGenerationKey 是补算作业领取时记下的模块暂停代次，放在执行上下文里。
+type leaseGenerationKey struct{}
+
+// withLeaseGeneration 返回带着暂停代次的上下文：代次之后发生过暂停，这个上下文里的写结果操作一律被拒绝。
+func withLeaseGeneration(ctx context.Context, generation uint64) context.Context {
+	return context.WithValue(ctx, leaseGenerationKey{}, generation)
+}
+
+// beginWrite 是写结果操作的登记式门禁：先登记在途，再检查门禁，不允许就立刻注销并拒绝。live 表示实时门禁放行，
+// catchup 表示恢复追赶的门禁放行；上下文带着领取代次时，代次变化（期间暂停过）也拒绝。
+func (r *Runtime) beginWrite(ctx context.Context, taskID string, live, catchup bool) (func(), bool) {
+	release := r.writes.enter(taskID)
+	allowed := (live && r.gate(taskID)) || (catchup && r.catchupGate(taskID))
+	if allowed {
+		if generation, ok := ctx.Value(leaseGenerationKey{}).(uint64); ok && generation != r.life.ModuleGeneration() {
+			allowed = false
+		}
+	}
+	if !allowed {
+		release()
+		return nil, false
+	}
+	return release, true
+}
+
+// beginReplayWrite 是回放写回的登记式门禁：回放的任务不一定处于预热或运行，所以只在被有意停下（暂停、恢复追赶、重置、故障）时拒绝。
+func (r *Runtime) beginReplayWrite(_ context.Context, taskID string) (func(), bool) {
+	release := r.writes.enter(taskID)
+	if r.life.Halted(lifecycle.Ref{}) || r.life.Halted(setRef(taskID)) {
+		release()
+		return nil, false
+	}
+	return release, true
+}
+
+// quiesce 是生命周期的 Quiesce 钩子：门禁已经关闭，等在途的写结果操作（实时计算、补算分块、追赶推进、回放写回、补算领取）结束。
+func (r *Runtime) quiesce(ctx context.Context, ref lifecycle.Ref) error {
+	taskID := ""
+	if ref != (lifecycle.Ref{}) {
+		taskID = ref.ID
+	}
+	return r.writes.wait(ctx, taskID)
+}
+
+// leaseAllowed 报告是否可以领取补算作业：模块级生命周期放行才领取。不用 active()，它还服务于消费者、预载与数据同步。
+func (r *Runtime) leaseAllowed() bool { return r.life == nil || r.life.ModuleOpen() }
 
 func (r *Runtime) lifecycleObjects() []lifecycle.Ref {
 	ids := r.catalog.TaskIDs()
@@ -92,6 +205,9 @@ func (r *Runtime) checkTask(ctx context.Context, ref lifecycle.Ref) []lifecycle.
 		checks = append(checks, r.coverageCheck(ctx, src))
 	}
 	checks = append(checks, r.blockedCheck(src, ref.ID))
+	if check, ok := r.modulesCheck(set); ok {
+		checks = append(checks, check)
+	}
 	if gaps := r.data.LongGaps(src); len(gaps) > 0 {
 		first := gaps[0]
 		checks = append(checks, lifecycle.Check{
@@ -232,6 +348,19 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lif
 			len(short), first.Subject, first.Have, first.Earliest.UTC().Format(time.RFC3339), first.Want),
 		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
 	}
+}
+
+// lifecycleStatus 是随心跳上报的模块级生命周期状态：管理端据此确认本次暂停已收敛（切换自定义算子版本的前提）。
+func (r *Runtime) lifecycleStatus() domain.EngineLifecycle {
+	if r.life == nil {
+		return domain.EngineLifecycle{}
+	}
+	self := r.life.Snapshot().Self
+	out := domain.EngineLifecycle{Stage: string(self.Stage), QuiescedAt: self.QuiescedAt, Quiesced: self.Quiesced(), CatchupBlocked: r.catchupPrecondition("")}
+	if self.Pause != nil {
+		out.PausedSince = self.Pause.Since
+	}
+	return out
 }
 
 // markPausedRunners 标出被有意停下的任务（手动、系统或自动暂停，以及放行前的恢复追赶；故障不算，要照常告警），

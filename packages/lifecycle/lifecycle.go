@@ -191,6 +191,9 @@ type Object struct {
 	// Pause 是暂停详情（暂停与恢复追赶阶段存在）；PausedSince 是最早一次暂停的时间，恢复追赶据此核对缺失区间。
 	Pause       *PauseInfo `json:"pause,omitempty"`
 	PausedSince time.Time  `json:"paused_since,omitempty"`
+	// QuiescedAt 是本次暂停收敛完成的时间：暂停命令成功后等到在途操作结束（没有 Quiesce 钩子时即刻）才写入，离开暂停阶段时清空。
+	// 只有它不早于 Pause.Since 才算本次暂停已收敛，上一轮暂停留下的值不能证明这一轮。
+	QuiescedAt time.Time `json:"quiesced_at,omitempty"`
 	// Resume 是暂停前的阶段（放行后回到它）。
 	Resume Stage `json:"resume,omitempty"`
 	// Catchup 是恢复追赶的进度（恢复追赶阶段，或模块恢复追赶中参与追赶的对象）。
@@ -275,6 +278,10 @@ type Controller struct {
 	checks  map[string][]Check
 
 	reset resetState
+
+	// generation、wasOpen 记录模块的暂停代次（见 ModuleGeneration），只在进程内保存。
+	generation uint64
+	wasOpen    bool
 }
 
 type record struct {
@@ -285,6 +292,7 @@ type record struct {
 	Pause       *PauseInfo   `json:"pause,omitempty"`
 	PausedSince time.Time    `json:"paused_since,omitempty"`
 	Resume      Stage        `json:"resume,omitempty"`
+	QuiescedAt  time.Time    `json:"quiesced_at,omitempty"`
 	Recovered   bool         `json:"recovered,omitempty"`
 	Hold        Hold         `json:"hold,omitempty"`
 	ReleasedAt  time.Time    `json:"released_at,omitempty"`
@@ -373,6 +381,7 @@ func New(opts Options) (*Controller, error) {
 }
 
 func (c *Controller) save() error {
+	c.trackOpen()
 	if c.opts.StateFile == "" {
 		return nil
 	}
@@ -438,6 +447,13 @@ func (c *Controller) set(r *record, to Stage, reason string, changes *[]change) 
 	from := r.Stage
 	r.Stage, r.Reason = to, reason
 	if from != to {
+		if to != StagePaused {
+			r.QuiescedAt = time.Time{}
+		}
+		if to != StageNotReady {
+			// 待恢复的阶段只在“重启后等检查”这一段有意义；用户显式 init/start 或检查通过后离开未就绪，它就作废。
+			r.Pending = ""
+		}
 		r.Since = c.opts.Now().UTC()
 		*changes = append(*changes, change{ref: r.Ref, from: from, to: to, reason: reason})
 	}

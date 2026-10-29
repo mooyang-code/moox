@@ -1,0 +1,10 @@
+# moox 自定义算子（wasm UDF）工作区：一个 crate 一个 UDF（一个模块、一个版本哈希）。
+[workspace]
+resolver = "2"
+members = ["udfs/*"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

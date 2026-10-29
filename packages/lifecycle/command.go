@@ -72,6 +72,10 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 			if qerr != nil {
 				return obj, fmt.Errorf("已暂停，但在途操作没有结束：%w", qerr)
 			}
+			obj = c.markQuiesced(req.Ref, obj)
+		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused:
+			// 没有需要等待的在途操作：暂停即收敛。
+			obj = c.markQuiesced(req.Ref, obj)
 		}
 		if err == nil {
 			c.audit("lifecycle_%s module=%s ref=%s/%s kind=%s by=%s reason=%q", req.Command, c.opts.Module, req.Ref.Kind, req.Ref.ID, req.PauseKind, req.By, req.Reason)
@@ -81,6 +85,21 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 		return c.release(ctx, req.Ref)
 	}
 	return Object{}, fmt.Errorf("未知命令 %q", req.Command)
+}
+
+// markQuiesced 写入收敛时间并返回更新后的对象。等待是针对 obj 所属的那一轮暂停做的：期间恢复过、又暂停过（新的一轮有新的
+// 暂停详情）时不写，否则上一轮的等待结果会把还没收敛的下一轮误报为已收敛。
+func (c *Controller) markQuiesced(ref Ref, obj Object) Object {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.recordFor(ref)
+	// 轮次按暂停开始的时间与类型认定（快照里的 Pause 是副本，不能比指针）：同一轮暂停里原因被改写不算新一轮。
+	if r.Stage != StagePaused || r.Pause == nil || obj.Pause == nil || !r.Pause.Since.Equal(obj.Pause.Since) || r.Pause.Kind != obj.Pause.Kind {
+		return c.object(r)
+	}
+	r.QuiescedAt = c.opts.Now().UTC()
+	_ = c.save()
+	return c.object(r)
 }
 
 func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
@@ -283,6 +302,19 @@ func (c *Controller) endCatchup(r *record) {
 	}
 }
 
+// roundID 标识一次恢复追赶：模块的阶段时间、对象自己的阶段时间与暂停信息。再次暂停、恢复之后三者之一必然改变，
+// settle 在锁外读追赶进度，回写时靠它丢弃上一轮迟到的结果（不能用旧结果覆盖新一轮、更不能据此放行）。
+type roundID struct {
+	self, own time.Time
+	pause     *PauseInfo
+}
+
+// roundOf 读取 ref 当前的恢复轮次标识；调用方持有锁。
+func (c *Controller) roundOf(ref Ref) roundID {
+	r := c.recordFor(ref)
+	return roundID{self: c.self.Since, own: r.Since, pause: r.Pause}
+}
+
 // settle 推进恢复追赶：对恢复追赶中的记录（和模块恢复追赶时参与追赶的对象）调用 Catchup 钩子，
 // 追平且检查通过的、设为自动放行的记录回到暂停前的阶段；系统级恢复的记录停在「已追平待放行」，等 release。
 func (c *Controller) settle(ctx context.Context) {
@@ -297,7 +329,9 @@ func (c *Controller) settle(ctx context.Context) {
 		}
 	}
 	since := map[string]time.Time{}
+	rounds := map[string]roundID{}
 	for _, ref := range refs {
+		rounds[ref.key()] = c.roundOf(ref)
 		since[ref.key()] = c.recordFor(ref).PausedSince
 		if since[ref.key()].IsZero() {
 			// 模块恢复追赶时，参与追赶的对象继续运行阶段、没有自己的暂停时间：取模块的暂停时间作为追赶起点。
@@ -324,7 +358,12 @@ func (c *Controller) settle(ctx context.Context) {
 
 	c.mu.Lock()
 	var changes []change
+	stale := map[string]bool{}
 	for _, ref := range refs {
+		if rounds[ref.key()] != c.roundOf(ref) {
+			stale[ref.key()] = true // 这一轮已经结束或被新一轮取代：结果作废
+			continue
+		}
 		r := c.recordFor(ref)
 		res := results[ref.key()]
 		cu := res.catchup
@@ -337,7 +376,7 @@ func (c *Controller) settle(ctx context.Context) {
 		c.checks[ref.key()] = res.checks
 	}
 	// 模块自身：自己和所有参与追赶的对象都追平，并且自身检查没有失败项，才算追平。
-	if c.self.Stage == StageResuming && c.self.catchup != nil {
+	if c.self.Stage == StageResuming && c.self.catchup != nil && !stale[c.self.key()] {
 		self := c.self
 		caught := self.catchup.CaughtUp && Passed(c.checks[self.key()])
 		for _, o := range c.objects {
@@ -352,7 +391,7 @@ func (c *Controller) settle(ctx context.Context) {
 	}
 	for _, ref := range refs {
 		r := c.recordFor(ref)
-		if r.Stage != StageResuming || !r.autoRelease || r.catchup == nil || !r.catchup.CaughtUp {
+		if stale[ref.key()] || r.Stage != StageResuming || !r.autoRelease || r.catchup == nil || !r.catchup.CaughtUp {
 			continue
 		}
 		if !Passed(c.checks[ref.key()]) {

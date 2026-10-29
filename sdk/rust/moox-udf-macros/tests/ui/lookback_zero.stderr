@@ -1,0 +1,5 @@
+error: 参数取下限时窗口长度要 ≥ 1
+ --> tests/ui/lookback_zero.rs:2:72
+  |
+2 | #[udf(name = "f", inputs = [x], params = { n: int(0..=5) }, lookback = "n")]
+  |                                                                        ^^^

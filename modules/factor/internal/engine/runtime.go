@@ -68,6 +68,8 @@ type Runtime struct {
 	admit    *memadmit.Admitter
 	health   *factorhealth.State
 	life     *lifecycle.Controller
+	writes   *inflight
+	udf      *udfModules
 	replays  *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
@@ -97,7 +99,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		return nil, err
 	}
 	r := &Runtime{
-		cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
+		writes: newInflight(), cfg: cfg, identity: domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: bootID, Version: version},
 		runs: newRunTracker(), monitor: NewHealth(cfg.Pipeline.PeriodBudgetMax), locks: setlock.New(""),
 		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
 	}
@@ -134,6 +136,12 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	// 本地时序存储与内存窗口（设计第 3、4 节）：窗口与块缓存是常驻内存，先从进程预算里扣除，计算再向准入器预留。
 	r.admit = memadmit.New(int64(cfg.Memory.TotalBudget))
 	r.admit.SetResident("seriesstore_block_cache", int64(cfg.SeriesStore.BlockCache))
+	// 自定义算子（wasm UDF）：模块存储与宿主；实例的常驻内存经准入器登记并受预算约束。
+	if r.udf, err = newUDFModules(appCtx, cfg.UDF, cfg.Compute.Workers, r.admit, r.manager.GetUdfModule); err != nil {
+		return nil, fmt.Errorf("create udf modules: %w", err)
+	}
+	r.udf.reclaim = r.reclaimModules
+	r.udf.Host().SetObserver(r.observeUDF)
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
@@ -146,7 +154,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
 		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
 		OnCompileError:  func(taskID, factorID string) { r.metrics.CompileErrors.WithLabelValues(taskID, factorID).Inc() },
-		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax,
+		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax, UDF: r.udf.Host(),
 	}
 	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
 	ledger, expired, err := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
@@ -193,7 +201,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
-		onChange: r.reconcileConsumer, now: time.Now,
+		onChange: r.reconcileConsumer, now: time.Now, kick: make(chan struct{}, 1),
+		prepare: r.prepareSnapshot, applied: r.retainModules,
 	}
 	beat := &heartbeater{
 		client: r.manager, lease: r.lease, status: r.engineStatus, interval: cfg.Engine.HeartbeatInterval,
@@ -215,8 +224,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
+		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
+		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
 			_, err := r.data.BackfillTask(ctx, set, subjects, bars, nil)
 			return err
@@ -238,6 +249,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		onGapped: func(seriesstore.Source) { r.metrics.SeriesChangeGaps.Inc() }, blocked: map[seriesstore.Source]bool{},
 	}
 
+	r.goRun(appCtx, r.loadModulesAtStart)
 	r.goRun(appCtx, filler.Run)
 	r.goRun(appCtx, r.runCatchup)
 	r.goRun(appCtx, r.syncer.Run)
@@ -250,6 +262,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.replays = newReplayManager(ReplayDeps{
 		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
+		Begin:   r.beginReplayWrite,
+		Pin:     r.pinTaskModules,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {
@@ -288,6 +302,9 @@ func (r *Runtime) reconcileConsumer() {
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			Begin: func(ctx context.Context, taskID string, live bool) (func(), bool) {
+				return r.beginWrite(ctx, taskID, true, !live)
+			},
 			Params: r.params,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
@@ -349,6 +366,10 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 	}
 	status.Runners = withWarmup(status.Runners, r.catalog.TaskIDs(), r.pipeline.WarmupStatuses())
 	markPausedRunners(status.Runners, r.life)
+	status.Lifecycle = r.lifecycleStatus()
+	if r.udf != nil {
+		status.UDFModules = r.udf.Status()
+	}
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
 			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,
@@ -369,6 +390,7 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.reportGapMetrics(&gapSkipped)
+			r.reportUDFMetrics()
 			currentTasks := make(map[string]struct{})
 			if consumer := r.currentConsumer(); consumer != nil {
 				for _, runner := range consumer.RunnerStatuses() {
@@ -461,6 +483,9 @@ func (r *Runtime) Close() error {
 			r.cancel()
 		}
 		r.wg.Wait()
+		if r.udf != nil {
+			r.err = errors.Join(r.err, r.udf.Close(context.Background()))
+		}
 		r.reconcileMu.Lock()
 		if consumer := r.currentConsumer(); consumer != nil {
 			r.setConsumer(nil)

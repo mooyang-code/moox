@@ -49,6 +49,39 @@ func (c *Controller) moduleOpen() bool {
 	return false
 }
 
+// ModuleOpen 报告模块自身是否放行（没有控制意图，且自身阶段是就绪、预热或运行）：后台的领取类动作（例如补算领取）用它做门禁。
+func (c *Controller) ModuleOpen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trackOpen()
+	return c.moduleOpen()
+}
+
+// ModuleGeneration 返回模块的暂停代次：模块每次从放行变为不放行加一。
+// 在途的长任务（补算作业）记下领取时的代次，代次变化说明期间发生过暂停，不能再沿用旧的执行上下文写结果。
+func (c *Controller) ModuleGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trackOpen()
+	return c.generation
+}
+
+// trackOpen 在模块由放行变为不放行时推进代次；调用方持有锁。每次状态变更落盘前与每次查询时都会调用，
+// 所以两次观察之间的任何一次关闭都会被计入。
+func (c *Controller) trackOpen() {
+	open := c.moduleOpen()
+	if c.wasOpen && !open {
+		c.generation++
+	}
+	c.wasOpen = open
+}
+
+// Quiesced 报告对象本次暂停是否已经收敛：处于暂停、有暂停详情，并且收敛时间不早于本次暂停的开始时间。
+// 没有 Quiesce 钩子的模块，暂停命令成功即写入收敛时间。
+func (o Object) Quiesced() bool {
+	return o.Stage == StagePaused && o.Pause != nil && !o.QuiescedAt.IsZero() && !o.QuiescedAt.Before(o.Pause.Since)
+}
+
 // Allowed 报告对象是否在做实时计算（预热或运行）：处理周期事件前用它做门禁。
 // ref 为空时指模块自身（没有对象的模块，例如 Trade）：自身处于预热或运行。
 // 模块自身暂停、恢复追赶、重置或故障时整个模块都不计算，不管对象各自处于什么阶段。
@@ -107,6 +140,15 @@ func (c *Controller) Halted(ref Ref) bool {
 	if c.self.Hold != HoldNone {
 		return true
 	}
+	// 重启后待恢复的暂停（启动前检查还没通过）仍然是被有意停下的：不能因为检查暂时不过就放开写路径。
+	if c.self.Pending == StagePaused && c.self.Stage == StageNotReady {
+		return true
+	}
+	if ref != (Ref{}) {
+		if o := c.objects[ref.key()]; o != nil && o.Pending == StagePaused && o.Stage == StageNotReady {
+			return true
+		}
+	}
 	switch c.self.Stage {
 	case StagePaused, StageResuming, StageResetting, StageResetFailed, StageFault:
 		return true
@@ -155,8 +197,13 @@ func (c *Controller) effective(r *record) Stage {
 func (c *Controller) object(r *record) Object {
 	obj := Object{
 		Ref: r.Ref, Stage: r.Stage, Effective: c.effective(r), Color: c.effective(r).Color(), Reason: r.Reason, Since: r.Since,
-		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
+		Pause: r.Pause, PausedSince: r.PausedSince, QuiescedAt: r.QuiescedAt, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
+	}
+	if r.Pause != nil {
+		// 快照不能暴露内部指针：Refresh 会原地改写自动暂停的原因，调用方在锁外编码快照时会与它竞争。
+		pause := *r.Pause
+		obj.Pause = &pause
 	}
 	if r.catchup != nil {
 		cu := *r.catchup

@@ -20,6 +20,9 @@ type scope struct {
 	// memo 按语法树节点缓存编译结果。expr-lang 会让多个父节点共享同一个子节点（例如把 0 < e < 1 改写成两个比较、
 	// 共用 e），不缓存的话嵌套几十层就会指数级重复编译。同一个语法节点只属于一条表达式，结果确定。
 	memo map[ast.Node]*Node
+	// udfs 是自定义算子的解析环境（可为空）；udfFns 缓存本次编译里按名称构造好的函数。
+	udfs   UDFEnv
+	udfFns map[string]*Function
 }
 
 // lower 把语法树编译成规范化的表达式节点：解析名称、检查类型、折叠常量、计算回看。
@@ -127,8 +130,14 @@ func resolveName(src *exprSource, node *ast.IdentifierNode, sc *scope) (*Node, e
 }
 
 func lowerCall(src *exprSource, call *ast.CallNode, sc *scope) (*Node, error) {
+	if name, ok := udfCallee(call.Callee); ok {
+		return lowerUDFCall(src, call, name, sc)
+	}
 	callee, ok := call.Callee.(*ast.IdentifierNode)
 	if !ok {
+		if _, isMember := call.Callee.(*ast.MemberNode); isMember {
+			return nil, src.errAt(call, "只能调用函数名，或自定义算子 udf.<名称>(...)")
+		}
 		return nil, src.errAt(call, "只能调用函数名")
 	}
 	fn, ok := LookupFunction(callee.Value)
@@ -370,6 +379,8 @@ type Factor struct {
 	// Lookback 是参数在声明范围内取最坏值时的回看。
 	Lookback int
 	Type     FactorType
+	// UDFs 是引用的自定义算子版本，按名称排序、去重。
+	UDFs []UDFRef
 }
 
 // Param 返回名为 name 的参数声明。
@@ -453,22 +464,29 @@ func (n *Node) Bind(values map[string]float64) ([]int, []float64) {
 	return ints, floats
 }
 
-// Compile 解析并编译一份定义文本。
-func Compile(text string) (*Factor, error) {
+// Compile 解析并编译一份定义文本（不允许调用自定义算子）。
+func Compile(text string) (*Factor, error) { return CompileWith(text, nil) }
+
+// CompileWith 与 Compile 相同，env 是自定义算子的解析环境：udf.<名称>(...) 按它解析到具体版本。
+func CompileWith(text string, env UDFEnv) (*Factor, error) {
 	spec, err := ParseSpec(text)
 	if err != nil {
 		return nil, err
 	}
-	return CompileSpec(spec)
+	return CompileSpecWith(spec, env)
 }
 
 // CompileSpec 编译已解析的定义：编译 let 与输出（参数编译成参数槽），推导输入列、回看与类型。
-func CompileSpec(spec *Spec) (*Factor, error) {
+func CompileSpec(spec *Spec) (*Factor, error) { return CompileSpecWith(spec, nil) }
+
+// CompileSpecWith 与 CompileSpec 相同，env 是自定义算子的解析环境。
+func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 	if len(spec.Outputs) > MaxOutputs {
 		return nil, errorf("outputs", 0, "输出不能超过 %d 个", MaxOutputs)
 	}
 	sc := &scope{params: make(map[string]Param, len(spec.Params)), lets: make(map[string]*Node, len(spec.Lets)),
-		letPos: make(map[string]int, len(spec.Lets)), memo: make(map[ast.Node]*Node)}
+		letPos: make(map[string]int, len(spec.Lets)), memo: make(map[ast.Node]*Node),
+		udfs: env, udfFns: map[string]*Function{}}
 	for _, param := range spec.Params {
 		sc.params[param.Name] = param
 	}
@@ -533,6 +551,7 @@ func CompileSpec(spec *Spec) (*Factor, error) {
 
 func (f *Factor) derive() {
 	columns := map[string]bool{}
+	udfs := map[string]string{}
 	visited := map[*Node]bool{}
 	var walk func(*Node)
 	walk = func(node *Node) {
@@ -542,6 +561,9 @@ func (f *Factor) derive() {
 		visited[node] = true
 		if node.Op == OpColumn {
 			columns[node.Column] = true
+		}
+		if udf := node.Function.UDF(); udf != nil {
+			udfs[udf.Name] = udf.Hash
 		}
 		for _, arg := range node.Args {
 			walk(arg)
@@ -561,6 +583,11 @@ func (f *Factor) derive() {
 		f.InputColumns = append(f.InputColumns, column)
 	}
 	sort.Strings(f.InputColumns)
+	f.UDFs = nil
+	for name, hash := range udfs {
+		f.UDFs = append(f.UDFs, UDFRef{Name: name, Hash: hash})
+	}
+	sort.Slice(f.UDFs, func(i, j int) bool { return f.UDFs[i].Name < f.UDFs[j].Name })
 }
 
 // SingleOutput 报告因子是否是单输出写法（output）：此时输出的 Name 为空，输出名就是因子 ID。

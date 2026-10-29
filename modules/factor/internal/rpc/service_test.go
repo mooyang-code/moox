@@ -282,6 +282,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
 		"SubmitFactorParams", "GetFactorParams",
+		"PublishUdf", "ListUdfs", "GetUdf", "ActivateUdf",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {

@@ -1,0 +1,4 @@
+{"cases": [
+  {"name": "共同有效段不足 min_valid 时为 NaN", "params": [4], "inputs": [[null, null, null, 1, 2], [null, 1, 2, 3, 4]], "expected": [null, 1]},
+  {"name": "窗口中间的 NaN 为 NaN", "params": [3], "inputs": [[1, null, 3, 4], [1, 2, 3, 4]], "expected": [null, 1]}
+]}

@@ -37,6 +37,21 @@ type Config struct {
 	Watermark     WatermarkConfig                  `yaml:"watermark"`
 	Lifecycle     LifecycleConfig                  `yaml:"lifecycle"`
 	Params        ParamsConfig                     `yaml:"params"`
+	UDF           UDFConfig                        `yaml:"udf"`
+}
+
+// UDFConfig 是自定义算子（wasm UDF）的运行参数；整段可选，不写时全部取默认值（设计 11.2、11.3）。
+type UDFConfig struct {
+	// Dir 是模块的本地存储目录（按版本哈希寻址的 <哈希>.wasm 与编译缓存 cache/），默认 ./data/udf。
+	Dir string `yaml:"dir"`
+	// CallTimeout 是实例化与每次 guest 调用的截止时间，默认 10s。
+	CallTimeout time.Duration `yaml:"call_timeout"`
+	// InstanceMemory 是单个实例线性内存的上限，默认 512MiB。
+	InstanceMemory ByteSize `yaml:"instance_memory"`
+	// BatchBytes 是每批输入输出的字节预算，默认 64MiB，也是上限（内存估算按这个上限计）。
+	BatchBytes ByteSize `yaml:"batch_bytes"`
+	// IdleTimeout 是实例空闲多久后关闭，默认 5 分钟。
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
 }
 
 // WatermarkConfig 是连续水位：每个任务从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
@@ -266,6 +281,7 @@ func Default() *Config {
 		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
 		Lifecycle: LifecycleConfig{StateFile: "./data/engine/lifecycle.json", Interval: 30 * time.Second},
 		Params:    ParamsConfig{CacheFile: "./data/engine/param_cache.json", FetchTimeout: 5 * time.Second},
+		UDF:       UDFConfig{Dir: "./data/udf", CallTimeout: 10 * time.Second, InstanceMemory: 512 << 20, BatchBytes: 64 << 20, IdleTimeout: 5 * time.Minute},
 	}
 }
 
@@ -294,6 +310,15 @@ func (c *Config) applyDefaults() {
 	setDuration(&c.Pipeline.PeriodBudgetMax, d.Pipeline.PeriodBudgetMax)
 	setInt(&c.Recalc.ChunkPeriods, d.Recalc.ChunkPeriods)
 	setDuration(&c.Recalc.PollInterval, d.Recalc.PollInterval)
+	setString(&c.UDF.Dir, d.UDF.Dir)
+	setDuration(&c.UDF.CallTimeout, d.UDF.CallTimeout)
+	if c.UDF.InstanceMemory == 0 {
+		c.UDF.InstanceMemory = d.UDF.InstanceMemory
+	}
+	if c.UDF.BatchBytes == 0 {
+		c.UDF.BatchBytes = d.UDF.BatchBytes
+	}
+	setDuration(&c.UDF.IdleTimeout, d.UDF.IdleTimeout)
 	setString(&c.Gap.LedgerDir, d.Gap.LedgerDir)
 	setDuration(&c.Gap.SweepInterval, d.Gap.SweepInterval)
 	setDuration(&c.Gap.Settle, d.Gap.Settle)
@@ -315,7 +340,7 @@ func (c *Config) applyDefaults() {
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.CacheFile,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.CacheFile, &c.UDF.Dir,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
@@ -346,6 +371,8 @@ func (c *Config) Validate() error {
 	require(c.Compute.Workers > 0 && c.Compute.MaxMemory > 0, "compute.workers and compute.max_memory must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")
 	require(c.Recalc.ChunkPeriods > 0, "recalc.chunk_periods must be positive")
+	require(c.UDF.CallTimeout > 0 && c.UDF.InstanceMemory >= 1<<20 && c.UDF.BatchBytes >= 1<<20 && c.UDF.BatchBytes <= 64<<20 && c.UDF.IdleTimeout > 0 && strings.TrimSpace(c.UDF.Dir) != "",
+		"udf.dir、udf.call_timeout、udf.idle_timeout must be set, udf.instance_memory must be at least 1MiB, udf.batch_bytes must be between 1MiB and 64MiB")
 	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
 	require(c.Gap.MaxGroupsPerSweep > 0 && c.Gap.MaxSpan > 0, "gap.max_groups_per_sweep and gap.max_span must be positive")
 	require(strings.TrimSpace(c.SeriesStore.Dir) != "" && c.SeriesStore.BlockCache > 0, "seriesstore.dir and seriesstore.block_cache are required")

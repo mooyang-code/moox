@@ -87,6 +87,23 @@ func (a *Admitter) CanResident(name string, extra int64) bool {
 	return a.residentLocked()-a.resident[name]+extra <= a.budget
 }
 
+// TrySetResident 把 name 的常驻内存改为 bytes：增加之后常驻加已预留的计算内存超出预算就拒绝（返回 false、不登记），
+// 否则登记。检查与登记在同一把锁里完成，并发的预留与常驻申请不会重复放行同一份预算；减少或不变总是成功。
+func (a *Admitter) TrySetResident(name string, bytes int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.budget > 0 && bytes > a.resident[name] && a.residentLocked()-a.resident[name]+bytes+a.reserved > a.budget {
+		return false
+	}
+	if bytes <= 0 {
+		delete(a.resident, name)
+	} else {
+		a.resident[name] = bytes
+	}
+	a.dispatchLocked()
+	return true
+}
+
 type priorityKey struct{}
 
 // WithPriority 在 ctx 里带上预留的优先级：管线只通过 Reserve(ctx, bytes) 预留，实时周期与补算由调用方用它区分。

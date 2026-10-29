@@ -21,19 +21,6 @@ type factorDefRow struct {
 	UpdatedAt            time.Time `gorm:"column:c_mtime"`
 }
 
-// domain 还原定义并编译 Spec 填充派生字段。已落库的 Spec 编译失败（例如 expr 语义版本变化后不再合法）时仍返回定义，
-// 派生字段为空，由调用方的校验报错，避免一个坏定义让列表接口整体失败。
-func (r factorDefRow) domain() (domain.FactorDef, error) {
-	def := domain.FactorDef{
-		FactorID: r.FactorID, Name: r.Name, CategoryID: r.CategoryID, Spec: r.Spec, SpecHash: r.SpecHash,
-		AllowPartialUniverse: r.AllowPartialUniverse != 0, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-	}
-	if compiled, err := domain.CompileDefinition(def); err == nil {
-		def = compiled
-	}
-	return def, nil
-}
-
 // CreateFactor creates a standalone definition.
 func (s *Store) CreateFactor(ctx context.Context, def domain.FactorDef) error {
 	if s == nil || s.db == nil {
@@ -138,7 +125,7 @@ func (s *Store) GetFactor(ctx context.Context, factorID string) (domain.FactorDe
 	if err != nil {
 		return domain.FactorDef{}, err
 	}
-	return row.domain()
+	return s.resolveDef(ctx, s.db, row)
 }
 
 // ListFactors returns every definition in factor id order.
@@ -150,7 +137,7 @@ func (s *Store) ListFactors(ctx context.Context) ([]domain.FactorDef, error) {
 	if err := s.db.WithContext(ctx).Raw(`SELECT ` + factorDefColumns + ` FROM t_factor_defs ORDER BY c_factor_id`).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	return factorDefRowsToDomain(rows)
+	return s.defRowsToDomain(ctx, s.db, rows)
 }
 
 // DeleteFactor removes one definition that no set member references.
@@ -193,10 +180,10 @@ func (s *Store) SetFactorCategory(ctx context.Context, factorID, categoryID stri
 	return nil
 }
 
-func factorDefRowsToDomain(rows []factorDefRow) ([]domain.FactorDef, error) {
+func (s *Store) defRowsToDomain(ctx context.Context, db *gorm.DB, rows []factorDefRow) ([]domain.FactorDef, error) {
 	defs := make([]domain.FactorDef, 0, len(rows))
 	for _, row := range rows {
-		def, err := row.domain()
+		def, err := s.resolveDef(ctx, db, row)
 		if err != nil {
 			return nil, err
 		}

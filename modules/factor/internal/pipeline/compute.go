@@ -146,10 +146,11 @@ func snapshotOf(plan Plan, member domain.MemberDef) domain.ParamSnapshot {
 
 // compile 返回编译好的定义。引擎目录里的定义来自 JSON 快照，没有编译结果；按 (factor_id, spec) 缓存编译结果。
 func (r *Runner) compile(factor domain.FactorDef) (domain.FactorDef, error) {
-	if factor.Compiled() != nil {
+	if factor.CompiledCurrent() {
 		return factor, nil
 	}
-	key := factor.FactorID + "\x00" + factor.Spec
+	// 缓存键含自定义算子的绑定：切换版本时 spec 不变，否则会命中旧版本的编译结果。
+	key := factor.FactorID + "\x00" + factor.Spec + "\x00" + domain.UDFKey(factor.UDFs)
 	if cached, ok := r.compiled.Load(key); ok {
 		def := cached.(domain.FactorDef)
 		def.Name, def.SpecHash, def.AllowPartialUniverse, def.CategoryID = factor.Name, factor.SpecHash, factor.AllowPartialUniverse, factor.CategoryID
@@ -250,7 +251,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 		}
 	}
 	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers,
-		Params: params})
+		Params: params, UDF: r.cfg.UDF})
 	if err != nil {
 		return nil, computeGrid{}, err
 	}
@@ -451,6 +452,10 @@ func (c *Computation) fail(member domain.MemberDef, plan Plan, available []strin
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
 	state.Status = "degraded"
 	c.FactorStates[member.Key] = state
+	if c.Failures == nil {
+		c.Failures = map[string]error{}
+	}
+	c.Failures[member.Key] = err
 	if member.Factor.FactorType != domain.FactorTypeCrossSection {
 		for _, subject := range available {
 			c.Results[member.Key][subject] = ItemResult{Member: member.Key, Err: err}

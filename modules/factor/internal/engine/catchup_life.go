@@ -79,6 +79,11 @@ func (t *catchupTracker) drop(taskID string) {
 // catchupHook 是生命周期的 Catchup 钩子：模块自身没有数据要追赶（由各任务决定），任务走 catchupSet。
 func (r *Runtime) catchupHook(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
 	if ref == (lifecycle.Ref{}) {
+		// 模块自身没有数据要追赶，但放行前同样要满足前置条件：本次恢复之后目录同步成功、引用的自定义算子模块全部就绪。
+		// 重启后暂停中的任务还没有预载（未就绪阶段），不在各任务的追赶范围里，只靠任务级检查会漏掉这一条。
+		if reason := r.catchupPrecondition(""); reason != "" {
+			return lifecycle.Catchup{Since: since, BlockedBy: "追赶前置条件", Message: reason}, nil
+		}
 		return lifecycle.Catchup{CaughtUp: true}, nil
 	}
 	return r.catchupSet(ctx, ref.ID, since, time.Now().UTC()), nil
@@ -104,6 +109,11 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 	set, lookup := r.catalog.SetByID(taskID)
 	if lookup != SetFound {
 		out.Message = "任务已不在目录里"
+		return out
+	}
+	if reason := r.catchupPrecondition(taskID); reason != "" {
+		out.BlockedBy = "追赶前置条件"
+		out.Message = reason
 		return out
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}

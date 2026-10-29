@@ -981,6 +981,10 @@ components:
           - BindFactorTask
           - SubmitFactorParams
           - GetFactorParams
+          - PublishUdf
+          - ListUdfs
+          - GetUdf
+          - ActivateUdf
         read_only_methods:
           - GetFactorTask
           - ListFactorTasks
@@ -994,6 +998,8 @@ components:
           - ListFactorFunctions
           - ListFactorCategories
           - GetFactorParams
+          - ListUdfs
+          - GetUdf
         acl:
           - methods:
               - CreateFactorTask
@@ -1022,6 +1028,10 @@ components:
               - DeleteFactorCategory
               - SetFactorCategory
               - GetFactorParams
+              - PublishUdf
+              - ListUdfs
+              - GetUdf
+              - ActivateUdf
             callers:
               - console
               - moox-cli
@@ -1054,6 +1064,7 @@ components:
           - PullRecalcJob
           - ReportRecalcProgress
           - GetTaskParams
+          - GetUdfModule
         acl: []
     doctor:
       role: factor-mgr
@@ -2075,6 +2086,7 @@ principals:
           - PullRecalcJob
           - ReportRecalcProgress
           - GetTaskParams
+          - GetUdfModule
   - id: archive-worker
     allow:
       - service: trpc.moox.storage.PrimaryStore

@@ -140,3 +140,28 @@ func engineError(err error) *commonpb.RetInfo {
 	}
 	return inner(err)
 }
+
+// UdfModuleAPI 是引擎拉取自定义算子模块的来源（由目录服务实现）。
+type UdfModuleAPI interface {
+	UdfModule(ctx context.Context, hash string) (string, []byte, error)
+}
+
+// GetUdfModule 按版本哈希返回一个自定义算子模块的 wasm 字节；只有持有引擎租约的进程可以调用。
+func (s *EngineService) GetUdfModule(ctx context.Context, req *factorpb.GetUdfModuleReq) (*factorpb.GetUdfModuleRsp, error) {
+	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
+		return &factorpb.GetUdfModuleRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil
+	}
+	hash := strings.TrimSpace(req.GetHash())
+	if hash == "" {
+		return &factorpb.GetUdfModuleRsp{RetInfo: invalid(fmt.Errorf("hash 必填"))}, nil
+	}
+	source, ok := s.params.(UdfModuleAPI)
+	if !ok {
+		return &factorpb.GetUdfModuleRsp{RetInfo: inner(fmt.Errorf("自定义算子未启用"))}, nil
+	}
+	name, wasm, err := source.UdfModule(ctx, hash)
+	if err != nil {
+		return &factorpb.GetUdfModuleRsp{RetInfo: engineError(err)}, nil
+	}
+	return &factorpb.GetUdfModuleRsp{RetInfo: success(), Name: name, Wasm: wasm}, nil
+}

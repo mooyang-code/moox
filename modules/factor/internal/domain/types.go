@@ -74,7 +74,12 @@ type FactorDef struct {
 	InputColumns    []string `json:"input_columns,omitempty" gorm:"-"`
 	Outputs         []string `json:"outputs,omitempty" gorm:"-"`
 	LookbackPeriods int      `json:"lookback_periods,omitempty" gorm:"-"`
-	compiled        *factorexpr.Factor
+	// UDFs 是这份定义引用的自定义算子在本次编译所用的版本与元数据（名称 → 版本）：读取定义时按启用版本（或补算作业固化的绑定）
+	// 解析，随目录快照与补算任务一起传到引擎（引擎把目录快照写成 JSON，重启后据此恢复）。它不落库，也不进 spec_hash，
+	// 但版本哈希会进规范文本与 definition_hash。
+	UDFs        map[string]factorexpr.UDF `json:"udfs,omitempty" gorm:"-"`
+	compiled    *factorexpr.Factor
+	compiledKey string
 }
 
 func (FactorDef) TableName() string { return "t_factor_defs" }

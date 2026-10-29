@@ -1,0 +1,5 @@
+{"cases": [
+  {"name": "基础", "params": [3], "inputs": [[1, 2, 3, 4, 5, 6]], "expected": [2, 3, 4, 5]},
+  {"name": "开头与中途的 NaN", "params": [3], "inputs": [[null, 2, 3, 4, null, 6, 7, 8]], "expected": [null, 3, null, null, null, 7]},
+  {"name": "常数窗口返回原值", "params": [4], "inputs": [[0.1, 0.1, 0.1, 0.1, 0.1]], "expected": [0.1, 0.1]}
+]}

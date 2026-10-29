@@ -1,0 +1,5 @@
+error: 名称 "Bad-Name" 不合法：要匹配 ^[a-z][a-z0-9_]{0,47}$
+ --> tests/ui/bad_name.rs:2:14
+  |
+2 | #[udf(name = "Bad-Name", inputs = [x], params = { n: int(1..=5) }, lookback = "n")]
+  |              ^^^^^^^^^^
