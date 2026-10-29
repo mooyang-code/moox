@@ -454,7 +454,7 @@ members = [
 1. **查引用**：`GetFactor` 的返回里 `usages` 列出任务、成员键和状态，确认影响面（引用它的因子任务、策略实例）。
 
    ```bash
-   moox-cli gateway call trpc.moox.factor.FactorMgr GetFactor --file ./moox.toml --data '{"factor_id":"f1_upper_shadow"}'
+   moox-cli gateway call trpc.moox.factor.FactorMgr GetFactor --file ./moox.toml --data '{"factor_id":"upper_shadow"}'
    ```
 
 2. **离线验证新表达式**：按 7.3～7.6 用 `check` 和 `eval` 验证；也可以用 `ValidateFactorSpec` 看服务端编译结果和新的 `definition_hash`。
@@ -462,7 +462,7 @@ members = [
 
    ```bash
    moox-cli gateway call trpc.moox.factor.FactorMgr SetTaskMemberStatus --file ./moox.toml \
-     --data '{"task_id":"ftask_xxx","member_key":"f1_upper_shadow__12","status":"disabled"}'
+     --data '{"task_id":"ftask_xxx","member_key":"upper_shadow__12","status":"disabled"}'
    ```
 
 4. **更新定义**：先用 `GetFactor`（带 spec）读回原定义，只改 `spec`，整个 `factor` 对象原样回传，避免丢字段；然后调 `UpdateFactor`，返回的 `definition_hash` 应与第 2 步一致。
