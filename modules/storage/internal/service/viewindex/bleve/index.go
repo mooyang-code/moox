@@ -82,6 +82,44 @@ func (i *Index) Prepare(_ context.Context, id string, schema viewindex.ViewIndex
 	return i.writeMeta(id, meta)
 }
 
+// ExtendColumns 原地追加列。Bleve 的字段映射建好后不能改，新列按动态映射写入（存储并索引），字符串列不再有精确匹配的
+// keyword 字段；这里只更新索引自身记录的列清单和修订号。
+func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewindex.ViewIndexSchema) error {
+	if id == "" || current.SpaceID == "" || current.ViewID == "" || current.Engine != "bleve" || next.Engine != current.Engine ||
+		next.SpaceID != current.SpaceID || next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
+		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || next.SchemaHash == "" {
+		return fmt.Errorf("%w：Bleve 要求索引身份一致且修订号递增", viewindex.ErrSchemaExtensionConflict)
+	}
+	if !viewindex.IsAppendOnlyViewColumns(current.Columns, next.Columns) {
+		return fmt.Errorf("%w：Bleve 的列只能追加", viewindex.ErrSchemaExtensionConflict)
+	}
+	h, err := i.get(id)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.meta.ViewVersion == next.ViewVersion && h.meta.SchemaHash == next.SchemaHash {
+		return nil
+	}
+	if h.meta.ViewVersion < current.ViewVersion || h.meta.ViewVersion > next.ViewVersion || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
+		return fmt.Errorf("%w：Bleve 物理状态在修订号 %d 上不是追加前缀", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
+	}
+	meta := h.meta
+	meta.ViewVersion = next.ViewVersion
+	meta.SchemaHash = next.SchemaHash
+	meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	meta.Columns = schemaColumns(next.Columns)
+	if err := i.writeMeta(id, meta); err != nil {
+		return err
+	}
+	// 换一个新句柄而不是原地改：正在执行的查询继续用旧句柄读到一致的列清单。
+	i.mu.Lock()
+	i.open[id] = &handle{index: h.index, meta: meta, columns: meta.Columns}
+	i.mu.Unlock()
+	return nil
+}
+
 func (i *Index) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
 	if err := batch.Validate(); err != nil {
 		return err

@@ -27,12 +27,10 @@ storage:
     max_workers: 1
     max_ack_pending: 1
     ack_wait_ms: 120000
-    # 重建时按页读取主库历史并串行请求，避免大修复对 Storage 形成突发压力。
+    # 首次建索引时按页读取主库历史并串行请求，避免对 Storage 形成突发压力。
     backfill_page_size: 2000
     backfill_request_interval: 100ms
     # 定时删除最旧数据（每分钟第 10 秒触发、偶数分钟执行）：每个序列只保留最新的 bars 根，每批最多删除这么多行最旧数据。
     delete_oldest_batch_size: 2000
-    rebuild_max_pending: 32
-    rebuild_idle_checks: 3
   health:
     addr: ":20210"

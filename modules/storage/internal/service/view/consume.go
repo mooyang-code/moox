@@ -83,7 +83,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		mu    sync.RWMutex
 		bound bool
 	}
-	states := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(partitionConfigs))
 	bounds := make(map[string]*boundState, len(partitionConfigs))
 	var boundReader func() bool
 	var boundReaderMu sync.RWMutex
@@ -135,35 +134,8 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			return nil, fmt.Errorf("启动 View 消费分区 %q 失败：%w", partitionID, err)
 		}
 		stops = append(stops, stop)
-		durable := strings.TrimSpace(partition.Consumer)
-		states[partitionID] = func(stateCtx context.Context) (jetstream.ConsumerState, error) {
-			return partitionClient.ConsumerState(stateCtx, events.DatasetRowsUpserted.Stream(), durable)
-		}
 	}
 
-	stateReader := func(stateCtx context.Context) (jetstream.ConsumerState, error) {
-		// 动态的 View 清单对账可以在维护读取汇总状态的同时注册和注销分区。遍历之前在服务锁内给映射做快照，
-		// 闭包就不会与这些更新竞争。
-		s.mu.RLock()
-		readers := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(s.consumerStates))
-		for partitionID, reader := range s.consumerStates {
-			readers[partitionID] = reader
-		}
-		s.mu.RUnlock()
-		var total jetstream.ConsumerState
-		for partitionID, reader := range readers {
-			state, err := reader(stateCtx)
-			if err != nil {
-				return jetstream.ConsumerState{}, fmt.Errorf("读取消费分区 %q 的状态失败：%w", partitionID, err)
-			}
-			if opts.Metrics != nil {
-				opts.Metrics.ObserveConsumerPartitionBacklog(partitionID, state.NumPending, uint64(state.NumAckPending))
-			}
-			total.NumPending += state.NumPending
-			total.NumAckPending += state.NumAckPending
-		}
-		return total, nil
-	}
 	computedBoundReader := func() bool {
 		for _, state := range bounds {
 			state.mu.RLock()
@@ -197,7 +169,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	s.mu.Lock()
 	s.readyPublisher = publisher
 	s.readyReconnect = readyClient.Reconnect
-	s.consumerStates = states
 	s.consumerBounds = make(map[string]func() bool, len(bounds))
 	s.consumerPartitionByDataset = make(map[datasetRef]string)
 	for _, partition := range partitionConfigs {
@@ -217,8 +188,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			return bound
 		}
 	}
-	s.consumerState = stateReader
-	s.consumerBound = boundReader
 	s.mu.Unlock()
 	boundReaderMu.RLock()
 	reader := boundReader
@@ -278,17 +247,9 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		s.mu.Lock()
 		s.readyPublisher = nil
 		s.readyReconnect = nil
-		s.consumerState = nil
-		s.consumerBound = nil
-		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))
 		s.consumerBounds = make(map[string]func() bool)
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
-	}
-	// 丢弃旧二进制遗留的重建日志。重建从不从这个目录发出 subject-ready。
-	if err := s.ReplayPendingSubjects(ctx); err != nil {
-		stop()
-		return nil, fmt.Errorf("清理遗留的 View 标的日志失败：%w", err)
 	}
 	// 补发落盘的就绪事件：失败（EventBus 尚未恢复、发布超时）只记日志，交给退避与后台重试，不能让 View 角色退出、
 	// 行事件因此完全停止消费。
@@ -334,9 +295,6 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 		partitionID:     spec.partitionID,
 		durable:         spec.durable,
 		consumerIsBound: state.get,
-		consumerState: func(stateCtx context.Context) (jetstream.ConsumerState, error) {
-			return partitionClient.ConsumerState(stateCtx, events.DatasetRowsUpserted.Stream(), spec.durable)
-		},
 	}
 	if err := s.registerDynamicConsumerPartition(spec.ref, binding); err != nil {
 		stopConsumer()
@@ -355,7 +313,7 @@ func (s *Service) bindDynamicDatasetConsumer(ctx context.Context, client *jetstr
 }
 
 func (s *Service) registerDynamicConsumerPartition(ref datasetRef, binding *dynamicDatasetConsumerBinding) error {
-	if binding == nil || binding.partitionID == "" || binding.consumerState == nil || binding.consumerIsBound == nil {
+	if binding == nil || binding.partitionID == "" || binding.consumerIsBound == nil {
 		return errors.New("View 动态消费者的绑定不完整")
 	}
 	s.mu.Lock()
@@ -363,11 +321,8 @@ func (s *Service) registerDynamicConsumerPartition(ref datasetRef, binding *dyna
 	if current := s.consumerPartitionByDataset[ref]; current != "" && current != binding.partitionID {
 		return fmt.Errorf("数据集 %s/%s 已分配给消费分区 %q", ref.spaceID, ref.datasetID, current)
 	}
-	if _, exists := s.consumerStates[binding.partitionID]; exists {
+	if _, exists := s.consumerBounds[binding.partitionID]; exists {
 		return fmt.Errorf("View 消费分区 %q 已经登记过", binding.partitionID)
-	}
-	if s.consumerStates == nil {
-		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))
 	}
 	if s.consumerBounds == nil {
 		s.consumerBounds = make(map[string]func() bool)
@@ -375,7 +330,6 @@ func (s *Service) registerDynamicConsumerPartition(ref datasetRef, binding *dyna
 	if s.consumerPartitionByDataset == nil {
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 	}
-	s.consumerStates[binding.partitionID] = binding.consumerState
 	s.consumerBounds[binding.partitionID] = binding.consumerIsBound
 	s.consumerPartitionByDataset[ref] = binding.partitionID
 	return nil
@@ -391,6 +345,5 @@ func (s *Service) unregisterDynamicConsumerPartition(ref datasetRef, partitionID
 		return
 	}
 	delete(s.consumerPartitionByDataset, ref)
-	delete(s.consumerStates, partitionID)
 	delete(s.consumerBounds, partitionID)
 }

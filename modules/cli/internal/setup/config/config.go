@@ -191,8 +191,6 @@ type ViewMaxAge struct {
 type StorageView struct {
 	MaxAge                   ViewMaxAge `toml:"max_age" json:"max_age"`
 	MaintenanceCheckInterval string     `toml:"maintenance_check_interval" json:"maintenance_check_interval"`
-	CapacityCheckInterval    string     `toml:"capacity_check_interval" json:"capacity_check_interval"`
-	CapacityCheckJitter      string     `toml:"capacity_check_jitter" json:"capacity_check_jitter"`
 	MaxViewFileBytes         int64      `toml:"max_view_file_bytes" json:"max_view_file_bytes"`
 }
 
@@ -221,10 +219,7 @@ func (m Manifest) StoragePolicy() storagepolicy.Policy {
 		View: storagepolicy.View{
 			MaxAge:                   storagepolicy.Retention{Defaults: m.StorageView.MaxAge.Defaults, Spaces: m.StorageView.MaxAge.Spaces},
 			Bars:                     m.StorageRetention.ViewBars,
-			TrimBars:                 storagepolicy.TrimBarsFor(m.StorageRetention.ViewBars),
 			MaintenanceCheckInterval: m.StorageView.MaintenanceCheckInterval,
-			CapacityCheckInterval:    m.StorageView.CapacityCheckInterval,
-			CapacityCheckJitter:      m.StorageView.CapacityCheckJitter,
 			MaxViewFileBytes:         m.StorageView.MaxViewFileBytes,
 		},
 	}
@@ -555,16 +550,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	}
 	if !md.IsDefined("storage_view", "maintenance_check_interval") {
 		out.StorageView.MaintenanceCheckInterval = "1m"
-	}
-	if !md.IsDefined("storage_view", "capacity_check_interval") {
-		out.StorageView.CapacityCheckInterval = "1h"
-	}
-	if !md.IsDefined("storage_view", "capacity_check_jitter") {
-		jitter := time.Hour
-		if interval, err := time.ParseDuration(strings.TrimSpace(out.StorageView.CapacityCheckInterval)); err == nil && interval > 0 && interval < jitter {
-			jitter = interval
-		}
-		out.StorageView.CapacityCheckJitter = jitter.String()
 	}
 	if !md.IsDefined("storage_view", "max_view_file_bytes") {
 		out.StorageView.MaxViewFileBytes = storagepolicy.DefaultMaxViewFileBytes

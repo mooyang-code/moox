@@ -286,7 +286,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -310,6 +310,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				checkID, name = "factor_params:"+business.Module, "策略参数投递"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+			} else if business.Kind == "view_file" {
+				checkID, name = "view_file:"+business.Module, "View 索引文件大小"
 			} else if business.Kind == "metrics_ingest" {
 				checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
 			} else if business.Kind == "worker_presence" {

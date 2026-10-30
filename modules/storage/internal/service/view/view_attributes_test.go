@@ -23,12 +23,3 @@ func TestMaintenanceOrderFollowsDeclaredPriority(t *testing.T) {
 	}
 	require.Equal(t, []string{"view_first", "view_result", "view_bad", "view_default", "view_late"}, order)
 }
-
-// 重建方式由 View 属性 rebuild_source 声明：primary 只从主库历史重建，缺省先复制活动索引再从主库补。
-func TestRebuildSourceAttribute(t *testing.T) {
-	require.False(t, rebuildsFromPrimaryOnly(nil))
-	require.False(t, rebuildsFromPrimaryOnly(&pb.View{}))
-	require.False(t, rebuildsFromPrimaryOnly(&pb.View{Attributes: map[string]string{"rebuild_source": "active_then_primary"}}))
-	require.True(t, rebuildsFromPrimaryOnly(&pb.View{Attributes: map[string]string{"rebuild_source": "primary"}}))
-	require.True(t, rebuildsFromPrimaryOnly(&pb.View{Attributes: map[string]string{"rebuild_source": " Primary "}}))
-}

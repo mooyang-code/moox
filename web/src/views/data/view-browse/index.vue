@@ -34,17 +34,6 @@
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
             </a-tag>
-            <a-button type="text" size="mini" :loading="rebuildLogsLoading" @click="openRebuildLogs">日志</a-button>
-            <a-button
-              type="text"
-              size="mini"
-              :loading="rebuildRequestLoading"
-              :disabled="!activeView || rebuildPollActive"
-              @click="requestViewRebuild"
-            >
-              <template #icon><icon-refresh /></template>
-              重建视图
-            </a-button>
             <slot name="status-extra" />
           </section>
 
@@ -364,39 +353,6 @@
       </div>
     </a-modal>
 
-    <a-modal v-model:visible="rebuildLogsVisible" title="视图构建日志" width="960px" :footer="false">
-      <a-spin :loading="rebuildLogsLoading">
-        <a-empty v-if="rebuildLogs.length === 0" description="暂无构建日志" />
-        <a-table v-else :data="rebuildLogs" :pagination="false" :bordered="{ cell: true }" size="small">
-          <template #columns>
-            <a-table-column title="时间" :width="180">
-              <template #cell="{ record }">{{
-                formatRebuildLogTime(record.finished_at || record.created_at || record.started_at)
-              }}</template>
-            </a-table-column>
-            <a-table-column title="原因" :width="130">
-              <template #cell="{ record }">{{ rebuildReasonLabel(record.trigger_reason) }}</template>
-            </a-table-column>
-            <a-table-column title="结果" :width="100">
-              <template #cell="{ record }">{{ rebuildResultLabel(record.result) }}</template>
-            </a-table-column>
-            <a-table-column title="耗时" :width="90">
-              <template #cell="{ record }">{{ rebuildLogDuration(record) }}</template>
-            </a-table-column>
-            <a-table-column title="写入行数" :width="100">
-              <template #cell="{ record }">{{ record.entries_written || 0 }}</template>
-            </a-table-column>
-            <a-table-column title="详情" :ellipsis="true" :tooltip="true">
-              <template #cell="{ record }">{{ rebuildLogDetail(record) }}</template>
-            </a-table-column>
-          </template>
-        </a-table>
-        <div v-if="rebuildLogsPage.has_more" class="rebuild-logs-more">
-          <a-button size="small" :loading="rebuildLogsLoading" @click="loadMoreRebuildLogs">加载更多</a-button>
-        </div>
-      </a-spin>
-    </a-modal>
-
     <KlineModal
       v-model:visible="klineVisible"
       v-model:limit="klineLimit"
@@ -411,16 +367,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
-import {
-  listAllDatasets,
-  listAllViews,
-  listDatasetColumns,
-  listAllViewColumns,
-  listFields,
-  listViewRebuildLogs,
-  requestViewRebuild as requestViewRebuildTask
-} from "@/api/storage/metadata";
+import { Message } from "@arco-design/web-vue";
+import { listAllDatasets, listAllViews, listDatasetColumns, listAllViewColumns, listFields } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
@@ -431,8 +379,7 @@ import type {
   TimeSeriesKey,
   TimeSeriesRow,
   View,
-  ViewColumn,
-  ViewRebuildLog
+  ViewColumn
 } from "@/api/storage/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
@@ -588,20 +535,6 @@ function showSystemColumn(name: string) {
 }
 const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
-const rebuildLogsVisible = ref(false);
-const rebuildLogsLoading = ref(false);
-const rebuildLogs = ref<ViewRebuildLog[]>([]);
-const rebuildLogsPage = ref<{ page?: number; has_more: boolean }>({ has_more: false });
-const rebuildLogsRequestId = ref(0);
-const rebuildRequestLoading = ref(false);
-// Keep the action disabled for the whole asynchronous build, not just the
-// short HTTP request. A second request would advance desired_view_revision
-// and make the first A/B build stale.
-const rebuildPollActive = ref(false);
-const rebuildPollRevision = ref(0);
-let rebuildPollTimer: ReturnType<typeof setTimeout> | undefined;
-let rebuildPollDeadline = 0;
-let rebuildPollToken = 0;
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
 // Time-series previews should answer the operational question first: what is
@@ -726,228 +659,6 @@ const detailColumns = computed(() => {
   return names.map(name => ({ name: columnTitle(name), value: row.values[name] || "-" }));
 });
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
-
-const rebuildReasonLabels: Record<string, string> = {
-  "1": "首次构建",
-  "2": "定义变更",
-  "3": "活跃索引缺失",
-  "4": "活跃索引异常",
-  "5": "覆盖修复",
-  "6": "容量限制",
-  "7": "手动修复",
-  "8": "中断重试",
-  "9": "序列容量维护",
-  VIEW_REBUILD_TRIGGER_INITIAL_BUILD: "首次构建",
-  VIEW_REBUILD_TRIGGER_DEFINITION_CHANGE: "定义变更",
-  VIEW_REBUILD_TRIGGER_ACTIVE_MISSING: "活跃索引缺失",
-  VIEW_REBUILD_TRIGGER_ACTIVE_INVALID: "活跃索引异常",
-  VIEW_REBUILD_TRIGGER_COVERAGE_REPAIR: "覆盖修复",
-  VIEW_REBUILD_TRIGGER_SIZE_LIMIT: "容量限制",
-  VIEW_REBUILD_TRIGGER_SERIES_CAPACITY: "序列容量维护",
-  VIEW_REBUILD_TRIGGER_MANUAL_REPAIR: "手动修复",
-  VIEW_REBUILD_TRIGGER_INTERRUPTED_RETRY: "中断重试"
-};
-const rebuildResultLabels: Record<string, string> = {
-  "1": "进行中",
-  "2": "成功",
-  "3": "失败",
-  "4": "已跳过",
-  VIEW_REBUILD_RESULT_RUNNING: "进行中",
-  VIEW_REBUILD_RESULT_SUCCEEDED: "成功",
-  VIEW_REBUILD_RESULT_FAILED: "失败",
-  VIEW_REBUILD_RESULT_SKIPPED: "已跳过"
-};
-function isRunningRebuildLog(log: ViewRebuildLog) {
-  return Number(log.result) === 1 || log.result === "VIEW_REBUILD_RESULT_RUNNING";
-}
-
-function rebuildReasonLabel(value: number | string) {
-  return rebuildReasonLabels[String(value)] || "未知原因";
-}
-function rebuildResultLabel(value: number | string) {
-  return rebuildResultLabels[String(value)] || "未知";
-}
-const rebuildPhaseLabels: Record<string, string> = {
-  maintenance: "视图维护",
-  prepare: "准备索引",
-  backfill: "回溯写入",
-  catch_up: "追平实时数据",
-  activate: "切换索引",
-  completed: "已完成",
-  interrupted: "中断清理",
-  preflight: "前置检查"
-};
-function rebuildLogPhase(log: ViewRebuildLog) {
-  if (!log.details_json) return "";
-  try {
-    const details = JSON.parse(log.details_json) as { phase?: string };
-    return details.phase ? rebuildPhaseLabels[details.phase] || details.phase : "";
-  } catch {
-    return "";
-  }
-}
-function formatRebuildLogTime(value?: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
-}
-function rebuildLogDetail(log: ViewRebuildLog) {
-  if (log.result === 4 || String(log.result) === "4" || log.result === "VIEW_REBUILD_RESULT_SKIPPED") {
-    return `${log.block_reason || "等待前置条件"}${Number(log.skip_count || 0) > 1 ? `（${log.skip_count} 次）` : ""}`;
-  }
-  if (String(log.trigger_reason) === "9" || log.trigger_reason === "VIEW_REBUILD_TRIGGER_SERIES_CAPACITY") {
-    try {
-      const details = JSON.parse(log.details_json || "{}") as {
-        subject_id?: string;
-        frequency?: string;
-        series_tag?: string;
-        observed_periods?: number;
-        max_periods_per_series?: number;
-        rebuild_lookback_periods?: number;
-      };
-      if (details.subject_id) {
-        const series = [details.subject_id, details.frequency, details.series_tag || "-"].filter(Boolean).join(" · ");
-        const observed = details.observed_periods || 0;
-        const max = details.max_periods_per_series || 0;
-        const lookback = details.rebuild_lookback_periods || max;
-        return `${series}：${observed} / ${max} 根，重建后保留 ${lookback} 根`;
-      }
-    } catch {
-      // 详情无法解析时沿用通用的阶段/错误文本。
-    }
-  }
-  if (log.error_summary) return log.error_summary;
-  const phase = rebuildLogPhase(log);
-  if (phase) return phase;
-  return log.finished_at && log.started_at ? `写入 ${log.entries_written || 0} 条` : "构建中";
-}
-function rebuildLogDuration(log: ViewRebuildLog) {
-  if (!log.started_at || !log.finished_at) return "-";
-  const durationMs = new Date(log.finished_at).valueOf() - new Date(log.started_at).valueOf();
-  if (!Number.isFinite(durationMs) || durationMs < 0) return "-";
-  if (durationMs < 1000) return `${durationMs}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
-}
-
-async function openRebuildLogs(reset = true, showModal = true) {
-  const view = activeView.value;
-  const space_id = selectedSpaceId.value;
-  if (!view || !space_id) return;
-  const requestId = ++rebuildLogsRequestId.value;
-  if (showModal) rebuildLogsVisible.value = true;
-  rebuildLogsLoading.value = true;
-  if (reset) {
-    rebuildLogs.value = [];
-    rebuildLogsPage.value = { has_more: false };
-  }
-  try {
-    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: 1, size: 100 } });
-    if (
-      requestId !== rebuildLogsRequestId.value ||
-      activeView.value?.view_id !== view.view_id ||
-      selectedSpaceId.value !== space_id
-    )
-      return;
-    rebuildLogs.value = rsp.logs || [];
-    rebuildLogsPage.value = rsp.page_result || { has_more: false };
-  } catch (error) {
-    if (requestId !== rebuildLogsRequestId.value) return;
-    rebuildLogs.value = [];
-    Message.error(error instanceof Error ? error.message : "加载构建日志失败");
-  } finally {
-    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
-  }
-}
-
-function stopRebuildPolling() {
-  if (rebuildPollTimer) {
-    clearTimeout(rebuildPollTimer);
-    rebuildPollTimer = undefined;
-  }
-  rebuildPollToken += 1;
-}
-
-function scheduleRebuildLogPolling() {
-  if (rebuildPollTimer || Date.now() >= rebuildPollDeadline) return;
-  const token = rebuildPollToken;
-  rebuildPollTimer = setTimeout(async () => {
-    rebuildPollTimer = undefined;
-    if (token !== rebuildPollToken) return;
-    await openRebuildLogs(false, false);
-    if (token !== rebuildPollToken) return;
-    const revision = rebuildPollRevision.value;
-    const current =
-      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) === revision) ||
-      rebuildLogs.value.find(log => Number(log.target_view_revision || 0) > revision);
-    if (current && !isRunningRebuildLog(current)) {
-      if (current.result === 2 || current.result === "2" || current.result === "VIEW_REBUILD_RESULT_SUCCEEDED") {
-        await loadMeta();
-      }
-      rebuildPollActive.value = false;
-      return;
-    }
-    if (Date.now() >= rebuildPollDeadline) {
-      rebuildPollActive.value = false;
-      Message.warning("重建任务仍在后台运行，可在日志中查看最新进度");
-      return;
-    }
-    scheduleRebuildLogPolling();
-  }, 2000);
-}
-
-async function requestViewRebuild() {
-  const view = activeView.value;
-  const space_id = selectedSpaceId.value;
-  if (!view || !space_id || rebuildRequestLoading.value) return;
-  Modal.confirm({
-    title: "确认重建视图",
-    content: "将异步创建新的 A/B 索引。当前视图仍保持可读，完成后新索引会自动切换生效。是否继续？",
-    okText: "开始重建",
-    cancelText: "取消",
-    onOk: async () => {
-      rebuildRequestLoading.value = true;
-      try {
-        const rsp = await requestViewRebuildTask({ space_id, view_id: view.view_id });
-        rebuildPollRevision.value = Number(rsp.view?.desired_view_revision || 0);
-        stopRebuildPolling();
-        rebuildPollDeadline = Date.now() + 15 * 60 * 1000;
-        rebuildPollActive.value = true;
-        Message.success("已提交重建任务");
-        await openRebuildLogs();
-        scheduleRebuildLogPolling();
-      } catch (error) {
-        Message.error(error instanceof Error ? error.message : "提交视图重建失败");
-        throw error;
-      } finally {
-        rebuildRequestLoading.value = false;
-      }
-    }
-  });
-}
-
-async function loadMoreRebuildLogs() {
-  const view = activeView.value;
-  const space_id = selectedSpaceId.value;
-  if (!view || !space_id || !rebuildLogsPage.value.has_more || rebuildLogsLoading.value) return;
-  const requestId = rebuildLogsRequestId.value;
-  const nextPage = (rebuildLogsPage.value.page || 1) + 1;
-  rebuildLogsLoading.value = true;
-  try {
-    const rsp = await listViewRebuildLogs({ space_id, view_id: view.view_id, page: { page: nextPage, size: 100 } });
-    if (
-      requestId !== rebuildLogsRequestId.value ||
-      activeView.value?.view_id !== view.view_id ||
-      selectedSpaceId.value !== space_id
-    )
-      return;
-    rebuildLogs.value = rebuildLogs.value.concat(rsp.logs || []);
-    rebuildLogsPage.value = rsp.page_result || { has_more: false };
-  } catch (error) {
-    if (requestId === rebuildLogsRequestId.value) Message.error(error instanceof Error ? error.message : "加载构建日志失败");
-  } finally {
-    if (requestId === rebuildLogsRequestId.value) rebuildLogsLoading.value = false;
-  }
-}
 
 async function loadMeta() {
   const sequence = ++metaLoadSequence;
@@ -1095,11 +806,6 @@ function clearViewState() {
   hasQueried.value = false;
   previewHasMore.value = false;
   pagination.current = 1;
-  rebuildLogsVisible.value = false;
-  rebuildLogs.value = [];
-  rebuildLogsRequestId.value += 1;
-  stopRebuildPolling();
-  rebuildPollActive.value = false;
 }
 
 async function loadViewContext() {
@@ -1638,7 +1344,6 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   klineRequestGuard.invalidate();
-  stopRebuildPolling();
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);
     autoRefreshTimer = undefined;

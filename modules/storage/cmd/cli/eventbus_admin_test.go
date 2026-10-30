@@ -414,9 +414,9 @@ func repairFixture(t *testing.T) repairViewOptions {
 	dbPath := filepath.Join(dir, "meta.db")
 	db, err := sql.Open("sqlite", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE t_views (c_space_id TEXT, c_view_id TEXT, c_engine TEXT, c_active_index_id TEXT, c_desired_view_revision INTEGER, c_attrs_json TEXT, c_mtime TEXT, PRIMARY KEY(c_space_id,c_view_id))`)
+	_, err = db.Exec(`CREATE TABLE t_views (c_space_id TEXT, c_view_id TEXT, c_engine TEXT, c_active_index_id TEXT, c_attrs_json TEXT, c_mtime TEXT, PRIMARY KEY(c_space_id,c_view_id))`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO t_views VALUES ('space','view','duckdb','',3,'{"space_id":"space","view_id":"view","desired_view_revision":3}','')`)
+	_, err = db.Exec(`INSERT INTO t_views VALUES ('space','view','duckdb','','{"space_id":"space","view_id":"view"}','')`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	conf := filepath.Join(dir, "config", "storage.yaml")
@@ -425,7 +425,7 @@ func repairFixture(t *testing.T) repairViewOptions {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "start.sh"), []byte("#!/bin/sh\n"), 0o755))
 	return repairViewOptions{
 		action: "repair-view", spaceID: "space", viewID: "view", storageConf: conf, packageRoot: dir, stream: events.StorageViewConsumerStream,
-		consumer: testViewDurableA, deliverPolicy: "new", timeout: time.Minute, yes: true, resetConsumer: true, forceRebuild: true, restart: true,
+		consumer: testViewDurableA, deliverPolicy: "new", timeout: time.Minute, yes: true, resetConsumer: true, restart: true,
 	}
 }
 

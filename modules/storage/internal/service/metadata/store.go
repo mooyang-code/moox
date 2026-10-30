@@ -109,21 +109,9 @@ type Reader interface {
 	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
 
-// ViewRebuildLogReader is intentionally separate from Reader so the hot-path
-// metadata snapshot/cache implementations do not have to model an append-only
-// operational history stream.
-type ViewRebuildLogReader interface {
-	ListViewRebuildLogs(ctx context.Context, spaceID string, viewID string, result pb.ViewRebuildResult, page *pb.Page) ([]*pb.ViewRebuildLog, *pb.PageResult, error)
-}
-
-// ManualRebuildRevisionAttribute is persisted on a View when an operator asks
-// for an asynchronous A/B rebuild. The marker is revision-scoped, so it stops
-// being active automatically once that revision is activated.
-const ManualRebuildRevisionAttribute = "moox.manual_rebuild_revision"
-
-// ActiveBuildIDAttribute 记录激活当前活动索引的构建 ID。A/B 槽位名在每次重建时交替复用，不能区分索引代次；
-// 构建 ID 每次重建都不同，调用方（例如策略回放）据此判断活动索引是否换过一代、旧的行是否可能已被裁掉。
-const ActiveBuildIDAttribute = "moox.active_build_id"
+// IndexGenerationAttribute 记录 View 当前索引的代次，首次建成时写入。索引标识对一个 View 是固定的，不能区分代次；
+// View 重建（删除后重新建索引）时代次变化，调用方（例如策略回放）据此判断旧的行是否已不存在。
+const IndexGenerationAttribute = "moox.index_generation"
 
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
@@ -135,16 +123,9 @@ type Writer interface {
 	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)
 	ReplaceViewColumns(ctx context.Context, item *pb.View) (*pb.View, error)
 	DeleteView(ctx context.Context, spaceID string, viewID string) error
-	RequestViewRebuild(ctx context.Context, spaceID string, viewID string) (*pb.View, error)
 	UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.ViewColumn, error)
-	ClaimViewIndexBuild(ctx context.Context, req *pb.ClaimViewIndexBuildReq) (*pb.ViewIndexBuild, bool, error)
-	UpdateViewIndexBuild(ctx context.Context, req *pb.UpdateViewIndexBuildReq) (*pb.ViewIndexBuild, error)
-	ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndexReq) (*pb.View, error)
+	CompleteViewInitialBuild(ctx context.Context, req *pb.CompleteViewInitialBuildReq) (*pb.View, error)
 	CommitViewSchemaExtension(ctx context.Context, req *pb.CommitViewSchemaExtensionReq) (*pb.View, error)
-	FailViewIndexBuild(ctx context.Context, req *pb.FailViewIndexBuildReq) (*pb.ViewIndexBuild, error)
-	CreateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
-	UpdateViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
-	UpsertSkippedViewRebuildLog(ctx context.Context, item *pb.ViewRebuildLog) (*pb.ViewRebuildLog, error)
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
@@ -183,7 +164,6 @@ type Store interface {
 	TableNames(ctx context.Context) ([]string, error)
 	Reader
 	TagStore
-	ViewRebuildLogReader
 	Writer
 	ViewPeriodStateStore
 }

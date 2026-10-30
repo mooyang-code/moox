@@ -75,8 +75,8 @@ type ViewInfo struct {
 	Frequency     string
 	Status        string
 	ActiveIndexID string
-	// Generation 是活动索引的代次：活动索引 ID 加上激活它的构建 ID（Storage 在激活时记录）。A/B 槽位名在重建时
-	// 交替复用，代次相同才说明是同一代索引（只追加、不删除行）；没有构建 ID 时退化为活动索引 ID。
+	// Generation 是索引的代次：索引 ID 加上 Storage 建成时记录的代次。索引 ID 对一个 View 是固定的，代次相同才说明
+	// 是同一代索引（行只会被定时删除最旧数据删掉）；没有代次记录时退化为索引 ID。
 	Generation string
 	// IndexedFrom 与 IndexedTo 是活动索引全部行的最早与最晚 bar_start（取自 DataView 的索引统计，至多每 5 分钟
 	// 刷新，最晚一根可能略滞后；最早时间只会提前，可能来自已停更的序列）；只有经 WithCoverage 读取后才有值，零值表示未知。

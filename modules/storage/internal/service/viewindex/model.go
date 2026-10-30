@@ -14,13 +14,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-type Slot string
-
-const (
-	SlotA Slot = "a"
-	SlotB Slot = "b"
-)
-
 type WriteMode uint8
 
 const (
@@ -124,7 +117,7 @@ type ViewIndexStats struct {
 	FreeDiskBytes uint64
 	IndexedFrom   string
 	IndexedTo     string
-	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（旧索引）。
+	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（记录型 View 不按根数保留）。
 	RowsPerSeries uint64
 }
 
@@ -185,8 +178,7 @@ type RowCounter interface {
 	CountBySubject(context.Context, string, QuerySpec) (map[string]int64, error)
 }
 
-// SchemaExtender applies an append-only schema revision to an existing active
-// physical index without replacing the index or rebuilding its rows.
+// SchemaExtender 把只追加列的新修订应用到已有的活动索引上：原地加列，已有行的新列为空。
 type SchemaExtender interface {
 	ExtendColumns(context.Context, string, ViewIndexSchema, ViewIndexSchema) error
 }
@@ -197,7 +189,7 @@ var ErrSchemaExtensionConflict = errors.New("view schema extension conflicts wit
 // IsAppendOnlyViewColumns reports whether desired preserves every physical
 // column in active and appends at least one new column after its sort order.
 func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
-	if len(active) == 0 || len(desired) <= len(active) {
+	if len(desired) <= len(active) {
 		return false
 	}
 	activeByName := make(map[string]*pb.ViewColumn, len(active))
@@ -231,7 +223,7 @@ func IsAppendOnlyViewColumns(active, desired []*pb.ViewColumn) bool {
 		usedOrder[column.GetSortOrder()] = struct{}{}
 		previous := activeByName[column.GetColumnName()]
 		if previous == nil {
-			if column.GetSortOrder() <= maxOrder {
+			if len(active) > 0 && column.GetSortOrder() <= maxOrder {
 				return false
 			}
 			appended++
@@ -266,21 +258,6 @@ type ExistenceChecker interface {
 // path.
 type MetadataStatReader interface {
 	StatMetadata(context.Context, string) (ViewIndexStats, error)
-}
-
-type SeriesCapacityResult struct {
-	Exceeded  bool
-	SubjectID string
-	Freq      string
-	SeriesTag string
-	Rows      uint64
-}
-
-// SeriesCapacityReader reports the first sequence whose physical row count
-// exceeds the configured limit. It is intentionally optional so record
-// indexes do not need to invent a time-series capacity model.
-type SeriesCapacityReader interface {
-	SeriesCapacity(context.Context, string, uint64) (SeriesCapacityResult, error)
 }
 
 // OldestRowsCut 是一个序列本批要删除的最旧数据：data_time 早于 Before 的行，按计划共 Rows 行。

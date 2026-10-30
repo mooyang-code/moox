@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '15')
+VALUES ('schema_version', '16')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -57,11 +57,9 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
     c_active_index_id TEXT NOT NULL DEFAULT '',
-    c_desired_view_revision INTEGER NOT NULL DEFAULT 1,
-    c_active_view_revision INTEGER NOT NULL DEFAULT 0,
+    c_view_revision INTEGER NOT NULL DEFAULT 0,
     c_active_columns_json TEXT NOT NULL DEFAULT '[]',
     c_active_view_schema_hash TEXT NOT NULL DEFAULT '',
-    c_active_slot TEXT NOT NULL DEFAULT 'slot-a',
     c_indexed_from TEXT NOT NULL DEFAULT '',
     c_indexed_to TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'active',
@@ -78,7 +76,6 @@ CREATE TABLE IF NOT EXISTS t_views (
 
 CREATE INDEX IF NOT EXISTS idx_t_views_space ON t_views (c_space_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_views_dataset ON t_views (c_space_id, c_dataset_id, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_views_revision_pending ON t_views (c_space_id, c_status, c_desired_view_revision, c_active_view_revision);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_views_mtime
 AFTER UPDATE ON t_views
@@ -87,65 +84,6 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_views SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
-
-CREATE TABLE IF NOT EXISTS t_view_index_builds (
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_build_id TEXT NOT NULL UNIQUE,
-    c_index_id TEXT NOT NULL,
-    c_engine TEXT NOT NULL,
-    c_target_view_version INTEGER NOT NULL,
-    c_state INTEGER NOT NULL,
-    c_owner_id TEXT NOT NULL,
-    c_new_slot TEXT NOT NULL,
-    c_status TEXT NOT NULL,
-    c_started_at TEXT NOT NULL,
-    c_backfilled_rows INTEGER NOT NULL DEFAULT 0,
-    c_safe_error TEXT NOT NULL DEFAULT '',
-    c_updated_at TEXT NOT NULL,
-    PRIMARY KEY (c_space_id, c_view_id),
-    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CHECK (c_engine IN ('duckdb', 'bleve')),
-    CHECK (c_state BETWEEN 1 AND 5)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_index_builds_status
-ON t_view_index_builds (c_status, c_started_at);
-
-CREATE TABLE IF NOT EXISTS t_view_rebuild_logs (
-    c_log_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
-    c_build_id TEXT NOT NULL DEFAULT '',
-    c_index_id TEXT NOT NULL DEFAULT '',
-    c_trigger_reason INTEGER NOT NULL,
-    c_result INTEGER NOT NULL,
-    c_block_reason TEXT NOT NULL DEFAULT '',
-    c_target_view_revision INTEGER NOT NULL DEFAULT 0,
-    c_active_view_revision INTEGER NOT NULL DEFAULT 0,
-    c_physical_bytes INTEGER NOT NULL DEFAULT 0,
-    c_num_pending INTEGER NOT NULL DEFAULT 0,
-    c_num_ack_pending INTEGER NOT NULL DEFAULT 0,
-    c_entries_written INTEGER NOT NULL DEFAULT 0,
-    c_started_at TEXT NOT NULL DEFAULT '',
-    c_finished_at TEXT NOT NULL DEFAULT '',
-    c_first_checked_at TEXT NOT NULL DEFAULT '',
-    c_last_checked_at TEXT NOT NULL DEFAULT '',
-    c_skip_count INTEGER NOT NULL DEFAULT 0,
-    c_error_summary TEXT NOT NULL DEFAULT '',
-    c_details_json TEXT NOT NULL DEFAULT '{}',
-    c_created_at TEXT NOT NULL,
-    c_updated_at TEXT NOT NULL,
-    FOREIGN KEY (c_space_id, c_view_id) REFERENCES t_views (c_space_id, c_view_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CHECK (c_result BETWEEN 1 AND 4),
-    CHECK (c_trigger_reason BETWEEN 1 AND 9)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_view_time
-ON t_view_rebuild_logs (c_space_id, c_view_id, c_created_at DESC, c_log_id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_t_view_rebuild_logs_skip_key
-ON t_view_rebuild_logs (c_space_id, c_view_id, c_trigger_reason, c_block_reason, c_result, c_updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS t_view_period_dataset_states (
     c_space_id TEXT NOT NULL,

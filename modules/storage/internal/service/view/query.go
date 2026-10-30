@@ -108,8 +108,9 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index was updated during query: start=%d current=%d", startRevision, currentRevision))}, nil
 	}
 	out := make([]*pb.TimeSeriesRow, 0, len(rows))
+	hidden := runtimeHiddenColumns(runtime)
 	for _, row := range rows {
-		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields()})
+		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: visibleFields(row.GetFields(), hidden)})
 	}
 	stats, hasStats := cachedActiveIndexStats(runtime, indexID)
 	if req.GetTotalMode() != pb.TotalMode_NONE {
@@ -141,7 +142,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 }
 
 // retainedRowsPerSeries 返回活动索引每个序列至少保留的最近行数：索引建立时记录的行数与当前配置中较小的一个。
-// 调大配置要等重建成功（新索引记录新值）后才变大，调小配置立即生效；索引没有记录（旧索引）时为 0（未知）。
+// 调大配置要等重新建索引后才变大，调小配置立即生效；索引没有记录（记录型 View）时为 0（未知）。
 func (s *Service) retainedRowsPerSeries(stats viewindex.ViewIndexStats, hasStats bool) uint64 {
 	if !hasStats || stats.RowsPerSeries == 0 {
 		return 0
@@ -198,7 +199,7 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		}
 		keys = append(keys, recordRowKey(k))
 	}
-	indexID, _ := s.activeIndex(req.GetSpaceId(), req.GetViewId())
+	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
 	engine, err := s.engineFor(indexID)
 	if err != nil {
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
@@ -210,13 +211,35 @@ func (s *Service) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRows
 		return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Error(queryErrorCode(err), err)}, nil
 	}
 	out := make([]*pb.RecordRow, 0, len(rows))
+	hidden := runtimeHiddenColumns(runtime)
 	for _, row := range rows {
-		out = append(out, &pb.RecordRow{Key: rowToRecordKey(row.GetKey()), Fields: row.GetFields()})
+		out = append(out, &pb.RecordRow{Key: rowToRecordKey(row.GetKey()), Fields: visibleFields(row.GetFields(), hidden)})
 	}
 	// Record views have no time-window coverage; the active index itself is the completeness signal.
 	stats, statsErr := engine.Stat(ctx, indexID)
 	complete := statsErr == nil && stats.Exists
 	return &pb.SearchRecordRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), Complete: complete}, nil
+}
+
+func runtimeHiddenColumns(runtime *viewRuntime) map[string]struct{} {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.queryState().hiddenColumns
+}
+
+// visibleFields 去掉被禁用的列：数据集列禁用只是逻辑上的，只在返回时过滤。
+func visibleFields(fields []*pb.FieldValue, hidden map[string]struct{}) []*pb.FieldValue {
+	if len(hidden) == 0 {
+		return fields
+	}
+	visible := make([]*pb.FieldValue, 0, len(fields))
+	for _, field := range fields {
+		if _, ok := hidden[field.GetFieldId()]; !ok {
+			visible = append(visible, field)
+		}
+	}
+	return visible
 }
 
 func filterGroups(spec *pb.FilterSpec) []viewindex.FilterGroup {

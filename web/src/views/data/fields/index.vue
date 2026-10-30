@@ -24,7 +24,7 @@
           </div>
           <div class="filter-control">
             <a-select v-model="state.status" class="filter-select" allow-clear placeholder="状态" @change="changeFilter">
-              <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+              <a-option v-for="item in fieldStatusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
             </a-select>
           </div>
           <a-button type="primary" :disabled="!selectedSpaceId" @click="commitSearch">
@@ -146,7 +146,12 @@ import {
 } from "@/api/storage/metadata";
 import type { Field, FieldGroup } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
-import { applyPageResult, defaultPagination, fieldValueTypeOptions, statusOptions } from "@/views/data/shared/metadata-utils";
+import {
+  applyPageResult,
+  defaultPagination,
+  fieldStatusOptions,
+  fieldValueTypeOptions
+} from "@/views/data/shared/metadata-utils";
 import FieldBatchBar from "./components/FieldBatchBar.vue";
 import FieldEditorDrawer from "./components/FieldEditorDrawer.vue";
 import FieldGroupDialog from "./components/FieldGroupDialog.vue";
@@ -439,7 +444,7 @@ function confirmDeleteGroup(group: FieldGroup) {
   });
 }
 
-async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" }) {
+async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }) {
   if (!selectedKeys.value.length) return;
   batchLoading.value = true;
   try {

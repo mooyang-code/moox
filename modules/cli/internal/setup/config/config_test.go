@@ -80,15 +80,12 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, DefaultControlRoot, snapshot.Manifest.Paths.ControlRoot)
 	assert.Equal(t, DefaultStorageRoot, snapshot.Manifest.Paths.StorageRoot)
 	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
-	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
-	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 	assert.Equal(t, int64(4<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
 	policy := snapshot.Manifest.StoragePolicy()
 	recommended := storagepolicy.Default().Retention
 	recommended.Spaces = RecommendedSpaceRetention()
 	assert.Equal(t, recommended, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
 	assert.Equal(t, uint64(10000), policy.View.Bars)
-	assert.Equal(t, uint64(12000), policy.View.TrimBars)
 	require.NoError(t, policy.Validate())
 	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
 	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
@@ -215,7 +212,6 @@ view_rows_per_series = 777
 	require.NoError(t, err)
 	policy := snapshot.Manifest.StoragePolicy()
 	assert.Equal(t, uint64(777), policy.View.Bars)
-	assert.Equal(t, uint64(933), policy.View.TrimBars)
 	period, source, err := policy.Retention.Resolve("crypto", "1m")
 	require.NoError(t, err)
 	assert.Equal(t, "336h", period.String())
@@ -360,41 +356,6 @@ func TestLoadRejectsInvalidStorageRetention(t *testing.T) {
 			require.Contains(t, err.Error(), tt.want)
 		})
 	}
-}
-
-func TestLoadRejectsInvalidStorageViewCapacitySchedule(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "nonpositive interval", body: "capacity_check_interval = \"0s\"", want: "capacity_check_interval"},
-		{name: "interval over one day", body: "capacity_check_interval = \"25h\"", want: "capacity_check_interval"},
-		{name: "zero jitter", body: "capacity_check_jitter = \"0s\"", want: "capacity_check_jitter"},
-		{name: "nonpositive jitter", body: "capacity_check_jitter = \"-1s\"", want: "capacity_check_jitter"},
-		{name: "jitter exceeds interval", body: "capacity_check_interval = \"30m\"\ncapacity_check_jitter = \"1h\"", want: "capacity_check_jitter"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			body := validManifest + "\n[storage_view]\n" + tt.body + "\n"
-			_, err := Load(writeManifest(t, root, body, 0o600), root)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), tt.want)
-		})
-	}
-}
-
-func TestLoadStorageViewDefaultsJitterToShorterConfiguredInterval(t *testing.T) {
-	root := t.TempDir()
-	body := validManifest + `
-[storage_view]
-capacity_check_interval = "30m"
-`
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	require.Equal(t, "30m", snapshot.Manifest.StorageView.CapacityCheckInterval)
-	require.Equal(t, "30m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
 }
 
 const factorSetupHead = `

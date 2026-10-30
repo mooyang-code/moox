@@ -224,12 +224,6 @@ func TestHandleLedgerPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
 	service := newPeriodTestService(metadata, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
-	runtime.mu.Lock()
-	runtime.activeDatasetIDs = []string{"prices", "fundamentals"}
-	runtime.activePrimaryDatasetID = "prices"
-	runtime.activeDatasetSet = true
-	runtime.mu.Unlock()
 
 	periodTime := int64(1786032000)
 	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
@@ -397,7 +391,7 @@ func TestHandleDatasetSyncPointRecordsBuildingOnlyView(t *testing.T) {
 	service := newPeriodTestService(metadata, nil, &pb.View{
 		SpaceId: "quant", ViewId: "building-view", DatasetId: "prices",
 	})
-	service.views[viewRef{spaceID: "quant", viewID: "building-view"}].next = "building-index"
+	service.views[viewRef{spaceID: "quant", viewID: "building-view"}].building = "building-index"
 	message := periodMessage("sync-building-1", time.Date(2026, 8, 7, 0, 3, 0, 0, time.UTC))
 	payload := &storageeventpb.DatasetSyncPoint{SyncPointId: "sync-building", RequestId: "import-building", DatasetId: "prices", Source: "import"}
 	if err := service.HandleDatasetSyncPoint(context.Background(), message, payload); err != nil {
@@ -673,5 +667,56 @@ func TestRowDeliveryIgnoresReadyPublishFailure(t *testing.T) {
 	service.flushReadyAfterRows(context.Background(), "quant")
 	if !service.hasPendingReady() {
 		t.Fatal("发布失败的就绪事件应留在队列里")
+	}
+}
+
+// periodViewsMetadata 只回答 ListViews，其余方法不会被调用。
+type periodViewsMetadata struct {
+	MetadataClient
+	views []*pb.View
+}
+
+func (m *periodViewsMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
+	return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: m.views}, nil
+}
+
+func TestPeriodCompletedDuringInitialBuildIsDroppedAndNotRepublished(t *testing.T) {
+	view := &pb.View{SpaceId: "quant", ViewId: "building-view", DatasetId: "kline"}
+	at := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
+	cases := map[string]*storageeventpb.DatasetPeriodCompleted{
+		"ledger": collectorCompleted("kline", "complete", []string{"BTC-USDT"}, nil, at, 1786032000),
+		"producer": {
+			DatasetId: "kline", Frequency: "1m", PeriodTime: 1786032000, Status: "complete", Source: "producer",
+			UniverseSubjectIds: []string{"BTC-USDT"}, CompletedAt: timestamppb.New(at),
+		},
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			metadata, publisher := newPeriodMetadataFake(), newReadyPublisherFake()
+			service := newPeriodTestService(metadata, publisher, view)
+			service.metadataClient = &periodViewsMetadata{views: []*pb.View{view}}
+			service.views[viewRef{spaceID: "quant", viewID: "building-view"}].building = "building-index"
+			if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("period-1", at), payload); err != nil {
+				t.Fatalf("建索引期间的周期应直接确认：%v", err)
+			}
+			if len(publisher.attempts) != 0 || len(metadata.states) != 0 {
+				t.Fatalf("建索引期间不应发布或记录：发布=%d 状态=%d", len(publisher.attempts), len(metadata.states))
+			}
+		})
+	}
+}
+
+func TestPeriodCompletedStaysPendingUntilBuiltViewIsAttached(t *testing.T) {
+	at := time.Date(2026, 8, 7, 0, 1, 0, 0, time.UTC)
+	publisher := newReadyPublisherFake()
+	service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{SpaceId: "quant", ViewId: "recovering-view", DatasetId: "kline"})
+	// 元数据已有活动索引，运行时还没挂上：是启动或恢复期间，这一期不能丢。
+	service.metadataClient = &periodViewsMetadata{views: []*pb.View{{SpaceId: "quant", ViewId: "recovering-view", DatasetId: "kline", ActiveIndexId: "built-index"}}}
+	payload := collectorCompleted("kline", "complete", []string{"BTC-USDT"}, nil, at, 1786032000)
+	if err := service.HandleDatasetPeriodCompleted(context.Background(), periodMessage("period-1", at), payload); err == nil {
+		t.Fatal("已建好索引但未挂上时应保持未确认")
+	}
+	if len(publisher.attempts) != 0 {
+		t.Fatalf("不应发布：%d", len(publisher.attempts))
 	}
 }

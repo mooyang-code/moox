@@ -32,7 +32,7 @@ backup_count = 5
 # Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
 # 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。
 [storage_retention]
-view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
+view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；更旧的行每 2 分钟定时删除
 
 # 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
 [storage_retention.defaults]
@@ -76,17 +76,15 @@ view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；超过 ce
 "30s" = "48h"
 "1m" = "7d"
 
-# View 维护的检查节奏与单个 View 文件上限。
+# View 维护的检查节奏与单个 View 文件的告警线（超过只告警，不动数据）。
 [storage_view]
 maintenance_check_interval = "1m"
-capacity_check_interval = "1h"
-capacity_check_jitter = "1h"
 max_view_file_bytes = 4294967296
 
 # View 按空间 × 频率限制最长历史：data_time 早于“当前时间 − 期限”的行不写入 View，
 # 补采、导入、因子历史重算带来的旧行同样丢弃（Dataset 与因子本地存储照常保留全部历史）。
 # 期限写法同 [storage_retention]；要装得下 view_rows_per_series 根（默认值恰好装下 1 万根）。
-# 已在 View 里的过期行由整理按每序列根数裁掉。
+# 已在 View 里的旧行由定时删除按每序列根数删掉。
 [storage_view.max_age.defaults]
 "30s" = "90h"
 "1m" = "7d"

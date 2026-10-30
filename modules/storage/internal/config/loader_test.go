@@ -25,11 +25,11 @@ func TestStorageConfigRolesAreExplicit(t *testing.T) {
 	}
 }
 
-func TestStorageViewRebuildDefaults(t *testing.T) {
+func TestStorageViewBackfillDefaults(t *testing.T) {
 	cfg := StorageConfig{}
 	cfg.ApplyDefaults()
-	if cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" || cfg.View.RebuildMaxPending != 32 || cfg.View.RebuildIdleChecks != 3 {
-		t.Fatalf("view rebuild defaults = %d/%s/%d", cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval, cfg.View.RebuildMaxPending)
+	if cfg.View.BackfillPageSize != 2000 || cfg.View.BackfillRequestInterval != "100ms" {
+		t.Fatalf("view backfill defaults = %d/%s", cfg.View.BackfillPageSize, cfg.View.BackfillRequestInterval)
 	}
 }
 
@@ -261,49 +261,6 @@ func TestStorageConfigsContainNoLegacyPathsOrRotationAndDependentsDoNotOwnIndexR
 				t.Fatalf("%s still contains legacy key %q", file, legacy)
 			}
 		}
-	}
-}
-
-func TestStorageViewRebuildConfigDefaults(t *testing.T) {
-	var cfg StorageConfig
-	cfg.ApplyDefaults()
-
-	if cfg.Devices.ViewIndexRoot != "var/storage/view-indexes" {
-		t.Fatalf("view index root = %q, want var/storage/view-indexes", cfg.Devices.ViewIndexRoot)
-	}
-
-}
-
-func TestStorageViewRebuildYAMLOverrides(t *testing.T) {
-	raw := []byte(`
-storage:
-  devices:
-    view_index_root: /indexes
-  view:
-    rebuild_max_pending: 7
-`)
-	var cfg RuntimeConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-	cfg.ApplyDefaults()
-
-	if cfg.Storage.Devices.ViewIndexRoot != "/indexes" {
-		t.Fatalf("view index root = %q", cfg.Storage.Devices.ViewIndexRoot)
-	}
-	if cfg.Storage.View.RebuildMaxPending != 7 || cfg.Storage.View.RebuildIdleChecks != 3 {
-		t.Fatalf("rebuild config = %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
-	}
-}
-
-func TestStorageViewExplicitZeroWatermarkIsNotDefaulted(t *testing.T) {
-	var cfg RuntimeConfig
-	if err := yaml.Unmarshal([]byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-	cfg.ApplyDefaults()
-	if cfg.Storage.View.RebuildMaxPending != 0 || cfg.Storage.View.RebuildIdleChecks != 0 {
-		t.Fatalf("explicit zero gate values were defaulted to %d/%d", cfg.Storage.View.RebuildMaxPending, cfg.Storage.View.RebuildIdleChecks)
 	}
 }
 

@@ -39,7 +39,7 @@
 | 标的列表 | `ListSubjects` | `{"space_id":"crypto","page":{"size":200}}` |
 | 标签、标签成员 | `ListTags` / `ListTagMembers` | `{"space_id":"crypto"}` / `{"space_id":"crypto","tag_id":"<标签>"}` |
 | 数据来源 | `ListDataSources` | `{"space_id":"crypto"}` |
-| View 列表、重建日志 | `ListViews` / `ListViewRebuildLogs` | `{"space_id":"crypto"}` / `{"space_id":"crypto","view_id":"<View>"}` |
+| View 列表 | `ListViews` | `{"space_id":"crypto"}` |
 | 存储节点 | `ListDataNodes` | `{}` |
 
 标签成员的增删优先用 `moox-cli metadata tag members`；View 的修复与重建用 `moox-cli storage repair-view` 等专用命令（见 [`cli-operations.md`](cli-operations.md)）。

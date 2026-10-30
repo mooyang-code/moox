@@ -23,8 +23,8 @@ func TestCommitViewSchemaExtensionRequiresViewRoleHMAC(t *testing.T) {
 	require.NoError(t, err)
 
 	req := &pb.CommitViewSchemaExtensionReq{
-		SpaceId: "space", ViewId: "view", ActiveIndexId: "index", ExpectedActiveRevision: 1,
-		ExpectedDesiredRevision: 2, ExpectedActiveSchemaHash: "active", ViewSchemaHash: "desired",
+		SpaceId: "space", ViewId: "view", ActiveIndexId: "index", ExpectedViewRevision: 1,
+		ExpectedSchemaHash: "active", ViewSchemaHash: "desired",
 		Columns: []*pb.ViewColumn{{ColumnName: "column"}},
 	}
 	rejected, err := service.CommitViewSchemaExtension(ctx, req)
@@ -60,32 +60,8 @@ func TestViewOnlyMetadataMethodsRequireViewServiceSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	calls := map[string]func(*pb.AuthInfo) *pb.RetInfo{
-		"ClaimViewIndexBuild": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.ClaimViewIndexBuild(ctx, &pb.ClaimViewIndexBuildReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"UpdateViewIndexBuild": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.UpdateViewIndexBuild(ctx, &pb.UpdateViewIndexBuildReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"ActivateViewIndex": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.ActivateViewIndex(ctx, &pb.ActivateViewIndexReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"FailViewIndexBuild": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.FailViewIndexBuild(ctx, &pb.FailViewIndexBuildReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"CreateViewRebuildLog": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.CreateViewRebuildLog(ctx, &pb.CreateViewRebuildLogReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"UpdateViewRebuildLog": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.UpdateViewRebuildLog(ctx, &pb.UpdateViewRebuildLogReq{AuthInfo: a})
-			return rsp.GetRetInfo()
-		},
-		"UpsertSkippedViewRebuildLog": func(a *pb.AuthInfo) *pb.RetInfo {
-			rsp, _ := service.UpsertSkippedViewRebuildLog(ctx, &pb.UpsertSkippedViewRebuildLogReq{AuthInfo: a})
+		"CompleteViewInitialBuild": func(a *pb.AuthInfo) *pb.RetInfo {
+			rsp, _ := service.CompleteViewInitialBuild(ctx, &pb.CompleteViewInitialBuildReq{AuthInfo: a})
 			return rsp.GetRetInfo()
 		},
 		"UpsertViewPeriodDatasetState": func(a *pb.AuthInfo) *pb.RetInfo {

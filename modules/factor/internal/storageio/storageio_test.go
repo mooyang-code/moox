@@ -712,7 +712,7 @@ func TestEnsureResultViewCreatesTheDefaultViewWithMaintenanceAttributes(t *testi
 	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
 	require.Equal(t, map[string]string{
-		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "rebuild_source": "primary", "maintenance_priority": "10",
+		"owner_module": "factor", "view_role": "factor_result", "follow_dataset_columns": "true", "maintenance_priority": "10",
 	}, view.GetAttributes())
 	var names []string
 	for _, column := range view.GetColumns() {

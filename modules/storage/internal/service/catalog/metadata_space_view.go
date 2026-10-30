@@ -2,10 +2,10 @@ package catalog
 
 import (
 	"context"
-	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -173,68 +173,16 @@ func (s *Service) DeleteView(ctx context.Context, req *pb.DeleteViewReq) (*pb.De
 	return &pb.DeleteViewRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
-// RequestViewRebuild records a revision-scoped manual rebuild request and
-// returns immediately. The View Maintainer performs the A/B work in the
-// background while the current active index remains readable.
-func (s *Service) RequestViewRebuild(ctx context.Context, req *pb.RequestViewRebuildReq) (*pb.RequestViewRebuildRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	if err := s.validateManualRebuildAuth(req.GetAuthInfo()); err != nil {
-		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	current, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, err)}, nil
-	}
-	if current == nil || !strings.EqualFold(strings.TrimSpace(current.GetStatus()), "active") {
-		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("only active views can be rebuilt"))}, nil
-	}
-	view, err := s.metadata.RequestViewRebuild(ctx, req.GetSpaceId(), req.GetViewId())
-	if err != nil {
-		return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	// Metadata is already committed and the View Maintainer can safely read it from
-	// SQLite. Cache publication is best-effort here; a transient cache failure
-	// must not make the browser retry and advance the revision again.
-	s.refreshMetadataCacheAfterCommit(ctx, "RequestViewRebuild")
-	return &pb.RequestViewRebuildRsp{RetInfo: retinfo.Success("rebuild requested"), View: view}, nil
-}
-
-// validateManualRebuildAuth keeps this expensive operator action restricted at
-// the Storage boundary as well as at the browser gateway. The gateway route
-// allow-list is defense in depth, not an authentication mechanism: a service
-// credential must not be able to forge admin-gateway by only changing AppId.
-func (s *Service) validateManualRebuildAuth(auth *pb.AuthInfo) error {
-	if strings.TrimSpace(s.operatorSecret) == "" {
-		return errors.New("storage auth secret is not configured")
-	}
-	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
-		return errors.New("administrator service auth is required")
-	}
-	appID := strings.TrimSpace(auth.GetAppId())
-	if appID != "admin-gateway" && appID != "moox-cli" {
-		return errors.New("administrator identity required")
-	}
-	expected := serviceAuthKey(s.operatorSecret, appID)
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
-		return errors.New("invalid administrator service HMAC")
-	}
-	return nil
-}
-
 func clearViewIndexRuntimeState(view *pb.View) {
 	if view == nil {
 		return
 	}
 	view.ActiveIndexId = ""
-	view.ActiveViewRevision = 0
+	view.ViewRevision = 0
 	view.ActiveColumns = nil
 	view.ActiveViewSchemaHash = ""
-	view.ActiveSlot = "slot-a"
 	view.IndexedFrom = ""
 	view.IndexedTo = ""
-	view.IndexBuild = nil
 }
 
 func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb.View) error {
@@ -250,7 +198,11 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if err != nil {
 		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 	}
-	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, view.GetColumns()); err != nil {
+	existing, err := s.metadata.GetView(ctx, spaceID, view.GetViewId())
+	if err != nil {
+		existing = nil // 新建 View 时还不存在，所有列都按新列校验
+	}
+	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, newViewColumns(existing, view.GetColumns())); err != nil {
 		return err
 	}
 	if freq := strings.TrimSpace(view.GetFreq()); freq != "" && freq != dataset.GetFreq() {
@@ -261,6 +213,21 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
 	view.Engine = defaultViewEngine(dataset.GetDataKind())
 	return nil
+}
+
+// newViewColumns 去掉 View 已有的列：列只能追加，数据集列被禁用后 View 里的这一列也要留着，所以只校验新列。
+func newViewColumns(view *pb.View, columns []*pb.ViewColumn) []*pb.ViewColumn {
+	existing := make(map[string]struct{}, len(view.GetColumns())+len(view.GetActiveColumns()))
+	for _, column := range append(append([]*pb.ViewColumn(nil), view.GetColumns()...), view.GetActiveColumns()...) {
+		existing[column.GetColumnName()] = struct{}{}
+	}
+	added := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		if _, ok := existing[column.GetColumnName()]; !ok {
+			added = append(added, column)
+		}
+	}
+	return added
 }
 
 // validateViewColumnsInDataset requires every dataset column of a View to
@@ -315,59 +282,6 @@ func (s *Service) ListViews(ctx context.Context, req *pb.ListViewsReq) (*pb.List
 	return &pb.ListViewsRsp{RetInfo: retinfo.Success("success"), Views: items, PageResult: page}, nil
 }
 
-func (s *Service) ListViewRebuildLogs(ctx context.Context, req *pb.ListViewRebuildLogsReq) (*pb.ListViewRebuildLogsRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetViewId()) == "" {
-		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and view_id are required"))}, nil
-	}
-	items, page, err := s.metadata.ListViewRebuildLogs(ctx, req.GetSpaceId(), req.GetViewId(), req.GetResult(), req.GetPage())
-	if err != nil {
-		return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.ListViewRebuildLogsRsp{RetInfo: retinfo.Success("success"), Logs: items, PageResult: page}, nil
-}
-
-func (s *Service) CreateViewRebuildLog(ctx context.Context, req *pb.CreateViewRebuildLogReq) (*pb.CreateViewRebuildLogRsp, error) {
-	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
-		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if req == nil || req.GetLog() == nil {
-		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
-	}
-	item, err := s.metadata.CreateViewRebuildLog(ctx, req.GetLog())
-	if err != nil {
-		return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.CreateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
-}
-
-func (s *Service) UpdateViewRebuildLog(ctx context.Context, req *pb.UpdateViewRebuildLogReq) (*pb.UpdateViewRebuildLogRsp, error) {
-	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
-		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if req == nil || req.GetLog() == nil {
-		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
-	}
-	item, err := s.metadata.UpdateViewRebuildLog(ctx, req.GetLog())
-	if err != nil {
-		return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpdateViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
-}
-
-func (s *Service) UpsertSkippedViewRebuildLog(ctx context.Context, req *pb.UpsertSkippedViewRebuildLogReq) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
-	if err := s.validateViewServiceAuth(req.GetAuthInfo()); err != nil {
-		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
-	if req == nil || req.GetLog() == nil {
-		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("log is required"))}, nil
-	}
-	item, err := s.metadata.UpsertSkippedViewRebuildLog(ctx, req.GetLog())
-	if err != nil {
-		return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	return &pb.UpsertSkippedViewRebuildLogRsp{RetInfo: retinfo.Success("success"), Log: item}, nil
-}
-
 func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumnReq) (*pb.UpsertViewColumnRsp, error) {
 	column := req.GetColumn()
 	if column == nil || column.GetSpaceId() == "" || column.GetViewId() == "" || column.GetColumnName() == "" {
@@ -383,7 +297,7 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	if err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), []*pb.ViewColumn{column}); err != nil {
+	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), newViewColumns(view, []*pb.ViewColumn{column})); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)
@@ -401,5 +315,26 @@ func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsRe
 	if err != nil {
 		return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	if req.GetViewId() != "" {
+		view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+		if err != nil {
+			return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		}
+		items = visibleViewColumns(items, view.GetHiddenColumns())
+	}
 	return &pb.ListViewColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
+}
+
+// visibleViewColumns 去掉逻辑上已删除的列。
+func visibleViewColumns(columns []*pb.ViewColumn, hidden []string) []*pb.ViewColumn {
+	if len(hidden) == 0 {
+		return columns
+	}
+	visible := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		if !slices.Contains(hidden, column.GetColumnName()) {
+			visible = append(visible, column)
+		}
+	}
+	return visible
 }

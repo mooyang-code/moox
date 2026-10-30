@@ -646,6 +646,7 @@ const KIND_LABELS: Record<string, string> = {
   market_canary: "行情探针",
   market_fetch: "采集计划对账",
   data_delivery: "数据投递",
+  view_file: "View 索引文件",
   metrics_ingest: "指标入库",
   module: "模块运行",
   balance: "账户余额同步",

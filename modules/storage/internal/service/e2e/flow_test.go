@@ -137,7 +137,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)
 	}
-	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
+	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,17 +231,6 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	closes[1] = 111
 	waitForOutboxEmpty(t, ctx, store, relayErrors)
 	waitForSelectorStates(t, ctx, view, viewAuth, closes)
-
-	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view-next", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 2, Engine: "duckdb", ViewSchemaHash: "schema-2", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("prepare replacement view: rsp=%v err=%v", rsp, err)
-	}
-	if err := view.BackfillViewWithReader(ctx, "quant", "prices-view", 2, primaryFieldReader{service: primary}); err != nil {
-		t.Fatalf("backfill replacement view: %v", err)
-	}
-	if err := view.SwitchView(ctx, "quant", "prices-view"); err != nil {
-		t.Fatalf("switch replacement view: %v", err)
-	}
-	assertSelectorStates(t, ctx, view, viewAuth, closes)
 }
 
 func waitForOutboxEmpty(t *testing.T, ctx context.Context, store *pebble.Store, relayErrors <-chan error) {

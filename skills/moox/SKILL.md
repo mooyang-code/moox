@@ -51,7 +51,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 ## 几条容易踩的规则
 
-- **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，重建时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
+- **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，首次建索引时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
   调大 `[storage_retention] view_rows_per_series` 或放宽 `[storage_view.max_age]` 时，按 [`references/storage.md`](references/storage.md) 估算并提醒余量；
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。
 - **配置变更**：`moox.toml` 的改动（保留期、View 设置等）只有重新安装对应单元才生效（`setup release build` 加该单元的命令带 `--release`）；只换二进制保留已安装的配置。

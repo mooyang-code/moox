@@ -197,6 +197,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
+	viewFiles, err := b.buildViewFileLimitHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
 	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -308,6 +313,46 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 	}
 	return []BusinessStatus{{
 		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "data_delivery", Module: "storage_outbox",
+		Status: status, Reason: reason, LastCheckedAt: now,
+	}}, nil
+}
+
+// buildViewFileLimitHealth 把 Storage View 上报的索引文件超限数量转成告警：超过 max_view_file_bytes 只告警，数据不动，
+// 由人判断是调大告警线、调小保留根数还是减列。
+func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+		return nil, nil
+	}
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_file_over_limit", "", 100, now)
+	if err != nil {
+		return nil, err
+	}
+	var overLimit float64
+	found := false
+	for _, item := range series {
+		if item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		overLimit = max(overLimit, latest.Value)
+		found = true
+	}
+	if !found {
+		return nil, nil
+	}
+	status, reason := "healthy", "View 索引文件都在告警线以内"
+	if overLimit > 0 {
+		status = "down"
+		reason = fmt.Sprintf("%.0f 个 View 的索引文件超过 max_view_file_bytes；数据不受影响，日志里有具体的 View，确认后调大告警线或减少保留根数", overLimit)
+	}
+	return []BusinessStatus{{
+		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "view_file", Module: "storage_view",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }

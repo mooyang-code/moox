@@ -22,7 +22,7 @@ func MetadataStoreCode(err error) pb.ErrorCode {
 	if errors.Is(err, sql.ErrNoRows) {
 		return pb.ErrorCode_NOT_FOUND
 	}
-	if errors.Is(err, sqlitemetadata.ErrViewIndexBuildConflict) {
+	if errors.Is(err, sqlitemetadata.ErrViewIndexConflict) {
 		return pb.ErrorCode_CONFLICT
 	}
 	if errors.Is(err, metadatastore.ErrViewSchemaExtensionConflict) {

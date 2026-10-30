@@ -152,42 +152,6 @@ func TestLiveIndexWriteUsesDedicatedBudgetAfterDeliveryDeadline(t *testing.T) {
 	}
 }
 
-func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *testing.T) {
-	activeErr := errors.New("active index is corrupt")
-	engine := &existenceQueryEngine{
-		queryEngine: &queryEngine{writeErrs: map[string]error{"prices-index": activeErr}},
-		exists:      true,
-	}
-	svc, _ := queryTestService(engine, true)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	svc.views[key].next = "prices-next"
-	svc.views[key].status = "building"
-	svc.indexEngine["prices-next"] = "query-test"
-	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
-		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
-	}
-	svc.schemas["prices-next"] = svc.schemas["prices-index"]
-	svc.indexView = map[string]viewRef{"prices-index": key, "prices-next": key}
-	svc.byData = map[datasetRef]map[string]struct{}{
-		{spaceID: "space", datasetID: "market"}: {"prices-index": {}, "prices-next": {}},
-	}
-
-	err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{{
-		Key: timeSeriesTestRowKey("venue:binance"),
-		Fields: []*pb.FieldValue{{
-			FieldId: "close",
-			Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
-		}},
-	}})
-	if !errors.Is(err, activeErr) {
-		t.Fatalf("apply error=%v, want active failure", err)
-	}
-	if engine.writes["prices-index"] != 1 || engine.writes["prices-next"] != 1 {
-		t.Fatalf("writes=%v, want one active attempt and one replacement write", engine.writes)
-	}
-}
-
 func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := observability.NewViewMetrics(registry)
@@ -252,10 +216,9 @@ func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetr
 	key := viewRef{spaceID: "space", viewID: "prices_view"}
 	svc.metrics = metrics
 	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", Freq: "1m"}}
-	svc.views[key] = &viewRuntime{active: "prices-index", next: nextID, status: "active"}
+	svc.views[key] = &viewRuntime{active: "prices-index"}
 	if indexID == nextID {
-		svc.views[key].active = ""
-		svc.views[key].status = "building"
+		svc.views[key] = &viewRuntime{building: nextID}
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
@@ -319,113 +282,6 @@ func mustGather(t *testing.T, registry *prometheus.Registry) []*dto.MetricFamily
 		t.Fatal(err)
 	}
 	return families
-}
-
-func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *testing.T) {
-	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-b": errors.New("replacement write failed")}}, exists: true}
-	svc, _ := queryTestService(engine, false)
-	svc.engines["query-test"] = engine
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	svc.views[key] = &viewRuntime{}
-	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
-	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
-	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
-	svc.schemas["prices-b"] = svc.schemas["prices-a"]
-	svc.byData = map[datasetRef]map[string]struct{}{
-		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
-	}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}, failErr: errors.New("metadata temporarily unavailable")}
-	runtime := svc.views[key]
-	runtime.active = "prices-a"
-	runtime.next = "prices-b"
-	runtime.status = "building"
-	runtime.buildID = "build-1"
-	runtime.ownerID = "owner-1"
-	runtime.metadata = metadata
-	runtime.metadataAuth = &pb.AuthInfo{AppId: "view"}
-	row := &pb.RowFieldUpsert{
-		Key:    timeSeriesTestRowKey("venue:binance"),
-		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
-	}
-
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
-		t.Fatal("first replacement failure was ACKed")
-	}
-	if !runtime.buildFailed || runtime.next != "prices-b" || metadata.failCalls != 1 {
-		t.Fatalf("after transient metadata failure: failed=%v next=%q fail_calls=%d", runtime.buildFailed, runtime.next, metadata.failCalls)
-	}
-	engine.queryEngine.writeErrs["prices-b"] = nil
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
-		t.Fatal("redelivery after persisting failure was ACKed")
-	}
-	if runtime.buildFailed || runtime.next != "" || metadata.failCalls != 2 {
-		t.Fatalf("failed replacement was not cleared: failed=%v next=%q fail_calls=%d", runtime.buildFailed, runtime.next, metadata.failCalls)
-	}
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
-		t.Fatalf("post-cleanup redelivery did not ACK: %v", err)
-	}
-}
-
-// 活动索引写成功、替换索引写失败时只丢弃替换构建：View 仍按活动索引服务，运行状态应回到 active。
-func TestReplacementFailureKeepsHealthyActiveViewActive(t *testing.T) {
-	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-b": errors.New("replacement write failed")}}, exists: true}
-	svc, _ := queryTestService(engine, false)
-	svc.engines["query-test"] = engine
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	svc.views[key] = &viewRuntime{}
-	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
-	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
-	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
-	svc.schemas["prices-b"] = svc.schemas["prices-a"]
-	svc.byData = map[datasetRef]map[string]struct{}{
-		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
-	}
-	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}}
-	runtime := svc.views[key]
-	runtime.active = "prices-a"
-	runtime.next = "prices-b"
-	runtime.nextDatasetIDs = []string{"market"}
-	runtime.nextPrimaryDatasetID = "market"
-	runtime.status = "building"
-	runtime.buildID = "build-1"
-	runtime.ownerID = "owner-1"
-	runtime.metadata = metadata
-	runtime.metadataAuth = &pb.AuthInfo{AppId: "view"}
-	row := &pb.RowFieldUpsert{
-		Key:    timeSeriesTestRowKey("venue:binance"),
-		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
-	}
-
-	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
-		t.Fatalf("活动索引已写成功，投递应确认：%v", err)
-	}
-	if metadata.failCalls != 1 {
-		t.Fatalf("替换构建失败应持久化一次，实际 %d 次", metadata.failCalls)
-	}
-	if runtime.next != "" || runtime.nextDatasetIDs != nil || runtime.nextPrimaryDatasetID != "" || runtime.status != "active" || runtime.active != "prices-a" {
-		t.Fatalf("丢弃替换构建后运行状态不对：active=%q next=%q next_datasets=%v next_primary=%q status=%q", runtime.active, runtime.next, runtime.nextDatasetIDs, runtime.nextPrimaryDatasetID, runtime.status)
-	}
-	if runtime.buildFailed || runtime.buildID != "" || runtime.ownerID != "" || runtime.buildCancel != nil {
-		t.Fatalf("丢弃替换构建后应清掉构建身份：failed=%v build=%q owner=%q", runtime.buildFailed, runtime.buildID, runtime.ownerID)
-	}
-}
-
-func TestFailedBuildCleanupDoesNotRemoveReusedSlotGeneration(t *testing.T) {
-	engine := &queryEngine{}
-	svc, _ := queryTestService(engine, false)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	svc.indexView = make(map[string]viewRef)
-	svc.indexEngine = make(map[string]string)
-	svc.schemas = make(map[string]viewindex.ViewIndexSchema)
-	svc.indexGeneration = make(map[string]uint64)
-	svc.indexView["prices-b"] = key
-	svc.indexEngine["prices-b"] = "query-test"
-	svc.schemas["prices-b"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market"}
-	svc.indexGeneration["prices-b"] = 2
-	svc.removeFailedBuildAtGeneration(context.Background(), "prices-b", 1)
-	if _, ok := svc.indexView["prices-b"]; !ok {
-		t.Fatal("stale cleanup removed a newer slot generation")
-	}
 }
 
 func TestQueryTimeSeriesRowsPreservesSelectorPresenceAndExactResultTags(t *testing.T) {
@@ -638,36 +494,6 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 	}
 }
 
-func TestQueryTimeSeriesRowsActiveIndexRemainsCompleteDuringRebuild(t *testing.T) {
-	engine := &queryEngine{
-		rows: []*pb.RowFieldValues{{Key: timeSeriesTestRowKey("")}},
-		stats: viewindex.ViewIndexStats{
-			Exists: true, EntryCount: 1,
-			IndexedFrom: "2026-07-29T00:00:00Z",
-			IndexedTo:   "2026-07-29T00:00:00Z",
-		},
-	}
-	svc, auth := queryTestService(engine, true)
-	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
-	runtime.status = "building"
-	runtime.next = "prices-next"
-
-	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices",
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
-		TimeRange: &pb.TimeRange{
-			StartTime: "2026-07-29T00:00:00Z",
-			EndTime:   "2026-07-29T00:00:00.000000001Z",
-		},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-	if !rsp.GetComplete() {
-		t.Fatalf("active index became incomplete while next index builds: %v", rsp)
-	}
-}
-
 func TestQueryTimeSeriesRowsCoverageUsesHalfOpenNanosecondBoundary(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -737,7 +563,7 @@ func queryTestService(engine viewindex.Engine, active bool) (*Service, *pb.AuthI
 		views: map[viewRef]*viewRuntime{},
 	}
 	if active {
-		svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: "prices-index", status: "active"}
+		svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: "prices-index"}
 	}
 	auth := &pb.AuthInfo{AppId: "query-test", AppKey: datanode.ServiceAuthKey(secret, "query-test")}
 	return svc, auth

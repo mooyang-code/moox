@@ -151,7 +151,7 @@ func storageViewState(output []byte) (string, error) {
 type retainViewRow struct{ spaceID, viewID, engine, status, activeIndexID string }
 
 // withMetadataTx 在 Metadata SQLite 的一个 BEGIN IMMEDIATE 事务里执行 fn：fn 返回 nil 就提交，否则回滚。
-// 外键级联打开，删除 t_views 的行会连带删除它的列、构建、重建日志与周期状态。
+// 外键级联打开，删除 t_views 的行会连带删除它的列与周期状态。
 func withMetadataTx(ctx context.Context, metadataDB string, fn func(conn *sql.Conn) error) error {
 	db, err := sql.Open("sqlite", metadataDB)
 	if err != nil {
@@ -202,16 +202,11 @@ func listViewRows(ctx context.Context, conn *sql.Conn) ([]retainViewRow, error) 
 	return all, rows.Err()
 }
 
-// deleteViewMetadata 删除一个 View 的元数据，并把它占用的活动索引与构建中索引记进 summary，
+// deleteViewMetadata 删除一个 View 的元数据，并把它占用的活动索引记进 summary，
 // 供之后由 Storage View 的清理定时器回收物理文件。
 func deleteViewMetadata(ctx context.Context, conn *sql.Conn, item retainViewRow, summary *retainViewsSummary) error {
-	var buildIndexID, buildEngine string
-	_ = conn.QueryRowContext(ctx, `SELECT c_index_id, c_engine FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID).Scan(&buildIndexID, &buildEngine)
 	if strings.TrimSpace(item.activeIndexID) != "" {
 		summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: item.activeIndexID})
-	}
-	if strings.TrimSpace(buildIndexID) != "" {
-		summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: buildEngine, IndexID: buildIndexID})
 	}
 	if _, err := conn.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID); err != nil {
 		return err

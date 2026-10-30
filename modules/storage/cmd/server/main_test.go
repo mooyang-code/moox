@@ -201,7 +201,7 @@ func TestLoadStoragePolicyDefaultsWithoutStorageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.View.Bars != 10000 || policy.View.TrimBars != 12000 || policy.Retention.Defaults["1m"] != "840h" {
+	if policy.View.Bars != 10000 || policy.Retention.Defaults["1m"] != "840h" {
 		t.Fatalf("default policy = %#v", policy)
 	}
 }
@@ -222,42 +222,6 @@ func TestStorageViewMaintenanceDisabled(t *testing.T) {
 				t.Fatalf("value %q unexpectedly disabled maintenance", value)
 			}
 		})
-	}
-}
-
-func TestStorageViewRebuildSettingsUsesConfiguredValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 5\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if maxPending != 5 || idleChecks != 3 {
-		t.Fatalf("gate settings = %d/%d", maxPending, idleChecks)
-	}
-	if !maxPendingConfigured || idleChecksConfigured {
-		t.Fatal("configured flags do not match the file")
-	}
-}
-
-func TestStorageViewRebuildSettingsAllowsExplicitZeroMaxPending(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "storage.yaml")
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 0\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("MOOX_STORAGE_CONFIG", path)
-	if _, _, _, _, err := storageViewRebuildSettings(); err == nil {
-		t.Fatal("accepted explicit zero idle checks")
-	}
-	if err := os.WriteFile(path, []byte("storage:\n  view:\n    rebuild_max_pending: 0\n    rebuild_idle_checks: 3\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
-	if err != nil || maxPending != 0 || idleChecks != 3 || !maxPendingConfigured || !idleChecksConfigured {
-		t.Fatalf("explicit zero max pending settings = %d/%d configured=%v/%v err=%v", maxPending, idleChecks, maxPendingConfigured, idleChecksConfigured, err)
 	}
 }
 

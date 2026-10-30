@@ -112,10 +112,10 @@ func requestBodySpace(header string, body []byte, canInject bool) (space string,
 // （其余方法的空间在嵌套消息里，如 view.space_id，回填会被 ProtoJSON 当作未知字段拒绝）。
 // 清单由 TestStorageTopLevelSpaceMethodsMatchProto 对照 .proto 文件校验。
 var storageTopLevelSpaceMethods = map[string]bool{
-	"DeleteView": true, "RequestViewRebuild": true, "DeleteDataSource": true, "DeleteTag": true,
+	"DeleteView": true, "DeleteDataSource": true, "DeleteTag": true,
 	"AddTagMembers": true, "RemoveTagMembers": true, "SetTagMemberStatus": true, "DeleteDataset": true,
 	"ActivateDataset": true, "BatchUpdateFields": true, "DeleteFieldGroup": true, "GetSpace": true,
-	"GetView": true, "ListViews": true, "ListViewColumns": true, "ListViewRebuildLogs": true,
+	"GetView": true, "ListViews": true, "ListViewColumns": true,
 	"GetDataSource": true, "ListDataSources": true, "GetSubject": true, "ListSubjects": true,
 	"GetTag": true, "ListTags": true, "ListTagMembers": true, "ResolveSubjects": true,
 	"GetDataset": true, "ListDatasets": true, "CheckDatasetActivation": true, "ListDatasetSubjects": true,

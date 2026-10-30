@@ -256,61 +256,9 @@ export interface View {
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
-  desired_view_revision?: number | string;
-  active_view_revision?: number | string;
-  view_version?: number | string;
-  active_view_version?: number | string;
+  view_revision?: number | string;
   active_columns?: ViewColumn[];
-  index_build?: ViewIndexBuild;
-}
-
-export interface ViewIndexBuild {
-  space_id: string;
-  view_id: string;
-  build_id: string;
-  index_id: string;
-  engine: string;
-  target_view_version: number | string;
-  state: number | string;
-  owner_id?: string;
-  lease_expires_at?: string;
-  cursor_json?: string;
-  snapshot_end?: string;
-  coverage_start?: string;
-  coverage_end?: string;
-  entries_written?: number | string;
-  schema_hash?: string;
-  columns?: ViewColumn[];
-  started_at?: string;
-  updated_at?: string;
-  finished_at?: string;
-  error?: string;
-}
-
-export interface ViewRebuildLog {
-  log_id: number | string;
-  space_id: string;
-  view_id: string;
-  build_id?: string;
-  index_id?: string;
-  trigger_reason: number | string;
-  result: number | string;
-  block_reason?: string;
-  target_view_revision?: number | string;
-  active_view_revision?: number | string;
-  physical_bytes?: number | string;
-  num_pending?: number | string;
-  num_ack_pending?: number | string;
-  entries_written?: number | string;
-  started_at?: string;
-  finished_at?: string;
-  first_checked_at?: string;
-  last_checked_at?: string;
-  skip_count?: number | string;
-  error_summary?: string;
-  details_json?: string;
-  created_at?: string;
-  updated_at?: string;
+  hidden_columns?: string[];
 }
 
 export interface ViewColumn {

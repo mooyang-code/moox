@@ -30,22 +30,19 @@ var (
 )
 
 var storageInternalMethods = map[string]struct{}{
-	"ClaimViewIndexBuild":  {},
-	"UpdateViewIndexBuild": {},
-	"ActivateViewIndex":    {},
-	"FailViewIndexBuild":   {},
-	"MergePrimaryRows":     {},
-	"ScanPrimaryRows":      {},
-	"DeletePrimaryRows":    {},
-	"DeleteTimeSeriesRows": {},
-	"PrepareViewIndex":     {},
-	"ApplyViewIndex":       {},
-	"StatViewIndex":        {},
-	"RemoveViewIndex":      {},
-	"ListViewIndexes":      {},
-	"QueryTimeSeriesIndex": {},
-	"SearchRecordIndex":    {},
-	"GetShardState":        {},
+	"CompleteViewInitialBuild": {},
+	"MergePrimaryRows":         {},
+	"ScanPrimaryRows":          {},
+	"DeletePrimaryRows":        {},
+	"DeleteTimeSeriesRows":     {},
+	"PrepareViewIndex":         {},
+	"ApplyViewIndex":           {},
+	"StatViewIndex":            {},
+	"RemoveViewIndex":          {},
+	"ListViewIndexes":          {},
+	"QueryTimeSeriesIndex":     {},
+	"SearchRecordIndex":        {},
+	"GetShardState":            {},
 }
 
 var storagePrivilegedMethods = map[string]map[string]struct{}{

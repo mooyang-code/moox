@@ -28,6 +28,19 @@ type failingPrepare struct{ err error }
 func (f failingPrepare) Prepare(context.Context, domain.EngineTask, []string) error { return f.err }
 func (f failingPrepare) ReleaseTask(domain.FactorTask)                              {}
 
+// blockingPrepare 让本地数据同步停在 release 关闭之前，测试才能确定地观察“同步中”的状态。
+type blockingPrepare struct{ release <-chan struct{} }
+
+func (b blockingPrepare) Prepare(ctx context.Context, _ domain.EngineTask, _ []string) error {
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (blockingPrepare) ReleaseTask(domain.FactorTask) {}
+
 func newCatchupRuntime(t *testing.T) (*Runtime, *watermark.Store) {
 	t.Helper()
 	r, _ := newLifecycleRuntime(t)
@@ -139,7 +152,9 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	}
 	_, err := r.life.Command(ctx, lifecycle.CmdPause, ref)
 	require.NoError(t, err)
-	// 水位还没落后（没有记录）：同步完成即追平。
+	// 水位还没落后（没有记录）：同步完成即追平。同步先停住：否则后台同步可能抢在断言之前完成，直接回到运行。
+	release := make(chan struct{})
+	r.preload.data = blockingPrepare{release: release}
 	_, err = r.life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdResume, Ref: ref})
 	require.NoError(t, err)
 	require.Equal(t, lifecycle.StageResuming, r.life.Stage(ref), "同步本地数据期间不放行")
@@ -147,6 +162,7 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	require.True(t, r.catchupGate("ftask_a"))
 	require.True(t, r.writeGate("ftask_a"))
 
+	close(release)
 	require.Eventually(t, func() bool {
 		r.life.Refresh(ctx)
 		return r.life.Stage(ref) == lifecycle.StageRunning

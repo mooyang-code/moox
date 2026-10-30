@@ -4,7 +4,7 @@
 
 - SQLite：primary 保存空间、标的、标签、数据集、字段和 View 元数据。
 - Pebble：node 保存字段级时序/记录事实、Outbox、采集周期账本与行变更日志。
-- DuckDB：view 保存可重建的时序宽表；每个 View 有 A/B 独立索引，重建追平后切换。
+- DuckDB：view 保存可重建的时序宽表；每个 View 一个物理索引：首次从 Primary 回填建成，之后原地加列、定时删除最旧数据。
 - Bleve：view 为记录数据提供全文索引。
 
 归档由独立的 `modules/archive` 定时从 Primary 读取，worker 用 SQLite 暂存并导出 CSV（默认）或 CSV.gz。当前运行时不生成 Parquet；不能把 Parquet 当作已实现的归档或恢复入口。

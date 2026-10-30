@@ -73,8 +73,8 @@ var appliedPersistInterval = time.Second
 
 // flushAppliedFence 把标脏的写入围栏落盘并 fsync。落盘不在行处理的热路径上（后台每秒合并一次），fsync 的代价不会让
 // 分区排队；不 fsync 的话，部分文件系统掉电后改名留下空文件，启动时整份围栏被当作损坏清空。后台循环与停止消费先后
-// 调用，落盘串行：快照在持有 appliedPersistMu 时取，后写入的文件总是更新的快照。A/B 槽位名在重建时复用，每个 View
-// 至多两个索引的键，不需要清理（已删除 View 的少量键会一直留着）。
+// 调用，落盘串行：快照在持有 appliedPersistMu 时取，后写入的文件总是更新的快照。索引标识对一个 View 是固定的，
+// 键的数量有界，不需要清理（已删除 View 的少量键会一直留着）。
 func (s *Service) flushAppliedFence() error {
 	if s == nil || strings.TrimSpace(s.readyFenceDir) == "" {
 		return nil

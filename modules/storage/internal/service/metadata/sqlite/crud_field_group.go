@@ -163,8 +163,8 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 	if targetGroupID == "" && targetStatus == "" {
 		return 0, errors.New("target_group_id or target_status is required")
 	}
-	if targetStatus != "" && targetStatus != "active" && targetStatus != "disabled" {
-		return 0, errors.New("target_status must be active or disabled")
+	if targetStatus != "" && targetStatus != "active" && targetStatus != "disabled" && targetStatus != "deleted" {
+		return 0, errors.New("target_status 只能是 active、disabled 或 deleted")
 	}
 	seen := make(map[string]struct{}, len(fieldIDs))
 	for _, fieldID := range fieldIDs {

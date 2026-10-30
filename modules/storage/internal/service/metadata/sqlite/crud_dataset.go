@@ -438,15 +438,12 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	if err != nil {
 		return nil, err
 	}
-	newField := false
 	if existing, getErr := s.GetField(ctx, item.GetSpaceId(), item.GetFieldId()); getErr == nil {
 		if existing.GetValueType() != item.GetValueType() {
 			return nil, errors.New("field value_type is immutable")
 		}
 	} else if !errors.Is(getErr, sql.ErrNoRows) {
 		return nil, getErr
-	} else {
-		newField = true
 	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_description, c_value_type, c_unit, c_validation_rule_json, c_write_example, c_sort_order, c_status, c_attrs_json)
@@ -465,11 +462,6 @@ func (s *Store) UpsertField(ctx context.Context, item *pb.Field) (*pb.Field, err
 	`, item.GetSpaceId(), item.GetFieldId(), item.GetGroupId(), item.GetName(), item.GetDescription(), valueTypeSQL(item.GetValueType()), item.GetUnit(), defaultJSON(item.GetValidationRuleJson()), item.GetWriteExample(), item.GetSortOrder(), item.GetStatus(), raw)
 	if err != nil {
 		return nil, err
-	}
-	if newField {
-		if err := s.bumpViewsForField(ctx, item.GetSpaceId(), item.GetFieldId()); err != nil {
-			return nil, err
-		}
 	}
 	return s.GetField(ctx, item.GetSpaceId(), item.GetFieldId())
 }
@@ -654,11 +646,6 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 			return nil, err
 		}
 	}
-	if projectionChanged {
-		if err := bumpViewsForDataset(ctx, tx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
-			return nil, err
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -687,36 +674,26 @@ func followingViewIDs(ctx context.Context, tx *sql.Tx, spaceID, datasetID string
 	return ids, rows.Err()
 }
 
-// addColumnToFollowingViews 把数据集的新列（或重新启用的列）加进跟随它的 View，并提升 View 版本触发原地扩展。
+// addColumnToFollowingViews 把数据集的新列（或重新启用的列）加进跟随它的 View，由定时任务原地追加到索引。
 func addColumnToFollowingViews(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
 	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
 		return err
 	}
 	for _, viewID := range viewIDs {
-		var sortOrder uint32
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), viewID).Scan(&sortOrder); err != nil {
-			return err
-		}
-		changed, err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
+		if err := upsertViewColumn(ctx, tx, &pb.ViewColumn{
 			SpaceId: item.GetSpaceId(), ViewId: viewID, ColumnName: item.GetColumnName(),
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: item.GetColumnName(),
-			ValueType: item.GetValueType(), SortOrder: sortOrder, Attributes: cloneMetadataStringMap(item.GetAttributes()),
-		})
-		if err != nil {
+			ValueType: item.GetValueType(), Attributes: cloneMetadataStringMap(item.GetAttributes()),
+		}); err != nil {
 			return err
-		}
-		if changed {
-			if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
 }
 
 // refreshFollowingViewColumnAttributes 把数据集列的新属性同步到跟随它的 View 的同名列：只改属性，排序与其他字段不动；
-// View 里还没有这一列（没有加进 View）时什么都不做。属性变了要提升 View 版本，下游缓存才会刷新。
+// View 里还没有这一列（没有加进 View）时什么都不做。
 func refreshFollowingViewColumnAttributes(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
 	viewIDs, err := followingViewIDs(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
 	if err != nil {
@@ -740,9 +717,6 @@ func refreshFollowingViewColumnAttributes(ctx context.Context, tx *sql.Tx, item 
 			raw, item.GetSpaceId(), viewID, item.GetColumnName()); err != nil {
 			return err
 		}
-		if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -756,37 +730,6 @@ func cloneMetadataStringMap(input map[string]string) map[string]string {
 		output[key] = value
 	}
 	return output
-}
-
-func bumpViewsForDataset(ctx context.Context, db execQueryRower, spaceID, datasetID string) error {
-	_, err := db.ExecContext(ctx, `
-		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
-			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
-		WHERE c_space_id = ? AND c_dataset_id = ?
-		  AND COALESCE(json_extract(c_attrs_json, '$.attributes."moox.columns_explicit"'), '') <> 'true'
-		  AND NOT EXISTS (
-			SELECT 1 FROM t_view_columns view_column
-			WHERE view_column.c_space_id = t_views.c_space_id
-			  AND view_column.c_view_id = t_views.c_view_id
-		  )`, spaceID, datasetID)
-	return err
-}
-
-func (s *Store) bumpViewsForField(ctx context.Context, spaceID, fieldID string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE t_views
-		SET c_desired_view_revision = CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END,
-			c_attrs_json = json_set(c_attrs_json, '$.desired_view_revision', CAST(CASE WHEN c_desired_view_revision = 0 THEN 1 ELSE c_desired_view_revision + 1 END AS TEXT))
-		WHERE c_space_id = ? AND EXISTS (
-			SELECT 1
-			FROM t_dataset_columns column_ref
-			WHERE column_ref.c_space_id = t_views.c_space_id
-			  AND column_ref.c_origin_type = 'field'
-			  AND column_ref.c_origin_id = ?
-			  AND column_ref.c_dataset_id = t_views.c_dataset_id
-		)`, spaceID, fieldID)
-	return err
 }
 
 func (s *Store) ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {

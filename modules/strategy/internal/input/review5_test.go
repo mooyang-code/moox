@@ -158,7 +158,7 @@ func TestRangeLoaderReportsIndexChange(t *testing.T) {
 
 // View 的代次由活动索引与激活它的构建 ID 组成；没有构建 ID 时退化为活动索引。
 func TestGetViewReadsGeneration(t *testing.T) {
-	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active", ActiveIndexId: "idx_a", Attributes: map[string]string{"moox.active_build_id": "build-7"}}}
+	metadata := &metadataStub{view: &storagepb.View{ViewId: "view", DatasetId: "ds", Freq: "1h", Status: "active", ActiveIndexId: "idx_a", Attributes: map[string]string{"moox.index_generation": "build-7"}}}
 	info, err := (&RPCClient{Metadata: metadata}).GetView(context.Background(), "space", "view")
 	if err != nil || info.Generation != "idx_a@build-7" {
 		t.Fatalf("代次应带构建 ID：%q err=%v", info.Generation, err)

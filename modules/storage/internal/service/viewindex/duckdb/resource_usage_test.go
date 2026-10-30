@@ -17,7 +17,7 @@ import (
 )
 
 func usageTestIndexID(view string) string {
-	return viewindex.ViewIndexID("crypto", view, viewindex.SlotA)
+	return viewindex.ViewIndexID("crypto", view)
 }
 
 func TestUsageReportSummarizesAndFlagsOnlyTheIndexesThatNeedAttention(t *testing.T) {
@@ -44,7 +44,7 @@ func TestUsageReportSummarizesAndFlagsOnlyTheIndexesThatNeedAttention(t *testing
 		}
 	}
 	// 内存最多的三个，按用量从大到小，索引 ID 被还原成 空间/View/槽位。
-	order := []string{"crypto/service_metrics/a 900MB", "crypto/kline_1m/a 800MB", "crypto/factor_1m/a 120MB"}
+	order := []string{"crypto/service_metrics 900MB", "crypto/kline_1m 800MB", "crypto/factor_1m 120MB"}
 	last := -1
 	for _, want := range order {
 		at := strings.Index(summary, want)
@@ -56,10 +56,10 @@ func TestUsageReportSummarizesAndFlagsOnlyTheIndexesThatNeedAttention(t *testing
 	if strings.Contains(summary, "kline_1h") || strings.Contains(summary, "host_disk") {
 		t.Errorf("汇总行只列前 %d 个：%s", topUsageIndexes, summary)
 	}
-	if !strings.Contains(lines[1], "发生磁盘溢出") || !strings.Contains(lines[1], "crypto/service_metrics/a") || !strings.Contains(lines[1], "溢出=35MB") {
+	if !strings.Contains(lines[1], "发生磁盘溢出") || !strings.Contains(lines[1], "crypto/service_metrics") || !strings.Contains(lines[1], "溢出=35MB") {
 		t.Errorf("溢出行不对：%s", lines[1])
 	}
-	if !strings.Contains(lines[2], "内存接近上限") || !strings.Contains(lines[2], "crypto/kline_1m/a") {
+	if !strings.Contains(lines[2], "内存接近上限") || !strings.Contains(lines[2], "crypto/kline_1m") {
 		t.Errorf("接近上限行不对：%s", lines[2])
 	}
 }

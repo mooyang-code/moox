@@ -45,30 +45,6 @@ func (s *Service) NoteAppliedPosition(spaceID, viewID, indexID, nodeID, storeID 
 	}
 }
 
-// inheritAppliedFence 在活动索引从 from 切换到 to 时，把 from 的写入围栏并入 to（逐个来源取较大值）。to 在开始双写
-// 之后才从 Primary 回填，行事件又在 Primary 提交之后才发出，所以 from 在那之前写入的行 to 的回填都有，此后的行两边都
-// 写；不并入的话，行在切换前写入、周期完成事件在切换后才到的就绪事件，要等同一来源的下一次行写入才放行（日线要等一个
-// 交易日）。例外：回填时 Primary 超时被跳过的标的（记日志）在 to 里缺行，并入与否都缺，并入只是不再拖延放行。索引 ID
-// 内含空间与 View，按索引 ID 匹配即可。A/B 槽位名在重建时复用：to 上一代留下的旧键不会大于 from 继承来的值，不影响结果。
-func (s *Service) inheritAppliedFence(from, to string) {
-	if from == "" || to == "" || from == to {
-		return
-	}
-	s.appliedFenceMu.Lock()
-	defer s.appliedFenceMu.Unlock()
-	for key, seq := range s.appliedFence {
-		if key.indexID != from {
-			continue
-		}
-		target := key
-		target.indexID = to
-		if seq > s.appliedFence[target] {
-			s.appliedFence[target] = seq
-			s.appliedDirty = true
-		}
-	}
-}
-
 // readyPublishTimeout 限制单条就绪事件的发布等待。不设截止时间的 JetStream 发布在确认丢失（EventBus 重启、
 // 断网）时会一直挂起；刷新持有串行锁，挂起会让所有 View 的投递排在后面。
 var readyPublishTimeout = 10 * time.Second
@@ -387,15 +363,9 @@ func (s *Service) noteAppliedFromPayload(spaceID string, payload *storagepb.Data
 		if runtime == nil {
 			continue
 		}
-		// 索引的选择与两个围栏的更新必须在同一次 runtime.mu 临界区内完成（锁方向 runtime.mu → appliedFenceMu，与
-		// inheritAppliedFence 一致）：释放锁之后再更新，激活可以在两者之间继承并落盘围栏，落盘的快照里旧索引已推进、新索引
-		// 还没有；随后激活提交、进程退出，重启后活动索引是新索引，围栏却缺了这一行，对应的周期事件会一直等下去。
 		runtime.mu.Lock()
-		if activeID := runtime.active; activeID != "" {
-			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), activeID, payload.GetNodeId(), payload.GetStoreId(), payload.GetSequence())
-		}
-		if nextID := runtime.next; nextID != "" {
-			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), nextID, payload.GetNodeId(), payload.GetStoreId(), payload.GetSequence())
+		if indexID := runtime.writeTargetLocked(); indexID != "" {
+			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), indexID, payload.GetNodeId(), payload.GetStoreId(), payload.GetSequence())
 		}
 		runtime.mu.Unlock()
 	}

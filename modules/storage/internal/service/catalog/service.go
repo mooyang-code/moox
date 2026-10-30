@@ -22,7 +22,6 @@ type Service struct {
 	// refreshOverride 仅供测试替换缓存刷新实现
 	refreshOverride func(context.Context) error
 	nodeAuthSecret  string
-	operatorSecret  string
 	viewAuthSecret  string
 	nodeState       NodeStateChecker
 	retention       storagepolicy.Retention
@@ -30,10 +29,6 @@ type Service struct {
 
 type Options struct {
 	AuthSecret string
-	// OperatorAuthSecret authenticates expensive admin/CLI metadata actions.
-	// It is separate from the DataNode registration secret used by the
-	// storage-primary role.
-	OperatorAuthSecret string
 	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
 	ViewAuthSecret   string
 	NodeStateChecker NodeStateChecker
@@ -50,10 +45,6 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if secret == "" {
 		secret = os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 	}
-	operatorSecret := options.OperatorAuthSecret
-	if operatorSecret == "" {
-		operatorSecret = os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	}
 	viewSecret := options.ViewAuthSecret
 	if viewSecret == "" {
 		viewSecret = os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
@@ -64,7 +55,7 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if options.Retention.Defaults == nil {
 		options.Retention = storagepolicy.Default().Retention
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker, retention: options.Retention}, nil
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker, retention: options.Retention}, nil
 }
 
 // withRetention returns a copy of dataset carrying its effective retention.

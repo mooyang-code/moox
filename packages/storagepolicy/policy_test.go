@@ -111,10 +111,8 @@ func TestValidateRequiresCompleteDefaultsAndCanonicalKeys(t *testing.T) {
 		"alias space override":   mutate(func(p *Policy) { p.Retention.Spaces["stockcn"]["1M"] = "30d" }),
 		"invalid period":         mutate(func(p *Policy) { p.Retention.Defaults["1m"] = "7 days" }),
 		"blank space":            mutate(func(p *Policy) { p.Retention.Spaces[" "] = map[string]string{"1m": "1d"} }),
-		"trim not above bars":    mutate(func(p *Policy) { p.View.TrimBars = p.View.Bars }),
 		"no bars":                mutate(func(p *Policy) { p.View.Bars = 0 }),
 		"fast maintenance check": mutate(func(p *Policy) { p.View.MaintenanceCheckInterval = "10s" }),
-		"jitter over interval":   mutate(func(p *Policy) { p.View.CapacityCheckJitter = "2h" }),
 		"no file limit":          mutate(func(p *Policy) { p.View.MaxViewFileBytes = 0 }),
 	}
 	for name, policy := range cases {
@@ -148,14 +146,6 @@ func TestEncodeParseRoundTripIsCanonical(t *testing.T) {
 	}
 	if _, err := Parse([]byte(`{"retention":{"defaults":{}},"view":{},"extra":1}`)); err == nil {
 		t.Fatal("unknown fields must be rejected")
-	}
-}
-
-func TestTrimBarsFor(t *testing.T) {
-	for bars, want := range map[uint64]uint64{5000: 6000, 1: 2, 7: 9, 10: 12} {
-		if got := TrimBarsFor(bars); got != want {
-			t.Errorf("TrimBarsFor(%d) = %d, want %d", bars, got, want)
-		}
 	}
 }
 

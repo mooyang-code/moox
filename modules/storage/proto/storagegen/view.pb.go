@@ -219,7 +219,7 @@ type QueryTimeSeriesRowsReq struct {
 	Limit uint32 `protobuf:"varint,10,opt,name=limit,proto3" json:"limit,omitempty"`
 	// total_mode 控制是否计算精确总数。
 	TotalMode commonpb.TotalMode `protobuf:"varint,11,opt,name=total_mode,json=totalMode,proto3,enum=trpc.moox.common.TotalMode" json:"total_mode,omitempty"`
-	// pin 钉住多页读取使用的索引版本：与当前活动索引不一致（A/B 切换或原地更新）表示索引已变化，
+	// pin 钉住多页读取使用的索引版本：与当前活动索引不一致（行被写入、修正或删除）表示索引已变化，
 	// 调用方必须从头重读，不能混用两个版本的页。
 	Pin *IndexVersion `protobuf:"bytes,12,opt,name=pin,proto3" json:"pin,omitempty"`
 }

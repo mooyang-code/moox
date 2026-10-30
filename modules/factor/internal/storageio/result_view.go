@@ -12,15 +12,12 @@ import (
 
 // 默认 View 由 factor-mgr 自己建、改、删：Storage 不再替因子结果数据集托管 View。
 // 这些属性告诉 Storage 怎么维护它，Storage 不认识“因子”：
-//   - follow_dataset_columns：数据集加列后 View 原地扩展；
-//   - rebuild_source=primary：重建只从主库历史来（结果可以先空着，活动索引不一定完整）；
+//   - follow_dataset_columns：数据集加列后 View 跟着加列；
 //   - maintenance_priority：维护顺序，数字越小越先，因子结果排在采集结果之后。
 const (
-	ViewAttrFollowColumns        = "follow_dataset_columns"
-	ViewAttrRebuildSource        = "rebuild_source"
-	ViewAttrMaintenancePriority  = "maintenance_priority"
-	defaultResultViewPriority    = "10"
-	defaultResultViewRebuildFrom = "primary"
+	ViewAttrFollowColumns       = "follow_dataset_columns"
+	ViewAttrMaintenancePriority = "maintenance_priority"
+	defaultResultViewPriority   = "10"
 )
 
 // DefaultResultViewID 是结果数据集的默认 View ID：view_<数据集 ID 去掉 dataset_ 前缀>。
@@ -86,7 +83,6 @@ func (c *Client) EnsureResultView(ctx context.Context, spaceID, datasetID string
 			"owner_module":              "factor",
 			"view_role":                 "factor_result", // 页面按它找到结果 View；Storage 不读
 			ViewAttrFollowColumns:       "true",
-			ViewAttrRebuildSource:       defaultResultViewRebuildFrom,
 			ViewAttrMaintenancePriority: defaultResultViewPriority,
 		},
 	}})

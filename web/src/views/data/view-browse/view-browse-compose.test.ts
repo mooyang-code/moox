@@ -14,9 +14,7 @@ vi.mock("@/api/storage/metadata", () => ({
   listAllViewColumns: mocks.columns,
   listFields: vi.fn().mockResolvedValue({ fields: [] }),
   listAllDatasets: vi.fn(),
-  listAllViews: vi.fn(),
-  listViewRebuildLogs: vi.fn(),
-  requestViewRebuild: vi.fn()
+  listAllViews: vi.fn()
 }));
 vi.mock("@/api/storage/view", () => ({ queryTimeSeriesRows: mocks.queryTimeSeries, searchRecordRows: vi.fn() }));
 vi.mock("@/store/modules/space", () => ({

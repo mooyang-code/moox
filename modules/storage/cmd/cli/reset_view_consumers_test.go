@@ -30,18 +30,16 @@ func TestValidateResetViewConsumersRequiresExplicitConfirmation(t *testing.T) {
 	}
 }
 
-func TestStageResetViewIndexesRestoresBothSlots(t *testing.T) {
+func TestStageResetViewIndexesRestoresIndex(t *testing.T) {
 	root := t.TempDir()
 	view := resetViewRecord{SpaceID: "crypto", ViewID: "kline", Engine: "duckdb"}
-	for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
-		id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, slot)
-		path := filepath.Join(root, "duckdb", id+".duckdb")
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	id := viewindex.ViewIndexID(view.SpaceID, view.ViewID)
+	path := filepath.Join(root, "duckdb", id+".duckdb")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(id), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	staging, moves, err := stageResetViewIndexes(root, []resetViewRecord{view})
 	if err != nil {
@@ -56,11 +54,8 @@ func TestStageResetViewIndexesRestoresBothSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.RemoveAll(staging)
-	for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
-		id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, slot)
-		if _, err := os.Stat(filepath.Join(root, "duckdb", id+".duckdb")); err != nil {
-			t.Fatalf("restored index missing: %v", err)
-		}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("restored index missing: %v", err)
 	}
 }
 
@@ -217,15 +212,14 @@ func resetE2EFixture(t *testing.T, storageViewReady bool) (opts resetViewConsume
 	}
 	if _, err := db.Exec(`
 CREATE TABLE t_views (
-  c_space_id TEXT, c_view_id TEXT, c_engine TEXT, c_status TEXT, c_dataset_id TEXT, c_active_index_id TEXT, c_desired_view_revision INTEGER,
-  c_active_view_revision INTEGER, c_active_columns_json TEXT, c_active_view_schema_hash TEXT,
-  c_active_slot TEXT, c_indexed_from TEXT, c_indexed_to TEXT, c_attrs_json TEXT, c_mtime TEXT,
+  c_space_id TEXT, c_view_id TEXT, c_engine TEXT, c_status TEXT, c_dataset_id TEXT, c_active_index_id TEXT,
+  c_view_revision INTEGER, c_active_columns_json TEXT, c_active_view_schema_hash TEXT,
+  c_indexed_from TEXT, c_indexed_to TEXT, c_attrs_json TEXT, c_mtime TEXT,
   PRIMARY KEY(c_space_id,c_view_id));
-CREATE TABLE t_view_index_builds (c_space_id TEXT, c_view_id TEXT);
 CREATE TABLE t_view_period_dataset_states (c_space_id TEXT, c_view_id TEXT);
 CREATE TABLE t_view_sync_points (c_space_id TEXT, c_view_id TEXT);
-INSERT INTO t_views (c_space_id,c_view_id,c_engine,c_status,c_dataset_id,c_active_index_id,c_desired_view_revision,c_attrs_json)
-VALUES ('crypto','view','duckdb','active','ds_a','view_a',3,'{"space_id":"crypto","view_id":"view","desired_view_revision":3}');`); err != nil {
+INSERT INTO t_views (c_space_id,c_view_id,c_engine,c_status,c_dataset_id,c_active_index_id,c_attrs_json)
+VALUES ('crypto','view','duckdb','active','ds_a','view_a','{"space_id":"crypto","view_id":"view"}');`); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()

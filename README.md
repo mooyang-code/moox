@@ -188,7 +188,7 @@ Agent 将按照 [安装与初始化](skills/moox/references/install.md) 完成�
 
 ![首页](docs/public/screenshots/home.webp)
 
-**采集结果**：按数据集查看已入库的 K 线，支持按标的、时间与价格条件检索，支持触发视图重建。
+**采集结果**：按数据集查看已入库的 K 线，支持按标的、时间与价格条件检索。
 
 ![采集结果](docs/public/screenshots/collect-results.webp)
 

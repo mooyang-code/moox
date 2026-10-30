@@ -18,6 +18,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+type subjectPublisherFunc func(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error)
+
+func (f subjectPublisherFunc) Publish(ctx context.Context, event events.Event, payload proto.Message, opts events.PublishOptions) (*jetstream.PublishAck, error) {
+	return f(ctx, event, payload, opts)
+}
+
 func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	ctx := context.Background()
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "secret")
@@ -47,7 +53,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	// write against the activated index publishes, and that row is already
 	// queryable inside the publisher callback.
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
-	require.NoError(t, svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
+	require.NoError(t, svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", Engine: "duckdb", ActiveIndexId: "prices-a", ViewRevision: 1, ActiveViewSchemaHash: "schema", ActiveColumns: columns, Status: "active"}))
 	svc.readyPublisher = subjectPublisherFunc(func(ctx context.Context, _ events.Event, _ proto.Message, _ events.PublishOptions) (*jetstream.PublishAck, error) {
 		rows, err := svc.query(ctx, "prices-a", []*pb.RowKey{row.Key}, nil)
 		require.NoError(t, err)
@@ -56,7 +62,6 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 		published = true
 		return &jetstream.PublishAck{}, nil
 	})
-	require.NoError(t, svc.ReplayPendingSubjects(ctx))
 	require.False(t, published, "rebuild leftover journal must not emit ready events")
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.False(t, published, "row writes no longer publish subject-ready")

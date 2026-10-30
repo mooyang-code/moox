@@ -43,7 +43,7 @@ export function applyPageResult(pagination: AdminPagination, page?: PageResultTo
 export function statusColor(status?: string) {
   if (status === "active") return "green";
   if (status === "disabled") return "orange";
-  if (status === "failed") return "red";
+  if (status === "failed" || status === "deleted") return "red";
   if (status === "building") return "blue";
   return "gray";
 }
@@ -56,6 +56,8 @@ export function statusLabel(status?: string) {
     case "disabled":
     case "inactive":
       return "已停用";
+    case "deleted":
+      return "已删除";
     default:
       return status || "-";
   }
@@ -86,6 +88,9 @@ export const statusOptions: SelectOption[] = [
   { label: "启用", value: "active" },
   { label: "禁用", value: "disabled" }
 ];
+
+// 字段只在逻辑上删除，字段管理要能看到已删除的字段。
+export const fieldStatusOptions: SelectOption[] = [...statusOptions, { label: "已删除", value: "deleted" }];
 
 export const dataKindOptions: SelectOption<DataKind>[] = [
   { label: "记录", value: "DATA_KIND_RECORD", aliases: [1, "record"] },

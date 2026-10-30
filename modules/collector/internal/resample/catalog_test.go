@@ -161,8 +161,8 @@ func (f *catalogMetadataFake) UpsertViewColumn(_ context.Context, req *storagepb
 	}
 	view := f.views[req.GetColumn().GetViewId()]
 	if view != nil {
-		view.DesiredViewRevision++
-		view.ActiveViewRevision = view.DesiredViewRevision
+		view.ActiveColumns = append(view.ActiveColumns, req.GetColumn())
+		view.Columns = append(view.Columns, req.GetColumn())
 		view.ActiveIndexId = "idx"
 		view.Status = "active"
 	}
@@ -269,25 +269,26 @@ func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
 }
 
 func TestTargetViewRevisionReadyRequiresActiveIndexAndRevision(t *testing.T) {
-	assert.False(t, targetViewRevisionReady(&storagepb.View{Status: "active", ActiveViewRevision: 2, ActiveIndexId: "idx"}, 3))
-	assert.False(t, targetViewRevisionReady(&storagepb.View{Status: "active", ActiveViewRevision: 3}, 3))
-	assert.False(t, targetViewRevisionReady(&storagepb.View{Status: "building", ActiveViewRevision: 3, ActiveIndexId: "idx"}, 3))
-	assert.False(t, targetViewRevisionReady(&storagepb.View{Status: "active", DesiredViewRevision: 4, ActiveViewRevision: 3, ActiveIndexId: "idx"}, 3))
-	assert.True(t, targetViewRevisionReady(&storagepb.View{Status: "active", ActiveViewRevision: 3, ActiveIndexId: "idx"}, 3))
+	declared := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}}
+	built := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}, {ColumnName: "volume"}}
+	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: declared[:1], ActiveIndexId: "idx"}, declared), "还有列没建进索引")
+	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: built}, declared), "索引还没建成")
+	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "building", ActiveColumns: built, ActiveIndexId: "idx"}, declared))
+	assert.True(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: built, ActiveIndexId: "idx"}, declared))
 }
 
 func TestWaitTargetViewRevisionPollsUntilDesiredIndexIsActive(t *testing.T) {
 	getter := &fakeViewGetter{views: []*storagepb.View{
-		{Status: "active", DesiredViewRevision: 3, ActiveViewRevision: 2, ActiveIndexId: "idx-a"},
-		{Status: "active", DesiredViewRevision: 3, ActiveViewRevision: 3, ActiveIndexId: "idx-b"},
+		{Status: "active", ActiveIndexId: "idx"},
+		{Status: "active", ActiveIndexId: "idx", ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "close"}}},
 	}}
-	require.NoError(t, waitTargetViewRevision(context.Background(), getter, nil, "crypto", "view", 3, 500*time.Millisecond))
+	require.NoError(t, waitTargetViewColumns(context.Background(), getter, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 500*time.Millisecond))
 	assert.Equal(t, 1, getter.index)
 }
 
 func TestWaitTargetViewRevisionReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
-	getter := &fakeViewGetter{views: []*storagepb.View{{Status: "active", DesiredViewRevision: 2, ActiveViewRevision: 1, ActiveIndexId: "idx"}}}
-	err := waitTargetViewRevision(context.Background(), getter, nil, "crypto", "view", 2, 20*time.Millisecond)
+	getter := &fakeViewGetter{views: []*storagepb.View{{Status: "active", ActiveIndexId: "idx"}}}
+	err := waitTargetViewColumns(context.Background(), getter, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 20*time.Millisecond)
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
 }
 

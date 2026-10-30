@@ -57,10 +57,6 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_views(c_space_id,c_view_id,c_name,c_dataset_id) VALUES ('target','view','View','dataset');
 		INSERT INTO t_view_columns(c_space_id,c_view_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
 			VALUES ('target','view','value','dataset_column','dataset.value','double');
-		INSERT INTO t_view_index_builds(
-			c_space_id,c_view_id,c_build_id,c_index_id,c_engine,c_target_view_version,c_state,
-			c_owner_id,c_new_slot,c_status,c_started_at,c_updated_at
-		) VALUES ('target','view','build','index','duckdb',1,1,'owner','slot-b','building','now','now');
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +67,7 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 	for _, table := range []string{
 		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
 		"t_field_groups", "t_fields", "t_datasets",
-		"t_dataset_columns", "t_views", "t_view_columns", "t_view_index_builds",
+		"t_dataset_columns", "t_views", "t_view_columns",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {

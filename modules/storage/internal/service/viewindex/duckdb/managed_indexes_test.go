@@ -22,8 +22,8 @@ func TestListManagedIndexesReturnsOnlyOfficialDuckDBFiles(t *testing.T) {
 	defer manager.Close()
 
 	ids := []string{
-		viewindex.ViewIndexID("space", "prices", viewindex.SlotA),
-		viewindex.ViewIndexID("space", "prices", viewindex.SlotB),
+		viewindex.ViewIndexID("space", "prices"),
+		viewindex.ViewIndexID("space", "volumes"),
 	}
 	for _, id := range ids {
 		if err := os.WriteFile(filepath.Join(root, id+".duckdb"), nil, 0o600); err != nil {

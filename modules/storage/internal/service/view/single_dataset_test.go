@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/catalog"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -51,7 +50,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret", OperatorAuthSecret: "secret"})
+	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret"})
 	require.NoError(t, err)
 
 	closeCol := &pb.ViewColumn{
@@ -103,30 +102,6 @@ func TestSingleDatasetView(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), "a View may only index columns of its own dataset")
 		require.Contains(t, rsp.GetRetInfo().GetMsg(), `view column "pe" is not an active column of dataset dataset_prices`)
-	})
-
-	t.Run("rebuild keeps freq and projection", func(t *testing.T) {
-		got, err := svc.GetView(ctx, &pb.GetViewReq{SpaceId: "space", ViewId: "view_close"})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_SUCCESS, got.GetRetInfo().GetCode())
-		require.Equal(t, "1m", got.GetView().GetFreq())
-
-		rebuild, err := svc.RequestViewRebuild(ctx, &pb.RequestViewRebuildReq{
-			AuthInfo: &pb.AuthInfo{AppId: "admin-gateway", AppKey: datanode.ServiceAuthKey("secret", "admin-gateway")},
-			SpaceId:  "space", ViewId: "view_close",
-		})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_SUCCESS, rebuild.GetRetInfo().GetCode(), rebuild.GetRetInfo().GetMsg())
-
-		after, err := svc.GetView(ctx, &pb.GetViewReq{SpaceId: "space", ViewId: "view_close"})
-		require.NoError(t, err)
-		require.Equal(t, "1m", after.GetView().GetFreq())
-		require.Equal(t, prices.GetDatasetId(), after.GetView().GetDatasetId())
-		cols, err := svc.ListViewColumns(ctx, &pb.ListViewColumnsReq{SpaceId: "space", ViewId: "view_close"})
-		require.NoError(t, err)
-		require.Equal(t, pb.ErrorCode_SUCCESS, cols.GetRetInfo().GetCode())
-		require.Len(t, cols.GetColumns(), 1)
-		require.Equal(t, "close", cols.GetColumns()[0].GetColumnName())
 	})
 
 	t.Run("deleting one view keeps dataset and the other view", func(t *testing.T) {

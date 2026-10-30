@@ -67,16 +67,11 @@ type StorageView struct {
 	MaxWorkers    int `yaml:"max_workers"`
 	MaxAckPending int `yaml:"max_ack_pending"`
 	AckWaitMS     int `yaml:"ack_wait_ms"`
-	// BackfillPageSize bounds each Primary history page during a View rebuild.
-	// Smaller pages reduce the instantaneous point-read and index-write burst.
+	// BackfillPageSize 限制首次建索引时每页读取的 Primary 历史行数，页越小点读和写索引的突发越小。
 	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
 	BackfillRequestInterval string `yaml:"backfill_request_interval"`
 	// DeleteOldestBatchSize 是定时删除最旧数据时每批最多删除的行数；未配置时取默认值 2000。
-	DeleteOldestBatchSize int    `yaml:"delete_oldest_batch_size"`
-	RebuildMaxPending     uint64 `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks     uint32 `yaml:"rebuild_idle_checks"`
-	rebuildMaxPendingSet  bool
-	rebuildIdleChecksSet  bool
+	DeleteOldestBatchSize int `yaml:"delete_oldest_batch_size"`
 }
 
 // ValidateConsumer 校验全局消费参数：都为正数，且单次拉取数不超过未确认上限。
@@ -87,26 +82,6 @@ func (v StorageView) ValidateConsumer() error {
 	if v.FetchBatch > v.MaxAckPending {
 		return fmt.Errorf("storage view fetch_batch %d exceeds max_ack_pending %d", v.FetchBatch, v.MaxAckPending)
 	}
-	return nil
-}
-
-func (v StorageView) HasRebuildMaxPendingSetting() bool { return v.rebuildMaxPendingSet }
-func (v StorageView) HasRebuildIdleChecksSetting() bool { return v.rebuildIdleChecksSet }
-
-// UnmarshalYAML distinguishes omitted rebuild limits from explicit zero values.
-func (v *StorageView) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	type plain StorageView
-	var decoded plain
-	if err := unmarshal(&decoded); err != nil {
-		return err
-	}
-	var raw map[interface{}]interface{}
-	if err := unmarshal(&raw); err != nil {
-		return err
-	}
-	*v = StorageView(decoded)
-	_, v.rebuildMaxPendingSet = raw["rebuild_max_pending"]
-	_, v.rebuildIdleChecksSet = raw["rebuild_idle_checks"]
 	return nil
 }
 
@@ -173,12 +148,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
 		c.View.BackfillRequestInterval = "100ms"
-	}
-	if c.View.RebuildMaxPending == 0 && !c.View.rebuildMaxPendingSet {
-		c.View.RebuildMaxPending = 32
-	}
-	if c.View.RebuildIdleChecks == 0 && !c.View.rebuildIdleChecksSet {
-		c.View.RebuildIdleChecks = 3
 	}
 	if c.Health.Addr == "" {
 		c.Health.Addr = ":20210"

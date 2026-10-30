@@ -33,9 +33,9 @@ Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 `purge-dataset --space <空间> --dataset <数据集> --yes` 用因子管理端自己的网关身份删除一个因子结果数据集（行和元数据，不可恢复）：
 只用于清理没有因子任务引用的孤立结果数据集（例如重建因子库后遗留的旧结果），仍被因子任务引用的会被拒绝。
 
-## 清理 Storage View 积压并触发 A/B 重建
+## 清理 Storage View 积压
 
-当某个 Storage View 的消费积压、View 不再追赶 Source，或需要重新触发一次安全重建时，使用：
+当某个 Storage View 的消费积压、View 不再追赶 Source 时，使用：
 
 ```bash
 moox-cli storage repair-view \
@@ -54,10 +54,9 @@ moox-cli storage repair-view \
 1. 停止 `storage-view`。
 2. 备份 Metadata SQLite。
 3. 删除目标数据集对应的 durable consumer（`view_<12 位十六进制>`）。
-4. 递增 View desired revision，交由服务正常执行 A/B 构建和切换。
-5. 重启 `storage-view`。
+4. 重启 `storage-view`。
 
-默认不会删除 active 物理索引；输出中的 `backup_path` 是回滚和问题复盘所需的关键证据。
+默认不会删除物理索引；输出中的 `backup_path` 是回滚和问题复盘所需的关键证据。
 
 先检查目标 View 和将要执行的动作：
 
@@ -84,23 +83,21 @@ moox-cli storage repair-view \
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
 | `--timeout` | `2m` | 总操作超时 |
 | `--reset-consumer` | `true` | 删除 durable consumer |
-| `--force-rebuild` | `true` | 递增 desired revision |
 | `--restart` | `true` | 重启 `storage-view` |
-| `--purge-inactive-index` | `false` | 只删除 inactive 物理索引 |
-| `--reset-view-indexes` | `false` | 删除 A/B 两个物理索引并从事件重建 |
+| `--reset-view-indexes` | `false` | 删除物理索引，重启后从 Primary 重新建，期间 View 不可读 |
 | `--yes` | `false` | 执行变更确认 |
 | `--dry-run` | `false` | 只检查，不停止服务、不改状态 |
 
 ## 高风险选项
 
-`--reset-view-indexes` 不是常规积压清理。它会清空 Metadata active 指针并删除 A/B 物理索引，只有在确认 JetStream 仍保留完整 Source 事件时才可以使用，并且必须同时指定：
+`--reset-view-indexes` 不是常规积压清理。它会清空 Metadata active 指针并删除物理索引，View 在重新建好之前不可读，并且必须同时指定：
 
 ```bash
 moox-cli storage repair-view ... \
   --reset-view-indexes --deliver-policy=all --yes
 ```
 
-`--purge-inactive-index` 只清理 inactive 槽位；不要手工删除 active DuckDB/Bleve 文件。A/B 切换、双写和旧索引延迟清理由 Storage View 自己完成。
+不要手工删除 DuckDB/Bleve 文件；已删除 View 的索引由 Storage View 的清理定时器回收。
 
 ## 精确清理单个 Dataset 的历史事件
 
@@ -134,12 +131,12 @@ moox-cli storage force-rebuild-view \
 ```
 
 确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
-删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
-重新消费 Source 事件；原 View 历史数据不可恢复。
+删除 durable consumer、清空 View active/period/sync 状态、删除物理索引，重启后从 Primary 回填每个序列最近的行，
+并以 `DeliverAll` 重新消费 Source 事件；Primary 已不保留的行不可恢复。记录型 View（Bleve）没有可读的 Primary 历史，重新建后为空。
 **新建 View、给 View 加标的、调大 `view_rows_per_series` 或放宽 `[storage_view.max_age]` 前要核对内存余量**：`storage-view` 没有代码配置的进程级总预算，单索引 `memory_limit` 也不是进程 RSS 的硬上界。
-历史记录（2026-10-28，未在本次审查中重测）为文件 2.7GB、常驻 7.8GB、主机 15.5GB；稳态 2.5～3 倍、重建/回填额外预留最大索引的 1～1.5 倍，只是相近负载的粗估，不是源码保证。
-可按“序列数 × `view_rows_per_series` 行”初估行数；每行 100～150 字节是历史压缩样本，实际取决于字段和数据。用 `docs/部署与运维.md`“Storage 主机内存要求”的经验公式起步，再测量目标负载的 RSS 和重建峰值；余量不足先升配或缩小 View。
-重建按 `view_rows_per_series` 从 Primary 读取每个序列最近的行，再按 `max_age` 过滤；历史不足或行已超龄时，以实际留下的数据激活，不保证凑满 N 根。
+历史记录（2026-10-28，未在本次审查中重测）为文件 2.7GB、常驻 7.8GB、主机 15.5GB；稳态 2.5～3 倍、首次建索引额外预留最大索引的 1～1.5 倍，只是相近负载的粗估，不是源码保证。
+可按“序列数 × `view_rows_per_series` 行”初估行数；每行 100～150 字节是历史压缩样本，实际取决于字段和数据。用 `docs/部署与运维.md`“Storage 主机内存要求”的经验公式起步，再测量目标负载的 RSS 和建索引峰值；余量不足先升配或缩小 View。
+建索引按 `view_rows_per_series` 从 Primary 读取每个序列最近的行，再按 `max_age` 过滤；历史不足或行已超龄时，以实际留下的数据建成，不保证凑满 N 根。
 
 ## 下线单个 View
 
@@ -154,7 +151,7 @@ moox-cli storage force-rebuild-view \
   --yes
 ```
 
-命令只删指定的一个 View 及其列、构建与重建日志（外键级联），输出待回收的 `engine/index_id`；物理 A/B 文件由 `storage-view` 的清理定时器在确认无引用后回收。
+命令只删指定的一个 View 及其列（外键级联），输出待回收的 `engine/index_id`；物理文件由 `storage-view` 的清理定时器在确认无引用后回收。
 **不要用 `retain-views` 删单个 View**：它会删除所有不在保留清单里的 View，生产上的因子结果视图也会被删掉。删除前先备份元数据库。
 
 ## 收敛默认 View 集合
@@ -176,17 +173,15 @@ moox-cli storage force-rebuild-view \
 ```
 
 命令要求精确传入七个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
-中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
-物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
+中的非保留 View 和列，输出待清理的 `engine/index_id`；不会直接删除
+物理文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 
-Storage 服务的时序 View 默认按所有频率回溯 `10000` 根；任一序列超过 `12000`（ceil(1.2 × 10000)）根时触发安全重建。
-昂贵的序列容量扫描默认每个 Storage View 进程、View 和 active index 每小时至多执行一次，首次扫描
-在一小时范围内随机错峰；轻量 View Maintainer 仍按 `maintenance_check_interval` 默认每分钟运行。可在根目录
-`moox.toml` 的 `[storage_retention] view_rows_per_series` 统一调整，适用于自动 A/B、启动恢复和手动
-重建。回填按游标分页，同一标的可以跨页；DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，扫描量按
-「序列数 × 根数」增长，不扫描全部历史。Primary 历史不足配置根数，或回填行被 `[storage_view.max_age]` 过滤时，以实际留下的数据激活；后续实时事件继续更新，但不保证填满 N 根。
+Storage 服务的时序 View 每个序列保留最近 `10000` 根，由每分钟的定时任务删除更旧的行（偶数分钟第 10 秒执行，每批行数见 `storage.view.delete_oldest_batch_size`）。
+可在根目录 `moox.toml` 的 `[storage_retention] view_rows_per_series` 统一调整；调大后已有索引的行不会变多，要 `force-rebuild-view` 才回填到新根数。
+回填按游标分页，同一标的可以跨页；DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，扫描量按
+「序列数 × 根数」增长，不扫描全部历史。Primary 历史不足配置根数，或回填行被 `[storage_view.max_age]` 过滤时，以实际留下的数据建成；后续实时事件继续更新，但不保证填满 N 根。
 年龄过滤以处理批次时的时钟为准，早于截止点的行被丢弃，等于截止点保留；全部被过滤仍返回成功，不代表这些行已进入 View。此过滤不主动清理已有索引行，不改变 Primary 或因子机本地存储的保留行为。
-记录型 View（Bleve）不按根数，整体重建。
+记录型 View（Bleve）不按根数。
 
 ## Agent 处理顺序
 
