@@ -84,13 +84,14 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
 - Storage 三个名字：构建 `storage-primary`，再用 `--name moox-storage-primary|moox-storage-node|moox-storage-view` 各装一次保持一致；
   只重启需要的那个（例如只改 View 逻辑就只给 `storage-view` 加 `--restart storage-view`，前两个用 `--no-restart`）。
   重启 `storage-primary`、`storage-node` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
-- 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 重建。
+- 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 首次建索引。
 
 ## 发布清单的重新封存
 
 单元工具（`deploy-host`、`deploy-unit`、`bootstrap --release`）会核对已安装发布的文件清单（`prepared.json`）。`install` 与 `rollback`
 在组件重启核对之后，会调用该主机 `host/current/bin/moox-runtime reseal --unit-root <单元> --yes` 把清单改成现状（输出 `RESEALED:`）。
 封存失败时二进制已经生效，脚本以 7 退出并给出手工补救命令；手工改配置之后也要执行同样的 `reseal`（不带 `--yes` 先看差异路径）。
+`reseal` 只接受权限为 0600、0644、0755 的文件，脚本替换配置后要改回原权限，否则报 `prepared release objects must be bounded owned regular files`。
 改写前的清单留在单元根目录的 `reseal-backups/` 下。
 
 ## 服务目录变化：必须整体发布
@@ -110,11 +111,10 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 1. 构建 `host-gateway admin monitor`（同一个提交）。
 2. 每台登记主机的 `host` 单元（包括因子机等只出站主机）：**`moox-host-gateway` 和 `moox-host-gateway-cli` 都装**（旧 cli 会拒绝新快照），重启 `host-gateway`；一台一台来，间隔约 15 秒，控制机最后。
 3. Admin 与 Monitor 连着装（先 Admin 后 Monitor），间隔不超过 1～2 分钟：两者之间 Monitor 与 Admin 的目录不一致，部署同步会停摆，窗口越短越好。
-   **控制机的 host-gateway 装完后可能起不来**：它启动时从还是旧版的 Admin 取初始路由快照，新目录校验不过就退出
+   **任何主机的 host-gateway 装完后都可能起不来**：它启动时从还是旧版的 Admin 取初始路由快照，新目录校验不过就退出
    （日志 `initial host snapshot unavailable: invalid host gateway snapshot: route differs from catalog or directory`，`status` 里 `host-gateway stopped`，
-   脚本不打印 `RESULT/READY`）。此时控制机上的组件跨主机调用全部中断，要立刻装 Admin，Admin 就绪后在控制机执行
-   `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
-   存储机和海外机的网关不受影响。
+   脚本不打印 `RESULT/READY`）。此时这台主机上的组件跨主机调用全部中断，要立刻装 Admin 和 Monitor，就绪后在这台主机执行
+   `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关，再手工 `reseal`（2026-10-15 控制机实测中断约 50 秒；2026-10-30 存储机同样发生，中断约 35 秒）。
 4. 外部白名单有变化时，再装存储机与海外机的 `access`（构建目标 `access`，一台一台来）。
 5. 核对：Admin 数据库的 `t_host_gateway_status` 里所有已启用主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `monitor deployment sync updated N checks`、没有 `catalog differs`。
 
