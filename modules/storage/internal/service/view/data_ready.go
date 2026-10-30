@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	storagepb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/proto"
 )
@@ -277,7 +278,7 @@ func (s *Service) hasPendingReady() bool {
 // SetSeriesBars 设置时序 View 每个序列保留的根数（0 表示默认值），随查询响应告知调用方；关闭维护时也要设置。
 func (s *Service) SetSeriesBars(bars uint64) {
 	if bars == 0 {
-		bars = defaultViewBars
+		bars = storagepolicy.DefaultViewBars
 	}
 	s.mu.Lock()
 	s.seriesBars = bars

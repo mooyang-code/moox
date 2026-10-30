@@ -366,6 +366,47 @@ func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *te
 	}
 }
 
+// 活动索引写成功、替换索引写失败时只丢弃替换构建：View 仍按活动索引服务，运行状态应回到 active。
+func TestReplacementFailureKeepsHealthyActiveViewActive(t *testing.T) {
+	engine := &existenceQueryEngine{queryEngine: &queryEngine{writeErrs: map[string]error{"prices-b": errors.New("replacement write failed")}}, exists: true}
+	svc, _ := queryTestService(engine, false)
+	svc.engines["query-test"] = engine
+	key := viewRef{spaceID: "space", viewID: "prices"}
+	svc.views[key] = &viewRuntime{}
+	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
+	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
+	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
+	svc.schemas["prices-b"] = svc.schemas["prices-a"]
+	svc.byData = map[datasetRef]map[string]struct{}{
+		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
+	}
+	metadata := &maintenanceMetadata{view: &pb.View{SpaceId: "space", ViewId: "prices", ActiveIndexId: "prices-a"}}
+	runtime := svc.views[key]
+	runtime.active = "prices-a"
+	runtime.next = "prices-b"
+	runtime.nextDatasetIDs = []string{"market"}
+	runtime.nextPrimaryDatasetID = "market"
+	runtime.status = "building"
+	runtime.buildID = "build-1"
+	runtime.ownerID = "owner-1"
+	runtime.metadata = metadata
+	runtime.metadataAuth = &pb.AuthInfo{AppId: "view"}
+	row := &pb.RowFieldUpsert{
+		Key:    timeSeriesTestRowKey("venue:binance"),
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+	}
+
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err != nil {
+		t.Fatalf("活动索引已写成功，投递应确认：%v", err)
+	}
+	if metadata.failCalls != 1 {
+		t.Fatalf("替换构建失败应持久化一次，实际 %d 次", metadata.failCalls)
+	}
+	if runtime.next != "" || runtime.nextDatasetIDs != nil || runtime.nextPrimaryDatasetID != "" || runtime.status != "active" || runtime.active != "prices-a" {
+		t.Fatalf("丢弃替换构建后运行状态不对：active=%q next=%q next_datasets=%v next_primary=%q status=%q", runtime.active, runtime.next, runtime.nextDatasetIDs, runtime.nextPrimaryDatasetID, runtime.status)
+	}
+}
+
 func TestFailedBuildCleanupDoesNotRemoveReusedSlotGeneration(t *testing.T) {
 	engine := &queryEngine{}
 	svc, _ := queryTestService(engine, false)

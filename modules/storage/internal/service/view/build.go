@@ -29,12 +29,8 @@ type backfillRequestLimiter struct {
 // primaryHistoryPageReadTimeout 限制一页 Primary 读取的耗时；超时则整次重建失败并重试，不静默跳过。
 const primaryHistoryPageReadTimeout = 60 * time.Second
 
-const (
-	// primaryReadPageSize 是重建时每页向 Primary 请求的行数，服务端再按值数量上限截断。
-	primaryReadPageSize = 5000
-	// maxLatestPerSeries 是 Primary 单次读取允许的每序列最近 N 根上限。
-	maxLatestPerSeries = 10000
-)
+// maxLatestPerSeries 是 Primary 单次读取允许的每序列最近 N 根上限。
+const maxLatestPerSeries = 10000
 
 func newBackfillRequestLimiter(interval time.Duration) *backfillRequestLimiter {
 	return &backfillRequestLimiter{interval: interval}
@@ -70,18 +66,18 @@ func (s *Service) BackfillView(ctx context.Context, spaceID, viewID string, batc
 }
 
 func (s *Service) BackfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader) error {
-	_, err := s.backfillViewWithReader(ctx, spaceID, viewID, batchSize, reader, nil, 0, defaultMaxHistoryScanRows)
+	_, err := s.backfillViewWithReader(ctx, spaceID, viewID, batchSize, reader, nil, 0)
 	return err
 }
 
-func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64) (uint64, error) {
-	return s.backfillViewWithReaderLimited(ctx, spaceID, viewID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, nil)
+func (s *Service) backfillViewWithReader(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars uint64) (uint64, error) {
+	return s.backfillViewWithReaderLimited(ctx, spaceID, viewID, batchSize, reader, rangeReader, bars, nil)
 }
 
 // backfillViewWithReaderLimited fills the pending index. A time-series View
 // takes the latest bars of every series from Primary; a record View copies
-// its active index.
-func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+// its active index. batchSize is the page size of either read.
+func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, viewID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -199,7 +195,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 		if strings.EqualFold(strings.TrimSpace(next.Engine()), "bleve") {
 			log.Printf("storage record View %s/%s starts empty: no Primary history reader", spaceID, viewID)
 		} else if primaryOnly {
-			written, err = s.backfillPrimaryOnlyHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
+			written, err = s.backfillPrimaryOnlyHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -207,7 +203,7 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 			if reader == nil {
 				return 0, errors.New("Primary field reader is required for a time-series View rebuild")
 			}
-			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
+			written, err = s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, limiter)
 			if err != nil {
 				return written, err
 			}
@@ -223,12 +219,12 @@ func (s *Service) backfillViewWithReaderLimited(ctx context.Context, spaceID, vi
 	return written, nil
 }
 
-func (s *Service) backfillPrimaryOnlyHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+func (s *Service) backfillPrimaryOnlyHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if reader == nil || rangeReader == nil {
 		log.Printf("storage View %s/%s (rebuild_source=primary) starts empty; waiting for the writer's output", spaceID, viewID)
 		return 0, nil
 	}
-	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, maxHistoryScanRows, limiter)
+	written, err := s.backfillPrimaryHistory(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, bars, limiter)
 	if err != nil {
 		return written, err
 	}
@@ -238,7 +234,7 @@ func (s *Service) backfillPrimaryOnlyHistory(ctx context.Context, spaceID, viewI
 	return written, nil
 }
 
-func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, bars uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	if bars == 0 {
 		return 0, nil
 	}
@@ -262,12 +258,13 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, spaceID, viewID, n
 	if view.GetFreq() == "" {
 		return 0, errors.New("time-series View frequency is required for Primary history backfill")
 	}
-	return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, reader, rangeReader, view, nextSchema, auth, view.GetFreq(), bars, maxHistoryScanRows, limiter)
+	return s.backfillPrimaryHistoryByPeriods(ctx, spaceID, viewID, nextID, batchSize, rangeReader, view, nextSchema, auth, view.GetFreq(), bars, limiter)
 }
 
 // backfillPrimaryHistoryByPeriods 重建 View 保留的最近行：不指定标的、每个序列取最近 periods 根，
-// 按 next_cursor 逐页读取，一次拿到值。某一页失败（含超时）时整次重建按现有失败处理重试，不静默跳过标的。
-func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, batchSize int, reader FieldReader, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods, maxHistoryScanRows uint64, limiter *backfillRequestLimiter) (uint64, error) {
+// 按 next_cursor 逐页读取（每页 pageSize 行，DataNode 再按单页值数上限截断），一次拿到值。
+// 某一页失败（含超时）时整次重建按现有失败处理重试，不静默跳过标的。
+func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, viewID, nextID string, pageSize int, rangeReader TimeSeriesRangeReader, view *pb.View, nextSchema viewindex.ViewIndexSchema, auth *pb.AuthInfo, frequency string, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	columns := viewColumnFields(nextSchema.Columns)
 	if len(columns) == 0 {
 		log.Printf("storage view history backfill has no dataset columns space=%s view=%s", spaceID, viewID)
@@ -289,7 +286,7 @@ func (s *Service) backfillPrimaryHistoryByPeriods(ctx context.Context, spaceID, 
 		pageCtx, cancel := context.WithTimeout(ctx, primaryHistoryPageReadTimeout)
 		rsp, err := readPrimaryTimeSeriesRowsLimited(pageCtx, limiter, rangeReader, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
-			ColumnNames: columns, LatestPerSeries: perSeries, Page: &pb.Page{Size: primaryReadPageSize, Cursor: cursor},
+			ColumnNames: columns, LatestPerSeries: perSeries, Page: &pb.Page{Size: uint32(pageSize), Cursor: cursor},
 		})
 		cancel()
 		if err != nil {

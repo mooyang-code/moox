@@ -111,7 +111,7 @@ func TestPeriodBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:okx"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:okx"),
 		historyRow("ETH-USDT", "2026-08-18T00:01:00Z", ""),
 	}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 2)
 	if err != nil {
 		t.Fatalf("period backfill: %v", err)
 	}
@@ -131,6 +131,10 @@ func TestPeriodBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.
 		if i > 0 && req.GetPage().GetCursor() == "" {
 			t.Fatalf("request %d did not continue from the previous cursor", i)
 		}
+		// 每页行数取调用方给的 batchSize（线上即 backfill_page_size），不能被常量覆盖。
+		if req.GetPage().GetSize() != 100 {
+			t.Fatalf("第 %d 次请求的页大小 = %d，应为调用方给的 100", i, req.GetPage().GetSize())
+		}
 	}
 }
 
@@ -141,7 +145,7 @@ func TestPeriodBackfillFailsWholeBuildWhenAPageFails(t *testing.T) {
 	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""), historyRow("C", "2026-08-18T00:00:00Z", ""),
 	}}
-	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1, defaultMaxHistoryScanRows); err == nil {
+	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1); err == nil {
 		t.Fatal("a failed page must fail the rebuild instead of silently skipping subjects")
 	}
 }
@@ -150,7 +154,7 @@ func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
 	svc := newBackfillService(engine, view, "")
-	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, nil, nil, 2, defaultMaxHistoryScanRows); err == nil {
+	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, nil, nil, 2); err == nil {
 		t.Fatal("new time-series View without Primary reader was accepted")
 	}
 }
@@ -160,7 +164,7 @@ func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
 	svc := newBackfillService(engine, view, "")
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance")}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1000, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1000)
 	if err != nil {
 		t.Fatalf("partial period backfill: %v", err)
 	}
@@ -173,7 +177,7 @@ func TestPrimaryOnlyViewMayStartEmptyBeforeFirstOutput(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
 	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"rebuild_source": "primary"}}
 	svc := newBackfillService(engine, view, "")
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 2)
 	if err != nil {
 		t.Fatalf("empty factor result backfill: %v", err)
 	}
@@ -193,7 +197,7 @@ func TestPrimaryOnlyViewBackfillsExistingPrimaryOutput(t *testing.T) {
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:binance"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance"),
 	}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, reader, 2, defaultMaxHistoryScanRows)
+	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, reader, 2)
 	if err != nil {
 		t.Fatalf("factor result history backfill: %v", err)
 	}
