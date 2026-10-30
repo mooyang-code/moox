@@ -532,3 +532,36 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 		t.Fatalf("runtime=%+v", runtime)
 	}
 }
+
+func TestStorageViewDeleteOldestBatchSizeDefaultsAndBounds(t *testing.T) {
+	t.Setenv("MOOX_STORAGE_CONFIG", "")
+	if size, err := storageViewDeleteOldestBatchSize(); err != nil || size != 2000 {
+		t.Fatalf("没有配置文件时应取默认 2000，实际 %d，错误 %v", size, err)
+	}
+	for _, c := range []struct {
+		yaml    string
+		want    int
+		wantErr bool
+	}{
+		{yaml: "storage:\n  view:\n    batch_size: 500\n", want: 2000},
+		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 500\n", want: 500},
+		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: 20001\n", wantErr: true},
+		{yaml: "storage:\n  view:\n    delete_oldest_batch_size: -1\n", wantErr: true},
+	} {
+		path := filepath.Join(t.TempDir(), "storage.yaml")
+		if err := os.WriteFile(path, []byte(c.yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("MOOX_STORAGE_CONFIG", path)
+		size, err := storageViewDeleteOldestBatchSize()
+		if c.wantErr {
+			if err == nil {
+				t.Fatalf("%q 应报越界错误，实际取到 %d", c.yaml, size)
+			}
+			continue
+		}
+		if err != nil || size != c.want {
+			t.Fatalf("%q 应取到 %d，实际 %d，错误 %v", c.yaml, c.want, size, err)
+		}
+	}
+}

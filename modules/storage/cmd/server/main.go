@@ -357,6 +357,10 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
+	deleteOldestBatchSize, err := storageViewDeleteOldestBatchSize()
+	if err != nil {
+		return err
+	}
 	policy, err := loadStoragePolicy()
 	if err != nil {
 		return err
@@ -471,6 +475,8 @@ func runViewRole() error {
 		}
 		defer stopViewMaintainer()
 	}
+	stopDeleteOldest := svc.StartDeleteOldest(trpc.BackgroundContext(), viewservice.DeleteOldestOptions{BatchSize: deleteOldestBatchSize})
+	defer stopDeleteOldest()
 	return <-serveErr
 }
 
@@ -586,6 +592,24 @@ func storageViewRebuildSettings() (uint64, uint32, bool, bool, error) {
 	}
 	return runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
+}
+
+// storageViewDeleteOldestBatchSize 读取定时删除最旧数据时每批最多删除的行数（storage.view.delete_oldest_batch_size）。
+func storageViewDeleteOldestBatchSize() (int, error) {
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return viewservice.DefaultDeleteOldestBatchSize, nil
+	}
+	var runtimeConfig storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
+		return 0, fmt.Errorf("读取 storage view 删除最旧数据配置失败：%w", err)
+	}
+	size := runtimeConfig.Storage.View.DeleteOldestBatchSize
+	if size < 1 || size > viewservice.MaxDeleteOldestBatchSize {
+		return 0, fmt.Errorf("storage.view.delete_oldest_batch_size 必须在 1～%d 之间，当前为 %d", viewservice.MaxDeleteOldestBatchSize, size)
+	}
+	return size, nil
 }
 
 func storageViewBackfillSettings() (uint32, time.Duration, error) {

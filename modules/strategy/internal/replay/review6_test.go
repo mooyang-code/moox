@@ -79,7 +79,8 @@ func TestReplayRecheckRereadsAfterStaleCoverage(t *testing.T) {
 	client := &fakeClient{marketType: "spot", switchAtQuery: 2, switchedFrom: origin, coverageStale: 1}
 	(&Runner{Store: repo, Client: client, ChunkBars: 4}).Execute(context.Background(), job)
 	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 12 || client.coverageCalls != 2 {
+	// 开始前复查一次（同一代索引也会删除最旧数据），回放中换代后重读两次，共 3 次。
+	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 12 || client.coverageCalls != 3 {
 		t.Fatalf("覆盖统计冲突一次后应重读并完成：%+v coverage=%d", done, client.coverageCalls)
 	}
 }

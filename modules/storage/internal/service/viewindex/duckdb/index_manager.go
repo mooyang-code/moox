@@ -982,6 +982,15 @@ func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) (st
 		return "", "", err
 	}
 	mergedFrom, mergedTo := mergeCoverageBounds(currentFrom, currentTo, from, to)
+	// 覆盖起点只往外扩是为了不丢掉统计之后才写进来的更早的行；但定时删除最旧数据会让起点前移，
+	// 统计在删除前读到的最早时间不能把起点改回去，所以以本事务里重读的实际最早时间为下限。
+	var oldest sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+		return "", "", err
+	}
+	if fresh := canonicalCoverageTime(oldest.Time); oldest.Valid && mergedFrom != "" && beforeCanonicalTime(mergedFrom, fresh) {
+		mergedFrom = fresh
+	}
 	if mergedFrom != canonicalizeCoverageTime(currentFrom) || mergedTo != canonicalizeCoverageTime(currentTo) {
 		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
 			return "", "", err
@@ -1793,4 +1802,164 @@ func viewMetaColumnType(column string) string {
 		return "UBIGINT DEFAULT 0"
 	}
 	return "VARCHAR DEFAULT ''"
+}
+
+// PlanOldestRows 实现 viewindex.OldestRowsDeleter：先从计数表找出行数超过 keep 的序列（计数表很小，不扫行），
+// 再逐个序列查删除分界——从最旧往新数第 k+1 行的 data_time，比它更旧的 k 行就是本批要删的最旧数据。只读，不需要写锁。
+func (m *IndexManager) PlanOldestRows(ctx context.Context, id string, keep uint64, maxSeries, maxRows int) ([]viewindex.OldestRowsCut, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, err
+	}
+	if keep == 0 || maxSeries <= 0 || maxRows <= 0 {
+		return nil, nil
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT subject_id, freq, series_tag, row_count - ?
+		FROM view_series_counts
+		WHERE row_count > ?
+		ORDER BY row_count DESC, subject_id, freq, series_tag
+		LIMIT ?`, keep, keep, maxSeries)
+	if err != nil {
+		return nil, err
+	}
+	var cuts []viewindex.OldestRowsCut
+	budget := uint64(maxRows)
+	for rows.Next() {
+		var cut viewindex.OldestRowsCut
+		if err := rows.Scan(&cut.SubjectID, &cut.Freq, &cut.SeriesTag, &cut.Rows); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if budget == 0 {
+			continue
+		}
+		cut.Rows = min(cut.Rows, budget)
+		budget -= cut.Rows
+		cuts = append(cuts, cut)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	planned := cuts[:0]
+	for _, cut := range cuts {
+		err := db.QueryRowContext(ctx, `
+			SELECT data_time FROM view_rows
+			WHERE subject_id = ? AND freq = ? AND series_tag = ?
+			ORDER BY data_time
+			LIMIT 1 OFFSET ?`, cut.SubjectID, cut.Freq, cut.SeriesTag, cut.Rows).Scan(&cut.Before)
+		if errors.Is(err, sql.ErrNoRows) {
+			// 计数比实际行数多（不应发生）：没有足够的行可留，这个序列本批不删。
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		planned = append(planned, cut)
+	}
+	return planned, nil
+}
+
+// DeleteOldestRows 实现 viewindex.OldestRowsDeleter：在一个事务里删除各序列分界之前的最旧行，
+// 按实际删除行数减少 view_series_counts，并更新 view_meta.updated_at（查询按它判断分页读取期间数据有没有变）。
+// 调用方必须持有这个索引的写锁。
+func (m *IndexManager) DeleteOldestRows(ctx context.Context, id string, cuts []viewindex.OldestRowsCut) (uint64, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return 0, err
+	}
+	if len(cuts) == 0 {
+		return 0, nil
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var total uint64
+	for _, cut := range cuts {
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM view_rows
+			WHERE subject_id = ? AND freq = ? AND series_tag = ? AND data_time < ?`,
+			cut.SubjectID, cut.Freq, cut.SeriesTag, cut.Before)
+		if err != nil {
+			return 0, fmt.Errorf("删除 View 序列最旧数据失败 %s/%s/%s：%w", cut.SubjectID, cut.Freq, cut.SeriesTag, err)
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if deleted == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE view_series_counts SET row_count = row_count - ?
+			WHERE subject_id = ? AND freq = ? AND series_tag = ?`,
+			deleted, cut.SubjectID, cut.Freq, cut.SeriesTag); err != nil {
+			return 0, err
+		}
+		total += uint64(deleted)
+	}
+	if total == 0 {
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// FinishOldestRowsDelete 实现 viewindex.OldestRowsDeleter：一轮删完后把 view_meta 的覆盖起点改成剩余行的最早时间
+// （写入只会把覆盖范围往外扩，删除后要在这里前移），并把记录的保留根数改为 keep（没有记录或记录得更大时），
+// 同时更新修改时间。调用方必须持有这个索引的写锁。返回新的覆盖起点。
+func (m *IndexManager) FinishOldestRowsDelete(ctx context.Context, id string, keep uint64) (string, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return "", err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var oldest sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+		return "", err
+	}
+	from := ""
+	if oldest.Valid {
+		from = canonicalCoverageTime(oldest.Time)
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ? WHERE singleton = 1`, from); err != nil {
+			return "", err
+		}
+	}
+	if keep > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET rows_per_series = ? WHERE singleton = 1 AND (rows_per_series = 0 OR rows_per_series > ?)`, keep, keep); err != nil {
+			return "", err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return from, nil
 }

@@ -71,10 +71,12 @@ type StorageView struct {
 	// Smaller pages reduce the instantaneous point-read and index-write burst.
 	BackfillPageSize        uint32 `yaml:"backfill_page_size"`
 	BackfillRequestInterval string `yaml:"backfill_request_interval"`
-	RebuildMaxPending       uint64 `yaml:"rebuild_max_pending"`
-	RebuildIdleChecks       uint32 `yaml:"rebuild_idle_checks"`
-	rebuildMaxPendingSet    bool
-	rebuildIdleChecksSet    bool
+	// DeleteOldestBatchSize 是定时删除最旧数据时每批最多删除的行数；未配置时取默认值 2000。
+	DeleteOldestBatchSize int    `yaml:"delete_oldest_batch_size"`
+	RebuildMaxPending     uint64 `yaml:"rebuild_max_pending"`
+	RebuildIdleChecks     uint32 `yaml:"rebuild_idle_checks"`
+	rebuildMaxPendingSet  bool
+	rebuildIdleChecksSet  bool
 }
 
 // ValidateConsumer 校验全局消费参数：都为正数，且单次拉取数不超过未确认上限。
@@ -165,6 +167,9 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.View.BackfillPageSize == 0 {
 		c.View.BackfillPageSize = 2000
+	}
+	if c.View.DeleteOldestBatchSize == 0 {
+		c.View.DeleteOldestBatchSize = 2000
 	}
 	if strings.TrimSpace(c.View.BackfillRequestInterval) == "" {
 		c.View.BackfillRequestInterval = "100ms"

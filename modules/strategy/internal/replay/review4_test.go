@@ -27,21 +27,21 @@ func submitReplay(t *testing.T, repo *store.Store, dslYaml, indexID string, star
 	return claimed
 }
 
-// 从覆盖边缘起步的回放在排队期间 View 正常滚动了几根：活动索引没变时行不会被删除，沿用提交时校验过的区间，
-// 不再读取覆盖统计，也不因覆盖起点前移而失败。
-func TestReplayKeepsSubmittedWindowWhileIndexUnchanged(t *testing.T) {
+// 从覆盖边缘起步的回放在排队期间，Storage 按保留根数删掉了每个序列最旧的数据：活动索引没变也要按精确统计复查起点，
+// 起点已经被删掉时明确失败并要求重新发起，不拿缺了数据的区间悄悄执行。
+func TestReplayRechecksWindowAfterOldestRowsDeleted(t *testing.T) {
 	repo := openStore(t)
 	aged := strings.Replace(replayDSL, "rules:", "universe:\n  min_age_bars: 3\nrules:", 1)
 	job := submitReplay(t, repo, aged, "idx", origin.Add(2*time.Hour), 4)
 	// 执行时覆盖统计显示起点已前移到 10:00，晚于提交的 02:00。
 	client := &fakeClient{marketType: "spot", indexedFrom: origin.Add(10 * time.Hour)}
 	(&Runner{Store: repo, Client: client, ChunkBars: 10}).Execute(context.Background(), job)
-	done, _ := repo.GetReplay(context.Background(), "p1")
-	if done.Status != store.ReplayDone || len(barsOf(t, repo, "p1")) != 4 {
-		t.Fatalf("索引未变时应按提交的区间执行：%+v", done)
+	failed, _ := repo.GetReplay(context.Background(), "p1")
+	if failed.Status != store.ReplayFailed || !strings.Contains(failed.Error, "删除了最旧的数据") || !strings.Contains(failed.Error, "重新发起") {
+		t.Fatalf("同一代索引的起点数据被删除后应失败并提示重新发起：%+v", failed)
 	}
-	if client.coverageCalls != 0 {
-		t.Fatalf("索引未变时不应读取覆盖统计：%d", client.coverageCalls)
+	if client.coverageCalls == 0 {
+		t.Fatal("同一代索引也应读取覆盖统计复查起点")
 	}
 }
 

@@ -239,13 +239,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
 	abort := r.abortHook(job.ReplayID)
-	// 活动索引的代次没变：同一代索引只追加、不删除行，提交时校验过的区间仍然有效（覆盖统计随新 bar 前移不影响已有的行）。
-	// 代次变了（排队期间重建过索引，新一代只保留最近的根数）才按新索引的精确统计复查起点并截断终点。
+	// 开始前总是按精确统计复查起点并截断终点：排队期间可能重建过索引（新一代只保留最近的根数），
+	// 同一代索引也会由 Storage 定时删除每个序列最旧的数据，提交时校验过的起点可能已经不在了。
 	end := job.EndTime
-	if view.Generation != job.ViewGeneration {
-		if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, end, false, abort); err != nil {
-			return Metrics{}, err
-		}
+	if view, end, err = r.recheckWindow(ctx, job, resolved, program, view, job.StartTime, end, false, abort); err != nil {
+		return Metrics{}, err
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, job.StartTime, end, r.maxBars())
 	if err != nil {
@@ -435,9 +433,19 @@ func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved i
 			return input.ViewInfo{}, time.Time{}, err
 		}
 	}
+	// 代次没变时区间变化只可能来自定时删除最旧数据；代次变了才是重建了索引。重读覆盖统计时可能读到了新一代，
+	// 所以按重读之后的 View 判断。
+	changed := "重建了索引"
+	if view.Generation == job.ViewGeneration {
+		changed = "删除了最旧的数据"
+	}
 	// 覆盖统计未知时无法确认区间仍然有效；其余覆盖问题（行全在非交易日上、超出内嵌日历）由 ReplayWindow 说明具体原因。
+	// 代次没变时统计暂时未知（例如 Storage 刚重启）按提交的区间执行：同一代索引只会删掉最旧的少量数据，不因此拒绝回放。
 	if _, err := input.CoverageBounds(view, resolved, r.now()); errors.Is(err, input.ErrCoverageUnknown) {
-		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引，新索引的覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", job.ViewID, when)
+		if view.Generation == job.ViewGeneration {
+			return view, end, nil
+		}
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s，覆盖范围暂时未知，无法确认回放区间仍然有效；请稍后重新发起回放", job.ViewID, when, changed)
 	}
 	newEnd, err := input.ReplayWindow(resolved, program, view, start, end, r.now())
 	var early *input.EarlyStartError
@@ -451,9 +459,11 @@ func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved i
 		err = fmt.Errorf("剩余区间从 %s 起，但新索引的活跃序列从 %s 起才有数据%s（新索引的可用起点为 %s）", label(early.First), label(early.Coverage), requirement, label(early.Earliest))
 	}
 	if err != nil {
-		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s重建了索引：%w；请重新发起回放", job.ViewID, when, err)
+		return input.ViewInfo{}, time.Time{}, fmt.Errorf("View %s %s%s：%w；请重新发起回放", job.ViewID, when, changed, err)
 	}
-	r.logf("回放 %s：View %s %s重建了索引（→ %s），按新索引复查区间通过", job.ReplayID, job.ViewID, when, view.Generation)
+	if view.Generation != job.ViewGeneration {
+		r.logf("回放 %s：View %s %s重建了索引（→ %s），按新索引复查区间通过", job.ReplayID, job.ViewID, when, view.Generation)
+	}
 	return view, newEnd, nil
 }
 

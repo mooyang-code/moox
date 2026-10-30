@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -280,6 +281,28 @@ type SeriesCapacityResult struct {
 // indexes do not need to invent a time-series capacity model.
 type SeriesCapacityReader interface {
 	SeriesCapacity(context.Context, string, uint64) (SeriesCapacityResult, error)
+}
+
+// OldestRowsCut 是一个序列本批要删除的最旧数据：data_time 早于 Before 的行，按计划共 Rows 行。
+type OldestRowsCut struct {
+	SubjectID string
+	Freq      string
+	SeriesTag string
+	Before    time.Time
+	Rows      uint64
+}
+
+// OldestRowsDeleter 删除每个序列超出保留根数的最旧数据，由 View 的定时任务调用；记录型索引不实现。
+//
+// PlanOldestRows 只读（不需要写锁）：列出最多 maxSeries 个行数超过 keep 的序列，合计最多 maxRows 行，
+// 并按一致快照算出每个序列的删除分界。DeleteOldestRows 由调用方在持有该索引写锁时调用：在一个事务里删掉分界之前的行、
+// 按实际删除行数减少序列计数并更新索引的修改时间（查询按它判断数据是否在读取期间变化），返回删除的总行数。
+// FinishOldestRowsDelete 同样在写锁内调用，一轮删完后执行：把覆盖起点前移到剩余行的最早时间，并把记录的保留根数改为 keep
+// （没有记录或记录得更大时），让读取方知道每个序列最多只有这么多行。
+type OldestRowsDeleter interface {
+	PlanOldestRows(ctx context.Context, indexID string, keep uint64, maxSeries, maxRows int) ([]OldestRowsCut, error)
+	DeleteOldestRows(ctx context.Context, indexID string, cuts []OldestRowsCut) (uint64, error)
+	FinishOldestRowsDelete(ctx context.Context, indexID string, keep uint64) (string, error)
 }
 
 func RowKeyID(k *pb.RowKey) string {
