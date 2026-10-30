@@ -39,7 +39,7 @@ func init() {
 var storageRepairViewCmd = &cobra.Command{
 	Use:                "repair-view [flags]",
 	Aliases:            []string{"修复视图", "repair"},
-	Short:              "清理 View 消费积压并触发安全的 A/B 重建",
+	Short:              "清理 View 消费积压并重建索引",
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStorageMaintenanceBinary(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), args)

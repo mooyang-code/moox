@@ -590,32 +590,39 @@ func (s *Service) metadataClientSnapshot() MetadataClient {
 // missing during discovery/recovery. The latter must remain pending so a
 // newly-created View cannot miss rows before the next maintenance tick.
 func (s *Service) datasetHasActiveView(ctx context.Context, spaceID, datasetID string) (bool, error) {
+	managed, _, err := s.datasetViewIndexState(ctx, spaceID, datasetID)
+	return managed, err
+}
+
+// datasetViewIndexState 按元数据报告数据集有没有活动状态的 View（managed），以及其中有没有已建好索引的（built）。
+func (s *Service) datasetViewIndexState(ctx context.Context, spaceID, datasetID string) (managed, built bool, err error) {
 	metadata := s.metadataClientSnapshot()
 	if metadata == nil {
 		// Lightweight embedders may not configure MetadataClient. In production
 		// the maintainer installs it before readiness is advertised; without it
 		// there is no managed-view contract to protect and unrelated rows may ACK.
-		return false, nil
+		return false, false, nil
 	}
 	auth := s.internalAuth()
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, SpaceId: spaceID, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return false, err
+			return false, false, err
 		}
 		for _, view := range rsp.GetViews() {
-			if view == nil || view.GetSpaceId() != spaceID {
+			if view == nil || view.GetSpaceId() != spaceID || strings.TrimSpace(view.GetDatasetId()) != datasetID {
 				continue
 			}
-			if strings.TrimSpace(view.GetDatasetId()) == datasetID {
-				return true, nil
+			managed = true
+			if strings.TrimSpace(view.GetActiveIndexId()) != "" {
+				return true, true, nil
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			return false, nil
+			return managed, false, nil
 		}
 	}
 }

@@ -73,14 +73,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), completion.datasetID)
 	if len(views) == 0 {
-		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), completion.datasetID)
-		if err != nil {
-			return err
-		}
-		if managed {
-			return errors.New("View 索引映射尚未就绪")
-		}
-		return nil
+		return s.periodWithoutActiveView(ctx, message.GetSpaceId(), completion.datasetID, completion.periodTime)
 	}
 	for _, view := range views {
 		state := &pb.ViewPeriodDatasetState{
@@ -152,14 +145,7 @@ func (s *Service) applyProducerPeriodCompleted(ctx context.Context, message *eve
 	}
 	views := s.activeViewsForDataset(message.GetSpaceId(), payload.GetDatasetId())
 	if len(views) == 0 {
-		managed, err := s.datasetHasActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId())
-		if err != nil {
-			return err
-		}
-		if managed {
-			return errors.New("View 索引映射尚未就绪")
-		}
-		return nil
+		return s.periodWithoutActiveView(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetPeriodTime())
 	}
 	for _, view := range views {
 		ready := &storageeventpb.ViewDataReady{
@@ -188,6 +174,22 @@ func (s *Service) applyProducerPeriodCompleted(ctx context.Context, message *eve
 		log.Printf("storage view 写入方周期完成就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
 			view.GetViewId(), payload.GetPeriodTime(), handleStart.Sub(message.GetOccurredAt().AsTime()).Round(time.Millisecond), enqueueStart.Sub(handleStart).Round(time.Millisecond),
 			flushStart.Sub(enqueueStart).Round(time.Millisecond), time.Since(flushStart).Round(time.Millisecond), time.Since(handleStart).Round(time.Millisecond))
+	}
+	return nil
+}
+
+// periodWithoutActiveView 处理没有可发布 View 的一期。数据集的 View 还没建好索引时直接确认：建索引期间的周期不保留、
+// 建成后不补发，就绪事件从建成后的下一期开始。元数据已有活动索引、只是运行时还没挂上（启动或恢复期间）时保持未确认，挂上后重投。
+func (s *Service) periodWithoutActiveView(ctx context.Context, spaceID, datasetID string, periodTime int64) error {
+	managed, built, err := s.datasetViewIndexState(ctx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
+	if built {
+		return errors.New("View 索引映射尚未就绪")
+	}
+	if managed {
+		log.Printf("storage view 丢弃建索引期间的周期完成事件 space=%s dataset=%s period=%d", spaceID, datasetID, periodTime)
 	}
 	return nil
 }
