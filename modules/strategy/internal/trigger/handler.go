@@ -60,7 +60,13 @@ const (
 	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不发目标，但求值并推进规则状态。引用上一周期因子列的策略需要相邻周期的记录，
 	// 追赶期间不记的话，放行后第一个周期会因 previous_version_unknown 被跳过。
 	ModeCatchup
+	// ModeWait 模块自身暂时未就绪（刚启动、出站 EventBus 还在连接）：本期先不处理，事件稍后重投，
+	// 就绪后照常求值；不能像 ModeOff 那样确认掉，否则重启窗口里到达的周期会永久丢失。
+	ModeWait
 )
+
+// ErrModuleNotReady 表示策略模块暂时未就绪，事件需要稍后重投。
+var ErrModuleNotReady = errors.New("策略模块尚未就绪，稍后重投")
 
 // Handler 处理 ViewDataReady：遍历绑定该 View 的启用实例，错误汇总，全部终态落库后才 ACK。
 type Handler struct {
@@ -209,6 +215,9 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	mode := h.mode(instance.InstanceID)
 	if mode == ModeOff {
 		return nil
+	}
+	if mode == ModeWait {
+		return ErrModuleNotReady
 	}
 	periodTime := time.Unix(payload.GetPeriodTime(), 0).UTC()
 	rt, rtErr := h.runtimeFor(ctx, instance)

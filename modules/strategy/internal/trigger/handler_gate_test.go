@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -58,5 +59,31 @@ func TestHandleGateModes(t *testing.T) {
 	live := h.resultAt(3)
 	if live.Status != store.StatusOK || shadowFlagOf(t, live) {
 		t.Fatalf("运行期的目标不应带影子标记：%+v", live)
+	}
+}
+
+// 模块暂时未就绪（重启后出站 EventBus 还在连接）：事件不确认、不留记录、不读输入，等重投；
+// 就绪后重投的同一事件照常求值，这一期不会丢。
+func TestHandleWaitsWhileModuleNotReadyThenEvaluatesOnRedelivery(t *testing.T) {
+	account := "acct-1"
+	h := newHarness(t, rankDSL, &account)
+	h.frame(1, map[string]map[string]float64{"A": {"m": 2}, "B": {"m": 1}})
+	mode := ModeWait
+	h.handler.Gate = func(string) Mode { return mode }
+
+	err := h.deliver(1)
+	expectRetry(t, err)
+	if !errors.Is(err, ErrModuleNotReady) {
+		t.Fatalf("暂时未就绪应返回 ErrModuleNotReady：%v", err)
+	}
+	h.noResultAt(1)
+	if h.loader.calls != 0 {
+		t.Fatalf("暂时未就绪时不应读取输入：%d", h.loader.calls)
+	}
+
+	mode = ModeLive
+	expectAck(t, h.deliver(1))
+	if result := h.resultAt(1); result.Status != store.StatusOK {
+		t.Fatalf("就绪后重投的周期应正常求值：%+v", result)
 	}
 }

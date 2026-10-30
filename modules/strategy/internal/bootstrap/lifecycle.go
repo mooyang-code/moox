@@ -21,10 +21,14 @@ import (
 // 暂停或没有启动：不求值、不发新目标，持仓不动。
 
 const (
-	instanceKind            = "strategy_instance"
-	lifecycleRefreshEvery   = 30 * time.Second
-	lifecycleStateFileName  = "lifecycle.json"
-	lifecycleHealthDetailID = "lifecycle"
+	instanceKind          = "strategy_instance"
+	lifecycleRefreshEvery = 30 * time.Second
+	// lifecycleStartupRefreshEvery、lifecycleStartupWindow：启动后模块还没就绪时每秒检查一次（最多这么久），
+	// 出站 EventBus 一连上就放行，不用等满一个常规检查周期；就绪后或超过窗口回到常规周期。
+	lifecycleStartupRefreshEvery = time.Second
+	lifecycleStartupWindow       = time.Minute
+	lifecycleStateFileName       = "lifecycle.json"
+	lifecycleHealthDetailID      = "lifecycle"
 )
 
 // lifecycleDeps 是生命周期检查依赖的模块状态。
@@ -200,9 +204,13 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 }
 
 // triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值
-// （暂停、恢复追赶、重置、故障，以及模块自身未就绪，对象各自的阶段不变但都不求值）。
+// （暂停、恢复追赶、重置、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
+// 时返回 ModeWait：事件稍后重投，就绪后照常求值，不丢掉这几期。
 func triggerGate(c *lifecycle.Controller) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
+		if c.ModuleWaiting() {
+			return trigger.ModeWait
+		}
 		if !c.Allowed(instanceRef(instanceID)) { // 模块自身暂停或故障时，所有实例都不求值
 			if c.CatchupAllowed(instanceRef(instanceID)) {
 				return trigger.ModeCatchup // 恢复追赶：只记录周期，不求值、不发目标
@@ -242,5 +250,22 @@ func withLifecycle(snapshot func(context.Context) healthz.Response, c *lifecycle
 		}
 		rsp.Details[lifecycleHealthDetailID] = c.Compact()
 		return rsp
+	}
+}
+
+// refreshUntilReady 在启动后模块还暂时未就绪时按 every 反复检查，直到不再处于“暂时未就绪”或超过 window。
+// 重启时出站 EventBus 往往晚于第一次检查才连上，按常规 30 秒周期要等满一轮才放行，期间到达的事件只能等重投。
+func refreshUntilReady(ctx context.Context, c *lifecycle.Controller, every, window time.Duration) {
+	deadline := time.Now().Add(window)
+	for c.ModuleWaiting() && time.Now().Before(deadline) {
+		timer := time.NewTimer(every)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		c.Refresh(ctx)
+		c.AutoAdvance(ctx)
 	}
 }
