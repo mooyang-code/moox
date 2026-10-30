@@ -1015,6 +1015,7 @@ message BatchUpdateFieldsReq {
   string space_id = 2;
   repeated string field_ids = 3;
   string target_group_id = 4;
+  // target_status 可为 active、disabled 或 deleted。deleted 是逻辑删除：数据保留，引用它的列被隐藏，重新启用即恢复。
   string target_status = 5;
 }
 

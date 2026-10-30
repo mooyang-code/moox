@@ -159,7 +159,7 @@ export function batchUpdateFields(params: {
   space_id: string;
   field_ids: string[];
   target_group_id?: string;
-  target_status?: "active" | "disabled";
+  target_status?: "active" | "disabled" | "deleted";
 }) {
   return callMetadata<typeof params, RetRsp & { updated_count: number }>("BatchUpdateFields", params);
 }

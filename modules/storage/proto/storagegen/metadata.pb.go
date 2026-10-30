@@ -7852,7 +7852,8 @@ type BatchUpdateFieldsReq struct {
 	SpaceId       string             `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	FieldIds      []string           `protobuf:"bytes,3,rep,name=field_ids,json=fieldIds,proto3" json:"field_ids,omitempty"`
 	TargetGroupId string             `protobuf:"bytes,4,opt,name=target_group_id,json=targetGroupId,proto3" json:"target_group_id,omitempty"`
-	TargetStatus  string             `protobuf:"bytes,5,opt,name=target_status,json=targetStatus,proto3" json:"target_status,omitempty"`
+	// target_status 可为 active、disabled 或 deleted。deleted 是逻辑删除：数据保留，引用它的列被隐藏，重新启用即恢复。
+	TargetStatus string `protobuf:"bytes,5,opt,name=target_status,json=targetStatus,proto3" json:"target_status,omitempty"`
 }
 
 func (x *BatchUpdateFieldsReq) Reset() {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -421,6 +422,9 @@ func (s *Service) GetField(ctx context.Context, req *pb.GetFieldReq) (*pb.GetFie
 	return &pb.GetFieldRsp{RetInfo: retinfo.Success("success"), Field: item}, nil
 }
 
+// batchFieldStatuses 是批量操作可设置的字段状态，空值表示不改状态。deleted 是逻辑删除：数据保留，重新启用即恢复。
+var batchFieldStatuses = []string{"", "active", "disabled", "deleted"}
+
 func (s *Service) ListFields(ctx context.Context, req *pb.ListFieldsReq) (*pb.ListFieldsRsp, error) {
 	if err := validateFieldSpaceContext(ctx, req.GetSpaceId()); err != nil {
 		return &pb.ListFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
@@ -459,8 +463,8 @@ func (s *Service) BatchUpdateFields(ctx context.Context, req *pb.BatchUpdateFiel
 	if req.GetTargetGroupId() == "" && req.GetTargetStatus() == "" {
 		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_group_id or target_status is required"))}, nil
 	}
-	if req.GetTargetStatus() != "" && req.GetTargetStatus() != "active" && req.GetTargetStatus() != "disabled" {
-		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_status must be active or disabled"))}, nil
+	if !slices.Contains(batchFieldStatuses, req.GetTargetStatus()) {
+		return &pb.BatchUpdateFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("target_status 只能是 active、disabled 或 deleted"))}, nil
 	}
 	updated, err := s.metadata.BatchUpdateFields(ctx, req.GetSpaceId(), req.GetFieldIds(), req.GetTargetGroupId(), req.GetTargetStatus())
 	if err != nil {

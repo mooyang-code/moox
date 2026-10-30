@@ -272,3 +272,51 @@ func TestViewReportsHiddenDatasetColumns(t *testing.T) {
 		t.Fatalf("hidden_columns 不应落库：%s", raw)
 	}
 }
+
+// 删除字段是逻辑上的：引用它的列被隐藏，重新启用后恢复。
+func TestBatchDeleteFieldHidesColumnUntilReEnabled(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "space", GroupId: "hidden-group", Name: "分组"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertField(ctx, &pb.Field{SpaceId: "space", GroupId: "hidden-group", FieldId: "gone", Name: "将删除", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
+		SpaceId: "space", DatasetId: "prices", ColumnName: "gone", OriginId: "gone",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hidden := func() []string {
+		t.Helper()
+		view, err := store.GetView(ctx, "space", "source-view")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return view.GetHiddenColumns()
+	}
+	if got := hidden(); len(got) != 0 {
+		t.Fatalf("启用状态不应隐藏：%v", got)
+	}
+	if _, err := store.BatchUpdateFields(ctx, "space", []string{"gone"}, "", "deleted"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hidden(); !slices.Equal(got, []string{"gone"}) {
+		t.Fatalf("删除后应隐藏：%v", got)
+	}
+	field, err := store.GetField(ctx, "space", "gone")
+	if err != nil || field.GetStatus() != "deleted" {
+		t.Fatalf("字段状态 = %v err=%v", field.GetStatus(), err)
+	}
+	if _, err := store.BatchUpdateFields(ctx, "space", []string{"gone"}, "", "active"); err != nil {
+		t.Fatal(err)
+	}
+	if got := hidden(); len(got) != 0 {
+		t.Fatalf("重新启用后应恢复：%v", got)
+	}
+	if _, err := store.BatchUpdateFields(ctx, "space", []string{"gone"}, "", "archived"); err == nil {
+		t.Fatal("批量操作不应接受其他状态")
+	}
+}

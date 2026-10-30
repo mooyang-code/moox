@@ -15,6 +15,14 @@
         ><template #icon><icon-minus-circle /></template>停用</a-button
       >
     </a-popconfirm>
+    <a-popconfirm
+      content="确认删除所选字段？引用这些字段的列会从查询结果和列清单中隐藏，已写入的数据保留，重新启用后恢复。"
+      @ok="$emit('apply', { target_status: 'deleted' })"
+    >
+      <a-button size="small" status="danger" :disabled="loading"
+        ><template #icon><icon-delete /></template>删除</a-button
+      >
+    </a-popconfirm>
     <a-button size="small" type="text" :disabled="loading" @click="$emit('clear')">取消选择</a-button>
   </div>
 
@@ -37,7 +45,7 @@ import { groupPath } from "../field-workbench";
 
 defineProps<{ selectedCount: number; groups: FieldGroup[]; loading: boolean }>();
 const emit = defineEmits<{
-  apply: [change: { target_group_id?: string; target_status?: "active" | "disabled" }];
+  apply: [change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }];
   clear: [];
 }>();
 

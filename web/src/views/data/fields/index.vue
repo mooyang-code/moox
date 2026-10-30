@@ -444,7 +444,7 @@ function confirmDeleteGroup(group: FieldGroup) {
   });
 }
 
-async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" }) {
+async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }) {
   if (!selectedKeys.value.length) return;
   batchLoading.value = true;
   try {
