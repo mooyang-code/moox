@@ -117,7 +117,7 @@ type ViewIndexStats struct {
 	FreeDiskBytes uint64
 	IndexedFrom   string
 	IndexedTo     string
-	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（旧索引）。
+	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（记录型 View 不按根数保留）。
 	RowsPerSeries uint64
 }
 

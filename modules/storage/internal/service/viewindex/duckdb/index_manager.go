@@ -27,13 +27,12 @@ import (
 type IndexManagerOptions struct{ Root string }
 
 type IndexManager struct {
-	root       string
-	mu         sync.Mutex
-	dbs        map[string]*sql.DB
-	schema     map[string]map[string]pb.FieldValueType
-	dataset    map[string]string
-	space      map[string]string
-	coverageMu sync.Mutex
+	root    string
+	mu      sync.Mutex
+	dbs     map[string]*sql.DB
+	schema  map[string]map[string]pb.FieldValueType
+	dataset map[string]string
+	space   map[string]string
 	// stop 通知后台的用量日志协程退出，由 Close 关闭。
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -1115,14 +1114,6 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	if err != nil {
 		return nil, nil, "", "", err
 	}
-	if err := m.ensureCoverageColumns(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, nil, "", "", err
-	}
-	if err := ensureInternalAttributesColumn(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, nil, "", "", err
-	}
 	if err := validateSystemSchema(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, nil, "", "", err
@@ -1165,42 +1156,6 @@ func (m *IndexManager) getIndex(ctx context.Context, id string) (*sql.DB, map[st
 	m.space[id] = spaceID
 	m.mu.Unlock()
 	return db, columns, datasetID, spaceID, nil
-}
-
-func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) error {
-	var err error
-	if ctx, err = duckDBContext(ctx); err != nil {
-		return err
-	}
-	m.coverageMu.Lock()
-	defer m.coverageMu.Unlock()
-	for _, column := range []string{"indexed_from", "indexed_to", "rows_per_series"} {
-		var count int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_meta' AND column_name = ?`, column).Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			continue
-		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` `+viewMetaColumnType(column)); err != nil {
-			return fmt.Errorf("add view_meta coverage column %s: %w", column, err)
-		}
-	}
-	return nil
-}
-
-func ensureInternalAttributesColumn(ctx context.Context, db *sql.DB) error {
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_rows' AND column_name = ?`, internalAttributesColumn).Scan(&count); err != nil {
-		return err
-	}
-	if count != 0 {
-		return nil
-	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE view_rows ADD COLUMN `+internalAttributesColumn+` JSON`); err != nil {
-		return fmt.Errorf("add internal View attributes column: %w", err)
-	}
-	return nil
 }
 
 func (m *IndexManager) path(id string) (string, error) {
@@ -1750,14 +1705,6 @@ func orderSQL(sorts []*pb.SortSpec, order pb.SortOrder, columns map[string]pb.Fi
 		}
 	}
 	return " ORDER BY " + strings.Join(parts, ", ")
-}
-
-// viewMetaColumnType 返回给旧索引补加的 view_meta 列的类型和默认值。
-func viewMetaColumnType(column string) string {
-	if column == "rows_per_series" {
-		return "UBIGINT DEFAULT 0"
-	}
-	return "VARCHAR DEFAULT ''"
 }
 
 // PlanOldestRows 实现 viewindex.OldestRowsDeleter：先从计数表找出行数超过 keep 的序列（计数表很小，不扫行），

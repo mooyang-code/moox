@@ -42,7 +42,7 @@
 - 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给首次建索引补发行级就绪事件或往 `pending-subjects` 落 journal。曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
+- 给首次建索引补发行级就绪事件。曾把每行 fsync 落盘，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
 
 ## Storage View：单数据集消费停滞
 

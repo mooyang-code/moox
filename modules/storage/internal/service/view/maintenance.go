@@ -262,7 +262,7 @@ func isPrimaryHistoryIndexNotReady(err error) bool {
 
 func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) error {
 	auth := s.internalAuth()
-	firstErr := s.ReplayPendingSubjects(ctx)
+	var firstErr error
 	activeViews := make(map[observability.ViewKey]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})

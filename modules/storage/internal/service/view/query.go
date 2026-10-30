@@ -142,7 +142,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 }
 
 // retainedRowsPerSeries 返回活动索引每个序列至少保留的最近行数：索引建立时记录的行数与当前配置中较小的一个。
-// 调大配置要等重建成功（新索引记录新值）后才变大，调小配置立即生效；索引没有记录（旧索引）时为 0（未知）。
+// 调大配置要等重新建索引后才变大，调小配置立即生效；索引没有记录（记录型 View）时为 0（未知）。
 func (s *Service) retainedRowsPerSeries(stats viewindex.ViewIndexStats, hasStats bool) uint64 {
 	if !hasStats || stats.RowsPerSeries == 0 {
 		return 0

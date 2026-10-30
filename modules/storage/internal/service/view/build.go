@@ -165,9 +165,6 @@ func (s *Service) completeInitialBuild(ctx context.Context, opts MaintenanceOpti
 	runtime.mu.Unlock()
 	// 回填的行不走实时事件：建成后补一次水位，否则 Monitor 要等下一次实时写入才能看到这个 View 的输出。
 	s.observeActivatedViewWatermark(view, indexID)
-	if err := s.ReplayPendingSubjects(ctx); err != nil {
-		log.Printf("storage view 建成后重放待补标的失败：%v", err)
-	}
 	return nil
 }
 

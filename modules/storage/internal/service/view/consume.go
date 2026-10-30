@@ -251,11 +251,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
 	}
-	// 丢弃遗留的待补标的日志。首次建索引从不从这个目录发出 subject-ready。
-	if err := s.ReplayPendingSubjects(ctx); err != nil {
-		stop()
-		return nil, fmt.Errorf("清理遗留的 View 标的日志失败：%w", err)
-	}
 	// 补发落盘的就绪事件：失败（EventBus 尚未恢复、发布超时）只记日志，交给退避与后台重试，不能让 View 角色退出、
 	// 行事件因此完全停止消费。
 	if err := s.FlushViewDataReady(ctx, "", ""); err != nil {

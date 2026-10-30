@@ -32,7 +32,6 @@ type Service struct {
 	catalogViews               map[viewRef]*pb.View
 	indexView                  map[string]viewRef
 	authSecret                 string
-	pendingSubjectsDir         string
 	primaryAuth                *pb.AuthInfo
 	primary                    FieldReader
 	mu                         sync.RWMutex
@@ -177,7 +176,6 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, fmt.Errorf("open duckdb view indexes: %w", err)
 	}
 	service := &Service{
-		pendingSubjectsDir:         filepath.Join(root, "pending-subjects"),
 		engines:                    engines,
 		indexEngine:                make(map[string]string),
 		schemas:                    make(map[string]viewindex.ViewIndexSchema),
