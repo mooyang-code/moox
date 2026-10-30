@@ -19,10 +19,11 @@ import (
 )
 
 type maintenanceMetadata struct {
-	view        *pb.View
-	completes   int
-	extensions  int
-	completeErr error
+	view           *pb.View
+	datasetColumns []*pb.DatasetColumn
+	completes      int
+	extensions     int
+	completeErr    error
 	// completeRet 不为空时按这个返回，同时不写入 view，模拟提交失败。
 	completeRet *pb.RetInfo
 	// commitThenFail 模拟提交成功但响应丢失。
@@ -53,7 +54,7 @@ func (m *maintenanceMetadata) ListDatasetSubjects(_ context.Context, req *pb.Lis
 	return &pb.ListDatasetSubjectsRsp{RetInfo: successRetInfo(), DatasetSubjects: items, PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
 func (m *maintenanceMetadata) ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error) {
-	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
+	return &pb.ListDatasetColumnsRsp{RetInfo: successRetInfo(), Columns: m.datasetColumns, PageResult: &pb.PageResult{Page: 1, Size: 1000}}, nil
 }
 
 func (m *maintenanceMetadata) CompleteViewInitialBuild(_ context.Context, req *pb.CompleteViewInitialBuildReq, _ ...client.Option) (*pb.CompleteViewInitialBuildRsp, error) {
@@ -421,5 +422,34 @@ func TestUnattachedViewHoldsDatasetEvents(t *testing.T) {
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil || !strings.Contains(err.Error(), "尚未就绪") {
 		t.Fatalf("未挂接的 View 应当让事件保持未确认，err=%v", err)
+	}
+}
+
+// 数据集列禁用只是逻辑上的：行里的值还在，只在返回时过滤；重新启用后恢复。
+func TestDisabledDatasetColumnIsFilteredFromResults(t *testing.T) {
+	key := timeSeriesTestRowKey("")
+	engine := &queryEngine{rows: []*pb.RowFieldValues{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close"}, {FieldId: "old"}}}}}
+	svc, auth := queryTestService(engine, true)
+	view := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "market"}
+	metadata := &maintenanceMetadata{view: view, datasetColumns: []*pb.DatasetColumn{{ColumnName: "close", Status: "active"}, {ColumnName: "old", Status: "disabled"}}}
+	query := func() []*pb.FieldValue {
+		t.Helper()
+		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: "space", ViewId: "prices",
+			Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 {
+			t.Fatalf("rsp=%v err=%v", rsp, err)
+		}
+		return rsp.GetRows()[0].GetFields()
+	}
+	svc.refreshHiddenColumns(context.Background(), metadata, auth, view)
+	if fields := query(); len(fields) != 1 || fields[0].GetFieldId() != "close" {
+		t.Fatalf("禁用的列应当被过滤：%v", fields)
+	}
+	metadata.datasetColumns[1].Status = "active"
+	svc.refreshHiddenColumns(context.Background(), metadata, auth, view)
+	if fields := query(); len(fields) != 2 {
+		t.Fatalf("重新启用后应当恢复：%v", fields)
 	}
 }

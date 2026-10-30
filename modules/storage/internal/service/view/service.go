@@ -88,6 +88,8 @@ type viewRuntime struct {
 	statsIndexID     string
 	stats            viewindex.ViewIndexStats
 	statsRefreshedAt time.Time
+	// hiddenColumns 是数据集里被禁用的列：只在返回结果时过滤，索引和已写入的值都不动。
+	hiddenColumns map[string]struct{}
 	// readState is a lock-free copy of what queries need. A delivery holds mu
 	// for its whole index write (seconds for a large factor batch), so queries
 	// that took mu to read the active index waited behind every write.
@@ -100,6 +102,8 @@ type runtimeReadState struct {
 	active       string
 	statsIndexID string
 	stats        viewindex.ViewIndexStats
+	// hiddenColumns 发布后只读，更新时整体替换。
+	hiddenColumns map[string]struct{}
 }
 
 // newViewRuntime 创建运行时并立即发布一份空的查询路径副本：没有发布过副本的运行时在读取 active 时要等运行时锁，
@@ -113,7 +117,7 @@ func newViewRuntime() *viewRuntime {
 // publishReadStateLocked republishes the query-path copy; call it with mu held
 // after changing active, statsIndexID or stats.
 func (r *viewRuntime) publishReadStateLocked() {
-	r.readState.Store(&runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats})
+	r.readState.Store(&runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: r.hiddenColumns})
 }
 
 // clearActiveLocked 清空活动索引及其统计缓存（调用方持有 mu）。
@@ -140,7 +144,7 @@ func (r *viewRuntime) queryState() runtimeReadState {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats}
+	return runtimeReadState{active: r.active, statsIndexID: r.statsIndexID, stats: r.stats, hiddenColumns: r.hiddenColumns}
 }
 
 func (s *Service) attachOwnedDatasetMappingLocked(spaceID, datasetID, indexID string) {

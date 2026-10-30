@@ -242,6 +242,7 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 			if err := s.AttachActiveView(ctx, view); err != nil {
 				return err
 			}
+			s.refreshHiddenColumns(ctx, opts.Metadata, auth, view)
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
 			return nil
@@ -397,7 +398,42 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	if !metadataOnly || stats.IndexedFrom != "" || stats.IndexedTo != "" || stats.EntryCount != 0 {
 		s.cacheActiveIndexStats(runtime, view.GetActiveIndexId(), stats)
 	}
+	s.refreshHiddenColumns(ctx, opts.Metadata, auth, view)
 	return nil
+}
+
+// refreshHiddenColumns 更新 View 返回结果时要过滤的列。读取失败时保留上一次的结果，下一轮再读。
+func (s *Service) refreshHiddenColumns(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View) {
+	hidden := make(map[string]struct{})
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListDatasetColumns(ctx, &pb.ListDatasetColumnsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), DatasetId: view.GetDatasetId(),
+			Page: &pb.Page{Page: pageNo, Size: 1000},
+		})
+		if err == nil {
+			err = requireSuccess(rsp.GetRetInfo())
+		}
+		if err != nil {
+			log.Printf("storage view 读取数据集列状态失败 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
+			return
+		}
+		for _, column := range rsp.GetColumns() {
+			if status := column.GetStatus(); status != "" && status != "active" {
+				hidden[column.GetColumnName()] = struct{}{}
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetColumns()) == 0 {
+			break
+		}
+	}
+	_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())
+	if runtime == nil {
+		return
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.hiddenColumns = hidden
+	runtime.publishReadStateLocked()
 }
 
 // viewBars returns the number of bars a View keeps per series: the policy's
