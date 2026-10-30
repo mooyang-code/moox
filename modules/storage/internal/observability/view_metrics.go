@@ -54,6 +54,7 @@ type ViewMetrics struct {
 	expiredRowsDropped               *prometheus.CounterVec
 	oldestRowsDeleted                *prometheus.CounterVec
 	oldestDeleteLockSeconds          prometheus.Histogram
+	oldestDeleteLastRound            prometheus.Gauge
 	readyQueuePending                prometheus.Gauge
 	readyQueueOldestAge              prometheus.GaugeFunc
 	readyPublishBackoff              prometheus.Gauge
@@ -280,6 +281,10 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Help:    "Time one oldest-row delete batch held the View index write lock.",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2},
 		}),
+		oldestDeleteLastRound: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_delete_last_round_timestamp_seconds",
+			Help: "Wall time when the last oldest-row delete round finished, whether or not it deleted anything.",
+		}),
 		readyQueuePending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_pending",
 			Help: "View ready events waiting to be published.",
@@ -460,6 +465,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.oldestDeleteLockSeconds, err = registerOrReuse(registerer, metrics.oldestDeleteLockSeconds); err != nil {
 		return nil, err
 	}
+	if metrics.oldestDeleteLastRound, err = registerOrReuse(registerer, metrics.oldestDeleteLastRound); err != nil {
+		return nil, err
+	}
 	if metrics.readyQueuePending, err = registerOrReuse(registerer, metrics.readyQueuePending); err != nil {
 		return nil, err
 	}
@@ -627,6 +635,14 @@ func (m *ViewMetrics) ObserveViewOldestRowsDeleted(space, view string, rows uint
 	if rows > 0 {
 		m.oldestRowsDeleted.WithLabelValues(space, view).Add(float64(rows))
 	}
+}
+
+// ObserveViewOldestDeleteRound 记录一轮删除最旧数据结束的时间（没有可删的也记），用来确认定时任务在跑。
+func (m *ViewMetrics) ObserveViewOldestDeleteRound(finished time.Time) {
+	if m == nil {
+		return
+	}
+	m.oldestDeleteLastRound.Set(float64(finished.UnixNano()) / 1e9)
 }
 
 // SetReadyQueue 记录就绪队列的深度与最老事件的时间（队列为空时 oldest 为零值）。

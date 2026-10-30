@@ -45,6 +45,8 @@ func (s *Service) StartDeleteOldest(ctx context.Context, opts DeleteOldestOption
 	if now == nil {
 		now = time.Now
 	}
+	log.Printf("storage view 定时删除最旧数据已启动：每分钟第 10 秒触发、偶数分钟执行，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 批",
+		opts.BatchSize, deleteOldestSeriesPerBatch, deleteOldestBatchesPerRound)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -134,18 +136,25 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 		}
 		return targets[i].ref.viewID < targets[j].ref.viewID
 	})
+	var deleted uint64
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := s.deleteOldestFromIndex(ctx, target, bars, batchSize); err != nil {
+		n, err := s.deleteOldestFromIndex(ctx, target, bars, batchSize)
+		if err != nil {
 			log.Printf("storage view 删除最旧数据失败 space=%s view=%s index=%s：%v", target.ref.spaceID, target.ref.viewID, target.indexID, err)
 		}
+		deleted += n
+	}
+	s.metrics.ObserveViewOldestDeleteRound(time.Now())
+	if deleted > 0 {
+		log.Printf("storage view 删除最旧数据本轮完成：检查 %d 个时序索引，共删除 %d 行", len(targets), deleted)
 	}
 }
 
-// deleteOldestFromIndex 对一个索引删一轮，最多 batchSize × deleteOldestBatchesPerRound 行。
-func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldestTarget, bars uint64, batchSize int) error {
+// deleteOldestFromIndex 对一个索引删一轮，最多 batchSize × deleteOldestBatchesPerRound 行，返回删除的行数。
+func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldestTarget, bars uint64, batchSize int) (uint64, error) {
 	roundCap := batchSize * deleteOldestBatchesPerRound
 	began := time.Now()
 	var deleted uint64
@@ -154,21 +163,21 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 		// 查分界只读，不持写锁；删除只碰比分界更旧的行，实时写入追加的新根不受影响。
 		cuts, err := target.deleter.PlanOldestRows(ctx, target.indexID, bars, deleteOldestSeriesPerBatch, min(batchSize, roundCap-int(deleted)))
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		if len(cuts) == 0 {
 			break
 		}
 		release, err := s.indexWriteGate(target.indexID).lock(ctx)
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		lockedAt := time.Now()
 		n, err := target.deleter.DeleteOldestRows(ctx, target.indexID, cuts)
 		held := time.Since(lockedAt)
 		release()
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		maxHeld = max(maxHeld, held)
 		s.metrics.ObserveViewOldestRowsDeleted(target.ref.spaceID, target.ref.viewID, n, held)
@@ -181,23 +190,23 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 		deleted += n
 	}
 	if deleted == 0 {
-		return nil
+		return 0, nil
 	}
 	release, err := s.indexWriteGate(target.indexID).lock(ctx)
 	if err != nil {
-		return err
+		return deleted, err
 	}
 	from, err := target.deleter.RefreshCoverageFrom(ctx, target.indexID)
 	release()
 	if err != nil {
-		return err
+		return deleted, err
 	}
 	s.refreshCachedCoverageFrom(target, from)
 	if int(deleted) >= roundCap {
 		// 达到一轮上限说明还有积压（首次删到保留根数，或删除跟不上写入），剩余部分留到下一轮。
 		log.Printf("storage view 删除最旧数据本轮达到上限 space=%s view=%s 行=%d 用时=%s 单批最长持锁=%s", target.ref.spaceID, target.ref.viewID, deleted, time.Since(began).Round(time.Millisecond), maxHeld.Round(time.Millisecond))
 	}
-	return nil
+	return deleted, nil
 }
 
 // refreshCachedCoverageFrom 把缓存的活动索引覆盖起点改成删除后的值，查询响应不用等下一次全量统计。
