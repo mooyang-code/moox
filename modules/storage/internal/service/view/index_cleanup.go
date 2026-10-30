@@ -278,6 +278,11 @@ func (s *Service) removeRetiredIndex(ctx context.Context, ref managedIndexRef, e
 		return fmt.Errorf("lock retired view index engine=%s index_id=%s: %w", ref.engine, ref.indexID, err)
 	}
 	defer release()
+	// 等写锁期间同名 View 可能刚准备好索引：运行时这时才出现，这轮不删。
+	if runtime == nil && s.runtimeOfIndex(ref.indexID) != nil {
+		s.cancelCleanupCandidate(ref, "runtime_created")
+		return nil
+	}
 	if runtime != nil {
 		if (runtime.active == ref.indexID || runtime.building == ref.indexID) && s.indexEngineMatches(ref) {
 			runtime.mu.Unlock()

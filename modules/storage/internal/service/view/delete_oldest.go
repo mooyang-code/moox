@@ -39,7 +39,7 @@ type DeleteOldestOptions struct {
 	now func() time.Time
 }
 
-// StartMinuteTasks 启动每分钟的定时任务，返回停止函数。维护尚未就绪（首次维护没跑完）时跳过本轮。
+// StartMinuteTasks 启动每分钟的定时任务，返回停止函数。还没建好索引的 View 由两件事各自跳过。
 func (s *Service) StartMinuteTasks(ctx context.Context, opts DeleteOldestOptions) func() {
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = DefaultDeleteOldestBatchSize
@@ -63,9 +63,6 @@ func (s *Service) StartMinuteTasks(ctx context.Context, opts DeleteOldestOptions
 				timer.Stop()
 				return
 			case fired := <-timer.C:
-				if !s.maintenanceReadyNow() {
-					continue
-				}
 				s.extendViewSchemasRound(loopCtx)
 				if deleteOldestRoundDue(fired) {
 					s.deleteOldestRound(loopCtx, opts.BatchSize)

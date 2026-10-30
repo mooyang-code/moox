@@ -63,8 +63,8 @@ func (s *Service) recoverViewSchemaExtension(ctx context.Context, metadata Metad
 }
 
 func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
-	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine)
-	if err != nil || !ok {
+	// 先按快照判断有没有要加的列：每分钟都要检查所有 View，绝大多数没有新列，不用取锁、不用重读。
+	if _, _, _, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine); err != nil || !ok {
 		return false, err
 	}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
@@ -89,6 +89,16 @@ func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient,
 		return false, err
 	}
 	defer release()
+	// 定时任务和维护循环都会走到这里，各自拿的是自己的快照。加列只在这两把锁下提交，所以持锁后重读一次：
+	// 用过期的快照算目标，会把别的一轮刚提交的修订号再加一遍列，物理索引和元数据的哈希就对不上了。
+	view, err = s.readActiveView(ctx, metadata, auth, view.GetSpaceId(), view.GetViewId())
+	if err != nil {
+		return false, err
+	}
+	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine)
+	if err != nil || !ok {
+		return false, err
+	}
 	if err := extender.ExtendColumns(ctx, view.GetActiveIndexId(), current, next); err != nil {
 		return false, fmt.Errorf("原地加列：%w", err)
 	}

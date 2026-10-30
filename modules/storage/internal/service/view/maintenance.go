@@ -78,33 +78,23 @@ func (s *Service) StartViewMaintainer(ctx context.Context, opts MaintenanceOptio
 	if err := s.maintainOnce(ctx, opts); err != nil {
 		return nil, err
 	}
-	s.setMaintenanceReady(true)
 	return s.startViewMaintenanceLoop(ctx, opts), nil
 }
 
-// StartViewMaintainerAsync starts the periodic check without making process
-// startup wait for a potentially large historical backfill. Until the first
-// successful pass completes, event handlers keep deliveries pending.
+// StartViewMaintainerAsync 启动周期维护，不让进程启动等待首次建索引的大批量回填。
 func (s *Service) StartViewMaintainerAsync(ctx context.Context, opts MaintenanceOptions) (func(), error) {
 	var err error
 	opts, err = s.normalizeMaintenanceOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	s.setMaintenanceReady(false)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		firstPass := true
 		run := func() {
 			if err := s.maintainOnce(loopCtx, opts); err != nil {
 				log.Printf("storage view maintenance failed: %v", err)
-				return
-			}
-			if firstPass {
-				s.setMaintenanceReady(true)
-				firstPass = false
 			}
 		}
 		run()

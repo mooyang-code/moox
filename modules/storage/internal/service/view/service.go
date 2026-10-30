@@ -54,7 +54,6 @@ type Service struct {
 	cleanupCandidates map[managedIndexRef]retiredIndexCandidate
 	fileOverLimitMu   sync.Mutex
 	fileOverLimit     map[viewRef]struct{}
-	maintenanceReady  bool
 	pendingReadyMu    sync.Mutex
 	pendingReady      []pendingViewReady
 	readyFlushMu      sync.Mutex
@@ -199,23 +198,6 @@ func New(root, authSecret string) (*Service, error) {
 		return nil, err
 	}
 	return service, nil
-}
-
-func (s *Service) maintenanceReadyNow() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.maintenanceReady
-}
-
-func (s *Service) setMaintenanceReady(ready bool) {
-	s.mu.Lock()
-	s.maintenanceReady = ready
-	s.mu.Unlock()
-}
-
-// MarkMaintenanceReady 让运维可以只跑实时消费、暂停建索引：事件照常处理，这种模式下服务不启动维护协程。
-func (s *Service) MarkMaintenanceReady() {
-	s.setMaintenanceReady(true)
 }
 
 func (s *Service) nextIndexRevision(indexID string) uint64 {

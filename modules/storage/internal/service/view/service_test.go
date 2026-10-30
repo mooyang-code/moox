@@ -306,7 +306,6 @@ func TestDatasetEventStaysPendingWhenNewManagedViewIsNotAttached(t *testing.T) {
 		SpaceId: "space", ViewId: "prices", DatasetId: "market", Status: "active",
 	}}
 	svc.setMetadataClient(metadata)
-	svc.setMaintenanceReady(true)
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil {
 		t.Fatal("managed Dataset row was ACKable before its View mapping was attached")

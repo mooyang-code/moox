@@ -450,7 +450,6 @@ func runViewRole() error {
 	defer stopDynamicConsumer()
 	if storageViewMaintenanceDisabled() {
 		// 运维主动暂停建索引时（Storage 主机过载），实时消费照常工作。
-		svc.MarkMaintenanceReady()
 		log.Printf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
 	} else {
 		stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
