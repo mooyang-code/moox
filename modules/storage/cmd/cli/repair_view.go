@@ -45,35 +45,27 @@ type repairViewOptions struct {
 	yes           bool
 	dryRun        bool
 	resetConsumer bool
-	forceRebuild  bool
 	restart       bool
-	purgeInactive bool
 	resetView     bool
 }
 
 type repairViewSummary struct {
-	SpaceID                 string   `json:"space_id"`
-	ViewID                  string   `json:"view_id"`
-	DBPath                  string   `json:"db_path"`
-	BackupPath              string   `json:"backup_path,omitempty"`
-	ActiveIndexID           string   `json:"active_index_id,omitempty"`
-	InactiveIndexID         string   `json:"inactive_index_id,omitempty"`
-	PreviousDesiredRevision uint64   `json:"previous_desired_revision"`
-	DesiredRevision         uint64   `json:"desired_revision"`
-	ConsumerReset           bool     `json:"consumer_reset"`
-	RebuildTriggered        bool     `json:"rebuild_triggered"`
-	InactiveIndexesRemoved  []string `json:"inactive_indexes_removed,omitempty"`
-	ViewIndexesRemoved      []string `json:"view_indexes_removed,omitempty"`
-	ViewReset               bool     `json:"view_reset"`
-	Restarted               bool     `json:"restarted"`
-	DryRun                  bool     `json:"dry_run"`
-	Warnings                []string `json:"warnings,omitempty"`
+	SpaceID            string   `json:"space_id"`
+	ViewID             string   `json:"view_id"`
+	DBPath             string   `json:"db_path"`
+	BackupPath         string   `json:"backup_path,omitempty"`
+	ActiveIndexID      string   `json:"active_index_id,omitempty"`
+	ConsumerReset      bool     `json:"consumer_reset"`
+	ViewIndexesRemoved []string `json:"view_indexes_removed,omitempty"`
+	ViewReset          bool     `json:"view_reset"`
+	Restarted          bool     `json:"restarted"`
+	DryRun             bool     `json:"dry_run"`
+	Warnings           []string `json:"warnings,omitempty"`
 }
 
 type repairViewRecord struct {
-	Engine          string
-	ActiveIndexID   string
-	DesiredRevision uint64
+	Engine        string
+	ActiveIndexID string
 }
 
 // These hooks keep the destructive orchestration testable without connecting
@@ -188,7 +180,7 @@ func writeForceRebuildViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 		stdout = io.Discard
 	}
 	fmt.Fprintln(stdout, "用法: moox-cli storage force-rebuild-view --space-id <space> --view-id <view> --yes")
-	fmt.Fprintln(stdout, "操作: 停止 storage-view、删除 durable consumer、删除旧 View 索引和运行时指针，从可重放事件重新创建 View")
+	fmt.Fprintln(stdout, "操作: 停止 storage-view、删除 durable consumer、删除 View 索引和活动索引指针，重启后从 Primary 重新建索引")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
 }
@@ -209,23 +201,14 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		return err
 	}
 	summary := repairViewSummary{
-		SpaceID:                 opts.spaceID,
-		ViewID:                  opts.viewID,
-		DBPath:                  dbPath,
-		ActiveIndexID:           record.ActiveIndexID,
-		InactiveIndexID:         viewindex.InactiveViewIndexID(opts.spaceID, opts.viewID, record.ActiveIndexID),
-		PreviousDesiredRevision: record.DesiredRevision,
-		DesiredRevision:         nextViewRevision(record.DesiredRevision),
-		DryRun:                  opts.dryRun,
-	}
-	if summary.ActiveIndexID != "" {
-		summary.Warnings = append(summary.Warnings, "active view index is preserved; the rebuild uses the normal A/B switch path")
-	}
-	if opts.purgeInactive {
-		summary.Warnings = append(summary.Warnings, "only the inactive slot is purged; the active slot is never deleted by this command")
+		SpaceID:       opts.spaceID,
+		ViewID:        opts.viewID,
+		DBPath:        dbPath,
+		ActiveIndexID: record.ActiveIndexID,
+		DryRun:        opts.dryRun,
 	}
 	if opts.resetView {
-		summary.Warnings = append(summary.Warnings, "reset-view-indexes deletes both physical slots and requires replayable source events")
+		summary.Warnings = append(summary.Warnings, "reset-view-indexes 删除索引后 View 不可读，直到从 Primary 重新建完")
 	}
 	// 要删消费者时，在停止任何服务之前先确认网关、Admin 与 EventBus 都可用、流存在：
 	// 否则可能 View 已被停止才发现连不上。dry-run 也走这一步，让它真正成为预检。
@@ -264,36 +247,16 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		}
 		summary.ConsumerReset = deleted
 	}
-	if opts.forceRebuild && !opts.resetView {
-		if err := forceRepairViewRevision(ctx, dbPath, opts.spaceID, opts.viewID, summary.DesiredRevision); err != nil {
-			return fmt.Errorf("force View rebuild: %w", err)
-		}
-		summary.RebuildTriggered = true
-	}
 	if opts.resetView {
-		if err := resetRepairViewMetadata(ctx, dbPath, opts.spaceID, opts.viewID, summary.DesiredRevision); err != nil {
+		if err := resetRepairViewMetadata(ctx, dbPath, opts.spaceID, opts.viewID); err != nil {
 			return fmt.Errorf("reset View metadata: %w", err)
 		}
-		// Metadata may already have lost its active pointer after an interrupted
-		// reset, while the other physical slot still exists. Derive both stable
-		// slot IDs instead of relying only on the recorded active pointer.
-		removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, record.Engine,
-			viewindex.ViewIndexID(opts.spaceID, opts.viewID, viewindex.SlotA),
-			viewindex.ViewIndexID(opts.spaceID, opts.viewID, viewindex.SlotB),
-		)
+		removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, record.Engine, viewindex.ViewIndexID(opts.spaceID, opts.viewID))
 		if err != nil {
 			return fmt.Errorf("delete View indexes: %w", err)
 		}
 		summary.ViewIndexesRemoved = removed
 		summary.ViewReset = true
-		summary.RebuildTriggered = true
-	}
-	if opts.purgeInactive {
-		removed, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, record.Engine, summary.InactiveIndexID)
-		if err != nil {
-			return fmt.Errorf("purge inactive View index: %w", err)
-		}
-		summary.InactiveIndexesRemoved = removed
 	}
 	if opts.restart {
 		if err := runRepairLifecycle(ctx, packageRoot, "start", opts.deliverPolicy, stderr); err != nil {
@@ -324,10 +287,8 @@ func bindRepairViewFlags(fs *flag.FlagSet, opts *repairViewOptions) {
 	fs.BoolVar(&opts.yes, "yes", false, "confirm the maintenance operation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the View without stopping services or changing state")
 	fs.BoolVar(&opts.resetConsumer, "reset-consumer", true, "delete the durable View consumer before restart")
-	fs.BoolVar(&opts.forceRebuild, "force-rebuild", true, "bump the desired View revision to trigger A/B rebuild")
 	fs.BoolVar(&opts.restart, "restart", true, "restart storage-view after maintenance")
-	fs.BoolVar(&opts.purgeInactive, "purge-inactive-index", false, "delete only the inactive physical index slot")
-	fs.BoolVar(&opts.resetView, "reset-view-indexes", false, "delete both physical slots and rebuild from retained source events")
+	fs.BoolVar(&opts.resetView, "reset-view-indexes", false, "delete the physical index and rebuild it from Primary")
 }
 
 func defaultRepairStorageConfigPath() string {
@@ -350,7 +311,7 @@ func writeRepairViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 		stdout = io.Discard
 	}
 	fmt.Fprintln(stdout, "用法: moox-cli storage repair-view --space-id <space> --view-id <view> --yes")
-	fmt.Fprintln(stdout, "默认操作: 停止 storage-view、删除 durable View consumer、备份元数据、触发 A/B 重建并重启服务")
+	fmt.Fprintln(stdout, "默认操作: 停止 storage-view、删除 durable View consumer、备份元数据并重启服务；加 --reset-view-indexes 时删除索引，重启后从 Primary 重新建")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
 }
@@ -375,10 +336,10 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 		return fmt.Errorf("--deliver-policy %q is unsupported; want new or all", opts.deliverPolicy)
 	}
 	opts.deliverPolicy = policy
-	if !opts.resetConsumer && !opts.forceRebuild && !opts.purgeInactive && !opts.resetView {
-		return errors.New("nothing to repair: enable --reset-consumer, --force-rebuild, --purge-inactive-index, or --reset-view-indexes")
+	if !opts.resetConsumer && !opts.resetView {
+		return errors.New("nothing to repair: enable --reset-consumer or --reset-view-indexes")
 	}
-	if (opts.purgeInactive || opts.resetView) && !opts.yes && !opts.dryRun {
+	if opts.resetView && !opts.yes && !opts.dryRun {
 		return errors.New("index deletion requires --yes")
 	}
 	if opts.resetView && opts.deliverPolicy != "all" {
@@ -487,7 +448,7 @@ func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (rep
 	defer db.Close()
 	var record repairViewRecord
 	var attrs string
-	err = db.QueryRowContext(ctx, `SELECT c_engine, c_active_index_id, c_desired_view_revision, c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&record.Engine, &record.ActiveIndexID, &record.DesiredRevision, &attrs)
+	err = db.QueryRowContext(ctx, `SELECT c_engine, c_active_index_id, c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&record.Engine, &record.ActiveIndexID, &attrs)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return repairViewRecord{}, fmt.Errorf("View %s/%s was not found", spaceID, viewID)
@@ -501,13 +462,6 @@ func inspectRepairView(ctx context.Context, dbPath, spaceID, viewID string) (rep
 		return repairViewRecord{}, errors.New("View metadata attributes are empty or invalid JSON")
 	}
 	return record, nil
-}
-
-func nextViewRevision(current uint64) uint64 {
-	if current == 0 {
-		return 2
-	}
-	return current + 1
 }
 
 func backupRepairDB(path string) (string, error) {
@@ -634,7 +588,7 @@ func copyOptionalFile(source, target string) error {
 	return nil
 }
 
-func forceRepairViewRevision(ctx context.Context, dbPath, spaceID, viewID string, revision uint64) error {
+func resetRepairViewMetadata(ctx context.Context, dbPath, spaceID, viewID string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -653,60 +607,17 @@ func forceRepairViewRevision(ctx context.Context, dbPath, spaceID, viewID string
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(attrs), view); err != nil {
 		return fmt.Errorf("decode View attributes: %w", err)
 	}
-	view.DesiredViewRevision = revision
-	view.Columns = nil
-	view.IndexBuild = nil
-	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(view)
-	if err != nil {
-		return err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE t_views SET c_desired_view_revision = ?, c_attrs_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_view_id = ?`, revision, string(raw), spaceID, viewID)
-	if err != nil {
-		return err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if changed != 1 {
-		return fmt.Errorf("View %s/%s disappeared while updating metadata", spaceID, viewID)
-	}
-	return tx.Commit()
-}
-
-func resetRepairViewMetadata(ctx context.Context, dbPath, spaceID, viewID string, revision uint64) error {
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var attrs string
-	if err := tx.QueryRowContext(ctx, `SELECT c_attrs_json FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID).Scan(&attrs); err != nil {
-		return err
-	}
-	view := &storagepb.View{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(attrs), view); err != nil {
-		return fmt.Errorf("decode View attributes: %w", err)
-	}
-	view.DesiredViewRevision = revision
 	view.ActiveIndexId = ""
-	view.ActiveViewRevision = 0
+	view.ViewRevision = 0
 	view.ActiveColumns = nil
 	view.ActiveViewSchemaHash = ""
-	view.ActiveSlot = "slot-a"
 	view.IndexedFrom = ""
 	view.IndexedTo = ""
-	view.IndexBuild = nil
 	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(view)
 	if err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = '', c_desired_view_revision = ?, c_active_view_revision = 0, c_active_columns_json = '[]', c_active_view_schema_hash = '', c_active_slot = 'slot-a', c_indexed_from = '', c_indexed_to = '', c_attrs_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_view_id = ?`, revision, string(raw), spaceID, viewID)
+	result, err := tx.ExecContext(ctx, `UPDATE t_views SET c_active_index_id = '', c_view_revision = 0, c_active_columns_json = '[]', c_active_view_schema_hash = '', c_indexed_from = '', c_indexed_to = '', c_attrs_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_view_id = ?`, string(raw), spaceID, viewID)
 	if err != nil {
 		return err
 	}
@@ -716,9 +627,6 @@ func resetRepairViewMetadata(ctx context.Context, dbPath, spaceID, viewID string
 	}
 	if changed != 1 {
 		return fmt.Errorf("View %s/%s disappeared while resetting metadata", spaceID, viewID)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, spaceID, viewID); err != nil {
-		return err
 	}
 	// These protocol checkpoints belong to the old View incarnation. Keeping
 	// them would make replayed period/sync events look already applied and

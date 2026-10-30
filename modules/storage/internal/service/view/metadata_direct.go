@@ -19,10 +19,9 @@ type directMetadataClient struct {
 }
 
 var (
-	_ MetadataClient           = (*directMetadataClient)(nil)
-	_ PeriodMetadataClient     = (*directMetadataClient)(nil)
-	_ ViewInventoryClient      = (*directMetadataClient)(nil)
-	_ rebuildLogMetadataClient = (*directMetadataClient)(nil)
+	_ MetadataClient       = (*directMetadataClient)(nil)
+	_ PeriodMetadataClient = (*directMetadataClient)(nil)
+	_ ViewInventoryClient  = (*directMetadataClient)(nil)
 )
 
 // NewDirectMetadataClient 包装 Metadata 的 tRPC 客户端，请求体里统一补上 storage-view 的服务签名。
@@ -59,49 +58,14 @@ func (c *directMetadataClient) ListSubjects(ctx context.Context, request *pb.Lis
 	return c.proxy.ListSubjects(ctx, request, options...)
 }
 
-func (c *directMetadataClient) ClaimViewIndexBuild(ctx context.Context, request *pb.ClaimViewIndexBuildReq, options ...client.Option) (*pb.ClaimViewIndexBuildRsp, error) {
+func (c *directMetadataClient) CompleteViewInitialBuild(ctx context.Context, request *pb.CompleteViewInitialBuildReq, options ...client.Option) (*pb.CompleteViewInitialBuildRsp, error) {
 	request.AuthInfo = c.auth()
-	return c.proxy.ClaimViewIndexBuild(ctx, request, options...)
-}
-
-func (c *directMetadataClient) UpdateViewIndexBuild(ctx context.Context, request *pb.UpdateViewIndexBuildReq, options ...client.Option) (*pb.UpdateViewIndexBuildRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.UpdateViewIndexBuild(ctx, request, options...)
-}
-
-func (c *directMetadataClient) ActivateViewIndex(ctx context.Context, request *pb.ActivateViewIndexReq, options ...client.Option) (*pb.ActivateViewIndexRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.ActivateViewIndex(ctx, request, options...)
+	return c.proxy.CompleteViewInitialBuild(ctx, request, options...)
 }
 
 func (c *directMetadataClient) CommitViewSchemaExtension(ctx context.Context, request *pb.CommitViewSchemaExtensionReq, options ...client.Option) (*pb.CommitViewSchemaExtensionRsp, error) {
 	request.AuthInfo = c.auth()
 	return c.proxy.CommitViewSchemaExtension(ctx, request, options...)
-}
-
-func (c *directMetadataClient) FailViewIndexBuild(ctx context.Context, request *pb.FailViewIndexBuildReq, options ...client.Option) (*pb.FailViewIndexBuildRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.FailViewIndexBuild(ctx, request, options...)
-}
-
-func (c *directMetadataClient) ListViewRebuildLogs(ctx context.Context, request *pb.ListViewRebuildLogsReq, options ...client.Option) (*pb.ListViewRebuildLogsRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.ListViewRebuildLogs(ctx, request, options...)
-}
-
-func (c *directMetadataClient) CreateViewRebuildLog(ctx context.Context, request *pb.CreateViewRebuildLogReq, options ...client.Option) (*pb.CreateViewRebuildLogRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.CreateViewRebuildLog(ctx, request, options...)
-}
-
-func (c *directMetadataClient) UpdateViewRebuildLog(ctx context.Context, request *pb.UpdateViewRebuildLogReq, options ...client.Option) (*pb.UpdateViewRebuildLogRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.UpdateViewRebuildLog(ctx, request, options...)
-}
-
-func (c *directMetadataClient) UpsertSkippedViewRebuildLog(ctx context.Context, request *pb.UpsertSkippedViewRebuildLogReq, options ...client.Option) (*pb.UpsertSkippedViewRebuildLogRsp, error) {
-	request.AuthInfo = c.auth()
-	return c.proxy.UpsertSkippedViewRebuildLog(ctx, request, options...)
 }
 
 func (c *directMetadataClient) UpsertViewPeriodDatasetState(ctx context.Context, request *pb.UpsertViewPeriodDatasetStateReq, options ...client.Option) (*pb.UpsertViewPeriodDatasetStateRsp, error) {

@@ -33,16 +33,16 @@ func (c *RPCClient) pageSize() uint32 {
 	return 500
 }
 
-// activeBuildIDAttribute 是 Storage 激活索引时记录构建 ID 的内部属性。
-const activeBuildIDAttribute = "moox.active_build_id"
+// indexGenerationAttribute 是 Storage 建成索引时记录代次的内部属性。
+const indexGenerationAttribute = "moox.index_generation"
 
-// viewGeneration 组合活动索引的代次：活动索引 ID 加上激活它的构建 ID；没有构建 ID 时只有活动索引 ID。
-func viewGeneration(activeIndexID, buildID string) string {
-	activeIndexID, buildID = strings.TrimSpace(activeIndexID), strings.TrimSpace(buildID)
-	if activeIndexID == "" || buildID == "" {
+// viewGeneration 组合索引的代次：索引 ID 加上建成时记录的代次；没有代次时只有索引 ID。
+func viewGeneration(activeIndexID, generation string) string {
+	activeIndexID, generation = strings.TrimSpace(activeIndexID), strings.TrimSpace(generation)
+	if activeIndexID == "" || generation == "" {
 		return activeIndexID
 	}
-	return activeIndexID + "@" + buildID
+	return activeIndexID + "@" + generation
 }
 
 // viewNotFound 是 View 已被删除的跳过：实时求值记 config_error（实例需要重新绑定），回放与启用直接报错。
@@ -69,7 +69,7 @@ func (c *RPCClient) ViewGeneration(ctx context.Context, spaceID, viewID string) 
 	if view == nil {
 		return "", viewNotFound(viewID)
 	}
-	return viewGeneration(view.GetActiveIndexId(), view.GetAttributes()[activeBuildIDAttribute]), nil
+	return viewGeneration(view.GetActiveIndexId(), view.GetAttributes()[indexGenerationAttribute]), nil
 }
 
 // GetView 读取 View 及其全部列（不含覆盖范围，见 ViewCoverage）。
@@ -92,7 +92,7 @@ func (c *RPCClient) GetView(ctx context.Context, spaceID, viewID string) (ViewIn
 		return ViewInfo{}, viewNotFound(viewID)
 	}
 	info := ViewInfo{ViewID: view.GetViewId(), DatasetID: view.GetDatasetId(), Frequency: view.GetFreq(), Status: view.GetStatus(), ActiveIndexID: strings.TrimSpace(view.GetActiveIndexId())}
-	info.Generation = viewGeneration(info.ActiveIndexID, view.GetAttributes()[activeBuildIDAttribute])
+	info.Generation = viewGeneration(info.ActiveIndexID, view.GetAttributes()[indexGenerationAttribute])
 	for page := uint32(1); ; page++ {
 		columns, err := c.Metadata.ListViewColumns(ctx, &storagepb.ListViewColumnsReq{AuthInfo: c.Auth, SpaceId: spaceID, ViewId: viewID, Page: &commonpb.Page{Page: page, Size: c.pageSize()}})
 		if err != nil {

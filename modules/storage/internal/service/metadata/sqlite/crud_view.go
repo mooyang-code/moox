@@ -73,7 +73,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		next.Attributes["moox.columns_explicit"] = "true"
 	}
 	next.Columns = nil
-	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
 	if strings.TrimSpace(next.Engine) == "" {
 		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
@@ -84,10 +83,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	grainKeys, err := marshalJSON(next.GetGrainKeys())
-	if err != nil {
-		return nil, err
-	}
-	activeColumns, err := marshalJSON(next.GetActiveColumns())
 	if err != nil {
 		return nil, err
 	}
@@ -106,23 +101,23 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			return nil, err
 		}
 	}
-	if existing != nil && existing.GetActiveIndexId() != "" {
-		if existing.GetEngine() != "" && existing.GetEngine() != next.GetEngine() {
-			return nil, errors.New("active view engine change is unsupported; create a new view")
-		}
-		if existing.GetDatasetId() != "" && existing.GetDatasetId() != next.GetDatasetId() {
-			return nil, errors.New("active view dataset change is unsupported; create a new view")
+	if existing != nil {
+		if err := validateViewDefinitionChange(existing, next); err != nil {
+			return nil, err
 		}
 	}
-	shapeChanged := existing != nil && viewIndexShapeChanged(existing, next)
-	mergeViewIndexState(existing, next, shapeChanged)
+	mergeViewIndexState(existing, next)
 	raw, err := marshal(next)
 	if err != nil {
 		return nil, err
 	}
+	activeColumns, err := marshalJSON(next.GetActiveColumns())
+	if err != nil {
+		return nil, err
+	}
 	insertSQL := `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_active_index_id, c_view_revision, c_active_columns_json, c_active_view_schema_hash, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if !createOnly {
 		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
@@ -132,17 +127,15 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_grain_keys_json = excluded.c_grain_keys_json,
 			c_engine = excluded.c_engine,
 			c_active_index_id = excluded.c_active_index_id,
-			c_desired_view_revision = excluded.c_desired_view_revision,
-			c_active_view_revision = excluded.c_active_view_revision,
+			c_view_revision = excluded.c_view_revision,
 			c_active_columns_json = excluded.c_active_columns_json,
 			c_active_view_schema_hash = excluded.c_active_view_schema_hash,
-			c_active_slot = excluded.c_active_slot,
 			c_indexed_from = excluded.c_indexed_from,
 			c_indexed_to = excluded.c_indexed_to,
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json`
 	}
-	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetActiveIndexId(), next.GetViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		var sqliteErr *sqlite.Error
 		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
@@ -150,41 +143,9 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		}
 		return nil, err
 	}
-	if shapeChanged {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, next.GetSpaceId(), next.GetViewId()); err != nil {
-			return nil, err
-		}
-	}
-	columnsChanged := false
 	if replaceColumns {
-		keep := make(map[string]struct{}, len(columns))
-		for _, column := range columns {
-			if column != nil && column.GetColumnName() != "" {
-				keep[column.GetColumnName()] = struct{}{}
-			}
-		}
-		if len(keep) == 0 {
-			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, next.GetSpaceId(), next.GetViewId())
-			if err != nil {
-				return nil, err
-			}
-			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
-				columnsChanged = affected > 0
-			}
-		} else {
-			placeholders := strings.TrimRight(strings.Repeat("?,", len(keep)), ",")
-			args := make([]any, 0, 2+len(keep))
-			args = append(args, next.GetSpaceId(), next.GetViewId())
-			for name := range keep {
-				args = append(args, name)
-			}
-			result, err := tx.ExecContext(ctx, `DELETE FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name NOT IN (`+placeholders+`)`, args...)
-			if err != nil {
-				return nil, err
-			}
-			if affected, affectedErr := result.RowsAffected(); affectedErr == nil {
-				columnsChanged = affected > 0
-			}
+		if err := rejectViewColumnRemoval(ctx, tx, next, columns); err != nil {
+			return nil, err
 		}
 	}
 	for _, column := range columns {
@@ -201,16 +162,9 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		column.SpaceId = next.GetSpaceId()
 		column.ViewId = next.GetViewId()
 		if column.GetColumnName() != "" {
-			changed, err := upsertViewColumn(ctx, tx, column)
-			if err != nil {
+			if err := upsertViewColumn(ctx, tx, column); err != nil {
 				return nil, err
 			}
-			columnsChanged = columnsChanged || changed
-		}
-	}
-	if existing != nil && columnsChanged && !shapeChanged {
-		if err := bumpViewVersion(ctx, tx, next.GetSpaceId(), next.GetViewId()); err != nil {
-			return nil, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -256,11 +210,6 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 		return nil, err
 	}
 	view.Columns = columns
-	build, err := s.GetViewIndexBuild(ctx, spaceID, viewID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	view.IndexBuild = build
 	return view, nil
 }
 
@@ -287,11 +236,6 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 			return nil, nil, err
 		}
 		item.Columns = columns
-		build, err := s.GetViewIndexBuild(ctx, item.GetSpaceId(), item.GetViewId())
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, err
-		}
-		item.IndexBuild = build
 	}
 	return items, pageResult, nil
 }
@@ -315,14 +259,8 @@ func (s *Store) UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	changed, err := upsertViewColumn(ctx, tx, item)
-	if err != nil {
+	if err := upsertViewColumn(ctx, tx, item); err != nil {
 		return nil, err
-	}
-	if changed {
-		if err := bumpViewVersion(ctx, tx, item.GetSpaceId(), item.GetViewId()); err != nil {
-			return nil, err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -330,49 +268,36 @@ func (s *Store) UpsertViewColumn(ctx context.Context, item *pb.ViewColumn) (*pb.
 	return item, nil
 }
 
-func upsertViewColumn(ctx context.Context, store execQueryRower, item *pb.ViewColumn) (bool, error) {
+// upsertViewColumn 写入 View 列：已有列的来源和类型不能改、排序保持原值，只有属性和上线时间可改；新列排在现有列之后。
+func upsertViewColumn(ctx context.Context, store execQueryRower, item *pb.ViewColumn) error {
 	existing, err := getMessage(ctx, store, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`, []any{item.GetSpaceId(), item.GetViewId(), item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, err
+	switch {
+	case err == nil:
+		if existing.GetOriginType() != item.GetOriginType() || existing.GetOriginId() != item.GetOriginId() || existing.GetValueType() != item.GetValueType() {
+			return fmt.Errorf("View 列 %q 的来源和类型不能修改", item.GetColumnName())
+		}
+		item.SortOrder = existing.GetSortOrder()
+	case errors.Is(err, sql.ErrNoRows):
+		var nextOrder uint32
+		if err := store.QueryRowContext(ctx, `SELECT COALESCE(MAX(c_sort_order) + 1, 0) FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ?`, item.GetSpaceId(), item.GetViewId()).Scan(&nextOrder); err != nil {
+			return err
+		}
+		item.SortOrder = max(item.GetSortOrder(), nextOrder)
+	default:
+		return err
 	}
 	raw, err := marshal(item)
 	if err != nil {
-		return false, err
+		return err
 	}
 	_, err = store.ExecContext(ctx, `
 		INSERT INTO t_view_columns (c_space_id, c_view_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_online_time, c_sort_order, c_attrs_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_view_id, c_column_name) DO UPDATE SET
-			c_origin_type = excluded.c_origin_type,
-			c_origin_id = excluded.c_origin_id,
-			c_value_type = excluded.c_value_type,
 			c_online_time = excluded.c_online_time,
-			c_sort_order = excluded.c_sort_order,
 			c_attrs_json = excluded.c_attrs_json
 	`, item.GetSpaceId(), item.GetViewId(), item.GetColumnName(), viewOriginSQL(item.GetOriginType()), item.GetOriginId(), valueTypeSQL(item.GetValueType()), item.GetOnlineTime(), item.GetSortOrder(), raw)
-	if err != nil {
-		return false, err
-	}
-	return existing == nil || viewColumnShapeChanged(existing, item), nil
-}
-
-func viewColumnShapeChanged(existing *pb.ViewColumn, next *pb.ViewColumn) bool {
-	if existing.GetOriginType() != next.GetOriginType() {
-		return true
-	}
-	if existing.GetOriginId() != next.GetOriginId() {
-		return true
-	}
-	if existing.GetValueType() != next.GetValueType() {
-		return true
-	}
-	if existing.GetOnlineTime() != next.GetOnlineTime() {
-		return true
-	}
-	if existing.GetSortOrder() != next.GetSortOrder() {
-		return true
-	}
-	return !mapsEqual(existing.GetAttributes(), next.GetAttributes())
+	return err
 }
 
 func (s *Store) ListViewColumns(ctx context.Context, spaceID string, viewID string, page *pb.Page) ([]*pb.ViewColumn, *pb.PageResult, error) {

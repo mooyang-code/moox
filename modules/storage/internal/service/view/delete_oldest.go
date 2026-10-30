@@ -10,9 +10,10 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 )
 
-// 定时删除最旧数据：时序 View 每个序列只保留最新的 bars 根，超出的部分由这个定时任务删掉，不再靠 A/B 重建裁剪。
+// 每分钟的定时任务：第 10 秒触发（避开整点前后的周期提交与策略读取高峰），先给声明了新列的 View 原地加列，
+// 偶数分钟再删一轮最旧数据。两件事在同一个任务里顺序执行，不会同时占用写锁。
 //
-// 任务每分钟第 10 秒触发（避开整点前后的周期提交与策略读取高峰），偶数分钟执行一轮。一轮里逐个活动索引处理：
+// 定时删除最旧数据：时序 View 每个序列只保留最新的 bars 根，超出的部分由这个任务删掉。一轮里逐个活动索引处理：
 // 先不持锁按快照算出每个序列的删除分界，再拿该索引的写锁在一个短事务里删掉分界之前的行并减计数，批与批之间放开写锁，
 // 让实时写入插进来。2 分钟一轮的开销约为每分钟一轮的一半（成本主要在逐个序列查分界），序列最多临时多出 1 根。
 const (
@@ -38,8 +39,8 @@ type DeleteOldestOptions struct {
 	now func() time.Time
 }
 
-// StartDeleteOldest 启动定时删除最旧数据的任务，返回停止函数。维护尚未就绪（首次维护没跑完）时跳过本轮。
-func (s *Service) StartDeleteOldest(ctx context.Context, opts DeleteOldestOptions) func() {
+// StartMinuteTasks 启动每分钟的定时任务，返回停止函数。维护尚未就绪（首次维护没跑完）时跳过本轮。
+func (s *Service) StartMinuteTasks(ctx context.Context, opts DeleteOldestOptions) func() {
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = DefaultDeleteOldestBatchSize
 	}
@@ -47,7 +48,7 @@ func (s *Service) StartDeleteOldest(ctx context.Context, opts DeleteOldestOption
 	if now == nil {
 		now = time.Now
 	}
-	log.Printf("storage view 定时删除最旧数据已启动：每分钟第 10 秒触发、偶数分钟执行，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 行",
+	log.Printf("storage view 定时任务已启动：每分钟第 10 秒检查加列，偶数分钟删除最旧数据，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 行",
 		opts.BatchSize, deleteOldestSeriesPerBatch, opts.BatchSize*deleteOldestRoundRowsFactor)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -62,10 +63,13 @@ func (s *Service) StartDeleteOldest(ctx context.Context, opts DeleteOldestOption
 				timer.Stop()
 				return
 			case fired := <-timer.C:
-				if !deleteOldestRoundDue(fired) {
+				if !s.maintenanceReadyNow() {
 					continue
 				}
-				s.deleteOldestRound(loopCtx, opts.BatchSize)
+				s.extendViewSchemasRound(loopCtx)
+				if deleteOldestRoundDue(fired) {
+					s.deleteOldestRound(loopCtx, opts.BatchSize)
+				}
 			}
 		}
 	}()
@@ -101,7 +105,6 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 		runtime *viewRuntime
 	}
 	s.mu.RLock()
-	ready := s.maintenanceReady
 	bars := s.seriesBars
 	candidates := make([]candidate, 0, len(s.views))
 	for ref, runtime := range s.views {
@@ -110,16 +113,13 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 		}
 	}
 	s.mu.RUnlock()
-	if !ready || bars == 0 {
+	if bars == 0 {
 		return
 	}
 	targets := make([]deleteOldestTarget, 0, len(candidates))
 	for _, item := range candidates {
-		item.runtime.mu.Lock()
-		activeID, nextID := item.runtime.active, item.runtime.next
-		item.runtime.mu.Unlock()
-		// 正在做 A/B 构建的 View 跳过：新索引按保留根数回填，切换后由下一轮接着处理。
-		if activeID == "" || nextID != "" {
+		activeID := item.runtime.queryState().active
+		if activeID == "" {
 			continue
 		}
 		engine, err := s.engineFor(activeID)

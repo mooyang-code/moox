@@ -17,14 +17,16 @@ func TestViewIndexWriteBatchValidate(t *testing.T) {
 	}
 }
 
-func TestViewIndexSlotRoundTrip(t *testing.T) {
-	id := ViewIndexID("space", "view", SlotB)
+func TestViewIndexIDRoundTrip(t *testing.T) {
+	id := ViewIndexID("space", "view")
 	ref, err := ParseViewIndexID(id)
-	if err != nil || ref.SpaceID != "space" || ref.ViewID != "view" || ref.Slot != SlotB {
+	if err != nil || ref.SpaceID != "space" || ref.ViewID != "view" {
 		t.Fatalf("id=%q ref=%+v err=%v", id, ref, err)
 	}
-	if got := InactiveViewIndexID("space", "view", id); got != ViewIndexID("space", "view", SlotA) {
-		t.Fatalf("inactive=%q", got)
+	for _, invalid := range []string{"", "view_s00", id + "_a", "x_" + id} {
+		if _, err := ParseViewIndexID(invalid); err == nil {
+			t.Fatalf("ParseViewIndexID(%q) 应当失败", invalid)
+		}
 	}
 }
 

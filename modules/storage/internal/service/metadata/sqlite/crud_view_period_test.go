@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,61 +29,6 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 	}
 	if after.GetName() != original.GetName() || after.GetDatasetId() != original.GetDatasetId() {
 		t.Fatalf("create-only call replaced existing view: before=%v after=%v", original, after)
-	}
-}
-
-func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
-	existing := &pb.View{DatasetId: "prices", Engine: "duckdb"}
-	next := &pb.View{DatasetId: "prices", Engine: "duckdb"}
-	if viewIndexShapeChanged(existing, next) {
-		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
-	}
-}
-
-func TestRequestViewRebuildAdvancesDesiredRevisionWithoutChangingActiveIndex(t *testing.T) {
-	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
-	before, err := store.GetView(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	requested, err := store.RequestViewRebuild(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requested.GetDesiredViewRevision() != before.GetDesiredViewRevision()+1 {
-		t.Fatalf("desired revision = %d, want %d", requested.GetDesiredViewRevision(), before.GetDesiredViewRevision()+1)
-	}
-	if requested.GetActiveIndexId() != before.GetActiveIndexId() || requested.GetActiveViewRevision() != before.GetActiveViewRevision() {
-		t.Fatalf("manual rebuild changed active state: before=%v after=%v", before, requested)
-	}
-	if got := requested.GetAttributes()["moox.manual_rebuild_revision"]; got != fmt.Sprint(requested.GetDesiredViewRevision()) {
-		t.Fatalf("manual rebuild marker = %q, want revision %d", got, requested.GetDesiredViewRevision())
-	}
-	again, err := store.RequestViewRebuild(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.GetDesiredViewRevision() != requested.GetDesiredViewRevision() {
-		t.Fatalf("duplicate request advanced desired revision = %d, want idempotent revision %d", again.GetDesiredViewRevision(), requested.GetDesiredViewRevision())
-	}
-}
-
-func TestRequestViewRebuildUsesAuthoritativeRevisionColumn(t *testing.T) {
-	ctx := context.Background()
-	store := openViewPeriodTestStore(t, ctx)
-	if _, err := store.db.ExecContext(ctx, `
-		UPDATE t_views SET c_desired_view_revision = c_desired_view_revision + 3
-		WHERE c_space_id = ? AND c_view_id = ?
-	`, "space", "source-view"); err != nil {
-		t.Fatal(err)
-	}
-	requested, err := store.RequestViewRebuild(ctx, "space", "source-view")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requested.GetDesiredViewRevision() != 5 {
-		t.Fatalf("desired revision = %d, want authoritative revision + 1 = 5", requested.GetDesiredViewRevision())
 	}
 }
 
@@ -155,7 +99,7 @@ func TestListViewPeriodDatasetStatesReturnsEveryDataset(t *testing.T) {
 	}
 }
 
-func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.T) {
+func TestUpsertViewMergesPartialColumnsAndReplaceKeepsExplicitMarker(t *testing.T) {
 	ctx := context.Background()
 	store := openViewPeriodTestStore(t, ctx)
 	view, err := store.GetView(ctx, "space", "source-view")
@@ -177,27 +121,9 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	if len(columns) != 2 {
 		t.Fatalf("columns after partial update = %v", columns)
 	}
-	view.Columns = view.Columns[:1]
+	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "old"}}
 	if _, err := store.ReplaceViewColumns(ctx, view); err != nil {
 		t.Fatal(err)
-	}
-	columns, _, err = store.ListViewColumns(ctx, "space", "source-view", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(columns) != 1 || columns[0].GetColumnName() != "close" {
-		t.Fatalf("columns after replacement = %v", columns)
-	}
-	view.Columns = []*pb.ViewColumn{}
-	if _, err := store.ReplaceViewColumns(ctx, view); err != nil {
-		t.Fatal(err)
-	}
-	columns, _, err = store.ListViewColumns(ctx, "space", "source-view", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(columns) != 0 {
-		t.Fatalf("columns after empty replacement = %v", columns)
 	}
 	stored, err := store.GetView(ctx, "space", "source-view")
 	if err != nil {
@@ -242,12 +168,12 @@ func TestUpsertViewRejectsEngineAndPrimaryChangeWithActiveIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Engine = "bleve"
-	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "engine change is unsupported") {
+	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "引擎不能修改") {
 		t.Fatalf("engine change error = %v", err)
 	}
 	view.Engine = "duckdb"
 	view.DatasetId = "fundamentals"
-	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "dataset change is unsupported") {
+	if _, err := store.UpsertView(ctx, view); err == nil || !strings.Contains(err.Error(), "数据集不能修改") {
 		t.Fatalf("primary change error = %v", err)
 	}
 	unchanged, err := store.GetView(ctx, "space", "source-view")
@@ -408,7 +334,7 @@ func TestUpsertViewRejectsColumnsOwnedByAnotherView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.GetColumns()[0].GetSortOrder() == 99 || after.GetDesiredViewRevision() != before.GetDesiredViewRevision() {
+	if after.GetColumns()[0].GetSortOrder() == 99 {
 		t.Fatalf("另一个 View 被改动: before=%v after=%v", before, after)
 	}
 }

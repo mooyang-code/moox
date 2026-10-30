@@ -89,7 +89,7 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 	for _, entry := range entries {
 		if strings.Contains(entry.Name(), ".duckdb.prepare-") {
 			// A process may have been interrupted after creating the temporary
-			// build file. It is never an authoritative slot and is safe to
+			// build file. It is never an authoritative index and is safe to
 			// remove before Metadata restores active indexes.
 			// 准备文件专属的临时目录（<文件>.tmp）名称里也含 ".duckdb.prepare-"，一并清掉。
 			_ = os.RemoveAll(filepath.Join(opts.Root, entry.Name()))
@@ -112,11 +112,8 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	if err != nil {
 		return err
 	}
-	// Build into a sibling temporary file. The active slot stays intact until
-	// the complete schema and metadata have been committed and the file is
-	// closed; the final rename is atomic on the same filesystem. A crash during
-	// DDL therefore leaves the previous active file (or only an ignored temp
-	// file), never a half-created official slot.
+	// 先建到同目录的临时文件，表结构和元数据都写完并关闭后再改名（同一文件系统上是原子的）。
+	// 建表途中崩溃只留下被忽略的临时文件，不会留下半成品的正式索引。
 	tempPath := fmt.Sprintf("%s.prepare-%d", path, time.Now().UnixNano())
 	db, err := open(tempPath)
 	if err != nil {
@@ -240,8 +237,7 @@ func (m *IndexManager) ExtendColumns(ctx context.Context, id string, current, ne
 		if schemaHash != current.SchemaHash || !samePhysicalColumns(physicalColumns, oldColumns) {
 			return fmt.Errorf("%w: DuckDB active schema differs from the expected current contract", viewindex.ErrSchemaExtensionConflict)
 		}
-	} else if version == next.ViewVersion {
-		return fmt.Errorf("%w: DuckDB target revision has a conflicting physical schema", viewindex.ErrSchemaExtensionConflict)
+		// 物理修订号比当前大：上次加列后元数据没提交，这期间又声明了新列时，在上次的列之后继续追加。
 	} else if !matchesAppendOnlyPhysicalPrefix(physicalColumns, next, version, schemaHash) {
 		return fmt.Errorf("%w: DuckDB intermediate schema is not an append-only target prefix", viewindex.ErrSchemaExtensionConflict)
 	}
@@ -408,46 +404,6 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return nil
-}
-
-func (m *IndexManager) SeriesCapacity(ctx context.Context, id string, maxPeriods uint64) (viewindex.SeriesCapacityResult, error) {
-	if maxPeriods == 0 {
-		return viewindex.SeriesCapacityResult{}, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return viewindex.SeriesCapacityResult{}, err
-	}
-	// Capacity scans are read-only and run behind a process-wide single-scan
-	// gate. Unlike request and mutation paths, keep the deadline for this query:
-	// the driver interrupts only this connection and waits for the interrupt
-	// watcher before returning it to the pool, allowing the maintainer to release
-	// its gate and retry on the next hourly slot.
-	db, _, _, _, err := m.getIndex(context.Background(), id)
-	if err != nil {
-		return viewindex.SeriesCapacityResult{}, err
-	}
-	// Counts are updated transactionally with view_rows. This index has no
-	// in-place row deletion path; rebuilds create a new index and its counts.
-	// Treat the compact per-series table as authoritative so a capacity check
-	// never performs a physical COUNT over the potentially large View table.
-	var subject, freq, tag string
-	var rowCount uint64
-	err = db.QueryRowContext(ctx, `
-		SELECT subject_id, freq, series_tag, row_count
-		FROM view_series_counts
-		WHERE row_count > ?
-		ORDER BY row_count DESC, subject_id, freq, series_tag
-		LIMIT 1`, maxPeriods).Scan(&subject, &freq, &tag, &rowCount)
-	if errors.Is(err, sql.ErrNoRows) {
-		return viewindex.SeriesCapacityResult{}, nil
-	}
-	if err != nil {
-		return viewindex.SeriesCapacityResult{}, err
-	}
-	return viewindex.SeriesCapacityResult{Exceeded: true, SubjectID: subject, Freq: freq, SeriesTag: tag, Rows: rowCount}, nil
 }
 
 func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
@@ -1084,7 +1040,7 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 		return err
 	}
 	// DuckDB may leave a write-ahead log beside the database. Remove it with
-	// the retired index so an A/B rotation does not strand storage on disk. The
+	// the index so it does not strand storage on disk. The
 	// WAL is removed first: if that removal fails, the main managed file remains
 	// discoverable and the cleanup Timer can retry the complete artifact.
 	// 专属临时目录最先删除，原因同上：它删不掉时主文件还在，清理定时器会整体重试。

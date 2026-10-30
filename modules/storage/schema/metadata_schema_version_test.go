@@ -11,14 +11,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestMetadataSchemaV14Contract(t *testing.T) {
+func TestMetadataSchemaContract(t *testing.T) {
 	sql, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '15')",
+		"VALUES ('schema_version', '16')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -38,10 +38,7 @@ func TestMetadataSchemaV14Contract(t *testing.T) {
 		"c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled'))",
 		"FOREIGN KEY (c_data_node_id) REFERENCES t_data_nodes (c_node_id) ON DELETE RESTRICT",
 		"CREATE INDEX IF NOT EXISTS idx_t_datasets_data_node_id ON t_datasets (c_data_node_id)",
-		"c_active_slot",
-		"c_new_slot",
-		"c_backfilled_rows",
-		"c_safe_error",
+		"c_view_revision INTEGER NOT NULL DEFAULT 0",
 		"CREATE TABLE IF NOT EXISTS t_view_period_dataset_states",
 		"CREATE TABLE IF NOT EXISTS t_view_sync_points",
 		"c_dataset_id TEXT NOT NULL",
@@ -69,6 +66,10 @@ func TestMetadataSchemaV14Contract(t *testing.T) {
 		"t_dataset_subject_set_staging",
 		"c_primary_dataset_id",
 		"c_dataset_ids_json",
+		"c_active_slot",
+		"c_desired_view_revision",
+		"t_view_index_builds",
+		"t_view_rebuild_logs",
 	}, removedTables...) {
 		if strings.Contains(text, forbidden) {
 			t.Errorf("metadata schema contains removed schema element %q", forbidden)
@@ -93,7 +94,7 @@ func TestMetadataSchemaV14Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV15DDLExecutes(t *testing.T) {
+func TestMetadataSchemaDDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +113,8 @@ func TestMetadataSchemaV15DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "15" {
-		t.Fatalf("persisted schema version = %q, want 14", version)
+	if version != "16" {
+		t.Fatalf("persisted schema version = %q, want 16", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {

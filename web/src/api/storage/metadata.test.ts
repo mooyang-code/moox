@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({ callStorage: vi.fn() }));
 
 vi.mock("./http", () => ({ callStorage: mocks.callStorage }));
 
-import { listDatasets, listViewRebuildLogs, requestViewRebuild } from "./metadata";
+import { listDatasets } from "./metadata";
 
 describe("Storage metadata DataNode APIs", () => {
   beforeEach(() => {
@@ -40,22 +40,5 @@ describe("Storage metadata DataNode APIs", () => {
       },
       undefined
     );
-  });
-
-  it("loads View rebuild history on demand", async () => {
-    await listViewRebuildLogs({ space_id: "space-a", view_id: "view-a", page: { page: 1, size: 100 } });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("ListViewRebuildLogs", {
-      space_id: "space-a",
-      view_id: "view-a",
-      page: { page: 1, size: 100 }
-    });
-  });
-
-  it("submits an asynchronous View rebuild without changing the request shape", async () => {
-    await requestViewRebuild({ space_id: "space-a", view_id: "view-a" });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("RequestViewRebuild", {
-      space_id: "space-a",
-      view_id: "view-a"
-    });
   });
 });

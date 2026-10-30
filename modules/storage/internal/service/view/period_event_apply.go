@@ -252,30 +252,18 @@ func (s *Service) hasReadyViewIndex(ctx context.Context, view *pb.View) (bool, e
 		return false, nil
 	}
 	runtime.mu.Lock()
-	activeID, nextID, status := runtime.active, runtime.next, runtime.status
+	activeID := runtime.active
 	runtime.mu.Unlock()
-	activeMissing := activeID == ""
-	if activeID != "" {
-		if engine, err := s.engineFor(activeID); err == nil {
-			if stats, statErr := engine.Stat(ctx, activeID); statErr == nil && stats.Exists {
-				return true, nil
-			}
-		}
-		activeMissing = true
+	// 只有构建中索引的 View 不算就绪：先确认 SyncPoint、源围栏已经记录，建索引中途崩溃就会丢掉这个索引。
+	if activeID == "" {
+		return false, nil
 	}
-	if nextID != "" {
-		// 只有构建中索引的 View，必须先把索引持久化地标记为就绪，才能确认 SyncPoint；否则源围栏已经记录，
-		// 一次崩溃就会丢掉这个索引。
-		if activeMissing && status != "active" {
-			return false, nil
-		}
-		if engine, err := s.engineFor(nextID); err == nil {
-			if stats, statErr := engine.Stat(ctx, nextID); statErr == nil && stats.Exists {
-				return true, nil
-			}
-		}
+	engine, err := s.engineFor(activeID)
+	if err != nil {
+		return false, nil
 	}
-	return false, nil
+	stats, err := engine.Stat(ctx, activeID)
+	return err == nil && stats.Exists, nil
 }
 
 func (s *Service) periodDependencies() (PeriodMetadataClient, ReadyEventPublisher) {
@@ -315,40 +303,21 @@ func (s *Service) viewsForDataset(spaceID, datasetID string, includeBuilding boo
 
 	result := make([]*pb.View, 0, len(candidates))
 	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.view.GetDatasetId()) != datasetID {
+			continue
+		}
 		runtime := candidate.runtime
 		runtime.mu.Lock()
-		activeID := runtime.active
-		active := runtime.active != "" || (includeBuilding && runtime.next != "")
-		datasetIDs := append([]string(nil), runtime.activeDatasetIDs...)
-		primaryDatasetID := runtime.activePrimaryDatasetID
-		if runtime.active == "" && runtime.next != "" {
-			datasetIDs = append([]string(nil), runtime.nextDatasetIDs...)
-			primaryDatasetID = runtime.nextPrimaryDatasetID
-			if len(datasetIDs) == 0 {
-				datasetIDs = viewDatasetIDs(candidate.view)
-			}
-		}
-		if !runtime.activeDatasetSet && runtime.active != "" {
-			datasetIDs = viewDatasetIDs(candidate.view)
-			primaryDatasetID = candidate.view.GetDatasetId()
-		}
-		if primaryDatasetID == "" {
-			primaryDatasetID = candidate.view.GetDatasetId()
-		}
+		activeID, building := runtime.active, runtime.building
 		runtime.mu.Unlock()
-		contractID := strings.TrimSpace(primaryDatasetID)
-		if contractID == "" && len(datasetIDs) > 0 {
-			contractID = strings.TrimSpace(datasetIDs[0])
+		if activeID == "" && (!includeBuilding || building == "") {
+			continue
 		}
-		if active && contractID == datasetID {
-			view := candidate.view
-			// 携带将接收这个事件的索引的契约。A/B 重建期间目录里的副本可能描述更新的目标版本，不能提前改变源就绪的聚合。
-			view.DatasetId = contractID
-			if activeID != "" {
-				view.ActiveIndexId = activeID
-			}
-			result = append(result, view)
+		view := candidate.view
+		if activeID != "" {
+			view.ActiveIndexId = activeID
 		}
+		result = append(result, view)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].GetViewId() < result[j].GetViewId() })
 	return result
@@ -393,8 +362,8 @@ func viewConfigID(view *pb.View) string {
 	if hash := strings.TrimSpace(view.GetActiveViewSchemaHash()); hash != "" {
 		return hash
 	}
-	if view.GetActiveViewRevision() > 0 {
-		return fmt.Sprintf("%s@%d", view.GetViewId(), view.GetActiveViewRevision())
+	if view.GetViewRevision() > 0 {
+		return fmt.Sprintf("%s@%d", view.GetViewId(), view.GetViewRevision())
 	}
 	return view.GetViewId()
 }

@@ -175,7 +175,7 @@ func TestEnsureCreatesOneExclusiveResultAndIsIdempotent(t *testing.T) {
 	require.Equal(t, "view_task_1_kline_1h", first.ViewID)
 }
 
-func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
+func TestEnsureOutputFieldsAppendsToExplicitViewProjection(t *testing.T) {
 	fake := newResultMetadataFake()
 	ids := ResultIDs("crypto", "task-projection")
 	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
@@ -193,13 +193,12 @@ func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	require.NoError(t, manager.EnsureOutputFields(context.Background(), "crypto", "task-projection", ids.DatasetID, ids.ViewID, "kline", []string{"open", "close"}))
 
+	// View 的列只能追加：任务收窄输出后旧列留着（新行里为空），只补上新增的字段。
 	got := fake.views[ids.ViewID].GetColumns()
-	require.Len(t, got, 2)
+	require.Len(t, got, 3)
 	require.Equal(t, "close", got[0].GetColumnName())
-	require.Equal(t, "open", got[1].GetColumnName())
-	for _, column := range got {
-		require.NotContains(t, column.GetColumnName(), "provider_id")
-	}
+	require.Equal(t, "provider_id", got[1].GetColumnName())
+	require.Equal(t, "open", got[2].GetColumnName())
 }
 
 func TestEnsurePreservesExistingSubjectTagsWhenConfigOmitsTags(t *testing.T) {

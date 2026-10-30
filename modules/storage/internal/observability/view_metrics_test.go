@@ -34,26 +34,13 @@ func TestViewMetricsRecordFixedOutcomeLabels(t *testing.T) {
 	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.deriveInFlight))
 }
 
-func TestViewMetricsObserveCapacityScanQueueAndPermanentViewOverflow(t *testing.T) {
-	registry := prometheus.NewRegistry()
-	metrics, err := NewViewMetrics(registry)
+func TestViewMetricsViewFileOverLimit(t *testing.T) {
+	metrics, err := NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
-
-	metrics.ObserveCapacityScanQueueDelay(17 * time.Minute)
-	metrics.SetCapacityScanOldestOverdue(3 * time.Minute)
-	metrics.SetPermanentViewCapacityOverLimitCount(2)
-
-	assert.Equal(t, float64(2), testutil.ToFloat64(metrics.permanentViewCapacityOverLimit))
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		switch family.GetName() {
-		case "moox_storage_view_capacity_scan_queue_delay_seconds":
-			assert.Equal(t, uint64(1), family.GetMetric()[0].GetHistogram().GetSampleCount())
-		case "moox_storage_view_capacity_scan_oldest_overdue_seconds":
-			assert.GreaterOrEqual(t, family.GetMetric()[0].GetGauge().GetValue(), 180.0)
-		}
-	}
+	metrics.SetViewFileOverLimitCount(2)
+	assert.Equal(t, float64(2), testutil.ToFloat64(metrics.viewFileOverLimit))
+	metrics.SetViewFileOverLimitCount(-1)
+	assert.Equal(t, float64(0), testutil.ToFloat64(metrics.viewFileOverLimit))
 }
 
 func TestViewMetricsSummarizeSubjectsPerView(t *testing.T) {
@@ -199,9 +186,6 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 		"moox_storage_view_restore_duration_seconds":           true,
 		"moox_storage_view_restore_ready":                      true,
 		"moox_storage_view_restore_failures_total":             true,
-		"moox_storage_view_rebuild_audit_pending":              true,
-		"moox_storage_view_rebuild_audit_write_failures_total": true,
-		"moox_storage_view_rebuild_audit_dropped_total":        true,
 	}
 	for _, family := range families {
 		delete(wantNames, family.GetName())

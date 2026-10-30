@@ -60,14 +60,10 @@ type View struct {
 	// 补采、导入和因子历史重算带来的旧行同样丢弃。Dataset 与因子本地存储不受影响。
 	MaxAge Retention `json:"max_age"`
 	// Bars is the number of most recent bars a series View keeps.
-	Bars uint64 `json:"bars"`
-	// TrimBars is the per-series count above which a View is trimmed back to
-	// Bars; see TrimBarsFor.
-	TrimBars                 uint64 `json:"trim_bars"`
+	Bars                     uint64 `json:"bars"`
 	MaintenanceCheckInterval string `json:"maintenance_check_interval"`
-	CapacityCheckInterval    string `json:"capacity_check_interval"`
-	CapacityCheckJitter      string `json:"capacity_check_jitter"`
-	MaxViewFileBytes         int64  `json:"max_view_file_bytes"`
+	// MaxViewFileBytes 是索引文件大小的告警线：超过只告警，不动数据。
+	MaxViewFileBytes int64 `json:"max_view_file_bytes"`
 }
 
 // Period is a retention period. A Forever period keeps all rows.
@@ -158,11 +154,6 @@ func fallbackStandard(freq string) (string, bool) {
 	return best, true
 }
 
-// TrimBarsFor returns ceil(1.2 × bars), the count at which a View is trimmed.
-func TrimBarsFor(bars uint64) uint64 {
-	return (bars*6 + 4) / 5
-}
-
 // Default returns the generic policy: every standard frequency has a default
 // retention. Space overrides are deployment configuration (moox.toml), not
 // part of the package.
@@ -177,10 +168,7 @@ func Default() Policy {
 		View: View{
 			MaxAge:                   defaultViewMaxAge(),
 			Bars:                     DefaultViewBars,
-			TrimBars:                 TrimBarsFor(DefaultViewBars),
 			MaintenanceCheckInterval: "1m",
-			CapacityCheckInterval:    "1h",
-			CapacityCheckJitter:      "1h",
 			MaxViewFileBytes:         DefaultMaxViewFileBytes,
 		},
 	}
@@ -348,20 +336,9 @@ func (v View) validate() error {
 	if v.Bars == 0 || v.Bars > maxViewBars {
 		return fmt.Errorf("view.bars must be between 1 and %d", maxViewBars)
 	}
-	if v.TrimBars <= v.Bars || v.TrimBars > maxBars {
-		return fmt.Errorf("view.trim_bars must be greater than view.bars and at most %d", maxBars)
-	}
 	interval, err := time.ParseDuration(strings.TrimSpace(v.MaintenanceCheckInterval))
 	if err != nil || interval < 30*time.Second {
 		return errors.New("view.maintenance_check_interval must be at least 30s")
-	}
-	capacityInterval, err := time.ParseDuration(strings.TrimSpace(v.CapacityCheckInterval))
-	if err != nil || capacityInterval <= 0 || capacityInterval > 24*time.Hour {
-		return errors.New("view.capacity_check_interval must be greater than 0 and at most 24h")
-	}
-	capacityJitter, err := time.ParseDuration(strings.TrimSpace(v.CapacityCheckJitter))
-	if err != nil || capacityJitter <= 0 || capacityJitter > capacityInterval {
-		return errors.New("view.capacity_check_jitter must be greater than 0 and at most view.capacity_check_interval")
 	}
 	if v.MaxViewFileBytes <= 0 {
 		return errors.New("view.max_view_file_bytes must be positive")

@@ -96,34 +96,31 @@ func TestFollowingViewExtendsWhenDatasetGainsColumn(t *testing.T) {
 	ctx := context.Background()
 	store, _, dataset := newDatasetFixture(t)
 	view := createView(t, store, dataset, "view_factor_btc_1m", true)
-	beforeRevision := view.GetDesiredViewRevision()
 
 	column := newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5"})
 	_, err := store.UpsertDatasetColumn(ctx, column)
 	require.NoError(t, err)
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
-	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision())
 	require.Contains(t, viewColumnNames(view.GetColumns()), "momentum_5")
+	columns := len(view.GetColumns())
 
 	_, err = store.UpsertDatasetColumn(ctx, column)
 	require.NoError(t, err)
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
-	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision(), "重复 upsert 不提升 View 版本")
+	require.Len(t, view.GetColumns(), columns, "重复 upsert 不重复加列")
 }
 
 func TestViewWithoutFollowAttributeIsNotExtended(t *testing.T) {
 	ctx := context.Background()
 	store, _, dataset := newDatasetFixture(t)
 	view := createView(t, store, dataset, "view_plain", false)
-	beforeRevision := view.GetDesiredViewRevision()
 
 	_, err := store.UpsertDatasetColumn(ctx, newDatasetColumn(dataset, "momentum_5", map[string]string{"display_name": "momentum_5"}))
 	require.NoError(t, err)
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
-	require.Equal(t, beforeRevision, view.GetDesiredViewRevision())
 	require.NotContains(t, viewColumnNames(view.GetColumns()), "momentum_5")
 }
 
@@ -138,7 +135,6 @@ func TestFollowingViewColumnAttributeChangeRefreshes(t *testing.T) {
 	require.NoError(t, err)
 	view, err := store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
 	require.NoError(t, err)
-	revision := view.GetDesiredViewRevision()
 	find := func(view *pb.View) *pb.ViewColumn {
 		for _, item := range view.GetColumns() {
 			if item.GetColumnName() == "fast_bias" {
@@ -159,13 +155,6 @@ func TestFollowingViewColumnAttributeChangeRefreshes(t *testing.T) {
 	require.NotNil(t, after)
 	require.Equal(t, "BiasB", after.GetAttributes()["factor_id"])
 	require.Equal(t, before.GetSortOrder(), after.GetSortOrder(), "只刷新属性，排序不动")
-	require.Equal(t, revision+1, view.GetDesiredViewRevision())
-
-	_, err = store.UpsertDatasetColumn(ctx, column("BiasB"))
-	require.NoError(t, err)
-	view, err = store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
-	require.NoError(t, err)
-	require.Equal(t, revision+1, view.GetDesiredViewRevision(), "属性没变的重复 upsert 不再提升版本")
 }
 
 // 数据集的 View 由创建它的模块自己管理：Storage 不再替它删除，有 View 引用的数据集不能删。

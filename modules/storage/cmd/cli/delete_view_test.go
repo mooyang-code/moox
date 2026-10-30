@@ -35,9 +35,6 @@ func newDeleteViewFixture(t *testing.T) string {
 		_, err = db.Exec(`INSERT INTO t_view_columns (c_space_id, c_view_id, c_column_name, c_origin_type, c_origin_id, c_value_type) VALUES (?, ?, 'value', 'dataset_column', 'value', 'double')`, v.space, v.view)
 		require.NoError(t, err)
 	}
-	_, err = db.Exec(`INSERT INTO t_view_index_builds (c_space_id, c_view_id, c_build_id, c_index_id, c_engine, c_target_view_version, c_state, c_owner_id, c_new_slot, c_status, c_started_at, c_updated_at)
-VALUES ('mooxsys', 'view_mooxsys_service_metrics', 'build-1', 'idx-service-a', 'duckdb', 1, 1, 'owner', 'slot-a', 'building', '', '')`)
-	require.NoError(t, err)
 	return path
 }
 
@@ -57,11 +54,10 @@ func TestDeleteViewRemovesOnlyTheNamedView(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.DeletedViews)
 	require.Zero(t, summary.KeptViews)
-	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: "idx-service-a"}, {Engine: "duckdb", IndexID: "idx-service-b"}}, summary.RetiredIndexes, "活动索引与构建中的索引都要交给清理定时器")
+	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: "idx-service-b"}}, summary.RetiredIndexes, "活动索引要交给清理定时器")
 
 	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_mooxsys_service_metrics'`))
 	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_view_columns WHERE c_view_id = 'view_mooxsys_service_metrics'`), "列随 View 级联删除")
-	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_view_index_builds WHERE c_view_id = 'view_mooxsys_service_metrics'`), "构建记录随 View 级联删除")
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_factor_1h'`), "其他 View 不受影响")
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_view_columns WHERE c_view_id = 'view_factor_1h'`))
 }
@@ -107,7 +103,7 @@ func TestRetainViewsStillKeepsOnlyTheListedViews(t *testing.T) {
 	summary, err := retainViews(context.Background(), retainViewsOptions{metadataDB: path, keepViews: []string{"crypto/view_factor_1h"}})
 	require.NoError(t, err)
 	require.Equal(t, retainViewsSummary{KeptViews: 1, DeletedViews: 1, RetiredIndexes: summary.RetiredIndexes}, summary)
-	require.Len(t, summary.RetiredIndexes, 2)
+	require.Len(t, summary.RetiredIndexes, 1)
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views`))
 }
 

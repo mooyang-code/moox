@@ -18,7 +18,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// liveIndexWriteTimeout 是单次 DuckDB 实时写入专用的时间预算。JetStream 投递到达时，常因前一个索引占着写入闸门而只剩
+// liveIndexWriteTimeout 是单次 DuckDB 实时写入专用的时间预算。JetStream 投递到达时，常因前一个索引占着写锁而只剩
 // 很短的截止时间；继承这个截止时间会让健康的写入变成不断 NAK 的循环，并让 View 落后 Primary 数分钟。
 const liveIndexWriteTimeout = 30 * time.Second
 
@@ -102,7 +102,7 @@ func (s *Service) flushReadyAfterRows(ctx context.Context, spaceID string) {
 	}
 }
 
-// HandleDatasetRowsBatch 在进入按索引的写入闸门之前，把同一个数据集连续的行事件合并成一批。标记事件从不并入
+// HandleDatasetRowsBatch 在排队取索引写锁之前，把同一个数据集连续的行事件合并成一批。标记事件从不并入
 // 这个批次，所以数据集的顺序围栏保持不变，而 DuckDB 能用一个更大的事务写入多个标的。
 func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsumer.DatasetRowsBatchItem) error {
 	if len(items) == 0 {
@@ -179,7 +179,6 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		return nil
 	}
 	for viewKey := range viewKeys {
-		activeWatermarkRows := make(map[string][]*pb.RowFieldUpsert, 1)
 		s.mu.RLock()
 		runtime := s.views[viewKey]
 		s.mu.RUnlock()
@@ -187,150 +186,25 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			continue
 		}
 		runtime.mu.Lock()
-		// 上一次写 B 索引可能失败了，而元数据的 Fail 调用当时暂时不可用。数据集的投递保持未确认，先重试持久化这次失败，
-		// 再尝试下一次写入；否则之后一次成功的重投会让 buildFailed 一直置位，卡住激活，元数据状态也永远无法收敛。
-		if runtime.buildFailed && runtime.next != "" {
-			failedID := runtime.next
-			failedGeneration := s.indexGenerationOf(failedID)
-			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("重试已失败的替换构建")); failErr != nil {
-				runtime.mu.Unlock()
-				return failErr
-			}
-			runtime.next = ""
-			runtime.nextDatasetIDs = nil
-			runtime.nextPrimaryDatasetID = ""
-			runtime.buildFailed = false
-			runtime.buildID = ""
-			runtime.ownerID = ""
-			runtime.buildCancel = nil
-			if runtime.active == "" {
-				runtime.status = "failed"
-			} else {
-				runtime.status = "active"
-			}
+		target := runtime.writeTargetLocked()
+		if target == "" {
 			runtime.mu.Unlock()
-			s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
-			return errors.New("View 的替换构建已失败")
+			return errors.New("View 索引映射尚未就绪")
 		}
-		activeID, nextID := runtime.active, runtime.next
-		activeReady, activeErr := s.liveIndexReady(ctx, activeID)
-		var activeFailure error
-		if activeErr != nil && activeID != "" {
-			// 索引统计不能下结论，所以先做一次写入尝试，再判断活动指针是否已失效。如果写入本身失败而替换索引是健康的，
-			// 投递保持未确认，直到替换索引就绪、激活后成为权威索引。
-			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
-			if err == nil {
-				activeReady, activeErr = true, nil
-				if len(writtenRows) > 0 {
-					activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
-				}
-			} else if nextID != "" {
-				log.Printf("storage view 活动索引不可用而替换索引已就绪，改写替换索引 space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
-				activeFailure = err
-				activeReady, activeErr = false, nil
-			} else {
-				runtime.mu.Unlock()
-				return err
-			}
-		}
-		if activeErr != nil && nextID == "" {
+		// 索引统计不能下结论时直接试写，由写入结果决定。
+		if ready, err := s.liveIndexReady(ctx, target); err == nil && !ready {
 			runtime.mu.Unlock()
-			return activeErr
+			return fmt.Errorf("View 的索引 %q 不可用", target)
 		}
-		if activeErr == nil && !activeReady && nextID == "" {
+		writtenRows, err := s.applyEventToIndex(ctx, target, datasetID, rows)
+		if err != nil {
+			log.Printf("storage view 索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, target, datasetID, err)
 			runtime.mu.Unlock()
-			return fmt.Errorf("View 的活动索引 %q 不可用", activeID)
+			return err
 		}
-		if activeErr == nil && activeReady {
-			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
-			if err != nil {
-				log.Printf("storage view 活动索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
-				if nextID == "" {
-					runtime.mu.Unlock()
-					return err
-				}
-				// 轻量的存在检查只能证明索引目录在；活动索引损坏或不可写时，先把这一行写进替换索引，
-				// 本次投递保持未确认，等替换索引激活。
-				activeFailure = err
-				activeReady = false
-			} else if len(writtenRows) > 0 {
-				activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
-			}
-		} else if activeErr == nil {
-			// 准备替换索引期间崩溃，可能留下失效的活动指针。不能什么都没写就确认这一行：继续写健康的替换索引，
-			// 激活时排空消费者，保持“先行后标记”的顺序。
-			log.Printf("storage view 活动索引不可用，实时行写入替换索引 space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
-		}
-		// 先发布活动索引已写成功的水位，再处理替换索引：替换索引失败不能让新鲜度监控看不到权威索引已提交的数据。
-		for indexID, writtenRows := range activeWatermarkRows {
-			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
-		}
-		if nextID != "" {
-			_, nextWriteErr := s.applyEventToIndex(ctx, nextID, datasetID, rows)
-			if err := nextWriteErr; err != nil {
-				failedID := nextID
-				failedGeneration := s.indexGenerationOf(failedID)
-				// 实时投递的截止时间很短。替换索引占着它的写入闸门时发生的超时是背压，不能证明 B 索引已损坏。投递保持未确认，
-				// 下一次尝试再重试写入；在这里把整个构建标记为 FAILED，会让每一次大批量回填自我取消。
-				if isTransientBuildWriteError(err) {
-					runtime.mu.Unlock()
-					return err
-				}
-				if activeErr != nil || !activeReady {
-					// 首次构建没有权威的 A 索引。先持久化失败状态再返回；投递本身保持未确认，好让替换构建收到这一行。失败状态
-					// 落盘之后，立即删掉这个未启用的槽位，不等周期性的维护器；这也让丢失了 Fail 响应的情形在下一次重试时收敛。
-					if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
-						runtime.mu.Unlock()
-						return errors.Join(err, failErr)
-					}
-					runtime.next = ""
-					runtime.nextDatasetIDs = nil
-					runtime.nextPrimaryDatasetID = ""
-					if runtime.active == "" {
-						runtime.status = "failed"
-					} else {
-						runtime.status = "active"
-					}
-					runtime.mu.Unlock()
-					s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
-					return err
-				}
-				if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
-					runtime.mu.Unlock()
-					return errors.Join(err, failErr)
-				}
-				// 活动索引已经写成功、仍是权威索引：只丢弃替换构建，View 继续按活动索引服务。
-				// 构建身份一并清掉，避免下一次准备替换索引时，实时写入拿旧 buildID 重复持久化失败。
-				runtime.next = ""
-				runtime.nextDatasetIDs = nil
-				runtime.nextPrimaryDatasetID = ""
-				runtime.buildFailed = false
-				runtime.buildID = ""
-				runtime.ownerID = ""
-				runtime.buildCancel = nil
-				runtime.status = "active"
-				runtime.mu.Unlock()
-				s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
-				continue
-			}
-			if activeFailure != nil {
-				// 替换索引收到了这一行，但活动索引的统计不能下结论、它的写入失败了。投递保持未确认；激活围栏可以切到
-				// 已就绪的替换索引。
-				runtime.mu.Unlock()
-				return activeFailure
-			}
-			if !activeReady && runtime.active == "" {
-				// 从零开始的重建从持久化的消息流写 B 索引。替换索引写入后确认投递。重建从不记录日志、也不发出 subject-ready；
-				// 激活之后的实时写入直接发布。
-				runtime.mu.Unlock()
-				continue
-			}
-			if !activeReady && runtime.status != "active" {
-				// 这一行已经在替换索引里，但它还不是持久化的就绪或活动索引。源投递保持未确认，这样构建元数据到达就绪之前
-				// 崩溃也不会丢掉这一行。
-				runtime.mu.Unlock()
-				return fmt.Errorf("View 的替换索引 %q 等待激活", nextID)
-			}
+		// 首次建索引期间不发布水位：建成时统一补一次。
+		if target == runtime.active && len(writtenRows) > 0 {
+			s.observeViewWatermark(target, datasetID, writtenRows, false)
 		}
 		runtime.mu.Unlock()
 	}
@@ -346,21 +220,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 	return nil
 }
 
-func isTransientBuildWriteError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return true
-	}
-	// tRPC 的传输错误可能把 context 错误包在框架错误里，Unwrap 链没有保留。保守地做一次文本检查，免得很短的
-	// 投递截止时间把健康、只是繁忙的 B 索引标成永久失败。
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "context canceled")
-}
-
-// liveIndexReady 确认一个索引指针仍然指向物理索引。维护在准备替换索引期间，活动指针可能短暂保留着已失效的值；
-// 调用方据此把行路由到替换索引，而不是悄悄丢掉。
+// liveIndexReady 确认一个索引指针仍然指向物理索引。
 func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, error) {
 	if indexID == "" {
 		return false, nil
@@ -434,7 +294,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 		return nil, err
 	}
 	if total := time.Since(applyStart); total >= slowIndexApplyLog {
-		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 索引写入闸门与 DuckDB 事务。
+		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 等索引写锁与 DuckDB 事务。
 		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 开始于=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
 			id, datasetID, applyStart.Format("15:04:05.000"), len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
 			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))

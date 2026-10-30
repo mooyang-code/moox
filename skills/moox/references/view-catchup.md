@@ -29,13 +29,11 @@
 
 控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
-## Storage View 容量检查
+## Storage View 容量
 
-时序 View 重建时，每个 `(subject_id, freq, series_tag)` 默认从 Primary 读取最近 **10000 根**，再过滤超过 `[storage_view.max_age]` 的行，实际根数可少于 10000；任一序列严格超过 **12000 根**触发 A/B 整理。新索引完成回填并追平后才切换，旧索引继续服务；此操作不删除 Primary 历史。文件达到默认 **4GiB** 阈值也可触发容量重建；记录 View 超限只告警，不自动截断。实际阈值以部署 policy 为准。
+时序 View 建索引时，每个 `(subject_id, freq, series_tag)` 默认从 Primary 读取最近 **10000 根**，再过滤超过 `[storage_view.max_age]` 的行，实际根数可少于 10000。之后由定时任务每 2 分钟删除每个序列超出保留根数的最旧行，不删除 Primary 历史。文件达到默认 **4GiB** 只告警（Monitor 检查“View 索引文件大小”），不动数据。实际阈值以部署 policy 为准。
 
-实时、补采、导入与因子重算写入也受同一年龄过滤：`data_time` 严格早于“处理时刻 − 期限”时丢弃，等于截止点保留，整批超期仍按处理成功返回。默认 crypto 1m 只写近 7d、5m 近 35d；Primary 1m 默认保留 35d，两层范围不同。先看 `moox_storage_view_expired_rows_dropped_total{space,freq}` 与 `storage view 丢弃超过最长保留期的行` 日志，避免把符合策略的历史缺行判成消费者停滞；重试或重建不会恢复超期行。已有索引不会随时钟推进主动按年龄清理，重建时才重新过滤；`retained_rows_per_series` 也不保证实际行数或历史覆盖范围。
-
-容量统计由 Storage View Maintainer 执行。轻量维护仍每分钟检查，但对每个 View 的 active index，昂贵的逐序列容量扫描最多每小时一次。进程首次看到该 View/index 时先独立随机等待 `[0, 1h)`；进程重启或 active index 切换后重新抽取首次偏移。扫描之后按扫描开始时间加一小时调度，不按整点对齐。失败或超时也占用本次周期，不会被每分钟维护循环热重试。
+实时、补采、导入与因子重算写入也受同一年龄过滤：`data_time` 严格早于“处理时刻 − 期限”时丢弃，等于截止点保留，整批超期仍按处理成功返回。默认 crypto 1m 只写近 7d、5m 近 35d；Primary 1m 默认保留 35d，两层范围不同。先看 `moox_storage_view_expired_rows_dropped_total{space,freq}` 与 `storage view 丢弃超过最长保留期的行` 日志，避免把符合策略的历史缺行判成消费者停滞；重试或重新建索引不会恢复超期行。已有索引不按年龄清理，重新建索引时才重新过滤；`retained_rows_per_series` 也不保证实际行数或历史覆盖范围。
 
 ## 禁止
 
@@ -44,11 +42,11 @@
 - 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
-- 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
+- 给首次建索引补发行级就绪事件或往 `pending-subjects` 落 journal。曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是周期完成事件（`DatasetPeriodCompleted`），计算窗口来自因子机本地时序副本，由 PrimaryStore 增量同步；历史结果需要修正时使用显式 Recalc
 
 ## Storage View：单数据集消费停滞
 
-Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `view_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、重建占用与进程问题。
+Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `view_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、首次建索引占用与进程问题。
 
 确需修复索引时，在 Storage 主机使用同版本 CLI，先只读预演：
 
@@ -62,7 +60,7 @@ moox-cli storage repair-view \
   --dry-run
 ```
 
-核对目标、备份路径与 desired revision 后，按既有授权执行对应 `--yes` 命令。默认删除所指定的消费者、提高 desired revision 并重启 storage-view；`deliver_policy=new`，历史窗口由 A/B 从 Primary 回填。每个数据集有自己的消费者，不能套用“第一个 View 重置共享 kline durable，其余跳过”的旧流程；不要把 `--reset-view-indexes` 当普通追平选项。
+核对目标与备份路径后，按既有授权执行对应 `--yes` 命令。默认删除所指定的消费者并重启 storage-view；`deliver_policy=new`，不动索引。每个数据集有自己的消费者，不能套用“第一个 View 重置共享 kline durable，其余跳过”的旧流程；不要把 `--reset-view-indexes` 当普通追平选项。
 
 ### EventBus 管理权限
 

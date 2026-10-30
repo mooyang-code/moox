@@ -224,12 +224,6 @@ func TestHandleLedgerPeriodCompletedIgnoresExtraRuntimeDatasets(t *testing.T) {
 	service := newPeriodTestService(metadata, publisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
-	runtime.mu.Lock()
-	runtime.activeDatasetIDs = []string{"prices", "fundamentals"}
-	runtime.activePrimaryDatasetID = "prices"
-	runtime.activeDatasetSet = true
-	runtime.mu.Unlock()
 
 	periodTime := int64(1786032000)
 	at := time.Date(2026, 8, 7, 0, 0, 1, 0, time.UTC)
@@ -397,7 +391,7 @@ func TestHandleDatasetSyncPointRecordsBuildingOnlyView(t *testing.T) {
 	service := newPeriodTestService(metadata, nil, &pb.View{
 		SpaceId: "quant", ViewId: "building-view", DatasetId: "prices",
 	})
-	service.views[viewRef{spaceID: "quant", viewID: "building-view"}].next = "building-index"
+	service.views[viewRef{spaceID: "quant", viewID: "building-view"}].building = "building-index"
 	message := periodMessage("sync-building-1", time.Date(2026, 8, 7, 0, 3, 0, 0, time.UTC))
 	payload := &storageeventpb.DatasetSyncPoint{SyncPointId: "sync-building", RequestId: "import-building", DatasetId: "prices", Source: "import"}
 	if err := service.HandleDatasetSyncPoint(context.Background(), message, payload); err != nil {

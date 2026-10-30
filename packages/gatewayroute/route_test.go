@@ -133,7 +133,7 @@ func TestValidateStorageRouteRequiresAllowlistAndRejectsInternalMethods(t *testi
 	}
 
 	for _, method := range []string{
-		"ClaimViewIndexBuild",
+		"CompleteViewInitialBuild",
 		"MergePrimaryRows",
 		"DeletePrimaryRows",
 		"ApplyViewIndex",

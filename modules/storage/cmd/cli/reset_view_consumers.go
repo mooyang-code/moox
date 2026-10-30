@@ -44,7 +44,6 @@ type resetViewConsumersSummary struct {
 
 type resetViewRecord struct {
 	SpaceID, ViewID, Engine, ActiveIndexID, PrimaryDatasetID string
-	DesiredRevision                                          uint64
 	DatasetIDs                                               []string
 }
 
@@ -135,10 +134,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 			summary.RecordViews++
 			continue
 		}
-		for _, slot := range []string{"a", "b"} {
-			id := viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.Slot(slot))
-			summary.Indexes = append(summary.Indexes, id)
-		}
+		summary.Indexes = append(summary.Indexes, viewindex.ViewIndexID(view.SpaceID, view.ViewID))
 	}
 	// EventBus 的删除与清除经网关交给 Admin 执行（管理员令牌只在 Admin 的数据库里）。
 	// 在动手前就打开通道：dry-run 与真正执行用同一条路径做预检。
@@ -207,12 +203,10 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		}
 	}()
 	for _, view := range views {
-		if err := resetRepairViewMetadata(ctx, dbPath, view.SpaceID, view.ViewID, nextViewRevision(view.DesiredRevision)); err != nil {
+		if err := resetRepairViewMetadata(ctx, dbPath, view.SpaceID, view.ViewID); err != nil {
 			return fmt.Errorf("reset View metadata %s/%s: %w", view.SpaceID, view.ViewID, err)
 		}
-		if _, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, view.Engine,
-			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotA),
-			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotB)); err != nil {
+		if _, err := purgeRepairViewIndexes(storage.Devices.ViewIndexRoot, view.Engine, viewindex.ViewIndexID(view.SpaceID, view.ViewID)); err != nil {
 			return fmt.Errorf("delete View indexes %s/%s: %w", view.SpaceID, view.ViewID, err)
 		}
 	}
@@ -302,7 +296,7 @@ func resetViewIndexPaths(root, engine, id string) []string {
 	}
 }
 
-// stageResetViewIndexes moves both A/B slots out of the live inventory before
+// stageResetViewIndexes moves the View indexes out of the live inventory before
 // any metadata or stream mutation. A failed reset can therefore put the
 // physical files back before the old package is restarted.
 func stageResetViewIndexes(root string, views []resetViewRecord) (string, []resetIndexMove, error) {
@@ -319,34 +313,7 @@ func stageResetViewIndexes(root string, views []resetViewRecord) (string, []rese
 		_ = os.RemoveAll(stagingDir)
 	}
 	for _, view := range views {
-		ids := []string{
-			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotA),
-			viewindex.ViewIndexID(view.SpaceID, view.ViewID, viewindex.SlotB),
-		}
-		for _, original := range resetViewIndexPaths(root, view.Engine, ids[0]) {
-			if _, err := os.Stat(original); errors.Is(err, os.ErrNotExist) {
-				continue
-			} else if err != nil {
-				restore()
-				return "", nil, err
-			}
-			rel, err := filepath.Rel(root, original)
-			if err != nil {
-				restore()
-				return "", nil, err
-			}
-			staged := filepath.Join(stagingDir, rel)
-			if err := os.MkdirAll(filepath.Dir(staged), 0o700); err != nil {
-				restore()
-				return "", nil, err
-			}
-			if err := os.Rename(original, staged); err != nil {
-				restore()
-				return "", nil, err
-			}
-			moves = append(moves, resetIndexMove{original: original, staged: staged})
-		}
-		for _, original := range resetViewIndexPaths(root, view.Engine, ids[1]) {
+		for _, original := range resetViewIndexPaths(root, view.Engine, viewindex.ViewIndexID(view.SpaceID, view.ViewID)) {
 			if _, err := os.Stat(original); errors.Is(err, os.ErrNotExist) {
 				continue
 			} else if err != nil {
@@ -596,10 +563,8 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 		return nil, err
 	}
 	defer db.Close()
-	// A destructive reset must also clear disabled/building/archived rows. They
-	// may still own physical A/B files or an unfinished build even though they
-	// are not currently visible in the active View list.
-	rows, err := db.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_active_index_id, c_desired_view_revision, c_dataset_id FROM t_views`)
+	// 破坏性重置也要清 disabled、building、archived 的行：它们可能还占着物理索引文件，只是不在活动 View 列表里。
+	rows, err := db.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_active_index_id, c_dataset_id FROM t_views`)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +572,7 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 	var result []resetViewRecord
 	for rows.Next() {
 		var record resetViewRecord
-		if err := rows.Scan(&record.SpaceID, &record.ViewID, &record.Engine, &record.ActiveIndexID, &record.DesiredRevision, &record.PrimaryDatasetID); err != nil {
+		if err := rows.Scan(&record.SpaceID, &record.ViewID, &record.Engine, &record.ActiveIndexID, &record.PrimaryDatasetID); err != nil {
 			return nil, err
 		}
 		if record.PrimaryDatasetID != "" {

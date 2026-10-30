@@ -31,7 +31,7 @@ import (
 
 // metadataResetClear 是要清空的表，子表在前（外键 RESTRICT 的父表在后）。
 var metadataResetClear = []string{
-	"t_view_columns", "t_view_sync_points", "t_view_period_dataset_states", "t_view_rebuild_logs", "t_view_index_builds",
+	"t_view_columns", "t_view_sync_points", "t_view_period_dataset_states",
 	"t_views", "t_dataset_columns", "t_datasets", "t_fields", "t_field_groups",
 	"t_subject_tags", "t_tags", "t_subjects", "t_data_sources", "t_spaces",
 }

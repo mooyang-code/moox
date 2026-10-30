@@ -21,9 +21,8 @@ type managedIndexRef struct {
 }
 
 type retiredIndexCandidate struct {
-	firstSeen  time.Time
-	lastSeen   time.Time
-	generation uint64
+	firstSeen time.Time
+	lastSeen  time.Time
 }
 
 type RetiredIndexCleanupOptions struct {
@@ -56,7 +55,6 @@ func (s *Service) CleanupRetiredIndexes(ctx context.Context, opts RetiredIndexCl
 
 	engines := s.cleanupEngines()
 	physical := make(map[managedIndexRef]struct{})
-	listedEngines := make(map[string]struct{})
 	var errs []error
 	for _, engineName := range sortedEngineNames(engines) {
 		engine := engines[engineName]
@@ -70,12 +68,10 @@ func (s *Service) CleanupRetiredIndexes(ctx context.Context, opts RetiredIndexCl
 			errs = append(errs, fmt.Errorf("list %s view indexes: %w", engineName, listErr))
 			continue
 		}
-		listedEngines[engineName] = struct{}{}
 		for _, id := range ids {
 			physical[managedIndexRef{engine: engineName, indexID: id}] = struct{}{}
 		}
 	}
-	s.clearMissingRetiringIndexes(physical, listedEngines)
 
 	due := s.observeCleanupCandidates(now, age, physical, protected)
 	if len(due) == 0 {
@@ -103,25 +99,6 @@ func (s *Service) CleanupRetiredIndexes(ctx context.Context, opts RetiredIndexCl
 	return errors.Join(errs...)
 }
 
-func (s *Service) clearMissingRetiringIndexes(physical map[managedIndexRef]struct{}, listedEngines map[string]struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for indexID, generation := range s.retiringIndexes {
-		engine := normalizedEngine(s.indexEngine[indexID])
-		if engine == "" {
-			continue
-		}
-		if _, listed := listedEngines[engine]; !listed {
-			continue
-		}
-		if _, exists := physical[managedIndexRef{engine: engine, indexID: indexID}]; exists {
-			continue
-		}
-		delete(s.retiringIndexes, indexID)
-		log.Printf("storage view cleanup retirement cleared engine=%s index_id=%s generation=%d reason=physical_missing", engine, indexID, generation)
-	}
-}
-
 func (s *Service) cleanupProtectedIndexes(ctx context.Context, metadata MetadataClient) (map[managedIndexRef]struct{}, error) {
 	protected, err := metadataProtectedIndexes(ctx, metadata, s.internalAuth())
 	if err != nil {
@@ -141,19 +118,17 @@ func (s *Service) cleanupProtectedIndexes(ctx context.Context, metadata Metadata
 	s.mu.RUnlock()
 	for _, item := range runtimes {
 		if !item.runtime.mu.TryLock() {
-			// A busy runtime cannot be read safely. Protect both official slots for
-			// only that View and continue collecting other Views, so one hot View
-			// cannot prevent unrelated garbage from aging into cleanup.
-			for _, slot := range []viewindex.Slot{viewindex.SlotA, viewindex.SlotB} {
-				protected[managedIndexRef{indexID: viewindex.ViewIndexID(item.view.spaceID, item.view.viewID, slot)}] = struct{}{}
-			}
+			// A busy runtime cannot be read safely. Protect only that View's index
+			// and continue collecting other Views, so one hot View cannot prevent
+			// unrelated garbage from aging into cleanup.
+			protected[managedIndexRef{indexID: viewindex.ViewIndexID(item.view.spaceID, item.view.viewID)}] = struct{}{}
 			continue
 		}
 		if item.runtime.active != "" {
 			protected[s.managedIndexRef(item.runtime.active)] = struct{}{}
 		}
-		if item.runtime.next != "" {
-			protected[s.managedIndexRef(item.runtime.next)] = struct{}{}
+		if item.runtime.building != "" {
+			protected[s.managedIndexRef(item.runtime.building)] = struct{}{}
 		}
 		item.runtime.mu.Unlock()
 	}
@@ -183,15 +158,6 @@ func metadataProtectedIndexes(ctx context.Context, metadata MetadataClient, auth
 			if id := strings.TrimSpace(view.GetActiveIndexId()); id != "" {
 				protected[managedIndexRef{engine: normalizedEngine(view.GetEngine()), indexID: id}] = struct{}{}
 			}
-			if build := view.GetIndexBuild(); build != nil {
-				if id := strings.TrimSpace(build.GetIndexId()); id != "" {
-					engine := normalizedEngine(build.GetEngine())
-					if engine == "" {
-						engine = normalizedEngine(view.GetEngine())
-					}
-					protected[managedIndexRef{engine: engine, indexID: id}] = struct{}{}
-				}
-			}
 		}
 		pageResult := rsp.GetPageResult()
 		if pageResult == nil {
@@ -214,8 +180,8 @@ func cleanupIndexProtected(protected map[managedIndexRef]struct{}, ref managedIn
 	if _, ok := protected[ref]; ok {
 		return true
 	}
-	// An engine-less reference (a busy runtime protects both official slots this
-	// way) is a wildcard rather than risking deletion of the active artifact.
+	// An engine-less reference (a busy runtime protects its index this way) is a
+	// wildcard rather than risking deletion of the active artifact.
 	_, ok := protected[managedIndexRef{indexID: ref.indexID}]
 	return ok
 }
@@ -252,12 +218,9 @@ func (s *Service) observeCleanupCandidates(now time.Time, age time.Duration, phy
 	if s.cleanupCandidates == nil {
 		s.cleanupCandidates = make(map[managedIndexRef]retiredIndexCandidate)
 	}
-	for ref, candidate := range s.cleanupCandidates {
+	for ref := range s.cleanupCandidates {
 		if _, exists := physical[ref]; !exists {
 			delete(s.cleanupCandidates, ref)
-			if generation, ok := s.retiringIndexes[ref.indexID]; ok && generation == candidate.generation && (generation != s.indexGeneration[ref.indexID] || normalizedEngine(s.indexEngine[ref.indexID]) == ref.engine) {
-				delete(s.retiringIndexes, ref.indexID)
-			}
 		}
 	}
 	due := make([]managedIndexRef, 0)
@@ -266,19 +229,14 @@ func (s *Service) observeCleanupCandidates(now time.Time, age time.Duration, phy
 			if _, ok := s.cleanupCandidates[ref]; ok {
 				log.Printf("storage view cleanup candidate cancelled engine=%s index_id=%s reason=referenced_again", ref.engine, ref.indexID)
 			}
-			if generation, retiring := s.retiringIndexes[ref.indexID]; retiring {
-				if generation != s.indexGeneration[ref.indexID] || normalizedEngine(s.indexEngine[ref.indexID]) == ref.engine {
-					delete(s.retiringIndexes, ref.indexID)
-				}
-			}
 			delete(s.cleanupCandidates, ref)
 			continue
 		}
 		candidate, exists := s.cleanupCandidates[ref]
 		if !exists {
-			candidate = retiredIndexCandidate{firstSeen: now, lastSeen: now, generation: s.indexGeneration[ref.indexID]}
+			candidate = retiredIndexCandidate{firstSeen: now, lastSeen: now}
 			s.cleanupCandidates[ref] = candidate
-			log.Printf("storage view cleanup candidate discovered engine=%s index_id=%s generation=%d first_seen=%s", ref.engine, ref.indexID, candidate.generation, candidate.firstSeen.Format(time.RFC3339Nano))
+			log.Printf("storage view cleanup candidate discovered engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
 			continue
 		}
 		candidate.lastSeen = now
@@ -320,16 +278,8 @@ func (s *Service) removeRetiredIndex(ctx context.Context, ref managedIndexRef, e
 		return fmt.Errorf("lock retired view index engine=%s index_id=%s: %w", ref.engine, ref.indexID, err)
 	}
 	defer release()
-	if generation, preparing := s.preparingGeneration(ref.indexID); preparing {
-		if runtime != nil {
-			runtime.mu.Unlock()
-		}
-		s.cancelCleanupCandidate(ref, "preparing")
-		log.Printf("storage view cleanup candidate deferred engine=%s index_id=%s generation=%d reason=preparing", ref.engine, ref.indexID, generation)
-		return nil
-	}
 	if runtime != nil {
-		if (runtime.active == ref.indexID || runtime.next == ref.indexID) && s.indexEngineMatches(ref) {
+		if (runtime.active == ref.indexID || runtime.building == ref.indexID) && s.indexEngineMatches(ref) {
 			runtime.mu.Unlock()
 			s.cancelCleanupCandidate(ref, "runtime_referenced")
 			return nil
@@ -351,36 +301,22 @@ func (s *Service) removeRetiredIndex(ctx context.Context, ref managedIndexRef, e
 
 	s.mu.RLock()
 	candidate, exists := s.cleanupCandidates[ref]
-	currentGeneration := s.indexGeneration[ref.indexID]
 	s.mu.RUnlock()
 	if !exists {
 		return nil
 	}
-	if currentGeneration != candidate.generation {
-		s.cancelCleanupCandidate(ref, "generation_changed")
-		return nil
-	}
 	if err := engine.Remove(ctx, ref.indexID); err != nil {
-		log.Printf("storage view cleanup delete failed engine=%s index_id=%s generation=%d age=%s err=%v", ref.engine, ref.indexID, candidate.generation, candidate.lastSeen.Sub(candidate.firstSeen), err)
+		log.Printf("storage view cleanup delete failed engine=%s index_id=%s age=%s err=%v", ref.engine, ref.indexID, candidate.lastSeen.Sub(candidate.firstSeen), err)
 		return fmt.Errorf("remove retired view index engine=%s index_id=%s: %w", ref.engine, ref.indexID, err)
 	}
 
 	s.mu.Lock()
-	if current, ok := s.cleanupCandidates[ref]; ok && current.generation == candidate.generation {
-		delete(s.cleanupCandidates, ref)
-	}
-	mappedEngine := normalizedEngine(s.indexEngine[ref.indexID])
-	if generation, ok := s.retiringIndexes[ref.indexID]; ok && generation == candidate.generation && (mappedEngine == "" || mappedEngine == ref.engine) {
-		delete(s.retiringIndexes, ref.indexID)
-	}
-	if s.indexGeneration[ref.indexID] == candidate.generation && mappedEngine == ref.engine {
-		s.removeIndexMappingsLocked(ref.indexID)
-		delete(s.indexEngine, ref.indexID)
-		delete(s.schemas, ref.indexID)
-		delete(s.indexView, ref.indexID)
+	delete(s.cleanupCandidates, ref)
+	if normalizedEngine(s.indexEngine[ref.indexID]) == ref.engine {
+		s.forgetIndexLocked(ref.indexID)
 	}
 	s.mu.Unlock()
-	log.Printf("storage view cleanup deleted engine=%s index_id=%s generation=%d first_seen=%s", ref.engine, ref.indexID, candidate.generation, candidate.firstSeen.Format(time.RFC3339Nano))
+	log.Printf("storage view cleanup deleted engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
 	return nil
 }
 
@@ -395,18 +331,11 @@ func (s *Service) indexEngineMatches(ref managedIndexRef) bool {
 
 func (s *Service) cancelCleanupCandidate(ref managedIndexRef, reason string) {
 	s.mu.Lock()
-	candidate, ok := s.cleanupCandidates[ref]
-	if ok {
-		delete(s.cleanupCandidates, ref)
-		if generation, retiring := s.retiringIndexes[ref.indexID]; retiring && generation == candidate.generation {
-			if generation != s.indexGeneration[ref.indexID] || normalizedEngine(s.indexEngine[ref.indexID]) == ref.engine {
-				delete(s.retiringIndexes, ref.indexID)
-			}
-		}
-	}
+	_, ok := s.cleanupCandidates[ref]
+	delete(s.cleanupCandidates, ref)
 	s.mu.Unlock()
 	if ok {
-		log.Printf("storage view cleanup candidate cancelled engine=%s index_id=%s generation=%d reason=%s", ref.engine, ref.indexID, candidate.generation, reason)
+		log.Printf("storage view cleanup candidate cancelled engine=%s index_id=%s reason=%s", ref.engine, ref.indexID, reason)
 	}
 }
 

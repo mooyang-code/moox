@@ -1178,3 +1178,30 @@ func TestBuilderReportsRecentStorageDeadlineRejections(t *testing.T) {
 	require.Contains(t, check.Reason, "ds_swap")
 	require.NotContains(t, check.Reason, "ds_spot")
 }
+
+func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
+	find := func(overview Overview) *BusinessStatus {
+		for i := range overview.BusinessChecks {
+			if overview.BusinessChecks[i].Kind == "view_file" {
+				return &overview.BusinessChecks[i]
+			}
+		}
+		return nil
+	}
+	for _, tc := range []struct {
+		value  float64
+		status string
+	}{{0, "healthy"}, {2, "down"}} {
+		now := time.Now().UTC().Truncate(time.Second)
+		query := openOverviewMetrics(t, func(db *gorm.DB) {
+			seedOverviewMetricForInstance(t, db, "view-file", "storage-view", "storage-view@storage", "moox_storage_view_file_over_limit", `{}`, tc.value, now)
+		})
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item := find(overview); item == nil || item.Status != tc.status {
+			t.Fatalf("超限数量 %.0f 时检查 = %+v，want %s", tc.value, item, tc.status)
+		}
+	}
+}

@@ -17,8 +17,8 @@ func TestMetadataStoreCodeMapsMissingRowsToNotFound(t *testing.T) {
 	}
 }
 
-func TestMetadataStoreCodeMapsViewIndexBuildConflict(t *testing.T) {
-	if got := MetadataStoreCode(metadatastore.ErrViewIndexBuildConflict); got != pb.ErrorCode_CONFLICT {
+func TestMetadataStoreCodeMapsViewIndexConflict(t *testing.T) {
+	if got := MetadataStoreCode(metadatastore.ErrViewIndexConflict); got != pb.ErrorCode_CONFLICT {
 		t.Fatalf("MetadataStoreCode() = %v, want %v", got, pb.ErrorCode_CONFLICT)
 	}
 }

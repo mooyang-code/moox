@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 )
@@ -55,10 +54,10 @@ func TestReadyFlushDoesNotWaitForBusyRuntime(t *testing.T) {
 	}
 }
 
-// 删除索引时运行时才被创建（首次准备索引）：先取到的闸门不能替代运行时锁，要放开重来，保证总是先取运行时锁再取闸门，
-// 最终清掉指向该索引的 next，而不是物理索引没了、运行时仍指向它。
+// 删除索引时运行时才被创建（首次准备索引）：先取到的写锁不能替代运行时锁，要放开重来，保证总是先取运行时锁再取写锁，
+// 最终清掉指向该索引的 building，而不是物理索引没了、运行时仍指向它。
 func TestRemoveViewIndexRetriesWhenRuntimeAppearsWhileWaiting(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	key := viewRef{spaceID: "space", viewID: "prices"}
@@ -66,7 +65,7 @@ func TestRemoveViewIndexRetriesWhenRuntimeAppearsWhileWaiting(t *testing.T) {
 	svc.indexView[id] = key
 	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
 
-	// 占着闸门，让删除先找运行时（此时还没有）再等闸门。
+	// 占着写锁，让删除先找运行时（此时还没有）再等写锁。
 	hold, err := svc.indexWriteGate(id).lock(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +76,8 @@ func TestRemoveViewIndexRetriesWhenRuntimeAppearsWhileWaiting(t *testing.T) {
 		done <- rsp
 	}()
 	time.Sleep(100 * time.Millisecond)
-	// 准备索引的效果：运行时被创建，并把这个索引挂成 next。
-	runtime := &viewRuntime{next: id, status: "building"}
+	// 准备索引的效果：运行时被创建，并把这个索引挂成 building。
+	runtime := &viewRuntime{building: id}
 	svc.mu.Lock()
 	svc.views[key] = runtime
 	svc.mu.Unlock()
@@ -95,19 +94,18 @@ func TestRemoveViewIndexRetriesWhenRuntimeAppearsWhileWaiting(t *testing.T) {
 		t.Fatal("删除返回后仍持有运行时锁")
 	}
 	defer runtime.mu.Unlock()
-	if runtime.next != "" {
-		t.Fatalf("物理索引已删除，运行时不应继续指向它：next=%q", runtime.next)
+	if runtime.building != "" {
+		t.Fatalf("物理索引已删除，运行时不应继续指向它：building=%q", runtime.building)
 	}
 }
 
-// 清空活动索引时一并重置活动数据集契约：之后重新挂载的新索引按新的元数据建立契约，而不是沿用被删除索引的旧数据集
-// （周期事件会按旧契约路由，新数据集的完成事件收不到）。
-func TestRemoveViewIndexResetsActiveDatasetContract(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+func TestRemoveViewIndexClearsActiveAndReadState(t *testing.T) {
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	key := viewRef{spaceID: "space", viewID: "prices"}
-	runtime := &viewRuntime{active: id, activeDatasetIDs: []string{"ds_old"}, activePrimaryDatasetID: "ds_old", activeDatasetSet: true}
+	runtime := &viewRuntime{active: id}
+	runtime.publishReadStateLocked()
 	svc.views[key] = runtime
 	svc.indexEngine[id] = "fake"
 	svc.indexView[id] = key
@@ -115,27 +113,11 @@ func TestRemoveViewIndexResetsActiveDatasetContract(t *testing.T) {
 	if rsp, err := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("删除失败：rsp=%v err=%v", rsp, err)
 	}
-	if runtime.active != "" || runtime.activeDatasetSet || runtime.activeDatasetIDs != nil || runtime.activePrimaryDatasetID != "" {
-		t.Fatalf("清空 active 时应重置数据集契约：%+v", runtime)
+	if runtime.active != "" {
+		t.Fatalf("删除后不应继续指向索引：%q", runtime.active)
 	}
 	if state := runtime.queryState(); state.active != "" {
 		t.Fatalf("查询路径的副本也应清空：%q", state.active)
-	}
-}
-
-// 放弃失败的首次构建（活动槽位）同样重置数据集契约。
-func TestDiscardFailedBuildResetsActiveDatasetContract(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
-	svc := newCleanupService(t, engine)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	runtime := &viewRuntime{active: id, activeDatasetIDs: []string{"ds_old"}, activePrimaryDatasetID: "ds_old", activeDatasetSet: true, status: "building"}
-	svc.views[key] = runtime
-	svc.indexEngine[id] = "fake"
-	svc.indexView[id] = key
-	svc.discardFailedBuild(context.Background(), "space", "prices", id, "fake")
-	if runtime.active != "" || runtime.activeDatasetSet || runtime.activeDatasetIDs != nil || runtime.activePrimaryDatasetID != "" || runtime.status != "failed" {
-		t.Fatalf("放弃失败构建时应清空 active 并重置数据集契约：%+v", runtime)
 	}
 }
 

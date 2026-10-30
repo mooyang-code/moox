@@ -128,7 +128,7 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret, Retention: policy.Retention})
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, Retention: policy.Retention})
 	if err != nil {
 		return err
 	}
@@ -349,10 +349,6 @@ func runViewRole() error {
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
-	if err != nil {
-		return err
-	}
 	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
 	if err != nil {
 		return err
@@ -366,29 +362,18 @@ func runViewRole() error {
 		return err
 	}
 	// The policy is validated on load, so its durations parse.
-	rebuildCheckInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
-	capacityCheckInterval, _ := time.ParseDuration(policy.View.CapacityCheckInterval)
-	capacityCheckJitter, _ := time.ParseDuration(policy.View.CapacityCheckJitter)
+	maintenanceInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
 	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
 	svc.SetSeriesBars(policy.View.Bars)
 	svc.SetMaxAge(policy.View.MaxAge)
 	maintenanceOptions := viewservice.MaintenanceOptions{
-		Metadata:                    metadataProxy,
-		Primary:                     primaryProxy,
-		PrimaryRange:                primaryProxy,
-		OwnerID:                     "storage-view",
-		Interval:                    rebuildCheckInterval,
-		Bars:                        policy.View.Bars,
-		TrimBars:                    policy.View.TrimBars,
-		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
-		CapacityCheckInterval:       capacityCheckInterval,
-		CapacityCheckJitter:         capacityCheckJitter,
-		RebuildMaxPending:           rebuildMaxPending,
-		RebuildIdleChecks:           rebuildIdleChecks,
-		RebuildMaxPendingConfigured: maxPendingConfigured,
-		RebuildIdleChecksConfigured: idleChecksConfigured,
-		BackfillPageSize:            backfillPageSize,
-		BackfillRequestInterval:     backfillRequestInterval,
+		Metadata:                metadataProxy,
+		PrimaryRange:            primaryProxy,
+		Interval:                maintenanceInterval,
+		Bars:                    policy.View.Bars,
+		MaxViewFileBytes:        policy.View.MaxViewFileBytes,
+		BackfillPageSize:        backfillPageSize,
+		BackfillRequestInterval: backfillRequestInterval,
 	}
 	// Bind the listeners before opening/validating historical indexes. View
 	// restoration can still take time on a large deployment; keeping the
@@ -464,8 +449,7 @@ func runViewRole() error {
 	}
 	defer stopDynamicConsumer()
 	if storageViewMaintenanceDisabled() {
-		// Keep live View consumers available while an operator deliberately
-		// pauses historical maintenance on an overloaded Storage host.
+		// 运维主动暂停建索引时（Storage 主机过载），实时消费照常工作。
 		svc.MarkMaintenanceReady()
 		log.Printf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
 	} else {
@@ -475,8 +459,8 @@ func runViewRole() error {
 		}
 		defer stopViewMaintainer()
 	}
-	stopDeleteOldest := svc.StartDeleteOldest(trpc.BackgroundContext(), viewservice.DeleteOldestOptions{BatchSize: deleteOldestBatchSize})
-	defer stopDeleteOldest()
+	stopMinuteTasks := svc.StartMinuteTasks(trpc.BackgroundContext(), viewservice.DeleteOldestOptions{BatchSize: deleteOldestBatchSize})
+	defer stopMinuteTasks()
 	return <-serveErr
 }
 
@@ -573,25 +557,6 @@ func buildStorageViewConsumerTemplate(view storageconfig.StorageView) (viewservi
 		AckWaitMS: view.AckWaitMS, FetchBatch: view.FetchBatch, MaxWorkers: view.MaxWorkers, MaxAckPending: view.MaxAckPending,
 		Ordering: "dataset", DeliverPolicy: "all", MaxRetryAttempts: -1,
 	}, nil
-}
-
-func storageViewRebuildSettings() (uint64, uint32, bool, bool, error) {
-	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
-	if path == "" {
-		return 32, 3, false, false, nil
-	}
-	var runtimeConfig storageconfig.RuntimeConfig
-	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
-	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
-	}
-	maxPendingConfigured := runtimeConfig.Storage.View.HasRebuildMaxPendingSetting()
-	idleChecksConfigured := runtimeConfig.Storage.View.HasRebuildIdleChecksSetting()
-	if idleChecksConfigured && runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
-		return 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
-	}
-	return runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
-		maxPendingConfigured, idleChecksConfigured, nil
 }
 
 // storageViewDeleteOldestBatchSize 读取定时删除最旧数据时每批最多删除的行数（storage.view.delete_oldest_batch_size）。

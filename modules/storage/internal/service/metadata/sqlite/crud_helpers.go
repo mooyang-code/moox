@@ -38,7 +38,8 @@ var (
 	unmarshalOptions = protojson.UnmarshalOptions{DiscardUnknown: true}
 )
 
-var ErrViewIndexBuildConflict = errors.New("view index build conflict")
+// ErrViewIndexConflict 表示活动索引的状态与这次提交的预期不一致。
+var ErrViewIndexConflict = errors.New("view index conflict")
 
 const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
@@ -48,7 +49,7 @@ func requireChangedRow(result sql.Result) error {
 		return err
 	}
 	if rows == 0 {
-		return ErrViewIndexBuildConflict
+		return ErrViewIndexConflict
 	}
 	return nil
 }

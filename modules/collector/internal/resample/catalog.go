@@ -244,9 +244,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			return compensate(err)
 		}
 	}
-	// Upserting a View column advances desired_view_revision. Re-read the
-	// authoritative revision after the complete desired schema is written; the
-	// earlier GetView response may describe a stale definition.
+	// 写完全部列之后重新读一次 View：之前的 GetView 响应可能还是旧定义，要按完整的声明列等待。
 	finalViewResp, finalViewErr := c.Metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: c.Auth, SpaceId: task.SpaceID, ViewId: targetViewID})
 	if finalViewErr != nil {
 		return compensate(fmt.Errorf("get target View after columns: %w", finalViewErr))
@@ -277,7 +275,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if !syncResp.GetReady() {
 		return compensate(ErrTargetViewNotReady)
 	}
-	if err := waitTargetViewRevision(ctx, c.Metadata, c.Auth, task.SpaceID, targetViewID, finalView.GetDesiredViewRevision(), 5*time.Second); err != nil {
+	if err := waitTargetViewColumns(ctx, c.Metadata, c.Auth, task.SpaceID, targetViewID, finalView.GetColumns(), 5*time.Second); err != nil {
 		return compensate(err)
 	}
 	return nil
@@ -354,13 +352,9 @@ type viewGetter interface {
 	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
 }
 
-// waitTargetViewRevision fences Collector activation on the physical View
-// index, not merely on the route-ready marker. A marker can be visible before
-// the asynchronous View Maintainer has activated the desired schema revision.
-func waitTargetViewRevision(ctx context.Context, getter viewGetter, auth *storagepb.AuthInfo, spaceID, viewID string, desired uint64, timeout time.Duration) error {
-	if desired == 0 {
-		return nil
-	}
+// waitTargetViewColumns 等到物理索引建好、声明的列都已建进索引才放行采集，只看路由就绪标记不够：
+// 标记可能先于异步的建索引或加列出现。
+func waitTargetViewColumns(ctx context.Context, getter viewGetter, auth *storagepb.AuthInfo, spaceID, viewID string, columns []*storagepb.ViewColumn, timeout time.Duration) error {
 	if getter == nil {
 		return errors.New("metadata View getter is required")
 	}
@@ -378,19 +372,19 @@ func waitTargetViewRevision(ctx context.Context, getter viewGetter, auth *storag
 				}
 				return ErrTargetViewNotReady
 			}
-			return fmt.Errorf("get target View revision: %w", err)
+			return fmt.Errorf("get target View: %w", err)
 		}
 		if response == nil {
-			return errors.New("get target View revision: empty response")
+			return errors.New("get target View: empty response")
 		}
-		if err := ensureMetadataSuccess("get target View revision", response.GetRetInfo()); err != nil {
+		if err := ensureMetadataSuccess("get target View", response.GetRetInfo()); err != nil {
 			return err
 		}
 		view := response.GetView()
 		if view == nil {
-			return errors.New("get target View revision: empty View")
+			return errors.New("get target View: empty View")
 		}
-		if targetViewRevisionReady(view, desired) {
+		if targetViewColumnsReady(view, columns) {
 			return nil
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
@@ -406,9 +400,18 @@ func waitTargetViewRevision(ctx context.Context, getter viewGetter, auth *storag
 	}
 }
 
-func targetViewRevisionReady(view *storagepb.View, desired uint64) bool {
-	if view == nil || view.GetDesiredViewRevision() > desired || view.GetActiveViewRevision() < desired || strings.TrimSpace(view.GetActiveIndexId()) == "" {
+func targetViewColumnsReady(view *storagepb.View, columns []*storagepb.ViewColumn) bool {
+	if view == nil || strings.TrimSpace(view.GetActiveIndexId()) == "" {
 		return false
+	}
+	built := make(map[string]struct{}, len(view.GetActiveColumns()))
+	for _, column := range view.GetActiveColumns() {
+		built[column.GetColumnName()] = struct{}{}
+	}
+	for _, column := range columns {
+		if _, ok := built[column.GetColumnName()]; !ok {
+			return false
+		}
 	}
 	status := strings.ToLower(strings.TrimSpace(view.GetStatus()))
 	return status == "" || status == "active"

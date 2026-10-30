@@ -141,29 +141,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		}
 	}
 
-	stateReader := func(stateCtx context.Context) (jetstream.ConsumerState, error) {
-		// 动态的 View 清单对账可以在维护读取汇总状态的同时注册和注销分区。遍历之前在服务锁内给映射做快照，
-		// 闭包就不会与这些更新竞争。
-		s.mu.RLock()
-		readers := make(map[string]func(context.Context) (jetstream.ConsumerState, error), len(s.consumerStates))
-		for partitionID, reader := range s.consumerStates {
-			readers[partitionID] = reader
-		}
-		s.mu.RUnlock()
-		var total jetstream.ConsumerState
-		for partitionID, reader := range readers {
-			state, err := reader(stateCtx)
-			if err != nil {
-				return jetstream.ConsumerState{}, fmt.Errorf("读取消费分区 %q 的状态失败：%w", partitionID, err)
-			}
-			if opts.Metrics != nil {
-				opts.Metrics.ObserveConsumerPartitionBacklog(partitionID, state.NumPending, uint64(state.NumAckPending))
-			}
-			total.NumPending += state.NumPending
-			total.NumAckPending += state.NumAckPending
-		}
-		return total, nil
-	}
 	computedBoundReader := func() bool {
 		for _, state := range bounds {
 			state.mu.RLock()
@@ -217,8 +194,6 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 			return bound
 		}
 	}
-	s.consumerState = stateReader
-	s.consumerBound = boundReader
 	s.mu.Unlock()
 	boundReaderMu.RLock()
 	reader := boundReader
@@ -278,14 +253,12 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 		s.mu.Lock()
 		s.readyPublisher = nil
 		s.readyReconnect = nil
-		s.consumerState = nil
-		s.consumerBound = nil
 		s.consumerStates = make(map[string]func(context.Context) (jetstream.ConsumerState, error))
 		s.consumerBounds = make(map[string]func() bool)
 		s.consumerPartitionByDataset = make(map[datasetRef]string)
 		s.mu.Unlock()
 	}
-	// 丢弃旧二进制遗留的重建日志。重建从不从这个目录发出 subject-ready。
+	// 丢弃遗留的待补标的日志。首次建索引从不从这个目录发出 subject-ready。
 	if err := s.ReplayPendingSubjects(ctx); err != nil {
 		stop()
 		return nil, fmt.Errorf("清理遗留的 View 标的日志失败：%w", err)

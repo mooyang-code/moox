@@ -59,7 +59,7 @@ message QueryTimeSeriesRowsReq {
   uint32 limit = 10;
   // total_mode 控制是否计算精确总数。
   common.TotalMode total_mode = 11;
-  // pin 钉住多页读取使用的索引版本：与当前活动索引不一致（A/B 切换或原地更新）表示索引已变化，
+  // pin 钉住多页读取使用的索引版本：与当前活动索引不一致（行被写入、修正或删除）表示索引已变化，
   // 调用方必须从头重读，不能混用两个版本的页。
   IndexVersion pin = 12;
 }
@@ -138,8 +138,7 @@ message SearchRecordRowsRsp {
 // DataView 是用户侧 View 查询服务。
 // View 索引是可从 PrimaryStore 重建的有界派生结果，不是完整事实存储；
 // 完整历史以 PrimaryStore KV/Pebble 为准。索引生命周期统一由 view
-// 角色的 View Maintainer 调度驱动（schema 抢占重建、容量切换、ready switch、
-// 陈旧清理），不提供手动重建 RPC。
+// 角色调度驱动（首次建索引、原地加列、定时删除最旧数据、清理已删除 View 的索引）。
 service DataView {
   // QueryTimeSeriesRows 查询 DuckDB 中当前 active View 索引。
   // View 索引是可重建的近期派生结果，不是完整事实存储。

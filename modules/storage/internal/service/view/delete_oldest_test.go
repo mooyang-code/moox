@@ -120,22 +120,8 @@ func TestDeleteOldestRoundStopsWhenNothingLeftAndSkipsUnsafeViews(t *testing.T) 
 		t.Fatalf("没有删除时不应更新覆盖起点，实际 %d 次", engine.refreshes)
 	}
 
-	// 正在做 A/B 构建的 View 跳过。
 	engine.backlog = 5
 	plans := engine.plans
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}].next = "prices-next"
-	svc.deleteOldestRound(context.Background(), 3)
-	if engine.plans != plans {
-		t.Fatal("正在做 A/B 构建的 View 不应删除最旧数据")
-	}
-
-	// 维护尚未就绪时整轮跳过。
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}].next = ""
-	svc.maintenanceReady = false
-	svc.deleteOldestRound(context.Background(), 3)
-	if engine.plans != plans {
-		t.Fatal("维护尚未就绪时不应删除最旧数据")
-	}
 
 	// 记录型 View（没有频率）不处理。
 	svc.maintenanceReady = true

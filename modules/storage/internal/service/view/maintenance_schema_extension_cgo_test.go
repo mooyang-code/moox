@@ -65,15 +65,14 @@ func TestFollowingViewColumnAddDoesNotRebuild(t *testing.T) {
 		Engine: "duckdb", Columns: []*pb.ViewColumn{closeColumn, biasColumn},
 	}
 	desiredSchema.SchemaHash = viewindex.HashViewIndexSchema(desiredSchema)
-	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: viewID, DatasetId: datasetID, Engine: "duckdb", ActiveIndexId: indexID,
-		ActiveViewRevision: 1, DesiredViewRevision: 2, ActiveViewSchemaHash: activeSchema.SchemaHash,
+		ViewRevision: 1, ActiveViewSchemaHash: activeSchema.SchemaHash,
 		ActiveColumns: []*pb.ViewColumn{closeColumn}, Columns: []*pb.ViewColumn{closeColumn, biasColumn},
 		Status: "active", Attributes: map[string]string{
 			"follow_dataset_columns": "true",
-			activePrimaryDatasetAttr: datasetID,
 		},
-	}}}
+	}}
 	if err := svc.AttachActiveView(ctx, metadata.view); err != nil {
 		t.Fatalf("attach active view: %v", err)
 	}
@@ -89,17 +88,18 @@ func TestFollowingViewColumnAddDoesNotRebuild(t *testing.T) {
 		t.Fatalf("event with a not-yet-active column must be applied with the new column trimmed: %v", err)
 	}
 
-	if err := svc.maintainView(ctx, MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
-		t.Fatalf("maintainView: %v", err)
+	svc.setMetadataClient(metadata)
+	svc.extendViewSchemasRound(ctx)
+	if metadata.completes != 0 || metadata.extensions != 1 {
+		t.Fatalf("加列不应重建：completes=%d extensions=%d", metadata.completes, metadata.extensions)
 	}
-	if metadata.claims != 0 || metadata.extensions != 1 || metadata.activated {
-		t.Fatalf("maintenance rebuilt instead of extending: claims=%d extensions=%d activated=%v", metadata.claims, metadata.extensions, metadata.activated)
+	// 没有新列时不再提交。
+	svc.extendViewSchemasRound(ctx)
+	if metadata.extensions != 1 {
+		t.Fatalf("没有新列时不应提交：extensions=%d", metadata.extensions)
 	}
-	if metadata.created != nil {
-		t.Fatalf("unexpected rebuild record: %v", metadata.created)
-	}
-	if metadata.view.GetActiveIndexId() != indexID || metadata.view.GetActiveViewRevision() != 2 {
-		t.Fatalf("active contract after extension = index %q revision %d", metadata.view.GetActiveIndexId(), metadata.view.GetActiveViewRevision())
+	if metadata.view.GetActiveIndexId() != indexID || metadata.view.GetViewRevision() != 2 {
+		t.Fatalf("active contract after extension = index %q revision %d", metadata.view.GetActiveIndexId(), metadata.view.GetViewRevision())
 	}
 	stats, err := engine.(viewindex.MetadataStatReader).StatMetadata(ctx, indexID)
 	if err != nil || stats.ViewVersion != 2 || stats.SchemaHash != desiredSchema.SchemaHash {
@@ -173,15 +173,14 @@ func TestRestoreRecoversViewSchemaExtensionAfterRestart(t *testing.T) {
 		t.Fatalf("simulate DuckDB commit before Metadata CAS: %v", err)
 	}
 
-	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
+	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: viewID, DatasetId: datasetID, Engine: "duckdb", ActiveIndexId: indexID,
-		ActiveViewRevision: 1, DesiredViewRevision: 2, ActiveViewSchemaHash: activeSchema.SchemaHash,
+		ViewRevision: 1, ActiveViewSchemaHash: activeSchema.SchemaHash,
 		ActiveColumns: []*pb.ViewColumn{closeColumn}, Columns: []*pb.ViewColumn{closeColumn, biasColumn},
 		Status: "active", Attributes: map[string]string{
 			"follow_dataset_columns": "true",
-			activePrimaryDatasetAttr: datasetID,
 		},
-	}}}
+	}}
 	closeEngines := func(service *Service) {
 		for _, candidate := range service.engines {
 			if closer, ok := candidate.(interface{ Close() error }); ok {
@@ -201,11 +200,11 @@ func TestRestoreRecoversViewSchemaExtensionAfterRestart(t *testing.T) {
 	if err := restarted.RestoreActiveViews(ctx, MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("restore factor result active index: %v", err)
 	}
-	if metadata.extensions != 1 || metadata.claims != 0 || metadata.activated {
-		t.Fatalf("restart recovery did not CAS the existing index: extensions=%d claims=%d activated=%v", metadata.extensions, metadata.claims, metadata.activated)
+	if metadata.extensions != 1 || metadata.completes != 0 {
+		t.Fatalf("重启后应当补提交已有索引：extensions=%d completes=%d", metadata.extensions, metadata.completes)
 	}
-	if metadata.view.GetActiveIndexId() != indexID || metadata.view.GetActiveViewRevision() != 2 {
-		t.Fatalf("recovered active contract = index %q revision %d", metadata.view.GetActiveIndexId(), metadata.view.GetActiveViewRevision())
+	if metadata.view.GetActiveIndexId() != indexID || metadata.view.GetViewRevision() != 2 {
+		t.Fatalf("recovered active contract = index %q revision %d", metadata.view.GetActiveIndexId(), metadata.view.GetViewRevision())
 	}
 	rows, _, err := restarted.engines["duckdb"].Query(ctx, indexID, viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: datasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
@@ -243,13 +242,12 @@ func TestRestoreRecoversViewSchemaExtensionAfterRestart(t *testing.T) {
 	if err := restartedExtender.ExtendColumns(ctx, indexID, currentSchema, nextSchema); err != nil {
 		t.Fatalf("simulate later DuckDB commit before Metadata CAS: %v", err)
 	}
-	metadata.view.DesiredViewRevision = 3
 	metadata.view.Columns = []*pb.ViewColumn{closeColumn, biasColumn, volumeColumn}
 	if err := restarted.maintainView(ctx, MaintenanceOptions{Metadata: metadata}, restarted.internalAuth(), metadata.view); err != nil {
 		t.Fatalf("maintainer recovery of an ahead physical schema: %v", err)
 	}
-	if metadata.extensions != 2 || metadata.claims != 0 || metadata.activated || metadata.view.GetActiveViewRevision() != 3 {
-		t.Fatalf("maintainer did not recover same active index: extensions=%d claims=%d activated=%v revision=%d",
-			metadata.extensions, metadata.claims, metadata.activated, metadata.view.GetActiveViewRevision())
+	if metadata.extensions != 2 || metadata.completes != 0 || metadata.view.GetViewRevision() != 3 {
+		t.Fatalf("维护应当补提交同一个索引：extensions=%d completes=%d revision=%d",
+			metadata.extensions, metadata.completes, metadata.view.GetViewRevision())
 	}
 }

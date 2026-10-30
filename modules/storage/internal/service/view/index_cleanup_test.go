@@ -149,12 +149,12 @@ func newCleanupService(t *testing.T, engine *fakeManagedEngine) *Service {
 	return svc
 }
 
-func cleanupIndexID(viewID string, slot viewindex.Slot) string {
-	return viewindex.ViewIndexID("space", viewID, slot)
+func cleanupIndexID(viewID string) string {
+	return viewindex.ViewIndexID("space", viewID)
 }
 
 func TestCleanupRetiredIndexesRequiresContinuousUnreferencedAge(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	metadata := &cleanupMetadata{}
@@ -181,18 +181,15 @@ func TestCleanupRetiredIndexesRequiresContinuousUnreferencedAge(t *testing.T) {
 }
 
 func TestCleanupRetiredIndexesProtectsMetadataAndRuntimeIndexes(t *testing.T) {
-	active := cleanupIndexID("active", viewindex.SlotA)
-	build := cleanupIndexID("build", viewindex.SlotB)
-	runtimeActive := cleanupIndexID("runtime-active", viewindex.SlotA)
-	runtimeNext := cleanupIndexID("runtime-next", viewindex.SlotB)
-	orphan := cleanupIndexID("orphan", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{active, build, runtimeActive, runtimeNext, orphan}}
+	active := cleanupIndexID("active")
+	runtimeActive := cleanupIndexID("runtime-active")
+	building := cleanupIndexID("building")
+	orphan := cleanupIndexID("orphan")
+	engine := &fakeManagedEngine{name: "fake", ids: []string{active, runtimeActive, building, orphan}}
 	svc := newCleanupService(t, engine)
-	svc.views[viewRef{spaceID: "space", viewID: "runtime"}] = &viewRuntime{active: runtimeActive, next: runtimeNext}
-	metadata := &cleanupMetadata{views: []*pb.View{{
-		SpaceId: "space", ViewId: "metadata", ActiveIndexId: active,
-		IndexBuild: &pb.ViewIndexBuild{IndexId: build},
-	}}}
+	svc.views[viewRef{spaceID: "space", viewID: "runtime-active"}] = &viewRuntime{active: runtimeActive}
+	svc.views[viewRef{spaceID: "space", viewID: "building"}] = &viewRuntime{building: building}
+	metadata := &cleanupMetadata{views: []*pb.View{{SpaceId: "space", ViewId: "metadata", ActiveIndexId: active}}}
 	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
 	opts := RetiredIndexCleanupOptions{Metadata: metadata, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}
 
@@ -209,8 +206,8 @@ func TestCleanupRetiredIndexesProtectsMetadataAndRuntimeIndexes(t *testing.T) {
 }
 
 func TestCleanupRetiredIndexesBusyRuntimeDoesNotStarveOtherViews(t *testing.T) {
-	busyID := cleanupIndexID("busy", viewindex.SlotA)
-	orphanID := cleanupIndexID("orphan", viewindex.SlotA)
+	busyID := cleanupIndexID("busy")
+	orphanID := cleanupIndexID("orphan")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{busyID, orphanID}}
 	svc := newCleanupService(t, engine)
 	busyRuntime := &viewRuntime{}
@@ -237,7 +234,7 @@ func TestCleanupRetiredIndexesBusyRuntimeDoesNotStarveOtherViews(t *testing.T) {
 }
 
 func TestCleanupRetiredIndexesMetadataFailureBreaksCandidateContinuity(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	metadata := &cleanupMetadata{}
@@ -279,7 +276,7 @@ func TestCleanupRetiredIndexesRejectsIncompleteMetadataPagination(t *testing.T) 
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id := cleanupIndexID("prices", viewindex.SlotA)
+			id := cleanupIndexID("prices")
 			engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 			svc := newCleanupService(t, engine)
 			metadata := &cleanupMetadata{}
@@ -302,7 +299,7 @@ func TestCleanupRetiredIndexesRejectsIncompleteMetadataPagination(t *testing.T) 
 }
 
 func TestCleanupRetiredIndexesRetriesRemoveFailure(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}, removeErr: errors.New("busy")}
 	svc := newCleanupService(t, engine)
 	metadata := &cleanupMetadata{}
@@ -326,7 +323,7 @@ func TestCleanupRetiredIndexesRetriesRemoveFailure(t *testing.T) {
 }
 
 func TestCleanupRetiredIndexesRevalidatesMetadataInsideIndexGate(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	metadata := &cleanupMetadata{
@@ -349,75 +346,8 @@ func TestCleanupRetiredIndexesRevalidatesMetadataInsideIndexGate(t *testing.T) {
 	}
 }
 
-func TestRetireIndexSharesPrepareGate(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake"}
-	svc := newCleanupService(t, engine)
-	release, err := svc.indexWriteGate(id).lock(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- svc.retireIndex(context.Background(), id, 0) }()
-	select {
-	case err := <-done:
-		t.Fatalf("retirement bypassed per-index gate: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	release()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if generation, retiring := svc.retiringGeneration(id); !retiring || generation != 0 {
-		t.Fatalf("retiring generation = %d, present=%v", generation, retiring)
-	}
-}
-
-func TestCleanupRetiredIndexesCancelsReusedGeneration(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
-	svc := newCleanupService(t, engine)
-	metadata := &cleanupMetadata{}
-	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
-	opts := RetiredIndexCleanupOptions{Metadata: metadata, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}
-	svc.markIndexRetiring(id, 0)
-
-	if err := svc.CleanupRetiredIndexes(context.Background(), opts); err != nil {
-		t.Fatal(err)
-	}
-	svc.nextIndexGeneration(id)
-	now = now.Add(time.Minute)
-	if err := svc.CleanupRetiredIndexes(context.Background(), opts); err != nil {
-		t.Fatal(err)
-	}
-	if len(engine.removeCalls) != 0 {
-		t.Fatalf("reused generation was removed: %v", engine.removeCalls)
-	}
-	if _, retiring := svc.retiringGeneration(id); retiring {
-		t.Fatal("stale retiring generation was not cleared")
-	}
-}
-
-func TestCleanupRetiredIndexesClearsProtectedStaleRetirement(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
-	svc := newCleanupService(t, engine)
-	metadata := &cleanupMetadata{views: []*pb.View{{
-		SpaceId: "space", ViewId: "prices", Engine: "fake", ActiveIndexId: id,
-	}}}
-	svc.markIndexRetiring(id, 0)
-	svc.nextIndexGeneration(id)
-
-	if err := svc.CleanupRetiredIndexes(context.Background(), RetiredIndexCleanupOptions{Metadata: metadata}); err != nil {
-		t.Fatal(err)
-	}
-	if _, retiring := svc.retiringGeneration(id); retiring {
-		t.Fatal("protected reused index kept a stale retiring marker")
-	}
-}
-
 func TestCleanupRetiredIndexesProtectsOnlyMatchingEngine(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	duckdb := &fakeManagedEngine{name: "duckdb", ids: []string{id}}
 	bleve := &fakeManagedEngine{name: "bleve", ids: []string{id}}
 	svc := newCleanupService(t, duckdb)
@@ -452,31 +382,8 @@ func TestCleanupRetiredIndexesProtectsOnlyMatchingEngine(t *testing.T) {
 	}
 }
 
-func TestCleanupRetiredIndexesSiblingCandidateDoesNotClearRetirement(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	duckdb := &fakeManagedEngine{name: "duckdb", ids: []string{id}}
-	bleve := &fakeManagedEngine{name: "bleve", ids: []string{id}}
-	svc := newCleanupService(t, duckdb)
-	svc.engines[bleve.name] = bleve
-	svc.indexEngine[id] = "duckdb"
-	svc.markIndexRetiring(id, 0)
-	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
-	opts := RetiredIndexCleanupOptions{Metadata: &cleanupMetadata{}, MinUnreferencedAge: time.Minute, Now: func() time.Time { return now }}
-	if err := svc.CleanupRetiredIndexes(context.Background(), opts); err != nil {
-		t.Fatal(err)
-	}
-	bleve.ids = nil
-	now = now.Add(time.Second)
-	if err := svc.CleanupRetiredIndexes(context.Background(), opts); err != nil {
-		t.Fatal(err)
-	}
-	if generation, retiring := svc.retiringGeneration(id); !retiring || generation != 0 {
-		t.Fatalf("Bleve candidate cancellation cleared DuckDB retirement: generation=%d present=%v", generation, retiring)
-	}
-}
-
 func TestCleanupRetiredIndexesRediscoveryAfterRestart(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	metadata := &cleanupMetadata{}
 	now := time.Date(2026, 8, 19, 2, 0, 0, 0, time.UTC)
@@ -504,71 +411,9 @@ func TestCleanupRetiredIndexesRediscoveryAfterRestart(t *testing.T) {
 	}
 }
 
-func TestCleanupRetiredIndexesClearsMissingOldActiveForSlotReuse(t *testing.T) {
-	oldID := cleanupIndexID("prices", viewindex.SlotA)
-	newID := cleanupIndexID("prices", viewindex.SlotB)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{newID}}
-	svc := newCleanupService(t, engine)
-	svc.indexEngine[oldID] = "fake"
-	svc.indexEngine[newID] = "fake"
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{
-		active: oldID, next: newID, status: "ready",
-	}
-	if err := svc.SwitchView(context.Background(), "space", "prices"); err != nil {
-		t.Fatal(err)
-	}
-	if _, retiring := svc.retiringGeneration(oldID); !retiring {
-		t.Fatal("missing old active was not marked retiring during switch")
-	}
-	metadata := &cleanupMetadata{views: []*pb.View{{
-		SpaceId: "space", ViewId: "prices", Engine: "fake", ActiveIndexId: newID,
-	}}}
-	if err := svc.CleanupRetiredIndexes(context.Background(), RetiredIndexCleanupOptions{Metadata: metadata}); err != nil {
-		t.Fatal(err)
-	}
-	if _, retiring := svc.retiringGeneration(oldID); retiring {
-		t.Fatal("missing old active kept its slot permanently retiring")
-	}
-
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
-	rsp, err := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
-		AuthInfo: auth, IndexId: oldID,
-		Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "prices", Engine: "fake", ViewVersion: 3},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("reuse missing old slot: rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestRemoveViewIndexClearsRetirementForImmediateSlotReuse(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
-	svc := newCleanupService(t, engine)
-	svc.indexEngine[id] = "fake"
-	svc.schemas[id] = viewindex.ViewIndexSchema{Engine: "fake"}
-	svc.indexView[id] = viewRef{spaceID: "space", viewID: "prices"}
-	svc.markIndexRetiring(id, 0)
-	svc.cleanupCandidates[managedIndexRef{engine: "fake", indexID: id}] = retiredIndexCandidate{generation: 0}
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
-	rsp, err := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("remove retired index: rsp=%v err=%v", rsp, err)
-	}
-	if _, retiring := svc.retiringGeneration(id); retiring {
-		t.Fatal("explicit removal left the slot retiring")
-	}
-	prepare, err := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
-		AuthInfo: auth, IndexId: id,
-		Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "prices", Engine: "fake", ViewVersion: 2},
-	})
-	if err != nil || prepare.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("reuse explicitly removed slot: rsp=%v err=%v", prepare, err)
-	}
-}
-
 // 删除挂在 View 上的当前索引：整个过程持有运行时锁，结束时清掉 active 并释放锁（不能在已持有时再次加锁）。
 func TestRemoveViewIndexClearsActiveOfAttachedView(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
+	id := cleanupIndexID("prices")
 	engine := &fakeManagedEngine{name: "fake", ids: []string{id}}
 	svc := newCleanupService(t, engine)
 	key := viewRef{spaceID: "space", viewID: "prices"}
@@ -596,147 +441,5 @@ func TestRemoveViewIndexClearsActiveOfAttachedView(t *testing.T) {
 	defer runtime.mu.Unlock()
 	if runtime.active != "" {
 		t.Fatalf("active 未清空：%q", runtime.active)
-	}
-}
-
-func TestRemoveViewIndexCannotCrossPrepareAttachWindow(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	prepareStarted := make(chan struct{})
-	prepareRelease := make(chan struct{})
-	engine := &fakeManagedEngine{
-		name: "fake", ids: []string{id}, prepareStarted: prepareStarted, prepareRelease: prepareRelease,
-	}
-	svc := newCleanupService(t, engine)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	runtime := &viewRuntime{}
-	svc.views[key] = runtime
-	svc.indexEngine[id] = "fake"
-	svc.indexView[id] = key
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
-	prepareDone := make(chan *pb.PrepareViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
-			AuthInfo: auth, IndexId: id,
-			Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "prices", Engine: "fake", ViewVersion: 2},
-		})
-		prepareDone <- rsp
-	}()
-	<-prepareStarted
-	removeDone := make(chan *pb.RemoveViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id})
-		removeDone <- rsp
-	}()
-	deadline := time.Now().Add(time.Second)
-	for runtime.mu.TryLock() {
-		runtime.mu.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("RemoveViewIndex did not acquire the runtime lock")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	close(prepareRelease)
-	removeRsp := <-removeDone
-	if removeRsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
-		t.Fatal("RemoveViewIndex deleted a generation that was still attaching")
-	}
-	prepareRsp := <-prepareDone
-	if prepareRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("PrepareViewIndex failed after protected attach: %v", prepareRsp.GetRetInfo())
-	}
-	if len(engine.ids) != 1 || engine.ids[0] != id {
-		t.Fatalf("prepared physical index was removed: %v", engine.ids)
-	}
-}
-
-func TestCleanupCannotCrossPrepareAttachWindowOrLeakRuntimeLock(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	prepareStarted := make(chan struct{})
-	prepareRelease := make(chan struct{})
-	engine := &fakeManagedEngine{
-		name: "fake", ids: []string{id}, prepareStarted: prepareStarted, prepareRelease: prepareRelease,
-	}
-	svc := newCleanupService(t, engine)
-	key := viewRef{spaceID: "space", viewID: "prices"}
-	runtime := &viewRuntime{}
-	svc.views[key] = runtime
-	svc.indexEngine[id] = "fake"
-	svc.indexView[id] = key
-	ref := managedIndexRef{engine: "fake", indexID: id}
-	svc.cleanupCandidates[ref] = retiredIndexCandidate{generation: 0}
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
-	prepareDone := make(chan *pb.PrepareViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
-			AuthInfo: auth, IndexId: id,
-			Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "prices", Engine: "fake", ViewVersion: 2},
-		})
-		prepareDone <- rsp
-	}()
-	<-prepareStarted
-	cleanupDone := make(chan error, 1)
-	go func() {
-		cleanupDone <- svc.removeRetiredIndex(context.Background(), ref, engine, &cleanupMetadata{})
-	}()
-	deadline := time.Now().Add(time.Second)
-	for runtime.mu.TryLock() {
-		runtime.mu.Unlock()
-		if time.Now().After(deadline) {
-			t.Fatal("cleanup did not acquire the runtime lock")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	close(prepareRelease)
-	if err := <-cleanupDone; err != nil {
-		t.Fatal(err)
-	}
-	prepareRsp := <-prepareDone
-	if prepareRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("PrepareViewIndex failed after cleanup defer: %v", prepareRsp.GetRetInfo())
-	}
-	if !runtime.mu.TryLock() {
-		t.Fatal("cleanup leaked the runtime lock")
-	}
-	runtime.mu.Unlock()
-	if len(engine.ids) != 1 || engine.ids[0] != id {
-		t.Fatalf("cleanup removed the preparing physical index: %v", engine.ids)
-	}
-}
-
-func TestPrepareViewIndexRejectsConcurrentSameSlotPreparation(t *testing.T) {
-	id := cleanupIndexID("prices", viewindex.SlotA)
-	prepareStarted := make(chan struct{})
-	prepareRelease := make(chan struct{})
-	engine := &fakeManagedEngine{name: "fake", prepareStarted: prepareStarted, prepareRelease: prepareRelease}
-	svc := newCleanupService(t, engine)
-	runtime := &viewRuntime{}
-	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = runtime
-	runtime.mu.Lock()
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
-	request := func(version uint64) *pb.PrepareViewIndexReq {
-		return &pb.PrepareViewIndexReq{
-			AuthInfo: auth, IndexId: id,
-			Schema: &pb.ViewIndexSchema{SpaceId: "space", ViewId: "prices", Engine: "fake", ViewVersion: version},
-		}
-	}
-	firstDone := make(chan *pb.PrepareViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.PrepareViewIndex(context.Background(), request(1))
-		firstDone <- rsp
-	}()
-	<-prepareStarted
-	secondDone := make(chan *pb.PrepareViewIndexRsp, 1)
-	go func() {
-		rsp, _ := svc.PrepareViewIndex(context.Background(), request(2))
-		secondDone <- rsp
-	}()
-	close(prepareRelease)
-	if rsp := <-secondDone; rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS {
-		runtime.mu.Unlock()
-		t.Fatal("concurrent PrepareViewIndex unexpectedly succeeded")
-	}
-	runtime.mu.Unlock()
-	if rsp := <-firstDone; rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("first PrepareViewIndex failed: %v", rsp.GetRetInfo())
 	}
 }

@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strconv"
 	"testing"
@@ -16,6 +17,7 @@ import (
 type primaryHistoryBackfillEngine struct {
 	queryCalls int
 	writeRows  int
+	removes    int
 	queryRows  []*pb.RowFieldValues
 }
 
@@ -34,7 +36,10 @@ func (e *primaryHistoryBackfillEngine) Query(context.Context, string, viewindex.
 func (*primaryHistoryBackfillEngine) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{Exists: true}, nil
 }
-func (*primaryHistoryBackfillEngine) Remove(context.Context, string) error { return nil }
+func (e *primaryHistoryBackfillEngine) Remove(context.Context, string) error {
+	e.removes++
+	return nil
+}
 
 // pagedRangeReader 模拟 Primary 的「每序列最近 N 根」分页读取：把预置的行按页返回，并记录每次请求。
 type pagedRangeReader struct {
@@ -65,12 +70,6 @@ func (r *pagedRangeReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTim
 	return rsp, nil
 }
 
-type primaryHistoryFieldReader struct{}
-
-func (*primaryHistoryFieldReader) ReadRows(context.Context, *pb.PrimaryReadRowsReq, ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
-	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo()}, nil
-}
-
 func closeColumns() []*pb.ViewColumn {
 	return []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 }
@@ -82,44 +81,47 @@ func historyRow(subject, at, tag string) *pb.TimeSeriesRow {
 	}
 }
 
-func newBackfillService(engine *primaryHistoryBackfillEngine, view *pb.View, activeID string) *Service {
-	next := view.GetViewId() + "-b"
-	runtime := &viewRuntime{next: next}
-	indexEngine := map[string]string{next: "duckdb"}
-	schemas := map[string]viewindex.ViewIndexSchema{next: {SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(), Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema", Columns: closeColumns()}}
-	if activeID != "" {
-		runtime.active = activeID
-		indexEngine[activeID] = "duckdb"
-		schemas[activeID] = schemas[next]
-	}
+func newBuildService(engine *primaryHistoryBackfillEngine) *Service {
 	return &Service{
-		engines:        map[string]viewindex.Engine{"duckdb": engine},
-		indexEngine:    indexEngine,
-		schemas:        schemas,
-		views:          map[viewRef]*viewRuntime{{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}: runtime},
-		catalogViews:   map[viewRef]*pb.View{{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}: view},
-		metadataClient: &maintenanceMetadata{view: view},
+		engines:      map[string]viewindex.Engine{"duckdb": engine},
+		indexEngine:  make(map[string]string),
+		schemas:      make(map[string]viewindex.ViewIndexSchema),
+		views:        make(map[viewRef]*viewRuntime),
+		catalogViews: make(map[viewRef]*pb.View),
+		indexView:    make(map[string]viewRef),
+		byData:       make(map[datasetRef]map[string]struct{}),
+		authSecret:   "secret",
 	}
 }
 
-func TestPeriodBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.T) {
-	engine := &primaryHistoryBackfillEngine{}
+func backfillSchema() viewindex.ViewIndexSchema {
+	return viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Engine: "duckdb", ViewVersion: 1, SchemaHash: "schema", Columns: closeColumns()}
+}
+
+func newBackfillService(engine *primaryHistoryBackfillEngine) (*Service, *pb.View, string) {
 	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
-	svc := newBackfillService(engine, view, "prices-a")
+	indexID := viewindex.ViewIndexID("space", "prices")
+	svc := newBuildService(engine)
+	svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{building: indexID}
+	svc.indexEngine[indexID] = "duckdb"
+	svc.schemas[indexID] = backfillSchema()
+	return svc, view, indexID
+}
+
+func TestBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.T) {
+	engine := &primaryHistoryBackfillEngine{}
+	svc, view, indexID := newBackfillService(engine)
 	reader := &pagedRangeReader{pageSize: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:binance"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance"),
 		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:okx"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:okx"),
 		historyRow("ETH-USDT", "2026-08-18T00:01:00Z", ""),
 	}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 2)
+	written, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader, BackfillPageSize: 100}, 2)
 	if err != nil {
-		t.Fatalf("period backfill: %v", err)
+		t.Fatalf("回填：%v", err)
 	}
 	if written != 5 || engine.writeRows != 5 {
-		t.Fatalf("written=%d engine_rows=%d, want every row of every page", written, engine.writeRows)
-	}
-	if engine.queryCalls != 0 {
-		t.Fatalf("active index was queried %d times; period rebuild must read Primary directly", engine.queryCalls)
+		t.Fatalf("written=%d engine_rows=%d，应当写入每一页的每一行", written, engine.writeRows)
 	}
 	if len(reader.requests) != 3 {
 		t.Fatalf("requests=%d, want 3 pages", len(reader.requests))
@@ -131,78 +133,69 @@ func TestPeriodBackfillReadsLatestBarsPerSeriesFromPrimaryPageByPage(t *testing.
 		if i > 0 && req.GetPage().GetCursor() == "" {
 			t.Fatalf("request %d did not continue from the previous cursor", i)
 		}
-		// 每页行数取调用方给的 batchSize（线上即 backfill_page_size），不能被常量覆盖。
+		// 每页行数取配置的 backfill_page_size，不能被常量覆盖。
 		if req.GetPage().GetSize() != 100 {
-			t.Fatalf("第 %d 次请求的页大小 = %d，应为调用方给的 100", i, req.GetPage().GetSize())
+			t.Fatalf("第 %d 次请求的页大小 = %d，应为配置的 100", i, req.GetPage().GetSize())
 		}
 	}
 }
 
-func TestPeriodBackfillFailsWholeBuildWhenAPageFails(t *testing.T) {
+func TestBackfillFailsWholeBuildWhenAPageFails(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
-	svc := newBackfillService(engine, view, "")
+	svc, view, indexID := newBackfillService(engine)
 	reader := &pagedRangeReader{pageSize: 1, failPage: 2, rows: []*pb.TimeSeriesRow{
 		historyRow("A", "2026-08-18T00:00:00Z", ""), historyRow("B", "2026-08-18T00:00:00Z", ""), historyRow("C", "2026-08-18T00:00:00Z", ""),
 	}}
-	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1); err == nil {
-		t.Fatal("a failed page must fail the rebuild instead of silently skipping subjects")
+	if _, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 1); err == nil {
+		t.Fatal("一页失败应当让整次建索引失败，不能静默跳过标的")
 	}
 }
 
-func TestPeriodBackfillRequiresPrimaryReaderForNewTimeSeriesView(t *testing.T) {
-	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
-	svc := newBackfillService(engine, view, "")
-	if _, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, nil, nil, 2); err == nil {
-		t.Fatal("new time-series View without Primary reader was accepted")
+func TestBackfillRequiresPrimaryReaderForTimeSeriesView(t *testing.T) {
+	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
+	if _, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{}, 2); err == nil {
+		t.Fatal("时序 View 没有 Primary 读取客户端时应当报错")
 	}
 }
 
-func TestPeriodBackfillActivatesWithAvailableHistoryBelowTarget(t *testing.T) {
+func TestBackfillStopsWhenBuildIsCancelled(t *testing.T) {
+	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
+	svc.views[viewRef{spaceID: "space", viewID: "prices"}].building = ""
+	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("A", "2026-08-18T00:00:00Z", "")}}
+	if _, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 2); !errors.Is(err, errViewBuildCancelled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBackfillAcceptsHistoryBelowTarget(t *testing.T) {
 	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "market", Freq: "1m"}
-	svc := newBackfillService(engine, view, "")
+	svc, view, indexID := newBackfillService(engine)
 	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance")}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", "prices", 100, &primaryHistoryFieldReader{}, reader, 1000)
+	written, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: reader}, 1000)
 	if err != nil {
-		t.Fatalf("partial period backfill: %v", err)
+		t.Fatalf("历史不足时也应建成：%v", err)
 	}
 	if written != 1 || engine.writeRows != 1 {
-		t.Fatalf("written=%d engine_rows=%d, want one available row", written, engine.writeRows)
+		t.Fatalf("written=%d engine_rows=%d", written, engine.writeRows)
 	}
 }
 
-func TestPrimaryOnlyViewMayStartEmptyBeforeFirstOutput(t *testing.T) {
-	engine := &primaryHistoryBackfillEngine{}
-	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"rebuild_source": "primary"}}
-	svc := newBackfillService(engine, view, "")
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, nil, 2)
-	if err != nil {
-		t.Fatalf("empty factor result backfill: %v", err)
-	}
-	runtime := svc.views[viewRef{spaceID: "space", viewID: view.ViewId}]
-	if written != 0 || runtime.status != "ready" {
-		t.Fatalf("written=%d status=%q, want empty ready build", written, runtime.status)
+// 派生输出（例如因子结果）在第一个周期到来之前 Primary 里没有行：View 从空开始。
+func TestBackfillMayStartEmpty(t *testing.T) {
+	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
+	written, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{PrimaryRange: &pagedRangeReader{}}, 2)
+	if err != nil || written != 0 {
+		t.Fatalf("written=%d err=%v", written, err)
 	}
 }
 
-func TestPrimaryOnlyViewBackfillsExistingPrimaryOutput(t *testing.T) {
-	activeKey := timeSeriesTestRowKey("venue:binance")
-	activeKey.DatasetId = "market"
-	activeKey.GetTimeSeries().DataTime = "2026-08-18T00:01:00Z"
-	engine := &primaryHistoryBackfillEngine{queryRows: []*pb.RowFieldValues{{Key: activeKey}}}
-	view := &pb.View{SpaceId: "space", ViewId: "factor-result-view", Engine: "duckdb", DatasetId: "market", Freq: "1m", Attributes: map[string]string{"rebuild_source": "primary"}}
-	svc := newBackfillService(engine, view, "factor-result-view-a")
-	reader := &pagedRangeReader{rows: []*pb.TimeSeriesRow{
-		historyRow("BTC-USDT", "2026-08-18T00:01:00Z", "venue:binance"), historyRow("BTC-USDT", "2026-08-18T00:00:00Z", "venue:binance"),
-	}}
-	written, err := svc.backfillViewWithReader(context.Background(), "space", view.ViewId, 100, &primaryHistoryFieldReader{}, reader, 2)
-	if err != nil {
-		t.Fatalf("factor result history backfill: %v", err)
-	}
-	if written != 2 || engine.writeRows != 2 || engine.queryCalls != 0 {
-		t.Fatalf("written=%d engine_rows=%d query_calls=%d, want authoritative Primary rebuild", written, engine.writeRows, engine.queryCalls)
+// 记录型 View 没有可读的 Primary 历史，从空开始，不需要读取客户端。
+func TestRecordViewStartsEmpty(t *testing.T) {
+	svc, view, indexID := newBackfillService(&primaryHistoryBackfillEngine{})
+	view.Freq = ""
+	written, err := svc.backfillInitialIndex(context.Background(), view, backfillSchema(), indexID, MaintenanceOptions{}, 0)
+	if err != nil || written != 0 {
+		t.Fatalf("written=%d err=%v", written, err)
 	}
 }
 
@@ -218,40 +211,5 @@ func TestBackfillRequestLimiterSerializesStorageRequests(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed < 8*time.Millisecond {
 		t.Fatalf("second request started after %s, want at least 8ms", elapsed)
-	}
-}
-
-func TestBackfillSortsUseCompleteTimeSeriesIdentity(t *testing.T) {
-	got := backfillSorts("duckdb")
-	want := []*pb.SortSpec{
-		{FieldName: "data_time"},
-		{FieldName: "subject_id"},
-		{FieldName: "freq"},
-		{FieldName: "series_tag"},
-		{FieldName: "record_id"},
-		{FieldName: "version"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("backfill sorts=%v want=%v", got, want)
-	}
-}
-
-func TestProjectBackfillFieldsUsesNextSchemaShape(t *testing.T) {
-	active := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "old", OriginId: "old", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-	}}
-	next := viewindex.ViewIndexSchema{Columns: []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "old", OriginId: "new", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-	}}
-	fields := []*pb.FieldValue{
-		{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}},
-		{FieldId: "old", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}},
-		{FieldId: "removed", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}},
-	}
-	got := projectBackfillFields(fields, active, next)
-	if len(got) != 1 || got[0].GetFieldId() != "close" {
-		t.Fatalf("projected fields=%v, want only unchanged close", got)
 	}
 }

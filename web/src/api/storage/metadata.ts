@@ -15,8 +15,7 @@ import type {
   TagMemberStatus,
   TagReference,
   View,
-  ViewColumn,
-  ViewRebuildLog
+  ViewColumn
 } from "./types";
 
 type RetRsp = { ret_info: RetInfo };
@@ -181,10 +180,6 @@ export async function createView(view: View) {
   return rsp.view;
 }
 
-export function requestViewRebuild(params: { space_id: string; view_id: string }) {
-  return callMetadata<typeof params, RetRsp & { view: View }>("RequestViewRebuild", params);
-}
-
 export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
@@ -212,10 +207,6 @@ export function listViews(
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { columns: ViewColumn[]; page_result: PageResult }>("ListViewColumns", params);
-}
-
-export function listViewRebuildLogs(params: { space_id: string; view_id: string; result?: number; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { logs: ViewRebuildLog[]; page_result: PageResult }>("ListViewRebuildLogs", params);
 }
 
 export function listDataNodes(params: { status?: string; page?: Page }) {

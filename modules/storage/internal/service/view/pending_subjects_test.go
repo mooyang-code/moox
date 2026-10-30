@@ -165,7 +165,7 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 	svc, _ := queryTestService(engine, false)
 	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_host_resource"}
 	indexID := "metrics-next"
-	svc.views[key] = &viewRuntime{active: "", next: indexID, status: "building"}
+	svc.views[key] = &viewRuntime{building: indexID}
 	svc.indexView = map[string]viewRef{indexID: key}
 	svc.indexEngine[indexID] = "query-test"
 	svc.schemas[indexID] = viewindex.ViewIndexSchema{
@@ -202,7 +202,7 @@ func TestReplayDropsPendingSubjectsForSystemViews(t *testing.T) {
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
 	svc, _ := queryTestService(engine, false)
 	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_host_resource"}
-	svc.views[key] = &viewRuntime{active: "", next: "metrics-next", status: "building"}
+	svc.views[key] = &viewRuntime{building: "metrics-next"}
 	svc.pendingSubjectsDir = filepath.Join(t.TempDir(), "pending")
 	require.NoError(t, os.MkdirAll(svc.pendingSubjectsDir, 0o700))
 	row := &pb.RowFieldUpsert{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
@@ -11,55 +12,77 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (s *Service) extendActiveViewSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (bool, error) {
-	return s.extendViewSchema(ctx, opts, auth, view, engine, false)
+// extendViewSchemasRound 给声明了新列的 View 原地加列，由每分钟的定时任务触发。新列默认为空，不回填。
+func (s *Service) extendViewSchemasRound(ctx context.Context) {
+	metadata := s.metadataClientSnapshot()
+	if metadata == nil {
+		return
+	}
+	auth := s.internalAuth()
+	for pageNo := uint32(1); ; pageNo++ {
+		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
+		if err == nil {
+			err = requireSuccess(rsp.GetRetInfo())
+		}
+		if err != nil {
+			log.Printf("storage view 检查加列时读取 View 失败：%v", err)
+			return
+		}
+		for _, view := range rsp.GetViews() {
+			if ctx.Err() != nil {
+				return
+			}
+			if view == nil || view.GetActiveIndexId() == "" {
+				continue
+			}
+			engine := s.engines[strings.ToLower(strings.TrimSpace(view.GetEngine()))]
+			extended, err := s.extendViewSchema(ctx, metadata, auth, view, engine, false)
+			if err != nil {
+				log.Printf("storage view 加列失败 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
+			} else if extended {
+				log.Printf("storage view 加列完成 space=%s view=%s 修订号=%d", view.GetSpaceId(), view.GetViewId(), view.GetViewRevision()+1)
+			}
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
+			return
+		}
+	}
 }
 
-// recoverViewSchemaExtension handles the durable window where DuckDB
-// committed an append-only revision but the Metadata CAS did not. It accepts
-// only physical revisions that can be a prefix of the current desired schema;
-// ExtendColumns performs the authoritative physical-column validation.
-func (s *Service) recoverViewSchemaExtension(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, stats viewindex.ViewIndexStats) (bool, error) {
-	current, next, _, ok, err := viewSchemaExtensionTarget(ctx, opts, auth, view, engine)
-	if err != nil || !ok {
-		return false, err
-	}
-	if !stats.Exists || stats.ViewVersion <= current.ViewVersion || stats.ViewVersion > next.ViewVersion {
+// recoverViewSchemaExtension 处理索引已经加列、元数据提交却没有完成的窗口（进程在两步之间退出）：物理修订号比元数据大 1，
+// 重新走一遍加列；ExtendColumns 负责校验物理状态，并接着追加这期间新声明的列。
+func (s *Service) recoverViewSchemaExtension(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, stats viewindex.ViewIndexStats) (bool, error) {
+	if !stats.Exists || stats.ViewVersion != view.GetViewRevision()+1 {
 		return false, nil
 	}
-	if stats.ViewVersion == next.ViewVersion && strings.TrimSpace(stats.SchemaHash) != next.SchemaHash {
-		return false, nil
-	}
-	recovered, err := s.extendViewSchema(ctx, opts, auth, view, engine, true)
+	recovered, err := s.extendViewSchema(ctx, metadata, auth, view, engine, true)
 	if errors.Is(err, viewindex.ErrSchemaExtensionConflict) {
 		return false, nil
 	}
 	return recovered, err
 }
 
-func (s *Service) extendViewSchema(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
-	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, opts, auth, view, engine)
+func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
+	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine)
 	if err != nil || !ok {
 		return false, err
 	}
-	if opts.Metadata == nil {
-		return false, errors.New("Metadata client is required to commit an active View schema extension")
-	}
-	desiredColumns := next.Columns
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
-	s.mu.RLock()
+	s.mu.Lock()
 	runtime := s.views[viewKey]
-	s.mu.RUnlock()
 	if runtime == nil {
 		if !allowDetached {
-			return false, errors.New("active View runtime is not attached for schema extension")
-		}
-	} else {
-		runtime.mu.Lock()
-		defer runtime.mu.Unlock()
-		if runtime.active != view.GetActiveIndexId() || runtime.next != "" {
+			s.mu.Unlock()
 			return false, nil
 		}
+		runtime = newViewRuntime()
+		s.views[viewKey] = runtime
+	}
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if !allowDetached && runtime.active != view.GetActiveIndexId() {
+		return false, nil
 	}
 	release, err := s.indexWriteGate(view.GetActiveIndexId()).lock(ctx)
 	if err != nil {
@@ -67,101 +90,85 @@ func (s *Service) extendViewSchema(ctx context.Context, opts MaintenanceOptions,
 	}
 	defer release()
 	if err := extender.ExtendColumns(ctx, view.GetActiveIndexId(), current, next); err != nil {
-		return false, fmt.Errorf("extend active factor result View columns: %w", err)
+		return false, fmt.Errorf("原地加列：%w", err)
 	}
 	s.nextIndexRevision(view.GetActiveIndexId())
-	rsp, err := opts.Metadata.CommitViewSchemaExtension(ctx, &pb.CommitViewSchemaExtensionReq{
+	rsp, err := metadata.CommitViewSchemaExtension(ctx, &pb.CommitViewSchemaExtensionReq{
 		AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ActiveIndexId: view.GetActiveIndexId(),
-		ExpectedActiveRevision: view.GetActiveViewRevision(), ExpectedDesiredRevision: view.GetDesiredViewRevision(),
-		ExpectedActiveSchemaHash: view.GetActiveViewSchemaHash(), Columns: desiredColumns, ViewSchemaHash: next.SchemaHash,
+		ExpectedViewRevision: view.GetViewRevision(), ExpectedSchemaHash: view.GetActiveViewSchemaHash(),
+		Columns: next.Columns, ViewSchemaHash: next.SchemaHash,
 	})
+	if err == nil {
+		err = requireSuccess(rsp.GetRetInfo())
+	}
 	if err != nil {
-		return false, fmt.Errorf("commit active factor result View schema: %w", err)
-	}
-	if rsp == nil {
-		return false, errors.New("Metadata returned an empty active View schema extension response")
-	}
-	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-		return false, fmt.Errorf("commit active factor result View schema: %w", err)
+		return false, fmt.Errorf("提交加列：%w", err)
 	}
 	committed := rsp.GetView()
-	if committed == nil || committed.GetActiveIndexId() != view.GetActiveIndexId() ||
-		committed.GetActiveViewRevision() != next.ViewVersion || committed.GetActiveViewSchemaHash() != next.SchemaHash ||
-		!proto.Equal(&pb.View{ActiveColumns: committed.GetActiveColumns()}, &pb.View{ActiveColumns: desiredColumns}) {
-		return false, errors.New("Metadata returned a mismatched active View schema extension contract")
+	if committed.GetActiveIndexId() != view.GetActiveIndexId() || committed.GetViewRevision() != next.ViewVersion ||
+		committed.GetActiveViewSchemaHash() != next.SchemaHash ||
+		!proto.Equal(&pb.View{ActiveColumns: committed.GetActiveColumns()}, &pb.View{ActiveColumns: next.Columns}) {
+		return false, errors.New("元数据返回的已建列与这次加列不一致")
 	}
-	stats, _, err := maintainIndexStats(ctx, engine, view.GetActiveIndexId())
-	if err != nil {
-		return false, fmt.Errorf("verify extended active View index: %w", err)
-	}
-	if err := validatePhysicalViewContract(committed, stats); err != nil {
-		return false, err
-	}
-	if runtime == nil {
-		s.mu.Lock()
-		runtime = s.views[viewKey]
-		if runtime == nil {
-			runtime = newViewRuntime()
-			s.views[viewKey] = runtime
-		}
-		s.mu.Unlock()
-		runtime.mu.Lock()
-		defer runtime.mu.Unlock()
-		if runtime.active != "" && runtime.active != committed.GetActiveIndexId() || runtime.next != "" {
-			return false, errors.New("active View runtime changed during schema extension recovery")
-		}
-	}
-	activePrimary := strings.TrimSpace(committed.GetAttributes()[activePrimaryDatasetAttr])
-	if activePrimary == "" {
-		activePrimary = committed.GetDatasetId()
-	}
-	s.attachActiveViewLocked(committed, runtime, next, desiredColumns, activePrimary, "duckdb")
-	runtime.statsIndexID = view.GetActiveIndexId()
-	runtime.stats = stats
-	runtime.publishReadStateLocked()
+	s.attachActiveViewLocked(committed, runtime, next, next.Columns, next.Engine)
 	return true, nil
 }
 
-func viewSchemaExtensionTarget(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool, error) {
-	if view == nil || engine == nil || view.GetIndexBuild() != nil ||
-		view.GetActiveIndexId() == "" || view.GetActiveViewRevision() == 0 ||
-		view.GetDesiredViewRevision() <= view.GetActiveViewRevision() ||
-		!strings.EqualFold(strings.TrimSpace(view.GetAttributes()["follow_dataset_columns"]), "true") ||
-		!strings.EqualFold(strings.TrimSpace(view.GetEngine()), "duckdb") || engine.Engine() != "duckdb" {
-		return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, nil
+// viewSchemaExtensionTarget 算出这次加列的前后契约；没有要加的列时 ok 为假。
+func viewSchemaExtensionTarget(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool, error) {
+	var none viewindex.ViewIndexSchema
+	if view == nil || engine == nil || view.GetActiveIndexId() == "" || view.GetViewRevision() == 0 {
+		return none, none, nil, false, nil
 	}
 	extender, ok := engine.(viewindex.SchemaExtender)
 	if !ok {
-		return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, nil
+		return none, none, nil, false, nil
 	}
-	desiredColumns := view.GetColumns()
-	if len(desiredColumns) == 0 && view.GetAttributes()[viewColumnsExplicitAttr] != "true" {
-		var err error
-		desiredColumns, err = loadDefaultViewColumns(ctx, opts.Metadata, auth, view)
-		if err != nil {
-			return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, err
-		}
+	desired, err := desiredViewColumns(ctx, metadata, auth, view)
+	if err != nil {
+		return none, none, nil, false, err
 	}
-	activeColumns := view.GetActiveColumns()
-	if !viewindex.IsAppendOnlyViewColumns(activeColumns, desiredColumns) {
-		return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, nil
-	}
-	primaryDatasetID := strings.TrimSpace(view.GetAttributes()[activePrimaryDatasetAttr])
-	if primaryDatasetID == "" {
-		primaryDatasetID = view.GetDatasetId()
+	extended, ok := appendViewColumns(view.GetActiveColumns(), desired)
+	if !ok {
+		return none, none, nil, false, nil
 	}
 	current := viewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: primaryDatasetID,
-		ViewVersion: view.GetActiveViewRevision(), Engine: "duckdb", Columns: activeColumns,
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(),
+		ViewVersion: view.GetViewRevision(), Engine: engine.Engine(), Columns: view.GetActiveColumns(),
 		SchemaHash: view.GetActiveViewSchemaHash(),
 	}
 	next := viewindex.ViewIndexSchema{
-		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: primaryDatasetID,
-		ViewVersion: view.GetDesiredViewRevision(), Engine: "duckdb", Columns: desiredColumns,
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(),
+		ViewVersion: view.GetViewRevision() + 1, Engine: engine.Engine(), Columns: extended,
 	}
 	next.SchemaHash = viewindex.HashViewIndexSchema(next)
-	if current.SchemaHash == "" || viewindex.HashViewIndexSchema(current) != current.SchemaHash {
-		return viewindex.ViewIndexSchema{}, viewindex.ViewIndexSchema{}, nil, false, nil
-	}
 	return current, next, extender, true, nil
+}
+
+// appendViewColumns 返回已建列加上还没建的声明列（按列名比较，新列按声明顺序排在最后）；没有新列时第二个返回值为假。
+// 声明里没有、但已建的列不会被去掉：列只能追加。
+func appendViewColumns(active, desired []*pb.ViewColumn) ([]*pb.ViewColumn, bool) {
+	built := make(map[string]struct{}, len(active))
+	extended := make([]*pb.ViewColumn, 0, len(desired))
+	var nextOrder uint32
+	for _, column := range active {
+		built[column.GetColumnName()] = struct{}{}
+		extended = append(extended, column)
+		nextOrder = max(nextOrder, column.GetSortOrder()+1)
+	}
+	found := false
+	for _, column := range desired {
+		if column == nil || column.GetColumnName() == "" {
+			continue
+		}
+		if _, ok := built[column.GetColumnName()]; ok {
+			continue
+		}
+		clone := proto.Clone(column).(*pb.ViewColumn)
+		clone.SortOrder = nextOrder
+		nextOrder++
+		extended = append(extended, clone)
+		found = true
+	}
+	return extended, found
 }

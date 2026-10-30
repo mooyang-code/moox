@@ -12,61 +12,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 )
-
-// 重建切换活动索引后，写入围栏要随之转到新索引：行在切换前写入、周期完成事件在切换后才到（或切换时还在队列里）的
-// 就绪事件不能等到同一来源的下一次行写入才放行。配置了落盘目录时也一样（第五轮按“非活动索引”清理键会删掉 next 的围栏）。
-func TestReadyFenceFollowsIndexSwitch(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		noteNext bool
-	}{
-		{name: "新索引开始双写之前写入的行", noteNext: false},
-		{name: "重建期间双写的行", noteNext: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			publisher := newReadyPublisherFake()
-			service := newPeriodTestService(newPeriodMetadataFake(), publisher, &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-			dir := t.TempDir()
-			service.readyFenceDir = dir
-			enqueueReadyPeriods(t, service, "prices-ready-1")
-			runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
-			runtime.mu.Lock()
-			runtime.next, runtime.status = "source-view-b", "ready"
-			runtime.mu.Unlock()
-			service.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)
-			if tc.noteNext {
-				service.NoteAppliedPosition("quant", "source-view", "source-view-b", "node-a", "store-a", 12)
-			}
-			if err := service.flushAppliedFence(); err != nil {
-				t.Fatal(err)
-			}
-			runtime.mu.Lock()
-			_, _, err := service.switchViewLocked(context.Background(), runtime)
-			runtime.mu.Unlock()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := service.FlushViewDataReady(context.Background(), "quant", "source-view"); err != nil {
-				t.Fatal(err)
-			}
-			if len(publisher.byID) != 1 || service.hasPendingReady() {
-				t.Fatalf("切换后旧索引已写入到的位置新索引也有，事件应放行：published=%d pending=%v", len(publisher.byID), service.hasPendingReady())
-			}
-			if err := service.flushAppliedFence(); err != nil {
-				t.Fatal(err)
-			}
-			reloaded := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-b"})
-			if err := reloaded.openReadyFence(dir); err != nil {
-				t.Fatal(err)
-			}
-			if seq := reloaded.appliedSequence("quant", "source-view", "source-view-b", "node-a", "store-a"); seq != 12 {
-				t.Fatalf("重启后新索引的围栏应为 12：%d", seq)
-			}
-		})
-	}
-}
 
 // 记录位置只改内存并标脏；落盘只在有新的更新时进行，不再每条行事件都写文件。
 func TestAppliedFencePersistsOnlyWhenDirty(t *testing.T) {
@@ -203,39 +149,5 @@ func TestAppliedFencePersistFailureLogsOnce(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(service.readyFenceDir, "applied.json")); err != nil {
 		t.Fatalf("失败期间的更新应在恢复后落盘：%v", err)
-	}
-}
-
-// 行围栏的更新与激活的继承互斥：激活持有 runtime.mu 继承并取快照时，旧索引推进到的位置新索引一定也有。
-// 行处理在锁外更新围栏时，快照里会出现旧索引已推进、新索引还没有的状态（随后激活提交并崩溃，重启后围栏缺这一行）。
-func TestAppliedFenceUpdateIsAtomicWithActivationInheritance(t *testing.T) {
-	service := newPeriodTestService(newPeriodMetadataFake(), newReadyPublisherFake(), &pb.View{SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a"})
-	runtime := service.views[viewRef{spaceID: "quant", viewID: "source-view"}]
-	runtime.mu.Lock()
-	runtime.next, runtime.status = "source-view-b", "ready"
-	runtime.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for seq := uint64(1); seq <= 20000; seq++ {
-			service.noteAppliedFromPayload("quant", &storageeventpb.DatasetRowsUpserted{DatasetId: "prices", NodeId: "node-a", StoreId: "store-a", Sequence: seq})
-		}
-	}()
-	for {
-		select {
-		case <-done:
-			return
-		default:
-		}
-		runtime.mu.Lock()
-		service.inheritAppliedFence("source-view-a", "source-view-b")
-		a := service.appliedSequence("quant", "source-view", "source-view-a", "node-a", "store-a")
-		b := service.appliedSequence("quant", "source-view", "source-view-b", "node-a", "store-a")
-		runtime.mu.Unlock()
-		if b < a {
-			t.Errorf("激活时继承之后新索引的围栏不应落后于旧索引：A=%d B=%d", a, b)
-			<-done
-			return
-		}
 	}
 }

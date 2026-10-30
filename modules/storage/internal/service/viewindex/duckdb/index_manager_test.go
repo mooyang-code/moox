@@ -108,6 +108,22 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	if err != nil || !stats.Exists || stats.ViewVersion != 3 || stats.SchemaHash != version3.SchemaHash {
 		t.Fatalf("final physical schema = %#v err=%v, want revision 3", stats, err)
 	}
+
+	// 修订号每次只加 1：上次加列没提交时，补提交的目标修订号与物理修订号相同，只是多了这期间新声明的列。
+	v4 := proto.Clone(&pb.ViewColumn{ColumnName: "turnover", OriginId: "turnover",
+		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 3}).(*pb.ViewColumn)
+	v4.SpaceId, v4.ViewId = current.SpaceID, current.ViewID
+	sameRevision := viewindex.ViewIndexSchema{
+		SpaceID: current.SpaceID, ViewID: current.ViewID, PrimaryDatasetID: current.PrimaryDatasetID,
+		ViewVersion: 3, Engine: current.Engine, Columns: append(append([]*pb.ViewColumn(nil), version3.Columns...), v4),
+	}
+	sameRevision.SchemaHash = viewindex.HashViewIndexSchema(sameRevision)
+	if err := manager.ExtendColumns(ctx, "factor-view-a", version2, sameRevision); err != nil {
+		t.Fatalf("同修订号补列：%v", err)
+	}
+	if stats, err := manager.StatMetadata(ctx, "factor-view-a"); err != nil || stats.ViewVersion != 3 || stats.SchemaHash != sameRevision.SchemaHash {
+		t.Fatalf("同修订号补列后 = %#v err=%v", stats, err)
+	}
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
 		Includes:  []string{"bias_20", "volume"},
@@ -988,32 +1004,6 @@ func TestDuckDBSeriesCapacityTracksEachSeriesIndependently(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("transactional series counter = %d, want 3 after duplicate and distinct-key writes", count)
-	}
-	if got, err := manager.SeriesCapacity(context.Background(), "idx", 3); err != nil || got.Exceeded {
-		t.Fatalf("capacity at exact limit = %#v, err=%v", got, err)
-	}
-	got, err := manager.SeriesCapacity(context.Background(), "idx", 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Exceeded || got.SubjectID != "BTC" || got.Freq != "1m" || got.SeriesTag != "venue:binance" || got.Rows != 3 {
-		db, _, _, _, dbErr := manager.getIndex(context.Background(), "idx")
-		if dbErr == nil {
-			rows, queryErr := db.Query(`SELECT subject_id, freq, series_tag, row_count FROM view_series_counts ORDER BY subject_id, series_tag`)
-			if queryErr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var subject, freq, tag string
-					var count uint64
-					_ = rows.Scan(&subject, &freq, &tag, &count)
-					t.Logf("count row subject=%s freq=%s tag=%s count=%d", subject, freq, tag, count)
-				}
-			}
-		}
-		t.Fatalf("unexpected capacity offender: %#v", got)
-	}
-	if got, err := manager.SeriesCapacity(context.Background(), "idx", 99); err != nil || got.Exceeded {
-		t.Fatalf("below-capacity result = %#v, err=%v", got, err)
 	}
 }
 

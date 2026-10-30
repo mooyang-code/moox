@@ -76,11 +76,9 @@ view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；超过 ce
 "30s" = "48h"
 "1m" = "7d"
 
-# View 维护的检查节奏与单个 View 文件上限。
+# View 维护的检查节奏与单个 View 文件的告警线（超过只告警，不动数据）。
 [storage_view]
 maintenance_check_interval = "1m"
-capacity_check_interval = "1h"
-capacity_check_jitter = "1h"
 max_view_file_bytes = 4294967296
 
 # View 按空间 × 频率限制最长历史：data_time 早于“当前时间 − 期限”的行不写入 View，

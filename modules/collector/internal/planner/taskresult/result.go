@@ -775,17 +775,21 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 	if err := m.ensureColumns(ctx, spaceID, ids.DatasetID, ids.ViewID, kind, outputFields); err != nil {
 		return err
 	}
-	// output_fields is the complete user-facing projection contract. Replacing
-	// the View columns removes stale fields (for example provider_id) when a
-	// task narrows its projection; append-only updates leave metadata pointing
-	// at fields that new rows no longer persist and cause "not projected"
-	// query failures after the next View rebuild.
+	// View 的列只能追加：已有列原样保留（任务收窄输出后，旧列在新行里为空），只补上这次新增的字段。
 	columns, err := resultViewColumns(spaceID, ids, outputFields)
 	if err != nil {
 		return err
 	}
 	nextView := proto.Clone(view).(*storagepb.View)
-	nextView.Columns = columns
+	existing := make(map[string]struct{}, len(view.GetColumns()))
+	for _, column := range view.GetColumns() {
+		existing[column.GetColumnName()] = struct{}{}
+	}
+	for _, column := range columns {
+		if _, ok := existing[column.GetColumnName()]; !ok {
+			nextView.Columns = append(nextView.Columns, column)
+		}
+	}
 	updated, err := m.metadata.UpdateView(ctx, &storagepb.UpdateViewReq{AuthInfo: m.auth, View: nextView, ReplaceColumns: true})
 	if err != nil || updated == nil || updated.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 		return metadataError("replace result view output fields", err, func() *storagepb.RetInfo {
