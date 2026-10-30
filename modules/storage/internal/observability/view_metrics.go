@@ -52,6 +52,8 @@ type ViewMetrics struct {
 	viewSubjects                     *viewSubjectTracker
 	readyPublishRetry                *prometheus.CounterVec
 	expiredRowsDropped               *prometheus.CounterVec
+	oldestRowsDeleted                *prometheus.CounterVec
+	oldestDeleteLockSeconds          prometheus.Histogram
 	readyQueuePending                prometheus.Gauge
 	readyQueueOldestAge              prometheus.GaugeFunc
 	readyPublishBackoff              prometheus.Gauge
@@ -269,6 +271,15 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "expired_rows_dropped_total",
 			Help: "Rows not written to a View because data_time is older than the maximum View age of its frequency.",
 		}, []string{"space", "freq"}),
+		oldestRowsDeleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_rows_deleted_total",
+			Help: "Oldest rows deleted from time-series Views because their series exceeded the configured bars.",
+		}, []string{"space", "view"}),
+		oldestDeleteLockSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "oldest_delete_lock_seconds",
+			Help:    "Time one oldest-row delete batch held the View index write lock.",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2},
+		}),
 		readyQueuePending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_queue_pending",
 			Help: "View ready events waiting to be published.",
@@ -443,6 +454,12 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.expiredRowsDropped, err = registerOrReuse(registerer, metrics.expiredRowsDropped); err != nil {
 		return nil, err
 	}
+	if metrics.oldestRowsDeleted, err = registerOrReuse(registerer, metrics.oldestRowsDeleted); err != nil {
+		return nil, err
+	}
+	if metrics.oldestDeleteLockSeconds, err = registerOrReuse(registerer, metrics.oldestDeleteLockSeconds); err != nil {
+		return nil, err
+	}
 	if metrics.readyQueuePending, err = registerOrReuse(registerer, metrics.readyQueuePending); err != nil {
 		return nil, err
 	}
@@ -599,6 +616,17 @@ func (m *ViewMetrics) ObserveViewExpiredRowsDropped(space, freq string, rows int
 		return
 	}
 	m.expiredRowsDropped.WithLabelValues(space, freq).Add(float64(rows))
+}
+
+// ObserveViewOldestRowsDeleted 记录一批删除最旧数据：删除的行数与这一批持有写锁的时长。
+func (m *ViewMetrics) ObserveViewOldestRowsDeleted(space, view string, rows uint64, lockHeld time.Duration) {
+	if m == nil {
+		return
+	}
+	m.oldestDeleteLockSeconds.Observe(lockHeld.Seconds())
+	if rows > 0 {
+		m.oldestRowsDeleted.WithLabelValues(space, view).Add(float64(rows))
+	}
 }
 
 // SetReadyQueue 记录就绪队列的深度与最老事件的时间（队列为空时 oldest 为零值）。

@@ -1794,3 +1794,139 @@ func viewMetaColumnType(column string) string {
 	}
 	return "VARCHAR DEFAULT ''"
 }
+
+// PlanOldestRows 实现 viewindex.OldestRowsDeleter：先从计数表找出行数超过 keep 的序列（计数表很小，不扫行），
+// 再逐个序列查删除分界——从最旧往新数第 k+1 行的 data_time，比它更旧的 k 行就是本批要删的最旧数据。只读，不需要写锁。
+func (m *IndexManager) PlanOldestRows(ctx context.Context, id string, keep uint64, maxSeries, maxRows int) ([]viewindex.OldestRowsCut, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, err
+	}
+	if keep == 0 || maxSeries <= 0 || maxRows <= 0 {
+		return nil, nil
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT subject_id, freq, series_tag, row_count - ?
+		FROM view_series_counts
+		WHERE row_count > ?
+		ORDER BY row_count DESC, subject_id, freq, series_tag
+		LIMIT ?`, keep, keep, maxSeries)
+	if err != nil {
+		return nil, err
+	}
+	var cuts []viewindex.OldestRowsCut
+	budget := uint64(maxRows)
+	for rows.Next() {
+		var cut viewindex.OldestRowsCut
+		if err := rows.Scan(&cut.SubjectID, &cut.Freq, &cut.SeriesTag, &cut.Rows); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if budget == 0 {
+			continue
+		}
+		cut.Rows = min(cut.Rows, budget)
+		budget -= cut.Rows
+		cuts = append(cuts, cut)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	planned := cuts[:0]
+	for _, cut := range cuts {
+		err := db.QueryRowContext(ctx, `
+			SELECT data_time FROM view_rows
+			WHERE subject_id = ? AND freq = ? AND series_tag = ?
+			ORDER BY data_time
+			LIMIT 1 OFFSET ?`, cut.SubjectID, cut.Freq, cut.SeriesTag, cut.Rows).Scan(&cut.Before)
+		if errors.Is(err, sql.ErrNoRows) {
+			// 计数比实际行数多（不应发生）：没有足够的行可留，这个序列本批不删。
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		planned = append(planned, cut)
+	}
+	return planned, nil
+}
+
+// DeleteOldestRows 实现 viewindex.OldestRowsDeleter：在一个事务里删除各序列分界之前的最旧行，
+// 并按实际删除行数减少 view_series_counts。调用方必须持有这个索引的写锁。
+func (m *IndexManager) DeleteOldestRows(ctx context.Context, id string, cuts []viewindex.OldestRowsCut) (uint64, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return 0, err
+	}
+	if len(cuts) == 0 {
+		return 0, nil
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var total uint64
+	for _, cut := range cuts {
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM view_rows
+			WHERE subject_id = ? AND freq = ? AND series_tag = ? AND data_time < ?`,
+			cut.SubjectID, cut.Freq, cut.SeriesTag, cut.Before)
+		if err != nil {
+			return 0, fmt.Errorf("删除 View 序列最旧数据失败 %s/%s/%s：%w", cut.SubjectID, cut.Freq, cut.SeriesTag, err)
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		if deleted == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE view_series_counts SET row_count = row_count - ?
+			WHERE subject_id = ? AND freq = ? AND series_tag = ?`,
+			deleted, cut.SubjectID, cut.Freq, cut.SeriesTag); err != nil {
+			return 0, err
+		}
+		total += uint64(deleted)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// RefreshCoverageFrom 实现 viewindex.OldestRowsDeleter：把 view_meta 的覆盖起点改成剩余行的最早时间。
+// 写入只会把覆盖范围往外扩，删除最旧数据后要在这里把起点前移。调用方必须持有这个索引的写锁。
+func (m *IndexManager) RefreshCoverageFrom(ctx context.Context, id string) (string, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return "", err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	var oldest sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+		return "", err
+	}
+	if !oldest.Valid {
+		return "", nil
+	}
+	from := canonicalCoverageTime(oldest.Time)
+	if _, err := db.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ? WHERE singleton = 1 AND indexed_from <> ?`, from, from); err != nil {
+		return "", err
+	}
+	return from, nil
+}
