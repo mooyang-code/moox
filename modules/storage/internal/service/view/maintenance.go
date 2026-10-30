@@ -153,13 +153,9 @@ func seriesCapacityWithTimeout(
 	}
 }
 
-// Keep Primary history requests below the DataNode point-read budget. A
-// 10k-row page becomes 100k+ Pebble gets for a wide K-line schema and can
-// starve live reads; cursor pagination keeps the scan bounded instead.
-// History pages contain keys only; field enrichment is split below the
-// PrimaryStore key/field limit. Use the history reader's 10k page ceiling so
-// a bounded 1,000-bar rebuild does not spend minutes on avoidable RPC/page
-// overhead. Enrichment and index writes remain chunked independently.
+// viewBackfillBatchSize 是没有配置 backfill_page_size 时重建每页读取的行数。
+// Primary 历史读取一页就带回字段值，DataNode 还会按单页值数上限截断，宽表的实际页更小；
+// 线上用 backfill_page_size 把页调小，减轻重建对 Pebble 点读的突发压力。索引写入另按 256 行分批。
 const viewBackfillBatchSize = 10000
 const capacityMaintenanceRetryInterval = 30 * time.Minute
 const defaultCapacityCheckInterval = time.Hour

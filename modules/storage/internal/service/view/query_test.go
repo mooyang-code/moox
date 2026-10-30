@@ -405,6 +405,9 @@ func TestReplacementFailureKeepsHealthyActiveViewActive(t *testing.T) {
 	if runtime.next != "" || runtime.nextDatasetIDs != nil || runtime.nextPrimaryDatasetID != "" || runtime.status != "active" || runtime.active != "prices-a" {
 		t.Fatalf("丢弃替换构建后运行状态不对：active=%q next=%q next_datasets=%v next_primary=%q status=%q", runtime.active, runtime.next, runtime.nextDatasetIDs, runtime.nextPrimaryDatasetID, runtime.status)
 	}
+	if runtime.buildFailed || runtime.buildID != "" || runtime.ownerID != "" || runtime.buildCancel != nil {
+		t.Fatalf("丢弃替换构建后应清掉构建身份：failed=%v build=%q owner=%q", runtime.buildFailed, runtime.buildID, runtime.ownerID)
+	}
 }
 
 func TestFailedBuildCleanupDoesNotRemoveReusedSlotGeneration(t *testing.T) {

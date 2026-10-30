@@ -97,6 +97,8 @@ var errRebuildSuperseded = errors.New("构建被新的构建取代，未完成")
 // closeSupersededRebuildLogs 在认领新构建成功后，结束同一 View 下其他构建遗留的进行中日志。
 // 认领成功说明元数据里已没有别的在途构建；而新版本的认领会覆盖还没结束的构建记录，修改 View 定义也会删掉失败的构建记录，
 // 这些构建的日志此后再没有人收尾，会一直显示进行中。已排进重试队列的日志留给重试去写真实结果。
+// 激活事务提交后、写结束日志前进程退出（或激活后本地切换失败）时，日志也会留在进行中，但那个构建已经是活动索引：
+// 按 View 属性 moox.active_build_id 认出它，记为成功，不能写成被取代。
 // 这只是审计收尾：查询失败就留到下一次认领。
 func (s *Service) closeSupersededRebuildLogs(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID string) {
 	client, ok := opts.Metadata.(rebuildLogMetadataClient)
@@ -124,7 +126,13 @@ func (s *Service) closeSupersededRebuildLogs(ctx context.Context, opts Maintenan
 			break
 		}
 	}
+	activeBuildID := strings.TrimSpace(view.GetAttributes()[coremetadata.ActiveBuildIDAttribute])
 	for _, item := range stale {
+		if activeBuildID != "" && item.GetBuildId() == activeBuildID {
+			log.Printf("storage view 补记已激活构建的重建日志为成功 space=%s view=%s build=%s log=%d", item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetLogId())
+			s.finishRebuildLog(ctx, opts, auth, item, pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, item.GetEntriesWritten(), nil)
+			continue
+		}
 		log.Printf("storage view 结束被取代构建的进行中重建日志 space=%s view=%s build=%s log=%d new_build=%s", item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetLogId(), buildID)
 		s.finishRebuildLog(ctx, opts, auth, item, pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, item.GetEntriesWritten(), errRebuildSuperseded)
 	}

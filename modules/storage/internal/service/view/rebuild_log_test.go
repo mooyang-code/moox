@@ -80,8 +80,9 @@ func TestRebuildTriggerReasonPrioritizesSingleSeriesCapacity(t *testing.T) {
 // supersededLogMetadata 保存一组重建日志，按结果过滤列出，并记录每次结束日志的写入。
 type supersededLogMetadata struct {
 	maintenanceMetadata
-	logs    []*pb.ViewRebuildLog
-	updated []*pb.ViewRebuildLog
+	logs     []*pb.ViewRebuildLog
+	updated  []*pb.ViewRebuildLog
+	pageSize int
 }
 
 func (m *supersededLogMetadata) ListViewRebuildLogs(_ context.Context, req *pb.ListViewRebuildLogsReq, _ ...client.Option) (*pb.ListViewRebuildLogsRsp, error) {
@@ -91,7 +92,15 @@ func (m *supersededLogMetadata) ListViewRebuildLogs(_ context.Context, req *pb.L
 			logs = append(logs, proto.Clone(item).(*pb.ViewRebuildLog))
 		}
 	}
-	return &pb.ListViewRebuildLogsRsp{RetInfo: successRetInfo(), Logs: logs, PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
+	// pageSize 大于 0 时按页切片，检验调用方翻页收集。
+	hasMore := false
+	if m.pageSize > 0 {
+		start := min(int(req.GetPage().GetPage()-1)*m.pageSize, len(logs))
+		end := min(start+m.pageSize, len(logs))
+		hasMore = end < len(logs)
+		logs = logs[start:end]
+	}
+	return &pb.ListViewRebuildLogsRsp{RetInfo: successRetInfo(), Logs: logs, PageResult: &pb.PageResult{Page: req.GetPage().GetPage(), Size: 100, HasMore: hasMore}}, nil
 }
 
 func (m *supersededLogMetadata) CreateViewRebuildLog(_ context.Context, req *pb.CreateViewRebuildLogReq, _ ...client.Option) (*pb.CreateViewRebuildLogRsp, error) {
@@ -121,30 +130,41 @@ func TestCloseSupersededRebuildLogsFinishesOnlyAbandonedBuilds(t *testing.T) {
 			EntriesWritten: uint64(id * 10), DetailsJson: `{"phase":"activate"}`,
 		}
 	}
-	view := &pb.View{SpaceId: "space", ViewId: "prices"}
-	metadata := &supersededLogMetadata{logs: []*pb.ViewRebuildLog{
+	// build-active 已被元数据激活，只是激活后没来得及写结束日志。
+	view := &pb.View{SpaceId: "space", ViewId: "prices", Attributes: map[string]string{coremetadata.ActiveBuildIDAttribute: "build-active"}}
+	metadata := &supersededLogMetadata{pageSize: 2, logs: []*pb.ViewRebuildLog{
 		logOf(1, "build-old", running),
 		logOf(2, "build-new", running),
 		logOf(3, "build-queued", running),
 		logOf(4, "build-done", pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED),
+		logOf(5, "build-lookup", running),
+		logOf(6, "build-active", running),
+		logOf(7, "build-older", running),
 	}}
 	opts := MaintenanceOptions{Metadata: metadata}
-	// build-queued 的结束写入失败过、已在重试队列里，要留给重试写真实结果。
+	// build-queued 的结束写入失败过、已在重试队列里；build-lookup 有按构建查找日志的占位项。两者都要留给重试写真实结果。
 	svc.queueRebuildLogRetry(pendingRebuildLog{opts: opts, item: logOf(3, "build-queued", running), result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, entries: 30})
+	svc.queueRebuildLogRetry(pendingRebuildLog{opts: opts, view: view, buildID: "build-lookup", result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED})
 
 	svc.closeSupersededRebuildLogs(context.Background(), opts, &pb.AuthInfo{}, view, "build-new")
 
-	if len(metadata.updated) != 1 {
-		t.Fatalf("结束了 %d 条日志，只应结束被取代的 build-old：%v", len(metadata.updated), metadata.updated)
+	got := map[int64]*pb.ViewRebuildLog{}
+	for _, item := range metadata.updated {
+		got[item.GetLogId()] = item
 	}
-	got := metadata.updated[0]
-	if got.GetLogId() != 1 || got.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED {
-		t.Fatalf("结束的日志 = %v，应为日志 1 且结果为失败", got)
+	if len(metadata.updated) != 3 || got[1] == nil || got[6] == nil || got[7] == nil {
+		t.Fatalf("结束的日志 = %v，应只结束日志 1、6、7（跨页收集，跳过当前构建、重试队列中的和已结束的）", metadata.updated)
 	}
-	if got.GetEntriesWritten() != 10 || got.GetFinishedAt() == "" || !strings.Contains(got.GetErrorSummary(), "取代") {
-		t.Fatalf("结束的日志应保留已写行数、带结束时间并说明被取代：%v", got)
+	for _, id := range []int64{1, 7} {
+		item := got[id]
+		if item.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED || item.GetEntriesWritten() != uint64(id*10) || item.GetFinishedAt() == "" || !strings.Contains(item.GetErrorSummary(), "取代") {
+			t.Fatalf("被取代的日志 %d 应记为失败、保留已写行数、带结束时间并说明被取代：%v", id, item)
+		}
+		if !strings.Contains(item.GetDetailsJson(), `"phase":"failed"`) {
+			t.Fatalf("被取代的日志 %d 阶段应为 failed：%s", id, item.GetDetailsJson())
+		}
 	}
-	if !strings.Contains(got.GetDetailsJson(), `"phase":"failed"`) {
-		t.Fatalf("结束的日志阶段应为 failed：%s", got.GetDetailsJson())
+	if active := got[6]; active.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED || active.GetErrorSummary() != "" || active.GetEntriesWritten() != 60 {
+		t.Fatalf("已激活构建的日志应补记为成功：%v", active)
 	}
 }
