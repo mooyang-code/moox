@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 	"time"
@@ -18,8 +19,9 @@ const (
 	deleteOldestTickSecond = 10 * time.Second
 	// deleteOldestSeriesPerBatch 是一批最多处理的序列数，和每批行数一起控制单批持有写锁的时长。
 	deleteOldestSeriesPerBatch = 64
-	// deleteOldestBatchesPerRound 是一个索引一轮最多删几批，超出的部分留到下一轮。
-	deleteOldestBatchesPerRound = 10
+	// deleteOldestRoundRowsFactor：一个索引一轮最多删除“每批行数 × 这个倍数”行，超出的部分留到下一轮。
+	// 稳态时每个序列每轮只超出一两根，一批不到 64 个序列就删不满每批行数，所以按行数而不是批数封顶。
+	deleteOldestRoundRowsFactor = 10
 	// DefaultDeleteOldestBatchSize 是每批最多删除的最旧行数的默认值（2026-10-30 用线上 1m 因子索引实测，单批持锁约 30～50ms）。
 	DefaultDeleteOldestBatchSize = 2000
 	// MaxDeleteOldestBatchSize 是每批行数配置的上限。
@@ -45,8 +47,8 @@ func (s *Service) StartDeleteOldest(ctx context.Context, opts DeleteOldestOption
 	if now == nil {
 		now = time.Now
 	}
-	log.Printf("storage view 定时删除最旧数据已启动：每分钟第 10 秒触发、偶数分钟执行，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 批",
-		opts.BatchSize, deleteOldestSeriesPerBatch, deleteOldestBatchesPerRound)
+	log.Printf("storage view 定时删除最旧数据已启动：每分钟第 10 秒触发、偶数分钟执行，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 行",
+		opts.BatchSize, deleteOldestSeriesPerBatch, opts.BatchSize*deleteOldestRoundRowsFactor)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -153,31 +155,40 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 	}
 }
 
-// deleteOldestFromIndex 对一个索引删一轮，最多 batchSize × deleteOldestBatchesPerRound 行，返回删除的行数。
+// deleteOldestFromIndex 对一个索引删一轮，最多 batchSize × deleteOldestRoundRowsFactor 行，返回删除的行数。
+// 每批删除都推进这个索引的修订号：分页读取按修订号判断读取期间数据有没有变，删行不推进的话后面几页会静默少行。
+// 中途出错时，已经删掉的部分照样收尾（前移覆盖起点），再返回错误。
 func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldestTarget, bars uint64, batchSize int) (uint64, error) {
-	roundCap := batchSize * deleteOldestBatchesPerRound
+	roundCap := batchSize * deleteOldestRoundRowsFactor
 	began := time.Now()
 	var deleted uint64
 	var maxHeld time.Duration
+	var roundErr error
 	for int(deleted) < roundCap {
 		// 查分界只读，不持写锁；删除只碰比分界更旧的行，实时写入追加的新根不受影响。
 		cuts, err := target.deleter.PlanOldestRows(ctx, target.indexID, bars, deleteOldestSeriesPerBatch, min(batchSize, roundCap-int(deleted)))
 		if err != nil {
-			return deleted, err
+			roundErr = err
+			break
 		}
 		if len(cuts) == 0 {
 			break
 		}
 		release, err := s.indexWriteGate(target.indexID).lock(ctx)
 		if err != nil {
-			return deleted, err
+			roundErr = err
+			break
 		}
 		lockedAt := time.Now()
 		n, err := target.deleter.DeleteOldestRows(ctx, target.indexID, cuts)
+		if err == nil && n > 0 {
+			s.nextIndexRevision(target.indexID)
+		}
 		held := time.Since(lockedAt)
 		release()
 		if err != nil {
-			return deleted, err
+			roundErr = err
+			break
 		}
 		maxHeld = max(maxHeld, held)
 		s.metrics.ObserveViewOldestRowsDeleted(target.ref.spaceID, target.ref.viewID, n, held)
@@ -190,35 +201,42 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 		deleted += n
 	}
 	if deleted == 0 {
-		return 0, nil
+		return 0, roundErr
 	}
-	release, err := s.indexWriteGate(target.indexID).lock(ctx)
+	// 收尾不受本轮 ctx 取消影响：已经删掉的行必须把覆盖起点与保留根数一起改对。
+	finishCtx := context.WithoutCancel(ctx)
+	release, err := s.indexWriteGate(target.indexID).lock(finishCtx)
 	if err != nil {
-		return deleted, err
+		return deleted, errors.Join(roundErr, err)
 	}
-	from, err := target.deleter.RefreshCoverageFrom(ctx, target.indexID)
+	from, err := target.deleter.FinishOldestRowsDelete(finishCtx, target.indexID, bars)
+	if err == nil {
+		s.nextIndexRevision(target.indexID)
+	}
 	release()
 	if err != nil {
-		return deleted, err
+		return deleted, errors.Join(roundErr, err)
 	}
-	s.refreshCachedCoverageFrom(target, from)
+	s.refreshCachedCoverageFrom(target, from, bars)
 	if int(deleted) >= roundCap {
 		// 达到一轮上限说明还有积压（首次删到保留根数，或删除跟不上写入），剩余部分留到下一轮。
 		log.Printf("storage view 删除最旧数据本轮达到上限 space=%s view=%s 行=%d 用时=%s 单批最长持锁=%s", target.ref.spaceID, target.ref.viewID, deleted, time.Since(began).Round(time.Millisecond), maxHeld.Round(time.Millisecond))
 	}
-	return deleted, nil
+	return deleted, roundErr
 }
 
-// refreshCachedCoverageFrom 把缓存的活动索引覆盖起点改成删除后的值，查询响应不用等下一次全量统计。
-func (s *Service) refreshCachedCoverageFrom(target deleteOldestTarget, from string) {
-	if from == "" {
-		return
-	}
+// refreshCachedCoverageFrom 把缓存的活动索引覆盖起点与保留根数改成删除后的值，查询响应不用等下一次全量统计。
+func (s *Service) refreshCachedCoverageFrom(target deleteOldestTarget, from string, keep uint64) {
 	_, runtime := s.activeIndex(target.ref.spaceID, target.ref.viewID)
 	stats, ok := cachedActiveIndexStats(runtime, target.indexID)
 	if !ok {
 		return
 	}
-	stats.IndexedFrom = from
+	if from != "" {
+		stats.IndexedFrom = from
+	}
+	if stats.RowsPerSeries == 0 || stats.RowsPerSeries > keep {
+		stats.RowsPerSeries = keep
+	}
 	s.cacheActiveIndexStats(runtime, target.indexID, stats)
 }

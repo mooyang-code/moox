@@ -409,11 +409,6 @@ func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved i
 	if midRun {
 		when = "在回放过程中"
 	}
-	// 代次没变时区间变化只可能来自定时删除最旧数据；代次变了才是重建了索引。
-	changed := "重建了索引"
-	if view.Generation == job.ViewGeneration {
-		changed = "删除了最旧的数据"
-	}
 	for attempt := 0; ; attempt++ {
 		covered, err := withTransportRetry(ctx, abort, func() (input.ViewInfo, error) {
 			return input.WithCoverage(ctx, r.Client, job.SpaceID, view, true)
@@ -437,6 +432,12 @@ func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved i
 		}); err != nil {
 			return input.ViewInfo{}, time.Time{}, err
 		}
+	}
+	// 代次没变时区间变化只可能来自定时删除最旧数据；代次变了才是重建了索引。重读覆盖统计时可能读到了新一代，
+	// 所以按重读之后的 View 判断。
+	changed := "重建了索引"
+	if view.Generation == job.ViewGeneration {
+		changed = "删除了最旧的数据"
 	}
 	// 覆盖统计未知时无法确认区间仍然有效；其余覆盖问题（行全在非交易日上、超出内嵌日历）由 ReplayWindow 说明具体原因。
 	// 代次没变时统计暂时未知（例如 Storage 刚重启）按提交的区间执行：同一代索引只会删掉最旧的少量数据，不因此拒绝回放。

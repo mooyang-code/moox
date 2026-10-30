@@ -296,11 +296,13 @@ type OldestRowsCut struct {
 //
 // PlanOldestRows 只读（不需要写锁）：列出最多 maxSeries 个行数超过 keep 的序列，合计最多 maxRows 行，
 // 并按一致快照算出每个序列的删除分界。DeleteOldestRows 由调用方在持有该索引写锁时调用：在一个事务里删掉分界之前的行、
-// 按实际删除行数减少序列计数，返回删除的总行数。RefreshCoverageFrom 同样在写锁内调用，把覆盖起点前移到剩余行的最早时间。
+// 按实际删除行数减少序列计数并更新索引的修改时间（查询按它判断数据是否在读取期间变化），返回删除的总行数。
+// FinishOldestRowsDelete 同样在写锁内调用，一轮删完后执行：把覆盖起点前移到剩余行的最早时间，并把记录的保留根数改为 keep
+// （没有记录或记录得更大时），让读取方知道每个序列最多只有这么多行。
 type OldestRowsDeleter interface {
 	PlanOldestRows(ctx context.Context, indexID string, keep uint64, maxSeries, maxRows int) ([]OldestRowsCut, error)
 	DeleteOldestRows(ctx context.Context, indexID string, cuts []OldestRowsCut) (uint64, error)
-	RefreshCoverageFrom(ctx context.Context, indexID string) (string, error)
+	FinishOldestRowsDelete(ctx context.Context, indexID string, keep uint64) (string, error)
 }
 
 func RowKeyID(k *pb.RowKey) string {

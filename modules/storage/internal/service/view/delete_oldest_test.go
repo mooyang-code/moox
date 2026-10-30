@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,15 +14,17 @@ import (
 // 共有 backlog 行可删；记录每次删除时是否持有该索引的写锁。
 type oldestDeleterEngine struct {
 	*queryEngine
-	svc         *Service
-	backlog     uint64
-	plans       int
-	deletes     int
-	refreshes   int
-	unlocked    int
-	gotKeep     uint64
-	gotMaxRows  []int
-	gotMaxSerie int
+	svc          *Service
+	backlog      uint64
+	plans        int
+	deletes      int
+	refreshes    int
+	unlocked     int
+	gotKeep      uint64
+	gotMaxRows   []int
+	gotMaxSerie  int
+	finishKeep   uint64
+	failDeleteAt int
 }
 
 func (e *oldestDeleterEngine) PlanOldestRows(_ context.Context, _ string, keep uint64, maxSeries, maxRows int) ([]viewindex.OldestRowsCut, error) {
@@ -37,6 +40,9 @@ func (e *oldestDeleterEngine) PlanOldestRows(_ context.Context, _ string, keep u
 
 func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string, cuts []viewindex.OldestRowsCut) (uint64, error) {
 	e.deletes++
+	if e.failDeleteAt > 0 && e.deletes == e.failDeleteAt {
+		return 0, errors.New("模拟删除失败")
+	}
 	if len(e.svc.indexWriteGate(indexID).token) != 0 {
 		e.unlocked++
 	}
@@ -48,8 +54,9 @@ func (e *oldestDeleterEngine) DeleteOldestRows(_ context.Context, indexID string
 	return total, nil
 }
 
-func (e *oldestDeleterEngine) RefreshCoverageFrom(_ context.Context, indexID string) (string, error) {
+func (e *oldestDeleterEngine) FinishOldestRowsDelete(_ context.Context, indexID string, keep uint64) (string, error) {
 	e.refreshes++
+	e.finishKeep = keep
 	if len(e.svc.indexWriteGate(indexID).token) != 0 {
 		e.unlocked++
 	}
@@ -70,8 +77,16 @@ func TestDeleteOldestRoundDeletesInBatchesUnderWriteLockUpToRoundCap(t *testing.
 	svc, engine := deleteOldestTestService(1_000_000)
 	svc.deleteOldestRound(context.Background(), 3)
 
-	if engine.deletes != deleteOldestBatchesPerRound {
-		t.Fatalf("一轮删了 %d 批，应在上限 %d 批处停下", engine.deletes, deleteOldestBatchesPerRound)
+	// 每批 3 行、每轮上限 3 × deleteOldestRoundRowsFactor 行。
+	if engine.deletes != deleteOldestRoundRowsFactor || engine.backlog != 1_000_000-3*deleteOldestRoundRowsFactor {
+		t.Fatalf("一轮删了 %d 批、剩 %d 行，应在 %d 行的上限处停下", engine.deletes, engine.backlog, 3*deleteOldestRoundRowsFactor)
+	}
+	// 每批删除和收尾都推进修订号，分页读取才能发现读取期间数据变了。
+	if got := svc.indexRevisionOf("prices-index"); got != uint64(engine.deletes+1) {
+		t.Fatalf("修订号推进了 %d 次，应为 %d 批删除加 1 次收尾", got, engine.deletes+1)
+	}
+	if engine.finishKeep != 10000 {
+		t.Fatalf("收尾时的保留根数=%d，应为 10000", engine.finishKeep)
 	}
 	if engine.unlocked != 0 {
 		t.Fatalf("有 %d 次删除或更新覆盖起点时没有持有写锁", engine.unlocked)
@@ -128,6 +143,24 @@ func TestDeleteOldestRoundStopsWhenNothingLeftAndSkipsUnsafeViews(t *testing.T) 
 	svc.deleteOldestRound(context.Background(), 3)
 	if engine.plans != plans {
 		t.Fatal("记录型 View 不应删除最旧数据")
+	}
+}
+
+// 一轮中途删除失败：已经删掉的部分照样收尾（前移覆盖起点、修正保留根数），不留着错误的覆盖起点等下一轮。
+func TestDeleteOldestRoundFinishesDeletedRowsWhenALaterBatchFails(t *testing.T) {
+	svc, engine := deleteOldestTestService(100)
+	engine.failDeleteAt = 3
+	deleted, err := svc.deleteOldestFromIndex(context.Background(), deleteOldestTarget{
+		ref: viewRef{spaceID: "space", viewID: "prices"}, indexID: "prices-index", deleter: engine,
+	}, 10000, 3)
+	if err == nil || deleted != 6 {
+		t.Fatalf("第 3 批失败时应返回已删的 6 行与错误，实际 %d 行，错误 %v", deleted, err)
+	}
+	if engine.refreshes != 1 {
+		t.Fatalf("已经删了行就要收尾，实际收尾 %d 次", engine.refreshes)
+	}
+	if len(svc.indexWriteGate("prices-index").token) != 1 {
+		t.Fatal("失败后写锁没有释放")
 	}
 }
 

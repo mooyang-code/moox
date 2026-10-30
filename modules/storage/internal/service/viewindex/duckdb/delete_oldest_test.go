@@ -61,9 +61,15 @@ func TestDeleteOldestRowsKeepsNewestBarsPerSeries(t *testing.T) {
 	require.Equal(t, base.Add(5*time.Minute), cuts[0].Before.UTC(), "A 的分界是第 6 旧的那根")
 	require.Equal(t, uint64(2), cuts[1].Rows)
 
+	before, err := m.StatMetadata(ctx, "idx")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Millisecond)
 	deleted, err := m.DeleteOldestRows(ctx, "idx", cuts)
 	require.NoError(t, err)
 	require.Equal(t, uint64(7), deleted)
+	after, err := m.StatMetadata(ctx, "idx")
+	require.NoError(t, err)
+	require.NotEqual(t, before.UpdatedAt, after.UpdatedAt, "删除必须更新修改时间，分页读取才能发现数据变了")
 	for subject, wantOldest := range map[string]time.Time{"A": base.Add(5 * time.Minute), "B": base.Add(2 * time.Minute)} {
 		counted, actual, oldest := seriesState(t, m, subject)
 		require.Equal(t, 10, counted, "%s 的计数应减到保留根数", subject)
@@ -74,12 +80,13 @@ func TestDeleteOldestRowsKeepsNewestBarsPerSeries(t *testing.T) {
 	require.Equal(t, 6, counted)
 	require.Equal(t, 6, actual, "没超出保留根数的序列不动")
 
-	from, err := m.RefreshCoverageFrom(ctx, "idx")
+	from, err := m.FinishOldestRowsDelete(ctx, "idx", 10)
 	require.NoError(t, err)
 	require.Equal(t, canonicalCoverageTime(base), from, "C 仍从 base 开始，覆盖起点不变")
 	stats, err := m.StatMetadata(ctx, "idx")
 	require.NoError(t, err)
 	require.Equal(t, from, stats.IndexedFrom)
+	require.Equal(t, uint64(10), stats.RowsPerSeries, "没有记录保留根数的索引，删除后应记为 keep")
 
 	again, err := m.PlanOldestRows(ctx, "idx", 10, 64, 100)
 	require.NoError(t, err)
@@ -108,7 +115,7 @@ func TestPlanOldestRowsHonoursRowBudgetAndSeriesLimit(t *testing.T) {
 	require.Len(t, cuts, 1, "每批最多 1 个序列")
 }
 
-func TestRefreshCoverageFromMovesForwardAfterDeletingOldest(t *testing.T) {
+func TestFinishOldestRowsDeleteMovesCoverageForwardAndStatCannotMoveItBack(t *testing.T) {
 	ctx := context.Background()
 	m, base := deleteOldestTestIndex(t)
 	db, _, _, _, err := m.getIndex(ctx, "idx")
@@ -123,10 +130,48 @@ func TestRefreshCoverageFromMovesForwardAfterDeletingOldest(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.DeleteOldestRows(ctx, "idx", cuts)
 	require.NoError(t, err)
-	from, err := m.RefreshCoverageFrom(ctx, "idx")
+	from, err := m.FinishOldestRowsDelete(ctx, "idx", 10)
 	require.NoError(t, err)
 	require.Equal(t, canonicalCoverageTime(base.Add(2*time.Minute)), from, "B 剩下的最早一根是第 3 分钟")
 	stats, err := m.StatMetadata(ctx, "idx")
 	require.NoError(t, err)
 	require.Equal(t, from, stats.IndexedFrom)
+
+	// 全量统计在删除之前读到的最早时间（base）不能把起点改回去。
+	merged, _, err := persistCoverageBounds(ctx, db, canonicalCoverageTime(base), "")
+	require.NoError(t, err)
+	require.Equal(t, from, merged, "合并覆盖范围时以实际最早时间为下限")
+	stats, err = m.StatMetadata(ctx, "idx")
+	require.NoError(t, err)
+	require.Equal(t, from, stats.IndexedFrom)
+}
+
+func TestDeleteOldestRowsHandlesEmptySeriesTagAndOtherFrequency(t *testing.T) {
+	ctx := context.Background()
+	m, base := deleteOldestTestIndex(t)
+	var writes []viewindex.RowWrite
+	for _, freq := range []string{"1m", "5m"} {
+		for i := 0; i < 12; i++ {
+			writes = append(writes, viewindex.RowWrite{
+				Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "prices", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+					SubjectId: "D", Freq: freq, DataTime: base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), SeriesTag: "",
+				}}}},
+				Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}},
+			})
+		}
+	}
+	require.NoError(t, m.Write(ctx, "idx", viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}))
+	cuts, err := m.PlanOldestRows(ctx, "idx", 10, 64, 100)
+	require.NoError(t, err)
+	_, err = m.DeleteOldestRows(ctx, "idx", cuts)
+	require.NoError(t, err)
+	db, _, _, _, err := m.getIndex(ctx, "idx")
+	require.NoError(t, err)
+	for _, freq := range []string{"1m", "5m"} {
+		var counted, actual int
+		require.NoError(t, db.QueryRow(`SELECT row_count FROM view_series_counts WHERE subject_id = 'D' AND freq = ? AND series_tag = ''`, freq).Scan(&counted))
+		require.NoError(t, db.QueryRow(`SELECT count(*) FROM view_rows WHERE subject_id = 'D' AND freq = ? AND series_tag = ''`, freq).Scan(&actual))
+		require.Equal(t, 10, counted, "freq=%s 的空序列标签计数", freq)
+		require.Equal(t, 10, actual, "freq=%s 的空序列标签实际行数", freq)
+	}
 }

@@ -982,6 +982,15 @@ func persistCoverageBounds(ctx context.Context, db *sql.DB, from, to string) (st
 		return "", "", err
 	}
 	mergedFrom, mergedTo := mergeCoverageBounds(currentFrom, currentTo, from, to)
+	// 覆盖起点只往外扩是为了不丢掉统计之后才写进来的更早的行；但定时删除最旧数据会让起点前移，
+	// 统计在删除前读到的最早时间不能把起点改回去，所以以本事务里重读的实际最早时间为下限。
+	var oldest sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+		return "", "", err
+	}
+	if fresh := canonicalCoverageTime(oldest.Time); oldest.Valid && mergedFrom != "" && beforeCanonicalTime(mergedFrom, fresh) {
+		mergedFrom = fresh
+	}
 	if mergedFrom != canonicalizeCoverageTime(currentFrom) || mergedTo != canonicalizeCoverageTime(currentTo) {
 		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ?, indexed_to = ? WHERE singleton = 1`, mergedFrom, mergedTo); err != nil {
 			return "", "", err
@@ -1858,7 +1867,8 @@ func (m *IndexManager) PlanOldestRows(ctx context.Context, id string, keep uint6
 }
 
 // DeleteOldestRows 实现 viewindex.OldestRowsDeleter：在一个事务里删除各序列分界之前的最旧行，
-// 并按实际删除行数减少 view_series_counts。调用方必须持有这个索引的写锁。
+// 按实际删除行数减少 view_series_counts，并更新 view_meta.updated_at（查询按它判断分页读取期间数据有没有变）。
+// 调用方必须持有这个索引的写锁。
 func (m *IndexManager) DeleteOldestRows(ctx context.Context, id string, cuts []viewindex.OldestRowsCut) (uint64, error) {
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
@@ -1900,15 +1910,22 @@ func (m *IndexManager) DeleteOldestRows(ctx context.Context, id string, cuts []v
 		}
 		total += uint64(deleted)
 	}
+	if total == 0 {
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return total, nil
 }
 
-// RefreshCoverageFrom 实现 viewindex.OldestRowsDeleter：把 view_meta 的覆盖起点改成剩余行的最早时间。
-// 写入只会把覆盖范围往外扩，删除最旧数据后要在这里把起点前移。调用方必须持有这个索引的写锁。
-func (m *IndexManager) RefreshCoverageFrom(ctx context.Context, id string) (string, error) {
+// FinishOldestRowsDelete 实现 viewindex.OldestRowsDeleter：一轮删完后把 view_meta 的覆盖起点改成剩余行的最早时间
+// （写入只会把覆盖范围往外扩，删除后要在这里前移），并把记录的保留根数改为 keep（没有记录或记录得更大时），
+// 同时更新修改时间。调用方必须持有这个索引的写锁。返回新的覆盖起点。
+func (m *IndexManager) FinishOldestRowsDelete(ctx context.Context, id string, keep uint64) (string, error) {
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return "", err
@@ -1917,15 +1934,31 @@ func (m *IndexManager) RefreshCoverageFrom(ctx context.Context, id string) (stri
 	if err != nil {
 		return "", err
 	}
-	var oldest sql.NullTime
-	if err := db.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
 		return "", err
 	}
-	if !oldest.Valid {
-		return "", nil
+	defer func() { _ = tx.Rollback() }()
+	var oldest sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(data_time) FROM view_rows`).Scan(&oldest); err != nil {
+		return "", err
 	}
-	from := canonicalCoverageTime(oldest.Time)
-	if _, err := db.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ? WHERE singleton = 1 AND indexed_from <> ?`, from, from); err != nil {
+	from := ""
+	if oldest.Valid {
+		from = canonicalCoverageTime(oldest.Time)
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET indexed_from = ? WHERE singleton = 1`, from); err != nil {
+			return "", err
+		}
+	}
+	if keep > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET rows_per_series = ? WHERE singleton = 1 AND (rows_per_series = 0 OR rows_per_series > ?)`, keep, keep); err != nil {
+			return "", err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	return from, nil
