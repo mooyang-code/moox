@@ -100,7 +100,7 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 	if err != nil {
 		return fmt.Errorf("准备 View 索引：%w", err)
 	}
-	if _, err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, bars); err != nil {
+	if err := s.backfillInitialIndex(ctx, view, schema, indexID, opts, bars); err != nil {
 		s.discardInitialBuild(ctx, ref, indexID)
 		if isPrimaryHistoryIndexNotReady(err) {
 			// Primary 的历史索引是首次使用时异步物化的：这是正常的预热等待，下一轮再建。
@@ -150,7 +150,7 @@ func (s *Service) completeInitialBuild(ctx context.Context, opts MaintenanceOpti
 	}
 	committed := rsp.GetView()
 	if err != nil {
-		readback, readErr := s.readActiveView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
+		readback, readErr := s.readView(ctx, opts.Metadata, auth, view.GetSpaceId(), view.GetViewId())
 		if readErr != nil || readback.GetActiveIndexId() != indexID {
 			runtime.mu.Unlock()
 			return errors.Join(err, readErr)
@@ -161,7 +161,7 @@ func (s *Service) completeInitialBuild(ctx context.Context, opts MaintenanceOpti
 		runtime.mu.Unlock()
 		return fmt.Errorf("元数据没有返回建好的索引 %q", indexID)
 	}
-	s.attachActiveViewLocked(committed, runtime, schema, schema.Columns, schema.Engine)
+	s.attachActiveViewLocked(committed, runtime, schema, schema.Engine)
 	runtime.mu.Unlock()
 	// 回填的行不走实时事件：建成后补一次水位，否则 Monitor 要等下一次实时写入才能看到这个 View 的输出。
 	s.observeActivatedViewWatermark(view, indexID)
@@ -202,16 +202,13 @@ func (s *Service) discardInitialBuild(ctx context.Context, ref viewRef, indexID 
 }
 
 // backfillInitialIndex 从 Primary 回填时序 View 每个序列最近的 bars 根。记录型 View 和 Bleve 没有可读的 Primary 历史，从空开始。
-func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, opts MaintenanceOptions, bars uint64) (uint64, error) {
+func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, opts MaintenanceOptions, bars uint64) error {
 	if bars == 0 || schema.Engine == "bleve" {
 		log.Printf("storage view %s/%s 从空开始：没有 Primary 历史可回填", view.GetSpaceId(), view.GetViewId())
-		return 0, nil
-	}
-	if view.GetFreq() == "" {
-		return 0, errors.New("回填 Primary 历史需要时序 View 的频率")
+		return nil
 	}
 	if opts.PrimaryRange == nil {
-		return 0, errors.New("回填 Primary 历史需要 Primary 历史读取客户端")
+		return errors.New("回填 Primary 历史需要 Primary 历史读取客户端")
 	}
 	pageSize := int(opts.BackfillPageSize)
 	if pageSize <= 0 {
@@ -219,13 +216,13 @@ func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schem
 	}
 	written, err := s.backfillPrimaryHistory(ctx, view, schema, indexID, pageSize, opts.PrimaryRange, bars, newBackfillRequestLimiter(opts.BackfillRequestInterval))
 	if err != nil {
-		return written, err
+		return err
 	}
 	if written == 0 {
 		// 派生输出（例如因子结果）在第一个周期到来之前合法地为空。
 		log.Printf("storage view %s/%s 从空开始：Primary 还没有这个 View 的行", view.GetSpaceId(), view.GetViewId())
 	}
-	return written, nil
+	return nil
 }
 
 // backfillPrimaryHistory 回填 View 保留的最近行：不指定标的、每个序列取最近 periods 根，
@@ -327,10 +324,9 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	if s.engines[engineName] == nil {
 		return fmt.Errorf("view engine %q is unavailable", engineName)
 	}
-	columns := view.GetActiveColumns()
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetViewRevision(),
-		PrimaryDatasetID: view.GetDatasetId(), Engine: engineName, Columns: columns, SchemaHash: view.GetActiveViewSchemaHash(),
+		PrimaryDatasetID: view.GetDatasetId(), Engine: engineName, Columns: view.GetActiveColumns(), SchemaHash: view.GetActiveViewSchemaHash(),
 	}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
@@ -339,20 +335,23 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 		runtime = newViewRuntime()
 		s.views[viewKey] = runtime
 	}
-	attached := s.schemas[view.GetActiveIndexId()]
 	s.mu.Unlock()
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	// 维护读到的元数据可能早于定时任务刚提交的加列：不能用旧快照把写入契约改回去。
+	// 加列在运行时锁下提交，这里必须在锁内读当前契约，锁外读到的可能已经过期。
+	s.mu.RLock()
+	attached := s.schemas[view.GetActiveIndexId()]
+	s.mu.RUnlock()
 	if runtime.active == view.GetActiveIndexId() && attached.ViewVersion > view.GetViewRevision() {
 		return nil
 	}
-	s.attachActiveViewLocked(view, runtime, schema, columns, engineName)
+	s.attachActiveViewLocked(view, runtime, schema, engineName)
 	return nil
 }
 
 // attachActiveViewLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。
-func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, schema viewindex.ViewIndexSchema, columns []*pb.ViewColumn, engineName string) {
+func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, schema viewindex.ViewIndexSchema, engineName string) {
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
 	defer s.mu.Unlock()

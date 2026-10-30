@@ -343,7 +343,7 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 		return errors.New("index deletion requires --yes")
 	}
 	if opts.resetView && opts.deliverPolicy != "all" {
-		return errors.New("--reset-view-indexes requires --deliver-policy=all so retained source events can replay")
+		return errors.New("--reset-view-indexes 需要 --deliver-policy=all：时序 View 从 Primary 回填，但同数据集的其他 View 和记录型 View 要靠重放事件补齐")
 	}
 	return nil
 }

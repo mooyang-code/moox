@@ -53,7 +53,6 @@ type dynamicDatasetConsumerBinding struct {
 	durable         string
 	stop            func()
 	routeReady      map[string]struct{}
-	consumerState   func(context.Context) (jetstream.ConsumerState, error)
 	consumerIsBound func() bool
 }
 

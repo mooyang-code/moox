@@ -63,9 +63,14 @@ func (s *Service) recoverViewSchemaExtension(ctx context.Context, metadata Metad
 }
 
 func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine, allowDetached bool) (bool, error) {
-	// 先按快照判断有没有要加的列：每分钟都要检查所有 View，绝大多数没有新列，不用取锁、不用重读。
-	if _, _, _, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine); err != nil || !ok {
+	// 声明的列放在锁外读：它只增不减，晚于这次读取新增的列留给下一轮；锁内不做可能较慢的数据集列查询。
+	desired, err := desiredViewColumns(ctx, metadata, auth, view)
+	if err != nil {
 		return false, err
+	}
+	// 先按快照判断有没有要加的列：每分钟都要检查所有 View，绝大多数没有新列，不用取锁、不用重读。
+	if _, _, _, ok := viewSchemaExtensionTarget(view, engine, desired); !ok {
+		return false, nil
 	}
 	viewKey := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
 	s.mu.Lock()
@@ -91,13 +96,13 @@ func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient,
 	defer release()
 	// 定时任务和维护循环都会走到这里，各自拿的是自己的快照。加列只在这两把锁下提交，所以持锁后重读一次：
 	// 用过期的快照算目标，会把别的一轮刚提交的修订号再加一遍列，物理索引和元数据的哈希就对不上了。
-	view, err = s.readActiveView(ctx, metadata, auth, view.GetSpaceId(), view.GetViewId())
+	view, err = s.readView(ctx, metadata, auth, view.GetSpaceId(), view.GetViewId())
 	if err != nil {
 		return false, err
 	}
-	current, next, extender, ok, err := viewSchemaExtensionTarget(ctx, metadata, auth, view, engine)
-	if err != nil || !ok {
-		return false, err
+	current, next, extender, ok := viewSchemaExtensionTarget(view, engine, desired)
+	if !ok {
+		return false, nil
 	}
 	if err := extender.ExtendColumns(ctx, view.GetActiveIndexId(), current, next); err != nil {
 		return false, fmt.Errorf("原地加列：%w", err)
@@ -120,27 +125,23 @@ func (s *Service) extendViewSchema(ctx context.Context, metadata MetadataClient,
 		!proto.Equal(&pb.View{ActiveColumns: committed.GetActiveColumns()}, &pb.View{ActiveColumns: next.Columns}) {
 		return false, errors.New("元数据返回的已建列与这次加列不一致")
 	}
-	s.attachActiveViewLocked(committed, runtime, next, next.Columns, next.Engine)
+	s.attachActiveViewLocked(committed, runtime, next, next.Engine)
 	return true, nil
 }
 
 // viewSchemaExtensionTarget 算出这次加列的前后契约；没有要加的列时 ok 为假。
-func viewSchemaExtensionTarget(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, view *pb.View, engine viewindex.Engine) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool, error) {
+func viewSchemaExtensionTarget(view *pb.View, engine viewindex.Engine, desired []*pb.ViewColumn) (viewindex.ViewIndexSchema, viewindex.ViewIndexSchema, viewindex.SchemaExtender, bool) {
 	var none viewindex.ViewIndexSchema
 	if view == nil || engine == nil || view.GetActiveIndexId() == "" || view.GetViewRevision() == 0 {
-		return none, none, nil, false, nil
+		return none, none, nil, false
 	}
 	extender, ok := engine.(viewindex.SchemaExtender)
 	if !ok {
-		return none, none, nil, false, nil
-	}
-	desired, err := desiredViewColumns(ctx, metadata, auth, view)
-	if err != nil {
-		return none, none, nil, false, err
+		return none, none, nil, false
 	}
 	extended, ok := appendViewColumns(view.GetActiveColumns(), desired)
 	if !ok {
-		return none, none, nil, false, nil
+		return none, none, nil, false
 	}
 	current := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), PrimaryDatasetID: view.GetDatasetId(),
@@ -152,7 +153,7 @@ func viewSchemaExtensionTarget(ctx context.Context, metadata MetadataClient, aut
 		ViewVersion: view.GetViewRevision() + 1, Engine: engine.Engine(), Columns: extended,
 	}
 	next.SchemaHash = viewindex.HashViewIndexSchema(next)
-	return current, next, extender, true, nil
+	return current, next, extender, true
 }
 
 // appendViewColumns 返回已建列加上还没建的声明列（按列名比较，新列按声明顺序排在最后）；没有新列时第二个返回值为假。

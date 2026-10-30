@@ -39,7 +39,7 @@ var (
 )
 
 // ErrViewIndexConflict 表示活动索引的状态与这次提交的预期不一致。
-var ErrViewIndexConflict = errors.New("view index conflict")
+var ErrViewIndexConflict = errors.New("View 索引状态与这次提交的预期不一致")
 
 const sqliteBuildTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
 

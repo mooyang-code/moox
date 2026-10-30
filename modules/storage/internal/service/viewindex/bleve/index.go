@@ -88,10 +88,10 @@ func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewin
 	if id == "" || current.SpaceID == "" || current.ViewID == "" || current.Engine != "bleve" || next.Engine != current.Engine ||
 		next.SpaceID != current.SpaceID || next.ViewID != current.ViewID || next.PrimaryDatasetID != current.PrimaryDatasetID ||
 		current.ViewVersion == 0 || next.ViewVersion <= current.ViewVersion || next.SchemaHash == "" {
-		return fmt.Errorf("%w: Bleve requires matching index identity and increasing revisions", viewindex.ErrSchemaExtensionConflict)
+		return fmt.Errorf("%w：Bleve 要求索引身份一致且修订号递增", viewindex.ErrSchemaExtensionConflict)
 	}
 	if !viewindex.IsAppendOnlyViewColumns(current.Columns, next.Columns) {
-		return fmt.Errorf("%w: Bleve columns are not append-only", viewindex.ErrSchemaExtensionConflict)
+		return fmt.Errorf("%w：Bleve 的列只能追加", viewindex.ErrSchemaExtensionConflict)
 	}
 	h, err := i.get(id)
 	if err != nil {
@@ -103,7 +103,7 @@ func (i *Index) ExtendColumns(_ context.Context, id string, current, next viewin
 		return nil
 	}
 	if h.meta.ViewVersion < current.ViewVersion || h.meta.ViewVersion > next.ViewVersion || h.meta.PrimaryDatasetID != current.PrimaryDatasetID {
-		return fmt.Errorf("%w: Bleve physical state is not an append-only prefix at revision %d", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
+		return fmt.Errorf("%w：Bleve 物理状态在修订号 %d 上不是追加前缀", viewindex.ErrSchemaExtensionConflict, h.meta.ViewVersion)
 	}
 	meta := h.meta
 	meta.ViewVersion = next.ViewVersion

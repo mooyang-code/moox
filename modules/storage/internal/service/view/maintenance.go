@@ -20,6 +20,7 @@ import (
 
 type MetadataClient interface {
 	ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error)
+	GetView(context.Context, *pb.GetViewReq, ...client.Option) (*pb.GetViewRsp, error)
 	GetDataset(context.Context, *pb.GetDatasetReq, ...client.Option) (*pb.GetDatasetRsp, error)
 	ListDatasetSubjects(context.Context, *pb.ListDatasetSubjectsReq, ...client.Option) (*pb.ListDatasetSubjectsRsp, error)
 	ListDatasetColumns(context.Context, *pb.ListDatasetColumnsReq, ...client.Option) (*pb.ListDatasetColumnsRsp, error)
@@ -230,12 +231,12 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 			}
 			if err := validatePhysicalViewContract(view, stats); err != nil {
 				recovered, recoverErr := s.recoverViewSchemaExtension(ctx, opts.Metadata, auth, view, engine, stats)
-				if recoverErr != nil {
-					log.Printf("storage view 启动时补提交加列未完成 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), recoverErr)
-				} else if !recovered {
-					// 一个索引对不上不能拖垮整个进程：这个 View 不挂接，其他 View 继续恢复。
-					log.Printf("storage view 启动时跳过契约不一致的活动索引 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
+				if recovered && recoverErr == nil {
+					continue
 				}
+				// 一个索引对不上不能拖垮整个进程：这个 View 不挂接，其他 View 继续恢复。
+				log.Printf("storage view 启动时没能挂接活动索引 space=%s view=%s 契约=%v 补提交=%v", view.GetSpaceId(), view.GetViewId(), err, recoverErr)
+				s.holdUnattachedView(view)
 				continue
 			}
 			if err := s.AttachActiveView(ctx, view); err != nil {
@@ -470,24 +471,28 @@ func (s *Service) observeActivatedViewWatermark(view *pb.View, indexID string) {
 	s.observeViewWatermark(indexID, view.GetDatasetId(), keys, true)
 }
 
-func (s *Service) readActiveView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {
-	for pageNo := uint32(1); ; pageNo++ {
-		rsp, err := metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, SpaceId: spaceID, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
-		if err != nil {
-			return nil, err
-		}
-		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		for _, candidate := range rsp.GetViews() {
-			if candidate != nil && candidate.GetSpaceId() == spaceID && candidate.GetViewId() == viewID {
-				return candidate, nil
-			}
-		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
-			return nil, fmt.Errorf("active view %s/%s was not found", spaceID, viewID)
-		}
+func (s *Service) readView(ctx context.Context, metadata MetadataClient, auth *pb.AuthInfo, spaceID, viewID string) (*pb.View, error) {
+	rsp, err := metadata.GetView(ctx, &pb.GetViewReq{AuthInfo: auth, SpaceId: spaceID, ViewId: viewID})
+	if err != nil {
+		return nil, err
 	}
+	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+		return nil, err
+	}
+	return rsp.GetView(), nil
+}
+
+// holdUnattachedView 让没能挂接的 View 继续占着数据集映射。它的运行时没有写入目标，这个数据集的行事件保持未确认；
+// 否则同数据集上已挂接的 View 会把事件确认掉，这个 View 恢复后也补不回这些行。
+func (s *Service) holdUnattachedView(view *pb.View) {
+	key := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.views[key] == nil {
+		s.views[key] = newViewRuntime()
+	}
+	s.indexView[view.GetActiveIndexId()] = key
+	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), view.GetActiveIndexId())
 }
 
 // validatePhysicalViewContract 防止挂接到对不上元数据的物理索引：修订号和 schema 哈希以元数据为准。

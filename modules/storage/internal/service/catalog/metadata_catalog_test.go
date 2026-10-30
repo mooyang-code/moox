@@ -397,3 +397,15 @@ func TestDeleteOrdinaryDatasetPreservesExistingBehavior(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, 1, store.deleted)
 }
+
+// 列只能追加：数据集列被禁用后 View 里的这一列要留着，更新 View 时只校验新列。
+func TestNewViewColumnsSkipsDeclaredAndBuiltColumns(t *testing.T) {
+	view := &pb.View{
+		Columns:       []*pb.ViewColumn{{ColumnName: "declared"}},
+		ActiveColumns: []*pb.ViewColumn{{ColumnName: "built"}},
+	}
+	added := newViewColumns(view, []*pb.ViewColumn{{ColumnName: "declared"}, {ColumnName: "built"}, {ColumnName: "new"}})
+	require.Len(t, added, 1)
+	require.Equal(t, "new", added[0].GetColumnName())
+	require.Len(t, newViewColumns(nil, []*pb.ViewColumn{{ColumnName: "new"}}), 1, "新建 View 时所有列都是新列")
+}

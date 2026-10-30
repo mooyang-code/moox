@@ -197,7 +197,11 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if err != nil {
 		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 	}
-	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, view.GetColumns()); err != nil {
+	existing, err := s.metadata.GetView(ctx, spaceID, view.GetViewId())
+	if err != nil {
+		existing = nil // 新建 View 时还不存在，所有列都按新列校验
+	}
+	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, newViewColumns(existing, view.GetColumns())); err != nil {
 		return err
 	}
 	if freq := strings.TrimSpace(view.GetFreq()); freq != "" && freq != dataset.GetFreq() {
@@ -208,6 +212,21 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
 	view.Engine = defaultViewEngine(dataset.GetDataKind())
 	return nil
+}
+
+// newViewColumns 去掉 View 已有的列：列只能追加，数据集列被禁用后 View 里的这一列也要留着，所以只校验新列。
+func newViewColumns(view *pb.View, columns []*pb.ViewColumn) []*pb.ViewColumn {
+	existing := make(map[string]struct{}, len(view.GetColumns())+len(view.GetActiveColumns()))
+	for _, column := range append(append([]*pb.ViewColumn(nil), view.GetColumns()...), view.GetActiveColumns()...) {
+		existing[column.GetColumnName()] = struct{}{}
+	}
+	added := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		if _, ok := existing[column.GetColumnName()]; !ok {
+			added = append(added, column)
+		}
+	}
+	return added
 }
 
 // validateViewColumnsInDataset requires every dataset column of a View to
@@ -277,7 +296,7 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 	if err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), []*pb.ViewColumn{column}); err != nil {
+	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), newViewColumns(view, []*pb.ViewColumn{column})); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)

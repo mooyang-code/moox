@@ -35,7 +35,6 @@ const (
 	// 否则会反复触发「达到容量上限、重建只保留最新」。
 	DefaultMaxViewFileBytes = int64(4) << 30
 
-	maxBars = 1_000_000
 	// maxViewBars 是 View 每序列保留行数的上限，与读接口单次 latest_per_series 的上限一致，重建回填才能兑现配置。
 	maxViewBars = 10_000
 )

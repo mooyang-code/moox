@@ -20,7 +20,6 @@ import (
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"google.golang.org/protobuf/proto"
 )
@@ -42,7 +41,6 @@ type Service struct {
 	periodMetadata             PeriodMetadataClient
 	metadataClient             MetadataClient
 	readyPublisher             ReadyEventPublisher
-	consumerStates             map[string]func(context.Context) (jetstream.ConsumerState, error)
 	consumerBounds             map[string]func() bool
 	consumerPartitionByDataset map[datasetRef]string
 	indexGatesMu               sync.Mutex
@@ -187,7 +185,6 @@ func New(root, authSecret string) (*Service, error) {
 		indexGates:                 make(map[string]*indexWriteGate),
 		indexRevision:              make(map[string]uint64),
 		cleanupCandidates:          make(map[managedIndexRef]retiredIndexCandidate),
-		consumerStates:             make(map[string]func(context.Context) (jetstream.ConsumerState, error)),
 		consumerBounds:             make(map[string]func() bool),
 		consumerPartitionByDataset: make(map[datasetRef]string),
 		metrics:                    observability.DefaultViewMetrics,

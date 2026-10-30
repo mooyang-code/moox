@@ -134,15 +134,11 @@ type ViewMetricsSnapshot struct {
 // Storage View durable. It is intentionally keyed only by configured
 // partition id, never by dataset or subject.
 type ConsumerPartitionSnapshot struct {
-	PartitionID      string
-	Durable          string
-	Bound            bool
-	LagMessages      int64
-	Pending          uint64
-	AckPending       uint64
-	OldestPendingAge time.Duration
-	LastDeliveryAt   time.Time
-	backlogSince     time.Time
+	PartitionID    string
+	Durable        string
+	Bound          bool
+	LagMessages    int64
+	LastDeliveryAt time.Time
 }
 
 func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
@@ -675,41 +671,13 @@ func (m *ViewMetrics) AddConsumerPartitionLag(partition, durable string, delta i
 	m.consumerPartitionLag.WithLabelValues(partition, durable).Set(float64(lag))
 }
 
-func (m *ViewMetrics) SetConsumerPartitionBacklog(partition, durable string, pending, ackPending uint64) {
-	if m == nil || strings.TrimSpace(partition) == "" {
-		return
-	}
-	partition = strings.TrimSpace(partition)
-	durable = strings.TrimSpace(durable)
-	m.partitionMu.Lock()
-	state := m.partitionStates[partition]
-	state.PartitionID = partition
-	state.Durable = durable
-	state.Pending = pending
-	state.AckPending = ackPending
-	if pending+ackPending > 0 && state.backlogSince.IsZero() {
-		state.backlogSince = time.Now().UTC()
-	}
-	if pending+ackPending == 0 {
-		state.backlogSince = time.Time{}
-		state.OldestPendingAge = 0
-	}
-	m.partitionStates[partition] = state
-	m.partitionMu.Unlock()
-}
-
 func (m *ViewMetrics) ConsumerPartitionsSnapshot() []ConsumerPartitionSnapshot {
 	if m == nil {
 		return nil
 	}
 	m.partitionMu.RLock()
 	result := make([]ConsumerPartitionSnapshot, 0, len(m.partitionStates))
-	now := time.Now().UTC()
 	for _, state := range m.partitionStates {
-		if !state.backlogSince.IsZero() && now.After(state.backlogSince) {
-			state.OldestPendingAge = now.Sub(state.backlogSince)
-		}
-		state.backlogSince = time.Time{}
 		result = append(result, state)
 	}
 	m.partitionMu.RUnlock()

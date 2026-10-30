@@ -38,6 +38,11 @@ func (c *directMetadataClient) ListViews(ctx context.Context, request *pb.ListVi
 	return c.proxy.ListViews(ctx, request, options...)
 }
 
+func (c *directMetadataClient) GetView(ctx context.Context, request *pb.GetViewReq, options ...client.Option) (*pb.GetViewRsp, error) {
+	request.AuthInfo = c.auth()
+	return c.proxy.GetView(ctx, request, options...)
+}
+
 func (c *directMetadataClient) GetDataset(ctx context.Context, request *pb.GetDatasetReq, options ...client.Option) (*pb.GetDatasetRsp, error) {
 	request.AuthInfo = c.auth()
 	return c.proxy.GetDataset(ctx, request, options...)

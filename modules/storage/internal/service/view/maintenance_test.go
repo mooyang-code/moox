@@ -32,6 +32,9 @@ type maintenanceMetadata struct {
 func (m *maintenanceMetadata) ListViews(context.Context, *pb.ListViewsReq, ...client.Option) (*pb.ListViewsRsp, error) {
 	return &pb.ListViewsRsp{RetInfo: successRetInfo(), Views: []*pb.View{m.view}, PageResult: &pb.PageResult{Page: 1, Size: 100}}, nil
 }
+func (m *maintenanceMetadata) GetView(context.Context, *pb.GetViewReq, ...client.Option) (*pb.GetViewRsp, error) {
+	return &pb.GetViewRsp{RetInfo: successRetInfo(), View: proto.Clone(m.view).(*pb.View)}, nil
+}
 func (m *maintenanceMetadata) GetDataset(_ context.Context, req *pb.GetDatasetReq, _ ...client.Option) (*pb.GetDatasetRsp, error) {
 	kind := pb.DataKind_DATA_KIND_RECORD
 	if req.GetDatasetId() == "prices" {
@@ -398,5 +401,25 @@ func TestMaintenanceStatsActiveIndexBeforeAttachingIt(t *testing.T) {
 	}
 	if _, exists := svc.indexEngine["prices-a"]; exists {
 		t.Fatal("invalid active index mapping remains attached")
+	}
+}
+
+// 共用数据集时，没能挂接的 View 要让行事件保持未确认：否则已挂接的 View 把事件确认掉，这个 View 恢复后补不回这些行。
+func TestUnattachedViewHoldsDatasetEvents(t *testing.T) {
+	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.engines["bleve"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, ViewVersion: 1, SchemaHash: "old"}}
+	metadata := &maintenanceMetadata{view: &pb.View{
+		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "market",
+		ActiveIndexId: "prices-a", ViewRevision: 2, ActiveViewSchemaHash: "new",
+	}}
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
+		t.Fatal(err)
+	}
+	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
+	if err := svc.applyDatasetEvent(context.Background(), "space", "market", []*pb.RowFieldUpsert{row}); err == nil || !strings.Contains(err.Error(), "尚未就绪") {
+		t.Fatalf("未挂接的 View 应当让事件保持未确认，err=%v", err)
 	}
 }
