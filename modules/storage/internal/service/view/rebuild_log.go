@@ -91,6 +91,71 @@ func (s *Service) finishRunningRebuildLog(ctx context.Context, opts MaintenanceO
 	return found, updated, true
 }
 
+// errRebuildSuperseded 是被新构建取代、没有跑完的旧构建写进重建日志的结束原因。
+var errRebuildSuperseded = errors.New("构建被新的构建取代，未完成")
+
+// closeSupersededRebuildLogs 在认领新构建成功后，结束同一 View 下其他构建遗留的进行中日志。
+// 认领成功说明元数据里已没有别的在途构建；而新版本的认领会覆盖还没结束的构建记录，修改 View 定义也会删掉失败的构建记录，
+// 这些构建的日志此后再没有人收尾，会一直显示进行中。已排进重试队列的日志留给重试去写真实结果。
+// 激活事务提交后、写结束日志前进程退出（或激活后本地切换失败）时，日志也会留在进行中，但那个构建已经是活动索引：
+// 按 View 属性 moox.active_build_id 认出它，记为成功，不能写成被取代。
+// 这只是审计收尾：查询失败就留到下一次认领。
+func (s *Service) closeSupersededRebuildLogs(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View, buildID string) {
+	client, ok := opts.Metadata.(rebuildLogMetadataClient)
+	if !ok || view == nil || strings.TrimSpace(buildID) == "" {
+		return
+	}
+	// 先收集再逐条结束：边翻页边结束会让进行中的集合缩小，后面的页会漏掉。
+	var stale []*pb.ViewRebuildLog
+	for page := uint32(1); ; page++ {
+		rsp, err := client.ListViewRebuildLogs(ctx, &pb.ListViewRebuildLogsReq{
+			AuthInfo: auth, SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(),
+			Result: pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING,
+			Page:   &pb.Page{Page: page, Size: 100},
+		})
+		if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			return
+		}
+		for _, item := range rsp.GetLogs() {
+			if item == nil || item.GetBuildId() == buildID || item.GetResult() != pb.ViewRebuildResult_VIEW_REBUILD_RESULT_RUNNING || s.rebuildLogRetryPending(item) {
+				continue
+			}
+			stale = append(stale, item)
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetLogs()) == 0 {
+			break
+		}
+	}
+	activeBuildID := strings.TrimSpace(view.GetAttributes()[coremetadata.ActiveBuildIDAttribute])
+	for _, item := range stale {
+		if activeBuildID != "" && item.GetBuildId() == activeBuildID {
+			log.Printf("storage view 补记已激活构建的重建日志为成功 space=%s view=%s build=%s log=%d", item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetLogId())
+			s.finishRebuildLog(ctx, opts, auth, item, pb.ViewRebuildResult_VIEW_REBUILD_RESULT_SUCCEEDED, item.GetEntriesWritten(), nil)
+			continue
+		}
+		log.Printf("storage view 结束被取代构建的进行中重建日志 space=%s view=%s build=%s log=%d new_build=%s", item.GetSpaceId(), item.GetViewId(), item.GetBuildId(), item.GetLogId(), buildID)
+		s.finishRebuildLog(ctx, opts, auth, item, pb.ViewRebuildResult_VIEW_REBUILD_RESULT_FAILED, item.GetEntriesWritten(), errRebuildSuperseded)
+	}
+}
+
+// rebuildLogRetryPending 报告这条日志是否已在重试队列里等着写入真实结果（按日志 ID，或按构建查找日志的占位项）。
+func (s *Service) rebuildLogRetryPending(item *pb.ViewRebuildLog) bool {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	for _, entry := range s.rebuildLogRetry {
+		if entry.item != nil {
+			if entry.item.GetLogId() == item.GetLogId() {
+				return true
+			}
+			continue
+		}
+		if entry.view != nil && entry.view.GetSpaceId() == item.GetSpaceId() && entry.view.GetViewId() == item.GetViewId() && entry.buildID == item.GetBuildId() {
+			return true
+		}
+	}
+	return false
+}
+
 const maxRebuildLogRetries = 256
 
 func rebuildLogRetryKey(item *pb.ViewRebuildLog) string {

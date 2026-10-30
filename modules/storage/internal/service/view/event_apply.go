@@ -299,8 +299,16 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 					runtime.mu.Unlock()
 					return errors.Join(err, failErr)
 				}
+				// 活动索引已经写成功、仍是权威索引：只丢弃替换构建，View 继续按活动索引服务。
+				// 构建身份一并清掉，避免下一次准备替换索引时，实时写入拿旧 buildID 重复持久化失败。
 				runtime.next = ""
-				runtime.status = "failed"
+				runtime.nextDatasetIDs = nil
+				runtime.nextPrimaryDatasetID = ""
+				runtime.buildFailed = false
+				runtime.buildID = ""
+				runtime.ownerID = ""
+				runtime.buildCancel = nil
+				runtime.status = "active"
 				runtime.mu.Unlock()
 				s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
 				continue

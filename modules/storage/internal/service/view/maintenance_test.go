@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -190,8 +191,8 @@ func TestViewBarsComeFromThePolicyForTimeSeriesViews(t *testing.T) {
 	if got := viewBars(&pb.View{Freq: "1m"}, MaintenanceOptions{Bars: 4320}); got != 4320 {
 		t.Fatalf("time-series View bars = %d, want the policy 4320", got)
 	}
-	if got := viewBars(&pb.View{Freq: "1h"}, MaintenanceOptions{}); got != defaultViewBars {
-		t.Fatalf("time-series View bars without a policy = %d, want %d", got, defaultViewBars)
+	if got := viewBars(&pb.View{Freq: "1h"}, MaintenanceOptions{}); got != storagepolicy.DefaultViewBars {
+		t.Fatalf("time-series View bars without a policy = %d, want %d", got, storagepolicy.DefaultViewBars)
 	}
 	if got := viewBars(&pb.View{Engine: "bleve"}, MaintenanceOptions{Bars: 4320}); got != 0 {
 		t.Fatalf("record View bars = %d, want 0 (keeps every row)", got)

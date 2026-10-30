@@ -17,8 +17,11 @@ import (
 // 所以上限应当按“能装下最大的那个索引在重建时的工作集”来定，而不是按“索引个数 × 上限”。
 //
 // 线上出现过一次：256MB 的上限在重建一个 211MB 的索引（历史回填、激活探测）时被顶满，
-// 报 Out of Memory Error: failed to pin block。索引文件超过 max_view_file_bytes（默认 1GiB）才会触发容量重建，
-// 一个索引正常可以长到 1GiB，重建它需要的内存约为文件大小的 1 到 1.5 倍，所以上限放到 2GB。
+// 报 Out of Memory Error: failed to pin block。上限够用时 DuckDB 会淘汰缓存，重建内存不随文件线性增长：
+// 用线上 523 个序列、34 列的 1m 因子索引实测，按重建的真实写法回填到每序列 1 万根（文件 1.67GB），
+// 967MB 上限下峰值 909MB、没有溢出。
+// 索引大小由 View 维护的根数裁剪封顶：每个序列超过 trim_bars 根就重建回 bars 根（默认 1 万根）；
+// max_view_file_bytes（默认 4GiB）只是兜底，正常到不了。上限封顶 2GB，16GB 主机上按 1/16 取到约 1GB。
 const (
 	memoryLimitDivisor = 16
 	// DuckDB 在每线程 125MB 以下难以完成检查点和较大的写入批次，所以小内存主机也不低于 128MB。
