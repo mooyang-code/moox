@@ -368,13 +368,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import {
-  listAllDatasets,
-  listAllViews,
-  listDatasetColumns,
-  listAllViewColumns,
-  listFields
-} from "@/api/storage/metadata";
+import { listAllDatasets, listAllViews, listDatasetColumns, listAllViewColumns, listFields } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
 import type {
   Dataset,
