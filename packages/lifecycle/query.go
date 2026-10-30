@@ -35,6 +35,17 @@ func (c *Controller) StageSince(ref Ref) time.Time {
 	return time.Time{}
 }
 
+// ModuleWaiting 报告模块自身是否只是暂时未就绪：刚启动、检查还没跑完，或检查有失败项（例如出站连接还在建立），
+// 而且没有暂停、重置等控制意图。调用方据此让到达的输入稍后重试，而不是像暂停那样直接丢弃。
+func (c *Controller) ModuleWaiting() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.self.Hold != HoldNone {
+		return false
+	}
+	return c.self.Stage == StageUninitialized || c.self.Stage == StageNotReady
+}
+
 // moduleOpen 报告模块自身是否放行实时计算：没有控制意图，且自身阶段是就绪、预热或运行。
 // 自身未初始化、未就绪、暂停、恢复追赶、重置、故障时一律不放行，不沿用「本来就不计算」的隐含假设。
 // 调用方持有锁。

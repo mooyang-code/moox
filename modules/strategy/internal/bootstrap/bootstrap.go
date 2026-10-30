@@ -174,6 +174,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	go func() {
 		defer loops.Done()
 		life.Recover(background)
+		refreshUntilReady(background, life, lifecycleStartupRefreshEvery, lifecycleStartupWindow)
 		life.Run(background, lifecycleRefreshEvery)
 	}()
 
@@ -206,9 +207,12 @@ const (
 	factorTaskReadyStep = 3 * time.Second
 )
 
-// paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），其余模式照常。
+// paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），模块暂时未就绪时也不提交（ModeWait），其余模式照常。
 func paramSubmitAllowed(gate func(string) trigger.Mode) func(string) bool {
-	return func(instanceID string) bool { return gate(instanceID) != trigger.ModeOff }
+	return func(instanceID string) bool {
+		mode := gate(instanceID)
+		return mode != trigger.ModeOff && mode != trigger.ModeWait
+	}
 }
 
 func reconcileLoop(ctx context.Context, service *rpc.Service) {

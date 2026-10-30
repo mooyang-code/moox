@@ -567,3 +567,28 @@ func TestAutoAdvanceConfirmsWarmingObjectsWhenHookAgrees(t *testing.T) {
 	require.Equal(t, StagePaused, c.Stage(set1))
 	require.Empty(t, asked)
 }
+
+// 模块自身刚启动（未初始化）或检查有失败项时是“暂时未就绪”；检查通过、或有暂停等控制意图时不是。
+func TestModuleWaiting(t *testing.T) {
+	f := newFake()
+	c := newController(t, f, "")
+	ctx := context.Background()
+	require.True(t, c.ModuleWaiting(), "还没做第一次检查")
+
+	f.mu.Lock()
+	f.module = []Check{fail("EventBus", "出站 EventBus 未连接")}
+	f.mu.Unlock()
+	c.Refresh(ctx)
+	require.Equal(t, StageNotReady, c.Stage(Ref{}))
+	require.True(t, c.ModuleWaiting(), "检查失败时暂时未就绪")
+
+	f.mu.Lock()
+	f.module = []Check{pass("EventBus")}
+	f.mu.Unlock()
+	c.Refresh(ctx)
+	require.False(t, c.ModuleWaiting(), "检查通过后就绪")
+
+	_, err := c.Command(ctx, CmdPause, Ref{})
+	require.NoError(t, err)
+	require.False(t, c.ModuleWaiting(), "人工暂停不是暂时未就绪")
+}

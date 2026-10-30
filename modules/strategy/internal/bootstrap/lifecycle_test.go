@@ -30,10 +30,18 @@ func TestTriggerGateFollowsLifecycleStage(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := triggerGate(life)
+	ctx := context.Background()
+	// 模块自身还没做第一次检查：暂时未就绪，事件稍后重投，不能丢弃。
+	if gate("i1") != trigger.ModeWait {
+		t.Fatal("模块还没检查时应让事件稍后重投")
+	}
+	if paramSubmitAllowed(gate)("i1") {
+		t.Fatal("模块暂时未就绪时不提交参数")
+	}
+	life.Refresh(ctx)
 	if gate("i1") != trigger.ModeOff {
 		t.Fatal("未初始化的实例不应求值")
 	}
-	ctx := context.Background()
 	ref := instanceRef("i1")
 	// 没有启用的实例：检查不过，实例不会就绪。
 	obj, err := life.Command(ctx, lifecycle.CmdInit, ref)
@@ -157,5 +165,76 @@ func TestWaitOutboxDrainedWaitsForPublishAndReportsTimeout(t *testing.T) {
 	err := waitOutboxDrained(ctx, &fakeOutbox{counts: []int{2}})
 	if err == nil || !strings.Contains(err.Error(), "还有 2 个目标没有发布到 EventBus") {
 		t.Fatalf("超时应报出剩余数量：%v", err)
+	}
+}
+
+// 模块自身检查失败（例如重启后出站 EventBus 还没连上）：事件稍后重投而不是丢弃；检查恢复后照常求值。
+// 启动期快速检查在模块就绪后立即返回，不用等满常规周期。
+func TestTriggerGateWaitsWhileModuleNotReadyAndStartupRefreshReleasesQuickly(t *testing.T) {
+	ref := instanceRef("i1")
+	var connected atomic.Bool
+	life, err := lifecycle.New(lifecycle.Options{Module: "strategy", Hooks: lifecycle.Hooks{
+		CheckModule: func(context.Context) []lifecycle.Check {
+			if connected.Load() {
+				return []lifecycle.Check{{Name: "EventBus", Status: lifecycle.CheckPass}}
+			}
+			return []lifecycle.Check{{Name: "EventBus", Status: lifecycle.CheckFail, Message: "出站 EventBus 未连接"}}
+		},
+		Objects:     func() []lifecycle.Ref { return []lifecycle.Ref{ref} },
+		CheckObject: func(context.Context, lifecycle.Ref) []lifecycle.Check { return nil },
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	connected.Store(true)
+	life.Refresh(ctx)
+	for _, cmd := range []lifecycle.Command{lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm} {
+		if _, err := life.Command(ctx, cmd, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gate := triggerGate(life)
+	if gate("i1") != trigger.ModeLive {
+		t.Fatal("模块与实例都就绪时正式求值")
+	}
+
+	connected.Store(false)
+	life.Refresh(ctx)
+	if gate("i1") != trigger.ModeWait {
+		t.Fatal("模块检查失败时应让事件稍后重投")
+	}
+
+	// 一秒后连上：启动期快速检查应在窗口内放行。
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		connected.Store(true)
+	}()
+	began := time.Now()
+	refreshUntilReady(ctx, life, 10*time.Millisecond, 5*time.Second)
+	if life.ModuleWaiting() || time.Since(began) > 2*time.Second {
+		t.Fatalf("连上后应很快放行：仍在等待=%v 用时=%s", life.ModuleWaiting(), time.Since(began))
+	}
+	if gate("i1") != trigger.ModeLive {
+		t.Fatal("模块恢复后实例回到正式求值")
+	}
+
+	// 窗口内一直没连上：到点退出，交给常规周期。
+	connected.Store(false)
+	life.Refresh(ctx)
+	began = time.Now()
+	refreshUntilReady(ctx, life, 10*time.Millisecond, 100*time.Millisecond)
+	if !life.ModuleWaiting() || time.Since(began) > time.Second {
+		t.Fatalf("超过窗口应退出：仍在等待=%v 用时=%s", life.ModuleWaiting(), time.Since(began))
+	}
+
+	// 人工暂停模块：不是暂时未就绪，按暂停处理（不求值、不重投）。
+	connected.Store(true)
+	life.Refresh(ctx)
+	if _, err := life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{}); err != nil {
+		t.Fatal(err)
+	}
+	if gate("i1") != trigger.ModeOff {
+		t.Fatal("模块暂停时不求值，也不让事件重投")
 	}
 }
