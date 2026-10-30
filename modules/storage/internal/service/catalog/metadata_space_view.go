@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
@@ -314,5 +315,26 @@ func (s *Service) ListViewColumns(ctx context.Context, req *pb.ListViewColumnsRe
 	if err != nil {
 		return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	if req.GetViewId() != "" {
+		view, err := s.metadata.GetView(ctx, req.GetSpaceId(), req.GetViewId())
+		if err != nil {
+			return &pb.ListViewColumnsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		}
+		items = visibleViewColumns(items, view.GetHiddenColumns())
+	}
 	return &pb.ListViewColumnsRsp{RetInfo: retinfo.Success("success"), Columns: items, PageResult: page}, nil
+}
+
+// visibleViewColumns 去掉逻辑上已删除的列。
+func visibleViewColumns(columns []*pb.ViewColumn, hidden []string) []*pb.ViewColumn {
+	if len(hidden) == 0 {
+		return columns
+	}
+	visible := make([]*pb.ViewColumn, 0, len(columns))
+	for _, column := range columns {
+		if !slices.Contains(hidden, column.GetColumnName()) {
+			visible = append(visible, column)
+		}
+	}
+	return visible
 }

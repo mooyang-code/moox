@@ -364,6 +364,10 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 	}
 	runtime.active = view.GetActiveIndexId()
 	runtime.building = ""
+	runtime.hiddenColumns = make(map[string]struct{}, len(view.GetHiddenColumns()))
+	for _, name := range view.GetHiddenColumns() {
+		runtime.hiddenColumns[name] = struct{}{}
+	}
 	runtime.publishReadStateLocked()
 	s.indexView[view.GetActiveIndexId()] = viewKey
 	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), view.GetActiveIndexId())

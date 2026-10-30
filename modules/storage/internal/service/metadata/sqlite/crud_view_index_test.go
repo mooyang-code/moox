@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -226,5 +227,48 @@ func TestViewDefinitionIsImmutable(t *testing.T) {
 	grain.GrainKeys = append(grain.GrainKeys, "extra")
 	if _, err := store.UpsertView(ctx, grain); err == nil {
 		t.Fatal("改主键维度应当被拒绝")
+	}
+}
+
+// 列被禁用，或引用的字段不再启用，都算逻辑上已删除：随 View 下发，View 的列定义不变。
+func TestViewReportsHiddenDatasetColumns(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO t_field_groups (c_space_id, c_group_id, c_name) VALUES ('space', 'hidden-group', '分组')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO t_fields (c_space_id, c_field_id, c_group_id, c_name, c_value_type, c_status) VALUES ('space', 'gone', 'hidden-group', '已删', 'double', 'deleted')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []struct{ name, originType, originID, status string }{
+		{"kept", "custom", "", "active"},
+		{"disabled_column", "custom", "", "disabled"},
+		{"gone", "field", "gone", "active"},
+	} {
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO t_dataset_columns (c_space_id, c_dataset_id, c_column_name, c_origin_type, c_origin_id, c_value_type, c_status) VALUES ('space', 'prices', ?, ?, ?, 'double', ?)`, column.name, column.originType, column.originID, column.status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	view, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(view.GetHiddenColumns(), []string{"disabled_column", "gone"}) {
+		t.Fatalf("hidden_columns = %v", view.GetHiddenColumns())
+	}
+	views, _, err := store.ListViews(ctx, "space", "prices", "", nil)
+	if err != nil || len(views) != 1 || !slices.Equal(views[0].GetHiddenColumns(), view.GetHiddenColumns()) {
+		t.Fatalf("ListViews = %v err=%v", views, err)
+	}
+	// 客户端带回的值不落库，读取时总是重新计算。
+	if _, err := store.UpsertView(ctx, view); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := store.db.QueryRowContext(ctx, `SELECT c_attrs_json FROM t_views WHERE c_view_id = 'source-view'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "hidden_columns") {
+		t.Fatalf("hidden_columns 不应落库：%s", raw)
 	}
 }

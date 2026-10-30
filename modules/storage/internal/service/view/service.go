@@ -88,7 +88,7 @@ type viewRuntime struct {
 	statsIndexID     string
 	stats            viewindex.ViewIndexStats
 	statsRefreshedAt time.Time
-	// hiddenColumns 是数据集里被禁用的列：只在返回结果时过滤，索引和已写入的值都不动。
+	// hiddenColumns 是逻辑上已删除的列（元数据随 View 下发）：只在返回结果时过滤，索引和已写入的值都不动。
 	hiddenColumns map[string]struct{}
 	// readState is a lock-free copy of what queries need. A delivery holds mu
 	// for its whole index write (seconds for a large factor batch), so queries

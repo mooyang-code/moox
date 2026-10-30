@@ -258,6 +258,7 @@ export interface View {
   attributes?: Record<string, string>;
   view_revision?: number | string;
   active_columns?: ViewColumn[];
+  hidden_columns?: string[];
 }
 
 export interface ViewColumn {

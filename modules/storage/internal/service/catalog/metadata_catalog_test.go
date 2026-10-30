@@ -409,3 +409,11 @@ func TestNewViewColumnsSkipsDeclaredAndBuiltColumns(t *testing.T) {
 	require.Equal(t, "new", added[0].GetColumnName())
 	require.Len(t, newViewColumns(nil, []*pb.ViewColumn{{ColumnName: "new"}}), 1, "新建 View 时所有列都是新列")
 }
+
+func TestVisibleViewColumnsHidesLogicallyDeletedColumns(t *testing.T) {
+	columns := []*pb.ViewColumn{{ColumnName: "close"}, {ColumnName: "old"}}
+	visible := visibleViewColumns(columns, []string{"old"})
+	require.Len(t, visible, 1)
+	require.Equal(t, "close", visible[0].GetColumnName())
+	require.Len(t, visibleViewColumns(columns, nil), 2)
+}

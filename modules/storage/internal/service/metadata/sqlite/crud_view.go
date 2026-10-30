@@ -73,6 +73,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		next.Attributes["moox.columns_explicit"] = "true"
 	}
 	next.Columns = nil
+	next.HiddenColumns = nil
 	next.Status = defaultStatus(next.GetStatus())
 	if strings.TrimSpace(next.Engine) == "" {
 		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
@@ -210,7 +211,34 @@ func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb
 		return nil, err
 	}
 	view.Columns = columns
+	if view.HiddenColumns, err = s.hiddenDatasetColumns(ctx, spaceID, view.GetDatasetId()); err != nil {
+		return nil, err
+	}
 	return view, nil
+}
+
+// hiddenDatasetColumns 返回数据集里逻辑上已删除的列：列本身被禁用，或它引用的字段不再启用。
+func (s *Store) hiddenDatasetColumns(ctx context.Context, spaceID, datasetID string) ([]string, error) {
+	rows, err := s.queryDB(ctx).QueryContext(ctx, `
+		SELECT dc.c_column_name
+		FROM t_dataset_columns dc
+		LEFT JOIN t_fields f ON dc.c_origin_type = 'field' AND f.c_space_id = dc.c_space_id AND f.c_field_id = dc.c_origin_id
+		WHERE dc.c_space_id = ? AND dc.c_dataset_id = ?
+		  AND (dc.c_status <> 'active' OR COALESCE(f.c_status, 'active') <> 'active')
+		ORDER BY dc.c_column_name`, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hidden []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		hidden = append(hidden, name)
+	}
+	return hidden, rows.Err()
 }
 
 func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string, status string, page *pb.Page) ([]*pb.View, *pb.PageResult, error) {
@@ -236,6 +264,9 @@ func (s *Store) ListViews(ctx context.Context, spaceID string, datasetID string,
 			return nil, nil, err
 		}
 		item.Columns = columns
+		if item.HiddenColumns, err = s.hiddenDatasetColumns(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
+			return nil, nil, err
+		}
 	}
 	return items, pageResult, nil
 }

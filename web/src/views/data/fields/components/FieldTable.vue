@@ -43,9 +43,7 @@
       >
       <a-table-column title="状态" data-index="status" :width="100">
         <template #cell="{ record }"
-          ><a-tag size="small" :color="statusColor(record.status)">{{
-            record.status === "active" ? "启用" : "停用"
-          }}</a-tag></template
+          ><a-tag size="small" :color="statusColor(record.status)">{{ fieldStatusText(record.status) }}</a-tag></template
         >
       </a-table-column>
       <a-table-column title="更新时间" data-index="updated_at" :width="180" sorter>
@@ -69,6 +67,11 @@
 import type { Field, FieldGroup } from "@/api/storage/types";
 import { displayFieldId, fieldValueTypeOptions, formatTime, optionLabel, statusColor } from "@/views/data/shared/metadata-utils";
 import { groupPath } from "../field-workbench";
+
+function fieldStatusText(status?: string) {
+  if (status === "active") return "启用";
+  return status === "deleted" ? "已删除" : "停用";
+}
 
 const props = defineProps<{
   rows: Field[];

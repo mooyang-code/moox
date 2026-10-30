@@ -68,6 +68,8 @@ message View {
   string indexed_from = 24;
   // indexed_to 是当前索引实际覆盖的最大业务时间或版本。
   string indexed_to = 25;
+  // hidden_columns 是数据集里被禁用或所引用字段已停用、删除的列，由 Storage 计算：列和数据都保留，只在返回结果和列清单时隐藏。
+  repeated string hidden_columns = 26;
 }
 
 // ViewColumn 定义 View 对用户暴露的一列。
