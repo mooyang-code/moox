@@ -26,6 +26,8 @@ type rpcFakeGateway struct {
 	// bodies 记录每个方法最后一次请求体，methods 记录调用顺序。
 	bodies  map[string][]byte
 	methods []string
+	// invokes 记录 pb 方式调用（Invoke）的方法名。
+	invokes []string
 	calls   int
 	closed  bool
 }
@@ -43,8 +45,11 @@ func (g *rpcFakeGateway) Forward(_ context.Context, service, method string, _ in
 	}
 	return []byte(g.response), nil
 }
-func (g *rpcFakeGateway) Invoke(context.Context, string, string, any, any) error { return nil }
-func (g *rpcFakeGateway) Close() error                                           { g.closed = true; return nil }
+func (g *rpcFakeGateway) Invoke(_ context.Context, _, method string, _, _ any) error {
+	g.invokes = append(g.invokes, method)
+	return nil
+}
+func (g *rpcFakeGateway) Close() error { g.closed = true; return nil }
 
 func useRPCGateway(t *testing.T, gateway *rpcFakeGateway) {
 	t.Helper()

@@ -115,13 +115,23 @@ func init() {
 			return runSystemStatus(cmd.Context(), systemFlags, cmd.OutOrStdout())
 		},
 	})
+	var pauseYes bool
 	pause := &cobra.Command{
-		Use: "pause", Short: "系统暂停：下游到上游逐个暂停", Args: cobra.NoArgs,
+		Use: "pause", Short: "系统暂停：下游到上游逐个暂停（默认只预览，--yes 才执行）", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !pauseYes {
+				// 暂停顺序是下游到上游，预览按这个顺序列出。
+				var modules []string
+				for _, module := range systemFlags.orchestrator(nil).Modules {
+					modules = append([]string{module.Name}, modules...)
+				}
+				return writePreview(cmd, map[string]any{"action": "system_pause", "modules": modules, "reason": systemFlags.Reason})
+			}
 			return runSystemPause(cmd.Context(), systemFlags, cmd.OutOrStdout())
 		},
 	}
 	pause.Flags().StringVar(&systemFlags.Reason, "reason", "", "暂停原因（写进暂停详情）")
+	pause.Flags().BoolVar(&pauseYes, "yes", false, "确认暂停；不加只预览将要暂停的模块")
 	systemCmd.AddCommand(pause)
 	resume := &cobra.Command{
 		Use: "resume", Short: "系统恢复：先追赶补采，全部追平后统一放行", Args: cobra.NoArgs,

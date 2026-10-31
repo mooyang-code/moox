@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -125,11 +127,15 @@ type moduleHealthRequest struct {
 
 // resolveModuleHealth 按 moox.toml 解析模块的健康端点并装好密钥环境变量；测试里替换。
 var resolveModuleHealth = func(ctx context.Context, request moduleHealthRequest) (*moduleHealth, error) {
+	// setupconfig.Load 读不到文件时的错误没有包装 os.ErrNotExist，所以先自己判断文件在不在：
+	// 直接在模块所在的主机上运行时没有 moox.toml，要退回本机地址而不是报错。
+	if absolute, err := filepath.Abs(defaultFlag(request.File, defaultSetupFile)); err == nil {
+		if _, statErr := os.Stat(absolute); errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", errManifestUnavailable, absolute)
+		}
+	}
 	remote, err := openHostRemote(request.File, "", nil)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: %v", errManifestUnavailable, err)
-		}
 		return nil, err
 	}
 	return resolveModuleHealthWith(ctx, remote, request)
@@ -163,6 +169,10 @@ func resolveModuleHealthWith(ctx context.Context, remote *hostRemote, request mo
 		}
 		host := remote.manifest.ComponentHost(module.Component)
 		if host == "" {
+			if hosts := componentHosts(remote.manifest, module.Component); len(hosts) > 1 {
+				health.Close()
+				return nil, fmt.Errorf("%s 部署在多台主机上（%s），不能自动选择，请用 --endpoint（或该命令的地址参数）显式指定", name, strings.Join(hosts, "、"))
+			}
 			health.NotDeployed = append(health.NotDeployed, name)
 			continue
 		}
@@ -205,6 +215,18 @@ func resolveModuleHealthWith(ctx context.Context, remote *hostRemote, request mo
 // 所以只能出站、没法 SSH 的主机（例如局域网里的因子机），密钥可以从控制机上的文件读到。
 // 模块各自的重置专用密钥不在这里，只能从模块自己的主机读，或由用户用环境变量给出。
 var healthSecretFallbacks = []string{"monitor", "collector", "strategy", "admin"}
+
+// componentHosts 列出部署了某个组件的全部主机（已排序）。
+func componentHosts(manifest setupconfig.Manifest, component string) []string {
+	var hosts []string
+	for host, components := range manifest.Deployments {
+		if slices.Contains(components, component) {
+			hosts = append(hosts, host)
+		}
+	}
+	slices.Sort(hosts)
+	return hosts
+}
 
 // readHealthSecrets 经 SSH 读取模块的健康密钥：先试模块所在主机（只能出站的主机跳过），再借用控制机上的文件；
 // 第一个能解析出密钥的为准。
@@ -336,5 +358,3 @@ func resolveSingleModuleEndpoint(ctx context.Context, file, module string, gener
 	}
 	return "", fmt.Errorf("moox.toml 里没有部署 %s", module)
 }
-
-func errorsIsManifestUnavailable(err error) bool { return errors.Is(err, errManifestUnavailable) }

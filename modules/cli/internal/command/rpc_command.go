@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,9 +24,15 @@ import (
 
 // gatewayCallDenied 是 gateway call 拒绝的方法：它们的响应含明文密钥或完整 webhook，
 // 不能经由通用入口流入 Agent 的对话。专用命令在进程内使用这些值，不会打印。
+const secretWriteDenied = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作；明文不经过 Agent，误删也无法恢复"
+
 var gatewayCallDenied = map[string]string{
 	"trpc.moox.ops.SecretMgr/GetSecretValue":                "返回密钥明文；云账户等凭证由专用命令在进程内使用，需要查看请到管理台“设置 › 密钥”",
 	"trpc.moox.monitor.MonitorMgr/ListNotificationChannels": "返回完整 webhook 地址；查看告警渠道用 moox-cli config notification（地址已打码）",
+	"trpc.moox.ops.SecretMgr/CreateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/UpdateSecret":                  secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/ToggleSecretStatus":            secretWriteDenied,
+	"trpc.moox.ops.SecretMgr/DeleteSecret":                  secretWriteDenied,
 }
 
 // rpcBusinessError 是服务返回了业务失败（ret_info.code 非成功）。响应已经打印，这里只负责非 0 退出。
@@ -126,7 +133,7 @@ type rpcFlag struct {
 	Kind      rpcFlagKind
 	Usage     string
 	Required  bool   // 请求里没有该字段（--data 也没给）时报错
-	Default   string // 非空时未显式传入也写入
+	Default   string // 只用于字符串参数：非空时未显式传入也写入（并作为帮助里的默认值）
 }
 
 type rpcPageStyle int
@@ -138,19 +145,95 @@ const (
 )
 
 type rpcSpec struct {
-	Path        []string // 命令路径，如 {"factor", "task", "list"}
-	Short       string
-	Service     string // 完整服务名，如 trpc.moox.factor.FactorMgr
-	Method      string
-	Flags       []rpcFlag
-	Page        rpcPageStyle
-	SpaceField  string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
-	NoSpace     bool     // 空间无关的方法不加 --space-id
-	Host        bool     // 加 --host，指定调用哪台主机上的服务
-	Destructive bool     // 默认只预览，--yes 才执行
-	AutoIDs     []string // 请求里缺省时自动生成随机 ID 的字段
+	Path         []string // 命令路径，如 {"factor", "task", "list"}
+	Short        string
+	Service      string // 完整服务名，如 trpc.moox.factor.FactorMgr
+	Method       string
+	Flags        []rpcFlag
+	Page         rpcPageStyle
+	SpaceField   string   // 非空时 --space-id 也写入这个请求字段（通常是 space_id）
+	NoSpace      bool     // 空间无关的方法不加 --space-id
+	Host         bool     // 加 --host，指定调用哪台主机上的服务
+	HostRequired bool     // --host 必填：服务部署在多台主机上、不指定会静默落到别的主机时用
+	Destructive  bool     // 默认只预览，--yes 才执行
+	AutoIDs      []string // 请求里缺省时自动生成随机 ID 的字段
 	// Fixed 是固定写入请求的字段（如启用/停用命令里的 status）。
 	Fixed map[string]any
+	// Merge 非空时，在发请求（和预览）之前先取回现有对象，把用户给的字段合并进去再提交：
+	// 服务端的修改接口是整体替换，只给几个字段会把其余字段清空。
+	Merge rpcMerge
+}
+
+// rpcMerge 读取现有对象并把用户给的字段合并进请求。request 是已经构造好的请求，实现里原地改写。
+type rpcMerge func(ctx context.Context, inv rpcInvocation, request map[string]any) error
+
+// readOnlyObjectFields 是取回的对象里永远不回传的只读字段。
+var readOnlyObjectFields = map[string]bool{"id": true, "created_at": true, "updated_at": true, "create_time": true, "modify_time": true}
+
+// mergeExisting 返回一个合并函数：fetch 取回现有对象，只保留 keep 里的字段（keep 为空表示除只读字段外全部保留），
+// 用户在 request[into] 里给出的字段覆盖它，结果写回 request[into]。
+func mergeExisting(into string, keep []string, fetch func(ctx context.Context, inv rpcInvocation, request map[string]any) (map[string]any, error)) rpcMerge {
+	return func(ctx context.Context, inv rpcInvocation, request map[string]any) error {
+		existing, err := fetch(ctx, inv, request)
+		if err != nil {
+			return fmt.Errorf("取回现有对象失败：%w", err)
+		}
+		merged := map[string]any{}
+		if len(keep) == 0 {
+			for key, value := range existing {
+				if !readOnlyObjectFields[key] {
+					merged[key] = value
+				}
+			}
+		}
+		for _, key := range keep {
+			if value, ok := existing[key]; ok {
+				merged[key] = value
+			}
+		}
+		given, _ := request[into].(map[string]any)
+		for key, value := range given {
+			merged[key] = value
+		}
+		request[into] = merged
+		return nil
+	}
+}
+
+// mergeViaGet 用同一个服务的 Get 类方法取回现有对象：getKeys 是“取回请求的字段 ← 本命令请求里的字段路径”，
+// from 是响应里对象的路径，into 是合并回提交请求的路径。
+func mergeViaGet(method string, getKeys map[string]string, from, into string, keep ...string) rpcMerge {
+	return mergeExisting(into, keep, func(ctx context.Context, inv rpcInvocation, request map[string]any) (map[string]any, error) {
+		get := map[string]any{}
+		for field, source := range getKeys {
+			if value, ok := lookupRequest(request, source); ok {
+				get[field] = value
+			}
+		}
+		return fetchObject(ctx, inv, method, get, from)
+	})
+}
+
+// fetchObject 调用只读方法，检查 ret_info 后取出响应里 from 路径上的对象。
+func fetchObject(ctx context.Context, inv rpcInvocation, method string, getRequest map[string]any, from string) (map[string]any, error) {
+	read := inv
+	read.Method, read.Request = method, getRequest
+	response, err := invokeRPC(ctx, read)
+	if err != nil {
+		return nil, err
+	}
+	if err := rpcRetError(response); err != nil {
+		return nil, err
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(response, &decoded); err != nil {
+		return nil, err
+	}
+	object, _ := decoded[from].(map[string]any)
+	if object == nil {
+		return nil, fmt.Errorf("响应里没有 %s", from)
+	}
+	return object, nil
 }
 
 func (s rpcSpec) key() string { return s.Service + "/" + s.Method }
@@ -168,6 +251,26 @@ func setRequestPath(request map[string]any, path string, value any) {
 		request = next
 	}
 	request[parts[len(parts)-1]] = value
+}
+
+func lookupRequest(request map[string]any, path string) (any, bool) {
+	parts := strings.Split(path, ".")
+	current := request
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current = next
+	}
+	value, ok := current[parts[len(parts)-1]]
+	return value, ok
+}
+
+func lookupRequestString(request map[string]any, path string) (string, bool) {
+	value, ok := lookupRequest(request, path)
+	text, isString := value.(string)
+	return text, ok && isString && text != ""
 }
 
 func hasRequestPath(request map[string]any, path string) bool {
@@ -294,35 +397,20 @@ func (f rpcFlag) value(cmd *cobra.Command, stdin io.Reader) (value any, ok bool,
 }
 
 func (f rpcFlag) register(cmd *cobra.Command) {
-	usage := f.Usage
 	switch f.Kind {
 	case rpcInt:
-		def, _ := parseInt64(f.Default)
-		cmd.Flags().Int64(f.Name, def, usage)
+		cmd.Flags().Int64(f.Name, 0, f.Usage)
 	case rpcFloat:
-		cmd.Flags().Float64(f.Name, 0, usage)
+		cmd.Flags().Float64(f.Name, 0, f.Usage)
 	case rpcBool:
-		cmd.Flags().Bool(f.Name, f.Default == "true", usage)
+		cmd.Flags().Bool(f.Name, false, f.Usage)
 	case rpcStrings:
-		var def []string
-		if f.Default != "" {
-			def = strings.Split(f.Default, ",")
-		}
-		cmd.Flags().StringSlice(f.Name, def, usage)
+		cmd.Flags().StringSlice(f.Name, nil, f.Usage)
 	case rpcStringMap, rpcNumberMap:
-		cmd.Flags().StringToString(f.Name, nil, usage)
+		cmd.Flags().StringToString(f.Name, nil, f.Usage)
 	default:
-		cmd.Flags().String(f.Name, f.Default, usage)
+		cmd.Flags().String(f.Name, f.Default, f.Usage)
 	}
-}
-
-func parseInt64(value string) (int64, error) {
-	if value == "" {
-		return 0, nil
-	}
-	var parsed int64
-	_, err := fmt.Sscan(value, &parsed)
-	return parsed, err
 }
 
 // buildRequest 把 --data 与各参数合并成请求体：参数优先于 --data。
@@ -332,8 +420,10 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 	if err != nil {
 		return nil, err
 	}
+	// 默认值（空间 crypto、分页 1/50）不能覆盖 --data 里显式给的值；用户显式传了参数才覆盖。
 	if !s.NoSpace && s.SpaceField != "" {
-		if space, _ := cmd.Flags().GetString("space-id"); space != "" {
+		space, _ := cmd.Flags().GetString("space-id")
+		if space != "" && (cmd.Flags().Changed("space-id") || !hasRequestPath(request, s.SpaceField)) {
 			setRequestPath(request, s.SpaceField, space)
 		}
 	}
@@ -360,8 +450,12 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 		if s.Page == rpcPagePSize {
 			key = "page_size"
 		}
-		setRequestPath(request, "page.page", page)
-		setRequestPath(request, "page."+key, size)
+		if cmd.Flags().Changed("page") || !hasRequestPath(request, "page.page") {
+			setRequestPath(request, "page.page", page)
+		}
+		if cmd.Flags().Changed("page-size") || !hasRequestPath(request, "page."+key) {
+			setRequestPath(request, "page."+key, size)
+		}
 	}
 	for _, field := range s.AutoIDs {
 		if !hasRequestPath(request, field) {
@@ -400,9 +494,24 @@ func buildRPCCommand(spec rpcSpec) *cobra.Command {
 			inv := rpcInvocation{File: file, Service: spec.Service, Method: spec.Method, Request: request}
 			if !spec.NoSpace {
 				inv.SpaceID, _ = cmd.Flags().GetString("space-id")
+				// 没显式给 --space-id 时，--data 里的空间就是请求所属的空间。
+				if !cmd.Flags().Changed("space-id") && spec.SpaceField != "" {
+					if fromData, ok := lookupRequestString(request, spec.SpaceField); ok {
+						inv.SpaceID = fromData
+					}
+				}
 			}
 			if spec.Host {
 				inv.HostID, _ = cmd.Flags().GetString("host")
+				if spec.HostRequired && inv.HostID == "" {
+					return errors.New("缺少 --host：这个服务部署在多台主机上，要指定查哪一台（moox.toml 里的主机名）")
+				}
+			}
+			if spec.Merge != nil {
+				if err := spec.Merge(cmd.Context(), inv, request); err != nil {
+					return err
+				}
+				inv.Request = request
 			}
 			if spec.Destructive {
 				if yes, _ := cmd.Flags().GetBool("yes"); !yes {

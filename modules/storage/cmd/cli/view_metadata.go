@@ -20,7 +20,6 @@ type retainedIndex struct {
 }
 
 type removedViewsSummary struct {
-	KeptViews      int             `json:"kept_views"`
 	DeletedViews   int             `json:"deleted_views"`
 	RetiredIndexes []retainedIndex `json:"retired_indexes,omitempty"`
 }

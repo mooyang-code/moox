@@ -28,7 +28,7 @@ func init() {
 				strFlag("keyword", "keyword", "关键字"), boolFlag("refresh-readback", "refresh_readback", "回读云侧状态")}},
 		rpcSpec{Path: []string{"cloud", "function", "job"}, Short: "查看函数作业进度", Service: cloudFunctionMgr, Method: "GetFunctionJob",
 			Flags: []rpcFlag{reqFlag("job-id", "job_id", "作业 ID")}},
-		rpcSpec{Path: []string{"cloud", "function", "invoke"}, Short: "调用一个函数实例（会真实执行函数，先确认事件内容）", Service: cloudFunctionMgr, Method: "InvokeFunction",
+		rpcSpec{Path: []string{"cloud", "function", "invoke"}, Destructive: true, Short: "调用一个函数实例（会真实执行函数；默认只预览事件内容，--yes 才执行）", Service: cloudFunctionMgr, Method: "InvokeFunction",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID"), jsonFlag("event", "event_data", "事件 JSON；@文件 读取"), strFlag("invoke-type", "scf_invoke_type", "SCF_INVOKE_TYPE_REQUEST_RESPONSE 或 SCF_INVOKE_TYPE_EVENT"), strFlag("qualifier", "qualifier", "版本或别名")}},
 
 		rpcSpec{Path: []string{"cloud", "scf", "preview"}, Short: "预览云上有哪些 SCF 函数可以导入", Service: cloudFunctionMgr, Method: "PreviewSCFFunctions",

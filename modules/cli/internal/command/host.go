@@ -139,8 +139,13 @@ func newHostPutCommand() *cobra.Command {
 			defer remote.Close()
 			cmd.SilenceUsage = true
 			if !yes {
-				if _, err := remote.Exec(cmd.Context(), hostID, []string{"test", "-e", remotePath}, nil); err == nil {
+				result, err := remote.Exec(cmd.Context(), hostID, []string{"test", "-e", remotePath}, nil)
+				switch {
+				case err == nil:
 					return writePreview(cmd, map[string]any{"action": "upload_overwrite", "host": hostID, "local": localPath, "remote": remotePath, "remote_exists": true, "bytes": info.Size()})
+				case result.ExitCode != 1:
+					// 退出码 1 才表示“不存在”；连接中断等其他错误不能当作不存在，否则会在无法确认时直接覆盖。
+					return fmt.Errorf("无法确认远端文件 %s 是否已存在：%w", remotePath, err)
 				}
 			}
 			source, err := os.Open(localPath)

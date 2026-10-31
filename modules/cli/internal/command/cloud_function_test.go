@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/stretchr/testify/assert"
@@ -86,17 +87,36 @@ func TestCloudFunctionDeleteUsesTopLevelFenceAndReportsFailedJob(t *testing.T) {
 	require.ErrorContains(t, err, "缺少 --instance-id")
 }
 
-func TestCloudFunctionCreateWithoutWaitReturnsSubmitResponse(t *testing.T) {
+func TestCloudFunctionReleasesLeaseWhenServerRejectsAndHoldsItWhenOutcomeUnknown(t *testing.T) {
+	// 服务端明确拒绝（没受理）：立即释放租约。
 	gateway := &rpcFakeGateway{responses: map[string]string{
 		"AcquireCollectorPublishLease":  leaseResponse,
 		"ReleaseCollectorPublishLease":  `{"ret_info":{"code":0},"released":true}`,
-		"SubmitCreateFunctionInstances": `{"ret_info":{"code":0},"job_id":"job-3","total_count":1}`,
+		"SubmitCreateFunctionInstances": `{"ret_info":{"code":5,"msg":"参数不合法"}}`,
 	}}
 	useRPCGateway(t, gateway)
-	out, _, err := runCloudWrite(t, "create", "--data", `{"instances":[{"cloud_account_id":"a","function_type":"scf-event","region":"ap-guangzhou","package_id":"p"}]}`, "--wait=false")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"AcquireCollectorPublishLease", "SubmitCreateFunctionInstances", "ReleaseCollectorPublishLease"}, gateway.methods)
-	assert.Contains(t, out, "job-3")
+	_, _, err := runCloudWrite(t, "create", "--data", `{"instances":[{"cloud_account_id":"a"}]}`)
+	require.Error(t, err)
+	assert.Equal(t, []string{"AcquireCollectorPublishLease", "SubmitCreateFunctionInstances", "ReleaseCollectorPublishLease"}, gateway.methods, "被拒绝后要释放，不能让租约白占 2 分钟")
+
+	// 受理后等不到终态（轮询一直失败，结果未知）：不释放。
+	gateway = &rpcFakeGateway{responses: map[string]string{
+		"AcquireCollectorPublishLease":  leaseResponse,
+		"SubmitCreateFunctionInstances": `{"ret_info":{"code":0},"job_id":"job-9","total_count":1}`,
+		"GetFunctionJob":                `{"ret_info":{"code":0},"job":{"job_id":"job-9","status":"FUNCTION_JOB_STATUS_RUNNING"}}`,
+	}}
+	useRPCGateway(t, gateway)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	cmd := cloudWriteCommand(t, "create").command()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--data", `{"instances":[{"cloud_account_id":"a"}]}`})
+	cmd.SetContext(ctx)
+	require.Error(t, cmd.Execute())
+	assert.NotContains(t, gateway.methods, "ReleaseCollectorPublishLease", "结果未知时不释放租约")
+	assert.Contains(t, gateway.methods, "GetFunctionJob")
+
 	_, _, err = runCloudWrite(t, "create")
 	require.ErrorContains(t, err, "缺少请求内容")
 }

@@ -195,7 +195,7 @@ func runUdfActivate(ctx context.Context, out io.Writer, opts udfActivateOptions)
 	case rsp.GetApplied() && len(rsp.GetImpacts()) == 0:
 		fmt.Fprintf(out, "\n已切换 %s：%s → %s。没有因子定义引用它，不需要恢复引擎。\n", name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetApplied():
-		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（lifecycle resume --endpoint <因子引擎地址>），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
+		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（moox-cli lifecycle resume），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
 			name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetDryRun():
 		fmt.Fprintln(out, "\n（预览：没有修改任何东西；确认后加 --yes）")
@@ -314,8 +314,8 @@ var udfCmd = &cobra.Command{
   moox-cli udf activate <名称>@<哈希> [--yes]         切换启用版本：默认只给出影响清单与前提检查，--yes 才切换
   moox-cli udf list | show <名称>                     查看版本、引用关系与各引擎的模块状态
 
-切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause --endpoint <因子引擎健康检查地址，默认 http://127.0.0.1:11417>（等收敛）→ 取消列出的已领取补算作业 →
-udf activate → lifecycle resume --endpoint <同上>（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
+切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause（默认连因子引擎，按 moox.toml 自动解析；等收敛）→ 取消列出的已领取补算作业 →
+udf activate --yes → lifecycle resume（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
 }
 
 func newUdfCommands() *cobra.Command {

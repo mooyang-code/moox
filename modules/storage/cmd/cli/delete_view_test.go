@@ -53,7 +53,6 @@ func TestDeleteViewRemovesOnlyTheNamedView(t *testing.T) {
 	summary, err := deleteView(context.Background(), deleteViewOptions{metadataDB: path, view: "mooxsys/view_mooxsys_service_metrics"})
 	require.NoError(t, err)
 	require.Equal(t, 1, summary.DeletedViews)
-	require.Zero(t, summary.KeptViews)
 	require.Equal(t, []retainedIndex{{Engine: "duckdb", IndexID: "idx-service-b"}}, summary.RetiredIndexes, "活动索引要交给清理定时器")
 
 	require.Zero(t, countRows(t, path, `SELECT COUNT(*) FROM t_views WHERE c_view_id = 'view_mooxsys_service_metrics'`))

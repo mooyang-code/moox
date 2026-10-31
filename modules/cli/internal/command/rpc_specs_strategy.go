@@ -47,9 +47,9 @@ func init() {
 		rpcSpec{Path: []string{"strategy", "instance", "create"}, Short: "创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用）", Service: strategyMgr, Method: "CreateStrategyInstance", SpaceField: "instance.space_id", Flags: createInstanceFlags},
 		rpcSpec{Path: []string{"strategy", "instance", "update"}, Short: "修改停用中的策略实例绑定的策略定义与账户（因子任务创建时写定，不能改）", Service: strategyMgr, Method: "UpdateStrategyInstance", SpaceField: "instance.space_id",
 			Flags: updateInstanceFlags},
-		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Short: "启用策略实例", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
+		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Destructive: true, Short: "启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
-		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Short: "停用策略实例", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
+		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Destructive: true, Short: "停用策略实例（默认只预览，--yes 才执行）", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 
 		rpcSpec{Path: []string{"strategy", "result", "list"}, Short: "列出实例每期的结果", Service: strategyMgr, Method: "ListStrategyResults", Page: rpcPagePSize,

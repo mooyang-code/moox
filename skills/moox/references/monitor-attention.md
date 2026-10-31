@@ -27,7 +27,7 @@
 
    退出码：0 没有问题，1 只有警告（降级），2 有严重问题，3 无法判断。每一项带 `source`（alert、dataset、business_check、component、host）、
    `severity`（critical、warning、info）、原因、原始信息和一条常见原因提示。`info` 只提示（例如因子“积累中”），不算故障。
-   只看某个空间用 `--space crypto`。
+   只看某个空间用 `--space-id crypto`。
    同一类 doctor 还有 `doctor bootstrap`（新部署各模块的安装与配置是否正常）和 `doctor diagnose`（按 Monitor 的事实诊断各模块），
    清单里查不出原因时再用它们。
 

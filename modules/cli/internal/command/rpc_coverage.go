@@ -2,7 +2,7 @@ package command
 
 const (
 	tradeWriteReason  = "交易模块尚未完工：不提供写操作命令，Agent 不代用户创建账户、下单、撤单或清仓"
-	secretWriteReason = "密钥明文会经过 Agent，请用户在管理台“设置 › 密钥”自己填写"
+	secretWriteReason = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
 	sshReason         = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
 	authReason        = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
 	spaceDupReason    = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"

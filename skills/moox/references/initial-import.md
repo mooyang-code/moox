@@ -184,7 +184,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 - 策略 `min_age_bars` 按关联因子任务的结果 View 的覆盖判断：任务可以先于策略运行积累历史，结果 View 的覆盖不够时启用被拒绝。
 - 用到 `bars[-1]` 因子列的规则，启用后的第一期会以 `previous_version_unknown` 整期跳过，第二期起正常（新实例没有持仓，不会触发退出）。
-- 需要历史因子值时再手动补算：`moox-factor-mgr-cli recalc` 指定范围。每个补算块会往 Storage 写几十万行因子结果，
+- 需要历史因子值时再手动补算：`moox-cli factor recalc submit --task-id <任务> --from … --to …` 指定范围。每个补算块会往 Storage 写几十万行因子结果，
   Storage 的 View 约 1 万行/秒才消化得完，范围按需、一次不要太大。
 
 ## 常见问题

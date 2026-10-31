@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -297,4 +298,22 @@ func TestResolveModuleHealthBorrowsControlSecretForOutboundHost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "shared-secret", secrets["MOOX_HEALTH_AUTH_SECRET_KEY"])
 	assert.Equal(t, []string{"cat /data/moox/prod/current/secrets/runtime-monitor.json"}, ssh.cats)
+}
+
+// 直接在模块所在主机上运行时没有 moox.toml：真实的解析函数要返回“没有 moox.toml”，各命令据此退回本机地址（不替换 resolveModuleHealth）。
+func TestRealResolveReportsMissingManifestAsUnavailable(t *testing.T) {
+	_, err := resolveModuleHealth(context.Background(), moduleHealthRequest{File: filepath.Join(t.TempDir(), "moox.toml"), Modules: []string{"factor-engine"}})
+	require.ErrorIs(t, err, errManifestUnavailable)
+
+	lifecycleFlags = lifecycleOptions{Module: "factor-engine", File: filepath.Join(t.TempDir(), "moox.toml")}
+	t.Cleanup(func() { lifecycleFlags = lifecycleOptions{} })
+	var stderr strings.Builder
+	cmd := &cobra.Command{Use: "status"}
+	cmd.SetErr(&stderr)
+	require.NoError(t, prepareLifecycleEndpoint(cmd, nil))
+	assert.Equal(t, "http://127.0.0.1:11417", lifecycleFlags.Endpoint)
+
+	endpoint, err := resolveSingleModuleEndpoint(context.Background(), filepath.Join(t.TempDir(), "moox.toml"), "factor-engine", true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:11417", endpoint, "import --engine 的默认值")
 }

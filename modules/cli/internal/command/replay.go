@@ -1,6 +1,8 @@
 package command
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/seriesreplay/command"
@@ -64,7 +66,7 @@ func takeFlag(args []string, name string) (value string, rest []string, found bo
 // 密钥放进本进程的环境变量。没有 moox.toml 时保持原样。
 func prepareReplayEndpoints(cmd *cobra.Command, args []string) ([]string, error) {
 	file, args, _ := takeFlag(args, "--file")
-	if !replayNetworkCommands[args[0]] {
+	if len(args) == 0 || !replayNetworkCommands[args[0]] {
 		return args, nil
 	}
 	given := map[string]bool{}
@@ -81,10 +83,14 @@ func prepareReplayEndpoints(cmd *cobra.Command, args []string) ([]string, error)
 	}
 	health, err := resolveAndTrackModuleHealth(cmd.Context(), moduleHealthRequest{File: defaultFlag(file, defaultSetupFile), Modules: missing})
 	if err != nil {
-		if errorsIsManifestUnavailable(err) {
+		if errors.Is(err, errManifestUnavailable) {
 			return args, nil
 		}
 		return nil, err
+	}
+	// 回放要用到因子引擎、策略与 Trade：缺任何一个都不能让它退回默认的本机地址，那会把请求打到操作机自己的端口上。
+	if len(health.NotDeployed) > 0 {
+		return nil, fmt.Errorf("moox.toml 里没有部署 %s，回放需要它们；直接在主机上运行请用 --factor-endpoint 等参数显式指定地址", strings.Join(health.NotDeployed, "、"))
 	}
 	args = append([]string{}, args...)
 	for _, item := range replayEndpointFlags {

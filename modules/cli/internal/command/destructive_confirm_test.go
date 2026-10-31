@@ -98,7 +98,7 @@ func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	assert.Equal(t, "delete_task", preview["action"])
 	assert.Equal(t, "task-1", preview["task_id"])
 	assert.Equal(t, true, preview["delete_result_data"])
-	assert.Zero(t, gateway.calls)
+	assert.Equal(t, []string{"GetTaskDetail"}, gateway.invokes, "预览只读取任务详情，不能发出 DeleteTask")
 }
 
 func TestCollectorResultDeleteOnlyPreviewsWithoutYes(t *testing.T) {

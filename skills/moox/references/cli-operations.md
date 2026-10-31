@@ -40,15 +40,16 @@ Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；�
 
 ## 清理 Storage View 积压
 
-当某个 Storage View 的消费积压、View 不再追赶 Source 时，使用：
+当某个 Storage View 的消费积压、View 不再追赶 Source 时，先预览（不带 `--yes` 就是预览），把目标给用户确认：
 
 ```bash
 ./bin/moox-cli storage repair-view \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer <View 消费者名> \
-  --yes
+  --consumer <View 消费者名>
 ```
+
+确认目标后在同一条命令末尾加 `--yes` 才执行。
 
 `--consumer` 只接受 Storage View 的消费者：按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个，其他名称在发出请求前就会被拒绝）。同一数据集的多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`；不同数据集的 View 各用各的消费者。
 
@@ -60,15 +61,6 @@ Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；�
 4. 重启 `storage-view`。
 
 默认不会删除物理索引；输出中的 `backup_path` 是回滚和问题复盘所需的关键证据。
-
-先检查目标 View 和将要执行的动作（不带 `--yes` 就是预览）：
-
-```bash
-./bin/moox-cli storage repair-view \
-  --space-id crypto \
-  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer <View 消费者名>
-```
 
 主要参数（原样交给存储机上的程序，下列为程序的参数）：
 

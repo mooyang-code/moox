@@ -93,7 +93,6 @@ func deleteView(ctx context.Context, opts deleteViewOptions) (removedViewsSummar
 	if err != nil {
 		return removedViewsSummary{}, err
 	}
-	summary.KeptViews = 0
 	sortRetiredIndexes(&summary)
 	return summary, nil
 }

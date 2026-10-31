@@ -28,6 +28,7 @@ type hostFakeSSH struct {
 	download   string
 	forwarded  []string
 	closed     bool
+	runHook    func(argv []string) (setupssh.Result, error) // 非空时优先于默认行为
 }
 
 func (h *hostFakeSSH) Check(context.Context) error { return nil }
@@ -46,6 +47,9 @@ func (h *hostFakeSSH) Download(_ context.Context, _ string, dst io.Writer) (int6
 }
 func (h *hostFakeSSH) Run(_ context.Context, argv []string, _ io.Reader) (setupssh.Result, error) {
 	h.ran = append(h.ran, argv)
+	if h.runHook != nil {
+		return h.runHook(argv)
+	}
 	if argv[0] == "test" {
 		if h.remoteFile {
 			return setupssh.Result{}, nil

@@ -18,13 +18,15 @@ import (
 // 用于没有专用命令的管理接口。响应里 ret_info.code 非成功时先打印响应，再以非 0 退出码结束。
 func newGatewayCallCommand() *cobra.Command {
 	var file, space, data, host string
+	var yes bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "call <service> <method>",
 		Short: "调用内部服务方法（JSON）",
 		Long: "service 写完整服务名，例如 trpc.moox.strategy.StrategyMgr（可用的服务与方法见 gateway methods）；--data 为 JSON 文本，@文件 读取文件，- 读取标准输入。" +
 			"请求与返回的字段见各模块 proto 与 skill 的接口配方。业务失败（ret_info.code 非 0）时退出码非 0。" +
-			"返回密钥明文或完整 webhook 的方法被拒绝，见 gateway methods 的标注。",
+			"返回密钥明文或完整 webhook 的方法、以及密钥的新建、修改、启停、删除被拒绝，见 gateway methods 的标注。" +
+			"写方法（gateway methods 里标“写”）不带 --yes 只预览将要发出的请求。",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if reason, denied := gatewayCallDenied[args[0]+"/"+args[1]]; denied {
@@ -38,6 +40,9 @@ func newGatewayCallCommand() *cobra.Command {
 			if err := json.Unmarshal(body, &request); err != nil {
 				return fmt.Errorf("--data 不是合法的 JSON: %w", err)
 			}
+			if readOnly, known := gatewayMethodReadOnly(args[0], args[1]); known && !readOnly && !yes {
+				return writePreview(cmd, map[string]any{"service": args[0], "method": args[1], "space_id": space, "host": host, "request": request, "note": "写方法默认只预览"})
+			}
 			cmd.SilenceUsage = true
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -48,6 +53,7 @@ func newGatewayCallCommand() *cobra.Command {
 	cmd.Flags().StringVar(&space, "space-id", "crypto", "请求携带的空间 ID")
 	cmd.Flags().StringVar(&data, "data", "{}", "请求 JSON；@文件 读取文件，- 读取标准输入")
 	cmd.Flags().StringVar(&host, "host", "", "只调用这台主机上的服务（moox.toml 里的主机名）；默认本机优先")
+	cmd.Flags().BoolVar(&yes, "yes", false, "确认执行写方法；不加只预览（只读方法不受影响）")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "调用超时")
 	return cmd
 }
@@ -102,6 +108,23 @@ func newGatewayMethodsCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// gatewayMethodReadOnly 查内嵌服务目录：方法是否只读；服务或方法不在目录里时 known 为 false，交给网关按 ACL 处理。
+func gatewayMethodReadOnly(service, method string) (readOnly, known bool) {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return false, false
+	}
+	for _, component := range catalog.Components {
+		for _, item := range component.Services {
+			if item.Path != service || !slices.Contains(item.Methods, method) {
+				continue
+			}
+			return slices.Contains(item.ReadOnlyMethods, method), true
+		}
+	}
+	return false, false
 }
 
 func readGatewayCallBody(data string) ([]byte, error) {

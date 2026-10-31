@@ -14,8 +14,8 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
-  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览，执行前先把完整命令给用户确认；`gateway call` 的写方法同样先把请求给用户看。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
-- **`gateway call` 取不到密钥明文**：它拒绝返回密钥明文或完整 webhook 的方法；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
+  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览，执行前先把完整命令给用户确认；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+- **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块尚未完工：不要代用户创建实盘账户、下单或清仓。
 
