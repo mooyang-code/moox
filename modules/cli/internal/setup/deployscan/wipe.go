@@ -39,7 +39,9 @@ type HostPlan struct {
 	Entries    []string          `json:"entries"`
 	Unknown    []string          `json:"unknown_entries,omitempty"`
 	Dirs       []string          `json:"dirs,omitempty"`
-	SizesKB    map[string]int64  `json:"sizes_kb,omitempty"`
+	// Skipped 是看到了但不属于 MooX 的目录，不会清除，要告诉用户。
+	Skipped []string         `json:"skipped_dirs,omitempty"`
+	SizesKB map[string]int64 `json:"sizes_kb,omitempty"`
 }
 
 // Plan 是清除预览。
@@ -58,13 +60,25 @@ type Plan struct {
 // rejectedRoots 是绝不能当作清除目标的系统目录。
 var rejectedRoots = []string{"/data", "/home", "/root", "/etc", "/usr", "/var", "/opt", "/srv", "/mnt", "/media", "/tmp", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/run", "/sys"}
 
-// CheckDeleteTarget 是清除目录的保护：拒绝系统目录、家目录及其上级。fsutil.ValidateUnitRoots 不做这些检查。
+// systemTrees 下的任何目录都不能清除。
+var systemTrees = []string{"/usr", "/etc", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/dev", "/proc", "/run", "/sys"}
+
+// CheckDeleteTarget 是清除目录的保护：拒绝系统目录及其子目录、家目录及其上级、家目录下的点目录。
+// fsutil.ValidateUnitRoots 不做这些检查。
 func CheckDeleteTarget(target, home string) error {
 	if !strings.HasPrefix(target, "/") || path.Clean(target) != target || target == "/" || strings.ContainsAny(target, "\x00\r\n") {
 		return fmt.Errorf("delete_target_rejected: %s 不是干净的绝对路径", target)
 	}
 	if slices.Contains(rejectedRoots, target) {
 		return fmt.Errorf("delete_target_rejected: %s 是系统目录", target)
+	}
+	for _, tree := range systemTrees {
+		if strings.HasPrefix(target, tree+"/") {
+			return fmt.Errorf("delete_target_rejected: %s 在系统目录 %s 下", target, tree)
+		}
+	}
+	if relative, ok := strings.CutPrefix(target, home+"/"); ok && strings.HasPrefix(relative, ".") {
+		return fmt.Errorf("delete_target_rejected: %s 是家目录下的配置目录", target)
 	}
 	if home == target || strings.HasPrefix(home, target+"/") {
 		return fmt.Errorf("delete_target_rejected: %s 是用户家目录或它的上级目录", target)
@@ -87,20 +101,22 @@ func knownEntries(paths setupconfig.Paths) []string {
 }
 
 // BuildPlan 根据检测结果生成清除范围；路径保护不通过时返回错误，不生成预览。
-// pending 是上次没做完的清除：部署根可能已经没有 MooX 标记，服务文件删掉后外部目录也查不到了，要沿用当时的目录。
+// pending 是上次没做完的清除：同一主机、同一部署根上，部署根可能已经没有 MooX 标记，
+// 服务文件删掉后外部目录也查不到了，要沿用当时的目录。主机或部署根变了，标记不起作用。
 func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *PendingRecord) (Plan, error) {
 	paths := manifest.Paths.Resolved()
 	known := knownEntries(paths)
 	plan := Plan{Trade: TradeNone, RegistryUnread: true}
 	configured := map[string]bool{}
 	for _, report := range reports {
-		configured[report.Host] = true
+		configured[report.Host], configured[report.Address] = true, true
 	}
 	for _, report := range reports {
 		if err := CheckDeleteTarget(paths.DeployRoot, report.Home); err != nil {
 			return plan, fmt.Errorf("host %s: %w", report.Host, err)
 		}
-		if len(report.Entries) != 0 && !report.Markers && pending == nil {
+		resumed, resuming := pending.host(report.Host, report.Address, paths.DeployRoot)
+		if len(report.Entries) != 0 && !report.Markers && !resuming {
 			return plan, fmt.Errorf("delete_target_rejected: %s 上的 %s 看不到 MooX 标记，不像部署目录", report.Host, paths.DeployRoot)
 		}
 		item := HostPlan{Host: report.Host, Address: report.Address, Units: report.Units, DeployRoot: paths.DeployRoot, Entries: report.Entries, SizesKB: report.SizesKB}
@@ -109,18 +125,25 @@ func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *Pen
 				item.Unknown = append(item.Unknown, entry)
 			}
 		}
-		dirs := slices.Clone(report.ExternalDirs)
-		for _, archive := range report.ArchiveDirs {
-			if !archive.Empty {
-				dirs = append(dirs, archive.Path)
+		dirs := slices.Clone(resumed.Dirs)
+		for _, dir := range append(slices.Clone(report.ExternalDirs), report.ArchiveDirs...) {
+			switch {
+			case !dir.Marked:
+				if !dir.Empty {
+					item.Skipped = append(item.Skipped, dir.Path)
+				}
+			case dir.Symlink:
+				return plan, fmt.Errorf("delete_target_rejected: %s 上的 %s 是符号链接，不会跟随清除；请用户自己处理后重新运行", report.Host, dir.Path)
+			case !dir.Empty || slices.Contains(report.ExternalPaths(), dir.Path):
+				dirs = append(dirs, dir.Path)
 			}
-		}
-		if pending != nil {
-			dirs = append(dirs, pending.Dirs[report.Host]...)
 		}
 		for _, dir := range dirs {
 			if dir == paths.DeployRoot || strings.HasPrefix(dir, paths.DeployRoot+"/") {
 				continue
+			}
+			if strings.HasPrefix(paths.DeployRoot, dir+"/") {
+				return plan, fmt.Errorf("delete_target_rejected: %s 上的 %s 是部署目录的上级", report.Host, dir)
 			}
 			if err := CheckDeleteTarget(dir, report.Home); err != nil {
 				return plan, fmt.Errorf("host %s: %w", report.Host, err)
@@ -134,7 +157,7 @@ func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *Pen
 		if report.RegisteredHosts != nil {
 			plan.RegistryUnread = false
 			for _, registered := range report.RegisteredHosts {
-				if !configured[registered.ID] {
+				if !configured[registered.ID] && !configured[registered.Address] {
 					plan.OtherHosts = append(plan.OtherHosts, registered)
 				}
 			}
@@ -169,10 +192,11 @@ func digestOf(plan Plan) (string, error) {
 		Units         map[string]string
 		Root          string
 		Entries, Dirs []string
+		Skipped       []string
 	}
 	scopes := make([]scope, 0, len(plan.Hosts))
 	for _, host := range plan.Hosts {
-		scopes = append(scopes, scope{host.Host, host.Address, host.Units, host.DeployRoot, host.Entries, host.Dirs})
+		scopes = append(scopes, scope{host.Host, host.Address, host.Units, host.DeployRoot, host.Entries, host.Dirs, host.Skipped})
 	}
 	raw, err := json.Marshal(struct {
 		Scopes []scope
@@ -247,16 +271,34 @@ func WipeHost(ctx context.Context, dial Dial, host setupconfig.Host, root string
 	return result, nil
 }
 
+// PendingHost 记录一台主机上没做完的清除。
+type PendingHost struct {
+	Address string   `json:"address"`
+	Root    string   `json:"root"`
+	Dirs    []string `json:"dirs"`
+}
+
 // PendingRecord 是未完成标记的内容。
 type PendingRecord struct {
-	Digest string              `json:"digest"`
-	Dirs   map[string][]string `json:"dirs"`
+	Hosts map[string]PendingHost `json:"hosts"`
+}
+
+// host 返回这台主机上次没做完的清除；主机地址或部署根对不上时不算。
+func (p *PendingRecord) host(name, address, root string) (PendingHost, bool) {
+	if p == nil {
+		return PendingHost{}, false
+	}
+	item, ok := p.Hosts[name]
+	if !ok || item.Address != address || item.Root != root {
+		return PendingHost{}, false
+	}
+	return item, true
 }
 
 // PendingPath 返回未完成标记的路径。
 func PendingPath(operatorDir string) string { return filepath.Join(operatorDir, pendingFile) }
 
-// ReadPending 读取上次没做完的清除；没有标记时返回 nil。标记读不出来时也算没做完，只是没有目录记录。
+// ReadPending 读取上次没做完的清除；没有标记时返回 nil。标记读不出来时也算没做完，但不放行任何主机。
 func ReadPending(operatorDir string) *PendingRecord {
 	raw, err := os.ReadFile(PendingPath(operatorDir))
 	if errors.Is(err, os.ErrNotExist) {
@@ -271,9 +313,9 @@ func ReadPending(operatorDir string) *PendingRecord {
 
 // MarkPending 在动手前写未完成标记。
 func MarkPending(operatorDir string, plan Plan) error {
-	record := PendingRecord{Digest: plan.Digest, Dirs: map[string][]string{}}
+	record := PendingRecord{Hosts: map[string]PendingHost{}}
 	for _, host := range plan.Hosts {
-		record.Dirs[host.Host] = host.Dirs
+		record.Hosts[host.Host] = PendingHost{Address: host.Address, Root: host.DeployRoot, Dirs: host.Dirs}
 	}
 	raw, err := json.Marshal(record)
 	if err != nil {
@@ -314,13 +356,9 @@ func ArchiveLocal(operatorDir, stateDir string, now time.Time) error {
 			return err
 		}
 	}
-	return ArchiveState(stateDir, now)
-}
-
-// ArchiveState 把状态目录改名为 .bak-<时间>，避免新发布复用旧软件。目录不存在时什么也不做。
-func ArchiveState(stateDir string, now time.Time) error {
+	// 状态目录也要换新，否则新发布会复用旧软件。
 	if _, err := os.Lstat(stateDir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return os.Rename(stateDir, stateDir+".bak-"+now.UTC().Format("20060102150405"))
+	return os.Rename(stateDir, stateDir+".bak-"+stamp)
 }

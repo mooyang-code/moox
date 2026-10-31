@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -22,6 +23,9 @@ import (
 //go:embed inspect.py
 var inspectScript string
 
+// inspectTimeout 限制一台主机的检测时长：要遍历部署目录，慢盘上可能很久，但不能一直挂住。
+const inspectTimeout = 10 * time.Minute
+
 // 目标机上 Trade 的状态。
 const (
 	TradeNone       = "none"       // 没有 Trade 单元
@@ -30,10 +34,14 @@ const (
 	TradeUnreadable = "unreadable" // 文件存在但读不出
 )
 
-// ArchiveDir 是一个归档目录及其是否为空。
-type ArchiveDir struct {
-	Path  string `json:"path"`
-	Empty bool   `json:"empty"`
+// DirReport 是部署根之外的一个候选目录（外部程序目录或归档目录）。
+// Marked 表示能看到 MooX 自己的文件；没有标记的目录不算 MooX 的，不计入残留，也绝不清除。
+type DirReport struct {
+	Path    string `json:"path"`
+	Empty   bool   `json:"empty"`
+	Marked  bool   `json:"marked"`
+	Symlink bool   `json:"symlink"`
+	Foreign bool   `json:"foreign"`
 }
 
 // RegisteredHost 是旧部署 t_hosts 里登记的一台主机。
@@ -56,8 +64,8 @@ type HostReport struct {
 	Markers          bool              `json:"markers"`
 	Cron             bool              `json:"cron"`
 	Services         []string          `json:"services"`
-	ExternalDirs     []string          `json:"external_dirs"`
-	ArchiveDirs      []ArchiveDir      `json:"archive_dirs"`
+	ExternalDirs     []DirReport       `json:"external_dirs"`
+	ArchiveDirs      []DirReport       `json:"archive_dirs"`
 	ProcessesInside  int               `json:"processes_inside"`
 	ProcessesOutside []string          `json:"processes_outside"`
 	PortsOccupied    []int             `json:"ports_occupied"`
@@ -73,12 +81,21 @@ func (r HostReport) Empty() bool {
 	if len(r.Entries) != 0 || r.Cron || len(r.Services) != 0 {
 		return false
 	}
-	for _, archive := range r.ArchiveDirs {
-		if !archive.Empty {
+	for _, dir := range append(slices.Clone(r.ArchiveDirs), r.ExternalDirs...) {
+		if dir.Marked && !dir.Empty {
 			return false
 		}
 	}
 	return true
+}
+
+// ExternalPaths 返回外部程序目录：有内容没内容都要清，安装目录不留空壳。
+func (r HostReport) ExternalPaths() []string {
+	paths := make([]string, 0, len(r.ExternalDirs))
+	for _, dir := range r.ExternalDirs {
+		paths = append(paths, dir.Path)
+	}
+	return paths
 }
 
 // Options 是一次检测的参数。
@@ -101,7 +118,11 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 	hosts := manifest.Hosts()
 	reports := make([]HostReport, 0, len(hosts))
 	for _, host := range hosts {
-		request := map[string]any{"deploy_root": paths.DeployRoot, "archive_root": paths.ArchiveRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes}
+		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes}
+		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
+		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {
+			request["archive_root"] = paths.ArchiveRoot
+		}
 		if host.Name == control {
 			request["admin_db"] = path.Join(paths.ControlRoot, "current/admin/data/admin.db")
 		}
@@ -120,6 +141,8 @@ func inspect(ctx context.Context, dial Dial, host setupconfig.Host, request map[
 	if err != nil {
 		return report, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
 	transport, err := dial(ctx, host)
 	if err != nil {
 		return report, err
@@ -127,7 +150,7 @@ func inspect(ctx context.Context, dial Dial, host setupconfig.Host, request map[
 	defer transport.Close()
 	output, err := transport.Run(ctx, []string{"python3", "-c", inspectScript, string(raw)}, nil)
 	if err != nil {
-		return report, fmt.Errorf("host %s: deployment inspection failed; private output omitted", host.Name)
+		return report, fmt.Errorf("deployment_inspection_failed: host %s 检测失败或超时，详细输出已隐藏", host.Name)
 	}
 	if err := decode(output.Stdout, &report); err != nil {
 		return report, fmt.Errorf("host %s: deployment inspection returned invalid metadata", host.Name)

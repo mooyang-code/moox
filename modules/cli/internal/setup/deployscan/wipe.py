@@ -1,6 +1,6 @@
-# 清除一台目标机上的 MooX。argv[1] 是 JSON 请求，dirs 是预览列出并已通过删除保护的目录。
-# 可重复执行：已经清掉的步骤再跑一次没有副作用。结果用 JSON 输出，不含任何文件内容。
-import fcntl, glob, json, os, shutil, signal, stat, subprocess, sys, time
+# Wipes MooX from one target host. argv[1] is a JSON request; dirs were listed in the preview and passed the delete guard.
+# Repeatable: finished steps have no effect on a rerun. The JSON result holds no file contents.
+import fcntl, glob, json, os, re, shutil, signal, stat, subprocess, sys, time
 
 CRON_MARKER = '# moox-watchdog'
 SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
@@ -8,6 +8,7 @@ LOCK_WAIT = 120
 SCRIPT_TIMEOUT = 90
 TERM_WAIT = 20
 KILL_WAIT = 5
+MOUNTS = set()
 
 
 class Stop(Exception):
@@ -22,12 +23,12 @@ def remove_watchdog():
     listed = run(['crontab', '-l'])
     if listed.returncode != 0:
         return
-    lines = listed.stdout.decode().splitlines()
+    lines = listed.stdout.decode('utf-8', 'surrogateescape').splitlines()
     kept = [line for line in lines if CRON_MARKER not in line]
     if len(kept) == len(lines):
         return
     if kept:
-        result = run(['crontab', '-'], stdin=('\n'.join(kept) + '\n').encode())
+        result = run(['crontab', '-'], stdin=('\n'.join(kept) + '\n').encode('utf-8', 'surrogateescape'))
     else:
         result = run(['crontab', '-r'])
     if result.returncode != 0:
@@ -35,7 +36,7 @@ def remove_watchdog():
 
 
 def wait_watchdog(root):
-    """等正在运行的那轮看护结束；只探测，拿到锁立刻释放，不让子进程继承。"""
+    """Wait for a running watchdog pass. Only probes: the lock is released at once so no child inherits it."""
     path = os.path.join(root, 'run/watchdog.lock')
     if not os.path.exists(path):
         return
@@ -60,7 +61,7 @@ def stop_services(home):
         return
     def systemctl(*args):
         return subprocess.run(['systemctl', '--user'] + list(args), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-    # 服务带自动重启；连不上用户级 systemd 时不能往下删，否则进程还会被拉起来。
+    # The services restart themselves: without the user manager, deleting files would not stop them.
     if systemctl('list-units', '--no-legend').returncode != 0:
         raise Stop('systemd_unreachable')
     for name in present:
@@ -130,8 +131,22 @@ def stop_processes(directories):
         raise Stop('processes_still_running')
 
 
+def load_mounts(path):
+    try:
+        with open(path, errors='replace') as stream:
+            rows = stream.readlines()
+    except OSError:
+        return set()
+    decode = lambda text: re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), text)
+    return set(decode(row.split()[4]) for row in rows if len(row.split()) > 4)
+
+
+def holds_mount(path):
+    return any(m.startswith(path.rstrip('/') + '/') for m in MOUNTS)
+
+
 def unlock(path):
-    """发布目录可能是只读的，先放开权限才能删。不跟随符号链接。"""
+    """Release directories may be read-only; open them first. Never follows symlinks."""
     os.chmod(path, stat.S_IRWXU)
     for entry in os.scandir(path):
         if entry.is_dir(follow_symlinks=False):
@@ -140,19 +155,25 @@ def unlock(path):
 
 def remove(path):
     info = os.lstat(path)
-    if stat.S_ISDIR(info.st_mode):
+    if not stat.S_ISDIR(info.st_mode):
+        os.unlink(path)
+    elif path in MOUNTS or holds_mount(path):
+        # A mount point cannot be removed: empty it and keep the directory.
+        clear(path)
+        if path not in MOUNTS and not holds_mount(path):
+            os.rmdir(path)
+    else:
         unlock(path)
         shutil.rmtree(path)
-    else:
-        os.unlink(path)
 
 
 def clear(directory):
-    """删除目录里的全部内容，保留目录本身。"""
+    """Delete everything inside the directory and keep the directory."""
     if not os.path.isdir(directory) or os.path.islink(directory):
         return
+    mounted = directory in MOUNTS or os.path.ismount(directory)
     for name in os.listdir(directory):
-        if name == 'lost+found' and os.path.ismount(directory):
+        if name == 'lost+found' and mounted:
             continue
         remove(os.path.join(directory, name))
 
@@ -181,6 +202,7 @@ def main():
     request = json.loads(sys.argv[1])
     root, directories = request['deploy_root'], request.get('dirs') or []
     home = os.path.expanduser('~')
+    MOUNTS.update(load_mounts(request.get('mountinfo') or '/proc/self/mountinfo'))
     try:
         remove_watchdog()
         wait_watchdog(root)
@@ -193,7 +215,7 @@ def main():
         result = {'status': 'done', 'processes_outside': outside()}
     except Stop as stopped:
         result = {'status': 'failed', 'reason': str(stopped)}
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         result = {'status': 'failed', 'reason': 'clear_failed', 'path': getattr(error, 'filename', '') or ''}
     json.dump(result, sys.stdout)
 

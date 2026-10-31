@@ -1,21 +1,46 @@
-# 只读检测一台目标机：不写文件、不改权限、不输出任何密钥。argv[1] 是 JSON 请求。
+# Read-only inspection of one target host: writes nothing and never prints secrets. argv[1] is a JSON request.
 import glob, json, os, re, stat, subprocess, sys
 
 try:
     import sqlite3
-except ImportError:  # 精简版 python3 可能没有这个模块
+except ImportError:  # minimal python3 packages may lack this module
     sqlite3 = None
 
 CRON_MARKER = '# moox-watchdog'
 SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
-MAX_ENTRIES = 500000
+OPEN_ORDERS = "'PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN', 'OPEN', 'PARTIALLY_FILLED', 'CANCELING', 'CANCEL_UNKNOWN'"
+EXTERNAL_MARKERS = ('bin/moox-factor-engine', 'bin/moox-archive-worker')
+MOUNTS = set()
+
+
+def load_mounts(path):
+    """Mount points, from mountinfo field 5 with octal escapes decoded."""
+    try:
+        with open(path, errors='replace') as stream:
+            rows = stream.readlines()
+    except OSError:
+        return set()
+    decode = lambda text: re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), text)
+    return set(decode(row.split()[4]) for row in rows if len(row.split()) > 4)
+
+
+def holds_mount(path):
+    return any(m.startswith(path.rstrip('/') + '/') for m in MOUNTS)
 
 
 def names(path):
+    """Directory contents that count as leftovers: lost+found and emptied nested mount points do not."""
     try:
-        return sorted(n for n in os.listdir(path) if n != 'lost+found')
+        listed = sorted(n for n in os.listdir(path) if n != 'lost+found')
     except OSError:
         return []
+    kept = []
+    for name in listed:
+        child = os.path.join(path, name)
+        if (child in MOUNTS or holds_mount(child)) and not os.path.islink(child) and not names(child):
+            continue
+        kept.append(name)
+    return kept
 
 
 def service_file(home, name):
@@ -23,27 +48,20 @@ def service_file(home, name):
 
 
 def service_dir(path):
-    work, start = '', ''
     try:
-        with open(path) as stream:
+        with open(path, errors='replace') as stream:
             for line in stream:
                 line = line.strip()
                 if line.startswith('WorkingDirectory='):
-                    work = line.split('=', 1)[1].strip()
-                elif line.startswith('ExecStart='):
-                    start = line.split('=', 1)[1].strip().split(' ')[0].lstrip('-@+!:')
+                    return os.path.normpath(line.split('=', 1)[1].strip().lstrip('-'))
     except OSError:
-        return ''
-    if work:
-        return os.path.normpath(work)
-    if start and os.path.basename(os.path.dirname(start)) == 'bin':
-        return os.path.normpath(os.path.dirname(os.path.dirname(start)))
+        pass
     return ''
 
 
 def archive_dir(directory):
     try:
-        with open(os.path.join(directory, 'config/app.yaml')) as stream:
+        with open(os.path.join(directory, 'config/app.yaml'), errors='replace') as stream:
             match = re.search(r'^\s*root_dir:\s*["\']?([^"\'\s#]+)', stream.read(), re.M)
     except OSError:
         return ''
@@ -73,7 +91,7 @@ def under(path, directories):
 
 
 def processes(inside_dirs):
-    """返回目录内进程和目录外的 moox- 进程；读不到路径的 moox- 进程算目录外。"""
+    """Processes inside the directories, and moox- processes outside; an unreadable path counts as outside."""
     inside, outside = [], []
     if not os.path.isdir('/proc'):
         return inside, outside
@@ -107,7 +125,7 @@ def listening(ports):
 
 
 def occupied_ports(ports, inside_dirs):
-    """返回被部署目录之外的程序占用的端口；看不到属于谁的也算被占用。"""
+    """Ports held by programs outside the deployment; an unknown owner counts as occupied."""
     sockets = listening(set(ports))
     if not sockets:
         return []
@@ -129,20 +147,21 @@ def occupied_ports(ports, inside_dirs):
 
 
 def foreign_file(root):
-    """部署根内有不属于当前用户或读不到的文件时返回 True。"""
-    uid, count = os.getuid(), 0
+    """True when the tree holds anything the SSH user cannot delete. A mount's lost+found belongs to root."""
+    uid = os.getuid()
     denied = []
     for base, directories, files in os.walk(root, onerror=denied.append):
+        if base in MOUNTS or os.path.ismount(base):
+            directories[:] = [d for d in directories if d != 'lost+found']
         for name in directories + files:
-            count += 1
             try:
                 if os.lstat(os.path.join(base, name)).st_uid != uid:
                     return True
             except OSError:
                 return True
-        if denied or count > MAX_ENTRIES:
-            return bool(denied)
-    return bool(denied)
+        if denied:
+            return True
+    return False
 
 
 def writable_parent(path):
@@ -158,6 +177,17 @@ def cron_marked():
     except (OSError, subprocess.SubprocessError):
         return False
     return CRON_MARKER.encode() in output.stdout
+
+
+def describe(path, marker):
+    """A candidate directory outside the deployment root. Only marked directories are MooX's to delete."""
+    return {
+        'path': path,
+        'empty': not names(path),
+        'marked': any(os.path.lexists(os.path.join(path, m)) for m in marker),
+        'symlink': os.path.islink(path),
+        'foreign': os.path.lexists(path) and not os.path.islink(path) and foreign_file(path),
+    }
 
 
 def runtime_binding(root):
@@ -194,8 +224,11 @@ def trade_state(root):
         return 'none'
     try:
         count = 0
+        paper = "SELECT c_trading_account_id FROM t_trading_accounts WHERE c_execution_mode = 'PAPER'"
         for path in paths:
             count += query(path, "SELECT COUNT(*) FROM t_trading_accounts WHERE c_execution_mode = 'LIVE'")[0][0]
+            count += query(path, "SELECT COUNT(*) FROM t_trading_positions WHERE CAST(c_signed_quantity AS REAL) != 0 AND c_trading_account_id NOT IN (%s)" % paper)[0][0]
+            count += query(path, "SELECT COUNT(*) FROM t_trade_orders WHERE c_state IN (%s) AND c_trading_account_id NOT IN (%s)" % (OPEN_ORDERS, paper))[0][0]
         return 'live' if count else 'clear'
     except Exception:
         return 'unreadable'
@@ -222,14 +255,16 @@ def main():
     request = json.loads(sys.argv[1])
     root = request['deploy_root']
     home = os.path.expanduser('~')
+    MOUNTS.update(load_mounts(request.get('mountinfo') or '/proc/self/mountinfo'))
     services = [name for name in SERVICES if os.path.lexists(service_file(home, name))]
     service_dirs = sorted(set(d for d in (service_dir(service_file(home, n)) for n in services) if d))
-    external = [d for d in service_dirs if not under(d, [root])]
+    external = [describe(d, EXTERNAL_MARKERS) for d in service_dirs if not under(d, [root])]
     archives = {request.get('archive_root', '')}
     for directory in service_dirs + [os.path.join(root, 'archive-worker')]:
         archives.add(archive_dir(directory))
-    archives = sorted(d for d in archives if d)
-    inside_dirs = [root] + external
+    archives = sorted(d for d in archives if d and not under(d, [root]))
+    archive_reports = [describe(d, ('.state',)) for d in archives]
+    inside_dirs = [root] + [e['path'] for e in external if e['marked'] and not e['symlink']]
     inside, outside = processes(inside_dirs)
     exists = os.path.lexists(root)
     owner_ok, mode_ok = True, True
@@ -249,7 +284,7 @@ def main():
         'cron': cron_marked(),
         'services': services,
         'external_dirs': external,
-        'archive_dirs': [{'path': d, 'empty': not names(d)} for d in archives],
+        'archive_dirs': archive_reports,
         'processes_inside': len(inside),
         'processes_outside': outside,
         'ports_occupied': occupied_ports(request.get('ports', []), inside_dirs),
@@ -259,7 +294,7 @@ def main():
         'registered_hosts': registered_hosts(request.get('admin_db', '')),
     }
     if request.get('sizes'):
-        report['sizes_kb'] = dict((d, size_kb(d)) for d in [root] + external + archives if os.path.lexists(d))
+        report['sizes_kb'] = dict((d, size_kb(d)) for d in [root] + [e['path'] for e in external] + archives if os.path.lexists(d))
     json.dump(report, sys.stdout)
 
 

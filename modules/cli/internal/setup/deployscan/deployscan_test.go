@@ -154,7 +154,7 @@ func TestInspectReadsDeploymentWithoutWriting(t *testing.T) {
 	write(t, filepath.Join(external, "bin/moox-factor-engine"), "x")
 	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nWorkingDirectory="+external+"\nExecStart="+external+"/bin/moox-factor-engine serve\n")
 	archive := filepath.Join(filepath.Dir(s.home), "archive-data")
-	write(t, filepath.Join(archive, "part.csv"), "x")
+	write(t, filepath.Join(archive, ".state/staging.db"), "x")
 	write(t, filepath.Join(external, "config/app.yaml"), "worker:\n  root_dir: "+archive+"\n")
 	before := snapshotTree(t, filepath.Dir(s.home))
 	report := s.inspect(t, map[string]any{"deploy_root": s.root, "archive_root": filepath.Join(s.root, "archive"), "sizes": true})
@@ -164,8 +164,9 @@ func TestInspectReadsDeploymentWithoutWriting(t *testing.T) {
 	require.True(t, report.Cron)
 	require.Equal(t, "sha256:abc", report.RuntimeSHA256)
 	require.Equal(t, map[string]string{"prod": "r1"}, report.Units)
-	require.Equal(t, []string{external}, report.ExternalDirs)
-	require.Contains(t, report.ArchiveDirs, ArchiveDir{Path: archive})
+	require.Equal(t, []string{external}, report.ExternalPaths())
+	require.True(t, report.ExternalDirs[0].Marked)
+	require.Contains(t, report.ArchiveDirs, DirReport{Path: archive, Marked: true})
 	require.Contains(t, report.SizesKB, s.root)
 }
 
@@ -175,7 +176,21 @@ func tradeDB(t *testing.T, path, mode string) {
 	db, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE t_trading_accounts (c_execution_mode TEXT); INSERT INTO t_trading_accounts VALUES ('` + mode + `')`)
+	_, err = db.Exec(`CREATE TABLE t_trading_accounts (c_trading_account_id TEXT, c_execution_mode TEXT);
+		CREATE TABLE t_trading_positions (c_trading_account_id TEXT, c_signed_quantity TEXT);
+		CREATE TABLE t_trade_orders (c_trading_account_id TEXT, c_state TEXT);
+		INSERT INTO t_trading_accounts VALUES ('a', '` + mode + `');
+		INSERT INTO t_trading_positions VALUES ('a', '1.5');
+		INSERT INTO t_trade_orders VALUES ('a', 'OPEN');`)
+	require.NoError(t, err)
+}
+
+func tradeExec(t *testing.T, path, statement string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(statement)
 	require.NoError(t, err)
 }
 
@@ -185,7 +200,13 @@ func TestInspectTradeAndRegistry(t *testing.T) {
 	request := map[string]any{"deploy_root": s.root, "archive_root": filepath.Join(s.root, "archive")}
 	database := filepath.Join(s.root, "trade/current/trade/data/moox_trade.db")
 	tradeDB(t, database, "PAPER")
-	require.Equal(t, TradeClear, s.inspect(t, request).Trade)
+	require.Equal(t, TradeClear, s.inspect(t, request).Trade, "纸面账户的持仓和订单不算")
+	tradeExec(t, database, `INSERT INTO t_trading_positions VALUES ('gone', '2')`)
+	require.Equal(t, TradeLive, s.inspect(t, request).Trade, "账户记录没了但还有持仓")
+	tradeExec(t, database, `DELETE FROM t_trading_positions WHERE c_trading_account_id = 'gone'; INSERT INTO t_trade_orders VALUES ('gone', 'SUBMIT_UNKNOWN')`)
+	require.Equal(t, TradeLive, s.inspect(t, request).Trade, "账户记录没了但还有未完成订单")
+	tradeExec(t, database, `DELETE FROM t_trade_orders WHERE c_trading_account_id = 'gone'; INSERT INTO t_trade_orders VALUES ('gone', 'FILLED'); INSERT INTO t_trading_positions VALUES ('gone', '0')`)
+	require.Equal(t, TradeClear, s.inspect(t, request).Trade, "已结束的订单和零持仓不算")
 	require.NoError(t, os.Remove(database))
 	tradeDB(t, database, "LIVE")
 	require.Equal(t, TradeLive, s.inspect(t, request).Trade)
@@ -324,7 +345,11 @@ func TestDecideRoutes(t *testing.T) {
 	cronOnly := clean
 	cronOnly.Cron = true
 	archive := clean
-	archive.ArchiveDirs = []ArchiveDir{{Path: "/data/x"}}
+	archive.ArchiveDirs = []DirReport{{Path: "/data/x", Marked: true}}
+	userFiles := clean
+	userFiles.ArchiveDirs = []DirReport{{Path: "/data/x"}}
+	foreignArchive := clean
+	foreignArchive.ArchiveDirs = []DirReport{{Path: "/data/x", Marked: true, Foreign: true}}
 	foreign := installed
 	foreign.OwnerOK = false
 	outside := clean
@@ -349,6 +374,8 @@ func TestDecideRoutes(t *testing.T) {
 		{"半清的机器不算空机", []HostReport{halfWiped}, LocalState{}, RouteExisting},
 		{"只剩看护也不算空机", []HostReport{cronOnly}, LocalState{}, RouteExisting},
 		{"归档有内容也不算空机", []HostReport{archive}, LocalState{}, RouteExisting},
+		{"没有标记的归档目录是用户自己的", []HostReport{userFiles}, LocalState{}, RouteFresh},
+		{"归档里有删不掉的文件", []HostReport{foreignArchive}, LocalState{}, RouteBlocked},
 		{"首装做到一半", []HostReport{installed}, matched, RouteResume},
 		{"首装写绑定前失败", []HostReport{uploaded}, matched, RouteResume},
 		{"写绑定前失败但别处已部署", []HostReport{uploaded, {Host: "x", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Units: map[string]string{"host": "r"}}}, matched, RouteExisting},
@@ -373,7 +400,7 @@ func TestDecideRoutes(t *testing.T) {
 }
 
 func TestCheckDeleteTarget(t *testing.T) {
-	for _, target := range []string{"/", "/data", "/home", "/root", "/etc", "/usr", "/var", "/opt", "/home/ubuntu", "/home/other", "/home/ubuntu/", "relative", "/data/../etc"} {
+	for _, target := range []string{"/", "/data", "/home", "/root", "/etc", "/usr", "/var", "/opt", "/home/ubuntu", "/home/other", "/home/ubuntu/", "relative", "/data/../etc", "/usr/local", "/var/lib", "/etc/systemd", "/home/ubuntu/.ssh", "/home/ubuntu/.local/share"} {
 		require.Error(t, CheckDeleteTarget(target, "/home/ubuntu"), target)
 	}
 	require.Error(t, CheckDeleteTarget("/srv/users", "/srv/users/ubuntu"), "家目录的上级")
@@ -388,13 +415,15 @@ func planManifest() setupconfig.Manifest {
 
 func TestBuildPlan(t *testing.T) {
 	report := HostReport{Host: "h", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host", "prod", "my-notes"}, Markers: true, Trade: TradeClear,
-		ExternalDirs: []string{"/home/ubuntu/moox/factor-engine"}, ArchiveDirs: []ArchiveDir{{Path: "/data/moox/archive"}, {Path: "/mnt/archive"}, {Path: "/mnt/empty", Empty: true}},
+		ExternalDirs:    []DirReport{{Path: "/home/ubuntu/moox/factor-engine", Marked: true}, {Path: "/home/ubuntu/projects"}},
+		ArchiveDirs:     []DirReport{{Path: "/mnt/archive", Marked: true}, {Path: "/mnt/empty", Marked: true, Empty: true}, {Path: "/mnt/photos"}},
 		RegisteredHosts: []RegisteredHost{{ID: "h"}, {ID: "old", Address: "203.0.113.9"}}, SizesKB: map[string]int64{"/data/moox": 1}}
 	manifest := planManifest()
 	plan, err := BuildPlan(manifest, []HostReport{report}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"my-notes"}, plan.Hosts[0].Unknown)
-	require.Equal(t, []string{"/home/ubuntu/moox/factor-engine", "/mnt/archive"}, plan.Hosts[0].Dirs, "部署根内的不重复列，空目录不列")
+	require.Equal(t, []string{"/home/ubuntu/moox/factor-engine", "/mnt/archive"}, plan.Hosts[0].Dirs, "空目录不列")
+	require.Equal(t, []string{"/home/ubuntu/projects", "/mnt/photos"}, plan.Hosts[0].Skipped, "没有 MooX 标记的目录绝不清除")
 	require.Equal(t, []RegisteredHost{{ID: "old", Address: "203.0.113.9"}}, plan.OtherHosts)
 	require.False(t, plan.RegistryUnread)
 	require.Equal(t, TradeClear, plan.Trade)
@@ -417,13 +446,124 @@ func TestBuildPlanRejectsUnsafeRoot(t *testing.T) {
 	require.ErrorContains(t, err, "delete_target_rejected")
 }
 
+func TestBuildPlanRejectsDangerousDirs(t *testing.T) {
+	base := HostReport{Host: "h", Home: "/home/ubuntu", Markers: true, Entries: []string{"host"}}
+	for _, dir := range []DirReport{
+		{Path: "/data", Marked: true},
+		{Path: "/usr/local", Marked: true},
+		{Path: "/home/ubuntu/.local", Marked: true},
+		{Path: "/mnt/link", Marked: true, Symlink: true},
+	} {
+		report := base
+		report.ExternalDirs = []DirReport{dir}
+		_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
+		require.ErrorContains(t, err, "delete_target_rejected", dir.Path)
+	}
+	manifest := planManifest()
+	manifest.Paths.DeployRoot = "/data/x/moox"
+	report := base
+	report.ExternalDirs = []DirReport{{Path: "/data/x", Marked: true}}
+	_, err := BuildPlan(manifest, []HostReport{report}, nil)
+	require.ErrorContains(t, err, "上级")
+}
+
 func TestBuildPlanRequiresMarker(t *testing.T) {
-	report := HostReport{Host: "h", Home: "/home/ubuntu", Entries: []string{"storage"}}
+	report := HostReport{Host: "h", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"storage"}}
 	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
 	require.ErrorContains(t, err, "MooX 标记")
-	plan, err := BuildPlan(planManifest(), []HostReport{report}, &PendingRecord{Dirs: map[string][]string{"h": {"/home/ubuntu/moox/old"}}})
+	for name, pending := range map[string]*PendingRecord{
+		"标记读不出":   {},
+		"换了主机":    {Hosts: map[string]PendingHost{"h": {Address: "203.0.113.1", Root: "/data/moox"}}},
+		"换了部署目录":  {Hosts: map[string]PendingHost{"h": {Address: "198.51.100.1", Root: "/data/other"}}},
+		"别的主机的标记": {Hosts: map[string]PendingHost{"x": {Address: "198.51.100.1", Root: "/data/moox"}}},
+	} {
+		_, err := BuildPlan(planManifest(), []HostReport{report}, pending)
+		require.ErrorContains(t, err, "MooX 标记", name)
+	}
+	plan, err := BuildPlan(planManifest(), []HostReport{report}, &PendingRecord{Hosts: map[string]PendingHost{"h": {Address: "198.51.100.1", Root: "/data/moox", Dirs: []string{"/home/ubuntu/moox/old"}}}})
 	require.NoError(t, err)
 	require.Equal(t, []string{"/home/ubuntu/moox/old"}, plan.Hosts[0].Dirs, "重跑要沿用上次记录的目录")
+}
+
+func TestMountedRootIsNotForeign(t *testing.T) {
+	s := newSandbox(t)
+	lost := filepath.Join(s.root, "lost+found")
+	require.NoError(t, os.MkdirAll(lost, 0o755))
+	require.NoError(t, os.Chmod(lost, 0))
+	t.Cleanup(func() { _ = os.Chmod(lost, 0o755) })
+	mountinfo := filepath.Join(s.home, "mountinfo")
+	write(t, mountinfo, "36 35 98:0 / "+s.root+" rw - ext4 /dev/vdb rw\n")
+	report := s.inspect(t, map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
+	require.False(t, report.ForeignFiles, "挂载点的 lost+found 不算别人的文件")
+	require.True(t, report.Empty())
+	require.Equal(t, RouteFresh, Decide([]HostReport{report}, "control", LocalState{}).Route)
+}
+
+func TestWipeKeepsNestedMountPoint(t *testing.T) {
+	s := newSandbox(t)
+	deployment(t, s)
+	mountinfo := filepath.Join(s.home, "mountinfo")
+	mounted := filepath.Join(s.root, "import")
+	write(t, mountinfo, "36 35 98:0 / "+mounted+" rw - ext4 /dev/vdc rw\n")
+	raw, err := json.Marshal(map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
+	require.NoError(t, err)
+	output, err := s.client.Run(context.Background(), []string{"python3", "-c", wipeScript, string(raw)}, nil)
+	require.NoError(t, err)
+	require.Contains(t, output.Stdout, `"done"`)
+	require.DirExists(t, mounted, "挂载点不能删")
+	require.NoFileExists(t, filepath.Join(mounted, "history.bin"))
+	report := s.inspect(t, map[string]any{"deploy_root": s.root, "mountinfo": mountinfo})
+	require.True(t, report.Empty(), "清空的挂载点不算残留")
+}
+
+func TestSymlinkArchiveIsReported(t *testing.T) {
+	s := newSandbox(t)
+	target := filepath.Join(s.home, "nas")
+	write(t, filepath.Join(target, ".state/staging.db"), "x")
+	link := filepath.Join(filepath.Dir(s.home), "archive-link")
+	require.NoError(t, os.Symlink(target, link))
+	report := s.inspect(t, map[string]any{"deploy_root": s.root, "archive_root": link})
+	require.Equal(t, []DirReport{{Path: link, Marked: true, Symlink: true}}, report.ArchiveDirs)
+	report.Home = "/home/ubuntu"
+	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
+	require.ErrorContains(t, err, "符号链接")
+}
+
+func TestServiceWithoutWorkingDirectoryAddsNoDir(t *testing.T) {
+	s := newSandbox(t)
+	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nExecStart=/usr/local/bin/moox-factor-engine\n")
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	require.Empty(t, report.ExternalDirs)
+}
+
+func TestUnmarkedExternalDirIsLeftAlone(t *testing.T) {
+	s := newSandbox(t)
+	projects := filepath.Join(s.home, "projects")
+	write(t, filepath.Join(projects, "code.go"), "x")
+	write(t, filepath.Join(s.home, ".config/systemd/user/moox-factor-engine.service"), "[Service]\nWorkingDirectory="+projects+"\n")
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	require.False(t, report.ExternalDirs[0].Marked)
+	report.Home = "/home/ubuntu"
+	plan, err := BuildPlan(planManifest(), []HostReport{report}, nil)
+	require.NoError(t, err)
+	require.Empty(t, plan.Hosts[0].Dirs)
+	require.Equal(t, []string{projects}, plan.Hosts[0].Skipped)
+}
+
+func TestScriptsAreASCII(t *testing.T) {
+	for _, source := range []string{inspectScript, wipeScript} {
+		for _, r := range source {
+			require.Less(t, r, rune(128), "python3 -c 在 C 语言环境下可能读不了非 ASCII 内容")
+		}
+	}
+}
+
+func TestWipeSurvivesNonUTF8Crontab(t *testing.T) {
+	s := newSandbox(t)
+	require.NoError(t, os.MkdirAll(s.root, 0o755))
+	s.cron(t, "1 2 3 4 5 \xff\n* * * * * run # moox-watchdog\n")
+	wipe(t, s)
+	require.Equal(t, "1 2 3 4 5 \xff\n", s.cronContent())
 }
 
 func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
@@ -452,8 +592,10 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 func TestPendingRoundTrip(t *testing.T) {
 	operator := filepath.Join(t.TempDir(), "moox")
 	require.Nil(t, ReadPending(operator))
-	require.NoError(t, MarkPending(operator, Plan{Digest: "d", Hosts: []HostPlan{{Host: "h", Dirs: []string{"/x/y"}}}}))
-	require.Equal(t, []string{"/x/y"}, ReadPending(operator).Dirs["h"])
+	require.NoError(t, MarkPending(operator, Plan{Hosts: []HostPlan{{Host: "h", Address: "a", DeployRoot: "/r", Dirs: []string{"/x/y"}}}}))
+	host, ok := ReadPending(operator).host("h", "a", "/r")
+	require.True(t, ok)
+	require.Equal(t, []string{"/x/y"}, host.Dirs)
 	require.NoError(t, ClearPending(operator))
 	require.NoError(t, ClearPending(operator))
 	require.Nil(t, ReadPending(operator))

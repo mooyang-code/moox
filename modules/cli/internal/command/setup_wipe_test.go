@@ -186,8 +186,12 @@ func TestCheckCoreRoute(t *testing.T) {
 		h.reports[i].Entries, h.reports[i].Units = nil, nil
 	}
 	require.NoError(t, os.MkdirAll(h.state, 0o700))
+	require.NoError(t, os.MkdirAll(h.operator, 0o700))
+	pin := filepath.Join(h.operator, "gateway-bootstrap.json")
+	require.NoError(t, os.WriteFile(pin, []byte("{}"), 0o600))
 	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
 	require.NoDirExists(t, h.state, "空机时要归档本机遗留状态")
+	require.NoFileExists(t, pin, "旧操作员身份会和新 CA 冲突，也要归档")
 	h.deps.scanDeployment = nil
 	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
 }

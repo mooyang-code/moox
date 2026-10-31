@@ -1,6 +1,9 @@
 package deployscan
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // 发布路线。
 const (
@@ -80,6 +83,11 @@ func blockers(reports []HostReport) []string {
 		}
 		if report.ForeignFiles {
 			add(report, "部署目录里有不属于 SSH 用户的文件，清除时删不掉")
+		}
+		for _, dir := range append(slices.Clone(report.ExternalDirs), report.ArchiveDirs...) {
+			if dir.Marked && dir.Foreign {
+				add(report, "目录 %s 里有不属于 SSH 用户的文件，清除时删不掉", dir.Path)
+			}
 		}
 		if len(report.ProcessesOutside) != 0 {
 			add(report, "部署目录之外还有 MooX 进程：%v", report.ProcessesOutside)

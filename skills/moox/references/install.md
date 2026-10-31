@@ -68,7 +68,7 @@ echo "下载源: $SRC"
 
 ```bash
 VER=v0.4.1
-OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64 / windows_amd64
+OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64
 GITHUB=https://github.com/mooyang-code/moox/releases/download/${VER}
 CNB=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
 if [[ "$SRC" == cnb ]]; then BASES=("$CNB" "$GITHUB"); else BASES=("$GITHUB" "$CNB"); fi
@@ -144,7 +144,7 @@ cd moox-${VER}
 > 要彻底清空吗？清空会删除这些机器上全部旧程序和旧数据（K 线、因子、策略、任务、归档、历史导入包、交易记录、管理台账号与操作记录、管理台里保存的交易所密钥等、配置备份），然后用你刚填的初始化设置重新发布 `<版本>`，并在腾讯云防火墙放行 `<端口摘要>`。删除后无法恢复，配置备份也会一起删除。
 > `<配置之外还有这些旧机器：……，不会被清理，上面的旧程序会继续运行>`
 > 如果旧部署启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
-> 不清空就保留全部数据，这次不发布新程序，改走恢复配置。
+> `<existing 时：不清空就保留全部数据，这次不发布新程序，改走恢复配置；upgrade 时：不清空就保留全部数据，只升级程序>`
 
 - **用户同意**：执行下面的命令，清除和后面的部署都算在这次确认内，中途不再确认。
 
@@ -154,9 +154,10 @@ cd moox-${VER}
 
   - 清除后 `route` 是 `fresh`，走第 4 节。
   - 预览里 `unknown_entries` 不为空时，把这些条目告诉用户：它们在部署目录里，也会被删除。
+  - 预览里 `skipped_dirs` 不为空时也告诉用户：这些目录看不到 MooX 的文件，不会清除。
   - 中途失败后再运行一次会接着清：重新取预览，范围变小不用再问，范围变大要重新询问。
-  - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝。这是唯一要重新询问的情况，用户明确同意后才加 `--accept-trade-risk`。
-- **用户不同意**：把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理。
+  - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
+- **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
 
 ## 4. 部署
 
@@ -240,8 +241,8 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 
 ## 常见问题
 
-| 现象 | 处理 |
-| --- | --- |
+| 现象 | 含义 | 处理 |
+| --- | --- | --- |
 | `route=blocked` | 属主或权限不符、端口被占用，或有部署目录之外的旧进程 | 按 `reasons` 处理，不要继续安装 |
 | `ssh_unreachable`，且是因子机 | 这台电脑和因子机不在同一网络 | 换到同一网络后重新运行 |
 | `bootstrap observation failed` 等“retry”提示 | SSH 连接断开 | 用同样的参数重试一次 |
@@ -255,8 +256,8 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `bundle_incomplete` | 产物包不完整，没有清除任何主机 | 重新下载产物包 |
 | `private material directory ownership or permissions are invalid` | 本机私有目录权限不对（CLI 会自动收紧属于自己的目录） | 按报错里的路径和命令处理 |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | 系统 `known_hosts` 有旧记录，或机器确实换了 | 先跑 `setup validate`，通过说明 MooX 记录的指纹没变；不自己删记录，向用户说明 |
-| `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机）：请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
-| `ssh_auth_failed` | 免密登录没开通或公钥被删：让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
-| 腾讯云接口报权限不足 | 核对子用户的 6 个预设策略 |
-| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集，先从 `moox.toml` 去掉或先建采集任务 |
-| 产物包只有 linux/amd64 | ARM 服务器暂不支持 |
+| `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机） | 请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
+| `ssh_auth_failed` | 免密登录没开通或公钥被删 | 让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
+| 腾讯云接口报权限不足 | 子用户缺策略 | 核对子用户的 6 个预设策略 |
+| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
+| 产物包只有 linux/amd64 | ARM 服务器暂不支持 | 换 x86_64 服务器 |

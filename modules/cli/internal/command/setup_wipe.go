@@ -44,7 +44,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 }
 
 // checkCoreRoute 在 bootstrap core 动手打包和上传之前确认这是一次首次安装：
-// 全是空机时先归档本机遗留的状态，避免复用旧软件；上次没做完的首次安装可以继续；其余情况直接停止。
+// 全是空机时先归档本机遗留的状态和操作员身份，避免复用旧软件、和新 CA 冲突；上次没做完的首次安装可以继续；其余情况直接停止。
 func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.CoreOptions) error {
 	if deps.scanDeployment == nil {
 		return nil
@@ -57,7 +57,7 @@ func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 	decision := deployscan.Decide(reports, snapshot.Manifest.ControlHost().Name, local)
 	switch decision.Route {
 	case deployscan.RouteFresh:
-		return deployscan.ArchiveState(options.StateDirectory, time.Now())
+		return deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
 	case deployscan.RouteResume:
 		return nil
 	default:
