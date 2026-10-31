@@ -358,3 +358,13 @@ func TestSetKeyFailsLoudlyWhenTheTemplateDrifts(t *testing.T) {
 		t.Fatal("找不到拓扑段时必须报错")
 	}
 }
+
+// 告警 Webhook 可以不填，部署后在管理台添加；填了仍要通过官方域名校验。
+func TestRenderAllowsEmptyWebhook(t *testing.T) {
+	request := sampleRequest()
+	request.Notification.WebhookURL = ""
+	manifest, _ := renderWith(t, request, nil)
+	if manifest.Notification.WebhookURL != "" || manifest.Notification.ChannelType != "wecom" {
+		t.Fatalf("告警配置不对: %+v", manifest.Notification)
+	}
+}

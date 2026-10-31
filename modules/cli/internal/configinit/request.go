@@ -82,11 +82,16 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
 	r.Notification.ChannelType = strings.TrimSpace(r.Notification.ChannelType)
 	r.Notification.WebhookURL = strings.TrimSpace(r.Notification.WebhookURL)
-	for _, field := range []struct{ name, value string }{
-		{"管理员用户名", r.Admin.Username}, {"管理员密码", r.Admin.Password},
-		{"告警渠道", r.Notification.ChannelType}, {"告警机器人的 Webhook 地址", r.Notification.WebhookURL},
+	for _, field := range []struct {
+		name, value string
+		required    bool
+	}{
+		{"管理员用户名", r.Admin.Username, true}, {"管理员密码", r.Admin.Password, true},
+		{"告警渠道", r.Notification.ChannelType, true},
+		// Webhook 可以留空，部署后在管理台添加。
+		{"告警机器人的 Webhook 地址", r.Notification.WebhookURL, false},
 	} {
-		if err := checkText(field.name, field.value, true); err != nil {
+		if err := checkText(field.name, field.value, field.required); err != nil {
 			return err
 		}
 	}

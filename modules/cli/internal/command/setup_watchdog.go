@@ -32,11 +32,6 @@ func newSetupWatchdogCommand(deps setupDeps) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if !remove {
-			if err := snapshot.Manifest.RequireNotification(); err != nil {
-				return err
-			}
-		}
 		if remove && !yes {
 			names := make([]string, 0, len(targets))
 			for _, host := range targets {
@@ -79,15 +74,15 @@ func watchdogTargets(manifest setupconfig.Manifest, names []string) ([]setupconf
 	return targets, nil
 }
 
-// watchdogSeed 用 moox.toml 的 [notification] 生成主机策略种子。
+// watchdogSeed 用 moox.toml 的 [notification] 生成主机策略种子；没配置 webhook 时种子里没有渠道，等 Monitor 同步。
 func watchdogSeed(manifest setupconfig.Manifest) ([]byte, error) {
 	channel := strings.TrimSpace(manifest.Notification.ChannelType)
 	if channel == "" {
 		channel = "wecom"
 	}
-	seed := hostpolicy.Policy{
-		Source: hostpolicy.SourceSeed, FetchedAt: time.Now().UTC(),
-		NotificationChannels: []hostpolicy.Channel{{Type: channel, WebhookURL: strings.TrimSpace(manifest.Notification.WebhookURL)}},
+	seed := hostpolicy.Policy{Source: hostpolicy.SourceSeed, FetchedAt: time.Now().UTC()}
+	if url := strings.TrimSpace(manifest.Notification.WebhookURL); url != "" {
+		seed.NotificationChannels = []hostpolicy.Channel{{Type: channel, WebhookURL: url}}
 	}
 	if err := seed.Validate(); err != nil {
 		return nil, err

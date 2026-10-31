@@ -110,9 +110,6 @@ func runSetupInit(
 	file, configDir, storageHost string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
-	if err := snapshot.Manifest.RequireNotification(); err != nil {
-		return setupInitSummary{}, err
-	}
 	// Open the cloud ingress required by every configured public runtime endpoint
 	// before the first Admin/Storage mutation.
 	firewall, err := deps.ensureFirewall(ctx, snapshot)
