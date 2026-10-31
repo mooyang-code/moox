@@ -4,7 +4,7 @@ import fcntl, glob, json, os, re, shutil, signal, stat, subprocess, sys, time
 
 CRON_MARKER = '# moox-watchdog'
 SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
-LOCK_WAIT = 120
+LOCK_WAIT = 300
 SCRIPT_TIMEOUT = 90
 TERM_WAIT = 20
 KILL_WAIT = 5
@@ -20,7 +20,10 @@ def run(argv, stdin=None, timeout=30):
 
 
 def remove_watchdog():
-    listed = run(['crontab', '-l'])
+    try:
+        listed = run(['crontab', '-l'])
+    except OSError:
+        return  # no crontab command means no watchdog entry
     if listed.returncode != 0:
         return
     lines = listed.stdout.decode('utf-8', 'surrogateescape').splitlines()
@@ -160,8 +163,6 @@ def remove(path):
     elif path in MOUNTS or holds_mount(path):
         # A mount point cannot be removed: empty it and keep the directory.
         clear(path)
-        if path not in MOUNTS and not holds_mount(path):
-            os.rmdir(path)
     else:
         unlock(path)
         shutil.rmtree(path)
@@ -193,7 +194,8 @@ def outside():
                     name = stream.read().strip()
             except OSError:
                 continue
-        if os.path.basename(name).startswith('moox-'):
+        base = os.path.basename(name)
+        if base.startswith('moox-') and base != 'moox-cli':
             found.add(name)
     return sorted(found)
 

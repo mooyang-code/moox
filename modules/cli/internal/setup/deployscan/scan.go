@@ -1,6 +1,6 @@
 // Package deployscan 检测目标机器上的 MooX 部署情况，决定发布走哪条路线，并在用户同意后彻底清除旧部署。
 //
-// 检测全程只读：不建目录、不生成密钥，也不把任何密钥带回操作机。
+// 检测不改动部署：不建目录、不生成密钥，也不把任何密钥带回操作机（只读打开 SQLite 时可能留下 -shm、-wal 文件）。
 package deployscan
 
 import (
@@ -78,7 +78,7 @@ type HostReport struct {
 
 // Empty 报告这台主机是否干净：部署根、看护、外部服务和归档都没有残留。半清的机器不算空机。
 func (r HostReport) Empty() bool {
-	if len(r.Entries) != 0 || r.Cron || len(r.Services) != 0 {
+	if len(r.Entries) != 0 || r.Cron || len(r.Services) != 0 || r.ProcessesInside != 0 {
 		return false
 	}
 	for _, dir := range append(slices.Clone(r.ArchiveDirs), r.ExternalDirs...) {
@@ -87,15 +87,6 @@ func (r HostReport) Empty() bool {
 		}
 	}
 	return true
-}
-
-// ExternalPaths 返回外部程序目录：有内容没内容都要清，安装目录不留空壳。
-func (r HostReport) ExternalPaths() []string {
-	paths := make([]string, 0, len(r.ExternalDirs))
-	for _, dir := range r.ExternalDirs {
-		paths = append(paths, dir.Path)
-	}
-	return paths
 }
 
 // Options 是一次检测的参数。

@@ -67,7 +67,7 @@ echo "下载源: $SRC"
 - CNB：`https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}/<文件名>`
 
 ```bash
-VER=v0.4.1
+VER=v0.4.2
 OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64
 GITHUB=https://github.com/mooyang-code/moox/releases/download/${VER}
 CNB=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
@@ -129,7 +129,7 @@ cd moox-${VER}
 | `fresh` | 全是空机 | 不用询问清空，确认部署计划后走第 4 节 |
 | `resume` | 这台电脑上次的首次安装没做完 | 继续第 4 节，不询问清空 |
 | `existing` | 已有部署，这台电脑没有匹配的状态（新电脑都是这种） | 询问是否彻底清空 |
-| `upgrade` | 已有部署，这台电脑就是当初部署的电脑 | 询问是否彻底清空；不清空就按“升级到新版本” |
+| `upgrade` | 已有部署，这台电脑就是当初部署的电脑 | 询问是否彻底清空；不清空就按“升级到新版本”。如果是本次安装在 `bootstrap --stage control` 之后中断，不用询问，从中断的步骤继续 |
 | `blocked` | 有阻塞项，`reasons` 写了原因 | 说明原因后停下，不要继续 |
 
 `existing` 或 `upgrade` 时先取预览（不会改动任何东西）：
@@ -246,7 +246,7 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `route=blocked` | 属主或权限不符、端口被占用，或有部署目录之外的旧进程 | 按 `reasons` 处理，不要继续安装 |
 | `ssh_unreachable`，且是因子机 | 这台电脑和因子机不在同一网络 | 换到同一网络后重新运行 |
 | `bootstrap observation failed` 等“retry”提示 | SSH 连接断开 | 用同样的参数重试一次 |
-| `target_*`、`target_rejected` 开头的错误 | 目标机明确拒绝，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate` |
+| `target_*`、`target_rejected` 开头的错误 | 目标机明确拒绝，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate`。`route` 看不出原因时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |
 | `unit deployment requires the original core state directory…`、`…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |
 | `wipe_scope_changed` | 清除范围和预览不一致，没有清除任何主机 | 重新预览并确认 |

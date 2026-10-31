@@ -27,8 +27,8 @@ const wipeTimeout = 2 * time.Hour
 // pendingFile 是 setup wipe 的未完成标记，放在操作员目录里，状态目录改名不影响它。
 const pendingFile = "wipe-pending.json"
 
-// 操作员目录里要留在原处的文件：没有钥匙串时 moox.toml 的密钥在 config.key，known_hosts 是已确认的指纹。
-var operatorKeep = []string{"config.key", "known_hosts", pendingFile}
+// operatorIdentity 是操作员目录里绑定旧部署的文件。config.key（没有钥匙串时解密 moox.toml）和 known_hosts（已确认的指纹）要留在原处。
+var operatorIdentity = []string{"gateway-client.yaml", "gateway-bootstrap.json", "moox-ca.crt", "caller-moox-cli.key", "storage-internal-auth.env"}
 
 // HostPlan 是一台主机的清除范围。
 type HostPlan struct {
@@ -91,7 +91,7 @@ func CheckDeleteTarget(target, home string) error {
 
 // knownEntries 是部署根下属于 MooX 的顶层条目。
 func knownEntries(paths setupconfig.Paths) []string {
-	known := []string{"host", "eventbus", "storage", "storage-view", "access", "egress-proxy", "trade", "collector-stream", "factor-engine", "archive-worker", "archive", "import", "bootstrap", "bootstrap-input", "identity", "run", "prod"}
+	known := []string{"host", "eventbus", "storage", "storage-view", "access", "egress-proxy", "trade", "collector-stream", "factor-engine", "archive-worker", "archive", "import", "bootstrap", "bootstrap-input", "material-exports", "identity", "run", "prod"}
 	for _, root := range []string{paths.ControlRoot, paths.StorageRoot, paths.ArchiveRoot} {
 		if relative, err := filepath.Rel(paths.DeployRoot, root); err == nil && !strings.HasPrefix(relative, "..") {
 			known = append(known, strings.Split(relative, "/")[0])
@@ -134,7 +134,7 @@ func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *Pen
 				}
 			case dir.Symlink:
 				return plan, fmt.Errorf("delete_target_rejected: %s 上的 %s 是符号链接，不会跟随清除；请用户自己处理后重新运行", report.Host, dir.Path)
-			case !dir.Empty || slices.Contains(report.ExternalPaths(), dir.Path):
+			default:
 				dirs = append(dirs, dir.Path)
 			}
 		}
@@ -336,29 +336,35 @@ func ClearPending(operatorDir string) error {
 	return err
 }
 
-// ArchiveLocal 归档这台电脑上的旧部署状态：操作员身份移到 .bak 子目录，状态目录改名。
-// config.key、known_hosts 留在原处，否则 moox.toml 解不开、主机指纹要重新确认。
-func ArchiveLocal(operatorDir, stateDir string, now time.Time) error {
+// ArchiveLocal 归档这台电脑上的旧部署状态：操作员身份移到 .bak 子目录，状态目录改名，返回归档了哪些位置。
+func ArchiveLocal(operatorDir, stateDir string, now time.Time) ([]string, error) {
 	stamp := now.UTC().Format("20060102150405")
-	entries, err := os.ReadDir(operatorDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	backup := filepath.Join(operatorDir, ".bak-"+stamp)
-	for _, entry := range entries {
-		if slices.Contains(operatorKeep, entry.Name()) || strings.HasPrefix(entry.Name(), ".bak-") {
+	archived := []string{}
+	for _, name := range operatorIdentity {
+		source := filepath.Join(operatorDir, name)
+		if _, err := os.Lstat(source); errors.Is(err, os.ErrNotExist) {
 			continue
+		} else if err != nil {
+			return archived, err
 		}
 		if err := os.MkdirAll(backup, 0o700); err != nil {
-			return err
+			return archived, err
 		}
-		if err := os.Rename(filepath.Join(operatorDir, entry.Name()), filepath.Join(backup, entry.Name())); err != nil {
-			return err
+		if err := os.Rename(source, filepath.Join(backup, name)); err != nil {
+			return archived, err
+		}
+		if !slices.Contains(archived, backup) {
+			archived = append(archived, backup)
 		}
 	}
 	// 状态目录也要换新，否则新发布会复用旧软件。
 	if _, err := os.Lstat(stateDir); errors.Is(err, os.ErrNotExist) {
-		return nil
+		return archived, nil
 	}
-	return os.Rename(stateDir, stateDir+".bak-"+stamp)
+	target := stateDir + ".bak-" + stamp
+	if err := os.Rename(stateDir, target); err != nil {
+		return archived, err
+	}
+	return append(archived, target), nil
 }

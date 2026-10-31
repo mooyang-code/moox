@@ -180,7 +180,7 @@ func TestSetupValidateReportsRoute(t *testing.T) {
 
 func TestCheckCoreRoute(t *testing.T) {
 	h := newWipeHarness(t)
-	options := unitdeploy.CoreOptions{StateDirectory: h.state, OperatorDirectory: h.operator}
+	options := unitdeploy.CoreOptions{StateDirectory: h.state, OperatorDirectory: h.operator, Log: &bytes.Buffer{}}
 	require.ErrorContains(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options), "deployment_not_fresh")
 	for i := range h.reports {
 		h.reports[i].Entries, h.reports[i].Units = nil, nil

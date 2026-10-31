@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
@@ -24,9 +23,7 @@ func ReadLocalState(stateDir, operatorDir string) deployscan.LocalState {
 	}
 	state.CoreReady = fileExists(filepath.Join(stateDir, "core-ready.json"))
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
-	if pin, err := unitbundle.ReadOperatorPin(operatorDir); err == nil && pin.ControlHostID != "" {
-		state.OperatorPin = true
-	}
+	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))
 	for _, pattern := range []string{"units/*/*/operation.json", "units/*/*/releases/*/operation.json"} {
 		if matches, _ := filepath.Glob(filepath.Join(stateDir, pattern)); len(matches) != 0 {
 			state.UnitRecords = true

@@ -57,7 +57,11 @@ func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 	decision := deployscan.Decide(reports, snapshot.Manifest.ControlHost().Name, local)
 	switch decision.Route {
 	case deployscan.RouteFresh:
-		return deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
+		archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
+		for _, location := range archived {
+			fmt.Fprintf(options.Log, "目标机器是空机，这台电脑上的旧部署状态已归档到 %s\n", location)
+		}
+		return err
 	case deployscan.RouteResume:
 		return nil
 	default:
@@ -140,7 +144,8 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 				}
 				results = append(results, result)
 			}
-			if err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now()); err != nil {
+			archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
+			if err != nil {
 				return err
 			}
 			reports, err = deps.scanDeployment(cmd.Context(), snapshot, deployscan.Options{})
@@ -154,7 +159,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if err := deployscan.ClearPending(options.OperatorDirectory); err != nil {
 				return err
 			}
-			return writeSetupJSON(cmd, map[string]any{"status": "wiped", "route": decision.Route, "hosts": results})
+			return writeSetupJSON(cmd, map[string]any{"status": "wiped", "route": decision.Route, "hosts": results, "archived": archived})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")

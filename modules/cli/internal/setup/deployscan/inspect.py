@@ -90,6 +90,12 @@ def under(path, directories):
     return any(path == d or path.startswith(d.rstrip('/') + '/') for d in directories)
 
 
+def moox_process(name):
+    # moox-cli is the operator tool, possibly running this very inspection on the same host.
+    base = os.path.basename(name)
+    return base.startswith('moox-') and base != 'moox-cli'
+
+
 def processes(inside_dirs):
     """Processes inside the directories, and moox- processes outside; an unreadable path counts as outside."""
     inside, outside = [], []
@@ -102,7 +108,7 @@ def processes(inside_dirs):
         path = executable(pid)
         if path and under(path, inside_dirs):
             inside.append(int(pid))
-        elif os.path.basename(path or command_name(pid)).startswith('moox-'):
+        elif moox_process(path or command_name(pid)):
             outside.append(path or command_name(pid))
     return inside, sorted(set(outside))
 
@@ -280,7 +286,7 @@ def main():
         'mode_ok': mode_ok,
         'parent_writable': exists or writable_parent(root),
         'foreign_files': exists and owner_ok and foreign_file(root),
-        'markers': any(os.path.lexists(os.path.join(root, n)) for n in ('run/host.json', 'host/current', 'identity', 'bootstrap')),
+        'markers': any(os.path.lexists(os.path.join(root, n)) for n in ('run/host.json', 'host/current', 'identity', 'bootstrap', 'bootstrap-input')),
         'cron': cron_marked(),
         'services': services,
         'external_dirs': external,

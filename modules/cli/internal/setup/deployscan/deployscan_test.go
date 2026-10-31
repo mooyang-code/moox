@@ -164,7 +164,7 @@ func TestInspectReadsDeploymentWithoutWriting(t *testing.T) {
 	require.True(t, report.Cron)
 	require.Equal(t, "sha256:abc", report.RuntimeSHA256)
 	require.Equal(t, map[string]string{"prod": "r1"}, report.Units)
-	require.Equal(t, []string{external}, report.ExternalPaths())
+	require.Equal(t, external, report.ExternalDirs[0].Path)
 	require.True(t, report.ExternalDirs[0].Marked)
 	require.Contains(t, report.ArchiveDirs, DirReport{Path: archive, Marked: true})
 	require.Contains(t, report.SizesKB, s.root)
@@ -346,6 +346,8 @@ func TestDecideRoutes(t *testing.T) {
 	cronOnly.Cron = true
 	archive := clean
 	archive.ArchiveDirs = []DirReport{{Path: "/data/x", Marked: true}}
+	running := clean
+	running.ProcessesInside = 3
 	userFiles := clean
 	userFiles.ArchiveDirs = []DirReport{{Path: "/data/x"}}
 	foreignArchive := clean
@@ -376,6 +378,7 @@ func TestDecideRoutes(t *testing.T) {
 		{"归档有内容也不算空机", []HostReport{archive}, LocalState{}, RouteExisting},
 		{"没有标记的归档目录是用户自己的", []HostReport{userFiles}, LocalState{}, RouteFresh},
 		{"归档里有删不掉的文件", []HostReport{foreignArchive}, LocalState{}, RouteBlocked},
+		{"还有进程在跑不算空机", []HostReport{running}, LocalState{}, RouteExisting},
 		{"首装做到一半", []HostReport{installed}, matched, RouteResume},
 		{"首装写绑定前失败", []HostReport{uploaded}, matched, RouteResume},
 		{"写绑定前失败但别处已部署", []HostReport{uploaded, {Host: "x", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Units: map[string]string{"host": "r"}}}, matched, RouteExisting},
@@ -485,6 +488,24 @@ func TestBuildPlanRequiresMarker(t *testing.T) {
 	require.Equal(t, []string{"/home/ubuntu/moox/old"}, plan.Hosts[0].Dirs, "重跑要沿用上次记录的目录")
 }
 
+func TestInterruptedUploadStillHasMarker(t *testing.T) {
+	s := newSandbox(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "bootstrap-input"), 0o700))
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	report.Home = "/home/ubuntu"
+	_, err := BuildPlan(planManifest(), []HostReport{report}, nil)
+	require.NoError(t, err, "上传阶段中断的机器也要能清")
+}
+
+func TestWipeWithoutCrontabCommand(t *testing.T) {
+	s := newSandbox(t)
+	require.NoError(t, os.MkdirAll(s.root, 0o755))
+	bin := strings.TrimPrefix(strings.Split(s.client.env[1], ":")[0], "PATH=")
+	require.NoError(t, os.Remove(filepath.Join(bin, "crontab")))
+	s.client.env[1] = "PATH=" + bin
+	wipe(t, s)
+}
+
 func TestMountedRootIsNotForeign(t *testing.T) {
 	s := newSandbox(t)
 	lost := filepath.Join(s.root, "lost+found")
@@ -569,12 +590,14 @@ func TestWipeSurvivesNonUTF8Crontab(t *testing.T) {
 func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	base := t.TempDir()
 	operator, state := filepath.Join(base, "moox"), filepath.Join(base, "state", "abc")
-	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-auth.env"} {
+	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-internal-auth.env", "notes.txt"} {
 		write(t, filepath.Join(operator, name), "x")
 	}
 	write(t, filepath.Join(state, "core-software.json"), "{}")
 	now := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
-	require.NoError(t, ArchiveLocal(operator, state, now))
+	archived, err := ArchiveLocal(operator, state, now)
+	require.NoError(t, err)
+	require.Len(t, archived, 2)
 	entries, err := os.ReadDir(operator)
 	require.NoError(t, err)
 	names := []string{}
@@ -582,11 +605,12 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 		names = append(names, entry.Name())
 	}
 	slices.Sort(names)
-	require.Equal(t, []string{".bak-20261031010203", "config.key", "known_hosts"}, names)
+	require.Equal(t, []string{".bak-20261031010203", "config.key", "known_hosts", "notes.txt"}, names)
 	require.FileExists(t, filepath.Join(operator, ".bak-20261031010203/gateway-client.yaml"))
 	require.NoDirExists(t, state)
 	require.DirExists(t, state+".bak-20261031010203")
-	require.NoError(t, ArchiveLocal(operator, state, now), "重跑不能失败")
+	_, err = ArchiveLocal(operator, state, now)
+	require.NoError(t, err, "重跑不能失败")
 }
 
 func TestPendingRoundTrip(t *testing.T) {
