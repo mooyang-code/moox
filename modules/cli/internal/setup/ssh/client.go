@@ -27,6 +27,8 @@ var (
 	ErrFingerprintMismatch = errors.New("host_key_fingerprint_mismatch")
 	ErrAuthFailed          = errors.New("ssh_auth_failed")
 	ErrUnreachable         = errors.New("ssh_unreachable")
+	// ErrHostKeyStoreInvalid 表示本机保存主机指纹的文件损坏、不是普通文件或权限不是 0600。
+	ErrHostKeyStoreInvalid = errors.New("host_key_store_invalid")
 )
 
 type Target struct {
@@ -85,7 +87,7 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	}
 	callback, err := knownhosts.New(knownHostsPath)
 	if err != nil {
-		return nil, fmt.Errorf("host_key_store_invalid")
+		return nil, ErrHostKeyStoreInvalid
 	}
 	wrappedCallback := func(hostname string, remote net.Addr, key xssh.PublicKey) error {
 		if err := callback(hostname, remote, key); err != nil {
@@ -150,11 +152,11 @@ func TrustHost(ctx context.Context, target Target, expectedFingerprint string, o
 	line := knownhosts.Line([]string{knownhosts.Normalize(target.DialAddress())}, captured) + "\n"
 	f, err := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return fmt.Errorf("host_key_store_invalid")
+		return ErrHostKeyStoreInvalid
 	}
 	defer f.Close()
 	if _, err := io.WriteString(f, line); err != nil {
-		return fmt.Errorf("host_key_store_invalid")
+		return ErrHostKeyStoreInvalid
 	}
 	return f.Sync()
 }
@@ -173,31 +175,123 @@ func timeout(opts Options) time.Duration {
 	return opts.Timeout
 }
 
-func secureKnownHostsPath(path string, create bool) (string, error) {
+// HostKeyFingerprint 从 Dial 返回的 ErrHostKeyUnknown 里取出服务器给出的 SHA256 指纹。
+// 错误文本形如“ssh: handshake failed: host_key_unknown: SHA256:xxx”，前缀不属于指纹；取不到时返回空。
+func HostKeyFingerprint(err error) string {
+	if !errors.Is(err, ErrHostKeyUnknown) {
+		return ""
+	}
+	text := err.Error()
+	i := strings.LastIndex(text, "SHA256:")
+	if i < 0 {
+		return ""
+	}
+	fields := strings.Fields(text[i:])
+	return fields[0]
+}
+
+// resolveKnownHostsPath 返回主机指纹文件的路径；没有指定时用 ~/.config/moox/known_hosts。
+func resolveKnownHostsPath(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("host_key_store_invalid")
+			return "", ErrHostKeyStoreInvalid
 		}
 		path = filepath.Join(home, ".config", "moox", "known_hosts")
 	}
 	path, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("host_key_store_invalid")
+		return "", ErrHostKeyStoreInvalid
+	}
+	return path, nil
+}
+
+// ForgetHost 删除本机已记录的这台主机的全部指纹，让下一次连接重新走“核对并确认指纹”。
+// 机器重装、换机后指纹变了，或指纹文件损坏、权限不对时使用；其他主机的记录原样保留。
+// 指纹文件是符号链接或目录时先改名留底，之后确认指纹会重新创建。
+func ForgetHost(target Target, opts Options) error {
+	if err := validateTarget(target); err != nil {
+		return err
+	}
+	path, err := resolveKnownHostsPath(opts.KnownHostsPath)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return ErrHostKeyStoreInvalid
+	}
+	if !info.Mode().IsRegular() {
+		if err := os.Rename(path, path+".bak-"+time.Now().Format("20060102-150405")); err != nil {
+			return ErrHostKeyStoreInvalid
+		}
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ErrHostKeyStoreInvalid
+	}
+	host := knownhosts.Normalize(target.DialAddress())
+	var kept []string
+	for _, line := range strings.SplitAfter(string(raw), "\n") {
+		if line != "" && !recordsHost(line, host) {
+			kept = append(kept, line)
+		}
+	}
+	// 写新文件再改名：新文件权限是 0600，原来权限不对的文件也一并修好。
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".known_hosts-*")
+	if err != nil {
+		return ErrHostKeyStoreInvalid
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := io.WriteString(tmp, strings.Join(kept, "")); err != nil {
+		_ = tmp.Close()
+		return ErrHostKeyStoreInvalid
+	}
+	if err := tmp.Close(); err != nil {
+		return ErrHostKeyStoreInvalid
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return ErrHostKeyStoreInvalid
+	}
+	return nil
+}
+
+// recordsHost 判断 known_hosts 的一行是不是记录了这台主机（主机字段可以是逗号分隔的多个）。
+func recordsHost(line, host string) bool {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+		return false
+	}
+	for _, name := range strings.Split(fields[0], ",") {
+		if name == host {
+			return true
+		}
+	}
+	return false
+}
+
+func secureKnownHostsPath(path string, create bool) (string, error) {
+	path, err := resolveKnownHostsPath(path)
+	if err != nil {
+		return "", ErrHostKeyStoreInvalid
 	}
 	if create {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return "", fmt.Errorf("host_key_store_invalid")
+			return "", ErrHostKeyStoreInvalid
 		}
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
-			return "", fmt.Errorf("host_key_store_invalid")
+			return "", ErrHostKeyStoreInvalid
 		}
 		_ = f.Close()
 	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return "", fmt.Errorf("host_key_store_invalid: known_hosts must be a regular 0600 file")
+		return "", fmt.Errorf("%w: known_hosts must be a regular 0600 file", ErrHostKeyStoreInvalid)
 	}
 	return path, nil
 }

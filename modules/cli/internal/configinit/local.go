@@ -158,16 +158,18 @@ func (p *localPage) page(w http.ResponseWriter) {
 
 // response 是各接口共用的 JSON 响应；只填用到的字段。
 type response struct {
-	OK       bool         `json:"ok"`
-	Message  string       `json:"message,omitempty"`
-	Account  *Account     `json:"account,omitempty"`
-	Instance *Instance    `json:"instance,omitempty"`
-	Report   *ProbeReport `json:"report,omitempty"`
-	Key      *SSHKey      `json:"key,omitempty"`
-	Login    *loginReply  `json:"login,omitempty"`
-	Overview *Overview    `json:"overview,omitempty"`
-	Form     *ConfigForm  `json:"form,omitempty"`
-	Value    string       `json:"value,omitempty"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
+	// Resettable 表示这个错误可以靠“重置并重新获取指纹”解决，页面据此显示按钮。
+	Resettable bool         `json:"resettable,omitempty"`
+	Account    *Account     `json:"account,omitempty"`
+	Instance   *Instance    `json:"instance,omitempty"`
+	Report     *ProbeReport `json:"report,omitempty"`
+	Key        *SSHKey      `json:"key,omitempty"`
+	Login      *loginReply  `json:"login,omitempty"`
+	Overview   *Overview    `json:"overview,omitempty"`
+	Form       *ConfigForm  `json:"form,omitempty"`
+	Value      string       `json:"value,omitempty"`
 	// Fingerprint 是待用户核对的管理台证书指纹（证书不被这台电脑信任时）。
 	Fingerprint string `json:"fingerprint,omitempty"`
 	// Sync 说明这次保存有没有同步到管理后台的配置备份。

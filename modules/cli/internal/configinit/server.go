@@ -143,6 +143,7 @@ func newSession(addr, output string, deadline time.Time, keys configcrypt.KeySto
 		"ssh/reach":      s.reach,
 		"ssh/check":      s.checkLogin,
 		"ssh/trust":      s.trustHost,
+		"ssh/reset-host": s.resetHost,
 		"ssh/authorize":  s.authorize,
 		"factor/check":   s.checkFactor,
 	}
@@ -231,6 +232,15 @@ func (s *session) trustHost(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// resetHost 清除本机记录的这台主机的指纹，再检测一次；页面随后会重新要求核对指纹。
+func (s *session) resetHost(w http.ResponseWriter, r *http.Request) {
+	var target SSHTarget
+	if !s.decode(w, r, &target) {
+		return
+	}
+	s.replyLogin(w, r, target, func(target SSHTarget) error { return s.prober.Reset(r.Context(), target) })
+}
+
 // authorize 用一次性的密码安装 MooX 公钥，再检测一次免密登录。密码不保存、不写日志。
 func (s *session) authorize(w http.ResponseWriter, r *http.Request) {
 	var request struct {
@@ -260,7 +270,8 @@ func (s *session) replyLogin(w http.ResponseWriter, r *http.Request, target SSHT
 		report, err = s.prober.Login(r.Context(), target)
 	}
 	if err != nil {
-		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		var fixable *resettableError
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error(), Resettable: errors.As(err, &fixable)})
 		return
 	}
 	login := loginReply{LoginReport: report}

@@ -168,8 +168,11 @@ func (systemProber) Login(ctx context.Context, target SSHTarget) (LoginReport, e
 	client, err := setupssh.Dial(ctx, sshTarget(target), "", keyOnly(key))
 	switch {
 	case errors.Is(err, setupssh.ErrHostKeyUnknown):
-		_, fingerprint, _ := strings.Cut(err.Error(), ": ")
-		return LoginReport{HostKey: strings.TrimSpace(fingerprint)}, nil
+		fingerprint := setupssh.HostKeyFingerprint(err)
+		if fingerprint == "" {
+			return LoginReport{}, unreachable(target)
+		}
+		return LoginReport{HostKey: fingerprint}, nil
 	case errors.Is(err, setupssh.ErrAuthFailed):
 		return LoginReport{}, nil
 	case err != nil:
@@ -182,10 +185,33 @@ func (systemProber) Login(ctx context.Context, target SSHTarget) (LoginReport, e
 func (systemProber) Trust(ctx context.Context, target SSHTarget, fingerprint string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if err := setupssh.TrustHost(ctx, sshTarget(target), strings.TrimSpace(fingerprint), setupssh.Options{Timeout: 15 * time.Second}); err != nil {
-		return fmt.Errorf("没能记录 %s 的主机指纹：机器的指纹可能已经变化，请重新检测", target.Address)
+	err := setupssh.TrustHost(ctx, sshTarget(target), strings.TrimSpace(fingerprint), setupssh.Options{Timeout: 15 * time.Second})
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, setupssh.ErrFingerprintMismatch):
+		return resettable("%s 现在给出的主机指纹和刚才页面上确认的不一致：可能是这台机器刚重装过，也可能连接被别人替换了。请点「重置并重新获取指纹」，再对照腾讯云控制台里的指纹核对一次", target.Address)
+	case errors.Is(err, setupssh.ErrHostKeyStoreInvalid):
+		return resettable("没能记录 %s 的主机指纹：这台电脑上保存指纹的文件（~/.config/moox/known_hosts）损坏或权限不对。点「重置并重新获取指纹」会修复它并重新开始", target.Address)
+	}
+	return unreachable(target)
+}
+
+// Reset 删除本机记录的这台主机的指纹；之后再检测会重新要求核对。
+func (systemProber) Reset(_ context.Context, target SSHTarget) error {
+	if err := setupssh.ForgetHost(sshTarget(target), setupssh.Options{}); err != nil {
+		return fmt.Errorf("没能清除 %s 的指纹记录：请手动删除 ~/.config/moox/known_hosts 里这台机器的那一行（或整个文件）后重新检测", target.Address)
 	}
 	return nil
+}
+
+// resettableError 是页面可以用“重置并重新获取指纹”解决的错误。
+type resettableError struct{ message string }
+
+func (e *resettableError) Error() string { return e.message }
+
+func resettable(format string, args ...any) error {
+	return &resettableError{message: fmt.Sprintf(format, args...)}
 }
 
 // authorizeScript 把标准输入里的一行公钥追加到 authorized_keys（已有则不重复），并收紧权限。

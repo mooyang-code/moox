@@ -148,3 +148,32 @@ func TestSystemProberReachTellsSSHFromOtherServicesAndClosedPorts(t *testing.T) 
 		t.Fatalf("端口没开应提示没有 SSH 服务: %v", err)
 	}
 }
+
+func TestFingerprintFailureOffersAResetThatStartsTheConfirmationOver(t *testing.T) {
+	h := start(t, time.Minute)
+	t.Setenv("HOME", t.TempDir())
+	h.prober.hostKey = "SHA256:abcdef"
+	target := SSHTarget{Address: "192.168.0.103", SSHUser: "builder"}
+	status, bad := h.post("ssh/trust", map[string]any{"target": target, "fingerprint": "SHA256:other"})
+	if status != http.StatusUnprocessableEntity || bad.OK || !bad.Resettable || !strings.Contains(bad.Message, "不一致") {
+		t.Fatalf("指纹对不上应 422 并带上可重置标记: %d %+v", status, bad)
+	}
+	// 其他失败（例如字段不对）不应给重置按钮。
+	if status, other := h.post("ssh/trust", map[string]any{"target": SSHTarget{Address: "192.168.0.103"}, "fingerprint": "x"}); status != http.StatusUnprocessableEntity || other.Resettable {
+		t.Fatalf("参数错误不该可重置: %d %+v", status, other)
+	}
+	if status, ok := h.post("ssh/trust", map[string]any{"target": target, "fingerprint": "SHA256:abcdef"}); status != http.StatusOK || ok.Login == nil || ok.Login.HostKey != "" {
+		t.Fatalf("确认正确指纹后应进入下一步: %d %+v", status, ok)
+	}
+	status, reset := h.post("ssh/reset-host", target)
+	if status != http.StatusOK || reset.Login == nil || reset.Login.HostKey != "SHA256:abcdef" {
+		t.Fatalf("重置后应重新要求核对指纹: %d %+v", status, reset)
+	}
+	if got := h.prober.resets; len(got) != 1 || got[0] != "192.168.0.103" {
+		t.Fatalf("应清除这台主机的指纹记录: %v", got)
+	}
+	h.prober.resetErr = errors.New("没能清除")
+	if status, failed := h.post("ssh/reset-host", target); status != http.StatusUnprocessableEntity || failed.OK {
+		t.Fatalf("清除失败应 422: %d %+v", status, failed)
+	}
+}

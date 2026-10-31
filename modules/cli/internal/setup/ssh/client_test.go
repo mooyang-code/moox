@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -338,4 +339,58 @@ func TestUploadReplacesExistingFile(t *testing.T) {
 	info, err := os.Stat(destination)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestHostKeyFingerprintIsTheBareFingerprintWithoutErrorPrefix(t *testing.T) {
+	fixture := startSSHFixture(t)
+	_, err := Dial(context.Background(), fixture.target, fixture.password, Options{KnownHostsPath: knownHostsFile(t)})
+	require.ErrorIs(t, err, ErrHostKeyUnknown)
+	want := xssh.FingerprintSHA256(fixture.publicKey)
+	assert.Equal(t, want, HostKeyFingerprint(err))
+	// 取出来的指纹必须能直接用于确认，否则会被当成“指纹不一致”。
+	require.NoError(t, TrustHost(context.Background(), fixture.target, HostKeyFingerprint(err), Options{KnownHostsPath: knownHostsFile(t)}))
+	assert.Empty(t, HostKeyFingerprint(errors.New("连不上")))
+}
+
+func TestForgetHostRemovesOnlyThatHostAndRepairsThePermissions(t *testing.T) {
+	fixture := startSSHFixture(t)
+	path := knownHostsFile(t)
+	require.NoError(t, TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: path}))
+	other := "[203.0.113.9]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherOtherOtherOtherOtherOtherOtherOtherOth\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("# 备注\n" + other)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, os.Chmod(path, 0o644))
+
+	require.NoError(t, ForgetHost(fixture.target, Options{KnownHostsPath: path}))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "# 备注\n"+other, string(raw))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	// 清掉之后又变回“第一次连接”，要重新确认指纹。
+	_, err = Dial(context.Background(), fixture.target, fixture.password, Options{KnownHostsPath: path})
+	assert.ErrorIs(t, err, ErrHostKeyUnknown)
+}
+
+func TestForgetHostToleratesAMissingFileAndSetsAsideAnInvalidOne(t *testing.T) {
+	fixture := startSSHFixture(t)
+	dir := t.TempDir()
+	require.NoError(t, ForgetHost(fixture.target, Options{KnownHostsPath: filepath.Join(dir, "missing")}))
+
+	target := filepath.Join(dir, "real")
+	require.NoError(t, os.WriteFile(target, []byte("x"), 0o600))
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(target, link))
+	require.NoError(t, ForgetHost(fixture.target, Options{KnownHostsPath: link}))
+	_, err := os.Lstat(link)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "符号链接应被改名留底")
+	backups, _ := filepath.Glob(link + ".bak-*")
+	assert.Len(t, backups, 1)
+	// 留底后，重新确认指纹可以正常创建新的指纹文件。
+	require.NoError(t, TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: link}))
 }
