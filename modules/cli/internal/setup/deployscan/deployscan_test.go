@@ -419,7 +419,7 @@ func planManifest() setupconfig.Manifest {
 func TestBuildPlan(t *testing.T) {
 	report := HostReport{Host: "h", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host", "prod", "my-notes"}, Markers: true, Trade: TradeClear,
 		ExternalDirs:    []DirReport{{Path: "/home/ubuntu/moox/factor-engine", Marked: true}, {Path: "/home/ubuntu/projects"}},
-		ArchiveDirs:     []DirReport{{Path: "/mnt/archive", Marked: true}, {Path: "/mnt/empty", Marked: true, Empty: true}, {Path: "/mnt/photos"}},
+		ArchiveDirs:     []DirReport{{Path: "/mnt/archive", Marked: true}, {Path: "/mnt/empty", Empty: true}, {Path: "/mnt/photos"}},
 		RegisteredHosts: []RegisteredHost{{ID: "h"}, {ID: "old", Address: "203.0.113.9"}}, SizesKB: map[string]int64{"/data/moox": 1}}
 	manifest := planManifest()
 	plan, err := BuildPlan(manifest, []HostReport{report}, nil)
