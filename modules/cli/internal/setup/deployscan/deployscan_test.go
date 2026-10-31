@@ -307,20 +307,29 @@ func TestWipeStopsWhenSystemdUnreachable(t *testing.T) {
 	require.FileExists(t, filepath.Join(s.root, "import/history.bin"), "连不上 systemd 时不能往下删")
 }
 
+// TestHelperSleep 是 TestWipeKillsProcessesInsideRoot 启动的假进程，平时不做事。
+func TestHelperSleep(t *testing.T) {
+	if os.Getenv("MOOX_TEST_SLEEP") == "1" {
+		time.Sleep(time.Minute)
+	}
+}
+
 func TestWipeKillsProcessesInsideRoot(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("需要 /proc")
 	}
 	s := newSandbox(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "run"), 0o755))
-	sleep, err := exec.LookPath("sleep")
+	self, err := os.Executable()
 	require.NoError(t, err)
-	raw, err := os.ReadFile(sleep)
+	raw, err := os.ReadFile(self)
 	require.NoError(t, err)
 	binary := filepath.Join(s.root, "moox-fake")
 	require.NoError(t, os.WriteFile(binary, raw, 0o755))
-	command := exec.Command(binary, "60")
+	command := exec.Command(binary, "-test.run=^TestHelperSleep$")
+	command.Env = append(os.Environ(), "MOOX_TEST_SLEEP=1")
 	require.NoError(t, command.Start())
+	t.Cleanup(func() { _ = command.Process.Kill() })
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()
 	report := s.inspect(t, map[string]any{"deploy_root": s.root})
