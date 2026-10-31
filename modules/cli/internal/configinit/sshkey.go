@@ -1,17 +1,21 @@
 package configinit
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -131,6 +135,27 @@ func keyOnly(key SSHKey) setupssh.Options {
 
 func sshTarget(target SSHTarget) setupssh.Target {
 	return setupssh.Target{Name: "host", Address: target.Address, Port: target.SSHPort, Username: target.SSHUser}
+}
+
+func (systemProber) Reach(ctx context.Context, target SSHTarget) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	addr := net.JoinHostPort(target.Address, strconv.Itoa(target.SSHPort))
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "", fmt.Errorf("%s 拒绝了连接：IP 通，但这个端口上没有 SSH 服务，请确认 SSH 服务已启动、端口号填对了", addr)
+	case err != nil:
+		return "", fmt.Errorf("连不上 %s：请确认 IP 填对、机器已开机，并且防火墙或安全组放行了 SSH 端口 %d（局域网机器还要确认这台电脑能访问到它）", addr, target.SSHPort)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, _ := bufio.NewReader(io.LimitReader(conn, 255)).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "SSH-") {
+		return "", fmt.Errorf("%s 能连上，但对方没有按 SSH 协议回应：端口 %d 上运行的可能不是 SSH 服务", addr, target.SSHPort)
+	}
+	return line, nil
 }
 
 func (systemProber) Login(ctx context.Context, target SSHTarget) (LoginReport, error) {

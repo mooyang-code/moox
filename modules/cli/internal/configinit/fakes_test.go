@@ -57,10 +57,21 @@ type fakeProber struct {
 	password   string
 	authorized map[string]bool
 	targets    []SSHTarget
+	reachErr   error
 }
 
 func linuxReport() ProbeReport {
 	return ProbeReport{OK: true, OS: "linux", Items: []CheckItem{{Name: "系统", Status: CheckOK, Detail: "Ubuntu 26.04"}}}
+}
+
+func (p *fakeProber) Reach(_ context.Context, target SSHTarget) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.targets = append(p.targets, target)
+	if p.reachErr != nil {
+		return "", p.reachErr
+	}
+	return "SSH-2.0-OpenSSH_9.6", nil
 }
 
 func (p *fakeProber) Login(_ context.Context, target SSHTarget) (LoginReport, error) {

@@ -140,6 +140,7 @@ func newSession(addr, output string, deadline time.Time, keys configcrypt.KeySto
 		"tencent/verify": s.verifyTencent,
 		"tencent/lookup": s.lookupServer,
 		"ssh/key":        s.sshKey,
+		"ssh/reach":      s.reach,
 		"ssh/check":      s.checkLogin,
 		"ssh/trust":      s.trustHost,
 		"ssh/authorize":  s.authorize,
@@ -185,6 +186,24 @@ func (s *session) sshKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, http.StatusOK, response{OK: true, Key: &key})
+}
+
+// reach 只测网络连通（TCP 端口和 SSH 问候），让用户在填完 IP 后就能发现 IP、端口和防火墙的问题。
+func (s *session) reach(w http.ResponseWriter, r *http.Request) {
+	var target SSHTarget
+	if !s.decode(w, r, &target) {
+		return
+	}
+	target, err := target.normalize("服务器")
+	var banner string
+	if err == nil {
+		banner, err = s.prober.Reach(r.Context(), target)
+	}
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Message: "网络通畅，对方的 SSH 服务正常（" + banner + "）。SSH 用户名和登录方式在下一步验证。"})
 }
 
 func (s *session) checkLogin(w http.ResponseWriter, r *http.Request) {

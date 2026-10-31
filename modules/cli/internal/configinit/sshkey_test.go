@@ -1,12 +1,16 @@
 package configinit
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // 页面会同时发出多个需要密钥的请求：并发生成不能互相撞上“已存在”。
@@ -87,5 +91,60 @@ func TestPageServesItsScreenshotsOnlyWithTheToken(t *testing.T) {
 	page, _ := h.request(http.MethodGet, "", nil, nil)
 	if !strings.Contains(page.Header.Get("Content-Security-Policy"), "img-src 'self'") {
 		t.Fatal("页面应允许加载同源图片")
+	}
+}
+
+func TestReachRouteReportsNetworkResultWithoutNeedingCredentials(t *testing.T) {
+	h := start(t, time.Minute)
+	target := SSHTarget{Address: "192.168.0.103", SSHUser: "builder", SSHPort: 2222}
+	status, ok := h.post("ssh/reach", target)
+	if status != http.StatusOK || !ok.OK || !strings.Contains(ok.Message, "SSH-2.0-OpenSSH_9.6") {
+		t.Fatalf("网络通畅应返回成功和 SSH 版本: %d %+v", status, ok)
+	}
+	if got := h.prober.targets; len(got) != 1 || got[0].SSHPort != 2222 {
+		t.Fatalf("应按填写的端口探测: %+v", got)
+	}
+	h.prober.reachErr = errors.New("连不上 192.168.0.103:2222")
+	if status, bad := h.post("ssh/reach", target); status != http.StatusUnprocessableEntity || bad.OK || !strings.Contains(bad.Message, "连不上") {
+		t.Fatalf("连不上应 422 并给出原因: %d %+v", status, bad)
+	}
+	if status, bad := h.post("ssh/reach", SSHTarget{SSHUser: "builder"}); status != http.StatusUnprocessableEntity || bad.OK {
+		t.Fatalf("没填 IP 应 422: %d %+v", status, bad)
+	}
+}
+
+// 真实探测：对本机起的临时监听口，分别验证 SSH 问候、非 SSH 服务和端口没开三种情况。
+func TestSystemProberReachTellsSSHFromOtherServicesAndClosedPorts(t *testing.T) {
+	serve := func(greeting string) SSHTarget {
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { listener.Close() })
+		go func() {
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				_, _ = conn.Write([]byte(greeting))
+				conn.Close()
+			}
+		}()
+		return SSHTarget{Address: "127.0.0.1", SSHPort: listener.Addr().(*net.TCPAddr).Port, SSHUser: "u"}
+	}
+	banner, err := systemProber{}.Reach(context.Background(), serve("SSH-2.0-OpenSSH_9.6\r\n"))
+	if err != nil || banner != "SSH-2.0-OpenSSH_9.6" {
+		t.Fatalf("SSH 服务应探测成功: %q %v", banner, err)
+	}
+	if _, err := (systemProber{}).Reach(context.Background(), serve("HTTP/1.1 400 Bad Request\r\n")); err == nil || !strings.Contains(err.Error(), "不是 SSH") {
+		t.Fatalf("非 SSH 服务应提示端口上不是 SSH: %v", err)
+	}
+	closed := serve("")
+	listener, _ := net.Listen("tcp4", "127.0.0.1:0")
+	closed.SSHPort = listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	if _, err := (systemProber{}).Reach(context.Background(), closed); err == nil || !strings.Contains(err.Error(), "没有 SSH 服务") {
+		t.Fatalf("端口没开应提示没有 SSH 服务: %v", err)
 	}
 }

@@ -139,6 +139,10 @@ button.small { height: 28px; padding: 0 10px; font-size: 12.5px; }
 .keybox code, .copyid code { display: block; margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: var(--hover); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; color: var(--ink); }
 .copyid { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
 .login-state { grid-column: 1 / -1; }
+.reach { grid-column: 1 / -1; display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
+.reach-result { color: var(--muted); }
+.reach-result.ok { color: var(--ok); }
+.reach-result.err { color: var(--err); }
 
 table.review { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.review th { text-align: left; font-weight: 500; color: var(--muted); width: 160px; padding: 11px 0; vertical-align: top; }
@@ -362,7 +366,32 @@ button.ghost.away { visibility: hidden; }
     var ip = field(r.key === 'factor' ? 'IP 地址' : '公网 IP', { 'data-full': '1', placeholder: r.key === 'factor' ? '局域网地址也可以，例如 192.168.1.20' : '例如 106.53.10.20' });
     var user = field('SSH 用户名', { value: r.ssh_user || '' });
     var port = field('端口', { type: 'number', value: '22', min: '1', max: '65535' });
-    return { ip: ip, user: user, port: port, wrap: el('div', { class: 'fields' }, [ip.label, user.label, port.label]) };
+    var reach = reachRow(r.key);
+    var wrap = el('div', { class: 'fields' }, [ip.label, user.label, port.label, reach.row]);
+    [ip, user, port].forEach(function (f) { f.input.addEventListener('input', reach.clear); });
+    return { ip: ip, user: user, port: port, wrap: wrap };
+  }
+  // 「测试连接」只测网络（IP、端口、防火墙），不要密码；用户名和免密登录在下一步验证。
+  function reachRow(key) {
+    var button = el('button', { type: 'button', class: 'small', text: '测试连接' });
+    var result = el('span', { class: 'reach-result' });
+    var seq = 0;
+    function clear() { seq++; result.className = 'reach-result'; result.textContent = ''; }
+    button.addEventListener('click', function () {
+      var target = targetOf(key);
+      var mine = ++seq;
+      if (!target.address) { result.className = 'reach-result err'; result.textContent = '请先填写 IP'; return; }
+      button.disabled = true;
+      result.className = 'reach-result'; result.textContent = '测试中…';
+      post('ssh/reach', target).then(function (data) {
+        if (mine !== seq) return;
+        result.className = 'reach-result ok'; result.textContent = data.message;
+      }, function (err) {
+        if (mine !== seq) return;
+        result.className = 'reach-result err'; result.textContent = err.message;
+      }).then(function () { button.disabled = false; });
+    });
+    return { row: el('div', { class: 'reach' }, [button, result]), clear: clear };
   }
   function specText(inst) {
     var parts = [];
