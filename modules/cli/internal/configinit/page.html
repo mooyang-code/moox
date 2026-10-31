@@ -157,6 +157,11 @@ table.review tr + tr th, table.review tr + tr td { border-top: 1px solid var(--l
 .privacy { display: flex; gap: 8px; align-items: flex-start; max-width: 640px; line-height: 1.5; }
 .privacy svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--ok); }
 .privacy b { font-weight: 600; color: var(--err); }
+.env { margin: 0 0 16px; padding: 14px 18px; max-width: 760px; border-left: 3px solid var(--warn); border-radius: 0 6px 6px 0; background: var(--warn-tint); font-size: 13px; color: var(--ink-2); }
+.env p { margin: 0 0 6px; }
+.env p:last-child { margin-bottom: 0; }
+.env .lead { font-size: 14px; color: var(--ink); }
+.env .lead b { font-weight: 700; }
 .safe { display: flex; gap: 14px; align-items: flex-start; margin: 0 0 28px; padding: 16px 18px; max-width: 760px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); }
 .safe > svg { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--ok); }
 .safe .vow { margin: 0 0 12px; font-size: 15px; line-height: 1.5; color: var(--ink); }
@@ -192,6 +197,10 @@ button.ghost.away { visibility: hidden; }
     <section class="page" id="page-1">
       <h1>腾讯云账号</h1>
       <p class="lede">MooX 部署在你自己的腾讯云账号里：行情采集用云函数，服务器也要在这个账号下。填好密钥后，下一步会自动识别服务器的地域和规格。</p>
+      <section class="env" aria-label="适用范围">
+        <p class="lead"><b>当前所有服务器需要部署在腾讯云上</b>（轻量应用服务器或云服务器 CVM），只有因子机例外：它可以是家里或局域网里的 Linux 机器。</p>
+        <p>其他云厂商正在支持中。如果你用的是小众云厂商，可以手动部署：参考 <a href="https://github.com/mooyang-code/moox" target="_blank" rel="noopener noreferrer">GitHub 源码</a>里的 <code>docs/部署与运维.md</code>，自行初始化各个模块的配置。</p>
+      </section>
       <section class="safe" aria-label="数据安全说明">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
         <div>
@@ -241,7 +250,7 @@ button.ghost.away { visibility: hidden; }
 
     <section class="page" id="page-2" hidden>
       <h1>服务器</h1>
-      <p class="lede">填写每台服务器的公网 IP 和 SSH 用户名，地域和规格会自动从腾讯云识别。服务会按用途自动装到对应的服务器上；下一步为它们开通免密登录。</p>
+      <p class="lede">填写每台服务器的公网 IP 和 SSH 用户名，地域和规格会自动从腾讯云识别（因子机以外的服务器必须是第一步这个腾讯云账号下的）。服务会按用途自动装到对应的服务器上；下一步为它们开通免密登录。</p>
       <div id="servers"></div>
     </section>
 

@@ -150,7 +150,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	for rest := body; strings.Contains(rest, `href="`); {
 		rest = rest[strings.Index(rest, `href="`)+len(`href="`):]
 		link := rest[:strings.Index(rest, `"`)]
-		if !strings.HasPrefix(link, "https://console.cloud.tencent.com/") && !strings.HasPrefix(link, "https://cloud.tencent.com/document/") {
+		if !strings.HasPrefix(link, "https://console.cloud.tencent.com/") && !strings.HasPrefix(link, "https://cloud.tencent.com/document/") && link != "https://github.com/mooyang-code/moox" {
 			t.Fatalf("页面不应链接到 %q", link)
 		}
 		if tag := rest[:strings.Index(rest, ">")]; !strings.Contains(tag, `target="_blank"`) || !strings.Contains(tag, `rel="noopener noreferrer"`) {
