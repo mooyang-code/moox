@@ -333,7 +333,11 @@ button.ghost.away { visibility: hidden; }
     return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (response) {
         return response.json().catch(function () { return {}; }).then(function (data) {
-          if (!response.ok || !data.ok) throw new Error(data.message || '请求失败（HTTP ' + response.status + '）');
+          if (!response.ok || !data.ok) {
+            var failure = new Error(data.message || '请求失败（HTTP ' + response.status + '）');
+            failure.resettable = !!data.resettable;
+            throw failure;
+          }
           return data;
         });
       }, function () { throw new Error('连不上本机的配置服务：页面可能已超时关闭，请回到 Agent 重新开始。'); });
@@ -541,7 +545,14 @@ button.ghost.away { visibility: hidden; }
       setState(ui, 'err', '失败', err.message);
       var retry = el('button', { type: 'button', text: '重新检测' });
       retry.addEventListener('click', function () { login(key, ui, 'ssh/check', targetOf(key)); });
-      ui.action.replaceChildren(el('div', { class: 'actions-inline' }, [retry]));
+      var buttons = [retry];
+      if (err.resettable) {
+        // 指纹记录出了问题：清掉这台机器的记录，重新获取指纹并让用户核对。
+        var reset = el('button', { type: 'button', class: 'primary', text: '重置并重新获取指纹' });
+        reset.addEventListener('click', function () { login(key, ui, 'ssh/reset-host', targetOf(key)); });
+        buttons.unshift(reset);
+      }
+      ui.action.replaceChildren(el('div', { class: 'actions-inline' }, buttons));
     });
   }
   function showLogin(key, ui, result) {

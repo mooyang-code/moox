@@ -65,6 +65,8 @@ type Prober interface {
 	Reach(ctx context.Context, target SSHTarget) (string, error)
 	// Login 用 MooX 密钥登录，报告免密登录是否可用、是否需要先确认主机指纹。
 	Login(ctx context.Context, target SSHTarget) (LoginReport, error)
+	// Reset 删除本机记录的这台主机的指纹（机器重装、指纹文件损坏时用），让页面重新核对指纹。
+	Reset(ctx context.Context, target SSHTarget) error
 	// Trust 在用户确认后记录主机指纹。
 	Trust(ctx context.Context, target SSHTarget, fingerprint string) error
 	// Authorize 用一次性密码登录并安装 MooX 公钥。

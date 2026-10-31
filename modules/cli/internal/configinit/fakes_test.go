@@ -58,6 +58,8 @@ type fakeProber struct {
 	authorized map[string]bool
 	targets    []SSHTarget
 	reachErr   error
+	resets     []string
+	resetErr   error
 }
 
 func linuxReport() ProbeReport {
@@ -72,6 +74,14 @@ func (p *fakeProber) Reach(_ context.Context, target SSHTarget) (string, error) 
 		return "", p.reachErr
 	}
 	return "SSH-2.0-OpenSSH_9.6", nil
+}
+
+func (p *fakeProber) Reset(_ context.Context, target SSHTarget) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resets = append(p.resets, target.Address)
+	p.trusted = ""
+	return p.resetErr
 }
 
 func (p *fakeProber) Login(_ context.Context, target SSHTarget) (LoginReport, error) {
@@ -113,7 +123,7 @@ func (p *fakeProber) Trust(_ context.Context, _ SSHTarget, fingerprint string) e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if fingerprint != p.hostKey {
-		return errors.New("fingerprint mismatch")
+		return resettable("%s 现在给出的主机指纹和刚才确认的不一致", "fake-host")
 	}
 	p.trusted = fingerprint
 	return nil
