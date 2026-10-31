@@ -48,12 +48,23 @@ func TestSetupWatchdogCommandTargetsHosts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"compute"}, hosts)
 
+	// 没配置 webhook 也能安装守护，种子里没有渠道，等 Monitor 同步。
 	snapshot.Manifest.Notification = setupconfig.Notification{}
-	_, _, _, err = runWatchdogCommand(t, snapshot)
-	require.ErrorContains(t, err, "notification.webhook_url is required")
+	hosts, _, _, err = runWatchdogCommand(t, snapshot)
+	require.NoError(t, err)
+	require.Len(t, hosts, len(snapshot.Manifest.Hosts()))
 	_, removes, _, err = runWatchdogCommand(t, snapshot, "--remove", "--host", "compute", "--yes")
 	require.NoError(t, err)
 	require.Equal(t, []bool{true}, removes)
+}
+
+func TestWatchdogSeedWithoutWebhookHasNoChannel(t *testing.T) {
+	t.Parallel()
+	raw, err := watchdogSeed(setupconfig.Manifest{})
+	require.NoError(t, err)
+	var seed hostpolicy.Policy
+	require.NoError(t, json.Unmarshal(raw, &seed))
+	require.Empty(t, seed.NotificationChannels)
 }
 
 func TestWatchdogSeedUsesNotificationChannel(t *testing.T) {

@@ -3,6 +3,30 @@
 外部用户第一次安装 MooX 时按本文执行：下载发布产物，不需要在本机编译。
 维护者自己清空重装生产按 [`fresh-deploy.md`](fresh-deploy.md)，升级已安装的单元按 [`native-release.md`](native-release.md)。
 
+## 先测网络，选下载源
+
+安装一开始就在用户的电脑上测一下到 GitHub 和 CNB（cnb.cool，国内）的延迟，后面的下载都用更快的那个。**差异不大就用 GitHub**；只有 GitHub 不通、或 CNB 的延迟低于它的 70% 才用 CNB。
+先 `ping`，被禁 ICMP 时自动改测 HTTPS 建连耗时。把结果告诉用户（例如“github.com 90 ms，cnb.cool 9 ms，从 CNB 下载”）。两个都不通时先让用户检查网络或代理，不要往下执行。
+
+```bash
+# 平均往返延迟（毫秒）；ping 不通（含被禁 ICMP）时改测 HTTPS 建连耗时，都不通则输出空
+rtt() {
+  local ms=""
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ms=$(ping -n 3 "$1" 2>/dev/null | grep -Eo '(平均|Average) = [0-9]+' | grep -Eo '[0-9]+$' || true) ;;
+    *) ms=$(ping -c 3 -i 0.5 "$1" 2>/dev/null | awk -F/ '/^(rtt|round-trip)/ {print $5}' || true) ;;
+  esac
+  [[ -n "$ms" ]] || ms=$(curl -s -o /dev/null --max-time 5 -w '%{time_connect}' "https://$1" 2>/dev/null | awk '$1 > 0 {printf "%.1f", $1 * 1000}')
+  echo "$ms"
+}
+G=$(rtt github.com); C=$(rtt cnb.cool)
+echo "github.com: ${G:-不通} ms，cnb.cool: ${C:-不通} ms"
+SRC=github   # 差异不大或都测不出来就用 GitHub；只有 GitHub 不通、或 CNB 的延迟低于它的 70% 才用 CNB
+if [[ -z "$G" && -n "$C" ]] || { [[ -n "$G" && -n "$C" ]] && awk "BEGIN{exit !($C < $G * 0.7)}"; }; then SRC=cnb; fi
+echo "下载源: $SRC"
+[[ -n "$G$C" ]] || echo "github.com 和 cnb.cool 都连不上：请先检查网络或代理"
+```
+
 ## 0. 先跟用户确认
 
 - **云厂商（最先确认）**：**当前所有服务器必须部署在腾讯云上**（轻量应用服务器或 CVM），只有因子机例外（可以是家里或局域网的 Linux 机器）。
@@ -22,7 +46,7 @@
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
 
 - **本机**：macOS、Linux 或 Windows，能 SSH 到上面的服务器（Windows 上部分辅助脚本需要 Git Bash 或 WSL）。
-- **告警渠道**：企业微信或飞书群机器人的 Webhook 地址。
+- **告警渠道**：企业微信或飞书群机器人的 Webhook 地址（可选，没有可以部署后再在管理台添加）。
 
 ## 1. 下载发布产物
 
@@ -34,7 +58,7 @@
 | `moox-cli_${VER}_darwin_arm64.tar.gz` / `darwin_amd64` / `linux_amd64` / `linux_arm64` / `windows_amd64.zip` | 本机命令行 |
 | `SHA256SUMS` | 校验和 |
 
-下载地址（二选一，国内网络优先 CNB）：
+下载地址由上面测速选出的 `SRC` 决定：
 
 - GitHub：`https://github.com/mooyang-code/moox/releases/download/${VER}/<文件名>`
 - CNB：`https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}/<文件名>`
@@ -42,7 +66,7 @@
 ```bash
 VER=v0.4.1
 OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64 / windows_amd64
-BASE=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
+if [[ "$SRC" == cnb ]]; then BASE=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}; else BASE=https://github.com/mooyang-code/moox/releases/download/${VER}; fi
 curl -fLO ${BASE}/moox-bundle_${VER}_linux_amd64.tar.gz
 curl -fLO ${BASE}/moox-cli_${VER}_${OS}.tar.gz       # Windows 是 .zip
 curl -fLO ${BASE}/SHA256SUMS
@@ -67,8 +91,8 @@ cd moox-${VER}
 1. 腾讯云密钥（先验证）；
 2. 各台服务器的 IP、SSH 端口和用户名（地域、规格按 IP 自动识别）；
 3. **免密登录**：页面在本机生成 MooX 专用密钥 `~/.ssh/moox_ed25519`，逐台确认主机指纹，用户输入一次 SSH 密码装上公钥（密码不保存），
-   也可以按页面给出的 `ssh-copy-id` 命令自己在终端执行；因子机在免密开通后自动做环境检测；
-4. 管理员账号与告警渠道；
+   密码或用户名填错时，页面直接让用户重新填写用户名和密码；也可以按页面给出的 `ssh-copy-id` 命令自己在终端执行；因子机在免密开通后自动做环境检测；
+4. 管理员账号与告警渠道（机器人 Webhook 可以先不填，部署完成后在管理台“监控 › 告警渠道”添加；添加之前出了问题不会通知到群里，要提醒用户补上）；
 5. 确认后写出加密的 `moox.toml`（解密密钥在系统钥匙串）。
 
 规则：

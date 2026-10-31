@@ -179,8 +179,10 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
 button.ghost { border-color: transparent; color: var(--muted); }
 button.ghost.away { visibility: hidden; }
 
-.finish { max-width: 520px; padding-top: 24px; }
-.finish .mark { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--ok); color: var(--ok); display: grid; place-items: center; margin-bottom: 18px; font-size: 20px; }
+.layout.solo { grid-template-columns: minmax(0, 560px); justify-content: center; }
+.finish { max-width: 520px; margin: 0 auto; padding-top: 12vh; text-align: center; }
+.finish .lede { margin: 0 auto 14px; }
+.finish .mark { width: 48px; height: 48px; border-radius: 50%; border: 1.5px solid var(--ok); color: var(--ok); display: grid; place-items: center; margin: 0 auto 20px; font-size: 24px; }
 </style>
 </head>
 <body>
@@ -278,7 +280,7 @@ button.ghost.away { visibility: hidden; }
         <div><h2>告警通知</h2><p>行情中断、服务异常时发到群里。</p></div>
         <div class="fields two">
           <label class="f"><span>发送到</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option></select></label>
-          <label class="f full"><span>机器人 Webhook 地址</span><input type="password" id="notify-url" data-secret autocomplete="new-password" spellcheck="false"><small>在群设置 → 群机器人 → 添加机器人后复制。</small></label>
+          <label class="f full"><span>机器人 Webhook 地址<span class="opt">可选</span></span><input type="password" id="notify-url" data-secret autocomplete="new-password" spellcheck="false"><small>在群设置 → 群机器人 → 添加机器人后复制。现在不填也行，部署完成后可以在管理台「监控 › 告警渠道」里添加；添加之前出了问题不会通知到群里。</small></label>
         </div>
       </div>
     </section>
@@ -528,7 +530,8 @@ button.ghost.away { visibility: hidden; }
       var r = role(key), target = targetOf(key);
       var ui = { state: el('div', { class: 'login-state' }), action: el('div', { class: 'fields two' }) };
       if (key === 'factor') { ui.checks = el('div', { class: 'checks' }); ui.checks.hidden = true; }
-      var left = el('div', {}, [el('h2', { text: r.title }), el('p', {}, [el('span', { class: 'mono', text: target.ssh_user + '@' + target.address + ':' + target.ssh_port })])]);
+      ui.target = el('span', { class: 'mono', text: target.ssh_user + '@' + target.address + ':' + target.ssh_port });
+      var left = el('div', {}, [el('h2', { text: r.title }), el('p', {}, [ui.target])]);
       var right = el('div', {}, [ui.state, ui.action, ui.checks]);
       list.append(el('div', { class: 'block' }, [left, right]));
       login(key, ui, 'ssh/check', target);
@@ -543,6 +546,16 @@ button.ghost.away { visibility: hidden; }
     ui.action.replaceChildren();
     post(path, body).then(function (data) { showLogin(key, ui, data.login); }, function (err) {
       setState(ui, 'err', '失败', err.message);
+      // 密码登录没成功：用户名或密码填错了，直接回到填写表单，不用先点「重新检测」。
+      if (path === 'ssh/authorize') {
+        credentialForm(key, ui, '');
+        // 再取一次手动命令（用户名可能刚改过）；用户已经开始重填时只追加，不打断。
+        var form = ui.action.firstChild;
+        post('ssh/check', targetOf(key)).then(function (data) {
+          if (ui.action.firstChild === form && data.login.copy_id) ui.action.append(copyIDBlock(key, ui, data.login.copy_id));
+        }, function () {});
+        return;
+      }
       var retry = el('button', { type: 'button', text: '重新检测' });
       retry.addEventListener('click', function () { login(key, ui, 'ssh/check', targetOf(key)); });
       var buttons = [retry];
@@ -572,19 +585,33 @@ button.ghost.away { visibility: hidden; }
       return;
     }
     setState(ui, 'wait', '未开通', '这台服务器还没有装上 MooX 公钥');
+    credentialForm(key, ui, result.copy_id);
+  }
+  // 填写 SSH 用户名和一次性密码来装公钥；用户名改了会同步回「服务器」一步的填写。IP 或端口填错要回上一步改。
+  function credentialForm(key, ui, copyID) {
+    var current = targetOf(key);
+    var user = field('SSH 用户名', { value: current.ssh_user }, 'IP 或端口填错了，请回到上一步修改');
     var pass = field('SSH 密码', { type: 'password', autocomplete: 'new-password' }, '只用这一次，不保存');
     var install = el('button', { type: 'button', class: 'primary', text: '安装公钥' });
     install.addEventListener('click', function () {
-      var password = pass.input.value;
-      if (!password) { pass.input.classList.add('bad'); return; }
+      var name = user.input.value.trim(), password = pass.input.value;
+      user.input.classList.toggle('bad', !name);
+      pass.input.classList.toggle('bad', !password);
+      if (!name || !password) return;
       pass.input.value = '';
+      blocks[key].ssh.user.input.value = name;
+      var target = targetOf(key);
+      ui.target.textContent = target.ssh_user + '@' + target.address + ':' + target.ssh_port;
       login(key, ui, 'ssh/authorize', { target: target, password: password });
     });
-    var again = el('button', { type: 'button', text: '我已执行，重新检测' });
-    again.addEventListener('click', function () { login(key, ui, 'ssh/check', target); });
-    var parts = [pass.label, el('div', { class: 'actions-inline' }, [install])];
-    if (result.copy_id) parts.push(el('div', { class: 'copyid' }, ['不想在页面里输密码，也可以在这台电脑的终端里执行下面的命令，再点「重新检测」：', el('code', { text: result.copy_id }), again]));
+    var parts = [user.label, pass.label, el('div', { class: 'actions-inline' }, [install])];
+    if (copyID) parts.push(copyIDBlock(key, ui, copyID));
     ui.action.replaceChildren.apply(ui.action, parts);
+  }
+  function copyIDBlock(key, ui, copyID) {
+    var again = el('button', { type: 'button', text: '我已执行，重新检测' });
+    again.addEventListener('click', function () { login(key, ui, 'ssh/check', targetOf(key)); });
+    return el('div', { class: 'copyid' }, ['不想在页面里输密码，也可以在这台电脑的终端里执行下面的命令，再点「重新检测」：', el('code', { text: copyID }), again]);
   }
   function factorCheck(ui) {
     setState(ui, 'wait', '检测中…', '已开通免密登录，正在检测系统、CPU、内存和磁盘');
@@ -678,7 +705,7 @@ button.ghost.away { visibility: hidden; }
     a.replaceChildren(
       el('tr', {}, [el('th', { text: '腾讯云' }), el('td', { text: '账号 ' + (state.account ? state.account.account_id : '') })]),
       el('tr', {}, [el('th', { text: '管理员' }), el('td', { text: $('admin-username').value.trim() })]),
-      el('tr', {}, [el('th', { text: '告警' }), el('td', { text: $('notify-type').selectedOptions[0].textContent })]));
+      el('tr', {}, [el('th', { text: '告警' }), $('notify-url').value.trim() ? el('td', { text: $('notify-type').selectedOptions[0].textContent }) : el('td', { class: 'muted', text: '暂不配置，稍后在管理台添加' })]));
   }
   function osName(report) {
     var names = { linux: 'Linux', darwin: 'macOS', windows: 'Windows' };
@@ -716,7 +743,6 @@ button.ghost.away { visibility: hidden; }
     }
     if (state.step === 4) {
       if (!$('admin-username').value.trim() || !$('admin-password').value) { showAlert('请填写管理员用户名和密码'); return; }
-      if (!$('notify-url').value.trim()) { showAlert('请填写告警机器人的 Webhook 地址'); return; }
       go(5);
       return;
     }
@@ -725,7 +751,7 @@ button.ghost.away { visibility: hidden; }
       post('submit', gather()).then(function () {
         state.finished = true;
         go(6);
-        $('footer').hidden = true; $('steps').hidden = true; $('timer').hidden = true;
+        $('footer').hidden = true; $('steps').hidden = true; $('timer').hidden = true; $('layout').classList.add('solo');
       }, function (err) { showAlert(err.message); button.textContent = '确认并完成'; }).finally(function () { button.disabled = false; });
     }
   });

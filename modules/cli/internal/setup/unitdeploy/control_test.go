@@ -74,9 +74,10 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.T) {
 	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32), StorageNodeSecret: strings.Repeat("n", 32)}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr", "strategy"}
-	// 部署 Monitor 前告警推送地址必须已配置，否则监控只展示不推送。
-	_, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
-	require.ErrorContains(t, err, "notification.webhook_url is required")
+	// 没配置告警推送地址也能部署 Monitor，渠道由用户稍后在管理台添加。
+	empty, err := unitEnvironment(setupconfig.Manifest{}, identity, "control", components)
+	require.NoError(t, err)
+	require.Empty(t, empty["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])
 	manifest := setupconfig.Manifest{Notification: setupconfig.Notification{ChannelType: "wecom", WebhookURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"}}
 	env, err := unitEnvironment(manifest, identity, "control", components)
 	require.NoError(t, err)
