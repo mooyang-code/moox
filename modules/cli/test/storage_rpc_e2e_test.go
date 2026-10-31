@@ -134,15 +134,15 @@ func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T
 	seed := filepath.Join(dir, "seed.yaml")
 	require.NoError(t, os.WriteFile(seed, []byte("spaces:\n- space_id: crypto\n  name: Crypto\n"), 0600))
 	var imported map[string]any
-	require.NoError(t, json.Unmarshal(run("metadata", "import", "--file", seed, "--manifest", manifest), &imported))
+	require.NoError(t, json.Unmarshal(run("metadata", "import", "--seed", seed, "--file", manifest), &imported))
 	require.Equal(t, float64(1), imported["applied"])
 	var exported map[string]any
-	require.NoError(t, json.Unmarshal(run("data", "rows", "export", "--file", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT", "--columns", "close", "--start-time", "2026-10-01T00:00:00Z", "--end-time", "2026-10-02T00:00:00Z"), &exported))
+	require.NoError(t, json.Unmarshal(run("data", "rows", "export", "--file", manifest, "--space-id", "crypto", "--dataset-id", "prices", "--subject", "BTC-USDT", "--columns", "close", "--from", "2026-10-01T00:00:00Z", "--to", "2026-10-02T00:00:00Z"), &exported))
 	require.Len(t, exported["rows"], 1)
 	csv := filepath.Join(dir, "prices.csv")
 	require.NoError(t, os.WriteFile(csv, []byte("time,close\n2026-10-09T00:00:00Z,12.5\n"), 0600))
 	var written map[string]any
-	require.NoError(t, json.Unmarshal(run("import", "--path", csv, "--manifest", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT", "--freq", "1m",
+	require.NoError(t, json.Unmarshal(run("import", "--path", csv, "--file", manifest, "--space-id", "crypto", "--dataset-id", "prices", "--subject", "BTC-USDT", "--frequency", "1m",
 		"--time-column", "time", "--target", "storage", "--job-db", filepath.Join(dir, "importer.db")), &written))
 	require.Equal(t, "imported", written["status"])
 	require.Equal(t, float64(1), written["rows"])
