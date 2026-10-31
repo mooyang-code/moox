@@ -2,11 +2,12 @@ package configinit
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,11 @@ const DefaultTimeout = time.Hour
 
 //go:embed page.html
 var pageSource string
+
+// pageAssets 是录入页里的操作截图（腾讯云控制台的创建子用户步骤）。
+//
+//go:embed assets/*.webp
+var pageAssets embed.FS
 
 var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 
@@ -127,6 +133,7 @@ func newSession(addr, output string, deadline time.Time, keys configcrypt.KeySto
 	if err != nil {
 		return nil, err
 	}
+	page.assets = assetsFS()
 	s := &session{localPage: page, output: output, keys: keys, result: make(chan Result, 1)}
 	page.routes = map[string]http.HandlerFunc{
 		"submit":         s.submit,
@@ -340,4 +347,12 @@ func writeNew(path string, data []byte) error {
 		return fmt.Errorf("写入 %s 失败: %w", path, err)
 	}
 	return nil
+}
+
+func assetsFS() fs.FS {
+	sub, err := fs.Sub(pageAssets, "assets")
+	if err != nil {
+		panic(err)
+	}
+	return sub
 }

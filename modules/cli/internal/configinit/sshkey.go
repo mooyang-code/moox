@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -38,39 +39,84 @@ type LoginReport struct {
 	HostKey string `json:"host_key,omitempty"`
 }
 
+// sshKeyMu 串行化 ensureSSHKey：页面会同时发出好几个请求，各自都可能发现密钥还不存在，
+// 不加锁时后到的那个会在写入时撞上先到的，报“已存在”。
+var sshKeyMu sync.Mutex
+
 // ensureSSHKey 读取本机的 MooX 密钥，没有时生成一把（不加口令，只给 MooX 用）。
+// 已有的文件不是可用的私钥（损坏或带口令）时，先改名备份再生成新的，不覆盖也不让用户手工处理。
 func ensureSSHKey() (SSHKey, error) {
+	sshKeyMu.Lock()
+	defer sshKeyMu.Unlock()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return SSHKey{}, fmt.Errorf("找不到用户主目录: %w", err)
 	}
 	dir := filepath.Join(home, ".ssh")
 	path := filepath.Join(dir, sshKeyName)
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return SSHKey{}, fmt.Errorf("创建 %s 失败: %w", dir, err)
-		}
-		_, private, err := ed25519.GenerateKey(rand.Reader)
+	signer, err := readSSHKey(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		backup, err := backupSSHKey(path)
 		if err != nil {
 			return SSHKey{}, err
 		}
-		block, err := xssh.MarshalPrivateKey(private, sshKeyComment)
-		if err != nil {
-			return SSHKey{}, err
-		}
-		raw = pem.EncodeToMemory(block)
-		if err := writeNew(path, raw); err != nil {
-			return SSHKey{}, fmt.Errorf("保存 MooX 密钥失败: %w", err)
-		}
-	} else if err != nil {
-		return SSHKey{}, fmt.Errorf("读取 %s 失败: %w", path, err)
+		fmt.Fprintf(os.Stderr, "%s 不是可用的不带口令的 SSH 私钥，已备份为 %s，并生成新的 MooX 密钥\n", path, backup)
+	default:
+		return writePublicKey(path, signer)
 	}
-	signer, err := xssh.ParsePrivateKey(raw)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return SSHKey{}, fmt.Errorf("创建 %s 失败: %w", dir, err)
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return SSHKey{}, err
+	}
+	block, err := xssh.MarshalPrivateKey(private, sshKeyComment)
+	if err != nil {
+		return SSHKey{}, err
+	}
+	raw := pem.EncodeToMemory(block)
+	err = writeNew(path, raw)
 	clear(raw)
 	if err != nil {
-		return SSHKey{}, fmt.Errorf("%s 不是不带口令的 SSH 私钥，请把它改名后重新打开配置页", path)
+		return SSHKey{}, fmt.Errorf("保存 MooX 密钥失败: %w", err)
 	}
+	signer, err = readSSHKey(path)
+	if err != nil {
+		return SSHKey{}, fmt.Errorf("读取刚生成的 MooX 密钥失败: %w", err)
+	}
+	return writePublicKey(path, signer)
+}
+
+// readSSHKey 读取不带口令的私钥；文件不存在时返回 os.ErrNotExist。
+func readSSHKey(path string) (xssh.Signer, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	signer, err := xssh.ParsePrivateKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s 不是不带口令的 SSH 私钥: %w", path, err)
+	}
+	return signer, nil
+}
+
+// backupSSHKey 把不可用的旧密钥（及其公钥文件）改名为 <名字>.bak-<时间>，返回备份后的私钥路径。
+func backupSSHKey(path string) (string, error) {
+	backup := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
+	if err := os.Rename(path, backup); err != nil {
+		return "", fmt.Errorf("备份旧密钥 %s 失败: %w", path, err)
+	}
+	if err := os.Rename(path+".pub", backup+".pub"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("备份旧公钥 %s.pub 失败: %w", path, err)
+	}
+	return backup, nil
+}
+
+func writePublicKey(path string, signer xssh.Signer) (SSHKey, error) {
 	public := strings.TrimSpace(string(xssh.MarshalAuthorizedKey(signer.PublicKey()))) + " " + sshKeyComment
 	if err := os.WriteFile(path+".pub", []byte(public+"\n"), 0o644); err != nil {
 		return SSHKey{}, fmt.Errorf("保存 MooX 公钥失败: %w", err)

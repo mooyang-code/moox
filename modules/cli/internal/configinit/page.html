@@ -91,6 +91,9 @@ a:hover { text-decoration: underline; }
 ol.guide { margin: 0 0 12px; padding: 0 0 0 20px; color: var(--ink-2); font-size: 13.5px; }
 ol.guide li { margin-bottom: 6px; padding-left: 2px; }
 ol.guide b { font-weight: 600; color: var(--ink); }
+ol.guide figure { margin: 8px 0 4px; }
+ol.guide figure img { display: block; width: 100%; max-width: 560px; border: 1px solid var(--line); border-radius: 4px; }
+ol.guide figcaption { margin-top: 4px; color: var(--faint); font-size: 12.5px; }
 table.policies { width: 100%; border-collapse: collapse; margin: 8px 0 8px; font-size: 12.5px; }
 table.policies th { text-align: left; font-weight: 500; color: var(--faint); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
 table.policies td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); vertical-align: top; }
@@ -182,8 +185,11 @@ button.ghost.away { visibility: hidden; }
           <p><a href="https://cloud.tencent.com/document/product/598/37140" target="_blank" rel="noopener noreferrer">查看腾讯云的官方说明</a></p></div>
         <div>
         <ol class="guide">
-          <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用），访问方式勾选「编程访问」。</li>
-          <li>给它授权：在「设置用户权限」里搜索并勾选下面 6 个预设策略（可以点「复制全部策略名」后逐个粘贴搜索）。
+          <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用）：选「快捷创建」，填好用户名后，点「访问方式」那一栏的编辑图标，只勾选「编程访问」后确定。
+            <figure><img src="assets/cam-create-user.webp" alt="腾讯云创建子用户页面，标出了访问方式和用户权限两处编辑入口" loading="lazy"><figcaption>快捷创建子用户：需要改的是红框里的「访问方式」和「用户权限」。</figcaption></figure>
+            <figure><img src="assets/cam-access-type.webp" alt="选择访问方式弹窗，勾选编程访问" loading="lazy"><figcaption>访问方式只勾「编程访问」，不需要「腾讯云控制台访问」。</figcaption></figure></li>
+          <li>给它授权：点「用户权限」那一栏的编辑图标，在弹窗里搜索并勾选下面 6 个预设策略（可以点「复制全部策略名」后逐个粘贴搜索）；右侧「已选择」里出现 6 条后点确定，再点「创建用户」。
+            <figure><img src="assets/cam-select-policy.webp" alt="选择策略弹窗，右侧已选择 6 条预设策略" loading="lazy"><figcaption>右侧红框是已选的策略，应当正好是下表这 6 个。</figcaption></figure>
             <table class="policies">
               <thead><tr><th>预设策略</th><th>腾讯云服务</th><th>MooX 用来做什么</th></tr></thead>
               <tbody>
@@ -535,7 +541,9 @@ button.ghost.away { visibility: hidden; }
     var list = $('servers');
     boot.roles.forEach(function (r) {
       var left = el('div', {}, [el('h2', {}, [r.title, r.optional ? el('span', { class: 'opt', text: '可选' }) : null]), el('p', { text: r.purpose }),
-        el('dl', { class: 'meta' }, [el('dt', { text: '建议配置' }), el('dd', {}, r.specs.reduce(function (acc, line, i) { if (i) acc.push(el('br')); acc.push(line); return acc; }, []))])]);
+        el('dl', { class: 'meta' }, [
+          r.machine ? el('dt', { text: '推荐机型' }) : null, r.machine ? el('dd', { text: r.machine }) : null,
+          el('dt', { text: '建议配置' }), el('dd', {}, r.specs.reduce(function (acc, line, i) { if (i) acc.push(el('br')); acc.push(line); return acc; }, []))])]);
       list.append(el('div', { class: 'block' }, [left, r.key === 'factor' ? factorBlock(r) : cloudBlock(r)]));
     });
     syncShare();

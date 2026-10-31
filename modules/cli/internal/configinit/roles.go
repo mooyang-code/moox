@@ -20,6 +20,8 @@ type Role struct {
 	Title   string   `json:"title"`
 	Purpose string   `json:"purpose"`
 	Specs   []string `json:"specs"`
+	// Machine 是推荐的腾讯云机型，页面在建议配置旁单独一行展示；为空不显示。
+	Machine string `json:"machine,omitempty"`
 	// Recommend 用来和识别出的实例规格比较，低于建议时页面提醒（不拦截）。
 	Recommend Recommend `json:"recommend"`
 	Optional  bool      `json:"optional"`
@@ -68,6 +70,7 @@ var roleCatalog = []Role{
 		Key: RoleControl, Title: "管理台服务器", exampleHost: "control",
 		Purpose:   "运行管理台和调度服务，资源要求不高。",
 		Specs:     []string{"4 核 · 4 GB · 40 GB"},
+		Machine:   "轻量应用服务器",
 		Recommend: Recommend{CPU: 4, MemoryGB: 4, DiskGB: 40},
 		Share: []ShareOption{
 			{Value: "", Label: "单独一台服务器", Hint: "推荐，互不影响"},

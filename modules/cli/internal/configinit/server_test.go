@@ -134,9 +134,16 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if nonce == "" || !strings.Contains(body, `<script nonce="`+nonce+`">`) || !strings.Contains(body, `<style nonce="`+nonce+`">`) {
 		t.Fatal("页面的脚本与样式必须带本次响应的 nonce")
 	}
-	for _, external := range []string{"<link", "<img", "<iframe", `src="http`, "url(", "@import"} {
+	for _, external := range []string{"<link", "<iframe", `src="http`, "url(", "@import"} {
 		if strings.Contains(body, external) {
 			t.Fatalf("页面不应引用外部资源: %s", external)
+		}
+	}
+	// 图片只允许是同源的内嵌截图（assets/ 下）。
+	for rest := body; strings.Contains(rest, "<img"); {
+		rest = rest[strings.Index(rest, "<img")+len("<img"):]
+		if !strings.HasPrefix(strings.TrimSpace(rest), `src="assets/`) {
+			t.Fatalf("图片只能引用 assets/ 下的内嵌截图: %.60s", rest)
 		}
 	}
 	// 外部链接只有腾讯云的帮助入口，而且在新窗口打开、不带来源信息。
