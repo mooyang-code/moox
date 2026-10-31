@@ -34,15 +34,19 @@ type setupFirewallTarget struct {
 
 func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 	var file string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "firewall",
-		Short: "初始化所有目标主机的腾讯云防火墙端口",
+		Short: "初始化所有目标主机的腾讯云防火墙端口（默认只预览，--yes 才执行）",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			if !yes {
+				return writePreview(cmd, map[string]any{"action": "open_firewall_ports", "targets": setupFirewallPreview(setupFirewallTargets(snapshot.Manifest))})
+			}
 			result, err := deps.ensureFirewall(cmd.Context(), snapshot)
 			if err != nil {
 				return err
@@ -54,7 +58,21 @@ func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().BoolVar(&yes, "yes", false, "确认放行；不加只预览将要放行的端口")
 	return cmd
+}
+
+// setupFirewallPreview 把将要放行的规则整理成可读的预览。
+func setupFirewallPreview(targets []setupFirewallTarget) []map[string]any {
+	out := make([]map[string]any, 0, len(targets))
+	for _, target := range targets {
+		rules := make([]map[string]string, 0, len(target.Rules))
+		for _, rule := range target.Rules {
+			rules = append(rules, map[string]string{"protocol": rule.Protocol, "ports": rule.Ports, "cidr": rule.CidrBlock, "description": rule.Description})
+		}
+		out = append(out, map[string]any{"host": target.Host.Name, "address": target.Host.Address, "rules": rules})
+	}
+	return out
 }
 
 // defaultSetupEnsureFirewall opens only ports used by the deployed runtime.

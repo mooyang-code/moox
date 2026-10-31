@@ -169,24 +169,24 @@ stop:
   moox-strategy-cli template render <模板.yaml> --name demo [--var leverage=3] --params params.csv > demo.yaml
   ```
 
-- 保存模板：`moox-cli gateway call trpc.moox.strategy.StrategyMgr SaveStrategyTemplate --data @save.json`，`save.json` 是 `{"template_yaml": "<模板原文>"}`。
+- 保存模板：`moox-cli strategy template save --template-file 模板.yaml`；`strategy template list|show|render|delete` 查看、渲染与删除（删除默认只预览，`--yes` 执行）。
 
 ## 7. 校验、创建与上线
 
 写入生产的策略定义和实例属于外部写操作，每一步先告诉用户并等确认。
 
-1. **本地先看语法**：模板用 `moox-strategy-cli template check`；普通 DSL 用 `ValidateStrategy`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
+1. **本地先看语法**：模板用 `moox-strategy-cli template check`；普通 DSL 用 `moox-cli strategy validate`（只校验语法与结构，并在选定因子任务的结果 View 最近一期上试算一次，结果不落库；引用了不存在的列时报错带最接近的列名和该任务的全部列）。
 
    ```bash
-   moox-cli gateway call trpc.moox.strategy.StrategyMgr ValidateStrategy --file ./moox.toml --data @validate.json
+   moox-cli strategy validate --dsl-file s.yaml --factor-task-id <因子任务>
    ```
 
-2. **创建定义**：`CreateStrategy`；已有定义用 `UpdateStrategy` 修改。创建后用 `GetStrategy` 读回 DSL 核对。
-3. **创建实例**：`CreateStrategyInstance` 必须带 `factor_task_id`（只能选本空间里运行中、还没被别的实例关联的任务），**创建后不能改，实例也不能删，只能启用或停止**。
+2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
+3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task-id <因子任务>`（默认停用；加 `--enable` 创建即启用）。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改，实例也不能删，只能启用或停止**；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
-4. **启用**：`SetStrategyInstanceEnabled`。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
+4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。
-5. **看结果**：`ListStrategyResults`、`ListStrategyTargets`（当前会话最新的 ok 目标）；控制台 `/strategy/detail/<实例ID>`。
+5. **看结果**：`strategy result list --instance-id <ID>`、`strategy target list --instance-id <ID>`（当前会话最新的 ok 目标）；控制台 `/strategy/detail/<实例ID>`。
    首次启用进入试运行（只发带影子标记的目标，Trade 不下单）；观察实例随后自动进入运行，挂账户的实例要用户执行 `confirm`。
 
 ### 修改已有策略

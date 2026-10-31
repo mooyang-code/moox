@@ -21,7 +21,7 @@ import (
 func newSetupWatchdogCommand(deps setupDeps) *cobra.Command {
 	var file string
 	var hosts []string
-	var remove bool
+	var remove, yes bool
 	cmd := &cobra.Command{Use: "watchdog", Short: "在各主机安装（或移除）主机级守护与告警策略种子", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
@@ -36,6 +36,13 @@ func newSetupWatchdogCommand(deps setupDeps) *cobra.Command {
 			if err := snapshot.Manifest.RequireNotification(); err != nil {
 				return err
 			}
+		}
+		if remove && !yes {
+			names := make([]string, 0, len(targets))
+			for _, host := range targets {
+				names = append(names, host.Name)
+			}
+			return writePreview(cmd, map[string]any{"action": "remove_watchdog", "hosts": names})
 		}
 		results := map[string]json.RawMessage{}
 		for _, host := range targets {
@@ -52,7 +59,8 @@ func newSetupWatchdogCommand(deps setupDeps) *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringSliceVar(&hosts, "host", nil, "只处理这些主机（默认全部主机）")
-	cmd.Flags().BoolVar(&remove, "remove", false, "移除守护的 crontab 条目")
+	cmd.Flags().BoolVar(&remove, "remove", false, "移除守护的 crontab 条目（默认只预览，需要 --yes）")
+	cmd.Flags().BoolVar(&yes, "yes", false, "确认移除；只对 --remove 有意义")
 	return cmd
 }
 

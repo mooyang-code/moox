@@ -49,7 +49,7 @@ func TestLifecycleScriptsAreCalledWithTheNativeRuntimeInterface(t *testing.T) {
 	require.Nil(t, lifecycleScriptArgs(" storage "))
 }
 
-// retain-views 要求 storage-view 已停止：status.sh 输出的是 JSON，按组件 ID 取状态。
+// delete-view 要求 storage-view 已停止：status.sh 输出的是 JSON，按组件 ID 取状态。
 func TestStorageViewStateReadsRuntimeStatusJSON(t *testing.T) {
 	status := func(state string) []byte {
 		return []byte(`{"host_id":"storage","operation":"status","components":[{"id":"storage-primary","state":"running","ready":true},{"id":"storage-view","state":"` + state + `","ready":false}]}`)

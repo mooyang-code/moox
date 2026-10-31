@@ -950,13 +950,13 @@ func init() {
 	metadataCmd.AddCommand(metadataApplyCmd)
 	metadataCmd.AddCommand(metadataSpacesCmd)
 
-	metadataImportCmd.Flags().StringVarP(&metadataImportFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataImportCmd.Flags().StringVar(&metadataImportManifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
+	metadataImportCmd.Flags().StringVar(&metadataImportFile, "seed", "", "metadata seed YAML 文件路径")
+	metadataImportCmd.Flags().StringVar(&metadataImportManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	metadataImportCmd.Flags().BoolVar(&metadataImportDryRun, "dry-run", false, "只解析并输出导入计划，不发送 RPC")
 	metadataImportCmd.Flags().BoolVar(&metadataImportIfNotExists, "if-not-exists", false, "资源已存在时跳过 create 类调用")
 	metadataImportCmd.Flags().StringSliceVar(&metadataImportSpaces, "spaces", nil, "仅导入指定 Space ID 或中文名，逗号分隔")
-	metadataSpacesCmd.Flags().StringVarP(&metadataSpacesFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataApplyCmd.Flags().StringVarP(&metadataApplyFile, "file", "f", "", "metadata seed YAML 文件路径")
-	metadataApplyCmd.Flags().StringVar(&metadataApplyManifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
+	metadataSpacesCmd.Flags().StringVar(&metadataSpacesFile, "seed", "", "metadata seed YAML 文件路径")
+	metadataApplyCmd.Flags().StringVar(&metadataApplyFile, "seed", "", "metadata seed YAML 文件路径")
+	metadataApplyCmd.Flags().StringVar(&metadataApplyManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	metadataApplyCmd.Flags().BoolVar(&metadataApplyDryRun, "dry-run", false, "只解析并输出应用计划，不发送 RPC")
 }

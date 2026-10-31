@@ -198,7 +198,7 @@ func (r *Runtime) checkTask(ctx context.Context, ref lifecycle.Ref) []lifecycle.
 	if r.preload.Ready(ref.ID) {
 		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckPass})
 	} else {
-		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成", Remedy: "moox-cli lifecycle init --task " + ref.ID})
+		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成", Remedy: "moox-cli lifecycle init --task-id " + ref.ID})
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 	if r.preload.Ready(ref.ID) {
@@ -238,7 +238,7 @@ func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) lifecycle.
 	case errors.As(err, &noData):
 		return lifecycle.Check{
 			Name: "本地数据", Status: lifecycle.CheckFail, Message: err.Error(),
-			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>；或把这些标的从源数据集的标签里移除", src.SpaceID, src.DatasetID, src.Freq),
+			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>；或把这些标的从源数据集的标签里移除", src.SpaceID, src.DatasetID, src.Freq),
 		}
 	case errors.As(err, &over):
 		return lifecycle.Check{
@@ -346,7 +346,7 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lif
 		Name: "本地数据覆盖", Status: lifecycle.CheckFail,
 		Message: fmt.Sprintf("%d 个标的的本地数据不足回看根数，例如 %s：本地 %d 根（最早 %s），需要 %d 根",
 			len(short), first.Subject, first.Have, first.Earliest.UTC().Format(time.RFC3339), first.Want),
-		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
+		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
 	}
 }
 

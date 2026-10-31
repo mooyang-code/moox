@@ -165,10 +165,9 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		ControlURL: server.URL,
-		SpaceID:    "crypto",
-		Namespace:  "default",
-		DryRun:     true,
+		SpaceID:   "crypto",
+		Namespace: "default",
+		DryRun:    true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "default", summary.Namespace)
@@ -194,7 +193,7 @@ func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 	defer server.Close()
 
 	_, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: false,
+		SpaceID: "crypto", Confirm: true, Wait: false,
 	})
 	require.ErrorContains(t, err, "requires --wait")
 	assert.Empty(t, calls, "the command must reject non-waiting deletion before reading targets or acquiring a lease")
@@ -224,7 +223,7 @@ func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T)
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
+		SpaceID: "crypto", Confirm: true, Wait: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "nothing_to_delete", summary.Status)
@@ -272,7 +271,7 @@ func TestDeleteCollectorFunctionsHoldsLeaseUntilFunctionJobCompletes(t *testing.
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
+		SpaceID: "crypto", Confirm: true, Wait: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "FUNCTION_JOB_STATUS_SUCCESS", summary.Status)
@@ -331,7 +330,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	defer server.Close()
 
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
-		ControlURL: server.URL, SpaceID: "stockcn", Confirm: true, Wait: true,
+		SpaceID: "stockcn", Confirm: true, Wait: true,
 	})
 	require.ErrorContains(t, err, "delete-1 finished with status FUNCTION_JOB_STATUS_FAILED")
 	assert.Equal(t, []int{100, 70}, submittedSizes)

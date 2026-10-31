@@ -110,6 +110,7 @@ func stringsToAny(values []string) []any {
 
 var collectorTaskDeleteFlagsValue struct {
 	KeepResult bool
+	Yes        bool
 	File       string
 	SpaceID    string
 	TaskID     string
@@ -117,7 +118,7 @@ var collectorTaskDeleteFlagsValue struct {
 
 var collectorTaskDeleteCmd = &cobra.Command{
 	Use:   "delete",
-	Short: "删除采集任务及其结果",
+	Short: "删除采集任务及其结果（默认只预览，--yes 才执行）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		flags := collectorTaskDeleteFlagsValue
@@ -129,6 +130,23 @@ var collectorTaskDeleteCmd = &cobra.Command{
 			return err
 		}
 		defer gateway.Close()
+		if !flags.Yes {
+			detail := &collectorpb.GetTaskDetailRsp{}
+			if err := gateway.Invoke(cmd.Context(), "trpc.moox.collector.CollectMgr", "GetTaskDetail", &collectorpb.GetTaskDetailReq{SpaceId: flags.SpaceID, TaskId: flags.TaskID}, detail); err != nil {
+				return fmt.Errorf("get task: %w", err)
+			}
+			if err := collectorRetError("get task", detail.GetRetInfo()); err != nil {
+				return err
+			}
+			return writePreview(cmd, map[string]any{
+				"action":             "delete_task",
+				"space_id":           flags.SpaceID,
+				"task_id":            flags.TaskID,
+				"task_name":          detail.GetTask().GetTaskName(),
+				"result":             detail.GetTask().GetResult(),
+				"delete_result_data": !flags.KeepResult,
+			})
+		}
 		rsp := &collectorpb.DeleteTaskRsp{}
 		if err := gateway.Invoke(cmd.Context(), "trpc.moox.collector.CollectMgr", "DeleteTask", &collectorpb.DeleteTaskReq{SpaceId: flags.SpaceID, TaskId: flags.TaskID, DeleteResultData: !flags.KeepResult}, rsp); err != nil {
 			return fmt.Errorf("delete task: %w", err)
@@ -147,22 +165,27 @@ func init() {
 	flags.StringVar(&collectorTaskDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
 	flags.StringVar(&collectorTaskDeleteFlagsValue.TaskID, "task-id", "", "任务 ID")
 	flags.BoolVar(&collectorTaskDeleteFlagsValue.KeepResult, "keep-result", false, "只删任务，保留结果数据集与 View")
+	flags.BoolVar(&collectorTaskDeleteFlagsValue.Yes, "yes", false, "确认删除；不加只预览")
 }
 
 var collectorResultDeleteFlagsValue struct {
 	File, SpaceID, AuthFile string
 	DatasetIDs, ViewIDs     []string
+	Yes                     bool
 }
 
 // collectorResultDeleteCmd 删除已没有任务引用的采集结果（View、行数据、数据集）。
 var collectorResultDeleteCmd = &cobra.Command{
 	Use:   "delete-result",
-	Short: "删除没有任务引用的采集结果（View、行数据与数据集）",
+	Short: "删除没有任务引用的采集结果（View、行数据与数据集；默认只预览，--yes 才执行）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		flags := collectorResultDeleteFlagsValue
 		if flags.SpaceID == "" || (len(flags.DatasetIDs) == 0 && len(flags.ViewIDs) == 0) {
 			return errors.New("--space-id and at least one --dataset-id/--view-id are required")
+		}
+		if !flags.Yes {
+			return writePreview(cmd, map[string]any{"action": "delete_result", "space_id": flags.SpaceID, "views": flags.ViewIDs, "datasets": flags.DatasetIDs})
 		}
 		metadata, closer, err := newCollectorStorageMetadataClient(cmd.Context(), flags.File, nil, flags.AuthFile)
 		if err != nil {
@@ -191,4 +214,5 @@ func init() {
 	flags.StringVar(&collectorResultDeleteFlagsValue.SpaceID, "space-id", "", "空间 ID")
 	flags.StringArrayVar(&collectorResultDeleteFlagsValue.DatasetIDs, "dataset-id", nil, "要删除的数据集（连同行数据），可重复")
 	flags.StringArrayVar(&collectorResultDeleteFlagsValue.ViewIDs, "view-id", nil, "要删除的 View，可重复；先于数据集删除")
+	flags.BoolVar(&collectorResultDeleteFlagsValue.Yes, "yes", false, "确认删除；不加只预览")
 }

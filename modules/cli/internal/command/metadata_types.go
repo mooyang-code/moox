@@ -36,11 +36,11 @@ var metadataImportCmd = &cobra.Command{
 	Long: `通过 moox-storage MetadataService 导入存储元数据 seed。
 
 示例:
-  moox-cli metadata import --file ../../config/setup/metadata.yaml --manifest ./moox.toml --if-not-exists
-  moox-cli metadata import --file ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
+  moox-cli metadata import --seed ../../config/setup/metadata.yaml --file ./moox.toml --if-not-exists
+  moox-cli metadata import --seed ../../config/setup/metadata.yaml --spaces crypto --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataImportFile) == "" {
-			return fmt.Errorf("必须指定 --file")
+			return fmt.Errorf("必须指定 --seed")
 		}
 		seed, err := loadMetadataSeed(metadataImportFile)
 		if err != nil {
@@ -81,7 +81,7 @@ var metadataSpacesCmd = &cobra.Command{
 	Short: "列出 metadata seed 可导入的业务空间",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if strings.TrimSpace(metadataSpacesFile) == "" {
-			return fmt.Errorf("必须指定 --file")
+			return fmt.Errorf("必须指定 --seed")
 		}
 		seed, err := loadMetadataSeed(metadataSpacesFile)
 		if err != nil {
@@ -96,7 +96,7 @@ var metadataApplyCmd = &cobra.Command{
 	Short: "创建并校验存储元数据 seed",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(metadataApplyFile) == "" {
-			return fmt.Errorf("必须指定 --file")
+			return fmt.Errorf("必须指定 --seed")
 		}
 		seed, err := loadMetadataSeed(metadataApplyFile)
 		if err != nil {

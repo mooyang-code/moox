@@ -315,12 +315,12 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 "$SKILL_ROOT/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT --interval 1m \
-  --start-time 2026-10-17T00:00:00Z --end-time 2026-10-17T16:00:00Z --limit 1000 \
+  --from 2026-10-17T00:00:00Z --to 2026-10-17T16:00:00Z --limit 1000 \
   --columns open,high,low,close,volume,quote_volume,trade_num --output ./factor-convert/btc-1.json
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv ./factor-convert/*.json --output ./factor-convert/bars.csv
 ```
 
-运维机上也可以用 `moox-cli data rows export --dataset <源数据集> --subject <标的> --columns open,high,low,close,volume,quote_volume ...` 导出后同样转换。
+运维机上也可以用 `moox-cli data rows export --dataset-id <源数据集> --subject <标的> --columns open,high,low,close,volume,quote_volume ...` 导出后同样转换。
 **合成数据必做一份**（覆盖收平、并列等边界，截面因子要多个标的）：
 
 ```bash
@@ -407,7 +407,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
    输出 JSON 的 `factors` 里先确认 `enabled` 为 true、`definitions` 等于登记的个数，再看每个任务与成员的结果：
    逐项报告 `exists` / `created` / `conflict`（冲突不影响其余项），并打印每个成员的成员键与列名；配置里已去掉的成员只报告 `orphan`，不自动移除。FactorMgr 会重新编译定义，编不过会整体报错。
    再次执行是幂等的：定义没变时记为 `unchanged`。
-4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-factor-mgr-cli recalc` 指定范围）。
+4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-cli factor recalc submit` 指定范围）。
 5. 仓库里的因子库改动按项目规范提交。
 
 **同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个因子任务，
@@ -447,26 +447,25 @@ members = [
 - 因子已被任务引用时，还要求定义兼容：**不能增删参数、改参数名、调参数顺序、改参数类型、改参数默认值**（成员键依赖默认值），**不能增删、改名、重排输出**。可以改的是表达式本身，以及参数的 `min` / `max`。
 - 已有成员的参数值必须仍满足新的范围，否则报“参数不再合法”；新定义让某个成员无法通过校验，整次更新失败。
 - 没有被任何任务引用的因子可以随便改（不受上面两条兼容限制）。
-- `moox-cli setup factors` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `UpdateFactor`。
+- `moox-cli setup factors` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `factor update`。
 
-**流程**（运维机，用户的 `moox.toml`；`gateway call` 的 `--data` 支持 `@文件`）：
+**流程**（运维机，用户的 `moox.toml`）：
 
-1. **查引用**：`GetFactor` 的返回里 `usages` 列出任务、成员键和状态，确认影响面（引用它的因子任务、策略实例）。
-
-   ```bash
-   moox-cli gateway call trpc.moox.factor.FactorMgr GetFactor --file ./moox.toml --data '{"factor_id":"upper_shadow"}'
-   ```
-
-2. **离线验证新表达式**：按 7.3～7.6 用 `check` 和 `eval` 验证；也可以用 `ValidateFactorSpec` 看服务端编译结果和新的 `definition_hash`。
-3. **停用引用它的成员**：对 `usages` 里每个状态为 `enabled` 的成员调 `SetTaskMemberStatus`（`status` 取 `disabled`）。停用期间该成员的结果列不再产出，依赖它的策略实例拿不到这一列（实际表现未逐项验证），所以先告诉用户，并按需先停用相关策略实例。
+1. **查引用**：`factor show` 的返回里 `usages` 列出任务、成员键和状态，确认影响面（引用它的因子任务、策略实例）。
 
    ```bash
-   moox-cli gateway call trpc.moox.factor.FactorMgr SetTaskMemberStatus --file ./moox.toml \
-     --data '{"task_id":"ftask_xxx","member_key":"upper_shadow__12","status":"disabled"}'
+   moox-cli factor show --factor-id upper_shadow
    ```
 
-4. **更新定义**：先用 `GetFactor`（带 spec）读回原定义，只改 `spec`，整个 `factor` 对象原样回传，避免丢字段；然后调 `UpdateFactor`，返回的 `definition_hash` 应与第 2 步一致。
-5. **重新启用成员**，等引擎下一次同步（最长约 1 分钟）并预热完成；预热依据回看窗口，长回看的因子要等本地序列重新就绪。启用不会自动补算历史，需要历史因子值时用 `RecalcFactors`。
+2. **离线验证新表达式**：按 7.3～7.6 用 `check` 和 `eval` 验证；也可以用 `moox-cli factor validate --spec-file new.yaml --factor-id <因子>` 看服务端编译结果和新的 `definition_hash`。
+3. **停用引用它的成员**：对 `usages` 里每个状态为 `enabled` 的成员执行 `factor member disable`。停用期间该成员的结果列不再产出，依赖它的策略实例拿不到这一列（实际表现未逐项验证），所以先告诉用户，并按需先停用相关策略实例。
+
+   ```bash
+   moox-cli factor member disable --task-id ftask_xxx --member-key upper_shadow__12
+   ```
+
+4. **更新定义**：先用 `factor show` 读回原定义，只改 `spec`，把整个 `factor` 对象原样放进 `--data @update.json`（`{"factor": {…}}`）再 `factor update --data @update.json`，避免丢字段；返回的 `definition_hash` 应与第 2 步一致。
+5. **重新启用成员**（`factor member enable`），等引擎下一次同步（最长约 1 分钟）并预热完成；预热依据回看窗口，长回看的因子要等本地序列重新就绪。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit`。
 6. **重新启用依赖它的策略实例**：定义哈希变了，引用它的策略实例要重新启用，不然继续停在旧状态。
 7. **验证**：按第 9 节核对定义、引擎同步和数值；确认结果列重新按期产出。
 8. **同步配置与库文件**：把改动同步到仓库因子库（或 `local/` 下的因子库）和用户的 `moox.toml` 登记；库文件与线上定义不一致，下次 `setup factors` 会报 `conflict`。
@@ -478,16 +477,16 @@ members = [
 1. **定义**：控制台因子详情（或 `GetFactor`）里的类型、输入列、输出列、回看与 7.3 的 `check` 结果一致。
 2. **引擎**：引擎默认每分钟第 45 秒同步目录；成员启用时管理端对齐结果列，实际数据要等目录同步、窗口就绪和任务进入试运行或运行之后产生。
    控制台「因子计算」总览 / `GetStatus` 里引擎在线、目录一致，`factor_compile_errors_total` 不增长（编译失败只会出现在引擎与管理端的表达式版本不一致时）。
-3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「因子任务」页或 `moox-factor-mgr-cli status` 看任务从排队到完成。
+3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「因子任务」页或 `moox-cli factor recalc list|show` 看任务从排队到完成。
 4. **生产数值复核**：取一段时间的源 K 线和结果列，本地 `eval` 后与生产结果比较。须保证输入、成员参数、截面全集与预热长度一致；有填充或历史修正时，原始 Storage 导出不一定等于生产当时的本地窗口。
    时序因子取一两个标的即可；**截面因子必须导出该因子任务在这段时间的全部标的**（不带 `--subject`，或逐个导出后合并），否则本地排名、标准化的样本不同，
    结果必然对不上。源数据要比比较区间提前至少“因子回看”个周期，比较时用 `--start`、`--end` 只比较目标区间：
 
    ```bash
-   moox-cli data rows export --file ./moox.toml --space crypto --dataset <源数据集> --subject BTC-USDT --freq 1m \
-     --start-time <起> --end-time <止> --columns open,high,low,close,volume,quote_volume --output src.json
-   moox-cli data rows export --file ./moox.toml --space crypto --dataset <因子结果数据集> --subject BTC-USDT --freq 1m \
-     --start-time <起> --end-time <止> --columns zf_abs_mean --output prod.json
+   moox-cli data rows export --file ./moox.toml --space-id crypto --dataset-id <源数据集> --subject BTC-USDT --frequency 1m \
+     --from <起> --to <止> --columns open,high,low,close,volume,quote_volume --output src.json
+   moox-cli data rows export --file ./moox.toml --space-id crypto --dataset-id <因子结果数据集> --subject BTC-USDT --frequency 1m \
+     --from <起> --to <止> --columns zf_abs_mean --output prod.json
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv src.json --output src.csv
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv prod.json --output prod.csv
    "$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id zf_abs_mean --input src.csv --freq 1m --output local.csv

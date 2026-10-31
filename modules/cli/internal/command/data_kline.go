@@ -164,8 +164,8 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	cmd.Flags().StringVar(&symbol, "symbol", "", "交易标的，例如 BTC-USDT")
 	cmd.Flags().StringVar(&interval, "interval", "1m", "K 线周期")
 	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000；不给时间范围时是最新的 limit 根，给了时间范围时是范围内最早的 limit 根")
-	cmd.Flags().StringVar(&startTime, "start-time", "", "RFC3339 起始时间")
-	cmd.Flags().StringVar(&endTime, "end-time", "", "RFC3339 结束时间")
+	cmd.Flags().StringVar(&startTime, "from", "", "RFC3339 起始时间")
+	cmd.Flags().StringVar(&endTime, "to", "", "RFC3339 结束时间")
 	cmd.Flags().DurationVar(&timeout, "timeout", 15*time.Second, "RPC 超时时间，必须大于 0")
 	cmd.Flags().StringSliceVar(&columns, "columns", nil, "返回的列，逗号分隔；默认 open,high,low,close,volume")
 	cmd.Flags().StringVar(&output, "output", "", "输出 JSON 文件；为空则输出到 stdout")
@@ -180,17 +180,17 @@ func validateKlineTimeRange(start, end string) error {
 	if start != "" {
 		startValue, err = time.Parse(time.RFC3339, start)
 		if err != nil {
-			return fmt.Errorf("--start-time 必须是 RFC3339 时间: %w", err)
+			return fmt.Errorf("--from 必须是 RFC3339 时间: %w", err)
 		}
 	}
 	if end != "" {
 		endValue, err = time.Parse(time.RFC3339, end)
 		if err != nil {
-			return fmt.Errorf("--end-time 必须是 RFC3339 时间: %w", err)
+			return fmt.Errorf("--to 必须是 RFC3339 时间: %w", err)
 		}
 	}
 	if start != "" && end != "" && startValue.After(endValue) {
-		return fmt.Errorf("--start-time 不能晚于 --end-time")
+		return fmt.Errorf("--from 不能晚于 --to")
 	}
 	return nil
 }

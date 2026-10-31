@@ -50,8 +50,8 @@ import-pack/
 ## 2. 预检（操作机，只读）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --dry-run --min-rows <回看数量> \
-  --tail-rows 6000 --allow-missing --manifest ./moox.toml > preflight.json
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --dry-run --min-rows <回看数量> \
+  --tail-rows 6000 --allow-missing --file ./moox.toml > preflight.json
 ```
 
 `--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
@@ -62,8 +62,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
 取目标数据集最近的一条实时行，对比其 `series_tag` 与清单：
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --space <空间> --dataset <数据集> --freq <频率> \
-  --subject <任一标的> --columns close --start-time <最近几分钟> --end-time <现在> --page-size 2
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --space-id <空间> --dataset-id <数据集> --frequency <频率> \
+  --subject <任一标的> --columns close --from <最近几分钟> --to <现在> --page-size 2
 ```
 
 `key.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
@@ -117,10 +117,10 @@ set -a; . /data/moox/factor-engine/secrets/health-auth.env; set +a
 ```bash
 nproc; free -g
 # 试跑一个标的
-./moox-cli import --target factor --space <空间> --dataset <数据集> --freq <频率> --series-tag '<series_tag>' --allow-missing \
+./moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> --series-tag '<series_tag>' --allow-missing \
   --engine http://127.0.0.1:11417 --job-db ./one.db --path pack/<频率>/<标的>.csv
 # 全量：每个文件一个进程、各自独立的断点库，并发 P
-ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target factor --space <空间> --dataset <数据集> --freq <频率> \
+ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
   --series-tag "<series_tag>" --allow-missing --engine http://127.0.0.1:11417 --job-db "./jobs/$(basename {}).db" --path {} > "./logs/$(basename {}).log" 2>&1 \
   && echo ok >> ok.txt || echo "{}" >> fail.txt'
 ```
@@ -130,8 +130,8 @@ ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target fac
 ## 8. Storage 窗口（操作机，可与第 7 步同时进行）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
-  --manifest ./moox.toml --job-db ./storage-import.db > storage-import.json
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
+  --file ./moox.toml --job-db ./storage-import.db > storage-import.json
 ```
 
 输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。
@@ -176,7 +176,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 - **新建的因子任务由引擎自动推进**，不用在因子机手动执行 `lifecycle` 命令：引擎每 30 秒对目录里的任务自动 init、start（进入试运行，因子已经在算），
   试运行之后有一期所有启用成员都完整算完时自动确认进入运行。时间线：任务建好后，引擎在每分钟第 45 秒同步目录，预加载本地窗口
   （源数据有 5 万根历史时可达一两分钟），再等下一个源数据周期收盘出第一批结果，随后再完整算完一期转为运行。
-  用 `moox-cli lifecycle status --endpoint http://127.0.0.1:11417`（因子机上，环境变量同第 7 步）查看阶段；长时间停在“未初始化”或“未就绪”时看该命令给出的检查失败原因。
+  在操作机上用 `moox-cli lifecycle status`（按 moox.toml 自动连因子引擎，不需要隧道或环境变量）查看阶段；在因子机上没有 moox.toml 时用 `--endpoint http://127.0.0.1:11417`（环境变量同第 7 步）；长时间停在“未初始化”或“未就绪”时看该命令给出的检查失败原因。
 - 同一个因子要用不同的固定参数算多组时，不要为参数新建因子定义：用同一个定义加多个成员，每个成员带自己的固定参数，成员键按参数生成
   （全部参数等于默认值时就是因子 ID，否则“因子ID__值1_值2…”）。例如 EMA20 用 5 万根预热：`ema` 成员 `span=20, warmup=50000`，成员键与结果列都是 `ema__20_50000`；
   固定参数加成员之后不再改。在 `moox.toml` 里写成员的 `{ factor = "ema", params = { span = 20, warmup = 50000 } }`，页面里是添加因子时填参数（页面会预览成员键和列名）。
@@ -184,7 +184,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 - 策略 `min_age_bars` 按关联因子任务的结果 View 的覆盖判断：任务可以先于策略运行积累历史，结果 View 的覆盖不够时启用被拒绝。
 - 用到 `bars[-1]` 因子列的规则，启用后的第一期会以 `previous_version_unknown` 整期跳过，第二期起正常（新实例没有持仓，不会触发退出）。
-- 需要历史因子值时再手动补算：`moox-factor-mgr-cli recalc` 指定范围。每个补算块会往 Storage 写几十万行因子结果，
+- 需要历史因子值时再手动补算：`moox-cli factor recalc submit --task-id <任务> --from … --to …` 指定范围。每个补算块会往 Storage 写几十万行因子结果，
   Storage 的 View 约 1 万行/秒才消化得完，范围按需、一次不要太大。
 
 ## 常见问题

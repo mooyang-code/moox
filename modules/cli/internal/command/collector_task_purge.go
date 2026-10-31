@@ -31,9 +31,6 @@ type collectorTaskPurgeFlags struct {
 	SeedFile         string
 	CollectorInitBin string
 	Apply            bool
-	DryRun           bool
-	DryRunSet        bool
-	Confirm          bool
 }
 
 type collectorTaskResultRef struct {
@@ -186,11 +183,10 @@ var collectorTaskCmd = &cobra.Command{
 var collectorTaskPurgeCmd = &cobra.Command{
 	Use:   "purge",
 	Short: "清理 Collector 任务运行数据和结果引用",
-	Long:  "默认只输出清单，不修改任何数据。执行清理必须同时指定 --apply --confirm；--apply 与 --dry-run 互斥。apply 会先执行 --stop-command，成功后才删除任务、运行记录和结果，只有全空间模式才重建 Schema。",
+	Long:  "默认只输出清单，不修改任何数据；加 --yes 才执行清理。执行时会先运行 --stop-command，成功后才删除任务、运行记录和结果，只有全空间模式才重建 Schema。",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		flags := collectorTaskPurgeFlagsValue
-		flags.DryRunSet = cmd.Flags().Changed("dry-run")
 		summary, err := runCollectorTaskPurge(cmd.Context(), flags)
 		if summary != nil {
 			encoder := json.NewEncoder(cmd.OutOrStdout())
@@ -216,9 +212,7 @@ func init() {
 	flags.StringVar(&collectorTaskPurgeFlagsValue.BackupDir, "backup-dir", "", "备份目录；默认写入数据库所在目录")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SeedFile, "seed-file", "", "重建 Schema 后使用的 Collector 任务种子文件")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.CollectorInitBin, "collector-init-bin", "moox-collector-cli", "Collector CLI 初始化程序路径")
-	flags.BoolVar(&collectorTaskPurgeFlagsValue.Apply, "apply", false, "执行删除；必须同时指定 --confirm")
-	flags.BoolVar(&collectorTaskPurgeFlagsValue.DryRun, "dry-run", false, "只输出清单，不修改文件或远端；默认行为")
-	flags.BoolVar(&collectorTaskPurgeFlagsValue.Confirm, "confirm", false, "确认执行破坏性重置")
+	flags.BoolVar(&collectorTaskPurgeFlagsValue.Apply, "yes", false, "确认执行；不加只输出清单，不修改文件或远端")
 }
 
 func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (*collectorTaskPurgeSummary, error) {
@@ -256,15 +250,6 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		DBPath:                 dbPath,
 		Results:                []collectorTaskResultRef{},
 		StorageInventoryStatus: "unavailable",
-	}
-
-	if flags.Apply && (flags.DryRun || flags.DryRunSet) {
-		summary.StorageInventoryReason = "apply and dry-run are mutually exclusive"
-		return summary, fmt.Errorf("collector task purge cannot combine --apply and --dry-run")
-	}
-	if flags.Apply && !flags.Confirm {
-		summary.StorageInventoryReason = "apply requires --confirm"
-		return summary, fmt.Errorf("collector task purge requires both --apply and --confirm")
 	}
 
 	if err := inspectCollectorTaskPurge(dbPath, summary); err != nil {

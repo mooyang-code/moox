@@ -1,13 +1,13 @@
 // Package command 是回放命令行的共用实现：moox-replay 与 moox-cli replay 都调用它。
 //
-//	start    [--task <因子任务>] --instance <策略实例> --from <起> --to <止> [--replay <ID>] [--quote next_open|close] [--write-factors] ...
-//	         开始一次回放；用同样的参数（或只给 --replay）再次执行就是续跑。前台运行，Ctrl-C 中断后可续跑。
-//	pause    --replay <ID>   暂停（运行进程在周期边界停下）
-//	resume   --replay <ID>   继续被暂停的回放
-//	cancel   --replay <ID>   取消回放（保留已有结果）
-//	status   [--replay <ID>] 查看进度、当前周期与状态
-//	report   --replay <ID>   汇总权益、回撤、费用与成交
-//	delete   --replay <ID>   清理这次回放在 Trade 里的结果和本地记录
+//	start    [--task-id <因子任务>] --instance-id <策略实例> --from <起> --to <止> [--replay-id <ID>] [--quote next_open|close] [--write-factors] ...
+//	         开始一次回放；用同样的参数（或只给 --replay-id）再次执行就是续跑。前台运行，Ctrl-C 中断后可续跑。
+//	pause    --replay-id <ID>   暂停（运行进程在周期边界停下）
+//	resume   --replay-id <ID>   继续被暂停的回放
+//	cancel   --replay-id <ID>   取消回放（保留已有结果）
+//	status   [--replay-id <ID>] 查看进度、当前周期与状态
+//	report   --replay-id <ID>   汇总权益、回撤、费用与成交
+//	delete   --replay-id <ID>   清理这次回放在 Trade 里的结果和本地记录
 //
 // 回放接口挂在各模块的健康检查端口上，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY；
 // 各模块的密钥不同时分别用 MOOX_FACTOR_/MOOX_STRATEGY_/MOOX_TRADE_HEALTH_AUTH_ACCESS_KEY、_SECRET_KEY 覆盖。
@@ -60,7 +60,7 @@ type common struct {
 
 func (c *common) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.db, "db", "./replay.db", "回放服务的 SQLite 路径（任务状态与周期记录）")
-	fs.StringVar(&c.replayID, "replay", "", "回放 ID")
+	fs.StringVar(&c.replayID, "replay-id", "", "回放 ID")
 	fs.StringVar(&c.factorURL, "factor-endpoint", "http://127.0.0.1:11417", "因子引擎健康检查地址（可以是 SSH 隧道的本地端口）")
 	fs.StringVar(&c.strategyURL, "strategy-endpoint", "http://127.0.0.1:11431", "策略健康检查地址")
 	fs.StringVar(&c.tradeURL, "trade-endpoint", "http://127.0.0.1:11210", "Trade 健康检查地址")
@@ -94,8 +94,8 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	var c common
 	c.bind(fs)
 	var spec seriesreplay.Spec
-	fs.StringVar(&spec.TaskID, "task", "", "计算因子帧的因子任务 ID（可省略，取实例关联的因子任务）")
-	fs.StringVar(&spec.InstanceID, "instance", "", "提供策略定义与数据源绑定的策略实例 ID")
+	fs.StringVar(&spec.TaskID, "task-id", "", "计算因子帧的因子任务 ID（可省略，取实例关联的因子任务）")
+	fs.StringVar(&spec.InstanceID, "instance-id", "", "提供策略定义与数据源绑定的策略实例 ID")
 	fs.StringVar(&spec.From, "from", "", "回放起点（RFC3339，含）")
 	fs.StringVar(&spec.To, "to", "", "回放终点（RFC3339，不含）；本地数据必须包含终点之后的一根")
 	fs.StringVar(&spec.Quote, "quote", "next_open", "成交价取法：next_open（下一根开盘）或 close（本期收盘）")
@@ -112,7 +112,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	// 只给 --replay：从库里取规格续跑。
+	// 只给 --replay-id：从库里取规格续跑。
 	if c.replayID != "" && spec.TaskID == "" && spec.InstanceID == "" && spec.From == "" {
 		run, err := store.GetRun(c.replayID)
 		if err != nil {
@@ -163,7 +163,7 @@ func control(args []string, out io.Writer, name, to string, from ...string) erro
 		return err
 	}
 	if c.replayID == "" {
-		return errors.New("--replay 是必填项")
+		return errors.New("--replay-id 是必填项")
 	}
 	store, err := seriesreplay.OpenStore(c.db)
 	if err != nil {
@@ -231,7 +231,7 @@ func report(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	if c.replayID == "" {
-		return errors.New("--replay 是必填项")
+		return errors.New("--replay-id 是必填项")
 	}
 	summary, err := seriesreplay.Report(ctx, c.trade(), c.replayID)
 	if err != nil {
@@ -257,7 +257,7 @@ func remove(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	if c.replayID == "" {
-		return errors.New("--replay 是必填项")
+		return errors.New("--replay-id 是必填项")
 	}
 	store, err := seriesreplay.OpenStore(c.db)
 	if err != nil {

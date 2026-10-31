@@ -151,6 +151,26 @@ func TestInternalSelectsLocalOtherwiseTLSWithPrivateCA(t *testing.T) {
 	}
 }
 
+func TestEndpointHonorsRequestedHost(t *testing.T) {
+	ca, _, _ := testCertificates(t)
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	config := tunnelConfig(source)
+	config.Mode = Internal
+	config.LocalHostID = "b"
+	config.Tunnels = nil
+	config.CAFile = ca
+	c := newTestClient(t, config)
+	ctx := WithCallMetadata(context.Background(), CallMetadata{HostID: "a"})
+	ep, err := c.endpoint(ctx, secretService, "")
+	require.NoError(t, err)
+	require.Equal(t, "a", ep.target, "指定主机时不再本机优先")
+	ep, err = c.endpoint(ctx, secretService, "a")
+	require.NoError(t, err)
+	require.Equal(t, "a", ep.target, "只有一台候选时重试仍落在指定主机")
+	_, err = c.endpoint(WithCallMetadata(context.Background(), CallMetadata{HostID: "zz"}), secretService, "")
+	require.ErrorContains(t, err, "not deployed on host zz")
+}
+
 func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
 	config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "moox-skill", KeyID: "skill", Secret: "secret"}, AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
 	c := newTestClient(t, config)

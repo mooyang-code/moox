@@ -18,7 +18,7 @@ type deleteViewOptions struct {
 }
 
 // runDeleteView 离线删除一个 View 的元数据，用在没有别的入口（控制台没有删除视图的页面）时下线单个 View。
-// 和 retain-views 一样直接改 Metadata SQLite，所以 storage-view 必须已停止；不同的是它只删指定的一个，
+// 直接改 Metadata SQLite，所以 storage-view 必须已停止；不同的是它只删指定的一个，
 // 不会波及因子结果视图等其他动态视图。物理索引文件由 storage-view 的清理定时器在确认无引用后回收。
 func runDeleteView(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("delete-view", flag.ContinueOnError)
@@ -72,12 +72,12 @@ func splitViewRef(value string) (spaceID, viewID string, err error) {
 	return spaceID, viewID, nil
 }
 
-func deleteView(ctx context.Context, opts deleteViewOptions) (retainViewsSummary, error) {
+func deleteView(ctx context.Context, opts deleteViewOptions) (removedViewsSummary, error) {
 	spaceID, viewID, err := splitViewRef(opts.view)
 	if err != nil {
-		return retainViewsSummary{}, err
+		return removedViewsSummary{}, err
 	}
-	summary := retainViewsSummary{}
+	summary := removedViewsSummary{}
 	err = withMetadataTx(ctx, opts.metadataDB, func(conn *sql.Conn) error {
 		all, err := listViewRows(ctx, conn)
 		if err != nil {
@@ -91,9 +91,8 @@ func deleteView(ctx context.Context, opts deleteViewOptions) (retainViewsSummary
 		return fmt.Errorf("View %s/%s does not exist", spaceID, viewID)
 	})
 	if err != nil {
-		return retainViewsSummary{}, err
+		return removedViewsSummary{}, err
 	}
-	summary.KeptViews = 0
 	sortRetiredIndexes(&summary)
 	return summary, nil
 }

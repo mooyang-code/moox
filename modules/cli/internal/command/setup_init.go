@@ -346,7 +346,7 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "factors",
-		Short: "导入本地 YAML 因子库并建立默认 View 绑定",
+		Short: "按 moox.toml 的 [[factors.definitions]] 与 [[factors.tasks]] 补齐因子定义、任务与成员（只补缺不删除）",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {

@@ -41,7 +41,7 @@ var collectorIngestModeGetCmd = &cobra.Command{
 
 var collectorIngestModeSetCmd = &cobra.Command{
 	Use:   "set",
-	Short: "切换数据集的采集方式（按生效周期交接；不带 --dataset 表示空间全部数据集）",
+	Short: "切换数据集的采集方式（按生效周期交接；不带 --dataset-id 表示空间全部数据集）",
 	Long: "切到 stream 要求 collector-stream 在线；--executor 选拉取与补采的执行端（scf 云函数或 local 本地执行端；留空时 stream 默认 local，pull 默认 scf）。\n" +
 		"--force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端。\n" +
 		"不带 --yes 时只打印当前状态；带 --yes 时保存并等待对账生成交接计划，打印每个数据集按频率选用的生效周期 P。",
@@ -60,7 +60,7 @@ func init() {
 	}{{collectorIngestModeGetCmd, &ingestModeGetFlags}, {collectorIngestModeSetCmd, &ingestModeSetFlags}} {
 		item.cmd.Flags().StringVar(&item.flags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 		item.cmd.Flags().StringVar(&item.flags.SpaceID, "space-id", "", "空间 ID")
-		item.cmd.Flags().StringVar(&item.flags.DatasetID, "dataset", "", "只处理指定数据集；留空表示空间全部数据集")
+		item.cmd.Flags().StringVar(&item.flags.DatasetID, "dataset-id", "", "只处理指定数据集；留空表示空间全部数据集")
 	}
 	collectorIngestModeSetCmd.Flags().StringVar(&ingestModeSetFlags.Mode, "mode", "", "stream 或 pull")
 	collectorIngestModeSetCmd.Flags().StringVar(&ingestModeSetFlags.Executor, "executor", "", "scf 或 local；留空时 stream 用 local，pull 用 scf")

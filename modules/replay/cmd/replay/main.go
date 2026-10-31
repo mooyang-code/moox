@@ -3,11 +3,11 @@
 //
 // 用法：
 //
-//	moox-replay start --task <因子任务> --instance <策略实例> --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z [--write-factors]
-//	moox-replay pause|resume|cancel|report|delete --replay <ID>
-//	moox-replay status [--replay <ID>]
+//	moox-replay start --task-id <因子任务> --instance-id <策略实例> --from 2026-01-01T00:00:00Z --to 2026-02-01T00:00:00Z [--write-factors]
+//	moox-replay pause|resume|cancel|report|delete --replay-id <ID>
+//	moox-replay status [--replay-id <ID>]
 //
-// 中断后用同样的参数（或只给 --replay）再次执行 start 即可续跑。
+// 中断后用同样的参数（或只给 --replay-id）再次执行 start 即可续跑。
 package main
 
 import (

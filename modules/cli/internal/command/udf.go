@@ -125,7 +125,7 @@ func runUdfPublish(ctx context.Context, out io.Writer, opts udfPublishOptions) e
 		state = "版本已存在，只更新了说明与示例"
 	}
 	fmt.Fprintf(out, "已发布 %s@%s：%s\n", rsp.GetName(), rsp.GetHash(), state)
-	fmt.Fprintf(out, "下一步：moox-cli udf preview %s@%s --spec <因子定义> --task <因子任务>；满意后 moox-cli udf activate %s@%s --dry-run\n",
+	fmt.Fprintf(out, "下一步：moox-cli udf preview %s@%s --spec <因子定义> --task-id <因子任务>；满意后先 moox-cli udf activate %s@%s 看影响清单，确认后加 --yes\n",
 		rsp.GetName(), rsp.GetHash(), rsp.GetName(), rsp.GetHash())
 	return nil
 }
@@ -153,7 +153,7 @@ func runUdfPreview(ctx context.Context, out io.Writer, opts udfPreviewOptions) e
 		return err
 	}
 	if opts.Task == "" {
-		return errors.New("--task 必填：在这个因子任务的源数据上试算")
+		return errors.New("--task-id 必填：在这个因子任务的源数据上试算")
 	}
 	req := &factorpb.PreviewFactorReq{
 		TaskId: opts.Task, Spec: string(spec), Subjects: opts.Subjects, Periods: opts.Periods, AllowPartialUniverse: opts.AllowPart,
@@ -172,6 +172,7 @@ func runUdfPreview(ctx context.Context, out io.Writer, opts udfPreviewOptions) e
 type udfActivateOptions struct {
 	File   string
 	Ref    string
+	Yes    bool // 命令行 --yes：确认切换；不带时只给出影响清单
 	DryRun bool
 }
 
@@ -194,10 +195,10 @@ func runUdfActivate(ctx context.Context, out io.Writer, opts udfActivateOptions)
 	case rsp.GetApplied() && len(rsp.GetImpacts()) == 0:
 		fmt.Fprintf(out, "\n已切换 %s：%s → %s。没有因子定义引用它，不需要恢复引擎。\n", name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetApplied():
-		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（lifecycle resume --endpoint <因子引擎地址>），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
+		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（moox-cli lifecycle resume），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
 			name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetDryRun():
-		fmt.Fprintln(out, "\n（dry-run：没有修改任何东西）")
+		fmt.Fprintln(out, "\n（预览：没有修改任何东西；确认后加 --yes）")
 	}
 	return nil
 }
@@ -309,12 +310,12 @@ var udfCmd = &cobra.Command{
   moox-cli udf new <名称> [--sdk-path <sdk/rust>]   生成骨架（空目录生成工作区，已有工作区只添加 crate）
   moox-cli udf build [<名称>]                        clippy → 原生测试 → 编译 → 模块检查 → 一致性测试 → 打包 dist/<名称>-<哈希>.udfpkg
   moox-cli udf publish <包>                           上传并由服务端复核（要求 git 工作区干净），存为不可变版本（未启用）
-  moox-cli udf preview <名称>@<哈希> --spec <文件> --task <任务>   用未启用的版本在真实数据上试算
-  moox-cli udf activate <名称>@<哈希> [--dry-run]     切换启用版本：先给出影响清单与前提检查
+  moox-cli udf preview <名称>@<哈希> --spec <文件> --task-id <任务>   用未启用的版本在真实数据上试算
+  moox-cli udf activate <名称>@<哈希> [--yes]         切换启用版本：默认只给出影响清单与前提检查，--yes 才切换
   moox-cli udf list | show <名称>                     查看版本、引用关系与各引擎的模块状态
 
-切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause --endpoint <因子引擎健康检查地址，默认 http://127.0.0.1:11417>（等收敛）→ 取消列出的已领取补算作业 →
-udf activate → lifecycle resume --endpoint <同上>（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
+切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause（默认连因子引擎，按 moox.toml 自动解析；等收敛）→ 取消列出的已领取补算作业 →
+udf activate --yes → lifecycle resume（追赶：同步目录、备齐模块、用新版本补算暂停期间的周期，再放行）。`,
 }
 
 func newUdfCommands() *cobra.Command {
@@ -371,7 +372,7 @@ func newUdfCommands() *cobra.Command {
 		},
 	}
 	previewCmd.Flags().StringVar(&prevOpts.Spec, "spec", "", "因子定义文件（里面用 udf.<名称>(...)）")
-	previewCmd.Flags().StringVar(&prevOpts.Task, "task", "", "在哪个因子任务的源数据上试算")
+	previewCmd.Flags().StringVar(&prevOpts.Task, "task-id", "", "在哪个因子任务的源数据上试算")
 	previewCmd.Flags().StringVar(&prevOpts.FactorID, "factor-id", "", "因子 ID（单输出因子的输出名就是它）；不给按草稿处理")
 	previewCmd.Flags().StringSliceVar(&prevOpts.Subjects, "subjects", nil, "展示的标的，逗号分隔；不给取前几个")
 	previewCmd.Flags().Int32Var(&prevOpts.Periods, "periods", 0, "最近多少期（默认 20，最多 500）")
@@ -379,15 +380,16 @@ func newUdfCommands() *cobra.Command {
 
 	var actOpts udfActivateOptions
 	activateCmd := &cobra.Command{
-		Use: "activate <名称>@<哈希>", Short: "切换启用版本（先 --dry-run 看影响清单与前提）", Args: cobra.ExactArgs(1),
+		Use: "activate <名称>@<哈希>", Short: "切换启用版本（默认只看影响清单与前提，--yes 才切换）", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			actOpts.File, actOpts.Ref = file, args[0]
+			actOpts.DryRun = !actOpts.Yes
 			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 			defer cancel()
 			return runUdfActivate(ctx, cmd.OutOrStdout(), actOpts)
 		},
 	}
-	activateCmd.Flags().BoolVar(&actOpts.DryRun, "dry-run", false, "只给出影响清单与前提检查，不修改")
+	activateCmd.Flags().BoolVar(&actOpts.Yes, "yes", false, "确认切换；不加只给出影响清单与前提检查，不修改")
 
 	var asJSON bool
 	listCmd := &cobra.Command{

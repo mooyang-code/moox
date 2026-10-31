@@ -34,10 +34,10 @@ def csv_rows_in_window(path, start, end):
 
 def storage_rows_in_window(args, manifest, subject, start, end):
     command = [
-        args.moox_cli, "data", "rows", "export", "--file", args.moox_toml, "--space", manifest["space_id"],
-        "--dataset", manifest["dataset_id"], "--freq", manifest["freq"], "--subject", subject, "--columns", "close",
+        args.moox_cli, "data", "rows", "export", "--file", args.moox_toml, "--space-id", manifest["space_id"],
+        "--dataset-id", manifest["dataset_id"], "--frequency", manifest["freq"], "--subject", subject, "--columns", "close",
         "--series-tag", manifest["series_tag"],
-        "--start-time", start.strftime("%Y-%m-%dT%H:%M:%SZ"), "--end-time", (end + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--from", start.strftime("%Y-%m-%dT%H:%M:%SZ"), "--to", (end + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "--page-size", str(args.page_size),
     ]
     env = {k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy")}
@@ -58,7 +58,7 @@ def storage_rows_in_window(args, manifest, subject, start, end):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--pack", required=True, help="导入包目录（含 manifest.json）")
-    parser.add_argument("--preflight", required=True, help="导入命令输出的 JSON 文件（moox-cli import --manifest-pack … --tail-rows N 的 stdout，每个文件带 tail_from）")
+    parser.add_argument("--preflight", required=True, help="导入命令输出的 JSON 文件（moox-cli import --pack … --tail-rows N 的 stdout，每个文件带 tail_from）")
     parser.add_argument("--moox-cli", required=True, help="moox-cli 路径（当前版本）")
     parser.add_argument("--moox-toml", default="./moox.toml")
     parser.add_argument("--workers", type=int, default=8)

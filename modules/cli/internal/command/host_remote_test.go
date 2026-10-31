@@ -34,7 +34,7 @@ func (f *fakeRelayGateway) DialRelay(_ context.Context, hostID string, _ int) (n
 	return nil, errors.New("not connected")
 }
 
-func doctorRemoteFixture() (*doctorRemote, *remoteSSH, *[]string) {
+func hostRemoteFixture() (*hostRemote, *remoteSSH, *[]string) {
 	manifest := setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{
 			"control": {Address: "198.51.100.10", SSH: setupconfig.SSHConfig{Port: 22, Username: "ubuntu"}},
@@ -43,7 +43,7 @@ func doctorRemoteFixture() (*doctorRemote, *remoteSSH, *[]string) {
 	}
 	ssh := &remoteSSH{stdout: "enabled=enabled\nactive=active\nlinger=yes\n"}
 	var local []string
-	remote := newDoctorRemote(manifest, "control", &fakeRelayGateway{})
+	remote := newHostRemote(manifest, "control", &fakeRelayGateway{})
 	remote.dial = func(context.Context, setupconfig.Host) (setupssh.Client, error) { return ssh, nil }
 	remote.runLocal = func(_ context.Context, argv []string) (string, error) {
 		local = append(local, argv[len(argv)-1])
@@ -52,8 +52,8 @@ func doctorRemoteFixture() (*doctorRemote, *remoteSSH, *[]string) {
 	return remote, ssh, &local
 }
 
-func TestDoctorRemoteRunsLocalNodeLocallyAndOthersOverSSH(t *testing.T) {
-	remote, ssh, local := doctorRemoteFixture()
+func TestHostRemoteRunsLocalNodeLocallyAndOthersOverSSH(t *testing.T) {
+	remote, ssh, local := hostRemoteFixture()
 	defer remote.Close()
 	check := remote.Systemd()
 
@@ -76,26 +76,26 @@ func TestDoctorRemoteRunsLocalNodeLocallyAndOthersOverSSH(t *testing.T) {
 	assert.True(t, ssh.closed)
 }
 
-func TestDoctorRemoteRelayOnlyForOutboundHosts(t *testing.T) {
-	remote, _, _ := doctorRemoteFixture()
+func TestHostRemoteRelayOnlyForOutboundHosts(t *testing.T) {
+	remote, _, _ := hostRemoteFixture()
 	prober := remote.Relay(doctorcli.HealthAuth{AccessKey: "a", SecretKey: "b"})
 	require.NotNil(t, prober)
 	assert.True(t, prober.Outbound("factor"))
 	assert.False(t, prober.Outbound("control"))
 	assert.False(t, prober.Outbound("unknown"))
 
-	withoutRelay := newDoctorRemote(remote.manifest, "control", struct{}{})
+	withoutRelay := newHostRemote(remote.manifest, "control", struct{}{})
 	assert.Nil(t, withoutRelay.Relay(doctorcli.HealthAuth{AccessKey: "a", SecretKey: "b"}), "操作员网关不支持中转时不提供中转探测")
 }
 
 // 诊断要用 SSH 密码连接主机：快照里的凭据被清掉后，远程执行器仍保留主机目录里的密码，直到关闭。
-func TestDoctorRemoteKeepsHostPasswordsUntilClose(t *testing.T) {
+func TestHostRemoteKeepsHostPasswordsUntilClose(t *testing.T) {
 	definition := setupconfig.HostDefinition{}
 	definition.SSH.Password = "ssh-secret"
 	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"storage": definition}}}
 	snapshot.Manifest.Admin.Password = "admin-secret"
 
-	remote := newDoctorRemoteFromSnapshot(snapshot, "control", nil)
+	remote := newHostRemoteFromSnapshot(snapshot, "control", nil)
 	assert.Empty(t, snapshot.Manifest.Admin.Password, "其余凭据照常清掉")
 	assert.Empty(t, snapshot.Manifest.HostCatalog["storage"].SSH.Password, "快照里的 SSH 密码被清掉")
 	assert.Equal(t, "ssh-secret", remote.manifest.HostCatalog["storage"].SSH.Password, "远程执行器建连时还要用")

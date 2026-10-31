@@ -149,15 +149,20 @@ var fetchPlanPauseFlags struct {
 	Wait time.Duration
 }
 
+var fetchPlanPauseYes bool
+
 var collectorFetchPlanPauseCmd = &cobra.Command{
 	Use:   "pause",
-	Short: "暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采",
+	Short: "暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采（默认只预览，--yes 才执行）",
 	Long: "保存暂停开关（重启后保持），并等 Collector 在下一轮同步（约 1 分钟内）停用该空间全部函数的定时器，云端读回确认后返回。\n" +
 		"定时器停用只保证不再触发新的采集调用，已经触发、仍在执行的调用不在其内：返回后还要再等过 SCF 函数的执行超时，\n" +
 		"并确认 Storage 不再有该空间的写入，才能认为采集已经静默。暂停期间产生的周期不会进入账本，也没有完成事件，\n" +
 		"恢复后行由自动补采补齐，因子结果需要用因子管理 CLI 的 recalc 补算。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if !fetchPlanPauseYes {
+			return writePreview(cmd, map[string]any{"action": "pause_fetch_plan", "space_id": fetchPlanPauseFlags.SpaceID})
+		}
 		return runFetchPlanPause(cmd.Context(), cmd.OutOrStdout(), fetchPlanPauseFlags.klineRangeFlags, true, fetchPlanPauseFlags.Wait)
 	},
 }
@@ -178,6 +183,7 @@ func init() {
 		c.Flags().StringVar(&fetchPlanPauseFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 		c.Flags().StringVar(&fetchPlanPauseFlags.SpaceID, "space-id", "", "空间 ID")
 	}
+	collectorFetchPlanPauseCmd.Flags().BoolVar(&fetchPlanPauseYes, "yes", false, "确认暂停；不加只预览")
 	collectorFetchPlanPauseCmd.Flags().DurationVar(&fetchPlanPauseFlags.Wait, "wait", 5*time.Minute, "等待云端确认定时器全部停用的最长时间；0 表示只保存开关不等待")
 	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.SpaceID, "space-id", "", "空间 ID")

@@ -52,45 +52,6 @@ func TestCollectorTaskPurgeDefaultsToReadOnlyInventory(t *testing.T) {
 	require.EqualValues(t, 1, count)
 }
 
-func TestCollectorTaskPurgeRejectsApplyAndExplicitDryRun(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.Exec(`CREATE TABLE t_collector_tasks (c_id INTEGER PRIMARY KEY, c_space_id TEXT, c_task_id TEXT, c_task_name TEXT, c_result_view_id TEXT, c_result_dataset_id TEXT)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_collector_tasks VALUES (1, 'crypto', 'task-1', 'BTC', 'view-1', 'dataset-1')`).Error)
-
-	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath: dbPath, Apply: true, DryRunSet: true, Confirm: true,
-		StopCommand: "false",
-	})
-	require.Error(t, err)
-	require.ErrorContains(t, err, "--apply and --dry-run")
-	require.Equal(t, "dry_run", summary.Status)
-	require.True(t, summary.DryRun)
-	require.FileExists(t, dbPath)
-}
-
-func TestCollectorTaskPurgeApplyRequiresConfirmation(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "collector.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.Exec(`CREATE TABLE t_collector_tasks (c_id INTEGER PRIMARY KEY, c_space_id TEXT, c_task_id TEXT, c_task_name TEXT, c_result_view_id TEXT, c_result_dataset_id TEXT)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO t_collector_tasks VALUES (1, 'crypto', 'task-1', 'BTC', 'view-1', 'dataset-1')`).Error)
-
-	orderPath := filepath.Join(t.TempDir(), "order.log")
-	server := newCollectorTaskPurgeControlServer(t, orderPath)
-	defer server.Close()
-	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
-		DBPath: dbPath, Apply: true,
-		StopCommand: fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
-	})
-	require.Error(t, err)
-	require.ErrorContains(t, err, "--apply and --confirm")
-	require.Equal(t, "dry_run", summary.Status)
-	require.FileExists(t, dbPath)
-	require.Empty(t, readCollectorPurgeOrder(t, orderPath))
-}
-
 func TestCollectorTaskPurgeApplyBacksUpBeforeInitializing(t *testing.T) {
 	useEmptyCollectorStorageInventory(t)
 	dbPath := filepath.Join(t.TempDir(), "collector.db")
@@ -103,7 +64,6 @@ func TestCollectorTaskPurgeApplyBacksUpBeforeInitializing(t *testing.T) {
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:           dbPath,
 		Apply:            true,
-		Confirm:          true,
 		StopCommand:      "true",
 		CollectorInitBin: initScript,
 	})
@@ -141,7 +101,6 @@ func TestCollectorTaskPurgeApplyStopsBeforeDeletingTaskAndRuntime(t *testing.T) 
 		DBPath:      dbPath,
 		SpaceID:     "crypto",
 		Apply:       true,
-		Confirm:     true,
 		StopCommand: stopCommand,
 	})
 	require.NoError(t, err)
@@ -185,7 +144,6 @@ func TestCollectorTaskPurgeApplyUsesSpaceForEachTask(t *testing.T) {
 	summary, err := runCollectorTaskPurge(context.Background(), collectorTaskPurgeFlags{
 		DBPath:           dbPath,
 		Apply:            true,
-		Confirm:          true,
 		StopCommand:      fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
 		CollectorInitBin: initScript,
 	})
@@ -210,7 +168,6 @@ func TestCollectorTaskPurgeStopFailureDoesNotDelete(t *testing.T) {
 		DBPath:      dbPath,
 		SpaceID:     "crypto",
 		Apply:       true,
-		Confirm:     true,
 		StopCommand: "printf 'stop\\n' >> " + shellQuoteCollectorPurge(orderPath) + "; exit 7",
 	})
 	require.Error(t, err)
@@ -253,7 +210,6 @@ func TestCollectorTaskPurgeMetadataDeleteFailureKeepsLocalRetryState(t *testing.
 		DBPath:      dbPath,
 		SpaceID:     "crypto",
 		Apply:       true,
-		Confirm:     true,
 		StopCommand: fmt.Sprintf("printf 'stop\\n' >> %q", orderPath),
 	})
 	require.Error(t, err)

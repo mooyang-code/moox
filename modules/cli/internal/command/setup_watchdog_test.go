@@ -51,7 +51,7 @@ func TestSetupWatchdogCommandTargetsHosts(t *testing.T) {
 	snapshot.Manifest.Notification = setupconfig.Notification{}
 	_, _, _, err = runWatchdogCommand(t, snapshot)
 	require.ErrorContains(t, err, "notification.webhook_url is required")
-	_, removes, _, err = runWatchdogCommand(t, snapshot, "--remove", "--host", "compute")
+	_, removes, _, err = runWatchdogCommand(t, snapshot, "--remove", "--host", "compute", "--yes")
 	require.NoError(t, err)
 	require.Equal(t, []bool{true}, removes)
 }

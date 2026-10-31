@@ -20,16 +20,6 @@ func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
 	assert.Equal(t, "moox CLI dev", GetFullVersionInfo())
 }
 
-func TestPadLineAndDisplayWidth(t *testing.T) {
-	assert.Equal(t, 5, calculateDisplayWidth("hello"))
-	padded := padLine("x", 5)
-	assert.Equal(t, 5, calculateDisplayWidth(padded))
-}
-
-func TestCalculateDisplayWidthCountsWideChars(t *testing.T) {
-	assert.Equal(t, 4, calculateDisplayWidth("测试"))
-}
-
 func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 	seed := metadataSeed{
 		Spaces: []seedSpace{{SpaceID: "crypto", Name: "Crypto", seedCommon: seedCommon{Status: "active"}}},

@@ -98,7 +98,7 @@ func TestUdfActivatePrintsImpactsAndPrerequisites(t *testing.T) {
 	assert.True(t, req.GetDryRun())
 	assert.Equal(t, testHash, req.GetHash())
 	text := out.String()
-	for _, want := range []string{"影响清单", "因子 f1", "回看 20 → 30", "策略实例：inst-1", "✓ 因子引擎模块已暂停", "× 受影响任务没有已领取", "注意：回看变长", "dry-run"} {
+	for _, want := range []string{"影响清单", "因子 f1", "回看 20 → 30", "策略实例：inst-1", "✓ 因子引擎模块已暂停", "× 受影响任务没有已领取", "注意：回看变长", "预览"} {
 		assert.Contains(t, text, want)
 	}
 }

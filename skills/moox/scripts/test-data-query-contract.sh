@@ -86,7 +86,7 @@ for index in "${!example_files[@]}"; do
       printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --limit 20 >"${expected_args}"
       ;;
     3)
-      printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z >"${expected_args}"
+      printf '%s\n' data skill kline get --config "${EXPECTED_CONFIG}" --data-type crypto --exchange binance --symbol BTC-USDT --interval 1m --from 2026-08-28T00:00:00Z --to 2026-08-28T01:00:00Z >"${expected_args}"
       ;;
   esac
   cmp -s "${expected_args}" "${TEST_ROOT}/example-$((index + 1)).args" || fail "example $((index + 1)) mapped unexpected flags"
@@ -163,7 +163,7 @@ grep -Fq 'packaged data-access config is missing or unsafe' <<<"${output}" || fa
 grep -Fq "${SECRET_SENTINEL}" <<<"${output}" && fail "symlink config error leaked credential content"
 
 help="$(cd "${ROOT}/modules/cli" && go run ./cmd/moox-cli data skill kline get --help)"
-for flag in --config --data-type --exchange --symbol --interval --limit --start-time --end-time --timeout --output; do
+for flag in --config --data-type --exchange --symbol --interval --limit --from --to --timeout --output; do
   grep -Fq -- "${flag}" <<<"${help}" || fail "CLI help is missing ${flag}"
 done
 
