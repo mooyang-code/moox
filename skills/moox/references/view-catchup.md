@@ -22,8 +22,8 @@
 
 原生 Storage 单元的路径按部署清单解析，常见示例：
 
-- 包根 `--package-root /data/moox/storage/current`，其中包含 `start.sh` / `stop.sh` / `status.sh`。
-- 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`；不要传 `trpc_go.yaml`。
+- 包根 `--package-root /data/moox/storage/current`（`moox-cli storage …` 缺省自动补上），其中包含 `start.sh` / `stop.sh` / `status.sh`。
+- 业务配置 `--storage-conf /data/moox/storage/current/storage-view/config/storage.yaml`（同样缺省自动补上）；不要传 `trpc_go.yaml`。
 - View 的消费者是按数据集动态创建的 `view_<12 位十六进制>`（每个数据集一个）；并发参数是 View 的 `storage.view.fetch_batch` / `max_workers` / `max_ack_pending`（全局，默认都是 1）
 - 元数据库与 Pebble 分别属于 `storage-primary` 与 `storage-node` 组件。不要把旧平铺目录或操作机的路径当作当前主机路径。
 
@@ -48,16 +48,13 @@
 
 Primary 水位前进而某个 View 长时间不动时，定位该数据集实际的 `view_<hash>`，核对 pending、redelivery、ACK、最老待处理事件年龄及 `storage-view` 写入错误。当前没有共享 `storage_view_kline` durable。ACK 窗口占满只能说明投递未完成，还需区分索引写失败、处理慢、首次建索引占用与进程问题。
 
-确需修复索引时，在 Storage 主机使用同版本 CLI，先只读预演：
+确需修复索引时，在操作机用 `moox-cli storage repair-view`（经 SSH 在存储机上执行同版本程序；路径参数自动补齐），先只读预演（不带 `--yes` 就是预演）：
 
 ```bash
 moox-cli storage repair-view \
-  --storage-conf /data/moox/storage/current/storage-view/config/storage.yaml \
-  --package-root /data/moox/storage/current \
   --space-id crypto \
   --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
-  --consumer <该数据集的实际消费者名> \
-  --dry-run
+  --consumer <该数据集的实际消费者名>
 ```
 
 核对目标与备份路径后，按既有授权执行对应 `--yes` 命令。默认删除所指定的消费者并重启 storage-view；`deliver_policy=new`，不动索引。每个数据集有自己的消费者，不能套用“第一个 View 重置共享 kline durable，其余跳过”的旧流程；不要把 `--reset-view-indexes` 当普通追平选项。

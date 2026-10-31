@@ -144,7 +144,7 @@ local/<名称>/                     # 加入 .git/info/exclude，不进仓库
 
 ### 5.3 参数一致（上线后）
 
-从系统读回策略定义的 DSL（控制台，或 `moox-cli gateway call StrategyMgr`），用转换脚本的 `--check` 对源文件重跑 4.3 节的三类核对。
+从系统读回策略定义的 DSL（控制台，或 `moox-cli strategy show --strategy-id <ID>`），用转换脚本的 `--check` 对源文件重跑 4.3 节的三类核对。
 DSL 要逐字节和提交的内容一致；DSL 超过 64 KiB 时，同时验证了 1 MiB 上限是通的。
 
 ### 5.4 语义一致（重点）

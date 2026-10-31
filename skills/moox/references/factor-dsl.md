@@ -447,26 +447,25 @@ members = [
 - 因子已被任务引用时，还要求定义兼容：**不能增删参数、改参数名、调参数顺序、改参数类型、改参数默认值**（成员键依赖默认值），**不能增删、改名、重排输出**。可以改的是表达式本身，以及参数的 `min` / `max`。
 - 已有成员的参数值必须仍满足新的范围，否则报“参数不再合法”；新定义让某个成员无法通过校验，整次更新失败。
 - 没有被任何任务引用的因子可以随便改（不受上面两条兼容限制）。
-- `moox-cli setup factors` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `UpdateFactor`。
+- `moox-cli setup factors` 和 `moox-factor-mgr-cli import` 遇到“已存在但定义不同”只报 `conflict`，**不会替换**；改定义必须走 `factor update`。
 
-**流程**（运维机，用户的 `moox.toml`；`gateway call` 的 `--data` 支持 `@文件`）：
+**流程**（运维机，用户的 `moox.toml`）：
 
-1. **查引用**：`GetFactor` 的返回里 `usages` 列出任务、成员键和状态，确认影响面（引用它的因子任务、策略实例）。
-
-   ```bash
-   moox-cli gateway call trpc.moox.factor.FactorMgr GetFactor --file ./moox.toml --data '{"factor_id":"upper_shadow"}'
-   ```
-
-2. **离线验证新表达式**：按 7.3～7.6 用 `check` 和 `eval` 验证；也可以用 `ValidateFactorSpec` 看服务端编译结果和新的 `definition_hash`。
-3. **停用引用它的成员**：对 `usages` 里每个状态为 `enabled` 的成员调 `SetTaskMemberStatus`（`status` 取 `disabled`）。停用期间该成员的结果列不再产出，依赖它的策略实例拿不到这一列（实际表现未逐项验证），所以先告诉用户，并按需先停用相关策略实例。
+1. **查引用**：`factor show` 的返回里 `usages` 列出任务、成员键和状态，确认影响面（引用它的因子任务、策略实例）。
 
    ```bash
-   moox-cli gateway call trpc.moox.factor.FactorMgr SetTaskMemberStatus --file ./moox.toml \
-     --data '{"task_id":"ftask_xxx","member_key":"upper_shadow__12","status":"disabled"}'
+   moox-cli factor show --factor-id upper_shadow
    ```
 
-4. **更新定义**：先用 `GetFactor`（带 spec）读回原定义，只改 `spec`，整个 `factor` 对象原样回传，避免丢字段；然后调 `UpdateFactor`，返回的 `definition_hash` 应与第 2 步一致。
-5. **重新启用成员**，等引擎下一次同步（最长约 1 分钟）并预热完成；预热依据回看窗口，长回看的因子要等本地序列重新就绪。启用不会自动补算历史，需要历史因子值时用 `RecalcFactors`。
+2. **离线验证新表达式**：按 7.3～7.6 用 `check` 和 `eval` 验证；也可以用 `moox-cli factor validate --spec-file new.yaml --factor-id <因子>` 看服务端编译结果和新的 `definition_hash`。
+3. **停用引用它的成员**：对 `usages` 里每个状态为 `enabled` 的成员执行 `factor member disable`。停用期间该成员的结果列不再产出，依赖它的策略实例拿不到这一列（实际表现未逐项验证），所以先告诉用户，并按需先停用相关策略实例。
+
+   ```bash
+   moox-cli factor member disable --task-id ftask_xxx --member-key upper_shadow__12
+   ```
+
+4. **更新定义**：先用 `factor show` 读回原定义，只改 `spec`，把整个 `factor` 对象原样放进 `--data @update.json`（`{"factor": {…}}`）再 `factor update --data @update.json`，避免丢字段；返回的 `definition_hash` 应与第 2 步一致。
+5. **重新启用成员**（`factor member enable`），等引擎下一次同步（最长约 1 分钟）并预热完成；预热依据回看窗口，长回看的因子要等本地序列重新就绪。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit`。
 6. **重新启用依赖它的策略实例**：定义哈希变了，引用它的策略实例要重新启用，不然继续停在旧状态。
 7. **验证**：按第 9 节核对定义、引擎同步和数值；确认结果列重新按期产出。
 8. **同步配置与库文件**：把改动同步到仓库因子库（或 `local/` 下的因子库）和用户的 `moox.toml` 登记；库文件与线上定义不一致，下次 `setup factors` 会报 `conflict`。

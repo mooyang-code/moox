@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup bootstrap/deploy-host/deploy-unit/init), upgrading or rolling back production units (发布, 上线, 升级, 回滚, native release, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank/signal/tranche 规则, ValidateStrategy, 策略模板, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
+description: Use for everything about the MooX quant system (MooX 量化系统) — installing and deploying it from release artifacts (安装, 部署, 初始化, 免密登录, moox-cli config init, setup bootstrap/deploy-host/deploy-unit/init), upgrading or rolling back production units (发布, 上线, 升级, 回滚, native release, service catalog rollout, 全新部署, 清空重装), and day-to-day management through moox-cli and gateway call (采集任务, 补采, K线合成, 标的排除, 存储 View 修复, 因子任务与补算, 策略定义与实例, 回放, 归档, 系统暂停与恢复, 空间, 主机登记). Also covers querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情 queries, factor expression DSL (因子表达式, 因子 DSL, Python 因子转换, wasm UDF 自定义算子), strategy DSL (策略 DSL, rank/signal/tranche 规则, ValidateStrategy, 策略模板, 策略迁移, 选币策略), 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Linux Host Agent monitoring, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud firewall, CLS log queries, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance, and the moox-cli command set that covers the 管理台 (空间, 元数据, 采集任务, 云函数, 因子, 策略, EventBus, 主机与部署, 交易只读, host exec, 命令覆盖).
 ---
 
 # MooX
@@ -13,7 +13,9 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **`moox.toml` 是加密的私有配置**：Agent 不直接读取、打印、复制或 `source` 这个文件；要看配置用 `moox-cli config get <路径>`（密钥打码），改单个值用 `moox-cli config set 表.键=值`（见 [`references/config-access.md`](references/config-access.md)）。Agent 也不打开 `config init` / `config edit` / `config restore` 的本机页面；
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
-- **写操作先预览、后执行**：`setup` 类命令默认只预览，用户确认后才加 `--yes`；`gateway call` 的写方法先把请求给用户看。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+- **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
+  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览，执行前先把完整命令给用户确认；`gateway call` 的写方法同样先把请求给用户看。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+- **`gateway call` 取不到密钥明文**：它拒绝返回密钥明文或完整 webhook 的方法；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块尚未完工：不要代用户创建实盘账户、下单或清仓。
 
@@ -23,7 +25,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | --- | --- |
 | 第一次安装、部署、初始化（下载产物，不用编译） | [`references/install.md`](references/install.md) |
 | 了解各模块、日常管理命令速查 | [`references/modules.md`](references/modules.md) |
-| 管理台上的操作在命令行怎么做（`gateway call` 配方） | [`references/api-recipes.md`](references/api-recipes.md) |
+| 管理台上的操作在命令行怎么做（专用命令对照表；少数底层接口用 `gateway call`） | [`references/api-recipes.md`](references/api-recipes.md) |
 | 取采集的 K 线等数据 | [`references/data-query.md`](references/data-query.md) |
 | 首页“N 项需要处理”、告警、数据长时间未更新 | [`references/monitor-attention.md`](references/monitor-attention.md) |
 | 新增、部署、启停、移除机器；因子引擎与归档 Worker | [`references/host-registry.md`](references/host-registry.md) |
@@ -45,7 +47,10 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 - 用户解压的产物包目录（`moox-<版本>/`，或源码仓库根目录）就是工作目录：命令写成 `./bin/moox-cli …`，默认读取当前目录的 `moox.toml`。
 - 产物包里有 `moox-bundle.json`：`setup` 命令自动使用包内预编译的 linux/amd64 程序，不需要 git、Go、Docker 或 Node。
-- 没有专用命令的管理接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用。
+- 管理台上的操作和各模块的主要操作都有专用命令（`factor`、`strategy`、`space`、`metadata`、`collector`、`cloud`、`monitor`、`eventbus`、`host`、`secret`、`trade` 只读等），先用 `./bin/moox-cli <命令> --help` 看参数；命令对照表见 [`references/api-recipes.md`](references/api-recipes.md)。
+- 没有专用命令的底层接口：`./bin/moox-cli gateway methods [关键字]` 查有哪些方法，`./bin/moox-cli gateway call <服务> <方法> --data @请求.json` 调用；业务失败时退出码非 0。
+- 命令按 `moox.toml` 里的 SSH 配置连接各台主机；`lifecycle`、`system`、`replay`、`import` 访问模块健康端口时也自动解析，不需要手工建隧道或设置健康密钥环境变量。要在某台主机上执行命令或传文件用 `host exec|get|put`。
+- 带 `--space-id` 的命令默认空间是 `crypto`；时间范围用 `--from` / `--to`（RFC3339，左闭右开）。
 - 本机有 HTTP 代理时，执行前 `env -u HTTP_PROXY -u HTTPS_PROXY`，否则到主机的直连会被挡住。
 - 耗时的命令（部署、初始化、导入）放后台运行，盯输出里的 `*-ready` 与报错。
 

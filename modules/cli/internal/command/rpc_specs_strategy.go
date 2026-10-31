@@ -14,10 +14,18 @@ func init() {
 	rpcGroupShort["strategy template"] = "策略模板"
 	rpcGroupShort["strategy display"] = "策略实例的展示设置"
 
-	instanceFlags := []rpcFlag{
+	createInstanceFlags := []rpcFlag{
 		reqFlag("strategy-id", "instance.strategy_id", "策略定义 ID"),
-		reqFlag("factor-task-id", "instance.factor_task_id", "关联的因子计算任务（一个任务只能被一个实例关联）"),
+		reqFlag("factor-task-id", "instance.factor_task_id", "关联的因子计算任务（只能选本空间里运行中、还没被别的实例关联的任务；创建后不能改）"),
 		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；不挂＝观察实例，只算目标不下单"),
+		strFlag("instance-id", "instance.instance_id", "实例 ID；不给由服务端生成，重试创建时带上同一个 ID 保持幂等"),
+		boolFlag("enable", "instance.enabled", "创建后立即启用；不加则创建后停用，确认无误再 enable"),
+	}
+	updateInstanceFlags := []rpcFlag{
+		reqFlag("instance-id", "instance.instance_id", "实例 ID"),
+		reqFlag("strategy-id", "instance.strategy_id", "改绑到这个策略定义"),
+		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；留空表示观察实例（整体替换）"),
+		strFlag("factor-task-id", "instance.factor_task_id", "可省略；给了就必须与现有的一致（因子任务创建时写定）"),
 	}
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"strategy", "list"}, Short: "列出策略定义", Service: strategyMgr, Method: "ListStrategies", Page: rpcPagePSize},
@@ -36,9 +44,9 @@ func init() {
 			Flags: []rpcFlag{strFlag("strategy-id", "strategy_id", "只列这个策略的实例"), boolFlag("enabled", "enabled", "按启用状态过滤（--enabled=false 只列停用的）")}},
 		rpcSpec{Path: []string{"strategy", "instance", "show"}, Short: "查看一个策略实例", Service: strategyMgr, Method: "GetStrategyInstance",
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
-		rpcSpec{Path: []string{"strategy", "instance", "create"}, Short: "创建策略实例（新建后默认停用，确认无误再 enable）", Service: strategyMgr, Method: "CreateStrategyInstance", SpaceField: "instance.space_id", Flags: instanceFlags},
-		rpcSpec{Path: []string{"strategy", "instance", "update"}, Short: "修改策略实例（先停用再改）", Service: strategyMgr, Method: "UpdateStrategyInstance", SpaceField: "instance.space_id",
-			Flags: append([]rpcFlag{reqFlag("instance-id", "instance.instance_id", "实例 ID")}, instanceFlags...)},
+		rpcSpec{Path: []string{"strategy", "instance", "create"}, Short: "创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用）", Service: strategyMgr, Method: "CreateStrategyInstance", SpaceField: "instance.space_id", Flags: createInstanceFlags},
+		rpcSpec{Path: []string{"strategy", "instance", "update"}, Short: "修改停用中的策略实例绑定的策略定义与账户（因子任务创建时写定，不能改）", Service: strategyMgr, Method: "UpdateStrategyInstance", SpaceField: "instance.space_id",
+			Flags: updateInstanceFlags},
 		rpcSpec{Path: []string{"strategy", "instance", "enable"}, Short: "启用策略实例", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": true},
 			Flags: []rpcFlag{reqFlag("instance-id", "instance_id", "实例 ID")}},
 		rpcSpec{Path: []string{"strategy", "instance", "disable"}, Short: "停用策略实例", Service: strategyMgr, Method: "SetStrategyInstanceEnabled", Fixed: map[string]any{"enabled": false},

@@ -137,22 +137,20 @@ ssh ubuntu@<存储机> 'cd /data/moox/storage/current
 不挂账户（观察实例，只计算目标权重、不投递）。它依赖合约任务里有快、慢线两个成员 `{ factor = "ma", params = { window = 5 } }`（列 `ma__5`）与 `{ factor = "ma", params = { window = 10 } }`（列 `ma__10`），
 `moox.toml.example` 的默认合约任务已包含；已有任务缺这两个成员时，往 `moox.toml` 的 `ftask_swap_1m` 里加上再 `setup factors`。
 
-创建要等因子任务**进入运行**且结果视图覆盖够 `min_age_bars`（15 根，即任务开始出结果后约 15 分钟）；任务刚建、视图覆盖不足时 `ValidateStrategy` 会提示还缺多少数据，启用也会被拒绝。依次执行（在主仓库根目录，用 `moox-cli gateway call`）：
+创建要等因子任务**进入运行**且结果视图覆盖够 `min_age_bars`（15 根，即任务开始出结果后约 15 分钟）；任务刚建、视图覆盖不足时 `strategy validate` 会提示还缺多少数据，启用也会被拒绝。依次执行（在主仓库根目录，用 `moox-cli gateway call`）：
 
 ```bash
-CALL="$CLI gateway call trpc.moox.strategy.StrategyMgr --space crypto"
+S="$CLI strategy"
 # 1) 试算：不落库，确认列都存在且能在最新一期求值（返回里的 trial 有内容才算通过）
-python3 -c 'import json,sys; print(json.dumps({"dsl_yaml": open(sys.argv[1]).read(), "factor_task_id": "ftask_swap_1m"}))' $WT/examples/strategies/dual_ma_swap_1m.yaml > /tmp/validate.json
-$CALL ValidateStrategy --data @/tmp/validate.json
-# 2) 创建定义（名称取自 DSL 的 name），记下返回的 strategy_id；之后改 DSL 要先停用实例，再 UpdateStrategy，再启用（启用中的实例引用定义时更新会被拒绝）
-python3 -c 'import json,sys; print(json.dumps({"strategy": {"dsl_yaml": open(sys.argv[1]).read()}}))' $WT/examples/strategies/dual_ma_swap_1m.yaml > /tmp/create.json
-$CALL CreateStrategy --data @/tmp/create.json
+$S validate --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml --factor-task-id ftask_swap_1m
+# 2) 创建定义（名称取自 DSL 的 name），记下返回的 strategy_id；之后改 DSL 要先停用实例，再 strategy update，再启用（启用中的实例引用定义时更新会被拒绝）
+$S create --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml
 # 3) 创建观察实例（不挂账户）并启用，记下 instance_id
-$CALL CreateStrategyInstance --data '{"instance": {"strategy_id": "<strategy_id>", "space_id": "crypto", "factor_task_id": "ftask_swap_1m"}}'
-$CALL SetStrategyInstanceEnabled --data '{"instance_id": "<instance_id>", "enabled": true}'
+$S instance create --strategy-id <strategy_id> --factor-task-id ftask_swap_1m
+$S instance enable --instance-id <instance_id>
 ```
 
-启用后实例自动 init、start 并（无账户）自动 confirm 进入运行；`ListStrategyResults` 看每期结果，管理台的策略页能看到它。第一期是 `skipped(previous_version_unknown)`（用到 `bars[-1]` 需要上一根的版本证据），从第二期起正常求值；每期按条件筛选，满足的合约进入目标、不满足的记 `filtered`。注意 zsh 里把命令存进变量再 `$CALL` 调用不会分词，用函数 `call() { $CLI gateway call trpc.moox.strategy.StrategyMgr --space crypto "$@"; }`。一个因子任务只能被一个实例关联，且创建后不能改、不能删，所以这个任务留给默认策略，别的实例另建因子任务。
+启用后实例自动 init、start 并（无账户）自动 confirm 进入运行；`strategy result list --instance-id <instance_id>` 看每期结果，管理台的策略页能看到它。第一期是 `skipped(previous_version_unknown)`（用到 `bars[-1]` 需要上一根的版本证据），从第二期起正常求值；每期按条件筛选，满足的合约进入目标、不满足的记 `filtered`。注意 zsh 里把命令存进变量再 `$CALL` 调用不会分词，用函数 `call() { $CLI gateway call trpc.moox.strategy.StrategyMgr --space crypto "$@"; }`。一个因子任务只能被一个实例关联，且创建后不能改、不能删，所以这个任务留给默认策略，别的实例另建因子任务。
 
 不在默认配置里、要另外做的事（汇报时列给用户，并附命令）：
 
