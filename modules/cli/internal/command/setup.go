@@ -157,9 +157,10 @@ func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
 // rollout to finish.
 func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 	var file, region, namespace, functionName, vpcID, subnetID string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "attach-scf-vpc",
-		Short: "为腾讯云函数绑定 VPC 子网",
+		Short: "为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定）",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
@@ -182,6 +183,12 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			status := firstNonEmpty(fn.PublicNetStatus, "ENABLE")
+			if !yes {
+				return writePreview(cmd, map[string]any{
+					"action": "attach_scf_vpc", "region": region, "namespace": namespace, "function": functionName,
+					"current_vpc_id": fn.VpcID, "current_subnet_id": fn.SubnetID, "vpc_id": vpcID, "subnet_id": subnetID, "public_net_status": status,
+				})
+			}
 			if err := network.ForRegion(region).UpdateSCFNetwork(cmd.Context(), namespace, functionName, vpcID, subnetID, status, fn.Environment); err != nil {
 				return err
 			}
@@ -198,6 +205,7 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&functionName, "function", "", "SCF 函数名")
 	cmd.Flags().StringVar(&vpcID, "vpc-id", "", "VPC ID")
 	cmd.Flags().StringVar(&subnetID, "subnet-id", "", "子网 ID")
+	cmd.Flags().BoolVar(&yes, "yes", false, "确认绑定；不加只预览")
 	_ = cmd.MarkFlagRequired("function")
 	_ = cmd.MarkFlagRequired("vpc-id")
 	_ = cmd.MarkFlagRequired("subnet-id")
@@ -255,9 +263,10 @@ func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 // from the Storage region.
 func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 	var file, hostName string
+	var yes bool
 	cmd := &cobra.Command{
 		Use:   "reboot-host",
-		Short: "重启无响应的腾讯云主机",
+		Short: "重启无响应的腾讯云主机（默认只预览，--yes 才重启）",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
@@ -294,6 +303,12 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("reboot host lookup: %w", err)
 			}
+			if !yes {
+				return writePreview(cmd, map[string]any{
+					"action": "reboot_host", "host": host.Name, "instance_id": instance.InstanceID,
+					"region": instance.Region, "zone": instance.Zone, "kind": instance.Kind,
+				})
+			}
 			var requestID string
 			switch instance.Kind {
 			case cloudtencent.KindLighthouse:
@@ -323,6 +338,7 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&hostName, "host", "", "目标主机名称")
+	cmd.Flags().BoolVar(&yes, "yes", false, "确认重启；不加只预览目标实例")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }

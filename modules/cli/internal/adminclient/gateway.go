@@ -36,6 +36,7 @@ func (c *Client) gatewayJSON(ctx context.Context, service, method string, body a
 	}
 	metadata := gatewayclient.CallMetadataFromContext(ctx)
 	metadata.SpaceID = c.SpaceID
+	metadata.HostID = c.HostID
 	return c.Gateway.Forward(gatewayclient.WithCallMetadata(ctx, metadata), service, method, codec.SerializationTypeJSON, raw)
 }
 

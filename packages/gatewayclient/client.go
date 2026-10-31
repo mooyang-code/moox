@@ -490,6 +490,12 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		return endpoint{}, fmt.Errorf("service has no enabled deployment")
 	}
 	slices.Sort(hosts)
+	if want := CallMetadataFromContext(ctx).HostID; want != "" {
+		if !slices.Contains(hosts, want) {
+			return endpoint{}, fmt.Errorf("service is not deployed on host %s", want)
+		}
+		hosts = []string{want}
+	}
 	if i := slices.Index(hosts, c.config.LocalHostID); i >= 0 {
 		// 本机优先。不能写成 append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)：内层 append 原地改写底层数组，
 		// 而字面量里的 hosts[i] 与内层 append 的求值先后不确定，本机排在第一位时会读到被覆盖的值，把调用发到远端主机。

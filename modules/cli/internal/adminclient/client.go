@@ -7,8 +7,10 @@ import (
 
 // Client borrows the command-owned SSH gateway.
 type Client struct {
-	Gateway        GatewayForwarder
-	SpaceID        string
+	Gateway GatewayForwarder
+	SpaceID string
+	// HostID 非空时把调用发到这台主机，用于只在个别主机上部署的服务（如 HostAgentMgr）。
+	HostID         string
 	publishLeaseMu sync.RWMutex
 	publishLease   *CollectorPublishLease
 }

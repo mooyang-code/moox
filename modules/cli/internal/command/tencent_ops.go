@@ -26,6 +26,7 @@ type lighthouseFirewallAddOptions struct {
 	Action          string
 	Description     string
 	FirewallVersion int64
+	Yes             bool // 命令行 --yes：确认提交；不带时只预览
 	DryRun          bool
 }
 
@@ -54,16 +55,17 @@ var lighthouseFirewallCmd = &cobra.Command{
 var lighthouseFirewallAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "添加轻量应用服务器防火墙规则",
-	Long: `添加腾讯云轻量应用服务器防火墙规则。
+	Long: `添加腾讯云轻量应用服务器防火墙规则。默认只预览将要提交的规则，加 --yes 才调用腾讯云 API。
 
 示例：
-  moox-cli ops tencent lighthouse firewall add --public-ip <lighthouse-public-ip> --ports 20201,20200,11000
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201 --cidr 0.0.0.0/0 --description moox-storage
-  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201,20200 --dry-run
+  moox-cli ops tencent lighthouse firewall add --public-ip <lighthouse-public-ip> --ports 20201,20200,11000          # 预览
+  moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201 --cidr 0.0.0.0/0 --description moox-storage --yes
 
 提示：public-ip 可从云厂商控制台获取；MooX 服务部署地址以管理台“服务部署信息”页为准。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLighthouseFirewallAdd(cmd, lighthouseFirewallAddFlags)
+		options := lighthouseFirewallAddFlags
+		options.DryRun = !options.Yes
+		return runLighthouseFirewallAdd(cmd, options)
 	},
 }
 
@@ -87,7 +89,7 @@ func init() {
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Action, "action", "ACCEPT", "动作：ACCEPT 或 DROP")
 	lighthouseFirewallAddCmd.Flags().StringVar(&lighthouseFirewallAddFlags.Description, "description", "moox firewall rule", "防火墙规则描述，最长 64 字符")
 	lighthouseFirewallAddCmd.Flags().Int64Var(&lighthouseFirewallAddFlags.FirewallVersion, "firewall-version", 0, "防火墙版本号；0 表示不传")
-	lighthouseFirewallAddCmd.Flags().BoolVar(&lighthouseFirewallAddFlags.DryRun, "dry-run", false, "仅输出将要提交的规则，不调用腾讯云 API")
+	lighthouseFirewallAddCmd.Flags().BoolVar(&lighthouseFirewallAddFlags.Yes, "yes", false, "确认提交规则；不加只预览，不调用腾讯云 API")
 }
 
 func runLighthouseFirewallAdd(cmd *cobra.Command, opts lighthouseFirewallAddOptions) error {
@@ -103,8 +105,7 @@ func runLighthouseFirewallAdd(cmd *cobra.Command, opts lighthouseFirewallAddOpti
 		if err != nil {
 			return err
 		}
-		return writeJSON(cmd, map[string]any{
-			"dry_run":   true,
+		return writePreview(cmd, map[string]any{
 			"action":    "CreateFirewallRules",
 			"region":    opts.Region,
 			"endpoint":  opts.Endpoint,

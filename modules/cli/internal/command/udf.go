@@ -125,7 +125,7 @@ func runUdfPublish(ctx context.Context, out io.Writer, opts udfPublishOptions) e
 		state = "版本已存在，只更新了说明与示例"
 	}
 	fmt.Fprintf(out, "已发布 %s@%s：%s\n", rsp.GetName(), rsp.GetHash(), state)
-	fmt.Fprintf(out, "下一步：moox-cli udf preview %s@%s --spec <因子定义> --task <因子任务>；满意后 moox-cli udf activate %s@%s --dry-run\n",
+	fmt.Fprintf(out, "下一步：moox-cli udf preview %s@%s --spec <因子定义> --task <因子任务>；满意后先 moox-cli udf activate %s@%s 看影响清单，确认后加 --yes\n",
 		rsp.GetName(), rsp.GetHash(), rsp.GetName(), rsp.GetHash())
 	return nil
 }
@@ -172,6 +172,7 @@ func runUdfPreview(ctx context.Context, out io.Writer, opts udfPreviewOptions) e
 type udfActivateOptions struct {
 	File   string
 	Ref    string
+	Yes    bool // 命令行 --yes：确认切换；不带时只给出影响清单
 	DryRun bool
 }
 
@@ -197,7 +198,7 @@ func runUdfActivate(ctx context.Context, out io.Writer, opts udfActivateOptions)
 		fmt.Fprintf(out, "\n已切换 %s：%s → %s。\n后续：恢复因子引擎模块（lifecycle resume --endpoint <因子引擎地址>），等追赶完成放行；受影响的策略实例会进入 factor_changed，需要重新启用。\n",
 			name, orEmpty(rsp.GetOldHash()), rsp.GetNewHash())
 	case rsp.GetDryRun():
-		fmt.Fprintln(out, "\n（dry-run：没有修改任何东西）")
+		fmt.Fprintln(out, "\n（预览：没有修改任何东西；确认后加 --yes）")
 	}
 	return nil
 }
@@ -310,7 +311,7 @@ var udfCmd = &cobra.Command{
   moox-cli udf build [<名称>]                        clippy → 原生测试 → 编译 → 模块检查 → 一致性测试 → 打包 dist/<名称>-<哈希>.udfpkg
   moox-cli udf publish <包>                           上传并由服务端复核（要求 git 工作区干净），存为不可变版本（未启用）
   moox-cli udf preview <名称>@<哈希> --spec <文件> --task <任务>   用未启用的版本在真实数据上试算
-  moox-cli udf activate <名称>@<哈希> [--dry-run]     切换启用版本：先给出影响清单与前提检查
+  moox-cli udf activate <名称>@<哈希> [--yes]         切换启用版本：默认只给出影响清单与前提检查，--yes 才切换
   moox-cli udf list | show <名称>                     查看版本、引用关系与各引擎的模块状态
 
 切换启用版本要在因子引擎模块暂停期间进行：lifecycle pause --endpoint <因子引擎健康检查地址，默认 http://127.0.0.1:11417>（等收敛）→ 取消列出的已领取补算作业 →
@@ -379,15 +380,16 @@ func newUdfCommands() *cobra.Command {
 
 	var actOpts udfActivateOptions
 	activateCmd := &cobra.Command{
-		Use: "activate <名称>@<哈希>", Short: "切换启用版本（先 --dry-run 看影响清单与前提）", Args: cobra.ExactArgs(1),
+		Use: "activate <名称>@<哈希>", Short: "切换启用版本（默认只看影响清单与前提，--yes 才切换）", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			actOpts.File, actOpts.Ref = file, args[0]
+			actOpts.DryRun = !actOpts.Yes
 			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
 			defer cancel()
 			return runUdfActivate(ctx, cmd.OutOrStdout(), actOpts)
 		},
 	}
-	activateCmd.Flags().BoolVar(&actOpts.DryRun, "dry-run", false, "只给出影响清单与前提检查，不修改")
+	activateCmd.Flags().BoolVar(&actOpts.Yes, "yes", false, "确认切换；不加只给出影响清单与前提检查，不修改")
 
 	var asJSON bool
 	listCmd := &cobra.Command{

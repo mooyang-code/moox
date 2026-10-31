@@ -48,18 +48,15 @@ type collectorPackageOptions struct {
 }
 
 type collectorDeleteOptions struct {
-	ControlURL       string
-	AccessToken      string
-	ServiceAccessKey string
-	ServiceSecretKey string
-	File             string
-	SpaceID          string
-	Namespace        string
-	InstancePrefix   string
-	Region           string
-	Confirm          bool
-	DryRun           bool
-	Wait             bool
+	File           string
+	SpaceID        string
+	Namespace      string
+	InstancePrefix string
+	Region         string
+	Yes            bool // 命令行 --yes：确认删除；不带时只列出目标
+	Confirm        bool
+	DryRun         bool
+	Wait           bool
 }
 
 type collectorProbeOptions struct {
@@ -79,10 +76,13 @@ var collectorFunctionDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "异步删除当前 space 中全部 SCF 云函数",
 	Long: "列出当前 space 的 scf-event 实例，并通过 FunctionInstance 提交可恢复查询的异步删除任务；可按命名空间和地域筛选。\n" +
-		"必须显式指定 --confirm；使用 --dry-run 只列出目标而不提交删除。",
+		"默认只列出目标而不提交删除；加 --yes 才真正删除。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		summary, err := deleteCollectorFunctions(cmd.Context(), collectorDeleteFlags)
+		options := collectorDeleteFlags
+		options.Confirm = options.Yes
+		options.DryRun = !options.Yes
+		summary, err := deleteCollectorFunctions(cmd.Context(), options)
 		if summary != nil {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
@@ -165,17 +165,12 @@ func init() {
 	collectorFunctionPackageCmd.Flags().StringVar(&collectorPackageFlags.SpaceID, "space-id", "", "space id; selects the matching SCF config directory")
 
 	deleteFlags := collectorFunctionDeleteCmd.Flags()
-	deleteFlags.StringVar(&collectorDeleteFlags.ControlURL, "control-url", "", "Control service base URL")
-	deleteFlags.StringVar(&collectorDeleteFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
-	deleteFlags.StringVar(&collectorDeleteFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名鉴权 key_id; 默认取 MOOX_GATEWAY_SERVICE_KEY_ID")
-	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
 	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的实例")
 	deleteFlags.StringVar(&collectorDeleteFlags.InstancePrefix, "instance-prefix", "", "只删除实例 ID 以该前缀开头的 SCF 实例")
 	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 实例")
-	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 实例")
-	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
+	deleteFlags.BoolVar(&collectorDeleteFlags.Yes, "yes", false, "确认删除当前筛选范围内的 SCF 实例；不加只列出目标")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
 	probeFlags := collectorFunctionProbeCmd.Flags()
 	probeFlags.StringVar(&collectorProbeFlags.ControlURL, "control-url", "", "Control service base URL")
@@ -363,16 +358,12 @@ func mergeBatchStatus(current, next string) string {
 }
 
 func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (summaryResult *collectorDeleteSummary, retErr error) {
-	controlURL := strings.TrimSpace(opts.ControlURL)
-	if controlURL == "" {
-		return nil, fmt.Errorf("--control-url is required")
-	}
 	spaceID := strings.TrimSpace(defaultFlag(opts.SpaceID, os.Getenv("MOOX_SPACE_ID")))
 	if spaceID == "" {
 		return nil, fmt.Errorf("--space-id is required")
 	}
 	if !opts.DryRun && !opts.Confirm {
-		return nil, fmt.Errorf("refusing to delete SCF instances without --confirm (use --dry-run to inspect targets)")
+		return nil, fmt.Errorf("refusing to delete SCF instances without --yes")
 	}
 	if !opts.DryRun && !opts.Wait {
 		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous FunctionInstance batch")

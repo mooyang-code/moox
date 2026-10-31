@@ -9,6 +9,9 @@ type CallMetadata struct {
 	SpaceID string
 	UserID  string
 	TraceID string
+	// HostID 指定把调用发到哪台主机；为空时按默认规则选择（本机优先，其次按主机 ID 排序）。
+	// 只在隧道与直连模式下生效，不会作为请求头发送。
+	HostID string
 }
 
 type callMetadataKey struct{}
