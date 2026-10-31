@@ -119,12 +119,14 @@ const (
 )
 
 type rpcFlag struct {
-	Name     string // 参数名（不含 --）；不能用 file、data、yes、space-id、host
-	Field    string // 请求字段，点号表示嵌套，如 "factor_task.name"
-	Kind     rpcFlagKind
-	Usage    string
-	Required bool   // 请求里没有该字段（--data 也没给）时报错
-	Default  string // 非空时未显式传入也写入
+	Name  string // 参数名（不含 --）；不能用 file、data、yes、space-id、host
+	Field string // 请求字段，点号表示嵌套，如 "factor_task.name"
+	// AlsoField 非空时同一个值再写进另一个请求字段（例如任务 ID 既在顶层又在 task 对象里）。
+	AlsoField string
+	Kind      rpcFlagKind
+	Usage     string
+	Required  bool   // 请求里没有该字段（--data 也没给）时报错
+	Default   string // 非空时未显式传入也写入
 }
 
 type rpcPageStyle int
@@ -147,6 +149,8 @@ type rpcSpec struct {
 	Host        bool     // 加 --host，指定调用哪台主机上的服务
 	Destructive bool     // 默认只预览，--yes 才执行
 	AutoIDs     []string // 请求里缺省时自动生成随机 ID 的字段
+	// Fixed 是固定写入请求的字段（如启用/停用命令里的 status）。
+	Fixed map[string]any
 }
 
 func (s rpcSpec) key() string { return s.Service + "/" + s.Method }
@@ -340,7 +344,13 @@ func (s rpcSpec) buildRequest(cmd *cobra.Command, stdin io.Reader) (map[string]a
 		}
 		if ok {
 			setRequestPath(request, flag.Field, value)
+			if flag.AlsoField != "" {
+				setRequestPath(request, flag.AlsoField, value)
+			}
 		}
+	}
+	for field, value := range s.Fixed {
+		setRequestPath(request, field, value)
 	}
 	switch s.Page {
 	case rpcPageSize, rpcPagePSize:
@@ -508,4 +518,34 @@ func findOrAddGroup(parent *cobra.Command, name, path string) *cobra.Command {
 	group := &cobra.Command{Use: name, Short: short}
 	parent.AddCommand(group)
 	return group
+}
+
+// ---- 规格里常用的参数写法 ----
+
+func strFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcString, Usage: usage}
+}
+func reqFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcString, Usage: usage, Required: true}
+}
+func boolFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcBool, Usage: usage}
+}
+func intFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcInt, Usage: usage}
+}
+func listFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcStrings, Usage: usage}
+}
+func jsonFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcJSON, Usage: usage}
+}
+func fileFlag(name, field, usage string, required bool) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcFile, Usage: usage, Required: required}
+}
+func timeFlag(name, field, usage string, required bool) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcTime, Usage: usage, Required: required}
+}
+func mapFlag(name, field, usage string) rpcFlag {
+	return rpcFlag{Name: name, Field: field, Kind: rpcStringMap, Usage: usage}
 }

@@ -20,15 +20,27 @@ import (
 type rpcFakeGateway struct {
 	service, method string
 	body            []byte
-	metadataHost    string
 	response        string
-	calls           int
-	closed          bool
+	// responses 按方法名给出响应，没有登记的方法用 response。
+	responses map[string]string
+	// bodies 记录每个方法最后一次请求体，methods 记录调用顺序。
+	bodies  map[string][]byte
+	methods []string
+	calls   int
+	closed  bool
 }
 
 func (g *rpcFakeGateway) Forward(_ context.Context, service, method string, _ int, body []byte) ([]byte, error) {
 	g.calls++
 	g.service, g.method, g.body = service, method, body
+	g.methods = append(g.methods, method)
+	if g.bodies == nil {
+		g.bodies = map[string][]byte{}
+	}
+	g.bodies[method] = body
+	if response, ok := g.responses[method]; ok {
+		return []byte(response), nil
+	}
 	return []byte(g.response), nil
 }
 func (g *rpcFakeGateway) Invoke(context.Context, string, string, any, any) error { return nil }
