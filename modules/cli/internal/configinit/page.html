@@ -90,7 +90,7 @@ a { color: var(--brand); text-decoration: none; }
 a:hover { text-decoration: underline; }
 ol.guide { margin: 0 0 12px; padding: 0 0 0 20px; color: var(--ink-2); font-size: 13.5px; }
 ol.guide li { margin-bottom: 6px; padding-left: 2px; }
-ol.guide b { font-weight: 600; color: var(--ink); }
+ol.guide b { font-weight: 700; color: var(--ink); }
 ol.guide figure { margin: 8px 0 4px; }
 ol.guide figure img { display: block; width: 100%; max-width: 560px; border: 1px solid var(--line); border-radius: 4px; }
 ol.guide figcaption { margin-top: 4px; color: var(--faint); font-size: 12.5px; }
@@ -208,11 +208,11 @@ button.ghost.away { visibility: hidden; }
           <p><a href="https://cloud.tencent.com/document/product/598/37140" target="_blank" rel="noopener noreferrer">查看腾讯云的官方说明</a></p></div>
         <div>
         <ol class="guide">
-          <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用）：选「快捷创建」，填好用户名后，点「访问方式」那一栏的编辑图标，只勾选「编程访问」后确定。
-            <figure><img src="assets/cam-create-user.webp" alt="腾讯云创建子用户页面，标出了访问方式和用户权限两处编辑入口" loading="lazy"><figcaption>快捷创建子用户：需要改的是红框里的「访问方式」和「用户权限」。</figcaption></figure>
-            <figure><img src="assets/cam-access-type.webp" alt="选择访问方式弹窗，勾选编程访问" loading="lazy"><figcaption>访问方式只勾「编程访问」，不需要「腾讯云控制台访问」。</figcaption></figure></li>
-          <li>给它授权：点「用户权限」那一栏的编辑图标，在弹窗里搜索并勾选下面 6 个预设策略（可以点「复制全部策略名」后逐个粘贴搜索）；右侧「已选择」里出现 6 条后点确定，再点「创建用户」。
-            <figure><img src="assets/cam-select-policy.webp" alt="选择策略弹窗，右侧已选择 6 条预设策略" loading="lazy"><figcaption>右侧红框是已选的策略，应当正好是下表这 6 个。</figcaption></figure>
+          <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用）：选<b>「快捷创建」</b>，填好用户名后，点<b>「访问方式」</b>那一栏的编辑图标，<b>只勾选「编程访问」</b>后确定。
+            <figure><img src="assets/cam-create-user.webp" alt="腾讯云创建子用户页面，标出了访问方式和用户权限两处编辑入口" loading="lazy"><figcaption>快捷创建子用户：需要改的是红框里的<b>「访问方式」</b>和<b>「用户权限」</b>。</figcaption></figure>
+            <figure><img src="assets/cam-access-type.webp" alt="选择访问方式弹窗，勾选编程访问" loading="lazy"><figcaption>访问方式<b>只勾「编程访问」</b>，不要勾「腾讯云控制台访问」。</figcaption></figure></li>
+          <li>给它授权：点<b>「用户权限」</b>那一栏的编辑图标，在弹窗里搜索并勾选下面<b>全部 6 个预设策略</b>（可以点「复制全部策略名」后逐个粘贴搜索）；右侧「已选择」里出现 <b>6 条</b>后点确定，再点<b>「创建用户」</b>。
+            <figure><img src="assets/cam-select-policy.webp" alt="选择策略弹窗，右侧已选择 6 条预设策略" loading="lazy"><figcaption>右侧红框是已选的策略，应当正好是下表这 <b>6 个</b>，缺一个都可能导致后面部署失败。</figcaption></figure>
             <table class="policies">
               <thead><tr><th>预设策略</th><th>腾讯云服务</th><th>MooX 用来做什么</th></tr></thead>
               <tbody>
@@ -226,7 +226,7 @@ button.ghost.away { visibility: hidden; }
             </table>
             <button type="button" id="copy-policies" class="small">复制全部策略名</button> <span class="copied" id="copied" hidden>已复制</span>
           </li>
-          <li>点进这个子用户，切到「API 密钥」页签，点「新建密钥」。</li>
+          <li>点进这个子用户，切到<b>「API 密钥」</b>页签，点<b>「新建密钥」</b>。</li>
           <li>把弹窗里的 SecretId 和 SecretKey 复制到下面。<b>SecretKey 只在创建时显示一次</b>，关掉弹窗后就查不到了，请先保存好。</li>
         </ol>
         <p class="aside">也可以用主账号在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer">API 密钥管理</a> 里创建，但主账号密钥权限过大，不推荐。</p>
