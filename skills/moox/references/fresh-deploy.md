@@ -100,11 +100,13 @@ find /data/moox -mindepth 1 -maxdepth 1 -print0 | xargs -0 rm -rf
 `MOOX_STORAGE_NODE_AUTH_SECRET` 取自存储节点进程自己的环境，只放进环境变量、不打印不落盘：
 
 ```bash
-ssh ubuntu@<存储机> 'cd /data/moox/storage/current
+./bin/moox-cli host exec --host <存储机主机 ID> -- sh -c 'cd /data/moox/storage/current
   pid=$(pgrep -f "^/data/moox/storage/.*moox-storage-node" | head -1)
   export MOOX_STORAGE_NODE_AUTH_SECRET=$(tr "\0" "\n" < /proc/$pid/environ | sed -n "s/^MOOX_STORAGE_NODE_AUTH_SECRET=//p")
   ./bin/moox-storage-cli register-node --metadata-target ip://127.0.0.1:20100 --node-id storage-node-0 --service-target ip://127.0.0.1:20107'
 ```
+
+（`host exec` 经 `moox.toml` 里的 SSH 配置在存储机上执行，密钥只在远端 shell 的环境变量里，不会出现在输出里。）
 
 步骤 8 同样取密钥，命令换成 `activate-datasets --metadata-target ip://127.0.0.1:20100`。
 
