@@ -161,7 +161,7 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 	}
 	output, err := in.target.Run(ctx, arguments, nil)
 	if err != nil || output.ExitCode != 0 {
-		return result, errors.New("external program installation failed; retry the same deployment; private output omitted" + helperDiagnostic(err, output))
+		return result, remoteFailure("external program installation failed; retry the same deployment; private output omitted", err, output)
 	}
 	if err := verifyExternal(ctx, in.target, program.unit, in.disabled); err != nil {
 		return result, err

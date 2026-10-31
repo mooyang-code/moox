@@ -46,33 +46,22 @@ cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --sourc
 
 ## 3. 停机并清空
 
-对每台主机的操作顺序：因子机 → 海外机 → 控制机 → 存储机（因子引擎往 Storage 写，EventBus 最后停）。每台：
+清除一律用 `setup wipe`，不要手工 `rm`。它按 因子机 → 海外机 → 控制机 → 存储机 的顺序，去掉定时看护、停止并删除外部服务、停止各单元、终止部署目录内的进程，再清空部署目录（保留目录本身，否则要 sudo 重建），最后归档本机状态。
+
+因子机的 `/data/moox/import` 也会被清除，要留下先挪走：`mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
 
 ```bash
-# 1) 先去掉定时看护，否则 watchdog 每分钟会把进程拉起来
-crontab -l > ~/crontab.bak-<时间>; crontab -l | grep -v moox-watchdog | crontab - || crontab -r
-# 2) 因子机：停 systemd 用户服务
-systemctl --user stop moox-factor-engine.service moox-archive-worker.service
-systemctl --user disable moox-factor-engine.service moox-archive-worker.service
-# 3) 各单元用自带脚本停（不要自己 flock 维护锁，子进程会继承它）
-for u in /data/moox/*/current; do (cd "$u" && ./stop.sh); done
-# 4) 核对没有残留，有就杀；注意匹配锚定开头，避免杀到自己的 ssh 命令行
-pgrep -f '^/data/moox/'
+$CLI setup wipe --file ./moox.toml                                   # 预览：主机、目录、不认识的条目、digest
+$CLI setup wipe --file ./moox.toml --yes --expect <预览里的 plan.digest>
+$CLI setup validate --file ./moox.toml                               # deployment.route 应为 fresh
 ```
 
-确认全部停止后，**保留 `/data/moox` 目录本身**（否则要 sudo 重建），只删里面的内容：
-
-```bash
-find /data/moox -mindepth 1 -maxdepth 1 -print0 | xargs -0 rm -rf
-```
-
-因子机先 `mkdir -p ~/moox-import-keep && mv /data/moox/import/* ~/moox-import-keep/`。
+中途失败后再运行一次会接着清。CLI 不清理云函数，见第 8 节。
 
 ### 本机状态
 
-- 旧的本机操作员身份目录移走并重建：`mv ~/.config/moox ~/.config/moox.bak-<时间> && mkdir -m 700 ~/.config/moox`，再把旧目录里的 `known_hosts`（SSH 指纹）拷回，免得重新核验指纹。
-- 安装状态目录 `~/.local/state/moox/setup/<摘要>` 移走（`mv` 到 `setup.bak-<时间>`）。**这是必须的**：制品和请求哈希绑定在 core 阶段的状态里，
-  control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
+`setup wipe` 把操作员身份移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
+状态目录**必须**换新：制品和请求哈希绑定在 core 阶段的状态里，control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
 
 ## 4. 安装顺序
 
@@ -188,6 +177,7 @@ $S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 
 ## 8. 收尾
 
+- 提醒用户到腾讯云控制台删除旧的 `moox-fetch-plan-` 云函数（`setup wipe` 不清理）。
 - 汇报：做了什么、验收结果、没做的事（第 5 节）、重建后丢失的手工配置、需要用户做的事（清理旧 CA 等）。
 - 把发布过程中临时改过的代码或脚本提交并推送；`moox.toml` 的变更提醒用户 `moox-cli config backup`。
 - 更新记忆（部署状态、踩坑）。

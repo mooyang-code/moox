@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 )
 
@@ -97,12 +98,12 @@ try:
         print(json.dumps({'present':present}))
     else: raise ValueError('operation')
 except Exception:
-    sys.stderr.write('private deployment transfer preflight failed\n');sys.exit(1)
+    sys.stderr.write('private deployment transfer preflight failed\n'+'''+` + failure.Prefix + failure.TargetDirectory + `'''+'\n');sys.exit(1)
 `
 
 func prepareTarget(ctx context.Context, transport setupssh.Client, root string, units ...string) error {
-	if _, err := transport.Run(ctx, append([]string{"python3", "-c", targetFiles, "prepare", root}, units...), nil); err != nil {
-		return errors.New("target deployment directory preflight failed; private output omitted")
+	if output, err := transport.Run(ctx, append([]string{"python3", "-c", targetFiles, "prepare", root}, units...), nil); err != nil {
+		return failure.Describe("target deployment directory preflight failed; retry the same command; private output omitted", output.ExitCode, output.Stderr)
 	}
 	return nil
 }
@@ -160,6 +161,12 @@ func uploadFile(ctx context.Context, transport setupssh.Client, root, local, rem
 
 func uploadBytes(ctx context.Context, transport setupssh.Client, root string, raw []byte, remote string, mode fs.FileMode) error {
 	return uploadReader(ctx, transport, root, remote, sha(raw), mode, bytes.NewReader(raw), int64(len(raw)))
+}
+
+// remoteFailure 把目标端助手的失败转成明确原因：只有 SSH 断开才用 retryHint 提示重试。
+func remoteFailure(retryHint string, err error, output setupssh.Result) error {
+	described := failure.Describe(retryHint, output.ExitCode, output.Stderr)
+	return errors.New(described.Error() + helperDiagnostic(err, output))
 }
 
 // helperDiagnostic 在显式设置 MOOX_SETUP_DEBUG_HELPER=1 时返回目标端助手的失败输出（截断），

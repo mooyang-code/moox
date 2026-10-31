@@ -204,6 +204,9 @@ func (c Catalog) ValidateTopology(t Topology) error {
 
 func validStatus(status string) bool { return status == Enabled || status == Disabled }
 
+// AllPorts 返回组件占用的全部监听端口。
+func (c Component) AllPorts() []int { return componentPorts(c) }
+
 func componentPorts(component Component) []int {
 	ports := slices.Clone(component.Ports)
 	if component.Health.Port != 0 {

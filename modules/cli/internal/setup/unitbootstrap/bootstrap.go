@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
@@ -129,7 +130,7 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			return err
 		}
 		if (j.Host.Previous == "") != (j.Control.Previous == "") {
-			return errors.New("bootstrap requires both existing units or an empty control host")
+			return failure.New(failure.TargetPartialInstall, "bootstrap requires both existing units or an empty control host")
 		}
 		if j.Control.Previous != "" {
 			previous, err := unitinstall.ReadInstalled(ctx, j.Control.Previous)
@@ -139,7 +140,7 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
 			for _, id := range previous.Components {
 				if slices.Contains(control.Components, id) && !slices.Contains(input.components, id) {
-					return errors.New("bootstrap cannot narrow an installed control deployment to a core subset")
+					return failure.New(failure.TargetSubsetInstalled, "bootstrap cannot narrow an installed control deployment to a core subset")
 				}
 			}
 		}

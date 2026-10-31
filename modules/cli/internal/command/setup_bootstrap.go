@@ -56,6 +56,9 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			options.Log = command.ErrOrStderr()
 			var result unitdeploy.CoreResult
 			if stage == "core" {
+				if err := checkCoreRoute(command.Context(), deps, snapshot, options); err != nil {
+					return err
+				}
 				result, err = deps.bootstrapCore(command.Context(), snapshot, options)
 			} else {
 				control.CoreOptions = options

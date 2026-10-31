@@ -14,8 +14,9 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
-  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览，执行前先把完整命令给用户确认；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把整条部署计划（主机、单元、顺序、防火墙放行内容）一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
+- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`core-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块尚未完工：不要代用户创建实盘账户、下单或清仓。
 
@@ -23,7 +24,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 | 用户想做什么 | 读这个 |
 | --- | --- |
-| 第一次安装、部署、初始化（下载产物，不用编译；一开始先测 GitHub 与 CNB 的网络，选更快的下载源） | [`references/install.md`](references/install.md) |
+| 第一次安装、部署、初始化，或者新电脑发布到已有旧程序的机器（下载产物，不用编译；一开始先测 GitHub 与 CNB 的网络，选更快的下载源） | [`references/install.md`](references/install.md) |
 | 了解各模块、日常管理命令速查 | [`references/modules.md`](references/modules.md) |
 | 全部命令一览（含低频命令，每个命令一行） | [`references/command-index.md`](references/command-index.md) |
 | 管理台上的操作在命令行怎么做（专用命令对照表；少数底层接口用 `gateway call`） | [`references/api-recipes.md`](references/api-recipes.md) |
@@ -57,6 +58,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 ## 几条容易踩的规则
 
+- **排查**：同一个错误重试一次还失败就停，不再重试；先查 [`references/install.md`](references/install.md) 的常见问题和诊断命令，不把产物包源码当主要排查手段；路线走不通时停下问用户，不要自己绕路。
 - **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，首次建索引时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
   调大 `[storage_retention] view_rows_per_series` 或放宽 `[storage_view.max_age]` 时，按 [`references/storage.md`](references/storage.md) 估算并提醒余量；
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。
@@ -65,7 +67,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 durable consumer 或 View 索引，用 `moox-cli` 的对应命令（先 dry-run）。
 - **主机与部署**：`t_hosts` / `t_deployments` 是唯一登记处，增删启停只走 `moox-cli setup …`，管理台只读。
 - **监控告警**：先判断是真问题、已删除对象的残留，还是重启造成的瞬时现象；不要手改 `monitor.db`，不要把重启当修复手段。
-- **初始化后**：macOS 上管理台用内部证书时，提醒用户让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 4 节），不要替用户清理钥匙串里的这张证书。
+- **初始化后**：macOS 上管理台用内部证书时，提醒用户让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 5 节），不要替用户清理钥匙串里的这张证书。
 
 ### EventBus 凭据
 

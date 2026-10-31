@@ -309,7 +309,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 		output, err := source.Run(ctx, []string{remoteHelper, "export-host", "--request", remoteRequest}, nil)
 		if err != nil {
-			return result, errors.New("host identity export observation failed; retry original state; private output omitted")
+			return result, remoteFailure("host identity export observation failed; retry original state; private output omitted", err, output)
 		}
 		var exported unitbootstrap.ExportResult
 		decoder := json.NewDecoder(strings.NewReader(output.Stdout))
@@ -450,7 +450,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	output, err := target.Run(ctx, []string{remoteHelper, "deploy", "--request", remoteRequest}, nil)
 	if err != nil {
-		return result, errors.New("unit deployment observation failed; retry original state; target journal retained and private output omitted" + helperDiagnostic(err, output))
+		return result, remoteFailure("unit deployment observation failed; retry original state; target journal retained and private output omitted", err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()

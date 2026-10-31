@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 )
 
@@ -63,7 +64,7 @@ func bindRuntimeIdentity(deployment *os.Root, input inputs) error {
 		}
 		var stored runtimeBinding
 		if decode(raw, &stored) != nil || stored != wanted {
-			return errors.New("runtime identity differs from the persistent deployment binding; restore original native state")
+			return failure.New(failure.TargetIdentityDiffers, "runtime identity differs from the persistent deployment binding; restore original native state")
 		}
 		return nil
 	} else if !os.IsNotExist(err) {
@@ -77,7 +78,7 @@ func bindRuntimeIdentity(deployment *os.Root, input inputs) error {
 		_, statErr := root.Lstat("current")
 		root.Close()
 		if !os.IsNotExist(statErr) {
-			return errors.New("existing deployment lacks its persistent runtime identity binding")
+			return failure.New(failure.TargetBindingMissing, "existing deployment lacks its persistent runtime identity binding")
 		}
 	}
 	if err := privateDirectory(deployment, "identity"); err != nil {

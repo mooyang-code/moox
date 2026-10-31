@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://github.com/mooyang-code/moox/releases"><img src="https://img.shields.io/github/v/release/mooyang-code/moox" alt="Release"></a>
   <img src="https://img.shields.io/badge/Go-1.27-00ADD8.svg" alt="Go 1.27">
-  <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg" alt="平台">
+  <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux-lightgrey.svg" alt="平台">
 </p>
 
 ## MooX 是什么
@@ -159,7 +159,7 @@ MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、�
   | 海外机 | 采集加密货币行情时必需，建议位于香港 | 2 核 4G |
   | 因子机 | 可选，可使用局域网内的 Linux 主机 | 8 核 16G |
 
-- **本机**：macOS、Linux 或 Windows（amd64），可通过 SSH 访问上述服务器。无需安装 Go、Docker 或 Node。
+- **本机**：macOS 或 Linux，可通过 SSH 访问上述服务器（Windows 目前只能运行只读命令，部署走不通）。无需安装 Go、Docker 或 Node。
 
 - **告警**：企业微信或飞书群机器人的 Webhook 地址（可选，部署后也能在管理台添加）。
 
