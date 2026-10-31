@@ -50,8 +50,8 @@ import-pack/
 ## 2. 预检（操作机，只读）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --dry-run --min-rows <回看数量> \
-  --tail-rows 6000 --allow-missing --manifest ./moox.toml > preflight.json
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --dry-run --min-rows <回看数量> \
+  --tail-rows 6000 --allow-missing --file ./moox.toml > preflight.json
 ```
 
 `--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
@@ -62,8 +62,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
 取目标数据集最近的一条实时行，对比其 `series_tag` 与清单：
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --space <空间> --dataset <数据集> --freq <频率> \
-  --subject <任一标的> --columns close --start-time <最近几分钟> --end-time <现在> --page-size 2
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli data rows export --file ./moox.toml --space-id <空间> --dataset-id <数据集> --frequency <频率> \
+  --subject <任一标的> --columns close --from <最近几分钟> --to <现在> --page-size 2
 ```
 
 `key.series_tag` 与 `manifest.json` 的 `series_tag` 不一致就停下汇报。
@@ -117,10 +117,10 @@ set -a; . /data/moox/factor-engine/secrets/health-auth.env; set +a
 ```bash
 nproc; free -g
 # 试跑一个标的
-./moox-cli import --target factor --space <空间> --dataset <数据集> --freq <频率> --series-tag '<series_tag>' --allow-missing \
+./moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> --series-tag '<series_tag>' --allow-missing \
   --engine http://127.0.0.1:11417 --job-db ./one.db --path pack/<频率>/<标的>.csv
 # 全量：每个文件一个进程、各自独立的断点库，并发 P
-ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target factor --space <空间> --dataset <数据集> --freq <频率> \
+ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target factor --space-id <空间> --dataset-id <数据集> --frequency <频率> \
   --series-tag "<series_tag>" --allow-missing --engine http://127.0.0.1:11417 --job-db "./jobs/$(basename {}).db" --path {} > "./logs/$(basename {}).log" 2>&1 \
   && echo ok >> ok.txt || echo "{}" >> fail.txt'
 ```
@@ -130,8 +130,8 @@ ls pack/<频率>/*.csv | xargs -P <P> -I{} sh -c './moox-cli import --target fac
 ## 8. Storage 窗口（操作机，可与第 7 步同时进行）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
-  --manifest ./moox.toml --job-db ./storage-import.db > storage-import.json
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target storage --tail-rows 6000 --min-rows <回看数量> --allow-missing \
+  --file ./moox.toml --job-db ./storage-import.db > storage-import.json
 ```
 
 输出（每个文件的 `tail_from`、`tail_rows`）存成 `storage-import.json`，第 10 步的逐标的校验要用它。

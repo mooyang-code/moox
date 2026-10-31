@@ -84,7 +84,7 @@ func newTestDataKlineCommand(t *testing.T, reader *fakeTimeSeriesReader) (*bytes
 func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	reader := &fakeTimeSeriesReader{rsp: &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}}
 	stdout, _, cmd := newTestDataKlineCommand(t, reader)
-	cmd.SetArgs([]string{"--data-type", " CRYPTO ", "--symbol", "BTC-USDT", "--start-time", "2026-08-28T00:00:00Z", "--end-time", "2026-08-28T01:00:00Z", "--limit", "5"})
+	cmd.SetArgs([]string{"--data-type", " CRYPTO ", "--symbol", "BTC-USDT", "--from", "2026-08-28T00:00:00Z", "--to", "2026-08-28T01:00:00Z", "--limit", "5"})
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.NotNil(t, reader.request)
@@ -139,8 +139,8 @@ func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
 		{name: "large limit", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--limit", "1001"}, want: "1..1000"},
 		{name: "zero timeout", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--timeout", "0s"}, want: "--timeout"},
 		{name: "negative timeout", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--timeout", "-1s"}, want: "--timeout"},
-		{name: "bad start", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--start-time", "today"}, want: "RFC3339"},
-		{name: "reverse range", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--start-time", "2026-08-28T02:00:00Z", "--end-time", "2026-08-28T01:00:00Z"}, want: "start-time"},
+		{name: "bad start", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--from", "today"}, want: "RFC3339"},
+		{name: "reverse range", args: []string{"--data-type", "crypto", "--symbol", "BTC-USDT", "--from", "2026-08-28T02:00:00Z", "--to", "2026-08-28T01:00:00Z"}, want: "--from"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

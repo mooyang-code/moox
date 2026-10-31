@@ -59,23 +59,23 @@ var importCmd = &cobra.Command{
 文件必须带数据集的全部字段和时间列（可选 series_tag 列），时间按 UTC 解析；文件名（去掉扩展名）即标的 ID。
 本地存储按频率网格保证连续：序列内部缺周期时默认拒绝，加 --allow-missing 把缺的周期写成带标记的填充行。
 写 Storage 经过操作员 SSH 网关（同 moox-cli storage 的其他命令）；写因子机本地存储经过因子引擎的本地接口：
-默认按 --manifest（moox.toml）自动找到因子机、建立转发并读取健康密钥，不需要手工建隧道或设置环境变量；
+默认按 --file（moox.toml）自动找到因子机、建立转发并读取健康密钥，不需要手工建隧道或设置环境变量；
 直接在因子机上运行时可用 --engine 指定地址，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
 
 示例:
-  moox-cli import --space crypto --dataset dataset_spot_kline_1m --freq 1m \
+  moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m \
     --path ~/Downloads/spot_1m/ --target storage,factor --allow-missing --recalc
 
-  moox-cli import --space crypto --dataset dataset_spot_kline_1m --freq 1m --path ~/Downloads/BTCUSDT.csv --dry-run`,
+  moox-cli import --space-id crypto --dataset-id dataset_spot_kline_1m --frequency 1m --path ~/Downloads/BTCUSDT.csv --dry-run`,
 	RunE: func(cmd *cobra.Command, args []string) error { return runImportCommand(cmd.Context(), importFlags) },
 }
 
 func init() {
 	rootCmd.AddCommand(importCmd)
 	f := importCmd.Flags()
-	f.StringVar(&importFlags.Space, "space", "", "Space ID")
-	f.StringVar(&importFlags.Dataset, "dataset", "", "Dataset ID")
-	f.StringVar(&importFlags.Freq, "freq", "", "时序频率：1m 5m 15m 30m 1h 4h 1d")
+	f.StringVar(&importFlags.Space, "space-id", "", "Space ID")
+	f.StringVar(&importFlags.Dataset, "dataset-id", "", "Dataset ID")
+	f.StringVar(&importFlags.Freq, "frequency", "", "时序频率：1m 5m 15m 30m 1h 4h 1d")
 	f.StringArrayVar(&importFlags.Paths, "path", nil, "数据文件或目录（可重复）")
 	f.StringVar(&importFlags.Format, "format", "csv", "数据格式")
 	f.StringVar(&importFlags.Subject, "subject", "", "标的 ID；不写时用文件名（去掉扩展名）")
@@ -86,14 +86,14 @@ func init() {
 	f.BoolVar(&importFlags.Recalc, "recalc", false, "导入后对已算出过因子值的区间重算（因子本地存储记入失效重算待办）")
 	f.BoolVar(&importFlags.DryRun, "dry-run", false, "只校验不写入")
 	f.StringSliceVar(&importFlags.Targets, "target", []string{"storage", "factor"}, "写入目标：storage、factor")
-	f.StringVar(&importFlags.Manifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
+	f.StringVar(&importFlags.Manifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	f.StringVar(&importFlags.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 追平导入的同步点")
-	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --manifest 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
+	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --file 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
 	f.IntVar(&importFlags.TailRows, "tail-rows", 0, "Storage 目标每个文件只写最后 N 行，且跳过早于保留期的行；因子机本地目标仍写全量（初始数据导入用，0 表示不限制）")
-	f.StringVar(&importFlags.Pack, "manifest-pack", "", "导入包目录（含 manifest.json）：空间、数据集、频率、series_tag 与文件清单取自清单，并按清单预检；--dry-run 只预检")
+	f.StringVar(&importFlags.Pack, "pack", "", "导入包目录（含 manifest.json）：空间、数据集、频率、series_tag 与文件清单取自清单，并按清单预检；--dry-run 只预检")
 	f.IntVar(&importFlags.MinRows, "min-rows", 0, "预检要求每个文件至少这么多行（该数据源的回看数量，保证因子窗口凑得满）")
 }
 
@@ -254,9 +254,9 @@ func applyImportPack(opts *importOptions) (*importPack, error) {
 		name, flag, manifest string
 		target               *string
 	}{
-		{"space", opts.Space, pack.SpaceID, &opts.Space},
-		{"dataset", opts.Dataset, pack.DatasetID, &opts.Dataset},
-		{"freq", opts.Freq, pack.Freq, &opts.Freq},
+		{"space-id", opts.Space, pack.SpaceID, &opts.Space},
+		{"dataset-id", opts.Dataset, pack.DatasetID, &opts.Dataset},
+		{"frequency", opts.Freq, pack.Freq, &opts.Freq},
 		{"series-tag", opts.SeriesTag, pack.SeriesTag, &opts.SeriesTag},
 	} {
 		if field.flag != "" && field.flag != field.manifest {
@@ -265,10 +265,10 @@ func applyImportPack(opts *importOptions) (*importPack, error) {
 		*field.target = field.manifest
 	}
 	if len(opts.Paths) > 0 || opts.Subject != "" {
-		return nil, errors.New("用了 --manifest-pack 就不要再指定 --path 或 --subject：文件清单取自导入包")
+		return nil, errors.New("用了 --pack 就不要再指定 --path 或 --subject：文件清单取自导入包")
 	}
 	if opts.MinRows <= 0 {
-		return nil, errors.New("用了 --manifest-pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml 的 window.lookback）：行数不够时因子窗口凑不满，这是预检的硬约束")
+		return nil, errors.New("用了 --pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml 的 window.lookback）：行数不够时因子窗口凑不满，这是预检的硬约束")
 	}
 	opts.Paths = pack.paths()
 	return pack, nil

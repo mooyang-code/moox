@@ -11,7 +11,7 @@
 ./bin/moox-cli gateway methods strategy
 
 # 调用：服务写完整名称；--data 是 JSON，@文件 读文件，- 读标准输入；--space 是请求携带的空间（默认 crypto）
-./bin/moox-cli gateway call trpc.moox.strategy.StrategyMgr ListStrategies --space crypto --data '{"page":{"page":1,"page_size":50}}'
+./bin/moox-cli gateway call trpc.moox.strategy.StrategyMgr ListStrategies --space-id crypto --data '{"page":{"page":1,"page_size":50}}'
 ```
 
 - 命令在产物包（或仓库）根目录执行，经 `moox.toml` 里的控制机 SSH 隧道调用，不需要单独登录。

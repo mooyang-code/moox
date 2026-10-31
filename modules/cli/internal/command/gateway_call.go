@@ -45,7 +45,7 @@ func newGatewayCallCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&space, "space", "crypto", "请求携带的空间 ID")
+	cmd.Flags().StringVar(&space, "space-id", "crypto", "请求携带的空间 ID")
 	cmd.Flags().StringVar(&data, "data", "{}", "请求 JSON；@文件 读取文件，- 读取标准输入")
 	cmd.Flags().StringVar(&host, "host", "", "只调用这台主机上的服务（moox.toml 里的主机名）；默认本机优先")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second, "调用超时")

@@ -25,7 +25,7 @@ var monitorFlags struct {
 
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Monitor 运维：告警屏蔽",
+	Short: "Monitor：健康总览、数据到达历史、主机指标与告警屏蔽",
 }
 
 var monitorMuteCmd = &cobra.Command{

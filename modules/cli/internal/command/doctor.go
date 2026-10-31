@@ -92,7 +92,7 @@ func newDoctorAlertsCommand(deps doctorCommandDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "./moox.toml", "deployment manifest for the operator SSH gateway")
-	cmd.Flags().StringVar(&space, "space", "", "只看某个空间；为空时看全部")
+	cmd.Flags().StringVar(&space, "space-id", "", "只看某个空间；为空时看全部")
 	cmd.Flags().StringVar(&format, "format", "json", "报告格式：json、text 或 markdown")
 	cmd.Flags().StringVar(&output, "output", "", "把报告原子写入该路径")
 	return cmd

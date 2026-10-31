@@ -33,7 +33,7 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 			space = strings.TrimSpace(space)
 			output = strings.TrimSpace(output)
 			if space == "" {
-				return fmt.Errorf("--space is required")
+				return fmt.Errorf("--space-id is required")
 			}
 			if output == "" {
 				return fmt.Errorf("--output is required")
@@ -72,9 +72,9 @@ func newSetupExportSkillConfigCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&space, "space", "", "要导出的 SCF Space ID")
+	cmd.Flags().StringVar(&space, "space-id", "", "要导出的 SCF Space ID")
 	cmd.Flags().StringVar(&output, "output", "", "Skill 数据访问配置输出路径")
-	_ = cmd.MarkFlagRequired("space")
+	_ = cmd.MarkFlagRequired("space-id")
 	_ = cmd.MarkFlagRequired("output")
 	return cmd
 }

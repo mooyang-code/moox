@@ -60,7 +60,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	deps = completeSetupDeps(deps)
 	cmd := &cobra.Command{
 		Use:          "setup",
-		Short:        "初始化 MooX 控制面",
+		Short:        "部署与初始化：主机、组件部署、防火墙、发布与初始数据",
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(

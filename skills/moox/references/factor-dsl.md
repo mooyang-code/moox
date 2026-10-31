@@ -315,12 +315,12 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 ```bash
 SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 "$SKILL_ROOT/scripts/data-kline.sh" --data-type crypto --symbol BTC-USDT --interval 1m \
-  --start-time 2026-10-17T00:00:00Z --end-time 2026-10-17T16:00:00Z --limit 1000 \
+  --from 2026-10-17T00:00:00Z --to 2026-10-17T16:00:00Z --limit 1000 \
   --columns open,high,low,close,volume,quote_volume,trade_num --output ./factor-convert/btc-1.json
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv ./factor-convert/*.json --output ./factor-convert/bars.csv
 ```
 
-运维机上也可以用 `moox-cli data rows export --dataset <源数据集> --subject <标的> --columns open,high,low,close,volume,quote_volume ...` 导出后同样转换。
+运维机上也可以用 `moox-cli data rows export --dataset-id <源数据集> --subject <标的> --columns open,high,low,close,volume,quote_volume ...` 导出后同样转换。
 **合成数据必做一份**（覆盖收平、并列等边界，截面因子要多个标的）：
 
 ```bash
@@ -484,10 +484,10 @@ members = [
    结果必然对不上。源数据要比比较区间提前至少“因子回看”个周期，比较时用 `--start`、`--end` 只比较目标区间：
 
    ```bash
-   moox-cli data rows export --file ./moox.toml --space crypto --dataset <源数据集> --subject BTC-USDT --freq 1m \
-     --start-time <起> --end-time <止> --columns open,high,low,close,volume,quote_volume --output src.json
-   moox-cli data rows export --file ./moox.toml --space crypto --dataset <因子结果数据集> --subject BTC-USDT --freq 1m \
-     --start-time <起> --end-time <止> --columns zf_abs_mean --output prod.json
+   moox-cli data rows export --file ./moox.toml --space-id crypto --dataset-id <源数据集> --subject BTC-USDT --frequency 1m \
+     --from <起> --to <止> --columns open,high,low,close,volume,quote_volume --output src.json
+   moox-cli data rows export --file ./moox.toml --space-id crypto --dataset-id <因子结果数据集> --subject BTC-USDT --frequency 1m \
+     --from <起> --to <止> --columns zf_abs_mean --output prod.json
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv src.json --output src.csv
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv prod.json --output prod.csv
    "$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id zf_abs_mean --input src.csv --freq 1m --output local.csv

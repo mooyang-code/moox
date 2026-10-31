@@ -40,7 +40,7 @@ var dataRowsExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "导出 Dataset 行为 JSON",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		datasetID, err := requiredFlagValue(dataDatasetID, "--dataset")
+		datasetID, err := requiredFlagValue(dataDatasetID, "--dataset-id")
 		if err != nil {
 			return err
 		}
@@ -57,7 +57,7 @@ var dataRowsExportCmd = &cobra.Command{
 			return fmt.Errorf("必须用 --columns 指定要导出的列")
 		}
 		if dataStartTime == "" || dataEndTime == "" {
-			return fmt.Errorf("必须同时指定 --start-time 与 --end-time")
+			return fmt.Errorf("必须同时指定 --from 与 --to")
 		}
 		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
 		rsp, err := exportRowsPaged(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
@@ -91,13 +91,13 @@ func init() {
 
 	dataRowsExportCmd.Flags().StringVar(&dataManifest, "file", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	dataRowsExportCmd.Flags().StringVar(&dataStorageAuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
-	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space", "default", "Space ID")
-	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset", "", "Dataset ID")
+	dataRowsExportCmd.Flags().StringVar(&dataSpaceID, "space-id", "default", "Space ID")
+	dataRowsExportCmd.Flags().StringVar(&dataDatasetID, "dataset-id", "", "Dataset ID")
 	dataRowsExportCmd.Flags().StringVar(&dataSubjectID, "subject", "", "Subject ID")
-	dataRowsExportCmd.Flags().StringVar(&dataFreq, "freq", "1m", "K 线频率")
+	dataRowsExportCmd.Flags().StringVar(&dataFreq, "frequency", "1m", "K 线频率")
 	dataRowsExportCmd.Flags().StringVar(&dataSeriesTag, "series-tag", "", "精确序列标签；省略表示全部序列，显式空值表示默认序列")
-	dataRowsExportCmd.Flags().StringVar(&dataStartTime, "start-time", "", "起始时间")
-	dataRowsExportCmd.Flags().StringVar(&dataEndTime, "end-time", "", "结束时间")
+	dataRowsExportCmd.Flags().StringVar(&dataStartTime, "from", "", "起始时间")
+	dataRowsExportCmd.Flags().StringVar(&dataEndTime, "to", "", "结束时间")
 	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数；达到上限时停止并提示")
 	dataRowsExportCmd.Flags().StringSliceVar(&dataColumns, "columns", nil, "要导出的列，逗号分隔（必填）")
 	dataRowsExportCmd.Flags().StringVar(&dataOutputFile, "output", "", "输出 JSON 文件；为空则输出到 stdout")

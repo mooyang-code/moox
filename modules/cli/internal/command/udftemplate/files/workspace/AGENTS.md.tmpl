@@ -11,7 +11,7 @@ moox-cli udf new <名称>            # 生成骨架（已有工作区时只添�
 moox-cli udf build [<名称>]        # clippy → 原生测试 → 编译 wasm → 模块检查 → 一致性测试 → 打包 dist/*.udfpkg
 git commit                         # publish 要求工作区干净（系统记录提交号）
 moox-cli udf publish dist/<名称>-<哈希>.udfpkg
-moox-cli udf preview <名称>@<哈希> --spec <因子定义> --task <因子任务>   # 在真实数据上试算
+moox-cli udf preview <名称>@<哈希> --spec <因子定义> --task-id <因子任务>   # 在真实数据上试算
 moox-cli udf activate <名称>@<哈希> --dry-run                            # 看影响清单与前提，再按 skill 的步骤切换
 ```
 

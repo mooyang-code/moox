@@ -13,11 +13,11 @@ var replayCmd = &cobra.Command{
 	Long: `逐期回放：按时间顺序逐期推进历史数据，每期取因子帧（因子引擎）、求策略决策（策略）、
 在 Trade 的纸面账本里撮合，得到接近实盘时序的模拟结果。回放绝不产生实际下单，不影响实盘策略实例。
 
-  moox-cli replay start [--task <因子任务>] --instance <策略实例> --from <起> --to <止> [--write-factors]
-  moox-cli replay status [--replay <ID>]
-  moox-cli replay pause|resume|cancel|report|delete --replay <ID>
+  moox-cli replay start [--task-id <因子任务>] --instance-id <策略实例> --from <起> --to <止> [--write-factors]
+  moox-cli replay status [--replay-id <ID>]
+  moox-cli replay pause|resume|cancel|report|delete --replay-id <ID>
 
-中断后用同样的参数（或只给 --replay）再次执行 start 即可续跑。回放接口挂在各模块的健康检查端口上：
+中断后用同样的参数（或只给 --replay-id）再次执行 start 即可续跑。回放接口挂在各模块的健康检查端口上：
 start、report、delete 默认按 --file（moox.toml，默认 ./moox.toml）自动找到因子引擎、策略、Trade 所在的主机，
 建立转发并读取健康密钥，不需要手工建隧道或设置环境变量。
 直接在模块所在主机上运行时，用 --factor-endpoint、--strategy-endpoint、--trade-endpoint 指定地址，

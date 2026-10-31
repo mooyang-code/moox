@@ -71,7 +71,7 @@ func init() {
 		cmd.Flags().StringVar(&flags.SpaceID, "space-id", "", "空间 ID")
 	}
 	bind(collectorResampleBackfillCmd, &resampleBackfillFlags)
-	collectorResampleBackfillCmd.Flags().StringVar(&resampleBackfillFlags.TaskID, "task", "", "合成任务 ID")
+	collectorResampleBackfillCmd.Flags().StringVar(&resampleBackfillFlags.TaskID, "task-id", "", "合成任务 ID")
 	collectorResampleBackfillCmd.Flags().StringVar(&resampleBackfillFlags.From, "from", "", "起始时间（含）")
 	collectorResampleBackfillCmd.Flags().StringVar(&resampleBackfillFlags.To, "to", "", "结束时间（不含）")
 	collectorResampleBackfillCmd.Flags().StringSliceVar(&resampleBackfillFlags.Subjects, "subjects", nil, "只合成这些标的（逗号分隔）；不指定表示全部")
@@ -79,7 +79,7 @@ func init() {
 	collectorResampleBackfillCmd.Flags().BoolVar(&resampleBackfillFlags.Wait, "wait", false, "等作业结束，输出写入数、跳过数与跳过样例")
 	collectorResampleBackfillCmd.Flags().DurationVar(&resampleBackfillFlags.Timeout, "timeout", 30*time.Minute, "--wait 的最长等待时间")
 	bind(collectorResampleJobsCmd, &resampleJobsFlags)
-	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.TaskID, "task", "", "只看该合成任务的作业")
+	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.TaskID, "task-id", "", "只看该合成任务的作业")
 	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.JobID, "job-id", "", "作业 ID")
 	collectorResampleJobsCmd.Flags().StringVar(&resampleJobsFlags.Status, "status", "", "只看该状态：queued、running、syncing、succeeded、failed、cancelled")
 	collectorResampleJobsCmd.Flags().Uint32Var(&resampleJobsFlags.Limit, "limit", 50, "最多列出多少个")
@@ -109,7 +109,7 @@ func newResampleRequestID() string {
 
 func runResampleBackfill(ctx context.Context, out io.Writer, flags resampleFlags) error {
 	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.TaskID) == "" {
-		return errors.New("--space-id and --task are required")
+		return errors.New("--space-id and --task-id are required")
 	}
 	from, err := parseKlineTime("from", flags.From)
 	if err != nil {

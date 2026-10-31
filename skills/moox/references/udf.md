@@ -12,7 +12,7 @@ moox-cli udf new <名称>               # 空目录生成工作区；已有工�
 moox-cli udf build [<名称>]           # 源码扫描 → clippy(-D warnings) → 原生测试 → 编译 → 模块检查 → 一致性测试 → dist/<名称>-<哈希>.udfpkg
 git add -A && git commit              # publish 要求工作区干净，且与包里记录的提交号一致
 moox-cli udf publish dist/<名称>-<哈希>.udfpkg      # 服务端复核并重跑同一套测试、比对输出摘要；存为不可变版本（未启用）
-moox-cli udf preview <名称>@<哈希> --spec <因子定义文件> --task <因子任务> [--subjects BTC,ETH --periods 20]
+moox-cli udf preview <名称>@<哈希> --spec <因子定义文件> --task-id <因子任务> [--subjects BTC,ETH --periods 20]
 moox-cli udf activate <名称>@<哈希> --dry-run       # 影响清单与前提检查
 ```
 

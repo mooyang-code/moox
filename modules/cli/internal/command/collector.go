@@ -112,7 +112,7 @@ var collectorPackageFlags collectorPackageOptions
 
 var collectorCmd = &cobra.Command{
 	Use:   "collector",
-	Short: "数据采集器工具",
+	Short: "采集：任务、运行状态、补采与合成、标的、采集方式与云函数包",
 	Run: func(cmd *cobra.Command, args []string) {
 		_ = cmd.Help()
 	},

@@ -46,21 +46,21 @@ var lifecycleCmd = &cobra.Command{
 	Long: `查看和推进模块或其管理对象（因子任务、策略实例）的生命周期。
 
   moox-cli lifecycle status                      查看状态、各对象阶段和未就绪原因
-  moox-cli lifecycle check  [--task <id>]         重新执行启动前检查
-  moox-cli lifecycle init   [--task <id>]         执行初始化（因子任务：载入本地窗口）
-  moox-cli lifecycle start  [--task <id>]         启动：进入试运行
-  moox-cli lifecycle confirm [--task <id>]        确认试运行结果：进入运行
-  moox-cli lifecycle pause  [--task <id>] [--reason 原因] [--pause-kind manual|system]
+  moox-cli lifecycle check  [--task-id <id>]         重新执行启动前检查
+  moox-cli lifecycle init   [--task-id <id>]         执行初始化（因子任务：载入本地窗口）
+  moox-cli lifecycle start  [--task-id <id>]         启动：进入试运行
+  moox-cli lifecycle confirm [--task-id <id>]        确认试运行结果：进入运行
+  moox-cli lifecycle pause  [--task-id <id>] [--reason 原因] [--pause-kind manual|system]
                                                  暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、试运行、运行时暂停）
-  moox-cli lifecycle resume [--task <id>] [--pause-kind system] [--force] [--manual-release]
+  moox-cli lifecycle resume [--task-id <id>] [--pause-kind system] [--force] [--manual-release]
                                                  恢复：先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后自动放行回到暂停前的阶段；
                                                  --manual-release 追平后停在待放行，等 release（系统级恢复用）；
                                                  --pause-kind system 只恢复系统暂停（不动手动暂停）；
                                                  --force 在模块暂停期间只放行单个对象的追赶
-  moox-cli lifecycle release [--task <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
+  moox-cli lifecycle release [--task-id <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
   moox-cli lifecycle catchup                     查看恢复追赶的进度
 
-不指定 --task / --kind --id 时作用于模块自身。
+不指定 --task-id / --kind --id 时作用于模块自身。
 
 连接：默认操作 factor-engine，用 --module 换成 strategy、trade 等模块；按 --file（moox.toml）自动找到模块所在主机、
 建立转发（只能出站的主机经 control 中转）并读取健康密钥，不需要手工建隧道或设置环境变量。
@@ -103,7 +103,7 @@ func init() {
 	pf.StringVar(&lifecycleFlags.Endpoint, "endpoint", "", "模块健康检查地址；不给时按 --file 与 --module 自动解析")
 	pf.StringVar(&lifecycleFlags.Module, "module", "factor-engine", "要操作的模块："+healthModuleNames())
 	pf.StringVar(&lifecycleFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于定位模块所在主机")
-	pf.StringVar(&lifecycleFlags.Task, "task", "", "因子任务 ID（等价于 --kind factor_task --id <ID>）")
+	pf.StringVar(&lifecycleFlags.Task, "task-id", "", "因子任务 ID（等价于 --kind factor_task --id <ID>）")
 	pf.StringVar(&lifecycleFlags.Kind, "kind", "", "对象类型（factor_task、strategy_instance……）")
 	pf.StringVar(&lifecycleFlags.ID, "id", "", "对象 ID")
 	pf.BoolVar(&lifecycleFlags.JSON, "json", false, "以 JSON 输出")
@@ -126,7 +126,7 @@ func init() {
 			return runLifecycleShadow(cmd.Context(), lifecycleFlags, shadowSpace, shadowLimit, cmd.OutOrStdout())
 		},
 	}
-	shadow.Flags().StringVar(&shadowSpace, "space", "", "空间 ID")
+	shadow.Flags().StringVar(&shadowSpace, "space-id", "", "空间 ID")
 	shadow.Flags().IntVar(&shadowLimit, "limit", 20, "最多显示的条数")
 	lifecycleCmd.AddCommand(shadow)
 	lifecycleCmd.AddCommand(&cobra.Command{
@@ -161,7 +161,7 @@ func (o lifecycleOptions) ref() (lifecycle.Ref, error) {
 	kind, id := o.Kind, o.ID
 	if o.Task != "" {
 		if kind != "" || id != "" {
-			return lifecycle.Ref{}, errors.New("--task 不能和 --kind / --id 同时使用")
+			return lifecycle.Ref{}, errors.New("--task-id 不能和 --kind / --id 同时使用")
 		}
 		kind, id = "factor_task", o.Task
 	}
@@ -241,7 +241,7 @@ func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.
 // runLifecycleShadow 读 Trade 记录的影子目标：预热中的策略实例发来的、只换算不下单的目标。
 func runLifecycleShadow(ctx context.Context, o lifecycleOptions, space string, limit int, out io.Writer) error {
 	if space == "" || o.ID == "" {
-		return errors.New("需要 --space 与 --id（策略实例 ID）")
+		return errors.New("需要 --space-id 与 --id（策略实例 ID）")
 	}
 	var rsp struct {
 		Targets []struct {

@@ -248,9 +248,9 @@ func TestReplayAddsEndpointsForNetworkCommandsOnly(t *testing.T) {
 	requests := useFakeHealth(t, map[string]string{"factor-engine": "http://127.0.0.1:1", "strategy": "http://127.0.0.1:2", "trade": "http://127.0.0.1:3"})
 	cmd := &cobra.Command{Use: "replay"}
 
-	args, err := prepareReplayEndpoints(cmd, []string{"start", "--file", "x.toml", "--instance", "i1", "--strategy-endpoint=http://mine:9"})
+	args, err := prepareReplayEndpoints(cmd, []string{"start", "--file", "x.toml", "--instance-id", "i1", "--strategy-endpoint=http://mine:9"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"start", "--instance", "i1", "--strategy-endpoint=http://mine:9", "--factor-endpoint=http://127.0.0.1:1", "--trade-endpoint=http://127.0.0.1:3"}, args)
+	assert.Equal(t, []string{"start", "--instance-id", "i1", "--strategy-endpoint=http://mine:9", "--factor-endpoint=http://127.0.0.1:1", "--trade-endpoint=http://127.0.0.1:3"}, args)
 	assert.Equal(t, "x.toml", (*requests)[0].File)
 	assert.Equal(t, []string{"factor-engine", "trade"}, (*requests)[0].Modules, "已给地址的模块不解析")
 

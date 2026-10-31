@@ -33,7 +33,7 @@ Never pass `--config`, rely on the CLI's relative default config path, or use `M
 - Pass the user's `--symbol` unchanged. Do not rewrite `BTC-USDT` as `BTCUSDT`, change case, or guess a pair.
 - Pass the requested `--interval` and use the packaged catalog exactly. The current seed exports Binance spot `1m` and `1h`, and A-share `1m`; an older package can have fewer entries. Regenerate the package after changing collection tasks.
 - Use `--limit` for a requested count (`1..1000`); otherwise the CLI default is `100`.
-- Use RFC3339 `--start-time` and `--end-time` only when the user supplies a time range. The start must be strictly before the end.
+- Use RFC3339 `--from` and `--to` only when the user supplies a time range. The start must be strictly before the end.
 - Use `--columns` for required extra fields (comma-separated); the default is `open,high,low,close,volume`, so `quote_volume` and `trade_num` need explicit selection. Use `--timeout` to override the default 15-second RPC budget and `--output` only when a result file was requested.
 
 Examples follow the same replacement rule. Each block is independently executable after resolving its own `SKILL_ROOT`.
@@ -59,7 +59,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 "$SKILL_ROOT/scripts/data-kline.sh" \
   --data-type crypto --exchange binance \
   --symbol BTC-USDT --interval 1m \
-  --start-time 2026-08-28T00:00:00Z --end-time 2026-08-28T01:00:00Z
+  --from 2026-08-28T00:00:00Z --to 2026-08-28T01:00:00Z
 ```
 
 The CLI resolves `data-type + exchange + interval` by exact lookup in the packaged catalog. Never construct or guess a Space, Dataset, frequency, or series tag. For the initial catalog, `crypto/binance/1m` resolves to the Binance spot 1m collection task result `crypto/dataset_dasftksvjhj2jom4vhd0`, frequency `1m`, and series tag `venue:binance|market:spot|source:spot_http`. Report unsupported catalog combinations as errors rather than falling back to another dataset.
