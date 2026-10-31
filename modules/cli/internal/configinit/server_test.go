@@ -443,7 +443,7 @@ func TestTencentEndpointsVerifyKeysAndRecognizeServers(t *testing.T) {
 	if status != http.StatusOK || reply.Instance == nil || reply.Instance.Region != "ap-nanjing" || reply.Instance.ZoneName != "南京一区" || reply.Instance.MemoryGB != 16 {
 		t.Fatalf("识别服务器: %d %+v", status, reply)
 	}
-	if status, reply := h.post("tencent/lookup", map[string]any{"tencent": keys, "address": "203.0.113.50"}); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "不在当前腾讯云账号下") {
+	if status, reply := h.post("tencent/lookup", map[string]any{"tencent": keys, "address": "203.0.113.50"}); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "不在当前腾讯云账号下") || !strings.Contains(reply.Message, "QcloudLighthouseFullAccess") {
 		t.Fatalf("不在账号下: %d %+v", status, reply)
 	}
 	// 提交时复用已经识别过的结果，不再逐个地域查一遍。
