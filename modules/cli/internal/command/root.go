@@ -170,7 +170,10 @@ func Execute() {
 	rootCmd.SetHelpCommand(helpCmd)
 
 	// 先执行命令解析，这样可以检查是否使用了--version标志
-	if err := rootCmd.Execute(); err != nil {
+	mountRPCCommands(rootCmd)
+	err := rootCmd.Execute()
+	closeModuleHealth()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		var coded interface{ ExitCode() int }
 		if errors.As(err, &coded) {

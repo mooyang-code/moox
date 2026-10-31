@@ -58,8 +58,9 @@ var importCmd = &cobra.Command{
 
 文件必须带数据集的全部字段和时间列（可选 series_tag 列），时间按 UTC 解析；文件名（去掉扩展名）即标的 ID。
 本地存储按频率网格保证连续：序列内部缺周期时默认拒绝，加 --allow-missing 把缺的周期写成带标记的填充行。
-写 Storage 经过操作员 SSH 网关（同 moox-cli storage 的其他命令）；写因子机本地存储经过因子引擎的本地接口
-（--engine 指向引擎健康检查地址，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY）。
+写 Storage 经过操作员 SSH 网关（同 moox-cli storage 的其他命令）；写因子机本地存储经过因子引擎的本地接口：
+默认按 --manifest（moox.toml）自动找到因子机、建立转发并读取健康密钥，不需要手工建隧道或设置环境变量；
+直接在因子机上运行时可用 --engine 指定地址，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
 
 示例:
   moox-cli import --space crypto --dataset dataset_spot_kline_1m --freq 1m \
@@ -88,7 +89,7 @@ func init() {
 	f.StringVar(&importFlags.Manifest, "manifest", "./moox.toml", "操作员 SSH 网关使用的部署配置文件")
 	f.StringVar(&importFlags.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
 	f.StringVar(&importFlags.ViewID, "view", "", "可选 View ID；写 Storage 后等该 View 追平导入的同步点")
-	f.StringVar(&importFlags.Engine, "engine", "http://127.0.0.1:11417", "因子引擎健康检查地址（本地写入接口挂在它上面，可以是 SSH 隧道的本地端口）")
+	f.StringVar(&importFlags.Engine, "engine", "", "因子引擎健康检查地址（本地写入接口挂在它上面）；不给时按 --manifest 里的 moox.toml 自动解析，没有 moox.toml 时用 http://127.0.0.1:11417")
 	f.StringVar(&importFlags.JobDB, "job-db", "./importer.db", "断点库路径")
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
 	f.IntVar(&importFlags.TailRows, "tail-rows", 0, "Storage 目标每个文件只写最后 N 行，且跳过早于保留期的行；因子机本地目标仍写全量（初始数据导入用，0 表示不限制）")
@@ -127,6 +128,13 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	wantStorage, wantFactor, err := importTargets(opts.Targets)
 	if err != nil {
 		return err
+	}
+	if wantFactor && opts.Engine == "" {
+		endpoint, err := resolveSingleModuleEndpoint(ctx, opts.Manifest, "factor-engine", true, os.Stderr)
+		if err != nil {
+			return err
+		}
+		opts.Engine = endpoint
 	}
 	engine := &engineclient.Client{Endpoint: opts.Engine, AuthVersion: os.Getenv("MOOX_HEALTH_AUTH_VERSION"),
 		AccessKey: os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"), SecretKey: os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")}

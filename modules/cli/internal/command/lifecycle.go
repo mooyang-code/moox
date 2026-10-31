@@ -18,6 +18,9 @@ import (
 // lifecycleOptions 是 moox-cli lifecycle 的参数。
 type lifecycleOptions struct {
 	Endpoint string
+	// Module 是要操作的模块（factor-engine、strategy、trade……），未给 --endpoint 时按 moox.toml 解析它的健康端点。
+	Module   string
+	File     string
 	Kind, ID string
 	Task     string
 	JSON     bool
@@ -57,14 +60,49 @@ var lifecycleCmd = &cobra.Command{
   moox-cli lifecycle release [--task <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
   moox-cli lifecycle catchup                     查看恢复追赶的进度
 
-不指定 --task / --kind --id 时作用于模块自身。--endpoint 指向模块的健康检查地址
-（可以是 SSH 隧道的本地端口），鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。`,
+不指定 --task / --kind --id 时作用于模块自身。
+
+连接：默认操作 factor-engine，用 --module 换成 strategy、trade 等模块；按 --file（moox.toml）自动找到模块所在主机、
+建立转发（只能出站的主机经 control 中转）并读取健康密钥，不需要手工建隧道或设置环境变量。
+给了 --endpoint 就直接连这个地址（例如在模块所在主机上运行），鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY；
+没有 moox.toml 时同样退回本机地址。`,
+	PersistentPreRunE: prepareLifecycleEndpoint,
+}
+
+// prepareLifecycleEndpoint 在子命令运行前确定模块的健康端点：显式 --endpoint 优先，其次按 moox.toml 解析。
+func prepareLifecycleEndpoint(cmd *cobra.Command, _ []string) error {
+	if lifecycleFlags.Endpoint != "" {
+		return nil
+	}
+	module := lifecycleFlags.Module
+	if cmd.Name() == "shadow" {
+		module = "trade"
+	}
+	if _, ok := healthModuleByName(module); !ok {
+		return fmt.Errorf("未知的模块 %q（%s）", module, healthModuleNames())
+	}
+	endpoint, err := resolveSingleModuleEndpoint(cmd.Context(), lifecycleFlags.File, module, true, cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+	lifecycleFlags.Endpoint = endpoint
+	return nil
+}
+
+func healthModuleNames() string {
+	names := make([]string, 0, len(healthModules))
+	for _, module := range healthModules {
+		names = append(names, module.Name)
+	}
+	return strings.Join(names, "、")
 }
 
 func init() {
 	rootCmd.AddCommand(lifecycleCmd)
 	pf := lifecycleCmd.PersistentFlags()
-	pf.StringVar(&lifecycleFlags.Endpoint, "endpoint", "http://127.0.0.1:11417", "模块健康检查地址（因子引擎默认 11417）")
+	pf.StringVar(&lifecycleFlags.Endpoint, "endpoint", "", "模块健康检查地址；不给时按 --file 与 --module 自动解析")
+	pf.StringVar(&lifecycleFlags.Module, "module", "factor-engine", "要操作的模块："+healthModuleNames())
+	pf.StringVar(&lifecycleFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于定位模块所在主机")
 	pf.StringVar(&lifecycleFlags.Task, "task", "", "因子任务 ID（等价于 --kind factor_task --id <ID>）")
 	pf.StringVar(&lifecycleFlags.Kind, "kind", "", "对象类型（factor_task、strategy_instance……）")
 	pf.StringVar(&lifecycleFlags.ID, "id", "", "对象 ID")
@@ -83,7 +121,7 @@ func init() {
 		},
 	})
 	shadow := &cobra.Command{
-		Use: "shadow", Short: "查看试运行中的策略实例的影子目标（--endpoint 指向 Trade 的健康检查地址）", Args: cobra.NoArgs,
+		Use: "shadow", Short: "查看试运行中的策略实例的影子目标（固定连接 trade 模块）", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runLifecycleShadow(cmd.Context(), lifecycleFlags, shadowSpace, shadowLimit, cmd.OutOrStdout())
 		},

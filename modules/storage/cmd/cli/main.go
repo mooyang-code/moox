@@ -159,7 +159,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, retain-views, delete-view, purge-dataset-events, or period-inventory")
+		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
 	}
 	switch args[0] {
 	case "init":
@@ -178,8 +178,6 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runResetViewConsumers(args[1:], stdout, stderr)
 	case "reset-metadata":
 		return runResetMetadata(args[1:], stdout, stderr)
-	case "retain-views":
-		return runRetainViews(args[1:], stdout, stderr)
 	case "delete-view":
 		return runDeleteView(args[1:], stdout, stderr)
 	case "purge-dataset-events":
@@ -187,7 +185,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	case "period-inventory":
 		return runPeriodInventory(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, retain-views, delete-view, purge-dataset-events, or period-inventory", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
 	}
 }
 

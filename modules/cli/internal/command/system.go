@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/lifecycle"
@@ -19,6 +20,7 @@ type systemOptions struct {
 	Collector, Factor, Strategy, Trade string
 	// FactorMgr、Archive、Monitor 只在系统重置里参与（暂停/恢复不涉及它们）。
 	FactorMgr, Archive, Monitor string
+	File                        string
 	Reason                      string
 	By                          string
 	Timeout                     time.Duration
@@ -32,10 +34,13 @@ var systemFlags systemOptions
 var systemCmd = &cobra.Command{
 	Use:   "system",
 	Short: "系统级暂停与恢复（按依赖顺序逐个模块，恢复先追赶补采、全部追平后统一放行）",
-	Long: `系统级暂停与恢复。各模块的健康检查地址用 --collector / --factor / --strategy / --trade 指定（可以是 SSH 隧道的本地端口），
-也可以用环境变量 MOOX_COLLECTOR_HEALTH_ENDPOINT / MOOX_FACTOR_HEALTH_ENDPOINT / MOOX_STRATEGY_HEALTH_ENDPOINT / MOOX_TRADE_HEALTH_ENDPOINT；
-没有指定地址的模块不参与。系统重置另外用 --factor-mgr / --archive / --monitor（环境变量 MOOX_FACTORMGR_ / MOOX_ARCHIVE_ / MOOX_MONITOR_HEALTH_ENDPOINT）。鉴权密钥按模块取环境变量 MOOX_<COLLECTOR|FACTOR|STRATEGY|TRADE>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY，
-没有设置时用 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
+	Long: `系统级暂停与恢复。默认按 --file（moox.toml）自动找到 collector、factor-engine、strategy、trade 所在的主机，
+建立转发（只能出站的主机经 control 中转）并读取各模块的健康密钥，没有部署的模块自动跳过；系统重置另外包含 factor-mgr、archive-mgr、monitor。
+不需要手工建隧道或设置环境变量。
+
+直接在模块所在的主机上运行、或要覆盖某个模块的地址时，用 --collector / --factor / --strategy / --trade（重置另有 --factor-mgr / --archive / --monitor）
+或环境变量 MOOX_COLLECTOR_HEALTH_ENDPOINT / MOOX_FACTOR_ / MOOX_STRATEGY_ / MOOX_TRADE_ / MOOX_FACTORMGR_ / MOOX_ARCHIVE_ / MOOX_MONITOR_HEALTH_ENDPOINT 指定；
+这时鉴权密钥按模块取环境变量 MOOX_<COLLECTOR|FACTOR|STRATEGY|TRADE>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY，没有设置时用 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
 
   moox-cli system status                  各模块的阶段与暂停详情、恢复追赶进度
   moox-cli system pause  [--reason 原因]  下游到上游逐个暂停：策略 → Trade → 因子引擎 → 采集
@@ -46,6 +51,48 @@ var systemCmd = &cobra.Command{
 
 命令幂等：中途断开后再执行一次就按各模块当前状态继续。追赶超时只报告，不自动放行；
 --release-partial --yes 在超时后放行已追平的模块，让未追平的继续追赶。`,
+	PersistentPreRunE: prepareSystemEndpoints,
+}
+
+// prepareSystemEndpoints 为没有显式给地址的模块按 moox.toml 解析健康端点；没有 moox.toml 时保持原样（只用显式给的地址）。
+func prepareSystemEndpoints(cmd *cobra.Command, _ []string) error {
+	o := &systemFlags
+	type item struct {
+		name     string
+		endpoint *string
+	}
+	wanted := []item{{"collector", &o.Collector}, {"factor-engine", &o.Factor}, {"strategy", &o.Strategy}, {"trade", &o.Trade}}
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		if parent.Name() == "reset" {
+			wanted = append(wanted, item{"factor-mgr", &o.FactorMgr}, item{"archive-mgr", &o.Archive}, item{"monitor", &o.Monitor})
+			break
+		}
+	}
+	var missing []string
+	for _, w := range wanted {
+		if *w.endpoint == "" {
+			missing = append(missing, w.name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	health, err := resolveAndTrackModuleHealth(cmd.Context(), moduleHealthRequest{File: o.File, Modules: missing})
+	if errors.Is(err, errManifestUnavailable) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, w := range wanted {
+		if endpoint := health.Endpoint(w.name); endpoint != "" && *w.endpoint == "" {
+			*w.endpoint = endpoint
+		}
+	}
+	if len(health.NotDeployed) > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "提示：moox.toml 里没有部署 %s，已跳过\n", strings.Join(health.NotDeployed, "、"))
+	}
+	return nil
 }
 
 func init() {
@@ -58,6 +105,7 @@ func init() {
 	pf.StringVar(&systemFlags.FactorMgr, "factor-mgr", os.Getenv("MOOX_FACTORMGR_HEALTH_ENDPOINT"), "因子管理的健康检查地址（系统重置用）")
 	pf.StringVar(&systemFlags.Archive, "archive", os.Getenv("MOOX_ARCHIVE_HEALTH_ENDPOINT"), "归档管理的健康检查地址（系统重置用）")
 	pf.StringVar(&systemFlags.Monitor, "monitor", os.Getenv("MOOX_MONITOR_HEALTH_ENDPOINT"), "Monitor 的健康检查地址（系统重置用）")
+	pf.StringVar(&systemFlags.File, "file", defaultSetupFile, "部署配置文件（moox.toml）；用于定位各模块所在主机")
 	pf.StringVar(&systemFlags.By, "by", "", "操作者（默认 cli:<主机名>）")
 	pf.BoolVar(&systemFlags.JSON, "json", false, "以 JSON 输出（status）")
 
@@ -140,7 +188,7 @@ func (o systemOptions) orchestrator(out io.Writer) *sysctl.Orchestrator {
 func runSystemStatus(ctx context.Context, o systemOptions, out io.Writer) error {
 	orch := o.orchestrator(nil)
 	if len(orch.Modules) == 0 {
-		return errors.New("没有指定任何模块的健康检查地址（--collector / --factor / --strategy / --trade）")
+		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
 	}
 	states := orch.Status(ctx)
 	if o.JSON {
@@ -189,7 +237,7 @@ func runSystemStatus(ctx context.Context, o systemOptions, out io.Writer) error 
 func runSystemPause(ctx context.Context, o systemOptions, out io.Writer) error {
 	orch := o.orchestrator(out)
 	if len(orch.Modules) == 0 {
-		return errors.New("没有指定任何模块的健康检查地址（--collector / --factor / --strategy / --trade）")
+		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
 	}
 	result, err := orch.Pause(ctx, o.Reason)
 	for _, w := range result.Warnings {
@@ -209,7 +257,7 @@ func runSystemResume(ctx context.Context, o systemOptions, out io.Writer) error 
 	}
 	orch := o.orchestrator(out)
 	if len(orch.Modules) == 0 {
-		return errors.New("没有指定任何模块的健康检查地址（--collector / --factor / --strategy / --trade）")
+		return errors.New("没有可操作的模块：moox.toml 里没有部署任何带健康端口的模块，或没有找到 moox.toml（可用 --collector / --factor / --strategy / --trade 指定地址）")
 	}
 	result, err := orch.Resume(ctx, sysctl.ResumeOptions{Timeout: o.Timeout, ReleasePartial: o.ReleasePartial})
 	if err != nil {

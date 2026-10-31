@@ -84,7 +84,9 @@ func TestCollectorTaskDeleteOnlyPreviewsWithoutYes(t *testing.T) {
 	useRPCGateway(t, gateway)
 	collectorTaskDeleteFlagsValue.File, collectorTaskDeleteFlagsValue.SpaceID, collectorTaskDeleteFlagsValue.TaskID = "moox.toml", "crypto", "task-1"
 	collectorTaskDeleteFlagsValue.Yes, collectorTaskDeleteFlagsValue.KeepResult = false, false
-	t.Cleanup(func() { collectorTaskDeleteFlagsValue.File, collectorTaskDeleteFlagsValue.SpaceID, collectorTaskDeleteFlagsValue.TaskID = "", "", "" })
+	t.Cleanup(func() {
+		collectorTaskDeleteFlagsValue.File, collectorTaskDeleteFlagsValue.SpaceID, collectorTaskDeleteFlagsValue.TaskID = "", "", ""
+	})
 	var out bytes.Buffer
 	collectorTaskDeleteCmd.SetOut(&out)
 	collectorTaskDeleteCmd.SetErr(&bytes.Buffer{})

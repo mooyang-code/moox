@@ -141,7 +141,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			var systemd doctorcli.SystemdChecker
 			var relay *doctorcli.RelayProber
 			var deployRoot string
-			if remote := loadDoctorRemote(file, doctorCfg.NodeID, gateway); remote != nil {
+			if remote := loadHostRemote(file, doctorCfg.NodeID, gateway); remote != nil {
 				defer remote.Close()
 				systemd, relay = remote.Systemd(), remote.Relay(auth)
 				deployRoot = remote.manifest.Paths.Resolved().DeployRoot

@@ -98,15 +98,6 @@ func TestDeleteViewRefusesWhileStorageViewRuns(t *testing.T) {
 	require.Equal(t, 2, countRows(t, path, `SELECT COUNT(*) FROM t_views`), "storage-view 在运行时不能动元数据")
 }
 
-func TestRetainViewsStillKeepsOnlyTheListedViews(t *testing.T) {
-	path := newDeleteViewFixture(t)
-	summary, err := retainViews(context.Background(), retainViewsOptions{metadataDB: path, keepViews: []string{"crypto/view_factor_1h"}})
-	require.NoError(t, err)
-	require.Equal(t, retainViewsSummary{KeptViews: 1, DeletedViews: 1, RetiredIndexes: summary.RetiredIndexes}, summary)
-	require.Len(t, summary.RetiredIndexes, 1)
-	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views`))
-}
-
 func TestDeleteViewAcceptsPausedStorageView(t *testing.T) {
 	for _, state := range []string{"stopped", "paused"} {
 		root := t.TempDir()
