@@ -60,6 +60,9 @@ type ProbeReport struct {
 
 // Prober 负责录入页里的 SSH 操作；测试里替换。
 type Prober interface {
+	// Reach 只测网络：能不能连上这台机器的 SSH 端口并收到 SSH 服务的问候，不需要密码或密钥。
+	// 成功时返回对方的 SSH 版本串。
+	Reach(ctx context.Context, target SSHTarget) (string, error)
 	// Login 用 MooX 密钥登录，报告免密登录是否可用、是否需要先确认主机指纹。
 	Login(ctx context.Context, target SSHTarget) (LoginReport, error)
 	// Trust 在用户确认后记录主机指纹。

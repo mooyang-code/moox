@@ -1,16 +1,21 @@
 package configinit
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -38,39 +43,84 @@ type LoginReport struct {
 	HostKey string `json:"host_key,omitempty"`
 }
 
+// sshKeyMu 串行化 ensureSSHKey：页面会同时发出好几个请求，各自都可能发现密钥还不存在，
+// 不加锁时后到的那个会在写入时撞上先到的，报“已存在”。
+var sshKeyMu sync.Mutex
+
 // ensureSSHKey 读取本机的 MooX 密钥，没有时生成一把（不加口令，只给 MooX 用）。
+// 已有的文件不是可用的私钥（损坏或带口令）时，先改名备份再生成新的，不覆盖也不让用户手工处理。
 func ensureSSHKey() (SSHKey, error) {
+	sshKeyMu.Lock()
+	defer sshKeyMu.Unlock()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return SSHKey{}, fmt.Errorf("找不到用户主目录: %w", err)
 	}
 	dir := filepath.Join(home, ".ssh")
 	path := filepath.Join(dir, sshKeyName)
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return SSHKey{}, fmt.Errorf("创建 %s 失败: %w", dir, err)
-		}
-		_, private, err := ed25519.GenerateKey(rand.Reader)
+	signer, err := readSSHKey(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		backup, err := backupSSHKey(path)
 		if err != nil {
 			return SSHKey{}, err
 		}
-		block, err := xssh.MarshalPrivateKey(private, sshKeyComment)
-		if err != nil {
-			return SSHKey{}, err
-		}
-		raw = pem.EncodeToMemory(block)
-		if err := writeNew(path, raw); err != nil {
-			return SSHKey{}, fmt.Errorf("保存 MooX 密钥失败: %w", err)
-		}
-	} else if err != nil {
-		return SSHKey{}, fmt.Errorf("读取 %s 失败: %w", path, err)
+		fmt.Fprintf(os.Stderr, "%s 不是可用的不带口令的 SSH 私钥，已备份为 %s，并生成新的 MooX 密钥\n", path, backup)
+	default:
+		return writePublicKey(path, signer)
 	}
-	signer, err := xssh.ParsePrivateKey(raw)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return SSHKey{}, fmt.Errorf("创建 %s 失败: %w", dir, err)
+	}
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return SSHKey{}, err
+	}
+	block, err := xssh.MarshalPrivateKey(private, sshKeyComment)
+	if err != nil {
+		return SSHKey{}, err
+	}
+	raw := pem.EncodeToMemory(block)
+	err = writeNew(path, raw)
 	clear(raw)
 	if err != nil {
-		return SSHKey{}, fmt.Errorf("%s 不是不带口令的 SSH 私钥，请把它改名后重新打开配置页", path)
+		return SSHKey{}, fmt.Errorf("保存 MooX 密钥失败: %w", err)
 	}
+	signer, err = readSSHKey(path)
+	if err != nil {
+		return SSHKey{}, fmt.Errorf("读取刚生成的 MooX 密钥失败: %w", err)
+	}
+	return writePublicKey(path, signer)
+}
+
+// readSSHKey 读取不带口令的私钥；文件不存在时返回 os.ErrNotExist。
+func readSSHKey(path string) (xssh.Signer, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	signer, err := xssh.ParsePrivateKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s 不是不带口令的 SSH 私钥: %w", path, err)
+	}
+	return signer, nil
+}
+
+// backupSSHKey 把不可用的旧密钥（及其公钥文件）改名为 <名字>.bak-<时间>，返回备份后的私钥路径。
+func backupSSHKey(path string) (string, error) {
+	backup := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
+	if err := os.Rename(path, backup); err != nil {
+		return "", fmt.Errorf("备份旧密钥 %s 失败: %w", path, err)
+	}
+	if err := os.Rename(path+".pub", backup+".pub"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("备份旧公钥 %s.pub 失败: %w", path, err)
+	}
+	return backup, nil
+}
+
+func writePublicKey(path string, signer xssh.Signer) (SSHKey, error) {
 	public := strings.TrimSpace(string(xssh.MarshalAuthorizedKey(signer.PublicKey()))) + " " + sshKeyComment
 	if err := os.WriteFile(path+".pub", []byte(public+"\n"), 0o644); err != nil {
 		return SSHKey{}, fmt.Errorf("保存 MooX 公钥失败: %w", err)
@@ -85,6 +135,27 @@ func keyOnly(key SSHKey) setupssh.Options {
 
 func sshTarget(target SSHTarget) setupssh.Target {
 	return setupssh.Target{Name: "host", Address: target.Address, Port: target.SSHPort, Username: target.SSHUser}
+}
+
+func (systemProber) Reach(ctx context.Context, target SSHTarget) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	addr := net.JoinHostPort(target.Address, strconv.Itoa(target.SSHPort))
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "", fmt.Errorf("%s 拒绝了连接：IP 通，但这个端口上没有 SSH 服务，请确认 SSH 服务已启动、端口号填对了", addr)
+	case err != nil:
+		return "", fmt.Errorf("连不上 %s：请确认 IP 填对、机器已开机，并且防火墙或安全组放行了 SSH 端口 %d（局域网机器还要确认这台电脑能访问到它）", addr, target.SSHPort)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, _ := bufio.NewReader(io.LimitReader(conn, 255)).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "SSH-") {
+		return "", fmt.Errorf("%s 能连上，但对方没有按 SSH 协议回应：端口 %d 上运行的可能不是 SSH 服务", addr, target.SSHPort)
+	}
+	return line, nil
 }
 
 func (systemProber) Login(ctx context.Context, target SSHTarget) (LoginReport, error) {

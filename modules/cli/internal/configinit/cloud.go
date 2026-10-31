@@ -155,6 +155,9 @@ func (c *cloudCache) verify(ctx context.Context, keys Keys) (Account, error) {
 	return account, nil
 }
 
+// lookupPolicies 是按公网 IP 识别服务器所需的预设策略，查不到服务器时提示用户检查。
+const lookupPolicies = "QcloudLighthouseFullAccess、QcloudCVMFullAccess、QcloudVPCFullAccess"
+
 func (c *cloudCache) lookup(ctx context.Context, keys Keys, address string) (Instance, error) {
 	keys, err := keys.normalize()
 	if err != nil {
@@ -176,10 +179,10 @@ func (c *cloudCache) lookup(ctx context.Context, keys Keys, address string) (Ins
 	defer cancel()
 	instance, err := c.cloud.Lookup(ctx, keys, address)
 	if errors.Is(err, errNotInAccount) {
-		return Instance{}, fmt.Errorf("%s 不在当前腾讯云账号下。请确认它是腾讯云服务器，并且和第一步填写的是同一个账号", address)
+		return Instance{}, fmt.Errorf("%s 不在当前腾讯云账号下。请逐项确认：1）它是腾讯云服务器，并且和第一步填写的是同一个账号；2）填的是公网 IP（弹性公网 IP 要已经绑定到这台服务器）；3）第一步的子用户已授权 %s，没有授权时也会查不到服务器", address, lookupPolicies)
 	}
 	if err != nil {
-		return Instance{}, fmt.Errorf("暂时查不到 %s 的信息，请稍后重试", address)
+		return Instance{}, fmt.Errorf("暂时查不到 %s 的信息，请稍后重试；如果一直这样，请确认第一步的子用户已授权 %s", address, lookupPolicies)
 	}
 	c.mu.Lock()
 	c.found[key] = instance

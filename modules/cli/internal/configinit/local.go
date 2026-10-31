@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"mime"
 	"net"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +30,8 @@ type localPage struct {
 	tmpl   *template.Template
 	boot   template.JS
 	routes map[string]http.HandlerFunc
+	// assets 是页面引用的静态图片（只读），为空表示页面没有图片。
+	assets fs.FS
 
 	mu   sync.Mutex
 	done bool
@@ -76,6 +80,10 @@ func (p *localPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.page(w)
 		return
 	}
+	if name, isAsset := strings.CutPrefix(rest, assetPrefix); isAsset && p.assets != nil {
+		p.serveAsset(w, r, name)
+		return
+	}
 	handler, ok := p.routes[rest]
 	if !ok {
 		http.NotFound(w, r)
@@ -87,6 +95,29 @@ func (p *localPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	handler(w, r)
+}
+
+// assetPrefix 是静态图片在令牌路径下的前缀。
+const assetPrefix = "assets/"
+
+// serveAsset 只读返回内嵌的图片；名字不允许带目录。
+func (p *localPage) serveAsset(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		http.NotFound(w, r)
+		return
+	}
+	raw, err := fs.ReadFile(p.assets, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", mime.TypeByExtension(path.Ext(name)))
+	_, _ = w.Write(raw)
 }
 
 // splitPath 把 /<令牌>/<其余> 拆成两段。
@@ -121,7 +152,7 @@ func (p *localPage) page(w http.ResponseWriter) {
 	}
 	n := base64.RawURLEncoding.EncodeToString(nonce)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+n+"'; script-src 'nonce-"+n+"'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'nonce-"+n+"'; script-src 'nonce-"+n+"'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	_ = p.tmpl.Execute(w, map[string]any{"Nonce": n, "Boot": p.boot})
 }
 

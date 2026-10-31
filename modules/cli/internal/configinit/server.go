@@ -2,11 +2,12 @@ package configinit
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,11 @@ const DefaultTimeout = time.Hour
 
 //go:embed page.html
 var pageSource string
+
+// pageAssets 是录入页里的操作截图（腾讯云控制台的创建子用户步骤）。
+//
+//go:embed assets/*.webp
+var pageAssets embed.FS
 
 var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 
@@ -127,12 +133,14 @@ func newSession(addr, output string, deadline time.Time, keys configcrypt.KeySto
 	if err != nil {
 		return nil, err
 	}
+	page.assets = assetsFS()
 	s := &session{localPage: page, output: output, keys: keys, result: make(chan Result, 1)}
 	page.routes = map[string]http.HandlerFunc{
 		"submit":         s.submit,
 		"tencent/verify": s.verifyTencent,
 		"tencent/lookup": s.lookupServer,
 		"ssh/key":        s.sshKey,
+		"ssh/reach":      s.reach,
 		"ssh/check":      s.checkLogin,
 		"ssh/trust":      s.trustHost,
 		"ssh/authorize":  s.authorize,
@@ -178,6 +186,24 @@ func (s *session) sshKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, http.StatusOK, response{OK: true, Key: &key})
+}
+
+// reach 只测网络连通（TCP 端口和 SSH 问候），让用户在填完 IP 后就能发现 IP、端口和防火墙的问题。
+func (s *session) reach(w http.ResponseWriter, r *http.Request) {
+	var target SSHTarget
+	if !s.decode(w, r, &target) {
+		return
+	}
+	target, err := target.normalize("服务器")
+	var banner string
+	if err == nil {
+		banner, err = s.prober.Reach(r.Context(), target)
+	}
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Message: "网络通畅，对方的 SSH 服务正常（" + banner + "）。SSH 用户名和登录方式在下一步验证。"})
 }
 
 func (s *session) checkLogin(w http.ResponseWriter, r *http.Request) {
@@ -340,4 +366,12 @@ func writeNew(path string, data []byte) error {
 		return fmt.Errorf("写入 %s 失败: %w", path, err)
 	}
 	return nil
+}
+
+func assetsFS() fs.FS {
+	sub, err := fs.Sub(pageAssets, "assets")
+	if err != nil {
+		panic(err)
+	}
+	return sub
 }
