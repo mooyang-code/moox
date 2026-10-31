@@ -3,6 +3,8 @@
 适用于线上这套**原生部署**（`/data/moox/<单元>/releases/<发布ID>` + `current`，由 `moox-runtime` 管理进程）：
 在本机构建 Linux 二进制（含 CGO 的 Storage 在 Docker 里构建），逐台替换并重启，核对 sha 与就绪。构建环境见 [`docs/构建手册.md`](../../../docs/构建手册.md)。
 
+这份流程面向维护者：它要求本机有发布环境，不带配置改动，也不恢复 CLI 能力。外部用户在新电脑上不要用它绕过安装流程，见 [`install.md`](install.md) 第 3 节。
+
 固化的步骤在 `skills/moox/scripts/native-release.sh`（契约测试 `test-native-release.sh`）；这里写流程、顺序和陷阱。
 
 ## 先确认再动手

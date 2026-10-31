@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
@@ -37,6 +38,9 @@ func main() {
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		// Private file contents and child output never form part of errors.
 		fmt.Fprintln(os.Stderr, err)
+		if line, ok := failure.Line(err); ok {
+			fmt.Fprintln(os.Stderr, line)
+		}
 		os.Exit(1)
 	}
 }

@@ -75,6 +75,9 @@ func privateRoot(directory string) (*os.Root, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err
 	}
+	if err := fsutil.TightenPrivate(directory); err != nil {
+		return nil, err
+	}
 	return fsutil.OpenPhysicalRoot(directory, true)
 }
 
@@ -293,7 +296,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if err != nil {
 		// SSH observation failure is not evidence that the target exited. Leave
 		// its journal and the exact request intact for a safe explicit retry.
-		return result, errors.New("bootstrap observation failed; retry with the original state directory and configuration; target journal retained and private output omitted" + helperDiagnostic(err, output))
+		return result, remoteFailure("bootstrap observation failed; retry with the original state directory and configuration; target journal retained and private output omitted", err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()

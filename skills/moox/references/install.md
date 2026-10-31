@@ -45,7 +45,10 @@ echo "下载源: $SRC"
   | 海外机 | 采集加密货币行情时需要（建议香港） | 2 核 4G | WS 行情推送、出口代理、交易执行 |
   | 因子机 | 可选，可以是家里或局域网的 Linux 机器 | 8 核 16G | 因子引擎、归档 Worker（systemd 用户服务） |
 
-- **本机**：macOS、Linux 或 Windows，能 SSH 到上面的服务器（Windows 上部分辅助脚本需要 Git Bash 或 WSL）。
+- **本机**：macOS 或 Linux，能 SSH 到上面的服务器。**Windows 现在只能使用只读命令，部署走不通**，用户用 Windows 时提前说明。
+- **有没有旧部署**（在填配置之前问）：“目标机器上有旧部署吗？要保留数据吗？”
+  - 要保留：不走 `config init`，按下面“保留数据”一节处理。
+  - 不保留或不清楚：继续往下，第 3 节会实际检测。
 - **告警渠道**：企业微信或飞书群机器人的 Webhook 地址（可选，没有可以部署后再在管理台添加）。
 
 ## 1. 下载发布产物
@@ -64,12 +67,23 @@ echo "下载源: $SRC"
 - CNB：`https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}/<文件名>`
 
 ```bash
-VER=v0.4.1
-OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64 / windows_amd64
-if [[ "$SRC" == cnb ]]; then BASE=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}; else BASE=https://github.com/mooyang-code/moox/releases/download/${VER}; fi
-curl -fLO ${BASE}/moox-bundle_${VER}_linux_amd64.tar.gz
-curl -fLO ${BASE}/moox-cli_${VER}_${OS}.tar.gz       # Windows 是 .zip
-curl -fLO ${BASE}/SHA256SUMS
+VER=v0.4.2
+OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64
+GITHUB=https://github.com/mooyang-code/moox/releases/download/${VER}
+CNB=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
+if [[ "$SRC" == cnb ]]; then BASES=("$CNB" "$GITHUB"); else BASES=("$GITHUB" "$CNB"); fi
+# 选中的源失败时自动换另一个；连接超时、重试和断点续传都由 curl 负责
+fetch() {
+  local base
+  for base in "${BASES[@]}"; do
+    curl -fL --connect-timeout 10 --retry 2 --retry-delay 2 -C - -O "$base/$1" && return 0
+    echo "从 $base 下载 $1 失败，换另一个源" >&2
+  done
+  return 1
+}
+fetch moox-bundle_${VER}_linux_amd64.tar.gz
+fetch moox-cli_${VER}_${OS}.tar.gz
+fetch SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing          # Linux 用 sha256sum -c
 tar -xzf moox-bundle_${VER}_linux_amd64.tar.gz
 tar -xzf moox-cli_${VER}_${OS}.tar.gz -C moox-${VER}/bin
@@ -97,18 +111,61 @@ cd moox-${VER}
 
 规则：
 
+- 命令结束后立即告诉用户：配置已保存，页面可以关，之后不用重填。
 - Agent **不打开、不填写、不读取**这个页面和 `moox.toml`；页面地址没能自动打开时，把命令打印的地址原样转给用户。
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
 
-## 3. 部署
+## 3. 判断走哪条路
+
+```bash
+./bin/moox-cli setup validate
+```
+
+输出的 `deployment.route` 说明目标机器的实际情况，后面按它走：
+
+| route | 含义 | 怎么做 |
+| --- | --- | --- |
+| `fresh` | 全是空机 | 不用询问清空，确认部署计划后走第 4 节 |
+| `resume` | 这台电脑上次的首次安装没做完 | 继续第 4 节，不询问清空 |
+| `existing` | 已有部署，这台电脑没有匹配的状态（新电脑都是这种） | 询问是否彻底清空 |
+| `upgrade` | 已有部署，这台电脑就是当初部署的电脑 | 询问是否彻底清空；不清空就按“升级到新版本”。如果是本次安装在 `bootstrap --stage control` 之后中断，不用询问，从中断的步骤继续 |
+| `blocked` | 有阻塞项，`reasons` 写了原因 | 说明原因后停下，不要继续 |
+
+`existing` 或 `upgrade` 时先取预览（不会改动任何东西）：
+
+```bash
+./bin/moox-cli setup wipe
+```
+
+再这样问用户，不能只问“要覆盖吗”。`<>` 里的内容从预览取：主机与版本来自 `plan.hosts`，配置之外的旧机器来自 `plan.other_hosts`（`plan.registry_unread` 为 true 时说明没能读取）：
+
+> 检测到这些机器上已经部署了 MooX：`<主机、IP、版本>`。
+> 要彻底清空吗？清空会删除这些机器上全部旧程序和旧数据（K 线、因子、策略、任务、归档、历史导入包、交易记录、管理台账号与操作记录、管理台里保存的交易所密钥等、配置备份），然后用你刚填的初始化设置重新发布 `<版本>`，并在腾讯云防火墙放行 `<端口摘要>`。删除后无法恢复，配置备份也会一起删除。
+> `<配置之外还有这些旧机器：……，不会被清理，上面的旧程序会继续运行>`
+> 如果旧部署启用过云函数采集，请你到腾讯云控制台删除 `moox-fetch-plan-` 开头的函数；不删会继续运行并产生费用，以后启用云函数时同名函数也会创建失败。
+> `<existing 时：不清空就保留全部数据，这次不发布新程序，改走恢复配置；upgrade 时：不清空就保留全部数据，只升级程序>`
+
+- **用户同意**：执行下面的命令，清除和后面的部署都算在这次确认内，中途不再确认。
+
+  ```bash
+  ./bin/moox-cli setup wipe --yes --expect <预览里的 plan.digest>
+  ```
+
+  - 清除后 `route` 是 `fresh`，走第 4 节。
+  - 预览里 `unknown_entries` 不为空时，把这些条目告诉用户：它们在部署目录里，也会被删除。
+  - 预览里 `skipped_dirs` 不为空时也告诉用户：这些目录看不到 MooX 的文件，不会清除。
+  - 中途失败后再运行一次会接着清：重新取预览，范围变小不用再问，范围变大要重新询问。
+  - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
+- **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
+
+## 4. 部署
 
 每一步成功的标志是输出里的 `*-ready`；失败先看输出的原因，不要盲目重试，重试要用同样的参数。耗时较长的命令放后台运行。
 `<主机ID>` 来自 `config init` 的输出：`control`（管理台）、`storage`、`overseas`、`factor`。
 
 ```bash
-./bin/moox-cli setup validate                                   # 校验配置与 SSH 连通
-./bin/moox-cli setup firewall                                   # 放行腾讯云防火墙端口
+./bin/moox-cli setup firewall --yes                             # 放行腾讯云防火墙端口（内容在部署计划里给用户确认过）
 ./bin/moox-cli setup bootstrap --stage core                     # 管理台机：Admin、主机网关、主机代理 → core-ready
 ./bin/moox-cli setup deploy-host --host storage                 # 每台非管理台主机各一次：storage、overseas、factor → host-ready
 ./bin/moox-cli setup deploy-unit --host storage --profile eventbus
@@ -122,7 +179,7 @@ cd moox-${VER}
 - `--create-proxy-ca` 只在管理台用内部证书（没有域名，`tls_mode` 为 internal 或 auto 判定为 internal）时的**首次**安装需要。
 - 每个 `deploy-unit` 只装 `moox.toml` 的 `[deployments]` 里登记在该主机上的组件；管理台与哪台共用、有没有海外机，以 `config init` 的结果为准。
 
-## 4. 初始化
+## 5. 初始化
 
 ```bash
 ./bin/moox-cli setup trust-browser                              # 内部证书时：让本机浏览器信任管理台证书
@@ -145,7 +202,7 @@ macOS 上用内部证书时，`trust-browser` 会请用户在系统弹窗里授�
 security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
 ```
 
-## 5. 验收与交付
+## 6. 验收与交付
 
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
 2. `./bin/moox-cli collector status --space-id crypto`：各数据集 `level: ok`。
@@ -153,7 +210,24 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
    币安现货与合约 1m K 线采集、两个 1m 因子任务。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
 4. 列出还没做、需要用户决定的事：长历史导入（[`initial-import.md`](initial-import.md)）、自定义因子（[`factor-dsl.md`](factor-dsl.md)）、自定义策略。
 
+## 保留数据
+
+新电脑上要保留旧部署的数据时，走恢复配置。前提：旧管理台能打开，旧部署做过 `config backup`，并且知道**初始**管理员密码。
+
+```bash
+./bin/moox-cli config restore
+```
+
+如实告诉用户取回之后能做什么：
+
+- 取回的只有配置。`setup validate`、`setup firewall`、`config backup` 这类只靠 SSH、云密钥或管理台登录的命令，有密钥就能用（SSH 密钥路径要重新核对）。
+- `doctor`、`setup deploy-*` 依赖操作员身份和本机状态，**这台电脑上用不了**。
+- 要升级时，优先回到当初部署的电脑操作。
+- 原电脑已经不可用时，告诉用户现在不支持在新电脑上接管旧部署，后续版本会提供；或者选择彻底清空。不要用 `native-release.sh` 绕过，也不要手动恢复身份。
+
 ## 升级到新版本
+
+这条路要求这台电脑就是当初部署的电脑（本机状态目录还在），新电脑上走“保留数据”一节。升级前比较两版 `catalog.yaml`，变了要整体发布。
 
 下载新版本的产物包与 CLI，在新目录里放入原来的 `moox.toml`（或 `config restore` 从管理台取回），然后：
 
@@ -167,10 +241,23 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 
 ## 常见问题
 
-| 现象 | 处理 |
-| --- | --- |
-| `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机）：请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
-| `ssh_auth_failed` | 免密登录没开通或公钥被删：让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
-| 腾讯云接口报权限不足 | 核对子用户的 6 个预设策略 |
-| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集，先从 `moox.toml` 去掉或先建采集任务 |
-| 产物包只有 linux/amd64 | ARM 服务器暂不支持 |
+| 现象 | 含义 | 处理 |
+| --- | --- | --- |
+| `route=blocked` | 属主或权限不符、端口被占用，或有部署目录之外的旧进程 | 按 `reasons` 处理，不要继续安装 |
+| `ssh_unreachable`，且是因子机 | 这台电脑和因子机不在同一网络 | 换到同一网络后重新运行 |
+| `bootstrap observation failed` 等“retry”提示 | SSH 连接断开 | 用同样的参数重试一次 |
+| `target_*`、`target_rejected` 开头的错误 | 目标机明确拒绝，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate`。`route` 看不出原因时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
+| `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |
+| `unit deployment requires the original core state directory…`、`…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |
+| `wipe_scope_changed` | 清除范围和预览不一致，没有清除任何主机 | 重新预览并确认 |
+| `wipe_failed`、`wipe_interrupted`、`wipe_incomplete` | 清除没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |
+| `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |
+| `delete_target_rejected` | 部署目录是系统目录或家目录，或看不到 MooX 标记 | 核对 `moox.toml` 的 `[paths]`，不要手工删除 |
+| `bundle_incomplete` | 产物包不完整，没有清除任何主机 | 重新下载产物包 |
+| `private material directory ownership or permissions are invalid` | 本机私有目录权限不对（CLI 会自动收紧属于自己的目录） | 按报错里的路径和命令处理 |
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | 系统 `known_hosts` 有旧记录，或机器确实换了 | 先跑 `setup validate`，通过说明 MooX 记录的指纹没变；不自己删记录，向用户说明 |
+| `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机） | 请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
+| `ssh_auth_failed` | 免密登录没开通或公钥被删 | 让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
+| 腾讯云接口报权限不足 | 子用户缺策略 | 核对子用户的 6 个预设策略 |
+| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
+| 产物包只有 linux/amd64 | ARM 服务器暂不支持 | 换 x86_64 服务器 |

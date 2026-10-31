@@ -14,8 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/configinit"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
@@ -50,6 +52,10 @@ type setupDeps struct {
 	exportSkillConfig     func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall        func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	ensureRelayFirewall   func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
+	scanDeployment func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
+	wipeHost       func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
+	trialPackage   func(context.Context, unitdeploy.CoreOptions) error
 }
 
 func init() {
@@ -65,6 +71,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newSetupInitCommand(deps),
+		newSetupWipeCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupSyncDeploymentsCommand(deps),
@@ -550,19 +557,30 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 
 func newSetupValidateCommand(deps setupDeps) *cobra.Command {
 	var file string
-	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接", RunE: func(cmd *cobra.Command, _ []string) error {
+	var options unitdeploy.CoreOptions
+	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接，并报告目标机器的部署情况与发布路线（route）", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
 		}
 		defer clearSetupSecrets(snapshot)
 		result, err := deps.validate(cmd.Context(), snapshot)
-		if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
+		output := setupValidateOutput{Result: result}
+		var deployment error
+		if err == nil && deps.scanDeployment != nil {
+			output.Deployment, deployment = setupDeploymentStatus(cmd.Context(), deps, snapshot, &options)
+		}
+		if encodeErr := writeSetupJSON(cmd, output); encodeErr != nil {
 			return encodeErr
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return deployment
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
+	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
+	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	return cmd
 }
 
@@ -782,6 +800,9 @@ func defaultSetupDeps() setupDeps {
 			return setupconfig.Load(path, root)
 		},
 		loadInitBundle:        loadSetupInitBundle,
+		scanDeployment:        defaultSetupScanDeployment,
+		wipeHost:              defaultSetupWipeHost,
+		trialPackage:          defaultSetupTrialPackage,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		apply:                 defaultSetupApply,
