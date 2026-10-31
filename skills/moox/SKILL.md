@@ -25,6 +25,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | --- | --- |
 | 第一次安装、部署、初始化（下载产物，不用编译） | [`references/install.md`](references/install.md) |
 | 了解各模块、日常管理命令速查 | [`references/modules.md`](references/modules.md) |
+| 全部命令一览（含低频命令，每个命令一行） | [`references/command-index.md`](references/command-index.md) |
 | 管理台上的操作在命令行怎么做（专用命令对照表；少数底层接口用 `gateway call`） | [`references/api-recipes.md`](references/api-recipes.md) |
 | 取采集的 K 线等数据 | [`references/data-query.md`](references/data-query.md) |
 | 首页“N 项需要处理”、告警、数据长时间未更新 | [`references/monitor-attention.md`](references/monitor-attention.md) |

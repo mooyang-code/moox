@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -392,4 +393,37 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 	require.True(t, ok)
 	matches, _ = index.kindMatches(rpcStrings, repeated)
 	assert.True(t, matches)
+}
+
+// skill 的完整命令清单必须列出每一个叶子命令：新增命令忘了写进 skills/moox/references/command-index.md，Agent 就不知道有它。
+func TestSkillCommandIndexListsEveryCommand(t *testing.T) {
+	mountRPCCommands(rootCmd)
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "skills", "moox", "references", "command-index.md"))
+	require.NoError(t, err)
+	index := string(raw)
+	var leaves []string
+	var walk func(cmd *cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		children := 0
+		for _, child := range cmd.Commands() {
+			if child.Name() == "help" || child.Hidden {
+				continue
+			}
+			children++
+			walk(child)
+		}
+		if children == 0 && cmd != rootCmd {
+			leaves = append(leaves, strings.TrimPrefix(cmd.CommandPath(), rootCmd.Name()+" "))
+		}
+	}
+	walk(rootCmd)
+	require.Greater(t, len(leaves), 200)
+	var missing []string
+	for _, leaf := range leaves {
+		if !strings.Contains(index, "| `"+leaf+"` |") {
+			missing = append(missing, leaf)
+		}
+	}
+	sort.Strings(missing)
+	assert.Empty(t, missing, "这些命令没有写进 skills/moox/references/command-index.md：\n%s", strings.Join(missing, "\n"))
 }

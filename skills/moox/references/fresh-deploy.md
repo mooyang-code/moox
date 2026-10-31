@@ -149,7 +149,7 @@ $S validate --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml --factor-tas
 $S create --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml
 # 3) 创建观察实例（不挂账户）并启用，记下 instance_id
 $S instance create --strategy-id <strategy_id> --factor-task-id ftask_swap_1m
-$S instance enable --instance-id <instance_id>
+$S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 ```
 
 启用后实例自动 init、start 并（无账户）自动 confirm 进入运行；`strategy result list --instance-id <instance_id>` 看每期结果，管理台的策略页能看到它。第一期是 `skipped(previous_version_unknown)`（用到 `bars[-1]` 需要上一根的版本证据），从第二期起正常求值；每期按条件筛选，满足的合约进入目标、不满足的记 `filtered`。注意 zsh 里把命令存进变量再 `$CALL` 调用不会分词，用函数 `call() { $CLI gateway call trpc.moox.strategy.StrategyMgr --space crypto "$@"; }`。一个因子任务只能被一个实例关联，且创建后不能改、不能删，所以这个任务留给默认策略，别的实例另建因子任务。

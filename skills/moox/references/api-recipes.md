@@ -50,7 +50,7 @@
 ./bin/moox-cli strategy validate --dsl-file s.yaml --factor-task-id <任务>
 ./bin/moox-cli strategy create --dsl-file s.yaml
 ./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task-id <任务>
-./bin/moox-cli strategy instance enable --instance-id <ID>
+./bin/moox-cli strategy instance enable --instance-id <ID>        # 先预览，确认后加 --yes
 
 # 破坏性：先预览，给用户确认后再加 --yes
 ./bin/moox-cli factor task delete --task-id <任务>

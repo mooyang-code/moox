@@ -34,14 +34,19 @@
 ./bin/moox-cli collector task list|show|update|disable|inventory      # 任务查询、改名与启停
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
+./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
+./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
 ./bin/moox-cli collector resample preview|backfill|jobs|cancel ...    # 历史 K 线合成
 ./bin/moox-cli collector subjects exclude|unexclude|exclusions|sync|status|listers
 ./bin/moox-cli collector ingest-mode get|set                          # WS 推送 / 定时拉取
-./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集
+./bin/moox-cli collector fetch-plan pause|resume                      # 暂停或恢复整个空间的采集（pause 默认只预览，--yes 才执行）
 ./bin/moox-cli collector data-type list|show                          # 可采集的数据类型
 ```
 
-- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。
+- 删除任务与结果不可恢复：`collector task delete`、`delete-result` 默认只预览，`--yes` 才执行。`collector task purge` 清理 Collector 本机库里的任务运行数据与结果引用（默认只输出清单，`--yes` 才执行），属于重置前后的维护动作，先问用户。
+- Storage 数据被清空后，要让采集重新登记序列快照并重置补采状态：`collector fetch-plan reregister --space-id <空间> --yes`（系统重置后的必做步骤，见 [`fresh-deploy.md`](fresh-deploy.md)）。
+- SCF 函数包与发布：`collector function package`（构建代码包）、`upload`（构建或使用现成的包并只上传，不创建函数）、`delete`（按条件异步删除函数，默认只列目标）、
+  `probe-egress`（逐个调用短时函数诊断公网出口与行情源连通性）、`timer-inventory`（只读盘点 Timer 函数并校验云侧读回）。
 - 云函数：`cloud function list|job|invoke|create|deploy|update-config|delete`、`cloud package list|show|url|delete`、`cloud scf preview|import`、`cloud account list|regions|delete`；
   创建、部署、改配置、删除会自动持有采集发布租约；代码包上传用 `collector function upload`；云账户的新建与修改带密钥，请用户在管理台填写。
 - 长历史导入：[`initial-import.md`](initial-import.md)。取 K 线数据：[`data-query.md`](data-query.md)。
@@ -55,6 +60,7 @@
   - 读数据：`data kline get`、`data rows export|count`、`data view query`、`data records search`。
   - 维护：`storage repair-view|force-rebuild-view|reset-view-consumers|reset-metadata|delete-view|purge-dataset-events|period-inventory`
     （经 SSH 在存储机上执行，不带 `--yes` 只预览；见 [`cli-operations.md`](cli-operations.md)、[`view-catchup.md`](view-catchup.md)）；节点登记 `storage node list|show|update|delete`。
+- **其他**：`metadata spaces` 列出一份种子文件里可导入的业务空间；`setup storage-auth` 经 SSH 从存储机读一次 Primary 角色密钥存到本机操作员目录（`import`、`data rows export` 要用，只需一次，不打印）。
 - **注意**：新建 View、加标的、调大 `view_rows_per_series` 都会增加存储机内存，按 [`storage.md`](storage.md) 估算并提醒用户。保留期等配置改在 `moox.toml` 后要重装对应单元才生效。
 - 协议与命名规则：[`protocol.md`](protocol.md)。
 
@@ -67,7 +73,10 @@
   - 任务与成员：`factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`；批量配置写进 `moox.toml` 的 `[factors]` 后 `./bin/moox-cli setup factors`；
   - 补算与状态：`factor recalc submit|list|show|cancel`（左闭右开）、`factor status`；
   - 阶段控制 `./bin/moox-cli lifecycle status|check|init|start|confirm|pause|resume --task-id <任务>`（默认连因子引擎，`--module` 换模块）；
-  - 自定义算子 `./bin/moox-cli udf …`（[`udf.md`](udf.md)）。
+  - 生命周期的其余命令：`lifecycle catchup`（恢复追赶进度）、`release`（追平后手动放行，配合 `resume --manual-release`）、`shadow --space-id <空间> --id <实例>`（读 Trade 为试运行实例记录的影子目标，固定连 trade 模块）；
+    单个模块的重置 `lifecycle reset-plan|reset-apply|reset-status|reset-abort`：先 `pause` 模块，`reset-plan --scope data|all` 只读列出每一步与阻止条件并给 10 分钟内有效、只能用一次的令牌，再 `reset-apply --token … --scope … --yes`；
+    会删除运行数据，必须先得到用户明确同意，整套系统的重置用 `system reset`；
+  - 自定义算子 `./bin/moox-cli udf new|build|publish|preview|activate|list|show`（[`udf.md`](udf.md)；`activate` 默认只看影响清单，`--yes` 才切换）。
 - **注意**：被启用成员引用的定义不能改；长回看因子受保留期、`window.lookback`、`compute.max_memory` 三道限制。
 
 ## 策略
@@ -100,7 +109,9 @@
 - 新增、部署、启停、移除主机和部署，外部程序（因子引擎、归档 Worker）的安装与退役：[`host-registry.md`](host-registry.md)。管理台对这些只读；查询用 `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host <主机>`。
 - 要在某台主机上执行一条命令或传文件：`host exec --host <ID> -- <命令>`、`host get|put`（经 SSH，退出码透传；只能出站的主机不能 SSH）。会改动主机的命令先把完整命令给用户确认。
 - 升级已安装的单元：[`native-release.md`](native-release.md)；主机代理：[`host-agent.md`](host-agent.md)。
-- 腾讯云：`setup firewall`（防火墙）、`setup reboot-host`（重启无响应的主机）、`ops tencent cls …`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；这些写操作默认只预览，`--yes` 才执行。
+- 腾讯云：`setup firewall`（按拓扑放行所需端口）、`ops tencent lighthouse firewall add|open`（单独加规则；`open` 用控制面登记的云账户凭证，凭证不打印）、`setup reboot-host`（重启无响应的主机）、
+  `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
+- 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup render-runtime-config` 从 `moox.toml` 渲染 Egress、Collector 运行配置；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
 
 ## 归档（只有命令行）
 
@@ -109,15 +120,17 @@
 ```bash
 ./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐执行计划
 ./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> --cron "0 30 2 * * *"
-./bin/moox-cli archive overview | runs list | partitions list|get
+./bin/moox-cli archive tasks list|preview               # 列出任务；校验执行计划并预览接下来 5 次运行与读取区间
+./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
 ./bin/moox-cli archive tasks backfill|run|update|delete ...
+./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记
 ```
 
 ## 系统暂停、恢复与重置（只有命令行）
 
 ```bash
 ./bin/moox-cli system status     # 按 moox.toml 自动连各模块，没有部署的模块跳过
-./bin/moox-cli system pause      # 从下游到上游逐个暂停
+./bin/moox-cli system pause      # 从下游到上游逐个暂停（默认只预览将要暂停的模块，--yes 才执行）
 ./bin/moox-cli system resume     # 先追赶补采，全部追平后统一放行
 ./bin/moox-cli system reset plan|apply|status|abort   # 删除运行数据回到“刚部署完”的状态，破坏性，必须先得到用户明确确认
 ```
