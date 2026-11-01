@@ -938,3 +938,14 @@ func TestPlanStepsGroupsParallelStepsAndFillsSpace(t *testing.T) {
 	retried := PlanSteps(stepsManifest(), RouteUpgrade, LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, Units: map[string]bool{}, Started: map[string]bool{"crypto": true}}, "crypto")
 	require.True(t, slices.ContainsFunc(retried, func(step Step) bool { return step.Kind == StepBackup }), "备份失败后重跑要补上")
 }
+
+func TestUnfinishedReasonIgnoresPostInstallSteps(t *testing.T) {
+	manifest := stepsManifest()
+	done := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
+	for _, step := range PlanSteps(manifest, RouteFresh, LocalState{}, "") {
+		if step.Kind == StepUnit || step.Kind == StepHost {
+			done.Units[step.Host+"/"+map[bool]string{true: "host", false: step.Unit}[step.Kind == StepHost]] = true
+		}
+	}
+	require.Empty(t, UnfinishedReason(manifest, RouteUpgrade, done), "部署全部完成时，备份和启动不算没做完")
+}

@@ -178,3 +178,10 @@ func TestSetupInstallRefusesSpaceWithoutPrerequisites(t *testing.T) {
 	_, err := h.run(t, newSetupInstallCommand, "--space-id", "stockcn")
 	require.ErrorContains(t, err, "start_prerequisite_missing")
 }
+
+func TestSetupInstallRefusesOutsideBundle(t *testing.T) {
+	h := newInstallHarness(t)
+	t.Chdir(t.TempDir())
+	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto")
+	require.ErrorContains(t, err, "产物包目录")
+}

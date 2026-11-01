@@ -17,7 +17,7 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 	local.StaleBinding = false
 	// 验收是安装后的检查，没有记录不代表部署没做完。
 	pending := slices.DeleteFunc(NextSteps(manifest, route, local), func(step string) bool {
-		return strings.Contains(step, "setup verify") || strings.Contains(step, "setup start")
+		return strings.Contains(step, "setup verify") || strings.Contains(step, "setup start") || strings.Contains(step, "config backup")
 	})
 	if len(pending) == 0 {
 		return ""

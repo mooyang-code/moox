@@ -146,7 +146,7 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 			return err
 		}
 	}
-	hosts, err := setupInstallPreflight(ctx, deps, manifest, options)
+	hosts, err := setupInstallPreflight(ctx, deps, manifest, options, pending)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func checkSetupWipe(plan deployscan.Plan, options setupInstallOptions) error {
 }
 
 // setupInstallPreflight 实测每台的下载源。源不通时部署阶段由这台电脑推送，只是慢，不算失败。
-func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupconfig.Manifest, options setupInstallOptions) ([]setupInstallHost, error) {
+func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupconfig.Manifest, options setupInstallOptions, pending []deployscan.Step) ([]setupInstallHost, error) {
 	list := manifest.Hosts()
 	hosts := make([]setupInstallHost, len(list))
 	errs := make([]error, len(list))
@@ -229,7 +229,11 @@ func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupco
 		return hosts, err
 	}
 	// 目标机下载不了时靠这台电脑推送。这里也不通就在动旧部署之前停下。
-	if slices.ContainsFunc(hosts, func(host setupInstallHost) bool { return !host.Reachable }) && !deps.localReachable(ctx, options.deploy) {
+	// 只差备份或验收时不用下载，不能因为下载源不通拦住重跑。
+	deploys := slices.ContainsFunc(pending, func(step deployscan.Step) bool {
+		return slices.Contains([]string{deployscan.StepAdmin, deployscan.StepHost, deployscan.StepUnit, deployscan.StepControl}, step.Kind)
+	})
+	if deploys && slices.ContainsFunc(hosts, func(host setupInstallHost) bool { return !host.Reachable }) && !deps.localReachable(ctx, options.deploy) {
 		return hosts, errors.New("download_failed: 目标机和这台电脑都连不上下载源，没有动任何主机；检查网络后重跑")
 	}
 	return hosts, nil
