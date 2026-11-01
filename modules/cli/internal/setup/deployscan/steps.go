@@ -15,7 +15,8 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 		return ""
 	}
 	local.StaleBinding = false
-	pending := NextSteps(manifest, route, local)
+	// 验收是安装后的检查，没有记录不代表部署没做完。
+	pending := slices.DeleteFunc(NextSteps(manifest, route, local), func(step string) bool { return strings.Contains(step, "setup verify") })
 	if len(pending) == 0 {
 		return ""
 	}
@@ -92,8 +93,8 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState) []
 }
 
 // ManualSteps 列出要用户自己做的事。浏览器信任要这台电脑的管理员授权，不放进 NextSteps，免得 Agent 卡在这里。
-func ManualSteps(route string, local LocalState) []string {
-	if route != RouteFresh && route != RouteResume && (route != RouteUpgrade || local.StaleBinding) {
+func ManualSteps(route string) []string {
+	if route != RouteFresh && route != RouteResume {
 		return nil
 	}
 	return []string{"管理台装好后，在自己的终端运行 ./bin/moox-cli setup trust-browser。不做时管理台能打开，但浏览器有安全提示"}

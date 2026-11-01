@@ -38,7 +38,7 @@ func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, optio
 	return bootstrap(ctx, snapshot, options.DeployOptions, &options)
 }
 
-func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, transport setupssh.Client, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
+func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
 	components, err := unitComponents(snapshot.Manifest, request.Topology.ControlHostID, "control")
 	if err != nil {
 		return request, nil, err
@@ -280,7 +280,7 @@ func checkControlDependencies(snapshot *setupconfig.Snapshot, root *os.Root, com
 				Stage string `json:"stage"`
 			}
 			if err := readJSON(root, filepath.Join("units", host.Name, profile, unitReadyFile), 4096, &ready); err != nil || ready.Stage != profile+"-ready" {
-				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务暂停时用 setup restart", host.Name, profile, host.Name, profile)
+				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务被暂停时先运行 system resume，再重新部署这个单元", host.Name, profile, host.Name, profile)
 			}
 		}
 		if !found {

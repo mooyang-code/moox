@@ -1047,8 +1047,13 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 
 // setupHasTerminal 在测试里替换。
 var setupHasTerminal = func() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	stdin, err := os.Stdin.Stat()
+	if err != nil || stdin.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	// /dev/null 也是字符设备，Agent 的标准输入常常指向它。
+	null, err := os.Stat(os.DevNull)
+	return err == nil && !os.SameFile(stdin, null)
 }
 
 // manualBrowserTrustCommand 是用户在自己终端运行的信任命令。

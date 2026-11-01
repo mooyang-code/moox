@@ -36,9 +36,9 @@ broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `
 本机已有 CA 绑定不匹配时拒绝覆盖，身份轮换使用显式流程。
 
 本机验证为 `make test-unit-admin`。Linux 门禁 `make test-unit-admin-linux` 只执行预构建的
-测试与软件，必须提供 `MOOX_CORE_TEST_BINARY`、`MOOX_RUNTIME_BINARY`、
+测试与软件，必须提供 `MOOX_ADMIN_TEST_BINARY`、`MOOX_RUNTIME_BINARY`、
 `MOOX_BOOTSTRAP_HOST_ARCHIVE`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`、只含公开模板的
-合成 Git 仓库 `MOOX_CORE_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
+合成 Git 仓库 `MOOX_ADMIN_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
 Access、出口代理、Trade/Trade CLI 和四个 Storage 二进制（仅三个服务需要 CGO）。真实 SSH/SFTP 场景从首次制品准备开始，使用
 完整三主机拓扑核验三个核心服务、主机指纹拒绝、操作员身份范围、重复执行 PID 保持、
 本机状态丢失拒绝替换凭据。其余主机只参与拓扑与签发，未在此场景启动。

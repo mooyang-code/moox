@@ -105,12 +105,32 @@ func TestStrategyRules(t *testing.T) {
 	require.Equal(t, Skip, status(Evaluate(in), "strategy"))
 }
 
-func TestNoEnabledTasksSkips(t *testing.T) {
-	in := healthy()
-	in.Datasets = nil
+func TestNoEnabledTasksFails(t *testing.T) {
+	checks := Evaluate(Input{Now: now})
+	require.Equal(t, Fail, checks[0].Status)
+	require.Equal(t, CodeNoCollectionTasks, checks[0].Code)
+	require.True(t, Settled(checks), "空间没有任务不用再等")
+}
+
+func TestSmallDatasetGapIsNotDiluted(t *testing.T) {
+	in := Input{Now: now, HasPlan: true, Datasets: []Dataset{
+		{ID: "large", Registered: true, Frequency: "1m", Expected: 1000},
+		{ID: "small", Registered: true, Frequency: "1m", Expected: 10, Missing: 10},
+	}}
+	check := klines(in)
+	require.Equal(t, Wait, check.Status)
+	require.Contains(t, check.Detail, "small")
+}
+
+func TestMarketClosedFactorOnlyMustNotFail(t *testing.T) {
+	in := Input{Now: now.Add(time.Hour), HasPlan: true, FactorDeployed: true,
+		Datasets: []Dataset{{ID: "d", Registered: true, Frequency: "1m", EffectiveFrom: now}},
+		Factors:  []Factor{{TaskID: "f", Frequency: "1m", LastPeriod: 5, Baseline: 5, SourceEnabled: true}}}
 	checks := Evaluate(in)
-	require.Equal(t, Skip, status(checks, "plan"))
-	require.Equal(t, Skip, status(checks, "kline"))
+	require.Equal(t, Skip, checks[1].Status)
+	require.Equal(t, Pass, checks[2].Status)
+	in.Factors[0].LastStatus = "failed"
+	require.Equal(t, Wait, Evaluate(in)[2].Status)
 }
 
 func TestFinishTurnsWaitIntoFail(t *testing.T) {

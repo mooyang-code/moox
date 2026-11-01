@@ -31,7 +31,8 @@ func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 		Short: "验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读",
 		Long: `按已启用的任务逐项检查，等到通过或超时。开头没有计划、第一根 K 线还没收盘时算等待，到超时才失败。
 K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口靠之后补采。因子预热期状态是 degraded，也算通过。
-没有部署因子引擎、没有启用的策略实例、空间没有启用的 K 线任务时，对应的检查跳过。`,
+没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有启用的 K 线任务时直接失败，不算通过。
+休市时 K 线检查跳过，因子只看最近一期没有失败。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(spaceID) == "" {
@@ -82,19 +83,26 @@ type setupVerifySource interface {
 func runSetupVerify(ctx context.Context, source setupVerifySource, timeout, poll time.Duration) ([]verify.Check, error) {
 	deadline := time.Now().Add(timeout)
 	baseline := map[string]int64{}
-	first, err := source.read(ctx, baseline)
-	if err != nil {
-		return nil, err
-	}
-	for _, factor := range first.Factors {
-		baseline[factor.TaskID] = factor.LastPeriod
-	}
+	started := false
 	for {
 		input, err := source.read(ctx, baseline)
-		if err != nil {
-			return nil, err
+		var checks []verify.Check
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return nil, ctx.Err()
+		case err != nil:
+			// 组件可能还在启动或瞬断，和数据没到一样等到超时。
+			checks = []verify.Check{{Name: "read", Status: verify.Wait, Code: verify.CodeReadFailed, Detail: err.Error()}}
+		case !started:
+			// 第一次读成功才有基准，之后才能判断因子有没有前进。
+			for _, factor := range input.Factors {
+				baseline[factor.TaskID] = factor.LastPeriod
+			}
+			started = true
+			continue
+		default:
+			checks = verify.Evaluate(input)
 		}
-		checks := verify.Evaluate(input)
 		if verify.Settled(checks) {
 			return checks, nil
 		}
@@ -154,7 +162,7 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	sources := map[string]bool{}
 	from, to := now.Truncate(time.Minute).Add(-3*time.Minute).Format(time.RFC3339), now.Format(time.RFC3339)
 	for _, task := range tasks.GetTasks() {
-		id := setupTaskDatasetID(task)
+		id := task.GetResult().GetDatasetId()
 		sources[id] = true
 		dataset := verify.Dataset{ID: id}
 		if entry := registered[id]; entry != nil {
@@ -176,6 +184,9 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 		if err := r.gateway.Invoke(ctx, factorMgr, "ListFactorTasks", &factorpb.ListFactorTasksReq{Status: "enabled"}, rsp); err != nil {
 			return input, fmt.Errorf("read factor tasks: %w", err)
 		}
+		if ret := rsp.GetRetInfo(); ret.GetCode() != 0 {
+			return input, fmt.Errorf("read factor tasks: %s (code %d)", ret.GetMsg(), ret.GetCode())
+		}
 		for _, info := range rsp.GetFactorTasks() {
 			task := info.GetFactorTask()
 			if !strings.EqualFold(task.GetSpaceId(), r.spaceID) {
@@ -195,14 +206,6 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	return input, nil
 }
 
-// setupTaskDatasetID 返回采集任务的结果数据集：优先用任务结果里已提交的视图 ID 推出，和 Collector 的派生规则一致。
-func setupTaskDatasetID(task *collectorpb.CollectionTask) string {
-	if view := task.GetResult().GetViewId(); strings.HasPrefix(view, "view_") {
-		return "dataset_" + strings.TrimPrefix(view, "view_")
-	}
-	return "dataset_" + strings.ToLower(task.GetTaskId())
-}
-
 // readStrategyInstances 读空间的策略实例。CLI 不依赖策略模块的协议包，这里按 JSON 取需要的字段。
 func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwarder, spaceID string) ([]verify.Instance, error) {
 	var rsp json.RawMessage
@@ -211,6 +214,10 @@ func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwa
 		return nil, fmt.Errorf("read strategy instances: %w", err)
 	}
 	var parsed struct {
+		RetInfo struct {
+			Code json.RawMessage `json:"code"`
+			Msg  string          `json:"msg"`
+		} `json:"ret_info"`
 		Instances []struct {
 			InstanceID string `json:"instance_id"`
 			Enabled    bool   `json:"enabled"`
@@ -219,6 +226,10 @@ func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwa
 	}
 	if err := json.Unmarshal(rsp, &parsed); err != nil {
 		return nil, fmt.Errorf("read strategy instances: %w", err)
+	}
+	// JSON 里枚举可能是数字或名字，成功时也可能省略。
+	if code := strings.Trim(string(parsed.RetInfo.Code), `"`); code != "" && code != "0" && code != "SUCCESS" {
+		return nil, fmt.Errorf("read strategy instances: %s (code %s)", parsed.RetInfo.Msg, code)
 	}
 	instances := make([]verify.Instance, 0, len(parsed.Instances))
 	for _, item := range parsed.Instances {

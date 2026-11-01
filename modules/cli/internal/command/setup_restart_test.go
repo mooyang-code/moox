@@ -44,6 +44,11 @@ func TestSetupRestartLocatesUnitDirectory(t *testing.T) {
 	require.ErrorContains(t, err, "服务目录里没有组件")
 }
 
+func TestSetupRestartPausedDetected(t *testing.T) {
+	require.True(t, setupRestartPaused(`{"components":[{"id":"monitor","state":"paused"}]}`))
+	require.False(t, setupRestartPaused(`{"components":[{"id":"monitor","state":"running"}]}`))
+}
+
 func TestSetupRestartPreviewsUntilConfirmed(t *testing.T) {
 	snapshot := &setupconfig.Snapshot{Manifest: restartManifest()}
 	called := 0

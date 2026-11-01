@@ -22,7 +22,7 @@
 
 请求可显式指定 `control.components` 为完整部署清单的唯一子集，必须包含 Admin；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在部署清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
 
-代理首次 internal CA 必须由请求的 `proxy_ca.create` 显式授权，或以 `proxy_ca.import_directory` 提供关闭后的规范源树；源树只需 `console-proxy/data` 和 `console-proxy/certs`，必须包含原始发布的根证书和指纹。创建和导入互斥，常规服务配置不接受初始化权限。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致；public-only 不生成多余 internal CA。
+代理的内部 CA 在首次安装时自动创建；上一版已含 Console Proxy 却没有回执时拒绝创建，不替换原有 CA。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致。
 
 EventBus 角色和 TLS 身份保存在 Admin 的加密 secret 表，重跑复用；CA/服务端证书丢失一半或端点不匹配时拒绝替换，损坏证书在导出前拒绝。两个 EventBus 子进程与离线 bootstrap 使用相同的锁继承和父进程死亡约束。bootstrap 实际服务测试核对升级前后的角色令牌和 EventBus CA 保持一致；broker 的连接鉴权由 EventBus 自身的集成测试验证。
 

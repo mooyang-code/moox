@@ -231,7 +231,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 	}
 	overrides := [2]map[string][]byte{{}, {}}
 	if controlOptions != nil {
-		request, overrides[1], err = controlInput(ctx, snapshot, root, transport, request, identity, packages[1], *controlOptions)
+		request, overrides[1], err = controlInput(ctx, snapshot, root, request, identity, packages[1], *controlOptions)
 		if err != nil {
 			return result, err
 		}

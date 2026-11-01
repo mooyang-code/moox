@@ -97,7 +97,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	control := snapshot.Manifest.ControlHost().Name
 	status := &setupDeployment{Decision: deployscan.Decide(reports, control, local), Hosts: reports, Warnings: diskWarnings(reports, control)}
 	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local)
-	status.ManualSteps = deployscan.ManualSteps(status.Route, local)
+	status.ManualSteps = deployscan.ManualSteps(status.Route)
 	if len(deployscan.CollectSpaces(snapshot.Manifest)) == 0 {
 		status.Warnings = append(status.Warnings, "这个拓扑没有 collector-stream，也没配云函数，默认的 crypto 采集任务不会运行")
 	}

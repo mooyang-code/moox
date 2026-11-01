@@ -106,6 +106,12 @@ func defaultSetupRestartComponent(ctx context.Context, target setupRestartTarget
 	}
 	defer client.Close()
 	if target.External {
+		// 用户停用的外部程序不能被重启顺带启用。
+		unit, _ := unitdeploy.ExternalProgramUnit(target.Component)
+		output, err := client.Run(ctx, []string{"systemctl", "--user", "is-enabled", unit}, nil)
+		if err != nil || output.ExitCode != 0 {
+			return nil, fmt.Errorf("restart_failed: %s 在 %s 上没有启用，restart 不会启用它", target.Component, target.Host.Name)
+		}
 		if err := unitdeploy.StartExternalService(ctx, client, target.Component, target.Directory); err != nil {
 			return nil, err
 		}
@@ -120,5 +126,25 @@ func defaultSetupRestartComponent(ctx context.Context, target setupRestartTarget
 	if err != nil || output.ExitCode != 0 || !json.Valid([]byte(output.Stdout)) {
 		return nil, fmt.Errorf("restart_unverified: %s 已重启，但读不到状态，用 setup logs --host %s --component %s 确认", target.Component, target.Host.Name, target.Component)
 	}
+	if setupRestartPaused(output.Stdout) {
+		return nil, fmt.Errorf("restart_failed: %s 处于暂停状态，restart 不解除暂停，先运行 system resume", target.Component)
+	}
 	return json.RawMessage(output.Stdout), nil
+}
+
+// setupRestartPaused 报告 status.sh 的输出里组件是否处于暂停状态。
+func setupRestartPaused(status string) bool {
+	var parsed struct {
+		Components []struct {
+			State string `json:"state"`
+		} `json:"components"`
+	}
+	if json.Unmarshal([]byte(status), &parsed) != nil {
+		return false
+	}
+	return slices.ContainsFunc(parsed.Components, func(component struct {
+		State string `json:"state"`
+	}) bool {
+		return component.State == "paused"
+	})
 }

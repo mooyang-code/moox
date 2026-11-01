@@ -28,7 +28,7 @@ func (c controlTransport) Run(_ context.Context, args []string, _ io.Reader) (se
 func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *testing.T) {
 	directory := t.TempDir()
 	for id, template := range map[string]string{
-		"console-proxy": "public: {host: localhost, port: 9527, http3: true}\ntls: {mode: internal, storage_root: ../data/caddy/caddy}\nlifecycle: {drain_timeout: 91s}\n",
+		"console-proxy": "public: {host: localhost, port: 9527, http3: true}\ntls: {storage_root: ../data/caddy/caddy}\nlifecycle: {drain_timeout: 91s}\n",
 		"monitor":       "deployment: {enabled: true, https: {}}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
 		"collector":     "database: {path: ./data/collector.db}\nstorage: {result_data_node_id: obsolete-node}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
 		"factor-mgr":    "engine: {lease_ttl: 73s}\n",
@@ -50,6 +50,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	}
 	proxy, monitor, collector := decode("console-proxy"), decode("monitor"), decode("collector")
 	require.Equal(t, "2001:db8::10", proxy["public"].(map[string]any)["host"])
+	require.NotContains(t, proxy["tls"], "mode", "Console Proxy 严格解析配置，不能再带 mode")
 	require.Equal(t, "91s", proxy["lifecycle"].(map[string]any)["drain_timeout"])
 	https := monitor["deployment"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
 	require.Equal(t, "https://[2001:db8::10]:9527/", https["url"])

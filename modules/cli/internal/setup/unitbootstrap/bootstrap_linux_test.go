@@ -63,7 +63,7 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 		return filename
 	}
 	request.Control.Overrides["admin/config/console.yaml"] = write("console.yaml", "jwt:\n  secret_key: ''\n  access_expired: 24h\nconsole:\n  debug: false\ncors:\n  allowed_origins: [https://localhost:9527]\n")
-	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
+	request.Control.Overrides["console-proxy/config/app.yaml"] = write("proxy.yaml", "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: 9527\n  http3: false\ntls:\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: 127.0.0.1:11000\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 2s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 15s\n")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

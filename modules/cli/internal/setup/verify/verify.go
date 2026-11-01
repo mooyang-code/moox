@@ -17,6 +17,8 @@ const (
 // 失败时的错误码，install.md 的处理表要逐项对应。
 const (
 	CodeCollectionNotStarted = "collection_not_started"
+	CodeNoCollectionTasks    = "no_collection_tasks"
+	CodeReadFailed           = "verify_read_failed"
 	CodeKlineNotArrived      = "kline_not_arrived"
 	CodeFactorNotAdvancing   = "factor_not_advancing"
 	CodeStrategyNotRunning   = "strategy_not_running"
@@ -78,14 +80,16 @@ type Check struct {
 
 // Evaluate 判断这一轮的结果。这里只给 pass、wait、skip：等到超时才算失败，由 Finish 转换。
 func Evaluate(in Input) []Check {
-	return []Check{plan(in), klines(in), factors(in), strategies(in)}
+	kline := klines(in)
+	return []Check{plan(in), kline, factors(in, kline.Status == Skip), strategies(in)}
 }
 
 func plan(in Input) Check {
 	check := Check{Name: "plan", Code: CodeCollectionNotStarted}
 	switch {
 	case len(in.Datasets) == 0:
-		check.Status, check.Code, check.Detail = Skip, "", "这个空间没有启用的 K 线任务"
+		// 没有任务就没有数据，空间写错或种子没写入时不能算通过。
+		check.Status, check.Code, check.Detail = Fail, CodeNoCollectionTasks, "这个空间没有启用的 K 线任务"
 	case !in.HasPlan:
 		check.Status, check.Detail = Wait, "还没有采集计划"
 		if in.PlanIssue != "" {
@@ -105,7 +109,7 @@ func klines(in Input) Check {
 		check.Status, check.Code, check.Detail = Skip, "", "这个空间没有启用的 K 线任务"
 		return check
 	}
-	expected, missing := 0, 0
+	expected, missing, settled := 0, 0, 0
 	for _, dataset := range in.Datasets {
 		if !dataset.Registered {
 			check.Status, check.Detail = Wait, "数据集 "+dataset.ID+" 还没进入采集计划"
@@ -118,21 +122,25 @@ func klines(in Input) Check {
 			}
 			continue // 休市或频率大于 1m：最近几期本来就没有 K 线。
 		}
+		// 逐个数据集判断，小数据集全缺不能被大数据集稀释。
+		if float64(dataset.Missing) > float64(dataset.Expected)*maxMissingRatio {
+			check.Status, check.Detail = Wait, fmt.Sprintf("数据集 %s 缺失 %d/%d 根", dataset.ID, dataset.Missing, dataset.Expected)
+			return check
+		}
 		expected += dataset.Expected
 		missing += dataset.Missing
+		settled++
 	}
-	switch {
-	case expected == 0:
+	if settled == 0 {
 		check.Status, check.Code, check.Detail = Skip, "", "最近几期没有应有的 K 线，按休市处理"
-	case float64(missing) > float64(expected)*maxMissingRatio:
-		check.Status, check.Detail = Wait, fmt.Sprintf("缺失 %d/%d 根", missing, expected)
-	default:
-		check.Status, check.Code, check.Detail = Pass, "", fmt.Sprintf("缺失 %d/%d 根", missing, expected)
+		return check
 	}
+	check.Status, check.Code, check.Detail = Pass, "", fmt.Sprintf("缺失 %d/%d 根", missing, expected)
 	return check
 }
 
-func factors(in Input) Check {
+// factors 判断因子任务。marketClosed 时 1m 任务本来就不前进，只看最近一期没有失败。
+func factors(in Input, marketClosed bool) Check {
 	check := Check{Name: "factor", Code: CodeFactorNotAdvancing}
 	if !in.FactorDeployed {
 		check.Status, check.Code, check.Detail = Skip, "", "没有部署因子引擎"
@@ -149,7 +157,7 @@ func factors(in Input) Check {
 			check.Status, check.Detail = Wait, "因子任务 "+factor.TaskID+" 最近一期失败"
 			return check
 		}
-		if factor.Frequency == "1m" && factor.LastPeriod <= factor.Baseline {
+		if factor.Frequency == "1m" && !marketClosed && factor.LastPeriod <= factor.Baseline {
 			check.Status, check.Detail = Wait, "因子任务 "+factor.TaskID+" 还没有前进"
 			return check
 		}

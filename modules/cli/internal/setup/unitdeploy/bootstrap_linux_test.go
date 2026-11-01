@@ -192,7 +192,7 @@ func copyArtifact(t *testing.T, source, destination string, mode os.FileMode) {
 }
 
 func TestNativeAdminBootstrapOverVerifiedSSHWithFullFleetTopology(t *testing.T) {
-	if os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE") == "" || os.Getenv("MOOX_CORE_SOURCE_ROOT") == "" {
+	if os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE") == "" || os.Getenv("MOOX_ADMIN_SOURCE_ROOT") == "" {
 		t.Skip("requires actual prebuilt Linux artifacts; mandatory in native admin Linux gate")
 	}
 	root, err := os.MkdirTemp("", "moox-native-admin-")
@@ -237,7 +237,7 @@ compute1 = ["access"]
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
 	snapshot, err := setupconfig.Load(configPath, root)
 	require.NoError(t, err)
-	options := DeployOptions{RepositoryRoot: os.Getenv("MOOX_CORE_SOURCE_ROOT"), BinaryDirectory: filepath.Join(root, "bin"), StateDirectory: filepath.Join(root, "operator-state"), OperatorDirectory: filepath.Join(root, "operator-config"), SSH: setupssh.Options{KnownHostsPath: filepath.Join(root, "known_hosts"), DisableAgent: true}}
+	options := DeployOptions{RepositoryRoot: os.Getenv("MOOX_ADMIN_SOURCE_ROOT"), BinaryDirectory: filepath.Join(root, "bin"), StateDirectory: filepath.Join(root, "operator-state"), OperatorDirectory: filepath.Join(root, "operator-config"), SSH: setupssh.Options{KnownHostsPath: filepath.Join(root, "known_hosts"), DisableAgent: true}}
 	require.NoError(t, os.WriteFile(options.SSH.KnownHostsPath, nil, 0o600))
 	require.NoError(t, os.Mkdir(options.BinaryDirectory, 0o700))
 	for i, source := range []string{os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE")} {
@@ -323,7 +323,7 @@ compute1 = ["access"]
 	// Losing native state cannot replace credentials or restart a healthy
 	// target. Prebuilt input is explicit; this gate never invokes a compiler.
 	options.StateDirectory = filepath.Join(root, "lost-native-state")
-	options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
+	options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_ADMIN_SOURCE_ROOT"), filepath.Join(root, "bin")
 	_, err = BootstrapAdmin(t.Context(), snapshot, options)
 	require.ErrorContains(t, err, "original state directory")
 	require.Equal(t, host, status(initial.Bootstrap.HostDirectory))
@@ -423,7 +423,7 @@ compute1 = ["access"]
 		for _, binary := range []string{"moox-access", "moox-egress-proxy", "moox-trade", "moox-trade-cli", "moox-storage-primary", "moox-storage-node", "moox-storage-view", "moox-storage-cli"} {
 			copyArtifact(t, filepath.Join(directory, binary), filepath.Join(root, "bin", binary), 0o700)
 		}
-		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
+		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_ADMIN_SOURCE_ROOT"), filepath.Join(root, "bin")
 		// eventbus 在 storage 与完整控制单元之前：control 上的 strategy、monitor 等要连上它才就绪。
 		for _, profile := range []string{"eventbus", "access", "egress-proxy", "trade", "storage"} {
 			deployed, err := DeployUnit(t.Context(), snapshot, UnitOptions{DeployOptions: options, HostID: "control", Profile: profile})
