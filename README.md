@@ -33,6 +33,8 @@ MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、�
 
 https://github.com/user-attachments/assets/1512aea0-f402-4ad0-8f0a-fda056239f71
 
+播放器一直转圈、加载不出来（国内网络常见）？打开[备用播放页](https://mooyang-code.github.io/moox/video.html)。
+
 ---
 
 ## 安装部署
