@@ -923,7 +923,7 @@ func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.
 	created := 0
 	var mu sync.Mutex
 	manager := &PlanManager{
-		Configured: []string{"crypto"},
+		Configured: func(context.Context) ([]string, error) { return []string{"crypto"}, nil },
 		Spaces:     func(context.Context) ([]string, error) { return nil, nil },
 		Factory: func(string) (*PlanReconciler, error) {
 			mu.Lock()
@@ -1371,7 +1371,7 @@ func TestPlanManagerReportsTimersDisabledAfterPauseAndRestartsOnResume(t *testin
 			}
 			return []string{"crypto"}, nil
 		},
-		Configured: []string{"crypto"},
+		Configured: func(context.Context) ([]string, error) { return []string{"crypto"}, nil },
 		Factory: func(string) (*PlanReconciler, error) {
 			r := h.reconciler()
 			r.Now = time.Now

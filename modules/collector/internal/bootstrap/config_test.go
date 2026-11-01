@@ -292,14 +292,14 @@ func TestSCFPlanConfigValidation(t *testing.T) {
 		return cfg
 	}
 	require.NoError(t, valid().validateSCFPlan())
-	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces())
+	require.Equal(t, []string{"crypto"}, valid().scfSpaces())
 	multi := valid()
 	multi.SCFMarkets["stockcn"] = map[string][]string{"equity": {"ap-nanjing"}}
-	require.Equal(t, []string{"crypto", "stockcn"}, multi.fetchPlanSpaces(), "空间集合以 scf_markets 为准，与旧调度的空间环境变量无关")
+	require.Equal(t, []string{"crypto", "stockcn"}, multi.scfSpaces(), "空间集合以 scf_markets 为准，与旧调度的空间环境变量无关")
 	onlyStock := valid()
 	onlyStock.SCFMarkets = map[string]map[string][]string{"stockcn": {"equity": {"ap-nanjing"}}}
-	require.Equal(t, []string{"stockcn"}, onlyStock.fetchPlanSpaces())
-	require.Equal(t, []string{"crypto", "stockcn"}, withStoredSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
+	require.Equal(t, []string{"stockcn"}, onlyStock.scfSpaces())
+	require.Equal(t, []string{"crypto", "stockcn"}, mergeSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
 
 	noRoute := valid()
 	noRoute.SCFPlan.AccessRoutes = nil
@@ -397,7 +397,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 	t.Run("crypto only", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
 		require.NoError(t, err)
-		require.Equal(t, []string{"crypto"}, cfg.fetchPlanSpaces())
+		require.Equal(t, []string{"crypto"}, cfg.scfSpaces())
 		deploy, err := cfg.fetchPlanDeploy("crypto")
 		require.NoError(t, err)
 		require.Equal(t, "pkg-crypto", deploy.PackageName)
@@ -408,7 +408,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 	t.Run("only stockcn keeps its own defaults", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
 		require.NoError(t, err)
-		require.Equal(t, []string{"stockcn"}, cfg.fetchPlanSpaces(), "只配置 stockcn 也要启动管理器")
+		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
 		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
 		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
@@ -417,7 +417,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
 			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
 		require.NoError(t, err)
-		require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
+		require.Equal(t, []string{"crypto", "stockcn"}, cfg.scfSpaces())
 	})
 	t.Run("two spaces sharing one package are rejected", func(t *testing.T) {
 		_, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -427,7 +427,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 	t.Run("disabled renders nothing", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, "database: {path: ./c.db}\n"))
 		require.NoError(t, err)
-		require.Empty(t, cfg.fetchPlanSpaces())
+		require.Empty(t, cfg.scfSpaces())
 	})
 }
 
@@ -502,8 +502,8 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 	require.NoError(t, err)
 	cfg, err := Load(writeCollectorConfig(t, string(raw)))
 	require.NoError(t, err)
-	require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
-	for _, space := range cfg.fetchPlanSpaces() {
+	require.Equal(t, []string{"crypto", "stockcn"}, cfg.scfSpaces())
+	for _, space := range cfg.scfSpaces() {
 		deploy, deployErr := cfg.fetchPlanDeploy(space)
 		require.NoError(t, deployErr, space)
 		require.NotEmpty(t, deploy.PackageName, space)

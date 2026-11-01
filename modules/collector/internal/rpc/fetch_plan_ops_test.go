@@ -216,6 +216,8 @@ type fakeFetchPlanControl struct{ disabled map[string]bool }
 
 func (f fakeFetchPlanControl) TimersDisabled(space string) bool { return f.disabled[space] }
 
+func (fakeFetchPlanControl) PlanIssue(string) string { return "" }
+
 func TestSetFetchPlanPausedSavesSwitchAndReportsTimerState(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()

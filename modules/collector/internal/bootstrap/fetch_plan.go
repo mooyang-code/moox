@@ -23,20 +23,33 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// registerFetchPlanManager 为配置了 SCF 市场地域的空间启动采集计划对账：每个空间一个独立协程。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl) error {
-	spaces := cfg.fetchPlanSpaces()
-	stored, err := dbm.FetchPlans().Spaces(process.ctx)
+// managedSpaces 返回管理集合：有启用任务、库里有计划、配置了云函数或处于暂停的空间。只查本地库，不依赖 Admin。
+// 暂停的空间必须在内：否则恢复时清不掉暂停开关，收敛也会空转；有计划的空间要留着，停掉最后一个任务后计划才能收尾。
+func managedSpaces(ctx context.Context, cfg *Config, dbm *store.Store) ([]string, error) {
+	enabled, err := dbm.Tasks().EnabledSpaces(ctx)
 	if err != nil {
-		return fmt.Errorf("list spaces with fetch plans: %w", err)
+		return nil, fmt.Errorf("list spaces with enabled tasks: %w", err)
 	}
-	// 配置里已移除、但库里有采集计划的空间也要启动管理器：由它先停用这些空间的定时器再退出。
-	configured := withStoredSpaces(spaces, stored)
-	if len(configured) == 0 {
-		return nil
+	stored, err := dbm.FetchPlans().Spaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list spaces with fetch plans: %w", err)
 	}
-	// 启动时先逐个空间检查部署参数，配置错误尽早暴露。
-	for _, space := range spaces {
+	pausedSet, err := dbm.FetchPlans().PausedSpaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list paused spaces: %w", err)
+	}
+	paused := make([]string, 0, len(pausedSet))
+	for space := range pausedSet {
+		paused = append(paused, space)
+	}
+	return mergeSpaces(enabled, stored, cfg.scfSpaces(), paused), nil
+}
+
+// registerFetchPlanManager 启动采集计划对账：管理集合里的每个空间一个独立协程。对账器始终启动，推送采集不依赖云函数配置。
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl) error {
+	managed := func(ctx context.Context) ([]string, error) { return managedSpaces(ctx, cfg, dbm) }
+	// 启动时先逐个云函数空间检查部署参数，配置错误尽早暴露。
+	for _, space := range cfg.scfSpaces() {
 		if _, err := cfg.fetchPlanDeploy(space); err != nil {
 			return err
 		}
@@ -103,9 +116,13 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	svc.SetKlineOps(backfiller)
 	svc.SetActivityLogger(invoker)
 	manager := &marketfetch.PlanManager{
-		Configured: configured,
+		Configured: managed,
 		Spaces: func(ctx context.Context) ([]string, error) {
-			// 配置里的空间 ∩ Admin 中仍启用的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			// 运行集合：管理集合 ∩ Admin 中仍启用的空间 − 暂停的空间；空间被停用或删除后，管理器先停定时器再退出该空间的协程。
+			spaces, err := managed(ctx)
+			if err != nil {
+				return nil, err
+			}
 			active, err := invoker.ListActiveSpaceIDs(ctx)
 			if err != nil {
 				return nil, err
@@ -147,7 +164,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,
 				Modes: dbm.IngestModes(), DefaultMode: cfg.SCFPlan.defaultModeFor(spaceID), Workers: dbm.StreamWorkers(),
-				Exclusions: dbm.SubjectExclusions(),
+				StreamOnline: func(ctx context.Context) (bool, error) { return stream.Online(ctx, spaceID) },
+				Exclusions:   dbm.SubjectExclusions(),
 			}
 			reconcilers.Store(spaceID, reconciler)
 			return reconciler, nil
@@ -180,7 +198,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	}
 	svc.SetFetchPlanControl(manager)
 	svc.SetSourceIDResolver(marketwiring.DefaultSourceID)
-	control.bind(dbm.FetchPlans(), backfiller, manager, configured)
+	control.bind(dbm.FetchPlans(), backfiller, manager, managed)
 	if !process.launch(func() { control.runRecovery(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
@@ -193,7 +211,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			case <-process.ctx.Done():
 				return
 			case <-ticker.C:
-				stream.RefreshOnline(process.ctx, spaces)
+				stream.RefreshOnline(process.ctx, control.managed(process.ctx))
 			}
 		}
 	}) {
@@ -202,7 +220,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	if !process.launch(func() { manager.Run(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}
-	log.Infof("collector fetch plan reconciliation enabled spaces=%s", strings.Join(spaces, ","))
+	log.Infof("collector fetch plan reconciliation enabled spaces=%s", strings.Join(control.managed(process.ctx), ","))
 	return nil
 }
 

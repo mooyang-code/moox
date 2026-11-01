@@ -40,54 +40,67 @@ type collectorControl struct {
 	plans      *store.FetchPlanRepository
 	backfiller *klinecheck.Backfiller
 	manager    *marketfetch.PlanManager
-	spaces     []string
-	recovering map[string]bool
+	// spaces 返回管理集合，每次现取：运行中新增的空间也要能暂停、恢复和收敛。known 是最近一次读到的结果，读库失败时沿用。
+	spaces     func(context.Context) ([]string, error)
+	known      []string
+	recovering bool
 	// timerWait 是重置前等待 SCF 定时器停用的时限（默认 2 分钟，测试可缩短）。
 	timerWait time.Duration
 	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
 	recoveryTo time.Time
 }
 
-func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *marketfetch.PlanManager, spaces []string) {
+func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *marketfetch.PlanManager, spaces func(context.Context) ([]string, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.plans, c.backfiller, c.manager, c.spaces = plans, backfiller, manager, append([]string(nil), spaces...)
+	c.plans, c.backfiller, c.manager, c.spaces = plans, backfiller, manager, spaces
+}
+
+// managed 返回管理集合；读库失败时沿用最近一次的结果。
+func (c *collectorControl) managed(ctx context.Context) []string {
+	c.mu.Lock()
+	read, known := c.spaces, append([]string(nil), c.known...)
+	c.mu.Unlock()
+	if read == nil {
+		return known
+	}
+	spaces, err := read(ctx)
+	if err != nil {
+		log.WarnContextf(ctx, "collector_managed_spaces_failed error=%v", err)
+		return known
+	}
+	c.mu.Lock()
+	c.known = append([]string(nil), spaces...)
+	c.mu.Unlock()
+	return spaces
 }
 
 // Recovering 报告空间是否处于恢复模式：暂停开关仍在（实时采集关闭），但补采调度要运行。
-func (c *collectorControl) Recovering(space string) bool {
+func (c *collectorControl) Recovering(string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.recovering[strings.ToLower(space)]
+	return c.recovering
 }
 
 func (c *collectorControl) setRecovering(on bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if on {
-		c.recoveryTo = time.Now().UTC()
-		c.recovering = map[string]bool{}
-		for _, space := range c.spaces {
-			c.recovering[strings.ToLower(space)] = true
-		}
+		c.recovering, c.recoveryTo = true, time.Now().UTC()
 		return
 	}
-	c.recovering, c.recoveryTo = nil, time.Time{}
-}
-
-func (c *collectorControl) snapshot() (*store.FetchPlanRepository, []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.plans, append([]string(nil), c.spaces...)
+	c.recovering, c.recoveryTo = false, time.Time{}
 }
 
 // setPaused 保存全部采集计划空间的暂停开关。
 func (c *collectorControl) setPaused(ctx context.Context, paused bool) error {
-	plans, spaces := c.snapshot()
+	c.mu.Lock()
+	plans := c.plans
+	c.mu.Unlock()
 	if plans == nil {
 		return nil
 	}
-	for _, space := range spaces {
+	for _, space := range c.managed(ctx) {
 		if err := plans.SetPaused(ctx, space, paused); err != nil {
 			return fmt.Errorf("保存空间 %s 的暂停开关：%w", space, err)
 		}
@@ -122,7 +135,7 @@ func (c *collectorControl) onChange(ctx context.Context, from, to lifecycle.Stag
 // quiesce 等暂停真正生效：每个空间的定时器停用已确认、在途的补采分块已结束。
 func (c *collectorControl) quiesce(ctx context.Context) error {
 	c.mu.Lock()
-	backfiller, manager, spaces := c.backfiller, c.manager, append([]string(nil), c.spaces...)
+	backfiller, manager := c.backfiller, c.manager
 	c.mu.Unlock()
 	if backfiller == nil || manager == nil {
 		return nil
@@ -134,7 +147,7 @@ func (c *collectorControl) quiesce(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		var waiting []string
-		for _, space := range spaces {
+		for _, space := range c.managed(ctx) {
 			if !manager.TimersDisabled(space) {
 				waiting = append(waiting, space)
 			}
@@ -153,14 +166,14 @@ func (c *collectorControl) quiesce(ctx context.Context) error {
 // catchup 汇总各空间暂停区间的补采进度。
 func (c *collectorControl) catchup(ctx context.Context, since time.Time) (lifecycle.Catchup, error) {
 	c.mu.Lock()
-	backfiller, spaces, to := c.backfiller, append([]string(nil), c.spaces...), c.recoveryTo
+	backfiller, to := c.backfiller, c.recoveryTo
 	c.mu.Unlock()
 	out := lifecycle.Catchup{CaughtUp: true, Target: to}
 	if backfiller == nil {
 		return out, nil
 	}
 	var expected, missing int64
-	for _, space := range spaces {
+	for _, space := range c.managed(ctx) {
 		state, err := backfiller.Catchup(ctx, space, since, to)
 		if err != nil {
 			return lifecycle.Catchup{Message: fmt.Sprintf("空间 %s：%v", space, err)}, err
@@ -190,12 +203,12 @@ func (c *collectorControl) runRecovery(ctx context.Context) {
 		case <-ticker.C:
 		}
 		c.mu.Lock()
-		backfiller, spaces := c.backfiller, append([]string(nil), c.spaces...)
+		backfiller := c.backfiller
 		c.mu.Unlock()
 		if backfiller == nil {
 			continue
 		}
-		for _, space := range spaces {
+		for _, space := range c.managed(ctx) {
 			if !c.Recovering(space) {
 				continue
 			}

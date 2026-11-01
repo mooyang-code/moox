@@ -106,6 +106,16 @@ func (r *TaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]dom
 	return tasks, err
 }
 
+// EnabledSpaces 返回有启用任务的空间。
+func (r *TaskRepository) EnabledSpaces(ctx context.Context) ([]string, error) {
+	var spaces []string
+	err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).
+		Where("c_enabled = ?", true).
+		Distinct("c_space_id").
+		Pluck("c_space_id", &spaces).Error
+	return spaces, err
+}
+
 // ListEnabledAll returns the complete enabled task inventory. It fails rather
 // than returning a truncated snapshot because observability reconciliation must
 // never publish a partial expected set.

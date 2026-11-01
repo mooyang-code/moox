@@ -66,6 +66,21 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 			break
 		}
 	}
+	if open == nil && applied == nil {
+		enabled, err := s.taskRepo.ListEnabled(ctx, spaceID)
+		if err != nil {
+			return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		if len(enabled) > 0 {
+			reason := "有启用的采集任务，但还没有采集计划，等下一轮对账"
+			if s.fetchPlanControl != nil {
+				if issue := s.fetchPlanControl.PlanIssue(spaceID); issue != "" {
+					reason = "有启用的采集任务，但还没有采集计划：" + issue
+				}
+			}
+			raise(klinecheck.HealthError, reason)
+		}
+	}
 	if open != nil && now.Sub(open.CreatedAt) > pendingPlanWarn {
 		raise(klinecheck.HealthWarn, fmt.Sprintf("采集计划 #%d 已 %s 未生效", open.ID, klinecheck.FormatDuration(now.Sub(open.CreatedAt))))
 	}

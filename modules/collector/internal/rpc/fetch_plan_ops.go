@@ -40,6 +40,8 @@ func (s *Service) ReregisterFetchPlan(ctx context.Context, req *pb.ReregisterFet
 // FetchPlanControl 是采集计划管理器对 RPC 暴露的状态查询。
 type FetchPlanControl interface {
 	TimersDisabled(space string) bool
+	// PlanIssue 返回空间最近一轮对账没有建出计划的原因。
+	PlanIssue(space string) string
 }
 
 // SetFetchPlanControl 注入采集计划管理器；没有配置采集计划的部署不注入。
