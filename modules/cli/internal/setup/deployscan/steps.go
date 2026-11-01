@@ -90,5 +90,23 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 	if len(steps) != 0 {
 		add(false, "config backup")
 	}
+	for _, space := range CollectSpaces(manifest) {
+		add(local.Verified[space], "setup verify --space-id %s", space)
+	}
 	return steps
+}
+
+// CollectSpaces 返回这个拓扑能采集的空间：有 collector-stream 就有 crypto，再加配了云函数的空间。
+func CollectSpaces(manifest setupconfig.Manifest) []string {
+	spaces := []string{}
+	if manifest.ComponentHost("collector-stream") != "" {
+		spaces = append(spaces, "crypto")
+	}
+	if manifest.SCFEnabled() {
+		for _, space := range manifest.SCFPlan.Spaces {
+			spaces = append(spaces, space.SpaceID)
+		}
+	}
+	slices.Sort(spaces)
+	return slices.Compact(spaces)
 }

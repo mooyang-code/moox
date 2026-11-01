@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
@@ -57,6 +58,9 @@ const (
 	StepInitReady   = "init-ready.json"
 )
 
+// VerifiedStep 返回一个空间验收通过的记录文件名。
+func VerifiedStep(spaceID string) string { return "verify-ready-" + spaceID + ".json" }
+
 // ReadLocalState 只读取这台电脑上的部署状态：不建目录、不生成密钥，文件不存在就算没有。
 // current 是这次命令用的配置和版本；本机没有记录或记录不一致时，这份状态不能用来继续安装。
 func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.LocalState {
@@ -79,6 +83,13 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
 	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
 	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
+	state.Verified = map[string]bool{}
+	if matches, err := filepath.Glob(filepath.Join(stateDir, VerifiedStep("*"))); err == nil {
+		for _, match := range matches {
+			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "verify-ready-"), ".json")
+			state.Verified[name] = true
+		}
+	}
 	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))
 	for _, pattern := range []string{"units/*/*/operation.json", "units/*/*/releases/*/operation.json"} {
 		if matches, _ := filepath.Glob(filepath.Join(stateDir, pattern)); len(matches) != 0 {

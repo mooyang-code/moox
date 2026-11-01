@@ -75,6 +75,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInitCommand(deps),
 		newSetupWipeCommand(deps),
 		newSetupLogsCommand(deps),
+		newSetupVerifyCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupSyncDeploymentsCommand(deps),

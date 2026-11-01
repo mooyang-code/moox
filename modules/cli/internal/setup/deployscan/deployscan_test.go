@@ -734,7 +734,8 @@ func TestNextStepsFollowReadinessOrder(t *testing.T) {
 	require.Less(t, position("setup trust-browser"), position("setup init --config-dir"))
 	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
 	require.Less(t, position("sync-deployments --host factor"), position("--profile factor-engine"))
-	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-1])
+	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2])
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1])
 	for _, step := range steps {
 		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
 	}
