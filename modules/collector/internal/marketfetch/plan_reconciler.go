@@ -502,6 +502,9 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 			break
 		}
 	}
+	if firstStreamPlan(desired, previousFunctions, previousDatasets) {
+		lead = planLeadTimeFirstStream
+	}
 	choose := func(frequency string) (int64, error) {
 		return ChoosePeriodStartWithLead(frequency, r.now(), lead)
 	}
@@ -518,6 +521,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 		return r.verifyFleet(ctx, scfFunctions(previousFunctions))
 	}
+	content.LeadSeconds = int(lead / time.Second)
 	if r.Preflight != nil {
 		if err := r.Preflight(ctx); err != nil {
 			return r.fail("preflight", err)
@@ -552,6 +556,19 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	}
 	log.InfoContextf(ctx, "collector fetch plan created space=%s plan=%d datasets=%d functions=%d", r.SpaceID, record.ID, len(content.Datasets), len(content.Functions))
 	return r.advance(ctx, record)
+}
+
+// firstStreamPlan 报告这是空间的第一份计划，并且全部由 collector-stream 执行。
+func firstStreamPlan(desired *DesiredState, previousFunctions map[string]*PlanFunction, previousDatasets map[string]*PlanDatasetState) bool {
+	if len(previousFunctions) != 0 || len(previousDatasets) != 0 || len(desired.Functions) == 0 {
+		return false
+	}
+	for _, function := range desired.Functions {
+		if function.Executor == "" || function.Executor == PlanExecutorSCF {
+			return false
+		}
+	}
+	return true
 }
 
 // waitForStream 在新计划要给 collector-stream 下发新的推送或本地执行项、而它不在线时返回 true：本轮不建计划。
@@ -790,7 +807,11 @@ func (r *PlanReconciler) registerSnapshots(ctx context.Context, record *store.Fe
 		registration, err := r.Storage.RegisterSeriesSnapshot(ctx, r.SpaceID, change.DatasetID, change.Frequency, change.Series, change.P)
 		switch {
 		case errors.Is(err, marketstorage.ErrStaleEffectiveFrom):
-			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), planLeadTimeWithCreate)
+			lead := planLeadTimeWithCreate
+			if content.LeadSeconds > 0 {
+				lead = time.Duration(content.LeadSeconds) * time.Second
+			}
+			p, chooseErr := ChoosePeriodStartWithLead(change.Frequency, r.now(), lead)
 			if chooseErr != nil {
 				return false, r.fail("storage", chooseErr)
 			}

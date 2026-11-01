@@ -206,6 +206,8 @@ type CollectMgrService interface {
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
 
+	TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq) (*TriggerFetchPlanRsp, error)
+
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error)
 
 	GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error)
@@ -705,6 +707,24 @@ func CollectMgrService_ReregisterFetchPlan_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func CollectMgrService_TriggerFetchPlan_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &TriggerFetchPlanReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).TriggerFetchPlan(ctx, reqbody.(*TriggerFetchPlanReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func CollectMgrService_SetFetchPlanPaused_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SetFetchPlanPausedReq{}
 	filters, err := f(req)
@@ -927,6 +947,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_ReregisterFetchPlan_Handler,
 		},
 		{
+			Name: "/trpc.moox.collector.CollectMgr/TriggerFetchPlan",
+			Func: CollectMgrService_TriggerFetchPlan_Handler,
+		},
+		{
 			Name: "/trpc.moox.collector.CollectMgr/SetFetchPlanPaused",
 			Func: CollectMgrService_SetFetchPlanPaused_Handler,
 		},
@@ -1073,6 +1097,9 @@ func (s *UnimplementedCollectMgr) GetCollectorStatus(ctx context.Context, req *G
 }
 func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error) {
 	return nil, errors.New("rpc ReregisterFetchPlan of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq) (*TriggerFetchPlanRsp, error) {
+	return nil, errors.New("rpc TriggerFetchPlan of service CollectMgr is not implemented")
 }
 func (s *UnimplementedCollectMgr) SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error) {
 	return nil, errors.New("rpc SetFetchPlanPaused of service CollectMgr is not implemented")
@@ -1269,6 +1296,8 @@ type CollectMgrClientProxy interface {
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq, opts ...client.Option) (rsp *GetCollectorStatusRsp, err error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
+
+	TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq, opts ...client.Option) (rsp *TriggerFetchPlanRsp, err error)
 
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq, opts ...client.Option) (rsp *SetFetchPlanPausedRsp, err error)
 
@@ -1826,6 +1855,26 @@ func (c *CollectMgrClientProxyImpl) ReregisterFetchPlan(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReregisterFetchPlanRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) TriggerFetchPlan(ctx context.Context, req *TriggerFetchPlanReq, opts ...client.Option) (*TriggerFetchPlanRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/TriggerFetchPlan")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("TriggerFetchPlan")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &TriggerFetchPlanRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -15,6 +15,9 @@ import (
 // planLeadTime 是新周期起点 P 距当前时间的最短提前量。
 const planLeadTime = 2 * time.Minute
 
+// planLeadTimeFirstStream 是首份纯 WS 计划的提前量：没有云端步骤，也没有旧执行端要交接，collector-stream 心跳 10 秒一次就能接上。
+const planLeadTimeFirstStream = 30 * time.Second
+
 // PlanDatasetChange 是一份采集计划里一个数据集的变更。
 type PlanDatasetChange struct {
 	PlanDatasetState
@@ -71,6 +74,8 @@ type PlanFunctionChange struct {
 type FetchPlanContent struct {
 	Datasets  map[string]*PlanDatasetChange  `json:"datasets"`
 	Functions map[string]*PlanFunctionChange `json:"functions"`
+	// LeadSeconds 是这份计划选 P 用的提前量，P 过期重选时沿用。
+	LeadSeconds int `json:"lead_seconds,omitempty"`
 }
 
 // FetchPlanProgress 是 c_progress 的内容：各步的确认状态。

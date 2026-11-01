@@ -1596,3 +1596,31 @@ func TestUpgradeBeforeEnableIgnoresFunctionsGoneFromTheCloudAndWaitsOnReadbackEr
 	h.cloud.nodes[gone] = scfinvoker.FunctionInstance{InstanceID: gone, PackageID: "pkg-old", Metadata: map[string]any{}}
 	require.ErrorIs(t, r.upgradeBeforeEnable(context.Background()), errCodeUpgradePending)
 }
+
+func TestFirstStreamPlanUsesShortLead(t *testing.T) {
+	stream := &DesiredState{Functions: map[string]*PlanFunction{"a": {Executor: PlanExecutorStreaming}}}
+	require.True(t, firstStreamPlan(stream, nil, nil))
+	require.False(t, firstStreamPlan(stream, map[string]*PlanFunction{"a": {}}, nil), "已有计划要走正常提前量")
+	require.False(t, firstStreamPlan(&DesiredState{Functions: map[string]*PlanFunction{"a": {}}}, nil, nil), "云函数要创建，不能缩短")
+	require.False(t, firstStreamPlan(&DesiredState{}, nil, nil))
+}
+
+func TestPlanManagerTriggerWakesWorkerAndKeepsRunContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := &PlanManager{
+		Interval: time.Hour,
+		Spaces:   func(context.Context) ([]string, error) { return []string{"crypto"}, nil },
+	}
+	worker := &planWorker{wake: make(chan struct{}, 1), done: make(chan struct{})}
+	manager.workers = map[string]*planWorker{"crypto": worker}
+	go manager.Run(ctx)
+	manager.Trigger("CRYPTO")
+	manager.Trigger("crypto")
+	select {
+	case <-worker.wake:
+	case <-time.After(5 * time.Second):
+		t.Fatal("没有唤醒空间协程")
+	}
+	close(worker.done)
+}

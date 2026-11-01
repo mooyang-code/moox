@@ -674,6 +674,16 @@ message SetFetchPlanPausedRsp {
   bool timers_disabled = 3;
 }
 
+// TriggerFetchPlan 让空间立刻对账一轮，不等下一分钟。启用一批任务之后调用一次，
+// 这批任务会进同一份计划。
+message TriggerFetchPlanReq {
+  string space_id = 1;
+}
+
+message TriggerFetchPlanRsp {
+  common.RetInfo ret_info = 1;
+}
+
 message ReregisterFetchPlanRsp {
   common.RetInfo ret_info = 1;
   // datasets 是被标记为需要重新登记快照的“数据集|频率”。
@@ -945,6 +955,7 @@ service CollectMgr {
   // ----- 运行状态与采集计划 -----
   rpc GetCollectorStatus(GetCollectorStatusReq) returns (GetCollectorStatusRsp);
   rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
+  rpc TriggerFetchPlan(TriggerFetchPlanReq) returns (TriggerFetchPlanRsp);
   rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
   rpc GetIngestMode(GetIngestModeReq) returns (GetIngestModeRsp);
   rpc SetIngestMode(SetIngestModeReq) returns (SetIngestModeRsp);

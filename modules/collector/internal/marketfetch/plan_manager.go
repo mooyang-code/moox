@@ -286,15 +286,58 @@ type PlanManager struct {
 	workers  map[string]*planWorker
 	disabled map[string]bool
 	wg       sync.WaitGroup
+
+	triggerOnce sync.Once
+	triggered   chan struct{}
+	pending     map[string]bool
 }
 
 type planWorker struct {
 	reconciler *PlanReconciler
 	cancel     context.CancelFunc
 	stop       chan struct{}
-	done       chan struct{}
+	// wake 让协程立刻跑一轮，容量为 1，多次触发合并成一次。
+	wake chan struct{}
+	done chan struct{}
 	// disabled 在协程因停用收尾完成而退出时置位（done 关闭后读取）。
 	disabled bool
+}
+
+func (m *PlanManager) triggerSignal() chan struct{} {
+	m.triggerOnce.Do(func() { m.triggered = make(chan struct{}, 1) })
+	return m.triggered
+}
+
+// Trigger 让空间尽快对账一轮，不等下一个周期。这里只做通知：同步空间要用 Run 的上下文，
+// 空间协程从它派生，用调用方的上下文的话请求一结束协程就退出了。
+func (m *PlanManager) Trigger(space string) {
+	m.mu.Lock()
+	if m.pending == nil {
+		m.pending = map[string]bool{}
+	}
+	m.pending[space] = true
+	m.mu.Unlock()
+	select {
+	case m.triggerSignal() <- struct{}{}:
+	default:
+	}
+}
+
+// wakeTriggered 唤醒被触发的空间协程。
+func (m *PlanManager) wakeTriggered() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for space := range m.pending {
+		for name, worker := range m.workers {
+			if strings.EqualFold(name, space) {
+				select {
+				case worker.wake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+	m.pending = nil
 }
 
 // TimersDisabled 报告空间的对账协程是否已在停用收尾确认后退出：此时云端已确认该空间全部函数的定时器停用，
@@ -365,6 +408,9 @@ func (m *PlanManager) Run(ctx context.Context) {
 		case <-timer.C:
 			m.sync(ctx)
 			timer.Reset(untilNext(time.Now(), m.interval(), 0))
+		case <-m.triggerSignal():
+			m.sync(ctx)
+			m.wakeTriggered()
 		}
 	}
 }
@@ -424,7 +470,7 @@ func (m *PlanManager) sync(ctx context.Context) {
 			return
 		}
 		workerCtx, cancel := context.WithCancel(ctx)
-		worker := &planWorker{reconciler: reconciler, cancel: cancel, stop: make(chan struct{}, 1), done: make(chan struct{})}
+		worker := &planWorker{reconciler: reconciler, cancel: cancel, stop: make(chan struct{}, 1), wake: make(chan struct{}, 1), done: make(chan struct{})}
 		if stopping {
 			worker.stop <- struct{}{}
 		}
@@ -457,6 +503,8 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 			return
 		case <-worker.stop:
 			stopping = true
+			timer.Stop()
+		case <-worker.wake:
 			timer.Stop()
 		case <-timer.C:
 		}
