@@ -103,7 +103,7 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 	bin := options.BinaryDirectory
 	if bin == "" {
 		bin = filepath.Join(work, "bin")
-		if err := buildCoreLocally(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log); err != nil {
+		if err := buildAdminLocally(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log); err != nil {
 			return release, err
 		}
 		if err := buildLocalTargets(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log, []string{"access", "egress-proxy", "trade", "collector-stream", "factor-engine", "archive-worker"}); err != nil {
@@ -145,7 +145,7 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 	if err := os.Chmod(release.Helper, 0o700); err != nil {
 		return Release{}, err
 	}
-	// 助手是 0700 可执行文件，不能用私有文件树同步；与 prepareCoreSoftware 一样逐个同步软件包、助手与目录。
+	// 助手是 0700 可执行文件，不能用私有文件树同步；与 prepareAdminSoftware 一样逐个同步软件包、助手与目录。
 	names := []string{release.Helper, work, filepath.Dir(work)}
 	for _, item := range release.Packages {
 		names = append(names, item.Archive)

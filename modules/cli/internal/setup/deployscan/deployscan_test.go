@@ -369,7 +369,7 @@ func TestDecideRoutes(t *testing.T) {
 	ports := clean
 	ports.PortsOccupied = []int{9527}
 	matched := LocalState{RuntimeSHA256: "sha256:a"}
-	full := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true}
+	full := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true}
 	noRecords := full
 	noRecords.UnitRecords = false
 	other := LocalState{RuntimeSHA256: "sha256:b", ControlReady: true}
@@ -603,7 +603,7 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-internal-auth.env", "notes.txt"} {
 		write(t, filepath.Join(operator, name), "x")
 	}
-	write(t, filepath.Join(state, "core-software.json"), "{}")
+	write(t, filepath.Join(state, "admin-software.json"), "{}")
 	now := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
 	archived, err := ArchiveLocal(operator, state, "", now)
 	require.NoError(t, err)
@@ -690,7 +690,7 @@ func TestStaleBindingIsNotResume(t *testing.T) {
 }
 
 func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
-	local := LocalState{CoreReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
+	local := LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
 	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local, false)
 	require.Contains(t, reason, "/old/moox.toml")
 	require.Contains(t, reason, "host-registry.md", "装好后有意新增的不能被建议清空")
@@ -752,7 +752,7 @@ func TestNextStepsFollowTopologyAndProgress(t *testing.T) {
 	require.NotContains(t, steps, "--create-proxy-ca", "公网证书不要内部 CA")
 	require.NotContains(t, steps, "trust-browser")
 
-	local := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
+	local := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
 	resumed := NextSteps(manifest, RouteResume, local, false)
 	require.Equal(t, "./bin/moox-cli setup deploy-unit --host storage --profile access", resumed[0], "接着中断的步骤：%v", resumed)
 

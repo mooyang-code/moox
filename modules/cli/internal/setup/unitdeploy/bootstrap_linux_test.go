@@ -45,7 +45,7 @@ import (
 
 // This server uses real SSH authentication, host keys, SFTP, and target shell
 // execution. Linux gates run it in an isolated network namespace with actual
-// prebuilt core, host, business and moox-runtime binaries.
+// prebuilt admin, host, business and moox-runtime binaries.
 func nativeSSH(t *testing.T) (setupssh.Target, string) {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -191,11 +191,11 @@ func copyArtifact(t *testing.T, source, destination string, mode os.FileMode) {
 	require.NoError(t, output.Close())
 }
 
-func TestNativeCoreBootstrapOverVerifiedSSHWithFullFleetTopology(t *testing.T) {
+func TestNativeAdminBootstrapOverVerifiedSSHWithFullFleetTopology(t *testing.T) {
 	if os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE") == "" || os.Getenv("MOOX_CORE_SOURCE_ROOT") == "" {
-		t.Skip("requires actual prebuilt Linux artifacts; mandatory in native core Linux gate")
+		t.Skip("requires actual prebuilt Linux artifacts; mandatory in native admin Linux gate")
 	}
-	root, err := os.MkdirTemp("", "moox-native-core-")
+	root, err := os.MkdirTemp("", "moox-native-admin-")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if !t.Failed() {
@@ -237,7 +237,7 @@ compute1 = ["access"]
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
 	snapshot, err := setupconfig.Load(configPath, root)
 	require.NoError(t, err)
-	options := CoreOptions{RepositoryRoot: os.Getenv("MOOX_CORE_SOURCE_ROOT"), BinaryDirectory: filepath.Join(root, "bin"), StateDirectory: filepath.Join(root, "operator-state"), OperatorDirectory: filepath.Join(root, "operator-config"), SSH: setupssh.Options{KnownHostsPath: filepath.Join(root, "known_hosts"), DisableAgent: true}}
+	options := DeployOptions{RepositoryRoot: os.Getenv("MOOX_CORE_SOURCE_ROOT"), BinaryDirectory: filepath.Join(root, "bin"), StateDirectory: filepath.Join(root, "operator-state"), OperatorDirectory: filepath.Join(root, "operator-config"), SSH: setupssh.Options{KnownHostsPath: filepath.Join(root, "known_hosts"), DisableAgent: true}}
 	require.NoError(t, os.WriteFile(options.SSH.KnownHostsPath, nil, 0o600))
 	require.NoError(t, os.Mkdir(options.BinaryDirectory, 0o700))
 	for i, source := range []string{os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE")} {
@@ -251,7 +251,7 @@ compute1 = ["access"]
 			copyArtifact(t, filepath.Join(extraction.Directory, "bin", binary), filepath.Join(options.BinaryDirectory, binary), 0o700)
 		}
 	}
-	_, err = BootstrapCore(t.Context(), snapshot, options)
+	_, err = BootstrapAdmin(t.Context(), snapshot, options)
 	require.ErrorIs(t, err, setupssh.ErrHostKeyUnknown)
 	_, err = os.Stat(deployment)
 	require.True(t, os.IsNotExist(err), "an untrusted host must never receive deployment input")
@@ -267,10 +267,10 @@ compute1 = ["access"]
 			}
 		}
 	})
-	initial, err := BootstrapCore(t.Context(), snapshot, options)
+	initial, err := BootstrapAdmin(t.Context(), snapshot, options)
 	require.NoError(t, err)
-	t.Log("actual core services ready")
-	require.Equal(t, "core-ready", initial.Stage)
+	t.Log("actual admin services ready")
+	require.Equal(t, "admin-ready", initial.Stage)
 	require.Equal(t, filepath.Join(snapshot.Manifest.Paths.ControlRoot, "releases"), filepath.Dir(initial.Bootstrap.ControlDirectory))
 	_, err = os.Stat(filepath.Join(deployment, "control"))
 	require.True(t, os.IsNotExist(err), "custom control root must not create a second default unit")
@@ -293,7 +293,7 @@ compute1 = ["access"]
 		require.Positive(t, item.PID)
 	}
 	_, err = os.Stat(filepath.Join(deployment, "identity", "console-proxy"))
-	require.True(t, os.IsNotExist(err), "core staging must not consume proxy CA creation authorization")
+	require.True(t, os.IsNotExist(err), "admin staging must not consume proxy CA creation authorization")
 	operator, err := os.ReadFile(initial.OperatorConfig)
 	require.NoError(t, err)
 	var identity struct {
@@ -314,7 +314,7 @@ compute1 = ["access"]
 		require.False(t, strings.Contains(entry.Name(), "admin"))
 	}
 	options.RepositoryRoot, options.BinaryDirectory = "", ""
-	repeated, err := BootstrapCore(t.Context(), snapshot, options)
+	repeated, err := BootstrapAdmin(t.Context(), snapshot, options)
 	require.NoError(t, err)
 	require.Equal(t, initial, repeated)
 	require.Equal(t, passwordHash, nativeAdminPasswordHash(t, repeated.Bootstrap.ControlDirectory, snapshot.Manifest.Admin.Username), "a completed retry must not rehash or reset the administrator password")
@@ -324,7 +324,7 @@ compute1 = ["access"]
 	// target. Prebuilt input is explicit; this gate never invokes a compiler.
 	options.StateDirectory = filepath.Join(root, "lost-native-state")
 	options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
-	_, err = BootstrapCore(t.Context(), snapshot, options)
+	_, err = BootstrapAdmin(t.Context(), snapshot, options)
 	require.ErrorContains(t, err, "original state directory")
 	require.Equal(t, host, status(initial.Bootstrap.HostDirectory))
 	require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
@@ -335,10 +335,10 @@ compute1 = ["access"]
 	require.NotContains(t, string(encoded), "synthetic-ssh-password")
 	// Exercise the native host entry against the running control host. Other
 	// hosts remain registered; this test does not claim multi-host acceptance.
-	_, err = DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
-	require.ErrorContains(t, err, "original core state")
+	_, err = DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
+	require.ErrorContains(t, err, "original admin state")
 	options.StateDirectory = filepath.Join(root, "operator-state")
-	deployed, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	deployed, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	t.Log("native host deployment ready")
 	require.Equal(t, "host-ready", deployed.Stage)
@@ -369,7 +369,7 @@ compute1 = ["access"]
 		require.True(t, component.Ready)
 		require.Positive(t, component.PID)
 	}
-	retry, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	retry, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	require.Equal(t, deployed, retry)
 	require.Equal(t, host, status(deployed.Deployment.Directory))
@@ -380,7 +380,7 @@ compute1 = ["access"]
 		require.NoError(t, err, "%s", output)
 	}
 	lifecycle("pause")
-	paused, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	paused, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	require.Equal(t, "host-paused", paused.Stage)
 	for _, component := range paused.Deployment.Components {
@@ -392,7 +392,7 @@ compute1 = ["access"]
 	}
 	lifecycle("resume")
 	lifecycle("stop")
-	repaired, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	repaired, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	require.Equal(t, "host-ready", repaired.Stage)
 	require.Equal(t, deployed.Deployment.Directory, repaired.Deployment.Directory)
@@ -404,7 +404,7 @@ compute1 = ["access"]
 	require.NoError(t, readJSON(unit, "deployment.json", 128<<10, &receipt))
 	receipt.Phase = "activating"
 	require.NoError(t, saveJSON(unit, "deployment.json", receipt, true))
-	resumed, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	resumed, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	require.Equal(t, repaired.Deployment.Directory, resumed.Deployment.Directory)
 	require.Equal(t, repaired.Deployment.Components, resumed.Deployment.Components)
@@ -413,7 +413,7 @@ compute1 = ["access"]
 	receipt.Phase = "rolled-back"
 	require.NoError(t, saveJSON(unit, "deployment.json", receipt, true))
 	unit.Close()
-	fresh, err := DeployHost(t.Context(), snapshot, HostOptions{CoreOptions: options, HostID: "control"})
+	fresh, err := DeployHost(t.Context(), snapshot, HostOptions{DeployOptions: options, HostID: "control"})
 	require.NoError(t, err)
 	require.Equal(t, "host-ready", fresh.Stage)
 	require.NotEqual(t, resumed.Deployment.Directory, fresh.Deployment.Directory)
@@ -426,7 +426,7 @@ compute1 = ["access"]
 		options.RepositoryRoot, options.BinaryDirectory = os.Getenv("MOOX_CORE_SOURCE_ROOT"), filepath.Join(root, "bin")
 		// eventbus 在 storage 与完整控制单元之前：control 上的 strategy、monitor 等要连上它才就绪。
 		for _, profile := range []string{"eventbus", "access", "egress-proxy", "trade", "storage"} {
-			deployed, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: options, HostID: "control", Profile: profile})
+			deployed, err := DeployUnit(t.Context(), snapshot, UnitOptions{DeployOptions: options, HostID: "control", Profile: profile})
 			require.NoError(t, err, profile)
 			require.Equal(t, profile+"-ready", deployed.Stage)
 			prepared, err := unitinstall.ReadInstalled(t.Context(), deployed.Deployment.Directory)
@@ -440,13 +440,13 @@ compute1 = ["access"]
 			if profile == "storage" {
 				require.FileExists(t, filepath.Join(deployed.Deployment.Directory, "storage-primary/var/storage/metadata/storage_metadata.db"))
 			}
-			repeated, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: options, HostID: "control", Profile: profile})
+			repeated, err := DeployUnit(t.Context(), snapshot, UnitOptions{DeployOptions: options, HostID: "control", Profile: profile})
 			require.NoError(t, err)
 			require.Equal(t, deployed, repeated)
 			require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 			t.Log("actual business unit ready with immutable retry:", profile)
 		}
-		promotion := ControlOptions{CoreOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}}
+		promotion := ControlOptions{DeployOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}}
 		full, err := BootstrapControl(t.Context(), snapshot, promotion)
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", full.Stage)
@@ -542,7 +542,7 @@ func nativeAdminLoginAt(t *testing.T, client *http.Client, endpoint, username, p
 	encrypted, err := mooxsecurity.Encrypt(password, salt.GetSalt()+strconv.FormatInt(salt.GetTimestamp(), 10))
 	require.NoError(t, err)
 	var login adminpb.LoginRsp
-	call("Login", &adminpb.LoginReq{Username: username, PasswordHash: encrypted, Salt: salt.GetSalt(), Timestamp: salt.GetTimestamp(), DeviceId: "native-core-gate"}, &login)
+	call("Login", &adminpb.LoginReq{Username: username, PasswordHash: encrypted, Salt: salt.GetSalt(), Timestamp: salt.GetTimestamp(), DeviceId: "native-admin-gate"}, &login)
 	require.NotNil(t, login.GetRetInfo())
 	require.Zero(t, login.GetRetInfo().GetCode(), "the initialized administrator must be able to log in")
 	require.NotEmpty(t, login.GetAccessToken())

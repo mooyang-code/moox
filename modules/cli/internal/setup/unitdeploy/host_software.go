@@ -14,9 +14,9 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
-func prepareHostSoftware(ctx context.Context, root, state *os.Root, options CoreOptions, arch string, core coreSoftware) (unitpackage.Result, string, error) {
-	if core.Architecture == arch {
-		return core.Packages[0], core.Helper, nil
+func prepareHostSoftware(ctx context.Context, root, state *os.Root, options DeployOptions, arch string, admin adminSoftware) (unitpackage.Result, string, error) {
+	if admin.Architecture == arch {
+		return admin.Packages[0], admin.Helper, nil
 	}
 	work, err := os.MkdirTemp(state.Name(), "software-")
 	if err != nil {

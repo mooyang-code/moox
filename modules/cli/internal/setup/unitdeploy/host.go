@@ -28,7 +28,7 @@ import (
 )
 
 type HostOptions struct {
-	CoreOptions
+	DeployOptions
 	HostID string
 	// Release 选择版本制品，含义同 UnitOptions.Release。
 	Release string
@@ -88,14 +88,14 @@ func runtimeBinding(identity runtimeIdentity) string {
 	return "sha256:" + sha(raw)
 }
 
-// DeployHost installs the two host components after core initialization. It
+// DeployHost installs the two host components after admin initialization. It
 // reads the operator manifest only through the caller's trusted snapshot.
 func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options HostOptions) (HostResult, error) {
-	return DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options.CoreOptions, HostID: options.HostID, Profile: "host", Release: options.Release})
+	return DeployUnit(ctx, snapshot, UnitOptions{DeployOptions: options.DeployOptions, HostID: options.HostID, Profile: "host", Release: options.Release})
 }
 
 type UnitOptions struct {
-	CoreOptions
+	DeployOptions
 	HostID  string
 	Profile string
 	// Release 选择 setup release build 产出的版本制品；为空时修复首次安装的发布（使用首次初始化的软件）。
@@ -142,14 +142,14 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	defer root.Close()
 	// Unit deployment must never generate replacement fleet credentials when
-	// the operator loses the state created by bootstrap core.
+	// the operator loses the state created by bootstrap admin.
 	if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
-		return result, errors.New("core_not_ready: 这台电脑上没有 core 的记录，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
+		return result, errors.New("admin_not_ready: 这台电脑上没有 admin 的记录，先运行 setup bootstrap --stage admin；如果是换了电脑或目录，运行 setup validate 看路线")
 	}
 	control := manifest.ControlHost()
-	var ready CoreResult
-	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
-		return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
+	var ready BootstrapResult
+	if err := readJSON(root, "admin-ready.json", 128<<10, &ready); err != nil || ready.Stage != "admin-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
+		return result, errors.New("admin_not_ready: admin 还没有完成，先运行 setup bootstrap --stage admin；如果是换了电脑或目录，运行 setup validate 看路线")
 	}
 	// 带 --release 时记录在版本目录下，由版本自己的检查负责。
 	if options.Release == "" && options.Profile != "host" && options.HostID != control.Name {
@@ -158,7 +158,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 	}
 	if !insideState(manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
-		return result, errors.New("unit deployment requires the control and host roots from its original core receipt")
+		return result, errors.New("unit deployment requires the control and host roots from its original admin receipt")
 	}
 	identity, err := loadIdentity(root, control, manifest.Paths.DeployRoot)
 	if err != nil {
@@ -251,13 +251,13 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 		exportHelper, exportHelperSHA = release.Helper, release.HelperSHA256
 	} else {
-		core, exists, err := readCoreSoftware(ctx, root, controlArch)
+		admin, exists, err := readAdminSoftware(ctx, root, controlArch)
 		if err != nil || !exists {
-			return result, errors.New("unit deployment requires the original verified core software")
+			return result, errors.New("unit deployment requires the original verified admin software")
 		}
-		exportHelper, exportHelperSHA = core.Helper, core.HelperSHA256
+		exportHelper, exportHelperSHA = admin.Helper, admin.HelperSHA256
 		if os.IsNotExist(operationErr) {
-			software, helper, err := prepareUnitSoftware(ctx, root, state, options.CoreOptions, arch, options.Profile, core)
+			software, helper, err := prepareUnitSoftware(ctx, root, state, options.DeployOptions, arch, options.Profile, admin)
 			if err != nil {
 				return result, err
 			}

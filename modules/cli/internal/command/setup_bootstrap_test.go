@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetupBootstrapCoreUsesOneSnapshotAndExplicitStage(t *testing.T) {
+func TestSetupBootstrapAdminUsesOneSnapshotAndExplicitStage(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	loaded, called := 0, 0
 	command := newSetupCommand(setupDeps{
@@ -22,28 +22,28 @@ func TestSetupBootstrapCoreUsesOneSnapshotAndExplicitStage(t *testing.T) {
 			require.Equal(t, defaultSetupFile, name)
 			return snapshot, nil
 		},
-		bootstrapCore: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.CoreOptions) (unitdeploy.CoreResult, error) {
+		bootstrapAdmin: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.DeployOptions) (unitdeploy.BootstrapResult, error) {
 			called++
 			require.Same(t, snapshot, got)
 			require.True(t, filepath.IsAbs(options.RepositoryRoot))
 			require.True(t, filepath.IsAbs(options.StateDirectory))
 			require.True(t, filepath.IsAbs(options.OperatorDirectory))
 			require.NotNil(t, options.Log)
-			return unitdeploy.CoreResult{Stage: "core-ready", OperatorConfig: filepath.Join(options.OperatorDirectory, "gateway-client.yaml")}, nil
+			return unitdeploy.BootstrapResult{Stage: "admin-ready", OperatorConfig: filepath.Join(options.OperatorDirectory, "gateway-client.yaml")}, nil
 		},
 	})
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"bootstrap"})
-	require.ErrorContains(t, command.Execute(), "--stage core")
+	require.ErrorContains(t, command.Execute(), "--stage admin")
 	require.Zero(t, loaded)
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	command.SetArgs([]string{"bootstrap", "--stage", "core", "--state-dir", state, "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"bootstrap", "--stage", "admin", "--state-dir", state, "--operator-dir", t.TempDir()})
 	require.NoError(t, command.Execute())
 	require.Equal(t, 1, loaded)
 	require.Equal(t, 1, called)
-	require.Contains(t, output.String(), `"stage":"core-ready"`)
+	require.Contains(t, output.String(), `"stage":"admin-ready"`)
 	require.NotContains(t, output.String(), "admin-test-password")
 }
 
@@ -53,16 +53,16 @@ func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	command := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) {
 		loaded++
 		return snapshot, nil
-	}, bootstrapControl: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.ControlOptions) (unitdeploy.CoreResult, error) {
+	}, bootstrapControl: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
 		called++
 		require.Same(t, snapshot, got)
 		require.True(t, options.ProxyCA.Create)
 		require.True(t, filepath.IsAbs(options.StateDirectory))
-		return unitdeploy.CoreResult{Stage: "control-ready"}, nil
+		return unitdeploy.BootstrapResult{Stage: "control-ready"}, nil
 	}})
 	var output bytes.Buffer
 	command.SetOut(&output)
-	command.SetArgs([]string{"bootstrap", "--stage", "core", "--create-proxy-ca"})
+	command.SetArgs([]string{"bootstrap", "--stage", "admin", "--create-proxy-ca"})
 	require.ErrorContains(t, command.Execute(), "belongs to --stage control")
 	require.Zero(t, loaded)
 	state, err := filepath.EvalSymlinks(t.TempDir())
@@ -81,15 +81,15 @@ func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 func TestSetupBootstrapStopsBeforeUploadWhenPrerequisitesFail(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	called := 0
-	deps := setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }, bootstrapCore: func(context.Context, *setupconfig.Snapshot, unitdeploy.CoreOptions) (unitdeploy.CoreResult, error) {
+	deps := setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }, bootstrapAdmin: func(context.Context, *setupconfig.Snapshot, unitdeploy.DeployOptions) (unitdeploy.BootstrapResult, error) {
 		called++
-		return unitdeploy.CoreResult{}, nil
+		return unitdeploy.BootstrapResult{}, nil
 	}, scanDeployment: func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error) {
 		return []deployscan.HostReport{{Host: "control", Address: "198.51.100.10", OwnerOK: true, ModeOK: true, ParentWritable: true, DiskFreeKB: 3 << 20}}, nil
 	}}
 	command := newSetupCommand(deps)
 	command.SetOut(&bytes.Buffer{})
-	command.SetArgs([]string{"bootstrap", "--stage", "core", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"bootstrap", "--stage", "admin", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
 	require.ErrorContains(t, command.Execute(), "disk_low")
 	require.Zero(t, called)
 	require.Empty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: 6 << 20, ReclaimableKB: 3 << 20}}, "control"), "失败残留下一次会自动清掉，不能挡住重试")

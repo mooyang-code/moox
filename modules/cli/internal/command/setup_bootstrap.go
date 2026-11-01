@@ -15,15 +15,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type setupCoreBootstrap func(context.Context, *setupconfig.Snapshot, unitdeploy.CoreOptions) (unitdeploy.CoreResult, error)
-type setupControlBootstrap func(context.Context, *setupconfig.Snapshot, unitdeploy.ControlOptions) (unitdeploy.CoreResult, error)
+type setupAdminBootstrap func(context.Context, *setupconfig.Snapshot, unitdeploy.DeployOptions) (unitdeploy.BootstrapResult, error)
+type setupControlBootstrap func(context.Context, *setupconfig.Snapshot, unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error)
 
 func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	var file, source, stage string
-	var options unitdeploy.CoreOptions
+	var options unitdeploy.DeployOptions
 	var control unitdeploy.ControlOptions
-	if deps.bootstrapCore == nil {
-		deps.bootstrapCore = unitdeploy.BootstrapCore
+	if deps.bootstrapAdmin == nil {
+		deps.bootstrapAdmin = unitdeploy.BootstrapAdmin
 	}
 	if deps.bootstrapControl == nil {
 		deps.bootstrapControl = unitdeploy.BootstrapControl
@@ -31,16 +31,16 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "通过已核验 SSH 初始化核心或完整控制服务",
-		Long:  "--stage core 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署及 Console Proxy。首次 internal CA 须显式创建或提供关闭后的可信导入目录。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
+		Long:  "--stage admin 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署及 Console Proxy。首次 internal CA 须显式创建或提供关闭后的可信导入目录。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if stage != "core" && stage != "control" {
-				return errors.New("bootstrap requires --stage core or --stage control")
+			if stage != "admin" && stage != "control" {
+				return errors.New("bootstrap requires --stage admin or --stage control")
 			}
-			if stage == "core" && control.ProxyCA.Create {
+			if stage == "admin" && control.ProxyCA.Create {
 				return errors.New("proxy authorization belongs to --stage control")
 			}
-			if stage == "core" && control.Release != "" {
+			if stage == "admin" && control.Release != "" {
 				return errors.New("--release upgrades the control stage only")
 			}
 			snapshot, err := deps.load(file)
@@ -55,7 +55,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			options.Log = command.ErrOrStderr()
-			var result unitdeploy.CoreResult
+			var result unitdeploy.BootstrapResult
 			if err := setupvalidate.CheckDeployments(snapshot.Manifest); err != nil {
 				return err
 			}
@@ -65,18 +65,18 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 					return err
 				}
 			}
-			if stage == "core" {
-				if err := checkCoreRoute(command.Context(), deps, snapshot, options); err != nil {
+			if stage == "admin" {
+				if err := checkAdminRoute(command.Context(), deps, snapshot, options); err != nil {
 					return err
 				}
-				result, err = deps.bootstrapCore(command.Context(), snapshot, options)
+				result, err = deps.bootstrapAdmin(command.Context(), snapshot, options)
 			} else {
 				// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
 				local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 				if control.Release == "" && !local.InitStorage && !local.ControlReady {
 					return errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
 				}
-				control.CoreOptions = options
+				control.DeployOptions = options
 				result, err = deps.bootstrapControl(command.Context(), snapshot, control)
 			}
 			if err != nil {
@@ -86,7 +86,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&file, "file", defaultSetupFile, "原仓库中的私有 moox.toml")
-	command.Flags().StringVar(&stage, "stage", "", "执行阶段：core/control")
+	command.Flags().StringVar(&stage, "stage", "", "执行阶段：admin/control")
 	command.Flags().StringVar(&source, "source-dir", "", "源码与公共配置模板所在 worktree（默认当前目录）")
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：本机预先构建的目标 Linux host/control 二进制目录")
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录；重试必须使用原目录")
@@ -96,7 +96,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	return command
 }
 
-func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, options *unitdeploy.CoreOptions) error {
+func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, options *unitdeploy.DeployOptions) error {
 	var err error
 	if source == "" {
 		source, err = os.Getwd()

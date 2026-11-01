@@ -16,7 +16,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
   部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把 `setup validate` 输出的 `next_steps`（连同防火墙放行内容）作为部署计划一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
-- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`core-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
+- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`admin-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块尚未完工：不要代用户创建实盘账户、下单或清仓。
 

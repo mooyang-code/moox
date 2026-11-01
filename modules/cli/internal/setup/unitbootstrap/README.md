@@ -18,7 +18,7 @@
 
 普通本机验证：`make test-unit-bootstrap`。Linux 完整门禁 `make test-unit-bootstrap-linux` 只执行预先构建的制品，要求 `MOOX_BOOTSTRAP_TEST_BINARY`、`MOOX_RUNTIME_BINARY`，以及 `MOOX_BOOTSTRAP_HOST_ARCHIVE`/`MOOX_BOOTSTRAP_HOST_SHA256`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`/`MOOX_BOOTSTRAP_CONTROL_SHA256`。七组必需场景不接受跳过：私密输入、输出边界、运行身份持久绑定、真实服务初始化/升级失败恢复、Admin 启动窗口实际 SIGKILL 的整机恢复、离线子进程的锁继承与父进程死亡，以及代理 CA 首次授权消费/历史导入。
 
-实际服务场景使用 control 软件包中的 Admin、Web Host、Console Proxy，以及完整 host 单元；测试不启动 broker，并验证 EventBus 不可用时 HostAgent 仍可就绪。它不替代全部 control 组件或跨主机业务验收。顶层 CLI 的 core/control、其他主机与业务单元部署、版本升级已由 `unitdeploy` 接入，生产验收仍需独立执行。
+实际服务场景使用 control 软件包中的 Admin、Web Host、Console Proxy，以及完整 host 单元；测试不启动 broker，并验证 EventBus 不可用时 HostAgent 仍可就绪。它不替代全部 control 组件或跨主机业务验收。顶层 CLI 的 admin/control、其他主机与业务单元部署、版本升级已由 `unitdeploy` 接入，生产验收仍需独立执行。
 
 请求可显式指定 `control.components` 为完整部署清单的唯一子集，必须包含 Admin；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在部署清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
 

@@ -4,7 +4,7 @@
 这是破坏性运维：**必须先得到用户的明确确认**，并复述要清空的主机和数据。升级已安装的单元不走这里，见 [`native-release.md`](native-release.md)。
 本文是维护者在源码仓库里重装自己生产环境的记录（四台主机、从源码构建）；外部用户第一次安装按 [`install.md`](install.md)，用发布产物，不需要构建。
 
-整体顺序：核对前提 → 备份 → 构建制品 → 停机清空 → 本机状态清理 → 安装（core → 主机 → 单元 → control）→ 默认初始化 → 验收。
+整体顺序：核对前提 → 备份 → 构建制品 → 停机清空 → 本机状态清理 → 安装（admin → 主机 → 单元 → control）→ 默认初始化 → 验收。
 耗时的命令都放后台运行，用日志文件加 Monitor 盯结果（一次完整安装约 20 分钟，另加 5 分钟构建）。
 
 ## 0. 前提与约定
@@ -61,7 +61,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 ### 本机状态
 
 `setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
-状态目录**必须**换新：制品和请求哈希绑定在 core 阶段的状态里，control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
+状态目录**必须**换新：制品和请求哈希绑定在 admin 阶段的状态里，control 阶段重试会复用 admin 时构建的软件。想换制品（改了代码）只能换新状态目录，从 admin 重来。
 
 ## 4. 安装顺序
 
@@ -70,7 +70,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 | 步 | 命令 | 备注 |
 | --- | --- | --- |
-| 1 | `$CLI setup bootstrap --stage core` | Admin、HostGateway、HostAgent、EventBus 凭据；输出 `core-ready`。约 3 分钟，含本机构建 |
+| 1 | `$CLI setup bootstrap --stage admin` | Admin、HostGateway、HostAgent、EventBus 凭据；输出 `admin-ready`。约 3 分钟，含本机构建 |
 | 2 | `$CLI setup deploy-host --host storage`，再 `overseas`、`factor` | 因子机要求 `[hosts.factor] reachability = "outbound"`，且已有 `/data/moox`（可写） |
 | 3 | `$CLI setup deploy-unit --host storage --profile eventbus` | EventBus 装在 `[deployments]` 登记它的主机（默认存储机） |
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
@@ -144,7 +144,7 @@ $S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
-| control 阶段失败，重试结果相同 | 软件制品绑定在 core 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 core 重来 |
+| control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
 | 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节在编译机构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
 | `setup init` 报 `browser_ca_trust_failed`、`sudo: a terminal is required` | 检查要求证书在系统钥匙串，安装需要 sudo | 见第 4 节“信任内部 CA”，由用户授权 |

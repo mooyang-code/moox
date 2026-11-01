@@ -87,7 +87,7 @@ type setupInitStorageSummary struct {
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var file, configDir, storageHost, stage string
-	var options unitdeploy.CoreOptions
+	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "导入默认空间、数据集、字段和因子",
@@ -140,7 +140,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 }
 
 // runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage 并激活。
-// Admin 在 core 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
+// Admin 在 admin 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
 func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
 	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
 		return setupInitStorageSummary{}, err

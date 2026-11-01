@@ -26,16 +26,16 @@ import (
 )
 
 type ControlOptions struct {
-	CoreOptions
+	DeployOptions
 	ProxyCA unitbootstrap.ProxyCAAuthorization
 	// Release 非空时升级 control：使用该版本的 host 与 control 软件，不顺带部署 Storage 与出口单元。
 	Release string
 }
 
-// BootstrapControl promotes the original core software to every control
-// deployment. It does not rerun the core-only request or replace its receipt.
-func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, options ControlOptions) (CoreResult, error) {
-	return bootstrap(ctx, snapshot, options.CoreOptions, &options)
+// BootstrapControl promotes the original admin software to every control
+// deployment. It does not rerun the admin-only request or replace its receipt.
+func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, options ControlOptions) (BootstrapResult, error) {
+	return bootstrap(ctx, snapshot, options.DeployOptions, &options)
 }
 
 func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, transport setupssh.Client, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
@@ -57,7 +57,7 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
 			return request, nil, err
 		}
-	} else if err := checkControlDependencies(ctx, snapshot, root, components, options.CoreOptions); err != nil {
+	} else if err := checkControlDependencies(ctx, snapshot, root, components, options.DeployOptions); err != nil {
 		return request, nil, err
 	}
 	temporary, err := os.MkdirTemp(root.Name(), "control-templates-")
@@ -85,7 +85,7 @@ func consoleTLSMode(host setupconfig.Host) string {
 }
 
 // Templates come from the independently verified original package, never
-// from files that may have changed in the worktree after the core build.
+// from files that may have changed in the worktree after the admin build.
 func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string) (map[string][]byte, error) {
 	result := map[string][]byte{}
 	control := snapshot.Manifest.ControlHost()
@@ -273,7 +273,7 @@ func activeControlStatus(ctx context.Context, transport setupssh.Client, helper,
 
 // Control startup requires Storage, and Collector additionally needs egress.
 // Fleet-wide host/Access/Trade preparation belongs to the outer bootstrap.
-func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, components []string, options CoreOptions) error {
+func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, components []string, options DeployOptions) error {
 	profiles := []string{}
 	if slices.ContainsFunc(components, func(id string) bool {
 		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}, id)
@@ -297,7 +297,7 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 			// Reuse the exact deploy transaction to finish or repair its original
 			// request. A stale ready PID alone cannot prove that the desired
 			// software, configuration and material were successfully activated.
-			result, err := DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options, HostID: host.Name, Profile: profile})
+			result, err := DeployUnit(ctx, snapshot, UnitOptions{DeployOptions: options, HostID: host.Name, Profile: profile})
 			if err != nil {
 				return err
 			}

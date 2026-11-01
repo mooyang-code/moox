@@ -24,7 +24,7 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 
 // NextSteps 按当前拓扑和已完成的步骤列出接下来要运行的命令。安装顺序只在这里写一份，文档和 skill 都照它走。
 // 顺序规则：组件的就绪条件不能依赖排在它后面的步骤。Monitor 就绪要求系统元数据已激活，
-// 所以 init --stage storage 排在管理台之前；Access 就绪只依赖服务目录，core 完成后目录已有全部部署。
+// 所以 init --stage storage 排在管理台之前；Access 就绪只依赖服务目录，admin 完成后目录已有全部部署。
 // internalTLS 表示管理台用内部证书。只有首次安装的路线才有步骤；旧状态和其他路线返回空。
 func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, internalTLS bool) []string {
 	switch route {
@@ -59,8 +59,8 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 			add(local.Units[host+"/"+profile], "setup deploy-unit --host %s --profile %s", host, profile)
 		}
 	}
-	add(local.CoreReady, "setup firewall --yes")
-	add(local.CoreReady, "setup bootstrap --stage core")
+	add(local.AdminReady, "setup firewall --yes")
+	add(local.AdminReady, "setup bootstrap --stage admin")
 	for _, host := range manifest.Hosts() {
 		if host.Name != control {
 			add(local.Units[host.Name+"/host"], "setup deploy-host --host %s", host.Name)

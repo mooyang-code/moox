@@ -103,7 +103,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			continue
 		}
 		if len(identity.StorageNodeSecret) < 32 || len(identity.StoragePrimarySecret) < 32 || len(identity.StorageViewSecret) < 32 {
-			return nil, errors.New("Storage requires its original complete private core identity; missing credentials cannot be regenerated during deployment")
+			return nil, errors.New("Storage requires its original complete private admin identity; missing credentials cannot be regenerated during deployment")
 		}
 		values["MOOX_STORAGE_HOME"] = "./var/storage"
 		values["MOOX_STORAGE_ROLE"] = strings.TrimPrefix(id, "storage-")
@@ -134,9 +134,9 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 	return environment, nil
 }
 
-func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options CoreOptions, arch, profile string, core coreSoftware) (unitpackage.Result, string, error) {
+func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options DeployOptions, arch, profile string, admin adminSoftware) (unitpackage.Result, string, error) {
 	if profile == "host" {
-		return prepareHostSoftware(ctx, root, state, options, arch, core)
+		return prepareHostSoftware(ctx, root, state, options, arch, admin)
 	}
 	work, err := os.MkdirTemp(state.Name(), "software-")
 	if err != nil {
@@ -159,7 +159,7 @@ func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options Core
 	if err != nil {
 		return software, "", err
 	}
-	if core.Architecture != arch {
+	if admin.Architecture != arch {
 		hostID := filepath.Base(filepath.Dir(state.Name()))
 		var operation unitOperation
 		if err := readJSON(root, "hosts/"+hostID+"/operation.json", 2<<20, &operation); err != nil {
@@ -177,5 +177,5 @@ func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options Core
 		}
 		return software, operation.Helper, nil
 	}
-	return software, core.Helper, nil
+	return software, admin.Helper, nil
 }

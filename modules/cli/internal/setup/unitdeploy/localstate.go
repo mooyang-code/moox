@@ -75,7 +75,7 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 			state.RuntimeSHA256 = runtimeBinding(identity)
 		}
 	}
-	state.CoreReady = fileExists(filepath.Join(stateDir, "core-ready.json"))
+	state.AdminReady = fileExists(filepath.Join(stateDir, "admin-ready.json"))
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
 	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
 	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
@@ -115,7 +115,7 @@ func fileExists(name string) bool {
 
 // TrialPackage 按全部单元试打包到临时目录，确认产物包能用，走的是和正式部署相同的路径。
 // 没有预编译二进制（源码目录）时跳过，部署时才在本机构建。
-func TrialPackage(ctx context.Context, options CoreOptions, arch string) error {
+func TrialPackage(ctx context.Context, options DeployOptions, arch string) error {
 	if options.BinaryDirectory == "" {
 		return nil
 	}

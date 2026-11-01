@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCoreRequestUsesConfiguredControlRootAndPrivateAdministrator(t *testing.T) {
+func TestAdminRequestUsesConfiguredControlRootAndPrivateAdministrator(t *testing.T) {
 	manifest := setupconfig.Manifest{Admin: setupconfig.Admin{Username: "admin", Password: "synthetic-bootstrap-password"}, Paths: setupconfig.Paths{DeployRoot: "/data/moox", ControlRoot: "/data/moox/units/prod"}}
-	request, err := coreRequest(manifest, runtimeIdentity{}, unitpackage.Result{}, unitpackage.Result{})
+	request, err := adminRequest(manifest, runtimeIdentity{}, unitpackage.Result{}, unitpackage.Result{})
 	require.NoError(t, err)
 	require.Equal(t, manifest.Paths.ControlRoot, request.Control.UnitRoot)
 	require.Equal(t, "/data/moox/host", request.Host.UnitRoot)
@@ -49,7 +49,7 @@ control = ["admin","eventbus","console-proxy","web-host"]
 	control := snapshot.Manifest.ControlHost()
 	_, err = loadIdentity(state, control, snapshot.Manifest.Paths.DeployRoot)
 	require.NoError(t, err)
-	ready := CoreResult{Stage: "core-ready", Bootstrap: unitbootstrap.Result{HostID: control.Name, Phase: "complete", HostDirectory: filepath.Join(snapshot.Manifest.Paths.DeployRoot, "host", "releases", "initial"), ControlDirectory: filepath.Join(snapshot.Manifest.Paths.ControlRoot, "releases", "initial")}}
+	ready := BootstrapResult{Stage: "admin-ready", Bootstrap: unitbootstrap.Result{HostID: control.Name, Phase: "complete", HostDirectory: filepath.Join(snapshot.Manifest.Paths.DeployRoot, "host", "releases", "initial"), ControlDirectory: filepath.Join(snapshot.Manifest.Paths.ControlRoot, "releases", "initial")}}
 	for _, changed := range []string{"host", "control"} {
 		invalid := ready
 		if changed == "host" {
@@ -57,9 +57,9 @@ control = ["admin","eventbus","console-proxy","web-host"]
 		} else {
 			invalid.Bootstrap.ControlDirectory = filepath.Join(snapshot.Manifest.Paths.ControlRoot+"-other", "releases", "initial")
 		}
-		require.NoError(t, saveJSON(state, "core-ready.json", invalid, true))
-		_, err := DeployUnit(t.Context(), snapshot, UnitOptions{CoreOptions: CoreOptions{StateDirectory: state.Name()}, HostID: control.Name, Profile: "host"})
-		require.ErrorContains(t, err, "roots from its original core receipt")
+		require.NoError(t, saveJSON(state, "admin-ready.json", invalid, true))
+		_, err := DeployUnit(t.Context(), snapshot, UnitOptions{DeployOptions: DeployOptions{StateDirectory: state.Name()}, HostID: control.Name, Profile: "host"})
+		require.ErrorContains(t, err, "roots from its original admin receipt")
 	}
 }
 
@@ -89,7 +89,7 @@ func TestRuntimeIdentityIsPrivatePersistentAndBoundToTarget(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
+func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"web", "web-host", "tools"} {
 		require.NoError(t, os.Mkdir(filepath.Join(root, name), 0o700))
@@ -104,7 +104,7 @@ func TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	t.Setenv("CGO_ENABLED", "1")
 	t.Setenv("GOOS", "windows")
 	t.Setenv("GOARCH", "386")
-	require.NoError(t, buildCoreLocally(t.Context(), root, filepath.Join(root, "bin"), "arm64", nil))
+	require.NoError(t, buildAdminLocally(t.Context(), root, filepath.Join(root, "bin"), "arm64", nil))
 	raw, err := os.ReadFile(log)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")

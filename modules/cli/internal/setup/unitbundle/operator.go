@@ -18,7 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// OperatorPin is the public CA binding installed by the core bootstrap.
+// OperatorPin is the public CA binding installed by the admin bootstrap.
 type OperatorPin struct {
 	ControlHostID string `json:"control_host_id"`
 	CA            string `json:"ca_sha256"`

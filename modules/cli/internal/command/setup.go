@@ -27,7 +27,7 @@ import (
 const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
-	bootstrapCore         setupCoreBootstrap
+	bootstrapAdmin        setupAdminBootstrap
 	bootstrapControl      setupControlBootstrap
 	deployHost            setupHostDeploy
 	deployUnit            setupUnitDeploy
@@ -57,7 +57,7 @@ type setupDeps struct {
 	scanDeployment func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost       func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
 	readLogs       func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
-	trialPackage   func(context.Context, unitdeploy.CoreOptions) error
+	trialPackage   func(context.Context, unitdeploy.DeployOptions) error
 }
 
 func init() {
@@ -560,7 +560,7 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 
 func newSetupValidateCommand(deps setupDeps) *cobra.Command {
 	var file string
-	var options unitdeploy.CoreOptions
+	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps）", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {

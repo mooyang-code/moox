@@ -94,7 +94,7 @@ func loadIdentity(path string) (gatewayclient.FileConfig, error) {
 	var config gatewayclient.FileConfig
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
-		return config, errors.New("core_not_ready: 这台电脑没有网关身份，core 还没有完成；运行 setup validate 看下一步")
+		return config, errors.New("admin_not_ready: 这台电脑没有网关身份，admin 还没有完成；运行 setup validate 看下一步")
 	}
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > 4096 {
 		return config, errors.New("operator gateway configuration must be a regular 0600 file of at most 4096 bytes")
