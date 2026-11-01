@@ -114,9 +114,6 @@ func renderHost(host Host) []string {
 	if host.Provider != "" {
 		out = append(out, "provider = "+tomlString(host.Provider))
 	}
-	if host.TLSMode != "" {
-		out = append(out, "tls_mode = "+tomlString(host.TLSMode))
-	}
 	return append(out, "ssh = { port = "+strconv.Itoa(host.SSHPort)+", username = "+tomlString(host.SSHUser)+", private_key_file = "+tomlString(sshKeyTOMLPath)+" }")
 }
 

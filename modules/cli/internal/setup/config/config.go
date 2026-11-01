@@ -261,7 +261,6 @@ type Host struct {
 	Username       string
 	Password       string `json:"-"`
 	Provider       string
-	TLSMode        string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
 	// Label 是主机的中文名（例如“海外机”），登记到 Admin 用于界面展示；配置里没写时按主机 ID 生成。
@@ -289,7 +288,6 @@ type HostDefinition struct {
 	PrivateAddress string `toml:"private_address"`
 	Region         string `toml:"region"`
 	Provider       string `toml:"provider"`
-	TLSMode        string `toml:"tls_mode"`
 	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
 	Reachability string    `toml:"reachability"`
 	SSH          SSHConfig `toml:"ssh"`
@@ -521,6 +519,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 			return fmt.Errorf("config_invalid: %s is no longer supported; [[factors.definitions]] accepts only factor_id and file (a YAML factor library file); name, spec and the derived fields come from the library", first)
 		}
 		first := keys[0].String()
+		if len(keys[0]) == 3 && keys[0][0] == "hosts" && keys[0][2] == "tls_mode" {
+			return fmt.Errorf("config_invalid: %s 已删除，管理台只用内部证书；运行 moox-cli config migrate --yes 去掉它", first)
+		}
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
@@ -556,7 +557,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
 		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
 		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
-		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
 		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
 		definition.SSH.PrivateKeyFile = strings.TrimSpace(definition.SSH.PrivateKeyFile)

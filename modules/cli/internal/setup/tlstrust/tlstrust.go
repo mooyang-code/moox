@@ -1,4 +1,4 @@
-// Package tlstrust 判断控制台入口的证书模式，并管理操作员本机对内部 CA 的信任。
+// Package tlstrust 管理操作员本机对管理台内部 CA 的信任。
 package tlstrust
 
 import (
@@ -8,43 +8,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
-
-type TLSMode string
-
-const (
-	TLSModePublic   TLSMode = "public"
-	TLSModeInternal TLSMode = "internal"
-)
-
-func resolveTLSMode(mode TLSMode, publicHost string) TLSMode {
-	if mode == TLSModePublic || mode == TLSModeInternal {
-		return mode
-	}
-	host := strings.TrimSpace(publicHost)
-	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
-		return TLSModeInternal
-	}
-	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-		return TLSModeInternal
-	}
-	return TLSModePublic
-}
-
-func UsesPublicTLSMode(mode TLSMode, publicHost string) bool {
-	return resolveTLSMode(mode, publicHost) == TLSModePublic
-}
-
-// RequiresLocalCATrust reports whether browsers need the MooX Caddy root CA
-// installed in the operator's trust store for the selected endpoint.
-func RequiresLocalCATrust(mode TLSMode, publicHost string) bool {
-	return resolveTLSMode(mode, publicHost) == TLSModeInternal
-}
 
 type FileCAStore struct{}
 
@@ -139,16 +107,6 @@ func EnsureLocalCATrust(ctx context.Context, repositoryRoot, caPath string) erro
 		return fmt.Errorf("%w: trust store rejected %s after installation: %w", ErrBrowserCATrust, caPath, err)
 	}
 	return nil
-}
-
-// EnsureLocalCATrustForHost is the endpoint-aware form used by setup flows.
-// Public ACME certificates are already trusted by normal browsers and must
-// not cause any local trust-store mutation.
-func EnsureLocalCATrustForHost(ctx context.Context, repositoryRoot, publicHost string, mode TLSMode) error {
-	if !RequiresLocalCATrust(mode, publicHost) {
-		return nil
-	}
-	return EnsureLocalCATrust(ctx, repositoryRoot, CAPath(publicHost))
 }
 
 func runLocalCACommand(ctx context.Context, script, caPath string, checkOnly bool) error {

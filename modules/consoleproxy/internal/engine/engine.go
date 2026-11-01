@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 	_ "time/tzdata"
@@ -60,7 +59,6 @@ func Start(ctx context.Context, cfg config.Config) (_ *Engine, err error) {
 	e = &Engine{cfg: cfg, gate: newAdmission()}
 	ownership.current = e.gate
 	// Match only necessary CLI initialization; CLI never owns main/signals.
-	certmagic.DefaultACME.Agreed = true
 	certmagic.UserAgent = "moox-console-proxy embedded-caddy/2.11.4"
 	if err = caddy.Load(raw, true); err != nil {
 		return nil, fmt.Errorf("load embedded Caddy: %w", err)
@@ -75,13 +73,6 @@ func Start(ctx context.Context, cfg config.Config) (_ *Engine, err error) {
 	if err = waitTLS(startup, cfg, root); err != nil {
 		return nil, err
 	}
-	if cfg.TLS.Mode == "public" {
-		for _, name := range []string{"root.crt", "root.sha256"} {
-			if err = os.Remove(filepath.Join(cfg.TLS.CAPublishDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return nil, err
-			}
-		}
-	}
 	e.gate.allow()
 	return e, nil
 }
@@ -91,11 +82,8 @@ func Start(ctx context.Context, cfg config.Config) (_ *Engine, err error) {
 func (e *Engine) CheckTLS(ctx context.Context) error { return waitTLS(ctx, e.cfg, e.root) }
 
 func waitTLS(ctx context.Context, cfg config.Config, root *x509.Certificate) error {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: cfg.Public.Host}
-	if cfg.TLS.Mode == "internal" {
-		tlsConfig.RootCAs = x509.NewCertPool()
-		tlsConfig.RootCAs.AddCert(root)
-	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: cfg.Public.Host, RootCAs: x509.NewCertPool()}
+	tlsConfig.RootCAs.AddCert(root)
 	host := cfg.Public.Bind
 	if net.ParseIP(host).IsUnspecified() {
 		if net.ParseIP(host).To4() != nil {

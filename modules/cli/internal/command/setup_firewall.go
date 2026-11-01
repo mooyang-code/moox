@@ -9,7 +9,6 @@ import (
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -244,9 +243,7 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 		targets = append(targets, setupFirewallTarget{Host: host, Rules: append([]cloudtencent.CreateFirewallRulesOptions(nil), rules...)})
 	}
 
-	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
-		tlstrust.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
-	)...)
+	controlRules := setupControlFirewallRules()
 	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules()...)
 	add(manifest.ControlHost(), controlRules)
 	// EventBus 端口只在 EventBus 所在的主机上放行（与控制机同机时由 add 按地址合并）。

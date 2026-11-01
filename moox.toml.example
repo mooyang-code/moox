@@ -316,7 +316,6 @@ label = "控制机"
 address = "203.0.113.10"
 region = "ap-guangzhou"
 provider = "tencent"
-tls_mode = "auto"
 ssh = { port = 22, username = "ubuntu" }
 
 [hosts.storage]
@@ -324,7 +323,6 @@ label = "存储机"
 address = "203.0.113.11"
 region = "ap-nanjing"
 provider = "tencent"
-tls_mode = "auto"
 ssh = { port = 22, username = "ubuntu" }
 
 # 海外机：海外 IP 出口，运行交易执行与出口代理，建议放在香港。

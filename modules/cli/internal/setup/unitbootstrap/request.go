@@ -31,13 +31,12 @@ type Unit struct {
 }
 
 type Request struct {
-	Version        int                  `json:"version"`
-	DeploymentRoot string               `json:"deployment_root"`
-	Topology       hostbundle.Topology  `json:"topology"`
-	Host           Unit                 `json:"host"`
-	Control        Unit                 `json:"control"`
-	ProxyCA        ProxyCAAuthorization `json:"proxy_ca"`
-	InitialAdmin   *AdminUser           `json:"initial_admin,omitempty"`
+	Version        int                 `json:"version"`
+	DeploymentRoot string              `json:"deployment_root"`
+	Topology       hostbundle.Topology `json:"topology"`
+	Host           Unit                `json:"host"`
+	Control        Unit                `json:"control"`
+	InitialAdmin   *AdminUser          `json:"initial_admin,omitempty"`
 }
 
 // AdminUser is a private, create-only seed. It never resets an existing user's
@@ -59,12 +58,6 @@ func (a AdminUser) Validate() error {
 		return errors.New("initial administrator requires a username of 1 to 20 ASCII letters or digits and a password of 1 to 72 bytes")
 	}
 	return nil
-}
-
-// ProxyCAAuthorization is consumed outside release snapshots: Create authorizes
-// the one-time internal CA creation of the first internal proxy install.
-type ProxyCAAuthorization struct {
-	Create bool `json:"create"`
 }
 
 func (Request) String() string     { return "MooXBootstrapRequest{private inputs omitted}" }
@@ -165,9 +158,6 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	}
 	if _, err := eventBusHost(request.Topology); err != nil {
 		return result, err
-	}
-	if !slices.Contains(result.components, "console-proxy") && request.ProxyCA.Create {
-		return result, errors.New("proxy CA authorization requires a selected console-proxy")
 	}
 	for _, name := range []string{request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot} {
 		root, err := fsutil.OpenPhysicalRoot(name, false)

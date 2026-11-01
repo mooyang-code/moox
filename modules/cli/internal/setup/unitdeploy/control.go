@@ -28,7 +28,6 @@ import (
 
 type ControlOptions struct {
 	DeployOptions
-	ProxyCA unitbootstrap.ProxyCAAuthorization
 	// Release 非空时升级 control：使用该版本的 host 与 control 软件，不顺带部署 Storage 与出口单元。
 	Release string
 }
@@ -50,10 +49,6 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		return request, nil, err
 	}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
-	request.ProxyCA = options.ProxyCA
-	if request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
-		return request, nil, errors.New("proxy CA creation requires internal TLS and cannot be combined with trusted import")
-	}
 	if options.Release != "" {
 		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
 			return request, nil, err
@@ -74,23 +69,11 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	return request, overrides, err
 }
 
-func consoleTLSMode(host setupconfig.Host) string {
-	if host.TLSMode == "internal" || host.TLSMode == "public" {
-		return host.TLSMode
-	}
-	ip := net.ParseIP(host.Address)
-	if strings.EqualFold(host.Address, "localhost") || strings.HasSuffix(strings.ToLower(host.Address), ".localhost") || ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-		return "internal"
-	}
-	return "public"
-}
-
 // Templates come from the independently verified original package, never
 // from files that may have changed in the worktree after the admin build.
 func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string) (map[string][]byte, error) {
 	result := map[string][]byte{}
 	control := snapshot.Manifest.ControlHost()
-	mode := consoleTLSMode(control)
 	for _, id := range components {
 		if !slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
 			continue
@@ -124,11 +107,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 				return nil, err
 			}
 			public["host"] = control.Address
-			tls, err := mapping("tls")
-			if err != nil {
-				return nil, err
-			}
-			tls["mode"] = mode
 		case "monitor":
 			deployment, err := mapping("deployment")
 			if err != nil {
@@ -138,10 +116,7 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			deployment["local_host_id"] = control.Name
 			if slices.Contains(components, "console-proxy") {
 				endpoint := (&url.URL{Scheme: "https", Host: net.JoinHostPort(control.Address, "9527"), Path: "/"}).String()
-				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": mode}
-				if mode == "internal" {
-					target["ca_file"], target["ca_baseline"] = "../../console-proxy/certs/caddy/root.crt", "../../console-proxy/data/caddy/internal-ca.sha256"
-				}
+				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": "internal", "ca_file": "../../console-proxy/certs/caddy/root.crt", "ca_baseline": "../../console-proxy/data/caddy/internal-ca.sha256"}
 				deployment["https"] = map[string]any{"console-proxy": target}
 			}
 			metrics, err := mapping("metrics")

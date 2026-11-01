@@ -130,8 +130,7 @@ func TestLoadHostNormalizationAndSecretRedaction(t *testing.T) {
 	body := strings.Replace(validManifest, `address = "192.0.2.10"`, `address = " 192.0.2.10 "
 private_address = " 10.0.0.10 "
 region = " AP-GUANGZHOU "
-provider = " Tencent "
-tls_mode = " INTERNAL "`, 1)
+provider = " Tencent "`, 1)
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	host := snapshot.Manifest.ControlHost()
@@ -139,7 +138,6 @@ tls_mode = " INTERNAL "`, 1)
 	assert.Equal(t, "10.0.0.10", host.PrivateAddress)
 	assert.Equal(t, "ap-guangzhou", host.Region)
 	assert.Equal(t, "tencent", host.Provider)
-	assert.Equal(t, "internal", host.TLSMode)
 	for _, value := range []any{host, snapshot.Manifest.HostCatalog} {
 		raw, err := json.Marshal(value)
 		require.NoError(t, err)

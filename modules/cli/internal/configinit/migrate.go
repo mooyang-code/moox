@@ -29,8 +29,6 @@ type MigrateOptions struct {
 	RepoRoot string
 	// RenameFrom / RenameTo 非空时把主机 ID 改名（--rename-host old=new）。
 	RenameFrom, RenameTo string
-	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
-	TLSModeHost, TLSMode string
 	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
 	FactorsEnabled string
 	// RetentionTarget / RetentionValue 非空时设置某个频率的保留期（--set-retention defaults.1m=35d）。
@@ -103,9 +101,10 @@ type MigrateReport struct {
 	// Components 记录 [deployments] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
 	Components []ComponentRename `json:"components,omitempty"`
 	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
-	Deployments bool              `json:"deployments,omitempty"`
-	SCF         *SCFImportReport  `json:"scf,omitempty"`
-	TLSMode     map[string]string `json:"tls_mode,omitempty"`
+	Deployments bool             `json:"deployments,omitempty"`
+	SCF         *SCFImportReport `json:"scf,omitempty"`
+	// RemovedTLSMode 记录删掉了 tls_mode 的主机：管理台只用内部证书，这项配置已删除。
+	RemovedTLSMode []string `json:"removed_tls_mode,omitempty"`
 	// FactorsEnabled 记录 --set-factors-enabled 的结果。
 	FactorsEnabled string `json:"factors_enabled,omitempty"`
 	// Retention 记录 --set-retention 的结果。
@@ -149,12 +148,6 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	migrated, err := migrateManifestText(plain, library, opts.RenameFrom, opts.RenameTo, &report)
 	if err != nil {
 		return report, err
-	}
-	if opts.TLSModeHost != "" {
-		if migrated, err = setHostTLSMode(migrated, opts.TLSModeHost, opts.TLSMode); err != nil {
-			return report, err
-		}
-		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
 	}
 	if opts.FactorsEnabled != "" {
 		if migrated, err = setFactorsEnabled(migrated, opts.FactorsEnabled); err != nil {
@@ -408,6 +401,13 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		id, ok := strings.CutPrefix(blocks[i].header, "hosts.")
 		if !ok || blocks[i].array || strings.Contains(id, ".") {
 			continue
+		}
+		if blockHasKey(blocks[i], "tls_mode") {
+			blocks[i].lines = slices.DeleteFunc(blocks[i].lines, func(line string) bool {
+				key, _, ok := keyValue(line)
+				return ok && key == "tls_mode"
+			})
+			report.RemovedTLSMode = append(report.RemovedTLSMode, id)
 		}
 		label := setupconfig.DefaultHostLabel(id)
 		if label == "" || blockHasKey(blocks[i], "label") {
@@ -899,22 +899,4 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 		out = append(out, b.lines...)
 	}
 	return []byte(strings.Join(out, "\n")), added, nil
-}
-
-// setHostTLSMode 设置 [hosts.<host>] 的 tls_mode。
-func setHostTLSMode(plain []byte, host, mode string) ([]byte, error) {
-	if mode != "auto" && mode != "public" && mode != "internal" {
-		return nil, errors.New("--set-tls-mode 的模式只能是 auto、public 或 internal")
-	}
-	blocks := splitBlocks(strings.Split(string(plain), "\n"))
-	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
-	if i < 0 {
-		return nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
-	}
-	setBlockKey(&blocks[i], "tls_mode", fmt.Sprintf("%q", mode))
-	var out []string
-	for _, b := range blocks {
-		out = append(out, b.lines...)
-	}
-	return []byte(strings.Join(out, "\n")), nil
 }

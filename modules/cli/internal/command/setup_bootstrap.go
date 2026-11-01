@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -32,14 +31,11 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "通过已核验 SSH 初始化核心或完整控制服务",
-		Long:  "--stage admin 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署及 Console Proxy。首次 internal CA 须显式创建或提供关闭后的可信导入目录。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
+		Long:  "--stage admin 初始化 Admin、EventBus、Host Gateway、Host Agent，保留全量拓扑并安装本机操作员身份；--stage control 在 Storage/出口依赖实际就绪后，用原始软件和凭据部署完整 control 部署及 Console Proxy。首次安装自动创建管理台内部 CA。纯 Go 和前端默认在本机构建；只有三个 Storage CGO 服务使用 compile_host。重试必须保留原 state-dir、原配置和原授权；完整舰队、云资源及正式验收继续由外层流程完成。",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if stage != "admin" && stage != "control" {
 				return errors.New("bootstrap requires --stage admin or --stage control")
-			}
-			if stage == "admin" && control.ProxyCA.Create {
-				return errors.New("proxy authorization belongs to --stage control")
 			}
 			if stage == "admin" && control.Release != "" {
 				return errors.New("--release upgrades the control stage only")
@@ -79,7 +75,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				}
 				// 改通知、Collector 这些配置后可以重跑；主机、账号这类改了就不是原来那次安装。
 				if control.Release == "" && !local.ControlReady && local.StaleBinding {
-					return fmt.Errorf("deployment_config_changed: 主机、路径、管理员或版本和这次安装开始时不一致（原配置在 %s）。换回原配置和原版本后重跑；要用新配置就彻底清空后重新安装", local.BindingConfig)
+					return errors.New("deployment_config_changed: 主机、路径、管理员或版本和这次安装开始时不一致，运行 setup validate 看原配置的位置。换回原配置和原版本后重跑；要用新配置就彻底清空后重新安装")
 				}
 				control.DeployOptions = options
 				result, err = deps.bootstrapControl(command.Context(), snapshot, control)
@@ -96,7 +92,6 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：本机预先构建的目标 Linux host/control 二进制目录")
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录；重试必须使用原目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
-	command.Flags().BoolVar(&control.ProxyCA.Create, "create-proxy-ca", false, "首次 internal 代理安装的一次性 CA 创建授权")
 	command.Flags().StringVar(&control.Release, "release", "", "仅 --stage control：用该版本升级 control 上的 host 与 control 单元（会按顺序重启 control 上的服务）")
 	return command
 }

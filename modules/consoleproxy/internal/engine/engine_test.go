@@ -86,33 +86,25 @@ func start(t *testing.T, c config.Config) (*Engine, *http.Client, string) {
 
 func TestRenderedConfigurationInvariants(t *testing.T) {
 	c := config.Defaults()
-	for _, mode := range []string{"internal", "public"} {
-		c.TLS.Mode = mode
-		raw, err := Render(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var parsed map[string]any
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			t.Fatal(err)
-		}
-		admin := parsed["admin"].(map[string]any)
-		if admin["disabled"] != true || admin["config"].(map[string]any)["persist"] != false {
-			t.Fatal("admin/persistence enabled")
-		}
-		apps := parsed["apps"].(map[string]any)
-		if mode == "internal" {
-			pki := apps["pki"].(map[string]any)
-			ca := pki["certificate_authorities"].(map[string]any)["local"].(map[string]any)
-			if ca["install_trust"] != false {
-				t.Fatal("automatic trust installation enabled")
-			}
-		} else if _, ok := apps["pki"]; ok {
-			t.Fatal("public mode would provision an unused internal CA")
-		}
-		if strings.Contains(string(raw), "11001") || strings.Contains(string(raw), "2019") {
-			t.Fatal("legacy listener rendered")
-		}
+	raw, err := Render(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	admin := parsed["admin"].(map[string]any)
+	if admin["disabled"] != true || admin["config"].(map[string]any)["persist"] != false {
+		t.Fatal("admin/persistence enabled")
+	}
+	pki := parsed["apps"].(map[string]any)["pki"].(map[string]any)
+	ca := pki["certificate_authorities"].(map[string]any)["local"].(map[string]any)
+	if ca["install_trust"] != false {
+		t.Fatal("automatic trust installation enabled")
+	}
+	if strings.Contains(string(raw), "11001") || strings.Contains(string(raw), "2019") {
+		t.Fatal("legacy listener rendered")
 	}
 }
 
@@ -407,30 +399,6 @@ func TestFirstInstallRequiresExplicitStateDecision(t *testing.T) {
 	}
 	if _, err := Start(context.Background(), c); err == nil {
 		t.Fatal("partial CA state was regenerated")
-	}
-}
-
-func TestPublicOnlyStateRemainsWithoutInternalCA(t *testing.T) {
-	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	c.TLS.Mode = "public"
-	previous, err := prepareCA(c)
-	if err != nil || previous != nil {
-		t.Fatalf("public first install required an internal CA: %v", err)
-	}
-	if _, err := publishCA(c, previous); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(c.TLS.StorageRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("public-only state created an internal CA")
-	}
-	if err := os.MkdirAll(filepath.Dir(c.TLS.CABaseline), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(c.TLS.CABaseline, []byte("historical"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := prepareCA(c); err == nil {
-		t.Fatal("public mode ignored a missing historical internal CA")
 	}
 }
 

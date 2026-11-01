@@ -37,7 +37,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 		require.NoError(t, os.MkdirAll(parent, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(parent, "app.yaml"), []byte(template), 0o600))
 	}
-	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10", TLSMode: "internal"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-node", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-node", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}
 	rendered, err := controlConfigurations(snapshot, directory, components)
 	require.NoError(t, err)
@@ -61,15 +61,6 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	require.Equal(t, "", collector["scf_access"].(map[string]any)["key_id"], "scf-collector 的 key_id 在安装时由主机材料填入，不从旧配置继承")
 	require.Equal(t, "7m", collector["period_readiness"].(map[string]any)["grace"])
 	require.Equal(t, 19, collector["collector_retention"].(map[string]any)["max_rows_per_pass"])
-	definition := snapshot.Manifest.HostCatalog["control"]
-	definition.TLSMode = "public"
-	snapshot.Manifest.HostCatalog["control"] = definition
-	rendered, err = controlConfigurations(snapshot, directory, components)
-	require.NoError(t, err)
-	https = decode("monitor")["deployment"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
-	require.Equal(t, "public", https["trust_mode"])
-	require.NotContains(t, https, "ca_file")
-	require.NotContains(t, https, "ca_baseline")
 }
 
 func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 )
 
 func newConfigMigrateCommand() *cobra.Command {
-	var file, renameHost, importSCF, tlsMode, addDeployment, reachability, factorsEnabled, retention string
+	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -33,13 +33,6 @@ func newConfigMigrateCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF}
-			if tlsMode != "" {
-				host, mode, ok := strings.Cut(tlsMode, "=")
-				if !ok {
-					return errors.New("--set-tls-mode 需要写成 主机ID=auto|public|internal")
-				}
-				opts.TLSModeHost, opts.TLSMode = strings.TrimSpace(host), strings.TrimSpace(mode)
-			}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			if retention != "" {
 				target, value, ok := strings.Cut(retention, "=")
@@ -88,7 +81,6 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&retention, "set-retention", "", "设置某个频率的保留期，写成 defaults.<频率>=<时长> 或 <空间>.<频率>=<时长>，例如 defaults.1m=35d")
 	cmd.Flags().StringVar(&reachability, "set-reachability", "", "设置主机的可达性，写成 主机ID=direct|outbound（只能出站的内网机器用 outbound）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
-	cmd.Flags().StringVar(&tlsMode, "set-tls-mode", "", "设置主机的控制台证书模式，写成 主机ID=auto|public|internal")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd
 }

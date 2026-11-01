@@ -1,6 +1,7 @@
 package command
 
 import (
+	"encoding/json"
 	"bytes"
 	"context"
 	"errors"
@@ -171,6 +172,12 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"verify",
 		"admin-status",
 	}, stages)
+	var summary map[string]any
+	require.NoError(t, json.Unmarshal(output.Bytes(), &summary))
+	require.Equal(t, "pending", summary["browser_trust"].(map[string]any)["status"], "信任不在 setup init 里做")
+	delete(summary, "browser_trust")
+	summaryJSON, err := json.Marshal(summary)
+	require.NoError(t, err)
 	require.JSONEq(t, `{
 		"status":"ready",
 		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
@@ -183,7 +190,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"metadata":{"planned":3,"applied":3,"unchanged":0},
 		"datasets":{"total":2,"activated":2,"unchanged":0},
 		"verification":{"planned":3,"unchanged":3}
-	}`, output.String())
+	}`, string(summaryJSON))
 }
 
 func TestSetupInitStopsAfterAdminFailure(t *testing.T) {

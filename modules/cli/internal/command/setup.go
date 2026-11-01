@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -623,20 +624,16 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 			host := snapshot.Manifest.ControlHost()
-			result := map[string]any{
-				"host":   host.Name,
-				"status": "trusted",
+			if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
+				return err
 			}
-			if !tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(host.TLSMode), host.Address) {
-				result["status"] = "not_required"
-			} else {
-				if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
-					return err
-				}
-				trust := describeSetupBrowserTrust(snapshot)
-				result["ca_path"] = trust.CAPath
-				result["fingerprint"] = trust.Fingerprint
-				result["other_machines"] = trust.OtherMachines
+			trust := describeSetupBrowserTrust(snapshot)
+			result := map[string]any{
+				"host":           host.Name,
+				"status":         "trusted",
+				"ca_path":        trust.CAPath,
+				"fingerprint":    trust.Fingerprint,
+				"other_machines": trust.OtherMachines,
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
@@ -832,12 +829,9 @@ func defaultSetupDeps() setupDeps {
 		ensureRelayFirewall:   setupEnsureRelayFirewall,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
-			tlsMode := tlstrust.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
-			if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
-				return setupclient.LoginResult{}, err
-			}
-			if tlstrust.UsesPublicTLSMode(tlsMode, snapshot.Manifest.ControlHost().Address) {
-				return setupclient.VerifyPublicLogin(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
+			// 这里只校验登录，用取回的根证书连接，不碰本机信任库。
+			if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
+				return setupclient.LoginResult{}, fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回内部 CA 根证书: %w", err)
 			}
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
@@ -957,10 +951,6 @@ func isPublicFirewallIP(address string) bool {
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	return []cloudtencent.CreateFirewallRulesOptions{
 		{
-			Protocol: "TCP", Ports: "80", CidrBlock: "0.0.0.0/0",
-			Action: "ACCEPT", Description: "MooX ACME HTTP challenge",
-		},
-		{
 			Protocol: "TCP", Ports: "9527", CidrBlock: "0.0.0.0/0",
 			Action: "ACCEPT", Description: "MooX browser HTTPS",
 		},
@@ -969,14 +959,6 @@ func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 			Action: "ACCEPT", Description: "MooX service HTTPS",
 		},
 	}
-}
-
-func setupControlFirewallRulesForTLS(mode tlstrust.TLSMode, address string) []cloudtencent.CreateFirewallRulesOptions {
-	rules := setupControlFirewallRules()
-	if tlstrust.UsesPublicTLSMode(mode, address) {
-		return rules
-	}
-	return rules[1:]
 }
 
 // setupEventBusFirewallRule 是 EventBus 端口的放行规则：只放在 EventBus 所在主机上（不一定是控制机），
@@ -1045,16 +1027,33 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("browser_ca_trust_failed: resolve repository root: %w", err)
 	}
 	host := snapshot.Manifest.ControlHost()
-	mode := tlstrust.TLSMode(host.TLSMode)
-	if !tlstrust.RequiresLocalCATrust(mode, host.Address) {
-		return nil
-	}
 	// 原生 control 单元把内部 CA 根证书发布在 current/console-proxy 下；先经 SSH 取回到本机缓存再安装信任，
 	// 不依赖本机残留的旧证书副本。
 	if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
 		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回内部 CA 根证书: %w", err)
 	}
-	return tlstrust.EnsureLocalCATrustForHost(ctx, root, host.Address, mode)
+	caPath := tlstrust.CAPath(host.Address)
+	if !setupHasTerminal() {
+		return fmt.Errorf("browser_trust_manual: 这一步要管理员授权，当前没有终端。请在自己的终端运行：%s", manualBrowserTrustCommand(caPath))
+	}
+	if err := tlstrust.EnsureLocalCATrust(ctx, root, caPath); err != nil {
+		return fmt.Errorf("browser_trust_manual: 自动安装失败（%v）。请在自己的终端运行：%s", err, manualBrowserTrustCommand(caPath))
+	}
+	return nil
+}
+
+// setupHasTerminal 在测试里替换。
+var setupHasTerminal = func() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// manualBrowserTrustCommand 是用户在自己终端运行的信任命令。
+func manualBrowserTrustCommand(caPath string) string {
+	if runtime.GOOS == "darwin" {
+		return "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain " + caPath
+	}
+	return "sudo scripts/deploy/install-caddy-ca.sh --ca-file " + caPath
 }
 
 // refreshSetupConsoleCA 在测试里替换。

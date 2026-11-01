@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -16,8 +17,8 @@ import (
 	"testing"
 	"time"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,18 +46,13 @@ func writeCachedConsoleCA(t *testing.T, address string) string {
 func TestSetupInitSummaryReportsBrowserTrustForInternalCA(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	snapshot := setupSnapshot(t)
-
-	// 公网地址走公共证书：本机不需要信任内部 CA，摘要里不出现。
-	require.Nil(t, describeSetupBrowserTrust(snapshot))
-
 	control := snapshot.Manifest.ControlHost()
-	control.TLSMode = "internal"
-	testfixture.SetHost(&snapshot.Manifest, control)
 	want := writeCachedConsoleCA(t, control.Address)
 
 	trust := describeSetupBrowserTrust(snapshot)
 	require.NotNil(t, trust)
-	require.Equal(t, "trusted", trust.Status)
+	require.Equal(t, "pending", trust.Status, "信任要用户自己做")
+	require.Contains(t, trust.Note, "setup trust-browser")
 	require.Equal(t, want, trust.Fingerprint)
 	require.Equal(t, tlstrust.CAPath(control.Address), trust.CAPath)
 	require.True(t, strings.HasPrefix(trust.CAPath, os.Getenv("HOME")))
@@ -72,4 +68,16 @@ func TestTLSTrustFingerprintRejectsMissingOrInvalidFiles(t *testing.T) {
 	bad := filepath.Join(dir, "bad.crt")
 	require.NoError(t, os.WriteFile(bad, []byte("not pem"), 0o600))
 	require.Empty(t, tlstrust.Fingerprint(bad))
+}
+
+func TestSetupBrowserTrustWithoutTerminalPrintsManualCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	refresh, terminal := refreshSetupConsoleCA, setupHasTerminal
+	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = refresh, terminal })
+	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error { return nil }
+	setupHasTerminal = func() bool { return false }
+	snapshot := setupSnapshot(t)
+	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
+	require.ErrorContains(t, err, "browser_trust_manual")
+	require.ErrorContains(t, err, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 }

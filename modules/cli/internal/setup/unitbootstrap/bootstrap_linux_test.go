@@ -52,7 +52,6 @@ func bootstrapFixture(t *testing.T) (Request, string) {
 	// 这里没有任何 broker 在运行，HostAgent 照样必须就绪（就绪不依赖 EventBus）。
 	components := []string{"admin", "web-host", "console-proxy"}
 	request := Request{Version: 1, DeploymentRoot: deployment, Topology: hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{{HostID: "control", Address: "127.0.0.1", Description: "initial", Components: append(append([]string(nil), components...), "eventbus")}}}, Host: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_HOST_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_HOST_SHA256"), UnitRoot: filepath.Join(deployment, "host"), Environment: map[string]map[string]string{"host-gateway": health(), "host-agent": health()}, Overrides: map[string]string{}}, Control: Unit{Archive: os.Getenv("MOOX_BOOTSTRAP_CONTROL_ARCHIVE"), SHA256: os.Getenv("MOOX_BOOTSTRAP_CONTROL_SHA256"), UnitRoot: filepath.Join(deployment, "control"), Environment: map[string]map[string]string{}, Overrides: map[string]string{}, Components: components}}
-	request.ProxyCA.Create = true
 	request.InitialAdmin = &AdminUser{Username: "admin", Password: "synthetic-initial-admin-password"}
 	for _, id := range components {
 		request.Control.Environment[id] = health()
@@ -144,7 +143,6 @@ func TestBootstrapLinuxActualAdminGatewayAndServicesRecoverTogether(t *testing.T
 	partial.Control.Components = []string{"admin"}
 	partial.Control.Environment = map[string]map[string]string{"admin": request.Control.Environment["admin"]}
 	partial.Control.Overrides = map[string]string{"admin/config/console.yaml": request.Control.Overrides["admin/config/console.yaml"]}
-	partial.ProxyCA = ProxyCAAuthorization{}
 	_, err = runBootstrap(t, partial, root)
 	require.ErrorContains(t, err, "cannot narrow")
 	require.Equal(t, host, runtimeStatus(t, initial.HostDirectory))

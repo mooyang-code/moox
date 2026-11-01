@@ -446,7 +446,7 @@ compute1 = ["access"]
 			require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 			t.Log("actual business unit ready with immutable retry:", profile)
 		}
-		promotion := ControlOptions{DeployOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}}
+		promotion := ControlOptions{DeployOptions: options}
 		full, err := BootstrapControl(t.Context(), snapshot, promotion)
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", full.Stage)
@@ -487,9 +487,6 @@ compute1 = ["access"]
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", resumedControl.Stage)
 		unchanged := status(full.Bootstrap.ControlDirectory)
-		promotion.ProxyCA.Create = false
-		_, err = BootstrapControl(t.Context(), snapshot, promotion)
-		require.ErrorContains(t, err, "original private deployment input changed")
 		require.Equal(t, unchanged, status(full.Bootstrap.ControlDirectory))
 		t.Log("all eight control services, trusted HTTPS page/login, immutable retry, pause/resume and original authorization binding passed")
 	} else {

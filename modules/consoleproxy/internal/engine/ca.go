@@ -98,10 +98,13 @@ func caDir(c config.Config) string {
 // cannot be silently replaced by Caddy's automatic CA creation.
 func prepareCA(c config.Config) (*x509.Certificate, error) {
 	cert, err := verifyCA(c)
-	if err == nil && cert != nil {
-		err = checkFingerprint(c.TLS.CABaseline, cert)
+	if err != nil {
+		return nil, err
 	}
-	return cert, err
+	if cert == nil {
+		return nil, errors.New("CA is missing; initialize state offline before serving")
+	}
+	return cert, checkFingerprint(c.TLS.CABaseline, cert)
 }
 
 // CheckState validates persisted keys, certificates and the existing trust
@@ -111,15 +114,10 @@ func CheckState(c config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if cert == nil {
-		if c.TLS.Mode == "internal" {
-			return "", errors.New("internal CA state is absent")
-		}
-		return "", nil
-	}
 	return strings.TrimSpace(fingerprint(cert)), nil
 }
 
+// verifyCA 校验持久化的 CA；状态完全为空时返回 nil，残缺的状态直接报错。
 func verifyCA(c config.Config) (*x509.Certificate, error) {
 	dir := caDir(c)
 	_, err := os.Stat(filepath.Join(dir, "root.crt"))
@@ -129,9 +127,6 @@ func verifyCA(c config.Config) (*x509.Certificate, error) {
 			if _, e := os.Stat(path); !errors.Is(e, os.ErrNotExist) {
 				return nil, errors.New("incomplete existing CA state; refusing automatic replacement")
 			}
-		}
-		if c.TLS.Mode == "internal" {
-			return nil, errors.New("CA is missing; initialize state offline before serving")
 		}
 		return nil, nil
 	}
@@ -187,11 +182,6 @@ func checkPublishedCA(c config.Config, cert *x509.Certificate) error {
 }
 
 func publishCA(c config.Config, previous *x509.Certificate) (*x509.Certificate, error) {
-	// Public-only installations do not provision PKI. Any partial historical
-	// state was rejected before Load; an empty state stays empty.
-	if c.TLS.Mode == "public" && previous == nil {
-		return nil, nil
-	}
 	cert, crt, err := readCA(caDir(c), "root")
 	if err != nil {
 		return nil, err
@@ -202,13 +192,11 @@ func publishCA(c config.Config, previous *x509.Certificate) (*x509.Certificate, 
 	if err := atomicWrite(c.TLS.CABaseline, []byte(fingerprint(cert)), 0600); err != nil {
 		return nil, err
 	}
-	if c.TLS.Mode == "internal" {
-		if err := atomicWrite(filepath.Join(c.TLS.CAPublishDir, "root.crt"), crt, 0644); err != nil {
-			return nil, err
-		}
-		if err := atomicWrite(filepath.Join(c.TLS.CAPublishDir, "root.sha256"), []byte(fingerprint(cert)), 0644); err != nil {
-			return nil, err
-		}
+	if err := atomicWrite(filepath.Join(c.TLS.CAPublishDir, "root.crt"), crt, 0644); err != nil {
+		return nil, err
+	}
+	if err := atomicWrite(filepath.Join(c.TLS.CAPublishDir, "root.sha256"), []byte(fingerprint(cert)), 0644); err != nil {
+		return nil, err
 	}
 	return cert, nil
 }

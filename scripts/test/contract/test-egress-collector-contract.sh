@@ -34,7 +34,6 @@ tls_enabled = true
 
 [hosts.control]
 address = "192.0.2.10"
-tls_mode = "auto"
 ssh = { port = 22, username = "ubuntu" }
 
 [hosts.storage]

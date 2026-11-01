@@ -22,9 +22,11 @@ var errDeploymentBlocked = errors.New("deployment_blocked: 目标机器有阻塞
 type setupDeployment struct {
 	deployscan.Decision
 	// NextSteps 是接下来要按顺序运行的命令，只有首次安装的路线才有。
-	NextSteps []string                `json:"next_steps"`
-	Warnings  []string                `json:"warnings,omitempty"`
-	Hosts     []deployscan.HostReport `json:"hosts"`
+	NextSteps []string `json:"next_steps"`
+	// ManualSteps 是要用户在自己终端做的事，Agent 做不了，也不影响安装继续。
+	ManualSteps []string                `json:"manual_steps,omitempty"`
+	Warnings    []string                `json:"warnings,omitempty"`
+	Hosts       []deployscan.HostReport `json:"hosts"`
 }
 
 // minControlDiskKB 是管理台机部署前至少要有的可用空间：一次部署要放离线包和两个发布目录。
@@ -41,18 +43,9 @@ func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
 	return unitdeploy.Binding{DeploymentSHA256: snapshot.DeploymentDigest(), ConfigPath: snapshot.Path(), Version: Version}
 }
 
-// consoleCertPath 是这台电脑上缓存的管理台证书；公网证书没有缓存，返回空。
+// consoleCertPath 是这台电脑上缓存的管理台证书。
 func consoleCertPath(snapshot *setupconfig.Snapshot) string {
-	control := snapshot.Manifest.ControlHost()
-	if !usesInternalTLS(snapshot) {
-		return ""
-	}
-	return tlstrust.CAPath(control.Address)
-}
-
-func usesInternalTLS(snapshot *setupconfig.Snapshot) bool {
-	control := snapshot.Manifest.ControlHost()
-	return tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(control.TLSMode), control.Address)
+	return tlstrust.CAPath(snapshot.Manifest.ControlHost().Address)
 }
 
 // diskWarnings 列出可用空间不够的主机。不算阻塞项：清除旧部署正好能腾出空间。
@@ -103,7 +96,8 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 	control := snapshot.Manifest.ControlHost().Name
 	status := &setupDeployment{Decision: deployscan.Decide(reports, control, local), Hosts: reports, Warnings: diskWarnings(reports, control)}
-	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot))
+	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local)
+	status.ManualSteps = deployscan.ManualSteps(status.Route, local)
 	if len(deployscan.CollectSpaces(snapshot.Manifest)) == 0 {
 		status.Warnings = append(status.Warnings, "这个拓扑没有 collector-stream，也没配云函数，默认的 crypto 采集任务不会运行")
 	}
@@ -112,7 +106,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 		return nil, err
 	}
 	status.Warnings = append(status.Warnings, drift...)
-	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot)); reason != "" {
+	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local); reason != "" {
 		status.Reasons = append(status.Reasons, reason)
 	}
 	if status.Route == deployscan.RouteBlocked {

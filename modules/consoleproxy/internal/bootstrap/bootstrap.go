@@ -25,7 +25,7 @@ func Serve(ctx context.Context, cfg config.Config, version, commit string) error
 				_ = conn.Close()
 			}
 		}
-		rsp.Details = map[string]any{"tls_mode": cfg.TLS.Mode, "caddy_version": "v2.11.4", "upstream_tcp_reachable": dependencies}
+		rsp.Details = map[string]any{"caddy_version": "v2.11.4", "upstream_tcp_reachable": dependencies}
 		return rsp
 	}
 	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))

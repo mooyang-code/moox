@@ -15,7 +15,7 @@ import (
 // InitializeState is an offline operation on a stopped, exclusively owned
 // staging directory. The deployment coordinator durably consumes authorization
 // before calling it and publishes the completed state before any service starts.
-// Only the PKI app is provisioned: no listeners, ACME or OS trust installation.
+// Only the PKI app is provisioned: no listeners or OS trust installation.
 func InitializeState(ctx context.Context, cfg config.Config) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -28,35 +28,30 @@ func InitializeState(ctx context.Context, cfg config.Config) (string, error) {
 	if ownership.current != nil {
 		return "", errors.New("offline initialization requires the process Caddy engine to be stopped")
 	}
-	// Public installations need no internal CA. Checking in public mode also
-	// rejects remnants before a fresh internal installation is authorized.
-	empty := cfg
-	empty.TLS.Mode = "public"
-	cert, err := verifyCA(empty)
+	// 只有完全空的状态才能初始化，残留的 CA 文件也会在这里被拒绝。
+	cert, err := verifyCA(cfg)
 	if err != nil {
 		return "", err
 	}
 	if cert != nil {
 		return "", errors.New("initialization never replaces existing CA state")
 	}
-	if cfg.TLS.Mode == "internal" {
-		type obj = map[string]any
-		raw, err := json.Marshal(obj{
-			"admin":   obj{"disabled": true, "config": obj{"persist": false}},
-			"storage": obj{"module": "file_system", "root": cfg.TLS.StorageRoot},
-			"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false, "intermediate_lifetime": intermediateLifetime}}}},
-		})
-		if err != nil {
-			return "", err
-		}
-		loadErr := caddy.Load(raw, true)
-		stopErr := caddy.Stop()
-		if err := errors.Join(loadErr, stopErr); err != nil {
-			return "", err
-		}
-		if _, err := publishCA(cfg, nil); err != nil {
-			return "", err
-		}
+	type obj = map[string]any
+	raw, err := json.Marshal(obj{
+		"admin":   obj{"disabled": true, "config": obj{"persist": false}},
+		"storage": obj{"module": "file_system", "root": cfg.TLS.StorageRoot},
+		"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false, "intermediate_lifetime": intermediateLifetime}}}},
+	})
+	if err != nil {
+		return "", err
+	}
+	loadErr := caddy.Load(raw, true)
+	stopErr := caddy.Stop()
+	if err := errors.Join(loadErr, stopErr); err != nil {
+		return "", err
+	}
+	if _, err := publishCA(cfg, nil); err != nil {
+		return "", err
 	}
 	// Caddy's generated key files and all newly created directories must reach
 	// disk before the coordinator publishes its authorization receipt.

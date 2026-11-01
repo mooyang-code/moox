@@ -42,7 +42,6 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 | `--set-retention defaults.5m=240d` 或 `<空间>.<频率>=<时长>` | 改保留期（目标表必须已存在）；**生效要重装 Storage 单元** |
 | `--set-factors-enabled true|false` | `[factors] enabled` |
 | `--set-reachability 主机ID=direct|outbound` | 主机可达性 |
-| `--set-tls-mode 主机ID=auto|public|internal` | 控制台证书模式 |
 | `--add-deployment 主机ID=组件ID[,组件ID]` | 把组件并入主机的 `[deployments]` |
 | `--rename-host 旧ID=新ID` | 主机改名（主机表、`[deployments]`、引用一起改） |
 | `--import-scf <JSON>` | 整体替换 `[scf_plan]` |

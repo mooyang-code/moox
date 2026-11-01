@@ -76,22 +76,20 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
 | 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、登记存储节点、导入并激活元数据。必须在 control 之前：Monitor 要等系统数据集就绪 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
-| 7 | `$CLI setup bootstrap --stage control --create-proxy-ca` | internal TLS 的首次安装必须带 `--create-proxy-ca`；失败的发布目录由下一次尝试自动清理 |
-| 8 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
+| 7 | `$CLI setup bootstrap --stage control` | 首次安装自动创建管理台内部 CA；失败的发布目录由下一次尝试自动清理 |
+| 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
 | 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳 |
 | 10 | `$CLI setup sync-deployments --host factor --yes`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 
-### 步骤 8 前：信任内部 CA
+### 信任内部 CA（用户自己做）
 
-`setup init` 先检查内部 CA 是否已被本机信任，检查标准是**证书在系统钥匙串里**，没有就调 `scripts/deploy/install-caddy-ca.sh`（要 sudo 密码）。Agent 的 shell 没有终端，输不了密码：
+`setup init` 不碰信任库，也不等这一步。信任要这台电脑的管理员授权，Agent 的 shell 没有终端，做不了。`setup validate` 把它放在 `manual_steps`，安装结束时转告用户：
 
-1. 先核对本机缓存的证书就是新 CA：`openssl x509 -in ~/.moox/certs/moox-caddy-root-<控制机地址>.crt -noout -fingerprint -sha256`，与控制机 `/data/moox/prod/current/console-proxy/certs/caddy/root.crt` 的指纹一致。
-2. 让用户在本机授权（弹窗由用户点、密码由用户输，Agent 看不到）：
-   `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db <证书>`（用户级信任，弹系统授权框）；
-   再用 `osascript -e 'do shell script "security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <证书>" with administrator privileges'` 把证书放进系统钥匙串（弹管理员密码框；系统信任设置可能因“无法交互”被拒，但证书已入系统钥匙串，检查即可通过）。
-3. 用 `scripts/deploy/install-caddy-ca.sh --ca-file <证书> --check` 的退出码确认，再重跑 `setup init`。
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
+```
 
-旧的 CA 会留在钥匙串里，由用户自行清理。
+用户也可以在自己的终端运行 `setup trust-browser`。不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。重装后 CA 是新的，旧证书留在钥匙串里，由用户自行清理。
 
 ### 步骤 8 的已知限制
 
@@ -147,7 +145,7 @@ $S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 | control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
 | 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节在编译机构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
-| `setup init` 报 `browser_ca_trust_failed`、`sudo: a terminal is required` | 检查要求证书在系统钥匙串，安装需要 sudo | 见第 4 节“信任内部 CA”，由用户授权 |
+| `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |
 | 引擎重启后一段时间 `lease conflict`、`not_ready` | 旧租约还没过期 | 等几十秒，再等窗口载入（约 20 秒）和 warming |

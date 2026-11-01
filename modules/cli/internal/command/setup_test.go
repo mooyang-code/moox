@@ -13,7 +13,6 @@ import (
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,17 +85,6 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	require.Contains(t, output.String(), "render-runtime-config")
 }
 
-func TestSetupTrustBrowserSkipsPublicTLS(t *testing.T) {
-	t.Parallel()
-	snapshot := setupSnapshot(t)
-	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
-	require.NoError(t, cmd.Execute())
-	require.JSONEq(t, `{"host":"control","status":"not_required"}`, output.String())
-}
-
 func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
@@ -106,11 +94,9 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	t.Setenv("MARKER", marker)
 	t.Chdir(root)
 	snapshot := setupSnapshot(t)
-	host := snapshot.Manifest.HostCatalog["control"]
-	host.TLSMode = "internal"
-	snapshot.Manifest.HostCatalog["control"] = host
-	original := refreshSetupConsoleCA
-	t.Cleanup(func() { refreshSetupConsoleCA = original })
+	original, terminal := refreshSetupConsoleCA, setupHasTerminal
+	t.Cleanup(func() { refreshSetupConsoleCA, setupHasTerminal = original, terminal })
+	setupHasTerminal = func() bool { return true }
 	refreshed := 0
 	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error {
 		refreshed++
@@ -203,27 +189,18 @@ func TestEventBusFirewallIPRejectsAmbiguousDNS(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one IPv4")
 }
 
-func TestSetupControlFirewallRulesIncludePublicTLSAndServicePorts(t *testing.T) {
+func TestSetupControlFirewallRulesIncludeBrowserAndServicePorts(t *testing.T) {
 	rules := setupControlFirewallRules()
-	require.Len(t, rules, 3)
-	assert.Equal(t, "80", rules[0].Ports)
-	assert.Equal(t, "MooX ACME HTTP challenge", rules[0].Description)
-	assert.Equal(t, "9527", rules[1].Ports)
-	assert.Equal(t, "MooX browser HTTPS", rules[1].Description)
-	assert.Equal(t, "11001", rules[2].Ports)
-	assert.Equal(t, "MooX service HTTPS", rules[2].Description)
+	require.Len(t, rules, 2, "只用内部证书，不开 80 端口")
+	assert.Equal(t, "9527", rules[0].Ports)
+	assert.Equal(t, "MooX browser HTTPS", rules[0].Description)
+	assert.Equal(t, "11001", rules[1].Ports)
+	assert.Equal(t, "MooX service HTTPS", rules[1].Description)
 	for _, rule := range rules {
 		assert.Equal(t, "TCP", rule.Protocol)
 		assert.Equal(t, "0.0.0.0/0", rule.CidrBlock)
 		assert.Equal(t, "ACCEPT", rule.Action)
 	}
-}
-
-func TestSetupControlFirewallRulesSkipACMEForInternalTLS(t *testing.T) {
-	rules := setupControlFirewallRulesForTLS(tlstrust.TLSModeInternal, "203.0.113.8")
-	require.Len(t, rules, 2)
-	require.Equal(t, "9527", rules[0].Ports)
-	require.Equal(t, "11001", rules[1].Ports)
 }
 
 func TestIsPublicFirewallIPRejectsPrivateAndLoopbackAddresses(t *testing.T) {

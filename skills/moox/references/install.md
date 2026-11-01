@@ -168,7 +168,7 @@ cd moox-${VER}
 - `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
 - 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
 
-大致顺序，以 `next_steps` 为准：防火墙 → admin → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → 信任证书（内部证书时）→ `setup init` → 海外采集和交易 → 因子机 → 配置备份。
+大致顺序，以 `next_steps` 为准：防火墙 → admin → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → `setup init` → 海外采集和交易 → 因子机 → 配置备份 → 验收。
 
 元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
 
@@ -176,13 +176,15 @@ cd moox-${VER}
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
-`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、浏览器证书检查、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
+`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
 
-macOS 上用内部证书时，`trust-browser` 会请用户在系统弹窗里授权；不要替用户清理钥匙串里的这张证书。授权弹不出来时，把下面的命令给用户自己执行：
+管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
 ```bash
-security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
 ```
+
+不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。
 
 ## 6. 验收与交付
 

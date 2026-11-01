@@ -56,18 +56,14 @@ func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	}, bootstrapControl: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
 		called++
 		require.Same(t, snapshot, got)
-		require.True(t, options.ProxyCA.Create)
 		require.True(t, filepath.IsAbs(options.StateDirectory))
 		return unitdeploy.BootstrapResult{Stage: "control-ready"}, nil
 	}})
 	var output bytes.Buffer
 	command.SetOut(&output)
-	command.SetArgs([]string{"bootstrap", "--stage", "admin", "--create-proxy-ca"})
-	require.ErrorContains(t, command.Execute(), "belongs to --stage control")
-	require.Zero(t, loaded)
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	command.SetArgs([]string{"bootstrap", "--stage", "control", "--create-proxy-ca", "--state-dir", state, "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"bootstrap", "--stage", "control", "--state-dir", state, "--operator-dir", t.TempDir()})
 	require.ErrorContains(t, command.Execute(), "init_storage_required")
 	require.Zero(t, called, "元数据没激活时不能动手")
 	require.NoError(t, unitdeploy.MarkStep(state, unitdeploy.StepInitStorage))

@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
@@ -146,13 +145,6 @@ func TestEnsureSetupBrowserCATrustRefreshesNativeControlCA(t *testing.T) {
 	}
 
 	snapshot := setupSnapshot(t)
-	// 公网地址走公共证书，不需要本机信任内部 CA。
-	require.NoError(t, ensureSetupBrowserCATrust(context.Background(), snapshot))
-	require.Zero(t, calls)
-
-	control := snapshot.Manifest.ControlHost()
-	control.TLSMode = "internal"
-	testfixture.SetHost(&snapshot.Manifest, control)
 	err := ensureSetupBrowserCATrust(context.Background(), snapshot)
 	require.ErrorContains(t, err, "browser_ca_trust_failed")
 	require.True(t, strings.Contains(err.Error(), "ssh unavailable"))

@@ -121,17 +121,12 @@ func TestCADownloadRefusesMissingOrNonCertificateFiles(t *testing.T) {
 	}
 }
 
-func TestRenderExposesCADownloadOnlyInInternalMode(t *testing.T) {
-	c := config.Defaults()
-	for mode, want := range map[string]bool{"internal": true, "public": false} {
-		c.TLS.Mode = mode
-		raw, err := Render(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := strings.Contains(string(raw), "moox_console_ca") && strings.Contains(string(raw), caDownloadCertPath)
-		if got != want {
-			t.Fatalf("%s mode: CA download route present = %v, want %v", mode, got, want)
-		}
+func TestRenderExposesCADownload(t *testing.T) {
+	raw, err := Render(config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "moox_console_ca") || !strings.Contains(string(raw), caDownloadCertPath) {
+		t.Fatal("根证书下载路由缺失")
 	}
 }
