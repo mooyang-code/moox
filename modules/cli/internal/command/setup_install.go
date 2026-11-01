@@ -146,7 +146,7 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 			return err
 		}
 	}
-	hosts, err := setupInstallPreflight(ctx, deps, manifest, options, pending)
+	hosts, err := setupInstallPreflight(ctx, deps, manifest, options, !rerun, pending)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func checkSetupWipe(plan deployscan.Plan, options setupInstallOptions) error {
 }
 
 // setupInstallPreflight 实测每台的下载源。源不通时部署阶段由这台电脑推送，只是慢，不算失败。
-func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupconfig.Manifest, options setupInstallOptions, pending []deployscan.Step) ([]setupInstallHost, error) {
+func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupconfig.Manifest, options setupInstallOptions, wipe bool, pending []deployscan.Step) ([]setupInstallHost, error) {
 	list := manifest.Hosts()
 	hosts := make([]setupInstallHost, len(list))
 	errs := make([]error, len(list))
@@ -229,8 +229,8 @@ func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupco
 		return hosts, err
 	}
 	// 目标机下载不了时靠这台电脑推送。这里也不通就在动旧部署之前停下。
-	// 只差备份或验收时不用下载，不能因为下载源不通拦住重跑。
-	deploys := slices.ContainsFunc(pending, func(step deployscan.Step) bool {
+	// 只差备份或验收时不用下载，不能因为下载源不通拦住重跑；要清除时后面全都要重新部署。
+	deploys := wipe || slices.ContainsFunc(pending, func(step deployscan.Step) bool {
 		return slices.Contains([]string{deployscan.StepAdmin, deployscan.StepHost, deployscan.StepUnit, deployscan.StepControl}, step.Kind)
 	})
 	if deploys && slices.ContainsFunc(hosts, func(host setupInstallHost) bool { return !host.Reachable }) && !deps.localReachable(ctx, options.deploy) {
