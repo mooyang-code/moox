@@ -101,7 +101,7 @@ type UnitOptions struct {
 	DeployOptions
 	HostID  string
 	Profile string
-	// Release 选择 setup release build 产出的版本制品；为空时修复首次安装的发布（使用首次初始化的软件）。
+	// Release 选择 setup release fetch 或 build 登记的版本制品；为空时修复首次安装的发布（使用首次初始化的软件）。
 	Release string
 }
 type UnitResult = HostResult

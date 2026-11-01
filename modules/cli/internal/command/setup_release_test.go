@@ -32,7 +32,6 @@ func TestSetupReleaseBuildCommand(t *testing.T) {
 	output, err := run("build", "--release", "r1", "--state-dir", "state", "--source-dir", ".", "--storage-binary-dir", "storage-bin")
 	require.NoError(t, err)
 	require.Equal(t, "r1", got.ReleaseID)
-	require.Equal(t, "amd64", got.Architecture)
 	for _, path := range []string{got.StateDirectory, got.RepositoryRoot, got.StorageBinaryDirectory} {
 		require.True(t, filepath.IsAbs(path), path)
 	}

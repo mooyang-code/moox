@@ -132,7 +132,7 @@ func TestHostBuildUsesOnlyLocalPureGoTools(t *testing.T) {
 	t.Setenv("CGO_ENABLED", "1")
 	t.Setenv("GOOS", "windows")
 	t.Setenv("GOARCH", "386")
-	require.NoError(t, buildHostLocally(t.Context(), root, filepath.Join(root, "bin"), "arm64", nil))
+	require.NoError(t, buildLocalTargets(t.Context(), root, filepath.Join(root, "bin"), "arm64", nil, []string{"host-gateway", "hostagent"}))
 	raw, err := os.ReadFile(log)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")

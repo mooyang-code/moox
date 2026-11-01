@@ -68,7 +68,10 @@ func ensureArtifact(ctx context.Context, transport setupssh.Client, download art
 	remote := artifactPath(download.root, item)
 	digest := strings.TrimPrefix(item.SHA256, "sha256:")
 	if item.Archive != "" {
-		return remote, uploadFile(ctx, transport, download.root, item.Archive, remote, digest, 0o600)
+		if err := uploadFile(ctx, transport, download.root, item.Archive, remote, digest, 0o600); err != nil {
+			return remote, err
+		}
+		return remote, markStaging(ctx, transport, remote, "local")
 	}
 	file := fetchunit.File{Name: item.RemoteFile, SHA256: digest, Size: item.Size}
 	urls := fetchunit.Sources(item.Release)
@@ -83,7 +86,19 @@ func ensureArtifact(ctx context.Context, transport setupssh.Client, download art
 	if err != nil {
 		return remote, err
 	}
-	return remote, uploadFile(ctx, transport, download.root, local, remote, digest, 0o600)
+	if err := uploadFile(ctx, transport, download.root, local, remote, digest, 0o600); err != nil {
+		return remote, err
+	}
+	return remote, markStaging(ctx, transport, remote, item.Release)
+}
+
+// markStaging 给推送上去的软件包写版本标记：staging 按标记只留最近两个版本，没有标记就永远清不掉。
+func markStaging(ctx context.Context, transport setupssh.Client, remote, release string) error {
+	output, err := transport.Run(ctx, []string{"sh", "-c", `printf %s "$2" > "$1/.release"`, "moox-mark-staging", path.Dir(remote), release}, nil)
+	if err != nil {
+		return remoteFailure("记录软件包版本", err, output)
+	}
+	return nil
 }
 
 // helperExtractScript 从目标机上的 host 包取出运行助手，校验通过才放到位。
