@@ -102,10 +102,6 @@ func TestReleaseRejectsInvalidInput(t *testing.T) {
 		_, err := BuildRelease(t.Context(), bad)
 		require.Error(t, err, id)
 	}
-	bad := options
-	bad.Architecture = "386"
-	_, err := BuildRelease(t.Context(), bad)
-	require.ErrorContains(t, err, "architecture")
 }
 
 // control 请求绑定：首次完整 control 与各升级版本各自一条记录；同一版本换请求拒绝，不同版本互不影响。

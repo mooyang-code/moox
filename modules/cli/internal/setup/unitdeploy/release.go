@@ -93,9 +93,7 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 	if !validReleaseID(options.ReleaseID) {
 		return release, errors.New("release ID must be 1-40 lowercase letters, digits, dots or dashes")
 	}
-	if options.Architecture != "amd64" && options.Architecture != "arm64" {
-		return release, errors.New("release architecture must be amd64 or arm64")
-	}
+	options.Architecture = "amd64"
 	if options.commit == nil {
 		options.commit = cleanCommit
 	}

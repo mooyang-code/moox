@@ -150,12 +150,17 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 	if err != nil {
 		return err
 	}
+	disk := installDiskWarnings(reports, manifest.ControlHost().Name, !rerun)
 	if !options.yes {
-		preview := map[string]any{"action": "install", "route": decision.Route, "reasons": decision.Reasons, "hosts": hosts, "steps": pending, "warnings": diskWarnings(reports, manifest.ControlHost().Name)}
+		preview := map[string]any{"action": "install", "route": decision.Route, "reasons": decision.Reasons, "hosts": hosts, "steps": pending, "warnings": disk}
 		if !rerun {
 			preview["wipe"] = plan
 		}
 		return writePreview(cmd, preview)
+	}
+	// 磁盘要在动手之前判断：放到清除之后，旧部署已经没了才报错。
+	if len(disk) != 0 {
+		return errors.New(strings.Join(disk, "；"))
 	}
 	if !rerun {
 		if err := checkSetupWipe(plan, options); err != nil {
@@ -194,6 +199,19 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 		return fmt.Errorf("%w。修好后重跑同一条命令，已完成的步骤会跳过", err)
 	}
 	return writeSetupJSON(cmd, map[string]any{"status": "installed", "space_id": options.spaceID, "seconds": time.Since(started).Round(time.Second).Seconds(), "manual_steps": deployscan.ManualSteps(deployscan.RouteFresh)})
+}
+
+// installDiskWarnings 按部署时的可用空间判断。要清除时，部署目录和外部目录占的空间会腾出来，算作可用。
+func installDiskWarnings(reports []deployscan.HostReport, control string, wipe bool) []string {
+	adjusted := slices.Clone(reports)
+	if wipe {
+		for i := range adjusted {
+			for _, size := range adjusted[i].SizesKB {
+				adjusted[i].DiskFreeKB += size
+			}
+		}
+	}
+	return diskWarnings(adjusted, control)
 }
 
 // checkSetupWipe 确认用户授权的清除范围。

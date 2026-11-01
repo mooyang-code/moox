@@ -73,7 +73,6 @@ func newSetupReleaseCommand(deps setupDeps) *cobra.Command {
 	}}
 	build.Flags().StringVar(&file, "file", defaultSetupFile, "原仓库中的私有 moox.toml（只用于推导默认状态目录）")
 	build.Flags().StringVar(&options.ReleaseID, "release", "", "版本 ID（小写字母、数字、点与短横线，最长 40）")
-	build.Flags().StringVar(&options.Architecture, "arch", "amd64", "目标 Linux 架构：amd64/arm64")
 	build.Flags().StringVar(&source, "source-dir", "", "源码 worktree（默认当前目录）")
 	build.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：已为目标平台构建的纯 Go 二进制目录")
 	build.Flags().StringVar(&options.StorageBinaryDirectory, "storage-binary-dir", "", "可选：Storage CGO 二进制与 storage CLI 目录")

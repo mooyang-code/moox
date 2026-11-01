@@ -139,8 +139,11 @@ func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options Depl
 		software, err := bundleSoftware(options.Bundle, profile, arch)
 		return software, "", err
 	}
+	if admin.Architecture != arch {
+		return unitpackage.Result{}, "", fmt.Errorf("target_arch_unsupported: 目标机是 %s，首次安装的软件是 %s，所有主机要同一架构", arch, admin.Architecture)
+	}
 	if profile == "host" {
-		return prepareHostSoftware(ctx, root, state, options, arch, admin)
+		return admin.Packages[0], admin.Helper, nil
 	}
 	work, err := os.MkdirTemp(state.Name(), "software-")
 	if err != nil {
@@ -162,24 +165,6 @@ func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options Depl
 	software, err := unitpackage.Package(ctx, unitpackage.Options{RepositoryRoot: options.RepositoryRoot, BinaryDirectory: bin, Output: filepath.Join(work, profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch})
 	if err != nil {
 		return software, "", err
-	}
-	if admin.Architecture != arch {
-		hostID := filepath.Base(filepath.Dir(state.Name()))
-		var operation unitOperation
-		if err := readJSON(root, "hosts/"+hostID+"/operation.json", 2<<20, &operation); err != nil {
-			return software, "", fmt.Errorf("host_not_ready: 主机 %s 还没部署主机服务，先运行 setup deploy-host --host %s", hostID, hostID)
-		}
-		verified, err := unitpackage.Inspect(ctx, operation.Package.Archive)
-		if err != nil || operation.Profile != "host" || operation.Source.Target.HostID != hostID || !insideState(root.Name(), operation.Package.Archive) || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.Profile != "host" || verified.Manifest.GOARCH != arch || !insideState(root.Name(), operation.Helper) {
-			return software, "", errors.New("target host runtime state is invalid")
-		}
-		digest, err := fileSHA(operation.Helper)
-		if err != nil || digest != operation.HelperSHA256 || !slices.ContainsFunc(verified.Manifest.Files, func(file unitpackage.File) bool {
-			return file.Path == "bin/moox-runtime" && file.SHA256 == "sha256:"+digest
-		}) {
-			return software, "", errors.New("target host runtime helper changed")
-		}
-		return software, operation.Helper, nil
 	}
 	return software, admin.Helper, nil
 }

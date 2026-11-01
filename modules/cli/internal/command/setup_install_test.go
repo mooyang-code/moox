@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -177,6 +178,44 @@ func TestSetupInstallRefusesSpaceWithoutPrerequisites(t *testing.T) {
 	h := newInstallHarness(t)
 	_, err := h.run(t, newSetupInstallCommand, "--space-id", "stockcn")
 	require.ErrorContains(t, err, "start_prerequisite_missing")
+}
+
+func TestSetupInstallChecksDiskBeforeTouchingAnything(t *testing.T) {
+	h := newInstallHarness(t)
+	freshReports(h)
+	for i := range h.reports {
+		h.reports[i].DiskFreeKB = 1
+	}
+	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes")
+	require.ErrorContains(t, err, "disk_low")
+	require.Empty(t, h.calls, "空间不够不能开始")
+}
+
+func TestInstallDiskCountsSpaceFreedByWipe(t *testing.T) {
+	report := deployscan.HostReport{Host: "control", DiskFreeKB: 1, SizesKB: map[string]int64{"/data/moox": 20 << 20}}
+	require.Empty(t, installDiskWarnings([]deployscan.HostReport{report}, "control", true), "清除后空间够用")
+	require.NotEmpty(t, installDiskWarnings([]deployscan.HostReport{report}, "control", false))
+}
+
+func TestBundleDirectoryWithoutServerBinariesWorks(t *testing.T) {
+	repository, err := filepath.Abs("../../../..")
+	require.NoError(t, err)
+	h := newInstallHarness(t)
+	root, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.CopyFS(filepath.Join(root, "config/setup"), os.DirFS(filepath.Join(repository, "config/setup"))))
+	options := unitdeploy.DeployOptions{StateDirectory: h.state, OperatorDirectory: h.operator}
+	require.NoError(t, resolveSetupUnitOptions(h.snapshot, "", &options))
+	require.NotNil(t, options.Bundle, "在产物包目录里按清单下载")
+	require.Empty(t, options.BinaryDirectory)
+	require.NoDirExists(t, filepath.Join(root, "bin"))
+	bundle, err := loadSetupInitBundle(filepath.Join(root, "config/setup"))
+	require.NoError(t, err, "setup init 只读种子，不需要服务器程序")
+	require.NotEmpty(t, bundle.Calls)
+	cmd := newSetupValidateCommand(h.deps)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--state-dir", h.state, "--operator-dir", h.operator})
+	require.NoError(t, cmd.ExecuteContext(context.Background()), "setup validate 不需要服务器程序")
 }
 
 func TestSetupInstallRefusesOutsideBundle(t *testing.T) {
