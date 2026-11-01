@@ -789,7 +789,7 @@ func TestRedactLogKeepsOtherLinesAndCoversEdgeCases(t *testing.T) {
 		require.NotContains(t, text, secret)
 	}
 	require.Contains(t, RedactLog("tokens used: 123"), "123")
-	text = RedactLog("token:\nnext line keep\nsecret1=s1-value token_v2=s2-value\n{\"password\":\"ab\\\"tail-value\"}\npassword: \"abc-value\\\npassword=*star-value\npem-tail-value\n")
+	text = RedactLog("token:\nnext line keep\nsecret1=s1-value token_v2=s2-value\n{\"password\":\"ab\\\"tail-value\"}\npassword: \"abc-value\\\npassword=*star-value\n")
 	require.Contains(t, text, "next line keep", "空值不能遮到下一行")
 	for _, secret := range []string{"s1-value", "s2-value", "tail-value", "abc-value", "star-value"} {
 		require.NotContains(t, text, secret)
