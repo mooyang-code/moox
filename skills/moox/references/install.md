@@ -158,6 +158,7 @@ cd moox-${VER}
   - 预览里 `unknown_entries` 不为空时，把这些条目告诉用户：它们在部署目录里，也会被删除。
   - 预览里 `skipped_dirs` 不为空时也告诉用户：这些目录看不到 MooX 的文件，不会清除。
   - 中途失败后再运行一次会接着清：重新取预览，范围变小不用再问，范围变大要重新询问。
+  - 云上的采集计划函数默认不删：同一云账号可能有其他环境。要清理时加 `--clean-functions` 预览，用户确认后再带 `--clean-functions --expect-functions <functions_digest>`。
   - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
 - **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
 
@@ -276,6 +277,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |
 | `delete_target_rejected` | 部署目录是系统目录或家目录，或看不到 MooX 标记 | 核对 `moox.toml` 的 `[paths]`，不要手工删除 |
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程 | 把预览里的路径告诉用户，用户确认后加 `--kill-outside` 再清除 |
+| `functions_unread`、`functions_delete_failed` | `--clean-functions` 读不了某个地域，或没有删完 | 检查云账号权限后重跑 |
 | `bundle_incomplete` | 产物包清单不完整，或缺这个单元 | 重新下载产物包 |
 | `bundle_version_mismatch` | 产物包和 moox-cli 不是同一版本 | 下载同一版本的 CLI 和产物包 |
 | `target_arch_unsupported` | 发布只有 linux/amd64，目标机架构不同 | 换 amd64 主机 |

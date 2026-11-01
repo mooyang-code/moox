@@ -62,6 +62,7 @@ type setupDeps struct {
 	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
 	backupConfig func(context.Context, string) error
 	verifySpace  func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
+	regionCloud  func(setupconfig.Manifest, string) (setupFunctionCloud, error)
 	readLogs     func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 }
 

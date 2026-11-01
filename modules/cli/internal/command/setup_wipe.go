@@ -160,8 +160,12 @@ func checkAdminRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.
 
 func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	var file, source, expect string
-	var yes, acceptTradeRisk, killOutside bool
+	var yes, acceptTradeRisk, killOutside, cleanFunctions bool
+	var expectFunctions string
 	var options unitdeploy.DeployOptions
+	if deps.regionCloud == nil {
+		deps.regionCloud = defaultSetupRegionCloud
+	}
 	cmd := &cobra.Command{
 		Use:   "wipe",
 		Short: "彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复）",
@@ -201,8 +205,27 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			regionCloud := func(region string) (setupFunctionCloud, error) { return deps.regionCloud(manifest, region) }
+			var functions []setupPlanFunction
+			if cleanFunctions {
+				var unread []string
+				if functions, unread, err = listSetupPlanFunctions(cmd.Context(), regionCloud); err != nil {
+					return err
+				}
+				if len(unread) != 0 {
+					return fmt.Errorf("functions_unread: 这些地域读不了云函数，没有清除任何东西：%v", unread)
+				}
+			}
 			if !yes {
-				return writePreview(cmd, map[string]any{"action": "wipe", "route": decision.Route, "plan": plan})
+				preview := map[string]any{"action": "wipe", "route": decision.Route, "plan": plan}
+				if cleanFunctions {
+					// 同一云账号可能有其他环境，单列出来让用户确认。
+					preview["functions"], preview["functions_digest"] = functions, setupFunctionsDigest(functions)
+				}
+				return writePreview(cmd, preview)
+			}
+			if cleanFunctions && expectFunctions != setupFunctionsDigest(functions) {
+				return fmt.Errorf("wipe_scope_changed: 云函数清单和预览不一致（现在是 %s），没有清除任何东西；重新预览并让用户确认", setupFunctionsDigest(functions))
 			}
 			if expect != plan.Digest {
 				return fmt.Errorf("wipe_scope_changed: 清除范围和预览不一致（现在是 %s），没有清除任何主机；重新预览并让用户确认", plan.Digest)
@@ -221,6 +244,9 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := deleteSetupPlanFunctions(cmd.Context(), regionCloud, functions); err != nil {
+				return fmt.Errorf("functions_delete_failed: 主机已清除，云函数没有删完，重新运行会接着删：%w", err)
+			}
 			decision = deployscan.Decision{Route: deployscan.RouteFresh}
 			return writeSetupJSON(cmd, map[string]any{"status": "wiped", "route": decision.Route, "hosts": results, "archived": archived})
 		},
@@ -231,6 +257,8 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "确认清除，不加只预览")
 	cmd.Flags().StringVar(&expect, "expect", "", "预览输出的 digest，范围变了会拒绝")
+	cmd.Flags().BoolVar(&cleanFunctions, "clean-functions", false, "同时清理云上的采集计划函数：预览单列，同一云账号可能有其他环境，要用户单独确认")
+	cmd.Flags().StringVar(&expectFunctions, "expect-functions", "", "预览输出的 functions_digest，清单变了会拒绝")
 	cmd.Flags().BoolVar(&killOutside, "kill-outside", false, "用户确认后，结束预览里列出的部署目录之外的 MooX 进程")
 	cmd.Flags().BoolVar(&acceptTradeRisk, "accept-trade-risk", false, "用户明确同意后，在查到实盘账户或查不了 Trade 时继续")
 	return cmd

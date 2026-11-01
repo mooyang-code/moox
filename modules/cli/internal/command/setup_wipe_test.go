@@ -265,3 +265,62 @@ func TestSetupWipeRequiresKillOutsideConfirmation(t *testing.T) {
 	require.ErrorContains(t, err, "wipe_outside_processes")
 	require.Empty(t, h.wiped)
 }
+
+type fakeFunctionCloud struct {
+	mu      sync.Mutex
+	deleted []string
+}
+
+func (f *fakeFunctionCloud) ListSCFNamespaces(context.Context) ([]string, error) {
+	return []string{"default", "moox-crypto-plan", "moox-crypto-ns2", "other-plan"}, nil
+}
+
+func (f *fakeFunctionCloud) ListSCFFunctions(_ context.Context, namespace string) ([]string, error) {
+	return []string{"moox-fetch-plan-" + namespace, "someone-else"}, nil
+}
+
+func (f *fakeFunctionCloud) DeleteSCFFunction(_ context.Context, namespace, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, namespace+"/"+name)
+	return nil
+}
+
+func TestSetupPlanFunctionsMatchOnlyMooX(t *testing.T) {
+	cloud := &fakeFunctionCloud{}
+	functions, err := listRegionPlanFunctions(context.Background(), cloud, "ap-tokyo")
+	require.NoError(t, err)
+	require.Equal(t, []setupPlanFunction{
+		{Region: "ap-tokyo", Namespace: "moox-crypto-plan", Name: "moox-fetch-plan-moox-crypto-plan"},
+		{Region: "ap-tokyo", Namespace: "moox-crypto-ns2", Name: "moox-fetch-plan-moox-crypto-ns2"},
+	}, functions)
+}
+
+func TestSetupWipeDoesNotTouchFunctionsByDefault(t *testing.T) {
+	h := newWipeHarness(t)
+	cloud := &fakeFunctionCloud{}
+	h.deps.regionCloud = func(setupconfig.Manifest, string) (setupFunctionCloud, error) { return cloud, nil }
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", h.digest(t))
+	require.NoError(t, err)
+	require.Empty(t, cloud.deleted, "云账号可能有其他环境，不默认删除")
+}
+
+func TestSetupWipeCleanFunctionsRequiresConfirmedList(t *testing.T) {
+	h := newWipeHarness(t)
+	cloud := &fakeFunctionCloud{}
+	h.deps.regionCloud = func(setupconfig.Manifest, string) (setupFunctionCloud, error) { return cloud, nil }
+	digest := h.digest(t)
+	out, err := h.run(t, newSetupWipeCommand, "--clean-functions")
+	require.NoError(t, err)
+	var preview struct {
+		Digest string `json:"functions_digest"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &preview))
+	require.NotEmpty(t, preview.Digest)
+	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--clean-functions", "--expect-functions", "wrong")
+	require.ErrorContains(t, err, "wipe_scope_changed")
+	require.Empty(t, h.wiped)
+	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--clean-functions", "--expect-functions", preview.Digest)
+	require.NoError(t, err)
+	require.NotEmpty(t, cloud.deleted)
+}

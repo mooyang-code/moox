@@ -65,7 +65,7 @@ func TestEveryCodeIsDocumentedInSkill(t *testing.T) {
 		}
 	}
 	// 操作机自己报的错误码。
-	for _, code := range []string{"no_collection_tasks", "start_prerequisite_missing", "wipe_outside_processes", "bundle_version_mismatch", "target_arch_unsupported", "download_failed", "verify_read_failed", "browser_trust_manual", "browser_ca_trust_failed", "control_dependency_not_ready", "deployment_config_changed", "bootstrap_interrupted", "restart_failed", "restart_unverified", "collection_not_started", "kline_not_arrived", "factor_not_advancing", "strategy_not_running", "ssh_disconnected", "deployment_incomplete", "disk_low", "admin_not_ready", "host_not_ready", "init_storage_required", "logs_unavailable"} {
+	for _, code := range []string{"no_collection_tasks", "functions_unread", "functions_delete_failed", "start_prerequisite_missing", "wipe_outside_processes", "bundle_version_mismatch", "target_arch_unsupported", "download_failed", "verify_read_failed", "browser_trust_manual", "browser_ca_trust_failed", "control_dependency_not_ready", "deployment_config_changed", "bootstrap_interrupted", "restart_failed", "restart_unverified", "collection_not_started", "kline_not_arrived", "factor_not_advancing", "strategy_not_running", "ssh_disconnected", "deployment_incomplete", "disk_low", "admin_not_ready", "host_not_ready", "init_storage_required", "logs_unavailable"} {
 		if !strings.Contains(string(raw), "`"+code+"`") {
 			t.Errorf("install.md 的处理表缺少错误码 %s", code)
 		}
