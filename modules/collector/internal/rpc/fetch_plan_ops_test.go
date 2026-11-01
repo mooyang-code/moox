@@ -222,7 +222,6 @@ func TestSetFetchPlanPausedSavesSwitchAndReportsTimerState(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 
-
 	control := fakeFetchPlanControl{disabled: map[string]bool{}}
 	service.SetFetchPlanControl(control)
 	rsp, err := service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
