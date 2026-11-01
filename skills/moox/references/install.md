@@ -49,6 +49,7 @@ echo "下载源: $SRC"
 - **有没有旧部署**（在填配置之前问）：“目标机器上有旧部署吗？要保留数据吗？”
   - 要保留：不走 `config init`，按下面“保留数据”一节处理。
   - 不保留或不清楚：继续往下，第 3 节会实际检测。
+- **启动哪个空间**：加密货币用 `crypto`（需要海外机），A 股用 `stockcn`（需要配 `[scf_plan]`）。采集任务默认停用，安装时只启动选定的空间。
 - **告警渠道**：企业微信或飞书群机器人的 Webhook 地址（可选，没有可以部署后再在管理台添加）。
 
 ## 1. 下载发布产物
@@ -162,22 +163,33 @@ cd moox-${VER}
 
 ## 4. 部署
 
-**顺序由 CLI 给出，不要自己推算。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表（有没有海外机、因子机，管理台用什么证书，上次做到哪一步都算在内），把整份列表放进部署计划给用户确认一次，然后从上到下逐条运行。
+**主线是一条命令，用户同意后后台运行：**
 
-- 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。耗时较长的命令放后台运行。
-- 中断或换一次会话后，重新运行 `setup validate`，从新的 `next_steps` 继续；已做完的步骤不会再列出来。`resume` 时不要从头开始。
-- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
-- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
+```bash
+./bin/moox-cli setup install --space-id <空间>              # 只读预检，把结果告诉用户
+./bin/moox-cli setup install --space-id <空间> --yes        # 空机直接执行
+./bin/moox-cli setup install --space-id <空间> --yes --wipe <预检里的 wipe.digest>   # 有旧部署，用户确认清除后
+```
 
-大致顺序，以 `next_steps` 为准：防火墙 → admin → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → `setup init` → 海外采集和交易 → 因子机 → 配置备份 → 验收。
+- 预检输出路线、清除范围、每台的单元和下载源是否可达。下载源都不通时，部署阶段由这台电脑推送，只是慢。
+- 带 `--yes` 后下载、清除、防火墙同时进行，再按依赖并行部署、初始化、启动空间、备份配置、验收。清除时下载的软件包保留。
+- 进度逐行 JSON 输出到标准错误，后台运行，结束或失败时再汇报。
+- 中途失败修好后重跑同一条命令，已完成的步骤跳过；已经装过的部分不需要再带 `--wipe`。
+- 有实盘账户或查不了 Trade 时加 `--accept-trade-risk`，目录外有 MooX 进程时加 `--kill-outside`，都要用户明确同意。
 
-元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
+**分步命令用于修复。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表，顺序和 `setup install` 用同一份定义，不要自己推算。
+
+- 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。
+- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
+- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
+
+元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功。
 
 ## 5. 初始化
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
-`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
+`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。因子任务和默认策略在 `setup start` 里按空间导入。
 
 管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
@@ -273,5 +285,5 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机） | 请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
 | `ssh_auth_failed` | 免密登录没开通或公钥被删 | 让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
 | 腾讯云接口报权限不足 | 子用户缺策略 | 核对子用户的 6 个预设策略 |
-| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
+| `setup start` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
 | 产物包只有 linux/amd64 | ARM 服务器暂不支持 | 换 x86_64 服务器 |

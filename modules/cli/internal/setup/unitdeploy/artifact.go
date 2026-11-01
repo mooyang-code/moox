@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
@@ -107,4 +109,79 @@ func ensureHelper(ctx context.Context, transport setupssh.Client, root, local, h
 		return remote, remoteFailure("取出运行助手", err, output)
 	}
 	return remote, nil
+}
+
+// HostUnits 返回一台主机要的单元清单。host 单元每台都要：运行助手从它取出。
+func HostUnits(manifest setupconfig.Manifest, hostID string) []string {
+	units := []string{"host"}
+	for _, component := range manifest.Deployments[hostID] {
+		if profile, ok := unitpackage.ProfileOf(component); ok && !slices.Contains(units, profile) {
+			units = append(units, profile)
+		}
+	}
+	return units
+}
+
+// prefetchRequest 组织一台主机的下载请求。
+func prefetchRequest(manifest setupconfig.Manifest, bundleManifest *bundle.Manifest, hostID string) (fetchunit.Request, error) {
+	request := fetchunit.Request{DeployRoot: manifest.Paths.Resolved().DeployRoot, Release: bundleManifest.Release, URLs: fetchunit.Sources(bundleManifest.Release)}
+	for _, unit := range HostUnits(manifest, hostID) {
+		artifact, ok := bundleManifest.Units[unit]
+		if !ok {
+			return request, fmt.Errorf("bundle_incomplete: 产物包 %s 没有 %s 单元", bundleManifest.Release, unit)
+		}
+		request.Files = append(request.Files, fetchunit.File{Name: artifact.File, SHA256: artifact.SHA256, Size: artifact.Size})
+	}
+	return request, nil
+}
+
+func dialHost(ctx context.Context, host setupconfig.Host, options DeployOptions) (setupssh.Client, error) {
+	settings := options.SSH
+	settings.OutputLimit = 128 << 10
+	if settings.Timeout == 0 {
+		settings.Timeout = 15 * time.Second
+	}
+	return setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, settings)
+}
+
+// CheckDownload 是预检：确认目标机架构和下载源，不下载、不改动目标机。
+func CheckDownload(ctx context.Context, manifest setupconfig.Manifest, options DeployOptions, hostID string) (bool, error) {
+	if !options.downloads() {
+		return true, nil
+	}
+	transport, err := dialHost(ctx, manifest.HostByID(hostID), options)
+	if err != nil {
+		return false, err
+	}
+	defer transport.Close()
+	arch, err := targetArchitecture(ctx, transport)
+	if err != nil {
+		return false, err
+	}
+	if arch != "amd64" {
+		return false, fmt.Errorf("target_arch_unsupported: %s 是 %s，发布只有 linux/amd64", hostID, arch)
+	}
+	request, err := prefetchRequest(manifest, options.Bundle, hostID)
+	if err != nil {
+		return false, err
+	}
+	return fetchunit.Reachable(ctx, transport, request), nil
+}
+
+// Prefetch 让一台主机下载它要的全部单元。失败不致命：部署时还会换源和本机推送。
+func Prefetch(ctx context.Context, manifest setupconfig.Manifest, options DeployOptions, hostID string) error {
+	if !options.downloads() {
+		return nil
+	}
+	transport, err := dialHost(ctx, manifest.HostByID(hostID), options)
+	if err != nil {
+		return err
+	}
+	defer transport.Close()
+	request, err := prefetchRequest(manifest, options.Bundle, hostID)
+	if err != nil {
+		return err
+	}
+	// 这里不能建 bootstrap-input：下载和清除同时进行，它不算下载的东西，留下来机器就不是空机了。
+	return fetchunit.Run(ctx, transport, request)
 }

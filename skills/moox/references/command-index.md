@@ -335,6 +335,7 @@
 | `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
 | `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
+| `setup install` | 一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检） |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
 | `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
 | `setup package inspect` | 校验部署包的组件边界、平台、文件与摘要 |

@@ -713,7 +713,8 @@ func TestNextStepsFollowReadinessOrder(t *testing.T) {
 		return index
 	}
 	require.Less(t, position("--profile storage"), position("init --stage storage"))
-	require.Less(t, position("init --stage storage"), position("--profile access"), "系统元数据要在 access 和管理台之前")
+	require.Less(t, position("--profile access"), position("init --stage storage"), "Access 就绪只看目录，排在元数据之前")
+	require.Less(t, position("init --stage storage"), position("--stage control"), "系统元数据要在管理台之前")
 	require.Less(t, position("--host overseas --profile access"), position("--stage control"))
 	require.Less(t, position("--stage control"), position("setup init --config-dir"))
 	require.NotContains(t, strings.Join(steps, "\n"), "trust-browser", "信任要用户授权，不放进 next_steps")
@@ -915,4 +916,22 @@ func TestWipeKillsRestartedProcesses(t *testing.T) {
 	t.Cleanup(func() { _ = command.Process.Kill() })
 	wipe(t, s)
 	require.Error(t, command.Wait(), "目录内的进程要被结束")
+}
+
+func TestPlanStepsGroupsParallelStepsAndFillsSpace(t *testing.T) {
+	steps := PlanSteps(stepsManifest(), RouteFresh, LocalState{}, "crypto")
+	find := func(kind, host, unit string) Step {
+		for _, step := range steps {
+			if step.Kind == kind && step.Host == host && step.Unit == unit {
+				return step
+			}
+		}
+		t.Fatalf("缺少步骤 %s %s %s", kind, host, unit)
+		return Step{}
+	}
+	require.Equal(t, find(StepUnit, "storage", "storage").Group, find(StepUnit, "overseas", "egress-proxy").Group, "存储机和海外机并行")
+	require.Less(t, find(StepUnit, "storage", "eventbus").Group, find(StepUnit, "storage", "storage").Group, "EventBus 先就绪")
+	require.Less(t, find(StepControl, "control", "").Group, find(StepUnit, "overseas", "collector-stream").Group)
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1].Command)
+	require.Equal(t, "./bin/moox-cli setup start --space-id crypto", steps[len(steps)-2].Command)
 }

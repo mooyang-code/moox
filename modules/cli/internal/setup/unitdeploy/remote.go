@@ -64,7 +64,9 @@ def mkdir(name, private=True):
         if not part: continue
         current=os.path.join(current,part)
         if not stat.S_ISDIR(os.lstat(current).st_mode): raise ValueError('parent')
-    os.mkdir(name,0o700);syncdir(parent);physical(name,private)
+    try: os.mkdir(name,0o700)
+    except FileExistsError: pass  # another deployment on this host got there first
+    syncdir(parent);physical(name,private)
 try:
     if op=='prepare':
         units=sys.argv[3:]

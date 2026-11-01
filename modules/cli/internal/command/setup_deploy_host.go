@@ -40,32 +40,8 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 		}
-		// 只能出站的主机经 control 反向连接接入：先经腾讯云接口确认 control 的端口已放行，再部署。
-		if snapshot.Manifest.HostByID(options.HostID).Reachability == servicecatalog.ReachabilityOutbound && deps.ensureRelayFirewall != nil {
-			firewall, err := deps.ensureRelayFirewall(command.Context(), snapshot)
-			if err != nil {
-				return fmt.Errorf("prepare control firewall for outbound host %s: %w", options.HostID, err)
-			}
-			fmt.Fprintf(options.Log, "control firewall ready for outbound host %s: created=%d already_open=%d\n", options.HostID, firewall.Created, firewall.AlreadyOpen)
-		}
-		result, err := deps.deployHost(command.Context(), snapshot, options)
+		result, err := deploySetupHost(command.Context(), deps, snapshot, options)
 		if err != nil {
-			return err
-		}
-		// 主机服务就绪后安装主机级守护（crontab 与告警策略种子）；重复执行是幂等的。
-		if deps.installWatchdog != nil {
-			host, err := findSetupHost(snapshot.Manifest, options.HostID)
-			if err != nil {
-				return err
-			}
-			watchdog, err := deps.installWatchdog(command.Context(), snapshot, host, false)
-			if err != nil {
-				return fmt.Errorf("install watchdog on %s: %w", options.HostID, err)
-			}
-			fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", options.HostID, watchdog)
-		}
-		// 看护也装好才算这台主机完成，否则 next_steps 会跳过它，这台主机就没有自愈了。
-		if err := unitdeploy.MarkHostReady(options.StateDirectory, options.HostID); err != nil {
 			return err
 		}
 		return writeSetupJSON(command, result)
@@ -78,4 +54,38 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	command.Flags().StringVar(&options.Release, "release", "", "可选：setup release build 产出的版本 ID；为空时修复首次安装的发布")
 	return command
+}
+
+// deploySetupHost 部署一台主机的主机服务：只能出站的主机先确认控制机端口，装好后安装看护再记完成，setup install 共用。
+func deploySetupHost(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.HostOptions) (unitdeploy.HostResult, error) {
+	var result unitdeploy.HostResult
+	// 只能出站的主机经 control 反向连接接入：先经腾讯云接口确认 control 的端口已放行，再部署。
+	if snapshot.Manifest.HostByID(options.HostID).Reachability == servicecatalog.ReachabilityOutbound && deps.ensureRelayFirewall != nil {
+		firewall, err := deps.ensureRelayFirewall(ctx, snapshot)
+		if err != nil {
+			return result, fmt.Errorf("prepare control firewall for outbound host %s: %w", options.HostID, err)
+		}
+		fmt.Fprintf(options.Log, "control firewall ready for outbound host %s: created=%d already_open=%d\n", options.HostID, firewall.Created, firewall.AlreadyOpen)
+	}
+	result, err := deps.deployHost(ctx, snapshot, options)
+	if err != nil {
+		return result, err
+	}
+	// 主机服务就绪后安装主机级守护（crontab 与告警策略种子）；重复执行是幂等的。
+	if deps.installWatchdog != nil {
+		host, err := findSetupHost(snapshot.Manifest, options.HostID)
+		if err != nil {
+			return result, err
+		}
+		watchdog, err := deps.installWatchdog(ctx, snapshot, host, false)
+		if err != nil {
+			return result, fmt.Errorf("install watchdog on %s: %w", options.HostID, err)
+		}
+		fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", options.HostID, watchdog)
+	}
+	// 看护也装好才算这台主机完成，否则 next_steps 会跳过它，这台主机就没有自愈了。
+	if err := unitdeploy.MarkHostReady(options.StateDirectory, options.HostID); err != nil {
+		return result, err
+	}
+	return result, nil
 }

@@ -70,20 +70,8 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				}
 				result, err = deps.bootstrapAdmin(command.Context(), snapshot, options)
 			} else {
-				// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
-				local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
-				if control.Release == "" && !local.InitStorage && !local.ControlReady {
-					return errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
-				}
-				// 改通知、Collector 这些配置后可以重跑；主机、账号这类改了就不是原来那次安装。
-				if control.Release == "" && !local.ControlReady && local.StaleBinding {
-					return errors.New("deployment_config_changed: 主机、路径、管理员或版本和这次安装开始时不一致，运行 setup validate 看原配置的位置。换回原配置和原版本后重跑；要用新配置就彻底清空后重新安装")
-				}
 				control.DeployOptions = options
-				result, err = deps.bootstrapControl(command.Context(), snapshot, control)
-				if err == nil {
-					err = finishSetupControl(command.Context(), deps, snapshot, options, result)
-				}
+				result, err = deploySetupControl(command.Context(), deps, snapshot, control)
 			}
 			if err != nil {
 				return err
@@ -99,6 +87,25 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	command.Flags().StringVar(&control.Release, "release", "", "仅 --stage control：用该版本升级 control 上的 host 与 control 单元（会按顺序重启 control 上的服务）")
 	return command
+}
+
+// deploySetupControl 部署 control：确认元数据和配置没问题，部署后装看护再写完成记录，setup install 共用。
+func deploySetupControl(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, control unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
+	var result unitdeploy.BootstrapResult
+	// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
+	local := unitdeploy.ReadLocalState(control.StateDirectory, control.OperatorDirectory, setupBinding(snapshot))
+	if control.Release == "" && !local.InitStorage && !local.ControlReady {
+		return result, errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
+	}
+	// 改通知、Collector 这些配置后可以重跑；主机、账号这类改了就不是原来那次安装。
+	if control.Release == "" && !local.ControlReady && local.StaleBinding {
+		return result, errors.New("deployment_config_changed: 主机、路径、管理员或版本和这次安装开始时不一致，运行 setup validate 看原配置的位置。换回原配置和原版本后重跑；要用新配置就彻底清空后重新安装")
+	}
+	result, err := deps.bootstrapControl(ctx, snapshot, control)
+	if err != nil {
+		return result, err
+	}
+	return result, finishSetupControl(ctx, deps, snapshot, control.DeployOptions, result)
 }
 
 // finishSetupControl 给控制机装好看护再写完成记录：控制机不走 deploy-host，这里不装就没人拉起崩溃的组件。

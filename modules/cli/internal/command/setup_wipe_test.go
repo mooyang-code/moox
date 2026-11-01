@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,8 +28,7 @@ type wipeHarness struct {
 	reports  []deployscan.HostReport
 	wiped    []string
 	wipeErr  error
-	trialErr error
-	trials   int
+	mu       sync.Mutex
 	operator string
 	state    string
 }
@@ -54,6 +54,8 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 			if h.wipeErr != nil {
 				return deployscan.HostResult{}, h.wipeErr
 			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
 			h.wiped = append(h.wiped, host.Name)
 			if len(h.wiped) == len(h.reports) {
 				for i := range h.reports {
@@ -96,7 +98,6 @@ func TestSetupWipePreviewChangesNothing(t *testing.T) {
 	h := newWipeHarness(t)
 	h.digest(t)
 	require.Empty(t, h.wiped)
-	require.Zero(t, h.trials)
 	require.Nil(t, deployscan.ReadPending(h.operator))
 }
 

@@ -59,7 +59,10 @@ type setupDeps struct {
 	wipeHost         func(context.Context, setupconfig.Host, string, []string, bool) (deployscan.HostResult, error)
 	restartComponent func(context.Context, setupRestartTarget) (json.RawMessage, error)
 	openStart        func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error)
-	readLogs         func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
+	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
+	backupConfig func(context.Context, string) error
+	verifySpace  func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
+	readLogs     func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 }
 
 func init() {
@@ -79,6 +82,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupLogsCommand(deps),
 		newSetupRestartCommand(deps),
 		newSetupStartCommand(deps),
+		newSetupInstallCommand(deps),
 		newSetupVerifyCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
