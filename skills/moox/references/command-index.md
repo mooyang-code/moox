@@ -340,6 +340,7 @@
 | `setup package inspect` | 校验部署包的组件边界、平台、文件与摘要 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
 | `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
+| `setup release fetch` | 用当前产物包登记一个版本，目标机部署时下载 |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
 | `setup render-runtime-config` | 从 moox.toml 渲染 Egress/Collector 运行配置 |
 | `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |

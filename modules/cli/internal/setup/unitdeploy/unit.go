@@ -135,6 +135,10 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 }
 
 func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options DeployOptions, arch, profile string, admin adminSoftware) (unitpackage.Result, string, error) {
+	if options.downloads() {
+		software, err := bundleSoftware(options.Bundle, profile, arch)
+		return software, "", err
+	}
 	if profile == "host" {
 		return prepareHostSoftware(ctx, root, state, options, arch, admin)
 	}

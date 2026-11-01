@@ -59,7 +59,6 @@ type setupDeps struct {
 	wipeHost         func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
 	restartComponent func(context.Context, setupRestartTarget) (json.RawMessage, error)
 	readLogs         func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
-	trialPackage     func(context.Context, unitdeploy.DeployOptions) error
 }
 
 func init() {
@@ -812,7 +811,6 @@ func defaultSetupDeps() setupDeps {
 		wipeHost:              defaultSetupWipeHost,
 		readLogs:              defaultSetupReadLogs,
 		restartComponent:      defaultSetupRestartComponent,
-		trialPackage:          defaultSetupTrialPackage,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		apply:                 defaultSetupApply,

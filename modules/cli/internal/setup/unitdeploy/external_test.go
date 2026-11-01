@@ -136,7 +136,7 @@ func TestDeployExternalInstallsFactorEngineWithCredentialsAndStartsIt(t *testing
 	assert.Contains(t, string(target.uploads[stage+"/secrets/health-auth.env"]), "MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-17")
 	assert.Equal(t, []byte("CA PEM"), target.uploads[stage+"/secrets/ca.pem"])
 	assert.Contains(t, string(target.uploads[stage+"/secrets/factor-eventbus.yaml"]), "ca_file: ca.pem")
-	assert.Contains(t, target.uploads, stage+"/factor-engine.tar.gz")
+	assert.Contains(t, target.uploads, artifactPath("/data/moox", in.operation.Package))
 
 	var script []string
 	for _, argv := range target.runs {

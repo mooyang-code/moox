@@ -833,3 +833,28 @@ func TestReadLogsRedactsOutput(t *testing.T) {
 	require.Len(t, sections, 1)
 	require.NotContains(t, sections[0].Text, "abc")
 }
+
+func TestStagingIsNotLeftover(t *testing.T) {
+	s := newSandbox(t)
+	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	require.Empty(t, report.Entries, "只下载过的机器还是空机")
+	require.True(t, report.Empty())
+	require.Equal(t, RouteFresh, Decide([]HostReport{report}, "control", LocalState{}).Route)
+}
+
+func TestWipeKeepsDownloadedPackages(t *testing.T) {
+	s := newSandbox(t)
+	deployment(t, s)
+	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
+	outsideDir := filepath.Join(filepath.Dir(s.root), "external")
+	write(t, filepath.Join(outsideDir, "staging/keep-out"), "old")
+	raw, err := json.Marshal(map[string]any{"deploy_root": s.root, "dirs": []string{outsideDir}})
+	require.NoError(t, err)
+	output, err := s.client.Run(context.Background(), []string{"python3", "-c", wipeScript, string(raw)}, nil)
+	require.NoError(t, err)
+	require.Contains(t, output.Stdout, `"done"`)
+	require.FileExists(t, filepath.Join(s.root, "staging/abc/host.tar.gz"))
+	require.NoDirExists(t, filepath.Join(s.root, "identity"))
+	require.NoDirExists(t, filepath.Join(outsideDir, "staging"), "外部目录里同名目录照常清除")
+}

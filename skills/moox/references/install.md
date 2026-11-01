@@ -57,7 +57,8 @@ echo "下载源: $SRC"
 
 | 文件 | 说明 |
 | --- | --- |
-| `moox-bundle_${VER}_linux_amd64.tar.gz` | 部署产物包：仓库文件快照 + 预编译的 linux/amd64 服务器程序 |
+| `moox-bundle_${VER}_linux_amd64.tar.gz` | 部署产物包：仓库文件快照和附件清单，约 12MB，不含服务器程序 |
+| `moox-unit-<单元>_${VER}_linux_amd64.tar.gz` | 各部署单元，目标机自己并行下载，不用手工下载 |
 | `moox-cli_${VER}_darwin_arm64.tar.gz` / `darwin_amd64` / `linux_amd64` / `linux_arm64` / `windows_amd64.zip` | 本机命令行 |
 | `SHA256SUMS` | 校验和 |
 
@@ -91,7 +92,7 @@ cd moox-${VER}
 ./bin/moox-cli --help
 ```
 
-之后**所有命令都在 `moox-${VER}` 目录里执行**：`moox.toml` 写在这里，`setup` 命令从这里读取预编译程序（`bin/linux-amd64`）和公共模板。
+之后**所有命令都在 `moox-${VER}` 目录里执行**：`moox.toml` 写在这里，目标机按产物包清单自己下载单元包，测速选源，每台最多 4 条连接，校验 SHA256；都下载不了时由这台电脑下载再推送。
 产物包里有 `moox-bundle.json`，CLI 据此识别产物包，不需要 git、Go、Docker 或 Node。
 
 ## 2. 生成配置（用户在自己的浏览器里填写）
@@ -218,7 +219,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 下载新版本的产物包与 CLI，在新目录里放入原来的 `moox.toml`（或 `config restore` 从管理台取回），然后：
 
 ```bash
-./bin/moox-cli setup release build --release <版本ID>          # 用产物包里的程序生成版本制品
+./bin/moox-cli setup release fetch --release <版本ID>          # 用产物包里的程序生成版本制品
 ./bin/moox-cli setup bootstrap --stage control --release <版本ID>
 ./bin/moox-cli setup deploy-host --host <主机ID> --release <版本ID>      # 其余主机与单元同理，按 native-release.md 的顺序
 ```
@@ -261,7 +262,10 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `wipe_failed`、`wipe_interrupted`、`wipe_incomplete` | 清除没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |
 | `delete_target_rejected` | 部署目录是系统目录或家目录，或看不到 MooX 标记 | 核对 `moox.toml` 的 `[paths]`，不要手工删除 |
-| `bundle_incomplete` | 产物包不完整，没有清除任何主机 | 重新下载产物包 |
+| `bundle_incomplete` | 产物包清单不完整，或缺这个单元 | 重新下载产物包 |
+| `bundle_version_mismatch` | 产物包和 moox-cli 不是同一版本 | 下载同一版本的 CLI 和产物包 |
+| `target_arch_unsupported` | 发布只有 linux/amd64，目标机架构不同 | 换 amd64 主机 |
+| `download_failed` | 目标机和这台电脑都下载不了单元包 | 检查网络后重跑同一条命令，已下载的不会重下 |
 | `private material directory ownership or permissions are invalid` | 本机私有目录权限不对（CLI 会自动收紧属于自己的目录） | 按报错里的路径和命令处理 |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | 系统 `known_hosts` 有旧记录，或机器确实换了 | 先跑 `setup validate`，通过说明 MooX 记录的指纹没变；不自己删记录，向用户说明 |
 | `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机） | 请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |

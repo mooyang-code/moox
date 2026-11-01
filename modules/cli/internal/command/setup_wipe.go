@@ -200,11 +200,6 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if (plan.Trade == deployscan.TradeLive || plan.Trade == deployscan.TradeUnreadable) && !acceptTradeRisk {
 				return fmt.Errorf("wipe_trade_risk: Trade 状态是 %s（可能有实盘账户），没有清除任何主机；用户明确同意后加 --accept-trade-risk", plan.Trade)
 			}
-			if deps.trialPackage != nil {
-				if err := deps.trialPackage(cmd.Context(), options); err != nil {
-					return err
-				}
-			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return errors.New("config_changed")
 			}
@@ -257,8 +252,4 @@ func defaultSetupScanDeployment(ctx context.Context, snapshot *setupconfig.Snaps
 
 func defaultSetupWipeHost(ctx context.Context, host setupconfig.Host, root string, dirs []string) (deployscan.HostResult, error) {
 	return deployscan.WipeHost(ctx, dialSetupHost, host, root, dirs)
-}
-
-func defaultSetupTrialPackage(ctx context.Context, options unitdeploy.DeployOptions) error {
-	return unitdeploy.TrialPackage(ctx, options, "amd64")
 }

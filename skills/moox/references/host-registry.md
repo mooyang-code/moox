@@ -53,7 +53,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 健康检查经 control 网关中转到 11417 / 11418 的探测端口，Monitor 与 `moox-cli doctor` 按这个口径判断，调用方走 Access 的外部身份。
 
 ```bash
-./bin/moox-cli setup release build --release <ID> --source-dir .   # release 里要有两个外部程序
+./bin/moox-cli setup release fetch --release <ID> --source-dir .   # release 里要有两个外部程序
 ./bin/moox-cli setup deploy-unit --host factor --profile factor-engine --release <ID>
 ./bin/moox-cli setup deploy-unit --host factor --profile archive-worker --release <ID>
 ```

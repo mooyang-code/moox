@@ -105,8 +105,8 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 	defer func() {
 		_, _ = in.target.Run(ctx, []string{"sh", "-c", `rm -rf -- "$1"`, "moox-external-cleanup", stage}, nil)
 	}()
-	archive := path.Join(stage, profile+".tar.gz")
-	if err := uploadFile(ctx, in.target, deployRoot, in.operation.Package.Archive, archive, strings.TrimPrefix(in.operation.Package.SHA256, "sha256:"), 0o600); err != nil {
+	archive, err := ensureArtifact(ctx, in.target, artifactDownload{options: in.options.DeployOptions, root: deployRoot}, in.operation.Package)
+	if err != nil {
 		return result, err
 	}
 	extracted := path.Join(stage, "software")

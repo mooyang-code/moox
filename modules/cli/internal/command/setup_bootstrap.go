@@ -144,7 +144,7 @@ func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, opti
 	if err != nil {
 		return err
 	}
-	if err := defaultBundleBinaries(options.RepositoryRoot, &options.BinaryDirectory); err != nil {
+	if err := loadSetupBundle(options); err != nil {
 		return err
 	}
 	if options.BinaryDirectory != "" {
@@ -156,20 +156,15 @@ func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, opti
 	return nil
 }
 
-// defaultBundleBinaries 在源目录是解压后的产物包、且没有显式指定二进制目录时，改用包内预编译的 Linux 二进制，
-// 部署不再在本机构建。
-func defaultBundleBinaries(root string, directories ...*string) error {
-	manifest, ok, err := bundle.Load(root)
+// loadSetupBundle 在源目录是解压后的产物包时读取清单：软件由目标机按清单下载，部署不再在本机构建。
+func loadSetupBundle(options *unitdeploy.DeployOptions) error {
+	manifest, ok, err := bundle.Load(options.RepositoryRoot)
 	if err != nil || !ok {
 		return err
 	}
 	if err := manifest.CheckCLI(Version, unitruntime.CatalogSHA256()); err != nil {
 		return err
 	}
-	for _, directory := range directories {
-		if *directory == "" {
-			*directory = manifest.BinaryPath(root)
-		}
-	}
+	options.Bundle = &manifest
 	return nil
 }

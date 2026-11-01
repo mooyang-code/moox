@@ -59,7 +59,6 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 			}
 			return deployscan.HostResult{Host: host.Name}, nil
 		},
-		trialPackage: func(context.Context, unitdeploy.DeployOptions) error { h.trials++; return h.trialErr },
 	}
 	return h
 }
@@ -118,7 +117,6 @@ func TestSetupWipeClearsAllHostsAndArchivesLocalState(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"wiped"`)
 	require.Len(t, h.wiped, len(h.reports))
-	require.Equal(t, 1, h.trials)
 	require.FileExists(t, filepath.Join(h.operator, "config.key"))
 	require.FileExists(t, filepath.Join(h.operator, "known_hosts"))
 	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
@@ -147,16 +145,6 @@ func TestSetupWipeStopsOnTradeRisk(t *testing.T) {
 	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--accept-trade-risk")
 	require.NoError(t, err)
 	require.NotEmpty(t, h.wiped)
-}
-
-func TestSetupWipeTouchesNothingWhenBundleBroken(t *testing.T) {
-	h := newWipeHarness(t)
-	digest := h.digest(t)
-	h.trialErr = errors.New("bundle_incomplete")
-	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
-	require.ErrorContains(t, err, "bundle_incomplete")
-	require.Empty(t, h.wiped)
-	require.Nil(t, deployscan.ReadPending(h.operator))
 }
 
 func TestSetupWipeRefusesBlockedHosts(t *testing.T) {

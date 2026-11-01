@@ -37,7 +37,6 @@ def main():
         "release": release,
         "commit": commit,
         "catalog_sha256": catalogs.pop(),
-        "binary_directory": "bin/linux-amd64",
         "units": units,
         "collector_scf": artifact(scf),
         "files": files,

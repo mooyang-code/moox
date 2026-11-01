@@ -37,6 +37,36 @@ type Release struct {
 	HelperSHA256 string                        `json:"helper_sha256"`
 }
 
+// FetchRelease 用产物包登记一个版本：软件由目标机下载，发布 ID 和软件版本分开，
+// 同一份软件可以用新 ID 再发一次，让配置改动生效。
+func FetchRelease(stateDirectory, id string, manifest *bundle.Manifest) (Release, error) {
+	release := Release{Version: 1, ID: id, SourceCommit: manifest.Commit, Architecture: "amd64", Packages: map[string]unitpackage.Result{}}
+	if !validReleaseID(id) {
+		return release, errors.New("release ID must be 1-40 lowercase letters, digits, dots or dashes")
+	}
+	for profile := range manifest.Units {
+		item, err := bundleSoftware(manifest, profile, "amd64")
+		if err != nil {
+			return release, err
+		}
+		release.Packages[profile] = item
+	}
+	digest, err := packageHelperSHA(release.Packages["host"])
+	if err != nil {
+		return release, err
+	}
+	release.HelperSHA256 = digest
+	root, err := privateRoot(stateDirectory)
+	if err != nil {
+		return release, err
+	}
+	defer root.Close()
+	if err := root.MkdirAll(filepath.Join("releases", id), 0o700); err != nil {
+		return release, err
+	}
+	return release, saveJSON(root, releaseName(id), release, true)
+}
+
 // ReleaseOptions 是构建版本制品的参数。
 type ReleaseOptions struct {
 	RepositoryRoot string
@@ -185,10 +215,16 @@ func readRelease(ctx context.Context, root *os.Root, id, arch string) (Release, 
 	if err := readJSON(root, releaseName(id), 4<<20, &release); err != nil {
 		return release, true, err
 	}
-	if release.Version != 1 || release.ID != id || release.Architecture != arch || release.SourceCommit == "" || release.Packages["host"].Archive == "" || release.Packages["control"].Archive == "" {
+	if release.Version != 1 || release.ID != id || release.Architecture != arch || release.SourceCommit == "" || release.Packages["host"].SHA256 == "" || release.Packages["control"].Archive == "" {
 		return release, true, errors.New("release manifest does not match this target")
 	}
 	for profile, item := range release.Packages {
+		if item.Archive == "" {
+			if item.Manifest.Profile != profile {
+				return release, true, fmt.Errorf("release %s %s artifact failed independent verification", id, profile)
+			}
+			continue
+		}
 		if !insideState(root.Name(), item.Archive) {
 			return release, true, errors.New("release artifact is outside private deployment state")
 		}
@@ -198,11 +234,17 @@ func readRelease(ctx context.Context, root *os.Root, id, arch string) (Release, 
 		}
 		release.Packages[profile] = verified
 	}
-	if !insideState(root.Name(), release.Helper) {
-		return release, true, errors.New("release helper is outside private deployment state")
+	digest := release.HelperSHA256
+	if release.Helper != "" {
+		if !insideState(root.Name(), release.Helper) {
+			return release, true, errors.New("release helper is outside private deployment state")
+		}
+		var err error
+		if digest, err = fileSHA(release.Helper); err != nil || digest != release.HelperSHA256 {
+			return release, true, errors.New("release runtime helper changed or differs from its host package")
+		}
 	}
-	digest, err := fileSHA(release.Helper)
-	if err != nil || digest != release.HelperSHA256 || !packageHasHelper(release.Packages["host"], digest) {
+	if !packageHasHelper(release.Packages["host"], digest) {
 		return release, true, errors.New("release runtime helper changed or differs from its host package")
 	}
 	return release, true, nil
@@ -217,7 +259,7 @@ func ReadRelease(ctx context.Context, stateDirectory, id, arch string) (Release,
 	defer root.Close()
 	release, exists, err := readRelease(ctx, root, id, arch)
 	if err == nil && !exists {
-		err = fmt.Errorf("release %s does not exist; build it with setup release build", id)
+		err = fmt.Errorf("release %s does not exist; register it with setup release fetch", id)
 	}
 	return release, err
 }

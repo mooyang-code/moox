@@ -168,13 +168,13 @@ def remove(path):
         shutil.rmtree(path)
 
 
-def clear(directory):
+def clear(directory, keep=()):
     """Delete everything inside the directory and keep the directory."""
     if not os.path.isdir(directory) or os.path.islink(directory):
         return
     mounted = directory in MOUNTS or os.path.ismount(directory)
     for name in os.listdir(directory):
-        if name == 'lost+found' and mounted:
+        if name == 'lost+found' and mounted or name in keep:
             continue
         remove(os.path.join(directory, name))
 
@@ -211,7 +211,8 @@ def main():
         stop_services(home)
         stop_units(root)
         stop_processes([root] + directories)
-        clear(root)
+        # Packages download while the wipe runs; they belong to the next install.
+        clear(root, ('staging',))
         for directory in directories:
             clear(directory)
         result = {'status': 'done', 'processes_outside': outside()}

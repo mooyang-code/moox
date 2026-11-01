@@ -1,16 +1,13 @@
 package unitdeploy
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
 // Binding 记录一次首次安装用的部署配置和版本。本机状态里的软件和身份只对它们有效。
@@ -147,24 +144,4 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 func fileExists(name string) bool {
 	_, err := os.Lstat(name)
 	return err == nil
-}
-
-// TrialPackage 按全部单元试打包到临时目录，确认产物包能用，走的是和正式部署相同的路径。
-// 没有预编译二进制（源码目录）时跳过，部署时才在本机构建。
-func TrialPackage(ctx context.Context, options DeployOptions, arch string) error {
-	if options.BinaryDirectory == "" {
-		return nil
-	}
-	work, err := os.MkdirTemp("", "moox-trial-package-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(work)
-	for _, profile := range append([]string{"storage"}, releaseProfiles...) {
-		_, err := unitpackage.Package(ctx, unitpackage.Options{RepositoryRoot: options.RepositoryRoot, BinaryDirectory: options.BinaryDirectory, Output: filepath.Join(work, profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch})
-		if err != nil {
-			return fmt.Errorf("bundle_incomplete: 产物包打不出 %s 单元，没有清除任何主机: %w", profile, err)
-		}
-	}
-	return nil
 }

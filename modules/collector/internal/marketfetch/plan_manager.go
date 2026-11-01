@@ -506,6 +506,12 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 			timer.Stop()
 		case <-worker.wake:
 			timer.Stop()
+			// stop 和 wake 同时就绪时 select 是随机选的，停用中的空间不能再跑一轮启用。
+			select {
+			case <-worker.stop:
+				stopping = true
+			default:
+			}
 		case <-timer.C:
 		}
 		tickCtx, cancel := context.WithTimeout(ctx, m.timeout())

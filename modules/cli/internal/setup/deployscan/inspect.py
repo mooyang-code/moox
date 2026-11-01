@@ -24,6 +24,9 @@ def load_mounts(path):
     return set(decode(row.split()[4]) for row in rows if len(row.split()) > 4)
 
 
+STAGING = 'staging'
+
+
 def holds_mount(path):
     return any(m.startswith(path.rstrip('/') + '/') for m in MOUNTS)
 
@@ -217,11 +220,13 @@ def occupied_ports(ports, inside_dirs):
     return sorted(set(sockets.values()))
 
 
-def foreign_file(root):
+def foreign_file(root, keep=()):
     """True when the tree holds anything the SSH user cannot delete. A mount's lost+found belongs to root."""
     uid = os.getuid()
     denied = []
     for base, directories, files in os.walk(root, onerror=denied.append):
+        if base == root:
+            directories[:] = [d for d in directories if d not in keep]
         if base in MOUNTS or os.path.ismount(base):
             directories[:] = [d for d in directories if d != 'lost+found']
         for name in directories + files:
@@ -346,11 +351,12 @@ def main():
     report = {
         'home': home,
         'root_exists': exists,
-        'entries': names(root),
+        # Downloaded packages are not leftovers: a host that only downloaded still counts as empty.
+        'entries': [n for n in names(root) if n != STAGING],
         'owner_ok': owner_ok,
         'mode_ok': mode_ok,
         'parent_writable': exists or writable_parent(root),
-        'foreign_files': exists and owner_ok and foreign_file(root),
+        'foreign_files': exists and owner_ok and foreign_file(root, (STAGING,)),
         'markers': any(os.path.lexists(os.path.join(root, n)) for n in ('run/host.json', 'host/current', 'identity', 'bootstrap', 'bootstrap-input')),
         'cron': cron_marked(),
         'services': services,
@@ -365,6 +371,7 @@ def main():
         'registered_hosts': registered_hosts(request.get('admin_db', '')),
         'helper_running': helper_running(root),
         'disk_free_kb': disk_free_kb(root),
+        'staging_kb': size_kb(os.path.join(root, STAGING)) if os.path.isdir(os.path.join(root, STAGING)) else 0,
         'last_attempt': last_attempt(root),
     }
     if request.get('reclaim'):

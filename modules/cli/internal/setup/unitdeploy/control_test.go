@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
@@ -153,4 +154,21 @@ func TestLatestUnitConfigurationReadsNewestRecord(t *testing.T) {
 	digest, ok := latestUnitConfiguration(state, "storage", "storage")
 	require.True(t, ok)
 	require.Equal(t, "sha256:new", digest)
+}
+
+func TestBundleSoftwareRecordsRemoteArtifact(t *testing.T) {
+	manifest := &bundle.Manifest{Release: "v9.9.9", Units: map[string]bundle.Artifact{
+		"host": {File: "moox-unit-host_v9.9.9_linux_amd64.tar.gz", SHA256: "abc", Size: 7, Manifest: []byte(`{"profile":"host","files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]}`)},
+	}}
+	item, err := bundleSoftware(manifest, "host", "amd64")
+	require.NoError(t, err)
+	require.Empty(t, item.Archive, "软件不在这台电脑上")
+	require.Equal(t, "/data/moox/staging/abc/moox-unit-host_v9.9.9_linux_amd64.tar.gz", artifactPath("/data/moox", item))
+	digest, err := packageHelperSHA(item)
+	require.NoError(t, err)
+	require.Equal(t, "def", digest)
+	_, err = bundleSoftware(manifest, "host", "arm64")
+	require.ErrorContains(t, err, "target_arch_unsupported")
+	_, err = bundleSoftware(manifest, "trade", "amd64")
+	require.ErrorContains(t, err, "bundle_incomplete")
 }

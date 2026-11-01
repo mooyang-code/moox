@@ -71,11 +71,12 @@ try:
         mkdir(root,False)
         for unit in units: mkdir(unit,False)
         mkdir(os.path.join(root,'bootstrap-input'))
+        mkdir(os.path.join(root,'staging'))
         print('{}')
     elif op=='inspect':
         filename,digest,mode = sys.argv[3:6]
         physical(root)
-        base=os.path.join(root,'bootstrap-input')
+        base=os.path.join(root,'staging' if filename.startswith(os.path.join(root,'staging')+'/') else 'bootstrap-input')
         physical(base,True)
         if os.path.commonpath([base,filename])!=base or filename==base or os.path.normpath(filename)!=filename: raise ValueError('destination')
         relative=os.path.relpath(os.path.dirname(filename),base)

@@ -22,21 +22,21 @@ func TestLoadNotBundle(t *testing.T) {
 }
 
 func TestLoadValid(t *testing.T) {
-	root := writeManifest(t, `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","binary_directory":"bin/linux-amd64","files":["go.work","packages/servicecatalog/catalog.yaml"]}`)
+	root := writeManifest(t, `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{}},"files":["go.work","packages/servicecatalog/catalog.yaml"]}`)
 	manifest, ok, err := Load(root)
 	if err != nil || !ok {
 		t.Fatalf("应读出清单: ok=%v err=%v", ok, err)
 	}
-	if got, want := manifest.BinaryPath(root), filepath.Join(root, "bin", "linux-amd64"); got != want {
-		t.Fatalf("二进制目录 %s，期望 %s", got, want)
+	if manifest.Release != "v0.2.0" || len(manifest.Units) != 1 {
+		t.Fatalf("清单内容不对：%+v", manifest)
 	}
 }
 
 func TestLoadRejectsBadManifest(t *testing.T) {
 	for name, content := range map[string]string{
-		"短提交":    `{"version":1,"release":"v0.2.0","commit":"abc","binary_directory":"bin","files":["a"]}`,
-		"越界路径":   `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","binary_directory":"bin","files":["../a"]}`,
-		"没有文件":   `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","binary_directory":"bin","files":[]}`,
+		"短提交":    `{"version":1,"release":"v0.2.0","commit":"abc","units":{"host":{}},"files":["a"]}`,
+		"越界路径":   `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{}},"files":["../a"]}`,
+		"没有文件":   `{"version":1,"release":"v0.2.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{}},"files":[]}`,
 		"不是JSON": `{`,
 	} {
 		if _, ok, err := Load(writeManifest(t, content)); !ok || err == nil {

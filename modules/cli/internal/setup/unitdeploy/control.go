@@ -38,7 +38,7 @@ func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, optio
 	return bootstrap(ctx, snapshot, options.DeployOptions, &options)
 }
 
-func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
+func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, transport setupssh.Client, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
 	components, err := unitComponents(snapshot.Manifest, request.Topology.ControlHostID, "control")
 	if err != nil {
 		return request, nil, err
@@ -61,12 +61,55 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		return request, nil, err
 	}
 	defer os.RemoveAll(temporary)
-	extraction, err := unitpackage.Extract(ctx, unitpackage.ExtractOptions{Archive: software.Archive, ExpectedSHA256: software.SHA256, Profile: "control", GOOS: "linux", GOARCH: software.Manifest.GOARCH, Destination: filepath.Join(temporary, "software")})
+	directory, err := controlTemplates(ctx, transport, request, software, components, temporary)
 	if err != nil {
 		return request, nil, err
 	}
-	overrides, err := controlConfigurations(snapshot, extraction.Directory, components)
+	overrides, err := controlConfigurations(snapshot, directory, components)
 	return request, overrides, err
+}
+
+// controlTemplates 取 control 配置模板。下载的软件不在这台电脑上，从目标机的软件包里读，按清单校验。
+func controlTemplates(ctx context.Context, transport setupssh.Client, request unitbootstrap.Request, software unitpackage.Result, components []string, temporary string) (string, error) {
+	if software.Archive != "" {
+		extraction, err := unitpackage.Extract(ctx, unitpackage.ExtractOptions{Archive: software.Archive, ExpectedSHA256: software.SHA256, Profile: "control", GOOS: "linux", GOARCH: software.Manifest.GOARCH, Destination: filepath.Join(temporary, "software")})
+		return extraction.Directory, err
+	}
+	names := []string{}
+	for _, id := range components {
+		if slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
+			names = append(names, id+"/config/app.yaml")
+		}
+	}
+	stage := path.Join(request.DeploymentRoot, "bootstrap-input/templates", strings.TrimPrefix(software.SHA256, "sha256:"))
+	arguments := append([]string{"sh", "-c", `set -eu
+stage=$1; archive=$2; shift 2
+rm -rf -- "$stage"
+mkdir -p -m 0700 "$stage"
+tar -xzf "$archive" -C "$stage" --no-same-owner --no-same-permissions -- "$@"`, "moox-templates", stage, request.Control.Archive}, names...)
+	if output, err := transport.Run(ctx, arguments, nil); err != nil {
+		return "", remoteFailure("读取管理台配置模板", err, output)
+	}
+	defer transport.Run(ctx, []string{"rm", "-rf", "--", stage}, nil)
+	directory := filepath.Join(temporary, "templates")
+	for _, name := range names {
+		var content bytes.Buffer
+		if _, err := transport.Download(ctx, path.Join(stage, name), &content); err != nil {
+			return "", fmt.Errorf("读取管理台配置模板 %s: %w", name, err)
+		}
+		i := slices.IndexFunc(software.Manifest.Files, func(file unitpackage.File) bool { return file.Path == name })
+		if i < 0 || software.Manifest.Files[i].SHA256 != "sha256:"+sha(content.Bytes()) {
+			return "", fmt.Errorf("管理台配置模板 %s 和清单不一致", name)
+		}
+		local := filepath.Join(directory, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(local), 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(local, content.Bytes(), 0o600); err != nil {
+			return "", err
+		}
+	}
+	return directory, nil
 }
 
 // Templates come from the independently verified original package, never
@@ -310,7 +353,7 @@ func ConfigDrift(snapshot *setupconfig.Snapshot, stateDir string) ([]string, err
 			if !ok || deployed == "sha256:"+sha(configuration) {
 				continue
 			}
-			warning := fmt.Sprintf("%s 上的 %s 配置和部署时不同，要发新版本才生效：setup release build --release <新ID>，再 setup deploy-unit --host %s --profile %s --release <新ID>", host.Name, profile, host.Name, profile)
+			warning := fmt.Sprintf("%s 上的 %s 配置和部署时不同，要发新版本才生效：setup release fetch --release <新ID>，再 setup deploy-unit --host %s --profile %s --release <新ID>", host.Name, profile, host.Name, profile)
 			if profile == "egress-proxy" {
 				warning += "；出口代理配置也进了 Collector，还要 setup bootstrap --stage control --release <新ID>"
 			}

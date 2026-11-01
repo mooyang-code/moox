@@ -60,7 +60,7 @@ broker 的证书、私钥和用户表只随 `eventbus` 单元下发（`export-cl
 ## 轮换时的强制顺序
 
 1. 按变更执行 `rotate --credential <NATS用户名> --confirm` 或 `rotate-tls --confirm` 后立刻导出。单角色轮换不改变 CA；TLS 轮换核对新 CA 的 SHA-256，不要打印 PEM 或 token。
-2. 用 `setup release build` 构建一个版本，先装 EventBus 单元（`setup deploy-unit --profile eventbus`），再装 control，确认 control 上的客户端恢复。
+2. 用 `setup release fetch` 构建一个版本，先装 EventBus 单元（`setup deploy-unit --profile eventbus`），再装 control，确认 control 上的客户端恢复。
 3. 对 **moox.toml 里每一台主机** 安装 `host` 单元，再安装各业务单元。
 4. 重新部署外置因子引擎；若存在显式启用 EventBus 指标 Reporter 的定制 SCF，更新并重新发布这些函数。标准计划采集与补采 SCF 不需要因这次轮换重发。
 5. 验收全部通过后，才删除本机临时 `0600` 导出文件。
