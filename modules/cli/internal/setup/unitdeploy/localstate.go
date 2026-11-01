@@ -92,6 +92,13 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 			state.Units[filepath.Base(filepath.Dir(profile))+"/"+filepath.Base(profile)] = true
 		}
 	}
+	// 带 --release 部署的记录在版本目录下。
+	if matches, err := filepath.Glob(filepath.Join(stateDir, "units", "*", "*", "releases", "*", unitReadyFile)); err == nil {
+		for _, match := range matches {
+			profile := filepath.Dir(filepath.Dir(filepath.Dir(match)))
+			state.Units[filepath.Base(filepath.Dir(profile))+"/"+filepath.Base(profile)] = true
+		}
+	}
 	// 主机单元的记录在 hosts/<主机>/ 下，不在 units 下。
 	if matches, err := filepath.Glob(filepath.Join(stateDir, "hosts", "*", unitReadyFile)); err == nil {
 		for _, match := range matches {

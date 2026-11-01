@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 )
@@ -26,19 +27,24 @@ const secretName = `(?:secret|password|passwd|token|api[_-]?key|private[_-]?key)
 
 var (
 	pemBlock    = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+-----.*?(?:-----END [A-Z ]+-----|\z)`)
-	pemTail     = regexp.MustCompile(`(?s)\A.*?-----END [A-Z ]+-----`)
+	pemEnd      = regexp.MustCompile(`-----END [A-Z ]+-----`)
 	authHeader  = regexp.MustCompile(`(?im)(authorization(?:\\?["'])?[ \t]*[:=][ \t]*).*$`)
 	bearerToken = regexp.MustCompile(`(?i)\b(bearer|basic)[ \t]+[^\s"'\\,]+`)
 	urlPassword = regexp.MustCompile(`(://[^\s:/@"']+:)[^\s/@"']+@`)
 	queryKey    = regexp.MustCompile(`(?i)([?&](?:key|token|secret|sign|signature)=)[^\s&"'\\]+`)
-	plainField  = regexp.MustCompile(`(?i)(` + secretName + `)[^\s"'\\]\S*`)
-	quotedField = regexp.MustCompile(`(?im)(` + secretName + `)(?:\\"(?:[^\\\n]|\\[^"\n])*(?:\\"|$)|"(?:[^"\\\n]|\\.)*(?:"|\\?$)|'[^'\n]*(?:'|$))`)
+	plainField  = regexp.MustCompile(`(?i)(` + secretName + `)(?:[^\s"'\\]|\\[^"\s])\S*`)
+	quotedField = regexp.MustCompile(`(?im)(` + secretName + `)(?:\\"(?:\\\\\\"|[^\\\n]|\\[^"\n])*(?:\\"|$)|"(?:[^"\\\n]|\\.)*(?:"|\\?$)|'[^'\n]*(?:'|$))`)
 )
 
 // RedactLog 遮掉日志里的密钥。日志是给人和 Agent 排查用的，不应该带出密钥。
 func RedactLog(text string) string {
+	// 日志从中间截断时，开头可能是半个 PEM：第一个 END 排在第一个 BEGIN 之前。
+	if end := pemEnd.FindStringIndex(text); end != nil {
+		if begin := strings.Index(text, "-----BEGIN "); begin < 0 || end[0] < begin {
+			text = "***" + text[end[1]:]
+		}
+	}
 	text = pemBlock.ReplaceAllString(text, "***")
-	text = pemTail.ReplaceAllString(text, "***")
 	text = authHeader.ReplaceAllString(text, "${1}***")
 	text = bearerToken.ReplaceAllString(text, "${1} ***")
 	text = urlPassword.ReplaceAllString(text, "${1}***@")

@@ -581,7 +581,11 @@ func (s *runtimeState) startupFailure(component Component, exited bool, reasons 
 		list := strings.Join(reasons, ",")
 		// 详情有长度上限，超了整条带不回去，所以先截短。
 		if len(list) > 300 {
-			list = list[:strings.LastIndex(list[:300], ",")] + ",..."
+			if comma := strings.LastIndex(list[:300], ","); comma > 0 {
+				list = list[:comma] + ",..."
+			} else {
+				list = list[:300] + "..."
+			}
 		}
 		subject += " not_ready=" + list
 	}

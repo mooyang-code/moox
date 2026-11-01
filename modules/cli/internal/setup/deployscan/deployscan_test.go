@@ -794,6 +794,14 @@ func TestRedactLogKeepsOtherLinesAndCoversEdgeCases(t *testing.T) {
 	for _, secret := range []string{"s1-value", "s2-value", "tail-value", "abc-value", "star-value"} {
 		require.NotContains(t, text, secret)
 	}
+	text = RedactLog("password=\\abc-value secret=\\u0041bc-value password=\\\\def-value\n{\\\"password\\\":\\\"ab\\\\\\\"nested-value\\\"}\n")
+	for _, secret := range []string{"abc-value", "bc-value", "def-value", "nested-value"} {
+		require.NotContains(t, text, secret)
+	}
+	text = RedactLog("keep1\n-----BEGIN KEY-----\nbody\n-----END KEY-----\nkeep2\n-----END KEY-----\nkeep3")
+	require.Contains(t, text, "keep1", "完整的 PEM 块不能把前面的内容一起吃掉")
+	require.Contains(t, text, "keep2")
+	require.NotContains(t, text, "body")
 	require.NotContains(t, RedactLog("half-pem-value\n-----END PRIVATE KEY-----\nafter"), "half-pem-value")
 	require.Contains(t, RedactLog("half\n-----END PRIVATE KEY-----\nafter"), "after")
 }

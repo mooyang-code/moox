@@ -732,4 +732,6 @@ func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
 	_, detail = code(state.startupFailure(component, false, many, info.Size()))
 	require.Less(t, len(detail), 400)
 	require.Contains(t, detail, "component=console-proxy")
+	_, detail = code(state.startupFailure(component, false, []string{strings.Repeat("a", 350)}, info.Size()))
+	require.Less(t, len(detail), 400, "只有一项且很长时也不能出错")
 }
