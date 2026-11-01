@@ -165,7 +165,7 @@ cd moox-${VER}
 
 - 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。耗时较长的命令放后台运行。
 - 中断或换一次会话后，重新运行 `setup validate`，从新的 `next_steps` 继续；已做完的步骤不会再列出来。`resume` 时不要从头开始。
-- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时按它说明处理。
+- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时不算完成：说明装到一半换了配置或版本，把缺的步骤告诉用户，换回原配置和原版本后补上。
 - 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
 
 大致顺序，以 `next_steps` 为准：防火墙 → core → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → 信任证书（内部证书时）→ `setup init` → 海外采集和交易 → 因子机 → 配置备份。
@@ -236,7 +236,6 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错里的 `config migrate --add-deployment` 补上，再 `setup validate` |
 | `disk_low` | 目标机磁盘不够 | 告诉用户腾出空间或换大磁盘 |
 | `core_not_ready`、`host_not_ready` | core 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
-| `operation_cancelled` | 命令被取消或超时，目标机上的操作可能还在运行 | 先 `setup validate` 确认没有“上一次部署操作还在运行”，再继续 |
 | `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |

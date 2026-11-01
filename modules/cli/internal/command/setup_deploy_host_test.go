@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -33,7 +34,7 @@ func TestSetupDeployHostUsesOneSnapshotAndPreservesPausedResult(t *testing.T) {
 	command.SetArgs([]string{"deploy-host"})
 	require.ErrorContains(t, command.Execute(), "--host")
 	require.Zero(t, loaded)
-	command.SetArgs([]string{"deploy-host", "--host", "compute", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"deploy-host", "--host", "compute", "--state-dir", physicalTempDir(t), "--operator-dir", t.TempDir()})
 	require.NoError(t, command.Execute())
 	require.Equal(t, 1, loaded)
 	require.Equal(t, 1, called)
@@ -66,7 +67,7 @@ func TestSetupDeployHostOpensControlFirewallForOutboundHost(t *testing.T) {
 		command := newSetupCommand(deps)
 		command.SetOut(&bytes.Buffer{})
 		command.SetErr(&bytes.Buffer{})
-		command.SetArgs([]string{"deploy-host", "--host", "compute", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
+		command.SetArgs([]string{"deploy-host", "--host", "compute", "--state-dir", physicalTempDir(t), "--operator-dir", t.TempDir()})
 		return command.Execute()
 	}
 	require.NoError(t, run())
@@ -81,4 +82,12 @@ func TestSetupDeployHostOpensControlFirewallForOutboundHost(t *testing.T) {
 	firewallErr, steps = nil, nil
 	require.NoError(t, run())
 	require.Equal(t, []string{"firewall", "deploy"}, steps)
+}
+
+// physicalTempDir 解开 macOS 临时目录的符号链接：部署状态目录要求是物理路径。
+func physicalTempDir(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return directory
 }

@@ -151,6 +151,11 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
 		return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
 	}
+	if options.Profile != "host" && options.HostID != control.Name {
+		if _, err := root.Lstat(filepath.Join("hosts", options.HostID, "operation.json")); err != nil {
+			return result, fmt.Errorf("host_not_ready: 主机 %s 还没部署主机服务，先运行 setup deploy-host --host %s", options.HostID, options.HostID)
+		}
+	}
 	if !insideState(manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
 		return result, errors.New("unit deployment requires the control and host roots from its original core receipt")
 	}
@@ -457,7 +462,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	output, err := target.Run(ctx, []string{remoteHelper, "deploy", "--request", remoteRequest}, nil)
 	if err != nil {
-		return result, helperFailure(ctx, func() (setupssh.Client, error) { return dial(host) }, "部署单元 "+options.Profile, err, output)
+		return result, helperFailure(ctx, func() (setupssh.Client, error) { return dial(host) }, options.Log, "部署单元 "+options.Profile, err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
@@ -475,8 +480,11 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return HostResult{}, errors.New("deployed unit component is not ready")
 		}
 	}
-	if err := saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true); err != nil {
-		return result, err
+	// 主机单元还要装看护，由命令层在看护装好后记录。
+	if options.Profile != "host" {
+		if err := saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }

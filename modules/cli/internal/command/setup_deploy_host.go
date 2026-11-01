@@ -64,6 +64,12 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 			}
 			fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", options.HostID, watchdog)
 		}
+		// 看护也装好才算这台主机完成，否则 next_steps 会跳过它，这台主机就没有自愈了。
+		if options.Release == "" {
+			if err := unitdeploy.MarkHostReady(options.StateDirectory, options.HostID); err != nil {
+				return err
+			}
+		}
 		return writeSetupJSON(command, result)
 	}}
 	command.Flags().StringVar(&file, "file", defaultSetupFile, "原仓库中的私有 moox.toml")

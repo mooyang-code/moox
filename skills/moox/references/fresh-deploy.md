@@ -60,12 +60,12 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 ### 本机状态
 
-`setup wipe` 把操作员身份移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
+`setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
 状态目录**必须**换新：制品和请求哈希绑定在 core 阶段的状态里，control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
 
 ## 4. 安装顺序
 
-首次安装的**所有命令都不带 `--release`**（`--release` 只用于升级）。以下命令都在主仓库根目录执行，`CLI=$WT/bin/moox-cli`，公共参数 `--file ./moox.toml --source-dir $WT`。
+首次安装的**所有命令都不带 `--release`**（`--release` 只用于升级）。以下命令都在主仓库根目录执行（`setup init` 没有 `--source-dir`，不用带），`CLI=$WT/bin/moox-cli`，公共参数 `--file ./moox.toml --source-dir $WT`。
 每一步成功的标志是输出里的 `*-ready` 与 `STEP-EXIT=0`；任何一步失败先看日志，不要盲目重试。
 
 | 步 | 命令 | 备注 |
@@ -77,7 +77,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、登记存储节点、导入并激活元数据。必须在 control 之前：Monitor 要等系统数据集就绪 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
 | 7 | `$CLI setup bootstrap --stage control --create-proxy-ca` | internal TLS 的首次安装必须带 `--create-proxy-ca`；失败的发布目录由下一次尝试自动清理 |
-| 8 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 创建业务空间、导入元数据与因子 |
+| 8 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
 | 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳 |
 | 10 | `$CLI setup sync-deployments --host factor`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 

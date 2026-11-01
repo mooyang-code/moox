@@ -99,6 +99,9 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	control := snapshot.Manifest.ControlHost().Name
 	status := &setupDeployment{Decision: deployscan.Decide(reports, control, local), Hosts: reports, Warnings: diskWarnings(reports, control)}
 	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot))
+	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot)); reason != "" {
+		status.Reasons = append(status.Reasons, reason)
+	}
 	if status.Route == deployscan.RouteBlocked {
 		return status, errDeploymentBlocked
 	}

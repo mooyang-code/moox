@@ -166,9 +166,6 @@ func uploadBytes(ctx context.Context, transport setupssh.Client, root string, ra
 
 // remoteFailure 把目标端助手的失败转成明确原因；operation 是这次操作的名字。
 func remoteFailure(operation string, err error, output setupssh.Result) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return errors.New("operation_cancelled: " + operation + "：命令被取消，目标机上的操作可能还在运行。运行 setup validate，确认上一次操作已结束后再继续")
-	}
 	described := failure.Describe(operation, output.ExitCode, output.Stderr)
 	return errors.New(described.Error() + helperDiagnostic(err, output))
 }
@@ -179,14 +176,17 @@ var (
 	disconnectPoll = 10 * time.Second
 )
 
-// helperProbe 查目标机上是否还有部署助手在运行。方括号让这条命令自己不被匹配到。
-const helperProbe = `command -v pgrep >/dev/null || exit 1; if pgrep -f '[/]bootstrap-input/runtime/' >/dev/null; then echo running; else echo idle; fi`
+// helperProbe 查目标机上是否还有部署助手在运行：助手都从上传的 runtime 目录启动，和 setup validate 的判断一致。
+const helperProbe = `for e in /proc/[0-9]*/exe; do case "$(readlink "$e" 2>/dev/null)" in */bootstrap-input/runtime/*) echo running; exit 0;; esac; done; echo idle`
 
 // helperFailure 处理部署助手的失败：目标机明确失败时直接说明原因；SSH 断开时重新连接，等助手结束再报告，
 // 这样下一次重试不会和目标机上还没结束的操作重叠。
-func helperFailure(ctx context.Context, redial func() (setupssh.Client, error), operation string, err error, output setupssh.Result) error {
+func helperFailure(ctx context.Context, redial func() (setupssh.Client, error), log io.Writer, operation string, err error, output setupssh.Result) error {
 	if output.ExitCode != 0 || ctx.Err() != nil {
 		return remoteFailure(operation, err, output)
+	}
+	if log != nil {
+		fmt.Fprintf(log, "%s：SSH 连接断开，等目标机上的操作结束，最多 %s\n", operation, disconnectWait)
 	}
 	deadline := time.Now().Add(disconnectWait)
 	for {

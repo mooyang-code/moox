@@ -673,13 +673,13 @@ func TestStaleBindingIsNotResume(t *testing.T) {
 }
 
 func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
-	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, RootExists: true, Entries: []string{"host"}, Units: map[string]string{"host": "bootstrap-a"}, RuntimeSHA256: "sha256:a"}
-	local := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true, StaleBinding: true, BindingConfig: "/old/moox.toml"}
-	decision := Decide([]HostReport{report}, "control", local)
-	require.Equal(t, RouteUpgrade, decision.Route)
-	require.NotEmpty(t, decision.Reasons, "初始化没做完时要说明，不能当成已经装完")
+	local := LocalState{CoreReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
+	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local, false)
+	require.Contains(t, reason, "/old/moox.toml")
+	require.Contains(t, reason, "--profile collector-stream", "初始化之后才缺的单元也要说出来")
+	require.Empty(t, NextSteps(stepsManifest(), RouteUpgrade, local, false))
 	local.BindingConfig = ""
-	require.Empty(t, Decide([]HostReport{report}, "control", local).Reasons, "早期部署没有记录，按正常升级走")
+	require.Empty(t, UnfinishedReason(stepsManifest(), RouteUpgrade, local, false), "早期部署没有记录，按正常升级走")
 }
 
 func TestRunningHelperBlocksEveryRoute(t *testing.T) {
@@ -779,6 +779,15 @@ func (c logsClient) Run(context.Context, []string, io.Reader) (setupssh.Result, 
 	return setupssh.Result{Stdout: c.output}, nil
 }
 func (logsClient) Close() error { return nil }
+
+func TestRedactLogKeepsOtherLinesAndCoversEdgeCases(t *testing.T) {
+	text := RedactLog("token: \"open-value\nnext line keep\nAuthorization: TC3-HMAC-SHA256 Credential=AKID, Signature=sig-value\npassword=ab*cd password=ab,cd\n-----BEGIN KEY-----\nno-end-value")
+	require.Contains(t, text, "next line keep", "没闭合的引号不能吃掉下一行")
+	for _, secret := range []string{"open-value", "AKID", "sig-value", "cd", "no-end-value"} {
+		require.NotContains(t, text, secret)
+	}
+	require.Contains(t, RedactLog("tokens used: 123"), "123")
+}
 
 func TestReadLogsRedactsOutput(t *testing.T) {
 	dial := func(context.Context, setupconfig.Host) (setupssh.Client, error) {

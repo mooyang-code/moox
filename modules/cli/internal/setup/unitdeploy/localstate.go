@@ -41,6 +41,16 @@ func MarkStep(stateDir, name string) error {
 	return saveJSON(root, name, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339)}, true)
 }
 
+// MarkHostReady 记下主机服务和看护都装好了。
+func MarkHostReady(stateDir, hostID string) error {
+	root, err := privateRoot(filepath.Join(stateDir, "hosts", hostID))
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, unitReadyFile, map[string]string{"stage": "host-ready"}, true)
+}
+
 // 已完成步骤的记录文件。
 const (
 	StepInitStorage = "init-storage.json"

@@ -298,7 +298,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 		// its journal and the exact request intact for a safe explicit retry.
 		return result, helperFailure(ctx, func() (setupssh.Client, error) {
 			return setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, options.SSH)
-		}, "部署管理台", err, output)
+		}, options.Log, "部署管理台", err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()

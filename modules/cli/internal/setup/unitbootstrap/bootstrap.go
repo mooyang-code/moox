@@ -180,18 +180,19 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 // 当前版本和它的上一版都保留，手动回滚要用。只在目标机上没有未完成的尝试时调用；清理失败不影响部署，下次再清。
 func pruneAttempts(request Request, j journal) {
 	keep := append(unitinstall.PruneReleases(request.Host.UnitRoot, j.Host.Previous), unitinstall.PruneReleases(request.Control.UnitRoot, j.Control.Previous)...)
-	directory := filepath.Join(request.DeploymentRoot, "bootstrap")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		return
-	}
 	names := make([]string, 0, len(keep))
 	for _, path := range keep {
 		names = append(names, filepath.Base(path))
 	}
-	for _, entry := range entries {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), "bootstrap-") && !slices.Contains(names, entry.Name()) {
-			_ = os.RemoveAll(filepath.Join(directory, entry.Name()))
+	for _, directory := range []string{filepath.Join(request.DeploymentRoot, "bootstrap"), filepath.Join(request.Control.UnitRoot, "state-imports")} {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "bootstrap-") && !slices.Contains(names, entry.Name()) {
+				_ = os.RemoveAll(filepath.Join(directory, entry.Name()))
+			}
 		}
 	}
 }

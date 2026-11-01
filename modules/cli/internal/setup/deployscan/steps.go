@@ -3,9 +3,24 @@ package deployscan
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 )
+
+// UnfinishedReason 处理升级路线上的一种情况：安装没做完就换了配置或版本。旧状态不能接着用，NextSteps 是空的，
+// 但这不代表装完了，要把缺的步骤说出来。早期部署没有记录，按正常升级走。
+func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalState, internalTLS bool) string {
+	if route != RouteUpgrade || !local.StaleBinding || local.BindingConfig == "" {
+		return ""
+	}
+	local.StaleBinding = false
+	pending := NextSteps(manifest, route, local, internalTLS)
+	if len(pending) == 0 {
+		return ""
+	}
+	return staleReason(local) + "。还缺这些步骤：" + strings.Join(pending, "；")
+}
 
 // NextSteps 按当前拓扑和已完成的步骤列出接下来要运行的命令。安装顺序只在这里写一份，文档和 skill 都照它走。
 // 顺序规则：组件的就绪条件不能依赖排在它后面的步骤。Monitor 就绪要求系统元数据已激活，

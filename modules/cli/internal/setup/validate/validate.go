@@ -72,6 +72,9 @@ func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
 	return result, nil
 }
 
+// controlComponents 是可以直接加到管理台主机上的组件；Storage 这类组件对放置有要求，不能这样补。
+var controlComponents = []string{"monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"}
+
 // CheckDeployments 确认配置里的部署完整：授权服务都有组件提供。这是纯配置检查，不连接任何主机，
 // 缺组件时部署到一半才会以“未就绪”的形式暴露，所以在动手之前就要报出来。
 func CheckDeployments(manifest setupconfig.Manifest) error {
@@ -92,6 +95,11 @@ func CheckDeployments(manifest setupconfig.Manifest) error {
 	for _, item := range missing {
 		if !slices.Contains(components, item.Component) {
 			components = append(components, item.Component)
+		}
+	}
+	for _, id := range components {
+		if !slices.Contains(controlComponents, id) {
+			return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；重新运行 config init 生成配置", strings.Join(components, "、"))
 		}
 	}
 	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；运行 moox-cli config migrate --add-deployment %s=%s --yes 补上，再重新校验",

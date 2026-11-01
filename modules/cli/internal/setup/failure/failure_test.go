@@ -65,7 +65,7 @@ func TestEveryCodeIsDocumentedInSkill(t *testing.T) {
 		}
 	}
 	// 操作机自己报的错误码。
-	for _, code := range []string{"ssh_disconnected", "operation_cancelled", "deployment_incomplete", "disk_low", "core_not_ready", "host_not_ready", "init_storage_required", "logs_unavailable"} {
+	for _, code := range []string{"ssh_disconnected", "deployment_incomplete", "disk_low", "core_not_ready", "host_not_ready", "init_storage_required", "logs_unavailable"} {
 		if !strings.Contains(string(raw), "`"+code+"`") {
 			t.Errorf("install.md 的处理表缺少错误码 %s", code)
 		}
