@@ -151,7 +151,8 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
 		return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
 	}
-	if options.Profile != "host" && options.HostID != control.Name {
+	// 带 --release 时记录在版本目录下，由版本自己的检查负责。
+	if options.Release == "" && options.Profile != "host" && options.HostID != control.Name {
 		if _, err := root.Lstat(filepath.Join("hosts", options.HostID, "operation.json")); err != nil {
 			return result, fmt.Errorf("host_not_ready: 主机 %s 还没部署主机服务，先运行 setup deploy-host --host %s", options.HostID, options.HostID)
 		}

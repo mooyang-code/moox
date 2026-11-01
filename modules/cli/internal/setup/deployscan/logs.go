@@ -21,28 +21,30 @@ type LogSection struct {
 }
 
 // 日志里可能带密钥的写法：Authorization 整行、字段值、Bearer 令牌、URL 里的账号密码和 key 参数、PEM 块。
-// JSON 里被转义的引号也要算上；值没有闭合引号时遮到行尾。
-const secretName = `(?:secret|password|passwd|token|api[_-]?key|private[_-]?key)[a-z_-]*(?:\\?["'])?\s*[:=]\s*`
+// JSON 里被转义的引号也要算上；值没有闭合引号时遮到行尾。无引号的值遮到空白为止，同一行紧跟的字段会一起遮掉，宁可多遮。
+const secretName = `(?:secret|password|passwd|token|api[_-]?key|private[_-]?key)[a-z0-9_-]*(?:\\?["'])?[ \t]*[:=][ \t]*`
 
 var (
 	pemBlock    = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+-----.*?(?:-----END [A-Z ]+-----|\z)`)
-	authHeader  = regexp.MustCompile(`(?im)(authorization(?:\\?["'])?\s*[:=]\s*).*$`)
-	bearerToken = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s"'\\,]+`)
+	pemTail     = regexp.MustCompile(`(?s)\A.*?-----END [A-Z ]+-----`)
+	authHeader  = regexp.MustCompile(`(?im)(authorization(?:\\?["'])?[ \t]*[:=][ \t]*).*$`)
+	bearerToken = regexp.MustCompile(`(?i)\b(bearer|basic)[ \t]+[^\s"'\\,]+`)
 	urlPassword = regexp.MustCompile(`(://[^\s:/@"']+:)[^\s/@"']+@`)
 	queryKey    = regexp.MustCompile(`(?i)([?&](?:key|token|secret|sign|signature)=)[^\s&"'\\]+`)
-	quotedField = regexp.MustCompile(`(?im)(` + secretName + `)(?:\\?"(?:[^"\\\n]|\\[^"\n])*(?:\\?"|$)|'[^'\n]*(?:'|$))`)
-	plainField  = regexp.MustCompile(`(?i)(` + secretName + `)[^\s*"'][^\s]*`)
+	plainField  = regexp.MustCompile(`(?i)(` + secretName + `)[^\s"'\\]\S*`)
+	quotedField = regexp.MustCompile(`(?im)(` + secretName + `)(?:\\"(?:[^\\\n]|\\[^"\n])*(?:\\"|$)|"(?:[^"\\\n]|\\.)*(?:"|\\?$)|'[^'\n]*(?:'|$))`)
 )
 
 // RedactLog 遮掉日志里的密钥。日志是给人和 Agent 排查用的，不应该带出密钥。
 func RedactLog(text string) string {
 	text = pemBlock.ReplaceAllString(text, "***")
+	text = pemTail.ReplaceAllString(text, "***")
 	text = authHeader.ReplaceAllString(text, "${1}***")
 	text = bearerToken.ReplaceAllString(text, "${1} ***")
 	text = urlPassword.ReplaceAllString(text, "${1}***@")
 	text = queryKey.ReplaceAllString(text, "${1}***")
-	text = quotedField.ReplaceAllString(text, "${1}***")
-	return plainField.ReplaceAllString(text, "${1}***")
+	text = plainField.ReplaceAllString(text, "${1}***")
+	return quotedField.ReplaceAllString(text, "${1}***")
 }
 
 // ReadLogs 只读取一个组件在这台主机上最近的日志，包括失败回滚的发布目录里的日志。unit 是外部程序的 systemd 单元名。

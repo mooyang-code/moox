@@ -727,4 +727,9 @@ func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
 	got, detail = code(state.startupFailure(component, false, []string{"host_storage_schema_ready"}, info.Size()))
 	require.Equal(t, failure.TargetNotReady, got)
 	require.Contains(t, detail, "not_ready=host_storage_schema_ready")
+
+	many := strings.Split(strings.Repeat("trpc.moox.some.ServiceNameThatIsLong,", 30), ",")
+	_, detail = code(state.startupFailure(component, false, many, info.Size()))
+	require.Less(t, len(detail), 400)
+	require.Contains(t, detail, "component=console-proxy")
 }

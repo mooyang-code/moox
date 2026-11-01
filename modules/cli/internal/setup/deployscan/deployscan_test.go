@@ -676,6 +676,8 @@ func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
 	local := LocalState{CoreReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
 	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local, false)
 	require.Contains(t, reason, "/old/moox.toml")
+	require.Contains(t, reason, "host-registry.md", "装好后有意新增的不能被建议清空")
+	require.NotContains(t, reason, "彻底清空")
 	require.Contains(t, reason, "--profile collector-stream", "初始化之后才缺的单元也要说出来")
 	require.Empty(t, NextSteps(stepsManifest(), RouteUpgrade, local, false))
 	local.BindingConfig = ""
@@ -787,6 +789,13 @@ func TestRedactLogKeepsOtherLinesAndCoversEdgeCases(t *testing.T) {
 		require.NotContains(t, text, secret)
 	}
 	require.Contains(t, RedactLog("tokens used: 123"), "123")
+	text = RedactLog("token:\nnext line keep\nsecret1=s1-value token_v2=s2-value\n{\"password\":\"ab\\\"tail-value\"}\npassword: \"abc-value\\\npassword=*star-value\npem-tail-value\n")
+	require.Contains(t, text, "next line keep", "空值不能遮到下一行")
+	for _, secret := range []string{"s1-value", "s2-value", "tail-value", "abc-value", "star-value"} {
+		require.NotContains(t, text, secret)
+	}
+	require.NotContains(t, RedactLog("half-pem-value\n-----END PRIVATE KEY-----\nafter"), "half-pem-value")
+	require.Contains(t, RedactLog("half\n-----END PRIVATE KEY-----\nafter"), "after")
 }
 
 func TestReadLogsRedactsOutput(t *testing.T) {

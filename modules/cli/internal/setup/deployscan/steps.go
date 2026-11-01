@@ -8,8 +8,8 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 )
 
-// UnfinishedReason 处理升级路线上的一种情况：安装没做完就换了配置或版本。旧状态不能接着用，NextSteps 是空的，
-// 但这不代表装完了，要把缺的步骤说出来。早期部署没有记录，按正常升级走。
+// UnfinishedReason 处理升级路线上配置或版本变了的情况：可能是安装中途换的，也可能是装好后有意加了主机或组件，
+// 两者都让 NextSteps 为空，只说事实，由用户分辨。早期部署没有记录，按正常升级走。
 func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalState, internalTLS bool) string {
 	if route != RouteUpgrade || !local.StaleBinding || local.BindingConfig == "" {
 		return ""
@@ -19,7 +19,7 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 	if len(pending) == 0 {
 		return ""
 	}
-	return staleReason(local) + "。还缺这些步骤：" + strings.Join(pending, "；")
+	return "按当前配置，这些步骤没有完成记录：" + strings.Join(pending, "；") + "。如果是安装中途换了配置或版本，换回原配置和原版本（原配置在 " + local.BindingConfig + "）后补上；如果是装好后有意新增主机或组件，按 host-registry.md 部署，不要清空"
 }
 
 // NextSteps 按当前拓扑和已完成的步骤列出接下来要运行的命令。安装顺序只在这里写一份，文档和 skill 都照它走。

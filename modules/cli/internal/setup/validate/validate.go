@@ -99,7 +99,7 @@ func CheckDeployments(manifest setupconfig.Manifest) error {
 	}
 	for _, id := range components {
 		if !slices.Contains(controlComponents, id) {
-			return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；重新运行 config init 生成配置", strings.Join(components, "、"))
+			return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；把现有 moox.toml 改名后重新运行 config init 生成配置", strings.Join(components, "、"))
 		}
 	}
 	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；运行 moox-cli config migrate --add-deployment %s=%s --yes 补上，再重新校验",

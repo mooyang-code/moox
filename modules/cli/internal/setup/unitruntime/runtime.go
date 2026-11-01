@@ -578,7 +578,12 @@ func (s *runtimeState) startupFailure(component Component, exited bool, reasons 
 		return failure.WithDetail(failure.TargetProcessExited, message, subject)
 	}
 	if len(reasons) != 0 {
-		subject += " not_ready=" + strings.Join(reasons, ",")
+		list := strings.Join(reasons, ",")
+		// 详情有长度上限，超了整条带不回去，所以先截短。
+		if len(list) > 300 {
+			list = list[:strings.LastIndex(list[:300], ",")] + ",..."
+		}
+		subject += " not_ready=" + list
 	}
 	return failure.WithDetail(failure.TargetNotReady, message, subject)
 }

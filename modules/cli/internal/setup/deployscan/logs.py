@@ -5,8 +5,13 @@ def tail(path, lines):
     with open(path, 'rb') as stream:
         stream.seek(0, os.SEEK_END)
         size = stream.tell()
-        stream.seek(max(0, size - (1 << 20)))
-        return b'\n'.join(stream.read().split(b'\n')[-lines - 1:]).decode('utf-8', 'replace')
+        start = max(0, size - (1 << 20))
+        stream.seek(start)
+        rows = stream.read().split(b'\n')
+        if start:
+            # 第一行可能是半截，没有键名就遮不到密钥。
+            rows = rows[1:]
+        return b'\n'.join(rows[-lines - 1:]).decode('utf-8', 'replace')
 
 
 def main():
