@@ -60,7 +60,8 @@ func diskWarnings(reports []deployscan.HostReport, control string) []string {
 		if report.Host == control {
 			need = minControlDiskKB
 		}
-		if report.DiskFreeKB > 0 && report.DiskFreeKB < need {
+		// 失败尝试的残留下一次部署会自动清掉，算作可用，否则失败后反而重试不了。
+		if report.DiskFreeKB > 0 && report.DiskFreeKB+report.ReclaimableKB < need {
 			warnings = append(warnings, fmt.Sprintf("disk_low: %s（%s）可用磁盘 %.1f GB，部署至少要 %d GB", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), need>>20))
 		}
 	}
@@ -72,7 +73,7 @@ func checkInstallDisk(ctx context.Context, deps setupDeps, snapshot *setupconfig
 	if deps.scanDeployment == nil {
 		return nil
 	}
-	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Host: host})
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Host: host, Reclaim: true})
 	if err != nil {
 		return err
 	}
@@ -91,7 +92,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	if err := resolveSetupUnitOptions(snapshot, "", options); err != nil {
 		return nil, err
 	}
-	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Reclaim: true})
 	if err != nil {
 		return nil, err
 	}

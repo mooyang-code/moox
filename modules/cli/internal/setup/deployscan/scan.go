@@ -78,6 +78,8 @@ type HostReport struct {
 	HelperRunning bool `json:"helper_running"`
 	// DiskFreeKB 是部署目录所在磁盘的可用空间，0 表示没查到。
 	DiskFreeKB int64 `json:"disk_free_kb"`
+	// ReclaimableKB 是下一次部署开始时会自动清掉的空间（失败尝试的残留），只在 Options.Reclaim 时统计。
+	ReclaimableKB int64 `json:"reclaimable_kb,omitempty"`
 	// LastAttempt 是最近一次 bootstrap 的阶段，只有管理台机有。
 	LastAttempt string `json:"last_attempt,omitempty"`
 }
@@ -99,6 +101,8 @@ func (r HostReport) Empty() bool {
 type Options struct {
 	// Sizes 为 true 时统计目录占用，只在清除预览里需要。
 	Sizes bool
+	// Reclaim 为 true 时统计可自动回收的空间。
+	Reclaim bool
 	// Host 不为空时只检测这一台主机。
 	Host string
 }
@@ -120,7 +124,7 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 		if options.Host != "" && host.Name != options.Host {
 			continue
 		}
-		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes}
+		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes, "reclaim": options.Reclaim}
 		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
 		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {
 			request["archive_root"] = paths.ArchiveRoot

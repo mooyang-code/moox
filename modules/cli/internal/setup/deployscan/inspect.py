@@ -131,6 +131,33 @@ def disk_free_kb(path):
         return 0
 
 
+def kept_releases(unit):
+    """The running release and its predecessor; everything else is removed by the next deployment."""
+    kept = {os.path.realpath(os.path.join(unit, 'current'))}
+    try:
+        with open(os.path.join(unit, 'activation.json')) as stream:
+            kept.add(os.path.realpath(json.load(stream).get('previous_directory') or unit))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return kept
+
+
+def reclaimable_kb(root):
+    """Space the next deployment frees by itself: failed attempts kept only so their logs stay readable."""
+    total, names = 0, set()
+    units = sorted(set(os.path.dirname(os.path.dirname(p)) for p in glob.glob(os.path.join(root, '*/releases/*'))))
+    for unit in units:
+        kept = kept_releases(unit)
+        names.update(os.path.basename(path) for path in kept)
+        for path in glob.glob(os.path.join(unit, 'releases/*')):
+            if os.path.realpath(path) not in kept:
+                total += max(size_kb(path), 0)
+    for path in glob.glob(os.path.join(root, 'bootstrap/bootstrap-*')):
+        if os.path.isdir(path) and os.path.basename(path) not in names:
+            total += max(size_kb(path), 0)
+    return total
+
+
 def last_attempt(root):
     try:
         with open(os.path.join(root, 'bootstrap/workflow.json')) as stream:
@@ -328,6 +355,8 @@ def main():
         'disk_free_kb': disk_free_kb(root),
         'last_attempt': last_attempt(root),
     }
+    if request.get('reclaim'):
+        report['reclaimable_kb'] = reclaimable_kb(root)
     if request.get('sizes'):
         report['sizes_kb'] = dict((d, size_kb(d)) for d in [root] + [e['path'] for e in external] + archives if os.path.lexists(d))
     json.dump(report, sys.stdout)

@@ -663,6 +663,23 @@ func TestInspectReportsDiskAndAttempt(t *testing.T) {
 	require.False(t, report.HelperRunning)
 }
 
+func TestInspectCountsOnlyFailedAttemptsAsReclaimable(t *testing.T) {
+	s := newSandbox(t)
+	current, previous, failed := filepath.Join(s.root, "prod/releases/r2"), filepath.Join(s.root, "prod/releases/r1"), filepath.Join(s.root, "prod/releases/r3")
+	big := strings.Repeat("x", 1<<20)
+	write(t, filepath.Join(current, "a"), big)
+	write(t, filepath.Join(previous, "a"), big)
+	write(t, filepath.Join(failed, "a"), big)
+	write(t, filepath.Join(s.root, "bootstrap/bootstrap-r2/a"), big)
+	write(t, filepath.Join(s.root, "bootstrap/bootstrap-r3/a"), big)
+	require.NoError(t, os.Symlink(current, filepath.Join(s.root, "prod/current")))
+	write(t, filepath.Join(s.root, "prod/activation.json"), `{"previous_directory":"`+previous+`"}`)
+	require.NoError(t, os.MkdirAll(filepath.Join(s.root, "bootstrap/r"), 0o700))
+	report := s.inspect(t, map[string]any{"deploy_root": s.root, "reclaim": true})
+	require.Greater(t, report.ReclaimableKB, int64(1000))
+	require.Less(t, report.ReclaimableKB, int64(2500), "只算失败的发布和失败的尝试")
+}
+
 func TestStaleBindingIsNotResume(t *testing.T) {
 	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, RootExists: true, Entries: []string{"host"}, Units: map[string]string{"host": "bootstrap-a"}, RuntimeSHA256: "sha256:a"}
 	stale := LocalState{RuntimeSHA256: "sha256:a", StaleBinding: true, BindingConfig: "/old/moox.toml"}
