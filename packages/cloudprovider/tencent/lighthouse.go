@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -57,10 +58,11 @@ type CreateFirewallRulesRequest struct {
 	FirewallVersion *int64         `json:"FirewallVersion,omitempty"`
 }
 
-type EnsureFirewallRuleResult struct {
-	Created    bool
-	InstanceID string
-	RequestID  string
+type EnsureFirewallRulesResult struct {
+	Created     int
+	AlreadyOpen int
+	InstanceID  string
+	RequestID   string
 }
 
 type FirewallRule struct {
@@ -219,30 +221,41 @@ func (c *Client) CreateFirewallRules(ctx context.Context, req CreateFirewallRule
 	return resp.Response.RequestID, nil
 }
 
-func (c *Client) EnsureFirewallRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) (EnsureFirewallRuleResult, error) {
+// EnsureFirewallRules 确保一台实例上有这些规则：实例解析和规则读取各一次，缺的规则一次写入。
+func (c *Client) EnsureFirewallRules(ctx context.Context, publicIP string, opts []CreateFirewallRulesOptions) (EnsureFirewallRulesResult, error) {
 	instanceID, err := c.ResolveInstanceIDByPublicIP(ctx, publicIP)
 	if err != nil {
-		return EnsureFirewallRuleResult{}, err
+		return EnsureFirewallRulesResult{}, err
 	}
-	opts.InstanceID = instanceID
-	request, err := NewCreateFirewallRulesRequest(opts)
+	result := EnsureFirewallRulesResult{InstanceID: instanceID}
+	wanted := make([]FirewallRule, 0, len(opts))
+	for _, opt := range opts {
+		opt.InstanceID = instanceID
+		request, err := NewCreateFirewallRulesRequest(opt)
+		if err != nil {
+			return result, err
+		}
+		wanted = append(wanted, request.FirewallRules[0])
+	}
+	existing, err := c.describeFirewallRules(ctx, instanceID)
 	if err != nil {
-		return EnsureFirewallRuleResult{}, err
+		return result, err
 	}
-	rules, err := c.describeFirewallRules(ctx, instanceID)
-	if err != nil {
-		return EnsureFirewallRuleResult{}, err
-	}
-	for _, existing := range rules {
-		if sameFirewallRule(existing, request.FirewallRules[0]) {
-			return EnsureFirewallRuleResult{InstanceID: instanceID}, nil
+	missing := make([]FirewallRule, 0, len(wanted))
+	for _, rule := range wanted {
+		if !slices.ContainsFunc(existing, func(item FirewallRule) bool { return sameFirewallRule(item, rule) }) {
+			missing = append(missing, rule)
 		}
 	}
-	requestID, err := c.CreateFirewallRules(ctx, request)
-	if err != nil {
-		return EnsureFirewallRuleResult{}, err
+	result.AlreadyOpen = len(wanted) - len(missing)
+	if len(missing) == 0 {
+		return result, nil
 	}
-	return EnsureFirewallRuleResult{Created: true, InstanceID: instanceID, RequestID: requestID}, nil
+	if result.RequestID, err = c.CreateFirewallRules(ctx, CreateFirewallRulesRequest{InstanceID: instanceID, FirewallRules: missing}); err != nil {
+		return result, err
+	}
+	result.Created = len(missing)
+	return result, nil
 }
 
 func (c *Client) describeFirewallRules(ctx context.Context, instanceID string) ([]FirewallRule, error) {

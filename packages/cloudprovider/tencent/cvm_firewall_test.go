@@ -30,9 +30,9 @@ func TestCVMClient_ExistingBroadSecurityGroupRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.now = func() time.Time { return time.Unix(1700000000, 0) }
-	if err := client.EnsureSecurityGroupRule(context.Background(), "43.132.204.177", CreateFirewallRulesOptions{
+	if _, err := client.EnsureSecurityGroupRules(context.Background(), "43.132.204.177", []CreateFirewallRulesOptions{{
 		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT",
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := actions, []string{"DescribeInstances", "DescribeSecurityGroupPolicies"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
@@ -69,9 +69,9 @@ func TestCVMClient_CreatesMissingSecurityGroupRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.now = func() time.Time { return time.Unix(1700000000, 0) }
-	if err := client.EnsureSecurityGroupRule(context.Background(), "43.132.204.177", CreateFirewallRulesOptions{
+	if _, err := client.EnsureSecurityGroupRules(context.Background(), "43.132.204.177", []CreateFirewallRulesOptions{{
 		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "Storage gateway",
-	}); err != nil {
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if !created {

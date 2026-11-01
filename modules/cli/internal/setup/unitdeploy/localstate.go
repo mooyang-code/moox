@@ -42,6 +42,31 @@ func MarkStep(stateDir, name string) error {
 	return saveJSON(root, name, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339)}, true)
 }
 
+// MarkInitStorage 记下元数据已导入和这份种子的摘要。
+func MarkInitStorage(stateDir, seedSHA256 string) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, StepInitStorage, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339), "seed_sha256": seedSHA256}, true)
+}
+
+// ImportedSeed 返回 setup init --stage storage 导入过的种子摘要，没有记录时为空。
+func ImportedSeed(stateDir string) string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, StepInitStorage))
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		Seed string `json:"seed_sha256"`
+	}
+	if json.Unmarshal(raw, &record) != nil {
+		return ""
+	}
+	return record.Seed
+}
+
 // MarkHostReady 记下主机服务和看护都装好了。
 func MarkHostReady(stateDir, hostID string) error {
 	root, err := privateRoot(filepath.Join(stateDir, "hosts", hostID))

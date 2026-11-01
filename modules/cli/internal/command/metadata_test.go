@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
@@ -918,4 +919,74 @@ func TestMetadataContractsEqualComparesDataSourceAttributes(t *testing.T) {
 	assert.True(t, metadataContractsEqual("data_sources", seed, same))
 	same.Attributes = map[string]string{"owner": "someone"}
 	assert.False(t, metadataContractsEqual("data_sources", seed, same))
+}
+
+func TestMetadataApplyStagesKeepDependencies(t *testing.T) {
+	group := func(id, parent string) metadataImportCall {
+		return metadataImportCall{Resource: "field_groups", Request: &pb.CreateFieldGroupReq{FieldGroup: &pb.FieldGroup{GroupId: id, ParentGroupId: parent}}}
+	}
+	column := func(dataset, name string) metadataImportCall {
+		return metadataImportCall{Resource: "dataset_columns", Request: &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{DatasetId: dataset, ColumnName: name}}}
+	}
+	stages := metadataApplyStages([]metadataImportCall{
+		{Resource: "spaces"}, {Resource: "spaces"},
+		group("child", "parent"), group("parent", ""),
+		column("a", "1"), column("b", "1"), column("a", "2"),
+	})
+	require.Len(t, stages, 4)
+	assert.Len(t, stages[0], 2, "同类资源并发")
+	assert.Equal(t, "parent", stages[1][0][0].Request.(*pb.CreateFieldGroupReq).GetFieldGroup().GetGroupId(), "父分组先写")
+	assert.Equal(t, "child", stages[2][0][0].Request.(*pb.CreateFieldGroupReq).GetFieldGroup().GetGroupId())
+	require.Len(t, stages[3], 2, "按数据集分组")
+	require.Len(t, stages[3][0], 2)
+	assert.Equal(t, "2", stages[3][0][1].Request.(*pb.UpsertDatasetColumnReq).GetColumn().GetColumnName(), "组内保持写入顺序")
+}
+
+func TestRunMetadataApplyListsColumnsOncePerDataset(t *testing.T) {
+	var mu sync.Mutex
+	lists, upserts := 0, []string{}
+	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"ListDatasetColumns": func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			lists++
+			mu.Unlock()
+			writeProtoJSON(w, &pb.ListDatasetColumnsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+		},
+		"UpsertDatasetColumn": func(w http.ResponseWriter, r *http.Request) {
+			request := &pb.UpsertDatasetColumnReq{}
+			raw, _ := io.ReadAll(r.Body)
+			require.NoError(t, protojson.Unmarshal(raw, request))
+			mu.Lock()
+			upserts = append(upserts, request.GetColumn().GetColumnName())
+			mu.Unlock()
+			writeProtoJSON(w, &pb.UpsertDatasetColumnRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
+		},
+	})
+	defer server.Close()
+	var calls []metadataImportCall
+	for _, name := range []string{"open", "high", "low", "close"} {
+		calls = append(calls, metadataImportCall{Resource: "dataset_columns", Method: "UpsertDatasetColumn",
+			Request:  &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{SpaceId: "crypto", DatasetId: "d", ColumnName: name}},
+			Response: &pb.UpsertDatasetColumnRsp{}})
+	}
+	summary, err := runMetadataApply(context.Background(), server, calls)
+	require.NoError(t, err)
+	assert.Equal(t, 1, lists, "每组只查一次")
+	assert.Equal(t, []string{"open", "high", "low", "close"}, upserts, "列的排序依赖写入顺序")
+	assert.Equal(t, 4, summary.Applied)
+}
+
+func TestRunMetadataApplyStopsOnFailure(t *testing.T) {
+	server := metadataTestServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"GetSpace": func(w http.ResponseWriter, r *http.Request) {
+			writeProtoJSON(w, &pb.GetSpaceRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "boom"}})
+		},
+	})
+	defer server.Close()
+	_, err := runMetadataApply(context.Background(), server, []metadataImportCall{
+		{Resource: "spaces", Method: "CreateSpace", Request: &pb.CreateSpaceReq{Space: &pb.Space{SpaceId: "a"}}, Response: &pb.CreateSpaceRsp{},
+			Exists: &metadataExistsProbe{Method: "GetSpace", Request: &pb.GetSpaceReq{SpaceId: "a"}, Response: &pb.GetSpaceRsp{}}},
+		{Resource: "tags", Method: "UpsertTag"},
+	})
+	require.ErrorContains(t, err, "boom")
 }

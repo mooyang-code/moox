@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,6 +24,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 )
 
 const defaultSetupConfigDir = "./config/setup"
@@ -30,6 +33,23 @@ type setupInitBundle struct {
 	Spaces   []setupclient.Space
 	Datasets []seedDataset
 	Calls    []metadataImportCall
+	// ImportedSeed 是 setup init --stage storage 导入过的种子摘要，一致时不再重复导入。
+	ImportedSeed string
+}
+
+// metadataSeedDigest 是一组导入调用的摘要。
+func metadataSeedDigest(calls []metadataImportCall) (string, error) {
+	digest := sha256.New()
+	options := proto.MarshalOptions{Deterministic: true}
+	for _, call := range calls {
+		raw, err := options.Marshal(call.Request)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s:%d:", call.Method, len(raw))
+		digest.Write(raw)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 type setupInitStorage interface {
@@ -114,11 +134,16 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := unitdeploy.MarkStep(options.StateDirectory, unitdeploy.StepInitStorage); err != nil {
+				seed, err := metadataSeedDigest(bundle.Calls)
+				if err != nil {
+					return err
+				}
+				if err := unitdeploy.MarkInitStorage(options.StateDirectory, seed); err != nil {
 					return err
 				}
 				return writeSetupJSON(cmd, result)
 			}
+			bundle.ImportedSeed = unitdeploy.ImportedSeed(options.StateDirectory)
 			result, err := deps.initStorage(cmd.Context(), snapshot, file, configDir, storageHost, bundle)
 			if err != nil {
 				return err
@@ -172,6 +197,19 @@ func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconf
 		return empty, setupDatasetActivationSummary{}, empty, err
 	}
 	defer storage.Close()
+	imported, err := setupMetadataImported(ctx, storage, bundle)
+	if err != nil {
+		return empty, setupDatasetActivationSummary{}, empty, err
+	}
+	if imported {
+		// Activate 每次都跑：系统重置会重新导入种子，空间回来了但数据集未激活。
+		datasets, err := storage.Activate(ctx, bundle.Datasets)
+		if err != nil {
+			return empty, setupDatasetActivationSummary{}, empty, err
+		}
+		done := metadataImportSummary{Planned: len(bundle.Calls), Unchanged: len(bundle.Calls)}
+		return done, datasets, done, nil
+	}
 	metadata, err := storage.Apply(ctx, bundle.Calls)
 	if err != nil {
 		return empty, setupDatasetActivationSummary{}, empty, err
@@ -188,6 +226,25 @@ func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconf
 		return empty, setupDatasetActivationSummary{}, empty, fmt.Errorf("metadata_verification_failed")
 	}
 	return metadata, datasets, verification, nil
+}
+
+// setupMetadataImported 判断这份种子已经导入过，并且业务空间还在。
+func setupMetadataImported(ctx context.Context, storage setupInitStorage, bundle setupInitBundle) (bool, error) {
+	if bundle.ImportedSeed == "" {
+		return false, nil
+	}
+	seed, err := metadataSeedDigest(bundle.Calls)
+	if err != nil || seed != bundle.ImportedSeed {
+		return false, err
+	}
+	var spaces []metadataImportCall
+	for _, call := range bundle.Calls {
+		if call.Resource == "spaces" {
+			spaces = append(spaces, call)
+		}
+	}
+	probe, err := storage.Apply(ctx, spaces)
+	return err == nil && probe.Applied == 0, err
 }
 
 func runSetupInit(

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -96,84 +97,92 @@ type vpcCreatePoliciesRequest struct {
 	} `json:"SecurityGroupPolicySet"`
 }
 
-// EnsureSecurityGroupRule makes the requested TCP/UDP ingress available on a
-// CVM's VPC security group. Existing broad ACCEPT rules are also accepted as
-// satisfying the request.
-func (c *CVMClient) EnsureSecurityGroupRule(ctx context.Context, publicIP string, opts CreateFirewallRulesOptions) error {
+// EnsureSecurityGroupRules 确保 CVM 的安全组放行这些入站规则：实例和策略各读一次，缺的规则一次写入。
+// 已有更宽的 ACCEPT 规则也算满足。
+func (c *CVMClient) EnsureSecurityGroupRules(ctx context.Context, publicIP string, opts []CreateFirewallRulesOptions) (EnsureFirewallRulesResult, error) {
+	var result EnsureFirewallRulesResult
 	publicIP = strings.TrimSpace(publicIP)
 	if net.ParseIP(publicIP) == nil {
-		return fmt.Errorf("invalid public ip: %s", publicIP)
+		return result, fmt.Errorf("invalid public ip: %s", publicIP)
 	}
-	rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
-		InstanceID:    "cvm",
-		Protocol:      opts.Protocol,
-		Ports:         opts.Ports,
-		CidrBlock:     opts.CidrBlock,
-		IPv6CidrBlock: opts.IPv6CidrBlock,
-		Action:        opts.Action,
-		Description:   opts.Description,
-	})
-	if err != nil {
-		return err
-	}
-	wanted := vpcSecurityGroupPolicy{
-		Protocol: rule.FirewallRules[0].Protocol, Port: rule.FirewallRules[0].Port,
-		CidrBlock: rule.FirewallRules[0].CidrBlock, Action: rule.FirewallRules[0].Action,
-		PolicyDescription: rule.FirewallRules[0].FirewallRuleDescription,
+	wanted := make([]vpcSecurityGroupPolicy, 0, len(opts))
+	for _, opt := range opts {
+		rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
+			InstanceID:    "cvm",
+			Protocol:      opt.Protocol,
+			Ports:         opt.Ports,
+			CidrBlock:     opt.CidrBlock,
+			IPv6CidrBlock: opt.IPv6CidrBlock,
+			Action:        opt.Action,
+			Description:   opt.Description,
+		})
+		if err != nil {
+			return result, err
+		}
+		wanted = append(wanted, vpcSecurityGroupPolicy{
+			Protocol: rule.FirewallRules[0].Protocol, Port: rule.FirewallRules[0].Port,
+			CidrBlock: rule.FirewallRules[0].CidrBlock, Action: rule.FirewallRules[0].Action,
+			PolicyDescription: rule.FirewallRules[0].FirewallRuleDescription,
+		})
 	}
 	var instances cvmDescribeInstancesResponse
 	if err := c.do(ctx, "cvm", cvmVersion, "DescribeInstances", c.endpointFor("cvm"), map[string]any{
 		"Filters": []map[string]any{{"Name": "public-ip-address", "Values": []string{publicIP}}}, "Limit": 1,
 	}, &instances); err != nil {
-		return err
+		return result, err
 	}
 	if instances.Response.Error != nil {
-		return fmt.Errorf("%s: %s", instances.Response.Error.Code, instances.Response.Error.Message)
+		return result, fmt.Errorf("%s: %s", instances.Response.Error.Code, instances.Response.Error.Message)
 	}
 	if len(instances.Response.InstanceSet) == 0 {
-		return fmt.Errorf("cvm instance not found for public ip %s", publicIP)
+		return result, fmt.Errorf("cvm instance not found for public ip %s", publicIP)
 	}
 	groups := instances.Response.InstanceSet[0].SecurityGroupIDs
 	if len(groups) == 0 {
-		return fmt.Errorf("cvm instance has no security group for public ip %s", publicIP)
+		return result, fmt.Errorf("cvm instance has no security group for public ip %s", publicIP)
 	}
+	var ingress []vpcSecurityGroupPolicy
 	for _, groupID := range groups {
 		var policies vpcDescribePoliciesResponse
 		if err := c.do(ctx, "vpc", vpcVersion, "DescribeSecurityGroupPolicies", c.endpointFor("vpc"), map[string]any{
 			"SecurityGroupId": groupID,
 		}, &policies); err != nil {
-			return err
+			return result, err
 		}
 		if policies.Response.Error != nil {
-			return fmt.Errorf("%s: %s", policies.Response.Error.Code, policies.Response.Error.Message)
+			return result, fmt.Errorf("%s: %s", policies.Response.Error.Code, policies.Response.Error.Message)
 		}
-		for _, existing := range policies.Response.SecurityGroupPolicySet.Ingress {
-			if coversCVMRule(existing, wanted) {
-				return nil
-			}
+		ingress = append(ingress, policies.Response.SecurityGroupPolicySet.Ingress...)
+	}
+	missing := make([]vpcSecurityGroupPolicy, 0, len(wanted))
+	for _, rule := range wanted {
+		if !slices.ContainsFunc(ingress, func(existing vpcSecurityGroupPolicy) bool { return coversCVMRule(existing, rule) }) {
+			missing = append(missing, rule)
 		}
 	}
-	// All groups are evaluated above. Adding to the first group is sufficient
-	// for the common single-group topology and avoids silently duplicating a
-	// rule across every attached group.
-	groupID := groups[0]
+	result.AlreadyOpen = len(wanted) - len(missing)
+	if len(missing) == 0 {
+		return result, nil
+	}
+	// 写到第一个安全组就够了：单安全组是常见情况，也避免把规则重复写到每个组。
 	var created struct {
 		Response struct {
 			Error *apiError `json:"Error,omitempty"`
 		} `json:"Response"`
 	}
 	if err := c.do(ctx, "vpc", vpcVersion, "CreateSecurityGroupPolicies", c.endpointFor("vpc"), vpcCreatePoliciesRequest{
-		SecurityGroupID: groupID,
+		SecurityGroupID: groups[0],
 		SecurityGroupPolicySet: struct {
 			Ingress []vpcSecurityGroupPolicy `json:"Ingress"`
-		}{Ingress: []vpcSecurityGroupPolicy{wanted}},
+		}{Ingress: missing},
 	}, &created); err != nil {
-		return err
+		return result, err
 	}
 	if created.Response.Error != nil {
-		return fmt.Errorf("%s: %s", created.Response.Error.Code, created.Response.Error.Message)
+		return result, fmt.Errorf("%s: %s", created.Response.Error.Code, created.Response.Error.Message)
 	}
-	return nil
+	result.Created = len(missing)
+	return result, nil
 }
 
 // RebootInstance requests a hard reboot for a CVM instance. The operation is
