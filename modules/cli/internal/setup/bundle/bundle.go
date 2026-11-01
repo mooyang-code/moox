@@ -26,13 +26,31 @@ type Manifest struct {
 	Release string `json:"release"`
 	// Commit 是快照对应的完整提交。
 	Commit string `json:"commit"`
+	// CatalogSHA256 是打包时的服务目录摘要，和 CLI 不一致说明包和命令行不是同一版本。
+	CatalogSHA256 string `json:"catalog_sha256"`
+	// Units 是各部署单元包，键是单元名。
+	Units map[string]Artifact `json:"units"`
+	// CollectorSCF 是云函数程序。
+	CollectorSCF Artifact `json:"collector_scf"`
 	// BinaryDirectory 是相对包根的 Linux 二进制目录。
 	BinaryDirectory string `json:"binary_directory"`
 	// Files 是快照里的全部文件（相对包根、斜杠分隔），等价于该提交的 git ls-files。
 	Files []string `json:"files"`
 }
 
-var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+// Artifact 是一个随发布下载的附件。
+type Artifact struct {
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	// Manifest 是单元包的内容清单（unitpackage.Manifest），由使用方解析；云函数程序没有。
+	Manifest json.RawMessage `json:"manifest,omitempty"`
+}
+
+var (
+	commitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	releasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+)
 
 // Load 读取 root 下的产物包清单；root 不是产物包时返回 false。
 func Load(root string) (Manifest, bool, error) {
@@ -56,6 +74,17 @@ func Load(root string) (Manifest, bool, error) {
 		}
 	}
 	return manifest, true, nil
+}
+
+// CheckCLI 确认产物包和 CLI 是同一版本：服务目录必须一致，CLI 是正式版本时版本号也要一致。
+func (m Manifest) CheckCLI(version, catalogSHA256 string) error {
+	if m.CatalogSHA256 != "" && m.CatalogSHA256 != catalogSHA256 {
+		return fmt.Errorf("bundle_version_mismatch: 产物包 %s 的服务目录和这个 moox-cli 不一致，换成同一版本的 CLI", m.Release)
+	}
+	if releasePattern.MatchString(version) && version != m.Release {
+		return fmt.Errorf("bundle_version_mismatch: 产物包是 %s，moox-cli 是 %s，换成同一版本", m.Release, version)
+	}
+	return nil
 }
 
 // BinaryPath 返回包内二进制目录的绝对路径。

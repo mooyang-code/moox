@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -86,6 +86,10 @@ udf-testdata:
 test-go:
 	./scripts/test/contract/test-go-workspace.sh
 
+.PHONY: test-release-bundle-manifest
+test-release-bundle-manifest:
+	./scripts/test/contract/test-release-bundle-manifest.sh
+
 .PHONY: test-console-proxy
 test-console-proxy:
 	cd modules/consoleproxy && go test -count=1 ./... && go vet ./...
@@ -110,7 +114,7 @@ PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 # make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
 # 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
 VERIFY_PR_UNITS := test-deployment-packages test-host-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-unit-admin
-VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract
+VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest
 VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-caddy test-skill-contracts
 VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 

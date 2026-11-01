@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/spf13/cobra"
 )
@@ -160,6 +161,9 @@ func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, opti
 func defaultBundleBinaries(root string, directories ...*string) error {
 	manifest, ok, err := bundle.Load(root)
 	if err != nil || !ok {
+		return err
+	}
+	if err := manifest.CheckCLI(Version, unitruntime.CatalogSHA256()); err != nil {
 		return err
 	}
 	for _, directory := range directories {

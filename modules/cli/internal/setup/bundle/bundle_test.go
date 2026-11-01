@@ -44,3 +44,20 @@ func TestLoadRejectsBadManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckCLI(t *testing.T) {
+	manifest := Manifest{Release: "v1.2.3", CatalogSHA256: "abc"}
+	if err := manifest.CheckCLI("v1.2.3", "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.CheckCLI("dev", "abc"); err != nil {
+		t.Fatalf("开发版本不比版本号：%v", err)
+	}
+	if err := manifest.CheckCLI("v1.2.4", "abc"); err == nil {
+		t.Fatal("版本不同要拒绝")
+	}
+	manifest.CatalogSHA256 = "other"
+	if err := manifest.CheckCLI("dev", "abc"); err == nil {
+		t.Fatal("服务目录不同要拒绝")
+	}
+}
