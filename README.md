@@ -29,9 +29,9 @@ MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、�
 
 ## 介绍视频
 
-3 分钟看懂 MooX：
+3 分半钟看懂 MooX：
 
-https://github.com/user-attachments/assets/61539b04-b183-4570-bc6d-c4ad0e6ed537
+https://github.com/user-attachments/assets/1512aea0-f402-4ad0-8f0a-fda056239f71
 
 ---
 
