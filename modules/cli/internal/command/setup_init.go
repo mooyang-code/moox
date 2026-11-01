@@ -254,6 +254,9 @@ func runSetupInit(
 		return setupInitSummary{}, err
 	}
 	var factorSummary *setupFactorSummary
+	if snapshot.Manifest.Factors.Enabled && (snapshot.Manifest.ComponentHost("factor-engine") == "" || snapshot.Manifest.ComponentHost("collector-stream") == "") {
+		factorPlan.Warnings = append(factorPlan.Warnings, "打开了因子导入，但没有因子引擎或海外采集：任务不会出结果，会长期告警")
+	}
 	reportFactorWarnings(factorPlan.Warnings)
 	if !factorPlan.empty() {
 		factorService, openErr := deps.openInitFactor(ctx, snapshot)

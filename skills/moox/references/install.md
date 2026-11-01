@@ -189,7 +189,7 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
 2. `./bin/moox-cli collector status --space-id crypto`：各数据集 `level: ok`。
 3. 告诉用户管理台地址 `https://<管理台地址>:9527`、管理员用户名（密码在用户自己填的配置里），以及默认已经在跑的内容：
-   币安现货与合约 1m K 线采集、两个 1m 因子任务。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
+   币安现货与合约 1m K 线采集；有因子机和海外机时还有两个 1m 因子任务。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
 4. 列出还没做、需要用户决定的事：长历史导入（[`initial-import.md`](initial-import.md)）、自定义因子（[`factor-dsl.md`](factor-dsl.md)）、自定义策略。
 
 ## 保留数据
@@ -235,6 +235,10 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
 | `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
+| `collection_not_started` | 有启用的采集任务，但到超时还没有采集计划，或 collector-stream 不在线 | 看 `collector kline status` 给出的原因，不要删任务、不要手工改数据 |
+| `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector kline status` 和 `setup logs --component collector-stream` |
+| `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --component factor-engine` |
+| `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |
 | `admin_not_ready`、`host_not_ready` | admin 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
 | `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |

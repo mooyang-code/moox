@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -89,4 +90,26 @@ func TestInitializeUsesBoundedSQLitePool(t *testing.T) {
 	if stats.MaxOpenConnections != 8 {
 		t.Fatalf("MaxOpenConnections = %d, want 8", stats.MaxOpenConnections)
 	}
+}
+
+func TestCachePreallocatesLittleWhileOpen(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "badger")
+	mgr := NewManager()
+	if err := mgr.InitializeCache(dir); err != nil {
+		t.Fatalf("InitializeCache() error = %v", err)
+	}
+	defer mgr.CloseCache()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+	}
+	assert.Less(t, total, int64(64<<20), "打开状态下的表观大小，关闭后 vlog 会被截断，量不到预分配")
 }

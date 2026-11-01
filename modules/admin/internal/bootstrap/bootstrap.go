@@ -69,6 +69,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	log.InfoContextf(ctx, "应用初始化完成")
 	s.RegisterOnShutdown(services.closeGateways)
+	s.RegisterOnShutdown(func() {
+		if err := services.DBManager.CloseCache(); err != nil {
+			log.Errorf("close badger cache: %v", err)
+		}
+	})
 	initialized = true
 	return s, nil
 }

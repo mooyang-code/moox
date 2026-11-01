@@ -388,3 +388,20 @@ func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
 		}
 	}
 }
+
+func TestFactorsOnlyTurnOnWithEngineAndOverseas(t *testing.T) {
+	full := sampleRequest()
+	full.Servers.Factor = &SSHTarget{Address: "192.168.0.20", SSHUser: "me"}
+	if !render(t, full).Factors.Enabled {
+		t.Fatal("有因子机和海外机时默认打开因子")
+	}
+	noOverseas := full
+	noOverseas.Servers.Overseas = nil
+	if render(t, noOverseas).Factors.Enabled {
+		t.Fatal("没有海外机时没有源数据，不打开因子")
+	}
+	noFactor := sampleRequest()
+	if render(t, noFactor).Factors.Enabled {
+		t.Fatal("没有因子机时不打开因子")
+	}
+}

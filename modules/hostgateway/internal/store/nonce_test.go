@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -45,5 +46,29 @@ func TestNonceConsumePersistsAndRejectsConcurrentDuplicates(t *testing.T) {
 	defer nonces.Close()
 	if ok, err := nonces.Consume(context.Background(), "service", "abc", time.Minute); err != nil || ok {
 		t.Fatalf("persistent consume = %v, %v", ok, err)
+	}
+}
+
+func TestNonceStorePreallocatesLittleWhileOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nonces")
+	nonces, err := OpenNonces(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nonces.Close()
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+	}
+	if total >= 64<<20 {
+		t.Fatalf("打开状态下的表观大小 %d 太大", total)
 	}
 }

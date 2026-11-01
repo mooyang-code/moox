@@ -62,6 +62,9 @@ func (dm *Manager) InitializeCache(cacheDir string) error {
 
 	opts := badger.DefaultOptions(cacheDir)
 	opts.Logger = nil // 禁用 BadgerDB 的默认日志
+	// 这里只有登录盐、会话和 nonce，默认值会预分配 2GB 的 vlog 和 128MB 的 memtable 文件，发布复制状态时要展开成实心文件。
+	opts.ValueLogFileSize = 16 << 20
+	opts.MemTableSize = 8 << 20
 
 	cache, err := badger.Open(opts)
 	if err != nil {
@@ -77,6 +80,14 @@ func (dm *Manager) InitializeCache(cacheDir string) error {
 // 注意：业务逻辑应通过DAO访问数据库，避免直接使用此方法
 func (dm *Manager) GetDB() *gorm.DB {
 	return dm.db
+}
+
+// CloseCache 关闭缓存，退出时调用：关闭后 vlog 截断到实际大小。
+func (dm *Manager) CloseCache() error {
+	if dm.cache == nil {
+		return nil
+	}
+	return dm.cache.Close()
 }
 
 // GetCache 获取缓存连接

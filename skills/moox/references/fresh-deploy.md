@@ -95,7 +95,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 ### 步骤 8 的已知限制
 
-`setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）。
+`setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
 
 ## 5. 默认初始化的范围

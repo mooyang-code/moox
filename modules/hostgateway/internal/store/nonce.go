@@ -22,7 +22,8 @@ func OpenNonces(path string) (*Nonces, error) {
 	if err := os.Chmod(path, 0o700); err != nil {
 		return nil, fmt.Errorf("secure nonce store: %w", err)
 	}
-	opts := badger.DefaultOptions(path).WithLogger(nil).WithSyncWrites(true)
+	// nonce 很小，默认值会预分配 2GB 的 vlog 和 128MB 的 memtable 文件。
+	opts := badger.DefaultOptions(path).WithLogger(nil).WithSyncWrites(true).WithValueLogFileSize(16 << 20).WithMemTableSize(8 << 20)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("open nonce store: %w", err)

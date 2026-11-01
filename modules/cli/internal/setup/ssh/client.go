@@ -426,7 +426,8 @@ func (t *transport) Upload(ctx context.Context, src io.Reader, size int64, dst s
 			_ = client.Remove(temporary)
 		}
 	}()
-	written, err := io.Copy(file, &contextReader{ctx: ctx, reader: io.LimitReader(src, size+1)})
+	// 默认单路写入每 32KB 等一次确认，高延迟线路只有 0.3 MB/s。并发写入后中途失败可能留下空洞，但临时文件会被删除，上传后还要校验哈希。
+	written, err := file.ReadFromWithConcurrency(&contextReader{ctx: ctx, reader: io.LimitReader(src, size+1)}, 0)
 	if err != nil {
 		return fmt.Errorf("ssh_upload_failed: %w", err)
 	}

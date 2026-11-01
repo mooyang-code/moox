@@ -332,6 +332,7 @@
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
 | `setup init` | 导入默认空间、数据集、字段和因子 |
+| `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
 | `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
 | `setup invoke-scf` | 直接调用腾讯云函数 |

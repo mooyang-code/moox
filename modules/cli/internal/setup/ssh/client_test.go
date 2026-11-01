@@ -394,3 +394,25 @@ func TestForgetHostToleratesAMissingFileAndSetsAsideAnInvalidOne(t *testing.T) {
 	// 留底后，重新确认指纹可以正常创建新的指纹文件。
 	require.NoError(t, TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: link}))
 }
+
+func TestUploadLargeFileConcurrentlyAndRejectsOverlongSource(t *testing.T) {
+	fixture := startSSHFixture(t)
+	knownHosts := knownHostsFile(t)
+	require.NoError(t, TrustHost(context.Background(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: knownHosts}))
+	client, err := Dial(context.Background(), fixture.target, fixture.password, Options{KnownHostsPath: knownHosts})
+	require.NoError(t, err)
+	defer client.Close()
+
+	destination := filepath.Join(t.TempDir(), "large.bin")
+	payload := strings.Repeat("0123456789abcdef", 1<<16) // 1MiB，远大于 32KB 的单包。
+	require.NoError(t, client.Upload(context.Background(), strings.NewReader(payload), int64(len(payload)), destination, 0o600))
+	contents, err := os.ReadFile(destination)
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(contents))
+
+	overlong := filepath.Join(t.TempDir(), "overlong.bin")
+	require.Error(t, client.Upload(context.Background(), strings.NewReader(payload), int64(len(payload)-1), overlong, 0o600))
+	matches, err := filepath.Glob(overlong + "*")
+	require.NoError(t, err)
+	assert.Empty(t, matches)
+}

@@ -45,11 +45,19 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 		return nil, err
 	}
 	raw := []byte(strings.Join(lines, "\n"))
-	if _, err := setupconfig.Parse(raw); err != nil {
+	manifest, err := setupconfig.Parse(raw)
+	if err != nil {
 		// 校验错误只提到字段名和规则，不含值；仍然只返回错误文本，不返回渲染结果。
 		return nil, err
 	}
-	return raw, nil
+	if manifest.ComponentHost("factor-engine") != "" && manifest.ComponentHost("collector-stream") != "" {
+		return raw, nil
+	}
+	// 默认因子任务读 crypto 数据：没有因子机或海外机时打开只会长期告警。
+	if lines, err = setKey(lines, "factors", "enabled", "false"); err != nil {
+		return nil, err
+	}
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 // replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机和部署段整体换成生成的拓扑。
