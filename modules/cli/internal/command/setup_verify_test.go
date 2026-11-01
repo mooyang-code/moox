@@ -72,13 +72,17 @@ func TestRunSetupVerifySurvivesTransientReadErrors(t *testing.T) {
 
 // fakeVerifyGateway 按线上的形状回答：视图 ID 带类型和频率，数据集 ID 不带。
 type fakeVerifyGateway struct {
-	strategy string
-	factors  *factorpb.ListFactorTasksRsp
+	strategy      string
+	factors       *factorpb.ListFactorTasksRsp
+	tasksDisabled bool
 }
 
-func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, _, rsp any) error {
+func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp any) error {
 	switch out := rsp.(type) {
 	case *collectorpb.GetTaskListRsp:
+		if g.tasksDisabled && req.(*collectorpb.GetTaskListReq).Enabled != nil {
+			return nil
+		}
 		out.Tasks = []*collectorpb.CollectionTask{{TaskId: "task_a", Result: &collectorpb.TaskResult{ViewId: "view_task_a_kline_1m", DatasetId: "dataset_task_a"}}}
 	case *collectorpb.GetCollectorStatusRsp:
 		out.Datasets = []*collectorpb.CollectorDatasetStatus{{DatasetId: "dataset_task_a", Frequency: "1m"}}
@@ -105,6 +109,11 @@ func TestSetupVerifyReaderMatchesDatasetsByTaskResult(t *testing.T) {
 	require.True(t, input.Datasets[0].Registered, "数据集要按任务结果对上")
 	require.Equal(t, 3, input.Datasets[0].Expected)
 	require.True(t, input.Factors[0].SourceEnabled)
+
+	reader.gateway = fakeVerifyGateway{strategy: `{"instances":[]}`, factors: factors, tasksDisabled: true}
+	input, err = reader.read(context.Background(), map[string]int64{})
+	require.NoError(t, err)
+	require.True(t, input.TasksDisabled, "有任务但全停用")
 
 	reader.gateway = fakeVerifyGateway{strategy: `{"ret_info":{"code":"INNER_ERR","msg":"boom"}}`, factors: factors}
 	_, err = reader.read(context.Background(), map[string]int64{})

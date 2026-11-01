@@ -280,7 +280,11 @@ func checkControlDependencies(snapshot *setupconfig.Snapshot, root *os.Root, com
 				Stage string `json:"stage"`
 			}
 			if err := readJSON(root, filepath.Join("units", host.Name, profile, unitReadyFile), 4096, &ready); err != nil || ready.Stage != profile+"-ready" {
-				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务被暂停时先运行 system resume，再重新部署这个单元", host.Name, profile, host.Name, profile)
+				unitRoot := path.Join(snapshot.Manifest.Paths.DeployRoot, profile)
+				if profile == "storage" {
+					unitRoot = snapshot.Manifest.Paths.StorageRoot
+				}
+				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务被暂停时先在该主机运行 %s，再重新部署这个单元", host.Name, profile, host.Name, profile, path.Join(unitRoot, "current", "resume.sh"))
 			}
 		}
 		if !found {

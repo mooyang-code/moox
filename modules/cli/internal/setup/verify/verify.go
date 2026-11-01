@@ -59,8 +59,10 @@ type Instance struct {
 
 // Input 是一轮验收读到的数据。
 type Input struct {
-	Now            time.Time
-	Datasets       []Dataset
+	Now      time.Time
+	Datasets []Dataset
+	// TasksDisabled 表示空间有采集任务但全部停用：这是用户的选择，不算失败。
+	TasksDisabled  bool
 	HasPlan        bool
 	NeedsStream    bool
 	StreamOnline   bool
@@ -87,6 +89,8 @@ func Evaluate(in Input) []Check {
 func plan(in Input) Check {
 	check := Check{Name: "plan", Code: CodeCollectionNotStarted}
 	switch {
+	case len(in.Datasets) == 0 && in.TasksDisabled:
+		check.Status, check.Code, check.Detail = Skip, "", "这个空间的采集任务都停用了"
 	case len(in.Datasets) == 0:
 		// 没有任务就没有数据，空间写错或种子没写入时不能算通过。
 		check.Status, check.Code, check.Detail = Fail, CodeNoCollectionTasks, "这个空间没有启用的 K 线任务"
@@ -191,14 +195,16 @@ func strategies(in Input) Check {
 	return check
 }
 
-// Settled 报告这一轮是否不用再等。
+// Settled 报告这一轮是否不用再等：已有失败项，或没有还在等的项。
 func Settled(checks []Check) bool {
+	waiting := false
 	for _, check := range checks {
-		if check.Status == Wait {
-			return false
+		if check.Status == Fail {
+			return true
 		}
+		waiting = waiting || check.Status == Wait
 	}
-	return true
+	return !waiting
 }
 
 // Finish 在超时后把还在等的项改成失败。

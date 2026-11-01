@@ -112,6 +112,14 @@ func TestNoEnabledTasksFails(t *testing.T) {
 	require.True(t, Settled(checks), "空间没有任务不用再等")
 }
 
+func TestDisabledTasksSkipAndFailDoesNotWait(t *testing.T) {
+	checks := Evaluate(Input{Now: now, TasksDisabled: true})
+	require.Equal(t, Skip, checks[0].Status, "任务都停用不算失败")
+	require.Equal(t, Skip, checks[1].Status)
+	in := Input{Now: now, Instances: []Instance{{ID: "s", Enabled: true}}}
+	require.True(t, Settled(Evaluate(in)), "已有失败项时不用等别的检查")
+}
+
 func TestSmallDatasetGapIsNotDiluted(t *testing.T) {
 	in := Input{Now: now, HasPlan: true, Datasets: []Dataset{
 		{ID: "large", Registered: true, Frequency: "1m", Expected: 1000},

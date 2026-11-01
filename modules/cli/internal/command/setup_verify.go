@@ -31,7 +31,7 @@ func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 		Short: "验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读",
 		Long: `按已启用的任务逐项检查，等到通过或超时。开头没有计划、第一根 K 线还没收盘时算等待，到超时才失败。
 K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口靠之后补采。因子预热期状态是 degraded，也算通过。
-没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有启用的 K 线任务时直接失败，不算通过。
+没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有任何 K 线任务时直接失败，任务都停用时跳过。
 休市时 K 线检查跳过，因子只看最近一期没有失败。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -139,6 +139,16 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 	}
 	if err := collectorRetError("read collector tasks", tasks.GetRetInfo()); err != nil {
 		return input, err
+	}
+	if len(tasks.GetTasks()) == 0 {
+		all := &collectorpb.GetTaskListRsp{}
+		if err := r.gateway.Invoke(ctx, collectMgr, "GetTaskList", &collectorpb.GetTaskListReq{SpaceId: r.spaceID, DataType: "kline"}, all); err != nil {
+			return input, fmt.Errorf("read collector tasks: %w", err)
+		}
+		if err := collectorRetError("read collector tasks", all.GetRetInfo()); err != nil {
+			return input, err
+		}
+		input.TasksDisabled = len(all.GetTasks()) != 0
 	}
 	status := &collectorpb.GetCollectorStatusRsp{}
 	if err := r.gateway.Invoke(ctx, collectMgr, "GetCollectorStatus", &collectorpb.GetCollectorStatusReq{SpaceId: r.spaceID}, status); err != nil {

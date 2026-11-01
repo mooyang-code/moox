@@ -109,7 +109,10 @@ func defaultSetupRestartComponent(ctx context.Context, target setupRestartTarget
 		// 用户停用的外部程序不能被重启顺带启用。
 		unit, _ := unitdeploy.ExternalProgramUnit(target.Component)
 		output, err := client.Run(ctx, []string{"systemctl", "--user", "is-enabled", unit}, nil)
-		if err != nil || output.ExitCode != 0 {
+		if err != nil {
+			return nil, fmt.Errorf("restart_failed: 读不到 %s 在 %s 上的启用状态: %w", target.Component, target.Host.Name, err)
+		}
+		if output.ExitCode != 0 {
 			return nil, fmt.Errorf("restart_failed: %s 在 %s 上没有启用，restart 不会启用它", target.Component, target.Host.Name)
 		}
 		if err := unitdeploy.StartExternalService(ctx, client, target.Component, target.Directory); err != nil {
@@ -127,7 +130,7 @@ func defaultSetupRestartComponent(ctx context.Context, target setupRestartTarget
 		return nil, fmt.Errorf("restart_unverified: %s 已重启，但读不到状态，用 setup logs --host %s --component %s 确认", target.Component, target.Host.Name, target.Component)
 	}
 	if setupRestartPaused(output.Stdout) {
-		return nil, fmt.Errorf("restart_failed: %s 处于暂停状态，restart 不解除暂停，先运行 system resume", target.Component)
+		return nil, fmt.Errorf("restart_failed: %s 处于暂停状态，restart 不解除暂停。确认后在 %s 上运行 %s --components %s", target.Component, target.Host.Name, path.Join(current, "resume.sh"), target.Component)
 	}
 	return json.RawMessage(output.Stdout), nil
 }

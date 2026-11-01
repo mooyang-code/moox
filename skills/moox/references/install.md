@@ -239,10 +239,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
 | `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
-| `no_collection_tasks` | 这个空间没有启用的 K 线任务，`--space-id` 写错或种子没写入 | 核对空间，看 `collector task list`；不要手工改数据库 |
+| `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |
 | `browser_trust_manual` | 信任要管理员授权，没有终端或安装失败 | 把错误里的命令交给用户在自己的终端运行，不影响继续安装 |
-| `control_dependency_not_ready` | Storage 或出口代理单元没就绪或被暂停 | 按报错运行 `setup deploy-unit`；被暂停时先 `system resume` |
+| `control_dependency_not_ready` | Storage 或出口代理单元没就绪或被暂停 | 按报错运行 `setup deploy-unit`；被暂停时先确认原因，再运行报错里的 `resume.sh`，不要用 `system resume` |
+| `browser_ca_trust_failed` | 从管理台服务器取不回内部根证书 | 检查 SSH 和 control 是否已装好，用 `setup logs --component console-proxy` 查 |
 | `deployment_config_changed` | 首次 control 成功前，主机、路径、管理员或版本变了 | 换回原配置和原版本重跑；要用新配置就清空重装，清空前问用户 |
 | `bootstrap_interrupted` | 目标机上一次部署没结束，这次请求不同 | 换回原配置重跑同一条命令，恢复后再改 |
 | `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |
