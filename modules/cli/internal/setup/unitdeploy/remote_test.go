@@ -1,10 +1,12 @@
 package unitdeploy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,4 +88,59 @@ func TestControlDependenciesSkipEgressWithoutOverseasHost(t *testing.T) {
 	err = checkControlDependencyRecords(snapshot, root, []string{"collector"})
 	require.NotErrorIs(t, err, nil)
 	require.NotContains(t, err.Error(), "egress", "没有海外机时只查 Storage")
+}
+
+// runLocalClient 把“目标机”命令放到本机运行，用真实的 python3 跑目标机脚本。
+type runLocalClient struct{ setupssh.Client }
+
+func (runLocalClient) Run(ctx context.Context, argv []string, stdin io.Reader) (setupssh.Result, error) {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Stdin = stdin
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	return setupssh.Result{Stdout: stdout.String(), Stderr: stderr.String()}, err
+}
+
+func TestUploadPackVerifiesAndWritesPrivateFiles(t *testing.T) {
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(directory, "moox")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bootstrap-input"), 0o700))
+	files := []packFile{
+		{filepath.Join(root, "bootstrap-input/host-deploy/e1/identity/key.pem"), []byte("key")},
+		{filepath.Join(root, "bootstrap-input/host-deploy/e1/request.json"), []byte("{}")},
+	}
+	require.NoError(t, uploadPack(t.Context(), runLocalClient{}, root, files))
+	raw, err := os.ReadFile(files[0].remote)
+	require.NoError(t, err)
+	require.Equal(t, "key", string(raw))
+	info, err := os.Stat(files[0].remote)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	require.NoError(t, uploadPack(t.Context(), runLocalClient{}, root, files), "重试覆盖同样的内容")
+	require.Error(t, uploadPack(t.Context(), runLocalClient{}, root, []packFile{{"/etc/passwd", []byte("x")}}), "只能写到 bootstrap-input")
+}
+
+func TestEnsureHelperExtractsFromHostPackage(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("需要 sha256sum")
+	}
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	root := filepath.Join(directory, "moox")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bootstrap-input"), 0o700))
+	source := filepath.Join(directory, "source/bin")
+	require.NoError(t, os.MkdirAll(source, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "moox-runtime"), []byte("helper"), 0o700))
+	archive := filepath.Join(directory, "host.tar.gz")
+	require.NoError(t, exec.Command("tar", "-czf", archive, "-C", filepath.Dir(source), "bin/moox-runtime").Run())
+	digest := sha([]byte("helper"))
+	remote, err := ensureHelper(t.Context(), runLocalClient{}, root, "", archive, digest)
+	require.NoError(t, err)
+	info, err := os.Stat(remote)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	_, err = ensureHelper(t.Context(), runLocalClient{}, root, "", archive, sha([]byte("other")))
+	require.Error(t, err, "摘要不对不能放到位")
 }

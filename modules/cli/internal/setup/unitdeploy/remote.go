@@ -1,6 +1,7 @@
 package unitdeploy
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -98,6 +100,34 @@ try:
                 os.fsync(stream.fileno())
             syncdir(os.path.dirname(filename))
         print(json.dumps({'present':present}))
+    elif op=='unpack':
+        import tarfile
+        physical(root)
+        base=os.path.join(root,'bootstrap-input')
+        physical(base,True)
+        wanted=json.loads(sys.argv[3])
+        seen=set()
+        with tarfile.open(fileobj=sys.stdin.buffer,mode='r|') as archive:
+            for member in archive:
+                name=os.path.normpath(os.path.join(base,member.name))
+                if not member.isfile() or name not in wanted or name in seen or os.path.commonpath([base,name])!=base: raise ValueError('member')
+                raw=archive.extractfile(member).read()
+                if hashlib.sha256(raw).hexdigest()!=wanted[name]: raise ValueError('digest')
+                relative=os.path.relpath(os.path.dirname(name),base)
+                current=base
+                if relative!='.':
+                    for part in relative.split('/'):
+                        current=os.path.join(current,part);mkdir(current)
+                temporary=name+'.tmp'
+                fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+                try:
+                    with os.fdopen(os.dup(fd),'wb') as stream: stream.write(raw)
+                    os.fsync(fd)
+                finally: os.close(fd)
+                os.replace(temporary,name);syncdir(os.path.dirname(name))
+                seen.add(name)
+        if seen!=set(wanted): raise ValueError('incomplete')
+        print('{}')
     else: raise ValueError('operation')
 except Exception:
     sys.stderr.write('private deployment transfer preflight failed\n'+'''+` + failure.Prefix + failure.TargetDirectory + `'''+'\n');sys.exit(1)
@@ -159,6 +189,52 @@ func uploadFile(ctx context.Context, transport setupssh.Client, root, local, rem
 		return err
 	}
 	return uploadReader(ctx, transport, root, remote, digest, mode, file, info.Size())
+}
+
+// packFile 是打包传输的一个文件。
+type packFile struct {
+	remote string
+	raw    []byte
+}
+
+// uploadPack 把一批私有文件打成一个包，走一条 SSH 连接传完，目标机按摘要校验后以 0600 落盘。
+// 逐个传时每个文件要两次校验加一次 SFTP，一个单元有二十多个文件。
+func uploadPack(ctx context.Context, transport setupssh.Client, root string, files []packFile) error {
+	base := path.Join(root, "bootstrap-input") + "/"
+	wanted := make(map[string]string, len(files))
+	var buffer bytes.Buffer
+	archive := tar.NewWriter(&buffer)
+	for _, file := range files {
+		name, ok := strings.CutPrefix(file.remote, base)
+		if !ok {
+			return errors.New("deployment material must stay under bootstrap-input")
+		}
+		wanted[file.remote] = sha(file.raw)
+		if err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(file.raw)), Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		if _, err := archive.Write(file.raw); err != nil {
+			return err
+		}
+	}
+	if err := archive.Close(); err != nil {
+		return err
+	}
+	manifest, err := json.Marshal(wanted)
+	if err != nil {
+		return err
+	}
+	output, err := transport.Run(ctx, []string{"python3", "-c", targetFiles, "unpack", root, string(manifest)}, &buffer)
+	if err != nil {
+		return failure.Describe("传输部署材料", output.ExitCode, output.Stderr)
+	}
+	return nil
+}
+
+// cleanupExport 在部署成功后删掉目标机上的材料和控制机上的导出目录，它们含密钥。失败不影响部署结果。
+func cleanupExport(ctx context.Context, target, control setupssh.Client, root, exportID string) {
+	_, _ = target.Run(ctx, []string{"rm", "-rf", "--", path.Join(root, "bootstrap-input/host-deploy", exportID)}, nil)
+	_, _ = control.Run(ctx, []string{"rm", "-rf", "--", path.Join(root, "material-exports", exportID)}, nil)
 }
 
 func uploadBytes(ctx context.Context, transport setupssh.Client, root string, raw []byte, remote string, mode fs.FileMode) error {

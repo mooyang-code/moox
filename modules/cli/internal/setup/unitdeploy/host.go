@@ -393,6 +393,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err != nil {
 			return result, err
 		}
+		cleanupExport(ctx, target, source, manifest.Paths.DeployRoot, operation.Source.ExportID)
 		return result, saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true)
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
@@ -455,6 +456,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return result, err
 		}
 	}
+	var pack []packFile
 	for _, group := range []struct {
 		local, remote string
 		files         []hostbundle.File
@@ -467,22 +469,30 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 		files = append(files, hostbundle.File{Path: group.metadata, SHA256: metadataSHA})
 		for _, file := range files {
-			if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, filepath.Join(group.local, file.Path), path.Join(group.remote, file.Path), file.SHA256, 0o600); err != nil {
+			content, err := os.ReadFile(filepath.Join(group.local, file.Path))
+			if err != nil {
 				return result, err
 			}
+			if sha(content) != file.SHA256 {
+				return result, errors.New("local deployment artifact changed before upload")
+			}
+			pack = append(pack, packFile{path.Join(group.remote, file.Path), content})
 		}
 	}
 	if len(configuration) > 0 {
-		if err := uploadBytes(ctx, target, manifest.Paths.DeployRoot, configuration, path.Join(remoteBase, "configuration.yaml"), 0o600); err != nil {
-			return result, err
-		}
+		pack = append(pack, packFile{path.Join(remoteBase, "configuration.yaml"), configuration})
 	}
+	defer func() {
+		for _, file := range pack {
+			clear(file.raw)
+		}
+	}()
 	remoteHelper, err := ensureHelper(ctx, target, manifest.Paths.DeployRoot, operation.Helper, hostArchive, operation.HelperSHA256)
 	if err != nil {
 		return result, err
 	}
 	remoteRequest := path.Join(remoteBase, "request.json")
-	if err := uploadBytes(ctx, target, manifest.Paths.DeployRoot, raw, remoteRequest, 0o600); err != nil {
+	if err := uploadPack(ctx, target, manifest.Paths.DeployRoot, append(pack, packFile{remoteRequest, raw})); err != nil {
 		return result, err
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -508,6 +518,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return HostResult{}, errors.New("deployed unit component is not ready")
 		}
 	}
+	cleanupExport(ctx, target, source, manifest.Paths.DeployRoot, operation.Source.ExportID)
 	// 主机单元还要装看护，由命令层在看护装好后记录。
 	if options.Profile != "host" {
 		if err := saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true); err != nil {
