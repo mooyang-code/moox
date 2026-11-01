@@ -99,6 +99,16 @@ var unitProfiles = map[string][]string{
 	"archive-worker": {"archive-worker"},
 }
 
+// ProfileOf 返回组件所属的部署单元。
+func ProfileOf(component string) (string, bool) {
+	for profile, components := range unitProfiles {
+		if slices.Contains(components, component) {
+			return profile, true
+		}
+	}
+	return "", false
+}
+
 func configAsset(module, component string) unitAsset {
 	return unitAsset{"modules/" + module + "/config", component + "/config", true}
 }

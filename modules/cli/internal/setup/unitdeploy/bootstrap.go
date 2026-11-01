@@ -315,9 +315,8 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 		return result, err
 	}
 	result.Stage, result.OperatorConfig = "admin-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
-	receipt := "admin-ready.json"
 	if controlOptions != nil {
-		result.Stage, receipt, result.Release = "control-ready", "control-ready.json", controlOptions.Release
+		result.Stage, result.Release = "control-ready", controlOptions.Release
 		result.Components, err = activeControlStatus(ctx, transport, remoteHelper, result.Bootstrap.ControlDirectory, host.Name, request.Control.Components)
 		if err != nil {
 			return BootstrapResult{}, err
@@ -327,11 +326,23 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 				result.Stage = "control-paused"
 			}
 		}
+		// 回执由命令层在看护装好后写，否则 next_steps 会跳过 control，看护失败就再也补不上。
+		return result, nil
 	}
-	if err := saveJSON(root, receipt, result, true); err != nil {
+	if err := saveJSON(root, "admin-ready.json", result, true); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// MarkControlReady 记下 control 和控制机看护都装好了。
+func MarkControlReady(stateDir string, result BootstrapResult) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, "control-ready.json", result, true)
 }
 
 func persistRequest(root *os.Root, digest string, raw []byte) error {

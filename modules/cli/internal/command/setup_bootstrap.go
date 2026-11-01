@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -79,6 +80,9 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				}
 				control.DeployOptions = options
 				result, err = deps.bootstrapControl(command.Context(), snapshot, control)
+				if err == nil {
+					err = finishSetupControl(command.Context(), deps, snapshot, options, result)
+				}
 			}
 			if err != nil {
 				return err
@@ -94,6 +98,17 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	command.Flags().StringVar(&control.Release, "release", "", "仅 --stage control：用该版本升级 control 上的 host 与 control 单元（会按顺序重启 control 上的服务）")
 	return command
+}
+
+// finishSetupControl 给控制机装好看护再写完成记录：控制机不走 deploy-host，这里不装就没人拉起崩溃的组件。
+// 看护安装失败时不写记录，重跑这一步能补上。
+func finishSetupControl(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, result unitdeploy.BootstrapResult) error {
+	watchdog, err := deps.installWatchdog(ctx, snapshot, snapshot.Manifest.ControlHost(), false)
+	if err != nil {
+		return fmt.Errorf("install watchdog on %s: %w", snapshot.Manifest.ControlHost().Name, err)
+	}
+	fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", snapshot.Manifest.ControlHost().Name, watchdog)
+	return unitdeploy.MarkControlReady(options.StateDirectory, result)
 }
 
 func resolveSetupUnitOptions(snapshot *setupconfig.Snapshot, source string, options *unitdeploy.DeployOptions) error {

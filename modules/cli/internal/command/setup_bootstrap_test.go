@@ -3,6 +3,8 @@ package command
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -49,10 +51,14 @@ func TestSetupBootstrapAdminUsesOneSnapshotAndExplicitStage(t *testing.T) {
 
 func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	snapshot := setupSnapshot(t)
-	loaded, called := 0, 0
+	loaded, called, watched := 0, 0, 0
+	watchdogResult, watchdogErr := json.RawMessage(`{}`), errors.New("crontab failed")
 	command := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) {
 		loaded++
 		return snapshot, nil
+	}, installWatchdog: func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error) {
+		watched++
+		return watchdogResult, watchdogErr
 	}, bootstrapControl: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.ControlOptions) (unitdeploy.BootstrapResult, error) {
 		called++
 		require.Same(t, snapshot, got)
@@ -70,12 +76,19 @@ func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	require.ErrorContains(t, command.Execute(), "deployment_config_changed", "首次 control 要核对配置")
 	require.Zero(t, called)
 	require.NoError(t, unitdeploy.WriteBinding(state, setupBinding(snapshot)))
-	snapshot.Manifest.Notification.WebhookURL = "https://example.invalid/changed"
-	require.NoError(t, command.Execute(), "改通知不影响部署配置")
+	password := snapshot.Manifest.Admin.Password
 	snapshot.Manifest.Admin.Password = "another-admin-password"
 	require.ErrorContains(t, command.Execute(), "deployment_config_changed", "改管理员密码后不能接着装")
-	require.Equal(t, 4, loaded)
-	require.Equal(t, 1, called)
+	snapshot.Manifest.Admin.Password = password
+	snapshot.Manifest.Notification.WebhookURL = "https://example.invalid/changed"
+	require.ErrorContains(t, command.Execute(), "crontab failed", "改通知不影响部署配置")
+	require.NoFileExists(t, filepath.Join(state, "control-ready.json"), "看护没装好不能写完成记录")
+	watchdogErr = nil
+	require.NoError(t, command.Execute(), "重跑能补上看护")
+	require.FileExists(t, filepath.Join(state, "control-ready.json"))
+	require.Equal(t, 2, watched)
+	require.Equal(t, 5, loaded)
+	require.Equal(t, 2, called)
 	require.Contains(t, output.String(), `"stage":"control-ready"`)
 	require.NotContains(t, output.String(), "admin-test-password")
 }

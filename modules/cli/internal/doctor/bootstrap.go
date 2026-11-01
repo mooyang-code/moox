@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
@@ -69,14 +70,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if options.ReleaseRoot == "" {
 		runner.manifestErr = fmt.Errorf("release root is required")
 	} else {
-		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml"))
-		runner.manifestErr = manifestErr
-		if manifestErr == nil && releaseManifest.Checksum != manifest.Checksum {
-			runner.manifestErr = fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", releaseManifest.Checksum, manifest.Checksum)
-		}
-		if runner.manifestErr == nil {
-			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml.sha256"), manifest.Checksum)
-		}
+		runner.manifestErr = verifyReleaseCatalog(options.ReleaseRoot, manifest.Checksum)
 	}
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
@@ -439,4 +433,22 @@ func selectSpecs(specs []core.CheckSpec, selected []string) ([]core.CheckSpec, e
 		}
 	}
 	return out, nil
+}
+
+// verifyReleaseCatalog 核对发布目录里的服务目录和内嵌的是否一致。产物包目录没有发布清单，直接用内嵌目录。
+func verifyReleaseCatalog(root, checksum string) error {
+	directory := filepath.Join(root, "config", "servicecatalog")
+	if _, isBundle, err := bundle.Load(root); err != nil {
+		return err
+	} else if _, statErr := os.Stat(directory); isBundle && os.IsNotExist(statErr) {
+		return nil
+	}
+	release, err := core.LoadManifestFile(filepath.Join(directory, "catalog.yaml"))
+	if err != nil {
+		return err
+	}
+	if release.Checksum != checksum {
+		return fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", release.Checksum, checksum)
+	}
+	return validateManifestChecksumFile(filepath.Join(directory, "catalog.yaml.sha256"), checksum)
 }

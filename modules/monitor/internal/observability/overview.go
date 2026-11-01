@@ -1832,7 +1832,7 @@ func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string,
 		if state.heartbeat > 0 {
 			status, reason := "healthy", "collector-stream 心跳正常"
 			if since := now.Sub(unixTime(state.heartbeat)); since > collectorStreamHeartbeatTimeout {
-				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，持续时用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回 SCF", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
+				status, reason = "down", fmt.Sprintf("collector-stream 心跳已中断 %s（最后 %s）：推送采集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回", since.Truncate(time.Second), unixTime(state.heartbeat).Format(time.RFC3339))
 			}
 			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream", Status: status, Reason: reason, LastCheckedAt: now})
 		}

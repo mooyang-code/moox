@@ -99,7 +99,7 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 		}
 	}
 	if len(targets) == 0 {
-		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, fmt.Sprintf("空间 %s 没有已登记采集方式的数据集 %s（数据集在第一次对账时登记）", spaceID, datasetID))}, nil
+		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, fmt.Sprintf("空间 %s 还没有采集计划，没有可切换的数据集 %s；用 moox-cli collector kline status 看计划为什么没建出来", spaceID, datasetID))}, nil
 	}
 	sort.Strings(targets)
 	var worker *pb.StreamWorkerStatus

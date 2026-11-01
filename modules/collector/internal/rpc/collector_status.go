@@ -62,7 +62,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	}
 	for _, mode := range rsp.IngestModes {
 		if mode.GetMode() == store.IngestStreaming && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
-			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
+			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，用 moox-cli setup logs --component collector-stream 查原因；配了云函数时也可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
 			break
 		}
 	}
@@ -73,10 +73,8 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 		if len(enabled) > 0 {
 			reason := "有启用的采集任务，但还没有采集计划，等下一轮对账"
-			if s.fetchPlanControl != nil {
-				if issue := s.fetchPlanControl.PlanIssue(spaceID); issue != "" {
-					reason = "有启用的采集任务，但还没有采集计划：" + issue
-				}
+			if issue := s.fetchPlanControl.PlanIssue(spaceID); issue != "" {
+				reason = "有启用的采集任务，但还没有采集计划：" + issue
 			}
 			raise(klinecheck.HealthError, reason)
 		}

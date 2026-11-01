@@ -1,9 +1,9 @@
 package command
 
 import (
-	"encoding/json"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 

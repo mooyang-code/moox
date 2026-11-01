@@ -342,6 +342,7 @@
 | `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
 | `setup render-runtime-config` | 从 moox.toml 渲染 Egress/Collector 运行配置 |
+| `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |
 | `setup status` | 检查初始化记录状态 |
 | `setup storage-auth` | 把 Storage 内部写入身份保存到本机操作员目录（导入、导出数据用，只需一次） |
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |

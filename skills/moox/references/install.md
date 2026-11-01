@@ -186,6 +186,8 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。
 
+采集或计划有问题时，不要删任务、不要用 `host exec` 改数据库、不要用维护者脚本。先看 `collector kline status` 和 `setup verify` 给出的原因，走不通就停下来汇报。重启单个组件用 `setup restart`，不重发整个单元。
+
 ## 6. 验收与交付
 
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
