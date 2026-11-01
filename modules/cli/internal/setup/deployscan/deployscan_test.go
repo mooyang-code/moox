@@ -82,7 +82,8 @@ exit 0`)
 	python, err := exec.LookPath("python3")
 	require.NoError(t, err)
 	require.NoError(t, os.Symlink(python, filepath.Join(bin, "python3")))
-	env := []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
+	// macOS 的系统 Python 会把字节码缓存写进 $HOME/Library/Caches，不算检测产生的文件。
+	env := []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE=1"}
 	client := localClient{env: env}
 	return &sandbox{home: home, root: filepath.Join(base, "moox"), client: client, dial: func(context.Context, setupconfig.Host) (setupssh.Client, error) { return client, nil }}
 }
