@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
@@ -144,6 +145,7 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 				}
 			}
 		}
+		pruneAttempts(request, j)
 		if err := writeJournal(root, &j, "captured"); err != nil {
 			return err
 		}
@@ -171,6 +173,28 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 		return nil
 	})
 	return result, err
+}
+
+// pruneAttempts 在新尝试开始前删掉上一次失败留下的目录，每次尝试都带离线包，不清理的话小磁盘几次就写满。
+// 失败后不立刻删：组件日志在发布目录里，要留给 setup logs 查看，所以最多留一次失败的现场。
+// 当前版本和它的上一版都保留，手动回滚要用。只在目标机上没有未完成的尝试时调用；清理失败不影响部署，下次再清。
+func pruneAttempts(request Request, j journal) {
+	keep := append(unitinstall.PruneReleases(request.Host.UnitRoot, j.Host.Previous), unitinstall.PruneReleases(request.Control.UnitRoot, j.Control.Previous)...)
+	names := make([]string, 0, len(keep))
+	for _, path := range keep {
+		names = append(names, filepath.Base(path))
+	}
+	for _, directory := range []string{filepath.Join(request.DeploymentRoot, "bootstrap"), filepath.Join(request.Control.UnitRoot, "state-imports")} {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "bootstrap-") && !slices.Contains(names, entry.Name()) {
+				_ = os.RemoveAll(filepath.Join(directory, entry.Name()))
+			}
+		}
+	}
 }
 
 func privateDirectory(root *os.Root, name string) error {

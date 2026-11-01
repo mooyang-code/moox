@@ -141,6 +141,7 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 				}
 			}
 		}
+		PruneReleases(candidate.UnitRoot, candidate.Directory, current)
 		journal := Activation{Version: 1, HostID: candidate.HostID, DeploymentRoot: candidate.DeploymentRoot, UnitRoot: candidate.UnitRoot, Profile: candidate.Profile, Directory: candidate.Directory, PreviousDirectory: current, Phase: "stopping", StartComponents: starts, PreviousRunning: []string{}}
 		if options.StateSeed != nil {
 			journal.StateSeedSHA256 = options.StateSeed.SHA256
@@ -240,6 +241,28 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 		return guard.EndInstallation()
 	})
 	return result, err
+}
+
+// PruneReleases 删掉用不到的发布目录（失败尝试的残留、更早的版本），返回保留的目录。
+// 保留 keep 和激活记录里的上一版，手动回滚要用。清理失败不影响部署，下次再清。
+func PruneReleases(unitRoot string, keep ...string) []string {
+	if last, exists, err := ReadActivation(unitRoot); err != nil {
+		return keep
+	} else if exists && last.PreviousDirectory != "" {
+		keep = append(keep, last.PreviousDirectory)
+	}
+	directory := filepath.Join(unitRoot, "releases")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return keep
+	}
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.Name())
+		if entry.IsDir() && !slices.Contains(keep, path) {
+			_ = os.RemoveAll(path)
+		}
+	}
+	return keep
 }
 
 func validSelection(ids, available []string) bool {

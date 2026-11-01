@@ -113,6 +113,71 @@ def processes(inside_dirs):
     return inside, sorted(set(outside))
 
 
+def helper_running(root):
+    """A deployment helper still working on this host; it runs from the uploaded runtime directory."""
+    base = [os.path.join(root, 'bootstrap-input/runtime')]
+    me = os.getpid()
+    return any(pid.isdigit() and int(pid) != me and under(executable(pid), base) for pid in os.listdir('/proc')) if os.path.isdir('/proc') else False
+
+
+def disk_free_kb(path):
+    current = path
+    while current != '/' and not os.path.exists(current):
+        current = os.path.dirname(current)
+    try:
+        info = os.statvfs(current)
+        return info.f_bavail * info.f_frsize // 1024
+    except OSError:
+        return -1
+
+
+def kept_releases(unit):
+    """The running release and its predecessor; everything else is removed by the next deployment."""
+    kept = {os.path.realpath(os.path.join(unit, 'current'))}
+    try:
+        with open(os.path.join(unit, 'activation.json')) as stream:
+            kept.add(os.path.realpath(json.load(stream).get('previous_directory') or unit))
+    except (OSError, ValueError, AttributeError):
+        pass
+    return kept
+
+
+def reclaimable_kb(root):
+    """Space the next deployment frees by itself: failed attempts kept only so their logs stay readable."""
+    total, names = 0, set()
+    try:
+        device = os.stat(root).st_dev
+    except OSError:
+        return 0
+
+    def counted(path):
+        # A separately mounted data disk frees nothing on the deployment root's disk.
+        try:
+            return max(size_kb(path), 0) if os.stat(path).st_dev == device else 0
+        except OSError:
+            return 0
+
+    units = sorted(set(os.path.dirname(os.path.dirname(p)) for p in glob.glob(os.path.join(root, '*/releases/*'))))
+    for unit in units:
+        kept = kept_releases(unit)
+        names.update(os.path.basename(path) for path in kept)
+        for path in glob.glob(os.path.join(unit, 'releases/*')):
+            if os.path.realpath(path) not in kept:
+                total += counted(path)
+    for path in glob.glob(os.path.join(root, 'bootstrap/bootstrap-*')):
+        if os.path.isdir(path) and os.path.basename(path) not in names:
+            total += counted(path)
+    return total
+
+
+def last_attempt(root):
+    try:
+        with open(os.path.join(root, 'bootstrap/workflow.json')) as stream:
+            return json.load(stream).get('phase', '')
+    except (OSError, ValueError, AttributeError):
+        return ''
+
+
 def listening(ports):
     found = {}
     for name in ('/proc/net/tcp', '/proc/net/tcp6'):
@@ -298,7 +363,12 @@ def main():
         'units': units(root),
         'trade': trade_state(root),
         'registered_hosts': registered_hosts(request.get('admin_db', '')),
+        'helper_running': helper_running(root),
+        'disk_free_kb': disk_free_kb(root),
+        'last_attempt': last_attempt(root),
     }
+    if request.get('reclaim'):
+        report['reclaimable_kb'] = reclaimable_kb(root)
     if request.get('sizes'):
         report['sizes_kb'] = dict((d, size_kb(d)) for d in [root] + [e['path'] for e in external] + archives if os.path.lexists(d))
     json.dump(report, sys.stdout)

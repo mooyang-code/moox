@@ -210,7 +210,8 @@ func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root
 	}) {
 		profiles = append(profiles, "storage")
 	}
-	if slices.Contains(components, "collector") {
+	// 不配海外机时没有出口代理，只做 A 股、港股、美股的部署也要能装完。
+	if slices.Contains(components, "collector") && snapshot.Manifest.ComponentHost("egress-proxy") != "" {
 		profiles = append(profiles, "egress-proxy")
 	}
 	for _, profile := range profiles {
@@ -252,7 +253,7 @@ func unitDeploymentRecorded(root *os.Root, host, profile string) bool {
 func activeControlStatus(ctx context.Context, transport setupssh.Client, helper, directory, host string, ids []string) ([]unitruntime.Status, error) {
 	output, err := transport.Run(ctx, []string{helper, "status", "--plan", path.Join(directory, "runtime.json")}, nil)
 	if err != nil {
-		return nil, remoteFailure("control dependency runtime observation failed; retry the same command; private output omitted", err, output)
+		return nil, remoteFailure("查询管理台组件状态", err, output)
 	}
 	var status unitruntime.Result
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
@@ -279,7 +280,8 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 	}) {
 		profiles = append(profiles, "storage")
 	}
-	if slices.Contains(components, "collector") {
+	// 不配海外机时没有出口代理，只做 A 股、港股、美股的部署也要能装完。
+	if slices.Contains(components, "collector") && snapshot.Manifest.ComponentHost("egress-proxy") != "" {
 		profiles = append(profiles, "egress-proxy")
 	}
 	for _, profile := range profiles {

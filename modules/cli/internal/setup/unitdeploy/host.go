@@ -72,6 +72,9 @@ func readJSON(root *os.Root, name string, max int64, out any) error {
 	return nil
 }
 
+// unitReadyFile 记录单元已部署成功；operation.json 在部署开始前就写了，不能代表成功。
+const unitReadyFile = "ready.json"
+
 func saveJSON(root *os.Root, name string, value any, replace bool) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -141,12 +144,18 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	// Unit deployment must never generate replacement fleet credentials when
 	// the operator loses the state created by bootstrap core.
 	if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
-		return result, errors.New("unit deployment requires the original core state directory")
+		return result, errors.New("core_not_ready: 这台电脑上没有 core 的记录，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
 	}
 	control := manifest.ControlHost()
 	var ready CoreResult
 	if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.HostID != control.Name || ready.Bootstrap.Phase != "complete" {
-		return result, errors.New("unit deployment requires the original core state directory and completed core receipt")
+		return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
+	}
+	// 带 --release 时记录在版本目录下，由版本自己的检查负责。
+	if options.Release == "" && options.Profile != "host" && options.HostID != control.Name {
+		if _, err := root.Lstat(filepath.Join("hosts", options.HostID, "operation.json")); err != nil {
+			return result, fmt.Errorf("host_not_ready: 主机 %s 还没部署主机服务，先运行 setup deploy-host --host %s", options.HostID, options.HostID)
+		}
 	}
 	if !insideState(manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
 		return result, errors.New("unit deployment requires the control and host roots from its original core receipt")
@@ -309,7 +318,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 		output, err := source.Run(ctx, []string{remoteHelper, "export-host", "--request", remoteRequest}, nil)
 		if err != nil {
-			return result, remoteFailure("host identity export observation failed; retry original state; private output omitted", err, output)
+			return result, remoteFailure("导出主机身份", err, output)
 		}
 		var exported unitbootstrap.ExportResult
 		decoder := json.NewDecoder(strings.NewReader(output.Stdout))
@@ -359,11 +368,15 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return result, errors.New("config_changed")
 		}
-		return deployExternal(ctx, externalInstall{
+		result, err = deployExternal(ctx, externalInstall{
 			options: options, manifest: manifest, host: host, control: control, identity: identity, operation: operation,
 			localClients: localClients, target: target, source: source,
 			disabled: !registered.HostEnabled || !registered.DeploymentEnabled,
 		})
+		if err != nil {
+			return result, err
+		}
+		return result, saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true)
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
 	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: manifest.EventBusURLFor(host.Name), EventBusAdvertise: setupconfig.EventBusAdvertiseURL(manifest.EventBusHost().Address, manifest.EventBus.Port)}
@@ -450,7 +463,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	output, err := target.Run(ctx, []string{remoteHelper, "deploy", "--request", remoteRequest}, nil)
 	if err != nil {
-		return result, remoteFailure("unit deployment observation failed; retry original state; target journal retained and private output omitted", err, output)
+		return result, helperFailure(ctx, func() (setupssh.Client, error) { return dial(host) }, options.Log, "部署单元 "+options.Profile, err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
@@ -466,6 +479,12 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			result.Stage = options.Profile + "-paused"
 		} else if component.State != "running" || !component.Ready {
 			return HostResult{}, errors.New("deployed unit component is not ready")
+		}
+	}
+	// 主机单元还要装看护，由命令层在看护装好后记录。
+	if options.Profile != "host" {
+		if err := saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true); err != nil {
+			return result, err
 		}
 	}
 	return result, nil

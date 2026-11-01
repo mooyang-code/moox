@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	"github.com/spf13/cobra"
 )
 
@@ -55,12 +56,26 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			}
 			options.Log = command.ErrOrStderr()
 			var result unitdeploy.CoreResult
+			if err := setupvalidate.CheckDeployments(snapshot.Manifest); err != nil {
+				return err
+			}
+			// 升级只换程序，不占首次安装那么多空间，这里只拦首次安装。
+			if control.Release == "" {
+				if err := checkInstallDisk(command.Context(), deps, snapshot, snapshot.Manifest.ControlHost().Name); err != nil {
+					return err
+				}
+			}
 			if stage == "core" {
 				if err := checkCoreRoute(command.Context(), deps, snapshot, options); err != nil {
 					return err
 				}
 				result, err = deps.bootstrapCore(command.Context(), snapshot, options)
 			} else {
+				// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
+				local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
+				if control.Release == "" && !local.InitStorage && !local.ControlReady {
+					return errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
+				}
 				control.CoreOptions = options
 				result, err = deps.bootstrapControl(command.Context(), snapshot, control)
 			}

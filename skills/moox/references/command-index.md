@@ -332,6 +332,7 @@
 | `setup host-diagnostics` | 检查远端主机磁盘和服务进程 |
 | `setup hosts` | 列出可选的部署主机（不输出密码） |
 | `setup init` | 导入默认空间、数据集、字段和因子 |
+| `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
 | `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
@@ -345,7 +346,7 @@
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |
 | `setup trust-browser` | 检查并安装管理台浏览器证书信任 |
 | `setup trust-host` | 确认并记录 SSH 主机指纹 |
-| `setup validate` | 校验初始化配置和连接，并报告目标机器的部署情况与发布路线（route） |
+| `setup validate` | 校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps） |
 | `setup watchdog` | 在各主机安装（或移除）主机级守护与告警策略种子 |
 | `setup wipe` | 彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复） |
 

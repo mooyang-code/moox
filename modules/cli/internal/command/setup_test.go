@@ -394,7 +394,7 @@ username = "ubuntu"
 password = "other-ssh-password"
 
 [deployments]
-control = ["admin", "console-proxy", "web-host", "eventbus"]
+control = ["admin", "console-proxy", "web-host", "eventbus", "collector", "factor-mgr", "archive-mgr", "storage-primary"]
 compute = []
 `)
 	require.NoError(t, os.WriteFile(path, raw, 0o600))

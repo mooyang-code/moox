@@ -33,6 +33,11 @@ func newSetupDeployUnitCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		options.Log = command.ErrOrStderr()
+		if options.Release == "" {
+			if err := checkInstallDisk(command.Context(), deps, snapshot, options.HostID); err != nil {
+				return err
+			}
+		}
 		result, err := deps.deployUnit(command.Context(), snapshot, options)
 		if err != nil {
 			return err

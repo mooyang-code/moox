@@ -67,3 +67,34 @@ func (c Catalog) Retryable(servicePath, method string) bool {
 	service, ok := c.Service(servicePath)
 	return ok && (slices.Contains(service.ReadOnlyMethods, method) || slices.Contains(service.IdempotentMethods, method))
 }
+
+// MissingGrant 是一项授权服务没有部署：调用方的授权指向了它，但提供它的组件不在部署里。
+type MissingGrant struct {
+	Principal string `json:"principal"`
+	Service   string `json:"service"`
+	Component string `json:"component"`
+}
+
+// MissingGrants 列出授权服务里没有部署的项。Access 要等全部授权服务都进入服务目录才就绪，
+// 所以这里缺一项，部署时就会卡在 Access 未就绪。
+func (c Catalog) MissingGrants(deployed []string) []MissingGrant {
+	providers := map[string]string{}
+	for _, component := range c.Components {
+		for _, service := range component.Services {
+			providers[service.Path] = component.ID
+		}
+	}
+	missing := []MissingGrant{}
+	seen := map[string]bool{}
+	for _, principal := range c.Principals {
+		for _, grant := range principal.Allow {
+			provider := providers[grant.Service]
+			if seen[grant.Service] || slices.Contains(deployed, provider) {
+				continue
+			}
+			seen[grant.Service] = true
+			missing = append(missing, MissingGrant{Principal: principal.ID, Service: grant.Service, Component: provider})
+		}
+	}
+	return missing
+}

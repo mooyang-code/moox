@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
@@ -74,12 +76,27 @@ type setupInitSummary struct {
 	BrowserTrust     *setupBrowserTrustSummary     `json:"browser_trust,omitempty"`
 }
 
+// setupInitStorageSummary 是 setup init --stage storage 的结果。
+type setupInitStorageSummary struct {
+	Status           string                        `json:"status"`
+	BusinessSpaceIDs []string                      `json:"business_space_ids"`
+	Metadata         setupInitMetadataCounts       `json:"metadata"`
+	Datasets         setupDatasetActivationSummary `json:"datasets"`
+	Verification     setupInitMetadataCounts       `json:"verification"`
+}
+
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
-	var file, configDir, storageHost string
+	var file, configDir, storageHost, stage string
+	var options unitdeploy.CoreOptions
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "导入默认空间、数据集、字段和因子",
+		Long: `--stage storage 在装管理台之前运行：只写业务空间、登记存储节点、导入并激活元数据，管理台的服务要等这些就绪才能启动。
+不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户、日志服务和默认因子任务，已经做过的步骤不会重复写入。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if stage != "" && stage != "storage" {
+				return errors.New("setup init --stage 只支持 storage")
+			}
 			bundle, err := deps.loadInitBundle(configDir)
 			if err != nil {
 				return err
@@ -89,8 +106,24 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
+			if err := resolveSetupUnitOptions(snapshot, "", &options); err != nil {
+				return err
+			}
+			if stage == "storage" {
+				result, err := deps.initMetadata(cmd.Context(), snapshot, storageHost, bundle)
+				if err != nil {
+					return err
+				}
+				if err := unitdeploy.MarkStep(options.StateDirectory, unitdeploy.StepInitStorage); err != nil {
+					return err
+				}
+				return writeSetupJSON(cmd, result)
+			}
 			result, err := deps.initStorage(cmd.Context(), snapshot, file, configDir, storageHost, bundle)
 			if err != nil {
+				return err
+			}
+			if err := unitdeploy.MarkStep(options.StateDirectory, unitdeploy.StepInitReady); err != nil {
 				return err
 			}
 			return writeSetupJSON(cmd, result)
@@ -99,8 +132,62 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&configDir, "config-dir", defaultSetupConfigDir, "默认配置目录")
 	cmd.Flags().StringVar(&storageHost, "storage-host", "", "已部署 Storage 的主机名称")
+	cmd.Flags().StringVar(&stage, "stage", "", "只做哪个阶段：storage 在装管理台之前运行；不填做全部初始化")
+	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
+	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	_ = cmd.MarkFlagRequired("storage-host")
 	return cmd
+}
+
+// runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage 并激活。
+// Admin 在 core 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
+func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
+	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
+		return setupInitStorageSummary{}, err
+	}
+	adminStatus, err := deps.statusSpaces(ctx, snapshot, bundle.Spaces)
+	if err != nil {
+		return setupInitStorageSummary{}, err
+	}
+	if adminStatus.State != "completed" || adminStatus.Spaces != len(bundle.Spaces) {
+		return setupInitStorageSummary{}, fmt.Errorf("setup_incomplete")
+	}
+	metadata, datasets, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
+	if err != nil {
+		return setupInitStorageSummary{}, err
+	}
+	return setupInitStorageSummary{
+		Status: "ready", BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
+		Metadata:     setupInitMetadataCounts{Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged},
+		Datasets:     datasets,
+		Verification: setupInitMetadataCounts{Planned: verification.Planned, Unchanged: verification.Unchanged},
+	}, nil
+}
+
+// applySetupMetadata 导入元数据、激活数据集并核对，重复运行结果不变。
+func applySetupMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (metadataImportSummary, setupDatasetActivationSummary, metadataImportSummary, error) {
+	var empty metadataImportSummary
+	storage, err := deps.openInitStorage(ctx, snapshot, storageHost)
+	if err != nil {
+		return empty, setupDatasetActivationSummary{}, empty, err
+	}
+	defer storage.Close()
+	metadata, err := storage.Apply(ctx, bundle.Calls)
+	if err != nil {
+		return empty, setupDatasetActivationSummary{}, empty, err
+	}
+	datasets, err := storage.Activate(ctx, bundle.Datasets)
+	if err != nil {
+		return empty, setupDatasetActivationSummary{}, empty, err
+	}
+	verification, err := storage.Verify(ctx, bundle.Calls)
+	if err != nil {
+		return empty, setupDatasetActivationSummary{}, empty, err
+	}
+	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
+		return empty, setupDatasetActivationSummary{}, empty, fmt.Errorf("metadata_verification_failed")
+	}
+	return metadata, datasets, verification, nil
 }
 
 func runSetupInit(
@@ -158,25 +245,9 @@ func runSetupInit(
 		return setupInitSummary{}, fmt.Errorf("config_changed")
 	}
 
-	storage, err := deps.openInitStorage(ctx, snapshot, storageHost)
+	metadata, datasets, verification, err := applySetupMetadata(ctx, deps, snapshot, storageHost, bundle)
 	if err != nil {
 		return setupInitSummary{}, err
-	}
-	defer storage.Close()
-	metadata, err := storage.Apply(ctx, bundle.Calls)
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	datasets, err := storage.Activate(ctx, bundle.Datasets)
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	verification, err := storage.Verify(ctx, bundle.Calls)
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
-		return setupInitSummary{}, fmt.Errorf("metadata_verification_failed")
 	}
 	factorPlan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
 	if err != nil {

@@ -204,7 +204,7 @@ func TestDeployExternalReportsFailuresWithoutLeakingSecrets(t *testing.T) {
 	in, target, _ := externalFixture(t, "factor-engine", false)
 	target.failWhen = func(argv []string) bool { return argv[0] == "bash" }
 	_, err := deployExternal(t.Context(), in)
-	require.ErrorContains(t, err, "installation failed")
+	require.ErrorContains(t, err, "安装外部程序")
 	assert.NotContains(t, err.Error(), callerKey)
 	assert.NotContains(t, err.Error(), storageSecret)
 	assert.True(t, target.ran("rm -rf -- \"$1\""), "失败时也要清掉暂存的凭据")

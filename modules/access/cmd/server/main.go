@@ -8,6 +8,8 @@ import (
 	"log"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -81,7 +83,14 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	state := healthz.NewState("access", "access@"+gateway.LocalHostID(), Version, GitCommit)
-	handler, err := healthz.WrapFromEnv(healthz.StandardMux(state.Snapshot, promhttp.Handler()))
+	var missing atomic.Value
+	snapshot := func(ctx context.Context) healthz.Response {
+		response := state.Snapshot(ctx)
+		names, _ := missing.Load().([]string)
+		response.Details = map[string]any{"missing_services": names}
+		return response
+	}
+	handler, err := healthz.WrapFromEnv(healthz.StandardMux(snapshot, promhttp.Handler()))
 	if err != nil {
 		return err
 	}
@@ -95,7 +104,7 @@ func run(ctx context.Context, cfg config.Config) error {
 	go func() { done <- s.Serve() }()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	updateReady(state, gateway)
+	missing.Store(updateReady(state, gateway))
 	for {
 		select {
 		case <-ctx.Done():
@@ -111,21 +120,26 @@ func run(ctx context.Context, cfg config.Config) error {
 			}
 			return fmt.Errorf("access server stopped unexpectedly: %w", err)
 		case <-ticker.C:
-			updateReady(state, gateway)
+			missing.Store(updateReady(state, gateway))
 		}
 	}
 }
 
 // Readiness follows the client's verified directory. Control-plane downtime
 // does not withdraw valid cached routes; missing service deployments do.
-func updateReady(state *healthz.State, gateway *gatewayclient.Client) {
+// 返回目录里缺少的授权服务，就绪检查据此说明为什么没就绪。
+func updateReady(state *healthz.State, gateway *gatewayclient.Client) []string {
 	directory := gateway.Directory()
 	catalog, err := servicecatalog.LoadEmbedded()
 	ready := err == nil && directory.Version != ""
+	missing := []string{}
 	for _, principal := range catalog.Principals {
 		for _, grant := range principal.Allow {
-			ready = ready && len(directory.Services[grant.Service]) > 0
+			if len(directory.Services[grant.Service]) == 0 && !slices.Contains(missing, grant.Service) {
+				missing = append(missing, grant.Service)
+			}
 		}
 	}
-	state.SetReady(ready)
+	state.SetReady(ready && len(missing) == 0)
+	return missing
 }

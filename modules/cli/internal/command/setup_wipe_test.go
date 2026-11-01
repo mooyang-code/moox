@@ -33,10 +33,11 @@ type wipeHarness struct {
 func newWipeHarness(t *testing.T) *wipeHarness {
 	t.Helper()
 	h := &wipeHarness{snapshot: setupSnapshot(t)}
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
 	h.operator, h.state = filepath.Join(base, "operator"), filepath.Join(base, "state")
 	for _, host := range h.snapshot.Manifest.Hosts() {
-		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Address: host.Address, Home: "/home/ubuntu", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: deployscan.TradeNone})
+		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Address: host.Address, Home: "/home/ubuntu", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: deployscan.TradeNone, DiskFreeKB: 100 << 20})
 	}
 	h.deps = setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return h.snapshot, nil },
@@ -132,7 +133,7 @@ func TestSetupWipeLeavesMarkerWhenInterrupted(t *testing.T) {
 	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
 	require.ErrorContains(t, err, "wipe_interrupted")
 	require.NotNil(t, deployscan.ReadPending(h.operator))
-	local := unitdeploy.ReadLocalState(h.state, h.operator)
+	local := unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{})
 	require.Equal(t, deployscan.RouteExisting, deployscan.Decide(nil, "", local).Route, "主机都空了也要继续清")
 }
 
@@ -189,9 +190,57 @@ func TestCheckCoreRoute(t *testing.T) {
 	require.NoError(t, os.MkdirAll(h.operator, 0o700))
 	pin := filepath.Join(h.operator, "gateway-bootstrap.json")
 	require.NoError(t, os.WriteFile(pin, []byte("{}"), 0o600))
+	leftover := filepath.Join(h.state, "runtime-identity.json")
+	require.NoError(t, os.WriteFile(leftover, []byte("{}"), 0o600))
 	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
-	require.NoDirExists(t, h.state, "空机时要归档本机遗留状态")
+	require.NoFileExists(t, leftover, "空机时要归档本机遗留状态")
 	require.NoFileExists(t, pin, "旧操作员身份会和新 CA 冲突，也要归档")
+	binding := unitdeploy.ReadLocalState(h.state, h.operator, setupBinding(h.snapshot))
+	require.False(t, binding.StaleBinding, "首次安装开始时要记下配置和版本")
+	require.True(t, unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{ConfigSHA256: "other"}).StaleBinding)
+	require.NoError(t, os.RemoveAll(h.state))
 	h.deps.scanDeployment = nil
 	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
+}
+
+func TestSetupValidateListsNextSteps(t *testing.T) {
+	h := newWipeHarness(t)
+	for i := range h.reports {
+		h.reports[i].Entries, h.reports[i].Units, h.reports[i].Markers = nil, nil, false
+		h.reports[i].DiskFreeKB = 1 << 20
+	}
+	out, err := h.run(t, newSetupValidateCommand)
+	require.NoError(t, err)
+	require.Contains(t, out, `"route":"fresh"`)
+	require.Contains(t, out, "setup bootstrap --stage core")
+	require.Contains(t, out, "disk_low", "磁盘不够要提醒，但不阻塞：清除正好能腾空间")
+}
+
+func TestSetupLogsChecksHostAndComponent(t *testing.T) {
+	h := newWipeHarness(t)
+	h.deps.readLogs = func(_ context.Context, host setupconfig.Host, roots []string, component, unit string, lines int) ([]deployscan.LogSection, error) {
+		return []deployscan.LogSection{{Path: roots[0] + "/run/logs/" + component + ".log", Text: host.Name + " tail"}}, nil
+	}
+	cmd := func(args ...string) (string, error) {
+		c := newSetupLogsCommand(h.deps)
+		var stdout bytes.Buffer
+		c.SetOut(&stdout)
+		c.SetErr(&bytes.Buffer{})
+		c.SilenceUsage, c.SilenceErrors = true, true
+		c.SetArgs(args)
+		err := c.Execute()
+		return stdout.String(), err
+	}
+	control := h.snapshot.Manifest.ControlHost().Name
+	out, err := cmd("--host", control, "--component", "admin")
+	require.NoError(t, err)
+	require.Contains(t, out, "tail")
+	_, err = cmd("--host", "nobody", "--component", "admin")
+	require.ErrorContains(t, err, "没有主机")
+	_, err = cmd("--host", control, "--component", "../../secret")
+	require.ErrorContains(t, err, "没有组件")
+	_, err = cmd("--host", control, "--component", "trade")
+	require.ErrorContains(t, err, "没有部署在")
+	_, err = cmd("--host", control, "--component", "admin", "--lines", "99999")
+	require.ErrorContains(t, err, "--lines")
 }

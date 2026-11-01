@@ -60,12 +60,12 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 ### 本机状态
 
-`setup wipe` 把操作员身份移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
+`setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
 状态目录**必须**换新：制品和请求哈希绑定在 core 阶段的状态里，control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
 
 ## 4. 安装顺序
 
-首次安装的**所有命令都不带 `--release`**（`--release` 只用于升级）。以下命令都在主仓库根目录执行，`CLI=$WT/bin/moox-cli`，公共参数 `--file ./moox.toml --source-dir $WT`。
+首次安装的**所有命令都不带 `--release`**（`--release` 只用于升级）。以下命令都在主仓库根目录执行（`setup init` 没有 `--source-dir`，不用带），`CLI=$WT/bin/moox-cli`，公共参数 `--file ./moox.toml --source-dir $WT`。
 每一步成功的标志是输出里的 `*-ready` 与 `STEP-EXIT=0`；任何一步失败先看日志，不要盲目重试。
 
 | 步 | 命令 | 备注 |
@@ -74,32 +74,14 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 | 2 | `$CLI setup deploy-host --host storage`，再 `overseas`、`factor` | 因子机要求 `[hosts.factor] reachability = "outbound"`，且已有 `/data/moox`（可写） |
 | 3 | `$CLI setup deploy-unit --host storage --profile eventbus` | EventBus 装在 `[deployments]` 登记它的主机（默认存储机） |
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
-| 5 | 在存储机注册 DataNode（见下） | 节点 ID 固定 `storage-node-0` |
-| 6 | `$CLI setup apply --file ./moox.toml` | 写入管理员与云凭据。**末尾的浏览器 CA 信任一步此时必然失败**（control 还没装、没有证书），以 `setup status` 返回 `"state":"completed"` 为准 |
-| 7 | `$CLI setup metadata-import --storage-host storage --seed $WT/config/setup/metadata.yaml --spaces mooxsys`，再 `--spaces crypto,stockcn,stockhk,stockus` | 先系统空间，再业务空间 |
-| 8 | 在存储机 `moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100` | 激活数据集；需要 `MOOX_STORAGE_NODE_AUTH_SECRET`（见下） |
-| 9 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
-| 10 | `$CLI setup bootstrap --stage control --create-proxy-ca` | internal TLS 的首次安装必须带 `--create-proxy-ca`；控制机磁盘小，失败重试前先清残留的发布目录 |
-| 11 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 创建业务空间、导入元数据与因子 |
-| 12 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳 |
-| 13 | `$CLI setup sync-deployments --host factor`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
+| 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、登记存储节点、导入并激活元数据。必须在 control 之前：Monitor 要等系统数据集就绪 |
+| 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
+| 7 | `$CLI setup bootstrap --stage control --create-proxy-ca` | internal TLS 的首次安装必须带 `--create-proxy-ca`；失败的发布目录由下一次尝试自动清理 |
+| 8 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
+| 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳 |
+| 10 | `$CLI setup sync-deployments --host factor --yes`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 
-### 步骤 5、8：在存储机取节点密钥
-
-`MOOX_STORAGE_NODE_AUTH_SECRET` 取自存储节点进程自己的环境，只放进环境变量、不打印不落盘：
-
-```bash
-./bin/moox-cli host exec --host <存储机主机 ID> -- sh -c 'cd /data/moox/storage/current
-  pid=$(pgrep -f "^/data/moox/storage/.*moox-storage-node" | head -1)
-  export MOOX_STORAGE_NODE_AUTH_SECRET=$(tr "\0" "\n" < /proc/$pid/environ | sed -n "s/^MOOX_STORAGE_NODE_AUTH_SECRET=//p")
-  ./bin/moox-storage-cli register-node --metadata-target ip://127.0.0.1:20100 --node-id storage-node-0 --service-target ip://127.0.0.1:20107'
-```
-
-（`host exec` 经 `moox.toml` 里的 SSH 配置在存储机上执行，密钥只在远端 shell 的环境变量里，不会出现在输出里。）
-
-步骤 8 同样取密钥，命令换成 `activate-datasets --metadata-target ip://127.0.0.1:20100`。
-
-### 步骤 11 前：信任内部 CA
+### 步骤 8 前：信任内部 CA
 
 `setup init` 先检查内部 CA 是否已被本机信任，检查标准是**证书在系统钥匙串里**，没有就调 `scripts/deploy/install-caddy-ca.sh`（要 sudo 密码）。Agent 的 shell 没有终端，输不了密码：
 
@@ -111,7 +93,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 旧的 CA 会留在钥匙串里，由用户自行清理。
 
-### 步骤 11 的已知限制
+### 步骤 8 的已知限制
 
 `setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
@@ -163,11 +145,10 @@ $S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 | --- | --- | --- |
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
 | control 阶段失败，重试结果相同 | 软件制品绑定在 core 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 core 重来 |
-| control 阶段 `bootstrap observation failed`，Monitor 退出 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
+| control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
 | 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节在编译机构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
-| `setup apply` 末尾报 `browser_ca_trust_failed` | control 还没装，取不到证书 | 预期现象，用 `setup status` 判断 |
 | `setup init` 报 `browser_ca_trust_failed`、`sudo: a terminal is required` | 检查要求证书在系统钥匙串，安装需要 sudo | 见第 4 节“信任内部 CA”，由用户授权 |
-| `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 11 的已知限制” |
+| `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |
 | 引擎重启后一段时间 `lease conflict`、`not_ready` | 旧租约还没过期 | 等几十秒，再等窗口载入（约 20 秒）和 warming |
 | 告警“外部接入（overseas）连接被拒绝” | 海外机没装 Access | `deploy-unit --host overseas --profile access` |

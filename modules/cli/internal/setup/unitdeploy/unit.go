@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -162,7 +163,7 @@ func prepareUnitSoftware(ctx context.Context, root, state *os.Root, options Core
 		hostID := filepath.Base(filepath.Dir(state.Name()))
 		var operation unitOperation
 		if err := readJSON(root, "hosts/"+hostID+"/operation.json", 2<<20, &operation); err != nil {
-			return software, "", errors.New("business deployment requires the target host's original software state")
+			return software, "", fmt.Errorf("host_not_ready: 主机 %s 还没部署主机服务，先运行 setup deploy-host --host %s", hostID, hostID)
 		}
 		verified, err := unitpackage.Inspect(ctx, operation.Package.Archive)
 		if err != nil || operation.Profile != "host" || operation.Source.Target.HostID != hostID || !insideState(root.Name(), operation.Package.Archive) || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.Profile != "host" || verified.Manifest.GOARCH != arch || !insideState(root.Name(), operation.Helper) {

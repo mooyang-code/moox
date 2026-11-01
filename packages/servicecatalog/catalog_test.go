@@ -448,3 +448,22 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingGrantsNamesTheProvidingComponent(t *testing.T) {
+	catalog, err := LoadEmbedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := make([]string, 0, len(catalog.Components))
+	for _, component := range catalog.Components {
+		all = append(all, component.ID)
+	}
+	if missing := catalog.MissingGrants(all); len(missing) != 0 {
+		t.Fatalf("全部部署时不应缺项: %+v", missing)
+	}
+	without := slices.DeleteFunc(slices.Clone(all), func(id string) bool { return id == "archive-mgr" })
+	missing := catalog.MissingGrants(without)
+	if len(missing) != 1 || missing[0].Component != "archive-mgr" || missing[0].Service != "trpc.moox.archive.ArchiveWorker" {
+		t.Fatalf("应指出缺 archive-mgr: %+v", missing)
+	}
+}

@@ -24,6 +24,15 @@ type LocalState struct {
 	UnitRecords   bool
 	// WipePending 表示上次 setup wipe 没有做完。
 	WipePending bool
+	// StaleBinding 表示这份本机状态不是当前配置和版本生成的：旧状态里的软件和身份绑定着原来的配置，不能接着装。
+	StaleBinding bool
+	// BindingConfig 是生成这份本机状态的配置文件路径。
+	BindingConfig string
+	// Units 是已经部署成功的单元，键是 主机/profile。
+	Units map[string]bool
+	// InitStorage、InitReady 表示 setup init --stage storage、setup init 已完成。
+	InitStorage bool
+	InitReady   bool
 }
 
 // Decision 是路线判定的结果。
@@ -57,6 +66,9 @@ func Decide(reports []HostReport, control string, local LocalState) Decision {
 		// 首次安装在写身份绑定之前就失败时，目标机只有上传目录，也算没做完。
 		unfinished := matched || (remote == "" && !deployed)
 		if unfinished && !local.ControlReady {
+			if local.StaleBinding {
+				return Decision{Route: RouteExisting, Reasons: []string{staleReason(local)}}
+			}
 			return Decision{Route: RouteResume}
 		}
 		if matched && local.CoreReady && local.OperatorPin && local.UnitRecords {
@@ -64,6 +76,14 @@ func Decide(reports []HostReport, control string, local LocalState) Decision {
 		}
 	}
 	return Decision{Route: RouteExisting}
+}
+
+func staleReason(local LocalState) string {
+	reason := "上次没装完的状态是另一份配置或另一个版本生成的，不能接着装"
+	if local.BindingConfig != "" {
+		reason += "（原配置在 " + local.BindingConfig + "）"
+	}
+	return reason + "。要继续就换回原配置和原版本，否则彻底清空后重新安装"
 }
 
 func blockers(reports []HostReport) []string {
@@ -88,6 +108,9 @@ func blockers(reports []HostReport) []string {
 			if dir.Marked && dir.Foreign {
 				add(report, "目录 %s 里有不属于 SSH 用户的文件，清除时删不掉", dir.Path)
 			}
+		}
+		if report.HelperRunning {
+			add(report, "上一次部署操作还在运行，等它结束再继续")
 		}
 		if len(report.ProcessesOutside) != 0 {
 			add(report, "部署目录之外还有 MooX 进程：%v", report.ProcessesOutside)
