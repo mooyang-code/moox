@@ -56,7 +56,7 @@ type setupDeps struct {
 	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
 	scanDeployment func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost       func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
-	readLogs       func(context.Context, setupconfig.Host, string, string, string, int) ([]deployscan.LogSection, error)
+	readLogs       func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 	trialPackage   func(context.Context, unitdeploy.CoreOptions) error
 }
 

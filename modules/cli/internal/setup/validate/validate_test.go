@@ -153,7 +153,7 @@ func TestRunRejectsIncompleteDeploymentsBeforeTouchingHosts(t *testing.T) {
 	result, err := Run(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
 	require.ErrorIs(t, err, ErrValidationFailed)
 	assert.ErrorContains(t, err, "archive-mgr")
-	assert.ErrorContains(t, err, "--add-deployment control=archive-mgr")
+	assert.ErrorContains(t, err, "--add-deployment control=archive-mgr --yes")
 	assert.Equal(t, "deployment_incomplete", result.Checks[1].Code)
 	assert.Empty(t, sshChecker.calls)
 	assert.Zero(t, identity.calls)

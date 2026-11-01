@@ -11,14 +11,21 @@ def tail(path, lines):
 
 def main():
     request = json.loads(sys.argv[1])
-    root, component, lines = request['deploy_root'], request['component'], request['lines']
+    component, lines = request['component'], request['lines']
     sections = []
     if request.get('unit'):
-        output = subprocess.run(['journalctl', '--user', '-u', request['unit'], '-n', str(lines), '--no-pager'],
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
-        sections.append({'path': 'journalctl --user -u ' + request['unit'], 'text': output.stdout.decode('utf-8', 'replace')})
-    candidates = glob.glob(os.path.join(root, '*/releases/*', component, 'logs/trpc.log'))
-    candidates += glob.glob(os.path.join(root, 'run/logs', component + '.log'))
+        try:
+            output = subprocess.run(['journalctl', '--user', '-u', request['unit'], '-n', str(lines), '--no-pager'],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+            sections.append({'path': 'journalctl --user -u ' + request['unit'], 'text': output.stdout.decode('utf-8', 'replace')})
+        except (OSError, subprocess.SubprocessError):
+            pass
+    candidates = []
+    for root in request['roots']:
+        candidates += glob.glob(os.path.join(root, 'releases/*', component, 'logs/trpc.log'))
+        candidates += glob.glob(os.path.join(root, '*/releases/*', component, 'logs/trpc.log'))
+        candidates += glob.glob(os.path.join(root, 'run/logs', component + '.log'))
+    candidates = sorted(set(candidates))
     candidates.sort(key=os.path.getmtime, reverse=True)
     for path in candidates[:3]:
         sections.append({'path': path, 'text': tail(path, lines)})

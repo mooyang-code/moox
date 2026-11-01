@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/stretchr/testify/require"
 )
@@ -51,4 +54,39 @@ func TestHelperFailureGivesUpAfterDeadline(t *testing.T) {
 	err := helperFailure(context.Background(), redial, "部署管理台", errors.New("eof"), setupssh.Result{})
 	require.ErrorContains(t, err, "ssh_disconnected")
 	require.True(t, strings.Contains(err.Error(), "可能还在运行"))
+}
+
+func TestRemoteFailureReportsCancellation(t *testing.T) {
+	err := remoteFailure("部署管理台", context.Canceled, setupssh.Result{})
+	require.ErrorContains(t, err, "operation_cancelled")
+	require.NotContains(t, err.Error(), "ssh_disconnected")
+}
+
+func TestReadLocalStateSeesEveryCompletedStep(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	require.NoError(t, os.MkdirAll(filepath.Join(state, "hosts/storage"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(state, "units/storage/access"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(state, "hosts/storage", unitReadyFile), []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(state, "units/storage/access", unitReadyFile), []byte("{}"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(state, "units/storage/storage"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(state, "units/storage/storage/operation.json"), []byte("{}"), 0o600))
+	local := ReadLocalState(state, t.TempDir(), Binding{})
+	require.True(t, local.Units["storage/host"])
+	require.True(t, local.Units["storage/access"])
+	require.False(t, local.Units["storage/storage"], "operation.json 在部署前就写了，不能算成功")
+}
+
+func TestControlDependenciesSkipEgressWithoutOverseasHost(t *testing.T) {
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.10"}},
+		Deployments: map[string][]string{"control": {"admin", "collector", "storage-primary"}},
+	}}
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	defer root.Close()
+	err = checkControlDependencyRecords(snapshot, root, []string{"admin"})
+	require.NoError(t, err, "只有 Collector 才需要出口代理")
+	err = checkControlDependencyRecords(snapshot, root, []string{"collector"})
+	require.NotErrorIs(t, err, nil)
+	require.NotContains(t, err.Error(), "egress", "没有海外机时只查 Storage")
 }

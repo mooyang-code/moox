@@ -68,7 +68,7 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 	unit("trade", "trade")
 	engines := hostsWith("factor-engine")
 	if len(engines) != 0 && !local.Units[engines[0]+"/factor-engine"] {
-		add(false, "setup sync-deployments --host %s", engines[0])
+		add(false, "setup sync-deployments --host %s --yes", engines[0])
 	}
 	unit("factor-engine", "factor-engine")
 	unit("archive-worker", "archive-worker")

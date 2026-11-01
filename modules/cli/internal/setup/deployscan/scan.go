@@ -99,6 +99,8 @@ func (r HostReport) Empty() bool {
 type Options struct {
 	// Sizes 为 true 时统计目录占用，只在清除预览里需要。
 	Sizes bool
+	// Host 不为空时只检测这一台主机。
+	Host string
 }
 
 // Dial 连接一台主机。
@@ -115,6 +117,9 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 	hosts := manifest.Hosts()
 	reports := make([]HostReport, 0, len(hosts))
 	for _, host := range hosts {
+		if options.Host != "" && host.Name != options.Host {
+			continue
+		}
 		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes}
 		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
 		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {

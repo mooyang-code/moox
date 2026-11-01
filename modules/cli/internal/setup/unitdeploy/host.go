@@ -362,11 +362,15 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return result, errors.New("config_changed")
 		}
-		return deployExternal(ctx, externalInstall{
+		result, err = deployExternal(ctx, externalInstall{
 			options: options, manifest: manifest, host: host, control: control, identity: identity, operation: operation,
 			localClients: localClients, target: target, source: source,
 			disabled: !registered.HostEnabled || !registered.DeploymentEnabled,
 		})
+		if err != nil {
+			return result, err
+		}
+		return result, saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true)
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
 	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: manifest.EventBusURLFor(host.Name), EventBusAdvertise: setupconfig.EventBusAdvertiseURL(manifest.EventBusHost().Address, manifest.EventBus.Port)}

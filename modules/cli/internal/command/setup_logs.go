@@ -49,7 +49,8 @@ func newSetupLogsCommand(deps setupDeps) *cobra.Command {
 			if deps.readLogs == nil {
 				return errors.New("setup logs dependencies are unavailable")
 			}
-			sections, err := deps.readLogs(cmd.Context(), target, snapshot.Manifest.Paths.Resolved().DeployRoot, component, entry.Doctor.Unit, lines)
+			paths := snapshot.Manifest.Paths.Resolved()
+			sections, err := deps.readLogs(cmd.Context(), target, []string{paths.DeployRoot, paths.ControlRoot, paths.StorageRoot}, component, entry.Doctor.Unit, lines)
 			if err != nil {
 				return err
 			}
@@ -65,6 +66,6 @@ func newSetupLogsCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func defaultSetupReadLogs(ctx context.Context, host setupconfig.Host, root, component, unit string, lines int) ([]deployscan.LogSection, error) {
-	return deployscan.ReadLogs(ctx, dialSetupHost, host, root, component, unit, lines)
+func defaultSetupReadLogs(ctx context.Context, host setupconfig.Host, roots []string, component, unit string, lines int) ([]deployscan.LogSection, error) {
+	return deployscan.ReadLogs(ctx, dialSetupHost, host, roots, component, unit, lines)
 }

@@ -94,7 +94,7 @@ func CheckDeployments(manifest setupconfig.Manifest) error {
 			components = append(components, item.Component)
 		}
 	}
-	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；运行 moox-cli config migrate --add-deployment %s=%s 补上，再重新校验",
+	return fmt.Errorf("deployment_incomplete: [deployments] 缺少组件 %s，Access 会一直无法就绪；运行 moox-cli config migrate --add-deployment %s=%s --yes 补上，再重新校验",
 		strings.Join(components, "、"), control, strings.Join(components, ","))
 }
 

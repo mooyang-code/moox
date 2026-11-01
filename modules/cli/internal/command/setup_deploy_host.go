@@ -35,6 +35,11 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		options.Log = command.ErrOrStderr()
+		if options.Release == "" {
+			if err := checkInstallDisk(command.Context(), deps, snapshot, options.HostID); err != nil {
+				return err
+			}
+		}
 		// 只能出站的主机经 control 反向连接接入：先经腾讯云接口确认 control 的端口已放行，再部署。
 		if snapshot.Manifest.HostByID(options.HostID).Reachability == servicecatalog.ReachabilityOutbound && deps.ensureRelayFirewall != nil {
 			firewall, err := deps.ensureRelayFirewall(command.Context(), snapshot)

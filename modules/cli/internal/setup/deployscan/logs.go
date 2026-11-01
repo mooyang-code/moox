@@ -20,20 +20,34 @@ type LogSection struct {
 	Text string `json:"text"`
 }
 
-// secretField 匹配日志里形如 password=xxx、"token": "xxx" 的字段，值要遮掉。
-var secretField = regexp.MustCompile(`(?i)((?:secret|password|passwd|token|api[_-]?key|authorization|private[_-]?key)[a-z_-]*["']?\s*[:=]\s*["']?)[^\s"',}]+`)
+// 日志里可能带密钥的写法：字段值、Bearer 令牌、URL 里的账号密码和 key 参数、PEM 块。JSON 里被转义的引号也要算上。
+var (
+	pemBlock    = regexp.MustCompile(`(?s)-----BEGIN [A-Z ]+-----.*?-----END [A-Z ]+-----`)
+	bearerToken = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s"'\\,]+`)
+	urlPassword = regexp.MustCompile(`(://[^\s:/@"']+:)[^\s/@"']+@`)
+	queryKey    = regexp.MustCompile(`(?i)([?&](?:key|token|secret|sign|signature)=)[^\s&"'\\]+`)
+	quotedField = regexp.MustCompile(`(?i)((?:secret|password|passwd|token|api[_-]?key|authorization|private[_-]?key)[a-z_-]*(?:\\?["'])?\s*[:=]\s*)(?:\\?")(?:[^"\\]|\\[^"])*(?:\\?")|((?:secret|password|passwd|token|api[_-]?key|authorization|private[_-]?key)[a-z_-]*(?:\\?["'])?\s*[:=]\s*)'[^']*'`)
+	plainField  = regexp.MustCompile(`(?i)((?:secret|password|passwd|token|api[_-]?key|authorization|private[_-]?key)[a-z_-]*(?:\\?["'])?\s*[:=]\s*)[^\s"',}\\*]+`)
+)
 
-// RedactLog 遮掉日志里的密钥字段。日志是给人和 Agent 排查用的，不应该带出密钥。
-func RedactLog(text string) string { return secretField.ReplaceAllString(text, "${1}***") }
+// RedactLog 遮掉日志里的密钥。日志是给人和 Agent 排查用的，不应该带出密钥。
+func RedactLog(text string) string {
+	text = pemBlock.ReplaceAllString(text, "***")
+	text = bearerToken.ReplaceAllString(text, "${1} ***")
+	text = urlPassword.ReplaceAllString(text, "${1}***@")
+	text = queryKey.ReplaceAllString(text, "${1}***")
+	text = quotedField.ReplaceAllString(text, "${1}${2}***")
+	return plainField.ReplaceAllString(text, "${1}***")
+}
 
 // ReadLogs 只读取一个组件在这台主机上最近的日志，包括失败回滚的发布目录里的日志。unit 是外部程序的 systemd 单元名。
-func ReadLogs(ctx context.Context, dial Dial, host setupconfig.Host, root, component, unit string, lines int) ([]LogSection, error) {
+func ReadLogs(ctx context.Context, dial Dial, host setupconfig.Host, roots []string, component, unit string, lines int) ([]LogSection, error) {
 	transport, err := dial(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	defer transport.Close()
-	request, err := json.Marshal(map[string]any{"deploy_root": root, "component": component, "unit": unit, "lines": lines})
+	request, err := json.Marshal(map[string]any{"roots": roots, "component": component, "unit": unit, "lines": lines})
 	if err != nil {
 		return nil, err
 	}

@@ -159,18 +159,22 @@ cd moox-${VER}
   - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
 - **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
 
-## 4. 部署与初始化
+## 4. 部署
 
 **顺序由 CLI 给出，不要自己推算。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表（有没有海外机、因子机，管理台用什么证书，上次做到哪一步都算在内），把整份列表放进部署计划给用户确认一次，然后从上到下逐条运行。
 
 - 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。耗时较长的命令放后台运行。
 - 中断或换一次会话后，重新运行 `setup validate`，从新的 `next_steps` 继续；已做完的步骤不会再列出来。`resume` 时不要从头开始。
-- `next_steps` 为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。
+- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时按它说明处理。
 - 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
 
 大致顺序，以 `next_steps` 为准：防火墙 → core → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → 信任证书（内部证书时）→ `setup init` → 海外采集和交易 → 因子机 → 配置备份。
 
 元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
+
+## 5. 初始化
+
+启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
 `setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、浏览器证书检查、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
 
@@ -231,7 +235,9 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错里的 `config migrate --add-deployment` 补上，再 `setup validate` |
 | `disk_low` | 目标机磁盘不够 | 告诉用户腾出空间或换大磁盘 |
-| `core_not_ready` | core 还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
+| `core_not_ready`、`host_not_ready` | core 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
+| `operation_cancelled` | 命令被取消或超时，目标机上的操作可能还在运行 | 先 `setup validate` 确认没有“上一次部署操作还在运行”，再继续 |
+| `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |
 | `…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |

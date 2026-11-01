@@ -76,10 +76,16 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 		}
 	}
 	state.Units = map[string]bool{}
-	if matches, _ := filepath.Glob(filepath.Join(stateDir, "units", "*", "*", unitReadyFile)); len(matches) != 0 {
+	if matches, err := filepath.Glob(filepath.Join(stateDir, "units", "*", "*", unitReadyFile)); err == nil {
 		for _, match := range matches {
 			profile := filepath.Dir(match)
 			state.Units[filepath.Base(filepath.Dir(profile))+"/"+filepath.Base(profile)] = true
+		}
+	}
+	// 主机单元的记录在 hosts/<主机>/ 下，不在 units 下。
+	if matches, err := filepath.Glob(filepath.Join(stateDir, "hosts", "*", unitReadyFile)); err == nil {
+		for _, match := range matches {
+			state.Units[filepath.Base(filepath.Dir(match))+"/host"] = true
 		}
 	}
 	return state

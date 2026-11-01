@@ -210,7 +210,8 @@ func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root
 	}) {
 		profiles = append(profiles, "storage")
 	}
-	if slices.Contains(components, "collector") {
+	// 不配海外机时没有出口代理，只做 A 股、港股、美股的部署也要能装完。
+	if slices.Contains(components, "collector") && snapshot.Manifest.ComponentHost("egress-proxy") != "" {
 		profiles = append(profiles, "egress-proxy")
 	}
 	for _, profile := range profiles {
@@ -279,7 +280,8 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 	}) {
 		profiles = append(profiles, "storage")
 	}
-	if slices.Contains(components, "collector") {
+	// 不配海外机时没有出口代理，只做 A 股、港股、美股的部署也要能装完。
+	if slices.Contains(components, "collector") && snapshot.Manifest.ComponentHost("egress-proxy") != "" {
 		profiles = append(profiles, "egress-proxy")
 	}
 	for _, profile := range profiles {

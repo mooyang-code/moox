@@ -672,6 +672,16 @@ func TestStaleBindingIsNotResume(t *testing.T) {
 	require.Equal(t, RouteResume, Decide([]HostReport{report}, "control", LocalState{RuntimeSHA256: "sha256:a"}).Route)
 }
 
+func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
+	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, RootExists: true, Entries: []string{"host"}, Units: map[string]string{"host": "bootstrap-a"}, RuntimeSHA256: "sha256:a"}
+	local := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true, StaleBinding: true, BindingConfig: "/old/moox.toml"}
+	decision := Decide([]HostReport{report}, "control", local)
+	require.Equal(t, RouteUpgrade, decision.Route)
+	require.NotEmpty(t, decision.Reasons, "初始化没做完时要说明，不能当成已经装完")
+	local.BindingConfig = ""
+	require.Empty(t, Decide([]HostReport{report}, "control", local).Reasons, "早期部署没有记录，按正常升级走")
+}
+
 func TestRunningHelperBlocksEveryRoute(t *testing.T) {
 	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, HelperRunning: true}
 	decision := Decide([]HostReport{report}, "control", LocalState{})
@@ -751,8 +761,10 @@ func TestArchiveLocalTakesTheOldConsoleCert(t *testing.T) {
 }
 
 func TestRedactLogHidesSecretFields(t *testing.T) {
-	text := RedactLog(`level=info password=abc123 "secret_key": "xyz" token: t0k3n api_key=k1 port=11425`)
-	for _, secret := range []string{"abc123", "xyz", "t0k3n", "k1"} {
+	text := RedactLog(`level=info password=abc123 "secret_key": "xyz" token: t0k3n api_key=k1 port=11425 ` +
+		`Authorization: Bearer bearer-value {\"password\":\"escaped-value\"} https://x/webhook/send?key=hook-value nats://u:url-value@host:4222 Password: 'a b c' ` +
+		"-----BEGIN PRIVATE KEY-----\npem-value\n-----END PRIVATE KEY-----")
+	for _, secret := range []string{"abc123", "xyz", "t0k3n", "k1", "bearer-value", "escaped-value", "hook-value", "url-value", "b c", "pem-value"} {
 		require.NotContains(t, text, secret)
 	}
 	require.Contains(t, text, "port=11425")
@@ -772,7 +784,7 @@ func TestReadLogsRedactsOutput(t *testing.T) {
 	dial := func(context.Context, setupconfig.Host) (setupssh.Client, error) {
 		return logsClient{output: `[{"path":"/data/moox/run/logs/monitor.log","text":"password=abc"}]`}, nil
 	}
-	sections, err := ReadLogs(context.Background(), dial, setupconfig.Host{Name: "control"}, "/data/moox", "monitor", "", 10)
+	sections, err := ReadLogs(context.Background(), dial, setupconfig.Host{Name: "control"}, []string{"/data/moox"}, "monitor", "", 10)
 	require.NoError(t, err)
 	require.Len(t, sections, 1)
 	require.NotContains(t, sections[0].Text, "abc")

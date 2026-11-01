@@ -67,12 +67,12 @@ func diskWarnings(reports []deployscan.HostReport, control string) []string {
 	return warnings
 }
 
-// checkInstallDisk 在打包上传之前确认目标机磁盘够用。
-func checkInstallDisk(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot) error {
+// checkInstallDisk 在打包上传之前确认要动的这台主机磁盘够用。只连这一台：别的主机这一步用不到，可能还连不上。
+func checkInstallDisk(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, host string) error {
 	if deps.scanDeployment == nil {
 		return nil
 	}
-	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{Host: host})
 	if err != nil {
 		return err
 	}

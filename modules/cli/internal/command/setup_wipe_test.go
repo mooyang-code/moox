@@ -218,8 +218,8 @@ func TestSetupValidateListsNextSteps(t *testing.T) {
 
 func TestSetupLogsChecksHostAndComponent(t *testing.T) {
 	h := newWipeHarness(t)
-	h.deps.readLogs = func(_ context.Context, host setupconfig.Host, root, component, unit string, lines int) ([]deployscan.LogSection, error) {
-		return []deployscan.LogSection{{Path: root + "/run/logs/" + component + ".log", Text: host.Name + " tail"}}, nil
+	h.deps.readLogs = func(_ context.Context, host setupconfig.Host, roots []string, component, unit string, lines int) ([]deployscan.LogSection, error) {
+		return []deployscan.LogSection{{Path: roots[0] + "/run/logs/" + component + ".log", Text: host.Name + " tail"}}, nil
 	}
 	cmd := func(args ...string) (string, error) {
 		c := newSetupLogsCommand(h.deps)

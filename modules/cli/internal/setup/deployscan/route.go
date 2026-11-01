@@ -72,6 +72,10 @@ func Decide(reports []HostReport, control string, local LocalState) Decision {
 			return Decision{Route: RouteResume}
 		}
 		if matched && local.CoreReady && local.OperatorPin && local.UnitRecords {
+			// 记录过配置却对不上，说明初始化做到一半时换了配置或版本，不能当成已经装完。
+			if local.StaleBinding && local.BindingConfig != "" && !local.InitReady {
+				return Decision{Route: RouteUpgrade, Reasons: []string{staleReason(local)}}
+			}
 			return Decision{Route: RouteUpgrade}
 		}
 	}

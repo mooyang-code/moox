@@ -141,7 +141,7 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 				}
 			}
 		}
-		pruneReleases(candidate.UnitRoot, candidate.Directory, current)
+		PruneReleases(candidate.UnitRoot, candidate.Directory, current)
 		journal := Activation{Version: 1, HostID: candidate.HostID, DeploymentRoot: candidate.DeploymentRoot, UnitRoot: candidate.UnitRoot, Profile: candidate.Profile, Directory: candidate.Directory, PreviousDirectory: current, Phase: "stopping", StartComponents: starts, PreviousRunning: []string{}}
 		if options.StateSeed != nil {
 			journal.StateSeedSHA256 = options.StateSeed.SHA256
@@ -243,13 +243,18 @@ func Activate(ctx context.Context, options ActivateOptions, lockOptions unitrunt
 	return result, err
 }
 
-// pruneReleases 只保留这次要启动的版本和当前版本，其余发布目录（失败尝试的残留、更早的版本）都删掉，
-// 否则小磁盘的机器几次重试就写满。清理失败不影响部署，下次再清。
-func pruneReleases(unitRoot string, keep ...string) {
+// PruneReleases 删掉用不到的发布目录（失败尝试的残留、更早的版本），返回保留的目录。
+// 保留 keep 和激活记录里的上一版，手动回滚要用。清理失败不影响部署，下次再清。
+func PruneReleases(unitRoot string, keep ...string) []string {
+	if last, exists, err := ReadActivation(unitRoot); err != nil {
+		return keep
+	} else if exists && last.PreviousDirectory != "" {
+		keep = append(keep, last.PreviousDirectory)
+	}
 	directory := filepath.Join(unitRoot, "releases")
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return
+		return keep
 	}
 	for _, entry := range entries {
 		path := filepath.Join(directory, entry.Name())
@@ -257,10 +262,8 @@ func pruneReleases(unitRoot string, keep ...string) {
 			_ = os.RemoveAll(path)
 		}
 	}
+	return keep
 }
-
-// PruneReleases 给 bootstrap 用：回滚后删掉失败的发布目录。
-func PruneReleases(unitRoot string, keep ...string) { pruneReleases(unitRoot, keep...) }
 
 func validSelection(ids, available []string) bool {
 	seen := map[string]bool{}

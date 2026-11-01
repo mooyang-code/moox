@@ -366,10 +366,12 @@ type Snapshot struct {
 	path      string
 	info      os.FileInfo
 	digest    [sha256.Size]byte
+	// content 是明文的摘要：加密文件每次写回密文都可能变，比较配置要看内容。
+	content [sha256.Size]byte
 }
 
 // Digest 是配置文件内容的摘要，用来判断两次命令用的是不是同一份配置。
-func (s *Snapshot) Digest() string { return hex.EncodeToString(s.digest[:]) }
+func (s *Snapshot) Digest() string { return hex.EncodeToString(s.content[:]) }
 
 // Path 是配置文件的绝对路径。
 func (s *Snapshot) Path() string { return s.path }
@@ -409,6 +411,7 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 		path:      resolvedPath,
 		info:      info,
 		digest:    sha256.Sum256(raw),
+		content:   sha256.Sum256(plain),
 	}, nil
 }
 

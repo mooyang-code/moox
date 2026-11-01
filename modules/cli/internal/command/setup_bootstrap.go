@@ -61,7 +61,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			}
 			// 升级只换程序，不占首次安装那么多空间，这里只拦首次安装。
 			if control.Release == "" {
-				if err := checkInstallDisk(command.Context(), deps, snapshot); err != nil {
+				if err := checkInstallDisk(command.Context(), deps, snapshot, snapshot.Manifest.ControlHost().Name); err != nil {
 					return err
 				}
 			}
@@ -71,7 +71,9 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				}
 				result, err = deps.bootstrapCore(command.Context(), snapshot, options)
 			} else {
-				if control.Release == "" && !unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot)).InitStorage {
+				// 已经装好过管理台的环境重跑这一步是修复，元数据早就激活了。
+				local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
+				if control.Release == "" && !local.InitStorage && !local.ControlReady {
 					return errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
 				}
 				control.CoreOptions = options

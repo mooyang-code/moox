@@ -166,6 +166,9 @@ func uploadBytes(ctx context.Context, transport setupssh.Client, root string, ra
 
 // remoteFailure 把目标端助手的失败转成明确原因；operation 是这次操作的名字。
 func remoteFailure(operation string, err error, output setupssh.Result) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("operation_cancelled: " + operation + "：命令被取消，目标机上的操作可能还在运行。运行 setup validate，确认上一次操作已结束后再继续")
+	}
 	described := failure.Describe(operation, output.ExitCode, output.Stderr)
 	return errors.New(described.Error() + helperDiagnostic(err, output))
 }
@@ -177,7 +180,7 @@ var (
 )
 
 // helperProbe 查目标机上是否还有部署助手在运行。方括号让这条命令自己不被匹配到。
-const helperProbe = `if pgrep -f '[/]bootstrap-input/runtime/' >/dev/null; then echo running; else echo idle; fi`
+const helperProbe = `command -v pgrep >/dev/null || exit 1; if pgrep -f '[/]bootstrap-input/runtime/' >/dev/null; then echo running; else echo idle; fi`
 
 // helperFailure 处理部署助手的失败：目标机明确失败时直接说明原因；SSH 断开时重新连接，等助手结束再报告，
 // 这样下一次重试不会和目标机上还没结束的操作重叠。
