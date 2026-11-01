@@ -93,6 +93,9 @@ func TestSetupBootstrapStopsBeforeUploadWhenPrerequisitesFail(t *testing.T) {
 	require.ErrorContains(t, command.Execute(), "disk_low")
 	require.Zero(t, called)
 	require.Empty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: 6 << 20, ReclaimableKB: 3 << 20}}, "control"), "失败残留下一次会自动清掉，不能挡住重试")
+	require.NotEmpty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: 1 << 18, ReclaimableKB: 9 << 20}}, "control"), "上传本身要真实空间")
+	require.NotEmpty(t, diskWarnings([]deployscan.HostReport{{Host: "control"}}, "control"), "磁盘写满时可用空间就是 0")
+	require.Empty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: -1}}, "control"), "没查到不告警")
 
 	control := snapshot.Manifest.ControlHost().Name
 	snapshot.Manifest.Deployments[control] = slices.DeleteFunc(snapshot.Manifest.Deployments[control], func(id string) bool { return id == "archive-mgr" })

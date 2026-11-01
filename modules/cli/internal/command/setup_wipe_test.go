@@ -37,7 +37,7 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 	require.NoError(t, err)
 	h.operator, h.state = filepath.Join(base, "operator"), filepath.Join(base, "state")
 	for _, host := range h.snapshot.Manifest.Hosts() {
-		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Address: host.Address, Home: "/home/ubuntu", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: deployscan.TradeNone})
+		h.reports = append(h.reports, deployscan.HostReport{Host: host.Name, Address: host.Address, Home: "/home/ubuntu", OwnerOK: true, ModeOK: true, ParentWritable: true, Entries: []string{"host"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: deployscan.TradeNone, DiskFreeKB: 100 << 20})
 	}
 	h.deps = setupDeps{
 		load: func(string) (*setupconfig.Snapshot, error) { return h.snapshot, nil },

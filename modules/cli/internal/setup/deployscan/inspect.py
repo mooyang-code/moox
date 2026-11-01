@@ -128,7 +128,7 @@ def disk_free_kb(path):
         info = os.statvfs(current)
         return info.f_bavail * info.f_frsize // 1024
     except OSError:
-        return 0
+        return -1
 
 
 def kept_releases(unit):
@@ -145,16 +145,28 @@ def kept_releases(unit):
 def reclaimable_kb(root):
     """Space the next deployment frees by itself: failed attempts kept only so their logs stay readable."""
     total, names = 0, set()
+    try:
+        device = os.stat(root).st_dev
+    except OSError:
+        return 0
+
+    def counted(path):
+        # A separately mounted data disk frees nothing on the deployment root's disk.
+        try:
+            return max(size_kb(path), 0) if os.stat(path).st_dev == device else 0
+        except OSError:
+            return 0
+
     units = sorted(set(os.path.dirname(os.path.dirname(p)) for p in glob.glob(os.path.join(root, '*/releases/*'))))
     for unit in units:
         kept = kept_releases(unit)
         names.update(os.path.basename(path) for path in kept)
         for path in glob.glob(os.path.join(unit, 'releases/*')):
             if os.path.realpath(path) not in kept:
-                total += max(size_kb(path), 0)
+                total += counted(path)
     for path in glob.glob(os.path.join(root, 'bootstrap/bootstrap-*')):
         if os.path.isdir(path) and os.path.basename(path) not in names:
-            total += max(size_kb(path), 0)
+            total += counted(path)
     return total
 
 

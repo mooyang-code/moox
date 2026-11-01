@@ -234,7 +234,7 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `target_subset_installed`、`target_identity_differs`、`target_binding_missing`、`target_partial_install`、`target_directory_invalid` | 目标机的状态和这次操作不符，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate` 按 `route` 处理 |
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
-| `disk_low` | 目标机磁盘不够（失败尝试的残留已算作可用，下一次部署会自动清掉，不用手工删） | 告诉用户腾出空间或换大磁盘 |
+| `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
 | `core_not_ready`、`host_not_ready` | core 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
 | `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |

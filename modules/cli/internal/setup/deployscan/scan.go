@@ -76,7 +76,7 @@ type HostReport struct {
 	SizesKB          map[string]int64  `json:"sizes_kb,omitempty"`
 	// HelperRunning 表示目标机上还有部署助手在运行。
 	HelperRunning bool `json:"helper_running"`
-	// DiskFreeKB 是部署目录所在磁盘的可用空间，0 表示没查到。
+	// DiskFreeKB 是部署目录所在磁盘的可用空间，-1 表示没查到。
 	DiskFreeKB int64 `json:"disk_free_kb"`
 	// ReclaimableKB 是下一次部署开始时会自动清掉的空间（失败尝试的残留），只在 Options.Reclaim 时统计。
 	ReclaimableKB int64 `json:"reclaimable_kb,omitempty"`

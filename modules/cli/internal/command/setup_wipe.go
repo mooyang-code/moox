@@ -33,6 +33,9 @@ const minControlDiskKB = 8 << 20
 // minHostDiskKB 是其他主机部署前至少要有的可用空间。
 const minHostDiskKB = 2 << 20
 
+// minUploadKB 是不算残留时至少要有的可用空间：安装包要先上传，下一次部署才开始清理残留。
+const minUploadKB = 1 << 20
+
 // setupBinding 是这次命令用的配置和版本。
 func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
 	return unitdeploy.Binding{ConfigSHA256: snapshot.Digest(), ConfigPath: snapshot.Path(), Version: Version}
@@ -61,8 +64,9 @@ func diskWarnings(reports []deployscan.HostReport, control string) []string {
 			need = minControlDiskKB
 		}
 		// 失败尝试的残留下一次部署会自动清掉，算作可用，否则失败后反而重试不了。
-		if report.DiskFreeKB > 0 && report.DiskFreeKB+report.ReclaimableKB < need {
-			warnings = append(warnings, fmt.Sprintf("disk_low: %s（%s）可用磁盘 %.1f GB，部署至少要 %d GB", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), need>>20))
+		// 残留要到上传之后才清，所以真实可用空间至少要放得下一个安装包。
+		if report.DiskFreeKB >= 0 && (report.DiskFreeKB+report.ReclaimableKB < need || report.DiskFreeKB < minUploadKB) {
+			warnings = append(warnings, fmt.Sprintf("disk_low: %s（%s）可用磁盘 %.1f GB（另有 %.1f GB 失败残留可自动回收），部署至少要 %d GB，其中 1 GB 要真实可用", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), float64(report.ReclaimableKB)/(1<<20), need>>20))
 		}
 	}
 	return warnings
