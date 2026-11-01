@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -124,42 +125,25 @@ func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, t
 		return setupFirewallSummary{}, fmt.Errorf("firewall: %w", err)
 	}
 	summary := setupFirewallSummary{Status: "ready", Targets: len(targets)}
-	for _, target := range targets {
-		address, err := setupFirewallAddress(ctx, target.Host.Address)
-		if err != nil {
-			return summary, fmt.Errorf("firewall %s: resolve address: %w", target.Host.Name, err)
+	// 各主机并行：区域解析和回退按主机做一次，不再按规则。
+	results := make([]firewallHostResult, len(targets))
+	var workers sync.WaitGroup
+	for i, target := range targets {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			results[i] = ensureFirewallHost(ctx, manifest, tencent, target)
+		}()
+	}
+	workers.Wait()
+	for _, result := range results {
+		if result.err != nil {
+			return summary, result.err
 		}
-		if !isPublicFirewallIP(address) {
-			summary.Skipped++
-			continue
-		}
-		for _, rule := range target.Rules {
-			result, err := tencent.EnsureFirewallRule(ctx, address, rule)
-			if err != nil {
-				// The manifest home region need not be the region of every
-				// configured host. Resolve the actual Tencent region before
-				// falling back to a CVM security group or retrying Lighthouse.
-				created, fallbackErr := ensureFirewallRuleAtDiscoveredRegion(ctx, manifest, address, rule)
-				if fallbackErr == nil {
-					summary.Rules++
-					if created {
-						summary.Created++
-					} else {
-						summary.AlreadyOpen++
-					}
-					continue
-				}
-				fmt.Fprintf(os.Stderr, "firewall %s port %s skipped: lighthouse=%v; discovered=%v\n", target.Host.Name, rule.Ports, err, fallbackErr)
-				summary.Skipped++
-				continue
-			}
-			summary.Rules++
-			if result.Created {
-				summary.Created++
-			} else {
-				summary.AlreadyOpen++
-			}
-		}
+		summary.Rules += result.created + result.alreadyOpen
+		summary.Created += result.created
+		summary.AlreadyOpen += result.alreadyOpen
+		summary.Skipped += result.skipped
 	}
 	if summary.Skipped > 0 {
 		// A skipped target is not equivalent to an already-open rule. Keep the
@@ -170,24 +154,51 @@ func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, t
 	return summary, nil
 }
 
-// ensureFirewallRuleAtDiscoveredRegion handles hosts placed outside the
+type firewallHostResult struct {
+	created, alreadyOpen, skipped int
+	err                           error
+}
+
+func ensureFirewallHost(ctx context.Context, manifest setupconfig.Manifest, tencent *cloudtencent.Client, target setupFirewallTarget) firewallHostResult {
+	address, err := setupFirewallAddress(ctx, target.Host.Address)
+	if err != nil {
+		return firewallHostResult{err: fmt.Errorf("firewall %s: resolve address: %w", target.Host.Name, err)}
+	}
+	if !isPublicFirewallIP(address) {
+		return firewallHostResult{skipped: 1}
+	}
+	result, err := tencent.EnsureFirewallRules(ctx, address, target.Rules)
+	if err != nil {
+		// The manifest home region need not be the region of every
+		// configured host. Resolve the actual Tencent region before
+		// falling back to a CVM security group or retrying Lighthouse.
+		var fallbackErr error
+		if result, fallbackErr = ensureFirewallRulesAtDiscoveredRegion(ctx, manifest, address, target.Rules); fallbackErr != nil {
+			fmt.Fprintf(os.Stderr, "firewall %s skipped: lighthouse=%v; discovered=%v\n", target.Host.Name, err, fallbackErr)
+			return firewallHostResult{skipped: len(target.Rules)}
+		}
+	}
+	return firewallHostResult{created: result.Created, alreadyOpen: result.AlreadyOpen}
+}
+
+// ensureFirewallRulesAtDiscoveredRegion handles hosts placed outside the
 // manifest's home region. Lighthouse rules and CVM security-group rules both
 // require the actual region in their signed request, so retrying with the
 // home-region client can never succeed for those hosts.
-func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupconfig.Manifest, address string, rule cloudtencent.CreateFirewallRulesOptions) (bool, error) {
+func ensureFirewallRulesAtDiscoveredRegion(ctx context.Context, manifest setupconfig.Manifest, address string, rules []cloudtencent.CreateFirewallRulesOptions) (cloudtencent.EnsureFirewallRulesResult, error) {
 	network, err := cloudtencent.NewNetworkClient(cloudtencent.ClientOptions{
 		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
 		Region: manifest.TencentCloud.Region,
 	})
 	if err != nil {
-		return false, err
+		return cloudtencent.EnsureFirewallRulesResult{}, err
 	}
 	lighthouse, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
 		SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
 		Region: manifest.TencentCloud.Region,
 	})
 	if err != nil {
-		return false, err
+		return cloudtencent.EnsureFirewallRulesResult{}, err
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -195,23 +206,22 @@ func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupcon
 		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
 	)
 	if err != nil {
-		return false, err
+		return cloudtencent.EnsureFirewallRulesResult{}, err
 	}
 	switch instance.Kind {
 	case cloudtencent.KindLighthouse:
-		result, err := lighthouse.ForRegion(instance.Region).EnsureFirewallRule(ctx, address, rule)
-		return result.Created, err
+		return lighthouse.ForRegion(instance.Region).EnsureFirewallRules(ctx, address, rules)
 	case cloudtencent.KindCVM:
 		cvm, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
 			SecretID: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey,
 			Region: instance.Region,
 		})
 		if err != nil {
-			return false, err
+			return cloudtencent.EnsureFirewallRulesResult{}, err
 		}
-		return false, cvm.EnsureSecurityGroupRule(ctx, address, rule)
+		return cvm.EnsureSecurityGroupRules(ctx, address, rules)
 	default:
-		return false, fmt.Errorf("unsupported Tencent instance kind %q", instance.Kind)
+		return cloudtencent.EnsureFirewallRulesResult{}, fmt.Errorf("unsupported Tencent instance kind %q", instance.Kind)
 	}
 }
 

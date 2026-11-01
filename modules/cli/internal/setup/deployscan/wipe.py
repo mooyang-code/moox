@@ -1,13 +1,10 @@
 # Wipes MooX from one target host. argv[1] is a JSON request; dirs were listed in the preview and passed the delete guard.
 # Repeatable: finished steps have no effect on a rerun. The JSON result holds no file contents.
-import fcntl, glob, json, os, re, shutil, signal, stat, subprocess, sys, time
+import json, os, re, shutil, signal, stat, subprocess, sys, time
 
 CRON_MARKER = '# moox-watchdog'
 SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
-LOCK_WAIT = 300
-SCRIPT_TIMEOUT = 90
-TERM_WAIT = 20
-KILL_WAIT = 5
+KILL_WAIT = 30
 MOUNTS = set()
 
 
@@ -38,24 +35,6 @@ def remove_watchdog():
         raise Stop('watchdog_cron_failed')
 
 
-def wait_watchdog(root):
-    """Wait for a running watchdog pass. Only probes: the lock is released at once so no child inherits it."""
-    path = os.path.join(root, 'run/watchdog.lock')
-    if not os.path.exists(path):
-        return
-    deadline = time.time() + LOCK_WAIT
-    with open(path) as stream:
-        while True:
-            try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fcntl.flock(stream, fcntl.LOCK_UN)
-                return
-            except OSError:
-                if time.time() > deadline:
-                    raise Stop('watchdog_busy')
-                time.sleep(1)
-
-
 def stop_services(home):
     env = dict(os.environ)
     env.setdefault('XDG_RUNTIME_DIR', '/run/user/%d' % os.getuid())
@@ -77,24 +56,21 @@ def stop_services(home):
     systemctl('daemon-reload')
 
 
-def stop_units(root):
-    for link in sorted(glob.glob(os.path.join(root, '*', 'current'))):
-        for script in ('pause.sh', 'stop.sh'):
-            path = os.path.join(link, script)
-            if not os.path.exists(path):
-                continue
-            try:
-                run([path], timeout=SCRIPT_TIMEOUT)
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-
 def executable(pid):
     try:
         path = os.readlink('/proc/%s/exe' % pid)
     except OSError:
         return ''
     return path[:-len(' (deleted)')] if path.endswith(' (deleted)') else path
+
+
+def zombie(pid):
+    """A killed process waiting for its parent: it holds nothing and its exe link is gone, so it must not count as running."""
+    try:
+        with open('/proc/%s/stat' % pid) as stream:
+            return stream.read().rpartition(')')[2].split()[0] == 'Z'
+    except (OSError, IndexError):
+        return False
 
 
 def under(path, directories):
@@ -108,30 +84,21 @@ def inside(directories):
     return [int(p) for p in os.listdir('/proc') if p.isdigit() and int(p) != me and under(executable(p), directories)]
 
 
-def signal_all(pids, number):
-    for pid in pids:
-        try:
-            os.kill(pid, number)
-        except OSError:
-            pass
-
-
-def wait_gone(directories, seconds):
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        if not inside(directories):
-            return True
-        time.sleep(0.5)
-    return not inside(directories)
-
-
-def stop_processes(directories):
-    signal_all(inside(directories), signal.SIGTERM)
-    if wait_gone(directories, TERM_WAIT):
-        return
-    signal_all(inside(directories), signal.SIGKILL)
-    if not wait_gone(directories, KILL_WAIT):
-        raise Stop('processes_still_running')
+def kill_until_gone(find):
+    """A running watchdog pass may start processes again, so keep killing until none are left."""
+    deadline = time.time() + KILL_WAIT
+    while True:
+        pids = find()
+        if not pids:
+            return
+        if time.time() > deadline:
+            raise Stop('processes_still_running')
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.2)
 
 
 def load_mounts(path):
@@ -168,23 +135,24 @@ def remove(path):
         shutil.rmtree(path)
 
 
-def clear(directory):
+def clear(directory, keep=()):
     """Delete everything inside the directory and keep the directory."""
     if not os.path.isdir(directory) or os.path.islink(directory):
         return
     mounted = directory in MOUNTS or os.path.ismount(directory)
     for name in os.listdir(directory):
-        if name == 'lost+found' and mounted:
+        if name == 'lost+found' and mounted or name in keep:
             continue
         remove(os.path.join(directory, name))
 
 
 def outside():
+    """MooX processes running from anywhere, by pid."""
     if not os.path.isdir('/proc'):
-        return []
-    me, found = os.getpid(), set()
+        return {}
+    me, found = os.getpid(), {}
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or int(pid) == me:
+        if not pid.isdigit() or int(pid) == me or zombie(pid):
             continue
         path = executable(pid)
         name = path
@@ -196,8 +164,8 @@ def outside():
                 continue
         base = os.path.basename(name)
         if base.startswith('moox-') and base != 'moox-cli':
-            found.add(name)
-    return sorted(found)
+            found[int(pid)] = name
+    return found
 
 
 def main():
@@ -207,14 +175,18 @@ def main():
     MOUNTS.update(load_mounts(request.get('mountinfo') or '/proc/self/mountinfo'))
     try:
         remove_watchdog()
-        wait_watchdog(root)
         stop_services(home)
-        stop_units(root)
-        stop_processes([root] + directories)
-        clear(root)
+        kill_until_gone(lambda: inside([root] + directories))
+        if request.get('kill_outside'):
+            kill_until_gone(lambda: list(outside()))
+        # Packages download while the wipe runs; they belong to the next install.
+        clear(root, ('staging',))
         for directory in directories:
             clear(directory)
-        result = {'status': 'done', 'processes_outside': outside()}
+        # A watchdog pass that started before its cron line went away may have put something back.
+        kill_until_gone(lambda: inside([root] + directories))
+        clear(root, ('staging',))
+        result = {'status': 'done', 'processes_outside': sorted(set(outside().values()))}
     except Stop as stopped:
         result = {'status': 'failed', 'reason': str(stopped)}
     except (OSError, ValueError, subprocess.SubprocessError) as error:

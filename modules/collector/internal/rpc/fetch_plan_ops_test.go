@@ -218,6 +218,21 @@ func (f fakeFetchPlanControl) TimersDisabled(space string) bool { return f.disab
 
 func (fakeFetchPlanControl) PlanIssue(string) string { return "" }
 
+func (f fakeFetchPlanControl) Trigger(space string) { f.disabled["triggered:"+space] = true }
+
+func TestTriggerFetchPlanNotifiesManager(t *testing.T) {
+	service, _ := newReregisterFixture(t)
+	control := fakeFetchPlanControl{disabled: map[string]bool{}}
+	service.SetFetchPlanControl(control)
+	rsp, err := service.TriggerFetchPlan(context.Background(), &pb.TriggerFetchPlanReq{SpaceId: " crypto "})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.True(t, control.disabled["triggered:crypto"])
+	rsp, err = service.TriggerFetchPlan(context.Background(), &pb.TriggerFetchPlanReq{})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
 func TestSetFetchPlanPausedSavesSwitchAndReportsTimerState(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()

@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/gatewayio"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
@@ -49,7 +50,9 @@ type unitOperation struct {
 	Package             unitpackage.Result          `json:"package"`
 	Helper              string                      `json:"helper"`
 	HelperSHA256        string                      `json:"helper_sha256"`
-	Prefix              string                      `json:"prefix"`
+	// HostPackage 是取运行助手用的 host 包，只有下载的软件才有。
+	HostPackage unitpackage.Result `json:"host_package,omitzero"`
+	Prefix      string             `json:"prefix"`
 }
 
 func readJSON(root *os.Root, name string, max int64, out any) error {
@@ -236,6 +239,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	// exportHelper 在 control 上执行材料导出：带版本时用该版本的助手，否则用首次初始化的助手。
 	var exportHelper, exportHelperSHA string
+	var exportHost unitpackage.Result
 	var release Release
 	if options.Release != "" {
 		var exists bool
@@ -244,24 +248,24 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return result, err
 		}
 		if !exists {
-			return result, errors.New("unit deployment requires a release built by setup release build")
+			return result, errors.New("unit deployment requires a release from setup release fetch or setup release build")
 		}
 		if release.Architecture != arch {
 			return result, errors.New("release architecture does not match the target host")
 		}
-		exportHelper, exportHelperSHA = release.Helper, release.HelperSHA256
+		exportHelper, exportHelperSHA, exportHost = release.Helper, release.HelperSHA256, release.Packages["host"]
 	} else {
 		admin, exists, err := readAdminSoftware(ctx, root, controlArch)
 		if err != nil || !exists {
 			return result, errors.New("unit deployment requires the original verified admin software")
 		}
-		exportHelper, exportHelperSHA = admin.Helper, admin.HelperSHA256
+		exportHelper, exportHelperSHA, exportHost = admin.Helper, admin.HelperSHA256, admin.Packages[0]
 		if os.IsNotExist(operationErr) {
 			software, helper, err := prepareUnitSoftware(ctx, root, state, options.DeployOptions, arch, options.Profile, admin)
 			if err != nil {
 				return result, err
 			}
-			release = Release{Packages: map[string]unitpackage.Result{options.Profile: software}, Helper: helper}
+			release = Release{Packages: map[string]unitpackage.Result{options.Profile: software}, Helper: helper, HelperSHA256: admin.HelperSHA256}
 		}
 	}
 	if os.IsNotExist(operationErr) {
@@ -269,26 +273,35 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if !ok {
 			return result, fmt.Errorf("release %s has no %s software", options.Release, options.Profile)
 		}
-		helper := release.Helper
-		helperSHA, err := fileSHA(helper)
-		if err != nil {
-			return result, err
+		helper, helperSHA := release.Helper, release.HelperSHA256
+		if helper != "" {
+			if helperSHA, err = fileSHA(helper); err != nil {
+				return result, err
+			}
 		}
 		request.ExportID = options.Profile + "-" + rand.Text()
 		operation = unitOperation{Profile: options.Profile, Components: components, ConfigurationSHA256: configurationSHA, EnvironmentSHA256: environmentSHA, Version: 1, Source: request, Package: software, Helper: helper, HelperSHA256: helperSHA, Prefix: options.Profile + "-" + rand.Text()[:16]}
+		if helper == "" {
+			operation.HostPackage = exportHost
+		}
 		if err := saveJSON(state, "operation.json", operation, false); err != nil {
 			return result, err
 		}
 	}
-	verified, err := unitpackage.Inspect(ctx, operation.Package.Archive)
-	if err != nil || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.GOARCH != arch || verified.Manifest.Profile != options.Profile || !insideState(root.Name(), operation.Package.Archive) || !insideState(root.Name(), operation.Helper) {
+	if operation.Package.Archive != "" {
+		verified, err := unitpackage.Inspect(ctx, operation.Package.Archive)
+		if err != nil || verified.SHA256 != operation.Package.SHA256 || verified.Manifest.GOARCH != arch || verified.Manifest.Profile != options.Profile || !insideState(root.Name(), operation.Package.Archive) {
+			return result, errors.New("original unit software changed or does not match target architecture")
+		}
+		operation.Package = verified
+	} else if operation.Package.Manifest.Profile != options.Profile {
 		return result, errors.New("original unit software changed or does not match target architecture")
 	}
-	helperSHA, err := fileSHA(operation.Helper)
-	if err != nil || helperSHA != operation.HelperSHA256 || options.Profile == "host" && !slices.ContainsFunc(verified.Manifest.Files, func(file unitpackage.File) bool {
-		return file.Path == "bin/moox-runtime" && file.SHA256 == "sha256:"+helperSHA
-	}) {
-		return result, errors.New("unit runtime helper differs from its verified software")
+	if operation.Helper != "" {
+		helperSHA, err := fileSHA(operation.Helper)
+		if err != nil || !insideState(root.Name(), operation.Helper) || helperSHA != operation.HelperSHA256 || options.Profile == "host" && !packageHasHelper(operation.Package, helperSHA) {
+			return result, errors.New("unit runtime helper differs from its verified software")
+		}
 	}
 	if operation.Export == nil {
 		gateway, err := gatewayio.OpenWithIdentity(ctx, snapshot, filepath.Join(options.OperatorDirectory, "gateway-client.yaml"), options.SSH)
@@ -310,7 +323,11 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return result, errors.New("config_changed")
 		}
-		if err := uploadFile(ctx, source, manifest.Paths.DeployRoot, exportHelper, remoteHelper, exportHelperSHA, 0o700); err != nil {
+		exportArchive, err := ensureArtifact(ctx, source, artifactDownload{options: options.DeployOptions, root: manifest.Paths.DeployRoot}, exportHost)
+		if err != nil {
+			return result, err
+		}
+		if remoteHelper, err = ensureHelper(ctx, source, manifest.Paths.DeployRoot, exportHelper, exportArchive, exportHelperSHA); err != nil {
 			return result, err
 		}
 		if err := uploadBytes(ctx, source, manifest.Paths.DeployRoot, raw, remoteRequest, 0o600); err != nil {
@@ -376,10 +393,11 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err != nil {
 			return result, err
 		}
+		cleanupExport(ctx, target, source, manifest.Paths.DeployRoot, operation.Source.ExportID)
 		return result, saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true)
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
-	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: manifest.EventBusURLFor(host.Name), EventBusAdvertise: setupconfig.EventBusAdvertiseURL(manifest.EventBusHost().Address, manifest.EventBus.Port)}
+	prepare := unitinstall.PrepareOptions{Archive: artifactPath(manifest.Paths.DeployRoot, operation.Package), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: manifest.EventBusURLFor(host.Name), EventBusAdvertise: setupconfig.EventBusAdvertiseURL(manifest.EventBusHost().Address, manifest.EventBus.Port)}
 	overrideHashes := map[string]string{}
 	if len(configuration) > 0 {
 		local := filepath.Join(state.Name(), "configuration.yaml")
@@ -425,9 +443,20 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err := prepareTarget(ctx, target, manifest.Paths.DeployRoot, prepare.UnitRoot); err != nil {
 		return result, err
 	}
-	if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, operation.Package.Archive, prepare.Archive, strings.TrimPrefix(prepare.SHA256, "sha256:"), 0o600); err != nil {
+	download := artifactDownload{options: options.DeployOptions, root: manifest.Paths.DeployRoot}
+	if options.Release != "" {
+		download.limit = fetchunit.UpgradeRateLimit
+	}
+	if _, err := ensureArtifact(ctx, target, download, operation.Package); err != nil {
 		return result, err
 	}
+	hostArchive := ""
+	if operation.Helper == "" {
+		if hostArchive, err = ensureArtifact(ctx, target, download, operation.HostPackage); err != nil {
+			return result, err
+		}
+	}
+	var pack []packFile
 	for _, group := range []struct {
 		local, remote string
 		files         []hostbundle.File
@@ -440,22 +469,30 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		}
 		files = append(files, hostbundle.File{Path: group.metadata, SHA256: metadataSHA})
 		for _, file := range files {
-			if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, filepath.Join(group.local, file.Path), path.Join(group.remote, file.Path), file.SHA256, 0o600); err != nil {
+			content, err := os.ReadFile(filepath.Join(group.local, file.Path))
+			if err != nil {
 				return result, err
 			}
+			if sha(content) != file.SHA256 {
+				return result, errors.New("local deployment artifact changed before upload")
+			}
+			pack = append(pack, packFile{path.Join(group.remote, file.Path), content})
 		}
 	}
 	if len(configuration) > 0 {
-		if err := uploadBytes(ctx, target, manifest.Paths.DeployRoot, configuration, path.Join(remoteBase, "configuration.yaml"), 0o600); err != nil {
-			return result, err
-		}
+		pack = append(pack, packFile{path.Join(remoteBase, "configuration.yaml"), configuration})
 	}
-	remoteHelper := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/runtime", operation.HelperSHA256, "moox-runtime")
-	if err := uploadFile(ctx, target, manifest.Paths.DeployRoot, operation.Helper, remoteHelper, operation.HelperSHA256, 0o700); err != nil {
+	defer func() {
+		for _, file := range pack {
+			clear(file.raw)
+		}
+	}()
+	remoteHelper, err := ensureHelper(ctx, target, manifest.Paths.DeployRoot, operation.Helper, hostArchive, operation.HelperSHA256)
+	if err != nil {
 		return result, err
 	}
 	remoteRequest := path.Join(remoteBase, "request.json")
-	if err := uploadBytes(ctx, target, manifest.Paths.DeployRoot, raw, remoteRequest, 0o600); err != nil {
+	if err := uploadPack(ctx, target, manifest.Paths.DeployRoot, append(pack, packFile{remoteRequest, raw})); err != nil {
 		return result, err
 	}
 	if err := snapshot.VerifyUnchanged(); err != nil {
@@ -481,6 +518,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return HostResult{}, errors.New("deployed unit component is not ready")
 		}
 	}
+	cleanupExport(ctx, target, source, manifest.Paths.DeployRoot, operation.Source.ExportID)
 	// 主机单元还要装看护，由命令层在看护装好后记录。
 	if options.Profile != "host" {
 		if err := saveJSON(state, unitReadyFile, map[string]string{"stage": result.Stage}, true); err != nil {

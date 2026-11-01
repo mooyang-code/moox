@@ -93,41 +93,19 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### 步骤 8 的已知限制
 
-`setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
+`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
 
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略）加上 `moox.toml` 里默认的因子任务。Collector 首次启动会把随发布安装的 `collector/config/collection-tasks.yaml` 写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间，默认启用）和 A 股（stockcn，默认停用）；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector kline status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间）和 A 股（stockcn），都是停用状态，`setup start --space-id <空间>` 才启用，安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector kline status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
 
 ### 默认展示策略（合约双均线）
 
-给用户看的默认策略是 [`examples/strategies/dual_ma_swap_1m.yaml`](../../../examples/strategies/dual_ma_swap_1m.yaml)：基于币安合约 1m 因子任务（`ftask_swap_1m`）的 5/10 简单均线，
-对任务里的**全部合约**逐个判断——快线 `ma__5` 在慢线 `ma__10` 之上的都持有（等权，单个最多 5%，较少时剩余留现金），落到慢线之下的下一期被剔除；只做多，
-不挂账户（观察实例，只计算目标权重、不投递）。它依赖合约任务里有快、慢线两个成员 `{ factor = "ma", params = { window = 5 } }`（列 `ma__5`）与 `{ factor = "ma", params = { window = 10 } }`（列 `ma__10`），
-`moox.toml.example` 的默认合约任务已包含；已有任务缺这两个成员时，往 `moox.toml` 的 `ftask_swap_1m` 里加上再 `setup factors`。
+`setup start --space-id crypto` 自动创建：[`examples/strategies/dual_ma_swap_1m.yaml`](../../../examples/strategies/dual_ma_swap_1m.yaml)，绑定合约 1m 因子任务 `ftask_swap_1m`，固定 ID `default_dual_ma_swap_1m`，观察实例，不挂账户、只计算不投递。重复运行不会重复创建。
 
-创建要等因子任务**进入运行**且结果视图覆盖够 `min_age_bars`（15 根，即任务开始出结果后约 15 分钟）；任务刚建、视图覆盖不足时 `strategy validate` 会提示还缺多少数据，启用也会被拒绝。依次执行（在主仓库根目录，用 `moox-cli gateway call`）：
-
-```bash
-S="$CLI strategy"
-# 1) 试算：不落库，确认列都存在且能在最新一期求值（返回里的 trial 有内容才算通过）
-$S validate --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml --factor-task-id ftask_swap_1m
-# 2) 创建定义（名称取自 DSL 的 name），记下返回的 strategy_id；之后改 DSL 要先停用实例，再 strategy update，再启用（启用中的实例引用定义时更新会被拒绝）
-$S create --dsl-file $WT/examples/strategies/dual_ma_swap_1m.yaml
-# 3) 创建观察实例（不挂账户）并启用，记下 instance_id
-$S instance create --strategy-id <strategy_id> --factor-task-id ftask_swap_1m
-$S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
-```
-
-启用后实例自动 init、start 并（无账户）自动 confirm 进入运行；`strategy result list --instance-id <instance_id>` 看每期结果，管理台的策略页能看到它。第一期是 `skipped(previous_version_unknown)`（用到 `bars[-1]` 需要上一根的版本证据），从第二期起正常求值；每期按条件筛选，满足的合约进入目标、不满足的记 `filtered`。注意 zsh 里把命令存进变量再 `$CALL` 调用不会分词，用函数 `call() { $CLI gateway call trpc.moox.strategy.StrategyMgr --space crypto "$@"; }`。一个因子任务只能被一个实例关联，且创建后不能改、不能删，所以这个任务留给默认策略，别的实例另建因子任务。
-
-不在默认配置里、要另外做的事（汇报时列给用户，并附命令）：
-
-- 长历史导入（例如永续 501 个标的的 5m）：见 [`initial-import.md`](initial-import.md)。导入前不要启用依赖长回看的因子任务；默认的 1m 因子任务在历史不足时按“降级/预热”运行，不影响实时链路。
-- 迁移来的策略实例及其参数表：见 [`strategy-migration.md`](strategy-migration.md)，参数放 `local/`，不进仓库。
-- 手工建的采集任务和标签、自定义因子任务。
+快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限 30 分钟或 20 个周期，所以约 15 分钟内看到第一个结果。这个因子任务已绑给用户自己的实例时跳过默认示例，要改绑先停用，再 `strategy instance update`。
 
 ## 6. 验收
 

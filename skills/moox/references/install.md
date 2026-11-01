@@ -49,6 +49,7 @@ echo "下载源: $SRC"
 - **有没有旧部署**（在填配置之前问）：“目标机器上有旧部署吗？要保留数据吗？”
   - 要保留：不走 `config init`，按下面“保留数据”一节处理。
   - 不保留或不清楚：继续往下，第 3 节会实际检测。
+- **启动哪个空间**：加密货币用 `crypto`（需要海外机），A 股用 `stockcn`（需要配 `[scf_plan]`）。采集任务默认停用，安装时只启动选定的空间。
 - **告警渠道**：企业微信或飞书群机器人的 Webhook 地址（可选，没有可以部署后再在管理台添加）。
 
 ## 1. 下载发布产物
@@ -57,7 +58,8 @@ echo "下载源: $SRC"
 
 | 文件 | 说明 |
 | --- | --- |
-| `moox-bundle_${VER}_linux_amd64.tar.gz` | 部署产物包：仓库文件快照 + 预编译的 linux/amd64 服务器程序 |
+| `moox-bundle_${VER}_linux_amd64.tar.gz` | 部署产物包：仓库文件快照和附件清单，约 12MB，不含服务器程序 |
+| `moox-unit-<单元>_${VER}_linux_amd64.tar.gz` | 各部署单元，目标机自己并行下载，不用手工下载 |
 | `moox-cli_${VER}_darwin_arm64.tar.gz` / `darwin_amd64` / `linux_amd64` / `linux_arm64` / `windows_amd64.zip` | 本机命令行 |
 | `SHA256SUMS` | 校验和 |
 
@@ -67,7 +69,7 @@ echo "下载源: $SRC"
 - CNB：`https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}/<文件名>`
 
 ```bash
-VER=v0.4.4
+VER=v0.5.0
 OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64
 GITHUB=https://github.com/mooyang-code/moox/releases/download/${VER}
 CNB=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
@@ -91,7 +93,7 @@ cd moox-${VER}
 ./bin/moox-cli --help
 ```
 
-之后**所有命令都在 `moox-${VER}` 目录里执行**：`moox.toml` 写在这里，`setup` 命令从这里读取预编译程序（`bin/linux-amd64`）和公共模板。
+之后**所有命令都在 `moox-${VER}` 目录里执行**：`moox.toml` 写在这里，目标机按产物包清单自己下载单元包，测速选源，每台最多 4 条连接，校验 SHA256；都下载不了时由这台电脑下载再推送。
 产物包里有 `moox-bundle.json`，CLI 据此识别产物包，不需要 git、Go、Docker 或 Node。
 
 ## 2. 生成配置（用户在自己的浏览器里填写）
@@ -156,27 +158,39 @@ cd moox-${VER}
   - 预览里 `unknown_entries` 不为空时，把这些条目告诉用户：它们在部署目录里，也会被删除。
   - 预览里 `skipped_dirs` 不为空时也告诉用户：这些目录看不到 MooX 的文件，不会清除。
   - 中途失败后再运行一次会接着清：重新取预览，范围变小不用再问，范围变大要重新询问。
+  - 云上的采集计划函数默认不删：同一云账号可能有其他环境。要清理时加 `--clean-functions` 预览，用户确认后再带 `--clean-functions --expect-functions <functions_digest>`。
   - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
 - **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
 
 ## 4. 部署
 
-**顺序由 CLI 给出，不要自己推算。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表（有没有海外机、因子机，管理台用什么证书，上次做到哪一步都算在内），把整份列表放进部署计划给用户确认一次，然后从上到下逐条运行。
+**主线是一条命令，用户同意后后台运行：**
 
-- 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。耗时较长的命令放后台运行。
-- 中断或换一次会话后，重新运行 `setup validate`，从新的 `next_steps` 继续；已做完的步骤不会再列出来。`resume` 时不要从头开始。
-- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
-- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
+```bash
+./bin/moox-cli setup install --space-id <空间>              # 只读预检，把结果告诉用户
+./bin/moox-cli setup install --space-id <空间> --yes        # 空机直接执行
+./bin/moox-cli setup install --space-id <空间> --yes --wipe <预检里的 wipe.digest>   # 有旧部署，用户确认清除后
+```
 
-大致顺序，以 `next_steps` 为准：防火墙 → admin → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → `setup init` → 海外采集和交易 → 因子机 → 配置备份 → 验收。
+- 预检输出路线、清除范围、每台的单元和下载源是否可达。下载源都不通时，部署阶段由这台电脑推送，只是慢。
+- 带 `--yes` 后下载、清除、防火墙同时进行，再按依赖并行部署、初始化、启动空间、备份配置、验收。清除时下载的软件包保留。
+- 进度逐行 JSON 输出到标准错误，后台运行，结束或失败时再汇报。
+- 中途失败修好后重跑同一条命令，已完成的步骤跳过；已经装过的部分不需要再带 `--wipe`。
+- 有实盘账户或查不了 Trade 时加 `--accept-trade-risk`，目录外有 MooX 进程时加 `--kill-outside`，都要用户明确同意。
 
-元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
+**分步命令用于修复。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表，顺序和 `setup install` 用同一份定义，不要自己推算。
+
+- 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。
+- `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
+- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
+
+元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功。
 
 ## 5. 初始化
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
-`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
+`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对，已经做过的不会重复写入。因子任务和默认策略在 `setup start` 里按空间导入。
 
 管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
@@ -193,7 +207,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
 2. `./bin/moox-cli collector status --space-id crypto`：各数据集 `level: ok`。
 3. 告诉用户管理台地址 `https://<管理台地址>:9527`、管理员用户名（密码在用户自己填的配置里），以及默认已经在跑的内容：
-   币安现货与合约 1m K 线采集；有因子机和海外机时还有两个 1m 因子任务。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
+   用户选的空间。crypto 是币安现货与合约 1m K 线采集；有因子机时还有因子任务和默认示例策略（合约 1m 双均线，观察实例，不投递）。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。
 4. 列出还没做、需要用户决定的事：长历史导入（[`initial-import.md`](initial-import.md)）、自定义因子（[`factor-dsl.md`](factor-dsl.md)）、自定义策略。
 
 ## 保留数据
@@ -218,7 +232,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 下载新版本的产物包与 CLI，在新目录里放入原来的 `moox.toml`（或 `config restore` 从管理台取回），然后：
 
 ```bash
-./bin/moox-cli setup release build --release <版本ID>          # 用产物包里的程序生成版本制品
+./bin/moox-cli setup release fetch --release <版本ID>          # 用产物包里的程序生成版本制品
 ./bin/moox-cli setup bootstrap --stage control --release <版本ID>
 ./bin/moox-cli setup deploy-host --host <主机ID> --release <版本ID>      # 其余主机与单元同理，按 native-release.md 的顺序
 ```
@@ -239,6 +253,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
 | `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
+| `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |
 | `browser_trust_manual` | 信任要管理员授权，没有终端或安装失败 | 把错误里的命令交给用户在自己的终端运行，不影响继续安装 |
@@ -248,7 +263,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `bootstrap_interrupted` | 目标机上一次部署没结束，这次请求不同 | 换回原配置重跑同一条命令，恢复后再改 |
 | `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |
 | `restart_unverified` | 已重启但读不到状态 | 用 `setup logs` 确认 |
-| `collection_not_started` | 有启用的采集任务，但到超时还没有采集计划，或 collector-stream 不在线 | 看 `collector kline status` 给出的原因，不要删任务、不要手工改数据 |
+| `collection_not_started` | 还没运行 `setup start`（任务默认停用）；或到超时还没有采集计划、collector-stream 不在线 | 看 `collector kline status` 给出的原因，不要删任务、不要手工改数据 |
 | `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector kline status` 和 `setup logs --component collector-stream` |
 | `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --component factor-engine` |
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |
@@ -261,11 +276,16 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `wipe_failed`、`wipe_interrupted`、`wipe_incomplete` | 清除没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |
 | `delete_target_rejected` | 部署目录是系统目录或家目录，或看不到 MooX 标记 | 核对 `moox.toml` 的 `[paths]`，不要手工删除 |
-| `bundle_incomplete` | 产物包不完整，没有清除任何主机 | 重新下载产物包 |
+| `wipe_outside_processes` | 部署目录之外还有 MooX 进程 | 把预览里的路径告诉用户，用户确认后加 `--kill-outside` 再清除 |
+| `functions_unread`、`functions_delete_failed` | `--clean-functions` 读不了某个地域，或没有删完 | 检查云账号权限后重跑 |
+| `bundle_incomplete` | 产物包清单不完整，或缺这个单元 | 重新下载产物包 |
+| `bundle_version_mismatch` | 产物包和 moox-cli 不是同一版本 | 下载同一版本的 CLI 和产物包 |
+| `target_arch_unsupported` | 发布只有 linux/amd64，目标机架构不同 | 换 amd64 主机 |
+| `download_failed` | 目标机和这台电脑都下载不了单元包 | 检查网络后重跑同一条命令，已下载的不会重下 |
 | `private material directory ownership or permissions are invalid` | 本机私有目录权限不对（CLI 会自动收紧属于自己的目录） | 按报错里的路径和命令处理 |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | 系统 `known_hosts` 有旧记录，或机器确实换了 | 先跑 `setup validate`，通过说明 MooX 记录的指纹没变；不自己删记录，向用户说明 |
 | `host_key_unknown` | 某台服务器的主机指纹没确认（例如后来新加的主机） | 请用户经可信渠道（腾讯云控制台登录该机执行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`）核对指纹后，执行 `setup trust-host --host <主机ID> --fingerprint <指纹>` |
 | `ssh_auth_failed` | 免密登录没开通或公钥被删 | 让用户在终端执行 `ssh-copy-id -i ~/.ssh/moox_ed25519.pub -p <端口> <用户>@<地址>` |
 | 腾讯云接口报权限不足 | 子用户缺策略 | 核对子用户的 6 个预设策略 |
-| `setup init` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
+| `setup start` 报某个因子任务的源数据集不存在 | 该任务指向还没创建的采集数据集 | 先从 `moox.toml` 去掉或先建采集任务 |
 | 产物包只有 linux/amd64 | ARM 服务器暂不支持 | 换 x86_64 服务器 |

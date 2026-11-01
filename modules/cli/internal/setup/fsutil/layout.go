@@ -23,7 +23,7 @@ func ValidateUnitRoots(deployment string, units ...string) error {
 		}
 		first := strings.Split(relative, string(filepath.Separator))[0]
 		switch first {
-		case "bootstrap", "bootstrap-input", "identity", "run":
+		case "bootstrap", "bootstrap-input", "identity", "run", "staging":
 			return errors.New("unit roots must not occupy deployment state namespaces")
 		}
 		for _, previous := range units[:i] {

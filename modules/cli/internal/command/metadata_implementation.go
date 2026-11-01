@@ -11,10 +11,12 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 )
@@ -377,97 +379,182 @@ func runMetadataImport(ctx context.Context, gateway gatewayclient.Invoker, calls
 	return summary, nil
 }
 
+// metadataApplyConcurrency 是元数据导入同时进行的调用数。
+const metadataApplyConcurrency = 16
+
+// runMetadataApply 按依赖顺序逐类导入，同类资源并发。列要组内串行：新列的排序依赖写入顺序，
+// 所以按 View 和数据集分组，每组只查一次列表。父分组要先于子分组写入。
 func runMetadataApply(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall) (metadataImportSummary, error) {
 	summary := metadataImportSummary{Status: "ok", Service: metadataServiceName, Planned: len(calls), Resources: countMetadataCalls(calls)}
-	for _, call := range calls {
-		probe := call.Exists
-		switch call.Resource {
-		case "dataset_columns":
-			column, ok := call.Request.(*pb.UpsertDatasetColumnReq)
-			if !ok || column.GetColumn() == nil {
-				return summary, fmt.Errorf("invalid dataset column apply call")
-			}
-			probe = &metadataExistsProbe{Method: "ListDatasetColumns", Request: &pb.ListDatasetColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), DatasetId: column.GetColumn().GetDatasetId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListDatasetColumnsRsp{}}
-		case "view_columns":
-			column, ok := call.Request.(*pb.UpsertViewColumnReq)
-			if !ok || column.GetColumn() == nil {
-				return summary, fmt.Errorf("invalid view column apply call")
-			}
-			probe = &metadataExistsProbe{Method: "ListViewColumns", Request: &pb.ListViewColumnsReq{SpaceId: column.GetColumn().GetSpaceId(), ViewId: column.GetColumn().GetViewId(), Page: &commonpb.Page{Page: 1, Size: metadataApplyPageSize}}, Response: &pb.ListViewColumnsRsp{}}
-		}
-		if probe == nil {
-			return summary, fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
-		}
-		found, actual, err := findMetadataApplyResource(ctx, gateway, call.Resource, probe, call.Request)
-		if err != nil {
-			return summary, err
-		}
-		if !found {
-			if err := postStorage(ctx, gateway, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
-				return summary, err
-			}
+	var mu sync.Mutex
+	record := func(applied bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if applied {
 			summary.Applied++
-			continue
-		}
-		if call.Resource == "tags" {
-			summary.Skipped++
-			summary.Unchanged++
-			continue
-		}
-		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
-			return summary, err
+			return
 		}
 		summary.Skipped++
 		summary.Unchanged++
 	}
+	for _, stage := range metadataApplyStages(calls) {
+		group, groupCtx := errgroup.WithContext(ctx)
+		group.SetLimit(metadataApplyConcurrency)
+		for _, batch := range stage {
+			group.Go(func() error {
+				if batch[0].Resource == "dataset_columns" || batch[0].Resource == "view_columns" {
+					return applyMetadataColumns(groupCtx, gateway, batch, record)
+				}
+				return applyMetadataCall(groupCtx, gateway, batch[0], record)
+			})
+		}
+		if err := group.Wait(); err != nil {
+			return summary, err
+		}
+	}
 	return summary, nil
 }
 
-func findMetadataApplyResource(
-	ctx context.Context,
-	gateway gatewayclient.Invoker,
-	resource string,
-	probe *metadataExistsProbe,
-	expectedRequest proto.Message,
-) (bool, proto.Message, error) {
-	switch resource {
-	case "dataset_columns":
-		base := probe.Request.(*pb.ListDatasetColumnsReq)
-		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
-			current := &metadataExistsProbe{
-				Method: probe.Method,
-				Request: &pb.ListDatasetColumnsReq{
-					SpaceId: base.GetSpaceId(), DatasetId: base.GetDatasetId(),
-					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
-				},
-				Response: &pb.ListDatasetColumnsRsp{},
-			}
-			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, gateway, resource, current, expectedRequest)
-			if err != nil || found || !hasMore {
-				return found, actual, err
-			}
+// metadataApplyStages 把调用分成按顺序执行的阶段，每个阶段里的批次可以并发，批次内串行。
+func metadataApplyStages(calls []metadataImportCall) [][][]metadataImportCall {
+	var stages [][][]metadataImportCall
+	for start := 0; start < len(calls); {
+		end := start
+		for end < len(calls) && calls[end].Resource == calls[start].Resource {
+			end++
 		}
-	case "view_columns":
-		base := probe.Request.(*pb.ListViewColumnsReq)
-		for page := uint32(1); page <= metadataApplyMaxPages; page++ {
-			current := &metadataExistsProbe{
-				Method: probe.Method,
-				Request: &pb.ListViewColumnsReq{
-					SpaceId: base.GetSpaceId(), ViewId: base.GetViewId(),
-					Page: &commonpb.Page{Page: page, Size: metadataApplyPageSize},
-				},
-				Response: &pb.ListViewColumnsRsp{},
+		same := calls[start:end]
+		start = end
+		switch same[0].Resource {
+		case "dataset_columns", "view_columns":
+			index := map[string]int{}
+			var stage [][]metadataImportCall
+			for _, call := range same {
+				key := metadataColumnOwner(call)
+				position, seen := index[key]
+				if !seen {
+					position = len(stage)
+					index[key] = position
+					stage = append(stage, nil)
+				}
+				stage[position] = append(stage[position], call)
 			}
-			found, actual, hasMore, err := inspectMetadataApplyPage(ctx, gateway, resource, current, expectedRequest)
-			if err != nil || found || !hasMore {
-				return found, actual, err
+			stages = append(stages, stage)
+		case "field_groups":
+			var parents, children [][]metadataImportCall
+			for _, call := range same {
+				if request, ok := call.Request.(*pb.CreateFieldGroupReq); ok && request.GetFieldGroup().GetParentGroupId() != "" {
+					children = append(children, []metadataImportCall{call})
+				} else {
+					parents = append(parents, []metadataImportCall{call})
+				}
 			}
+			stages = append(stages, parents)
+			if len(children) != 0 {
+				stages = append(stages, children)
+			}
+		default:
+			stage := make([][]metadataImportCall, 0, len(same))
+			for _, call := range same {
+				stage = append(stage, []metadataImportCall{call})
+			}
+			stages = append(stages, stage)
 		}
-	default:
-		found, actual, _, err := inspectMetadataApplyPage(ctx, gateway, resource, probe, expectedRequest)
-		return found, actual, err
 	}
-	return false, nil, fmt.Errorf("metadata %s probe exceeds %d pages", resource, metadataApplyMaxPages)
+	return stages
+}
+
+// metadataColumnOwner 返回列所属的数据集或 View；格式不对的请求返回空，到执行时报错。
+func metadataColumnOwner(call metadataImportCall) string {
+	switch request := call.Request.(type) {
+	case *pb.UpsertDatasetColumnReq:
+		return request.GetColumn().GetSpaceId() + "\x00" + request.GetColumn().GetDatasetId()
+	case *pb.UpsertViewColumnReq:
+		return request.GetColumn().GetSpaceId() + "\x00" + request.GetColumn().GetViewId()
+	}
+	return ""
+}
+
+func applyMetadataCall(ctx context.Context, gateway gatewayclient.Invoker, call metadataImportCall, record func(bool)) error {
+	if call.Exists == nil {
+		return fmt.Errorf("apply does not support resource %s without read probe", call.Resource)
+	}
+	found, actual, _, err := inspectMetadataApplyPage(ctx, gateway, call.Resource, call.Exists, call.Request)
+	if err != nil {
+		return err
+	}
+	return finishMetadataCall(ctx, gateway, call, found, actual, record)
+}
+
+func finishMetadataCall(ctx context.Context, gateway gatewayclient.Invoker, call metadataImportCall, found bool, actual proto.Message, record func(bool)) error {
+	if !found {
+		if err := postStorage(ctx, gateway, metadataServiceName, call.Method, call.Request, call.Response); err != nil {
+			return err
+		}
+		record(true)
+		return nil
+	}
+	if call.Resource != "tags" {
+		if err := verifyMetadataResource(call.Resource, call.Request, actual); err != nil {
+			return err
+		}
+	}
+	record(false)
+	return nil
+}
+
+// applyMetadataColumns 处理一个数据集或 View 的全部列：查一次列表，再逐列比对，缺的按顺序写入。
+func applyMetadataColumns(ctx context.Context, gateway gatewayclient.Invoker, calls []metadataImportCall, record func(bool)) error {
+	pages, err := listMetadataColumns(ctx, gateway, calls[0])
+	if err != nil {
+		return err
+	}
+	for _, call := range calls {
+		found, actual := false, proto.Message(nil)
+		for _, page := range pages {
+			if found, actual = applyProbeResult(call.Resource, page, call.Request); found {
+				break
+			}
+		}
+		if err := finishMetadataCall(ctx, gateway, call, found, actual, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// listMetadataColumns 读完列的全部分页。
+func listMetadataColumns(ctx context.Context, gateway gatewayclient.Invoker, call metadataImportCall) ([]*metadataExistsProbe, error) {
+	var pages []*metadataExistsProbe
+	for page := uint32(1); page <= metadataApplyMaxPages; page++ {
+		current := &metadataExistsProbe{}
+		number := &commonpb.Page{Page: page, Size: metadataApplyPageSize}
+		switch request := call.Request.(type) {
+		case *pb.UpsertDatasetColumnReq:
+			if request.GetColumn() == nil {
+				return nil, errors.New("invalid dataset column apply call")
+			}
+			current.Method, current.Response = "ListDatasetColumns", &pb.ListDatasetColumnsRsp{}
+			current.Request = &pb.ListDatasetColumnsReq{SpaceId: request.GetColumn().GetSpaceId(), DatasetId: request.GetColumn().GetDatasetId(), Page: number}
+		case *pb.UpsertViewColumnReq:
+			if request.GetColumn() == nil {
+				return nil, errors.New("invalid view column apply call")
+			}
+			current.Method, current.Response = "ListViewColumns", &pb.ListViewColumnsRsp{}
+			current.Request = &pb.ListViewColumnsReq{SpaceId: request.GetColumn().GetSpaceId(), ViewId: request.GetColumn().GetViewId(), Page: number}
+		default:
+			return nil, fmt.Errorf("invalid %s apply call", call.Resource)
+		}
+		_, _, hasMore, err := inspectMetadataApplyPage(ctx, gateway, call.Resource, current, call.Request)
+		if err != nil {
+			return nil, err
+		}
+		pages = append(pages, current)
+		if !hasMore {
+			return pages, nil
+		}
+	}
+	return nil, fmt.Errorf("metadata %s probe exceeds %d pages", call.Resource, metadataApplyMaxPages)
 }
 
 func inspectMetadataApplyPage(

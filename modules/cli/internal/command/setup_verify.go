@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/verify"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -31,7 +32,7 @@ func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 		Short: "验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读",
 		Long: `按已启用的任务逐项检查，等到通过或超时。开头没有计划、第一根 K 线还没收盘时算等待，到超时才失败。
 K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口靠之后补采。因子预热期状态是 degraded，也算通过。
-没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有任何 K 线任务时直接失败，任务都停用时跳过。
+没有部署因子引擎、没有启用的策略实例时，对应的检查跳过。空间没有任何 K 线任务，或任务都停用（还没运行 setup start）时直接失败。
 休市时 K 线检查跳过，因子只看最近一期没有失败。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -46,25 +47,14 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 			if err := resolveSetupUnitOptions(snapshot, "", &options); err != nil {
 				return err
 			}
-			gateway, err := openCommandGateway(cmd.Context(), file, snapshot)
-			if err != nil {
+			checks, err := runSetupVerifySpace(cmd.Context(), file, snapshot, options, spaceID, timeout)
+			if err != nil && checks == nil {
 				return err
 			}
-			defer gateway.Close()
-			reader := setupVerifyReader{gateway: gateway, spaceID: spaceID, factorDeployed: len(snapshot.Manifest.ComponentHost("factor-engine")) != 0}
-			checks, err := runSetupVerify(cmd.Context(), reader, timeout, setupVerifyPoll)
-			if err != nil {
-				return err
+			if writeErr := writeSetupJSON(cmd, map[string]any{"space_id": spaceID, "checks": checks}); writeErr != nil {
+				return writeErr
 			}
-			if err := writeSetupJSON(cmd, map[string]any{"space_id": spaceID, "checks": checks}); err != nil {
-				return err
-			}
-			for _, check := range checks {
-				if check.Status == verify.Fail {
-					return fmt.Errorf("%s: %s。先看 moox-cli collector kline status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID)
-				}
-			}
-			return unitdeploy.MarkStep(options.StateDirectory, unitdeploy.VerifiedStep(spaceID))
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -73,6 +63,26 @@ K 线缺失不超过 5% 算通过：到截止时间就带缺口结算，缺口�
 	cmd.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录（默认和 bootstrap 相同）")
 	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	return cmd
+}
+
+// runSetupVerifySpace 验收一个空间，通过时写记录。检查项有失败时同时返回 checks 和错误。
+func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string, timeout time.Duration) ([]verify.Check, error) {
+	gateway, err := openCommandGateway(ctx, file, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	defer gateway.Close()
+	reader := setupVerifyReader{gateway: gateway, spaceID: spaceID, factorDeployed: len(snapshot.Manifest.ComponentHost("factor-engine")) != 0}
+	checks, err := runSetupVerify(ctx, reader, timeout, setupVerifyPoll)
+	if err != nil {
+		return nil, err
+	}
+	for _, check := range checks {
+		if check.Status == verify.Fail {
+			return checks, fmt.Errorf("%s: %s。先看 moox-cli collector kline status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID)
+		}
+	}
+	return checks, unitdeploy.MarkStep(options.StateDirectory, unitdeploy.VerifiedStep(spaceID))
 }
 
 // setupVerifySource 读一轮验收的数据。baseline 是本次验收开始时各因子任务的最后一期。

@@ -335,14 +335,17 @@
 | `setup verify` | 验收一个空间：K 线入库、因子前进、策略在运行才算通过，只读 |
 | `setup logs` | 只读查看组件在主机上的日志，包括失败回滚的发布目录，密钥字段已遮掉 |
 | `setup inspect-scf` | 检查腾讯云函数网络配置 |
+| `setup install` | 一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检） |
 | `setup invoke-scf` | 直接调用腾讯云函数 |
 | `setup metadata-import` | 通过 Storage SSH 隧道导入选定业务空间 |
 | `setup package inspect` | 校验部署包的组件边界、平台、文件与摘要 |
 | `setup reboot-host` | 重启无响应的腾讯云主机（默认只预览，--yes 才重启） |
 | `setup release build` | 在本机构建并打包一个版本的全部纯 Go 单元 |
+| `setup release fetch` | 用当前产物包登记一个版本，目标机部署时下载 |
 | `setup remove-host` | 从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览） |
 | `setup render-runtime-config` | 从 moox.toml 渲染 Egress/Collector 运行配置 |
 | `setup restart` | 重启主机上的单个组件（默认只预览，--yes 才重启） |
+| `setup start` | 启动一个空间：启用采集任务，导入因子，创建默认示例策略 |
 | `setup status` | 检查初始化记录状态 |
 | `setup storage-auth` | 把 Storage 内部写入身份保存到本机操作员目录（导入、导出数据用，只需一次） |
 | `setup sync-deployments` | 把 moox.toml 中指定主机的组件部署同步给 Admin（生成网关路由；默认只预览，--yes 才执行） |

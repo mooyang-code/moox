@@ -56,10 +56,18 @@ type setupDeps struct {
 	ensureRelayFirewall   func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
 	scanDeployment   func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
-	wipeHost         func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
+	wipeHost         func(context.Context, setupconfig.Host, string, []string, bool) (deployscan.HostResult, error)
 	restartComponent func(context.Context, setupRestartTarget) (json.RawMessage, error)
-	readLogs         func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
-	trialPackage     func(context.Context, unitdeploy.DeployOptions) error
+	openStart        func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error)
+	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
+	backupConfig func(context.Context, string) error
+	// checkDownload、prefetch、localReachable 连目标机和下载源，测试里替换。
+	checkDownload  func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) (bool, error)
+	prefetch       func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) error
+	localReachable func(context.Context, unitdeploy.DeployOptions) bool
+	verifySpace    func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
+	regionCloud    func(setupconfig.Manifest, string) (setupFunctionCloud, error)
+	readLogs       func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 }
 
 func init() {
@@ -78,6 +86,8 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupWipeCommand(deps),
 		newSetupLogsCommand(deps),
 		newSetupRestartCommand(deps),
+		newSetupStartCommand(deps),
+		newSetupInstallCommand(deps),
 		newSetupVerifyCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
@@ -812,7 +822,7 @@ func defaultSetupDeps() setupDeps {
 		wipeHost:              defaultSetupWipeHost,
 		readLogs:              defaultSetupReadLogs,
 		restartComponent:      defaultSetupRestartComponent,
-		trialPackage:          defaultSetupTrialPackage,
+		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		apply:                 defaultSetupApply,

@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	metadatastore "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -318,5 +320,56 @@ func TestBatchDeleteFieldHidesColumnUntilReEnabled(t *testing.T) {
 	}
 	if _, err := store.BatchUpdateFields(ctx, "space", []string{"gone"}, "", "archived"); err == nil {
 		t.Fatal("批量操作不应接受其他状态")
+	}
+}
+
+// 初始化时元数据并发导入：同类资源并发写，不能出现忙错误或丢写。
+func TestConcurrentFieldAndColumnUpserts(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.UpsertFieldGroup(ctx, &pb.FieldGroup{SpaceId: "space", GroupId: "concurrent", Name: "分组"}); err != nil {
+		t.Fatal(err)
+	}
+	const total = 64
+	errs := make(chan error, total)
+	var workers sync.WaitGroup
+	limit := make(chan struct{}, 16)
+	for i := range total {
+		workers.Add(1)
+		limit <- struct{}{}
+		go func() {
+			defer workers.Done()
+			defer func() { <-limit }()
+			id := fmt.Sprintf("concurrent_%d", i)
+			if _, err := store.UpsertField(ctx, &pb.Field{SpaceId: "space", GroupId: "concurrent", FieldId: id, Name: id, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}); err != nil {
+				errs <- err
+				return
+			}
+			_, err := store.UpsertDatasetColumn(ctx, &pb.DatasetColumn{
+				SpaceId: "space", DatasetId: "prices", ColumnName: id, OriginId: id,
+				OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			})
+			errs <- err
+		}()
+	}
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	columns, _, err := store.ListDatasetColumns(ctx, "space", "prices", &pb.Page{Page: 1, Size: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, column := range columns {
+		if strings.HasPrefix(column.GetColumnName(), "concurrent_") {
+			count++
+		}
+	}
+	if count != total {
+		t.Fatalf("写入 %d 列，读回 %d 列", total, count)
 	}
 }

@@ -175,3 +175,33 @@ func TestLighthouseLookupInstance(t *testing.T) {
 		t.Fatalf("instance = %+v", got)
 	}
 }
+
+func TestSCFListAndDelete(t *testing.T) {
+	actions := []string{}
+	client := newTestNetworkClient(t, func(w http.ResponseWriter, r *http.Request) {
+		action := r.Header.Get("X-TC-Action")
+		actions = append(actions, action)
+		switch action {
+		case "ListNamespaces":
+			_, _ = w.Write([]byte(`{"Response":{"Namespaces":[{"Name":"moox-crypto-plan"}],"TotalCount":1}}`))
+		case "ListFunctions":
+			_, _ = w.Write([]byte(`{"Response":{"Functions":[{"FunctionName":"moox-fetch-plan-crypto-1"}],"TotalCount":1}}`))
+		default:
+			_, _ = w.Write([]byte(`{"Response":{}}`))
+		}
+	})
+	namespaces, err := client.ListSCFNamespaces(context.Background())
+	if err != nil || len(namespaces) != 1 || namespaces[0] != "moox-crypto-plan" {
+		t.Fatalf("namespaces=%v err=%v", namespaces, err)
+	}
+	functions, err := client.ListSCFFunctions(context.Background(), namespaces[0])
+	if err != nil || len(functions) != 1 {
+		t.Fatalf("functions=%v err=%v", functions, err)
+	}
+	if err := client.DeleteSCFFunction(context.Background(), namespaces[0], functions[0]); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 3 || actions[2] != "DeleteFunction" {
+		t.Fatalf("actions=%v", actions)
+	}
+}

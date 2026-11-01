@@ -161,12 +161,13 @@ func TestClient_EnsureFirewallRule_ExistingRuleDoesNotCreateDuplicate(t *testing
 	})
 	require.NoError(t, err)
 
-	result, err := client.EnsureFirewallRule(context.Background(), "1.2.3.4", CreateFirewallRulesOptions{
+	result, err := client.EnsureFirewallRules(context.Background(), "1.2.3.4", []CreateFirewallRulesOptions{{
 		Protocol: "TCP", Ports: "4222", CidrBlock: "0.0.0.0/0",
 		Action: "ACCEPT", Description: "MooX EventBus TLS",
-	})
+	}})
 	require.NoError(t, err)
-	assert.False(t, result.Created)
+	assert.Zero(t, result.Created)
+	assert.Equal(t, 1, result.AlreadyOpen)
 	assert.Equal(t, "lhins-abc", result.InstanceID)
 	assert.Equal(t, []string{"DescribeInstances", "DescribeFirewallRules"}, actions)
 }
@@ -196,12 +197,12 @@ func TestClient_EnsureFirewallRule_MissingRuleCreatesIt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, err := client.EnsureFirewallRule(context.Background(), "1.2.3.4", CreateFirewallRulesOptions{
+	result, err := client.EnsureFirewallRules(context.Background(), "1.2.3.4", []CreateFirewallRulesOptions{{
 		Protocol: "TCP", Ports: "4222", CidrBlock: "0.0.0.0/0",
 		Action: "ACCEPT", Description: "MooX EventBus TLS",
-	})
+	}})
 	require.NoError(t, err)
-	assert.True(t, result.Created)
+	assert.Equal(t, 1, result.Created)
 	assert.Equal(t, "req-create", result.RequestID)
 	assert.Equal(t, []string{"DescribeInstances", "DescribeFirewallRules", "CreateFirewallRules"}, actions)
 }

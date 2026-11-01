@@ -148,7 +148,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 **因子引擎与归档 Worker** 使用 systemd 用户单元 `moox-factor-engine.service` / `moox-archive-worker.service`。原生安装器写入 `<paths.deploy_root>/<组件>`，默认 `/data/moox/factor-engine` 与 `/data/moox/archive-worker`；旧手工安装可能位于家目录，先用 `systemctl --user cat <服务>` 核对实际路径。
 
-二进制单独更新可在本机构建对应目标后用 scp 上传，再在目标机替换。以下以默认因子引擎路径为例；需要重建配置或分发凭据时可使用 `setup release build` 与 `setup deploy-unit --host factor --profile <组件> --release <ID>`；因子引擎安装脚本会完整重写 `engine.yaml`，应先备份并核对、恢复现有内存与窗口调参，单纯升级二进制沿用下面的替换流程。
+二进制单独更新可在本机构建对应目标后用 scp 上传，再在目标机替换。以下以默认因子引擎路径为例；需要重建配置或分发凭据时可使用 `setup release fetch` 与 `setup deploy-unit --host factor --profile <组件> --release <ID>`；因子引擎安装脚本会完整重写 `engine.yaml`，应先备份并核对、恢复现有内存与窗口调参，单纯升级二进制沿用下面的替换流程。
 
 ```bash
 D=/data/moox/factor-engine; TS=$(date +%Y%m%d%H%M%S)

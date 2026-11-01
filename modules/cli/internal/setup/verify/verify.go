@@ -61,7 +61,7 @@ type Instance struct {
 type Input struct {
 	Now      time.Time
 	Datasets []Dataset
-	// TasksDisabled 表示空间有采集任务但全部停用：这是用户的选择，不算失败。
+	// TasksDisabled 表示空间有采集任务但全部停用：还没有运行 setup start。
 	TasksDisabled  bool
 	HasPlan        bool
 	NeedsStream    bool
@@ -90,7 +90,8 @@ func plan(in Input) Check {
 	check := Check{Name: "plan", Code: CodeCollectionNotStarted}
 	switch {
 	case len(in.Datasets) == 0 && in.TasksDisabled:
-		check.Status, check.Code, check.Detail = Skip, "", "这个空间的采集任务都停用了"
+		// 任务默认停用，全停用就是还没启动，不能算通过。
+		check.Status, check.Detail = Fail, "这个空间的采集任务都停用了，先运行 setup start --space-id <空间>"
 	case len(in.Datasets) == 0:
 		// 没有任务就没有数据，空间写错或种子没写入时不能算通过。
 		check.Status, check.Code, check.Detail = Fail, CodeNoCollectionTasks, "这个空间没有启用的 K 线任务"

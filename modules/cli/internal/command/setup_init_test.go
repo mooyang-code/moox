@@ -614,3 +614,32 @@ func (clsReadyAPI) CreateIndex(context.Context, string) (string, error) { return
 func (clsReadyAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
 	return true, "r", nil
 }
+
+type seedProbeStorage struct {
+	fakeSetupInitStorage
+	applied   int
+	applyRuns int
+}
+
+func (s *seedProbeStorage) Apply(context.Context, []metadataImportCall) (metadataImportSummary, error) {
+	s.applyRuns++
+	return metadataImportSummary{Applied: s.applied}, nil
+}
+
+func TestSetupMetadataImportedRequiresSameSeedAndLiveSpaces(t *testing.T) {
+	calls := []metadataImportCall{{Resource: "spaces", Method: "CreateSpace", Request: &storagepb.CreateSpaceReq{Space: &storagepb.Space{SpaceId: "crypto"}}}}
+	seed, err := metadataSeedDigest(calls)
+	require.NoError(t, err)
+	storage := &seedProbeStorage{}
+	imported, err := setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls})
+	require.NoError(t, err)
+	require.False(t, imported, "没有记录时要导入")
+	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: "other"})
+	require.False(t, imported, "种子变了要导入")
+	require.Zero(t, storage.applyRuns)
+	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: seed})
+	require.True(t, imported)
+	storage.applied = 1
+	imported, _ = setupMetadataImported(context.Background(), storage, setupInitBundle{Calls: calls, ImportedSeed: seed})
+	require.False(t, imported, "空间被重置过要重新导入")
+}

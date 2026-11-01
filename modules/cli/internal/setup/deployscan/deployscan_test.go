@@ -236,7 +236,7 @@ func TestInspectFlagsUnsafeRootMode(t *testing.T) {
 
 func wipe(t *testing.T, s *sandbox, dirs ...string) {
 	t.Helper()
-	result, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, dirs)
+	result, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, dirs, false)
 	require.NoError(t, err)
 	require.Empty(t, result.ProcessesOutside)
 }
@@ -269,16 +269,13 @@ func TestWipeClearsEverythingAndIsRepeatable(t *testing.T) {
 	remaining, err := os.ReadDir(external)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
-	stopped, err := os.ReadFile(filepath.Join(filepath.Dir(s.home), "stop.log"))
-	require.NoError(t, err)
-	require.Contains(t, string(stopped), "stopped")
 	log, err := os.ReadFile(filepath.Join(filepath.Dir(s.home), "systemctl.log"))
 	require.NoError(t, err)
 	for _, want := range []string{"stop moox-factor-engine.service", "disable moox-factor-engine.service", "daemon-reload"} {
 		require.Contains(t, string(log), want)
 	}
 
-	wipe(t, s, external) // 重跑：stop.sh、moox-runtime 都没了也不能卡住
+	wipe(t, s, external) // 重跑：什么都没了也不能卡住
 	require.True(t, s.inspect(t, map[string]any{"deploy_root": s.root}).Empty())
 }
 
@@ -303,7 +300,7 @@ func TestWipeStopsWhenSystemdUnreachable(t *testing.T) {
 	write(t, filepath.Join(s.home, ".config/systemd/user/moox-archive-worker.service"), "[Service]\n")
 	bin := strings.TrimPrefix(strings.Split(s.client.env[1], ":")[0], "PATH=")
 	script(t, filepath.Join(bin, "systemctl"), "exit 1")
-	_, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, nil)
+	_, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, nil, false)
 	require.ErrorContains(t, err, "systemd_unreachable")
 	require.FileExists(t, filepath.Join(s.root, "import/history.bin"), "连不上 systemd 时不能往下删")
 }
@@ -397,7 +394,7 @@ func TestDecideRoutes(t *testing.T) {
 		{"哈希不一致", []HostReport{installed}, other, RouteExisting},
 		{"清除没做完", []HostReport{clean}, LocalState{WipePending: true}, RouteExisting},
 		{"属主不同", []HostReport{foreign}, LocalState{}, RouteBlocked},
-		{"目录外有进程", []HostReport{outside}, LocalState{}, RouteBlocked},
+		{"目录外有进程", []HostReport{outside}, LocalState{}, RouteExisting},
 		{"端口被占", []HostReport{ports}, LocalState{}, RouteBlocked},
 		{"阻塞优先于未完成清除", []HostReport{ports}, LocalState{WipePending: true}, RouteBlocked},
 	}
@@ -642,18 +639,6 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	require.Error(t, decode(string(raw), &out))
 }
 
-func TestOrderClearsStorageLast(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}, "storage": {Address: "198.51.100.2"}, "overseas": {Address: "198.51.100.3"}, "factor": {Address: "198.51.100.4"}},
-		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary"}, "overseas": {"trade"}, "factor": {"factor-engine"}},
-	}
-	names := []string{}
-	for _, host := range Order(manifest) {
-		names = append(names, host.Name)
-	}
-	require.Equal(t, []string{"factor", "overseas", "control", "storage"}, names)
-}
-
 func TestInspectReportsDiskAndAttempt(t *testing.T) {
 	s := newSandbox(t)
 	deployment(t, s)
@@ -728,16 +713,19 @@ func TestNextStepsFollowReadinessOrder(t *testing.T) {
 		return index
 	}
 	require.Less(t, position("--profile storage"), position("init --stage storage"))
-	require.Less(t, position("init --stage storage"), position("--profile access"), "系统元数据要在 access 和管理台之前")
+	require.Less(t, position("--profile access"), position("init --stage storage"), "Access 就绪只看目录，排在元数据之前")
+	require.Less(t, position("init --stage storage"), position("--stage control"), "系统元数据要在管理台之前")
 	require.Less(t, position("--host overseas --profile access"), position("--stage control"))
 	require.Less(t, position("--stage control"), position("setup init --config-dir"))
 	require.NotContains(t, strings.Join(steps, "\n"), "trust-browser", "信任要用户授权，不放进 next_steps")
 	require.Contains(t, strings.Join(ManualSteps(RouteFresh), "\n"), "setup trust-browser")
 	require.Empty(t, ManualSteps(RouteUpgrade))
 	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
-	require.Less(t, position("sync-deployments --host factor"), position("--profile factor-engine"))
-	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2])
-	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1])
+	require.Equal(t, "./bin/moox-cli setup start --space-id <空间>", steps[len(steps)-2], "选了空间才验收")
+	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-1])
+	require.NotContains(t, strings.Join(steps, "\n"), "setup verify", "没启动的空间不验收")
+	started := NextSteps(stepsManifest(), RouteResume, LocalState{RuntimeSHA256: "sha256:a", Started: map[string]bool{"crypto": true}})
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", started[len(started)-1])
 	for _, step := range steps {
 		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
 	}
@@ -832,4 +820,132 @@ func TestReadLogsRedactsOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sections, 1)
 	require.NotContains(t, sections[0].Text, "abc")
+}
+
+func TestStagingIsNotLeftover(t *testing.T) {
+	s := newSandbox(t)
+	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	require.Empty(t, report.Entries, "只下载过的机器还是空机")
+	require.True(t, report.Empty())
+	require.Equal(t, RouteFresh, Decide([]HostReport{report}, "control", LocalState{}).Route)
+}
+
+func TestWipeKeepsDownloadedPackages(t *testing.T) {
+	s := newSandbox(t)
+	deployment(t, s)
+	write(t, filepath.Join(s.root, "staging/abc/host.tar.gz"), "package")
+	outsideDir := filepath.Join(filepath.Dir(s.root), "external")
+	write(t, filepath.Join(outsideDir, "staging/keep-out"), "old")
+	raw, err := json.Marshal(map[string]any{"deploy_root": s.root, "dirs": []string{outsideDir}})
+	require.NoError(t, err)
+	output, err := s.client.Run(context.Background(), []string{"python3", "-c", wipeScript, string(raw)}, nil)
+	require.NoError(t, err)
+	require.Contains(t, output.Stdout, `"done"`)
+	require.FileExists(t, filepath.Join(s.root, "staging/abc/host.tar.gz"))
+	require.NoDirExists(t, filepath.Join(s.root, "identity"))
+	require.NoDirExists(t, filepath.Join(outsideDir, "staging"), "外部目录里同名目录照常清除")
+}
+
+func TestWipeResumesWithConfirmedDigest(t *testing.T) {
+	manifest := stepsManifest()
+	home := "/home/ubuntu"
+	full := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"host", "identity"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: TradeNone}}
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	plan, err := BuildPlan(manifest, full, nil)
+	require.NoError(t, err)
+	operator := t.TempDir()
+	require.NoError(t, MarkPending(operator, plan))
+
+	partial := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity"}, Units: map[string]string{}, Trade: TradeNone}}
+	pending := ReadPending(operator)
+	resumed, err := BuildPlan(manifest, partial, pending)
+	require.NoError(t, err)
+	require.Equal(t, plan.Digest, resumed.Digest, "半清之后沿用用户确认过的摘要")
+
+	require.NoError(t, MarkPending(operator, resumed))
+	require.Equal(t, []string{"host", "identity"}, ReadPending(operator).Hosts["control"].Entries, "已有标记不能被半清的范围覆盖")
+
+	grown := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity", "newcomer"}, Units: map[string]string{}, Trade: TradeNone}}
+	_, err = BuildPlan(manifest, grown, pending)
+	require.ErrorContains(t, err, "wipe_scope_changed")
+}
+
+func TestWipeBadPendingFallsBackToCurrentDigest(t *testing.T) {
+	operator := t.TempDir()
+	require.NoError(t, os.WriteFile(PendingPath(operator), []byte("broken"), 0o600))
+	manifest := stepsManifest()
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	report := []HostReport{{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host"}, Markers: true, Trade: TradeNone}}
+	first, err := BuildPlan(manifest, report, nil)
+	require.NoError(t, err)
+	second, err := BuildPlan(manifest, report, ReadPending(operator))
+	require.NoError(t, err)
+	require.Equal(t, first.Digest, second.Digest)
+}
+
+func TestOutsideProcessesEnterScope(t *testing.T) {
+	manifest := stepsManifest()
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	clean := HostReport{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Trade: TradeNone}
+	dirty := clean
+	dirty.ProcessesOutside = []string{"/opt/moox-admin"}
+	first, err := BuildPlan(manifest, []HostReport{clean}, nil)
+	require.NoError(t, err)
+	second, err := BuildPlan(manifest, []HostReport{dirty}, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, first.Digest, second.Digest)
+	require.Equal(t, []string{"/opt/moox-admin"}, second.Hosts[0].Outside)
+}
+
+func TestWipeKillsRestartedProcesses(t *testing.T) {
+	if _, err := os.Stat("/proc/self/exe"); err != nil {
+		t.Skip("需要 /proc")
+	}
+	s := newSandbox(t)
+	deployment(t, s)
+	binary := filepath.Join(s.root, "host/moox-sleeper")
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	raw, err := os.ReadFile(sleep)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(binary), 0o755))
+	require.NoError(t, os.WriteFile(binary, raw, 0o755))
+	command := exec.Command(binary, "300")
+	require.NoError(t, command.Start())
+	t.Cleanup(func() { _ = command.Process.Kill() })
+	wipe(t, s)
+	require.Error(t, command.Wait(), "目录内的进程要被结束")
+}
+
+func TestPlanStepsGroupsParallelStepsAndFillsSpace(t *testing.T) {
+	steps := PlanSteps(stepsManifest(), RouteFresh, LocalState{}, "crypto")
+	find := func(kind, host, unit string) Step {
+		for _, step := range steps {
+			if step.Kind == kind && step.Host == host && step.Unit == unit {
+				return step
+			}
+		}
+		t.Fatalf("缺少步骤 %s %s %s", kind, host, unit)
+		return Step{}
+	}
+	require.Equal(t, find(StepUnit, "storage", "storage").Group, find(StepUnit, "overseas", "egress-proxy").Group, "存储机和海外机并行")
+	require.Less(t, find(StepUnit, "storage", "eventbus").Group, find(StepUnit, "storage", "storage").Group, "EventBus 先就绪")
+	require.Less(t, find(StepControl, "control", "").Group, find(StepUnit, "overseas", "collector-stream").Group)
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1].Command)
+	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2].Command, "启动之后备份，再验收")
+	require.Equal(t, "./bin/moox-cli setup start --space-id crypto", steps[len(steps)-3].Command)
+	retried := PlanSteps(stepsManifest(), RouteUpgrade, LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, Units: map[string]bool{}, Started: map[string]bool{"crypto": true}}, "crypto")
+	require.True(t, slices.ContainsFunc(retried, func(step Step) bool { return step.Kind == StepBackup }), "备份失败后重跑要补上")
+}
+
+func TestUnfinishedReasonIgnoresPostInstallSteps(t *testing.T) {
+	manifest := stepsManifest()
+	done := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
+	for _, step := range PlanSteps(manifest, RouteFresh, LocalState{}, "") {
+		if step.Kind == StepUnit || step.Kind == StepHost {
+			done.Units[step.Host+"/"+map[bool]string{true: "host", false: step.Unit}[step.Kind == StepHost]] = true
+		}
+	}
+	require.Empty(t, UnfinishedReason(manifest, RouteUpgrade, done), "部署全部完成时，备份和启动不算没做完")
 }

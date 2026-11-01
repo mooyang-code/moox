@@ -594,3 +594,74 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	}
 	return &http.Client{Timeout: timeout}
 }
+
+// ListSCFNamespaces 列出这个地域的云函数命名空间。
+func (c *NetworkClient) ListSCFNamespaces(ctx context.Context) ([]string, error) {
+	const limit = 100
+	names := []string{}
+	for offset := 0; ; offset += limit {
+		var resp struct {
+			Response struct {
+				Error      *apiError `json:"Error,omitempty"`
+				Namespaces []struct {
+					Name string `json:"Name"`
+				} `json:"Namespaces"`
+				TotalCount int `json:"TotalCount"`
+			} `json:"Response"`
+		}
+		if err := c.do(ctx, "scf", scfVersion, "ListNamespaces", map[string]any{"Limit": limit, "Offset": offset}, &resp); err != nil {
+			return nil, err
+		}
+		if err := apiCodeMessage(resp.Response.Error); err != nil {
+			return nil, err
+		}
+		for _, namespace := range resp.Response.Namespaces {
+			names = append(names, namespace.Name)
+		}
+		if len(resp.Response.Namespaces) < limit || len(names) >= resp.Response.TotalCount {
+			return names, nil
+		}
+	}
+}
+
+// ListSCFFunctions 列出命名空间里的函数名。
+func (c *NetworkClient) ListSCFFunctions(ctx context.Context, namespace string) ([]string, error) {
+	const limit = 100
+	names := []string{}
+	for offset := 0; ; offset += limit {
+		var resp struct {
+			Response struct {
+				Error     *apiError `json:"Error,omitempty"`
+				Functions []struct {
+					FunctionName string `json:"FunctionName"`
+				} `json:"Functions"`
+				TotalCount int `json:"TotalCount"`
+			} `json:"Response"`
+		}
+		if err := c.do(ctx, "scf", scfVersion, "ListFunctions", map[string]any{"Namespace": namespace, "Limit": limit, "Offset": offset}, &resp); err != nil {
+			return nil, err
+		}
+		if err := apiCodeMessage(resp.Response.Error); err != nil {
+			return nil, err
+		}
+		for _, function := range resp.Response.Functions {
+			names = append(names, function.FunctionName)
+		}
+		if len(resp.Response.Functions) < limit || len(names) >= resp.Response.TotalCount {
+			return names, nil
+		}
+	}
+}
+
+// DeleteSCFFunction 删除一个函数。
+func (c *NetworkClient) DeleteSCFFunction(ctx context.Context, namespace, name string) error {
+	var resp struct {
+		Response struct {
+			Error *apiError `json:"Error,omitempty"`
+		} `json:"Response"`
+	}
+	if err := c.do(ctx, "scf", scfVersion, "DeleteFunction", map[string]any{"FunctionName": name, "Namespace": namespace}, &resp); err != nil {
+		return err
+	}
+	return apiCodeMessage(resp.Response.Error)
+}

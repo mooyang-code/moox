@@ -97,8 +97,8 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 		t.Fatal(err)
 	}
 	barEnd := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)
-	observer.ObservePeriod(instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_missing")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_missing")
 	if got := testutil.ToFloat64(observer.periods.WithLabelValues("i1", "ok", "")); got != 1 {
 		t.Fatalf("ok 计数不符：%v", got)
 	}
@@ -132,7 +132,7 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer.ObservePeriod(second, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
+	observer.ObservePeriod(context.Background(), second, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
 	if len(observer.expected) != 2 {
 		t.Fatalf("首次观测应登记新实例：%+v", observer.expected)
 	}

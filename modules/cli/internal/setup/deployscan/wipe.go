@@ -39,6 +39,8 @@ type HostPlan struct {
 	Entries    []string          `json:"entries"`
 	Unknown    []string          `json:"unknown_entries,omitempty"`
 	Dirs       []string          `json:"dirs,omitempty"`
+	// Outside 是部署目录之外的 MooX 进程路径，只有带 --kill-outside 才会结束。PID 每次都变，不进范围。
+	Outside []string `json:"processes_outside,omitempty"`
 	// Skipped 是看到了但不属于 MooX 的目录，不会清除，要告诉用户。
 	Skipped []string         `json:"skipped_dirs,omitempty"`
 	SizesKB map[string]int64 `json:"sizes_kb,omitempty"`
@@ -152,6 +154,7 @@ func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *Pen
 		}
 		slices.Sort(item.Dirs)
 		item.Dirs = slices.Compact(item.Dirs)
+		item.Outside = slices.Clone(report.ProcessesOutside)
 		plan.Hosts = append(plan.Hosts, item)
 		plan.Trade = worseTrade(plan.Trade, report.Trade)
 		if report.RegisteredHosts != nil {
@@ -174,6 +177,13 @@ func BuildPlan(manifest setupconfig.Manifest, reports []HostReport, pending *Pen
 		return plan, err
 	}
 	plan.Digest = digest
+	if pending != nil && pending.Digest != "" {
+		if !pending.covers(plan) {
+			return plan, fmt.Errorf("wipe_scope_changed: 范围比上次没做完的清除大。确认后删除 %s 再重新预览", pendingFile)
+		}
+		// 部分清除后摘要必变，范围没变大就沿用原摘要，用户确认过的还是这个范围。
+		plan.Digest = pending.Digest
+	}
 	return plan, nil
 }
 
@@ -192,11 +202,12 @@ func digestOf(plan Plan) (string, error) {
 		Units         map[string]string
 		Root          string
 		Entries, Dirs []string
+		Outside       []string
 		Skipped       []string
 	}
 	scopes := make([]scope, 0, len(plan.Hosts))
 	for _, host := range plan.Hosts {
-		scopes = append(scopes, scope{host.Host, host.Address, host.Units, host.DeployRoot, host.Entries, host.Dirs, host.Skipped})
+		scopes = append(scopes, scope{host.Host, host.Address, host.Units, host.DeployRoot, host.Entries, host.Dirs, host.Outside, host.Skipped})
 	}
 	raw, err := json.Marshal(struct {
 		Scopes []scope
@@ -209,35 +220,16 @@ func digestOf(plan Plan) (string, error) {
 	return hex.EncodeToString(sum[:8]), nil
 }
 
-// Order 是清除顺序：先下游后上游，存储机最后，因为其他模块都往 Storage 写、EventBus 最后停。
-func Order(manifest setupconfig.Manifest) []setupconfig.Host {
-	control, storage := manifest.ControlHost().Name, manifest.StorageHost().Name
-	rank := func(host setupconfig.Host) int {
-		switch {
-		case host.Name == storage:
-			return 3
-		case host.Name == control:
-			return 2
-		case slices.Contains(manifest.Deployments[host.Name], "factor-engine"), slices.Contains(manifest.Deployments[host.Name], "archive-worker"):
-			return 0
-		}
-		return 1
-	}
-	hosts := slices.Clone(manifest.Hosts())
-	slices.SortStableFunc(hosts, func(a, b setupconfig.Host) int { return rank(a) - rank(b) })
-	return hosts
-}
-
 // HostResult 是一台主机的清除结果。
 type HostResult struct {
 	Host             string   `json:"host"`
 	ProcessesOutside []string `json:"processes_outside,omitempty"`
 }
 
-// WipeHost 清除一台主机。目录外还有 MooX 进程时返回错误，不杀进程。
-func WipeHost(ctx context.Context, dial Dial, host setupconfig.Host, root string, dirs []string) (HostResult, error) {
+// WipeHost 清除一台主机。目录外的 MooX 进程只有 killOutside 时才结束，还有剩余时返回错误。
+func WipeHost(ctx context.Context, dial Dial, host setupconfig.Host, root string, dirs []string, killOutside bool) (HostResult, error) {
 	result := HostResult{Host: host.Name}
-	raw, err := json.Marshal(map[string]any{"deploy_root": root, "dirs": dirs})
+	raw, err := json.Marshal(map[string]any{"deploy_root": root, "dirs": dirs, "kill_outside": killOutside})
 	if err != nil {
 		return result, err
 	}
@@ -273,14 +265,42 @@ func WipeHost(ctx context.Context, dial Dial, host setupconfig.Host, root string
 
 // PendingHost 记录一台主机上没做完的清除。
 type PendingHost struct {
-	Address string   `json:"address"`
-	Root    string   `json:"root"`
-	Dirs    []string `json:"dirs"`
+	Address string            `json:"address"`
+	Root    string            `json:"root"`
+	Dirs    []string          `json:"dirs"`
+	Entries []string          `json:"entries"`
+	Units   map[string]string `json:"units"`
+	Outside []string          `json:"processes_outside"`
 }
 
 // PendingRecord 是未完成标记的内容。
 type PendingRecord struct {
-	Hosts map[string]PendingHost `json:"hosts"`
+	// Digest 是用户确认过的摘要。标记损坏时为空，退回比较当前摘要。
+	Digest string                 `json:"digest"`
+	Hosts  map[string]PendingHost `json:"hosts"`
+}
+
+// covers 报告当前范围没有超出记录的范围。不比较 Skipped 和 Trade：部分清除后外部目录丢标记会进 Skipped，
+// 交易库删了 Trade 会变 none。
+func (p *PendingRecord) covers(plan Plan) bool {
+	for _, host := range plan.Hosts {
+		recorded, ok := p.host(host.Host, host.Address, host.DeployRoot)
+		if !ok {
+			return false
+		}
+		within := func(current, known []string) bool {
+			return !slices.ContainsFunc(current, func(item string) bool { return !slices.Contains(known, item) })
+		}
+		if !within(host.Entries, recorded.Entries) || !within(host.Dirs, recorded.Dirs) || !within(host.Outside, recorded.Outside) {
+			return false
+		}
+		for unit, state := range host.Units {
+			if recorded.Units[unit] != state {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // host 返回这台主机上次没做完的清除；主机地址或部署根对不上时不算。
@@ -311,11 +331,14 @@ func ReadPending(operatorDir string) *PendingRecord {
 	return record
 }
 
-// MarkPending 在动手前写未完成标记。
+// MarkPending 在动手前写未完成标记。已有有效标记时不重写，否则原来的范围会被半清的状态覆盖。
 func MarkPending(operatorDir string, plan Plan) error {
-	record := PendingRecord{Hosts: map[string]PendingHost{}}
+	if existing := ReadPending(operatorDir); existing != nil && existing.Digest != "" {
+		return nil
+	}
+	record := PendingRecord{Digest: plan.Digest, Hosts: map[string]PendingHost{}}
 	for _, host := range plan.Hosts {
-		record.Hosts[host.Host] = PendingHost{Address: host.Address, Root: host.DeployRoot, Dirs: host.Dirs}
+		record.Hosts[host.Host] = PendingHost{Address: host.Address, Root: host.DeployRoot, Dirs: host.Dirs, Entries: host.Entries, Units: host.Units, Outside: host.Outside}
 	}
 	raw, err := json.Marshal(record)
 	if err != nil {

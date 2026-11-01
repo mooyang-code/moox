@@ -61,6 +61,12 @@ func readAdminSoftware(ctx context.Context, root *os.Root, arch string) (adminSo
 	}
 	for i, profile := range []string{"host", "control"} {
 		item := stored.Packages[i]
+		if item.Archive == "" {
+			if item.Manifest.Profile != profile {
+				return stored, true, errors.New("persisted admin artifact failed independent verification")
+			}
+			continue
+		}
 		if !insideState(root.Name(), item.Archive) {
 			return stored, true, errors.New("persisted admin artifact is outside private deployment state")
 		}
@@ -70,12 +76,14 @@ func readAdminSoftware(ctx context.Context, root *os.Root, arch string) (adminSo
 		}
 		stored.Packages[i] = verified
 	}
-	if !insideState(root.Name(), stored.Helper) {
-		return stored, true, errors.New("persisted helper is outside private deployment state")
-	}
-	digest, err := fileSHA(stored.Helper)
-	if err != nil || digest != stored.HelperSHA256 {
-		return stored, true, errors.New("persisted runtime helper changed")
+	digest := stored.HelperSHA256
+	if stored.Helper != "" {
+		if !insideState(root.Name(), stored.Helper) {
+			return stored, true, errors.New("persisted helper is outside private deployment state")
+		}
+		if digest, err = fileSHA(stored.Helper); err != nil || digest != stored.HelperSHA256 {
+			return stored, true, errors.New("persisted runtime helper changed")
+		}
 	}
 	files := stored.Packages[0].Manifest.Files
 	i := slices.IndexFunc(files, func(file unitpackage.File) bool { return file.Path == "bin/moox-runtime" })
@@ -94,6 +102,9 @@ func prepareAdminSoftware(ctx context.Context, root *os.Root, options DeployOpti
 	stored, exists, err := readAdminSoftware(ctx, root, arch)
 	if err != nil || exists {
 		return stored.Packages, stored.Helper, err
+	}
+	if options.downloads() {
+		return recordBundleAdminSoftware(root, options, arch)
 	}
 	work, err := os.MkdirTemp(root.Name(), "software-")
 	if err != nil {
@@ -157,6 +168,31 @@ func prepareAdminSoftware(ctx context.Context, root *os.Root, options DeployOpti
 		return nil, "", err
 	}
 	return stored.Packages, stored.Helper, nil
+}
+
+// recordBundleAdminSoftware 记下产物包里的 host、control 软件，重试时用同一份。
+func recordBundleAdminSoftware(root *os.Root, options DeployOptions, arch string) ([]unitpackage.Result, string, error) {
+	stored := adminSoftware{Version: 1, Architecture: arch}
+	for _, profile := range []string{"host", "control"} {
+		item, err := bundleSoftware(options.Bundle, profile, arch)
+		if err != nil {
+			return nil, "", err
+		}
+		stored.Packages = append(stored.Packages, item)
+	}
+	digest, err := packageHelperSHA(stored.Packages[0])
+	if err != nil {
+		return nil, "", err
+	}
+	stored.HelperSHA256 = digest
+	encoded, err := json.Marshal(stored)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := fsutil.WritePrivate(root, "admin-software.json", append(encoded, '\n'), false); err != nil {
+		return nil, "", err
+	}
+	return stored.Packages, "", nil
 }
 
 // No SSH capability is available to this builder. Every

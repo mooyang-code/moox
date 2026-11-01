@@ -24,6 +24,9 @@ def load_mounts(path):
     return set(decode(row.split()[4]) for row in rows if len(row.split()) > 4)
 
 
+STAGING = 'staging'
+
+
 def holds_mount(path):
     return any(m.startswith(path.rstrip('/') + '/') for m in MOUNTS)
 
@@ -86,6 +89,15 @@ def command_name(pid):
         return ''
 
 
+def zombie(pid):
+    """A killed process waiting for its parent: it holds nothing and its exe link is gone, so it must not count as running."""
+    try:
+        with open('/proc/%s/stat' % pid) as stream:
+            return stream.read().rpartition(')')[2].split()[0] == 'Z'
+    except (OSError, IndexError):
+        return False
+
+
 def under(path, directories):
     return any(path == d or path.startswith(d.rstrip('/') + '/') for d in directories)
 
@@ -103,7 +115,7 @@ def processes(inside_dirs):
         return inside, outside
     me = os.getpid()
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or int(pid) == me:
+        if not pid.isdigit() or int(pid) == me or zombie(pid):
             continue
         path = executable(pid)
         if path and under(path, inside_dirs):
@@ -196,12 +208,16 @@ def listening(ports):
 
 
 def occupied_ports(ports, inside_dirs):
-    """Ports held by programs outside the deployment; an unknown owner counts as occupied."""
+    """Ports held by programs that are not MooX; an unknown owner counts as occupied.
+    MooX processes outside the deployment are reported on their own and can be ended with --kill-outside."""
     sockets = listening(set(ports))
     if not sockets:
         return []
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or not under(executable(pid), inside_dirs):
+        if not pid.isdigit():
+            continue
+        path = executable(pid)
+        if not under(path, inside_dirs) and not moox_process(path or command_name(pid)):
             continue
         try:
             descriptors = os.listdir('/proc/%s/fd' % pid)
@@ -217,11 +233,13 @@ def occupied_ports(ports, inside_dirs):
     return sorted(set(sockets.values()))
 
 
-def foreign_file(root):
+def foreign_file(root, keep=()):
     """True when the tree holds anything the SSH user cannot delete. A mount's lost+found belongs to root."""
     uid = os.getuid()
     denied = []
     for base, directories, files in os.walk(root, onerror=denied.append):
+        if base == root:
+            directories[:] = [d for d in directories if d not in keep]
         if base in MOUNTS or os.path.ismount(base):
             directories[:] = [d for d in directories if d != 'lost+found']
         for name in directories + files:
@@ -346,11 +364,12 @@ def main():
     report = {
         'home': home,
         'root_exists': exists,
-        'entries': names(root),
+        # Downloaded packages are not leftovers: a host that only downloaded still counts as empty.
+        'entries': [n for n in names(root) if n != STAGING],
         'owner_ok': owner_ok,
         'mode_ok': mode_ok,
         'parent_writable': exists or writable_parent(root),
-        'foreign_files': exists and owner_ok and foreign_file(root),
+        'foreign_files': exists and owner_ok and foreign_file(root, (STAGING,)),
         'markers': any(os.path.lexists(os.path.join(root, n)) for n in ('run/host.json', 'host/current', 'identity', 'bootstrap', 'bootstrap-input')),
         'cron': cron_marked(),
         'services': services,
@@ -365,6 +384,7 @@ def main():
         'registered_hosts': registered_hosts(request.get('admin_db', '')),
         'helper_running': helper_running(root),
         'disk_free_kb': disk_free_kb(root),
+        'staging_kb': size_kb(os.path.join(root, STAGING)) if os.path.isdir(os.path.join(root, STAGING)) else 0,
         'last_attempt': last_attempt(root),
     }
     if request.get('reclaim'):

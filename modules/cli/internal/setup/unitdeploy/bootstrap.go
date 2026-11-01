@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbootstrap"
@@ -30,8 +32,10 @@ import (
 )
 
 type DeployOptions struct {
-	RepositoryRoot    string
-	BinaryDirectory   string // Empty builds pure Go and frontend locally.
+	RepositoryRoot  string
+	BinaryDirectory string // Empty builds pure Go and frontend locally, or downloads when Bundle is set.
+	// Bundle 是运行目录里的产物包清单：软件由目标机按清单下载。指定了 BinaryDirectory 时不用它。
+	Bundle            *bundle.Manifest
 	StateDirectory    string // Persistent private state; retain across retries/upgrades.
 	OperatorDirectory string
 	Log               io.Writer
@@ -134,7 +138,7 @@ func adminRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host,
 		for _, id := range components {
 			env[id] = maps.Clone(health)
 		}
-		return unitbootstrap.Unit{Archive: path.Join(manifest.Paths.DeployRoot, "bootstrap-input/packages", strings.TrimPrefix(result.SHA256, "sha256:"), name+".tar.gz"), SHA256: result.SHA256, UnitRoot: path.Join(manifest.Paths.DeployRoot, name), Environment: env, Overrides: map[string]string{}, Components: components}
+		return unitbootstrap.Unit{Archive: artifactPath(manifest.Paths.DeployRoot, result), SHA256: result.SHA256, UnitRoot: path.Join(manifest.Paths.DeployRoot, name), Environment: env, Overrides: map[string]string{}, Components: components}
 	}
 	request := unitbootstrap.Request{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, Topology: topology, Host: unit(host, "host", []string{"host-gateway", "host-agent"}), Control: unit(control, "control", []string{"admin"})}
 	request.Control.UnitRoot = manifest.Paths.ControlRoot
@@ -202,6 +206,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 	}
 	var packages []unitpackage.Result
 	var helper string
+	download := artifactDownload{options: options, root: snapshot.Manifest.Paths.DeployRoot}
 	switch {
 	case controlOptions == nil:
 		packages, helper, err = prepareAdminSoftware(ctx, root, options, arch)
@@ -215,6 +220,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 			return result, errors.New("control upgrade requires a release built by setup release build")
 		}
 		packages, helper = []unitpackage.Result{release.Packages["host"], release.Packages["control"]}, release.Helper
+		download.limit = fetchunit.UpgradeRateLimit
 	default:
 		stored, exists, readErr := readAdminSoftware(ctx, root, arch)
 		if readErr != nil || !exists {
@@ -229,9 +235,17 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 	if err != nil {
 		return result, err
 	}
+	if err := prepareTarget(ctx, transport, request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot); err != nil {
+		return result, err
+	}
+	for _, item := range packages {
+		if _, err := ensureArtifact(ctx, transport, download, item); err != nil {
+			return result, err
+		}
+	}
 	overrides := [2]map[string][]byte{{}, {}}
 	if controlOptions != nil {
-		request, overrides[1], err = controlInput(ctx, snapshot, root, request, identity, packages[1], *controlOptions)
+		request, overrides[1], err = controlInput(ctx, snapshot, root, transport, request, identity, packages[1], *controlOptions)
 		if err != nil {
 			return result, err
 		}
@@ -265,25 +279,19 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Depl
 	if err := snapshot.VerifyUnchanged(); err != nil {
 		return result, errors.New("config_changed")
 	}
-	if err := prepareTarget(ctx, transport, request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot); err != nil {
-		return result, err
-	}
 	for i, unit := range []unitbootstrap.Unit{request.Host, request.Control} {
-		if err := uploadFile(ctx, transport, request.DeploymentRoot, packages[i].Archive, unit.Archive, strings.TrimPrefix(unit.SHA256, "sha256:"), 0o600); err != nil {
-			return result, err
-		}
 		for name, content := range overrides[i] {
 			if err := uploadBytes(ctx, transport, request.DeploymentRoot, content, unit.Overrides[name], 0o600); err != nil {
 				return result, err
 			}
 		}
 	}
-	helperSHA, err := fileSHA(helper)
+	helperSHA, err := packageHelperSHA(packages[0])
 	if err != nil {
 		return result, err
 	}
-	remoteHelper := path.Join(request.DeploymentRoot, "bootstrap-input/runtime", helperSHA, "moox-runtime")
-	if err := uploadFile(ctx, transport, request.DeploymentRoot, helper, remoteHelper, helperSHA, 0o700); err != nil {
+	remoteHelper, err := ensureHelper(ctx, transport, request.DeploymentRoot, helper, request.Host.Archive, helperSHA)
+	if err != nil {
 		return result, err
 	}
 	if err := uploadBytes(ctx, transport, request.DeploymentRoot, raw, requestPath, 0o600); err != nil {

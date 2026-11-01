@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
@@ -153,4 +154,47 @@ func TestLatestUnitConfigurationReadsNewestRecord(t *testing.T) {
 	digest, ok := latestUnitConfiguration(state, "storage", "storage")
 	require.True(t, ok)
 	require.Equal(t, "sha256:new", digest)
+}
+
+func TestBundleSoftwareRecordsRemoteArtifact(t *testing.T) {
+	manifest := &bundle.Manifest{Release: "v9.9.9", Units: map[string]bundle.Artifact{
+		"host": {File: "moox-unit-host_v9.9.9_linux_amd64.tar.gz", SHA256: "abc", Size: 7, Manifest: []byte(`{"profile":"host","files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]}`)},
+	}}
+	item, err := bundleSoftware(manifest, "host", "amd64")
+	require.NoError(t, err)
+	require.Empty(t, item.Archive, "软件不在这台电脑上")
+	require.Equal(t, "/data/moox/staging/abc/moox-unit-host_v9.9.9_linux_amd64.tar.gz", artifactPath("/data/moox", item))
+	digest, err := packageHelperSHA(item)
+	require.NoError(t, err)
+	require.Equal(t, "def", digest)
+	_, err = bundleSoftware(manifest, "host", "arm64")
+	require.ErrorContains(t, err, "target_arch_unsupported")
+	_, err = bundleSoftware(manifest, "trade", "amd64")
+	require.ErrorContains(t, err, "bundle_incomplete")
+}
+
+func TestFetchedReleaseCanBeRead(t *testing.T) {
+	state, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(state, 0o700))
+	unit := func(profile, extra string) bundle.Artifact {
+		return bundle.Artifact{File: profile + ".tar.gz", SHA256: "abc", Size: 1, Manifest: []byte(`{"profile":"` + profile + `"` + extra + `}`)}
+	}
+	manifest := &bundle.Manifest{Release: "v9.9.9", Commit: strings.Repeat("a", 40), Units: map[string]bundle.Artifact{
+		"host": unit("host", `,"files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]`), "control": unit("control", ""),
+	}}
+	_, err = FetchRelease(state, "r1", manifest)
+	require.NoError(t, err)
+	root, err := privateRoot(state)
+	require.NoError(t, err)
+	defer root.Close()
+	release, exists, err := readRelease(t.Context(), root, "r1", "amd64")
+	require.NoError(t, err, "登记的版本要读得出来，否则 --release 全部不可用")
+	require.True(t, exists)
+	require.Equal(t, "def", release.HelperSHA256)
+}
+
+func TestExternalUnpackCreatesPrivateStage(t *testing.T) {
+	require.Contains(t, externalUnpackScript, "umask 077", "stage 目录要 0700，后面上传密钥时会检查")
+	require.Contains(t, externalUnpackScript, `mkdir -p "$1"`, "软件包在 staging，没有上传步骤替它建目录")
 }

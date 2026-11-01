@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -54,27 +55,53 @@ func TestObserverTreatsHistoryAccumulationAsPartialWithinTheLimit(t *testing.T) 
 	observer.now = func() time.Time { return now }
 	barEnd := now
 
-	observer.ObservePeriod(instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusSkipped, "history_insufficient")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_skipped")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_skipped")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "积累中不计模块失败")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_runs_total", "success"), "积累中模块在正常处理事件，记成功，健康检查才不会因长时间没有成功而过期")
 
 	now = now.Add(minAccumulationLimit)
-	observer.ObservePeriod(instance, "1h", barEnd.Add(2*time.Hour).Add(-time.Hour), barEnd.Add(2*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(2*time.Hour).Add(-time.Hour), barEnd.Add(2*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 3, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "上限之内（72 小时，含一小时余量）")
 
 	now = now.Add(2 * time.Hour)
-	observer.ObservePeriod(instance, "1h", barEnd.Add(3*time.Hour).Add(-time.Hour), barEnd.Add(3*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(3*time.Hour).Add(-time.Hour), barEnd.Add(3*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "超过上限不再是积累")
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "回到模块失败")
 
-	observer.ObservePeriod(instance, "1h", barEnd.Add(4*time.Hour).Add(-time.Hour), barEnd.Add(4*time.Hour), store.StatusOK, "")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(4*time.Hour).Add(-time.Hour), barEnd.Add(4*time.Hour), store.StatusOK, "")
 	require.Empty(t, observer.accumulatingSince, "ok 之后清除计时")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(5*time.Hour).Add(-time.Hour), barEnd.Add(5*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(5*time.Hour).Add(-time.Hour), barEnd.Add(5*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 4, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "重新计时")
 
-	observer.ObservePeriod(instance, "1h", barEnd.Add(6*time.Hour).Add(-time.Hour), barEnd.Add(6*time.Hour), store.StatusSkipped, "factor_missing")
+	observer.ObservePeriod(context.Background(), instance, "1h", barEnd.Add(6*time.Hour).Add(-time.Hour), barEnd.Add(6*time.Hour), store.StatusSkipped, "factor_missing")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "与积累无关的跳过原因照旧")
+}
+
+// 去掉 min_age_bars 之后，新实例前几根 ma__10 为空：第一个 ok 之前的 too_many_missing 算积累，有上限；有过 ok 之后恢复原样。
+func TestObserverTreatsTooManyMissingAsWarmupUntilFirstOk(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	require.NoError(t, err)
+	require.NoError(t, observer.refresh(context.Background()))
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	require.NoError(t, err)
+	session := "session-1"
+	instance.SessionID = &session
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	observer.now = func() time.Time { return now }
+	period := func() {
+		observer.ObservePeriod(context.Background(), instance, "1m", now.Add(-time.Minute), now, store.StatusSkipped, engine.SkipTooManyMissing)
+	}
+	period()
+	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "第一个 ok 之前算积累")
+	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
+
+	now = now.Add(warmupMinimum + time.Minute)
+	period()
+	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "超过上限还缺数要告警")
 }

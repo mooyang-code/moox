@@ -1,16 +1,13 @@
 package unitdeploy
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
 // Binding 记录一次首次安装用的部署配置和版本。本机状态里的软件和身份只对它们有效。
@@ -42,6 +39,31 @@ func MarkStep(stateDir, name string) error {
 	return saveJSON(root, name, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339)}, true)
 }
 
+// MarkInitStorage 记下元数据已导入和这份种子的摘要。
+func MarkInitStorage(stateDir, seedSHA256 string) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, StepInitStorage, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339), "seed_sha256": seedSHA256}, true)
+}
+
+// ImportedSeed 返回 setup init --stage storage 导入过的种子摘要，没有记录时为空。
+func ImportedSeed(stateDir string) string {
+	raw, err := os.ReadFile(filepath.Join(stateDir, StepInitStorage))
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		Seed string `json:"seed_sha256"`
+	}
+	if json.Unmarshal(raw, &record) != nil {
+		return ""
+	}
+	return record.Seed
+}
+
 // MarkHostReady 记下主机服务和看护都装好了。
 func MarkHostReady(stateDir, hostID string) error {
 	root, err := privateRoot(filepath.Join(stateDir, "hosts", hostID))
@@ -56,7 +78,11 @@ func MarkHostReady(stateDir, hostID string) error {
 const (
 	StepInitStorage = "init-storage.json"
 	StepInitReady   = "init-ready.json"
+	StepBackup      = "backup-ready.json"
 )
+
+// StartedStep 返回一个空间已启动的记录文件名。
+func StartedStep(spaceID string) string { return "start-ready-" + spaceID + ".json" }
 
 // VerifiedStep 返回一个空间验收通过的记录文件名。
 func VerifiedStep(spaceID string) string { return "verify-ready-" + spaceID + ".json" }
@@ -83,11 +109,18 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
 	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
 	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
+	state.BackedUp = fileExists(filepath.Join(stateDir, StepBackup))
 	state.Verified = map[string]bool{}
 	if matches, err := filepath.Glob(filepath.Join(stateDir, VerifiedStep("*"))); err == nil {
 		for _, match := range matches {
 			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "verify-ready-"), ".json")
 			state.Verified[name] = true
+		}
+	}
+	state.Started = map[string]bool{}
+	if matches, err := filepath.Glob(filepath.Join(stateDir, StartedStep("*"))); err == nil {
+		for _, match := range matches {
+			state.Started[strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "start-ready-"), ".json")] = true
 		}
 	}
 	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))
@@ -122,24 +155,4 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 func fileExists(name string) bool {
 	_, err := os.Lstat(name)
 	return err == nil
-}
-
-// TrialPackage 按全部单元试打包到临时目录，确认产物包能用，走的是和正式部署相同的路径。
-// 没有预编译二进制（源码目录）时跳过，部署时才在本机构建。
-func TrialPackage(ctx context.Context, options DeployOptions, arch string) error {
-	if options.BinaryDirectory == "" {
-		return nil
-	}
-	work, err := os.MkdirTemp("", "moox-trial-package-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(work)
-	for _, profile := range append([]string{"storage"}, releaseProfiles...) {
-		_, err := unitpackage.Package(ctx, unitpackage.Options{RepositoryRoot: options.RepositoryRoot, BinaryDirectory: options.BinaryDirectory, Output: filepath.Join(work, profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch})
-		if err != nil {
-			return fmt.Errorf("bundle_incomplete: 产物包打不出 %s 单元，没有清除任何主机: %w", profile, err)
-		}
-	}
-	return nil
 }

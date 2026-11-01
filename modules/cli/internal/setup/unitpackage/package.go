@@ -72,6 +72,10 @@ type Result struct {
 	Archive  string   `json:"archive"`
 	SHA256   string   `json:"sha256"`
 	Manifest Manifest `json:"manifest"`
+	// 下载的软件不在这台电脑上：Archive 为空，这几项说明去哪里取。
+	RemoteFile string `json:"remote_file,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	Release    string `json:"release,omitempty"`
 }
 
 type unitAsset struct {

@@ -33,6 +33,10 @@ type LocalState struct {
 	// InitStorage、InitReady 表示 setup init --stage storage、setup init 已完成。
 	InitStorage bool
 	InitReady   bool
+	// BackedUp 表示 setup install 做过配置备份。
+	BackedUp bool
+	// Started 是已启动的空间，见 setup start。
+	Started map[string]bool
 	// Verified 是验收通过的空间，见 setup verify。
 	Verified map[string]bool
 }
@@ -50,6 +54,12 @@ func Decide(reports []HostReport, control string, local LocalState) Decision {
 	}
 	if local.WipePending {
 		return Decision{Route: RouteExisting, Reasons: []string{"上次 setup wipe 没有做完，重新运行 setup wipe"}}
+	}
+	// 干净的机器上也可能有目录外的进程，要在判断空机之前处理，由用户确认后结束。
+	for _, report := range reports {
+		if len(report.ProcessesOutside) != 0 {
+			return Decision{Route: RouteExisting, Reasons: []string{fmt.Sprintf("%s（%s）：部署目录之外还有 MooX 进程：%v，确认后用 setup wipe --kill-outside 结束", report.Host, report.Address, report.ProcessesOutside)}}
+		}
 	}
 	empty, deployed := true, false
 	remote := ""
@@ -113,9 +123,6 @@ func blockers(reports []HostReport) []string {
 		}
 		if report.HelperRunning {
 			add(report, "上一次部署操作还在运行，等它结束再继续")
-		}
-		if len(report.ProcessesOutside) != 0 {
-			add(report, "部署目录之外还有 MooX 进程：%v", report.ProcessesOutside)
 		}
 		if len(report.PortsOccupied) != 0 {
 			add(report, "这些端口被其他程序占用：%v", report.PortsOccupied)

@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -76,6 +77,8 @@ type HostReport struct {
 	SizesKB          map[string]int64  `json:"sizes_kb,omitempty"`
 	// HelperRunning 表示目标机上还有部署助手在运行。
 	HelperRunning bool `json:"helper_running"`
+	// StagingKB 是已下载的软件包占用的空间，它们不算遗留。
+	StagingKB int64 `json:"staging_kb"`
 	// DiskFreeKB 是部署目录所在磁盘的可用空间，-1 表示没查到。
 	DiskFreeKB int64 `json:"disk_free_kb"`
 	// ReclaimableKB 是下一次部署开始时会自动清掉的空间（失败尝试的残留），只在 Options.Reclaim 时统计。
@@ -119,11 +122,12 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 	paths := manifest.Paths.Resolved()
 	control := manifest.ControlHost().Name
 	hosts := manifest.Hosts()
-	reports := make([]HostReport, 0, len(hosts))
-	for _, host := range hosts {
-		if options.Host != "" && host.Name != options.Host {
-			continue
-		}
+	selected := slices.DeleteFunc(slices.Clone(hosts), func(host setupconfig.Host) bool { return options.Host != "" && host.Name != options.Host })
+	// 并行检测，结果保持主机顺序：清除范围的摘要依赖这个顺序。
+	reports := make([]HostReport, len(selected))
+	errs := make([]error, len(selected))
+	var workers sync.WaitGroup
+	for i, host := range selected {
 		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes, "reclaim": options.Reclaim}
 		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
 		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {
@@ -132,11 +136,15 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 		if host.Name == control {
 			request["admin_db"] = path.Join(paths.ControlRoot, "current/admin/data/admin.db")
 		}
-		report, err := inspect(ctx, dial, host, request)
-		if err != nil {
-			return nil, err
-		}
-		reports = append(reports, report)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			reports[i], errs[i] = inspect(ctx, dial, host, request)
+		}()
+	}
+	workers.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 	return reports, nil
 }

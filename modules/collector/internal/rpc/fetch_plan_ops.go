@@ -37,11 +37,22 @@ func (s *Service) ReregisterFetchPlan(ctx context.Context, req *pb.ReregisterFet
 	return &pb.ReregisterFetchPlanRsp{RetInfo: retOK(), Datasets: datasets, BackfillJobs: int32(jobs)}, nil
 }
 
+// TriggerFetchPlan 让空间立刻对账一轮。
+func (s *Service) TriggerFetchPlan(ctx context.Context, req *pb.TriggerFetchPlanReq) (*pb.TriggerFetchPlanRsp, error) {
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" {
+		return &pb.TriggerFetchPlanRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
+	}
+	s.fetchPlanControl.Trigger(strings.TrimSpace(req.GetSpaceId()))
+	return &pb.TriggerFetchPlanRsp{RetInfo: retOK()}, nil
+}
+
 // FetchPlanControl 是采集计划管理器对 RPC 暴露的状态查询。
 type FetchPlanControl interface {
 	TimersDisabled(space string) bool
 	// PlanIssue 返回空间最近一轮对账没有建出计划的原因。
 	PlanIssue(space string) string
+	// Trigger 让空间尽快对账一轮。
+	Trigger(space string)
 }
 
 // SetFetchPlanControl 注入采集计划管理器。

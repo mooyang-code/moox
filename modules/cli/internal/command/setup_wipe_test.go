@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -24,8 +28,7 @@ type wipeHarness struct {
 	reports  []deployscan.HostReport
 	wiped    []string
 	wipeErr  error
-	trialErr error
-	trials   int
+	mu       sync.Mutex
 	operator string
 	state    string
 }
@@ -47,10 +50,12 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 		scanDeployment: func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error) {
 			return h.reports, nil
 		},
-		wipeHost: func(_ context.Context, host setupconfig.Host, _ string, _ []string) (deployscan.HostResult, error) {
+		wipeHost: func(_ context.Context, host setupconfig.Host, _ string, _ []string, _ bool) (deployscan.HostResult, error) {
 			if h.wipeErr != nil {
 				return deployscan.HostResult{}, h.wipeErr
 			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
 			h.wiped = append(h.wiped, host.Name)
 			if len(h.wiped) == len(h.reports) {
 				for i := range h.reports {
@@ -59,7 +64,6 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 			}
 			return deployscan.HostResult{Host: host.Name}, nil
 		},
-		trialPackage: func(context.Context, unitdeploy.DeployOptions) error { h.trials++; return h.trialErr },
 	}
 	return h
 }
@@ -94,7 +98,6 @@ func TestSetupWipePreviewChangesNothing(t *testing.T) {
 	h := newWipeHarness(t)
 	h.digest(t)
 	require.Empty(t, h.wiped)
-	require.Zero(t, h.trials)
 	require.Nil(t, deployscan.ReadPending(h.operator))
 }
 
@@ -118,7 +121,6 @@ func TestSetupWipeClearsAllHostsAndArchivesLocalState(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `"status":"wiped"`)
 	require.Len(t, h.wiped, len(h.reports))
-	require.Equal(t, 1, h.trials)
 	require.FileExists(t, filepath.Join(h.operator, "config.key"))
 	require.FileExists(t, filepath.Join(h.operator, "known_hosts"))
 	require.NoFileExists(t, filepath.Join(h.operator, "gateway-client.yaml"))
@@ -147,16 +149,6 @@ func TestSetupWipeStopsOnTradeRisk(t *testing.T) {
 	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--accept-trade-risk")
 	require.NoError(t, err)
 	require.NotEmpty(t, h.wiped)
-}
-
-func TestSetupWipeTouchesNothingWhenBundleBroken(t *testing.T) {
-	h := newWipeHarness(t)
-	digest := h.digest(t)
-	h.trialErr = errors.New("bundle_incomplete")
-	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
-	require.ErrorContains(t, err, "bundle_incomplete")
-	require.Empty(t, h.wiped)
-	require.Nil(t, deployscan.ReadPending(h.operator))
 }
 
 func TestSetupWipeRefusesBlockedHosts(t *testing.T) {
@@ -243,4 +235,92 @@ func TestSetupLogsChecksHostAndComponent(t *testing.T) {
 	require.ErrorContains(t, err, "没有部署在")
 	_, err = cmd("--host", control, "--component", "admin", "--lines", "99999")
 	require.ErrorContains(t, err, "--lines")
+}
+
+func TestSetupWipeRunsHostsInParallelAndReportsEveryFailure(t *testing.T) {
+	h := newWipeHarness(t)
+	digest := h.digest(t)
+	var running, peak atomic.Int64
+	h.deps.wipeHost = func(_ context.Context, host setupconfig.Host, _ string, _ []string, _ bool) (deployscan.HostResult, error) {
+		peak.Store(max(peak.Load(), running.Add(1)))
+		time.Sleep(20 * time.Millisecond)
+		running.Add(-1)
+		return deployscan.HostResult{}, fmt.Errorf("wipe_failed: %s", host.Name)
+	}
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
+	for _, report := range h.reports {
+		require.ErrorContains(t, err, report.Host)
+	}
+	if len(h.reports) > 1 {
+		require.Greater(t, peak.Load(), int64(1))
+	}
+	require.NotNil(t, deployscan.ReadPending(h.operator), "失败后留着标记，重跑接着清")
+}
+
+func TestSetupWipeRequiresKillOutsideConfirmation(t *testing.T) {
+	h := newWipeHarness(t)
+	h.reports[0].ProcessesOutside = []string{"/opt/moox-admin"}
+	digest := h.digest(t)
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
+	require.ErrorContains(t, err, "wipe_outside_processes")
+	require.Empty(t, h.wiped)
+}
+
+type fakeFunctionCloud struct {
+	mu      sync.Mutex
+	deleted []string
+}
+
+func (f *fakeFunctionCloud) ListSCFNamespaces(context.Context) ([]string, error) {
+	return []string{"default", "moox-crypto-plan", "moox-crypto-ns2", "other-plan"}, nil
+}
+
+func (f *fakeFunctionCloud) ListSCFFunctions(_ context.Context, namespace string) ([]string, error) {
+	return []string{"moox-fetch-plan-" + namespace, "someone-else"}, nil
+}
+
+func (f *fakeFunctionCloud) DeleteSCFFunction(_ context.Context, namespace, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, namespace+"/"+name)
+	return nil
+}
+
+func TestSetupPlanFunctionsMatchOnlyMooX(t *testing.T) {
+	cloud := &fakeFunctionCloud{}
+	functions, err := listRegionPlanFunctions(context.Background(), cloud, "ap-tokyo")
+	require.NoError(t, err)
+	require.Equal(t, []setupPlanFunction{
+		{Region: "ap-tokyo", Namespace: "moox-crypto-plan", Name: "moox-fetch-plan-moox-crypto-plan"},
+		{Region: "ap-tokyo", Namespace: "moox-crypto-ns2", Name: "moox-fetch-plan-moox-crypto-ns2"},
+	}, functions)
+}
+
+func TestSetupWipeDoesNotTouchFunctionsByDefault(t *testing.T) {
+	h := newWipeHarness(t)
+	cloud := &fakeFunctionCloud{}
+	h.deps.regionCloud = func(setupconfig.Manifest, string) (setupFunctionCloud, error) { return cloud, nil }
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", h.digest(t))
+	require.NoError(t, err)
+	require.Empty(t, cloud.deleted, "云账号可能有其他环境，不默认删除")
+}
+
+func TestSetupWipeCleanFunctionsRequiresConfirmedList(t *testing.T) {
+	h := newWipeHarness(t)
+	cloud := &fakeFunctionCloud{}
+	h.deps.regionCloud = func(setupconfig.Manifest, string) (setupFunctionCloud, error) { return cloud, nil }
+	digest := h.digest(t)
+	out, err := h.run(t, newSetupWipeCommand, "--clean-functions")
+	require.NoError(t, err)
+	var preview struct {
+		Digest string `json:"functions_digest"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &preview))
+	require.NotEmpty(t, preview.Digest)
+	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--clean-functions", "--expect-functions", "wrong")
+	require.ErrorContains(t, err, "wipe_scope_changed")
+	require.Empty(t, h.wiped)
+	_, err = h.run(t, newSetupWipeCommand, "--yes", "--expect", digest, "--clean-functions", "--expect-functions", preview.Digest)
+	require.NoError(t, err)
+	require.NotEmpty(t, cloud.deleted)
 }
