@@ -9,6 +9,10 @@
   <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Linux-lightgrey.svg" alt="平台">
 </p>
 
+<p align="center">
+  <a href="#介绍视频">介绍视频</a> · <a href="#安装部署">安装部署</a> · <a href="#管理台">管理台</a> · <a href="#文档">文档</a>
+</p>
+
 ## MooX 是什么
 
 MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、因子计算、策略决策、实盘交易与监控告警全链路，私有化部署于用户自有服务器。
@@ -20,6 +24,53 @@ MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、�
 - **多市场通用**：加密货币、A 股、港股、美股共用同一套采集、存储、因子与策略能力。
 
 - **由 AI Agent 部署与运维**：通过 skill 完成安装、初始化与日常管理，无需本地编译。
+
+---
+
+## 介绍视频
+
+3 分钟看懂 MooX：
+
+https://github.com/user-attachments/assets/61539b04-b183-4570-bc6d-c4ad0e6ed537
+
+---
+
+## 安装部署
+
+> 首次部署大概需要 30 分钟，请耐心等待。其中包括你填写配置的时间，机器部署由 Agent 自动完成。
+
+将以下提示词发送给可执行命令的 AI Agent（如 Claude Code、Codex）：
+
+```text
+请帮我安装并部署 MooX 量化系统：
+1. 从 https://github.com/mooyang-code/moox/releases （国内网络用 https://cnb.cool/mooyang-code/moox/-/releases ）
+   下载最新版本的 moox-bundle_<版本>_linux_amd64.tar.gz、适合我这台电脑的 moox-cli_<版本>_<系统>_<架构> 和 SHA256SUMS，校验后解压：
+   产物包解压出 moox-<版本>/ 目录，把 moox-cli 放进 moox-<版本>/bin/。之后所有命令都在 moox-<版本>/ 目录里执行。
+2. 把 moox-<版本>/skills/moox 安装成你的 skill（Claude Code：复制或软链到 ~/.claude/skills/moox），然后读取其中的 SKILL.md，按 references/install.md 执行。
+3. 运行 ./bin/moox-cli config init，让我在自己的浏览器里填写云账号密钥、服务器 IP、开通 SSH 免密登录、设置管理员和告警。
+   你不要打开、填写或读取这个页面和生成的 moox.toml。
+4. 我填完后，问我要启动哪个空间，按 skill 运行 setup install 完成部署、初始化、启动和验收，最后告诉我管理台地址和还需要我做的事。
+所有写操作先给我预览，删除、清空、重置等操作必须等我确认。
+```
+
+Agent 将按照 [安装与初始化](skills/moox/references/install.md) 完成部署；部署完成后，通过浏览器访问 `https://<管理台地址>:9527`。
+
+### 准备工作
+
+- **云账号**：云上的自动化操作目前通过腾讯云 API 完成。需创建腾讯云子用户 API 密钥，并授权 `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess` 六个预设策略。
+
+- **服务器**（Linux x86_64；目前须为上述腾讯云账号下的轻量应用服务器或 CVM，用于自动识别地域规格与配置防火墙）：
+
+  | 角色 | 是否必需 | 建议配置 |
+  | --- | --- | --- |
+  | 存储机 | 必需 | 4 核 16G、100G 磁盘 |
+  | 管理台 | 必需，可与存储机或海外机共用 | 2 核 4G |
+  | 海外机 | 采集加密货币行情时必需，建议位于香港 | 2 核 4G |
+  | 因子机 | 可选，可使用局域网内的 Linux 主机 | 8 核 16G |
+
+- **本机**：macOS 或 Linux，可通过 SSH 访问上述服务器（Windows 目前只能运行只读命令，部署走不通）。无需安装 Go、Docker 或 Node。
+
+- **告警**：企业微信或飞书群机器人的 Webhook 地址（可选，部署后也能在管理台添加）。
 
 ---
 
@@ -141,45 +192,6 @@ MooX 是一套**生产级分布式实时量化平台**，覆盖行情采集、�
 - 腾讯云：轻量应用服务器、CVM、SCF 云函数、CLS 日志服务
 - 其他云厂商：支持中；小众云厂商可以手动部署，参考本仓库源码与 `docs/部署与运维.md` 自行初始化各模块配置
 - 当前所有服务器需要部署在腾讯云上（因子机除外，可以是家里或局域网的 Linux 机器）
-
----
-
-## 快速开始
-
-**前置条件**
-
-- **云账号**：云上的自动化操作目前通过腾讯云 API 完成。需创建腾讯云子用户 API 密钥，并授权 `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess` 六个预设策略。
-
-- **服务器**（Linux x86_64；目前须为上述腾讯云账号下的轻量应用服务器或 CVM，用于自动识别地域规格与配置防火墙）：
-
-  | 角色 | 是否必需 | 建议配置 |
-  | --- | --- | --- |
-  | 存储机 | 必需 | 4 核 16G、100G 磁盘 |
-  | 管理台 | 必需，可与存储机或海外机共用 | 2 核 4G |
-  | 海外机 | 采集加密货币行情时必需，建议位于香港 | 2 核 4G |
-  | 因子机 | 可选，可使用局域网内的 Linux 主机 | 8 核 16G |
-
-- **本机**：macOS 或 Linux，可通过 SSH 访问上述服务器（Windows 目前只能运行只读命令，部署走不通）。无需安装 Go、Docker 或 Node。
-
-- **告警**：企业微信或飞书群机器人的 Webhook 地址（可选，部署后也能在管理台添加）。
-
-**安装**
-
-将以下提示词发送给可执行命令的 AI Agent（如 Claude Code、Codex）：
-
-```text
-请帮我安装并部署 MooX 量化系统：
-1. 从 https://github.com/mooyang-code/moox/releases （国内网络用 https://cnb.cool/mooyang-code/moox/-/releases ）
-   下载最新版本的 moox-bundle_<版本>_linux_amd64.tar.gz、适合我这台电脑的 moox-cli_<版本>_<系统>_<架构> 和 SHA256SUMS，校验后解压：
-   产物包解压出 moox-<版本>/ 目录，把 moox-cli 放进 moox-<版本>/bin/。之后所有命令都在 moox-<版本>/ 目录里执行。
-2. 把 moox-<版本>/skills/moox 安装成你的 skill（Claude Code：复制或软链到 ~/.claude/skills/moox），然后读取其中的 SKILL.md，按 references/install.md 执行。
-3. 运行 ./bin/moox-cli config init，让我在自己的浏览器里填写云账号密钥、服务器 IP、开通 SSH 免密登录、设置管理员和告警。
-   你不要打开、填写或读取这个页面和生成的 moox.toml。
-4. 我填完后，按 skill 依次完成部署、初始化和验收，最后告诉我管理台地址和还需要我做的事。
-所有写操作先给我预览，删除、清空、重置等操作必须等我确认。
-```
-
-Agent 将按照 [安装与初始化](skills/moox/references/install.md) 完成部署；部署完成后，通过浏览器访问 `https://<管理台地址>:9527`。
 
 ---
 
