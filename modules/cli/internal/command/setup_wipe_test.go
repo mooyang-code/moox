@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -47,7 +50,7 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 		scanDeployment: func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error) {
 			return h.reports, nil
 		},
-		wipeHost: func(_ context.Context, host setupconfig.Host, _ string, _ []string) (deployscan.HostResult, error) {
+		wipeHost: func(_ context.Context, host setupconfig.Host, _ string, _ []string, _ bool) (deployscan.HostResult, error) {
 			if h.wipeErr != nil {
 				return deployscan.HostResult{}, h.wipeErr
 			}
@@ -231,4 +234,33 @@ func TestSetupLogsChecksHostAndComponent(t *testing.T) {
 	require.ErrorContains(t, err, "没有部署在")
 	_, err = cmd("--host", control, "--component", "admin", "--lines", "99999")
 	require.ErrorContains(t, err, "--lines")
+}
+
+func TestSetupWipeRunsHostsInParallelAndReportsEveryFailure(t *testing.T) {
+	h := newWipeHarness(t)
+	digest := h.digest(t)
+	var running, peak atomic.Int64
+	h.deps.wipeHost = func(_ context.Context, host setupconfig.Host, _ string, _ []string, _ bool) (deployscan.HostResult, error) {
+		peak.Store(max(peak.Load(), running.Add(1)))
+		time.Sleep(20 * time.Millisecond)
+		running.Add(-1)
+		return deployscan.HostResult{}, fmt.Errorf("wipe_failed: %s", host.Name)
+	}
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
+	for _, report := range h.reports {
+		require.ErrorContains(t, err, report.Host)
+	}
+	if len(h.reports) > 1 {
+		require.Greater(t, peak.Load(), int64(1))
+	}
+	require.NotNil(t, deployscan.ReadPending(h.operator), "失败后留着标记，重跑接着清")
+}
+
+func TestSetupWipeRequiresKillOutsideConfirmation(t *testing.T) {
+	h := newWipeHarness(t)
+	h.reports[0].ProcessesOutside = []string{"/opt/moox-admin"}
+	digest := h.digest(t)
+	_, err := h.run(t, newSetupWipeCommand, "--yes", "--expect", digest)
+	require.ErrorContains(t, err, "wipe_outside_processes")
+	require.Empty(t, h.wiped)
 }

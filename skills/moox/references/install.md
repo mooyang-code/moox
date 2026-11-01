@@ -262,6 +262,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `wipe_failed`、`wipe_interrupted`、`wipe_incomplete` | 清除没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |
 | `delete_target_rejected` | 部署目录是系统目录或家目录，或看不到 MooX 标记 | 核对 `moox.toml` 的 `[paths]`，不要手工删除 |
+| `wipe_outside_processes` | 部署目录之外还有 MooX 进程 | 把预览里的路径告诉用户，用户确认后加 `--kill-outside` 再清除 |
 | `bundle_incomplete` | 产物包清单不完整，或缺这个单元 | 重新下载产物包 |
 | `bundle_version_mismatch` | 产物包和 moox-cli 不是同一版本 | 下载同一版本的 CLI 和产物包 |
 | `target_arch_unsupported` | 发布只有 linux/amd64，目标机架构不同 | 换 amd64 主机 |

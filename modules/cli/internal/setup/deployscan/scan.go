@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -121,11 +122,12 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 	paths := manifest.Paths.Resolved()
 	control := manifest.ControlHost().Name
 	hosts := manifest.Hosts()
-	reports := make([]HostReport, 0, len(hosts))
-	for _, host := range hosts {
-		if options.Host != "" && host.Name != options.Host {
-			continue
-		}
+	selected := slices.DeleteFunc(slices.Clone(hosts), func(host setupconfig.Host) bool { return options.Host != "" && host.Name != options.Host })
+	// 并行检测，结果保持主机顺序：清除范围的摘要依赖这个顺序。
+	reports := make([]HostReport, len(selected))
+	errs := make([]error, len(selected))
+	var workers sync.WaitGroup
+	for i, host := range selected {
 		request := map[string]any{"deploy_root": paths.DeployRoot, "ports": hostPorts(manifest, catalog, host.Name), "sizes": options.Sizes, "reclaim": options.Reclaim}
 		// 归档目录只在跑 archive-worker 的主机上属于 MooX，别的主机上同名目录是用户自己的。
 		if slices.Contains(manifest.Deployments[host.Name], "archive-worker") {
@@ -134,11 +136,15 @@ func Scan(ctx context.Context, manifest setupconfig.Manifest, dial Dial, options
 		if host.Name == control {
 			request["admin_db"] = path.Join(paths.ControlRoot, "current/admin/data/admin.db")
 		}
-		report, err := inspect(ctx, dial, host, request)
-		if err != nil {
-			return nil, err
-		}
-		reports = append(reports, report)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			reports[i], errs[i] = inspect(ctx, dial, host, request)
+		}()
+	}
+	workers.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
 	}
 	return reports, nil
 }

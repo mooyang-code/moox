@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -41,6 +42,15 @@ const minUploadKB = 1 << 20
 // setupBinding 是这次命令用的配置和版本。
 func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
 	return unitdeploy.Binding{DeploymentSHA256: snapshot.DeploymentDigest(), ConfigPath: snapshot.Path(), Version: Version}
+}
+
+// planOutside 列出清除范围里部署目录之外的进程。
+func planOutside(plan deployscan.Plan) []string {
+	outside := []string{}
+	for _, host := range plan.Hosts {
+		outside = append(outside, host.Outside...)
+	}
+	return outside
 }
 
 // consoleCertPath 是这台电脑上缓存的管理台证书。
@@ -150,7 +160,7 @@ func checkAdminRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.
 
 func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	var file, source, expect string
-	var yes, acceptTradeRisk bool
+	var yes, acceptTradeRisk, killOutside bool
 	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "wipe",
@@ -197,42 +207,21 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if expect != plan.Digest {
 				return fmt.Errorf("wipe_scope_changed: 清除范围和预览不一致（现在是 %s），没有清除任何主机；重新预览并让用户确认", plan.Digest)
 			}
+			if outside := planOutside(plan); len(outside) != 0 && !killOutside {
+				return fmt.Errorf("wipe_outside_processes: 部署目录之外还有 MooX 进程 %v，没有清除任何主机；用户确认后加 --kill-outside", outside)
+			}
 			if (plan.Trade == deployscan.TradeLive || plan.Trade == deployscan.TradeUnreadable) && !acceptTradeRisk {
 				return fmt.Errorf("wipe_trade_risk: Trade 状态是 %s（可能有实盘账户），没有清除任何主机；用户明确同意后加 --accept-trade-risk", plan.Trade)
 			}
-			if err := snapshot.VerifyUnchanged(); err != nil {
-				return errors.New("config_changed")
-			}
-			if err := deployscan.MarkPending(options.OperatorDirectory, plan); err != nil {
+			results, err := executeSetupWipe(cmd.Context(), deps, snapshot, options, plan, killOutside)
+			if err != nil {
 				return err
-			}
-			dirs := map[string][]string{}
-			for _, host := range plan.Hosts {
-				dirs[host.Host] = host.Dirs
-			}
-			results := []deployscan.HostResult{}
-			for _, host := range deployscan.Order(manifest) {
-				result, err := deps.wipeHost(cmd.Context(), host, manifest.Paths.Resolved().DeployRoot, dirs[host.Name])
-				if err != nil {
-					return err
-				}
-				results = append(results, result)
 			}
 			archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, consoleCertPath(snapshot), time.Now())
 			if err != nil {
 				return err
 			}
-			reports, err = deps.scanDeployment(cmd.Context(), snapshot, deployscan.Options{})
-			if err != nil {
-				return err
-			}
-			decision = deployscan.Decide(reports, manifest.ControlHost().Name, deployscan.LocalState{})
-			if decision.Route != deployscan.RouteFresh {
-				return fmt.Errorf("wipe_incomplete: 清除后 route=%s，重新运行 setup wipe 会接着清", decision.Route)
-			}
-			if err := deployscan.ClearPending(options.OperatorDirectory); err != nil {
-				return err
-			}
+			decision = deployscan.Decision{Route: deployscan.RouteFresh}
 			return writeSetupJSON(cmd, map[string]any{"status": "wiped", "route": decision.Route, "hosts": results, "archived": archived})
 		},
 	}
@@ -242,6 +231,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "确认清除，不加只预览")
 	cmd.Flags().StringVar(&expect, "expect", "", "预览输出的 digest，范围变了会拒绝")
+	cmd.Flags().BoolVar(&killOutside, "kill-outside", false, "用户确认后，结束预览里列出的部署目录之外的 MooX 进程")
 	cmd.Flags().BoolVar(&acceptTradeRisk, "accept-trade-risk", false, "用户明确同意后，在查到实盘账户或查不了 Trade 时继续")
 	return cmd
 }
@@ -250,6 +240,40 @@ func defaultSetupScanDeployment(ctx context.Context, snapshot *setupconfig.Snaps
 	return deployscan.Scan(ctx, snapshot.Manifest, dialSetupHost, options)
 }
 
-func defaultSetupWipeHost(ctx context.Context, host setupconfig.Host, root string, dirs []string) (deployscan.HostResult, error) {
-	return deployscan.WipeHost(ctx, dialSetupHost, host, root, dirs)
+func defaultSetupWipeHost(ctx context.Context, host setupconfig.Host, root string, dirs []string, killOutside bool) (deployscan.HostResult, error) {
+	return deployscan.WipeHost(ctx, dialSetupHost, host, root, dirs, killOutside)
+}
+
+// executeSetupWipe 并行清除全部主机并确认结果，setup wipe 和 setup install 共用。一台失败时全部重跑，清除脚本可重复执行。
+func executeSetupWipe(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, plan deployscan.Plan, killOutside bool) ([]deployscan.HostResult, error) {
+	if err := snapshot.VerifyUnchanged(); err != nil {
+		return nil, errors.New("config_changed")
+	}
+	if err := deployscan.MarkPending(options.OperatorDirectory, plan); err != nil {
+		return nil, err
+	}
+	manifest := snapshot.Manifest
+	results := make([]deployscan.HostResult, len(plan.Hosts))
+	errs := make([]error, len(plan.Hosts))
+	var workers sync.WaitGroup
+	for i, host := range plan.Hosts {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			results[i], errs[i] = deps.wipeHost(ctx, manifest.HostByID(host.Host), manifest.Paths.Resolved().DeployRoot, host.Dirs, killOutside)
+		}()
+	}
+	workers.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
+	if err != nil {
+		return nil, err
+	}
+	decision := deployscan.Decide(reports, manifest.ControlHost().Name, deployscan.LocalState{})
+	if decision.Route != deployscan.RouteFresh {
+		return nil, fmt.Errorf("wipe_incomplete: 清除后 route=%s，重新运行 setup wipe 会接着清", decision.Route)
+	}
+	return results, deployscan.ClearPending(options.OperatorDirectory)
 }

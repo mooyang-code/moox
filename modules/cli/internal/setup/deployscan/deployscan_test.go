@@ -236,7 +236,7 @@ func TestInspectFlagsUnsafeRootMode(t *testing.T) {
 
 func wipe(t *testing.T, s *sandbox, dirs ...string) {
 	t.Helper()
-	result, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, dirs)
+	result, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, dirs, false)
 	require.NoError(t, err)
 	require.Empty(t, result.ProcessesOutside)
 }
@@ -269,16 +269,13 @@ func TestWipeClearsEverythingAndIsRepeatable(t *testing.T) {
 	remaining, err := os.ReadDir(external)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
-	stopped, err := os.ReadFile(filepath.Join(filepath.Dir(s.home), "stop.log"))
-	require.NoError(t, err)
-	require.Contains(t, string(stopped), "stopped")
 	log, err := os.ReadFile(filepath.Join(filepath.Dir(s.home), "systemctl.log"))
 	require.NoError(t, err)
 	for _, want := range []string{"stop moox-factor-engine.service", "disable moox-factor-engine.service", "daemon-reload"} {
 		require.Contains(t, string(log), want)
 	}
 
-	wipe(t, s, external) // 重跑：stop.sh、moox-runtime 都没了也不能卡住
+	wipe(t, s, external) // 重跑：什么都没了也不能卡住
 	require.True(t, s.inspect(t, map[string]any{"deploy_root": s.root}).Empty())
 }
 
@@ -303,7 +300,7 @@ func TestWipeStopsWhenSystemdUnreachable(t *testing.T) {
 	write(t, filepath.Join(s.home, ".config/systemd/user/moox-archive-worker.service"), "[Service]\n")
 	bin := strings.TrimPrefix(strings.Split(s.client.env[1], ":")[0], "PATH=")
 	script(t, filepath.Join(bin, "systemctl"), "exit 1")
-	_, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, nil)
+	_, err := WipeHost(context.Background(), s.dial, setupconfig.Host{Name: "control"}, s.root, nil, false)
 	require.ErrorContains(t, err, "systemd_unreachable")
 	require.FileExists(t, filepath.Join(s.root, "import/history.bin"), "连不上 systemd 时不能往下删")
 }
@@ -397,7 +394,7 @@ func TestDecideRoutes(t *testing.T) {
 		{"哈希不一致", []HostReport{installed}, other, RouteExisting},
 		{"清除没做完", []HostReport{clean}, LocalState{WipePending: true}, RouteExisting},
 		{"属主不同", []HostReport{foreign}, LocalState{}, RouteBlocked},
-		{"目录外有进程", []HostReport{outside}, LocalState{}, RouteBlocked},
+		{"目录外有进程", []HostReport{outside}, LocalState{}, RouteExisting},
 		{"端口被占", []HostReport{ports}, LocalState{}, RouteBlocked},
 		{"阻塞优先于未完成清除", []HostReport{ports}, LocalState{WipePending: true}, RouteBlocked},
 	}
@@ -642,18 +639,6 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	require.Error(t, decode(string(raw), &out))
 }
 
-func TestOrderClearsStorageLast(t *testing.T) {
-	manifest := setupconfig.Manifest{
-		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}, "storage": {Address: "198.51.100.2"}, "overseas": {Address: "198.51.100.3"}, "factor": {Address: "198.51.100.4"}},
-		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary"}, "overseas": {"trade"}, "factor": {"factor-engine"}},
-	}
-	names := []string{}
-	for _, host := range Order(manifest) {
-		names = append(names, host.Name)
-	}
-	require.Equal(t, []string{"factor", "overseas", "control", "storage"}, names)
-}
-
 func TestInspectReportsDiskAndAttempt(t *testing.T) {
 	s := newSandbox(t)
 	deployment(t, s)
@@ -857,4 +842,75 @@ func TestWipeKeepsDownloadedPackages(t *testing.T) {
 	require.FileExists(t, filepath.Join(s.root, "staging/abc/host.tar.gz"))
 	require.NoDirExists(t, filepath.Join(s.root, "identity"))
 	require.NoDirExists(t, filepath.Join(outsideDir, "staging"), "外部目录里同名目录照常清除")
+}
+
+func TestWipeResumesWithConfirmedDigest(t *testing.T) {
+	manifest := stepsManifest()
+	home := "/home/ubuntu"
+	full := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"host", "identity"}, Markers: true, Units: map[string]string{"host": "r1"}, Trade: TradeNone}}
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	plan, err := BuildPlan(manifest, full, nil)
+	require.NoError(t, err)
+	operator := t.TempDir()
+	require.NoError(t, MarkPending(operator, plan))
+
+	partial := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity"}, Units: map[string]string{}, Trade: TradeNone}}
+	pending := ReadPending(operator)
+	resumed, err := BuildPlan(manifest, partial, pending)
+	require.NoError(t, err)
+	require.Equal(t, plan.Digest, resumed.Digest, "半清之后沿用用户确认过的摘要")
+
+	require.NoError(t, MarkPending(operator, resumed))
+	require.Equal(t, []string{"host", "identity"}, ReadPending(operator).Hosts["control"].Entries, "已有标记不能被半清的范围覆盖")
+
+	grown := []HostReport{{Host: "control", Address: "198.51.100.1", Home: home, Entries: []string{"identity", "newcomer"}, Units: map[string]string{}, Trade: TradeNone}}
+	_, err = BuildPlan(manifest, grown, pending)
+	require.ErrorContains(t, err, "wipe_scope_changed")
+}
+
+func TestWipeBadPendingFallsBackToCurrentDigest(t *testing.T) {
+	operator := t.TempDir()
+	require.NoError(t, os.WriteFile(PendingPath(operator), []byte("broken"), 0o600))
+	manifest := stepsManifest()
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	report := []HostReport{{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Entries: []string{"host"}, Markers: true, Trade: TradeNone}}
+	first, err := BuildPlan(manifest, report, nil)
+	require.NoError(t, err)
+	second, err := BuildPlan(manifest, report, ReadPending(operator))
+	require.NoError(t, err)
+	require.Equal(t, first.Digest, second.Digest)
+}
+
+func TestOutsideProcessesEnterScope(t *testing.T) {
+	manifest := stepsManifest()
+	manifest.HostCatalog = map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.1"}}
+	clean := HostReport{Host: "control", Address: "198.51.100.1", Home: "/home/ubuntu", Trade: TradeNone}
+	dirty := clean
+	dirty.ProcessesOutside = []string{"/opt/moox-admin"}
+	first, err := BuildPlan(manifest, []HostReport{clean}, nil)
+	require.NoError(t, err)
+	second, err := BuildPlan(manifest, []HostReport{dirty}, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, first.Digest, second.Digest)
+	require.Equal(t, []string{"/opt/moox-admin"}, second.Hosts[0].Outside)
+}
+
+func TestWipeKillsRestartedProcesses(t *testing.T) {
+	if _, err := os.Stat("/proc/self/exe"); err != nil {
+		t.Skip("需要 /proc")
+	}
+	s := newSandbox(t)
+	deployment(t, s)
+	binary := filepath.Join(s.root, "host/moox-sleeper")
+	sleep, err := exec.LookPath("sleep")
+	require.NoError(t, err)
+	raw, err := os.ReadFile(sleep)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(binary), 0o755))
+	require.NoError(t, os.WriteFile(binary, raw, 0o755))
+	command := exec.Command(binary, "300")
+	require.NoError(t, command.Start())
+	t.Cleanup(func() { _ = command.Process.Kill() })
+	wipe(t, s)
+	require.Error(t, command.Wait(), "目录内的进程要被结束")
 }
