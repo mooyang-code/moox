@@ -336,11 +336,25 @@ func ClearPending(operatorDir string) error {
 	return err
 }
 
-// ArchiveLocal 归档这台电脑上的旧部署状态：操作员身份移到 .bak 子目录，状态目录改名，返回归档了哪些位置。
-func ArchiveLocal(operatorDir, stateDir string, now time.Time) ([]string, error) {
+// ArchiveLocal 归档这台电脑上的旧部署状态：操作员身份和旧管理台证书移到 .bak 子目录，状态目录改名，返回归档了哪些位置。
+// 旧证书属于被清除的部署，留着会和新部署的证书混淆。
+func ArchiveLocal(operatorDir, stateDir, consoleCert string, now time.Time) ([]string, error) {
 	stamp := now.UTC().Format("20060102150405")
 	backup := filepath.Join(operatorDir, ".bak-"+stamp)
 	archived := []string{}
+	if consoleCert != "" {
+		if _, err := os.Lstat(consoleCert); err == nil {
+			if err := os.MkdirAll(backup, 0o700); err != nil {
+				return archived, err
+			}
+			if err := os.Rename(consoleCert, filepath.Join(backup, filepath.Base(consoleCert))); err != nil {
+				return archived, err
+			}
+			archived = append(archived, backup)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return archived, err
+		}
+	}
 	for _, name := range operatorIdentity {
 		source := filepath.Join(operatorDir, name)
 		if _, err := os.Lstat(source); errors.Is(err, os.ErrNotExist) {

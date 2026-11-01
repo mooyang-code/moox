@@ -11,6 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 )
 
 // sampleRequest 是三台独立的腾讯云服务器（存储、管理台、海外），不配因子计算机（地址用文档保留的测试网段）。
@@ -72,7 +73,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的部署一致。
-	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
+	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}) ||
 		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
 		t.Fatalf("部署 = %+v", manifest.Deployments)
@@ -366,5 +367,24 @@ func TestRenderAllowsEmptyWebhook(t *testing.T) {
 	manifest, _ := renderWith(t, request, nil)
 	if manifest.Notification.WebhookURL != "" || manifest.Notification.ChannelType != "wecom" {
 		t.Fatalf("告警配置不对: %+v", manifest.Notification)
+	}
+}
+
+// 配置页能生成的每种拓扑都要部署完整，否则新用户都会卡在 Access 未就绪。
+func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
+	factorServer := &SSHTarget{Address: "192.0.2.30", SSHUser: "builder"}
+	cases := map[string]func(*Request){
+		"全部":      func(r *Request) { r.Servers.Factor = factorServer },
+		"只有必选主机":  func(r *Request) { r.Servers.Overseas = nil },
+		"有因子机没海外": func(r *Request) { r.Servers.Overseas, r.Servers.Factor = nil, factorServer },
+		"管理台共用存储": func(r *Request) { r.Servers.Control = &Server{SharedWith: RoleStorage} },
+		"管理台共用海外": func(r *Request) { r.Servers.Control = &Server{SharedWith: RoleOverseas} },
+	}
+	for name, change := range cases {
+		request := sampleRequest()
+		change(&request)
+		if err := setupvalidate.CheckDeployments(render(t, request)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

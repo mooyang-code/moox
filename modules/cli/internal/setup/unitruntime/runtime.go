@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
@@ -410,7 +412,7 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 			return status, err
 		}
 		if record.Launcher != nil {
-			return s.awaitStartup(ctx, component, record, values, status)
+			return s.awaitStartup(ctx, component, record, values, status, -1)
 		}
 		status.Ready, err = s.probe(ctx, component, record, values, true)
 		return status, err
@@ -423,6 +425,9 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		return status, err
 	}
 	catalog, _ := s.catalog.Component(component.ID)
+	if err := s.clearPorts(ctx, component, catalog.AllPorts(), stop); err != nil {
+		return status, err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return status, err
@@ -459,6 +464,10 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 	if err != nil {
 		return status, err
 	}
+	var logStart int64
+	if info, err := logFile.Stat(); err == nil {
+		logStart = info.Size()
+	}
 	command.Stdout, command.Stderr = logFile, logFile
 	err = command.Start()
 	logFile.Close()
@@ -493,7 +502,7 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		return status, errors.New("could not release the recorded child process")
 	}
 	_ = release.Close()
-	return s.awaitStartup(ctx, component, record, values, status)
+	return s.awaitStartup(ctx, component, record, values, status, logStart)
 }
 
 func componentEnvironment(values map[string]string) []string {
@@ -514,20 +523,29 @@ func componentEnvironment(values map[string]string) []string {
 	return environment
 }
 
-func (s *runtimeState) awaitStartup(ctx context.Context, component Component, record pidRecord, values map[string]string, status Status) (Status, error) {
+// awaitStartup 等组件就绪。没等到时停掉组件，并把能说的原因带回操作机：进程自己退出了，还是一直没就绪、缺哪几项。
+// logStart 是这次启动前输出日志的长度，-1 表示这次启动不是本次调用发起的，日志不属于它。
+func (s *runtimeState) awaitStartup(ctx context.Context, component Component, record pidRecord, values map[string]string, status Status, logStart int64) (Status, error) {
 	readyCtx, cancel := context.WithDeadline(ctx, record.StartedAt.Add(record.StartupTimeout))
 	defer cancel()
+	exited := false
+	var reasons []string
 	for {
 		_, alive, identityErr := s.record(component)
 		if identityErr != nil || !alive {
+			exited = identityErr == nil
 			break
 		}
 		actual, alive, identityErr := readProcess(record.PID)
 		if identityErr != nil || !alive {
+			exited = identityErr == nil
 			break
 		}
 		if actual == record.processIdentity {
-			ready, probeErr := s.probe(readyCtx, component, record, values, true)
+			ready, current, probeErr := s.probeReasons(readyCtx, component, record, values, true)
+			if len(current) != 0 {
+				reasons = current
+			}
 			if probeErr == nil && ready {
 				record.Launcher = nil
 				if err := writeState(s.pids, component.ID+".json", record); err != nil {
@@ -547,7 +565,89 @@ cleanup:
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), record.StopTimeout+10*time.Second)
 	defer cleanupCancel()
 	_, stopErr := s.stop(cleanupCtx, component)
-	return status, errors.Join(errors.New("release process did not become ready"), stopErr)
+	return status, errors.Join(s.startupFailure(component, exited, reasons, logStart), stopErr)
+}
+
+func (s *runtimeState) startupFailure(component Component, exited bool, reasons []string, logStart int64) error {
+	const message = "release process did not become ready"
+	subject := "component=" + component.ID
+	if exited {
+		if port := s.boundPort(component, logStart); port != "" {
+			return failure.WithDetail(failure.TargetPortInUse, message, subject+" port="+port)
+		}
+		return failure.WithDetail(failure.TargetProcessExited, message, subject)
+	}
+	if len(reasons) != 0 {
+		subject += " not_ready=" + strings.Join(reasons, ",")
+	}
+	return failure.WithDetail(failure.TargetNotReady, message, subject)
+}
+
+var bindConflict = regexp.MustCompile(`listen tcp [^ ]*:(\d+): bind: address already in use`)
+
+// boundPort 从这次启动的输出日志里找端口冲突，只取端口号，日志内容不带出去。
+func (s *runtimeState) boundPort(component Component, logStart int64) string {
+	if logStart < 0 {
+		return ""
+	}
+	file, err := s.logs.Open(component.ID + ".log")
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(io.NewSectionReader(file, logStart, 1<<20), 1<<20))
+	if err != nil {
+		return ""
+	}
+	if match := bindConflict.FindSubmatch(raw); match != nil {
+		return string(match[1])
+	}
+	return ""
+}
+
+// clearPorts 在启动前确认组件的端口是空的：部署目录里的残留进程（失败尝试留下的，没有记录）核对身份后停掉，
+// 其他程序占着就立刻失败，不等启动超时。调用方持有维护锁，且这个组件没有在运行，占端口的不可能是它自己。
+func (s *runtimeState) clearPorts(ctx context.Context, component Component, ports []int, stop time.Duration) error {
+	holders, err := portHolders(ports)
+	if err != nil {
+		return err
+	}
+	for _, holder := range holders {
+		if holder.PID == 0 || !insideRoot(holder.Executable, s.plan.DeploymentRoot) {
+			return failure.WithDetail(failure.TargetPortInUse, "component port is held by another program", fmt.Sprintf("component=%s port=%d program=%s", component.ID, holder.Port, holderName(holder.Executable)))
+		}
+		if err := s.note(component, fmt.Sprintf("moox-runtime: 停掉占用端口 %d 的残留进程 %d（%s）", holder.Port, holder.PID, holder.Executable)); err != nil {
+			return err
+		}
+		if err := stopLeftover(ctx, holder, stop); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func insideRoot(executable, root string) bool {
+	return strings.HasPrefix(executable, strings.TrimSuffix(root, "/")+"/")
+}
+
+// holderName 是占端口的程序名，看不到的进程（属于别的用户）写 unknown。
+func holderName(executable string) string {
+	name := filepath.Base(executable)
+	if executable == "" || !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(name) {
+		return "unknown"
+	}
+	return name
+}
+
+// note 往组件的输出日志里写一行，留下这次自动处理的记录。
+func (s *runtimeState) note(component Component, line string) error {
+	file, err := s.logs.OpenFile(component.ID+".log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = fmt.Fprintln(file, time.Now().Format("2006-01-02 15:04:05.000")+"\t"+line)
+	return err
 }
 
 func (s *runtimeState) stop(ctx context.Context, component Component) (Status, error) {

@@ -6,14 +6,58 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
+// Binding 记录一次首次安装用的配置和版本。本机状态里的软件和身份只对这份配置、这个版本有效。
+type Binding struct {
+	ConfigSHA256 string `json:"config_sha256"`
+	ConfigPath   string `json:"config_path"`
+	Version      string `json:"version"`
+}
+
+const bindingFile = "install-binding.json"
+
+// WriteBinding 在首次安装开始时记下配置和版本。
+func WriteBinding(stateDir string, binding Binding) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, bindingFile, binding, true)
+}
+
+// MarkStep 记下一个已完成的安装步骤，next_steps 据此跳过它。
+func MarkStep(stateDir, name string) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, name, map[string]string{"completed_at": time.Now().UTC().Format(time.RFC3339)}, true)
+}
+
+// 已完成步骤的记录文件。
+const (
+	StepInitStorage = "init-storage.json"
+	StepInitReady   = "init-ready.json"
+)
+
 // ReadLocalState 只读取这台电脑上的部署状态：不建目录、不生成密钥，文件不存在就算没有。
-func ReadLocalState(stateDir, operatorDir string) deployscan.LocalState {
-	state := deployscan.LocalState{WipePending: deployscan.ReadPending(operatorDir) != nil}
+// current 是这次命令用的配置和版本；本机没有记录或记录不一致时，这份状态不能用来继续安装。
+func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.LocalState {
+	state := deployscan.LocalState{WipePending: deployscan.ReadPending(operatorDir) != nil, StaleBinding: true}
+	if raw, err := os.ReadFile(filepath.Join(stateDir, bindingFile)); err == nil {
+		var recorded Binding
+		if json.Unmarshal(raw, &recorded) == nil {
+			state.BindingConfig = recorded.ConfigPath
+			state.StaleBinding = recorded.ConfigSHA256 != current.ConfigSHA256 || recorded.Version != current.Version
+		}
+	}
 	raw, err := os.ReadFile(filepath.Join(stateDir, "runtime-identity.json"))
 	if err == nil {
 		var identity runtimeIdentity
@@ -23,10 +67,19 @@ func ReadLocalState(stateDir, operatorDir string) deployscan.LocalState {
 	}
 	state.CoreReady = fileExists(filepath.Join(stateDir, "core-ready.json"))
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
+	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
+	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
 	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))
 	for _, pattern := range []string{"units/*/*/operation.json", "units/*/*/releases/*/operation.json"} {
 		if matches, _ := filepath.Glob(filepath.Join(stateDir, pattern)); len(matches) != 0 {
 			state.UnitRecords = true
+		}
+	}
+	state.Units = map[string]bool{}
+	if matches, _ := filepath.Glob(filepath.Join(stateDir, "units", "*", "*", unitReadyFile)); len(matches) != 0 {
+		for _, match := range matches {
+			profile := filepath.Dir(match)
+			state.Units[filepath.Base(filepath.Dir(profile))+"/"+filepath.Base(profile)] = true
 		}
 	}
 	return state

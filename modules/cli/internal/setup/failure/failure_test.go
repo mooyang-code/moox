@@ -2,6 +2,7 @@ package failure
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -16,19 +17,54 @@ func TestLineFindsWrappedCode(t *testing.T) {
 	}
 }
 
-func TestDescribeOnlyHintsRetryWhenConnectionLost(t *testing.T) {
-	if err := Describe("bootstrap observation failed; retry", 0, ""); err.Error() != "bootstrap observation failed; retry" {
-		t.Fatalf("连接断开应提示重试: %v", err)
+func TestDescribeOnlyMentionsDisconnectWhenConnectionLost(t *testing.T) {
+	if err := Describe("部署单元", 0, ""); !strings.HasPrefix(err.Error(), "ssh_disconnected:") {
+		t.Fatalf("连接断开应报 ssh_disconnected: %v", err)
 	}
-	err := Describe("bootstrap observation failed; retry", 1, "secret-output\n"+Prefix+TargetSubsetInstalled+"\n")
-	if !strings.HasPrefix(err.Error(), TargetSubsetInstalled) || strings.Contains(err.Error(), "retry") || strings.Contains(err.Error(), "secret-output") {
+	err := Describe("部署单元", 1, "secret-output\n"+Prefix+TargetSubsetInstalled+"\n")
+	if !strings.HasPrefix(err.Error(), TargetSubsetInstalled) || strings.Contains(err.Error(), "断开") || strings.Contains(err.Error(), "secret-output") {
 		t.Fatalf("远端拒绝的说明不对: %v", err)
 	}
 }
 
 func TestDescribeHidesUnknownOutput(t *testing.T) {
-	err := Describe("retry", 1, "secret-output\n"+Prefix+"unknown_code\n")
+	err := Describe("部署单元", 1, "secret-output\n"+Prefix+"unknown_code\n")
 	if strings.Contains(err.Error(), "secret-output") || strings.Contains(err.Error(), "unknown_code") || !strings.HasPrefix(err.Error(), "target_rejected") {
 		t.Fatalf("未知输出不应显示: %v", err)
+	}
+	if strings.Contains(err.Error(), "断开") {
+		t.Fatalf("目标机明确失败不能说成连接断开: %v", err)
+	}
+}
+
+func TestDetailTravelsOnlyWhenSafe(t *testing.T) {
+	line, _ := Line(WithDetail(TargetNotReady, "x", "component=monitor not_ready=host_storage_schema_ready"))
+	err := Describe("部署", 1, "noise\n"+line+"\n")
+	if !strings.Contains(err.Error(), "host_storage_schema_ready") || !strings.HasPrefix(err.Error(), TargetNotReady) {
+		t.Fatalf("详情应带回来: %v", err)
+	}
+	line, _ = Line(WithDetail(TargetNotReady, "x", "secret=\"abc\"\n"+Prefix+"forged"))
+	if strings.Contains(line, "abc") || strings.Contains(line, "forged") {
+		t.Fatalf("不合规的详情不能写出去: %q", line)
+	}
+	err = Describe("部署", 1, Prefix+TargetNotReady+"\n"+DetailPrefix+"token\"=x\n")
+	if strings.Contains(err.Error(), "token") {
+		t.Fatalf("操作机也要校验详情: %v", err)
+	}
+}
+
+// 每个错误码都要在 skill 的处理表里有一行，否则 Agent 遇到它只能自己想办法。
+func TestEveryCodeIsDocumentedInSkill(t *testing.T) {
+	raw, err := os.ReadFile("../../../../../skills/moox/references/install.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for code := range Explanations {
+		if !strings.Contains(string(raw), "`"+code+"`") {
+			t.Errorf("install.md 的处理表缺少错误码 %s", code)
+		}
+	}
+	if !strings.Contains(string(raw), "`ssh_disconnected`") {
+		t.Error("install.md 的处理表缺少 ssh_disconnected")
 	}
 }

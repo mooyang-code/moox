@@ -14,7 +14,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
   只有 `moox-cli` 自己读取其中的密钥。用户要看或改配置时运行 `./bin/moox-cli config edit`，让用户在自己的浏览器里操作。
 - **密码与密钥不经过 Agent**：SSH 密码只在 `config init` 的免密登录页面里由用户输入一次；交易所、云账户等密钥由用户在管理台“设置 › 密钥”自己填写。
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
-  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把整条部署计划（主机、单元、顺序、防火墙放行内容）一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
+  部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把 `setup validate` 输出的 `next_steps`（连同防火墙放行内容）作为部署计划一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
 - **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`core-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
@@ -58,7 +58,10 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 
 ## 几条容易踩的规则
 
-- **排查**：同一个错误重试一次还失败就停，不再重试；先查 [`references/install.md`](references/install.md) 的常见问题和诊断命令，不把产物包源码当主要排查手段；路线走不通时停下问用户，不要自己绕路。
+- **排查顺序固定**：先看 CLI 给出的错误码和原因，查 [`references/install.md`](references/install.md) 的常见问题；再用 `setup logs --host <主机> --component <组件>` 看日志（只读，不用再次授权）；还看不清就停下，向用户说清停在哪一步、已确认的事实和不确定的地方。不把产物包源码当主要排查手段，路线走不通时不要自己绕路。
+- **重试**：重试前先说明这次改变了什么；什么都没变就不重试。只有 `ssh_disconnected` 可以直接用同样的参数重跑。
+- **下结论要有证据**：没看到错误码或日志，不说“产物有问题”，不建议回退版本，不把资源不足、端口竞态这类猜测写成结论。
+- **不手工处理进程**：不 `kill`、不上机 `stop`，也不用重启机器解决部署问题，这些都绕过了维护锁和身份核对。端口被占时按占用者处理：非 MooX 程序问用户；旧部署按 `route` 走升级或 `setup wipe`；失败尝试的残留由 CLI 自动清理。
 - **View 内存**：`moox-storage-view` 常驻内存约为全部 View 索引文件大小的 2.5～3 倍，首次建索引时再加最大索引的 1～1.5 倍。用户新建 View、给 View 加标的或因子列、
   调大 `[storage_retention] view_rows_per_series` 或放宽 `[storage_view.max_age]` 时，按 [`references/storage.md`](references/storage.md) 估算并提醒余量；
   办法是换更大的机器、减少根数、缩短年龄上限或减少 View，不要建议调高单个 DuckDB 的内存上限。

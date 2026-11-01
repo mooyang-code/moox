@@ -15,3 +15,11 @@ type processIdentity struct {
 	Inode      uint64 `json:"inode"`
 	UID        uint32 `json:"uid"`
 }
+
+// portHolder 是占着端口的进程。PID 为 0 表示看不到属主（属于别的用户）。
+type portHolder struct {
+	Port       int
+	PID        int
+	Executable string
+	identity   processIdentity
+}

@@ -252,7 +252,7 @@ func unitDeploymentRecorded(root *os.Root, host, profile string) bool {
 func activeControlStatus(ctx context.Context, transport setupssh.Client, helper, directory, host string, ids []string) ([]unitruntime.Status, error) {
 	output, err := transport.Run(ctx, []string{helper, "status", "--plan", path.Join(directory, "runtime.json")}, nil)
 	if err != nil {
-		return nil, remoteFailure("control dependency runtime observation failed; retry the same command; private output omitted", err, output)
+		return nil, remoteFailure("查询管理台组件状态", err, output)
 	}
 	var status unitruntime.Result
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))

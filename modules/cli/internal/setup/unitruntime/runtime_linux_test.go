@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,15 @@ func TestMain(m *testing.M) {
 			os.Exit(32)
 		}
 		return
+	}
+	if port := os.Getenv("MOOX_RUNTIME_TEST_LISTEN"); port != "" {
+		listener, err := net.Listen("tcp", "127.0.0.1:"+port)
+		if err != nil {
+			os.Exit(34)
+		}
+		defer listener.Close()
+		time.Sleep(time.Minute)
+		os.Exit(0)
 	}
 	if os.Getenv("MOOX_RUNTIME_TEST_CHILD") == "1" {
 		runFixtureProcess()
@@ -624,4 +634,97 @@ func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(
 			require.False(t, alive)
 		})
 	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func TestRuntimeLinuxClearPortsStopsLeftoverInsideDeployment(t *testing.T) {
+	_, plan := planFixture(t, "console-proxy")
+	state, err := openRuntime(plan)
+	require.NoError(t, err)
+	defer state.close()
+	source, err := os.Executable()
+	require.NoError(t, err)
+	raw, err := os.ReadFile(source)
+	require.NoError(t, err)
+	leftover := filepath.Join(plan.DeploymentRoot, "leftover")
+	require.NoError(t, os.WriteFile(leftover, raw, 0o700))
+	port := freePort(t)
+	command := exec.Command(leftover)
+	command.Env = append(os.Environ(), fmt.Sprintf("MOOX_RUNTIME_TEST_LISTEN=%d", port))
+	require.NoError(t, command.Start())
+	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
+	go func() { _ = command.Wait() }()
+	require.Eventually(t, func() bool {
+		holders, err := portHolders([]int{port})
+		return err == nil && len(holders) == 1
+	}, 5*time.Second, 20*time.Millisecond)
+
+	require.NoError(t, state.clearPorts(context.Background(), Component{ID: "console-proxy"}, []int{port}, 2*time.Second))
+	holders, err := portHolders([]int{port})
+	require.NoError(t, err)
+	require.Empty(t, holders)
+	log, err := os.ReadFile(filepath.Join(plan.DeploymentRoot, "run", "logs", "console-proxy.log"))
+	require.NoError(t, err)
+	require.Contains(t, string(log), "残留进程")
+}
+
+func TestRuntimeLinuxClearPortsRefusesForeignProgram(t *testing.T) {
+	_, plan := planFixture(t, "console-proxy")
+	state, err := openRuntime(plan)
+	require.NoError(t, err)
+	defer state.close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	err = state.clearPorts(context.Background(), Component{ID: "console-proxy"}, []int{port}, time.Second)
+	var coded *failure.Coded
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, failure.TargetPortInUse, coded.Code)
+	require.Contains(t, coded.Detail, fmt.Sprintf("port=%d", port))
+	line, ok := failure.Line(err)
+	require.True(t, ok)
+	require.Contains(t, line, failure.DetailPrefix, "详情要能带回操作机")
+}
+
+func TestRuntimeLinuxStartupFailureNamesTheCause(t *testing.T) {
+	_, plan := planFixture(t, "console-proxy")
+	state, err := openRuntime(plan)
+	require.NoError(t, err)
+	defer state.close()
+	component := Component{ID: "console-proxy"}
+	logs := filepath.Join(plan.DeploymentRoot, "run", "logs", "console-proxy.log")
+	require.NoError(t, os.WriteFile(logs, []byte("old: listen tcp 0.0.0.0:1111: bind: address already in use\n"), 0o600))
+	info, err := os.Stat(logs)
+	require.NoError(t, err)
+	code := func(err error) (string, string) {
+		var coded *failure.Coded
+		require.ErrorAs(t, err, &coded)
+		return coded.Code, coded.Detail
+	}
+
+	got, detail := code(state.startupFailure(component, true, nil, info.Size()))
+	require.Equal(t, failure.TargetProcessExited, got, "上一次启动的日志不算数")
+	require.Equal(t, "component=console-proxy", detail)
+
+	file, err := os.OpenFile(logs, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = file.WriteString("listen tcp 127.0.0.1:12926: bind: address already in use\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	got, detail = code(state.startupFailure(component, true, nil, info.Size()))
+	require.Equal(t, failure.TargetPortInUse, got)
+	require.Contains(t, detail, "port=12926")
+
+	got, detail = code(state.startupFailure(component, false, []string{"host_storage_schema_ready"}, info.Size()))
+	require.Equal(t, failure.TargetNotReady, got)
+	require.Contains(t, detail, "not_ready=host_storage_schema_ready")
 }

@@ -247,3 +247,114 @@ func exclusiveFlock(fd int) bool {
 	}
 	return false
 }
+
+// listeningSockets 读出正在监听这些端口的 socket，返回 inode 到端口的映射。
+func listeningSockets(ports []int) (map[string]int, error) {
+	wanted := map[int]bool{}
+	for _, port := range ports {
+		wanted[port] = true
+	}
+	sockets := map[string]int{}
+	for _, name := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		raw, err := os.ReadFile(name)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for i, row := range strings.Split(string(raw), "\n") {
+			fields := strings.Fields(row)
+			if i == 0 || len(fields) < 10 || fields[3] != "0A" {
+				continue
+			}
+			_, hexPort, found := strings.Cut(fields[1], ":")
+			if !found {
+				continue
+			}
+			port, err := strconv.ParseInt(hexPort, 16, 32)
+			if err == nil && wanted[int(port)] {
+				sockets[fields[9]] = int(port)
+			}
+		}
+	}
+	return sockets, nil
+}
+
+// portHolders 列出占着这些端口的进程，一个端口只报一次。看不到属主的 socket 也要报：
+// 那是别的用户的程序，同样不能启动。
+func portHolders(ports []int) ([]portHolder, error) {
+	sockets, err := listeningSockets(ports)
+	if err != nil || len(sockets) == 0 {
+		return nil, err
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	holders := []portHolder{}
+	seen := map[int]bool{}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		descriptors, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+		if err != nil {
+			continue
+		}
+		for _, descriptor := range descriptors {
+			target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, descriptor.Name()))
+			if err != nil || !strings.HasPrefix(target, "socket:[") {
+				continue
+			}
+			inode := strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")
+			port, found := sockets[inode]
+			if !found || seen[port] {
+				continue
+			}
+			identity, alive, err := readProcess(pid)
+			if err != nil || !alive {
+				continue
+			}
+			seen[port] = true
+			holders = append(holders, portHolder{Port: port, PID: pid, Executable: identity.Executable, identity: identity})
+		}
+	}
+	for _, port := range sockets {
+		if !seen[port] {
+			seen[port] = true
+			holders = append(holders, portHolder{Port: port})
+		}
+	}
+	return holders, nil
+}
+
+// stopLeftover 停掉一个没有记录的残留进程：先 SIGTERM，超过时限再 SIGKILL。pidfd 绑定进程身份，PID 被复用也不会误伤。
+func stopLeftover(ctx context.Context, holder portHolder, budget time.Duration) error {
+	file, alive, err := openProcess(holder.identity)
+	if err != nil {
+		return err
+	}
+	if !alive {
+		return nil
+	}
+	defer file.Close()
+	if err := signalProcess(file, false); err != nil {
+		return err
+	}
+	exited, err := waitProcess(ctx, file, time.Now().Add(budget))
+	if err != nil || exited {
+		return err
+	}
+	if err := signalProcess(file, true); err != nil {
+		return err
+	}
+	if exited, err = waitProcess(ctx, file, time.Now().Add(10*time.Second)); err != nil {
+		return err
+	}
+	if !exited {
+		return errors.New("forced exit of the leftover process was not observed")
+	}
+	return nil
+}

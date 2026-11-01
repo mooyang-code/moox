@@ -113,6 +113,32 @@ def processes(inside_dirs):
     return inside, sorted(set(outside))
 
 
+def helper_running(root):
+    """A deployment helper still working on this host; it runs from the uploaded runtime directory."""
+    base = [os.path.join(root, 'bootstrap-input/runtime')]
+    me = os.getpid()
+    return any(pid.isdigit() and int(pid) != me and under(executable(pid), base) for pid in os.listdir('/proc')) if os.path.isdir('/proc') else False
+
+
+def disk_free_kb(path):
+    current = path
+    while current != '/' and not os.path.exists(current):
+        current = os.path.dirname(current)
+    try:
+        info = os.statvfs(current)
+        return info.f_bavail * info.f_frsize // 1024
+    except OSError:
+        return 0
+
+
+def last_attempt(root):
+    try:
+        with open(os.path.join(root, 'bootstrap/workflow.json')) as stream:
+            return json.load(stream).get('phase', '')
+    except (OSError, ValueError, AttributeError):
+        return ''
+
+
 def listening(ports):
     found = {}
     for name in ('/proc/net/tcp', '/proc/net/tcp6'):
@@ -298,6 +324,9 @@ def main():
         'units': units(root),
         'trade': trade_state(root),
         'registered_hosts': registered_hosts(request.get('admin_db', '')),
+        'helper_running': helper_running(root),
+        'disk_free_kb': disk_free_kb(root),
+        'last_attempt': last_attempt(root),
     }
     if request.get('sizes'):
         report['sizes_kb'] = dict((d, size_kb(d)) for d in [root] + [e['path'] for e in external] + archives if os.path.lexists(d))

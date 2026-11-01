@@ -127,8 +127,8 @@ cd moox-${VER}
 | route | 含义 | 怎么做 |
 | --- | --- | --- |
 | `fresh` | 全是空机 | 不用询问清空，确认部署计划后走第 4 节 |
-| `resume` | 这台电脑上次的首次安装没做完 | 继续第 4 节，不询问清空 |
-| `existing` | 已有部署，这台电脑没有匹配的状态（新电脑都是这种） | 询问是否彻底清空 |
+| `resume` | 这台电脑上次的首次安装没做完，配置和版本都没变 | 继续第 4 节，不询问清空 |
+| `existing` | 已有部署，这台电脑没有匹配的状态（新电脑都是这种）；或者上次没装完的状态是另一份配置、另一个版本生成的，`reasons` 写了原配置的位置 | 询问是否彻底清空；要接着装就换回原配置和原版本 |
 | `upgrade` | 已有部署，这台电脑就是当初部署的电脑 | 询问是否彻底清空；不清空就按“升级到新版本”。如果是本次安装在 `bootstrap --stage control` 之后中断，不用询问，从中断的步骤继续 |
 | `blocked` | 有阻塞项，`reasons` 写了原因 | 说明原因后停下，不要继续 |
 
@@ -159,42 +159,20 @@ cd moox-${VER}
   - `plan.trade` 是 `live` 或 `unreadable` 时，命令会拒绝，要重新询问用户，明确同意后才加 `--accept-trade-risk`。
 - **用户不同意**：`existing` 时把新的 `moox.toml` 改名（`config restore` 不覆盖已有文件），按“保留数据”处理；`upgrade` 时按“升级到新版本”处理。
 
-## 4. 部署
+## 4. 部署与初始化
 
-每一步成功的标志是输出里的 `*-ready`；失败先看输出的原因，不要盲目重试，重试要用同样的参数。耗时较长的命令放后台运行。
-`<主机ID>` 来自 `config init` 的输出：`control`（管理台）、`storage`、`overseas`、`factor`。
+**顺序由 CLI 给出，不要自己推算。** `setup validate` 输出的 `deployment.next_steps` 是按当前拓扑和已完成的步骤算出的命令列表（有没有海外机、因子机，管理台用什么证书，上次做到哪一步都算在内），把整份列表放进部署计划给用户确认一次，然后从上到下逐条运行。
 
-```bash
-./bin/moox-cli setup firewall --yes                             # 放行腾讯云防火墙端口（内容在部署计划里给用户确认过）
-./bin/moox-cli setup bootstrap --stage core                     # 管理台机：Admin、主机网关、主机代理 → core-ready
-./bin/moox-cli setup deploy-host --host storage                 # 每台非管理台主机各一次：storage、overseas、factor → host-ready
-./bin/moox-cli setup deploy-unit --host storage --profile eventbus
-./bin/moox-cli setup deploy-unit --host storage --profile storage
-./bin/moox-cli setup deploy-unit --host storage --profile access
-./bin/moox-cli setup deploy-unit --host overseas --profile access          # 有海外机时
-./bin/moox-cli setup deploy-unit --host overseas --profile egress-proxy    # 有海外机时
-./bin/moox-cli setup bootstrap --stage control --create-proxy-ca           # 管理台全部服务 → control-ready
-```
+- 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。耗时较长的命令放后台运行。
+- 中断或换一次会话后，重新运行 `setup validate`，从新的 `next_steps` 继续；已做完的步骤不会再列出来。`resume` 时不要从头开始。
+- `next_steps` 为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。
+- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
 
-- `--create-proxy-ca` 只在管理台用内部证书（没有域名，`tls_mode` 为 internal 或 auto 判定为 internal）时的**首次**安装需要。
-- 每个 `deploy-unit` 只装 `moox.toml` 的 `[deployments]` 里登记在该主机上的组件；管理台与哪台共用、有没有海外机，以 `config init` 的结果为准。
+大致顺序，以 `next_steps` 为准：防火墙 → core → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → 信任证书（内部证书时）→ `setup init` → 海外采集和交易 → 因子机 → 配置备份。
 
-## 5. 初始化
+元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
 
-```bash
-./bin/moox-cli setup trust-browser                              # 内部证书时：让本机浏览器信任管理台证书
-./bin/moox-cli setup init --config-dir ./config/setup --storage-host storage
-./bin/moox-cli setup deploy-unit --host overseas --profile collector-stream   # 有海外机时；必须在 control 就绪之后
-./bin/moox-cli setup deploy-unit --host overseas --profile trade              # 有海外机时
-./bin/moox-cli setup sync-deployments --host factor                           # 有因子机时
-./bin/moox-cli setup deploy-unit --host factor --profile factor-engine
-./bin/moox-cli setup deploy-unit --host factor --profile archive-worker
-./bin/moox-cli config backup                                    # 把加密配置备份到自己的管理台
-```
-
-启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
-
-`setup init` 依次完成：防火墙核对、浏览器证书检查、业务空间、云账户、日志服务、登记存储节点、导入元数据并激活数据集、导入 `moox.toml` 里的默认因子任务。
+`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、浏览器证书检查、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
 
 macOS 上用内部证书时，`trust-browser` 会请用户在系统弹窗里授权；不要替用户清理钥匙串里的这张证书。授权弹不出来时，把下面的命令给用户自己执行：
 
@@ -243,12 +221,20 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 
 | 现象 | 含义 | 处理 |
 | --- | --- | --- |
-| `route=blocked` | 属主或权限不符、端口被占用，或有部署目录之外的旧进程 | 按 `reasons` 处理，不要继续安装 |
+| `route=blocked` | 属主或权限不符、端口被占用、有部署目录之外的旧进程，或上一次部署操作还在运行 | 按 `reasons` 处理，不要继续安装 |
 | `ssh_unreachable`，且是因子机 | 这台电脑和因子机不在同一网络 | 换到同一网络后重新运行 |
-| `bootstrap observation failed` 等“retry”提示 | SSH 连接断开 | 用同样的参数重试一次 |
-| `target_*`、`target_rejected` 开头的错误 | 目标机明确拒绝，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate`。`route` 看不出原因时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
+| `ssh_disconnected` | SSH 连接断开，没有拿到结果 | 只有这个错误可以重跑：先 `setup validate` 确认没有“上一次部署操作还在运行”，再用同样的参数重跑 |
+| `target_not_ready` | 组件在时限内没就绪，已被停掉；括号里的 `not_ready` 列出没就绪的项或缺少的服务 | 按缺的项找前置步骤，用 `setup logs` 看日志。什么都没变就不要重试 |
+| `target_process_exited` | 组件启动后自己退出 | 用 `setup logs` 看日志，把事实告诉用户 |
+| `target_port_in_use` | 端口被其他程序占用，括号里有端口和程序名 | 问用户能否停掉那个程序，不要手动杀进程。部署目录里的残留进程 CLI 会自动清理，不会报这个错 |
+| `target_subset_installed`、`target_identity_differs`、`target_binding_missing`、`target_partial_install`、`target_directory_invalid` | 目标机的状态和这次操作不符，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate` 按 `route` 处理 |
+| `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
+| `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错里的 `config migrate --add-deployment` 补上，再 `setup validate` |
+| `disk_low` | 目标机磁盘不够 | 告诉用户腾出空间或换大磁盘 |
+| `core_not_ready` | core 还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
+| `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |
-| `unit deployment requires the original core state directory…`、`…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |
+| `…operator bootstrap pin`、`full control requires…` | 这台电脑没有部署状态 | 回到 `setup validate`，不要手动恢复 |
 | `wipe_scope_changed` | 清除范围和预览不一致，没有清除任何主机 | 重新预览并确认 |
 | `wipe_failed`、`wipe_interrupted`、`wipe_incomplete` | 清除没做完 | 重新运行 `setup wipe` 接着清，清完才能安装 |
 | `wipe_outside_processes` | 部署目录之外还有 MooX 进程，不会被杀 | 告诉用户进程路径，由用户决定 |

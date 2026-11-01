@@ -47,3 +47,9 @@ func TestRuntimeHealthUsesSharedAuthenticationAndBindsResponseToRunningBinary(t 
 	_, err = state.probe(context.Background(), component, pidRecord{BinarySHA256: "running-binary", BootID: "current-boot"}, values, true)
 	require.ErrorIs(t, err, errHealthIdentity)
 }
+
+func TestNotReadyReasonsTakeNamesOnly(t *testing.T) {
+	raw := []byte(`{"ready":false,"details":{"host_storage_schema_ready":false,"database_ready":true,"deployment_enabled":false,"metrics_reporter_error":"password=abc","missing_services":["trpc.moox.archive.ArchiveWorker"]}}`)
+	require.Equal(t, []string{"host_storage_schema_ready", "trpc.moox.archive.ArchiveWorker"}, notReadyReasons(raw))
+	require.Empty(t, notReadyReasons([]byte("not json")))
+}

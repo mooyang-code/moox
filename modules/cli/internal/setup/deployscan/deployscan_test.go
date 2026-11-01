@@ -604,7 +604,7 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	}
 	write(t, filepath.Join(state, "core-software.json"), "{}")
 	now := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
-	archived, err := ArchiveLocal(operator, state, now)
+	archived, err := ArchiveLocal(operator, state, "", now)
 	require.NoError(t, err)
 	require.Len(t, archived, 2)
 	entries, err := os.ReadDir(operator)
@@ -618,7 +618,7 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	require.FileExists(t, filepath.Join(operator, ".bak-20261031010203/gateway-client.yaml"))
 	require.NoDirExists(t, state)
 	require.DirExists(t, state+".bak-20261031010203")
-	_, err = ArchiveLocal(operator, state, now)
+	_, err = ArchiveLocal(operator, state, "", now)
 	require.NoError(t, err, "重跑不能失败")
 }
 
@@ -651,4 +651,129 @@ func TestOrderClearsStorageLast(t *testing.T) {
 		names = append(names, host.Name)
 	}
 	require.Equal(t, []string{"factor", "overseas", "control", "storage"}, names)
+}
+
+func TestInspectReportsDiskAndAttempt(t *testing.T) {
+	s := newSandbox(t)
+	deployment(t, s)
+	write(t, filepath.Join(s.root, "bootstrap/workflow.json"), `{"phase":"rolled-back"}`)
+	report := s.inspect(t, map[string]any{"deploy_root": s.root})
+	require.Greater(t, report.DiskFreeKB, int64(0))
+	require.Equal(t, "rolled-back", report.LastAttempt)
+	require.False(t, report.HelperRunning)
+}
+
+func TestStaleBindingIsNotResume(t *testing.T) {
+	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, RootExists: true, Entries: []string{"host"}, Units: map[string]string{"host": "bootstrap-a"}, RuntimeSHA256: "sha256:a"}
+	stale := LocalState{RuntimeSHA256: "sha256:a", StaleBinding: true, BindingConfig: "/old/moox.toml"}
+	decision := Decide([]HostReport{report}, "control", stale)
+	require.Equal(t, RouteExisting, decision.Route)
+	require.Contains(t, decision.Reasons[0], "/old/moox.toml")
+	require.Equal(t, RouteResume, Decide([]HostReport{report}, "control", LocalState{RuntimeSHA256: "sha256:a"}).Route)
+}
+
+func TestRunningHelperBlocksEveryRoute(t *testing.T) {
+	report := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true, HelperRunning: true}
+	decision := Decide([]HostReport{report}, "control", LocalState{})
+	require.Equal(t, RouteBlocked, decision.Route)
+	require.Contains(t, decision.Reasons[0], "还在运行")
+}
+
+func stepsManifest() setupconfig.Manifest {
+	return setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "198.51.100.10"}, "storage": {Address: "198.51.100.11"}, "overseas": {Address: "198.51.100.12"}, "factor": {Address: "192.0.2.30"}},
+		Deployments: map[string][]string{
+			"control":  {"admin", "monitor", "console-proxy"},
+			"storage":  {"storage-primary", "access", "eventbus"},
+			"overseas": {"access", "egress-proxy", "trade", "collector-stream"},
+			"factor":   {"factor-engine", "archive-worker"},
+		},
+	}
+}
+
+func TestNextStepsFollowReadinessOrder(t *testing.T) {
+	steps := NextSteps(stepsManifest(), RouteFresh, LocalState{}, true)
+	position := func(text string) int {
+		index := slices.IndexFunc(steps, func(step string) bool { return strings.Contains(step, text) })
+		require.GreaterOrEqual(t, index, 0, "缺少步骤 %s：%v", text, steps)
+		return index
+	}
+	require.Less(t, position("--profile storage"), position("init --stage storage"))
+	require.Less(t, position("init --stage storage"), position("--profile access"), "系统元数据要在 access 和管理台之前")
+	require.Less(t, position("--host overseas --profile access"), position("--stage control --create-proxy-ca"))
+	require.Less(t, position("--stage control"), position("setup trust-browser"))
+	require.Less(t, position("setup trust-browser"), position("setup init --config-dir"))
+	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
+	require.Less(t, position("sync-deployments --host factor"), position("--profile factor-engine"))
+	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-1])
+	for _, step := range steps {
+		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
+	}
+}
+
+func TestNextStepsFollowTopologyAndProgress(t *testing.T) {
+	manifest := stepsManifest()
+	delete(manifest.HostCatalog, "overseas")
+	delete(manifest.HostCatalog, "factor")
+	delete(manifest.Deployments, "overseas")
+	delete(manifest.Deployments, "factor")
+	steps := strings.Join(NextSteps(manifest, RouteFresh, LocalState{}, false), "\n")
+	require.NotContains(t, steps, "overseas")
+	require.NotContains(t, steps, "factor")
+	require.NotContains(t, steps, "--create-proxy-ca", "公网证书不要内部 CA")
+	require.NotContains(t, steps, "trust-browser")
+
+	local := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
+	resumed := NextSteps(manifest, RouteResume, local, false)
+	require.Equal(t, "./bin/moox-cli setup deploy-unit --host storage --profile access", resumed[0], "接着中断的步骤：%v", resumed)
+
+	done := local
+	done.ControlReady, done.InitReady = true, true
+	done.Units = map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true, "storage/access": true}
+	require.Empty(t, NextSteps(manifest, RouteUpgrade, done, false), "都做完了不再有步骤")
+	local.StaleBinding = true
+	require.Empty(t, NextSteps(manifest, RouteResume, local, false))
+	require.Empty(t, NextSteps(manifest, RouteExisting, LocalState{}, false))
+	require.Empty(t, NextSteps(manifest, RouteBlocked, LocalState{}, false))
+}
+
+func TestArchiveLocalTakesTheOldConsoleCert(t *testing.T) {
+	operator, state := filepath.Join(t.TempDir(), "operator"), filepath.Join(t.TempDir(), "state")
+	require.NoError(t, os.MkdirAll(operator, 0o700))
+	cert := filepath.Join(t.TempDir(), "moox-caddy-root-a.crt")
+	require.NoError(t, os.WriteFile(cert, []byte("old"), 0o600))
+	archived, err := ArchiveLocal(operator, state, cert, time.Unix(0, 0))
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	_, err = os.Lstat(cert)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.FileExists(t, filepath.Join(archived[0], filepath.Base(cert)))
+}
+
+func TestRedactLogHidesSecretFields(t *testing.T) {
+	text := RedactLog(`level=info password=abc123 "secret_key": "xyz" token: t0k3n api_key=k1 port=11425`)
+	for _, secret := range []string{"abc123", "xyz", "t0k3n", "k1"} {
+		require.NotContains(t, text, secret)
+	}
+	require.Contains(t, text, "port=11425")
+}
+
+type logsClient struct {
+	setupssh.Client
+	output string
+}
+
+func (c logsClient) Run(context.Context, []string, io.Reader) (setupssh.Result, error) {
+	return setupssh.Result{Stdout: c.output}, nil
+}
+func (logsClient) Close() error { return nil }
+
+func TestReadLogsRedactsOutput(t *testing.T) {
+	dial := func(context.Context, setupconfig.Host) (setupssh.Client, error) {
+		return logsClient{output: `[{"path":"/data/moox/run/logs/monitor.log","text":"password=abc"}]`}, nil
+	}
+	sections, err := ReadLogs(context.Background(), dial, setupconfig.Host{Name: "control"}, "/data/moox", "monitor", "", 10)
+	require.NoError(t, err)
+	require.Len(t, sections, 1)
+	require.NotContains(t, sections[0].Text, "abc")
 }

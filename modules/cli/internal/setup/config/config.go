@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
@@ -366,6 +367,12 @@ type Snapshot struct {
 	info      os.FileInfo
 	digest    [sha256.Size]byte
 }
+
+// Digest 是配置文件内容的摘要，用来判断两次命令用的是不是同一份配置。
+func (s *Snapshot) Digest() string { return hex.EncodeToString(s.digest[:]) }
+
+// Path 是配置文件的绝对路径。
+func (s *Snapshot) Path() string { return s.path }
 
 func Load(path, repositoryRoot string) (*Snapshot, error) {
 	resolvedPath, err := filepath.Abs(path)

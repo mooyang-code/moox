@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 )
@@ -19,7 +21,65 @@ var errDeploymentBlocked = errors.New("deployment_blocked: 目标机器有阻塞
 
 type setupDeployment struct {
 	deployscan.Decision
-	Hosts []deployscan.HostReport `json:"hosts"`
+	// NextSteps 是接下来要按顺序运行的命令，只有首次安装的路线才有。
+	NextSteps []string                `json:"next_steps"`
+	Warnings  []string                `json:"warnings,omitempty"`
+	Hosts     []deployscan.HostReport `json:"hosts"`
+}
+
+// minControlDiskKB 是管理台机部署前至少要有的可用空间：一次部署要放离线包和两个发布目录。
+const minControlDiskKB = 8 << 20
+
+// minHostDiskKB 是其他主机部署前至少要有的可用空间。
+const minHostDiskKB = 2 << 20
+
+// setupBinding 是这次命令用的配置和版本。
+func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
+	return unitdeploy.Binding{ConfigSHA256: snapshot.Digest(), ConfigPath: snapshot.Path(), Version: Version}
+}
+
+// consoleCertPath 是这台电脑上缓存的管理台证书；公网证书没有缓存，返回空。
+func consoleCertPath(snapshot *setupconfig.Snapshot) string {
+	control := snapshot.Manifest.ControlHost()
+	if !usesInternalTLS(snapshot) {
+		return ""
+	}
+	return tlstrust.CAPath(control.Address)
+}
+
+func usesInternalTLS(snapshot *setupconfig.Snapshot) bool {
+	control := snapshot.Manifest.ControlHost()
+	return tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(control.TLSMode), control.Address)
+}
+
+// diskWarnings 列出可用空间不够的主机。不算阻塞项：清除旧部署正好能腾出空间。
+func diskWarnings(reports []deployscan.HostReport, control string) []string {
+	warnings := []string{}
+	for _, report := range reports {
+		need := int64(minHostDiskKB)
+		if report.Host == control {
+			need = minControlDiskKB
+		}
+		if report.DiskFreeKB > 0 && report.DiskFreeKB < need {
+			warnings = append(warnings, fmt.Sprintf("disk_low: %s（%s）可用磁盘 %.1f GB，部署至少要 %d GB", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), need>>20))
+		}
+	}
+	return warnings
+}
+
+// checkInstallDisk 在打包上传之前确认目标机磁盘够用。
+func checkInstallDisk(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot) error {
+	if deps.scanDeployment == nil {
+		return nil
+	}
+	reports, err := deps.scanDeployment(ctx, snapshot, deployscan.Options{})
+	if err != nil {
+		return err
+	}
+	if warnings := diskWarnings(reports, snapshot.Manifest.ControlHost().Name); len(warnings) != 0 {
+		return errors.New(strings.Join(warnings, "；"))
+	}
+	return nil
 }
 
 type setupValidateOutput struct {
@@ -35,8 +95,10 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	if err != nil {
 		return nil, err
 	}
-	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory)
-	status := &setupDeployment{Decision: deployscan.Decide(reports, snapshot.Manifest.ControlHost().Name, local), Hosts: reports}
+	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
+	control := snapshot.Manifest.ControlHost().Name
+	status := &setupDeployment{Decision: deployscan.Decide(reports, control, local), Hosts: reports, Warnings: diskWarnings(reports, control)}
+	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot))
 	if status.Route == deployscan.RouteBlocked {
 		return status, errDeploymentBlocked
 	}
@@ -53,19 +115,26 @@ func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 	if err != nil {
 		return err
 	}
-	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory)
+	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 	decision := deployscan.Decide(reports, snapshot.Manifest.ControlHost().Name, local)
 	switch decision.Route {
 	case deployscan.RouteFresh:
-		archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
+		archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, consoleCertPath(snapshot), time.Now())
 		for _, location := range archived {
 			fmt.Fprintf(options.Log, "目标机器是空机，这台电脑上的旧部署状态已归档到 %s\n", location)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return unitdeploy.WriteBinding(options.StateDirectory, setupBinding(snapshot))
 	case deployscan.RouteResume:
 		return nil
 	default:
-		return fmt.Errorf("deployment_not_fresh: route=%s，目标机器不是空机，没有改动任何东西；运行 setup validate 查看情况，再决定彻底清空还是保留数据", decision.Route)
+		reason := ""
+		if len(decision.Reasons) != 0 {
+			reason = "：" + strings.Join(decision.Reasons, "；")
+		}
+		return fmt.Errorf("deployment_not_fresh: route=%s%s。没有改动任何东西；运行 setup validate 查看情况，再决定彻底清空还是保留数据", decision.Route, reason)
 	}
 }
 
@@ -99,7 +168,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory)
+			local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 			decision := deployscan.Decide(reports, manifest.ControlHost().Name, local)
 			if decision.Route == deployscan.RouteBlocked {
 				if err := writeSetupJSON(cmd, setupDeployment{Decision: decision, Hosts: reports}); err != nil {
@@ -144,7 +213,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 				}
 				results = append(results, result)
 			}
-			archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, time.Now())
+			archived, err := deployscan.ArchiveLocal(options.OperatorDirectory, options.StateDirectory, consoleCertPath(snapshot), time.Now())
 			if err != nil {
 				return err
 			}

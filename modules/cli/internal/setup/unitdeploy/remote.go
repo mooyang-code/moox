@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/failure"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -103,7 +104,7 @@ except Exception:
 
 func prepareTarget(ctx context.Context, transport setupssh.Client, root string, units ...string) error {
 	if output, err := transport.Run(ctx, append([]string{"python3", "-c", targetFiles, "prepare", root}, units...), nil); err != nil {
-		return failure.Describe("target deployment directory preflight failed; retry the same command; private output omitted", output.ExitCode, output.Stderr)
+		return failure.Describe("检查目标机部署目录", output.ExitCode, output.Stderr)
 	}
 	return nil
 }
@@ -163,10 +164,51 @@ func uploadBytes(ctx context.Context, transport setupssh.Client, root string, ra
 	return uploadReader(ctx, transport, root, remote, sha(raw), mode, bytes.NewReader(raw), int64(len(raw)))
 }
 
-// remoteFailure 把目标端助手的失败转成明确原因：只有 SSH 断开才用 retryHint 提示重试。
-func remoteFailure(retryHint string, err error, output setupssh.Result) error {
-	described := failure.Describe(retryHint, output.ExitCode, output.Stderr)
+// remoteFailure 把目标端助手的失败转成明确原因；operation 是这次操作的名字。
+func remoteFailure(operation string, err error, output setupssh.Result) error {
+	described := failure.Describe(operation, output.ExitCode, output.Stderr)
 	return errors.New(described.Error() + helperDiagnostic(err, output))
+}
+
+// 断线后等目标机上的助手结束的时限和轮询间隔。助手一次最长要等多个组件的启动时限。
+var (
+	disconnectWait = 15 * time.Minute
+	disconnectPoll = 10 * time.Second
+)
+
+// helperProbe 查目标机上是否还有部署助手在运行。方括号让这条命令自己不被匹配到。
+const helperProbe = `if pgrep -f '[/]bootstrap-input/runtime/' >/dev/null; then echo running; else echo idle; fi`
+
+// helperFailure 处理部署助手的失败：目标机明确失败时直接说明原因；SSH 断开时重新连接，等助手结束再报告，
+// 这样下一次重试不会和目标机上还没结束的操作重叠。
+func helperFailure(ctx context.Context, redial func() (setupssh.Client, error), operation string, err error, output setupssh.Result) error {
+	if output.ExitCode != 0 || ctx.Err() != nil {
+		return remoteFailure(operation, err, output)
+	}
+	deadline := time.Now().Add(disconnectWait)
+	for {
+		if helperIdle(ctx, redial) {
+			return errors.New("ssh_disconnected: " + operation + "：SSH 连接断开，目标机上的操作已结束，但没有拿到结果。运行 setup validate 查看状态，再用同样的参数重跑" + helperDiagnostic(err, output))
+		}
+		if time.Now().After(deadline) {
+			return remoteFailure(operation, err, output)
+		}
+		select {
+		case <-ctx.Done():
+			return remoteFailure(operation, err, output)
+		case <-time.After(disconnectPoll):
+		}
+	}
+}
+
+func helperIdle(ctx context.Context, redial func() (setupssh.Client, error)) bool {
+	transport, err := redial()
+	if err != nil {
+		return false
+	}
+	defer transport.Close()
+	output, err := transport.Run(ctx, []string{"sh", "-c", helperProbe}, nil)
+	return err == nil && strings.TrimSpace(output.Stdout) == "idle"
 }
 
 // helperDiagnostic 在显式设置 MOOX_SETUP_DEBUG_HELPER=1 时返回目标端助手的失败输出（截断），

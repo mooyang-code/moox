@@ -74,6 +74,12 @@ type HostReport struct {
 	Trade            string            `json:"trade"`
 	RegisteredHosts  []RegisteredHost  `json:"registered_hosts"`
 	SizesKB          map[string]int64  `json:"sizes_kb,omitempty"`
+	// HelperRunning 表示目标机上还有部署助手在运行。
+	HelperRunning bool `json:"helper_running"`
+	// DiskFreeKB 是部署目录所在磁盘的可用空间，0 表示没查到。
+	DiskFreeKB int64 `json:"disk_free_kb"`
+	// LastAttempt 是最近一次 bootstrap 的阶段，只有管理台机有。
+	LastAttempt string `json:"last_attempt,omitempty"`
 }
 
 // Empty 报告这台主机是否干净：部署根、看护、外部服务和归档都没有残留。半清的机器不算空机。

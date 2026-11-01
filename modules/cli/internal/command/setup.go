@@ -47,6 +47,7 @@ type setupDeps struct {
 	openInitStorage       func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
 	openInitFactor        func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
 	initStorage           func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
+	initMetadata          func(context.Context, *setupconfig.Snapshot, string, setupInitBundle) (setupInitStorageSummary, error)
 	installWatchdog       func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
 	importMetadata        func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 	exportSkillConfig     func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
@@ -55,6 +56,7 @@ type setupDeps struct {
 	// scanDeployment 检测目标机器的部署情况；测试里为空时跳过检测。
 	scanDeployment func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost       func(context.Context, setupconfig.Host, string, []string) (deployscan.HostResult, error)
+	readLogs       func(context.Context, setupconfig.Host, string, string, string, int) ([]deployscan.LogSection, error)
 	trialPackage   func(context.Context, unitdeploy.CoreOptions) error
 }
 
@@ -72,6 +74,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 	cmd.AddCommand(
 		newSetupInitCommand(deps),
 		newSetupWipeCommand(deps),
+		newSetupLogsCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
 		newSetupSyncDeploymentsCommand(deps),
@@ -558,7 +561,7 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 func newSetupValidateCommand(deps setupDeps) *cobra.Command {
 	var file string
 	var options unitdeploy.CoreOptions
-	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接，并报告目标机器的部署情况与发布路线（route）", RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "validate", Short: "校验初始化配置和连接，并报告目标机器的部署情况、发布路线（route）和接下来要运行的命令（next_steps）", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
@@ -772,6 +775,11 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 			return runSetupInit(ctx, deps, snapshot, file, configDir, storageHost, bundle)
 		}
 	}
+	if deps.initMetadata == nil {
+		deps.initMetadata = func(ctx context.Context, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
+			return runSetupInitMetadata(ctx, deps, snapshot, storageHost, bundle)
+		}
+	}
 	if deps.installWatchdog == nil {
 		deps.installWatchdog = defaults.installWatchdog
 	}
@@ -802,6 +810,7 @@ func defaultSetupDeps() setupDeps {
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,
 		wipeHost:              defaultSetupWipeHost,
+		readLogs:              defaultSetupReadLogs,
 		trialPackage:          defaultSetupTrialPackage,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,

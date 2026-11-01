@@ -171,7 +171,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if controlOptions != nil {
 		var ready CoreResult
 		if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.Phase != "complete" || ready.Bootstrap.HostID != snapshot.Manifest.ControlHost().Name || !insideState(snapshot.Manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(snapshot.Manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
-			return result, errors.New("full control requires its original completed core receipt")
+			return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
 		}
 		if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
 			return result, errors.New("full control requires its original private runtime identity")
@@ -296,7 +296,9 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if err != nil {
 		// SSH observation failure is not evidence that the target exited. Leave
 		// its journal and the exact request intact for a safe explicit retry.
-		return result, remoteFailure("bootstrap observation failed; retry with the original state directory and configuration; target journal retained and private output omitted", err, output)
+		return result, helperFailure(ctx, func() (setupssh.Client, error) {
+			return setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, options.SSH)
+		}, "部署管理台", err, output)
 	}
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
