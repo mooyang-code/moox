@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -366,12 +367,38 @@ type Snapshot struct {
 	path      string
 	info      os.FileInfo
 	digest    [sha256.Size]byte
-	// content 是明文的摘要：加密文件每次写回密文都可能变，比较配置要看内容。
-	content [sha256.Size]byte
 }
 
-// Digest 是配置文件内容的摘要，用来判断两次命令用的是不是同一份配置。
-func (s *Snapshot) Digest() string { return hex.EncodeToString(s.content[:]) }
+// deploymentFields 列出 DeploymentDigest 覆盖的字段。
+func (s *Snapshot) deploymentFields() any {
+	type host struct {
+		Name, Address, PrivateAddress, Username, Reachability string
+		Port                                                  int
+	}
+	hosts := []host{}
+	for _, item := range s.Manifest.Hosts() {
+		hosts = append(hosts, host{item.Name, item.Address, item.PrivateAddress, item.Username, item.Reachability, item.Port})
+	}
+	return struct {
+		Hosts         []host
+		Deployments   map[string][]string
+		Paths         Paths
+		EventBusPort  int
+		AdminUser     string
+		AdminPassword string
+	}{hosts, s.Manifest.Deployments, s.Manifest.Paths, s.Manifest.EventBus.Port, s.Manifest.Admin.Username, s.Manifest.Admin.Password}
+}
+
+// DeploymentDigest 是决定部署身份的配置摘要：这些字段进了首次安装的软件、证书或账号，装到一半不能改。
+// 其他配置只影响后面的步骤，改了可以直接重跑。
+func (s *Snapshot) DeploymentDigest() string {
+	raw, err := json.Marshal(s.deploymentFields())
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
 
 // Path 是配置文件的绝对路径。
 func (s *Snapshot) Path() string { return s.path }
@@ -411,7 +438,6 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 		path:      resolvedPath,
 		info:      info,
 		digest:    sha256.Sum256(raw),
-		content:   sha256.Sum256(plain),
 	}, nil
 }
 

@@ -13,11 +13,11 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
-// Binding 记录一次首次安装用的配置和版本。本机状态里的软件和身份只对这份配置、这个版本有效。
+// Binding 记录一次首次安装用的部署配置和版本。本机状态里的软件和身份只对它们有效。
 type Binding struct {
-	ConfigSHA256 string `json:"config_sha256"`
-	ConfigPath   string `json:"config_path"`
-	Version      string `json:"version"`
+	DeploymentSHA256 string `json:"deployment_sha256"`
+	ConfigPath       string `json:"config_path"`
+	Version          string `json:"version"`
 }
 
 const bindingFile = "install-binding.json"
@@ -69,7 +69,7 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 		var recorded Binding
 		if json.Unmarshal(raw, &recorded) == nil {
 			state.BindingConfig = recorded.ConfigPath
-			state.StaleBinding = recorded.ConfigSHA256 != current.ConfigSHA256 || recorded.Version != current.Version
+			state.StaleBinding = recorded.DeploymentSHA256 != current.DeploymentSHA256 || recorded.Version != current.Version
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(stateDir, "runtime-identity.json"))

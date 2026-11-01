@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -118,5 +119,46 @@ func TestControlPreflightRejectsUnreadyAndUnrelatedRuntime(t *testing.T) {
 	defer root.Close()
 	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
 	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
-	require.Error(t, bindControlRequest(root, "", "sha256:changed"))
+	require.NoError(t, bindControlRequest(root, "", "sha256:changed"), "control 没成功时可以改配置重试")
+	require.NoError(t, saveJSON(root, "control-ready.json", map[string]string{"stage": "control-ready"}, true))
+	require.Error(t, bindControlRequest(root, "", "sha256:other"), "control 成功后不能换请求")
+	require.NoError(t, bindControlRequest(root, "", "sha256:changed"))
+}
+
+func TestControlDependenciesReadReadyRecords(t *testing.T) {
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(directory, 0o700))
+	root, err := privateRoot(directory)
+	require.NoError(t, err)
+	defer root.Close()
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "storage": {Address: "192.0.2.2"}},
+		Deployments: map[string][]string{"control": {"admin", "monitor"}, "storage": {"storage-node"}},
+	}}
+	require.ErrorContains(t, checkControlDependencies(snapshot, root, []string{"monitor"}), "control_dependency_not_ready")
+	state := filepath.Join(directory, "units", "storage", "storage")
+	require.NoError(t, os.MkdirAll(state, 0o700))
+	write := func(stage string) {
+		require.NoError(t, os.WriteFile(filepath.Join(state, unitReadyFile), []byte(`{"stage":"`+stage+`"}`+"\n"), 0o600))
+	}
+	write("storage-paused")
+	require.ErrorContains(t, checkControlDependencies(snapshot, root, []string{"monitor"}), "control_dependency_not_ready", "暂停的 Storage 不能当就绪")
+	write("storage-ready")
+	require.NoError(t, checkControlDependencies(snapshot, root, []string{"monitor"}))
+}
+
+func TestLatestUnitConfigurationReadsNewestRecord(t *testing.T) {
+	state := t.TempDir()
+	base := filepath.Join(state, "units", "storage", "storage")
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "releases", "r1"), 0o700))
+	_, ok := latestUnitConfiguration(state, "storage", "storage")
+	require.False(t, ok)
+	first, second := filepath.Join(base, "operation.json"), filepath.Join(base, "releases", "r1", "operation.json")
+	require.NoError(t, os.WriteFile(first, []byte(`{"configuration_sha256":"sha256:old"}`), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte(`{"configuration_sha256":"sha256:new"}`), 0o600))
+	require.NoError(t, os.Chtimes(first, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
+	digest, ok := latestUnitConfiguration(state, "storage", "storage")
+	require.True(t, ok)
+	require.Equal(t, "sha256:new", digest)
 }

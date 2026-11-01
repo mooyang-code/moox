@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -75,6 +76,10 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 				local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 				if control.Release == "" && !local.InitStorage && !local.ControlReady {
 					return errors.New("init_storage_required: 管理台的服务要等系统元数据激活才能就绪，先运行 setup init --stage storage；运行 setup validate 看下一步")
+				}
+				// 改通知、Collector 这些配置后可以重跑；主机、账号这类改了就不是原来那次安装。
+				if control.Release == "" && !local.ControlReady && local.StaleBinding {
+					return fmt.Errorf("deployment_config_changed: 主机、路径、管理员或版本和这次安装开始时不一致（原配置在 %s）。换回原配置和原版本后重跑；要用新配置就彻底清空后重新安装", local.BindingConfig)
 				}
 				control.DeployOptions = options
 				result, err = deps.bootstrapControl(command.Context(), snapshot, control)

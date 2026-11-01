@@ -71,8 +71,14 @@ func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	require.ErrorContains(t, command.Execute(), "init_storage_required")
 	require.Zero(t, called, "元数据没激活时不能动手")
 	require.NoError(t, unitdeploy.MarkStep(state, unitdeploy.StepInitStorage))
-	require.NoError(t, command.Execute())
-	require.Equal(t, 2, loaded)
+	require.ErrorContains(t, command.Execute(), "deployment_config_changed", "首次 control 要核对配置")
+	require.Zero(t, called)
+	require.NoError(t, unitdeploy.WriteBinding(state, setupBinding(snapshot)))
+	snapshot.Manifest.Notification.WebhookURL = "https://example.invalid/changed"
+	require.NoError(t, command.Execute(), "改通知不影响部署配置")
+	snapshot.Manifest.Admin.Password = "another-admin-password"
+	require.ErrorContains(t, command.Execute(), "deployment_config_changed", "改管理员密码后不能接着装")
+	require.Equal(t, 4, loaded)
 	require.Equal(t, 1, called)
 	require.Contains(t, output.String(), `"stage":"control-ready"`)
 	require.NotContains(t, output.String(), "admin-test-password")

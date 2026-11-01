@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
@@ -57,7 +58,7 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
 			return request, nil, err
 		}
-	} else if err := checkControlDependencies(ctx, snapshot, root, components, options.DeployOptions); err != nil {
+	} else if err := checkControlDependencies(snapshot, root, components); err != nil {
 		return request, nil, err
 	}
 	temporary, err := os.MkdirTemp(root.Name(), "control-templates-")
@@ -182,7 +183,8 @@ func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 }
 
 // bindControlRequest 把 control 请求摘要绑定到操作记录：首次完整 control 用 control-operation.json，
-// 每个升级版本各自一条 control-operations/<版本>.json；重试同一版本必须是同一请求。
+// 每个升级版本各自一条 control-operations/<版本>.json。首次 control 成功前可以改配置重试，
+// 配置的部署部分由命令层核对；成功后和升级一样，同一版本重试必须是同一请求。
 func bindControlRequest(root *os.Root, release, digest string) error {
 	raw, err := json.Marshal(struct {
 		Version int    `json:"version"`
@@ -198,7 +200,15 @@ func bindControlRequest(root *os.Root, release, digest string) error {
 		}
 		name = "control-operations/" + release + ".json"
 	}
-	return persistPrivateBytes(root, name, append(raw, '\n'))
+	raw = append(raw, '\n')
+	if release == "" {
+		if _, err := root.Lstat("control-ready.json"); os.IsNotExist(err) {
+			return fsutil.WritePrivate(root, name, raw, true)
+		} else if err != nil {
+			return err
+		}
+	}
+	return persistPrivateBytes(root, name, raw)
 }
 
 // checkControlDependencyRecords 是 control 升级时的依赖检查：只核验 Storage 与出口单元已有部署记录，
@@ -271,9 +281,9 @@ func activeControlStatus(ctx context.Context, transport setupssh.Client, helper,
 	return status.Components, nil
 }
 
-// Control startup requires Storage, and Collector additionally needs egress.
-// Fleet-wide host/Access/Trade preparation belongs to the outer bootstrap.
-func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, components []string, options DeployOptions) error {
+// checkControlDependencies 确认 control 启动依赖的单元都已就绪：Storage 总是需要，Collector 还要出口代理。
+// 只读 ready.json，单元没好时要用户修好再来，不在这里重新部署。
+func checkControlDependencies(snapshot *setupconfig.Snapshot, root *os.Root, components []string) error {
 	profiles := []string{}
 	if slices.ContainsFunc(components, func(id string) bool {
 		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}, id)
@@ -291,18 +301,11 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 				continue
 			}
 			found = true
-			if _, err := root.Lstat(filepath.Join("units", host.Name, profile, "operation.json")); err != nil {
-				return errors.New("full control requires the original native Storage and egress operations")
+			var ready struct {
+				Stage string `json:"stage"`
 			}
-			// Reuse the exact deploy transaction to finish or repair its original
-			// request. A stale ready PID alone cannot prove that the desired
-			// software, configuration and material were successfully activated.
-			result, err := DeployUnit(ctx, snapshot, UnitOptions{DeployOptions: options, HostID: host.Name, Profile: profile})
-			if err != nil {
-				return err
-			}
-			if result.Stage != profile+"-ready" {
-				return errors.New("required control startup dependencies cannot remain paused")
+			if err := readJSON(root, filepath.Join("units", host.Name, profile, unitReadyFile), 4096, &ready); err != nil || ready.Stage != profile+"-ready" {
+				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务暂停时用 setup restart", host.Name, profile, host.Name, profile)
 			}
 		}
 		if !found {
@@ -310,4 +313,51 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 		}
 	}
 	return nil
+}
+
+// ConfigDrift 比对 Storage、出口单元最新一次部署用的配置，变了就说明要怎么生效。这些配置只在单元部署时写入。
+func ConfigDrift(snapshot *setupconfig.Snapshot, stateDir string) ([]string, error) {
+	warnings := []string{}
+	for _, profile := range []string{"storage", "egress-proxy"} {
+		configuration, err := unitConfiguration(snapshot, profile)
+		if err != nil {
+			return nil, err
+		}
+		for _, host := range snapshot.Manifest.Hosts() {
+			if _, err := unitComponents(snapshot.Manifest, host.Name, profile); err != nil {
+				continue
+			}
+			deployed, ok := latestUnitConfiguration(stateDir, host.Name, profile)
+			if !ok || deployed == "sha256:"+sha(configuration) {
+				continue
+			}
+			warning := fmt.Sprintf("%s 上的 %s 配置和部署时不同，要发新版本才生效：setup release build --release <新ID>，再 setup deploy-unit --host %s --profile %s --release <新ID>", host.Name, profile, host.Name, profile)
+			if profile == "egress-proxy" {
+				warning += "；出口代理配置也进了 Collector，还要 setup bootstrap --stage control --release <新ID>"
+			}
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings, nil
+}
+
+// latestUnitConfiguration 读单元最新一次部署记录里的配置摘要，没有记录时 ok 为 false。
+func latestUnitConfiguration(stateDir, host, profile string) (string, bool) {
+	base := filepath.Join(stateDir, "units", host, profile)
+	paths, _ := filepath.Glob(filepath.Join(base, "releases", "*", "operation.json"))
+	paths = append(paths, filepath.Join(base, "operation.json"))
+	latest, digest := time.Time{}, ""
+	for _, name := range paths {
+		info, err := os.Stat(name)
+		if err != nil || info.ModTime().Before(latest) {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		var operation unitOperation
+		if err != nil || json.Unmarshal(raw, &operation) != nil {
+			continue
+		}
+		latest, digest = info.ModTime(), operation.ConfigurationSHA256
+	}
+	return digest, digest != ""
 }

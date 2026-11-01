@@ -38,7 +38,7 @@ const minUploadKB = 1 << 20
 
 // setupBinding 是这次命令用的配置和版本。
 func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
-	return unitdeploy.Binding{ConfigSHA256: snapshot.Digest(), ConfigPath: snapshot.Path(), Version: Version}
+	return unitdeploy.Binding{DeploymentSHA256: snapshot.DeploymentDigest(), ConfigPath: snapshot.Path(), Version: Version}
 }
 
 // consoleCertPath 是这台电脑上缓存的管理台证书；公网证书没有缓存，返回空。
@@ -107,6 +107,11 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	if len(deployscan.CollectSpaces(snapshot.Manifest)) == 0 {
 		status.Warnings = append(status.Warnings, "这个拓扑没有 collector-stream，也没配云函数，默认的 crypto 采集任务不会运行")
 	}
+	drift, err := unitdeploy.ConfigDrift(snapshot, options.StateDirectory)
+	if err != nil {
+		return nil, err
+	}
+	status.Warnings = append(status.Warnings, drift...)
 	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot)); reason != "" {
 		status.Reasons = append(status.Reasons, reason)
 	}

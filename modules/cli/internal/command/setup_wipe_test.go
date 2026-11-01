@@ -197,7 +197,7 @@ func TestCheckAdminRoute(t *testing.T) {
 	require.NoFileExists(t, pin, "旧操作员身份会和新 CA 冲突，也要归档")
 	binding := unitdeploy.ReadLocalState(h.state, h.operator, setupBinding(h.snapshot))
 	require.False(t, binding.StaleBinding, "首次安装开始时要记下配置和版本")
-	require.True(t, unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{ConfigSHA256: "other"}).StaleBinding)
+	require.True(t, unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{DeploymentSHA256: "other"}).StaleBinding)
 	require.NoError(t, os.RemoveAll(h.state))
 	h.deps.scanDeployment = nil
 	require.NoError(t, checkAdminRoute(context.Background(), h.deps, h.snapshot, options))

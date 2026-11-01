@@ -100,7 +100,7 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 		}
 		if exists && j.Phase != "complete" && j.Phase != "rolled-back" {
 			if j.RequestSHA256 != input.digest {
-				return errors.New("an interrupted bootstrap must be recovered with its original request")
+				return errors.New("bootstrap_interrupted: 目标机上一次部署没有结束，只能用原配置恢复。换回原配置重跑同一条命令，恢复后再改")
 			}
 			if err := guard.BeginBootstrap(ctx, input.digest); err != nil {
 				return err
