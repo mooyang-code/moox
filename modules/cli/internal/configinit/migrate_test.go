@@ -375,3 +375,15 @@ func TestMigrateSetsFactorsEnabled(t *testing.T) {
 	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, FactorsEnabled: "yes"})
 	require.ErrorContains(t, err, "true 或 false")
 }
+
+func TestMigrateRemovesTLSMode(t *testing.T) {
+	plain := "[hosts.control]\nlabel = \"控制机\"\ntls_mode = \"auto\"\nssh = { port = 22 }\n"
+	report := MigrateReport{}
+	migrated, err := migrateManifestText([]byte(plain), nil, "", "", &report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(migrated), "tls_mode") || len(report.RemovedTLSMode) != 1 || report.RemovedTLSMode[0] != "control" {
+		t.Fatalf("没有删掉 tls_mode：%s %+v", migrated, report)
+	}
+}

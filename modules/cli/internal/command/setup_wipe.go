@@ -22,9 +22,11 @@ var errDeploymentBlocked = errors.New("deployment_blocked: 目标机器有阻塞
 type setupDeployment struct {
 	deployscan.Decision
 	// NextSteps 是接下来要按顺序运行的命令，只有首次安装的路线才有。
-	NextSteps []string                `json:"next_steps"`
-	Warnings  []string                `json:"warnings,omitempty"`
-	Hosts     []deployscan.HostReport `json:"hosts"`
+	NextSteps []string `json:"next_steps"`
+	// ManualSteps 是要用户在自己终端做的事，Agent 做不了，也不影响安装继续。
+	ManualSteps []string                `json:"manual_steps,omitempty"`
+	Warnings    []string                `json:"warnings,omitempty"`
+	Hosts       []deployscan.HostReport `json:"hosts"`
 }
 
 // minControlDiskKB 是管理台机部署前至少要有的可用空间：一次部署要放离线包和两个发布目录。
@@ -38,21 +40,12 @@ const minUploadKB = 1 << 20
 
 // setupBinding 是这次命令用的配置和版本。
 func setupBinding(snapshot *setupconfig.Snapshot) unitdeploy.Binding {
-	return unitdeploy.Binding{ConfigSHA256: snapshot.Digest(), ConfigPath: snapshot.Path(), Version: Version}
+	return unitdeploy.Binding{DeploymentSHA256: snapshot.DeploymentDigest(), ConfigPath: snapshot.Path(), Version: Version}
 }
 
-// consoleCertPath 是这台电脑上缓存的管理台证书；公网证书没有缓存，返回空。
+// consoleCertPath 是这台电脑上缓存的管理台证书。
 func consoleCertPath(snapshot *setupconfig.Snapshot) string {
-	control := snapshot.Manifest.ControlHost()
-	if !usesInternalTLS(snapshot) {
-		return ""
-	}
-	return tlstrust.CAPath(control.Address)
-}
-
-func usesInternalTLS(snapshot *setupconfig.Snapshot) bool {
-	control := snapshot.Manifest.ControlHost()
-	return tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(control.TLSMode), control.Address)
+	return tlstrust.CAPath(snapshot.Manifest.ControlHost().Address)
 }
 
 // diskWarnings 列出可用空间不够的主机。不算阻塞项：清除旧部署正好能腾出空间。
@@ -92,7 +85,7 @@ type setupValidateOutput struct {
 	Deployment *setupDeployment `json:"deployment,omitempty"`
 }
 
-func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options *unitdeploy.CoreOptions) (*setupDeployment, error) {
+func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options *unitdeploy.DeployOptions) (*setupDeployment, error) {
 	if err := resolveSetupUnitOptions(snapshot, "", options); err != nil {
 		return nil, err
 	}
@@ -103,8 +96,17 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	local := unitdeploy.ReadLocalState(options.StateDirectory, options.OperatorDirectory, setupBinding(snapshot))
 	control := snapshot.Manifest.ControlHost().Name
 	status := &setupDeployment{Decision: deployscan.Decide(reports, control, local), Hosts: reports, Warnings: diskWarnings(reports, control)}
-	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot))
-	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local, usesInternalTLS(snapshot)); reason != "" {
+	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local)
+	status.ManualSteps = deployscan.ManualSteps(status.Route)
+	if len(deployscan.CollectSpaces(snapshot.Manifest)) == 0 {
+		status.Warnings = append(status.Warnings, "这个拓扑没有 collector-stream，也没配云函数，默认的 crypto 采集任务不会运行")
+	}
+	drift, err := unitdeploy.ConfigDrift(snapshot, options.StateDirectory)
+	if err != nil {
+		return nil, err
+	}
+	status.Warnings = append(status.Warnings, drift...)
+	if reason := deployscan.UnfinishedReason(snapshot.Manifest, status.Route, local); reason != "" {
 		status.Reasons = append(status.Reasons, reason)
 	}
 	if status.Route == deployscan.RouteBlocked {
@@ -113,9 +115,9 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	return status, nil
 }
 
-// checkCoreRoute 在 bootstrap core 动手打包和上传之前确认这是一次首次安装：
+// checkAdminRoute 在 bootstrap admin 动手打包和上传之前确认这是一次首次安装：
 // 全是空机时先归档本机遗留的状态和操作员身份，避免复用旧软件、和新 CA 冲突；上次没做完的首次安装可以继续；其余情况直接停止。
-func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.CoreOptions) error {
+func checkAdminRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions) error {
 	if deps.scanDeployment == nil {
 		return nil
 	}
@@ -149,7 +151,7 @@ func checkCoreRoute(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	var file, source, expect string
 	var yes, acceptTradeRisk bool
-	var options unitdeploy.CoreOptions
+	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "wipe",
 		Short: "彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复）",
@@ -257,6 +259,6 @@ func defaultSetupWipeHost(ctx context.Context, host setupconfig.Host, root strin
 	return deployscan.WipeHost(ctx, dialSetupHost, host, root, dirs)
 }
 
-func defaultSetupTrialPackage(ctx context.Context, options unitdeploy.CoreOptions) error {
+func defaultSetupTrialPackage(ctx context.Context, options unitdeploy.DeployOptions) error {
 	return unitdeploy.TrialPackage(ctx, options, "amd64")
 }

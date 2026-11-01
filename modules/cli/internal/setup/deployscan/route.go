@@ -18,7 +18,7 @@ const (
 type LocalState struct {
 	// RuntimeSHA256 是本机身份的绑定哈希；为空表示没有本机状态。
 	RuntimeSHA256 string
-	CoreReady     bool
+	AdminReady    bool
 	ControlReady  bool
 	OperatorPin   bool
 	UnitRecords   bool
@@ -33,6 +33,8 @@ type LocalState struct {
 	// InitStorage、InitReady 表示 setup init --stage storage、setup init 已完成。
 	InitStorage bool
 	InitReady   bool
+	// Verified 是验收通过的空间，见 setup verify。
+	Verified map[string]bool
 }
 
 // Decision 是路线判定的结果。
@@ -71,7 +73,7 @@ func Decide(reports []HostReport, control string, local LocalState) Decision {
 			}
 			return Decision{Route: RouteResume}
 		}
-		if matched && local.CoreReady && local.OperatorPin && local.UnitRecords {
+		if matched && local.AdminReady && local.OperatorPin && local.UnitRecords {
 			return Decision{Route: RouteUpgrade}
 		}
 	}

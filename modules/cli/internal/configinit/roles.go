@@ -34,7 +34,6 @@ type Role struct {
 
 	exampleHost string
 	hostID      string
-	tlsMode     string
 	components  []string
 }
 
@@ -97,8 +96,7 @@ var roleCatalog = []Role{
 func loadRoles() ([]Role, error) {
 	var example struct {
 		Hosts map[string]struct {
-			TLSMode string `toml:"tls_mode"`
-			SSH     struct {
+			SSH struct {
 				Username string `toml:"username"`
 			} `toml:"ssh"`
 		} `toml:"hosts"`
@@ -116,7 +114,6 @@ func loadRoles() ([]Role, error) {
 				return nil, fmt.Errorf("示例配置里没有主机 %s 或它的部署，请同步模板", role.exampleHost)
 			}
 			role.hostID = role.exampleHost
-			role.tlsMode = host.TLSMode
 			role.SSHUser = host.SSH.Username
 			role.components = append([]string(nil), placed...)
 		}

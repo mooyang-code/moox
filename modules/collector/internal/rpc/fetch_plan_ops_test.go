@@ -216,17 +216,15 @@ type fakeFetchPlanControl struct{ disabled map[string]bool }
 
 func (f fakeFetchPlanControl) TimersDisabled(space string) bool { return f.disabled[space] }
 
+func (fakeFetchPlanControl) PlanIssue(string) string { return "" }
+
 func TestSetFetchPlanPausedSavesSwitchAndReportsTimerState(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 
-	rsp, err := service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode(), "没有启用采集计划时不能暂停")
-
 	control := fakeFetchPlanControl{disabled: map[string]bool{}}
 	service.SetFetchPlanControl(control)
-	rsp, err = service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
+	rsp, err := service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.True(t, rsp.GetPaused())

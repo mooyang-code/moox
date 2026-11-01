@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,12 +31,9 @@ type Public struct {
 }
 
 type TLS struct {
-	Mode         string `yaml:"mode"`
 	StorageRoot  string `yaml:"storage_root"`
 	CABaseline   string `yaml:"ca_baseline"`
 	CAPublishDir string `yaml:"ca_publish_dir"`
-	Email        string `yaml:"email"`
-	ACMECA       string `yaml:"acme_ca"`
 }
 
 type Upstreams struct {
@@ -59,7 +55,7 @@ type Lifecycle struct {
 func Defaults() Config {
 	return Config{
 		Public:    Public{Host: "localhost", Bind: "0.0.0.0", Port: 9527, HTTP3: false},
-		TLS:       TLS{Mode: "internal", StorageRoot: "../data/caddy/caddy", CABaseline: "../data/caddy/internal-ca.sha256", CAPublishDir: "../certs/caddy"},
+		TLS:       TLS{StorageRoot: "../data/caddy/caddy", CABaseline: "../data/caddy/internal-ca.sha256", CAPublishDir: "../certs/caddy"},
 		Upstreams: Upstreams{Admin: "127.0.0.1:11000", Web: "127.0.0.1:9528"},
 		Health:    Health{Listen: "127.0.0.1:19528"},
 		Lifecycle: Lifecycle{DrainTimeout: 30 * time.Second, EngineStopTimeout: 10 * time.Second, CleanupMargin: 5 * time.Second, StartupTimeout: 3 * time.Minute},
@@ -129,18 +125,9 @@ func (c Config) Validate() error {
 	if c.Public.Port < 1 || c.Public.Port > 65535 {
 		return errors.New("public.port must be in 1..65535")
 	}
-	if c.TLS.Mode != "internal" && c.TLS.Mode != "public" {
-		return errors.New("tls.mode must be internal or public")
-	}
 	for _, p := range []string{c.TLS.StorageRoot, c.TLS.CABaseline, c.TLS.CAPublishDir} {
 		if p == "" {
 			return errors.New("TLS state paths must be explicit")
-		}
-	}
-	if c.TLS.ACMECA != "" {
-		u, err := url.Parse(c.TLS.ACMECA)
-		if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.Scheme != "https" && !(u.Scheme == "http" && net.ParseIP(u.Hostname()).IsLoopback()) {
-			return errors.New("acme_ca must be HTTPS, or HTTP on a literal loopback test server")
 		}
 	}
 	if err := loopbackAddress(c.Health.Listen); err != nil {

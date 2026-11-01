@@ -59,7 +59,7 @@ func newWipeHarness(t *testing.T) *wipeHarness {
 			}
 			return deployscan.HostResult{Host: host.Name}, nil
 		},
-		trialPackage: func(context.Context, unitdeploy.CoreOptions) error { h.trials++; return h.trialErr },
+		trialPackage: func(context.Context, unitdeploy.DeployOptions) error { h.trials++; return h.trialErr },
 	}
 	return h
 }
@@ -179,10 +179,10 @@ func TestSetupValidateReportsRoute(t *testing.T) {
 	require.Contains(t, out, `"route":"blocked"`)
 }
 
-func TestCheckCoreRoute(t *testing.T) {
+func TestCheckAdminRoute(t *testing.T) {
 	h := newWipeHarness(t)
-	options := unitdeploy.CoreOptions{StateDirectory: h.state, OperatorDirectory: h.operator, Log: &bytes.Buffer{}}
-	require.ErrorContains(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options), "deployment_not_fresh")
+	options := unitdeploy.DeployOptions{StateDirectory: h.state, OperatorDirectory: h.operator, Log: &bytes.Buffer{}}
+	require.ErrorContains(t, checkAdminRoute(context.Background(), h.deps, h.snapshot, options), "deployment_not_fresh")
 	for i := range h.reports {
 		h.reports[i].Entries, h.reports[i].Units = nil, nil
 	}
@@ -192,15 +192,15 @@ func TestCheckCoreRoute(t *testing.T) {
 	require.NoError(t, os.WriteFile(pin, []byte("{}"), 0o600))
 	leftover := filepath.Join(h.state, "runtime-identity.json")
 	require.NoError(t, os.WriteFile(leftover, []byte("{}"), 0o600))
-	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
+	require.NoError(t, checkAdminRoute(context.Background(), h.deps, h.snapshot, options))
 	require.NoFileExists(t, leftover, "空机时要归档本机遗留状态")
 	require.NoFileExists(t, pin, "旧操作员身份会和新 CA 冲突，也要归档")
 	binding := unitdeploy.ReadLocalState(h.state, h.operator, setupBinding(h.snapshot))
 	require.False(t, binding.StaleBinding, "首次安装开始时要记下配置和版本")
-	require.True(t, unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{ConfigSHA256: "other"}).StaleBinding)
+	require.True(t, unitdeploy.ReadLocalState(h.state, h.operator, unitdeploy.Binding{DeploymentSHA256: "other"}).StaleBinding)
 	require.NoError(t, os.RemoveAll(h.state))
 	h.deps.scanDeployment = nil
-	require.NoError(t, checkCoreRoute(context.Background(), h.deps, h.snapshot, options))
+	require.NoError(t, checkAdminRoute(context.Background(), h.deps, h.snapshot, options))
 }
 
 func TestSetupValidateListsNextSteps(t *testing.T) {
@@ -212,7 +212,7 @@ func TestSetupValidateListsNextSteps(t *testing.T) {
 	out, err := h.run(t, newSetupValidateCommand)
 	require.NoError(t, err)
 	require.Contains(t, out, `"route":"fresh"`)
-	require.Contains(t, out, "setup bootstrap --stage core")
+	require.Contains(t, out, "setup bootstrap --stage admin")
 	require.Contains(t, out, "disk_low", "磁盘不够要提醒，但不阻塞：清除正好能腾空间")
 }
 

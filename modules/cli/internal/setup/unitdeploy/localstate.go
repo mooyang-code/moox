@@ -6,17 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
-// Binding 记录一次首次安装用的配置和版本。本机状态里的软件和身份只对这份配置、这个版本有效。
+// Binding 记录一次首次安装用的部署配置和版本。本机状态里的软件和身份只对它们有效。
 type Binding struct {
-	ConfigSHA256 string `json:"config_sha256"`
-	ConfigPath   string `json:"config_path"`
-	Version      string `json:"version"`
+	DeploymentSHA256 string `json:"deployment_sha256"`
+	ConfigPath       string `json:"config_path"`
+	Version          string `json:"version"`
 }
 
 const bindingFile = "install-binding.json"
@@ -57,6 +58,9 @@ const (
 	StepInitReady   = "init-ready.json"
 )
 
+// VerifiedStep 返回一个空间验收通过的记录文件名。
+func VerifiedStep(spaceID string) string { return "verify-ready-" + spaceID + ".json" }
+
 // ReadLocalState 只读取这台电脑上的部署状态：不建目录、不生成密钥，文件不存在就算没有。
 // current 是这次命令用的配置和版本；本机没有记录或记录不一致时，这份状态不能用来继续安装。
 func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.LocalState {
@@ -65,7 +69,7 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 		var recorded Binding
 		if json.Unmarshal(raw, &recorded) == nil {
 			state.BindingConfig = recorded.ConfigPath
-			state.StaleBinding = recorded.ConfigSHA256 != current.ConfigSHA256 || recorded.Version != current.Version
+			state.StaleBinding = recorded.DeploymentSHA256 != current.DeploymentSHA256 || recorded.Version != current.Version
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(stateDir, "runtime-identity.json"))
@@ -75,10 +79,17 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 			state.RuntimeSHA256 = runtimeBinding(identity)
 		}
 	}
-	state.CoreReady = fileExists(filepath.Join(stateDir, "core-ready.json"))
+	state.AdminReady = fileExists(filepath.Join(stateDir, "admin-ready.json"))
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
 	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
 	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
+	state.Verified = map[string]bool{}
+	if matches, err := filepath.Glob(filepath.Join(stateDir, VerifiedStep("*"))); err == nil {
+		for _, match := range matches {
+			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "verify-ready-"), ".json")
+			state.Verified[name] = true
+		}
+	}
 	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))
 	for _, pattern := range []string{"units/*/*/operation.json", "units/*/*/releases/*/operation.json"} {
 		if matches, _ := filepath.Glob(filepath.Join(stateDir, pattern)); len(matches) != 0 {
@@ -115,7 +126,7 @@ func fileExists(name string) bool {
 
 // TrialPackage 按全部单元试打包到临时目录，确认产物包能用，走的是和正式部署相同的路径。
 // 没有预编译二进制（源码目录）时跳过，部署时才在本机构建。
-func TrialPackage(ctx context.Context, options CoreOptions, arch string) error {
+func TrialPackage(ctx context.Context, options DeployOptions, arch string) error {
 	if options.BinaryDirectory == "" {
 		return nil
 	}

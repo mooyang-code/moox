@@ -87,7 +87,7 @@ type setupInitStorageSummary struct {
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
 	var file, configDir, storageHost, stage string
-	var options unitdeploy.CoreOptions
+	var options unitdeploy.DeployOptions
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "导入默认空间、数据集、字段和因子",
@@ -140,7 +140,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 }
 
 // runSetupInitMetadata 只做不依赖管理台服务的初始化：业务空间写进 Admin，元数据写进 Storage 并激活。
-// Admin 在 core 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
+// Admin 在 admin 就有，Storage 经 SSH 访问，所以这一步能排在管理台之前。
 func runSetupInitMetadata(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, storageHost string, bundle setupInitBundle) (setupInitStorageSummary, error) {
 	if _, err := deps.applySpaces(ctx, snapshot, bundle.Spaces); err != nil {
 		return setupInitStorageSummary{}, err
@@ -206,10 +206,6 @@ func runSetupInit(
 	if firewall.Status != "" && firewall.Status != "ready" {
 		return setupInitSummary{}, fmt.Errorf("firewall_incomplete: status=%s skipped=%d", firewall.Status, firewall.Skipped)
 	}
-	if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
-		return setupInitSummary{}, err
-	}
-
 	admin, err := deps.applySpaces(ctx, snapshot, bundle.Spaces)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -254,6 +250,9 @@ func runSetupInit(
 		return setupInitSummary{}, err
 	}
 	var factorSummary *setupFactorSummary
+	if snapshot.Manifest.Factors.Enabled && (snapshot.Manifest.ComponentHost("factor-engine") == "" || snapshot.Manifest.ComponentHost("collector-stream") == "") {
+		factorPlan.Warnings = append(factorPlan.Warnings, "打开了因子导入，但没有因子引擎或海外采集：任务不会出结果，会长期告警")
+	}
 	reportFactorWarnings(factorPlan.Warnings)
 	if !factorPlan.empty() {
 		factorService, openErr := deps.openInitFactor(ctx, snapshot)
@@ -924,28 +923,27 @@ func summarizeDatasetActivationChecks(checks []*storagepb.DatasetActivationCheck
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)
 var _ datasetActivationAPI = (storageMetadataAPI)(nil)
 
-// setupBrowserTrustSummary 记录初始化时已在本机安装信任的控制台内部 CA，以及其他机器怎么快速做同样的事。
+// setupBrowserTrustSummary 说明管理台内部 CA 的信任还要用户自己做：不做时管理台能打开，但浏览器有安全提示。
 type setupBrowserTrustSummary struct {
 	Status        string `json:"status"`
 	CAPath        string `json:"ca_path"`
 	Fingerprint   string `json:"fingerprint,omitempty"`
+	Note          string `json:"note"`
 	OtherMachines string `json:"other_machines"`
 }
 
-// describeSetupBrowserTrust 只在控制台使用内部 CA 时返回摘要；公共证书不需要本机信任，返回 nil。
+// describeSetupBrowserTrust 返回信任摘要，status 是 pending，等用户在自己的终端运行 setup trust-browser。
 func describeSetupBrowserTrust(snapshot *setupconfig.Snapshot) *setupBrowserTrustSummary {
 	if snapshot == nil {
 		return nil
 	}
 	host := snapshot.Manifest.ControlHost()
-	if !tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(host.TLSMode), host.Address) {
-		return nil
-	}
 	caPath := tlstrust.CAPath(host.Address)
 	return &setupBrowserTrustSummary{
-		Status:      "trusted",
+		Status:      "pending",
 		CAPath:      caPath,
 		Fingerprint: tlstrust.Fingerprint(caPath),
+		Note:        "这一步要这台电脑的管理员授权，Agent 做不了，请在自己的终端运行 moox-cli setup trust-browser。不做时管理台能打开，但浏览器有安全提示",
 		OtherMachines: fmt.Sprintf("换电脑或迁移机器：打开 https://%s:9527 的登录页或“秘钥管理”页，点“下载并安装根证书”，下载安装包后核对指纹，"+
 			"向运维或已信任的机器取得根证书指纹，按安装包里 AGENT-INSTALL.md 的“直接安装”用系统命令安装（可把该文件交给 Agent，由它先向你确认指纹）；"+
 			"不要不加检查地运行包内脚本。有仓库、moox.toml 和控制机 SSH 权限的机器更稳妥：先用可信渠道拿到 SSH 主机指纹，运行 "+

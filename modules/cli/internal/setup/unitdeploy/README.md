@@ -1,6 +1,6 @@
 # 原生核心初始化与单元部署入口
 
-`moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir /path/to/worktree`
+`moox-cli setup bootstrap --stage admin --file ./moox.toml --source-dir /path/to/worktree`
 由本机 CLI 读取一次私有配置，核验 SSH 主机指纹，按目标 Linux 架构准备 host/control
 软件包，再传输规范请求并调用目标 `moox-runtime`。缺少预构建目录时，前端和这两个
 包内的纯 Go 组件均在本机构建，强制 `CGO_ENABLED=0`。
@@ -16,8 +16,8 @@ control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`
 命名空间；使用自定义路径不会额外创建硬编码的 `control/`。Storage 根仍须位于部署根下，
 当前安装器不支持 Storage 跨部署根或三个角色分散到多台主机。
 
-核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、Host Gateway、Host Agent。EventBus 的身份在 core 阶段签发，
-broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `stage=core-ready`，不能据此认定完整部署成功。待 Storage、Access、
+核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、Host Gateway、Host Agent。EventBus 的身份在 admin 阶段签发，
+broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `stage=admin-ready`，不能据此认定完整部署成功。待 Storage、Access、
 出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 部署并激活 Console Proxy。
 已有的完整控制服务不能通过核心请求被缩减。
 
@@ -35,15 +35,15 @@ broker 通过独立 `eventbus` profile 安装到拓扑指定的主机。输出 `
 `~/.config/moox`，配置为 `gateway-client.yaml`，与 `gatewayio` 的读取入口一致。
 本机已有 CA 绑定不匹配时拒绝覆盖，身份轮换使用显式流程。
 
-本机验证为 `make test-unit-core`。Linux 门禁 `make test-unit-core-linux` 只执行预构建的
-测试与软件，必须提供 `MOOX_CORE_TEST_BINARY`、`MOOX_RUNTIME_BINARY`、
+本机验证为 `make test-unit-admin`。Linux 门禁 `make test-unit-admin-linux` 只执行预构建的
+测试与软件，必须提供 `MOOX_ADMIN_TEST_BINARY`、`MOOX_RUNTIME_BINARY`、
 `MOOX_BOOTSTRAP_HOST_ARCHIVE`、`MOOX_BOOTSTRAP_CONTROL_ARCHIVE`、只含公开模板的
-合成 Git 仓库 `MOOX_CORE_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
+合成 Git 仓库 `MOOX_ADMIN_SOURCE_ROOT`，以及 `MOOX_BUSINESS_BINARY_DIRECTORY` 中预构建的
 Access、出口代理、Trade/Trade CLI 和四个 Storage 二进制（仅三个服务需要 CGO）。真实 SSH/SFTP 场景从首次制品准备开始，使用
 完整三主机拓扑核验三个核心服务、主机指纹拒绝、操作员身份范围、重复执行 PID 保持、
 本机状态丢失拒绝替换凭据。其余主机只参与拓扑与签发，未在此场景启动。
 
-核心成功后在本机保存 `core-ready.json` 完成收据。`setup deploy-host --host HOST` 使用同一
+核心成功后在本机保存 `admin-ready.json` 完成收据。`setup deploy-host --host HOST` 使用同一
 `state-dir` 和 `operator-dir`，经签名 SSH 隧道调用 `SyncHostDeployments`，再由控制机的
 `moox-runtime export-host` 在维护锁内调用运行中 Admin 的离线 CLI 导出身份。导出绑定原始
 运行身份摘要和 MooX CA，只签发目标主机材料；EventBus 只取 `hostagent-publisher`、
@@ -66,12 +66,12 @@ PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回�
 经 SSH 以 systemd 用户服务安装并核对 linger，主机或部署已停用时只安装文件、不启动。出口配置和 Storage
 策略由可信配置快照产生，配置字节及私有环境摘要绑定原始操作；重试拒绝变更后重新接管。
 客户端材料只包含所需签名身份、EventBus 角色和公开 CA，运行时使用发布内的独立副本。
-同架构助手复用原始 core 制品，其他架构只接受原目标 host 包验证过的助手。
+同架构助手复用原始 admin 制品，其他架构只接受原目标 host 包验证过的助手。
 
 Access、出口代理和 Trade 默认在本机关闭 CGO 构建。Storage 必须先执行
 `setup build-linux --module storage --source-dir /path/to/worktree`，再以 `--binary-dir` 提供
-三个 CGO Linux 服务制品和本机关闭 CGO 编译的 Storage CLI。新建 core 的私有运行身份保存独立的 node、primary、view 认证密钥，
-按 Storage 角色分发；旧 core 身份缺少这些密钥时拒绝 Storage 部署，不在重试中补生成。
+三个 CGO Linux 服务制品和本机关闭 CGO 编译的 Storage CLI。新建 admin 的私有运行身份保存独立的 node、primary、view 认证密钥，
+按 Storage 角色分发；旧 admin 身份缺少这些密钥时拒绝 Storage 部署，不在重试中补生成。
 当前模板的内部 RPC 只监听 loopback，原生入口要求三个 Storage 角色位于同一主机；跨主机角色路由未接通时，在远端操作前拒绝部署。Storage 主库初始化在旧写入者退出、候选独立复制完成后执行，强制候选内的相对数据根，
 子进程继承维护锁并在父进程死亡时退出；取消后先等待写入者退出，再释放维护锁。
 初始化关闭数据库后只同步元数据树和祖先目录，不扫描全部数据集，也不输出子进程私密日志。

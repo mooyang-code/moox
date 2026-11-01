@@ -18,7 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 )
 
-type coreSoftware struct {
+type adminSoftware struct {
 	Version      int                  `json:"version"`
 	Architecture string               `json:"architecture"`
 	Packages     []unitpackage.Result `json:"packages"`
@@ -43,30 +43,30 @@ func fileSHA(filename string) (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-func readCoreSoftware(ctx context.Context, root *os.Root, arch string) (coreSoftware, bool, error) {
-	var stored coreSoftware
-	if _, err := root.Lstat("core-software.json"); os.IsNotExist(err) {
+func readAdminSoftware(ctx context.Context, root *os.Root, arch string) (adminSoftware, bool, error) {
+	var stored adminSoftware
+	if _, err := root.Lstat("admin-software.json"); os.IsNotExist(err) {
 		return stored, false, nil
 	} else if err != nil {
 		return stored, false, err
 	}
-	raw, err := fsutil.ReadPrivate(root, "core-software.json", 1<<20)
+	raw, err := fsutil.ReadPrivate(root, "admin-software.json", 1<<20)
 	if err != nil {
 		return stored, true, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&stored) != nil || decoder.Decode(new(any)) != io.EOF || stored.Version != 1 || stored.Architecture != arch || len(stored.Packages) != 2 {
-		return stored, true, errors.New("persisted core software does not match this target")
+		return stored, true, errors.New("persisted admin software does not match this target")
 	}
 	for i, profile := range []string{"host", "control"} {
 		item := stored.Packages[i]
 		if !insideState(root.Name(), item.Archive) {
-			return stored, true, errors.New("persisted core artifact is outside private deployment state")
+			return stored, true, errors.New("persisted admin artifact is outside private deployment state")
 		}
 		verified, err := unitpackage.Inspect(ctx, item.Archive)
 		if err != nil || verified.SHA256 != item.SHA256 || verified.Manifest.Profile != profile || verified.Manifest.GOOS != "linux" || verified.Manifest.GOARCH != arch {
-			return stored, true, errors.New("persisted core artifact failed independent verification")
+			return stored, true, errors.New("persisted admin artifact failed independent verification")
 		}
 		stored.Packages[i] = verified
 	}
@@ -90,8 +90,8 @@ func insideState(directory, filename string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && filepath.IsAbs(filename) && filepath.Clean(filename) == filename
 }
 
-func prepareCoreSoftware(ctx context.Context, root *os.Root, options CoreOptions, arch string) ([]unitpackage.Result, string, error) {
-	stored, exists, err := readCoreSoftware(ctx, root, arch)
+func prepareAdminSoftware(ctx context.Context, root *os.Root, options DeployOptions, arch string) ([]unitpackage.Result, string, error) {
+	stored, exists, err := readAdminSoftware(ctx, root, arch)
 	if err != nil || exists {
 		return stored.Packages, stored.Helper, err
 	}
@@ -104,11 +104,11 @@ func prepareCoreSoftware(ctx context.Context, root *os.Root, options CoreOptions
 	bin := options.BinaryDirectory
 	if bin == "" {
 		bin = filepath.Join(work, "bin")
-		if err := buildCoreLocally(ctx, options.RepositoryRoot, bin, arch, options.Log); err != nil {
+		if err := buildAdminLocally(ctx, options.RepositoryRoot, bin, arch, options.Log); err != nil {
 			return nil, "", err
 		}
 	}
-	stored = coreSoftware{Version: 1, Architecture: arch}
+	stored = adminSoftware{Version: 1, Architecture: arch}
 	for _, profile := range []string{"host", "control"} {
 		result, err := unitpackage.Package(ctx, unitpackage.Options{RepositoryRoot: options.RepositoryRoot, BinaryDirectory: bin, Output: filepath.Join(work, profile+".tar.gz"), Profile: profile, GOOS: "linux", GOARCH: arch})
 		if err != nil {
@@ -153,7 +153,7 @@ func prepareCoreSoftware(ctx context.Context, root *os.Root, options CoreOptions
 	if err != nil {
 		return nil, "", err
 	}
-	if err := fsutil.WritePrivate(root, "core-software.json", append(encoded, '\n'), false); err != nil {
+	if err := fsutil.WritePrivate(root, "admin-software.json", append(encoded, '\n'), false); err != nil {
 		return nil, "", err
 	}
 	return stored.Packages, stored.Helper, nil
@@ -161,7 +161,7 @@ func prepareCoreSoftware(ctx context.Context, root *os.Root, options CoreOptions
 
 // No SSH capability is available to this builder. Every
 // component in the host/control profiles is pure Go; frontend assets use Node.
-func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.Writer) error {
+func buildAdminLocally(ctx context.Context, repository, bin, arch string, log io.Writer) error {
 	if log == nil {
 		log = io.Discard
 	}
@@ -177,7 +177,7 @@ func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.
 		}
 		command.Env = append(environment, "CGO_ENABLED=0", "GOTOOLCHAIN=local", "TARGET_GOOS=linux", "TARGET_GOARCH="+arch, "BIN_DIR="+bin)
 		if err := command.Run(); err != nil {
-			return errors.New("local core build failed; see build diagnostics")
+			return errors.New("local admin build failed; see build diagnostics")
 		}
 		return nil
 	}

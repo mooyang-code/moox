@@ -41,7 +41,7 @@ func TestUnitActivationLinuxActualProxyDrainsAndPreservesCA(t *testing.T) {
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
 	require.NoError(t, listener.Close())
-	config := "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\n  http3: false\ntls:\n  mode: internal\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: " + upstream.Listener.Addr().String() + "\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 3s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 10s\n"
+	config := "public:\n  host: localhost\n  bind: 127.0.0.1\n  port: " + strconv.Itoa(port) + "\n  http3: false\ntls:\n  storage_root: ../data/caddy/caddy\n  ca_baseline: ../data/caddy/internal-ca.sha256\n  ca_publish_dir: ../certs/caddy\nupstreams:\n  admin: " + upstream.Listener.Addr().String() + "\n  web: 127.0.0.1:9528\nhealth:\n  listen: 127.0.0.1:19528\nlifecycle:\n  drain_timeout: 3s\n  engine_stop_timeout: 1s\n  cleanup_margin: 1s\n  startup_timeout: 10s\n"
 	override := filepath.Join(privateParent(t), "proxy.yaml")
 	require.NoError(t, os.WriteFile(override, []byte(config), 0o600))
 	options.Components = []string{"console-proxy", "web-host"}
@@ -89,7 +89,7 @@ func TestUnitActivationLinuxActualProxyDrainsAndPreservesCA(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	options.ReleaseID = "unsafe-initialize"
-	require.NoError(t, os.WriteFile(override, []byte(strings.Replace(config, "mode: internal", "mode: internal\n  initialize_ca: true", 1)), 0o600))
+	require.NoError(t, os.WriteFile(override, []byte(strings.Replace(config, "tls:\n", "tls:\n  initialize_ca: true\n", 1)), 0o600))
 	_, err = prepareWithHelper(t, options)
 	require.Error(t, err, "service configuration must reject reusable initialization permission")
 	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))

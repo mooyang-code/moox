@@ -109,7 +109,7 @@ components:
         - 保留 CA 与续期状态并排空完整流式请求
       inputs:
         - HTTPS 浏览器请求
-        - Caddy 证书与 ACME 状态
+        - Caddy 证书状态
       outputs:
         - Admin 与 web-host 响应
         - 内部鉴权诊断

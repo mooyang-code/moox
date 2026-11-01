@@ -22,7 +22,7 @@ func (m Manifest) HostByID(id string) Host {
 	if label == "" {
 		label = DefaultHostLabel(id)
 	}
-	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: label, PrivateKeyFile: definition.SSH.PrivateKeyFile, PrivateKeyPassphrase: definition.SSH.PrivateKeyPassphrase}
+	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, Reachability: reachability, Label: label, PrivateKeyFile: definition.SSH.PrivateKeyFile, PrivateKeyPassphrase: definition.SSH.PrivateKeyPassphrase}
 }
 func (m Manifest) ControlHost() Host  { return m.HostByID(m.ComponentHost("admin")) }
 func (m Manifest) EventBusHost() Host { return m.HostByID(m.ComponentHost("eventbus")) }
@@ -142,9 +142,6 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		}
 		if utf8.RuneCountInString(definition.Label) > 32 || strings.ContainsAny(definition.Label, "\r\n\t") {
 			return fmt.Errorf("config_invalid: %s.label must be a single line of at most 32 characters", path)
-		}
-		if definition.TLSMode != "" && definition.TLSMode != "auto" && definition.TLSMode != "public" && definition.TLSMode != "internal" {
-			return fmt.Errorf("config_invalid: %s.tls_mode must be auto, public, or internal", path)
 		}
 		if definition.Provider != "" && !providerPattern.MatchString(definition.Provider) {
 			return fmt.Errorf("config_invalid: %s.provider must use lowercase letters, digits, dash, or underscore", path)

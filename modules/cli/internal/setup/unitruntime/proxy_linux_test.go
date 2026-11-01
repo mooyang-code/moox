@@ -63,8 +63,8 @@ func TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused(t *testing.T)
 	config := map[string]any{
 		"public": map[string]any{"host": "localhost", "bind": "127.0.0.1", "port": port, "http3": false},
 		"tls": map[string]any{
-			"mode": "internal", "storage_root": filepath.Join(plan.ReleaseRoot, "data", "caddy"),
-			"ca_baseline": filepath.Join(plan.ReleaseRoot, "data", "internal-ca.sha256"), "ca_publish_dir": filepath.Join(plan.ReleaseRoot, "certs", "caddy"),
+			"storage_root": filepath.Join(plan.ReleaseRoot, "data", "caddy"),
+			"ca_baseline":  filepath.Join(plan.ReleaseRoot, "data", "internal-ca.sha256"), "ca_publish_dir": filepath.Join(plan.ReleaseRoot, "certs", "caddy"),
 		},
 		"upstreams": map[string]string{"admin": strings.TrimPrefix(admin.URL, "http://"), "web": strings.TrimPrefix(web.URL, "http://")},
 		"health":    map[string]string{"listen": "127.0.0.1:19528"},

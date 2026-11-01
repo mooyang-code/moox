@@ -178,6 +178,9 @@ type PlanReconciler struct {
 	Exclusions SubjectExclusionSource
 	// Operations 限制同时进行的 SCF 配置操作（各空间共用）；为空表示不限制。
 	Operations chan struct{}
+	// StreamOnline 判断 collector-stream 是否在线：新计划要给它下发推送或本地执行项时，它不在线就不建计划，
+	// 否则生效周期早于它上线，开头缺一段 K 线。为空表示不检查。
+	StreamOnline func(ctx context.Context) (bool, error)
 	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
 	Preflight func(ctx context.Context) error
 	// JobWait 与 PollInterval 控制等待一个云端作业的时间。
@@ -185,6 +188,10 @@ type PlanReconciler struct {
 	PollInterval time.Duration
 
 	mu sync.Mutex
+	// waiting 是本轮没有建计划的原因，issue 是最近一轮结束时的问题（受 issueMu 保护），collector 状态接口读取。
+	waiting string
+	issueMu sync.Mutex
+	issue   string
 	// failCount 统计 fail 的调用次数，roundFailCount 是上一轮对账结束时的值；
 	// 两者相等说明自上一轮结束以来没有任何失败（包括同一 tick 内对账之前的启用、升级）。
 	failCount      int
@@ -328,6 +335,13 @@ func (r *PlanReconciler) acquireOperation(ctx context.Context) (func(), error) {
 	}
 }
 
+// Issue 返回最近一轮对账的问题：失败原因或等待原因，没有问题时为空。
+func (r *PlanReconciler) Issue() string {
+	r.issueMu.Lock()
+	defer r.issueMu.Unlock()
+	return r.issue
+}
+
 // Reconcile 执行一轮对账。上一轮未结束时本轮直接跳过。
 func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	if r == nil || r.Store == nil || r.Cloud == nil || r.Groups == nil || r.Storage == nil {
@@ -337,7 +351,17 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 		return errors.New("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
-	defer func() { r.finishRound(err) }()
+	r.waiting = ""
+	defer func() {
+		r.finishRound(err)
+		issue := r.waiting
+		if err != nil {
+			issue = err.Error()
+		}
+		r.issueMu.Lock()
+		r.issue = issue
+		r.issueMu.Unlock()
+	}()
 	r.refreshPackageIfAvailable(ctx)
 	if err := r.packageGate(ctx); err != nil {
 		return err
@@ -425,6 +449,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if len(groups) == 0 && len(managed) > 0 {
 		// 任务启用但标的暂时取不到：属于临时数据状况，保持现状，不能据此停掉全部函数。
 		log.WarnContextf(ctx, "collector fetch plan kept current state space=%s: enabled tasks have no usable kline groups", r.SpaceID)
+		r.waiting = "启用的任务暂时取不到标的"
 		return nil
 	}
 	// 排除名单叠加在标签成员之上，放在“标的暂时取不到”的保护之后：全部标的都被排除是操作员的决定，照常生效。
@@ -457,6 +482,9 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	handoff := handoffPending(desired, previousDatasets)
 	if r.holdMissingDatasets(ctx, desired, previousDatasets, managed) {
 		return nil
+	}
+	if blocked, err := r.waitForStream(ctx, desired, previousFunctions); blocked || err != nil {
+		return err
 	}
 	for _, estimate := range EstimateRateBudget(scfFunctions(desired.Functions), r.Options.AssumedEgressIPs) {
 		if estimate.Exceeds() {
@@ -524,6 +552,33 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	}
 	log.InfoContextf(ctx, "collector fetch plan created space=%s plan=%d datasets=%d functions=%d", r.SpaceID, record.ID, len(content.Datasets), len(content.Functions))
 	return r.advance(ctx, record)
+}
+
+// waitForStream 在新计划要给 collector-stream 下发新的推送或本地执行项、而它不在线时返回 true：本轮不建计划。
+func (r *PlanReconciler) waitForStream(ctx context.Context, desired *DesiredState, previous map[string]*PlanFunction) (bool, error) {
+	if r.StreamOnline == nil {
+		return false, nil
+	}
+	needed := false
+	for name, function := range desired.Functions {
+		if function.Executor != "" && previous[name] == nil {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return false, nil
+	}
+	online, err := r.StreamOnline(ctx)
+	if err != nil {
+		return false, r.fail("store", fmt.Errorf("read collector-stream status: %w", err))
+	}
+	if online {
+		return false, nil
+	}
+	r.waiting = "等 collector-stream 上线"
+	log.InfoContextf(ctx, "collector fetch plan waits for collector-stream space=%s", r.SpaceID)
+	return true, nil
 }
 
 // holdMissingDatasets 对“数据集从期望状态中消失、但对应任务仍启用”做防抖：
@@ -1446,6 +1501,10 @@ func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchP
 
 // upgradeLaggingFunctions 找出本空间代码包落后的计划函数并升级。
 func (r *PlanReconciler) upgradeLaggingFunctions(ctx context.Context) error {
+	// 没配代码包（例如不用云函数）时没有可升级的函数，也不用查询云端。
+	if strings.TrimSpace(r.Deploy.PackageName) == "" && strings.TrimSpace(r.Deploy.PackageID) == "" {
+		return nil
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return err

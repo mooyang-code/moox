@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
@@ -26,19 +27,18 @@ import (
 )
 
 type ControlOptions struct {
-	CoreOptions
-	ProxyCA unitbootstrap.ProxyCAAuthorization
+	DeployOptions
 	// Release 非空时升级 control：使用该版本的 host 与 control 软件，不顺带部署 Storage 与出口单元。
 	Release string
 }
 
-// BootstrapControl promotes the original core software to every control
-// deployment. It does not rerun the core-only request or replace its receipt.
-func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, options ControlOptions) (CoreResult, error) {
-	return bootstrap(ctx, snapshot, options.CoreOptions, &options)
+// BootstrapControl promotes the original admin software to every control
+// deployment. It does not rerun the admin-only request or replace its receipt.
+func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, options ControlOptions) (BootstrapResult, error) {
+	return bootstrap(ctx, snapshot, options.DeployOptions, &options)
 }
 
-func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, transport setupssh.Client, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
+func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, request unitbootstrap.Request, identity runtimeIdentity, software unitpackage.Result, options ControlOptions) (unitbootstrap.Request, map[string][]byte, error) {
 	components, err := unitComponents(snapshot.Manifest, request.Topology.ControlHostID, "control")
 	if err != nil {
 		return request, nil, err
@@ -49,15 +49,11 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 		return request, nil, err
 	}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
-	request.ProxyCA = options.ProxyCA
-	if request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
-		return request, nil, errors.New("proxy CA creation requires internal TLS and cannot be combined with trusted import")
-	}
 	if options.Release != "" {
 		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
 			return request, nil, err
 		}
-	} else if err := checkControlDependencies(ctx, snapshot, root, components, options.CoreOptions); err != nil {
+	} else if err := checkControlDependencies(snapshot, root, components); err != nil {
 		return request, nil, err
 	}
 	temporary, err := os.MkdirTemp(root.Name(), "control-templates-")
@@ -73,23 +69,11 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	return request, overrides, err
 }
 
-func consoleTLSMode(host setupconfig.Host) string {
-	if host.TLSMode == "internal" || host.TLSMode == "public" {
-		return host.TLSMode
-	}
-	ip := net.ParseIP(host.Address)
-	if strings.EqualFold(host.Address, "localhost") || strings.HasSuffix(strings.ToLower(host.Address), ".localhost") || ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-		return "internal"
-	}
-	return "public"
-}
-
 // Templates come from the independently verified original package, never
-// from files that may have changed in the worktree after the core build.
+// from files that may have changed in the worktree after the admin build.
 func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string) (map[string][]byte, error) {
 	result := map[string][]byte{}
 	control := snapshot.Manifest.ControlHost()
-	mode := consoleTLSMode(control)
 	for _, id := range components {
 		if !slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
 			continue
@@ -123,11 +107,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 				return nil, err
 			}
 			public["host"] = control.Address
-			tls, err := mapping("tls")
-			if err != nil {
-				return nil, err
-			}
-			tls["mode"] = mode
 		case "monitor":
 			deployment, err := mapping("deployment")
 			if err != nil {
@@ -137,10 +116,7 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			deployment["local_host_id"] = control.Name
 			if slices.Contains(components, "console-proxy") {
 				endpoint := (&url.URL{Scheme: "https", Host: net.JoinHostPort(control.Address, "9527"), Path: "/"}).String()
-				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": mode}
-				if mode == "internal" {
-					target["ca_file"], target["ca_baseline"] = "../../console-proxy/certs/caddy/root.crt", "../../console-proxy/data/caddy/internal-ca.sha256"
-				}
+				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": "internal", "ca_file": "../../console-proxy/certs/caddy/root.crt", "ca_baseline": "../../console-proxy/data/caddy/internal-ca.sha256"}
 				deployment["https"] = map[string]any{"console-proxy": target}
 			}
 			metrics, err := mapping("metrics")
@@ -182,7 +158,8 @@ func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 }
 
 // bindControlRequest 把 control 请求摘要绑定到操作记录：首次完整 control 用 control-operation.json，
-// 每个升级版本各自一条 control-operations/<版本>.json；重试同一版本必须是同一请求。
+// 每个升级版本各自一条 control-operations/<版本>.json。首次 control 成功前可以改配置重试，
+// 配置的部署部分由命令层核对；成功后和升级一样，同一版本重试必须是同一请求。
 func bindControlRequest(root *os.Root, release, digest string) error {
 	raw, err := json.Marshal(struct {
 		Version int    `json:"version"`
@@ -198,7 +175,15 @@ func bindControlRequest(root *os.Root, release, digest string) error {
 		}
 		name = "control-operations/" + release + ".json"
 	}
-	return persistPrivateBytes(root, name, append(raw, '\n'))
+	raw = append(raw, '\n')
+	if release == "" {
+		if _, err := root.Lstat("control-ready.json"); os.IsNotExist(err) {
+			return fsutil.WritePrivate(root, name, raw, true)
+		} else if err != nil {
+			return err
+		}
+	}
+	return persistPrivateBytes(root, name, raw)
 }
 
 // checkControlDependencyRecords 是 control 升级时的依赖检查：只核验 Storage 与出口单元已有部署记录，
@@ -271,9 +256,9 @@ func activeControlStatus(ctx context.Context, transport setupssh.Client, helper,
 	return status.Components, nil
 }
 
-// Control startup requires Storage, and Collector additionally needs egress.
-// Fleet-wide host/Access/Trade preparation belongs to the outer bootstrap.
-func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, components []string, options CoreOptions) error {
+// checkControlDependencies 确认 control 启动依赖的单元都已就绪：Storage 总是需要，Collector 还要出口代理。
+// 只读 ready.json，单元没好时要用户修好再来，不在这里重新部署。
+func checkControlDependencies(snapshot *setupconfig.Snapshot, root *os.Root, components []string) error {
 	profiles := []string{}
 	if slices.ContainsFunc(components, func(id string) bool {
 		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}, id)
@@ -291,18 +276,15 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 				continue
 			}
 			found = true
-			if _, err := root.Lstat(filepath.Join("units", host.Name, profile, "operation.json")); err != nil {
-				return errors.New("full control requires the original native Storage and egress operations")
+			var ready struct {
+				Stage string `json:"stage"`
 			}
-			// Reuse the exact deploy transaction to finish or repair its original
-			// request. A stale ready PID alone cannot prove that the desired
-			// software, configuration and material were successfully activated.
-			result, err := DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options, HostID: host.Name, Profile: profile})
-			if err != nil {
-				return err
-			}
-			if result.Stage != profile+"-ready" {
-				return errors.New("required control startup dependencies cannot remain paused")
+			if err := readJSON(root, filepath.Join("units", host.Name, profile, unitReadyFile), 4096, &ready); err != nil || ready.Stage != profile+"-ready" {
+				unitRoot := path.Join(snapshot.Manifest.Paths.DeployRoot, profile)
+				if profile == "storage" {
+					unitRoot = snapshot.Manifest.Paths.StorageRoot
+				}
+				return fmt.Errorf("control_dependency_not_ready: %s 上的 %s 单元没有就绪，先运行 setup deploy-unit --host %s --profile %s；服务被暂停时先在该主机运行 %s，再重新部署这个单元", host.Name, profile, host.Name, profile, path.Join(unitRoot, "current", "resume.sh"))
 			}
 		}
 		if !found {
@@ -310,4 +292,51 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 		}
 	}
 	return nil
+}
+
+// ConfigDrift 比对 Storage、出口单元最新一次部署用的配置，变了就说明要怎么生效。这些配置只在单元部署时写入。
+func ConfigDrift(snapshot *setupconfig.Snapshot, stateDir string) ([]string, error) {
+	warnings := []string{}
+	for _, profile := range []string{"storage", "egress-proxy"} {
+		configuration, err := unitConfiguration(snapshot, profile)
+		if err != nil {
+			return nil, err
+		}
+		for _, host := range snapshot.Manifest.Hosts() {
+			if _, err := unitComponents(snapshot.Manifest, host.Name, profile); err != nil {
+				continue
+			}
+			deployed, ok := latestUnitConfiguration(stateDir, host.Name, profile)
+			if !ok || deployed == "sha256:"+sha(configuration) {
+				continue
+			}
+			warning := fmt.Sprintf("%s 上的 %s 配置和部署时不同，要发新版本才生效：setup release build --release <新ID>，再 setup deploy-unit --host %s --profile %s --release <新ID>", host.Name, profile, host.Name, profile)
+			if profile == "egress-proxy" {
+				warning += "；出口代理配置也进了 Collector，还要 setup bootstrap --stage control --release <新ID>"
+			}
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings, nil
+}
+
+// latestUnitConfiguration 读单元最新一次部署记录里的配置摘要，没有记录时 ok 为 false。
+func latestUnitConfiguration(stateDir, host, profile string) (string, bool) {
+	base := filepath.Join(stateDir, "units", host, profile)
+	paths, _ := filepath.Glob(filepath.Join(base, "releases", "*", "operation.json"))
+	paths = append(paths, filepath.Join(base, "operation.json"))
+	latest, digest := time.Time{}, ""
+	for _, name := range paths {
+		info, err := os.Stat(name)
+		if err != nil || info.ModTime().Before(latest) {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		var operation unitOperation
+		if err != nil || json.Unmarshal(raw, &operation) != nil {
+			continue
+		}
+		latest, digest = info.ModTime(), operation.ConfigurationSHA256
+	}
+	return digest, digest != ""
 }

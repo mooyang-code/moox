@@ -103,7 +103,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
-		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断模块"}[mode],
+		Short:        map[string]string{"bootstrap": "检查新部署各模块的安装与配置", "diagnose": "按 Monitor 的事实诊断本机的模块；操作电脑上看远端用 setup logs"}[mode],
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		PreRunE: func(_ *cobra.Command, _ []string) error {
@@ -156,6 +156,9 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 					Systemd: systemd, DeployRoot: deployRoot,
 				})
 			case "diagnose":
+				if doctorCfg.ReleaseRoot == "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), "提示：这台电脑没有部署目录，diagnose 只查本机；看目标机日志用 moox-cli setup logs --host <主机> --component <组件>")
+				}
 				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
 					NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober, Relay: relay, Systemd: systemd,
 					HealthChecks: report.BuiltInModuleHealthChecks(),

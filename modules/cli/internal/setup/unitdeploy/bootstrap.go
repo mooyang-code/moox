@@ -29,7 +29,7 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostbundle"
 )
 
-type CoreOptions struct {
+type DeployOptions struct {
 	RepositoryRoot    string
 	BinaryDirectory   string // Empty builds pure Go and frontend locally.
 	StateDirectory    string // Persistent private state; retain across retries/upgrades.
@@ -38,7 +38,7 @@ type CoreOptions struct {
 	SSH               setupssh.Options
 }
 
-type CoreResult struct {
+type BootstrapResult struct {
 	Stage string `json:"stage"`
 	// Release 是 control 升级使用的版本 ID；首次初始化为空。
 	Release        string               `json:"release,omitempty"`
@@ -112,7 +112,7 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 	return stored, nil
 }
 
-func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, control unitpackage.Result) (unitbootstrap.Request, error) {
+func adminRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, control unitpackage.Result) (unitbootstrap.Request, error) {
 	topology := hostbundle.Topology{Version: 1, ControlHostID: manifest.ControlHost().Name}
 	for _, h := range manifest.Hosts() {
 		components := slices.Clone(manifest.Deployments[h.Name])
@@ -143,17 +143,17 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 	return request, nil
 }
 
-// BootstrapCore establishes Admin and both host components. EventBus is its own
+// BootstrapAdmin establishes Admin and both host components. EventBus is its own
 // unit, installed by deploy-unit on the host that [deployments] names; its
 // credentials are still issued here, inside Admin's database. Its result
-// deliberately says core-ready: fleet services and Console Proxy are installed
+// deliberately says admin-ready: fleet services and Console Proxy are installed
 // by the outer workflow once Storage and other dependencies exist.
-func BootstrapCore(ctx context.Context, snapshot *setupconfig.Snapshot, options CoreOptions) (CoreResult, error) {
+func BootstrapAdmin(ctx context.Context, snapshot *setupconfig.Snapshot, options DeployOptions) (BootstrapResult, error) {
 	return bootstrap(ctx, snapshot, options, nil)
 }
 
-func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options CoreOptions, controlOptions *ControlOptions) (CoreResult, error) {
-	var result CoreResult
+func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options DeployOptions, controlOptions *ControlOptions) (BootstrapResult, error) {
+	var result BootstrapResult
 	if snapshot == nil || snapshot.VerifyUnchanged() != nil {
 		return result, errors.New("bootstrap requires an unchanged private setup snapshot")
 	}
@@ -169,9 +169,9 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	}
 	defer root.Close()
 	if controlOptions != nil {
-		var ready CoreResult
-		if err := readJSON(root, "core-ready.json", 128<<10, &ready); err != nil || ready.Stage != "core-ready" || ready.Bootstrap.Phase != "complete" || ready.Bootstrap.HostID != snapshot.Manifest.ControlHost().Name || !insideState(snapshot.Manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(snapshot.Manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
-			return result, errors.New("core_not_ready: core 还没有完成，先运行 setup bootstrap --stage core；如果是换了电脑或目录，运行 setup validate 看路线")
+		var ready BootstrapResult
+		if err := readJSON(root, "admin-ready.json", 128<<10, &ready); err != nil || ready.Stage != "admin-ready" || ready.Bootstrap.Phase != "complete" || ready.Bootstrap.HostID != snapshot.Manifest.ControlHost().Name || !insideState(snapshot.Manifest.Paths.ControlRoot, ready.Bootstrap.ControlDirectory) || !insideState(path.Join(snapshot.Manifest.Paths.DeployRoot, "host"), ready.Bootstrap.HostDirectory) {
+			return result, errors.New("admin_not_ready: admin 还没有完成，先运行 setup bootstrap --stage admin；如果是换了电脑或目录，运行 setup validate 看路线")
 		}
 		if _, err := fsutil.ReadPrivate(root, "runtime-identity.json", 4096); err != nil {
 			return result, errors.New("full control requires its original private runtime identity")
@@ -204,7 +204,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	var helper string
 	switch {
 	case controlOptions == nil:
-		packages, helper, err = prepareCoreSoftware(ctx, root, options, arch)
+		packages, helper, err = prepareAdminSoftware(ctx, root, options, arch)
 	case controlOptions.Release != "":
 		// control 升级：host 与 control 两个单元都换成该版本的软件，目标端走 bootstrap 的再执行路径。
 		release, exists, readErr := readRelease(ctx, root, controlOptions.Release, arch)
@@ -216,22 +216,22 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 		}
 		packages, helper = []unitpackage.Result{release.Packages["host"], release.Packages["control"]}, release.Helper
 	default:
-		stored, exists, readErr := readCoreSoftware(ctx, root, arch)
+		stored, exists, readErr := readAdminSoftware(ctx, root, arch)
 		if readErr != nil || !exists {
-			return result, errors.New("full control requires its original verified core software")
+			return result, errors.New("full control requires its original verified admin software")
 		}
 		packages, helper = stored.Packages, stored.Helper
 	}
 	if err != nil {
 		return result, err
 	}
-	request, err := coreRequest(snapshot.Manifest, identity, packages[0], packages[1])
+	request, err := adminRequest(snapshot.Manifest, identity, packages[0], packages[1])
 	if err != nil {
 		return result, err
 	}
 	overrides := [2]map[string][]byte{{}, {}}
 	if controlOptions != nil {
-		request, overrides[1], err = controlInput(ctx, snapshot, root, transport, request, identity, packages[1], *controlOptions)
+		request, overrides[1], err = controlInput(ctx, snapshot, root, request, identity, packages[1], *controlOptions)
 		if err != nil {
 			return result, err
 		}
@@ -303,7 +303,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&result.Bootstrap) != nil || decoder.Decode(new(any)) != io.EOF || result.Bootstrap.Phase != "complete" || result.Bootstrap.HostID != host.Name || result.Bootstrap.RequestSHA256 != expectedRequest || !insideState(request.Host.UnitRoot, result.Bootstrap.HostDirectory) || !insideState(request.Control.UnitRoot, result.Bootstrap.ControlDirectory) || !insideState(path.Join(request.DeploymentRoot, "bootstrap"), result.Bootstrap.BundleDirectory) {
-		return CoreResult{}, errors.New("bootstrap helper returned invalid public result metadata")
+		return BootstrapResult{}, errors.New("bootstrap helper returned invalid public result metadata")
 	}
 	control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == host.Name })]
 	materialOptions := unitbundle.Options{HostID: host.Name, ControlHostID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: host.Address, Components: control.Components, ExpectedCA: result.Bootstrap.CAFingerprint, ExpectedHash: result.Bootstrap.ExpectedHash, AllowOperator: true}
@@ -314,24 +314,35 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if err := unitbundle.InstallOperator(ctx, transport.Download, metadata, materialOptions, options.OperatorDirectory); err != nil {
 		return result, err
 	}
-	result.Stage, result.OperatorConfig = "core-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
-	receipt := "core-ready.json"
+	result.Stage, result.OperatorConfig = "admin-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
 	if controlOptions != nil {
-		result.Stage, receipt, result.Release = "control-ready", "control-ready.json", controlOptions.Release
+		result.Stage, result.Release = "control-ready", controlOptions.Release
 		result.Components, err = activeControlStatus(ctx, transport, remoteHelper, result.Bootstrap.ControlDirectory, host.Name, request.Control.Components)
 		if err != nil {
-			return CoreResult{}, err
+			return BootstrapResult{}, err
 		}
 		for _, component := range result.Components {
 			if component.State == "paused" {
 				result.Stage = "control-paused"
 			}
 		}
+		// 回执由命令层在看护装好后写，否则 next_steps 会跳过 control，看护失败就再也补不上。
+		return result, nil
 	}
-	if err := saveJSON(root, receipt, result, true); err != nil {
+	if err := saveJSON(root, "admin-ready.json", result, true); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// MarkControlReady 记下 control 和控制机看护都装好了。
+func MarkControlReady(stateDir string, result BootstrapResult) error {
+	root, err := privateRoot(stateDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return saveJSON(root, "control-ready.json", result, true)
 }
 
 func persistRequest(root *os.Root, digest string, raw []byte) error {

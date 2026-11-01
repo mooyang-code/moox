@@ -10,12 +10,13 @@ import (
 
 // UnfinishedReason 处理升级路线上配置或版本变了的情况：可能是安装中途换的，也可能是装好后有意加了主机或组件，
 // 两者都让 NextSteps 为空，只说事实，由用户分辨。早期部署没有记录，按正常升级走。
-func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalState, internalTLS bool) string {
+func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalState) string {
 	if route != RouteUpgrade || !local.StaleBinding || local.BindingConfig == "" {
 		return ""
 	}
 	local.StaleBinding = false
-	pending := NextSteps(manifest, route, local, internalTLS)
+	// 验收是安装后的检查，没有记录不代表部署没做完。
+	pending := slices.DeleteFunc(NextSteps(manifest, route, local), func(step string) bool { return strings.Contains(step, "setup verify") })
 	if len(pending) == 0 {
 		return ""
 	}
@@ -24,9 +25,9 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 
 // NextSteps 按当前拓扑和已完成的步骤列出接下来要运行的命令。安装顺序只在这里写一份，文档和 skill 都照它走。
 // 顺序规则：组件的就绪条件不能依赖排在它后面的步骤。Monitor 就绪要求系统元数据已激活，
-// 所以 init --stage storage 排在管理台之前；Access 就绪只依赖服务目录，core 完成后目录已有全部部署。
-// internalTLS 表示管理台用内部证书。只有首次安装的路线才有步骤；旧状态和其他路线返回空。
-func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, internalTLS bool) []string {
+// 所以 init --stage storage 排在管理台之前；Access 就绪只依赖服务目录，admin 完成后目录已有全部部署。
+// 只有首次安装的路线才有步骤；旧状态和其他路线返回空。
+func NextSteps(manifest setupconfig.Manifest, route string, local LocalState) []string {
 	switch route {
 	case RouteFresh:
 		local = LocalState{Units: map[string]bool{}}
@@ -59,8 +60,8 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 			add(local.Units[host+"/"+profile], "setup deploy-unit --host %s --profile %s", host, profile)
 		}
 	}
-	add(local.CoreReady, "setup firewall --yes")
-	add(local.CoreReady, "setup bootstrap --stage core")
+	add(local.AdminReady, "setup firewall --yes")
+	add(local.AdminReady, "setup bootstrap --stage admin")
 	for _, host := range manifest.Hosts() {
 		if host.Name != control {
 			add(local.Units[host.Name+"/host"], "setup deploy-host --host %s", host.Name)
@@ -72,12 +73,7 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 	add(local.InitStorage, "setup init --stage storage --config-dir ./config/setup --storage-host %s", storage)
 	unit("access", "access")
 	unit("egress-proxy", "egress-proxy")
-	if internalTLS {
-		add(local.ControlReady, "setup bootstrap --stage control --create-proxy-ca")
-		add(local.InitReady, "setup trust-browser")
-	} else {
-		add(local.ControlReady, "setup bootstrap --stage control")
-	}
+	add(local.ControlReady, "setup bootstrap --stage control")
 	add(local.InitReady, "setup init --config-dir ./config/setup --storage-host %s", storage)
 	unit("collector-stream", "collector-stream")
 	unit("trade", "trade")
@@ -90,5 +86,31 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState, in
 	if len(steps) != 0 {
 		add(false, "config backup")
 	}
+	for _, space := range CollectSpaces(manifest) {
+		add(local.Verified[space], "setup verify --space-id %s", space)
+	}
 	return steps
+}
+
+// ManualSteps 列出要用户自己做的事。浏览器信任要这台电脑的管理员授权，不放进 NextSteps，免得 Agent 卡在这里。
+func ManualSteps(route string) []string {
+	if route != RouteFresh && route != RouteResume {
+		return nil
+	}
+	return []string{"管理台装好后，在自己的终端运行 ./bin/moox-cli setup trust-browser。不做时管理台能打开，但浏览器有安全提示"}
+}
+
+// CollectSpaces 返回这个拓扑能采集的空间：有 collector-stream 就有 crypto，再加配了云函数的空间。
+func CollectSpaces(manifest setupconfig.Manifest) []string {
+	spaces := []string{}
+	if manifest.ComponentHost("collector-stream") != "" {
+		spaces = append(spaces, "crypto")
+	}
+	if manifest.SCFEnabled() {
+		for _, space := range manifest.SCFPlan.Spaces {
+			spaces = append(spaces, space.SpaceID)
+		}
+	}
+	slices.Sort(spaces)
+	return slices.Compact(spaces)
 }

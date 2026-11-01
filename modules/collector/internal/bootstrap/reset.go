@@ -99,15 +99,15 @@ func collectorResetSpec(db *store.Store, dbPath string, control *collectorContro
 }
 
 // timersNotDisabled 返回 SCF 定时器还没有确认停用的空间；没有绑定采集计划管理器（没有配置采集计划）时为空。
-func (c *collectorControl) timersNotDisabled() []string {
+func (c *collectorControl) timersNotDisabled(ctx context.Context) []string {
 	c.mu.Lock()
-	manager, spaces := c.manager, append([]string(nil), c.spaces...)
+	manager := c.manager
 	c.mu.Unlock()
 	if manager == nil {
 		return nil
 	}
 	var waiting []string
-	for _, space := range spaces {
+	for _, space := range c.managed(ctx) {
 		if !manager.TimersDisabled(space) {
 			waiting = append(waiting, space)
 		}
@@ -126,7 +126,7 @@ func (c *collectorControl) waitTimersDisabled(ctx context.Context) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		waiting := c.timersNotDisabled()
+		waiting := c.timersNotDisabled(ctx)
 		if len(waiting) == 0 {
 			return nil
 		}

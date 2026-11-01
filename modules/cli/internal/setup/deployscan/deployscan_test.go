@@ -369,7 +369,7 @@ func TestDecideRoutes(t *testing.T) {
 	ports := clean
 	ports.PortsOccupied = []int{9527}
 	matched := LocalState{RuntimeSHA256: "sha256:a"}
-	full := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true}
+	full := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, ControlReady: true, OperatorPin: true, UnitRecords: true}
 	noRecords := full
 	noRecords.UnitRecords = false
 	other := LocalState{RuntimeSHA256: "sha256:b", ControlReady: true}
@@ -603,7 +603,7 @@ func TestArchiveLocalKeepsKeyAndFingerprints(t *testing.T) {
 	for _, name := range []string{"config.key", "known_hosts", "gateway-client.yaml", "gateway-bootstrap.json", "caller-moox-cli.key", "storage-internal-auth.env", "notes.txt"} {
 		write(t, filepath.Join(operator, name), "x")
 	}
-	write(t, filepath.Join(state, "core-software.json"), "{}")
+	write(t, filepath.Join(state, "admin-software.json"), "{}")
 	now := time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC)
 	archived, err := ArchiveLocal(operator, state, "", now)
 	require.NoError(t, err)
@@ -690,15 +690,15 @@ func TestStaleBindingIsNotResume(t *testing.T) {
 }
 
 func TestStaleInstallIsNotReportedAsFinished(t *testing.T) {
-	local := LocalState{CoreReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
-	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local, false)
+	local := LocalState{AdminReady: true, ControlReady: true, InitStorage: true, InitReady: true, StaleBinding: true, BindingConfig: "/old/moox.toml", Units: map[string]bool{}}
+	reason := UnfinishedReason(stepsManifest(), RouteUpgrade, local)
 	require.Contains(t, reason, "/old/moox.toml")
 	require.Contains(t, reason, "host-registry.md", "装好后有意新增的不能被建议清空")
 	require.NotContains(t, reason, "彻底清空")
 	require.Contains(t, reason, "--profile collector-stream", "初始化之后才缺的单元也要说出来")
-	require.Empty(t, NextSteps(stepsManifest(), RouteUpgrade, local, false))
+	require.Empty(t, NextSteps(stepsManifest(), RouteUpgrade, local))
 	local.BindingConfig = ""
-	require.Empty(t, UnfinishedReason(stepsManifest(), RouteUpgrade, local, false), "早期部署没有记录，按正常升级走")
+	require.Empty(t, UnfinishedReason(stepsManifest(), RouteUpgrade, local), "早期部署没有记录，按正常升级走")
 }
 
 func TestRunningHelperBlocksEveryRoute(t *testing.T) {
@@ -721,7 +721,7 @@ func stepsManifest() setupconfig.Manifest {
 }
 
 func TestNextStepsFollowReadinessOrder(t *testing.T) {
-	steps := NextSteps(stepsManifest(), RouteFresh, LocalState{}, true)
+	steps := NextSteps(stepsManifest(), RouteFresh, LocalState{})
 	position := func(text string) int {
 		index := slices.IndexFunc(steps, func(step string) bool { return strings.Contains(step, text) })
 		require.GreaterOrEqual(t, index, 0, "缺少步骤 %s：%v", text, steps)
@@ -729,12 +729,15 @@ func TestNextStepsFollowReadinessOrder(t *testing.T) {
 	}
 	require.Less(t, position("--profile storage"), position("init --stage storage"))
 	require.Less(t, position("init --stage storage"), position("--profile access"), "系统元数据要在 access 和管理台之前")
-	require.Less(t, position("--host overseas --profile access"), position("--stage control --create-proxy-ca"))
-	require.Less(t, position("--stage control"), position("setup trust-browser"))
-	require.Less(t, position("setup trust-browser"), position("setup init --config-dir"))
+	require.Less(t, position("--host overseas --profile access"), position("--stage control"))
+	require.Less(t, position("--stage control"), position("setup init --config-dir"))
+	require.NotContains(t, strings.Join(steps, "\n"), "trust-browser", "信任要用户授权，不放进 next_steps")
+	require.Contains(t, strings.Join(ManualSteps(RouteFresh), "\n"), "setup trust-browser")
+	require.Empty(t, ManualSteps(RouteUpgrade))
 	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
 	require.Less(t, position("sync-deployments --host factor"), position("--profile factor-engine"))
-	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-1])
+	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2])
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1])
 	for _, step := range steps {
 		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
 	}
@@ -746,24 +749,22 @@ func TestNextStepsFollowTopologyAndProgress(t *testing.T) {
 	delete(manifest.HostCatalog, "factor")
 	delete(manifest.Deployments, "overseas")
 	delete(manifest.Deployments, "factor")
-	steps := strings.Join(NextSteps(manifest, RouteFresh, LocalState{}, false), "\n")
+	steps := strings.Join(NextSteps(manifest, RouteFresh, LocalState{}), "\n")
 	require.NotContains(t, steps, "overseas")
 	require.NotContains(t, steps, "factor")
-	require.NotContains(t, steps, "--create-proxy-ca", "公网证书不要内部 CA")
-	require.NotContains(t, steps, "trust-browser")
 
-	local := LocalState{RuntimeSHA256: "sha256:a", CoreReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
-	resumed := NextSteps(manifest, RouteResume, local, false)
+	local := LocalState{RuntimeSHA256: "sha256:a", AdminReady: true, InitStorage: true, Units: map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true}}
+	resumed := NextSteps(manifest, RouteResume, local)
 	require.Equal(t, "./bin/moox-cli setup deploy-unit --host storage --profile access", resumed[0], "接着中断的步骤：%v", resumed)
 
 	done := local
 	done.ControlReady, done.InitReady = true, true
 	done.Units = map[string]bool{"storage/host": true, "storage/eventbus": true, "storage/storage": true, "storage/access": true}
-	require.Empty(t, NextSteps(manifest, RouteUpgrade, done, false), "都做完了不再有步骤")
+	require.Empty(t, NextSteps(manifest, RouteUpgrade, done), "都做完了不再有步骤")
 	local.StaleBinding = true
-	require.Empty(t, NextSteps(manifest, RouteResume, local, false))
-	require.Empty(t, NextSteps(manifest, RouteExisting, LocalState{}, false))
-	require.Empty(t, NextSteps(manifest, RouteBlocked, LocalState{}, false))
+	require.Empty(t, NextSteps(manifest, RouteResume, local))
+	require.Empty(t, NextSteps(manifest, RouteExisting, LocalState{}))
+	require.Empty(t, NextSteps(manifest, RouteBlocked, LocalState{}))
 }
 
 func TestArchiveLocalTakesTheOldConsoleCert(t *testing.T) {

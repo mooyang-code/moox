@@ -47,7 +47,6 @@ type Host struct {
 	Address  string
 	Region   string
 	Provider string
-	TLSMode  string
 	SSHPort  int
 	SSHUser  string
 	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
@@ -137,10 +136,6 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 			}
 			target := &r.hosts[index]
 			target.Components = append(target.Components, role.components...)
-			// 管理台的 HTTPS 入口跟着搬到共用的主机上。
-			if target.TLSMode == "" {
-				target.TLSMode = role.tlsMode
-			}
 			continue
 		}
 		host, err := item.server.host(ctx, env, r.Tencent, role, catalog)
@@ -213,7 +208,7 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 		return Host{}, err
 	}
 	return Host{
-		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent", TLSMode: role.tlsMode,
+		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent",
 		SSHPort: target.SSHPort, SSHUser: target.SSHUser, Components: append([]string(nil), role.components...),
 	}, nil
 }

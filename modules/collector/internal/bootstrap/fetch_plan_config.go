@@ -236,9 +236,8 @@ func defaultSCFPlan() SCFPlanConfig {
 // defaultLatenessSeconds 是空间的允许迟到时间默认值。
 func defaultLatenessSeconds(spaceID string) int { return domain.DefaultAllowedLatenessSeconds(spaceID) }
 
-// fetchPlanSpaces 返回配置了 SCF 市场地域、由采集计划对账管理的空间（排序）。空间集合以 scf_markets 为准，
-// 不再与进程的旧调度空间环境变量取交集：Timer 采集可以管理旧调度之外的空间（例如只配置 stockcn）。
-func (c *Config) fetchPlanSpaces() []string {
+// scfSpaces 返回配置了云函数市场地域的空间（排序）。它只代表云函数空间：不用云函数的空间由启用的任务决定，见 managedSpaces。
+func (c *Config) scfSpaces() []string {
 	spaces := make([]string, 0, len(c.SCFMarkets))
 	for spaceID, markets := range c.SCFMarkets {
 		if len(markets) > 0 {
@@ -249,16 +248,14 @@ func (c *Config) fetchPlanSpaces() []string {
 	return spaces
 }
 
-// withStoredSpaces 把库里有过采集计划、但已不在配置里的空间并入：配置被移除后，这些空间的定时器必须先停用，
-// 不能留下无人管理却仍在采集的函数。
-func withStoredSpaces(configured, stored []string) []string {
-	set := make(map[string]struct{}, len(configured)+len(stored))
-	for _, space := range configured {
-		set[strings.ToLower(space)] = struct{}{}
-	}
-	for _, space := range stored {
-		if space = strings.ToLower(strings.TrimSpace(space)); space != "" {
-			set[space] = struct{}{}
+// mergeSpaces 合并空间列表：转小写、去空、去重、排序。
+func mergeSpaces(lists ...[]string) []string {
+	set := map[string]struct{}{}
+	for _, list := range lists {
+		for _, space := range list {
+			if space = strings.ToLower(strings.TrimSpace(space)); space != "" {
+				set[space] = struct{}{}
+			}
 		}
 	}
 	all := make([]string, 0, len(set))

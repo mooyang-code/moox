@@ -16,7 +16,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **写操作先预览、后执行**：删除、重启、改防火墙、切换线上版本这类破坏性命令（`setup firewall`、`setup reboot-host`、`factor task delete`、`cloud function deploy`、`storage repair-view` 等）不带 `--yes` 只预览，把预览给用户确认后才加 `--yes`；
   部署类命令（`setup bootstrap`、`deploy-host`、`deploy-unit`、`init`）没有预览：执行前把 `setup validate` 输出的 `next_steps`（连同防火墙放行内容）作为部署计划一次给用户确认，确认后依次执行，只在计划变化或失败时再问；`setup wipe` 要按 [`references/install.md`](references/install.md) 第 3 节询问用户，并带预览里的 `--expect` 执行；`gateway call` 的写方法同样默认只预览，确认后加 `--yes`。删除、清空、重置、回滚等破坏性操作必须得到用户明确同意。
 - **`gateway call` 取不到密钥明文，也不能改密钥**：它拒绝返回密钥明文或完整 webhook 的方法，以及密钥的新建、修改、启停、删除；云账户等凭证由专用命令在进程内使用，不会打印。`secret list|show` 只给打码后的信息。
-- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`core-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
+- **本机状态和线上密钥不碰**：不读取、不打印 `~/.local/state/moox/setup/`（请求文件含 SSH 私钥）、线上的 `secrets/` 和 `identity/`；不手工写入或恢复 `runtime-identity.json`、`admin-ready.json`；不在目标机器上手动执行 `moox-runtime bootstrap`；不手工执行 `rm` 清除部署，只用 `setup wipe`。遇到这些情况就停下，带着现状和选项问用户。
 - **只在用户明确要求时发布或升级**，并且只发布用户点名的组件。
 - 交易模块尚未完工：不要代用户创建实盘账户、下单或清仓。
 
@@ -70,7 +70,9 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 durable consumer 或 View 索引，用 `moox-cli` 的对应命令（先 dry-run）。
 - **主机与部署**：`t_hosts` / `t_deployments` 是唯一登记处，增删启停只走 `moox-cli setup …`，管理台只读。
 - **监控告警**：先判断是真问题、已删除对象的残留，还是重启造成的瞬时现象；不要手改 `monitor.db`，不要把重启当修复手段。
-- **初始化后**：macOS 上管理台用内部证书时，提醒用户让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 5 节），不要替用户清理钥匙串里的这张证书。
+- **采集或计划有问题**：不删任务、不用 `host exec` 改数据库、不用维护者脚本。先看 `collector kline status` 和 `setup verify` 给出的原因，走不通就停下来汇报。
+- **重启单个组件**：用 `setup restart --host <主机> --component <组件> --yes`，不重发整个单元。
+- **初始化后**：提醒用户在自己的终端让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 5 节），不要替用户清理钥匙串里的这张证书。
 
 ### EventBus 凭据
 

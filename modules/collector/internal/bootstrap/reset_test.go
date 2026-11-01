@@ -21,7 +21,7 @@ func newCollectorResetEnv(t *testing.T) (*lifecycle.Controller, *collectorContro
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 	control := &collectorControl{}
-	control.plans, control.spaces = db.FetchPlans(), []string{"crypto"}
+	control.plans, control.spaces = db.FetchPlans(), fixedSpaces("crypto")
 	life, err := newCollectorLifecycle(dbPath, control, func() bool { return true }, collectorResetSpec(db, dbPath, control))
 	require.NoError(t, err)
 	life.Refresh(context.Background())

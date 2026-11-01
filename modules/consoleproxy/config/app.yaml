@@ -6,7 +6,6 @@ public:
   port: 9527
   http3: false
 tls:
-  mode: internal
   storage_root: ../data/caddy/caddy
   ca_baseline: ../data/caddy/internal-ca.sha256
   ca_publish_dir: ../certs/caddy

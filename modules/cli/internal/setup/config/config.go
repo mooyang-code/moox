@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -260,7 +261,6 @@ type Host struct {
 	Username       string
 	Password       string `json:"-"`
 	Provider       string
-	TLSMode        string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
 	// Label 是主机的中文名（例如“海外机”），登记到 Admin 用于界面展示；配置里没写时按主机 ID 生成。
@@ -288,7 +288,6 @@ type HostDefinition struct {
 	PrivateAddress string `toml:"private_address"`
 	Region         string `toml:"region"`
 	Provider       string `toml:"provider"`
-	TLSMode        string `toml:"tls_mode"`
 	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
 	Reachability string    `toml:"reachability"`
 	SSH          SSHConfig `toml:"ssh"`
@@ -366,12 +365,38 @@ type Snapshot struct {
 	path      string
 	info      os.FileInfo
 	digest    [sha256.Size]byte
-	// content 是明文的摘要：加密文件每次写回密文都可能变，比较配置要看内容。
-	content [sha256.Size]byte
 }
 
-// Digest 是配置文件内容的摘要，用来判断两次命令用的是不是同一份配置。
-func (s *Snapshot) Digest() string { return hex.EncodeToString(s.content[:]) }
+// deploymentFields 列出 DeploymentDigest 覆盖的字段。
+func (s *Snapshot) deploymentFields() any {
+	type host struct {
+		Name, Address, PrivateAddress, Username, Reachability string
+		Port                                                  int
+	}
+	hosts := []host{}
+	for _, item := range s.Manifest.Hosts() {
+		hosts = append(hosts, host{item.Name, item.Address, item.PrivateAddress, item.Username, item.Reachability, item.Port})
+	}
+	return struct {
+		Hosts         []host
+		Deployments   map[string][]string
+		Paths         Paths
+		EventBusPort  int
+		AdminUser     string
+		AdminPassword string
+	}{hosts, s.Manifest.Deployments, s.Manifest.Paths, s.Manifest.EventBus.Port, s.Manifest.Admin.Username, s.Manifest.Admin.Password}
+}
+
+// DeploymentDigest 是决定部署身份的配置摘要：这些字段进了首次安装的软件、证书或账号，装到一半不能改。
+// 其他配置只影响后面的步骤，改了可以直接重跑。
+func (s *Snapshot) DeploymentDigest() string {
+	raw, err := json.Marshal(s.deploymentFields())
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
 
 // Path 是配置文件的绝对路径。
 func (s *Snapshot) Path() string { return s.path }
@@ -411,7 +436,6 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 		path:      resolvedPath,
 		info:      info,
 		digest:    sha256.Sum256(raw),
-		content:   sha256.Sum256(plain),
 	}, nil
 }
 
@@ -495,6 +519,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 			return fmt.Errorf("config_invalid: %s is no longer supported; [[factors.definitions]] accepts only factor_id and file (a YAML factor library file); name, spec and the derived fields come from the library", first)
 		}
 		first := keys[0].String()
+		if len(keys[0]) == 3 && keys[0][0] == "hosts" && keys[0][2] == "tls_mode" {
+			return fmt.Errorf("config_invalid: %s 已删除，管理台只用内部证书；运行 moox-cli config migrate --yes 去掉它", first)
+		}
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
@@ -530,7 +557,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
 		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
 		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
-		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
 		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
 		definition.SSH.PrivateKeyFile = strings.TrimSpace(definition.SSH.PrivateKeyFile)

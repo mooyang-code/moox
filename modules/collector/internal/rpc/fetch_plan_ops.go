@@ -40,9 +40,11 @@ func (s *Service) ReregisterFetchPlan(ctx context.Context, req *pb.ReregisterFet
 // FetchPlanControl 是采集计划管理器对 RPC 暴露的状态查询。
 type FetchPlanControl interface {
 	TimersDisabled(space string) bool
+	// PlanIssue 返回空间最近一轮对账没有建出计划的原因。
+	PlanIssue(space string) string
 }
 
-// SetFetchPlanControl 注入采集计划管理器；没有配置采集计划的部署不注入。
+// SetFetchPlanControl 注入采集计划管理器。
 func (s *Service) SetFetchPlanControl(control FetchPlanControl) { s.fetchPlanControl = control }
 
 // SetSourceIDResolver 注入 provider 与品种到 source_id 的解析，合成任务据此推导源任务写入时用的 series_tag。
@@ -57,9 +59,6 @@ func (s *Service) SetFetchPlanPaused(ctx context.Context, req *pb.SetFetchPlanPa
 		return &pb.SetFetchPlanPausedRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
 	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
-	if s.fetchPlanControl == nil {
-		return &pb.SetFetchPlanPausedRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "Collector 没有启用采集计划，没有可暂停的空间")}, nil
-	}
 	if err := s.persistence.FetchPlans().SetPaused(ctx, spaceID, req.GetPaused()); err != nil {
 		log.ErrorContextf(ctx, "set fetch plan paused failed space=%s paused=%t: %v", spaceID, req.GetPaused(), err)
 		return &pb.SetFetchPlanPausedRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil

@@ -168,7 +168,7 @@ cd moox-${VER}
 - `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。如果 `config backup` 没跑过，补跑一次。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
 - 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦 `setup wipe`，但部署命令会拒绝，要先腾出空间或换大磁盘。
 
-大致顺序，以 `next_steps` 为准：防火墙 → core → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → 信任证书（内部证书时）→ `setup init` → 海外采集和交易 → 因子机 → 配置备份。
+大致顺序，以 `next_steps` 为准：防火墙 → admin → 其他主机的主机网关 → EventBus、Storage → `setup init --stage storage`（业务空间和元数据）→ Access、出口代理 → 管理台 → `setup init` → 海外采集和交易 → 因子机 → 配置备份 → 验收。
 
 元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功，`bootstrap --stage control` 没有这一步会直接拒绝。
 
@@ -176,20 +176,24 @@ cd moox-${VER}
 
 启用 SCF 采集（`[scf_plan] enabled = true`）时，先按 `references/private-network.md` 为每个采集地域配置同地域的 Access 主机与 VPC。
 
-`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、浏览器证书检查、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
+`setup init --stage storage` 只写业务空间、登记存储节点、导入并激活元数据。不带 `--stage` 的 `setup init` 在管理台装好后运行，依次完成防火墙核对、业务空间、云账户、日志服务、元数据核对、导入 `moox.toml` 里的默认因子任务，已经做过的不会重复写入。
 
-macOS 上用内部证书时，`trust-browser` 会请用户在系统弹窗里授权；不要替用户清理钥匙串里的这张证书。授权弹不出来时，把下面的命令给用户自己执行：
+管理台用内部证书。信任要这台电脑的管理员授权，Agent 做不了，也不阻塞安装：`setup validate` 把它放在 `manual_steps`，安装结束时把下面的命令交给用户在自己的终端运行，不要替用户清理钥匙串里的这张证书。
 
 ```bash
-security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<管理台地址>.crt
 ```
+
+不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。
+
+采集或计划有问题时，不要删任务、不要用 `host exec` 改数据库、不要用维护者脚本。先看 `collector kline status` 和 `setup verify` 给出的原因，走不通就停下来汇报。重启单个组件用 `setup restart`，不重发整个单元。
 
 ## 6. 验收与交付
 
 1. `./bin/moox-cli doctor alerts --format text`：新对象一开始会有“尚未上报 / 尚无成功运行”，等一两个周期再看；长时间不消的按 [`monitor-attention.md`](monitor-attention.md) 排查。
 2. `./bin/moox-cli collector status --space-id crypto`：各数据集 `level: ok`。
 3. 告诉用户管理台地址 `https://<管理台地址>:9527`、管理员用户名（密码在用户自己填的配置里），以及默认已经在跑的内容：
-   币安现货与合约 1m K 线采集、两个 1m 因子任务。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
+   币安现货与合约 1m K 线采集；有因子机和海外机时还有两个 1m 因子任务。以 `setup verify` 的结果为准，没验收通过不要说已经在跑。默认展示策略的创建见 [`strategy-dsl.md`](strategy-dsl.md)。
 4. 列出还没做、需要用户决定的事：长历史导入（[`initial-import.md`](initial-import.md)）、自定义因子（[`factor-dsl.md`](factor-dsl.md)）、自定义策略。
 
 ## 保留数据
@@ -235,7 +239,20 @@ security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db 
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
 | `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
-| `core_not_ready`、`host_not_ready` | core 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
+| `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
+| `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |
+| `browser_trust_manual` | 信任要管理员授权，没有终端或安装失败 | 把错误里的命令交给用户在自己的终端运行，不影响继续安装 |
+| `control_dependency_not_ready` | Storage 或出口代理单元没就绪或被暂停 | 按报错运行 `setup deploy-unit`；被暂停时先确认原因，再运行报错里的 `resume.sh`，不要用 `system resume` |
+| `browser_ca_trust_failed` | 从管理台服务器取不回内部根证书 | 检查 SSH 和 control 是否已装好，用 `setup logs --component console-proxy` 查 |
+| `deployment_config_changed` | 首次 control 成功前，主机、路径、管理员或版本变了 | 换回原配置和原版本重跑；要用新配置就清空重装，清空前问用户 |
+| `bootstrap_interrupted` | 目标机上一次部署没结束，这次请求不同 | 换回原配置重跑同一条命令，恢复后再改 |
+| `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |
+| `restart_unverified` | 已重启但读不到状态 | 用 `setup logs` 确认 |
+| `collection_not_started` | 有启用的采集任务，但到超时还没有采集计划，或 collector-stream 不在线 | 看 `collector kline status` 给出的原因，不要删任务、不要手工改数据 |
+| `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector kline status` 和 `setup logs --component collector-stream` |
+| `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --component factor-engine` |
+| `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |
+| `admin_not_ready`、`host_not_ready` | admin 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |
 | `logs_unavailable` | 读不到目标机的日志 | 检查 SSH 连接；读不到就向用户说明，不要上机 |
 | `init_storage_required` | 系统元数据还没激活 | 先运行 `setup init --stage storage` |
 | `deployment_not_fresh` | 目标机不是空机，`bootstrap` 没有动手 | 回到第 3 节 |

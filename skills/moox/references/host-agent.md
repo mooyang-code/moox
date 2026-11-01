@@ -5,7 +5,7 @@ Host Agent 是只支持 Linux `amd64`/`arm64` 的主机服务。它只采集 CPU
 ## 安装
 
 Host Agent 与 Host Gateway 一起组成每台主机的 `host` 单元（`/data/moox/host/current`，由 `moox-runtime` 管理），
-不单独安装。首次安装用 `moox-cli setup deploy-host --host <主机ID>`（control 由 `setup bootstrap --stage core` 安装），
+不单独安装。首次安装用 `moox-cli setup deploy-host --host <主机ID>`（control 由 `setup bootstrap --stage admin` 安装），
 命令从运行中的 Admin 导出该主机的身份和 `hostagent-publisher` 凭据，写进发布目录的 `host-agent/config/eventbus.yaml`。
 完整顺序见 `docs/部署与运维.md` 第 2 节。
 

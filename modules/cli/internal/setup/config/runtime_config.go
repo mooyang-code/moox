@@ -103,7 +103,7 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 }
 
 // renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络）、scf_markets（空间与市场的运行地域）、
-// scf_plan（云账号、代码包名称、命名空间、各地域 Access 私网入口）。未启用时三块一并移除，保证关闭后配置不残留。
+// scf_plan（云账号、代码包名称、命名空间、各地域 Access 私网入口）。未启用时三块一并移除：这只关掉云函数，推送采集不受影响。
 // 代码包只写名称：Collector 总是使用该名称的最新可用版本，上传新版本后不需要改配置或重启。
 func renderSCFPlanBlocks(manifest Manifest, rendered []byte) ([]byte, error) {
 	plan := manifest.SCFPlan

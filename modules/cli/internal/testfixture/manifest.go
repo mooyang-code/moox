@@ -9,8 +9,8 @@ func SetHost(manifest *setupconfig.Manifest, host setupconfig.Host, components .
 	}
 	manifest.HostCatalog[host.Name] = setupconfig.HostDefinition{
 		Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region,
-		Provider: host.Provider, TLSMode: host.TLSMode,
-		SSH: setupconfig.SSHConfig{Port: host.Port, Username: host.Username, Password: host.Password},
+		Provider: host.Provider,
+		SSH:      setupconfig.SSHConfig{Port: host.Port, Username: host.Username, Password: host.Password},
 	}
 	if components != nil {
 		if manifest.Deployments == nil {

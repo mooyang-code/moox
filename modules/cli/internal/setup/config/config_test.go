@@ -621,7 +621,6 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"missing SSH username", strings.Replace(validManifest, `username = "ubuntu"`, `username = ""`, 1), "hosts.control.ssh.username"},
 		{"explicit zero SSH port", strings.Replace(validManifest, "port = 22", "port = 0", 1), "hosts.control.ssh.port"},
 		{"invalid SSH port", strings.Replace(validManifest, "port = 22", "port = 70000", 1), "hosts.control.ssh.port"},
-		{"invalid TLS mode", strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\ntls_mode = \"bad\"", 1), "hosts.control.tls_mode"},
 		{"eventbus explicit zero port", strings.Replace(validManifest, "port = 4222", "port = 0", 1), "eventbus.port"},
 		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
 		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
@@ -787,4 +786,11 @@ func TestLoadHostLabel(t *testing.T) {
 		_, err := Load(writeManifest(t, other, bad, 0o600), other)
 		require.ErrorContains(t, err, "label")
 	}
+}
+
+func TestRetiredTLSModeSuggestsMigrate(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, "[hosts.control]", "[hosts.control]\ntls_mode = \"auto\"", 1)
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "config migrate")
 }

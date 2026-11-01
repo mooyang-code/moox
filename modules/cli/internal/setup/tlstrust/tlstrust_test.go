@@ -11,13 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequiresLocalCATrust(t *testing.T) {
-	require.True(t, RequiresLocalCATrust(TLSModeInternal, "203.0.113.10"))
-	require.False(t, RequiresLocalCATrust(TLSModePublic, "203.0.113.10"))
-	require.False(t, RequiresLocalCATrust("", "203.0.113.8"))
-	require.True(t, RequiresLocalCATrust("", "127.0.0.1"))
-}
-
 func TestEnsureLocalCATrustInstallsOnlyWhenCheckFails(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "scripts", "deploy", "install-caddy-ca.sh")
@@ -43,9 +36,6 @@ func TestEnsureLocalCATrustSkipsInstallWhenAlreadyTrusted(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestEnsureLocalCATrustForHostSkipsPublicTLS(t *testing.T) {
-	require.NoError(t, EnsureLocalCATrustForHost(context.Background(), t.TempDir(), "203.0.113.8", TLSModePublic))
-}
 func TestLocalCATrustFailuresAreRecognizable(t *testing.T) {
 	err := EnsureLocalCATrust(context.Background(), "", "")
 	if !errors.Is(err, ErrBrowserCATrust) {

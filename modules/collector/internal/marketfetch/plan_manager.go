@@ -270,9 +270,9 @@ func (r *PlanReconciler) finishDisable(deferred int) (bool, error) {
 type PlanManager struct {
 	// Spaces 返回当前应当运行对账的空间。
 	Spaces func(ctx context.Context) ([]string, error)
-	// Configured 是配置了采集计划的全部空间。其中当前不在 Spaces 里的空间（停用或在停机期间被停用）
-	// 会先做一次停用收尾，确保旧的定时器不再运行；确认后不再重复。
-	Configured []string
+	// Configured 返回管理集合：有启用任务、有采集计划、配置了云函数或处于暂停的空间。其中当前不在 Spaces 里的空间
+	// （停用、暂停或在停机期间被停用）会先做一次停用收尾，确保旧的定时器不再运行；确认后不再重复。
+	Configured func(ctx context.Context) ([]string, error)
 	// Factory 为空间创建对账器。
 	Factory  func(spaceID string) (*PlanReconciler, error)
 	Interval time.Duration
@@ -289,9 +289,10 @@ type PlanManager struct {
 }
 
 type planWorker struct {
-	cancel context.CancelFunc
-	stop   chan struct{}
-	done   chan struct{}
+	reconciler *PlanReconciler
+	cancel     context.CancelFunc
+	stop       chan struct{}
+	done       chan struct{}
 	// disabled 在协程因停用收尾完成而退出时置位（done 关闭后读取）。
 	disabled bool
 }
@@ -307,6 +308,18 @@ func (m *PlanManager) TimersDisabled(space string) bool {
 		}
 	}
 	return false
+}
+
+// PlanIssue 返回空间最近一轮对账没有建出计划的原因；没有运行中的协程或没有问题时为空。
+func (m *PlanManager) PlanIssue(space string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, worker := range m.workers {
+		if strings.EqualFold(name, space) {
+			return worker.reconciler.Issue()
+		}
+	}
+	return ""
 }
 
 func (m *PlanManager) interval() time.Duration {
@@ -362,6 +375,13 @@ func (m *PlanManager) sync(ctx context.Context) {
 		log.WarnContextf(ctx, "collector fetch plan space list failed: %v", err)
 		return
 	}
+	var configured []string
+	if m.Configured != nil {
+		if configured, err = m.Configured(ctx); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan managed spaces failed: %v", err)
+			return
+		}
+	}
 	wanted := make(map[string]struct{}, len(spaces))
 	for _, space := range spaces {
 		wanted[space] = struct{}{}
@@ -404,7 +424,7 @@ func (m *PlanManager) sync(ctx context.Context) {
 			return
 		}
 		workerCtx, cancel := context.WithCancel(ctx)
-		worker := &planWorker{cancel: cancel, stop: make(chan struct{}, 1), done: make(chan struct{})}
+		worker := &planWorker{reconciler: reconciler, cancel: cancel, stop: make(chan struct{}, 1), done: make(chan struct{})}
 		if stopping {
 			worker.stop <- struct{}{}
 		}
@@ -415,7 +435,7 @@ func (m *PlanManager) sync(ctx context.Context) {
 	for space := range wanted {
 		start(space, false)
 	}
-	for _, space := range m.Configured {
+	for _, space := range configured {
 		if _, active := wanted[space]; !active && !m.disabled[space] {
 			start(space, true)
 		}

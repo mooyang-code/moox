@@ -34,7 +34,7 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 		ModifyTime:     formatTime(task.ModifyTime),
 		PrepareState:   string(task.PrepareState),
 		LastError:      task.LastError,
-		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
+		Result:         &pb.TaskResult{ResultName: resultName(task.TaskName), ViewId: task.ResultViewID, DatasetId: task.ResultDatasetID, Status: resultStatus, DataKind: taskResultDataKind(task.DataType)},
 	}
 }
 

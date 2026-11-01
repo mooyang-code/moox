@@ -4,7 +4,7 @@
 这是破坏性运维：**必须先得到用户的明确确认**，并复述要清空的主机和数据。升级已安装的单元不走这里，见 [`native-release.md`](native-release.md)。
 本文是维护者在源码仓库里重装自己生产环境的记录（四台主机、从源码构建）；外部用户第一次安装按 [`install.md`](install.md)，用发布产物，不需要构建。
 
-整体顺序：核对前提 → 备份 → 构建制品 → 停机清空 → 本机状态清理 → 安装（core → 主机 → 单元 → control）→ 默认初始化 → 验收。
+整体顺序：核对前提 → 备份 → 构建制品 → 停机清空 → 本机状态清理 → 安装（admin → 主机 → 单元 → control）→ 默认初始化 → 验收。
 耗时的命令都放后台运行，用日志文件加 Monitor 盯结果（一次完整安装约 20 分钟，另加 5 分钟构建）。
 
 ## 0. 前提与约定
@@ -61,7 +61,7 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 ### 本机状态
 
 `setup wipe` 把操作员身份和这台控制机的旧管理台证书移到 `~/.config/moox/.bak-<时间>/`，`config.key` 和 `known_hosts` 留在原处；状态目录 `~/.local/state/moox/setup/<摘要>` 改名为 `<摘要>.bak-<时间>`。
-状态目录**必须**换新：制品和请求哈希绑定在 core 阶段的状态里，control 阶段重试会复用 core 时构建的软件。想换制品（改了代码）只能换新状态目录，从 core 重来。
+状态目录**必须**换新：制品和请求哈希绑定在 admin 阶段的状态里，control 阶段重试会复用 admin 时构建的软件。想换制品（改了代码）只能换新状态目录，从 admin 重来。
 
 ## 4. 安装顺序
 
@@ -70,38 +70,36 @@ $CLI setup validate --file ./moox.toml                               # deploymen
 
 | 步 | 命令 | 备注 |
 | --- | --- | --- |
-| 1 | `$CLI setup bootstrap --stage core` | Admin、HostGateway、HostAgent、EventBus 凭据；输出 `core-ready`。约 3 分钟，含本机构建 |
+| 1 | `$CLI setup bootstrap --stage admin` | Admin、HostGateway、HostAgent、EventBus 凭据；输出 `admin-ready`。约 3 分钟，含本机构建 |
 | 2 | `$CLI setup deploy-host --host storage`，再 `overseas`、`factor` | 因子机要求 `[hosts.factor] reachability = "outbound"`，且已有 `/data/moox`（可写） |
 | 3 | `$CLI setup deploy-unit --host storage --profile eventbus` | EventBus 装在 `[deployments]` 登记它的主机（默认存储机） |
 | 4 | `$CLI setup deploy-unit --host storage --profile storage --binary-dir $WT/bin` | Storage 必须带第 2 节构建的 Linux CGO 制品 |
 | 5 | `$CLI setup init --stage storage --config-dir $WT/config/setup --storage-host storage` | 业务空间、登记存储节点、导入并激活元数据。必须在 control 之前：Monitor 要等系统数据集就绪 |
 | 6 | `$CLI setup deploy-unit --host storage --profile access`，再 `--host overseas --profile access`，再 `--host overseas --profile egress-proxy` | **存储机和海外机都要装 Access**，漏了海外机会出现“外接入（overseas）连接被拒绝”告警 |
-| 7 | `$CLI setup bootstrap --stage control --create-proxy-ca` | internal TLS 的首次安装必须带 `--create-proxy-ca`；失败的发布目录由下一次尝试自动清理 |
-| 8 | 信任内部 CA（见下），然后 `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
+| 7 | `$CLI setup bootstrap --stage control` | 首次安装自动创建管理台内部 CA；失败的发布目录由下一次尝试自动清理 |
+| 8 | `$CLI setup init --config-dir $WT/config/setup --storage-host storage` | 云账户、日志服务和默认因子任务；业务空间和元数据第 5 步已写入，这里只核对 |
 | 9 | `$CLI setup deploy-unit --host overseas --profile collector-stream`，再 `--profile trade` | 必须在 control 就绪之后：collector-stream 启动后向 Collector 发心跳 |
 | 10 | `$CLI setup sync-deployments --host factor --yes`，再 `deploy-unit --host factor --profile factor-engine`，再 `--profile archive-worker` | 因子机外部程序，systemd 用户服务；引擎安装时自动按本机内存校准窗口与内存预算（`tune --write`） |
 
-### 步骤 8 前：信任内部 CA
+### 信任内部 CA（用户自己做）
 
-`setup init` 先检查内部 CA 是否已被本机信任，检查标准是**证书在系统钥匙串里**，没有就调 `scripts/deploy/install-caddy-ca.sh`（要 sudo 密码）。Agent 的 shell 没有终端，输不了密码：
+`setup init` 不碰信任库，也不等这一步。信任要这台电脑的管理员授权，Agent 的 shell 没有终端，做不了。`setup validate` 把它放在 `manual_steps`，安装结束时转告用户：
 
-1. 先核对本机缓存的证书就是新 CA：`openssl x509 -in ~/.moox/certs/moox-caddy-root-<控制机地址>.crt -noout -fingerprint -sha256`，与控制机 `/data/moox/prod/current/console-proxy/certs/caddy/root.crt` 的指纹一致。
-2. 让用户在本机授权（弹窗由用户点、密码由用户输，Agent 看不到）：
-   `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db <证书>`（用户级信任，弹系统授权框）；
-   再用 `osascript -e 'do shell script "security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain <证书>" with administrator privileges'` 把证书放进系统钥匙串（弹管理员密码框；系统信任设置可能因“无法交互”被拒，但证书已入系统钥匙串，检查即可通过）。
-3. 用 `scripts/deploy/install-caddy-ca.sh --ca-file <证书> --check` 的退出码确认，再重跑 `setup init`。
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
+```
 
-旧的 CA 会留在钥匙串里，由用户自行清理。
+用户也可以在自己的终端运行 `setup trust-browser`。不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。重装后 CA 是新的，旧证书留在钥匙串里，由用户自行清理。
 
 ### 步骤 8 的已知限制
 
-`setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）。
+`setup init` 会逐项导入 `moox.toml` 的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
 
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略）加上 `moox.toml` 里默认的因子任务。Collector 首次启动会把随发布安装的 `collector/config/collection-tasks.yaml` 写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间，默认启用）和 A 股（stockcn，默认停用）；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。crypto 的采集方式默认就是 collector-stream（stream + local），不需要手工切换，用 `moox-cli collector ingest-mode get --space-id crypto` 确认。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间，默认启用）和 A 股（stockcn，默认停用）；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector kline status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
 
 ### 默认展示策略（合约双均线）
 
@@ -144,10 +142,10 @@ $S instance enable --instance-id <instance_id> --yes   # 不带 --yes 只预览
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
-| control 阶段失败，重试结果相同 | 软件制品绑定在 core 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 core 重来 |
+| control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
 | 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节在编译机构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
-| `setup init` 报 `browser_ca_trust_failed`、`sudo: a terminal is required` | 检查要求证书在系统钥匙串，安装需要 sudo | 见第 4 节“信任内部 CA”，由用户授权 |
+| `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |
 | 引擎重启后一段时间 `lease conflict`、`not_ready` | 旧租约还没过期 | 等几十秒，再等窗口载入（约 20 秒）和 warming |

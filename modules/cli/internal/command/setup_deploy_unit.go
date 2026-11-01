@@ -29,7 +29,7 @@ func newSetupDeployUnitCommand(deps setupDeps) *cobra.Command {
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return errors.New("config_changed")
 		}
-		if err := resolveSetupUnitOptions(snapshot, source, &options.CoreOptions); err != nil {
+		if err := resolveSetupUnitOptions(snapshot, source, &options.DeployOptions); err != nil {
 			return err
 		}
 		options.Log = command.ErrOrStderr()
@@ -49,7 +49,7 @@ func newSetupDeployUnitCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.Profile, "profile", "", "业务单元：access/egress-proxy/trade/collector-stream/storage/factor-engine/archive-worker")
 	command.Flags().StringVar(&source, "source-dir", "", "源码与公共配置模板所在 worktree（默认当前目录）")
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：目标 Linux 预构建目录；Storage 必须填写")
-	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "bootstrap core 创建的持久私有状态目录")
+	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "bootstrap admin 创建的持久私有状态目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	command.Flags().StringVar(&options.Release, "release", "", "可选：setup release build 产出的版本 ID；为空时修复首次安装的发布")
 	return command

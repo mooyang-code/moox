@@ -159,9 +159,6 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("console-proxy") != target.host {
 			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Deployments)
 		}
-		if manifest.HostCatalog[target.host].TLSMode != "auto" {
-			t.Fatalf("%s：管理台的 HTTPS 入口应跟着搬过去，证书模式 %q", target.role, manifest.HostCatalog[target.host].TLSMode)
-		}
 		// EventBus 是独立单元，默认放在存储机上（Storage 内部的事件流量最大），不跟着管理台组件走。
 		if manifest.ComponentHost("eventbus") != "storage" || manifest.EventBus.PublicAddress != manifest.HostCatalog["storage"].Address {
 			t.Fatalf("%s：EventBus 应在存储机上，地址是存储机的地址：%+v", target.role, manifest.Deployments)
@@ -386,5 +383,22 @@ func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
 		if err := setupvalidate.CheckDeployments(render(t, request)); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestFactorsOnlyTurnOnWithEngineAndOverseas(t *testing.T) {
+	full := sampleRequest()
+	full.Servers.Factor = &SSHTarget{Address: "192.168.0.20", SSHUser: "me"}
+	if !render(t, full).Factors.Enabled {
+		t.Fatal("有因子机和海外机时默认打开因子")
+	}
+	noOverseas := full
+	noOverseas.Servers.Overseas = nil
+	if render(t, noOverseas).Factors.Enabled {
+		t.Fatal("没有海外机时没有源数据，不打开因子")
+	}
+	noFactor := sampleRequest()
+	if render(t, noFactor).Factors.Enabled {
+		t.Fatal("没有因子机时不打开因子")
 	}
 }

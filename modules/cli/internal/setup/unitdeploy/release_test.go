@@ -115,6 +115,7 @@ func TestControlRequestBindingPerRelease(t *testing.T) {
 	require.NoError(t, err)
 	defer root.Close()
 	require.NoError(t, bindControlRequest(root, "", "sha256:first"))
+	require.NoError(t, saveJSON(root, "control-ready.json", map[string]string{"stage": "control-ready"}, true))
 	require.Error(t, bindControlRequest(root, "", "sha256:other"), "首次绑定不能被替换")
 	require.NoError(t, bindControlRequest(root, "r1", "sha256:upgrade-1"))
 	require.NoError(t, bindControlRequest(root, "r1", "sha256:upgrade-1"), "同一版本重试")

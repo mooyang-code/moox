@@ -18,7 +18,7 @@ func newLifecycleFixture(t *testing.T) (*lifecycle.Controller, *collectorControl
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
 	t.Cleanup(func() { _ = db.Close() })
 	control := &collectorControl{}
-	control.plans, control.spaces = db.FetchPlans(), []string{"crypto", "stockcn"}
+	control.plans, control.spaces = db.FetchPlans(), fixedSpaces("crypto", "stockcn")
 	life, err := newCollectorLifecycle(filepath.Join(t.TempDir(), "collector.db"), control, func() bool { return true }, nil)
 	require.NoError(t, err)
 	life.Refresh(context.Background())

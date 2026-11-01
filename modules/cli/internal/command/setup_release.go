@@ -24,21 +24,21 @@ func newSetupReleaseCommand(deps setupDeps) *cobra.Command {
 		if options.ReleaseID == "" {
 			return errors.New("release build requires --release")
 		}
-		var core unitdeploy.CoreOptions
-		core.StateDirectory = options.StateDirectory
-		if core.StateDirectory == "" {
+		var admin unitdeploy.DeployOptions
+		admin.StateDirectory = options.StateDirectory
+		if admin.StateDirectory == "" {
 			// 未指定状态目录时与部署命令一样按 moox.toml 推导默认位置。
 			snapshot, err := deps.load(file)
 			if err != nil {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			if err := resolveSetupUnitOptions(snapshot, source, &core); err != nil {
+			if err := resolveSetupUnitOptions(snapshot, source, &admin); err != nil {
 				return err
 			}
 		}
 		var err error
-		if options.StateDirectory, err = filepath.Abs(core.StateDirectory); err != nil {
+		if options.StateDirectory, err = filepath.Abs(admin.StateDirectory); err != nil {
 			return err
 		}
 		if source == "" {
