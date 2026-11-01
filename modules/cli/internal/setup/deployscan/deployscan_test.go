@@ -720,9 +720,11 @@ func TestNextStepsFollowReadinessOrder(t *testing.T) {
 	require.Contains(t, strings.Join(ManualSteps(RouteFresh), "\n"), "setup trust-browser")
 	require.Empty(t, ManualSteps(RouteUpgrade))
 	require.Less(t, position("setup init --config-dir"), position("--profile collector-stream"))
-	require.Less(t, position("sync-deployments --host factor"), position("--profile factor-engine"))
 	require.Equal(t, "./bin/moox-cli config backup", steps[len(steps)-2])
-	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", steps[len(steps)-1])
+	require.Equal(t, "./bin/moox-cli setup start --space-id <空间>", steps[len(steps)-1], "选了空间才验收")
+	require.NotContains(t, strings.Join(steps, "\n"), "setup verify", "没启动的空间不验收")
+	started := NextSteps(stepsManifest(), RouteResume, LocalState{RuntimeSHA256: "sha256:a", Started: map[string]bool{"crypto": true}})
+	require.Equal(t, "./bin/moox-cli setup verify --space-id crypto", started[len(started)-1])
 	for _, step := range steps {
 		require.NotContains(t, step, "--host control", "管理台机不走 deploy-host：%s", step)
 	}

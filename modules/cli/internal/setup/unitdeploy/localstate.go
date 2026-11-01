@@ -80,6 +80,9 @@ const (
 	StepInitReady   = "init-ready.json"
 )
 
+// StartedStep 返回一个空间已启动的记录文件名。
+func StartedStep(spaceID string) string { return "start-ready-" + spaceID + ".json" }
+
 // VerifiedStep 返回一个空间验收通过的记录文件名。
 func VerifiedStep(spaceID string) string { return "verify-ready-" + spaceID + ".json" }
 
@@ -110,6 +113,12 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 		for _, match := range matches {
 			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "verify-ready-"), ".json")
 			state.Verified[name] = true
+		}
+	}
+	state.Started = map[string]bool{}
+	if matches, err := filepath.Glob(filepath.Join(stateDir, StartedStep("*"))); err == nil {
+		for _, match := range matches {
+			state.Started[strings.TrimSuffix(strings.TrimPrefix(filepath.Base(match), "start-ready-"), ".json")] = true
 		}
 	}
 	state.OperatorPin = fileExists(filepath.Join(operatorDir, "gateway-bootstrap.json"))

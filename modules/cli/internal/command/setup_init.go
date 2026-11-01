@@ -92,7 +92,6 @@ type setupInitSummary struct {
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
-	Factors          *setupFactorSummary           `json:"factors,omitempty"`
 	BrowserTrust     *setupBrowserTrustSummary     `json:"browser_trust,omitempty"`
 }
 
@@ -302,31 +301,6 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	factorPlan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
-	if err != nil {
-		return setupInitSummary{}, err
-	}
-	var factorSummary *setupFactorSummary
-	if snapshot.Manifest.Factors.Enabled && (snapshot.Manifest.ComponentHost("factor-engine") == "" || snapshot.Manifest.ComponentHost("collector-stream") == "") {
-		factorPlan.Warnings = append(factorPlan.Warnings, "打开了因子导入，但没有因子引擎或海外采集：任务不会出结果，会长期告警")
-	}
-	reportFactorWarnings(factorPlan.Warnings)
-	if !factorPlan.empty() {
-		factorService, openErr := deps.openInitFactor(ctx, snapshot)
-		if openErr != nil {
-			return setupInitSummary{}, openErr
-		}
-		appliedSummary, applyErr := factorService.Apply(ctx, factorPlan)
-		closeErr := factorService.Close()
-		if applyErr != nil {
-			return setupInitSummary{}, applyErr
-		}
-		if closeErr != nil {
-			return setupInitSummary{}, closeErr
-		}
-		appliedSummary.Warnings = factorPlan.Warnings
-		factorSummary = &appliedSummary
-	}
 	adminStatus, err = deps.statusSpaces(ctx, snapshot, bundle.Spaces)
 	if err != nil {
 		return setupInitSummary{}, err
@@ -347,7 +321,7 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
-		Factors: factorSummary, BrowserTrust: describeSetupBrowserTrust(snapshot),
+		BrowserTrust: describeSetupBrowserTrust(snapshot),
 	}, nil
 }
 

@@ -5,7 +5,7 @@ tasks:
   task_name: Binance 现货 K 线 1m
   data_type: kline
   tag_ids: [binance_spot]
-  enabled: true
+  enabled: false
   creator: moox-setup
   collect_params:
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]
@@ -15,7 +15,7 @@ tasks:
   task_name: Binance 合约 K 线 1m
   data_type: kline
   tag_ids: [binance_swap]
-  enabled: true
+  enabled: false
   creator: moox-setup
   collect_params:
     output_fields: [open, high, low, close, volume, quote_volume, trade_num]

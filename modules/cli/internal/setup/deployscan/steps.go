@@ -16,7 +16,7 @@ func UnfinishedReason(manifest setupconfig.Manifest, route string, local LocalSt
 	}
 	local.StaleBinding = false
 	// 验收是安装后的检查，没有记录不代表部署没做完。
-	pending := slices.DeleteFunc(NextSteps(manifest, route, local), func(step string) bool { return strings.Contains(step, "setup verify") })
+	pending := slices.DeleteFunc(NextSteps(manifest, route, local), func(step string) bool { return strings.Contains(step, "setup verify") || strings.Contains(step, "setup start") })
 	if len(pending) == 0 {
 		return ""
 	}
@@ -77,16 +77,16 @@ func NextSteps(manifest setupconfig.Manifest, route string, local LocalState) []
 	add(local.InitReady, "setup init --config-dir ./config/setup --storage-host %s", storage)
 	unit("collector-stream", "collector-stream")
 	unit("trade", "trade")
-	engines := hostsWith("factor-engine")
-	if len(engines) != 0 && !local.Units[engines[0]+"/factor-engine"] {
-		add(false, "setup sync-deployments --host %s --yes", engines[0])
-	}
 	unit("factor-engine", "factor-engine")
 	unit("archive-worker", "archive-worker")
 	if len(steps) != 0 {
 		add(false, "config backup")
 	}
-	for _, space := range CollectSpaces(manifest) {
+	spaces := CollectSpaces(manifest)
+	started := slices.DeleteFunc(slices.Clone(spaces), func(space string) bool { return !local.Started[space] })
+	// 启动哪个空间由用户选，手工路径留占位，setup install 用参数填入。
+	add(len(spaces) == 0 || len(started) != 0, "setup start --space-id <空间>")
+	for _, space := range started {
 		add(local.Verified[space], "setup verify --space-id %s", space)
 	}
 	return steps

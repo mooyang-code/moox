@@ -109,7 +109,7 @@ func setupDeploymentStatus(ctx context.Context, deps setupDeps, snapshot *setupc
 	status.NextSteps = deployscan.NextSteps(snapshot.Manifest, status.Route, local)
 	status.ManualSteps = deployscan.ManualSteps(status.Route)
 	if len(deployscan.CollectSpaces(snapshot.Manifest)) == 0 {
-		status.Warnings = append(status.Warnings, "这个拓扑没有 collector-stream，也没配云函数，默认的 crypto 采集任务不会运行")
+		status.Warnings = append(status.Warnings, "这个拓扑不能采集任何空间：没有 collector-stream，也没配云函数")
 	}
 	drift, err := unitdeploy.ConfigDrift(snapshot, options.StateDirectory)
 	if err != nil {

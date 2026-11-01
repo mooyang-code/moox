@@ -11,8 +11,6 @@
 name: dual_ma_swap_1m
 bar: 1m
 
-universe:
-  min_age_bars: 15
 
 rules:
   - id: ma_above

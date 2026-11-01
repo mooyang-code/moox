@@ -33,6 +33,8 @@ type LocalState struct {
 	// InitStorage、InitReady 表示 setup init --stage storage、setup init 已完成。
 	InitStorage bool
 	InitReady   bool
+	// Started 是已启动的空间，见 setup start。
+	Started map[string]bool
 	// Verified 是验收通过的空间，见 setup verify。
 	Verified map[string]bool
 }

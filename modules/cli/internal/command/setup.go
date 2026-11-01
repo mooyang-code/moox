@@ -58,6 +58,7 @@ type setupDeps struct {
 	scanDeployment   func(context.Context, *setupconfig.Snapshot, deployscan.Options) ([]deployscan.HostReport, error)
 	wipeHost         func(context.Context, setupconfig.Host, string, []string, bool) (deployscan.HostResult, error)
 	restartComponent func(context.Context, setupRestartTarget) (json.RawMessage, error)
+	openStart        func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error)
 	readLogs         func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 }
 
@@ -77,6 +78,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupWipeCommand(deps),
 		newSetupLogsCommand(deps),
 		newSetupRestartCommand(deps),
+		newSetupStartCommand(deps),
 		newSetupVerifyCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
@@ -811,6 +813,7 @@ func defaultSetupDeps() setupDeps {
 		wipeHost:              defaultSetupWipeHost,
 		readLogs:              defaultSetupReadLogs,
 		restartComponent:      defaultSetupRestartComponent,
+		openStart:             defaultSetupOpenStart,
 		validate:              defaultSetupValidate,
 		trustHost:             defaultSetupTrustHost,
 		apply:                 defaultSetupApply,

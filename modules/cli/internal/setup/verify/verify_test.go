@@ -112,10 +112,10 @@ func TestNoEnabledTasksFails(t *testing.T) {
 	require.True(t, Settled(checks), "空间没有任务不用再等")
 }
 
-func TestDisabledTasksSkipAndFailDoesNotWait(t *testing.T) {
+func TestDisabledTasksFailAndFailDoesNotWait(t *testing.T) {
 	checks := Evaluate(Input{Now: now, TasksDisabled: true})
-	require.Equal(t, Skip, checks[0].Status, "任务都停用不算失败")
-	require.Equal(t, Skip, checks[1].Status)
+	require.Equal(t, Fail, checks[0].Status, "任务默认停用，全停用就是还没 setup start，不能假绿")
+	require.Equal(t, CodeCollectionNotStarted, checks[0].Code)
 	in := Input{Now: now, Instances: []Instance{{ID: "s", Enabled: true}}}
 	require.True(t, Settled(Evaluate(in)), "已有失败项时不用等别的检查")
 }

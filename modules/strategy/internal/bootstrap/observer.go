@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
@@ -36,6 +37,12 @@ var accumulatingReasons = map[string]bool{
 
 // minAccumulationLimit 是积累期上限的下限：上游因子的回看窗口可达两三天（1h 因子任务），min_age_bars 对应的时长更短时也要给足。
 const minAccumulationLimit = 72 * time.Hour
+
+// 新实例因子预热的积累上限：warmupMinimum 与 warmupPeriods 个周期取较大者。
+const (
+	warmupMinimum = 30 * time.Minute
+	warmupPeriods = 20
+)
 
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。
 var failureReasons = map[string]bool{
@@ -345,8 +352,9 @@ func expectations(values map[string]report.DatasetExpectation) []report.DatasetE
 
 // ObservePeriod 记录一个处理周期：ok → success（推进输出水位），skipped → incomplete。水位用这根 K 线在存储里的 data_time
 // （开盘时间），与 Storage、因子的水位同一口径，Monitor 按交易日历算它的收线时间和到达延迟。
-func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
+func (o *instanceObserver) ObservePeriod(ctx context.Context, instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	o.periods.WithLabelValues(instance.InstanceID, result, reason).Inc()
+	warming := o.warmingUp(ctx, instance, result, reason)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if barEnd.After(o.lastBarEnd[instance.InstanceID]) {
@@ -381,7 +389,7 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 		observation.Result = "success"
 		observation.OutputWatermark = barStart
 		delete(o.accumulatingSince, instance.InstanceID)
-	} else if accumulatingReasons[reason] && o.accumulatingLocked(instance, bar, finishedAt) {
+	} else if (accumulatingReasons[reason] || warming) && o.accumulatingLocked(instance, bar, finishedAt, warming) {
 		observation.Result = "partial"
 		accumulating = true
 	}
@@ -405,19 +413,37 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 
 // accumulatingLocked 记下（首次出现时）实例进入积累期的时刻，并判断是否仍在积累期上限之内。上限取 min_age_bars 根 K 线
 // 对应的时长与 minAccumulationLimit 的较大者再加一小时：数据按时间攒，再久还不够就不是在积累。调用方持有 o.mu。
-func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar string, at time.Time) bool {
+func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar string, at time.Time, warming bool) bool {
 	since, ok := o.accumulatingSince[instance.InstanceID]
 	if !ok {
 		since = at
 		o.accumulatingSince[instance.InstanceID] = since
 	}
 	limit := minAccumulationLimit
+	if warming {
+		// 新实例前几根因子为空，几十分钟就够了，太久还缺说明真的缺数。
+		limit = warmupMinimum
+		if expectation, valid := datasetKey(instance, bar); valid {
+			limit = max(limit, warmupPeriods*expectation.Interval)
+		}
+		return at.Sub(since) <= limit
+	}
 	if expectation, valid := datasetKey(instance, bar); valid {
 		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && resolved.MinAgeBars > 0 {
 			limit = max(limit, time.Duration(resolved.MinAgeBars)*expectation.Interval)
 		}
 	}
 	return at.Sub(since) <= limit+time.Hour
+}
+
+// warmingUp 报告这次 too_many_missing 发生在本次会话第一个 ok 之前：实例刚启用，前几根因子还是空的。
+// 按会话查库，策略重启后判断不变；放在加锁之前，查询不占观察器的锁。查询失败时按原样告警。
+func (o *instanceObserver) warmingUp(ctx context.Context, instance store.Instance, result, reason string) bool {
+	if result == store.StatusOK || reason != engine.SkipTooManyMissing || o.store == nil || instance.SessionID == nil {
+		return false
+	}
+	_, found, err := o.store.LatestOk(ctx, instance.InstanceID, *instance.SessionID)
+	return err == nil && !found
 }
 
 // Alert 记录需要人工处理的实例事件：写告警日志，并把模块健康检查记一次失败。
