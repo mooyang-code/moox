@@ -61,9 +61,13 @@ type setupDeps struct {
 	openStart        func(context.Context, string, *setupconfig.Snapshot) (setupStartClient, func(), error)
 	// backupConfig、verifySpace 是 setup install 的最后两步，测试里替换。
 	backupConfig func(context.Context, string) error
-	verifySpace  func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
-	regionCloud  func(setupconfig.Manifest, string) (setupFunctionCloud, error)
-	readLogs     func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
+	// checkDownload、prefetch、localReachable 连目标机和下载源，测试里替换。
+	checkDownload  func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) (bool, error)
+	prefetch       func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) error
+	localReachable func(context.Context, unitdeploy.DeployOptions) bool
+	verifySpace    func(context.Context, string, *setupconfig.Snapshot, unitdeploy.DeployOptions, string) error
+	regionCloud    func(setupconfig.Manifest, string) (setupFunctionCloud, error)
+	readLogs       func(context.Context, setupconfig.Host, []string, string, string, int) ([]deployscan.LogSection, error)
 }
 
 func init() {

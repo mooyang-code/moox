@@ -199,12 +199,16 @@ def listening(ports):
 
 
 def occupied_ports(ports, inside_dirs):
-    """Ports held by programs outside the deployment; an unknown owner counts as occupied."""
+    """Ports held by programs that are not MooX; an unknown owner counts as occupied.
+    MooX processes outside the deployment are reported on their own and can be ended with --kill-outside."""
     sockets = listening(set(ports))
     if not sockets:
         return []
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or not under(executable(pid), inside_dirs):
+        if not pid.isdigit():
+            continue
+        path = executable(pid)
+        if not under(path, inside_dirs) and not moox_process(path or command_name(pid)):
             continue
         try:
             descriptors = os.listdir('/proc/%s/fd' % pid)

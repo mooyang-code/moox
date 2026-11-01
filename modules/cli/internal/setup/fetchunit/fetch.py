@@ -214,9 +214,9 @@ def prune(staging, release):
 
 
 def main():
+    os.umask(0o077)
     request = json.load(sys.stdin)
     staging = os.path.join(request['deploy_root'], 'staging')
-    os.makedirs(staging, 0o700, exist_ok=True)
     if request.get('probe_only'):
         name = request['files'][0]['name']
         candidates, scores = rank(request['urls'], name)
@@ -224,6 +224,7 @@ def main():
         return 0 if candidates else 3
     limiter = Limiter(request.get('rate_limit') or 0)
     try:
+        os.makedirs(staging, 0o700, exist_ok=True)
         for item in request['files']:
             download(item, staging, request, limiter)
             with open(os.path.join(staging, item['sha256'], '.release'), 'w') as stream:

@@ -174,6 +174,9 @@ def main():
         clear(root, ('staging',))
         for directory in directories:
             clear(directory)
+        # A watchdog pass that started before its cron line went away may have put something back.
+        kill_until_gone(lambda: inside([root] + directories))
+        clear(root, ('staging',))
         result = {'status': 'done', 'processes_outside': sorted(set(outside().values()))}
     except Stop as stopped:
         result = {'status': 'failed', 'reason': str(stopped)}

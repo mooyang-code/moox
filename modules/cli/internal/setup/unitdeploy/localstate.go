@@ -78,6 +78,7 @@ func MarkHostReady(stateDir, hostID string) error {
 const (
 	StepInitStorage = "init-storage.json"
 	StepInitReady   = "init-ready.json"
+	StepBackup      = "backup-ready.json"
 )
 
 // StartedStep 返回一个空间已启动的记录文件名。
@@ -108,6 +109,7 @@ func ReadLocalState(stateDir, operatorDir string, current Binding) deployscan.Lo
 	state.ControlReady = fileExists(filepath.Join(stateDir, "control-ready.json"))
 	state.InitStorage = fileExists(filepath.Join(stateDir, StepInitStorage))
 	state.InitReady = fileExists(filepath.Join(stateDir, StepInitReady))
+	state.BackedUp = fileExists(filepath.Join(stateDir, StepBackup))
 	state.Verified = map[string]bool{}
 	if matches, err := filepath.Glob(filepath.Join(stateDir, VerifiedStep("*"))); err == nil {
 		for _, match := range matches {

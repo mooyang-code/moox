@@ -111,7 +111,7 @@ func newSetupInitCommand(deps setupDeps) *cobra.Command {
 		Use:   "init",
 		Short: "导入默认空间、数据集、字段和因子",
 		Long: `--stage storage 在装管理台之前运行：只写业务空间、登记存储节点、导入并激活元数据，管理台的服务要等这些就绪才能启动。
-不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户、日志服务和默认因子任务，已经做过的步骤不会重复写入。`,
+不带 --stage 在管理台装好后运行：完成全部初始化，包括云账户和日志服务；因子任务由 setup start 导入，已经做过的步骤不会重复写入。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if stage != "" && stage != "storage" {
 				return errors.New("setup init --stage 只支持 storage")

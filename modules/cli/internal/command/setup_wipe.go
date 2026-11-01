@@ -245,7 +245,7 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			if err := deleteSetupPlanFunctions(cmd.Context(), regionCloud, functions); err != nil {
-				return fmt.Errorf("functions_delete_failed: 主机已清除，云函数没有删完，重新运行会接着删：%w", err)
+				return fmt.Errorf("functions_delete_failed: 主机已清除，云函数没有删完：%w。重新预览 setup wipe --clean-functions，确认后用新的摘要接着删", err)
 			}
 			decision = deployscan.Decision{Route: deployscan.RouteFresh}
 			return writeSetupJSON(cmd, map[string]any{"status": "wiped", "route": decision.Route, "hosts": results, "archived": archived})

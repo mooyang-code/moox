@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/bundle"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
@@ -18,14 +21,18 @@ import (
 // installHarness 在 wipeHarness 上把部署步骤都换成记录调用。
 type installHarness struct {
 	*wipeHarness
-	mu    sync.Mutex
-	calls []string
-	fail  string
+	mu          sync.Mutex
+	calls       []string
+	fail        string
+	unreachable bool
 }
 
 func newInstallHarness(t *testing.T) *installHarness {
 	t.Helper()
 	h := &installHarness{wipeHarness: newWipeHarness(t)}
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, bundle.ManifestName), []byte(`{"version":1,"release":"v0.0.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{"file":"host.tar.gz"}},"files":["a"]}`), 0o644))
+	t.Chdir(root)
 	deployments := h.snapshot.Manifest.Deployments
 	deployments["compute"] = append(slices.Clone(deployments["compute"]), "collector-stream", "egress-proxy")
 	record := func(name string) error {
@@ -37,6 +44,11 @@ func newInstallHarness(t *testing.T) *installHarness {
 		}
 		return nil
 	}
+	h.deps.checkDownload = func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) (bool, error) {
+		return !h.unreachable, nil
+	}
+	h.deps.prefetch = func(context.Context, setupconfig.Manifest, unitdeploy.DeployOptions, string) error { return nil }
+	h.deps.localReachable = func(context.Context, unitdeploy.DeployOptions) bool { return false }
 	h.deps.ensureFirewall = func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error) {
 		return setupFirewallSummary{Status: "ready"}, record("firewall")
 	}
@@ -150,6 +162,15 @@ func TestSetupInstallStopsOnFailedStepAndReportsRerun(t *testing.T) {
 		}
 		return -1
 	}(), "失败后不进入下一组")
+}
+
+func TestSetupInstallStopsBeforeWipeWhenNothingCanDownload(t *testing.T) {
+	h := newInstallHarness(t)
+	h.unreachable = true
+	digest := h.digest(t)
+	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes", "--wipe", digest)
+	require.ErrorContains(t, err, "download_failed")
+	require.Empty(t, h.wiped, "下载不了就不能动旧部署")
 }
 
 func TestSetupInstallRefusesSpaceWithoutPrerequisites(t *testing.T) {

@@ -123,10 +123,6 @@ func PlanSteps(manifest setupconfig.Manifest, route string, local LocalState, sp
 	unit("factor-engine", "factor-engine")
 	unit("archive-worker", "archive-worker")
 	group++
-	if len(steps) != 0 {
-		add(false, Step{Kind: StepBackup, Host: control}, "config backup")
-	}
-	group++
 	spaces := CollectSpaces(manifest)
 	started := slices.DeleteFunc(slices.Clone(spaces), func(item string) bool { return !local.Started[item] })
 	if space != "" {
@@ -138,6 +134,13 @@ func PlanSteps(manifest setupconfig.Manifest, route string, local LocalState, sp
 		// 启动哪个空间由用户选，手工路径留占位，setup install 用参数填入。
 		add(len(spaces) == 0 || len(started) != 0, Step{Kind: StepStart, Host: control}, "setup start --space-id <空间>")
 	}
+	group++
+	// setup install 用记录判断，备份失败后重跑能补上；手工路径 config backup 可以重复运行，只在还有步骤时列出。
+	backedUp := len(steps) == 0
+	if space != "" {
+		backedUp = local.BackedUp
+	}
+	add(backedUp, Step{Kind: StepBackup, Host: control}, "config backup")
 	group++
 	for _, item := range slices.Compact(started) {
 		add(local.Verified[item], Step{Kind: StepVerify, Space: item, Host: control}, "setup verify --space-id %s", item)

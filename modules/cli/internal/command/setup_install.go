@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,9 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 	}
+	if deps.checkDownload == nil {
+		deps.checkDownload, deps.prefetch, deps.localReachable = unitdeploy.CheckDownload, unitdeploy.Prefetch, unitdeploy.LocalDownloadReachable
+	}
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检）",
@@ -82,6 +86,9 @@ func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 			}
 			if err := setupStartPrerequisites(snapshot.Manifest, options.spaceID); err != nil {
 				return err
+			}
+			if options.deploy.Bundle == nil {
+				return errors.New("setup install 要在产物包目录里运行；源码目录用分步命令")
 			}
 			options.deploy.Log = &lockedWriter{out: cmd.ErrOrStderr()}
 			return runSetupInstall(cmd, deps, snapshot, options)
@@ -139,7 +146,7 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 			return err
 		}
 	}
-	hosts, err := setupInstallPreflight(ctx, manifest, options)
+	hosts, err := setupInstallPreflight(ctx, deps, manifest, options)
 	if err != nil {
 		return err
 	}
@@ -171,6 +178,11 @@ func runSetupInstall(cmd *cobra.Command, deps setupDeps, snapshot *setupconfig.S
 		return err
 	}
 	decision = deployscan.Decide(reports, manifest.ControlHost().Name, local)
+	switch decision.Route {
+	case deployscan.RouteFresh, deployscan.RouteResume, deployscan.RouteUpgrade:
+	default:
+		return fmt.Errorf("deployment_not_fresh: 准备完成后 route=%s：%s", decision.Route, strings.Join(decision.Reasons, "；"))
+	}
 	if warnings := diskWarnings(reports, manifest.ControlHost().Name); len(warnings) != 0 {
 		return errors.New(strings.Join(warnings, "；"))
 	}
@@ -199,7 +211,7 @@ func checkSetupWipe(plan deployscan.Plan, options setupInstallOptions) error {
 }
 
 // setupInstallPreflight 实测每台的下载源。源不通时部署阶段由这台电脑推送，只是慢，不算失败。
-func setupInstallPreflight(ctx context.Context, manifest setupconfig.Manifest, options setupInstallOptions) ([]setupInstallHost, error) {
+func setupInstallPreflight(ctx context.Context, deps setupDeps, manifest setupconfig.Manifest, options setupInstallOptions) ([]setupInstallHost, error) {
 	list := manifest.Hosts()
 	hosts := make([]setupInstallHost, len(list))
 	errs := make([]error, len(list))
@@ -208,12 +220,19 @@ func setupInstallPreflight(ctx context.Context, manifest setupconfig.Manifest, o
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			reachable, err := unitdeploy.CheckDownload(ctx, manifest, options.deploy, host.Name)
+			reachable, err := deps.checkDownload(ctx, manifest, options.deploy, host.Name)
 			hosts[i], errs[i] = setupInstallHost{Host: host.Name, Units: unitdeploy.HostUnits(manifest, host.Name), Reachable: reachable}, err
 		}()
 	}
 	workers.Wait()
-	return hosts, errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return hosts, err
+	}
+	// 目标机下载不了时靠这台电脑推送。这里也不通就在动旧部署之前停下。
+	if slices.ContainsFunc(hosts, func(host setupInstallHost) bool { return !host.Reachable }) && !deps.localReachable(ctx, options.deploy) {
+		return hosts, errors.New("download_failed: 目标机和这台电脑都连不上下载源，没有动任何主机；检查网络后重跑")
+	}
+	return hosts, nil
 }
 
 // prepareSetupInstall 同时启动下载、清除和防火墙，总耗时取决于最慢的一项。清除失败不进入部署；
@@ -243,7 +262,7 @@ func prepareSetupInstall(ctx context.Context, deps setupDeps, snapshot *setupcon
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			err := unitdeploy.Prefetch(ctx, snapshot.Manifest, options.deploy, host.Name)
+			err := deps.prefetch(ctx, snapshot.Manifest, options.deploy, host.Name)
 			fields := map[string]any{"host": host.Name, "ok": err == nil}
 			if err != nil {
 				fields["detail"] = err.Error()
@@ -297,7 +316,10 @@ func executeSetupInstallStep(ctx context.Context, deps setupDeps, snapshot *setu
 		}
 		return unitdeploy.MarkStep(deploy.StateDirectory, unitdeploy.StepInitReady)
 	case deployscan.StepBackup:
-		return deps.backupConfig(ctx, options.file)
+		if err := deps.backupConfig(ctx, options.file); err != nil {
+			return err
+		}
+		return unitdeploy.MarkStep(deploy.StateDirectory, unitdeploy.StepBackup)
 	case deployscan.StepStart:
 		client, closeClient, err := deps.openStart(ctx, options.file, snapshot)
 		if err != nil {

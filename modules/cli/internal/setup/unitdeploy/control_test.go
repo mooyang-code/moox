@@ -172,3 +172,29 @@ func TestBundleSoftwareRecordsRemoteArtifact(t *testing.T) {
 	_, err = bundleSoftware(manifest, "trade", "amd64")
 	require.ErrorContains(t, err, "bundle_incomplete")
 }
+
+func TestFetchedReleaseCanBeRead(t *testing.T) {
+	state, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(state, 0o700))
+	unit := func(profile, extra string) bundle.Artifact {
+		return bundle.Artifact{File: profile + ".tar.gz", SHA256: "abc", Size: 1, Manifest: []byte(`{"profile":"` + profile + `"` + extra + `}`)}
+	}
+	manifest := &bundle.Manifest{Release: "v9.9.9", Commit: strings.Repeat("a", 40), Units: map[string]bundle.Artifact{
+		"host": unit("host", `,"files":[{"path":"bin/moox-runtime","sha256":"sha256:def"}]`), "control": unit("control", ""),
+	}}
+	_, err = FetchRelease(state, "r1", manifest)
+	require.NoError(t, err)
+	root, err := privateRoot(state)
+	require.NoError(t, err)
+	defer root.Close()
+	release, exists, err := readRelease(t.Context(), root, "r1", "amd64")
+	require.NoError(t, err, "登记的版本要读得出来，否则 --release 全部不可用")
+	require.True(t, exists)
+	require.Equal(t, "def", release.HelperSHA256)
+}
+
+func TestExternalUnpackCreatesPrivateStage(t *testing.T) {
+	require.Contains(t, externalUnpackScript, "umask 077", "stage 目录要 0700，后面上传密钥时会检查")
+	require.Contains(t, externalUnpackScript, `mkdir -p "$1"`, "软件包在 staging，没有上传步骤替它建目录")
+}

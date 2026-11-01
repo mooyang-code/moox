@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/fetchunit"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
@@ -38,6 +39,16 @@ var externalPrograms = map[string]externalProgram{
 		script: "archive-worker/scripts/deploy/deploy-archive-worker.sh",
 	},
 }
+
+// externalUnpackScript 校验并解开软件包。软件包在 staging，stage 目录要在这里建，umask 保证中间目录也是 0700。
+const externalUnpackScript = `set -eu
+umask 077
+mkdir -p "$1"
+cd "$1"
+echo "$2  $3" | sha256sum -c - >/dev/null
+rm -rf "$4"
+mkdir -m 0700 "$4"
+tar -xzf "$3" -C "$4" --no-same-owner --no-same-permissions`
 
 func isExternalProfile(profile string) bool {
 	_, ok := externalPrograms[profile]
@@ -105,17 +116,16 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 	defer func() {
 		_, _ = in.target.Run(ctx, []string{"sh", "-c", `rm -rf -- "$1"`, "moox-external-cleanup", stage}, nil)
 	}()
-	archive, err := ensureArtifact(ctx, in.target, artifactDownload{options: in.options.DeployOptions, root: deployRoot}, in.operation.Package)
+	download := artifactDownload{options: in.options.DeployOptions, root: deployRoot}
+	if in.options.Release != "" {
+		download.limit = fetchunit.UpgradeRateLimit
+	}
+	archive, err := ensureArtifact(ctx, in.target, download, in.operation.Package)
 	if err != nil {
 		return result, err
 	}
 	extracted := path.Join(stage, "software")
-	if err := runExternal(ctx, in.target, "unpack the verified software package", `set -eu
-cd "$1"
-echo "$2  $3" | sha256sum -c - >/dev/null
-rm -rf "$4"
-mkdir -m 0700 "$4"
-tar -xzf "$3" -C "$4" --no-same-owner --no-same-permissions`, stage, strings.TrimPrefix(in.operation.Package.SHA256, "sha256:"), archive, extracted); err != nil {
+	if err := runExternal(ctx, in.target, "unpack the verified software package", externalUnpackScript, stage, strings.TrimPrefix(in.operation.Package.SHA256, "sha256:"), archive, extracted); err != nil {
 		return result, err
 	}
 	for name, raw := range secrets {

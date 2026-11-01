@@ -324,17 +324,8 @@ func (c gatewayStartClient) strategyCall(ctx context.Context, method string, req
 	if err := c.admin(defaultStrategySpace).CallGatewayJSON(ctx, strategyMgr, method, request, &raw); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
-	var result struct {
-		RetInfo struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-		} `json:"ret_info"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
+	if err := rpcRetError(raw); err != nil {
 		return fmt.Errorf("%s: %w", method, err)
-	}
-	if result.RetInfo.Code != 0 {
-		return fmt.Errorf("%s: %s (code %d)", method, result.RetInfo.Msg, result.RetInfo.Code)
 	}
 	if response != nil {
 		return json.Unmarshal(raw, response)

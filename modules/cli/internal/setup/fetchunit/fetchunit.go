@@ -123,6 +123,28 @@ func Local(ctx context.Context, urls []string, file File, directory string) (str
 	return "", fmt.Errorf("download_failed: 这台电脑也下载不了 %s: %w", file.Name, last)
 }
 
+// LocalReachable 实测这台电脑能不能从发布页下载：取 1MB，目标机都下载不了时要靠它。
+func LocalReachable(ctx context.Context, urls []string, name string) bool {
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, template := range urls {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.ReplaceAll(template, "{file}", name), nil)
+		if err != nil {
+			continue
+		}
+		request.Header.Set("Range", "bytes=0-1048575")
+		response, err := client.Do(request)
+		if err != nil {
+			continue
+		}
+		received, _ := io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		response.Body.Close()
+		if response.StatusCode < 300 && received > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func localFetch(ctx context.Context, client *http.Client, url string, file File, final string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

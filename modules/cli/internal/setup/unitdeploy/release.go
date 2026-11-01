@@ -215,7 +215,7 @@ func readRelease(ctx context.Context, root *os.Root, id, arch string) (Release, 
 	if err := readJSON(root, releaseName(id), 4<<20, &release); err != nil {
 		return release, true, err
 	}
-	if release.Version != 1 || release.ID != id || release.Architecture != arch || release.SourceCommit == "" || release.Packages["host"].SHA256 == "" || release.Packages["control"].Archive == "" {
+	if release.Version != 1 || release.ID != id || release.Architecture != arch || release.SourceCommit == "" || release.Packages["host"].SHA256 == "" || release.Packages["control"].SHA256 == "" {
 		return release, true, errors.New("release manifest does not match this target")
 	}
 	for profile, item := range release.Packages {

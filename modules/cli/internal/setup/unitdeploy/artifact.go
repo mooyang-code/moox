@@ -168,6 +168,11 @@ func CheckDownload(ctx context.Context, manifest setupconfig.Manifest, options D
 	return fetchunit.Reachable(ctx, transport, request), nil
 }
 
+// LocalDownloadReachable 实测这台电脑能不能从发布页下载。
+func LocalDownloadReachable(ctx context.Context, options DeployOptions) bool {
+	return fetchunit.LocalReachable(ctx, fetchunit.Sources(options.Bundle.Release), options.Bundle.Units["host"].File)
+}
+
 // Prefetch 让一台主机下载它要的全部单元。失败不致命：部署时还会换源和本机推送。
 func Prefetch(ctx context.Context, manifest setupconfig.Manifest, options DeployOptions, hostID string) error {
 	if !options.downloads() {

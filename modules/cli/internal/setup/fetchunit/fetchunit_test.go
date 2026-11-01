@@ -112,6 +112,16 @@ func TestAllSourcesFailing(t *testing.T) {
 	require.False(t, Reachable(t.Context(), localTransport{}, request))
 }
 
+func TestProbeChangesNothingOnTarget(t *testing.T) {
+	body, file := fixture(t, 1<<20)
+	root := filepath.Join(t.TempDir(), "moox")
+	request := Request{DeployRoot: root, Release: "v1", Files: []File{file}, URLs: []string{rangeServer(t, body, nil).URL + "/{file}"}}
+	require.True(t, Reachable(t.Context(), localTransport{}, request))
+	require.NoDirExists(t, root, "预检不能改目标机")
+	require.True(t, LocalReachable(t.Context(), request.URLs, file.Name))
+	require.False(t, LocalReachable(t.Context(), []string{deadServer(t).URL + "/{file}"}, file.Name))
+}
+
 func TestWrongDigestNeverLandsInStaging(t *testing.T) {
 	body, file := fixture(t, 1<<20)
 	file.SHA256 = strings.Repeat("0", 64)
