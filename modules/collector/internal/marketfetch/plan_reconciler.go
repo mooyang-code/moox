@@ -503,7 +503,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		}
 	}
 	if firstStreamPlan(desired, previousFunctions, previousDatasets) {
-		lead = planLeadTimeFirstStream
+		lead = planLeadTimePushOnly
 	}
 	choose := func(frequency string) (int64, error) {
 		return ChoosePeriodStartWithLead(frequency, r.now(), lead)

@@ -15,8 +15,8 @@ import (
 // planLeadTime 是新周期起点 P 距当前时间的最短提前量。
 const planLeadTime = 2 * time.Minute
 
-// planLeadTimeFirstStream 是首份纯 WS 计划的提前量：没有云端步骤，也没有旧执行端要交接，collector-stream 心跳 10 秒一次就能接上。
-const planLeadTimeFirstStream = 30 * time.Second
+// planLeadTimePushOnly 是首份纯 WS 计划的提前量：没有云端步骤，也没有旧执行端要交接，collector-stream 心跳 10 秒一次就能接上。
+const planLeadTimePushOnly = 30 * time.Second
 
 // PlanDatasetChange 是一份采集计划里一个数据集的变更。
 type PlanDatasetChange struct {

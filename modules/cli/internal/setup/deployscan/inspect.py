@@ -89,6 +89,15 @@ def command_name(pid):
         return ''
 
 
+def zombie(pid):
+    """A killed process waiting for its parent: it holds nothing and its exe link is gone, so it must not count as running."""
+    try:
+        with open('/proc/%s/stat' % pid) as stream:
+            return stream.read().rpartition(')')[2].split()[0] == 'Z'
+    except (OSError, IndexError):
+        return False
+
+
 def under(path, directories):
     return any(path == d or path.startswith(d.rstrip('/') + '/') for d in directories)
 
@@ -106,7 +115,7 @@ def processes(inside_dirs):
         return inside, outside
     me = os.getpid()
     for pid in os.listdir('/proc'):
-        if not pid.isdigit() or int(pid) == me:
+        if not pid.isdigit() or int(pid) == me or zombie(pid):
             continue
         path = executable(pid)
         if path and under(path, inside_dirs):
