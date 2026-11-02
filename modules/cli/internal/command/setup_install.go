@@ -41,27 +41,6 @@ type setupInstallHost struct {
 
 func newSetupInstallCommand(deps setupDeps) *cobra.Command {
 	var options setupInstallOptions
-	if deps.deployHost == nil {
-		deps.deployHost = unitdeploy.DeployHost
-	}
-	if deps.deployUnit == nil {
-		deps.deployUnit = unitdeploy.DeployUnit
-	}
-	if deps.backupConfig == nil {
-		deps.backupConfig = func(ctx context.Context, file string) error {
-			_, err := backupConfigFile(ctx, file)
-			return err
-		}
-	}
-	if deps.verifySpace == nil {
-		deps.verifySpace = func(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string) error {
-			_, err := runSetupVerifySpace(ctx, file, snapshot, options, spaceID, setupVerifyTimeout)
-			return err
-		}
-	}
-	if deps.checkDownload == nil {
-		deps.checkDownload, deps.prefetch, deps.localReachable = unitdeploy.CheckDownload, unitdeploy.Prefetch, unitdeploy.LocalDownloadReachable
-	}
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "一条命令装完：预检、下载、清除旧部署、防火墙、部署、初始化、启动和验收（默认只预检）",

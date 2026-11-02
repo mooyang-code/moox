@@ -36,7 +36,7 @@ echo "下载源: $SRC"
 
 - **云账号**：需要调用云厂商接口的操作（识别服务器、防火墙、采集云函数、日志服务）目前对接腾讯云 API，其他云厂商后续接入。需要一个腾讯云子用户的 API 密钥，授权 6 个预设策略：
   `QcloudSCFFullAccess`、`QcloudCOSFullAccess`、`QcloudCLSFullAccess`、`QcloudLighthouseFullAccess`、`QcloudCVMFullAccess`、`QcloudVPCFullAccess`。
-- **服务器**（Linux x86_64，SSH 能登录，有 sudo 或 `/data` 可写；除因子机外，必须是上面腾讯云账号下的轻量应用服务器或 CVM，`config init` 按 IP 识别地域与规格）：
+- **服务器**（Linux x86_64，SSH 能登录，部署目录要让 SSH 用户可写，不可写时报错里有要运行的 `sudo` 命令；除因子机外，必须是上面腾讯云账号下的轻量应用服务器或 CVM，`config init` 按 IP 识别地域与规格）：
 
   | 角色 | 必需 | 建议配置 | 跑什么 |
   | --- | --- | --- | --- |
@@ -117,6 +117,7 @@ cd moox-${VER}
 - Agent **不打开、不填写、不读取**这个页面和 `moox.toml`；页面地址没能自动打开时，把命令打印的地址原样转给用户。
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
+- MooX 密钥不是 OpenSSH 的默认身份文件。手工验证要写 `ssh -i ~/.ssh/moox_ed25519 <用户>@<IP>`，普通 `ssh` 询问密码不代表公钥没装上。
 
 ## 3. 判断走哪条路
 
@@ -200,7 +201,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 不做时管理台能打开，但浏览器有安全提示；其他设备从登录页下载根证书。
 
-采集或计划有问题时，不要删任务、不要用 `host exec` 改数据库、不要用维护者脚本。先看 `collector kline status` 和 `setup verify` 给出的原因，走不通就停下来汇报。重启单个组件用 `setup restart`，不重发整个单元。
+采集或计划有问题时，不要删任务、不要用 `host exec` 改数据库、不要用维护者脚本。先看 `collector status --space-id <空间>` 和 `setup verify` 给出的原因，走不通就停下来汇报。重启单个组件用 `setup restart`，不重发整个单元。
 
 ## 6. 验收与交付
 
@@ -263,8 +264,9 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `bootstrap_interrupted` | 目标机上一次部署没结束，这次请求不同 | 换回原配置重跑同一条命令，恢复后再改 |
 | `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |
 | `restart_unverified` | 已重启但读不到状态 | 用 `setup logs` 确认 |
-| `collection_not_started` | 还没运行 `setup start`（任务默认停用）；或到超时还没有采集计划、collector-stream 不在线 | 看 `collector kline status` 给出的原因，不要删任务、不要手工改数据 |
-| `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector kline status` 和 `setup logs --component collector-stream` |
+| `collection_not_started` | 还没运行 `setup start`（任务默认停用）；或到超时还没有采集计划、collector-stream 不在线 | 看 `collector status` 给出的原因，不要删任务、不要手工改数据 |
+| `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`；远程健康检查超时多半是端口没放行，运行 `setup firewall --yes` 后重跑 `setup install` |
+| `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector status` 和 `setup logs --component collector-stream` |
 | `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --component factor-engine` |
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |
 | `admin_not_ready`、`host_not_ready` | admin 或这台主机的主机服务还没完成，或这台电脑没有部署状态 | 回到 `setup validate`，按 `next_steps` 走 |

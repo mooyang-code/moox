@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"slices"
 	"strings"
 	"time"
@@ -78,8 +79,11 @@ func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig
 		return nil, err
 	}
 	for _, check := range checks {
+		if check.Status == verify.Fail && check.Code == verify.CodeMonitorUnhealthy {
+			return checks, fmt.Errorf("%s: %s。先看 moox-cli doctor alerts；远程健康检查超时多半是端口没放行，运行 moox-cli setup firewall --yes", check.Code, check.Detail)
+		}
 		if check.Status == verify.Fail {
-			return checks, fmt.Errorf("%s: %s。先看 moox-cli collector kline status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID)
+			return checks, fmt.Errorf("%s: %s。先看 moox-cli collector status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID)
 		}
 	}
 	return checks, unitdeploy.MarkStep(options.StateDirectory, unitdeploy.VerifiedStep(spaceID))
@@ -223,7 +227,27 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 		return input, err
 	}
 	input.Instances = instances
+	if input.CriticalAlerts, err = readCriticalAlerts(ctx, r.gateway); err != nil {
+		return input, err
+	}
 	return input, nil
+}
+
+// readCriticalAlerts 读全部空间：防火墙、组件这些问题不属于某个空间。
+func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway) ([]string, error) {
+	overview, err := doctorcli.New(gateway).GetHealthOverview(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("read monitor overview: %w", err)
+	}
+	var alerts []string
+	for _, item := range doctorcli.BuildAlertsReport(overview).Items {
+		if item.Severity != doctorcli.AlertSeverityCritical {
+			continue
+		}
+		parts := slices.DeleteFunc([]string{item.Object, item.Title, item.Reason}, func(text string) bool { return text == "" })
+		alerts = append(alerts, strings.Join(parts, " "))
+	}
+	return alerts, nil
 }
 
 // readStrategyInstances 读空间的策略实例。CLI 不依赖策略模块的协议包，这里按 JSON 取需要的字段。

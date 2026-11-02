@@ -70,7 +70,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 - **View 与因子恢复**：先分别量 Primary、View、Factor 三层水位；不要手删 durable consumer 或 View 索引，用 `moox-cli` 的对应命令（先 dry-run）。
 - **主机与部署**：`t_hosts` / `t_deployments` 是唯一登记处，增删启停只走 `moox-cli setup …`，管理台只读。
 - **监控告警**：先判断是真问题、已删除对象的残留，还是重启造成的瞬时现象；不要手改 `monitor.db`，不要把重启当修复手段。
-- **采集或计划有问题**：不删任务、不用 `host exec` 改数据库、不用维护者脚本。先看 `collector kline status` 和 `setup verify` 给出的原因，走不通就停下来汇报。
+- **采集或计划有问题**：不删任务、不用 `host exec` 改数据库、不用维护者脚本。先看 `collector status --space-id <空间>` 和 `setup verify` 给出的原因，走不通就停下来汇报。
 - **重启单个组件**：用 `setup restart --host <主机> --component <组件> --yes`，不重发整个单元。
 - **初始化后**：提醒用户在自己的终端让浏览器信任管理台 CA（[`references/install.md`](references/install.md) 第 5 节），不要替用户清理钥匙串里的这张证书。
 

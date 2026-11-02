@@ -111,7 +111,7 @@ func blockers(reports []HostReport) []string {
 			add(report, "部署目录不是普通目录，或者组和其他用户可写")
 		}
 		if !report.ParentWritable {
-			add(report, "部署目录不存在，上级目录也不可写")
+			add(report, "部署目录不存在，上级目录也不可写。有 sudo 权限的话，在这台主机上运行 sudo install -d -o $(id -un) -g $(id -gn) -m 0755 <部署目录>（部署目录见 moox.toml 的 [paths]）后重试")
 		}
 		if report.ForeignFiles {
 			add(report, "部署目录里有不属于 SSH 用户的文件，清除时删不掉")

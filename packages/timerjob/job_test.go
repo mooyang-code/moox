@@ -10,6 +10,20 @@ import (
 
 type contextKey string
 
+func TestKeepRunningHidesFailureFromTimer(t *testing.T) {
+	calls := 0
+	handler := KeepRunning("test", func(context.Context) error {
+		calls++
+		return errors.New("eventbus unavailable")
+	})
+	if err := handler(context.Background()); err != nil {
+		t.Fatalf("失败不应该传给定时器：%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d", calls)
+	}
+}
+
 func TestNewRejectsInvalidArguments(t *testing.T) {
 	tests := []struct {
 		name    string

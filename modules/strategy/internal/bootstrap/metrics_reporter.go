@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -27,13 +28,13 @@ func registerMetricsReporter(s *server.Server, observer *instanceObserver) error
 	}
 	// 策略结果的输出水位在每期运行完成时前进：立刻补报，Monitor 约 1 秒内看到，不等 30 秒定时上报。
 	handler.FlushOnOutputAdvance()
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("strategy_metrics", func(ctx context.Context) error {
 		if observer != nil {
 			if err := observer.refresh(ctx); err != nil {
 				log.WarnContextf(ctx, "策略实例的期望数据集未刷新：%v", err)
 			}
 		}
 		return handler.Handle(ctx)
-	})
+	}))
 	return nil
 }

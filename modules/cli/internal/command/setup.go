@@ -736,8 +736,37 @@ func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
+// completeSetupDeps 是默认依赖的唯一补全入口。子命令里不要再判空补默认值：那样只改到子命令自己的副本，
+// 聚合命令 setup install 拿到的还是空的。
 func completeSetupDeps(deps setupDeps) setupDeps {
 	defaults := defaultSetupDeps()
+	if deps.bootstrapAdmin == nil {
+		deps.bootstrapAdmin = defaults.bootstrapAdmin
+	}
+	if deps.bootstrapControl == nil {
+		deps.bootstrapControl = defaults.bootstrapControl
+	}
+	if deps.deployHost == nil {
+		deps.deployHost = defaults.deployHost
+	}
+	if deps.deployUnit == nil {
+		deps.deployUnit = defaults.deployUnit
+	}
+	if deps.buildRelease == nil {
+		deps.buildRelease = defaults.buildRelease
+	}
+	if deps.backupConfig == nil {
+		deps.backupConfig = defaults.backupConfig
+	}
+	if deps.verifySpace == nil {
+		deps.verifySpace = defaults.verifySpace
+	}
+	if deps.checkDownload == nil {
+		deps.checkDownload, deps.prefetch, deps.localReachable = defaults.checkDownload, defaults.prefetch, defaults.localReachable
+	}
+	if deps.regionCloud == nil {
+		deps.regionCloud = defaults.regionCloud
+	}
 	if deps.load == nil {
 		deps.load = defaults.load
 	}
@@ -817,6 +846,23 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
+		bootstrapAdmin:   unitdeploy.BootstrapAdmin,
+		bootstrapControl: unitdeploy.BootstrapControl,
+		deployHost:       unitdeploy.DeployHost,
+		deployUnit:       unitdeploy.DeployUnit,
+		buildRelease:     unitdeploy.BuildRelease,
+		backupConfig: func(ctx context.Context, file string) error {
+			_, err := backupConfigFile(ctx, file)
+			return err
+		},
+		verifySpace: func(ctx context.Context, file string, snapshot *setupconfig.Snapshot, options unitdeploy.DeployOptions, spaceID string) error {
+			_, err := runSetupVerifySpace(ctx, file, snapshot, options, spaceID, setupVerifyTimeout)
+			return err
+		},
+		checkDownload:         unitdeploy.CheckDownload,
+		prefetch:              unitdeploy.Prefetch,
+		localReachable:        unitdeploy.LocalDownloadReachable,
+		regionCloud:           defaultSetupRegionCloud,
 		loadInitBundle:        loadSetupInitBundle,
 		scanDeployment:        defaultSetupScanDeployment,
 		wipeHost:              defaultSetupWipeHost,

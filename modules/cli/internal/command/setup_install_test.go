@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/deployscan"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,6 +108,28 @@ func freshReports(h *installHarness) {
 	for i := range h.reports {
 		h.reports[i].Entries, h.reports[i].Units, h.reports[i].RuntimeSHA256 = nil, nil, ""
 	}
+}
+
+// 真实入口用的依赖不能有空函数：测试里注入假依赖时看不出这个问题，到真机上才空指针崩溃。
+func TestDefaultSetupDepsHaveNoNilFunction(t *testing.T) {
+	deps := reflect.ValueOf(completeSetupDeps(defaultSetupDeps()))
+	for i := range deps.NumField() {
+		if deps.Field(i).Kind() == reflect.Func {
+			assert.False(t, deps.Field(i).IsNil(), "setupDeps.%s 没有默认值", deps.Type().Field(i).Name)
+		}
+	}
+}
+
+func TestSetupInstallDefaultBootstrapCallbacksRejectInvalidSnapshot(t *testing.T) {
+	deps := completeSetupDeps(defaultSetupDeps())
+	t.Run("admin", func(t *testing.T) {
+		_, err := deps.bootstrapAdmin(context.Background(), nil, unitdeploy.DeployOptions{})
+		require.ErrorContains(t, err, "unchanged private setup snapshot")
+	})
+	t.Run("control", func(t *testing.T) {
+		_, err := deps.bootstrapControl(context.Background(), nil, unitdeploy.ControlOptions{})
+		require.ErrorContains(t, err, "unchanged private setup snapshot")
+	})
 }
 
 func TestSetupInstallPreviewChangesNothing(t *testing.T) {

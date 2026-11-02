@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/timerjob"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -54,7 +55,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		log.Warn("monitor metrics timer service is not configured, skip register")
 		return moduleMetrics
 	}
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_metrics", func(ctx context.Context) error {
 		err := h.Handle(ctx)
 		if errors.Is(err, report.ErrInFlight) {
 			// A slow snapshot is still active. Keep the previous readiness state;
@@ -65,7 +66,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 			runtime.setMetricsReporterState(err == nil, err)
 		}
 		return err
-	})
+	}))
 	return moduleMetrics
 }
 

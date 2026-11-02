@@ -78,6 +78,6 @@ func registerMonitorTimerJob(s *server.Server, name string, job *timerjob.Job) e
 	if service == nil {
 		return fmt.Errorf("monitor timer service %q is not configured", name)
 	}
-	timer.RegisterHandlerService(service, job.Handle)
+	timer.RegisterHandlerService(service, timerjob.KeepRunning(name, job.Handle))
 	return nil
 }

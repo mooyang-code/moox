@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"testing"
 	"time"
 
@@ -58,6 +59,29 @@ func (s *flakyVerifySource) read(ctx context.Context, baseline map[string]int64)
 	return s.fakeVerifySource.read(ctx, baseline)
 }
 
+type alertingVerifySource struct {
+	fakeVerifySource
+	alerts []string
+}
+
+func (s *alertingVerifySource) read(ctx context.Context, baseline map[string]int64) (verify.Input, error) {
+	in, err := s.fakeVerifySource.read(ctx, baseline)
+	in.CriticalAlerts = s.alerts
+	return in, err
+}
+
+// 数据都到了但 Monitor 还有 critical 告警时，不能算装好。
+func TestRunSetupVerifyFailsWhenMonitorKeepsCriticalAlerts(t *testing.T) {
+	source := &alertingVerifySource{alerts: []string{"storage host-agent 健康检查超时"}}
+	checks, err := runSetupVerify(context.Background(), source, 5*time.Millisecond, time.Millisecond)
+	require.NoError(t, err)
+	last := checks[len(checks)-1]
+	require.Equal(t, "monitor", last.Name)
+	require.Equal(t, verify.Fail, last.Status)
+	require.Equal(t, verify.CodeMonitorUnhealthy, last.Code)
+	require.Contains(t, last.Detail, "host-agent")
+}
+
 func TestRunSetupVerifySurvivesTransientReadErrors(t *testing.T) {
 	source := &flakyVerifySource{fakeVerifySource: fakeVerifySource{ready: 1}, failures: 2}
 	checks, err := runSetupVerify(context.Background(), source, time.Second, time.Millisecond)
@@ -91,6 +115,9 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		out.Expected, out.Missing = 3, 0
 	case *factorpb.ListFactorTasksRsp:
 		proto.Merge(out, g.factors)
+	case *monitorpb.GetHealthOverviewRsp:
+		out.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		out.Overview = &monitorpb.HealthOverview{}
 	default:
 		return errors.New("unexpected " + method)
 	}

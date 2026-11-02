@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/timerjob"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -105,7 +106,7 @@ func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) er
 	if handler == nil {
 		handler = func(context.Context) error { return nil }
 	}
-	timer.RegisterHandlerService(service, handler)
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_deployment_sync", handler))
 }
 
 func serializedMonitorSync(syncFunc func(context.Context) (int, error)) func(context.Context) (int, error) {

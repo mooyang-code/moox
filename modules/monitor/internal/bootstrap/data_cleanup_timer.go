@@ -131,6 +131,6 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if err != nil {
 		return err
 	}
-	timer.RegisterHandlerService(service, job.Handle)
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("monitor_data_cleanup", job.Handle))
 	return nil
 }

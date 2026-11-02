@@ -29,7 +29,7 @@ var collectorSubjectsCmd = &cobra.Command{
 var collectorSubjectsSyncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "立即同步币安/东财的标的标签成员，不等整点定时任务",
-	Long: "首次部署、迁移或交易所接口恢复后，用它强制同步一次标的标签成员（--attributes 同时刷新标的属性）。它只更新标的，不会启动采集；采集没开始时看 collector kline status。\n" +
+	Long: "首次部署、迁移或交易所接口恢复后，用它强制同步一次标的标签成员（--attributes 同时刷新标的属性）。它只更新标的，不会启动采集；采集没开始时看 collector status。\n" +
 		"无视各标签的 cron 窗口；只处理 mode=auto 且配置了数据源的标签。输出 JSON：每个标签的状态、标的数和失败原因；" +
 		"任一标签失败时命令以非零状态退出。同步正在运行时返回冲突，稍后重试即可。",
 	Args: cobra.NoArgs,

@@ -3,6 +3,7 @@ package verify
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ const (
 	CodeKlineNotArrived      = "kline_not_arrived"
 	CodeFactorNotAdvancing   = "factor_not_advancing"
 	CodeStrategyNotRunning   = "strategy_not_running"
+	CodeMonitorUnhealthy     = "monitor_unhealthy"
 )
 
 // maxMissingRatio 是允许的 K 线缺失比例：到截止时间就带缺口结算，缺口靠之后补采，要求零缺失可能永远走不完。
@@ -70,6 +72,8 @@ type Input struct {
 	FactorDeployed bool
 	Factors        []Factor
 	Instances      []Instance
+	// CriticalAlerts 是 Monitor 里 critical 级别的问题，和 doctor alerts 是同一份数据。
+	CriticalAlerts []string
 }
 
 // Check 是一项检查的结果。
@@ -83,7 +87,15 @@ type Check struct {
 // Evaluate 判断这一轮的结果。这里只给 pass、wait、skip：等到超时才算失败，由 Finish 转换。
 func Evaluate(in Input) []Check {
 	kline := klines(in)
-	return []Check{plan(in), kline, factors(in, kline.Status == Skip), strategies(in)}
+	return []Check{plan(in), kline, factors(in, kline.Status == Skip), strategies(in), monitor(in)}
+}
+
+// monitor 只看 critical：新装后要等首轮探测和新数据，所以先等，到时限还在才算失败。
+func monitor(in Input) Check {
+	if len(in.CriticalAlerts) == 0 {
+		return Check{Name: "monitor", Status: Pass}
+	}
+	return Check{Name: "monitor", Code: CodeMonitorUnhealthy, Status: Wait, Detail: strings.Join(in.CriticalAlerts, "；")}
 }
 
 func plan(in Input) Check {

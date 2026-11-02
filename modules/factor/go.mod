@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/factor
 go 1.27.2
 
 require (
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
@@ -169,3 +170,5 @@ replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hos
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

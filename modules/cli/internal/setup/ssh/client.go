@@ -81,7 +81,8 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	if err := validateTarget(target); err != nil {
 		return nil, err
 	}
-	knownHostsPath, err := secureKnownHostsPath(opts.KnownHostsPath, false)
+	// 第一次使用时指纹文件还不存在：建一个空文件，未知主机照样要用户确认。
+	knownHostsPath, err := secureKnownHostsPath(opts.KnownHostsPath, true)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +257,12 @@ func ForgetHost(target Target, opts Options) error {
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return ErrHostKeyStoreInvalid
+	}
+	// 其他行损坏时删掉这一台也修不好，整个文件移开，避免页面反复提示重置。
+	if _, err := knownhosts.New(path); err != nil {
+		if err := os.Rename(path, path+".bak-"+time.Now().Format("20060102-150405")); err != nil {
+			return ErrHostKeyStoreInvalid
+		}
 	}
 	return nil
 }

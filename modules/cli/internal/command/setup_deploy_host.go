@@ -16,9 +16,6 @@ type setupHostDeploy func(context.Context, *setupconfig.Snapshot, unitdeploy.Hos
 func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 	var file, source string
 	var options unitdeploy.HostOptions
-	if deps.deployHost == nil {
-		deps.deployHost = unitdeploy.DeployHost
-	}
 	command := &cobra.Command{Use: "deploy-host", Short: "通过已核验 SSH 部署指定主机的 Host Gateway 与 Host Agent", Long: "先完成 bootstrap --stage admin，再从运行中的 Admin 导出目标主机身份和 EventBus 客户端凭据。重试必须保留原 state-dir；重复执行修复缺失进程并保留暂停状态。结果 host-ready 仅表示两项主机服务就绪；host-paused 表示已安装但存在暂停组件。纯 Go 在本机编译。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
 		if options.HostID == "" {
 			return errors.New("deploy-host requires --host")

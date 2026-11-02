@@ -112,7 +112,7 @@ var reasons = map[string]string{
 	"invalid_config":                      "探针配置无效，请检查监控配置",
 	"subject_catalog_unavailable":         "无法读取采集对象清单",
 	"storage_unreachable":                 "无法连接存储服务，读取不到行情数据",
-	"insufficient_closed_bars":            "已收盘的K线数量不足，无法判断",
+	"insufficient_closed_bars":            "已收盘的K线数量不足，无法判断（新安装的前几分钟属于正常）",
 	"stale_watermark":                     "行情K线没有按时更新",
 	"no_eligible_kline_feed":              "没有符合条件的K线采集来源",
 	"calendar_unavailable":                "无法读取交易日历",

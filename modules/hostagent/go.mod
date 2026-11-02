@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/hostagent
 go 1.27.2
 
 require (
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
@@ -121,3 +122,5 @@ replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storag
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
