@@ -342,7 +342,7 @@ func TestManualDelayedPendingRefreshesOnlyServerQuote(t *testing.T) {
 				result, callErr := service.PlaceManualOrder(ctx, command)
 				require.NoError(t, callErr)
 				require.Equal(t, "RUNNING", result.Action.Status)
-				require.Contains(t, result.Action.LastError, "insufficient")
+				require.Contains(t, result.Action.LastError, "可用资金不足")
 				require.Equal(t, before.ReferencePrice, result.Order.ReferencePrice)
 				require.Equal(t, before.ReferencePriceAt, result.Order.ReferencePriceAt)
 				require.Equal(t, before.RemainingReservedQuantity, result.Order.RemainingReservedQuantity)

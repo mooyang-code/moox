@@ -80,7 +80,7 @@ func TestPaperManualRefreshReplacesReflectedReservationE2E(t *testing.T) {
 			require.Equal(t, initial.Order.OrderID, result.Order.OrderID)
 			if factor == "1.2" {
 				require.Equal(t, "RUNNING", result.Action.Status)
-				require.Contains(t, result.Action.LastError, "insufficient")
+				require.Contains(t, result.Action.LastError, "可用资金不足")
 				require.Equal(t, initial.Order.RemainingReservedQuantity, result.Order.RemainingReservedQuantity)
 				require.Equal(t, initial.Order.ReferencePrice, result.Order.ReferencePrice)
 				require.Zero(t, f.fake.placeCalls)

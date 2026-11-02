@@ -402,7 +402,7 @@ func TestModernReadinessRejectsDifferentSession(t *testing.T) {
 	readiness, err := service.Readiness(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
-	require.Contains(t, readiness.Reasons, "target session does not own logical account")
+	require.Contains(t, readiness.Reasons, "目标所属会话不再持有组合账户")
 }
 
 func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {

@@ -163,6 +163,55 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: success(), Capabilities: capabilities}, nil
 }
 
+// ListTradableInstruments 返回账户当前可下单的标的和数量规则，供下单表单使用。
+func (s *ConsoleServer) ListTradableInstruments(
+	ctx context.Context,
+	req *tradepb.ListTradableInstrumentsReq,
+) (*tradepb.ListTradableInstrumentsRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	if s.Store == nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(err)}, nil
+	}
+	records, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(err)}, nil
+	}
+	rsp := &tradepb.ListTradableInstrumentsRsp{RetInfo: success()}
+	for _, record := range records {
+		if record.Status != "TRADING" && record.Status != "live" {
+			continue
+		}
+		if record.SettlementAsset != "" && record.SettlementAsset != account.SettlementAsset {
+			continue
+		}
+		rsp.Instruments = append(rsp.Instruments, tradableInstrumentToPB(record))
+	}
+	return rsp, nil
+}
+
+func tradableInstrumentToPB(record store.InstrumentRecord) *tradepb.TradableInstrument {
+	step := shared.MustDecimal(record.ExchangeQuantityStep)
+	minimum := shared.MustDecimal(record.MinExchangeQuantity)
+	if exchange.RuleFor(record.MarketType).ContractValue {
+		contractValue := shared.MustDecimal(record.ContractValue)
+		step, minimum = step.Mul(contractValue), minimum.Mul(contractValue)
+	}
+	return &tradepb.TradableInstrument{
+		InstrumentId: record.InstrumentID, QuantityStep: step.String(), MinQuantity: minimum.String(),
+		MinNotional: record.MinNotional, PriceTick: record.PriceTick,
+	}
+}
+
 func (s *ConsoleServer) QueryEquityCurve(
 	ctx context.Context,
 	req *tradepb.QueryEquityCurveReq,

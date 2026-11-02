@@ -421,7 +421,7 @@ func TestSubmitRejectedReturnsStableRejection(t *testing.T) {
 	require.EqualError(t, err, "REJECTED: stable reason")
 
 	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.EqualError(t, err, "REJECTED: stable reason")
+	require.EqualError(t, err, "交易所返回：stable reason")
 	require.Equal(t, orderdomain.Rejected, got.State)
 	require.Equal(t, 1, adapter.placeCalls)
 }

@@ -15,12 +15,12 @@ import (
 
 var (
 	ErrAccountOwnership   = errors.New("trade order: Exchange account ownership mismatch")
-	ErrInstrumentDisabled = errors.New("trade order: instrument is not tradable")
-	ErrQuantityRule       = errors.New("trade order: quantity violates instrument rules")
-	ErrNotionalLimit      = errors.New("trade order: maximum child notional exceeded")
-	ErrInsufficientFunds  = errors.New("trade order: insufficient available funds")
-	ErrLeverageLimit      = errors.New("trade order: leverage exceeds configured ceiling")
-	ErrReduceOnly         = errors.New("trade order: invalid reduce-only direction")
+	ErrInstrumentDisabled = errors.New("标的不可交易")
+	ErrQuantityRule       = errors.New("数量不符合交易规则")
+	ErrNotionalLimit      = errors.New("超过单笔子单金额上限")
+	ErrInsufficientFunds  = errors.New("可用资金不足")
+	ErrLeverageLimit      = errors.New("杠杆超过上限")
+	ErrReduceOnly         = errors.New("只减仓订单无效")
 	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
 )
 

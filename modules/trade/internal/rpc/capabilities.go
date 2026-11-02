@@ -30,20 +30,20 @@ func ResolveExecutionCapabilities(
 			account.Status == exchange.AccountStatusEnabled,
 	}
 	if account.Status != exchange.AccountStatusEnabled {
-		capabilities.UnavailableReason = "trading account is disabled"
+		capabilities.UnavailableReason = "账户已停用"
 		return capabilities
 	}
 	if !account.Ready {
-		capabilities.UnavailableReason = "trading account is not ready"
+		capabilities.UnavailableReason = "账户未就绪"
 		return capabilities
 	}
 	if account.ExecutionMode == exchange.ExecutionModePaper && !matcherReady {
-		capabilities.UnavailableReason = "paper matcher is not ready"
+		capabilities.UnavailableReason = "模拟撮合未就绪"
 		return capabilities
 	}
 	if account.ExecutionMode == exchange.ExecutionModeLive &&
 		account.MarketDataEnvironment() == exchange.AccountEnvironmentProduction && !liveTradingEnabled {
-		capabilities.UnavailableReason = "production trading is disabled"
+		capabilities.UnavailableReason = "生产交易未开启"
 		return capabilities
 	}
 	capabilities.CanPlaceOrder = true

@@ -633,6 +633,24 @@ message GetExecutionCapabilitiesRsp {
   ExecutionCapabilities capabilities = 2;
 }
 
+message ListTradableInstrumentsReq {
+  string trading_account_id = 1;
+}
+
+// 数量都是基础资产数量，合约已按面值换算。
+message TradableInstrument {
+  string instrument_id = 1;
+  string quantity_step = 2;
+  string min_quantity = 3;
+  string min_notional = 4;
+  string price_tick = 5;
+}
+
+message ListTradableInstrumentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TradableInstrument instruments = 2;
+}
+
 message EquityPoint {
   int64 bucket_time = 1;
   string equity = 2;
@@ -707,6 +725,7 @@ service TradeConsoleService {
   rpc CreatePaperSimulation(CreatePaperSimulationReq) returns (CreatePaperSimulationRsp);
   rpc ClosePaperSimulation(ClosePaperSimulationReq) returns (ClosePaperSimulationRsp);
   rpc GetExecutionCapabilities(GetExecutionCapabilitiesReq) returns (GetExecutionCapabilitiesRsp);
+  rpc ListTradableInstruments(ListTradableInstrumentsReq) returns (ListTradableInstrumentsRsp);
   rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
 }

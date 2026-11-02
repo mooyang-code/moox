@@ -310,7 +310,7 @@ func (s *Service) flattenAccount(
 		reasons := make(map[string]string)
 		switch {
 		case !exchange.MarketType(account.MarketType).Valid():
-			result.Error = "unsupported market type " + account.MarketType
+			result.Error = "不支持的市场类型 " + account.MarketType
 		case !execution.InTradingSession(s.Venues, account.Exchange, time.Now()):
 			result.Error = "当前不在交易时段"
 		case exchange.RuleFor(account.MarketType).PositionFromBalance:
@@ -476,7 +476,7 @@ func (s *Service) flattenSwap(
 		}
 		instrument, found := bySymbol[position.ExchangeSymbol]
 		if !found {
-			reasons[position.ExchangeSymbol] = "position has no tradable instrument mapping"
+			reasons[position.ExchangeSymbol] = "持仓没有对应的可交易标的"
 			continue
 		}
 		if reason := quantityRuleReason(quantity.Abs(), instrument); reason != "" {
@@ -533,7 +533,7 @@ func (s *Service) flattenSpot(
 		}
 		instrument, found := byAsset[balance.Asset]
 		if !found {
-			reasons["asset:"+balance.Asset] = "asset has no settlement-market mapping"
+			reasons["asset:"+balance.Asset] = "资产没有对应结算资产的标的"
 			continue
 		}
 		available, err := decimalOrZero(balance.Available)
@@ -568,7 +568,7 @@ func (s *Service) flattenSpot(
 		}
 		if minNotional.Cmp(shared.Zero()) > 0 &&
 			quantity.Mul(quote.Price).Cmp(minNotional) < 0 {
-			reasons["asset:"+balance.Asset] = "quantity is below minimum notional"
+			reasons["asset:"+balance.Asset] = "金额低于最小名义金额"
 			continue
 		}
 		if err := s.placeOrContinueFlattenChildWithQuote(
@@ -911,7 +911,7 @@ func quantityRuleReason(
 	if quantity.Cmp(shared.Zero()) <= 0 ||
 		quantity.Cmp(minimum) < 0 ||
 		!quantity.Div(step).IsInteger() {
-		return "quantity is below minimum or not aligned to step"
+		return "数量低于最小值或不符合步长"
 	}
 	return ""
 }

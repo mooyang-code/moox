@@ -109,13 +109,20 @@ func (s *Service) CancelOrder(
 	defer unlock()
 	var action store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			command.SpaceID,
-			orderRecord.LogicalAccountID,
-			"PAUSED",
-			strings.TrimSpace(command.Reason),
-		); err != nil {
+		logical, err := tx.GetLogicalAccount(command.SpaceID, orderRecord.LogicalAccountID)
+		if err != nil {
 			return err
+		}
+		// 自主下单账户没有自动执行，撤单不需要暂停。
+		if logical.ControlMode != "MANUAL" {
+			if err := tx.SetLogicalAccountAutomation(
+				command.SpaceID,
+				orderRecord.LogicalAccountID,
+				"PAUSED",
+				strings.TrimSpace(command.Reason),
+			); err != nil {
+				return err
+			}
 		}
 		var ensureErr error
 		action, _, ensureErr = tx.EnsureOperatorAction(

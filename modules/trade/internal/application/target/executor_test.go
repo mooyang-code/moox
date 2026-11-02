@@ -549,7 +549,7 @@ func TestTargetExecutorRecordsBelowMinimumBlockedTarget(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Contains(t, target.BlockedTargets[0].Reason, "minimum")
+	require.Contains(t, target.BlockedTargets[0].Reason, "最小")
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -572,7 +572,7 @@ func TestTargetExecutorRecordsBelowMinimumNotionalAsBlocked(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+	require.Contains(t, target.BlockedTargets[0].Reason, "最小名义金额")
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -595,7 +595,7 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 		require.Len(t, target.BlockedTargets, 1)
 		require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
 		require.Equal(t, "12", target.BlockedTargets[0].Quantity)
-		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Contains(t, target.BlockedTargets[0].Reason, "标的")
 		require.Empty(t, fixture.orders.specs)
 	})
 
@@ -617,7 +617,7 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 		require.Len(t, target.BlockedTargets, 1)
 		require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 		require.Equal(t, "2", target.BlockedTargets[0].Quantity)
-		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Contains(t, target.BlockedTargets[0].Reason, "标的")
 		require.Empty(t, fixture.orders.specs)
 	})
 }
@@ -690,7 +690,7 @@ func TestTargetExecutorRecordsBlockedRemainingDelta(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
 	require.Equal(t, "-0.001", target.BlockedTargets[0].Quantity)
-	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+	require.Contains(t, target.BlockedTargets[0].Reason, "最小名义金额")
 }
 
 type targetFixture struct {

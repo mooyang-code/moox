@@ -25,7 +25,7 @@ func TestResolveExecutionCapabilitiesProductionGate(t *testing.T) {
 		false,
 		true,
 	)
-	if got.CanPlaceOrder || got.UnavailableReason != "production trading is disabled" {
+	if got.CanPlaceOrder || got.UnavailableReason != "生产交易未开启" {
 		t.Fatalf("capabilities = %+v, want production gate", got)
 	}
 }
@@ -37,7 +37,7 @@ func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 		false,
 		false,
 	)
-	if got.CanPlaceOrder || got.UnavailableReason != "paper matcher is not ready" {
+	if got.CanPlaceOrder || got.UnavailableReason != "模拟撮合未就绪" {
 		t.Fatalf("capabilities = %+v, want matcher gate", got)
 	}
 	ready := ResolveExecutionCapabilities(

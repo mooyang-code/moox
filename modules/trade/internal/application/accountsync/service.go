@@ -564,7 +564,7 @@ func (s *Service) resolveUnknownOrders(
 // awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
 var errBalanceNotConfirmed = errors.New("trade account sync: balance snapshot does not cover the pending fill or private update")
 
-const awaitingBalanceReason = "private fill awaiting balance sync"
+const awaitingBalanceReason = "成交待余额同步确认"
 
 func (s *Service) ApplyFill(
 	ctx context.Context,
@@ -1315,7 +1315,7 @@ func (s *Service) pauseForExternalFact(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 			"PAUSED",
-			"EXTERNAL order or fill detected on "+tradingAccountID,
+			"发现外部订单或成交 EXTERNAL："+tradingAccountID,
 		)
 	})
 }

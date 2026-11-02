@@ -119,6 +119,15 @@ func (r *ClosePaperSimulationReq) Validate() error {
 	}), "trading_account_id")
 }
 
+func (r *ListTradableInstrumentsReq) Validate() error {
+	return requireID(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.TradingAccountId
+	}), "trading_account_id")
+}
+
 func (r *GetExecutionCapabilitiesReq) Validate() error {
 	return requireID(r != nil, value(func() string {
 		if r == nil {

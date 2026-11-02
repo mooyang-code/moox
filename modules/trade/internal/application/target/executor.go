@@ -198,7 +198,7 @@ func (e *Executor) Converge(
 	}
 	for _, member := range members {
 		if member.account.Status != "ENABLED" || !member.account.Ready {
-			target.LastError = "member " + member.account.TradingAccountID + " is not ready"
+			target.LastError = "成员 " + member.account.TradingAccountID + " 未就绪"
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -231,7 +231,7 @@ func (e *Executor) Converge(
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
 				current.RunnerID != target.RunnerID:
 			reason := fmt.Sprintf(
-				"%s order %s conflicts with automatic target execution",
+				"%s 订单 %s 与自动执行冲突",
 				current.OwnerType, current.OrderID,
 			)
 			if err := e.pauseLogicalAccount(ctx, logicalAccount, target, reason); err != nil {
@@ -478,7 +478,7 @@ func (e *Executor) loadMembers(
 						InstrumentID: balance.Asset,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
-							": asset has no unique tradable instrument mapping",
+							"：资产没有唯一可交易的标的",
 					})
 					continue
 				}
@@ -510,7 +510,7 @@ func (e *Executor) loadMembers(
 						InstrumentID: position.ExchangeSymbol,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
-							": position has no tradable instrument mapping",
+							"：持仓没有对应的可交易标的",
 					})
 					continue
 				}
@@ -644,7 +644,7 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"position has no tradable instrument mapping", nil
+					"持仓没有对应的可交易标的", nil
 			}
 			return laneAction{
 				member: member, instrument: instrument,
@@ -673,7 +673,7 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"position has no tradable instrument mapping", nil
+					"持仓没有对应的可交易标的", nil
 			}
 			return laneAction{
 				member: member, instrument: instrument,
@@ -689,7 +689,7 @@ func nextLaneAction(
 			}, false, "", nil
 		}
 	}
-	return laneAction{}, false, "no enabled member supports instrument", nil
+	return laneAction{}, false, "没有启用的成员支持该标的", nil
 }
 
 func positionsByAbsoluteSize(
@@ -789,7 +789,7 @@ func (e *Executor) placeAction(
 			return false, "", err
 		}
 		if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 {
-			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": child notional limit is below Exchange minimum quantity")
+			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
 		belowMinimum, err := belowMinimumNotional(
@@ -804,7 +804,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(
 				capacityErrors,
 				candidate.member.account.TradingAccountID+
-					": notional is below Exchange minimum",
+					": 金额低于交易所最小名义金额",
 			)
 			continue
 		}
@@ -836,7 +836,7 @@ func (e *Executor) placeAction(
 				return false, "", err
 			}
 			if capacity.Cmp(shared.Zero()) <= 0 {
-				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": no executable capacity")
+				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
 				continue
 			}
 			if capacity.Cmp(spec.Quantity) < 0 {
@@ -877,9 +877,9 @@ func (e *Executor) placeAction(
 		return true, "", nil
 	}
 	if len(capacityErrors) == 0 {
-		return false, "quantity is below Exchange minimum", nil
+		return false, "数量低于交易所最小值", nil
 	}
-	return false, "insufficient member capacity: " +
+	return false, "成员容量不足：" +
 		strings.Join(capacityErrors, "; "), nil
 }
 
@@ -975,7 +975,7 @@ func (e *Executor) childQuantity(
 	}
 	quantity := floorToStep(action.delta.Abs(), step)
 	if quantity.IsZero() || quantity.Cmp(minimum) < 0 {
-		return shared.Zero(), "quantity is below Exchange minimum", nil
+		return shared.Zero(), "数量低于交易所最小值", nil
 	}
 	return quantity, "", nil
 }

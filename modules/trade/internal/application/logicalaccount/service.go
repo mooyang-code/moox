@@ -441,7 +441,7 @@ func (s *Service) readiness(
 	}
 	reasons := make([]string, 0)
 	if len(members) == 0 {
-		reasons = append(reasons, "no enabled members")
+		reasons = append(reasons, "没有启用的成员")
 	}
 	now := s.now()
 	for _, member := range members {
@@ -453,13 +453,13 @@ func (s *Service) readiness(
 		}
 		switch {
 		case account.Status != "ENABLED":
-			reasons = append(reasons, account.TradingAccountID+" is disabled")
+			reasons = append(reasons, account.TradingAccountID+" 已停用")
 		case !account.Ready:
-			reasons = append(reasons, account.TradingAccountID+" is not ready")
+			reasons = append(reasons, account.TradingAccountID+" 未就绪")
 		case account.LastSyncAt <= 0:
-			reasons = append(reasons, account.TradingAccountID+" has no initial sync")
+			reasons = append(reasons, account.TradingAccountID+" 尚未完成首次同步")
 		case s.snapshotStale(now, account.LastSyncAt):
-			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
+			reasons = append(reasons, account.TradingAccountID+" 账户快照已过期")
 		}
 		orders, listErr := s.Store.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
 		if listErr != nil {
@@ -469,13 +469,13 @@ func (s *Service) readiness(
 			if current.State == "SUBMITTING" || current.State == "SUBMIT_UNKNOWN" {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" has unresolved submit "+current.OrderID,
+					account.TradingAccountID+" 有未确认的提交订单 "+current.OrderID,
 				)
 			}
 			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" has EXTERNAL order "+current.OrderID,
+					account.TradingAccountID+" 有外部订单 EXTERNAL "+current.OrderID,
 				)
 			}
 		}
@@ -491,7 +491,7 @@ func (s *Service) readiness(
 	case targetErr == nil:
 		if target.InstanceID == "" || target.SessionID == "" ||
 			target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
-			reasons = append(reasons, "target session does not own logical account")
+			reasons = append(reasons, "目标所属会话不再持有组合账户")
 		}
 		// Resume enables automation, not an expired target. Execution waits
 		// for the next valid target and checks its validity window itself.

@@ -187,7 +187,7 @@ func TestFlattenReportsPartialRemainingPositionsAndEndsPaused(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "PARTIAL", result.Action.Status)
 	require.NotEmpty(t, result.Accounts[0].Remaining)
-	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "minimum")
+	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "最小值")
 	account, err := fixture.store.GetLogicalAccount(
 		context.Background(), "space-1", "logical-1",
 	)

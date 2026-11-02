@@ -19,12 +19,12 @@ import (
 var (
 	ErrIdempotencyConflict = errors.New("trade order: idempotency conflict")
 	ErrServiceConfig       = errors.New("trade order: service is not configured")
-	ErrCrossZero           = errors.New("trade order: order cannot cross zero")
-	ErrExternalConflict    = errors.New("trade order: active external order conflicts with target")
-	ErrAutomationPaused    = errors.New("trade order: logical account automation is paused")
+	ErrCrossZero           = errors.New("订单不能跨过零持仓")
+	ErrExternalConflict    = errors.New("存在外部活动订单")
+	ErrAutomationPaused    = errors.New("组合账户自动执行已暂停")
 	ErrTargetOwnerConflict = errors.New("trade order: target runner no longer owns logical account")
 	ErrTargetExpired       = errors.New("trade order: target validity window elapsed")
-	ErrAccountNotReady     = errors.New("trade order: exchange account is not ready")
+	ErrAccountNotReady     = errors.New("账户未就绪")
 )
 
 type AdapterSource interface {
@@ -1079,7 +1079,7 @@ func (s *Service) submit(
 		_, err = current.MarkSubmitUnknown()
 	default:
 		_, err = current.Reject()
-		latest.RejectReason = callErr.Error()
+		latest.RejectReason = exchange.RejectMessage(callErr)
 	}
 	if err != nil {
 		return orderdomain.Order{}, false, err
