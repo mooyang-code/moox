@@ -14,9 +14,6 @@ type setupUnitDeploy func(context.Context, *setupconfig.Snapshot, unitdeploy.Uni
 func newSetupDeployUnitCommand(deps setupDeps) *cobra.Command {
 	var file, source string
 	var options unitdeploy.UnitOptions
-	if deps.deployUnit == nil {
-		deps.deployUnit = unitdeploy.DeployUnit
-	}
 	command := &cobra.Command{Use: "deploy-unit", Short: "通过已核验 SSH 部署业务单元", Long: "先完成核心初始化及目标主机部署，再安装该主机已登记的 access、egress-proxy、trade、collector-stream、storage、factor-engine 或 archive-worker 单元（collector-stream 首次安装也走这里，之后的二进制升级可用 native-release.sh install）。factor-engine 与 archive-worker 是外部程序：软件包随版本制品交付，由 systemd 用户服务托管（目标机需开启 linger），主机或部署在 Admin 里已停用时只安装文件、不启动；归档根目录取 moox.toml 的 [paths] archive_root。纯 Go 默认在本机构建；Storage 必须通过 --binary-dir 使用已构建的 Linux CGO 制品（setup build-linux 在本机 Docker 里构建）。重试复用原始软件、身份和配置，保留暂停状态；结果仅表示所选单元，不代表完整系统初始化成功。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
 		if options.HostID == "" || options.Profile == "" || options.Profile == "host" {
 			return errors.New("deploy-unit requires --host and a business --profile")

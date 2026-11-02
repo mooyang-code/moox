@@ -108,7 +108,7 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 	if err != nil {
 		return err
 	}
-	timer.RegisterHandlerService(s.Service(service), job.Handle)
+	timer.RegisterHandlerService(s.Service(service), timerjob.KeepRunning(name, job.Handle))
 	return nil
 }
 

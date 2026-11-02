@@ -105,13 +105,17 @@ func blockers(reports []HostReport) []string {
 	}
 	for _, report := range reports {
 		if !report.OwnerOK {
-			add(report, "部署目录不属于这次配置的 SSH 用户，旧的看护任务和服务在原用户名下，看不到也清不掉。请改用原部署用户")
+			if len(report.Entries) == 0 {
+				add(report, "部署目录是空的，但不属于这次配置的 SSH 用户。有 sudo 权限的话，在这台主机上运行 sudo chown $(id -un):$(id -gn) <部署目录>（部署目录见 moox.toml 的 [paths]）后重试")
+			} else {
+				add(report, "部署目录不属于这次配置的 SSH 用户，旧的看护任务和服务在原用户名下，看不到也清不掉。请改用原部署用户")
+			}
 		}
 		if !report.ModeOK {
 			add(report, "部署目录不是普通目录，或者组和其他用户可写")
 		}
 		if !report.ParentWritable {
-			add(report, "部署目录不存在，上级目录也不可写")
+			add(report, "部署目录不存在，上级目录也不可写。有 sudo 权限的话，在这台主机上运行 sudo install -d -o $(id -un) -g $(id -gn) -m 0755 <部署目录>（部署目录见 moox.toml 的 [paths]）后重试")
 		}
 		if report.ForeignFiles {
 			add(report, "部署目录里有不属于 SSH 用户的文件，清除时删不掉")

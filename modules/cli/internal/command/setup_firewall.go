@@ -45,7 +45,11 @@ func newSetupFirewallCommand(deps setupDeps) *cobra.Command {
 			}
 			defer clearSetupSecrets(snapshot)
 			if !yes {
-				return writePreview(cmd, map[string]any{"action": "open_firewall_ports", "targets": setupFirewallPreview(setupFirewallTargets(snapshot.Manifest))})
+				targets, err := setupFirewallTargets(snapshot.Manifest)
+				if err != nil {
+					return err
+				}
+				return writePreview(cmd, map[string]any{"action": "open_firewall_ports", "targets": setupFirewallPreview(targets)})
 			}
 			result, err := deps.ensureFirewall(cmd.Context(), snapshot)
 			if err != nil {
@@ -81,7 +85,11 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 	if snapshot == nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
 	}
-	return ensureFirewallTargets(ctx, snapshot.Manifest, setupFirewallTargets(snapshot.Manifest))
+	targets, err := setupFirewallTargets(snapshot.Manifest)
+	if err != nil {
+		return setupFirewallSummary{}, err
+	}
+	return ensureFirewallTargets(ctx, snapshot.Manifest, targets)
 }
 
 // setupEnsureRelayFirewall 在部署只能出站的主机之前，经腾讯云接口确认 control 的跨主机端口（反向连接）
@@ -236,7 +244,7 @@ func setupFirewallAddress(ctx context.Context, address string) (string, error) {
 	return eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
 }
 
-func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
+func setupFirewallTargets(manifest setupconfig.Manifest) ([]setupFirewallTarget, error) {
 	byAddress := make(map[string]int)
 	targets := make([]setupFirewallTarget, 0, len(manifest.Hosts()))
 	add := func(host setupconfig.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
@@ -277,38 +285,50 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 		}
 	}
 	for _, host := range manifest.Hosts() {
-		add(host, healthProbeFirewallRules(manifest, host))
+		rules, err := healthProbeFirewallRules(manifest, host)
+		if err != nil {
+			return nil, err
+		}
+		add(host, rules)
 	}
-	return targets
+	return targets, nil
 }
 
 // healthProbeFirewallRules 是 Monitor（在控制机上）探测其他直连主机上组件健康端口需要的规则：只放行控制机地址。
 // 健康端口本身还有签名鉴权；控制机自己的组件由本机探测，不需要放行。
-func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Host) []cloudtencent.CreateFirewallRulesOptions {
+// 组件要按完整拓扑算：Host Gateway、Host Agent 是自动补入的，不在 manifest.Deployments 里，Monitor 一样会探测。
+func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Host) ([]cloudtencent.CreateFirewallRulesOptions, error) {
 	control := manifest.ControlHost()
 	if strings.EqualFold(strings.TrimSpace(host.Name), strings.TrimSpace(control.Name)) || !isPublicFirewallIP(control.Address) {
-		return nil
+		return nil, nil
 	}
 	// 与控制机同一地域且有私网地址的主机，Monitor 走私网探测，不经过公网防火墙（与 Monitor 部署同步的规则一致）。
 	if host.PrivateAddress != "" && host.Region != "" && host.Region == control.Region {
-		return nil
+		return nil, nil
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	topology, err := manifest.Topology()
+	if err != nil {
+		return nil, err
 	}
 	var rules []cloudtencent.CreateFirewallRulesOptions
-	for _, id := range manifest.Deployments[host.Name] {
-		component, ok := catalog.Component(id)
+	for _, deployment := range topology.Deployments {
+		if deployment.HostID != host.Name {
+			continue
+		}
+		component, ok := catalog.Component(deployment.ComponentID)
 		if !ok || component.Health.Kind != "readyz" || component.Health.Port <= 0 || component.Health.Loopback {
 			continue
 		}
 		rules = append(rules, cloudtencent.CreateFirewallRulesOptions{
 			Protocol: "TCP", Ports: fmt.Sprint(component.Health.Port), CidrBlock: control.Address + "/32",
-			Action: "ACCEPT", Description: "MooX Monitor health probe " + id,
+			Action: "ACCEPT", Description: "MooX Monitor health probe " + component.ID,
 		})
 	}
-	return rules
+	return rules, nil
 }
 
 func setupconfigHostConfigured(host setupconfig.Host) bool {

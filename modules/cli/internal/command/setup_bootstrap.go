@@ -24,12 +24,6 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	var file, source, stage string
 	var options unitdeploy.DeployOptions
 	var control unitdeploy.ControlOptions
-	if deps.bootstrapAdmin == nil {
-		deps.bootstrapAdmin = unitdeploy.BootstrapAdmin
-	}
-	if deps.bootstrapControl == nil {
-		deps.bootstrapControl = unitdeploy.BootstrapControl
-	}
 	command := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "通过已核验 SSH 初始化核心或完整控制服务",

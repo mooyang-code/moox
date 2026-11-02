@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,9 @@ import (
 
 // setupVerifyPoll 是验收轮询的间隔：K 线按分钟到，不用查得更勤。
 const setupVerifyPoll = 10 * time.Second
+
+// requiredPasses 是验收要连续通过的轮数。
+const requiredPasses = 2
 
 func newSetupVerifyCommand(deps setupDeps) *cobra.Command {
 	var file, spaceID string
@@ -77,10 +81,22 @@ func runSetupVerifySpace(ctx context.Context, file string, snapshot *setupconfig
 	if err != nil {
 		return nil, err
 	}
+	var failures []string
 	for _, check := range checks {
-		if check.Status == verify.Fail {
-			return checks, fmt.Errorf("%s: %s。先看 moox-cli collector kline status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID)
+		if check.Status != verify.Fail {
+			continue
 		}
+		switch check.Code {
+		case verify.CodeMonitorUnhealthy:
+			failures = append(failures, fmt.Sprintf("%s: %s。先看 moox-cli doctor alerts；远程健康检查超时多半是端口没放行，运行 moox-cli setup firewall --yes", check.Code, check.Detail))
+		case verify.CodeMonitorUnreadable:
+			failures = append(failures, fmt.Sprintf("%s: %s。用 setup logs --component monitor 查 Monitor", check.Code, check.Detail))
+		default:
+			failures = append(failures, fmt.Sprintf("%s: %s。先看 moox-cli collector status --space-id %s，再用 setup logs 查对应组件", check.Code, check.Detail, spaceID))
+		}
+	}
+	if len(failures) != 0 {
+		return checks, errors.New(strings.Join(failures, "\n"))
 	}
 	return checks, unitdeploy.MarkStep(options.StateDirectory, unitdeploy.VerifiedStep(spaceID))
 }
@@ -94,6 +110,7 @@ func runSetupVerify(ctx context.Context, source setupVerifySource, timeout, poll
 	deadline := time.Now().Add(timeout)
 	baseline := map[string]int64{}
 	started := false
+	passes := 0
 	for {
 		input, err := source.read(ctx, baseline)
 		var checks []verify.Check
@@ -113,8 +130,16 @@ func runSetupVerify(ctx context.Context, source setupVerifySource, timeout, poll
 		default:
 			checks = verify.Evaluate(input)
 		}
-		if verify.Settled(checks) {
+		switch {
+		case !verify.Settled(checks):
+			passes = 0
+		case slices.ContainsFunc(checks, func(check verify.Check) bool { return check.Status == verify.Fail }):
 			return checks, nil
+		default:
+			// 反复退出的组件可能某一轮碰巧正常，连续两轮都通过才算。
+			if passes++; passes >= requiredPasses {
+				return checks, nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			return verify.Finish(checks), nil
@@ -223,7 +248,44 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 		return input, err
 	}
 	input.Instances = instances
+	if input.CriticalAlerts, err = readCriticalAlerts(ctx, r.gateway, r.spaceID); err != nil {
+		input.MonitorError = err.Error()
+	}
 	return input, nil
+}
+
+// readCriticalAlerts 只看这个空间：其他没启动的空间有告警是正常的，不能拦住这次验收。组件和主机不分空间，都在结果里。
+func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway, spaceID string) ([]string, error) {
+	overview, err := doctorcli.New(gateway).GetHealthOverview(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items), nil
+}
+
+// criticalAlertLines 列出 critical 项。同一个组件既有告警又有状态项，只算一项。
+func criticalAlertLines(items []doctorcli.AlertItem) []string {
+	var components []string
+	for _, item := range items {
+		if item.Source == doctorcli.AlertSourceComponent {
+			components = append(components, item.Object)
+		}
+	}
+	var alerts []string
+	for _, item := range items {
+		if item.Severity != doctorcli.AlertSeverityCritical {
+			continue
+		}
+		duplicate := item.Source == doctorcli.AlertSourceAlert && slices.ContainsFunc(components, func(object string) bool {
+			return strings.Contains(item.Object+"/", "/"+object+"/")
+		})
+		if duplicate {
+			continue
+		}
+		parts := slices.DeleteFunc([]string{item.Object, item.Title, item.Reason}, func(text string) bool { return text == "" })
+		alerts = append(alerts, strings.Join(parts, " "))
+	}
+	return alerts
 }
 
 // readStrategyInstances 读空间的策略实例。CLI 不依赖策略模块的协议包，这里按 JSON 取需要的字段。

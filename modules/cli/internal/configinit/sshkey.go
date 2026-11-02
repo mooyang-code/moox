@@ -176,7 +176,7 @@ func (systemProber) Login(ctx context.Context, target SSHTarget) (LoginReport, e
 	case errors.Is(err, setupssh.ErrAuthFailed):
 		return LoginReport{}, nil
 	case err != nil:
-		return LoginReport{}, unreachable(target)
+		return LoginReport{}, connectError(target, err)
 	}
 	client.Close()
 	return LoginReport{Ready: true}, nil
@@ -191,10 +191,8 @@ func (systemProber) Trust(ctx context.Context, target SSHTarget, fingerprint str
 		return nil
 	case errors.Is(err, setupssh.ErrFingerprintMismatch):
 		return resettable("%s 现在给出的主机指纹和刚才页面上确认的不一致：可能是这台机器刚重装过，也可能连接被别人替换了。请点「重置并重新获取指纹」，再对照腾讯云控制台里的指纹核对一次", target.Address)
-	case errors.Is(err, setupssh.ErrHostKeyStoreInvalid):
-		return resettable("没能记录 %s 的主机指纹：这台电脑上保存指纹的文件（~/.config/moox/known_hosts）损坏或权限不对。点「重置并重新获取指纹」会修复它并重新开始", target.Address)
 	}
-	return unreachable(target)
+	return connectError(target, err)
 }
 
 // Reset 删除本机记录的这台主机的指纹；之后再检测会重新要求核对。
@@ -234,7 +232,7 @@ func (p systemProber) Authorize(ctx context.Context, target SSHTarget, password 
 	case errors.Is(err, setupssh.ErrAuthFailed):
 		return fmt.Errorf("用密码登录 %s 失败，请检查用户名和密码（服务器需要允许密码登录）", target.Address)
 	case err != nil:
-		return unreachable(target)
+		return connectError(target, err)
 	}
 	defer client.Close()
 	result, err := client.Run(ctx, []string{"sh", "-c", authorizeScript}, strings.NewReader(key.PublicKey+"\n"))
@@ -242,6 +240,17 @@ func (p systemProber) Authorize(ctx context.Context, target SSHTarget, password 
 		return fmt.Errorf("已登录 %s，但写入 ~/.ssh/authorized_keys 失败", target.Address)
 	}
 	return nil
+}
+
+// connectError 把连接失败分开说：本机指纹文件的问题不是网络问题，不能让用户去查服务器。
+func connectError(target SSHTarget, err error) error {
+	switch {
+	case errors.Is(err, setupssh.ErrHostKeyStoreInvalid):
+		return resettable("这台电脑上保存主机指纹的文件（~/.config/moox/known_hosts）损坏或权限不对，和 %s 的网络无关。点「重置并重新获取指纹」会修复它并重新开始", target.Address)
+	case errors.Is(err, setupssh.ErrUnreachable):
+		return unreachable(target)
+	}
+	return fmt.Errorf("连接 %s 失败：%w", target.Address, err)
 }
 
 func unreachable(target SSHTarget) error {

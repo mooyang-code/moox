@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/report"
+	"github.com/mooyang-code/moox/packages/timerjob"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -65,7 +66,7 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 			}()
 		})
 	}
-	timer.RegisterHandlerService(service, func(ctx context.Context) error {
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("factor_metrics", func(ctx context.Context) error {
 		if err := observer.observe(ctx); err != nil {
 			log.WarnContextf(ctx, "factor dataset metrics not refreshed: %v", err)
 		}
@@ -78,6 +79,6 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 			}
 		}
 		return handler.Handle(ctx)
-	})
+	}))
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
+	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -69,6 +70,6 @@ func registerSampleHandler(s *server.Server, handler func(context.Context) error
 	if service == nil {
 		return fmt.Errorf("hostagent sample timer service %q is not configured", sampleTimerService)
 	}
-	timer.RegisterHandlerService(service, handler)
+	timer.RegisterHandlerService(service, timerjob.KeepRunning("hostagent_sample", handler))
 	return nil
 }

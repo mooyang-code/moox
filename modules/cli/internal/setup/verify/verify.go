@@ -3,6 +3,7 @@ package verify
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,10 +23,15 @@ const (
 	CodeKlineNotArrived      = "kline_not_arrived"
 	CodeFactorNotAdvancing   = "factor_not_advancing"
 	CodeStrategyNotRunning   = "strategy_not_running"
+	CodeMonitorUnhealthy     = "monitor_unhealthy"
+	CodeMonitorUnreadable    = "monitor_unreadable"
 )
 
 // maxMissingRatio 是允许的 K 线缺失比例：到截止时间就带缺口结算，缺口靠之后补采，要求零缺失可能永远走不完。
 const maxMissingRatio = 0.05
+
+// maxAlertsShown 是报错里最多列出的告警数，全部内容看 doctor alerts。
+const maxAlertsShown = 5
 
 // firstBarWait 是生效周期之后等第一根 K 线的时间：超过它 expected 仍是 0，说明这段时间本来就没有 K 线（休市）。
 const firstBarWait = 3 * time.Minute
@@ -70,6 +76,10 @@ type Input struct {
 	FactorDeployed bool
 	Factors        []Factor
 	Instances      []Instance
+	// CriticalAlerts 是这个空间和各组件、主机 critical 级别的问题，来源和 doctor alerts --space 相同。
+	CriticalAlerts []string
+	// MonitorError 是读不到 Monitor 的原因：Monitor 可能还在启动，不影响其他检查。
+	MonitorError string
 }
 
 // Check 是一项检查的结果。
@@ -83,7 +93,23 @@ type Check struct {
 // Evaluate 判断这一轮的结果。这里只给 pass、wait、skip：等到超时才算失败，由 Finish 转换。
 func Evaluate(in Input) []Check {
 	kline := klines(in)
-	return []Check{plan(in), kline, factors(in, kline.Status == Skip), strategies(in)}
+	return []Check{plan(in), kline, factors(in, kline.Status == Skip), strategies(in), monitor(in)}
+}
+
+// monitor 只看 critical：新装后要等首轮探测和新数据，所以先等，到时限还在才算失败。
+func monitor(in Input) Check {
+	check := Check{Name: "monitor", Code: CodeMonitorUnhealthy, Status: Wait}
+	switch count := len(in.CriticalAlerts); {
+	case in.MonitorError != "":
+		check.Code, check.Detail = CodeMonitorUnreadable, "读不到 Monitor："+in.MonitorError
+	case count == 0:
+		return Check{Name: "monitor", Status: Pass}
+	case count > maxAlertsShown:
+		check.Detail = fmt.Sprintf("共 %d 项，前 %d 项：%s", count, maxAlertsShown, strings.Join(in.CriticalAlerts[:maxAlertsShown], "；"))
+	default:
+		check.Detail = strings.Join(in.CriticalAlerts, "；")
+	}
+	return check
 }
 
 func plan(in Input) Check {

@@ -3,6 +3,8 @@ package command
 import (
 	"context"
 	"errors"
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
+	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"testing"
 	"time"
 
@@ -58,6 +60,78 @@ func (s *flakyVerifySource) read(ctx context.Context, baseline map[string]int64)
 	return s.fakeVerifySource.read(ctx, baseline)
 }
 
+type alertingVerifySource struct {
+	fakeVerifySource
+	alerts []string
+}
+
+func (s *alertingVerifySource) read(ctx context.Context, baseline map[string]int64) (verify.Input, error) {
+	in, err := s.fakeVerifySource.read(ctx, baseline)
+	in.CriticalAlerts = s.alerts
+	return in, err
+}
+
+// 数据都到了但 Monitor 还有 critical 告警时，不能算装好。
+func TestRunSetupVerifyFailsWhenMonitorKeepsCriticalAlerts(t *testing.T) {
+	source := &alertingVerifySource{alerts: []string{"storage host-agent 健康检查超时"}}
+	checks, err := runSetupVerify(context.Background(), source, 5*time.Millisecond, time.Millisecond)
+	require.NoError(t, err)
+	last := checks[len(checks)-1]
+	require.Equal(t, "monitor", last.Name)
+	require.Equal(t, verify.Fail, last.Status)
+	require.Equal(t, verify.CodeMonitorUnhealthy, last.Code)
+	require.Contains(t, last.Detail, "host-agent")
+}
+
+type flappingVerifySource struct {
+	alertingVerifySource
+	reads int
+}
+
+// 第一轮之后交替出现告警：碰巧干净的一轮不能算通过。
+func (s *flappingVerifySource) read(ctx context.Context, baseline map[string]int64) (verify.Input, error) {
+	s.reads++
+	s.alerts = nil
+	if s.reads%2 == 0 {
+		s.alerts = []string{"storage host-agent 反复退出"}
+	}
+	return s.alertingVerifySource.read(ctx, baseline)
+}
+
+func TestRunSetupVerifyRequiresConsecutivePasses(t *testing.T) {
+	source := &flappingVerifySource{}
+	checks, err := runSetupVerify(context.Background(), source, 20*time.Millisecond, time.Millisecond)
+	require.NoError(t, err)
+	require.False(t, verify.Settled(checks) && checks[len(checks)-1].Status == verify.Pass && source.reads < 4)
+	require.Greater(t, source.reads, 4)
+}
+
+func TestCriticalAlertLinesCountEachComponentOnce(t *testing.T) {
+	lines := criticalAlertLines([]doctorcli.AlertItem{
+		{Source: doctorcli.AlertSourceAlert, Severity: doctorcli.AlertSeverityCritical, Object: "component/storage/host-agent", Title: "健康检查超时"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityCritical, Object: "storage/host-agent", Title: "storage / host-agent"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityWarning, Object: "storage/access", Title: "storage / access"},
+		{Source: doctorcli.AlertSourceHost, Severity: doctorcli.AlertSeverityCritical, Object: "overseas", Title: "主机 overseas"},
+	})
+	require.Equal(t, []string{"storage/host-agent storage / host-agent", "overseas 主机 overseas"}, lines)
+}
+
+func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
+	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
+	last := checks[len(checks)-1]
+	require.Equal(t, verify.Wait, last.Status)
+	require.Equal(t, verify.CodeMonitorUnreadable, last.Code)
+	require.Contains(t, last.Detail, "读不到 Monitor")
+}
+
+func TestSetupVerifyListsOnlyTheFirstAlerts(t *testing.T) {
+	alerts := []string{"a", "b", "c", "d", "e", "f", "g"}
+	checks := verify.Evaluate(verify.Input{Now: time.Now(), CriticalAlerts: alerts})
+	detail := checks[len(checks)-1].Detail
+	require.Contains(t, detail, "共 7 项")
+	require.NotContains(t, detail, "f")
+}
+
 func TestRunSetupVerifySurvivesTransientReadErrors(t *testing.T) {
 	source := &flakyVerifySource{fakeVerifySource: fakeVerifySource{ready: 1}, failures: 2}
 	checks, err := runSetupVerify(context.Background(), source, time.Second, time.Millisecond)
@@ -91,6 +165,9 @@ func (g fakeVerifyGateway) Invoke(_ context.Context, _, method string, req, rsp 
 		out.Expected, out.Missing = 3, 0
 	case *factorpb.ListFactorTasksRsp:
 		proto.Merge(out, g.factors)
+	case *monitorpb.GetHealthOverviewRsp:
+		out.RetInfo = &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+		out.Overview = &monitorpb.HealthOverview{}
 	default:
 		return errors.New("unexpected " + method)
 	}

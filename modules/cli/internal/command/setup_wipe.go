@@ -163,9 +163,6 @@ func newSetupWipeCommand(deps setupDeps) *cobra.Command {
 	var yes, acceptTradeRisk, killOutside, cleanFunctions bool
 	var expectFunctions string
 	var options unitdeploy.DeployOptions
-	if deps.regionCloud == nil {
-		deps.regionCloud = defaultSetupRegionCloud
-	}
 	cmd := &cobra.Command{
 		Use:   "wipe",
 		Short: "彻底清除 moox.toml 所列主机上全部 MooX 旧程序和数据（默认只预览，不可恢复）",

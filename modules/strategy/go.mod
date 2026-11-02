@@ -3,6 +3,7 @@ module github.com/mooyang-code/moox/modules/strategy
 go 1.27.2
 
 require (
+	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
@@ -165,3 +166,5 @@ replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hos
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob

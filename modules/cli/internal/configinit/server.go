@@ -296,7 +296,8 @@ func (s *session) checkFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := s.probe(r.Context(), target)
 	if err != nil {
-		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		var fixable *resettableError
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error(), Resettable: errors.As(err, &fixable)})
 		return
 	}
 	reply(w, http.StatusOK, response{OK: true, Report: &report})

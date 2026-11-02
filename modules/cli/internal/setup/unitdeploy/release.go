@@ -269,11 +269,14 @@ func packageHasHelper(host unitpackage.Result, digest string) bool {
 }
 
 // cleanCommit 返回仓库当前提交；工作区有未提交改动时拒绝，保证版本制品能对应到一个提交。
+// 只有产物包目录（没有 .git）才用产物包记录的提交：在 Git 仓库里改过代码再构建，不能显示成官方提交。
 func cleanCommit(ctx context.Context, repository string) (string, error) {
-	if manifest, ok, err := bundle.Load(repository); err != nil {
-		return "", err
-	} else if ok {
-		return manifest.Commit, nil
+	if _, err := os.Stat(filepath.Join(repository, ".git")); errors.Is(err, os.ErrNotExist) {
+		if manifest, ok, err := bundle.Load(repository); err != nil {
+			return "", err
+		} else if ok {
+			return manifest.Commit, nil
+		}
 	}
 	status, err := exec.CommandContext(ctx, "git", "-C", repository, "status", "--porcelain").Output()
 	if err != nil {

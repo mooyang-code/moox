@@ -81,7 +81,8 @@ func Dial(ctx context.Context, target Target, password string, opts Options) (Cl
 	if err := validateTarget(target); err != nil {
 		return nil, err
 	}
-	knownHostsPath, err := secureKnownHostsPath(opts.KnownHostsPath, false)
+	// 第一次使用时指纹文件还不存在：建一个空文件，未知主机照样要用户确认。
+	knownHostsPath, err := secureKnownHostsPath(opts.KnownHostsPath, true)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +208,7 @@ func resolveKnownHostsPath(path string) (string, error) {
 }
 
 // ForgetHost 删除本机已记录的这台主机的全部指纹，让下一次连接重新走“核对并确认指纹”。
-// 机器重装、换机后指纹变了，或指纹文件损坏、权限不对时使用；其他主机的记录原样保留。
+// 机器重装、换机后指纹变了，或指纹文件损坏、权限不对时使用；其他主机的记录保留（文件其他行也损坏时整个移开）。
 // 指纹文件是符号链接或目录时先改名留底，之后确认指纹会重新创建。
 func ForgetHost(target Target, opts Options) error {
 	if err := validateTarget(target); err != nil {
@@ -256,6 +257,12 @@ func ForgetHost(target Target, opts Options) error {
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return ErrHostKeyStoreInvalid
+	}
+	// 其他行损坏时删掉这一台也修不好，整个文件移开，避免页面反复提示重置。
+	if _, err := knownhosts.New(path); err != nil {
+		if err := os.Rename(path, path+".bak-"+time.Now().Format("20060102-150405")); err != nil {
+			return ErrHostKeyStoreInvalid
+		}
 	}
 	return nil
 }

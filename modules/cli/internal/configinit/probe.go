@@ -92,7 +92,7 @@ func (systemProber) Probe(ctx context.Context, target SSHTarget) (ProbeReport, e
 	case errors.Is(err, setupssh.ErrHostKeyUnknown), errors.Is(err, setupssh.ErrAuthFailed):
 		return ProbeReport{}, fmt.Errorf("还不能免密登录 %s，请先在「免密登录」一步完成授权", target.Address)
 	case err != nil:
-		return ProbeReport{}, unreachable(target)
+		return ProbeReport{}, connectError(target, err)
 	}
 	defer client.Close()
 	output, err := runRemote(ctx, client)

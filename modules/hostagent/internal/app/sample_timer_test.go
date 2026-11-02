@@ -3,16 +3,21 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/hostagent/internal/eventpublisher"
 	hostagentpb "github.com/mooyang-code/moox/modules/hostagent/proto/hostagentgen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -146,19 +151,79 @@ func TestSampleTimerStartAtOnceRunsBeforeServerStartupCompletes(t *testing.T) {
 	require.NoError(t, <-serveDone)
 }
 
-func TestSampleTimerStartAtOnceErrorFailsServerStartup(t *testing.T) {
+// 锁定定时器库的行为：首次执行的错误会让服务退出，这就是定时任务都要走 KeepRunning 的原因。
+func TestTimerLibraryStopsServerOnStartupError(t *testing.T) {
 	server := newImmediateSampleTimerServer()
 	want := errors.New("initial sample failed")
-	require.NoError(t, registerSampleHandler(server, func(context.Context) error { return want }))
-	err := server.Serve()
-	assert.ErrorContains(t, err, want.Error())
+	timer.RegisterHandlerService(server.Service(sampleTimerService), func(context.Context) error { return want })
+	assert.ErrorContains(t, server.Serve(), want.Error())
 }
 
-func newImmediateSampleTimerServer() *server.Server {
+func TestRegisteredSampleTimerSurvivesEventBusFailureAndRecovers(t *testing.T) {
+	a := testAgent(t)
+	a.collector = fakeSnapshotCollector{snapshot: testSnapshot()}
+	var available atomic.Bool
+	a.newPublisher = func(context.Context) (eventpublisher.Publisher, error) {
+		if !available.Load() {
+			return nil, errors.New("eventbus unavailable")
+		}
+		return &fakeEventPublisher{ready: true}, nil
+	}
+	s := newImmediateSampleTimerServer("*/1 * * * * *?startAtOnce=1")
+	require.NoError(t, RegisterSampleTimer(s, a))
+	serveDone := serveSampleTimer(t, s, a)
+	require.Eventually(t, func() bool { return a.dropped.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
+	rr := httptest.NewRecorder()
+	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	select {
+	case err := <-serveDone:
+		serveDone <- err
+		t.Fatalf("EventBus failure stopped sample timer: %v", err)
+	default:
+	}
+	available.Store(true)
+	require.Eventually(t, func() bool { return a.published.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestRegisteredSampleTimerKeepsCollectionFailureUnready(t *testing.T) {
+	a := testAgent(t)
+	a.collector = fakeSnapshotCollector{err: errors.New("required collector failed")}
+	s := newImmediateSampleTimerServer()
+	require.NoError(t, RegisterSampleTimer(s, a))
+	serveSampleTimer(t, s, a)
+	require.Eventually(t, func() bool { return a.dropped.Load() > 0 }, 3*time.Second, 10*time.Millisecond)
+	rr := httptest.NewRecorder()
+	healthHandler(a).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+}
+
+func serveSampleTimer(t *testing.T, s *server.Server, a *Agent) chan error {
+	t.Helper()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.Serve() }()
+	t.Cleanup(func() {
+		assert.NoError(t, s.Close(nil))
+		select {
+		case err := <-serveDone:
+			assert.NoError(t, err)
+		case <-time.After(3 * time.Second):
+			t.Error("sample timer did not stop")
+		}
+		assert.NoError(t, a.Close())
+	})
+	return serveDone
+}
+
+func newImmediateSampleTimerServer(networks ...string) *server.Server {
+	network := "*/15 * * * * *?startAtOnce=1"
+	if len(networks) > 0 {
+		network = networks[0]
+	}
 	cfg := &trpc.Config{}
 	cfg.Server.Service = []*trpc.ServiceConfig{{
 		Name: sampleTimerService, IP: "127.0.0.1", Port: 11427,
-		Network: "*/15 * * * * *?startAtOnce=1", Protocol: "timer", Timeout: 30000,
+		Network: network, Protocol: "timer", Timeout: 30000,
 	}}
 	return trpc.NewServerWithConfig(cfg)
 }

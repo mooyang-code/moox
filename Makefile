@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
+.PHONY: check-timer-startup build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract test-release-bundle-manifest e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -9,10 +9,13 @@ build-host-gateway:
 build-storage-linux:
 	bash scripts/build/build-linux-local.sh storage
 
-check-boundaries: check-module-boundaries check-package-boundaries check-factor-split
+check-boundaries: check-module-boundaries check-package-boundaries check-factor-split check-timer-startup
 
 check-factor-split:
 	./scripts/check/check-factor-split.sh
+
+check-timer-startup:
+	./scripts/check/check-timer-startup.sh
 
 check-module-boundaries:
 	./scripts/check/check-module-boundaries.sh
