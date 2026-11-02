@@ -3,9 +3,12 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -58,6 +61,11 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	holdings, err := liveSpotHoldings(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, holdings...)
 	var open int
 	if err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM t_trade_orders o
@@ -69,6 +77,38 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 		out = append(out, fmt.Sprintf("实盘账户还有 %d 个未完成订单（暂停不撤单，先自行撤单）", open))
 	}
 	return out, nil
+}
+
+// liveSpotHoldings 检查持仓来自余额的实盘账户：现货没有持仓表，受管标记又来自订单表，
+// 重置后 MooX 买入的币会变成未受管，不再计入权益，也不会被卖出。
+func liveSpotHoldings(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT c_trading_account_id, c_market_type, c_settlement_asset, c_snapshot_json
+		FROM t_trading_accounts WHERE c_execution_mode = 'LIVE'`)
+	if err != nil {
+		return nil, fmt.Errorf("检查实盘现货余额：%w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var account, market, settlement, raw string
+		if err := rows.Scan(&account, &market, &settlement, &raw); err != nil {
+			return nil, err
+		}
+		if !exchange.RuleFor(market).PositionFromBalance {
+			continue
+		}
+		var snapshot store.TradingAccountSnapshot
+		if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+			return nil, fmt.Errorf("解析账户 %s 快照：%w", account, err)
+		}
+		for _, balance := range snapshot.Balances {
+			if total, parseErr := shared.ParseDecimal(balance.Total); parseErr == nil && balance.Asset != settlement && !total.IsZero() {
+				out = append(out, fmt.Sprintf("实盘账户 %s 还有持仓 %s %s", account, balance.Asset, balance.Total))
+			}
+		}
+	}
+	return out, rows.Err()
 }
 
 // liveAccounts 列出启用的实盘账户 ID。

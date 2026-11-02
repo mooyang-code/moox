@@ -215,6 +215,7 @@ func initialize(
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
+			CreatedAt:        record.CreatedAt,
 		}
 		var adapter execution.ExecutionAdapter
 		var marketData execution.MarketDataSource

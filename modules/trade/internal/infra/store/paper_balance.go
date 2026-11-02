@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"gorm.io/gorm"
 )
 
 type PaperBalanceSnapshot struct {
@@ -48,7 +50,23 @@ func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSn
 	var marker struct {
 		Count int64 `gorm:"column:c_applied_fill_count"`
 	}
-	if err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error; err != nil {
+	err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// reset data 清掉了余额但保留账户，按配置的初始资金重新开始。
+		var initial string
+		if rawErr := tx.db.Raw(`SELECT c_initial_balance FROM t_paper_account_configs WHERE c_space_id = ? AND c_trading_account_id = ?`,
+			spaceID, accountID).Scan(&initial).Error; rawErr != nil {
+			return result, rawErr
+		}
+		if initial == "" {
+			return result, err
+		}
+		if err = tx.initializePaperBalance(spaceID, accountID, initial); err != nil {
+			return result, err
+		}
+		return tx.GetPaperBalanceSnapshot(spaceID, accountID)
+	}
+	if err != nil {
 		return result, err
 	}
 	result.AppliedFillCount = marker.Count

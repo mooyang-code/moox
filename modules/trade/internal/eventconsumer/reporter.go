@@ -63,7 +63,8 @@ type targetActionReport struct {
 // attentionCode 判断拒绝是否需要人看。过期、被新目标取代是正常情况，页面也能看到。
 func attentionCode(code string) bool {
 	switch code {
-	case "invalid_event", "invalid_contract", "authorization_conflict", "receipt_conflict", "resolver_missing", "unsupported_instrument":
+	case "invalid_event", "invalid_contract", "authorization_conflict", "receipt_conflict", "resolver_missing",
+		"unsupported_instrument", "permanent_rejection":
 		return true
 	default:
 		return false

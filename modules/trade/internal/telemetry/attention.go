@@ -25,6 +25,17 @@ var attentionKinds = []string{
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
 const maxAttentionDetail = 480
 
+// StableReason 去掉错误里的地址和时间戳：错误原文可能带签名参数，每次都不同，会让指标序列不断增长。
+func StableReason(reason string) string {
+	if index := strings.Index(reason, "http"); index > 0 {
+		reason = strings.TrimRight(reason[:index], " :\"")
+	}
+	if runes := []rune(reason); len(runes) > 60 {
+		reason = string(runes[:60])
+	}
+	return reason
+}
+
 // PublishAttention 用本轮结果替换上报值，items 按 kind 列出每条详情。
 func PublishAttention(items map[string][]string) {
 	Attention.Reset()

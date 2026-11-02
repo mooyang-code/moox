@@ -1338,6 +1338,10 @@ func (s *Service) pauseForExternalFact(
 	if err != nil {
 		return err
 	}
+	// 自主下单账户没有自动执行，用户在交易所手工成交是正常操作。
+	if logicalAccount.ControlMode == "MANUAL" {
+		return nil
+	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation(
 			logicalAccount.SpaceID,

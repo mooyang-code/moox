@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -77,7 +76,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		notReady[account.TradingAccountID] = since
 		if now.Sub(since) >= notReadyGrace {
 			items[telemetry.AttentionAccountNotReady] = append(items[telemetry.AttentionAccountNotReady],
-				account.Name+"："+stableReason(account.LastError))
+				account.Name+"："+notReadyReason(account.LastError))
 		}
 	}
 	w.notReadySince = notReady
@@ -120,6 +119,13 @@ func (w *AttentionWorker) scanLogicalAccount(
 	return w.noteTarget(ctx, logical, target, now, items, blocked)
 }
 
+func notReadyReason(lastError string) string {
+	if lastError == "" {
+		return "账户未就绪"
+	}
+	return telemetry.StableReason(lastError)
+}
+
 func (w *AttentionWorker) noteTarget(
 	ctx context.Context,
 	logical store.LogicalAccountRecord,
@@ -155,20 +161,6 @@ func (w *AttentionWorker) noteTarget(
 			logical.Name+"：连续多个目标过期且持仓未到位")
 	}
 	return nil
-}
-
-// stableReason 去掉错误里的地址和时间戳：错误原文带签名参数，每次都不同，会让指标序列不断增长。
-func stableReason(reason string) string {
-	if reason == "" {
-		return "账户未就绪"
-	}
-	if index := strings.Index(reason, "http"); index > 0 {
-		reason = strings.TrimRight(reason[:index], " :\"")
-	}
-	if runes := []rune(reason); len(runes) > 60 {
-		reason = string(runes[:60])
-	}
-	return reason
 }
 
 // countExpired 每个过期目标只计一次，没有差额的过期不算。

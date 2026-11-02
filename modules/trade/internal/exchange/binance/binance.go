@@ -745,6 +745,14 @@ func (a *Adapter) ListRecentFills(
 				return nil, cursor, err
 			}
 			orderID := row.OrderID.String()
+			// 账户创建前的成交不入账，不查订单号，历史长的账户首次拉取才不会撞限频。
+			if fill.TradedAt.Before(a.config.CreatedAt) {
+				out = append(out, fill)
+				if row.ID.String() != "" {
+					next = row.ID.String()
+				}
+				continue
+			}
 			clientOrderID, found := clientOrderIDs[orderID]
 			if !found {
 				clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbolValue, orderID)

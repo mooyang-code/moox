@@ -787,7 +787,12 @@ func (s *Service) resolveUnknown(
 	if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
 		return current, accountExecutionError(record.TradingAccountID, "get_order", lookupErr)
 	}
-	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), "")
+	// 从已同步的位置往后找，不重新拉全部历史。
+	cursor := ""
+	if account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID); accountErr == nil {
+		cursor = account.FillCursors[record.ExchangeSymbol]
+	}
+	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), cursor)
 	if fillsErr != nil {
 		return current, accountExecutionError(record.TradingAccountID, "list_fills", fillsErr)
 	}

@@ -12,11 +12,11 @@ import (
 )
 
 func TestStableReasonDropsSignedURL(t *testing.T) {
-	first := stableReason(`Get "https://fapi.binance.com/x?signature=aaa&timestamp=1": timeout`)
-	second := stableReason(`Get "https://fapi.binance.com/x?signature=bbb&timestamp=2": timeout`)
+	first := notReadyReason(`Get "https://fapi.binance.com/x?signature=aaa&timestamp=1": timeout`)
+	second := notReadyReason(`Get "https://fapi.binance.com/x?signature=bbb&timestamp=2": timeout`)
 	require.Equal(t, first, second)
 	require.NotContains(t, first, "signature")
-	require.Equal(t, "账户未就绪", stableReason(""))
+	require.Equal(t, "账户未就绪", notReadyReason(""))
 }
 
 // 策略每根 K 线都发新目标，阻塞时长要跨目标累计。

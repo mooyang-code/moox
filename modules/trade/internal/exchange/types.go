@@ -214,6 +214,8 @@ type AccountConfig struct {
 	Environment      AccountEnvironment
 	SettlementAsset  string
 	MarginMode       MarginMode
+	// CreatedAt 之前的成交不入账，适配器不用为它们多查一次订单。
+	CreatedAt time.Time
 }
 
 type Instrument struct {

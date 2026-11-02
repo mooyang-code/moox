@@ -177,3 +177,21 @@ func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
 		require.False(t, result.ExternalFactsImported)
 	}
 }
+
+func TestManualAccountKeepsPauseReasonOnExternalFact(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'`).Error)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		})
+	}))
+	service := Service{Store: tradeStore}
+
+	require.NoError(t, service.pauseForExternalFact(context.Background(), "account-1"))
+
+	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.False(t, store.IsAutoPauseReason(logical.PauseReason))
+}

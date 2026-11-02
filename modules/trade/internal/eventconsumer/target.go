@@ -10,6 +10,7 @@ import (
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
@@ -222,6 +223,8 @@ func HandleTarget(
 		if errors.Is(conversionErr, targetapp.ErrPermanent) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
 		}
+		// 换算失败的目标不进目标表，过期后就消失了，页面看不到，这里提醒人。
+		telemetry.NoteTargetRejection(request.GetLogicalAccountId(), "目标换算失败："+telemetry.StableReason(conversionErr.Error()), now)
 		return retryTarget(conversionErr)
 	}
 	record.Targets = append(record.Targets, conversion.QuantityTargets...)
