@@ -36,14 +36,6 @@ type Metrics interface {
 	Observe(tradingAccountID string, now time.Time, maxDifference float64, err error)
 }
 
-type FactsObserver interface {
-	AccountFactsChanged(
-		ctx context.Context,
-		tradingAccountID string,
-		external bool,
-	) error
-}
-
 type Result struct {
 	FillsIngested          int
 	OrdersUpdated          int
@@ -79,7 +71,7 @@ type Service struct {
 	Fills          *consumer.Reducer
 	Orders         *orderapp.Service
 	Metrics        Metrics
-	Facts          FactsObserver
+	Wake           func()
 	Now            func() time.Time
 	LateFillWindow time.Duration
 }
@@ -149,9 +141,8 @@ func (s *Service) syncAccount(
 		}
 		return result, err
 	}
-	return result, s.notifyFacts(
-		ctx, tradingAccountID, false,
-	)
+	s.wakeTargets()
+	return result, nil
 }
 
 func (s *Service) syncAccountLocked(
@@ -359,9 +350,8 @@ func (s *Service) ApplySnapshot(
 	if err != nil {
 		return result, err
 	}
-	return result, s.notifyFacts(
-		ctx, tradingAccountID, false,
-	)
+	s.wakeTargets()
+	return result, nil
 }
 
 func (s *Service) applySnapshot(
@@ -624,7 +614,8 @@ func (s *Service) ApplyFill(
 	if err != nil {
 		return applied, err
 	}
-	return applied, s.notifyFacts(ctx, tradingAccountID, false)
+	s.wakeTargets()
+	return applied, nil
 }
 
 func (s *Service) ApplyOrder(
@@ -653,7 +644,8 @@ func (s *Service) ApplyOrder(
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, tradingAccountID, false)
+	s.wakeTargets()
+	return nil
 }
 
 func (s *Service) ApplyPosition(
@@ -794,7 +786,8 @@ func (s *Service) SetReady(
 	if err != nil {
 		return err
 	}
-	return s.notifyFacts(ctx, tradingAccountID, false)
+	s.wakeTargets()
+	return nil
 }
 
 func (s *Service) setReady(
@@ -1270,15 +1263,11 @@ func (s *Service) validate() error {
 	return nil
 }
 
-func (s *Service) notifyFacts(
-	ctx context.Context,
-	tradingAccountID string,
-	external bool,
-) error {
-	if s.Facts == nil {
-		return nil
+// wakeTargets 在账户事实变化后唤醒目标收敛，调用时不能持有账户锁。
+func (s *Service) wakeTargets() {
+	if s.Wake != nil {
+		s.Wake()
 	}
-	return s.Facts.AccountFactsChanged(ctx, tradingAccountID, external)
 }
 
 // lockSyncScope 拿到同步需要的执行锁和账户锁，不碰全局成员锁：同步期间要调用 REST，
@@ -1354,7 +1343,7 @@ func (s *Service) pauseForExternalFact(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 			"PAUSED",
-			"发现外部订单或成交 EXTERNAL："+tradingAccountID,
+			store.AutoPauseReason("发现外部订单或成交 EXTERNAL："+tradingAccountID),
 		)
 	})
 }

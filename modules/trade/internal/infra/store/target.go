@@ -205,13 +205,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			c_last_error = excluded.c_last_error,
 			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE (excluded.c_instance_id <> '' AND
-			(t_logical_account_targets.c_instance_id <> excluded.c_instance_id OR
-			 t_logical_account_targets.c_session_id <> excluded.c_session_id OR
-			 excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time))
-		   OR (excluded.c_instance_id = '' AND
-			 t_logical_account_targets.c_instance_id = '' AND
-			 excluded.c_command_sequence > t_logical_account_targets.c_command_sequence)
+		WHERE t_logical_account_targets.c_instance_id <> excluded.c_instance_id
+		   OR t_logical_account_targets.c_session_id <> excluded.c_session_id
+		   OR excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time
 	`,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
@@ -250,18 +246,6 @@ func (s *Store) GetLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, err
 	}
 	return logicalAccountTargetRecord(row)
-}
-
-func (tx *Tx) DeleteLogicalAccountTargetForOtherRunner(
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-) error {
-	return tx.db.Exec(`
-		DELETE FROM t_logical_account_targets
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_runner_id <> ?
-	`, spaceID, logicalAccountID, runnerID).Error
 }
 
 // DeleteLogicalAccountTarget removes the current target during an ownership

@@ -103,7 +103,6 @@ func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testi
 	staleConfig := TradingAccountConfiguration{
 		Name: "renamed", CredentialSecretID: "secret-2",
 		SettlementAsset: "USDC", MarginMode: "CROSS", Status: "ENABLED",
-		SyncSymbols: []string{"BTCUSDT"},
 	}
 	syncState := TradingAccountSyncState{
 		Ready: true, LeverageSettings: LeverageSettings{"BTCUSDT": "5"},
@@ -132,7 +131,6 @@ func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testi
 	require.Equal(t, "renamed", got.Name)
 	require.Empty(t, got.CredentialSecretID)
 	require.Equal(t, "USDC", got.SettlementAsset)
-	require.Equal(t, []string{"BTCUSDT"}, got.SyncSymbols)
 	require.False(t, got.Ready)
 	require.Equal(t, "5", got.LeverageSettings["BTCUSDT"])
 	require.Equal(t, "100", got.Snapshot.Equity)

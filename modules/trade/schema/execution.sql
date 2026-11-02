@@ -159,7 +159,6 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
         REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
 );
 
-
 -- 被权威（REST 完整）持仓快照确认为空仓而删除的持仓墓碑：保留“快照确认空仓”的覆盖时间，
 -- 时间早于它的迟到成交已经体现在空仓里，不能再从零叠加出虚假持仓。
 CREATE TABLE IF NOT EXISTS t_trading_position_tombstones (

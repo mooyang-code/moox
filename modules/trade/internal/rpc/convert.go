@@ -285,7 +285,6 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 		ExecutionMode:   executionModeToPB(value.ExecutionMode),
 		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
 		Status: value.Status, Ready: value.Ready,
-		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: mapCopy(value.LeverageSettings),
 		Snapshot: &tradepb.TradingAccountSnapshot{
 			Balances: balances, Equity: value.Snapshot.Equity,

@@ -31,9 +31,6 @@ func FullSymbols(
 			set[symbol] = struct{}{}
 		}
 	}
-	for _, symbol := range account.SyncSymbols {
-		add(symbol)
-	}
 	for symbol := range account.FillCursors {
 		add(symbol)
 	}

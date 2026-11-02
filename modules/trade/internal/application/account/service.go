@@ -55,7 +55,6 @@ type SymbolConfigs interface {
 
 type SessionState interface {
 	ReadyFor(tradingaccount.Account) bool
-	Invalidate(tradingAccountID string)
 }
 
 type Service struct {
@@ -73,7 +72,6 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
-	SyncSymbols        *[]string
 }
 
 func (s *Service) Create(
@@ -117,7 +115,7 @@ func (s *Service) Update(
 	if current.ExecutionMode == exchange.ExecutionModePaper &&
 		(command.Name != nil || command.CredentialSecretID != nil ||
 			command.SettlementAsset != nil || command.MarginMode != nil ||
-			command.Status != nil || command.SyncSymbols != nil) {
+			command.Status != nil) {
 		return tradingaccount.Account{}, ErrPaperAccountImmutable
 	}
 	projected := current
@@ -140,9 +138,6 @@ func (s *Service) Update(
 	}
 	if err := s.Store.Update(ctx, command); err != nil {
 		return tradingaccount.Account{}, err
-	}
-	if s.SessionState != nil {
-		s.SessionState.Invalidate(command.TradingAccountID)
 	}
 	return s.Store.Get(ctx, command.TradingAccountID)
 }
@@ -252,8 +247,5 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
-	}
-	if command.SyncSymbols != nil {
-		value.SyncSymbols = append([]string(nil), (*command.SyncSymbols)...)
 	}
 }

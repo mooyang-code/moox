@@ -37,8 +37,8 @@ func TestTargetWorkerCancelSyncErrorKeepsCorrectReadinessScope(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			writeFailure := mode == "readiness persistence"
 			f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-			seedTargetPaperHoldings(t, f)
 			seedLogicalAccount(t, f.store)
+			seedTargetPaperHoldings(t, f)
 			now := time.Now().UTC()
 			f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
 			f.orders.Now = func() time.Time { return now }

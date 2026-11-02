@@ -577,7 +577,7 @@ func TestTargetExecutorRecordsBelowMinimumNotionalAsBlocked(t *testing.T) {
 }
 
 func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
-	t.Run("SPOT balance", func(t *testing.T) {
+	t.Run("未受管的现货资产不算敞口", func(t *testing.T) {
 		fixture := newTargetFixture(t, exchange.MarketTypeSpot)
 		fixture.setBalance(t, "account-a", "DOGE", "12")
 		fixture.target(t, nil)
@@ -587,15 +587,7 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		require.Equal(t, StatusBlocked, result.Status)
-		target, err := fixture.store.GetLogicalAccountTarget(
-			context.Background(), "space-1", "logical-1",
-		)
-		require.NoError(t, err)
-		require.Len(t, target.BlockedTargets, 1)
-		require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
-		require.Equal(t, "12", target.BlockedTargets[0].Quantity)
-		require.Contains(t, target.BlockedTargets[0].Reason, "标的")
+		require.Equal(t, StatusConverged, result.Status)
 		require.Empty(t, fixture.orders.specs)
 	})
 
@@ -623,10 +615,10 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 }
 
 func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
-	fixture.setBalance(t, "account-a", "DOGE", "12")
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
 	}})
 
 	result, err := fixture.executor().Converge(
@@ -641,19 +633,19 @@ func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
+	require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 }
 
 func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
-	fixture.setBalance(t, "account-a", "DOGE", "12")
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
 	}})
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "current-child",
 		TradingAccountID: "account-a", ClientOrderID: "current-child",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -688,6 +680,28 @@ func TestTargetExecutorDiscardsPendingChildWithStaleQuote(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StatusConverging, result.Status)
 	require.Equal(t, []string{"stale-child"}, fixture.orders.discarded)
+}
+
+// MooX 买过的币不在目标里时要卖掉，手工持有的币不动。
+func TestTargetExecutorSellsManagedAssetAndKeepsUnmanaged(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	fixture.setBalance(t, "account-a", "BTC", "2")
+	fixture.setBalance(t, "account-a", "BNB", "7")
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
+		State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
+	})
+	fixture.target(t, nil)
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "BTC-USDT-SPOT", fixture.orders.specs[0].InstrumentID)
+	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
 func TestTargetExecutorFullCloseIgnoresMinimumNotional(t *testing.T) {

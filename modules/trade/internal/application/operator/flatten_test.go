@@ -279,6 +279,15 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 		)
 	}))
 
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", TradingAccountID: "account-b", OrderID: "bought", ClientOrderID: "bought",
+			Exchange: account.Exchange, MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",
+			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
+		})
+	}))
+
 	_, err = fixture.service().FlattenLogicalAccount(
 		context.Background(),
 		FlattenCommand{

@@ -194,7 +194,6 @@ func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
@@ -217,7 +216,6 @@ func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	service := Service{
 		Store:              store,
 		Secrets:            &fakeSecrets{secret: validSecret()},
@@ -395,7 +393,6 @@ func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	value.Ready = true
 	store.accounts[value.ID] = value
 	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}

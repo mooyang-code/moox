@@ -132,11 +132,13 @@ func (s *Service) FlattenLogicalAccount(
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
-	deadline := time.Now().Add(s.flattenTimeout())
+	budgetEnd := time.Now().Add(s.flattenTimeout())
 	executable := 0
 	var sharedErrors []error
 	retry := false
-	for _, member := range members {
+	for index, member := range members {
+		// 每个账户分到剩余时间的一份，前面的账户耗尽预算时后面的账户仍能执行。
+		deadline := time.Now().Add(time.Until(budgetEnd) / time.Duration(len(members)-index))
 		accountResult, wasExecutable := s.flattenAccount(
 			ctx, command, member.TradingAccountID, deadline,
 		)
@@ -265,6 +267,7 @@ func (s *Service) flattenAccount(
 			break
 		}
 		if attempt > 0 && !time.Now().Before(deadline) {
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: context.DeadlineExceeded})
 			break
 		}
 		if attempt > 0 {
@@ -508,6 +511,11 @@ func (s *Service) flattenSpot(
 		result.addError(err)
 		return
 	}
+	managed, err := s.Store.ManagedAssets(ctx, command.SpaceID, account.TradingAccountID)
+	if err != nil {
+		result.addError(err)
+		return
+	}
 	byAsset := make(map[string]store.InstrumentRecord)
 	for _, instrument := range instruments {
 		if !tradableForSettlement(instrument, account.SettlementAsset) ||
@@ -520,7 +528,7 @@ func (s *Service) flattenSpot(
 		}
 	}
 	for _, balance := range account.Snapshot.Balances {
-		if balance.Asset == account.SettlementAsset {
+		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 			continue
 		}
 		total, err := decimalOrZero(balance.Total)
@@ -759,8 +767,13 @@ func (s *Service) remainingForAccount(
 			})
 		}
 	} else {
+		managed, managedErr := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
+		if managedErr != nil {
+			result.addError(managedErr)
+			return nil
+		}
 		for _, balance := range account.Snapshot.Balances {
-			if balance.Asset == account.SettlementAsset {
+			if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 				continue
 			}
 			quantity, parseErr := decimalOrZero(balance.Total)
@@ -897,7 +910,8 @@ func (s *Service) flattenTimeout() time.Duration {
 	if s.FlattenTimeout > 0 {
 		return s.FlattenTimeout
 	}
-	return 5 * time.Second
+	// 要小于控制台 RPC 的 15 秒超时，未完成的部分由工作线程继续。
+	return 12 * time.Second
 }
 
 func quantityRuleReason(

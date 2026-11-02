@@ -29,8 +29,8 @@ const (
 
 func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	var wakes atomic.Int32
 	now := time.Now().UTC()
 	options := eventconsumer.TargetOptions{
@@ -127,8 +127,9 @@ func TestLogicalAccountEmptyFullFlattensAllPhysicalPositions(t *testing.T) {
 func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 	now := time.Now().UTC()
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
+	seedManagedHoldings(t, f)
 	result := eventconsumer.HandleTarget(
 		context.Background(),
 		targetDeliveryWithTargets(t, now, "target-empty", 1, nil),
@@ -163,8 +164,8 @@ func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) {
 	now := time.Now().UTC()
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	result := eventconsumer.HandleTarget(
 		context.Background(),
 		targetDelivery(t, now, "stale-price-target", 1, "0.03"),
@@ -191,6 +192,20 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 	f.fake.mu.Lock()
 	require.Empty(t, f.fake.requests)
 	f.fake.mu.Unlock()
+}
+
+// seedManagedHoldings 让 BTC 成为受管资产：MooX 买过的币不在目标里时要卖掉。
+func seedManagedHoldings(t *testing.T, f *fixture) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: testSpace, TradingAccountID: testAccount, OrderID: "managed-buy",
+			ClientOrderID: "managed-buy", ExchangeSymbol: testSymbol, OrderType: "MARKET",
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: testInstrumentID(exchange.MarketTypeSpot),
+			Side: "BUY", Quantity: "1", ReferencePrice: "5000", State: "FILLED", FilledQuantity: "1", AveragePrice: "5000",
+			OwnerType: "OPERATOR", OwnerID: "managed-buy", LogicalAccountID: testLogicalAccount,
+		})
+	}))
 }
 
 func seedTargetPaperHoldings(t *testing.T, f *fixture) {

@@ -63,8 +63,25 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		}); err != nil {
 			return err
 		}
-		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentTestnet),
+			MarketType: string(exchange.MarketTypeSpot), ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			BaseAsset: "BTC", QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
+			PriceTick: "0.1", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
+			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+			ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000", State: "FILLED",
+			OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
 		})
 	}); err != nil {
 		t.Fatal(err)

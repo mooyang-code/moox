@@ -133,7 +133,6 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
 		Status:           string(account.Status),
-		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
 		LeverageSettings: leverage,
 	}
 	if account.Paper != nil {
@@ -146,16 +145,6 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 		}
 	}
 	return sameSessionConfig(entry.account, current)
-}
-
-func (m *Manager) Invalidate(tradingAccountID string) {
-	m.mu.Lock()
-	entry := m.sessions[tradingAccountID]
-	if entry != nil && !entry.stopping {
-		entry.stopping = true
-		entry.cancel()
-	}
-	m.mu.Unlock()
 }
 
 // EnsureSymbolConfig 在首次开仓前把全仓和杠杆设置到交易所。
@@ -340,20 +329,7 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		equalStringSlices(left.SyncSymbols, right.SyncSymbols) &&
 		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
-}
-
-func equalStringSlices(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {

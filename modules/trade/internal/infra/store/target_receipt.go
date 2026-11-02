@@ -55,11 +55,10 @@ type targetReceiptRow struct {
 }
 
 func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
-	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
-	if record.SpaceID == "" || record.TargetID == "" || record.LogicalAccountID == "" || record.RequestHash == "" || record.AcceptedAt <= 0 || (!newIdentity && (record.RunnerID == "" || record.CommandSequence == 0 || record.SignalTime <= 0)) {
+	if record.SpaceID == "" || record.TargetID == "" || record.LogicalAccountID == "" || record.RequestHash == "" || record.AcceptedAt <= 0 {
 		return fmt.Errorf("%w: incomplete target receipt", ErrInvalidRecord)
 	}
-	if newIdentity && (record.InstanceID == "" || record.SessionID == "" || record.StrategyID == "" || record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt) {
+	if record.InstanceID == "" || record.SessionID == "" || record.StrategyID == "" || record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
 		return fmt.Errorf("%w: incomplete target receipt session contract", ErrInvalidRecord)
 	}
 	for name, raw := range map[string]string{"weights": record.WeightsJSON, "reference_prices": record.ReferencePricesJSON, "quantity_targets": record.QuantityTargetsJSON} {
@@ -136,21 +135,21 @@ func (r TargetReceiptRecord) AcceptedAtTime() time.Time { return time.UnixMilli(
 // AcceptLogicalAccountTargetWithReceipt atomically accepts the current target
 // and writes its first conversion receipt. A replay with the same request hash
 // is idempotent; a different payload for the same target ID is a conflict.
-func (s *Store) AcceptLogicalAccountTargetWithReceipt(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord, ownerGenerations ...int64) (LogicalAccountTargetRecord, bool, error) {
+func (s *Store) AcceptLogicalAccountTargetWithReceipt(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord) (LogicalAccountTargetRecord, bool, error) {
 	unlock := s.LockLogicalAccount(target.SpaceID, target.LogicalAccountID)
 	defer unlock()
-	return s.acceptLogicalAccountTargetWithReceipt(ctx, target, receipt, ownerGenerations...)
+	return s.acceptLogicalAccountTargetWithReceipt(ctx, target, receipt)
 }
 
 // AcceptLogicalAccountTargetWithReceiptLocked is the same atomic operation as
 // AcceptLogicalAccountTargetWithReceipt, but requires the caller to already
 // hold the logical-account lock. Trade uses this while converting weights so
 // membership, equity and the persisted receipt observe one lifecycle.
-func (s *Store) AcceptLogicalAccountTargetWithReceiptLocked(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord, ownerGenerations ...int64) (LogicalAccountTargetRecord, bool, error) {
-	return s.acceptLogicalAccountTargetWithReceipt(ctx, target, receipt, ownerGenerations...)
+func (s *Store) AcceptLogicalAccountTargetWithReceiptLocked(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord) (LogicalAccountTargetRecord, bool, error) {
+	return s.acceptLogicalAccountTargetWithReceipt(ctx, target, receipt)
 }
 
-func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord, ownerGenerations ...int64) (LogicalAccountTargetRecord, bool, error) {
+func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, target LogicalAccountTargetRecord, receipt TargetReceiptRecord) (LogicalAccountTargetRecord, bool, error) {
 	var current LogicalAccountTargetRecord
 	var accepted bool
 	err := s.Transaction(ctx, func(tx *Tx) error {
@@ -188,12 +187,6 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 		}
 		if !errors.Is(query.Error, gorm.ErrRecordNotFound) {
 			return query.Error
-		}
-		if len(ownerGenerations) > 0 {
-			// 目标必须属于当前归属代数：认领、重绑、释放都会推进代数，延迟到达的旧目标在这里被拒绝。
-			if generation := ownerGenerations[0]; generation <= 0 || generation != account.OwnerGeneration {
-				return fmt.Errorf("%w: target event belongs to stale owner lifecycle", ErrConflict)
-			}
 		}
 		var err error
 		current, accepted, err = tx.AcceptLogicalAccountTarget(target)

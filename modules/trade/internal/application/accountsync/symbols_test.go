@@ -78,8 +78,7 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			CreatedAt: time.UnixMilli(5_000), SyncSymbols: []string{"BTC-USDT"},
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
+			CreatedAt: time.UnixMilli(5_000), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})

@@ -125,10 +125,15 @@ func (e *Executor) Converge(
 	defer func() {
 		switch {
 		case singleCauseIs(resultErr, ErrTargetExpired) || singleCauseIs(resultErr, orderapp.ErrTargetExpired):
-			target.Status = StatusExpired
-			target.LastError = ""
 			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			defer cancel()
+			// 先释放待提交子单再置为过期：释放失败时目标不变，下一轮重试。
+			if err := e.discardExpiredPendingOrders(persistCtx, spaceID, target); err != nil {
+				result, resultErr = Result{}, err
+				return
+			}
+			target.Status = StatusExpired
+			target.LastError = ""
 			updated, err := e.Store.UpdateLogicalAccountTargetState(persistCtx, target)
 			if err != nil {
 				result, resultErr = Result{}, err
@@ -145,26 +150,10 @@ func (e *Executor) Converge(
 		}
 	}()
 	if target.Status == StatusExpired {
-		// EXPIRED targets are normally terminal, but an older process may have
-		// persisted that state before releasing a PENDING child reservation. Run
-		// the idempotent cleanup on every recovery pass so upgrades/restarts can
-		// repair that durable state as well.
-		if err := e.discardExpiredPendingOrders(ctx, spaceID, target); err != nil {
-			return Result{}, err
-		}
 		return Result{Status: StatusExpired}, nil
 	}
+	// 过期不是撤单或平仓的理由，新的有效目标到达后才继续收敛。
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
-		// Expiry is a normal terminal condition for this target, not a reason to
-		// cancel existing orders or flatten positions. Trade will converge only
-		// after a newer valid target arrives. Pending children are different:
-		// they have not reached an exchange and must release their reservation
-		// before the target becomes terminal.
-		if errors.Is(err, ErrTargetExpired) {
-			if expiryErr := e.discardExpiredPendingOrders(ctx, spaceID, target); expiryErr != nil {
-				return Result{}, errors.Join(err, expiryErr)
-			}
-		}
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
@@ -444,6 +433,28 @@ func (e *Executor) Converge(
 	return Result{Status: StatusConverged}, nil
 }
 
+// HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
+func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccountTargetRecord) (bool, error) {
+	members, err := e.loadMembers(ctx, target.SpaceID, target.LogicalAccountID)
+	if err != nil {
+		return false, err
+	}
+	desired, err := desiredTargets(target)
+	if err != nil {
+		return false, err
+	}
+	for _, instrumentID := range laneIDs(desired, members) {
+		_, complete, _, err := nextLaneAction(instrumentID, desired[instrumentID], members)
+		if err != nil {
+			return false, err
+		}
+		if !complete {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (e *Executor) loadMembers(
 	ctx context.Context,
 	spaceID string,
@@ -485,8 +496,12 @@ func (e *Executor) loadMembers(
 		sellable := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
 		if exchange.RuleFor(account.MarketType).PositionFromBalance {
+			managed, managedErr := e.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)
+			if managedErr != nil {
+				return nil, managedErr
+			}
 			for _, balance := range account.Snapshot.Balances {
-				if balance.Asset == account.SettlementAsset {
+				if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 					continue
 				}
 				quantity, parseErr := shared.ParseDecimal(balance.Total)
@@ -1072,7 +1087,7 @@ func (e *Executor) pauseLogicalAccount(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 			"PAUSED",
-			reason,
+			store.AutoPauseReason(reason),
 		)
 	}); err != nil {
 		return err

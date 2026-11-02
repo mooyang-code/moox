@@ -71,7 +71,6 @@ func seedSmokeStore(
 			CredentialSecretID: options.SecretID,
 			SettlementAsset:    "USDT",
 			Status:             string(exchange.AccountStatusEnabled),
-			SyncSymbols:        []string{options.ExchangeSymbol},
 			LeverageSettings:   store.LeverageSettings{},
 			FillCursors:        store.FillCursors{},
 		}); err != nil {

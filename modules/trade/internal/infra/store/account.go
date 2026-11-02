@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -57,7 +55,6 @@ type TradingAccountRecord struct {
 	MarginMode         string
 	Status             string
 	Ready              bool
-	SyncSymbols        []string
 	LeverageSettings   LeverageSettings
 	FillCursors        FillCursors
 	Snapshot           TradingAccountSnapshot
@@ -84,7 +81,6 @@ type tradingAccountRow struct {
 	MarginMode           string    `gorm:"column:c_margin_mode"`
 	Status               string    `gorm:"column:c_status"`
 	Ready                bool      `gorm:"column:c_ready"`
-	SyncSymbolsJSON      string    `gorm:"column:c_sync_symbols_json"`
 	LeverageSettingsJSON string    `gorm:"column:c_leverage_settings_json"`
 	FillCursorsJSON      string    `gorm:"column:c_fill_cursors_json"`
 	SnapshotJSON         string    `gorm:"column:c_snapshot_json"`
@@ -127,18 +123,14 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	if err != nil {
 		return err
 	}
-	syncSymbolsJSON, err := encodeSyncSymbols(record.SyncSymbols)
-	if err != nil {
-		return err
-	}
 	row := tradingAccountRow{
 		SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
 		Name: record.Name, Exchange: record.Exchange, MarketType: record.MarketType,
 		ExecutionMode: record.ExecutionMode, Environment: record.Environment,
 		CredentialSecretID: record.CredentialSecretID,
 		SettlementAsset:    record.SettlementAsset, MarginMode: record.MarginMode,
-		Status: record.Status,
-		Ready:  record.Ready, SyncSymbolsJSON: syncSymbolsJSON,
+		Status:               record.Status,
+		Ready:                record.Ready,
 		LeverageSettingsJSON: leverageJSON,
 		FillCursorsJSON:      fillCursorsJSON, SnapshotJSON: snapshotJSON,
 		SnapshotSourceTime: record.SnapshotSourceTime, LastSyncAt: record.LastSyncAt,
@@ -153,18 +145,18 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 			c_space_id, c_trading_account_id, c_name, c_exchange, c_market_type,
 		c_execution_mode, c_live_environment, c_credential_secret_id,
 			c_settlement_asset, c_margin_mode,
-			c_status, c_ready, c_sync_symbols_json,
+			c_status, c_ready,
 			c_leverage_settings_json,
 			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
 			c_last_sync_at, c_last_ready_at,
 			c_last_error, c_ctime
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.MarketType,
 		row.ExecutionMode, row.Environment, row.CredentialSecretID,
 		row.SettlementAsset, row.MarginMode,
 		row.Status, row.Ready,
-		row.SyncSymbolsJSON, row.LeverageSettingsJSON,
+		row.LeverageSettingsJSON,
 		row.FillCursorsJSON, row.SnapshotJSON,
 		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError, createdAt,
 	).Error
@@ -183,7 +175,6 @@ type TradingAccountConfiguration struct {
 	SettlementAsset    string
 	MarginMode         string
 	Status             string
-	SyncSymbols        []string
 }
 
 func (tx *Tx) UpdateTradingAccountConfiguration(
@@ -238,29 +229,24 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 			)
 		}
 	}
-	syncSymbolsJSON, err := encodeSyncSymbols(config.SyncSymbols)
-	if err != nil {
-		return err
-	}
 	result = tx.db.Exec(`
 		UPDATE t_trading_accounts
 		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
-			c_margin_mode = ?, c_status = ?, c_sync_symbols_json = ?,
+			c_margin_mode = ?, c_status = ?,
 			c_ready = CASE
 				WHEN c_credential_secret_id <> ?
 					OR c_settlement_asset <> ?
 					OR c_margin_mode <> ?
 					OR c_status <> ?
-					OR c_sync_symbols_json <> ?
 				THEN 0
 				ELSE c_ready
 			END,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
-		config.MarginMode, config.Status, syncSymbolsJSON,
+		config.MarginMode, config.Status,
 		config.CredentialSecretID, config.SettlementAsset,
-		config.MarginMode, config.Status, syncSymbolsJSON,
+		config.MarginMode, config.Status,
 		spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
@@ -581,13 +567,6 @@ func (s *Store) ListEnabledTradingAccounts(
 }
 
 func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
-	var syncSymbols []string
-	if err := json.Unmarshal([]byte(row.SyncSymbolsJSON), &syncSymbols); err != nil {
-		return TradingAccountRecord{}, fmt.Errorf("%w: sync symbols JSON: %v", ErrInvalidRecord, err)
-	}
-	if _, err := encodeSyncSymbols(syncSymbols); err != nil {
-		return TradingAccountRecord{}, err
-	}
 	var leverage LeverageSettings
 	if err := json.Unmarshal([]byte(row.LeverageSettingsJSON), &leverage); err != nil {
 		return TradingAccountRecord{}, fmt.Errorf("%w: leverage JSON: %v", ErrInvalidRecord, err)
@@ -615,8 +594,8 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 		ExecutionMode: row.ExecutionMode, Environment: row.Environment,
 		CredentialSecretID: row.CredentialSecretID,
 		SettlementAsset:    row.SettlementAsset, MarginMode: row.MarginMode,
-		Status: row.Status,
-		Ready:  row.Ready, SyncSymbols: syncSymbols,
+		Status:           row.Status,
+		Ready:            row.Ready,
 		LeverageSettings: leverage, FillCursors: fillCursors,
 		Snapshot:           snapshot,
 		SnapshotSourceTime: row.SnapshotSourceTime, BalancePendingUntil: row.BalancePendingUntil, LastSyncAt: row.LastSyncAt,
@@ -648,28 +627,6 @@ func loadPaperConfig(db *gorm.DB, ctx context.Context, record *TradingAccountRec
 		TakerFeeRate: row.TakerFeeRate, SlippageBPS: row.SlippageBPS,
 	}
 	return nil
-}
-
-func encodeSyncSymbols(symbols []string) (string, error) {
-	canonical := make([]string, 0, len(symbols))
-	seen := make(map[string]struct{}, len(symbols))
-	for _, symbol := range symbols {
-		symbol = strings.TrimSpace(symbol)
-		if symbol == "" {
-			return "", fmt.Errorf("%w: empty sync symbol", ErrInvalidRecord)
-		}
-		if _, found := seen[symbol]; found {
-			continue
-		}
-		seen[symbol] = struct{}{}
-		canonical = append(canonical, symbol)
-	}
-	sort.Strings(canonical)
-	data, err := json.Marshal(canonical)
-	if err != nil {
-		return "", fmt.Errorf("%w: encode sync symbols: %v", ErrInvalidRecord, err)
-	}
-	return string(data), nil
 }
 
 func encodeFillCursors(cursors FillCursors) (string, error) {

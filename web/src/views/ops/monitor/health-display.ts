@@ -66,6 +66,7 @@ export function alertLink(object?: HealthObject): { href: string; label: string 
     case "data_delivery":
       return { href: "#/ops/storage/nodes", label: "查看存储节点" };
     case "balance":
+    case "trade_attention":
       return { href: "#/trading/accounts", label: "查看交易账户" };
   }
   return {

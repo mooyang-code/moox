@@ -171,11 +171,9 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	current := exchange.Order{
@@ -207,11 +205,9 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 	adapter := &syncAdapter{lookupErr: &exchange.Error{
 		Kind: exchange.ErrorOrderNotFound, Err: errors.New("missing"),
 	}}
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 
@@ -243,11 +239,9 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -289,11 +283,9 @@ func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -325,11 +317,9 @@ func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -414,13 +404,10 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: &LogicalAccountFactsObserver{
-			Store: tradeStore,
-			Wake: func() {
-				unlock := tradeStore.LockTradingAccount("account-1")
-				unlock()
-				woke <- struct{}{}
-			},
+		Wake: func() {
+			unlock := tradeStore.LockTradingAccount("account-1")
+			unlock()
+			woke <- struct{}{}
 		},
 		Now: func() time.Time { return time.UnixMilli(3_000) },
 	}
@@ -455,11 +442,9 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	unlock := tradeStore.LockLogicalAccount("space-1", "logical-1")
@@ -695,10 +680,7 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: &LogicalAccountFactsObserver{
-			Store: tradeStore,
-			Wake:  func() { wakes++ },
-		},
+		Wake:  func() { wakes++ },
 	}
 	require.NoError(t, service.ApplyPosition(
 		context.Background(), "account-1", exchange.Position{
@@ -1042,26 +1024,8 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 	require.Equal(t, "disconnected", account.LastError)
 }
 
-func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
+func TestFullSymbolsIncludesPositions(t *testing.T) {
 	symbols := FullSymbols(
-		store.TradingAccountRecord{
-			MarketType:  "SPOT",
-			SyncSymbols: []string{"BTC-USDT"},
-		},
-		nil,
-		nil,
-		nil,
-		[]store.InstrumentRecord{{
-			ExchangeSymbol: "BTC-USDT", BaseAsset: "BTC", SettlementAsset: "USDT",
-			Status: "TRADING",
-		}},
-		exchange.AccountSnapshot{Balances: []exchange.AssetBalance{{
-			Asset: "BTC", Total: shared.Zero(),
-		}}},
-	)
-	require.Equal(t, []string{"BTC-USDT"}, symbols)
-
-	symbols = FullSymbols(
 		store.TradingAccountRecord{MarketType: "SWAP"},
 		nil,
 		nil,
@@ -1078,27 +1042,6 @@ func openSyncStore(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	return tradeStore
-}
-
-func runFactsObserver(
-	t *testing.T,
-	tradeStore *store.Store,
-) *LogicalAccountFactsObserver {
-	t.Helper()
-	observer := &LogicalAccountFactsObserver{
-		Store: tradeStore, RetryInterval: 10 * time.Millisecond,
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- observer.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		require.ErrorIs(t, <-done, context.Canceled)
-	})
-	require.Eventually(t, func() bool {
-		return observer.Snapshot().Ready
-	}, time.Second, 10*time.Millisecond)
-	return observer
 }
 
 func setLogicalAccountAutomation(
@@ -1143,13 +1086,13 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			CreatedAt: time.UnixMilli(1), SyncSymbols: []string{"BTC-USDT"},
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
+			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 			Environment:        "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
+			FillCursors:      store.FillCursors{"BTC-USDT": "0"},
 		}); err != nil {
 			return err
 		}

@@ -20,13 +20,12 @@ type healthSessions struct {
 func TestReadinessExposesPaperOrderDiagnosticWithoutGlobalFailure(t *testing.T) {
 	fault := paper.MatcherState{OrderID: "order-a", Stage: "decision", ErrorCode: "PAPER_DECISION_FAILED", LastError: "quote unavailable", Generation: 1}
 	r := Readiness{
-		DatabaseReady:        func(context.Context) error { return nil },
-		Sessions:             healthSessions{snapshot: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true}},
-		LogicalAccountWorker: func() (bool, string) { return true, "" },
-		TargetWorker:         func() traderuntime.TargetWorkerSnapshot { return traderuntime.TargetWorkerSnapshot{Ready: true} },
-		OperatorWorker:       func() traderuntime.OperatorWorkerSnapshot { return traderuntime.OperatorWorkerSnapshot{Ready: true} },
-		PaperMatcherWorker:   func() (bool, string) { return true, "" },
-		PaperAccountErrors:   func() map[string]paper.MatcherState { return map[string]paper.MatcherState{"account-a": fault} },
+		DatabaseReady:      func(context.Context) error { return nil },
+		Sessions:           healthSessions{snapshot: traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true}},
+		TargetWorker:       func() traderuntime.TargetWorkerSnapshot { return traderuntime.TargetWorkerSnapshot{Ready: true} },
+		OperatorWorker:     func() traderuntime.OperatorWorkerSnapshot { return traderuntime.OperatorWorkerSnapshot{Ready: true} },
+		PaperMatcherWorker: func() (bool, string) { return true, "" },
+		PaperAccountErrors: func() map[string]paper.MatcherState { return map[string]paper.MatcherState{"account-a": fault} },
 	}
 	ready, details := r.Evaluate(context.Background())
 	require.True(t, ready)
@@ -78,7 +77,6 @@ func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 		eventBusEnabled bool
 		eventBusReady   bool
 		sessions        traderuntime.SessionSnapshot
-		logicalReady    bool
 		targetReady     bool
 		operatorReady   bool
 		configErrors    []string
@@ -86,15 +84,15 @@ func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 		want            bool
 	}{
 		{
-			name:         "idle service is ready after account enumeration succeeds",
-			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
-			logicalReady: true, targetReady: true, operatorReady: true,
+			name:        "idle service is ready after account enumeration succeeds",
+			sessions:    traderuntime.SessionSnapshot{Reconciled: true},
+			targetReady: true, operatorReady: true,
 			want: true,
 		},
 		{
 			name: "all requirements ready", eventBusEnabled: true, eventBusReady: true,
-			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 2, Reconciled: true},
-			logicalReady: true, targetReady: true, operatorReady: true,
+			sessions:    traderuntime.SessionSnapshot{Enabled: 2, Ready: 2, Reconciled: true},
+			targetReady: true, operatorReady: true,
 			want: true,
 		},
 		{
@@ -107,43 +105,35 @@ func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 			name: "enabled EventBus unavailable", eventBusEnabled: true,
 		},
 		{
-			name:         "one live session disconnected",
-			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true},
-			logicalReady: true, targetReady: true, operatorReady: true, want: true,
+			name:        "one live session disconnected",
+			sessions:    traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true},
+			targetReady: true, operatorReady: true, want: true,
 		},
 		{
-			name:         "paper matcher shared failure",
-			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
-			logicalReady: true, targetReady: true, operatorReady: true, matcherFailed: true,
+			name:        "paper matcher shared failure",
+			sessions:    traderuntime.SessionSnapshot{Reconciled: true},
+			targetReady: true, operatorReady: true, matcherFailed: true,
 		},
 		{
-			name:         "configuration error",
-			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
-			logicalReady: true, targetReady: true, operatorReady: true,
+			name:        "configuration error",
+			sessions:    traderuntime.SessionSnapshot{Reconciled: true},
+			targetReady: true, operatorReady: true,
 			configErrors: []string{"invalid account"},
 		},
 		{
-			name:         "account configuration error does not stop healthy accounts",
-			sessions:     traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true, AccountErrors: map[string]string{"bad-account": "missing adapter"}},
-			logicalReady: true, targetReady: true, operatorReady: true, want: true,
-		},
-		{
-			name:          "logical account worker has not recovered",
-			sessions:      traderuntime.SessionSnapshot{Reconciled: true},
-			targetReady:   true,
-			operatorReady: true,
+			name:        "account configuration error does not stop healthy accounts",
+			sessions:    traderuntime.SessionSnapshot{Enabled: 2, Ready: 1, Reconciled: true, AccountErrors: map[string]string{"bad-account": "missing adapter"}},
+			targetReady: true, operatorReady: true, want: true,
 		},
 		{
 			name:          "target worker has not recovered",
 			sessions:      traderuntime.SessionSnapshot{Reconciled: true},
-			logicalReady:  true,
 			operatorReady: true,
 		},
 		{
-			name:         "operator worker has not recovered",
-			sessions:     traderuntime.SessionSnapshot{Reconciled: true},
-			logicalReady: true,
-			targetReady:  true,
+			name:        "operator worker has not recovered",
+			sessions:    traderuntime.SessionSnapshot{Reconciled: true},
+			targetReady: true,
 		},
 	}
 	for _, tt := range tests {
@@ -153,9 +143,6 @@ func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 				EventBusEnabled: tt.eventBusEnabled,
 				EventBusReady:   func() bool { return tt.eventBusReady },
 				Sessions:        healthSessions{snapshot: tt.sessions},
-				LogicalAccountWorker: func() (bool, string) {
-					return tt.logicalReady, ""
-				},
 				TargetWorker: func() traderuntime.TargetWorkerSnapshot {
 					return traderuntime.TargetWorkerSnapshot{Ready: tt.targetReady}
 				},
@@ -168,7 +155,6 @@ func TestReadinessSeparatesAccountFailuresFromSharedDependencies(t *testing.T) {
 			ready, details := readiness.Evaluate(context.Background())
 			require.Equal(t, tt.want, ready)
 			require.Equal(t, tt.sessions.Enabled, details["enabled_exchange_accounts"])
-			require.Equal(t, tt.logicalReady, details["logical_account_worker_ready"])
 			require.Equal(t, tt.targetReady, details["target_worker_ready"])
 			require.Equal(t, tt.operatorReady, details["operator_worker_ready"])
 			require.Equal(t, tt.sessions.AccountErrors, details["account_errors"])

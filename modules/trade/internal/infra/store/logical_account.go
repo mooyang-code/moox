@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
@@ -319,6 +320,19 @@ func (tx *Tx) SetLogicalAccountName(
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 	`, name, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account name")
+}
+
+// autoPausePrefix 区分系统自动暂停和人工暂停，自动暂停要告警。
+const autoPausePrefix = "自动暂停："
+
+// AutoPauseReason 给系统自动暂停的原因加上标记。
+func AutoPauseReason(reason string) string {
+	return autoPausePrefix + reason
+}
+
+// IsAutoPauseReason 判断暂停原因是否来自系统自动暂停。
+func IsAutoPauseReason(reason string) bool {
+	return strings.HasPrefix(reason, autoPausePrefix)
 }
 
 func (tx *Tx) SetLogicalAccountAutomation(

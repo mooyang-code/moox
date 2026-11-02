@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"trpc.group/trpc-go/trpc-go/log"
+
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -19,8 +21,9 @@ import (
 var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
 
 const (
-	sessionOrderWindow  = 5 * time.Minute
-	pollingSyncInterval = 3 * time.Second
+	sessionOrderWindow        = 5 * time.Minute
+	pollingSyncInterval       = 3 * time.Second
+	instrumentRefreshInterval = time.Hour
 )
 
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
@@ -83,11 +86,6 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	s.Account = account
 	marketData := s.marketData()
-	if exchange.RuleFor(account.MarketType).PositionFromBalance &&
-		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
-		len(account.SyncSymbols) == 0 {
-		return fmt.Errorf("%w: SPOT account requires sync symbols", ErrSessionConfig)
-	}
 	if exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModePaper {
 		return s.runPaper(ctx)
 	}
@@ -240,10 +238,14 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return s.disconnect(context.Background(), ctx.Err())
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
 		case err := <-streamDone:
 			return s.disconnect(context.Background(), err)
 		case <-ticker.C:
@@ -318,6 +320,8 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	defer poll.Stop()
 	refresh := time.NewTicker(interval)
 	defer refresh.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
 	for {
 		matcherReady := s.PaperMatcherReady != nil && s.PaperMatcherReady()
 		if s.PaperAccountState != nil {
@@ -333,6 +337,8 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			_ = s.disconnect(context.Background(), ctx.Err())
 			return ctx.Err()
 		case <-poll.C:
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
 		case <-refresh.C:
 			generation := s.paperAccountGeneration()
 			if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
@@ -368,14 +374,29 @@ func (s *ExchangeSession) runPolling(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(pollingSyncInterval)
 	defer ticker.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return s.disconnect(context.Background(), ctx.Err())
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
 		case <-ticker.C:
 			// 失败时账户已记录错误并保持未就绪，下一轮重试。
 			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 		}
+	}
+}
+
+// refreshInstruments 让新上市、下架的标的不必重启会话就能生效。失败时沿用旧数据，下一轮重试。
+func (s *ExchangeSession) refreshInstruments(ctx context.Context) {
+	instruments, err := s.marketData().LoadInstruments(ctx)
+	if err == nil {
+		err = s.persistInstruments(ctx, instruments)
+	}
+	if err != nil {
+		log.ErrorContextf(ctx, "刷新标的失败：account=%s err=%v", s.Account.TradingAccountID, err)
 	}
 }
 

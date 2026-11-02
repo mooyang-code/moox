@@ -102,7 +102,6 @@ message TradingAccount {
   string settlement_asset = 7;
   string margin_mode = 8;
   map<string, string> leverage_settings = 9;
-  repeated string sync_symbols = 10;
   string status = 11;
   bool ready = 12;
   int64 last_sync_at = 13;
@@ -141,9 +140,7 @@ message LogicalAccount {
   // Strategy lifecycle identity of the current owner.
   string owner_instance_id = 16;
   string owner_session_id = 17;
-  // Opaque compare-and-set token used by Strategy lifecycle calls. It is
-  // returned to trusted internal callers only; target events use the numeric
-  // owner_generation fence instead.
+  // Strategy 生命周期调用的比较并交换令牌，只返回给内部调用方。
   string auth_fence = 18;
   ControlMode control_mode = 19;
 }
@@ -275,7 +272,6 @@ message CreateTradingAccountReq {
   MarketType market_type = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
-  repeated string sync_symbols = 6;
   LiveConfig live = 7;
 }
 message CreateTradingAccountRsp {
@@ -290,7 +286,6 @@ message UpdateTradingAccountReq {
   string settlement_asset = 4;
   string margin_mode = 5;
   string status = 6;
-  repeated string sync_symbols = 7;
 }
 message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;

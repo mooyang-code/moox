@@ -142,7 +142,6 @@ func seedBrokerAccount(t *testing.T, tradeStore *store.Store, instrument exchang
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: "broker-secret", SettlementAsset: "CNY",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
-			SyncSymbols: []string{brokerInstrument},
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{{Asset: "CNY", Available: "1000000", Total: "1000000"}},
 				Equity:   "1000000", AvailableFunds: "1000000", ExchangeUpdatedAt: testNow.UnixMilli(),

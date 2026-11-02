@@ -44,6 +44,9 @@ import (
 
 var startedAt = time.Now()
 
+// maxChildNotional 是单笔子单的金额上限，下单校验和目标拆单共用。
+const maxChildNotional = "100000"
+
 func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
 	cfg, err := config.Load("./config/app.yaml")
 	if err != nil {
@@ -100,7 +103,7 @@ func initialize(
 			Instruments:      instrumentSource{store: tradeStore},
 			Positions:        positionSource{store: tradeStore},
 			MaxReferenceAge:  10 * time.Second,
-			MaxChildNotional: shared.MustDecimal("100000"),
+			MaxChildNotional: shared.MustDecimal(maxChildNotional),
 			MaxLeverage:      shared.MustDecimal("20"),
 			FeeBufferRate:    shared.MustDecimal("0.002"),
 		},
@@ -164,7 +167,7 @@ func initialize(
 		Venues: registry,
 		Store:  tradeStore, Orders: orderService,
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
-		MaxChildNotional: shared.MustDecimal("100000"),
+		MaxChildNotional: shared.MustDecimal(maxChildNotional),
 	}
 	weightResolver := &targetapp.WeightResolver{
 		Store:  tradeStore,
@@ -177,11 +180,7 @@ func initialize(
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
 		Metrics: tradeStore.ModuleMetrics(), Gate: lifeGate.Open,
 	}
-	factsObserver := &accountsync.LogicalAccountFactsObserver{
-		Store: tradeStore,
-		Wake:  targetWorker.Wake,
-	}
-	syncService.Facts = factsObserver
+	syncService.Wake = targetWorker.Wake
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 	}
@@ -284,11 +283,11 @@ func initialize(
 		}()
 	}
 	runWorker(manager.Run)
-	runWorker(factsObserver.Run)
 	runWorker(targetWorker.Run)
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
 		runWorker(func(workerCtx context.Context) error {
@@ -390,7 +389,6 @@ func initialize(
 		serverInstance,
 		tradeStore,
 		manager,
-		factsObserver,
 		targetWorker,
 		operatorWorker,
 		paperMatcherWorker,
@@ -717,7 +715,6 @@ func registerHealth(
 	serverInstance *server.Server,
 	tradeStore *store.Store,
 	manager *traderuntime.Manager,
-	factsObserver *accountsync.LogicalAccountFactsObserver,
 	targetWorker *traderuntime.TargetWorker,
 	operatorWorker *traderuntime.OperatorWorker,
 	paperMatcherWorker *traderuntime.PaperMatcherWorker,
@@ -738,11 +735,7 @@ func registerHealth(
 			return eventBus != nil && eventBus.Ready() &&
 				targetConsumerReady != nil && targetConsumerReady.Load()
 		},
-		Sessions: manager,
-		LogicalAccountWorker: func() (bool, string) {
-			snapshot := factsObserver.Snapshot()
-			return snapshot.Ready, snapshot.LastError
-		},
+		Sessions:           manager,
 		TargetWorker:       targetWorker.Snapshot,
 		OperatorWorker:     operatorWorker.Snapshot,
 		PaperMatcherWorker: paperMatcherWorker.State,

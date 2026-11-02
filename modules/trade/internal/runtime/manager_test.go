@@ -196,8 +196,7 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 		SpaceID: "space-1", TradingAccountID: "account-1",
 		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
-		Status: "ENABLED", SyncSymbols: []string{"BTCUSDT"},
-		LeverageSettings: store.LeverageSettings{},
+		Status: "ENABLED", LeverageSettings: store.LeverageSettings{},
 	}
 	source := &managerAccountSource{accounts: []store.TradingAccountRecord{record}}
 	session := &managedSessionStub{
@@ -219,51 +218,11 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
 		ExecutionMode:      exchange.ExecutionModeLive,
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
-		Status: exchange.AccountStatusEnabled, SyncSymbols: []string{"BTCUSDT"},
-		LeverageSettings: map[string]shared.Decimal{},
+		Status: exchange.AccountStatusEnabled, LeverageSettings: map[string]shared.Decimal{},
 	}
 	require.True(t, manager.ReadyFor(account))
 	account.CredentialSecretID = "secret-2"
 	require.False(t, manager.ReadyFor(account))
-	account.CredentialSecretID = "secret-1"
-	manager.Invalidate(account.ID)
-	require.False(t, manager.ReadyFor(account))
-	manager.stopAll()
-}
-
-func TestManagerReplacesInvalidatedSessionWithUnchangedConfiguration(t *testing.T) {
-	record := store.TradingAccountRecord{TradingAccountID: "account-1"}
-	source := &managerAccountSource{accounts: []store.TradingAccountRecord{record}}
-	first := &managedSessionStub{
-		started: make(chan struct{}),
-		stopped: make(chan struct{}),
-	}
-	second := &managedSessionStub{
-		started: make(chan struct{}),
-		stopped: make(chan struct{}),
-	}
-	var calls atomic.Int32
-	manager := &Manager{
-		Accounts: source,
-		NewSession: func(store.TradingAccountRecord) (ManagedSession, error) {
-			if calls.Add(1) == 1 {
-				return first, nil
-			}
-			return second, nil
-		},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, manager.reconcile(ctx))
-	<-first.started
-	manager.Invalidate(record.TradingAccountID)
-	<-first.stopped
-	require.NoError(t, manager.reconcile(ctx))
-	<-second.started
-	require.Eventually(t, func() bool {
-		return manager.Ready(record.TradingAccountID)
-	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int32(2), calls.Load())
 	manager.stopAll()
 }
 

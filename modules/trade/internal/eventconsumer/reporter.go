@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -59,6 +60,16 @@ type targetActionReport struct {
 	TraceSource     string `json:"trace_source,omitempty"`
 }
 
+// attentionCode 判断拒绝是否需要人看。过期、被新目标取代是正常情况，页面也能看到。
+func attentionCode(code string) bool {
+	switch code {
+	case "invalid_event", "invalid_contract", "authorization_conflict", "receipt_conflict", "resolver_missing", "unsupported_instrument":
+		return true
+	default:
+		return false
+	}
+}
+
 type targetActionReporter struct {
 	emit func(context.Context, targetActionReport)
 }
@@ -66,6 +77,9 @@ type targetActionReporter struct {
 func (r targetActionReporter) ReportAction(ctx context.Context, delivery *jetstream.Delivery, result jetstream.HandlerResult, actionErr error) {
 	report := makeTargetActionReport(ctx, delivery, result, actionErr)
 	telemetry.TargetDeliveryActions.WithLabelValues(report.Decision, report.ErrorCode, report.ActionResult).Inc()
+	if report.Decision == "TERM" && attentionCode(report.ErrorCode) {
+		telemetry.NoteTargetRejection(report.LogicalAccount, report.ErrorCode, time.Now())
+	}
 	if r.emit != nil {
 		r.emit(ctx, report)
 		return

@@ -56,7 +56,6 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 				Name: value.Name, CredentialSecretID: credentialSecret(value),
 				SettlementAsset: value.SettlementAsset,
 				MarginMode:      string(value.MarginMode), Status: string(value.Status),
-				SyncSymbols: append([]string(nil), value.SyncSymbols...),
 			},
 		)
 	})
@@ -101,7 +100,6 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 		CredentialSecretID: credentialSecret(value),
 		SettlementAsset:    value.SettlementAsset, MarginMode: string(value.MarginMode),
 		Status: string(value.Status), Ready: value.Ready,
-		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: leverage, FillCursors: store.FillCursors{},
 		Snapshot:           snapshotRecord(value.Snapshot),
 		SnapshotSourceTime: timestampMillis(value.SnapshotSourceTime),
@@ -144,7 +142,6 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 		SettlementAsset:    record.SettlementAsset,
 		MarginMode:         exchange.MarginMode(record.MarginMode),
 		Status:             exchange.AccountStatus(record.Status), Ready: record.Ready,
-		SyncSymbols:      append([]string(nil), record.SyncSymbols...),
 		LeverageSettings: leverage, Snapshot: snapshotDomain(record.Snapshot),
 		SnapshotSourceTime: millisTime(record.SnapshotSourceTime),
 		LastSyncAt:         millisTime(record.LastSyncAt),

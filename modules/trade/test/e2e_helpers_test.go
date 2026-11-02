@@ -695,7 +695,7 @@ func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.
 			CredentialSecretID: credentialID,
 			SettlementAsset:    "USDT",
 			MarginMode:         margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
-			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
+			LeverageSettings: leverage,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
 					{Asset: "USDT", Available: "100000", Total: "100000"},

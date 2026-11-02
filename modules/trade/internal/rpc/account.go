@@ -56,7 +56,6 @@ func (h *AccountServer) CreateTradingAccount(
 		Live:               &tradingaccount.LiveConfig{Environment: environmentFromPB(req.GetLive().GetEnvironment()), CredentialSecretID: strings.TrimSpace(req.GetLive().GetCredentialSecretId())},
 		SettlementAsset:    normalized(req.GetSettlementAsset()), MarginMode: marginMode,
 		Status:           exchange.AccountStatusEnabled,
-		SyncSymbols:      append([]string(nil), req.GetSyncSymbols()...),
 		LeverageSettings: leverageSettings,
 	}
 	created, err := h.Accounts.Create(ctx, value)
@@ -98,10 +97,6 @@ func (h *AccountServer) UpdateTradingAccount(
 	if value := normalized(req.GetStatus()); value != "" {
 		status := exchange.AccountStatus(value)
 		command.Status = &status
-	}
-	if req.SyncSymbols != nil {
-		values := append([]string(nil), req.GetSyncSymbols()...)
-		command.SyncSymbols = &values
 	}
 	if _, err := h.Accounts.Update(ctx, command); err != nil {
 		return &tradepb.UpdateTradingAccountRsp{RetInfo: errorInfo(err)}, nil
