@@ -187,8 +187,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 
 func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v5/market/ticker" ||
-			request.URL.Query().Get("instId") != "BTC-USDT" {
+		if request.URL.Path != "/api/v5/market/tickers" || request.URL.Query().Get("instType") != "SPOT" {
 			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
 		}
 		ok(w, `[{"instId":"BTC-USDT","last":"100.25","ts":"2000"}]`)

@@ -159,8 +159,8 @@ func (m *binanceHTTPMock) handle(
 	t.Helper()
 	switch request.URL.Path {
 	case "/api/v3/ticker/price":
-		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
-		_, _ = io.WriteString(writer, `{"symbol":"BTCUSDT","price":"50000"}`)
+		require.Empty(t, request.URL.Query().Get("symbol"), "报价走全市场接口")
+		_, _ = io.WriteString(writer, `[{"symbol":"BTCUSDT","price":"50000"}]`)
 	case "/api/v3/ticker/bookTicker":
 		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
 		_, _ = fmt.Fprintf(writer, `{"symbol":"BTCUSDT","bidPrice":"49999","askPrice":"50001","lastPrice":"50000","closeTime":%d}`, m.now.UnixMilli())

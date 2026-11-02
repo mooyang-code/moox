@@ -179,9 +179,13 @@ func TestLoadSwapInstruments(t *testing.T) {
 
 func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v3/ticker/price" ||
-			request.URL.Query().Get("symbol") != "BTCUSDT" {
+		if request.URL.Path != "/api/v3/ticker/price" {
 			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		// 优先用全市场接口，没有这个标的时才退回单标的接口。
+		if request.URL.Query().Get("symbol") == "" {
+			_, _ = io.WriteString(w, `[{"symbol":"ETHUSDT","price":"9"}]`)
+			return
 		}
 		_, _ = io.WriteString(w, `{"symbol":"BTCUSDT","price":"100.25"}`)
 	}))

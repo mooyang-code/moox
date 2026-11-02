@@ -30,6 +30,7 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
+	prices      exchange.PriceBoard
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
@@ -223,6 +224,9 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
+	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
+	}
 	data, err := a.request(
 		ctx,
 		http.MethodGet,
@@ -246,6 +250,27 @@ func (a *Adapter) GetReferencePrice(
 	}
 	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟。
 	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
+}
+
+func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.MarketType)}}, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		InstID string `json:"instId"`
+		Last   string `json:"last"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, rejected("decode all prices", err)
+	}
+	prices := make(map[string]shared.Decimal, len(rows))
+	for _, row := range rows {
+		if price, err := shared.ParseDecimal(row.Last); err == nil {
+			prices[row.InstID] = price
+		}
+	}
+	return prices, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
