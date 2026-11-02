@@ -419,6 +419,17 @@ func (s *Service) ResumeOperatorAction(
 	}
 }
 
+func (s *Service) actionOlderThan(action store.OperatorActionRecord, age time.Duration) bool {
+	if action.CreatedAt.IsZero() {
+		return false
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	return now.Sub(action.CreatedAt) >= age
+}
+
 func (s *Service) manualDeadlineFrom(created time.Time) int64 {
 	window := s.ManualSubmitWindow
 	if window <= 0 {
@@ -877,9 +888,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
-		records, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.TradingAccountID, 1,
-		)
+		records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, member.TradingAccountID)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(
@@ -920,9 +929,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
-		confirmed, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.TradingAccountID, 1,
-		)
+		confirmed, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, member.TradingAccountID)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(

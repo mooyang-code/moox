@@ -186,3 +186,26 @@ func TestOpenAcceptsCurrentSchemaOnReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, second.Close())
 }
+
+func TestListActiveOrdersForAccountSkipsFinishedOrders(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateTradingAccount(TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+			return err
+		}
+		for id, state := range map[string]string{"open": "OPEN", "unknown": "SUBMIT_UNKNOWN", "filled": "FILLED", "canceled": "CANCELED"} {
+			if err := tx.CreateOrder(OrderRecord{SpaceID: "s", OrderID: id, TradingAccountID: "a", ClientOrderID: id, ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "1", ReferencePriceAt: 1, OwnerType: "EXTERNAL", OwnerID: id, State: state}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	records, err := s.ListActiveOrdersForAccount(ctx, "s", "a")
+	require.NoError(t, err)
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.OrderID)
+	}
+	require.ElementsMatch(t, []string{"open", "unknown"}, ids)
+}

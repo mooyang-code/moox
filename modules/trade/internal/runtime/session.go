@@ -18,6 +18,9 @@ import (
 )
 
 var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
+
+const sessionOrderWindow = 5 * time.Minute
+
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
@@ -197,7 +200,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		ctx,
 		s.Account.SpaceID,
 		s.Account.TradingAccountID,
-		0,
+		time.Now().Add(-sessionOrderWindow).UnixMilli(),
 	)
 	if err != nil {
 		return s.disconnect(ctx, err)
@@ -288,22 +291,17 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		case err := <-streamDone:
 			return s.disconnect(context.Background(), err)
 		case <-ticker.C:
+			// 同步失败时账户已记录错误并保持未就绪，下一轮重试；只有私有流结束才重启会话。
 			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
-			if err != nil {
-				return s.disconnect(context.Background(), err)
-			}
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
 		case <-s.syncRequested:
 			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
-			if err != nil {
-				return s.disconnect(context.Background(), err)
-			}
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}

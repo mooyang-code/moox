@@ -444,7 +444,6 @@ func (s *Service) readiness(
 		reasons = append(reasons, "no enabled members")
 	}
 	now := s.now()
-	supported := make(map[string]struct{})
 	for _, member := range members {
 		account, getErr := s.Store.GetTradingAccountByID(
 			ctx, member.TradingAccountID,
@@ -462,23 +461,7 @@ func (s *Service) readiness(
 		case s.snapshotStale(now, account.LastSyncAt):
 			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
 		}
-		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
-		if listErr != nil {
-			return Readiness{}, listErr
-		}
-		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
-				continue
-			}
-			if instrument.SettlementAsset != "" &&
-				instrument.SettlementAsset != account.SettlementAsset {
-				continue
-			}
-			supported[instrument.InstrumentID] = struct{}{}
-		}
-		orders, listErr := s.Store.ListOrdersForAccount(
-			ctx, spaceID, account.TradingAccountID, 1,
-		)
+		orders, listErr := s.Store.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
 		if listErr != nil {
 			return Readiness{}, listErr
 		}
@@ -515,6 +498,10 @@ func (s *Service) readiness(
 		if now.UnixMilli() >= target.ValidUntil {
 			break
 		}
+		supported, supportErr := s.supportedInstruments(ctx, members)
+		if supportErr != nil {
+			return Readiness{}, supportErr
+		}
 		for _, desired := range target.Targets {
 			// 保持标的不会被下单，不因它暂时不可用而阻止恢复自动化。
 			if desired.Hold {
@@ -535,6 +522,31 @@ func (s *Service) readiness(
 	return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
 }
 
+func (s *Service) supportedInstruments(ctx context.Context, members []store.LogicalAccountMemberRecord) (map[string]struct{}, error) {
+	supported := make(map[string]struct{})
+	for _, member := range members {
+		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return nil, err
+		}
+		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		if err != nil {
+			return nil, err
+		}
+		for _, instrument := range instruments {
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
+			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			supported[instrument.InstrumentID] = struct{}{}
+		}
+	}
+	return supported, nil
+}
+
 func (s *Service) memberHasExposure(
 	ctx context.Context,
 	spaceID string,
@@ -548,9 +560,7 @@ func (s *Service) memberHasExposure(
 		s.snapshotStale(s.now(), account.LastSyncAt) {
 		return false, ErrNotReady
 	}
-	orders, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, tradingAccountID, 1,
-	)
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return false, err
 	}

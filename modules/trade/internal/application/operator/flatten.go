@@ -20,6 +20,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
+const flattenActionTimeout = 30 * time.Minute
+
 type FlattenCommand struct {
 	SpaceID          string
 	ActionID         string
@@ -162,6 +164,10 @@ func (s *Service) FlattenLogicalAccount(
 	status := flattenStatus(result.Accounts, executable)
 	if retry {
 		status = "RUNNING"
+		// 账户一直异常时清仓不能永远运行，否则恢复自动执行会被挡住。剩余持仓已写入结果，要继续就重新发起。
+		if s.actionOlderThan(result.Action, flattenActionTimeout) {
+			status = "PARTIAL"
+		}
 	}
 	if err := s.persistFlattenProgress(ctx, &result, status); err != nil {
 		return result, errors.Join(errors.Join(sharedErrors...), err)
@@ -336,7 +342,7 @@ func (s *Service) flattenAccount(
 }
 
 func (s *Service) recoverFlattenChildren(ctx context.Context, command FlattenCommand, accountID string, result *FlattenAccountResult) error {
-	orders, err := s.Store.ListOrdersForAccount(ctx, command.SpaceID, accountID, 1)
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, accountID)
 	if err != nil {
 		return err
 	}
@@ -364,7 +370,7 @@ func (s *Service) recoverFlattenChildren(ctx context.Context, command FlattenCom
 }
 
 func (s *Service) confirmFlattenChildren(ctx context.Context, command FlattenCommand, accountID string, result *FlattenAccountResult) error {
-	orders, err := s.Store.ListOrdersForAccount(ctx, command.SpaceID, accountID, 1)
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, accountID)
 	if err != nil {
 		return err
 	}
@@ -383,9 +389,7 @@ func (s *Service) cancelAccountOrders(
 	tradingAccountID string,
 	actionID string,
 ) error {
-	records, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, tradingAccountID, 1,
-	)
+	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -413,9 +417,7 @@ func (s *Service) confirmAccountCancellations(
 	tradingAccountID string,
 	actionID string,
 ) error {
-	records, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, tradingAccountID, 1,
-	)
+	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}

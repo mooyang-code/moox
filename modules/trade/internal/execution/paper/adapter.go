@@ -22,7 +22,7 @@ type FactStore interface {
 	GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error)
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
-	ListOrdersForAccount(context.Context, string, string, int64) ([]store.OrderRecord, error)
+	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
 	ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
@@ -300,7 +300,7 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	if a.Store == nil {
 		return nil, nil
 	}
-	rows, err := a.Store.ListOrdersForAccount(ctx, a.Account.SpaceID, a.Account.TradingAccountID, 0)
+	rows, err := a.Store.ListActiveOrdersForAccount(ctx, a.Account.SpaceID, a.Account.TradingAccountID)
 	if err != nil {
 		return nil, storageError(err)
 	}

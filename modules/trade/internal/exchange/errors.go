@@ -57,3 +57,12 @@ func IsKind(err error, kind ErrorKind) bool {
 	var exchangeErr *Error
 	return errors.As(err, &exchangeErr) && exchangeErr != nil && exchangeErr.Kind == kind
 }
+
+// IsConfirmedOrderMissing 报告交易所是否用明确的错误码确认订单不存在。
+func IsConfirmedOrderMissing(err error) bool {
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind != ErrorOrderNotFound {
+		return false
+	}
+	return typed.Code == "-2013" || typed.Code == "51603"
+}

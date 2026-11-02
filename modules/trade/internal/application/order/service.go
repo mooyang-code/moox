@@ -1167,6 +1167,11 @@ func (s *Service) rejectPending(
 	return current, cause
 }
 
+// IsPermanentValidationError 报告错误是否为重试也不会通过的下单校验失败。
+func IsPermanentValidationError(err error) bool {
+	return permanentValidationError(err)
+}
+
 func permanentValidationError(err error) bool {
 	if errors.Is(err, orderdomain.ErrReferencePriceStale) {
 		return false

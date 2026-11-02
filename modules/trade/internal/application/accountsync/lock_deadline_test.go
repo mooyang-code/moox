@@ -16,7 +16,7 @@ import (
 )
 
 func TestSyncAccountLockWaitHonorsDeadline(t *testing.T) {
-	for _, kind := range []string{"membership", "execution", "account"} {
+	for _, kind := range []string{"execution", "account"} {
 		t.Run(kind, func(t *testing.T) {
 			db := openSyncStore(t)
 			seedSyncAccount(t, db)
@@ -26,8 +26,6 @@ func TestSyncAccountLockWaitHonorsDeadline(t *testing.T) {
 			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}, SessionState: readySessionState(true)}
 			var unlock func()
 			switch kind {
-			case "membership":
-				unlock = db.LockLogicalAccountMembership()
 			case "execution":
 				unlock = db.LockLogicalAccountExecution("space-1", "logical-1")
 			case "account":
@@ -66,8 +64,21 @@ func TestSyncAccountLockWaitHonorsDeadline(t *testing.T) {
 
 type lockDeadlineAdapter struct{ syncAdapter }
 
+// 同步期间要调用 REST，不能占着全局成员锁，否则其他组合账户都要排队。
+func TestSyncAccountDoesNotWaitForMembershipLock(t *testing.T) {
+	db := openSyncStore(t)
+	seedSyncAccount(t, db)
+	unlock := db.LockLogicalAccountMembership()
+	defer unlock()
+	svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := svc.SyncAccount(ctx, "account-1")
+	require.NoError(t, err)
+}
+
 func TestSyncAccountLockFailureRetainsCleanupDatabaseError(t *testing.T) {
-	for _, stage := range []string{"read", "write"} {
+	for _, stage := range []string{"write"} {
 		t.Run(stage, func(t *testing.T) {
 			db := openSyncStore(t)
 			seedSyncAccount(t, db)
@@ -77,7 +88,7 @@ func TestSyncAccountLockFailureRetainsCleanupDatabaseError(t *testing.T) {
 			} else {
 				require.NoError(t, db.DBForTest().Callback().Raw().Before("gorm:raw").Register("test:lock_cleanup", func(query *gorm.DB) { query.AddError(dbErr) }))
 			}
-			unlock := db.LockLogicalAccountMembership()
+			unlock := db.LockTradingAccount("account-1")
 			defer unlock()
 			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{}}, Fills: &consumer.Reducer{Store: db}}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)

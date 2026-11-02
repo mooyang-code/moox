@@ -266,6 +266,7 @@ func parseQuote(raw string) shared.Decimal {
 	}
 	return v
 }
+
 type spotAccount struct {
 	UpdateTime int64 `json:"updateTime"`
 	Balances   []struct {
@@ -1008,8 +1009,11 @@ func classifyAPIError(err error, raw []byte) error {
 		typed.Kind = exchange.ErrorOrderNotFound
 	case "-2015":
 		typed.Kind = exchange.ErrorAuthentication
-	case "-1003":
+	case "-1003", "-1015":
 		typed.Kind = exchange.ErrorRateLimited
+	case "-1021":
+		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
+		typed.Kind = exchange.ErrorTransportUnknown
 	}
 	return typed
 }

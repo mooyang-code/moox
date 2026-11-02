@@ -269,7 +269,7 @@ func (e *Executor) Converge(
 				}
 				return Result{Status: StatusPaused}, err
 			}
-			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
+			if submitted, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil && submitted.State != orderdomain.Rejected {
 				if targetSubmitConflict(err) {
 					if _, discardErr := e.Orders.DiscardPending(
 						ctx, spaceID, current.OrderID,
@@ -532,9 +532,7 @@ func (e *Executor) activeOrders(
 ) ([]store.OrderRecord, error) {
 	var active []store.OrderRecord
 	for _, member := range members {
-		records, err := e.Store.ListOrdersForAccount(
-			ctx, spaceID, member.account.TradingAccountID, 1,
-		)
+		records, err := e.Store.ListActiveOrdersForAccount(ctx, spaceID, member.account.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
@@ -697,21 +695,17 @@ func (e *Executor) placeAction(
 	action laneAction,
 	members []memberState,
 ) (bool, string, error) {
-	candidates := []laneAction{action}
-	if !action.reducing {
-		candidates = candidates[:0]
-		for _, member := range members {
-			instrument, ok := member.instruments[action.instrument.InstrumentID]
-			if !ok {
-				continue
-			}
-			candidates = append(candidates, laneAction{
-				member: member, instrument: instrument, delta: action.delta,
-			})
-		}
+	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
+	if err != nil {
+		return false, "", err
 	}
 	var capacityErrors []string
-	for _, candidate := range candidates {
+	for _, candidate := range placementCandidates(action, members) {
+		if reason, excluded := rejected[candidate.member.account.TradingAccountID]; excluded {
+			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
+			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+reason)
+			continue
+		}
 		quantity, reason, err := e.childQuantity(ctx, candidate)
 		if err != nil {
 			return false, "", err
@@ -814,7 +808,7 @@ func (e *Executor) placeAction(
 		}
 		placed, err := e.Orders.Place(ctx, spaceID, spec)
 		if err != nil {
-			if capacityError(err) && !candidate.reducing {
+			if orderapp.IsPermanentValidationError(err) {
 				capacityErrors = append(
 					capacityErrors,
 					candidate.member.account.TradingAccountID+": "+err.Error(),
@@ -826,7 +820,12 @@ func (e *Executor) placeAction(
 		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
 			return false, "", e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
-		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
+		submitted, err := e.Orders.Submit(ctx, spaceID, string(placed.ID))
+		if err != nil {
+			// 一轮只提交一笔子单：拒单后先同步，下一轮再换成员，全部被拒时写入 blocked_targets。
+			if submitted.State == orderdomain.Rejected {
+				return true, "", nil
+			}
 			if targetSubmitConflict(err) {
 				_, discardErr := e.Orders.DiscardPending(
 					ctx, spaceID, string(placed.ID),
@@ -845,6 +844,36 @@ func (e *Executor) placeAction(
 	}
 	return false, "insufficient member capacity: " +
 		strings.Join(capacityErrors, "; "), nil
+}
+
+// placementCandidates 列出可以承接这次动作的成员：加仓是全部支持该标的的成员，
+// 减仓是全部同向持仓的成员，首选成员在最前。减仓数量不超过各成员自己的持仓。
+func placementCandidates(action laneAction, members []memberState) []laneAction {
+	instrumentID := action.instrument.InstrumentID
+	if !action.reducing {
+		candidates := make([]laneAction, 0, len(members))
+		for _, member := range members {
+			if instrument, ok := member.instruments[instrumentID]; ok {
+				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta})
+			}
+		}
+		return candidates
+	}
+	candidates := []laneAction{action}
+	for _, member := range positionsByAbsoluteSize(members, instrumentID) {
+		position := member.positions[instrumentID]
+		instrument, ok := member.instruments[instrumentID]
+		if !ok || member.account.TradingAccountID == action.member.account.TradingAccountID ||
+			position.IsZero() || position.IsNegative() == action.delta.IsNegative() {
+			continue
+		}
+		delta := action.delta
+		if position.Abs().Cmp(delta.Abs()) < 0 {
+			delta = position.Neg()
+		}
+		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true})
+	}
+	return candidates
 }
 
 func (e *Executor) checkTargetExecutable(

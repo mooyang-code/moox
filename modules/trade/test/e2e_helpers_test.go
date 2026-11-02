@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	testSpace        = "space-e2e"
-	testAccount      = "account-e2e"
-	testSymbol       = "BTCUSDT"
-	testSubjectID    = "BTC-USDT"
+	testSpace     = "space-e2e"
+	testAccount   = "account-e2e"
+	testSymbol    = "BTCUSDT"
+	testSubjectID = "BTC-USDT"
 )
 
 // testInstrumentID 是 Trade 内部标的 ID：从交易所加载的标的都带市场后缀，而策略目标发的是 testSubjectID。

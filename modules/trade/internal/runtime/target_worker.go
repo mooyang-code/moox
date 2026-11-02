@@ -136,15 +136,16 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-w.wake:
+			w.setResult(w.runOnce(ctx))
 		case <-ticker.C:
+			// 已阻塞、已收敛的目标不随定时器重算：每次重算都可能请求报价，账户事实变化时由 wake 触发。
+			w.setResult(w.runActive(ctx))
 		case <-w.targetWake:
 			// Only a full scan can establish that an earlier shared failure recovered.
 			if err := w.runTargets(ctx, w.takeTargets()); err != nil {
 				w.setResult(err)
 			}
-			continue
 		}
-		w.setResult(w.runOnce(ctx))
 	}
 }
 
@@ -191,10 +192,17 @@ func (w *TargetWorker) Quiesce(ctx context.Context) error {
 }
 
 func (w *TargetWorker) runOnce(ctx context.Context) error {
+	return w.runStatuses(ctx, targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged)
+}
+
+func (w *TargetWorker) runActive(ctx context.Context) error {
+	return w.runStatuses(ctx, targetapp.StatusPending, targetapp.StatusConverging)
+}
+
+func (w *TargetWorker) runStatuses(ctx context.Context, statuses ...string) error {
 	if !w.open() {
 		return nil
 	}
-	statuses := []string{targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged}
 	w.expiredMu.Lock()
 	if w.expiredRetry == nil {
 		w.expiredRetry = make(map[targetKey]struct{})

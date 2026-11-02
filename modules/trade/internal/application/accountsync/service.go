@@ -22,6 +22,8 @@ import (
 
 var ErrServiceConfig = errors.New("trade account sync: service is not configured")
 
+const missingOrderGrace = 5 * time.Minute
+
 type AdapterSource interface {
 	Adapter(tradingAccountID string) (execution.ExecutionAdapter, error)
 }
@@ -105,32 +107,20 @@ func (s *Service) SyncAccount(
 			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, observed)
 		}
 	}()
-	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	unlockAccount, unlockExecution, err := s.lockSyncScope(ctx, tradingAccountID)
 	if err != nil {
-		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_membership_lock", Err: err})
-	}
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
-	if err != nil {
-		unlockMembership()
 		var accountErr *orderapp.AccountExecutionError
-		if errors.As(err, &accountErr) && accountErr.Operation == "sync_execution_lock" {
+		if errors.As(err, &accountErr) {
 			return s.failLock(ctx, tradingAccountID, err)
 		}
 		return Result{}, err
 	}
-	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
-	if err != nil {
-		unlockExecution()
-		unlockMembership()
-		return s.failLock(ctx, tradingAccountID, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_account_lock", Err: err})
-	}
 	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID)
-	unlock()
+	unlockAccount()
 	if err == nil && result.ExternalFactsImported {
 		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	unlockExecution()
-	unlockMembership()
 	if err != nil {
 		return result, err
 	}
@@ -218,10 +208,14 @@ func (s *Service) syncAccountLocked(
 	}
 
 	orders := append([]exchange.Order(nil), openOrders...)
+	// 外部订单可能没有客户端订单号，挂单要同时按交易所订单号比对。
 	openByClient := make(map[string]struct{}, len(openOrders))
+	openByExchange := make(map[string]struct{}, len(openOrders))
 	for _, current := range openOrders {
 		openByClient[current.ClientOrderID] = struct{}{}
+		openByExchange[current.ExchangeOrderID] = struct{}{}
 	}
+	var missing []store.OrderRecord
 	for _, local := range localOrders {
 		if orderdomain.State(local.State).Terminal() {
 			continue
@@ -229,11 +223,17 @@ func (s *Service) syncAccountLocked(
 		if _, found := openByClient[local.ClientOrderID]; found {
 			continue
 		}
-		current, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
+		if _, found := openByExchange[local.ExchangeOrderID]; found && local.ExchangeOrderID != "" {
+			continue
+		}
+		current, lookupErr := lookupLocalOrder(ctx, adapter, local)
 		switch {
 		case lookupErr == nil:
 			orders = append(orders, current)
 		case exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound):
+			if s.orderMissingOnExchange(local, lookupErr) {
+				missing = append(missing, local)
+			}
 			continue
 		default:
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "get_order", lookupErr))
@@ -248,7 +248,42 @@ func (s *Service) syncAccountLocked(
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, FillCursors: cursors, Ready: ready,
 	})
-	return result, maxDifference, err
+	if err != nil {
+		return result, maxDifference, err
+	}
+	for _, local := range missing {
+		// 迟到成交仍可入账，领域模型允许已撤销订单继续应用成交。
+		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
+			return result, maxDifference, err
+		}
+		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
+	}
+	return result, maxDifference, nil
+}
+
+func lookupLocalOrder(ctx context.Context, adapter execution.ExecutionAdapter, local store.OrderRecord) (exchange.Order, error) {
+	if lookup, ok := adapter.(execution.ExchangeOrderLookup); ok && local.ExchangeOrderID != "" {
+		return lookup.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
+	}
+	return adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
+}
+
+// orderMissingOnExchange 判断本地活动订单是否可以按已撤销处理。只认交易所明确的不存在错误码，
+// HTTP 404、响应解析失败或空结果都不算；还要等过了 5 分钟，避免刚提交的订单被误判。
+func (s *Service) orderMissingOnExchange(local store.OrderRecord, lookupErr error) bool {
+	switch orderdomain.State(local.State) {
+	case orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Canceling, orderdomain.CancelUnknown:
+	default:
+		return false
+	}
+	if !exchange.IsConfirmedOrderMissing(lookupErr) {
+		return false
+	}
+	since := local.CreatedAt
+	if submitted := time.UnixMilli(local.SubmittedAt); local.SubmittedAt > 0 && submitted.After(since) {
+		since = submitted
+	}
+	return !since.IsZero() && s.now().Sub(since) >= missingOrderGrace
 }
 
 func maxBalanceDifference(before, after []store.AssetBalance) float64 {
@@ -288,28 +323,16 @@ func (s *Service) ApplySnapshot(
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
-	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	unlockAccount, unlockExecution, err := s.lockSyncScope(ctx, tradingAccountID)
 	if err != nil {
-		return Result{}, err
-	}
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
-	if err != nil {
-		unlockMembership()
-		return Result{}, err
-	}
-	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
-	if err != nil {
-		unlockExecution()
-		unlockMembership()
 		return Result{}, err
 	}
 	result, err := s.applySnapshot(ctx, tradingAccountID, snapshot)
-	unlock()
+	unlockAccount()
 	if err == nil && result.ExternalFactsImported {
 		err = s.pauseForExternalFact(ctx, tradingAccountID)
 	}
 	unlockExecution()
-	unlockMembership()
 	if err != nil {
 		return result, err
 	}
@@ -551,20 +574,11 @@ func (s *Service) ApplyFill(
 	if err := s.validate(); err != nil {
 		return false, err
 	}
-	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer unlockMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
+	unlock, unlockExecution, err := s.lockSyncScope(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
 	defer unlockExecution()
-	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
-	if err != nil {
-		return false, err
-	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -595,20 +609,11 @@ func (s *Service) ApplyOrder(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockMembership()
-	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
+	unlock, unlockExecution, err := s.lockSyncScope(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	defer unlockExecution()
-	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
-	if err != nil {
-		return err
-	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -1082,6 +1087,9 @@ func (s *Service) terminalize(
 	record.FinishedAt = s.now().UnixMilli()
 	if status == exchange.OrderStatusRejected {
 		record.State = string(orderdomain.Rejected)
+		if record.RejectReason == "" {
+			record.RejectReason = "交易所拒单"
+		}
 	} else {
 		record.State = string(orderdomain.Expired)
 	}
@@ -1245,34 +1253,53 @@ func (s *Service) notifyFacts(
 	return s.Facts.AccountFactsChanged(ctx, tradingAccountID, external)
 }
 
-func (s *Service) lockLogicalAccountExecution(
-	ctx context.Context,
-	tradingAccountID string,
-) (func(), error) {
+// lockSyncScope 拿到同步需要的执行锁和账户锁，不碰全局成员锁：同步期间要调用 REST，
+// 持有全局锁会让其他组合账户的同步和成交入账一起排队。成员变更同时持有这两把锁，
+// 所以复核通过后归属不会变化；复核不一致说明刚好发生了成员变更，释放后重试。
+func (s *Service) lockSyncScope(ctx context.Context, tradingAccountID string) (unlockAccount, unlockExecution func(), err error) {
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	logicalAccount, _, err := s.Store.FindLogicalAccountByTradingAccount(
-		ctx,
-		account.SpaceID,
-		tradingAccountID,
-	)
+	for attempt := 0; attempt < 4; attempt++ {
+		logicalAccountID, err := s.logicalAccountOf(ctx, account.SpaceID, tradingAccountID)
+		if err != nil {
+			return nil, nil, err
+		}
+		execution := func() {}
+		if logicalAccountID != "" {
+			execution, err = s.Store.LockLogicalAccountExecutionContext(ctx, account.SpaceID, logicalAccountID)
+			if err != nil {
+				return nil, nil, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_execution_lock", Err: err}
+			}
+		}
+		unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+		if err != nil {
+			execution()
+			return nil, nil, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_account_lock", Err: err}
+		}
+		confirmed, err := s.logicalAccountOf(ctx, account.SpaceID, tradingAccountID)
+		if err == nil && confirmed == logicalAccountID {
+			return unlock, execution, nil
+		}
+		unlock()
+		execution()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, fmt.Errorf("%w: logical account membership changed during sync", store.ErrConflict)
+}
+
+func (s *Service) logicalAccountOf(ctx context.Context, spaceID, tradingAccountID string) (string, error) {
+	logicalAccount, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, tradingAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return func() {}, nil
+		return "", nil
 	}
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	unlock, err := s.Store.LockLogicalAccountExecutionContext(
-		ctx,
-		logicalAccount.SpaceID,
-		logicalAccount.LogicalAccountID,
-	)
-	if err != nil {
-		return nil, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "sync_execution_lock", Err: err}
-	}
-	return unlock, nil
+	return logicalAccount.LogicalAccountID, nil
 }
 
 func (s *Service) pauseForExternalFact(

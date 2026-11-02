@@ -474,3 +474,25 @@ func TestTargetWorkerQuiesceWaitsForInflightConvergence(t *testing.T) {
 	}()
 	require.NoError(t, worker.Quiesce(context.Background()), "在途结束后返回")
 }
+
+// 定时器不重算已阻塞、已收敛的目标：这些目标只在账户事实变化时重算，否则每秒都会请求报价。
+func TestTargetWorkerTickerSkipsSettledTargets(t *testing.T) {
+	targets := &logicalTargetStoreStub{}
+	worker := &TargetWorker{Store: targets, Executor: &logicalTargetConvergerStub{wake: make(chan struct{}, 4)}}
+	worker.initWake()
+	require.NoError(t, worker.runActive(context.Background()))
+	require.ElementsMatch(t, []string{targetapp.StatusPending, targetapp.StatusConverging}, withoutExpired(targets.statuses))
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Contains(t, targets.statuses, targetapp.StatusBlocked)
+	require.Contains(t, targets.statuses, targetapp.StatusConverged)
+}
+
+func withoutExpired(statuses []string) []string {
+	kept := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status != targetapp.StatusExpired {
+			kept = append(kept, status)
+		}
+	}
+	return kept
+}

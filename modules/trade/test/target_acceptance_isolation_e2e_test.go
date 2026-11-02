@@ -176,6 +176,11 @@ func TestTargetWorkerExchangeFailureRemainsAccountDiagnostic(t *testing.T) {
 			t.Cleanup(func() { cancel(); <-done })
 			require.Eventually(t, func() bool {
 				snapshot := worker.Snapshot()
+				if kind == exchange.ErrorRejected {
+					// 明确拒单不算故障：不进错误列表，由拒单规则换成员或写入阻塞原因。
+					orders, _, listErr := f.store.ListOrders(ctx, testSpace, store.OrderQuery{LogicalAccountID: testLogicalAccount, Limit: 10})
+					return listErr == nil && len(orders) == 1 && snapshot.Ready && len(snapshot.TargetErrors) == 0
+				}
 				return snapshot.Ready && len(snapshot.TargetErrors) == 1
 			}, 2*time.Second, 10*time.Millisecond)
 			require.Empty(t, worker.Snapshot().LastError)

@@ -1822,3 +1822,39 @@ func flatSnapshotThenLateClosingFill(t *testing.T, fillAt int64) {
 	).Scan(&count).Error)
 	require.Zero(t, count, "已被空仓快照覆盖的平仓成交不能生成反向持仓")
 }
+
+func TestSyncCancelsLocalOrderOnlyWhenExchangeConfirmsMissing(t *testing.T) {
+	seedOrder := func(t *testing.T, db *store.Store) {
+		require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+			return tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", OrderID: "ghost", TradingAccountID: "account-1", ClientOrderID: "ghost-client",
+				ExchangeOrderID: "9", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+				Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1_000, OwnerType: "EXTERNAL", OwnerID: "external-9",
+				LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", Version: 1,
+			})
+		}))
+	}
+	for _, tc := range []struct {
+		name  string
+		err   error
+		after time.Duration
+		want  string
+	}{
+		{name: "明确不存在且已超时", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}, after: time.Hour, want: "CANCELED"},
+		{name: "刚创建的订单不处理", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}, after: -time.Hour, want: "OPEN"},
+		{name: "HTTP 404 不算不存在", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, HTTPStatus: 404}, after: time.Hour, want: "OPEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openSyncStore(t)
+			seedSyncAccount(t, db)
+			seedOrder(t, db)
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &syncAdapter{lookupErr: tc.err}}, Fills: &consumer.Reducer{Store: db},
+				Now: func() time.Time { return time.Now().Add(tc.after) }}
+			_, err := svc.SyncAccount(context.Background(), "account-1")
+			require.NoError(t, err)
+			record, err := db.GetOrder(context.Background(), "space-1", "ghost")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, record.State)
+		})
+	}
+}

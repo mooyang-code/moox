@@ -77,3 +77,15 @@ func TestAllApprovedErrorKindsAreDistinct(t *testing.T) {
 		seen[kind] = struct{}{}
 	}
 }
+
+func TestIsConfirmedOrderMissingOnlyTrustsExplicitCodes(t *testing.T) {
+	if !IsConfirmedOrderMissing(&Error{Kind: ErrorOrderNotFound, Code: "-2013"}) ||
+		!IsConfirmedOrderMissing(&Error{Kind: ErrorOrderNotFound, Code: "51603"}) {
+		t.Fatal("交易所明确的不存在错误码应被确认")
+	}
+	// HTTP 404、OKX 空结果都没有错误码，不能当成订单不存在。
+	if IsConfirmedOrderMissing(&Error{Kind: ErrorOrderNotFound, HTTPStatus: 404}) ||
+		IsConfirmedOrderMissing(&Error{Kind: ErrorRejected, Code: "-2013"}) {
+		t.Fatal("没有明确错误码时不能确认")
+	}
+}

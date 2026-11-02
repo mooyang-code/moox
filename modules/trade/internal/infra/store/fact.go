@@ -630,6 +630,58 @@ func (s *Store) ListOrdersForAccount(
 	return records, nil
 }
 
+// ListActiveOrdersForAccount 只读未结束的订单。状态写成 IN 才能用上 idx_trade_orders_account_state。
+func (s *Store) ListActiveOrdersForAccount(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+) ([]OrderRecord, error) {
+	var rows []orderRow
+	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, []string{
+			"PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING", "CANCEL_UNKNOWN",
+		}).
+		Order("c_order_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, orderRecordFromRow(row))
+	}
+	return records, nil
+}
+
+// RejectedTargetAccounts 返回本目标在该标的上被交易所拒绝过的执行账户及拒单原因。
+// c_submitted_at 为 0 的是本地校验失败，持仓或资金刷新后可以恢复，不计入；
+// 零成交结束的 EXPIRED 单同样计入，否则市价单被交易所过期后会循环重下。
+func (s *Store) RejectedTargetAccounts(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	targetID string,
+	instrumentID string,
+) (map[string]string, error) {
+	var rows []orderRow
+	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
+			AND c_instrument_id = ? AND c_submitted_at > 0
+			AND (c_state = 'REJECTED' OR (c_state = 'EXPIRED' AND c_filled_quantity = '0'))`,
+			spaceID, logicalAccountID, targetID, instrumentID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	rejected := make(map[string]string, len(rows))
+	for _, row := range rows {
+		record := orderRecordFromRow(row)
+		reason := record.RejectReason
+		if reason == "" {
+			reason = "交易所未受理订单"
+		}
+		rejected[record.TradingAccountID] = reason
+	}
+	return rejected, nil
+}
+
 func (s *Store) ListOrdersForLane(
 	ctx context.Context,
 	spaceID string,

@@ -83,6 +83,7 @@ func (s *Store) CountOrdersWithFillGap(ctx context.Context, spaceID, tradingAcco
 		SELECT c_filled_quantity, c_observed_filled_quantity
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'
+			AND c_observed_filled_quantity <> c_filled_quantity
 	`, spaceID, tradingAccountID).Scan(&rows).Error; err != nil {
 		return 0, err
 	}
