@@ -203,15 +203,42 @@
               ><template #icon><icon-plus /></template>添加成员</a-button
             >
           </div>
-          <div class="member-hint">多个执行账户按优先级执行，当前账户容量不足时自动切换下一账户。</div>
-          <a-table size="small" row-key="trading_account_id" :data="selected.members" :pagination="false" :scroll="{ x: 600 }">
+          <a-alert v-if="longNotReady.length" type="error" show-icon class="section">
+            成员 {{ longNotReady.join("、") }} 未就绪，整个组合账户暂停收敛。
+          </a-alert>
+          <div class="member-hint">优先级数字越小越先使用，当前账户资金用完才用下一个账户。</div>
+          <a-table size="small" row-key="trading_account_id" :data="selected.members" :pagination="false" :scroll="{ x: 1180 }">
             <template #columns>
-              <a-table-column title="执行账户" data-index="trading_account_id" />
-              <a-table-column title="启用" :width="80">
+              <a-table-column title="执行账户" :width="170">
+                <template #cell="{ record }">
+                  {{ memberAccount(record)?.name || record.trading_account_id }}
+                  <div class="muted">{{ exchangeLabels[memberAccount(record)?.exchange ?? 0] }}</div>
+                </template>
+              </a-table-column>
+              <a-table-column title="启用" :width="70">
                 <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
               </a-table-column>
-              <a-table-column title="优先级" data-index="priority" :width="90" />
-              <a-table-column title="操作" :width="260">
+              <a-table-column title="优先级" data-index="priority" :width="80" />
+              <a-table-column title="就绪" :width="80">
+                <template #cell="{ record }">
+                  <a-tag :color="memberAccount(record)?.ready ? 'green' : 'red'">{{
+                    memberAccount(record)?.ready ? "就绪" : "未就绪"
+                  }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="权益" :width="110">
+                <template #cell="{ record }">{{ memberAccount(record)?.snapshot?.equity || "-" }}</template>
+              </a-table-column>
+              <a-table-column title="可用资金" :width="110">
+                <template #cell="{ record }">{{ memberAccount(record)?.snapshot?.available_funds || "-" }}</template>
+              </a-table-column>
+              <a-table-column title="持仓数" :width="80">
+                <template #cell="{ record }">{{ memberPositionCount(record.trading_account_id) }}</template>
+              </a-table-column>
+              <a-table-column title="最近错误" :width="170" :ellipsis="true" :tooltip="true">
+                <template #cell="{ record }">{{ memberAccount(record)?.last_error || "-" }}</template>
+              </a-table-column>
+              <a-table-column title="操作" :width="310" fixed="right">
                 <template #cell="{ record }">
                   <a-space>
                     <a-button
@@ -222,6 +249,17 @@
                       >{{ orderEntryLabel }}</a-button
                     >
                     <a-button size="mini" type="text" @click="openOrders(record.trading_account_id)">查看订单</a-button>
+                    <a-tooltip
+                      :content="selected.automation_state === 'PAUSED' ? '修改优先级和启用状态' : '暂停组合账户后才能编辑'"
+                    >
+                      <a-button
+                        size="mini"
+                        type="text"
+                        :disabled="selected.automation_state !== 'PAUSED'"
+                        @click="editMember(record)"
+                        >编辑</a-button
+                      >
+                    </a-tooltip>
                     <a-popconfirm content="确认移除此成员？" @ok="removeMember(record.trading_account_id)">
                       <a-button size="mini" type="text" status="danger" :disabled="selected?.automation_state !== 'PAUSED'"
                         >移除</a-button
@@ -247,6 +285,7 @@
               <a-table-column title="实际数量" data-index="actual" :width="110" />
               <a-table-column title="差额" data-index="difference" :width="110" />
               <a-table-column title="状态" data-index="status" />
+              <a-table-column title="各成员持仓" data-index="members" />
             </template>
           </a-table>
           <a-empty v-if="target && !target.targets.length" description="空目标：全部归零" />
@@ -313,21 +352,26 @@
       <a-modal
         v-model:visible="memberVisible"
         width="min(520px, calc(100vw - 24px))"
-        title="添加执行账户"
+        :title="memberEditing ? '编辑成员' : '添加执行账户'"
         :on-before-ok="addMember"
       >
         <a-alert v-if="dialogError" type="error" show-icon class="dialog-alert">{{ dialogError }}</a-alert>
         <a-form :model="memberForm" auto-label-width>
+          <a-alert v-if="!memberEditing" type="info" class="dialog-alert">每个成员必须是不同的交易所账户。</a-alert>
           <a-form-item label="执行账户" required>
-            <a-select v-model="memberForm.trading_account_id" allow-search>
+            <a-select v-model="memberForm.trading_account_id" allow-search :disabled="memberEditing">
               <a-option v-for="item in eligibleAccounts" :key="item.trading_account_id" :value="item.trading_account_id">
                 {{ item.name }} ({{ item.trading_account_id }})
               </a-option>
             </a-select>
           </a-form-item>
-          <a-form-item label="优先级"><a-input-number v-model="memberForm.priority" :min="0" /></a-form-item>
+          <a-form-item label="优先级" extra="数字越小越先使用"
+            ><a-input-number v-model="memberForm.priority" :min="0"
+          /></a-form-item>
           <a-form-item label="启用"><a-switch v-model="memberForm.enabled" /></a-form-item>
-          <a-form-item label="接管已有敞口"><a-checkbox v-model="memberForm.adopt_existing_exposure" /></a-form-item>
+          <a-form-item v-if="!memberEditing" label="接管已有敞口" extra="只有进入目标的标的才会调整，其他资产不动">
+            <a-checkbox v-model="memberForm.adopt_existing_exposure" />
+          </a-form-item>
         </a-form>
       </a-modal>
 
@@ -417,7 +461,8 @@ import {
   logicalAutomationStateLabels,
   targetStateLabels,
   actionStateLabels,
-  orderStateLabels
+  orderStateLabels,
+  exchangeLabels
 } from "@/api/trade";
 import type {
   TradingAccount,
@@ -430,7 +475,14 @@ import type {
   TradableInstrument
 } from "@/api/trade";
 import { instrumentRuleHint, orderRuleError } from "./order-rules";
-import { actualFromHoldings, actualFromPositions, buildComparison } from "./target-comparison";
+import {
+  actualFromHoldings,
+  actualFromPositions,
+  buildComparison,
+  memberPositionsOf,
+  withMemberDetail,
+  type MemberPositions
+} from "./target-comparison";
 import EquityCurve from "./equity-curve.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
@@ -448,6 +500,10 @@ const pendingSubmission = ref<{ mode: 1 | 2; request: SubmitOrderReq } | null>(n
 const submitting = ref(false);
 const submissionError = ref("");
 const dialogError = ref("");
+const memberEditing = ref(false);
+const memberPositions = ref<Record<string, number>>({});
+const memberBreakdown = ref<MemberPositions>({});
+const notReadySince = ref<Record<string, number>>({});
 const capabilities = ref<ExecutionCapabilities | null>(null);
 const instruments = ref<TradableInstrument[]>([]);
 const actualPositions = ref<Record<string, number>>({});
@@ -518,7 +574,13 @@ const stateCounts = computed(() => ({
   notReady: rows.value.filter(item => !item.ready).length
 }));
 const comparison = computed(() =>
-  target.value ? buildComparison(target.value.targets, target.value.blocked_targets || [], actualPositions.value) : []
+  target.value
+    ? withMemberDetail(
+        buildComparison(target.value.targets, target.value.blocked_targets || [], actualPositions.value),
+        memberBreakdown.value,
+        id => accounts.value.find(item => item.trading_account_id === id)?.name || id
+      )
+    : []
 );
 const hasDifference = computed(() => comparison.value.some(row => Number(row.difference) !== 0));
 const targetExpired = computed(() => {
@@ -554,16 +616,48 @@ function flattenAccountStateLabel(status?: string) {
 function automationStateLabel(status?: string) {
   return status ? logicalAutomationStateLabels[status.toUpperCase()] || "未知" : "-";
 }
-const eligibleAccounts = computed(() =>
-  accounts.value.filter(
+const eligibleAccounts = computed(() => {
+  const memberIds = new Set(
+    rows.value
+      .flatMap(row => row.members || [])
+      .filter(member => member.enabled)
+      .map(member => member.trading_account_id)
+  );
+  const first = selected.value?.members[0];
+  const environment = first ? memberAccount(first)?.live?.environment : undefined;
+  return accounts.value.filter(
     item =>
       selected.value &&
       item.execution_mode === selected.value.execution_mode &&
       item.market_type === selected.value.market_type &&
       item.settlement_asset === selected.value.settlement_asset &&
+      (environment === undefined || item.live?.environment === environment) &&
+      !memberIds.has(item.trading_account_id) &&
       !selected.value.members.some(member => member.trading_account_id === item.trading_account_id)
-  )
+  );
+});
+function memberAccount(member: { trading_account_id: string }) {
+  return accounts.value.find(item => item.trading_account_id === member.trading_account_id);
+}
+function memberPositionCount(tradingAccountId: string) {
+  return memberPositions.value[tradingAccountId] ?? "-";
+}
+// 每笔成交后账户都会短暂未就绪，超过 10 秒才提示，否则提示会闪烁。
+const longNotReady = computed(() =>
+  (selected.value?.members || [])
+    .filter(member => member.enabled && notReadySince.value[member.trading_account_id] !== undefined)
+    .filter(member => Date.now() - notReadySince.value[member.trading_account_id] >= 10_000)
+    .map(member => memberAccount(member)?.name || member.trading_account_id)
 );
+function trackNotReady() {
+  const next: Record<string, number> = {};
+  for (const member of selected.value?.members || []) {
+    if (member.enabled && memberAccount(member)?.ready === false) {
+      next[member.trading_account_id] = notReadySince.value[member.trading_account_id] ?? Date.now();
+    }
+  }
+  notReadySince.value = next;
+}
 
 // 空间切换后，旧空间迟到的响应不能覆盖新空间的列表：只有最新一次请求可以更新页面。
 const listRequests = createLatestRequestGuard();
@@ -631,11 +725,23 @@ function openOrders(tradingAccountId: string) {
   void router.push({ path: "/trading/orders", query: { trading_account_id: tradingAccountId } });
 }
 async function loadActualPositions(account: LogicalAccount) {
-  if (account.market_type === 2)
-    return actualFromPositions((await listPositions({ logical_account_id: account.logical_account_id })).positions || []);
+  const counts: Record<string, number> = {};
+  if (account.market_type === 2) {
+    const positions = (await listPositions({ logical_account_id: account.logical_account_id })).positions || [];
+    for (const item of positions) counts[item.trading_account_id] = (counts[item.trading_account_id] || 0) + 1;
+    memberPositions.value = counts;
+    memberBreakdown.value = memberPositionsOf(positions.map(item => ({ ...item, quantity: Number(item.signed_quantity) })));
+    return actualFromPositions(positions);
+  }
   const members = (account.members || []).filter(member => member.enabled);
   const responses = await Promise.all(members.map(member => listHoldings(member.trading_account_id)));
-  return actualFromHoldings(responses.flatMap(response => response.holdings || []));
+  members.forEach((member, index) => {
+    counts[member.trading_account_id] = (responses[index].holdings || []).filter(item => item.instrument_id).length;
+  });
+  memberPositions.value = counts;
+  const holdings = responses.flatMap(response => response.holdings || []);
+  memberBreakdown.value = memberPositionsOf(holdings.map(item => ({ ...item, quantity: Number(item.quantity) })));
+  return actualFromHoldings(holdings);
 }
 function closeDetail() {
   stopDetailPolling();
@@ -662,7 +768,14 @@ async function reloadDetail() {
   selected.value = accountRsp.logical_account;
   rows.value = rows.value.map(row => (row.logical_account_id === id ? accountRsp.logical_account : row));
   target.value = targetRsp.target || null;
-  const actual = await loadActualPositions(accountRsp.logical_account).catch(() => null);
+  const [actual, accountList] = await Promise.all([
+    loadActualPositions(accountRsp.logical_account).catch(() => null),
+    listTradingAccounts({ page: { page: 1, size: 200 } }).catch(() => null)
+  ]);
+  if (accountList && request.isLatest()) {
+    accounts.value = accountList.accounts || [];
+    trackNotReady();
+  }
   if (actual && request.isLatest() && selected.value?.logical_account_id === id) actualPositions.value = actual;
 }
 
@@ -785,6 +898,13 @@ async function openMember() {
   const rsp = await listTradingAccounts({ page: { page: 1, size: 200 } });
   accounts.value = rsp.accounts || [];
   Object.assign(memberForm, { trading_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
+  memberEditing.value = false;
+  dialogError.value = "";
+  memberVisible.value = true;
+}
+function editMember(member: { trading_account_id: string; enabled: boolean; priority: number }) {
+  Object.assign(memberForm, { ...member, adopt_existing_exposure: false });
+  memberEditing.value = true;
   dialogError.value = "";
   memberVisible.value = true;
 }

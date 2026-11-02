@@ -15,6 +15,17 @@
               {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
             </a-option>
           </a-select>
+          <a-select
+            v-model="logicalAccountId"
+            allow-clear
+            placeholder="按组合账户查看"
+            class="account-select"
+            @change="logicalChanged"
+          >
+            <a-option v-for="logical in logicalAccounts" :key="logical.logical_account_id" :value="logical.logical_account_id">{{
+              logical.name
+            }}</a-option>
+          </a-select>
           <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
             {{ selectedAccount.ready ? "就绪" : "未就绪" }}
           </a-tag>
@@ -23,12 +34,44 @@
             <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
           </a-select>
           <a-range-picker v-model="orderTimeRange" value-format="timestamp" class="time-range" @change="searchOrders" />
-          <a-button type="primary" :disabled="!tradingAccountId" @click="searchOrders">
+          <a-button type="primary" :disabled="!tradingAccountId && !logicalAccountId" @click="searchOrders">
             <template #icon><icon-search /></template>
             查询
           </a-button>
         </a-space>
-        <div class="orders-table-region">
+        <a-radio-group v-model="recordTab" type="button" size="small" class="record-tabs" @change="searchOrders">
+          <a-radio value="orders">订单</a-radio>
+          <a-radio value="fills">成交</a-radio>
+        </a-radio-group>
+        <div v-if="recordTab === 'fills'" class="orders-table-region">
+          <a-table
+            row-key="fill_id"
+            size="small"
+            :bordered="{ cell: true }"
+            :data="fills"
+            :loading="loading"
+            :pagination="orderPagination"
+            :scroll="{ x: 'max-content' }"
+            @page-change="changeOrderPage"
+          >
+            <template #columns>
+              <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column title="执行账户" data-index="trading_account_id" />
+              <a-table-column title="方向">
+                <template #cell="{ record }">{{ orderSideLabels[record.side] }}</template>
+              </a-table-column>
+              <a-table-column title="价格" data-index="price" />
+              <a-table-column title="数量" data-index="quantity" />
+              <a-table-column title="手续费">
+                <template #cell="{ record }">{{ record.fee }} {{ record.fee_asset }}</template>
+              </a-table-column>
+              <a-table-column title="成交时间">
+                <template #cell="{ record }">{{ formatTimestamp(record.traded_at) }}</template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </div>
+        <div v-else class="orders-table-region">
           <a-empty v-if="!loading && !orders.length" class="orders-empty-state" description="暂无订单" />
           <a-table
             v-else
@@ -193,6 +236,7 @@ import {
   getLogicalAccount,
   orderOwnerLabels,
   formatTimestamp,
+  listLogicalAccounts,
   listTradingAccounts,
   listFills,
   listOrders,
@@ -200,7 +244,7 @@ import {
   orderSideLabels,
   orderStateLabels
 } from "@/api/trade";
-import type { TradingAccount, Fill, Order } from "@/api/trade/types";
+import type { TradingAccount, Fill, LogicalAccount, Order } from "@/api/trade/types";
 import { tradeRecordViewState } from "./trade-record-state";
 import { rangeToTime } from "./trade-record-utils";
 
@@ -218,6 +262,10 @@ const filterSymbol = toRef(tradeRecordViewState, "filterSymbol");
 const orderState = toRef(tradeRecordViewState, "orderState");
 const orderTimeRange = toRef(tradeRecordViewState, "orderTimeRange");
 const orders = ref<Order[]>([]);
+const fills = ref<Fill[]>([]);
+const recordTab = ref<"orders" | "fills">("orders");
+const logicalAccounts = ref<LogicalAccount[]>([]);
+const logicalAccountId = ref("");
 const loading = ref(false);
 const orderPagination = reactive({ current: tradeRecordViewState.orderPage, pageSize: 20, total: 0 });
 const accountRequests = createLatestRequestGuard();
@@ -258,6 +306,11 @@ async function loadAccounts() {
   if (!request.isLatest()) return;
   accounts.value = response.accounts || [];
   accountsLoaded.value = true;
+  void listLogicalAccounts({ page: 1, size: 500 })
+    .then(rsp => {
+      logicalAccounts.value = rsp.logical_accounts || [];
+    })
+    .catch(() => undefined);
   const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
   const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
   tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
@@ -309,16 +362,42 @@ function resetPagination() {
   tradeRecordViewState.orderPage = 1;
 }
 
+async function logicalChanged() {
+  closeOrderDetail();
+  resetPagination();
+  await loadOrders();
+}
+
 async function loadOrders() {
-  if (!tradingAccountId.value) {
+  if (!tradingAccountId.value && !logicalAccountId.value) {
     loading.value = false;
     orders.value = [];
     return;
   }
   const request = orderRequests.begin();
-  const accountId = tradingAccountId.value;
+  // 选了组合账户时查全部成员的记录。
+  const scope = logicalAccountId.value
+    ? { logical_account_id: logicalAccountId.value }
+    : { trading_account_id: tradingAccountId.value };
+  if (recordTab.value === "fills") {
+    loading.value = true;
+    try {
+      const response = await listFills({
+        ...scope,
+        instrument_id: filterSymbol.value.trim().toUpperCase(),
+        ...rangeToTime(orderTimeRange.value),
+        page: { page: orderPagination.current, size: orderPagination.pageSize }
+      });
+      if (!request.isLatest()) return;
+      fills.value = response.fills || [];
+      orderPagination.total = response.page_result?.total || 0;
+    } finally {
+      if (request.isLatest()) loading.value = false;
+    }
+    return;
+  }
   const query = {
-    trading_account_id: accountId,
+    ...scope,
     instrument_id: filterSymbol.value.trim().toUpperCase(),
     state: orderState.value || undefined,
     ...rangeToTime(orderTimeRange.value),
@@ -327,7 +406,7 @@ async function loadOrders() {
   loading.value = true;
   try {
     const response = await listOrders(query);
-    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+    if (!request.isLatest()) return;
     orders.value = response.orders || [];
     orderPagination.total = response.page_result?.total || 0;
   } finally {
@@ -543,6 +622,9 @@ onMounted(async () => {
 }
 .orders-table-region :deep(.arco-table-th) {
   white-space: nowrap;
+}
+.record-tabs {
+  margin-bottom: 8px;
 }
 .cancel-alert {
   margin-bottom: 12px;

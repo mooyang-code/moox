@@ -319,6 +319,7 @@ export interface ListOrdersReq {
 }
 
 export interface ListFillsReq {
+  logical_account_id?: string;
   trading_account_id?: string;
   order_id?: string;
   instrument_id?: string;

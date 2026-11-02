@@ -11,7 +11,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 | SPOT instrument | `/api/v3/exchangeInfo` | `/api/v5/public/instruments?instType=SPOT` |
 | USDT 线性 SWAP instrument | `/fapi/v1/exchangeInfo` | `/api/v5/public/instruments?instType=SWAP` |
 | 目标换算参考价 | `/api/v3/ticker/price` 或 `/fapi/v1/ticker/price` 的 `price` | `/api/v5/market/ticker` 的 `last` |
-| 撮合报价 | `/api/v3/ticker/24hr` 或 `/fapi/v1/ticker/24hr` | `/api/v5/market/ticker` |
+| 撮合报价 | `ticker/price` 加 `ticker/bookTicker`（现货 `/api/v3`，合约 `/fapi/v1`），时间取本地收到时间 | `/api/v5/market/ticker`，时间取本地收到时间 |
 | MARKET / LIMIT 下单 | `POST /api/v3/order` 或 `/fapi/v1/order` | `POST /api/v5/trade/order` |
 | 按 client order ID 查询 | origClientOrderId | clOrdId |
 | 撤单 / 查询未完成订单 | order/openOrders | cancel-order/orders-pending |
@@ -25,6 +25,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 - 公共 quantity 是基础资产数量。
 - Binance 当前的 SPOT 与 USDT 线性 SWAP 直接以基础资产数量传递 `quantity`，按 instrument 的步长、精度与最小量校验；不做 OKX 式的张数换算。
 - OKX SWAP 适配器用 `ctVal` 和 `ctValCcy` 在基础数量与 `sz` 之间双向转换。
+- Binance 合约持仓用 `/fapi/v3/positionRisk`，v3 不返回 `marginType`、`leverage`，全仓判断看 `isolatedMargin`，杠杆取本地配置。
 - 接口与持久化边界的时间戳统一为毫秒；适配器内部使用 `time.Time`。
 - Exchange order ID、trade ID 和 client order ID 原样保存，用于恢复与幂等。
 - live SWAP 的账户、保证金、强平价和 PnL 直接采用 Exchange 返回值；paper 使用本地

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getExecutionCapabilities: vi.fn(),
   listTradableInstruments: vi.fn(),
   listHoldings: vi.fn(),
+  listTradingAccounts: vi.fn(),
   listPositions: vi.fn(),
   submitOrder: vi.fn(),
   placeManualOrder: vi.fn(),
@@ -98,6 +99,7 @@ beforeEach(() => {
   mocks.getLogicalAccountTarget.mockReset().mockResolvedValue({});
   mocks.listTradableInstruments.mockResolvedValue({ instruments: [] });
   mocks.listHoldings.mockResolvedValue({ holdings: [] });
+  mocks.listTradingAccounts.mockResolvedValue({ accounts: [] });
   mocks.listPositions.mockResolvedValue({ positions: [] });
   mocks.getExecutionCapabilities
     .mockReset()

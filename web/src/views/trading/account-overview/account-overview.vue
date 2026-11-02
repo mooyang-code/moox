@@ -171,7 +171,7 @@
             <a-form-item field="maker_fee_rate" label="挂单费率" required><a-input v-model="form.maker_fee_rate" /></a-form-item>
             <a-form-item field="taker_fee_rate" label="吃单费率" required><a-input v-model="form.taker_fee_rate" /></a-form-item>
             <a-form-item field="slippage_bps" label="滑点（基点）" required><a-input v-model="form.slippage_bps" /></a-form-item>
-            <a-form-item field="logical_account_name" label="组合账户名称" required>
+            <a-form-item field="logical_account_name" label="组合账户名称" extra="不填就只建执行账户，之后再加入组合账户">
               <a-input v-model="form.logical_account_name" name="logical_account_name" />
             </a-form-item>
           </template>

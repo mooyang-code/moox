@@ -121,7 +121,7 @@ describe("strategy instance creation behavior", () => {
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
     api.listLogicalAccounts.mockRejectedValueOnce(new Error("账户服务不可用")).mockResolvedValueOnce({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto" }],
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1 }],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });

@@ -73,7 +73,7 @@ export function buildLiveRequest(form: AccountFormModel): CreateTradingAccountRe
 export function buildPaperSimulationRequest(form: AccountFormModel): CreatePaperSimulationReq {
   return {
     account_name: form.name.trim(),
-    logical_account_name: (form.logical_account_name || `${form.name.trim()}-logical`).trim(),
+    logical_account_name: form.logical_account_name.trim(),
     control_mode: form.control_mode,
     exchange: form.exchange,
     market_type: form.market_type,

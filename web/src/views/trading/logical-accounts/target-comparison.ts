@@ -6,6 +6,29 @@ export interface ComparisonRow {
   actual: string;
   difference: string;
   status: string;
+  members?: string;
+}
+
+// 各成员持仓，键是标的和账户。
+export type MemberPositions = Record<string, Record<string, number>>;
+
+export function memberPositionsOf(items: { instrument_id: string; trading_account_id: string; quantity: number }[]) {
+  const result: MemberPositions = {};
+  for (const item of items) {
+    if (!item.instrument_id) continue;
+    const current = (result[item.instrument_id] ||= {});
+    current[item.trading_account_id] = (current[item.trading_account_id] || 0) + item.quantity;
+  }
+  return result;
+}
+
+export function withMemberDetail(rows: ComparisonRow[], members: MemberPositions, accountName: (id: string) => string) {
+  return rows.map(row => ({
+    ...row,
+    members: Object.entries(members[row.instrument_id] || {})
+      .map(([id, quantity]) => `${accountName(id)}：${display(quantity)}`)
+      .join("；")
+  }));
 }
 
 export function actualFromPositions(positions: Position[]) {

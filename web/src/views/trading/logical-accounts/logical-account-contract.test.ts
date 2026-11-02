@@ -11,7 +11,7 @@ describe("组合账户子视图契约", () => {
     expect(source).toContain("新建组合账户");
     expect(source).toContain("组合账户详情");
     expect(source).toContain("执行账户");
-    expect(source).toContain("多个执行账户按优先级执行，当前账户容量不足时自动切换下一账户。");
+    expect(source).toContain("优先级数字越小越先使用，当前账户资金用完才用下一个账户。");
     expect(source).not.toContain("策略账户");
     expect(source).not.toContain("实际交易账户");
     expect(source).not.toContain("<h2>逻辑账户</h2>");

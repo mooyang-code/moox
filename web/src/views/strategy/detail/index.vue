@@ -23,6 +23,21 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
+        组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
+        <template #action>
+          <a-button
+            size="small"
+            @click="
+              router.push({
+                path: '/trading/accounts',
+                query: { view: 'strategy', logical_account_id: logicalAccount?.logical_account_id }
+              })
+            "
+            >去恢复</a-button
+          >
+        </template>
+      </a-alert>
       <template v-if="store.instance">
         <a-descriptions :column="{ xs: 1, md: 2, xl: 3 }" bordered size="small" class="summary">
           <a-descriptions-item label="实例状态"
@@ -52,7 +67,7 @@
                   query: { view: 'strategy', logical_account_id: store.instance.logical_account_id }
                 })
               "
-              >{{ store.instance.logical_account_id }}</a-link
+              >{{ logicalAccount?.name || store.instance.logical_account_id }}</a-link
             ><span v-else>未关联账户</span></a-descriptions-item
           >
         </a-descriptions>
@@ -97,6 +112,7 @@
 </template>
 
 <script setup lang="ts">
+import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
@@ -150,6 +166,7 @@ const {
     controlUncertain.value = false;
   }
 });
+const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
 
 const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
 const definitionHint = computed(() =>

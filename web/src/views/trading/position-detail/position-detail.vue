@@ -31,6 +31,17 @@
             {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
           </a-option>
         </a-select>
+        <a-select
+          v-model="logicalAccountId"
+          allow-clear
+          placeholder="按组合账户查看"
+          class="account-select"
+          @change="loadPositions"
+        >
+          <a-option v-for="logical in logicalAccounts" :key="logical.logical_account_id" :value="logical.logical_account_id">{{
+            logical.name
+          }}</a-option>
+        </a-select>
         <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
         <a-button type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
           <template #icon><icon-search /></template>
@@ -113,6 +124,7 @@
           >
             <template #columns>
               <a-table-column title="资产" data-index="asset" :width="100" />
+              <a-table-column v-if="logicalAccountId" title="执行账户" data-index="trading_account_id" :width="170" />
               <a-table-column title="数量" data-index="quantity" :width="110" />
               <a-table-column title="平均成本" :width="130">
                 <template #cell="{ record }">{{ unknownIfZero(record.average_cost) }}</template>
@@ -147,6 +159,7 @@
                 <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
               </a-table-column>
               <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column v-if="logicalAccountId" title="执行账户" data-index="trading_account_id" />
               <a-table-column title="方向" :width="90">
                 <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
               </a-table-column>
@@ -185,13 +198,14 @@ import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   formatTimestamp,
+  listLogicalAccounts,
   listTradingAccounts,
   listHoldings,
   listPositions,
   queryEquityCurve,
   syncTradingAccount
 } from "@/api/trade";
-import type { TradingAccount, Holding, Position } from "@/api/trade/types";
+import type { TradingAccount, Holding, LogicalAccount, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
 
@@ -200,6 +214,8 @@ const positions = ref<Position[]>([]);
 const holdings = ref<Holding[]>([]);
 // 现货快照没有权益，取最新权益点的估值。
 const spotEquity = ref("");
+const logicalAccounts = ref<LogicalAccount[]>([]);
+const logicalAccountId = ref("");
 
 function unknownIfZero(value?: string) {
   return !value || Number(value) === 0 ? "-" : value;
@@ -256,6 +272,11 @@ function pnlTone(value?: string) {
 
 async function loadAccounts() {
   const request = accountRequests.begin();
+  void listLogicalAccounts({ page: 1, size: 500 })
+    .then(rsp => {
+      logicalAccounts.value = rsp.logical_accounts || [];
+    })
+    .catch(() => undefined);
   accountsLoading.value = true;
   accountsError.value = "";
   try {
@@ -326,6 +347,22 @@ async function loadPositions() {
   loading.value = true;
   positionsError.value = "";
   try {
+    const logical = logicalAccounts.value.find(item => item.logical_account_id === logicalAccountId.value);
+    if (logical) {
+      if (logical.market_type === 2) {
+        const response = await listPositions({ logical_account_id: logical.logical_account_id, instrument_id: requestedSymbol });
+        if (!request.isLatest()) return;
+        positions.value = response.positions || [];
+        holdings.value = [];
+        return;
+      }
+      const members = (logical.members || []).filter(member => member.enabled);
+      const responses = await Promise.all(members.map(member => listHoldings(member.trading_account_id)));
+      if (!request.isLatest()) return;
+      holdings.value = responses.flatMap(response => response.holdings || []);
+      positions.value = [];
+      return;
+    }
     if (selectedAccount.value?.market_type === 1) {
       const response = await listHoldings(accountId);
       if (!request.isLatest() || tradingAccountId.value !== accountId) return;
