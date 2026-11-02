@@ -910,8 +910,8 @@ func (s *Service) flattenTimeout() time.Duration {
 	if s.FlattenTimeout > 0 {
 		return s.FlattenTimeout
 	}
-	// 要小于控制台 RPC 的 15 秒超时，未完成的部分由工作线程继续。
-	return 12 * time.Second
+	// 要小于网关默认的 10 秒调用超时，未完成的部分由工作线程继续。
+	return 8 * time.Second
 }
 
 func quantityRuleReason(
