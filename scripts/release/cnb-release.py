@@ -35,9 +35,10 @@ def sha256(path):
 
 
 def asset_matches(asset, path):
-    if asset is None or asset.get("size") != os.path.getsize(path):
+    """没有哈希就不算一致：同版本重新构建的文件可能大小相同。"""
+    if asset is None or asset.get("size") != os.path.getsize(path) or not asset.get("hash_value"):
         return False
-    return not asset.get("hash_value") or asset["hash_value"].lower().split(":")[-1] == sha256(path)
+    return asset["hash_value"].lower().split(":")[-1] == sha256(path)
 
 
 def find_release(tag):
@@ -94,7 +95,7 @@ def main():
             sys.exit(f"上传 {name} 失败（curl 退出码 {uploaded.returncode}），重新运行会接着传")
         m = re.search(r"/asset-upload-confirmation/([^/]+)/(.+?)(?:\?|$)", verify_url)
         if not m:
-            sys.exit(f"无法从 verify_url 解析确认参数：{verify_url}")
+            sys.exit("无法从 verify_url 解析确认参数")
         cnb("post-release-asset-upload-confirmation", "--release-id", rid, "--upload-token", m.group(1), "--asset-path", m.group(2), "--ttl", "0")
 
     print("==> 核对附件")

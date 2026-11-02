@@ -82,6 +82,21 @@ func TestRunSetupVerifyFailsWhenMonitorKeepsCriticalAlerts(t *testing.T) {
 	require.Contains(t, last.Detail, "host-agent")
 }
 
+func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
+	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
+	last := checks[len(checks)-1]
+	require.Equal(t, verify.Wait, last.Status)
+	require.Contains(t, last.Detail, "读不到 Monitor")
+}
+
+func TestSetupVerifyListsOnlyTheFirstAlerts(t *testing.T) {
+	alerts := []string{"a", "b", "c", "d", "e", "f", "g"}
+	checks := verify.Evaluate(verify.Input{Now: time.Now(), CriticalAlerts: alerts})
+	detail := checks[len(checks)-1].Detail
+	require.Contains(t, detail, "共 7 项")
+	require.NotContains(t, detail, "f")
+}
+
 func TestRunSetupVerifySurvivesTransientReadErrors(t *testing.T) {
 	source := &flakyVerifySource{fakeVerifySource: fakeVerifySource{ready: 1}, failures: 2}
 	checks, err := runSetupVerify(context.Background(), source, time.Second, time.Millisecond)

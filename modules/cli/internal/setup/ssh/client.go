@@ -208,7 +208,7 @@ func resolveKnownHostsPath(path string) (string, error) {
 }
 
 // ForgetHost 删除本机已记录的这台主机的全部指纹，让下一次连接重新走“核对并确认指纹”。
-// 机器重装、换机后指纹变了，或指纹文件损坏、权限不对时使用；其他主机的记录原样保留。
+// 机器重装、换机后指纹变了，或指纹文件损坏、权限不对时使用；其他主机的记录保留（文件其他行也损坏时整个移开）。
 // 指纹文件是符号链接或目录时先改名留底，之后确认指纹会重新创建。
 func ForgetHost(target Target, opts Options) error {
 	if err := validateTarget(target); err != nil {

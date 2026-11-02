@@ -29,6 +29,9 @@ const (
 // maxMissingRatio 是允许的 K 线缺失比例：到截止时间就带缺口结算，缺口靠之后补采，要求零缺失可能永远走不完。
 const maxMissingRatio = 0.05
 
+// maxAlertsShown 是报错里最多列出的告警数，全部内容看 doctor alerts。
+const maxAlertsShown = 5
+
 // firstBarWait 是生效周期之后等第一根 K 线的时间：超过它 expected 仍是 0，说明这段时间本来就没有 K 线（休市）。
 const firstBarWait = 3 * time.Minute
 
@@ -74,6 +77,8 @@ type Input struct {
 	Instances      []Instance
 	// CriticalAlerts 是 Monitor 里 critical 级别的问题，和 doctor alerts 是同一份数据。
 	CriticalAlerts []string
+	// MonitorError 是读不到 Monitor 的原因：Monitor 可能还在启动，不影响其他检查。
+	MonitorError string
 }
 
 // Check 是一项检查的结果。
@@ -92,10 +97,18 @@ func Evaluate(in Input) []Check {
 
 // monitor 只看 critical：新装后要等首轮探测和新数据，所以先等，到时限还在才算失败。
 func monitor(in Input) Check {
-	if len(in.CriticalAlerts) == 0 {
+	check := Check{Name: "monitor", Code: CodeMonitorUnhealthy, Status: Wait}
+	switch count := len(in.CriticalAlerts); {
+	case in.MonitorError != "":
+		check.Detail = "读不到 Monitor：" + in.MonitorError
+	case count == 0:
 		return Check{Name: "monitor", Status: Pass}
+	case count > maxAlertsShown:
+		check.Detail = fmt.Sprintf("共 %d 项，前 %d 项：%s", count, maxAlertsShown, strings.Join(in.CriticalAlerts[:maxAlertsShown], "；"))
+	default:
+		check.Detail = strings.Join(in.CriticalAlerts, "；")
 	}
-	return Check{Name: "monitor", Code: CodeMonitorUnhealthy, Status: Wait, Detail: strings.Join(in.CriticalAlerts, "；")}
+	return check
 }
 
 func plan(in Input) Check {

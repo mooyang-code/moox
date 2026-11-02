@@ -8,6 +8,11 @@ cd "${ROOT}"
 
 failed=0
 while IFS= read -r config; do
+  if [[ "${config}" != */config/* ]]; then
+    echo "${config} 不在模块的 config 目录下，检查不到对应代码" >&2
+    failed=1
+    continue
+  fi
   module="${config%/config/*}"
   while IFS= read -r line; do
     if [[ "${line}" != *timerjob.KeepRunning* ]]; then

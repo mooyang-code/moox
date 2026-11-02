@@ -227,17 +227,17 @@ func (r setupVerifyReader) read(ctx context.Context, baseline map[string]int64) 
 		return input, err
 	}
 	input.Instances = instances
-	if input.CriticalAlerts, err = readCriticalAlerts(ctx, r.gateway); err != nil {
-		return input, err
+	if input.CriticalAlerts, err = readCriticalAlerts(ctx, r.gateway, r.spaceID); err != nil {
+		input.MonitorError = err.Error()
 	}
 	return input, nil
 }
 
-// readCriticalAlerts 读全部空间：防火墙、组件这些问题不属于某个空间。
-func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway) ([]string, error) {
-	overview, err := doctorcli.New(gateway).GetHealthOverview(ctx, "")
+// readCriticalAlerts 只看这个空间：其他没启动的空间有告警是正常的，不能拦住这次验收。组件和主机不分空间，都在结果里。
+func readCriticalAlerts(ctx context.Context, gateway setupVerifyGateway, spaceID string) ([]string, error) {
+	overview, err := doctorcli.New(gateway).GetHealthOverview(ctx, spaceID)
 	if err != nil {
-		return nil, fmt.Errorf("read monitor overview: %w", err)
+		return nil, err
 	}
 	var alerts []string
 	for _, item := range doctorcli.BuildAlertsReport(overview).Items {
