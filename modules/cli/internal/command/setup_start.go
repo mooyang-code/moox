@@ -28,6 +28,7 @@ const (
 	defaultStrategyDSL    = "examples/strategies/dual_ma_swap_1m.yaml"
 	setupStartStreamWait  = 90 * time.Second
 	setupStartPlanWait    = 90 * time.Second
+	setupStartSubjectWait = 60 * time.Second
 	setupStartPollDefault = 3 * time.Second
 )
 
@@ -142,7 +143,7 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 		if task.Enabled {
 			continue
 		}
-		if err := client.EnableTask(ctx, spaceID, task.TaskID); err != nil {
+		if err := setupStartEnableTask(ctx, client, spaceID, task.TaskID, poll); err != nil {
 			return summary, err
 		}
 		summary.TasksEnabled++
@@ -169,6 +170,23 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 	}
 	summary.Strategy, err = setupStartStrategy(ctx, client, repository, &summary)
 	return summary, err
+}
+
+// setupStartEnableTask 启用任务。标的刚同步完时标签还可能解析不出成员，控制面会拒绝启用；
+// 这是暂时现象，等一会儿再试，其他错误原样返回。
+func setupStartEnableTask(ctx context.Context, client setupStartClient, spaceID, taskID string, poll time.Duration) error {
+	deadline := time.Now().Add(setupStartSubjectWait)
+	for {
+		err := client.EnableTask(ctx, spaceID, taskID)
+		if err == nil || !strings.Contains(err.Error(), "没有有效标的") || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
 }
 
 func setupStartWaitStream(ctx context.Context, client setupStartClient, spaceID string, poll time.Duration) error {
