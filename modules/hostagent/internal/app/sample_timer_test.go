@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-database/timer"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/server"
 )
@@ -148,6 +149,14 @@ func TestSampleTimerStartAtOnceRunsBeforeServerStartupCompletes(t *testing.T) {
 	}
 	require.NoError(t, server.Close(nil))
 	require.NoError(t, <-serveDone)
+}
+
+// 锁定定时器库的行为：首次执行的错误会让服务退出，这就是定时任务都要走 KeepRunning 的原因。
+func TestTimerLibraryStopsServerOnStartupError(t *testing.T) {
+	server := newImmediateSampleTimerServer()
+	want := errors.New("initial sample failed")
+	timer.RegisterHandlerService(server.Service(sampleTimerService), func(context.Context) error { return want })
+	assert.ErrorContains(t, server.Serve(), want.Error())
 }
 
 func TestRegisteredSampleTimerSurvivesEventBusFailureAndRecovers(t *testing.T) {

@@ -24,6 +24,7 @@ const (
 	CodeFactorNotAdvancing   = "factor_not_advancing"
 	CodeStrategyNotRunning   = "strategy_not_running"
 	CodeMonitorUnhealthy     = "monitor_unhealthy"
+	CodeMonitorUnreadable    = "monitor_unreadable"
 )
 
 // maxMissingRatio 是允许的 K 线缺失比例：到截止时间就带缺口结算，缺口靠之后补采，要求零缺失可能永远走不完。
@@ -75,7 +76,7 @@ type Input struct {
 	FactorDeployed bool
 	Factors        []Factor
 	Instances      []Instance
-	// CriticalAlerts 是 Monitor 里 critical 级别的问题，和 doctor alerts 是同一份数据。
+	// CriticalAlerts 是这个空间和各组件、主机 critical 级别的问题，来源和 doctor alerts --space 相同。
 	CriticalAlerts []string
 	// MonitorError 是读不到 Monitor 的原因：Monitor 可能还在启动，不影响其他检查。
 	MonitorError string
@@ -100,7 +101,7 @@ func monitor(in Input) Check {
 	check := Check{Name: "monitor", Code: CodeMonitorUnhealthy, Status: Wait}
 	switch count := len(in.CriticalAlerts); {
 	case in.MonitorError != "":
-		check.Detail = "读不到 Monitor：" + in.MonitorError
+		check.Code, check.Detail = CodeMonitorUnreadable, "读不到 Monitor："+in.MonitorError
 	case count == 0:
 		return Check{Name: "monitor", Status: Pass}
 	case count > maxAlertsShown:

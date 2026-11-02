@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -92,6 +93,27 @@ func TestReleaseBuildReuseAndVerification(t *testing.T) {
 	require.NoError(t, os.WriteFile(built.Packages["trade"].Archive, []byte("tampered"), 0o600))
 	_, err = ReadRelease(t.Context(), options.StateDirectory, "r1", "amd64")
 	require.ErrorContains(t, err, "trade artifact failed independent verification")
+}
+
+// Git 仓库里即使有 moox-bundle.json，也要走 Git 检查，不能把改过的代码记成官方提交。
+func TestCleanCommitIgnoresBundleManifestInGitRepository(t *testing.T) {
+	repository := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", repository, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, string(output))
+	}
+	run("init", "-q")
+	require.NoError(t, os.WriteFile(filepath.Join(repository, "moox-bundle.json"), []byte(`{"commit":"official"}`), 0o644))
+	run("add", ".")
+	run("commit", "-q", "-m", "x")
+	commit, err := cleanCommit(context.Background(), repository)
+	require.NoError(t, err)
+	require.NotEqual(t, "official", commit)
+	require.NoError(t, os.WriteFile(filepath.Join(repository, "changed"), []byte("x"), 0o644))
+	_, err = cleanCommit(context.Background(), repository)
+	require.ErrorContains(t, err, "clean worktree")
 }
 
 func TestReleaseRejectsInvalidInput(t *testing.T) {

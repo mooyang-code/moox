@@ -290,6 +290,38 @@ func mustFirewallTargets(t *testing.T, manifest setupconfig.Manifest) []setupFir
 	return targets
 }
 
+func TestSetupFirewallTargetsIncludeAutomaticHostServices(t *testing.T) {
+	manifest := setupconfig.Manifest{
+		HostCatalog: map[string]setupconfig.HostDefinition{
+			"control": {Address: "203.0.113.8"},
+			"storage": {Address: "203.0.113.10"},
+			"edge":    {Address: "203.0.113.11"},
+		},
+		Deployments: map[string][]string{"control": {"admin"}, "storage": {"storage-primary"}},
+	}
+	targets := mustFirewallTargets(t, manifest)
+	for _, name := range []string{"storage", "edge"} {
+		t.Run(name, func(t *testing.T) {
+			var healthPorts []string
+			for _, target := range targets {
+				if target.Host.Name != name {
+					continue
+				}
+				for _, rule := range target.Rules {
+					if rule.Ports != "11012" && rule.Ports != "11425" {
+						continue
+					}
+					healthPorts = append(healthPorts, rule.Ports)
+					assert.Equal(t, "TCP", rule.Protocol)
+					assert.Equal(t, "203.0.113.8/32", rule.CidrBlock)
+					assert.Equal(t, "ACCEPT", rule.Action)
+				}
+			}
+			assert.ElementsMatch(t, []string{"11012", "11425"}, healthPorts)
+		})
+	}
+}
+
 // Monitor 经公网探测的每个健康端口都要有放行规则；同地域私网和只能出站的主机不走公网，也不该开端口。
 func TestSetupFirewallCoversEveryPublicHealthProbe(t *testing.T) {
 	manifest := setupconfig.Manifest{

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	doctorcli "github.com/mooyang-code/moox/modules/cli/internal/doctor"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"testing"
 	"time"
@@ -82,10 +83,44 @@ func TestRunSetupVerifyFailsWhenMonitorKeepsCriticalAlerts(t *testing.T) {
 	require.Contains(t, last.Detail, "host-agent")
 }
 
+type flappingVerifySource struct {
+	alertingVerifySource
+	reads int
+}
+
+// 第一轮之后交替出现告警：碰巧干净的一轮不能算通过。
+func (s *flappingVerifySource) read(ctx context.Context, baseline map[string]int64) (verify.Input, error) {
+	s.reads++
+	s.alerts = nil
+	if s.reads%2 == 0 {
+		s.alerts = []string{"storage host-agent 反复退出"}
+	}
+	return s.alertingVerifySource.read(ctx, baseline)
+}
+
+func TestRunSetupVerifyRequiresConsecutivePasses(t *testing.T) {
+	source := &flappingVerifySource{}
+	checks, err := runSetupVerify(context.Background(), source, 20*time.Millisecond, time.Millisecond)
+	require.NoError(t, err)
+	require.False(t, verify.Settled(checks) && checks[len(checks)-1].Status == verify.Pass && source.reads < 4)
+	require.Greater(t, source.reads, 4)
+}
+
+func TestCriticalAlertLinesCountEachComponentOnce(t *testing.T) {
+	lines := criticalAlertLines([]doctorcli.AlertItem{
+		{Source: doctorcli.AlertSourceAlert, Severity: doctorcli.AlertSeverityCritical, Object: "component/storage/host-agent", Title: "健康检查超时"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityCritical, Object: "storage/host-agent", Title: "storage / host-agent"},
+		{Source: doctorcli.AlertSourceComponent, Severity: doctorcli.AlertSeverityWarning, Object: "storage/access", Title: "storage / access"},
+		{Source: doctorcli.AlertSourceHost, Severity: doctorcli.AlertSeverityCritical, Object: "overseas", Title: "主机 overseas"},
+	})
+	require.Equal(t, []string{"storage/host-agent storage / host-agent", "overseas 主机 overseas"}, lines)
+}
+
 func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
 	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
 	last := checks[len(checks)-1]
 	require.Equal(t, verify.Wait, last.Status)
+	require.Equal(t, verify.CodeMonitorUnreadable, last.Code)
 	require.Contains(t, last.Detail, "读不到 Monitor")
 }
 

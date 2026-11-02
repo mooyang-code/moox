@@ -265,7 +265,8 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `restart_failed` | 组件重启失败、处于暂停状态，或外部程序没启用 | 看错误原因；用 `setup logs` 查，不要重发单元 |
 | `restart_unverified` | 已重启但读不到状态 | 用 `setup logs` 确认 |
 | `collection_not_started` | 还没运行 `setup start`（任务默认停用）；或到超时还没有采集计划、collector-stream 不在线 | 看 `collector status` 给出的原因，不要删任务、不要手工改数据 |
-| `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`；远程健康检查超时多半是端口没放行，运行 `setup firewall --yes` 后重跑 `setup install` |
+| `monitor_unhealthy` | 到超时 Monitor 还有 critical 问题，报错里列出了主机和组件 | 看 `doctor alerts`；远程健康检查超时多半是端口没放行，运行 `setup firewall --yes` 后重跑 `setup install`。组件都正常但告警不解除时，检查告警通知渠道：恢复通知发不出去时告警会保持触发 |
+| `monitor_unreadable` | 到超时还读不到 Monitor | 用 `setup logs --component monitor` 查 Monitor |
 | `kline_not_arrived` | 到超时还没有 K 线，或缺失超过 5% | 看 `collector status` 和 `setup logs --component collector-stream` |
 | `factor_not_advancing` | 启用的 1m 因子任务没有前进，或最近一期失败 | 看 `factor status` 和 `setup logs --component factor-engine` |
 | `strategy_not_running` | 启用的策略实例没有运行会话 | 看 `strategy instance show` 和 `setup logs --component strategy` |

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """在 CNB 上发布新版本并撤下旧版本（需要带 repo-release:rw 权限的 CNB_TOKEN 环境变量）。
 
-用法：python3 cnb-release.py <新版本> <产物目录> <发布说明文件> <要删除的旧版本> <仓库目录>
-步骤：推送 main 与新 tag → 创建发布 → 逐个上传附件 → 按 SHA256 核对 → 删除旧版本的发布（保留旧 tag）。
+用法：
+  python3 cnb-release.py <新版本> <产物目录> <发布说明文件> <仓库目录>
+    推送 main 与新 tag → 创建发布（不标记最新）→ 逐个上传附件 → 按 SHA256 核对。
+  python3 cnb-release.py promote <新版本> <要删除的旧版本或 none>
+    真机验收通过后运行：标记最新，删除旧版本的发布（保留旧 tag）。
 """
 import getpass
 import hashlib
@@ -51,10 +54,28 @@ def find_release(tag):
     return payload.get("data")
 
 
+def promote(version, old):
+    release = find_release(version)
+    if release is None:
+        sys.exit(f"CNB 上没有 {version} 的发布")
+    print(f"==> 标记 {version} 为最新")
+    cnb("patch-release", "--release-id", str(release["id"]), "--make-latest", "true")
+    old_release = None if old == "none" else find_release(old)
+    if old_release is None:
+        print(f"==> 不删除旧发布（{old}）")
+    else:
+        print(f"==> 删除旧发布 {old}（id {old_release['id']}，保留 git tag）")
+        cnb("delete-release", "--release-id", str(old_release["id"]))
+    print("完成")
+
+
 def main():
-    if len(sys.argv) != 6:
+    if len(sys.argv) == 4 and sys.argv[1] == "promote":
+        promote(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) != 5:
         sys.exit(__doc__)
-    version, dist, notes, old, repo_dir = sys.argv[1:]
+    version, dist, notes, repo_dir = sys.argv[1:]
     if not os.environ.get("CNB_TOKEN"):
         if not sys.stdin.isatty():
             sys.exit("先设置 CNB_TOKEN（需要 repo-release:rw 权限），或在交互终端里运行以便输入")
@@ -74,7 +95,7 @@ def main():
     release = find_release(version)
     if release is None:
         print(f"==> 创建发布 {version}")
-        release = cnb("post-release", "--tag-name", version, "--name", f"MooX {version}", "--body-file", notes, "--make-latest", "true")
+        release = cnb("post-release", "--tag-name", version, "--name", f"MooX {version}", "--body-file", notes, "--make-latest", "false")
         release = release if release and release.get("id") else find_release(version)
     rid = str(release["id"])
     print(f"    发布 id {rid}")
@@ -107,15 +128,8 @@ def main():
         print(f"    {'OK ' if ok else '不一致'} {name}")
         bad |= not ok
     if bad:
-        sys.exit("附件核对不一致，未删除旧版本")
-
-    old_release = find_release(old)
-    if old_release is None:
-        print(f"==> CNB 上没有 {old} 的发布，跳过删除")
-    else:
-        print(f"==> 删除旧发布 {old}（id {old_release['id']}，保留 git tag）")
-        cnb("delete-release", "--release-id", str(old_release["id"]))
-    print("完成")
+        sys.exit("附件核对不一致")
+    print("完成。真机验收通过后再运行 promote")
 
 
 if __name__ == "__main__":

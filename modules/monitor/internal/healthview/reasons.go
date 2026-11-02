@@ -1,6 +1,10 @@
 package healthview
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+)
 
 func ChineseReason(raw string) string {
 	text := strings.TrimSpace(raw)
@@ -71,6 +75,9 @@ func ChineseReason(raw string) string {
 				return "账户余额差异超过阈值（当前值 " + values[0] + "，阈值 " + values[2] + "）"
 			}
 			return "账户余额差异超过阈值"
+		}
+		if translated := alerttext.Reason(text); translated != text {
+			return translated
 		}
 		if text != "" && isASCII(text) {
 			return "监控检查失败，请查看日志详情"

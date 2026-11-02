@@ -341,6 +341,14 @@ func TestWipeKillsProcessesInsideRoot(t *testing.T) {
 	}
 }
 
+func TestBlockersGiveCommandForEmptyForeignDirectory(t *testing.T) {
+	empty := HostReport{Host: "storage", ModeOK: true, ParentWritable: true}
+	require.Contains(t, strings.Join(blockers([]HostReport{empty}), ""), "sudo chown")
+	used := empty
+	used.Entries = []string{"host"}
+	require.NotContains(t, strings.Join(blockers([]HostReport{used}), ""), "sudo chown")
+}
+
 func TestDecideRoutes(t *testing.T) {
 	clean := HostReport{Host: "control", OwnerOK: true, ModeOK: true, ParentWritable: true}
 	installed := clean

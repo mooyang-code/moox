@@ -210,6 +210,7 @@ button.ghost.away { visibility: hidden; }
           <dl>
             <dt>只留在这台电脑</dt><dd>密码、密钥和整份配置都在本机用 AES-256 加密后保存，文件只有你本人能读；解密密钥放在<span id="key-store">系统钥匙串</span>，不写进配置文件。</dd>
             <dt>SSH 密码不保存</dt><dd>只用来第一次开通免密登录，用完即丢。</dd>
+            <dt>自己验证登录</dt><dd>MooX 用专用密钥，要写 <code>ssh -i ~/.ssh/moox_ed25519 用户@IP</code>；普通 ssh 询问密码不代表没开通。</dd>
             <dt>换电脑能找回</dt><dd>部署完成后，整份配置会用你设的管理员密码再加密一次，备份到你自己的管理后台。</dd>
           </dl>
         </div>
@@ -619,7 +620,15 @@ button.ghost.away { visibility: hidden; }
       state.report = data.report;
       setState(ui, data.report.ok ? '' : 'err', data.report.ok ? '已开通' : '不满足', data.report.ok ? '可以免密登录，环境检测通过' : '环境检测没有通过');
       renderChecks(ui.checks, data.report);
-    }, function (err) { state.report = null; setState(ui, 'err', '失败', err.message); });
+    }, function (err) {
+      state.report = null;
+      setState(ui, 'err', '失败', err.message);
+      if (err.resettable) {
+        var reset = el('button', { type: 'button', class: 'primary', text: '重置并重新获取指纹' });
+        reset.addEventListener('click', function () { login('factor', ui, 'ssh/reset-host', targetOf('factor')); });
+        ui.action.replaceChildren(el('div', { class: 'actions-inline' }, [reset]));
+      }
+    });
   }
   function checkLogins() {
     var keys = loginTargets();
