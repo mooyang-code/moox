@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,6 +21,10 @@ type fakeStartClient struct {
 	triggers  int
 	created   int
 	strategy  int
+	// subjectMisses 是启用任务前还要返回“没有有效标的”的次数；otherErr 非空时直接返回它。
+	subjectMisses int
+	otherErr      error
+	enableCalls   int
 }
 
 func (f *fakeStartClient) Tasks(context.Context, string) ([]adminclient.CollectionTaskSummary, error) {
@@ -27,6 +32,14 @@ func (f *fakeStartClient) Tasks(context.Context, string) ([]adminclient.Collecti
 }
 func (f *fakeStartClient) EnableTask(_ context.Context, _, taskID string) error {
 	require.Zero(nil2T{}, f.triggers)
+	f.enableCalls++
+	if f.otherErr != nil {
+		return f.otherErr
+	}
+	if f.subjectMisses > 0 {
+		f.subjectMisses--
+		return errors.New("UpdateTask rejected: 所选标签没有有效标的")
+	}
 	f.enabled = append(f.enabled, taskID)
 	return nil
 }
@@ -111,4 +124,17 @@ func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
 	manifest := setupconfig.Manifest{}
 	require.ErrorContains(t, setupStartPrerequisites(manifest, "crypto"), "start_prerequisite_missing")
 	require.ErrorContains(t, setupStartPrerequisites(manifest, "stockcn"), "scf_plan")
+}
+
+func TestSetupStartEnableTaskRetriesWhileSubjectsNotResolvable(t *testing.T) {
+	client := &fakeStartClient{subjectMisses: 2}
+	require.NoError(t, setupStartEnableTask(context.Background(), client, "crypto", "a", time.Millisecond))
+	require.Equal(t, 3, client.enableCalls)
+	require.Equal(t, []string{"a"}, client.enabled)
+}
+
+func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
+	client := &fakeStartClient{otherErr: errors.New("UpdateTask rejected: 其他原因")}
+	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", "a", time.Millisecond))
+	require.Equal(t, 1, client.enableCalls)
 }
