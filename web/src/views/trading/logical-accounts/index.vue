@@ -17,7 +17,7 @@
       <div class="summary-grid">
         <div class="summary-card">
           <span>组合账户</span>
-          <strong>{{ pagination.total }}</strong>
+          <strong>{{ rows.length }}</strong>
           <small>当前空间总数</small>
         </div>
         <div class="summary-card summary-card--green">
@@ -58,9 +58,8 @@
         row-key="logical_account_id"
         :data="filteredRows"
         :loading="loading"
-        :pagination="pagination"
+        :pagination="{ pageSize: 20 }"
         :scroll="{ x: 1040 }"
-        @page-change="changePage"
       >
         <template #columns>
           <a-table-column title="组合账户" :width="220">
@@ -212,7 +211,7 @@
                 <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
               </a-table-column>
               <a-table-column title="优先级" data-index="priority" :width="90" />
-              <a-table-column title="操作" :width="190">
+              <a-table-column title="操作" :width="260">
                 <template #cell="{ record }">
                   <a-space>
                     <a-button
@@ -222,6 +221,7 @@
                       @click="openManual(record.trading_account_id)"
                       >{{ orderEntryLabel }}</a-button
                     >
+                    <a-button size="mini" type="text" @click="openOrders(record.trading_account_id)">查看订单</a-button>
                     <a-popconfirm content="确认移除此成员？" @ok="removeMember(record.trading_account_id)">
                       <a-button size="mini" type="text" status="danger" :disabled="selected?.automation_state !== 'PAUSED'"
                         >移除</a-button
@@ -234,31 +234,23 @@
           </a-table>
 
           <div class="section-title">
-            <h3>当前目标</h3>
+            <h3>目标与实际持仓</h3>
             <span>{{ targetStatusLabel(target?.status) }}</span>
           </div>
-          <a-table size="small" row-key="instrument_id" :data="target?.targets || []" :pagination="false">
+          <a-alert v-if="targetExpired && hasDifference" type="warning" show-icon class="section">
+            目标已过期，持仓停在当前状态，等待下一个目标。
+          </a-alert>
+          <a-table size="small" row-key="instrument_id" :data="comparison" :pagination="false" :scroll="{ x: 600 }">
             <template #columns>
               <a-table-column title="交易标的" data-index="instrument_id" />
-              <a-table-column title="目标持仓量">
-                <template #cell="{ record }">{{ record.hold ? "保持当前持仓" : record.quantity }}</template>
-              </a-table-column>
+              <a-table-column title="目标数量" data-index="target" :width="110" />
+              <a-table-column title="实际数量" data-index="actual" :width="110" />
+              <a-table-column title="差额" data-index="difference" :width="110" />
+              <a-table-column title="状态" data-index="status" />
             </template>
           </a-table>
           <a-empty v-if="target && !target.targets.length" description="空目标：全部归零" />
           <a-alert v-if="target?.last_error" type="warning" show-icon class="section">{{ target.last_error }}</a-alert>
-          <template v-if="target?.blocked_targets?.length">
-            <div class="section-title">
-              <h3>阻塞标的</h3>
-            </div>
-            <a-table size="small" row-key="instrument_id" :data="target.blocked_targets" :pagination="false">
-              <template #columns>
-                <a-table-column title="交易标的" data-index="instrument_id" />
-                <a-table-column title="差额" data-index="quantity" :width="120" />
-                <a-table-column title="原因" data-index="reason" />
-              </template>
-            </a-table>
-          </template>
 
           <template v-if="action">
             <div class="section-title">
@@ -410,6 +402,8 @@ import {
   getLogicalAccountTarget,
   getOperatorAction,
   getOrder,
+  listHoldings,
+  listPositions,
   listTradableInstruments,
   listTradingAccounts,
   listLogicalAccounts,
@@ -436,6 +430,7 @@ import type {
   TradableInstrument
 } from "@/api/trade";
 import { instrumentRuleHint, orderRuleError } from "./order-rules";
+import { actualFromHoldings, actualFromPositions, buildComparison } from "./target-comparison";
 import EquityCurve from "./equity-curve.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
@@ -455,6 +450,8 @@ const submissionError = ref("");
 const dialogError = ref("");
 const capabilities = ref<ExecutionCapabilities | null>(null);
 const instruments = ref<TradableInstrument[]>([]);
+const actualPositions = ref<Record<string, number>>({});
+let detailPoller: ReturnType<typeof setInterval> | null = null;
 const loading = ref(false);
 const createVisible = ref(false);
 const detailVisible = ref(false);
@@ -465,7 +462,6 @@ const manualVisible = ref(false);
 const actionPoller = ref<ReturnType<typeof setInterval> | null>(null);
 const route = useRoute();
 const router = useRouter();
-const pagination = reactive({ current: 1, pageSize: 20, total: 0 });
 const stateFilter = ref("");
 const executionFilter = ref<number | undefined>(undefined);
 const routeRequests = createLatestRequestGuard();
@@ -521,6 +517,10 @@ const stateCounts = computed(() => ({
   paused: rows.value.filter(item => item.control_mode === 1 && item.automation_state === "PAUSED").length,
   notReady: rows.value.filter(item => !item.ready).length
 }));
+const comparison = computed(() =>
+  target.value ? buildComparison(target.value.targets, target.value.blocked_targets || [], actualPositions.value) : []
+);
+const hasDifference = computed(() => comparison.value.some(row => Number(row.difference) !== 0));
 const targetExpired = computed(() => {
   const validUntil = Number(target.value?.valid_until);
   return target.value?.status === "EXPIRED" || (Number.isFinite(validUntil) && validUntil > 0 && validUntil <= Date.now());
@@ -572,18 +572,14 @@ async function load() {
   const request = listRequests.begin();
   loading.value = true;
   try {
-    const rsp = await listLogicalAccounts({ page: pagination.current, size: pagination.pageSize });
+    // 统计卡片和筛选都要看全量，这里一次取完，表格在前端分页。
+    const rsp = await listLogicalAccounts({ page: 1, size: 500 });
     if (!request.isLatest()) return;
     rows.value = rsp.logical_accounts || [];
-    pagination.total = rsp.page_result?.total || 0;
     await openRouteDetail();
   } finally {
     if (request.isLatest()) loading.value = false;
   }
-}
-function changePage(page: number) {
-  pagination.current = page;
-  load();
 }
 async function create() {
   if (!createForm.name.trim() || !createForm.settlement_asset.trim()) {
@@ -618,9 +614,31 @@ async function openDetail(item: LogicalAccount) {
   submittedOrder.value = null;
   capabilities.value = null;
   detailVisible.value = true;
+  startDetailPolling();
   await reloadDetail();
 }
+function startDetailPolling() {
+  stopDetailPolling();
+  detailPoller = setInterval(() => {
+    void reloadDetail().catch(() => undefined);
+  }, 5000);
+}
+function stopDetailPolling() {
+  if (detailPoller) clearInterval(detailPoller);
+  detailPoller = null;
+}
+function openOrders(tradingAccountId: string) {
+  void router.push({ path: "/trading/orders", query: { trading_account_id: tradingAccountId } });
+}
+async function loadActualPositions(account: LogicalAccount) {
+  if (account.market_type === 2)
+    return actualFromPositions((await listPositions({ logical_account_id: account.logical_account_id })).positions || []);
+  const members = (account.members || []).filter(member => member.enabled);
+  const responses = await Promise.all(members.map(member => listHoldings(member.trading_account_id)));
+  return actualFromHoldings(responses.flatMap(response => response.holdings || []));
+}
 function closeDetail() {
+  stopDetailPolling();
   capabilityRequests.invalidate();
   manualVisible.value = false;
   routeRequests.invalidate();
@@ -644,6 +662,8 @@ async function reloadDetail() {
   selected.value = accountRsp.logical_account;
   rows.value = rows.value.map(row => (row.logical_account_id === id ? accountRsp.logical_account : row));
   target.value = targetRsp.target || null;
+  const actual = await loadActualPositions(accountRsp.logical_account).catch(() => null);
+  if (actual && request.isLatest() && selected.value?.logical_account_id === id) actualPositions.value = actual;
 }
 
 function refreshActionAccount() {
@@ -663,6 +683,7 @@ async function openRouteDetail() {
       detailRequests.invalidate();
       detailVisible.value = false;
       stopActionPolling();
+      stopDetailPolling();
       selected.value = null;
       target.value = null;
       action.value = null;
@@ -989,7 +1010,10 @@ function stopActionPolling() {
   if (actionPoller.value) clearInterval(actionPoller.value);
   actionPoller.value = null;
 }
-onUnmounted(stopActionPolling);
+onUnmounted(() => {
+  stopActionPolling();
+  stopDetailPolling();
+});
 load();
 // 切换空间后重新加载，丢弃旧空间的列表与进行中的操作轮询。
 const spaceStore = useSpaceStore();
@@ -998,8 +1022,8 @@ watch(
   (next, previous) => {
     if (!next || next === previous) return;
     stopActionPolling();
+    stopDetailPolling();
     listRequests.invalidate();
-    pagination.current = 1;
     rows.value = [];
     selected.value = null;
     void load();

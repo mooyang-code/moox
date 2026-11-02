@@ -60,7 +60,6 @@ export interface TradingAccount {
   last_error: string;
   created_at: string;
   updated_at: string;
-  sync_symbols: string[];
   live?: LiveConfig;
   paper?: PaperConfig;
 }
@@ -253,7 +252,6 @@ export interface CreateTradingAccountReq {
   market_type: MarketType;
   settlement_asset: string;
   margin_mode?: string;
-  sync_symbols?: string[];
   live: LiveConfig;
 }
 
@@ -264,7 +262,6 @@ export interface UpdateTradingAccountReq {
   settlement_asset?: string;
   margin_mode?: string;
   status?: string;
-  sync_symbols?: string[];
 }
 
 export interface ListTradingAccountsReq {

@@ -151,9 +151,6 @@
             <a-form-item field="credential_secret_id" label="真实账户密钥标识" required>
               <a-input v-model="form.credential_secret_id" name="credential_secret_id" autocomplete="off" />
             </a-form-item>
-            <a-form-item v-if="form.market_type === 1" field="sync_symbols" label="交易标的" required>
-              <a-input v-model="form.sync_symbols" name="sync_symbols" data-test="sync-symbols" placeholder="BTCUSDT, ETHUSDT" />
-            </a-form-item>
           </template>
           <a-form-item field="settlement_asset" label="结算资产" required>
             <a-input v-model="form.settlement_asset" :disabled="form.market_type === 2" name="settlement_asset" />
@@ -236,10 +233,6 @@
             </a-descriptions>
           </div>
           <div class="section">
-            <h3>同步标的</h3>
-            <span>{{ selectedAccount.sync_symbols.length ? selectedAccount.sync_symbols.join(", ") : "-" }}</span>
-          </div>
-          <div class="section">
             <h3>关联组合账户</h3>
             <a-button v-if="linkedLogicalAccount" type="text" @click="goLinkedLogicalAccount">
               {{ linkedLogicalAccount.name }} · {{ linkedLogicalAccount.logical_account_id }}
@@ -259,8 +252,12 @@
               <a-form-item field="credential_secret_id" label="真实账户密钥标识"
                 ><a-input v-model="editForm.credential_secret_id"
               /></a-form-item>
-              <a-form-item field="settlement_asset" label="结算资产"><a-input v-model="editForm.settlement_asset" /></a-form-item>
-              <a-form-item field="sync_symbols" label="交易标的"><a-input v-model="editForm.sync_symbols" /></a-form-item>
+              <a-form-item
+                field="settlement_asset"
+                label="结算资产"
+                :extra="linkedLogicalAccount ? '已加入组合账户，不能修改结算资产' : ''"
+                ><a-input v-model="editForm.settlement_asset" :disabled="!!linkedLogicalAccount"
+              /></a-form-item>
               <a-form-item field="status" label="状态">
                 <a-select v-model="editForm.status">
                   <a-option value="ENABLED">启用</a-option>
@@ -355,7 +352,7 @@ const createVisible = ref(false);
 const detailVisible = ref(false);
 const selectedAccount = ref<TradingAccount | null>(null);
 const form = reactive<AccountFormModel>(createDefaultAccountForm());
-const editForm = reactive({ name: "", credential_secret_id: "", settlement_asset: "", sync_symbols: "", status: "ENABLED" });
+const editForm = reactive({ name: "", credential_secret_id: "", settlement_asset: "", status: "ENABLED" });
 const leverageForm = reactive({ instrument_id: "", leverage: "" });
 const formErrors = ref("");
 const syncResult = ref<SyncResult | null>(null);
@@ -388,7 +385,6 @@ watch(
     if (marketType === 2) {
       form.settlement_asset = "USDT";
       form.margin_mode = "CROSS";
-      form.sync_symbols = "";
     }
   }
 );
@@ -548,7 +544,6 @@ async function openDetail(account: TradingAccount) {
     name: account.name,
     credential_secret_id: account.live?.credential_secret_id || "",
     settlement_asset: account.settlement_asset,
-    sync_symbols: account.sync_symbols.join(", "),
     status: account.status
   });
   Object.assign(leverageForm, { instrument_id: "", leverage: "" });
@@ -601,11 +596,7 @@ async function saveAccount() {
       name: editForm.name.trim(),
       credential_secret_id: editForm.credential_secret_id.trim(),
       settlement_asset: editForm.settlement_asset.trim().toUpperCase(),
-      status: editForm.status,
-      sync_symbols: editForm.sync_symbols
-        .split(/[\s,]+/)
-        .filter(Boolean)
-        .map(symbol => symbol.toUpperCase())
+      status: editForm.status
     });
     if (selectedAccount.value?.trading_account_id !== accountId) return;
     selectedAccount.value = response.account;

@@ -50,7 +50,6 @@ const account = {
   status: "ENABLED",
   ready: false,
   leverage_settings: {},
-  sync_symbols: ["BTCUSDT"],
   live: { environment: 1, credential_secret_id: "secret-1" },
   snapshot: {
     balances: [],

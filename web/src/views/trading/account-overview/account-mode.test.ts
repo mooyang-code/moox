@@ -18,8 +18,7 @@ const account = (execution_mode: TradingAccount["execution_mode"]): TradingAccou
   last_ready_at: "",
   last_error: "",
   created_at: "",
-  updated_at: "",
-  sync_symbols: []
+  updated_at: ""
 });
 
 describe("account mode helpers", () => {

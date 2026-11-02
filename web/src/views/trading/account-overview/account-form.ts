@@ -15,18 +15,6 @@ export interface AccountFormModel {
   taker_fee_rate: string;
   slippage_bps: string;
   logical_account_name: string;
-  sync_symbols: string;
-}
-
-export function normalizeSymbols(raw: string): string[] {
-  return [
-    ...new Set(
-      raw
-        .split(/[\s,]+/)
-        .map(value => value.trim().toUpperCase())
-        .filter(Boolean)
-    )
-  ];
 }
 
 export function createDefaultAccountForm(): AccountFormModel {
@@ -44,8 +32,7 @@ export function createDefaultAccountForm(): AccountFormModel {
     maker_fee_rate: "0",
     taker_fee_rate: "0",
     slippage_bps: "0",
-    logical_account_name: "",
-    sync_symbols: ""
+    logical_account_name: ""
   };
 }
 
@@ -59,9 +46,6 @@ export function validateAccountForm(form: AccountFormModel): string {
   if (form.execution_mode === 2 && !form.credential_secret_id.trim()) return "请输入真实账户密钥标识";
   if (form.execution_mode === 1 && (!isNonNegativeDecimal(form.initial_balance) || Number(form.initial_balance) <= 0)) {
     return "模拟账户初始资金必须大于 0";
-  }
-  if (form.execution_mode === 2 && form.market_type === 1 && normalizeSymbols(form.sync_symbols).length === 0) {
-    return "请至少填写一个交易标的";
   }
   if (form.execution_mode === 1) {
     for (const value of [form.maker_fee_rate, form.taker_fee_rate, form.slippage_bps]) {
@@ -82,7 +66,6 @@ export function buildLiveRequest(form: AccountFormModel): CreateTradingAccountRe
     market_type: form.market_type,
     settlement_asset: form.settlement_asset.trim().toUpperCase(),
     margin_mode: form.market_type === 2 ? form.margin_mode : "",
-    sync_symbols: normalizeSymbols(form.sync_symbols),
     live: { environment: form.environment, credential_secret_id: form.credential_secret_id.trim() }
   };
 }

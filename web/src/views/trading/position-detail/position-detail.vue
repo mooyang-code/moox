@@ -65,7 +65,7 @@
       <template v-if="selectedAccount">
         <div class="summary-grid">
           <div class="summary-card">
-            <span>权益</span><strong>{{ snapshotValue(selectedAccount.snapshot?.equity) }}</strong
+            <span>权益</span><strong>{{ spotEquity || snapshotValue(selectedAccount.snapshot?.equity) }}</strong
             ><small>{{ selectedAccount.settlement_asset }}</small>
           </div>
           <div class="summary-card">
@@ -114,9 +114,15 @@
             <template #columns>
               <a-table-column title="资产" data-index="asset" :width="100" />
               <a-table-column title="数量" data-index="quantity" :width="110" />
-              <a-table-column title="平均成本" data-index="average_cost" :width="130" />
-              <a-table-column title="标记价" data-index="mark_price" :width="130" />
-              <a-table-column title="市值" data-index="market_value" :width="130" />
+              <a-table-column title="平均成本" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.average_cost) }}</template>
+              </a-table-column>
+              <a-table-column title="标记价" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.mark_price) }}</template>
+              </a-table-column>
+              <a-table-column title="市值" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.market_value) }}</template>
+              </a-table-column>
               <a-table-column title="未实现盈亏" :width="140">
                 <template #cell="{ record }"
                   ><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template
@@ -177,7 +183,14 @@ import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
+import {
+  formatTimestamp,
+  listTradingAccounts,
+  listHoldings,
+  listPositions,
+  queryEquityCurve,
+  syncTradingAccount
+} from "@/api/trade";
 import type { TradingAccount, Holding, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
@@ -185,6 +198,28 @@ defineOptions({ name: "position-detail" });
 const accounts = ref<TradingAccount[]>([]);
 const positions = ref<Position[]>([]);
 const holdings = ref<Holding[]>([]);
+// 现货快照没有权益，取最新权益点的估值。
+const spotEquity = ref("");
+
+function unknownIfZero(value?: string) {
+  return !value || Number(value) === 0 ? "-" : value;
+}
+
+async function loadSpotEquity(accountId: string) {
+  spotEquity.value = "";
+  const now = Date.now();
+  try {
+    const response = await queryEquityCurve({
+      trading_account_id: accountId,
+      start_time: String(now - 3_600_000),
+      end_time: String(now)
+    });
+    const latest = response.points?.[response.points.length - 1];
+    if (latest && tradingAccountId.value === accountId) spotEquity.value = latest.equity;
+  } catch {
+    // 权益点缺失时显示快照值。
+  }
+}
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -296,6 +331,7 @@ async function loadPositions() {
       if (!request.isLatest() || tradingAccountId.value !== accountId) return;
       holdings.value = response.holdings || [];
       positions.value = [];
+      void loadSpotEquity(accountId);
       return;
     }
     const response = await listPositions({ trading_account_id: accountId, instrument_id: requestedSymbol });
