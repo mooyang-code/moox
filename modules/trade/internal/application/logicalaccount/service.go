@@ -595,12 +595,24 @@ func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, trading
 	if err != nil {
 		return false, err
 	}
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	minimums := make(map[string]string, len(instruments))
+	for _, instrument := range instruments {
+		minimums[instrument.BaseAsset] = instrument.MinExchangeQuantity
+	}
 	for _, balance := range account.Snapshot.Balances {
 		total, parseErr := shared.ParseDecimal(balance.Total)
 		if parseErr != nil {
 			return false, parseErr
 		}
-		if _, ok := managed[balance.Asset]; ok && balance.Asset != account.SettlementAsset && !total.IsZero() {
+		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset || total.IsZero() {
+			continue
+		}
+		// 卖出后留下的零头下不了单，不挡移除。
+		if minimum, parseErr := shared.ParseDecimal(minimums[balance.Asset]); parseErr != nil || total.Cmp(minimum) >= 0 {
 			return true, nil
 		}
 	}

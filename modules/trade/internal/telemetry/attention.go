@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,11 +26,11 @@ var attentionKinds = []string{
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
 const maxAttentionDetail = 480
 
+var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
+
 // StableReason 去掉错误里的地址和时间戳：错误原文可能带签名参数，每次都不同，会让指标序列不断增长。
 func StableReason(reason string) string {
-	if index := strings.Index(reason, "http"); index > 0 {
-		reason = strings.TrimRight(reason[:index], " :\"")
-	}
+	reason = urlPattern.ReplaceAllString(reason, "")
 	if runes := []rune(reason); len(runes) > 60 {
 		reason = string(runes[:60])
 	}

@@ -16,6 +16,7 @@ func TestStableReasonDropsSignedURL(t *testing.T) {
 	second := notReadyReason(`Get "https://fapi.binance.com/x?signature=bbb&timestamp=2": timeout`)
 	require.Equal(t, first, second)
 	require.NotContains(t, first, "signature")
+	require.Contains(t, first, "timeout")
 	require.Equal(t, "账户未就绪", notReadyReason(""))
 }
 

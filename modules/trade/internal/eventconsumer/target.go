@@ -38,6 +38,9 @@ type TargetWeightResolver interface {
 	Resolve(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
 
+// conversionAttentionDeliveries 是换算连续失败多少次才告警。
+const conversionAttentionDeliveries = 5
+
 func HandleTarget(
 	ctx context.Context,
 	delivery *jetstream.Delivery,
@@ -223,8 +226,10 @@ func HandleTarget(
 		if errors.Is(conversionErr, targetapp.ErrPermanent) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
 		}
-		// 换算失败的目标不进目标表，过期后就消失了，页面看不到，这里提醒人。
-		telemetry.NoteTargetRejection(request.GetLogicalAccountId(), "目标换算失败："+telemetry.StableReason(conversionErr.Error()), now)
+		// 换算失败的目标不进目标表，过期后就消失了，页面看不到。偶发失败重投就好，持续失败才提醒人。
+		if delivery.DeliveryCount >= conversionAttentionDeliveries {
+			telemetry.NoteTargetRejection(account.Name, "目标换算失败："+telemetry.StableReason(conversionErr.Error()), now)
+		}
 		return retryTarget(conversionErr)
 	}
 	record.Targets = append(record.Targets, conversion.QuantityTargets...)
