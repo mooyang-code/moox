@@ -232,7 +232,7 @@ func initialize(
 				return nil, bindErr
 			}
 			marketData = publicAdapter
-			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: marketData, Wake: paperMatcherWorker.Wake}
+			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: publicAdapter, Wake: paperMatcherWorker.Wake}
 		} else {
 			var bindErr error
 			adapter, bindErr = registry.Bind(accountConfig, credential)

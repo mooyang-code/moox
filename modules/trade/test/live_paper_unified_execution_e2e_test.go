@@ -161,3 +161,11 @@ func openUnifiedE2EStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s
 }
+
+func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+	quote, err := m.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	return exchange.ReferencePrice{Price: quote.Last, UpdatedAt: quote.SourceTime}, nil
+}

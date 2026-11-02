@@ -28,13 +28,20 @@ type FactStore interface {
 	ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
+
+// PublicMarketData 是模拟盘用的公共行情。
+type PublicMarketData interface {
+	execution.MarketDataSource
+	execution.ReferencePriceSource
+}
+
 type Adapter struct {
 	Account store.TradingAccountRecord
 	Store   FactStore
 	// MarketData is the unauthenticated production public adapter. Paper never
 	// invokes its private or order methods; it is only used for instruments and
 	// reference quotes.
-	MarketData  execution.MarketDataSource
+	MarketData  PublicMarketData
 	Wake        func()
 	Now         func() time.Time
 	mu          sync.RWMutex
@@ -244,22 +251,16 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 	return a.MarketData.GetQuote(ctx, shared.ExchangeSymbol(native))
 }
 
+// GetReferencePrice 用公共行情的参考价：目标换算要一次取几百个标的，不能逐个请求盘口。
 func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
-	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if a.MarketData == nil {
+		return exchange.ReferencePrice{}, errors.New("paper: public market data is not configured")
+	}
+	native, err := a.nativeSymbol(ctx, symbol)
 	if err != nil {
 		return exchange.ReferencePrice{}, err
 	}
-	price := quote.Last
-	if price.IsZero() {
-		price = quote.Ask
-	}
-	if price.IsZero() {
-		price = quote.Bid
-	}
-	if price.Cmp(shared.Zero()) <= 0 {
-		return exchange.ReferencePrice{}, fmt.Errorf("paper: public reference quote is empty")
-	}
-	return exchange.ReferencePrice{Price: price, UpdatedAt: quote.SourceTime}, nil
+	return a.MarketData.GetReferencePrice(ctx, native)
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {

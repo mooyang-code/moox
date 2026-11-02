@@ -450,3 +450,7 @@ func TestPaperPreloadedNativeSymbolDoesNotReloadInstruments(t *testing.T) {
 		})
 	}
 }
+
+func (*instrumentLoadFailure) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+	return exchange.ReferencePrice{}, errors.New("not used")
+}
