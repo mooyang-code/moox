@@ -48,9 +48,7 @@
           查询
         </a-button>
         <div v-if="selectedAccount" class="account-context-meta">
-          <a-tag
-            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
-          >
+          <a-tag>{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[viewMarketType] }}</a-tag>
           <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
             {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
           </a-tag>
@@ -74,7 +72,7 @@
       </a-alert>
 
       <template v-if="selectedAccount">
-        <div class="summary-grid">
+        <div v-if="!logicalAccountId" class="summary-grid">
           <div class="summary-card">
             <span>权益</span><strong>{{ spotEquity || snapshotValue(selectedAccount.snapshot?.equity) }}</strong
             ><small>{{ selectedAccount.settlement_asset }}</small>
@@ -88,8 +86,8 @@
             ><small>按最新同步数据</small>
           </div>
           <div class="summary-card">
-            <span>{{ selectedAccount.market_type === 1 ? "资产数" : "持仓数" }}</span
-            ><strong>{{ selectedAccount.market_type === 1 ? visibleHoldings.length : positions.length }}</strong
+            <span>{{ viewMarketType === 1 ? "资产数" : "持仓数" }}</span
+            ><strong>{{ viewMarketType === 1 ? visibleHoldings.length : positions.length }}</strong
             ><small>当前账户</small>
           </div>
         </div>
@@ -103,17 +101,13 @@
 
         <div v-if="!positionsError" class="position-table-region">
           <a-empty
-            v-if="
-              !loading &&
-              ((selectedAccount.market_type === 1 && !visibleHoldings.length) ||
-                (selectedAccount.market_type === 2 && !positions.length))
-            "
+            v-if="!loading && ((viewMarketType === 1 && !visibleHoldings.length) || (viewMarketType === 2 && !positions.length))"
             class="position-empty-state"
             description="暂无持仓数据"
           />
 
           <a-table
-            v-else-if="selectedAccount.market_type === 1"
+            v-else-if="viewMarketType === 1"
             row-key="asset"
             size="small"
             :bordered="{ cell: true }"
@@ -156,7 +150,7 @@
           >
             <template #columns>
               <a-table-column title="市场" :width="90">
-                <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
+                <template #cell>{{ localMarketTypeLabels[viewMarketType] }}</template>
               </a-table-column>
               <a-table-column title="交易标的" data-index="instrument_id" />
               <a-table-column v-if="logicalAccountId" title="执行账户" data-index="trading_account_id" />
@@ -214,6 +208,12 @@ const positions = ref<Position[]>([]);
 const holdings = ref<Holding[]>([]);
 // 现货快照没有权益，取最新权益点的估值。
 const spotEquity = ref("");
+// 按组合账户查看时，表格跟随组合账户的市场。
+const viewMarketType = computed(
+  () =>
+    logicalAccounts.value.find(item => item.logical_account_id === logicalAccountId.value)?.market_type ??
+    selectedAccount.value?.market_type
+);
 const logicalAccounts = ref<LogicalAccount[]>([]);
 const logicalAccountId = ref("");
 

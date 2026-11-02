@@ -58,11 +58,17 @@ function statusOf(target: InstrumentTarget, difference: number, blocked: Blocked
 }
 
 // 目标里没有、实际还持有的受管标的也要列出来：它们的目标是 0。
-export function buildComparison(targets: InstrumentTarget[], blocked: BlockedTarget[], actual: Record<string, number>) {
+// 现货里目标之外的币可能不受管，系统不会动，所以只有合约才列出。
+export function buildComparison(
+  targets: InstrumentTarget[],
+  blocked: BlockedTarget[],
+  actual: Record<string, number>,
+  options: { converged?: boolean; includeUntargeted?: boolean } = {}
+) {
   const listed = new Set(targets.map(item => item.instrument_id));
   const rows = [...targets];
   for (const [instrument_id, quantity] of Object.entries(actual)) {
-    if (!listed.has(instrument_id) && quantity !== 0) rows.push({ instrument_id, quantity: "0" });
+    if (options.includeUntargeted && !listed.has(instrument_id) && quantity !== 0) rows.push({ instrument_id, quantity: "0" });
   }
   const compared = rows.map<ComparisonRow>(item => {
     const current = actual[item.instrument_id] || 0;
@@ -72,7 +78,8 @@ export function buildComparison(targets: InstrumentTarget[], blocked: BlockedTar
       target: item.hold ? "保持" : item.quantity,
       actual: display(current),
       difference: display(difference),
-      status: statusOf(item, difference, blocked)
+      // 目标保留 18 位小数，收敛后差额是下不了单的零头，以目标状态为准。
+      status: options.converged && !item.hold ? "已到位" : statusOf(item, difference, blocked)
     };
   });
   // 无法映射到标的的敞口只出现在阻塞列表里。

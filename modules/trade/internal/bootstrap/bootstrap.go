@@ -378,6 +378,7 @@ func initialize(
 
 		rpc.ConsoleOptions{
 			Paper:              &papersimulation.Service{Store: tradeStore},
+			Venues:             registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},

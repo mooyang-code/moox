@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -29,6 +30,7 @@ type AttentionWorker struct {
 	Now      func() time.Time
 
 	notReadySince map[string]time.Time
+	blockedSince  map[string]time.Time
 	lastExpired   map[string]string
 	expiredCounts map[string]int
 }
@@ -74,14 +76,12 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		}
 		notReady[account.TradingAccountID] = since
 		if now.Sub(since) >= notReadyGrace {
-			reason := account.LastError
-			if reason == "" {
-				reason = "账户未就绪"
-			}
-			items[telemetry.AttentionAccountNotReady] = append(items[telemetry.AttentionAccountNotReady], account.Name+"："+reason)
+			items[telemetry.AttentionAccountNotReady] = append(items[telemetry.AttentionAccountNotReady],
+				account.Name+"："+stableReason(account.LastError))
 		}
 	}
 	w.notReadySince = notReady
+	blocked := make(map[string]time.Time, len(w.blockedSince))
 	var scanErrors []error
 	for spaceID := range spaces {
 		logicals, listErr := w.Store.ListLogicalAccounts(ctx, spaceID)
@@ -90,11 +90,12 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 			continue
 		}
 		for _, logical := range logicals {
-			if err := w.scanLogicalAccount(ctx, logical, now, items); err != nil {
+			if err := w.scanLogicalAccount(ctx, logical, now, items, blocked); err != nil {
 				scanErrors = append(scanErrors, err)
 			}
 		}
 	}
+	w.blockedSince = blocked
 	telemetry.PublishAttention(items)
 	return errors.Join(scanErrors...)
 }
@@ -104,6 +105,7 @@ func (w *AttentionWorker) scanLogicalAccount(
 	logical store.LogicalAccountRecord,
 	now time.Time,
 	items map[string][]string,
+	blocked map[string]time.Time,
 ) error {
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
@@ -115,11 +117,28 @@ func (w *AttentionWorker) scanLogicalAccount(
 	if err != nil {
 		return err
 	}
+	return w.noteTarget(ctx, logical, target, now, items, blocked)
+}
+
+func (w *AttentionWorker) noteTarget(
+	ctx context.Context,
+	logical store.LogicalAccountRecord,
+	target store.LogicalAccountTargetRecord,
+	now time.Time,
+	items map[string][]string,
+	blocked map[string]time.Time,
+) error {
 	switch target.Status {
 	case targetapp.StatusBlocked:
 		// 目标有效期是 2 根 K 线。
 		bar := time.Duration(target.ValidUntil-target.EffectiveAt) * time.Millisecond / 2
-		if now.Sub(time.UnixMilli(target.AcceptedAt)) > bar && len(target.BlockedTargets) > 0 {
+		// 策略每根 K 线都发新目标，起始时间要跨目标保留，不能用目标的接收时间。
+		since, seen := w.blockedSince[logical.LogicalAccountID]
+		if !seen {
+			since = now
+		}
+		blocked[logical.LogicalAccountID] = since
+		if now.Sub(since) > bar && len(target.BlockedTargets) > 0 {
 			blocked := target.BlockedTargets[0]
 			items[telemetry.AttentionTargetBlocked] = append(items[telemetry.AttentionTargetBlocked],
 				logical.Name+" "+blocked.InstrumentID+"："+blocked.Reason)
@@ -136,6 +155,20 @@ func (w *AttentionWorker) scanLogicalAccount(
 			logical.Name+"：连续多个目标过期且持仓未到位")
 	}
 	return nil
+}
+
+// stableReason 去掉错误里的地址和时间戳：错误原文带签名参数，每次都不同，会让指标序列不断增长。
+func stableReason(reason string) string {
+	if reason == "" {
+		return "账户未就绪"
+	}
+	if index := strings.Index(reason, "http"); index > 0 {
+		reason = strings.TrimRight(reason[:index], " :\"")
+	}
+	if runes := []rune(reason); len(runes) > 60 {
+		reason = string(runes[:60])
+	}
+	return reason
 }
 
 // countExpired 每个过期目标只计一次，没有差额的过期不算。

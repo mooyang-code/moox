@@ -1,9 +1,15 @@
 package rpc
 
 import (
-	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -66,5 +72,36 @@ func TestResolveExecutionCapabilitiesNotReadyKeepsOrderTypes(t *testing.T) {
 	got := ResolveExecutionCapabilities(account, testDescriptor, false, true)
 	if got.CanPlaceOrder || len(got.OrderTypes) == 0 || len(got.FillPolicies) == 0 {
 		t.Fatalf("capabilities = %+v, want order types without placement", got)
+	}
+}
+
+func TestGetExecutionCapabilitiesThroughConsoleServer(t *testing.T) {
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tradeStore.Close()
+	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", MarketType: "SPOT",
+			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := execution.NewRegistry()
+	registry.Register(execution.VenueDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+		return nil, nil
+	})
+	server := &ConsoleServer{Store: tradeStore, Venues: registry}
+	response, err := server.GetExecutionCapabilities(
+		spacecontext.WithSpaceID(context.Background(), "space-1"),
+		&tradepb.GetExecutionCapabilitiesReq{TradingAccountId: "account-1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.GetCapabilities().GetOrderTypes()) == 0 {
+		t.Fatalf("response = %+v", response)
 	}
 }

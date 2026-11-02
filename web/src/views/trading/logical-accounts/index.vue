@@ -130,7 +130,13 @@
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" width="min(860px, 100vw)" title="组合账户详情" @cancel="closeDetail">
+      <a-drawer
+        v-model:visible="detailVisible"
+        width="min(860px, 100vw)"
+        title="组合账户详情"
+        :footer="false"
+        @cancel="closeDetail"
+      >
         <template v-if="selected">
           <div class="detail-head">
             <div>
@@ -576,13 +582,18 @@ const stateCounts = computed(() => ({
 const comparison = computed(() =>
   target.value
     ? withMemberDetail(
-        buildComparison(target.value.targets, target.value.blocked_targets || [], actualPositions.value),
+        buildComparison(target.value.targets, target.value.blocked_targets || [], actualPositions.value, {
+          converged: target.value.status === "CONVERGED",
+          includeUntargeted: selected.value?.market_type === 2
+        }),
         memberBreakdown.value,
         id => accounts.value.find(item => item.trading_account_id === id)?.name || id
       )
     : []
 );
-const hasDifference = computed(() => comparison.value.some(row => Number(row.difference) !== 0));
+const hasDifference = computed(
+  () => target.value?.status !== "CONVERGED" && comparison.value.some(row => Number(row.difference) !== 0)
+);
 const targetExpired = computed(() => {
   const validUntil = Number(target.value?.valid_until);
   return target.value?.status === "EXPIRED" || (Number.isFinite(validUntil) && validUntil > 0 && validUntil <= Date.now());
@@ -713,8 +724,15 @@ async function openDetail(item: LogicalAccount) {
 }
 function startDetailPolling() {
   stopDetailPolling();
+  let polling = false;
   detailPoller = setInterval(() => {
-    void reloadDetail().catch(() => undefined);
+    if (polling) return;
+    polling = true;
+    void reloadDetail()
+      .catch(() => undefined)
+      .finally(() => {
+        polling = false;
+      });
   }, 5000);
 }
 function stopDetailPolling() {

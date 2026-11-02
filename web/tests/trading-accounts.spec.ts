@@ -19,7 +19,6 @@ const paperAccount = {
   status: "ENABLED",
   ready: true,
   leverage_settings: {},
-  sync_symbols: [],
   paper: { initial_balance: "100000", maker_fee_rate: "0", taker_fee_rate: "0", slippage_bps: "0" },
   snapshot: {
     balances: [],
@@ -45,7 +44,6 @@ const liveAccount = {
   execution_mode: 2,
   ready: false,
   live: { environment: 1, credential_secret_id: "secret-1" },
-  sync_symbols: ["BTCUSDT"],
   last_error: "symbol not found"
 };
 
@@ -236,7 +234,6 @@ test("submits a Paper request without Live-only fields and shows both IDs", asyn
   expect(paperRequests[0]).toMatchObject({ account_name: "Paper Created", settlement_asset: "USDT" });
   expect(paperRequests[0]).not.toHaveProperty("live");
   expect(paperRequests[0]).not.toHaveProperty("credential_secret_id");
-  expect(paperRequests[0]).not.toHaveProperty("sync_symbols");
   await expect(page.getByText("la-paper-1", { exact: false })).toBeVisible();
 });
 
@@ -246,12 +243,10 @@ test("submits real account configuration, syncs it, and shows readiness feedback
   await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
   await page.locator('input[name="account_name"]').fill("Live Created");
   await page.locator('input[name="credential_secret_id"]').fill("secret-live");
-  await page.locator('input[name="sync_symbols"]').fill("BTCUSDT");
   await page.locator(".arco-modal").getByRole("button", { name: "创建账户" }).click();
   await expect.poll(() => liveRequests.length).toBe(1);
   expect(liveRequests[0]).toMatchObject({
     name: "Live Created",
-    sync_symbols: ["BTCUSDT"],
     live: { environment: 1, credential_secret_id: "secret-live" }
   });
   expect(liveRequests[0]).not.toHaveProperty("initial_balance");

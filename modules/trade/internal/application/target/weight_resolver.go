@@ -123,10 +123,9 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	prices := make(map[string]string, len(orderedWeights))
 	evidence := make([]ReferencePriceEvidence, 0, len(orderedWeights))
 	quantities := make([]store.InstrumentTarget, 0, len(orderedWeights))
+	quotes := make(map[string]resolvedQuote, len(orderedWeights))
 	for _, weight := range orderedWeights {
 		if weight.Hold {
-			// 保持标的不取报价、不换算数量；执行器对它既不加仓也不减仓。
-			quantities = append(quantities, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
 			continue
 		}
 		instrument, tradingAccountID, err := r.instrumentForMembers(ctx, spaceID, members, weight.InstrumentID)
@@ -140,6 +139,21 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(quote.UpdatedAt) {
 			return WeightConversion{}, fmt.Errorf("target weight resolver: invalid reference price for %s", weight.InstrumentID)
 		}
+		quotes[weight.InstrumentID] = resolvedQuote{instrument: instrument, tradingAccountID: tradingAccountID, quote: quote}
+	}
+	unmanaged, err := r.unmanagedTargetValue(ctx, spaceID, members, quotes)
+	if err != nil {
+		return WeightConversion{}, err
+	}
+	equity = equity.Add(unmanaged)
+	for _, weight := range orderedWeights {
+		if weight.Hold {
+			// 保持标的不取报价、不换算数量；执行器对它既不加仓也不减仓。
+			quantities = append(quantities, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+			continue
+		}
+		resolved := quotes[weight.InstrumentID]
+		instrument, tradingAccountID, quote := resolved.instrument, resolved.tradingAccountID, resolved.quote
 		targetWeight, _ := shared.ParseDecimal(weight.TargetWeight)
 		quantity := equity.Mul(targetWeight).Div(quote.Price)
 		if !exchange.RuleFor(instrument.MarketType).CanShort && quantity.IsNegative() {
@@ -166,6 +180,52 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		})
 	}
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: equity, EquitySourceTime: equityTime, ReferencePrices: prices, ReferencePriceEvidence: evidence, WeightsJSON: weightsJSON, QuantityTargets: quantities}, nil
+}
+
+type resolvedQuote struct {
+	instrument       store.InstrumentRecord
+	tradingAccountID string
+	quote            Quote
+}
+
+// unmanagedTargetValue 计算目标里尚未受管的现货资产市值。权益点只算受管资产，而目标一落库
+// 这些资产就受管了，收敛按全部余额算持仓。不计入的话数量按偏小的权益换算，会多卖一大截。
+func (r *WeightResolver) unmanagedTargetValue(
+	ctx context.Context,
+	spaceID string,
+	members []store.LogicalAccountMemberRecord,
+	quotes map[string]resolvedQuote,
+) (shared.Decimal, error) {
+	total := shared.Zero()
+	for _, member := range members {
+		account, err := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return shared.Zero(), err
+		}
+		if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+			continue
+		}
+		managed, err := r.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)
+		if err != nil {
+			return shared.Zero(), err
+		}
+		for _, resolved := range quotes {
+			if _, ok := managed[resolved.instrument.BaseAsset]; ok {
+				continue
+			}
+			for _, balance := range account.Snapshot.Balances {
+				if balance.Asset != resolved.instrument.BaseAsset {
+					continue
+				}
+				quantity, err := shared.ParseDecimal(balance.Total)
+				if err != nil {
+					return shared.Zero(), err
+				}
+				total = total.Add(quantity.Mul(resolved.quote.Price))
+			}
+		}
+	}
+	return total, nil
 }
 
 func allHold(weights []orderedWeight) bool {

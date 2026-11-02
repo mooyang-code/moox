@@ -19,9 +19,20 @@ describe("目标与实际持仓对照", () => {
   });
 
   it("列出目标之外仍持有的标的", () => {
-    const rows = buildComparison([], [], { "BTC-USDT-SWAP": 1 });
+    const rows = buildComparison([], [], { "BTC-USDT-SWAP": 1 }, { includeUntargeted: true });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ target: "0", difference: "-1" });
+  });
+
+  it("现货目标之外的币不列出，收敛后零头算已到位", () => {
+    expect(buildComparison([], [], { "BNB-USDT-SPOT": 1 })).toHaveLength(0);
+    const [row] = buildComparison(
+      [{ instrument_id: "BTC-USDT-SWAP", quantity: "1.0004" }],
+      [],
+      { "BTC-USDT-SWAP": 1 },
+      { converged: true }
+    );
+    expect(row.status).toBe("已到位");
   });
 
   it("没有标的的资产不参与对照", () => {

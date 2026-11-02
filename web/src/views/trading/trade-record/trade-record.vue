@@ -463,17 +463,19 @@ function changeOrderPage(page: number) {
 const canCancel = canCancelOrderState;
 
 const cancelVisible = ref(false);
+let cancelAttemptReason = "";
 const cancelError = ref("");
 const cancelPausesAccount = ref(false);
 const cancelForm = reactive({ order_id: "", action_id: "", reason: "" });
 
 function openCancel(order: Order) {
-  if (order.trading_account_id !== tradingAccountId.value) {
+  if (!logicalAccountId.value && order.trading_account_id !== tradingAccountId.value) {
     Message.warning("账户已切换，请重新查询后重试");
     return;
   }
-  // 操作编号在弹窗打开时生成，失败重试沿用同一个编号。
+  // 操作编号在弹窗打开时生成，失败重试沿用同一个编号；原因变了就是新操作。
   Object.assign(cancelForm, { order_id: order.order_id, action_id: createClientId(), reason: "控制台手动撤单" });
+  cancelAttemptReason = "";
   cancelError.value = "";
   cancelPausesAccount.value = order.owner_type === "TARGET";
   cancelVisible.value = true;
@@ -490,6 +492,8 @@ async function confirmCancel() {
     return false;
   }
   cancelError.value = "";
+  if (cancelAttemptReason && cancelAttemptReason !== cancelForm.reason.trim()) cancelForm.action_id = createClientId();
+  cancelAttemptReason = cancelForm.reason.trim();
   try {
     await cancelOrder(cancelForm.action_id, cancelForm.order_id, cancelForm.reason.trim());
   } catch (error) {

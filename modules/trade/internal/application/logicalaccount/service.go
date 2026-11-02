@@ -195,7 +195,7 @@ func (s *Service) RemoveMember(
 		return lockErr
 	}
 	defer unlockAll()
-	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+	exposed, err := s.memberHasManagedExposure(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -566,6 +566,42 @@ func (s *Service) memberHasExposure(
 			if !total.IsZero() {
 				return true, nil
 			}
+		}
+	}
+	return false, nil
+}
+
+// memberHasManagedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
+func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, tradingAccountID string) (bool, error) {
+	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+	if err != nil || !exposed {
+		return false, err
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+		return true, nil
+	}
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	if len(orders) > 0 {
+		return true, nil
+	}
+	managed, err := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	for _, balance := range account.Snapshot.Balances {
+		total, parseErr := shared.ParseDecimal(balance.Total)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if _, ok := managed[balance.Asset]; ok && balance.Asset != account.SettlementAsset && !total.IsZero() {
+			return true, nil
 		}
 	}
 	return false, nil

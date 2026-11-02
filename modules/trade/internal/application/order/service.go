@@ -9,6 +9,7 @@ import (
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -203,6 +204,29 @@ func (s *Service) Place(
 	return domainOrder(record)
 }
 
+func (s *Service) oppositeDust(
+	ctx context.Context,
+	account tradingaccount.Account,
+	spec orderdomain.OrderSpec,
+	current shared.Decimal,
+) bool {
+	if s.Store == nil {
+		return false
+	}
+	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.ID, spec.InstrumentID)
+	if err != nil {
+		return false
+	}
+	step, stepErr := shared.ParseDecimal(instrument.ExchangeQuantityStep)
+	minimum, minimumErr := shared.ParseDecimal(instrument.MinExchangeQuantity)
+	contractValue, valueErr := shared.ParseDecimal(instrument.ContractValue)
+	if stepErr != nil || minimumErr != nil || valueErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
+		return false
+	}
+	contracts := current.Abs().Div(contractValue)
+	return contracts.Cmp(step) < 0 || contracts.Cmp(minimum) < 0
+}
+
 func (s *Service) deriveReducePositionOnly(
 	ctx context.Context,
 	spec orderdomain.OrderSpec,
@@ -241,6 +265,10 @@ func (s *Service) deriveReducePositionOnly(
 		return spec, nil
 	}
 	if spec.Quantity.Cmp(current.Abs()) > 0 {
+		// 下不了单的反向零头不算持仓，目标要能越过它加仓。
+		if spec.Owner.Type == orderdomain.OwnerTarget && s.oppositeDust(ctx, account, spec, current) {
+			return spec, nil
+		}
 		if spec.Owner.Type == orderdomain.OwnerOperator ||
 			spec.Owner.Type == orderdomain.OwnerTarget {
 			return spec, ErrCrossZero

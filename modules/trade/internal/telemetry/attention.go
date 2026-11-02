@@ -22,8 +22,8 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired,
 }
 
-// maxAttentionDetail 限制标签长度，详情过长时只留开头。
-const maxAttentionDetail = 300
+// maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
+const maxAttentionDetail = 480
 
 // PublishAttention 用本轮结果替换上报值，items 按 kind 列出每条详情。
 func PublishAttention(items map[string][]string) {
@@ -36,8 +36,8 @@ func PublishAttention(items map[string][]string) {
 		}
 		sort.Strings(details)
 		detail := strings.Join(details, "；")
-		if runes := []rune(detail); len(runes) > maxAttentionDetail {
-			detail = string(runes[:maxAttentionDetail]) + "…"
+		if len(detail) > maxAttentionDetail {
+			detail = strings.ToValidUTF8(detail[:maxAttentionDetail], "") + "…"
 		}
 		Attention.WithLabelValues(kind, detail).Set(1)
 	}

@@ -39,5 +39,5 @@ type ConsoleOptions struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
-	Venues             *executionport.Registry
+	Venues             executionport.VenueCatalog
 }

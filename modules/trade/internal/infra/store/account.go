@@ -265,7 +265,7 @@ func (tx *Tx) SetTradingAccountLeverage(
 	}
 	result := tx.db.Exec(`
 		UPDATE t_trading_accounts
-		SET c_leverage_settings_json = ?, c_ready = 0,
+		SET c_leverage_settings_json = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, encoded, spaceID, tradingAccountID)

@@ -18,7 +18,6 @@ const account = {
   status: "ENABLED",
   ready: true,
   leverage_settings: {},
-  sync_symbols: ["BTCUSDT"],
   snapshot: {
     balances: [],
     equity: "100240.20",
