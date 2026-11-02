@@ -3,11 +3,13 @@ package account
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 var (
@@ -42,6 +44,8 @@ type Store interface {
 	Get(context.Context, string) (tradingaccount.Account, error)
 	Update(context.Context, UpdateCommand) error
 	SetLeverage(context.Context, string, string, shared.Decimal) error
+	// ListEnabled 返回全部启用的执行账户。
+	ListEnabled(context.Context) ([]tradingaccount.Account, error)
 }
 
 type SecretSource interface {
@@ -62,6 +66,7 @@ type Service struct {
 	Secrets            SecretSource
 	SessionState       SessionState
 	SymbolConfigs      SymbolConfigs
+	Venues             execution.VenueCatalog
 	LiveTradingEnabled bool
 }
 
@@ -90,6 +95,9 @@ func (s *Service) Create(
 		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
 	if err := s.validateCredential(ctx, value); err != nil {
+		return tradingaccount.Account{}, err
+	}
+	if err := s.rejectDuplicateCredential(ctx, value); err != nil {
 		return tradingaccount.Account{}, err
 	}
 	if err := s.Store.Create(ctx, value); err != nil {
@@ -135,11 +143,41 @@ func (s *Service) Update(
 		if err := s.validateCredential(ctx, projected); err != nil {
 			return tradingaccount.Account{}, err
 		}
+		if err := s.rejectDuplicateCredential(ctx, projected); err != nil {
+			return tradingaccount.Account{}, err
+		}
 	}
 	if err := s.Store.Update(ctx, command); err != nil {
 		return tradingaccount.Account{}, err
 	}
 	return s.Store.Get(ctx, command.TradingAccountID)
+}
+
+// rejectDuplicateCredential 防止同一把密钥建两个执行账户：两个会话看到同一批订单，
+// 会互相当成外部订单，组合账户被自动暂停。
+func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingaccount.Account) error {
+	if value.ExecutionMode != exchange.ExecutionModeLive || value.Status != exchange.AccountStatusEnabled {
+		return nil
+	}
+	accounts, err := s.Store.ListEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	unified := false
+	if s.Venues != nil {
+		if descriptor, ok := s.Venues.Descriptor(value.Exchange); ok {
+			unified = descriptor.UnifiedAccount
+		}
+	}
+	for _, other := range accounts {
+		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
+			other.Exchange == value.Exchange && other.Environment == value.Environment &&
+			other.CredentialSecretID == value.CredentialSecretID &&
+			(unified || other.MarketType == value.MarketType) {
+			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥", tradingaccount.ErrInvalidAccount, other.Name)
+		}
+	}
+	return nil
 }
 
 func (s *Service) SetLeverage(

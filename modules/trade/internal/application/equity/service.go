@@ -244,10 +244,6 @@ func (s *Service) sampleLogicalAccount(
 		equity, available, used, unrealized := shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero()
 		allPnl := true
 		logicalValid := true
-		// A LIVE credential identifies one exchange capital source even when
-		// users model Spot and Perpetual accounts as separate members. Count its
-		// equity once; otherwise the same wallet can double the target notional.
-		seenCapitalSources := make(map[string]struct{}, len(members))
 		var sourceTime int64
 		// Store ordering is priority/account ID, which is not the same as the
 		// account that produced this fresh sample. Prefer that member so a
@@ -268,14 +264,6 @@ func (s *Service) sampleLogicalAccount(
 				logicalValid = false
 				break
 			}
-			capitalKey := member.TradingAccountID
-			if memberAccount.ExecutionMode == "LIVE" && strings.TrimSpace(memberAccount.CredentialSecretID) != "" {
-				capitalKey = strings.Join([]string{memberAccount.Exchange, memberAccount.Environment, memberAccount.CredentialSecretID}, "\x00")
-			}
-			if _, alreadyCounted := seenCapitalSources[capitalKey]; alreadyCounted {
-				continue
-			}
-			seenCapitalSources[capitalKey] = struct{}{}
 			memberSnapshot := confirmedSnapshot(memberAccount)
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled

@@ -94,7 +94,7 @@ func initialize(
 	}
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
-		SessionState: manager, SymbolConfigs: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		SessionState: manager, SymbolConfigs: manager, Venues: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager,
@@ -438,7 +438,9 @@ func registerBuiltins(registry *execution.Registry) {
 		}
 		return binance.New(config, credential), nil
 	})
-	registry.Register(cryptoVenue(exchange.ExchangeOKX), func(
+	okxVenue := cryptoVenue(exchange.ExchangeOKX)
+	okxVenue.UnifiedAccount = true
+	registry.Register(okxVenue, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {

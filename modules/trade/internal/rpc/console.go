@@ -82,10 +82,11 @@ func (s *ConsoleServer) CreatePaperSimulation(
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 	})
-	return &tradepb.CreatePaperSimulationRsp{
-		RetInfo: errorInfo(err), Account: accountToPB(result.Account),
-		LogicalAccount: s.logicalAccount(ctx, result.LogicalAccount),
-	}, nil
+	rsp := &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
+	if result.LogicalAccount.LogicalAccountID != "" {
+		rsp.LogicalAccount = s.logicalAccount(ctx, result.LogicalAccount)
+	}
+	return rsp, nil
 }
 
 func (s *ConsoleServer) ClosePaperSimulation(
@@ -102,6 +103,11 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	if s.Paper == nil || s.Store == nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
+	// 关闭会把账户移出成员，要先取组合账户。
+	var logical *store.LogicalAccountRecord
+	if record, _, findErr := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, req.GetTradingAccountId()); findErr == nil {
+		logical = &record
+	}
 	err = s.Paper.Close(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
@@ -110,19 +116,11 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
 	}
-	var logical *tradepb.LogicalAccount
-	for _, candidate := range mustLogicalAccounts(ctx, s.Store, spaceID) {
-		for _, member := range mustLogicalMembers(ctx, s.Store, spaceID, candidate.LogicalAccountID) {
-			if member.TradingAccountID == req.GetTradingAccountId() {
-				logical = s.logicalAccount(ctx, candidate)
-				break
-			}
-		}
-		if logical != nil {
-			break
-		}
+	rsp := &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account)}
+	if logical != nil {
+		rsp.LogicalAccount = s.logicalAccount(ctx, *logical)
 	}
-	return &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account), LogicalAccount: logical}, nil
+	return rsp, nil
 }
 
 func (s *ConsoleServer) GetExecutionCapabilities(

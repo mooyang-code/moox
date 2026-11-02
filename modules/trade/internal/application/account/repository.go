@@ -33,6 +33,22 @@ func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account,
 	return accountDomain(record)
 }
 
+func (r Repository) ListEnabled(ctx context.Context) ([]tradingaccount.Account, error) {
+	records, err := r.Store.ListEnabledTradingAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]tradingaccount.Account, 0, len(records))
+	for _, record := range records {
+		value, err := accountDomain(record)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, value)
+	}
+	return accounts, nil
+}
+
 func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 	unlock, lockErr := r.Store.LockTradingAccountContext(ctx, command.TradingAccountID)
 	if lockErr != nil {

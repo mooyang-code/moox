@@ -16,12 +16,11 @@ import (
 )
 
 var (
-	ErrServiceConfig            = errors.New("trade logical account: service is not configured")
-	ErrAdoptionRequired         = errors.New("trade logical account: adoption is required")
-	ErrMemberHasExposure        = errors.New("trade logical account: member has active exposure")
-	ErrOwnerConflict            = errors.New("trade logical account: runner ownership conflict")
-	ErrNotReady                 = errors.New("trade logical account: not ready")
-	ErrPaperMembershipImmutable = errors.New("trade logical account: paper membership is immutable")
+	ErrServiceConfig     = errors.New("trade logical account: service is not configured")
+	ErrAdoptionRequired  = errors.New("trade logical account: adoption is required")
+	ErrMemberHasExposure = errors.New("trade logical account: member has active exposure")
+	ErrOwnerConflict     = errors.New("trade logical account: runner ownership conflict")
+	ErrNotReady          = errors.New("trade logical account: not ready")
 )
 
 type AddMemberCommand struct {
@@ -91,38 +90,6 @@ func (s *Service) Create(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
-// lockMemberChange 按固定顺序取得成员变更需要的全部锁（逻辑账户 → 成员 → 执行 → 交易账户），全部带调用方期限；
-// 任何一把等待失败都会释放已取得的锁，返回的函数按相反顺序释放。
-func (s *Service) lockMemberChange(ctx context.Context, spaceID, logicalAccountID, tradingAccountID string) (func(), error) {
-	var releases []func()
-	release := func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
-		}
-	}
-	unlock, err := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockLogicalAccountMembershipContext(ctx); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalAccountID); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockTradingAccountContext(ctx, tradingAccountID); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	return release, nil
-}
-
 func (s *Service) UpdateName(
 	ctx context.Context,
 	spaceID string,
@@ -157,18 +124,26 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	members, err := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
 	if err != nil {
 		return err
 	}
-	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-		return ErrPaperMembershipImmutable
+	for _, member := range members {
+		// 启用成员只改优先级时不碰持仓，有持仓的成员也能调整。
+		if member.TradingAccountID == command.TradingAccountID && member.Enabled && command.Enabled {
+			unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer unlockAll()
+			return s.putMember(ctx, command)
+		}
 	}
 	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
 		return err
 	}
 	// 全部带期限：任何一把锁等待超时都释放已取得的锁并返回，不占住全局成员锁
-	unlockAll, lockErr := s.lockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+	unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
 	if lockErr != nil {
 		return lockErr
 	}
@@ -187,6 +162,10 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 			return ErrAdoptionRequired
 		}
 	}
+	return s.putMember(ctx, command)
+}
+
+func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error {
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
@@ -208,17 +187,10 @@ func (s *Service) RemoveMember(
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return err
-	}
-	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-		return ErrPaperMembershipImmutable
-	}
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		return err
 	}
-	unlockAll, lockErr := s.lockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
+	unlockAll, lockErr := s.Store.LockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
 	if lockErr != nil {
 		return lockErr
 	}

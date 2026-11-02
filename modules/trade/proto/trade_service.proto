@@ -563,6 +563,7 @@ message ListFillsReq {
   int64 start_time = 4;
   int64 end_time = 5;
   common.Page page = 6;
+  string logical_account_id = 7;
 }
 message ListFillsRsp {
   common.RetInfo ret_info = 1;

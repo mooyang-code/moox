@@ -253,20 +253,23 @@ func (h *ExecutionServer) ListFills(
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	if _, err := h.Store.GetTradingAccount(
-		ctx,
-		spaceID,
-		req.GetTradingAccountId(),
-	); err != nil {
-		return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
+	if req.GetLogicalAccountId() != "" {
+		if _, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
+			return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
+		}
 	}
-	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	if req.GetTradingAccountId() != "" {
+		if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+			return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
+		}
+	}
+	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListFills(ctx, spaceID, store.FillQuery{
-		TradingAccountID: req.GetTradingAccountId(), OrderID: req.GetOrderId(),
+		TradingAccountID: req.GetTradingAccountId(), LogicalAccountID: req.GetLogicalAccountId(), OrderID: req.GetOrderId(),
 		InstrumentID: instrumentID, StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})

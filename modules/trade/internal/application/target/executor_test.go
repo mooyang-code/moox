@@ -1081,3 +1081,40 @@ func TestConvergeLockWaitHonorsDeadline(t *testing.T) {
 		t.Fatal("Converge kept waiting for the logical account lock past the deadline")
 	}
 }
+
+// 一个成员拒单后，下一轮换下一个成员。
+func TestTargetExecutorMovesToNextMemberAfterRejection(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child",
+		ClientOrderID: "rejected-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "REJECTED",
+		RejectReason: "保证金不足", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+	})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
+}
+
+// 一个成员未就绪时整个组合账户停止，恢复后继续。
+func TestTargetExecutorResumesAfterMemberRecovers(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.setReady(t, "account-b", false)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+
+	fixture.setReady(t, "account-b", true)
+	result, err = fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+}

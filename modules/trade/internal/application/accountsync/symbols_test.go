@@ -154,3 +154,26 @@ func TestStalePrivateUpdateKeepsBalanceButClosesAdmission(t *testing.T) {
 	require.Equal(t, before.Snapshot.AvailableFunds, after.Snapshot.AvailableFunds)
 	require.NotZero(t, after.BalancePendingUntil)
 }
+
+// 同一交易所的两把不同密钥各自同步，一个账户的成交不会变成另一个账户的外部成交。
+func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-2", Name: "second",
+			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE", Environment: "TESTNET",
+			CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
+		})
+	}))
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: idleSyncAdapter{noOpenOrdersAdapter{&syncAdapter{}}}},
+		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+		Now: func() time.Time { return time.UnixMilli(3_000) },
+	}
+	for _, accountID := range []string{"account-1", "account-2"} {
+		result, err := service.SyncAccount(context.Background(), accountID)
+		require.NoError(t, err)
+		require.False(t, result.ExternalFactsImported)
+	}
+}

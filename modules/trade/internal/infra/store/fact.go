@@ -1106,6 +1106,7 @@ type fillRow struct {
 
 type FillQuery struct {
 	TradingAccountID string
+	LogicalAccountID string
 	OrderID          string
 	InstrumentID     string
 	ExchangeSymbol   string
@@ -1124,6 +1125,11 @@ func (s *Store) ListFills(
 		Where("c_space_id = ?", spaceID)
 	if query.TradingAccountID != "" {
 		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
+	}
+	// 按订单归属查询，已移出的成员的历史成交也算在组合账户下。
+	if query.LogicalAccountID != "" {
+		db = db.Where(`c_order_id IN (SELECT c_order_id FROM t_trade_orders WHERE c_space_id = ? AND c_logical_account_id = ?)`,
+			spaceID, query.LogicalAccountID)
 	}
 	if query.OrderID != "" {
 		db = db.Where("c_order_id = ?", query.OrderID)

@@ -77,6 +77,13 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		if result.Error != nil {
 			return result.Error
 		}
+		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
+		if err := tx.db.Exec(`
+			DELETE FROM t_logical_account_members
+			WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?
+		`, spaceID, logicalID, tradingAccountID).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -197,12 +204,4 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, status, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "trading account status")
-}
-
-func (tx *Tx) PaperSimulationMemberCount(spaceID, logicalAccountID string) (int64, error) {
-	var count int64
-	err := tx.db.Table("t_logical_account_members").
-		Where("c_space_id = ? AND c_logical_account_id = ? AND c_enabled = 1", spaceID, logicalAccountID).
-		Count(&count).Error
-	return count, err
 }

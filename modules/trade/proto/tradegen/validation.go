@@ -86,9 +86,9 @@ func (r *SyncTradingAccountReq) Validate() error {
 }
 
 func (r *CreatePaperSimulationReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.AccountName) == "" || strings.TrimSpace(r.LogicalAccountName) == "" ||
+	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
 		!validExchange(r.Exchange) || !validMarketType(r.MarketType) || strings.TrimSpace(r.SettlementAsset) == "" {
-		return fmt.Errorf("account_name, logical_account_name, exchange, market_type and settlement_asset are required")
+		return fmt.Errorf("account_name, exchange, market_type and settlement_asset are required")
 	}
 	if !validCreationControlMode(r.ControlMode) {
 		return fmt.Errorf("control_mode is invalid")
@@ -371,8 +371,8 @@ func (r *ListOrdersReq) Validate() error {
 }
 
 func (r *ListFillsReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
-		return fmt.Errorf("trading_account_id is required")
+	if r == nil || (strings.TrimSpace(r.TradingAccountId) == "" && strings.TrimSpace(r.LogicalAccountId) == "") {
+		return fmt.Errorf("trading_account_id or logical_account_id is required")
 	}
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
