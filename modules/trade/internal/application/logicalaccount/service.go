@@ -582,7 +582,7 @@ func (s *Service) memberHasExposure(
 			return true, nil
 		}
 	}
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		for _, balance := range account.Snapshot.Balances {
 			if balance.Asset == account.SettlementAsset {
 				continue

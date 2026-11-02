@@ -32,6 +32,20 @@ func (d VenueDescriptor) InTradingSession(now time.Time) bool {
 	return d.TradingSession == nil || d.TradingSession(now)
 }
 
+// VenueCatalog 按场所名查询静态信息。
+type VenueCatalog interface {
+	Descriptor(name exchange.Exchange) (VenueDescriptor, bool)
+}
+
+// InTradingSession 报告账户所在场所当前是否可以下单；没有登记的场所视为全天可交易。
+func InTradingSession(venues VenueCatalog, name string, now time.Time) bool {
+	if venues == nil {
+		return true
+	}
+	descriptor, ok := venues.Descriptor(exchange.Exchange(name))
+	return !ok || descriptor.InTradingSession(now)
+}
+
 type Registry struct {
 	mu          sync.RWMutex
 	factories   map[exchange.Exchange]AdapterFactory
@@ -99,18 +113,17 @@ func validateBinding(config exchange.AccountConfig) error {
 		strings.TrimSpace(config.SettlementAsset) == "" {
 		return fmt.Errorf("execution: invalid account binding")
 	}
-	switch config.MarketType {
-	case exchange.MarketTypeSpot:
+	if !exchange.RuleFor(config.MarketType).Leverage {
 		if config.MarginMode != exchange.MarginModeUnspecified {
 			return fmt.Errorf("execution: SPOT account cannot configure margin mode")
 		}
-	case exchange.MarketTypeSwap:
-		if config.MarginMode != exchange.MarginModeCross {
-			return fmt.Errorf("execution: SWAP account requires CROSS margin mode")
-		}
-		if !strings.EqualFold(strings.TrimSpace(config.SettlementAsset), "USDT") {
-			return fmt.Errorf("execution: SWAP account requires USDT settlement")
-		}
+		return nil
+	}
+	if config.MarginMode != exchange.MarginModeCross {
+		return fmt.Errorf("execution: SWAP account requires CROSS margin mode")
+	}
+	if !strings.EqualFold(strings.TrimSpace(config.SettlementAsset), "USDT") {
+		return fmt.Errorf("execution: SWAP account requires USDT settlement")
 	}
 	return nil
 }

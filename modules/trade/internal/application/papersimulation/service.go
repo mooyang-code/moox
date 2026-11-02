@@ -46,23 +46,23 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		!command.Exchange.Valid() || !command.MarketType.Valid() || command.SettlementAsset == "" {
 		return Result{}, fmt.Errorf("paper simulation: incomplete create command")
 	}
-	if command.MarketType == exchange.MarketTypeSpot && command.MarginMode != exchange.MarginModeUnspecified {
+	if !exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified {
 		return Result{}, fmt.Errorf("paper simulation: SPOT cannot configure margin mode")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.SettlementAsset != "USDT" {
+	if exchange.RuleFor(command.MarketType).Leverage && command.SettlementAsset != "USDT" {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires USDT settlement")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
+	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires CROSS margin mode")
 	}
 	if command.InitialBalance.Cmp(shared.Zero()) <= 0 {
 		return Result{}, fmt.Errorf("paper simulation: initial balance must be positive")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode == exchange.MarginModeUnspecified {
+	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode == exchange.MarginModeUnspecified {
 		command.MarginMode = exchange.MarginModeCross
 	}
 	leverageSettings := store.LeverageSettings{}
-	if command.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(command.MarketType).Leverage {
 		// The simulation form has no instrument-specific leverage yet. Persist a
 		// conservative wildcard so reservation, matching and Fill reduction use
 		// the same 1x value after restart.

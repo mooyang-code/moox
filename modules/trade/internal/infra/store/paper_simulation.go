@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 // ClosePaperSimulation atomically stops a paper account and its single logical
@@ -100,7 +101,7 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	// valuation remains cached and none of its freshness timestamps advance.
 	cash := projection.Totals[account.SettlementAsset]
 	snapshot.AvailableFunds = cash.String()
-	if account.MarketType == "SWAP" {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err

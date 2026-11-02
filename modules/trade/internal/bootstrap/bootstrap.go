@@ -161,7 +161,8 @@ func initialize(
 	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
 	orderService.Syncer = accountSyncer{service: syncService}
 	targetExecutor := &targetapp.Executor{
-		Store: tradeStore, Orders: orderService,
+		Venues: registry,
+		Store:  tradeStore, Orders: orderService,
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
 		MaxChildNotional: shared.MustDecimal("100000"),
 	}
@@ -185,7 +186,8 @@ func initialize(
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 	}
 	operatorService := &operatorapp.Service{
-		Store: tradeStore, Orders: orderService,
+		Venues: registry,
+		Store:  tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}

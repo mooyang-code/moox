@@ -220,7 +220,7 @@ func (s *ConsoleServer) ListHoldings(
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	if account.MarketType != string(exchange.MarketTypeSpot) {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
 	}
 	if s.Holdings != nil {

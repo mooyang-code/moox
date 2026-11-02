@@ -457,3 +457,32 @@ func TestSessionHandlerKeepsAdmissionClosedAfterBufferedAccountEvent(t *testing.
 	require.False(t, stored.Ready, "缓冲的私有余额事件在完整同步前不得恢复准入")
 	require.Equal(t, int64(2_500), stored.BalancePendingUntil)
 }
+
+// pollingSessionAdapter 只暴露 ExecutionAdapter，隐藏底层的私有流。
+type pollingSessionAdapter struct {
+	execution.ExecutionAdapter
+}
+
+func TestExchangeSessionWithoutPrivateStreamBecomesReadyByPolling(t *testing.T) {
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1), positionBuffered: make(chan struct{})}
+	adapter := pollingSessionAdapter{ExecutionAdapter: scripted}
+	syncService := &accountsync.Service{
+		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
+		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+	}
+	session := &ExchangeSession{Account: account, Adapter: adapter, Sync: syncService, SyncInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = session.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
+	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
+	require.NotContains(t, scripted.callSnapshot(), "Subscribe")
+}

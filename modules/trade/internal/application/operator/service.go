@@ -14,6 +14,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -49,6 +50,7 @@ type Service struct {
 	Orders             OrderService
 	Syncer             AccountSyncer
 	Prices             PriceSource
+	Venues             execution.VenueCatalog
 	Now                func() time.Time
 	ManualSubmitWindow time.Duration
 

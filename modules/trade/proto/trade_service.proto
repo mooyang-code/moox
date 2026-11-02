@@ -18,6 +18,7 @@ enum MarketType {
   MARKET_TYPE_UNSPECIFIED = 0;
   MARKET_TYPE_SPOT = 1;
   MARKET_TYPE_SWAP = 2;
+  MARKET_TYPE_STOCK = 3;
 }
 
 enum ExecutionMode {

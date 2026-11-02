@@ -114,7 +114,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		return Validation{}, ErrInstrumentDisabled
 	}
 	exchangeQuantity := spec.Quantity
-	if account.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(account.MarketType).ContractValue {
 		if instrument.ContractValue.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, ErrQuantityRule
 		}
@@ -153,8 +153,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		// taker, while a resting GTC LIMIT may later be maker.
 		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
 	}
-	switch account.MarketType {
-	case exchange.MarketTypeSpot:
+	if rule := exchange.RuleFor(account.MarketType); !rule.UsesMargin {
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
 			reserveNotional := referenceNotional
@@ -176,7 +175,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
-	case exchange.MarketTypeSwap:
+	} else {
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
 		if !found && instrument.ExchangeSymbol != "" {
 			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]

@@ -1143,9 +1143,7 @@ func (s *Service) importExternalOrder(
 		tif = exchange.TimeInForceUnspecified
 	}
 	positionSide := current.PositionSide
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSwap {
-		positionSide = exchange.PositionSideNet
-	}
+	positionSide = exchange.RuleFor(account.MarketType).PositionSide
 	referenceAt := current.CreatedAt
 	if referenceAt.IsZero() {
 		referenceAt = current.UpdatedAt
@@ -1371,7 +1369,7 @@ func syncSymbols(
 			set[position.ExchangeSymbol] = struct{}{}
 		}
 	}
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		heldAssets := make(map[string]struct{})
 		for _, balance := range snapshot.Balances {
 			if balance.Total.Cmp(shared.Zero()) > 0 ||

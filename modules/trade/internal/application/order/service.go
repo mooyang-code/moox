@@ -128,7 +128,7 @@ func (s *Service) Place(
 	record := orderRecord(validation, *aggregate)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if validation.Instrument.InstrumentID != "" &&
-			validation.Account.MarketType == exchange.MarketTypeSwap &&
+			exchange.RuleFor(validation.Account.MarketType).ReduceOnly &&
 			spec.ReducePositionOnly {
 			accountRecord, err := tx.GetTradingAccount(validation.Account.SpaceID, spec.TradingAccountID)
 			if err != nil {
@@ -209,7 +209,7 @@ func (s *Service) deriveReducePositionOnly(
 		return spec, err
 	}
 	spec.ReducePositionOnly = false
-	if account.MarketType == exchange.MarketTypeSpot {
+	if !exchange.RuleFor(account.MarketType).ReduceOnly {
 		return spec, nil
 	}
 	if s.Validator.Positions == nil {
@@ -964,7 +964,7 @@ func (s *Service) submit(
 			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
 		}
 		notional := aggregate.Spec.Quantity.Mul(price)
-		if validation.Account.MarketType == exchange.MarketTypeSwap {
+		if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
 			validation.ReservedQuantity = notional.Mul(feeRate)
 			if !aggregate.Spec.ReducePositionOnly {
 				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
@@ -1004,7 +1004,7 @@ func (s *Service) submit(
 				unreflected = unreflected.Sub(previous)
 			}
 			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-			if validation.Account.MarketType == exchange.MarketTypeSwap {
+			if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
 				available = validation.Account.Snapshot.AvailableFunds
 			}
 			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {

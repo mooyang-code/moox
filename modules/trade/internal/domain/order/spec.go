@@ -120,14 +120,12 @@ func (s OrderSpec) Validate(
 		return invalidSpec("unsupported order type")
 	}
 
-	switch market {
-	case exchange.MarketTypeSpot:
-		if s.PositionSide != exchange.PositionSideUnspecified || s.ReducePositionOnly {
-			return invalidSpec("SPOT cannot have position side or reduce-only")
+	if rule := exchange.RuleFor(market); market.Valid() {
+		if s.PositionSide != rule.PositionSide {
+			return invalidSpec("position side does not match market")
 		}
-	case exchange.MarketTypeSwap:
-		if s.PositionSide != exchange.PositionSideNet {
-			return invalidSpec("SWAP requires NET position side")
+		if s.ReducePositionOnly && !rule.ReduceOnly {
+			return invalidSpec("market cannot have reduce-only orders")
 		}
 	}
 	return nil

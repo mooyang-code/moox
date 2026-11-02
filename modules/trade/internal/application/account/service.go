@@ -159,7 +159,7 @@ func (s *Service) SetLeverage(
 	if err != nil {
 		return err
 	}
-	if current.MarketType != exchange.MarketTypeSwap {
+	if !exchange.RuleFor(current.MarketType).Leverage {
 		return tradingaccount.ErrInvalidAccount
 	}
 	if current.ExecutionMode == exchange.ExecutionModePaper {

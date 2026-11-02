@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
 
@@ -139,7 +140,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
-	if account.MarketType == "SPOT" {
+	if !exchange.RuleFor(account.MarketType).CanShort {
 		for _, target := range record.Targets {
 			if target.Hold {
 				continue

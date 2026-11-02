@@ -198,7 +198,7 @@ func (r *Reducer) applyFillTx(
 	if _, err := takeUnusedReservation(&record); err != nil {
 		return err
 	}
-	if record.MarketType == string(exchange.MarketTypeSwap) {
+	if !exchange.RuleFor(record.MarketType).PositionFromBalance {
 		if err := projectSwapPosition(tx, record, fill, priceTick.Scale(), source.Kind == OriginPaperMatcher); err != nil {
 			return err
 		}
@@ -329,19 +329,17 @@ func consumeReservation(
 	}
 
 	used := fill.Quantity
-	switch exchange.MarketType(record.MarketType) {
-	case exchange.MarketTypeSpot:
-		if fill.Side == exchange.SideBuy {
-			used = fill.Quantity.Mul(fill.Price)
-		}
-	case exchange.MarketTypeSwap:
+	switch {
+	case !exchange.MarketType(record.MarketType).Valid():
+		return shared.Decimal{}, errors.New("trade: unsupported Fill market type")
+	case exchange.RuleFor(record.MarketType).UsesMargin:
 		if record.ReduceOnly {
 			used = shared.Zero()
 		} else {
 			used = reserved.Mul(fill.Quantity).Div(orderQuantity)
 		}
-	default:
-		return shared.Decimal{}, errors.New("trade: unsupported Fill market type")
+	case fill.Side == exchange.SideBuy:
+		used = fill.Quantity.Mul(fill.Price)
 	}
 	if used.Cmp(remaining) > 0 {
 		used = remaining

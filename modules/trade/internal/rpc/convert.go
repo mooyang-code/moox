@@ -119,6 +119,8 @@ func marketFromPB(value tradepb.MarketType) exchange.MarketType {
 		return exchange.MarketTypeSpot
 	case tradepb.MarketType_MARKET_TYPE_SWAP:
 		return exchange.MarketTypeSwap
+	case tradepb.MarketType_MARKET_TYPE_STOCK:
+		return exchange.MarketTypeStock
 	default:
 		return exchange.MarketTypeUnspecified
 	}
@@ -130,6 +132,8 @@ func marketToPB(value string) tradepb.MarketType {
 		return tradepb.MarketType_MARKET_TYPE_SPOT
 	case exchange.MarketTypeSwap:
 		return tradepb.MarketType_MARKET_TYPE_SWAP
+	case exchange.MarketTypeStock:
+		return tradepb.MarketType_MARKET_TYPE_STOCK
 	default:
 		return tradepb.MarketType_MARKET_TYPE_UNSPECIFIED
 	}

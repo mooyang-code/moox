@@ -21,6 +21,9 @@ func CanonicalInstrumentID(
 	if base == "" || quote == "" || !market.Valid() {
 		return "", fmt.Errorf("trade Exchange: invalid canonical instrument identity")
 	}
+	if RuleFor(market).RawInstrumentID {
+		return base, nil
+	}
 	return base + "-" + quote + "-" + string(market), nil
 }
 
@@ -35,6 +38,11 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 	switch {
 	case !market.Valid():
 		return "", fmt.Errorf("%w: unsupported market %q", ErrInvalidInstrumentID, market)
+	case RuleFor(market).RawInstrumentID:
+		if value == "" || strings.ContainsAny(value, " \t") {
+			return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
+		}
+		return value, nil
 	case len(parts) == 2 && parts[0] != "" && parts[1] != "":
 		return CanonicalInstrumentID(parts[0], parts[1], market)
 	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == string(market):
@@ -64,10 +72,12 @@ const (
 	MarketTypeUnspecified MarketType = ""
 	MarketTypeSpot        MarketType = "SPOT"
 	MarketTypeSwap        MarketType = "SWAP"
+	MarketTypeStock       MarketType = "STOCK"
 )
 
 func (m MarketType) Valid() bool {
-	return m == MarketTypeSpot || m == MarketTypeSwap
+	_, ok := marketRules[m]
+	return ok
 }
 
 type ExecutionMode string

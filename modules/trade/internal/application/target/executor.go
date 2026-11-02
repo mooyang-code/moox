@@ -13,6 +13,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
@@ -58,6 +59,7 @@ type Executor struct {
 	Store            *store.Store
 	Orders           OrderService
 	Prices           PriceSource
+	Venues           execution.VenueCatalog
 	Now              func() time.Time
 	MaxChildNotional shared.Decimal
 }
@@ -72,7 +74,10 @@ type memberState struct {
 	account     store.TradingAccountRecord
 	instruments map[string]store.InstrumentRecord
 	positions   map[string]shared.Decimal
-	blocked     []store.BlockedTarget
+	// sellable 是持仓来自余额的市场可卖出的数量，取自 Available。
+	// positions 用 Total，股票当日买入的数量算持仓但不可卖。
+	sellable map[string]shared.Decimal
+	blocked  []store.BlockedTarget
 }
 
 type laneAction struct {
@@ -194,6 +199,20 @@ func (e *Executor) Converge(
 	for _, member := range members {
 		if member.account.Status != "ENABLED" || !member.account.Ready {
 			target.LastError = "member " + member.account.TradingAccountID + " is not ready"
+			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusPaused}, nil
+		}
+	}
+
+	now := time.Now()
+	if e.Now != nil {
+		now = e.Now()
+	}
+	for _, member := range members {
+		if !execution.InTradingSession(e.Venues, member.account.Exchange, now) {
+			target.LastError = "当前不在交易时段"
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -436,8 +455,9 @@ func (e *Executor) loadMembers(
 			symbols[instrument.ExchangeSymbol] = instrument.InstrumentID
 		}
 		positions := make(map[string]shared.Decimal)
+		sellable := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
-		if account.MarketType == string(exchange.MarketTypeSpot) {
+		if exchange.RuleFor(account.MarketType).PositionFromBalance {
 			for _, balance := range account.Snapshot.Balances {
 				if balance.Asset == account.SettlementAsset {
 					continue
@@ -463,6 +483,11 @@ func (e *Executor) loadMembers(
 					continue
 				}
 				positions[instrumentID] = positions[instrumentID].Add(quantity)
+				available, parseErr := shared.ParseDecimal(balance.Available)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				sellable[instrumentID] = sellable[instrumentID].Add(available)
 			}
 		} else {
 			positionRecords, listErr := e.Store.ListPositions(
@@ -494,7 +519,7 @@ func (e *Executor) loadMembers(
 		}
 		members = append(members, memberState{
 			member: record, account: account,
-			instruments: instruments, positions: positions, blocked: blocked,
+			instruments: instruments, positions: positions, sellable: sellable, blocked: blocked,
 		})
 	}
 	return members, nil
@@ -714,6 +739,20 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, reason)
 			continue
 		}
+		if candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).PositionFromBalance {
+			step, _, err := baseQuantityRules(candidate.instrument)
+			if err != nil {
+				return false, "", err
+			}
+			sellable := floorToStep(candidate.member.sellable[candidate.instrument.InstrumentID], step)
+			if sellable.Cmp(shared.Zero()) <= 0 {
+				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 可卖量不足")
+				continue
+			}
+			if quantity.Cmp(sellable) > 0 {
+				quantity = sellable
+			}
+		}
 		quote, err := e.Prices.LatestPrice(
 			ctx,
 			candidate.member.account.TradingAccountID,
@@ -786,9 +825,7 @@ func (e *Executor) placeAction(
 				LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
 			},
 		}
-		if candidate.member.account.MarketType == string(exchange.MarketTypeSwap) {
-			spec.PositionSide = exchange.PositionSideNet
-		}
+		spec.PositionSide = exchange.RuleFor(candidate.member.account.MarketType).PositionSide
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -1097,7 +1134,7 @@ func baseQuantityRules(
 		return shared.Decimal{}, shared.Decimal{},
 			fmt.Errorf("%w: minimum quantity", ErrInvalidTarget)
 	}
-	if instrument.MarketType == string(exchange.MarketTypeSwap) {
+	if exchange.RuleFor(instrument.MarketType).ContractValue {
 		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
 		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
 			return shared.Decimal{}, shared.Decimal{},

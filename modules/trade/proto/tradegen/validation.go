@@ -98,7 +98,7 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		return fmt.Errorf("paper configuration decimals are invalid")
 	}
 	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
-	if r.MarketType == MarketType_MARKET_TYPE_SPOT && margin != "" {
+	if r.MarketType != MarketType_MARKET_TYPE_SWAP && margin != "" {
 		return fmt.Errorf("SPOT paper simulation cannot configure margin_mode")
 	}
 	if r.MarketType == MarketType_MARKET_TYPE_SWAP && margin != "" && margin != "CROSS" {
@@ -389,7 +389,8 @@ func validExchange(value Exchange) bool {
 
 func validMarketType(value MarketType) bool {
 	return value == MarketType_MARKET_TYPE_SPOT ||
-		value == MarketType_MARKET_TYPE_SWAP
+		value == MarketType_MARKET_TYPE_SWAP ||
+		value == MarketType_MARKET_TYPE_STOCK
 }
 
 func validExecutionMode(value ExecutionMode) bool {

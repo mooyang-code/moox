@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -143,7 +142,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		}
 		targetWeight, _ := shared.ParseDecimal(weight.TargetWeight)
 		quantity := equity.Mul(targetWeight).Div(quote.Price)
-		if strings.EqualFold(instrument.MarketType, "SPOT") && quantity.IsNegative() {
+		if !exchange.RuleFor(instrument.MarketType).CanShort && quantity.IsNegative() {
 			return WeightConversion{}, fmt.Errorf("%w: target weight resolver: Spot target cannot be negative for %s", ErrPermanent, weight.InstrumentID)
 		}
 		// Division of exact rationals often produces a repeating quotient (for

@@ -109,7 +109,7 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 		return err
 	}
 	snapshot := confirmedSnapshot(account)
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
 		if valueErr != nil {
 			return valueErr
@@ -168,7 +168,7 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		}
 		byAsset := make(map[string]exchange.Instrument)
 		for _, instrument := range instruments {
-			if instrument.MarketType == exchange.MarketTypeSpot && strings.EqualFold(instrument.QuoteAsset, settlement) {
+			if exchange.RuleFor(instrument.MarketType).PositionFromBalance && strings.EqualFold(instrument.QuoteAsset, settlement) {
 				byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
 			}
 		}
@@ -264,7 +264,7 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 			memberSnapshot := confirmedSnapshot(memberAccount)
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled
-			} else if memberAccount.MarketType == string(exchange.MarketTypeSpot) {
+			} else if exchange.RuleFor(memberAccount.MarketType).PositionFromBalance {
 				valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
 				if valueErr != nil {
 					return valueErr

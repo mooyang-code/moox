@@ -17,6 +17,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -307,13 +308,15 @@ func (s *Service) flattenAccount(
 		}
 		result.Error = ""
 		reasons := make(map[string]string)
-		switch exchange.MarketType(account.MarketType) {
-		case exchange.MarketTypeSwap:
-			s.flattenSwap(ctx, command, account, &result, reasons)
-		case exchange.MarketTypeSpot:
+		switch {
+		case !exchange.MarketType(account.MarketType).Valid():
+			result.Error = "unsupported market type " + account.MarketType
+		case !execution.InTradingSession(s.Venues, account.Exchange, time.Now()):
+			result.Error = "当前不在交易时段"
+		case exchange.RuleFor(account.MarketType).PositionFromBalance:
 			s.flattenSpot(ctx, command, account, &result, reasons)
 		default:
-			result.Error = "unsupported market type " + account.MarketType
+			s.flattenSwap(ctx, command, account, &result, reasons)
 		}
 		if ctx.Err() != nil {
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_deadline", Err: ctx.Err()})
@@ -651,15 +654,13 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 			Side: side, Quantity: quantity,
 		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		ReducePositionOnly: account.MarketType == string(exchange.MarketTypeSwap),
+		ReducePositionOnly: exchange.RuleFor(account.MarketType).ReduceOnly,
 		Owner: orderdomain.OrderOwner{
 			Type: orderdomain.OwnerOperator, OwnerID: command.ActionID,
 			LogicalAccountID: command.LogicalAccountID,
 		},
 	}
-	if account.MarketType == string(exchange.MarketTypeSwap) {
-		spec.PositionSide = exchange.PositionSideNet
-	}
+	spec.PositionSide = exchange.RuleFor(account.MarketType).PositionSide
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
 	if err != nil {
 		return err
@@ -729,7 +730,7 @@ func (s *Service) remainingForAccount(
 		}}
 	}
 	var remaining []RemainingPosition
-	if account.MarketType == string(exchange.MarketTypeSwap) {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		positions, listErr := s.Store.ListPositions(
 			ctx, spaceID, tradingAccountID, "",
 		)
@@ -928,7 +929,7 @@ func baseQuantityRules(
 		return shared.Decimal{}, shared.Decimal{},
 			errors.New("invalid minimum exchange quantity")
 	}
-	if instrument.MarketType == string(exchange.MarketTypeSwap) {
+	if exchange.RuleFor(instrument.MarketType).ContractValue {
 		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
 		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
 			return shared.Decimal{}, shared.Decimal{},

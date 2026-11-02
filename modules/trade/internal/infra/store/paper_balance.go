@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 type PaperBalanceSnapshot struct {
@@ -116,8 +117,10 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 		return fmt.Errorf("%w: paper fill realized PnL", ErrInvalidRecord)
 	}
 	deltas := map[string]shared.Decimal{}
-	switch record.MarketType {
-	case "SPOT":
+	switch rule := exchange.RuleFor(record.MarketType); {
+	case !exchange.MarketType(record.MarketType).Valid():
+		return fmt.Errorf("%w: paper fill market", ErrInvalidRecord)
+	case rule.PositionFromBalance:
 		instrument, err := getInstrument(tx.db, identity.Exchange, identity.Environment, identity.MarketType, record.ExchangeSymbol)
 		if err != nil {
 			return err
@@ -135,13 +138,11 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 		default:
 			return fmt.Errorf("%w: paper fill side", ErrInvalidRecord)
 		}
-	case "SWAP":
+	default:
 		if record.SettlementAsset == "" {
 			return fmt.Errorf("%w: paper settlement asset", ErrInvalidRecord)
 		}
 		deltas[record.SettlementAsset] = pnl
-	default:
-		return fmt.Errorf("%w: paper fill market", ErrInvalidRecord)
 	}
 	if !fee.IsZero() {
 		asset := record.FeeAsset
@@ -185,7 +186,7 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 }
 
 func (tx *Tx) normalizePaperFillSettlement(record *FillRecord) error {
-	if record.MarketType != "SWAP" {
+	if exchange.RuleFor(record.MarketType).PositionFromBalance {
 		return nil
 	}
 	var settlement string

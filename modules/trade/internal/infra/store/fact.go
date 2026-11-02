@@ -9,6 +9,7 @@ import (
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
 
@@ -58,11 +59,11 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 	if err != nil {
 		return err
 	}
-	if record.MarketType == "SWAP" &&
+	if exchange.RuleFor(record.MarketType).ContractValue &&
 		(!record.Linear || record.ContractValueAsset != record.BaseAsset) {
 		return fmt.Errorf("%w: incomplete SWAP instrument", ErrInvalidRecord)
 	}
-	if record.MarketType == "SWAP" {
+	if exchange.RuleFor(record.MarketType).ContractValue {
 		record.ContractValue, err = canonicalDecimal(
 			record.ContractValue,
 			"contract value",
@@ -1658,7 +1659,7 @@ func canonicalizePosition(record *PositionRecord, marketType string) error {
 		}
 	}
 	leverageSign := decimalNonNegative
-	if marketType == "SWAP" {
+	if exchange.RuleFor(marketType).Leverage {
 		leverageSign = decimalPositive
 	}
 	record.Leverage, err = canonicalDefaultZero(

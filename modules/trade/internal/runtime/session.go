@@ -81,7 +81,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	s.Account = account
 	marketData := s.marketData()
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot &&
+	if exchange.RuleFor(account.MarketType).PositionFromBalance &&
 		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
 		len(account.SyncSymbols) == 0 {
 		return fmt.Errorf("%w: SPOT account requires sync symbols", ErrSessionConfig)
@@ -131,7 +131,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err, ended := privateStreamError(disconnected, streamDone); ended {
 		return s.disconnect(ctx, err)
 	}
-	if configurer, ok := s.Adapter.(execution.SymbolConfigurer); ok && exchange.MarketType(s.Account.MarketType) == exchange.MarketTypeSwap {
+	if configurer, ok := s.Adapter.(execution.SymbolConfigurer); ok && exchange.RuleFor(s.Account.MarketType).Leverage {
 		symbols := leverageSymbols(s.Account.LeverageSettings)
 		for _, symbol := range symbols {
 			if err := configurer.SetMarginMode(
@@ -770,7 +770,7 @@ func sessionSymbols(
 			set[position.ExchangeSymbol] = struct{}{}
 		}
 	}
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		heldAssets := make(map[string]struct{})
 		for _, balance := range snapshot.Balances {
 			if balance.Total.Cmp(shared.Zero()) > 0 ||

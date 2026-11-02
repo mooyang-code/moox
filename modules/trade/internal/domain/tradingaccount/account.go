@@ -84,12 +84,12 @@ func (a Account) Validate() error {
 	} else if a.Paper.InitialBalance.Cmp(shared.Zero()) <= 0 || a.Paper.MakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.TakerFeeRate.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.Zero()) < 0 || a.Paper.SlippageBPS.Cmp(shared.MustDecimal("10000")) >= 0 {
 		return invalidAccount("invalid paper config")
 	}
-	switch a.MarketType {
-	case exchange.MarketTypeSpot:
+	switch {
+	case !exchange.RuleFor(a.MarketType).Leverage:
 		if a.MarginMode != exchange.MarginModeUnspecified || len(a.LeverageSettings) != 0 {
 			return invalidAccount("SPOT cannot configure margin mode or leverage")
 		}
-	case exchange.MarketTypeSwap:
+	default:
 		if a.MarginMode != exchange.MarginModeCross {
 			return invalidAccount("SWAP requires CROSS margin mode")
 		}
@@ -117,7 +117,7 @@ func (a Account) ExecutionEligibility() error {
 		return err
 	}
 	if a.ExecutionMode == exchange.ExecutionModeLive &&
-		a.MarketType == exchange.MarketTypeSpot &&
+		exchange.RuleFor(a.MarketType).PositionFromBalance &&
 		len(a.SyncSymbols) == 0 {
 		return ErrAccountNotExecutable
 	}

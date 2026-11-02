@@ -6,6 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/reservation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument InstrumentRecord, spec order.OrderSpec) (reservation.Facts, error) {
@@ -37,7 +38,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			facts.AvailableFunds = value
 		}
 	}
-	if account.MarketType == "SWAP" {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		var row struct {
 			Quantity string `gorm:"column:c_signed_quantity"`
 		}

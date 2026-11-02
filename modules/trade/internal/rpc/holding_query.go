@@ -33,7 +33,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	if err != nil {
 		return nil, err
 	}
-	if account.MarketType != string(exchange.MarketTypeSpot) {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
 	var quoteSource execution.ReferencePriceSource
@@ -62,7 +62,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	}
 	byAsset := make(map[string]exchange.Instrument)
 	for _, instrument := range instruments {
-		if instrument.MarketType == exchange.MarketTypeSpot &&
+		if exchange.RuleFor(instrument.MarketType).PositionFromBalance &&
 			strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
 			byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
 		}
