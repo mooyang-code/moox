@@ -20,19 +20,31 @@ describe("Trade public API", () => {
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");
     await trade.flattenLogicalAccount("action-1", "logical-1", "risk cleanup");
-    expect(callTrade).toHaveBeenNthCalledWith(1, "console", "CreateLogicalAccount", expect.any(Object));
-    expect(callTrade).toHaveBeenNthCalledWith(2, "console", "PauseLogicalAccount", {
-      logical_account_id: "logical-1",
-      reason: "manual intervention"
-    });
+    expect(callTrade).toHaveBeenNthCalledWith(1, "console", "CreateLogicalAccount", expect.any(Object), { silent: true });
+    expect(callTrade).toHaveBeenNthCalledWith(
+      2,
+      "console",
+      "PauseLogicalAccount",
+      {
+        logical_account_id: "logical-1",
+        reason: "manual intervention"
+      },
+      { silent: true }
+    );
     expect(callTrade).toHaveBeenNthCalledWith(3, "console", "ResumeLogicalAccount", {
       logical_account_id: "logical-1"
     });
-    expect(callTrade).toHaveBeenNthCalledWith(4, "console", "FlattenLogicalAccount", {
-      action_id: "action-1",
-      logical_account_id: "logical-1",
-      reason: "risk cleanup"
-    });
+    expect(callTrade).toHaveBeenNthCalledWith(
+      4,
+      "console",
+      "FlattenLogicalAccount",
+      {
+        action_id: "action-1",
+        logical_account_id: "logical-1",
+        reason: "risk cleanup"
+      },
+      { silent: true }
+    );
   });
 
   it("uses canonical unified account RPC names", async () => {
@@ -56,7 +68,7 @@ describe("Trade public API", () => {
       control_mode: 2 as const
     };
     await trade.createLogicalAccount(logical);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "CreateLogicalAccount", logical);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "CreateLogicalAccount", logical, { silent: true });
     const paper = {
       account_name: "paper",
       logical_account_name: "manual",
@@ -70,7 +82,20 @@ describe("Trade public API", () => {
       control_mode: 2 as const
     };
     await trade.createPaperSimulation(paper);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "CreatePaperSimulation", paper);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "CreatePaperSimulation", paper, { silent: true });
+  });
+
+  it("文案键与后端状态一一对应", () => {
+    // 后端常量：target/executor.go 的 Status*，operator 的 Action 状态。
+    expect(Object.keys(trade.targetStateLabels).sort()).toEqual(["BLOCKED", "CONVERGED", "CONVERGING", "EXPIRED", "PENDING"]);
+    expect(Object.keys(trade.actionStateLabels).sort()).toEqual(["COMPLETED", "FAILED", "PARTIAL", "RUNNING"]);
+    expect(Object.keys(trade.orderOwnerLabels).sort()).toEqual(["EXTERNAL", "OPERATOR", "TARGET"]);
+  });
+
+  it("撤单中和撤单状态未知可以重试确认", () => {
+    expect(trade.canCancelOrderState("CANCELING")).toBe(true);
+    expect(trade.canCancelOrderState("CANCEL_UNKNOWN")).toBe(true);
+    expect(trade.canCancelOrderState("FILLED")).toBe(false);
   });
 
   it("exposes canonical Chinese order state labels", () => {
@@ -138,7 +163,7 @@ describe("Trade public API", () => {
     };
     await trade.submitOrder(request);
     expect(callTrade).toHaveBeenCalledTimes(1);
-    expect(callTrade).toHaveBeenCalledWith("console", "SubmitOrder", request);
+    expect(callTrade).toHaveBeenCalledWith("console", "SubmitOrder", request, { silent: true });
   });
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {

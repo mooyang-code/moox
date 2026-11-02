@@ -117,7 +117,7 @@
         width="min(520px, calc(100vw - 24px))"
         :title="form.execution_mode === 1 ? '创建模拟账户' : '创建真实账户'"
         :ok-text="form.execution_mode === 2 && form.environment === 2 ? '创建生产账户' : '创建账户'"
-        @ok="create"
+        :on-before-ok="create"
       >
         <a-form :model="form" auto-label-width>
           <a-form-item field="name" label="账户名称" required>
@@ -447,7 +447,6 @@ async function sync(account: TradingAccount) {
     await loadAccounts();
   } catch (error) {
     if (!request.isLatest()) return; // 切换空间使该同步作废：不展示属于原空间的失败
-    Message.error(error instanceof Error ? error.message : "账户同步失败，请检查连接和 Secret 配置");
   } finally {
     if (request.isLatest()) syncingId.value = "";
   }
@@ -523,15 +522,19 @@ async function submitCreate() {
   }
 }
 
-function create() {
-  if (form.execution_mode === 2 && form.environment === 2) {
+function confirmProduction() {
+  return new Promise<boolean>(resolve => {
     Modal.confirm({
       title: "确认创建生产账户",
       content: "生产账户可能产生真实交易，请确认环境和密钥标识。",
-      onOk: () => submitCreate()
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
     });
-    return false;
-  }
+  });
+}
+
+async function create() {
+  if (form.execution_mode === 2 && form.environment === 2 && !(await confirmProduction())) return false;
   return submitCreate();
 }
 
@@ -610,7 +613,6 @@ async function saveAccount() {
     await loadAccounts();
   } catch (error) {
     if (selectedAccount.value?.trading_account_id === accountId) {
-      Message.error(error instanceof Error ? error.message : "保存失败，请检查配置");
     }
   }
 }
@@ -632,7 +634,6 @@ async function saveLeverage() {
     Message.success("杠杆已更新");
   } catch (error) {
     if (selectedAccount.value?.trading_account_id === accountId) {
-      Message.error(error instanceof Error ? error.message : "杠杆更新失败");
     }
   }
 }
@@ -658,7 +659,6 @@ async function closePaper(account: TradingAccount) {
     if (selectedAccount.value?.trading_account_id === account.trading_account_id) closeDetail();
     await loadAccounts();
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "关闭模拟账户失败");
   } finally {
     closingId.value = "";
   }

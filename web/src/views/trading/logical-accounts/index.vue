@@ -105,7 +105,8 @@
         </template>
       </a-table>
 
-      <a-modal v-model:visible="createVisible" width="min(520px, calc(100vw - 24px))" title="新建组合账户" @ok="create">
+      <a-modal v-model:visible="createVisible" width="min(520px, calc(100vw - 24px))" title="新建组合账户" :on-before-ok="create">
+        <a-alert v-if="dialogError" type="error" show-icon class="dialog-alert">{{ dialogError }}</a-alert>
         <a-form :model="createForm" auto-label-width>
           <a-form-item label="名称" required><a-input v-model="createForm.name" /></a-form-item>
           <a-form-item label="控制模式" required>
@@ -155,17 +156,19 @@
               <a-button status="danger" @click="openFlatten">逐账户清仓</a-button>
             </a-space>
           </div>
-          <a-alert v-if="selected.pause_reason" type="warning" show-icon class="section">
+          <a-alert v-if="selected.control_mode === 1 && selected.pause_reason" type="warning" show-icon class="section">
             {{ selected.pause_reason }}
           </a-alert>
           <a-alert v-if="selected.readiness_reasons?.length" type="error" show-icon class="section">
             {{ selected.readiness_reasons.join("；") }}
           </a-alert>
-          <a-alert v-if="selected.automation_state === 'PAUSED' && target" type="info" show-icon class="section">
-            <template v-if="target.command_sequence"
-              >当前完整目标序号 {{ target.command_sequence }} 已保存但不会执行；恢复后会继续收敛。</template
-            >
-            <template v-else>当前目标已保存但不会执行；恢复后仅在目标仍未过期时继续收敛。</template>
+          <a-alert
+            v-if="selected.control_mode === 1 && selected.automation_state === 'PAUSED' && target"
+            type="info"
+            show-icon
+            class="section"
+          >
+            {{ targetExpired ? "目标已过期，恢复后等下一个目标。" : "目标已保存但不会执行，恢复后继续收敛。" }}
           </a-alert>
 
           <a-descriptions :column="detailColumns" bordered class="section">
@@ -178,6 +181,7 @@
             <a-descriptions-item label="运行会话">{{
               target?.session_id || selected.owner_session_id || "-"
             }}</a-descriptions-item>
+            <a-descriptions-item label="目标 K 线时间">{{ formatTargetTime(target?.bar_end_time) }}</a-descriptions-item>
             <a-descriptions-item label="目标有效至">{{ formatTargetTime(target?.valid_until) }}</a-descriptions-item>
           </a-descriptions>
 
@@ -236,10 +240,25 @@
           <a-table size="small" row-key="instrument_id" :data="target?.targets || []" :pagination="false">
             <template #columns>
               <a-table-column title="交易标的" data-index="instrument_id" />
-              <a-table-column title="目标持仓量" data-index="quantity" />
+              <a-table-column title="目标持仓量">
+                <template #cell="{ record }">{{ record.hold ? "保持当前持仓" : record.quantity }}</template>
+              </a-table-column>
             </template>
           </a-table>
           <a-empty v-if="target && !target.targets.length" description="空目标：全部归零" />
+          <a-alert v-if="target?.last_error" type="warning" show-icon class="section">{{ target.last_error }}</a-alert>
+          <template v-if="target?.blocked_targets?.length">
+            <div class="section-title">
+              <h3>阻塞标的</h3>
+            </div>
+            <a-table size="small" row-key="instrument_id" :data="target.blocked_targets" :pagination="false">
+              <template #columns>
+                <a-table-column title="交易标的" data-index="instrument_id" />
+                <a-table-column title="差额" data-index="quantity" :width="120" />
+                <a-table-column title="原因" data-index="reason" />
+              </template>
+            </a-table>
+          </template>
 
           <template v-if="action">
             <div class="section-title">
@@ -288,20 +307,24 @@
         v-model:visible="reasonVisible"
         width="min(520px, calc(100vw - 24px))"
         :title="reasonMode === 'pause' ? '暂停组合账户' : '逐账户清仓'"
-        @ok="submitReason"
+        :on-before-ok="submitReason"
       >
+        <a-alert v-if="dialogError" type="error" show-icon class="dialog-alert">{{ dialogError }}</a-alert>
         <a-alert v-if="reasonMode === 'flatten'" type="warning" show-icon class="section">
           将分别清空每个执行账户的风险仓位，不进行跨账户净额；完成后保持暂停。
         </a-alert>
         <a-form :model="reasonForm" auto-label-width>
-          <a-form-item label="操作编号" v-if="reasonMode === 'flatten'" required>
-            <a-input v-model="reasonForm.action_id" />
-          </a-form-item>
           <a-form-item label="原因" required><a-input v-model="reasonForm.reason" /></a-form-item>
         </a-form>
       </a-modal>
 
-      <a-modal v-model:visible="memberVisible" width="min(520px, calc(100vw - 24px))" title="添加执行账户" @ok="addMember">
+      <a-modal
+        v-model:visible="memberVisible"
+        width="min(520px, calc(100vw - 24px))"
+        title="添加执行账户"
+        :on-before-ok="addMember"
+      >
+        <a-alert v-if="dialogError" type="error" show-icon class="dialog-alert">{{ dialogError }}</a-alert>
         <a-form :model="memberForm" auto-label-width>
           <a-form-item label="执行账户" required>
             <a-select v-model="memberForm.trading_account_id" allow-search>
@@ -332,11 +355,13 @@
         >
         <a-alert v-if="submissionError" type="warning" show-icon class="section">{{ submissionError }}</a-alert>
         <a-form :model="manualForm" auto-label-width :disabled="!!pendingSubmission">
-          <a-form-item label="操作编号" required><a-input v-model="manualForm.action_id" /></a-form-item>
-          <a-form-item label="客户端订单编号" required><a-input v-model="manualForm.client_order_id" /></a-form-item>
-          <a-form-item label="交易标的" required
-            ><a-input v-model="manualForm.instrument_id" placeholder="BTC-USDT-SPOT"
-          /></a-form-item>
+          <a-form-item label="交易标的" required :extra="instrumentRuleHint(selectedInstrument)">
+            <a-select v-model="manualForm.instrument_id" allow-search placeholder="搜索交易标的">
+              <a-option v-for="item in instruments" :key="item.instrument_id" :value="item.instrument_id">{{
+                item.instrument_id
+              }}</a-option>
+            </a-select>
+          </a-form-item>
           <a-form-item label="方向" required>
             <a-radio-group v-model="manualForm.side" type="button">
               <a-radio :value="1">买入</a-radio><a-radio :value="2">卖出</a-radio>
@@ -385,6 +410,7 @@ import {
   getLogicalAccountTarget,
   getOperatorAction,
   getOrder,
+  listTradableInstruments,
   listTradingAccounts,
   listLogicalAccounts,
   parseFlattenResult,
@@ -406,8 +432,10 @@ import type {
   OperatorAction,
   ExecutionCapabilities,
   SubmitOrderReq,
-  Order
+  Order,
+  TradableInstrument
 } from "@/api/trade";
+import { instrumentRuleHint, orderRuleError } from "./order-rules";
 import EquityCurve from "./equity-curve.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
@@ -424,7 +452,9 @@ const submittedOrder = ref<Order | null>(null);
 const pendingSubmission = ref<{ mode: 1 | 2; request: SubmitOrderReq } | null>(null);
 const submitting = ref(false);
 const submissionError = ref("");
+const dialogError = ref("");
 const capabilities = ref<ExecutionCapabilities | null>(null);
+const instruments = ref<TradableInstrument[]>([]);
 const loading = ref(false);
 const createVisible = ref(false);
 const detailVisible = ref(false);
@@ -465,6 +495,13 @@ const manualForm = reactive({
   reason: "",
   deadline_at: ""
 });
+const selectedInstrument = computed(() => instruments.value.find(item => item.instrument_id === manualForm.instrument_id));
+watch(
+  () => manualForm.order_type,
+  type => {
+    if (type === 2 && !manualForm.fill_policy) manualForm.fill_policy = 1;
+  }
+);
 const localMarketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "合约" };
 const localExecutionModeLabels: Record<number, string> = { 0: "-", 1: "模拟", 2: "实盘" };
 const orderEntryLabel = computed(() => (selected.value?.control_mode === 2 ? "下单" : "接管并下单"));
@@ -484,6 +521,10 @@ const stateCounts = computed(() => ({
   paused: rows.value.filter(item => item.control_mode === 1 && item.automation_state === "PAUSED").length,
   notReady: rows.value.filter(item => !item.ready).length
 }));
+const targetExpired = computed(() => {
+  const validUntil = Number(target.value?.valid_until);
+  return target.value?.status === "EXPIRED" || (Number.isFinite(validUntil) && validUntil > 0 && validUntil <= Date.now());
+});
 function targetStatusLabel(status?: string) {
   return status ? targetStateLabels[status.toUpperCase()] || "未知" : "暂无";
 }
@@ -498,8 +539,7 @@ function actionTypeLabel(type?: string) {
     FLATTEN: "逐账户清仓",
     MANUAL_ORDER: "接管并下单",
     SUBMIT_ORDER: "下单",
-    PAUSE: "暂停",
-    RESUME: "恢复"
+    CANCEL_ORDER: "撤单"
   };
   return type ? labels[type.toUpperCase()] || "未知" : "-";
 }
@@ -509,8 +549,7 @@ function actionStateLabel(status?: string) {
 }
 function flattenAccountStateLabel(status?: string) {
   if (!status) return "-";
-  const labels: Record<string, string> = { ...actionStateLabels, PARTIAL: "部分完成" };
-  return labels[status.toUpperCase()] || "未知";
+  return actionStateLabels[status.toUpperCase()] || "未知";
 }
 function automationStateLabel(status?: string) {
   return status ? logicalAutomationStateLabels[status.toUpperCase()] || "未知" : "-";
@@ -552,15 +591,23 @@ async function create() {
     return false;
   }
   const submission = createScope.begin();
-  await createLogicalAccount({
-    ...createForm,
-    name: createForm.name.trim(),
-    settlement_asset: createForm.settlement_asset.trim().toUpperCase()
-  });
+  dialogError.value = "";
+  try {
+    await createLogicalAccount({
+      ...createForm,
+      name: createForm.name.trim(),
+      settlement_asset: createForm.settlement_asset.trim().toUpperCase()
+    });
+  } catch (error) {
+    if (submission.isCurrent()) dialogError.value = requestErrorMessage(error);
+    return false;
+  }
   if (!submission.isCurrent()) return false;
-  createVisible.value = false;
-  await load();
+  void load();
   return true;
+}
+function requestErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "请求失败，请稍后重试";
 }
 async function openDetail(item: LogicalAccount) {
   stopActionPolling();
@@ -646,6 +693,7 @@ function requestPause() {
   reasonOpenToken += 1;
   reasonMode.value = "pause";
   reasonForm.reason = "";
+  dialogError.value = "";
   reasonVisible.value = true;
 }
 function openFlatten() {
@@ -653,6 +701,7 @@ function openFlatten() {
   reasonMode.value = "flatten";
   reasonForm.action_id = createClientId();
   reasonForm.reason = "";
+  dialogError.value = "";
   reasonVisible.value = true;
 }
 function abandonedReasonSubmit(openToken: number) {
@@ -673,26 +722,30 @@ async function submitReason() {
     spaceStore.selectedSpaceId !== submitSpaceId ||
     selectedSpaceGeneration() !== submitGeneration ||
     selected.value?.logical_account_id !== submitAccountId;
-  if (reasonMode.value === "pause") {
-    await pauseLogicalAccount(selected.value.logical_account_id, reasonForm.reason.trim());
-    if (stale()) return abandonedReasonSubmit(openToken);
-  } else {
-    const rsp = await flattenLogicalAccount(
-      reasonForm.action_id.trim(),
-      selected.value.logical_account_id,
-      reasonForm.reason.trim()
-    );
-    // 请求已经发出但空间或所选组合账户已变化：不覆盖新对象的操作状态，也不用新空间轮询原空间的操作
-    if (stale()) return abandonedReasonSubmit(openToken);
-    action.value = rsp.action;
-    submittedOrder.value = null;
-    startActionPolling(rsp.action.action_id);
+  dialogError.value = "";
+  try {
+    if (reasonMode.value === "pause") {
+      await pauseLogicalAccount(selected.value.logical_account_id, reasonForm.reason.trim());
+      if (stale()) return abandonedReasonSubmit(openToken);
+    } else {
+      const rsp = await flattenLogicalAccount(
+        reasonForm.action_id.trim(),
+        selected.value.logical_account_id,
+        reasonForm.reason.trim()
+      );
+      // 请求已经发出但空间或所选组合账户已变化：不覆盖新对象的操作状态，也不用新空间轮询原空间的操作
+      if (stale()) return abandonedReasonSubmit(openToken);
+      action.value = rsp.action;
+      submittedOrder.value = null;
+      startActionPolling(rsp.action.action_id);
+    }
+  } catch (error) {
+    if (openToken === reasonOpenToken) dialogError.value = requestErrorMessage(error);
+    return false;
   }
+  void reloadDetail().then(load);
   // 同一空间同一账户重新打开了弹窗：操作本身仍然有效（状态与轮询照常更新），但不能关闭新打开的弹窗
-  if (openToken === reasonOpenToken) reasonVisible.value = false;
-  await reloadDetail();
-  await load();
-  return true;
+  return openToken === reasonOpenToken;
 }
 async function resume() {
   if (!selected.value) return;
@@ -711,6 +764,7 @@ async function openMember() {
   const rsp = await listTradingAccounts({ page: { page: 1, size: 200 } });
   accounts.value = rsp.accounts || [];
   Object.assign(memberForm, { trading_account_id: "", enabled: true, priority: 0, adopt_existing_exposure: false });
+  dialogError.value = "";
   memberVisible.value = true;
 }
 async function addMember() {
@@ -720,11 +774,15 @@ async function addMember() {
   }
   const submission = memberScope.begin();
   const memberAccountId = selected.value.logical_account_id;
-  await addLogicalAccountMember({ logical_account_id: memberAccountId, ...memberForm });
+  dialogError.value = "";
+  try {
+    await addLogicalAccountMember({ logical_account_id: memberAccountId, ...memberForm });
+  } catch (error) {
+    if (submission.isCurrent()) dialogError.value = requestErrorMessage(error);
+    return false;
+  }
   if (!submission.isCurrent() || selected.value?.logical_account_id !== memberAccountId) return false;
-  memberVisible.value = false;
-  await reloadDetail();
-  await load();
+  void reloadDetail().then(load);
   return true;
 }
 async function removeMember(exchangeAccountId: string) {
@@ -776,6 +834,14 @@ function openManual(exchangeAccountId: string) {
       if (!request.isLatest()) return;
       capabilities.value = null;
     });
+  instruments.value = [];
+  listTradableInstruments(exchangeAccountId)
+    .then(response => {
+      if (request.isLatest()) instruments.value = response.instruments || [];
+    })
+    .catch(() => {
+      if (request.isLatest()) instruments.value = [];
+    });
   manualVisible.value = true;
 }
 async function submitManual() {
@@ -796,6 +862,12 @@ async function submitManual() {
     return false;
   }
   if (!pendingSubmission.value) {
+    const limitPrice = manualForm.order_type === 2 ? manualForm.limit_price : undefined;
+    const ruleError = orderRuleError(manualForm.quantity, limitPrice, selectedInstrument.value);
+    if (ruleError) {
+      Message.warning(ruleError);
+      return false;
+    }
     const deadline = manualForm.deadline_at ? new Date(manualForm.deadline_at).getTime() : undefined;
     if (deadline !== undefined && (!Number.isFinite(deadline) || deadline <= Date.now())) {
       Message.warning("提交截止时间必须晚于当前时间");
@@ -809,7 +881,7 @@ async function submitManual() {
         action_id: manualForm.action_id.trim(),
         client_order_id: manualForm.client_order_id.trim(),
         instrument_id: manualForm.instrument_id.trim().toUpperCase(),
-        position_side: selected.value.market_type === 1 ? undefined : 1,
+        position_side: selected.value.market_type === 2 ? 1 : undefined,
         quantity: manualForm.quantity.trim(),
         fill_policy: manualForm.order_type === 1 ? 0 : manualForm.fill_policy,
         limit_price: manualForm.order_type === 2 ? manualForm.limit_price.trim() : undefined,
@@ -937,7 +1009,9 @@ watch(
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：createVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const createScope = createSubmitScope();
 watch(createVisible, open => {
-  if (open) createScope.invalidate();
+  if (!open) return;
+  createScope.invalidate();
+  dialogError.value = "";
 });
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：memberVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
@@ -1032,6 +1106,9 @@ watch(memberVisible, open => {
 }
 .logical-page :deep(.arco-table-th) {
   white-space: nowrap;
+}
+.dialog-alert {
+  margin-bottom: 12px;
 }
 .member-hint {
   margin-top: 8px;

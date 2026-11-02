@@ -182,6 +182,15 @@ export interface Position {
 export interface InstrumentTarget {
   instrument_id: string;
   quantity: string;
+  hold?: boolean;
+}
+
+export interface TradableInstrument {
+  instrument_id: string;
+  quantity_step: string;
+  min_quantity: string;
+  min_notional: string;
+  price_tick: string;
 }
 
 export interface BlockedTarget extends InstrumentTarget {

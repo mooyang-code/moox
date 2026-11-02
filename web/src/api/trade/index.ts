@@ -25,6 +25,7 @@ import type {
   PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
+  TradableInstrument,
   RetInfo,
   UpdateTradingAccountReq
 } from "./types";
@@ -33,7 +34,9 @@ export * from "./types";
 export { tradeServiceMap } from "./http";
 
 export function createTradingAccount(req: CreateTradingAccountReq) {
-  return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req);
+  return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req, {
+    silent: true
+  });
 }
 
 export function updateTradingAccount(req: UpdateTradingAccountReq) {
@@ -78,7 +81,8 @@ export function createPaperSimulation(req: CreatePaperSimulationReq) {
   return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
     "console",
     "CreatePaperSimulation",
-    req
+    req,
+    { silent: true }
   );
 }
 
@@ -93,6 +97,14 @@ export function getExecutionCapabilities(trading_account_id: string) {
   return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; capabilities: ExecutionCapabilities }>(
     "console",
     "GetExecutionCapabilities",
+    { trading_account_id }
+  );
+}
+
+export function listTradableInstruments(trading_account_id: string) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; instruments: TradableInstrument[] }>(
+    "console",
+    "ListTradableInstruments",
     { trading_account_id }
   );
 }
@@ -113,7 +125,7 @@ export function listHoldings(trading_account_id: string) {
 }
 
 export function createLogicalAccount(req: CreateLogicalAccountReq) {
-  return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req);
+  return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req, { silent: true });
 }
 
 export function getLogicalAccount(logical_account_id: string) {
@@ -131,7 +143,9 @@ export function listLogicalAccounts(page: Page = {}) {
 }
 
 export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
-  return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req);
+  return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req, {
+    silent: true
+  });
 }
 
 export function removeLogicalAccountMember(logical_account_id: string, trading_account_id: string) {
@@ -143,10 +157,15 @@ export function removeLogicalAccountMember(logical_account_id: string, trading_a
 }
 
 export function pauseLogicalAccount(logical_account_id: string, reason: string) {
-  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>("console", "PauseLogicalAccount", {
-    logical_account_id,
-    reason
-  });
+  return callTrade<{ logical_account_id: string; reason: string }, LogicalAccountResponse>(
+    "console",
+    "PauseLogicalAccount",
+    {
+      logical_account_id,
+      reason
+    },
+    { silent: true }
+  );
 }
 
 export function resumeLogicalAccount(logical_account_id: string) {
@@ -161,18 +180,21 @@ export function flattenLogicalAccount(action_id: string, logical_account_id: str
   return callTrade<
     { action_id: string; logical_account_id: string; reason: string },
     { ret_info: RetInfo; action: OperatorAction }
-  >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason });
+  >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason }, { silent: true });
 }
 
 export function submitOrder(req: SubmitOrderReq) {
-  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req);
+  return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req, {
+    silent: true
+  });
 }
 
 export function placeManualOrder(req: PlaceManualOrderReq) {
   return callTrade<PlaceManualOrderReq, { ret_info: RetInfo; action: OperatorAction; order?: Order }>(
     "console",
     "PlaceManualOrder",
-    req
+    req,
+    { silent: true }
   );
 }
 
@@ -180,7 +202,7 @@ export function cancelOrder(action_id: string, order_id: string, reason: string)
   return callTrade<
     { action_id: string; order_id: string; reason: string },
     { ret_info: RetInfo; action: OperatorAction; order: Order }
-  >("console", "CancelOrder", { action_id, order_id, reason });
+  >("console", "CancelOrder", { action_id, order_id, reason }, { silent: true });
 }
 
 export function getOperatorAction(action_id: string) {
@@ -236,23 +258,28 @@ export const orderStateLabels: Record<string, string> = {
   EXPIRED: "已过期"
 };
 export const actionStateLabels: Record<string, string> = {
-  PENDING: "等待中",
   RUNNING: "执行中",
-  SUCCEEDED: "已完成",
-  FAILED: "失败",
-  CANCELED: "已取消"
+  COMPLETED: "已完成",
+  PARTIAL: "部分完成",
+  FAILED: "失败"
 };
 export const targetStateLabels: Record<string, string> = {
-  ACCEPTED: "已接收",
-  RUNNING: "执行中",
-  SUCCEEDED: "已完成",
+  PENDING: "等待执行",
+  CONVERGING: "收敛中",
+  CONVERGED: "已收敛",
   BLOCKED: "已阻塞",
-  FAILED: "失败"
+  EXPIRED: "已过期"
 };
 
 export function canCancelOrderState(state: string): boolean {
-  return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN"].includes(state.toUpperCase());
+  return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN", "CANCELING", "CANCEL_UNKNOWN"].includes(state.toUpperCase());
 }
+
+export const orderOwnerLabels: Record<string, string> = {
+  TARGET: "策略",
+  OPERATOR: "人工",
+  EXTERNAL: "外部"
+};
 
 export function formatTimestamp(value?: string): string {
   if (!value) return "-";

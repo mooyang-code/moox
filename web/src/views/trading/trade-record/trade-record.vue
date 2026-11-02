@@ -46,6 +46,9 @@
               <a-table-column title="市场">
                 <template #cell="{ record }">{{ localMarketTypeLabels[record.market_type] }}</template>
               </a-table-column>
+              <a-table-column title="来源">
+                <template #cell="{ record }">{{ orderOwnerLabels[record.owner_type] || "-" }}</template>
+              </a-table-column>
               <a-table-column title="方向">
                 <template #cell="{ record }">
                   <a-tag :color="orderSideColors[record.side]">{{ orderSideLabels[record.side] }}</a-tag>
@@ -74,9 +77,17 @@
                 <template #cell="{ record }">
                   <a-space>
                     <a-button size="mini" type="text" @click="openOrderDetail(record)">详情</a-button>
-                    <a-button v-if="canCancel(record.state)" size="mini" type="text" status="danger" @click="cancel(record)"
+                    <a-button
+                      v-if="canCancel(record.state) && record.logical_account_id"
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      @click="openCancel(record)"
                       >撤单</a-button
                     >
+                    <a-tooltip v-else-if="canCancel(record.state)" content="外部订单请到交易所处理">
+                      <span class="muted">外部订单</span>
+                    </a-tooltip>
                   </a-space>
                 </template>
               </a-table-column>
@@ -84,6 +95,20 @@
           </a-table>
         </div>
       </section>
+
+      <a-modal
+        v-model:visible="cancelVisible"
+        width="min(480px, calc(100vw - 24px))"
+        title="撤单确认"
+        ok-text="确认撤单"
+        :on-before-ok="confirmCancel"
+      >
+        <a-alert v-if="cancelPausesAccount" type="warning" show-icon class="cancel-alert">撤单会暂停整个组合账户。</a-alert>
+        <a-alert v-if="cancelError" type="error" show-icon class="cancel-alert">{{ cancelError }}</a-alert>
+        <a-form :model="cancelForm" auto-label-width>
+          <a-form-item label="原因" required><a-input v-model="cancelForm.reason" /></a-form-item>
+        </a-form>
+      </a-modal>
 
       <a-drawer
         v-model:visible="detailVisible"
@@ -110,6 +135,11 @@
               formatTimestamp(selectedOrder.submitted_at || selectedOrder.created_at)
             }}</a-descriptions-item>
             <a-descriptions-item label="完成时间">{{ formatTimestamp(selectedOrder.finished_at) }}</a-descriptions-item>
+            <a-descriptions-item label="来源">{{ orderOwnerLabels[selectedOrder.owner_type] || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="参考价">{{ selectedOrder.reference_price || "-" }}</a-descriptions-item>
+            <a-descriptions-item v-if="selectedOrder.reject_reason" label="失败原因" :span="2">{{
+              selectedOrder.reject_reason
+            }}</a-descriptions-item>
           </a-descriptions>
 
           <div class="detail-section">
@@ -160,6 +190,8 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   canCancelOrderState,
   cancelOrder,
+  getLogicalAccount,
+  orderOwnerLabels,
   formatTimestamp,
   listTradingAccounts,
   listFills,
@@ -351,14 +383,43 @@ function changeOrderPage(page: number) {
 
 const canCancel = canCancelOrderState;
 
-async function cancel(order: Order) {
+const cancelVisible = ref(false);
+const cancelError = ref("");
+const cancelPausesAccount = ref(false);
+const cancelForm = reactive({ order_id: "", action_id: "", reason: "" });
+
+function openCancel(order: Order) {
   if (order.trading_account_id !== tradingAccountId.value) {
     Message.warning("账户已切换，请重新查询后重试");
     return;
   }
-  await cancelOrder(createClientId(), order.order_id, "控制台手动撤单");
+  // 操作编号在弹窗打开时生成，失败重试沿用同一个编号。
+  Object.assign(cancelForm, { order_id: order.order_id, action_id: createClientId(), reason: "控制台手动撤单" });
+  cancelError.value = "";
+  cancelPausesAccount.value = order.owner_type === "TARGET";
+  cancelVisible.value = true;
+  getLogicalAccount(order.logical_account_id)
+    .then(response => {
+      if (cancelForm.order_id === order.order_id) cancelPausesAccount.value = response.logical_account.control_mode === 1;
+    })
+    .catch(() => undefined);
+}
+
+async function confirmCancel() {
+  if (!cancelForm.reason.trim()) {
+    cancelError.value = "请填写撤单原因";
+    return false;
+  }
+  cancelError.value = "";
+  try {
+    await cancelOrder(cancelForm.action_id, cancelForm.order_id, cancelForm.reason.trim());
+  } catch (error) {
+    cancelError.value = error instanceof Error ? error.message : "撤单失败，请重试";
+    return false;
+  }
   Message.success("撤单请求已提交");
-  await loadOrders();
+  void loadOrders();
+  return true;
 }
 
 watch(
@@ -482,6 +543,9 @@ onMounted(async () => {
 }
 .orders-table-region :deep(.arco-table-th) {
   white-space: nowrap;
+}
+.cancel-alert {
+  margin-bottom: 12px;
 }
 .detail-section {
   margin-top: var(--moox-space-6);
