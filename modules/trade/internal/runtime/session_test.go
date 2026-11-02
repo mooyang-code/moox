@@ -219,17 +219,14 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return len(adapter.callSnapshot()) >= 12
+		return len(adapter.callSnapshot()) >= 9
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, []string{
 		"LoadInstruments",
 		"Subscribe",
-		"SetMarginMode",
-		"SetLeverage",
 		"GetAccountSnapshot",
 		"ListPositionSnapshots",
 		"ListOpenOrders",
-		"ListRecentFills",
 		"ListOpenOrders",
 		"ListPositionSnapshots",
 		"GetAccountSnapshot",
@@ -485,4 +482,33 @@ func TestExchangeSessionWithoutPrivateStreamBecomesReadyByPolling(t *testing.T) 
 	})
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
 	require.NotContains(t, scripted.callSnapshot(), "Subscribe")
+}
+
+func TestSessionSetsSymbolConfigOnceUntilForgotten(t *testing.T) {
+	account := store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModeLive)}
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1)}
+	session := &ExchangeSession{Account: account, Adapter: scripted}
+	leverage := shared.MustDecimal("3")
+	ctx := context.Background()
+
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Equal(t, []string{"SetMarginMode", "SetLeverage"}, scripted.callSnapshot())
+
+	session.ForgetSymbolConfig("BTCUSDT")
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Len(t, scripted.callSnapshot(), 4)
+
+	session.ForgetSymbolConfig(store.DefaultLeverageKey)
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Len(t, scripted.callSnapshot(), 6)
+}
+
+func TestPaperSessionSkipsSymbolConfig(t *testing.T) {
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1)}
+	session := &ExchangeSession{
+		Account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModePaper)}, Adapter: scripted,
+	}
+	require.NoError(t, session.EnsureSymbolConfig(context.Background(), "BTCUSDT", shared.MustDecimal("3")))
+	require.Empty(t, scripted.callSnapshot())
 }

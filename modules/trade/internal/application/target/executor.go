@@ -80,6 +80,13 @@ type memberState struct {
 	blocked  []store.BlockedTarget
 }
 
+// placement 是一次下单尝试的结果。tooSmall 表示全部成员都因最小量或最小金额下不了单。
+type placement struct {
+	placed   bool
+	reason   string
+	tooSmall bool
+}
+
 type laneAction struct {
 	member     memberState
 	instrument store.InstrumentRecord
@@ -289,6 +296,16 @@ func (e *Executor) Converge(
 				return Result{Status: StatusPaused}, err
 			}
 			if submitted, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil && submitted.State != orderdomain.Rejected {
+				// 报价过期时丢弃这笔子单，下一轮按最新持仓和报价重新下单。
+				if errors.Is(err, orderdomain.ErrReferencePriceStale) {
+					if _, discardErr := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); discardErr != nil {
+						return Result{}, errors.Join(err, discardErr)
+					}
+					if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+						return Result{}, err
+					}
+					return Result{Status: StatusConverging, Action: "discard"}, nil
+				}
 				if targetSubmitConflict(err) {
 					if _, discardErr := e.Orders.DiscardPending(
 						ctx, spaceID, current.OrderID,
@@ -340,9 +357,9 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
-	lanes := laneIDs(desired, members)
 	blocked = nil
-	for _, instrumentID := range lanes {
+	var actions []laneAction
+	for _, instrumentID := range laneIDs(desired, members) {
 		action, complete, reason, actionErr := nextLaneAction(
 			instrumentID, desired[instrumentID], members,
 		)
@@ -357,10 +374,17 @@ func (e *Executor) Converge(
 			})
 			continue
 		}
-		if complete {
-			continue
+		if !complete {
+			actions = append(actions, action)
 		}
-		placed, placeReason, placeErr := e.placeAction(
+	}
+	// 先减后加：释放资金的单排在前面。减仓下不了单时不阻止加仓，能否加仓由资金检查决定。
+	sort.SliceStable(actions, func(i, j int) bool {
+		return actions[i].reducing && !actions[j].reducing
+	})
+	for _, action := range actions {
+		instrumentID := action.instrument.InstrumentID
+		placement, placeErr := e.placeAction(
 			ctx, spaceID, target, action, members,
 		)
 		if placeErr != nil {
@@ -386,15 +410,18 @@ func (e *Executor) Converge(
 			}
 			return Result{}, placeErr
 		}
-		if placeReason != "" {
+		if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
+			continue
+		}
+		if placement.reason != "" {
 			blocked = append(blocked, store.BlockedTarget{
 				InstrumentID: instrumentID,
 				Quantity:     action.delta.String(),
-				Reason:       placeReason,
+				Reason:       placement.reason,
 			})
 			continue
 		}
-		if placed {
+		if placement.placed {
 			target.BlockedTargets = blocked
 			target.LastError = ""
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -646,13 +673,17 @@ func nextLaneAction(
 				return laneAction{}, false,
 					"持仓没有对应的可交易标的", nil
 			}
+			// 反向零头下不了单，跳过这个成员继续判断。
+			if belowMinimumQuantity(position, instrument) {
+				continue
+			}
 			return laneAction{
 				member: member, instrument: instrument,
 				delta: position.Neg(), reducing: true,
 			}, false, "", nil
 		}
 	}
-	if confirmed.Cmp(desired.Quantity) == 0 {
+	if desired.Quantity.IsZero() || confirmed.Cmp(desired.Quantity) == 0 {
 		return laneAction{}, true, "", nil
 	}
 	delta := desired.Quantity.Sub(confirmed)
@@ -692,6 +723,29 @@ func nextLaneAction(
 	return laneAction{}, false, "没有启用的成员支持该标的", nil
 }
 
+// belowMinimumQuantity 判断数量按步长取整后是否下不了单。
+func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
+	step, minimum, err := baseQuantityRules(instrument)
+	if err != nil {
+		return false
+	}
+	floored := floorToStep(quantity.Abs(), step)
+	return floored.IsZero() || floored.Cmp(minimum) < 0
+}
+
+// laneFinished 判断下不了单的剩余量能否算完成：目标为 0 或已有同向持仓时是零头，
+// 从空仓开新仓就达不到最小量才需要人看。
+func laneFinished(desired desiredTarget, members []memberState, instrumentID string) bool {
+	if desired.Quantity.IsZero() {
+		return true
+	}
+	confirmed := shared.Zero()
+	for _, member := range members {
+		confirmed = confirmed.Add(member.positions[instrumentID])
+	}
+	return !confirmed.IsZero() && sameSign(confirmed, desired.Quantity)
+}
+
 func positionsByAbsoluteSize(
 	members []memberState,
 	instrumentID string,
@@ -719,39 +773,26 @@ func (e *Executor) placeAction(
 	target store.LogicalAccountTargetRecord,
 	action laneAction,
 	members []memberState,
-) (bool, string, error) {
+) (placement, error) {
 	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
 	if err != nil {
-		return false, "", err
+		return placement{}, err
 	}
 	var capacityErrors []string
-	for _, candidate := range placementCandidates(action, members) {
-		if reason, excluded := rejected[candidate.member.account.TradingAccountID]; excluded {
-			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
-			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+reason)
-			continue
-		}
+	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
+	// 有成员本来能下单但被排除时不能算完成。
+	tooSmall := 0
+	candidates := placementCandidates(action, members)
+	for _, candidate := range candidates {
+		accountID := candidate.member.account.TradingAccountID
 		quantity, reason, err := e.childQuantity(ctx, candidate)
 		if err != nil {
-			return false, "", err
+			return placement{}, err
 		}
 		if reason != "" {
 			capacityErrors = append(capacityErrors, reason)
+			tooSmall++
 			continue
-		}
-		if candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).PositionFromBalance {
-			step, _, err := baseQuantityRules(candidate.instrument)
-			if err != nil {
-				return false, "", err
-			}
-			sellable := floorToStep(candidate.member.sellable[candidate.instrument.InstrumentID], step)
-			if sellable.Cmp(shared.Zero()) <= 0 {
-				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 可卖量不足")
-				continue
-			}
-			if quantity.Cmp(sellable) > 0 {
-				quantity = sellable
-			}
 		}
 		quote, err := e.Prices.LatestPrice(
 			ctx,
@@ -760,19 +801,47 @@ func (e *Executor) placeAction(
 		)
 		if err != nil {
 			if paper.IsInfrastructureError(err) {
-				return false, "", err
+				return placement{}, err
 			}
-			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
+			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
 		}
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
-			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+		}
+		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
+		if err != nil {
+			return placement{}, err
+		}
+		// 合约全平只查最小数量，否则剩余仓位永远平不掉。
+		fullClose := candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).ReduceOnly &&
+			quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
+		if belowMinimum && !fullClose {
+			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
+			tooSmall++
+			continue
+		}
+		if reason, excluded := rejected[accountID]; excluded {
+			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
+			capacityErrors = append(capacityErrors, accountID+": "+reason)
+			continue
+		}
+		if candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).PositionFromBalance {
+			sellable := candidate.member.sellable[candidate.instrument.InstrumentID]
+			if quantity.Cmp(sellable) > 0 {
+				quantity = sellable
+			}
+			if belowMinimumQuantity(quantity, candidate.instrument) {
+				capacityErrors = append(capacityErrors, accountID+": 可卖量不足")
+				continue
+			}
+			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
 		}
 		if target.InstanceID != "" {
 			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
 				SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
 				OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
 			}, target); err != nil {
-				return false, "", err
+				return placement{}, err
 			}
 		}
 		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
@@ -786,26 +855,10 @@ func (e *Executor) placeAction(
 		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
 		if err != nil {
-			return false, "", err
+			return placement{}, err
 		}
 		if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 {
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
-			continue
-		}
-		belowMinimum, err := belowMinimumNotional(
-			quantity,
-			quote.Price,
-			candidate.instrument.MinNotional,
-		)
-		if err != nil {
-			return false, "", err
-		}
-		if belowMinimum {
-			capacityErrors = append(
-				capacityErrors,
-				candidate.member.account.TradingAccountID+
-					": 金额低于交易所最小名义金额",
-			)
 			continue
 		}
 		runnerID := target.RunnerID
@@ -833,7 +886,7 @@ func (e *Executor) placeAction(
 					capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
 					continue
 				}
-				return false, "", err
+				return placement{}, err
 			}
 			if capacity.Cmp(shared.Zero()) <= 0 {
 				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
@@ -852,35 +905,37 @@ func (e *Executor) placeAction(
 				)
 				continue
 			}
-			return false, "", err
+			return placement{}, err
 		}
 		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
-			return false, "", e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
+			return placement{}, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
 		submitted, err := e.Orders.Submit(ctx, spaceID, string(placed.ID))
 		if err != nil {
 			// 一轮只提交一笔子单：拒单后先同步，下一轮再换成员，全部被拒时写入 blocked_targets。
 			if submitted.State == orderdomain.Rejected {
-				return true, "", nil
+				return placement{placed: true}, nil
 			}
 			if targetSubmitConflict(err) {
 				_, discardErr := e.Orders.DiscardPending(
 					ctx, spaceID, string(placed.ID),
 				)
 				if discardErr != nil {
-					return false, "", errors.Join(err, discardErr)
+					return placement{}, errors.Join(err, discardErr)
 				}
-				return false, "", err
+				return placement{}, err
 			}
-			return false, "", err
+			return placement{}, err
 		}
-		return true, "", nil
+		return placement{placed: true}, nil
 	}
+	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
 	if len(capacityErrors) == 0 {
-		return false, "数量低于交易所最小值", nil
+		result.reason = "数量低于交易所最小值"
+		return result, nil
 	}
-	return false, "成员容量不足：" +
-		strings.Join(capacityErrors, "; "), nil
+	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
+	return result, nil
 }
 
 // placementCandidates 列出可以承接这次动作的成员：加仓是全部支持该标的的成员，

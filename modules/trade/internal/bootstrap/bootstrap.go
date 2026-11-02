@@ -91,10 +91,10 @@ func initialize(
 	}
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
-		SessionState: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		SessionState: manager, SymbolConfigs: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
-		Store: tradeStore, Adapters: manager,
+		Store: tradeStore, Adapters: manager, SymbolConfig: manager,
 		Validator: orderapp.Validator{
 			Accounts:         accounts,
 			Instruments:      instrumentSource{store: tradeStore},

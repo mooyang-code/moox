@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +26,9 @@ const (
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
+	symbolMu          sync.Mutex
+	configuredSymbols map[string]string
+
 	Account               store.TradingAccountRecord
 	Adapter               execution.ExecutionAdapter
 	MarketData            execution.MarketDataSource
@@ -131,28 +133,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err, ended := privateStreamError(disconnected, streamDone); ended {
 		return s.disconnect(ctx, err)
 	}
-	if configurer, ok := s.Adapter.(execution.SymbolConfigurer); ok && exchange.RuleFor(s.Account.MarketType).Leverage {
-		symbols := leverageSymbols(s.Account.LeverageSettings)
-		for _, symbol := range symbols {
-			if err := configurer.SetMarginMode(
-				ctx,
-				shared.ExchangeSymbol(symbol),
-				exchange.MarginModeCross,
-			); err != nil {
-				return s.disconnect(ctx, err)
-			}
-		}
-		for _, symbol := range symbols {
-			leverage, parseErr := shared.ParseDecimal(s.Account.LeverageSettings[symbol])
-			if parseErr != nil {
-				return s.disconnect(ctx, parseErr)
-			}
-			if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
-				return s.disconnect(ctx, err)
-			}
-		}
-	}
-
+	accountReadAt := time.Now()
 	accountSnapshot, err := s.Adapter.GetAccountSnapshot(ctx)
 	if err != nil {
 		return s.disconnect(ctx, err)
@@ -183,14 +164,11 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
-	symbols := sessionSymbols(
-		s.Account,
-		orders,
-		localOrders,
-		positions,
-		instruments,
-		accountSnapshot,
-	)
+	instrumentRecords, err := s.Sync.Store.ListInstrumentsForAccount(ctx, s.Account.TradingAccountID)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	symbols := accountsync.FullSymbols(s.Account, orders, localOrders, positions, instrumentRecords, accountSnapshot)
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
 	for _, symbol := range symbols {
@@ -214,7 +192,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	s.opMu.Lock()
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
-		Account: accountSnapshot, FillCursors: cursors, Ready: false,
+		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
 	})
 	s.opMu.Unlock()
 	if err != nil {
@@ -378,7 +356,7 @@ func (s *ExchangeSession) runPolling(ctx context.Context) error {
 	if err := s.persistInstruments(ctx, instruments); err != nil {
 		return s.disconnect(ctx, err)
 	}
-	if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
+	if _, err := s.Sync.SyncAccountFull(ctx, s.Account.TradingAccountID); err != nil {
 		return s.disconnect(ctx, err)
 	}
 	s.ready.Store(true)
@@ -399,6 +377,41 @@ func (s *ExchangeSession) runPolling(ctx context.Context) error {
 			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
 		}
 	}
+}
+
+// EnsureSymbolConfig 把全仓和杠杆设置到交易所，结果记在会话内存里，同一标的只设置一次。
+func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error {
+	configurer, ok := s.Adapter.(execution.SymbolConfigurer)
+	if !ok || exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
+		return nil
+	}
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	if s.configuredSymbols[symbol] == leverage.String() {
+		return nil
+	}
+	if err := configurer.SetMarginMode(ctx, shared.ExchangeSymbol(symbol), exchange.MarginModeCross); err != nil {
+		return err
+	}
+	if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
+		return err
+	}
+	if s.configuredSymbols == nil {
+		s.configuredSymbols = make(map[string]string)
+	}
+	s.configuredSymbols[symbol] = leverage.String()
+	return nil
+}
+
+// ForgetSymbolConfig 让标的下次开仓前重新设置；默认杠杆变更时全部标的都要重新设置。
+func (s *ExchangeSession) ForgetSymbolConfig(symbol string) {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	if symbol == store.DefaultLeverageKey {
+		s.configuredSymbols = nil
+		return
+	}
+	delete(s.configuredSymbols, symbol)
 }
 
 func (s *ExchangeSession) marketData() execution.MarketDataSource {
@@ -722,84 +735,6 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-func leverageSymbols(settings store.LeverageSettings) []string {
-	symbols := make([]string, 0, len(settings))
-	for symbol := range settings {
-		if symbol != store.DefaultLeverageKey {
-			symbols = append(symbols, symbol)
-		}
-	}
-	sort.Strings(symbols)
-	return symbols
-}
-
-func sessionSymbols(
-	account store.TradingAccountRecord,
-	orders []exchange.Order,
-	local []store.OrderRecord,
-	positions []exchange.Position,
-	instruments []exchange.Instrument,
-	snapshot exchange.AccountSnapshot,
-) []string {
-	set := make(map[string]struct{})
-	for _, symbol := range account.SyncSymbols {
-		set[symbol] = struct{}{}
-	}
-	for symbol := range account.LeverageSettings {
-		if symbol != store.DefaultLeverageKey {
-			set[symbol] = struct{}{}
-		}
-	}
-	for symbol := range account.FillCursors {
-		set[symbol] = struct{}{}
-	}
-	for _, current := range orders {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, current := range local {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, position := range positions {
-		if position.ExchangeSymbol != "" {
-			set[position.ExchangeSymbol] = struct{}{}
-		}
-	}
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
-		heldAssets := make(map[string]struct{})
-		for _, balance := range snapshot.Balances {
-			if balance.Total.Cmp(shared.Zero()) > 0 ||
-				balance.Available.Cmp(shared.Zero()) > 0 ||
-				balance.Locked.Cmp(shared.Zero()) > 0 {
-				heldAssets[balance.Asset] = struct{}{}
-			}
-		}
-		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
-				continue
-			}
-			if instrument.QuoteAsset != account.SettlementAsset {
-				continue
-			}
-			if _, held := heldAssets[instrument.BaseAsset]; held {
-				symbol := instrument.ExchangeSymbol
-				if symbol != "" {
-					set[symbol] = struct{}{}
-				}
-			}
-		}
-	}
-	symbols := make([]string, 0, len(set))
-	for symbol := range set {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
-	return symbols
 }
 
 func cloneFillCursors(current store.FillCursors) store.FillCursors {

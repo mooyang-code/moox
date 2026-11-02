@@ -270,7 +270,7 @@
               <a-button type="primary" @click="saveAccount">保存真实账户配置</a-button>
             </a-form>
             <a-form v-if="selectedAccount.market_type === 2" :model="leverageForm" layout="inline" class="leverage-form">
-              <a-input v-model="leverageForm.instrument_id" placeholder="交易标的编号" />
+              <a-input v-model="leverageForm.instrument_id" placeholder="交易标的（留空为默认杠杆）" />
               <a-input v-model="leverageForm.leverage" placeholder="杠杆倍数" />
               <a-button @click="saveLeverage">设置杠杆</a-button>
             </a-form>
@@ -611,30 +611,28 @@ async function saveAccount() {
     selectedAccount.value = response.account;
     Message.success("真实账户配置已保存");
     await loadAccounts();
-  } catch (error) {
-    if (selectedAccount.value?.trading_account_id === accountId) {
-    }
+  } catch {
+    // 错误已由 callTrade 提示。
   }
 }
 
 async function saveLeverage() {
-  if (!selectedAccount.value || !leverageForm.instrument_id.trim() || !leverageForm.leverage.trim()) {
-    Message.warning("请输入交易标的编号和杠杆");
+  if (!selectedAccount.value || !leverageForm.leverage.trim()) {
+    Message.warning("请输入杠杆");
     return;
   }
   const accountId = selectedAccount.value.trading_account_id;
   try {
     const response = await setLeverage({
       trading_account_id: selectedAccount.value.trading_account_id,
-      instrument_id: leverageForm.instrument_id.trim(),
+      instrument_id: leverageForm.instrument_id.trim() || "*",
       leverage: leverageForm.leverage.trim()
     });
     if (selectedAccount.value?.trading_account_id !== accountId) return;
     selectedAccount.value = response.account;
     Message.success("杠杆已更新");
-  } catch (error) {
-    if (selectedAccount.value?.trading_account_id === accountId) {
-    }
+  } catch {
+    // 错误已由 callTrade 提示。
   }
 }
 

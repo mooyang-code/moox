@@ -193,18 +193,21 @@ func (h *AccountServer) SetLeverage(
 	if err == nil {
 		var account store.TradingAccountRecord
 		account, err = h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
-		instrumentID := ""
+		symbol := store.DefaultLeverageKey
+		if req.GetInstrumentId() != store.DefaultLeverageKey {
+			instrumentID := ""
+			if err == nil {
+				instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketType(account.MarketType))
+			}
+			if err != nil {
+				return &tradepb.SetLeverageRsp{RetInfo: instrumentErrorInfo(err)}, nil
+			}
+			var instrument store.InstrumentRecord
+			instrument, err = h.Store.GetInstrumentByIDForAccount(ctx, spaceID, req.GetTradingAccountId(), instrumentID)
+			symbol = instrument.ExchangeSymbol
+		}
 		if err == nil {
-			instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketType(account.MarketType))
-		}
-		if err != nil {
-			return &tradepb.SetLeverageRsp{RetInfo: instrumentErrorInfo(err)}, nil
-		}
-		instrument, resolveErr := h.Store.GetInstrumentByIDForAccount(ctx, spaceID, req.GetTradingAccountId(), instrumentID)
-		if resolveErr != nil {
-			err = resolveErr
-		} else {
-			err = h.Accounts.SetLeverage(ctx, req.GetTradingAccountId(), instrument.ExchangeSymbol, leverage)
+			err = h.Accounts.SetLeverage(ctx, req.GetTradingAccountId(), symbol, leverage)
 		}
 	}
 	record, getErr := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
@@ -228,7 +231,7 @@ func (h *AccountServer) SyncTradingAccount(
 	if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
 		return &tradepb.SyncTradingAccountRsp{RetInfo: errorInfo(err)}, nil
 	}
-	result, err := h.Sync.SyncAccount(ctx, req.GetTradingAccountId())
+	result, err := h.Sync.SyncAccountFull(ctx, req.GetTradingAccountId())
 	return &tradepb.SyncTradingAccountRsp{
 		RetInfo: errorInfo(err), FillsIngested: int32(result.FillsIngested),
 		OrdersUpdated:          int32(result.OrdersUpdated),

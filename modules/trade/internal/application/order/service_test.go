@@ -1415,3 +1415,55 @@ func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T
 func (*adapterStub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
 	return execution.MarketQuote{}, nil
 }
+
+type symbolConfigStub struct {
+	calls int
+	err   error
+}
+
+func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, string, shared.Decimal) error {
+	s.calls++
+	return s.err
+}
+
+func TestSubmitRejectedSymbolConfigCountsAsExchangeRejection(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	config := &symbolConfigStub{err: &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("leverage too high")}}
+	service.SymbolConfig = config
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	got, err := service.Submit(context.Background(), "space-1", string(placed.ID))
+
+	require.Error(t, err)
+	require.Equal(t, orderdomain.Rejected, got.State)
+	require.Equal(t, 1, config.calls)
+	require.Zero(t, adapter.placeCalls)
+	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.NotZero(t, stored.SubmittedAt, "拒单规则按提交时间统计")
+	require.Contains(t, stored.RejectReason, "leverage too high")
+}
+
+func TestSubmitSymbolConfigNetworkErrorKeepsPending(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	service.SymbolConfig = &symbolConfigStub{err: errors.New("network down")}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	_, err = service.Submit(context.Background(), "space-1", string(placed.ID))
+
+	require.Error(t, err)
+	require.Zero(t, adapter.placeCalls)
+	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, "PENDING", stored.State)
+}

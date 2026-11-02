@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -35,6 +36,7 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
+	modeChecked atomic.Bool
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
@@ -294,13 +296,15 @@ type swapAccount struct {
 }
 
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	// 持仓模式只在会话启动时检查一次，适配器随会话重建。
+	if a.config.MarketType == exchange.MarketTypeSwap && !a.modeChecked.Load() {
 		if err := a.ensureOneWayMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
 		if err := a.ensureSingleAssetMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
+		a.modeChecked.Store(true)
 	}
 	path := a.path("/api/v3/account", "/fapi/v3/account")
 	raw, err := a.request(ctx, http.MethodGet, path, nil)
@@ -715,9 +719,7 @@ func (a *Adapter) ListRecentFills(
 		// an idle account does not return the same Fill on every sync.
 		values.Set("fromId", strconv.FormatUint(tradeID+1, 10))
 	} else {
-		// A configured symbol is an explicit request to recover every Fill the
-		// Exchange still exposes, including terminal manual orders from before
-		// MooX first started.
+		// 第一次拉这个标的时从头取历史。账户创建前的成交由 accountsync 过滤，只推进游标。
 		values.Set("fromId", "0")
 	}
 	out := make([]exchange.Fill, 0)

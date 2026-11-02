@@ -48,6 +48,11 @@ type SecretSource interface {
 	GetExchangeSecret(context.Context, string) (ExchangeSecret, error)
 }
 
+// SymbolConfigs 记录会话里已经在交易所设置过的标的。
+type SymbolConfigs interface {
+	ForgetSymbolConfig(tradingAccountID, symbol string)
+}
+
 type SessionState interface {
 	ReadyFor(tradingaccount.Account) bool
 	Invalidate(tradingAccountID string)
@@ -57,6 +62,7 @@ type Service struct {
 	Store              Store
 	Secrets            SecretSource
 	SessionState       SessionState
+	SymbolConfigs      SymbolConfigs
 	LiveTradingEnabled bool
 }
 
@@ -168,8 +174,9 @@ func (s *Service) SetLeverage(
 	if err := s.Store.SetLeverage(ctx, tradingAccountID, symbol, leverage); err != nil {
 		return err
 	}
-	if s.SessionState != nil {
-		s.SessionState.Invalidate(tradingAccountID)
+	// 不重启会话，只让该标的下次开仓前重新设置。
+	if s.SymbolConfigs != nil {
+		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, symbol)
 	}
 	return nil
 }

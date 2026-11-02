@@ -133,7 +133,8 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if spec.Type == exchange.OrderTypeLimit {
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
-	if !capacity && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
+	// 合约全平只查最小数量。
+	if !capacity && !spec.ReducePositionOnly && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
 		orderNotional.Cmp(instrument.MinNotional) < 0 {
 		return Validation{}, ErrQuantityRule
 	}
@@ -180,7 +181,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		if !found && instrument.ExchangeSymbol != "" {
 			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
 		}
-		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+		if !found {
 			leverage, found = account.LeverageSettings["*"]
 		}
 		// Paper simulations intentionally keep the lifecycle small: when no

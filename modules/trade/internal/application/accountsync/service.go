@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
@@ -58,15 +58,21 @@ type Result struct {
 }
 
 type Snapshot struct {
-	Fills       []exchange.Fill
-	Orders      []exchange.Order
-	Positions   []exchange.Position
-	Account     exchange.AccountSnapshot
-	FillCursors store.FillCursors
-	Ready       bool
+	Fills     []exchange.Fill
+	Orders    []exchange.Order
+	Positions []exchange.Position
+	Account   exchange.AccountSnapshot
+	// AccountReadAt 是读取账户快照前的本地时间。适配器的快照时间可能是最后变更时间，
+	// 余额没变的成交之后追不上成交时间，判断新旧和清除水位都用这个时间。
+	AccountReadAt time.Time
+	FillCursors   store.FillCursors
+	Ready         bool
 }
 
 type Service struct {
+	rotationMu sync.Mutex
+	rotation   map[string]int
+
 	Store          *store.Store
 	Adapters       AdapterSource
 	SessionState   SessionState
@@ -89,9 +95,20 @@ func (s *Service) ConfirmCancel(ctx context.Context, spaceID, orderID string) er
 	return s.Fills.ConfirmCancel(ctx, spaceID, orderID)
 }
 
-func (s *Service) SyncAccount(
+// SyncAccount 是日常同步：账户、持仓、挂单每轮都读，成交只拉需要的标的。
+func (s *Service) SyncAccount(ctx context.Context, tradingAccountID string) (Result, error) {
+	return s.syncAccount(ctx, tradingAccountID, false)
+}
+
+// SyncAccountFull 拉全部标的的成交，用于控制台手动同步。
+func (s *Service) SyncAccountFull(ctx context.Context, tradingAccountID string) (Result, error) {
+	return s.syncAccount(ctx, tradingAccountID, true)
+}
+
+func (s *Service) syncAccount(
 	ctx context.Context,
 	tradingAccountID string,
+	full bool,
 ) (result Result, err error) {
 	if err := s.validate(); err != nil {
 		return Result{}, err
@@ -115,7 +132,7 @@ func (s *Service) SyncAccount(
 		}
 		return Result{}, err
 	}
-	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID)
+	result, maxDifference, err = s.syncAccountLocked(ctx, tradingAccountID, full)
 	unlockAccount()
 	if err == nil && result.ExternalFactsImported {
 		err = s.pauseForExternalFact(ctx, tradingAccountID)
@@ -140,6 +157,7 @@ func (s *Service) SyncAccount(
 func (s *Service) syncAccountLocked(
 	ctx context.Context,
 	tradingAccountID string,
+	full bool,
 ) (Result, float64, error) {
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
@@ -171,6 +189,7 @@ func (s *Service) syncAccountLocked(
 		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_positions", err))
 		return result, 0, failErr
 	}
+	accountReadAt := s.now()
 	accountSnapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
 		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "snapshot", err))
@@ -185,14 +204,14 @@ func (s *Service) syncAccountLocked(
 		result, failErr := s.fail(ctx, account, err)
 		return result, maxDifference, failErr
 	}
-	symbols := syncSymbols(
-		account,
-		openOrders,
-		localOrders,
-		positions,
-		instruments,
-		accountSnapshot,
-	)
+	symbols := FullSymbols(account, openOrders, localOrders, positions, instruments, accountSnapshot)
+	if !full {
+		symbols, err = s.incrementalSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot, symbols)
+		if err != nil {
+			result, failErr := s.fail(ctx, account, err)
+			return result, maxDifference, failErr
+		}
+	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
 	for _, symbol := range symbols {
@@ -246,7 +265,7 @@ func (s *Service) syncAccountLocked(
 	}
 	result, err := s.applySnapshot(ctx, account.TradingAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
-		Account: accountSnapshot, FillCursors: cursors, Ready: ready,
+		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: ready,
 	})
 	if err != nil {
 		return result, maxDifference, err
@@ -361,6 +380,10 @@ func (s *Service) applySnapshot(
 	}
 	result := Result{Ready: snapshot.Ready}
 
+	// 账户创建前的成交结果已经包含在余额和持仓快照里，只推进游标，不入账也不算外部成交。
+	// 要排在 batchQuantities 和 positionDeleteBefore 之前，否则持仓删除边界会被拉回最老的成交。
+	snapshot.Fills = fillsAfterCreation(snapshot.Fills, account.CreatedAt)
+
 	batchQuantities := make(map[string]shared.Decimal)
 	for _, fill := range snapshot.Fills {
 		key := fillBatchKey(fill)
@@ -433,6 +456,9 @@ func (s *Service) applySnapshot(
 
 	// 完整快照既不能早于已采用的完整快照，也不能早于私有余额更新已合并进来的时间：旧 REST 不得覆盖更新的字段。
 	snapshotTime := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	if !snapshot.AccountReadAt.IsZero() {
+		snapshotTime = snapshot.AccountReadAt.UnixMilli()
+	}
 	freshness := account.SnapshotSourceTime
 	if account.Snapshot.ExchangeUpdatedAt > freshness {
 		freshness = account.Snapshot.ExchangeUpdatedAt
@@ -660,7 +686,7 @@ func (s *Service) ApplyPosition(
 				return getErr
 			}
 			if !found && position.RequiresSync && !position.Present.Leverage &&
-				account.LeverageSettings[position.ExchangeSymbol] == "" {
+				account.LeverageSettings.For(position.ExchangeSymbol) == "" {
 				// A private partial update cannot create a valid SWAP
 				// projection without leverage. Keep the stream alive and let
 				// the queued full synchronization create the authoritative row.
@@ -713,18 +739,18 @@ func (s *Service) ApplyAccountSnapshot(
 		unlock()
 		return errors.New("trade account sync: account snapshot has no Exchange timestamp")
 	}
-	if snapshot.ExchangeUpdatedAt.UnixMilli() < account.Snapshot.ExchangeUpdatedAt {
-		unlock()
-		return nil
-	}
+	// 旧于已存时间的私有更新不合并余额，但账户确实变过，仍要等完整同步确认。
+	stale := snapshot.ExchangeUpdatedAt.UnixMilli() < account.Snapshot.ExchangeUpdatedAt
 	merged := mergePrivateSnapshot(account.Snapshot, snapshot)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.UpdateTradingAccountSnapshot(
-			account.SpaceID,
-			account.TradingAccountID,
-			merged,
-		); err != nil {
-			return err
+		if !stale {
+			if err := tx.UpdateTradingAccountSnapshot(
+				account.SpaceID,
+				account.TradingAccountID,
+				merged,
+			); err != nil {
+				return err
+			}
 		}
 		// 私有更新只合并了部分字段：完整余额快照覆盖这个时间之前，不能恢复准入
 		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
@@ -878,7 +904,11 @@ func (s *Service) ensureOrderForFill(
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
 	current.ExchangeSymbol = fill.ExchangeSymbol
-	imported, err := s.importExternalOrder(ctx, account, current)
+	batchFilled := syntheticQuantity
+	if batchFilled.Cmp(shared.Zero()) <= 0 {
+		batchFilled = fill.Quantity
+	}
+	imported, err := s.importExternalOrder(ctx, account, current, batchFilled)
 	if err != nil {
 		return false, err
 	}
@@ -927,7 +957,7 @@ func (s *Service) applyOrder(
 		)
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		record, err = s.importExternalOrder(ctx, account, current)
+		record, err = s.importExternalOrder(ctx, account, current, shared.Zero())
 		if err != nil {
 			return false, false, "", err
 		}
@@ -1094,6 +1124,7 @@ func (s *Service) importExternalOrder(
 	ctx context.Context,
 	account store.TradingAccountRecord,
 	current exchange.Order,
+	batchFilled shared.Decimal,
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
 		strings.TrimSpace(current.ExchangeSymbol) == "" ||
@@ -1163,6 +1194,14 @@ func (s *Service) importExternalOrder(
 	} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 		return store.OrderRecord{}, findErr
 	}
+	// 账户创建前下的挂单，创建前的成交已被过滤，累计成交量要从这里起步，否则缺口永远补不上。
+	// 成交先于订单处理，要减掉本批还会入账的部分。
+	filledQuantity, averagePrice := "0", "0"
+	if !current.CreatedAt.IsZero() && current.CreatedAt.Before(account.CreatedAt) {
+		if seed := current.FilledQuantity.Sub(batchFilled); seed.Cmp(shared.Zero()) > 0 {
+			filledQuantity, averagePrice = seed.String(), current.AveragePrice.String()
+		}
+	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
 		OrderID: "external:" + account.TradingAccountID + ":" +
@@ -1177,7 +1216,7 @@ func (s *Service) importExternalOrder(
 		ReferencePriceAt: referenceAt.UnixMilli(), ReduceOnly: current.ReduceOnly,
 		OwnerType: "EXTERNAL", OwnerID: ownerID,
 		LogicalAccountID: logicalAccountID, State: string(orderdomain.Open),
-		FilledQuantity: "0", AveragePrice: "0", ReservedQuantity: "0",
+		FilledQuantity: filledQuantity, AveragePrice: averagePrice, ReservedQuantity: "0",
 		RemainingReservedQuantity: "0",
 		ExchangeUpdatedAt:         current.UpdatedAt.UnixMilli(),
 		Version:                   1,
@@ -1334,70 +1373,6 @@ func (s *Service) lateFillWindow() time.Duration {
 	return 5 * time.Minute
 }
 
-func syncSymbols(
-	account store.TradingAccountRecord,
-	openOrders []exchange.Order,
-	localOrders []store.OrderRecord,
-	positions []exchange.Position,
-	instruments []store.InstrumentRecord,
-	snapshot exchange.AccountSnapshot,
-) []string {
-	set := make(map[string]struct{})
-	for _, symbol := range account.SyncSymbols {
-		set[symbol] = struct{}{}
-	}
-	for symbol := range account.LeverageSettings {
-		if symbol != store.DefaultLeverageKey {
-			set[symbol] = struct{}{}
-		}
-	}
-	for symbol := range account.FillCursors {
-		set[symbol] = struct{}{}
-	}
-	for _, current := range openOrders {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, current := range localOrders {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, position := range positions {
-		if position.ExchangeSymbol != "" {
-			set[position.ExchangeSymbol] = struct{}{}
-		}
-	}
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
-		heldAssets := make(map[string]struct{})
-		for _, balance := range snapshot.Balances {
-			if balance.Total.Cmp(shared.Zero()) > 0 ||
-				balance.Available.Cmp(shared.Zero()) > 0 ||
-				balance.Locked.Cmp(shared.Zero()) > 0 {
-				heldAssets[balance.Asset] = struct{}{}
-			}
-		}
-		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
-				continue
-			}
-			if !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
-				continue
-			}
-			if _, held := heldAssets[instrument.BaseAsset]; held {
-				set[instrument.ExchangeSymbol] = struct{}{}
-			}
-		}
-	}
-	symbols := make([]string, 0, len(set))
-	for symbol := range set {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
-	return symbols
-}
-
 func cloneCursors(current store.FillCursors) store.FillCursors {
 	result := make(store.FillCursors, len(current))
 	for symbol, cursor := range current {
@@ -1508,7 +1483,7 @@ func mergePositionRecord(
 		current.UsedMargin = "0"
 		current.LiquidationPrice = "0"
 		current.RealizedPnL = "0"
-		if leverage := account.LeverageSettings[incoming.ExchangeSymbol]; leverage != "" {
+		if leverage := account.LeverageSettings.For(incoming.ExchangeSymbol); leverage != "" {
 			current.Leverage = leverage
 		}
 	}

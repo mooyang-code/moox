@@ -220,7 +220,7 @@ func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
 	core.reference.UpdatedAt = now
 	f.orders.Validator.Now = func() time.Time { return now }
 	f.orders.Now = func() time.Time { return now }
-	f.sync.Now = func() time.Time { return now }
+	f.sync.Now = func() time.Time { return testNow.Add(2 * time.Hour) }
 	options := eventconsumer.TargetOptions{
 		Store: tradeStore, Now: func() time.Time { return now }, WeightResolver: brokerWeightResolver{},
 	}
@@ -250,7 +250,7 @@ func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
 	require.NotEqual(t, jetstream.ACK, deliver("target-short", 1, "-0.1"))
 
 	// 收盘时目标保持等待，不下单。
-	require.Equal(t, jetstream.ACK, deliver("target-buy", 2, "0.2"))
+	require.Equal(t, jetstream.ACK, deliver("target-buy", 2, "0.25"))
 	current := converge()
 	require.Equal(t, targetapp.StatusPending, current.Status)
 	require.Equal(t, "当前不在交易时段", current.LastError)
@@ -262,6 +262,7 @@ func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
 	require.Equal(t, 1, core.requestCount())
 	require.Equal(t, exchange.SideBuy, core.requests[0].Side)
 	require.Equal(t, "200", core.requests[0].Quantity.String())
+	// 目标 250 股，不足一手的 50 股算完成。
 	current = converge()
 	require.Equal(t, targetapp.StatusConverged, current.Status)
 	require.Equal(t, 1, core.requestCount())

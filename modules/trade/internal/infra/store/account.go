@@ -35,6 +35,14 @@ type TradingAccountSnapshot struct {
 // DefaultLeverageKey 是 LeverageSettings 里账户默认杠杆的键，不是交易标的。
 const DefaultLeverageKey = "*"
 
+// For 返回标的的杠杆，单标的配置优先，否则取账户默认杠杆。
+func (s LeverageSettings) For(symbol string) string {
+	if leverage := s[symbol]; leverage != "" {
+		return leverage
+	}
+	return s[DefaultLeverageKey]
+}
+
 type TradingAccountRecord struct {
 	SpaceID            string
 	TradingAccountID   string
@@ -136,6 +144,10 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		SnapshotSourceTime: record.SnapshotSourceTime, LastSyncAt: record.LastSyncAt,
 		LastReadyAt: record.LastReadyAt, LastError: record.LastError,
 	}
+	createdAt := record.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
 	err = tx.db.Exec(`
 		INSERT INTO t_trading_accounts (
 			c_space_id, c_trading_account_id, c_name, c_exchange, c_market_type,
@@ -145,8 +157,8 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 			c_leverage_settings_json,
 			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
 			c_last_sync_at, c_last_ready_at,
-			c_last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			c_last_error, c_ctime
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.MarketType,
 		row.ExecutionMode, row.Environment, row.CredentialSecretID,
@@ -154,7 +166,7 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		row.Status, row.Ready,
 		row.SyncSymbolsJSON, row.LeverageSettingsJSON,
 		row.FillCursorsJSON, row.SnapshotJSON,
-		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError,
+		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError, createdAt,
 	).Error
 	if err != nil {
 		return writeError(err)

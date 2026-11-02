@@ -44,7 +44,7 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	seedLogicalAccount(t, f.store)
 	f.orders.Now = func() time.Time { return now }
 	f.orders.Validator.Now = func() time.Time { return time.Now().UTC() }
-	f.sync.Now = func() time.Time { return now.Add(time.Minute) }
+	f.sync.Now = func() time.Time { return testNow.Add(2 * time.Hour) }
 
 	handled := eventconsumer.HandleTarget(
 		context.Background(),

@@ -158,7 +158,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	require.True(t, account.Ready)
 	require.Equal(t, "11", account.FillCursors["BTC-USDT"])
 	require.Equal(t, int64(3_000), account.LastSyncAt)
-	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+	require.Equal(t, int64(3_000), account.SnapshotSourceTime, "快照时间取本地读取时间")
 
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -1043,7 +1043,7 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 }
 
 func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
-	symbols := syncSymbols(
+	symbols := FullSymbols(
 		store.TradingAccountRecord{
 			MarketType:  "SPOT",
 			SyncSymbols: []string{"BTC-USDT"},
@@ -1061,7 +1061,7 @@ func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
 	)
 	require.Equal(t, []string{"BTC-USDT"}, symbols)
 
-	symbols = syncSymbols(
+	symbols = FullSymbols(
 		store.TradingAccountRecord{MarketType: "SWAP"},
 		nil,
 		nil,
@@ -1143,6 +1143,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			CreatedAt: time.UnixMilli(1), SyncSymbols: []string{"BTC-USDT"},
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 			Environment:        "TESTNET",
@@ -1176,15 +1177,6 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	}))
 }
 
-type staleSnapshotAdapter struct{ *syncAdapter }
-
-func (staleSnapshotAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
-	return exchange.AccountSnapshot{
-		AvailableFunds:    shared.MustDecimal("999"),
-		ExchangeUpdatedAt: time.UnixMilli(1_000), // 早于已采用的快照（2_000）
-	}, nil
-}
-
 // LastSyncAt 是资金预留的抵扣边界：丢弃陈旧余额快照时不能推进它，否则已提交订单的预留会被误认为已反映在余额中。
 func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	tradeStore := openSyncStore(t)
@@ -1210,15 +1202,14 @@ func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	_, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 
-	clock = 5_000
-	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{adapter}}
+	clock = 2_500
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.AccountSnapshotUpdated)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Equal(t, int64(3_000), account.LastSyncAt, "陈旧快照被丢弃时抵扣边界保持不变")
-	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+	require.Equal(t, int64(3_000), account.SnapshotSourceTime)
 }
 
 // 实盘私有成交已释放订单预留，但余额快照尚未反映这笔支出：成交后必须关闭准入，直到完整同步确认余额。
@@ -1332,7 +1323,7 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 	service.Metrics = metrics
 	for _, at := range []int64{1_500, 2_000, 2_900} { // 旧于已采用快照 / 与已采用快照同时间 / 介于旧余额与成交之间
 		service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, at}}
-		service.Now = func() time.Time { return time.UnixMilli(5_000 + at) }
+		service.Now = func() time.Time { return time.UnixMilli(at) }
 		result, syncErr := service.SyncAccount(context.Background(), "account-1")
 		require.NoError(t, syncErr)
 		require.False(t, result.Ready, "快照时间 %d 未覆盖成交 3_000", at)
@@ -1384,7 +1375,7 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
 		SessionState: readySessionState(true),
 		Fills:        &consumer.Reducer{Store: tradeStore},
-		Now:          func() time.Time { return time.UnixMilli(4_000) },
+		Now:          func() time.Time { return time.UnixMilli(2_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1") // 完整快照 2_000，可用资金 900
 	require.NoError(t, err)
@@ -1395,7 +1386,7 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 	}
 	require.NoError(t, service.ApplyAccountSnapshot(context.Background(), "account-1", private))
 
-	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 2_200}}
+	service.Now = func() time.Time { return time.UnixMilli(2_200) }
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.AccountSnapshotUpdated)
@@ -1426,11 +1417,12 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(3_000),
 		},
 	}
+	clock := int64(2_000)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: snapshotAtAdapter{base, 2_000}},
 		SessionState: readySessionState(true),
 		Fills:        &consumer.Reducer{Store: tradeStore},
-		Now:          func() time.Time { return time.UnixMilli(4_000) },
+		Now:          func() time.Time { return time.UnixMilli(clock) },
 	}
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -1442,7 +1434,7 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	require.Equal(t, int64(3_000), account.BalancePendingUntil)
 
 	// 重放同一成交（已去重）不会丢水位，余额覆盖成交后恢复
-	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	clock = 4_000
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, result.Ready)

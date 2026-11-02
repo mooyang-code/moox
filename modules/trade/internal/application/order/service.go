@@ -39,7 +39,13 @@ type CancelConfirmer interface {
 	ConfirmCancel(context.Context, string, string) error
 }
 
+// SymbolConfigurer 在首次开仓前把杠杆设置到交易所。
+type SymbolConfigurer interface {
+	EnsureSymbolConfig(ctx context.Context, tradingAccountID, symbol string, leverage shared.Decimal) error
+}
+
 type Service struct {
+	SymbolConfig        SymbolConfigurer
 	Store               *store.Store
 	Validator           Validator
 	Adapters            AdapterSource
@@ -931,6 +937,18 @@ func (s *Service) submit(
 	if err := ctx.Err(); err != nil {
 		return aggregate, false, err
 	}
+	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
+		exchange.RuleFor(validation.Account.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
+		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, record.ExchangeSymbol, validation.Leverage); err != nil {
+			if !exchange.IsKind(err, exchange.ErrorRejected) {
+				return aggregate, false, err
+			}
+			// 交易所明确拒绝：写入提交时间，拒单规则才会把它计入。
+			record.SubmittedAt = s.now().UnixMilli()
+			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
+			return rejected, false, rejectErr
+		}
+	}
 	expected := aggregate.Version
 	if _, err = aggregate.BeginSubmit(); err != nil {
 		return orderdomain.Order{}, false, err
@@ -1148,7 +1166,7 @@ func (s *Service) rejectPending(
 		return orderdomain.Order{}, err
 	}
 	applyAggregate(&record, current)
-	record.RejectReason = cause.Error()
+	record.RejectReason = exchange.RejectMessage(cause)
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {

@@ -40,7 +40,8 @@ func testInstrumentID(market exchange.MarketType) string {
 // Target validity is checked against the real Trade clock. Keep the shared
 // fixture clock near process start so generated target windows remain valid
 // while the package tests run.
-var testNow = time.Now().UTC()
+// 成交时间要晚于账户创建时间，否则会被当成接入前的成交过滤掉。
+var testNow = time.Now().UTC().Add(time.Hour)
 
 // fakeExchange models only Exchange facts. It deliberately does not use the
 // production order reducer, so reducer assertions do not mirror production.
