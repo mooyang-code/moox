@@ -212,7 +212,7 @@ const spotEquity = ref("");
 const viewMarketType = computed(
   () =>
     logicalAccounts.value.find(item => item.logical_account_id === logicalAccountId.value)?.market_type ??
-    selectedAccount.value?.market_type
+    selectedAccount.value?.market_type ?? 0
 );
 const logicalAccounts = ref<LogicalAccount[]>([]);
 const logicalAccountId = ref("");
