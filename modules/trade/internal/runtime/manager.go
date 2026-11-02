@@ -180,34 +180,6 @@ func (m *Manager) Adapter(tradingAccountID string) (execution.ExecutionAdapter, 
 	return adapter, nil
 }
 
-func (m *Manager) Bundle(tradingAccountID string) (execution.ExecutionBundle, error) {
-	m.mu.RLock()
-	entry := m.sessions[tradingAccountID]
-	stopping := entry == nil || entry.stopping
-	var session ManagedSession
-	if entry != nil {
-		session = entry.session
-	}
-	m.mu.RUnlock()
-	if stopping {
-		return execution.ExecutionBundle{}, ErrSessionConfig
-	}
-	if source, ok := session.(interface {
-		ExecutionBundle() execution.ExecutionBundle
-	}); ok {
-		bundle := source.ExecutionBundle()
-		if bundle.Adapter == nil {
-			return execution.ExecutionBundle{}, ErrSessionConfig
-		}
-		return bundle, nil
-	}
-	adapter, err := m.Adapter(tradingAccountID)
-	if err != nil {
-		return execution.ExecutionBundle{}, err
-	}
-	return execution.ExecutionBundle{Adapter: adapter, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
-}
-
 func (m *Manager) Snapshot() SessionSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

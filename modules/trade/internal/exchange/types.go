@@ -44,6 +44,7 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 	}
 }
 
+// Exchange 指交易场所，可以是交易所，也可以是券商。
 type Exchange string
 
 const (
@@ -52,8 +53,9 @@ const (
 	ExchangeOKX         Exchange = "OKX"
 )
 
+// Valid 只检查非空。是否支持由 execution.Registry 判断，新增场所不用改这里。
 func (e Exchange) Valid() bool {
-	return e == ExchangeBinance || e == ExchangeOKX
+	return e != ExchangeUnspecified
 }
 
 type MarketType string
@@ -190,6 +192,8 @@ type Credential struct {
 	APIKey     string
 	APISecret  string
 	Passphrase string
+	// Extra 放场所特有的配置，比如券商账号和网关地址。
+	Extra map[string]string
 }
 
 type AccountConfig struct {

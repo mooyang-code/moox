@@ -42,9 +42,7 @@ func (c *Client) GetExchangeSecret(
 	if secret.SecretID != secretID ||
 		secret.Category != "exchange" ||
 		!secret.Exchange.Valid() ||
-		secret.Status != "active" ||
-		strings.TrimSpace(secret.KeyID) == "" ||
-		strings.TrimSpace(secret.SecretValue) == "" {
+		secret.Status != "active" {
 		return account.ExchangeSecret{}, fmt.Errorf(
 			"%w: secret %q metadata or value is invalid",
 			account.ErrInvalidCredential,

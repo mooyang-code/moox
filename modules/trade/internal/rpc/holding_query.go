@@ -37,22 +37,12 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
 	var quoteSource execution.ReferencePriceSource
-	var instrumentSource interface {
-		LoadInstruments(context.Context) ([]exchange.Instrument, error)
-	}
 	var instruments []exchange.Instrument
-	if q.Adapters != nil {
-		if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
-			quoteSource, _ = adapter.(execution.ReferencePriceSource)
-			instrumentSource, _ = adapter.(interface {
-				LoadInstruments(context.Context) ([]exchange.Instrument, error)
-			})
-			if instrumentSource != nil {
-				instruments, err = instrumentSource.LoadInstruments(ctx)
-			}
-			if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
-				return nil, err
-			}
+	if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
+		quoteSource = adapter
+		instruments, err = adapter.LoadInstruments(ctx)
+		if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
+			return nil, err
 		}
 	}
 	// A closed Paper session has no runtime adapter. Use the last persisted

@@ -94,26 +94,23 @@ func pageResult(page pageSpec, total int64) *tradepb.PageResult {
 	}
 }
 
+// exchangePBNames 是 proto 枚举与场所名的对照，新增场所时加一行。
+var exchangePBNames = map[tradepb.Exchange]exchange.Exchange{
+	tradepb.Exchange_EXCHANGE_BINANCE: exchange.ExchangeBinance,
+	tradepb.Exchange_EXCHANGE_OKX:     exchange.ExchangeOKX,
+}
+
 func exchangeFromPB(value tradepb.Exchange) exchange.Exchange {
-	switch value {
-	case tradepb.Exchange_EXCHANGE_BINANCE:
-		return exchange.ExchangeBinance
-	case tradepb.Exchange_EXCHANGE_OKX:
-		return exchange.ExchangeOKX
-	default:
-		return exchange.ExchangeUnspecified
-	}
+	return exchangePBNames[value]
 }
 
 func exchangeToPB(value string) tradepb.Exchange {
-	switch exchange.Exchange(value) {
-	case exchange.ExchangeBinance:
-		return tradepb.Exchange_EXCHANGE_BINANCE
-	case exchange.ExchangeOKX:
-		return tradepb.Exchange_EXCHANGE_OKX
-	default:
-		return tradepb.Exchange_EXCHANGE_UNSPECIFIED
+	for pb, name := range exchangePBNames {
+		if string(name) == value {
+			return pb
+		}
 	}
+	return tradepb.Exchange_EXCHANGE_UNSPECIFIED
 }
 
 func marketFromPB(value tradepb.MarketType) exchange.MarketType {

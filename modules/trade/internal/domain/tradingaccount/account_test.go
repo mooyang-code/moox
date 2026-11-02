@@ -90,9 +90,9 @@ func TestAccountValidation(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "unsupported Exchange",
+			name: "missing Exchange",
 			account: mutate(validSpotAccount(), func(account *Account) {
-				account.Exchange = exchange.Exchange("OTHER")
+				account.Exchange = exchange.ExchangeUnspecified
 			}),
 			wantErr: true,
 		},

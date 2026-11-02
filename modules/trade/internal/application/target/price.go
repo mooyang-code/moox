@@ -2,7 +2,6 @@ package target
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
@@ -27,14 +26,7 @@ func (s ExchangePriceSource) LatestPrice(
 	if err != nil {
 		return Quote{}, err
 	}
-	source, ok := adapter.(execution.ReferencePriceSource)
-	if !ok {
-		return Quote{}, fmt.Errorf(
-			"%w: Exchange adapter has no reference price source",
-			ErrExecutorConfig,
-		)
-	}
-	quote, err := source.GetReferencePrice(ctx, symbol)
+	quote, err := adapter.GetReferencePrice(ctx, symbol)
 	if err != nil {
 		return Quote{}, err
 	}

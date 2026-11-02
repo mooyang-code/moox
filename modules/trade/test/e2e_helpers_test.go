@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -44,6 +45,7 @@ var testNow = time.Now().UTC()
 // fakeExchange models only Exchange facts. It deliberately does not use the
 // production order reducer, so reducer assertions do not mirror production.
 type fakeExchange struct {
+	adaptertest.Stub
 	mu sync.Mutex
 
 	market     exchange.MarketType
@@ -298,14 +300,14 @@ func (a recordingAdapter) SetLeverage(ctx context.Context, symbol shared.Exchang
 		leverageCall{symbol: symbol.String(), leverage: leverage},
 	)
 	a.recorder.mu.Unlock()
-	return a.ExecutionAdapter.SetLeverage(ctx, symbol, leverage)
+	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetLeverage(ctx, symbol, leverage)
 }
 
 func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
 	a.recorder.mu.Lock()
 	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
 	a.recorder.mu.Unlock()
-	return a.ExecutionAdapter.SetMarginMode(ctx, symbol, mode)
+	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetMarginMode(ctx, symbol, mode)
 }
 
 // synchronousPaperAdapter keeps the older unit-style E2E ergonomics while

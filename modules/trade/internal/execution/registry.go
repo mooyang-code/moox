@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
@@ -17,16 +18,35 @@ type ExchangeIdentity interface {
 	Exchange() exchange.Exchange
 }
 
+// VenueDescriptor 是场所注册时登记的静态信息，不依赖适配器实例，未就绪的账户也能取到。
+type VenueDescriptor struct {
+	Exchange     exchange.Exchange
+	OrderTypes   []exchange.OrderType
+	FillPolicies []exchange.FillPolicy
+	// TradingSession 判断当前是否在交易时段；nil 表示全天可交易。
+	TradingSession func(time.Time) bool
+}
+
+// InTradingSession 报告场所当前是否可以下单。
+func (d VenueDescriptor) InTradingSession(now time.Time) bool {
+	return d.TradingSession == nil || d.TradingSession(now)
+}
+
 type Registry struct {
-	mu        sync.RWMutex
-	factories map[exchange.Exchange]AdapterFactory
+	mu          sync.RWMutex
+	factories   map[exchange.Exchange]AdapterFactory
+	descriptors map[exchange.Exchange]VenueDescriptor
 }
 
 func NewRegistry() *Registry {
-	return &Registry{factories: make(map[exchange.Exchange]AdapterFactory)}
+	return &Registry{
+		factories:   make(map[exchange.Exchange]AdapterFactory),
+		descriptors: make(map[exchange.Exchange]VenueDescriptor),
+	}
 }
 
-func (r *Registry) Register(name exchange.Exchange, factory AdapterFactory) {
+func (r *Registry) Register(descriptor VenueDescriptor, factory AdapterFactory) {
+	name := descriptor.Exchange
 	if !name.Valid() || factory == nil {
 		panic("execution: Register requires a supported Exchange and factory")
 	}
@@ -36,10 +56,19 @@ func (r *Registry) Register(name exchange.Exchange, factory AdapterFactory) {
 		panic(fmt.Sprintf("execution: duplicate registration for %q", name))
 	}
 	r.factories[name] = factory
+	r.descriptors[name] = descriptor
+}
+
+// Descriptor 返回场所的静态信息。
+func (r *Registry) Descriptor(name exchange.Exchange) (VenueDescriptor, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	descriptor, ok := r.descriptors[name]
+	return descriptor, ok
 }
 
 func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
-	if err := validateBinding(config, credential); err != nil {
+	if err := validateBinding(config); err != nil {
 		return nil, err
 	}
 	r.mu.RLock()
@@ -62,7 +91,7 @@ func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Crede
 	return adapter, nil
 }
 
-func validateBinding(config exchange.AccountConfig, credential exchange.Credential) error {
+func validateBinding(config exchange.AccountConfig) error {
 	if strings.TrimSpace(config.TradingAccountID) == "" ||
 		!config.Exchange.Valid() ||
 		!config.MarketType.Valid() ||
@@ -82,10 +111,6 @@ func validateBinding(config exchange.AccountConfig, credential exchange.Credenti
 		if !strings.EqualFold(strings.TrimSpace(config.SettlementAsset), "USDT") {
 			return fmt.Errorf("execution: SWAP account requires USDT settlement")
 		}
-	}
-	if config.ExecutionMode == exchange.ExecutionModeLive &&
-		(strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "") {
-		return fmt.Errorf("execution: live account requires credential")
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ func (*registryStub) SetMarginMode(context.Context, shared.ExchangeSymbol, excha
 
 func TestRegistryBindsExecutionAdapter(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(exchange.ExchangeBinance, func(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
+	registry.Register(VenueDescriptor{Exchange: exchange.ExchangeBinance}, func(config exchange.AccountConfig, credential exchange.Credential) (ExecutionAdapter, error) {
 		return &registryStub{config: config, credential: credential}, nil
 	})
 	config := exchange.AccountConfig{TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "USDT"}
@@ -55,7 +55,7 @@ func TestRegistryBindsExecutionAdapter(t *testing.T) {
 		t.Fatalf("Bind() error = %v", err)
 	}
 	adapter, ok := got.(*registryStub)
-	if !ok || adapter.config != config || adapter.credential != credential {
+	if !ok || adapter.config != config || adapter.credential.APIKey != credential.APIKey {
 		t.Fatalf("factory binding = %#v", got)
 	}
 	order, err := got.GetOrder(context.Background(), "BTC-USDT-SPOT", "terminal-client")
@@ -69,7 +69,7 @@ func TestRegistryRejectsInvalidBindingAndDuplicate(t *testing.T) {
 	factory := func(exchange.AccountConfig, exchange.Credential) (ExecutionAdapter, error) {
 		return &registryStub{}, nil
 	}
-	registry.Register(exchange.ExchangeBinance, factory)
+	registry.Register(VenueDescriptor{Exchange: exchange.ExchangeBinance}, factory)
 	if _, err := registry.Bind(exchange.AccountConfig{Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "USDT"}, exchange.Credential{}); err == nil {
 		t.Fatal("Bind() accepted missing account and credential")
 	}
@@ -78,5 +78,16 @@ func TestRegistryRejectsInvalidBindingAndDuplicate(t *testing.T) {
 			t.Fatal("duplicate Register() did not panic")
 		}
 	}()
-	registry.Register(exchange.ExchangeBinance, factory)
+	registry.Register(VenueDescriptor{Exchange: exchange.ExchangeBinance}, factory)
+}
+
+func (*registryStub) LoadInstruments(context.Context) ([]exchange.Instrument, error) { return nil, nil }
+func (*registryStub) GetQuote(context.Context, shared.ExchangeSymbol) (MarketQuote, error) {
+	return MarketQuote{}, nil
+}
+func (*registryStub) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+	return exchange.ReferencePrice{}, nil
+}
+func (*registryStub) GetOrderByExchangeID(context.Context, string, string) (exchange.Order, error) {
+	return exchange.Order{}, nil
 }

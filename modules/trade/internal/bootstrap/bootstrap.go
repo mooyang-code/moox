@@ -229,10 +229,7 @@ func initialize(
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			marketData = publicMarketData(publicAdapter)
-			if marketData == nil {
-				return nil, errors.New("trade bootstrap: paper adapter does not provide public market data")
-			}
+			marketData = publicAdapter
 			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: marketData, Wake: paperMatcherWorker.Wake}
 		} else {
 			var bindErr error
@@ -240,19 +237,13 @@ func initialize(
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			marketData = publicMarketData(adapter)
+			marketData = adapter
+			// 没有私有流的场所不订阅，会话改为短周期同步。
 			accountEvents, _ = adapter.(execution.AccountEventSource)
-			if marketData == nil || accountEvents == nil {
-				return nil, errors.New("trade bootstrap: live adapter does not provide execution ports")
-			}
-		}
-		reservationPolicy := execution.ReservationPolicy(execution.LiveReservationPolicy{})
-		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
-			reservationPolicy = execution.PaperReservationPolicy{}
 		}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,
-			ReservationPolicy: reservationPolicy, Sync: syncService,
+			Sync:                  syncService,
 			PaperMatcherReady:     paperMatcherWorker.Ready,
 			PaperAccountState:     paperMatcher.AccountState,
 			PaperAccountRecovered: paperMatcher.RecoverAccount,
@@ -429,17 +420,31 @@ func initialize(
 	return serverInstance, nil
 }
 
+// registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	registry.Register(exchange.ExchangeBinance, func(
+	cryptoVenue := func(name exchange.Exchange) execution.VenueDescriptor {
+		return execution.VenueDescriptor{
+			Exchange:     name,
+			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
+			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+		}
+	}
+	registry.Register(cryptoVenue(exchange.ExchangeBinance), func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
+		if err := requireAPIKey(config, credential); err != nil {
+			return nil, err
+		}
 		return binance.New(config, credential), nil
 	})
-	registry.Register(exchange.ExchangeOKX, func(
+	registry.Register(cryptoVenue(exchange.ExchangeOKX), func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
+		if err := requireAPIKey(config, credential); err != nil {
+			return nil, err
+		}
 		if config.ExecutionMode == exchange.ExecutionModeLive &&
 			strings.TrimSpace(credential.Passphrase) == "" {
 			return nil, errors.New("OKX live account requires passphrase")
@@ -448,9 +453,13 @@ func registerBuiltins(registry *execution.Registry) {
 	})
 }
 
-func publicMarketData(adapter execution.ExecutionAdapter) execution.MarketDataSource {
-	source, _ := adapter.(execution.MarketDataSource)
-	return source
+// 模拟盘用空凭据绑定公共行情，只有实盘才要求密钥。
+func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {
+	if config.ExecutionMode == exchange.ExecutionModeLive &&
+		(strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "") {
+		return errors.New("live account requires credential")
+	}
+	return nil
 }
 
 func exchangeCredential(
@@ -472,9 +481,7 @@ func exchangeCredential(
 			secretID,
 		)
 	}
-	var extra struct {
-		Passphrase string `json:"passphrase"`
-	}
+	extra := map[string]string{}
 	if strings.TrimSpace(value.ExtraConfig) != "" {
 		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
 			return exchange.Credential{}, fmt.Errorf(
@@ -485,7 +492,7 @@ func exchangeCredential(
 	}
 	return exchange.Credential{
 		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra.Passphrase,
+		Passphrase: extra["passphrase"], Extra: extra,
 	}, nil
 }
 

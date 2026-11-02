@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func capabilityAccount(mode exchange.ExecutionMode, environment exchange.Account
 func TestResolveExecutionCapabilitiesProductionGate(t *testing.T) {
 	got := ResolveExecutionCapabilities(
 		capabilityAccount(exchange.ExecutionModeLive, exchange.AccountEnvironmentProduction),
+		testDescriptor,
 		false,
 		true,
 	)
@@ -31,6 +33,7 @@ func TestResolveExecutionCapabilitiesProductionGate(t *testing.T) {
 func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 	got := ResolveExecutionCapabilities(
 		capabilityAccount(exchange.ExecutionModePaper, exchange.AccountEnvironmentUnspecified),
+		testDescriptor,
 		false,
 		false,
 	)
@@ -39,6 +42,7 @@ func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 	}
 	ready := ResolveExecutionCapabilities(
 		capabilityAccount(exchange.ExecutionModePaper, exchange.AccountEnvironmentUnspecified),
+		testDescriptor,
 		false,
 		true,
 	)
@@ -49,4 +53,18 @@ func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 
 func (c ExecutionCapabilities) Valid() bool {
 	return c.CanPlaceOrder || strings.TrimSpace(c.UnavailableReason) != ""
+}
+
+var testDescriptor = execution.VenueDescriptor{
+	OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
+	FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+}
+
+func TestResolveExecutionCapabilitiesNotReadyKeepsOrderTypes(t *testing.T) {
+	account := capabilityAccount(exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet)
+	account.Ready = false
+	got := ResolveExecutionCapabilities(account, testDescriptor, false, true)
+	if got.CanPlaceOrder || len(got.OrderTypes) == 0 || len(got.FillPolicies) == 0 {
+		t.Fatalf("capabilities = %+v, want order types without placement", got)
+	}
 }

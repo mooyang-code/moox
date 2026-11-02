@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ func (s adapterSourceStub) Adapter(string) (execution.ExecutionAdapter, error) {
 }
 
 type adapterStub struct {
+	adaptertest.Stub
 	placeResult exchange.Order
 	placeErr    error
 	cancelErr   error
@@ -821,7 +823,6 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 		return time.Unix(1_700_000_002, 0)
 	}
 	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
 	require.ErrorIs(t, err, orderdomain.ErrReferencePriceStale)
 	require.Equal(t, 0, adapter.placeCalls)
 	stored, err = tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
@@ -1408,4 +1409,9 @@ func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Open, submitted.State)
 	require.Equal(t, 1, adapter.placeCalls)
+}
+
+// GetQuote 返回没有时间的报价，相当于行情已过期；需要新鲜报价的测试用 useLiveQuote。
+func (*adapterStub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	return execution.MarketQuote{}, nil
 }

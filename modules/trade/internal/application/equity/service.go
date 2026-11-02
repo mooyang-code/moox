@@ -162,17 +162,7 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
-		quotes, ok := adapter.(execution.ReferencePriceSource)
-		if !ok {
-			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote source is unavailable")
-		}
-		instrumentSource, ok := adapter.(interface {
-			LoadInstruments(context.Context) ([]exchange.Instrument, error)
-		})
-		if !ok {
-			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: instrument source is unavailable")
-		}
-		instruments, err := instrumentSource.LoadInstruments(ctx)
+		instruments, err := adapter.LoadInstruments(ctx)
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
@@ -192,7 +182,7 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: no %s/%s Spot instrument", balance.Asset, settlement)
 			}
 			symbol := instrument.ExchangeSymbol
-			quote, quoteErr := quotes.GetReferencePrice(ctx, symbol)
+			quote, quoteErr := adapter.GetReferencePrice(ctx, symbol)
 			if quoteErr != nil {
 				return store.TradingAccountSnapshot{}, quoteErr
 			}

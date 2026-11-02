@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ func (s syncAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) {
 }
 
 type syncAdapter struct {
+	adaptertest.Stub
 	order       exchange.Order
 	fill        exchange.Fill
 	fillStarted chan struct{}
@@ -1848,7 +1850,7 @@ func TestSyncCancelsLocalOrderOnlyWhenExchangeConfirmsMissing(t *testing.T) {
 			db := openSyncStore(t)
 			seedSyncAccount(t, db)
 			seedOrder(t, db)
-			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &syncAdapter{lookupErr: tc.err}}, Fills: &consumer.Reducer{Store: db},
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{syncAdapter: syncAdapter{lookupErr: tc.err}}}, Fills: &consumer.Reducer{Store: db},
 				Now: func() time.Time { return time.Now().Add(tc.after) }}
 			_, err := svc.SyncAccount(context.Background(), "account-1")
 			require.NoError(t, err)

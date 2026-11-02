@@ -19,7 +19,10 @@ import (
 
 var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
 
-const sessionOrderWindow = 5 * time.Minute
+const (
+	sessionOrderWindow  = 5 * time.Minute
+	pollingSyncInterval = 3 * time.Second
+)
 
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
@@ -28,7 +31,6 @@ type ExchangeSession struct {
 	Adapter               execution.ExecutionAdapter
 	MarketData            execution.MarketDataSource
 	AccountEvents         execution.AccountEventSource
-	ReservationPolicy     execution.ReservationPolicy
 	Sync                  *accountsync.Service
 	SyncInterval          time.Duration
 	PaperMatcherReady     func() bool
@@ -65,23 +67,6 @@ func (s *ExchangeSession) ExecutionAdapter() execution.ExecutionAdapter {
 	return s.Adapter
 }
 
-func (s *ExchangeSession) ExecutionBundle() execution.ExecutionBundle {
-	if s == nil {
-		return execution.ExecutionBundle{}
-	}
-	policy := s.ReservationPolicy
-	if policy == nil {
-		policy = execution.LiveReservationPolicy{}
-		if exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
-			policy = execution.PaperReservationPolicy{}
-		}
-	}
-	return execution.ExecutionBundle{
-		Adapter: s.Adapter, AccountEvents: s.AccountEvents, MarketData: s.MarketData,
-		ReservationPolicy: policy,
-	}
-}
-
 func (s *ExchangeSession) Run(ctx context.Context) error {
 	if s == nil || s.Adapter == nil || s.Sync == nil || s.Sync.Store == nil ||
 		s.Account.TradingAccountID == "" {
@@ -95,10 +80,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return err
 	}
 	s.Account = account
-	marketData := s.MarketData
-	if marketData == nil {
-		marketData, _ = s.Adapter.(execution.MarketDataSource)
-	}
+	marketData := s.marketData()
 	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot &&
 		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
 		len(account.SyncSymbols) == 0 {
@@ -111,8 +93,8 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if accountEvents == nil {
 		accountEvents, _ = s.Adapter.(execution.AccountEventSource)
 	}
-	if marketData == nil || accountEvents == nil {
-		return ErrSessionConfig
+	if accountEvents == nil {
+		return s.runPolling(ctx)
 	}
 	// Public metadata must be durable before private events are accepted. The
 	// handler only starts buffering once Subscribe begins, so the later REST
@@ -149,14 +131,10 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err, ended := privateStreamError(disconnected, streamDone); ended {
 		return s.disconnect(ctx, err)
 	}
-
-	if err, ended := privateStreamError(disconnected, streamDone); ended {
-		return s.disconnect(ctx, err)
-	}
-	if exchange.MarketType(s.Account.MarketType) == exchange.MarketTypeSwap {
+	if configurer, ok := s.Adapter.(execution.SymbolConfigurer); ok && exchange.MarketType(s.Account.MarketType) == exchange.MarketTypeSwap {
 		symbols := leverageSymbols(s.Account.LeverageSettings)
 		for _, symbol := range symbols {
-			if err := s.Adapter.SetMarginMode(
+			if err := configurer.SetMarginMode(
 				ctx,
 				shared.ExchangeSymbol(symbol),
 				exchange.MarginModeCross,
@@ -169,7 +147,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			if parseErr != nil {
 				return s.disconnect(ctx, parseErr)
 			}
-			if err := s.Adapter.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
+			if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
 				return s.disconnect(ctx, err)
 			}
 		}
@@ -315,27 +293,9 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	if s.Adapter == nil || s.Sync == nil {
 		return ErrSessionConfig
 	}
-	marketData := s.MarketData
-	if marketData == nil {
-		marketData, _ = s.Adapter.(execution.MarketDataSource)
-	}
 	generation := s.paperAccountGeneration()
-	if marketData == nil {
-		return ErrSessionConfig
-	}
-	// Paper's adapter keeps the canonical instrument -> native symbol map used
-	// by reference quotes. Load through it when available, while retaining the
-	// public source fallback for lightweight adapters in tests.
-	instrumentLoader, _ := s.Adapter.(interface {
-		LoadInstruments(context.Context) ([]exchange.Instrument, error)
-	})
-	var instruments []exchange.Instrument
-	var err error
-	if instrumentLoader != nil {
-		instruments, err = instrumentLoader.LoadInstruments(ctx)
-	} else {
-		instruments, err = marketData.LoadInstruments(ctx)
-	}
+	// 模拟适配器保存标的到原生代码的映射，所以从它加载。
+	instruments, err := s.Adapter.LoadInstruments(ctx)
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
@@ -407,6 +367,45 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			s.recoverPaperAccountAfterSync(generation, orders)
 		}
 	}
+}
+
+// runPolling 给没有私有流的场所用：短周期同步代替事件推送。
+func (s *ExchangeSession) runPolling(ctx context.Context) error {
+	instruments, err := s.marketData().LoadInstruments(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if err := s.persistInstruments(ctx, instruments); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	s.ready.Store(true)
+	if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, true, nil); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if s.OnReady != nil {
+		s.OnReady(s.Account.TradingAccountID)
+	}
+	ticker := time.NewTicker(pollingSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return s.disconnect(context.Background(), ctx.Err())
+		case <-ticker.C:
+			// 失败时账户已记录错误并保持未就绪，下一轮重试。
+			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+		}
+	}
+}
+
+func (s *ExchangeSession) marketData() execution.MarketDataSource {
+	if s.MarketData != nil {
+		return s.MarketData
+	}
+	return s.Adapter
 }
 
 func (s *ExchangeSession) paperAccountGeneration() uint64 {

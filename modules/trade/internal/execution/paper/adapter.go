@@ -23,6 +23,7 @@ type FactStore interface {
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
 	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
+	GetOrderByExchangeID(context.Context, string, string, string, string) (store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
 	ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
@@ -358,6 +359,20 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 	}
 	return result, nil
 }
+func (a *Adapter) GetOrderByExchangeID(ctx context.Context, symbol, exchangeOrderID string) (exchange.Order, error) {
+	if a.Store == nil {
+		return exchange.Order{}, nil
+	}
+	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, symbol, exchangeOrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}
+		}
+		return exchange.Order{}, storageError(err)
+	}
+	return orderFromRecord(row), nil
+}
+
 func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exchange.Order, error) {
 	if a.Wake != nil {
 		a.Wake()

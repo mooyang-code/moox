@@ -804,11 +804,7 @@ func (s *Service) freshReference(
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	marketData, ok := adapter.(execution.MarketDataSource)
-	if !ok {
-		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
-	}
-	quote, err := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
 	}
@@ -896,11 +892,7 @@ func (s *Service) submit(
 		if adapterErr != nil {
 			return aggregate, false, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
 		}
-		marketData, ok := adapter.(execution.MarketDataSource)
-		if !ok {
-			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", err)
-		}
-		quote, quoteErr := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
 		if quoteErr != nil {
 			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
 		}

@@ -3,6 +3,7 @@ package rpc
 import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 // ExecutionCapabilities is the server-side capability model used by both the
@@ -18,12 +19,13 @@ type ExecutionCapabilities struct {
 
 func ResolveExecutionCapabilities(
 	account tradingaccount.Account,
+	descriptor execution.VenueDescriptor,
 	liveTradingEnabled bool,
 	matcherReady bool,
 ) ExecutionCapabilities {
 	capabilities := ExecutionCapabilities{
-		OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
-		FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+		OrderTypes:   descriptor.OrderTypes,
+		FillPolicies: descriptor.FillPolicies,
 		CanClosePaperSimulation: account.ExecutionMode == exchange.ExecutionModePaper &&
 			account.Status == exchange.AccountStatusEnabled,
 	}

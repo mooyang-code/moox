@@ -15,8 +15,8 @@ func TestSwapNetCrossLeverageReduceOnlyAndRealizedPnL(t *testing.T) {
 	ctx := context.Background()
 	fake := newFakeExchange(exchange.MarketTypeSwap)
 	f := newFixture(t, exchange.MarketTypeSwap, fake)
-	require.NoError(t, f.adapter.SetMarginMode(ctx, testSymbol, exchange.MarginModeCross))
-	require.NoError(t, f.adapter.SetLeverage(ctx, testSymbol, shared.MustDecimal("10")))
+	require.NoError(t, f.fake.SetMarginMode(ctx, testSymbol, exchange.MarginModeCross))
+	require.NoError(t, f.fake.SetLeverage(ctx, testSymbol, shared.MustDecimal("10")))
 
 	openLong := mustPlace(t, f, swapSpec("long-open", exchange.SideBuy, "0.01", false))
 	openLong, err := f.orders.Submit(ctx, testSpace, string(openLong.ID))

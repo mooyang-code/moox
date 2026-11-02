@@ -262,8 +262,8 @@ func (s *Service) syncAccountLocked(
 }
 
 func lookupLocalOrder(ctx context.Context, adapter execution.ExecutionAdapter, local store.OrderRecord) (exchange.Order, error) {
-	if lookup, ok := adapter.(execution.ExchangeOrderLookup); ok && local.ExchangeOrderID != "" {
-		return lookup.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
+	if local.ExchangeOrderID != "" {
+		return adapter.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
 	}
 	return adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
 }
@@ -856,17 +856,8 @@ func (s *Service) ensureOrderForFill(
 	var lookupErr error
 	if fill.ClientOrderID != "" {
 		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.ExchangeSymbol), fill.ClientOrderID)
-	} else if lookup, ok := adapter.(execution.ExchangeOrderLookup); ok {
-		current, lookupErr = lookup.GetOrderByExchangeID(
-			ctx,
-			fill.ExchangeSymbol,
-			fill.ExchangeOrderID,
-		)
 	} else {
-		lookupErr = &exchange.Error{
-			Kind: exchange.ErrorOrderNotFound,
-			Err:  errors.New("Exchange order lookup by ID is unavailable"),
-		}
+		current, lookupErr = adapter.GetOrderByExchangeID(ctx, fill.ExchangeSymbol, fill.ExchangeOrderID)
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {

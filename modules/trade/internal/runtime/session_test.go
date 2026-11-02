@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -26,6 +27,7 @@ func (s sessionAdapterSource) Adapter(string) (execution.ExecutionAdapter, error
 }
 
 type scriptedSessionAdapter struct {
+	adaptertest.Stub
 	mu               sync.Mutex
 	calls            []string
 	disconnect       chan error

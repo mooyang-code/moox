@@ -9,7 +9,6 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -121,11 +120,7 @@ func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "adapter", err)
 	}
-	marketData, ok := adapter.(execution.MarketDataSource)
-	if !ok {
-		return spec, accountExecutionError(spec.TradingAccountID, "quote", errors.New("trade order: paper market data source is unavailable"))
-	}
-	quote, err := marketData.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
 	}

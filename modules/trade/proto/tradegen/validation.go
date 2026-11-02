@@ -383,8 +383,8 @@ func (r *ListPositionsReq) Validate() error {
 }
 
 func validExchange(value Exchange) bool {
-	return value == Exchange_EXCHANGE_BINANCE ||
-		value == Exchange_EXCHANGE_OKX
+	_, known := Exchange_name[int32(value)]
+	return known && value != Exchange_EXCHANGE_UNSPECIFIED
 }
 
 func validMarketType(value MarketType) bool {

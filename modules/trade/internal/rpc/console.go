@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -30,6 +31,7 @@ type ConsoleServer struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
+	Venues             *execution.Registry
 }
 
 type HoldingQueryService interface {
@@ -146,7 +148,8 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if s.MatcherReady != nil {
 		matcherReady = s.MatcherReady()
 	}
-	value := ResolveExecutionCapabilities(account, s.LiveTradingEnabled, matcherReady)
+	descriptor, _ := s.Venues.Descriptor(account.Exchange)
+	value := ResolveExecutionCapabilities(account, descriptor, s.LiveTradingEnabled, matcherReady)
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
