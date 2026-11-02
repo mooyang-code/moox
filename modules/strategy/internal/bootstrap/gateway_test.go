@@ -199,7 +199,7 @@ func (w *strategyGatewayWire) account() *tradepb.LogicalAccount {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.owner == nil {
-		w.owner = &tradepb.LogicalAccount{LogicalAccountId: "acct-1", SpaceId: "crypto", AuthFence: "fence-1"}
+		w.owner = &tradepb.LogicalAccount{LogicalAccountId: "acct-1", SpaceId: "crypto", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, AuthFence: "fence-1"}
 	}
 	return proto.Clone(w.owner).(*tradepb.LogicalAccount)
 }
@@ -216,7 +216,7 @@ func (w *strategyGatewayWire) ClaimLogicalAccountOwner(ctx context.Context, req 
 		return nil, err
 	}
 	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", AuthFence: "fence-1", OwnerInstanceId: req.GetInstanceId(), OwnerSessionId: req.GetSessionId()}
+	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, AuthFence: "fence-1", OwnerInstanceId: req.GetInstanceId(), OwnerSessionId: req.GetSessionId()}
 	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
 	w.mu.Unlock()
 	return &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
@@ -227,7 +227,7 @@ func (w *strategyGatewayWire) ReleaseLogicalAccountOwner(ctx context.Context, re
 		return nil, err
 	}
 	w.mu.Lock()
-	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", AuthFence: "fence-1"}
+	w.owner = &tradepb.LogicalAccount{LogicalAccountId: req.GetLogicalAccountId(), SpaceId: "crypto", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, AuthFence: "fence-1"}
 	owner := proto.Clone(w.owner).(*tradepb.LogicalAccount)
 	w.mu.Unlock()
 	return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: owner}, nil
@@ -322,7 +322,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Equal(t, "sha256:fixture", factor.DefinitionHash)
 
 	owner := tradeowner.New(cfg.Trade, gateway)
-	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
+	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", "swap"))
 	require.NoError(t, owner.ValidateSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
 	require.NoError(t, owner.ReleaseSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
 

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -74,6 +75,10 @@ func (h *ExecutionServer) PlaceManualOrder(
 		}
 		limitPrice = &value
 	}
+	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	if err != nil {
+		return &tradepb.PlaceManualOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	}
 	if h.PlaceManual == nil {
 		err = fmt.Errorf("trade RPC: manual order service is not configured")
 	}
@@ -83,7 +88,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 		action, order, err = h.PlaceManual(ctx, ManualOrderCommand{
 			SpaceID: spaceID, ActionID: req.GetActionId(),
 			TradingAccountID: req.GetTradingAccountId(),
-			ClientOrderID:    req.GetClientOrderId(), InstrumentID: req.GetInstrumentId(),
+			ClientOrderID:    req.GetClientOrderId(), InstrumentID: instrumentID,
 			OrderType:    orderTypeFromPB(req.GetOrderType()),
 			FillPolicy:   fillPolicyFromPB(req.GetFillPolicy()),
 			Side:         sideFromPB(req.GetSide()),
@@ -215,11 +220,15 @@ func (h *ExecutionServer) ListOrders(
 			return &tradepb.ListOrdersRsp{RetInfo: errorInfo(err)}, nil
 		}
 	}
+	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
+	if err != nil {
+		return &tradepb.ListOrdersRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
 		LogicalAccountID: req.GetLogicalAccountId(),
 		TradingAccountID: req.GetTradingAccountId(),
-		InstrumentID:     req.GetInstrumentId(), State: normalized(req.GetState()),
+		InstrumentID:     instrumentID, State: normalized(req.GetState()),
 		OnlyOpen: req.GetOnlyOpen(), StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
@@ -251,10 +260,14 @@ func (h *ExecutionServer) ListFills(
 	); err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
 	}
+	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	if err != nil {
+		return &tradepb.ListFillsRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	}
 	page := pageFromPB(req.GetPage())
 	records, total, err := h.Store.ListFills(ctx, spaceID, store.FillQuery{
 		TradingAccountID: req.GetTradingAccountId(), OrderID: req.GetOrderId(),
-		InstrumentID: req.GetInstrumentId(), StartTime: req.GetStartTime(),
+		InstrumentID: instrumentID, StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
 	fills := make([]*tradepb.Fill, 0, len(records))
@@ -284,13 +297,17 @@ func (h *ExecutionServer) ListPositions(
 	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err)}, nil
 	}
+	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
+	if err != nil {
+		return &tradepb.ListPositionsRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	}
 	positions := make([]*tradepb.Position, 0)
 	for _, accountID := range accountIDs {
 		records, listErr := h.Store.ListPositionsByInstrument(
 			ctx,
 			spaceID,
 			accountID,
-			req.GetInstrumentId(),
+			instrumentID,
 		)
 		if listErr != nil {
 			return &tradepb.ListPositionsRsp{
@@ -353,4 +370,41 @@ func (h *ExecutionServer) positionAccountIDs(
 		)
 	}
 	return ids, nil
+}
+
+// accountInstrumentID 按执行账户的市场标准化上游传入的标的 ID。
+func (h *ExecutionServer) accountInstrumentID(ctx context.Context, spaceID, tradingAccountID, raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return "", err
+	}
+	return exchange.NormalizeInstrumentID(raw, exchange.MarketType(account.MarketType))
+}
+
+// queryInstrumentID 给查询用：有账户信息时标准化，没有时按原值匹配。
+func (h *ExecutionServer) queryInstrumentID(ctx context.Context, spaceID, logicalAccountID, tradingAccountID, raw string) (string, error) {
+	switch {
+	case raw == "":
+		return "", nil
+	case tradingAccountID != "":
+		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
+	case logicalAccountID != "":
+		account, err := h.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+		if err != nil {
+			return "", err
+		}
+		return exchange.NormalizeInstrumentID(raw, exchange.MarketType(account.MarketType))
+	default:
+		return raw, nil
+	}
+}
+
+func instrumentErrorInfo(err error) *tradepb.RetInfo {
+	if errors.Is(err, exchange.ErrInvalidInstrumentID) {
+		return invalidInfo(err)
+	}
+	return errorInfo(err)
 }

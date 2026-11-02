@@ -23,7 +23,7 @@ func (manualReplayDependencies) LatestPrice(context.Context, string, string) (op
 func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 	for _, code := range []string{"INSUFFICIENT_FUNDS", "QUANTITY_RULE", "INVALID_SPEC", "INVALID_COMMAND", "CROSS_ZERO", "UNKNOWN_CODE"} {
 		t.Run(code, func(t *testing.T) {
-			db := openRPCStore(t)
+			db := rpcStoreWithAccount(t)
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 			if err := db.Transaction(ctx, func(tx *store.Tx) error {
 				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
@@ -32,17 +32,17 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			}
 			raw := `{"error_code":"` + code + `"}`
 			_, _, err := db.CreateOperatorAction(ctx, store.OperatorActionRecord{SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER", Status: "FAILED", Reason: "manual intervention", LastError: "retained failure detail", ResultJSON: &raw,
-				RequestJSON: `{"trading_account_id":"account-1","client_order_id":"client-1","instrument_id":"BTCUSDT","order_type":"MARKET","side":"BUY","position_side":"NET","quantity":"1"}`})
+				RequestJSON: `{"trading_account_id":"account-1","client_order_id":"client-1","instrument_id":"BTC-USDT-SPOT","order_type":"MARKET","side":"BUY","position_side":"NET","quantity":"1"}`})
 			if err != nil {
 				t.Fatal(err)
 			}
 			service := &operator.Service{Store: db, Orders: &orderapp.Service{Store: db}, Syncer: manualReplayDependencies{}, Prices: manualReplayDependencies{}}
-			h := &ExecutionServer{PlaceManual: func(ctx context.Context, c ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+			h := &ExecutionServer{Store: db, PlaceManual: func(ctx context.Context, c ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 				result, err := service.PlaceManualOrder(ctx, operator.ManualOrderCommand{SpaceID: c.SpaceID, ActionID: c.ActionID, TradingAccountID: c.TradingAccountID, ClientOrderID: c.ClientOrderID, InstrumentID: c.InstrumentID, Type: c.OrderType, FillPolicy: c.FillPolicy, Side: c.Side, PositionSide: c.PositionSide, Quantity: c.Quantity, LimitPrice: c.LimitPrice, Reason: c.Reason})
 				return result.Action, result.Order, err
 			}}
 			for attempt := 0; attempt < 2; attempt++ {
-				rsp, err := h.PlaceManualOrder(ctx, &tradepb.PlaceManualOrderReq{ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTCUSDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention"})
+				rsp, err := h.PlaceManualOrder(ctx, &tradepb.PlaceManualOrderReq{ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT", OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -67,11 +67,11 @@ func TestCorruptManualResultTakesPrecedenceOverInvalidRecord(t *testing.T) {
 
 func TestManualRunningDiagnosticDoesNotHideStorageFailure(t *testing.T) {
 	for _, failure := range []error{nil, errors.New("database unavailable")} {
-		h := &ExecutionServer{PlaceManual: func(context.Context, ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+		h := &ExecutionServer{Store: rpcStoreWithAccount(t), PlaceManual: func(context.Context, ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING", LastError: "submission outcome unknown"}, store.OrderRecord{}, failure
 		}}
 		rsp, err := h.PlaceManualOrder(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.PlaceManualOrderReq{
-			ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTCUSDT",
+			ActionId: "action-1", TradingAccountId: "account-1", ClientOrderId: "client-1", InstrumentId: "BTC-USDT",
 			OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY,
 			PositionSide: tradepb.PositionSide_POSITION_SIDE_NET, Quantity: "1", Reason: "manual intervention",
 		})
@@ -130,6 +130,7 @@ func TestOrderConversionPreservesOwnershipAndExecutionFields(t *testing.T) {
 func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 	var got ManualOrderCommand
 	handler := &ExecutionServer{
+		Store: rpcStoreWithAccount(t),
 		PlaceManual: func(
 			_ context.Context,
 			command ManualOrderCommand,
@@ -148,7 +149,7 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
 		&tradepb.PlaceManualOrderReq{
 			ActionId: "action-1", TradingAccountId: "account-1",
-			ClientOrderId: "client-1", InstrumentId: "BTCUSDT",
+			ClientOrderId: "client-1", InstrumentId: "BTC-USDT",
 			OrderType:    tradepb.OrderType_ORDER_TYPE_MARKET,
 			Side:         tradepb.OrderSide_ORDER_SIDE_BUY,
 			PositionSide: tradepb.PositionSide_POSITION_SIDE_NET,
@@ -255,4 +256,19 @@ func openRPCStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = value.Close() })
 	return value
+}
+
+func rpcStoreWithAccount(t *testing.T) *store.Store {
+	t.Helper()
+	db := openRPCStore(t)
+	if err := db.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
+			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			SettlementAsset: "USDT", Status: "ENABLED",
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return db
 }

@@ -8,10 +8,12 @@ import (
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -106,6 +108,11 @@ func HandleTarget(
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
 	}
+	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
+	request, err = normalizeTargetRequest(request, exchange.MarketType(account.MarketType))
+	if err != nil {
+		return targetRejection("invalid_contract", err)
+	}
 	if request.GetShadow() {
 		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
 	}
@@ -177,7 +184,7 @@ func HandleTarget(
 			store.ErrInvalidRecord, unsupportedInstrument,
 		)
 		if membersReady {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+			return targetRejection("unsupported_instrument", err)
 		}
 		return retryTarget(err)
 	}
@@ -315,6 +322,24 @@ func handleShadowTarget(
 		return retryTarget(err)
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+func normalizeTargetRequest(
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	market exchange.MarketType,
+) (*tradeeventpb.LogicalAccountTargetWeightRequested, error) {
+	normalized, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	if !ok {
+		return nil, fmt.Errorf("trade target: unexpected event payload %T", request)
+	}
+	for _, target := range normalized.GetTargets() {
+		instrumentID, err := exchange.NormalizeInstrumentID(target.GetInstrumentId(), market)
+		if err != nil {
+			return nil, err
+		}
+		target.InstrumentId = instrumentID
+	}
+	return normalized, nil
 }
 
 func mustMarshal(value any) string {

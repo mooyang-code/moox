@@ -32,6 +32,9 @@ type TradingAccountSnapshot struct {
 	ExchangeUpdatedAt int64          `json:"exchange_updated_at"`
 }
 
+// DefaultLeverageKey 是 LeverageSettings 里账户默认杠杆的键，不是交易标的。
+const DefaultLeverageKey = "*"
+
 type TradingAccountRecord struct {
 	SpaceID            string
 	TradingAccountID   string

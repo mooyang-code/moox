@@ -55,7 +55,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NoError(t, err)
 	fake := newFakeExchange(exchange.MarketTypeSpot)
 	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", Environment: "PRODUCTION", ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID, BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", MinNotional: "5", Status: "TRADING", ExchangeUpdatedAt: testNow.UnixMilli()})
+		return tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", Environment: "PRODUCTION", ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(exchange.MarketTypeSpot), BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", MinNotional: "5", Status: "TRADING", ExchangeUpdatedAt: testNow.UnixMilli()})
 	}))
 	adapter := &paperexec.Adapter{Store: db, Account: accountRecord, MarketData: fake, Now: func() time.Time { return testNow }}
 	f := buildFixture(db, path, fake, recordingAdapter{ExecutionAdapter: adapter, recorder: fake})

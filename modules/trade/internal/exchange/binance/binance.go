@@ -228,7 +228,6 @@ func (a *Adapter) GetReferencePrice(
 	}
 	var payload struct {
 		Price string `json:"price"`
-		Time  int64  `json:"time"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return exchange.ReferencePrice{}, typedRejected("decode reference price", err)
@@ -237,28 +236,27 @@ func (a *Adapter) GetReferencePrice(
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
 		return exchange.ReferencePrice{}, typedRejected("invalid reference price", err)
 	}
-	updatedAt := time.Now().UTC()
-	if payload.Time > 0 {
-		updatedAt = time.UnixMilli(payload.Time)
-	}
-	return exchange.ReferencePrice{Price: price, UpdatedAt: updatedAt}, nil
+	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟和最后成交时间。
+	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
 }
 
 func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
-	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr"), Query: url.Values{"symbol": []string{symbol.String()}}})
+	last, err := a.GetReferencePrice(ctx, symbol.String())
+	if err != nil {
+		return execution.MarketQuote{}, err
+	}
+	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{symbol.String()}}})
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
 	var payload struct {
-		BidPrice  string `json:"bidPrice"`
-		AskPrice  string `json:"askPrice"`
-		LastPrice string `json:"lastPrice"`
-		CloseTime int64  `json:"closeTime"`
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return execution.MarketQuote{}, typedRejected("decode quote", err)
 	}
-	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: parseQuote(payload.LastPrice), SourceTime: quoteTime(payload.CloseTime)}, nil
+	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: last.Price, SourceTime: time.Now().UTC()}, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
@@ -268,13 +266,6 @@ func parseQuote(raw string) shared.Decimal {
 	}
 	return v
 }
-func quoteTime(ms int64) time.Time {
-	if ms > 0 {
-		return time.UnixMilli(ms).UTC()
-	}
-	return time.Now().UTC()
-}
-
 type spotAccount struct {
 	UpdateTime int64 `json:"updateTime"`
 	Balances   []struct {
@@ -423,18 +414,20 @@ func (a *Adapter) ensureSingleAssetMode(ctx context.Context) error {
 	return nil
 }
 
+// positionRisk 是 /fapi/v3/positionRisk 的响应，v3 不再返回 marginType 和 leverage。
 type positionRisk struct {
-	Symbol           string `json:"symbol"`
-	PositionSide     string `json:"positionSide"`
-	PositionAmt      string `json:"positionAmt"`
-	EntryPrice       string `json:"entryPrice"`
-	MarkPrice        string `json:"markPrice"`
-	Leverage         string `json:"leverage"`
-	MarginType       string `json:"marginType"`
-	IsolatedMargin   string `json:"isolatedMargin"`
-	LiquidationPrice string `json:"liquidationPrice"`
-	UnRealizedProfit string `json:"unRealizedProfit"`
-	UpdateTime       int64  `json:"updateTime"`
+	Symbol                string `json:"symbol"`
+	PositionSide          string `json:"positionSide"`
+	PositionAmt           string `json:"positionAmt"`
+	EntryPrice            string `json:"entryPrice"`
+	MarkPrice             string `json:"markPrice"`
+	Notional              string `json:"notional"`
+	IsolatedWallet        string `json:"isolatedWallet"`
+	InitialMargin         string `json:"initialMargin"`
+	PositionInitialMargin string `json:"positionInitialMargin"`
+	LiquidationPrice      string `json:"liquidationPrice"`
+	UnRealizedProfit      string `json:"unRealizedProfit"`
+	UpdateTime            int64  `json:"updateTime"`
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
@@ -469,9 +462,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			position.MarkPrice, err = decimalOrZero(row.MarkPrice)
 		}
 		if err == nil {
-			position.Leverage, err = decimalOrZero(row.Leverage)
-		}
-		if err == nil {
 			position.LiquidationPrice, err = decimalOrZero(row.LiquidationPrice)
 		}
 		if err == nil {
@@ -480,12 +470,49 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil {
 			return nil, err
 		}
-		if !strings.EqualFold(row.MarginType, "cross") {
+		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
+		if err != nil {
+			return nil, err
+		}
+		if !isolatedWallet.IsZero() {
 			return nil, typedRejected("isolated margin is unsupported", nil)
+		}
+		position.UsedMargin, err = positionMargin(row)
+		if err != nil {
+			return nil, err
+		}
+		position.Leverage, err = positionLeverage(row.Notional, position.UsedMargin)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, position)
 	}
 	return out, nil
+}
+
+func positionMargin(row positionRisk) (shared.Decimal, error) {
+	margin, err := decimalOrZero(row.PositionInitialMargin)
+	if err != nil || !margin.IsZero() {
+		return margin, err
+	}
+	return decimalOrZero(row.InitialMargin)
+}
+
+// positionLeverage 由名义价值和保证金反推杠杆，只用于展示和估算；取不到时按 1 倍。
+func positionLeverage(rawNotional string, margin shared.Decimal) (shared.Decimal, error) {
+	notional, err := decimalOrZero(rawNotional)
+	if err != nil {
+		return shared.Decimal{}, err
+	}
+	one := shared.MustDecimal("1")
+	if notional.IsZero() || margin.Cmp(shared.Zero()) <= 0 {
+		return one, nil
+	}
+	leverage := notional.Abs().Div(margin).Add(shared.MustDecimal("0.5")).RoundDown(0)
+	if leverage.Cmp(one) < 0 {
+		return one, nil
+	}
+	return leverage, nil
 }
 
 type orderPayload struct {

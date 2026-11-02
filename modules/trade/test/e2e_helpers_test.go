@@ -27,8 +27,14 @@ const (
 	testSpace        = "space-e2e"
 	testAccount      = "account-e2e"
 	testSymbol       = "BTCUSDT"
-	testInstrumentID = "BTC-USDT"
+	testSubjectID    = "BTC-USDT"
 )
+
+// testInstrumentID 是 Trade 内部标的 ID：从交易所加载的标的都带市场后缀，而策略目标发的是 testSubjectID。
+// 两边都用真实格式，防止标的标准化再次对不上。
+func testInstrumentID(market exchange.MarketType) string {
+	return testSubjectID + "-" + string(market)
+}
 
 // Target validity is checked against the real Trade clock. Keep the shared
 // fixture clock near process start so generated target windows remain valid
@@ -76,7 +82,7 @@ type marginCall struct {
 func newFakeExchange(market exchange.MarketType) *fakeExchange {
 	instrument := exchange.Instrument{
 		Exchange: exchange.ExchangeBinance, MarketType: market,
-		ExchangeSymbol: testSymbol, InstrumentID: "BTC-USDT",
+		ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(market),
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.001"),
 		MinExchangeQuantity:  shared.MustDecimal("0.001"),
@@ -724,7 +730,7 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: testAccount, ClientOrderID: clientID,
-			InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: side,
+			InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Type: exchange.OrderTypeMarket, Side: side,
 			Quantity: shared.MustDecimal(quantity),
 		},
 		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,
@@ -737,6 +743,7 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 func swapSpec(clientID string, side exchange.Side, quantity string, reduceOnly bool) orderdomain.OrderSpec {
 	spec := marketSpec(clientID, side, quantity)
 	spec.PositionSide = exchange.PositionSideNet
+	spec.InstrumentID = testInstrumentID(exchange.MarketTypeSwap)
 	spec.ReducePositionOnly = reduceOnly
 	return spec
 }

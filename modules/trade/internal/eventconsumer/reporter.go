@@ -151,7 +151,7 @@ func targetErrorCode(result jetstream.HandlerResult) string {
 	var classified *targetBusinessError
 	if errors.As(result.Err, &classified) {
 		switch classified.code {
-		case "invalid_event", "invalid_contract", "authorization_conflict", "receipt_conflict", "superseded", "resolver_missing":
+		case "invalid_event", "invalid_contract", "authorization_conflict", "receipt_conflict", "superseded", "resolver_missing", "unsupported_instrument":
 			return classified.code
 		}
 	}

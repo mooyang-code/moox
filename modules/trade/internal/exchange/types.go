@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,6 +22,26 @@ func CanonicalInstrumentID(
 		return "", fmt.Errorf("trade Exchange: invalid canonical instrument identity")
 	}
 	return base + "-" + quote + "-" + string(market), nil
+}
+
+// ErrInvalidInstrumentID 表示上游传入的标的 ID 无法识别，或与账户市场不一致。
+var ErrInvalidInstrumentID = errors.New("trade Exchange: invalid instrument ID")
+
+// NormalizeInstrumentID 把上游传入的标的 ID 标准化成 Trade 内部 ID。
+// 采集和策略用不带市场后缀的 BTC-USDT，Trade 内部用 BTC-USDT-SPOT、BTC-USDT-SWAP。
+func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	parts := strings.Split(value, "-")
+	switch {
+	case !market.Valid():
+		return "", fmt.Errorf("%w: unsupported market %q", ErrInvalidInstrumentID, market)
+	case len(parts) == 2 && parts[0] != "" && parts[1] != "":
+		return CanonicalInstrumentID(parts[0], parts[1], market)
+	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == string(market):
+		return value, nil
+	default:
+		return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
+	}
 }
 
 type Exchange string

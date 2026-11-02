@@ -29,6 +29,10 @@ func (h *ExecutionServer) SubmitOrder(ctx context.Context, req *tradepb.SubmitOr
 		}
 		limitPrice = &value
 	}
+	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	if err != nil {
+		return &tradepb.SubmitOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	}
 	if h.SubmitOrdinary == nil {
 		err = fmt.Errorf("trade RPC: ordinary order service is not configured")
 	}
@@ -39,7 +43,7 @@ func (h *ExecutionServer) SubmitOrder(ctx context.Context, req *tradepb.SubmitOr
 			LogicalAccountID: req.GetLogicalAccountId(),
 			ManualOrderCommand: ManualOrderCommand{
 				SpaceID: spaceID, ActionID: req.GetActionId(), TradingAccountID: req.GetTradingAccountId(),
-				ClientOrderID: req.GetClientOrderId(), InstrumentID: req.GetInstrumentId(),
+				ClientOrderID: req.GetClientOrderId(), InstrumentID: instrumentID,
 				OrderType: orderTypeFromPB(req.GetOrderType()), FillPolicy: fillPolicyFromPB(req.GetFillPolicy()),
 				Side: sideFromPB(req.GetSide()), PositionSide: positionSideFromPB(req.GetPositionSide()),
 				Quantity: quantity, LimitPrice: limitPrice, Reason: req.GetReason(), DeadlineAt: req.GetDeadlineAt(),

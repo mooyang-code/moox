@@ -35,7 +35,7 @@ type Resolver interface {
 
 // Owner 是 Trade 组合账户的会话所有权接口。
 type Owner interface {
-	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
+	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID, marketType string) error
 	ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 }

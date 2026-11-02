@@ -236,7 +236,6 @@ func (a *Adapter) GetReferencePrice(
 	}
 	var rows []struct {
 		Last string `json:"last"`
-		TS   string `json:"ts"`
 	}
 	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
 		return exchange.ReferencePrice{}, rejected("decode reference price", err)
@@ -245,13 +244,8 @@ func (a *Adapter) GetReferencePrice(
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
 		return exchange.ReferencePrice{}, rejected("invalid reference price", err)
 	}
-	timestamp, err := strconv.ParseInt(rows[0].TS, 10, 64)
-	if err != nil || timestamp <= 0 {
-		return exchange.ReferencePrice{}, rejected("invalid reference price timestamp", err)
-	}
-	return exchange.ReferencePrice{
-		Price: price, UpdatedAt: time.UnixMilli(timestamp),
-	}, nil
+	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟。
+	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
@@ -271,13 +265,11 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 		Bid  string `json:"bidPx"`
 		Ask  string `json:"askPx"`
 		Last string `json:"last"`
-		TS   string `json:"ts"`
 	}
 	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
 		return execution.MarketQuote{}, rejected("decode quote", err)
 	}
-	ms, _ := strconv.ParseInt(rows[0].TS, 10, 64)
-	return execution.MarketQuote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.UnixMilli(ms).UTC()}, nil
+	return execution.MarketQuote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.Now().UTC()}, nil
 }
 
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {

@@ -65,7 +65,7 @@ func TestPaperManualRefreshReplacesReflectedReservationE2E(t *testing.T) {
 				Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow},
 				Now: func() time.Time { return now }, ManualSubmitWindow: 2 * time.Minute}
 			command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "reflected-refresh", TradingAccountID: testAccount,
-				ClientOrderID: "reflected-refresh", InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket,
+				ClientOrderID: "reflected-refresh", InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 				Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("18"), Reason: "delayed paper order"}
 			initial, err := service.PlaceManualOrder(ctx, command)
 			require.ErrorContains(t, err, "fault after action link before Submit dispatch")

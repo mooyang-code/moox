@@ -75,7 +75,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 				}})
 				return result.Action, result.Order, err
 			}}
-			req := &tradepb.SubmitOrderReq{ActionId: "ordinary-action", LogicalAccountId: logicalID, TradingAccountId: accountID, ClientOrderId: "ordinary-client", InstrumentId: testInstrumentID,
+			req := &tradepb.SubmitOrderReq{ActionId: "ordinary-action", LogicalAccountId: logicalID, TradingAccountId: accountID, ClientOrderId: "ordinary-client", InstrumentId: testInstrumentID(market),
 				OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY, PositionSide: positionPB, Quantity: "0.01", Reason: "ordinary", DeadlineAt: testNow.Add(time.Minute).UnixMilli()}
 			accepted, err := h.SubmitOrder(ctx, req)
 			require.NoError(t, err)
@@ -156,11 +156,12 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			require.NoError(t, logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true}))
 			service := &operator.Service{Store: f.store, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}
 			command := operator.SubmitOrderCommand{LogicalAccountID: testLogicalAccount, ManualOrderCommand: operator.ManualOrderCommand{
-				SpaceID: testSpace, ActionID: "ordinary-live", TradingAccountID: testAccount, ClientOrderID: "ordinary-live", InstrumentID: testInstrumentID,
+				SpaceID: testSpace, ActionID: "ordinary-live", TradingAccountID: testAccount, ClientOrderID: "ordinary-live", InstrumentID: testInstrumentID(market),
 				Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("0.01"), Reason: "local transport mock",
 			}}
 			if market == exchange.MarketTypeSwap {
 				command.PositionSide = exchange.PositionSideNet
+				command.InstrumentID = testInstrumentID(exchange.MarketTypeSwap)
 			}
 			result, err := service.SubmitOrder(ctx, command)
 			require.NoError(t, err)
@@ -174,6 +175,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			invalid := command
 			invalid.ActionID, invalid.ClientOrderID = "wrong-side", "wrong-side"
 			invalid.PositionSide = exchange.PositionSideNet
+			invalid.InstrumentID = testInstrumentID(exchange.MarketTypeSwap)
 			if market == exchange.MarketTypeSwap {
 				invalid.PositionSide = exchange.PositionSideUnspecified
 			}

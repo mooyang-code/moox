@@ -108,7 +108,7 @@ type fakeOwner struct {
 	onRelease func(instance, session string)
 }
 
-func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session string) error {
+func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session, _ string) error {
 	f.claims = append(f.claims, session)
 	if f.claimErr != nil {
 		return f.claimErr

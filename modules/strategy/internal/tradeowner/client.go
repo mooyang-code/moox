@@ -117,6 +117,10 @@ func IsReleaseSettled(err error) bool {
 	return errors.As(err, &coded) && coded.StatusCode() == 5
 }
 
+// ErrMarketMismatch 表示策略的市场与组合账户的市场不一致。Trade 收到无后缀标的时按账户市场补后缀，
+// 所以必须在绑定时拦住，否则合约策略绑到现货账户会直接买现货。
+var ErrMarketMismatch = errors.New("策略市场与组合账户市场不一致")
+
 // IsOwnerConflict 判断错误是否为所有权冲突（Trade 错误码 14）。
 func IsOwnerConflict(err error) bool {
 	var coded *ResponseError
@@ -126,6 +130,9 @@ func IsOwnerConflict(err error) bool {
 // IsPermanentClaimError 判断认领失败是否为 Trade 的确定性拒绝：本地待定会话可以立即清除；
 // 传输或内部错误则保留，让启动时的对账去恢复可能已经成功的远端结果。
 func IsPermanentClaimError(err error) bool {
+	if errors.Is(err, ErrMarketMismatch) {
+		return true
+	}
 	var coded *ResponseError
 	if !errors.As(err, &coded) {
 		return false
@@ -139,14 +146,18 @@ func IsPermanentClaimError(err error) bool {
 }
 
 // ClaimSession 以实例 + 会话身份认领账户所有权。
-func (c *Client) ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error {
+func (c *Client) ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID, marketType string) error {
 	if err := validateIdentity(spaceID, logicalAccountID, instanceID, sessionID); err != nil {
 		return err
 	}
-	expectedFence, err := c.readAuthFence(ctx, spaceID, logicalAccountID)
+	account, err := c.readAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return err
 	}
+	if err := checkMarket(marketType, account.GetMarketType()); err != nil {
+		return err
+	}
+	expectedFence := account.GetAuthFence()
 	callCtx, cancel, opts, err := c.call(ctx, spaceID)
 	if err != nil {
 		return err
@@ -211,19 +222,44 @@ func (c *Client) ValidateSession(ctx context.Context, spaceID, logicalAccountID,
 }
 
 func (c *Client) readAuthFence(ctx context.Context, spaceID, logicalAccountID string) (string, error) {
-	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	account, err := c.readAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return "", err
+	}
+	return account.GetAuthFence(), nil
+}
+
+// checkMarket 比对策略市场（spot、swap）与组合账户市场。
+func checkMarket(marketType string, accountMarket tradepb.MarketType) error {
+	var want tradepb.MarketType
+	switch marketType {
+	case "spot":
+		want = tradepb.MarketType_MARKET_TYPE_SPOT
+	case "swap":
+		want = tradepb.MarketType_MARKET_TYPE_SWAP
+	default:
+		return fmt.Errorf("%w：策略市场 %q 不受支持", ErrMarketMismatch, marketType)
+	}
+	if want != accountMarket {
+		return fmt.Errorf("%w：策略是 %s，组合账户是 %s", ErrMarketMismatch, marketType, accountMarket)
+	}
+	return nil
+}
+
+func (c *Client) readAccount(ctx context.Context, spaceID, logicalAccountID string) (*tradepb.LogicalAccount, error) {
+	callCtx, cancel, opts, err := c.call(ctx, spaceID)
+	if err != nil {
+		return nil, err
 	}
 	defer cancel()
 	response, err := c.proxy.GetLogicalAccount(callCtx, &tradepb.GetLogicalAccountReq{LogicalAccountId: logicalAccountID}, opts...)
 	if err != nil {
-		return "", c.transportError(callCtx, "读取鉴权围栏", err)
+		return nil, c.transportError(callCtx, "读取鉴权围栏", err)
 	}
 	if err := validateResponse("读取鉴权围栏", spaceID, logicalAccountID, response.GetRetInfo(), response.GetLogicalAccount()); err != nil {
-		return "", err
+		return nil, err
 	}
-	return response.GetLogicalAccount().GetAuthFence(), nil
+	return response.GetLogicalAccount(), nil
 }
 
 func (c *Client) call(ctx context.Context, spaceID string) (context.Context, context.CancelFunc, []client.Option, error) {

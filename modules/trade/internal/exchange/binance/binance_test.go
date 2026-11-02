@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -454,4 +455,32 @@ func limitOrderRequest() exchange.OrderRequest {
 	request.LimitPrice = &price
 	request.FillPolicy = exchange.FillPolicyIOC
 	return request
+}
+
+func TestListPositionSnapshotsParsesV3Response(t *testing.T) {
+	serve := func(body string) *Adapter {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(server.Close)
+		return testAdapter(exchange.MarketTypeSwap, server.URL)
+	}
+	// 字段与官方 Position Information V3 一致：没有 marginType 和 leverage。
+	const row = `"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"0.01","entryPrice":"50000","breakEvenPrice":"50010","markPrice":"51000","unRealizedProfit":"10","liquidationPrice":"0","notional":"510","marginAsset":"USDT","initialMargin":"102","maintMargin":"3","positionInitialMargin":"102","openOrderInitialMargin":"0","adl":2,"bidNotional":"0","askNotional":"0","updateTime":1700000000000`
+	positions, err := serve(`[{` + row + `,"isolatedMargin":"0","isolatedWallet":"0"}]`).ListPositionSnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("全仓持仓应解析成功：%v", err)
+	}
+	if len(positions) != 1 || positions[0].Leverage.String() != "5" || positions[0].UsedMargin.String() != "102" {
+		t.Fatalf("positions = %+v", positions)
+	}
+	if _, err := serve(`[{` + row + `,"isolatedMargin":"100","isolatedWallet":"100"}]`).ListPositionSnapshots(context.Background()); err == nil {
+		t.Fatal("逐仓持仓应被拒绝")
+	}
+	noMargin := strings.ReplaceAll(row, `"positionInitialMargin":"102"`, `"positionInitialMargin":"0"`)
+	noMargin = strings.ReplaceAll(noMargin, `"initialMargin":"102"`, `"initialMargin":"0"`)
+	positions, err = serve(`[{` + noMargin + `,"isolatedWallet":"0"}]`).ListPositionSnapshots(context.Background())
+	if err != nil || positions[0].Leverage.String() != "1" {
+		t.Fatalf("取不到保证金时按 1 倍：%+v err=%v", positions, err)
+	}
 }

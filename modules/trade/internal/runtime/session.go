@@ -730,7 +730,9 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 func leverageSymbols(settings store.LeverageSettings) []string {
 	symbols := make([]string, 0, len(settings))
 	for symbol := range settings {
-		symbols = append(symbols, symbol)
+		if symbol != store.DefaultLeverageKey {
+			symbols = append(symbols, symbol)
+		}
 	}
 	sort.Strings(symbols)
 	return symbols
@@ -749,7 +751,9 @@ func sessionSymbols(
 		set[symbol] = struct{}{}
 	}
 	for symbol := range account.LeverageSettings {
-		set[symbol] = struct{}{}
+		if symbol != store.DefaultLeverageKey {
+			set[symbol] = struct{}{}
+		}
 	}
 	for symbol := range account.FillCursors {
 		set[symbol] = struct{}{}

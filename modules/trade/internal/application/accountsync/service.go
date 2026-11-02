@@ -1331,7 +1331,9 @@ func syncSymbols(
 		set[symbol] = struct{}{}
 	}
 	for symbol := range account.LeverageSettings {
-		set[symbol] = struct{}{}
+		if symbol != store.DefaultLeverageKey {
+			set[symbol] = struct{}{}
+		}
 	}
 	for symbol := range account.FillCursors {
 		set[symbol] = struct{}{}

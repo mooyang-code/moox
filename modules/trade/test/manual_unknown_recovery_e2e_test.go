@@ -26,7 +26,7 @@ func TestManualRefreshedPaperMarketUsesFrozenSlippageAtMatcher(t *testing.T) {
 	now := testNow
 	f.adapter.(recordingAdapter).ExecutionAdapter.(*paperexec.Adapter).Now = func() time.Time { return now }
 	service := &operator.Service{Store: f.store, Orders: manualSubmitDispatchLoss{Service: f.orders}, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return now }, ManualSubmitWindow: 2 * time.Minute}
-	command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "paper-refresh", TradingAccountID: testAccount, ClientOrderID: "paper-refresh", InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"), Reason: "paper delayed submission"}
+	command := operator.ManualOrderCommand{SpaceID: testSpace, ActionID: "paper-refresh", TradingAccountID: testAccount, ClientOrderID: "paper-refresh", InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("0.01"), Reason: "paper delayed submission"}
 	initial, err := service.PlaceManualOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.NotNil(t, initial.Order.PaperExecutionPrice)
@@ -72,7 +72,7 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 	command := operator.ManualOrderCommand{
 		SpaceID: testSpace, ActionID: "manual-unknown-recovery",
 		TradingAccountID: testAccount, ClientOrderID: "manual-stable-client",
-		InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket,
+		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("0.01"), Reason: "manual recovery test",
 	}
@@ -515,7 +515,7 @@ func manualRecoveryFixture(t *testing.T) (*fixture, *operator.Service, operator.
 	command := operator.ManualOrderCommand{
 		SpaceID: testSpace, ActionID: "manual-pending-recovery",
 		TradingAccountID: testAccount, ClientOrderID: "manual-stable-client",
-		InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket,
+		InstrumentID: testInstrumentID(exchange.MarketTypeSwap), Type: exchange.OrderTypeMarket,
 		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("0.01"), Reason: "manual recovery test",
 	}
