@@ -195,13 +195,16 @@ func (s *Service) syncAccountLocked(
 		result, failErr := s.fail(ctx, account, err)
 		return result, maxDifference, failErr
 	}
-	symbols := FullSymbols(account, openOrders, localOrders, positions, instruments, accountSnapshot)
-	if !full {
-		symbols, err = s.incrementalSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot, symbols)
-		if err != nil {
-			result, failErr := s.fail(ctx, account, err)
-			return result, maxDifference, failErr
-		}
+	var symbols []string
+	if full {
+		symbols, err = s.BoundedFullSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot)
+	} else {
+		symbols, err = s.incrementalSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot,
+			FullSymbols(account, openOrders, localOrders, positions, instruments, accountSnapshot))
+	}
+	if err != nil {
+		result, failErr := s.fail(ctx, account, err)
+		return result, maxDifference, failErr
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)

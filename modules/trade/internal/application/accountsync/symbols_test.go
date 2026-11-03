@@ -195,3 +195,21 @@ func TestManualAccountKeepsPauseReasonOnExternalFact(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, store.IsAutoPauseReason(logical.PauseReason))
 }
+
+// 会话启动和手动同步：500 个有游标但没有变化的标的不能一次全拉。
+func TestBoundedFullSymbolsCapsIdleSymbols(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	account.FillCursors = make(map[string]string, 500)
+	for index := 0; index < 500; index++ {
+		account.FillCursors[fmt.Sprintf("S%03dUSDT", index)] = "1"
+	}
+	service := &Service{Store: tradeStore}
+	open := []exchange.Order{{ExchangeSymbol: "OPENUSDT"}}
+	symbols, err := service.BoundedFullSymbols(context.Background(), account, open, nil, nil, nil, exchange.AccountSnapshot{})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(symbols), fullSymbolCap)
+	require.Contains(t, symbols, "OPENUSDT")
+}

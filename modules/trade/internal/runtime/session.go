@@ -65,6 +65,27 @@ func (s *ExchangeSession) Ready() bool {
 	return true
 }
 
+// waitRatePause 在锁外等待限流暂停结束，不在请求内睡眠：请求带签名时间戳，等待会让它过期。
+func (s *ExchangeSession) waitRatePause(ctx context.Context) error {
+	source, ok := s.Adapter.(exchange.RateStatusSource)
+	if !ok {
+		return nil
+	}
+	until := source.RateStatus().PausedUntil
+	wait := time.Until(until)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *ExchangeSession) ExecutionAdapter() execution.ExecutionAdapter {
 	if s == nil {
 		return nil
@@ -88,6 +109,10 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	marketData := s.marketData()
 	if exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModePaper {
 		return s.runPaper(ctx)
+	}
+	// 限流暂停（含 418 封禁）期间不重连：重连要拉账户、持仓和成交，会延长封禁。
+	if err := s.waitRatePause(ctx); err != nil {
+		return err
 	}
 	accountEvents := s.AccountEvents
 	if accountEvents == nil {
@@ -166,7 +191,10 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
-	symbols := accountsync.FullSymbols(s.Account, orders, localOrders, positions, instrumentRecords, accountSnapshot)
+	symbols, err := s.Sync.BoundedFullSymbols(ctx, s.Account, orders, localOrders, positions, instrumentRecords, accountSnapshot)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
 	for _, symbol := range symbols {
