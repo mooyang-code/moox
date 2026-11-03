@@ -422,3 +422,57 @@ func TestManagerDuplicateIDsRemainGlobalConfigurationFailure(t *testing.T) {
 	require.Equal(t, []string{"duplicate enabled Exchange account ID duplicate"}, snapshot.ConfigErrors)
 	require.Equal(t, "factory failure", snapshot.AccountErrors["duplicate"])
 }
+
+// scheduledSession 按给定时长依次运行后断开，记录每次开始和结束的时间。
+type scheduledSession struct {
+	mu       sync.Mutex
+	runs     []time.Duration
+	starts   []time.Time
+	ends     []time.Time
+	finished chan struct{}
+}
+
+func (s *scheduledSession) Run(ctx context.Context) error {
+	s.mu.Lock()
+	index := len(s.starts)
+	s.starts = append(s.starts, time.Now())
+	s.mu.Unlock()
+	if index >= len(s.runs) {
+		close(s.finished)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	time.Sleep(s.runs[index])
+	s.mu.Lock()
+	s.ends = append(s.ends, time.Now())
+	s.mu.Unlock()
+	return errors.New("disconnected")
+}
+
+func (*scheduledSession) Ready() bool { return false }
+
+func TestManagerResetsBackoffAfterStableRun(t *testing.T) {
+	previous := stableSessionRun
+	stableSessionRun = 100 * time.Millisecond
+	defer func() { stableSessionRun = previous }()
+	// 三次快速失败把退避翻到 80ms，接着一次稳定运行后断开，下次应只等 RetryMin。
+	session := &scheduledSession{
+		runs:     []time.Duration{0, 0, 0, 150 * time.Millisecond},
+		finished: make(chan struct{}),
+	}
+	manager := &Manager{RetryMin: 20 * time.Millisecond, RetryMax: time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go manager.runSession(ctx, session)
+	select {
+	case <-session.finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not reconnect")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	fastGap := session.starts[3].Sub(session.ends[2])
+	stableGap := session.starts[4].Sub(session.ends[3])
+	require.GreaterOrEqual(t, fastGap, 70*time.Millisecond, "fast failures must keep doubling")
+	require.Less(t, stableGap, 60*time.Millisecond, "a stable run must reset the backoff")
+}

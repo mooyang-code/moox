@@ -102,14 +102,6 @@ type Status struct {
 	OrdersPausedUntil time.Time
 }
 
-// UsageRatio 是本分钟已用权重占额度的比例；没有额度配置时为 0。
-func (s Status) UsageRatio() float64 {
-	if s.WeightLimit <= 0 {
-		return 0
-	}
-	return float64(s.UsedWeight) / float64(s.WeightLimit)
-}
-
 // Status 返回客户端所在域名和本账户的限流状态。
 func (c *Client) Status() Status {
 	if c == nil {
@@ -206,7 +198,7 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 		return raw, nil
 	}
 	kind := c.classify(resp.StatusCode, raw)
-	if until := c.applyPause(host, kind, resp.StatusCode, resp.Header, time.Now()); !until.IsZero() && OnPause != nil {
+	if until := c.applyPause(host, kind, resp.StatusCode, resp.Header, req.Order, time.Now()); !until.IsZero() && OnPause != nil {
 		OnPause(hostKey(c.BaseURL), kind, until)
 	}
 	return raw, &exchange.Error{
@@ -245,7 +237,8 @@ func (c *Client) classify(status int, raw []byte) exchange.ErrorKind {
 }
 
 // applyPause 按限流类型暂停域名或本账户下单，返回暂停截止时间；不是限流时返回零值。
-func (c *Client) applyPause(host *hostState, kind exchange.ErrorKind, status int, header http.Header, now time.Time) time.Time {
+// 下单限流和系统限流只在下单请求上暂停本账户下单：查询被限流不影响下单（OKX 按接口单独限频）。
+func (c *Client) applyPause(host *hostState, kind exchange.ErrorKind, status int, header http.Header, order bool, now time.Time) time.Time {
 	retry := retryAfter(header)
 	var until time.Time
 	switch kind {
@@ -260,11 +253,15 @@ func (c *Client) applyPause(host *hostState, kind exchange.ErrorKind, status int
 		until = now.Add(orDefault(retry, pause))
 		host.pause(until, kind)
 	case exchange.ErrorOrderRateLimited:
-		until = now.Add(orDefault(retry, defaultOrderPause))
-		c.orders.extend(until, kind)
+		if order {
+			until = now.Add(orDefault(retry, defaultOrderPause))
+			c.orders.extend(until, kind)
+		}
 	case exchange.ErrorThrottled:
-		until = now.Add(orDefault(retry, throttlePause))
-		c.orders.extend(until, kind)
+		if order {
+			until = now.Add(orDefault(retry, throttlePause))
+			c.orders.extend(until, kind)
+		}
 	}
 	return until
 }
