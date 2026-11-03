@@ -232,6 +232,18 @@ func (e *Executor) Converge(
 	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return Result{}, ErrTargetSession
 	}
+	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，
+	// 这段等待如果每次都走完整计算，会和成交入账抢 SQLite 连接。
+	if waiting, err := e.waitingOnChildren(ctx, spaceID, logicalAccountID, target); err != nil {
+		return Result{}, err
+	} else if waiting {
+		if target.Status != StatusConverging {
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
+	}
 
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
 	if err != nil {
@@ -398,6 +410,16 @@ func (e *Executor) Converge(
 		}
 		for _, action := range actions {
 			if action.reducing != reducing {
+				continue
+			}
+			if quotaExhausted(quota) {
+				// 所有执行账户的本批额度都用完：剩下的标的留到下一批，不再逐个查询。
+				deferred = true
+				break
+			}
+			if quota[action.member.account.TradingAccountID] <= 0 {
+				// 首选成员额度用完：本轮跳过，不换成员。
+				deferred = true
 				continue
 			}
 			instrumentID := action.instrument.InstrumentID
@@ -1672,4 +1694,43 @@ func (e *Executor) batchFailure(
 		return Result{Status: StatusConverging, Action: "place"}, true, other
 	}
 	return Result{}, false, nil
+}
+
+func quotaExhausted(quota map[string]int) bool {
+	for _, remaining := range quota {
+		if remaining > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// waitingOnChildren 报告组合账户是否只是在等当前目标已发出的子单（挂单中、部分成交、撤单中）结束。
+// 有待提交、提交中、结果未知的子单，或有其他归属的活动订单时返回 false，交给完整流程处理。
+func (e *Executor) waitingOnChildren(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	target store.LogicalAccountTargetRecord,
+) (bool, error) {
+	records, _, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{LogicalAccountID: logicalAccountID, OnlyOpen: true, Limit: 1000})
+	if err != nil {
+		return false, err
+	}
+	waiting := false
+	for _, record := range records {
+		state := orderdomain.State(record.State)
+		if state.Terminal() {
+			continue
+		}
+		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID != target.TargetID {
+			return false, nil
+		}
+		switch state {
+		case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
+			return false, nil
+		}
+		waiting = true
+	}
+	return waiting, nil
 }

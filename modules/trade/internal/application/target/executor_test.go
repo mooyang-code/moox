@@ -663,8 +663,8 @@ func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
 	require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 }
 
-// 持仓变成无法映射时进入阻塞，挂着的目标市价单等它自己结束，不撤单。
-func TestTargetExecutorBlocksWithoutCancelWhenExposureBecomesUnmapped(t *testing.T) {
+// 持仓变成无法映射时，挂着的目标市价单先等它自己结束，不撤单；结束后再按阻塞处理。
+func TestTargetExecutorWaitsWithoutCancelWhenExposureBecomesUnmapped(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
@@ -686,7 +686,8 @@ func TestTargetExecutorBlocksWithoutCancelWhenExposureBecomesUnmapped(t *testing
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, StatusBlocked, result.Status)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Equal(t, "wait", result.Action)
 	require.Empty(t, fixture.orders.canceled)
 	require.Empty(t, fixture.orders.specs)
 }

@@ -41,6 +41,7 @@ type Adapter struct {
 	instruments map[string]exchange.Instrument
 	modeChecked atomic.Bool
 	prices      exchange.PriceBoard
+	books       exchange.BookBoard
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
@@ -320,6 +321,9 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
+	if book, at, ok := a.books.Get(ctx, symbol.String(), a.allBooks); ok {
+		return execution.MarketQuote{Bid: book.Bid, Ask: book.Ask, Last: last.Price, SourceTime: at}, nil
+	}
 	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{symbol.String()}}})
 	if err != nil {
 		return execution.MarketQuote{}, err
@@ -332,6 +336,30 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 		return execution.MarketQuote{}, typedRejected("decode quote", err)
 	}
 	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: last.Price, SourceTime: time.Now().UTC()}, nil
+}
+
+// allBooks 一次取全市场买一卖一（永续权重 5、现货 4）。
+func (a *Adapter) allBooks(ctx context.Context) (map[string]exchange.Book, error) {
+	raw, err := a.client().Do(ctx, &httpclient.Request{
+		Method: http.MethodGet,
+		Path:   a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Symbol   string `json:"symbol"`
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, typedRejected("decode all books", err)
+	}
+	books := make(map[string]exchange.Book, len(rows))
+	for _, row := range rows {
+		books[row.Symbol] = exchange.Book{Bid: parseQuote(row.BidPrice), Ask: parseQuote(row.AskPrice)}
+	}
+	return books, nil
 }
 
 func parseQuote(raw string) shared.Decimal {

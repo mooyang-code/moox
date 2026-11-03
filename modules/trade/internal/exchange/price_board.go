@@ -37,3 +37,39 @@ func (b *PriceBoard) Get(
 	price, ok := b.prices[symbol]
 	return price, b.at, ok && price.Cmp(shared.Zero()) > 0
 }
+
+// bookBoardTTL 是全市场买一卖一的复用时间。模拟盘每笔子单落库和提交前都要取一次可成交价，
+// 逐个请求盘口一批 16 单要几十次往返。
+const bookBoardTTL = time.Second
+
+// Book 是一个标的的买一卖一。
+type Book struct {
+	Bid shared.Decimal
+	Ask shared.Decimal
+}
+
+// BookBoard 缓存全市场买一卖一，并发调用只请求一次。
+type BookBoard struct {
+	mu    sync.Mutex
+	at    time.Time
+	books map[string]Book
+}
+
+// Get 返回标的的买一卖一和读取时间。全市场接口失败或没有这个标的时 ok 为 false，调用方退回单标的接口。
+func (b *BookBoard) Get(
+	ctx context.Context,
+	symbol string,
+	fetch func(context.Context) (map[string]Book, error),
+) (Book, time.Time, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if time.Since(b.at) >= bookBoardTTL {
+		books, err := fetch(ctx)
+		if err != nil {
+			return Book{}, time.Time{}, false
+		}
+		b.books, b.at = books, time.Now().UTC()
+	}
+	book, ok := b.books[symbol]
+	return book, b.at, ok && book.Bid.Cmp(shared.Zero()) > 0 && book.Ask.Cmp(shared.Zero()) > 0
+}

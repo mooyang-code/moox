@@ -71,15 +71,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		return exchange.AccountSnapshot{}, storageError(err)
 	}
 	balances, locked := projection.Totals, projection.Reserved
-	instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
-	if err != nil {
-		return exchange.AccountSnapshot{}, storageError(err)
-	}
 	settlement := balances[account.SettlementAsset]
 	equity := settlement
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
 	if account.MarketType == string(exchange.MarketTypeSpot) {
+		// 只有现货估值要按基础资产找交易对；合约按持仓估值，不读全部标的（每笔撮合要算两次快照）。
+		instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
+		if err != nil {
+			return exchange.AccountSnapshot{}, storageError(err)
+		}
 		byBase := make(map[string]store.InstrumentRecord, len(instruments))
 		for _, instrument := range instruments {
 			if instrument.QuoteAsset == account.SettlementAsset && instrument.BaseAsset != "" {
