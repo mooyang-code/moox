@@ -126,6 +126,27 @@ func (s *Store) ListTargetReceipts(ctx context.Context, spaceID, logicalAccountI
 	return result, nil
 }
 
+// ListTargetReceiptsSince 按接收时间返回 since 之后的回执，最前面再带上 since 之前最近的一条作为比较基准（没有就不带）。
+func (s *Store) ListTargetReceiptsSince(ctx context.Context, spaceID, logicalAccountID string, since int64) ([]TargetReceiptRecord, error) {
+	var baseline []targetReceiptRow
+	if err := s.db.WithContext(ctx).Table("t_logical_account_target_receipts").
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_accepted_at <= ?", spaceID, logicalAccountID, since).
+		Order("c_accepted_at DESC").Limit(1).Find(&baseline).Error; err != nil {
+		return nil, err
+	}
+	var rows []targetReceiptRow
+	if err := s.db.WithContext(ctx).Table("t_logical_account_target_receipts").
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_accepted_at > ?", spaceID, logicalAccountID, since).
+		Order("c_accepted_at").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make([]TargetReceiptRecord, 0, len(baseline)+len(rows))
+	for _, row := range append(baseline, rows...) {
+		result = append(result, row.targetReceipt())
+	}
+	return result, nil
+}
+
 func (r targetReceiptRow) targetReceipt() TargetReceiptRecord {
 	return TargetReceiptRecord{SpaceID: r.SpaceID, TargetID: r.TargetID, RunnerID: r.RunnerID, LogicalAccountID: r.LogicalAccountID, CommandSequence: r.CommandSequence, InstanceID: r.InstanceID, SessionID: r.SessionID, StrategyID: r.StrategyID, BarEndTime: r.BarEndTime, EffectiveAt: r.EffectiveAt, ValidUntil: r.ValidUntil, RequestHash: r.RequestHash, SignalTime: r.SignalTime, WeightsJSON: r.WeightsJSON, Equity: r.Equity, EquitySourceTime: r.EquitySourceTime, ReferencePricesJSON: r.ReferencePricesJSON, QuantityTargetsJSON: r.QuantityTargetsJSON, AcceptedAt: r.AcceptedAt}
 }

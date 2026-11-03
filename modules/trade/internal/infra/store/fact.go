@@ -1766,15 +1766,17 @@ func sameDecimalText(left, right string) bool {
 	return errA == nil && errB == nil && a.Cmp(b) == 0
 }
 
-// FillNotionalSince 返回账户 since（毫秒）之后成交的名义金额合计，只用于告警，是浮点近似值。
-func (s *Store) FillNotionalSince(ctx context.Context, spaceID, tradingAccountID string, since int64) (float64, error) {
+// TargetFillNotionalSince 返回执行账户 since 之后目标子单的成交额（价格 × 数量），清仓和人工单不算。
+func (s *Store) TargetFillNotionalSince(ctx context.Context, spaceID, tradingAccountID string, since int64) (float64, error) {
 	var total struct {
 		Notional float64 `gorm:"column:notional"`
 	}
 	err := s.db.WithContext(ctx).Raw(`
-		SELECT COALESCE(SUM(CAST(c_price AS REAL) * CAST(c_quantity AS REAL)), 0) AS notional
-		FROM t_order_fills
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_traded_at > ?
+		SELECT COALESCE(SUM(CAST(f.c_price AS REAL) * CAST(f.c_quantity AS REAL)), 0) AS notional
+		FROM t_order_fills AS f
+		JOIN t_trade_orders AS o ON o.c_space_id = f.c_space_id AND o.c_order_id = f.c_order_id
+		WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_traded_at > ?
+			AND o.c_owner_type = 'TARGET'
 	`, spaceID, tradingAccountID, since).Scan(&total).Error
 	return total.Notional, err
 }
