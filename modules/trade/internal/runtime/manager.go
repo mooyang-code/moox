@@ -161,6 +161,18 @@ func (m *Manager) EnsureSymbolConfig(
 	return session.EnsureSymbolConfig(ctx, symbol, leverage)
 }
 
+// RequestSync 请求账户会话做一次防抖轻量同步，会话不支持时返回 false。
+func (m *Manager) RequestSync(tradingAccountID string) bool {
+	m.mu.RLock()
+	entry := m.sessions[tradingAccountID]
+	m.mu.RUnlock()
+	if entry == nil || entry.stopping {
+		return false
+	}
+	session, ok := entry.session.(interface{ RequestSync() bool })
+	return ok && session.RequestSync()
+}
+
 // ForgetSymbolConfig 让标的下次开仓前重新设置，符号是默认杠杆键时清空全部记录。
 func (m *Manager) ForgetSymbolConfig(tradingAccountID, symbol string) {
 	if session, err := m.symbolConfigSession(tradingAccountID); err == nil {

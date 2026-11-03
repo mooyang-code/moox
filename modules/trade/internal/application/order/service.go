@@ -68,6 +68,8 @@ type Service struct {
 	NewOrderID          func() string
 	Now                 func() time.Time
 	UnknownLookupWindow time.Duration
+	// RequestSync 请求账户会话做一次防抖轻量同步，返回 false 时由服务自己同步。
+	RequestSync func(tradingAccountID string) bool
 
 	// lookups 记录批量解析未知订单时每笔最近一次查询的时间，用于限制查询次数。
 	lookupMu sync.Mutex
@@ -1245,12 +1247,12 @@ func (s *Service) deliverSubmit(
 				return err
 			}
 			if validation.Account.ExecutionMode == exchange.ExecutionModeLive {
-				at := response.UpdatedAt.UnixMilli()
-				if at <= 0 {
-					at = s.now().UnixMilli()
-				}
-				if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, at); err != nil {
-					return err
+				// 水位只用交易所时间：本地时间比成交晚一个往返，现货余额的更新时间永远追不上。
+				// 回执没有时间时只关闭准入，成交缺口会挡住恢复，成交入账时再按成交时间抬水位。
+				if at := response.UpdatedAt.UnixMilli(); at > 0 {
+					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, at); err != nil {
+						return err
+					}
 				}
 				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), "成交待余额同步确认")
 			}

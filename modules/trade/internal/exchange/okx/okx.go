@@ -34,11 +34,21 @@ type Adapter struct {
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
+	client := httpclient.New(defaultBaseURL)
+	client.Classify = classifyRateLimit
 	return &Adapter{
 		config: config, credential: credential,
-		client:      httpclient.New(defaultBaseURL),
+		client:      client,
 		instruments: make(map[string]exchange.Instrument),
 	}
+}
+
+// classifyRateLimit：OKX 的 HTTP 429 是按接口和用户的限频，不是 IP 封禁，只暂停这个账户下单。
+func classifyRateLimit(status int, _ []byte) exchange.ErrorKind {
+	if status == http.StatusTooManyRequests {
+		return exchange.ErrorOrderRateLimited
+	}
+	return ""
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
@@ -134,16 +144,17 @@ func (a *Adapter) send(
 		}
 		if err := json.Unmarshal(envelope.Data, &details); err == nil &&
 			len(details) != 0 && details[0].Code != "" && details[0].Code != "0" {
-			return envelope.Data, a.rateLimited(classifyOKXCode(details[0].Code, details[0].Message))
+			return envelope.Data, a.rateLimited(classifyOKXCode(details[0].Code, details[0].Message), order)
 		}
-		return envelope.Data, a.rateLimited(classifyOKXCode(envelope.Code, envelope.Msg))
+		return envelope.Data, a.rateLimited(classifyOKXCode(envelope.Code, envelope.Msg), order)
 	}
 	return envelope.Data, nil
 }
 
 // rateLimited 把 HTTP 200 里的限流码转成账户下单暂停：httpclient 看不到响应体里的错误码。
-func (a *Adapter) rateLimited(err error) error {
-	if exchange.IsKind(err, exchange.ErrorOrderRateLimited) {
+// 只有下单请求触发暂停，查询接口的限流不影响下单。
+func (a *Adapter) rateLimited(err error, order bool) error {
+	if order && exchange.IsKind(err, exchange.ErrorOrderRateLimited) {
 		a.client.PauseOrders(orderRateLimitPause, exchange.ErrorOrderRateLimited)
 	}
 	return err
@@ -684,7 +695,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, transportUnknown("decode placed order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg))
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), true)
 	}
 	return exchange.Order{
 		ExchangeOrderID: payload[0].OrdID,
@@ -719,7 +730,7 @@ func (a *Adapter) CancelOrder(
 		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg))
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), false)
 	}
 	// Fetch the authoritative terminal state; a cancel acknowledgement alone is
 	// not sufficient because final fills may have raced with the request.

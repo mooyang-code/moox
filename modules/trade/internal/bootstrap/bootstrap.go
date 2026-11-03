@@ -99,7 +99,7 @@ func initialize(
 		SessionState: manager, SymbolConfigs: manager, Venues: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
-		Store: tradeStore, Adapters: manager, SymbolConfig: manager,
+		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
 		Validator: orderapp.Validator{
 			Accounts:         accounts,
 			Instruments:      instrumentSource{store: tradeStore},

@@ -610,6 +610,8 @@ type orderPayload struct {
 	Status             string      `json:"status"`
 	Time               int64       `json:"time"`
 	UpdateTime         int64       `json:"updateTime"`
+	// TransactTime 是现货下单回执里唯一的时间字段（回执没有 time、updateTime）。
+	TransactTime int64 `json:"transactTime"`
 }
 
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
@@ -990,9 +992,18 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		AveragePrice:    average,
 		ReduceOnly:      row.ReduceOnly,
 		Status:          mapOrderStatus(row.Status, filled),
-		CreatedAt:       millis(row.Time),
-		UpdatedAt:       millis(row.UpdateTime),
+		CreatedAt:       millis(firstPositive(row.Time, row.TransactTime)),
+		UpdatedAt:       millis(firstPositive(row.UpdateTime, row.TransactTime)),
 	}, nil
+}
+
+func firstPositive(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {

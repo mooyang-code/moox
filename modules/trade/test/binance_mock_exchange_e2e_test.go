@@ -196,7 +196,7 @@ func (m *binanceHTTPMock) handleOrder(
 		m.placed = request.URL.Query()
 		m.clientOrderID = m.placed.Get("newClientOrderId")
 		m.apiKey = request.Header.Get("X-MBX-APIKEY")
-		m.writeFilledOrder(writer)
+		m.writePlacedSpotResult(writer)
 		return
 	}
 	require.Equal(t, http.MethodGet, request.Method)
@@ -216,6 +216,17 @@ func (m *binanceHTTPMock) handleTrades(
 	_, _ = fmt.Fprintf(
 		writer,
 		`[{"id":1,"orderId":42,"symbol":"BTCUSDT","price":"50000","qty":"0.01","commission":"0.1","commissionAsset":"USDT","time":%d,"isBuyer":false,"isMaker":false}]`,
+		m.now.Add(time.Second).UnixMilli(),
+	)
+}
+
+// writePlacedSpotResult 是真实的现货下单回执（newOrderRespType=RESULT）：只有 transactTime，没有 time、updateTime。
+func (m *binanceHTTPMock) writePlacedSpotResult(writer http.ResponseWriter) {
+	_, _ = fmt.Fprintf(
+		writer,
+		`{"symbol":"BTCUSDT","orderId":42,"orderListId":-1,"clientOrderId":%q,"transactTime":%d,"price":"0.00000000","origQty":"0.01","executedQty":"0.01","cummulativeQuoteQty":"500","status":"FILLED","timeInForce":"GTC","type":"MARKET","side":"SELL","workingTime":%d,"selfTradePreventionMode":"NONE"}`,
+		m.clientOrderID,
+		m.now.Add(time.Second).UnixMilli(),
 		m.now.Add(time.Second).UnixMilli(),
 	)
 }

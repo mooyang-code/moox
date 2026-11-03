@@ -29,6 +29,7 @@ type barrierAdapter struct {
 	maxInFlight int
 	ready       chan struct{}
 	errs        map[string]error
+	status      exchange.OrderStatus
 }
 
 func (a *barrierAdapter) PlaceOrder(_ context.Context, request exchange.OrderRequest) (exchange.Order, error) {
@@ -53,7 +54,11 @@ func (a *barrierAdapter) PlaceOrder(_ context.Context, request exchange.OrderReq
 	if err != nil {
 		return exchange.Order{}, err
 	}
-	return exchange.Order{ExchangeOrderID: "exchange-" + request.ClientOrderID, Status: exchange.OrderStatusOpen}, nil
+	status := a.status
+	if status == "" {
+		status = exchange.OrderStatusOpen
+	}
+	return exchange.Order{ExchangeOrderID: "exchange-" + request.ClientOrderID, Status: status}, nil
 }
 
 func batchService(t *testing.T, count int) (*Service, *barrierAdapter, []string) {
@@ -129,4 +134,24 @@ func TestResolveUnknownBatchLimitsLookups(t *testing.T) {
 	_, err = service.ResolveUnknownBatch(context.Background(), "space-1", ids)
 	require.NoError(t, err)
 	require.Equal(t, 2, stub.getCalls)
+}
+
+// 有成交的回执由会话做防抖同步，批后不直接同步；会话不支持时才直接同步。
+func TestSubmitBatchRequestsSessionSyncInsteadOfSyncing(t *testing.T) {
+	for _, handled := range []bool{true, false} {
+		service, adapter, ids := batchService(t, 2)
+		adapter.status = exchange.OrderStatusFilled
+		syncer := &syncerStub{}
+		service.Syncer = syncer
+		requested := 0
+		service.RequestSync = func(string) bool { requested++; return handled }
+		_, err := service.SubmitBatch(context.Background(), "space-1", ids)
+		require.NoError(t, err)
+		require.Equal(t, 1, requested, "同一账户只请求一次")
+		if handled {
+			require.Zero(t, syncer.calls)
+		} else {
+			require.Equal(t, 1, syncer.calls)
+		}
+	}
 }

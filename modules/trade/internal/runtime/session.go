@@ -33,6 +33,8 @@ type ExchangeSession struct {
 	configuredSymbols map[string]string
 	// symbolLocks 按标的串行设置杠杆：同一批里不同标的可以并发设置。
 	symbolLocks map[string]*sync.Mutex
+	// requestMu 保护 syncRequested 的替换，外部请求同步时要读它。
+	requestMu sync.Mutex
 
 	Account               store.TradingAccountRecord
 	Adapter               execution.ExecutionAdapter
@@ -63,6 +65,21 @@ func (s *ExchangeSession) Ready() bool {
 		if s.PaperAccountState != nil && !s.PaperAccountState(s.Account.TradingAccountID).Ready {
 			return false
 		}
+	}
+	return true
+}
+
+// RequestSync 请求一次防抖轻量同步；会话没有私有流（模拟盘、轮询）时返回 false，由调用方自己同步。
+func (s *ExchangeSession) RequestSync() bool {
+	s.requestMu.Lock()
+	requested := s.syncRequested
+	s.requestMu.Unlock()
+	if requested == nil {
+		return false
+	}
+	select {
+	case requested <- struct{}{}:
+	default:
 	}
 	return true
 }
@@ -133,7 +150,9 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err := s.persistInstruments(ctx, instruments); err != nil {
 		return s.disconnect(ctx, err)
 	}
+	s.requestMu.Lock()
 	s.syncRequested = make(chan struct{}, 1)
+	s.requestMu.Unlock()
 	s.ready.Store(false)
 	_ = s.Sync.SetReady(ctx, s.Account.TradingAccountID, false, nil)
 

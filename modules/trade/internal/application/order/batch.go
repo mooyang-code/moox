@@ -12,6 +12,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
+// batchSendTimeout 是批量发送里单笔请求的超时。
+const batchSendTimeout = 5 * time.Second
+
 // BatchResult 是批量提交里一笔订单的结果。
 type BatchResult struct {
 	OrderID string
@@ -26,7 +29,8 @@ type BatchResult struct {
 //	  逐笔持账户锁：外部冲突检查、全部提交前校验、落 SUBMITTING，释放账户锁
 //	  有界并发发往交易所，发送前再确认一次目标授权
 //	  逐笔持账户锁记录结果
-//	批后：每个账户一次轻量同步
+//	批后：有成交的账户请求会话做一次防抖轻量同步（等私有流成交先入账，一致时只要 10 权重）；
+//	      没有会话或余额拒单时直接轻量同步
 //
 // 私有流的订单和成交事件要拿执行锁，会在整批结束后才入账，这是预期行为。
 func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []string) ([]BatchResult, error) {
@@ -81,12 +85,16 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			go func(index int, send *submitSend) {
 				defer wg.Done()
 				accountID := send.record.TradingAccountID
-				result, synchronize, deliverErr := s.deliverSubmit(ctx, send, func(lockCtx context.Context) (func(), error) {
+				// 单笔请求最多 5 秒；结果落库用独立的期限，不受这里影响。
+				sendCtx, cancel := context.WithTimeout(ctx, batchSendTimeout)
+				defer cancel()
+				result, synchronize, deliverErr := s.deliverSubmit(sendCtx, send, func(lockCtx context.Context) (func(), error) {
 					return s.Store.LockTradingAccountContext(lockCtx, accountID)
 				})
 				mu.Lock()
 				results[index].Order, results[index].Err = result, deliverErr
-				if synchronize || (result.State == orderdomain.Rejected && exchange.IsKind(deliverErr, exchange.ErrorInsufficientBalance)) {
+				rejected := result.State == orderdomain.Rejected && exchange.IsKind(deliverErr, exchange.ErrorInsufficientBalance)
+				if rejected || synchronize {
 					syncAccounts[accountID] = struct{}{}
 				}
 				mu.Unlock()
@@ -103,6 +111,9 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 		defer cancel()
 		var syncErrors []error
 		for accountID := range syncAccounts {
+			if s.RequestSync != nil && s.RequestSync(accountID) {
+				continue
+			}
 			if syncErr := s.syncLight(syncCtx, accountID); syncErr != nil {
 				syncErrors = append(syncErrors, syncErr)
 			}

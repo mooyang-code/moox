@@ -223,3 +223,21 @@ func TestBoundedFullSymbolsCapsIdleSymbols(t *testing.T) {
 	require.LessOrEqual(t, len(symbols), fullSymbolCap)
 	require.Contains(t, symbols, "OPENUSDT")
 }
+
+// 本地库为空、交易所已有几百个持仓：每个持仓都算变化，也不能一次全拉。
+func TestBoundedFullSymbolsCapsChangedPositions(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	positions := make([]exchange.Position, 0, 491)
+	for index := 0; index < 491; index++ {
+		positions = append(positions, exchange.Position{ExchangeSymbol: fmt.Sprintf("P%03dUSDT", index), SignedQuantity: shared.MustDecimal("1")})
+	}
+	service := &Service{Store: tradeStore}
+	open := []exchange.Order{{ExchangeSymbol: "OPENUSDT"}}
+	symbols, err := service.BoundedFullSymbols(context.Background(), account, open, nil, positions, nil, exchange.AccountSnapshot{})
+	require.NoError(t, err)
+	require.Len(t, symbols, fullSymbolCap)
+	require.Contains(t, symbols, "OPENUSDT")
+}

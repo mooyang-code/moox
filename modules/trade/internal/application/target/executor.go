@@ -1552,8 +1552,18 @@ func (e *Executor) handlePendingChild(
 	if err != nil {
 		return Result{}, false, err
 	}
-	if complete || string(sideForDelta(action.delta)) != current.Side ||
-		action.member.account.TradingAccountID != current.TradingAccountID {
+	quantity, parseErr := shared.ParseDecimal(current.Quantity)
+	if parseErr != nil {
+		return Result{}, false, parseErr
+	}
+	unreflected, checkErr := e.positionUnreflected(ctx, spaceID, members, current.InstrumentID)
+	if checkErr != nil {
+		return Result{}, false, checkErr
+	}
+	// 差额变了（方向、成员或剩余数量小于这笔单）或持仓没反映已成交子单时丢弃重算，不按旧数量重发。
+	if complete || unreflected || string(sideForDelta(action.delta)) != current.Side ||
+		action.member.account.TradingAccountID != current.TradingAccountID ||
+		action.delta.Abs().Cmp(quantity) < 0 {
 		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
 			return Result{}, false, err
 		}
