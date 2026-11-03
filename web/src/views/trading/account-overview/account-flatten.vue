@@ -79,9 +79,14 @@ async function submit() {
     return true;
   } catch (error) {
     // 接口报错时平仓可能已经在后台继续（例如某个账户暂时异常、网关超时）：按操作编号查一次，查到就显示进度。
+    const message = error instanceof Error ? error.message : String(error);
     const recovered = await recoverAction(actionId.value);
-    if (recovered) return true;
-    dialogError.value = error instanceof Error ? error.message : String(error);
+    if (recovered) {
+      // 动作已经结束（例如失败）时，把接口返回的原因也显示出来。
+      if (action.value?.status !== "RUNNING") Message.warning(message);
+      return true;
+    }
+    dialogError.value = message;
     return false;
   } finally {
     submitting.value = false;

@@ -14,6 +14,8 @@ import (
 const (
 	defaultLedgerWindow = 7 * 24 * time.Hour
 	defaultLedgerLimit  = 200
+	// ledgerQueryTimeout 要明显小于网关（15 秒）和服务端的超时：到点时适配器返回已取到的部分，而不是被网关截断。
+	ledgerQueryTimeout = 11 * time.Second
 )
 
 var (
@@ -81,7 +83,9 @@ func (s *ConsoleServer) ListAccountLedger(
 	if limit <= 0 {
 		limit = defaultLedgerLimit
 	}
-	page, err := source.ListLedger(ctx, exchange.LedgerQuery{Start: start, End: end, Limit: limit})
+	queryCtx, cancel := context.WithTimeout(ctx, ledgerQueryTimeout)
+	defer cancel()
+	page, err := source.ListLedger(queryCtx, exchange.LedgerQuery{Start: start, End: end, Limit: limit})
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}

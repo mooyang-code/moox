@@ -67,7 +67,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return exchange.LedgerPage{}, ctx.Err()
+				return partialLedger(entries, query.Limit), nil
 			case <-timer.C:
 			}
 		}
@@ -82,7 +82,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		data, err := a.request(ctx, http.MethodGet, path, values, nil, true)
 		if err != nil {
 			// 翻到一半被限频：已取到的照样返回，标记还有更早的。
-			if requests > 0 && exchange.NotAccepted(err) {
+			if requests > 0 && (ctx.Err() != nil || exchange.NotAccepted(err)) {
 				return partialLedger(entries, query.Limit), nil
 			}
 			return exchange.LedgerPage{}, err
@@ -92,6 +92,10 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 			return exchange.LedgerPage{}, rejected("decode bills", err)
 		}
 		for _, row := range rows {
+			// 同一个统一账户可能分别登记成现货、永续两个执行账户：交易类账单只留本市场的，划转、利息等没有 instType 的都留。
+			if row.InstType != "" && !a.billInMarket(row.InstType) {
+				continue
+			}
 			rowEntries, err := billEntries(row)
 			if err != nil {
 				return exchange.LedgerPage{}, err
@@ -105,6 +109,13 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		after = rows[len(rows)-1].BillID
 	}
 	return partialLedger(entries, query.Limit), nil
+}
+
+func (a *Adapter) billInMarket(instType string) bool {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		return instType == "SWAP" || instType == "FUTURES"
+	}
+	return instType == "SPOT" || instType == "MARGIN"
 }
 
 func partialLedger(entries []exchange.LedgerEntry, limit int) exchange.LedgerPage {

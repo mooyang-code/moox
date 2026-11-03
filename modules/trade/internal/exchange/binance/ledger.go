@@ -55,6 +55,10 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		from := max(start, end-window+1)
 		rows, err := a.incomePage(ctx, from, end)
 		if err != nil {
+			// 查询到点或翻到一半被限频：已取到的照样返回，标记还有更早的。
+			if requests > 0 && (ctx.Err() != nil || exchange.NotAccepted(err)) {
+				return exchange.LedgerPage{Entries: newestLedger(entries, query.Limit), HasMore: true}, nil
+			}
 			return exchange.LedgerPage{}, err
 		}
 		if len(rows) >= incomePageLimit && window > 1 {

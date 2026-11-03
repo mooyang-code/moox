@@ -110,3 +110,20 @@ func TestBillsLedgerReturnsPartialWhenRateLimited(t *testing.T) {
 		t.Fatalf("len=%d hasMore=%v", len(page.Entries), page.HasMore)
 	}
 }
+
+func TestBillsLedgerKeepsOnlyOwnMarketTradeBills(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		ok(w, `[{"billId":"3","instType":"SPOT","type":"2","ccy":"BTC","balChg":"0.1","ts":"1700000000003"},
+			{"billId":"2","instType":"SWAP","type":"8","ccy":"USDT","balChg":"-0.2","ts":"1700000000002"},
+			{"billId":"1","instType":"","type":"1","ccy":"USDT","balChg":"100","ts":"1700000000001"}]`)
+	}))
+	defer server.Close()
+	now := time.Now()
+	page, err := swapAdapter(server.URL).ListLedger(context.Background(), exchange.LedgerQuery{Start: now.Add(-time.Hour), End: now, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 2 || page.Entries[0].ID != "2" || page.Entries[1].Type != exchange.LedgerTransfer {
+		t.Fatalf("entries = %+v", page.Entries)
+	}
+}

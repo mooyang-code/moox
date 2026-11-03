@@ -217,7 +217,8 @@ func (s *Service) FlattenLogicalAccount(
 		return FlattenResult{Action: action}, err
 	}
 	if other != nil {
-		return runningFlattenResult(*other), nil
+		result, _, err := runningFlattenFor(*other, command)
+		return result, err
 	}
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, command.SpaceID, command.LogicalAccountID, true,
@@ -313,10 +314,21 @@ func (s *Service) otherRunningFlatten(ctx context.Context, command FlattenComman
 	}
 	for _, action := range running {
 		if action.ActionType == "FLATTEN" && action.ActionID != command.ActionID {
-			return runningFlattenResult(action), true, nil
+			return runningFlattenFor(action, command)
 		}
 	}
 	return FlattenResult{}, false, nil
+}
+
+// runningFlattenFor 决定另一个运行中清仓能不能代表这次请求：整组清仓覆盖所有成员，同一账户的清仓覆盖这个账户，
+// 返回它的进度；只平别的成员的清仓不覆盖这次请求，返回“组合账户正忙”，否则前端会把那次的完成当成本账户平完了。
+func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand) (FlattenResult, bool, error) {
+	var request flattenRequest
+	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
+	if request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID) {
+		return runningFlattenResult(other), true, nil
+	}
+	return FlattenResult{Action: other}, true, ErrLogicalAccountBusy
 }
 
 // runningFlattenResult 返回运行中清仓已落库的进度；诊断信息不当作这次调用的错误。

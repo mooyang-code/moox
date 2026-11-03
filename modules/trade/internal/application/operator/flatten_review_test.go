@@ -288,3 +288,26 @@ func TestFlattenTradingAccountRequiresLogicalMembership(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrNotInLogicalAccount)
 }
+
+func TestFlattenTradingAccountIsBusyWhileAnotherMemberFlattens(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
+		SpaceID: "space-1", ActionID: "flatten-a", LogicalAccountID: "logical-1", ActionType: "FLATTEN",
+		RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-a"}`, Reason: "close a", Status: "RUNNING",
+	})
+	require.NoError(t, err)
+	service := fixture.service()
+
+	// 平 account-b 时另一个成员正在单独平仓：那次的进度不代表 account-b，报正忙。
+	_, err = service.FlattenTradingAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-b", TradingAccountID: "account-b", Reason: "close b",
+	})
+	require.ErrorIs(t, err, ErrLogicalAccountBusy)
+	// 同一个账户再发起，返回那次的进度。
+	result, err := service.FlattenTradingAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-a2", TradingAccountID: "account-a", Reason: "close a again",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "flatten-a", result.Action.ActionID)
+	require.Empty(t, fixture.orders.specs)
+}
