@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -329,7 +330,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	targets, err := decodeCurrentTargets(row.TargetsJSON)
+	targets, err := decodeCurrentTargetsCached(row.SpaceID+"\x00"+row.LogicalAccountID, row.TargetsJSON)
 	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
@@ -424,6 +425,30 @@ func encodeBlockedTargets(targets []BlockedTarget) (string, error) {
 		return "", fmt.Errorf("%w: encode blocked targets: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+// targetDecodeCache 按组合账户记住最近一次解码的目标：下单前每笔子单都要读一次目标，
+// 约 500 个标的的校验（逐个解析数量再规范化）比查询本身贵得多。只在原文完全相同时复用，
+// 每个组合账户只留一份，不会随目标数量增长。
+var targetDecodeCache sync.Map
+
+type decodedTargets struct {
+	raw     string
+	targets []InstrumentTarget
+}
+
+func decodeCurrentTargetsCached(key, raw string) ([]InstrumentTarget, error) {
+	if value, ok := targetDecodeCache.Load(key); ok {
+		if entry := value.(decodedTargets); entry.raw == raw {
+			return append(make([]InstrumentTarget, 0, len(entry.targets)), entry.targets...), nil
+		}
+	}
+	targets, err := decodeCurrentTargets(raw)
+	if err != nil {
+		return nil, err
+	}
+	targetDecodeCache.Store(key, decodedTargets{raw: raw, targets: append(make([]InstrumentTarget, 0, len(targets)), targets...)})
+	return targets, nil
 }
 
 // Current executable targets are not receipts: unknown fields must never

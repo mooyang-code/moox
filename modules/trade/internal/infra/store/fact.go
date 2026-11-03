@@ -612,6 +612,12 @@ func (s *Store) ListOrdersForAccount(
 	return records, nil
 }
 
+// activeOrderStates 是未结束订单的全部状态。查未结束订单一律写成 c_state IN，
+// NOT IN 用不上状态索引，会随历史订单数线性变慢。
+var activeOrderStates = []string{
+	"PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING", "CANCEL_UNKNOWN",
+}
+
 // ListActiveOrdersForAccount 只读未结束的订单。状态写成 IN 才能用上 idx_trade_orders_account_state。
 func (s *Store) ListActiveOrdersForAccount(
 	ctx context.Context,
@@ -620,9 +626,7 @@ func (s *Store) ListActiveOrdersForAccount(
 ) ([]OrderRecord, error) {
 	var rows []orderRow
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, []string{
-			"PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING", "CANCEL_UNKNOWN",
-		}).
+		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, activeOrderStates).
 		Order("c_order_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -773,9 +777,7 @@ func (s *Store) ListOrders(
 		db = db.Where("c_state = ?", query.State)
 	}
 	if query.OnlyOpen {
-		db = db.Where("c_state NOT IN ?", []string{
-			"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED",
-		})
+		db = db.Where("c_state IN ?", activeOrderStates)
 	}
 	if query.StartTime > 0 {
 		db = db.Where("c_ctime >= datetime(? / 1000, 'unixepoch')", query.StartTime)

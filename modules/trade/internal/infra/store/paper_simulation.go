@@ -185,8 +185,7 @@ func (tx *Tx) closedPaperPositionValuation(account TradingAccountRecord) (shared
 func (tx *Tx) listOpenOrdersForAccount(spaceID, tradingAccountID string) ([]OrderRecord, error) {
 	var rows []orderRow
 	err := tx.db.Table("t_trade_orders").
-		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state NOT IN ?", spaceID, tradingAccountID,
-			[]string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"}).
+		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, activeOrderStates).
 		Order("c_order_id").Find(&rows).Error
 	if err != nil {
 		return nil, err

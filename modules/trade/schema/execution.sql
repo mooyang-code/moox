@@ -94,6 +94,14 @@ ON t_trade_orders (
     c_mtime
 );
 
+CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
+ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
+
+-- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_paper_open
+ON t_trade_orders (c_first_match_pending, c_space_id, c_order_id)
+WHERE c_state = 'OPEN';
+
 CREATE TABLE IF NOT EXISTS t_order_fills (
     c_space_id TEXT NOT NULL,
     c_fill_id TEXT NOT NULL,
