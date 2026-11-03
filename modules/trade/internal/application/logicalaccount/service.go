@@ -100,8 +100,11 @@ func (s *Service) UpdateName(
 	logicalAccountID string,
 	name string,
 ) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil || strings.TrimSpace(name) == "" {
+	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	if strings.TrimSpace(name) == "" {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 名称不能为空", store.ErrInvalidRecord)
 	}
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
 	if lockErr != nil {
@@ -328,8 +331,11 @@ func (s *Service) Pause(
 	logicalAccountID string,
 	reason string,
 ) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil || strings.TrimSpace(reason) == "" {
+	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	if strings.TrimSpace(reason) == "" {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 暂停原因不能为空", store.ErrInvalidRecord)
 	}
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
 	if lockErr != nil {

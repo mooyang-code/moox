@@ -993,11 +993,16 @@ func (e *Executor) placeAction(
 			if quantity.Cmp(sellable) > 0 {
 				quantity = sellable
 			}
-			if belowMinimumQuantity(quantity, candidate.instrument) {
+			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
+			// 截断到可卖量后数量可能低于最小值或最小名义金额，交易所会拒单。
+			tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
+			if notionalErr != nil {
+				return placement{}, notionalErr
+			}
+			if belowMinimumQuantity(quantity, candidate.instrument) || tooSmallNotional {
 				capacityErrors = append(capacityErrors, accountID+": 可卖量不足")
 				continue
 			}
-			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
 		}
 		if target.InstanceID != "" {
 			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{

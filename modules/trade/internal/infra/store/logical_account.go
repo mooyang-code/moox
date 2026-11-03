@@ -169,7 +169,7 @@ func (s *Store) ListLogicalAccounts(
 
 // ClaimLogicalAccountSession atomically assigns a Strategy instance/session
 // to a logical account. expectedFence is the caller's previously observed
-// auth_fence and is mandatory for the V2 session path. Keeping it out of the
+// auth_fence and is mandatory. Keeping it out of the
 // public target contract makes delayed management calls harmless even when a
 // new session has already claimed the account. The returned fence is the value
 // to retain for the next CAS. changed is false for an identical session retry
@@ -520,17 +520,6 @@ func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 		AutomationState: logicalaccount.AutomationState(record.AutomationState),
 		PauseReason:     record.PauseReason,
 	}
-}
-
-func (tx *Tx) requireStrategyControl(spaceID, logicalAccountID string) error {
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return err
-	}
-	if account.ControlMode != string(logicalaccount.ControlStrategy) {
-		return fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
-	}
-	return nil
 }
 
 func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {

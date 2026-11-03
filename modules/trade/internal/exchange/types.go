@@ -184,13 +184,9 @@ const (
 type OrderStatus string
 
 const (
-	OrderStatusPending           OrderStatus = "PENDING"
-	OrderStatusSubmitting        OrderStatus = "SUBMITTING"
 	OrderStatusSubmitUnknown     OrderStatus = "SUBMIT_UNKNOWN"
 	OrderStatusOpen              OrderStatus = "OPEN"
 	OrderStatusPartiallyFilled   OrderStatus = "PARTIALLY_FILLED"
-	OrderStatusCanceling         OrderStatus = "CANCELING"
-	OrderStatusCancelUnknown     OrderStatus = "CANCEL_UNKNOWN"
 	OrderStatusFilled            OrderStatus = "FILLED"
 	OrderStatusCanceled          OrderStatus = "CANCELED"
 	OrderStatusPartiallyCanceled OrderStatus = "PARTIALLY_CANCELED"

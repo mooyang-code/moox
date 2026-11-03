@@ -623,14 +623,14 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		}
 		if membershipErr != nil || !member.Enabled || owner.LogicalAccountID != action.LogicalAccountID || (action.ActionType == "SUBMIT_ORDER" && owner.ControlMode != "MANUAL") {
 			if _, discardErr := s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID); discardErr != nil {
-				return s.deferChildOrderError(ctx, action, discardErr)
+				return s.submissionOrderError(ctx, action, discardErr)
 			}
 			return s.failManualAction(ctx, action, errors.New("manual order logical account membership changed"), nil)
 		}
 		if s.manualExpired(progress) {
 			_, err = s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID)
 			if err != nil {
-				return s.deferChildOrderError(ctx, action, err)
+				return s.submissionOrderError(ctx, action, err)
 			}
 			return s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)
 		}

@@ -52,8 +52,6 @@ type ExchangeSession struct {
 	syncRequested chan struct{}
 }
 
-type TradingSession = ExchangeSession
-
 func (s *ExchangeSession) Ready() bool {
 	if s == nil || !s.ready.Load() {
 		return false

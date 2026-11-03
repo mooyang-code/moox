@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sort"
 	"sync"
-	"sync/atomic"
 )
 
 type AccountSampler interface {
@@ -20,11 +19,9 @@ type EquitySampler struct {
 	mu      sync.Mutex
 	// runSem 是容量 1 的信号量（等待期间可响应 context）：后台 Run 持有它做现货报价估值时，
 	// 带期限的定时器调用不能无限排队，超时直接返回，待采样任务留在队列里由后台 worker 处理。
-	runSem    chan struct{}
-	runOnce   sync.Once
-	pending   map[string]struct{}
-	degraded  atomic.Bool
-	lastError atomic.Value
+	runSem  chan struct{}
+	runOnce sync.Once
+	pending map[string]struct{}
 }
 
 func NewEquitySampler(service AccountSampler) *EquitySampler {
@@ -90,8 +87,6 @@ func (s *EquitySampler) runPending(ctx context.Context) error {
 			if ctx.Err() != nil {
 				s.requeue([]string{id})
 			}
-			s.degraded.Store(true)
-			s.lastError.Store(err.Error())
 			if first == nil {
 				first = err
 			}

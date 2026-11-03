@@ -228,13 +228,13 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		for _, filter := range item.Filters {
 			switch filter.FilterType {
 			case "PRICE_FILTER":
-				instrument.PriceTick, err = parseOptionalDecimal(filter.TickSize)
+				instrument.PriceTick, err = decimalOrZero(filter.TickSize)
 			case "LOT_SIZE", "MARKET_LOT_SIZE":
 				// LOT_SIZE wins when both filters are present.
 				if instrument.ExchangeQuantityStep.IsZero() || filter.FilterType == "LOT_SIZE" {
-					instrument.ExchangeQuantityStep, err = parseOptionalDecimal(filter.StepSize)
+					instrument.ExchangeQuantityStep, err = decimalOrZero(filter.StepSize)
 					if err == nil {
-						instrument.MinExchangeQuantity, err = parseOptionalDecimal(filter.MinQty)
+						instrument.MinExchangeQuantity, err = decimalOrZero(filter.MinQty)
 					}
 				}
 			case "NOTIONAL", "MIN_NOTIONAL":
@@ -242,7 +242,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 				if rawNotional == "" {
 					rawNotional = filter.MinNotional
 				}
-				instrument.MinNotional, err = parseOptionalDecimal(rawNotional)
+				instrument.MinNotional, err = decimalOrZero(rawNotional)
 			}
 			if err != nil {
 				return nil, typedRejected("decode instrument decimal", err)
@@ -1219,10 +1219,6 @@ func decimalOrZero(raw string) (shared.Decimal, error) {
 		return shared.Decimal{}, typedRejected("invalid Exchange decimal", err)
 	}
 	return value, nil
-}
-
-func parseOptionalDecimal(raw string) (shared.Decimal, error) {
-	return decimalOrZero(raw)
 }
 
 func cloneValues(values url.Values) url.Values {

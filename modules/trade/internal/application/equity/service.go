@@ -224,83 +224,81 @@ func (s *Service) sampleLogicalAccount(
 	logical store.LogicalAccountRecord,
 	sampled *store.TradingAccountSnapshot,
 ) error {
-	{
-		// Disabled memberships are not executable and must not contribute
-		// capital to a logical account target conversion.
-		members, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, false)
-		if memberErr != nil {
-			return memberErr
-		}
-		contains := false
-		for _, member := range members {
-			if member.TradingAccountID == accountID {
-				contains = true
-				break
-			}
-		}
-		if !contains {
-			return nil
-		}
-		equity, available, used, unrealized := shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero()
-		allPnl := true
-		logicalValid := true
-		var sourceTime int64
-		// Store ordering is priority/account ID, which is not the same as the
-		// account that produced this fresh sample. Prefer that member so a
-		// shared LIVE credential cannot skip the newest snapshot.
-		orderedMembers := append([]store.LogicalAccountMemberRecord(nil), members...)
-		for i := range orderedMembers {
-			if orderedMembers[i].TradingAccountID == accountID {
-				orderedMembers[0], orderedMembers[i] = orderedMembers[i], orderedMembers[0]
-				break
-			}
-		}
-		for _, member := range orderedMembers {
-			memberAccount, accountErr := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
-			if accountErr != nil {
-				return accountErr
-			}
-			if memberAccount.Status != string(exchange.AccountStatusEnabled) || !memberAccount.Ready {
-				logicalValid = false
-				break
-			}
-			memberSnapshot := confirmedSnapshot(memberAccount)
-			if member.TradingAccountID == accountID && sampled != nil {
-				memberSnapshot = *sampled
-			} else if exchange.RuleFor(memberAccount.MarketType).PositionFromBalance {
-				valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
-				if valueErr != nil {
-					return valueErr
-				}
-				memberSnapshot = valued
-			}
-			if !s.sourceFresh(memberSnapshot.ExchangeUpdatedAt) {
-				logicalValid = false
-				break
-			}
-			equity = equity.Add(decimal(memberSnapshot.Equity))
-			available = available.Add(decimal(memberSnapshot.AvailableFunds))
-			used = used.Add(decimal(memberSnapshot.UsedMargin))
-			unrealized = unrealized.Add(decimal(memberSnapshot.UnrealizedPnL))
-			if strings.TrimSpace(memberSnapshot.UnrealizedPnL) == "" {
-				allPnl = false
-			}
-			memberSourceTime := memberSnapshot.ExchangeUpdatedAt
-			if sourceTime == 0 || memberSourceTime < sourceTime {
-				sourceTime = memberSourceTime
-			}
-		}
-		if !logicalValid || sourceTime <= 0 {
-			return nil
-		}
-		var pnl *string
-		if allPnl {
-			value := unrealized.String()
-			pnl = &value
-		}
-		point := store.EquityPointRecord{SpaceID: spaceID, LogicalAccountID: logical.LogicalAccountID, BucketTime: MinuteBucket(s.now()), Equity: equity.String(), AvailableFunds: available.String(), UsedMargin: used.String(), UnrealizedPnL: pnl, SourceTime: sourceTime}
-		return s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpsertLogicalAccountEquityPoint(point) })
+	// Disabled memberships are not executable and must not contribute
+	// capital to a logical account target conversion.
+	members, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, false)
+	if memberErr != nil {
+		return memberErr
 	}
+	contains := false
+	for _, member := range members {
+		if member.TradingAccountID == accountID {
+			contains = true
+			break
+		}
+	}
+	if !contains {
+		return nil
+	}
+	equity, available, used, unrealized := shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero()
+	allPnl := true
+	logicalValid := true
+	var sourceTime int64
+	// Store ordering is priority/account ID, which is not the same as the
+	// account that produced this fresh sample. Prefer that member so its
+	// newest snapshot is used.
+	orderedMembers := append([]store.LogicalAccountMemberRecord(nil), members...)
+	for i := range orderedMembers {
+		if orderedMembers[i].TradingAccountID == accountID {
+			orderedMembers[0], orderedMembers[i] = orderedMembers[i], orderedMembers[0]
+			break
+		}
+	}
+	for _, member := range orderedMembers {
+		memberAccount, accountErr := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if accountErr != nil {
+			return accountErr
+		}
+		if memberAccount.Status != string(exchange.AccountStatusEnabled) || !memberAccount.Ready {
+			logicalValid = false
+			break
+		}
+		memberSnapshot := confirmedSnapshot(memberAccount)
+		if member.TradingAccountID == accountID && sampled != nil {
+			memberSnapshot = *sampled
+		} else if exchange.RuleFor(memberAccount.MarketType).PositionFromBalance {
+			valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
+			if valueErr != nil {
+				return valueErr
+			}
+			memberSnapshot = valued
+		}
+		if !s.sourceFresh(memberSnapshot.ExchangeUpdatedAt) {
+			logicalValid = false
+			break
+		}
+		equity = equity.Add(decimal(memberSnapshot.Equity))
+		available = available.Add(decimal(memberSnapshot.AvailableFunds))
+		used = used.Add(decimal(memberSnapshot.UsedMargin))
+		unrealized = unrealized.Add(decimal(memberSnapshot.UnrealizedPnL))
+		if strings.TrimSpace(memberSnapshot.UnrealizedPnL) == "" {
+			allPnl = false
+		}
+		memberSourceTime := memberSnapshot.ExchangeUpdatedAt
+		if sourceTime == 0 || memberSourceTime < sourceTime {
+			sourceTime = memberSourceTime
+		}
+	}
+	if !logicalValid || sourceTime <= 0 {
+		return nil
+	}
+	var pnl *string
+	if allPnl {
+		value := unrealized.String()
+		pnl = &value
+	}
+	point := store.EquityPointRecord{SpaceID: spaceID, LogicalAccountID: logical.LogicalAccountID, BucketTime: MinuteBucket(s.now()), Equity: equity.String(), AvailableFunds: available.String(), UsedMargin: used.String(), UnrealizedPnL: pnl, SourceTime: sourceTime}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpsertLogicalAccountEquityPoint(point) })
 }
 
 func decimal(raw string) shared.Decimal {

@@ -335,19 +335,18 @@ func (h *LogicalAccountServer) FlattenLogicalAccount(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	if err == nil && h.Flatten == nil {
-		err = fmt.Errorf("trade RPC: flatten service is not configured")
+	if h.Flatten == nil {
+		return &tradepb.FlattenLogicalAccountRsp{
+			RetInfo: errorInfo(fmt.Errorf("trade RPC: flatten service is not configured")),
+		}, nil
 	}
-	var action store.OperatorActionRecord
-	if err == nil {
-		action, err = h.Flatten(
-			ctx,
-			spaceID,
-			req.GetActionId(),
-			req.GetLogicalAccountId(),
-			req.GetReason(),
-		)
-	}
+	action, err := h.Flatten(
+		ctx,
+		spaceID,
+		req.GetActionId(),
+		req.GetLogicalAccountId(),
+		req.GetReason(),
+	)
 	return &tradepb.FlattenLogicalAccountRsp{
 		RetInfo: errorInfo(err), Action: operatorActionToPB(action),
 	}, nil
