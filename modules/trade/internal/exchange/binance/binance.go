@@ -123,15 +123,16 @@ func (a *Adapter) path(spot, swap string) string {
 	return spot
 }
 
-func (a *Adapter) signedQuery(values url.Values) url.Values {
+// signedQuery 返回签好名的原始查询串：签名追加在末尾，签名用的正是发送的这段字节。
+func (a *Adapter) signedQuery(values url.Values) string {
 	query := cloneValues(values)
 	query.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	query.Set("recvWindow", strconv.Itoa(recvWindow))
-	query.Set("signature", hex.EncodeToString(hmacSha256(
+	encoded := query.Encode()
+	return encoded + "&signature=" + hex.EncodeToString(hmacSha256(
 		[]byte(a.credential.APISecret),
-		[]byte(query.Encode()),
-	)))
-	return query
+		[]byte(encoded),
+	))
 }
 
 func (a *Adapter) request(
@@ -152,9 +153,9 @@ func (a *Adapter) signedRequest(
 	order bool,
 ) ([]byte, error) {
 	return a.client().Do(ctx, &httpclient.Request{
-		Method: method,
-		Path:   path,
-		Query:  a.signedQuery(values),
+		Method:   method,
+		Path:     path,
+		RawQuery: a.signedQuery(values),
 		Headers: map[string]string{
 			"X-MBX-APIKEY": a.credential.APIKey,
 		},
@@ -794,9 +795,13 @@ type tradePayload struct {
 	CommissionAsset string      `json:"commissionAsset"`
 	RealizedPnl     string      `json:"realizedPnl"`
 	Time            int64       `json:"time"`
-	IsBuyer         bool        `json:"isBuyer"`
-	IsMaker         bool        `json:"isMaker"`
-	PositionSide    string      `json:"positionSide"`
+	// 现货 myTrades 用 isBuyer/isMaker；U 本位 userTrades 用 buyer/maker，并带 side。
+	IsBuyer      bool   `json:"isBuyer"`
+	IsMaker      bool   `json:"isMaker"`
+	Buyer        bool   `json:"buyer"`
+	Maker        bool   `json:"maker"`
+	Side         string `json:"side"`
+	PositionSide string `json:"positionSide"`
 }
 
 func (a *Adapter) ListRecentFills(
@@ -1051,7 +1056,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	side := exchange.SideSell
+	side, maker := exchange.SideSell, row.IsMaker
 	if row.IsBuyer {
 		side = exchange.SideBuy
 	}
@@ -1061,9 +1066,13 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
+		side, maker = exchange.Side(row.Side), row.Maker
+		if !side.Valid() {
+			return exchange.Fill{}, typedRejected("futures fill has no valid side", nil)
+		}
 	}
 	role := "TAKER"
-	if row.IsMaker {
+	if maker {
 		role = "MAKER"
 	}
 	return exchange.Fill{
@@ -1142,6 +1151,9 @@ func classifyAPIError(err error, raw []byte) error {
 		typed.Kind = exchange.ErrorOrderRateLimited
 	case "-1008":
 		typed.Kind = exchange.ErrorThrottled
+	case "-1006", "-1007":
+		// 官方说明：后端响应异常或超时，执行状态未知。
+		typed.Kind = exchange.ErrorTransportUnknown
 	case "-1021":
 		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
 		typed.Kind = exchange.ErrorTransportUnknown
@@ -1170,7 +1182,8 @@ func mapOrderStatus(status string, filled shared.Decimal) exchange.OrderStatus {
 			return exchange.OrderStatusPartiallyCanceled
 		}
 		return exchange.OrderStatusCanceled
-	case "EXPIRED":
+	case "EXPIRED", "EXPIRED_IN_MATCH":
+		// EXPIRED_IN_MATCH 是自成交保护让订单过期，已成交部分由成交入账补齐。
 		return exchange.OrderStatusExpired
 	case "REJECTED":
 		return exchange.OrderStatusRejected

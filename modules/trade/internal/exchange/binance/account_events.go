@@ -292,29 +292,18 @@ func (a *Adapter) keepListenKeyAlive(
 	}
 }
 
-type privateOrderFields struct {
-	Execution       string      `json:"x"`
-	Symbol          string      `json:"s"`
-	Side            string      `json:"S"`
-	OrderType       string      `json:"o"`
-	TimeInForce     string      `json:"f"`
-	ClientID        string      `json:"c"`
-	OrderID         json.Number `json:"i"`
-	OrderStatus     string      `json:"X"`
-	PositionSide    string      `json:"ps"`
-	ReduceOnly      bool        `json:"R"`
-	OriginalQty     string      `json:"q"`
-	FilledQty       string      `json:"z"`
-	AveragePrice    string      `json:"ap"`
-	TradeID         json.Number `json:"t"`
-	LastQty         string      `json:"l"`
-	LastPrice       string      `json:"L"`
-	Fee             string      `json:"n"`
-	FeeAsset        string      `json:"N"`
-	RealizedPnL     string      `json:"rp"`
-	CumulativeQuote string      `json:"Z"`
-	Maker           bool        `json:"m"`
-	TransactionAt   int64       `json:"T"`
+// privateOrder 是私有流订单事件里按精确键取出的字段，现货 executionReport 和合约 ORDER_TRADE_UPDATE 共用。
+type privateOrder struct {
+	payload       orderPayload
+	execution     string
+	tradeID       string
+	lastQty       string
+	lastPrice     string
+	fee           string
+	feeAsset      string
+	realizedPnL   string
+	maker         bool
+	transactionAt int64
 }
 
 func (a *Adapter) dispatchPrivate(
@@ -322,113 +311,182 @@ func (a *Adapter) dispatchPrivate(
 	payload []byte,
 	handler execution.AccountEventHandler,
 ) error {
-	var wrapper struct {
-		Event json.RawMessage `json:"event"`
-	}
-	if err := json.Unmarshal(payload, &wrapper); err != nil {
-		return typedRejected("decode private event wrapper", err)
-	}
-	if len(wrapper.Event) != 0 && string(wrapper.Event) != "null" {
-		payload = wrapper.Event
-	}
-	var root struct {
-		Event string `json:"e"`
-		Time  int64  `json:"E"`
-		// T 是事务（余额实际变更）时间；E 只是消息生成时间，可能晚于 T，不能与 REST 的余额更新时间比较。
-		TransactionTime int64           `json:"T"`
-		Order           json.RawMessage `json:"o"`
-		Account         json.RawMessage `json:"a"`
-	}
-	if err := json.Unmarshal(payload, &root); err != nil {
+	root, err := exactFields(payload)
+	if err != nil {
 		return typedRejected("decode private event", err)
 	}
-	if root.Event == "listenKeyExpired" {
+	// WebSocket API 订阅把事件包在 event 里，listenKey 流直接是事件本身。
+	if _, wrapped := root.value("event"); wrapped {
+		if root, err = root.object("event"); err != nil {
+			return typedRejected("decode private event wrapper", err)
+		}
+	}
+	event, err := root.str("e")
+	if err != nil {
+		return typedRejected("decode private event", err)
+	}
+	// 先按事件类型分派：o、a 在不同事件里类型不同（executionReport 的 o 是订单类型字符串）。
+	var order privateOrder
+	switch event {
+	case "listenKeyExpired", "eventStreamTerminated":
+		// 两者之后都不会再有事件，必须重连订阅；不能当成未知事件忽略。
 		return errListenKeyExpired
-	}
-	if root.Event == "ACCOUNT_UPDATE" {
-		eventTime := root.TransactionTime
-		if eventTime <= 0 {
-			eventTime = root.Time
-		}
-		return a.dispatchFuturesAccount(ctx, eventTime, root.Account, handler)
-	}
-	if root.Event == "outboundAccountPosition" {
-		return a.dispatchSpotAccount(ctx, payload, handler)
-	}
-	var envelope privateOrderFields
-	switch root.Event {
+	case "ACCOUNT_UPDATE":
+		return a.dispatchFuturesAccount(ctx, root, handler)
+	case "outboundAccountPosition":
+		return a.dispatchSpotAccount(ctx, root, handler)
 	case "ORDER_TRADE_UPDATE":
-		if len(root.Order) == 0 || root.Order[0] != '{' {
-			return typedRejected("missing futures order event", nil)
+		body, objectErr := root.object("o")
+		if objectErr != nil {
+			return typedRejected("decode futures private order", objectErr)
 		}
-		if err := json.Unmarshal(root.Order, &envelope); err != nil {
+		order, err = futuresPrivateOrder(body)
+		if err != nil {
 			return typedRejected("decode futures private order", err)
 		}
 	case "executionReport":
-		if err := json.Unmarshal(payload, &envelope); err != nil {
+		order, err = spotPrivateOrder(root)
+		if err != nil {
 			return typedRejected("decode spot private order", err)
 		}
 	default:
 		return nil
 	}
-	order, err := a.orderFromPayload(orderPayload{
-		OrderID: envelope.OrderID, ClientOrderID: envelope.ClientID,
-		Symbol: envelope.Symbol, Type: envelope.OrderType,
-		TimeInForce: envelope.TimeInForce, Side: envelope.Side,
-		PositionSide: envelope.PositionSide, OrigQty: envelope.OriginalQty,
-		ExecutedQty: envelope.FilledQty, AvgPrice: envelope.AveragePrice,
-		CumulativeQuoteQty: envelope.CumulativeQuote,
-		ReduceOnly:         envelope.ReduceOnly, Status: envelope.OrderStatus,
-		UpdateTime: envelope.TransactionAt,
-	})
+	current, err := a.orderFromPayload(order.payload)
 	if err != nil {
 		return err
 	}
-	if err := handler.OnOrder(ctx, order); err != nil {
+	if err := handler.OnOrder(ctx, current); err != nil {
 		return err
 	}
-	if envelope.Execution != "TRADE" || envelope.TradeID.String() == "" {
+	// 现货没有成交时 t 是 -1。
+	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
 		return nil
 	}
-	quantity, err := decimalOrZero(envelope.LastQty)
+	quantity, err := decimalOrZero(order.lastQty)
 	if err != nil {
 		return err
 	}
-	price, err := decimalOrZero(envelope.LastPrice)
+	price, err := decimalOrZero(order.lastPrice)
 	if err != nil {
 		return err
 	}
-	fee, err := decimalOrZero(envelope.Fee)
+	fee, err := decimalOrZero(order.fee)
 	if err != nil {
 		return err
 	}
-	pnl, err := decimalOrZero(envelope.RealizedPnL)
+	pnl, err := decimalOrZero(order.realizedPnL)
 	if err != nil {
 		return err
 	}
 	positionSide := exchange.PositionSideUnspecified
 	if a.config.MarketType == exchange.MarketTypeSwap {
-		if envelope.PositionSide != "" && envelope.PositionSide != "BOTH" {
+		if order.payload.PositionSide != "" && order.payload.PositionSide != "BOTH" {
 			return typedRejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
 	return handler.OnFill(ctx, exchange.Fill{
-		ExchangeTradeID: envelope.TradeID.String(),
-		ExchangeOrderID: envelope.OrderID.String(),
-		ClientOrderID:   envelope.ClientID,
-		ExchangeSymbol:  envelope.Symbol,
-		Side:            exchange.Side(envelope.Side),
+		ExchangeTradeID: order.tradeID,
+		ExchangeOrderID: order.payload.OrderID.String(),
+		ClientOrderID:   order.payload.ClientOrderID,
+		ExchangeSymbol:  order.payload.Symbol,
+		Side:            exchange.Side(order.payload.Side),
 		PositionSide:    positionSide,
 		Quantity:        quantity,
 		Price:           price,
 		Fee:             fee.Abs(),
-		FeeAsset:        envelope.FeeAsset,
+		FeeAsset:        order.feeAsset,
 		RealizedPnL:     pnl,
 		SettlementAsset: a.config.SettlementAsset,
-		LiquidityRole:   binanceLiquidityRole(envelope.Maker),
-		TradedAt:        millis(envelope.TransactionAt),
+		LiquidityRole:   binanceLiquidityRole(order.maker),
+		TradedAt:        millis(order.transactionAt),
 	})
+}
+
+// spotPrivateOrder 解析现货 executionReport。撤单事件的 c 是撤单请求自己的单号，原单号在 C；
+// 其他事件（含改单 REPLACED）一律用 c。
+func spotPrivateOrder(event fields) (privateOrder, error) {
+	for _, key := range []string{"s", "i", "x", "X"} {
+		if err := event.required(key); err != nil {
+			return privateOrder{}, err
+		}
+	}
+	var order privateOrder
+	var err error
+	var orderID, clientID, original string
+	values := []struct {
+		key    string
+		target *string
+	}{
+		{"s", &order.payload.Symbol}, {"i", &orderID}, {"c", &clientID}, {"C", &original},
+		{"S", &order.payload.Side}, {"o", &order.payload.Type}, {"f", &order.payload.TimeInForce},
+		{"q", &order.payload.OrigQty}, {"p", &order.payload.Price}, {"X", &order.payload.Status},
+		{"z", &order.payload.ExecutedQty}, {"Z", &order.payload.CumulativeQuoteQty},
+		{"x", &order.execution}, {"t", &order.tradeID}, {"l", &order.lastQty},
+		{"L", &order.lastPrice}, {"n", &order.fee}, {"N", &order.feeAsset},
+	}
+	for _, value := range values {
+		if *value.target, err = event.str(value.key); err != nil {
+			return privateOrder{}, err
+		}
+	}
+	if order.maker, err = event.bool("m"); err != nil {
+		return privateOrder{}, err
+	}
+	if order.transactionAt, err = event.int64("T"); err != nil {
+		return privateOrder{}, err
+	}
+	if order.payload.Time, err = event.int64("O"); err != nil {
+		return privateOrder{}, err
+	}
+	if order.execution == "CANCELED" && original != "" {
+		clientID = original
+	}
+	order.payload.OrderID = json.Number(orderID)
+	order.payload.ClientOrderID = clientID
+	order.payload.UpdateTime = order.transactionAt
+	return order, nil
+}
+
+// futuresPrivateOrder 解析合约 ORDER_TRADE_UPDATE 的 o 对象。
+func futuresPrivateOrder(body fields) (privateOrder, error) {
+	for _, key := range []string{"s", "i", "x", "X"} {
+		if err := body.required(key); err != nil {
+			return privateOrder{}, err
+		}
+	}
+	var order privateOrder
+	var err error
+	var orderID string
+	values := []struct {
+		key    string
+		target *string
+	}{
+		{"s", &order.payload.Symbol}, {"i", &orderID}, {"c", &order.payload.ClientOrderID},
+		{"S", &order.payload.Side}, {"o", &order.payload.Type}, {"f", &order.payload.TimeInForce},
+		{"ps", &order.payload.PositionSide}, {"q", &order.payload.OrigQty}, {"p", &order.payload.Price},
+		{"z", &order.payload.ExecutedQty}, {"ap", &order.payload.AvgPrice}, {"X", &order.payload.Status},
+		{"x", &order.execution}, {"t", &order.tradeID}, {"l", &order.lastQty},
+		{"L", &order.lastPrice}, {"n", &order.fee}, {"N", &order.feeAsset}, {"rp", &order.realizedPnL},
+	}
+	for _, value := range values {
+		if *value.target, err = body.str(value.key); err != nil {
+			return privateOrder{}, err
+		}
+	}
+	if order.payload.ReduceOnly, err = body.bool("R"); err != nil {
+		return privateOrder{}, err
+	}
+	if order.maker, err = body.bool("m"); err != nil {
+		return privateOrder{}, err
+	}
+	if order.transactionAt, err = body.int64("T"); err != nil {
+		return privateOrder{}, err
+	}
+	order.payload.OrderID = json.Number(orderID)
+	order.payload.UpdateTime = order.transactionAt
+	return order, nil
 }
 
 func binanceLiquidityRole(maker bool) string {
@@ -440,26 +498,27 @@ func binanceLiquidityRole(maker bool) string {
 
 func (a *Adapter) dispatchFuturesAccount(
 	ctx context.Context,
-	eventTime int64,
-	raw json.RawMessage,
+	root fields,
 	handler execution.AccountEventHandler,
 ) error {
-	var payload struct {
-		Balances []struct {
-			Asset  string `json:"a"`
-			Wallet string `json:"wb"`
-			Cross  string `json:"cw"`
-		} `json:"B"`
-		Positions []struct {
-			Symbol       string `json:"s"`
-			Quantity     string `json:"pa"`
-			EntryPrice   string `json:"ep"`
-			Unrealized   string `json:"up"`
-			MarginType   string `json:"mt"`
-			PositionSide string `json:"ps"`
-		} `json:"P"`
+	// T 是事务（余额实际变更）时间；E 只是消息生成时间，可能晚于 T，不能与 REST 的余额更新时间比较。
+	eventTime, err := root.int64("T")
+	if err == nil && eventTime <= 0 {
+		eventTime, err = root.int64("E")
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	if err != nil {
+		return typedRejected("decode futures account event", err)
+	}
+	body, err := root.object("a")
+	if err != nil {
+		return typedRejected("decode futures account event", err)
+	}
+	balances, err := body.objects("B")
+	if err != nil {
+		return typedRejected("decode futures account event", err)
+	}
+	positions, err := body.objects("P")
+	if err != nil {
 		return typedRejected("decode futures account event", err)
 	}
 	snapshot := exchange.AccountSnapshot{
@@ -467,42 +526,56 @@ func (a *Adapter) dispatchFuturesAccount(
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 		RequiresSync:      true,
 	}
-	for _, row := range payload.Balances {
-		total, err := decimalOrZero(row.Wallet)
+	for _, row := range balances {
+		var asset, wallet, cross string
+		for key, target := range map[string]*string{"a": &asset, "wb": &wallet, "cw": &cross} {
+			if *target, err = row.str(key); err != nil {
+				return typedRejected("decode futures account event", err)
+			}
+		}
+		total, err := decimalOrZero(wallet)
 		if err != nil {
 			return err
 		}
-		available, err := decimalOrZero(row.Cross)
+		available, err := decimalOrZero(cross)
 		if err != nil {
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: row.Asset, Available: available, Locked: total.Sub(available), Total: total,
+			Asset: asset, Available: available, Locked: total.Sub(available), Total: total,
 		})
 	}
 	if err := handler.OnAccountSnapshot(ctx, snapshot); err != nil {
 		return err
 	}
-	for _, row := range payload.Positions {
-		if row.PositionSide != "" && row.PositionSide != "BOTH" {
+	for _, row := range positions {
+		var symbol, amount, entry, unrealized, marginType, side string
+		for key, target := range map[string]*string{
+			"s": &symbol, "pa": &amount, "ep": &entry, "up": &unrealized, "mt": &marginType, "ps": &side,
+		} {
+			if *target, err = row.str(key); err != nil {
+				return typedRejected("decode futures account event", err)
+			}
+		}
+		if side != "" && side != "BOTH" {
 			return typedRejected("hedge position mode is unsupported", nil)
 		}
-		if !strings.EqualFold(row.MarginType, "cross") {
+		if !strings.EqualFold(marginType, "cross") {
 			return typedRejected("isolated margin is unsupported", nil)
 		}
-		quantity, err := decimalOrZero(row.Quantity)
+		quantity, err := decimalOrZero(amount)
 		if err != nil {
 			return err
 		}
 		position := exchange.Position{
 			TradingAccountID: a.config.TradingAccountID,
-			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
+			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
 		}
-		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
+		position.EntryPrice, err = decimalOrZero(entry)
 		if err == nil {
-			position.UnrealizedPnL, err = decimalOrZero(row.Unrealized)
+			position.UnrealizedPnL, err = decimalOrZero(unrealized)
 		}
 		if err != nil {
 			return err
@@ -516,36 +589,39 @@ func (a *Adapter) dispatchFuturesAccount(
 
 func (a *Adapter) dispatchSpotAccount(
 	ctx context.Context,
-	raw []byte,
+	root fields,
 	handler execution.AccountEventHandler,
 ) error {
-	var payload struct {
-		Time     int64 `json:"u"`
-		Balances []struct {
-			Asset  string `json:"a"`
-			Free   string `json:"f"`
-			Locked string `json:"l"`
-		} `json:"B"`
+	updatedAt, err := root.int64("u")
+	if err != nil {
+		return typedRejected("decode spot account event", err)
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	balances, err := root.objects("B")
+	if err != nil {
 		return typedRejected("decode spot account event", err)
 	}
 	snapshot := exchange.AccountSnapshot{
-		ExchangeUpdatedAt: millis(payload.Time),
+		ExchangeUpdatedAt: millis(updatedAt),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 	}
-	for _, row := range payload.Balances {
-		available, err := decimalOrZero(row.Free)
+	for _, row := range balances {
+		var asset, free, locked string
+		for key, target := range map[string]*string{"a": &asset, "f": &free, "l": &locked} {
+			if *target, err = row.str(key); err != nil {
+				return typedRejected("decode spot account event", err)
+			}
+		}
+		available, err := decimalOrZero(free)
 		if err != nil {
 			return err
 		}
-		locked, err := decimalOrZero(row.Locked)
+		lockedValue, err := decimalOrZero(locked)
 		if err != nil {
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: row.Asset, Available: available, Locked: locked,
-			Total: available.Add(locked),
+			Asset: asset, Available: available, Locked: lockedValue,
+			Total: available.Add(lockedValue),
 		})
 	}
 	return handler.OnAccountSnapshot(ctx, snapshot)

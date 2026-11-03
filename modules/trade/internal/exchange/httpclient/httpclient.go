@@ -81,12 +81,14 @@ func New(baseURL string) *Client {
 
 // Request 描述一次 REST 调用。
 type Request struct {
-	Method  string
-	Path    string
-	Query   url.Values
-	Body    []byte
-	Headers map[string]string
-	Timeout time.Duration
+	Method string
+	Path   string
+	Query  url.Values
+	// RawQuery 是已编码好的查询串，非空时原样发送、忽略 Query（签名要求字节一致、签名在末尾）。
+	RawQuery string
+	Body     []byte
+	Headers  map[string]string
+	Timeout  time.Duration
 	// Order 标记新下单请求：账户下单暂停时只拦这类请求，查询和撤单照常。
 	Order bool
 }
@@ -160,7 +162,9 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 		req.Method = http.MethodGet
 	}
 	full := c.BaseURL + req.Path
-	if len(req.Query) > 0 {
+	if req.RawQuery != "" {
+		full += "?" + req.RawQuery
+	} else if len(req.Query) > 0 {
 		full += "?" + req.Query.Encode()
 	}
 	var bodyReader io.Reader
