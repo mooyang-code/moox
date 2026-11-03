@@ -244,7 +244,7 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 			Name: "bad", Exchange: "BINANCE", MarketType: "SPOT",
 			ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			CredentialSecretID: options.SecretID, SettlementAsset: "USDT",
-			Status: "ENABLED",		})
+			Status: "ENABLED"})
 	}); err != nil {
 		t.Fatal(err)
 	}

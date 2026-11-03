@@ -313,23 +313,7 @@ func (a *Adapter) dispatchPrivate(
 				ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
-				Present: exchange.PositionPresence{
-					SignedQuantity:   true,
-					EntryPrice:       row.AvgPx != "",
-					MarkPrice:        row.MarkPx != "",
-					Leverage:         row.Lever != "",
-					MarginMode:       true,
-					UsedMargin:       row.IMR != "" || row.Margin != "",
-					LiquidationPrice: row.LiqPx != "",
-					UnrealizedPnL:    row.Upl != "",
-					RealizedPnL:      row.Realized != "",
-				},
 			}
-			position.RequiresSync = !position.Present.EntryPrice ||
-				!position.Present.MarkPrice ||
-				!position.Present.Leverage ||
-				!position.Present.UsedMargin ||
-				!position.Present.UnrealizedPnL
 			position.EntryPrice, err = decimalOrZero(row.AvgPx)
 			if err == nil {
 				position.MarkPrice, err = decimalOrZero(row.MarkPx)

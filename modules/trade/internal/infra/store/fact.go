@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type InstrumentRecord struct {
@@ -1248,14 +1249,20 @@ func (tx *Tx) resolveDuplicateFill(
 		existing.TradingAccountID != want.TradingAccountID || existing.Exchange != want.Exchange ||
 		existing.MarketType != want.MarketType || existing.ExchangeSymbol != want.ExchangeSymbol ||
 		existing.Side != want.Side || existing.PositionSide != want.PositionSide ||
-		existing.Price != want.Price || existing.Quantity != want.Quantity ||
-		existing.Fee != want.Fee || existing.FeeAsset != want.FeeAsset ||
-		existing.SettlementAsset != want.SettlementAsset || existing.RealizedPnL != want.RealizedPnL ||
-		existing.Role != want.Role || existing.TradedAt != want.TradedAt {
+		!sameDecimalText(existing.Price, want.Price) || !sameDecimalText(existing.Quantity, want.Quantity) {
 		return false, fmt.Errorf("%w: conflicting immutable Fill replay", conflict)
 	}
 	if existing.OrderID != want.OrderID || existing.ExchangeOrderID != want.ExchangeOrderID {
 		return false, fmt.Errorf("%w: conflicting immutable Fill order replay", conflict)
+	}
+	// 私有流和 REST 的手续费、手续费资产、成交角色、时间等字段可能不同（例如无手续费时私有流不带资产）。
+	// 订单、方向、数量、价格一致就是同一笔成交，其余字段不一致只记日志，按重复处理。
+	if existing.Fee != want.Fee || existing.FeeAsset != want.FeeAsset ||
+		existing.SettlementAsset != want.SettlementAsset || existing.RealizedPnL != want.RealizedPnL ||
+		existing.Role != want.Role || existing.TradedAt != want.TradedAt {
+		log.Warnf("成交 %s 重放字段不一致，按重复处理：已有 fee=%s %s role=%s at=%d，新 fee=%s %s role=%s at=%d",
+			record.ExchangeTradeID, existing.Fee, existing.FeeAsset, existing.Role, existing.TradedAt,
+			want.Fee, want.FeeAsset, want.Role, want.TradedAt)
 	}
 	// A trade identity can only replay the same immutable facts and order.
 	return false, nil
@@ -1336,6 +1343,12 @@ type PositionRecord struct {
 }
 
 func (tx *Tx) UpsertPosition(record PositionRecord) error {
+	return tx.upsertPosition(record, 0)
+}
+
+// upsertPosition 写入持仓：交易所时间不早于本地行时覆盖；本地行时间不晚于 overrideBefore（已过保护期）时也覆盖，
+// 这样 REST 持仓过了保护期后以 REST 为准，不再比较时间。
+func (tx *Tx) upsertPosition(record PositionRecord, overrideBefore int64) error {
 	if record.SpaceID == "" || record.TradingAccountID == "" || record.ExchangeSymbol == "" ||
 		record.PositionSide == "" {
 		return fmt.Errorf("%w: incomplete position", ErrInvalidRecord)
@@ -1386,21 +1399,26 @@ func (tx *Tx) UpsertPosition(record PositionRecord) error {
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE excluded.c_exchange_updated_at >=
 			t_trading_positions.c_exchange_updated_at
+			OR t_trading_positions.c_exchange_updated_at <= ?
 	`,
 		record.SpaceID, record.TradingAccountID, record.InstrumentID, record.ExchangeSymbol, record.PositionSide,
 		record.SignedQuantity, record.EntryPrice,
 		record.MarkPrice, record.Leverage, record.MarginMode,
 		record.UsedMargin, record.LiquidationPrice,
 		record.UnrealizedPnL, record.RealizedPnL,
-		record.ExchangeUpdatedAt,
+		record.ExchangeUpdatedAt, overrideBefore,
 	).Error
 }
 
+// ReplacePositionsForAccount 用 REST 持仓快照替换本地持仓。protectAfter 是持仓滞后保护期的起点（毫秒）：
+// 本地行时间晚于它的不删，也不被更旧的 REST 覆盖，避免持仓接口落后时删掉刚成交投影出的持仓；
+// 早于它的行以 REST 为准。protectAfter 为 0 时不保护。
 func (tx *Tx) ReplacePositionsForAccount(
 	spaceID string,
 	tradingAccountID string,
 	records []PositionRecord,
 	snapshotAt int64,
+	protectAfter int64,
 ) error {
 	if blank(spaceID) || blank(tradingAccountID) || snapshotAt <= 0 {
 		return fmt.Errorf("%w: incomplete position snapshot identity", ErrInvalidRecord)
@@ -1409,18 +1427,22 @@ func (tx *Tx) ReplacePositionsForAccount(
 		if record.SpaceID != spaceID || record.TradingAccountID != tradingAccountID {
 			return fmt.Errorf("%w: conflicting position snapshot identity", ErrInvalidRecord)
 		}
-		if err := tx.UpsertPosition(record); err != nil {
+		if err := tx.upsertPosition(record, protectAfter); err != nil {
 			return err
 		}
 		if err := tx.markPositionSnapshotCovered(record); err != nil {
 			return err
 		}
 	}
+	deleteBefore := snapshotAt
+	if protectAfter > 0 && protectAfter < deleteBefore {
+		deleteBefore = protectAfter
+	}
 	where := `
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 			AND c_exchange_updated_at <= ?
 	`
-	args := []any{spaceID, tradingAccountID, snapshotAt}
+	args := []any{spaceID, tradingAccountID, deleteBefore}
 	if len(records) > 0 {
 		var retained strings.Builder
 		retained.WriteString(" AND NOT (")
@@ -1730,4 +1752,14 @@ func decimalGreater(left string, right string) bool {
 	leftValue, _ := shared.ParseDecimal(left)
 	rightValue, _ := shared.ParseDecimal(right)
 	return leftValue.Cmp(rightValue) > 0
+}
+
+// sameDecimalText 比较两个十进制文本的数值，忽略 0.10 和 0.1 这类写法差异。
+func sameDecimalText(left, right string) bool {
+	if left == right {
+		return true
+	}
+	a, errA := shared.ParseDecimal(left)
+	b, errB := shared.ParseDecimal(right)
+	return errA == nil && errB == nil && a.Cmp(b) == 0
 }

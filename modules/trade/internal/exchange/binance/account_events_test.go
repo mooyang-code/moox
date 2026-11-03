@@ -178,9 +178,7 @@ func TestDispatchPrivateSwapPositionMarksPartialFields(t *testing.T) {
 		t.Fatalf("positions = %+v", handler.positions)
 	}
 	position := handler.positions[0]
-	if !position.RequiresSync || !position.Present.SignedQuantity ||
-		!position.Present.EntryPrice || !position.Present.UnrealizedPnL ||
-		position.Present.Leverage || !position.Leverage.IsZero() {
+	if position.ExchangeSymbol != "BTCUSDT" || position.SignedQuantity.String() != "1" {
 		t.Fatalf("position = %+v", position)
 	}
 }

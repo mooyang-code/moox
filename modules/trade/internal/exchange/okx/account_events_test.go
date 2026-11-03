@@ -77,10 +77,12 @@ func TestOrdersChannelFeeCompletenessAndRESTParity(t *testing.T) {
 						require.NoError(t, err)
 						require.Equal(t, i == 0, applied)
 					}
-					conflict := fills[0]
-					conflict.Fee = conflict.Fee.Add(shared.MustDecimal("1"))
-					_, err := r.ApplyFill(context.Background(), conflict, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: second})
-					require.ErrorIs(t, err, store.ErrConflict)
+					// 只有手续费不同的重放按重复处理，不报冲突，也不重复入账。
+					replay := fills[0]
+					replay.Fee = replay.Fee.Add(shared.MustDecimal("1"))
+					applied, err := r.ApplyFill(context.Background(), replay, consumer.Source{SpaceID: "space-1", TradingAccountID: "account-1", Kind: second})
+					require.NoError(t, err)
+					require.False(t, applied)
 					record, err := s.GetOrder(context.Background(), "space-1", "order-1")
 					require.NoError(t, err)
 					require.Equal(t, "1", record.FilledQuantity)

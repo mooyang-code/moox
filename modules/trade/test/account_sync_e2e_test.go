@@ -83,7 +83,8 @@ func TestAccountSyncEachSnapshotFailureKeepsNotReadyAndRecovers(t *testing.T) {
 			f := newFixture(t, exchange.MarketTypeSpot, fake)
 			failure.set(fake, errors.New("injected "+failure.name+" failure"))
 
-			result, err := f.sync.SyncAccount(context.Background(), testAccount)
+			// 对账推进轮转，拉成交这一步一定会被走到。
+			result, err := f.sync.SyncAccountReconcile(context.Background(), testAccount)
 			require.Error(t, err)
 			require.False(t, result.Ready)
 			account, getErr := f.store.GetTradingAccountByID(context.Background(), testAccount)

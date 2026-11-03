@@ -219,18 +219,17 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return len(adapter.callSnapshot()) >= 9
+		return len(adapter.callSnapshot()) >= 7
 	}, 2*time.Second, 10*time.Millisecond)
+	// 缓冲的持仓事件只关闭准入，防抖后触发轻量同步：只读持仓和账户，不读全部挂单。
 	require.Equal(t, []string{
 		"LoadInstruments",
 		"Subscribe",
 		"GetAccountSnapshot",
 		"ListPositionSnapshots",
 		"ListOpenOrders",
-		"ListOpenOrders",
 		"ListPositionSnapshots",
 		"GetAccountSnapshot",
-		"ListRecentFills",
 	}, adapter.callSnapshot())
 	// 激活前缓冲的持仓事件在 READY 交接时才应用，应用期间持久化状态会短暂回到未就绪、等完整同步确认后再就绪：
 	// session.Ready() 为真时库里的就绪位可能还没落定，要等它稳定为真。
@@ -238,13 +237,12 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 		return err == nil && stored.Ready
 	}, 2*time.Second, 10*time.Millisecond)
-	var positionUpdatedAt int64
+	var positionRows int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
-		SELECT c_exchange_updated_at FROM t_trading_positions
+		SELECT COUNT(*) FROM t_trading_positions
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
-	`, "space-1", "account-1", "BTC-USDT").Scan(&positionUpdatedAt).Error)
-	require.Equal(t, int64(2_500), positionUpdatedAt,
-		"buffered private event must apply after REST snapshot and before READY")
+	`, "space-1", "account-1", "BTC-USDT").Scan(&positionRows).Error)
+	require.Zero(t, positionRows, "持仓事件不写持仓，数量只由成交投影和 REST 决定")
 
 	disconnectErr := errors.New("private stream disconnected")
 	adapter.disconnect <- disconnectErr

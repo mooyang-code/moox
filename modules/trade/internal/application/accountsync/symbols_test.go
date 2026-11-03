@@ -65,12 +65,22 @@ func TestIncrementalSyncSkipsIdleSymbolsOutsideRotation(t *testing.T) {
 		context.Background(), account,
 		[]exchange.Order{{ExchangeSymbol: "ACTIVE"}}, nil,
 		[]exchange.Position{{ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
-		nil, exchange.AccountSnapshot{}, full,
+		nil, exchange.AccountSnapshot{}, full, true, 0,
 	)
 	require.NoError(t, err)
-	require.Len(t, symbols, 52)
+	// 轮转一次最多 rotationLimit 个标的。
+	require.Len(t, symbols, rotationLimit+2)
 	require.Contains(t, symbols, "ACTIVE")
 	require.Contains(t, symbols, "MOVED")
+	// 不推进轮转（撤单确认、未知订单收尾）时只拉有信号的标的。
+	symbols, err = service.incrementalSymbols(
+		context.Background(), account,
+		[]exchange.Order{{ExchangeSymbol: "ACTIVE"}}, nil,
+		[]exchange.Position{{ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
+		nil, exchange.AccountSnapshot{}, full, false, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ACTIVE", "MOVED"}, symbols)
 }
 
 // 接入前手工交易过的标的，第一次拉成交不能入账，也不能算外部成交。

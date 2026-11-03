@@ -268,6 +268,8 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
 	defer instrumentTicker.Stop()
+	light := newLightSyncSchedule()
+	defer light.stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -277,22 +279,104 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		case err := <-streamDone:
 			return s.disconnect(context.Background(), err)
 		case <-ticker.C:
+			// 权重用到 80% 时推迟这轮对账，成交事件触发的轻量同步照常。
+			if s.rateUsage() > reconcileUsageLimit {
+				continue
+			}
 			// 同步失败时账户已记录错误并保持未就绪，下一轮重试；只有私有流结束才重启会话。
 			s.opMu.Lock()
-			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			_, _ = s.Sync.SyncAccountReconcile(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
 		case <-s.syncRequested:
+			// 防抖：250 毫秒内的成交、持仓、账户事件合并成一次轻量同步。防抖只合并同步，不会下单。
+			light.request()
+		case <-light.channel():
 			s.opMu.Lock()
-			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			result, err := s.Sync.SyncAccountLight(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
+			light.done(err == nil && !result.BalancePending)
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
 		}
 	}
+}
+
+const (
+	// lightSyncDebounce 是私有事件触发轻量同步前的合并等待。
+	lightSyncDebounce = 250 * time.Millisecond
+	// reconcileUsageLimit 是推迟 30 秒对账的权重用量比例。
+	reconcileUsageLimit = 0.8
+)
+
+// lightSyncRetries 是轻量同步没能恢复准入（待确认水位未过、REST 失败、限流暂停）后的短退避，用完等 30 秒对账。
+var lightSyncRetries = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second, 2 * time.Second}
+
+// lightSyncSchedule 管理轻量同步的防抖和失败重排。定时器在同步之外，不持锁。
+type lightSyncSchedule struct {
+	timer    *time.Timer
+	pending  bool
+	attempts int
+}
+
+func newLightSyncSchedule() *lightSyncSchedule { return &lightSyncSchedule{} }
+
+func (l *lightSyncSchedule) schedule(delay time.Duration) {
+	if l.timer == nil {
+		l.timer = time.NewTimer(delay)
+	} else {
+		l.timer.Stop()
+		select {
+		case <-l.timer.C:
+		default:
+		}
+		l.timer.Reset(delay)
+	}
+	l.pending = true
+}
+
+// request 在没有待执行的同步时开始防抖；已有待执行（防抖或重排）时合并。
+func (l *lightSyncSchedule) request() {
+	if !l.pending {
+		l.attempts = 0
+		l.schedule(lightSyncDebounce)
+	}
+}
+
+func (l *lightSyncSchedule) channel() <-chan time.Time {
+	if !l.pending || l.timer == nil {
+		return nil
+	}
+	return l.timer.C
+}
+
+// done 记录一次同步结果：没能恢复准入时按退避重排，最多 5 次。
+func (l *lightSyncSchedule) done(recovered bool) {
+	l.pending = false
+	if recovered || l.attempts >= len(lightSyncRetries) {
+		l.attempts = 0
+		return
+	}
+	l.schedule(lightSyncRetries[l.attempts])
+	l.attempts++
+}
+
+func (l *lightSyncSchedule) stop() {
+	if l.timer != nil {
+		l.timer.Stop()
+	}
+}
+
+// rateUsage 是交易所接口本分钟的权重用量比例，模拟盘为 0。
+func (s *ExchangeSession) rateUsage() float64 {
+	source, ok := s.Adapter.(exchange.RateStatusSource)
+	if !ok {
+		return 0
+	}
+	return source.RateStatus().UsageRatio()
 }
 
 // runPaper shares the same SQLite facts and sync projections as Live, but has
@@ -569,7 +653,7 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 	case privateFill:
 		applied, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
 		if err == nil && applied && s.syncRequested != nil {
-			// 成交已使准入关闭，请求完整同步以确认余额后恢复
+			// 成交已使准入关闭，请求轻量同步确认余额后恢复
 			select {
 			case s.syncRequested <- struct{}{}:
 			default:

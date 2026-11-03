@@ -512,6 +512,11 @@ func (s accountSyncer) SyncAccount(ctx context.Context, accountID string) error 
 	return err
 }
 
+func (s accountSyncer) SyncAccountLight(ctx context.Context, accountID string) error {
+	_, err := s.service.SyncAccountLight(ctx, accountID)
+	return err
+}
+
 func (s accountSyncer) ConfirmCancel(ctx context.Context, spaceID, orderID string) error {
 	return s.service.ConfirmCancel(ctx, spaceID, orderID)
 }

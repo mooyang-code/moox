@@ -495,13 +495,6 @@ func (a *Adapter) dispatchFuturesAccount(
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
-			Present: exchange.PositionPresence{
-				SignedQuantity: true,
-				EntryPrice:     true,
-				MarginMode:     true,
-				UnrealizedPnL:  true,
-			},
-			RequiresSync: true,
 		}
 		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
 		if err == nil {

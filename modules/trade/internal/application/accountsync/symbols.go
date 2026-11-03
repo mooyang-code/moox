@@ -12,8 +12,12 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// rotationBatches 是轮转批次数：每轮多拉全集的十分之一，30 秒一轮时 5 分钟走完一圈。
-const rotationBatches = 10
+// rotationBatches 是轮转批次数：每轮多拉全集的十分之一，但不超过 rotationLimit 个标的。
+// 491 个标的时 30 秒一轮约 12 分钟走完一圈，换来每次对账最多 100 权重的成交查询。
+const (
+	rotationBatches = 10
+	rotationLimit   = 20
+)
 
 // FullSymbols 是账户可能有成交的全部标的：有成交游标、有持仓、有挂单或近期订单的标的，
 // 以及现货持有资产对应的交易对。会话启动和手动同步拉这个全集。
@@ -88,7 +92,7 @@ func (s *Service) BoundedFullSymbols(
 	for _, symbol := range gaps {
 		set[symbol] = struct{}{}
 	}
-	changed, err := s.changedPositionSymbols(ctx, account, positions)
+	changed, err := s.changedPositionSymbols(ctx, account, positions, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +125,8 @@ func (s *Service) incrementalSymbols(
 	instruments []store.InstrumentRecord,
 	snapshot exchange.AccountSnapshot,
 	full []string,
+	rotate bool,
+	protectAfter int64,
 ) ([]string, error) {
 	set := make(map[string]struct{})
 	for _, current := range openOrders {
@@ -131,6 +137,33 @@ func (s *Service) incrementalSymbols(
 			set[current.ExchangeSymbol] = struct{}{}
 		}
 	}
+	inconsistent, err := s.inconsistentSymbols(ctx, account, positions, instruments, snapshot, protectAfter)
+	if err != nil {
+		return nil, err
+	}
+	for _, symbol := range inconsistent {
+		set[symbol] = struct{}{}
+	}
+	if rotate {
+		for _, symbol := range s.nextRotationBatch(account.TradingAccountID, full) {
+			set[symbol] = struct{}{}
+		}
+	}
+	delete(set, "")
+	return sortedSymbols(set), nil
+}
+
+// inconsistentSymbols 是本地事实和 REST 不一致、需要补拉成交的标的：成交缺口、持仓变化（保护期内的行不算）、
+// 现货余额变化。轻量同步只拉这些。
+func (s *Service) inconsistentSymbols(
+	ctx context.Context,
+	account store.TradingAccountRecord,
+	positions []exchange.Position,
+	instruments []store.InstrumentRecord,
+	snapshot exchange.AccountSnapshot,
+	protectAfter int64,
+) ([]string, error) {
+	set := make(map[string]struct{})
 	gaps, err := s.Store.OrderSymbolsWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return nil, err
@@ -138,7 +171,7 @@ func (s *Service) incrementalSymbols(
 	for _, symbol := range gaps {
 		set[symbol] = struct{}{}
 	}
-	changed, err := s.changedPositionSymbols(ctx, account, positions)
+	changed, err := s.changedPositionSymbols(ctx, account, positions, protectAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -150,24 +183,27 @@ func (s *Service) incrementalSymbols(
 			set[symbol] = struct{}{}
 		}
 	}
-	for _, symbol := range s.nextRotationBatch(account.TradingAccountID, full) {
-		set[symbol] = struct{}{}
-	}
 	delete(set, "")
 	return sortedSymbols(set), nil
 }
 
+// changedPositionSymbols 比较本地持仓和 REST 持仓。时间晚于 protectAfter 的本地行在保护期内，不算不一致。
 func (s *Service) changedPositionSymbols(
 	ctx context.Context,
 	account store.TradingAccountRecord,
 	positions []exchange.Position,
+	protectAfter int64,
 ) ([]string, error) {
 	records, err := s.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, "")
 	if err != nil {
 		return nil, err
 	}
 	local := make(map[string]shared.Decimal, len(records))
+	protected := make(map[string]struct{})
 	for _, record := range records {
+		if protectAfter > 0 && record.ExchangeUpdatedAt > protectAfter {
+			protected[record.ExchangeSymbol] = struct{}{}
+		}
 		quantity, parseErr := shared.ParseDecimal(record.SignedQuantity)
 		if parseErr != nil {
 			return nil, parseErr
@@ -176,12 +212,19 @@ func (s *Service) changedPositionSymbols(
 	}
 	var symbols []string
 	for _, position := range positions {
+		if _, ok := protected[position.ExchangeSymbol]; ok {
+			delete(local, position.ExchangeSymbol)
+			continue
+		}
 		if position.SignedQuantity.Cmp(local[position.ExchangeSymbol]) != 0 {
 			symbols = append(symbols, position.ExchangeSymbol)
 		}
 		delete(local, position.ExchangeSymbol)
 	}
 	for symbol, quantity := range local {
+		if _, ok := protected[symbol]; ok {
+			continue
+		}
 		if !quantity.IsZero() {
 			symbols = append(symbols, symbol)
 		}
@@ -236,7 +279,7 @@ func (s *Service) nextRotationBatch(tradingAccountID string, full []string) []st
 	if len(full) == 0 {
 		return nil
 	}
-	size := (len(full) + rotationBatches - 1) / rotationBatches
+	size := min((len(full)+rotationBatches-1)/rotationBatches, rotationLimit)
 	s.rotationMu.Lock()
 	defer s.rotationMu.Unlock()
 	if s.rotation == nil {

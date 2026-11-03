@@ -631,7 +631,8 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 	}
 }
 
-func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
+// 持仓事件不写持仓：先于成交到达时写入数量，后到的成交会再叠加一次。
+func TestApplyPositionOnlyClosesReadiness(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	service := Service{
@@ -645,32 +646,18 @@ func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
 		SignedQuantity:    shared.MustDecimal("1"),
 		EntryPrice:        shared.MustDecimal("100"),
 		MarginMode:        exchange.MarginModeCross,
-		UnrealizedPnL:     shared.MustDecimal("2"),
 		ExchangeUpdatedAt: time.UnixMilli(2_000),
-		Present: exchange.PositionPresence{
-			SignedQuantity: true,
-			EntryPrice:     true,
-			MarginMode:     true,
-			UnrealizedPnL:  true,
-		},
-		RequiresSync: true,
 	})
 	require.NoError(t, err)
-	var position store.PositionRecord
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		var found bool
-		var getErr error
-		position, found, getErr = tx.GetPosition(
-			"space-1",
-			"account-1",
-			"BTC-USDT",
-			"NET",
-		)
-		require.True(t, found)
+		_, found, getErr := tx.GetPosition("space-1", "account-1", "BTC-USDT", "NET")
+		require.False(t, found)
 		return getErr
 	}))
-	require.Equal(t, "5", position.Leverage)
-	require.Equal(t, "1", position.SignedQuantity)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.EqualValues(t, 2_000, account.BalancePendingUntil)
 }
 
 func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T) {
@@ -689,10 +676,6 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 			EntryPrice:        shared.MustDecimal("100"),
 			MarginMode:        exchange.MarginModeCross,
 			ExchangeUpdatedAt: time.UnixMilli(2_500),
-			Present: exchange.PositionPresence{
-				SignedQuantity: true, EntryPrice: true, MarginMode: true,
-			},
-			RequiresSync: true,
 		},
 	))
 	require.NoError(t, service.ApplyAccountSnapshot(
@@ -733,10 +716,6 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 		SignedQuantity: shared.MustDecimal("1"),
 		EntryPrice:     shared.MustDecimal("100"), MarginMode: exchange.MarginModeCross,
 		ExchangeUpdatedAt: time.UnixMilli(2_000),
-		Present: exchange.PositionPresence{
-			SignedQuantity: true, EntryPrice: true, MarginMode: true,
-		},
-		RequiresSync: true,
 	}))
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		_, found, err := tx.GetPosition("space-1", "account-1", "ETH-USDT", "NET")

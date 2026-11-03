@@ -206,7 +206,14 @@ func (s *Service) flattenAccount(
 		result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: err})
 		return result, false
 	}
-	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+	if err := s.syncLight(ctx, tradingAccountID); err != nil {
+		result.Status = "FAILED"
+		result.Error = err.Error()
+		result.cause = err
+		return result, false
+	}
+	canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID)
+	if err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
 		result.cause = err
@@ -226,7 +233,7 @@ func (s *Service) flattenAccount(
 		)
 		return result, false
 	}
-	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+	if err := s.syncAfterCancel(ctx, tradingAccountID, canceling); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.cause = err
@@ -276,7 +283,13 @@ func (s *Service) flattenAccount(
 				result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
 				break
 			}
-			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+			if err := s.syncLight(ctx, tradingAccountID); err != nil {
+				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, err)
+				break
+			}
+			canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID)
+			if err != nil {
 				result.Error = err.Error()
 				result.cause = errors.Join(result.cause, err)
 				break
@@ -288,7 +301,7 @@ func (s *Service) flattenAccount(
 				result.cause = errors.Join(result.cause, err)
 				break
 			}
-			if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+			if err := s.syncAfterCancel(ctx, tradingAccountID, canceling); err != nil {
 				result.Error = err.Error()
 				result.cause = errors.Join(result.cause, err)
 				break
@@ -325,7 +338,7 @@ func (s *Service) flattenAccount(
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_deadline", Err: ctx.Err()})
 			break
 		}
-		if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
+		if err := s.syncLight(ctx, tradingAccountID); err != nil {
 			result.Error = joinError(result.Error, err.Error())
 			result.cause = errors.Join(result.cause, err)
 		}
@@ -387,6 +400,61 @@ func (s *Service) confirmFlattenChildren(ctx context.Context, command FlattenCom
 		}
 	}
 	return nil
+}
+
+// hasCancelableOrders 报告清仓前是否有要撤的单：有撤单时撤后要读全部挂单确认，否则轻量同步就够。
+func (s *Service) hasCancelableOrders(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+	actionID string,
+) (bool, error) {
+	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	for _, current := range records {
+		if orderdomain.State(current.State).Terminal() ||
+			current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == actionID {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *Service) syncAfterCancel(ctx context.Context, tradingAccountID string, canceled bool) error {
+	if canceled {
+		return s.Syncer.SyncAccount(ctx, tradingAccountID)
+	}
+	return s.syncLight(ctx, tradingAccountID)
+}
+
+// flattenNewOrderReserve 是剩余预算不足时不再发新单的余量，留给结果落库和收尾同步。
+const flattenNewOrderReserve = time.Second
+
+// waitFlattenReady 在每笔清仓子单前等账户就绪：实盘每笔成交都会关闭准入，等轻量同步确认余额后才能下下一笔。
+// 等待中的未就绪不算错误；预算不够就返回 false，结束本轮，由下一轮继续。
+func (s *Service) waitFlattenReady(ctx context.Context, spaceID, tradingAccountID string) bool {
+	for {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < flattenNewOrderReserve {
+			return false
+		}
+		account, err := s.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
+		if err != nil {
+			return false
+		}
+		if account.Ready {
+			return true
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Service) cancelAccountOrders(
@@ -490,6 +558,10 @@ func (s *Service) flattenSwap(
 		if quantity.IsNegative() {
 			side = exchange.SideBuy
 		}
+		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
+			result.Error = joinError(result.Error, "账户等待余额确认，本轮暂停下单")
+			return
+		}
 		if err := s.placeOrContinueFlattenChild(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
@@ -578,6 +650,10 @@ func (s *Service) flattenSpot(
 			quantity.Mul(quote.Price).Cmp(minNotional) < 0 {
 			reasons["asset:"+balance.Asset] = "金额低于最小名义金额"
 			continue
+		}
+		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
+			result.Error = joinError(result.Error, "账户等待余额确认，本轮暂停下单")
+			return
 		}
 		if err := s.placeOrContinueFlattenChildWithQuote(
 			ctx, command, account, instrument,

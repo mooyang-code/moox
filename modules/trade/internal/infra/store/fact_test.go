@@ -630,6 +630,7 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_500,
 			}},
 			2_000,
+			0,
 		)
 	}))
 	var btc PositionRecord

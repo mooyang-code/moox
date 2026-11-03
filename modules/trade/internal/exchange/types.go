@@ -280,20 +280,6 @@ type Position struct {
 	UnrealizedPnL     shared.Decimal
 	RealizedPnL       shared.Decimal
 	ExchangeUpdatedAt time.Time
-	Present           PositionPresence
-	RequiresSync      bool
-}
-
-type PositionPresence struct {
-	SignedQuantity   bool
-	EntryPrice       bool
-	MarkPrice        bool
-	Leverage         bool
-	MarginMode       bool
-	UsedMargin       bool
-	LiquidationPrice bool
-	UnrealizedPnL    bool
-	RealizedPnL      bool
 }
 
 type OrderRequest struct {

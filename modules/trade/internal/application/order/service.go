@@ -36,6 +36,18 @@ type AccountSyncer interface {
 	SyncAccount(context.Context, string) error
 }
 
+// LightSyncer 只读持仓和账户恢复准入。同步器实现时，下单之后和余额拒单之后用它，不读全部挂单。
+type LightSyncer interface {
+	SyncAccountLight(context.Context, string) error
+}
+
+func (s *Service) syncLight(ctx context.Context, tradingAccountID string) error {
+	if light, ok := s.Syncer.(LightSyncer); ok {
+		return light.SyncAccountLight(ctx, tradingAccountID)
+	}
+	return s.Syncer.SyncAccount(ctx, tradingAccountID)
+}
+
 type CancelConfirmer interface {
 	ConfirmCancel(context.Context, string, string) error
 }
@@ -363,14 +375,14 @@ func (s *Service) Submit(
 		// member, but this call must not submit a second child or mask the rejection.
 		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		return result, errors.Join(err, s.Syncer.SyncAccount(refreshCtx, record.TradingAccountID))
+		return result, errors.Join(err, s.syncLight(refreshCtx, record.TradingAccountID))
 	}
 	if err != nil || !synchronize || s.Syncer == nil {
 		return result, err
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	if err := s.Syncer.SyncAccount(ctx, record.TradingAccountID); err != nil {
+	if err := s.syncLight(ctx, record.TradingAccountID); err != nil {
 		return result, err
 	}
 	return s.Get(ctx, record.SpaceID, record.OrderID)
