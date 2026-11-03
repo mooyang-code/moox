@@ -181,6 +181,7 @@ func initialize(
 		Metrics: tradeStore.ModuleMetrics(), Gate: lifeGate.Open,
 	}
 	syncService.Wake = targetWorker.Wake
+	paperMatcher.WakeTarget = targetWorker.WakeTarget
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 	}

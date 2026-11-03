@@ -56,11 +56,13 @@ type MatchReducer interface {
 	ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, consumer.Source) error
 }
 type Matcher struct {
-	Store            *store.Store
-	Reducer          MatchReducer
-	Decide           func(store.OrderRecord) (Decision, error)
-	DecideContext    func(context.Context, store.OrderRecord) (Decision, error)
-	Enqueue          func(string)
+	Store         *store.Store
+	Reducer       MatchReducer
+	Decide        func(store.OrderRecord) (Decision, error)
+	DecideContext func(context.Context, store.OrderRecord) (Decision, error)
+	Enqueue       func(string)
+	// WakeTarget 在成交入账后唤醒目标收敛，下一笔子单不必等定时器。
+	WakeTarget       func(spaceID, logicalAccountID string)
 	Refresh          func(context.Context, string) error
 	Now              func() time.Time
 	CandidateTimeout time.Duration
@@ -348,6 +350,9 @@ func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, d
 	// fill cannot enqueue a point that still observes the pre-fill snapshot.
 	if err == nil && m.Enqueue != nil && !decision.Fill.Quantity.IsZero() {
 		m.Enqueue(candidate.TradingAccountID)
+	}
+	if err == nil && m.WakeTarget != nil && !decision.Fill.Quantity.IsZero() {
+		m.WakeTarget(candidate.SpaceID, candidate.LogicalAccountID)
 	}
 	return err
 }
