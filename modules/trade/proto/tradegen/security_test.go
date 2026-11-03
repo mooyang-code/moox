@@ -25,6 +25,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
+			"ListAccountLedger", "FlattenTradingAccount",
 		},
 	}
 	services := File_trade_service_proto.Services()
@@ -242,6 +243,8 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&PauseLogicalAccountReq{},
 		&ResumeLogicalAccountReq{},
 		&FlattenLogicalAccountReq{},
+		&FlattenTradingAccountReq{},
+		&ListAccountLedgerReq{},
 		&PlaceManualOrderReq{},
 		&SubmitOrderReq{},
 		&CancelOrderReq{},

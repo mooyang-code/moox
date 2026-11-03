@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 const flattenActionTimeout = 30 * time.Minute
@@ -27,6 +28,8 @@ type FlattenCommand struct {
 	SpaceID          string
 	ActionID         string
 	LogicalAccountID string
+	// TradingAccountID 非空时只平组合里的这一个执行账户，其他成员的单和仓不动。
+	TradingAccountID string
 	Reason           string
 }
 
@@ -79,6 +82,43 @@ type FlattenResult struct {
 
 type flattenRequest struct {
 	LogicalAccountID string `json:"logical_account_id"`
+	TradingAccountID string `json:"trading_account_id,omitempty"`
+}
+
+// ErrNotInLogicalAccount 表示执行账户不属于任何组合账户：MooX 只通过组合账户交易，这样的账户没有可平的仓。
+var ErrNotInLogicalAccount = errors.New("执行账户不属于任何组合账户")
+
+// FlattenTradingAccount 只平组合账户里的一个执行账户：撤这个账户的单、平这个账户的仓，组合账户照样暂停。
+// 同组合只允许一个运行中清仓、锁的短超时、终结与可重试的分类，都和组合清仓相同。
+func (s *Service) FlattenTradingAccount(ctx context.Context, command FlattenCommand) (FlattenResult, error) {
+	if err := s.validate(); err != nil {
+		return FlattenResult{}, err
+	}
+	if blank(command.TradingAccountID) {
+		return FlattenResult{}, ErrInvalidCommand
+	}
+	logical, _, err := s.Store.FindLogicalAccountMembership(ctx, command.SpaceID, command.TradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return FlattenResult{}, ErrNotInLogicalAccount
+	}
+	if err != nil {
+		return FlattenResult{}, err
+	}
+	command.LogicalAccountID = logical.LogicalAccountID
+	return s.FlattenLogicalAccount(ctx, command)
+}
+
+// decodeFlattenRequest 从动作的请求 JSON 恢复清仓命令（工作线程恢复时用）。
+func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, error) {
+	var request flattenRequest
+	if err := json.Unmarshal([]byte(action.RequestJSON), &request); err != nil {
+		return FlattenCommand{}, err
+	}
+	return FlattenCommand{
+		SpaceID: action.SpaceID, ActionID: action.ActionID,
+		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
+		Reason: action.Reason,
+	}, nil
 }
 
 func (s *Service) FlattenLogicalAccount(
@@ -185,6 +225,20 @@ func (s *Service) FlattenLogicalAccount(
 	if err != nil {
 		return FlattenResult{Action: action}, err
 	}
+	if target := strings.TrimSpace(command.TradingAccountID); target != "" {
+		selected := members[:0]
+		for _, member := range members {
+			if member.TradingAccountID == target {
+				selected = append(selected, member)
+			}
+		}
+		if len(selected) == 0 {
+			// 成员在发起之后被移出了组合：没有可平的，按失败结束。
+			result := FlattenResult{Action: action}
+			return result, errors.Join(ErrNotInLogicalAccount, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
+		}
+		members = selected
+	}
 	result := FlattenResult{
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
@@ -279,6 +333,7 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 	}
 	data, err := json.Marshal(flattenRequest{
 		LogicalAccountID: command.LogicalAccountID,
+		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
 	})
 	return string(data), err
 }

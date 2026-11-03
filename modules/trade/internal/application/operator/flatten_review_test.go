@@ -244,3 +244,47 @@ func TestFlattenWithManyMembersStillPlacesOrders(t *testing.T) {
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1, "the member with a position must get its flatten order")
 }
+
+func TestFlattenTradingAccountOnlyTouchesThatMember(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "3")
+	fixture.order(t, activeOrder(fixture, "other-member-order", "EXTERNAL"))
+	other, err := fixture.store.GetOrder(context.Background(), "space-1", "other-member-order")
+	require.NoError(t, err)
+	require.Equal(t, "account-a", other.TradingAccountID)
+	service := fixture.service()
+
+	result, err := service.FlattenTradingAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-b", TradingAccountID: "account-b", Reason: "close one member",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "logical-1", result.Action.LogicalAccountID)
+	require.Len(t, result.Accounts, 1)
+	require.Equal(t, "account-b", result.Accounts[0].TradingAccountID)
+	for _, spec := range fixture.orders.specs {
+		require.Equal(t, "account-b", spec.TradingAccountID)
+	}
+	require.NotContains(t, fixture.trace, "cancel:other-member-order")
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "PAUSED", logical.AutomationState)
+
+	// 工作线程恢复时从请求 JSON 读回过滤条件。
+	command, err := decodeFlattenRequest(result.Action)
+	require.NoError(t, err)
+	require.Equal(t, "account-b", command.TradingAccountID)
+}
+
+func TestFlattenTradingAccountRequiresLogicalMembership(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(fixture.account("account-solo"))
+	}))
+	_, err := fixture.service().FlattenTradingAccount(context.Background(), FlattenCommand{
+		SpaceID: "space-1", ActionID: "flatten-solo", TradingAccountID: "account-solo", Reason: "close",
+	})
+	require.ErrorIs(t, err, ErrNotInLogicalAccount)
+}

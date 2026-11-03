@@ -32,6 +32,8 @@ type ConsoleServer struct {
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
 	Exchanges          execution.ExchangeCatalog
+	Adapters           AdapterSource
+	FlattenAccount     FlattenTradingAccountFunc
 }
 
 type HoldingQueryService interface {
@@ -154,6 +156,9 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
+	}
+	if _, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID); ledgerErr == nil {
+		capabilities.Ledger = true
 	}
 	for _, item := range value.OrderTypes {
 		capabilities.OrderTypes = append(capabilities.OrderTypes, orderTypeToPB(string(item)))

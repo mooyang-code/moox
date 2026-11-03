@@ -267,6 +267,35 @@ func (r *FlattenLogicalAccountReq) Validate() error {
 	return nil
 }
 
+func (r *FlattenTradingAccountReq) Validate() error {
+	if r == nil ||
+		strings.TrimSpace(r.ActionId) == "" ||
+		strings.TrimSpace(r.TradingAccountId) == "" ||
+		strings.TrimSpace(r.Reason) == "" {
+		return fmt.Errorf("action_id, trading_account_id and reason are required")
+	}
+	return nil
+}
+
+// maxLedgerWindow 是资金流水一次查询的最长时间窗（OKX 归档账单只保留 3 个月）。
+const maxLedgerWindow = 90 * 24 * 60 * 60 * 1000
+
+func (r *ListAccountLedgerReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
+		return fmt.Errorf("trading_account_id is required")
+	}
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	if r.StartTime > 0 && r.EndTime > 0 && r.EndTime-r.StartTime > maxLedgerWindow {
+		return fmt.Errorf("ledger window must not exceed 90 days")
+	}
+	if r.Limit < 0 || r.Limit > 1000 {
+		return fmt.Errorf("limit must be between 0 and 1000")
+	}
+	return nil
+}
+
 func (r *PlaceManualOrderReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.ActionId) == "" ||

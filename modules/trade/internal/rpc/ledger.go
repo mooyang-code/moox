@@ -1,0 +1,119 @@
+package rpc
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+)
+
+const (
+	defaultLedgerWindow = 7 * 24 * time.Hour
+	defaultLedgerLimit  = 200
+)
+
+var (
+	// errLedgerUnsupported：交易所没有统一流水接口（例如币安现货）。
+	errLedgerUnsupported = errors.New("该账户不支持资金流水")
+	// errLedgerUnavailable：账户会话还没建立（停用、凭证有问题或刚启动）。
+	errLedgerUnavailable = errors.New("账户会话未就绪，暂时查不了资金流水")
+)
+
+// AdapterSource 按执行账户取当前会话的交易所适配器。
+type AdapterSource interface {
+	Adapter(string) (execution.ExecutionAdapter, error)
+}
+
+// FlattenTradingAccountFunc 只平组合账户里的一个执行账户。
+type FlattenTradingAccountFunc func(ctx context.Context, spaceID, actionID, tradingAccountID, reason string) (store.OperatorActionRecord, error)
+
+func (s *ConsoleServer) ledgerSource(tradingAccountID string) (execution.LedgerSource, error) {
+	if s.Adapters == nil {
+		return nil, errServiceUnavailable
+	}
+	adapter, err := s.Adapters.Adapter(tradingAccountID)
+	if err != nil {
+		return nil, errLedgerUnavailable
+	}
+	source, ok := adapter.(execution.LedgerSource)
+	if !ok || !source.LedgerSupported() {
+		return nil, errLedgerUnsupported
+	}
+	return source, nil
+}
+
+// ListAccountLedger 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序。
+func (s *ConsoleServer) ListAccountLedger(
+	ctx context.Context,
+	req *tradepb.ListAccountLedgerReq,
+) (*tradepb.ListAccountLedgerRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	if s.Store == nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	// 先按空间读一次账户，保证只能查自己空间的账户。
+	if _, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
+	}
+	source, err := s.ledgerSource(req.GetTradingAccountId())
+	if err != nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
+	}
+	end := time.Now().UTC()
+	if req.GetEndTime() > 0 {
+		end = time.UnixMilli(req.GetEndTime()).UTC()
+	}
+	start := end.Add(-defaultLedgerWindow)
+	if req.GetStartTime() > 0 {
+		start = time.UnixMilli(req.GetStartTime()).UTC()
+	}
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = defaultLedgerLimit
+	}
+	page, err := source.ListLedger(ctx, exchange.LedgerQuery{Start: start, End: end, Limit: limit})
+	if err != nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
+	}
+	rsp := &tradepb.ListAccountLedgerRsp{RetInfo: success(), HasMore: page.HasMore}
+	for _, entry := range page.Entries {
+		rsp.Entries = append(rsp.Entries, &tradepb.LedgerEntry{
+			Id: entry.ID, Time: entry.Time.UnixMilli(), Type: string(entry.Type), ExchangeType: entry.ExchangeType,
+			Asset: entry.Asset, Amount: entry.Amount.String(), ExchangeSymbol: entry.ExchangeSymbol,
+			TradeId: entry.TradeID, Info: entry.Info,
+		})
+	}
+	return rsp, nil
+}
+
+// FlattenTradingAccount 只平组合账户里的一个执行账户。
+func (s *ConsoleServer) FlattenTradingAccount(
+	ctx context.Context,
+	req *tradepb.FlattenTradingAccountReq,
+) (*tradepb.FlattenTradingAccountRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.FlattenTradingAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	if s.FlattenAccount == nil || s.Store == nil {
+		return &tradepb.FlattenTradingAccountRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	if _, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+		return &tradepb.FlattenTradingAccountRsp{RetInfo: errorInfo(err)}, nil
+	}
+	action, err := s.FlattenAccount(ctx, spaceID, req.GetActionId(), req.GetTradingAccountId(), req.GetReason())
+	return &tradepb.FlattenTradingAccountRsp{RetInfo: errorInfo(err), Action: operatorActionToPB(action)}, nil
+}

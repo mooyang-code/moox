@@ -30,6 +30,8 @@ func RegisterAll(
 		console.MatcherReady = options[0].MatcherReady
 		console.Holdings = options[0].Holdings
 		console.Exchanges = options[0].Exchanges
+		console.Adapters = options[0].Adapters
+		console.FlattenAccount = options[0].FlattenAccount
 	}
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
@@ -40,4 +42,6 @@ type ConsoleOptions struct {
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
 	Exchanges          executionport.ExchangeCatalog
+	Adapters           AdapterSource
+	FlattenAccount     FlattenTradingAccountFunc
 }
