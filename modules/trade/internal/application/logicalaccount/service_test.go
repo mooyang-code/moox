@@ -73,10 +73,37 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 		})
 	}))
 
-	err := service.RemoveMember(
+	_, err := service.RemoveMember(
 		context.Background(), "space-1", "logical-1", "account-a",
 	)
 	require.ErrorIs(t, err, ErrMemberHasExposure)
+}
+
+func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	calls := 0
+	service.Syncer = failingAccountSyncer{calls: &calls}
+
+	// 本地没有挂单和持仓：同步失败也允许移除，并提示交易所侧没有核对。
+	warning, err := service.RemoveMember(context.Background(), "space-1", "logical-1", "account-a")
+	require.NoError(t, err)
+	require.Equal(t, UnverifiedRemovalWarning, warning)
+
+	// 本地还有持仓：同步失败时不能移除，返回同步错误。
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-b",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
+		})
+	}))
+	_, err = service.RemoveMember(context.Background(), "space-1", "logical-1", "account-b")
+	require.ErrorContains(t, err, "sync must not run")
 }
 
 func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {

@@ -42,6 +42,7 @@ func errorInfo(err error) *tradepb.RetInfo {
 	case errors.Is(err, store.ErrConflict),
 		errors.Is(err, accountapp.ErrAccountConflict),
 		errors.Is(err, logicalapp.ErrOwnerConflict),
+		errors.Is(err, operatorapp.ErrLogicalAccountBusy),
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
 	case errors.Is(err, store.ErrInvalidRecord),

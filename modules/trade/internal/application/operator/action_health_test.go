@@ -263,7 +263,9 @@ func TestFlattenCanceledLockPersistsRetryAndKeepsIdentity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	result, err := s.FlattenLogicalAccount(ctx, FlattenCommand{SpaceID: "space-1", ActionID: action.ActionID, LogicalAccountID: "logical-1", Reason: "stop"})
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	// 运行中的清仓拿不到锁时由工作线程继续，调用方看到“运行中”，不报错。
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Equal(t, action.ActionID, result.Action.ActionID)
 	require.Contains(t, result.Action.LastError, "deadline")
 }

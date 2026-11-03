@@ -180,7 +180,7 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	err = h.LogicalAccounts.RemoveMember(
+	warning, err := h.LogicalAccounts.RemoveMember(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
@@ -190,8 +190,13 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 		return &tradepb.RemoveLogicalAccountMemberRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
+	info := errorInfo(err)
+	if err == nil && warning != "" {
+		// 成功但只按本地记录确认过，提示放在返回信息里。
+		info = retInfo(tradepb.ErrorCode_SUCCESS, warning)
+	}
 	return &tradepb.RemoveLogicalAccountMemberRsp{
-		RetInfo:        errorInfo(err),
+		RetInfo:        info,
 		LogicalAccount: h.logicalAccount(ctx, record),
 	}, nil
 }

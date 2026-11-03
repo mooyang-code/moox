@@ -191,6 +191,23 @@ func (s *Store) ListRunningOperatorActions(
 	return records, nil
 }
 
+// RunningOperatorActionsOfType 在事务里列出组合账户某类运行中的动作。
+func (tx *Tx) RunningOperatorActionsOfType(spaceID, logicalAccountID, actionType string) ([]OperatorActionRecord, error) {
+	var rows []operatorActionRow
+	if err := tx.db.
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_action_type = ? AND c_status = ?",
+			spaceID, logicalAccountID, actionType, operatordomain.StatusRunning).
+		Order("c_ctime, c_action_id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OperatorActionRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, operatorActionRecord(row))
+	}
+	return records, nil
+}
+
 func (s *Store) ListAllRunningOperatorActions(
 	ctx context.Context,
 ) ([]OperatorActionRecord, error) {

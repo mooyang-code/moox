@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -35,6 +35,25 @@ type RemainingPosition struct {
 	Asset        string `json:"asset,omitempty"`
 	Quantity     string `json:"quantity"`
 	Reason       string `json:"reason"`
+	// final 为真表示重试也平不掉（见 flattenReason）。
+	final bool
+}
+
+// flattenReason 是一条剩余仓位的原因。final 为真表示同样的条件下重试只会得到同样的结果：
+// 无可交易标的、数量不符合交易所规则、零成交就终结的子单、永久校验错误等；没列为终结的一律可重试。
+type flattenReason struct {
+	text  string
+	final bool
+}
+
+// flattenFinal 标记终结类错误，本轮只剩这类错误和终结原因时清仓直接结束为部分完成。
+type flattenFinal struct{ error }
+
+func (e flattenFinal) Unwrap() error { return e.error }
+
+func isFlattenFinal(err error) bool {
+	_, final := err.(flattenFinal)
+	return final
 }
 
 type FlattenAccountResult struct {
@@ -42,8 +61,13 @@ type FlattenAccountResult struct {
 	Status           string              `json:"status"`
 	ChildOrderIDs    []string            `json:"child_order_ids,omitempty"`
 	Remaining        []RemainingPosition `json:"remaining_positions,omitempty"`
-	Error            string              `json:"error,omitempty"`
-	cause            error
+	// Dust 是下不了单的现货零头，不算剩余，不阻止完成。
+	Dust  []RemainingPosition `json:"dust_positions,omitempty"`
+	Error string              `json:"error,omitempty"`
+	cause error
+	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
+	decided bool
+	retry   bool
 }
 
 type FlattenResult struct {
@@ -81,13 +105,27 @@ func (s *Service) FlattenLogicalAccount(
 	if found && existing.Status == string(operatordomain.StatusCompleted) {
 		return decodeFlattenResult(existing)
 	}
-	unlock, err := s.Store.LockLogicalAccountContext(ctx, command.SpaceID, command.LogicalAccountID)
-	if err != nil {
-		if !found {
-			return FlattenResult{}, err
+	resuming := found && existing.Status == string(operatordomain.StatusRunning)
+	// 同一组合只允许一个运行中的清仓，否则两个清仓会互相撤对方的子单。运行中的清仓多半正持着锁，所以锁前先查一次；
+	// 请求的动作本身正在运行（工作线程用原动作号恢复）时不查，否则遗留的两个运行中动作会互相指向对方。
+	if !resuming {
+		if other, ok, err := s.otherRunningFlatten(ctx, command); err != nil || ok {
+			return other, err
 		}
-		current, diagnosticErr := s.deferActionLock(ctx, existing, err)
-		return FlattenResult{Action: current}, diagnosticErr
+	}
+	lockCtx, lockCancel := context.WithTimeout(ctx, flattenLockWait)
+	unlock, err := s.Store.LockLogicalAccountContext(lockCtx, command.SpaceID, command.LogicalAccountID)
+	lockCancel()
+	if err != nil {
+		if resuming {
+			// 运行中的动作由工作线程继续，调用方看到“运行中”即可。
+			current, diagnosticErr := s.deferActionLock(ctx, existing, err)
+			if _, deferred := diagnosticErr.(submissionDeferredError); deferred {
+				diagnosticErr = nil
+			}
+			return FlattenResult{Action: current}, diagnosticErr
+		}
+		return FlattenResult{Action: existing}, ErrLogicalAccountBusy
 	}
 	defer unlock()
 	existing, found, err = s.existingAction(ctx, expectedAction)
@@ -98,7 +136,21 @@ func (s *Service) FlattenLogicalAccount(
 		return decodeFlattenResult(existing)
 	}
 	var action store.OperatorActionRecord
+	var other *store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		// 锁内再查一次，防止两个请求同时通过锁前的检查；恢复自身动作时同样不查。
+		if !resuming {
+			running, err := tx.RunningOperatorActionsOfType(command.SpaceID, command.LogicalAccountID, "FLATTEN")
+			if err != nil {
+				return err
+			}
+			for index := range running {
+				if running[index].ActionID != command.ActionID {
+					other = &running[index]
+					return nil
+				}
+			}
+		}
 		if err := tx.SetLogicalAccountAutomation(
 			command.SpaceID,
 			command.LogicalAccountID,
@@ -122,6 +174,9 @@ func (s *Service) FlattenLogicalAccount(
 	if err != nil {
 		return FlattenResult{Action: action}, err
 	}
+	if other != nil {
+		return runningFlattenResult(*other), nil
+	}
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, command.SpaceID, command.LogicalAccountID, true,
 	)
@@ -132,7 +187,8 @@ func (s *Service) FlattenLogicalAccount(
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
-	budgetEnd := time.Now().Add(s.flattenTimeout())
+	// 预算从收到请求算起，等锁用掉的时间要扣除，加上收尾不能超过网关的调用超时。
+	budgetEnd, _ := ctx.Deadline()
 	executable := 0
 	var sharedErrors []error
 	retry := false
@@ -145,18 +201,24 @@ func (s *Service) FlattenLogicalAccount(
 		if wasExecutable {
 			executable++
 		}
+		needsRetry := accountResult.retry
+		if !accountResult.decided {
+			needsRetry = accountResult.cause != nil && !submissionBusinessError(accountResult.cause)
+		}
 		if accountResult.cause != nil {
 			if accountResult.Error == "" {
 				accountResult.Error = accountResult.cause.Error()
 			}
-			if !submissionBusinessError(accountResult.cause) {
-				retry = true
-				if accountResult.Status == "COMPLETED" {
-					accountResult.Status = "RUNNING"
-				}
-			}
-			if !allSubmissionErrors(accountResult.cause, func(err error) bool { return submissionAccountError(err) || submissionBusinessError(err) }) {
+			if !allSubmissionErrors(accountResult.cause, func(err error) bool {
+				return submissionAccountError(err) || submissionBusinessError(err) || isFlattenFinal(err)
+			}) {
 				sharedErrors = append(sharedErrors, accountResult.cause)
+			}
+		}
+		if needsRetry {
+			retry = true
+			if accountResult.Status == "COMPLETED" {
+				accountResult.Status = "RUNNING"
 			}
 		}
 		result.Accounts = append(result.Accounts, accountResult)
@@ -176,6 +238,33 @@ func (s *Service) FlattenLogicalAccount(
 		return result, errors.Join(errors.Join(sharedErrors...), err)
 	}
 	return result, errors.Join(sharedErrors...)
+}
+
+// flattenLockWait 是清仓等组合账户锁的时长。锁是轮询抢占，目标执行器一整轮都持锁，太短实盘下容易报“正忙”。
+const flattenLockWait = 2500 * time.Millisecond
+
+// ErrLogicalAccountBusy 表示组合账户锁被占用，这次清仓没有执行。
+var ErrLogicalAccountBusy = errors.New("组合账户正忙，稍后再发起清仓")
+
+// otherRunningFlatten 返回同一组合里另一个运行中的清仓。
+func (s *Service) otherRunningFlatten(ctx context.Context, command FlattenCommand) (FlattenResult, bool, error) {
+	running, err := s.Store.ListRunningOperatorActions(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		return FlattenResult{}, false, err
+	}
+	for _, action := range running {
+		if action.ActionType == "FLATTEN" && action.ActionID != command.ActionID {
+			return runningFlattenResult(action), true, nil
+		}
+	}
+	return FlattenResult{}, false, nil
+}
+
+// runningFlattenResult 返回运行中清仓已落库的进度；诊断信息不当作这次调用的错误。
+func runningFlattenResult(action store.OperatorActionRecord) FlattenResult {
+	result, _ := decodeFlattenResult(action)
+	result.Action = action
+	return result
 }
 
 func flattenRequestJSON(command FlattenCommand) (string, error) {
@@ -322,13 +411,16 @@ func (s *Service) flattenAccount(
 				break
 			}
 		}
+		// 每轮只看本轮的错误：前几轮留下的“子单在途”之类不能让只剩终结原因的清仓继续空转。
 		result.Error = ""
-		reasons := make(map[string]string)
+		result.cause = nil
+		result.Dust = nil
+		reasons := make(map[string]flattenReason)
 		switch {
 		case !exchange.MarketType(account.MarketType).Valid():
-			result.Error = "不支持的市场类型 " + account.MarketType
+			result.addError(flattenFinal{errors.New("不支持的市场类型 " + account.MarketType)})
 		case !execution.InTradingSession(s.Exchanges, account.Exchange, time.Now()):
-			result.Error = "当前不在交易时段"
+			result.addError(flattenFinal{errors.New("当前不在交易时段")})
 		case exchange.RuleFor(account.MarketType).PositionFromBalance:
 			s.flattenSpot(ctx, command, account, &result, reasons)
 		default:
@@ -353,11 +445,29 @@ func (s *Service) flattenAccount(
 				result.cause = nil
 			}
 			result.Status = "COMPLETED"
+			result.decided = true
+			return result, true
+		}
+		if !flattenRoundRetryable(result) {
+			result.Status = "PARTIAL"
+			result.decided = true
 			return result, true
 		}
 	}
+	// 走到这里是预算用完或本轮遇到可重试的问题，交给下一次运行继续。
 	result.Status = "PARTIAL"
+	result.decided, result.retry = true, true
 	return result, true
+}
+
+// flattenRoundRetryable 判断本轮结束后还值不值得重试：剩余仓位有可重试原因，或本轮有非终结的错误。
+func flattenRoundRetryable(result FlattenAccountResult) bool {
+	for _, remaining := range result.Remaining {
+		if !remaining.final {
+			return true
+		}
+	}
+	return !allSubmissionErrors(result.cause, isFlattenFinal)
 }
 
 func (s *Service) recoverFlattenChildren(ctx context.Context, command FlattenCommand, accountID string, result *FlattenAccountResult) error {
@@ -423,11 +533,12 @@ func (s *Service) hasCancelableOrders(
 	return false, nil
 }
 
+// syncAfterCancel 撤过单时读全部挂单确认；没撤单时紧接着的那次轻量同步不会带来新信息，直接跳过。
 func (s *Service) syncAfterCancel(ctx context.Context, tradingAccountID string, canceled bool) error {
 	if canceled {
 		return s.Syncer.SyncAccount(ctx, tradingAccountID)
 	}
-	return s.syncLight(ctx, tradingAccountID)
+	return nil
 }
 
 // flattenNewOrderReserve 是剩余预算不足时不再发新单的余量，留给结果落库和收尾同步。
@@ -516,7 +627,7 @@ func (s *Service) flattenSwap(
 	command FlattenCommand,
 	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
-	reasons map[string]string,
+	reasons map[string]flattenReason,
 ) {
 	positions, err := s.Store.ListPositions(
 		ctx, command.SpaceID, account.TradingAccountID, "",
@@ -532,7 +643,7 @@ func (s *Service) flattenSwap(
 	}
 	bySymbol := make(map[string]store.InstrumentRecord, len(instruments))
 	for _, instrument := range instruments {
-		if tradableForSettlement(instrument, account.SettlementAsset) {
+		if exposure.Tradable(instrument, account.SettlementAsset) {
 			bySymbol[instrument.ExchangeSymbol] = instrument
 		}
 	}
@@ -547,11 +658,12 @@ func (s *Service) flattenSwap(
 		}
 		instrument, found := bySymbol[position.ExchangeSymbol]
 		if !found {
-			reasons[position.ExchangeSymbol] = "持仓没有对应的可交易标的"
+			reasons[position.ExchangeSymbol] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
 			continue
 		}
+		// 永续平仓单 reduceOnly，不查最小名义金额，只有数量不符合交易所规则才平不掉。
 		if reason := quantityRuleReason(quantity.Abs(), instrument); reason != "" {
-			reasons[position.ExchangeSymbol] = reason
+			reasons[position.ExchangeSymbol] = flattenReason{text: reason, final: true}
 			continue
 		}
 		side := exchange.SideSell
@@ -565,7 +677,7 @@ func (s *Service) flattenSwap(
 		if err := s.placeOrContinueFlattenChild(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
-			reasons[position.ExchangeSymbol] = err.Error()
+			reasons[position.ExchangeSymbol] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
 			result.addError(err)
 		}
 	}
@@ -576,7 +688,7 @@ func (s *Service) flattenSpot(
 	command FlattenCommand,
 	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
-	reasons map[string]string,
+	reasons map[string]flattenReason,
 ) {
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
@@ -588,21 +700,12 @@ func (s *Service) flattenSpot(
 		result.addError(err)
 		return
 	}
-	byAsset := make(map[string]store.InstrumentRecord)
-	for _, instrument := range instruments {
-		if !tradableForSettlement(instrument, account.SettlementAsset) ||
-			instrument.QuoteAsset != account.SettlementAsset ||
-			instrument.BaseAsset == account.SettlementAsset {
-			continue
-		}
-		if _, exists := byAsset[instrument.BaseAsset]; !exists {
-			byAsset[instrument.BaseAsset] = instrument
-		}
-	}
+	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
 	for _, balance := range account.Snapshot.Balances {
 		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 			continue
 		}
+		key := "asset:" + balance.Asset
 		total, err := decimalOrZero(balance.Total)
 		if err != nil {
 			result.addError(err)
@@ -613,7 +716,23 @@ func (s *Service) flattenSpot(
 		}
 		instrument, found := byAsset[balance.Asset]
 		if !found {
-			reasons["asset:"+balance.Asset] = "资产没有对应结算资产的标的"
+			reasons[key] = flattenReason{text: "资产没有对应结算资产的标的", final: true}
+			continue
+		}
+		quote, quoteErr := s.Prices.LatestPrice(
+			ctx, account.TradingAccountID, instrument.ExchangeSymbol,
+		)
+		price := shared.Zero()
+		if quoteErr == nil {
+			price = quote.Price
+		}
+		// 零头按总量判断，不算剩余，由剩余统计列进 Dust。
+		if exposure.SpotDust(total, price, instrument) {
+			continue
+		}
+		if quoteErr != nil {
+			reasons[key] = flattenReason{text: quoteErr.Error()}
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_quote", Err: quoteErr})
 			continue
 		}
 		available, err := decimalOrZero(balance.Available)
@@ -623,32 +742,14 @@ func (s *Service) flattenSpot(
 		}
 		step, _, ruleErr := baseQuantityRules(instrument)
 		if ruleErr != nil {
-			reasons["asset:"+balance.Asset] = ruleErr.Error()
-			result.addError(ruleErr)
+			reasons[key] = flattenReason{text: ruleErr.Error(), final: true}
+			result.addError(flattenFinal{ruleErr})
 			continue
 		}
-		quantity := floorToStep(available, step)
-		if reason := quantityRuleReason(quantity, instrument); reason != "" {
-			reasons["asset:"+balance.Asset] = reason
-			continue
-		}
-		quote, quoteErr := s.Prices.LatestPrice(
-			ctx, account.TradingAccountID, instrument.ExchangeSymbol,
-		)
-		if quoteErr != nil {
-			reasons["asset:"+balance.Asset] = quoteErr.Error()
-			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_quote", Err: quoteErr})
-			continue
-		}
-		minNotional, parseErr := decimalOrZero(instrument.MinNotional)
-		if parseErr != nil {
-			reasons["asset:"+balance.Asset] = parseErr.Error()
-			result.addError(parseErr)
-			continue
-		}
-		if minNotional.Cmp(shared.Zero()) > 0 &&
-			quantity.Mul(quote.Price).Cmp(minNotional) < 0 {
-			reasons["asset:"+balance.Asset] = "金额低于最小名义金额"
+		// 总量不是零头而可用余额卖不出去，说明还有余额被挂单占着，下一轮再试。
+		quantity := exposure.FloorToStep(available, step)
+		if quantityRuleReason(quantity, instrument) != "" || exposure.SpotDust(quantity, price, instrument) {
+			reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
 			continue
 		}
 		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
@@ -659,7 +760,7 @@ func (s *Service) flattenSpot(
 			ctx, command, account, instrument,
 			exchange.SideSell, quantity, quote, result,
 		); err != nil {
-			reasons["asset:"+balance.Asset] = err.Error()
+			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
 			result.addError(err)
 		}
 	}
@@ -725,7 +826,12 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 			return err
 		case orderdomain.Rejected, orderdomain.Canceled,
 			orderdomain.PartiallyCanceled, orderdomain.Expired:
-			return manualFailureError{message: fmt.Sprintf("existing flatten child ended %s", existing.State), cause: ErrInvalidCommand}
+			ended := manualFailureError{message: fmt.Sprintf("existing flatten child ended %s", existing.State), cause: ErrInvalidCommand}
+			// 零成交就终结的子单，同一单号重试只会得到同样结果；部分成交的等持仓同步后按新数量换单号再下。
+			if filled, parseErr := decimalOrZero(existing.FilledQuantity); parseErr == nil && filled.IsZero() {
+				return flattenFinal{ended}
+			}
+			return ended
 		default:
 			return nil
 		}
@@ -747,6 +853,11 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	spec.PositionSide = exchange.RuleFor(account.MarketType).PositionSide
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
 	if err != nil {
+		// 资金不足（预留不足时也返回它）和只减仓被拒可能只是持仓、余额还没同步，按可重试处理。
+		if orderapp.IsPermanentValidationError(err) &&
+			!errors.Is(err, orderapp.ErrInsufficientFunds) && !errors.Is(err, orderapp.ErrReduceOnly) {
+			return flattenFinal{err}
+		}
 		return err
 	}
 	result.ChildOrderIDs = appendUnique(
@@ -801,7 +912,7 @@ func (s *Service) remainingForAccount(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	reasons map[string]string,
+	reasons map[string]flattenReason,
 	result *FlattenAccountResult,
 ) []RemainingPosition {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -839,7 +950,7 @@ func (s *Service) remainingForAccount(
 				instrumentID = position.ExchangeSymbol
 			}
 			remaining = append(remaining, RemainingPosition{
-				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason,
+				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason.text, final: reason.final,
 			})
 		}
 	} else {
@@ -848,6 +959,13 @@ func (s *Service) remainingForAccount(
 			result.addError(managedErr)
 			return nil
 		}
+		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, tradingAccountID)
+		if listErr != nil {
+			result.addError(listErr)
+			return nil
+		}
+		byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
+		result.Dust = nil
 		for _, balance := range account.Snapshot.Balances {
 			if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 				continue
@@ -860,11 +978,23 @@ func (s *Service) remainingForAccount(
 			if quantity.Cmp(shared.Zero()) <= 0 {
 				continue
 			}
+			if instrument, found := byAsset[balance.Asset]; found {
+				price := shared.Zero()
+				if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol); quoteErr == nil {
+					price = quote.Price
+				}
+				if exposure.SpotDust(quantity, price, instrument) {
+					result.Dust = append(result.Dust, RemainingPosition{
+						Asset: balance.Asset, Quantity: quantity.String(), Reason: "零头，低于交易所最小数量或最小金额",
+					})
+					continue
+				}
+			}
 			reason := reasonFor(
 				reasons, "asset:"+balance.Asset, "asset remains after final sync",
 			)
 			remaining = append(remaining, RemainingPosition{
-				Asset: balance.Asset, Quantity: quantity.String(), Reason: reason,
+				Asset: balance.Asset, Quantity: quantity.String(), Reason: reason.text, final: reason.final,
 			})
 		}
 	}
@@ -1031,31 +1161,6 @@ func baseQuantityRules(
 	return step, minimum, nil
 }
 
-func floorToStep(value, step shared.Decimal) shared.Decimal {
-	if value.Cmp(shared.Zero()) <= 0 || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero()
-	}
-	ratio := new(big.Rat)
-	if _, ok := ratio.SetString(value.Div(step).String()); !ok {
-		return shared.Zero()
-	}
-	units := new(big.Int).Quo(ratio.Num(), ratio.Denom())
-	whole, err := shared.ParseDecimal(units.String())
-	if err != nil {
-		return shared.Zero()
-	}
-	return whole.Mul(step)
-}
-
-func tradableForSettlement(
-	instrument store.InstrumentRecord,
-	settlementAsset string,
-) bool {
-	return (instrument.Status == "TRADING" || instrument.Status == "live") &&
-		(instrument.SettlementAsset == "" ||
-			instrument.SettlementAsset == settlementAsset)
-}
-
 func decimalOrZero(raw string) (shared.Decimal, error) {
 	if strings.TrimSpace(raw) == "" {
 		return shared.Zero(), nil
@@ -1063,11 +1168,11 @@ func decimalOrZero(raw string) (shared.Decimal, error) {
 	return shared.ParseDecimal(raw)
 }
 
-func reasonFor(values map[string]string, key, fallback string) string {
-	if reason := values[key]; reason != "" {
+func reasonFor(values map[string]flattenReason, key, fallback string) flattenReason {
+	if reason := values[key]; reason.text != "" {
 		return reason
 	}
-	return fallback
+	return flattenReason{text: fallback}
 }
 
 func joinError(current, next string) string {
