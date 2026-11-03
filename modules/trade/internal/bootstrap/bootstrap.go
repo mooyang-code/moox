@@ -172,6 +172,9 @@ func initialize(
 		MaxChildNotional: shared.MustDecimal(maxChildNotional),
 		OnReversal:       noteTargetReversal(tradeStore),
 		Observe:          &telemetry.ExecutionMetrics{},
+		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
+		MinBatchInterval: time.Second,
+		RateStatus:       adapterRateStatus(manager),
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
@@ -811,5 +814,20 @@ func observeRateLimits() {
 	}
 	httpclient.OnWeight = func(host string, used, _ int) {
 		telemetry.RateWeightUsed.WithLabelValues(host).Set(float64(used))
+	}
+}
+
+// adapterRateStatus 返回执行账户适配器的限流状态；模拟盘和没有限流模型的场所返回 false。
+func adapterRateStatus(manager *traderuntime.Manager) func(string) (exchange.RateStatus, bool) {
+	return func(tradingAccountID string) (exchange.RateStatus, bool) {
+		adapter, err := manager.Adapter(tradingAccountID)
+		if err != nil {
+			return exchange.RateStatus{}, false
+		}
+		source, ok := adapter.(exchange.RateStatusSource)
+		if !ok {
+			return exchange.RateStatus{}, false
+		}
+		return source.RateStatus(), true
 	}
 }

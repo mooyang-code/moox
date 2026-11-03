@@ -31,6 +31,8 @@ var errPrivateDisconnected = errors.New("trade runtime: private stream disconnec
 type ExchangeSession struct {
 	symbolMu          sync.Mutex
 	configuredSymbols map[string]string
+	// symbolLocks 按标的串行设置杠杆：同一批里不同标的可以并发设置。
+	symbolLocks map[string]*sync.Mutex
 
 	Account               store.TradingAccountRecord
 	Adapter               execution.ExecutionAdapter
@@ -518,9 +520,13 @@ func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string,
 	if !ok || exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
 		return nil
 	}
+	lock := s.symbolLock(symbol)
+	lock.Lock()
+	defer lock.Unlock()
 	s.symbolMu.Lock()
-	defer s.symbolMu.Unlock()
-	if s.configuredSymbols[symbol] == leverage.String() {
+	configured := s.configuredSymbols[symbol] == leverage.String()
+	s.symbolMu.Unlock()
+	if configured {
 		return nil
 	}
 	if err := configurer.SetMarginMode(ctx, shared.ExchangeSymbol(symbol), exchange.MarginModeCross); err != nil {
@@ -529,11 +535,27 @@ func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string,
 	if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
 		return err
 	}
+	s.symbolMu.Lock()
 	if s.configuredSymbols == nil {
 		s.configuredSymbols = make(map[string]string)
 	}
 	s.configuredSymbols[symbol] = leverage.String()
+	s.symbolMu.Unlock()
 	return nil
+}
+
+func (s *ExchangeSession) symbolLock(symbol string) *sync.Mutex {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	if s.symbolLocks == nil {
+		s.symbolLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := s.symbolLocks[symbol]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.symbolLocks[symbol] = lock
+	}
+	return lock
 }
 
 // ForgetSymbolConfig 让标的下次开仓前重新设置；默认杠杆变更时全部标的都要重新设置。

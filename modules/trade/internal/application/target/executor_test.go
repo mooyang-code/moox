@@ -65,6 +65,32 @@ func (s *targetOrderServiceStub) Submit(
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
+func (s *targetOrderServiceStub) SubmitBatch(
+	ctx context.Context,
+	spaceID string,
+	orderIDs []string,
+) ([]orderapp.BatchResult, error) {
+	results := make([]orderapp.BatchResult, 0, len(orderIDs))
+	for _, orderID := range orderIDs {
+		order, err := s.Submit(ctx, spaceID, orderID)
+		results = append(results, orderapp.BatchResult{OrderID: orderID, Order: order, Err: err})
+	}
+	return results, nil
+}
+
+func (s *targetOrderServiceStub) ResolveUnknownBatch(
+	ctx context.Context,
+	spaceID string,
+	orderIDs []string,
+) ([]orderapp.BatchResult, error) {
+	results := make([]orderapp.BatchResult, 0, len(orderIDs))
+	for _, orderID := range orderIDs {
+		order, err := s.ResolveUnknown(ctx, spaceID, orderID)
+		results = append(results, orderapp.BatchResult{OrderID: orderID, Order: order, Err: err})
+	}
+	return results, nil
+}
+
 func (s *targetOrderServiceStub) Cancel(
 	_ context.Context,
 	_ string,

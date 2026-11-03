@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -67,6 +68,10 @@ type Service struct {
 	NewOrderID          func() string
 	Now                 func() time.Time
 	UnknownLookupWindow time.Duration
+
+	// lookups 记录批量解析未知订单时每笔最近一次查询的时间，用于限制查询次数。
+	lookupMu sync.Mutex
+	lookups  map[string]time.Time
 }
 
 func (s *Service) Get(
@@ -748,24 +753,10 @@ func (s *Service) ResolveUnknown(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
-	if err != nil {
-		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "resolve_unknown_lock", Err: err}
-	}
-	record, err = s.Store.GetOrder(ctx, spaceID, orderID)
-	if err != nil {
-		unlock()
-		return orderdomain.Order{}, err
-	}
-	current, err := domainOrder(record)
-	if err != nil {
-		unlock()
-		return current, err
-	}
-	wasUnknown := current.State == orderdomain.Submitting ||
-		current.State == orderdomain.SubmitUnknown
-	resolved, err := s.resolveUnknown(ctx, record, current)
-	unlock()
+	wasUnknown := record.State == string(orderdomain.Submitting) ||
+		record.State == string(orderdomain.SubmitUnknown)
+	resolved, err := s.resolveUnknownLocked(ctx, record)
+	// 尾部同步在放锁之后：同步要拿执行锁和账户锁。
 	if err != nil || !wasUnknown || resolved.State != orderdomain.Open ||
 		s.Syncer == nil {
 		return resolved, err
@@ -774,6 +765,32 @@ func (s *Service) ResolveUnknown(
 		return resolved, err
 	}
 	return s.Get(ctx, record.SpaceID, record.OrderID)
+}
+
+// resolveUnknownLocked 持锁解析一笔未知订单，不做尾部同步。目标子单先拿组合账户的执行锁：
+// 批量发送时账户锁不跨请求，只有执行锁能保证发送中的 SUBMITTING 不被当成崩溃残留。
+func (s *Service) resolveUnknownLocked(ctx context.Context, record store.OrderRecord) (orderdomain.Order, error) {
+	if record.OwnerType == string(orderdomain.OwnerTarget) && record.LogicalAccountID != "" {
+		unlockExecution, err := s.Store.LockLogicalAccountExecutionContext(ctx, record.SpaceID, record.LogicalAccountID)
+		if err != nil {
+			return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "resolve_unknown_lock", Err: err}
+		}
+		defer unlockExecution()
+	}
+	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
+	if err != nil {
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "resolve_unknown_lock", Err: err}
+	}
+	defer unlock()
+	record, err = s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	current, err := domainOrder(record)
+	if err != nil {
+		return current, err
+	}
+	return s.resolveUnknown(ctx, record, current)
 }
 
 func (s *Service) resolveUnknown(
@@ -896,21 +913,43 @@ func (s *Service) resolveUnknownFound(
 	return current, nil
 }
 
+// submitSend 是已经落为 SUBMITTING、等待发往交易所的订单。
+type submitSend struct {
+	record     store.OrderRecord
+	aggregate  orderdomain.Order
+	adapter    execution.ExecutionAdapter
+	validation Validation
+}
+
+// submit 是串行提交：准备、发送、记录都在调用方持有的锁里完成。
 func (s *Service) submit(
 	ctx context.Context,
 	record store.OrderRecord,
 ) (orderdomain.Order, bool, error) {
+	send, result, err := s.prepareSubmit(ctx, record)
+	if send == nil {
+		return result, false, err
+	}
+	return s.deliverSubmit(ctx, send, nil)
+}
+
+// prepareSubmit 完成提交前的全部检查并把订单落为 SUBMITTING。返回空的 send 表示本地已经处理完
+// （拒单、暂缓或出错），result 和 err 就是结果。调用方要持有账户锁。
+func (s *Service) prepareSubmit(
+	ctx context.Context,
+	record store.OrderRecord,
+) (*submitSend, orderdomain.Order, error) {
 	aggregate, err := domainOrder(record)
 	if err != nil {
-		return orderdomain.Order{}, false, err
+		return nil, orderdomain.Order{}, err
 	}
 	aggregate.Spec, err = s.refreshReducePositionOnly(ctx, aggregate.Spec)
 	if err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
-			return rejected, false, rejectErr
+			return nil, rejected, rejectErr
 		}
-		return orderdomain.Order{}, false, err
+		return nil, orderdomain.Order{}, err
 	}
 	validator := s.Validator
 	retryRepriced := false
@@ -922,7 +961,7 @@ func (s *Service) submit(
 			// 持久化的参考价仍是原值，只有预留金额按需增大。
 			fresh, freshErr := s.freshReference(ctx, record, aggregate.Spec, validator.MaxReferenceAge)
 			if freshErr != nil {
-				return aggregate, false, freshErr
+				return nil, aggregate, freshErr
 			}
 			if fresh.ReferencePrice.Cmp(originalReference) < 0 {
 				fresh.ReferencePrice = originalReference
@@ -948,18 +987,18 @@ func (s *Service) submit(
 		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
 		adapter, adapterErr := s.Adapters.Adapter(record.TradingAccountID)
 		if adapterErr != nil {
-			return aggregate, false, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
+			return nil, aggregate, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
 		}
 		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
 		if quoteErr != nil {
-			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
+			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
 		}
 		if !paperQuoteFresh(quote, s.now(), validator.MaxReferenceAge) {
-			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
 		}
 		price, priceErr := paperExecutablePrice(aggregate.Spec.Side, quote)
 		if priceErr != nil {
-			return aggregate, false, accountExecutionError(record.TradingAccountID, "quote", priceErr)
+			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", priceErr)
 		}
 		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = price, quote.SourceTime
 		validation, err = validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
@@ -968,42 +1007,42 @@ func (s *Service) submit(
 	if err != nil {
 		if permanentValidationError(err) {
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
-			return rejected, false, rejectErr
+			return nil, rejected, rejectErr
 		}
-		return orderdomain.Order{}, false, err
+		return nil, orderdomain.Order{}, err
 	}
 	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
 	if err != nil {
-		return aggregate, false, err
+		return nil, aggregate, err
 	}
 	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
 	if err != nil {
-		return orderdomain.Order{}, false, accountExecutionError(record.TradingAccountID, "adapter", err)
+		return nil, orderdomain.Order{}, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
 	// Place and margin preparation may perform account-scoped I/O. Re-read the
 	// target after those calls and before persisting SUBMITTING so a target that
 	// expired meanwhile remains a local PENDING intent and never reaches POST.
 	if err := s.authorizeTargetSubmit(ctx, record); err != nil {
-		return aggregate, false, err
+		return nil, aggregate, err
 	}
 	if err := ctx.Err(); err != nil {
-		return aggregate, false, err
+		return nil, aggregate, err
 	}
 	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
 		exchange.RuleFor(validation.Account.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
 		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, record.ExchangeSymbol, validation.Leverage); err != nil {
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
-				return aggregate, false, err
+				return nil, aggregate, err
 			}
 			// 交易所明确拒绝：写入提交时间，拒单规则才会把它计入。
 			record.SubmittedAt = s.now().UnixMilli()
 			rejected, rejectErr := s.rejectPending(ctx, record, aggregate, err)
-			return rejected, false, rejectErr
+			return nil, rejected, rejectErr
 		}
 	}
 	expected := aggregate.Version
 	if _, err = aggregate.BeginSubmit(); err != nil {
-		return orderdomain.Order{}, false, err
+		return nil, orderdomain.Order{}, err
 	}
 	releaseReservationForReduction := !record.ReduceOnly &&
 		aggregate.Spec.ReducePositionOnly
@@ -1014,11 +1053,11 @@ func (s *Service) submit(
 		if record.PaperExecutionPrice != nil {
 			previous, parseErr := shared.ParseDecimal(*record.PaperExecutionPrice)
 			if parseErr != nil {
-				return aggregate, false, parseErr
+				return nil, aggregate, parseErr
 			}
 			reference, parseErr := shared.ParseDecimal(record.ReferencePrice)
 			if parseErr != nil || reference.Cmp(shared.Zero()) <= 0 {
-				return aggregate, false, store.ErrInvalidRecord
+				return nil, aggregate, store.ErrInvalidRecord
 			}
 			// Preserve the slippage fixed at Place, even if account settings changed.
 			price = previous.Mul(price).Div(reference)
@@ -1090,8 +1129,21 @@ func (s *Service) submit(
 		}
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
-		return orderdomain.Order{}, false, err
+		return nil, orderdomain.Order{}, err
 	}
+	return &submitSend{record: record, aggregate: aggregate, adapter: adapter, validation: validation}, orderdomain.Order{}, nil
+}
+
+// deliverSubmit 把已经落为 SUBMITTING 的订单发往交易所并记录结果。发送前再确认一次目标授权，
+// 失败就退回待提交、不发请求。lockAccount 不为空时只在记录结果时持有账户锁，用于批量并发发送。
+func (s *Service) deliverSubmit(
+	ctx context.Context,
+	send *submitSend,
+	lockAccount func(context.Context) (func(), error),
+) (orderdomain.Order, bool, error) {
+	record, aggregate, adapter, validation := send.record, send.aggregate, send.adapter, send.validation
+	var expected uint64
+	var err error
 	if authorizationErr := s.authorizeTargetSubmit(ctx, record); authorizationErr != nil {
 		pending, abortErr := s.abortUnsentSubmit(ctx, record, aggregate)
 		if abortErr != nil {
@@ -1124,6 +1176,13 @@ func (s *Service) submit(
 	// caller's entire budget. This context cannot authorize another POST.
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer persistCancel()
+	if lockAccount != nil {
+		unlock, lockErr := lockAccount(persistCtx)
+		if lockErr != nil {
+			return orderdomain.Order{}, false, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "submit_record_lock", Err: lockErr}
+		}
+		defer unlock()
+	}
 	latest, getErr := s.Store.GetOrder(persistCtx, record.SpaceID, record.OrderID)
 	if getErr != nil {
 		return orderdomain.Order{}, false, getErr
@@ -1178,6 +1237,23 @@ func (s *Service) submit(
 	if err = s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
 		if err := tx.UpdateOrder(latest, expected); err != nil {
 			return err
+		}
+		// 下单回执（币安 RESULT）里的累计成交量写入观察成交量：整条成交事件丢失时也能发现缺口。
+		// 实盘有成交就先关闭准入，成交明细补齐、余额覆盖后由同步恢复。
+		if callErr == nil && response.FilledQuantity.Cmp(shared.Zero()) > 0 {
+			if err := tx.RaiseObservedFilledQuantity(latest.SpaceID, latest.OrderID, response.FilledQuantity); err != nil {
+				return err
+			}
+			if validation.Account.ExecutionMode == exchange.ExecutionModeLive {
+				at := response.UpdatedAt.UnixMilli()
+				if at <= 0 {
+					at = s.now().UnixMilli()
+				}
+				if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, at); err != nil {
+					return err
+				}
+				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), "成交待余额同步确认")
+			}
 		}
 		return nil
 	}); err != nil {

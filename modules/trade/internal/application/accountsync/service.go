@@ -616,7 +616,8 @@ func (s *Service) resolveUnknownOrders(
 		if state != orderdomain.Submitting && state != orderdomain.SubmitUnknown {
 			continue
 		}
-		resolved, resolveErr := s.Orders.ResolveUnknown(
+		// 同步内部解析不再触发同步，每笔订单在未知窗口内最多查两次，避免整批超时时耗尽权重。
+		resolved, resolveErr := s.Orders.ResolveUnknownQuiet(
 			ctx,
 			account.SpaceID,
 			current.OrderID,
