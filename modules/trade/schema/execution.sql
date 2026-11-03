@@ -84,6 +84,9 @@ ON t_trade_orders (c_space_id, c_trading_account_id, c_state, c_mtime);
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_symbol_finished
 ON t_trade_orders (c_space_id, c_trading_account_id, c_exchange_symbol, c_finished_at);
 
+CREATE INDEX IF NOT EXISTS idx_trade_orders_account_finished
+ON t_trade_orders (c_space_id, c_trading_account_id, c_finished_at);
+
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (
     c_space_id,

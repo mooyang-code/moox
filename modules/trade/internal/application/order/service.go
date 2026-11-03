@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,7 +144,7 @@ func (s *Service) Place(
 		}
 	}
 
-	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	marginAdjustment, err := s.fundsMarginAdjustment(ctx, validation)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -424,6 +425,19 @@ func (s *Service) rejectTargetExternalConflict(
 	return nil
 }
 
+type authorizationReuseKey struct{}
+
+type authorizationReuse struct {
+	mu      sync.Mutex
+	results map[string]error
+}
+
+// withAuthorizationReuse 让批量提交的一个阶段内，同一执行账户、同一目标的授权检查只做一次。
+// 准备阶段和发送前各用一份：准备期间目标变了，发送前那次新检查仍会拦住，不会有子单发出。
+func withAuthorizationReuse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorizationReuseKey{}, &authorizationReuse{results: make(map[string]error)})
+}
+
 func (s *Service) authorizeTargetSubmit(
 	ctx context.Context,
 	record store.OrderRecord,
@@ -432,6 +446,38 @@ func (s *Service) authorizeTargetSubmit(
 		record.LogicalAccountID == "" {
 		return nil
 	}
+	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.RunnerID, record.OwnerID}, "\x00")
+	return reuseAuthorization(ctx, key, func() error { return s.checkTargetAuthorization(ctx, record) })
+}
+
+// reuseAuthorization 在 ctx 带有复用范围时，同一 key 只调用一次 check 并复用结果（包括错误）。
+func reuseAuthorization(ctx context.Context, key string, check func() error) error {
+	reuse, _ := ctx.Value(authorizationReuseKey{}).(*authorizationReuse)
+	if reuse == nil {
+		return check()
+	}
+	reuse.mu.Lock()
+	defer reuse.mu.Unlock()
+	if err, ok := reuse.results[key]; ok {
+		return err
+	}
+	err := check()
+	if err == nil || reusableAuthorizationError(err) {
+		// 存储繁忙、超时这类瞬时错误不复用，同批后面的单各自重试。
+		reuse.results[key] = err
+	}
+	return err
+}
+
+func reusableAuthorizationError(err error) bool {
+	return errors.Is(err, ErrTargetExpired) || errors.Is(err, ErrTargetOwnerConflict) ||
+		errors.Is(err, ErrAutomationPaused) || errors.Is(err, ErrAccountNotReady)
+}
+
+func (s *Service) checkTargetAuthorization(
+	ctx context.Context,
+	record store.OrderRecord,
+) error {
 	account, err := s.Store.GetTradingAccountByID(
 		ctx,
 		record.TradingAccountID,
@@ -1016,7 +1062,7 @@ func (s *Service) prepareSubmit(
 		}
 		return nil, orderdomain.Order{}, err
 	}
-	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	marginAdjustment, err := s.fundsMarginAdjustment(ctx, validation)
 	if err != nil {
 		return nil, aggregate, err
 	}
@@ -1024,9 +1070,9 @@ func (s *Service) prepareSubmit(
 	if err != nil {
 		return nil, orderdomain.Order{}, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	// Place and margin preparation may perform account-scoped I/O. Re-read the
-	// target after those calls and before persisting SUBMITTING so a target that
-	// expired meanwhile remains a local PENDING intent and never reaches POST.
+	// 下单准备和保证金估值可能有账户级 I/O，之后再确认一次目标授权，过期的目标留在本地 PENDING。
+	// 批量提交时这次检查在准备阶段内复用，准备期间目标若变化，由发送前整批重新检查拦住，
+	// 已落 SUBMITTING 的单会退回 PENDING，不会发出。
 	if err := s.authorizeTargetSubmit(ctx, record); err != nil {
 		return nil, aggregate, err
 	}

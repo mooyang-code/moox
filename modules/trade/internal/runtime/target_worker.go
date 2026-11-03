@@ -296,6 +296,11 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 				runErrors = append(runErrors, convergeErr)
 			}
 		}
+		if result.RetryAfter > 0 {
+			// 批间隔到期时直接唤醒，不等下一次定时轮询。
+			spaceID, logicalAccountID := record.SpaceID, record.LogicalAccountID
+			time.AfterFunc(result.RetryAfter, func() { w.WakeTarget(spaceID, logicalAccountID) })
+		}
 		w.observe(result, convergeErr, now)
 	}
 	return errors.Join(runErrors...)

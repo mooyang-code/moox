@@ -174,7 +174,9 @@ func initialize(
 		Observe:          &telemetry.ExecutionMetrics{},
 		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
 		MinBatchInterval: time.Second,
-		RateStatus:       adapterRateStatus(manager),
+		// 模拟盘没有交易所限频，批间隔缩短到 0.3 秒。
+		PaperMinBatchInterval: 300 * time.Millisecond,
+		RateStatus:            adapterRateStatus(manager),
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
