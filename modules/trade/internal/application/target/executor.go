@@ -75,6 +75,9 @@ type Executor struct {
 	BatchSize func(marketType string) int
 	// MinBatchInterval 是同一组合账户相邻两批的最小间隔，为零时不限制。
 	MinBatchInterval time.Duration
+	// PaperMinBatchInterval 是成员全部为模拟盘时的批间隔，为零时用 MinBatchInterval。
+	// 模拟盘没有交易所限频，间隔只用来让撮合和同步跟上。
+	PaperMinBatchInterval time.Duration
 	// RateStatus 返回执行账户所在接口的限流状态，模拟盘没有。
 	RateStatus func(tradingAccountID string) (exchange.RateStatus, bool)
 
@@ -109,6 +112,8 @@ const (
 type Result struct {
 	Status string
 	Action string
+	// RetryAfter 非零时表示批间隔未到，过这么久再收敛即可发下一批，不必等定时器。
+	RetryAfter time.Duration
 }
 
 type memberState struct {
@@ -391,13 +396,15 @@ func (e *Executor) Converge(
 			actions = append(actions, action)
 		}
 	}
-	if len(actions) > 0 && !e.batchAllowed(logicalAccount.LogicalAccountID, members) {
-		// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
-		target.BlockedTargets = blocked
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
+	if len(actions) > 0 {
+		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members); !allowed {
+			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
+			target.BlockedTargets = blocked
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusConverging, Action: "pace", RetryAfter: retryAfter}, nil
 		}
-		return Result{Status: StatusConverging, Action: "pace"}, nil
 	}
 	// 先减后加：减仓批的结果回来、资金释放之后才发加仓。本批有减仓成功下单时不加仓；
 	// 减仓全部下不了时才加仓，能否加仓由资金检查决定。
@@ -1514,18 +1521,19 @@ func (e *Executor) batchQuota(members []memberState) map[string]int {
 }
 
 // batchAllowed 判断现在能否发新批：批间隔已到，成员接口没有限流暂停，权重用量低于 90%。
-func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) bool {
+// 只因批间隔未到而不能发时，retryAfter 是还要等的时间；限流原因由定时器重试。
+func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) (bool, time.Duration) {
 	now := e.now()
-	if e.MinBatchInterval > 0 {
+	if interval := e.batchInterval(members); interval > 0 {
 		e.batchMu.Lock()
 		last := e.lastBatch[logicalAccountID]
 		e.batchMu.Unlock()
-		if !last.IsZero() && now.Sub(last) < e.MinBatchInterval {
-			return false
+		if elapsed := now.Sub(last); !last.IsZero() && elapsed < interval {
+			return false, interval - elapsed
 		}
 	}
 	if e.RateStatus == nil {
-		return true
+		return true, 0
 	}
 	for _, member := range members {
 		status, ok := e.RateStatus(member.account.TradingAccountID)
@@ -1533,10 +1541,23 @@ func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) 
 			continue
 		}
 		if status.Paused(now) || now.Before(status.OrdersPausedUntil) || status.UsageRatio() >= batchUsageLimit {
-			return false
+			return false, 0
 		}
 	}
-	return true
+	return true, 0
+}
+
+// batchInterval 返回这个组合账户的批间隔：成员全部是模拟盘时用模拟盘间隔。
+func (e *Executor) batchInterval(members []memberState) time.Duration {
+	if e.PaperMinBatchInterval <= 0 || len(members) == 0 {
+		return e.MinBatchInterval
+	}
+	for _, member := range members {
+		if exchange.ExecutionMode(member.account.ExecutionMode) != exchange.ExecutionModePaper {
+			return e.MinBatchInterval
+		}
+	}
+	return e.PaperMinBatchInterval
 }
 
 func (e *Executor) noteBatch(logicalAccountID string) {

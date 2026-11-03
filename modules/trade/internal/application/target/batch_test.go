@@ -104,6 +104,20 @@ func TestBatchIntervalPacesNextBatch(t *testing.T) {
 	require.Equal(t, "pace", result.Action)
 	require.Equal(t, StatusConverging, result.Status)
 	require.Len(t, f.orders.specs, 1)
+	// 只因批间隔未到时带回还要等的时间，worker 到期直接唤醒。
+	require.Greater(t, result.RetryAfter, time.Duration(0))
+	require.LessOrEqual(t, result.RetryAfter, time.Hour)
+}
+
+// 成员全部是模拟盘时用模拟盘批间隔，混有实盘成员时用实盘间隔。
+func TestBatchIntervalForPaperMembers(t *testing.T) {
+	executor := &Executor{MinBatchInterval: time.Second, PaperMinBatchInterval: 300 * time.Millisecond}
+	paper := memberState{account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModePaper)}}
+	live := memberState{account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModeLive)}}
+	require.Equal(t, 300*time.Millisecond, executor.batchInterval([]memberState{paper, paper}))
+	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper, live}))
+	executor.PaperMinBatchInterval = 0
+	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper}))
 }
 
 // 权重用到 90% 或接口暂停时不发新批，也不算阻塞。
