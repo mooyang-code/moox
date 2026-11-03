@@ -33,8 +33,11 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 
 ## 错误分类
 
-明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 429 和 HTTP 5xx 表示
-提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。只有
+明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 408 和 HTTP 5xx 表示
+提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。
+限流类错误确定未受理：HTTP 429/-1003、418、WAF 403 是 IP 级（同一域名暂停），-1015 是账户下单限流，-1008 是系统限流，OKX 50011/50040/50061 是下单限流（HTTP 200 里返回，由适配器识别）。这类下单回到 `PENDING` 并清空提交时间，不计入拒单。
+
+权重（币安）：永续每分钟 2400、现货 6000，按 IP 和域名计；永续下单 0 权重、现货 1。`httpclient` 记录 `X-MBX-USED-WEIGHT-1M`，同一分钟取最大值（部分接口如 `bookTicker` 的读数不准），新一分钟没有响应时读数作废。OKX 下单带 `expTime`（5 秒）。只有
 按 client order ID 查询返回不存在、最近成交里也找不到该 ID，并且距首次提交已达到 `UnknownLookupWindow`（未设置时 30 秒），订单才回到 `PENDING`，后续用同一个 client order ID 重试；等待窗口内保持未知，不立即重发。
 
 ## 环境
