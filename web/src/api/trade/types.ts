@@ -239,6 +239,8 @@ export interface FlattenAccountResult {
   status: string;
   child_order_ids?: string[];
   remaining_positions?: RemainingPosition[];
+  /** 下不了单的现货零头，不算剩余 */
+  dust_positions?: RemainingPosition[];
   error?: string;
 }
 
@@ -386,4 +388,28 @@ export interface ExecutionCapabilities {
   order_types: OrderType[];
   fill_policies: FillPolicy[];
   can_close_paper_simulation: boolean;
+  /** 能否查询资金流水（币安现货没有统一流水接口） */
+  ledger?: boolean;
+}
+
+/** 资金流水类型：TRADE、FEE、REALIZED_PNL、FUNDING_FEE、TRANSFER、LIQUIDATION、INTEREST、OTHER */
+export type LedgerType = "TRADE" | "FEE" | "REALIZED_PNL" | "FUNDING_FEE" | "TRANSFER" | "LIQUIDATION" | "INTEREST" | "OTHER";
+
+export interface LedgerEntry {
+  id: string;
+  time: string;
+  type: LedgerType;
+  exchange_type?: string;
+  asset: string;
+  amount: string;
+  exchange_symbol?: string;
+  trade_id?: string;
+  info?: string;
+}
+
+export interface ListAccountLedgerReq {
+  trading_account_id: string;
+  start_time?: string;
+  end_time?: string;
+  limit?: number;
 }
