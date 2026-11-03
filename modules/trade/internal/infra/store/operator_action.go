@@ -208,6 +208,16 @@ func (tx *Tx) RunningOperatorActionsOfType(spaceID, logicalAccountID, actionType
 	return records, nil
 }
 
+// CountOperatorActionsSince 返回组合账户 since 之后创建的某类动作数。
+func (s *Store) CountOperatorActionsSince(ctx context.Context, spaceID, logicalAccountID, actionType string, since time.Time) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Table("t_operator_actions").
+		Where("c_space_id = ? AND c_logical_account_id = ? AND c_action_type = ? AND c_ctime >= ?",
+			spaceID, logicalAccountID, actionType, since.UTC().Format("2006-01-02 15:04:05")).
+		Count(&count).Error
+	return count, err
+}
+
 func (s *Store) ListAllRunningOperatorActions(
 	ctx context.Context,
 ) ([]OperatorActionRecord, error) {

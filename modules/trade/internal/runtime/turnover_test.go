@@ -36,3 +36,20 @@ func TestRequiredTurnoverSumsTargetChanges(t *testing.T) {
 		t.Fatalf("required without baseline = %v, want 300", required)
 	}
 }
+
+func TestRequiredTurnoverDropsStaleBaseline(t *testing.T) {
+	// 基准和窗口内第一张隔了很久（策略停过），从空仓算起：BTC 0→3 计 300。
+	receipts := []store.TargetReceiptRecord{
+		{AcceptedAt: 100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
+			ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
+		{AcceptedAt: 10_000, EffectiveAt: 10_000, ValidUntil: 10_060,
+			QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`, ReferencePricesJSON: `{"BTC":{"price":"100"}}`},
+	}
+	required, err := requiredTurnover(receipts, 1_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(required-300) > 1e-9 {
+		t.Fatalf("required = %v, want 300", required)
+	}
+}

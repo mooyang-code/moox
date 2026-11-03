@@ -245,6 +245,14 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 	if actual <= 0 {
 		return false, nil
 	}
+	// 窗口内清过仓，恢复后执行器会按目标重建整仓，这部分成交没有对应的目标变化，这一小时不判断。
+	flattens, err := w.Store.CountOperatorActionsSince(ctx, logical.SpaceID, logical.LogicalAccountID, "FLATTEN", now.Add(-time.Hour))
+	if err != nil {
+		return false, err
+	}
+	if flattens > 0 {
+		return false, nil
+	}
 	receipts, err := w.Store.ListTargetReceiptsSince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
 	if err != nil {
 		return false, err
@@ -261,6 +269,13 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 	previous := map[string]float64{}
 	lastPrice := map[string]float64{}
 	required := 0.0
+	// 窗口前的基准和窗口内第一张隔了两根 K 线以上（策略停过），持仓不再等于基准，改为从空仓算起。
+	if len(receipts) > 1 && receipts[0].AcceptedAt <= since {
+		interval := receipts[1].ValidUntil - receipts[1].EffectiveAt
+		if interval > 0 && receipts[1].AcceptedAt-receipts[0].AcceptedAt > 2*interval {
+			receipts = receipts[1:]
+		}
+	}
 	for index, receipt := range receipts {
 		var targets []store.InstrumentTarget
 		if err := json.Unmarshal([]byte(receipt.QuantityTargetsJSON), &targets); err != nil {
