@@ -23,7 +23,7 @@ const DefaultTimeout = time.Hour
 //go:embed page.html
 var pageSource string
 
-// pageAssets 是录入页里的操作截图（腾讯云控制台的创建子用户步骤）。
+// pageAssets 是录入页里的截图：欢迎屏的管理台截图，以及腾讯云控制台的创建子用户步骤。
 //
 //go:embed assets/*.webp
 var pageAssets embed.FS
