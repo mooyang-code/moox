@@ -15,7 +15,9 @@ import (
 
 type batchAdapterSource struct{ adapter execution.ExecutionAdapter }
 
-func (s batchAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) { return s.adapter, nil }
+func (s batchAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) {
+	return s.adapter, nil
+}
 
 // barrierAdapter 等到同一批的请求全部到齐才返回：串行发送时第一个请求会一直等到超时。
 type barrierAdapter struct {
