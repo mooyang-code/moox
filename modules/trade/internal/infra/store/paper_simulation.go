@@ -186,15 +186,11 @@ func (tx *Tx) listOpenOrdersForAccount(spaceID, tradingAccountID string) ([]Orde
 	var rows []orderRow
 	err := tx.db.Table("t_trade_orders").
 		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, activeOrderStates).
-		Order("c_order_id").Find(&rows).Error
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	result := make([]OrderRecord, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, orderRecordFromRow(row))
-	}
-	return result, nil
+	return sortedOrderRecords(rows), nil
 }
 
 func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) error {

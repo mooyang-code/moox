@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -588,28 +589,38 @@ func (s *Store) ListOrdersForAccount(
 	tradingAccountID string,
 	terminalSince int64,
 ) ([]OrderRecord, error) {
-	var rows []orderRow
-	query := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
-	if terminalSince > 0 {
-		query = query.Where(
-			"c_state NOT IN (?, ?, ?, ?, ?) OR c_finished_at >= ?",
-			"FILLED",
-			"CANCELED",
-			"PARTIALLY_CANCELED",
-			"REJECTED",
-			"EXPIRED",
-			terminalSince,
-		)
+	base := func() *gorm.DB {
+		return s.db.WithContext(ctx).Table("t_trade_orders").
+			Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
 	}
-	if err := query.Order("c_order_id").Find(&rows).Error; err != nil {
+	var rows []orderRow
+	if terminalSince <= 0 {
+		if err := base().Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		return sortedOrderRecords(rows), nil
+	}
+	// 未结束的和窗口内结束的分两次查，各走一个索引；写成一条 OR 会扫该账户全部历史订单。
+	if err := base().Where("c_state IN ?", activeOrderStates).Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	var finished []orderRow
+	if err := base().Where("c_finished_at >= ? AND c_state NOT IN ?", terminalSince, activeOrderStates).
+		Find(&finished).Error; err != nil {
+		return nil, err
+	}
+	return sortedOrderRecords(append(rows, finished...)), nil
+}
+
+// sortedOrderRecords 按订单号排序。排序放在 Go 里做：SQL 里写 ORDER BY c_order_id 会让 SQLite
+// 改走主键索引扫描整个空间的订单，而不是用账户和状态索引。
+func sortedOrderRecords(rows []orderRow) []OrderRecord {
 	records := make([]OrderRecord, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, orderRecordFromRow(row))
 	}
-	return records, nil
+	sort.Slice(records, func(i, j int) bool { return records[i].OrderID < records[j].OrderID })
+	return records
 }
 
 // activeOrderStates 是未结束订单的全部状态。查未结束订单一律写成 c_state IN，
@@ -627,14 +638,10 @@ func (s *Store) ListActiveOrdersForAccount(
 	var rows []orderRow
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, activeOrderStates).
-		Order("c_order_id").Find(&rows).Error; err != nil {
+		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	records := make([]OrderRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, orderRecordFromRow(row))
-	}
-	return records, nil
+	return sortedOrderRecords(rows), nil
 }
 
 // RejectedTargetAccounts 返回本目标在该标的上被交易所拒绝过的执行账户及拒单原因。
@@ -730,15 +737,10 @@ func (s *Store) ListOrdersForLane(
 			tradingAccountID,
 			symbol,
 		).
-		Order("c_order_id").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	records := make([]OrderRecord, 0, len(rows))
-	for _, row := range rows {
-		records = append(records, orderRecordFromRow(row))
-	}
-	return records, nil
+	return sortedOrderRecords(rows), nil
 }
 
 type OrderQuery struct {
