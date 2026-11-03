@@ -126,6 +126,9 @@ func (f *fakeExchange) LoadInstruments(context.Context) ([]exchange.Instrument, 
 func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.quoteErr != nil {
+		return exchange.ReferencePrice{}, f.quoteErr
+	}
 	return f.reference, nil
 }
 func (f *fakeExchange) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {

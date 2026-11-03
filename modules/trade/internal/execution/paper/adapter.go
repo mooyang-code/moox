@@ -142,25 +142,19 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}, nil
 }
 
+// valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。
 func (a *Adapter) valuationQuote(ctx context.Context, symbol string) (shared.Decimal, error) {
-	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	quote, err := a.GetReferencePrice(ctx, symbol)
 	if err != nil {
 		return shared.Zero(), err
 	}
-	if !QuoteFresh(quote, a.now(), 10*time.Second) {
+	if !QuoteFresh(execution.MarketQuote{SourceTime: quote.UpdatedAt}, a.now(), 10*time.Second) {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", symbol)
 	}
-	price := quote.Last
-	if price.IsZero() {
-		price = quote.Ask
-	}
-	if price.IsZero() {
-		price = quote.Bid
-	}
-	if price.Cmp(shared.Zero()) <= 0 {
+	if quote.Price.Cmp(shared.Zero()) <= 0 {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is empty for %s", symbol)
 	}
-	return price, nil
+	return quote.Price, nil
 }
 
 func paperBalances(total, locked map[string]shared.Decimal) []exchange.AssetBalance {
