@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -191,14 +190,18 @@ func expectOKXSubscribeAcks(
 	return buffered, nil
 }
 
+// eventOnlyPush 让 account、positions 频道只在有变化时推送。不设时 OKX 还会定时推送（positions 约每 5 秒），
+// 每次推送都会关闭准入并触发同步。OKX 要求它是 JSON 字符串。
+const eventOnlyPush = `{"updateInterval": "0"}`
+
 func (a *Adapter) privateChannels() []map[string]string {
 	channels := []map[string]string{
 		{"channel": "orders", "instType": a.instrumentType()},
-		{"channel": "account"},
+		{"channel": "account", "extraParams": eventOnlyPush},
 	}
 	if a.config.MarketType == exchange.MarketTypeSwap {
 		channels = append(channels, map[string]string{
-			"channel": "positions", "instType": "SWAP",
+			"channel": "positions", "instType": "SWAP", "extraParams": eventOnlyPush,
 		})
 	}
 	return channels
@@ -349,59 +352,9 @@ func (a *Adapter) dispatchPrivate(
 		if err := json.Unmarshal(message.Data, &rows); err != nil || len(rows) == 0 {
 			return rejected("decode private account", err)
 		}
-		snapshot := exchange.AccountSnapshot{
-			ExchangeUpdatedAt: millisString(rows[0].UTime),
-			Present: exchange.AccountSnapshotPresence{
-				Balances: true,
-				Equity:   true,
-			},
-		}
-		equity, err := decimalOrZero(rows[0].TotalEq)
+		snapshot, err := a.balanceSnapshot(rows[0])
 		if err != nil {
 			return err
-		}
-		snapshot.Equity = equity
-		for _, detail := range rows[0].Details {
-			totalRaw := detail.Eq
-			if totalRaw == "" {
-				totalRaw = detail.CashBal
-			}
-			total, err := decimalOrZero(totalRaw)
-			if err != nil {
-				return err
-			}
-			availableRaw := detail.AvailEq
-			if availableRaw == "" {
-				availableRaw = detail.AvailBal
-			}
-			available, err := decimalOrZero(availableRaw)
-			if err != nil {
-				return err
-			}
-			locked, err := decimalOrZero(detail.FrozenBal)
-			if err != nil {
-				return err
-			}
-			snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-				Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
-			})
-			if strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
-				snapshot.AvailableFunds = available
-				snapshot.UsedMargin, err = decimalOrZero(detail.Imr)
-				if err == nil {
-					snapshot.MaintenanceMargin, err = decimalOrZero(detail.Mmr)
-				}
-				if err == nil {
-					snapshot.UnrealizedPnL, err = decimalOrZero(detail.Upl)
-				}
-				if err != nil {
-					return err
-				}
-				snapshot.Present.AvailableFunds = true
-				snapshot.Present.UsedMargin = true
-				snapshot.Present.MaintenanceMargin = true
-				snapshot.Present.UnrealizedPnL = true
-			}
 		}
 		snapshot.RequiresSync = !snapshot.Present.AvailableFunds
 		if err := handler.OnAccountSnapshot(ctx, snapshot); err != nil {

@@ -344,13 +344,3 @@ func decimalValue(raw string) shared.Decimal {
 	}
 	return value
 }
-
-func mustLogicalAccounts(ctx context.Context, s *store.Store, spaceID string) []store.LogicalAccountRecord {
-	items, _ := s.ListLogicalAccounts(ctx, spaceID)
-	return items
-}
-
-func mustLogicalMembers(ctx context.Context, s *store.Store, spaceID, logicalID string) []store.LogicalAccountMemberRecord {
-	items, _ := s.ListLogicalAccountMembers(ctx, spaceID, logicalID, true)
-	return items
-}

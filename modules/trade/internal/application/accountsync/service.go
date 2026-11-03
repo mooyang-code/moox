@@ -1208,8 +1208,7 @@ func (s *Service) importExternalOrder(
 	} else {
 		tif = exchange.TimeInForceUnspecified
 	}
-	positionSide := current.PositionSide
-	positionSide = exchange.RuleFor(account.MarketType).PositionSide
+	positionSide := exchange.RuleFor(account.MarketType).PositionSide
 	referenceAt := current.CreatedAt
 	if referenceAt.IsZero() {
 		referenceAt = current.UpdatedAt

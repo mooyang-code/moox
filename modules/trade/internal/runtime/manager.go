@@ -345,6 +345,9 @@ func sameSessionConfig(
 		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
 }
 
+// stableSessionRun 是会话被视为正常运行过的时长，超过后断开重连不再沿用翻倍后的退避。
+var stableSessionRun = time.Minute
+
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {
 	delay := m.RetryMin
 	if delay <= 0 {
@@ -355,9 +358,17 @@ func (m *Manager) runSession(ctx context.Context, session ManagedSession) {
 		maxDelay = 30 * time.Second
 	}
 	for {
+		started := time.Now()
 		err := session.Run(ctx)
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return
+		}
+		// 正常跑过一段时间才断开（如币安每 24 小时断一次）从最短退避重来；只有连续快速失败才翻倍。
+		if time.Since(started) >= stableSessionRun {
+			delay = m.RetryMin
+			if delay <= 0 {
+				delay = time.Second
+			}
 		}
 		timer := time.NewTimer(delay)
 		select {

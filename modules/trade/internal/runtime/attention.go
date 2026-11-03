@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"time"
 
@@ -21,8 +23,10 @@ const (
 	notReadyGrace   = 2 * time.Minute
 	// expiredStreak 是连续过期且有差额的目标数，1 分钟策略偶尔过期不告警。
 	expiredStreak = 3
-	// turnoverMultiple 是 1 小时成交额相对组合账户权益的告警倍数：总权重 2 倍时约等于每小时调仓 3 轮。
-	turnoverMultiple = 6
+	// turnoverRatioLimit 是 1 小时目标成交额相对“目标变化所需成交额”的告警倍数；按目标变化比较，和策略周期无关。
+	turnoverRatioLimit = 1.5
+	// turnoverSlackRatio 是按权益计的余量，吸收取整、价格变动和未收敛完的上一目标带来的差额。
+	turnoverSlackRatio = 0.05
 	// unknownResultsLimit 是 1 分钟内结果未知下单的告警笔数。
 	unknownResultsLimit = 5
 )
@@ -128,10 +132,11 @@ func (w *AttentionWorker) scanLogicalAccount(
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
+	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
-		return err
+		log.WarnContextf(ctx, "交易关注项：组合 %s 换手检查失败：%v", logical.LogicalAccountID, err)
 	} else if high {
-		items[telemetry.AttentionTurnoverHigh] = append(items[telemetry.AttentionTurnoverHigh], logical.Name+"：1 小时成交额超过权益的 6 倍")
+		items[telemetry.AttentionTurnoverHigh] = append(items[telemetry.AttentionTurnoverHigh], logical.Name+"：1 小时目标成交额超过目标变化所需的 1.5 倍")
 	}
 	target, err := w.Store.GetLogicalAccountTarget(ctx, logical.SpaceID, logical.LogicalAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -213,14 +218,21 @@ func (w *AttentionWorker) countExpired(
 	return nil
 }
 
-// turnoverHigh 判断组合账户 1 小时成交额是否超过权益的 turnoverMultiple 倍，用来发现下单量异常。
+// turnoverHigh 判断组合账户 1 小时内目标子单的成交额是否明显超过目标变化所需的成交额，用来发现重复下单。
+// 所需成交额 = 相邻两个目标之间每条标的 |新数量 − 旧数量| × 参考价之和；窗口内第一个目标和窗口前最后一个比。
+// 没收敛完就过期的目标只会让实际成交额偏小，不会误报。
 func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.LogicalAccountRecord, now time.Time) (bool, error) {
 	members, err := w.Store.ListLogicalAccountMembers(ctx, logical.SpaceID, logical.LogicalAccountID, false)
 	if err != nil {
 		return false, err
 	}
+	// 1 小时内暂停或恢复过（清仓、人工下单都会暂停）：恢复后执行器会把持仓拉回目标，
+	// 这部分成交没有对应的目标变化，这一小时不判断。组合账户只在暂停、恢复、改名、认领会话时更新。
+	if !logical.UpdatedAt.IsZero() && now.Sub(logical.UpdatedAt) < time.Hour {
+		return false, nil
+	}
 	since := now.Add(-time.Hour).UnixMilli()
-	equity, turnover := 0.0, 0.0
+	equity, actual := 0.0, 0.0
 	for _, member := range members {
 		account, err := w.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if err != nil {
@@ -229,11 +241,85 @@ func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.Logica
 		if value, parseErr := strconv.ParseFloat(account.Snapshot.Equity, 64); parseErr == nil {
 			equity += value
 		}
-		notional, err := w.Store.FillNotionalSince(ctx, logical.SpaceID, member.TradingAccountID, since)
+		notional, err := w.Store.TargetFillNotionalSince(ctx, logical.SpaceID, member.TradingAccountID, since)
 		if err != nil {
 			return false, err
 		}
-		turnover += notional
+		actual += notional
 	}
-	return equity > 0 && turnover > equity*turnoverMultiple, nil
+	if actual <= 0 {
+		return false, nil
+	}
+
+	receipts, err := w.Store.ListTargetReceiptsSince(ctx, logical.SpaceID, logical.LogicalAccountID, since)
+	if err != nil {
+		return false, err
+	}
+	required, err := requiredTurnover(receipts, since)
+	if err != nil {
+		return false, err
+	}
+	return actual > required*turnoverRatioLimit+equity*turnoverSlackRatio, nil
+}
+
+// requiredTurnover 累加相邻目标之间的数量变化额。保持（Hold）的标的沿用上一个已知数量。
+func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float64, error) {
+	previous := map[string]float64{}
+	lastPrice := map[string]float64{}
+	required := 0.0
+	// 窗口前的基准和窗口内第一张相隔超过两个目标有效期（策略停过），持仓不再等于基准，改为从空仓算起。
+	if len(receipts) > 1 && receipts[0].AcceptedAt <= since {
+		interval := receipts[1].ValidUntil - receipts[1].EffectiveAt
+		if interval > 0 && receipts[1].AcceptedAt-receipts[0].AcceptedAt > 2*interval {
+			receipts = receipts[1:]
+		}
+	}
+	for index, receipt := range receipts {
+		var targets []store.InstrumentTarget
+		if err := json.Unmarshal([]byte(receipt.QuantityTargetsJSON), &targets); err != nil {
+			return 0, err
+		}
+		// 回执的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
+		var prices map[string]struct {
+			Price string `json:"price"`
+		}
+		if err := json.Unmarshal([]byte(receipt.ReferencePricesJSON), &prices); err != nil {
+			return 0, err
+		}
+		current := make(map[string]float64, len(targets))
+		for instrumentID, quantity := range previous {
+			current[instrumentID] = quantity
+		}
+		listed := make(map[string]bool, len(targets))
+		for _, target := range targets {
+			listed[target.InstrumentID] = true
+			if target.Hold {
+				continue
+			}
+			quantity, err := strconv.ParseFloat(target.Quantity, 64)
+			if err != nil {
+				return 0, err
+			}
+			current[target.InstrumentID] = quantity
+		}
+		// 全量目标里没列出的标的目标为 0。
+		for instrumentID := range current {
+			if !listed[instrumentID] {
+				current[instrumentID] = 0
+			}
+		}
+		for instrumentID, evidence := range prices {
+			if price, err := strconv.ParseFloat(evidence.Price, 64); err == nil && price > 0 {
+				lastPrice[instrumentID] = price
+			}
+		}
+		// 窗口前的那条只作基准，不计入。清掉的标的这次没有参考价，沿用最近一次的。
+		if !(index == 0 && receipt.AcceptedAt <= since) {
+			for instrumentID, quantity := range current {
+				required += math.Abs(quantity-previous[instrumentID]) * lastPrice[instrumentID]
+			}
+		}
+		previous = current
+	}
+	return required, nil
 }

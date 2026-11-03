@@ -132,3 +132,31 @@ func TestOnPauseReportsHostAndReason(t *testing.T) {
 	require.Equal(t, hostKey(server.URL), host)
 	require.Equal(t, exchange.ErrorRateLimited, reason)
 }
+
+func TestQueryRateLimitDoesNotPauseOrders(t *testing.T) {
+	var orders atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			orders.Add(1)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	client := New(server.URL)
+	// OKX 把所有 429 都归为下单限流，查询被限流时不能停下单。
+	client.Classify = func(status int, _ []byte) exchange.ErrorKind {
+		if status == http.StatusTooManyRequests {
+			return exchange.ErrorOrderRateLimited
+		}
+		return ""
+	}
+	_, err := client.Do(context.Background(), &Request{Path: "/positions"})
+	require.True(t, exchange.IsKind(err, exchange.ErrorOrderRateLimited), "%v", err)
+	require.True(t, exchange.NotAccepted(err))
+	_, err = client.Do(context.Background(), &Request{Method: http.MethodPost, Path: "/order", Order: true})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, orders.Load())
+	require.True(t, client.Status().OrdersPausedUntil.IsZero())
+}

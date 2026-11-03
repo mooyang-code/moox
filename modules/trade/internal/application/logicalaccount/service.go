@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -38,8 +41,10 @@ type Readiness struct {
 }
 
 type Service struct {
-	Store          *store.Store
-	Syncer         AccountSyncer
+	Store  *store.Store
+	Syncer AccountSyncer
+	// Prices 用于判断现货零头的最小名义金额；为空时只比较最小数量。
+	Prices         targetapp.PriceSource
 	Now            func() time.Time
 	MaxSnapshotAge time.Duration
 }
@@ -96,8 +101,11 @@ func (s *Service) UpdateName(
 	logicalAccountID string,
 	name string,
 ) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil || strings.TrimSpace(name) == "" {
+	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	if strings.TrimSpace(name) == "" {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 名称不能为空", store.ErrInvalidRecord)
 	}
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
 	if lockErr != nil {
@@ -123,6 +131,14 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	}
 	if s.Syncer == nil {
 		return ErrServiceConfig
+	}
+	// 归属检查放在同步和持仓检查之前，否则已属于别的组合的账户会先看到无关的错误。
+	if owner, _, err := s.Store.FindLogicalAccountMembership(ctx, command.SpaceID, command.TradingAccountID); err == nil {
+		if owner.LogicalAccountID != command.LogicalAccountID {
+			return fmt.Errorf("%w（组合账户 %s）", logicaldomain.ErrMemberElsewhere, owner.Name)
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
 	}
 	members, err := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
 	if err != nil {
@@ -175,38 +191,63 @@ func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error
 	})
 }
 
+// credentialUnavailable 判断同步失败是不是因为凭证失效或账户没有会话。
+func credentialUnavailable(err error) bool {
+	if exchange.IsKind(err, exchange.ErrorAuthentication) {
+		return true
+	}
+	var accountErr *orderapp.AccountExecutionError
+	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
+}
+
+// UnverifiedRemovalWarning 是同步失败、只凭本地记录移除成员时返回的提示。
+const UnverifiedRemovalWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
+
+// RemoveMember 移除成员，返回给用户的提示（正常移除时为空）。凭证失效等原因同步失败时，
+// 本地确认没有未结束订单、持仓和受管余额也允许移除，否则账户永远移不出组合。
 func (s *Service) RemoveMember(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
 	tradingAccountID string,
-) error {
+) (string, error) {
 	if s == nil || s.Store == nil {
-		return ErrServiceConfig
+		return "", ErrServiceConfig
 	}
 	if s.Syncer == nil {
-		return ErrServiceConfig
+		return "", ErrServiceConfig
 	}
-	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
-		return err
+	syncErr := s.Syncer.SyncAccount(ctx, tradingAccountID)
+	// 只有凭证失效或账户没有会话（同步永远不会成功）才退到只看本地记录；超时、限频等暂时性失败照旧报错。
+	if syncErr != nil && (ctx.Err() != nil || !credentialUnavailable(syncErr)) {
+		return "", syncErr
 	}
 	unlockAll, lockErr := s.Store.LockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
 	if lockErr != nil {
-		return lockErr
+		return "", lockErr
 	}
 	defer unlockAll()
-	exposed, err := s.memberHasManagedExposure(ctx, spaceID, tradingAccountID)
+	exposed, err := s.managedExposure(ctx, spaceID, tradingAccountID, syncErr == nil)
 	if err != nil {
-		return err
+		return "", errors.Join(syncErr, err)
 	}
 	if exposed {
-		return ErrMemberHasExposure
+		if syncErr != nil {
+			return "", syncErr
+		}
+		return "", ErrMemberHasExposure
 	}
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.DeleteLogicalAccountMember(
 			spaceID, logicalAccountID, tradingAccountID,
 		)
-	})
+	}); err != nil {
+		return "", err
+	}
+	if syncErr != nil {
+		return UnverifiedRemovalWarning, nil
+	}
+	return "", nil
 }
 
 // ClaimSession assigns the explicit Strategy instance/session identity used by
@@ -301,8 +342,11 @@ func (s *Service) Pause(
 	logicalAccountID string,
 	reason string,
 ) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil || strings.TrimSpace(reason) == "" {
+	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	if strings.TrimSpace(reason) == "" {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 暂停原因不能为空", store.ErrInvalidRecord)
 	}
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
 	if lockErr != nil {
@@ -524,12 +568,22 @@ func (s *Service) memberHasExposure(
 	spaceID string,
 	tradingAccountID string,
 ) (bool, error) {
+	return s.exposure(ctx, spaceID, tradingAccountID, true)
+}
+
+// exposure 判断执行账户是否有挂单、持仓或非结算资产余额；requireFresh 为真时要求账户就绪且快照新鲜。
+func (s *Service) exposure(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+	requireFresh bool,
+) (bool, error) {
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
-	if !account.Ready || account.LastSyncAt <= 0 ||
-		s.snapshotStale(s.now(), account.LastSyncAt) {
+	if requireFresh && (!account.Ready || account.LastSyncAt <= 0 ||
+		s.snapshotStale(s.now(), account.LastSyncAt)) {
 		return false, ErrNotReady
 	}
 	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
@@ -571,9 +625,9 @@ func (s *Service) memberHasExposure(
 	return false, nil
 }
 
-// memberHasManagedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
-func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, tradingAccountID string) (bool, error) {
-	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+// managedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
+func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID string, requireFresh bool) (bool, error) {
+	exposed, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
 	if err != nil || !exposed {
 		return false, err
 	}
@@ -599,10 +653,8 @@ func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, trading
 	if err != nil {
 		return false, err
 	}
-	minimums := make(map[string]string, len(instruments))
-	for _, instrument := range instruments {
-		minimums[instrument.BaseAsset] = instrument.MinExchangeQuantity
-	}
+	// 与清仓同一套规则：按总量判断，卖出后留下的零头下不了单，不挡移除。
+	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
 	for _, balance := range account.Snapshot.Balances {
 		total, parseErr := shared.ParseDecimal(balance.Total)
 		if parseErr != nil {
@@ -611,8 +663,17 @@ func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, trading
 		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset || total.IsZero() {
 			continue
 		}
-		// 卖出后留下的零头下不了单，不挡移除。
-		if minimum, parseErr := shared.ParseDecimal(minimums[balance.Asset]); parseErr != nil || total.Cmp(minimum) >= 0 {
+		instrument, found := byAsset[balance.Asset]
+		if !found {
+			return true, nil
+		}
+		price := shared.Zero()
+		if s.Prices != nil {
+			if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol); quoteErr == nil {
+				price = quote.Price
+			}
+		}
+		if !exposure.SpotDust(total, price, instrument) {
 			return true, nil
 		}
 	}

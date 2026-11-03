@@ -169,7 +169,7 @@ func (s *Store) ListLogicalAccounts(
 
 // ClaimLogicalAccountSession atomically assigns a Strategy instance/session
 // to a logical account. expectedFence is the caller's previously observed
-// auth_fence and is mandatory for the V2 session path. Keeping it out of the
+// auth_fence and is mandatory. Keeping it out of the
 // public target contract makes delayed management calls harmless even when a
 // new session has already claimed the account. The returned fence is the value
 // to retain for the next CAS. changed is false for an identical session retry
@@ -375,6 +375,16 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	if account.AutomationState != string(logicalaccount.AutomationPaused) {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
+	var elsewhere int64
+	if err := tx.db.Raw(`
+		SELECT COUNT(*) FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id <> ?
+	`, record.SpaceID, record.TradingAccountID, record.LogicalAccountID).Scan(&elsewhere).Error; err != nil {
+		return err
+	}
+	if elsewhere > 0 {
+		return fmt.Errorf("%w: %w", ErrInvalidRecord, logicalaccount.ErrMemberElsewhere)
+	}
 	physical, err := tx.GetTradingAccount(record.SpaceID, record.TradingAccountID)
 	if err != nil {
 		return err
@@ -483,6 +493,23 @@ func (s *Store) FindLogicalAccountByTradingAccount(
 	return account, logicalAccountMemberRecord(member), err
 }
 
+// FindLogicalAccountMembership 返回执行账户所属的组合账户，启用和停用成员都算（一个执行账户最多属于一个组合）。
+func (s *Store) FindLogicalAccountMembership(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+) (LogicalAccountRecord, LogicalAccountMemberRecord, error) {
+	var member logicalAccountMemberRow
+	err := s.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID).
+		Take(&member).Error
+	if err != nil {
+		return LogicalAccountRecord{}, LogicalAccountMemberRecord{}, err
+	}
+	account, err := s.GetLogicalAccount(ctx, spaceID, member.LogicalAccountID)
+	return account, logicalAccountMemberRecord(member), err
+}
+
 func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 	return logicalaccount.Account{
 		ControlMode: logicalaccount.ControlMode(record.ControlMode),
@@ -493,17 +520,6 @@ func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 		AutomationState: logicalaccount.AutomationState(record.AutomationState),
 		PauseReason:     record.PauseReason,
 	}
-}
-
-func (tx *Tx) requireStrategyControl(spaceID, logicalAccountID string) error {
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return err
-	}
-	if account.ControlMode != string(logicalaccount.ControlStrategy) {
-		return fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
-	}
-	return nil
 }
 
 func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {

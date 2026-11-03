@@ -39,11 +39,12 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 		),
 		"submit:child-account-a-BTC-USDT-SWAP",
 		"sync:account-a",
-		"sync:account-b",
+		// account-b 没有要撤的单：开始一次、收尾一次。
 		"sync:account-b",
 		"sync:account-b",
 	}, fixture.trace)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	// 子单已成交但持仓还没反映（兜底原因可重试），动作保持运行中，由工作线程继续。
+	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	spec := fixture.orders.specs[0]
 	require.Equal(t, "account-a", spec.TradingAccountID)
@@ -376,8 +377,9 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 		"child-account-a-BTC-USDT-SWAP": true,
 	}
 	fixture.position(t, "account-a", "BTCUSDT", "2")
+	// 第 3 次同步是重试前的那次：没撤单时不再紧接着做第二次轻量同步，所以比原来少一次。
 	fixture.syncer.onSync = func(ctx context.Context, accountID string, call int) error {
-		if accountID != "account-a" || call != 4 {
+		if accountID != "account-a" || call != 3 {
 			return nil
 		}
 		require.NoError(t, setOperatorOrderState(
@@ -433,7 +435,8 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 5*time.Second)
 	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Equal(t, 3, fixture.syncer.callsFor("account-a"))
+	// 开始一次、首轮收尾一次；没撤单时不再多做一次轻量同步。
+	require.Equal(t, 2, fixture.syncer.callsFor("account-a"))
 }
 
 func TestFlattenRecoveryCallsReceiveDeadlineContext(t *testing.T) {

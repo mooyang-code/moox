@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
@@ -182,9 +181,10 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			_, err = service.SubmitOrder(ctx, invalid)
 			require.Error(t, err)
 			require.Equal(t, 1, fake.placeCalls)
-			status := exchange.AccountStatusDisabled
-			_, err = f.account.Update(ctx, accountapp.UpdateCommand{TradingAccountID: testAccount, Status: &status})
-			require.NoError(t, err)
+			// 服务层不允许停用仍在组合里的账户，这里直接置库模拟“执行账户已停用”。
+			require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+				return tx.SetTradingAccountStatus(testSpace, testAccount, string(exchange.AccountStatusDisabled))
+			}))
 			disabled := command
 			disabled.ActionID, disabled.ClientOrderID = "disabled-account", "disabled-account"
 			_, err = service.SubmitOrder(ctx, disabled)

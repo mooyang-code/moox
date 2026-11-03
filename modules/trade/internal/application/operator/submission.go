@@ -326,10 +326,6 @@ func (s *Service) submissionDiagnostic(ctx context.Context, action store.Operato
 	return result, err
 }
 
-func (s *Service) deferChildOrderError(ctx context.Context, action store.OperatorActionRecord, cause error) (ManualOrderResult, error) {
-	return s.submissionOrderError(ctx, action, cause)
-}
-
 // Lock waiters may only append a diagnostic to the current action. They must
 // not overwrite progress or reopen an action completed by the lock owner.
 func (s *Service) deferActionLock(ctx context.Context, action store.OperatorActionRecord, cause error) (store.OperatorActionRecord, error) {

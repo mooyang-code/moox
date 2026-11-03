@@ -2,12 +2,14 @@ package account
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 type Repository struct {
@@ -31,6 +33,17 @@ func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account,
 		}
 	}
 	return accountDomain(record)
+}
+
+func (r Repository) LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error) {
+	logical, _, err := r.Store.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return logical.Name, nil
 }
 
 func (r Repository) ListEnabled(ctx context.Context) ([]tradingaccount.Account, error) {

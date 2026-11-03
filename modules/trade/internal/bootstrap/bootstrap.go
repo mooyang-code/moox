@@ -194,6 +194,7 @@ func initialize(
 	paperMatcher.WakeTarget = targetWorker.WakeTarget
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
+		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
 	operatorService := &operatorapp.Service{
 		Exchanges: registry,

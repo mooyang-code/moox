@@ -130,7 +130,8 @@ func (s *Service) Close(ctx context.Context, spaceID, accountID string) error {
 	if err != nil {
 		return err
 	}
-	logical, _, findErr := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, accountID)
+	// 停用成员也要找到组合并加成员变更锁，关闭时会删除全部成员关系。
+	logical, _, findErr := s.Store.FindLogicalAccountMembership(ctx, spaceID, accountID)
 	if errors.Is(findErr, gorm.ErrRecordNotFound) {
 		unlock, lockErr := s.Store.LockTradingAccountContext(ctx, accountID)
 		if lockErr != nil {

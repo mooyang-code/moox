@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestCreatePreservesControlModeAndRejectsUnknownAtomically(t *testing.T) {
@@ -90,4 +91,29 @@ func TestCloseRemovesOnlyClosedMember(t *testing.T) {
 	logical, err := db.GetLogicalAccount(ctx, "space", logicalID)
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logical.AutomationState)
+}
+
+func TestCloseRemovesDisabledMembership(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	s := Service{Store: db}
+	first, err := s.Create(ctx, paperCommand("paper-a", "logical"))
+	require.NoError(t, err)
+	logicalID := first.LogicalAccount.LogicalAccountID
+	accountID := first.Account.TradingAccountID
+	require.NoError(t, db.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.SetLogicalAccountAutomation("space", logicalID, "PAUSED", "configure"); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space", LogicalAccountID: logicalID, TradingAccountID: accountID, Enabled: false,
+		})
+	}))
+
+	require.NoError(t, s.Close(ctx, "space", accountID))
+
+	_, _, err = db.FindLogicalAccountMembership(ctx, "space", accountID)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }

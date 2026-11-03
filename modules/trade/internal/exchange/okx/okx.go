@@ -399,8 +399,6 @@ func (a *Adapter) toBaseQuantity(symbol string, contracts shared.Decimal) (share
 
 type balanceEnvelope struct {
 	UTime   string `json:"uTime"`
-	TotalEq string `json:"totalEq"`
-	AdjEq   string `json:"adjEq"`
 	Details []struct {
 		Ccy       string `json:"ccy"`
 		AvailBal  string `json:"availBal"`
@@ -428,49 +426,61 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err := json.Unmarshal(data, &payload); err != nil || len(payload) == 0 {
 		return exchange.AccountSnapshot{}, rejected("decode account snapshot", err)
 	}
-	row := payload[0]
-	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millisString(row.UTime)}
-	snapshot.Equity, err = decimalOrZero(row.TotalEq)
-	if err != nil {
-		return exchange.AccountSnapshot{}, err
+	return a.balanceSnapshot(payload[0])
+}
+
+// balanceSnapshot 把 REST 余额和私有流 account 推送统一转成账户快照。权益取结算币那一项的 eq，
+// 不用 totalEq（全币种折合 USD，账户里有别的币时会高估权益）。推送只带有变化的币种，
+// 所以结算币相关字段只有带了结算币明细才标记为存在，否则合并时会把它们写成 0。
+func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot, error) {
+	snapshot := exchange.AccountSnapshot{
+		ExchangeUpdatedAt: millisString(row.UTime),
+		Present:           exchange.AccountSnapshotPresence{Balances: true},
 	}
 	for _, detail := range row.Details {
 		totalRaw := detail.Eq
 		if totalRaw == "" {
 			totalRaw = detail.CashBal
 		}
-		total, parseErr := decimalOrZero(totalRaw)
-		if parseErr != nil {
-			return exchange.AccountSnapshot{}, parseErr
+		total, err := decimalOrZero(totalRaw)
+		if err != nil {
+			return exchange.AccountSnapshot{}, err
 		}
 		availableRaw := detail.AvailEq
 		if availableRaw == "" {
 			availableRaw = detail.AvailBal
 		}
-		available, parseErr := decimalOrZero(availableRaw)
-		if parseErr != nil {
-			return exchange.AccountSnapshot{}, parseErr
+		available, err := decimalOrZero(availableRaw)
+		if err != nil {
+			return exchange.AccountSnapshot{}, err
 		}
-		locked, parseErr := decimalOrZero(detail.FrozenBal)
-		if parseErr != nil {
-			return exchange.AccountSnapshot{}, parseErr
+		locked, err := decimalOrZero(detail.FrozenBal)
+		if err != nil {
+			return exchange.AccountSnapshot{}, err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
 			Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
 		})
-		if strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
-			snapshot.AvailableFunds = available
-			snapshot.UsedMargin, parseErr = decimalOrZero(detail.Imr)
-			if parseErr == nil {
-				snapshot.MaintenanceMargin, parseErr = decimalOrZero(detail.Mmr)
-			}
-			if parseErr == nil {
-				snapshot.UnrealizedPnL, parseErr = decimalOrZero(detail.Upl)
-			}
-			if parseErr != nil {
-				return exchange.AccountSnapshot{}, parseErr
-			}
+		if !strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
+			continue
 		}
+		snapshot.Equity = total
+		snapshot.AvailableFunds = available
+		snapshot.UsedMargin, err = decimalOrZero(detail.Imr)
+		if err == nil {
+			snapshot.MaintenanceMargin, err = decimalOrZero(detail.Mmr)
+		}
+		if err == nil {
+			snapshot.UnrealizedPnL, err = decimalOrZero(detail.Upl)
+		}
+		if err != nil {
+			return exchange.AccountSnapshot{}, err
+		}
+		snapshot.Present.Equity = true
+		snapshot.Present.AvailableFunds = true
+		snapshot.Present.UsedMargin = true
+		snapshot.Present.MaintenanceMargin = true
+		snapshot.Present.UnrealizedPnL = true
 	}
 	return snapshot, nil
 }
@@ -594,18 +604,36 @@ type orderPayload struct {
 	SMsg       string `json:"sMsg"`
 }
 
+// openOrdersPageSize 是 orders-pending 每页的上限。
+const openOrdersPageSize = 100
+
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
-	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/orders-pending", url.Values{
-		"instType": []string{a.instrumentType()},
-	}, nil, true)
-	if err != nil {
-		return nil, err
+	var all []orderPayload
+	after := ""
+	for {
+		query := url.Values{
+			"instType": []string{a.instrumentType()},
+			"limit":    []string{strconv.Itoa(openOrdersPageSize)},
+		}
+		if after != "" {
+			query.Set("after", after)
+		}
+		data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/orders-pending", query, nil, true)
+		if err != nil {
+			return nil, err
+		}
+		var page []orderPayload
+		if err := json.Unmarshal(data, &page); err != nil {
+			return nil, rejected("decode open orders", err)
+		}
+		all = append(all, page...)
+		// 按订单号倒序分页，after 取本页最后一笔。
+		if len(page) < openOrdersPageSize || page[len(page)-1].OrdID == "" || page[len(page)-1].OrdID == after {
+			break
+		}
+		after = page[len(page)-1].OrdID
 	}
-	var payload []orderPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, rejected("decode open orders", err)
-	}
-	return a.orders(payload)
+	return a.orders(all)
 }
 
 func (a *Adapter) GetOrder(
@@ -732,9 +760,11 @@ func (a *Adapter) CancelOrder(
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
 		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), false)
 	}
-	// Fetch the authoritative terminal state; a cancel acknowledgement alone is
-	// not sufficient because final fills may have raced with the request.
-	return a.GetOrder(ctx, symbol, clientOrderID)
+	// 回执只说明撤单已受理；最终状态和可能抢先发生的成交由调用方撤单后的同步拿到，这里不再追查订单：
+	// 追查失败会被当成撤单没发出而重发。
+	return exchange.Order{
+		ExchangeOrderID: payload[0].OrdID, ClientOrderID: clientOrderID, ExchangeSymbol: symbolValue,
+	}, nil
 }
 
 type fillPayload struct {

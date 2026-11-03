@@ -19,6 +19,8 @@ var (
 	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
 	ErrPaperAccountImmutable = errors.New("trade account: paper account configuration is immutable")
 	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
+	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
+	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )
 
 type ExchangeSecret struct {
@@ -46,6 +48,8 @@ type Store interface {
 	SetLeverage(context.Context, string, string, shared.Decimal) error
 	// ListEnabled 返回全部启用的执行账户。
 	ListEnabled(context.Context) ([]tradingaccount.Account, error)
+	// LogicalAccountName 返回执行账户所属组合账户的名称（启用或停用成员都算），不属于任何组合时返回空串。
+	LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error)
 }
 
 type SecretSource interface {
@@ -130,6 +134,15 @@ func (s *Service) Update(
 	applyUpdate(&projected, command)
 	if err := projected.Validate(); err != nil {
 		return tradingaccount.Account{}, err
+	}
+	if current.Status == exchange.AccountStatusEnabled && projected.Status != exchange.AccountStatusEnabled {
+		name, err := s.Store.LogicalAccountName(ctx, current.SpaceID, current.ID)
+		if err != nil {
+			return tradingaccount.Account{}, err
+		}
+		if name != "" {
+			return tradingaccount.Account{}, fmt.Errorf("%w（组合账户 %s）", ErrAccountInLogicalAccount, name)
+		}
 	}
 	if current.Status != exchange.AccountStatusEnabled &&
 		projected.Status == exchange.AccountStatusEnabled &&

@@ -264,7 +264,7 @@ func TestListRecentFillsNormalizesSwap(t *testing.T) {
 			_, _ = io.WriteString(w, `{"orderId":42,"clientOrderId":"cid","symbol":"BTCUSDT"}`)
 			return
 		}
-		_, _ = io.WriteString(w, `[{"id":7,"orderId":42,"symbol":"BTCUSDT","price":"100","qty":"0.01","commission":"-0.001","commissionAsset":"USDT","realizedPnl":"2.5","time":1700000000000,"isBuyer":true,"isMaker":false,"positionSide":"BOTH"}]`)
+		_, _ = io.WriteString(w, `[{"id":7,"orderId":42,"symbol":"BTCUSDT","price":"100","qty":"0.01","commission":"-0.001","commissionAsset":"USDT","realizedPnl":"2.5","time":1700000000000,"buyer":true,"maker":false,"side":"BUY","positionSide":"BOTH"}]`)
 	}))
 	defer server.Close()
 	fills, cursor, err := testAdapter(exchange.MarketTypeSwap, server.URL).

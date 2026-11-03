@@ -9,6 +9,7 @@ import (
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -41,6 +42,7 @@ func errorInfo(err error) *tradepb.RetInfo {
 	case errors.Is(err, store.ErrConflict),
 		errors.Is(err, accountapp.ErrAccountConflict),
 		errors.Is(err, logicalapp.ErrOwnerConflict),
+		errors.Is(err, operatorapp.ErrLogicalAccountBusy),
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
 	case errors.Is(err, store.ErrInvalidRecord),
@@ -49,6 +51,8 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, tradingaccount.ErrInvalidAccount),
 		errors.Is(err, logicalapp.ErrAdoptionRequired),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),
+		errors.Is(err, logicalaccount.ErrMemberElsewhere),
+		errors.Is(err, accountapp.ErrAccountInLogicalAccount),
 		errors.Is(err, logicalapp.ErrNotReady),
 		errors.Is(err, accountapp.ErrInvalidCredential),
 		errors.Is(err, orderdomain.ErrInvalidOrder),
