@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/stretchr/testify/require"
 )
 
-func TestLogicalAccountMembershipEnforcesHomogeneityAndOneEnabledGroup(t *testing.T) {
+func TestLogicalAccountMembershipAllowsOneGroupPerTradingAccount(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	second := testAccount()
@@ -48,15 +49,24 @@ func TestLogicalAccountMembershipEnforcesHomogeneityAndOneEnabledGroup(t *testin
 			TradingAccountID: "account-1", Enabled: true,
 		})
 	})
-	require.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, logicalaccount.ErrMemberElsewhere)
 
+	// 停用成员也算归属：同一执行账户不能再以停用成员加入另一个组合。
 	err = s.Transaction(ctx, func(tx *Tx) error {
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2",
 			TradingAccountID: "account-1", Enabled: false,
 		})
 	})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, logicalaccount.ErrMemberElsewhere)
+
+	// 绕过服务层直接写库时，唯一约束兜底。
+	err = s.Transaction(ctx, func(tx *Tx) error {
+		return tx.db.Exec(`INSERT INTO t_logical_account_members
+			(c_space_id, c_logical_account_id, c_trading_account_id, c_enabled, c_priority)
+			VALUES ('space-1', 'logical-2', 'account-1', 0, 0)`).Error
+	})
+	require.Error(t, err)
 }
 
 func TestLogicalAccountMembershipRejectsInhomogeneousAccount(t *testing.T) {

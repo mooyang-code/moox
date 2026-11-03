@@ -50,16 +50,13 @@ CREATE TABLE IF NOT EXISTS t_logical_account_members (
     CHECK (c_enabled IN (0, 1))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_enabled_physical_account_membership
-ON t_logical_account_members (c_space_id, c_trading_account_id)
-WHERE c_enabled = 1;
+-- 一个执行账户最多属于一个组合账户（启用和停用成员都算）
+CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_members_trading_account
+ON t_logical_account_members (c_space_id, c_trading_account_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_instance
 ON t_logical_accounts (c_space_id, c_owner_instance_id)
 WHERE c_owner_instance_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_logical_account_members_account
-ON t_logical_account_members (c_space_id, c_trading_account_id);
 
 CREATE TABLE IF NOT EXISTS t_logical_account_targets (
     c_space_id TEXT NOT NULL,

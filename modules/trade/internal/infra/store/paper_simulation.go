@@ -61,7 +61,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 	if err := tx.db.Raw(`
 		SELECT c_logical_account_id
 		FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_enabled = 1
+		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
 		return err
 	}

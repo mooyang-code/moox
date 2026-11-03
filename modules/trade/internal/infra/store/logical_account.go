@@ -375,6 +375,16 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	if account.AutomationState != string(logicalaccount.AutomationPaused) {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
+	var elsewhere int64
+	if err := tx.db.Raw(`
+		SELECT COUNT(*) FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id <> ?
+	`, record.SpaceID, record.TradingAccountID, record.LogicalAccountID).Scan(&elsewhere).Error; err != nil {
+		return err
+	}
+	if elsewhere > 0 {
+		return fmt.Errorf("%w: %w", ErrInvalidRecord, logicalaccount.ErrMemberElsewhere)
+	}
 	physical, err := tx.GetTradingAccount(record.SpaceID, record.TradingAccountID)
 	if err != nil {
 		return err
@@ -475,6 +485,23 @@ func (s *Store) FindLogicalAccountByTradingAccount(
 	err := s.db.WithContext(ctx).
 		Where("c_space_id = ? AND c_trading_account_id = ? AND c_enabled = 1",
 			spaceID, tradingAccountID).
+		Take(&member).Error
+	if err != nil {
+		return LogicalAccountRecord{}, LogicalAccountMemberRecord{}, err
+	}
+	account, err := s.GetLogicalAccount(ctx, spaceID, member.LogicalAccountID)
+	return account, logicalAccountMemberRecord(member), err
+}
+
+// FindLogicalAccountMembership 返回执行账户所属的组合账户，启用和停用成员都算（一个执行账户最多属于一个组合）。
+func (s *Store) FindLogicalAccountMembership(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+) (LogicalAccountRecord, LogicalAccountMemberRecord, error) {
+	var member logicalAccountMemberRow
+	err := s.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID).
 		Take(&member).Error
 	if err != nil {
 		return LogicalAccountRecord{}, LogicalAccountMemberRecord{}, err

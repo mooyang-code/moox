@@ -470,6 +470,7 @@ type memoryStore struct {
 	createCalls   int
 	updateCalls   int
 	leverageCalls int
+	memberships   map[string]string
 }
 
 func newMemoryStore() *memoryStore {
@@ -488,6 +489,10 @@ func (s *memoryStore) Create(_ context.Context, value tradingaccount.Account) er
 	s.accounts[value.ID] = value
 	s.nameIndex[key] = value.ID
 	return nil
+}
+
+func (s *memoryStore) LogicalAccountName(_ context.Context, _ string, id string) (string, error) {
+	return s.memberships[id], nil
 }
 
 func (s *memoryStore) ListEnabled(context.Context) ([]tradingaccount.Account, error) {
@@ -620,4 +625,28 @@ func TestRejectDuplicateCredentialFollowsExchangeWalletModel(t *testing.T) {
 	binanceSpot.Status = exchange.AccountStatusDisabled
 	store.accounts[binanceSpot.ID] = binanceSpot
 	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-spot-2", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
+}
+
+func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {
+	store := newMemoryStore()
+	value := validAccount()
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentProduction
+	value.Status = exchange.AccountStatusEnabled
+	store.accounts[value.ID] = value
+	store.memberships = map[string]string{value.ID: "组合一"}
+	status := exchange.AccountStatusDisabled
+	service := Service{Store: store}
+
+	_, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status})
+	if !errors.Is(err, ErrAccountInLogicalAccount) {
+		t.Fatalf("Update() error = %v, want ErrAccountInLogicalAccount", err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("Update() writes = %d, want 0", store.updateCalls)
+	}
+	delete(store.memberships, value.ID)
+	if _, err := service.Update(context.Background(), UpdateCommand{TradingAccountID: value.ID, Status: &status}); err != nil {
+		t.Fatalf("Update() after removal error = %v", err)
+	}
 }

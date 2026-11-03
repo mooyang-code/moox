@@ -2,11 +2,13 @@ package logicalaccount
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -610,4 +612,32 @@ func TestAddMemberChangesPriorityOfExposedMember(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+type failingAccountSyncer struct{ calls *int }
+
+func (s failingAccountSyncer) SyncAccount(context.Context, string) error {
+	*s.calls++
+	return errors.New("sync must not run")
+}
+
+func TestAddMemberRejectsAccountOwnedByAnotherGroupBeforeSync(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other",
+			ExecutionMode: "LIVE", MarketType: "SWAP", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		})
+	}))
+	calls := 0
+	service.Syncer = failingAccountSyncer{calls: &calls}
+	for _, enabled := range []bool{true, false} {
+		err := service.AddMember(context.Background(), AddMemberCommand{
+			SpaceID: "space-1", LogicalAccountID: "logical-2",
+			TradingAccountID: "account-a", Enabled: enabled,
+		})
+		require.ErrorIs(t, err, logicaldomain.ErrMemberElsewhere)
+	}
+	require.Zero(t, calls)
 }

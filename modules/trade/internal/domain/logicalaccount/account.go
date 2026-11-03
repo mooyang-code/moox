@@ -12,8 +12,10 @@ var (
 	ErrInvalidAccount   = errors.New("trade: invalid logical account")
 	ErrMembershipChange = errors.New("trade: logical account membership change requires pause")
 	ErrInhomogeneous    = errors.New("trade: logical account members must be homogeneous")
-	ErrRunnerOwnership  = errors.New("trade: logical account runner ownership conflict")
-	ErrAutomationState  = errors.New("trade: invalid logical account automation state")
+	// ErrMemberElsewhere：一个执行账户最多属于一个组合账户，换组合要先从原组合移除。
+	ErrMemberElsewhere = errors.New("执行账户已属于其他组合账户，先从该组合移除")
+	ErrRunnerOwnership = errors.New("trade: logical account runner ownership conflict")
+	ErrAutomationState = errors.New("trade: invalid logical account automation state")
 )
 
 type AutomationState string

@@ -124,6 +124,14 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
+	// 归属检查放在同步和持仓检查之前，否则已属于别的组合的账户会先看到无关的错误。
+	if owner, _, err := s.Store.FindLogicalAccountMembership(ctx, command.SpaceID, command.TradingAccountID); err == nil {
+		if owner.LogicalAccountID != command.LogicalAccountID {
+			return fmt.Errorf("%w（组合账户 %s）", logicaldomain.ErrMemberElsewhere, owner.Name)
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
 	members, err := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
 	if err != nil {
 		return err

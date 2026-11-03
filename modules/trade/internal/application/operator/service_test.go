@@ -432,10 +432,8 @@ func TestManualLogicalAccountLockRevalidatesMovedEnabledMembership(t *testing.T)
 		); err != nil {
 			return err
 		}
-		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TradingAccountID: "account-a", Enabled: false, Priority: 1,
-		}); err != nil {
+		// 一个执行账户只属于一个组合：先从原组合移除，再加入新组合。
+		if err := tx.DeleteLogicalAccountMember("space-1", "logical-1", "account-a"); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
