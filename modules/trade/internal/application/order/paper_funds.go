@@ -52,7 +52,8 @@ type snapshotReuse struct {
 }
 
 // WithSnapshotReuse 让同一轮建子单里对同一执行账户的模拟盘保证金估值只算一次快照。
-// 只用于持执行锁、没有在途子单时连续建单的这一段：这期间账户持仓不会因本组合账户的成交而变化。
+// 只用于 Converge 持逻辑账户锁、循环开始时成员账户没有活动订单的连续建单这一段：PENDING 单不参与撮合，
+// 一个执行账户只属于一个启用的组合账户，这期间持仓和标记价之外的保证金因素不会变化。
 // 发送阶段不能用：同批前面的子单可能已被撮合成交。
 func WithSnapshotReuse(ctx context.Context) context.Context {
 	return context.WithValue(ctx, snapshotReuseKey{}, &snapshotReuse{snapshots: make(map[string]exchange.AccountSnapshot)})

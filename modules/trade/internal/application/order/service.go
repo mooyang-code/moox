@@ -462,8 +462,16 @@ func reuseAuthorization(ctx context.Context, key string, check func() error) err
 		return err
 	}
 	err := check()
-	reuse.results[key] = err
+	if err == nil || reusableAuthorizationError(err) {
+		// 存储繁忙、超时这类瞬时错误不复用，同批后面的单各自重试。
+		reuse.results[key] = err
+	}
 	return err
+}
+
+func reusableAuthorizationError(err error) bool {
+	return errors.Is(err, ErrTargetExpired) || errors.Is(err, ErrTargetOwnerConflict) ||
+		errors.Is(err, ErrAutomationPaused) || errors.Is(err, ErrAccountNotReady)
 }
 
 func (s *Service) checkTargetAuthorization(
@@ -1062,9 +1070,9 @@ func (s *Service) prepareSubmit(
 	if err != nil {
 		return nil, orderdomain.Order{}, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	// Place and margin preparation may perform account-scoped I/O. Re-read the
-	// target after those calls and before persisting SUBMITTING so a target that
-	// expired meanwhile remains a local PENDING intent and never reaches POST.
+	// 下单准备和保证金估值可能有账户级 I/O，之后再确认一次目标授权，过期的目标留在本地 PENDING。
+	// 批量提交时这次检查在准备阶段内复用，准备期间目标若变化，由发送前整批重新检查拦住，
+	// 已落 SUBMITTING 的单会退回 PENDING，不会发出。
 	if err := s.authorizeTargetSubmit(ctx, record); err != nil {
 		return nil, aggregate, err
 	}

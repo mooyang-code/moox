@@ -609,7 +609,17 @@ func (s *Store) ListOrdersForAccount(
 		Find(&finished).Error; err != nil {
 		return nil, err
 	}
-	return sortedOrderRecords(append(rows, finished...)), nil
+	// 两次读不在同一事务里：中间刚结束的订单会两边都读到，保留终态那份。
+	seen := make(map[string]struct{}, len(finished))
+	for _, row := range finished {
+		seen[row.OrderID] = struct{}{}
+	}
+	for _, row := range rows {
+		if _, done := seen[row.OrderID]; !done {
+			finished = append(finished, row)
+		}
+	}
+	return sortedOrderRecords(finished), nil
 }
 
 // sortedOrderRecords 按订单号排序。排序放在 Go 里做：SQL 里写 ORDER BY c_order_id 会让 SQLite
