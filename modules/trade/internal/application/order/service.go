@@ -620,6 +620,10 @@ func (s *Service) RecoverCancel(
 		}
 		return s.Get(persistCtx, spaceID, orderID)
 	}
+	if exchange.NotAccepted(callErr) {
+		// 限流期间撤单没有发出，状态保持不变，下一轮再试。
+		return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
+	}
 	if !uncertainExchangeError(callErr) {
 		if err := ioCtx.Err(); err != nil {
 			return current, errors.Join(accountExecutionError(record.TradingAccountID, "cancel", callErr), accountExecutionError(record.TradingAccountID, "cancel_sync", err))
@@ -1122,6 +1126,14 @@ func (s *Service) submit(
 		current.State == orderdomain.Canceling || current.State == orderdomain.CancelUnknown)) {
 		return current, false, nil
 	}
+	if callErr != nil && exchange.NotAccepted(callErr) && current.State == orderdomain.Submitting {
+		// 限流、封禁或本地拦截：交易所确定没有受理，回到待提交，不算拒单，也不用查询。
+		pending, abortErr := s.abortUnsentSubmit(persistCtx, latest, current)
+		if abortErr != nil {
+			return orderdomain.Order{}, false, errors.Join(callErr, abortErr)
+		}
+		return pending, false, accountExecutionError(record.TradingAccountID, "place", callErr)
+	}
 	expected = current.Version
 	switch {
 	case callErr == nil:
@@ -1182,10 +1194,11 @@ func (s *Service) abortUnsentSubmit(
 	return current, nil
 }
 
+// uncertainExchangeError 报告请求结果是否未知：超时、连接中断、408、503 未知。
+// 限流和本地拦截是确定未受理，不在这里。
 func uncertainExchangeError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		exchange.IsKind(err, exchange.ErrorTransportUnknown) ||
-		exchange.IsKind(err, exchange.ErrorRateLimited)
+		exchange.IsKind(err, exchange.ErrorTransportUnknown)
 }
 
 func (s *Service) rejectPending(

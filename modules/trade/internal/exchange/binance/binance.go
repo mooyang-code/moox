@@ -26,6 +26,9 @@ const (
 	productionSwapURL = "https://fapi.binance.com"
 	testnetSwapURL    = "https://demo-fapi.binance.com"
 	recvWindow        = 5000
+	// 每分钟 IP 权重额度（exchangeInfo 实查）。
+	spotWeightLimit = 6000
+	swapWeightLimit = 2400
 )
 
 type Adapter struct {
@@ -42,13 +45,43 @@ type Adapter struct {
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
 	spotURL, swapURL := restEndpoints(config.Environment)
+	spot, swap := httpclient.New(spotURL), httpclient.New(swapURL)
+	spot.Classify, swap.Classify = classifyRateLimit, classifyRateLimit
+	spot.SetWeightLimit(spotWeightLimit)
+	swap.SetWeightLimit(swapWeightLimit)
 	return &Adapter{
 		config:      config,
 		credential:  credential,
-		spot:        httpclient.New(spotURL),
-		swap:        httpclient.New(swapURL),
+		spot:        spot,
+		swap:        swap,
 		instruments: make(map[string]exchange.Instrument),
 	}
+}
+
+// RateStatus 返回当前市场接口的限流状态。
+func (a *Adapter) RateStatus() exchange.RateStatus {
+	status := a.client().Status()
+	return exchange.RateStatus{
+		UsedWeight: status.UsedWeight, WeightLimit: status.WeightLimit,
+		PausedUntil: status.PausedUntil, PauseReason: status.PauseReason,
+		OrdersPausedUntil: status.OrdersPausedUntil,
+	}
+}
+
+// classifyRateLimit 按响应体错误码细分限流：-1015 只限下单，-1008 是系统限流，-1003 是 IP 级。
+func classifyRateLimit(status int, raw []byte) exchange.ErrorKind {
+	if status == http.StatusTeapot {
+		return exchange.ErrorBanned
+	}
+	switch apiCode(raw) {
+	case "-1003":
+		return exchange.ErrorRateLimited
+	case "-1015":
+		return exchange.ErrorOrderRateLimited
+	case "-1008":
+		return exchange.ErrorThrottled
+	}
+	return ""
 }
 
 func restEndpoints(
@@ -106,6 +139,17 @@ func (a *Adapter) request(
 	path string,
 	values url.Values,
 ) ([]byte, error) {
+	return a.signedRequest(ctx, method, path, values, false)
+}
+
+// signedRequest 发签名请求；order 标记新下单，账户下单暂停时只拦这类请求。
+func (a *Adapter) signedRequest(
+	ctx context.Context,
+	method string,
+	path string,
+	values url.Values,
+	order bool,
+) ([]byte, error) {
 	return a.client().Do(ctx, &httpclient.Request{
 		Method: method,
 		Path:   path,
@@ -113,6 +157,7 @@ func (a *Adapter) request(
 		Headers: map[string]string{
 			"X-MBX-APIKEY": a.credential.APIKey,
 		},
+		Order: order,
 	})
 }
 
@@ -659,11 +704,12 @@ func (a *Adapter) PlaceOrder(
 			values.Set("reduceOnly", "true")
 		}
 	}
-	raw, err := a.request(
+	raw, err := a.signedRequest(
 		ctx,
 		http.MethodPost,
 		a.path("/api/v3/order", "/fapi/v1/order"),
 		values,
+		true,
 	)
 	if err != nil {
 		return exchange.Order{}, classifyAPIError(err, raw)
@@ -1039,6 +1085,10 @@ func classifyAPIError(err error, raw []byte) error {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	code := apiCode(raw)
+	if code == "" {
+		// 本地拦截或传输错误没有响应体，保留 httpclient 的分类。
+		return typed
+	}
 	typed.Code = code
 	switch code {
 	case "-2010", "-2019":
@@ -1047,8 +1097,12 @@ func classifyAPIError(err error, raw []byte) error {
 		typed.Kind = exchange.ErrorOrderNotFound
 	case "-2015":
 		typed.Kind = exchange.ErrorAuthentication
-	case "-1003", "-1015":
+	case "-1003":
 		typed.Kind = exchange.ErrorRateLimited
+	case "-1015":
+		typed.Kind = exchange.ErrorOrderRateLimited
+	case "-1008":
+		typed.Kind = exchange.ErrorThrottled
 	case "-1021":
 		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
 		typed.Kind = exchange.ErrorTransportUnknown

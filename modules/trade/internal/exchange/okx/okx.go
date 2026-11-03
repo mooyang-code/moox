@@ -43,6 +43,15 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
 
+// RateStatus 返回限流状态。OKX 没有权重响应头，只有暂停信息。
+func (a *Adapter) RateStatus() exchange.RateStatus {
+	status := a.client.Status()
+	return exchange.RateStatus{
+		PausedUntil: status.PausedUntil, PauseReason: status.PauseReason,
+		OrdersPausedUntil: status.OrdersPausedUntil,
+	}
+}
+
 type response struct {
 	Code string          `json:"code"`
 	Msg  string          `json:"msg"`
@@ -56,6 +65,25 @@ func (a *Adapter) request(
 	query url.Values,
 	body any,
 	signed bool,
+) (json.RawMessage, error) {
+	return a.send(ctx, method, path, query, body, signed, false)
+}
+
+// orderRateLimitPause 是 OKX 限流（50011、50040）后该账户下单的暂停时长，OKX 限频窗口是 2 秒。
+const orderRateLimitPause = 2 * time.Second
+
+// orderExpiry 是下单请求的有效期：超过后 OKX 不再受理，保证未知结果窗口内不会迟到成交。
+const orderExpiry = 5 * time.Second
+
+// send 发请求；order 标记新下单，限流后只暂停这个账户下单。
+func (a *Adapter) send(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+	body any,
+	signed bool,
+	order bool,
 ) (json.RawMessage, error) {
 	fullPath := path
 	if len(query) > 0 {
@@ -83,8 +111,11 @@ func (a *Adapter) request(
 	if a.config.Environment == exchange.AccountEnvironmentTestnet {
 		headers["x-simulated-trading"] = "1"
 	}
+	if order {
+		headers["expTime"] = strconv.FormatInt(time.Now().Add(orderExpiry).UnixMilli(), 10)
+	}
 	raw, err := a.client.Do(ctx, &httpclient.Request{
-		Method: method, Path: fullPath, Body: rawBody, Headers: headers,
+		Method: method, Path: fullPath, Body: rawBody, Headers: headers, Order: order,
 	})
 	if err != nil {
 		return raw, classify(err, raw)
@@ -103,11 +134,19 @@ func (a *Adapter) request(
 		}
 		if err := json.Unmarshal(envelope.Data, &details); err == nil &&
 			len(details) != 0 && details[0].Code != "" && details[0].Code != "0" {
-			return envelope.Data, classifyOKXCode(details[0].Code, details[0].Message)
+			return envelope.Data, a.rateLimited(classifyOKXCode(details[0].Code, details[0].Message))
 		}
-		return envelope.Data, classifyOKXCode(envelope.Code, envelope.Msg)
+		return envelope.Data, a.rateLimited(classifyOKXCode(envelope.Code, envelope.Msg))
 	}
 	return envelope.Data, nil
+}
+
+// rateLimited 把 HTTP 200 里的限流码转成账户下单暂停：httpclient 看不到响应体里的错误码。
+func (a *Adapter) rateLimited(err error) error {
+	if exchange.IsKind(err, exchange.ErrorOrderRateLimited) {
+		a.client.PauseOrders(orderRateLimitPause, exchange.ErrorOrderRateLimited)
+	}
+	return err
 }
 
 func privateStreamEndpoint(
@@ -636,7 +675,7 @@ func (a *Adapter) PlaceOrder(
 			body["reduceOnly"] = "true"
 		}
 	}
-	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/order", nil, body, true)
+	data, err := a.send(ctx, http.MethodPost, "/api/v5/trade/order", nil, body, true, true)
 	if err != nil {
 		return exchange.Order{}, err
 	}
@@ -645,7 +684,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, transportUnknown("decode placed order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg))
 	}
 	return exchange.Order{
 		ExchangeOrderID: payload[0].OrdID,
@@ -680,7 +719,7 @@ func (a *Adapter) CancelOrder(
 		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg))
 	}
 	// Fetch the authoritative terminal state; a cancel acknowledgement alone is
 	// not sufficient because final fills may have raced with the request.
@@ -1052,8 +1091,8 @@ func classify(err error, _ []byte) error {
 func classifyOKXCode(code, message string) error {
 	kind := exchange.ErrorRejected
 	switch code {
-	case "50011", "50040":
-		kind = exchange.ErrorRateLimited
+	case "50011", "50040", "50061":
+		kind = exchange.ErrorOrderRateLimited
 	case "50014", "50101", "50113":
 		kind = exchange.ErrorAuthentication
 	case "51008":

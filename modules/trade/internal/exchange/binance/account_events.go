@@ -265,6 +265,10 @@ func (a *Adapter) keepListenKeyAlive(
 		case <-done:
 			return
 		case <-ticker.C:
+			// 限流暂停期间跳过这次续期，listenKey 有效期 60 分钟，下一轮再续，避免无谓断流。
+			if !a.client().Status().PausedUntil.IsZero() {
+				continue
+			}
 			_, err := a.client().Do(ctx, &httpclient.Request{
 				Method: http.MethodPut,
 				Path:   path,
@@ -273,6 +277,9 @@ func (a *Adapter) keepListenKeyAlive(
 					"X-MBX-APIKEY": a.credential.APIKey,
 				},
 			})
+			if exchange.IsKind(err, exchange.ErrorNotSent) {
+				continue
+			}
 			if err != nil {
 				_ = connection.Close()
 				return

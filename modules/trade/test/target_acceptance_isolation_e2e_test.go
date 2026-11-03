@@ -151,7 +151,7 @@ func TestExpiredTargetWorkerRemainsReadyWithoutTrading(t *testing.T) {
 }
 
 func TestTargetWorkerExchangeFailureRemainsAccountDiagnostic(t *testing.T) {
-	for _, kind := range []exchange.ErrorKind{exchange.ErrorRejected, exchange.ErrorTransportUnknown, exchange.ErrorRateLimited} {
+	for _, kind := range []exchange.ErrorKind{exchange.ErrorRejected, exchange.ErrorTransportUnknown} {
 		t.Run(string(kind), func(t *testing.T) {
 			f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
 			seedLogicalAccount(t, f.store)

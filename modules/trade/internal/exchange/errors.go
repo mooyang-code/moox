@@ -11,12 +11,35 @@ type ErrorKind string
 const (
 	ErrorRejected            ErrorKind = "REJECTED"
 	ErrorInsufficientBalance ErrorKind = "INSUFFICIENT_BALANCE"
-	ErrorRateLimited         ErrorKind = "RATE_LIMITED"
-	ErrorOrderNotFound       ErrorKind = "ORDER_NOT_FOUND"
-	ErrorAuthentication      ErrorKind = "AUTHENTICATION"
-	ErrorNotReady            ErrorKind = "NOT_READY"
-	ErrorTransportUnknown    ErrorKind = "TRANSPORT_UNKNOWN"
+	// ErrorRateLimited 是 IP 级限流（429、-1003、WAF 403），同一域名的请求都要停。
+	ErrorRateLimited ErrorKind = "RATE_LIMITED"
+	// ErrorOrderRateLimited 是账户下单限流（-1015），只停这个账户下单，查询照常。
+	ErrorOrderRateLimited ErrorKind = "ORDER_RATE_LIMITED"
+	// ErrorBanned 是 418 封禁，封禁期间同一域名的请求都不能发。
+	ErrorBanned ErrorKind = "BANNED"
+	// ErrorThrottled 是交易所系统限流（-1008），确定未受理。
+	ErrorThrottled ErrorKind = "THROTTLED"
+	// ErrorNotSent 表示限流暂停期间本地直接拦下，请求没有发出。
+	ErrorNotSent          ErrorKind = "NOT_SENT"
+	ErrorOrderNotFound    ErrorKind = "ORDER_NOT_FOUND"
+	ErrorAuthentication   ErrorKind = "AUTHENTICATION"
+	ErrorNotReady         ErrorKind = "NOT_READY"
+	ErrorTransportUnknown ErrorKind = "TRANSPORT_UNKNOWN"
 )
+
+// NotAccepted 报告请求是否确定没有被交易所受理：限流、封禁、系统限流和本地拦截。
+// 这类下单可以安全回到待提交，不算拒单，也不需要查询结果。
+func NotAccepted(err error) bool {
+	var typed *Error
+	if !errors.As(err, &typed) || typed == nil {
+		return false
+	}
+	switch typed.Kind {
+	case ErrorRateLimited, ErrorOrderRateLimited, ErrorBanned, ErrorThrottled, ErrorNotSent:
+		return true
+	}
+	return false
+}
 
 type Error struct {
 	Kind       ErrorKind
@@ -91,8 +114,10 @@ func RejectMessage(err error) string {
 	switch exchangeErr.Kind {
 	case ErrorInsufficientBalance:
 		return "余额不足"
-	case ErrorRateLimited:
+	case ErrorRateLimited, ErrorOrderRateLimited, ErrorThrottled, ErrorNotSent:
 		return "请求过于频繁"
+	case ErrorBanned:
+		return "交易所已临时封禁当前 IP"
 	case ErrorAuthentication:
 		return "交易所鉴权失败"
 	}

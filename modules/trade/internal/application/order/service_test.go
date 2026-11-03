@@ -767,7 +767,6 @@ func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.
 func TestServicePlaceUncertainResultRetainsReservation(t *testing.T) {
 	for _, kind := range []exchange.ErrorKind{
 		exchange.ErrorTransportUnknown,
-		exchange.ErrorRateLimited,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			service, tradeStore, adapter := newTestService(t)
@@ -1466,4 +1465,31 @@ func TestSubmitSymbolConfigNetworkErrorKeepsPending(t *testing.T) {
 	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
 	require.NoError(t, err)
 	require.Equal(t, "PENDING", stored.State)
+}
+
+// 限流、封禁、系统限流和本地拦截都确定未受理：回到待提交，不计拒单，预留保留。
+func TestServiceSubmitNotAcceptedReturnsToPending(t *testing.T) {
+	for _, kind := range []exchange.ErrorKind{
+		exchange.ErrorRateLimited,
+		exchange.ErrorOrderRateLimited,
+		exchange.ErrorBanned,
+		exchange.ErrorThrottled,
+		exchange.ErrorNotSent,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			service, tradeStore, adapter := newTestService(t)
+			adapter.placeErr = &exchange.Error{Kind: kind}
+			pending, err := service.Place(context.Background(), "space-1", testSpec(time.Unix(1_700_000_000, 0)))
+			require.NoError(t, err)
+			got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+			require.True(t, exchange.IsKind(err, kind), "%v", err)
+			require.Equal(t, orderdomain.Pending, got.State)
+			record, getErr := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
+			require.NoError(t, getErr)
+			require.Equal(t, "PENDING", record.State)
+			require.Zero(t, record.SubmittedAt)
+			require.Empty(t, record.RejectReason)
+			require.Equal(t, "101", record.RemainingReservedQuantity)
+		})
+	}
 }

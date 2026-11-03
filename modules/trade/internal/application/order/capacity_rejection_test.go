@@ -54,9 +54,15 @@ func TestSubmitRefreshesOnlyDefinitiveBalanceRejection(t *testing.T) {
 				require.Equal(t, "0", stored.RemainingReservedQuantity)
 			} else {
 				require.Zero(t, syncer.calls)
-				if kind != exchange.ErrorRejected {
+				switch kind {
+				case exchange.ErrorTransportUnknown:
 					require.Equal(t, orderdomain.SubmitUnknown, result.State)
 					require.NotEqual(t, "0", stored.RemainingReservedQuantity)
+				case exchange.ErrorRateLimited:
+					// 限流是确定未受理：回到待提交，预留保留，提交时间清零。
+					require.Equal(t, orderdomain.Pending, result.State)
+					require.NotEqual(t, "0", stored.RemainingReservedQuantity)
+					require.Zero(t, stored.SubmittedAt)
 				}
 			}
 		})
