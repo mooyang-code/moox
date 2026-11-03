@@ -165,11 +165,12 @@ func (m *Manager) EnsureSymbolConfig(
 func (m *Manager) RequestSync(tradingAccountID string) bool {
 	m.mu.RLock()
 	entry := m.sessions[tradingAccountID]
-	m.mu.RUnlock()
 	if entry == nil || entry.stopping {
+		m.mu.RUnlock()
 		return false
 	}
 	session, ok := entry.session.(interface{ RequestSync() bool })
+	m.mu.RUnlock()
 	return ok && session.RequestSync()
 }
 

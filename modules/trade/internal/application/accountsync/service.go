@@ -837,6 +837,16 @@ func (s *Service) setReady(
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
 		ready, lastError = false, awaitingBalanceReason
 	}
+	if ready {
+		// 订单累计成交仍领先已入账成交时也不能恢复：回执没有交易所时间时只记了缺口、没抬水位。
+		gaps, err := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
+		if err != nil {
+			return err
+		}
+		if gaps > 0 {
+			ready, lastError = false, awaitingBalanceReason
+		}
+	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,

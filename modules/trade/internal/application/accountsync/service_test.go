@@ -1774,3 +1774,25 @@ func TestSyncCancelsLocalOrderOnlyWhenExchangeConfirmsMissing(t *testing.T) {
 		})
 	}
 }
+
+// 有成交缺口时，会话就绪也不能恢复准入（回执没有交易所时间时只记了缺口、没抬水位）。
+func TestSetReadyKeepsAdmissionClosedWhileFillGapExists(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "gap-order", TradingAccountID: "account-1", ClientOrderID: "gap-order",
+			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+			Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1000, OwnerType: "EXTERNAL", OwnerID: "gap-order",
+			State: "OPEN", FilledQuantity: "0", Version: 1,
+		}); err != nil {
+			return err
+		}
+		return tx.RaiseObservedFilledQuantity("space-1", "gap-order", shared.MustDecimal("1"))
+	}))
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	require.NoError(t, service.SetReady(context.Background(), "account-1", true, nil))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+}

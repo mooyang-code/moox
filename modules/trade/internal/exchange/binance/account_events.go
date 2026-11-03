@@ -265,8 +265,9 @@ func (a *Adapter) keepListenKeyAlive(
 		case <-done:
 			return
 		case <-ticker.C:
-			// 限流暂停期间跳过这次续期，listenKey 有效期 60 分钟，下一轮再续，避免无谓断流。
+			// 限流暂停期间跳过这次续期，1 分钟后再试：listenKey 有效期 60 分钟，等满 30 分钟会过期断流。
 			if !a.client().Status().PausedUntil.IsZero() {
+				ticker.Reset(time.Minute)
 				continue
 			}
 			_, err := a.client().Do(ctx, &httpclient.Request{
@@ -278,12 +279,14 @@ func (a *Adapter) keepListenKeyAlive(
 				},
 			})
 			if exchange.IsKind(err, exchange.ErrorNotSent) {
+				ticker.Reset(time.Minute)
 				continue
 			}
 			if err != nil {
 				_ = connection.Close()
 				return
 			}
+			ticker.Reset(30 * time.Minute)
 		}
 	}
 }

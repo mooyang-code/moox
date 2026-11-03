@@ -64,7 +64,7 @@ func FullSymbols(
 }
 
 // fullSymbolCap 是一次完整同步最多拉成交的标的数：491 个标的全拉要 2455 权重，超过永续 1 分钟额度。
-// 只有订单和成交缺口涉及的标的不受限制，其余由轮转在后续对账中补齐。
+// 只有挂单、未结束订单和成交缺口涉及的标的不受限制，其余由轮转在后续对账中补齐。
 const fullSymbolCap = 60
 
 // BoundedFullSymbols 用于会话启动和手动同步：先放必须拉的标的，再从全集里补到上限。
@@ -85,7 +85,12 @@ func (s *Service) BoundedFullSymbols(
 	for _, current := range openOrders {
 		set[current.ExchangeSymbol] = struct{}{}
 	}
+	var finished []string
 	for _, current := range localOrders {
+		if orderdomain.State(current.State).Terminal() {
+			finished = append(finished, current.ExchangeSymbol)
+			continue
+		}
 		set[current.ExchangeSymbol] = struct{}{}
 	}
 	gaps, err := s.Store.OrderSymbolsWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
@@ -96,6 +101,7 @@ func (s *Service) BoundedFullSymbols(
 		set[symbol] = struct{}{}
 	}
 	delete(set, "")
+	// 可选标的按重要程度排：持仓或余额变化（可能有外部成交）优先，其次是近期已结束的订单，最后是轮转。
 	changed, err := s.changedPositionSymbols(ctx, account, positions, 0)
 	if err != nil {
 		return nil, err
@@ -104,6 +110,7 @@ func (s *Service) BoundedFullSymbols(
 	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		optional = append(optional, symbolsForAssets(account, instruments, changedAssets(account.Snapshot.Balances, snapshot.Balances))...)
 	}
+	optional = append(optional, finished...)
 	optional = append(optional, s.nextRotationBatch(account.TradingAccountID, full)...)
 	for _, symbol := range optional {
 		if len(set) >= fullSymbolCap {

@@ -241,3 +241,21 @@ func TestBoundedFullSymbolsCapsChangedPositions(t *testing.T) {
 	require.Len(t, symbols, fullSymbolCap)
 	require.Contains(t, symbols, "OPENUSDT")
 }
+
+// 5 分钟内的已结束订单不能占满上限，把持仓变化的标的挤掉：重连期间的外部成交要靠它发现。
+func TestBoundedFullSymbolsKeepsChangedPositionsAheadOfFinishedOrders(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	local := make([]store.OrderRecord, 0, 491)
+	for index := 0; index < 491; index++ {
+		local = append(local, store.OrderRecord{ExchangeSymbol: fmt.Sprintf("F%03dUSDT", index), State: "FILLED"})
+	}
+	positions := []exchange.Position{{ExchangeSymbol: "XUSDT", SignedQuantity: shared.MustDecimal("1")}}
+	service := &Service{Store: tradeStore}
+	symbols, err := service.BoundedFullSymbols(context.Background(), account, nil, local, positions, nil, exchange.AccountSnapshot{})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(symbols), fullSymbolCap)
+	require.Contains(t, symbols, "XUSDT")
+}

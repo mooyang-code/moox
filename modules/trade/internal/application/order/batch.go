@@ -29,8 +29,9 @@ type BatchResult struct {
 //	  逐笔持账户锁：外部冲突检查、全部提交前校验、落 SUBMITTING，释放账户锁
 //	  有界并发发往交易所，发送前再确认一次目标授权
 //	  逐笔持账户锁记录结果
-//	批后：有成交的账户请求会话做一次防抖轻量同步（等私有流成交先入账，一致时只要 10 权重）；
-//	      没有会话或余额拒单时直接轻量同步
+//	全部发出后：有成交回执的账户关闭准入
+//	批后：有成交或余额拒单的账户请求会话做一次防抖轻量同步（等私有流成交先入账，一致时只要 10 权重）；
+//	      没有会话时直接轻量同步
 //
 // 私有流的订单和成交事件要拿执行锁，会在整批结束后才入账，这是预期行为。
 func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []string) ([]BatchResult, error) {
@@ -101,6 +102,26 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			}(index, send)
 		}
 		wg.Wait()
+		// 全部发出后再关闭有成交账户的准入（仍持执行锁）：成交明细补齐、余额覆盖后由同步恢复。
+		closed := make(map[string]struct{})
+		for _, send := range sends {
+			if send == nil || !send.closeReadiness {
+				continue
+			}
+			accountID := send.record.TradingAccountID
+			if _, done := closed[accountID]; done {
+				continue
+			}
+			closed[accountID] = struct{}{}
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			err := s.Store.Transaction(closeCtx, func(tx *store.Tx) error {
+				return tx.UpdateTradingAccountReadiness(send.record.SpaceID, accountID, false, s.now().UnixMilli(), fillAwaitingBalance)
+			})
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
 		return nil
 	}()
 	if err != nil {

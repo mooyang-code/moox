@@ -921,6 +921,9 @@ type submitSend struct {
 	aggregate  orderdomain.Order
 	adapter    execution.ExecutionAdapter
 	validation Validation
+	// closeReadiness 表示回执带成交、账户需要关闭准入。批量发送时由批次在全部发出后统一关闭，
+	// 否则先回来的回执会挡住同批后面还没发出的单。
+	closeReadiness bool
 }
 
 // submit 是串行提交：准备、发送、记录都在调用方持有的锁里完成。
@@ -1254,7 +1257,11 @@ func (s *Service) deliverSubmit(
 						return err
 					}
 				}
-				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), "成交待余额同步确认")
+				if lockAccount != nil {
+					send.closeReadiness = true
+					return nil
+				}
+				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), fillAwaitingBalance)
 			}
 		}
 		return nil
@@ -1301,6 +1308,9 @@ func (s *Service) abortUnsentSubmit(
 
 // uncertainExchangeError 报告请求结果是否未知：超时、连接中断、408、503 未知。
 // 限流和本地拦截是确定未受理，不在这里。
+// fillAwaitingBalance 是成交后等余额同步确认期间的未就绪原因。
+const fillAwaitingBalance = "成交待余额同步确认"
+
 func observeOrder(tradingAccountID, result string) {
 	telemetry.Orders.WithLabelValues(tradingAccountID, result).Inc()
 }
