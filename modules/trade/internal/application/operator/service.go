@@ -63,7 +63,7 @@ type Service struct {
 	Orders             OrderService
 	Syncer             AccountSyncer
 	Prices             PriceSource
-	Venues             execution.VenueCatalog
+	Exchanges          execution.ExchangeCatalog
 	Now                func() time.Time
 	ManualSubmitWindow time.Duration
 

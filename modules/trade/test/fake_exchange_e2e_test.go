@@ -20,22 +20,22 @@ import (
 )
 
 const (
-	brokerExchange   = exchange.Exchange("FAKE_BROKER")
-	brokerInstrument = "600519.XSHG"
+	fakeExchangeName = exchange.Exchange("FAKE_EXCHANGE")
+	fakeInstrument   = "600519.XSHG"
 )
 
-// brokerCore 是 A 股假券商：市价单立即成交，当日买入的数量计入 Locked，次日才可卖。
-type brokerCore struct {
+// fakeCore 是 A 股假券商：市价单立即成交，当日买入的数量计入 Locked，次日才可卖。
+type fakeCore struct {
 	*fakeExchange
 	snapshots int
 }
 
-func newBrokerCore() *brokerCore {
+func newFakeCore() *fakeCore {
 	fake := newFakeExchange(exchange.MarketTypeStock)
 	fake.instrument = exchange.Instrument{
-		Exchange: brokerExchange, MarketType: exchange.MarketTypeStock,
-		ExchangeSymbol: brokerInstrument, InstrumentID: brokerInstrument,
-		BaseAsset: brokerInstrument, QuoteAsset: "CNY", SettlementAsset: "CNY",
+		Exchange: fakeExchangeName, MarketType: exchange.MarketTypeStock,
+		ExchangeSymbol: fakeInstrument, InstrumentID: fakeInstrument,
+		BaseAsset: fakeInstrument, QuoteAsset: "CNY", SettlementAsset: "CNY",
 		ExchangeQuantityStep: shared.MustDecimal("100"),
 		MinExchangeQuantity:  shared.MustDecimal("100"),
 		PriceTick:            shared.MustDecimal("0.01"), MinNotional: shared.MustDecimal("0"),
@@ -47,12 +47,12 @@ func newBrokerCore() *brokerCore {
 	}}
 	fake.account.Equity = shared.MustDecimal("1000000")
 	fake.account.AvailableFunds = shared.MustDecimal("1000000")
-	return &brokerCore{fakeExchange: fake}
+	return &fakeCore{fakeExchange: fake}
 }
 
-func (b *brokerCore) Exchange() exchange.Exchange { return brokerExchange }
+func (b *fakeCore) Exchange() exchange.Exchange { return fakeExchangeName }
 
-func (b *brokerCore) PlaceOrder(ctx context.Context, request exchange.OrderRequest) (exchange.Order, error) {
+func (b *fakeCore) PlaceOrder(ctx context.Context, request exchange.OrderRequest) (exchange.Order, error) {
 	if _, err := b.fakeExchange.PlaceOrder(ctx, request); err != nil {
 		return exchange.Order{}, err
 	}
@@ -71,7 +71,7 @@ func (b *brokerCore) PlaceOrder(ctx context.Context, request exchange.OrderReque
 }
 
 // moveBalances 调整现金和持仓；买入的数量计入 Locked，所以当日不可卖。调用方持有 b.mu。
-func (b *brokerCore) moveBalances(cash, total, available shared.Decimal) {
+func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	b.touch()
 	balances := b.account.Balances
 	balances[0].Total = balances[0].Total.Add(cash)
@@ -79,7 +79,7 @@ func (b *brokerCore) moveBalances(cash, total, available shared.Decimal) {
 	b.account.AvailableFunds = balances[0].Available
 	if len(balances) == 1 {
 		b.account.Balances = append(balances, exchange.AssetBalance{
-			Asset: brokerInstrument, Available: available, Locked: total.Sub(available), Total: total,
+			Asset: fakeInstrument, Available: available, Locked: total.Sub(available), Total: total,
 		})
 		return
 	}
@@ -89,13 +89,13 @@ func (b *brokerCore) moveBalances(cash, total, available shared.Decimal) {
 }
 
 // touch 让快照时间晚于成交时间，同步才认为余额已覆盖这笔成交。
-func (b *brokerCore) touch() {
+func (b *fakeCore) touch() {
 	b.snapshots++
 	b.account.ExchangeUpdatedAt = testNow.Add(time.Hour + time.Duration(b.snapshots)*time.Second)
 }
 
 // settle 模拟次日开盘：昨天买入的数量变为可卖。
-func (b *brokerCore) settle() {
+func (b *fakeCore) settle() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.touch()
@@ -103,23 +103,23 @@ func (b *brokerCore) settle() {
 	b.account.Balances[1].Locked = shared.Zero()
 }
 
-func (b *brokerCore) requestCount() int {
+func (b *fakeCore) requestCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.requests)
 }
 
-// fakeBroker 只暴露必须实现的接口：没有私有流，也没有杠杆配置。
-type fakeBroker struct {
+// fakeAdapter 只暴露必须实现的接口：没有私有流，也没有杠杆配置。
+type fakeAdapter struct {
 	execution.ExecutionAdapter
 }
 
-func (fakeBroker) Exchange() exchange.Exchange { return brokerExchange }
+func (fakeAdapter) Exchange() exchange.Exchange { return fakeExchangeName }
 
-// brokerWeightResolver 把权重按 1000 股换算：0.2 对应 200 股。
-type brokerWeightResolver struct{ testTargetWeightResolver }
+// fakeWeightResolver 把权重按 1000 股换算：0.2 对应 200 股。
+type fakeWeightResolver struct{ testTargetWeightResolver }
 
-func (r brokerWeightResolver) Resolve(
+func (r fakeWeightResolver) Resolve(
 	ctx context.Context,
 	signalTime int64,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
@@ -133,14 +133,14 @@ func (r brokerWeightResolver) Resolve(
 	return conversion, err
 }
 
-func seedBrokerAccount(t *testing.T, tradeStore *store.Store, instrument exchange.Instrument) {
+func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.Instrument) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "A 股",
-			Exchange: string(brokerExchange), MarketType: string(exchange.MarketTypeStock),
+			Exchange: string(fakeExchangeName), MarketType: string(exchange.MarketTypeStock),
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
-			CredentialSecretID: "broker-secret", SettlementAsset: "CNY",
+			CredentialSecretID: "fake-exchange-secret", SettlementAsset: "CNY",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{{Asset: "CNY", Available: "1000000", Total: "1000000"}},
@@ -151,7 +151,7 @@ func seedBrokerAccount(t *testing.T, tradeStore *store.Store, instrument exchang
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{
-			Exchange: string(brokerExchange), MarketType: string(exchange.MarketTypeStock),
+			Exchange: string(fakeExchangeName), MarketType: string(exchange.MarketTypeStock),
 			Environment:    string(exchange.AccountEnvironmentTestnet),
 			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: instrument.InstrumentID,
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
@@ -183,23 +183,23 @@ func seedBrokerAccount(t *testing.T, tradeStore *store.Store, instrument exchang
 }
 
 // 新增场所只注册适配器和描述信息：核心流程按规则跑通买入、T+1、交易时段和做空拒绝。
-func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
+func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	ctx := context.Background()
-	core := newBrokerCore()
+	core := newFakeCore()
 	var open atomic.Bool
 	registry := execution.NewRegistry()
-	registry.Register(execution.VenueDescriptor{
-		Exchange:       brokerExchange,
+	registry.Register(execution.ExchangeDescriptor{
+		Exchange:       fakeExchangeName,
 		OrderTypes:     []exchange.OrderType{exchange.OrderTypeMarket},
 		TradingSession: func(time.Time) bool { return open.Load() },
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")
 		}
-		return fakeBroker{ExecutionAdapter: core}, nil
+		return fakeAdapter{ExecutionAdapter: core}, nil
 	})
 	adapter, err := registry.Bind(exchange.AccountConfig{
-		TradingAccountID: testAccount, Exchange: brokerExchange, MarketType: exchange.MarketTypeStock,
+		TradingAccountID: testAccount, Exchange: fakeExchangeName, MarketType: exchange.MarketTypeStock,
 		ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "CNY",
 	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})
 	require.NoError(t, err)
@@ -212,7 +212,7 @@ func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
 	tradeStore, err := store.Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tradeStore.Close() })
-	seedBrokerAccount(t, tradeStore, core.instrument)
+	seedFakeAccount(t, tradeStore, core.instrument)
 	f := buildFixture(tradeStore, path, core.fakeExchange, adapter)
 
 	now := time.Now().UTC()
@@ -221,17 +221,17 @@ func TestFakeBrokerRunsFullTargetLifecycle(t *testing.T) {
 	f.orders.Now = func() time.Time { return now }
 	f.sync.Now = func() time.Time { return testNow.Add(2 * time.Hour) }
 	options := eventconsumer.TargetOptions{
-		Store: tradeStore, Now: func() time.Time { return now }, WeightResolver: brokerWeightResolver{},
+		Store: tradeStore, Now: func() time.Time { return now }, WeightResolver: fakeWeightResolver{},
 	}
 	executor := &targetapp.Executor{
-		Store: tradeStore, Orders: f.orders, Venues: registry,
+		Store: tradeStore, Orders: f.orders, Exchanges: registry,
 		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: adapter}},
 		Now:              func() time.Time { return now },
 		MaxChildNotional: shared.MustDecimal("100000000"),
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: brokerInstrument, TargetWeight: quantity}},
+			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}

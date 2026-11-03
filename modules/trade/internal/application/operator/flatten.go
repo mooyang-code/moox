@@ -327,7 +327,7 @@ func (s *Service) flattenAccount(
 		switch {
 		case !exchange.MarketType(account.MarketType).Valid():
 			result.Error = "不支持的市场类型 " + account.MarketType
-		case !execution.InTradingSession(s.Venues, account.Exchange, time.Now()):
+		case !execution.InTradingSession(s.Exchanges, account.Exchange, time.Now()):
 			result.Error = "当前不在交易时段"
 		case exchange.RuleFor(account.MarketType).PositionFromBalance:
 			s.flattenSpot(ctx, command, account, &result, reasons)

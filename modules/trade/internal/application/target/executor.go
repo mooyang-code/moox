@@ -62,7 +62,7 @@ type Executor struct {
 	Store            *store.Store
 	Orders           OrderService
 	Prices           PriceSource
-	Venues           execution.VenueCatalog
+	Exchanges        execution.ExchangeCatalog
 	Now              func() time.Time
 	MaxChildNotional shared.Decimal
 	// MinRebalanceRatio 是最小调仓比例，为零时用默认 5%。
@@ -269,7 +269,7 @@ func (e *Executor) Converge(
 		now = e.Now()
 	}
 	for _, member := range members {
-		if !execution.InTradingSession(e.Venues, member.account.Exchange, now) {
+		if !execution.InTradingSession(e.Exchanges, member.account.Exchange, now) {
 			target.LastError = "当前不在交易时段"
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err

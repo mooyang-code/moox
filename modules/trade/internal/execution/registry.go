@@ -18,8 +18,8 @@ type ExchangeIdentity interface {
 	Exchange() exchange.Exchange
 }
 
-// VenueDescriptor 是场所注册时登记的静态信息，不依赖适配器实例，未就绪的账户也能取到。
-type VenueDescriptor struct {
+// ExchangeDescriptor 是场所注册时登记的静态信息，不依赖适配器实例，未就绪的账户也能取到。
+type ExchangeDescriptor struct {
 	Exchange     exchange.Exchange
 	OrderTypes   []exchange.OrderType
 	FillPolicies []exchange.FillPolicy
@@ -30,38 +30,38 @@ type VenueDescriptor struct {
 }
 
 // InTradingSession 报告场所当前是否可以下单。
-func (d VenueDescriptor) InTradingSession(now time.Time) bool {
+func (d ExchangeDescriptor) InTradingSession(now time.Time) bool {
 	return d.TradingSession == nil || d.TradingSession(now)
 }
 
-// VenueCatalog 按场所名查询静态信息。
-type VenueCatalog interface {
-	Descriptor(name exchange.Exchange) (VenueDescriptor, bool)
+// ExchangeCatalog 按场所名查询静态信息。
+type ExchangeCatalog interface {
+	Descriptor(name exchange.Exchange) (ExchangeDescriptor, bool)
 }
 
 // InTradingSession 报告账户所在场所当前是否可以下单；没有登记的场所视为全天可交易。
-func InTradingSession(venues VenueCatalog, name string, now time.Time) bool {
-	if venues == nil {
+func InTradingSession(exchanges ExchangeCatalog, name string, now time.Time) bool {
+	if exchanges == nil {
 		return true
 	}
-	descriptor, ok := venues.Descriptor(exchange.Exchange(name))
+	descriptor, ok := exchanges.Descriptor(exchange.Exchange(name))
 	return !ok || descriptor.InTradingSession(now)
 }
 
 type Registry struct {
 	mu          sync.RWMutex
 	factories   map[exchange.Exchange]AdapterFactory
-	descriptors map[exchange.Exchange]VenueDescriptor
+	descriptors map[exchange.Exchange]ExchangeDescriptor
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		factories:   make(map[exchange.Exchange]AdapterFactory),
-		descriptors: make(map[exchange.Exchange]VenueDescriptor),
+		descriptors: make(map[exchange.Exchange]ExchangeDescriptor),
 	}
 }
 
-func (r *Registry) Register(descriptor VenueDescriptor, factory AdapterFactory) {
+func (r *Registry) Register(descriptor ExchangeDescriptor, factory AdapterFactory) {
 	name := descriptor.Exchange
 	if !name.Valid() || factory == nil {
 		panic("execution: Register requires a supported Exchange and factory")
@@ -76,7 +76,7 @@ func (r *Registry) Register(descriptor VenueDescriptor, factory AdapterFactory) 
 }
 
 // Descriptor 返回场所的静态信息。
-func (r *Registry) Descriptor(name exchange.Exchange) (VenueDescriptor, bool) {
+func (r *Registry) Descriptor(name exchange.Exchange) (ExchangeDescriptor, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	descriptor, ok := r.descriptors[name]

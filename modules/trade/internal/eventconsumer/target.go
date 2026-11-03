@@ -156,8 +156,8 @@ func HandleTarget(
 		return retryTarget(currentErr)
 	}
 	// Membership and account snapshots must remain stable from the resolver's
-	// venue selection through receipt acceptance. Otherwise a concurrent member
-	// removal can leave an immutable receipt pointing at a venue that no longer
+	// exchange selection through receipt acceptance. Otherwise a concurrent member
+	// removal can leave an immutable receipt pointing at an exchange that no longer
 	// belongs to the logical account.
 	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里，
 	// 超时按可重试处理，其他账户的消息才能继续。
@@ -407,7 +407,7 @@ func unsupportedLogicalTargetInstrument(
 	}
 	// A target is terminally unsupported only after every enabled membership
 	// has been inspected. If any enabled member is still warming up, retry so
-	// that it can become the eventual eligible execution venue.
+	// that it can become the eventual eligible execution exchange.
 	membersReady = enabledMemberCount > 0 && readyMemberCount == enabledMemberCount
 	for _, target := range request.GetTargets() {
 		// 保持标的不会被下单，不能因为它暂时不受支持（例如已下架的持仓）而拒绝整个目标。

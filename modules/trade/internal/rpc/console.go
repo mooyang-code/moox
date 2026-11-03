@@ -31,7 +31,7 @@ type ConsoleServer struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
-	Venues             execution.VenueCatalog
+	Exchanges          execution.ExchangeCatalog
 }
 
 type HoldingQueryService interface {
@@ -146,10 +146,10 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if s.MatcherReady != nil {
 		matcherReady = s.MatcherReady()
 	}
-	if s.Venues == nil {
+	if s.Exchanges == nil {
 		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	descriptor, _ := s.Venues.Descriptor(account.Exchange)
+	descriptor, _ := s.Exchanges.Descriptor(account.Exchange)
 	value := ResolveExecutionCapabilities(account, descriptor, s.LiveTradingEnabled, matcherReady)
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,

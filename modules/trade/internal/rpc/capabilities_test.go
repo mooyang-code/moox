@@ -61,7 +61,7 @@ func (c ExecutionCapabilities) Valid() bool {
 	return c.CanPlaceOrder || strings.TrimSpace(c.UnavailableReason) != ""
 }
 
-var testDescriptor = execution.VenueDescriptor{
+var testDescriptor = execution.ExchangeDescriptor{
 	OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 	FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
 }
@@ -90,10 +90,10 @@ func TestGetExecutionCapabilitiesThroughConsoleServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := execution.NewRegistry()
-	registry.Register(execution.VenueDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+	registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
 		return nil, nil
 	})
-	server := &ConsoleServer{Store: tradeStore, Venues: registry}
+	server := &ConsoleServer{Store: tradeStore, Exchanges: registry}
 	response, err := server.GetExecutionCapabilities(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
 		&tradepb.GetExecutionCapabilitiesReq{TradingAccountId: "account-1"},

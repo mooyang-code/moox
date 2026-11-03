@@ -13,7 +13,7 @@ var (
 	TargetDeliveryActions = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_target_delivery_actions_total", Help: "Target delivery decisions and transport action outcomes."}, []string{"decision", "error_code", "action_result"})
 	// 下单量监控：标签只用账户，不带标的和目标 ID，序列数固定。
 	Orders            = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_orders_total", Help: "Order submissions by trading account and result."}, []string{"account", "result"})
-	OrderCancels      = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_cancels_total", Help: "Order cancel requests accepted by the venue."}, []string{"account"})
+	OrderCancels      = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_cancels_total", Help: "Order cancel requests accepted by the exchange."}, []string{"account"})
 	OrderNotional     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_order_notional_total", Help: "Submitted order notional at the reference price."}, []string{"account", "asset"})
 	Reversals         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_trade_reversals_total", Help: "Target children reversing the previous target's fill on the same lane within five minutes."}, []string{"logical_account"})
 	TargetChildOrders = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_trade_target_child_orders", Help: "Child orders submitted for the current target."}, []string{"logical_account"})

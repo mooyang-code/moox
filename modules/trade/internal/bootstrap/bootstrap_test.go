@@ -147,12 +147,12 @@ type extraOnlyAdapter struct {
 	execution.ExecutionAdapter
 }
 
-func (extraOnlyAdapter) Exchange() exchange.Exchange { return "FAKE_BROKER" }
+func (extraOnlyAdapter) Exchange() exchange.Exchange { return "FAKE_EXCHANGE" }
 
-func TestRegistryBindsVenueWithOnlyExtraCredential(t *testing.T) {
+func TestRegistryBindsExchangeWithOnlyExtraCredential(t *testing.T) {
 	registry := execution.NewRegistry()
-	broker := exchange.Exchange("FAKE_BROKER")
-	registry.Register(execution.VenueDescriptor{Exchange: broker}, func(
+	fakeName := exchange.Exchange("FAKE_EXCHANGE")
+	registry.Register(execution.ExchangeDescriptor{Exchange: fakeName}, func(
 		_ exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
@@ -163,7 +163,7 @@ func TestRegistryBindsVenueWithOnlyExtraCredential(t *testing.T) {
 	})
 	adapter, err := registry.Bind(exchange.AccountConfig{
 		TradingAccountID: "account-1",
-		Exchange:         broker,
+		Exchange:         fakeName,
 		MarketType:       exchange.MarketTypeSpot,
 		ExecutionMode:    exchange.ExecutionModeLive,
 		SettlementAsset:  "CNY",

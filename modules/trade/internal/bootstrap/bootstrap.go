@@ -96,7 +96,7 @@ func initialize(
 	}
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
-		SessionState: manager, SymbolConfigs: manager, Venues: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
@@ -166,8 +166,8 @@ func initialize(
 	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
 	orderService.Syncer = accountSyncer{service: syncService}
 	targetExecutor := &targetapp.Executor{
-		Venues: registry,
-		Store:  tradeStore, Orders: orderService,
+		Exchanges: registry,
+		Store:     tradeStore, Orders: orderService,
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
 		MaxChildNotional: shared.MustDecimal(maxChildNotional),
 		OnReversal:       noteTargetReversal(tradeStore),
@@ -196,8 +196,8 @@ func initialize(
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 	}
 	operatorService := &operatorapp.Service{
-		Venues: registry,
-		Store:  tradeStore, Orders: orderService,
+		Exchanges: registry,
+		Store:     tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
@@ -390,7 +390,7 @@ func initialize(
 
 		rpc.ConsoleOptions{
 			Paper:              &papersimulation.Service{Store: tradeStore},
-			Venues:             registry,
+			Exchanges:          registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
@@ -435,14 +435,14 @@ func initialize(
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	cryptoVenue := func(name exchange.Exchange) execution.VenueDescriptor {
-		return execution.VenueDescriptor{
+	cryptoExchange := func(name exchange.Exchange) execution.ExchangeDescriptor {
+		return execution.ExchangeDescriptor{
 			Exchange:     name,
 			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
 		}
 	}
-	registry.Register(cryptoVenue(exchange.ExchangeBinance), func(
+	registry.Register(cryptoExchange(exchange.ExchangeBinance), func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
@@ -451,9 +451,9 @@ func registerBuiltins(registry *execution.Registry) {
 		}
 		return binance.New(config, credential), nil
 	})
-	okxVenue := cryptoVenue(exchange.ExchangeOKX)
-	okxVenue.UnifiedAccount = true
-	registry.Register(okxVenue, func(
+	okxExchange := cryptoExchange(exchange.ExchangeOKX)
+	okxExchange.UnifiedAccount = true
+	registry.Register(okxExchange, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {

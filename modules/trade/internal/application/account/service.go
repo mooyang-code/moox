@@ -66,7 +66,7 @@ type Service struct {
 	Secrets            SecretSource
 	SessionState       SessionState
 	SymbolConfigs      SymbolConfigs
-	Venues             execution.VenueCatalog
+	Exchanges          execution.ExchangeCatalog
 	LiveTradingEnabled bool
 }
 
@@ -164,8 +164,8 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 		return err
 	}
 	unified := false
-	if s.Venues != nil {
-		if descriptor, ok := s.Venues.Descriptor(value.Exchange); ok {
+	if s.Exchanges != nil {
+		if descriptor, ok := s.Exchanges.Descriptor(value.Exchange); ok {
 			unified = descriptor.UnifiedAccount
 		}
 	}
