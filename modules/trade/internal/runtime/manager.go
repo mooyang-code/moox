@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -132,7 +133,6 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 		CredentialSecretID: account.CredentialSecretID,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
 		Status:           string(account.Status),
-		SyncSymbols:      append([]string(nil), account.SyncSymbols...),
 		LeverageSettings: leverage,
 	}
 	if account.Paper != nil {
@@ -147,14 +147,57 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	return sameSessionConfig(entry.account, current)
 }
 
-func (m *Manager) Invalidate(tradingAccountID string) {
-	m.mu.Lock()
-	entry := m.sessions[tradingAccountID]
-	if entry != nil && !entry.stopping {
-		entry.stopping = true
-		entry.cancel()
+// EnsureSymbolConfig 在首次开仓前把全仓和杠杆设置到交易所。
+func (m *Manager) EnsureSymbolConfig(
+	ctx context.Context,
+	tradingAccountID string,
+	symbol string,
+	leverage shared.Decimal,
+) error {
+	session, err := m.symbolConfigSession(tradingAccountID)
+	if err != nil {
+		return err
 	}
-	m.mu.Unlock()
+	return session.EnsureSymbolConfig(ctx, symbol, leverage)
+}
+
+// RequestSync 请求账户会话做一次防抖轻量同步，会话不支持时返回 false。
+func (m *Manager) RequestSync(tradingAccountID string) bool {
+	m.mu.RLock()
+	entry := m.sessions[tradingAccountID]
+	if entry == nil || entry.stopping {
+		m.mu.RUnlock()
+		return false
+	}
+	session, ok := entry.session.(interface{ RequestSync() bool })
+	m.mu.RUnlock()
+	return ok && session.RequestSync()
+}
+
+// ForgetSymbolConfig 让标的下次开仓前重新设置，符号是默认杠杆键时清空全部记录。
+func (m *Manager) ForgetSymbolConfig(tradingAccountID, symbol string) {
+	if session, err := m.symbolConfigSession(tradingAccountID); err == nil {
+		session.ForgetSymbolConfig(symbol)
+	}
+}
+
+type symbolConfigSession interface {
+	EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error
+	ForgetSymbolConfig(symbol string)
+}
+
+func (m *Manager) symbolConfigSession(tradingAccountID string) (symbolConfigSession, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry := m.sessions[tradingAccountID]
+	if entry == nil || entry.stopping {
+		return nil, ErrSessionConfig
+	}
+	session, ok := entry.session.(symbolConfigSession)
+	if !ok {
+		return nil, ErrSessionConfig
+	}
+	return session, nil
 }
 
 func (m *Manager) Adapter(tradingAccountID string) (execution.ExecutionAdapter, error) {
@@ -178,34 +221,6 @@ func (m *Manager) Adapter(tradingAccountID string) (execution.ExecutionAdapter, 
 		return nil, ErrSessionConfig
 	}
 	return adapter, nil
-}
-
-func (m *Manager) Bundle(tradingAccountID string) (execution.ExecutionBundle, error) {
-	m.mu.RLock()
-	entry := m.sessions[tradingAccountID]
-	stopping := entry == nil || entry.stopping
-	var session ManagedSession
-	if entry != nil {
-		session = entry.session
-	}
-	m.mu.RUnlock()
-	if stopping {
-		return execution.ExecutionBundle{}, ErrSessionConfig
-	}
-	if source, ok := session.(interface {
-		ExecutionBundle() execution.ExecutionBundle
-	}); ok {
-		bundle := source.ExecutionBundle()
-		if bundle.Adapter == nil {
-			return execution.ExecutionBundle{}, ErrSessionConfig
-		}
-		return bundle, nil
-	}
-	adapter, err := m.Adapter(tradingAccountID)
-	if err != nil {
-		return execution.ExecutionBundle{}, err
-	}
-	return execution.ExecutionBundle{Adapter: adapter, ReservationPolicy: execution.LiveReservationPolicy{}}, nil
 }
 
 func (m *Manager) Snapshot() SessionSnapshot {
@@ -327,21 +342,7 @@ func sameSessionConfig(
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
-		equalStringSlices(left.SyncSymbols, right.SyncSymbols) &&
-		reflect.DeepEqual(left.LeverageSettings, right.LeverageSettings) &&
 		reflect.DeepEqual(left.PaperConfig, right.PaperConfig)
-}
-
-func equalStringSlices(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (m *Manager) runSession(ctx context.Context, session ManagedSession) {

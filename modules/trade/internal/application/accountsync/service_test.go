@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ func (s syncAdapterSource) Adapter(string) (execution.ExecutionAdapter, error) {
 }
 
 type syncAdapter struct {
+	adaptertest.Stub
 	order       exchange.Order
 	fill        exchange.Fill
 	fillStarted chan struct{}
@@ -156,7 +158,7 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	require.True(t, account.Ready)
 	require.Equal(t, "11", account.FillCursors["BTC-USDT"])
 	require.Equal(t, int64(3_000), account.LastSyncAt)
-	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+	require.Equal(t, int64(3_000), account.SnapshotSourceTime, "快照时间取本地读取时间")
 
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -169,11 +171,9 @@ func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	current := exchange.Order{
@@ -205,11 +205,9 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 	adapter := &syncAdapter{lookupErr: &exchange.Error{
 		Kind: exchange.ErrorOrderNotFound, Err: errors.New("missing"),
 	}}
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 
@@ -241,11 +239,9 @@ func TestExternalFillImportsExternalOwnerAndPauses(t *testing.T) {
 func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -287,11 +283,9 @@ func TestKnownExternalFillPausesOnceForNewFact(t *testing.T) {
 func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -323,11 +317,9 @@ func TestKnownExternalOrderUpdatePausesOnceForNewFact(t *testing.T) {
 func TestKnownExternalAggregateFillAheadPausesLogicalAccount(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(4_000) },
 	}
 	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
@@ -412,13 +404,10 @@ func TestAccountFactsWakeTargetWorkerAfterReleasingAccountLock(t *testing.T) {
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: &LogicalAccountFactsObserver{
-			Store: tradeStore,
-			Wake: func() {
-				unlock := tradeStore.LockTradingAccount("account-1")
-				unlock()
-				woke <- struct{}{}
-			},
+		Wake: func() {
+			unlock := tradeStore.LockTradingAccount("account-1")
+			unlock()
+			woke <- struct{}{}
 		},
 		Now: func() time.Time { return time.UnixMilli(3_000) },
 	}
@@ -453,11 +442,9 @@ func TestExternalFactsDoNotReenterLogicalAccountLock(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
-	observer := runFactsObserver(t, tradeStore)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: observer,
 		Now:   func() time.Time { return time.UnixMilli(3_000) },
 	}
 	unlock := tradeStore.LockLogicalAccount("space-1", "logical-1")
@@ -644,7 +631,8 @@ func TestApplySnapshotResolvesUnknownWithoutReenteringAccountLock(t *testing.T) 
 	}
 }
 
-func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
+// 持仓事件不写持仓：先于成交到达时写入数量，后到的成交会再叠加一次。
+func TestApplyPositionOnlyClosesReadiness(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	service := Service{
@@ -658,32 +646,18 @@ func TestApplyPartialPositionUsesConfiguredLeverage(t *testing.T) {
 		SignedQuantity:    shared.MustDecimal("1"),
 		EntryPrice:        shared.MustDecimal("100"),
 		MarginMode:        exchange.MarginModeCross,
-		UnrealizedPnL:     shared.MustDecimal("2"),
 		ExchangeUpdatedAt: time.UnixMilli(2_000),
-		Present: exchange.PositionPresence{
-			SignedQuantity: true,
-			EntryPrice:     true,
-			MarginMode:     true,
-			UnrealizedPnL:  true,
-		},
-		RequiresSync: true,
 	})
 	require.NoError(t, err)
-	var position store.PositionRecord
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		var found bool
-		var getErr error
-		position, found, getErr = tx.GetPosition(
-			"space-1",
-			"account-1",
-			"BTC-USDT",
-			"NET",
-		)
-		require.True(t, found)
+		_, found, getErr := tx.GetPosition("space-1", "account-1", "BTC-USDT", "NET")
+		require.False(t, found)
 		return getErr
 	}))
-	require.Equal(t, "5", position.Leverage)
-	require.Equal(t, "1", position.SignedQuantity)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.EqualValues(t, 2_000, account.BalancePendingUntil)
 }
 
 func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T) {
@@ -693,10 +667,7 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}},
 		Fills: &consumer.Reducer{Store: tradeStore},
-		Facts: &LogicalAccountFactsObserver{
-			Store: tradeStore,
-			Wake:  func() { wakes++ },
-		},
+		Wake:  func() { wakes++ },
 	}
 	require.NoError(t, service.ApplyPosition(
 		context.Background(), "account-1", exchange.Position{
@@ -705,10 +676,6 @@ func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T
 			EntryPrice:        shared.MustDecimal("100"),
 			MarginMode:        exchange.MarginModeCross,
 			ExchangeUpdatedAt: time.UnixMilli(2_500),
-			Present: exchange.PositionPresence{
-				SignedQuantity: true, EntryPrice: true, MarginMode: true,
-			},
-			RequiresSync: true,
 		},
 	))
 	require.NoError(t, service.ApplyAccountSnapshot(
@@ -749,10 +716,6 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 		SignedQuantity: shared.MustDecimal("1"),
 		EntryPrice:     shared.MustDecimal("100"), MarginMode: exchange.MarginModeCross,
 		ExchangeUpdatedAt: time.UnixMilli(2_000),
-		Present: exchange.PositionPresence{
-			SignedQuantity: true, EntryPrice: true, MarginMode: true,
-		},
-		RequiresSync: true,
 	}))
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		_, found, err := tx.GetPosition("space-1", "account-1", "ETH-USDT", "NET")
@@ -1040,26 +1003,8 @@ func TestDisconnectReadinessWinsAgainstConcurrentManualSync(t *testing.T) {
 	require.Equal(t, "disconnected", account.LastError)
 }
 
-func TestSyncSymbolsRetainsConfiguredSpotSymbolAfterSellToZero(t *testing.T) {
-	symbols := syncSymbols(
-		store.TradingAccountRecord{
-			MarketType:  "SPOT",
-			SyncSymbols: []string{"BTC-USDT"},
-		},
-		nil,
-		nil,
-		nil,
-		[]store.InstrumentRecord{{
-			ExchangeSymbol: "BTC-USDT", BaseAsset: "BTC", SettlementAsset: "USDT",
-			Status: "TRADING",
-		}},
-		exchange.AccountSnapshot{Balances: []exchange.AssetBalance{{
-			Asset: "BTC", Total: shared.Zero(),
-		}}},
-	)
-	require.Equal(t, []string{"BTC-USDT"}, symbols)
-
-	symbols = syncSymbols(
+func TestFullSymbolsIncludesPositions(t *testing.T) {
+	symbols := FullSymbols(
 		store.TradingAccountRecord{MarketType: "SWAP"},
 		nil,
 		nil,
@@ -1076,27 +1021,6 @@ func openSyncStore(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, tradeStore.Close()) })
 	return tradeStore
-}
-
-func runFactsObserver(
-	t *testing.T,
-	tradeStore *store.Store,
-) *LogicalAccountFactsObserver {
-	t.Helper()
-	observer := &LogicalAccountFactsObserver{
-		Store: tradeStore, RetryInterval: 10 * time.Millisecond,
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- observer.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		require.ErrorIs(t, <-done, context.Canceled)
-	})
-	require.Eventually(t, func() bool {
-		return observer.Snapshot().Ready
-	}, time.Second, 10*time.Millisecond)
-	return observer
 }
 
 func setLogicalAccountAutomation(
@@ -1141,12 +1065,13 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
+			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
 			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
 			Environment:        "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: "CROSS", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
+			FillCursors:      store.FillCursors{"BTC-USDT": "0"},
 		}); err != nil {
 			return err
 		}
@@ -1174,15 +1099,6 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 	}))
 }
 
-type staleSnapshotAdapter struct{ *syncAdapter }
-
-func (staleSnapshotAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
-	return exchange.AccountSnapshot{
-		AvailableFunds:    shared.MustDecimal("999"),
-		ExchangeUpdatedAt: time.UnixMilli(1_000), // 早于已采用的快照（2_000）
-	}, nil
-}
-
 // LastSyncAt 是资金预留的抵扣边界：丢弃陈旧余额快照时不能推进它，否则已提交订单的预留会被误认为已反映在余额中。
 func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	tradeStore := openSyncStore(t)
@@ -1208,15 +1124,14 @@ func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
 	_, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 
-	clock = 5_000
-	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{adapter}}
+	clock = 2_500
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.AccountSnapshotUpdated)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.Equal(t, int64(3_000), account.LastSyncAt, "陈旧快照被丢弃时抵扣边界保持不变")
-	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+	require.Equal(t, int64(3_000), account.SnapshotSourceTime)
 }
 
 // 实盘私有成交已释放订单预留，但余额快照尚未反映这笔支出：成交后必须关闭准入，直到完整同步确认余额。
@@ -1330,7 +1245,7 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 	service.Metrics = metrics
 	for _, at := range []int64{1_500, 2_000, 2_900} { // 旧于已采用快照 / 与已采用快照同时间 / 介于旧余额与成交之间
 		service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, at}}
-		service.Now = func() time.Time { return time.UnixMilli(5_000 + at) }
+		service.Now = func() time.Time { return time.UnixMilli(at) }
 		result, syncErr := service.SyncAccount(context.Background(), "account-1")
 		require.NoError(t, syncErr)
 		require.False(t, result.Ready, "快照时间 %d 未覆盖成交 3_000", at)
@@ -1382,7 +1297,7 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
 		SessionState: readySessionState(true),
 		Fills:        &consumer.Reducer{Store: tradeStore},
-		Now:          func() time.Time { return time.UnixMilli(4_000) },
+		Now:          func() time.Time { return time.UnixMilli(2_000) },
 	}
 	_, err := service.SyncAccount(context.Background(), "account-1") // 完整快照 2_000，可用资金 900
 	require.NoError(t, err)
@@ -1393,7 +1308,7 @@ func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
 	}
 	require.NoError(t, service.ApplyAccountSnapshot(context.Background(), "account-1", private))
 
-	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 2_200}}
+	service.Now = func() time.Time { return time.UnixMilli(2_200) }
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, result.AccountSnapshotUpdated)
@@ -1424,11 +1339,12 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 			SettlementAsset: "USDT", TradedAt: time.UnixMilli(3_000),
 		},
 	}
+	clock := int64(2_000)
 	service := Service{
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: snapshotAtAdapter{base, 2_000}},
 		SessionState: readySessionState(true),
 		Fills:        &consumer.Reducer{Store: tradeStore},
-		Now:          func() time.Time { return time.UnixMilli(4_000) },
+		Now:          func() time.Time { return time.UnixMilli(clock) },
 	}
 	result, err := service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
@@ -1440,7 +1356,7 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	require.Equal(t, int64(3_000), account.BalancePendingUntil)
 
 	// 重放同一成交（已去重）不会丢水位，余额覆盖成交后恢复
-	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	clock = 4_000
 	result, err = service.SyncAccount(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, result.Ready)
@@ -1821,4 +1737,62 @@ func flatSnapshotThenLateClosingFill(t *testing.T, fillAt int64) {
 		"SELECT COUNT(*) FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1",
 	).Scan(&count).Error)
 	require.Zero(t, count, "已被空仓快照覆盖的平仓成交不能生成反向持仓")
+}
+
+func TestSyncCancelsLocalOrderOnlyWhenExchangeConfirmsMissing(t *testing.T) {
+	seedOrder := func(t *testing.T, db *store.Store) {
+		require.NoError(t, db.Transaction(context.Background(), func(tx *store.Tx) error {
+			return tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", OrderID: "ghost", TradingAccountID: "account-1", ClientOrderID: "ghost-client",
+				ExchangeOrderID: "9", ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+				Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1_000, OwnerType: "EXTERNAL", OwnerID: "external-9",
+				LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", Version: 1,
+			})
+		}))
+	}
+	for _, tc := range []struct {
+		name  string
+		err   error
+		after time.Duration
+		want  string
+	}{
+		{name: "明确不存在且已超时", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}, after: time.Hour, want: "CANCELED"},
+		{name: "刚创建的订单不处理", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}, after: -time.Hour, want: "OPEN"},
+		{name: "HTTP 404 不算不存在", err: &exchange.Error{Kind: exchange.ErrorOrderNotFound, HTTPStatus: 404}, after: time.Hour, want: "OPEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openSyncStore(t)
+			seedSyncAccount(t, db)
+			seedOrder(t, db)
+			svc := &Service{Store: db, Adapters: syncAdapterSource{adapter: &lockDeadlineAdapter{syncAdapter: syncAdapter{lookupErr: tc.err}}}, Fills: &consumer.Reducer{Store: db},
+				Now: func() time.Time { return time.Now().Add(tc.after) }}
+			_, err := svc.SyncAccount(context.Background(), "account-1")
+			require.NoError(t, err)
+			record, err := db.GetOrder(context.Background(), "space-1", "ghost")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, record.State)
+		})
+	}
+}
+
+// 有成交缺口时，会话就绪也不能恢复准入（回执没有交易所时间时只记了缺口、没抬水位）。
+func TestSetReadyKeepsAdmissionClosedWhileFillGapExists(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "gap-order", TradingAccountID: "account-1", ClientOrderID: "gap-order",
+			ExchangeSymbol: "BTC-USDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
+			Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 1000, OwnerType: "EXTERNAL", OwnerID: "gap-order",
+			State: "OPEN", FilledQuantity: "0", Version: 1,
+		}); err != nil {
+			return err
+		}
+		return tx.RaiseObservedFilledQuantity("space-1", "gap-order", shared.MustDecimal("1"))
+	}))
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	require.NoError(t, service.SetReady(context.Background(), "account-1", true, nil))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
 }

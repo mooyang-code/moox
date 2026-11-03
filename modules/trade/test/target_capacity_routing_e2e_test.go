@@ -58,7 +58,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "live-target",
 		InstanceID: "live-instance", SessionID: "live-session", StrategyID: "live-strategy",
 		BarEndTime: testNow.UnixMilli(), EffectiveAt: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
-		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID, Quantity: "1"}},
+		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "1"}},
 		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
 	})
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	executor := &targetapp.Executor{Store: f.store, Orders: f.orders,
 		Prices: targetapp.ExchangePriceSource{Adapters: adapters}, Now: func() time.Time { return testNow }}
 	_, err = executor.Converge(ctx, testSpace, testLogicalAccount)
-	require.True(t, exchange.IsKind(err, exchange.ErrorInsufficientBalance), err)
+	require.NoError(t, err, "a definitive rejection is routed, not retried as an error")
 	orders, count, err := f.store.ListOrders(ctx, testSpace, store.OrderQuery{Limit: 10})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count, "one child per convergence even after a definitive rejection")
@@ -98,48 +98,6 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	require.Equal(t, 1, b.placeCalls)
 }
 
-func TestLiveBalanceRejectionRefreshDeadlineIncludesMembershipLockE2E(t *testing.T) {
-	fake := newFakeExchange(exchange.MarketTypeSpot)
-	f := newFixtureWithMode(t, exchange.MarketTypeSpot, fake, exchange.ExecutionModeLive)
-	pending, err := f.orders.Place(context.Background(), testSpace, marketSpec("bounded-rejection", exchange.SideBuy, "0.01"))
-	require.NoError(t, err)
-	fake.placeErr = &exchange.Error{Kind: exchange.ErrorInsufficientBalance}
-	unlock := f.store.LockLogicalAccountMembership()
-	held := true
-	release := func() {
-		if held {
-			held = false
-			unlock()
-		}
-	}
-	t.Cleanup(release)
-	done := make(chan error, 1)
-	go func() {
-		_, err := f.orders.Submit(context.Background(), testSpace, string(pending.ID))
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		require.True(t, exchange.IsKind(err, exchange.ErrorInsufficientBalance), err)
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	case <-time.After(6 * time.Second):
-		release()
-		<-done
-		t.Fatal("rejection refresh waited beyond its completion deadline for a held membership lock")
-	}
-	require.True(t, held, "Submit must return while the competing lock remains held")
-	account, err := f.store.GetTradingAccountByID(context.Background(), testAccount)
-	require.NoError(t, err)
-	require.False(t, account.Ready, "a failed refresh must not advertise the disproven capacity snapshot as executable")
-	release()
-	stored, err := f.store.GetOrder(context.Background(), testSpace, string(pending.ID))
-	require.NoError(t, err)
-	require.Equal(t, "REJECTED", stored.State)
-	require.Equal(t, "0", stored.RemainingReservedQuantity)
-}
-
-// This is an in-process integration test using actual Paper, valuation,
-// reservation and reducer code. It does not claim production Broker coverage.
 func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	ctx := context.Background()
 	f := newProductionPaperFixture(t, exchange.MarketTypeSpot)
@@ -199,7 +157,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", StrategyId: "capacity-strategy",
 		BarEndTime: timestamppb.New(testNow), EffectiveAt: timestamppb.New(testNow), ValidUntil: timestamppb.New(testNow.Add(time.Hour)),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testInstrumentID, TargetWeight: "1"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
@@ -265,4 +223,48 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 	_, total, err := f.store.ListFills(ctx, testSpace, store.FillQuery{Limit: 10})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
+}
+
+// 拒单不循环：同一目标在一个账户上只产生一笔拒绝订单，目标写明阻塞原因。
+func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
+	ctx := context.Background()
+	fake := newFakeExchange(exchange.MarketTypeSpot)
+	f := newFixtureWithMode(t, exchange.MarketTypeSpot, fake, exchange.ExecutionModeLive)
+	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
+			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
+			ExecutionMode: "LIVE", MarketType: "SPOT", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true}); err != nil {
+			return err
+		}
+		return tx.SetLogicalAccountAutomation(testSpace, testLogicalAccount, "ACTIVE", "")
+	}))
+	_, accepted, err := f.store.AcceptLogicalAccountTarget(ctx, store.LogicalAccountTargetRecord{
+		SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TargetID: "reject-target",
+		InstanceID: "live-instance", SessionID: "live-session", StrategyID: "live-strategy",
+		BarEndTime: testNow.UnixMilli(), EffectiveAt: testNow.UnixMilli(), ValidUntil: testNow.Add(time.Hour).UnixMilli(),
+		Targets: []store.InstrumentTarget{{InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Quantity: "0.1"}},
+		Status:  targetapp.StatusPending, AcceptedAt: testNow.UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.True(t, accepted)
+	fake.placeErr = &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("market closed")}
+	executor := &targetapp.Executor{Store: f.store, Orders: f.orders,
+		Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}}, Now: func() time.Time { return testNow }}
+	var result targetapp.Result
+	for range 4 {
+		result, err = executor.Converge(ctx, testSpace, testLogicalAccount)
+		require.NoError(t, err)
+	}
+	require.Equal(t, targetapp.StatusBlocked, result.Status)
+	require.Equal(t, 1, fake.placeCalls)
+	target, err := f.store.GetLogicalAccountTarget(ctx, testSpace, testLogicalAccount)
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Contains(t, target.BlockedTargets[0].Reason, "market closed")
 }

@@ -181,3 +181,57 @@ func TestTradeResetDataKeepsAccounts(t *testing.T) {
 	require.Equal(t, 2, env.count(t, "t_trading_accounts"), "data 范围保留账户")
 	require.Zero(t, env.count(t, "t_trading_positions"))
 }
+
+func TestLiveSpotHoldingsOnlyCountsManagedAssetsAboveMinimum(t *testing.T) {
+	ctx := context.Background()
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	defer tradeStore.Close()
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "spot", Exchange: "BINANCE", MarketType: "SPOT",
+			ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
+			Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
+				{Asset: "USDT", Total: "100"}, {Asset: "BNB", Total: "5"}, {Asset: "BTC", Total: "0.0001"}, {Asset: "ETH", Total: "2"},
+			}},
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE", MarketType: "SPOT",
+			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		for _, base := range []string{"BTC", "ETH"} {
+			instrument := base + "-USDT-SPOT"
+			if err := tx.UpsertInstrument(store.InstrumentRecord{
+				Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: instrument,
+				BaseAsset: base, QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
+			}); err != nil {
+				return err
+			}
+			if err := tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", TradingAccountID: "account-1", OrderID: base, ClientOrderID: base, Exchange: "BINANCE", MarketType: "SPOT",
+				ExchangeSymbol: base + "USDT", InstrumentID: instrument, OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1",
+				ReferencePrice: "100", State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-" + base, LogicalAccountID: "logical-1", Version: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	db, err := tradeStore.DBForTest().DB()
+	require.NoError(t, err)
+
+	holdings, err := liveSpotHoldings(ctx, db)
+
+	require.NoError(t, err)
+	require.Len(t, holdings, 1)
+	require.Contains(t, holdings[0], "ETH")
+}

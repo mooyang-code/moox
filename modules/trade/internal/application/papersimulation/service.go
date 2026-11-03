@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 type CreateCommand struct {
@@ -42,27 +44,27 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	}
 	command.SettlementAsset = strings.ToUpper(strings.TrimSpace(command.SettlementAsset))
 	command.MarginMode = exchange.MarginMode(strings.ToUpper(strings.TrimSpace(string(command.MarginMode))))
-	if command.SpaceID == "" || command.AccountName == "" || command.LogicalAccountName == "" ||
+	if command.SpaceID == "" || command.AccountName == "" ||
 		!command.Exchange.Valid() || !command.MarketType.Valid() || command.SettlementAsset == "" {
 		return Result{}, fmt.Errorf("paper simulation: incomplete create command")
 	}
-	if command.MarketType == exchange.MarketTypeSpot && command.MarginMode != exchange.MarginModeUnspecified {
+	if !exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified {
 		return Result{}, fmt.Errorf("paper simulation: SPOT cannot configure margin mode")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.SettlementAsset != "USDT" {
+	if exchange.RuleFor(command.MarketType).Leverage && command.SettlementAsset != "USDT" {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires USDT settlement")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
+	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires CROSS margin mode")
 	}
 	if command.InitialBalance.Cmp(shared.Zero()) <= 0 {
 		return Result{}, fmt.Errorf("paper simulation: initial balance must be positive")
 	}
-	if command.MarketType == exchange.MarketTypeSwap && command.MarginMode == exchange.MarginModeUnspecified {
+	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode == exchange.MarginModeUnspecified {
 		command.MarginMode = exchange.MarginModeCross
 	}
 	leverageSettings := store.LeverageSettings{}
-	if command.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(command.MarketType).Leverage {
 		// The simulation form has no instrument-specific leverage yet. Persist a
 		// conservative wildcard so reservation, matching and Fill reduction use
 		// the same 1x value after restart.
@@ -85,6 +87,14 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 			InitialBalance: command.InitialBalance.String(), MakerFeeRate: command.MakerFeeRate.String(),
 			TakerFeeRate: command.TakerFeeRate.String(), SlippageBPS: command.SlippageBPS.String(),
 		},
+	}
+	// 不填组合账户名称时只建执行账户，之后再加入已有的组合账户。
+	if command.LogicalAccountName == "" {
+		err := s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.CreateTradingAccount(account) })
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Account: account}, nil
 	}
 	logical := store.LogicalAccountRecord{
 		ControlMode: command.ControlMode,
@@ -120,51 +130,22 @@ func (s *Service) Close(ctx context.Context, spaceID, accountID string) error {
 	if err != nil {
 		return err
 	}
-	logicalID := ""
-	members, listErr := s.Store.ListLogicalAccounts(ctx, spaceID)
-	if listErr != nil {
-		return listErr
-	}
-	for _, logical := range members {
-		if logical.ExecutionMode != "PAPER" {
-			continue
-		}
-		memberRows, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, true)
-		if memberErr != nil {
-			return memberErr
-		}
-		for _, member := range memberRows {
-			if member.TradingAccountID == accountID && member.Enabled {
-				logicalID = logical.LogicalAccountID
-				break
-			}
-		}
-		if logicalID != "" {
-			break
-		}
-	}
-	// Every lifecycle mutation uses the same lock order as target execution:
-	// logical account, logical execution, then trading account.
-	// 全部带调用方期限：等待超时释放已取得的锁并返回
-	unlockLogical := func() {}
-	unlockExecution := func() {}
-	if logicalID != "" {
-		var lockErr error
-		if unlockLogical, lockErr = s.Store.LockLogicalAccountContext(ctx, spaceID, logicalID); lockErr != nil {
+	logical, _, findErr := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, accountID)
+	if errors.Is(findErr, gorm.ErrRecordNotFound) {
+		unlock, lockErr := s.Store.LockTradingAccountContext(ctx, accountID)
+		if lockErr != nil {
 			return lockErr
 		}
-		if unlockExecution, lockErr = s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalID); lockErr != nil {
-			unlockLogical()
+		defer unlock()
+	} else if findErr != nil {
+		return findErr
+	} else {
+		unlock, lockErr := s.Store.LockMemberChange(ctx, spaceID, logical.LogicalAccountID, accountID)
+		if lockErr != nil {
 			return lockErr
 		}
+		defer unlock()
 	}
-	defer unlockExecution()
-	defer unlockLogical()
-	unlockAccount, lockErr := s.Store.LockTradingAccountContext(ctx, accountID)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer unlockAccount()
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if account.SpaceID != spaceID {
 			return fmt.Errorf("%w: account space mismatch", store.ErrInvalidRecord)

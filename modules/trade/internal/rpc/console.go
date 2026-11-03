@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -30,6 +31,7 @@ type ConsoleServer struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
+	Venues             execution.VenueCatalog
 }
 
 type HoldingQueryService interface {
@@ -80,10 +82,11 @@ func (s *ConsoleServer) CreatePaperSimulation(
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 	})
-	return &tradepb.CreatePaperSimulationRsp{
-		RetInfo: errorInfo(err), Account: accountToPB(result.Account),
-		LogicalAccount: s.logicalAccount(ctx, result.LogicalAccount),
-	}, nil
+	rsp := &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
+	if result.LogicalAccount.LogicalAccountID != "" {
+		rsp.LogicalAccount = s.logicalAccount(ctx, result.LogicalAccount)
+	}
+	return rsp, nil
 }
 
 func (s *ConsoleServer) ClosePaperSimulation(
@@ -100,6 +103,11 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	if s.Paper == nil || s.Store == nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
+	// 关闭会把账户移出成员，要先取组合账户。
+	var logical *store.LogicalAccountRecord
+	if record, _, findErr := s.Store.FindLogicalAccountByTradingAccount(ctx, spaceID, req.GetTradingAccountId()); findErr == nil {
+		logical = &record
+	}
 	err = s.Paper.Close(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
@@ -108,19 +116,11 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	if err != nil {
 		return &tradepb.ClosePaperSimulationRsp{RetInfo: errorInfo(err)}, nil
 	}
-	var logical *tradepb.LogicalAccount
-	for _, candidate := range mustLogicalAccounts(ctx, s.Store, spaceID) {
-		for _, member := range mustLogicalMembers(ctx, s.Store, spaceID, candidate.LogicalAccountID) {
-			if member.TradingAccountID == req.GetTradingAccountId() {
-				logical = s.logicalAccount(ctx, candidate)
-				break
-			}
-		}
-		if logical != nil {
-			break
-		}
+	rsp := &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account)}
+	if logical != nil {
+		rsp.LogicalAccount = s.logicalAccount(ctx, *logical)
 	}
-	return &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account), LogicalAccount: logical}, nil
+	return rsp, nil
 }
 
 func (s *ConsoleServer) GetExecutionCapabilities(
@@ -146,7 +146,11 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 	if s.MatcherReady != nil {
 		matcherReady = s.MatcherReady()
 	}
-	value := ResolveExecutionCapabilities(account, s.LiveTradingEnabled, matcherReady)
+	if s.Venues == nil {
+		return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	descriptor, _ := s.Venues.Descriptor(account.Exchange)
+	value := ResolveExecutionCapabilities(account, descriptor, s.LiveTradingEnabled, matcherReady)
 	capabilities := &tradepb.ExecutionCapabilities{
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
@@ -158,6 +162,55 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 		capabilities.FillPolicies = append(capabilities.FillPolicies, fillPolicyToPB(string(item)))
 	}
 	return &tradepb.GetExecutionCapabilitiesRsp{RetInfo: success(), Capabilities: capabilities}, nil
+}
+
+// ListTradableInstruments 返回账户当前可下单的标的和数量规则，供下单表单使用。
+func (s *ConsoleServer) ListTradableInstruments(
+	ctx context.Context,
+	req *tradepb.ListTradableInstrumentsReq,
+) (*tradepb.ListTradableInstrumentsRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	if s.Store == nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
+	}
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(err)}, nil
+	}
+	records, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return &tradepb.ListTradableInstrumentsRsp{RetInfo: errorInfo(err)}, nil
+	}
+	rsp := &tradepb.ListTradableInstrumentsRsp{RetInfo: success()}
+	for _, record := range records {
+		if record.Status != "TRADING" && record.Status != "live" {
+			continue
+		}
+		if record.SettlementAsset != "" && record.SettlementAsset != account.SettlementAsset {
+			continue
+		}
+		rsp.Instruments = append(rsp.Instruments, tradableInstrumentToPB(record))
+	}
+	return rsp, nil
+}
+
+func tradableInstrumentToPB(record store.InstrumentRecord) *tradepb.TradableInstrument {
+	step := shared.MustDecimal(record.ExchangeQuantityStep)
+	minimum := shared.MustDecimal(record.MinExchangeQuantity)
+	if exchange.RuleFor(record.MarketType).ContractValue {
+		contractValue := shared.MustDecimal(record.ContractValue)
+		step, minimum = step.Mul(contractValue), minimum.Mul(contractValue)
+	}
+	return &tradepb.TradableInstrument{
+		InstrumentId: record.InstrumentID, QuantityStep: step.String(), MinQuantity: minimum.String(),
+		MinNotional: record.MinNotional, PriceTick: record.PriceTick,
+	}
 }
 
 func (s *ConsoleServer) QueryEquityCurve(
@@ -217,7 +270,7 @@ func (s *ConsoleServer) ListHoldings(
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	if account.MarketType != string(exchange.MarketTypeSpot) {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
 	}
 	if s.Holdings != nil {

@@ -103,7 +103,8 @@ func TestSyncAccountExternalErrorsCarryAccountIdentity(t *testing.T) {
 			}
 			cause := errors.New("adapter plain error")
 			s := &Service{Store: db, Fills: &consumer.Reducer{Store: db}, Adapters: syncAdapterSource{adapter: boundarySyncAdapter{syncAdapter: &syncAdapter{}, stage: stage, cause: cause}}}
-			_, err := s.SyncAccount(context.Background(), "account-1")
+			// 对账会推进轮转，每个阶段（含拉成交）都会被走到。
+			_, err := s.SyncAccountReconcile(context.Background(), "account-1")
 			require.ErrorIs(t, err, cause)
 			var accountErr *orderapp.AccountExecutionError
 			require.ErrorAs(t, err, &accountErr)

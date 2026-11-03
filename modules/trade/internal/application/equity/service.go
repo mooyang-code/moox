@@ -2,6 +2,7 @@ package equity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 type Service struct {
@@ -82,17 +84,16 @@ func (s *Service) ResolveLogicalAccountEquity(ctx context.Context, spaceID, logi
 	if s == nil || s.Store == nil {
 		return shared.Zero(), 0, fmt.Errorf("equity: store is not configured")
 	}
-	points, err := s.Store.ListLogicalAccountEquityPoints(ctx, spaceID, logicalAccountID, 0, 0)
+	point, err := s.Store.LatestLogicalAccountEquityPoint(ctx, spaceID, logicalAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return shared.Zero(), 0, fmt.Errorf("equity: no logical account snapshot")
+	}
 	if err != nil {
 		return shared.Zero(), 0, err
 	}
-	if len(points) == 0 {
-		return shared.Zero(), 0, fmt.Errorf("equity: no logical account snapshot")
-	}
-	point := points[len(points)-1]
 	equity, err := shared.ParseDecimal(point.Equity)
 	if err != nil || equity.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero(), point.SourceTime, fmt.Errorf("equity: latest logical snapshot is invalid")
+		return shared.Zero(), point.SourceTime, fmt.Errorf("equity: 组合账户权益为 0，请先准备结算资产")
 	}
 	if !s.sourceFresh(point.SourceTime) {
 		return shared.Zero(), point.SourceTime, fmt.Errorf("equity: latest logical snapshot is stale")
@@ -109,7 +110,7 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 		return err
 	}
 	snapshot := confirmedSnapshot(account)
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
 		if valueErr != nil {
 			return valueErr
@@ -132,17 +133,20 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	return s.sampleLogicalAccounts(ctx, account.SpaceID, accountID, &snapshot)
 }
 
-// valueSpotSnapshot fills the equity fields that spot account endpoints do
-// not provide. It deliberately fails closed when a non-settlement asset has
-// no current public quote instead of persisting a misleading zero curve.
+// valueSpotSnapshot 计算受管资产的权益：结算资产加受管资产的市值。没有报价时不写入，
+// 避免留下误导的零值曲线。未受管的资产不计入，也不影响权益。
 func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot) (store.TradingAccountSnapshot, error) {
 	if !s.sourceFresh(snapshot.ExchangeUpdatedAt) {
 		return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot balance snapshot")
 	}
 	settlement := account.SettlementAsset
+	managed, err := s.Store.ManagedAssets(ctx, account.SpaceID, account.TradingAccountID)
+	if err != nil {
+		return store.TradingAccountSnapshot{}, err
+	}
 	equity := shared.Zero()
 	available := shared.Zero()
-	needsQuote := false
+	var held []store.AssetBalance
 	for _, balance := range snapshot.Balances {
 		quantity := decimal(balance.Total)
 		if strings.EqualFold(balance.Asset, settlement) {
@@ -150,11 +154,11 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 			available = available.Add(decimal(balance.Available))
 			continue
 		}
-		if !quantity.IsZero() {
-			needsQuote = true
+		if _, ok := managed[balance.Asset]; ok && !quantity.IsZero() {
+			held = append(held, balance)
 		}
 	}
-	if needsQuote {
+	if len(held) > 0 {
 		if s.Adapters == nil {
 			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
 		}
@@ -162,47 +166,31 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
-		quotes, ok := adapter.(execution.ReferencePriceSource)
-		if !ok {
-			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote source is unavailable")
-		}
-		instrumentSource, ok := adapter.(interface {
-			LoadInstruments(context.Context) ([]exchange.Instrument, error)
-		})
-		if !ok {
-			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: instrument source is unavailable")
-		}
-		instruments, err := instrumentSource.LoadInstruments(ctx)
+		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
-		byAsset := make(map[string]exchange.Instrument)
+		byAsset := make(map[string]store.InstrumentRecord)
 		for _, instrument := range instruments {
-			if instrument.MarketType == exchange.MarketTypeSpot && strings.EqualFold(instrument.QuoteAsset, settlement) {
+			if strings.EqualFold(instrument.QuoteAsset, settlement) {
 				byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
 			}
 		}
-		for _, balance := range snapshot.Balances {
-			quantity := decimal(balance.Total)
-			if strings.EqualFold(balance.Asset, settlement) || quantity.IsZero() {
-				continue
-			}
+		for _, balance := range held {
 			instrument, found := byAsset[strings.ToUpper(balance.Asset)]
 			if !found {
 				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: no %s/%s Spot instrument", balance.Asset, settlement)
 			}
 			symbol := instrument.ExchangeSymbol
-			quote, quoteErr := quotes.GetReferencePrice(ctx, symbol)
+			quote, quoteErr := adapter.GetReferencePrice(ctx, symbol)
 			if quoteErr != nil {
 				return store.TradingAccountSnapshot{}, quoteErr
 			}
 			if !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
 				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot quote for %s", symbol)
 			}
-			equity = equity.Add(quantity.Mul(quote.Price))
-			// Freshness is bounded by the oldest input (balance or quote), not
-			// the newest one. A recent quote must not make an old balance appear
-			// current.
+			equity = equity.Add(decimal(balance.Total).Mul(quote.Price))
+			// 新鲜度取决于最旧的输入：新报价不能让旧余额看起来是最新的。
 			quoteTime := quote.UpdatedAt.UnixMilli()
 			if snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt {
 				snapshot.ExchangeUpdatedAt = quoteTime
@@ -219,7 +207,24 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 	if err != nil {
 		return err
 	}
+	// 单个组合账户失败不影响其他组合账户。
+	var sampleErrors []error
 	for _, logical := range logicals {
+		if err := s.sampleLogicalAccount(ctx, spaceID, accountID, logical, sampled); err != nil {
+			sampleErrors = append(sampleErrors, fmt.Errorf("equity: logical account %s: %w", logical.LogicalAccountID, err))
+		}
+	}
+	return errors.Join(sampleErrors...)
+}
+
+func (s *Service) sampleLogicalAccount(
+	ctx context.Context,
+	spaceID string,
+	accountID string,
+	logical store.LogicalAccountRecord,
+	sampled *store.TradingAccountSnapshot,
+) error {
+	{
 		// Disabled memberships are not executable and must not contribute
 		// capital to a logical account target conversion.
 		members, memberErr := s.Store.ListLogicalAccountMembers(ctx, spaceID, logical.LogicalAccountID, false)
@@ -234,15 +239,11 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 			}
 		}
 		if !contains {
-			continue
+			return nil
 		}
 		equity, available, used, unrealized := shared.Zero(), shared.Zero(), shared.Zero(), shared.Zero()
 		allPnl := true
 		logicalValid := true
-		// A LIVE credential identifies one exchange capital source even when
-		// users model Spot and Perpetual accounts as separate members. Count its
-		// equity once; otherwise the same wallet can double the target notional.
-		seenCapitalSources := make(map[string]struct{}, len(members))
 		var sourceTime int64
 		// Store ordering is priority/account ID, which is not the same as the
 		// account that produced this fresh sample. Prefer that member so a
@@ -263,18 +264,10 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 				logicalValid = false
 				break
 			}
-			capitalKey := member.TradingAccountID
-			if memberAccount.ExecutionMode == "LIVE" && strings.TrimSpace(memberAccount.CredentialSecretID) != "" {
-				capitalKey = strings.Join([]string{memberAccount.Exchange, memberAccount.Environment, memberAccount.CredentialSecretID}, "\x00")
-			}
-			if _, alreadyCounted := seenCapitalSources[capitalKey]; alreadyCounted {
-				continue
-			}
-			seenCapitalSources[capitalKey] = struct{}{}
 			memberSnapshot := confirmedSnapshot(memberAccount)
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled
-			} else if memberAccount.MarketType == string(exchange.MarketTypeSpot) {
+			} else if exchange.RuleFor(memberAccount.MarketType).PositionFromBalance {
 				valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
 				if valueErr != nil {
 					return valueErr
@@ -297,8 +290,8 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 				sourceTime = memberSourceTime
 			}
 		}
-		if !logicalValid || !contains || sourceTime <= 0 {
-			continue
+		if !logicalValid || sourceTime <= 0 {
+			return nil
 		}
 		var pnl *string
 		if allPnl {
@@ -306,11 +299,8 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 			pnl = &value
 		}
 		point := store.EquityPointRecord{SpaceID: spaceID, LogicalAccountID: logical.LogicalAccountID, BucketTime: MinuteBucket(s.now()), Equity: equity.String(), AvailableFunds: available.String(), UsedMargin: used.String(), UnrealizedPnL: pnl, SourceTime: sourceTime}
-		if err := s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpsertLogicalAccountEquityPoint(point) }); err != nil {
-			return err
-		}
+		return s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.UpsertLogicalAccountEquityPoint(point) })
 	}
-	return nil
 }
 
 func decimal(raw string) shared.Decimal {

@@ -75,30 +75,38 @@ func (tx *Tx) RaiseObservedFilledQuantity(spaceID, orderID string, observed shar
 
 // CountOrdersWithFillGap 返回账户下“观察到的累计成交量大于本地已入账成交量”的订单数：这些订单的成交明细还没补齐。
 func (s *Store) CountOrdersWithFillGap(ctx context.Context, spaceID, tradingAccountID string) (int, error) {
+	symbols, err := s.OrderSymbolsWithFillGap(ctx, spaceID, tradingAccountID)
+	return len(symbols), err
+}
+
+// OrderSymbolsWithFillGap 返回累计成交仍领先已入账成交明细的订单的标的，每个订单一项。
+func (s *Store) OrderSymbolsWithFillGap(ctx context.Context, spaceID, tradingAccountID string) ([]string, error) {
 	var rows []struct {
+		Symbol   string `gorm:"column:c_exchange_symbol"`
 		Filled   string `gorm:"column:c_filled_quantity"`
 		Observed string `gorm:"column:c_observed_filled_quantity"`
 	}
 	if err := s.db.WithContext(ctx).Raw(`
-		SELECT c_filled_quantity, c_observed_filled_quantity
+		SELECT c_exchange_symbol, c_filled_quantity, c_observed_filled_quantity
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'
+			AND c_observed_filled_quantity <> c_filled_quantity
 	`, spaceID, tradingAccountID).Scan(&rows).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
-	gaps := 0
+	var symbols []string
 	for _, row := range rows {
 		filled, err := shared.ParseDecimal(row.Filled)
 		if err != nil {
-			return 0, fmt.Errorf("%w: stored filled quantity", ErrInvalidRecord)
+			return nil, fmt.Errorf("%w: stored filled quantity", ErrInvalidRecord)
 		}
 		observed, err := shared.ParseDecimal(row.Observed)
 		if err != nil {
-			return 0, fmt.Errorf("%w: stored observed fill quantity", ErrInvalidRecord)
+			return nil, fmt.Errorf("%w: stored observed fill quantity", ErrInvalidRecord)
 		}
 		if observed.Cmp(filled) > 0 {
-			gaps++
+			symbols = append(symbols, row.Symbol)
 		}
 	}
-	return gaps, nil
+	return symbols, nil
 }

@@ -14,7 +14,7 @@ import (
 func ordinaryRequest() *tradepb.SubmitOrderReq {
 	return &tradepb.SubmitOrderReq{
 		ActionId: "action-1", LogicalAccountId: "logical-1", TradingAccountId: "account-1",
-		ClientOrderId: "client-1", InstrumentId: "BTCUSDT", Quantity: "1",
+		ClientOrderId: "client-1", InstrumentId: "BTC-USDT", Quantity: "1",
 		OrderType: tradepb.OrderType_ORDER_TYPE_MARKET, Side: tradepb.OrderSide_ORDER_SIDE_BUY,
 		Reason: "ordinary", DeadlineAt: 2000000000000,
 	}
@@ -23,6 +23,7 @@ func ordinaryRequest() *tradepb.SubmitOrderReq {
 func TestSubmitOrderRPCPreservesDurableAcceptance(t *testing.T) {
 	var got SubmitOrderCommand
 	h := &ExecutionServer{
+		Store: rpcStoreWithAccount(t),
 		PlaceManual: func(context.Context, ManualOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 			t.Fatal("ordinary submission called takeover")
 			return store.OperatorActionRecord{}, store.OrderRecord{}, nil
@@ -54,7 +55,7 @@ func TestSubmitOrderRPCValidationAndFailure(t *testing.T) {
 		{"missing_fields", ctx, &tradepb.SubmitOrderReq{}, tradepb.ErrorCode_INVALID_PARAM},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := &ExecutionServer{SubmitOrdinary: func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+			h := &ExecutionServer{Store: rpcStoreWithAccount(t), SubmitOrdinary: func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 				t.Fatal("invalid request reached application")
 				return store.OperatorActionRecord{}, store.OrderRecord{}, nil
 			}}
@@ -65,7 +66,7 @@ func TestSubmitOrderRPCValidationAndFailure(t *testing.T) {
 		})
 	}
 	for _, failure := range []error{operatorapp.ErrInvalidCommand, errors.New("database unavailable")} {
-		h := &ExecutionServer{SubmitOrdinary: func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
+		h := &ExecutionServer{Store: rpcStoreWithAccount(t), SubmitOrdinary: func(context.Context, SubmitOrderCommand) (store.OperatorActionRecord, store.OrderRecord, error) {
 			return store.OperatorActionRecord{ActionID: "action-1", Status: "RUNNING"}, store.OrderRecord{}, failure
 		}}
 		rsp, err := h.SubmitOrder(ctx, ordinaryRequest())

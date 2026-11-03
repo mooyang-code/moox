@@ -57,7 +57,6 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 			MarketType:      tradepb.MarketType_MARKET_TYPE_SPOT,
 			Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 			SettlementAsset: "USDT",
-			SyncSymbols:     []string{"BTCUSDT"},
 		},
 	)
 	if err != nil {

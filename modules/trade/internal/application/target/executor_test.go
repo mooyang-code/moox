@@ -65,6 +65,32 @@ func (s *targetOrderServiceStub) Submit(
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
+func (s *targetOrderServiceStub) SubmitBatch(
+	ctx context.Context,
+	spaceID string,
+	orderIDs []string,
+) ([]orderapp.BatchResult, error) {
+	results := make([]orderapp.BatchResult, 0, len(orderIDs))
+	for _, orderID := range orderIDs {
+		order, err := s.Submit(ctx, spaceID, orderID)
+		results = append(results, orderapp.BatchResult{OrderID: orderID, Order: order, Err: err})
+	}
+	return results, nil
+}
+
+func (s *targetOrderServiceStub) ResolveUnknownBatch(
+	ctx context.Context,
+	spaceID string,
+	orderIDs []string,
+) ([]orderapp.BatchResult, error) {
+	results := make([]orderapp.BatchResult, 0, len(orderIDs))
+	for _, orderID := range orderIDs {
+		order, err := s.ResolveUnknown(ctx, spaceID, orderID)
+		results = append(results, orderapp.BatchResult{OrderID: orderID, Order: order, Err: err})
+	}
+	return results, nil
+}
+
 func (s *targetOrderServiceStub) Cancel(
 	_ context.Context,
 	_ string,
@@ -464,7 +490,8 @@ func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
-func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
+// 旧目标的市价单挂着时等它结束，不撤单，也不下新单。
+func TestTargetExecutorFullOmissionWaitsForOldTargetOrder(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "1")
 	fixture.target(t, nil)
@@ -484,7 +511,7 @@ func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, StatusConverging, result.Status)
-	require.Equal(t, []string{"old-child"}, fixture.orders.canceled)
+	require.Empty(t, fixture.orders.canceled)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -549,7 +576,7 @@ func TestTargetExecutorRecordsBelowMinimumBlockedTarget(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Contains(t, target.BlockedTargets[0].Reason, "minimum")
+	require.Contains(t, target.BlockedTargets[0].Reason, "最小")
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -572,12 +599,12 @@ func TestTargetExecutorRecordsBelowMinimumNotionalAsBlocked(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+	require.Contains(t, target.BlockedTargets[0].Reason, "最小名义金额")
 	require.Empty(t, fixture.orders.specs)
 }
 
 func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
-	t.Run("SPOT balance", func(t *testing.T) {
+	t.Run("未受管的现货资产不算敞口", func(t *testing.T) {
 		fixture := newTargetFixture(t, exchange.MarketTypeSpot)
 		fixture.setBalance(t, "account-a", "DOGE", "12")
 		fixture.target(t, nil)
@@ -587,15 +614,7 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 		)
 
 		require.NoError(t, err)
-		require.Equal(t, StatusBlocked, result.Status)
-		target, err := fixture.store.GetLogicalAccountTarget(
-			context.Background(), "space-1", "logical-1",
-		)
-		require.NoError(t, err)
-		require.Len(t, target.BlockedTargets, 1)
-		require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
-		require.Equal(t, "12", target.BlockedTargets[0].Quantity)
-		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Equal(t, StatusConverged, result.Status)
 		require.Empty(t, fixture.orders.specs)
 	})
 
@@ -617,16 +636,16 @@ func TestTargetExecutorFullTargetReportsUnmappedExposure(t *testing.T) {
 		require.Len(t, target.BlockedTargets, 1)
 		require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 		require.Equal(t, "2", target.BlockedTargets[0].Quantity)
-		require.Contains(t, target.BlockedTargets[0].Reason, "mapping")
+		require.Contains(t, target.BlockedTargets[0].Reason, "标的")
 		require.Empty(t, fixture.orders.specs)
 	})
 }
 
 func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
-	fixture.setBalance(t, "account-a", "DOGE", "12")
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
 	}})
 
 	result, err := fixture.executor().Converge(
@@ -641,19 +660,20 @@ func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
-	require.Equal(t, "DOGE", target.BlockedTargets[0].InstrumentID)
+	require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 }
 
-func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
-	fixture.setBalance(t, "account-a", "DOGE", "12")
+// 持仓变成无法映射时，挂着的目标市价单先等它自己结束，不撤单；结束后再按阻塞处理。
+func TestTargetExecutorWaitsWithoutCancelWhenExposureBecomesUnmapped(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SPOT", Quantity: "1",
+		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
 	}})
 	fixture.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: "current-child",
 		TradingAccountID: "account-a", ClientOrderID: "current-child",
-		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "MARKET", Side: "BUY", Quantity: "1",
 		ReferencePrice: "100", ReferencePriceAt: 2_000,
 		OwnerType: "TARGET", OwnerID: "target-current",
@@ -666,13 +686,53 @@ func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, StatusBlocked, result.Status)
-	require.Equal(t, "cancel", result.Action)
-	require.Equal(t, []string{"current-child"}, fixture.orders.canceled)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Equal(t, "wait", result.Action)
+	require.Empty(t, fixture.orders.canceled)
 	require.Empty(t, fixture.orders.specs)
 }
 
-func TestTargetExecutorRecordsBlockedRemainingDelta(t *testing.T) {
+func TestTargetExecutorDiscardsPendingChildWithStaleQuote(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "stale-child",
+		ClientOrderID: "stale-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "PENDING",
+		OwnerType: "TARGET", OwnerID: "target-current", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+	})
+	fixture.orders.submitErrors = map[string]error{"stale-child": orderdomain.ErrReferencePriceStale}
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Equal(t, []string{"stale-child"}, fixture.orders.discarded)
+}
+
+// MooX 买过的币不在目标里时要卖掉，手工持有的币不动。
+func TestTargetExecutorSellsManagedAssetAndKeepsUnmanaged(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	fixture.setBalance(t, "account-a", "BTC", "2")
+	fixture.setBalance(t, "account-a", "BNB", "7")
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "bought", ClientOrderID: "bought",
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "2", FilledQuantity: "2", ReferencePrice: "100",
+		State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
+	})
+	fixture.target(t, nil)
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "BTC-USDT-SPOT", fixture.orders.specs[0].InstrumentID)
+	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
+}
+
+func TestTargetExecutorFullCloseIgnoresMinimumNotional(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "0.001")
 	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
@@ -683,14 +743,114 @@ func TestTargetExecutorRecordsBlockedRemainingDelta(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, StatusBlocked, result.Status)
-	target, err := fixture.store.GetLogicalAccountTarget(
-		context.Background(), "space-1", "logical-1",
-	)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.True(t, fixture.orders.specs[0].ReducePositionOnly)
+}
+
+func TestTargetExecutorPartialReductionBelowNotionalIsDust(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "0.002")
+	fixture.setMinNotional(t, "BINANCE", "BTCUSDT", "10")
+	fixture.setMinNotional(t, "OKX", "BTC-USDT-SWAP", "10")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.001"}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
 	require.NoError(t, err)
-	require.Len(t, target.BlockedTargets, 1)
-	require.Equal(t, "-0.001", target.BlockedTargets[0].Quantity)
-	require.Contains(t, target.BlockedTargets[0].Reason, "notional")
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs)
+}
+
+// 步长 0.001 和 0.01 的两个成员：剩余 0.005 粗步长成员下不了，由细步长成员承接。
+func TestTargetExecutorTriesMemberWithFinerStep(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.setQuantityRule(t, "BINANCE", "BTCUSDT", "10", "1")
+	fixture.position(t, "account-a", "BTCUSDT", "0.05")
+	fixture.position(t, "account-b", "BTC-USDT-SWAP", "0.005")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.05"}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
+	require.Equal(t, "0.005", fixture.orders.specs[0].Quantity.String())
+}
+
+func TestTargetExecutorRoundedRemainderOnBothMembersIsConverged(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "0.05")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.0504"}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs)
+}
+
+// 一个成员被拒、另一个达不到最小量：有成员本来能下单，不能算完成。
+func TestTargetExecutorRejectedMemberIsNotDust(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "0.05")
+	fixture.setQuantityRule(t, "OKX", "BTC-USDT-SWAP", "100", "100")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.06"}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child",
+		ClientOrderID: "rejected-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "REJECTED",
+		RejectReason: "保证金不足", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+	})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	target, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Contains(t, target.BlockedTargets[0].Reason, "保证金不足")
+	require.Empty(t, fixture.orders.specs)
+}
+
+// 反向零头下不了单时跳过，继续加目标持仓。
+func TestTargetExecutorSkipsOpposingDustAndAddsTarget(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "-0.0001")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, exchange.SideBuy, fixture.orders.specs[0].Side)
+	require.False(t, fixture.orders.specs[0].ReducePositionOnly)
+}
+
+func TestTargetExecutorReducesBeforeAddingAcrossInstruments(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "ZECUSDT", InstrumentID: "ZEC-USDT-SWAP",
+			BaseAsset: "ZEC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "1",
+			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING", Linear: true,
+			ContractValue: "0.001", ContractValueAsset: "ZEC",
+		})
+	}))
+	fixture.position(t, "account-a", "ZECUSDT", "0.005")
+	// BTC 按名称排在前面，但 ZEC 是减仓，要先下。
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "ZEC-USDT-SWAP", fixture.orders.specs[0].InstrumentID)
+	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
 type targetFixture struct {
@@ -881,6 +1041,25 @@ func (f *targetFixture) setBalance(
 	}))
 }
 
+func (f *targetFixture) setQuantityRule(
+	t *testing.T,
+	exchangeName string,
+	symbol string,
+	step string,
+	minimum string,
+) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, instrument := range f.instruments() {
+			if instrument.Exchange == exchangeName && instrument.ExchangeSymbol == symbol {
+				instrument.ExchangeQuantityStep, instrument.MinExchangeQuantity = step, minimum
+				return tx.UpsertInstrument(instrument)
+			}
+		}
+		return errors.New("instrument not found")
+	}))
+}
+
 func (f *targetFixture) setMinNotional(
 	t *testing.T,
 	exchangeName string,
@@ -929,4 +1108,41 @@ func TestConvergeLockWaitHonorsDeadline(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Converge kept waiting for the logical account lock past the deadline")
 	}
+}
+
+// 一个成员拒单后，下一轮换下一个成员。
+func TestTargetExecutorMovesToNextMemberAfterRejection(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "rejected-child",
+		ClientOrderID: "rejected-child", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SWAP",
+		OrderType: "MARKET", Side: "BUY", Quantity: "0.01", ReferencePrice: "100", State: "REJECTED",
+		RejectReason: "保证金不足", SubmittedAt: 1_900, OwnerType: "TARGET", OwnerID: "target-current",
+		LogicalAccountID: "logical-1", RunnerID: "runner-1",
+	})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
+}
+
+// 一个成员未就绪时整个组合账户停止，恢复后继续。
+func TestTargetExecutorResumesAfterMemberRecovers(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.setReady(t, "account-b", false)
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.01"}})
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusPaused, result.Status)
+
+	fixture.setReady(t, "account-b", true)
+	result, err = fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Len(t, fixture.orders.specs, 1)
 }

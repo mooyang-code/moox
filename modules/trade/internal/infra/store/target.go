@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
 
@@ -139,7 +141,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
-	if account.MarketType == "SPOT" {
+	if !exchange.RuleFor(account.MarketType).CanShort {
 		for _, target := range record.Targets {
 			if target.Hold {
 				continue
@@ -204,13 +206,9 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 			c_last_error = excluded.c_last_error,
 			c_accepted_at = excluded.c_accepted_at,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE (excluded.c_instance_id <> '' AND
-			(t_logical_account_targets.c_instance_id <> excluded.c_instance_id OR
-			 t_logical_account_targets.c_session_id <> excluded.c_session_id OR
-			 excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time))
-		   OR (excluded.c_instance_id = '' AND
-			 t_logical_account_targets.c_instance_id = '' AND
-			 excluded.c_command_sequence > t_logical_account_targets.c_command_sequence)
+		WHERE t_logical_account_targets.c_instance_id <> excluded.c_instance_id
+		   OR t_logical_account_targets.c_session_id <> excluded.c_session_id
+		   OR excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time
 	`,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
@@ -249,18 +247,6 @@ func (s *Store) GetLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, err
 	}
 	return logicalAccountTargetRecord(row)
-}
-
-func (tx *Tx) DeleteLogicalAccountTargetForOtherRunner(
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-) error {
-	return tx.db.Exec(`
-		DELETE FROM t_logical_account_targets
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_runner_id <> ?
-	`, spaceID, logicalAccountID, runnerID).Error
 }
 
 // DeleteLogicalAccountTarget removes the current target during an ownership
@@ -344,7 +330,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	targets, err := decodeCurrentTargets(row.TargetsJSON)
+	targets, err := decodeCurrentTargetsCached(row.SpaceID+"\x00"+row.LogicalAccountID, row.TargetsJSON)
 	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
@@ -439,6 +425,30 @@ func encodeBlockedTargets(targets []BlockedTarget) (string, error) {
 		return "", fmt.Errorf("%w: encode blocked targets: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+// targetDecodeCache 按组合账户记住最近一次解码的目标：下单前每笔子单都要读一次目标，
+// 约 500 个标的的校验（逐个解析数量再规范化）比查询本身贵得多。只在原文完全相同时复用，
+// 每个组合账户只留一份，不会随目标数量增长。
+var targetDecodeCache sync.Map
+
+type decodedTargets struct {
+	raw     string
+	targets []InstrumentTarget
+}
+
+func decodeCurrentTargetsCached(key, raw string) ([]InstrumentTarget, error) {
+	if value, ok := targetDecodeCache.Load(key); ok {
+		if entry := value.(decodedTargets); entry.raw == raw {
+			return append(make([]InstrumentTarget, 0, len(entry.targets)), entry.targets...), nil
+		}
+	}
+	targets, err := decodeCurrentTargets(raw)
+	if err != nil {
+		return nil, err
+	}
+	targetDecodeCache.Store(key, decodedTargets{raw: raw, targets: append(make([]InstrumentTarget, 0, len(targets)), targets...)})
+	return targets, nil
 }
 
 // Current executable targets are not receipts: unknown fields must never

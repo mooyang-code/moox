@@ -352,7 +352,11 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 	}
 	if instance.LogicalAccountID != nil {
-		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID); err != nil {
+		resolved, err := input.ParseResolved(resolvedJSON)
+		if err != nil {
+			return reload(), err
+		}
+		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID, resolved.MarketType); err != nil {
 			if tradeowner.IsPermanentClaimError(err) {
 				_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
 				if clearErr := s.Store.ClearInstanceSession(ctx, instance.InstanceID, sessionID, s.nowTime()); clearErr != nil {

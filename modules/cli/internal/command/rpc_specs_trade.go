@@ -38,6 +38,8 @@ func init() {
 				intFlag("start-time", "start_time", "起点（毫秒时间戳）"), intFlag("end-time", "end_time", "终点（毫秒时间戳）")}},
 		rpcSpec{Path: []string{"trade", "capabilities"}, Short: "查看交易账户的执行能力", Service: tradeConsole, Method: "GetExecutionCapabilities",
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
+		rpcSpec{Path: []string{"trade", "instruments"}, Short: "列出交易账户可下单的标的", Service: tradeConsole, Method: "ListTradableInstruments",
+			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
 		rpcSpec{Path: []string{"trade", "action"}, Short: "查看一次操作的执行结果", Service: tradeConsole, Method: "GetOperatorAction",
 			Flags: []rpcFlag{reqFlag("action-id", "action_id", "操作 ID")}},
 	)

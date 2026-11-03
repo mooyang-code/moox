@@ -295,6 +295,7 @@ func TestInsertTargetReceiptRequiresEquityOnlyForConvertedTargets(t *testing.T) 
 	ctx := context.Background()
 	receipt := func(id, quantityTargets string) TargetReceiptRecord {
 		return TargetReceiptRecord{SpaceID: "space-1", TargetID: id, LogicalAccountID: "logical-1", RunnerID: "runner-1", CommandSequence: 1,
+			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1", BarEndTime: 1, EffectiveAt: 1, ValidUntil: 2,
 			RequestHash: "hash-" + id, SignalTime: 1, WeightsJSON: "[]", ReferencePricesJSON: "{}", QuantityTargetsJSON: quantityTargets, AcceptedAt: 1}
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {

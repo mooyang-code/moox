@@ -1056,6 +1056,65 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		return nil, err
 	}
 	out = append(out, balances...)
+	attention, err := b.buildTradeAttentionStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, attention...)
+	return out, nil
+}
+
+// TradeAttentionNames 是 Trade 上报的需要人看的情况。
+var TradeAttentionNames = map[string]string{
+	"target_rejected":   "交易目标被拒绝",
+	"auto_paused":       "组合账户自动暂停",
+	"target_blocked":    "交易目标持续阻塞",
+	"account_not_ready": "执行账户持续未就绪",
+	"target_expired":    "交易目标连续过期",
+	"target_reversal":   "同一目标内反向下单",
+	"rate_limited":      "交易所接口限流",
+	"turnover_high":     "组合账户成交额异常偏高",
+	"unknown_results":   "下单结果未知偏多",
+}
+
+// buildTradeAttentionStatuses 把 Trade 的关注项变成业务检查。detail 标签带账户名和原因，
+// 内容变化后旧序列不再更新，所以只看没有过期的序列。
+func (b Builder) buildTradeAttentionStatuses(ctx context.Context) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", "moox_trade_attention_active", "", 0, 500)
+	if err != nil {
+		return nil, err
+	}
+	statuses := make(map[string]BusinessStatus, len(TradeAttentionNames))
+	for _, item := range series {
+		kind := labelValue(item.LabelsJSON, "kind")
+		if _, known := TradeAttentionNames[kind]; !known || item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil {
+			continue
+		}
+		status := BusinessStatus{
+			SpaceID: "crypto", Kind: "trade_attention", Module: kind, Status: "healthy", Reason: "正常",
+			LastCheckedAt: latest.ObservedAt,
+		}
+		if latest.Value > 0 {
+			status.Status, status.Reason = "down", labelValue(item.LabelsJSON, "detail")
+		}
+		if current, ok := statuses[kind]; !ok || status.LastCheckedAt.After(current.LastCheckedAt) {
+			statuses[kind] = status
+		}
+	}
+	out := make([]BusinessStatus, 0, len(statuses))
+	for _, status := range statuses {
+		out = append(out, status)
+	}
 	return out, nil
 }
 
@@ -1641,7 +1700,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page":
+	case "market_canary", "subject_tag", "balance", "trade_attention", "module", "kline_freshness", "console-page":
 		return kind
 	default:
 		return ""
@@ -1655,7 +1714,7 @@ func businessModule(checkID string) string {
 		return "console-proxy"
 	case "market_canary", "subject_tag", "kline_freshness":
 		return "collector"
-	case "balance":
+	case "balance", "trade_attention":
 		return "trade"
 	case "module":
 		for _, check := range report.BuiltInModuleHealthChecks() {

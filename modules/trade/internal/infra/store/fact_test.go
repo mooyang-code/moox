@@ -630,6 +630,7 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 				Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_500,
 			}},
 			2_000,
+			0,
 		)
 	}))
 	var btc PositionRecord
@@ -683,3 +684,29 @@ func seedAccountAndInstrument(ctx context.Context, s *Store) error {
 }
 
 func stringPointer(value string) *string { return &value }
+
+// 删除边界被本轮最早成交压低时，墓碑覆盖时间仍取保护期起点：之后拉到的更早平仓成交不能投影出反向持仓。
+func TestReplacePositionsTombstoneCoversProtectionStart(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	account := testAccount()
+	account.MarketType = "SWAP"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.CreateTradingAccount(account); err != nil {
+			return err
+		}
+		if err := tx.UpsertPosition(PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1",
+			ExchangeSymbol: "ETHUSDT", PositionSide: "NET", SignedQuantity: "1",
+			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 500,
+		}); err != nil {
+			return err
+		}
+		return tx.ReplacePositionsForAccount("space-1", "account-1", nil, 1_000, 5_000)
+	}))
+	var covered int64
+	require.NoError(t, s.DBForTest().Raw(`SELECT c_covered_until FROM t_trading_position_tombstones
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?`,
+		"space-1", "account-1", "ETHUSDT").Scan(&covered).Error)
+	require.Equal(t, int64(5_000), covered)
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -33,6 +34,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -43,6 +45,9 @@ import (
 )
 
 var startedAt = time.Now()
+
+// maxChildNotional 是单笔子单的金额上限，下单校验和目标拆单共用。
+const maxChildNotional = "100000"
 
 func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
 	cfg, err := config.Load("./config/app.yaml")
@@ -91,16 +96,16 @@ func initialize(
 	}
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
-		SessionState: manager, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		SessionState: manager, SymbolConfigs: manager, Venues: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 	}
 	orderService := &orderapp.Service{
-		Store: tradeStore, Adapters: manager,
+		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
 		Validator: orderapp.Validator{
 			Accounts:         accounts,
 			Instruments:      instrumentSource{store: tradeStore},
 			Positions:        positionSource{store: tradeStore},
 			MaxReferenceAge:  10 * time.Second,
-			MaxChildNotional: shared.MustDecimal("100000"),
+			MaxChildNotional: shared.MustDecimal(maxChildNotional),
 			MaxLeverage:      shared.MustDecimal("20"),
 			FeeBufferRate:    shared.MustDecimal("0.002"),
 		},
@@ -161,10 +166,17 @@ func initialize(
 	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
 	orderService.Syncer = accountSyncer{service: syncService}
 	targetExecutor := &targetapp.Executor{
-		Store: tradeStore, Orders: orderService,
+		Venues: registry,
+		Store:  tradeStore, Orders: orderService,
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
-		MaxChildNotional: shared.MustDecimal("100000"),
+		MaxChildNotional: shared.MustDecimal(maxChildNotional),
+		OnReversal:       noteTargetReversal(tradeStore),
+		Observe:          &telemetry.ExecutionMetrics{},
+		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
+		MinBatchInterval: time.Second,
+		RateStatus:       adapterRateStatus(manager),
 	}
+	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
 		Store:  tradeStore,
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
@@ -176,16 +188,14 @@ func initialize(
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
 		Metrics: tradeStore.ModuleMetrics(), Gate: lifeGate.Open,
 	}
-	factsObserver := &accountsync.LogicalAccountFactsObserver{
-		Store: tradeStore,
-		Wake:  targetWorker.Wake,
-	}
-	syncService.Facts = factsObserver
+	syncService.Wake = targetWorker.Wake
+	paperMatcher.WakeTarget = targetWorker.WakeTarget
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 	}
 	operatorService := &operatorapp.Service{
-		Store: tradeStore, Orders: orderService,
+		Venues: registry,
+		Store:  tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
@@ -214,6 +224,7 @@ func initialize(
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
+			CreatedAt:        record.CreatedAt,
 		}
 		var adapter execution.ExecutionAdapter
 		var marketData execution.MarketDataSource
@@ -229,30 +240,21 @@ func initialize(
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			marketData = publicMarketData(publicAdapter)
-			if marketData == nil {
-				return nil, errors.New("trade bootstrap: paper adapter does not provide public market data")
-			}
-			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: marketData, Wake: paperMatcherWorker.Wake}
+			marketData = publicAdapter
+			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: publicAdapter, Wake: paperMatcherWorker.Wake}
 		} else {
 			var bindErr error
 			adapter, bindErr = registry.Bind(accountConfig, credential)
 			if bindErr != nil {
 				return nil, bindErr
 			}
-			marketData = publicMarketData(adapter)
+			marketData = adapter
+			// 没有私有流的场所不订阅，会话改为短周期同步。
 			accountEvents, _ = adapter.(execution.AccountEventSource)
-			if marketData == nil || accountEvents == nil {
-				return nil, errors.New("trade bootstrap: live adapter does not provide execution ports")
-			}
-		}
-		reservationPolicy := execution.ReservationPolicy(execution.LiveReservationPolicy{})
-		if accountConfig.ExecutionMode == exchange.ExecutionModePaper {
-			reservationPolicy = execution.PaperReservationPolicy{}
 		}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,
-			ReservationPolicy: reservationPolicy, Sync: syncService,
+			Sync:                  syncService,
 			PaperMatcherReady:     paperMatcherWorker.Ready,
 			PaperAccountState:     paperMatcher.AccountState,
 			PaperAccountRecovered: paperMatcher.RecoverAccount,
@@ -291,11 +293,11 @@ func initialize(
 		}()
 	}
 	runWorker(manager.Run)
-	runWorker(factsObserver.Run)
 	runWorker(targetWorker.Run)
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
 		runWorker(func(workerCtx context.Context) error {
@@ -386,6 +388,7 @@ func initialize(
 
 		rpc.ConsoleOptions{
 			Paper:              &papersimulation.Service{Store: tradeStore},
+			Venues:             registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
@@ -397,7 +400,6 @@ func initialize(
 		serverInstance,
 		tradeStore,
 		manager,
-		factsObserver,
 		targetWorker,
 		operatorWorker,
 		paperMatcherWorker,
@@ -429,17 +431,33 @@ func initialize(
 	return serverInstance, nil
 }
 
+// registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	registry.Register(exchange.ExchangeBinance, func(
+	cryptoVenue := func(name exchange.Exchange) execution.VenueDescriptor {
+		return execution.VenueDescriptor{
+			Exchange:     name,
+			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
+			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+		}
+	}
+	registry.Register(cryptoVenue(exchange.ExchangeBinance), func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
+		if err := requireAPIKey(config, credential); err != nil {
+			return nil, err
+		}
 		return binance.New(config, credential), nil
 	})
-	registry.Register(exchange.ExchangeOKX, func(
+	okxVenue := cryptoVenue(exchange.ExchangeOKX)
+	okxVenue.UnifiedAccount = true
+	registry.Register(okxVenue, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
+		if err := requireAPIKey(config, credential); err != nil {
+			return nil, err
+		}
 		if config.ExecutionMode == exchange.ExecutionModeLive &&
 			strings.TrimSpace(credential.Passphrase) == "" {
 			return nil, errors.New("OKX live account requires passphrase")
@@ -448,9 +466,13 @@ func registerBuiltins(registry *execution.Registry) {
 	})
 }
 
-func publicMarketData(adapter execution.ExecutionAdapter) execution.MarketDataSource {
-	source, _ := adapter.(execution.MarketDataSource)
-	return source
+// 模拟盘用空凭据绑定公共行情，只有实盘才要求密钥。
+func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {
+	if config.ExecutionMode == exchange.ExecutionModeLive &&
+		(strings.TrimSpace(credential.APIKey) == "" || strings.TrimSpace(credential.APISecret) == "") {
+		return errors.New("live account requires credential")
+	}
+	return nil
 }
 
 func exchangeCredential(
@@ -472,9 +494,7 @@ func exchangeCredential(
 			secretID,
 		)
 	}
-	var extra struct {
-		Passphrase string `json:"passphrase"`
-	}
+	extra := map[string]string{}
 	if strings.TrimSpace(value.ExtraConfig) != "" {
 		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
 			return exchange.Credential{}, fmt.Errorf(
@@ -485,7 +505,7 @@ func exchangeCredential(
 	}
 	return exchange.Credential{
 		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra.Passphrase,
+		Passphrase: extra["passphrase"], Extra: extra,
 	}, nil
 }
 
@@ -495,6 +515,11 @@ type accountSyncer struct {
 
 func (s accountSyncer) SyncAccount(ctx context.Context, accountID string) error {
 	_, err := s.service.SyncAccount(ctx, accountID)
+	return err
+}
+
+func (s accountSyncer) SyncAccountLight(ctx context.Context, accountID string) error {
+	_, err := s.service.SyncAccountLight(ctx, accountID)
 	return err
 }
 
@@ -708,7 +733,6 @@ func registerHealth(
 	serverInstance *server.Server,
 	tradeStore *store.Store,
 	manager *traderuntime.Manager,
-	factsObserver *accountsync.LogicalAccountFactsObserver,
 	targetWorker *traderuntime.TargetWorker,
 	operatorWorker *traderuntime.OperatorWorker,
 	paperMatcherWorker *traderuntime.PaperMatcherWorker,
@@ -729,11 +753,7 @@ func registerHealth(
 			return eventBus != nil && eventBus.Ready() &&
 				targetConsumerReady != nil && targetConsumerReady.Load()
 		},
-		Sessions: manager,
-		LogicalAccountWorker: func() (bool, string) {
-			snapshot := factsObserver.Snapshot()
-			return snapshot.Ready, snapshot.LastError
-		},
+		Sessions:           manager,
 		TargetWorker:       targetWorker.Snapshot,
 		OperatorWorker:     operatorWorker.Snapshot,
 		PaperMatcherWorker: paperMatcherWorker.State,
@@ -773,4 +793,41 @@ func registerHealth(
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}
 	return nil
+}
+
+// noteTargetReversal 把同一目标内的反向下单记成关注项，详情用组合账户名，查不到时用 ID。
+func noteTargetReversal(tradeStore *store.Store) func(string, string, string, time.Time) {
+	return func(spaceID, logicalAccountID, instrumentID string, at time.Time) {
+		name := logicalAccountID
+		if record, err := tradeStore.GetLogicalAccount(context.Background(), spaceID, logicalAccountID); err == nil && record.Name != "" {
+			name = record.Name
+		}
+		telemetry.Note(telemetry.AttentionTargetReversal, name+" "+instrumentID+"："+"同一目标内出现反向子单", at)
+	}
+}
+
+// observeRateLimits 把限流暂停记成指标和关注项，权重读数记成指标。
+func observeRateLimits() {
+	httpclient.OnPause = func(host string, reason exchange.ErrorKind, until time.Time) {
+		telemetry.RatePauses.WithLabelValues(host, string(reason)).Inc()
+		telemetry.Note(telemetry.AttentionRateLimited, host+"："+exchange.RejectMessage(&exchange.Error{Kind: reason}), time.Now())
+	}
+	httpclient.OnWeight = func(host string, used, _ int) {
+		telemetry.RateWeightUsed.WithLabelValues(host).Set(float64(used))
+	}
+}
+
+// adapterRateStatus 返回执行账户适配器的限流状态；模拟盘和没有限流模型的场所返回 false。
+func adapterRateStatus(manager *traderuntime.Manager) func(string) (exchange.RateStatus, bool) {
+	return func(tradingAccountID string) (exchange.RateStatus, bool) {
+		adapter, err := manager.Adapter(tradingAccountID)
+		if err != nil {
+			return exchange.RateStatus{}, false
+		}
+		source, ok := adapter.(exchange.RateStatusSource)
+		if !ok {
+			return exchange.RateStatus{}, false
+		}
+		return source.RateStatus(), true
+	}
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -26,6 +27,7 @@ func (s sessionAdapterSource) Adapter(string) (execution.ExecutionAdapter, error
 }
 
 type scriptedSessionAdapter struct {
+	adaptertest.Stub
 	mu               sync.Mutex
 	calls            []string
 	disconnect       chan error
@@ -217,21 +219,17 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 
 	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
-		return len(adapter.callSnapshot()) >= 12
+		return len(adapter.callSnapshot()) >= 7
 	}, 2*time.Second, 10*time.Millisecond)
+	// 缓冲的持仓事件只关闭准入，防抖后触发轻量同步：只读持仓和账户，不读全部挂单。
 	require.Equal(t, []string{
 		"LoadInstruments",
 		"Subscribe",
-		"SetMarginMode",
-		"SetLeverage",
 		"GetAccountSnapshot",
 		"ListPositionSnapshots",
 		"ListOpenOrders",
-		"ListRecentFills",
-		"ListOpenOrders",
 		"ListPositionSnapshots",
 		"GetAccountSnapshot",
-		"ListRecentFills",
 	}, adapter.callSnapshot())
 	// 激活前缓冲的持仓事件在 READY 交接时才应用，应用期间持久化状态会短暂回到未就绪、等完整同步确认后再就绪：
 	// session.Ready() 为真时库里的就绪位可能还没落定，要等它稳定为真。
@@ -239,13 +237,12 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 		return err == nil && stored.Ready
 	}, 2*time.Second, 10*time.Millisecond)
-	var positionUpdatedAt int64
+	var positionRows int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
-		SELECT c_exchange_updated_at FROM t_trading_positions
+		SELECT COUNT(*) FROM t_trading_positions
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
-	`, "space-1", "account-1", "BTC-USDT").Scan(&positionUpdatedAt).Error)
-	require.Equal(t, int64(2_500), positionUpdatedAt,
-		"buffered private event must apply after REST snapshot and before READY")
+	`, "space-1", "account-1", "BTC-USDT").Scan(&positionRows).Error)
+	require.Zero(t, positionRows, "持仓事件不写持仓，数量只由成交投影和 REST 决定")
 
 	disconnectErr := errors.New("private stream disconnected")
 	adapter.disconnect <- disconnectErr
@@ -454,4 +451,62 @@ func TestSessionHandlerKeepsAdmissionClosedAfterBufferedAccountEvent(t *testing.
 	require.NoError(t, err)
 	require.False(t, stored.Ready, "缓冲的私有余额事件在完整同步前不得恢复准入")
 	require.Equal(t, int64(2_500), stored.BalancePendingUntil)
+}
+
+// pollingSessionAdapter 只暴露 ExecutionAdapter，隐藏底层的私有流。
+type pollingSessionAdapter struct {
+	execution.ExecutionAdapter
+}
+
+func TestExchangeSessionWithoutPrivateStreamBecomesReadyByPolling(t *testing.T) {
+	tradeStore := openRuntimeStore(t)
+	account := seedRuntimeAccount(t, tradeStore)
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1), positionBuffered: make(chan struct{})}
+	adapter := pollingSessionAdapter{ExecutionAdapter: scripted}
+	syncService := &accountsync.Service{
+		Store: tradeStore, Adapters: sessionAdapterSource{adapter: adapter},
+		Fills: &consumer.Reducer{Store: tradeStore}, SessionState: readySessionState(true),
+	}
+	session := &ExchangeSession{Account: account, Adapter: adapter, Sync: syncService, SyncInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = session.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
+	require.Eventually(t, session.Ready, 2*time.Second, 10*time.Millisecond)
+	require.NotContains(t, scripted.callSnapshot(), "Subscribe")
+}
+
+func TestSessionSetsSymbolConfigOnceUntilForgotten(t *testing.T) {
+	account := store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModeLive)}
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1)}
+	session := &ExchangeSession{Account: account, Adapter: scripted}
+	leverage := shared.MustDecimal("3")
+	ctx := context.Background()
+
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Equal(t, []string{"SetMarginMode", "SetLeverage"}, scripted.callSnapshot())
+
+	session.ForgetSymbolConfig("BTCUSDT")
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Len(t, scripted.callSnapshot(), 4)
+
+	session.ForgetSymbolConfig(store.DefaultLeverageKey)
+	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.Len(t, scripted.callSnapshot(), 6)
+}
+
+func TestPaperSessionSkipsSymbolConfig(t *testing.T) {
+	scripted := &scriptedSessionAdapter{disconnect: make(chan error, 1)}
+	session := &ExchangeSession{
+		Account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModePaper)}, Adapter: scripted,
+	}
+	require.NoError(t, session.EnsureSymbolConfig(context.Background(), "BTCUSDT", shared.MustDecimal("3")))
+	require.Empty(t, scripted.callSnapshot())
 }

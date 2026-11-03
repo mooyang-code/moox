@@ -3,11 +3,13 @@ package account
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 var (
@@ -42,21 +44,29 @@ type Store interface {
 	Get(context.Context, string) (tradingaccount.Account, error)
 	Update(context.Context, UpdateCommand) error
 	SetLeverage(context.Context, string, string, shared.Decimal) error
+	// ListEnabled 返回全部启用的执行账户。
+	ListEnabled(context.Context) ([]tradingaccount.Account, error)
 }
 
 type SecretSource interface {
 	GetExchangeSecret(context.Context, string) (ExchangeSecret, error)
 }
 
+// SymbolConfigs 记录会话里已经在交易所设置过的标的。
+type SymbolConfigs interface {
+	ForgetSymbolConfig(tradingAccountID, symbol string)
+}
+
 type SessionState interface {
 	ReadyFor(tradingaccount.Account) bool
-	Invalidate(tradingAccountID string)
 }
 
 type Service struct {
 	Store              Store
 	Secrets            SecretSource
 	SessionState       SessionState
+	SymbolConfigs      SymbolConfigs
+	Venues             execution.VenueCatalog
 	LiveTradingEnabled bool
 }
 
@@ -67,7 +77,6 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
-	SyncSymbols        *[]string
 }
 
 func (s *Service) Create(
@@ -86,6 +95,9 @@ func (s *Service) Create(
 		return tradingaccount.Account{}, ErrLiveTradingDisabled
 	}
 	if err := s.validateCredential(ctx, value); err != nil {
+		return tradingaccount.Account{}, err
+	}
+	if err := s.rejectDuplicateCredential(ctx, value); err != nil {
 		return tradingaccount.Account{}, err
 	}
 	if err := s.Store.Create(ctx, value); err != nil {
@@ -111,7 +123,7 @@ func (s *Service) Update(
 	if current.ExecutionMode == exchange.ExecutionModePaper &&
 		(command.Name != nil || command.CredentialSecretID != nil ||
 			command.SettlementAsset != nil || command.MarginMode != nil ||
-			command.Status != nil || command.SyncSymbols != nil) {
+			command.Status != nil) {
 		return tradingaccount.Account{}, ErrPaperAccountImmutable
 	}
 	projected := current
@@ -131,14 +143,41 @@ func (s *Service) Update(
 		if err := s.validateCredential(ctx, projected); err != nil {
 			return tradingaccount.Account{}, err
 		}
+		if err := s.rejectDuplicateCredential(ctx, projected); err != nil {
+			return tradingaccount.Account{}, err
+		}
 	}
 	if err := s.Store.Update(ctx, command); err != nil {
 		return tradingaccount.Account{}, err
 	}
-	if s.SessionState != nil {
-		s.SessionState.Invalidate(command.TradingAccountID)
-	}
 	return s.Store.Get(ctx, command.TradingAccountID)
+}
+
+// rejectDuplicateCredential 防止同一把密钥建两个执行账户：两个会话看到同一批订单，
+// 会互相当成外部订单，组合账户被自动暂停。
+func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingaccount.Account) error {
+	if value.ExecutionMode != exchange.ExecutionModeLive || value.Status != exchange.AccountStatusEnabled {
+		return nil
+	}
+	accounts, err := s.Store.ListEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	unified := false
+	if s.Venues != nil {
+		if descriptor, ok := s.Venues.Descriptor(value.Exchange); ok {
+			unified = descriptor.UnifiedAccount
+		}
+	}
+	for _, other := range accounts {
+		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
+			other.Exchange == value.Exchange && other.Environment == value.Environment &&
+			other.CredentialSecretID == value.CredentialSecretID &&
+			(unified || other.MarketType == value.MarketType) {
+			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥", tradingaccount.ErrInvalidAccount, other.Name)
+		}
+	}
+	return nil
 }
 
 func (s *Service) SetLeverage(
@@ -159,7 +198,7 @@ func (s *Service) SetLeverage(
 	if err != nil {
 		return err
 	}
-	if current.MarketType != exchange.MarketTypeSwap {
+	if !exchange.RuleFor(current.MarketType).Leverage {
 		return tradingaccount.ErrInvalidAccount
 	}
 	if current.ExecutionMode == exchange.ExecutionModePaper {
@@ -168,8 +207,9 @@ func (s *Service) SetLeverage(
 	if err := s.Store.SetLeverage(ctx, tradingAccountID, symbol, leverage); err != nil {
 		return err
 	}
-	if s.SessionState != nil {
-		s.SessionState.Invalidate(tradingAccountID)
+	// 不重启会话，只让该标的下次开仓前重新设置。
+	if s.SymbolConfigs != nil {
+		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, symbol)
 	}
 	return nil
 }
@@ -245,8 +285,5 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
-	}
-	if command.SyncSymbols != nil {
-		value.SyncSymbols = append([]string(nil), (*command.SyncSymbols)...)
 	}
 }

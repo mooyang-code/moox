@@ -13,7 +13,7 @@ import (
 // The caller holds the account lock. Market valuation happens outside the
 // SQLite transaction; cash and active reservations are read inside the write.
 func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
-	if validation.Account.ExecutionMode != exchange.ExecutionModePaper || validation.Account.MarketType != exchange.MarketTypeSwap {
+	if validation.Account.ExecutionMode != exchange.ExecutionModePaper || !exchange.RuleFor(validation.Account.MarketType).UsesMargin {
 		return shared.Zero(), nil
 	}
 	if s.Adapters == nil {

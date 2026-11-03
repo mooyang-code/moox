@@ -8,10 +8,13 @@ import (
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -25,8 +28,7 @@ type TargetOptions struct {
 	SetReady       func(bool)
 	WeightResolver TargetWeightResolver
 	ResolveTimeout time.Duration
-	// Intake 非空时是生命周期门禁：返回 false（暂停、恢复追赶、重置）时拒绝新的真实目标，
-	// 并回执「系统暂停」；影子目标只是记录，不受影响。
+	// Intake 返回 false（暂停、恢复追赶、重置）时延迟重投真实目标；影子目标只是记录，不受影响。
 	Intake func() bool
 }
 
@@ -35,6 +37,9 @@ type TargetOptions struct {
 type TargetWeightResolver interface {
 	Resolve(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
+
+// conversionAttentionDeliveries 是换算连续失败多少次才告警。
+const conversionAttentionDeliveries = 5
 
 func HandleTarget(
 	ctx context.Context,
@@ -105,6 +110,11 @@ func HandleTarget(
 	// until effective_at and only terminally reject it after valid_until.
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
+	}
+	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
+	request, err = normalizeTargetRequest(request, exchange.MarketType(account.MarketType))
+	if err != nil {
+		return targetRejection("invalid_contract", err)
 	}
 	if request.GetShadow() {
 		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
@@ -177,7 +187,7 @@ func HandleTarget(
 			store.ErrInvalidRecord, unsupportedInstrument,
 		)
 		if membersReady {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+			return targetRejection("unsupported_instrument", err)
 		}
 		return retryTarget(err)
 	}
@@ -215,6 +225,10 @@ func HandleTarget(
 	if conversionErr != nil {
 		if errors.Is(conversionErr, targetapp.ErrPermanent) {
 			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
+		}
+		// 换算失败的目标不进目标表，过期后就消失了，页面看不到。偶发失败重投就好，持续失败才提醒人。
+		if delivery.DeliveryCount >= conversionAttentionDeliveries {
+			telemetry.NoteTargetRejection(account.Name, "目标换算失败："+telemetry.StableReason(conversionErr.Error()), now)
 		}
 		return retryTarget(conversionErr)
 	}
@@ -315,6 +329,24 @@ func handleShadowTarget(
 		return retryTarget(err)
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+func normalizeTargetRequest(
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	market exchange.MarketType,
+) (*tradeeventpb.LogicalAccountTargetWeightRequested, error) {
+	normalized, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	if !ok {
+		return nil, fmt.Errorf("trade target: unexpected event payload %T", request)
+	}
+	for _, target := range normalized.GetTargets() {
+		instrumentID, err := exchange.NormalizeInstrumentID(target.GetInstrumentId(), market)
+		if err != nil {
+			return nil, err
+		}
+		target.InstrumentId = instrumentID
+	}
+	return normalized, nil
 }
 
 func mustMarshal(value any) string {

@@ -3,6 +3,7 @@ package rpc
 import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 // ExecutionCapabilities is the server-side capability model used by both the
@@ -18,30 +19,31 @@ type ExecutionCapabilities struct {
 
 func ResolveExecutionCapabilities(
 	account tradingaccount.Account,
+	descriptor execution.VenueDescriptor,
 	liveTradingEnabled bool,
 	matcherReady bool,
 ) ExecutionCapabilities {
 	capabilities := ExecutionCapabilities{
-		OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
-		FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+		OrderTypes:   descriptor.OrderTypes,
+		FillPolicies: descriptor.FillPolicies,
 		CanClosePaperSimulation: account.ExecutionMode == exchange.ExecutionModePaper &&
 			account.Status == exchange.AccountStatusEnabled,
 	}
 	if account.Status != exchange.AccountStatusEnabled {
-		capabilities.UnavailableReason = "trading account is disabled"
+		capabilities.UnavailableReason = "账户已停用"
 		return capabilities
 	}
 	if !account.Ready {
-		capabilities.UnavailableReason = "trading account is not ready"
+		capabilities.UnavailableReason = "账户未就绪"
 		return capabilities
 	}
 	if account.ExecutionMode == exchange.ExecutionModePaper && !matcherReady {
-		capabilities.UnavailableReason = "paper matcher is not ready"
+		capabilities.UnavailableReason = "模拟撮合未就绪"
 		return capabilities
 	}
 	if account.ExecutionMode == exchange.ExecutionModeLive &&
 		account.MarketDataEnvironment() == exchange.AccountEnvironmentProduction && !liveTradingEnabled {
-		capabilities.UnavailableReason = "production trading is disabled"
+		capabilities.UnavailableReason = "生产交易未开启"
 		return capabilities
 	}
 	capabilities.CanPlaceOrder = true

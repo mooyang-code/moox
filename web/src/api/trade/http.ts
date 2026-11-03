@@ -31,13 +31,24 @@ function assertSuccess(response: { ret_info?: RetInfo }) {
   }
 }
 
+// 轮询和查询失败时不弹窗，否则每次轮询都会弹一次；写操作默认提示业务错误。
+const quietMethod = /^(List|Get|Query)/;
+
 export async function callTrade<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: keyof typeof tradeServiceMap,
   method: string,
-  req: TReq
+  req: TReq,
+  options: { silent?: boolean } = {}
 ): Promise<TRsp> {
   const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req);
-  assertSuccess(rsp.data);
+  try {
+    assertSuccess(rsp.data);
+  } catch (error) {
+    if (error instanceof TradeResponseError && !options.silent && !quietMethod.test(method)) {
+      Message.error(error.message);
+    }
+    throw error;
+  }
   return rsp.data;
 }
 

@@ -9,10 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/reservation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	paperexec "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -22,29 +19,10 @@ import (
 )
 
 func TestLivePaperParityE2EUsesOneOrderPolicyAndPaperPrice(t *testing.T) {
-	account := tradingaccount.Account{
-		ID: "paper-1", SpaceID: "space-1", Name: "paper", Exchange: exchange.ExchangeBinance,
-		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModePaper,
-		Environment: exchange.AccountEnvironmentPaper, SettlementAsset: "USDT",
-		Status: exchange.AccountStatusEnabled, Ready: true,
-		Paper: &tradingaccount.PaperConfig{InitialBalance: shared.MustDecimal("1000"), TakerFeeRate: shared.MustDecimal("0.001")},
-	}
-	instrument := exchange.Instrument{
-		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
-		ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt",
-		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
-		ExchangeQuantityStep: shared.MustDecimal("0.001"), PriceTick: shared.MustDecimal("0.1"), Status: "TRADING",
-	}
 	quote := execution.MarketQuote{Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("101"), Last: shared.MustDecimal("100.5"), SourceTime: time.UnixMilli(1_700_000_000_000)}
 	price, err := paperexec.MarketExecutionPrice(exchange.SideBuy, quote, shared.MustDecimal("10"))
 	require.NoError(t, err)
 	require.Equal(t, "101.101", price.String())
-	policy, err := (execution.PaperReservationPolicy{}).Evaluate(account, instrument, order.OrderSpec{
-		ClientOrderSpec: order.ClientOrderSpec{TradingAccountID: account.ID, ClientOrderID: "client-1", InstrumentID: instrument.InstrumentID, Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("2")},
-		ReferencePrice:  shared.MustDecimal("101"),
-	}, quote, reservation.Facts{AvailableReducibleQuantity: shared.Zero()})
-	require.NoError(t, err)
-	require.Equal(t, "202.202", policy.Quantity.String())
 }
 
 func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
@@ -182,4 +160,12 @@ func openUnifiedE2EStore(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s
+}
+
+func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+	quote, err := m.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	return exchange.ReferencePrice{Price: quote.Last, UpdatedAt: quote.SourceTime}, nil
 }

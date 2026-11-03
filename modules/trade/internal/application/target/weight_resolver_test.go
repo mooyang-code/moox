@@ -127,3 +127,21 @@ func TestWeightResolverAllHoldTargetDoesNotNeedEquity(t *testing.T) {
 	_, err = resolver.Resolve(context.Background(), 0, request, "space-1")
 	require.Error(t, err)
 }
+
+// 手工币首次进目标：权益要算上它，否则数量偏小，多卖一大截。
+func TestResolveCountsUnmanagedTargetAssetInEquity(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSpot)
+	fixture.setBalance(t, "account-a", "BTC", "10")
+	resolver := WeightResolver{Store: fixture.store, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	request := &tradeeventpb.LogicalAccountTargetWeightRequested{
+		TargetId: "target-1", LogicalAccountId: "logical-1", InstanceId: "instance-1", SessionId: "session-1", StrategyId: "strategy-1",
+		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(61000)),
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "0.5"}},
+	}
+
+	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "3000", conversion.Equity.String(), "权益点 2000 加上 10 个币的市值 1000")
+	require.Equal(t, "15", conversion.QuantityTargets[0].Quantity)
+}

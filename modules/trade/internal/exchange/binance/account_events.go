@@ -265,6 +265,11 @@ func (a *Adapter) keepListenKeyAlive(
 		case <-done:
 			return
 		case <-ticker.C:
+			// 限流暂停期间跳过这次续期，1 分钟后再试：listenKey 有效期 60 分钟，等满 30 分钟会过期断流。
+			if !a.client().Status().PausedUntil.IsZero() {
+				ticker.Reset(time.Minute)
+				continue
+			}
 			_, err := a.client().Do(ctx, &httpclient.Request{
 				Method: http.MethodPut,
 				Path:   path,
@@ -273,10 +278,16 @@ func (a *Adapter) keepListenKeyAlive(
 					"X-MBX-APIKEY": a.credential.APIKey,
 				},
 			})
+			// 限流（确定未受理）或结果未知的续期 1 分钟后重试，只有明确失败才断开重连。
+			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+				ticker.Reset(time.Minute)
+				continue
+			}
 			if err != nil {
 				_ = connection.Close()
 				return
 			}
+			ticker.Reset(30 * time.Minute)
 		}
 	}
 }
@@ -488,13 +499,6 @@ func (a *Adapter) dispatchFuturesAccount(
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
-			Present: exchange.PositionPresence{
-				SignedQuantity: true,
-				EntryPrice:     true,
-				MarginMode:     true,
-				UnrealizedPnL:  true,
-			},
-			RequiresSync: true,
 		}
 		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
 		if err == nil {

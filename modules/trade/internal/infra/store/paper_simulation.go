@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 // ClosePaperSimulation atomically stops a paper account and its single logical
@@ -76,6 +77,13 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		if result.Error != nil {
 			return result.Error
 		}
+		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
+		if err := tx.db.Exec(`
+			DELETE FROM t_logical_account_members
+			WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?
+		`, spaceID, logicalID, tradingAccountID).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -100,7 +108,7 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	// valuation remains cached and none of its freshness timestamps advance.
 	cash := projection.Totals[account.SettlementAsset]
 	snapshot.AvailableFunds = cash.String()
-	if account.MarketType == "SWAP" {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err
@@ -177,8 +185,7 @@ func (tx *Tx) closedPaperPositionValuation(account TradingAccountRecord) (shared
 func (tx *Tx) listOpenOrdersForAccount(spaceID, tradingAccountID string) ([]OrderRecord, error) {
 	var rows []orderRow
 	err := tx.db.Table("t_trade_orders").
-		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state NOT IN ?", spaceID, tradingAccountID,
-			[]string{"FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED"}).
+		Where("c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?", spaceID, tradingAccountID, activeOrderStates).
 		Order("c_order_id").Find(&rows).Error
 	if err != nil {
 		return nil, err
@@ -196,12 +203,4 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 	`, status, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "trading account status")
-}
-
-func (tx *Tx) PaperSimulationMemberCount(spaceID, logicalAccountID string) (int64, error) {
-	var count int64
-	err := tx.db.Table("t_logical_account_members").
-		Where("c_space_id = ? AND c_logical_account_id = ? AND c_enabled = 1", spaceID, logicalAccountID).
-		Count(&count).Error
-	return count, err
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -186,8 +187,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 
 func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v5/market/ticker" ||
-			request.URL.Query().Get("instId") != "BTC-USDT" {
+		if request.URL.Path != "/api/v5/market/tickers" || request.URL.Query().Get("instType") != "SPOT" {
 			t.Fatalf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
 		}
 		ok(w, `[{"instId":"BTC-USDT","last":"100.25","ts":"2000"}]`)
@@ -204,7 +204,7 @@ func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if quote.Price.String() != "100.25" || quote.UpdatedAt.UnixMilli() != 2000 {
+	if quote.Price.String() != "100.25" || time.Since(quote.UpdatedAt) > time.Minute || quote.UpdatedAt.UnixMilli() == 2000 {
 		t.Fatalf("quote = %+v", quote)
 	}
 }

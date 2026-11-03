@@ -50,7 +50,6 @@ const account = {
   status: "ENABLED",
   ready: true,
   leverage_settings: {},
-  sync_symbols: ["BTCUSDT", "ETHUSDT"],
   snapshot: {
     balances: [],
     equity: "100240.20",

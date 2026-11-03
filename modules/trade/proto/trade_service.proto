@@ -18,6 +18,7 @@ enum MarketType {
   MARKET_TYPE_UNSPECIFIED = 0;
   MARKET_TYPE_SPOT = 1;
   MARKET_TYPE_SWAP = 2;
+  MARKET_TYPE_STOCK = 3;
 }
 
 enum ExecutionMode {
@@ -101,7 +102,6 @@ message TradingAccount {
   string settlement_asset = 7;
   string margin_mode = 8;
   map<string, string> leverage_settings = 9;
-  repeated string sync_symbols = 10;
   string status = 11;
   bool ready = 12;
   int64 last_sync_at = 13;
@@ -140,9 +140,7 @@ message LogicalAccount {
   // Strategy lifecycle identity of the current owner.
   string owner_instance_id = 16;
   string owner_session_id = 17;
-  // Opaque compare-and-set token used by Strategy lifecycle calls. It is
-  // returned to trusted internal callers only; target events use the numeric
-  // owner_generation fence instead.
+  // Strategy 生命周期调用的比较并交换令牌，只返回给内部调用方。
   string auth_fence = 18;
   ControlMode control_mode = 19;
 }
@@ -274,7 +272,6 @@ message CreateTradingAccountReq {
   MarketType market_type = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
-  repeated string sync_symbols = 6;
   LiveConfig live = 7;
 }
 message CreateTradingAccountRsp {
@@ -289,7 +286,6 @@ message UpdateTradingAccountReq {
   string settlement_asset = 4;
   string margin_mode = 5;
   string status = 6;
-  repeated string sync_symbols = 7;
 }
 message UpdateTradingAccountRsp {
   common.RetInfo ret_info = 1;
@@ -567,6 +563,7 @@ message ListFillsReq {
   int64 start_time = 4;
   int64 end_time = 5;
   common.Page page = 6;
+  string logical_account_id = 7;
 }
 message ListFillsRsp {
   common.RetInfo ret_info = 1;
@@ -630,6 +627,24 @@ message ExecutionCapabilities {
 message GetExecutionCapabilitiesRsp {
   common.RetInfo ret_info = 1;
   ExecutionCapabilities capabilities = 2;
+}
+
+message ListTradableInstrumentsReq {
+  string trading_account_id = 1;
+}
+
+// 数量都是基础资产数量，合约已按面值换算。
+message TradableInstrument {
+  string instrument_id = 1;
+  string quantity_step = 2;
+  string min_quantity = 3;
+  string min_notional = 4;
+  string price_tick = 5;
+}
+
+message ListTradableInstrumentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated TradableInstrument instruments = 2;
 }
 
 message EquityPoint {
@@ -706,6 +721,7 @@ service TradeConsoleService {
   rpc CreatePaperSimulation(CreatePaperSimulationReq) returns (CreatePaperSimulationRsp);
   rpc ClosePaperSimulation(ClosePaperSimulationReq) returns (ClosePaperSimulationRsp);
   rpc GetExecutionCapabilities(GetExecutionCapabilitiesReq) returns (GetExecutionCapabilitiesRsp);
+  rpc ListTradableInstruments(ListTradableInstrumentsReq) returns (ListTradableInstrumentsRsp);
   rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
 }

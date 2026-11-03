@@ -35,11 +35,6 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if adapterErr != nil {
 		return Decision{}, adapterErr
 	}
-	priceSource, hasReferencePrice := adapter.(execution.ReferencePriceSource)
-	marketDataSource, hasMarketData := adapter.(execution.MarketDataSource)
-	if !hasReferencePrice && !hasMarketData {
-		return Decision{}, errors.New("paper reference quote unavailable")
-	}
 	paperConfig, configErr := d.Store.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
 	if configErr != nil {
 		return Decision{}, storageError(configErr)
@@ -67,29 +62,15 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 		}
 	}
 	if price.Cmp(shared.Zero()) <= 0 {
-		var quoteErr error
-		if hasMarketData {
-			quote, marketErr := marketDataSource.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
-			quoteErr = marketErr
-			if quoteErr == nil && !QuoteFresh(quote, d.now(), 10*time.Second) {
-				quoteErr = errors.New("paper public quote is stale")
-			}
-			if quoteErr == nil {
-				if candidate.OrderType == string(exchange.OrderTypeMarket) {
-					price, quoteErr = MarketExecutionPrice(exchange.Side(candidate.Side), quote, slippage)
-				} else {
-					price, quoteErr = MarketExecutionPrice(exchange.Side(candidate.Side), quote, shared.Zero())
-				}
-			}
-		} else {
-			quote, referenceErr := priceSource.GetReferencePrice(ctx, candidate.ExchangeSymbol)
-			quoteErr = referenceErr
-			if quoteErr == nil {
-				price = quote.Price
-				if quote.Price.Cmp(shared.Zero()) <= 0 ||
-					!QuoteFresh(execution.MarketQuote{SourceTime: quote.UpdatedAt}, d.now(), 10*time.Second) {
-					quoteErr = errors.New("paper reference quote is stale or empty")
-				}
+		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+		if quoteErr == nil && !QuoteFresh(quote, d.now(), 10*time.Second) {
+			quoteErr = errors.New("paper public quote is stale")
+		}
+		if quoteErr == nil {
+			if candidate.OrderType == string(exchange.OrderTypeMarket) {
+				price, quoteErr = MarketExecutionPrice(exchange.Side(candidate.Side), quote, slippage)
+			} else {
+				price, quoteErr = MarketExecutionPrice(exchange.Side(candidate.Side), quote, shared.Zero())
 			}
 		}
 		if quoteErr != nil {
@@ -97,15 +78,6 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 		}
 		if price.Cmp(shared.Zero()) <= 0 {
 			return Decision{}, errors.New("paper reference quote is empty")
-		}
-	}
-	if candidate.OrderType == string(exchange.OrderTypeMarket) && candidate.PaperExecutionPrice == nil && !hasMarketData {
-		if slippage.Cmp(shared.Zero()) > 0 {
-			factor := shared.MustDecimal("1").Add(slippage.Div(shared.MustDecimal("10000")))
-			if candidate.Side == string(exchange.SideSell) {
-				factor = shared.MustDecimal("1").Sub(slippage.Div(shared.MustDecimal("10000")))
-			}
-			price = price.Mul(factor)
 		}
 	}
 	if candidate.OrderType == string(exchange.OrderTypeLimit) && candidate.LimitPrice != nil {

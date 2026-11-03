@@ -187,7 +187,7 @@ func TestFlattenReportsPartialRemainingPositionsAndEndsPaused(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "PARTIAL", result.Action.Status)
 	require.NotEmpty(t, result.Accounts[0].Remaining)
-	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "minimum")
+	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "最小值")
 	account, err := fixture.store.GetLogicalAccount(
 		context.Background(), "space-1", "logical-1",
 	)
@@ -277,6 +277,15 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 				LastSyncAt:         fixture.now.UnixMilli(),
 			},
 		)
+	}))
+
+	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", TradingAccountID: "account-b", OrderID: "bought", ClientOrderID: "bought",
+			Exchange: account.Exchange, MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "100",
+			State: "FILLED", OwnerType: "OPERATOR", OwnerID: "action-0", LogicalAccountID: "logical-1", Version: 1,
+		})
 	}))
 
 	_, err = fixture.service().FlattenLogicalAccount(

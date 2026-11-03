@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -24,20 +25,28 @@ import (
 )
 
 const (
-	testSpace        = "space-e2e"
-	testAccount      = "account-e2e"
-	testSymbol       = "BTCUSDT"
-	testInstrumentID = "BTC-USDT"
+	testSpace     = "space-e2e"
+	testAccount   = "account-e2e"
+	testSymbol    = "BTCUSDT"
+	testSubjectID = "BTC-USDT"
 )
+
+// testInstrumentID 是 Trade 内部标的 ID：从交易所加载的标的都带市场后缀，而策略目标发的是 testSubjectID。
+// 两边都用真实格式，防止标的标准化再次对不上。
+func testInstrumentID(market exchange.MarketType) string {
+	return testSubjectID + "-" + string(market)
+}
 
 // Target validity is checked against the real Trade clock. Keep the shared
 // fixture clock near process start so generated target windows remain valid
 // while the package tests run.
-var testNow = time.Now().UTC()
+// 成交时间要晚于账户创建时间，否则会被当成接入前的成交过滤掉。
+var testNow = time.Now().UTC().Add(time.Hour)
 
 // fakeExchange models only Exchange facts. It deliberately does not use the
 // production order reducer, so reducer assertions do not mirror production.
 type fakeExchange struct {
+	adaptertest.Stub
 	mu sync.Mutex
 
 	market     exchange.MarketType
@@ -76,7 +85,7 @@ type marginCall struct {
 func newFakeExchange(market exchange.MarketType) *fakeExchange {
 	instrument := exchange.Instrument{
 		Exchange: exchange.ExchangeBinance, MarketType: market,
-		ExchangeSymbol: testSymbol, InstrumentID: "BTC-USDT",
+		ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(market),
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.001"),
 		MinExchangeQuantity:  shared.MustDecimal("0.001"),
@@ -117,6 +126,9 @@ func (f *fakeExchange) LoadInstruments(context.Context) ([]exchange.Instrument, 
 func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.quoteErr != nil {
+		return exchange.ReferencePrice{}, f.quoteErr
+	}
 	return f.reference, nil
 }
 func (f *fakeExchange) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
@@ -292,14 +304,14 @@ func (a recordingAdapter) SetLeverage(ctx context.Context, symbol shared.Exchang
 		leverageCall{symbol: symbol.String(), leverage: leverage},
 	)
 	a.recorder.mu.Unlock()
-	return a.ExecutionAdapter.SetLeverage(ctx, symbol, leverage)
+	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetLeverage(ctx, symbol, leverage)
 }
 
 func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
 	a.recorder.mu.Lock()
 	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
 	a.recorder.mu.Unlock()
-	return a.ExecutionAdapter.SetMarginMode(ctx, symbol, mode)
+	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetMarginMode(ctx, symbol, mode)
 }
 
 // synchronousPaperAdapter keeps the older unit-style E2E ergonomics while
@@ -686,7 +698,7 @@ func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.
 			CredentialSecretID: credentialID,
 			SettlementAsset:    "USDT",
 			MarginMode:         margin, Status: string(exchange.AccountStatusEnabled), Ready: true,
-			SyncSymbols: []string{testSymbol}, LeverageSettings: leverage,
+			LeverageSettings: leverage,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
 					{Asset: "USDT", Available: "100000", Total: "100000"},
@@ -724,7 +736,7 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: testAccount, ClientOrderID: clientID,
-			InstrumentID: testInstrumentID, Type: exchange.OrderTypeMarket, Side: side,
+			InstrumentID: testInstrumentID(exchange.MarketTypeSpot), Type: exchange.OrderTypeMarket, Side: side,
 			Quantity: shared.MustDecimal(quantity),
 		},
 		ReferencePrice: shared.MustDecimal("50000"), ReferencePriceAt: testNow,
@@ -737,6 +749,7 @@ func marketSpec(clientID string, side exchange.Side, quantity string) orderdomai
 func swapSpec(clientID string, side exchange.Side, quantity string, reduceOnly bool) orderdomain.OrderSpec {
 	spec := marketSpec(clientID, side, quantity)
 	spec.PositionSide = exchange.PositionSideNet
+	spec.InstrumentID = testInstrumentID(exchange.MarketTypeSwap)
 	spec.ReducePositionOnly = reduceOnly
 	return spec
 }

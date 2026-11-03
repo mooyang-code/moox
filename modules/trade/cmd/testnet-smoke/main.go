@@ -51,6 +51,8 @@ func run(
 		return runSubmitPhase(phaseCtx, options, credential)
 	case "recover":
 		return runRecoverPhase(phaseCtx, options, credential)
+	case "facts":
+		return runFactsPhase(phaseCtx, options, credential)
 	default:
 		return fmt.Errorf("unsupported phase %q", options.Phase)
 	}

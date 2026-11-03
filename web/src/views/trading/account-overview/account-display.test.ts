@@ -19,7 +19,6 @@ const account = (overrides: Partial<TradingAccount> = {}): TradingAccount => ({
   last_error: "",
   created_at: "",
   updated_at: "",
-  sync_symbols: ["BTCUSDT"],
   live: { environment: 1, credential_secret_id: "secret-1" },
   ...overrides
 });

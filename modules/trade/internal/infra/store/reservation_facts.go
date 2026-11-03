@@ -6,6 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/reservation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument InstrumentRecord, spec order.OrderSpec) (reservation.Facts, error) {
@@ -37,7 +38,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			facts.AvailableFunds = value
 		}
 	}
-	if account.MarketType == "SWAP" {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		var row struct {
 			Quantity string `gorm:"column:c_signed_quantity"`
 		}
@@ -55,7 +56,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			ReduceOnly bool   `gorm:"column:c_reduce_only"`
 			State      string `gorm:"column:c_state"`
 		}
-		if err := tx.db.Raw("SELECT c_quantity,c_filled_quantity,c_side,c_reduce_only,c_state FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_exchange_symbol=? AND c_reduce_only=1 AND c_state NOT IN ('FILLED','CANCELED','PARTIALLY_CANCELED','REJECTED','EXPIRED')", account.SpaceID, account.TradingAccountID, instrument.ExchangeSymbol).Scan(&rows).Error; err != nil {
+		if err := tx.db.Raw("SELECT c_quantity,c_filled_quantity,c_side,c_reduce_only,c_state FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_exchange_symbol=? AND c_reduce_only=1 AND c_state IN ?", account.SpaceID, account.TradingAccountID, instrument.ExchangeSymbol, activeOrderStates).Scan(&rows).Error; err != nil {
 			return facts, err
 		}
 		for _, row := range rows {
@@ -81,7 +82,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 		Asset    string `gorm:"column:c_reserved_asset"`
 		Quantity string `gorm:"column:c_remaining_reserved_quantity"`
 	}
-	if err := tx.db.Raw("SELECT c_reserved_asset,c_remaining_reserved_quantity FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_state NOT IN ('FILLED','CANCELED','PARTIALLY_CANCELED','REJECTED','EXPIRED') AND c_remaining_reserved_quantity <> '0'", account.SpaceID, account.TradingAccountID).Scan(&active).Error; err != nil {
+	if err := tx.db.Raw("SELECT c_reserved_asset,c_remaining_reserved_quantity FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_state IN ? AND c_remaining_reserved_quantity <> '0'", account.SpaceID, account.TradingAccountID, activeOrderStates).Scan(&active).Error; err != nil {
 		return facts, err
 	}
 	for _, row := range active {

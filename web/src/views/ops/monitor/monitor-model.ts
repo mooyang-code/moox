@@ -650,6 +650,7 @@ const KIND_LABELS: Record<string, string> = {
   metrics_ingest: "指标入库",
   module: "模块运行",
   balance: "账户余额同步",
+  trade_attention: "交易关注项",
   "console-page": "控制台页面",
   subject_tag: "标的标签巡检"
 };

@@ -44,8 +44,8 @@ func (p *blockedTargetPrice) LatestPrice(ctx context.Context, _, _ string) (targ
 
 func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,8 +113,8 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 
 func TestExpiredTargetWorkerRemainsReadyWithoutTrading(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	opts := eventconsumer.TargetOptions{
 		Store: f.store, Now: func() time.Time { return now }, WeightResolver: testTargetWeightResolver{},
@@ -151,11 +151,11 @@ func TestExpiredTargetWorkerRemainsReadyWithoutTrading(t *testing.T) {
 }
 
 func TestTargetWorkerExchangeFailureRemainsAccountDiagnostic(t *testing.T) {
-	for _, kind := range []exchange.ErrorKind{exchange.ErrorRejected, exchange.ErrorTransportUnknown, exchange.ErrorRateLimited} {
+	for _, kind := range []exchange.ErrorKind{exchange.ErrorRejected, exchange.ErrorTransportUnknown} {
 		t.Run(string(kind), func(t *testing.T) {
 			f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-			seedTargetPaperHoldings(t, f)
 			seedLogicalAccount(t, f.store)
+			seedTargetPaperHoldings(t, f)
 			now := time.Now().UTC()
 			f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
 			f.fake.placeErr = &exchange.Error{Kind: kind, Err: errors.New("exchange unavailable")}
@@ -176,6 +176,11 @@ func TestTargetWorkerExchangeFailureRemainsAccountDiagnostic(t *testing.T) {
 			t.Cleanup(func() { cancel(); <-done })
 			require.Eventually(t, func() bool {
 				snapshot := worker.Snapshot()
+				if kind == exchange.ErrorRejected {
+					// 明确拒单不算故障：不进错误列表，由拒单规则换成员或写入阻塞原因。
+					orders, _, listErr := f.store.ListOrders(ctx, testSpace, store.OrderQuery{LogicalAccountID: testLogicalAccount, Limit: 10})
+					return listErr == nil && len(orders) == 1 && snapshot.Ready && len(snapshot.TargetErrors) == 0
+				}
 				return snapshot.Ready && len(snapshot.TargetErrors) == 1
 			}, 2*time.Second, 10*time.Millisecond)
 			require.Empty(t, worker.Snapshot().LastError)
@@ -222,8 +227,8 @@ func (s *expiringSubmitAdapterSource) Adapter(string) (execution.ExecutionAdapte
 
 func TestTargetExpiresAfterRealPlaceBeforeSubmit(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	currentTime := now
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
@@ -255,8 +260,8 @@ func TestTargetExpiresAfterRealPlaceBeforeSubmit(t *testing.T) {
 
 func TestTargetExpiresInsideRealSubmitBeforeAdapterPost(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	currentTime := now
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
@@ -298,8 +303,8 @@ func TestTargetExpiresInsideRealSubmitBeforeAdapterPost(t *testing.T) {
 
 func TestTargetExpiresWhilePersistingSubmittingBeforeAdapterPost(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	currentTime := now
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
@@ -341,8 +346,8 @@ func TestTargetExpiresWhilePersistingSubmittingBeforeAdapterPost(t *testing.T) {
 
 func TestTargetExpiryAbortPersistenceFailureIsGlobalAndNeverPosts(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	currentTime := now
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
@@ -394,8 +399,8 @@ func TestTargetExpiryAbortPersistenceFailureIsGlobalAndNeverPosts(t *testing.T) 
 
 func TestCanceledTargetSubmitRestoresKnownUnsentPendingOrder(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
 	f.orders.Now = func() time.Time { return now }
@@ -438,8 +443,8 @@ func TestCanceledTargetSubmitRestoresKnownUnsentPendingOrder(t *testing.T) {
 
 func TestTargetWorkerPaperExecutableQuoteFailureRecovers(t *testing.T) {
 	f := newFixture(t, exchange.MarketTypeSpot, newFakeExchange(exchange.MarketTypeSpot))
-	seedTargetPaperHoldings(t, f)
 	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
 	now := time.Now().UTC()
 	f.fake.reference = exchange.ReferencePrice{Price: shared.MustDecimal("50000"), UpdatedAt: now}
 	f.fake.quoteErr = errors.New("executable bid/ask unavailable")

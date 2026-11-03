@@ -76,9 +76,13 @@
         :help="fieldErrors.logical_account_id"
       >
         <a-select v-model="form.logical_account_id" allow-search :loading="accountsLoading" placeholder="选择接收目标的组合账户">
-          <a-option v-for="account in accounts" :key="account.logical_account_id" :value="account.logical_account_id">{{
-            account.name || account.logical_account_id
-          }}</a-option>
+          <a-option
+            v-for="option in accountOptions"
+            :key="option.account.logical_account_id"
+            :value="option.account.logical_account_id"
+            :disabled="!!option.disabledReason"
+            >{{ option.label }}</a-option
+          >
         </a-select>
         <template #extra>
           <span v-if="accountsError" class="meta-error"
@@ -128,6 +132,7 @@ import type { LogicalAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, type TaskOption } from "@/views/strategy/components/task-options";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import { logicalAccountOptions, resolvedMarket } from "@/views/strategy/components/logical-account-options";
 import { parseDSL } from "@/views/strategy/dsl";
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string; presetStrategyId?: string }>();
@@ -162,6 +167,9 @@ let checkRequest = 0;
 
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
+
+// 只列策略驱动且市场一致的组合账户，已被其他实例占用的显示但不可选。
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, resolvedMarket(check_result.value?.resolved_json)));
 
 const selectedTask = computed(() => tasks.value.find(item => item.taskId === form.factor_task_id));
 

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -25,6 +26,9 @@ const (
 	productionSwapURL = "https://fapi.binance.com"
 	testnetSwapURL    = "https://demo-fapi.binance.com"
 	recvWindow        = 5000
+	// 每分钟 IP 权重额度（exchangeInfo 实查）。
+	spotWeightLimit = 6000
+	swapWeightLimit = 2400
 )
 
 type Adapter struct {
@@ -35,17 +39,50 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
+	modeChecked atomic.Bool
+	prices      exchange.PriceBoard
+	books       exchange.BookBoard
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
 	spotURL, swapURL := restEndpoints(config.Environment)
+	spot, swap := httpclient.New(spotURL), httpclient.New(swapURL)
+	spot.Classify, swap.Classify = classifyRateLimit, classifyRateLimit
+	spot.SetWeightLimit(spotWeightLimit)
+	swap.SetWeightLimit(swapWeightLimit)
 	return &Adapter{
 		config:      config,
 		credential:  credential,
-		spot:        httpclient.New(spotURL),
-		swap:        httpclient.New(swapURL),
+		spot:        spot,
+		swap:        swap,
 		instruments: make(map[string]exchange.Instrument),
 	}
+}
+
+// RateStatus 返回当前市场接口的限流状态。
+func (a *Adapter) RateStatus() exchange.RateStatus {
+	status := a.client().Status()
+	return exchange.RateStatus{
+		UsedWeight: status.UsedWeight, WeightLimit: status.WeightLimit,
+		PausedUntil: status.PausedUntil, PauseReason: status.PauseReason,
+		OrdersPausedUntil: status.OrdersPausedUntil,
+	}
+}
+
+// classifyRateLimit 按响应体错误码细分限流：-1015 只限下单，-1008 是系统限流，-1003 是 IP 级。
+func classifyRateLimit(status int, raw []byte) exchange.ErrorKind {
+	if status == http.StatusTeapot {
+		return exchange.ErrorBanned
+	}
+	switch apiCode(raw) {
+	case "-1003":
+		return exchange.ErrorRateLimited
+	case "-1015":
+		return exchange.ErrorOrderRateLimited
+	case "-1008":
+		return exchange.ErrorThrottled
+	}
+	return ""
 }
 
 func restEndpoints(
@@ -103,6 +140,17 @@ func (a *Adapter) request(
 	path string,
 	values url.Values,
 ) ([]byte, error) {
+	return a.signedRequest(ctx, method, path, values, false)
+}
+
+// signedRequest 发签名请求；order 标记新下单，账户下单暂停时只拦这类请求。
+func (a *Adapter) signedRequest(
+	ctx context.Context,
+	method string,
+	path string,
+	values url.Values,
+	order bool,
+) ([]byte, error) {
 	return a.client().Do(ctx, &httpclient.Request{
 		Method: method,
 		Path:   path,
@@ -110,6 +158,7 @@ func (a *Adapter) request(
 		Headers: map[string]string{
 			"X-MBX-APIKEY": a.credential.APIKey,
 		},
+		Order: order,
 	})
 }
 
@@ -218,6 +267,9 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
+	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
+	}
 	raw, err := a.client().Do(ctx, &httpclient.Request{
 		Method: http.MethodGet,
 		Path:   a.path("/api/v3/ticker/price", "/fapi/v1/ticker/price"),
@@ -228,7 +280,6 @@ func (a *Adapter) GetReferencePrice(
 	}
 	var payload struct {
 		Price string `json:"price"`
-		Time  int64  `json:"time"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return exchange.ReferencePrice{}, typedRejected("decode reference price", err)
@@ -237,28 +288,78 @@ func (a *Adapter) GetReferencePrice(
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
 		return exchange.ReferencePrice{}, typedRejected("invalid reference price", err)
 	}
-	updatedAt := time.Now().UTC()
-	if payload.Time > 0 {
-		updatedAt = time.UnixMilli(payload.Time)
+	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟和最后成交时间。
+	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
+}
+
+func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
+	raw, err := a.client().Do(ctx, &httpclient.Request{
+		Method: http.MethodGet,
+		Path:   a.path("/api/v3/ticker/price", "/fapi/v1/ticker/price"),
+	})
+	if err != nil {
+		return nil, err
 	}
-	return exchange.ReferencePrice{Price: price, UpdatedAt: updatedAt}, nil
+	var rows []struct {
+		Symbol string `json:"symbol"`
+		Price  string `json:"price"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, typedRejected("decode all prices", err)
+	}
+	prices := make(map[string]shared.Decimal, len(rows))
+	for _, row := range rows {
+		if price, err := shared.ParseDecimal(row.Price); err == nil {
+			prices[row.Symbol] = price
+		}
+	}
+	return prices, nil
 }
 
 func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
-	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/24hr", "/fapi/v1/ticker/24hr"), Query: url.Values{"symbol": []string{symbol.String()}}})
+	last, err := a.GetReferencePrice(ctx, symbol.String())
+	if err != nil {
+		return execution.MarketQuote{}, err
+	}
+	if book, at, ok := a.books.Get(ctx, symbol.String(), a.allBooks); ok {
+		return execution.MarketQuote{Bid: book.Bid, Ask: book.Ask, Last: last.Price, SourceTime: at}, nil
+	}
+	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{symbol.String()}}})
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
 	var payload struct {
-		BidPrice  string `json:"bidPrice"`
-		AskPrice  string `json:"askPrice"`
-		LastPrice string `json:"lastPrice"`
-		CloseTime int64  `json:"closeTime"`
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return execution.MarketQuote{}, typedRejected("decode quote", err)
 	}
-	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: parseQuote(payload.LastPrice), SourceTime: quoteTime(payload.CloseTime)}, nil
+	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: last.Price, SourceTime: time.Now().UTC()}, nil
+}
+
+// allBooks 一次取全市场买一卖一（永续权重 5、现货 4）。
+func (a *Adapter) allBooks(ctx context.Context) (map[string]exchange.Book, error) {
+	raw, err := a.client().Do(ctx, &httpclient.Request{
+		Method: http.MethodGet,
+		Path:   a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Symbol   string `json:"symbol"`
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, typedRejected("decode all books", err)
+	}
+	books := make(map[string]exchange.Book, len(rows))
+	for _, row := range rows {
+		books[row.Symbol] = exchange.Book{Bid: parseQuote(row.BidPrice), Ask: parseQuote(row.AskPrice)}
+	}
+	return books, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
@@ -267,12 +368,6 @@ func parseQuote(raw string) shared.Decimal {
 		return shared.Zero()
 	}
 	return v
-}
-func quoteTime(ms int64) time.Time {
-	if ms > 0 {
-		return time.UnixMilli(ms).UTC()
-	}
-	return time.Now().UTC()
 }
 
 type spotAccount struct {
@@ -302,13 +397,15 @@ type swapAccount struct {
 }
 
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	// 持仓模式只在会话启动时检查一次，适配器随会话重建。
+	if a.config.MarketType == exchange.MarketTypeSwap && !a.modeChecked.Load() {
 		if err := a.ensureOneWayMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
 		if err := a.ensureSingleAssetMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
+		a.modeChecked.Store(true)
 	}
 	path := a.path("/api/v3/account", "/fapi/v3/account")
 	raw, err := a.request(ctx, http.MethodGet, path, nil)
@@ -423,18 +520,20 @@ func (a *Adapter) ensureSingleAssetMode(ctx context.Context) error {
 	return nil
 }
 
+// positionRisk 是 /fapi/v3/positionRisk 的响应，v3 不再返回 marginType 和 leverage。
 type positionRisk struct {
-	Symbol           string `json:"symbol"`
-	PositionSide     string `json:"positionSide"`
-	PositionAmt      string `json:"positionAmt"`
-	EntryPrice       string `json:"entryPrice"`
-	MarkPrice        string `json:"markPrice"`
-	Leverage         string `json:"leverage"`
-	MarginType       string `json:"marginType"`
-	IsolatedMargin   string `json:"isolatedMargin"`
-	LiquidationPrice string `json:"liquidationPrice"`
-	UnRealizedProfit string `json:"unRealizedProfit"`
-	UpdateTime       int64  `json:"updateTime"`
+	Symbol                string `json:"symbol"`
+	PositionSide          string `json:"positionSide"`
+	PositionAmt           string `json:"positionAmt"`
+	EntryPrice            string `json:"entryPrice"`
+	MarkPrice             string `json:"markPrice"`
+	Notional              string `json:"notional"`
+	IsolatedWallet        string `json:"isolatedWallet"`
+	InitialMargin         string `json:"initialMargin"`
+	PositionInitialMargin string `json:"positionInitialMargin"`
+	LiquidationPrice      string `json:"liquidationPrice"`
+	UnRealizedProfit      string `json:"unRealizedProfit"`
+	UpdateTime            int64  `json:"updateTime"`
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
@@ -469,9 +568,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			position.MarkPrice, err = decimalOrZero(row.MarkPrice)
 		}
 		if err == nil {
-			position.Leverage, err = decimalOrZero(row.Leverage)
-		}
-		if err == nil {
 			position.LiquidationPrice, err = decimalOrZero(row.LiquidationPrice)
 		}
 		if err == nil {
@@ -480,12 +576,49 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil {
 			return nil, err
 		}
-		if !strings.EqualFold(row.MarginType, "cross") {
+		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
+		if err != nil {
+			return nil, err
+		}
+		if !isolatedWallet.IsZero() {
 			return nil, typedRejected("isolated margin is unsupported", nil)
+		}
+		position.UsedMargin, err = positionMargin(row)
+		if err != nil {
+			return nil, err
+		}
+		position.Leverage, err = positionLeverage(row.Notional, position.UsedMargin)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, position)
 	}
 	return out, nil
+}
+
+func positionMargin(row positionRisk) (shared.Decimal, error) {
+	margin, err := decimalOrZero(row.PositionInitialMargin)
+	if err != nil || !margin.IsZero() {
+		return margin, err
+	}
+	return decimalOrZero(row.InitialMargin)
+}
+
+// positionLeverage 由名义价值和保证金反推杠杆，只用于展示和估算；取不到时按 1 倍。
+func positionLeverage(rawNotional string, margin shared.Decimal) (shared.Decimal, error) {
+	notional, err := decimalOrZero(rawNotional)
+	if err != nil {
+		return shared.Decimal{}, err
+	}
+	one := shared.MustDecimal("1")
+	if notional.IsZero() || margin.Cmp(shared.Zero()) <= 0 {
+		return one, nil
+	}
+	leverage := notional.Abs().Div(margin).Add(shared.MustDecimal("0.5")).RoundDown(0)
+	if leverage.Cmp(one) < 0 {
+		return one, nil
+	}
+	return leverage, nil
 }
 
 type orderPayload struct {
@@ -505,6 +638,8 @@ type orderPayload struct {
 	Status             string      `json:"status"`
 	Time               int64       `json:"time"`
 	UpdateTime         int64       `json:"updateTime"`
+	// TransactTime 是现货下单回执里唯一的时间字段（回执没有 time、updateTime）。
+	TransactTime int64 `json:"transactTime"`
 }
 
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
@@ -599,11 +734,12 @@ func (a *Adapter) PlaceOrder(
 			values.Set("reduceOnly", "true")
 		}
 	}
-	raw, err := a.request(
+	raw, err := a.signedRequest(
 		ctx,
 		http.MethodPost,
 		a.path("/api/v3/order", "/fapi/v1/order"),
 		values,
+		true,
 	)
 	if err != nil {
 		return exchange.Order{}, classifyAPIError(err, raw)
@@ -687,9 +823,7 @@ func (a *Adapter) ListRecentFills(
 		// an idle account does not return the same Fill on every sync.
 		values.Set("fromId", strconv.FormatUint(tradeID+1, 10))
 	} else {
-		// A configured symbol is an explicit request to recover every Fill the
-		// Exchange still exposes, including terminal manual orders from before
-		// MooX first started.
+		// 第一次拉这个标的时从头取历史。账户创建前的成交由 accountsync 过滤，只推进游标。
 		values.Set("fromId", "0")
 	}
 	out := make([]exchange.Fill, 0)
@@ -715,6 +849,14 @@ func (a *Adapter) ListRecentFills(
 				return nil, cursor, err
 			}
 			orderID := row.OrderID.String()
+			// 账户创建前的成交不入账，不查订单号，历史长的账户首次拉取才不会撞限频。
+			if fill.TradedAt.Before(a.config.CreatedAt) {
+				out = append(out, fill)
+				if row.ID.String() != "" {
+					next = row.ID.String()
+				}
+				continue
+			}
 			clientOrderID, found := clientOrderIDs[orderID]
 			if !found {
 				clientOrderID, err = a.clientOrderIDByExchangeOrderID(ctx, symbolValue, orderID)
@@ -878,9 +1020,18 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		AveragePrice:    average,
 		ReduceOnly:      row.ReduceOnly,
 		Status:          mapOrderStatus(row.Status, filled),
-		CreatedAt:       millis(row.Time),
-		UpdatedAt:       millis(row.UpdateTime),
+		CreatedAt:       millis(firstPositive(row.Time, row.TransactTime)),
+		UpdatedAt:       millis(firstPositive(row.UpdateTime, row.TransactTime)),
 	}, nil
+}
+
+func firstPositive(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
@@ -973,6 +1124,10 @@ func classifyAPIError(err error, raw []byte) error {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	code := apiCode(raw)
+	if code == "" {
+		// 本地拦截或传输错误没有响应体，保留 httpclient 的分类。
+		return typed
+	}
 	typed.Code = code
 	switch code {
 	case "-2010", "-2019":
@@ -983,6 +1138,13 @@ func classifyAPIError(err error, raw []byte) error {
 		typed.Kind = exchange.ErrorAuthentication
 	case "-1003":
 		typed.Kind = exchange.ErrorRateLimited
+	case "-1015":
+		typed.Kind = exchange.ErrorOrderRateLimited
+	case "-1008":
+		typed.Kind = exchange.ErrorThrottled
+	case "-1021":
+		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
+		typed.Kind = exchange.ErrorTransportUnknown
 	}
 	return typed
 }

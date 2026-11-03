@@ -89,7 +89,7 @@ func IsMonitoredMetric(name string) bool {
 			return true
 		}
 	}
-	if strings.HasPrefix(name, "moox_trade_balance_sync_") || strings.HasPrefix(name, "moox_doctor_") {
+	if strings.HasPrefix(name, "moox_trade_balance_sync_") || name == "moox_trade_attention_active" || strings.HasPrefix(name, "moox_doctor_") {
 		return true
 	}
 	if strings.HasPrefix(name, "moox_storage_view_") && (strings.HasSuffix(name, "_errors_total") || strings.HasSuffix(name, "_watermark_timestamp_seconds")) {

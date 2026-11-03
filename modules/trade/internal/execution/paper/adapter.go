@@ -22,18 +22,26 @@ type FactStore interface {
 	GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error)
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
-	ListOrdersForAccount(context.Context, string, string, int64) ([]store.OrderRecord, error)
+	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
+	GetOrderByExchangeID(context.Context, string, string, string, string) (store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
 	ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
+
+// PublicMarketData 是模拟盘用的公共行情。
+type PublicMarketData interface {
+	execution.MarketDataSource
+	execution.ReferencePriceSource
+}
+
 type Adapter struct {
 	Account store.TradingAccountRecord
 	Store   FactStore
 	// MarketData is the unauthenticated production public adapter. Paper never
 	// invokes its private or order methods; it is only used for instruments and
 	// reference quotes.
-	MarketData  execution.MarketDataSource
+	MarketData  PublicMarketData
 	Wake        func()
 	Now         func() time.Time
 	mu          sync.RWMutex
@@ -63,15 +71,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		return exchange.AccountSnapshot{}, storageError(err)
 	}
 	balances, locked := projection.Totals, projection.Reserved
-	instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
-	if err != nil {
-		return exchange.AccountSnapshot{}, storageError(err)
-	}
 	settlement := balances[account.SettlementAsset]
 	equity := settlement
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
 	if account.MarketType == string(exchange.MarketTypeSpot) {
+		// 只有现货估值要按基础资产找交易对；合约按持仓估值，不读全部标的（每笔撮合要算两次快照）。
+		instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
+		if err != nil {
+			return exchange.AccountSnapshot{}, storageError(err)
+		}
 		byBase := make(map[string]store.InstrumentRecord, len(instruments))
 		for _, instrument := range instruments {
 			if instrument.QuoteAsset == account.SettlementAsset && instrument.BaseAsset != "" {
@@ -134,25 +143,19 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}, nil
 }
 
+// valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。
 func (a *Adapter) valuationQuote(ctx context.Context, symbol string) (shared.Decimal, error) {
-	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	quote, err := a.GetReferencePrice(ctx, symbol)
 	if err != nil {
 		return shared.Zero(), err
 	}
-	if !QuoteFresh(quote, a.now(), 10*time.Second) {
+	if !QuoteFresh(execution.MarketQuote{SourceTime: quote.UpdatedAt}, a.now(), 10*time.Second) {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", symbol)
 	}
-	price := quote.Last
-	if price.IsZero() {
-		price = quote.Ask
-	}
-	if price.IsZero() {
-		price = quote.Bid
-	}
-	if price.Cmp(shared.Zero()) <= 0 {
+	if quote.Price.Cmp(shared.Zero()) <= 0 {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is empty for %s", symbol)
 	}
-	return price, nil
+	return quote.Price, nil
 }
 
 func paperBalances(total, locked map[string]shared.Decimal) []exchange.AssetBalance {
@@ -243,22 +246,16 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 	return a.MarketData.GetQuote(ctx, shared.ExchangeSymbol(native))
 }
 
+// GetReferencePrice 用公共行情的参考价：目标换算要一次取几百个标的，不能逐个请求盘口。
 func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
-	quote, err := a.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+	if a.MarketData == nil {
+		return exchange.ReferencePrice{}, errors.New("paper: public market data is not configured")
+	}
+	native, err := a.nativeSymbol(ctx, symbol)
 	if err != nil {
 		return exchange.ReferencePrice{}, err
 	}
-	price := quote.Last
-	if price.IsZero() {
-		price = quote.Ask
-	}
-	if price.IsZero() {
-		price = quote.Bid
-	}
-	if price.Cmp(shared.Zero()) <= 0 {
-		return exchange.ReferencePrice{}, fmt.Errorf("paper: public reference quote is empty")
-	}
-	return exchange.ReferencePrice{Price: price, UpdatedAt: quote.SourceTime}, nil
+	return a.MarketData.GetReferencePrice(ctx, native)
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
@@ -300,7 +297,7 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	if a.Store == nil {
 		return nil, nil
 	}
-	rows, err := a.Store.ListOrdersForAccount(ctx, a.Account.SpaceID, a.Account.TradingAccountID, 0)
+	rows, err := a.Store.ListActiveOrdersForAccount(ctx, a.Account.SpaceID, a.Account.TradingAccountID)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -358,6 +355,20 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 	}
 	return result, nil
 }
+func (a *Adapter) GetOrderByExchangeID(ctx context.Context, symbol, exchangeOrderID string) (exchange.Order, error) {
+	if a.Store == nil {
+		return exchange.Order{}, nil
+	}
+	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, symbol, exchangeOrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}
+		}
+		return exchange.Order{}, storageError(err)
+	}
+	return orderFromRecord(row), nil
+}
+
 func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exchange.Order, error) {
 	if a.Wake != nil {
 		a.Wake()

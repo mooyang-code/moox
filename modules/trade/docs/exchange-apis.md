@@ -11,7 +11,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 | SPOT instrument | `/api/v3/exchangeInfo` | `/api/v5/public/instruments?instType=SPOT` |
 | USDT 线性 SWAP instrument | `/fapi/v1/exchangeInfo` | `/api/v5/public/instruments?instType=SWAP` |
 | 目标换算参考价 | `/api/v3/ticker/price` 或 `/fapi/v1/ticker/price` 的 `price` | `/api/v5/market/ticker` 的 `last` |
-| 撮合报价 | `/api/v3/ticker/24hr` 或 `/fapi/v1/ticker/24hr` | `/api/v5/market/ticker` |
+| 撮合报价 | `ticker/price` 加 `ticker/bookTicker`（现货 `/api/v3`，合约 `/fapi/v1`），时间取本地收到时间 | `/api/v5/market/ticker`，时间取本地收到时间 |
 | MARKET / LIMIT 下单 | `POST /api/v3/order` 或 `/fapi/v1/order` | `POST /api/v5/trade/order` |
 | 按 client order ID 查询 | origClientOrderId | clOrdId |
 | 撤单 / 查询未完成订单 | order/openOrders | cancel-order/orders-pending |
@@ -25,6 +25,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 - 公共 quantity 是基础资产数量。
 - Binance 当前的 SPOT 与 USDT 线性 SWAP 直接以基础资产数量传递 `quantity`，按 instrument 的步长、精度与最小量校验；不做 OKX 式的张数换算。
 - OKX SWAP 适配器用 `ctVal` 和 `ctValCcy` 在基础数量与 `sz` 之间双向转换。
+- Binance 合约持仓用 `/fapi/v3/positionRisk`，v3 不返回 `marginType`、`leverage`，全仓判断看 `isolatedMargin`，杠杆取本地配置。
 - 接口与持久化边界的时间戳统一为毫秒；适配器内部使用 `time.Time`。
 - Exchange order ID、trade ID 和 client order ID 原样保存，用于恢复与幂等。
 - live SWAP 的账户、保证金、强平价和 PnL 直接采用 Exchange 返回值；paper 使用本地
@@ -32,8 +33,11 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 
 ## 错误分类
 
-明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 429 和 HTTP 5xx 表示
-提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。只有
+明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 408 和 HTTP 5xx 表示
+提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。
+限流类错误确定未受理：HTTP 429/-1003、418、WAF 403 是 IP 级（同一域名暂停），-1015 是账户下单限流，-1008 是系统限流，OKX 50011/50040/50061 是下单限流（HTTP 200 里返回，由适配器识别）。这类下单回到 `PENDING` 并清空提交时间，不计入拒单。
+
+权重（币安）：永续每分钟 2400、现货 6000，按 IP 和域名计；永续下单 0 权重、现货 1。`httpclient` 记录 `X-MBX-USED-WEIGHT-1M`，同一分钟取最大值（部分接口如 `bookTicker` 的读数不准），新一分钟没有响应时读数作废。OKX 下单带 `expTime`（5 秒）。只有
 按 client order ID 查询返回不存在、最近成交里也找不到该 ID，并且距首次提交已达到 `UnknownLookupWindow`（未设置时 30 秒），订单才回到 `PENDING`，后续用同一个 client order ID 重试；等待窗口内保持未知，不立即重发。
 
 ## 环境

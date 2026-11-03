@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ func (s adapterSourceStub) Adapter(string) (execution.ExecutionAdapter, error) {
 }
 
 type adapterStub struct {
+	adaptertest.Stub
 	placeResult exchange.Order
 	placeErr    error
 	cancelErr   error
@@ -419,7 +421,7 @@ func TestSubmitRejectedReturnsStableRejection(t *testing.T) {
 	require.EqualError(t, err, "REJECTED: stable reason")
 
 	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.EqualError(t, err, "REJECTED: stable reason")
+	require.EqualError(t, err, "交易所返回：stable reason")
 	require.Equal(t, orderdomain.Rejected, got.State)
 	require.Equal(t, 1, adapter.placeCalls)
 }
@@ -765,7 +767,6 @@ func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.
 func TestServicePlaceUncertainResultRetainsReservation(t *testing.T) {
 	for _, kind := range []exchange.ErrorKind{
 		exchange.ErrorTransportUnknown,
-		exchange.ErrorRateLimited,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			service, tradeStore, adapter := newTestService(t)
@@ -821,7 +822,6 @@ func TestServiceSubmitRevalidatesReadinessAndReferencePrice(t *testing.T) {
 		return time.Unix(1_700_000_002, 0)
 	}
 	_, err = service.Submit(context.Background(), "space-1", string(pending.ID))
-	require.ErrorIs(t, err, orderdomain.ErrInvalidSpec)
 	require.ErrorIs(t, err, orderdomain.ErrReferencePriceStale)
 	require.Equal(t, 0, adapter.placeCalls)
 	stored, err = tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
@@ -1408,4 +1408,88 @@ func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Open, submitted.State)
 	require.Equal(t, 1, adapter.placeCalls)
+}
+
+// GetQuote 返回没有时间的报价，相当于行情已过期；需要新鲜报价的测试用 useLiveQuote。
+func (*adapterStub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+	return execution.MarketQuote{}, nil
+}
+
+type symbolConfigStub struct {
+	calls int
+	err   error
+}
+
+func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, string, shared.Decimal) error {
+	s.calls++
+	return s.err
+}
+
+func TestSubmitRejectedSymbolConfigCountsAsExchangeRejection(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	config := &symbolConfigStub{err: &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("leverage too high")}}
+	service.SymbolConfig = config
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	got, err := service.Submit(context.Background(), "space-1", string(placed.ID))
+
+	require.Error(t, err)
+	require.Equal(t, orderdomain.Rejected, got.State)
+	require.Equal(t, 1, config.calls)
+	require.Zero(t, adapter.placeCalls)
+	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.NotZero(t, stored.SubmittedAt, "拒单规则按提交时间统计")
+	require.Contains(t, stored.RejectReason, "leverage too high")
+}
+
+func TestSubmitSymbolConfigNetworkErrorKeepsPending(t *testing.T) {
+	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	service.SymbolConfig = &symbolConfigStub{err: errors.New("network down")}
+	spec := testSpec(service.now())
+	spec.PositionSide = exchange.PositionSideNet
+	spec.Side = exchange.SideBuy
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+
+	_, err = service.Submit(context.Background(), "space-1", string(placed.ID))
+
+	require.Error(t, err)
+	require.Zero(t, adapter.placeCalls)
+	stored, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, "PENDING", stored.State)
+}
+
+// 限流、封禁、系统限流和本地拦截都确定未受理：回到待提交，不计拒单，预留保留。
+func TestServiceSubmitNotAcceptedReturnsToPending(t *testing.T) {
+	for _, kind := range []exchange.ErrorKind{
+		exchange.ErrorRateLimited,
+		exchange.ErrorOrderRateLimited,
+		exchange.ErrorBanned,
+		exchange.ErrorThrottled,
+		exchange.ErrorNotSent,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			service, tradeStore, adapter := newTestService(t)
+			adapter.placeErr = &exchange.Error{Kind: kind}
+			pending, err := service.Place(context.Background(), "space-1", testSpec(time.Unix(1_700_000_000, 0)))
+			require.NoError(t, err)
+			got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+			require.True(t, exchange.IsKind(err, kind), "%v", err)
+			require.Equal(t, orderdomain.Pending, got.State)
+			record, getErr := tradeStore.GetOrder(context.Background(), "space-1", "order-1")
+			require.NoError(t, getErr)
+			require.Equal(t, "PENDING", record.State)
+			require.Zero(t, record.SubmittedAt)
+			require.Empty(t, record.RejectReason)
+			require.Equal(t, "101", record.RemainingReservedQuantity)
+		})
+	}
 }

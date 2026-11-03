@@ -85,7 +85,7 @@ func TestPaperAccountIsolationWithProductionDeciderE2E(t *testing.T) {
 			startSession("b")
 			require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
 				for _, id := range []string{"a", "b"} {
-					if err := tx.CreateOrder(store.OrderRecord{SpaceID: testSpace, TradingAccountID: id, OrderID: id, ClientOrderID: id, ExchangeOrderID: id, ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID, OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "0.01", ReferencePrice: "50000", ReferencePriceAt: testNow.UnixMilli(), OwnerType: "EXTERNAL", OwnerID: id, State: "OPEN", FirstMatchPending: true, ReservedAsset: "USDT", ReservedQuantity: "501", RemainingReservedQuantity: "501"}); err != nil {
+					if err := tx.CreateOrder(store.OrderRecord{SpaceID: testSpace, TradingAccountID: id, OrderID: id, ClientOrderID: id, ExchangeOrderID: id, ExchangeSymbol: testSymbol, InstrumentID: testInstrumentID(exchange.MarketTypeSpot), OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "0.01", ReferencePrice: "50000", ReferencePriceAt: testNow.UnixMilli(), OwnerType: "EXTERNAL", OwnerID: id, State: "OPEN", FirstMatchPending: true, ReservedAsset: "USDT", ReservedQuantity: "501", RemainingReservedQuantity: "501"}); err != nil {
 						return err
 					}
 				}

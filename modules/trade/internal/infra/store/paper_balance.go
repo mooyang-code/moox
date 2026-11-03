@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"gorm.io/gorm"
 )
 
 type PaperBalanceSnapshot struct {
@@ -47,7 +50,23 @@ func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSn
 	var marker struct {
 		Count int64 `gorm:"column:c_applied_fill_count"`
 	}
-	if err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error; err != nil {
+	err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// reset data 清掉了余额但保留账户，按配置的初始资金重新开始。
+		var initial string
+		if rawErr := tx.db.Raw(`SELECT c_initial_balance FROM t_paper_account_configs WHERE c_space_id = ? AND c_trading_account_id = ?`,
+			spaceID, accountID).Scan(&initial).Error; rawErr != nil {
+			return result, rawErr
+		}
+		if initial == "" {
+			return result, err
+		}
+		if err = tx.initializePaperBalance(spaceID, accountID, initial); err != nil {
+			return result, err
+		}
+		return tx.GetPaperBalanceSnapshot(spaceID, accountID)
+	}
+	if err != nil {
 		return result, err
 	}
 	result.AppliedFillCount = marker.Count
@@ -116,9 +135,11 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 		return fmt.Errorf("%w: paper fill realized PnL", ErrInvalidRecord)
 	}
 	deltas := map[string]shared.Decimal{}
-	switch record.MarketType {
-	case "SPOT":
-		instrument, err := getInstrument(tx.db, identity.Exchange, identity.Environment, identity.MarketType, record.ExchangeSymbol)
+	switch rule := exchange.RuleFor(record.MarketType); {
+	case !exchange.MarketType(record.MarketType).Valid():
+		return fmt.Errorf("%w: paper fill market", ErrInvalidRecord)
+	case rule.PositionFromBalance:
+		instrument, err := tx.GetInstrumentInEnvironment(identity.Exchange, identity.Environment, identity.MarketType, record.ExchangeSymbol)
 		if err != nil {
 			return err
 		}
@@ -135,13 +156,11 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 		default:
 			return fmt.Errorf("%w: paper fill side", ErrInvalidRecord)
 		}
-	case "SWAP":
+	default:
 		if record.SettlementAsset == "" {
 			return fmt.Errorf("%w: paper settlement asset", ErrInvalidRecord)
 		}
 		deltas[record.SettlementAsset] = pnl
-	default:
-		return fmt.Errorf("%w: paper fill market", ErrInvalidRecord)
 	}
 	if !fee.IsZero() {
 		asset := record.FeeAsset
@@ -185,7 +204,7 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 }
 
 func (tx *Tx) normalizePaperFillSettlement(record *FillRecord) error {
-	if record.MarketType != "SWAP" {
+	if exchange.RuleFor(record.MarketType).PositionFromBalance {
 		return nil
 	}
 	var settlement string

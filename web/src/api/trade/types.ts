@@ -60,7 +60,6 @@ export interface TradingAccount {
   last_error: string;
   created_at: string;
   updated_at: string;
-  sync_symbols: string[];
   live?: LiveConfig;
   paper?: PaperConfig;
 }
@@ -182,6 +181,15 @@ export interface Position {
 export interface InstrumentTarget {
   instrument_id: string;
   quantity: string;
+  hold?: boolean;
+}
+
+export interface TradableInstrument {
+  instrument_id: string;
+  quantity_step: string;
+  min_quantity: string;
+  min_notional: string;
+  price_tick: string;
 }
 
 export interface BlockedTarget extends InstrumentTarget {
@@ -244,7 +252,6 @@ export interface CreateTradingAccountReq {
   market_type: MarketType;
   settlement_asset: string;
   margin_mode?: string;
-  sync_symbols?: string[];
   live: LiveConfig;
 }
 
@@ -255,7 +262,6 @@ export interface UpdateTradingAccountReq {
   settlement_asset?: string;
   margin_mode?: string;
   status?: string;
-  sync_symbols?: string[];
 }
 
 export interface ListTradingAccountsReq {
@@ -313,6 +319,7 @@ export interface ListOrdersReq {
 }
 
 export interface ListFillsReq {
+  logical_account_id?: string;
   trading_account_id?: string;
   order_id?: string;
   instrument_id?: string;

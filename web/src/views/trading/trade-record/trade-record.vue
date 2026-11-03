@@ -15,6 +15,17 @@
               {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
             </a-option>
           </a-select>
+          <a-select
+            v-model="logicalAccountId"
+            allow-clear
+            placeholder="按组合账户查看"
+            class="account-select"
+            @change="logicalChanged"
+          >
+            <a-option v-for="logical in logicalAccounts" :key="logical.logical_account_id" :value="logical.logical_account_id">{{
+              logical.name
+            }}</a-option>
+          </a-select>
           <a-tag v-if="selectedAccount" :color="selectedAccount.ready ? 'green' : 'orange'">
             {{ selectedAccount.ready ? "就绪" : "未就绪" }}
           </a-tag>
@@ -23,12 +34,44 @@
             <a-option v-for="item in orderStateOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
           </a-select>
           <a-range-picker v-model="orderTimeRange" value-format="timestamp" class="time-range" @change="searchOrders" />
-          <a-button type="primary" :disabled="!tradingAccountId" @click="searchOrders">
+          <a-button type="primary" :disabled="!tradingAccountId && !logicalAccountId" @click="searchOrders">
             <template #icon><icon-search /></template>
             查询
           </a-button>
         </a-space>
-        <div class="orders-table-region">
+        <a-radio-group v-model="recordTab" type="button" size="small" class="record-tabs" @change="searchOrders">
+          <a-radio value="orders">订单</a-radio>
+          <a-radio value="fills">成交</a-radio>
+        </a-radio-group>
+        <div v-if="recordTab === 'fills'" class="orders-table-region">
+          <a-table
+            row-key="fill_id"
+            size="small"
+            :bordered="{ cell: true }"
+            :data="fills"
+            :loading="loading"
+            :pagination="orderPagination"
+            :scroll="{ x: 'max-content' }"
+            @page-change="changeOrderPage"
+          >
+            <template #columns>
+              <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column title="执行账户" data-index="trading_account_id" />
+              <a-table-column title="方向">
+                <template #cell="{ record }">{{ orderSideLabels[record.side] }}</template>
+              </a-table-column>
+              <a-table-column title="价格" data-index="price" />
+              <a-table-column title="数量" data-index="quantity" />
+              <a-table-column title="手续费">
+                <template #cell="{ record }">{{ record.fee }} {{ record.fee_asset }}</template>
+              </a-table-column>
+              <a-table-column title="成交时间">
+                <template #cell="{ record }">{{ formatTimestamp(record.traded_at) }}</template>
+              </a-table-column>
+            </template>
+          </a-table>
+        </div>
+        <div v-else class="orders-table-region">
           <a-empty v-if="!loading && !orders.length" class="orders-empty-state" description="暂无订单" />
           <a-table
             v-else
@@ -45,6 +88,9 @@
               <a-table-column title="交易标的" data-index="instrument_id" />
               <a-table-column title="市场">
                 <template #cell="{ record }">{{ localMarketTypeLabels[record.market_type] }}</template>
+              </a-table-column>
+              <a-table-column title="来源">
+                <template #cell="{ record }">{{ orderOwnerLabels[record.owner_type] || "-" }}</template>
               </a-table-column>
               <a-table-column title="方向">
                 <template #cell="{ record }">
@@ -74,9 +120,17 @@
                 <template #cell="{ record }">
                   <a-space>
                     <a-button size="mini" type="text" @click="openOrderDetail(record)">详情</a-button>
-                    <a-button v-if="canCancel(record.state)" size="mini" type="text" status="danger" @click="cancel(record)"
+                    <a-button
+                      v-if="canCancel(record.state) && record.logical_account_id"
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      @click="openCancel(record)"
                       >撤单</a-button
                     >
+                    <a-tooltip v-else-if="canCancel(record.state)" content="外部订单请到交易所处理">
+                      <span class="muted">外部订单</span>
+                    </a-tooltip>
                   </a-space>
                 </template>
               </a-table-column>
@@ -84,6 +138,20 @@
           </a-table>
         </div>
       </section>
+
+      <a-modal
+        v-model:visible="cancelVisible"
+        width="min(480px, calc(100vw - 24px))"
+        title="撤单确认"
+        ok-text="确认撤单"
+        :on-before-ok="confirmCancel"
+      >
+        <a-alert v-if="cancelPausesAccount" type="warning" show-icon class="cancel-alert">撤单会暂停整个组合账户。</a-alert>
+        <a-alert v-if="cancelError" type="error" show-icon class="cancel-alert">{{ cancelError }}</a-alert>
+        <a-form :model="cancelForm" auto-label-width>
+          <a-form-item label="原因" required><a-input v-model="cancelForm.reason" /></a-form-item>
+        </a-form>
+      </a-modal>
 
       <a-drawer
         v-model:visible="detailVisible"
@@ -110,6 +178,11 @@
               formatTimestamp(selectedOrder.submitted_at || selectedOrder.created_at)
             }}</a-descriptions-item>
             <a-descriptions-item label="完成时间">{{ formatTimestamp(selectedOrder.finished_at) }}</a-descriptions-item>
+            <a-descriptions-item label="来源">{{ orderOwnerLabels[selectedOrder.owner_type] || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="参考价">{{ selectedOrder.reference_price || "-" }}</a-descriptions-item>
+            <a-descriptions-item v-if="selectedOrder.reject_reason" label="失败原因" :span="2">{{
+              selectedOrder.reject_reason
+            }}</a-descriptions-item>
           </a-descriptions>
 
           <div class="detail-section">
@@ -160,7 +233,10 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   canCancelOrderState,
   cancelOrder,
+  getLogicalAccount,
+  orderOwnerLabels,
   formatTimestamp,
+  listLogicalAccounts,
   listTradingAccounts,
   listFills,
   listOrders,
@@ -168,7 +244,7 @@ import {
   orderSideLabels,
   orderStateLabels
 } from "@/api/trade";
-import type { TradingAccount, Fill, Order } from "@/api/trade/types";
+import type { TradingAccount, Fill, LogicalAccount, Order } from "@/api/trade/types";
 import { tradeRecordViewState } from "./trade-record-state";
 import { rangeToTime } from "./trade-record-utils";
 
@@ -186,6 +262,10 @@ const filterSymbol = toRef(tradeRecordViewState, "filterSymbol");
 const orderState = toRef(tradeRecordViewState, "orderState");
 const orderTimeRange = toRef(tradeRecordViewState, "orderTimeRange");
 const orders = ref<Order[]>([]);
+const fills = ref<Fill[]>([]);
+const recordTab = ref<"orders" | "fills">("orders");
+const logicalAccounts = ref<LogicalAccount[]>([]);
+const logicalAccountId = ref("");
 const loading = ref(false);
 const orderPagination = reactive({ current: tradeRecordViewState.orderPage, pageSize: 20, total: 0 });
 const accountRequests = createLatestRequestGuard();
@@ -226,6 +306,11 @@ async function loadAccounts() {
   if (!request.isLatest()) return;
   accounts.value = response.accounts || [];
   accountsLoaded.value = true;
+  void listLogicalAccounts({ page: 1, size: 500 })
+    .then(rsp => {
+      logicalAccounts.value = rsp.logical_accounts || [];
+    })
+    .catch(() => undefined);
   const requested = typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "";
   const hasRequested = accounts.value.some(account => account.trading_account_id === requested);
   tradingAccountId.value = hasRequested ? requested : requested ? "" : accounts.value[0]?.trading_account_id || "";
@@ -277,16 +362,42 @@ function resetPagination() {
   tradeRecordViewState.orderPage = 1;
 }
 
+async function logicalChanged() {
+  closeOrderDetail();
+  resetPagination();
+  await loadOrders();
+}
+
 async function loadOrders() {
-  if (!tradingAccountId.value) {
+  if (!tradingAccountId.value && !logicalAccountId.value) {
     loading.value = false;
     orders.value = [];
     return;
   }
   const request = orderRequests.begin();
-  const accountId = tradingAccountId.value;
+  // 选了组合账户时查全部成员的记录。
+  const scope = logicalAccountId.value
+    ? { logical_account_id: logicalAccountId.value }
+    : { trading_account_id: tradingAccountId.value };
+  if (recordTab.value === "fills") {
+    loading.value = true;
+    try {
+      const response = await listFills({
+        ...scope,
+        instrument_id: filterSymbol.value.trim().toUpperCase(),
+        ...rangeToTime(orderTimeRange.value),
+        page: { page: orderPagination.current, size: orderPagination.pageSize }
+      });
+      if (!request.isLatest()) return;
+      fills.value = response.fills || [];
+      orderPagination.total = response.page_result?.total || 0;
+    } finally {
+      if (request.isLatest()) loading.value = false;
+    }
+    return;
+  }
   const query = {
-    trading_account_id: accountId,
+    ...scope,
     instrument_id: filterSymbol.value.trim().toUpperCase(),
     state: orderState.value || undefined,
     ...rangeToTime(orderTimeRange.value),
@@ -295,7 +406,7 @@ async function loadOrders() {
   loading.value = true;
   try {
     const response = await listOrders(query);
-    if (!request.isLatest() || tradingAccountId.value !== accountId) return;
+    if (!request.isLatest()) return;
     orders.value = response.orders || [];
     orderPagination.total = response.page_result?.total || 0;
   } finally {
@@ -351,14 +462,47 @@ function changeOrderPage(page: number) {
 
 const canCancel = canCancelOrderState;
 
-async function cancel(order: Order) {
-  if (order.trading_account_id !== tradingAccountId.value) {
+const cancelVisible = ref(false);
+let cancelAttemptReason = "";
+const cancelError = ref("");
+const cancelPausesAccount = ref(false);
+const cancelForm = reactive({ order_id: "", action_id: "", reason: "" });
+
+function openCancel(order: Order) {
+  if (!logicalAccountId.value && order.trading_account_id !== tradingAccountId.value) {
     Message.warning("账户已切换，请重新查询后重试");
     return;
   }
-  await cancelOrder(createClientId(), order.order_id, "控制台手动撤单");
+  // 操作编号在弹窗打开时生成，失败重试沿用同一个编号；原因变了就是新操作。
+  Object.assign(cancelForm, { order_id: order.order_id, action_id: createClientId(), reason: "控制台手动撤单" });
+  cancelAttemptReason = "";
+  cancelError.value = "";
+  cancelPausesAccount.value = order.owner_type === "TARGET";
+  cancelVisible.value = true;
+  getLogicalAccount(order.logical_account_id)
+    .then(response => {
+      if (cancelForm.order_id === order.order_id) cancelPausesAccount.value = response.logical_account.control_mode === 1;
+    })
+    .catch(() => undefined);
+}
+
+async function confirmCancel() {
+  if (!cancelForm.reason.trim()) {
+    cancelError.value = "请填写撤单原因";
+    return false;
+  }
+  cancelError.value = "";
+  if (cancelAttemptReason && cancelAttemptReason !== cancelForm.reason.trim()) cancelForm.action_id = createClientId();
+  cancelAttemptReason = cancelForm.reason.trim();
+  try {
+    await cancelOrder(cancelForm.action_id, cancelForm.order_id, cancelForm.reason.trim());
+  } catch (error) {
+    cancelError.value = error instanceof Error ? error.message : "撤单失败，请重试";
+    return false;
+  }
   Message.success("撤单请求已提交");
-  await loadOrders();
+  void loadOrders();
+  return true;
 }
 
 watch(
@@ -482,6 +626,12 @@ onMounted(async () => {
 }
 .orders-table-region :deep(.arco-table-th) {
   white-space: nowrap;
+}
+.record-tabs {
+  margin-bottom: 8px;
+}
+.cancel-alert {
+  margin-bottom: 12px;
 }
 .detail-section {
   margin-top: var(--moox-space-6);

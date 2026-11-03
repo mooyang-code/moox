@@ -44,7 +44,7 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	seedLogicalAccount(t, f.store)
 	f.orders.Now = func() time.Time { return now }
 	f.orders.Validator.Now = func() time.Time { return time.Now().UTC() }
-	f.sync.Now = func() time.Time { return now.Add(time.Minute) }
+	f.sync.Now = func() time.Time { return testNow.Add(2 * time.Hour) }
 
 	handled := eventconsumer.HandleTarget(
 		context.Background(),
@@ -64,6 +64,8 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 		},
 		Now:              func() time.Time { return now },
 		MaxChildNotional: shared.MustDecimal("1000000"),
+		// 这里只卖 0.01（约 0.1%），低于默认最小调仓比例。
+		MinRebalanceRatio: shared.MustDecimal("0.0001"),
 	}
 	first, err := executor.Converge(
 		context.Background(),
@@ -159,9 +161,9 @@ func (m *binanceHTTPMock) handle(
 	t.Helper()
 	switch request.URL.Path {
 	case "/api/v3/ticker/price":
-		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
-		_, _ = io.WriteString(writer, `{"symbol":"BTCUSDT","price":"50000"}`)
-	case "/api/v3/ticker/24hr":
+		require.Empty(t, request.URL.Query().Get("symbol"), "报价走全市场接口")
+		_, _ = io.WriteString(writer, `[{"symbol":"BTCUSDT","price":"50000"}]`)
+	case "/api/v3/ticker/bookTicker":
 		require.Equal(t, "BTCUSDT", request.URL.Query().Get("symbol"))
 		_, _ = fmt.Fprintf(writer, `{"symbol":"BTCUSDT","bidPrice":"49999","askPrice":"50001","lastPrice":"50000","closeTime":%d}`, m.now.UnixMilli())
 	case "/api/v3/order":
@@ -194,7 +196,7 @@ func (m *binanceHTTPMock) handleOrder(
 		m.placed = request.URL.Query()
 		m.clientOrderID = m.placed.Get("newClientOrderId")
 		m.apiKey = request.Header.Get("X-MBX-APIKEY")
-		m.writeFilledOrder(writer)
+		m.writePlacedSpotResult(writer)
 		return
 	}
 	require.Equal(t, http.MethodGet, request.Method)
@@ -214,6 +216,17 @@ func (m *binanceHTTPMock) handleTrades(
 	_, _ = fmt.Fprintf(
 		writer,
 		`[{"id":1,"orderId":42,"symbol":"BTCUSDT","price":"50000","qty":"0.01","commission":"0.1","commissionAsset":"USDT","time":%d,"isBuyer":false,"isMaker":false}]`,
+		m.now.Add(time.Second).UnixMilli(),
+	)
+}
+
+// writePlacedSpotResult 是真实的现货下单回执（newOrderRespType=RESULT）：只有 transactTime，没有 time、updateTime。
+func (m *binanceHTTPMock) writePlacedSpotResult(writer http.ResponseWriter) {
+	_, _ = fmt.Fprintf(
+		writer,
+		`{"symbol":"BTCUSDT","orderId":42,"orderListId":-1,"clientOrderId":%q,"transactTime":%d,"price":"0.00000000","origQty":"0.01","executedQty":"0.01","cummulativeQuoteQty":"500","status":"FILLED","timeInForce":"GTC","type":"MARKET","side":"SELL","workingTime":%d,"selfTradePreventionMode":"NONE"}`,
+		m.clientOrderID,
+		m.now.Add(time.Second).UnixMilli(),
 		m.now.Add(time.Second).UnixMilli(),
 	)
 }

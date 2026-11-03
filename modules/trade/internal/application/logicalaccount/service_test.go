@@ -402,7 +402,7 @@ func TestModernReadinessRejectsDifferentSession(t *testing.T) {
 	readiness, err := service.Readiness(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
-	require.Contains(t, readiness.Reasons, "target session does not own logical account")
+	require.Contains(t, readiness.Reasons, "目标所属会话不再持有组合账户")
 }
 
 func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
@@ -580,4 +580,34 @@ func acceptSessionTarget(t *testing.T, service *Service, tradeStore *store.Store
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
 	})
 	require.NoError(t, err)
+}
+
+// 有持仓的启用成员也能改优先级：只改优先级不做敞口检查。
+func TestAddMemberChangesPriorityOfExposedMember(t *testing.T) {
+	service, tradeStore := logicalAccountServiceFixture(t)
+	ctx := context.Background()
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-b", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+			SignedQuantity: "1", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
+		})
+	}))
+	require.NoError(t, service.AddMember(ctx, AddMemberCommand{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b",
+		Enabled: true, Priority: 2, AdoptExistingExposure: true,
+	}))
+
+	require.NoError(t, service.AddMember(ctx, AddMemberCommand{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true, Priority: 9,
+	}))
+
+	members, err := tradeStore.ListLogicalAccountMembers(ctx, "space-1", "logical-1", true)
+	require.NoError(t, err)
+	found := false
+	for _, member := range members {
+		if member.TradingAccountID == "account-b" {
+			found = member.Priority == 9
+		}
+	}
+	require.True(t, found)
 }

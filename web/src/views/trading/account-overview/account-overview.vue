@@ -117,7 +117,7 @@
         width="min(520px, calc(100vw - 24px))"
         :title="form.execution_mode === 1 ? '创建模拟账户' : '创建真实账户'"
         :ok-text="form.execution_mode === 2 && form.environment === 2 ? '创建生产账户' : '创建账户'"
-        @ok="create"
+        :on-before-ok="create"
       >
         <a-form :model="form" auto-label-width>
           <a-form-item field="name" label="账户名称" required>
@@ -151,9 +151,6 @@
             <a-form-item field="credential_secret_id" label="真实账户密钥标识" required>
               <a-input v-model="form.credential_secret_id" name="credential_secret_id" autocomplete="off" />
             </a-form-item>
-            <a-form-item v-if="form.market_type === 1" field="sync_symbols" label="交易标的" required>
-              <a-input v-model="form.sync_symbols" name="sync_symbols" data-test="sync-symbols" placeholder="BTCUSDT, ETHUSDT" />
-            </a-form-item>
           </template>
           <a-form-item field="settlement_asset" label="结算资产" required>
             <a-input v-model="form.settlement_asset" :disabled="form.market_type === 2" name="settlement_asset" />
@@ -174,7 +171,7 @@
             <a-form-item field="maker_fee_rate" label="挂单费率" required><a-input v-model="form.maker_fee_rate" /></a-form-item>
             <a-form-item field="taker_fee_rate" label="吃单费率" required><a-input v-model="form.taker_fee_rate" /></a-form-item>
             <a-form-item field="slippage_bps" label="滑点（基点）" required><a-input v-model="form.slippage_bps" /></a-form-item>
-            <a-form-item field="logical_account_name" label="组合账户名称" required>
+            <a-form-item field="logical_account_name" label="组合账户名称" extra="不填就只建执行账户，之后再加入组合账户">
               <a-input v-model="form.logical_account_name" name="logical_account_name" />
             </a-form-item>
           </template>
@@ -236,10 +233,6 @@
             </a-descriptions>
           </div>
           <div class="section">
-            <h3>同步标的</h3>
-            <span>{{ selectedAccount.sync_symbols.length ? selectedAccount.sync_symbols.join(", ") : "-" }}</span>
-          </div>
-          <div class="section">
             <h3>关联组合账户</h3>
             <a-button v-if="linkedLogicalAccount" type="text" @click="goLinkedLogicalAccount">
               {{ linkedLogicalAccount.name }} · {{ linkedLogicalAccount.logical_account_id }}
@@ -259,8 +252,12 @@
               <a-form-item field="credential_secret_id" label="真实账户密钥标识"
                 ><a-input v-model="editForm.credential_secret_id"
               /></a-form-item>
-              <a-form-item field="settlement_asset" label="结算资产"><a-input v-model="editForm.settlement_asset" /></a-form-item>
-              <a-form-item field="sync_symbols" label="交易标的"><a-input v-model="editForm.sync_symbols" /></a-form-item>
+              <a-form-item
+                field="settlement_asset"
+                label="结算资产"
+                :extra="linkedLogicalAccount ? '已加入组合账户，不能修改结算资产' : ''"
+                ><a-input v-model="editForm.settlement_asset" :disabled="!!linkedLogicalAccount"
+              /></a-form-item>
               <a-form-item field="status" label="状态">
                 <a-select v-model="editForm.status">
                   <a-option value="ENABLED">启用</a-option>
@@ -270,7 +267,7 @@
               <a-button type="primary" @click="saveAccount">保存真实账户配置</a-button>
             </a-form>
             <a-form v-if="selectedAccount.market_type === 2" :model="leverageForm" layout="inline" class="leverage-form">
-              <a-input v-model="leverageForm.instrument_id" placeholder="交易标的编号" />
+              <a-input v-model="leverageForm.instrument_id" placeholder="交易标的（留空为默认杠杆）" />
               <a-input v-model="leverageForm.leverage" placeholder="杠杆倍数" />
               <a-button @click="saveLeverage">设置杠杆</a-button>
             </a-form>
@@ -355,7 +352,7 @@ const createVisible = ref(false);
 const detailVisible = ref(false);
 const selectedAccount = ref<TradingAccount | null>(null);
 const form = reactive<AccountFormModel>(createDefaultAccountForm());
-const editForm = reactive({ name: "", credential_secret_id: "", settlement_asset: "", sync_symbols: "", status: "ENABLED" });
+const editForm = reactive({ name: "", credential_secret_id: "", settlement_asset: "", status: "ENABLED" });
 const leverageForm = reactive({ instrument_id: "", leverage: "" });
 const formErrors = ref("");
 const syncResult = ref<SyncResult | null>(null);
@@ -388,7 +385,6 @@ watch(
     if (marketType === 2) {
       form.settlement_asset = "USDT";
       form.margin_mode = "CROSS";
-      form.sync_symbols = "";
     }
   }
 );
@@ -447,7 +443,6 @@ async function sync(account: TradingAccount) {
     await loadAccounts();
   } catch (error) {
     if (!request.isLatest()) return; // 切换空间使该同步作废：不展示属于原空间的失败
-    Message.error(error instanceof Error ? error.message : "账户同步失败，请检查连接和 Secret 配置");
   } finally {
     if (request.isLatest()) syncingId.value = "";
   }
@@ -523,15 +518,19 @@ async function submitCreate() {
   }
 }
 
-function create() {
-  if (form.execution_mode === 2 && form.environment === 2) {
+function confirmProduction() {
+  return new Promise<boolean>(resolve => {
     Modal.confirm({
       title: "确认创建生产账户",
       content: "生产账户可能产生真实交易，请确认环境和密钥标识。",
-      onOk: () => submitCreate()
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
     });
-    return false;
-  }
+  });
+}
+
+async function create() {
+  if (form.execution_mode === 2 && form.environment === 2 && !(await confirmProduction())) return false;
   return submitCreate();
 }
 
@@ -545,7 +544,6 @@ async function openDetail(account: TradingAccount) {
     name: account.name,
     credential_secret_id: account.live?.credential_secret_id || "",
     settlement_asset: account.settlement_asset,
-    sync_symbols: account.sync_symbols.join(", "),
     status: account.status
   });
   Object.assign(leverageForm, { instrument_id: "", leverage: "" });
@@ -598,42 +596,34 @@ async function saveAccount() {
       name: editForm.name.trim(),
       credential_secret_id: editForm.credential_secret_id.trim(),
       settlement_asset: editForm.settlement_asset.trim().toUpperCase(),
-      status: editForm.status,
-      sync_symbols: editForm.sync_symbols
-        .split(/[\s,]+/)
-        .filter(Boolean)
-        .map(symbol => symbol.toUpperCase())
+      status: editForm.status
     });
     if (selectedAccount.value?.trading_account_id !== accountId) return;
     selectedAccount.value = response.account;
     Message.success("真实账户配置已保存");
     await loadAccounts();
-  } catch (error) {
-    if (selectedAccount.value?.trading_account_id === accountId) {
-      Message.error(error instanceof Error ? error.message : "保存失败，请检查配置");
-    }
+  } catch {
+    // 错误已由 callTrade 提示。
   }
 }
 
 async function saveLeverage() {
-  if (!selectedAccount.value || !leverageForm.instrument_id.trim() || !leverageForm.leverage.trim()) {
-    Message.warning("请输入交易标的编号和杠杆");
+  if (!selectedAccount.value || !leverageForm.leverage.trim()) {
+    Message.warning("请输入杠杆");
     return;
   }
   const accountId = selectedAccount.value.trading_account_id;
   try {
     const response = await setLeverage({
       trading_account_id: selectedAccount.value.trading_account_id,
-      instrument_id: leverageForm.instrument_id.trim(),
+      instrument_id: leverageForm.instrument_id.trim() || "*",
       leverage: leverageForm.leverage.trim()
     });
     if (selectedAccount.value?.trading_account_id !== accountId) return;
     selectedAccount.value = response.account;
     Message.success("杠杆已更新");
-  } catch (error) {
-    if (selectedAccount.value?.trading_account_id === accountId) {
-      Message.error(error instanceof Error ? error.message : "杠杆更新失败");
-    }
+  } catch {
+    // 错误已由 callTrade 提示。
   }
 }
 
@@ -658,7 +648,6 @@ async function closePaper(account: TradingAccount) {
     if (selectedAccount.value?.trading_account_id === account.trading_account_id) closeDetail();
     await loadAccounts();
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : "关闭模拟账户失败");
   } finally {
     closingId.value = "";
   }

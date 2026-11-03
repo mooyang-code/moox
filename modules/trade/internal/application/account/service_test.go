@@ -8,6 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateValidatesAggregateAndCredential(t *testing.T) {
@@ -194,7 +196,6 @@ func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
@@ -217,7 +218,6 @@ func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	service := Service{
 		Store:              store,
 		Secrets:            &fakeSecrets{secret: validSecret()},
@@ -395,7 +395,6 @@ func TestExecutionEligibilityRejectsProductionWhenLiveTradingDisabled(t *testing
 	value := validAccount()
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
-	value.SyncSymbols = []string{"BTCUSDT"}
 	value.Ready = true
 	store.accounts[value.ID] = value
 	service := Service{Store: store, SessionState: fakeSessionState{ready: true}}
@@ -491,6 +490,16 @@ func (s *memoryStore) Create(_ context.Context, value tradingaccount.Account) er
 	return nil
 }
 
+func (s *memoryStore) ListEnabled(context.Context) ([]tradingaccount.Account, error) {
+	var accounts []tradingaccount.Account
+	for _, value := range s.accounts {
+		if value.Status == exchange.AccountStatusEnabled {
+			accounts = append(accounts, value)
+		}
+	}
+	return accounts, nil
+}
+
 func (s *memoryStore) Get(_ context.Context, id string) (tradingaccount.Account, error) {
 	value, found := s.accounts[id]
 	if !found {
@@ -560,4 +569,55 @@ func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
 	if got := credentialSecret(value); got != "secret-b" {
 		t.Fatalf("persisted credential = %q, want secret-b", got)
 	}
+}
+
+type unifiedVenues struct{}
+
+func (unifiedVenues) Descriptor(name exchange.Exchange) (execution.VenueDescriptor, bool) {
+	return execution.VenueDescriptor{Exchange: name, UnifiedAccount: name == exchange.ExchangeOKX}, true
+}
+
+func liveCredentialAccount(id string, name exchange.Exchange, market exchange.MarketType) tradingaccount.Account {
+	value := validAccount()
+	if market == exchange.MarketTypeSwap {
+		value = validSwapAccount()
+	}
+	value.ID, value.Name, value.Exchange = id, id, name
+	value.ExecutionMode = exchange.ExecutionModeLive
+	value.Environment = exchange.AccountEnvironmentTestnet
+	value.CredentialSecretID = "secret-1"
+	value.Status = exchange.AccountStatusEnabled
+	value.Paper = nil
+	return value
+}
+
+func TestRejectDuplicateCredentialFollowsVenueWalletModel(t *testing.T) {
+	ctx := context.Background()
+	service := Service{Store: newMemoryStore(), Venues: unifiedVenues{}}
+	store := service.Store.(*memoryStore)
+
+	binanceSpot := liveCredentialAccount("binance-spot", exchange.ExchangeBinance, exchange.MarketTypeSpot)
+	store.accounts[binanceSpot.ID] = binanceSpot
+
+	// Binance 现货和合约钱包分开，同一把密钥可以各建一个。
+	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-swap", exchange.ExchangeBinance, exchange.MarketTypeSwap)))
+	err := service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-spot-2", exchange.ExchangeBinance, exchange.MarketTypeSpot))
+	require.ErrorIs(t, err, tradingaccount.ErrInvalidAccount)
+	require.Contains(t, err.Error(), "binance-spot")
+
+	// OKX 现货和合约共用账户，同一把密钥只能建一个。
+	okxSpot := liveCredentialAccount("okx-spot", exchange.ExchangeOKX, exchange.MarketTypeSpot)
+	store.accounts[okxSpot.ID] = okxSpot
+	require.Error(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("okx-swap", exchange.ExchangeOKX, exchange.MarketTypeSwap)))
+
+	// 不同密钥、账户自身都不算重复。
+	other := liveCredentialAccount("binance-spot-3", exchange.ExchangeBinance, exchange.MarketTypeSpot)
+	other.CredentialSecretID = "secret-2"
+	require.NoError(t, service.rejectDuplicateCredential(ctx, other))
+	require.NoError(t, service.rejectDuplicateCredential(ctx, binanceSpot))
+
+	// 停用的账户不占用密钥，重新启用时才检查。
+	binanceSpot.Status = exchange.AccountStatusDisabled
+	store.accounts[binanceSpot.ID] = binanceSpot
+	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-spot-2", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
 }

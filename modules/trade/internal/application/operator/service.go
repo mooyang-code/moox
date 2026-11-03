@@ -14,6 +14,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -35,6 +36,19 @@ type AccountSyncer interface {
 	SyncAccount(context.Context, string) error
 }
 
+// LightSyncer 只读持仓和账户恢复准入，同步器实现时清仓用它代替增量同步，省掉读全部挂单的权重。
+type LightSyncer interface {
+	SyncAccountLight(context.Context, string) error
+}
+
+// syncLight 优先用轻量同步。
+func (s *Service) syncLight(ctx context.Context, tradingAccountID string) error {
+	if light, ok := s.Syncer.(LightSyncer); ok {
+		return light.SyncAccountLight(ctx, tradingAccountID)
+	}
+	return s.Syncer.SyncAccount(ctx, tradingAccountID)
+}
+
 type OrderService interface {
 	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(context.Context, string, string) (orderdomain.Order, error)
@@ -49,6 +63,7 @@ type Service struct {
 	Orders             OrderService
 	Syncer             AccountSyncer
 	Prices             PriceSource
+	Venues             execution.VenueCatalog
 	Now                func() time.Time
 	ManualSubmitWindow time.Duration
 
@@ -417,6 +432,17 @@ func (s *Service) ResumeOperatorAction(
 	default:
 		return fmt.Errorf("%w: unsupported action type %q", ErrInvalidCommand, action.ActionType)
 	}
+}
+
+func (s *Service) actionOlderThan(action store.OperatorActionRecord, age time.Duration) bool {
+	if action.CreatedAt.IsZero() {
+		return false
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	return now.Sub(action.CreatedAt) >= age
 }
 
 func (s *Service) manualDeadlineFrom(created time.Time) int64 {
@@ -877,9 +903,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
-		records, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.TradingAccountID, 1,
-		)
+		records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, member.TradingAccountID)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(
@@ -920,9 +944,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
-		confirmed, err := s.Store.ListOrdersForAccount(
-			ctx, spaceID, member.TradingAccountID, 1,
-		)
+		confirmed, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, member.TradingAccountID)
 		if err != nil {
 			currentErrors = append(currentErrors, err)
 			accountErrors = appendAccountErrors(

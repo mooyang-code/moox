@@ -20,16 +20,15 @@ type SessionSource interface {
 }
 
 type Readiness struct {
-	DatabaseReady        func(context.Context) error
-	EventBusEnabled      bool
-	EventBusReady        func() bool
-	Sessions             SessionSource
-	LogicalAccountWorker func() (bool, string)
-	TargetWorker         func() traderuntime.TargetWorkerSnapshot
-	OperatorWorker       func() traderuntime.OperatorWorkerSnapshot
-	PaperMatcherWorker   func() (bool, string)
-	PaperAccountErrors   func() map[string]paper.MatcherState
-	ConfigErrors         func() []string
+	DatabaseReady      func(context.Context) error
+	EventBusEnabled    bool
+	EventBusReady      func() bool
+	Sessions           SessionSource
+	TargetWorker       func() traderuntime.TargetWorkerSnapshot
+	OperatorWorker     func() traderuntime.OperatorWorkerSnapshot
+	PaperMatcherWorker func() (bool, string)
+	PaperAccountErrors func() map[string]paper.MatcherState
+	ConfigErrors       func() []string
 }
 
 func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
@@ -59,14 +58,8 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 	if r.OperatorWorker != nil {
 		operatorWorker = r.OperatorWorker()
 	}
-	logicalAccountWorkerReady := false
-	logicalAccountWorkerError := ""
-	if r.LogicalAccountWorker != nil {
-		logicalAccountWorkerReady, logicalAccountWorkerError =
-			r.LogicalAccountWorker()
-	}
 	ready := databaseReady && eventBusReady && sessionsReady &&
-		logicalAccountWorkerReady && targetWorker.Ready &&
+		targetWorker.Ready &&
 		operatorWorker.Ready && paperMatcherReady && len(configErrors) == 0
 	paperAccountErrors := map[string]paper.MatcherState{}
 	if r.PaperAccountErrors != nil {
@@ -79,8 +72,6 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 		"enabled_exchange_accounts":    sessionSnapshot.Enabled,
 		"ready_exchange_sessions":      sessionSnapshot.Ready,
 		"exchange_accounts_reconciled": sessionSnapshot.Reconciled,
-		"logical_account_worker_ready": logicalAccountWorkerReady,
-		"logical_account_worker_error": logicalAccountWorkerError,
 		"target_worker_ready":          targetWorker.Ready,
 		"target_worker_error":          targetWorker.LastError,
 		"target_errors":                targetWorker.TargetErrors,

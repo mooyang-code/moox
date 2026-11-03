@@ -31,15 +31,24 @@
             {{ account.name }} · {{ localMarketTypeLabels[account.market_type] }}
           </a-option>
         </a-select>
+        <a-select
+          v-model="logicalAccountId"
+          allow-clear
+          placeholder="按组合账户查看"
+          class="account-select"
+          @change="loadPositions"
+        >
+          <a-option v-for="logical in logicalAccounts" :key="logical.logical_account_id" :value="logical.logical_account_id">{{
+            logical.name
+          }}</a-option>
+        </a-select>
         <a-input v-model="instrumentId" placeholder="交易标的" allow-clear class="symbol-input" @press-enter="loadPositions" />
         <a-button type="primary" :loading="loading" :disabled="!tradingAccountId" @click="loadPositions">
           <template #icon><icon-search /></template>
           查询
         </a-button>
         <div v-if="selectedAccount" class="account-context-meta">
-          <a-tag
-            >{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[selectedAccount.market_type] }}</a-tag
-          >
+          <a-tag>{{ localExchangeLabels[selectedAccount.exchange] }} · {{ localMarketTypeLabels[viewMarketType] }}</a-tag>
           <a-tag :color="selectedAccount.ready ? 'green' : 'orange'">
             {{ selectedAccount.ready ? "已就绪" : "未就绪" }}
           </a-tag>
@@ -63,9 +72,9 @@
       </a-alert>
 
       <template v-if="selectedAccount">
-        <div class="summary-grid">
+        <div v-if="!logicalAccountId" class="summary-grid">
           <div class="summary-card">
-            <span>权益</span><strong>{{ snapshotValue(selectedAccount.snapshot?.equity) }}</strong
+            <span>权益</span><strong>{{ spotEquity || snapshotValue(selectedAccount.snapshot?.equity) }}</strong
             ><small>{{ selectedAccount.settlement_asset }}</small>
           </div>
           <div class="summary-card">
@@ -77,8 +86,8 @@
             ><small>按最新同步数据</small>
           </div>
           <div class="summary-card">
-            <span>{{ selectedAccount.market_type === 1 ? "资产数" : "持仓数" }}</span
-            ><strong>{{ selectedAccount.market_type === 1 ? visibleHoldings.length : positions.length }}</strong
+            <span>{{ viewMarketType === 1 ? "资产数" : "持仓数" }}</span
+            ><strong>{{ viewMarketType === 1 ? visibleHoldings.length : positions.length }}</strong
             ><small>当前账户</small>
           </div>
         </div>
@@ -92,17 +101,13 @@
 
         <div v-if="!positionsError" class="position-table-region">
           <a-empty
-            v-if="
-              !loading &&
-              ((selectedAccount.market_type === 1 && !visibleHoldings.length) ||
-                (selectedAccount.market_type === 2 && !positions.length))
-            "
+            v-if="!loading && ((viewMarketType === 1 && !visibleHoldings.length) || (viewMarketType === 2 && !positions.length))"
             class="position-empty-state"
             description="暂无持仓数据"
           />
 
           <a-table
-            v-else-if="selectedAccount.market_type === 1"
+            v-else-if="viewMarketType === 1"
             row-key="asset"
             size="small"
             :bordered="{ cell: true }"
@@ -113,10 +118,17 @@
           >
             <template #columns>
               <a-table-column title="资产" data-index="asset" :width="100" />
+              <a-table-column v-if="logicalAccountId" title="执行账户" data-index="trading_account_id" :width="170" />
               <a-table-column title="数量" data-index="quantity" :width="110" />
-              <a-table-column title="平均成本" data-index="average_cost" :width="130" />
-              <a-table-column title="标记价" data-index="mark_price" :width="130" />
-              <a-table-column title="市值" data-index="market_value" :width="130" />
+              <a-table-column title="平均成本" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.average_cost) }}</template>
+              </a-table-column>
+              <a-table-column title="标记价" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.mark_price) }}</template>
+              </a-table-column>
+              <a-table-column title="市值" :width="130">
+                <template #cell="{ record }">{{ unknownIfZero(record.market_value) }}</template>
+              </a-table-column>
               <a-table-column title="未实现盈亏" :width="140">
                 <template #cell="{ record }"
                   ><span :class="pnlClass(record.unrealized_pnl)">{{ record.unrealized_pnl || "-" }}</span></template
@@ -138,9 +150,10 @@
           >
             <template #columns>
               <a-table-column title="市场" :width="90">
-                <template #cell>{{ localMarketTypeLabels[selectedAccount.market_type] }}</template>
+                <template #cell>{{ localMarketTypeLabels[viewMarketType] }}</template>
               </a-table-column>
               <a-table-column title="交易标的" data-index="instrument_id" />
+              <a-table-column v-if="logicalAccountId" title="执行账户" data-index="trading_account_id" />
               <a-table-column title="方向" :width="90">
                 <template #cell="{ record }">{{ quantitySide(record.signed_quantity) }}</template>
               </a-table-column>
@@ -177,14 +190,52 @@ import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
-import type { TradingAccount, Holding, Position } from "@/api/trade/types";
+import {
+  formatTimestamp,
+  listLogicalAccounts,
+  listTradingAccounts,
+  listHoldings,
+  listPositions,
+  queryEquityCurve,
+  syncTradingAccount
+} from "@/api/trade";
+import type { TradingAccount, Holding, LogicalAccount, Position } from "@/api/trade/types";
 
 defineOptions({ name: "position-detail" });
 
 const accounts = ref<TradingAccount[]>([]);
 const positions = ref<Position[]>([]);
 const holdings = ref<Holding[]>([]);
+// 现货快照没有权益，取最新权益点的估值。
+const spotEquity = ref("");
+// 按组合账户查看时，表格跟随组合账户的市场。
+const viewMarketType = computed(
+  () =>
+    logicalAccounts.value.find(item => item.logical_account_id === logicalAccountId.value)?.market_type ??
+    selectedAccount.value?.market_type ?? 0
+);
+const logicalAccounts = ref<LogicalAccount[]>([]);
+const logicalAccountId = ref("");
+
+function unknownIfZero(value?: string) {
+  return !value || Number(value) === 0 ? "-" : value;
+}
+
+async function loadSpotEquity(accountId: string) {
+  spotEquity.value = "";
+  const now = Date.now();
+  try {
+    const response = await queryEquityCurve({
+      trading_account_id: accountId,
+      start_time: String(now - 3_600_000),
+      end_time: String(now)
+    });
+    const latest = response.points?.[response.points.length - 1];
+    if (latest && tradingAccountId.value === accountId) spotEquity.value = latest.equity;
+  } catch {
+    // 权益点缺失时显示快照值。
+  }
+}
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -221,6 +272,11 @@ function pnlTone(value?: string) {
 
 async function loadAccounts() {
   const request = accountRequests.begin();
+  void listLogicalAccounts({ page: 1, size: 500 })
+    .then(rsp => {
+      logicalAccounts.value = rsp.logical_accounts || [];
+    })
+    .catch(() => undefined);
   accountsLoading.value = true;
   accountsError.value = "";
   try {
@@ -291,11 +347,28 @@ async function loadPositions() {
   loading.value = true;
   positionsError.value = "";
   try {
+    const logical = logicalAccounts.value.find(item => item.logical_account_id === logicalAccountId.value);
+    if (logical) {
+      if (logical.market_type === 2) {
+        const response = await listPositions({ logical_account_id: logical.logical_account_id, instrument_id: requestedSymbol });
+        if (!request.isLatest()) return;
+        positions.value = response.positions || [];
+        holdings.value = [];
+        return;
+      }
+      const members = (logical.members || []).filter(member => member.enabled);
+      const responses = await Promise.all(members.map(member => listHoldings(member.trading_account_id)));
+      if (!request.isLatest()) return;
+      holdings.value = responses.flatMap(response => response.holdings || []);
+      positions.value = [];
+      return;
+    }
     if (selectedAccount.value?.market_type === 1) {
       const response = await listHoldings(accountId);
       if (!request.isLatest() || tradingAccountId.value !== accountId) return;
       holdings.value = response.holdings || [];
       positions.value = [];
+      void loadSpotEquity(accountId);
       return;
     }
     const response = await listPositions({ trading_account_id: accountId, instrument_id: requestedSymbol });

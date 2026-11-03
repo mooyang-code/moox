@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const cancelActionTimeout = 5 * time.Minute
+
 type CancelOrderCommand struct {
 	SpaceID  string
 	ActionID string
@@ -107,13 +109,20 @@ func (s *Service) CancelOrder(
 	defer unlock()
 	var action store.OperatorActionRecord
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			command.SpaceID,
-			orderRecord.LogicalAccountID,
-			"PAUSED",
-			strings.TrimSpace(command.Reason),
-		); err != nil {
+		logical, err := tx.GetLogicalAccount(command.SpaceID, orderRecord.LogicalAccountID)
+		if err != nil {
 			return err
+		}
+		// 自主下单账户没有自动执行，撤单不需要暂停。
+		if logical.ControlMode != "MANUAL" {
+			if err := tx.SetLogicalAccountAutomation(
+				command.SpaceID,
+				orderRecord.LogicalAccountID,
+				"PAUSED",
+				strings.TrimSpace(command.Reason),
+			); err != nil {
+				return err
+			}
 		}
 		var ensureErr error
 		action, _, ensureErr = tx.EnsureOperatorAction(
@@ -230,6 +239,10 @@ func (s *Service) failCancelAction(
 		orderRecord = current
 	}
 	action.Status = "RUNNING"
+	if s.actionOlderThan(action, cancelActionTimeout) {
+		// 撤单迟迟确认不了就结束操作，否则恢复自动执行会一直被挡住。
+		action.Status = "FAILED"
+	}
 	action.LastError = cause.Error()
 	data, marshalErr := json.Marshal(map[string]string{
 		"order_id": orderRecord.OrderID,

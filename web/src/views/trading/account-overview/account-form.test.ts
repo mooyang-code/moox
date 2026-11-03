@@ -21,8 +21,7 @@ const form = (): AccountFormModel => ({
   maker_fee_rate: "0.001",
   taker_fee_rate: "0.002",
   slippage_bps: "5",
-  logical_account_name: "Paper Logical",
-  sync_symbols: "BTCUSDT, ETHUSDT"
+  logical_account_name: "Paper Logical"
 });
 
 describe("account form builders", () => {
@@ -41,22 +40,15 @@ describe("account form builders", () => {
       maker_fee_rate: "0",
       taker_fee_rate: "0",
       slippage_bps: "0",
-      logical_account_name: "",
-      sync_symbols: ""
+      logical_account_name: ""
     });
   });
 
-  it("rejects invalid Paper values and missing Live symbols", () => {
+  it("rejects invalid Paper values", () => {
     const paper = createDefaultAccountForm();
     paper.name = "paper";
     paper.initial_balance = "0";
     expect(validateAccountForm(paper)).toContain("初始资金");
-
-    const live = createDefaultAccountForm();
-    live.name = "live";
-    live.execution_mode = 2;
-    live.credential_secret_id = "secret-1";
-    expect(validateAccountForm(live)).toContain("交易标的");
   });
 
   it("keeps validation feedback in Chinese", () => {
@@ -72,15 +64,6 @@ describe("account form builders", () => {
     expect(validateAccountForm(swap)).toBe("合约账户仅支持 USDT/全仓");
   });
 
-  it("normalizes and deduplicates Live symbols", () => {
-    expect(buildLiveRequest({ ...form(), sync_symbols: "btc usdt, BTCUSDT, ETHUSDT" }).sync_symbols).toEqual([
-      "BTC",
-      "USDT",
-      "BTCUSDT",
-      "ETHUSDT"
-    ]);
-  });
-
   it("does not validate hidden Paper fee fields for Live", () => {
     const live = { ...form(), maker_fee_rate: "invalid", taker_fee_rate: "invalid", slippage_bps: "invalid" };
     expect(validateAccountForm(live)).toBe("");
@@ -93,7 +76,6 @@ describe("account form builders", () => {
       market_type: 1,
       settlement_asset: "USDT",
       margin_mode: "",
-      sync_symbols: ["BTCUSDT", "ETHUSDT"],
       live: { environment: 1, credential_secret_id: "secret-1" }
     });
   });
@@ -115,7 +97,6 @@ describe("account form builders", () => {
     });
     expect(request).not.toHaveProperty("live");
     expect(request).not.toHaveProperty("credential_secret_id");
-    expect(request).not.toHaveProperty("sync_symbols");
   });
 
   it("sends the explicitly selected Paper control mode", () => {

@@ -15,12 +15,12 @@ import (
 
 var (
 	ErrAccountOwnership   = errors.New("trade order: Exchange account ownership mismatch")
-	ErrInstrumentDisabled = errors.New("trade order: instrument is not tradable")
-	ErrQuantityRule       = errors.New("trade order: quantity violates instrument rules")
-	ErrNotionalLimit      = errors.New("trade order: maximum child notional exceeded")
-	ErrInsufficientFunds  = errors.New("trade order: insufficient available funds")
-	ErrLeverageLimit      = errors.New("trade order: leverage exceeds configured ceiling")
-	ErrReduceOnly         = errors.New("trade order: invalid reduce-only direction")
+	ErrInstrumentDisabled = errors.New("标的不可交易")
+	ErrQuantityRule       = errors.New("数量不符合交易规则")
+	ErrNotionalLimit      = errors.New("超过单笔子单金额上限")
+	ErrInsufficientFunds  = errors.New("可用资金不足")
+	ErrLeverageLimit      = errors.New("杠杆超过上限")
+	ErrReduceOnly         = errors.New("只减仓订单无效")
 	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
 )
 
@@ -114,7 +114,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		return Validation{}, ErrInstrumentDisabled
 	}
 	exchangeQuantity := spec.Quantity
-	if account.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(account.MarketType).ContractValue {
 		if instrument.ContractValue.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, ErrQuantityRule
 		}
@@ -133,7 +133,8 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if spec.Type == exchange.OrderTypeLimit {
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
-	if !capacity && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
+	// 合约全平只查最小数量。
+	if !capacity && !spec.ReducePositionOnly && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
 		orderNotional.Cmp(instrument.MinNotional) < 0 {
 		return Validation{}, ErrQuantityRule
 	}
@@ -153,8 +154,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		// taker, while a resting GTC LIMIT may later be maker.
 		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
 	}
-	switch account.MarketType {
-	case exchange.MarketTypeSpot:
+	if rule := exchange.RuleFor(account.MarketType); !rule.UsesMargin {
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
 			reserveNotional := referenceNotional
@@ -176,12 +176,12 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
-	case exchange.MarketTypeSwap:
+	} else {
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
 		if !found && instrument.ExchangeSymbol != "" {
 			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
 		}
-		if !found && account.ExecutionMode == exchange.ExecutionModePaper {
+		if !found {
 			leverage, found = account.LeverageSettings["*"]
 		}
 		// Paper simulations intentionally keep the lifecycle small: when no

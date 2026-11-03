@@ -238,6 +238,33 @@ func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 	}
 }
 
+func TestMatcherWakesTargetAfterFillIsCommitted(t *testing.T) {
+	s := matcherFixture(t)
+	o, err := s.GetOrder(context.Background(), "s", "a")
+	require.NoError(t, err)
+	o.LogicalAccountID = "logical"
+	var woken []string
+	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	m.WakeTarget = func(spaceID, logicalAccountID string) {
+		// 被唤醒时成交必须已经落库，并且账户锁已释放。
+		current, getErr := s.GetOrder(context.Background(), "s", "a")
+		require.NoError(t, getErr)
+		require.Equal(t, "FILLED", current.State)
+		unlock := s.LockTradingAccount("a")
+		unlock()
+		woken = append(woken, spaceID+"/"+logicalAccountID)
+	}
+	done := make(chan error, 1)
+	go func() { done <- m.MatchOrder(context.Background(), o, matchFill(o)) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("WakeTarget called while account lock held")
+	}
+	require.Equal(t, []string{"s/logical"}, woken)
+}
+
 func TestPaperSnapshotClassifiesClosedDatabaseAsSharedFailure(t *testing.T) {
 	s := matcherFixture(t)
 	account, err := s.GetTradingAccountByID(context.Background(), "a")
@@ -449,4 +476,8 @@ func TestPaperPreloadedNativeSymbolDoesNotReloadInstruments(t *testing.T) {
 			require.ErrorIs(t, err, market.err)
 		})
 	}
+}
+
+func (*instrumentLoadFailure) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+	return exchange.ReferencePrice{}, errors.New("not used")
 }

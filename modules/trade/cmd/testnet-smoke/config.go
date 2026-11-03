@@ -29,6 +29,7 @@ type smokeOptions struct {
 	Config         string
 	ExchangeSymbol string
 	MaxNotional    shared.Decimal
+	MarketType     exchange.MarketType
 }
 
 func parseOptions(args []string, getenv func(string) string) (smokeOptions, error) {
@@ -36,7 +37,10 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	flags := flag.NewFlagSet("testnet-smoke", flag.ContinueOnError)
 	var exchangeName string
 	var maxNotional string
-	flags.StringVar(&options.Phase, "phase", "", "submit or recover")
+	var market, environment string
+	flags.StringVar(&options.Phase, "phase", "", "submit, recover or facts")
+	flags.StringVar(&market, "market", "SPOT", "facts phase: SPOT or SWAP")
+	flags.StringVar(&environment, "environment", "TESTNET", "facts phase: TESTNET or PRODUCTION")
 	flags.StringVar(&exchangeName, "exchange", "", "BINANCE or OKX")
 	flags.StringVar(&options.SecretID, "secret-id", "", "Admin Exchange Secret ID")
 	flags.StringVar(&options.Database, "database", "", "isolated Trade SQLite database")
@@ -47,12 +51,17 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
-	if getenv == nil || getenv(confirmEnv) != "YES" {
+	options.Phase = strings.ToLower(strings.TrimSpace(options.Phase))
+	readOnly := options.Phase == "facts"
+	if !readOnly && (getenv == nil || getenv(confirmEnv) != "YES") {
 		return options, fmt.Errorf("SKIP: refusing real orders without %s=YES", confirmEnv)
 	}
-	options.Phase = strings.ToLower(strings.TrimSpace(options.Phase))
-	if options.Phase != "submit" && options.Phase != "recover" {
-		return options, errors.New("phase must be submit or recover")
+	if !readOnly && options.Phase != "submit" && options.Phase != "recover" {
+		return options, errors.New("phase must be submit, recover or facts")
+	}
+	options.MarketType = exchange.MarketType(strings.ToUpper(strings.TrimSpace(market)))
+	if !options.MarketType.Valid() {
+		return options, errors.New("market must be SPOT or SWAP")
 	}
 	options.Exchange = exchange.Exchange(strings.ToUpper(strings.TrimSpace(exchangeName)))
 	if options.Exchange != exchange.ExchangeBinance &&
@@ -62,6 +71,11 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	options.Environment = exchange.AccountEnvironmentTestnet
 	if strings.TrimSpace(options.SecretID) == "" {
 		return options, errors.New("SKIP: Exchange Testnet secret ID is required")
+	}
+	if readOnly {
+		// 只读阶段不写库也不下单，可以用生产密钥核对真实接口。
+		options.Environment = exchange.AccountEnvironment(strings.ToUpper(strings.TrimSpace(environment)))
+		return options, nil
 	}
 	if strings.TrimSpace(options.Database) == "" {
 		return options, errors.New("isolated Trade database path is required")

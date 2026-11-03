@@ -87,6 +87,29 @@ func (s *Store) ListAccountEquityPoints(ctx context.Context, spaceID, tradingAcc
 	return points, nil
 }
 
+// LatestLogicalAccountEquityPoint 只读最后一条，目标换算时不用扫全部分钟点。
+func (s *Store) LatestLogicalAccountEquityPoint(ctx context.Context, spaceID, logicalAccountID string) (EquityPointRecord, error) {
+	var row struct {
+		BucketTime     int64   `gorm:"column:c_bucket_time"`
+		Equity         string  `gorm:"column:c_equity"`
+		AvailableFunds string  `gorm:"column:c_available_funds"`
+		UsedMargin     string  `gorm:"column:c_used_margin"`
+		UnrealizedPnL  *string `gorm:"column:c_unrealized_pnl"`
+		SourceTime     int64   `gorm:"column:c_source_time"`
+	}
+	err := s.db.WithContext(ctx).Table("t_logical_account_equity_points").
+		Where("c_space_id = ? AND c_logical_account_id = ?", spaceID, logicalAccountID).
+		Order("c_bucket_time DESC").Limit(1).Take(&row).Error
+	if err != nil {
+		return EquityPointRecord{}, err
+	}
+	return EquityPointRecord{
+		SpaceID: spaceID, LogicalAccountID: logicalAccountID, BucketTime: row.BucketTime, Equity: row.Equity,
+		AvailableFunds: row.AvailableFunds, UsedMargin: row.UsedMargin, UnrealizedPnL: row.UnrealizedPnL,
+		SourceTime: row.SourceTime,
+	}, nil
+}
+
 func (s *Store) ListLogicalAccountEquityPoints(ctx context.Context, spaceID, logicalAccountID string, fromBucket, toBucket int64) ([]EquityPointRecord, error) {
 	var rows []struct {
 		SpaceID          string  `gorm:"column:c_space_id"`

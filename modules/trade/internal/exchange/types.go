@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,9 +21,38 @@ func CanonicalInstrumentID(
 	if base == "" || quote == "" || !market.Valid() {
 		return "", fmt.Errorf("trade Exchange: invalid canonical instrument identity")
 	}
+	if RuleFor(market).RawInstrumentID {
+		return base, nil
+	}
 	return base + "-" + quote + "-" + string(market), nil
 }
 
+// ErrInvalidInstrumentID 表示上游传入的标的 ID 无法识别，或与账户市场不一致。
+var ErrInvalidInstrumentID = errors.New("trade Exchange: invalid instrument ID")
+
+// NormalizeInstrumentID 把上游传入的标的 ID 标准化成 Trade 内部 ID。
+// 采集和策略用不带市场后缀的 BTC-USDT，Trade 内部用 BTC-USDT-SPOT、BTC-USDT-SWAP。
+func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
+	value := strings.ToUpper(strings.TrimSpace(raw))
+	parts := strings.Split(value, "-")
+	switch {
+	case !market.Valid():
+		return "", fmt.Errorf("%w: unsupported market %q", ErrInvalidInstrumentID, market)
+	case RuleFor(market).RawInstrumentID:
+		if value == "" || strings.ContainsAny(value, " \t") {
+			return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
+		}
+		return value, nil
+	case len(parts) == 2 && parts[0] != "" && parts[1] != "":
+		return CanonicalInstrumentID(parts[0], parts[1], market)
+	case len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == string(market):
+		return value, nil
+	default:
+		return "", fmt.Errorf("%w: %q for market %s", ErrInvalidInstrumentID, raw, market)
+	}
+}
+
+// Exchange 指交易场所，可以是交易所，也可以是券商。
 type Exchange string
 
 const (
@@ -31,8 +61,9 @@ const (
 	ExchangeOKX         Exchange = "OKX"
 )
 
+// Valid 只检查非空。是否支持由 execution.Registry 判断，新增场所不用改这里。
 func (e Exchange) Valid() bool {
-	return e == ExchangeBinance || e == ExchangeOKX
+	return e != ExchangeUnspecified
 }
 
 type MarketType string
@@ -41,10 +72,12 @@ const (
 	MarketTypeUnspecified MarketType = ""
 	MarketTypeSpot        MarketType = "SPOT"
 	MarketTypeSwap        MarketType = "SWAP"
+	MarketTypeStock       MarketType = "STOCK"
 )
 
 func (m MarketType) Valid() bool {
-	return m == MarketTypeSpot || m == MarketTypeSwap
+	_, ok := marketRules[m]
+	return ok
 }
 
 type ExecutionMode string
@@ -169,6 +202,8 @@ type Credential struct {
 	APIKey     string
 	APISecret  string
 	Passphrase string
+	// Extra 放场所特有的配置，比如券商账号和网关地址。
+	Extra map[string]string
 }
 
 type AccountConfig struct {
@@ -179,6 +214,8 @@ type AccountConfig struct {
 	Environment      AccountEnvironment
 	SettlementAsset  string
 	MarginMode       MarginMode
+	// CreatedAt 之前的成交不入账，适配器不用为它们多查一次订单。
+	CreatedAt time.Time
 }
 
 type Instrument struct {
@@ -243,20 +280,6 @@ type Position struct {
 	UnrealizedPnL     shared.Decimal
 	RealizedPnL       shared.Decimal
 	ExchangeUpdatedAt time.Time
-	Present           PositionPresence
-	RequiresSync      bool
-}
-
-type PositionPresence struct {
-	SignedQuantity   bool
-	EntryPrice       bool
-	MarkPrice        bool
-	Leverage         bool
-	MarginMode       bool
-	UsedMargin       bool
-	LiquidationPrice bool
-	UnrealizedPnL    bool
-	RealizedPnL      bool
 }
 
 type OrderRequest struct {

@@ -56,11 +56,13 @@ type MatchReducer interface {
 	ApplyFillToOrderTx(context.Context, *store.Tx, store.OrderRecord, exchange.Fill, consumer.Source) error
 }
 type Matcher struct {
-	Store            *store.Store
-	Reducer          MatchReducer
-	Decide           func(store.OrderRecord) (Decision, error)
-	DecideContext    func(context.Context, store.OrderRecord) (Decision, error)
-	Enqueue          func(string)
+	Store         *store.Store
+	Reducer       MatchReducer
+	Decide        func(store.OrderRecord) (Decision, error)
+	DecideContext func(context.Context, store.OrderRecord) (Decision, error)
+	Enqueue       func(string)
+	// WakeTarget 在成交入账后唤醒目标收敛，下一笔子单不必等定时器。
+	WakeTarget       func(spaceID, logicalAccountID string)
 	Refresh          func(context.Context, string) error
 	Now              func() time.Time
 	CandidateTimeout time.Duration
@@ -68,6 +70,11 @@ type Matcher struct {
 	accountsMu       sync.Mutex
 	accounts         map[string]MatcherState
 	ready            atomic.Bool
+	// pendingRefresh 是有成交但还没刷新快照、唤醒收敛的账户（账户锁忙时留到下一轮）。
+	pendingMu      sync.Mutex
+	pendingRefresh map[string]map[filledTarget]struct{}
+	// failedRefresh 是刷新快照失败的账户涉及的目标，账户恢复（会话核对后已刷新快照）时再唤醒。
+	failedRefresh map[string]map[filledTarget]struct{}
 }
 type MatcherState struct {
 	Ready      bool
@@ -102,9 +109,9 @@ func (m *Matcher) AccountState(accountID string) MatcherState {
 
 func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 	m.accountsMu.Lock()
-	defer m.accountsMu.Unlock()
 	state := m.accounts[accountID]
 	if state.Generation != generation {
+		m.accountsMu.Unlock()
 		return
 	}
 	state.Ready, state.LastError, state.Stage, state.OrderID, state.ErrorCode = true, "", "", "", ""
@@ -112,6 +119,17 @@ func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 		m.accounts = make(map[string]MatcherState)
 	}
 	m.accounts[accountID] = state
+	m.accountsMu.Unlock()
+
+	m.pendingMu.Lock()
+	targets := m.failedRefresh[accountID]
+	delete(m.failedRefresh, accountID)
+	m.pendingMu.Unlock()
+	if m.WakeTarget != nil {
+		for target := range targets {
+			m.WakeTarget(target.spaceID, target.logicalAccountID)
+		}
+	}
 }
 
 func (m *Matcher) failAccount(accountID string, err error, orderID ...string) {
@@ -161,6 +179,8 @@ func (m *Matcher) SetReady(v bool) {
 }
 func (m *Matcher) Ready() bool { return m != nil && m.ready.Load() }
 func (m *Matcher) Scan(ctx context.Context) error {
+	// 不论这轮怎么结束（某个账户失败、基础设施错误、取消），已入账成交的账户都要刷新快照并唤醒收敛。
+	defer m.flushRefresh(ctx)
 	if m == nil || m.Store == nil {
 		return fmt.Errorf("paper matcher: store is not configured")
 	}
@@ -236,7 +256,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				if err != nil {
 					err = &CandidateError{Stage: "decision", Err: err}
 				} else {
-					err = m.MatchOrder(candidateCtx, candidate, decision)
+					err = m.matchOrder(candidateCtx, candidate, decision, true)
 				}
 				cancel()
 				if ctx.Err() != nil {
@@ -264,8 +284,11 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				if firstMatchPending && decision.Rest {
 					processedFirstMatch[candidateKey] = struct{}{}
 				}
-				if !decision.Fill.Quantity.IsZero() && m.Refresh != nil {
-					refreshed[candidate.TradingAccountID] = true
+				if !decision.Fill.Quantity.IsZero() {
+					if m.Refresh != nil {
+						refreshed[candidate.TradingAccountID] = true
+					}
+					m.noteFilled(candidate.TradingAccountID, filledTarget{candidate.SpaceID, candidate.LogicalAccountID})
 				}
 			}
 			last := orders[len(orders)-1]
@@ -282,7 +305,99 @@ func (m *Matcher) Scan(ctx context.Context) error {
 	}
 	return nil
 }
+
+type filledTarget struct {
+	spaceID          string
+	logicalAccountID string
+}
+
+func (m *Matcher) noteFilled(accountID string, target filledTarget) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	if m.pendingRefresh == nil {
+		m.pendingRefresh = make(map[string]map[filledTarget]struct{})
+	}
+	if m.pendingRefresh[accountID] == nil {
+		m.pendingRefresh[accountID] = make(map[filledTarget]struct{})
+	}
+	m.pendingRefresh[accountID][target] = struct{}{}
+}
+
+// flushRefresh 给本轮（及之前因锁忙留下的）有成交的账户各刷新一次快照，再唤醒采样和目标收敛：
+// 逐笔刷新一批 16 单要算 16 次快照。同一轮后面的撮合判断按成交投影现算快照，不依赖已落库的快照。
+// 账户锁忙时留到下一轮，不判失败；刷新本身失败记账户失败，账户恢复时再唤醒涉及的目标。
+func (m *Matcher) flushRefresh(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.pendingMu.Lock()
+	pending := m.pendingRefresh
+	m.pendingRefresh = nil
+	m.pendingMu.Unlock()
+	for accountID, targets := range pending {
+		done, err := m.refreshFilled(ctx, accountID)
+		if !done && err == nil {
+			for target := range targets {
+				m.noteFilled(accountID, target)
+			}
+			continue
+		}
+		if err != nil {
+			// 刷新失败的账户由会话核对恢复，恢复时再唤醒这些目标，避免收敛读到旧快照后停在阻塞。
+			m.pendingMu.Lock()
+			if m.failedRefresh == nil {
+				m.failedRefresh = make(map[string]map[filledTarget]struct{})
+			}
+			if m.failedRefresh[accountID] == nil {
+				m.failedRefresh[accountID] = make(map[filledTarget]struct{})
+			}
+			for target := range targets {
+				m.failedRefresh[accountID][target] = struct{}{}
+			}
+			m.pendingMu.Unlock()
+			m.failAccount(accountID, err)
+			continue
+		}
+		if m.Enqueue != nil {
+			m.Enqueue(accountID)
+		}
+		if m.WakeTarget != nil {
+			for target := range targets {
+				m.WakeTarget(target.spaceID, target.logicalAccountID)
+			}
+		}
+	}
+}
+
+// refreshFilled 拿得到账户锁时刷新一次已落库的账户快照；锁忙返回 done=false。
+func (m *Matcher) refreshFilled(ctx context.Context, accountID string) (bool, error) {
+	if m.Refresh == nil {
+		return true, nil
+	}
+	unlock, acquired := m.Store.TryLockTradingAccount(accountID)
+	if !acquired {
+		return false, nil
+	}
+	defer unlock()
+	timeout := m.CandidateTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := m.Refresh(refreshCtx, accountID); err != nil {
+		return true, &CandidateError{Stage: "refresh", Err: err}
+	}
+	return true, nil
+}
+
+// MatchOrder 撮合一笔订单，成交后立即刷新快照并唤醒。
 func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision) error {
+	return m.matchOrder(ctx, candidate, decision, false)
+}
+
+// matchOrder 撮合一笔订单。deferRefresh 为真时由扫描在本轮结束后按账户统一刷新和唤醒。
+func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision, deferRefresh bool) error {
 	if m == nil || m.Store == nil {
 		return fmt.Errorf("paper matcher: store is not configured")
 	}
@@ -334,6 +449,9 @@ func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, d
 		}
 		return err
 	})
+	if deferRefresh {
+		return err
+	}
 	if err == nil && m.Refresh != nil && !decision.Fill.Quantity.IsZero() {
 		if refreshErr := m.Refresh(ctx, candidate.TradingAccountID); refreshErr != nil {
 			return &CandidateError{Stage: "refresh", Err: refreshErr}
@@ -348,6 +466,9 @@ func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, d
 	// fill cannot enqueue a point that still observes the pre-fill snapshot.
 	if err == nil && m.Enqueue != nil && !decision.Fill.Quantity.IsZero() {
 		m.Enqueue(candidate.TradingAccountID)
+	}
+	if err == nil && m.WakeTarget != nil && !decision.Fill.Quantity.IsZero() {
+		m.WakeTarget(candidate.SpaceID, candidate.LogicalAccountID)
 	}
 	return err
 }

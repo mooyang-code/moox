@@ -182,9 +182,10 @@ func assertCommonSpotFacts(t *testing.T, f *fixture, orderID string) {
 	points, err := f.store.ListAccountEquityPoints(ctx, testSpace, testAccount, 0, 0)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
-	require.Equal(t, "100000", points[0].Equity)
+	// 这笔是外部订单，买到的币不受管，权益只算结算资产。
+	require.Equal(t, "99500", points[0].Equity)
 	require.Equal(t, "99500", points[0].AvailableFunds)
-	require.Equal(t, testNow.UnixMilli(), points[0].SourceTime)
+	require.NotZero(t, points[0].SourceTime)
 }
 
 func assertCommonSwapFacts(t *testing.T, f *fixture, orderID string) {

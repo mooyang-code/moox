@@ -15,6 +15,9 @@ import (
 func TestEquitySamplerPersistsOneMonotonicAccountPointE2E(t *testing.T) {
 	ctx := context.Background()
 	f := newPaperFixture(t, exchange.MarketTypeSpot)
+	seedLogicalAccount(t, f.store)
+	seedTargetPaperHoldings(t, f)
+	seedManagedHoldings(t, f)
 	equity := &equityapp.Service{
 		Store: f.store, Adapters: adapterSource{adapter: f.adapter},
 		Now: func() time.Time { return testNow }, SourceMaxAge: time.Minute,
@@ -27,7 +30,7 @@ func TestEquitySamplerPersistsOneMonotonicAccountPointE2E(t *testing.T) {
 	points, err := f.store.ListAccountEquityPoints(ctx, testSpace, testAccount, 0, 0)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
-	require.Equal(t, "600000", points[0].Equity)
+	require.Equal(t, "550000", points[0].Equity)
 
 	// A newer source wins, while a later write carrying an older exchange
 	// watermark cannot overwrite the same minute bucket.

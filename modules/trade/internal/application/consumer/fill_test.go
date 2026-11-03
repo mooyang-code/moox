@@ -111,9 +111,11 @@ func TestReducerPersistsSignedFeeAndDeduplicatesRebate(t *testing.T) {
 	require.EqualValues(t, 1, total)
 	require.Len(t, fills, 1)
 	require.Equal(t, "-0.01", fills[0].Fee)
+	// 只有手续费不同的重放按重复处理，保留第一次入账的手续费。
 	fill.Fee = shared.MustDecimal("0.01")
-	_, err = reducer.ApplyFill(context.Background(), fill, fillSource())
-	require.ErrorIs(t, err, store.ErrConflict)
+	applied, err = reducer.ApplyFill(context.Background(), fill, fillSource())
+	require.NoError(t, err)
+	require.False(t, applied)
 }
 
 func TestReducerRebateRequiresFeeAsset(t *testing.T) {
@@ -412,7 +414,7 @@ func TestPaperMatcherFillAtSnapshotCoveredMillisecondStillProjectsPosition(t *te
 		require.NoError(t, getErr)
 		require.True(t, found)
 		position.ExchangeUpdatedAt = tradedAt.UnixMilli()
-		return tx.ReplacePositionsForAccount(testSpace, testAccount, []store.PositionRecord{position}, tradedAt.UnixMilli())
+		return tx.ReplacePositionsForAccount(testSpace, testAccount, []store.PositionRecord{position}, tradedAt.UnixMilli(), 0)
 	}))
 	applied, err = reducer.ApplyFill(context.Background(), newFill("paper-2"), paperSource)
 	require.NoError(t, err)

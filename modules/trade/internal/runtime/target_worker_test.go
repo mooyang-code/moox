@@ -101,34 +101,6 @@ func TestTargetWorkerPeriodicScanRecoversUnsignaledTargets(t *testing.T) {
 	}
 }
 
-func TestTargetWorkerDirectedWakeRepairsExpiredTargetsAndPreservesOtherDiagnostics(t *testing.T) {
-	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
-		{SpaceID: "space", LogicalAccountID: "expired", Status: targetapp.StatusExpired},
-		{SpaceID: "space", LogicalAccountID: "healthy", Status: targetapp.StatusPending},
-	}}
-	converger := &logicalTargetConvergerStub{}
-	previous := TargetFailure{SpaceID: "space", LogicalAccountID: "other", Error: "offline"}
-	worker := &TargetWorker{Store: targets, Executor: converger, targetErrors: []TargetFailure{previous}}
-	require.NoError(t, worker.runTargets(context.Background(), []targetKey{
-		{"space", "missing"}, {"space", "expired"}, {"space", "healthy"},
-	}))
-	require.Equal(t, []string{"space/expired", "space/healthy"}, converger.calls)
-	require.Equal(t, []TargetFailure{previous}, worker.Snapshot().TargetErrors)
-}
-
-func TestTargetWorkerPeriodicScanIncludesExpiredTargetsForRecovery(t *testing.T) {
-	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{{
-		SpaceID: "space", LogicalAccountID: "expired", Status: targetapp.StatusExpired,
-	}}}
-	converger := &logicalTargetConvergerStub{wake: make(chan struct{}, 1)}
-	worker := &TargetWorker{Store: targets, Executor: converger}
-	require.NoError(t, worker.runOnce(context.Background()))
-	require.Equal(t, []string{"space/expired"}, converger.calls)
-	require.Contains(t, targets.statuses, targetapp.StatusExpired)
-	require.NoError(t, worker.runOnce(context.Background()))
-	require.NotContains(t, targets.statuses, targetapp.StatusExpired)
-}
-
 func TestTargetWorkerDirectedCancellationStopsQueuedCandidates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -473,4 +445,26 @@ func TestTargetWorkerQuiesceWaitsForInflightConvergence(t *testing.T) {
 		worker.inflight.Add(-1)
 	}()
 	require.NoError(t, worker.Quiesce(context.Background()), "在途结束后返回")
+}
+
+// 定时器不重算已阻塞、已收敛的目标：这些目标只在账户事实变化时重算，否则每秒都会请求报价。
+func TestTargetWorkerTickerSkipsSettledTargets(t *testing.T) {
+	targets := &logicalTargetStoreStub{}
+	worker := &TargetWorker{Store: targets, Executor: &logicalTargetConvergerStub{wake: make(chan struct{}, 4)}}
+	worker.initWake()
+	require.NoError(t, worker.runActive(context.Background()))
+	require.ElementsMatch(t, []string{targetapp.StatusPending, targetapp.StatusConverging}, withoutExpired(targets.statuses))
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Contains(t, targets.statuses, targetapp.StatusBlocked)
+	require.Contains(t, targets.statuses, targetapp.StatusConverged)
+}
+
+func withoutExpired(statuses []string) []string {
+	kept := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status != targetapp.StatusExpired {
+			kept = append(kept, status)
+		}
+	}
+	return kept
 }

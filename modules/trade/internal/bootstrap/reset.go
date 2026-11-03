@@ -3,9 +3,12 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -58,6 +61,11 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	holdings, err := liveSpotHoldings(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, holdings...)
 	var open int
 	if err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM t_trade_orders o
@@ -69,6 +77,44 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 		out = append(out, fmt.Sprintf("实盘账户还有 %d 个未完成订单（暂停不撤单，先自行撤单）", open))
 	}
 	return out, nil
+}
+
+// liveSpotHoldings 检查启用的实盘现货账户里 MooX 买过的币：现货没有持仓表，受管标记又来自订单表，
+// 重置后这些币会变成未受管，不再计入权益，也不会被卖出。用户自己的币和下不了单的零头不算。
+func liveSpotHoldings(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT DISTINCT a.c_trading_account_id, a.c_market_type, a.c_snapshot_json, i.c_base_asset, i.c_min_exchange_quantity
+		FROM t_trade_orders o
+		JOIN t_trading_accounts a ON a.c_space_id = o.c_space_id AND a.c_trading_account_id = o.c_trading_account_id
+		JOIN t_trade_instruments i ON i.c_exchange = a.c_exchange AND i.c_market_type = a.c_market_type AND i.c_instrument_id = o.c_instrument_id
+		WHERE a.c_execution_mode = 'LIVE' AND a.c_status = 'ENABLED'
+			AND o.c_owner_type IN ('TARGET', 'OPERATOR') AND o.c_filled_quantity <> '0'`)
+	if err != nil {
+		return nil, fmt.Errorf("检查实盘现货余额：%w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var account, market, raw, asset, minimum string
+		if err := rows.Scan(&account, &market, &raw, &asset, &minimum); err != nil {
+			return nil, err
+		}
+		if !exchange.RuleFor(market).PositionFromBalance {
+			continue
+		}
+		var snapshot store.TradingAccountSnapshot
+		if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
+			return nil, fmt.Errorf("解析账户 %s 快照：%w", account, err)
+		}
+		for _, balance := range snapshot.Balances {
+			total, totalErr := shared.ParseDecimal(balance.Total)
+			floor, floorErr := shared.ParseDecimal(minimum)
+			if balance.Asset == asset && totalErr == nil && floorErr == nil && !total.IsZero() && total.Cmp(floor) >= 0 {
+				out = append(out, fmt.Sprintf("实盘账户 %s 还有持仓 %s %s", account, balance.Asset, balance.Total))
+			}
+		}
+	}
+	return out, rows.Err()
 }
 
 // liveAccounts 列出启用的实盘账户 ID。
@@ -159,6 +205,8 @@ func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx
 			}},
 			{Name: "clear_tables", Describe: "清空表：" + lifecycle.JoinTables(tables), Run: func(ctx context.Context, _ string) error {
 				deleted, err := lifecycle.ClearTables(ctx, sqlDB, tables)
+				// 直接清表绕过了存储层，内存里的标的和账户身份要一起清掉。
+				tradeStore.InvalidateCaches()
 				if err == nil {
 					log.Infof("trade_reset_cleared rows=%v", deleted)
 				}

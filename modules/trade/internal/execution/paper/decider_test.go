@@ -16,7 +16,6 @@ import (
 
 type deciderAdapter struct {
 	execution.ExecutionAdapter
-	execution.MarketDataSource
 	quote      execution.MarketQuote
 	quoteErr   error
 	quoteCalls int
@@ -35,20 +34,6 @@ func (a *deciderAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSn
 type deciderAdapters struct{ adapter execution.ExecutionAdapter }
 
 func (a deciderAdapters) Adapter(string) (execution.ExecutionAdapter, error) { return a.adapter, nil }
-
-type deciderReferenceAdapter struct {
-	execution.ExecutionAdapter
-	quote    exchange.ReferencePrice
-	snapshot exchange.AccountSnapshot
-}
-
-func (a deciderReferenceAdapter) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
-	return a.quote, nil
-}
-
-func (a deciderReferenceAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
-	return a.snapshot, nil
-}
 
 func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, store.OrderRecord) {
 	t.Helper()
@@ -217,34 +202,6 @@ func TestDeciderSwapRealizedPnLCapsClosingQuantity(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, decision.Cancel || decision.Rest)
 			require.Equal(t, tc.want, decision.Fill.RealizedPnL.String())
-		})
-	}
-}
-
-func TestDeciderReferenceOnlySourceUsesClockAndSlippage(t *testing.T) {
-	for _, side := range []string{"BUY", "SELL"} {
-		t.Run(side, func(t *testing.T) {
-			d, adapter, order := deciderFixture(t, "SPOT")
-			ref := deciderReferenceAdapter{snapshot: adapter.snapshot,
-				quote: exchange.ReferencePrice{Price: shared.MustDecimal("100"), UpdatedAt: d.Now()},
-			}
-			d.Adapters = deciderAdapters{ref}
-			order.Side = side
-			decision, err := d.Decide(context.Background(), order)
-			require.NoError(t, err)
-			require.False(t, decision.Cancel || decision.Rest)
-			want := "101"
-			if side == "SELL" {
-				want = "99"
-			}
-			require.Equal(t, want, decision.Fill.Price.String())
-			for _, invalid := range []time.Time{d.Now().Add(-11 * time.Second), {}, d.Now().Add(time.Nanosecond)} {
-				ref.quote.UpdatedAt = invalid
-				d.Adapters = deciderAdapters{ref}
-				decision, err = d.Decide(context.Background(), order)
-				require.ErrorContains(t, err, "stale")
-				require.False(t, decision.Cancel || decision.Rest)
-			}
 		})
 	}
 }

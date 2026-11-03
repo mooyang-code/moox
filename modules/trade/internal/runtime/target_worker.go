@@ -55,9 +55,6 @@ type TargetWorker struct {
 	ready        bool
 	lastError    string
 	targetErrors []TargetFailure
-	expiredMu    sync.Mutex
-	expiredSweep bool
-	expiredRetry map[targetKey]struct{}
 }
 
 type targetKey struct {
@@ -136,15 +133,16 @@ func (w *TargetWorker) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-w.wake:
+			w.setResult(w.runOnce(ctx))
 		case <-ticker.C:
+			// 已阻塞、已收敛的目标不随定时器重算：每次重算都可能请求报价，账户事实变化时由 wake 触发。
+			w.setResult(w.runActive(ctx))
 		case <-w.targetWake:
 			// Only a full scan can establish that an earlier shared failure recovered.
 			if err := w.runTargets(ctx, w.takeTargets()); err != nil {
 				w.setResult(err)
 			}
-			continue
 		}
-		w.setResult(w.runOnce(ctx))
 	}
 }
 
@@ -191,63 +189,20 @@ func (w *TargetWorker) Quiesce(ctx context.Context) error {
 }
 
 func (w *TargetWorker) runOnce(ctx context.Context) error {
+	return w.runStatuses(ctx, targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged)
+}
+
+func (w *TargetWorker) runActive(ctx context.Context) error {
+	return w.runStatuses(ctx, targetapp.StatusPending, targetapp.StatusConverging)
+}
+
+func (w *TargetWorker) runStatuses(ctx context.Context, statuses ...string) error {
 	if !w.open() {
 		return nil
-	}
-	statuses := []string{targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged}
-	w.expiredMu.Lock()
-	if w.expiredRetry == nil {
-		w.expiredRetry = make(map[targetKey]struct{})
-	}
-	includeExpired := !w.expiredSweep
-	w.expiredMu.Unlock()
-	if includeExpired {
-		statuses = append(statuses, targetapp.StatusExpired)
 	}
 	records, err := w.Store.ListLogicalAccountTargets(ctx, statuses...)
 	if err != nil {
 		return err
-	}
-	w.expiredMu.Lock()
-	if includeExpired {
-		w.expiredSweep = true
-	}
-	for _, record := range records {
-		if record.Status == targetapp.StatusExpired {
-			w.expiredRetry[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
-		}
-	}
-	retry := make([]targetKey, 0, len(w.expiredRetry))
-	for key := range w.expiredRetry {
-		retry = append(retry, key)
-	}
-	w.expiredMu.Unlock()
-	recordKeys := make(map[targetKey]struct{}, len(records))
-	for _, record := range records {
-		recordKeys[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
-	}
-	for _, key := range retry {
-		if _, found := recordKeys[key]; found {
-			continue
-		}
-		record, getErr := w.Store.GetLogicalAccountTarget(ctx, key.spaceID, key.logicalAccountID)
-		if errors.Is(getErr, gorm.ErrRecordNotFound) {
-			w.expiredMu.Lock()
-			delete(w.expiredRetry, key)
-			w.expiredMu.Unlock()
-			continue
-		}
-		if getErr != nil {
-			return getErr
-		}
-		if record.Status == targetapp.StatusExpired {
-			records = append(records, record)
-			recordKeys[key] = struct{}{}
-		} else {
-			w.expiredMu.Lock()
-			delete(w.expiredRetry, key)
-			w.expiredMu.Unlock()
-		}
 	}
 	return w.runRecords(ctx, records, true)
 }
@@ -270,7 +225,7 @@ func (w *TargetWorker) runTargets(ctx context.Context, keys []targetKey) error {
 			continue
 		}
 		switch record.Status {
-		case targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged, targetapp.StatusExpired:
+		case targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged:
 			runErrors = append(runErrors, w.runRecords(ctx, []store.LogicalAccountTargetRecord{record}, false))
 		}
 	}
@@ -341,18 +296,6 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 				runErrors = append(runErrors, convergeErr)
 			}
 		}
-		if record.Status == targetapp.StatusExpired {
-			w.expiredMu.Lock()
-			if w.expiredRetry == nil {
-				w.expiredRetry = make(map[targetKey]struct{})
-			}
-			if convergeErr == nil {
-				delete(w.expiredRetry, targetKey{record.SpaceID, record.LogicalAccountID})
-			} else {
-				w.expiredRetry[targetKey{record.SpaceID, record.LogicalAccountID}] = struct{}{}
-			}
-			w.expiredMu.Unlock()
-		}
 		w.observe(result, convergeErr, now)
 	}
 	return errors.Join(runErrors...)
@@ -384,6 +327,5 @@ func (w *TargetWorker) initWake() {
 		w.wake = make(chan struct{}, 1)
 		w.targetWake = make(chan struct{}, 1)
 		w.pending = make(map[targetKey]struct{})
-		w.expiredRetry = make(map[targetKey]struct{})
 	})
 }

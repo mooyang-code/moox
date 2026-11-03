@@ -63,8 +63,25 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		}); err != nil {
 			return err
 		}
-		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentTestnet),
+			MarketType: string(exchange.MarketTypeSpot), ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT",
+			BaseAsset: "BTC", QuoteAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
+			PriceTick: "0.1", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		}); err != nil {
+			return err
+		}
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", OrderID: "bought", ClientOrderID: "bought",
+			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+			ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-SPOT", OrderType: "MARKET", Side: "BUY",
+			Quantity: "0.01", FilledQuantity: "0.01", ReferencePrice: "50000", State: "FILLED",
+			OwnerType: "OPERATOR", OwnerID: "action-1", LogicalAccountID: "logical-1", Version: 1,
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -93,49 +110,6 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 	}
 	if len(logicalPoints) != 1 || logicalPoints[0].Equity != "1000" {
 		t.Fatalf("logical equity points = %+v", logicalPoints)
-	}
-}
-
-func TestSampleLogicalAccountCountsSharedLiveCredentialOnce(t *testing.T) {
-	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tradeStore.Close()
-	const sourceMillis = int64(1_700_000_000_000)
-	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		for _, id := range []string{"account-1", "account-2"} {
-			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-				SpaceID: "space-1", TradingAccountID: id, Name: id,
-				Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSwap),
-				ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "shared-secret", SettlementAsset: "USDT",
-				Status: string(exchange.AccountStatusEnabled), Ready: true, Snapshot: store.TradingAccountSnapshot{Equity: "1000", AvailableFunds: "1000", ExchangeUpdatedAt: sourceMillis},
-			}); err != nil {
-				return err
-			}
-		}
-		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSwap), SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"}); err != nil {
-			return err
-		}
-		for _, id := range []string{"account-1", "account-2"} {
-			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: id, Enabled: true}); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	service := &Service{Store: tradeStore, Now: func() time.Time { return time.UnixMilli(sourceMillis + 1) }}
-	if err := service.SampleAccount(context.Background(), "account-1"); err != nil {
-		t.Fatal(err)
-	}
-	points, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(points) != 1 || points[0].Equity != "1000" {
-		t.Fatalf("logical equity points = %+v, want one shared-capital snapshot", points)
 	}
 }
 

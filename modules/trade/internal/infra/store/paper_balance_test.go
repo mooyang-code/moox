@@ -89,8 +89,9 @@ func TestPaperBalanceRollbackAndImmutableConflict(t *testing.T) {
 	require.Equal(t, "100000", snapshot.Totals["USDT"].String())
 	require.Zero(t, snapshot.AppliedFillCount)
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
+	// 重放只有手续费不同时按重复处理，余额保持第一次入账的结果。
 	fill.Fee = "0.2"
-	require.ErrorIs(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }), ErrConflict)
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
 	snapshot, err = s.GetPaperBalanceSnapshot(context.Background(), fill.SpaceID, fill.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "99899.9", snapshot.Totals["USDT"].String())
@@ -189,13 +190,13 @@ func TestPaperBalanceSellAndSwapCashFlows(t *testing.T) {
 	}
 }
 
-func TestPaperBalanceFillCrossOrderAndLateFeeConflict(t *testing.T) {
+func TestPaperBalanceFillCrossOrderConflictAndLateFeeReplay(t *testing.T) {
 	s := openTestStore(t)
 	fill := seedPaperBalanceOrder(t, s)
 	fill.Fee = "0"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
 	fill.Fee = "0.1"
-	require.ErrorIs(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }), ErrConflict)
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
 		return tx.CreateOrder(OrderRecord{SpaceID: fill.SpaceID, TradingAccountID: fill.TradingAccountID, OrderID: "other-order", ClientOrderID: "other-client", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "other-client", State: "OPEN"})
 	}))

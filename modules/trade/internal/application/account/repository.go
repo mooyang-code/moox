@@ -33,6 +33,22 @@ func (r Repository) Get(ctx context.Context, id string) (tradingaccount.Account,
 	return accountDomain(record)
 }
 
+func (r Repository) ListEnabled(ctx context.Context) ([]tradingaccount.Account, error) {
+	records, err := r.Store.ListEnabledTradingAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]tradingaccount.Account, 0, len(records))
+	for _, record := range records {
+		value, err := accountDomain(record)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, value)
+	}
+	return accounts, nil
+}
+
 func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 	unlock, lockErr := r.Store.LockTradingAccountContext(ctx, command.TradingAccountID)
 	if lockErr != nil {
@@ -56,7 +72,6 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 				Name: value.Name, CredentialSecretID: credentialSecret(value),
 				SettlementAsset: value.SettlementAsset,
 				MarginMode:      string(value.MarginMode), Status: string(value.Status),
-				SyncSymbols: append([]string(nil), value.SyncSymbols...),
 			},
 		)
 	})
@@ -101,7 +116,6 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 		CredentialSecretID: credentialSecret(value),
 		SettlementAsset:    value.SettlementAsset, MarginMode: string(value.MarginMode),
 		Status: string(value.Status), Ready: value.Ready,
-		SyncSymbols:      append([]string(nil), value.SyncSymbols...),
 		LeverageSettings: leverage, FillCursors: store.FillCursors{},
 		Snapshot:           snapshotRecord(value.Snapshot),
 		SnapshotSourceTime: timestampMillis(value.SnapshotSourceTime),
@@ -144,7 +158,6 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 		SettlementAsset:    record.SettlementAsset,
 		MarginMode:         exchange.MarginMode(record.MarginMode),
 		Status:             exchange.AccountStatus(record.Status), Ready: record.Ready,
-		SyncSymbols:      append([]string(nil), record.SyncSymbols...),
 		LeverageSettings: leverage, Snapshot: snapshotDomain(record.Snapshot),
 		SnapshotSourceTime: millisTime(record.SnapshotSourceTime),
 		LastSyncAt:         millisTime(record.LastSyncAt),

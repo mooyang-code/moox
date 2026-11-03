@@ -142,3 +142,36 @@ func TestBootstrapOwnsOneStoreAndOneShutdownHook(t *testing.T) {
 		}
 	}
 }
+
+type extraOnlyAdapter struct {
+	execution.ExecutionAdapter
+}
+
+func (extraOnlyAdapter) Exchange() exchange.Exchange { return "FAKE_BROKER" }
+
+func TestRegistryBindsVenueWithOnlyExtraCredential(t *testing.T) {
+	registry := execution.NewRegistry()
+	broker := exchange.Exchange("FAKE_BROKER")
+	registry.Register(execution.VenueDescriptor{Exchange: broker}, func(
+		_ exchange.AccountConfig,
+		credential exchange.Credential,
+	) (execution.ExecutionAdapter, error) {
+		if credential.Extra["gateway"] == "" {
+			return nil, errors.New("gateway is required")
+		}
+		return extraOnlyAdapter{}, nil
+	})
+	adapter, err := registry.Bind(exchange.AccountConfig{
+		TradingAccountID: "account-1",
+		Exchange:         broker,
+		MarketType:       exchange.MarketTypeSpot,
+		ExecutionMode:    exchange.ExecutionModeLive,
+		SettlementAsset:  "CNY",
+	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})
+	if err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if _, ok := adapter.(execution.AccountEventSource); ok {
+		t.Fatal("没有私有流的场所不应实现 AccountEventSource")
+	}
+}

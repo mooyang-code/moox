@@ -79,6 +79,8 @@ type TradeConsoleServiceService interface {
 
 	GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq) (*GetExecutionCapabilitiesRsp, error)
 
+	ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq) (*ListTradableInstrumentsRsp, error)
+
 	QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq) (*QueryEquityCurveRsp, error)
 
 	ListHoldings(ctx context.Context, req *ListHoldingsReq) (*ListHoldingsRsp, error)
@@ -624,6 +626,24 @@ func TradeConsoleServiceService_GetExecutionCapabilities_Handler(svr interface{}
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_ListTradableInstruments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListTradableInstrumentsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListTradableInstruments(ctx, reqbody.(*ListTradableInstrumentsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func TradeConsoleServiceService_QueryEquityCurve_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &QueryEquityCurveReq{}
 	filters, err := f(req)
@@ -786,6 +806,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_GetExecutionCapabilities_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListTradableInstruments",
+			Func: TradeConsoleServiceService_ListTradableInstruments_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/QueryEquityCurve",
 			Func: TradeConsoleServiceService_QueryEquityCurve_Handler,
 		},
@@ -897,6 +921,9 @@ func (s *UnimplementedTradeConsoleService) ClosePaperSimulation(ctx context.Cont
 func (s *UnimplementedTradeConsoleService) GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq) (*GetExecutionCapabilitiesRsp, error) {
 	return nil, errors.New("rpc GetExecutionCapabilities of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq) (*ListTradableInstrumentsRsp, error) {
+	return nil, errors.New("rpc ListTradableInstruments of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq) (*QueryEquityCurveRsp, error) {
 	return nil, errors.New("rpc QueryEquityCurve of service TradeConsoleService is not implemented")
 }
@@ -971,6 +998,8 @@ type TradeConsoleServiceClientProxy interface {
 	ClosePaperSimulation(ctx context.Context, req *ClosePaperSimulationReq, opts ...client.Option) (rsp *ClosePaperSimulationRsp, err error)
 
 	GetExecutionCapabilities(ctx context.Context, req *GetExecutionCapabilitiesReq, opts ...client.Option) (rsp *GetExecutionCapabilitiesRsp, err error)
+
+	ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq, opts ...client.Option) (rsp *ListTradableInstrumentsRsp, err error)
 
 	QueryEquityCurve(ctx context.Context, req *QueryEquityCurveReq, opts ...client.Option) (rsp *QueryEquityCurveRsp, err error)
 
@@ -1580,6 +1609,26 @@ func (c *TradeConsoleServiceClientProxyImpl) GetExecutionCapabilities(ctx contex
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetExecutionCapabilitiesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListTradableInstruments(ctx context.Context, req *ListTradableInstrumentsReq, opts ...client.Option) (*ListTradableInstrumentsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListTradableInstruments")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListTradableInstruments")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListTradableInstrumentsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

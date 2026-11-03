@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     UNIQUE (c_space_id, c_name),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (c_control_mode IN ('STRATEGY', 'MANUAL')),
-    CHECK (c_market_type IN ('SPOT', 'SWAP')),
+    CHECK (c_market_type IN ('SPOT', 'SWAP', 'STOCK')),
     CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
     CHECK (
         (c_automation_state = 'ACTIVE' AND c_pause_reason = '')

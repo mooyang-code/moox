@@ -9,7 +9,6 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -62,7 +61,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 		quantity = minCapacity(quantity, s.Validator.MaxChildNotional.Div(spec.ReferencePrice))
 	}
 	step, minimum := validation.Instrument.ExchangeQuantityStep, validation.Instrument.MinExchangeQuantity
-	if validation.Account.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(validation.Account.MarketType).ContractValue {
 		step = step.Mul(validation.Instrument.ContractValue)
 		minimum = minimum.Mul(validation.Instrument.ContractValue)
 	}
@@ -107,7 +106,7 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		return shared.Zero(), err
 	}
 	available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-	if validation.Account.MarketType == exchange.MarketTypeSwap {
+	if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
 		available = validation.Account.Snapshot.AvailableFunds
 	}
 	return available.Sub(unreflected), nil
@@ -121,11 +120,7 @@ func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "adapter", err)
 	}
-	marketData, ok := adapter.(execution.MarketDataSource)
-	if !ok {
-		return spec, accountExecutionError(spec.TradingAccountID, "quote", errors.New("trade order: paper market data source is unavailable"))
-	}
-	quote, err := marketData.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
 	}

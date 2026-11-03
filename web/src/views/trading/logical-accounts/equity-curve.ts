@@ -10,3 +10,7 @@ export function toEquitySeries(points: EquityPoint[]): EquitySeriesPoint[] {
     .sort((a, b) => Number(a.bucket_time) - Number(b.bucket_time))
     .map(point => ({ time: Number(point.bucket_time), value: Number(point.equity) }));
 }
+
+export function equityRange(days: number, now: number) {
+  return { start_time: String(now - days * 86_400_000), end_time: String(now) };
+}

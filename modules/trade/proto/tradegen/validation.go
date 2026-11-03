@@ -86,9 +86,9 @@ func (r *SyncTradingAccountReq) Validate() error {
 }
 
 func (r *CreatePaperSimulationReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.AccountName) == "" || strings.TrimSpace(r.LogicalAccountName) == "" ||
+	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
 		!validExchange(r.Exchange) || !validMarketType(r.MarketType) || strings.TrimSpace(r.SettlementAsset) == "" {
-		return fmt.Errorf("account_name, logical_account_name, exchange, market_type and settlement_asset are required")
+		return fmt.Errorf("account_name, exchange, market_type and settlement_asset are required")
 	}
 	if !validCreationControlMode(r.ControlMode) {
 		return fmt.Errorf("control_mode is invalid")
@@ -98,7 +98,7 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		return fmt.Errorf("paper configuration decimals are invalid")
 	}
 	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
-	if r.MarketType == MarketType_MARKET_TYPE_SPOT && margin != "" {
+	if r.MarketType != MarketType_MARKET_TYPE_SWAP && margin != "" {
 		return fmt.Errorf("SPOT paper simulation cannot configure margin_mode")
 	}
 	if r.MarketType == MarketType_MARKET_TYPE_SWAP && margin != "" && margin != "CROSS" {
@@ -111,6 +111,15 @@ func (r *CreatePaperSimulationReq) Validate() error {
 }
 
 func (r *ClosePaperSimulationReq) Validate() error {
+	return requireID(r != nil, value(func() string {
+		if r == nil {
+			return ""
+		}
+		return r.TradingAccountId
+	}), "trading_account_id")
+}
+
+func (r *ListTradableInstrumentsReq) Validate() error {
 	return requireID(r != nil, value(func() string {
 		if r == nil {
 			return ""
@@ -362,8 +371,8 @@ func (r *ListOrdersReq) Validate() error {
 }
 
 func (r *ListFillsReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
-		return fmt.Errorf("trading_account_id is required")
+	if r == nil || (strings.TrimSpace(r.TradingAccountId) == "" && strings.TrimSpace(r.LogicalAccountId) == "") {
+		return fmt.Errorf("trading_account_id or logical_account_id is required")
 	}
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
@@ -383,13 +392,14 @@ func (r *ListPositionsReq) Validate() error {
 }
 
 func validExchange(value Exchange) bool {
-	return value == Exchange_EXCHANGE_BINANCE ||
-		value == Exchange_EXCHANGE_OKX
+	_, known := Exchange_name[int32(value)]
+	return known && value != Exchange_EXCHANGE_UNSPECIFIED
 }
 
 func validMarketType(value MarketType) bool {
 	return value == MarketType_MARKET_TYPE_SPOT ||
-		value == MarketType_MARKET_TYPE_SWAP
+		value == MarketType_MARKET_TYPE_SWAP ||
+		value == MarketType_MARKET_TYPE_STOCK
 }
 
 func validExecutionMode(value ExecutionMode) bool {

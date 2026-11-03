@@ -55,10 +55,10 @@
               ><span class="mono">{{ record.factor_task_id }}</span></template
             ></a-table-column
           >
-          <a-table-column title="模式" :width="80"
+          <a-table-column title="模式" :width="130"
             ><template #cell="{ record }"
               ><a-tag :color="record.logical_account_id ? 'orange' : 'blue'">{{
-                record.logical_account_id ? "交易模式" : "仅计算"
+                record.logical_account_id ? logicalNames[record.logical_account_id] || "交易模式" : "仅计算"
               }}</a-tag></template
             ></a-table-column
           >
@@ -118,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import { listLogicalAccounts } from "@/api/trade";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
@@ -145,6 +146,12 @@ const router = useRouter();
 const route = useRoute();
 const store = useStrategyStore();
 const spaceStore = useSpaceStore();
+const logicalNames = ref<Record<string, string>>({});
+void listLogicalAccounts({ page: 1, size: 500 })
+  .then(response => {
+    logicalNames.value = Object.fromEntries((response.logical_accounts || []).map(item => [item.logical_account_id, item.name]));
+  })
+  .catch(() => undefined);
 // URL 是已应用筛选、分页、快速详情与创建抽屉的唯一来源；filters 只是筛选框里还没点“查询”的草稿。
 const state = computed<RunningState>(() => parseRunningQuery(route.query));
 const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.value.enabled as string });

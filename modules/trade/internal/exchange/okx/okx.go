@@ -30,17 +30,37 @@ type Adapter struct {
 
 	mu          sync.RWMutex
 	instruments map[string]exchange.Instrument
+	prices      exchange.PriceBoard
 }
 
 func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter {
+	client := httpclient.New(defaultBaseURL)
+	client.Classify = classifyRateLimit
 	return &Adapter{
 		config: config, credential: credential,
-		client:      httpclient.New(defaultBaseURL),
+		client:      client,
 		instruments: make(map[string]exchange.Instrument),
 	}
 }
 
+// classifyRateLimit：OKX 的 HTTP 429 是按接口和用户的限频，不是 IP 封禁，只暂停这个账户下单。
+func classifyRateLimit(status int, _ []byte) exchange.ErrorKind {
+	if status == http.StatusTooManyRequests {
+		return exchange.ErrorOrderRateLimited
+	}
+	return ""
+}
+
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
+
+// RateStatus 返回限流状态。OKX 没有权重响应头，只有暂停信息。
+func (a *Adapter) RateStatus() exchange.RateStatus {
+	status := a.client.Status()
+	return exchange.RateStatus{
+		PausedUntil: status.PausedUntil, PauseReason: status.PauseReason,
+		OrdersPausedUntil: status.OrdersPausedUntil,
+	}
+}
 
 type response struct {
 	Code string          `json:"code"`
@@ -55,6 +75,25 @@ func (a *Adapter) request(
 	query url.Values,
 	body any,
 	signed bool,
+) (json.RawMessage, error) {
+	return a.send(ctx, method, path, query, body, signed, false)
+}
+
+// orderRateLimitPause 是 OKX 限流（50011、50040）后该账户下单的暂停时长，OKX 限频窗口是 2 秒。
+const orderRateLimitPause = 2 * time.Second
+
+// orderExpiry 是下单请求的有效期：超过后 OKX 不再受理，保证未知结果窗口内不会迟到成交。
+const orderExpiry = 5 * time.Second
+
+// send 发请求；order 标记新下单，限流后只暂停这个账户下单。
+func (a *Adapter) send(
+	ctx context.Context,
+	method string,
+	path string,
+	query url.Values,
+	body any,
+	signed bool,
+	order bool,
 ) (json.RawMessage, error) {
 	fullPath := path
 	if len(query) > 0 {
@@ -82,8 +121,11 @@ func (a *Adapter) request(
 	if a.config.Environment == exchange.AccountEnvironmentTestnet {
 		headers["x-simulated-trading"] = "1"
 	}
+	if order {
+		headers["expTime"] = strconv.FormatInt(time.Now().Add(orderExpiry).UnixMilli(), 10)
+	}
 	raw, err := a.client.Do(ctx, &httpclient.Request{
-		Method: method, Path: fullPath, Body: rawBody, Headers: headers,
+		Method: method, Path: fullPath, Body: rawBody, Headers: headers, Order: order,
 	})
 	if err != nil {
 		return raw, classify(err, raw)
@@ -102,11 +144,20 @@ func (a *Adapter) request(
 		}
 		if err := json.Unmarshal(envelope.Data, &details); err == nil &&
 			len(details) != 0 && details[0].Code != "" && details[0].Code != "0" {
-			return envelope.Data, classifyOKXCode(details[0].Code, details[0].Message)
+			return envelope.Data, a.rateLimited(classifyOKXCode(details[0].Code, details[0].Message), order)
 		}
-		return envelope.Data, classifyOKXCode(envelope.Code, envelope.Msg)
+		return envelope.Data, a.rateLimited(classifyOKXCode(envelope.Code, envelope.Msg), order)
 	}
 	return envelope.Data, nil
+}
+
+// rateLimited 把 HTTP 200 里的限流码转成账户下单暂停：httpclient 看不到响应体里的错误码。
+// 只有下单请求触发暂停，查询接口的限流不影响下单。
+func (a *Adapter) rateLimited(err error, order bool) error {
+	if order && exchange.IsKind(err, exchange.ErrorOrderRateLimited) {
+		a.client.PauseOrders(orderRateLimitPause, exchange.ErrorOrderRateLimited)
+	}
+	return err
 }
 
 func privateStreamEndpoint(
@@ -223,6 +274,9 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
+	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
+	}
 	data, err := a.request(
 		ctx,
 		http.MethodGet,
@@ -236,7 +290,6 @@ func (a *Adapter) GetReferencePrice(
 	}
 	var rows []struct {
 		Last string `json:"last"`
-		TS   string `json:"ts"`
 	}
 	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
 		return exchange.ReferencePrice{}, rejected("decode reference price", err)
@@ -245,13 +298,29 @@ func (a *Adapter) GetReferencePrice(
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
 		return exchange.ReferencePrice{}, rejected("invalid reference price", err)
 	}
-	timestamp, err := strconv.ParseInt(rows[0].TS, 10, 64)
-	if err != nil || timestamp <= 0 {
-		return exchange.ReferencePrice{}, rejected("invalid reference price timestamp", err)
+	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟。
+	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
+}
+
+func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.MarketType)}}, nil, false)
+	if err != nil {
+		return nil, err
 	}
-	return exchange.ReferencePrice{
-		Price: price, UpdatedAt: time.UnixMilli(timestamp),
-	}, nil
+	var rows []struct {
+		InstID string `json:"instId"`
+		Last   string `json:"last"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, rejected("decode all prices", err)
+	}
+	prices := make(map[string]shared.Decimal, len(rows))
+	for _, row := range rows {
+		if price, err := shared.ParseDecimal(row.Last); err == nil {
+			prices[row.InstID] = price
+		}
+	}
+	return prices, nil
 }
 
 func parseQuote(raw string) shared.Decimal {
@@ -271,13 +340,11 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 		Bid  string `json:"bidPx"`
 		Ask  string `json:"askPx"`
 		Last string `json:"last"`
-		TS   string `json:"ts"`
 	}
 	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
 		return execution.MarketQuote{}, rejected("decode quote", err)
 	}
-	ms, _ := strconv.ParseInt(rows[0].TS, 10, 64)
-	return execution.MarketQuote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.UnixMilli(ms).UTC()}, nil
+	return execution.MarketQuote{Bid: parseQuote(rows[0].Bid), Ask: parseQuote(rows[0].Ask), Last: parseQuote(rows[0].Last), SourceTime: time.Now().UTC()}, nil
 }
 
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
@@ -619,7 +686,7 @@ func (a *Adapter) PlaceOrder(
 			body["reduceOnly"] = "true"
 		}
 	}
-	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/order", nil, body, true)
+	data, err := a.send(ctx, http.MethodPost, "/api/v5/trade/order", nil, body, true, true)
 	if err != nil {
 		return exchange.Order{}, err
 	}
@@ -628,7 +695,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, transportUnknown("decode placed order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), true)
 	}
 	return exchange.Order{
 		ExchangeOrderID: payload[0].OrdID,
@@ -663,7 +730,7 @@ func (a *Adapter) CancelOrder(
 		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
 	if payload[0].SCode != "" && payload[0].SCode != "0" {
-		return exchange.Order{}, classifyOKXCode(payload[0].SCode, payload[0].SMsg)
+		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), false)
 	}
 	// Fetch the authoritative terminal state; a cancel acknowledgement alone is
 	// not sufficient because final fills may have raced with the request.
@@ -1035,8 +1102,8 @@ func classify(err error, _ []byte) error {
 func classifyOKXCode(code, message string) error {
 	kind := exchange.ErrorRejected
 	switch code {
-	case "50011", "50040":
-		kind = exchange.ErrorRateLimited
+	case "50011", "50040", "50061":
+		kind = exchange.ErrorOrderRateLimited
 	case "50014", "50101", "50113":
 		kind = exchange.ErrorAuthentication
 	case "51008":

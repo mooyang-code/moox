@@ -16,12 +16,11 @@ import (
 )
 
 var (
-	ErrServiceConfig            = errors.New("trade logical account: service is not configured")
-	ErrAdoptionRequired         = errors.New("trade logical account: adoption is required")
-	ErrMemberHasExposure        = errors.New("trade logical account: member has active exposure")
-	ErrOwnerConflict            = errors.New("trade logical account: runner ownership conflict")
-	ErrNotReady                 = errors.New("trade logical account: not ready")
-	ErrPaperMembershipImmutable = errors.New("trade logical account: paper membership is immutable")
+	ErrServiceConfig     = errors.New("trade logical account: service is not configured")
+	ErrAdoptionRequired  = errors.New("trade logical account: adoption is required")
+	ErrMemberHasExposure = errors.New("trade logical account: member has active exposure")
+	ErrOwnerConflict     = errors.New("trade logical account: runner ownership conflict")
+	ErrNotReady          = errors.New("trade logical account: not ready")
 )
 
 type AddMemberCommand struct {
@@ -91,38 +90,6 @@ func (s *Service) Create(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
-// lockMemberChange 按固定顺序取得成员变更需要的全部锁（逻辑账户 → 成员 → 执行 → 交易账户），全部带调用方期限；
-// 任何一把等待失败都会释放已取得的锁，返回的函数按相反顺序释放。
-func (s *Service) lockMemberChange(ctx context.Context, spaceID, logicalAccountID, tradingAccountID string) (func(), error) {
-	var releases []func()
-	release := func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
-		}
-	}
-	unlock, err := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockLogicalAccountMembershipContext(ctx); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalAccountID); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	if unlock, err = s.Store.LockTradingAccountContext(ctx, tradingAccountID); err != nil {
-		release()
-		return nil, err
-	}
-	releases = append(releases, unlock)
-	return release, nil
-}
-
 func (s *Service) UpdateName(
 	ctx context.Context,
 	spaceID string,
@@ -157,18 +124,26 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	members, err := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
 	if err != nil {
 		return err
 	}
-	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-		return ErrPaperMembershipImmutable
+	for _, member := range members {
+		// 启用成员只改优先级时不碰持仓，有持仓的成员也能调整。
+		if member.TradingAccountID == command.TradingAccountID && member.Enabled && command.Enabled {
+			unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer unlockAll()
+			return s.putMember(ctx, command)
+		}
 	}
 	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
 		return err
 	}
 	// 全部带期限：任何一把锁等待超时都释放已取得的锁并返回，不占住全局成员锁
-	unlockAll, lockErr := s.lockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+	unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
 	if lockErr != nil {
 		return lockErr
 	}
@@ -187,6 +162,10 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 			return ErrAdoptionRequired
 		}
 	}
+	return s.putMember(ctx, command)
+}
+
+func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error {
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
@@ -208,22 +187,15 @@ func (s *Service) RemoveMember(
 	if s.Syncer == nil {
 		return ErrServiceConfig
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return err
-	}
-	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-		return ErrPaperMembershipImmutable
-	}
 	if err := s.Syncer.SyncAccount(ctx, tradingAccountID); err != nil {
 		return err
 	}
-	unlockAll, lockErr := s.lockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
+	unlockAll, lockErr := s.Store.LockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)
 	if lockErr != nil {
 		return lockErr
 	}
 	defer unlockAll()
-	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+	exposed, err := s.memberHasManagedExposure(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
@@ -441,10 +413,9 @@ func (s *Service) readiness(
 	}
 	reasons := make([]string, 0)
 	if len(members) == 0 {
-		reasons = append(reasons, "no enabled members")
+		reasons = append(reasons, "没有启用的成员")
 	}
 	now := s.now()
-	supported := make(map[string]struct{})
 	for _, member := range members {
 		account, getErr := s.Store.GetTradingAccountByID(
 			ctx, member.TradingAccountID,
@@ -454,31 +425,15 @@ func (s *Service) readiness(
 		}
 		switch {
 		case account.Status != "ENABLED":
-			reasons = append(reasons, account.TradingAccountID+" is disabled")
+			reasons = append(reasons, account.TradingAccountID+" 已停用")
 		case !account.Ready:
-			reasons = append(reasons, account.TradingAccountID+" is not ready")
+			reasons = append(reasons, account.TradingAccountID+" 未就绪")
 		case account.LastSyncAt <= 0:
-			reasons = append(reasons, account.TradingAccountID+" has no initial sync")
+			reasons = append(reasons, account.TradingAccountID+" 尚未完成首次同步")
 		case s.snapshotStale(now, account.LastSyncAt):
-			reasons = append(reasons, account.TradingAccountID+" snapshot is stale")
+			reasons = append(reasons, account.TradingAccountID+" 账户快照已过期")
 		}
-		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
-		if listErr != nil {
-			return Readiness{}, listErr
-		}
-		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
-				continue
-			}
-			if instrument.SettlementAsset != "" &&
-				instrument.SettlementAsset != account.SettlementAsset {
-				continue
-			}
-			supported[instrument.InstrumentID] = struct{}{}
-		}
-		orders, listErr := s.Store.ListOrdersForAccount(
-			ctx, spaceID, account.TradingAccountID, 1,
-		)
+		orders, listErr := s.Store.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
 		if listErr != nil {
 			return Readiness{}, listErr
 		}
@@ -486,13 +441,13 @@ func (s *Service) readiness(
 			if current.State == "SUBMITTING" || current.State == "SUBMIT_UNKNOWN" {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" has unresolved submit "+current.OrderID,
+					account.TradingAccountID+" 有未确认的提交订单 "+current.OrderID,
 				)
 			}
 			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" has EXTERNAL order "+current.OrderID,
+					account.TradingAccountID+" 有外部订单 EXTERNAL "+current.OrderID,
 				)
 			}
 		}
@@ -508,12 +463,16 @@ func (s *Service) readiness(
 	case targetErr == nil:
 		if target.InstanceID == "" || target.SessionID == "" ||
 			target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
-			reasons = append(reasons, "target session does not own logical account")
+			reasons = append(reasons, "目标所属会话不再持有组合账户")
 		}
 		// Resume enables automation, not an expired target. Execution waits
 		// for the next valid target and checks its validity window itself.
 		if now.UnixMilli() >= target.ValidUntil {
 			break
+		}
+		supported, supportErr := s.supportedInstruments(ctx, members)
+		if supportErr != nil {
+			return Readiness{}, supportErr
 		}
 		for _, desired := range target.Targets {
 			// 保持标的不会被下单，不因它暂时不可用而阻止恢复自动化。
@@ -535,6 +494,31 @@ func (s *Service) readiness(
 	return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
 }
 
+func (s *Service) supportedInstruments(ctx context.Context, members []store.LogicalAccountMemberRecord) (map[string]struct{}, error) {
+	supported := make(map[string]struct{})
+	for _, member := range members {
+		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return nil, err
+		}
+		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		if err != nil {
+			return nil, err
+		}
+		for _, instrument := range instruments {
+			if instrument.Status != "TRADING" && instrument.Status != "live" {
+				continue
+			}
+			if instrument.SettlementAsset != "" &&
+				instrument.SettlementAsset != account.SettlementAsset {
+				continue
+			}
+			supported[instrument.InstrumentID] = struct{}{}
+		}
+	}
+	return supported, nil
+}
+
 func (s *Service) memberHasExposure(
 	ctx context.Context,
 	spaceID string,
@@ -548,9 +532,7 @@ func (s *Service) memberHasExposure(
 		s.snapshotStale(s.now(), account.LastSyncAt) {
 		return false, ErrNotReady
 	}
-	orders, err := s.Store.ListOrdersForAccount(
-		ctx, spaceID, tradingAccountID, 1,
-	)
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
@@ -572,7 +554,7 @@ func (s *Service) memberHasExposure(
 			return true, nil
 		}
 	}
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if exchange.RuleFor(account.MarketType).PositionFromBalance {
 		for _, balance := range account.Snapshot.Balances {
 			if balance.Asset == account.SettlementAsset {
 				continue
@@ -584,6 +566,54 @@ func (s *Service) memberHasExposure(
 			if !total.IsZero() {
 				return true, nil
 			}
+		}
+	}
+	return false, nil
+}
+
+// memberHasManagedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
+func (s *Service) memberHasManagedExposure(ctx context.Context, spaceID, tradingAccountID string) (bool, error) {
+	exposed, err := s.memberHasExposure(ctx, spaceID, tradingAccountID)
+	if err != nil || !exposed {
+		return false, err
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+		return true, nil
+	}
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	if len(orders) > 0 {
+		return true, nil
+	}
+	managed, err := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	minimums := make(map[string]string, len(instruments))
+	for _, instrument := range instruments {
+		minimums[instrument.BaseAsset] = instrument.MinExchangeQuantity
+	}
+	for _, balance := range account.Snapshot.Balances {
+		total, parseErr := shared.ParseDecimal(balance.Total)
+		if parseErr != nil {
+			return false, parseErr
+		}
+		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset || total.IsZero() {
+			continue
+		}
+		// 卖出后留下的零头下不了单，不挡移除。
+		if minimum, parseErr := shared.ParseDecimal(minimums[balance.Asset]); parseErr != nil || total.Cmp(minimum) >= 0 {
+			return true, nil
 		}
 	}
 	return false, nil

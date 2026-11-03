@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -18,14 +19,27 @@ import (
 )
 
 var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
+
+const (
+	sessionOrderWindow        = 5 * time.Minute
+	pollingSyncInterval       = 3 * time.Second
+	instrumentRefreshInterval = time.Hour
+)
+
 var errPrivateDisconnected = errors.New("trade runtime: private stream disconnected")
 
 type ExchangeSession struct {
+	symbolMu          sync.Mutex
+	configuredSymbols map[string]string
+	// symbolLocks 按标的串行设置杠杆：同一批里不同标的可以并发设置。
+	symbolLocks map[string]*sync.Mutex
+	// requestMu 保护 syncRequested 的替换，外部请求同步时要读它。
+	requestMu sync.Mutex
+
 	Account               store.TradingAccountRecord
 	Adapter               execution.ExecutionAdapter
 	MarketData            execution.MarketDataSource
 	AccountEvents         execution.AccountEventSource
-	ReservationPolicy     execution.ReservationPolicy
 	Sync                  *accountsync.Service
 	SyncInterval          time.Duration
 	PaperMatcherReady     func() bool
@@ -55,28 +69,47 @@ func (s *ExchangeSession) Ready() bool {
 	return true
 }
 
+// RequestSync 请求一次防抖轻量同步；会话没有私有流（模拟盘、轮询）时返回 false，由调用方自己同步。
+func (s *ExchangeSession) RequestSync() bool {
+	s.requestMu.Lock()
+	requested := s.syncRequested
+	s.requestMu.Unlock()
+	if requested == nil {
+		return false
+	}
+	select {
+	case requested <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// waitRatePause 在锁外等待限流暂停结束，不在请求内睡眠：请求带签名时间戳，等待会让它过期。
+func (s *ExchangeSession) waitRatePause(ctx context.Context) error {
+	source, ok := s.Adapter.(exchange.RateStatusSource)
+	if !ok {
+		return nil
+	}
+	until := source.RateStatus().PausedUntil
+	wait := time.Until(until)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func (s *ExchangeSession) ExecutionAdapter() execution.ExecutionAdapter {
 	if s == nil {
 		return nil
 	}
 	return s.Adapter
-}
-
-func (s *ExchangeSession) ExecutionBundle() execution.ExecutionBundle {
-	if s == nil {
-		return execution.ExecutionBundle{}
-	}
-	policy := s.ReservationPolicy
-	if policy == nil {
-		policy = execution.LiveReservationPolicy{}
-		if exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
-			policy = execution.PaperReservationPolicy{}
-		}
-	}
-	return execution.ExecutionBundle{
-		Adapter: s.Adapter, AccountEvents: s.AccountEvents, MarketData: s.MarketData,
-		ReservationPolicy: policy,
-	}
 }
 
 func (s *ExchangeSession) Run(ctx context.Context) error {
@@ -92,24 +125,20 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return err
 	}
 	s.Account = account
-	marketData := s.MarketData
-	if marketData == nil {
-		marketData, _ = s.Adapter.(execution.MarketDataSource)
-	}
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot &&
-		exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModeLive &&
-		len(account.SyncSymbols) == 0 {
-		return fmt.Errorf("%w: SPOT account requires sync symbols", ErrSessionConfig)
-	}
+	marketData := s.marketData()
 	if exchange.ExecutionMode(account.ExecutionMode) == exchange.ExecutionModePaper {
 		return s.runPaper(ctx)
+	}
+	// 限流暂停（含 418 封禁）期间不重连：重连要拉账户、持仓和成交，会延长封禁。
+	if err := s.waitRatePause(ctx); err != nil {
+		return err
 	}
 	accountEvents := s.AccountEvents
 	if accountEvents == nil {
 		accountEvents, _ = s.Adapter.(execution.AccountEventSource)
 	}
-	if marketData == nil || accountEvents == nil {
-		return ErrSessionConfig
+	if accountEvents == nil {
+		return s.runPolling(ctx)
 	}
 	// Public metadata must be durable before private events are accepted. The
 	// handler only starts buffering once Subscribe begins, so the later REST
@@ -121,7 +150,9 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err := s.persistInstruments(ctx, instruments); err != nil {
 		return s.disconnect(ctx, err)
 	}
+	s.requestMu.Lock()
 	s.syncRequested = make(chan struct{}, 1)
+	s.requestMu.Unlock()
 	s.ready.Store(false)
 	_ = s.Sync.SetReady(ctx, s.Account.TradingAccountID, false, nil)
 
@@ -146,32 +177,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	if err, ended := privateStreamError(disconnected, streamDone); ended {
 		return s.disconnect(ctx, err)
 	}
-
-	if err, ended := privateStreamError(disconnected, streamDone); ended {
-		return s.disconnect(ctx, err)
-	}
-	if exchange.MarketType(s.Account.MarketType) == exchange.MarketTypeSwap {
-		symbols := leverageSymbols(s.Account.LeverageSettings)
-		for _, symbol := range symbols {
-			if err := s.Adapter.SetMarginMode(
-				ctx,
-				shared.ExchangeSymbol(symbol),
-				exchange.MarginModeCross,
-			); err != nil {
-				return s.disconnect(ctx, err)
-			}
-		}
-		for _, symbol := range symbols {
-			leverage, parseErr := shared.ParseDecimal(s.Account.LeverageSettings[symbol])
-			if parseErr != nil {
-				return s.disconnect(ctx, parseErr)
-			}
-			if err := s.Adapter.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
-				return s.disconnect(ctx, err)
-			}
-		}
-	}
-
+	accountReadAt := time.Now()
 	accountSnapshot, err := s.Adapter.GetAccountSnapshot(ctx)
 	if err != nil {
 		return s.disconnect(ctx, err)
@@ -197,19 +203,19 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		ctx,
 		s.Account.SpaceID,
 		s.Account.TradingAccountID,
-		0,
+		time.Now().Add(-sessionOrderWindow).UnixMilli(),
 	)
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
-	symbols := sessionSymbols(
-		s.Account,
-		orders,
-		localOrders,
-		positions,
-		instruments,
-		accountSnapshot,
-	)
+	instrumentRecords, err := s.Sync.Store.ListInstrumentsForAccount(ctx, s.Account.TradingAccountID)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	symbols, err := s.Sync.BoundedFullSymbols(ctx, s.Account, orders, localOrders, positions, instrumentRecords, accountSnapshot)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
 	for _, symbol := range symbols {
@@ -233,7 +239,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	s.opMu.Lock()
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
-		Account: accountSnapshot, FillCursors: cursors, Ready: false,
+		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
 	})
 	s.opMu.Unlock()
 	if err != nil {
@@ -281,34 +287,117 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
+	light := newLightSyncSchedule()
+	defer light.stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return s.disconnect(context.Background(), ctx.Err())
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
 		case err := <-streamDone:
 			return s.disconnect(context.Background(), err)
 		case <-ticker.C:
-			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
-			s.opMu.Unlock()
-			if err != nil {
-				return s.disconnect(context.Background(), err)
+			// 权重用到 80% 时推迟这轮对账，成交事件触发的轻量同步照常。
+			if s.rateUsage() > reconcileUsageLimit {
+				continue
 			}
+			// 同步失败时账户已记录错误并保持未就绪，下一轮重试；只有私有流结束才重启会话。
+			s.opMu.Lock()
+			_, _ = s.Sync.SyncAccountReconcile(ctx, s.Account.TradingAccountID)
+			s.opMu.Unlock()
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
 		case <-s.syncRequested:
+			// 防抖：250 毫秒内的成交、持仓、账户事件合并成一次轻量同步。防抖只合并同步，不会下单。
+			light.request()
+		case <-light.channel():
 			s.opMu.Lock()
-			_, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			result, err := s.Sync.SyncAccountLight(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
-			if err != nil {
-				return s.disconnect(context.Background(), err)
-			}
+			light.done(err == nil && !result.BalancePending)
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
 		}
 	}
+}
+
+const (
+	// lightSyncDebounce 是私有事件触发轻量同步前的合并等待。
+	lightSyncDebounce = 250 * time.Millisecond
+	// reconcileUsageLimit 是推迟 30 秒对账的权重用量比例。
+	reconcileUsageLimit = 0.8
+)
+
+// lightSyncRetries 是轻量同步没能恢复准入（待确认水位未过、REST 失败、限流暂停）后的短退避，用完等 30 秒对账。
+var lightSyncRetries = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second, 2 * time.Second}
+
+// lightSyncSchedule 管理轻量同步的防抖和失败重排。定时器在同步之外，不持锁。
+type lightSyncSchedule struct {
+	timer    *time.Timer
+	pending  bool
+	attempts int
+}
+
+func newLightSyncSchedule() *lightSyncSchedule { return &lightSyncSchedule{} }
+
+func (l *lightSyncSchedule) schedule(delay time.Duration) {
+	if l.timer == nil {
+		l.timer = time.NewTimer(delay)
+	} else {
+		l.timer.Stop()
+		select {
+		case <-l.timer.C:
+		default:
+		}
+		l.timer.Reset(delay)
+	}
+	l.pending = true
+}
+
+// request 在没有待执行的同步时开始防抖；已有待执行（防抖或重排）时合并。
+func (l *lightSyncSchedule) request() {
+	if !l.pending {
+		l.attempts = 0
+		l.schedule(lightSyncDebounce)
+	}
+}
+
+func (l *lightSyncSchedule) channel() <-chan time.Time {
+	if !l.pending || l.timer == nil {
+		return nil
+	}
+	return l.timer.C
+}
+
+// done 记录一次同步结果：没能恢复准入时按退避重排，最多 5 次。
+func (l *lightSyncSchedule) done(recovered bool) {
+	l.pending = false
+	if recovered || l.attempts >= len(lightSyncRetries) {
+		l.attempts = 0
+		return
+	}
+	l.schedule(lightSyncRetries[l.attempts])
+	l.attempts++
+}
+
+func (l *lightSyncSchedule) stop() {
+	if l.timer != nil {
+		l.timer.Stop()
+	}
+}
+
+// rateUsage 是交易所接口本分钟的权重用量比例，模拟盘为 0。
+func (s *ExchangeSession) rateUsage() float64 {
+	source, ok := s.Adapter.(exchange.RateStatusSource)
+	if !ok {
+		return 0
+	}
+	return source.RateStatus().UsageRatio()
 }
 
 // runPaper shares the same SQLite facts and sync projections as Live, but has
@@ -317,27 +406,9 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	if s.Adapter == nil || s.Sync == nil {
 		return ErrSessionConfig
 	}
-	marketData := s.MarketData
-	if marketData == nil {
-		marketData, _ = s.Adapter.(execution.MarketDataSource)
-	}
 	generation := s.paperAccountGeneration()
-	if marketData == nil {
-		return ErrSessionConfig
-	}
-	// Paper's adapter keeps the canonical instrument -> native symbol map used
-	// by reference quotes. Load through it when available, while retaining the
-	// public source fallback for lightweight adapters in tests.
-	instrumentLoader, _ := s.Adapter.(interface {
-		LoadInstruments(context.Context) ([]exchange.Instrument, error)
-	})
-	var instruments []exchange.Instrument
-	var err error
-	if instrumentLoader != nil {
-		instruments, err = instrumentLoader.LoadInstruments(ctx)
-	} else {
-		instruments, err = marketData.LoadInstruments(ctx)
-	}
+	// 模拟适配器保存标的到原生代码的映射，所以从它加载。
+	instruments, err := s.Adapter.LoadInstruments(ctx)
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
@@ -382,6 +453,8 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	defer poll.Stop()
 	refresh := time.NewTicker(interval)
 	defer refresh.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
 	for {
 		matcherReady := s.PaperMatcherReady != nil && s.PaperMatcherReady()
 		if s.PaperAccountState != nil {
@@ -397,6 +470,8 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			_ = s.disconnect(context.Background(), ctx.Err())
 			return ctx.Err()
 		case <-poll.C:
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
 		case <-refresh.C:
 			generation := s.paperAccountGeneration()
 			if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil {
@@ -409,6 +484,115 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 			s.recoverPaperAccountAfterSync(generation, orders)
 		}
 	}
+}
+
+// runPolling 给没有私有流的场所用：短周期同步代替事件推送。
+func (s *ExchangeSession) runPolling(ctx context.Context) error {
+	instruments, err := s.marketData().LoadInstruments(ctx)
+	if err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if err := s.persistInstruments(ctx, instruments); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if _, err := s.Sync.SyncAccountFull(ctx, s.Account.TradingAccountID); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	s.ready.Store(true)
+	if err := s.Sync.SetReady(ctx, s.Account.TradingAccountID, true, nil); err != nil {
+		return s.disconnect(ctx, err)
+	}
+	if s.OnReady != nil {
+		s.OnReady(s.Account.TradingAccountID)
+	}
+	ticker := time.NewTicker(pollingSyncInterval)
+	defer ticker.Stop()
+	instrumentTicker := time.NewTicker(instrumentRefreshInterval)
+	defer instrumentTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return s.disconnect(context.Background(), ctx.Err())
+		case <-instrumentTicker.C:
+			s.refreshInstruments(ctx)
+		case <-ticker.C:
+			// 失败时账户已记录错误并保持未就绪，下一轮重试。
+			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+		}
+	}
+}
+
+// refreshInstruments 让新上市、下架的标的不必重启会话就能生效。失败时沿用旧数据，下一轮重试。
+func (s *ExchangeSession) refreshInstruments(ctx context.Context) {
+	instruments, err := s.marketData().LoadInstruments(ctx)
+	if err == nil {
+		err = s.persistInstruments(ctx, instruments)
+	}
+	if err != nil {
+		log.ErrorContextf(ctx, "刷新标的失败：account=%s err=%v", s.Account.TradingAccountID, err)
+	}
+}
+
+// EnsureSymbolConfig 把全仓和杠杆设置到交易所，结果记在会话内存里，同一标的只设置一次。
+func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error {
+	configurer, ok := s.Adapter.(execution.SymbolConfigurer)
+	if !ok || exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
+		return nil
+	}
+	lock := s.symbolLock(symbol)
+	lock.Lock()
+	defer lock.Unlock()
+	s.symbolMu.Lock()
+	configured := s.configuredSymbols[symbol] == leverage.String()
+	s.symbolMu.Unlock()
+	if configured {
+		return nil
+	}
+	if err := configurer.SetMarginMode(ctx, shared.ExchangeSymbol(symbol), exchange.MarginModeCross); err != nil {
+		return err
+	}
+	if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
+		return err
+	}
+	s.symbolMu.Lock()
+	if s.configuredSymbols == nil {
+		s.configuredSymbols = make(map[string]string)
+	}
+	s.configuredSymbols[symbol] = leverage.String()
+	s.symbolMu.Unlock()
+	return nil
+}
+
+func (s *ExchangeSession) symbolLock(symbol string) *sync.Mutex {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	if s.symbolLocks == nil {
+		s.symbolLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := s.symbolLocks[symbol]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.symbolLocks[symbol] = lock
+	}
+	return lock
+}
+
+// ForgetSymbolConfig 让标的下次开仓前重新设置；默认杠杆变更时全部标的都要重新设置。
+func (s *ExchangeSession) ForgetSymbolConfig(symbol string) {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	if symbol == store.DefaultLeverageKey {
+		s.configuredSymbols = nil
+		return
+	}
+	delete(s.configuredSymbols, symbol)
+}
+
+func (s *ExchangeSession) marketData() execution.MarketDataSource {
+	if s.MarketData != nil {
+		return s.MarketData
+	}
+	return s.Adapter
 }
 
 func (s *ExchangeSession) paperAccountGeneration() uint64 {
@@ -509,21 +693,15 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 		return s.Sync.ApplyOrder(ctx, s.Account.TradingAccountID, event.order)
 	case privateFill:
 		applied, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
-		if err == nil && applied && s.syncRequested != nil {
-			// 成交已使准入关闭，请求完整同步以确认余额后恢复
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+		if err == nil && applied {
+			// 成交已使准入关闭，请求轻量同步确认余额后恢复
+			s.RequestSync()
 		}
 		return err
 	case privatePosition:
 		err := s.Sync.ApplyPosition(ctx, s.Account.TradingAccountID, event.position)
-		if err == nil && s.syncRequested != nil {
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+		if err == nil {
+			s.RequestSync()
 		}
 		return err
 	case privateAccount:
@@ -532,11 +710,8 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 			s.Account.TradingAccountID,
 			event.account,
 		)
-		if err == nil && s.syncRequested != nil {
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+		if err == nil {
+			s.RequestSync()
 		}
 		return err
 	default:
@@ -725,80 +900,6 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-func leverageSymbols(settings store.LeverageSettings) []string {
-	symbols := make([]string, 0, len(settings))
-	for symbol := range settings {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
-	return symbols
-}
-
-func sessionSymbols(
-	account store.TradingAccountRecord,
-	orders []exchange.Order,
-	local []store.OrderRecord,
-	positions []exchange.Position,
-	instruments []exchange.Instrument,
-	snapshot exchange.AccountSnapshot,
-) []string {
-	set := make(map[string]struct{})
-	for _, symbol := range account.SyncSymbols {
-		set[symbol] = struct{}{}
-	}
-	for symbol := range account.LeverageSettings {
-		set[symbol] = struct{}{}
-	}
-	for symbol := range account.FillCursors {
-		set[symbol] = struct{}{}
-	}
-	for _, current := range orders {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, current := range local {
-		if current.ExchangeSymbol != "" {
-			set[current.ExchangeSymbol] = struct{}{}
-		}
-	}
-	for _, position := range positions {
-		if position.ExchangeSymbol != "" {
-			set[position.ExchangeSymbol] = struct{}{}
-		}
-	}
-	if exchange.MarketType(account.MarketType) == exchange.MarketTypeSpot {
-		heldAssets := make(map[string]struct{})
-		for _, balance := range snapshot.Balances {
-			if balance.Total.Cmp(shared.Zero()) > 0 ||
-				balance.Available.Cmp(shared.Zero()) > 0 ||
-				balance.Locked.Cmp(shared.Zero()) > 0 {
-				heldAssets[balance.Asset] = struct{}{}
-			}
-		}
-		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
-				continue
-			}
-			if instrument.QuoteAsset != account.SettlementAsset {
-				continue
-			}
-			if _, held := heldAssets[instrument.BaseAsset]; held {
-				symbol := instrument.ExchangeSymbol
-				if symbol != "" {
-					set[symbol] = struct{}{}
-				}
-			}
-		}
-	}
-	symbols := make([]string, 0, len(set))
-	for symbol := range set {
-		symbols = append(symbols, symbol)
-	}
-	sort.Strings(symbols)
-	return symbols
 }
 
 func cloneFillCursors(current store.FillCursors) store.FillCursors {

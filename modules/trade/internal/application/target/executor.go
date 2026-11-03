@@ -7,12 +7,14 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
@@ -49,6 +51,8 @@ type OrderService interface {
 	Capacity(context.Context, string, orderdomain.OrderSpec) (shared.Decimal, error)
 	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(context.Context, string, string) (orderdomain.Order, error)
+	SubmitBatch(context.Context, string, []string) ([]orderapp.BatchResult, error)
+	ResolveUnknownBatch(context.Context, string, []string) ([]orderapp.BatchResult, error)
 	Cancel(context.Context, string, string) (orderdomain.Order, error)
 	DiscardPending(context.Context, string, string) (orderdomain.Order, error)
 	ResolveUnknown(context.Context, string, string) (orderdomain.Order, error)
@@ -58,9 +62,49 @@ type Executor struct {
 	Store            *store.Store
 	Orders           OrderService
 	Prices           PriceSource
+	Venues           execution.VenueCatalog
 	Now              func() time.Time
 	MaxChildNotional shared.Decimal
+	// MinRebalanceRatio 是最小调仓比例，为零时用默认 5%。
+	MinRebalanceRatio shared.Decimal
+	// OnReversal 在同一目标内第一次出现反向子单时调用，用于告警。
+	OnReversal func(spaceID, logicalAccountID, instrumentID string, at time.Time)
+	// Observe 记录下单量指标，为空时不记录。
+	Observe ExecutionObserver
+	// BatchSize 返回一个执行账户每批最多下几单，为空时永续 16、现货 8。
+	BatchSize func(marketType string) int
+	// MinBatchInterval 是同一组合账户相邻两批的最小间隔，为零时不限制。
+	MinBatchInterval time.Duration
+	// RateStatus 返回执行账户所在接口的限流状态，模拟盘没有。
+	RateStatus func(tradingAccountID string) (exchange.RateStatus, bool)
+
+	batchMu   sync.Mutex
+	lastBatch map[string]time.Time
 }
+
+const (
+	defaultSwapBatchSize = 16
+	defaultSpotBatchSize = 8
+	// batchUsageLimit 是停发新批的权重用量比例。
+	batchUsageLimit = 0.9
+)
+
+// ExecutionObserver 接收收敛过程中的下单量事件。
+type ExecutionObserver interface {
+	// Blocked 记录被下单前持仓校验或同目标反向熔断跳过的标的。
+	Blocked(tradingAccountID, result string)
+	// ChildPlaced 记录当前目标又发出一笔子单；crossTargetReversal 表示它和上一个目标在同一标的上的成交方向相反。
+	ChildPlaced(logicalAccountID, targetID string, crossTargetReversal bool)
+}
+
+const (
+	// defaultMinRebalanceRatio 是默认最小调仓比例：同号持仓与目标的差额不超过目标数量的这个比例时不下单。
+	defaultMinRebalanceRatio = "0.05"
+	// positionReflectWindow 是下单前持仓校验的回看时长。
+	positionReflectWindow     = 10 * time.Minute
+	reasonPositionUnreflected = "持仓未反映已成交子单"
+	reasonTargetReversal      = "同一目标内来回下单"
+)
 
 type Result struct {
 	Status string
@@ -72,7 +116,20 @@ type memberState struct {
 	account     store.TradingAccountRecord
 	instruments map[string]store.InstrumentRecord
 	positions   map[string]shared.Decimal
-	blocked     []store.BlockedTarget
+	// sellable 是持仓来自余额的市场可卖出的数量，取自 Available。
+	// positions 用 Total，股票当日买入的数量算持仓但不可卖。
+	sellable map[string]shared.Decimal
+	blocked  []store.BlockedTarget
+}
+
+// placement 是一次下单尝试的结果。tooSmall 表示全部成员都因最小量或最小金额下不了单。
+type placement struct {
+	placed   bool
+	orderID  string
+	reason   string
+	tooSmall bool
+	// deferred 表示本批这个执行账户的额度用完，留到下一批。
+	deferred bool
 }
 
 type laneAction struct {
@@ -113,10 +170,15 @@ func (e *Executor) Converge(
 	defer func() {
 		switch {
 		case singleCauseIs(resultErr, ErrTargetExpired) || singleCauseIs(resultErr, orderapp.ErrTargetExpired):
-			target.Status = StatusExpired
-			target.LastError = ""
 			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			defer cancel()
+			// 先释放待提交子单再置为过期：释放失败时目标不变，下一轮重试。
+			if err := e.discardExpiredPendingOrders(persistCtx, spaceID, target); err != nil {
+				result, resultErr = Result{}, err
+				return
+			}
+			target.Status = StatusExpired
+			target.LastError = ""
 			updated, err := e.Store.UpdateLogicalAccountTargetState(persistCtx, target)
 			if err != nil {
 				result, resultErr = Result{}, err
@@ -133,26 +195,10 @@ func (e *Executor) Converge(
 		}
 	}()
 	if target.Status == StatusExpired {
-		// EXPIRED targets are normally terminal, but an older process may have
-		// persisted that state before releasing a PENDING child reservation. Run
-		// the idempotent cleanup on every recovery pass so upgrades/restarts can
-		// repair that durable state as well.
-		if err := e.discardExpiredPendingOrders(ctx, spaceID, target); err != nil {
-			return Result{}, err
-		}
 		return Result{Status: StatusExpired}, nil
 	}
+	// 过期不是撤单或平仓的理由，新的有效目标到达后才继续收敛。
 	if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
-		// Expiry is a normal terminal condition for this target, not a reason to
-		// cancel existing orders or flatten positions. Trade will converge only
-		// after a newer valid target arrives. Pending children are different:
-		// they have not reached an exchange and must release their reservation
-		// before the target becomes terminal.
-		if errors.Is(err, ErrTargetExpired) {
-			if expiryErr := e.discardExpiredPendingOrders(ctx, spaceID, target); expiryErr != nil {
-				return Result{}, errors.Join(err, expiryErr)
-			}
-		}
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
@@ -179,12 +225,24 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusPaused, Action: "cancel"}, nil
+			return Result{Status: StatusPaused, Action: "stop"}, nil
 		}
 		return Result{Status: StatusPaused}, nil
 	}
 	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return Result{}, ErrTargetSession
+	}
+	// 快速路径：只在等当前目标已发出的子单结束时，不加载成员、不逐个标的计算。每笔成交都会唤醒收敛，
+	// 这段等待如果每次都走完整计算，会和成交入账抢 SQLite 连接。
+	if waiting, err := e.waitingOnChildren(ctx, spaceID, logicalAccountID, target); err != nil {
+		return Result{}, err
+	} else if waiting {
+		if target.Status != StatusConverging {
+			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+				return Result{}, err
+			}
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
 	}
 
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
@@ -193,7 +251,7 @@ func (e *Executor) Converge(
 	}
 	for _, member := range members {
 		if member.account.Status != "ENABLED" || !member.account.Ready {
-			target.LastError = "member " + member.account.TradingAccountID + " is not ready"
+			target.LastError = "成员 " + member.account.TradingAccountID + " 未就绪"
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -201,7 +259,21 @@ func (e *Executor) Converge(
 		}
 	}
 
-	orders, err := e.activeOrders(ctx, spaceID, members)
+	now := time.Now()
+	if e.Now != nil {
+		now = e.Now()
+	}
+	for _, member := range members {
+		if !execution.InTradingSession(e.Venues, member.account.Exchange, now) {
+			target.LastError = "当前不在交易时段"
+			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
+				return Result{}, err
+			}
+			return Result{Status: StatusPaused}, nil
+		}
+	}
+
+	orders, err := e.activeOrders(ctx, spaceID, logicalAccountID, members)
 	if err != nil {
 		return Result{}, err
 	}
@@ -212,7 +284,7 @@ func (e *Executor) Converge(
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
 				current.RunnerID != target.RunnerID:
 			reason := fmt.Sprintf(
-				"%s order %s conflicts with automatic target execution",
+				"%s 订单 %s 与自动执行冲突",
 				current.OwnerType, current.OrderID,
 			)
 			if err := e.pauseLogicalAccount(ctx, logicalAccount, target, reason); err != nil {
@@ -227,7 +299,7 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusConverging, Action: "cancel"}, nil
+			return Result{Status: StatusConverging, Action: "stop"}, nil
 		}
 	}
 
@@ -246,7 +318,7 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusBlocked, Action: "cancel"}, nil
+			return Result{Status: StatusBlocked, Action: "stop"}, nil
 		}
 		target.BlockedTargets = blocked
 		target.LastError = ""
@@ -256,6 +328,13 @@ func (e *Executor) Converge(
 		return Result{Status: StatusBlocked}, nil
 	}
 
+	desired, err := desiredTargets(target)
+	if err != nil {
+		return Result{}, err
+	}
+	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
+	inFlight := false
+	var unknown []string
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
 			current.OwnerID != target.TargetID {
@@ -263,68 +342,38 @@ func (e *Executor) Converge(
 		}
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
-			if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
-				if expiryErr := e.discardPendingOnTargetInvalidation(ctx, spaceID, current.OrderID, err); expiryErr != nil {
-					return Result{}, expiryErr
-				}
-				return Result{Status: StatusPaused}, err
+			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members)
+			if handled {
+				return result, pendingErr
 			}
-			if _, err := e.Orders.Submit(ctx, spaceID, current.OrderID); err != nil {
-				if targetSubmitConflict(err) {
-					if _, discardErr := e.Orders.DiscardPending(
-						ctx, spaceID, current.OrderID,
-					); discardErr != nil {
-						return Result{}, errors.Join(err, discardErr)
-					}
-					if errors.Is(err, orderapp.ErrTargetExpired) {
-						return Result{Status: StatusPaused}, err
-					}
-					if errors.Is(err, orderapp.ErrAccountNotReady) {
-						target.LastError = err.Error()
-						if updateErr := e.updateTarget(
-							ctx, &target, StatusPending,
-						); updateErr != nil {
-							return Result{}, updateErr
-						}
-					} else {
-						if pauseErr := e.pauseLogicalAccount(
-							ctx, logicalAccount, target, err.Error(),
-						); pauseErr != nil {
-							return Result{}, pauseErr
-						}
-					}
-					return Result{Status: StatusPaused, Action: "pause"}, nil
-				}
-				return Result{}, err
+			if pendingErr != nil {
+				return Result{}, pendingErr
 			}
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusConverging, Action: "submit"}, nil
+			inFlight = inFlight || result.Action == "submit"
 		case orderdomain.Submitting, orderdomain.SubmitUnknown:
-			if _, err := e.Orders.ResolveUnknown(ctx, spaceID, current.OrderID); err != nil {
-				return Result{}, err
-			}
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusConverging, Action: "resolve"}, nil
+			unknown = append(unknown, current.OrderID)
+			inFlight = true
 		default:
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusConverging}, nil
+			inFlight = true
 		}
 	}
-
-	desired, err := desiredTargets(target)
-	if err != nil {
-		return Result{}, err
+	if len(unknown) > 0 {
+		// 全部未知结果一次解析完，结束后只做一次轻量同步。
+		if _, err := e.Orders.ResolveUnknownBatch(ctx, spaceID, unknown); err != nil {
+			return Result{}, err
+		}
 	}
-	lanes := laneIDs(desired, members)
+	if inFlight {
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
+	}
+
 	blocked = nil
-	for _, instrumentID := range lanes {
-		action, complete, reason, actionErr := nextLaneAction(
+	var actions []laneAction
+	for _, instrumentID := range laneIDs(desired, members) {
+		action, complete, reason, actionErr := e.laneAction(
 			instrumentID, desired[instrumentID], members,
 		)
 		if actionErr != nil {
@@ -338,51 +387,110 @@ func (e *Executor) Converge(
 			})
 			continue
 		}
-		if complete {
-			continue
+		if !complete {
+			actions = append(actions, action)
 		}
-		placed, placeReason, placeErr := e.placeAction(
-			ctx, spaceID, target, action, members,
-		)
-		if placeErr != nil {
-			if targetSubmitConflict(placeErr) {
-				if errors.Is(placeErr, orderapp.ErrTargetExpired) {
-					return Result{}, placeErr
-				}
-				if errors.Is(placeErr, orderapp.ErrAccountNotReady) {
-					target.LastError = placeErr.Error()
-					if updateErr := e.updateTarget(
-						ctx, &target, StatusPending,
-					); updateErr != nil {
-						return Result{}, updateErr
-					}
-				} else {
-					if pauseErr := e.pauseLogicalAccount(
-						ctx, logicalAccount, target, placeErr.Error(),
-					); pauseErr != nil {
-						return Result{}, pauseErr
-					}
-				}
-				return Result{Status: StatusPaused, Action: "pause"}, nil
+	}
+	if len(actions) > 0 && !e.batchAllowed(logicalAccount.LogicalAccountID, members) {
+		// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "pace"}, nil
+	}
+	// 先减后加：减仓批的结果回来、资金释放之后才发加仓。本批有减仓成功下单时不加仓；
+	// 减仓全部下不了时才加仓，能否加仓由资金检查决定。
+	quota := e.batchQuota(members)
+	var placedIDs []string
+	deferred := false
+	for _, reducing := range []bool{true, false} {
+		if !reducing && len(placedIDs) > 0 {
+			break
+		}
+		for _, action := range actions {
+			if action.reducing != reducing {
+				continue
 			}
-			return Result{}, placeErr
-		}
-		if placeReason != "" {
-			blocked = append(blocked, store.BlockedTarget{
-				InstrumentID: instrumentID,
-				Quantity:     action.delta.String(),
-				Reason:       placeReason,
-			})
-			continue
-		}
-		if placed {
-			target.BlockedTargets = blocked
-			target.LastError = ""
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
+			if quotaExhausted(quota) {
+				// 所有执行账户的本批额度都用完：剩下的标的留到下一批，不再逐个查询。
+				deferred = true
+				break
 			}
-			return Result{Status: StatusConverging, Action: "place"}, nil
+			if quota[action.member.account.TradingAccountID] <= 0 {
+				// 首选成员额度用完：本轮跳过，不换成员。
+				deferred = true
+				continue
+			}
+			instrumentID := action.instrument.InstrumentID
+			unreflected, checkErr := e.positionUnreflected(ctx, spaceID, members, instrumentID)
+			if checkErr != nil {
+				return Result{}, checkErr
+			}
+			if unreflected {
+				if e.Observe != nil {
+					e.Observe.Blocked(action.member.account.TradingAccountID, "duplicate_blocked")
+				}
+				// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
+				blocked = append(blocked, store.BlockedTarget{
+					InstrumentID: instrumentID,
+					Quantity:     action.delta.String(),
+					Reason:       reasonPositionUnreflected,
+				})
+				continue
+			}
+			placement, placeErr := e.placeAction(
+				ctx, spaceID, target, action, members, quota,
+			)
+			if placeErr != nil {
+				if len(placedIDs) > 0 {
+					// 已经落库的子单照常发出，错误留到下一轮。
+					break
+				}
+				return e.placementFailure(ctx, logicalAccount, &target, placeErr)
+			}
+			if placement.deferred {
+				deferred = true
+				continue
+			}
+			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
+				continue
+			}
+			if placement.reason != "" {
+				blocked = append(blocked, store.BlockedTarget{
+					InstrumentID: instrumentID,
+					Quantity:     action.delta.String(),
+					Reason:       placement.reason,
+				})
+				continue
+			}
+			if placement.placed {
+				placedIDs = append(placedIDs, placement.orderID)
+			}
 		}
+	}
+	if len(placedIDs) > 0 {
+		e.noteBatch(logicalAccount.LogicalAccountID)
+		results, batchErr := e.Orders.SubmitBatch(ctx, spaceID, placedIDs)
+		if result, handled, err := e.batchFailure(ctx, logicalAccount, &target, results); handled {
+			return result, err
+		}
+		if batchErr != nil && len(results) == 0 {
+			return Result{}, batchErr
+		}
+		target.BlockedTargets = blocked
+		target.LastError = ""
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, errors.Join(batchErr, err)
+		}
+		return Result{Status: StatusConverging, Action: "place"}, batchErr
+	}
+	if deferred {
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "pace"}, nil
 	}
 	target.BlockedTargets = blocked
 	target.LastError = ""
@@ -396,6 +504,28 @@ func (e *Executor) Converge(
 		return Result{}, err
 	}
 	return Result{Status: StatusConverged}, nil
+}
+
+// HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
+func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccountTargetRecord) (bool, error) {
+	members, err := e.loadMembers(ctx, target.SpaceID, target.LogicalAccountID)
+	if err != nil {
+		return false, err
+	}
+	desired, err := desiredTargets(target)
+	if err != nil {
+		return false, err
+	}
+	for _, instrumentID := range laneIDs(desired, members) {
+		_, complete, _, err := e.laneAction(instrumentID, desired[instrumentID], members)
+		if err != nil {
+			return false, err
+		}
+		if !complete {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *Executor) loadMembers(
@@ -436,10 +566,15 @@ func (e *Executor) loadMembers(
 			symbols[instrument.ExchangeSymbol] = instrument.InstrumentID
 		}
 		positions := make(map[string]shared.Decimal)
+		sellable := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
-		if account.MarketType == string(exchange.MarketTypeSpot) {
+		if exchange.RuleFor(account.MarketType).PositionFromBalance {
+			managed, managedErr := e.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)
+			if managedErr != nil {
+				return nil, managedErr
+			}
 			for _, balance := range account.Snapshot.Balances {
-				if balance.Asset == account.SettlementAsset {
+				if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 					continue
 				}
 				quantity, parseErr := shared.ParseDecimal(balance.Total)
@@ -458,11 +593,16 @@ func (e *Executor) loadMembers(
 						InstrumentID: balance.Asset,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
-							": asset has no unique tradable instrument mapping",
+							"：资产没有唯一可交易的标的",
 					})
 					continue
 				}
 				positions[instrumentID] = positions[instrumentID].Add(quantity)
+				available, parseErr := shared.ParseDecimal(balance.Available)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				sellable[instrumentID] = sellable[instrumentID].Add(available)
 			}
 		} else {
 			positionRecords, listErr := e.Store.ListPositions(
@@ -485,7 +625,7 @@ func (e *Executor) loadMembers(
 						InstrumentID: position.ExchangeSymbol,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
-							": position has no tradable instrument mapping",
+							"：持仓没有对应的可交易标的",
 					})
 					continue
 				}
@@ -494,7 +634,7 @@ func (e *Executor) loadMembers(
 		}
 		members = append(members, memberState{
 			member: record, account: account,
-			instruments: instruments, positions: positions, blocked: blocked,
+			instruments: instruments, positions: positions, sellable: sellable, blocked: blocked,
 		})
 	}
 	return members, nil
@@ -525,23 +665,37 @@ func blockedExposures(members []memberState) []store.BlockedTarget {
 	return blocked
 }
 
+// activeOrders 列出组合账户的未结束订单：按组合账户查（停用成员上的在途子单也要算），
+// 再加上启用成员账户上的订单（外部订单可能没有组合账户归属）。
 func (e *Executor) activeOrders(
 	ctx context.Context,
 	spaceID string,
+	logicalAccountID string,
 	members []memberState,
 ) ([]store.OrderRecord, error) {
 	var active []store.OrderRecord
+	seen := make(map[string]struct{})
+	add := func(record store.OrderRecord) {
+		if _, ok := seen[record.OrderID]; ok || orderdomain.State(record.State).Terminal() {
+			return
+		}
+		seen[record.OrderID] = struct{}{}
+		active = append(active, record)
+	}
+	owned, _, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{LogicalAccountID: logicalAccountID, OnlyOpen: true, Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range owned {
+		add(record)
+	}
 	for _, member := range members {
-		records, err := e.Store.ListOrdersForAccount(
-			ctx, spaceID, member.account.TradingAccountID, 1,
-		)
+		records, err := e.Store.ListActiveOrdersForAccount(ctx, spaceID, member.account.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
 		for _, record := range records {
-			if !orderdomain.State(record.State).Terminal() {
-				active = append(active, record)
-			}
+			add(record)
 		}
 	}
 	sort.Slice(active, func(i, j int) bool {
@@ -599,6 +753,28 @@ func laneIDs(
 	return values
 }
 
+// laneAction 先按最小调仓阈值判断整条标的是否已到位，再算下一步动作。收敛和过期告警共用，结论一致。
+func (e *Executor) laneAction(
+	instrumentID string,
+	desired desiredTarget,
+	members []memberState,
+) (laneAction, bool, string, error) {
+	if !desired.Hold {
+		confirmed := shared.Zero()
+		for _, member := range members {
+			confirmed = confirmed.Add(member.positions[instrumentID])
+		}
+		ratio := e.MinRebalanceRatio
+		if ratio.IsZero() {
+			ratio = shared.MustDecimal(defaultMinRebalanceRatio)
+		}
+		if withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID, ratio) {
+			return laneAction{}, true, "", nil
+		}
+	}
+	return nextLaneAction(instrumentID, desired, members)
+}
+
 func nextLaneAction(
 	instrumentID string,
 	desired desiredTarget,
@@ -612,6 +788,7 @@ func nextLaneAction(
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])
 	}
+
 	for _, member := range positionsByAbsoluteSize(members, instrumentID) {
 		position := member.positions[instrumentID]
 		if position.IsZero() {
@@ -621,7 +798,11 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"position has no tradable instrument mapping", nil
+					"持仓没有对应的可交易标的", nil
+			}
+			// 反向零头下不了单，跳过这个成员继续判断。
+			if belowMinimumQuantity(position, instrument) {
+				continue
 			}
 			return laneAction{
 				member: member, instrument: instrument,
@@ -629,7 +810,7 @@ func nextLaneAction(
 			}, false, "", nil
 		}
 	}
-	if confirmed.Cmp(desired.Quantity) == 0 {
+	if desired.Quantity.IsZero() || confirmed.Cmp(desired.Quantity) == 0 {
 		return laneAction{}, true, "", nil
 	}
 	delta := desired.Quantity.Sub(confirmed)
@@ -650,7 +831,7 @@ func nextLaneAction(
 			instrument, ok := member.instruments[instrumentID]
 			if !ok {
 				return laneAction{}, false,
-					"position has no tradable instrument mapping", nil
+					"持仓没有对应的可交易标的", nil
 			}
 			return laneAction{
 				member: member, instrument: instrument,
@@ -666,7 +847,52 @@ func nextLaneAction(
 			}, false, "", nil
 		}
 	}
-	return laneAction{}, false, "no enabled member supports instrument", nil
+	return laneAction{}, false, "没有启用的成员支持该标的", nil
+}
+
+// withinRebalanceThreshold 判断整条标的的差额是否小到不用调：目标不为 0，所有成员持仓都和目标同号或为零，
+// 且 |目标 − 合计持仓| 不超过 |目标| 的 ratio。按整条标的比较，反向持仓和多成员对冲不会被跳过。
+func withinRebalanceThreshold(
+	desired shared.Decimal,
+	confirmed shared.Decimal,
+	members []memberState,
+	instrumentID string,
+	ratio shared.Decimal,
+) bool {
+	if desired.IsZero() {
+		return false
+	}
+	for _, member := range members {
+		position := member.positions[instrumentID]
+		if !position.IsZero() && !sameSign(position, desired) {
+			return false
+		}
+	}
+	limit := desired.Abs().Mul(ratio)
+	return desired.Sub(confirmed).Abs().Cmp(limit) <= 0
+}
+
+// belowMinimumQuantity 判断数量按步长取整后是否下不了单。
+func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
+	step, minimum, err := baseQuantityRules(instrument)
+	if err != nil {
+		return false
+	}
+	floored := floorToStep(quantity.Abs(), step)
+	return floored.IsZero() || floored.Cmp(minimum) < 0
+}
+
+// laneFinished 判断下不了单的剩余量能否算完成：目标为 0 或已有同向持仓时是零头，
+// 从空仓开新仓就达不到最小量才需要人看。
+func laneFinished(desired desiredTarget, members []memberState, instrumentID string) bool {
+	if desired.Quantity.IsZero() {
+		return true
+	}
+	confirmed := shared.Zero()
+	for _, member := range members {
+		confirmed = confirmed.Add(member.positions[instrumentID])
+	}
+	return !confirmed.IsZero() && sameSign(confirmed, desired.Quantity)
 }
 
 func positionsByAbsoluteSize(
@@ -696,28 +922,30 @@ func (e *Executor) placeAction(
 	target store.LogicalAccountTargetRecord,
 	action laneAction,
 	members []memberState,
-) (bool, string, error) {
-	candidates := []laneAction{action}
-	if !action.reducing {
-		candidates = candidates[:0]
-		for _, member := range members {
-			instrument, ok := member.instruments[action.instrument.InstrumentID]
-			if !ok {
-				continue
-			}
-			candidates = append(candidates, laneAction{
-				member: member, instrument: instrument, delta: action.delta,
-			})
-		}
+	quota map[string]int,
+) (placement, error) {
+	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
+	if err != nil {
+		return placement{}, err
 	}
 	var capacityErrors []string
+	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
+	// 有成员本来能下单但被排除时不能算完成。
+	tooSmall := 0
+	candidates := placementCandidates(action, members)
 	for _, candidate := range candidates {
+		accountID := candidate.member.account.TradingAccountID
+		// 额度按执行账户计：用完算本轮跳过，不换到下一个成员，也不写阻塞原因。
+		if quota[accountID] <= 0 {
+			return placement{deferred: true}, nil
+		}
 		quantity, reason, err := e.childQuantity(ctx, candidate)
 		if err != nil {
-			return false, "", err
+			return placement{}, err
 		}
 		if reason != "" {
 			capacityErrors = append(capacityErrors, reason)
+			tooSmall++
 			continue
 		}
 		quote, err := e.Prices.LatestPrice(
@@ -727,19 +955,47 @@ func (e *Executor) placeAction(
 		)
 		if err != nil {
 			if paper.IsInfrastructureError(err) {
-				return false, "", err
+				return placement{}, err
 			}
-			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
+			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
 		}
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
-			return false, "", &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+		}
+		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
+		if err != nil {
+			return placement{}, err
+		}
+		// 合约全平只查最小数量，否则剩余仓位永远平不掉。
+		fullClose := candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).ReduceOnly &&
+			quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
+		if belowMinimum && !fullClose {
+			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
+			tooSmall++
+			continue
+		}
+		if reason, excluded := rejected[accountID]; excluded {
+			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
+			capacityErrors = append(capacityErrors, accountID+": "+reason)
+			continue
+		}
+		if candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).PositionFromBalance {
+			sellable := candidate.member.sellable[candidate.instrument.InstrumentID]
+			if quantity.Cmp(sellable) > 0 {
+				quantity = sellable
+			}
+			if belowMinimumQuantity(quantity, candidate.instrument) {
+				capacityErrors = append(capacityErrors, accountID+": 可卖量不足")
+				continue
+			}
+			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
 		}
 		if target.InstanceID != "" {
 			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
 				SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
 				OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
 			}, target); err != nil {
-				return false, "", err
+				return placement{}, err
 			}
 		}
 		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
@@ -753,27 +1009,22 @@ func (e *Executor) placeAction(
 		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
 		if err != nil {
-			return false, "", err
+			return placement{}, err
 		}
 		if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 {
-			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": child notional limit is below Exchange minimum quantity")
+			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		belowMinimum, err := belowMinimumNotional(
-			quantity,
-			quote.Price,
-			candidate.instrument.MinNotional,
-		)
-		if err != nil {
-			return false, "", err
+		reversal, reversalErr := e.reversalCount(ctx, spaceID, target, candidate)
+		if reversalErr != nil {
+			return placement{}, reversalErr
 		}
-		if belowMinimum {
-			capacityErrors = append(
-				capacityErrors,
-				candidate.member.account.TradingAccountID+
-					": notional is below Exchange minimum",
-			)
-			continue
+		if reversal >= 2 {
+			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
+			if e.Observe != nil {
+				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
+			}
+			return placement{reason: reasonTargetReversal}, nil
 		}
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
@@ -791,10 +1042,9 @@ func (e *Executor) placeAction(
 				Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
 				LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
 			},
+			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
-		if candidate.member.account.MarketType == string(exchange.MarketTypeSwap) {
-			spec.PositionSide = exchange.PositionSideNet
-		}
+		spec.PositionSide = exchange.RuleFor(candidate.member.account.MarketType).PositionSide
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -802,10 +1052,10 @@ func (e *Executor) placeAction(
 					capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
 					continue
 				}
-				return false, "", err
+				return placement{}, err
 			}
 			if capacity.Cmp(shared.Zero()) <= 0 {
-				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": no executable capacity")
+				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
 				continue
 			}
 			if capacity.Cmp(spec.Quantity) < 0 {
@@ -814,37 +1064,65 @@ func (e *Executor) placeAction(
 		}
 		placed, err := e.Orders.Place(ctx, spaceID, spec)
 		if err != nil {
-			if capacityError(err) && !candidate.reducing {
+			if orderapp.IsPermanentValidationError(err) {
 				capacityErrors = append(
 					capacityErrors,
 					candidate.member.account.TradingAccountID+": "+err.Error(),
 				)
 				continue
 			}
-			return false, "", err
+			return placement{}, err
 		}
 		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
-			return false, "", e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
+			return placement{}, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
-		if _, err := e.Orders.Submit(ctx, spaceID, string(placed.ID)); err != nil {
-			if targetSubmitConflict(err) {
-				_, discardErr := e.Orders.DiscardPending(
-					ctx, spaceID, string(placed.ID),
-				)
-				if discardErr != nil {
-					return false, "", errors.Join(err, discardErr)
-				}
-				return false, "", err
-			}
-			return false, "", err
+		quota[accountID]--
+		if reversal == 1 && e.OnReversal != nil {
+			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
 		}
-		return true, "", nil
+		if e.Observe != nil {
+			e.Observe.ChildPlaced(target.LogicalAccountID, target.TargetID, e.crossTargetReversal(ctx, spaceID, target, candidate))
+		}
+		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
+		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
+	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
 	if len(capacityErrors) == 0 {
-		return false, "quantity is below Exchange minimum", nil
+		result.reason = "数量低于交易所最小值"
+		return result, nil
 	}
-	return false, "insufficient member capacity: " +
-		strings.Join(capacityErrors, "; "), nil
+	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
+	return result, nil
+}
+
+// placementCandidates 列出可以承接这次动作的成员：加仓是全部支持该标的的成员，
+// 减仓是全部同向持仓的成员，首选成员在最前。减仓数量不超过各成员自己的持仓。
+func placementCandidates(action laneAction, members []memberState) []laneAction {
+	instrumentID := action.instrument.InstrumentID
+	if !action.reducing {
+		candidates := make([]laneAction, 0, len(members))
+		for _, member := range members {
+			if instrument, ok := member.instruments[instrumentID]; ok {
+				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta})
+			}
+		}
+		return candidates
+	}
+	candidates := []laneAction{action}
+	for _, member := range positionsByAbsoluteSize(members, instrumentID) {
+		position := member.positions[instrumentID]
+		instrument, ok := member.instruments[instrumentID]
+		if !ok || member.account.TradingAccountID == action.member.account.TradingAccountID ||
+			position.IsZero() || position.IsNegative() == action.delta.IsNegative() {
+			continue
+		}
+		delta := action.delta
+		if position.Abs().Cmp(delta.Abs()) < 0 {
+			delta = position.Neg()
+		}
+		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true})
+	}
+	return candidates
 }
 
 func (e *Executor) checkTargetExecutable(
@@ -909,7 +1187,7 @@ func (e *Executor) childQuantity(
 	}
 	quantity := floorToStep(action.delta.Abs(), step)
 	if quantity.IsZero() || quantity.Cmp(minimum) < 0 {
-		return shared.Zero(), "quantity is below Exchange minimum", nil
+		return shared.Zero(), "数量低于交易所最小值", nil
 	}
 	return quantity, "", nil
 }
@@ -929,11 +1207,10 @@ func (e *Executor) stopOrder(
 	case orderdomain.Submitting, orderdomain.SubmitUnknown:
 		_, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID)
 		return err
-	case orderdomain.Canceling, orderdomain.CancelUnknown:
-		return nil
 	default:
-		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
-		return err
+		// 挂单中、部分成交、撤单中的目标市价单都等它自己结束：撤单只会和成交赛跑，
+		// 结束后再按最新持仓重算，避免买了又撤、撤了又买。
+		return nil
 	}
 }
 
@@ -951,7 +1228,7 @@ func (e *Executor) pauseLogicalAccount(
 			logicalAccount.SpaceID,
 			logicalAccount.LogicalAccountID,
 			"PAUSED",
-			reason,
+			store.AutoPauseReason(reason),
 		)
 	}); err != nil {
 		return err
@@ -1068,7 +1345,7 @@ func baseQuantityRules(
 		return shared.Decimal{}, shared.Decimal{},
 			fmt.Errorf("%w: minimum quantity", ErrInvalidTarget)
 	}
-	if instrument.MarketType == string(exchange.MarketTypeSwap) {
+	if exchange.RuleFor(instrument.MarketType).ContractValue {
 		contractValue, parseErr := shared.ParseDecimal(instrument.ContractValue)
 		if parseErr != nil || contractValue.Cmp(shared.Zero()) <= 0 {
 			return shared.Decimal{}, shared.Decimal{},
@@ -1119,4 +1396,362 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 
 func childClientOrderID() string {
 	return "mt" + xid.New().String()
+}
+
+func (e *Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
+}
+
+// positionUnreflected 判断持仓是否回退到某笔已成交目标子单下单前的值。对每个成员取最近 10 分钟内
+// 不分来源、有成交的订单，最近一笔是目标子单时，从它开始收集同向的目标子单，遇到非目标单或反向单就停；
+// 当前持仓等于其中任一笔的下单前持仓就说明持仓没反映这些成交。
+func (e *Executor) positionUnreflected(
+	ctx context.Context,
+	spaceID string,
+	members []memberState,
+	instrumentID string,
+) (bool, error) {
+	since := e.now().Add(-positionReflectWindow).UnixMilli()
+	for _, member := range members {
+		instrument, ok := member.instruments[instrumentID]
+		if !ok {
+			continue
+		}
+		records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, member.account.TradingAccountID, instrument.ExchangeSymbol, since)
+		if err != nil {
+			return false, err
+		}
+		if len(records) == 0 || records[0].OwnerType != string(orderdomain.OwnerTarget) {
+			continue
+		}
+		current := member.positions[instrumentID]
+		side := records[0].Side
+		for _, record := range records {
+			if record.OwnerType != string(orderdomain.OwnerTarget) || record.Side != side {
+				break
+			}
+			if record.PositionBefore == "" {
+				continue
+			}
+			before, err := shared.ParseDecimal(record.PositionBefore)
+			if err != nil {
+				return false, err
+			}
+			if before.Cmp(current) == 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// reversalCount 返回同一目标、同一执行账户、同一标的已发出子单（含这次将发的）的方向切换次数。
+func (e *Executor) reversalCount(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	candidate laneAction,
+) (int, error) {
+	sides, err := e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
+		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
+	if err != nil {
+		return 0, err
+	}
+	sides = append(sides, string(sideForDelta(candidate.delta)))
+	switches := 0
+	for index := 1; index < len(sides); index++ {
+		if sides[index] != sides[index-1] {
+			switches++
+		}
+	}
+	return switches, nil
+}
+
+// crossTargetReversal 判断这笔子单是否和 5 分钟内上一个目标在同一标的上的成交方向相反，只用于计数。
+func (e *Executor) crossTargetReversal(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	candidate laneAction,
+) bool {
+	since := e.now().Add(-5 * time.Minute).UnixMilli()
+	records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, candidate.member.account.TradingAccountID,
+		candidate.instrument.ExchangeSymbol, since)
+	if err != nil {
+		return false
+	}
+	for _, record := range records {
+		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID == target.TargetID {
+			continue
+		}
+		return record.Side != string(sideForDelta(candidate.delta))
+	}
+	return false
+}
+
+// batchQuota 是每个执行账户本批可下的单数。
+func (e *Executor) batchQuota(members []memberState) map[string]int {
+	quota := make(map[string]int, len(members))
+	for _, member := range members {
+		size := 0
+		if e.BatchSize != nil {
+			size = e.BatchSize(member.account.MarketType)
+		}
+		if size <= 0 {
+			size = defaultSwapBatchSize
+			if !exchange.RuleFor(member.account.MarketType).UsesMargin {
+				size = defaultSpotBatchSize
+			}
+		}
+		quota[member.account.TradingAccountID] = size
+	}
+	return quota
+}
+
+// batchAllowed 判断现在能否发新批：批间隔已到，成员接口没有限流暂停，权重用量低于 90%。
+func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) bool {
+	now := e.now()
+	if e.MinBatchInterval > 0 {
+		e.batchMu.Lock()
+		last := e.lastBatch[logicalAccountID]
+		e.batchMu.Unlock()
+		if !last.IsZero() && now.Sub(last) < e.MinBatchInterval {
+			return false
+		}
+	}
+	if e.RateStatus == nil {
+		return true
+	}
+	for _, member := range members {
+		status, ok := e.RateStatus(member.account.TradingAccountID)
+		if !ok {
+			continue
+		}
+		if status.Paused(now) || now.Before(status.OrdersPausedUntil) || status.UsageRatio() >= batchUsageLimit {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Executor) noteBatch(logicalAccountID string) {
+	e.batchMu.Lock()
+	defer e.batchMu.Unlock()
+	if e.lastBatch == nil {
+		e.lastBatch = make(map[string]time.Time)
+	}
+	e.lastBatch[logicalAccountID] = e.now()
+}
+
+// handlePendingChild 处理当前目标的待提交子单。从未发出的是本地残留，丢弃后按最新事实重算；
+// 未知窗口过后查无此单回到待提交的单，差额变了就丢弃重算，否则用同一单号串行重发，遇到未就绪就保留并停止本轮。
+// handled 为真时 Converge 直接返回 result 和 err。
+func (e *Executor) handlePendingChild(
+	ctx context.Context,
+	logicalAccount store.LogicalAccountRecord,
+	target *store.LogicalAccountTargetRecord,
+	current store.OrderRecord,
+	desired map[string]desiredTarget,
+	members []memberState,
+) (Result, bool, error) {
+	spaceID := current.SpaceID
+	if current.SubmittedAt == 0 {
+		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
+			return Result{}, false, err
+		}
+		return Result{Action: "discard"}, false, nil
+	}
+	if err := e.checkTargetExecutable(ctx, logicalAccount, *target); err != nil {
+		if expiryErr := e.discardPendingOnTargetInvalidation(ctx, spaceID, current.OrderID, err); expiryErr != nil {
+			return Result{}, true, expiryErr
+		}
+		return Result{Status: StatusPaused}, true, err
+	}
+	action, complete, _, err := e.laneAction(current.InstrumentID, desired[current.InstrumentID], members)
+	if err != nil {
+		return Result{}, false, err
+	}
+	quantity, parseErr := shared.ParseDecimal(current.Quantity)
+	if parseErr != nil {
+		return Result{}, false, parseErr
+	}
+	unreflected, checkErr := e.positionUnreflected(ctx, spaceID, members, current.InstrumentID)
+	if checkErr != nil {
+		return Result{}, false, checkErr
+	}
+	// 差额变了（方向、成员或剩余数量小于这笔单）或持仓没反映已成交子单时丢弃重算，不按旧数量重发。
+	if complete || unreflected || string(sideForDelta(action.delta)) != current.Side ||
+		action.member.account.TradingAccountID != current.TradingAccountID ||
+		action.delta.Abs().Cmp(quantity) < 0 {
+		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
+			return Result{}, false, err
+		}
+		return Result{Action: "discard"}, false, nil
+	}
+	submitted, err := e.Orders.Submit(ctx, spaceID, current.OrderID)
+	if err == nil || submitted.State == orderdomain.Rejected {
+		return Result{Action: "submit"}, false, nil
+	}
+	switch {
+	case errors.Is(err, orderdomain.ErrReferencePriceStale):
+		// 报价过期时丢弃这笔子单，下一轮按最新持仓和报价重新下单。
+		if _, discardErr := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); discardErr != nil {
+			return Result{}, true, errors.Join(err, discardErr)
+		}
+		return Result{Action: "discard"}, false, nil
+	case errors.Is(err, orderapp.ErrAccountNotReady):
+		// 保留待提交和原单号，等账户就绪后再发。
+		target.LastError = err.Error()
+		if updateErr := e.updateTarget(ctx, target, StatusPending); updateErr != nil {
+			return Result{}, true, updateErr
+		}
+		return Result{Status: StatusPaused}, true, nil
+	case exchange.NotAccepted(err):
+		// 限流：订单回到待提交，下一轮按规则处理。
+		return Result{Action: "submit"}, false, nil
+	case targetSubmitConflict(err):
+		if _, discardErr := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); discardErr != nil {
+			return Result{}, true, errors.Join(err, discardErr)
+		}
+		if errors.Is(err, orderapp.ErrTargetExpired) {
+			return Result{Status: StatusPaused}, true, err
+		}
+		if pauseErr := e.pauseLogicalAccount(ctx, logicalAccount, *target, err.Error()); pauseErr != nil {
+			return Result{}, true, pauseErr
+		}
+		return Result{Status: StatusPaused, Action: "pause"}, true, nil
+	}
+	return Result{}, true, err
+}
+
+// placementFailure 处理下单落库时的目标级错误。
+func (e *Executor) placementFailure(
+	ctx context.Context,
+	logicalAccount store.LogicalAccountRecord,
+	target *store.LogicalAccountTargetRecord,
+	placeErr error,
+) (Result, error) {
+	if !targetSubmitConflict(placeErr) {
+		return Result{}, placeErr
+	}
+	if errors.Is(placeErr, orderapp.ErrTargetExpired) {
+		return Result{}, placeErr
+	}
+	if errors.Is(placeErr, orderapp.ErrAccountNotReady) {
+		target.LastError = placeErr.Error()
+		if err := e.updateTarget(ctx, target, StatusPending); err != nil {
+			return Result{}, err
+		}
+	} else if err := e.pauseLogicalAccount(ctx, logicalAccount, *target, placeErr.Error()); err != nil {
+		return Result{}, err
+	}
+	return Result{Status: StatusPaused, Action: "pause"}, nil
+}
+
+// batchFailure 处理批量提交里的目标级错误。拒单、限流只影响单笔，留给下一轮；
+// 目标过期、账户未就绪、归属冲突影响整个组合账户。没发出的单已经退回待提交，下一轮丢弃。
+func (e *Executor) batchFailure(
+	ctx context.Context,
+	logicalAccount store.LogicalAccountRecord,
+	target *store.LogicalAccountTargetRecord,
+	results []orderapp.BatchResult,
+) (Result, bool, error) {
+	var other error
+	for _, result := range results {
+		err := result.Err
+		if err == nil || result.Order.State == orderdomain.Rejected || exchange.NotAccepted(err) {
+			continue
+		}
+		if targetSubmitConflict(err) {
+			// 没发出的子单立即释放预留，不留到下一轮。
+			if _, discardErr := e.Orders.DiscardPending(ctx, target.SpaceID, result.OrderID); discardErr != nil {
+				return Result{}, true, errors.Join(err, discardErr)
+			}
+		}
+		switch {
+		case errors.Is(err, orderapp.ErrTargetExpired):
+			return Result{Status: StatusPaused}, true, err
+		case errors.Is(err, orderapp.ErrAccountNotReady):
+			target.LastError = err.Error()
+			if updateErr := e.updateTarget(ctx, target, StatusPending); updateErr != nil {
+				return Result{}, true, updateErr
+			}
+			return Result{Status: StatusPaused}, true, nil
+		case targetSubmitConflict(err):
+			if pauseErr := e.pauseLogicalAccount(ctx, logicalAccount, *target, err.Error()); pauseErr != nil {
+				return Result{}, true, pauseErr
+			}
+			return Result{Status: StatusPaused, Action: "pause"}, true, nil
+		}
+		if other == nil {
+			other = err
+		}
+	}
+	if other != nil {
+		return Result{Status: StatusConverging, Action: "place"}, true, other
+	}
+	return Result{}, false, nil
+}
+
+func quotaExhausted(quota map[string]int) bool {
+	for _, remaining := range quota {
+		if remaining > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// waitingOnChildren 报告组合账户是否只是在等当前目标已发出的子单（挂单中、部分成交、撤单中）结束。
+// 有待提交、提交中、结果未知的子单，有其他归属的活动订单，子单所在成员未就绪，
+// 或成员账户上有不属于当前目标的活动订单（例如入组前的外部单）时返回 false，交给完整流程处理。
+func (e *Executor) waitingOnChildren(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	target store.LogicalAccountTargetRecord,
+) (bool, error) {
+	records, _, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{LogicalAccountID: logicalAccountID, OnlyOpen: true, Limit: 1000})
+	if err != nil {
+		return false, err
+	}
+	waiting := false
+	accounts := make(map[string]struct{})
+	for _, record := range records {
+		state := orderdomain.State(record.State)
+		if state.Terminal() {
+			continue
+		}
+		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID != target.TargetID {
+			return false, nil
+		}
+		switch state {
+		case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
+			return false, nil
+		}
+		waiting = true
+		accounts[record.TradingAccountID] = struct{}{}
+	}
+	for accountID := range accounts {
+		account, err := e.Store.GetTradingAccountByID(ctx, accountID)
+		if err != nil {
+			return false, err
+		}
+		if account.Status != "ENABLED" || !account.Ready {
+			return false, nil
+		}
+		active, err := e.Store.ListActiveOrdersForAccount(ctx, spaceID, accountID)
+		if err != nil {
+			return false, err
+		}
+		for _, order := range active {
+			if order.OwnerType != string(orderdomain.OwnerTarget) || order.OwnerID != target.TargetID {
+				return false, nil
+			}
+		}
+	}
+	return waiting, nil
 }

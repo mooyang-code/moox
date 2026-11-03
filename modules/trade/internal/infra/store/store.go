@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/cache"
 	"reflect"
 	"sort"
 	"strings"
@@ -32,6 +33,20 @@ type Store struct {
 	executionLocks        sync.Map
 	logicalMembershipLock sync.Mutex
 	metrics               *report.ModuleMetrics
+
+	// 很少变化、写入点明确的数据缓存在内存里：标的定义按场所缓存整份，账户身份按账户缓存。
+	// 标的和账户的写入都会清掉对应缓存，下单时不必每笔都查库。
+	instrumentSets cache.Memo[instrumentScope, *instrumentSet]
+	identities     cache.Memo[accountKey, tradingAccountIdentity]
+}
+
+// InvalidateCaches 清空内存缓存，用于绕过存储层直接改表之后（例如系统重置清表）。
+func (s *Store) InvalidateCaches() {
+	if s == nil {
+		return
+	}
+	s.instrumentSets.Invalidate()
+	s.identities.Invalidate()
 }
 
 func (s *Store) SetModuleMetrics(metrics *report.ModuleMetrics) {
@@ -48,7 +63,11 @@ func (s *Store) ModuleMetrics() *report.ModuleMetrics {
 }
 
 type Tx struct {
-	db *gorm.DB
+	db    *gorm.DB
+	store *Store
+	// 本事务写过标的或账户时，读取直接查库：未提交的数据不能进缓存。
+	instrumentsWritten bool
+	accountsWritten    bool
 }
 
 func Open(path string) (*Store, error) {
@@ -296,9 +315,22 @@ func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
 	if fn == nil {
 		return fmt.Errorf("%w: nil transaction callback", ErrInvalidRecord)
 	}
-	return s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
-		return fn(&Tx{db: db})
+	var written *Tx
+	err := s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
+		tx := &Tx{db: db, store: s}
+		written = tx
+		return fn(tx)
 	})
+	// 提交或回滚之后再清一次：事务内写入时已经清过，这里覆盖事务期间别处重新填进去的旧数据。
+	if written != nil {
+		if written.instrumentsWritten {
+			s.instrumentSets.Invalidate()
+		}
+		if written.accountsWritten {
+			s.identities.Invalidate()
+		}
+	}
+	return err
 }
 
 func (s *Store) DBForTest() *gorm.DB {

@@ -27,7 +27,9 @@
           >
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
-            <span v-if="instance.logical_account_id" class="mono">· {{ instance.logical_account_id }}</span></a-descriptions-item
+            <span v-if="instance.logical_account_id" class="mono"
+              >· {{ logicalAccount?.name || instance.logical_account_id }}</span
+            ></a-descriptions-item
           >
           <a-descriptions-item label="当前会话"
             ><span class="mono">{{ instance.session_id || "无当前会话" }}</span></a-descriptions-item
@@ -48,6 +50,7 @@
 </template>
 
 <script setup lang="ts">
+import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { getInstance } from "@/api/strategy";
@@ -61,6 +64,7 @@ const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
 const emit = defineEmits<{ close: []; openDetail: [string]; results: [string]; replay: [StrategyInstance] }>();
 
 const instance = ref<StrategyInstance | null>(null);
+const logicalAccount = useLogicalAccount(computed(() => instance.value?.logical_account_id));
 const loading = ref(false);
 const error = ref("");
 const readAt = ref("-");

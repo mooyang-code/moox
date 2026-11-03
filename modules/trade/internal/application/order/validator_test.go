@@ -390,7 +390,6 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
 		CredentialSecretID: "secret-1",
 		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
-		SyncSymbols: []string{"BTC-USDT"},
 		Snapshot: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
 				{Asset: "USDT", Available: shared.MustDecimal("1000")},

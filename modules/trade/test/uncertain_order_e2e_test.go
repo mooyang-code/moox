@@ -20,7 +20,6 @@ func TestSubmitFailuresRemainUnknownAndRecoverByClientIDWithoutReplace(t *testin
 	}{
 		{name: "EOF", err: &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: io.EOF}},
 		{name: "timeout", err: transportError("request timeout")},
-		{name: "429", err: &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429}},
 		{name: "5xx", err: &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: 503}},
 	}
 	for _, failure := range failures {

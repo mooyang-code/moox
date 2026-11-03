@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_owner_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_runner_id TEXT,
+    -- 目标子单下单前该执行账户在这个标的上的持仓，用于发现持仓没反映已成交子单；其他订单为空
+    c_position_before TEXT NOT NULL DEFAULT '',
     c_state TEXT NOT NULL,
     c_filled_quantity TEXT NOT NULL DEFAULT '0',
     -- 交易所订单更新里观察到的累计成交量（只升不降）：大于本地已入账的成交明细时说明明细还没补齐，余额也就不可信
@@ -79,6 +81,9 @@ WHERE c_exchange_order_id <> '';
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_state
 ON t_trade_orders (c_space_id, c_trading_account_id, c_state, c_mtime);
 
+CREATE INDEX IF NOT EXISTS idx_trade_orders_account_symbol_finished
+ON t_trade_orders (c_space_id, c_trading_account_id, c_exchange_symbol, c_finished_at);
+
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (
     c_space_id,
@@ -88,6 +93,14 @@ ON t_trade_orders (
     c_state,
     c_mtime
 );
+
+CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
+ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
+
+-- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_paper_open
+ON t_trade_orders (c_first_match_pending, c_space_id, c_order_id)
+WHERE c_state = 'OPEN';
 
 CREATE TABLE IF NOT EXISTS t_order_fills (
     c_space_id TEXT NOT NULL,
@@ -158,7 +171,6 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
     FOREIGN KEY (c_space_id, c_trading_account_id)
         REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
 );
-
 
 -- 被权威（REST 完整）持仓快照确认为空仓而删除的持仓墓碑：保留“快照确认空仓”的覆盖时间，
 -- 时间早于它的迟到成交已经体现在空仓里，不能再从零叠加出虚假持仓。

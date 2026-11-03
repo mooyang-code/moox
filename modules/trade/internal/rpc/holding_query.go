@@ -33,48 +33,25 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	if err != nil {
 		return nil, err
 	}
-	if account.MarketType != string(exchange.MarketTypeSpot) {
+	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
 		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
 	var quoteSource execution.ReferencePriceSource
-	var instrumentSource interface {
-		LoadInstruments(context.Context) ([]exchange.Instrument, error)
+	if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
+		quoteSource = adapter
 	}
-	var instruments []exchange.Instrument
-	if q.Adapters != nil {
-		if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
-			quoteSource, _ = adapter.(execution.ReferencePriceSource)
-			instrumentSource, _ = adapter.(interface {
-				LoadInstruments(context.Context) ([]exchange.Instrument, error)
-			})
-			if instrumentSource != nil {
-				instruments, err = instrumentSource.LoadInstruments(ctx)
-			}
-			if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
-				return nil, err
-			}
-		}
+	records, err := q.Store.ListInstrumentsForAccount(ctx, accountID)
+	if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
+		return nil, err
 	}
-	// A closed Paper session has no runtime adapter. Use the last persisted
-	// instrument metadata so historical holdings remain queryable.
-	if len(instruments) == 0 {
-		records, recordErr := q.Store.ListInstrumentsForAccount(ctx, accountID)
-		if recordErr != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
-			return nil, recordErr
-		}
-		for _, record := range records {
-			instruments = append(instruments, exchange.Instrument{
+	byAsset := make(map[string]exchange.Instrument)
+	for _, record := range records {
+		if strings.EqualFold(record.QuoteAsset, account.SettlementAsset) {
+			byAsset[strings.ToUpper(record.BaseAsset)] = exchange.Instrument{
 				Exchange: exchange.Exchange(record.Exchange), MarketType: exchange.MarketType(record.MarketType),
 				ExchangeSymbol: record.ExchangeSymbol, InstrumentID: record.InstrumentID,
 				BaseAsset: record.BaseAsset, QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
-			})
-		}
-	}
-	byAsset := make(map[string]exchange.Instrument)
-	for _, instrument := range instruments {
-		if instrument.MarketType == exchange.MarketTypeSpot &&
-			strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
-			byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
+			}
 		}
 	}
 	result := make([]holdingapp.Holding, 0, len(account.Snapshot.Balances))
@@ -95,7 +72,9 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		}
 		instrument, found := byAsset[strings.ToUpper(balance.Asset)]
 		if !found {
-			return nil, fmt.Errorf("holding query: no %s/%s Spot instrument", balance.Asset, account.SettlementAsset)
+			// 无法估值的资产也要展示，价格留空，页面显示“-”。
+			result = append(result, item)
+			continue
 		}
 		item.InstrumentID, item.ExchangeSymbol = instrument.InstrumentID, holdingQuoteSymbol(instrument)
 		if account.ExecutionMode == string(exchange.ExecutionModePaper) {
@@ -106,13 +85,11 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			item.AverageCost = averageCost
 		}
 		if quoteSource != nil {
-			quote, quoteErr := quoteSource.GetReferencePrice(ctx, holdingQuoteSymbol(instrument))
-			if quoteErr != nil {
-				return nil, quoteErr
+			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, holdingQuoteSymbol(instrument)); quoteErr == nil {
+				item.MarkPrice = quote.Price
+				item.MarketValue = quantity.Mul(quote.Price)
+				item.SourceTime = quote.UpdatedAt
 			}
-			item.MarkPrice = quote.Price
-			item.MarketValue = quantity.Mul(quote.Price)
-			item.SourceTime = quote.UpdatedAt
 		} else if account.ExecutionMode == string(exchange.ExecutionModePaper) {
 			// Closed Paper accounts have no live quote stream. Preserve a useful
 			// historical mark from the latest fill when one exists; otherwise

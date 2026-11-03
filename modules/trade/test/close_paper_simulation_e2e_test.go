@@ -168,7 +168,7 @@ func testClosePositionMarkTimestamp(t *testing.T, unknown bool) {
 		// Preserve the facts but emulate a legacy position lacking source time.
 		positions[0].ExchangeUpdatedAt = 0
 		require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
-			if err := tx.ReplacePositionsForAccount(testSpace, testAccount, nil, testNow.Add(time.Hour).UnixMilli()); err != nil {
+			if err := tx.ReplacePositionsForAccount(testSpace, testAccount, nil, testNow.Add(time.Hour).UnixMilli(), 0); err != nil {
 				return err
 			}
 			return tx.UpsertPosition(positions[0])
