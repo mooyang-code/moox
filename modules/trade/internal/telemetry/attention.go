@@ -15,12 +15,17 @@ const (
 	AttentionTargetBlocked   = "target_blocked"
 	AttentionAccountNotReady = "account_not_ready"
 	AttentionTargetExpired   = "target_expired"
+	// AttentionTargetReversal 是同一目标内同一账户同一标的出现反向子单：说明下多了。
+	AttentionTargetReversal = "target_reversal"
+	// AttentionRateLimited 是交易所接口限流或封禁暂停。
+	AttentionRateLimited = "rate_limited"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
 var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
-	AttentionAccountNotReady, AttentionTargetExpired,
+	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
+	AttentionRateLimited,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
@@ -55,27 +60,35 @@ func PublishAttention(items map[string][]string) {
 	}
 }
 
-// 目标被 Trade 拒绝时不进目标表，这里记下来，在保留窗口内持续上报。
+// 没有落库状态的关注项（目标被拒绝、反向下单、接口限流）在这里记下来，在保留窗口内持续上报。
 var (
-	rejectionsMu sync.Mutex
-	rejections   = map[string]time.Time{}
+	notesMu sync.Mutex
+	notes   = map[string]map[string]time.Time{}
 )
+
+// Note 记录一条关注项，detail 相同的只保留最近一次时间。
+func Note(kind, detail string, at time.Time) {
+	notesMu.Lock()
+	defer notesMu.Unlock()
+	if notes[kind] == nil {
+		notes[kind] = map[string]time.Time{}
+	}
+	notes[kind][detail] = at
+}
 
 // NoteTargetRejection 记录一次被拒绝的目标。
 func NoteTargetRejection(logicalAccountID, code string, at time.Time) {
-	rejectionsMu.Lock()
-	defer rejectionsMu.Unlock()
-	rejections[logicalAccountID+"："+code] = at
+	Note(AttentionTargetRejected, logicalAccountID+"："+code, at)
 }
 
-// RecentTargetRejections 返回窗口内的拒绝记录，并清掉已过窗口的。
-func RecentTargetRejections(now time.Time, window time.Duration) []string {
-	rejectionsMu.Lock()
-	defer rejectionsMu.Unlock()
-	details := make([]string, 0, len(rejections))
-	for detail, at := range rejections {
+// Recent 返回窗口内的关注项，并清掉已过窗口的。
+func Recent(kind string, now time.Time, window time.Duration) []string {
+	notesMu.Lock()
+	defer notesMu.Unlock()
+	details := make([]string, 0, len(notes[kind]))
+	for detail, at := range notes[kind] {
 		if now.Sub(at) > window {
-			delete(rejections, detail)
+			delete(notes[kind], detail)
 			continue
 		}
 		details = append(details, detail)

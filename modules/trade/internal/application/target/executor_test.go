@@ -464,7 +464,8 @@ func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
-func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
+// 旧目标的市价单挂着时等它结束，不撤单，也不下新单。
+func TestTargetExecutorFullOmissionWaitsForOldTargetOrder(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "1")
 	fixture.target(t, nil)
@@ -484,7 +485,7 @@ func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, StatusConverging, result.Status)
-	require.Equal(t, []string{"old-child"}, fixture.orders.canceled)
+	require.Empty(t, fixture.orders.canceled)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -636,7 +637,8 @@ func TestTargetExecutorDoesNotTradeWhileExposureIsUnmapped(t *testing.T) {
 	require.Equal(t, "ETHUSDT", target.BlockedTargets[0].InstrumentID)
 }
 
-func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing.T) {
+// 持仓变成无法映射时进入阻塞，挂着的目标市价单等它自己结束，不撤单。
+func TestTargetExecutorBlocksWithoutCancelWhenExposureBecomesUnmapped(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "ETHUSDT", "2")
 	fixture.target(t, []store.InstrumentTarget{{
@@ -659,8 +661,7 @@ func TestTargetExecutorCancelsCurrentOrderWhenExposureBecomesUnmapped(t *testing
 
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
-	require.Equal(t, "cancel", result.Action)
-	require.Equal(t, []string{"current-child"}, fixture.orders.canceled)
+	require.Empty(t, fixture.orders.canceled)
 	require.Empty(t, fixture.orders.specs)
 }
 

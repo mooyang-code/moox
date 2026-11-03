@@ -1071,6 +1071,8 @@ var TradeAttentionNames = map[string]string{
 	"target_blocked":    "交易目标持续阻塞",
 	"account_not_ready": "执行账户持续未就绪",
 	"target_expired":    "交易目标连续过期",
+	"target_reversal":   "同一目标内反向下单",
+	"rate_limited":      "交易所接口限流",
 }
 
 // buildTradeAttentionStatuses 把 Trade 的关注项变成业务检查。detail 标签带账户名和原因，

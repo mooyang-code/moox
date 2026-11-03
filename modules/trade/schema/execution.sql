@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_owner_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_runner_id TEXT,
+    -- 目标子单下单前该执行账户在这个标的上的持仓，用于发现持仓没反映已成交子单；其他订单为空
+    c_position_before TEXT NOT NULL DEFAULT '',
     c_state TEXT NOT NULL,
     c_filled_quantity TEXT NOT NULL DEFAULT '0',
     -- 交易所订单更新里观察到的累计成交量（只升不降）：大于本地已入账的成交明细时说明明细还没补齐，余额也就不可信
@@ -78,6 +80,9 @@ WHERE c_exchange_order_id <> '';
 
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_state
 ON t_trade_orders (c_space_id, c_trading_account_id, c_state, c_mtime);
+
+CREATE INDEX IF NOT EXISTS idx_trade_orders_account_symbol_finished
+ON t_trade_orders (c_space_id, c_trading_account_id, c_exchange_symbol, c_finished_at);
 
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (

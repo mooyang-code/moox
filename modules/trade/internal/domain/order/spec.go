@@ -72,6 +72,9 @@ type OrderSpec struct {
 	ReferencePriceAt   time.Time
 	ReducePositionOnly bool
 	Owner              OrderOwner
+	// PositionBefore 是目标子单下单前该执行账户在这个标的上的持仓，用于发现持仓没反映已成交子单。
+	// 只是记录，不参与订单身份比较。
+	PositionBefore string
 }
 
 func (s OrderSpec) Validate(

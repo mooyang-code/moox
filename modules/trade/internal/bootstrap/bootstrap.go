@@ -33,6 +33,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -168,6 +169,7 @@ func initialize(
 		Store:  tradeStore, Orders: orderService,
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
 		MaxChildNotional: shared.MustDecimal(maxChildNotional),
+		OnReversal:       noteTargetReversal(tradeStore),
 	}
 	weightResolver := &targetapp.WeightResolver{
 		Store:  tradeStore,
@@ -780,4 +782,15 @@ func registerHealth(
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}
 	return nil
+}
+
+// noteTargetReversal 把同一目标内的反向下单记成关注项，详情用组合账户名，查不到时用 ID。
+func noteTargetReversal(tradeStore *store.Store) func(string, string, string, time.Time) {
+	return func(spaceID, logicalAccountID, instrumentID string, at time.Time) {
+		name := logicalAccountID
+		if record, err := tradeStore.GetLogicalAccount(context.Background(), spaceID, logicalAccountID); err == nil && record.Name != "" {
+			name = record.Name
+		}
+		telemetry.Note(telemetry.AttentionTargetReversal, name+" "+instrumentID+"："+"同一目标内出现反向子单", at)
+	}
 }

@@ -378,6 +378,7 @@ type OrderRecord struct {
 	OwnerID                   string
 	LogicalAccountID          string
 	RunnerID                  string
+	PositionBefore            string
 	State                     string
 	FilledQuantity            string
 	AveragePrice              string
@@ -418,6 +419,7 @@ type orderRow struct {
 	OwnerID                   string    `gorm:"column:c_owner_id"`
 	LogicalAccountID          *string   `gorm:"column:c_logical_account_id"`
 	RunnerID                  *string   `gorm:"column:c_runner_id"`
+	PositionBefore            string    `gorm:"column:c_position_before"`
 	State                     string    `gorm:"column:c_state"`
 	FilledQuantity            string    `gorm:"column:c_filled_quantity"`
 	AveragePrice              string    `gorm:"column:c_average_price"`
@@ -489,19 +491,19 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 			c_exchange_order_id, c_exchange, c_market_type, c_instrument_id, c_exchange_symbol, c_order_type,
 			c_time_in_force, c_side, c_position_side, c_quantity, c_limit_price,
 			c_reference_price, c_reference_price_at, c_reduce_only, c_owner_type,
-			c_owner_id, c_logical_account_id, c_runner_id,
+			c_owner_id, c_logical_account_id, c_runner_id, c_position_before,
 			c_state, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
 			c_paper_execution_price, c_first_match_pending, c_reject_reason,
 			c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.OrderID, record.TradingAccountID, record.ClientOrderID,
 		record.ExchangeOrderID, record.Exchange, record.MarketType, record.InstrumentID, record.ExchangeSymbol,
 		record.OrderType, record.TimeInForce, record.Side, record.PositionSide,
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
 		record.ReduceOnly, record.OwnerType, record.OwnerID,
-		nullableString(record.LogicalAccountID), nullableString(record.RunnerID), record.State,
+		nullableString(record.LogicalAccountID), nullableString(record.RunnerID), record.PositionBefore, record.State,
 		record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
 		record.RemainingReservedQuantity, record.PaperExecutionPrice, record.FirstMatchPending,
@@ -681,6 +683,54 @@ func (s *Store) RejectedTargetAccounts(
 		rejected[record.TradingAccountID] = reason
 	}
 	return rejected, nil
+}
+
+// RecentFilledOrdersForLane 返回这个账户在这个标的上 since（毫秒）之后结束且有成交的订单，
+// 不分来源，最近的在前。用于判断持仓是否反映了已成交的目标子单。
+func (s *Store) RecentFilledOrdersForLane(
+	ctx context.Context,
+	spaceID string,
+	tradingAccountID string,
+	symbol string,
+	since int64,
+) ([]OrderRecord, error) {
+	var rows []orderRow
+	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(`c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
+			AND c_finished_at > ? AND c_filled_quantity <> '0'`,
+			spaceID, tradingAccountID, symbol, since).
+		// 同一毫秒结束的订单按写入顺序：订单号是随机的，不能用来排先后。
+		Order("c_finished_at DESC, rowid DESC").
+		Limit(50).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]OrderRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, orderRecordFromRow(row))
+	}
+	return records, nil
+}
+
+// TargetChildSides 返回同一目标、同一执行账户、同一标的已发出子单的方向，按提交时间排序。
+func (s *Store) TargetChildSides(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	targetID string,
+	tradingAccountID string,
+	instrumentID string,
+) ([]string, error) {
+	var sides []string
+	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
+			AND c_trading_account_id = ? AND c_instrument_id = ? AND c_submitted_at > 0`,
+			spaceID, logicalAccountID, targetID, tradingAccountID, instrumentID).
+		Order("c_submitted_at, c_order_id").
+		Pluck("c_side", &sides).Error; err != nil {
+		return nil, err
+	}
+	return sides, nil
 }
 
 func (s *Store) ListOrdersForLane(
@@ -918,7 +968,7 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		ReferencePrice: row.ReferencePrice, ReferencePriceAt: row.ReferencePriceAt,
 		ReduceOnly: row.ReduceOnly, OwnerType: row.OwnerType, OwnerID: row.OwnerID,
 		LogicalAccountID: valueOrEmpty(row.LogicalAccountID),
-		RunnerID:         valueOrEmpty(row.RunnerID), State: row.State,
+		RunnerID:         valueOrEmpty(row.RunnerID), PositionBefore: row.PositionBefore, State: row.State,
 		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
 		RemainingReservedQuantity: row.RemainingReservedQuantity,

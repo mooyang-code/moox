@@ -64,6 +64,8 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 		},
 		Now:              func() time.Time { return now },
 		MaxChildNotional: shared.MustDecimal("1000000"),
+		// 这里只卖 0.01（约 0.1%），低于默认最小调仓比例。
+		MinRebalanceRatio: shared.MustDecimal("0.0001"),
 	}
 	first, err := executor.Converge(
 		context.Background(),

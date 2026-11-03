@@ -56,7 +56,9 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		now = w.Now().UTC()
 	}
 	items := map[string][]string{
-		telemetry.AttentionTargetRejected: telemetry.RecentTargetRejections(now, rejectionWindow),
+		telemetry.AttentionTargetRejected: telemetry.Recent(telemetry.AttentionTargetRejected, now, rejectionWindow),
+		telemetry.AttentionTargetReversal: telemetry.Recent(telemetry.AttentionTargetReversal, now, rejectionWindow),
+		telemetry.AttentionRateLimited:    telemetry.Recent(telemetry.AttentionRateLimited, now, rejectionWindow),
 	}
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
 	if err != nil {

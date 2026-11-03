@@ -62,7 +62,20 @@ type Executor struct {
 	Venues           execution.VenueCatalog
 	Now              func() time.Time
 	MaxChildNotional shared.Decimal
+	// MinRebalanceRatio 是最小调仓比例，为零时用默认 5%。
+	MinRebalanceRatio shared.Decimal
+	// OnReversal 在同一目标内第一次出现反向子单时调用，用于告警。
+	OnReversal func(spaceID, logicalAccountID, instrumentID string, at time.Time)
 }
+
+const (
+	// defaultMinRebalanceRatio 是默认最小调仓比例：同号持仓与目标的差额不超过目标数量的这个比例时不下单。
+	defaultMinRebalanceRatio = "0.05"
+	// positionReflectWindow 是下单前持仓校验的回看时长。
+	positionReflectWindow     = 10 * time.Minute
+	reasonPositionUnreflected = "持仓未反映已成交子单"
+	reasonTargetReversal      = "同一目标内来回下单"
+)
 
 type Result struct {
 	Status string
@@ -180,7 +193,7 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusPaused, Action: "cancel"}, nil
+			return Result{Status: StatusPaused, Action: "stop"}, nil
 		}
 		return Result{Status: StatusPaused}, nil
 	}
@@ -242,7 +255,7 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusConverging, Action: "cancel"}, nil
+			return Result{Status: StatusConverging, Action: "stop"}, nil
 		}
 	}
 
@@ -261,7 +274,7 @@ func (e *Executor) Converge(
 			if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
 				return Result{}, err
 			}
-			return Result{Status: StatusBlocked, Action: "cancel"}, nil
+			return Result{Status: StatusBlocked, Action: "stop"}, nil
 		}
 		target.BlockedTargets = blocked
 		target.LastError = ""
@@ -349,7 +362,7 @@ func (e *Executor) Converge(
 	blocked = nil
 	var actions []laneAction
 	for _, instrumentID := range laneIDs(desired, members) {
-		action, complete, reason, actionErr := nextLaneAction(
+		action, complete, reason, actionErr := e.laneAction(
 			instrumentID, desired[instrumentID], members,
 		)
 		if actionErr != nil {
@@ -373,6 +386,19 @@ func (e *Executor) Converge(
 	})
 	for _, action := range actions {
 		instrumentID := action.instrument.InstrumentID
+		unreflected, checkErr := e.positionUnreflected(ctx, spaceID, members, instrumentID)
+		if checkErr != nil {
+			return Result{}, checkErr
+		}
+		if unreflected {
+			// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
+			blocked = append(blocked, store.BlockedTarget{
+				InstrumentID: instrumentID,
+				Quantity:     action.delta.String(),
+				Reason:       reasonPositionUnreflected,
+			})
+			continue
+		}
 		placement, placeErr := e.placeAction(
 			ctx, spaceID, target, action, members,
 		)
@@ -444,7 +470,7 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 		return false, err
 	}
 	for _, instrumentID := range laneIDs(desired, members) {
-		_, complete, _, err := nextLaneAction(instrumentID, desired[instrumentID], members)
+		_, complete, _, err := e.laneAction(instrumentID, desired[instrumentID], members)
 		if err != nil {
 			return false, err
 		}
@@ -664,6 +690,28 @@ func laneIDs(
 	return values
 }
 
+// laneAction 先按最小调仓阈值判断整条标的是否已到位，再算下一步动作。收敛和过期告警共用，结论一致。
+func (e *Executor) laneAction(
+	instrumentID string,
+	desired desiredTarget,
+	members []memberState,
+) (laneAction, bool, string, error) {
+	if !desired.Hold {
+		confirmed := shared.Zero()
+		for _, member := range members {
+			confirmed = confirmed.Add(member.positions[instrumentID])
+		}
+		ratio := e.MinRebalanceRatio
+		if ratio.IsZero() {
+			ratio = shared.MustDecimal(defaultMinRebalanceRatio)
+		}
+		if withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID, ratio) {
+			return laneAction{}, true, "", nil
+		}
+	}
+	return nextLaneAction(instrumentID, desired, members)
+}
+
 func nextLaneAction(
 	instrumentID string,
 	desired desiredTarget,
@@ -677,6 +725,7 @@ func nextLaneAction(
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])
 	}
+
 	for _, member := range positionsByAbsoluteSize(members, instrumentID) {
 		position := member.positions[instrumentID]
 		if position.IsZero() {
@@ -736,6 +785,28 @@ func nextLaneAction(
 		}
 	}
 	return laneAction{}, false, "没有启用的成员支持该标的", nil
+}
+
+// withinRebalanceThreshold 判断整条标的的差额是否小到不用调：目标不为 0，所有成员持仓都和目标同号或为零，
+// 且 |目标 − 合计持仓| 不超过 |目标| 的 ratio。按整条标的比较，反向持仓和多成员对冲不会被跳过。
+func withinRebalanceThreshold(
+	desired shared.Decimal,
+	confirmed shared.Decimal,
+	members []memberState,
+	instrumentID string,
+	ratio shared.Decimal,
+) bool {
+	if desired.IsZero() {
+		return false
+	}
+	for _, member := range members {
+		position := member.positions[instrumentID]
+		if !position.IsZero() && !sameSign(position, desired) {
+			return false
+		}
+	}
+	limit := desired.Abs().Mul(ratio)
+	return desired.Sub(confirmed).Abs().Cmp(limit) <= 0
 }
 
 // belowMinimumQuantity 判断数量按步长取整后是否下不了单。
@@ -876,6 +947,14 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
+		reversal, reversalErr := e.reversalCount(ctx, spaceID, target, candidate)
+		if reversalErr != nil {
+			return placement{}, reversalErr
+		}
+		if reversal >= 2 {
+			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
+			return placement{reason: reasonTargetReversal}, nil
+		}
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
@@ -892,6 +971,7 @@ func (e *Executor) placeAction(
 				Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
 				LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
 			},
+			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
 		spec.PositionSide = exchange.RuleFor(candidate.member.account.MarketType).PositionSide
 		if !candidate.reducing {
@@ -941,6 +1021,9 @@ func (e *Executor) placeAction(
 				return placement{}, err
 			}
 			return placement{}, err
+		}
+		if reversal == 1 && e.OnReversal != nil {
+			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
 		}
 		return placement{placed: true}, nil
 	}
@@ -1065,11 +1148,10 @@ func (e *Executor) stopOrder(
 	case orderdomain.Submitting, orderdomain.SubmitUnknown:
 		_, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID)
 		return err
-	case orderdomain.Canceling, orderdomain.CancelUnknown:
-		return nil
 	default:
-		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
-		return err
+		// 挂单中、部分成交、撤单中的目标市价单都等它自己结束：撤单只会和成交赛跑，
+		// 结束后再按最新持仓重算，避免买了又撤、撤了又买。
+		return nil
 	}
 }
 
@@ -1255,4 +1337,76 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 
 func childClientOrderID() string {
 	return "mt" + xid.New().String()
+}
+
+func (e *Executor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
+}
+
+// positionUnreflected 判断持仓是否回退到某笔已成交目标子单下单前的值。对每个成员取最近 10 分钟内
+// 不分来源、有成交的订单，最近一笔是目标子单时，从它开始收集同向的目标子单，遇到非目标单或反向单就停；
+// 当前持仓等于其中任一笔的下单前持仓就说明持仓没反映这些成交。
+func (e *Executor) positionUnreflected(
+	ctx context.Context,
+	spaceID string,
+	members []memberState,
+	instrumentID string,
+) (bool, error) {
+	since := e.now().Add(-positionReflectWindow).UnixMilli()
+	for _, member := range members {
+		instrument, ok := member.instruments[instrumentID]
+		if !ok {
+			continue
+		}
+		records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, member.account.TradingAccountID, instrument.ExchangeSymbol, since)
+		if err != nil {
+			return false, err
+		}
+		if len(records) == 0 || records[0].OwnerType != string(orderdomain.OwnerTarget) {
+			continue
+		}
+		current := member.positions[instrumentID]
+		side := records[0].Side
+		for _, record := range records {
+			if record.OwnerType != string(orderdomain.OwnerTarget) || record.Side != side {
+				break
+			}
+			if record.PositionBefore == "" {
+				continue
+			}
+			before, err := shared.ParseDecimal(record.PositionBefore)
+			if err != nil {
+				return false, err
+			}
+			if before.Cmp(current) == 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// reversalCount 返回同一目标、同一执行账户、同一标的已发出子单（含这次将发的）的方向切换次数。
+func (e *Executor) reversalCount(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	candidate laneAction,
+) (int, error) {
+	sides, err := e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
+		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
+	if err != nil {
+		return 0, err
+	}
+	sides = append(sides, string(sideForDelta(candidate.delta)))
+	switches := 0
+	for index := 1; index < len(sides); index++ {
+		if sides[index] != sides[index-1] {
+			switches++
+		}
+	}
+	return switches, nil
 }
