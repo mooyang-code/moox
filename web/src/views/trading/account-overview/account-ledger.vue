@@ -9,7 +9,9 @@
     </div>
     <a-alert v-if="error" type="error" show-icon class="ledger-alert">{{ error }}</a-alert>
     <a-alert v-else-if="hasMore" type="info" show-icon class="ledger-alert">
-      只显示时间范围内最新的 {{ entries.length }} 条，更早的记录请缩小时间范围后查询。
+      只取到时间范围内最新的 {{ entries.length }} 条{{
+        typeFilter ? "，类型筛选只在这些记录里进行" : ""
+      }}；更早的记录请缩小时间范围后查询。
     </a-alert>
     <a-table :data="visibleEntries" :loading="loading" :pagination="{ pageSize: 20 }" row-key="id" size="small">
       <template #columns>
@@ -39,7 +41,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { formatTimestamp, listAccountLedger, type LedgerEntry } from "@/api/trade";
-import { amountClass, defaultLedgerRange, ledgerTypeLabel, ledgerTypeOptions } from "./account-ledger";
+import { amountClass, defaultLedgerRange, ledgerRangeError, ledgerTypeLabel, ledgerTypeOptions } from "./account-ledger";
 
 const props = defineProps<{ tradingAccountId: string }>();
 
@@ -50,6 +52,8 @@ const hasMore = ref(false);
 const loading = ref(false);
 const error = ref("");
 let requestToken = 0;
+// 一次最多取的条数：多了交易所要连续翻页，容易撞上限频和超时。
+const LEDGER_LIMIT = 500;
 
 const visibleEntries = computed(() =>
   typeFilter.value ? entries.value.filter(entry => entry.type === typeFilter.value) : entries.value
@@ -58,6 +62,14 @@ const visibleEntries = computed(() =>
 async function load() {
   const token = ++requestToken;
   const accountId = props.tradingAccountId;
+  const rangeError = ledgerRangeError(range.value);
+  if (rangeError) {
+    entries.value = [];
+    hasMore.value = false;
+    error.value = rangeError;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   error.value = "";
   try {
@@ -65,7 +77,7 @@ async function load() {
       trading_account_id: accountId,
       start_time: String(range.value[0]),
       end_time: String(range.value[1]),
-      limit: 1000
+      limit: LEDGER_LIMIT
     });
     // 切换账户或重新查询后，旧请求的结果不能覆盖新结果。
     if (token !== requestToken) return;

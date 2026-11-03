@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -287,8 +288,14 @@ func (r *ListAccountLedgerReq) Validate() error {
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
 	}
-	if r.StartTime > 0 && r.EndTime > 0 && r.EndTime-r.StartTime > maxLedgerWindow {
-		return fmt.Errorf("ledger window must not exceed 90 days")
+	if r.StartTime > 0 {
+		end := r.EndTime
+		if end == 0 {
+			end = time.Now().UnixMilli()
+		}
+		if end-r.StartTime > maxLedgerWindow {
+			return fmt.Errorf("时间范围不能超过 90 天")
+		}
 	}
 	if r.Limit < 0 || r.Limit > 1000 {
 		return fmt.Errorf("limit must be between 0 and 1000")

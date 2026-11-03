@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
@@ -17,8 +16,6 @@ const (
 	incomePageLimit = 1000
 	// incomeMaxRequests 限制一次查询最多发几次请求，避免为展示耗掉权重。
 	incomeMaxRequests = 8
-	// incomeInitialWindow 是从结束时间往前查的第一个窗口；满页就减半重查，稀疏就加倍。
-	incomeInitialWindow = time.Hour
 )
 
 type incomePayload struct {
@@ -38,8 +35,8 @@ func (a *Adapter) LedgerSupported() bool {
 }
 
 // ListLedger 返回 [Start, End] 内最新的至多 Limit 条资金流水，按时间倒序。
-// income 接口在窗口内按时间升序返回最早的 1000 条，所以从结束时间往前分段查：
-// 一段满页说明这段里还有没取到的，缩小窗口重查；不满页就整段收下再往前。
+// income 接口一次最多返回 1000 条，从结束时间往前分段查：第一次查整个时间段（稀疏账户一次就够）；
+// 满页说明这段装不下，按这一页覆盖的时间跨度估算密度，缩小窗口重查这段的末尾；不满页就整段收下再往前。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if !a.LedgerSupported() {
 		return exchange.LedgerPage{}, typedRejected("该账户不支持资金流水", nil)
@@ -50,7 +47,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 	var entries []exchange.LedgerEntry
 	end := query.End.UnixMilli()
 	start := query.Start.UnixMilli()
-	window := incomeInitialWindow.Milliseconds()
+	window := end - start + 1
 	for requests := 0; end >= start && len(entries) < query.Limit; requests++ {
 		if requests >= incomeMaxRequests {
 			return exchange.LedgerPage{Entries: newestLedger(entries, query.Limit), HasMore: true}, nil
@@ -61,8 +58,8 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 			return exchange.LedgerPage{}, err
 		}
 		if len(rows) >= incomePageLimit && window > 1 {
-			// 这一段装不下，缩小窗口重查同一段的末尾。
-			window = max(window/2, 1)
+			// 这一段装不下：满页 1000 条覆盖的跨度大约就是能装下的窗口，取它的八成重查同一段的末尾。
+			window = max(min((rows[len(rows)-1].Time-rows[0].Time)*4/5, window/2), 1)
 			continue
 		}
 		for _, row := range rows {

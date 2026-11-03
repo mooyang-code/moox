@@ -1861,6 +1861,10 @@ components:
         port: 11200
         console_name: trade
         timeout_ms: 5000
+        method_timeouts_ms:
+          ListAccountLedger: 15000
+          FlattenLogicalAccount: 12000
+          FlattenTradingAccount: 12000
         max_body_bytes: 4194304
         methods:
           - CreateTradingAccount

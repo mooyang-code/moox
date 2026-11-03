@@ -78,10 +78,24 @@ async function submit() {
     startPolling(rsp.action.action_id);
     return true;
   } catch (error) {
+    // 接口报错时平仓可能已经在后台继续（例如某个账户暂时异常、网关超时）：按操作编号查一次，查到就显示进度。
+    const recovered = await recoverAction(actionId.value);
+    if (recovered) return true;
     dialogError.value = error instanceof Error ? error.message : String(error);
     return false;
   } finally {
     submitting.value = false;
+  }
+}
+
+async function recoverAction(id: string): Promise<boolean> {
+  try {
+    const rsp = await getOperatorAction(id);
+    action.value = rsp.action;
+    startPolling(id);
+    return true;
+  } catch {
+    return false;
   }
 }
 

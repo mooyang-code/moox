@@ -22,6 +22,15 @@ export function defaultLedgerRange(now = Date.now()): number[] {
   return [now - 7 * DAY_MS, now];
 }
 
+/** 交易所只保留约 3 个月的账单，后端也限制单次最长 90 天 */
+export const MAX_LEDGER_DAYS = 90;
+
+export function ledgerRangeError(range: number[]): string {
+  if (range.length !== 2 || !(range[0] < range[1])) return "请选择有效的时间范围";
+  if (range[1] - range[0] > MAX_LEDGER_DAYS * DAY_MS) return `时间范围不能超过 ${MAX_LEDGER_DAYS} 天`;
+  return "";
+}
+
 export function amountClass(amount: string): string {
   const value = Number(amount);
   if (!Number.isFinite(value) || value === 0) return "";

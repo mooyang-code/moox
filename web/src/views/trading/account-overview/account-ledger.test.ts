@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { amountClass, defaultLedgerRange, ledgerTypeLabel } from "./account-ledger";
+import { amountClass, defaultLedgerRange, ledgerRangeError, ledgerTypeLabel } from "./account-ledger";
 import { flattenStatusText } from "./account-flatten";
 
 describe("account ledger helpers", () => {
@@ -10,6 +10,12 @@ describe("account ledger helpers", () => {
 
   it("defaults to the last seven days", () => {
     expect(defaultLedgerRange(8 * 86_400_000)).toEqual([86_400_000, 8 * 86_400_000]);
+  });
+
+  it("rejects ranges longer than 90 days", () => {
+    expect(ledgerRangeError([0, 91 * 86_400_000])).toContain("90");
+    expect(ledgerRangeError([0, 7 * 86_400_000])).toBe("");
+    expect(ledgerRangeError([10, 5])).not.toBe("");
   });
 
   it("colors amounts by sign", () => {

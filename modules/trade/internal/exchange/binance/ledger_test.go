@@ -99,3 +99,22 @@ func TestSpotLedgerUnsupported(t *testing.T) {
 		t.Fatal("spot ledger must fail")
 	}
 }
+
+func TestIncomeLedgerSparseLongRangeTakesOneRequest(t *testing.T) {
+	end := time.UnixMilli(1_700_000_000_000)
+	var rows []incomePayload
+	for day := 89; day >= 0; day-- {
+		at := end.Add(-time.Duration(day) * 24 * time.Hour)
+		rows = append(rows, incomePayload{IncomeType: "FUNDING_FEE", Income: "-0.1", Asset: "USDT", Time: at.UnixMilli(), TranID: json.Number(strconv.Itoa(day))})
+	}
+	server, calls := incomeServer(t, rows)
+	page, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListLedger(context.Background(), exchange.LedgerQuery{
+		Start: end.Add(-90 * 24 * time.Hour), End: end, Limit: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 || page.HasMore || len(page.Entries) != 90 {
+		t.Fatalf("calls=%d hasMore=%v len=%d", *calls, page.HasMore, len(page.Entries))
+	}
+}

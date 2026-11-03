@@ -1178,7 +1178,7 @@ func (s *Service) flattenTimeout() time.Duration {
 	if s.FlattenTimeout > 0 {
 		return s.FlattenTimeout
 	}
-	// 要小于网关默认的 10 秒调用超时，未完成的部分由工作线程继续。
+	// 要小于网关给清仓接口的 12 秒调用超时（服务目录 method_timeouts_ms），未完成的部分由工作线程继续。
 	return 8 * time.Second
 }
 
