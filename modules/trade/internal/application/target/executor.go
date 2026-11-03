@@ -1706,7 +1706,8 @@ func quotaExhausted(quota map[string]int) bool {
 }
 
 // waitingOnChildren 报告组合账户是否只是在等当前目标已发出的子单（挂单中、部分成交、撤单中）结束。
-// 有待提交、提交中、结果未知的子单，或有其他归属的活动订单时返回 false，交给完整流程处理。
+// 有待提交、提交中、结果未知的子单，有其他归属的活动订单，子单所在成员未就绪，
+// 或成员账户上有不属于当前目标的活动订单（例如入组前的外部单）时返回 false，交给完整流程处理。
 func (e *Executor) waitingOnChildren(
 	ctx context.Context,
 	spaceID string,
@@ -1718,6 +1719,7 @@ func (e *Executor) waitingOnChildren(
 		return false, err
 	}
 	waiting := false
+	accounts := make(map[string]struct{})
 	for _, record := range records {
 		state := orderdomain.State(record.State)
 		if state.Terminal() {
@@ -1731,6 +1733,25 @@ func (e *Executor) waitingOnChildren(
 			return false, nil
 		}
 		waiting = true
+		accounts[record.TradingAccountID] = struct{}{}
+	}
+	for accountID := range accounts {
+		account, err := e.Store.GetTradingAccountByID(ctx, accountID)
+		if err != nil {
+			return false, err
+		}
+		if account.Status != "ENABLED" || !account.Ready {
+			return false, nil
+		}
+		active, err := e.Store.ListActiveOrdersForAccount(ctx, spaceID, accountID)
+		if err != nil {
+			return false, err
+		}
+		for _, order := range active {
+			if order.OwnerType != string(orderdomain.OwnerTarget) || order.OwnerID != target.TargetID {
+				return false, nil
+			}
+		}
 	}
 	return waiting, nil
 }

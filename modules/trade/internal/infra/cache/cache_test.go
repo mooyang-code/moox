@@ -84,3 +84,44 @@ func TestMemoDropsLoadRacingInvalidate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 5, value, "出错不缓存")
 }
+
+func TestSnapshotLoadPanicReleasesWaiters(t *testing.T) {
+	snapshot := NewSnapshot[int](time.Minute)
+	func() {
+		defer func() { _ = recover() }()
+		_, _, _ = snapshot.Get(context.Background(), func(context.Context) (int, error) { panic("boom") })
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	value, _, err := snapshot.Get(ctx, func(context.Context) (int, error) { return 7, nil })
+	if err != nil || value != 7 {
+		t.Fatalf("panic 后应能重新加载，得到 %d, %v", value, err)
+	}
+}
+
+func TestSnapshotWaiterRetriesWhenLoaderCanceled(t *testing.T) {
+	snapshot := NewSnapshot[int](time.Minute)
+	loaderCtx, cancelLoader := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	go func() {
+		_, _, _ = snapshot.Get(loaderCtx, func(ctx context.Context) (int, error) {
+			close(started)
+			<-ctx.Done()
+			return 0, ctx.Err()
+		})
+	}()
+	<-started
+	result := make(chan error, 1)
+	go func() {
+		value, _, err := snapshot.Get(context.Background(), func(context.Context) (int, error) { return 9, nil })
+		if err == nil && value != 9 {
+			err = errors.New("值不对")
+		}
+		result <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancelLoader()
+	if err := <-result; err != nil {
+		t.Fatalf("加载方取消后等待者应重新取：%v", err)
+	}
+}

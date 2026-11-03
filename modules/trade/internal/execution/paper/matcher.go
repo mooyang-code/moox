@@ -73,6 +73,8 @@ type Matcher struct {
 	// pendingRefresh 是有成交但还没刷新快照、唤醒收敛的账户（账户锁忙时留到下一轮）。
 	pendingMu      sync.Mutex
 	pendingRefresh map[string]map[filledTarget]struct{}
+	// failedRefresh 是刷新快照失败的账户涉及的目标，账户恢复（会话核对后已刷新快照）时再唤醒。
+	failedRefresh map[string]map[filledTarget]struct{}
 }
 type MatcherState struct {
 	Ready      bool
@@ -107,9 +109,9 @@ func (m *Matcher) AccountState(accountID string) MatcherState {
 
 func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 	m.accountsMu.Lock()
-	defer m.accountsMu.Unlock()
 	state := m.accounts[accountID]
 	if state.Generation != generation {
+		m.accountsMu.Unlock()
 		return
 	}
 	state.Ready, state.LastError, state.Stage, state.OrderID, state.ErrorCode = true, "", "", "", ""
@@ -117,6 +119,17 @@ func (m *Matcher) RecoverAccount(accountID string, generation uint64) {
 		m.accounts = make(map[string]MatcherState)
 	}
 	m.accounts[accountID] = state
+	m.accountsMu.Unlock()
+
+	m.pendingMu.Lock()
+	targets := m.failedRefresh[accountID]
+	delete(m.failedRefresh, accountID)
+	m.pendingMu.Unlock()
+	if m.WakeTarget != nil {
+		for target := range targets {
+			m.WakeTarget(target.spaceID, target.logicalAccountID)
+		}
+	}
 }
 
 func (m *Matcher) failAccount(accountID string, err error, orderID ...string) {
@@ -312,8 +325,11 @@ func (m *Matcher) noteFilled(accountID string, target filledTarget) {
 
 // flushRefresh 给本轮（及之前因锁忙留下的）有成交的账户各刷新一次快照，再唤醒采样和目标收敛：
 // 逐笔刷新一批 16 单要算 16 次快照。同一轮后面的撮合判断按成交投影现算快照，不依赖已落库的快照。
-// 账户锁忙时留到下一轮，不判失败；只有刷新本身失败才记账户失败。
+// 账户锁忙时留到下一轮，不判失败；刷新本身失败记账户失败，账户恢复时再唤醒涉及的目标。
 func (m *Matcher) flushRefresh(ctx context.Context) {
+	if m == nil {
+		return
+	}
 	m.pendingMu.Lock()
 	pending := m.pendingRefresh
 	m.pendingRefresh = nil
@@ -327,6 +343,18 @@ func (m *Matcher) flushRefresh(ctx context.Context) {
 			continue
 		}
 		if err != nil {
+			// 刷新失败的账户由会话核对恢复，恢复时再唤醒这些目标，避免收敛读到旧快照后停在阻塞。
+			m.pendingMu.Lock()
+			if m.failedRefresh == nil {
+				m.failedRefresh = make(map[string]map[filledTarget]struct{})
+			}
+			if m.failedRefresh[accountID] == nil {
+				m.failedRefresh[accountID] = make(map[filledTarget]struct{})
+			}
+			for target := range targets {
+				m.failedRefresh[accountID][target] = struct{}{}
+			}
+			m.pendingMu.Unlock()
 			m.failAccount(accountID, err)
 			continue
 		}

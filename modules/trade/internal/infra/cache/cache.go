@@ -4,6 +4,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -25,14 +26,16 @@ func NewSnapshot[T any](ttl time.Duration) *Snapshot[T] {
 }
 
 // Get 返回快照和取得时间。快照过期时调用 load 重新取；取失败时返回错误，不保留旧值。
+// 有效期按单调时钟判断，系统时间回拨不会让旧快照一直被当作新鲜；返回的取得时间是 UTC 墙钟。
+// 只有正在取的调用方自己被取消时，等待者才重新竞争一次，不把别人的取消当成自己的错误。
 func (s *Snapshot[T]) Get(ctx context.Context, load func(context.Context) (T, error)) (T, time.Time, error) {
 	var zero T
 	for {
 		s.mu.Lock()
-		if !s.at.IsZero() && time.Since(s.at) < s.ttl {
+		if s.freshLocked() {
 			value, at := s.value, s.at
 			s.mu.Unlock()
-			return value, at, nil
+			return value, at.UTC(), nil
 		}
 		if s.loading != nil {
 			// 已有调用方在取：等它的结果，取到后从头再判断一次。
@@ -45,9 +48,9 @@ func (s *Snapshot[T]) Get(ctx context.Context, load func(context.Context) (T, er
 			}
 			s.mu.Lock()
 			err := s.err
-			fresh := !s.at.IsZero() && time.Since(s.at) < s.ttl
+			fresh := s.freshLocked()
 			s.mu.Unlock()
-			if err != nil && !fresh {
+			if err != nil && !fresh && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				return zero, time.Time{}, err
 			}
 			continue
@@ -56,20 +59,41 @@ func (s *Snapshot[T]) Get(ctx context.Context, load func(context.Context) (T, er
 		s.loading = done
 		s.mu.Unlock()
 
-		value, err := load(ctx)
-		now := time.Now().UTC()
-		s.mu.Lock()
-		s.loading, s.err = nil, err
-		if err == nil {
-			s.value, s.at = value, now
-		}
-		s.mu.Unlock()
-		close(done)
+		value, at, err := s.load(ctx, load, done)
 		if err != nil {
 			return zero, time.Time{}, err
 		}
-		return value, now, nil
+		return value, at.UTC(), nil
 	}
+}
+
+// load 调用一次 load 并发布结果；load panic 时同样清掉在取标记、唤醒等待者，再把 panic 抛出去。
+func (s *Snapshot[T]) load(ctx context.Context, load func(context.Context) (T, error), done chan struct{}) (value T, at time.Time, err error) {
+	finished := false
+	defer func() {
+		if !finished {
+			err = errors.New("cache: snapshot load panicked")
+		}
+		s.mu.Lock()
+		s.loading, s.err = nil, err
+		if err == nil {
+			s.value, s.at = value, at
+		}
+		s.mu.Unlock()
+		close(done)
+	}()
+	value, err = load(ctx)
+	at = time.Now()
+	finished = true
+	return value, at, err
+}
+
+func (s *Snapshot[T]) freshLocked() bool {
+	if s.at.IsZero() {
+		return false
+	}
+	age := time.Since(s.at)
+	return age >= 0 && age < s.ttl
 }
 
 // Memo 是写入时失效的按键缓存，用于很少变化、写入点明确的数据（例如标的定义、账户身份）。
