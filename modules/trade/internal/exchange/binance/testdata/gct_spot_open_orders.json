@@ -1,0 +1,1 @@
+[{"clientOrderId":"myOrder1","cummulativeQuoteQty":"0.0","executedQty":"0.0","icebergQty":"0.0","isWorking":true,"orderId":1,"origQty":"1.0","price":"0.1","side":"BUY","status":"NEW","stopPrice":"0.0","symbol":"LTCBTC","time":1499827319559,"timeInForce":"GTC","type":"LIMIT","updateTime":1499827319559}]
