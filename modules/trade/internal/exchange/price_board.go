@@ -66,6 +66,8 @@ func (b *BookBoard) Get(
 	if time.Since(b.at) >= bookBoardTTL {
 		books, err := fetch(ctx)
 		if err != nil {
+			// 失败也缓存一个周期，期间直接退回单标的接口，不反复拉全市场。
+			b.books, b.at = nil, time.Now().UTC()
 			return Book{}, time.Time{}, false
 		}
 		b.books, b.at = books, time.Now().UTC()

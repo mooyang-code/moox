@@ -70,6 +70,9 @@ type Matcher struct {
 	accountsMu       sync.Mutex
 	accounts         map[string]MatcherState
 	ready            atomic.Bool
+	// pendingRefresh 是有成交但还没刷新快照、唤醒收敛的账户（账户锁忙时留到下一轮）。
+	pendingMu      sync.Mutex
+	pendingRefresh map[string]map[filledTarget]struct{}
 }
 type MatcherState struct {
 	Ready      bool
@@ -163,6 +166,8 @@ func (m *Matcher) SetReady(v bool) {
 }
 func (m *Matcher) Ready() bool { return m != nil && m.ready.Load() }
 func (m *Matcher) Scan(ctx context.Context) error {
+	// 不论这轮怎么结束（某个账户失败、基础设施错误、取消），已入账成交的账户都要刷新快照并唤醒收敛。
+	defer m.flushRefresh(ctx)
 	if m == nil || m.Store == nil {
 		return fmt.Errorf("paper matcher: store is not configured")
 	}
@@ -185,7 +190,6 @@ func (m *Matcher) Scan(ctx context.Context) error {
 	deferred := make(map[string]bool)
 	succeeded := make(map[string]uint64)
 	refreshed := make(map[string]bool)
-	filled := make(map[string]map[filledTarget]struct{})
 	processedFirstMatch := make(map[string]struct{})
 	pageSize := m.PageSize
 	if pageSize <= 0 {
@@ -271,39 +275,13 @@ func (m *Matcher) Scan(ctx context.Context) error {
 					if m.Refresh != nil {
 						refreshed[candidate.TradingAccountID] = true
 					}
-					if filled[candidate.TradingAccountID] == nil {
-						filled[candidate.TradingAccountID] = map[filledTarget]struct{}{}
-					}
-					filled[candidate.TradingAccountID][filledTarget{candidate.SpaceID, candidate.LogicalAccountID}] = struct{}{}
+					m.noteFilled(candidate.TradingAccountID, filledTarget{candidate.SpaceID, candidate.LogicalAccountID})
 				}
 			}
 			last := orders[len(orders)-1]
 			afterSpaceID, afterOrderID = last.SpaceID, last.OrderID
 			if len(orders) < pageSize {
 				break
-			}
-		}
-	}
-	// 本轮有成交的账户各刷新一次快照，再唤醒采样和目标收敛：逐笔刷新一批 16 单要算 16 次快照。
-	// 同一轮后面的撮合判断按成交投影现算快照，不依赖已落库的快照。
-	for accountID, targets := range filled {
-		if failed[accountID] {
-			continue
-		}
-		if err := m.refreshFilled(ctx, accountID); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			m.failAccount(accountID, err)
-			failed[accountID] = true
-			continue
-		}
-		if m.Enqueue != nil {
-			m.Enqueue(accountID)
-		}
-		if m.WakeTarget != nil {
-			for target := range targets {
-				m.WakeTarget(target.spaceID, target.logicalAccountID)
 			}
 		}
 	}
@@ -320,26 +298,69 @@ type filledTarget struct {
 	logicalAccountID string
 }
 
-// refreshFilled 持账户锁刷新一次已落库的账户快照。
-func (m *Matcher) refreshFilled(ctx context.Context, accountID string) error {
-	if m.Refresh == nil {
-		return nil
+func (m *Matcher) noteFilled(accountID string, target filledTarget) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	if m.pendingRefresh == nil {
+		m.pendingRefresh = make(map[string]map[filledTarget]struct{})
 	}
+	if m.pendingRefresh[accountID] == nil {
+		m.pendingRefresh[accountID] = make(map[filledTarget]struct{})
+	}
+	m.pendingRefresh[accountID][target] = struct{}{}
+}
+
+// flushRefresh 给本轮（及之前因锁忙留下的）有成交的账户各刷新一次快照，再唤醒采样和目标收敛：
+// 逐笔刷新一批 16 单要算 16 次快照。同一轮后面的撮合判断按成交投影现算快照，不依赖已落库的快照。
+// 账户锁忙时留到下一轮，不判失败；只有刷新本身失败才记账户失败。
+func (m *Matcher) flushRefresh(ctx context.Context) {
+	m.pendingMu.Lock()
+	pending := m.pendingRefresh
+	m.pendingRefresh = nil
+	m.pendingMu.Unlock()
+	for accountID, targets := range pending {
+		done, err := m.refreshFilled(ctx, accountID)
+		if !done && err == nil {
+			for target := range targets {
+				m.noteFilled(accountID, target)
+			}
+			continue
+		}
+		if err != nil {
+			m.failAccount(accountID, err)
+			continue
+		}
+		if m.Enqueue != nil {
+			m.Enqueue(accountID)
+		}
+		if m.WakeTarget != nil {
+			for target := range targets {
+				m.WakeTarget(target.spaceID, target.logicalAccountID)
+			}
+		}
+	}
+}
+
+// refreshFilled 拿得到账户锁时刷新一次已落库的账户快照；锁忙返回 done=false。
+func (m *Matcher) refreshFilled(ctx context.Context, accountID string) (bool, error) {
+	if m.Refresh == nil {
+		return true, nil
+	}
+	unlock, acquired := m.Store.TryLockTradingAccount(accountID)
+	if !acquired {
+		return false, nil
+	}
+	defer unlock()
 	timeout := m.CandidateTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	refreshCtx, cancel := context.WithTimeout(ctx, timeout)
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	unlock, err := m.Store.LockTradingAccountContext(refreshCtx, accountID)
-	if err != nil {
-		return &CandidateError{Stage: "refresh", Err: err}
-	}
-	defer unlock()
 	if err := m.Refresh(refreshCtx, accountID); err != nil {
-		return &CandidateError{Stage: "refresh", Err: err}
+		return true, &CandidateError{Stage: "refresh", Err: err}
 	}
-	return nil
+	return true, nil
 }
 
 // MatchOrder 撮合一笔订单，成交后立即刷新快照并唤醒。
