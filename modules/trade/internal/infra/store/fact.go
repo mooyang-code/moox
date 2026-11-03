@@ -1456,8 +1456,14 @@ func (tx *Tx) ReplacePositionsForAccount(
 		retained.WriteString(")")
 		where += retained.String()
 	}
-	// 被删除的持仓留下墓碑：覆盖时间取这次快照的边界（含已有行的覆盖时间），迟到的平仓成交不能从零叠加出反向持仓
-	tombstoneArgs := append([]any{snapshotAt}, args...)
+	// 被删除的持仓留下墓碑：覆盖时间取这次快照的边界和保护期起点中较晚者（含已有行的覆盖时间），
+	// 迟到的平仓成交不能从零叠加出反向持仓。保护期起点之前的成交已经反映在交易所持仓里；
+	// 只用快照边界的话，边界会被本轮最早成交压低，没拉到成交的标的会被后来的平仓成交投影成反向持仓。
+	tombstoneAt := snapshotAt
+	if protectAfter > tombstoneAt {
+		tombstoneAt = protectAfter
+	}
+	tombstoneArgs := append([]any{tombstoneAt}, args...)
 	if err := tx.db.Exec(`
 		INSERT INTO t_trading_position_tombstones (c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, c_covered_until)
 		SELECT c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, MAX(c_snapshot_covered_until, ?)

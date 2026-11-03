@@ -59,6 +59,7 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 
 	results := make([]BatchResult, len(records))
 	syncAccounts := make(map[string]struct{})
+	var closeErrors []error
 	err := func() error {
 		if logicalAccountID != "" {
 			unlock, lockErr := s.Store.LockLogicalAccountExecutionContext(ctx, spaceID, logicalAccountID)
@@ -119,7 +120,8 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			})
 			cancel()
 			if err != nil {
-				return err
+				// 子单已经发出，结果照常返回；下一轮有在途子单不会发新批，成交入账时也会关闭准入。
+				closeErrors = append(closeErrors, err)
 			}
 		}
 		return nil
@@ -139,9 +141,9 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 				syncErrors = append(syncErrors, syncErr)
 			}
 		}
-		return results, errors.Join(syncErrors...)
+		return results, errors.Join(append(closeErrors, syncErrors...)...)
 	}
-	return results, nil
+	return results, errors.Join(closeErrors...)
 }
 
 // prepareBatchOrder 持账户锁做一笔订单的提交前检查并落 SUBMITTING。

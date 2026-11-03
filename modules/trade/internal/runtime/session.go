@@ -693,21 +693,15 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 		return s.Sync.ApplyOrder(ctx, s.Account.TradingAccountID, event.order)
 	case privateFill:
 		applied, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
-		if err == nil && applied && s.syncRequested != nil {
+		if err == nil && applied {
 			// 成交已使准入关闭，请求轻量同步确认余额后恢复
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+			s.RequestSync()
 		}
 		return err
 	case privatePosition:
 		err := s.Sync.ApplyPosition(ctx, s.Account.TradingAccountID, event.position)
-		if err == nil && s.syncRequested != nil {
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+		if err == nil {
+			s.RequestSync()
 		}
 		return err
 	case privateAccount:
@@ -716,11 +710,8 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 			s.Account.TradingAccountID,
 			event.account,
 		)
-		if err == nil && s.syncRequested != nil {
-			select {
-			case s.syncRequested <- struct{}{}:
-			default:
-			}
+		if err == nil {
+			s.RequestSync()
 		}
 		return err
 	default:

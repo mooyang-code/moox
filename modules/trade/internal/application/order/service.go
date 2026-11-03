@@ -1306,8 +1306,6 @@ func (s *Service) abortUnsentSubmit(
 	return current, nil
 }
 
-// uncertainExchangeError 报告请求结果是否未知：超时、连接中断、408、503 未知。
-// 限流和本地拦截是确定未受理，不在这里。
 // fillAwaitingBalance 是成交后等余额同步确认期间的未就绪原因。
 const fillAwaitingBalance = "成交待余额同步确认"
 
@@ -1315,6 +1313,8 @@ func observeOrder(tradingAccountID, result string) {
 	telemetry.Orders.WithLabelValues(tradingAccountID, result).Inc()
 }
 
+// uncertainExchangeError 报告请求结果是否未知：超时、连接中断、408、503 未知。
+// 限流和本地拦截是确定未受理，不在这里。
 func uncertainExchangeError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		exchange.IsKind(err, exchange.ErrorTransportUnknown)

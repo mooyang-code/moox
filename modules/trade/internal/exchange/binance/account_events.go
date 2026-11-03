@@ -278,7 +278,8 @@ func (a *Adapter) keepListenKeyAlive(
 					"X-MBX-APIKEY": a.credential.APIKey,
 				},
 			})
-			if exchange.IsKind(err, exchange.ErrorNotSent) {
+			// 限流（确定未受理）或结果未知的续期 1 分钟后重试，只有明确失败才断开重连。
+			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 				ticker.Reset(time.Minute)
 				continue
 			}
