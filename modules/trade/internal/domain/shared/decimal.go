@@ -53,6 +53,12 @@ func (d Decimal) IsZero() bool          { return d.Cmp(Zero()) == 0 }
 func (d Decimal) IsNegative() bool      { return d.Cmp(Zero()) < 0 }
 func (d Decimal) IsInteger() bool       { return d.rat().IsInt() }
 
+// Float64 返回近似浮点值，只用于指标和告警，不能参与资金计算。
+func (d Decimal) Float64() float64 {
+	value, _ := d.rat().Float64()
+	return value
+}
+
 func (d Decimal) String() string {
 	r := d.rat()
 	if r.IsInt() {

@@ -24,6 +24,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	executionpaper "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -170,7 +171,9 @@ func initialize(
 		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
 		MaxChildNotional: shared.MustDecimal(maxChildNotional),
 		OnReversal:       noteTargetReversal(tradeStore),
+		Observe:          &telemetry.ExecutionMetrics{},
 	}
+	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
 		Store:  tradeStore,
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
@@ -797,5 +800,16 @@ func noteTargetReversal(tradeStore *store.Store) func(string, string, string, ti
 			name = record.Name
 		}
 		telemetry.Note(telemetry.AttentionTargetReversal, name+" "+instrumentID+"："+"同一目标内出现反向子单", at)
+	}
+}
+
+// observeRateLimits 把限流暂停记成指标和关注项，权重读数记成指标。
+func observeRateLimits() {
+	httpclient.OnPause = func(host string, reason exchange.ErrorKind, until time.Time) {
+		telemetry.RatePauses.WithLabelValues(host, string(reason)).Inc()
+		telemetry.Note(telemetry.AttentionRateLimited, host+"："+exchange.RejectMessage(&exchange.Error{Kind: reason}), time.Now())
+	}
+	httpclient.OnWeight = func(host string, used, _ int) {
+		telemetry.RateWeightUsed.WithLabelValues(host).Set(float64(used))
 	}
 }

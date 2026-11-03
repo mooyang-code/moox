@@ -66,6 +66,16 @@ type Executor struct {
 	MinRebalanceRatio shared.Decimal
 	// OnReversal 在同一目标内第一次出现反向子单时调用，用于告警。
 	OnReversal func(spaceID, logicalAccountID, instrumentID string, at time.Time)
+	// Observe 记录下单量指标，为空时不记录。
+	Observe ExecutionObserver
+}
+
+// ExecutionObserver 接收收敛过程中的下单量事件。
+type ExecutionObserver interface {
+	// Blocked 记录被下单前持仓校验或同目标反向熔断跳过的标的。
+	Blocked(tradingAccountID, result string)
+	// ChildPlaced 记录当前目标又发出一笔子单；crossTargetReversal 表示它和上一个目标在同一标的上的成交方向相反。
+	ChildPlaced(logicalAccountID, targetID string, crossTargetReversal bool)
 }
 
 const (
@@ -391,6 +401,9 @@ func (e *Executor) Converge(
 			return Result{}, checkErr
 		}
 		if unreflected {
+			if e.Observe != nil {
+				e.Observe.Blocked(action.member.account.TradingAccountID, "duplicate_blocked")
+			}
 			// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
 			blocked = append(blocked, store.BlockedTarget{
 				InstrumentID: instrumentID,
@@ -953,6 +966,9 @@ func (e *Executor) placeAction(
 		}
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
+			if e.Observe != nil {
+				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
+			}
 			return placement{reason: reasonTargetReversal}, nil
 		}
 		runnerID := target.RunnerID
@@ -1024,6 +1040,9 @@ func (e *Executor) placeAction(
 		}
 		if reversal == 1 && e.OnReversal != nil {
 			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
+		}
+		if e.Observe != nil {
+			e.Observe.ChildPlaced(target.LogicalAccountID, target.TargetID, e.crossTargetReversal(ctx, spaceID, target, candidate))
 		}
 		return placement{placed: true}, nil
 	}
@@ -1409,4 +1428,26 @@ func (e *Executor) reversalCount(
 		}
 	}
 	return switches, nil
+}
+
+// crossTargetReversal 判断这笔子单是否和 5 分钟内上一个目标在同一标的上的成交方向相反，只用于计数。
+func (e *Executor) crossTargetReversal(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	candidate laneAction,
+) bool {
+	since := e.now().Add(-5 * time.Minute).UnixMilli()
+	records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, candidate.member.account.TradingAccountID,
+		candidate.instrument.ExchangeSymbol, since)
+	if err != nil {
+		return false
+	}
+	for _, record := range records {
+		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID == target.TargetID {
+			continue
+		}
+		return record.Side != string(sideForDelta(candidate.delta))
+	}
+	return false
 }

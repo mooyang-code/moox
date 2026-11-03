@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -20,6 +21,10 @@ const (
 	notReadyGrace   = 2 * time.Minute
 	// expiredStreak 是连续过期且有差额的目标数，1 分钟策略偶尔过期不告警。
 	expiredStreak = 3
+	// turnoverMultiple 是 1 小时成交额相对组合账户权益的告警倍数：总权重 2 倍时约等于每小时调仓 3 轮。
+	turnoverMultiple = 6
+	// unknownResultsLimit 是 1 分钟内结果未知下单的告警笔数。
+	unknownResultsLimit = 5
 )
 
 // AttentionWorker 定期扫描需要人看的情况并上报，告警由 Monitor 统一发送。
@@ -60,6 +65,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionTargetReversal: telemetry.Recent(telemetry.AttentionTargetReversal, now, rejectionWindow),
 		telemetry.AttentionRateLimited:    telemetry.Recent(telemetry.AttentionRateLimited, now, rejectionWindow),
 	}
+	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
 	if err != nil {
 		return err
@@ -68,6 +74,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 	notReady := make(map[string]time.Time, len(accounts))
 	for _, account := range accounts {
 		spaces[account.SpaceID] = struct{}{}
+		names[account.TradingAccountID] = account.Name
 		if account.Status != string(exchange.AccountStatusEnabled) || account.Ready {
 			continue
 		}
@@ -97,6 +104,16 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		}
 	}
 	w.blockedSince = blocked
+	for accountID, count := range telemetry.UnknownResultsSince(now.Add(-time.Minute)) {
+		if count > unknownResultsLimit {
+			name := names[accountID]
+			if name == "" {
+				name = accountID
+			}
+			telemetry.Note(telemetry.AttentionUnknownResults, name+"：1 分钟内多笔下单结果未知", now)
+		}
+	}
+	items[telemetry.AttentionUnknownResults] = telemetry.Recent(telemetry.AttentionUnknownResults, now, rejectionWindow)
 	telemetry.PublishAttention(items)
 	return errors.Join(scanErrors...)
 }
@@ -110,6 +127,11 @@ func (w *AttentionWorker) scanLogicalAccount(
 ) error {
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
+	}
+	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
+		return err
+	} else if high {
+		items[telemetry.AttentionTurnoverHigh] = append(items[telemetry.AttentionTurnoverHigh], logical.Name+"：1 小时成交额超过权益的 6 倍")
 	}
 	target, err := w.Store.GetLogicalAccountTarget(ctx, logical.SpaceID, logical.LogicalAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -189,4 +211,29 @@ func (w *AttentionWorker) countExpired(
 		delete(w.expiredCounts, logical.LogicalAccountID)
 	}
 	return nil
+}
+
+// turnoverHigh 判断组合账户 1 小时成交额是否超过权益的 turnoverMultiple 倍，用来发现下单量异常。
+func (w *AttentionWorker) turnoverHigh(ctx context.Context, logical store.LogicalAccountRecord, now time.Time) (bool, error) {
+	members, err := w.Store.ListLogicalAccountMembers(ctx, logical.SpaceID, logical.LogicalAccountID, false)
+	if err != nil {
+		return false, err
+	}
+	since := now.Add(-time.Hour).UnixMilli()
+	equity, turnover := 0.0, 0.0
+	for _, member := range members {
+		account, err := w.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return false, err
+		}
+		if value, parseErr := strconv.ParseFloat(account.Snapshot.Equity, 64); parseErr == nil {
+			equity += value
+		}
+		notional, err := w.Store.FillNotionalSince(ctx, logical.SpaceID, member.TradingAccountID, since)
+		if err != nil {
+			return false, err
+		}
+		turnover += notional
+	}
+	return equity > 0 && turnover > equity*turnoverMultiple, nil
 }

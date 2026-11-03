@@ -23,12 +23,15 @@ type hostState struct {
 
 var hosts sync.Map
 
-func hostOf(baseURL string) *hostState {
-	key := baseURL
+func hostKey(baseURL string) string {
 	if parsed, err := url.Parse(baseURL); err == nil && parsed.Host != "" {
-		key = parsed.Host
+		return parsed.Host
 	}
-	value, _ := hosts.LoadOrStore(key, &hostState{})
+	return baseURL
+}
+
+func hostOf(baseURL string) *hostState {
+	value, _ := hosts.LoadOrStore(hostKey(baseURL), &hostState{})
 	return value.(*hostState)
 }
 
@@ -39,14 +42,14 @@ func (h *hostState) setLimit(limit int) {
 }
 
 // recordWeight 记录响应头里的已用权重。同一分钟取最大值：部分接口的响应头不准（例如 bookTicker）。
-func (h *hostState) recordWeight(header http.Header, now time.Time) {
+func (h *hostState) recordWeight(header http.Header, now time.Time) bool {
 	raw := strings.TrimSpace(header.Get("X-MBX-USED-WEIGHT-1M"))
 	if raw == "" {
-		return
+		return false
 	}
 	used, err := strconv.Atoi(raw)
 	if err != nil || used < 0 {
-		return
+		return false
 	}
 	minute := now.Unix() / 60
 	h.mu.Lock()
@@ -57,6 +60,7 @@ func (h *hostState) recordWeight(header http.Header, now time.Time) {
 	if used > h.used {
 		h.used = used
 	}
+	return true
 }
 
 func (h *hostState) pause(until time.Time, reason exchange.ErrorKind) {

@@ -118,3 +118,17 @@ func TestStatusTracksWeightWithinMinute(t *testing.T) {
 	used, _, _, _ := host.snapshot(time.Now().Add(2 * time.Minute))
 	require.Zero(t, used)
 }
+
+func TestOnPauseReportsHostAndReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	var host string
+	var reason exchange.ErrorKind
+	OnPause = func(h string, r exchange.ErrorKind, _ time.Time) { host, reason = h, r }
+	defer func() { OnPause = nil }()
+	_, _ = New(server.URL).Do(context.Background(), &Request{Path: "/"})
+	require.Equal(t, hostKey(server.URL), host)
+	require.Equal(t, exchange.ErrorRateLimited, reason)
+}

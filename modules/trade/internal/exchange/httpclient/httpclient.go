@@ -51,6 +51,14 @@ func transport() http.RoundTripper {
 	return sharedTransport
 }
 
+// 观察回调由进程启动时设置，用于指标和告警；为空时不回调。
+var (
+	// OnPause 在域名或账户下单被限流暂停时调用。
+	OnPause func(host string, reason exchange.ErrorKind, until time.Time)
+	// OnWeight 在记录到新的权重读数时调用。
+	OnWeight func(host string, used, limit int)
+)
+
 // Classifier 让适配器按响应体里的错误码细分限流，返回空表示按 HTTP 状态处理。
 type Classifier func(status int, raw []byte) exchange.ErrorKind
 
@@ -125,7 +133,11 @@ func (c *Client) PauseOrders(d time.Duration, reason exchange.ErrorKind) {
 	if c == nil {
 		return
 	}
-	c.orders.extend(time.Now().Add(d), reason)
+	until := time.Now().Add(d)
+	c.orders.extend(until, reason)
+	if OnPause != nil {
+		OnPause(hostKey(c.BaseURL), reason, until)
+	}
 }
 
 // Do 执行请求，返回响应体。非 2xx 视为错误并返回交易所原始 body 便于诊断。
@@ -178,7 +190,10 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	defer resp.Body.Close()
-	host.recordWeight(resp.Header, time.Now())
+	if host.recordWeight(resp.Header, time.Now()) && OnWeight != nil {
+		used, limit, _, _ := host.snapshot(time.Now())
+		OnWeight(hostKey(c.BaseURL), used, limit)
+	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: resp.StatusCode, Err: err}
@@ -187,7 +202,9 @@ func (c *Client) Do(ctx context.Context, req *Request) ([]byte, error) {
 		return raw, nil
 	}
 	kind := c.classify(resp.StatusCode, raw)
-	c.applyPause(host, kind, resp.StatusCode, resp.Header, time.Now())
+	if until := c.applyPause(host, kind, resp.StatusCode, resp.Header, time.Now()); !until.IsZero() && OnPause != nil {
+		OnPause(hostKey(c.BaseURL), kind, until)
+	}
 	return raw, &exchange.Error{
 		Kind:       kind,
 		HTTPStatus: resp.StatusCode,
@@ -223,22 +240,29 @@ func (c *Client) classify(status int, raw []byte) exchange.ErrorKind {
 	return exchange.ErrorRejected
 }
 
-func (c *Client) applyPause(host *hostState, kind exchange.ErrorKind, status int, header http.Header, now time.Time) {
+// applyPause 按限流类型暂停域名或本账户下单，返回暂停截止时间；不是限流时返回零值。
+func (c *Client) applyPause(host *hostState, kind exchange.ErrorKind, status int, header http.Header, now time.Time) time.Time {
 	retry := retryAfter(header)
+	var until time.Time
 	switch kind {
 	case exchange.ErrorBanned:
-		host.pause(now.Add(orDefault(retry, defaultBanPause)), kind)
+		until = now.Add(orDefault(retry, defaultBanPause))
+		host.pause(until, kind)
 	case exchange.ErrorRateLimited:
 		pause := defaultHostPause
 		if status == http.StatusForbidden {
 			pause = wafPause
 		}
-		host.pause(now.Add(orDefault(retry, pause)), kind)
+		until = now.Add(orDefault(retry, pause))
+		host.pause(until, kind)
 	case exchange.ErrorOrderRateLimited:
-		c.orders.extend(now.Add(orDefault(retry, defaultOrderPause)), kind)
+		until = now.Add(orDefault(retry, defaultOrderPause))
+		c.orders.extend(until, kind)
 	case exchange.ErrorThrottled:
-		c.orders.extend(now.Add(orDefault(retry, throttlePause)), kind)
+		until = now.Add(orDefault(retry, throttlePause))
+		c.orders.extend(until, kind)
 	}
+	return until
 }
 
 func notSent(reason exchange.ErrorKind, until time.Time) error {

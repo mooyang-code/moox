@@ -19,13 +19,17 @@ const (
 	AttentionTargetReversal = "target_reversal"
 	// AttentionRateLimited 是交易所接口限流或封禁暂停。
 	AttentionRateLimited = "rate_limited"
+	// AttentionTurnoverHigh 是组合账户 1 小时成交额异常偏高。
+	AttentionTurnoverHigh = "turnover_high"
+	// AttentionUnknownResults 是 1 分钟内下单结果未知偏多。
+	AttentionUnknownResults = "unknown_results"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
 var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
-	AttentionRateLimited,
+	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
@@ -94,4 +98,39 @@ func Recent(kind string, now time.Time, window time.Duration) []string {
 		details = append(details, detail)
 	}
 	return details
+}
+
+// 下单结果未知按账户记时间，扫描时数 1 分钟内的笔数。
+var (
+	unknownMu      sync.Mutex
+	unknownResults = map[string][]time.Time{}
+)
+
+// NoteUnknownResult 记录一笔结果未知的下单。
+func NoteUnknownResult(account string, at time.Time) {
+	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	unknownResults[account] = append(unknownResults[account], at)
+}
+
+// UnknownResultsSince 返回每个账户在 since 之后结果未知的笔数，并清掉更早的记录。
+func UnknownResultsSince(since time.Time) map[string]int {
+	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	counts := make(map[string]int, len(unknownResults))
+	for account, times := range unknownResults {
+		kept := times[:0]
+		for _, at := range times {
+			if at.After(since) {
+				kept = append(kept, at)
+			}
+		}
+		if len(kept) == 0 {
+			delete(unknownResults, account)
+			continue
+		}
+		unknownResults[account] = kept
+		counts[account] = len(kept)
+	}
+	return counts
 }

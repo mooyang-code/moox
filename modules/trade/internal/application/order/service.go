@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/rs/xid"
 	"gorm.io/gorm"
 )
@@ -515,6 +516,7 @@ func (s *Service) Cancel(
 	defer persistCancel()
 	ctx = persistCtx
 	if callErr == nil {
+		telemetry.OrderCancels.WithLabelValues(record.TradingAccountID).Inc()
 		account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
 		if accountErr != nil {
 			return orderdomain.Order{}, accountErr
@@ -725,6 +727,7 @@ func (s *Service) DiscardPending(
 	applyAggregate(&record, current)
 	record.RemainingReservedQuantity = "0"
 	record.FinishedAt = s.now().UnixMilli()
+	observeOrder(record.TradingAccountID, telemetry.OrderDiscarded)
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}); err != nil {
@@ -1144,6 +1147,7 @@ func (s *Service) submit(
 		if abortErr != nil {
 			return orderdomain.Order{}, false, errors.Join(callErr, abortErr)
 		}
+		observeOrder(record.TradingAccountID, telemetry.OrderNotAccepted)
 		return pending, false, accountExecutionError(record.TradingAccountID, "place", callErr)
 	}
 	expected = current.Version
@@ -1179,6 +1183,17 @@ func (s *Service) submit(
 	}); err != nil {
 		return orderdomain.Order{}, false, err
 	}
+	switch {
+	case callErr == nil:
+		observeOrder(record.TradingAccountID, telemetry.OrderSubmitted)
+		telemetry.OrderNotional.WithLabelValues(record.TradingAccountID, validation.Instrument.QuoteAsset).
+			Add(aggregate.Spec.Quantity.Mul(aggregate.Spec.ReferencePrice).Float64())
+	case current.State == orderdomain.SubmitUnknown:
+		observeOrder(record.TradingAccountID, telemetry.OrderUnknown)
+		telemetry.NoteUnknownResult(record.TradingAccountID, s.now())
+	case current.State == orderdomain.Rejected:
+		observeOrder(record.TradingAccountID, telemetry.OrderRejected)
+	}
 	return current, callErr == nil &&
 		response.Status != "" &&
 		response.Status != exchange.OrderStatusOpen, accountExecutionError(record.TradingAccountID, "place", callErr)
@@ -1208,6 +1223,10 @@ func (s *Service) abortUnsentSubmit(
 
 // uncertainExchangeError 报告请求结果是否未知：超时、连接中断、408、503 未知。
 // 限流和本地拦截是确定未受理，不在这里。
+func observeOrder(tradingAccountID, result string) {
+	telemetry.Orders.WithLabelValues(tradingAccountID, result).Inc()
+}
+
 func uncertainExchangeError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		exchange.IsKind(err, exchange.ErrorTransportUnknown)

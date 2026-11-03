@@ -1073,6 +1073,8 @@ var TradeAttentionNames = map[string]string{
 	"target_expired":    "交易目标连续过期",
 	"target_reversal":   "同一目标内反向下单",
 	"rate_limited":      "交易所接口限流",
+	"turnover_high":     "组合账户成交额异常偏高",
+	"unknown_results":   "下单结果未知偏多",
 }
 
 // buildTradeAttentionStatuses 把 Trade 的关注项变成业务检查。detail 标签带账户名和原因，
