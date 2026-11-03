@@ -199,6 +199,17 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if !strings.Contains(body, `id="timer"`) {
 		t.Fatal("页面应有倒计时条")
 	}
+	// 打开后先是欢迎屏，表单和底栏要等点了「开始设置」才出现。
+	for _, want := range []string{`id="welcome"`, "欢迎使用 MooX", `id="start"`, `<div class="layout" id="layout" hidden>`, `<div class="footer" id="footer" hidden>`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("页面应先显示欢迎屏，缺少 %q", want)
+		}
+	}
+	for _, name := range []string{"welcome-home.webp", "welcome-strategy.webp"} {
+		if resp, _ := h.request(http.MethodGet, "assets/"+name, nil, nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("欢迎屏截图 %s 状态 %d", name, resp.StatusCode)
+		}
+	}
 	var keys []string
 	for _, role := range boot.Roles {
 		keys = append(keys, role.Key)
@@ -213,6 +224,15 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr"} {
 		if strings.Contains(body, id) {
 			t.Fatalf("页面不应展示组件 ID %q", id)
+		}
+	}
+}
+
+// 录入、修改、恢复三个本地页面固定深色，不随系统切换。
+func TestLocalPagesUseTheDarkTheme(t *testing.T) {
+	for name, source := range map[string]string{"page.html": pageSource, "editor.html": editorSource, "restore.html": restoreSource} {
+		if !strings.Contains(source, "color-scheme: dark;") || strings.Contains(source, "prefers-color-scheme") {
+			t.Fatalf("%s 应固定深色，不跟随系统", name)
 		}
 	}
 }
