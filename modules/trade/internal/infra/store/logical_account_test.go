@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/stretchr/testify/require"
@@ -184,4 +185,23 @@ func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
 	require.Equal(t, int64(1), got.OwnerGeneration)
 	require.Equal(t, "ACTIVE", got.AutomationState)
 	require.Empty(t, got.PauseReason)
+}
+
+func TestLogicalAccountUpdatedAtFollowsAutomationChange(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one",
+			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		})
+	}))
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	record, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	// 换手告警靠它判断 1 小时内是否暂停或恢复过。
+	require.WithinDuration(t, time.Now(), record.UpdatedAt, time.Minute)
 }
