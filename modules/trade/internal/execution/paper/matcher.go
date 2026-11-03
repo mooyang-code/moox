@@ -341,6 +341,7 @@ func (m *Matcher) refreshFilled(ctx context.Context, accountID string) error {
 	}
 	return nil
 }
+
 // MatchOrder 撮合一笔订单，成交后立即刷新快照并唤醒。
 func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision) error {
 	return m.matchOrder(ctx, candidate, decision, false)
