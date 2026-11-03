@@ -441,7 +441,7 @@ async function sync(account: TradingAccount) {
     if (response.warnings?.length) Message.warning(response.warnings.join("；"));
     else Message.success("账户同步完成");
     await loadAccounts();
-  } catch (error) {
+  } catch {
     if (!request.isLatest()) return; // 切换空间使该同步作废：不展示属于原空间的失败
   } finally {
     if (request.isLatest()) syncingId.value = "";
@@ -647,7 +647,8 @@ async function closePaper(account: TradingAccount) {
     Message.success("模拟账户已关闭");
     if (selectedAccount.value?.trading_account_id === account.trading_account_id) closeDetail();
     await loadAccounts();
-  } catch (error) {
+  } catch {
+    // 失败提示由请求拦截器统一展示。
   } finally {
     closingId.value = "";
   }

@@ -24,7 +24,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
-			"GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings",
+			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
 		},
 	}
 	services := File_trade_service_proto.Services()
@@ -58,7 +58,7 @@ func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 			"EXCHANGE_UNSPECIFIED", "EXCHANGE_BINANCE", "EXCHANGE_OKX",
 		},
 		"MarketType": {
-			"MARKET_TYPE_UNSPECIFIED", "MARKET_TYPE_SPOT", "MARKET_TYPE_SWAP",
+			"MARKET_TYPE_UNSPECIFIED", "MARKET_TYPE_SPOT", "MARKET_TYPE_SWAP", "MARKET_TYPE_STOCK",
 		},
 		"ExecutionMode": {
 			"EXECUTION_MODE_UNSPECIFIED", "EXECUTION_MODE_PAPER",

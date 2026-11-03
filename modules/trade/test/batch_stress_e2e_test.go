@@ -250,8 +250,8 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, accepted)
 
-	venue := newStressExchange(symbols, 7)
-	source := adapterSource{adapter: venue}
+	market := newStressExchange(symbols, 7)
+	source := adapterSource{adapter: market}
 	clock := testNow.Add(time.Minute)
 	now := func() time.Time { return clock }
 	accountService := &accountapp.Service{Store: accountapp.Repository{Store: tradeStore}, SessionState: readySession(true)}
@@ -275,7 +275,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		Prices:           targetapp.ExchangePriceSource{Adapters: source},
 		MaxChildNotional: shared.MustDecimal("1000000"),
 	}
-	var _ execution.ExecutionAdapter = venue
+	var _ execution.ExecutionAdapter = market
 	converged := false
 	for round := 0; round < 400 && !converged; round++ {
 		result, convergeErr := executor.Converge(context.Background(), testSpace, testLogicalAccount)
@@ -295,21 +295,21 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	for _, blocked := range current.BlockedTargets {
 		rejected[blocked.InstrumentID] = true
 	}
-	venue.mu.Lock()
-	defer venue.mu.Unlock()
+	market.mu.Lock()
+	defer market.mu.Unlock()
 	reached := 0
 	for symbol, quantity := range wanted {
 		instrumentID := symbol[:len(symbol)-4] + "-USDT-SWAP"
-		require.LessOrEqual(t, venue.maxAbs[symbol], absInt(quantity), "%s 出现重复下单", symbol)
-		if venue.positions[symbol] != 0 {
-			require.Equal(t, quantity > 0, venue.positions[symbol] > 0, "%s 方向", symbol)
+		require.LessOrEqual(t, market.maxAbs[symbol], absInt(quantity), "%s 出现重复下单", symbol)
+		if market.positions[symbol] != 0 {
+			require.Equal(t, quantity > 0, market.positions[symbol] > 0, "%s 方向", symbol)
 		}
 		if rejected[instrumentID] {
 			continue
 		}
-		require.Equal(t, quantity, venue.positions[symbol], "%s 最终持仓", symbol)
+		require.Equal(t, quantity, market.positions[symbol], "%s 最终持仓", symbol)
 		reached++
 	}
 	require.Greater(t, reached, count*3/4, "大部分标的应收敛到目标")
-	t.Logf("收敛 %d 个标的，%d 个因拒单阻塞；下单 %d 次，查单 %d 次，读全部挂单 %d 次", reached, len(rejected), venue.calls["place"], venue.calls["order"], venue.calls["open_orders"])
+	t.Logf("收敛 %d 个标的，%d 个因拒单阻塞；下单 %d 次，查单 %d 次，读全部挂单 %d 次", reached, len(rejected), market.calls["place"], market.calls["order"], market.calls["open_orders"])
 }

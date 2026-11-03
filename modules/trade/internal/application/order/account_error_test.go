@@ -292,7 +292,7 @@ func TestResolveUnknownAccountDependencyErrors(t *testing.T) {
 		pending, err := s.Place(ctx, "space-1", testSpec(s.now()))
 		require.NoError(t, err)
 		setStoredOrderState(t, db, string(pending.ID), "SUBMITTING", s.now())
-		cause := errors.New("venue lookup unavailable")
+		cause := errors.New("exchange lookup unavailable")
 		adapter.getErr = cause
 		if fillsFailure {
 			adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}

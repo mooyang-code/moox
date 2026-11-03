@@ -221,7 +221,7 @@ func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) (string, erro
 	}
 	// RPC/operator paths can request a quote before the session's initial
 	// snapshot. Lazily populate the same map used by runPaper so canonical
-	// instrument IDs never leak into a broker's public endpoint.
+	// instrument IDs never leak into an exchange's public endpoint.
 	if _, err := a.LoadInstruments(ctx); err != nil {
 		return "", err
 	} else {

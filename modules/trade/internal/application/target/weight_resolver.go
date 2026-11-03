@@ -63,8 +63,8 @@ var (
 	defaultMaxSingleWeight = shared.MustDecimal("10")
 	defaultMaxGrossWeight  = shared.MustDecimal("20")
 	// Logical targets are expressed in base units, before the executor fans
-	// them out to venue-specific child orders. Keep a venue-independent finite
-	// precision for the persisted snapshot; child orders apply each venue's
+	// them out to exchange-specific child orders. Keep a exchange-independent finite
+	// precision for the persisted snapshot; child orders apply each exchange's
 	// own quantity step later.
 	logicalTargetQuantityStep = shared.MustDecimal("0.000000000000000001")
 )
@@ -93,7 +93,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		return WeightConversion{}, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
 	// The period carried by the event is the sole business timestamp. Do not
-	// fall back to broker or local processing time when it is malformed.
+	// fall back to exchange or local processing time when it is malformed.
 	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
 	// An empty FULL target is an explicit flatten command. It must not depend
 	// on an equity snapshot or a quote for an instrument that no longer exists.
@@ -160,8 +160,8 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 			return WeightConversion{}, fmt.Errorf("%w: target weight resolver: Spot target cannot be negative for %s", ErrPermanent, weight.InstrumentID)
 		}
 		// Division of exact rationals often produces a repeating quotient (for
-		// example 100000*0.1/79999.5). Persist a finite, venue-independent
-		// snapshot. Venue-specific quantity steps are applied only when the
+		// example 100000*0.1/79999.5). Persist a finite, exchange-independent
+		// snapshot. Exchange-specific quantity steps are applied only when the
 		// executor creates child orders; quantizing here would let the first
 		// member's step silently erase a quantity that another member can fill.
 		negative := quantity.IsNegative()

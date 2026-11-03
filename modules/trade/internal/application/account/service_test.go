@@ -571,10 +571,10 @@ func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
 	}
 }
 
-type unifiedVenues struct{}
+type unifiedExchanges struct{}
 
-func (unifiedVenues) Descriptor(name exchange.Exchange) (execution.VenueDescriptor, bool) {
-	return execution.VenueDescriptor{Exchange: name, UnifiedAccount: name == exchange.ExchangeOKX}, true
+func (unifiedExchanges) Descriptor(name exchange.Exchange) (execution.ExchangeDescriptor, bool) {
+	return execution.ExchangeDescriptor{Exchange: name, UnifiedAccount: name == exchange.ExchangeOKX}, true
 }
 
 func liveCredentialAccount(id string, name exchange.Exchange, market exchange.MarketType) tradingaccount.Account {
@@ -591,9 +591,9 @@ func liveCredentialAccount(id string, name exchange.Exchange, market exchange.Ma
 	return value
 }
 
-func TestRejectDuplicateCredentialFollowsVenueWalletModel(t *testing.T) {
+func TestRejectDuplicateCredentialFollowsExchangeWalletModel(t *testing.T) {
 	ctx := context.Background()
-	service := Service{Store: newMemoryStore(), Venues: unifiedVenues{}}
+	service := Service{Store: newMemoryStore(), Exchanges: unifiedExchanges{}}
 	store := service.Store.(*memoryStore)
 
 	binanceSpot := liveCredentialAccount("binance-spot", exchange.ExchangeBinance, exchange.MarketTypeSpot)

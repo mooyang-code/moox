@@ -19,7 +19,7 @@ type ExecutionCapabilities struct {
 
 func ResolveExecutionCapabilities(
 	account tradingaccount.Account,
-	descriptor execution.VenueDescriptor,
+	descriptor execution.ExchangeDescriptor,
 	liveTradingEnabled bool,
 	matcherReady bool,
 ) ExecutionCapabilities {

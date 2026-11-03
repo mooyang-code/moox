@@ -29,7 +29,7 @@ func RegisterAll(
 		console.LiveTradingEnabled = options[0].LiveTradingEnabled
 		console.MatcherReady = options[0].MatcherReady
 		console.Holdings = options[0].Holdings
-		console.Venues = options[0].Venues
+		console.Exchanges = options[0].Exchanges
 	}
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
@@ -39,5 +39,5 @@ type ConsoleOptions struct {
 	LiveTradingEnabled bool
 	MatcherReady       func() bool
 	Holdings           HoldingQueryService
-	Venues             executionport.VenueCatalog
+	Exchanges          executionport.ExchangeCatalog
 }

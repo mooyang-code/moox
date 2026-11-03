@@ -58,7 +58,7 @@ type failedSyncAdapter struct{ *submissionAdapter }
 
 func (a failedSyncAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
 func (a failedSyncAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
-	return nil, errors.New("venue unavailable")
+	return nil, errors.New("exchange unavailable")
 }
 func (a failedSyncAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
