@@ -26,8 +26,8 @@ type BatchResult struct {
 //
 //	批前（不持锁）：并发设置杠杆，同一标的按标的加锁
 //	持执行锁覆盖整批：
-//	  逐笔持账户锁：外部冲突检查、全部提交前校验、落 SUBMITTING，释放账户锁
-//	  有界并发发往交易所，发送前再确认一次目标授权
+//	  逐笔持账户锁：外部冲突检查、全部提交前校验、落 SUBMITTING，释放账户锁；本阶段目标授权每个执行账户只查一次
+//	  有界并发发往交易所，发送前整批再确认一次目标授权
 //	  逐笔持账户锁记录结果
 //	全部发出后：有成交回执的账户关闭准入
 //	批后：有成交或余额拒单的账户请求会话做一次防抖轻量同步（等私有流成交先入账，一致时只要 10 权重）；
@@ -69,9 +69,10 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			defer unlock()
 		}
 		sends := make([]*submitSend, len(records))
+		prepareCtx := withAuthorizationReuse(ctx)
 		for index, record := range records {
 			results[index].OrderID = record.OrderID
-			send, result, prepareErr := s.prepareBatchOrder(ctx, record)
+			send, result, prepareErr := s.prepareBatchOrder(prepareCtx, record)
 			sends[index] = send
 			if send == nil {
 				results[index].Order, results[index].Err = result, prepareErr
@@ -79,6 +80,8 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 		}
 		var wg sync.WaitGroup
 		var mu sync.Mutex
+		// 发送前的授权检查整批重新做一次，各笔共用结果。
+		deliverCtx := withAuthorizationReuse(ctx)
 		for index, send := range sends {
 			if send == nil {
 				continue
@@ -88,7 +91,7 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 				defer wg.Done()
 				accountID := send.record.TradingAccountID
 				// 单笔请求最多 5 秒；结果落库用独立的期限，不受这里影响。
-				sendCtx, cancel := context.WithTimeout(ctx, batchSendTimeout)
+				sendCtx, cancel := context.WithTimeout(deliverCtx, batchSendTimeout)
 				defer cancel()
 				result, synchronize, deliverErr := s.deliverSubmit(sendCtx, send, func(lockCtx context.Context) (func(), error) {
 					return s.Store.LockTradingAccountContext(lockCtx, accountID)

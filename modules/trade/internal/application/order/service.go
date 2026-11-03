@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -424,6 +425,19 @@ func (s *Service) rejectTargetExternalConflict(
 	return nil
 }
 
+type authorizationReuseKey struct{}
+
+type authorizationReuse struct {
+	mu      sync.Mutex
+	results map[string]error
+}
+
+// withAuthorizationReuse 让批量提交的一个阶段内，同一执行账户、同一目标的授权检查只做一次。
+// 准备阶段和发送前各用一份：准备期间目标变了，发送前那次新检查仍会拦住，不会有子单发出。
+func withAuthorizationReuse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorizationReuseKey{}, &authorizationReuse{results: make(map[string]error)})
+}
+
 func (s *Service) authorizeTargetSubmit(
 	ctx context.Context,
 	record store.OrderRecord,
@@ -432,6 +446,30 @@ func (s *Service) authorizeTargetSubmit(
 		record.LogicalAccountID == "" {
 		return nil
 	}
+	key := strings.Join([]string{record.SpaceID, record.TradingAccountID, record.LogicalAccountID, record.RunnerID, record.OwnerID}, "\x00")
+	return reuseAuthorization(ctx, key, func() error { return s.checkTargetAuthorization(ctx, record) })
+}
+
+// reuseAuthorization 在 ctx 带有复用范围时，同一 key 只调用一次 check 并复用结果（包括错误）。
+func reuseAuthorization(ctx context.Context, key string, check func() error) error {
+	reuse, _ := ctx.Value(authorizationReuseKey{}).(*authorizationReuse)
+	if reuse == nil {
+		return check()
+	}
+	reuse.mu.Lock()
+	defer reuse.mu.Unlock()
+	if err, ok := reuse.results[key]; ok {
+		return err
+	}
+	err := check()
+	reuse.results[key] = err
+	return err
+}
+
+func (s *Service) checkTargetAuthorization(
+	ctx context.Context,
+	record store.OrderRecord,
+) error {
 	account, err := s.Store.GetTradingAccountByID(
 		ctx,
 		record.TradingAccountID,
