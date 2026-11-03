@@ -35,6 +35,10 @@ type InstrumentRecord struct {
 }
 
 func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
+	tx.instrumentsWritten = true
+	if tx.store != nil {
+		tx.store.instrumentSets.Invalidate()
+	}
 	if record.InstrumentID == "" {
 		record.InstrumentID = record.ExchangeSymbol
 	}
@@ -145,11 +149,15 @@ func (s *Store) GetInstrument(
 	marketType string,
 	symbol string,
 ) (InstrumentRecord, error) {
-	return getInstrument(s.db.WithContext(ctx), exchange, "PRODUCTION", marketType, symbol)
+	return s.GetInstrumentInEnvironment(ctx, exchange, "PRODUCTION", marketType, symbol)
 }
 
 func (s *Store) GetInstrumentInEnvironment(ctx context.Context, exchange, environment, marketType, exchangeSymbol string) (InstrumentRecord, error) {
-	return getInstrument(s.db.WithContext(ctx), exchange, environment, marketType, exchangeSymbol)
+	set, err := s.instrumentSet(ctx, instrumentScope{exchange, environment, marketType})
+	if err != nil {
+		return InstrumentRecord{}, err
+	}
+	return set.symbol(exchangeSymbol)
 }
 
 func (s *Store) GetInstrumentByID(ctx context.Context, instrumentID string) (InstrumentRecord, error) {
@@ -184,6 +192,15 @@ func (s *Store) ListInstrumentsInEnvironment(
 	environment string,
 	marketType string,
 ) ([]InstrumentRecord, error) {
+	set, err := s.instrumentSet(ctx, instrumentScope{exchange, environment, marketType})
+	if err != nil {
+		return nil, err
+	}
+	return set.records(), nil
+}
+
+// queryInstruments 从库里读一个场所的全部标的，只由标的缓存调用。
+func queryInstruments(db *gorm.DB, exchange, environment, marketType string) ([]InstrumentRecord, error) {
 	var rows []struct {
 		Exchange             string `gorm:"column:c_exchange"`
 		Environment          string `gorm:"column:c_environment"`
@@ -203,7 +220,7 @@ func (s *Store) ListInstrumentsInEnvironment(
 		Status               string `gorm:"column:c_status"`
 		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
 	}
-	if err := s.db.WithContext(ctx).Table("t_trade_instruments").
+	if err := db.Table("t_trade_instruments").
 		Where("c_exchange = ? AND c_environment = ? AND c_market_type = ?", exchange, environment, marketType).
 		Order("c_exchange_symbol").
 		Find(&rows).Error; err != nil {
@@ -250,11 +267,15 @@ func (tx *Tx) GetInstrument(
 	marketType string,
 	symbol string,
 ) (InstrumentRecord, error) {
-	return getInstrument(tx.db, exchange, "PRODUCTION", marketType, symbol)
+	return tx.GetInstrumentInEnvironment(exchange, "PRODUCTION", marketType, symbol)
 }
 
 func (tx *Tx) GetInstrumentInEnvironment(exchange, environment, marketType, exchangeSymbol string) (InstrumentRecord, error) {
-	return getInstrument(tx.db, exchange, environment, marketType, exchangeSymbol)
+	set, err := tx.instrumentSet(instrumentScope{exchange, environment, marketType})
+	if err != nil {
+		return InstrumentRecord{}, err
+	}
+	return set.symbol(exchangeSymbol)
 }
 
 func (tx *Tx) GetInstrumentByID(instrumentID string) (InstrumentRecord, error) {
@@ -266,49 +287,11 @@ func (tx *Tx) GetInstrumentByIDForAccount(spaceID, tradingAccountID, instrumentI
 	if err != nil {
 		return InstrumentRecord{}, err
 	}
-	return getInstrumentByID(tx.db, instrumentID, identity.Exchange, identity.Environment, identity.MarketType)
-}
-
-func getInstrument(
-	db *gorm.DB,
-	exchange string,
-	environment string,
-	marketType string,
-	exchangeSymbol string,
-) (InstrumentRecord, error) {
-	var row struct {
-		Exchange             string `gorm:"column:c_exchange"`
-		Environment          string `gorm:"column:c_environment"`
-		MarketType           string `gorm:"column:c_market_type"`
-		ExchangeSymbol       string `gorm:"column:c_exchange_symbol"`
-		InstrumentID         string `gorm:"column:c_instrument_id"`
-		BaseAsset            string `gorm:"column:c_base_asset"`
-		QuoteAsset           string `gorm:"column:c_quote_asset"`
-		SettlementAsset      string `gorm:"column:c_settlement_asset"`
-		Linear               bool   `gorm:"column:c_linear"`
-		ContractValue        string `gorm:"column:c_contract_value"`
-		ContractValueAsset   string `gorm:"column:c_contract_value_asset"`
-		ExchangeQuantityStep string `gorm:"column:c_exchange_quantity_step"`
-		MinExchangeQuantity  string `gorm:"column:c_min_exchange_quantity"`
-		PriceTick            string `gorm:"column:c_price_tick"`
-		MinNotional          string `gorm:"column:c_min_notional"`
-		Status               string `gorm:"column:c_status"`
-		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
+	set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, identity.MarketType})
+	if err != nil {
+		return InstrumentRecord{}, err
 	}
-	err := db.Table("t_trade_instruments").
-		Where("c_exchange = ? AND c_environment = ? AND c_market_type = ? AND c_exchange_symbol = ?", exchange, environment, marketType, exchangeSymbol).
-		Take(&row).Error
-	return InstrumentRecord{
-		Exchange: row.Exchange, Environment: row.Environment, MarketType: row.MarketType, ExchangeSymbol: row.ExchangeSymbol,
-		InstrumentID: row.InstrumentID, BaseAsset: row.BaseAsset,
-		QuoteAsset: row.QuoteAsset, SettlementAsset: row.SettlementAsset,
-		Linear: row.Linear, ContractValue: row.ContractValue,
-		ContractValueAsset:   row.ContractValueAsset,
-		ExchangeQuantityStep: row.ExchangeQuantityStep,
-		MinExchangeQuantity:  row.MinExchangeQuantity, PriceTick: row.PriceTick,
-		MinNotional: row.MinNotional, Status: row.Status,
-		ExchangeUpdatedAt: row.ExchangeUpdatedAt,
-	}, err
+	return set.id(instrumentID)
 }
 
 func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (InstrumentRecord, error) {
@@ -459,16 +442,11 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if err := validateOrDeriveIdentity(&record.MarketType, identity.MarketType, "order market type"); err != nil {
 		return err
 	}
-	var instrument struct {
-		InstrumentID string `gorm:"column:c_instrument_id"`
-	}
-	query := `
-		SELECT c_instrument_id FROM t_trade_instruments
-		WHERE c_exchange = ? AND c_environment = ? AND c_market_type = ?
-			AND c_exchange_symbol = ?`
-	args := []any{record.Exchange, identity.Environment, record.MarketType, record.ExchangeSymbol}
-	if err := tx.db.Raw(query, args...).Scan(&instrument).Error; err != nil {
+	var instrument InstrumentRecord
+	if set, err := tx.instrumentSet(instrumentScope{record.Exchange, identity.Environment, record.MarketType}); err != nil {
 		return err
+	} else if found, lookupErr := set.symbol(record.ExchangeSymbol); lookupErr == nil {
+		instrument = found
 	}
 	if instrument.InstrumentID == "" {
 		instrument.InstrumentID = record.InstrumentID
@@ -1289,7 +1267,17 @@ type tradingAccountIdentity struct {
 	ExecutionMode string `gorm:"column:c_execution_mode"`
 }
 
+// accountIdentity 返回账户的交易所、市场和行情环境。账户创建后这些不变，按账户缓存。
 func (tx *Tx) accountIdentity(spaceID string, tradingAccountID string) (tradingAccountIdentity, error) {
+	if tx.store == nil || tx.accountsWritten {
+		return tx.loadAccountIdentity(spaceID, tradingAccountID)
+	}
+	return tx.store.identities.Get(accountKey{spaceID, tradingAccountID}, func() (tradingAccountIdentity, error) {
+		return tx.loadAccountIdentity(spaceID, tradingAccountID)
+	})
+}
+
+func (tx *Tx) loadAccountIdentity(spaceID string, tradingAccountID string) (tradingAccountIdentity, error) {
 	var identity tradingAccountIdentity
 	result := tx.db.Raw(`
 		SELECT c_exchange, c_market_type, c_live_environment AS c_environment, c_execution_mode
@@ -1358,20 +1346,14 @@ func (tx *Tx) upsertPosition(record PositionRecord, overrideBefore int64) error 
 		return err
 	}
 	if record.InstrumentID == "" {
-		var instrument struct {
-			InstrumentID string `gorm:"column:c_instrument_id"`
+		set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, identity.MarketType})
+		if err != nil {
+			return err
 		}
-		result := tx.db.Raw(`
-			SELECT c_instrument_id FROM t_trade_instruments
-			WHERE c_exchange = ? AND c_environment = ? AND c_market_type = ? AND c_exchange_symbol = ?
-		`, identity.Exchange, identity.Environment, identity.MarketType, record.ExchangeSymbol).Scan(&instrument)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 || instrument.InstrumentID == "" {
-			record.InstrumentID = record.ExchangeSymbol
-		} else {
+		if instrument, lookupErr := set.symbol(record.ExchangeSymbol); lookupErr == nil && instrument.InstrumentID != "" {
 			record.InstrumentID = instrument.InstrumentID
+		} else {
+			record.InstrumentID = record.ExchangeSymbol
 		}
 	}
 	if err := canonicalizePosition(&record, identity.MarketType); err != nil {

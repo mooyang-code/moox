@@ -205,6 +205,8 @@ func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx
 			}},
 			{Name: "clear_tables", Describe: "清空表：" + lifecycle.JoinTables(tables), Run: func(ctx context.Context, _ string) error {
 				deleted, err := lifecycle.ClearTables(ctx, sqlDB, tables)
+				// 直接清表绕过了存储层，内存里的标的和账户身份要一起清掉。
+				tradeStore.InvalidateCaches()
 				if err == nil {
 					log.Infof("trade_reset_cleared rows=%v", deleted)
 				}

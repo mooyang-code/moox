@@ -98,6 +98,10 @@ func (tradingAccountRow) TableName() string {
 }
 
 func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
+	tx.accountsWritten = true
+	if tx.store != nil {
+		tx.store.identities.Invalidate()
+	}
 	if record.SpaceID == "" || record.TradingAccountID == "" || record.Name == "" ||
 		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
 		record.SettlementAsset == "" || record.Status == "" ||
