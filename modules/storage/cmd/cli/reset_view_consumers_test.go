@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,7 +184,8 @@ func TestResetReadyWaitErrorSaysTheResetIsAlreadyCommitted(t *testing.T) {
 }
 
 // resetE2EFixture 准备假的启停与健康检查脚本、带一个已有活动索引的 View 的元数据库和最小配置，
-// 返回 resetViewConsumers 的选项（超时 3 秒）与记录启停顺序的文件、元数据库路径。
+// 返回 resetViewConsumers 的选项与记录启停顺序的文件、元数据库路径。健康检查脚本每次运行都会写 health.log，
+// runResetE2E 据此判断命令已进入等待就绪阶段。
 func resetE2EFixture(t *testing.T, storageViewReady bool) (opts resetViewConsumersOptions, calls, dbPath string) {
 	t.Helper()
 	parent := t.TempDir()
@@ -199,7 +201,7 @@ func resetE2EFixture(t *testing.T, storageViewReady bool) (opts resetViewConsume
 	for name, body := range map[string]string{
 		"start.sh":       "#!/bin/sh\necho start >> " + calls + "\n",
 		"stop.sh":        "#!/bin/sh\necho stop >> " + calls + "\n",
-		"healthcheck.sh": "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"ready\":" + ready + "}]}'\n",
+		"healthcheck.sh": "#!/bin/sh\necho health >> " + filepath.Join(parent, "health.log") + "\necho '{\"components\":[{\"id\":\"storage-view\",\"ready\":" + ready + "}]}'\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -233,16 +235,56 @@ VALUES ('crypto','view','duckdb','active','ds_a','view_a','{"space_id":"crypto",
 	return opts, calls, dbPath
 }
 
-// resetE2ETimeout 要覆盖“清理 + 拉起 storage-view 子进程”在全量并发测试下的耗时；太短会让截止时间落在拉起过程中，
-// 报 start storage-view: signal: killed 而不是预期的“重置已完成”。这两个用例按设计要等满该超时，所以也不宜过长。
+// resetE2ETimeout 是传给命令的 --timeout，只用于核对报错文案；何时到点由 runResetE2E 决定。
 const resetE2ETimeout = 8 * time.Second
 
-// runResetE2E 像 runResetViewConsumers 那样用 --timeout 给整个操作设截止时间后执行。
+// runResetE2E 模拟 --timeout 在等待 storage-view 就绪时到点：等健康检查脚本第一次运行后才让截止时间到达。
+// 不能用真实计时：本机 CI 运行器负载高时，清理和拉起子进程就可能用完整个超时，截止时间落在拉起过程中，
+// 报 start storage-view: signal: killed 而不是要验证的“重置已完成”。
 func runResetE2E(opts resetViewConsumersOptions) error {
-	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
-	defer cancel()
+	ctx := &expiringContext{Context: context.Background(), done: make(chan struct{})}
+	// 兜底：命令始终没进入等待阶段时也要到点，避免测试挂住。
+	fallback := time.AfterFunc(time.Minute, ctx.expire)
+	defer fallback.Stop()
+	marker := filepath.Join(filepath.Dir(opts.packageRoot), "health.log")
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				ctx.expire()
+				return
+			}
+			select {
+			case <-ctx.done:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer ctx.expire()
 	return resetViewConsumers(ctx, opts, io.Discard, io.Discard)
 }
+
+// expiringContext 由测试决定何时到点；到点后 Err 返回 context.DeadlineExceeded，与 --timeout 到期时一致。
+type expiringContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func (c *expiringContext) Done() <-chan struct{} { return c.done }
+
+func (c *expiringContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *expiringContext) expire() { c.once.Do(func() { close(c.done) }) }
 
 // View 一直没有重建出活动索引：命令在 --timeout 到点时要报“重置已完成、仍在后台重建”，而不是笼统的 context deadline exceeded。
 func TestResetViewConsumersReportsCommittedResetWhenViewsAreStillRebuilding(t *testing.T) {
