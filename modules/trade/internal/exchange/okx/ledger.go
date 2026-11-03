@@ -57,7 +57,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 	started := time.Now()
 	var entries []exchange.LedgerEntry
 	after := ""
-	// 不按 instType 过滤：划转、利息等账单没有 instType，过滤后会查不到。
+	// 请求参数里不带 instType（划转、利息等账单没有 instType，带上就查不到），返回后再在本地只保留本市场的交易类账单。
 	for requests := 0; len(entries) < query.Limit; requests++ {
 		if requests >= billsMaxRequests || (requests > 0 && time.Since(started)+interval > billsQueryBudget) {
 			return partialLedger(entries, query.Limit), nil

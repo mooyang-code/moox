@@ -83,7 +83,7 @@ async function submit() {
     const recovered = await recoverAction(actionId.value);
     if (recovered) {
       // 动作已经结束（例如失败）时，把接口返回的原因也显示出来。
-      if (action.value?.status !== "RUNNING") Message.warning(message);
+      if (action.value?.status !== "RUNNING") Message.warning(message.length > 200 ? `${message.slice(0, 200)}…` : message);
       return true;
     }
     dialogError.value = message;
