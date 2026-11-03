@@ -68,6 +68,8 @@ type FlattenAccountResult struct {
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
+	// quotes 是本轮现货清仓拿到的报价（按资产），收尾判断零头时复用，不再逐个请求。
+	quotes map[string]shared.Decimal
 }
 
 type FlattenResult struct {
@@ -239,6 +241,9 @@ func (s *Service) FlattenLogicalAccount(
 	}
 	return result, errors.Join(sharedErrors...)
 }
+
+// errWaitingBalance：账户在等余额确认，本轮暂停下单，属可重试。
+var errWaitingBalance = errors.New("账户等待余额确认，本轮暂停下单")
 
 // flattenLockWait 是清仓等组合账户锁的时长。锁是轮询抢占，目标执行器一整轮都持锁，太短实盘下容易报“正忙”。
 const flattenLockWait = 2500 * time.Millisecond
@@ -415,6 +420,7 @@ func (s *Service) flattenAccount(
 		result.Error = ""
 		result.cause = nil
 		result.Dust = nil
+		result.quotes = nil
 		reasons := make(map[string]flattenReason)
 		switch {
 		case !exchange.MarketType(account.MarketType).Valid():
@@ -671,7 +677,7 @@ func (s *Service) flattenSwap(
 			side = exchange.SideBuy
 		}
 		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
-			result.Error = joinError(result.Error, "账户等待余额确认，本轮暂停下单")
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_wait_ready", Err: errWaitingBalance})
 			return
 		}
 		if err := s.placeOrContinueFlattenChild(
@@ -725,6 +731,10 @@ func (s *Service) flattenSpot(
 		price := shared.Zero()
 		if quoteErr == nil {
 			price = quote.Price
+			if result.quotes == nil {
+				result.quotes = make(map[string]shared.Decimal)
+			}
+			result.quotes[balance.Asset] = price
 		}
 		// 零头按总量判断，不算剩余，由剩余统计列进 Dust。
 		if exposure.SpotDust(total, price, instrument) {
@@ -753,7 +763,7 @@ func (s *Service) flattenSpot(
 			continue
 		}
 		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
-			result.Error = joinError(result.Error, "账户等待余额确认，本轮暂停下单")
+			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_wait_ready", Err: errWaitingBalance})
 			return
 		}
 		if err := s.placeOrContinueFlattenChildWithQuote(
@@ -979,11 +989,8 @@ func (s *Service) remainingForAccount(
 				continue
 			}
 			if instrument, found := byAsset[balance.Asset]; found {
-				price := shared.Zero()
-				if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol); quoteErr == nil {
-					price = quote.Price
-				}
-				if exposure.SpotDust(quantity, price, instrument) {
+				// 只用本轮已拿到的报价；没有报价时只按最小数量判断，收尾不再发请求。
+				if exposure.SpotDust(quantity, result.quotes[balance.Asset], instrument) {
 					result.Dust = append(result.Dust, RemainingPosition{
 						Asset: balance.Asset, Quantity: quantity.String(), Reason: "零头，低于交易所最小数量或最小金额",
 					})

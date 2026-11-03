@@ -132,8 +132,9 @@ func (w *AttentionWorker) scanLogicalAccount(
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
+	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
-		return err
+		log.WarnContextf(ctx, "交易关注项：组合 %s 换手检查失败：%v", logical.LogicalAccountID, err)
 	} else if high {
 		items[telemetry.AttentionTurnoverHigh] = append(items[telemetry.AttentionTurnoverHigh], logical.Name+"：1 小时目标成交额超过目标变化所需的 1.5 倍")
 	}
@@ -265,7 +266,10 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 		if err := json.Unmarshal([]byte(receipt.QuantityTargetsJSON), &targets); err != nil {
 			return 0, err
 		}
-		var prices map[string]string
+		// 回执的参考价按标的存证据对象（targetapp.ReferencePriceEvidence），这里只取价格。
+		var prices map[string]struct {
+			Price string `json:"price"`
+		}
 		if err := json.Unmarshal([]byte(receipt.ReferencePricesJSON), &prices); err != nil {
 			return 0, err
 		}
@@ -291,8 +295,8 @@ func requiredTurnover(receipts []store.TargetReceiptRecord, since int64) (float6
 				current[instrumentID] = 0
 			}
 		}
-		for instrumentID, raw := range prices {
-			if price, err := strconv.ParseFloat(raw, 64); err == nil && price > 0 {
+		for instrumentID, evidence := range prices {
+			if price, err := strconv.ParseFloat(evidence.Price, 64); err == nil && price > 0 {
 				lastPrice[instrumentID] = price
 			}
 		}

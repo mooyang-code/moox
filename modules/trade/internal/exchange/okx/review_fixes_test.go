@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"testing"
 
@@ -130,5 +131,24 @@ func TestCancelOrderSendsOneRequest(t *testing.T) {
 	}
 	if calls != 1 || order.ExchangeOrderID != "42" || order.ClientOrderID != "cid" {
 		t.Fatalf("calls=%d order=%+v", calls, order)
+	}
+}
+
+func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
+	raw, err := os.ReadFile("testdata/account_push.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &accountRecorder{}
+	if err := swapAdapter("http://unused").dispatchPrivate(context.Background(), raw, recorder); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.accounts) != 1 {
+		t.Fatalf("accounts = %+v", recorder.accounts)
+	}
+	snapshot := recorder.accounts[0]
+	if snapshot.Equity.String() != "4892.951170691435" || snapshot.AvailableFunds.String() != "4734.371190691435" ||
+		!snapshot.Present.Equity || snapshot.ExchangeUpdatedAt.UnixMilli() != 1705564223311 {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }

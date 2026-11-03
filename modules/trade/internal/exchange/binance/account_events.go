@@ -321,6 +321,7 @@ func (a *Adapter) dispatchPrivate(
 			return typedRejected("decode private event wrapper", err)
 		}
 	}
+	// 没有 e 的是 WS API 应答之类的非事件帧，按未知事件忽略。
 	event, err := root.str("e")
 	if err != nil {
 		return typedRejected("decode private event", err)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -190,6 +191,15 @@ func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error
 	})
 }
 
+// credentialUnavailable 判断同步失败是不是因为凭证失效或账户没有会话。
+func credentialUnavailable(err error) bool {
+	if exchange.IsKind(err, exchange.ErrorAuthentication) {
+		return true
+	}
+	var accountErr *orderapp.AccountExecutionError
+	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
+}
+
 // UnverifiedRemovalWarning 是同步失败、只凭本地记录移除成员时返回的提示。
 const UnverifiedRemovalWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
 
@@ -208,7 +218,8 @@ func (s *Service) RemoveMember(
 		return "", ErrServiceConfig
 	}
 	syncErr := s.Syncer.SyncAccount(ctx, tradingAccountID)
-	if syncErr != nil && ctx.Err() != nil {
+	// 只有凭证失效或账户没有会话（同步永远不会成功）才退到只看本地记录；超时、限频等暂时性失败照旧报错。
+	if syncErr != nil && (ctx.Err() != nil || !credentialUnavailable(syncErr)) {
 		return "", syncErr
 	}
 	unlockAll, lockErr := s.Store.LockMemberChange(ctx, spaceID, logicalAccountID, tradingAccountID)

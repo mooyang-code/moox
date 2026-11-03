@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -79,10 +81,21 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	require.ErrorIs(t, err, ErrMemberHasExposure)
 }
 
+type authFailingSyncer struct{}
+
+func (authFailingSyncer) SyncAccount(context.Context, string) error {
+	return &orderapp.AccountExecutionError{TradingAccountID: "account", Operation: "snapshot",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Err: errors.New("invalid api key")}}
+}
+
 func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	calls := 0
+	// 暂时性失败（不是凭证问题）不能退到只看本地记录。
 	service.Syncer = failingAccountSyncer{calls: &calls}
+	_, err := service.RemoveMember(context.Background(), "space-1", "logical-1", "account-a")
+	require.ErrorContains(t, err, "sync must not run")
+	service.Syncer = authFailingSyncer{}
 
 	// 本地没有挂单和持仓：同步失败也允许移除，并提示交易所侧没有核对。
 	warning, err := service.RemoveMember(context.Background(), "space-1", "logical-1", "account-a")
@@ -103,7 +116,7 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 		})
 	}))
 	_, err = service.RemoveMember(context.Background(), "space-1", "logical-1", "account-b")
-	require.ErrorContains(t, err, "sync must not run")
+	require.ErrorContains(t, err, "invalid api key")
 }
 
 func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {

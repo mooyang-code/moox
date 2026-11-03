@@ -12,13 +12,13 @@ func TestRequiredTurnoverSumsTargetChanges(t *testing.T) {
 	receipts := []store.TargetReceiptRecord{
 		// 窗口前的基准：BTC 1、ETH 10。
 		{AcceptedAt: 900, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"1"},{"instrument_id":"ETH","quantity":"10"}]`,
-			ReferencePricesJSON: `{"BTC":"100","ETH":"10"}`},
+			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"},"ETH":{"instrument_id":"ETH","price":"10"}}`},
 		// BTC 加到 3（变化 2×100），ETH 保持。
 		{AcceptedAt: 1_100, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"},{"instrument_id":"ETH","hold":true}]`,
-			ReferencePricesJSON: `{"BTC":"100"}`},
+			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"}}`},
 		// ETH 不再列出即目标为 0（变化 10×10，沿用上次参考价），BTC 不变。
 		{AcceptedAt: 1_200, QuantityTargetsJSON: `[{"instrument_id":"BTC","quantity":"3"}]`,
-			ReferencePricesJSON: `{"BTC":"100"}`},
+			ReferencePricesJSON: `{"BTC":{"instrument_id":"BTC","price":"100"}}`},
 	}
 	required, err := requiredTurnover(receipts, since)
 	if err != nil {

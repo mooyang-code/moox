@@ -795,10 +795,9 @@ type tradePayload struct {
 	CommissionAsset string      `json:"commissionAsset"`
 	RealizedPnl     string      `json:"realizedPnl"`
 	Time            int64       `json:"time"`
-	// 现货 myTrades 用 isBuyer/isMaker；U 本位 userTrades 用 buyer/maker，并带 side。
+	// 现货 myTrades 用 isBuyer/isMaker；U 本位 userTrades 方向取 side，挂单取 maker。
 	IsBuyer      bool   `json:"isBuyer"`
 	IsMaker      bool   `json:"isMaker"`
-	Buyer        bool   `json:"buyer"`
 	Maker        bool   `json:"maker"`
 	Side         string `json:"side"`
 	PositionSide string `json:"positionSide"`
