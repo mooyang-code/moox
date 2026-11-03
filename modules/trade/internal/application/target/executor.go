@@ -402,6 +402,8 @@ func (e *Executor) Converge(
 	// 先减后加：减仓批的结果回来、资金释放之后才发加仓。本批有减仓成功下单时不加仓；
 	// 减仓全部下不了时才加仓，能否加仓由资金检查决定。
 	quota := e.batchQuota(members)
+	// 本轮建子单时同一执行账户的模拟盘保证金估值只算一次快照；发送阶段仍用原 ctx。
+	placeCtx := orderapp.WithSnapshotReuse(ctx)
 	var placedIDs []string
 	deferred := false
 	for _, reducing := range []bool{true, false} {
@@ -440,7 +442,7 @@ func (e *Executor) Converge(
 				continue
 			}
 			placement, placeErr := e.placeAction(
-				ctx, spaceID, target, action, members, quota,
+				placeCtx, spaceID, target, action, members, quota,
 			)
 			if placeErr != nil {
 				if len(placedIDs) > 0 {

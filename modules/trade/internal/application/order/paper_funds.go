@@ -3,6 +3,7 @@ package order
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -23,7 +24,7 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
 	}
-	snapshot, err := adapter.GetAccountSnapshot(ctx)
+	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, adapter.GetAccountSnapshot)
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
 	}
@@ -32,6 +33,47 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
 	return snapshot.UnrealizedPnL.Sub(snapshot.UsedMargin), nil
+}
+
+// fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkPaperFunds 里不占新保证金，
+// 不必为它计算账户快照。
+func (s *Service) fundsMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
+	if validation.ReduceOnly {
+		return shared.Zero(), nil
+	}
+	return s.paperMarginAdjustment(ctx, validation)
+}
+
+type snapshotReuseKey struct{}
+
+type snapshotReuse struct {
+	mu        sync.Mutex
+	snapshots map[string]exchange.AccountSnapshot
+}
+
+// WithSnapshotReuse 让同一轮建子单里对同一执行账户的模拟盘保证金估值只算一次快照。
+// 只用于持执行锁、没有在途子单时连续建单的这一段：这期间账户持仓不会因本组合账户的成交而变化。
+// 发送阶段不能用：同批前面的子单可能已被撮合成交。
+func WithSnapshotReuse(ctx context.Context) context.Context {
+	return context.WithValue(ctx, snapshotReuseKey{}, &snapshotReuse{snapshots: make(map[string]exchange.AccountSnapshot)})
+}
+
+func reusedSnapshot(ctx context.Context, accountID string, load func(context.Context) (exchange.AccountSnapshot, error)) (exchange.AccountSnapshot, error) {
+	reuse, _ := ctx.Value(snapshotReuseKey{}).(*snapshotReuse)
+	if reuse == nil {
+		return load(ctx)
+	}
+	reuse.mu.Lock()
+	defer reuse.mu.Unlock()
+	if snapshot, ok := reuse.snapshots[accountID]; ok {
+		return snapshot, nil
+	}
+	snapshot, err := load(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	reuse.snapshots[accountID] = snapshot
+	return snapshot, nil
 }
 
 func checkPaperFunds(tx *store.Tx, validation Validation, marginAdjustment, required shared.Decimal, oldAsset, oldQuantity string) error {

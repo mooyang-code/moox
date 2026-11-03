@@ -143,7 +143,7 @@ func (s *Service) Place(
 		}
 	}
 
-	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	marginAdjustment, err := s.fundsMarginAdjustment(ctx, validation)
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
@@ -1016,7 +1016,7 @@ func (s *Service) prepareSubmit(
 		}
 		return nil, orderdomain.Order{}, err
 	}
-	marginAdjustment, err := s.paperMarginAdjustment(ctx, validation)
+	marginAdjustment, err := s.fundsMarginAdjustment(ctx, validation)
 	if err != nil {
 		return nil, aggregate, err
 	}
