@@ -71,44 +71,45 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 		// Shenzhen symbols only. Do not advertise XBSE and let the router
 		// choose Sina/EastMoney for Beijing symbols instead.
 		Exchanges:     []string{"XSHG", "XSHE"},
-		Frequencies:   []string{"1m"},
+		Frequencies:   []string{"1m", "5m"},
 		CompleteOHLCV: true,
-		// Tencent's public m1 payload omits turnover. We derive a conservative
-		// CNY estimate from close * shares and mark every normalized row as
-		// estimated so consumers do not mistake it for an upstream amount.
+		// 接口不给成交额：按 收盘价 × 成交量 估算写入，并在 amount_quality 标明是估算值。
 		HasAmount:         true,
 		MaxBarsPerRequest: p.maxBars,
-		TimestampMode:     marketdata.TimestampModeClose,
-		// The public m1 endpoint exposes only its latest bounded page; do not
-		// accept a longer backfill window that cannot be paged safely.
-		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
-		RateLimit: p.rateLimit,
+		// 时间标签是收盘时刻（2026-11-04 实测 5m：首根 0935，含 09:25 集合竞价；下午首根 1305）；成交量单位是手（可有小数），乘 100 换成股。
+		TimestampMode: marketdata.TimestampModeClose,
+		// 接口只给最新一页、没有起点游标：1m 保持 24 小时；5m 一页 320 根约 6.7 个交易日，保守声明 5 个自然日。
+		History:            marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{"5m": {MaxLookback: 5 * 24 * time.Hour}},
+		RateLimit:          p.rateLimit,
 	}
 }
 
+// payload 的 data.<代码> 下按周期名（m1、m5）给出 K 线。
 type payload struct {
-	Data map[string]struct {
-		M1 [][]json.RawMessage `json:"m1"`
-	} `json:"data"`
+	Data map[string]map[string]json.RawMessage `json:"data"`
+}
+
+// tencentPeriods 是 K 线接口的周期名。
+var tencentPeriods = map[marketdata.Frequency]string{
+	marketdata.FrequencyMinute: "m1",
+	marketdata.Frequency5Min:   "m5",
 }
 
 func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest) ([]marketdata.NormalizedKline, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	if req.Frequency != "1m" {
-		return nil, fmt.Errorf("%w: tencent only supports 1m", marketdata.ErrUnsupportedFrequency)
+	frequency, _ := req.FrequencyValue() // Validate 已校验
+	period, ok := tencentPeriods[frequency]
+	if !ok {
+		return nil, fmt.Errorf("%w: tencent 不支持 %s", marketdata.ErrUnsupportedFrequency, req.Frequency)
 	}
-	requestLimit := req.Limit
-	if !req.StartTime.IsZero() || !req.EndTime.IsZero() {
-		// Tencent exposes a latest-page endpoint rather than a start cursor.
-		// Fetch its full verified page for historical/gap requests and rely on
-		// the common pipeline to discard rows outside the requested interval.
-		requestLimit = p.maxBars
-	}
+	// 接口只给最新一页、没有起点游标：按起始时间数出要几根，公共写入边界再按请求区间过滤。
+	requestLimit := commonsrc.LatestPageLimit(req, p.now().UTC(), p.maxBars)
 	query := url.Values{
-		"_var":  {"m1_today"},
-		"param": {strings.Join([]string{req.ProviderSymbol, "m1", "", strconv.Itoa(requestLimit)}, ",")},
+		"_var":  {period + "_today"},
+		"param": {strings.Join([]string{req.ProviderSymbol, period, "", strconv.Itoa(requestLimit)}, ",")},
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+p.klineEndpoint+"?"+query.Encode(), nil)
 	if err != nil {
@@ -139,7 +140,12 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	data := decoded.Data[req.ProviderSymbol].M1
+	var data [][]json.RawMessage
+	if raw, ok := decoded.Data[req.ProviderSymbol][period]; ok {
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return nil, fmt.Errorf("%w: tencent %s: %v", marketdata.ErrProtocol, period, err)
+		}
+	}
 	rows := make([]marketdata.NormalizedKline, 0, len(data))
 	now := p.now().UTC()
 	for _, record := range data {
@@ -172,7 +178,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "tencent", req.ProviderSymbol, marketdata.FrequencyMinute, marketdata.TimestampModeClose, values[0], openValue, highValue, lowValue, closeValue, volumeValue, 0, 100, now, req.RequestID)
+		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "tencent", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, values[0], openValue, highValue, lowValue, closeValue, volumeValue, 0, 100, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}

@@ -89,15 +89,16 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m"},
+		Frequencies:       []string{"1m", "5m"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: p.maxBars,
-		TimestampMode:     marketdata.TimestampModeClose,
-		// Sina's public endpoint exposes only its latest bounded page; keep
-		// history requests within the window that every active source can serve.
-		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
-		RateLimit: p.rateLimit,
+		// 时间标签是收盘时刻（2026-11-04 实测 5m：首根 09:35，含 09:25 集合竞价；下午首根 13:05）；成交量单位是股，有成交额。
+		TimestampMode: marketdata.TimestampModeClose,
+		// 接口只给最新一页、没有起点游标：1m 一页只到当天，保持 24 小时；5m 一页 1023 根约 21 个交易日，保守声明 20 个自然日。
+		History:            marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{"5m": {MaxLookback: 20 * 24 * time.Hour}},
+		RateLimit:          p.rateLimit,
 	}
 }
 
@@ -125,19 +126,16 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	if req.Frequency != "1m" {
-		return nil, fmt.Errorf("%w: sina only supports 1m", marketdata.ErrUnsupportedFrequency)
+	frequency, _ := req.FrequencyValue() // Validate 已校验
+	scale, ok := sinaScales[frequency]
+	if !ok {
+		return nil, fmt.Errorf("%w: sina 不支持 %s", marketdata.ErrUnsupportedFrequency, req.Frequency)
 	}
-	requestLimit := req.Limit
-	if !req.StartTime.IsZero() || !req.EndTime.IsZero() {
-		// Sina returns the latest page and has no start cursor. Ask for the
-		// largest verified page for historical/gap requests, then let the
-		// common pipeline enforce the exact half-open coverage interval.
-		requestLimit = p.maxBars
-	}
+	// 接口只给最新一页、没有起点游标：按起始时间数出要几根，公共写入边界再按请求区间过滤。
+	requestLimit := commonsrc.LatestPageLimit(req, p.now().UTC(), p.maxBars)
 	query := url.Values{
 		"symbol":  {req.ProviderSymbol},
-		"scale":   {"1"},
+		"scale":   {scale},
 		"ma":      {"no"},
 		"datalen": {fmt.Sprintf("%d", requestLimit)},
 	}
@@ -199,7 +197,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "sina", req.ProviderSymbol, marketdata.FrequencyMinute, marketdata.TimestampModeClose, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
+		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "sina", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}
@@ -425,4 +423,10 @@ func firstPresent(values map[string]any, keys ...string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// sinaScales 是 K 线接口的 scale 参数（周期分钟数）。
+var sinaScales = map[marketdata.Frequency]string{
+	marketdata.FrequencyMinute: "1",
+	marketdata.Frequency5Min:   "5",
 }

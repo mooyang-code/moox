@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,24 +44,29 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	require.Equal(t, marketdata.TimestampModeClose, provider.KlineSpec().TimestampMode)
 }
 
-func TestFetchKlinesRequestsFullPageForHistoricalCoverage(t *testing.T) {
-	fixture := filepath.Join("testdata", "kline.json")
+func TestFetchKlinesRequestsOnlyTheBarsSinceStart(t *testing.T) {
+	var requested []string
 	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "1023", r.URL.Query().Get("datalen"))
-		body, err := os.ReadFile(fixture)
+		requested = append(requested, r.URL.Query().Get("datalen"))
+		body, err := os.ReadFile(filepath.Join("testdata", "kline.json"))
 		require.NoError(t, err)
 		_, _ = w.Write(body)
 	}))
-	now := time.Date(2026, 8, 29, 1, 32, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 4, 2, 7, 30, 0, time.UTC) // 10:07:30 Asia/Shanghai
 	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
-
-	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
-		SubjectID: "000001.XSHE", ProviderSymbol: "sz000001", Frequency: "1m", Limit: 1,
-		StartTime: now.Add(-time.Hour), EndTime: now, RequestID: "req-sina-history",
-	})
-
-	require.NoError(t, err)
-	require.NotEmpty(t, rows)
+	for _, start := range []time.Time{
+		time.Date(2026, 11, 4, 2, 0, 0, 0, time.UTC), // 实时周期提交：目标 10:00 那根
+		time.Date(2026, 11, 3, 5, 0, 0, 0, time.UTC), // 补采前一天下午起
+		time.Date(2026, 9, 1, 1, 30, 0, 0, time.UTC), // 两个月前：以单页上限封顶
+	} {
+		_, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+			SubjectID: "000001.XSHE", ProviderSymbol: "sz000001", Frequency: "5m", Limit: 1,
+			StartTime: start, EndTime: start.Add(5 * time.Minute), RequestID: "req-limit",
+		})
+		require.NoError(t, err)
+	}
+	// 10:00 起到最新已收盘的 10:00 那根是 1 根，多取 2 根；前一天 13:00 起是 31 根，多取 2 根。
+	require.Equal(t, []string{"3", "33", "1023"}, requested)
 }
 
 func TestFetchKlinesClassifiesBodyReadErrorForFallback(t *testing.T) {
@@ -306,4 +313,99 @@ func newFixtureClient(t *testing.T, handler http.Handler) *http.Client {
 			return recorder.Result(), nil
 		}),
 	}
+}
+
+var shanghai = time.FixedZone("CST", 8*3600)
+
+func cst(day, clock string) time.Time {
+	parsed, err := time.ParseInLocation("2006-01-02 15:04", day+" "+clock, shanghai)
+	if err != nil {
+		panic(err)
+	}
+	return parsed.UTC()
+}
+
+func recordedKlines(t *testing.T, fetch func(*http.Client, time.Time) ([]marketdata.NormalizedKline, error), path string) []marketdata.NormalizedKline {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+	})}
+	rows, err := fetch(client, cst("2026-11-04", "16:42"))
+	require.NoError(t, err)
+	return rows
+}
+
+// testdata/kline_5m_600519_20261104.txt 是 2026-11-04 16:42 实际请求
+// quotes.sina.cn/cn/api/jsonp_v2.php/var%20moox_kline=/CN_MarketDataService.getKLineData?symbol=sh600519&scale=5&ma=no&datalen=60 的原始返回。
+func TestFetchKlines5mParsesRecordedResponse(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "kline_5m_600519_20261104.txt"))
+	require.NoError(t, err)
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "5", r.URL.Query().Get("scale"))
+		require.Equal(t, "60", r.URL.Query().Get("datalen"))
+		_, _ = w.Write(body)
+	}))
+	now := cst("2026-11-04", "16:42")
+	provider := New(Config{BaseURL: "http://fixture.test", HTTPClient: client, Now: func() time.Time { return now }})
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "5m", Limit: 60, RequestID: "sina-5m"})
+	require.NoError(t, err)
+	require.Len(t, rows, 60)
+	// 标签是收盘时刻：首根 14:05:00 是 14:00 那根；下午首根 13:05 是 13:00 那根。
+	require.Equal(t, cst("2026-11-03", "14:00"), rows[0].BarStart)
+	byStart := map[time.Time]marketdata.NormalizedKline{}
+	for _, row := range rows {
+		require.Equal(t, "5m", row.Frequency)
+		require.False(t, row.AmountEstimated)
+		byStart[row.BarStart] = row
+	}
+	require.Contains(t, byStart, cst("2026-11-04", "13:00"))
+	_, lunch := byStart[cst("2026-11-04", "11:30")]
+	require.False(t, lunch)
+	// 首根含 09:25 集合竞价；成交量单位是股，有成交额。
+	first := byStart[cst("2026-11-04", "09:30")]
+	require.Equal(t, 674643.0, first.VolumeShares)
+	require.Equal(t, 993156836.1729, first.AmountCNY)
+	require.Equal(t, 1470.0, first.Open)
+}
+
+// 同一时段新浪、腾讯、东方财富 5m 时间逐根对齐，整段成交量合计一致；贴近 5 分钟边界的个别成交归属不同，单根量价可有小差异。
+func TestRecorded5mAlignsWithTencentAndEastMoney(t *testing.T) {
+	sinaRows := recordedKlines(t, func(client *http.Client, now time.Time) ([]marketdata.NormalizedKline, error) {
+		return New(Config{HTTPClient: client, Now: func() time.Time { return now }}).FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "5m", Limit: 60, RequestID: "sina"})
+	}, filepath.Join("testdata", "kline_5m_600519_20261104.txt"))
+	tencentRows := recordedKlines(t, func(client *http.Client, now time.Time) ([]marketdata.NormalizedKline, error) {
+		return tencent.New(tencent.Config{HTTPClient: client, Now: func() time.Time { return now }}).FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "5m", Limit: 60, RequestID: "tencent"})
+	}, filepath.Join("..", "tencent", "testdata", "kline_5m_600519_20261104.txt"))
+	// 东方财富样例在 12:51 录制，覆盖 2026-11-03 10:30～11-04 11:25。
+	eastRows := recordedKlines(t, func(client *http.Client, now time.Time) ([]marketdata.NormalizedKline, error) {
+		return eastmoney.New(eastmoney.Config{HTTPClient: client, Now: func() time.Time { return now }}).FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "5m", Limit: 60, RequestID: "east"})
+	}, filepath.Join("..", "eastmoney", "testdata", "kline_5m_600519_20261104.json"))
+
+	require.Len(t, tencentRows, len(sinaRows))
+	for i := range sinaRows {
+		require.Equal(t, sinaRows[i].BarStart, tencentRows[i].BarStart, "第 %d 根", i)
+		require.Equal(t, sinaRows[i].BarEnd, tencentRows[i].BarEnd, "第 %d 根", i)
+	}
+	sinaByStart := map[time.Time]marketdata.NormalizedKline{}
+	tencentByStart := map[time.Time]marketdata.NormalizedKline{}
+	for i := range sinaRows {
+		sinaByStart[sinaRows[i].BarStart], tencentByStart[tencentRows[i].BarStart] = sinaRows[i], tencentRows[i]
+	}
+	var eastVolume, sinaVolume, tencentVolume float64
+	overlap := 0
+	for _, east := range eastRows {
+		sina, ok := sinaByStart[east.BarStart]
+		if !ok {
+			continue
+		}
+		overlap++
+		eastVolume += east.VolumeShares
+		sinaVolume += sina.VolumeShares
+		tencentVolume += tencentByStart[east.BarStart].VolumeShares
+	}
+	require.Equal(t, 36, overlap, "11-03 14:00～14:55 与 11-04 09:30～11:25")
+	require.InEpsilon(t, eastVolume, sinaVolume, 2e-3)
+	require.InEpsilon(t, eastVolume, tencentVolume, 2e-3)
 }

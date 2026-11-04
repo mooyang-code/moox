@@ -41,7 +41,7 @@ func TestNewStockKlinePipelineUsesTheFrequencyRoute(t *testing.T) {
 
 	five, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
 	require.NoError(t, err)
-	require.Equal(t, []string{"eastmoney", "tdx"}, five.CandidateChain)
+	require.Equal(t, []string{"eastmoney", "sina", "tdx", "tencent"}, five.CandidateChain)
 
 	_, err = NewStockKlinePipeline(timerHandlerStorage{}, "15m")
 	require.ErrorContains(t, err, "没有 15m 的 K 线路由")

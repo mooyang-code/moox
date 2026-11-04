@@ -166,8 +166,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", fmt.Errorf("stockcn has no source assignment for %s", item.SubjectID))
 					return
 				}
+				// 分到的来源在前，其余按候选链（其余 primary，再 fallback）依次回落。
 				itemSourceID = selectedSource.SourceID
-				itemChain = append([]string{selectedSource.Provider}, chain...)
+				itemChain = normalizeCandidateChain(chain, selectedSource.Provider)
 			}
 			limit := item.BarLimit
 			if limit <= 0 {
@@ -740,8 +741,8 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 		stringValue("source_provider", bar.ProviderID),
 		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
 	}
-	// 上游缺成交额时按 close × volume 估算的值不是真实成交额：amount 显式写 NULL，只在 amount_quality 里留痕。
-	fields = append(fields, amountField(bar))
+	// 上游缺成交额（腾讯）时按 收盘价 × 成交量 估算写入 amount，amount_quality=estimated_close_x_volume 标明是估算值。
+	fields = append(fields, doubleValue("amount", bar.AmountCNY))
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
@@ -834,14 +835,6 @@ func tradeDateUTC(value time.Time) (time.Time, error) {
 
 func amountUnit(bar marketdata.NormalizedKline) string {
 	return "cny"
-}
-
-// amountField 返回成交额字段；估算值（close × volume）不当作真实成交额，写显式 NULL（覆盖该行此前写入的估算值）。
-func amountField(bar marketdata.NormalizedKline) *storagepb.FieldValue {
-	if bar.AmountEstimated {
-		return &storagepb.FieldValue{FieldId: "amount", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}}
-	}
-	return doubleValue("amount", bar.AmountCNY)
 }
 
 func doubleValue(field string, value float64) *storagepb.FieldValue {

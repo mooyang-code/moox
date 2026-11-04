@@ -41,7 +41,7 @@ type SourceBar struct {
 	Volume      *float64
 	QuoteVolume *float64
 	TradeNum    *int64
-	// Amount 是 A 股的成交额；采集拿不到真实成交额时为空。
+	// Amount 是 A 股的成交额；可能是采集时按 收盘价 × 成交量 估算的值（腾讯），合成不区分估算与否。
 	Amount *float64
 }
 
@@ -60,7 +60,7 @@ type Result struct {
 	Volume      float64
 	QuoteVolume float64
 	TradeNum    int64
-	// Amount 是 A 股的成交额：桶内有任何一根源 K 线没有真实成交额时为空（写入 NULL）。
+	// Amount 是 A 股的成交额：桶内源 K 线的成交额之和，可能含估算值（不传递 amount_quality）；有任何一根没有成交额时为空（写入 NULL）。
 	Amount          *float64
 	SourceWindowEnd time.Time
 	SourceHash      string

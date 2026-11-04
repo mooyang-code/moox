@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 )
 
 var shanghaiLocation = mustLoadLocation("Asia/Shanghai")
@@ -150,6 +151,40 @@ func NormalizeIntradayKline(subjectID, providerID, providerSymbol string, freque
 		return marketdata.NormalizedKline{}, err
 	}
 	return row, nil
+}
+
+// LatestPageLimit 返回只给“最新一页”、没有起点游标的接口（新浪、腾讯）应请求的根数。
+// 没有起始时间时取请求的 Limit；有起始时间时按交易序号数出起始时间到现在的交易桶数，多取 2 根
+// （容忍未收盘那根与服务端延迟），不超过 maxBars。实时周期提交只要几根，长区间补采自然更多。
+func LatestPageLimit(req marketdata.KlineRequest, now time.Time, maxBars int) int {
+	if req.StartTime.IsZero() {
+		return req.Limit
+	}
+	clock, err := markets.Clock("stockcn", req.Frequency)
+	if err != nil {
+		return maxBars
+	}
+	newest, err := clock.LatestClosed(now)
+	if err != nil {
+		return maxBars
+	}
+	before, err := clock.LatestClosed(req.StartTime)
+	if err != nil {
+		return maxBars
+	}
+	first, err := clock.Next(before)
+	if err != nil {
+		return maxBars
+	}
+	newestOrdinal, err := clock.Ordinal(newest)
+	if err != nil {
+		return maxBars
+	}
+	firstOrdinal, err := clock.Ordinal(first)
+	if err != nil {
+		return maxBars
+	}
+	return min(max(int(newestOrdinal-firstOrdinal)+3, 3), maxBars)
 }
 
 func splitSubjectID(subjectID string) (string, string, error) {

@@ -752,3 +752,58 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	require.Equal(t, "tencent", selected)
 	require.Equal(t, []marketdata.NormalizedKline{valid}, rows)
 }
+
+// 请求不带来源时按路由给每个标的固定分配 primary；分到的来源失败时按候选链回落，不再把它重试第二轮。
+// 写入行的 source_provider / provider_id / source_id 是实际取到数据的来源，series_tag 不随来源变化。
+func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
+	barStart := now.Add(-6 * time.Minute)
+	rowsFrom := func(provider, sourceID string) func(marketdata.KlineRequest) []marketdata.NormalizedKline {
+		return func(req marketdata.KlineRequest) []marketdata.NormalizedKline {
+			return []marketdata.NormalizedKline{{
+				SubjectID: req.SubjectID, ProviderID: provider, SourceID: sourceID, ProviderSymbol: req.ProviderSymbol, Frequency: "1m",
+				BarStart: barStart, BarEnd: barStart.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+				ProviderTimestamp: barStart.Add(time.Minute), FetchedAt: now, RequestID: req.RequestID,
+			}}
+		}
+	}
+	var sinaCalls, tencentCalls int32
+	registry := marketdata.NewRegistry()
+	rateLimit := &marketdata.RateLimitPolicy{RequestsPerSecond: 1000, Burst: 100, MaxConcurrent: 100, Cooldown: time.Second, RequestTimeout: time.Second}
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "stockcn_minute_http", err: marketdata.ErrProtocol, calls: &sinaCalls, rateLimit: rateLimit}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", sourceID: "stockcn_http", calls: &tencentCalls, rateLimit: rateLimit, rowsFor: rowsFrom("tencent", "stockcn_http")}))
+	router, err := marketdata.NewRouter(registry, 1000, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	_, sources, err := stockCNAssignmentRoute("1m")
+	require.NoError(t, err)
+
+	items := make([]domain.CollectionItem, 0, 20)
+	assignedToSina := 0
+	for index := 0; index < 20; index++ {
+		subjectID := fmt.Sprintf("%06d.XSHG", 600000+index)
+		if source, _ := stockSourceForSubject(sources, StockCNRouteID("1m"), subjectID); source.Provider == "sina" {
+			assignedToSina++
+		}
+		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1, StartTime: barStart.Format(time.RFC3339), EndTime: barStart.Add(time.Minute).Format(time.RFC3339)})
+	}
+	require.Positive(t, assignedToSina)
+	require.Less(t, assignedToSina, 20, "两家 primary 都分到标的")
+	storage := &pipelineStorage{}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, AutoBindSource: true, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "assign", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", MarketType: "equity", RequestID: "assign", Concurrency: 20, Items: items})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus())
+	require.Len(t, storage.rows, 20)
+	require.Equal(t, int32(20), atomic.LoadInt32(&tencentCalls), "每个标的最终都由腾讯取到")
+	require.Equal(t, int32(assignedToSina*RuntimeKlineProviderAttemptBudget()), atomic.LoadInt32(&sinaCalls), "分到新浪的标的只试新浪一轮，分到腾讯的不试新浪")
+	for _, row := range storage.rows {
+		fields := map[string]string{}
+		for _, field := range row.GetFields() {
+			fields[field.GetFieldId()] = field.GetValue().GetStringValue()
+		}
+		require.Equal(t, "tencent", fields["source_provider"])
+		require.Equal(t, "tencent", fields["provider_id"])
+		require.Equal(t, "stockcn_http", fields["source_id"])
+		require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
+	}
+}

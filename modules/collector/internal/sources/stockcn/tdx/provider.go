@@ -43,7 +43,8 @@ const (
 
 func New(cfg Config) *Provider {
 	if strings.TrimSpace(cfg.Host) == "" {
-		cfg.Host = "jstdx.gtjas.com"
+		// 2026-11-04 实测 jstdx.gtjas.com 返回的分钟线解码失败（minute datetime is truncated），shtdx.gtjas.com 正常。
+		cfg.Host = "shtdx.gtjas.com"
 	}
 	if cfg.Port <= 0 {
 		cfg.Port = 7709

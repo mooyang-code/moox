@@ -48,6 +48,16 @@ type PlanMarket struct {
 	MarketType     string `json:"market_type"`
 }
 
+// RequestSource 返回计划请求绑定的行情来源。A 股股票的 K 线来源由路由（route.yaml）按标的固定分配到 primary，
+// 失败再按候选链回落，请求里不写来源；其余市场（加密货币）固定用标签的同步来源。计划本身仍按标签的来源分组，
+// 计划内容与哈希不随分配变化。
+func (m PlanMarket) RequestSource() (provider, sourceID string) {
+	if strings.EqualFold(strings.TrimSpace(m.MarketID), StockCNSpaceID) && (strings.TrimSpace(m.InstrumentType) == "" || strings.EqualFold(strings.TrimSpace(m.InstrumentType), "equity")) {
+		return "", ""
+	}
+	return m.Provider, m.SourceID
+}
+
 // PlanFetch 是拉取参数，按数据源下发。
 type PlanFetch struct {
 	Concurrency      int `json:"concurrency"`
@@ -405,11 +415,12 @@ func (p *Plan) buildFrequencyRequest(spaceID, functionName, requestID, frequency
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	provider, sourceID := p.Market.RequestSource()
 	items := make([]domain.CollectionItem, 0, len(ids))
 	for _, id := range ids {
 		items = append(items, domain.CollectionItem{
 			InstanceID: planInstanceID(frequencyName, id), SubjectID: id, Symbol: p.ExchangeSymbol(id), TargetDataTime: periodText, BarLimit: 1,
-			RequirePeriodCommit: true, Provider: p.Market.Provider, SourceID: p.Market.SourceID, MarketID: p.Market.MarketID,
+			RequirePeriodCommit: true, Provider: provider, SourceID: sourceID, MarketID: p.Market.MarketID,
 			InstrumentType: p.Market.InstrumentType, MarketType: p.Market.MarketType, DataType: "kline", DatasetID: firstDataset, Frequency: frequencyName,
 		})
 	}
@@ -417,7 +428,7 @@ func (p *Plan) buildFrequencyRequest(spaceID, functionName, requestID, frequency
 	request := Request{
 		BatchID: fmt.Sprintf("%s|%s|%d", functionName, frequencyName, period.Unix()), BatchKind: domain.BatchKindRealtime, SpaceID: spaceID,
 		MarketID: p.Market.MarketID, InstrumentType: p.Market.InstrumentType, DatasetID: firstDataset, Frequency: frequencyName,
-		Provider: p.Market.Provider, SourceID: p.Market.SourceID, MarketType: p.Market.MarketType, NodeID: functionName, FunctionName: functionName,
+		Provider: provider, SourceID: sourceID, MarketType: p.Market.MarketType, NodeID: functionName, FunctionName: functionName,
 		RequestID: requestID, RequirePeriodCommit: true, PlanRequest: true, Concurrency: p.Fetch.Concurrency, Items: items, Targets: targets,
 	}
 	bindRequestTargetPeriodIdentity(&request)

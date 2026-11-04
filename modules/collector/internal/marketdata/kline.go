@@ -21,9 +21,8 @@ type NormalizedKline struct {
 	Close          float64
 	VolumeShares   float64
 	AmountCNY      float64
-	// AmountEstimated marks feeds such as Tencent whose public minute payload
-	// omits turnover. The common pipeline still exposes a CNY amount, but keeps
-	// the quality distinction explicit instead of presenting it as native data.
+	// AmountEstimated 标记上游不给成交额（腾讯）、AmountCNY 是 收盘价 × 成交量 的估算值：照常写入 amount，
+	// 并写 amount_quality=estimated_close_x_volume。
 	AmountEstimated   bool
 	TradeCount        int64
 	ProviderTimestamp time.Time
