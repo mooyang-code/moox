@@ -371,8 +371,12 @@ func TestStockDatasetWarmingAcrossBreaksStaysHealthy(t *testing.T) {
 	clock := stockSpaceClock(t, stockDays)
 	key := datasetKey{producer: "factor", spaceID: "stockcn", datasetID: "dataset_factor_stock_5m", freq: "5m"}
 	registered := cst("2026-10-16", "20:00:00")
-	lastPartial := cst("2026-10-19", "11:30:05")
-	for _, now := range []time.Time{cst("2026-10-19", "11:50:00"), cst("2026-10-19", "12:30:00"), cst("2026-10-19", "18:00:00"), cst("2026-10-20", "09:29:00")} {
+	morning, afternoon := cst("2026-10-19", "11:30:05"), cst("2026-10-19", "15:00:05")
+	for _, c := range []struct{ now, lastPartial time.Time }{
+		{cst("2026-10-19", "11:50:00"), morning}, {cst("2026-10-19", "12:30:00"), morning},
+		{cst("2026-10-19", "18:00:00"), afternoon}, {cst("2026-10-20", "09:29:00"), afternoon},
+	} {
+		now, lastPartial := c.now, c.lastPartial
 		value := datasetValues{interval: 300, lastRun: float64(lastPartial.Unix()), lastSuccess: float64(registered.Unix()), lastPartial: float64(lastPartial.Unix()), inventory: float64(now.Unix())}
 		item := datasetStatus(now, key, value, testRealtimePolicy(), clock)
 		require.NotEqual(t, "stale", item.Status, "%s %s", now, item.Reason)
