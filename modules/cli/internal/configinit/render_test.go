@@ -492,3 +492,32 @@ func TestRenderCloudFunctionPlanGuards(t *testing.T) {
 		t.Fatal("拿不到 AppId 时不生成计划")
 	}
 }
+
+// 入口主机优先选存储服务器（同地域走内网）；存储服务器是轻量服务器没有可用 VPC 时，退而选海外服务器的 Access。
+func TestRenderPrefersStorageRegionForCloudFunctions(t *testing.T) {
+	plan := func(cloud *fakeCloud) setupconfig.Manifest {
+		raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := setupconfig.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+	both := newFakeCloud()
+	both.instances["198.51.100.11"] = Instance{Kind: "cvm", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-nj", SubnetID: "subnet-nj", PrivateIP: "10.0.0.5"}
+	both.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
+	manifest := plan(both)
+	if got := manifest.SCFPlan.Spaces[0].Markets["equity"]; !slices.Equal(got, []string{"ap-nanjing"}) || manifest.SCFPlan.Regions["ap-nanjing"].AccessHost != "storage" {
+		t.Fatalf("存储服务器可用时应选它所在地域：%v", got)
+	}
+
+	fallback := newFakeCloud() // 存储服务器是轻量服务器（没有 VPC）
+	fallback.instances["198.51.100.12"] = Instance{Kind: "cvm", Region: "ap-hongkong", Name: "hk", VpcID: "vpc-hk", SubnetID: "subnet-hk", PrivateIP: "172.19.0.5"}
+	manifest = plan(fallback)
+	if !manifest.SCFEnabled() || manifest.SCFPlan.Regions["ap-hongkong"].AccessHost != "overseas" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-hongkong"}) {
+		t.Fatalf("存储服务器不可用时应退到海外服务器：%+v", manifest.SCFPlan)
+	}
+}

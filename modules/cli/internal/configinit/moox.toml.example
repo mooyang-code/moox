@@ -320,7 +320,8 @@ enabled = false
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
 
-# config init 会按第一步密钥的 AppId 与存储服务器的 VPC、子网、私网 IP 自动生成下面 A 股这一套（存储服务器须是带私有网络的云服务器）。
+# config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
+# 存储服务器没有可用的私有网络时退而选其他带 Access 的主机（如海外服务器）。
 # A 股：沪深 300 成分股 5m K 线，函数放在存储机所在地域（该地域要有带 access 组件、配了 private_address 的主机），
 # 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
 # [scf_plan.regions.ap-nanjing]

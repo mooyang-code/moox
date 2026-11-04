@@ -108,7 +108,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### A 股空间（stockcn）
 
-`config init` 第一步验证密钥时同时取到账号 AppId，识别存储服务器时拿到它的 VPC、子网与私网 IP，据此自动生成 stockcn 的 `[scf_plan]`（云账号引用 Admin 里的 `tencent-default`，代码包桶 `moox-scf-<管理台地域>-<AppId>` 首次上传时自动创建）；以下情况不生成、要手工补：存储服务器是轻量应用服务器等没有可绑定 VPC；地域不支持云函数；管理台与存储同地域但不在同一个 VPC；子用户没有 CAM 读权限取不到 AppId（页面会提示）。只有生成计划时才给存储服务器写 `private_address`。`setup init` 据此登记云账号。
+`config init` 第一步验证密钥时同时取到账号 AppId，识别服务器时拿到它们的 VPC、子网与私网 IP，据此自动生成 stockcn 的 `[scf_plan]`：函数入口优先选存储服务器所在地域（函数与 Storage 同地域，写入全程走内网），存储服务器不可用时退而选其他带 Access 且有可用 VPC 的主机（如海外服务器）（云账号引用 Admin 里的 `tencent-default`，代码包桶 `moox-scf-<管理台地域>-<AppId>` 首次上传时自动创建）；没有任何可用入口主机时不生成、要手工补（入口主机要有可绑定的 VPC、所在地域支持云函数、同地域的其他主机在同一个 VPC），或者子用户没有 CAM 读权限取不到 AppId（页面会提示）。只有生成计划时才给入口主机写 `private_address`。`setup init` 据此登记云账号。
 
 `setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写存储机所在地域，该地域要有带 access 组件、配了 `private_address` 的主机）。它依次：
 
