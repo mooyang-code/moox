@@ -11,3 +11,9 @@ replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/ser
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
+
+replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
+replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency

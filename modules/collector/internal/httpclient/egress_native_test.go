@@ -230,7 +230,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 			require.NoError(t, err)
 			defer rsp.Body.Close()
 			require.Equal(t, int64(32<<20), rsp.ContentLength)
-			listers, err := marketwiring.NewSubjectListers(client)
+			listers, _, err := marketwiring.NewSubjectListers(client)
 			require.NoError(t, err)
 			store := &tagSnapshotFixture{applied: map[string][]*storagepb.TagSnapshotItem{}}
 			runs := &memoryRuns{runs: map[string]collectorstore.TagSyncRun{}}

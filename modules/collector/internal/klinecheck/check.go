@@ -56,11 +56,9 @@ type Checker struct {
 	Auth        *storagepb.AuthInfo
 	Now         func() time.Time
 	Concurrency int
-	// Calendar 非空时用于过滤非交易时间点（按空间区分，stockcn 使用交易日历）；为空表示连续交易。
+	// Calendar 非空时用于过滤非交易时间点（按市场的分桶时钟，交易时段市场只有交易桶应有 K 线）；为空表示连续交易。
 	// 日历无法判断（超出覆盖期、计算出错）必须返回错误，不能当作非交易时间。
 	Calendar func(spaceID, frequency string, barStart time.Time) (bool, error)
-	// CalendarReady 非空时在检查前确认该空间的日历可用；不可用必须报错，不能当作“没有应有数据”。
-	CalendarReady func(spaceID string) error
 	// Absences 非空时，缺口扣除已确认的行情源缺失（强制重拉除外）。
 	Absences AbsenceSource
 }
@@ -116,11 +114,6 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 	}
 	if strings.TrimSpace(request.SpaceID) == "" || request.From.IsZero() || request.To.IsZero() || !request.From.Before(request.To) {
 		return nil, fmt.Errorf("space_id and a non-empty time range are required")
-	}
-	if c.CalendarReady != nil {
-		if err := c.CalendarReady(request.SpaceID); err != nil {
-			return nil, fmt.Errorf("trading calendar is unavailable: %w", err)
-		}
 	}
 	records, err := c.Plans.ListAll(ctx, request.SpaceID)
 	if err != nil {

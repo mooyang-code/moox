@@ -386,16 +386,26 @@ func TestEveryGeneratedTopologyIsComplete(t *testing.T) {
 	}
 }
 
-func TestFactorsOnlyTurnOnWithEngineAndOverseas(t *testing.T) {
+func TestFactorsTurnOnWithEngineAndKeepOnlyReachableSpaces(t *testing.T) {
 	full := sampleRequest()
 	full.Servers.Factor = &SSHTarget{Address: "192.168.0.20", SSHUser: "me"}
-	if !render(t, full).Factors.Enabled {
-		t.Fatal("有因子机和海外机时默认打开因子")
+	manifest := render(t, full)
+	if !manifest.Factors.Enabled || !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.SpaceID == "crypto" }) {
+		t.Fatal("有因子机和海外机时默认打开因子，保留 crypto 任务")
 	}
 	noOverseas := full
 	noOverseas.Servers.Overseas = nil
-	if render(t, noOverseas).Factors.Enabled {
-		t.Fatal("没有海外机时没有源数据，不打开因子")
+	manifest = render(t, noOverseas)
+	if !manifest.Factors.Enabled {
+		t.Fatal("有因子机、没有海外机时仍打开因子（A 股走云函数）")
+	}
+	for _, task := range manifest.Factors.Tasks {
+		if task.SpaceID == "crypto" {
+			t.Fatalf("没有海外机时 crypto 采集不起来，不该保留任务 %s", task.ID)
+		}
+	}
+	if !slices.ContainsFunc(manifest.Factors.Tasks, func(task setupconfig.FactorSetupTask) bool { return task.ID == "ftask_cn_5m" }) {
+		t.Fatal("没有海外机时保留 A 股因子任务")
 	}
 	noFactor := sampleRequest()
 	if render(t, noFactor).Factors.Enabled {

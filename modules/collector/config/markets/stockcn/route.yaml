@@ -1,51 +1,18 @@
 market_id: stockcn
-route_id: stockcn_equity_kline_1m_v4
-frequency: 1m
-# Release-time value. Change only with a new SCF publish and runtime canary.
-timer_function_count: 170
-measured_safe_group_size: 40
-stagger:
-  start_second: 5
-  window_seconds: 35
-  max_starts_per_second: 6
-providers:
-  # Complete instrument snapshots are fetched concurrently and merged by
-  # canonical SubjectID. A failed source does not block healthy sources;
-  # the merged set still must pass the complete snapshot gate. EastMoney and
-  # Sina are the active instrument candidates; Tencent/Baidu stay outside
-  # until their live full-market snapshot evidence is accepted.
-  - id: sina
-    source_id: stockcn_minute_http
-    weight: 1
-    kline: active
-    kline_role: primary
-    instrument: active
-  - id: tencent
-    source_id: stockcn_http
-    weight: 1
-    kline: active
-    kline_role: primary
-    instrument: disabled
-  - id: tdx
-    source_id: normal_7709
-    weight: 1
-    kline: active
-    kline_role: fallback
-    instrument: disabled
-  - id: eastmoney
-    source_id: stockcn_http
-    weight: 1
-    kline: active
-    kline_role: fallback
-    instrument: active
-  - id: baidu
-    source_id: stockcn_http
-    weight: 1
-    kline: shadow
-    instrument: disabled
-history:
-  mode: live_only
-  backfill_enabled: false
-  # Current public feeds expose only a bounded latest page. Longer history
-  # requires a cursor-paginated provider before this value is increased.
-  max_lookback: 1d
+# 完整标的快照的来源：并发取数后按 SubjectID 合并，一家失败不影响另一家，合并结果仍须通过完整快照校验。
+instrument_providers: [sina, eastmoney]
+# 按频率分开的 K 线候选链。primary 按标的权重分配；fallback 只在前面的来源都失败后依次使用。
+# 每个来源失败最多重试 3 次再换下一个。路由 ID 按频率生成：stockcn_equity_kline_<频率>。
+klines:
+  - frequency: 1m
+    providers:
+      - {id: sina, source_id: stockcn_minute_http, weight: 1, role: primary}
+      - {id: tencent, source_id: stockcn_http, weight: 1, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 1, role: fallback}
+      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: fallback}
+  # 5m：东方财富为主、通达信为备，均不复权。两家时间标签都是收盘时刻、成交量单位都是股，归一化后时间对齐、整段成交量合计一致；
+  # 贴近 5 分钟边界的个别成交两家归属不同，切到备源时个别根的量价会有小差异（2026-11-04 实测 60 根里 23 根）。
+  - frequency: 5m
+    providers:
+      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 1, role: fallback}

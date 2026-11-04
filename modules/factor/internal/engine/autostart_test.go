@@ -70,7 +70,7 @@ func recordPeriod(r *Runtime, taskID string, completedAt time.Time, mutate func(
 	if mutate != nil {
 		mutate(&outcome)
 	}
-	r.runs.record(taskID, time.Date(2026, 10, 25, 13, 35, 0, 0, time.UTC), outcome.Status, outcome, completedAt)
+	r.runs.record(taskID, testAxis("1m"), time.Date(2026, 10, 25, 13, 35, 0, 0, time.UTC), outcome.Status, outcome, completedAt)
 }
 
 // 预热到运行的自动确认：只对还没关联策略实例的任务，且要预热之后有一期所有成员都完整算完。

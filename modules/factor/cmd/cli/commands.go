@@ -15,7 +15,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -350,7 +349,7 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 		return clientErr
 	}
 	defer closeStorage()
-	svc := recalc.NewService(db, recalc.WithClock(periodclock.Continuous{}), recalc.WithSubjectProvider(storage))
+	svc := recalc.NewService(db, recalc.WithSubjectProvider(storage))
 	job, err := svc.Submit(ctx, cli.TaskID, cli.Members, cli.Subjects, requestID, cli.StartTime, cli.EndTime)
 	if err != nil {
 		return err

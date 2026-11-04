@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	watchdogpkg "github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -153,7 +154,6 @@ type MarketCanarySubject struct {
 	Frequency              string   `yaml:"frequency"`
 	SeriesTag              *string  `yaml:"series_tag"`
 	MarketID               string   `yaml:"market_id"`
-	CalendarPath           string   `yaml:"calendar_path"`
 	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
 }
 
@@ -491,8 +491,11 @@ func (c *Config) Validate() error {
 			if subject.SeriesTag == nil {
 				return fmt.Errorf("market_canary subject requires series_tag (use an explicit empty value for the default series)")
 			}
-			if strings.EqualFold(subject.MarketID, "stockcn") && (strings.TrimSpace(subject.CalendarPath) == "" || len(subject.EligibleKlineProviders) == 0) {
-				return fmt.Errorf("stockcn market_canary subject requires calendar_path and eligible_kline_providers")
+			if err := watchdogpkg.ValidateMarketCanary(watchdogpkg.MarketCanaryConfig{
+				SpaceID: subject.SpaceID, MarketID: subject.MarketID, Frequency: subject.Frequency,
+				EligibleKlineProviders: subject.EligibleKlineProviders,
+			}); err != nil {
+				return fmt.Errorf("market_canary 探针 %s/%s：%w", subject.SpaceID, subject.Symbol, err)
 			}
 		}
 	}

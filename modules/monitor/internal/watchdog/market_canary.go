@@ -6,30 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/mooyang-code/moox/packages/report"
-	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
+// MarketCanaryConfig 是一个行情探针。MarketID 决定按哪个市场的时钟切分 K 线，为空时按空间 ID（空间即市场）；
+// SettleDelay 起的几项只对交易时段市场（A 股）生效。
 type MarketCanaryConfig struct {
 	SpaceID, DatasetID, SubjectID, Frequency string
 	SeriesTag                                *string
 	Freshness                                time.Duration
 	ReturnThreshold                          float64
 	MarketID                                 string
-	CalendarPath                             string
 	SettleDelay                              time.Duration
 	PostCloseDelay                           time.Duration
 	CalendarWarningLead                      time.Duration
@@ -99,7 +99,7 @@ type marketCanaryThresholdDiagnostic struct {
 	ReturnThreshold float64 `json:"return_threshold"`
 }
 
-type stockCNClosedBarCoverageDiagnostic struct {
+type closedBarCoverageDiagnostic struct {
 	Type     string  `json:"type"`
 	Expected int     `json:"expected"`
 	Actual   int     `json:"actual"`
@@ -152,21 +152,94 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
-		return c.runStockCN(ctx, result, now, config)
+	clock, err := newMarketCanaryClock(config.market(), config.Frequency)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		if errors.Is(err, barclock.ErrNoCalendar) {
+			result.ErrorMessage = "calendar_unavailable"
+		}
+		return result
 	}
-	parsedFrequency, err := frequencypkg.Parse(config.Frequency)
+	if clock.session {
+		return c.runSession(ctx, result, now, config, clock)
+	}
+	return c.runContinuous(ctx, result, now, config, clock)
+}
+
+// market 是探针所在的市场：没有单独配置时空间 ID 即市场 ID。
+func (config MarketCanaryConfig) market() string {
+	if market := strings.TrimSpace(config.MarketID); market != "" {
+		return market
+	}
+	return strings.TrimSpace(config.SpaceID)
+}
+
+// marketCanaryClock 是探针用的市场时钟：哪些 K 线应已收盘统一由 barclock 回答，
+// 连续市场与交易时段市场只在“取到这些桶之后怎么判断”上不同。
+type marketCanaryClock struct {
+	clock barclock.Clock
+	// frequency 是存储里的规范频率。
+	frequency string
+	// session 表示交易时段市场（A 股）；coverageEnd 是交易日历最后一天的次日零点（市场时区）。
+	session     bool
+	coverageEnd time.Time
+}
+
+// ValidateMarketCanary 检查探针能否按市场时钟切分 K 线，交易时段市场还必须配置可用的 K 线来源；
+// 供配置校验在启动时拦下无效的探针。
+func ValidateMarketCanary(config MarketCanaryConfig) error {
+	clock, err := newMarketCanaryClock(config.market(), config.Frequency)
+	if err != nil {
+		return err
+	}
+	if clock.session && len(config.EligibleKlineProviders) == 0 {
+		return errors.New("交易时段市场的探针必须配置 eligible_kline_providers")
+	}
+	return nil
+}
+
+// newMarketCanaryClock 构造市场某个频率的时钟；未登记交易日历的市场按 24 小时连续交易处理（与采集一致）。
+func newMarketCanaryClock(marketID, frequency string) (marketCanaryClock, error) {
+	parsed, err := frequencypkg.Parse(frequency)
+	if err != nil {
+		return marketCanaryClock{}, fmt.Errorf("频率 %q 无效：%w", frequency, err)
+	}
+	market, err := barclock.MarketFor(marketID)
+	if errors.Is(err, barclock.ErrUnknownMarket) {
+		market = barclock.Market{ID: marketID, Alignment: barclock.AlignmentEpochUTC}
+	} else if err != nil {
+		return marketCanaryClock{}, err
+	}
+	clock, err := market.Clock(parsed.Duration())
+	if err != nil {
+		return marketCanaryClock{}, fmt.Errorf("市场 %s 不能按 %s 切分 K 线：%w", marketID, parsed, err)
+	}
+	out := marketCanaryClock{clock: clock, frequency: string(parsed)}
+	if market.Alignment != barclock.AlignmentSession {
+		return out, nil
+	}
+	calendar, err := marketcalendar.Load(market.CalendarID)
+	if err != nil {
+		return marketCanaryClock{}, fmt.Errorf("%w：%v", barclock.ErrNoCalendar, err)
+	}
+	location, err := time.LoadLocation(market.Timezone)
+	if err != nil {
+		return marketCanaryClock{}, fmt.Errorf("%w：时区 %q 无效", barclock.ErrNoCalendar, market.Timezone)
+	}
+	last := calendar.LastDate()
+	out.session = true
+	out.coverageEnd = time.Date(last.Year(), last.Month(), last.Day()+1, 0, 0, 0, 0, location)
+	return out, nil
+}
+
+// runContinuous 检查 24 小时连续市场：最近一根已收盘 K 线足够新，且与上一根的收盘价波动不超过阈值。
+func (c MarketCanary) runContinuous(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) domain.CheckResult {
+	candidateCount, err := marketCanaryCandidateCount(config.Freshness, clock.clock.Period())
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	storageFrequency, interval := string(parsedFrequency), parsedFrequency.NominalDuration()
-	candidateCount, err := marketCanaryCandidateCount(config.Freshness, interval)
-	if err != nil {
-		result.ErrorMessage = "invalid_config"
-		return result
-	}
-	candidateTimes, err := report.RecentDatasetTimes(storageFrequency, now, candidateCount)
+	buckets, err := clock.clock.ClosedBefore(now, candidateCount)
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
 		return result
@@ -174,7 +247,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
 		AuthInfo:    c.AuthInfo,
-		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
+		Keys:        recentMarketCanaryKeys(config, clock.frequency, bucketKeys(buckets)),
 		ColumnNames: []string{"close"},
 	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
@@ -219,30 +292,10 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	return result
 }
 
-type stockCalendarFile struct {
-	Timezone      string         `yaml:"timezone"`
-	CoverageStart string         `yaml:"coverage_start"`
-	CoverageEnd   string         `yaml:"coverage_end"`
-	Sessions      []stockSession `yaml:"sessions"`
-	ClosedDates   []string       `yaml:"closed_dates"`
-	OpenDates     []string       `yaml:"exceptional_open_dates"`
-}
-
-type stockSession struct {
-	Start string `yaml:"start"`
-	End   string `yaml:"end"`
-}
-
-type stockCalendar struct {
-	location       *time.Location
-	coverageStart  time.Time
-	coverageEnd    time.Time
-	sessions       []stockSession
-	closed, opened map[string]struct{}
-}
-
-func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig) domain.CheckResult {
-	if strings.TrimSpace(config.CalendarPath) == "" || config.SettleDelay < 0 || config.PostCloseDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 ||
+// runSession 检查交易时段市场（A 股）：最近 ClosedBarCount 根已收盘 K 线的覆盖率、OHLCV 与来源。
+// 休市时间（午休、收盘后、非交易日、开盘前）不读存储，直接报空闲健康。
+func (c MarketCanary) runSession(ctx context.Context, result domain.CheckResult, now time.Time, config MarketCanaryConfig, clock marketCanaryClock) domain.CheckResult {
+	if config.SettleDelay < 0 || config.PostCloseDelay < 0 || config.CalendarWarningLead <= 0 || config.ClosedBarCount <= 0 ||
 		config.ClosedBarMinCoverage <= 0 || config.ClosedBarMinCoverage > 1 {
 		result.ErrorMessage = "invalid_config"
 		return result
@@ -251,34 +304,29 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		result.ErrorMessage = "no_eligible_kline_feed"
 		return result
 	}
-	calendar, err := loadStockCalendar(config.CalendarPath)
-	if err != nil {
-		result.ErrorMessage = "calendar_unavailable"
-		return result
-	}
-	localNow := now.In(calendar.location)
-	if localNow.After(calendar.coverageEnd.Add(24 * time.Hour)) {
+	if !now.Before(clock.coverageEnd) {
 		result.ErrorMessage = "calendar_expired"
 		return result
 	}
-	if calendar.coverageEnd.Sub(localNow) < config.CalendarWarningLead {
+	if clock.coverageEnd.Sub(now) < config.CalendarWarningLead {
 		result.ErrorMessage = "calendar_expiring"
 		return result
 	}
-	if !calendar.isTradingDay(localNow) {
-		return healthyIdleResult(result)
+	expected, active, err := sessionExpectedBuckets(clock.clock, now, config.SettleDelay, config.PostCloseDelay, config.Freshness, config.ClosedBarCount)
+	if err != nil {
+		result.ErrorMessage = "invalid_config"
+		if errors.Is(err, barclock.ErrOutOfCoverage) {
+			result.ErrorMessage = "calendar_expired"
+		}
+		return result
 	}
-	if !calendar.inSession(localNow) && !calendar.inPostCloseCheckWindow(localNow, config.PostCloseDelay, config.Freshness) {
-		return healthyIdleResult(result)
-	}
-	expected := calendar.closedBarStarts(localNow, config.SettleDelay, config.ClosedBarCount)
-	if len(expected) < config.ClosedBarCount {
+	if !active {
 		return healthyIdleResult(result)
 	}
 	startedAt := time.Now()
 	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
 		AuthInfo:    c.AuthInfo,
-		Keys:        recentMarketCanaryKeys(config, "1m", expected),
+		Keys:        recentMarketCanaryKeys(config, clock.frequency, bucketKeys(expected)),
 		ColumnNames: []string{"open", "high", "low", "close", "volume", "amount", "source_provider"},
 	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
@@ -309,7 +357,7 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 	}
 	present := 0
 	for _, want := range expected {
-		if _, ok := byTime[want.UTC().Unix()]; ok {
+		if _, ok := byTime[want.Key.Unix()]; ok {
 			present++
 		}
 	}
@@ -320,8 +368,8 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 	coverage := float64(present) / float64(len(expected))
 	if coverage < config.ClosedBarMinCoverage {
 		result.ErrorMessage = "closed_bar_coverage_below_threshold"
-		diagnostic, _ := json.Marshal(stockCNClosedBarCoverageDiagnostic{
-			Type: "stockcn_closed_bar_coverage", Expected: len(expected), Actual: present,
+		diagnostic, _ := json.Marshal(closedBarCoverageDiagnostic{
+			Type: "closed_bar_coverage", Expected: len(expected), Actual: present,
 			Coverage: coverage, Minimum: config.ClosedBarMinCoverage,
 		})
 		result.BodyExcerpt = string(diagnostic)
@@ -331,105 +379,46 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 	return result
 }
 
+// sessionExpectedBuckets 返回交易时段市场此刻应已写入的最近 count 根 K 线；active 为假表示休市空闲，不检查。
+//
+// 收盘时刻晚于 now-settleDelay 的桶还没到写入时间，不算已收盘。最近一根已收盘的桶之后紧接着下一根（交易时段内）
+// 时一直检查；它是某个交易时段的最后一根（午休前、收盘）时，只在其收盘后 [postCloseDelay, postCloseDelay+window]
+// 内检查这几根，之后到下一时段第一根收盘前都空闲。非交易日、开盘前的最近一根是上一交易日的最后一根，早已出了检查窗口。
+func sessionExpectedBuckets(clock barclock.Clock, now time.Time, settleDelay, postCloseDelay, window time.Duration, count int) ([]barclock.Bucket, bool, error) {
+	at := now.Add(-settleDelay)
+	latest, err := clock.LatestClosed(at)
+	if err != nil {
+		return nil, false, err
+	}
+	// 取下一根出错只会是日历到头：按时段结束处理。
+	if next, nextErr := clock.Next(latest); nextErr != nil || !next.Start.Equal(latest.End) {
+		sinceClose := now.Sub(latest.End)
+		if sinceClose < postCloseDelay || sinceClose > postCloseDelay+window {
+			return nil, false, nil
+		}
+	}
+	expected, err := clock.ClosedBefore(at, count)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(expected) < count {
+		return nil, false, nil
+	}
+	return expected, true, nil
+}
+
+func bucketKeys(buckets []barclock.Bucket) []time.Time {
+	keys := make([]time.Time, len(buckets))
+	for i, bucket := range buckets {
+		keys[i] = bucket.Key
+	}
+	return keys
+}
+
 func healthyIdleResult(result domain.CheckResult) domain.CheckResult {
 	result.Success, result.Connected, result.Status = true, true, domain.CheckStatusOK
 	result.BodyExcerpt = `{"state":"idle"}`
 	return result
-}
-
-func loadStockCalendar(path string) (*stockCalendar, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var file stockCalendarFile
-	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(&file); err != nil {
-		return nil, err
-	}
-	location, err := time.LoadLocation(strings.TrimSpace(file.Timezone))
-	if err != nil {
-		return nil, err
-	}
-	start, err := time.ParseInLocation("2006-01-02", file.CoverageStart, location)
-	if err != nil {
-		return nil, err
-	}
-	end, err := time.ParseInLocation("2006-01-02", file.CoverageEnd, location)
-	if err != nil {
-		return nil, err
-	}
-	calendar := &stockCalendar{location: location, coverageStart: start, coverageEnd: end, sessions: file.Sessions, closed: map[string]struct{}{}, opened: map[string]struct{}{}}
-	for _, day := range file.ClosedDates {
-		calendar.closed[day] = struct{}{}
-	}
-	for _, day := range file.OpenDates {
-		calendar.opened[day] = struct{}{}
-	}
-	return calendar, nil
-}
-
-func (c *stockCalendar) isTradingDay(at time.Time) bool {
-	day := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, c.location)
-	if day.Before(c.coverageStart) || day.After(c.coverageEnd) {
-		return false
-	}
-	date := day.Format("2006-01-02")
-	if _, ok := c.closed[date]; ok {
-		return false
-	}
-	if _, ok := c.opened[date]; ok {
-		return true
-	}
-	return day.Weekday() != time.Saturday && day.Weekday() != time.Sunday
-}
-
-func (c *stockCalendar) inSession(at time.Time) bool {
-	minute := at.Format("15:04")
-	for _, session := range c.sessions {
-		if minute >= session.Start && minute < session.End {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *stockCalendar) inPostCloseCheckWindow(at time.Time, delay, window time.Duration) bool {
-	if c == nil || delay < 0 || window <= 0 {
-		return false
-	}
-	date := at.Format("2006-01-02")
-	if len(c.sessions) == 0 {
-		return false
-	}
-	end, err := time.ParseInLocation("2006-01-02 15:04", date+" "+c.sessions[len(c.sessions)-1].End, c.location)
-	if err != nil {
-		return false
-	}
-	afterClose := at.Sub(end)
-	return afterClose >= delay && afterClose <= delay+window
-}
-
-func (c *stockCalendar) closedBarStarts(now time.Time, settleDelay time.Duration, count int) []time.Time {
-	date := now.Format("2006-01-02")
-	all := make([]time.Time, 0, 240)
-	for _, session := range c.sessions {
-		start, startErr := time.ParseInLocation("2006-01-02 15:04", date+" "+session.Start, c.location)
-		end, endErr := time.ParseInLocation("2006-01-02 15:04", date+" "+session.End, c.location)
-		if startErr != nil || endErr != nil {
-			continue
-		}
-		for cursor := start; cursor.Before(end); cursor = cursor.Add(time.Minute) {
-			if !cursor.Add(time.Minute).Add(settleDelay).After(now) {
-				all = append(all, cursor.UTC())
-			}
-		}
-	}
-	if len(all) <= count {
-		return all
-	}
-	return all[len(all)-count:]
 }
 
 // ProbeStorageAuth performs the smallest possible Primary read needed to

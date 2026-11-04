@@ -4,7 +4,6 @@ provider:
   enabled_feeds: [kline]
   hosts: [web.ifzq.gtimg.cn]
   kline:
-    frequency: 1m
     max_bars_per_request: 320
     volume_unit: shares
     amount_unit: CNY

@@ -159,8 +159,7 @@ func buildMonitorMarketCanary(
 		canaryConfig := watchdog.MarketCanaryConfig{
 			SpaceID: subject.SpaceID, DatasetID: subject.DatasetID, SubjectID: subject.Symbol, Frequency: subject.Frequency,
 			SeriesTag: subject.SeriesTag,
-			Freshness: cfg.MarketCanary.Freshness, ReturnThreshold: cfg.MarketCanary.ReturnThreshold,
-			MarketID: subject.MarketID, CalendarPath: subject.CalendarPath,
+			Freshness: cfg.MarketCanary.Freshness, ReturnThreshold: cfg.MarketCanary.ReturnThreshold, MarketID: subject.MarketID,
 			SettleDelay: cfg.MarketCanary.SettleDelay, PostCloseDelay: cfg.MarketCanary.PostCloseDelay, CalendarWarningLead: cfg.MarketCanary.CalendarWarningLead,
 			ClosedBarCount: cfg.MarketCanary.ClosedBarCount, ClosedBarMinCoverage: cfg.MarketCanary.ClosedBarMinCoverage,
 			EligibleKlineProviders: append([]string(nil), subject.EligibleKlineProviders...),

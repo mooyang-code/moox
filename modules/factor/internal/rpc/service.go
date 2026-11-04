@@ -445,14 +445,15 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}
-	clock, err := periodclock.ForSpace(set.SpaceID)
+	// 起点是交易桶的起点；终点是排他终点，桶的起点或收盘时刻都可以（A 股的 15:00 也能作终点）。
+	axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(err)}, nil
 	}
-	if _, err := clock.Align(start, set.Freq); err != nil {
+	if _, err := axis.ToAxis(start); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("start_time must be aligned to %s: %w", set.Freq, err))}, nil
 	}
-	if _, err := clock.Align(end, set.Freq); err != nil {
+	if _, err := axis.EndToAxis(end); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("end_time must be aligned to %s: %w", set.Freq, err))}, nil
 	}
 	job, err := s.recalc.Submit(ctx, req.GetTaskId(), factorwire.CloneStrings(req.GetMembers()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)

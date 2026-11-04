@@ -45,28 +45,12 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"stockcn", "quantclass_stock", "eastmoney", "tdx", "tencent", "sina", "baidu", "ths", "market_data",
 	}, stockCNSources)
-	var stockCNViews []string
+	// A 股采集结果由采集任务派生（dataset_<task_id>），种子里没有 A 股行情 Dataset 与 View。
 	for _, item := range seed.Views {
-		if item.SpaceID == "stockcn" {
-			stockCNViews = append(stockCNViews, item.ViewID)
-		}
+		require.NotEqual(t, "stockcn", item.SpaceID, item.ViewID)
 	}
-	require.ElementsMatch(t, []string{
-		"view_stockcn_equity_kline_1m", "view_stockcn_index_kline_1d", "view_stockcn_bond_kline_1m",
-	}, stockCNViews)
 	// Crypto results are task-owned Datasets that Collector creates.
 	require.Empty(t, datasetIDs)
-	var stockKline seedDataset
-	foundStockKline := false
-	for _, item := range seed.Datasets {
-		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline_1m" {
-			stockKline = item
-			foundStockKline = true
-			break
-		}
-	}
-	require.True(t, foundStockKline)
-	require.Equal(t, "1m", stockKline.Freq)
 	require.Empty(t, viewIDs)
 	for _, item := range seed.Datasets {
 		require.Equal(t, "storage-node-0", item.DataNodeID, item.DatasetID)
@@ -77,40 +61,4 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 			require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, item.GrainKeys, item.ViewID)
 		}
 	}
-}
-
-func TestDefaultMetadataDefinesStrictStockCNKlineColumns(t *testing.T) {
-	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
-	require.NoError(t, err)
-
-	var columns []string
-	for _, item := range seed.DatasetColumns {
-		if item.SpaceID == "stockcn" && item.DatasetID == "dataset_stockcn_equity_kline_1m" {
-			columns = append(columns, item.ColumnName)
-		}
-	}
-	require.Equal(t, []string{
-		"open",
-		"high",
-		"low",
-		"close",
-		"volume",
-		"amount",
-		"instrument_name",
-		"trade_date",
-		"close_time",
-		"volume_unit",
-		"amount_unit",
-		"amount_quality",
-		"provider_symbol",
-		"provider_timestamp",
-		"fetched_at",
-		"request_id",
-		"route_id",
-		"route_rank",
-		"source_provider",
-		"quality_status",
-		"provider_id",
-		"source_id",
-	}, columns)
 }

@@ -71,11 +71,13 @@ type FactorOpenResponse struct {
 	Subjects []string         `json:"subjects"`
 	Excluded []FactorExcluded `json:"excluded,omitempty"`
 	Periods  int              `json:"periods"`
-	Start    string           `json:"start"`
-	StepSecs int64            `json:"step_seconds"`
-	Bytes    int64            `json:"bytes"`
-	Factors  []FactorInfo     `json:"factors"`
-	Fields   []string         `json:"fields"`
+	// PeriodTimes 是各决策周期的 data_time（Unix 秒，升序），由因子引擎按市场日历给出：有交易时段的市场跳过休市。
+	PeriodTimes []int64      `json:"period_times"`
+	Start       string       `json:"start"`
+	StepSecs    int64        `json:"step_seconds"`
+	Bytes       int64        `json:"bytes"`
+	Factors     []FactorInfo `json:"factors"`
+	Fields      []string     `json:"fields"`
 	// ShortWarmup 是本地数据起点晚于预热起点的标的数（因子前段为空值）。
 	ShortWarmup  int      `json:"short_warmup,omitempty"`
 	ShortSamples []string `json:"short_samples,omitempty"`

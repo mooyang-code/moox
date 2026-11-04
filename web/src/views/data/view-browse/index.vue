@@ -398,6 +398,7 @@ import {
   buildViewFilterFieldOptions,
   buildViewFilterExprs,
   buildViewSorts,
+  defaultSeriesTagForView,
   type ViewFilterFieldOption,
   DEFAULT_KLINE_LIMIT,
   exactSeriesTagFromFilters,
@@ -1035,12 +1036,11 @@ watch(
 );
 
 function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
-  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline_1m";
   return {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
-    value: option?.value === "series_tag" && isStockCNKline ? "default" : "",
+    value: option?.value === "series_tag" ? defaultSeriesTagForView(activeView.value) : "",
     startValue: "",
     endValue: ""
   };

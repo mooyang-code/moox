@@ -199,7 +199,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "sina", req.ProviderSymbol, marketdata.TimestampModeClose, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
+		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "sina", req.ProviderSymbol, marketdata.FrequencyMinute, marketdata.TimestampModeClose, record.Day, openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 1, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}

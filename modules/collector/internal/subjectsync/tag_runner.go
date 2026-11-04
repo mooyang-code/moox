@@ -29,9 +29,11 @@ type RunStore interface {
 }
 
 type TagRunner struct {
-	Store        TagStore
-	Runs         RunStore
-	Listers      Listers
+	Store   TagStore
+	Runs    RunStore
+	Listers Listers
+	// IndexListers 用于带 sync.index 的标签：同步指数成分股。
+	IndexListers IndexListers
 	FetchTimeout time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
@@ -163,14 +165,14 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	if delays == nil {
 		delays = defaultSnapshotRetryDelays
 	}
-	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
+	instruments, err := r.fetchSnapshot(fetchCtx, tag)
 	for attempt := 0; err != nil && attempt < len(delays) && fetchCtx.Err() == nil; attempt++ {
 		log.WarnContextf(ctx, "tag %s/%s snapshot attempt %d failed, retrying: %v", tag.GetSpaceId(), tag.GetTagId(), attempt+1, err)
 		select {
 		case <-time.After(delays[attempt]):
 		case <-fetchCtx.Done():
 		}
-		instruments, err = FetchSnapshot(fetchCtx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
+		instruments, err = r.fetchSnapshot(fetchCtx, tag)
 	}
 	subjects := 0
 	if err == nil {
@@ -195,6 +197,14 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 		r.Metrics.observeTagSuccess(tag, runAt)
 	}
 	return subjects, nil
+}
+
+// fetchSnapshot 取标签的成员快照：配置了 sync.index 时取该指数的成分股，否则取数据源的全部标的。
+func (r *TagRunner) fetchSnapshot(ctx context.Context, tag *pb.Tag) ([]marketdata.Instrument, error) {
+	if index := tagattr.Index(tag); index != "" {
+		return FetchIndexSnapshot(ctx, r.IndexListers, tagattr.Source(tag), index)
+	}
+	return FetchSnapshot(ctx, r.Listers, []string{tagattr.Source(tag)}, tagattr.MarketType(tag))
 }
 
 // SyncTags synchronizes the matching auto tags right now, whether or not they

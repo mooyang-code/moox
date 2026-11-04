@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 )
 
@@ -63,7 +62,7 @@ func Reconcile(ctx context.Context, cfg *Config, req ReconcileRequest) (Reconcil
 		return ReconcileSummary{}, fmt.Errorf("打开本地时序存储（引擎必须已停止）：%w", err)
 	}
 	defer store.Close()
-	data := localdata.New(localdata.Config{Store: store, Storage: storage, Clock: periodclock.Continuous{}, Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects})
+	data := localdata.New(localdata.Config{Store: store, Storage: storage, Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects})
 	res, err := data.ReconcileTask(ctx, set, req.Subjects, req.Progress)
 	if err != nil {
 		return ReconcileSummary{}, err
@@ -121,7 +120,7 @@ func Backfill(ctx context.Context, cfg *Config, req BackfillRequest) (BackfillSu
 		return BackfillSummary{}, fmt.Errorf("打开本地时序存储（引擎必须已停止）：%w", err)
 	}
 	defer store.Close()
-	data := localdata.New(localdata.Config{Store: store, Storage: storage, Clock: periodclock.Continuous{}, Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects})
+	data := localdata.New(localdata.Config{Store: store, Storage: storage, Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects})
 	extended, err := data.BackfillTask(ctx, set, req.Subjects, req.Bars, req.Progress)
 	if err != nil {
 		return BackfillSummary{}, err

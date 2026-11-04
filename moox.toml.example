@@ -213,6 +213,20 @@ members = [
   { factor = "vwap" },
 ]
 
+# A 股 5m 任务：读 config/setup/collection-tasks.yaml 里“A 股 K 线 5m”任务的结果（沪深 300 成分股）。
+# 只放双均线示例（examples/strategies/dual_ma_cn_5m.yaml）用到的两个成员，最长只回看 10 根，上线当天就能出结果；
+# EMA 等长回看因子在 A 股 5m 上要几年的历史（默认 EMA 最大回看 49995 根，每个交易日只有 48 根），需要时再加，并同步调大保留期。
+[[factors.tasks]]
+id = "ftask_cn_5m"
+name = "A股五分钟"
+space_id = "stockcn"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhh0"
+freq = "5m"
+members = [
+  { factor = "ma", params = { window = 5 } },
+  { factor = "ma", params = { window = 10 } },
+]
+
 [[factors.definitions]]
 factor_id = "bias"
 file = "xbx.yaml"
@@ -305,6 +319,17 @@ enabled = false
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
+
+# A 股：沪深 300 成分股 5m K 线，函数放在存储机所在地域（该地域要有带 access 组件、配了 private_address 的主机），
+# 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
+# [scf_plan.regions.ap-nanjing]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+# access_host = "storage"
+# [[scf_plan.spaces]]
+# space_id = "stockcn"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
 
 # 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
 # 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示，不写时按 ID 生成（overseas-2 → 海外机 2）。

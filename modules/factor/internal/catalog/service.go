@@ -89,8 +89,8 @@ func (s *Service) CreateTask(ctx context.Context, in domain.FactorTask) (domain.
 	if err := domain.ValidateTask(in); err != nil {
 		return domain.FactorTask{}, err
 	}
-	// 启用成员时才会取空间日历；不支持的空间在创建时就拒绝，避免出现永远无法启用的计算任务。
-	if _, err := periodclock.ForSpace(in.SpaceID); err != nil {
+	// 不支持的空间、空间的交易时段整除不了的频率在创建时就拒绝，避免出现永远无法启用的计算任务。
+	if _, err := periodclock.AxisFor(in.SpaceID, in.Freq); err != nil {
 		return domain.FactorTask{}, err
 	}
 	unlock, err := s.locks.LockContext(ctx, in.TaskID)

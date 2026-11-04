@@ -39,8 +39,11 @@ rules:
 	if _, err := FromBarEnd("cn_stock", "1d", time.Date(2026, 10, 5, 15, 0, 0, 0, location)); err == nil || !strings.Contains(err.Error(), "不在 A 股交易日上") {
 		t.Fatalf("非交易日的 bar_end 应给出中文错误：%v", err)
 	}
-	if err := CheckCalendar("cn_stock", "1h"); !errors.Is(err, ErrUnsupportedCalendar) {
-		t.Fatalf("A 股只支持日线：%v", err)
+	if err := CheckCalendar("cn_stock", "1h"); err != nil {
+		t.Fatalf("A 股支持能整除交易时段的日内周期：%v", err)
+	}
+	if err := CheckCalendar("cn_stock", "45m"); !errors.Is(err, ErrUnsupportedCalendar) {
+		t.Fatalf("A 股不支持不能整除交易时段的周期：%v", err)
 	}
 	if err := CheckCalendar("crypto_24x7", "15m"); err != nil {
 		t.Fatalf("crypto 支持定长周期：%v", err)

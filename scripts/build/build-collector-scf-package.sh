@@ -55,12 +55,12 @@ if find "${CONFIG_DIR}/sources" -type l -print -quit | grep -q .; then
   exit 1
 fi
 if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
-  for source in "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${ROOT}/modules/collector/config/markets/stockcn/route.yaml"; do
-    [[ -f "${source}" && ! -L "${source}" ]] || {
-      echo "SCF stockcn assets must be regular non-symlink files" >&2
-      exit 1
-    }
-  done
+  # 交易日历内嵌在二进制里（packages/marketcalendar），包里只带路由。
+  source="${ROOT}/modules/collector/config/markets/stockcn/route.yaml"
+  [[ -f "${source}" && ! -L "${source}" ]] || {
+    echo "SCF stockcn route must be a regular non-symlink file" >&2
+    exit 1
+  }
 fi
 
 cleanup() {
@@ -83,7 +83,6 @@ echo "==> copy ${SCF_SPACE_ID} SCF runtime configs"
 cp -R "${CONFIG_DIR}/sources" "${BUILD_DIR}/package/sources"
 if [[ "${SCF_SPACE_ID}" == "stockcn" ]]; then
   mkdir -p "${BUILD_DIR}/package/markets/stockcn"
-  cp "${ROOT}/modules/collector/config/markets/stockcn/calendar.yaml" "${BUILD_DIR}/package/markets/stockcn/calendar.yaml"
   cp "${ROOT}/modules/collector/config/markets/stockcn/route.yaml" "${BUILD_DIR}/package/markets/stockcn/route.yaml"
 fi
 

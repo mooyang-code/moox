@@ -44,6 +44,10 @@ type MigrateOptions struct {
 	// （--remove-factor-task、--remove-factor）。删除先于因子库校验，因子库里已经没有文件的旧定义也能删掉。
 	RemoveFactorTasks []string
 	RemoveFactors     []string
+	// AddFactorTasks 列出要从配置样例（ExampleFile，默认仓库根的 moox.toml.example）原样复制进来的 [[factors.tasks]]（按 id）
+	// （--add-factor-task）。已有同 id 的任务时报错，不覆盖。
+	AddFactorTasks []string
+	ExampleFile    string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
 	Write bool
 	Keys  configcrypt.KeyStore
@@ -120,11 +124,13 @@ type MigrateReport struct {
 	// RemovedFactorTasks / RemovedFactors 记录 --remove-factor-task、--remove-factor 删掉的任务 ID 与因子 ID。
 	RemovedFactorTasks []string `json:"removed_factor_tasks,omitempty"`
 	RemovedFactors     []string `json:"removed_factors,omitempty"`
-	Changed            bool     `json:"changed"`
-	Valid              bool     `json:"valid"`
-	Written            bool     `json:"written"`
-	Backup             string   `json:"backup,omitempty"`
-	NextAction         string   `json:"next_action,omitempty"`
+	// AddedFactorTasks 记录 --add-factor-task 从配置样例复制进来的任务 ID。
+	AddedFactorTasks []string `json:"added_factor_tasks,omitempty"`
+	Changed          bool     `json:"changed"`
+	Valid            bool     `json:"valid"`
+	Written          bool     `json:"written"`
+	Backup           string   `json:"backup,omitempty"`
+	NextAction       string   `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -151,6 +157,19 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	source := plain
 	if len(opts.RemoveFactorTasks) > 0 || len(opts.RemoveFactors) > 0 {
 		if source, err = removeFactorEntries(plain, opts.RemoveFactorTasks, opts.RemoveFactors, &report); err != nil {
+			return report, err
+		}
+	}
+	if len(opts.AddFactorTasks) > 0 {
+		example := opts.ExampleFile
+		if example == "" {
+			example = filepath.Join(opts.RepoRoot, "moox.toml.example")
+		}
+		exampleText, err := os.ReadFile(example)
+		if err != nil {
+			return report, fmt.Errorf("读取配置样例：%w", err)
+		}
+		if source, err = addFactorTasksFromExample(source, exampleText, opts.AddFactorTasks, &report); err != nil {
 			return report, err
 		}
 	}
@@ -878,6 +897,59 @@ func removeFactorEntries(plain []byte, tasks, factors []string, report *MigrateR
 	report.RemovedFactors = append(report.RemovedFactors, factors...)
 	var lines []string
 	for _, b := range kept {
+		lines = append(lines, b.lines...)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
+// addFactorTasksFromExample 把配置样例里指定 id 的 [[factors.tasks]] 原样复制到最后一个因子任务之后（没有因子任务时放在第一个
+// [[factors.definitions]] 之前，再没有就追加到末尾）。样例里没有、或配置里已有同 id 的任务时报错。
+func addFactorTasksFromExample(plain, example []byte, ids []string, report *MigrateReport) ([]byte, error) {
+	exampleTasks := map[string]block{}
+	for _, b := range splitBlocks(strings.Split(string(example), "\n")) {
+		if b.array && b.header == "factors.tasks" {
+			exampleTasks[blockValue(b, "id")] = b
+		}
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	existing := map[string]bool{}
+	insertAt, firstDefinition := -1, -1
+	for i, b := range blocks {
+		switch {
+		case b.array && b.header == "factors.tasks":
+			existing[blockValue(b, "id")] = true
+			insertAt = i + 1
+		case b.array && b.header == "factors.definitions" && firstDefinition < 0:
+			firstDefinition = i
+		}
+	}
+	if insertAt < 0 {
+		insertAt = len(blocks)
+		if firstDefinition >= 0 {
+			insertAt = firstDefinition
+		}
+	}
+	var added []block
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if existing[id] {
+			return nil, fmt.Errorf("配置里已有 id 为 %s 的 [[factors.tasks]]，不覆盖；要换内容先 --remove-factor-task", id)
+		}
+		task, ok := exampleTasks[id]
+		if !ok {
+			return nil, fmt.Errorf("配置样例里没有 id 为 %s 的 [[factors.tasks]]", id)
+		}
+		lines := append([]string(nil), task.lines...)
+		for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+			lines = lines[:len(lines)-1]
+		}
+		added = append(added, block{header: task.header, array: true, lines: append(lines, "")})
+		existing[id] = true
+		report.AddedFactorTasks = append(report.AddedFactorTasks, id)
+	}
+	blocks = append(blocks[:insertAt], append(added, blocks[insertAt:]...)...)
+	var lines []string
+	for _, b := range blocks {
 		lines = append(lines, b.lines...)
 	}
 	return []byte(strings.Join(lines, "\n")), nil

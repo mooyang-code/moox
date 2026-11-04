@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -375,15 +376,16 @@ func allowedLatenessSeconds(params *domain.CollectParams, spaceID string) int {
 	return domain.DefaultAllowedLatenessSeconds(spaceID)
 }
 
+// taskResultMarketCalendar 返回市场的交易日历、时区与交易时段（取自 barclock 的市场登记），Monitor 据此判断应收的 K 线。
 func taskResultMarketCalendar(marketID string) (calendarID, timezone string, sessions []string) {
-	switch strings.ToLower(strings.TrimSpace(marketID)) {
-	case "crypto":
-		return "", "UTC", nil
-	case "stockcn":
-		return "cn_stock", "Asia/Shanghai", []string{"09:30-11:30", "13:00-15:00"}
-	default:
+	market, err := barclock.MarketFor(marketID)
+	if err != nil {
 		return "", "", nil
 	}
+	if market.Alignment == barclock.AlignmentEpochUTC {
+		return "", "UTC", nil
+	}
+	return market.CalendarID, market.Timezone, append([]string(nil), market.Sessions...)
 }
 
 func firstTaskResultInventoryValue(values ...string) string {

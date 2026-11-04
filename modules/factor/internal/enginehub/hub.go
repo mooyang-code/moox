@@ -128,9 +128,9 @@ func (h *Hub) SetResultReady(taskID string, ready bool) {
 	h.mu.Unlock()
 }
 
-// Engine returns the manager's view of the lease holder and its last status,
-// with run lags recomputed against the manager clock. ok is false before the
-// first heartbeat.
+// Engine returns the manager's view of the lease holder and its last status.
+// ok is false before the first heartbeat. 各任务的滞后由引擎按交易 K 线根数算好（休市不算滞后），引擎在线时原样使用：
+// 管理端不再用当前时间减最后一期的开始时间，那样 A 股午休、周末会显示成滞后。引擎离线时见 withOfflineLag。
 func (h *Hub) Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {
 	now := h.now().UTC()
 	h.mu.Lock()
@@ -144,7 +144,7 @@ func (h *Hub) Engine(ctx context.Context) (domain.EngineInfo, domain.EngineStatu
 		return domain.EngineInfo{}, domain.EngineStatus{}, false, err
 	}
 	status := state.status
-	status.RecentRuns = withLag(status.RecentRuns, now)
+	status.RecentRuns = h.withOfflineLag(state, now)
 	info := domain.EngineInfo{
 		EngineIdentity: state.identity, Online: now.Before(state.lastSeen.Add(h.engineTTL)),
 		LastHeartbeatAt: state.lastSeen, CatalogHash: status.CatalogHash, CatalogSyncedAt: status.CatalogSyncedAt,
@@ -159,7 +159,7 @@ func (h *Hub) LatestRun(taskID string) domain.TaskRunSummary {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.engine != nil {
-		for _, run := range withLag(h.engine.status.RecentRuns, now) {
+		for _, run := range h.withOfflineLag(h.engine, now) {
 			if run.TaskID == taskID {
 				return run
 			}
@@ -168,10 +168,18 @@ func (h *Hub) LatestRun(taskID string) domain.TaskRunSummary {
 	return domain.TaskRunSummary{TaskID: taskID}
 }
 
-func withLag(runs []domain.TaskRunSummary, now time.Time) []domain.TaskRunSummary {
+// withOfflineLag 返回引擎上报的各任务运行摘要。引擎心跳已过期（离线）时，滞后停在最后一次心跳的值不再增长，
+// 任务会一直显示“已追平”：这时把离线时长按秒加到滞后上（相当于按名义周期估算离线期间落下的根数；引擎离线本身就是异常，
+// 不再区分休市）。
+func (h *Hub) withOfflineLag(state *engineState, now time.Time) []domain.TaskRunSummary {
+	runs := state.status.RecentRuns
+	if now.Before(state.lastSeen.Add(h.engineTTL)) {
+		return runs
+	}
+	offline := int64(now.Sub(state.lastSeen) / time.Second)
 	out := make([]domain.TaskRunSummary, len(runs))
 	for i, run := range runs {
-		run.LagSeconds = max(0, now.Unix()-run.LastPeriodTime)
+		run.LagSeconds += offline
 		out[i] = run
 	}
 	return out

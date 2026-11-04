@@ -123,10 +123,8 @@ func (c *Continuity) ratioFor(taskID string) float64 {
 
 // onEvent 记下事件带来的最新周期与期望标的，然后推进。
 func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, event periodEvent) error {
-	clock, err := periodclock.ForSpace(set.SpaceID)
-	if err != nil {
-		return err
-	}
+	// 连续水位全部在轴上：事件周期在入口已换到轴上，轴是连续的。
+	clock := periodclock.Continuous{}
 	step, err := clock.Duration(set.Freq)
 	if err != nil {
 		return err
@@ -179,11 +177,7 @@ func (c *Continuity) advanceTask(ctx context.Context, h *Handler, taskID string)
 		return err
 	}
 	set, members := engineTask.Set, engineTask.Members
-	clock, err := periodclock.ForSpace(set.SpaceID)
-	if err != nil {
-		return err
-	}
-	step, err := clock.Duration(set.Freq)
+	step, err := periodclock.Continuous{}.Duration(set.Freq)
 	if err != nil {
 		return err
 	}
@@ -214,7 +208,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 				if state.BlockedSince.IsZero() {
 					state.BlockedSince = c.cfg.Now().UTC()
 				}
-				log.WarnContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=%s missing=%d expected=%d", set.TaskID, period.Format(time.RFC3339), reason, len(unconfirmed), len(expected))
+				log.WarnContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=%s missing=%d expected=%d", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), reason, len(unconfirmed), len(expected))
 			}
 			state.BlockedPeriod, state.BlockedReason = period, reason
 			if err := c.cfg.Store.Put(state); err != nil {
@@ -234,7 +228,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 			}
 		}
 		if !state.BlockedSince.IsZero() {
-			log.InfoContextf(ctx, "factor_watermark_unblocked task_id=%s period=%s blocked_for=%s", set.TaskID, period.Format(time.RFC3339), c.cfg.Now().Sub(state.BlockedSince).Truncate(time.Second))
+			log.InfoContextf(ctx, "factor_watermark_unblocked task_id=%s period=%s blocked_for=%s", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), c.cfg.Now().Sub(state.BlockedSince).Truncate(time.Second))
 		}
 		state.CommittedThrough, state.BlockedSince, state.BlockedPeriod, state.BlockedReason = period, time.Time{}, time.Time{}, ""
 		state.InFlightPeriod, state.InFlightTrigger = time.Time{}, ""
@@ -318,7 +312,7 @@ func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.Factor
 	defer cancel()
 	frames, err := c.cfg.Reader.ReadWindow(readCtx, storageio.ReadRequest{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq, Subjects: subjects, Start: period, End: period.Add(step), Columns: []string{column}})
 	if err != nil {
-		return nil, fmt.Errorf("%w: read back period %s: %v", storageio.ErrInfra, period.Format(time.RFC3339), err)
+		return nil, fmt.Errorf("%w: read back period %s: %v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
 	}
 	var missing []string
 	for _, subject := range subjects {
@@ -330,11 +324,7 @@ func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.Factor
 }
 
 func periodStep(set domain.FactorTask) time.Duration {
-	clock, err := periodclock.ForSpace(set.SpaceID)
-	if err != nil {
-		return time.Minute
-	}
-	step, err := clock.Duration(set.Freq)
+	step, err := periodclock.Continuous{}.Duration(set.Freq)
 	if err != nil {
 		return time.Minute
 	}

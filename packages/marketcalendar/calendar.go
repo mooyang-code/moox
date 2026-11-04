@@ -238,6 +238,17 @@ func (c TradingCalendar) TradingDayIndex(date CivilDate) (int, error) {
 	return index, nil
 }
 
+// TradingDayAt 是 TradingDayIndex 的反向：返回序号 index 的交易日；超出日历范围返回 ErrOutOfCoverage。
+func (c TradingCalendar) TradingDayAt(index int) (CivilDate, error) {
+	if c.data == nil {
+		return CivilDate{}, fmt.Errorf("%w：日历未加载", ErrOutOfCoverage)
+	}
+	if index < 0 || index >= len(c.data.tradingDays) {
+		return CivilDate{}, fmt.Errorf("%w：交易日序号 %d 不在 0 至 %d 之内", ErrOutOfCoverage, index, len(c.data.tradingDays)-1)
+	}
+	return c.data.tradingDays[index], nil
+}
+
 func (c TradingCalendar) checkCovered(date CivilDate) error {
 	if c.data == nil {
 		return fmt.Errorf("%w：日历未加载", ErrOutOfCoverage)

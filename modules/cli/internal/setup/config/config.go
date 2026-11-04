@@ -57,22 +57,7 @@ const (
 	// built-in crypto market function pool. Crypto now publishes this capacity
 	// as Scheduler-owned Invoke functions rather than Tencent Timer functions.
 	DefaultCryptoMarketTimerFunctionCount = 60
-	// DefaultStockCNMarketTimerFunctionCount is used by callers that need the
-	// release baseline. stockcn config validation still requires an explicit
-	// timer_function_count instead of applying this value implicitly.
-	DefaultStockCNMarketTimerFunctionCount = 170
-	// Invoke execution needs a larger budget than stockcn Timer execution for the
-	// Storage acknowledgement and durable completion path.
-	DefaultStockCNInvokeTimeoutSeconds = 90
-	// Synchronized with active Kline providers in stockcn/route.yaml.
-	StockCNInvokeProviderChainLength  = 4
-	StockCNMaxRealtimeItems           = 40
-	DefaultCryptoInvokeTimeoutSeconds = 60
-	// Stock Timer groups are spread across this fixed second window. These are
-	// release defaults; changing them requires a new rendered configuration.
-	DefaultStockCNStaggerStartSecond        = 5
-	DefaultStockCNStaggerWindowSeconds      = 35
-	DefaultStockCNStaggerMaxStartsPerSecond = 6
+	DefaultCryptoInvokeTimeoutSeconds     = 60
 )
 
 const (

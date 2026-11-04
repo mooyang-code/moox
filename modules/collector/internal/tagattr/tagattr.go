@@ -14,6 +14,8 @@ const (
 	KeyMarketType = "market_type"
 	// KeySyncSource 是标的同步使用的数据来源，也是该标签采集时的行情源。
 	KeySyncSource = "sync.source"
+	// KeySyncIndex 是指数代码：有它时标签同步该指数的成分股，而不是数据源的全部标的。
+	KeySyncIndex = "sync.index"
 	// KeySyncCron 是标的同步的 cron 表达式；KeySyncTimezone 是它的时区。
 	KeySyncCron     = "sync.cron"
 	KeySyncTimezone = "sync.timezone"
@@ -31,6 +33,9 @@ func lower(tag *storagepb.Tag, key string) string {
 
 // Source 返回标签的同步来源（小写）；未配置时为空。
 func Source(tag *storagepb.Tag) string { return lower(tag, KeySyncSource) }
+
+// Index 返回标签要同步成分股的指数代码；未配置时为空（同步数据源的全部标的）。
+func Index(tag *storagepb.Tag) string { return strings.TrimSpace(tag.GetAttributes()[KeySyncIndex]) }
 
 // MarketType 返回标签的市场类型（小写）；未配置时为空。
 func MarketType(tag *storagepb.Tag) string { return lower(tag, KeyMarketType) }

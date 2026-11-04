@@ -182,6 +182,8 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
+replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb

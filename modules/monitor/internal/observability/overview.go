@@ -938,6 +938,9 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Timezone = clock.clock.Location().String()
 	}
 	inventoryAt := unixTime(value.inventory)
+	// 交易所市场在午休、收盘后、非交易日不运行：上报的间隔是连续时间，按它判运行、成功停滞会在每次休市误报。
+	// 此刻没有应收而未到的 K 线时跳过这两项；开盘后真停了，等待中的 K 线会让它照常判出来。
+	marketIdle := clock.err == nil && clock.clock.Exchange() && bars.waiting == 0
 	switch {
 	case value.reporterStale:
 		item.Status, item.Reason = "stale", "producer stale"
@@ -945,14 +948,14 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "unknown", "inventory_stale"
 	case item.LastRunAt.IsZero():
 		item.Status, item.Reason = "unknown", "尚未上报"
-	case runLag > 0 && now.Sub(item.LastRunAt) > runLag:
+	case !marketIdle && runLag > 0 && now.Sub(item.LastRunAt) > runLag:
 		item.Status, item.Reason = "stale", "run stale"
 	case warmingNow(now, item, successLag):
 		// 生产者仍在按设计只产出部分结果（空洞保护、历史不足、预热）：页面显示降级，但不是故障，不告警。
 		item.Status, item.Reason = "degraded", DatasetReasonWarming
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
-	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
+	case !marketIdle && successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
 	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
 		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。

@@ -187,9 +187,6 @@ func upgradeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, budget)
 }
 
-// stockCNHistoryMaxLookback 是 A 股当前数据源能回看的最长历史。
-const stockCNHistoryMaxLookback = 24 * time.Hour
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

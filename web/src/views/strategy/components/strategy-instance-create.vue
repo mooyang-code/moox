@@ -88,6 +88,7 @@
           <span v-if="accountsError" class="meta-error"
             >账户列表读取失败：{{ accountsError }}<a-link @click="loadAccountsList">重试</a-link>；也可以改为“仅计算”。</span
           >
+          <span v-else-if="market.noAccount">{{ market.noAccount }}，请改为“仅计算”。</span>
           <span v-else-if="!accountsLoading && !accounts.length">当前空间没有可用的组合账户，请先在交易模块创建。</span>
         </template>
       </a-form-item>
@@ -168,8 +169,9 @@ let checkRequest = 0;
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
-// 只列策略驱动且市场一致的组合账户，已被其他实例占用的显示但不可选。
-const accountOptions = computed(() => logicalAccountOptions(accounts.value, resolvedMarket(check_result.value?.resolved_json)));
+// 只列策略驱动且市场一致的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
+const market = computed(() => resolvedMarket(check_result.value?.resolved_json));
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value));
 
 const selectedTask = computed(() => tasks.value.find(item => item.taskId === form.factor_task_id));
 

@@ -218,3 +218,88 @@ func TestMarketForAndAllowedIntraday(t *testing.T) {
 	_, err = MarketFor("stockhk")
 	require.ErrorIs(t, err, ErrUnknownMarket)
 }
+
+func TestEpochOrdinalRoundTrip(t *testing.T) {
+	clock, err := NewEpoch(5 * time.Minute)
+	require.NoError(t, err)
+	bucket, _, err := clock.BucketAt(utc("2026-10-21T10:20:00Z"))
+	require.NoError(t, err)
+	n, err := clock.Ordinal(bucket)
+	require.NoError(t, err)
+	require.Equal(t, bucket.Start.Unix()/300, n)
+	back, err := clock.BucketAtOrdinal(n)
+	require.NoError(t, err)
+	require.Equal(t, bucket, back)
+	next, err := clock.BucketAtOrdinal(n + 1)
+	require.NoError(t, err)
+	want, _ := clock.Next(bucket)
+	require.Equal(t, want, next)
+}
+
+func TestSessionOrdinalSkipsBreaksAndHolidays(t *testing.T) {
+	clock, err := ClockFor("stockcn", 5*time.Minute)
+	require.NoError(t, err)
+	// 2026-09-30（周三）收盘最后一根 14:55，下一根是国庆后 10-08（周四）09:30。
+	last, ok, err := clock.BucketAt(utc("2026-09-30T06:55:00Z"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	first, ok, err := clock.BucketAt(utc("2026-10-08T01:30:00Z"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	a, err := clock.Ordinal(last)
+	require.NoError(t, err)
+	b, err := clock.Ordinal(first)
+	require.NoError(t, err)
+	require.Equal(t, a+1, b, "长假不占序号")
+
+	// 午休：11:25 那根之后是 13:00 那根，序号相邻。
+	morning, _, err := clock.BucketAt(utc("2026-10-08T03:25:00Z"))
+	require.NoError(t, err)
+	afternoon, _, err := clock.BucketAt(utc("2026-10-08T05:00:00Z"))
+	require.NoError(t, err)
+	m, err := clock.Ordinal(morning)
+	require.NoError(t, err)
+	p, err := clock.Ordinal(afternoon)
+	require.NoError(t, err)
+	require.Equal(t, m+1, p)
+
+	// 往返：一个交易日 48 根逐根一致。
+	for i := int64(0); i < 96; i++ {
+		bucket, err := clock.BucketAtOrdinal(b + i)
+		require.NoError(t, err)
+		back, err := clock.Ordinal(bucket)
+		require.NoError(t, err)
+		require.Equal(t, b+i, back)
+		if i > 0 {
+			prev, err := clock.BucketAtOrdinal(b + i - 1)
+			require.NoError(t, err)
+			next, err := clock.Next(prev)
+			require.NoError(t, err)
+			require.Equal(t, next, bucket)
+		}
+	}
+
+	// 不是桶起点、午休时刻都报错。
+	_, err = clock.Ordinal(Bucket{Start: utc("2026-10-08T01:31:00Z")})
+	require.Error(t, err)
+	_, err = clock.BucketAtOrdinal(-1)
+	require.ErrorIs(t, err, ErrOutOfCoverage)
+}
+
+func TestSessionDailyOrdinal(t *testing.T) {
+	clock, err := ClockFor("stockcn", 24*time.Hour)
+	require.NoError(t, err)
+	friday, ok, err := clock.BucketAt(utc("2026-10-09T02:00:00Z"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	monday, err := clock.Next(friday)
+	require.NoError(t, err)
+	a, err := clock.Ordinal(friday)
+	require.NoError(t, err)
+	b, err := clock.Ordinal(monday)
+	require.NoError(t, err)
+	require.Equal(t, a+1, b)
+	back, err := clock.BucketAtOrdinal(b)
+	require.NoError(t, err)
+	require.Equal(t, monday, back)
+}

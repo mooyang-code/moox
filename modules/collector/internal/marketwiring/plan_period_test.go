@@ -1,8 +1,6 @@
 package marketwiring
 
 import (
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -10,18 +8,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStockCNPlanPeriodValidFollowsTheTradingCalendar(t *testing.T) {
-	_, file, _, _ := runtime.Caller(0)
-	t.Setenv("MOOX_STOCK_CN_CALENDAR_PATH", filepath.Join(filepath.Dir(file), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	valid := stockCNPlanPeriodValid()
+func TestPlanPeriodValidFollowsTheMarketClock(t *testing.T) {
 	stock := marketfetch.PlanMarket{MarketID: marketfetch.StockCNSpaceID}
 	shanghai := time.FixedZone("CST", 8*3600)
-	// 2026-10-12（周一）：开盘第一分钟、午休、收盘前最后一分钟、收盘后。
-	require.True(t, valid(stock, "1m", time.Date(2026, 10, 12, 9, 30, 0, 0, shanghai).UTC()))
-	require.False(t, valid(stock, "1m", time.Date(2026, 10, 12, 12, 0, 0, 0, shanghai).UTC()), "lunch break")
-	require.True(t, valid(stock, "1m", time.Date(2026, 10, 12, 14, 59, 0, 0, shanghai).UTC()))
-	require.False(t, valid(stock, "1m", time.Date(2026, 10, 12, 15, 30, 0, 0, shanghai).UTC()), "after close")
-	require.False(t, valid(stock, "1m", time.Date(2026, 10, 11, 10, 0, 0, 0, shanghai).UTC()), "weekend")
-	require.False(t, valid(stock, "5m", time.Date(2026, 10, 12, 10, 0, 0, 0, shanghai).UTC()), "only 1m is supported")
-	require.True(t, valid(marketfetch.PlanMarket{MarketID: "crypto"}, "1m", time.Date(2026, 10, 11, 3, 0, 0, 0, time.UTC)), "crypto is continuous")
+	at := func(day, hour, minute int) time.Time {
+		return time.Date(2026, 10, day, hour, minute, 0, 0, shanghai).UTC()
+	}
+	// 2026-10-12（周一）。
+	require.True(t, planPeriodValid(stock, "1m", at(12, 9, 30)))
+	require.False(t, planPeriodValid(stock, "1m", at(12, 12, 0)), "午休")
+	require.True(t, planPeriodValid(stock, "1m", at(12, 14, 59)))
+	require.False(t, planPeriodValid(stock, "1m", at(12, 15, 30)), "收盘后")
+	require.False(t, planPeriodValid(stock, "1m", at(11, 10, 0)), "周末")
+	require.True(t, planPeriodValid(stock, "5m", at(12, 11, 25)), "11:30 触发采 11:25 那根")
+	require.False(t, planPeriodValid(stock, "5m", at(12, 12, 55)), "13:00 触发对应的 12:55 不是交易桶")
+	require.True(t, planPeriodValid(stock, "5m", at(12, 14, 55)), "15:00 触发采 14:55 那根")
+	require.False(t, planPeriodValid(stock, "5m", at(11, 10, 0)), "非交易日")
+	require.False(t, planPeriodValid(stock, "5m", time.Date(2027, 1, 5, 2, 0, 0, 0, time.UTC)), "超出日历覆盖期不执行")
+	require.True(t, planPeriodValid(marketfetch.PlanMarket{MarketID: "crypto"}, "5m", at(11, 3, 0)), "加密货币连续交易")
 }

@@ -267,6 +267,10 @@ func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request,
 	}
 	defer r.Close()
 	checker := seriesformat.NewChecker(req.Step)
+	axis, err := newSessionAxis(req.Space, req.Step)
+	if err != nil {
+		return seriesformat.Report{}, nil, err
+	}
 	var tail []time.Time
 	for {
 		if err := ctx.Err(); err != nil {
@@ -274,7 +278,14 @@ func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request,
 		}
 		batch, err := r.Next(req.batchRows())
 		if batch != nil {
-			if cerr := checker.Check(batch); cerr != nil {
+			checked := batch
+			if axis != nil {
+				var aerr error
+				if checked, aerr = axis.batch(batch); aerr != nil {
+					return seriesformat.Report{}, nil, aerr
+				}
+			}
+			if cerr := checker.Check(checked); cerr != nil {
 				return seriesformat.Report{}, nil, cerr
 			}
 			if req.TailRows > 0 {
@@ -288,7 +299,11 @@ func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request,
 			if len(tail) > req.TailRows && req.TailRows > 0 {
 				tail = tail[len(tail)-req.TailRows:]
 			}
-			return checker.Finish(), tail, nil
+			report := checker.Finish()
+			if axis != nil {
+				report = axis.report(report)
+			}
+			return report, tail, nil
 		}
 		if err != nil {
 			return seriesformat.Report{}, nil, err

@@ -392,7 +392,7 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 		if !req.HistoryAsOf.IsZero() {
 			historyReference = req.HistoryAsOf
 		}
-		if err := spec.History.ValidateStart(historyReference, providerReq.StartTime); err != nil {
+		if err := spec.HistoryFor(req.Frequency).ValidateStart(historyReference, providerReq.StartTime); err != nil {
 			s.breaker.Observe(providerID, err)
 			lastErr = err
 			continue

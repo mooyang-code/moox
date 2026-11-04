@@ -92,19 +92,39 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### 步骤 8 的已知限制
 
-`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认只有两个 1m 因子任务（`ftask_spot_1m`、`ftask_swap_1m`，源数据集由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
+`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
 
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略）加上 `moox.toml` 里默认的因子任务。Collector 首次启动会把随发布安装的 `collector/config/collection-tasks.yaml` 写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认只有 1m：币安现货、币安合约（crypto 空间）和 A 股（stockcn），都是停用状态，`setup start --space-id <空间>` 才启用，安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）和 A 股 5m（stockcn，沪深 300 成分股），都是停用状态，`setup start --space-id <空间>` 才启用，安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
 
 ### 默认展示策略（合约双均线）
 
 `setup start --space-id crypto` 自动创建：[`examples/strategies/dual_ma_swap_1m.yaml`](../../../examples/strategies/dual_ma_swap_1m.yaml)，绑定合约 1m 因子任务 `ftask_swap_1m`，固定 ID `default_dual_ma_swap_1m`，观察实例，不挂账户、只计算不投递。重复运行不会重复创建。
 
 快线 `ma__5` 在慢线 `ma__10` 之上的合约都持有，等权，单个最多 5%。前几根 `ma__10` 为空时记 `too_many_missing`，第一个 ok 之前按积累处理，上限 30 分钟或 20 个周期，所以约 15 分钟内看到第一个结果。这个因子任务已绑给用户自己的实例时跳过默认示例，要改绑先停用，再 `strategy instance update`。
+
+### A 股空间（stockcn）
+
+`setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写存储机所在地域，该地域要有带 access 组件、配了 `private_address` 的主机）。它依次：
+
+1. 立即同步一次空间里的自动标签：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
+2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只、每函数 40 只，共 8 个函数，每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回 `no_work`）；
+3. 导入因子任务 `ftask_cn_5m`（只有 `ma__5`、`ma__10`），创建观察实例 `default_dual_ma_cn_5m`（[`examples/strategies/dual_ma_cn_5m.yaml`](../../../examples/strategies/dual_ma_cn_5m.yaml)，不挂账户）。
+
+A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14:55），11:25 那根之后是 13:00 那根；午休、隔夜、周末 Monitor 不报停滞。
+数据是不复权 5m（东方财富为主、通达信为备），除权日前后跨越除权的均线会有一次跳变。A 股没有交易账户，实例只能是观察实例。
+
+### A 股交易日历的年度更新
+
+A 股交易日历只有一份：`packages/marketcalendar/data/cn_trading_days.json` 与 `manifest.json`（采集、因子、策略、Monitor 共用）。覆盖期到当年 12 月 31 日，交易所公布下一年休市安排后：
+
+1. 更新这两个文件（`manifest.json` 的 `valid_through` 与 `sha256` 要和数据一致，`go test ./packages/marketcalendar/` 校验）；
+2. 重新构建并发布 Collector、因子引擎、Strategy、Monitor，并上传新的 stockcn SCF 代码包（`moox-cli collector function upload`）。
+
+**必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划；到期前 60 天起每天告警。
 
 ## 6. 验收
 

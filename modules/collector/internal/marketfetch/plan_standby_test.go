@@ -52,8 +52,8 @@ func TestPlanWithStandbyAndConnReuseSurvivesEncodeDecode(t *testing.T) {
 
 func TestRequestRejectsOutOfRangeStandby(t *testing.T) {
 	req := Request{
-		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, BatchKind: domain.BatchKindRealtime,
-		Items:     []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, BarLimit: 1}},
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, BatchKind: domain.BatchKindRealtime,
+		Items:     []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID, BarLimit: 1}},
 		StandbyMS: 800,
 	}
 	require.NoError(t, req.validate())

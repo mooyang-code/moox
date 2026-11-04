@@ -183,13 +183,13 @@ func TestPresenceSkipsRowsOffCalendar(t *testing.T) {
 
 // 年化门槛按根数：A 股日线一整周是 5 个交易日，加密货币 1h 是 168 根。
 func TestAnnualizedThresholdByCalendar(t *testing.T) {
-	if bars := minAnnualizedBars("cn_stock", 24*time.Hour); bars != 5 {
+	if bars := minAnnualizedBars("cn_stock", "1d", 24*time.Hour); bars != 5 {
 		t.Fatalf("A 股一周应是 5 根：%d", bars)
 	}
-	if bars := minAnnualizedBars("crypto_24x7", time.Hour); bars != 168 {
+	if bars := minAnnualizedBars("crypto_24x7", "1h", time.Hour); bars != 168 {
 		t.Fatalf("1h 一周应是 168 根：%d", bars)
 	}
-	acc := newAccumulator(100, periodsPerYear("cn_stock", 24*time.Hour), minAnnualizedBars("cn_stock", 24*time.Hour))
+	acc := newAccumulator(100, periodsPerYear("cn_stock", "1d", 24*time.Hour), minAnnualizedBars("cn_stock", "1d", 24*time.Hour))
 	for i := 0; i < 5; i++ {
 		acc.add(origin.Add(time.Duration(i)*24*time.Hour), true, "", Outcome{EquityBefore: 100 + float64(i), EquityAfter: 100 + float64(i+1)}, 0)
 	}

@@ -248,6 +248,37 @@ func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
 }
 
+func TestEnsureWritesTheMarketCalendarAndAlignment(t *testing.T) {
+	fake := newResultMetadataFake()
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	stock, err := manager.Ensure(context.Background(), "stockcn", "task-stock-5m", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	require.NoError(t, err)
+	attrs := fake.datasets[stock.DatasetID].GetAttributes()
+	require.Equal(t, "cn_stock", attrs["calendar"])
+	require.Equal(t, "session", attrs["alignment"])
+	require.Equal(t, "equity", attrs["market_type"])
+
+	crypto, err := manager.Ensure(context.Background(), "crypto", "task-crypto-5m", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "5m"})
+	require.NoError(t, err)
+	attrs = fake.datasets[crypto.DatasetID].GetAttributes()
+	_, hasCalendar := attrs["calendar"]
+	_, hasAlignment := attrs["alignment"]
+	require.False(t, hasCalendar || hasAlignment, "crypto 不写 calendar、alignment，策略缺省按 crypto_24x7")
+	require.Equal(t, "spot", attrs["market_type"])
+
+	// 已有的结果数据集缺这两项时补上，已有的值不改。
+	ids := ResultIDs("stockcn", "task-existing")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "stockcn", DatasetId: ids.DatasetID, Status: "active",
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-existing", "market_type": "equity"},
+	}
+	_, err = manager.Ensure(context.Background(), "stockcn", "task-existing", "kline", "equity", Config{DataNodeID: "node-1", Frequency: "5m"})
+	require.NoError(t, err)
+	attrs = fake.datasets[ids.DatasetID].GetAttributes()
+	require.Equal(t, "cn_stock", attrs["calendar"])
+	require.Equal(t, "session", attrs["alignment"])
+}
+
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
 	fake := newResultMetadataFake()
 	fake.failView = true

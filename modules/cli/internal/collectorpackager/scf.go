@@ -33,8 +33,8 @@ type BuildSCFPackageResult struct {
 }
 
 // BuildSCFPackage creates a zip containing only the short-lived runtime binary,
-// configuration, source definitions, and the stock trading calendar when the
-// stockcn profile is packaged. CLS credentials are injected as SCF environment
+// configuration, source definitions, and the stock route when the stockcn
+// profile is packaged（交易日历内嵌在二进制里，不随包分发）. CLS credentials are injected as SCF environment
 // variables and never rendered into the package.
 func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error) {
 	if opts.BinaryPath == "" {
@@ -114,16 +114,6 @@ func BuildSCFPackage(opts BuildSCFPackageOptions) (*BuildSCFPackageResult, error
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	calendarPath, err := stockCNCalendarPath(configDir)
-	if err != nil {
-		return nil, err
-	}
-	if calendarPath != "" {
-		if err := addFile(calendarPath, "markets/stockcn/calendar.yaml"); err != nil {
-			return nil, err
-		}
 	}
 
 	routePath, err := stockCNRoutePath(configDir)
@@ -424,21 +414,6 @@ func hasNonemptySCFCredentialAssignment(content []byte) bool {
 		return true
 	}
 	return false
-}
-
-func stockCNCalendarPath(configDir string) (string, error) {
-	if filepath.Base(filepath.Clean(configDir)) != "stockcn" {
-		return "", nil
-	}
-	candidate := filepath.Clean(filepath.Join(configDir, "..", "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	info, err := os.Stat(candidate)
-	if err != nil {
-		return "", fmt.Errorf("stockcn calendar is required at %s: %w", candidate, err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("stockcn calendar is required at %s: path is a directory", candidate)
-	}
-	return candidate, nil
 }
 
 func stockCNRoutePath(configDir string) (string, error) {

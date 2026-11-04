@@ -256,7 +256,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
-	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, freq.NominalDuration()))
+	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, resolved.Bar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, resolved.Bar, freq.NominalDuration()))
 	acc.metrics.Factors = resolved.Factors
 	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy))
 	if end.Before(job.EndTime) {

@@ -95,7 +95,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 11)
+	require.Len(t, bundle.Datasets, 8)
 	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
 	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)

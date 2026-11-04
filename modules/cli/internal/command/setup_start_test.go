@@ -25,6 +25,9 @@ type fakeStartClient struct {
 	subjectMisses int
 	otherErr      error
 	enableCalls   int
+	syncs         int
+	syncBusy      int
+	syncSubjects  int
 }
 
 func (f *fakeStartClient) Tasks(context.Context, string) ([]adminclient.CollectionTaskSummary, error) {
@@ -43,6 +46,15 @@ func (f *fakeStartClient) EnableTask(_ context.Context, _, taskID string) error 
 	f.enabled = append(f.enabled, taskID)
 	return nil
 }
+func (f *fakeStartClient) SyncSubjects(context.Context, string, string) (int, error) {
+	f.syncs++
+	if f.syncBusy > 0 {
+		f.syncBusy--
+		return 0, errSubjectSyncBusy
+	}
+	f.subjectMisses = 0
+	return f.syncSubjects, nil
+}
 func (f *fakeStartClient) StreamOnline(context.Context, string) (bool, error) { return f.online, nil }
 func (f *fakeStartClient) Trigger(context.Context, string) error {
 	f.triggers++
@@ -54,7 +66,7 @@ func (f *fakeStartClient) PlanState(context.Context, string) (bool, string, erro
 func (f *fakeStartClient) Instances(context.Context, string) ([]setupStartInstance, error) {
 	return f.instances, nil
 }
-func (f *fakeStartClient) EnsureStrategy(context.Context, string, string) error {
+func (f *fakeStartClient) EnsureStrategy(context.Context, string, string, string) error {
 	f.strategy++
 	return nil
 }
@@ -63,7 +75,7 @@ func (f *fakeStartClient) CreateInstance(_ context.Context, instance setupStartI
 	f.instances = append(f.instances, instance)
 	return nil
 }
-func (f *fakeStartClient) EnableInstance(context.Context, string) error { return nil }
+func (f *fakeStartClient) EnableInstance(context.Context, string, string) error { return nil }
 
 // nil2T 让 fake 里的断言失败时直接 panic，测试照样失败。
 type nil2T struct{}
@@ -74,9 +86,11 @@ func (nil2T) FailNow()                          { panic("failed") }
 func startRepository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	name := filepath.Join(root, filepath.FromSlash(defaultStrategyDSL))
-	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o755))
-	require.NoError(t, os.WriteFile(name, []byte("name: dual_ma_swap_1m\n"), 0o644))
+	for _, example := range spaceExamples {
+		name := filepath.Join(root, filepath.FromSlash(example.DSL))
+		require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o755))
+		require.NoError(t, os.WriteFile(name, []byte("name: "+example.StrategyID+"\n"), 0o644))
+	}
 	return root
 }
 
@@ -92,6 +106,7 @@ func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, client.enabled)
 	require.Equal(t, 1, client.triggers)
 	require.Equal(t, 2, summary.TasksEnabled)
+	require.Zero(t, client.syncs, "标签已有成员时不额外同步")
 }
 
 func TestSetupStartWithoutTasksFails(t *testing.T) {
@@ -103,17 +118,18 @@ func TestSetupStartStrategyIsRepeatableAndRespectsUserInstance(t *testing.T) {
 	repository := startRepository(t)
 	client := startClient()
 	summary := setupStartSummary{}
-	status, err := setupStartStrategy(context.Background(), client, repository, &summary)
+	example := spaceExamples["crypto"]
+	status, err := setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
-	status, err = setupStartStrategy(context.Background(), client, repository, &summary)
+	status, err = setupStartStrategy(context.Background(), client, repository, "crypto", example, &summary)
 	require.NoError(t, err)
 	require.Equal(t, "unchanged", status, "重复运行不重复创建")
 	require.Equal(t, 1, client.created)
 
 	bound := startClient()
-	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTaskID: defaultStrategyTask}}
-	status, err = setupStartStrategy(context.Background(), bound, repository, &summary)
+	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTaskID: example.FactorTask}}
+	status, err = setupStartStrategy(context.Background(), bound, repository, "crypto", example, &summary)
 	require.NoError(t, err)
 	require.Equal(t, "skipped", status, "因子任务已被用户实例绑定")
 	require.Zero(t, bound.created)
@@ -127,14 +143,30 @@ func TestSetupStartPrerequisitesDependOnSpace(t *testing.T) {
 }
 
 func TestSetupStartEnableTaskRetriesWhileSubjectsNotResolvable(t *testing.T) {
-	client := &fakeStartClient{subjectMisses: 2}
-	require.NoError(t, setupStartEnableTask(context.Background(), client, "crypto", "a", time.Millisecond))
-	require.Equal(t, 3, client.enableCalls)
+	client := &fakeStartClient{subjectMisses: 2, syncBusy: 1, syncSubjects: 300}
+	task := adminclient.CollectionTaskSummary{TaskID: "a", TagIDs: []string{"cn_hs300"}}
+	require.NoError(t, setupStartEnableTask(context.Background(), client, "stockcn", task, time.Millisecond))
+	require.Equal(t, 3, client.enableCalls, "Collector 忙时下一轮再同步，同步完再启用")
+	require.Equal(t, 2, client.syncs)
 	require.Equal(t, []string{"a"}, client.enabled)
+
+	empty := &fakeStartClient{subjectMisses: 5}
+	require.ErrorContains(t, setupStartEnableTask(context.Background(), empty, "stockcn", task, time.Millisecond), "没有成员")
 }
 
 func TestSetupStartEnableTaskDoesNotRetryOtherErrors(t *testing.T) {
 	client := &fakeStartClient{otherErr: errors.New("UpdateTask rejected: 其他原因")}
-	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", "a", time.Millisecond))
+	require.Error(t, setupStartEnableTask(context.Background(), client, "crypto", adminclient.CollectionTaskSummary{TaskID: "a"}, time.Millisecond))
 	require.Equal(t, 1, client.enableCalls)
+}
+
+func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
+	repository := startRepository(t)
+	client := startClient()
+	summary := setupStartSummary{}
+	example := spaceExamples["stockcn"]
+	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example, &summary)
+	require.NoError(t, err)
+	require.Equal(t, "created", status)
+	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTaskID: "ftask_cn_5m", Enabled: true}}, client.instances)
 }

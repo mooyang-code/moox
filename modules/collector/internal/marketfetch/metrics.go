@@ -398,10 +398,10 @@ func boundedMetricField(value, fallback string) string {
 func boundedMarketRoute(marketID, routeID string) (string, string) {
 	marketID = boundedValue(marketID, []string{"stockcn", "crypto"}, "unknown")
 	routeID = strings.TrimSpace(routeID)
-	allowed := routeID == StockCNRouteID || routeID == "stockcn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
+	allowed := routeID == "stockcn_instrument_v1" || routeID == "binance_spot_instrument_v1" || routeID == "binance_swap_instrument_v1"
 	if !allowed {
-		for _, product := range []string{"spot", "swap"} {
-			prefix := "binance_" + product + "_kline_"
+		// K 线路由 ID 是“前缀 + 规范频率”。
+		for _, prefix := range []string{stockCNKlineRoutePrefix, "binance_spot_kline_", "binance_swap_kline_"} {
 			if strings.HasPrefix(routeID, prefix) {
 				frequency := strings.TrimPrefix(routeID, prefix)
 				if parsed, err := marketdata.ParseFrequency(frequency); err == nil && string(parsed) == frequency {

@@ -333,7 +333,7 @@ func (w *Window) fromColumns(subject string, cols *seriesstore.Columns) (map[str
 		}
 		for r, row := range rows {
 			if r > 0 && cols.Times[row]-cols.Times[rows[r-1]] != w.step {
-				return nil, fmt.Errorf("%s/%s 的本地数据在 %s 之后不连续", w.cfg.Source, subject, time.Unix(cols.Times[rows[r-1]], 0).UTC().Format(time.RFC3339))
+				return nil, fmt.Errorf("%s/%s 的本地数据在 %s 之后不连续", w.cfg.Source, subject, w.cfg.Source.Format(time.Unix(cols.Times[rows[r-1]], 0)))
 			}
 			w.putRow(s, r, cols, row, fieldIdx)
 		}
@@ -530,8 +530,8 @@ func (w *Window) Acquire(subjects []string, endSec int64) *View {
 
 // FromColumns 用一次本地读取的结果构造视图（补算、重算、回放预热读磁盘区间时用）；每个标的的行按（时间、标签）排序，
 // 各序列必须连续。fields 是要放进视图的数值字段。
-func FromColumns(stepSeconds int64, fields []string, cols map[string]*seriesstore.Columns) (*View, error) {
-	w := &Window{step: stepSeconds, fields: fields, index: map[string]int{}, cfg: Config{Lookback: math.MaxInt32}}
+func FromColumns(src seriesstore.Source, stepSeconds int64, fields []string, cols map[string]*seriesstore.Columns) (*View, error) {
+	w := &Window{step: stepSeconds, fields: fields, index: map[string]int{}, cfg: Config{Source: src, Lookback: math.MaxInt32}}
 	for i, name := range fields {
 		w.index[name] = i
 	}
@@ -562,7 +562,7 @@ func FromColumns(stepSeconds int64, fields []string, cols map[string]*seriesstor
 			}
 			for r, row := range rows {
 				if r > 0 && c.Times[row]-c.Times[rows[r-1]] != stepSeconds {
-					return nil, fmt.Errorf("标的 %s 序列 %q 的本地数据在 %s 之后不连续", subject, tag, time.Unix(c.Times[rows[r-1]], 0).UTC().Format(time.RFC3339))
+					return nil, fmt.Errorf("标的 %s 序列 %q 的本地数据在 %s 之后不连续", subject, tag, src.Format(time.Unix(c.Times[rows[r-1]], 0)))
 				}
 				w.putRow(s, r, c, row, idx)
 			}

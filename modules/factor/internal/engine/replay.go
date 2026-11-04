@@ -74,13 +74,14 @@ func newReplayManager(deps ReplayDeps) *replayManager {
 }
 
 type replaySession struct {
-	id       string
-	set      domain.EngineTask
-	src      seriesstore.Source
-	clock    periodclock.Clock
+	id  string
+	set domain.EngineTask
+	src seriesstore.Source
+	// axis 是任务空间、频率的换算：会话内的周期都是轴上时间，请求与响应是真实时间。
+	axis     periodclock.Axis
 	step     time.Duration
-	from, to time.Time // 决策周期的 data_time 范围 [from, to)
-	start    time.Time // 预热起点
+	from, to time.Time // 决策周期的 data_time 范围 [from, to)（轴上）
+	start    time.Time // 预热起点（轴上）
 	subjects []string
 	numeric  []string
 	lookback int
@@ -167,11 +168,13 @@ type ReplayOpenResponse struct {
 	Subjects []string         `json:"subjects"`
 	Excluded []ReplayExcluded `json:"excluded,omitempty"`
 	Periods  int              `json:"periods"`
-	Start    string           `json:"start"`
-	StepSecs int64            `json:"step_seconds"`
-	Bytes    int64            `json:"bytes"`
-	Factors  []ReplayFactor   `json:"factors"`
-	Fields   []string         `json:"fields"`
+	// PeriodTimes 是各决策周期的 data_time（真实时间的 Unix 秒，升序）：有交易时段的市场跳过休市，回放服务按它逐期推进。
+	PeriodTimes []int64        `json:"period_times"`
+	Start       string         `json:"start"`
+	StepSecs    int64          `json:"step_seconds"`
+	Bytes       int64          `json:"bytes"`
+	Factors     []ReplayFactor `json:"factors"`
+	Fields      []string       `json:"fields"`
 	// ShortWarmup 是本地数据起点晚于预热起点的标的数（因子前段为空值）；ShortSamples 是其中的前几个。
 	ShortWarmup  int      `json:"short_warmup,omitempty"`
 	ShortSamples []string `json:"short_samples,omitempty"`
@@ -255,13 +258,16 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, err
 	}
-	from, to = from.UTC(), to.UTC()
-	if !from.Before(to) || from.Unix()%int64(step/time.Second) != 0 || to.Unix()%int64(step/time.Second) != 0 {
-		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("回放区间 [%s, %s) 必须按 %s 对齐且 from 早于 to", req.From, req.To, set.Set.Freq)
-	}
-	clock, err := periodclock.ForSpace(set.Set.SpaceID)
+	// 回放接口是换算边界：请求里的区间是真实时间，会话内全部换到轴上。
+	axis, err := periodclock.AxisFor(set.Set.SpaceID, set.Set.Freq)
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, err
+	}
+	realFrom, realTo := from.UTC(), to.UTC()
+	from, fromErr := axis.ToAxis(realFrom)
+	to, toErr := axis.EndToAxis(realTo)
+	if fromErr != nil || toErr != nil || !from.Before(to) {
+		return ReplayOpenResponse{}, http.StatusBadRequest, fmt.Errorf("回放区间 [%s, %s) 必须按 %s 对齐且 from 早于 to", req.From, req.To, set.Set.Freq)
 	}
 	lookback := maxLookbackOf(set)
 	start := from.Add(-time.Duration(lookback-1+req.ExtraPeriods) * step)
@@ -293,16 +299,16 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		case !has:
 			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: "本地没有数据"})
 		case b.Latest.Before(to):
-			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据只到 %s，不包含回放终点（%s）这一根", b.Latest.Format(time.RFC3339), to.Format(time.RFC3339))})
+			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据只到 %s，不包含回放终点（%s）这一根", axis.Format(b.Latest), axis.Format(to))})
 		case b.Earliest.After(to.Add(-step)):
-			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据从 %s 才开始，回放区间内没有数据", b.Earliest.Format(time.RFC3339))})
+			excluded = append(excluded, ReplayExcluded{Subject: subject, Reason: fmt.Sprintf("本地数据从 %s 才开始，回放区间内没有数据", axis.Format(b.Earliest))})
 		default:
 			subjects = append(subjects, subject)
 			earliest[subject] = b.Earliest
 		}
 	}
 	if len(subjects) == 0 {
-		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("没有任何标的的本地数据覆盖回放区间：先导入 %s 到 %s 的数据（需要包含终点之后的一根）", from.Format(time.RFC3339), to.Format(time.RFC3339))
+		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("没有任何标的的本地数据覆盖回放区间：先导入 %s 到 %s 的数据（需要包含终点之后的一根）", realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339))
 	}
 	var shortSamples []string
 	shortCount := 0
@@ -316,7 +322,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	}
 	if shortCount*2 > len(subjects) && !req.AllowShortWarmup {
 		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受后加 --allow-short-warmup",
-			shortCount, len(subjects), start.Format(time.RFC3339), strings.Join(shortSamples, "、"))
+			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
 	periods := int(to.Sub(from) / step)
 	rowsPerSubject := int(to.Add(step).Sub(start) / step)
@@ -340,7 +346,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusInternalServerError, fmt.Errorf("读取回放快照：%w", err)
 	}
-	view, err := serieswindow.FromColumns(int64(step/time.Second), numeric, snapshot)
+	view, err := serieswindow.FromColumns(src, int64(step/time.Second), numeric, snapshot)
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("回放快照不连续：%w", err)
 	}
@@ -357,7 +363,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		types = seriessync.ValueTypes(columns)
 	}
 	session := &replaySession{
-		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
+		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
 		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
@@ -365,8 +371,16 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	m.mu.Lock()
 	m.sessions[req.ReplayID] = session
 	m.mu.Unlock()
+	periodTimes := make([]int64, 0, periods)
+	for period := from; period.Before(to); period = period.Add(step) {
+		at, err := axis.FromAxis(period)
+		if err != nil {
+			return ReplayOpenResponse{}, http.StatusInternalServerError, err
+		}
+		periodTimes = append(periodTimes, at.Unix())
+	}
 	rsp := ReplayOpenResponse{
-		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, Periods: periods, Start: start.Format(time.RFC3339),
+		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, Periods: periods, PeriodTimes: periodTimes, Start: axis.Format(start),
 		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric, ShortWarmup: shortCount, ShortSamples: shortSamples,
 	}
 	for _, member := range set.Members {
@@ -450,13 +464,17 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	if s == nil {
 		return ReplayStepResponse{}, http.StatusNotFound, fmt.Errorf("回放会话 %s 不存在（引擎重启或已结束），请重新建立会话", req.ReplayID)
 	}
-	period, err := time.Parse(time.RFC3339, req.Period)
+	realPeriod, err := time.Parse(time.RFC3339, req.Period)
 	if err != nil {
 		return ReplayStepResponse{}, http.StatusBadRequest, fmt.Errorf("period：%w", err)
 	}
-	period = period.UTC()
-	if period.Before(s.from) || !period.Before(s.to) || (period.Unix()-s.from.Unix())%int64(s.step/time.Second) != 0 {
-		return ReplayStepResponse{}, http.StatusBadRequest, fmt.Errorf("周期 %s 不在回放区间 [%s, %s) 内或没有对齐", req.Period, s.from.Format(time.RFC3339), s.to.Format(time.RFC3339))
+	period, axisErr := s.axis.ToAxis(realPeriod)
+	if axisErr != nil || period.Before(s.from) || !period.Before(s.to) {
+		return ReplayStepResponse{}, http.StatusBadRequest, fmt.Errorf("周期 %s 不在回放区间 [%s, %s) 内或没有对齐", req.Period, s.axis.Format(s.from), s.axis.Format(s.to))
+	}
+	decisionAt, err := s.axis.FromAxisEnd(period.Add(s.step))
+	if err != nil {
+		return ReplayStepResponse{}, http.StatusInternalServerError, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -484,7 +502,7 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 		}
 	}
 	rsp := ReplayStepResponse{
-		ReplayID: s.id, Period: period.Format(time.RFC3339), DecisionAt: period.Add(s.step).Format(time.RFC3339),
+		ReplayID: s.id, Period: realPeriod.UTC().Format(time.RFC3339), DecisionAt: decisionAt.Format(time.RFC3339),
 		Subjects: make(map[string]ReplaySubjectFrame, len(s.subjects)), States: current.states,
 		AppliedParams: applied, RejectedParams: rejected,
 	}
@@ -698,7 +716,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 			universe = append(universe, subject)
 		}
 	}
-	plan, err := pipeline.BuildLivePlan(s.clock, pipeline.LiveInput{
+	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
 		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period, Universe: universe, CarryColumns: s.carry,
 	})
 	if err != nil {
@@ -717,7 +735,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: available, Frames: map[string]*storageio.Frame{}}
 	computation, err := runner.Compute(ctx, plan, loaded)
 	if err != nil {
-		return nil, plan, computation, fmt.Errorf("计算 %s：%w", period.Format(time.RFC3339), err)
+		return nil, plan, computation, fmt.Errorf("计算 %s：%w", s.axis.Format(period), err)
 	}
 	values, err := pipeline.PeriodValues(plan, computation, period)
 	if err != nil {
@@ -774,7 +792,7 @@ func (s *replaySession) write(ctx context.Context, runner *pipeline.Runner, plan
 	loaded := pipeline.LoadResult{View: s.view.Truncate(period.Unix(), s.lookback+1), Available: plan.Available, Frames: frames}
 	rows, err := runner.Assemble(plan, loaded, comp)
 	if err != nil {
-		return 0, fmt.Errorf("组装 %s 的结果行：%w", period.Format(time.RFC3339), err)
+		return 0, fmt.Errorf("组装 %s 的结果行：%w", s.axis.Format(period), err)
 	}
 	plan.CommitSalt = fmt.Sprintf("replay:%s", s.id)
 	if err := runner.Write(ctx, plan, period, rows, batch); err != nil {

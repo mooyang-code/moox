@@ -117,6 +117,11 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
+// A股空间（stockcn）的 series_tag 恒为 default，浏览时默认按它筛选；其他空间的标签区分来源，默认不填。
+export function defaultSeriesTagForView(view?: Pick<View, "space_id"> | null) {
+  return view?.space_id === "stockcn" ? "default" : "";
+}
+
 export function viewModeFromPrimaryDataset(
   datasets: Array<Pick<Dataset, "dataset_id" | "data_kind">>,
   primaryDatasetId?: string

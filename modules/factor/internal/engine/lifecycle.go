@@ -345,7 +345,7 @@ func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lif
 	return lifecycle.Check{
 		Name: "本地数据覆盖", Status: lifecycle.CheckFail,
 		Message: fmt.Sprintf("%d 个标的的本地数据不足回看根数，例如 %s：本地 %d 根（最早 %s），需要 %d 根",
-			len(short), first.Subject, first.Have, first.Earliest.UTC().Format(time.RFC3339), first.Want),
+			len(short), first.Subject, first.Have, src.Format(first.Earliest), first.Want),
 		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space-id %s --dataset-id %s --frequency %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
 	}
 }

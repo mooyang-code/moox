@@ -114,7 +114,19 @@ type KlineSpec struct {
 	SupportsBatch     bool
 	TimestampMode     TimestampMode
 	RateLimit         RateLimitPolicy
-	History           KlineHistoryCapability
+	// History 是默认的历史回看能力；HistoryByFrequency 按频率覆盖它（同一数据源不同频率的回看深度不同）。
+	History            KlineHistoryCapability
+	HistoryByFrequency map[string]KlineHistoryCapability
+}
+
+// HistoryFor 返回该频率的历史回看能力：按频率声明过的取声明值，否则取默认值。
+func (s KlineSpec) HistoryFor(frequency string) KlineHistoryCapability {
+	if parsed, err := ParseFrequency(frequency); err == nil {
+		if history, ok := s.HistoryByFrequency[string(parsed)]; ok {
+			return history
+		}
+	}
+	return s.History
 }
 
 // SupportsRequest reports whether the static feed contract can serve the
@@ -368,6 +380,15 @@ type InstrumentFetcher interface {
 	MarketProvider
 	InstrumentSpec() InstrumentSpec
 	FetchInstrumentSnapshot(context.Context, InstrumentRequest) (InstrumentSnapshot, error)
+}
+
+// IndexConstituentFetcher 取指数的全部成分股（例如沪深 300 的 indexCode 是 "000300"）。
+// 返回的快照必须完整：条数与上游自报的总数一致，否则报错，不能用残缺名单更新成员。
+type IndexConstituentFetcher interface {
+	MarketProvider
+	// IndexCodes 返回能取成分股的指数代码。
+	IndexCodes() []string
+	FetchIndexConstituents(ctx context.Context, indexCode string) (InstrumentSnapshot, error)
 }
 
 type Instrument struct {

@@ -18,7 +18,7 @@ func TestStockKlineRowWritesNullForEstimatedAmount(t *testing.T) {
 		ProviderTimestamp: start, FetchedAt: start.Add(time.Minute), RequestID: "req",
 	}
 	amount := func(bar marketdata.NormalizedKline) *storagepb.FieldValue {
-		row, err := stockKlineRow(bar, "", "route", 1, "name")
+		row, err := stockKlineRow(bar, testStockDatasetID, "route", 1, "name")
 		require.NoError(t, err)
 		for _, field := range row.GetFields() {
 			if field.GetFieldId() == "amount" {

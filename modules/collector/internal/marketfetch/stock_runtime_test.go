@@ -8,35 +8,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadStockCNRouteUsesConfiguredProviderStates(t *testing.T) {
+func TestLoadStockCNRouteSplitsKlineRoutesByFrequency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "route.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`market_id: stockcn
-route_id: stockcn_equity_kline_1m_v4
-frequency: 1m
-providers:
-  - id: eastmoney
-    weight: 3
-    kline: active
-    instrument: active
-  - id: sina
-    weight: 2
-    kline: active
-    instrument: active
-  - id: tencent
-    weight: 1
-    kline: active
-    instrument: disabled
-  - id: baidu
-    weight: 1
-    kline: shadow
-    instrument: active
+instrument_providers: [eastmoney, sina]
+klines:
+  - frequency: 1m
+    providers:
+      - {id: sina, source_id: stockcn_minute_http, weight: 2, role: primary}
+      - {id: eastmoney, source_id: stockcn_http, weight: 3, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 1, role: fallback}
+  - frequency: 5m
+    providers:
+      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 1, role: fallback}
 `), 0o600))
 
 	route, err := loadStockCNRouteFile(path)
 	require.NoError(t, err)
-	require.Equal(t, []string{"eastmoney", "sina", "tencent"}, route.KlineProviders())
-	require.Equal(t, []string{"eastmoney", "sina", "baidu"}, route.InstrumentProviders())
-	require.Equal(t, map[string]int{"sina": 2, "tencent": 1, "eastmoney": 3}, route.KlineWeights())
+	require.Equal(t, []string{"eastmoney", "sina"}, route.InstrumentProviders())
+	require.Equal(t, []string{"eastmoney", "sina", "tdx"}, route.ProviderIDs())
+
+	minute, err := route.Kline("1m")
+	require.NoError(t, err)
+	require.Equal(t, "stockcn_equity_kline_1m", minute.RouteID())
+	require.Equal(t, []string{"sina", "eastmoney", "tdx"}, minute.ProviderChain())
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 3}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 2}}, minute.PrimarySources())
+
+	five, err := route.Kline("5m")
+	require.NoError(t, err)
+	require.Equal(t, "stockcn_equity_kline_5m", five.RouteID())
+	require.Equal(t, []string{"eastmoney", "tdx"}, five.ProviderChain())
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
+
+	_, err = route.Kline("15m")
+	require.ErrorContains(t, err, "没有 15m 的 K 线路由")
 }
 
 func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
@@ -51,49 +57,35 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Equal(t, 1023, providers["sina"].KlineSpec.MaxBarsPerRequest)
 	require.Equal(t, 5.0, providers["sina"].RateLimit.RequestsPerSecond)
 	require.Equal(t, 1, providers["sina"].RateLimit.MaxConcurrent)
-	// The source file advertises Baidu's instrument protocol, while the
-	// release route intentionally keeps it disabled. EastMoney and Sina are
-	// the active complete-snapshot sources in the release route.
-	require.True(t, providers["baidu"].InstrumentEnabled)
 	require.Equal(t, []string{"sina", "eastmoney"}, route.InstrumentProviders())
-	require.NotContains(t, route.InstrumentProviders(), "baidu")
-	require.True(t, providers["baidu"].KlineShadow)
+	require.Contains(t, providers["eastmoney"].Hosts, "push2his.eastmoney.com", "5m K 线走 push2his")
 }
 
-func TestStockCNRoutePutsTDXBeforeEastMoneyAsFallbacks(t *testing.T) {
+func TestReleaseStockCNRouteUsesEastMoneyPrimaryAndTDXFallbackFor5m(t *testing.T) {
 	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
-	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, route.KlineProviders())
-	require.Equal(t, []string{"sina", "tencent"}, route.KlinePrimaryProviders())
+	minute, err := route.Kline("1m")
+	require.NoError(t, err)
+	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, minute.ProviderChain())
+	five, err := route.Kline("5m")
+	require.NoError(t, err)
+	require.Equal(t, []string{"eastmoney", "tdx"}, five.ProviderChain())
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
 }
 
-func TestStockCNRouteRequiresThreeActiveKlineProviders(t *testing.T) {
-	route := stockCNRoute{
-		MarketID:  "stockcn",
-		RouteID:   StockCNRouteID,
-		Frequency: "1m",
-		Providers: []stockCNRouteProvider{
-			{ID: "sina", Weight: 1, Kline: "active", Instrument: "active"},
-			{ID: "tencent", Weight: 1, Kline: "active", Instrument: "disabled"},
-			{ID: "eastmoney", Weight: 1, Kline: "disabled", Instrument: "active"},
-		},
+func TestStockCNRouteValidation(t *testing.T) {
+	provider := stockCNRouteProvider{ID: "eastmoney", SourceID: "stockcn_http", Weight: 1, Role: "primary"}
+	cases := map[string]struct {
+		route stockCNRoute
+		want  string
+	}{
+		"没有 primary": {stockCNRoute{MarketID: StockCNSpaceID, Klines: []stockCNKlineRoute{{Frequency: "5m", Providers: []stockCNRouteProvider{{ID: "tdx", Weight: 1, Role: "fallback"}}}}}, "至少要有一个 primary"},
+		"频率重复":       {stockCNRoute{MarketID: StockCNSpaceID, Klines: []stockCNKlineRoute{{Frequency: "5m", Providers: []stockCNRouteProvider{provider}}, {Frequency: "5m", Providers: []stockCNRouteProvider{provider}}}}, "重复"},
+		"频率不规范":      {stockCNRoute{MarketID: StockCNSpaceID, Klines: []stockCNKlineRoute{{Frequency: "5min", Providers: []stockCNRouteProvider{provider}}}}, "无效"},
+		"角色无效":       {stockCNRoute{MarketID: StockCNSpaceID, Klines: []stockCNKlineRoute{{Frequency: "5m", Providers: []stockCNRouteProvider{{ID: "eastmoney", Weight: 1, Role: "shadow"}}}}}, "role"},
+		"市场不对":       {stockCNRoute{MarketID: "crypto", Klines: []stockCNKlineRoute{{Frequency: "5m", Providers: []stockCNRouteProvider{provider}}}}, "market_id"},
 	}
-
-	require.ErrorContains(t, route.Validate(), "at least three active stockcn kline providers")
-}
-
-func TestStockCNRouteRejectsHistoryBeyondProviderPageCapability(t *testing.T) {
-	route := stockCNRoute{
-		MarketID:  StockCNSpaceID,
-		RouteID:   StockCNRouteID,
-		Frequency: "1m",
-		History:   stockCNHistoryFile{MaxLookback: "2d"},
-		Providers: []stockCNRouteProvider{
-			{ID: "eastmoney", Weight: 1, Kline: "active", Instrument: "active"},
-			{ID: "sina", Weight: 1, Kline: "active", Instrument: "active"},
-			{ID: "tencent", Weight: 1, Kline: "active", Instrument: "disabled"},
-		},
+	for name, tc := range cases {
+		require.ErrorContains(t, tc.route.Validate(), tc.want, name)
 	}
-
-	require.ErrorContains(t, route.Validate(), "history.max_lookback")
 }

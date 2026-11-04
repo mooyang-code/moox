@@ -79,7 +79,7 @@ func build() *marketdata.Catalog {
 		}),
 		stockCNEntry("eastmoney", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
-			return eastmoney.New(eastmoney.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
+			return eastmoney.New(eastmoney.Config{KlineBaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
 		stockCNEntry("baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			return baidu.New(baidu.Config{SourceID: deps.SourceID, RateLimit: deps.Settings.RateLimit}), nil

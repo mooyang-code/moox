@@ -192,17 +192,6 @@ func TestValidateCollectionTaskDatasetsRejectsTargetMarketMismatch(t *testing.T)
 	require.ErrorContains(t, service.validateCollectionTaskDatasets(context.Background(), task), "market_type=spot does not match task market_type=swap")
 }
 
-func TestValidateCollectionTaskDatasetsAcceptsStockSharedDataSource(t *testing.T) {
-	service := &Service{datasetSrc: validationDatasetSource{
-		"symbols":                         {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_RECORD, Status: "active", Attributes: map[string]string{"market_type": "equity"}},
-		"dataset_stockcn_equity_kline_1m": {DataSourceID: "stockcn", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Attributes: map[string]string{"market_type": "equity"}},
-	}}
-	task := domain.CollectionTask{
-		SpaceID: "stockcn", TaskID: "stock-bars", DataType: "kline", CollectParams: `{"provider":"stockcn_multi","market_type":"equity","subject_tags":["binance_spot"],"target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`,
-	}
-	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), task))
-}
-
 func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", TaskName: "resample", DataType: "kline_resample", CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_4h","target_frequency":"4h","alignment":"epoch_utc"}`,
@@ -213,7 +202,7 @@ func TestValidateCollectionTaskAcceptsCollectorLocalResampleWithoutCloudRoute(t 
 func TestValidateCollectionTaskAcceptsBoundedStockHistoryMode(t *testing.T) {
 	task := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "stock-bars", TaskName: "stock bars", DataType: "kline", TagIDs: []string{"cn_a_share"},
-		CollectParams: `{"provider":"stockcn_multi","market_type":"equity","target_dataset_id":"dataset_stockcn_equity_kline_1m","frequency":"1m"}`,
+		CollectParams: `{"provider":"eastmoney","market_type":"equity","target_dataset_id":"dataset_stock_bars","frequency":"5m"}`,
 	}
 	require.NoError(t, validateCollectionTask(task))
 }
@@ -1098,8 +1087,10 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1mo"}`
 	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
 
-	// 东方财富只支持 1m：5m 在创建时就拒绝。
+	// 东方财富 A 股支持 1m、5m：其余频率在创建时就拒绝。
 	task.TagIDs = []string{"cn_a_share"}
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"5m"}`
+	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+	task.CollectParams = `{"target_dataset_id":"bars","frequency":"15m"}`
 	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "unsupported")
 }

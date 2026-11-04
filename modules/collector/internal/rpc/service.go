@@ -1250,9 +1250,7 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domai
 	if err != nil {
 		return err
 	}
-	// stockcn_multi is the public multi-provider collector identity, while
-	// the shared stock datasets belong to the stockcn data source.
-	datasetSourceID := collectorDatasetSourceID(params.Collector.Exchange)
+	datasetSourceID := params.Collector.Exchange
 	switch params.Collector.DataType {
 	case "kline":
 		return s.validateDataset(
@@ -1271,13 +1269,6 @@ func (s *Service) validateCollectionTaskDatasets(ctx context.Context, task domai
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", params.Collector.DataType)
 	}
-}
-
-func collectorDatasetSourceID(exchange string) string {
-	if strings.EqualFold(strings.TrimSpace(exchange), "stockcn_multi") {
-		return "stockcn"
-	}
-	return exchange
 }
 
 func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams) error {

@@ -13,7 +13,7 @@ import (
 )
 
 func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
-	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05,
@@ -25,11 +25,11 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
-	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Now: func() time.Time { return now }}
+	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
 	metrics := NewMetrics(prometheus.NewRegistry())
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
-		NewStockKlinePipeline: func(s Storage) (*KlinePipeline, error) {
+		NewStockKlinePipeline: func(s Storage, _ string) (*KlinePipeline, error) {
 			pipeline.Storage = s
 			return pipeline, nil
 		},
@@ -37,14 +37,14 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 		Now:     func() time.Time { return now },
 	}
 	req := Request{
-		BatchID: "handler-metrics-batch", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "handler-metrics-batch", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "handler-metrics", GroupID: 3, GroupCount: 4,
-		Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1}},
+		Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1}},
 	}
 	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
-	require.Equal(t, 1.0, testutil.ToFloat64(metrics.feedResults.WithLabelValues(StockCNSpaceID, StockCNRouteID, "sina", "kline", "3", "realtime", "success")))
+	require.Equal(t, 1.0, testutil.ToFloat64(metrics.feedResults.WithLabelValues(StockCNSpaceID, StockCNRouteID("1m"), "sina", "kline", "3", "realtime", "success")))
 	require.Len(t, storage.rows, 1)
 }
 

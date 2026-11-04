@@ -64,10 +64,10 @@ type Result struct {
 	Rows    []Row
 }
 
-// Service 执行试算。
+// Service 执行试算。source 必须是换算边界包装过的客户端（storageio.Axis）：管线始终在轴上运行，
+// 试算的终点按轴取，结果行的 data_time 换回真实时间再返回。
 type Service struct {
 	source Source
-	clock  periodclock.Clock
 	now    func() time.Time
 	runner *pipeline.Runner
 	udf    *udfhost.Host
@@ -84,8 +84,7 @@ func WithUDF(host *udfhost.Host, fetch func(ctx context.Context, hash string) ([
 }
 
 func New(source Source, workers int, options ...Option) *Service {
-	clock := periodclock.Continuous{}
-	s := &Service{source: source, clock: clock, now: time.Now}
+	s := &Service{source: source, now: time.Now}
 	for _, option := range options {
 		if option != nil {
 			option(s)
@@ -95,7 +94,7 @@ func New(source Source, workers int, options ...Option) *Service {
 	if s.udf != nil {
 		cfg.UDF = s.udf
 	}
-	s.runner = pipeline.NewRunner(source, pipeline.NewStorageData(source), clock, cfg)
+	s.runner = pipeline.NewRunner(source, pipeline.NewStorageData(source), periodclock.Continuous{}, cfg)
 	return s
 }
 
@@ -183,13 +182,14 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		}
 		computed = universe
 	}
-	duration, err := s.clock.Duration(set.Freq)
+	axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
 	if err != nil {
 		return Result{}, err
 	}
-	// 当前所在周期的起点（不含当前未收盘的周期）：周期时钟是连续日历，按周期长度向下取整。
-	end := s.now().UTC().Truncate(duration)
-	if _, err := s.clock.Align(end, set.Freq); err != nil {
+	duration := axis.Step()
+	// 轴上的排他终点：最新已收盘一根的下一期（不含当前未收盘的周期）。
+	end, err := axis.AxisEnd(s.now())
+	if err != nil {
 		return Result{}, err
 	}
 	// 读取之前按标的数估算峰值内存，超限直接拒绝，避免长窗口 × 大全集的试算耗尽管理端内存。
@@ -209,7 +209,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return collect(factor, computation, shown)
+	return collect(factor, computation, shown, axis)
 }
 
 func (s *Service) universe(ctx context.Context, set domain.FactorTask) ([]string, error) {
@@ -222,7 +222,7 @@ func (s *Service) universe(ctx context.Context, set domain.FactorTask) ([]string
 }
 
 // collect 把计算结果整理成按 (标的, 周期, 标签) 排序的行，只保留要展示的标的。
-func collect(factor domain.FactorDef, computation pipeline.Computation, shown []string) (Result, error) {
+func collect(factor domain.FactorDef, computation pipeline.Computation, shown []string, axis periodclock.Axis) (Result, error) {
 	wanted := make(map[string]bool, len(shown))
 	for _, subject := range shown {
 		wanted[subject] = true
@@ -249,6 +249,10 @@ func collect(factor domain.FactorDef, computation pipeline.Computation, shown []
 				continue
 			}
 			at, _ := values[0].(time.Time)
+			at, err := axis.FromAxis(at)
+			if err != nil {
+				return Result{}, err
+			}
 			tag, _ := values[1].(string)
 			row := Row{Subject: subject, Tag: tag, DataTime: at, Values: make([]*float64, len(factor.Outputs))}
 			for i := range factor.Outputs {

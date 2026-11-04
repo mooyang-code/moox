@@ -26,7 +26,7 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime,
 		return nil, fmt.Errorf("initialize subject HTTP client: %w", err)
 	}
 	process.beforeClose = append(process.beforeClose, func() error { http.Close(); return nil })
-	listers, err := marketwiring.NewSubjectListers(http)
+	listers, indexListers, err := marketwiring.NewSubjectListers(http)
 	if err != nil {
 		return nil, fmt.Errorf("initialize subject listers: %w", err)
 	}
@@ -46,7 +46,7 @@ func registerSubjectSyncRuntime(s *server.Server, cfg *Config, process *Runtime,
 		}
 	}
 	metrics := subjectsync.NewMetrics(prometheus.DefaultRegisterer)
-	tags := &subjectsync.TagRunner{Store: storage, Runs: runs, Listers: listers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
+	tags := &subjectsync.TagRunner{Store: storage, Runs: runs, Listers: listers, IndexListers: indexListers, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	attributes := &subjectsync.AttributeRunner{Store: storage, Listers: listers, Jobs: cfg.SubjectSync.Attributes, FetchTimeout: cfg.SubjectSync.FetchTimeout, Metrics: metrics}
 	syncer := &subjectsync.Syncer{Tags: tags, Attributes: attributes}
 	if err := registerSubjectSyncTimers(s, process, syncer.RunDueTags, syncer.RunDueAttributes); err != nil {

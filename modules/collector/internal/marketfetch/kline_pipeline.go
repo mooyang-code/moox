@@ -12,16 +12,14 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
-	StockCNSpaceID   = "stockcn"
-	StockCNDatasetID = "dataset_stockcn_equity_kline_1m"
-	StockCNRouteID   = "stockcn_equity_kline_1m_v4"
+	StockCNSpaceID = "stockcn"
 	// Each provider gets three attempts before the next provider in the route.
 	klineProviderAttemptBudget = 3
 )
@@ -42,7 +40,6 @@ type KlinePipeline struct {
 	SeriesTag      string
 	SettleDelay    time.Duration
 	Now            func() time.Time
-	Calendar       *stockmarket.Calendar
 	Metrics        *Metrics
 	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
 	Reporter     ItemReporter
@@ -64,9 +61,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	}
 	isStock := p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID
 	isStockEquity := isStock && (p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity)
-	if req.SpaceID != spaceID || req.DatasetID != datasetID || (isStockEquity && frequency != marketdata.FrequencyMinute) {
-		return nil, fmt.Errorf("kline pipeline requires %s/%s/1m for stockcn", spaceID, datasetID)
+	if req.SpaceID != spaceID || req.DatasetID != datasetID {
+		return nil, fmt.Errorf("K 线流水线绑定的是 %s/%s，请求是 %s/%s", spaceID, datasetID, req.SpaceID, req.DatasetID)
 	}
+	marketID := firstNonEmptyString(p.MarketID, req.SpaceID)
 	sourceID := firstNonEmptyString(p.SourceID, req.SourceID)
 	if p.SourceID != "" && req.SourceID != "" && !strings.EqualFold(strings.TrimSpace(p.SourceID), strings.TrimSpace(req.SourceID)) {
 		return nil, fmt.Errorf("kline pipeline source binding differs: pipeline=%s request=%s", p.SourceID, req.SourceID)
@@ -78,7 +76,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	stockRouteVersion := ""
 	var stockSources []stockCNSource
 	if isStock && p.AutoBindSource && sourceID == "" {
-		stockRouteVersion, stockSources, frequencyErr = stockCNAssignmentRoute()
+		stockRouteVersion, stockSources, frequencyErr = stockCNAssignmentRoute(req.Frequency)
 		if frequencyErr != nil {
 			return nil, frequencyErr
 		}
@@ -93,8 +91,8 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	if p.Now != nil {
 		started = p.Now()
 	}
-	if req.BatchKind == domain.BatchKindRealtime && !req.RequirePeriodCommit && p.Calendar != nil && frequency == marketdata.FrequencyMinute {
-		shouldCollect, err := stockCNShouldCollectMinute(p.Calendar, started, p.SettleDelay)
+	if req.BatchKind == domain.BatchKindRealtime && !req.RequirePeriodCommit {
+		shouldCollect, err := latestClosedIsTradingBar(marketID, frequency, started, p.SettleDelay)
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +173,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if limit <= 0 {
 				limit = MaxRealtimeRows
 			}
-			marketID := marketdata.MarketID(firstNonEmptyString(p.MarketID, req.SpaceID))
 			instrumentType := p.InstrumentType
 			if instrumentType == "" {
 				instrumentType = marketdata.InstrumentEquity
@@ -199,13 +196,14 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				limit = 1
 			}
 			historyAsOf := started.UTC()
-			if item.Canary && isStock && p.Calendar != nil && !req.RequirePeriodCommit {
-				canaryStart, canaryEnd, calendarErr := p.Calendar.LatestClosedMinute(started.UTC(), p.SettleDelay)
+			if item.Canary && !req.RequirePeriodCommit {
+				// 金丝雀取该市场此频率最近一根已收盘的交易桶：休市、周末、节假日时回到上一个交易时段。
+				bucket, calendarErr := markets.LatestClosedBar(marketID, req.Frequency, started.UTC().Add(-max(p.SettleDelay, 0)))
 				if calendarErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeProviderError, "calendar", calendarErr)
 					return
 				}
-				coverageStart, coverageEnd, historyAsOf = canaryStart, canaryEnd, canaryEnd
+				coverageStart, coverageEnd, historyAsOf = bucket.Start, bucket.End, bucket.End
 			}
 			// Each provider request owns its DNS snapshot, including the IP slices.
 			var dnsRoutes map[string][]string
@@ -217,7 +215,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -496,7 +494,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 					lastErr = specErr
 					break
 				}
-				if coverageErr := spec.History.ValidateCoverage(rows, req.StartTime); coverageErr != nil {
+				if coverageErr := spec.HistoryFor(req.Frequency).ValidateCoverage(rows, req.StartTime); coverageErr != nil {
 					lastErr = coverageErr
 					break
 				}
@@ -613,7 +611,7 @@ func (p *KlinePipeline) observeFeed(req Request, providerID, feedKind, result st
 
 func requestKlineRouteID(p *KlinePipeline, frequency string) string {
 	if p == nil {
-		return StockCNRouteID
+		return StockCNRouteID(frequency)
 	}
 	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), "crypto") {
 		product := "spot"
@@ -627,7 +625,10 @@ func requestKlineRouteID(p *KlinePipeline, frequency string) string {
 		}
 		return "binance_" + product + "_kline_" + frequency
 	}
-	return firstNonEmptyString(p.RouteID, StockCNRouteID)
+	if strings.EqualFold(strings.TrimSpace(firstNonEmptyString(p.MarketID, p.SpaceID)), StockCNSpaceID) && (p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
+		return StockCNRouteID(frequency)
+	}
+	return p.RouteID
 }
 
 func metricKlineResult(err error) string {
@@ -699,35 +700,25 @@ func defaultMarketSeriesTag(provider, source, market string) string {
 	return strings.Join(parts, "|")
 }
 
-func stockCNShouldCollectMinute(calendar *stockmarket.Calendar, now time.Time, settleDelay time.Duration) (bool, error) {
-	if calendar == nil {
-		return false, fmt.Errorf("stockcn calendar is required")
+// latestClosedIsTradingBar 判断实时批此刻对应的那根（结算延迟之后刚收盘的一根）是不是该市场的交易桶：
+// 连续交易的市场总是；交易时段市场在午休、收盘后、非交易日不是，这时不取数。
+func latestClosedIsTradingBar(marketID string, frequency marketdata.Frequency, now time.Time, settleDelay time.Duration) (bool, error) {
+	step := frequency.Duration()
+	if step <= 0 {
+		return true, nil
 	}
-	if err := calendar.ValidateHorizon(now, 14); err != nil {
-		return false, fmt.Errorf("stockcn calendar horizon: %w", err)
-	}
-	location := calendar.Location()
-	if location == nil {
-		return false, fmt.Errorf("stockcn calendar timezone is unavailable")
-	}
-	local := now.In(location)
-	expected, err := calendar.ExpectedMinuteBars(local.Format("2006-01-02"))
+	target := now.UTC().Add(-max(settleDelay, 0)).Truncate(step).Add(-step)
+	trading, err := markets.TradingBar(marketID, string(frequency), target)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("交易日历：%w", err)
 	}
-	if settleDelay < 0 {
-		settleDelay = 0
-	}
-	target := now.UTC().Add(-settleDelay).Truncate(time.Minute).Add(-time.Minute)
-	for _, barStart := range expected {
-		if barStart.Equal(target) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return trading, nil
 }
 
 func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+	if strings.TrimSpace(datasetID) == "" {
+		return nil, fmt.Errorf("A 股 K 线行缺少目标数据集")
+	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
 		return nil, err
 	}
@@ -762,9 +753,9 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
-			SpaceId: StockCNSpaceID, DatasetId: firstNonEmptyString(datasetID, StockCNDatasetID),
+			SpaceId: StockCNSpaceID, DatasetId: strings.TrimSpace(datasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: bar.SubjectID, Freq: "1m", DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
+				SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
 			}},
 		},
 		Fields: fields,
@@ -811,7 +802,7 @@ func normalizeCandidateChain(configured []string, primary string) []string {
 	result := make([]string, 0, len(configured)+1)
 	for _, provider := range append([]string{primary}, configured...) {
 		provider = strings.ToLower(strings.TrimSpace(provider))
-		if provider == "" || provider == "stockcn_multi" {
+		if provider == "" {
 			continue
 		}
 		if _, ok := seen[provider]; ok {

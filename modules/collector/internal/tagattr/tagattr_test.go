@@ -13,6 +13,8 @@ func TestAccessorsNormalizeAndDefault(t *testing.T) {
 	require.Equal(t, "binance", Source(tag))
 	require.Equal(t, "13 * * * *", Cron(tag))
 	require.Equal(t, DefaultTimezone, Timezone(tag), "未配置时区取缺省值")
+	require.Empty(t, Index(tag), "未配置指数时同步数据源的全部标的")
+	require.Equal(t, "000300", Index(&storagepb.Tag{Attributes: map[string]string{KeySyncIndex: " 000300 "}}))
 
 	empty := &storagepb.Tag{}
 	require.Empty(t, Source(empty))

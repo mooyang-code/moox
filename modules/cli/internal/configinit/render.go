@@ -50,14 +50,27 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 		// 校验错误只提到字段名和规则，不含值；仍然只返回错误文本，不返回渲染结果。
 		return nil, err
 	}
-	if manifest.ComponentHost("factor-engine") != "" && manifest.ComponentHost("collector-stream") != "" {
+	if manifest.ComponentHost("factor-engine") == "" {
+		// 没有因子机：打开因子只会长期告警。
+		if lines, err = setKey(lines, "factors", "enabled", "false"); err != nil {
+			return nil, err
+		}
+		return []byte(strings.Join(lines, "\n")), nil
+	}
+	if manifest.ComponentHost("collector-stream") != "" {
 		return raw, nil
 	}
-	// 默认因子任务读 crypto 数据：没有因子机或海外机时打开只会长期告警。
-	if lines, err = setKey(lines, "factors", "enabled", "false"); err != nil {
-		return nil, err
+	// 有因子机、没有海外机：crypto 采集不起来，去掉读 crypto 数据的默认因子任务，保留其他空间（如 A 股）的任务。
+	var crypto []string
+	for _, task := range manifest.Factors.Tasks {
+		if task.SpaceID == "crypto" {
+			crypto = append(crypto, task.ID)
+		}
 	}
-	return []byte(strings.Join(lines, "\n")), nil
+	if len(crypto) == 0 {
+		return raw, nil
+	}
+	return removeFactorEntries(raw, crypto, nil, &MigrateReport{})
 }
 
 // replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机和部署段整体换成生成的拓扑。

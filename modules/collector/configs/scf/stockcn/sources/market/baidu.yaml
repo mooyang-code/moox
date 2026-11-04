@@ -5,7 +5,6 @@ provider:
   shadow_feeds: [kline]
   hosts: [finance.pae.baidu.com]
   kline:
-    frequency: 1m
     mode: shadow
     complete_ohlcv: false
   rate_limit:

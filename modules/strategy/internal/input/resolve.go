@@ -81,7 +81,8 @@ func Resolve(ctx context.Context, client Client, spaceID, taskID string, strateg
 		return Resolved{}, nil, err
 	}
 	resolved.MarketType = marketType
-	resolved.Spot = marketType == "spot"
+	// A 股（equity）与现货同样只能做多、不加杠杆、不按数量分批持有。
+	resolved.Spot = marketType == "spot" || marketType == "equity"
 	if err := CheckCalendar(resolved.Calendar, resolved.Bar); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
 	}
@@ -318,7 +319,7 @@ func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time
 // 标签缺失、不一致或取值未知都拒绝启用，避免把合约当作现货（或相反）。
 func sourceMarketType(ctx context.Context, client Client, spaceID string, source DatasetInfo) (string, error) {
 	if value := strings.ToLower(strings.TrimSpace(source.Attributes["market_type"])); value != "" {
-		if value != "spot" && value != "swap" {
+		if !knownMarketType(value) {
 			return "", fmt.Errorf("源数据集 %s 的 market_type=%s 不受支持", source.DatasetID, value)
 		}
 		return value, nil
@@ -332,7 +333,7 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 		if err != nil {
 			return "", err
 		}
-		if tag.MarketType != "spot" && tag.MarketType != "swap" {
+		if !knownMarketType(tag.MarketType) {
 			return "", fmt.Errorf("标签 %s 的市场类型 %q 不受支持", tagID, tag.MarketType)
 		}
 		if marketType != "" && marketType != tag.MarketType {
@@ -343,10 +344,16 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 	return marketType, nil
 }
 
-// stockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
-const stockTradingDaysPerYear = 244
+// knownMarketType 报告策略支持的市场类型：现货 spot、永续合约 swap、A 股 equity。
+func knownMarketType(value string) bool {
+	return value == "spot" || value == "swap" || value == "equity"
+}
 
-// retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；A 股日线按交易日折算。forever 或无法解析返回 false。
+// StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
+const StockTradingDaysPerYear = 244
+
+// retentionBars 把数据集保留期（"<n>h" 或 "forever"）换算为根数；A 股先按交易日折算，再乘每个交易日的根数（日线 1，
+// 5m 为 48）。forever 或无法解析返回 false。
 func retentionBars(retention, calendar, bar string) (int, bool) {
 	retention = strings.TrimSpace(strings.ToLower(retention))
 	if retention == "" || retention == "forever" || !strings.HasSuffix(retention, "h") {
@@ -356,8 +363,8 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	if err != nil || hours <= 0 {
 		return 0, false
 	}
-	if normalizeCalendar(calendar) == "cn_stock" {
-		return hours / 24 * stockTradingDaysPerYear / 365, true
+	if perDay := TradingDayBars(calendar, bar); perDay > 0 {
+		return hours / 24 * StockTradingDaysPerYear / 365 * perDay, true
 	}
 	duration, err := parseBarDuration(bar)
 	if err != nil || duration <= 0 {

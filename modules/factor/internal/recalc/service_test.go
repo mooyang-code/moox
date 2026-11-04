@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +16,7 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	seedRecalcTask(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	one, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-1", start, end)
@@ -33,7 +32,7 @@ func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
 	subjects := &changingSubjects{values: []string{"BTC"}}
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(subjects))
+	svc := NewService(db, WithSubjectProvider(subjects))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	accepted, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-omitted", start, end)
@@ -69,7 +68,7 @@ func TestRecalcUsesSelectedFactorsOnly(t *testing.T) {
 		testRecalcFactor("one", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("two", domain.MemberStatusEnabled, 5),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	job, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
 	require.NoError(t, err)
@@ -127,7 +126,7 @@ func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	)
 	// A definition that exists but was never added to this set.
 	require.NoError(t, db.CreateFactor(context.Background(), testRecalcFactor("outsider", "", 1).def))
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"outsider"}, nil, "req-outsider", start, start.Add(time.Minute))
@@ -140,7 +139,7 @@ func TestRecalcRejectsDisabledMember(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 		testRecalcFactor("parked", domain.MemberStatusDisabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"parked"}, nil, "req-parked", start, start.Add(time.Minute))
@@ -154,7 +153,7 @@ func TestRecalcDefaultsToAllEnabledMembers(t *testing.T) {
 		testRecalcFactor("b_parked", domain.MemberStatusDisabled, 3),
 		testRecalcFactor("c_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	job, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-default", start, start.Add(time.Minute))
@@ -167,4 +166,31 @@ type recalcSubjects []string
 
 func (r recalcSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return append([]string(nil), r...), nil
+}
+
+// A 股补算区间：起点是交易桶的起点，终点可以是桶的起点或收盘时刻（含日历最后一天的收盘），按真实时间入库；午休中间的时刻不行。
+func TestAlignRangeAcceptsStockCNCloseAsEnd(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	at := func(value string) time.Time {
+		parsed, err := time.ParseInLocation("2006-01-02 15:04", value, cst)
+		require.NoError(t, err)
+		return parsed
+	}
+	for _, c := range [][2]string{
+		{"2026-10-09 09:30", "2026-10-09 15:00"},
+		{"2026-10-09 09:30", "2026-10-09 11:30"},
+		{"2026-10-09 13:00", "2026-10-12 09:30"},
+		{"2026-12-31 14:00", "2026-12-31 15:00"},
+	} {
+		start, end, err := alignRange("stockcn", "5m", at(c[0]), at(c[1]))
+		require.NoError(t, err, c)
+		require.Equal(t, at(c[0]).UTC(), start)
+		require.Equal(t, at(c[1]).UTC(), end)
+	}
+	_, _, err := alignRange("stockcn", "5m", at("2026-10-09 09:30"), at("2026-10-09 12:00"))
+	require.Error(t, err)
+	_, _, err = alignRange("stockcn", "5m", at("2026-10-09 11:30"), at("2026-10-09 15:00"))
+	require.Error(t, err, "起点必须是交易桶的起点")
+	_, _, err = alignRange("stockcn", "5m", at("2026-10-09 11:25"), at("2026-10-09 11:30"))
+	require.NoError(t, err, "区间里有一根")
 }

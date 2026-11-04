@@ -279,3 +279,42 @@ func TestConfirmedUntilUsesTheEarliestReportingInstance(t *testing.T) {
 	require.True(t, confirmedUntil(fresh(0), datasetValues{}).Equal(base))
 	require.True(t, confirmedUntil(datasetValues{}, fresh(0)).Equal(base))
 }
+
+// 交易所市场休市时生产者不运行：午休、收盘后、非交易日不按连续时间判运行、成功停滞；开盘后有等待中的 K 线时照常判。
+func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "collector", spaceID: "stockcn", datasetID: "dataset_stock_5m", freq: "5m"}
+	lastRun := cst("2026-10-16", "11:30:05")
+	value := datasetValues{
+		interval: 300, lastRun: float64(lastRun.Unix()), lastSuccess: float64(lastRun.Unix()),
+		output: float64(cst("2026-10-16", "11:25:00").Unix()), arrival: float64(lastRun.Unix()),
+	}
+	at := func(now time.Time) DatasetFrequencyStatus {
+		value.inventory = float64(now.Unix())
+		return datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	}
+
+	lunch := at(cst("2026-10-16", "12:50:00"))
+	require.Equal(t, "healthy", lunch.Status, lunch.Reason)
+	require.Zero(t, lunch.WaitingBars)
+
+	// 13:20：13:00、13:05… 已收线却没到，生产者 11:30 以后没再运行，判为运行停滞。
+	afternoon := at(cst("2026-10-16", "13:20:00"))
+	require.Equal(t, "stale", afternoon.Status)
+	require.Equal(t, "run stale", afternoon.Reason)
+
+	// 周五收盘后到周一开盘前都不报停滞。
+	value.lastRun, value.lastSuccess = float64(cst("2026-10-16", "15:00:05").Unix()), float64(cst("2026-10-16", "15:00:05").Unix())
+	value.output, value.arrival = float64(cst("2026-10-16", "14:55:00").Unix()), float64(cst("2026-10-16", "15:00:05").Unix())
+	for _, now := range []time.Time{cst("2026-10-16", "18:00:00"), cst("2026-10-18", "10:00:00"), cst("2026-10-19", "09:29:00")} {
+		weekend := at(now)
+		require.Equal(t, "healthy", weekend.Status, "%s %s", now, weekend.Reason)
+	}
+
+	// 全天交易的市场不受影响：同样的空档照常判运行停滞。
+	cryptoKey := datasetKey{producer: "collector", spaceID: "crypto", datasetID: "dataset_crypto_5m", freq: "5m"}
+	now := cst("2026-10-18", "10:00:00")
+	value.inventory = float64(now.Unix())
+	crypto := datasetStatus(now, cryptoKey, value, testRealtimePolicy(), spaceClock{clock: monmetrics.ContinuousClock()})
+	require.Equal(t, "stale", crypto.Status)
+}

@@ -157,3 +157,39 @@ func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
 		t.Fatalf("a failed snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)
 	}
 }
+
+func TestSyncTagsUsesIndexListersForIndexTags(t *testing.T) {
+	hs300 := autoTag("stockcn", "cn_hs300", "auto", "eastmoney", "equity")
+	hs300.Attributes["sync.index"] = "000300"
+	store := &fakeTagStore{tags: []*pb.Tag{hs300, autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity")}, applied: map[string]int{}}
+	runs := newFakeRunStore()
+	calls := 0
+	runner := &TagRunner{
+		Store: store, Runs: runs, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
+		Listers:      Listers{{Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.XSHG"}, {SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
+		IndexListers: IndexListers{{Source: "eastmoney", Index: "000300"}: flakyLister{calls: &calls, failures: 1, items: []marketdata.Instrument{{SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
+	}
+	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn"})
+	if err != nil || len(results) != 2 || results[0].Status != StatusSuccess || results[1].Status != StatusSuccess {
+		t.Fatalf("results=%v err=%v", results, err)
+	}
+	if store.applied["cn_hs300"] != 2 || store.applied["cn_a_share"] != 3 || calls != 2 {
+		t.Fatalf("带 sync.index 的标签取成分股，其余取全部标的：applied=%v calls=%d", store.applied, calls)
+	}
+
+	// 成分股取数一直失败：不应用快照，保留原成员，记录失败。
+	calls = 0
+	store.applied = map[string]int{}
+	runner.IndexListers[IndexListerKey{Source: "eastmoney", Index: "000300"}] = flakyLister{calls: &calls, failures: 3}
+	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "cn_hs300"})
+	if len(results) != 1 || results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || runs.runs["cn_hs300"].LastStatus != "failed" {
+		t.Fatalf("a failed constituent snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)
+	}
+
+	// 没有登记的指数直接报错。
+	hs300.Attributes["sync.index"] = "399001"
+	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "cn_hs300"})
+	if results[0].Status != StatusFailed {
+		t.Fatalf("unknown index must fail: %v", results)
+	}
+}

@@ -52,7 +52,7 @@ func NewJobDefinition() jobdef.JobDefinition {
 		Supports: []jobdef.Support{
 			{Exchange: "binance", Market: "spot", DataType: "kline", SourceKind: "dataset", Frequencies: binanceFrequencies},
 			{Exchange: "binance", Market: "swap", DataType: "kline", SourceKind: "dataset", Frequencies: binanceFrequencies},
-			{Exchange: "eastmoney", Market: "equity", DataType: "kline", SourceKind: "dataset", Frequencies: []string{"1m"}},
+			{Exchange: "eastmoney", Market: "equity", DataType: "kline", SourceKind: "dataset", Frequencies: []string{"1m", "5m"}},
 		},
 		Planner: func(ctx context.Context, rule *domain.CollectionTask, params *domain.CollectParams, subjects []domain.DatasetSubject) ([]domain.TaskSpec, error) {
 			_ = ctx

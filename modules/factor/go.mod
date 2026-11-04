@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/factorexpr v0.0.0-00010101000000-000000000000
@@ -79,6 +80,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/molecule-man/go-brrr v1.3.0 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
@@ -172,3 +174,7 @@ replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gate
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+
+replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
+replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar

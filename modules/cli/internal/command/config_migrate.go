@@ -12,7 +12,7 @@ import (
 
 func newConfigMigrateCommand() *cobra.Command {
 	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention string
-	var removeTasks, removeFactors []string
+	var removeTasks, removeFactors, addTasks []string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -27,14 +27,15 @@ func newConfigMigrateCommand() *cobra.Command {
 - 加 --set-reachability 主机ID=direct|outbound 时设置主机可达性；
 - 加 --add-deployment 主机ID=组件ID[,组件ID] 时把组件并入该主机的 [deployments]（已有的不重复）；
 - 加 --import-scf <JSON> 时整体替换 [scf_plan]（云账号、地域网络与入口主机、空间与市场），并给入口主机补上 region 与 private_address；
-- 加 --remove-factor-task <任务ID>、--remove-factor <因子ID>（都可重复）时删除这些因子任务与因子定义（只改本机配置，线上已有的任务不动）。
+- 加 --remove-factor-task <任务ID>、--remove-factor <因子ID>（都可重复）时删除这些因子任务与因子定义（只改本机配置，线上已有的任务不动）；
+- 加 --add-factor-task <任务ID>（可重复）时把仓库根 moox.toml.example 里这个因子任务原样复制进来（例如 A 股的 ftask_cn_5m），已有同 ID 的任务时报错。
 改写后先按当前格式校验。默认只预览改动；加 --yes 才写回：原文件备份为 moox.toml.bak-<时间>，新内容重新加密保存。
 输出只有键名、因子 ID、文件名、主机 ID 与中文名，不输出任何配置值。
 注意：改主机 ID 只改本机配置；生产主机要按 docs/部署与运维.md「主机命名」重新登记。`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors}
+			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			if retention != "" {
 				target, value, ok := strings.Cut(retention, "=")
@@ -84,6 +85,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&reachability, "set-reachability", "", "设置主机的可达性，写成 主机ID=direct|outbound（只能出站的内网机器用 outbound）")
 	cmd.Flags().StringArrayVar(&removeTasks, "remove-factor-task", nil, "删除这个因子任务（[[factors.tasks]] 的 id），可重复")
 	cmd.Flags().StringArrayVar(&removeFactors, "remove-factor", nil, "删除这个因子定义（[[factors.definitions]] 的 factor_id），可重复；仍被任务引用时报错")
+	cmd.Flags().StringArrayVar(&addTasks, "add-factor-task", nil, "从仓库根 moox.toml.example 复制这个因子任务（[[factors.tasks]] 的 id），可重复；已有同 ID 时报错")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd

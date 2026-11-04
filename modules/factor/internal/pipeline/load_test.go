@@ -131,7 +131,7 @@ func TestBuildPanelCopiesWindowRunsAndFilledColumn(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		cols.AppendRow(t0.Add(time.Duration(10+i)*time.Minute), "", i == 2, seriesstore.Float(float64(100+i)))
 	}
-	view, err := serieswindow.FromColumns(step, []string{"close"}, map[string]*seriesstore.Columns{"BTC": cols})
+	view, err := serieswindow.FromColumns(seriesstore.Source{}, step, []string{"close"}, map[string]*seriesstore.Columns{"BTC": cols})
 	require.NoError(t, err)
 
 	// 网格从 t0+8m 开始、长度 8：窗口只覆盖网格的后 4 格。

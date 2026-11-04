@@ -113,22 +113,27 @@ func ParseFloat(value string) (float64, error) {
 	return number, nil
 }
 
-func NormalizeMinuteKline(subjectID, providerID, providerSymbol string, mode marketdata.TimestampMode, rawTime string, open, high, low, close, volume, amount float64, volumeMultiplier float64, fetchedAt time.Time, requestID string) (marketdata.NormalizedKline, error) {
+// NormalizeIntradayKline 把一根日内 K 线归一化：周期取请求频率，mode 说明上游时间标签是开盘时刻还是收盘时刻。
+func NormalizeIntradayKline(subjectID, providerID, providerSymbol string, frequency marketdata.Frequency, mode marketdata.TimestampMode, rawTime string, open, high, low, close, volume, amount float64, volumeMultiplier float64, fetchedAt time.Time, requestID string) (marketdata.NormalizedKline, error) {
+	period := frequency.Duration()
+	if period <= 0 || period >= 24*time.Hour {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %q 不是日内频率", marketdata.ErrUnsupportedFrequency, frequency)
+	}
 	barTime, err := ParseCNMinute(rawTime)
 	if err != nil {
 		return marketdata.NormalizedKline{}, err
 	}
 	barStart := barTime
-	barEnd := barTime.Add(time.Minute)
+	barEnd := barTime.Add(period)
 	if mode == marketdata.TimestampModeClose {
 		barEnd = barTime
-		barStart = barEnd.Add(-time.Minute)
+		barStart = barEnd.Add(-period)
 	}
 	row := marketdata.NormalizedKline{
 		SubjectID:         subjectID,
 		ProviderID:        providerID,
 		ProviderSymbol:    providerSymbol,
-		Frequency:         string(marketdata.FrequencyMinute),
+		Frequency:         string(frequency),
 		BarStart:          barStart.UTC(),
 		BarEnd:            barEnd.UTC(),
 		Open:              open,

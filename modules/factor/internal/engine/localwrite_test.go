@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
@@ -41,7 +40,7 @@ func newTestWriter(t *testing.T) (*localWriter, *seriesstore.Store) {
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	data := localdata.New(localdata.Config{Store: store, Storage: writeStorage{}, Clock: periodclock.Continuous{}})
+	data := localdata.New(localdata.Config{Store: store, Storage: writeStorage{}})
 	return newLocalWriter(data, writeStorage{}), store
 }
 
@@ -207,7 +206,7 @@ func TestLocalWriteAcceptsImporterContractSample(t *testing.T) {
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
 	defer store.Close()
-	data := localdata.New(localdata.Config{Store: store, Storage: contractStorage{}, Clock: periodclock.Continuous{}})
+	data := localdata.New(localdata.Config{Store: store, Storage: contractStorage{}})
 	w := newLocalWriter(data, contractStorage{})
 	resp, status, err := w.write(context.Background(), req)
 	require.NoError(t, err)

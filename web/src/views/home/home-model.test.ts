@@ -24,6 +24,16 @@ import {
   toneIcon,
   toneOf
 } from "./home-model";
+import { freqSeconds } from "@/views/factor/shared/health";
+
+// 引擎在心跳里报的 lag_seconds：落后的已收盘根数 × 周期（crypto 按 7×24 小时数，收盘后留不超过半个周期、最多 30 秒的计算宽限）。
+// 测试按“上一期开盘后过了多久”模拟引擎的算法。
+const engineLag = (freq: string, openedSecondsAgo: number) => {
+  const period = freqSeconds(freq);
+  const grace = Math.min(30, period / 2);
+  return Math.max(0, Math.floor((openedSecondsAgo - grace) / period) - 1) * period;
+};
+
 
 const NOW = Date.parse("2026-10-13T10:00:00");
 const names = { datasets: { dataset_abc: "现货K线" }, views: { view_xyz: "因子宽表" } };
@@ -137,7 +147,7 @@ describe("home data rows", () => {
       {
         factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
         members: [],
-        last_run: { task_id: "b", last_period_time: "1791900000", last_status: "failed", lag_seconds: "600" }
+        last_run: { task_id: "b", last_period_time: "1791900000", last_status: "failed", lag_seconds: String(engineLag("1m", 600)) }
       },
       { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
     ] as unknown as FactorTaskInfo[];
@@ -389,8 +399,7 @@ describe("home tiles", () => {
         task_id: id,
         last_period_time: String(Math.floor((NOW - openedSecondsAgo * 1000) / 1000)),
         last_status: status,
-        // 汇总的“现在”是 上一期时间 + lag_seconds：这里就是服务端读取时距上一期开盘过了多久。
-        lag_seconds: String(openedSecondsAgo)
+        lag_seconds: String(engineLag(freq, openedSecondsAgo))
       }
     });
     const facts = (sets: unknown[]) =>
@@ -470,7 +479,7 @@ describe("home tiles", () => {
         task_id: id,
         last_period_time: String(Math.floor((NOW - openedSecondsAgo * 1000) / 1000)),
         last_status: status,
-        lag_seconds: String(openedSecondsAgo)
+        lag_seconds: String(engineLag("1m", openedSecondsAgo))
       }
     });
     const cardsOf = (sets: unknown[], datasets: unknown[]) =>
@@ -720,9 +729,9 @@ describe("home tiles", () => {
         }
       ] as unknown as FactorTaskInfo[];
     // 上一期开盘后 70 秒、125 秒仍是同一期：1m K 线收盘后才产出，这两个时刻都不是“滞后 1～2 分钟”。
-    for (const lag of ["70", "125"])
-      expect(factorRows(sets(lag), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
-    expect(factorRows(sets("400"), "crypto", names, NOW)[0]).toMatchObject({ lag: "落后 5 分钟", tone: "warn" });
+    for (const ago of [70, 125])
+      expect(factorRows(sets(String(engineLag("1m", ago))), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
+    expect(factorRows(sets(String(engineLag("1m", 400))), "crypto", names, NOW)[0]).toMatchObject({ lag: "落后 5 分钟", tone: "warn" });
   });
 });
 

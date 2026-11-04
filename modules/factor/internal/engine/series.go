@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"sort"
 	"time"
 
@@ -213,7 +214,7 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineTask, changed
 	_, err := f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr == nil && outcome.Status == "degraded" {
 			log.WarnContextf(ctx, "factor_series_recompute_degraded task_id=%s from=%s to=%s failed_subjects=%d", set.Set.TaskID,
-				start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), len(outcome.FailedSubjects))
+				periodclock.FormatPeriod(set.Set.SpaceID, set.Set.Freq, start), periodclock.FormatPeriod(set.Set.SpaceID, set.Set.Freq, end), len(outcome.FailedSubjects))
 		}
 	})
 	return err

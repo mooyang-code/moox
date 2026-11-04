@@ -54,11 +54,12 @@ func TestStockCNProvidersFromCatalogMatchTheFormerSwitch(t *testing.T) {
 	require.NoError(t, err)
 	configs, err := marketfetch.LoadStockCNProviderRuntime(route)
 	require.NoError(t, err)
+	sourceIDs := map[string]string{"sina": "stockcn_minute_http", "tencent": "stockcn_http", "eastmoney": "stockcn_http", "baidu": "stockcn_http", "tdx": "normal_7709"}
 	for id, want := range map[string]string{
 		"sina": "*sina.Provider sina/stockcn_minute_http", "tencent": "*tencent.Provider tencent/stockcn_http",
 		"eastmoney": "*eastmoney.Provider eastmoney/stockcn_http", "baidu": "*baidu.Provider baidu/stockcn_http", "tdx": "*tdx.Provider tdx/normal_7709",
 	} {
-		for _, source := range []string{"", stockCNSourceID(route, id)} {
+		for _, source := range []string{"", sourceIDs[id]} {
 			provider, err := newStockCNProvider(id, source, configs[id])
 			require.NoError(t, err, id)
 			require.Equal(t, want, fmt.Sprintf("%T %s", provider, provider.Descriptor().SourceKey()), id)

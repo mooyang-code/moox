@@ -124,11 +124,14 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	if len(open.Excluded) > 0 {
 		r.logf("回放 %s：%d 个标的的本地数据不满足回放要求，已排除（例如 %s：%s）", spec.ReplayID, len(open.Excluded), open.Excluded[0].Subject, open.Excluded[0].Reason)
 	}
-	step := time.Duration(open.StepSecs) * time.Second
-	if step <= 0 {
-		return r.fail(spec.ReplayID, errors.New("因子引擎没有返回周期时长"))
+	// 决策周期按因子引擎给出的列表推进：有交易时段的市场（A 股）不能按固定步长逐期加，午休、隔夜、休市日没有 K 线。
+	periods := make([]time.Time, 0, len(open.PeriodTimes))
+	for _, at := range open.PeriodTimes {
+		if t := time.Unix(at, 0).UTC(); !t.Before(from) && t.Before(to) {
+			periods = append(periods, t)
+		}
 	}
-	total := int(to.Sub(from) / step)
+	total := len(periods)
 	if err := r.Store.SetBinding(spec.ReplayID, binding, total); err != nil {
 		return Run{}, err
 	}
@@ -142,11 +145,15 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	}
 	var previous Record
 	hasPrevious := false
-	for t := from; t.Before(to); t = t.Add(step) {
+	for i, t := range periods {
 		if err := r.waitIfPaused(ctx, spec.ReplayID); err != nil {
 			return r.finish(spec.ReplayID, err)
 		}
-		rec, err := r.processPeriod(ctx, spec, binding, step, t, previous, hasPrevious)
+		var prior time.Time
+		if i > 0 {
+			prior = periods[i-1]
+		}
+		rec, err := r.processPeriod(ctx, spec, binding, t, prior, previous, hasPrevious)
 		if err != nil {
 			return r.finish(spec.ReplayID, err)
 		}
@@ -226,8 +233,8 @@ type periodOutcome struct {
 	alreadyDone bool
 }
 
-// processPeriod 执行一期；已经完成的周期直接返回记录。
-func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyBinding, step time.Duration, t time.Time, previous Record, hasPrevious bool) (periodOutcome, error) {
+// processPeriod 执行一期；已经完成的周期直接返回记录。prior 是上一个决策周期（第一期为零值）。
+func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyBinding, t, prior time.Time, previous Record, hasPrevious bool) (periodOutcome, error) {
 	existing, err := r.Store.GetRecord(spec.ReplayID, t.Unix())
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return periodOutcome{}, err
@@ -236,7 +243,7 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 		return periodOutcome{record: existing, alreadyDone: true}, nil
 	}
 	// 这一期因子要用的参数：上一期结束时生效的参数（闭环回放：策略逐期产出下一期的参数，缺值沿用）。
-	params, paramsErr := r.stepParams(spec, step, t, previous, hasPrevious)
+	params, paramsErr := r.stepParams(spec, prior, previous, hasPrevious)
 	if paramsErr != nil {
 		return periodOutcome{}, paramsErr
 	}
@@ -247,12 +254,12 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 		switch {
 		case hasPrevious:
 			state = previous.State
-		case t.After(mustParse(spec.From)):
-			prior, err := r.Store.GetRecord(spec.ReplayID, t.Add(-step).Unix())
+		case !prior.IsZero():
+			record, err := r.Store.GetRecord(spec.ReplayID, prior.Unix())
 			if err != nil {
 				return periodOutcome{}, fmt.Errorf("读取上一期记录：%w", err)
 			}
-			state = prior.State
+			state = record.State
 		}
 		startedFactor := time.Now()
 		frame, err := r.factorStep(ctx, spec, binding, t, false, params)
@@ -265,7 +272,12 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 		if err != nil {
 			return periodOutcome{}, fmt.Errorf("策略求值 %s：%w", t.Format(time.RFC3339), err)
 		}
-		advance := buildAdvance(spec.ReplayID, t.Add(step), decision, frame)
+		// 决策时刻是这根 K 线的收盘时刻，由因子引擎按市场日历给出。
+		decisionAt, err := time.Parse(time.RFC3339, frame.DecisionAt)
+		if err != nil {
+			return periodOutcome{}, fmt.Errorf("因子引擎返回的决策时刻 %q：%w", frame.DecisionAt, err)
+		}
+		advance := buildAdvance(spec.ReplayID, decisionAt, decision, frame)
 		// 下一期请求的参数以引擎本期实际生效的为基础叠加策略的新参数：策略产出的不合法参数在下一期被引擎拒绝后沿用上一期，
 		// 不会连同非法快照一起被保存、续跑时反复用到。
 		// 引擎返回了生效参数或拒绝原因就以它为准（成员全被拒绝时生效参数为空）；两者都没有（没有请求参数）按请求的计。
@@ -364,11 +376,6 @@ func buildAdvance(replayID string, decisionAt time.Time, decision StrategyDecisi
 
 func decimal(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
-func mustParse(value string) time.Time {
-	t, _ := time.Parse(time.RFC3339, value)
-	return t
-}
-
 func validateSpec(spec *Spec) error {
 	spec.ReplayID, spec.TaskID, spec.InstanceID = strings.TrimSpace(spec.ReplayID), strings.TrimSpace(spec.TaskID), strings.TrimSpace(spec.InstanceID)
 	if spec.ReplayID == "" || spec.InstanceID == "" {
@@ -414,17 +421,18 @@ func bindingDrift(pinned, now StrategyBinding) string {
 	return ""
 }
 
-// stepParams 返回周期 t 因子要用的参数：上一期结束时生效的参数（EffectiveParams）。第一期没有，交给因子引擎按冻结记录或默认值。
-func (r *Runner) stepParams(spec Spec, step time.Duration, t time.Time, previous Record, hasPrevious bool) (MemberParams, error) {
+// stepParams 返回这一期因子要用的参数：上一期结束时生效的参数（EffectiveParams）。第一期（prior 为零值）没有，
+// 交给因子引擎按冻结记录或默认值。
+func (r *Runner) stepParams(spec Spec, prior time.Time, previous Record, hasPrevious bool) (MemberParams, error) {
 	switch {
 	case hasPrevious:
 		return previous.Decision.EffectiveParams, nil
-	case t.After(mustParse(spec.From)):
-		prior, err := r.Store.GetRecord(spec.ReplayID, t.Add(-step).Unix())
+	case !prior.IsZero():
+		record, err := r.Store.GetRecord(spec.ReplayID, prior.Unix())
 		if err != nil {
 			return nil, fmt.Errorf("读取上一期记录：%w", err)
 		}
-		return prior.Decision.EffectiveParams, nil
+		return record.Decision.EffectiveParams, nil
 	}
 	return nil, nil
 }

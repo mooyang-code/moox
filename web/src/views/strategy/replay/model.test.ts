@@ -174,5 +174,9 @@ describe("replay model helpers", () => {
     expect(
       replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" })
     ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
+    // A 股日内的区间是真实时刻，按 UTC 时间写。
+    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" })).toBe(
+      "2026-10-08 03:00 UTC → 2026-10-08 05:30 UTC"
+    );
   });
 });

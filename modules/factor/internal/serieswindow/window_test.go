@@ -199,7 +199,7 @@ func TestNullBecomesNaNAndMultipleTags(t *testing.T) {
 
 func TestFromColumnsBuildsViewAndRejectsGaps(t *testing.T) {
 	c := rows(5, 9, "")
-	v, err := FromColumns(60, NumericFields(fields), map[string]*seriesstore.Columns{"BTC": c})
+	v, err := FromColumns(seriesstore.Source{}, 60, NumericFields(fields), map[string]*seriesstore.Columns{"BTC": c})
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC"}, v.Subjects())
 	s := v.Series("BTC")[0]
@@ -212,7 +212,7 @@ func TestFromColumnsBuildsViewAndRejectsGaps(t *testing.T) {
 
 	gap := rows(0, 2, "")
 	gap.AppendRow(at(5), "", false, seriesstore.Float(5), seriesstore.Float(1), seriesstore.Int(1), seriesstore.Str("n"))
-	_, err = FromColumns(60, NumericFields(fields), map[string]*seriesstore.Columns{"BTC": gap})
+	_, err = FromColumns(seriesstore.Source{}, 60, NumericFields(fields), map[string]*seriesstore.Columns{"BTC": gap})
 	require.Error(t, err)
 }
 

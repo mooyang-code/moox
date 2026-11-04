@@ -2,28 +2,24 @@ package marketwiring
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 
-func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipeline, error) {
-	providerID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_PROVIDER")))
-	sourceID := strings.ToLower(strings.TrimSpace(os.Getenv("MOOX_MARKET_FETCH_SOURCE_ID")))
-	if providerID != "" || sourceID != "" {
-		if providerID == "" || sourceID == "" {
-			return nil, fmt.Errorf("stockcn source-bound runtime requires provider and source_id")
-		}
-		return NewStockKlinePipelineForSource(storage, providerID, sourceID)
+// NewStockKlinePipeline 构造 A 股股票某个频率的 K 线流水线：候选链取路由里该频率的配置，
+// 来源按标的在 primary 之间分配，失败后按候选链依次兜底。
+func NewStockKlinePipeline(storage marketfetch.Storage, frequency string) (*marketfetch.KlinePipeline, error) {
+	if storage == nil {
+		return nil, fmt.Errorf("stockcn K 线流水线缺少 Storage")
 	}
 	route, err := marketfetch.LoadStockCNRoute()
+	if err != nil {
+		return nil, err
+	}
+	kline, err := route.Kline(frequency)
 	if err != nil {
 		return nil, err
 	}
@@ -31,13 +27,14 @@ func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipel
 	if err != nil {
 		return nil, err
 	}
+	chain := kline.ProviderChain()
 	registry := marketdata.NewRegistry()
-	for _, providerID := range route.KlineProviders() {
-		providerConfig, ok := providerConfigs[providerID]
+	for _, source := range kline.Sources() {
+		providerConfig, ok := providerConfigs[source.Provider]
 		if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
-			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", providerID)
+			return nil, fmt.Errorf("stockcn K 线来源 %q 在数据源配置里没有启用", source.Provider)
 		}
-		provider, providerErr := newStockCNProvider(providerID, "", providerConfig)
+		provider, providerErr := newStockCNProvider(source.Provider, source.SourceID, providerConfig)
 		if providerErr != nil {
 			return nil, providerErr
 		}
@@ -45,94 +42,15 @@ func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipel
 			return nil, err
 		}
 	}
-	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	chain := configuredStockCNProviderChain("MOOX_MARKET_FETCH_PROVIDER_CHAIN", route.KlineProviders())
-	if len(chain) == 0 {
-		return nil, fmt.Errorf("stockcn kline provider chain is empty")
-	}
-	if err := validateStockCNProviderChain(chain, providerConfigs, true); err != nil {
-		return nil, err
-	}
-	calendar, err := loadStockCNCalendar()
-	if err != nil {
-		return nil, err
-	}
-	return &marketfetch.KlinePipeline{Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true, RouteID: route.RouteID, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, InstrumentType: marketdata.InstrumentEquity, DatasetID: marketfetch.StockCNDatasetID, Calendar: calendar, SettleDelay: 5 * time.Second}, nil
-}
-
-func NewStockKlinePipelineForSource(storage marketfetch.Storage, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
-	if storage == nil {
-		return nil, fmt.Errorf("stockcn kline storage is required")
-	}
-	providerID = strings.ToLower(strings.TrimSpace(providerID))
-	sourceID = strings.ToLower(strings.TrimSpace(sourceID))
-	if providerID == "" || sourceID == "" {
-		return nil, fmt.Errorf("stockcn source-bound runtime requires provider and source_id")
-	}
-	route, err := marketfetch.LoadStockCNRoute()
-	if err != nil {
-		return nil, err
-	}
-	found := false
-	for _, candidate := range route.KlineSources() {
-		if candidate.Provider == providerID && candidate.SourceID == sourceID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("stockcn source %s/%s is not an active route source", providerID, sourceID)
-	}
-	providerConfigs, err := marketfetch.LoadStockCNProviderRuntime(route)
-	if err != nil {
-		return nil, err
-	}
-	providerConfig, ok := providerConfigs[providerID]
-	if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
-		return nil, fmt.Errorf("stockcn source %s/%s is not active in source config", providerID, sourceID)
-	}
-	registry := marketdata.NewRegistry()
-	for _, candidateID := range route.KlineProviders() {
-		candidateConfig, candidateOK := providerConfigs[candidateID]
-		if !candidateOK || !candidateConfig.KlineEnabled || candidateConfig.KlineShadow {
-			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", candidateID)
-		}
-		candidateSourceID := stockCNSourceID(route, candidateID)
-		candidate, providerErr := newStockCNProvider(candidateID, candidateSourceID, candidateConfig)
-		if providerErr != nil {
-			return nil, providerErr
-		}
-		if err := registry.Register(candidate); err != nil {
-			return nil, err
-		}
-	}
-	router, err := marketdata.NewRouter(registry, len(route.KlineProviders())*marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	calendar, err := loadStockCNCalendar()
+	router, err := marketdata.NewRouter(registry, len(chain)*marketfetch.RuntimeKlineProviderAttemptBudget(), nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	return &marketfetch.KlinePipeline{
-		Router: router, Storage: storage, CandidateChain: route.KlineProviders(),
-		RouteID: route.RouteID, SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID,
-		InstrumentType: marketdata.InstrumentEquity,
-		DatasetID:      marketfetch.StockCNDatasetID, Calendar: calendar,
+		Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true,
+		SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, InstrumentType: marketdata.InstrumentEquity,
 		SettleDelay: 5 * time.Second,
 	}, nil
-}
-
-func stockCNSourceID(route marketfetch.StockCNRoute, providerID string) string {
-	for _, source := range route.KlineSources() {
-		if source.Provider == strings.ToLower(strings.TrimSpace(providerID)) {
-			return source.SourceID
-		}
-	}
-	return ""
 }
 
 // NewCryptoKlinePipeline is the crypto composition root for the same common
@@ -168,42 +86,6 @@ func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.
 	return pipeline, nil
 }
 
-func loadStockCNCalendar() (*stockmarket.Calendar, error) {
-	_, sourceFile, _, _ := runtime.Caller(0)
-	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	candidates := []string{strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")), "markets/stockcn/calendar.yaml", "config/markets/stockcn/calendar.yaml", "modules/collector/config/markets/stockcn/calendar.yaml", sourceRelative}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Clean(candidate)); err != nil {
-			continue
-		}
-		calendar, err := stockmarket.LoadCalendar(candidate)
-		if err != nil {
-			return nil, fmt.Errorf("load stockcn calendar %s: %w", candidate, err)
-		}
-		return calendar, nil
-	}
-	return nil, fmt.Errorf("stockcn calendar config was not found")
-}
-
-func validateStockCNProviderChain(chain []string, providers map[string]marketfetch.StockCNProviderRuntime, kline bool) error {
-	for _, providerID := range chain {
-		config, ok := providers[strings.ToLower(strings.TrimSpace(providerID))]
-		if !ok {
-			return fmt.Errorf("stockcn provider chain contains unconfigured provider %q", providerID)
-		}
-		if kline && (!config.KlineEnabled || config.KlineShadow) {
-			return fmt.Errorf("stockcn kline provider %q is not active", providerID)
-		}
-		if !kline && !config.InstrumentEnabled {
-			return fmt.Errorf("stockcn instrument provider %q is not active", providerID)
-		}
-	}
-	return nil
-}
-
 // newStockCNProvider 从行情源目录构造 A 股股票数据源；sourceID 为空时取登记的默认值，运行参数来自数据源配置文件。
 func newStockCNProvider(providerID, sourceID string, config marketfetch.StockCNProviderRuntime) (marketdata.MarketProvider, error) {
 	entry, err := catalog.Default().Lookup(marketfetch.StockCNSpaceID, marketdata.InstrumentEquity, providerID, sourceID)
@@ -219,26 +101,4 @@ func stockCNSettings(config marketfetch.StockCNProviderRuntime) marketdata.Sourc
 		BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, Hosts: config.Hosts, Port: config.Port,
 		MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest, RateLimit: config.RateLimit,
 	}
-}
-
-func configuredStockCNProviderChain(envKey string, fallback []string) []string {
-	raw := strings.TrimSpace(os.Getenv(envKey))
-	if raw == "" {
-		return append([]string(nil), fallback...)
-	}
-	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '|' })
-	chain := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		provider := strings.ToLower(strings.TrimSpace(part))
-		if provider == "" {
-			continue
-		}
-		if _, exists := seen[provider]; exists {
-			continue
-		}
-		seen[provider] = struct{}{}
-		chain = append(chain, provider)
-	}
-	return chain
 }

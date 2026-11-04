@@ -10,6 +10,7 @@ package barclock
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -60,6 +61,11 @@ type Clock interface {
 	ValidateSource(source time.Duration) error
 	// SourceTimes 返回桶内应有的源 K 线开盘时刻（升序），不含午休与休市。
 	SourceTimes(b Bucket, source time.Duration) ([]time.Time, error)
+	// Ordinal 返回桶的交易序号：相邻两个桶的序号相差 1，休市不占序号。
+	// epoch_utc 是自 Unix 零点起的周期数；session 是“交易日序号 × 每日根数 + 日内序号”。
+	Ordinal(b Bucket) (int64, error)
+	// BucketAtOrdinal 是 Ordinal 的反向。超出交易日历覆盖范围时返回 ErrOutOfCoverage。
+	BucketAtOrdinal(n int64) (Bucket, error)
 }
 
 func closedBefore(c Clock, now time.Time, n int) ([]Bucket, error) {
@@ -132,6 +138,19 @@ func (c epochClock) Between(start, end time.Time, limit int) ([]Bucket, error) {
 		out = append(out, c.bucket(cursor))
 	}
 	return out, nil
+}
+
+func (c epochClock) Ordinal(b Bucket) (int64, error) {
+	step := int64(c.period / time.Second)
+	seconds := b.Start.UTC().Unix()
+	if seconds%step != 0 {
+		return 0, fmt.Errorf("%w：%s 不是 %s 的桶起点", ErrNoBucket, b.Start.UTC().Format(time.RFC3339), c.period)
+	}
+	return seconds / step, nil
+}
+
+func (c epochClock) BucketAtOrdinal(n int64) (Bucket, error) {
+	return c.bucket(time.Unix(n*int64(c.period/time.Second), 0)), nil
 }
 
 func (c epochClock) ValidateSource(source time.Duration) error {

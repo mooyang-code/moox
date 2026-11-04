@@ -176,7 +176,7 @@ func buildSkillDataAccessConfig(
 	if len(binanceKline) == 0 {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: no Binance spot kline collection task is configured")
 	}
-	stockKline, err := klineDatasets("stockcn", "cn_a_share")
+	stockKline, err := klineDatasets("stockcn", "cn_hs300")
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
 	}

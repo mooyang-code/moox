@@ -19,10 +19,10 @@ func TestRequestPayloadCarriesOutputFieldsOnCollectionItem(t *testing.T) {
 
 func TestRequestValidateRejectsMalformedOrReversedCoverage(t *testing.T) {
 	base := Request{
-		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		BatchKind: domain.BatchKindBackfill,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID,
+			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID,
 			StartTime: "2026-08-30T01:00:00Z", BarLimit: 3,
 		}},
 	}
@@ -49,10 +49,10 @@ func TestRequestValidateRejectsMalformedOrReversedCoverage(t *testing.T) {
 
 func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 	req := Request{
-		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		BatchKind: domain.BatchKindGapRepair,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID,
+			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID,
 			StartTime: "2026-08-30T01:00:00.123456789Z", EndTime: "2026-08-30T01:01:00Z", BarLimit: 3,
 		}},
 	}
@@ -61,10 +61,10 @@ func TestRequestValidateAcceptsRFC3339NanoCoverage(t *testing.T) {
 
 func TestRequestValidateAllowsTenRealtimeBarsAndRejectsEleven(t *testing.T) {
 	base := Request{
-		BatchID: "batch-realtime", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "batch-realtime", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		BatchKind: domain.BatchKindRealtime,
 		Items: []domain.CollectionItem{{
-			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, BarLimit: MaxRealtimeRows,
+			SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID, BarLimit: MaxRealtimeRows,
 		}},
 	}
 	require.NoError(t, base.validate())
@@ -75,12 +75,12 @@ func TestRequestValidateAllowsTenRealtimeBarsAndRejectsEleven(t *testing.T) {
 
 func TestRequestValidateRejectsMixedSourceBinding(t *testing.T) {
 	req := Request{
-		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "batch-1", SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Provider: "sina", SourceID: "stockcn_minute_http",
 		BatchKind: domain.BatchKindRealtime,
 		Items: []domain.CollectionItem{
-			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: StockCNDatasetID, Provider: "sina", SourceID: "stockcn_minute_http"},
-			{SubjectID: "000001.XSHE", Symbol: "sz000001", DatasetID: StockCNDatasetID, Provider: "tdx", SourceID: "normal_7709"},
+			{SubjectID: "600000.XSHG", Symbol: "sh600000", DatasetID: testStockDatasetID, Provider: "sina", SourceID: "stockcn_minute_http"},
+			{SubjectID: "000001.XSHE", Symbol: "sz000001", DatasetID: testStockDatasetID, Provider: "tdx", SourceID: "normal_7709"},
 		},
 	}
 	require.ErrorContains(t, req.validate(), "source binding")

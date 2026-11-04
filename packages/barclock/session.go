@@ -19,6 +19,14 @@ type TradingDays interface {
 	Status(marketcalendar.CivilDate) (marketcalendar.CoverageStatus, error)
 }
 
+// IndexedTradingDays 在 TradingDays 之外还能按序号定位交易日，交易序号（Ordinal）需要它。
+// marketcalendar.TradingCalendar 实现它。
+type IndexedTradingDays interface {
+	TradingDays
+	TradingDayIndex(marketcalendar.CivilDate) (int, error)
+	TradingDayAt(int) (marketcalendar.CivilDate, error)
+}
+
 // span 是一个交易时段，用距本地零点的时长表示。
 type span struct{ open, close time.Duration }
 
@@ -225,6 +233,60 @@ func (c *sessionClock) Between(start, end time.Time, limit int) ([]Bucket, error
 		}
 	}
 	return out, nil
+}
+
+// perDay 返回每个交易日的桶数；A 股没有半日市，每个交易日相同。
+func (c *sessionClock) perDay() int64 {
+	if c.period == 24*time.Hour {
+		return 1
+	}
+	var count int64
+	for _, item := range c.spans {
+		count += int64(item.length() / c.period)
+	}
+	return count
+}
+
+func (c *sessionClock) indexed() (IndexedTradingDays, error) {
+	indexed, ok := c.days.(IndexedTradingDays)
+	if !ok {
+		return nil, fmt.Errorf("%w：交易日历不支持按序号定位", ErrNoCalendar)
+	}
+	return indexed, nil
+}
+
+func (c *sessionClock) Ordinal(b Bucket) (int64, error) {
+	indexed, err := c.indexed()
+	if err != nil {
+		return 0, err
+	}
+	date := c.dateOf(b.Start)
+	day, err := indexed.TradingDayIndex(date)
+	if err != nil {
+		return 0, fmt.Errorf("%w：%s：%v", ErrOutOfCoverage, date, err)
+	}
+	for i, item := range c.dayBuckets(date) {
+		if item.Start.Equal(b.Start) {
+			return int64(day)*c.perDay() + int64(i), nil
+		}
+	}
+	return 0, fmt.Errorf("%w：%s 不是 %s 的交易桶起点", ErrNoBucket, b.Start.UTC().Format(time.RFC3339), c.period)
+}
+
+func (c *sessionClock) BucketAtOrdinal(n int64) (Bucket, error) {
+	indexed, err := c.indexed()
+	if err != nil {
+		return Bucket{}, err
+	}
+	if n < 0 {
+		return Bucket{}, fmt.Errorf("%w：交易序号 %d 为负", ErrOutOfCoverage, n)
+	}
+	perDay := c.perDay()
+	date, err := indexed.TradingDayAt(int(n / perDay))
+	if err != nil {
+		return Bucket{}, fmt.Errorf("%w：%v", ErrOutOfCoverage, err)
+	}
+	return c.dayBuckets(date)[n%perDay], nil
 }
 
 func (c *sessionClock) ValidateSource(source time.Duration) error {

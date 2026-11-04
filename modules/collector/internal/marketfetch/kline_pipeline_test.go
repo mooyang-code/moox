@@ -9,11 +9,13 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
+
+// testStockDatasetID 是测试用的 A 股任务结果数据集（结果数据集由采集任务派生，没有固定 ID）。
+const testStockDatasetID = "dataset_stock_task"
 
 type pipelineClock struct{ now time.Time }
 
@@ -137,33 +139,38 @@ func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
 	require.Equal(t, 1, attempts, "失败时返回实际尝试次数，供 CLS 失败明细使用")
 }
 
-func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
+func TestLatestClosedIsTradingBarHonorsSessionsAndClosedDays(t *testing.T) {
+	shanghai := time.FixedZone("CST", 8*3600)
+	cases := []struct {
+		name      string
+		frequency marketdata.Frequency
+		now       time.Time
+		want      bool
+	}{
+		{"1m 开盘第一根", marketdata.FrequencyMinute, time.Date(2026, 8, 28, 9, 31, 0, 0, shanghai), true},
+		{"1m 午休", marketdata.FrequencyMinute, time.Date(2026, 8, 28, 12, 0, 0, 0, shanghai), false},
+		{"1m 周末", marketdata.FrequencyMinute, time.Date(2026, 8, 29, 10, 0, 0, 0, shanghai), false},
+		{"5m 11:30 取 11:25 那根", marketdata.Frequency5Min, time.Date(2026, 8, 28, 11, 30, 0, 0, shanghai), true},
+		{"5m 13:00 对应的 12:55 不是交易桶", marketdata.Frequency5Min, time.Date(2026, 8, 28, 13, 0, 0, 0, shanghai), false},
+		{"5m 15:00 取 14:55 那根", marketdata.Frequency5Min, time.Date(2026, 8, 28, 15, 0, 0, 0, shanghai), true},
+		{"5m 收盘后", marketdata.Frequency5Min, time.Date(2026, 8, 28, 15, 5, 0, 0, shanghai), false},
+	}
+	for _, tc := range cases {
+		got, err := latestClosedIsTradingBar(StockCNSpaceID, tc.frequency, tc.now, 0)
+		require.NoError(t, err, tc.name)
+		require.Equal(t, tc.want, got, tc.name)
+	}
+	crypto, err := latestClosedIsTradingBar("crypto", marketdata.Frequency5Min, time.Date(2026, 8, 29, 10, 0, 0, 0, shanghai), 0)
 	require.NoError(t, err)
-	location := calendar.Location()
-	openMinute := time.Date(2026, 8, 28, 9, 31, 0, 0, location)
-	shouldCollect, err := stockCNShouldCollectMinute(calendar, openMinute, 0)
-	require.NoError(t, err)
-	require.True(t, shouldCollect)
-	noon := time.Date(2026, 8, 28, 12, 0, 0, 0, location)
-	shouldCollect, err = stockCNShouldCollectMinute(calendar, noon, 0)
-	require.NoError(t, err)
-	require.False(t, shouldCollect)
-	weekend := time.Date(2026, 8, 29, 10, 0, 0, 0, location)
-	shouldCollect, err = stockCNShouldCollectMinute(calendar, weekend, 0)
-	require.NoError(t, err)
-	require.False(t, shouldCollect)
+	require.True(t, crypto, "加密货币连续交易")
 }
 
-func TestStockCNShouldCollectMinuteHonorsSettleDelay(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
-	require.NoError(t, err)
-	location := calendar.Location()
-	barEnd := time.Date(2026, 8, 28, 9, 31, 0, 0, location)
-	shouldCollect, err := stockCNShouldCollectMinute(calendar, barEnd.Add(4*time.Second), 5*time.Second)
+func TestLatestClosedIsTradingBarHonorsSettleDelay(t *testing.T) {
+	barEnd := time.Date(2026, 8, 28, 9, 31, 0, 0, time.FixedZone("CST", 8*3600))
+	shouldCollect, err := latestClosedIsTradingBar(StockCNSpaceID, marketdata.FrequencyMinute, barEnd.Add(4*time.Second), 5*time.Second)
 	require.NoError(t, err)
 	require.False(t, shouldCollect)
-	shouldCollect, err = stockCNShouldCollectMinute(calendar, barEnd.Add(5*time.Second), 5*time.Second)
+	shouldCollect, err = latestClosedIsTradingBar(StockCNSpaceID, marketdata.FrequencyMinute, barEnd.Add(5*time.Second), 5*time.Second)
 	require.NoError(t, err)
 	require.True(t, shouldCollect)
 }
@@ -224,11 +231,9 @@ func TestKlinePipelineCanaryUsesLatestClosedCalendarSession(t *testing.T) {
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrNoClosedBar}))
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
 	require.NoError(t, err)
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
-	require.NoError(t, err)
 	storage := &pipelineStorage{}
-	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Calendar: calendar, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "canary", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "canary", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: now.Add(-23 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3, Canary: true}}})
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "canary", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "canary", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-23 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3, Canary: true}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Equal(t, barStart, observed.StartTime)
@@ -237,7 +242,7 @@ func TestKlinePipelineCanaryUsesLatestClosedCalendarSession(t *testing.T) {
 }
 
 func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbackWithinDeadline(t *testing.T) {
-	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 7, 0, 10, 0, time.UTC) // 15:00:10 Asia/Shanghai：14:59 那根刚过结算延迟
 	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-30"}
 	rateLimit := &marketdata.RateLimitPolicy{RequestsPerSecond: 1000, Burst: 30, MaxConcurrent: 30, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
 	var firstCalls, fallbackCalls int32
@@ -256,13 +261,13 @@ func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbac
 	items := make([]domain.CollectionItem, 0, 30)
 	for index := 0; index < 30; index++ {
 		subjectID := fmt.Sprintf("%06d.XSHG", 600000+index)
-		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 3})
+		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 3})
 	}
 	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-30", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-30", Concurrency: 30, Items: items})
+	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-30", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-30", Concurrency: 30, Items: items})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Len(t, pipeline.Storage.(*pipelineStorage).rows, 30)
@@ -285,14 +290,14 @@ func TestKlinePipelineRejectsRealtimeBarsInsideSettleWindow(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "settle", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "settle", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "settle", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "settle", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
 	require.Empty(t, storage.rows)
 }
 
 func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
-	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
@@ -308,15 +313,15 @@ func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
 	pipeline := &KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: []string{"sina"},
 		SourceID: "sina_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
-		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+		DatasetID: testStockDatasetID, Now: func() time.Time { return now },
 	}
 	payload, err := pipeline.Execute(context.Background(), Request{
 		BatchID: "bound-source", BatchKind: domain.BatchKindRealtime,
-		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+		SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 		Provider: "sina", SourceID: "sina_http", MarketType: "equity", RequestID: "bound-source",
 		Items: []domain.CollectionItem{{
 			SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", SourceID: "sina_http",
-			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+			MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1,
 		}},
 	})
 	require.NoError(t, err)
@@ -325,7 +330,7 @@ func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
 }
 
 func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
-	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
@@ -341,15 +346,15 @@ func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
 	pipeline := &KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: []string{"sina"},
 		SourceID: "stockcn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
-		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+		DatasetID: testStockDatasetID, Now: func() time.Time { return now },
 	}
 	_, err = pipeline.Execute(context.Background(), Request{
 		BatchID: "source-row", BatchKind: domain.BatchKindRealtime,
-		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+		SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 		Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "source-row",
 		Items: []domain.CollectionItem{{
 			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
-			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+			MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1,
 		}},
 	})
 	require.NoError(t, err)
@@ -372,7 +377,7 @@ func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, nil)
 	require.NoError(t, err)
 	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "history", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "history", Items: []domain.CollectionItem{{SubjectID: recent.SubjectID, Symbol: recent.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3}}})
 	require.NoError(t, err)
 	require.Equal(t, "failed", payload.GetStatus())
 	require.Contains(t, payload.GetErrorSummary(), "coverage")
@@ -387,14 +392,12 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}, request: &observed}))
 	router, err := marketdata.NewRouter(registry, 2, nil, nil)
 	require.NoError(t, err)
-	calendar, err := stockmarket.LoadCalendar("../../config/markets/stockcn/calendar.yaml")
-	require.NoError(t, err)
 	storage := &recordingTimerPeriodCommitStorage{}
-	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina"}, Calendar: calendar, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
-	item := domain.CollectionItem{InstanceID: "instance-1", SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", TargetDataTime: period.Format(time.RFC3339Nano), SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}
-	target := domain.WriteTarget{ID: "target-1", SpaceID: StockCNSpaceID, InstanceID: item.InstanceID, TaskID: "task-1", DatasetID: StockCNDatasetID, SeriesIndex: 0, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Frequency: "1m", TargetDataTime: item.TargetDataTime}
+	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina"}, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
+	item := domain.CollectionItem{InstanceID: "instance-1", SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", TargetDataTime: period.Format(time.RFC3339Nano), SeriesIndex: 0, SeriesHash: "series-hash", ExpectedCount: 1, RequirePeriodCommit: true}
+	target := domain.WriteTarget{ID: "target-1", SpaceID: StockCNSpaceID, InstanceID: item.InstanceID, TaskID: "task-1", DatasetID: testStockDatasetID, SeriesIndex: 0, SeriesHash: item.SeriesHash, ExpectedCount: item.ExpectedCount, Frequency: "1m", TargetDataTime: item.TargetDataTime}
 	payload, err := pipeline.Execute(context.Background(), Request{
-		BatchID: "historical-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "historical-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
@@ -409,7 +412,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	noRowsStorage := &recordingTimerPeriodCommitStorage{}
 	pipeline.Storage = noRowsStorage
 	payload, err = pipeline.Execute(context.Background(), Request{
-		BatchID: "unsupported-fields", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "unsupported-fields", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
@@ -423,7 +426,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	mixedFieldsStorage := &recordingTimerPeriodCommitStorage{}
 	pipeline.Storage = mixedFieldsStorage
 	payload, err = pipeline.Execute(context.Background(), Request{
-		BatchID: "mixed-output-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "mixed-output-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
 	})
@@ -436,7 +439,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	partialStorage := &recordingTimerPeriodCommitStorage{failDataset: target.DatasetID}
 	pipeline.Storage = partialStorage
 	payload, err = pipeline.Execute(context.Background(), Request{
-		BatchID: "two-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "two-targets", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target, secondTarget},
 	})
@@ -454,7 +457,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 	missingStorage := &recordingTimerPeriodCommitStorage{}
 	pipeline.Router, pipeline.Storage = router, missingStorage
 	payload, err = pipeline.Execute(context.Background(), Request{
-		BatchID: "missing-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID,
+		BatchID: "missing-target", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID,
 		Frequency: "1m", Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequirePeriodCommit: true,
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	})
@@ -529,14 +532,14 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-1", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-1", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 3, TargetDataTime: "2026-08-28T06:59:00Z", SeriesHash: "residual-period-hash", ExpectedCount: 1}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-1", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-1", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: "2026-08-28T06:59:00Z", BarLimit: 3, TargetDataTime: "2026-08-28T06:59:00Z", SeriesHash: "residual-period-hash", ExpectedCount: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Equal(t, 1, storage.writes)
 	require.Len(t, storage.rows, 1)
 	row := storage.rows[0]
 	require.Equal(t, StockCNSpaceID, row.GetKey().GetSpaceId())
-	require.Equal(t, StockCNDatasetID, row.GetKey().GetDatasetId())
+	require.Equal(t, testStockDatasetID, row.GetKey().GetDatasetId())
 	require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
 	fields := make(map[string]*storagepb.TypedValue, len(row.GetFields()))
 	for _, field := range row.GetFields() {
@@ -585,7 +588,7 @@ func TestKlinePipelineUsesInstrumentNameFromStorageMetadata(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorageWithInstrumentNames{names: map[string]string{"600000.XSHG": "浦发银行"}}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina"}, Now: func() time.Time { return now }}
-	_, err = pipeline.Execute(context.Background(), Request{BatchID: "batch-name", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-name", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 1}}})
+	_, err = pipeline.Execute(context.Background(), Request{BatchID: "batch-name", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-name", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 1}}})
 	require.NoError(t, err)
 	require.Equal(t, "浦发银行", findField(storage.rows[0], "instrument_name").GetStringValue())
 }
@@ -609,7 +612,7 @@ func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	_, err = pipeline.Execute(context.Background(), Request{BatchID: "retry-attempt-batch", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-retry", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, SourceEventID: "retry-key", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
+	_, err = pipeline.Execute(context.Background(), Request{BatchID: "retry-attempt-batch", BatchKind: domain.BatchKindGapRepair, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-retry", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, SourceEventID: "retry-key", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
 }
 
@@ -682,7 +685,7 @@ func TestKlinePipelineFiltersBarsBeforeConfiguredCoverageStart(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-2", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-2", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: after.BarStart.Format(time.RFC3339), EndTime: after.BarEnd.Format(time.RFC3339), BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-2", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-2", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: after.BarStart.Format(time.RFC3339), EndTime: after.BarEnd.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Len(t, storage.rows, 1)
@@ -711,7 +714,7 @@ func TestKlinePipelineUsesThirdProviderAfterThreeAttempts(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent", "eastmoney"}, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
+	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "batch-third", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-third", Items: []domain.CollectionItem{{SubjectID: "600000.XSHG", Symbol: "sh600000", Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: bar.BarStart.Format(time.RFC3339), BarLimit: 3}}})
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", payload.GetStatus())
 	require.Len(t, storage.rows, 1)

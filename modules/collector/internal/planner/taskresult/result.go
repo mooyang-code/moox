@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
@@ -541,8 +542,17 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if marketType = strings.TrimSpace(marketType); marketType == "" {
 		marketType = tagMarketType
 	}
+	// derived 是由市场决定、已有结果数据集缺了要补上的属性：market_type，以及交易时段市场时序结果的 calendar、alignment
+	// （策略按 calendar 选交易日历，缺省按 crypto_24x7；按 alignment 校验行键）。
+	derived := map[string]string{}
+	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		derived = sessionAttributes(spaceID)
+	}
 	if marketType != "" {
-		attrs["market_type"] = marketType
+		derived["market_type"] = marketType
+	}
+	for key, value := range derived {
+		attrs[key] = value
 	}
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
@@ -573,18 +583,23 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			subjectTags = normalizeSubjectTags(get.GetDataset().GetSubjectTags())
 		}
 		assignSource := dataSourceID != "" && get.GetDataset().GetDataSourceId() == ""
-		assignMarket := marketType != "" && get.GetDataset().GetAttributes()["market_type"] == ""
-		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || assignMarket {
+		missing := map[string]string{}
+		for key, value := range derived {
+			if get.GetDataset().GetAttributes()[key] == "" {
+				missing[key] = value
+			}
+		}
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || len(missing) > 0 {
 			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
 			updated.SubjectTags = subjectTags
 			if assignSource {
 				updated.DataSourceId = dataSourceID
 			}
-			if assignMarket {
-				if updated.Attributes == nil {
-					updated.Attributes = map[string]string{}
-				}
-				updated.Attributes["market_type"] = marketType
+			if len(missing) > 0 && updated.Attributes == nil {
+				updated.Attributes = map[string]string{}
+			}
+			for key, value := range missing {
+				updated.Attributes[key] = value
 			}
 			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -1204,8 +1219,8 @@ func shortChineseResultNameForTaskName(name string) string {
 		return "现货小时K线"
 	case strings.ToLower("Binance 合约 K 线 1H"):
 		return "合约小时K线"
-	case strings.ToLower("A 股 K 线 1m"):
-		return "A股分钟K线"
+	case strings.ToLower("A 股 K 线 5m"):
+		return "A股5分钟K线"
 	default:
 		return ""
 	}
@@ -1455,4 +1470,14 @@ func retInfoDatasetDelete(resp *storagepb.DeleteDatasetRsp) *storagepb.RetInfo {
 		return nil
 	}
 	return resp.GetRetInfo()
+}
+
+// sessionAttributes 返回交易时段市场时序结果数据集的 calendar 与 alignment（stockcn 为 cn_stock、session），取自 barclock 的市场登记。
+// 连续交易的市场（crypto）不写：策略缺省按 crypto_24x7。
+func sessionAttributes(spaceID string) map[string]string {
+	market, err := barclock.MarketFor(spaceID)
+	if err != nil || market.Alignment != barclock.AlignmentSession {
+		return map[string]string{}
+	}
+	return map[string]string{"calendar": market.CalendarID, "alignment": market.Alignment}
 }

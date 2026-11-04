@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildViewFilterExprs, buildViewFilterFieldOptions } from "./view-browse-utils";
+import { buildViewFilterExprs, buildViewFilterFieldOptions, defaultSeriesTagForView } from "./view-browse-utils";
 
 const double = "FIELD_VALUE_TYPE_DOUBLE" as const;
 
@@ -61,5 +61,13 @@ describe("buildViewFilterFieldOptions 指定搜索列", () => {
       "data_time",
       "close"
     ]);
+  });
+});
+
+describe("defaultSeriesTagForView", () => {
+  it("A股空间的 View 默认 series_tag 为 default，其他空间留空", () => {
+    expect(defaultSeriesTagForView({ space_id: "stockcn" })).toBe("default");
+    expect(defaultSeriesTagForView({ space_id: "crypto" })).toBe("");
+    expect(defaultSeriesTagForView(undefined)).toBe("");
   });
 });
