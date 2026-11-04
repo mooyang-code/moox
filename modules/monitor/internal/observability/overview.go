@@ -928,8 +928,9 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
 	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), value.confirmedAt, now)
 	if clock.err == nil && clock.clock.Exchange() {
-		// 从最近一次成功往后数：生产者每期都失败时最近运行会逐期前移，只看它会把一整天的失败当成“刚运行过”。
-		bars = waitingSinceRun(clock, key.freq, item.OutputWatermarkAt, item.LastSuccessAt, bars)
+		// 从最近一次成功或按设计的部分成功（预热中）往后数：生产者每期都失败时最近运行会逐期前移，只看它会把一整天的失败
+		// 当成“刚运行过”；预热期不推进产出水位、最近成功也不前移，不算 partial 会让午休和隔夜误报。
+		bars = waitingSinceRun(clock, key.freq, item.OutputWatermarkAt, laterTime(item.LastSuccessAt, item.LastPartialAt), bars)
 	}
 	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
 	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown
