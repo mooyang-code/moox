@@ -1134,13 +1134,16 @@ func classifyOKXCode(code, message string) error {
 	switch code {
 	case "50011", "50040", "50061":
 		kind = exchange.ErrorOrderRateLimited
-	case "50014", "50101", "50113":
+	// 鉴权类：API 冻结、环境不符、请求头缺失或错误、签名错误（50014 是“参数不能为空”，不是鉴权）。
+	case "50100", "50101", "50103", "50104", "50105", "50106", "50111", "50112", "50113", "50114":
 		kind = exchange.ErrorAuthentication
 	case "51008":
 		kind = exchange.ErrorInsufficientBalance
 	case "51400", "51401", "51603":
 		kind = exchange.ErrorOrderNotFound
-	case "50000", "50004", "50026":
+	// 结果未知，走查询恢复：服务暂不可用、超时（50004 官方说明不代表成功或失败）、系统繁忙/错误、下单超时，
+	// 以及时间戳过期（交易所没有受理，但本地无法确认，与币安 -1021 一致）。50000 是请求体为空，属于拒单。
+	case "50001", "50004", "50013", "50026", "51149", "50102":
 		kind = exchange.ErrorTransportUnknown
 	}
 	return &exchange.Error{Kind: kind, Code: code, Err: errors.New(message)}

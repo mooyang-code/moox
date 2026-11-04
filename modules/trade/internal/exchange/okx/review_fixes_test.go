@@ -152,3 +152,22 @@ func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
+
+func TestOKXErrorCodeClassification(t *testing.T) {
+	for code, want := range map[string]exchange.ErrorKind{
+		"50014": exchange.ErrorRejected, // 参数不能为空
+		"50000": exchange.ErrorRejected, // 请求体为空
+		"50111": exchange.ErrorAuthentication,
+		"50113": exchange.ErrorAuthentication,
+		"50105": exchange.ErrorAuthentication,
+		"50004": exchange.ErrorTransportUnknown,
+		"50013": exchange.ErrorTransportUnknown,
+		"51149": exchange.ErrorTransportUnknown,
+		"50011": exchange.ErrorOrderRateLimited,
+		"51603": exchange.ErrorOrderNotFound,
+	} {
+		if err := classifyOKXCode(code, "x"); !exchange.IsKind(err, want) {
+			t.Fatalf("%s: err = %v, want %s", code, err, want)
+		}
+	}
+}
