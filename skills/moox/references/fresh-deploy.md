@@ -13,8 +13,8 @@
   并用 `--source-dir <worktree>` 指向源码；种子文件用绝对路径（`--seed`、`--config-dir`）。不要用旧的 `./bin/moox-cli`（种子格式可能已变）。
 - 跑 CLI 前 `env -u HTTP_PROXY -u HTTPS_PROXY`（本机代理会挡住到主机的直连）。
 - `moox.toml` 是加密的，Agent 只通过 CLI 读写，不直接读文件，也不打印密钥。改它之前先备份：`cp -p moox.toml moox.toml.bak-<说明>-<时间>`。
-- 各主机地址在 `~/.moox-release.env`（`MOOX_RELEASE_HOST_*`、`MOOX_RELEASE_BUILDER`），SSH 只用公钥。
-- 因子机（factor）同时是编译机时，不要碰它上面的构建目录（`~/moox-web` 等）。
+- 各主机地址在 `~/.moox-release.env`（`MOOX_RELEASE_HOST_*`），SSH 只用公钥。
+- 本机就是编译机：所有制品都在本机构建（纯 Go 交叉编译，Storage 与前端进本机 Docker），不登录任何主机去编译。
 
 ## 1. 清空前核对
 
@@ -35,9 +35,8 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --source-dir $WT
 ```
 
-- **前端必须是真实构建**：Mac 上 `vue-tsc`、`vite` 不可靠。在编译机（因子机，`~/moox-web`）构建：
-  `rsync -a --delete --exclude node_modules --exclude dist --exclude .git web/ <编译机>:moox-web/`，再在编译机 `./node_modules/.bin/vite build --mode production`，
-  把 `dist` rsync 回 `$WT/web/dist`，然后 `cd web-host && go run github.com/rakyll/statik@v0.1.7 -src=../web/dist -dest=./internal -f`，**提交 `web-host/internal/statik/statik.go`**。
+- **前端必须是真实构建**：Mac 上直接跑 `vue-tsc`、`vite` 不可靠，用本机 Docker 构建：`cd $WT && bash scripts/build/build-web-docker.sh --check`
+  （Node 24 容器里跑完测试、代码检查和 `build:prod`，产物写回 `$WT/web/dist`），然后 `cd web-host && go run github.com/rakyll/statik@v0.1.7 -src=../web/dist -dest=./internal -f`，**提交 `web-host/internal/statik/statik.go`**。
   `web/dist` 缺少 `static/js` 时 `make statik` 会拒绝执行（否则会把占位页嵌进 web-host，管理台打不开）。
   之后 bootstrap 会重新生成 statik.go 造成无意义 diff，`git checkout` 掉即可。
 - 纯 Go 组件由 bootstrap / deploy-unit 在本机交叉编译。想提前确认能编译：逐个 `go.work` 模块 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...`，
@@ -122,7 +121,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
 | control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
-| 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节在编译机构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
+| 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节用 `build-web-docker.sh` 构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |
