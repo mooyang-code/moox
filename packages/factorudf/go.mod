@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/factorudf
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/stretchr/testify v1.12.1
@@ -9,5 +9,5 @@ require (
 
 require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )

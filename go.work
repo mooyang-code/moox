@@ -1,4 +1,4 @@
-go 1.27.2
+go 1.27.3
 
 use (
 	./modules/access
@@ -79,3 +79,12 @@ use (
 // Keep the aggregate module past the googleapis api/rpc split so the
 // workspace graph cannot select overlapping package copies.
 replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230822172742-b8732ec3820d
+
+// SQLite 引擎钉在升级 Caddy 之前整个工作区一直在用的版本：consoleproxy 升级 Caddy 后，间接依赖 go.step.sm/crypto
+// 要求 modernc.org/sqlite v1.58.0，工作区只会选一个版本，于是 admin、storage、trade 等所有服务的数据库引擎都被悄悄抬高了。
+// 数据库引擎不应当作为漏洞修复的副作用升级；单独评估后再去掉这三行。
+replace modernc.org/sqlite => modernc.org/sqlite v1.49.1
+
+replace modernc.org/libc => modernc.org/libc v1.72.0
+
+replace modernc.org/memory => modernc.org/memory v1.11.0
