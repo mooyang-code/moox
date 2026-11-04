@@ -72,6 +72,8 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		return "数据按时更新"
 	case "new_subjects_pending":
 		return pendingSubjectsText(report)
+	case "first_bar_pending":
+		return "等待第一根 K 线（数据集刚建好，休市或未开盘）"
 	case "no_observation":
 		return "还没有收到任何结果数据：请确认采集任务在运行、结果视图已生成"
 	case "subject_catalog_unavailable":

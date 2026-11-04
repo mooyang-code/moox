@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,4 +102,21 @@ func TestSubjectFirstSeenSurvivesRestart(t *testing.T) {
 	fresh, err := reopened.ObserveSubjects(t.Context(), "crypto", "ds", subjectSet("BTC", "NEW"), t1.Add(2*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, map[string]time.Time{"NEW": t1}, fresh, "重启后 NEW 仍按原来的首次出现时间，BTC 仍是存量")
+}
+
+func TestSubjectFirstSeenDatasetFirstSeen(t *testing.T) {
+	repo, _ := newFirstSeenRepository(t, filepath.Join(t.TempDir(), "monitor.db"))
+	ctx := context.Background()
+	_, ok, err := repo.DatasetFirstSeen(ctx, "stockcn", "ds")
+	require.NoError(t, err)
+	require.False(t, ok)
+	t0 := time.Date(2026, 11, 4, 7, 33, 0, 0, time.UTC)
+	_, err = repo.ObserveSubjects(ctx, "stockcn", "ds", subjectSet("600519.XSHG"), t0)
+	require.NoError(t, err)
+	_, err = repo.ObserveSubjects(ctx, "stockcn", "ds", subjectSet("600519.XSHG", "000001.XSHE"), t0.Add(time.Hour))
+	require.NoError(t, err)
+	at, ok, err := repo.DatasetFirstSeen(ctx, "stockcn", "ds")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, t0, at)
 }

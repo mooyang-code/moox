@@ -120,6 +120,8 @@ func (e *KlineFreshnessEvaluator) recordDisabledChecks(rules []KlineFreshnessRul
 // 的首次出现时间；没有配置时不给任何对象宽限。
 type SubjectFirstSeenStore interface {
 	ObserveSubjects(ctx context.Context, spaceID, datasetID string, active map[string]struct{}, now time.Time) (map[string]time.Time, error)
+	// DatasetFirstSeen 返回数据集的对象最早出现在采集清单里的时间（含部署前的存量）；还没有记录时 ok 为假。
+	DatasetFirstSeen(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error)
 }
 
 // SetSubjectFirstSeenStore 启用新上线对象的宽限期。
@@ -260,6 +262,12 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			continue
 		}
 		if summary.latest.IsZero() {
+			// 刚建好的数据集在第一根应到的 K 线收线（加允许迟到）之前没有输出是正常的：A 股收盘后、周末启用要等下一个交易时段。
+			if until, waiting := e.firstBarPending(ctx, rule, clock, freq, now); waiting {
+				report.Success, report.Reason, report.PendingUntil = true, "first_bar_pending", until
+				reports = append(reports, report)
+				continue
+			}
 			// An enabled rule with no output is a real failure: a misrouted
 			// View or an unbound consumer must not remain silent.
 			report.Success, report.Reason = false, "no_observation"
@@ -768,6 +776,23 @@ func (e *KlineFreshnessEvaluator) newSubjectDeadlines(ctx context.Context, rule 
 		}
 	}
 	return deadlines
+}
+
+// firstBarPending 判断还没有任何输出的数据集是否仍在等第一根 K 线：从数据集的对象最早出现在清单里算起，
+// 第一根完整 K 线收线再加允许迟到之前都算在等，返回截止时间。没有首次出现记录时不推测，按没有输出报出来。
+func (e *KlineFreshnessEvaluator) firstBarPending(ctx context.Context, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, now time.Time) (time.Time, bool) {
+	if e.firstSeen == nil || strings.TrimSpace(rule.DatasetID) == "" {
+		return time.Time{}, false
+	}
+	seenAt, ok, err := e.firstSeen.DatasetFirstSeen(ctx, rule.SpaceID, rule.DatasetID)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	deadline, err := newSubjectDeadline(clock, freq, seenAt, rule.Lateness)
+	if err != nil || !deadline.After(now) {
+		return time.Time{}, false
+	}
+	return deadline, true
 }
 
 // newSubjectDeadline 返回新对象应当已有首根 K 线的最晚时间：首次出现之后开盘的第一根（出现时正在走的那一根数据不完整）收线，
