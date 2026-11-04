@@ -927,6 +927,9 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
 	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), value.confirmedAt, now)
+	if clock.err == nil && clock.clock.Exchange() {
+		bars = waitingSinceRun(clock, key.freq, item.OutputWatermarkAt, item.LastRunAt, bars)
+	}
 	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
 	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown
 	item.ExpectedBarAt, item.ExpectedBarClose = bars.expected.Open, bars.expected.Close

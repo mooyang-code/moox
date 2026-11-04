@@ -34,7 +34,6 @@ const engineLag = (freq: string, openedSecondsAgo: number) => {
   return Math.max(0, Math.floor((openedSecondsAgo - grace) / period) - 1) * period;
 };
 
-
 const NOW = Date.parse("2026-10-13T10:00:00");
 const names = { datasets: { dataset_abc: "现货K线" }, views: { view_xyz: "因子宽表" } };
 
@@ -147,7 +146,12 @@ describe("home data rows", () => {
       {
         factor_task: { task_id: "b", space_id: "crypto", source_dataset_id: "dataset_abc", freq: "1m", status: "enabled" },
         members: [],
-        last_run: { task_id: "b", last_period_time: "1791900000", last_status: "failed", lag_seconds: String(engineLag("1m", 600)) }
+        last_run: {
+          task_id: "b",
+          last_period_time: "1791900000",
+          last_status: "failed",
+          lag_seconds: String(engineLag("1m", 600))
+        }
       },
       { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
     ] as unknown as FactorTaskInfo[];
@@ -730,8 +734,14 @@ describe("home tiles", () => {
       ] as unknown as FactorTaskInfo[];
     // 上一期开盘后 70 秒、125 秒仍是同一期：1m K 线收盘后才产出，这两个时刻都不是“滞后 1～2 分钟”。
     for (const ago of [70, 125])
-      expect(factorRows(sets(String(engineLag("1m", ago))), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
-    expect(factorRows(sets(String(engineLag("1m", 400))), "crypto", names, NOW)[0]).toMatchObject({ lag: "落后 5 分钟", tone: "warn" });
+      expect(factorRows(sets(String(engineLag("1m", ago))), "crypto", names, NOW)[0]).toMatchObject({
+        lag: "已追平",
+        tone: "ok"
+      });
+    expect(factorRows(sets(String(engineLag("1m", 400))), "crypto", names, NOW)[0]).toMatchObject({
+      lag: "落后 5 分钟",
+      tone: "warn"
+    });
   });
 });
 

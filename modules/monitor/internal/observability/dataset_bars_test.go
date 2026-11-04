@@ -331,3 +331,24 @@ func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
 	crypto := datasetStatus(now, cryptoKey, value, testRealtimePolicy(), spaceClock{clock: monmetrics.ContinuousClock()})
 	require.Equal(t, "stale", crypto.Status)
 }
+
+// 收盘后启用的 A 股采集数据集：生产者登记时记了一次空运行、还没有任何输出。整夜和开盘前不报停滞，
+// 开盘后一直没有写入时从第一根应到时间起算照常判出来。
+func TestStockDatasetRegisteredAfterCloseWaitsForTheNextSession(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "collector", spaceID: "stockcn", datasetID: "dataset_stock_5m", freq: "5m"}
+	registered := cst("2026-10-16", "20:00:00")
+	value := datasetValues{interval: 300, lastRun: float64(registered.Unix()), lastSuccess: float64(registered.Unix())}
+	at := func(now time.Time) DatasetFrequencyStatus {
+		value.inventory = float64(now.Unix())
+		return datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	}
+	for _, now := range []time.Time{cst("2026-10-16", "23:00:00"), cst("2026-10-18", "12:00:00"), cst("2026-10-19", "09:30:00"), cst("2026-10-19", "09:35:30")} {
+		item := at(now)
+		require.Equal(t, "healthy", item.Status, "%s %s", now, item.Reason)
+	}
+	stopped := at(cst("2026-10-19", "09:50:00"))
+	require.Equal(t, "stale", stopped.Status)
+	require.Equal(t, "run stale", stopped.Reason)
+	require.Equal(t, 4, stopped.WaitingBars, "09:30～09:45 四根已收线")
+}

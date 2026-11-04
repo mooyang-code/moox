@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
@@ -227,7 +228,7 @@ func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbac
 	rateLimit := &marketdata.RateLimitPolicy{RequestsPerSecond: 1000, Burst: 30, MaxConcurrent: 30, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
 	var firstCalls, fallbackCalls int32
 	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrProtocol, delay: 2 * time.Second, rateLimit: rateLimit, calls: &firstCalls}))
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrProtocol, delay: 10 * time.Second, rateLimit: rateLimit, calls: &firstCalls}))
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", rateLimit: rateLimit, calls: &fallbackCalls, rowsFor: func(req marketdata.KlineRequest) []marketdata.NormalizedKline {
 		row := bar
 		row.SubjectID = req.SubjectID
@@ -244,7 +245,10 @@ func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbac
 		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 3})
 	}
 	pipeline := &KlinePipeline{Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina", "tencent"}, Now: func() time.Time { return now }}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// 先加载交易日历与时钟，不让首次加载吃掉取数期限；sina 的模拟延迟远大于期限，靠熔断而不是等它超时。
+	_, err = markets.TradingBar(StockCNSpaceID, "1m", bar.BarStart)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
 
 	payload, err := pipeline.Execute(ctx, Request{BatchID: "batch-30", BatchKind: domain.BatchKindRealtime, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "request-30", Concurrency: 30, Items: items})

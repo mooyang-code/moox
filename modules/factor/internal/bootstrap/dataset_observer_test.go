@@ -248,3 +248,38 @@ func TestFactorDatasetObserverReportsPausedTasksAfterARestart(t *testing.T) {
 	require.NoError(t, observer.observe(context.Background()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 0)
 }
+
+// A 股收盘后、周末建的任务：结果数据集建好就进入期望清单，第一期要等下一根 K 线。首次进入期望清单时以任务登记时刻记一次
+// empty 运行（最近运行与最近成功都是登记时刻，不推进产出水位），Monitor 不会整夜判为“尚未上报”，由休市豁免接管；
+// factor-mgr 重启后（新进程、新指标）再次写这一条；引擎已经上报过一期的任务不需要。
+func TestFactorDatasetObserverGracesNewTasksBeforeFirstPeriod(t *testing.T) {
+	created := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC) // 周五 16:00（北京时间）
+	set := func(id, dataset string) domain.EngineTask {
+		return domain.EngineTask{Set: domain.FactorTask{TaskID: id, SpaceID: "stockcn", ResultDatasetID: dataset, Freq: "5m", CreatedAt: created}, ResultReady: true}
+	}
+	newObserver := func(engine *fakeEngineView) (*factorDatasetObserver, *prometheus.Registry) {
+		registry := prometheus.NewRegistry()
+		datasets, err := report.NewDatasetMetrics(registry, "factor")
+		require.NoError(t, err)
+		observer := newFactorDatasetObserver(engine, datasets)
+		observer.now = func() time.Time { return created.Add(30 * time.Hour) } // 周六晚上
+		return observer, registry
+	}
+	period := time.Date(2026, 10, 9, 6, 55, 0, 0, time.UTC)
+	engine := &fakeEngineView{
+		sets: []domain.EngineTask{set("stock_new", "dataset_factor_new"), set("stock_old", "dataset_factor_old")},
+		runs: []domain.TaskRunSummary{{TaskID: "stock_old", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + 3*time.Second).Unix(), LastStatus: "complete"}},
+	}
+	for restart := 0; restart < 2; restart++ {
+		observer, registry := newObserver(engine)
+		require.NoError(t, observer.observe(context.Background()))
+		require.NoError(t, observer.observe(context.Background()), "同一进程里只记一次")
+		requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_new", float64(created.Unix()))
+		requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_new", float64(created.Unix()))
+		_, found := datasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_new")
+		require.False(t, found, "empty 不推进产出水位")
+		// 已有一期的任务按引擎上报的运行记录，不写 empty。
+		requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_old", float64(period.Add(5*time.Minute+3*time.Second).Unix()))
+		require.Equal(t, 2, testutil.CollectAndCount(registry, "moox_factor_dataset_runs_total"), "new 一条 empty、old 一条 success")
+	}
+}
