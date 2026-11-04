@@ -58,6 +58,8 @@ type Host struct {
 	PrivateAddress string
 	VpcID          string
 	SubnetID       string
+	// renderPrivateAddress 由 renderSCFPlan 决定：只在生成 A 股云函数计划时给存储服务器写 private_address。
+	renderPrivateAddress bool
 }
 
 // Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、确认免密登录、检测因子机。

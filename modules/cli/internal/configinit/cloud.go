@@ -76,10 +76,8 @@ func (tencentCloud) Verify(ctx context.Context, keys Keys) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
-	appID, err := tencent.GetUserAppID(ctx, tencent.IdentityOptions{Credentials: tencent.Credentials{SecretID: keys.SecretID, SecretKey: keys.SecretKey}})
-	if err != nil {
-		return Account{}, err
-	}
+	// 取不到 AppId（例如子用户没有 CAM 读权限）不算密钥验证失败：AppId 留空，A 股云函数计划不生成，以后手工补配。
+	appID, _ := tencent.GetUserAppID(ctx, tencent.IdentityOptions{Credentials: tencent.Credentials{SecretID: keys.SecretID, SecretKey: keys.SecretKey}})
 	return Account{AccountID: identity.AccountID, AppID: appID}, nil
 }
 

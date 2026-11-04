@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
 // exampleTemplate 是仓库根目录 moox.toml.example 的副本（测试保证两者一致）。
@@ -41,11 +42,12 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 			return nil, err
 		}
 	}
+	plan := renderSCFPlan(request)
 	lines, err := replaceTopology(lines, renderTopology(request))
 	if err != nil {
 		return nil, err
 	}
-	if plan := renderSCFPlan(request); plan != nil {
+	if plan != nil {
 		if lines, err = setKey(lines, "scf_plan", "enabled", "true"); err != nil {
 			return nil, err
 		}
@@ -134,7 +136,7 @@ func renderHost(host Host) []string {
 	if host.Provider != "" {
 		out = append(out, "provider = "+tomlString(host.Provider))
 	}
-	if host.PrivateAddress != "" {
+	if host.renderPrivateAddress {
 		out = append(out, "private_address = "+tomlString(host.PrivateAddress))
 	}
 	return append(out, "ssh = { port = "+strconv.Itoa(host.SSHPort)+", username = "+tomlString(host.SSHUser)+", private_key_file = "+tomlString(sshKeyTOMLPath)+" }")
@@ -150,7 +152,8 @@ const (
 
 // renderSCFPlan 生成 A 股（stockcn）定时采集云函数的 [scf_plan] 子表：A 股只能走云函数。函数放在存储服务器所在地域、
 // 绑定它的 VPC 与子网，经它的私网地址访问它上面的 Access；代码包放在管理台所在地域、按 AppId 命名的 COS 桶（首次上传时自动创建）。
-// 存储服务器没有 VPC 或私网地址（例如轻量应用服务器）、或拿不到 AppId 时返回 nil，[scf_plan] 保持关闭，A 股要以后补配。
+// 存储服务器没有 VPC 或私网地址（例如轻量应用服务器）、地域不支持云函数、同地域的其他主机不在同一个 VPC、或拿不到 AppId 时
+// 返回 nil，[scf_plan] 保持关闭，A 股要以后补配。
 func renderSCFPlan(request *Request) []string {
 	var storage *Host
 	for i := range request.hosts {
@@ -159,9 +162,18 @@ func renderSCFPlan(request *Request) []string {
 		}
 	}
 	if storage == nil || request.appID == "" || request.region == "" || storage.Region == "" ||
-		storage.VpcID == "" || storage.SubnetID == "" || storage.PrivateAddress == "" {
+		storage.VpcID == "" || storage.SubnetID == "" || storage.PrivateAddress == "" ||
+		!tencent.IsSCFRegion(storage.Region) || !tencent.IsSCFRegion(request.region) {
 		return nil
 	}
+	// 写了 private_address 的主机，同地域的其他主机（如管理台）会改走私网探测它：同地域但不在同一个 VPC 时私网不通，不生成。
+	for _, host := range request.hosts {
+		if host.ID != storage.ID && host.Region == storage.Region && host.VpcID != storage.VpcID {
+			return nil
+		}
+	}
+	// 只有生成云函数计划时才给存储服务器写私网地址（函数经它访问 Access），其他主机一律不写。
+	storage.renderPrivateAddress = true
 	bucket := "moox-scf-" + strings.TrimPrefix(request.region, "ap-") + "-" + request.appID
 	return []string{
 		"",

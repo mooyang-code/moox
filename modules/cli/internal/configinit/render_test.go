@@ -453,3 +453,42 @@ func TestRenderLeavesCloudFunctionsOffWithoutStorageVPC(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+// 只给存储服务器写私网地址；管理台与存储同地域却不在同一个 VPC、或拿不到 AppId 时不生成云函数计划，也不写私网地址。
+func TestRenderCloudFunctionPlanGuards(t *testing.T) {
+	storageCVM := Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", Name: "storage", VpcID: "vpc-abc", SubnetID: "subnet-def", PrivateIP: "10.0.0.5"}
+	renderCloud := func(cloud *fakeCloud) (setupconfig.Manifest, string) {
+		raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := setupconfig.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return manifest, string(raw)
+	}
+
+	cloud := newFakeCloud()
+	cloud.instances["198.51.100.11"] = storageCVM
+	cloud.instances["198.51.100.10"] = Instance{Kind: "cvm", Region: "ap-guangzhou", Name: "control", VpcID: "vpc-gz", SubnetID: "subnet-gz", PrivateIP: "10.1.0.2"}
+	manifest, raw := renderCloud(cloud)
+	if !manifest.SCFEnabled() || strings.Count(raw, "private_address = ") != 1 {
+		t.Fatalf("只有存储服务器写私网地址：%d 处", strings.Count(raw, "private_address = "))
+	}
+
+	sameRegion := newFakeCloud()
+	sameRegion.instances["198.51.100.11"] = storageCVM
+	sameRegion.instances["198.51.100.10"] = Instance{Kind: "lighthouse", Region: "ap-nanjing", Name: "control", PrivateIP: "10.9.0.2"}
+	manifest, raw = renderCloud(sameRegion)
+	if manifest.SCFEnabled() || strings.Contains(raw, "private_address = ") {
+		t.Fatal("管理台与存储同地域但不在同一 VPC 时不生成计划、不写私网地址")
+	}
+
+	noAppID := newFakeCloud()
+	noAppID.instances["198.51.100.11"] = storageCVM
+	noAppID.noAppID = true
+	if manifest, _ = renderCloud(noAppID); manifest.SCFEnabled() {
+		t.Fatal("拿不到 AppId 时不生成计划")
+	}
+}

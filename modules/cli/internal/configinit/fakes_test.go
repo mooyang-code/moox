@@ -11,6 +11,8 @@ type fakeCloud struct {
 	mu        sync.Mutex
 	instances map[string]Instance
 	lookups   int
+	// noAppID 模拟子用户没有 CAM 读权限、取不到 AppId。
+	noAppID bool
 }
 
 func newFakeCloud() *fakeCloud {
@@ -24,6 +26,9 @@ func newFakeCloud() *fakeCloud {
 func (f *fakeCloud) Verify(_ context.Context, keys Keys) (Account, error) {
 	if keys.SecretKey == "wrong" {
 		return Account{}, errors.New("AuthFailure.SignatureFailure")
+	}
+	if f.noAppID {
+		return Account{AccountID: "100012345678"}, nil
 	}
 	return Account{AccountID: "100012345678", AppID: "1250000001"}, nil
 }
