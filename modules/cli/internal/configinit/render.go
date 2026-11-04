@@ -6,6 +6,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -43,6 +44,12 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 	lines, err := replaceTopology(lines, renderTopology(request))
 	if err != nil {
 		return nil, err
+	}
+	if plan := renderSCFPlan(request); plan != nil {
+		if lines, err = setKey(lines, "scf_plan", "enabled", "true"); err != nil {
+			return nil, err
+		}
+		lines = append(lines, plan...)
 	}
 	raw := []byte(strings.Join(lines, "\n"))
 	manifest, err := setupconfig.Parse(raw)
@@ -127,7 +134,57 @@ func renderHost(host Host) []string {
 	if host.Provider != "" {
 		out = append(out, "provider = "+tomlString(host.Provider))
 	}
+	if host.PrivateAddress != "" {
+		out = append(out, "private_address = "+tomlString(host.PrivateAddress))
+	}
 	return append(out, "ssh = { port = "+strconv.Itoa(host.SSHPort)+", username = "+tomlString(host.SSHUser)+", private_key_file = "+tomlString(sshKeyTOMLPath)+" }")
+}
+
+// scfAccountID、scfAccountName 是渲染进 [scf_plan.cloud_account] 的云函数账号登记；scfCredentialSecretID 是 Admin 保存
+// 第一步那把腾讯云密钥用的密钥 ID（modules/admin/internal/service/setup 的 tencentSecretID），云函数账号只引用它。
+const (
+	scfAccountID          = "tencent-scf"
+	scfAccountName        = "Tencent SCF"
+	scfCredentialSecretID = "tencent-default"
+)
+
+// renderSCFPlan 生成 A 股（stockcn）定时采集云函数的 [scf_plan] 子表：A 股只能走云函数。函数放在存储服务器所在地域、
+// 绑定它的 VPC 与子网，经它的私网地址访问它上面的 Access；代码包放在管理台所在地域、按 AppId 命名的 COS 桶（首次上传时自动创建）。
+// 存储服务器没有 VPC 或私网地址（例如轻量应用服务器）、或拿不到 AppId 时返回 nil，[scf_plan] 保持关闭，A 股要以后补配。
+func renderSCFPlan(request *Request) []string {
+	var storage *Host
+	for i := range request.hosts {
+		if slices.Contains(request.hosts[i].Components, "storage-primary") && slices.Contains(request.hosts[i].Components, "access") {
+			storage = &request.hosts[i]
+		}
+	}
+	if storage == nil || request.appID == "" || request.region == "" || storage.Region == "" ||
+		storage.VpcID == "" || storage.SubnetID == "" || storage.PrivateAddress == "" {
+		return nil
+	}
+	bucket := "moox-scf-" + strings.TrimPrefix(request.region, "ap-") + "-" + request.appID
+	return []string{
+		"",
+		"# A 股定时采集云函数（由 config init 按第一步的密钥与存储服务器的私有网络生成）。",
+		"[scf_plan.cloud_account]",
+		"account_id = " + tomlString(scfAccountID),
+		"account_name = " + tomlString(scfAccountName),
+		"credential_secret_id = " + tomlString(scfCredentialSecretID),
+		"app_id = " + tomlString(request.appID),
+		"cos_region = " + tomlString(request.region),
+		"cos_bucket = " + tomlString(bucket),
+		"",
+		"[scf_plan.regions." + storage.Region + "]",
+		"vpc_id = " + tomlString(storage.VpcID),
+		"subnet_id = " + tomlString(storage.SubnetID),
+		"access_host = " + tomlString(storage.ID),
+		"",
+		"[[scf_plan.spaces]]",
+		`space_id = "stockcn"`,
+		"[scf_plan.spaces.markets]",
+		"equity = [" + tomlString(storage.Region) + "]",
+		"",
+	}
 }
 
 // tomlString 渲染 TOML 基本字符串。normalize 已经拒绝了控制字符，这里仍按规范转义，作为第二道防线。

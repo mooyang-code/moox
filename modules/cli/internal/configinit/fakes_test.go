@@ -25,7 +25,7 @@ func (f *fakeCloud) Verify(_ context.Context, keys Keys) (Account, error) {
 	if keys.SecretKey == "wrong" {
 		return Account{}, errors.New("AuthFailure.SignatureFailure")
 	}
-	return Account{AccountID: "100012345678"}, nil
+	return Account{AccountID: "100012345678", AppID: "1250000001"}, nil
 }
 
 func (f *fakeCloud) Lookup(_ context.Context, _ Keys, address string) (Instance, error) {
@@ -132,6 +132,7 @@ func (p *fakeProber) Trust(_ context.Context, _ SSHTarget, fingerprint string) e
 func testEnv(cloud Cloud, prober Prober) Environment {
 	cache := newCloudCache(cloud)
 	return Environment{
+		Verify: cache.verify,
 		Lookup: cache.lookup,
 		Login:  prober.Login,
 		Probe: func(ctx context.Context, target SSHTarget) (ProbeReport, error) {

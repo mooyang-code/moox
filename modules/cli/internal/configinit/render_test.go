@@ -412,3 +412,44 @@ func TestFactorsTurnOnWithEngineAndKeepOnlyReachableSpaces(t *testing.T) {
 		t.Fatal("没有因子机时不打开因子")
 	}
 }
+
+// 存储服务器是带私有网络的云服务器：按第一步密钥的 AppId 与存储服务器的 VPC、子网、私网 IP 生成 A 股云函数的 [scf_plan]。
+func TestRenderPlansStockCNCloudFunctionsInTheStorageVPC(t *testing.T) {
+	cloud := newFakeCloud()
+	cloud.instances["198.51.100.11"] = Instance{Kind: "cvm", KindName: "云服务器", Region: "ap-nanjing", RegionName: "南京", Name: "storage",
+		VpcID: "vpc-abc", SubnetID: "subnet-def", PrivateIP: "10.0.0.5"}
+	raw, err := Render(context.Background(), ptr(sampleRequest()), testEnv(cloud, &fakeProber{report: linuxReport()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := setupconfig.Parse(raw)
+	if err != nil {
+		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
+	}
+	if !manifest.SCFEnabled() {
+		t.Fatal("应打开 [scf_plan]")
+	}
+	account := manifest.SCFCloudAccount()
+	if account.AppID != "1250000001" || account.CredentialSecretID != "tencent-default" || account.COSRegion != "ap-guangzhou" || account.COSBucket != "moox-scf-guangzhou-1250000001" {
+		t.Fatalf("云账号 = %+v", account)
+	}
+	region := manifest.SCFPlan.Regions["ap-nanjing"]
+	if region.VPCID != "vpc-abc" || region.SubnetID != "subnet-def" || region.AccessHost != "storage" {
+		t.Fatalf("地域网络 = %+v", region)
+	}
+	if len(manifest.SCFPlan.Spaces) != 1 || manifest.SCFPlan.Spaces[0].SpaceID != "stockcn" || !slices.Equal(manifest.SCFPlan.Spaces[0].Markets["equity"], []string{"ap-nanjing"}) {
+		t.Fatalf("空间 = %+v", manifest.SCFPlan.Spaces)
+	}
+	if !strings.Contains(string(raw), `private_address = "10.0.0.5"`) {
+		t.Fatal("存储服务器应写入私网地址")
+	}
+}
+
+// 存储服务器是轻量应用服务器（识别不到可绑定的 VPC）：不生成 [scf_plan]，保持关闭。
+func TestRenderLeavesCloudFunctionsOffWithoutStorageVPC(t *testing.T) {
+	if render(t, sampleRequest()).SCFEnabled() {
+		t.Fatal("没有 VPC 时不应打开 [scf_plan]")
+	}
+}
+
+func ptr[T any](value T) *T { return &value }

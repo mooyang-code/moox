@@ -32,6 +32,8 @@ type Request struct {
 	// 以下由 normalize 算出，供渲染使用。
 	hosts  []Host
 	region string
+	// appID 是密钥所属账号的 AppId，渲染 A 股云函数（SCF）的云账号与代码包桶名用。
+	appID string
 }
 
 // Server 是一台腾讯云服务器的填写内容；地域等信息由公网 IP 识别得到，不让用户填。
@@ -52,10 +54,15 @@ type Host struct {
 	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
 	Outbound   bool
 	Components []string
+	// 以下是识别到的私有网络，只有存储服务器用到：A 股云函数在它的 VPC 里经私网地址访问它上面的 Access。
+	PrivateAddress string
+	VpcID          string
+	SubnetID       string
 }
 
 // Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、确认免密登录、检测因子机。
 type Environment struct {
+	Verify func(ctx context.Context, keys Keys) (Account, error)
 	Lookup func(ctx context.Context, keys Keys, address string) (Instance, error)
 	Login  func(ctx context.Context, target SSHTarget) (LoginReport, error)
 	Probe  func(ctx context.Context, target SSHTarget) (ProbeReport, error)
@@ -99,6 +106,11 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 		return err
 	}
 	r.Tencent = keys
+	account, err := env.Verify(ctx, keys)
+	if err != nil {
+		return err
+	}
+	r.appID = account.AppID
 	return r.buildTopology(ctx, env)
 }
 
@@ -210,6 +222,7 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	return Host{
 		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent",
 		SSHPort: target.SSHPort, SSHUser: target.SSHUser, Components: append([]string(nil), role.components...),
+		PrivateAddress: instance.PrivateIP, VpcID: instance.VpcID, SubnetID: instance.SubnetID,
 	}, nil
 }
 

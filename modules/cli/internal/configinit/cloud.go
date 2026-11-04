@@ -32,9 +32,10 @@ func (k Keys) normalize() (Keys, error) {
 	return k, nil
 }
 
-// Account 是密钥所属的腾讯云账号。
+// Account 是密钥所属的腾讯云账号：AccountID 是主账号 UIN，AppID 是 COS 桶名与云函数账号登记用的 AppId（两者不同）。
 type Account struct {
 	AccountID string `json:"account_id"`
+	AppID     string `json:"app_id"`
 }
 
 // Instance 是按公网 IP 识别出的腾讯云服务器；规格字段取不到时为 0，页面不展示。
@@ -48,6 +49,11 @@ type Instance struct {
 	CPU        int    `json:"cpu,omitempty"`
 	MemoryGB   int    `json:"memory_gb,omitempty"`
 	DiskGB     int    `json:"disk_gb,omitempty"`
+	// VpcID、SubnetID、PrivateIP 是服务器所在的私有网络，A 股云函数（SCF）在同一 VPC 里经它的私网地址访问 Access。
+	// 只用于渲染 moox.toml，不回传页面。
+	VpcID     string `json:"-"`
+	SubnetID  string `json:"-"`
+	PrivateIP string `json:"-"`
 }
 
 // errNotInAccount 表示这个 IP 不是当前腾讯云账号下的服务器。
@@ -70,7 +76,11 @@ func (tencentCloud) Verify(ctx context.Context, keys Keys) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
-	return Account{AccountID: identity.AccountID}, nil
+	appID, err := tencent.GetUserAppID(ctx, tencent.IdentityOptions{Credentials: tencent.Credentials{SecretID: keys.SecretID, SecretKey: keys.SecretKey}})
+	if err != nil {
+		return Account{}, err
+	}
+	return Account{AccountID: identity.AccountID, AppID: appID}, nil
 }
 
 func (tencentCloud) Lookup(ctx context.Context, keys Keys, address string) (Instance, error) {
@@ -101,11 +111,16 @@ func describeInstance(found tencent.CloudInstance) Instance {
 	if found.Kind == tencent.KindLighthouse {
 		kind = "轻量应用服务器"
 	}
-	return Instance{
+	instance := Instance{
 		Kind: found.Kind, KindName: kind, Region: found.Region, RegionName: regionName(found.Region),
 		ZoneName: zoneName(found.Region, found.Zone), Name: found.InstanceName,
 		CPU: found.CPU, MemoryGB: found.MemoryGB, DiskGB: found.DiskGB,
+		VpcID: found.VpcID, SubnetID: found.SubnetID,
 	}
+	if len(found.PrivateIPs) > 0 {
+		instance.PrivateIP = found.PrivateIPs[0]
+	}
+	return instance
 }
 
 func regionName(code string) string {
@@ -132,13 +147,20 @@ func zoneName(region, zone string) string {
 
 // cloudCache 记住本次会话里识别过的服务器，提交时不必再挨个地域查一遍。键里含密钥摘要，换了密钥就重新查。
 type cloudCache struct {
-	cloud Cloud
-	mu    sync.Mutex
-	found map[string]Instance
+	cloud    Cloud
+	mu       sync.Mutex
+	found    map[string]Instance
+	accounts map[string]Account
 }
 
 func newCloudCache(cloud Cloud) *cloudCache {
-	return &cloudCache{cloud: cloud, found: map[string]Instance{}}
+	return &cloudCache{cloud: cloud, found: map[string]Instance{}, accounts: map[string]Account{}}
+}
+
+// keyDigest 是密钥（加可选的附加值）的摘要，用作缓存键，不保存密钥本身。
+func keyDigest(keys Keys, extra string) string {
+	sum := sha256.Sum256([]byte(keys.SecretID + "\x00" + keys.SecretKey + "\x00" + extra))
+	return hex.EncodeToString(sum[:])
 }
 
 func (c *cloudCache) verify(ctx context.Context, keys Keys) (Account, error) {
@@ -146,12 +168,22 @@ func (c *cloudCache) verify(ctx context.Context, keys Keys) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
+	key := keyDigest(keys, "")
+	c.mu.Lock()
+	cached, ok := c.accounts[key]
+	c.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	account, err := c.cloud.Verify(ctx, keys)
 	if err != nil {
 		return Account{}, fmt.Errorf("腾讯云密钥验证没有通过，请检查 SecretId 和 SecretKey 是否正确、是否已启用")
 	}
+	c.mu.Lock()
+	c.accounts[key] = account
+	c.mu.Unlock()
 	return account, nil
 }
 
@@ -167,8 +199,7 @@ func (c *cloudCache) lookup(ctx context.Context, keys Keys, address string) (Ins
 	if ip := net.ParseIP(address); ip == nil || ip.To4() == nil || ip.IsPrivate() || ip.IsLoopback() {
 		return Instance{}, fmt.Errorf("请填写服务器的公网 IPv4 地址")
 	}
-	sum := sha256.Sum256([]byte(keys.SecretID + "\x00" + keys.SecretKey + "\x00" + address))
-	key := hex.EncodeToString(sum[:])
+	key := keyDigest(keys, address)
 	c.mu.Lock()
 	cached, ok := c.found[key]
 	c.mu.Unlock()

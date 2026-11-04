@@ -355,6 +355,8 @@ button.ghost.away { visibility: hidden; }
     (children || []).forEach(function (child) { if (child) node.append(typeof child === 'string' ? document.createTextNode(child) : child); });
     return node;
   }
+  // 账号 UIN 与 AppId 不同：A 股云函数的代码包桶与云函数账号登记用 AppId，生成配置时自动写入。
+  function accountText(account) { return '账号 ' + account.account_id + (account.app_id ? ' · AppId ' + account.app_id : ''); }
   function role(key) { for (var i = 0; i < boot.roles.length; i++) if (boot.roles[i].key === key) return boot.roles[i]; }
   function keys() { return { secret_id: $('secret-id').value.trim(), secret_key: $('secret-key').value }; }
   function post(path, body) {
@@ -737,7 +739,7 @@ button.ghost.away { visibility: hidden; }
     t.append(el('tr', {}, [el('th', { text: role('factor').title }), factor]));
     var a = $('review-account');
     a.replaceChildren(
-      el('tr', {}, [el('th', { text: '腾讯云' }), el('td', { text: '账号 ' + (state.account ? state.account.account_id : '') })]),
+      el('tr', {}, [el('th', { text: '腾讯云' }), el('td', { text: state.account ? accountText(state.account) : '' })]),
       el('tr', {}, [el('th', { text: '管理员' }), el('td', { text: $('admin-username').value.trim() })]),
       el('tr', {}, [el('th', { text: '告警' }), $('notify-url').value.trim() ? el('td', { text: $('notify-type').selectedOptions[0].textContent }) : el('td', { class: 'muted', text: '暂不配置，稍后在管理台添加' })]));
   }
@@ -757,7 +759,7 @@ button.ghost.away { visibility: hidden; }
       button.disabled = true;
       post('tencent/verify', k).then(function (data) {
         state.account = data.account;
-        $('account').replaceChildren(el('span', { class: 'k', text: '已验证' }), el('span', { class: 'v' }, [el('span', { text: '账号 ' + data.account.account_id })]));
+        $('account').replaceChildren(el('span', { class: 'k', text: '已验证' }), el('span', { class: 'v' }, [el('span', { text: accountText(data.account) })]));
         $('account').hidden = false;
         go(2);
       }, function (err) { showAlert(err.message); }).finally(function () { button.disabled = false; });
