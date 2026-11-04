@@ -928,7 +928,8 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
 	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), value.confirmedAt, now)
 	if clock.err == nil && clock.clock.Exchange() {
-		bars = waitingSinceRun(clock, key.freq, item.OutputWatermarkAt, item.LastRunAt, bars)
+		// 从最近一次成功往后数：生产者每期都失败时最近运行会逐期前移，只看它会把一整天的失败当成“刚运行过”。
+		bars = waitingSinceRun(clock, key.freq, item.OutputWatermarkAt, item.LastSuccessAt, bars)
 	}
 	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
 	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown

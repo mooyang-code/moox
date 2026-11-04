@@ -352,3 +352,16 @@ func TestStockDatasetRegisteredAfterCloseWaitsForTheNextSession(t *testing.T) {
 	require.Equal(t, "run stale", stopped.Reason)
 	require.Equal(t, 4, stopped.WaitingBars, "09:30～09:45 四根已收线")
 }
+
+// 生产者在跑但每期都失败（结果一根都没写进来）：最近运行逐期前移，最近成功停在登记时刻。等待根数从最近一次成功往后数，
+// 开盘十来分钟内就报出来，不会因为“刚运行过”而整天显示正常。
+func TestStockDatasetFailingEveryPeriodIsReported(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "factor", spaceID: "stockcn", datasetID: "dataset_factor_stock_5m", freq: "5m"}
+	registered := cst("2026-10-16", "20:00:00")
+	now := cst("2026-10-19", "09:51:00")
+	value := datasetValues{interval: 300, lastRun: float64(cst("2026-10-19", "09:50:05").Unix()), lastSuccess: float64(registered.Unix()), inventory: float64(now.Unix())}
+	item := datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	require.NotEqual(t, "healthy", item.Status, item.Reason)
+	require.Equal(t, 4, item.WaitingBars, "09:30～09:45 四根已收线、都没写进来")
+}

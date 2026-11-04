@@ -16,6 +16,8 @@ type fakeEngineView struct {
 	sets    []domain.EngineTask
 	runs    []domain.TaskRunSummary
 	runners []domain.RunnerStatus
+	// unknown 为真时模拟引擎还没有心跳（factor-mgr 刚重启）。
+	unknown bool
 }
 
 func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []domain.EngineTask, error) {
@@ -23,7 +25,7 @@ func (f *fakeEngineView) Snapshot(context.Context, string) (string, bool, []doma
 }
 
 func (f *fakeEngineView) Engine(context.Context) (domain.EngineInfo, domain.EngineStatus, bool, error) {
-	return domain.EngineInfo{}, domain.EngineStatus{RecentRuns: f.runs, Runners: f.runners}, true, nil
+	return domain.EngineInfo{}, domain.EngineStatus{RecentRuns: f.runs, Runners: f.runners}, !f.unknown, nil
 }
 
 func TestFactorDatasetObserverReportsEngineRuns(t *testing.T) {
@@ -249,9 +251,9 @@ func TestFactorDatasetObserverReportsPausedTasksAfterARestart(t *testing.T) {
 	requireDatasetValue(t, registry, "moox_factor_dataset_enabled", "dataset_factor_spot", 0)
 }
 
-// A 股收盘后、周末建的任务：结果数据集建好就进入期望清单，第一期要等下一根 K 线。首次进入期望清单时以任务登记时刻记一次
-// empty 运行（最近运行与最近成功都是登记时刻，不推进产出水位），Monitor 不会整夜判为“尚未上报”，由休市豁免接管；
-// factor-mgr 重启后（新进程、新指标）再次写这一条；引擎已经上报过一期的任务不需要。
+// A 股收盘后、周末建的任务：结果数据集建好就进入期望清单，第一期要等下一根 K 线。首次进入期望清单时以当前时刻记一次
+// empty 运行（最近运行与最近成功都是这一刻，不推进产出水位），Monitor 不会整夜判为“尚未上报”，由休市豁免接管；
+// factor-mgr 重启后（新进程、新指标）再次写这一条；引擎已经上报过一期的任务不需要；引擎状态不明时不做宽限。
 func TestFactorDatasetObserverGracesNewTasksBeforeFirstPeriod(t *testing.T) {
 	created := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC) // 周五 16:00（北京时间）
 	set := func(id, dataset string) domain.EngineTask {
@@ -270,13 +272,20 @@ func TestFactorDatasetObserverGracesNewTasksBeforeFirstPeriod(t *testing.T) {
 		sets: []domain.EngineTask{set("stock_new", "dataset_factor_new"), set("stock_old", "dataset_factor_old")},
 		runs: []domain.TaskRunSummary{{TaskID: "stock_old", LastPeriodTime: period.Unix(), CompletedAt: period.Add(5*time.Minute + 3*time.Second).Unix(), LastStatus: "complete"}},
 	}
+	graced := float64(created.Add(30 * time.Hour).Unix())
 	for restart := 0; restart < 2; restart++ {
 		observer, registry := newObserver(engine)
+		// 刚重启、还没收到引擎心跳：看不到已有任务的运行记录，不做宽限，也不标记。
+		engine.unknown = true
+		require.NoError(t, observer.observe(context.Background()))
+		_, found := datasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_old")
+		require.False(t, found, "引擎状态不明时不给已有任务写 empty")
+		engine.unknown = false
 		require.NoError(t, observer.observe(context.Background()))
 		require.NoError(t, observer.observe(context.Background()), "同一进程里只记一次")
-		requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_new", float64(created.Unix()))
-		requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_new", float64(created.Unix()))
-		_, found := datasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_new")
+		requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_new", graced)
+		requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_new", graced)
+		_, found = datasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_new")
 		require.False(t, found, "empty 不推进产出水位")
 		// 已有一期的任务按引擎上报的运行记录，不写 empty。
 		requireDatasetValue(t, registry, "moox_factor_dataset_last_run_timestamp_seconds", "dataset_factor_old", float64(period.Add(5*time.Minute+3*time.Second).Unix()))

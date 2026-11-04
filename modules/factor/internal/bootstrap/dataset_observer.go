@@ -99,7 +99,6 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 	}
 	keys := make(map[string]report.DatasetKey, len(sets))
-	registered := make(map[string]time.Time, len(sets))
 	expected := make([]report.DatasetExpectation, 0, len(sets))
 	for _, set := range sets {
 		if !set.ResultReady || set.Set.ResultDatasetID == "" {
@@ -111,20 +110,16 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 		key := report.DatasetKey{SpaceID: set.Set.SpaceID, DatasetID: set.Set.ResultDatasetID, Freq: set.Set.Freq}
 		keys[set.Set.TaskID] = key
-		registered[set.Set.TaskID] = set.Set.CreatedAt
 		expected = append(expected, report.DatasetExpectation{Key: key, Interval: interval, Paused: paused[set.Set.TaskID]})
 	}
 	if err := o.metrics.ReplaceExpected(expected); err != nil {
 		return fmt.Errorf("replace expected factor datasets: %w", err)
 	}
-	var runs []domain.TaskRunSummary
-	if engineErr == nil && engineKnown {
-		runs = status.RecentRuns
-	}
-	o.graceNewTasksLocked(keys, registered, paused, runs)
+	// 引擎状态不明（刚重启、还没收到心跳）时不做宽限：这时看不到已有任务的运行记录，会把它们误当成新任务。
 	if engineErr != nil || !engineKnown {
 		return engineErr
 	}
+	o.graceNewTasksLocked(keys, paused, status.RecentRuns)
 	if o.blocked != nil {
 		for _, item := range status.Watermarks {
 			key, known := keys[item.TaskID]
@@ -175,13 +170,13 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 
 // graceNewTasksLocked 给刚进入期望清单、还没有任何一期结果的任务一个首期等待宽限（照搬策略侧的 graceNewInstancesLocked）：
 // 结果数据集建好就进入期望清单，Monitor 看到它没有任何运行会立即判为“尚未上报”，而这个判断排在休市豁免之前；
-// 第一次运行要等第一根 K 线收盘，A 股收盘后、周末建的任务会整夜告警。这里以任务的登记时刻记一次“空”运行（只刷新最近运行
+// 第一次运行要等第一根 K 线收盘，A 股收盘后、周末建的任务会整夜告警。这里以当前时刻记一次“空”运行（只刷新最近运行
 // 与最近成功时间，不推进产出水位），之后由 Monitor 的休市豁免与新鲜度检查接管。
 //
-// 指标只在进程内存里：factor-mgr 重启后每个任务首次进入期望清单时都会重新写这一条，不会回到“尚未上报”。起点固定在登记时刻，
-// 反复重启也延后不了告警。引擎已经上报过这个任务的一期时不需要宽限（随后的运行记录直接覆盖）；暂停的任务不在期望清单里。
+// 指标只在进程内存里：factor-mgr 重启后每个任务首次进入期望清单时都会重新写这一条，不会回到“尚未上报”。只在引擎状态已知时做：
+// 引擎已经上报过这个任务的一期时不需要宽限（随后的运行记录直接覆盖）；暂停的任务不在期望清单里。
 // 7×24 市场的新任务也会多一条 empty，下一分钟的第一期结果随即覆盖，无害。调用方持有 o.mu。
-func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.DatasetKey, registered map[string]time.Time, paused map[string]bool, runs []domain.TaskRunSummary) {
+func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.DatasetKey, paused map[string]bool, runs []domain.TaskRunSummary) {
 	ran := make(map[string]bool, len(runs))
 	for _, run := range runs {
 		if run.LastPeriodTime > 0 {
@@ -201,11 +196,7 @@ func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.Datas
 		if _, seen := o.observed[taskID]; seen || ran[taskID] {
 			continue
 		}
-		at := registered[taskID]
-		if at.IsZero() {
-			at = o.now()
-		}
-		if err := o.metrics.ObserveRun(report.DatasetObservation{Key: key, Result: "empty", FinishedAt: at.UTC()}); err != nil {
+		if err := o.metrics.ObserveRun(report.DatasetObservation{Key: key, Result: "empty", FinishedAt: o.now().UTC()}); err != nil {
 			log.Warnf("factor_dataset_grace_failed task_id=%s error=%v", taskID, err)
 		}
 	}
