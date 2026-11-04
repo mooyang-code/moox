@@ -40,6 +40,10 @@ type MigrateOptions struct {
 	AddDeploymentComponents []string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
+	// RemoveFactorTasks / RemoveFactors 列出要删除的 [[factors.tasks]]（按 id）与 [[factors.definitions]]（按 factor_id）
+	// （--remove-factor-task、--remove-factor）。删除先于因子库校验，因子库里已经没有文件的旧定义也能删掉。
+	RemoveFactorTasks []string
+	RemoveFactors     []string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
 	Write bool
 	Keys  configcrypt.KeyStore
@@ -113,11 +117,14 @@ type MigrateReport struct {
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
 	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
-	Changed          bool                `json:"changed"`
-	Valid            bool                `json:"valid"`
-	Written          bool                `json:"written"`
-	Backup           string              `json:"backup,omitempty"`
-	NextAction       string              `json:"next_action,omitempty"`
+	// RemovedFactorTasks / RemovedFactors 记录 --remove-factor-task、--remove-factor 删掉的任务 ID 与因子 ID。
+	RemovedFactorTasks []string `json:"removed_factor_tasks,omitempty"`
+	RemovedFactors     []string `json:"removed_factors,omitempty"`
+	Changed            bool     `json:"changed"`
+	Valid              bool     `json:"valid"`
+	Written            bool     `json:"written"`
+	Backup             string   `json:"backup,omitempty"`
+	NextAction         string   `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -141,11 +148,17 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, fmt.Errorf("解不开 %s：%w", path, err)
 		}
 	}
-	library, err := loadFactorLibrary(filepath.Join(opts.RepoRoot, filepath.FromSlash(factorSourceDir(plain))))
+	source := plain
+	if len(opts.RemoveFactorTasks) > 0 || len(opts.RemoveFactors) > 0 {
+		if source, err = removeFactorEntries(plain, opts.RemoveFactorTasks, opts.RemoveFactors, &report); err != nil {
+			return report, err
+		}
+	}
+	library, err := loadFactorLibrary(filepath.Join(opts.RepoRoot, filepath.FromSlash(factorSourceDir(source))))
 	if err != nil {
 		return report, err
 	}
-	migrated, err := migrateManifestText(plain, library, opts.RenameFrom, opts.RenameTo, &report)
+	migrated, err := migrateManifestText(source, library, opts.RenameFrom, opts.RenameTo, &report)
 	if err != nil {
 		return report, err
 	}
@@ -812,6 +825,72 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// removeFactorEntries 按块删除指定的因子任务和因子定义。任务的成员是同一块里的内联数组，随任务一起删除。
+// 要删的因子仍被保留下来的任务引用、或者指定的条目不存在时报错，不写半截配置。
+func removeFactorEntries(plain []byte, tasks, factors []string, report *MigrateReport) ([]byte, error) {
+	removeTask := make(map[string]bool, len(tasks))
+	for _, id := range tasks {
+		removeTask[strings.TrimSpace(id)] = true
+	}
+	removeFactor := make(map[string]bool, len(factors))
+	for _, id := range factors {
+		removeFactor[strings.TrimSpace(id)] = true
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	kept := make([]block, 0, len(blocks))
+	foundTask, foundFactor := map[string]bool{}, map[string]bool{}
+	for _, b := range blocks {
+		switch {
+		case b.array && b.header == "factors.tasks" && removeTask[blockValue(b, "id")]:
+			foundTask[blockValue(b, "id")] = true
+			continue
+		case b.array && b.header == "factors.definitions" && removeFactor[blockValue(b, "factor_id")]:
+			foundFactor[blockValue(b, "factor_id")] = true
+			continue
+		}
+		kept = append(kept, b)
+	}
+	for _, id := range tasks {
+		if !foundTask[strings.TrimSpace(id)] {
+			return nil, fmt.Errorf("没有 id 为 %s 的 [[factors.tasks]]", id)
+		}
+	}
+	for _, id := range factors {
+		if !foundFactor[strings.TrimSpace(id)] {
+			return nil, fmt.Errorf("没有 factor_id 为 %s 的 [[factors.definitions]]", id)
+		}
+	}
+	for _, b := range kept {
+		if !b.array || b.header != "factors.tasks" {
+			continue
+		}
+		for _, line := range b.lines {
+			for id := range removeFactor {
+				if strings.Contains(line, `factor = "`+id+`"`) {
+					return nil, fmt.Errorf("因子 %s 还被任务 %s 引用，先删掉该任务（--remove-factor-task）", id, blockValue(b, "id"))
+				}
+			}
+		}
+	}
+	report.RemovedFactorTasks = append(report.RemovedFactorTasks, tasks...)
+	report.RemovedFactors = append(report.RemovedFactors, factors...)
+	var lines []string
+	for _, b := range kept {
+		lines = append(lines, b.lines...)
+	}
+	return []byte(strings.Join(lines, "\n")), nil
+}
+
+// blockValue 返回块里某个键的字符串值；没有时为空。
+func blockValue(b block, key string) string {
+	for _, line := range b.lines {
+		if k, v, ok := keyValue(line); ok && k == key {
+			return quotedValue(v)
+		}
+	}
+	return ""
 }
 
 // setFactorsEnabled 设置 [factors] 的 enabled；没有 [factors] 表时报错，不凭空创建。

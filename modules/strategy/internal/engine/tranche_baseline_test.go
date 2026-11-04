@@ -36,22 +36,15 @@ type trancheBaselineScenario struct {
 	Bars    []trancheBaselineBar `json:"bars"`
 }
 
-// legacyToTranche 把基准里的旧写法（type: f1，默认值按参考实现）改成显式写出全部选项的 tranche 规则。
-func legacyToTranche(t *testing.T, text string) string {
+// withReferenceOptions 给基准里的 tranche 规则显式写出参考实现的默认值（基准只写了与默认不同的选项）。
+func withReferenceOptions(t *testing.T, text string) string {
 	t.Helper()
 	var doc yaml.Node
 	require.NoError(t, yaml.Unmarshal([]byte(text), &doc))
 	root := doc.Content[0]
 	if rules := yamlValue(root, "rules"); rules != nil {
 		for _, rule := range rules.Content {
-			if kind := yamlValue(rule, "type"); kind != nil && (kind.Value == "f1" || kind.Value == "tranche") {
-				kind.Value = "tranche"
-				yamlDelete(rule, "preset")
-				for i := 0; i+1 < len(rule.Content); i += 2 {
-					if rule.Content[i].Value == "f1" {
-						rule.Content[i].Value = "tranche"
-					}
-				}
+			if kind := yamlValue(rule, "type"); kind != nil && kind.Value == "tranche" {
 				if template := yamlValue(rule, "tranche"); template != nil {
 					explicitReferenceOptions(template)
 				}
@@ -172,7 +165,7 @@ func TestTrancheMatchesLegacyBaseline(t *testing.T) {
 	require.NotEmpty(t, scenarios)
 	for _, scenario := range scenarios {
 		t.Run(scenario.Name, func(t *testing.T) {
-			strategy, err := dsl.Parse([]byte(legacyToTranche(t, scenario.DSL)))
+			strategy, err := dsl.Parse([]byte(withReferenceOptions(t, scenario.DSL)))
 			require.NoError(t, err)
 			program, err := dsl.Compile(strategy, scenario.Columns)
 			require.NoError(t, err)
