@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 const flattenActionTimeout = 30 * time.Minute
@@ -27,6 +28,8 @@ type FlattenCommand struct {
 	SpaceID          string
 	ActionID         string
 	LogicalAccountID string
+	// TradingAccountID 非空时只平组合里的这一个执行账户，其他成员的单和仓不动。
+	TradingAccountID string
 	Reason           string
 }
 
@@ -79,6 +82,43 @@ type FlattenResult struct {
 
 type flattenRequest struct {
 	LogicalAccountID string `json:"logical_account_id"`
+	TradingAccountID string `json:"trading_account_id,omitempty"`
+}
+
+// ErrNotInLogicalAccount 表示执行账户不属于任何组合账户：MooX 只通过组合账户交易，这样的账户没有可平的仓。
+var ErrNotInLogicalAccount = errors.New("执行账户不属于任何组合账户")
+
+// FlattenTradingAccount 只平组合账户里的一个执行账户：撤这个账户的单、平这个账户的仓，组合账户照样暂停。
+// 同组合只允许一个运行中清仓、锁的短超时、终结与可重试的分类，都和组合清仓相同。
+func (s *Service) FlattenTradingAccount(ctx context.Context, command FlattenCommand) (FlattenResult, error) {
+	if err := s.validate(); err != nil {
+		return FlattenResult{}, err
+	}
+	if blank(command.TradingAccountID) {
+		return FlattenResult{}, ErrInvalidCommand
+	}
+	logical, _, err := s.Store.FindLogicalAccountMembership(ctx, command.SpaceID, command.TradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return FlattenResult{}, ErrNotInLogicalAccount
+	}
+	if err != nil {
+		return FlattenResult{}, err
+	}
+	command.LogicalAccountID = logical.LogicalAccountID
+	return s.FlattenLogicalAccount(ctx, command)
+}
+
+// decodeFlattenRequest 从动作的请求 JSON 恢复清仓命令（工作线程恢复时用）。
+func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, error) {
+	var request flattenRequest
+	if err := json.Unmarshal([]byte(action.RequestJSON), &request); err != nil {
+		return FlattenCommand{}, err
+	}
+	return FlattenCommand{
+		SpaceID: action.SpaceID, ActionID: action.ActionID,
+		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
+		Reason: action.Reason,
+	}, nil
 }
 
 func (s *Service) FlattenLogicalAccount(
@@ -177,13 +217,28 @@ func (s *Service) FlattenLogicalAccount(
 		return FlattenResult{Action: action}, err
 	}
 	if other != nil {
-		return runningFlattenResult(*other), nil
+		result, _, err := runningFlattenFor(*other, command)
+		return result, err
 	}
 	members, err := s.Store.ListLogicalAccountMembers(
 		ctx, command.SpaceID, command.LogicalAccountID, true,
 	)
 	if err != nil {
 		return FlattenResult{Action: action}, err
+	}
+	if target := strings.TrimSpace(command.TradingAccountID); target != "" {
+		selected := members[:0]
+		for _, member := range members {
+			if member.TradingAccountID == target {
+				selected = append(selected, member)
+			}
+		}
+		if len(selected) == 0 {
+			// 成员在发起之后被移出了组合：没有可平的，按失败结束。
+			result := FlattenResult{Action: action}
+			return result, errors.Join(ErrNotInLogicalAccount, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
+		}
+		members = selected
 	}
 	result := FlattenResult{
 		Action:   action,
@@ -259,10 +314,21 @@ func (s *Service) otherRunningFlatten(ctx context.Context, command FlattenComman
 	}
 	for _, action := range running {
 		if action.ActionType == "FLATTEN" && action.ActionID != command.ActionID {
-			return runningFlattenResult(action), true, nil
+			return runningFlattenFor(action, command)
 		}
 	}
 	return FlattenResult{}, false, nil
+}
+
+// runningFlattenFor 决定另一个运行中清仓能不能代表这次请求：整组清仓覆盖所有成员，同一账户的清仓覆盖这个账户，
+// 返回它的进度；只平别的成员的清仓不覆盖这次请求，返回“组合账户正忙”，否则前端会把那次的完成当成本账户平完了。
+func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand) (FlattenResult, bool, error) {
+	var request flattenRequest
+	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
+	if request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID) {
+		return runningFlattenResult(other), true, nil
+	}
+	return FlattenResult{Action: other}, true, ErrLogicalAccountBusy
 }
 
 // runningFlattenResult 返回运行中清仓已落库的进度；诊断信息不当作这次调用的错误。
@@ -279,6 +345,7 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 	}
 	data, err := json.Marshal(flattenRequest{
 		LogicalAccountID: command.LogicalAccountID,
+		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
 	})
 	return string(data), err
 }
@@ -1123,7 +1190,7 @@ func (s *Service) flattenTimeout() time.Duration {
 	if s.FlattenTimeout > 0 {
 		return s.FlattenTimeout
 	}
-	// 要小于网关默认的 10 秒调用超时，未完成的部分由工作线程继续。
+	// 要小于网关给清仓接口的 12 秒调用超时（服务目录 method_timeouts_ms），未完成的部分由工作线程继续。
 	return 8 * time.Second
 }
 

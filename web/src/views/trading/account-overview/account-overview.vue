@@ -182,7 +182,7 @@
         </a-form>
       </a-modal>
 
-      <a-drawer v-model:visible="detailVisible" title="执行账户详情" :width="760" @cancel="closeDetail">
+      <a-drawer v-model:visible="detailVisible" title="执行账户详情" :width="900" @cancel="closeDetail">
         <template v-if="selectedAccount">
           <div class="detail-head">
             <div>
@@ -238,6 +238,16 @@
               {{ linkedLogicalAccount.name }} · {{ linkedLogicalAccount.logical_account_id }}
             </a-button>
             <span v-else>-</span>
+            <AccountFlatten
+              v-if="linkedLogicalAccount"
+              :trading-account-id="selectedAccount.trading_account_id"
+              :logical-name="linkedLogicalAccount.name"
+              class="section"
+            />
+          </div>
+          <div v-if="capabilitiesByAccount[selectedAccount.trading_account_id]?.ledger" class="section">
+            <h3>资金流水</h3>
+            <AccountLedger :trading-account-id="selectedAccount.trading_account_id" />
           </div>
           <div class="section">
             <h3>杠杆配置</h3>
@@ -314,6 +324,8 @@ import {
 } from "@/api/trade";
 import type { ExecutionCapabilities, LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { createLatestRequestGuard } from "@/utils/latest-request";
+import AccountFlatten from "./account-flatten.vue";
+import AccountLedger from "./account-ledger.vue";
 import {
   buildLiveRequest,
   buildPaperSimulationRequest,

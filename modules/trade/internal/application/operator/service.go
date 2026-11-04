@@ -407,10 +407,11 @@ func (s *Service) ResumeOperatorAction(
 	}
 	switch action.ActionType {
 	case "FLATTEN":
-		result, err := s.FlattenLogicalAccount(ctx, FlattenCommand{
-			SpaceID: action.SpaceID, ActionID: action.ActionID,
-			LogicalAccountID: action.LogicalAccountID, Reason: action.Reason,
-		})
+		command, err := decodeFlattenRequest(action)
+		if err != nil {
+			return err
+		}
+		result, err := s.FlattenLogicalAccount(ctx, command)
 		return submissionRecoveryError(ManualOrderResult{Action: result.Action}, err)
 	case "MANUAL_ORDER":
 		command, err := manualOrderCommand(action)

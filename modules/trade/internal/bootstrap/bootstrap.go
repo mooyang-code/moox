@@ -395,6 +395,15 @@ func initialize(
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
+			Adapters:           manager,
+			FlattenAccount: func(
+				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
+			) (store.OperatorActionRecord, error) {
+				result, flattenErr := operatorService.FlattenTradingAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: spaceID, ActionID: actionID, TradingAccountID: tradingAccountID, Reason: reason,
+				})
+				return result.Action, flattenErr
+			},
 		},
 	)
 	if err := registerHealth(
