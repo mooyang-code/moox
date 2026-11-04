@@ -1861,6 +1861,10 @@ components:
         port: 11200
         console_name: trade
         timeout_ms: 5000
+        method_timeouts_ms:
+          ListAccountLedger: 15000
+          FlattenLogicalAccount: 12000
+          FlattenTradingAccount: 12000
         max_body_bytes: 4194304
         methods:
           - CreateTradingAccount
@@ -1896,6 +1900,8 @@ components:
           - ListTradableInstruments
           - QueryEquityCurve
           - ListHoldings
+          - ListAccountLedger
+          - FlattenTradingAccount
         read_only_methods:
           - GetTradingAccount
           - ListTradingAccounts
@@ -1911,6 +1917,7 @@ components:
           - ListTradableInstruments
           - QueryEquityCurve
           - ListHoldings
+          - ListAccountLedger
         acl:
           - methods:
               - CreateTradingAccount
@@ -1943,6 +1950,8 @@ components:
               - ListTradableInstruments
               - QueryEquityCurve
               - ListHoldings
+              - ListAccountLedger
+              - FlattenTradingAccount
             callers:
               - console
               - moox-cli

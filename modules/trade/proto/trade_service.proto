@@ -460,6 +460,17 @@ message FlattenLogicalAccountRsp {
   OperatorAction action = 2;
 }
 
+// 只平组合账户里的一个执行账户；组合账户照样暂停，防止执行器马上把仓位建回来。
+message FlattenTradingAccountReq {
+  string action_id = 1;
+  string trading_account_id = 2;
+  string reason = 3;
+}
+message FlattenTradingAccountRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+}
+
 message PlaceManualOrderReq {
   string action_id = 1;
   string trading_account_id = 2;
@@ -622,6 +633,8 @@ message ExecutionCapabilities {
   repeated OrderType order_types = 3;
   repeated FillPolicy fill_policies = 4;
   bool can_close_paper_simulation = 5;
+  // 是否能查询资金流水（币安现货没有统一流水接口）。
+  bool ledger = 6;
 }
 
 message GetExecutionCapabilitiesRsp {
@@ -724,4 +737,36 @@ service TradeConsoleService {
   rpc ListTradableInstruments(ListTradableInstrumentsReq) returns (ListTradableInstrumentsRsp);
   rpc QueryEquityCurve(QueryEquityCurveReq) returns (QueryEquityCurveRsp);
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
+  rpc ListAccountLedger(ListAccountLedgerReq) returns (ListAccountLedgerRsp);
+  rpc FlattenTradingAccount(FlattenTradingAccountReq) returns (FlattenTradingAccountRsp);
+}
+
+// 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用，按时间倒序。
+message ListAccountLedgerReq {
+  string trading_account_id = 1;
+  // 毫秒时间戳；不传时默认近 7 天，最长 90 天。
+  int64 start_time = 2;
+  int64 end_time = 3;
+  // 默认 200，最多 1000。
+  int32 limit = 4;
+}
+
+message LedgerEntry {
+  string id = 1;
+  int64 time = 2;
+  // TRADE、FEE、REALIZED_PNL、FUNDING_FEE、TRANSFER、LIQUIDATION、INTEREST、OTHER
+  string type = 3;
+  string exchange_type = 4;
+  string asset = 5;
+  string amount = 6;
+  string exchange_symbol = 7;
+  string trade_id = 8;
+  string info = 9;
+}
+
+message ListAccountLedgerRsp {
+  common.RetInfo ret_info = 1;
+  repeated LedgerEntry entries = 2;
+  // 时间窗内还有更早的记录没取到。
+  bool has_more = 3;
 }

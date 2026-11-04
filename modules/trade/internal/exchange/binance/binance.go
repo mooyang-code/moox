@@ -782,6 +782,8 @@ func (a *Adapter) CancelOrder(
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return exchange.Order{}, transportUnknown("decode canceled order", err)
 	}
+	// 现货撤单回执的 clientOrderId 是撤单请求自己的单号（原单号在 origClientOrderId），统一用被撤订单的单号。
+	payload.ClientOrderID = clientOrderID
 	return a.orderFromPayload(payload)
 }
 

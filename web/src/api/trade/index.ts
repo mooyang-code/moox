@@ -11,6 +11,8 @@ import type {
   EquityPoint,
   Fill,
   Holding,
+  LedgerEntry,
+  ListAccountLedgerReq,
   ListTradingAccountsReq,
   ListFillsReq,
   ListOrdersReq,
@@ -122,6 +124,23 @@ export function listHoldings(trading_account_id: string) {
   return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
     trading_account_id
   });
+}
+
+/** 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序 */
+export function listAccountLedger(req: ListAccountLedgerReq) {
+  return callTrade<ListAccountLedgerReq, { ret_info: RetInfo; entries: LedgerEntry[]; has_more: boolean }>(
+    "console",
+    "ListAccountLedger",
+    req
+  );
+}
+
+/** 只平组合账户里的这一个执行账户；组合账户会被暂停 */
+export function flattenTradingAccount(action_id: string, trading_account_id: string, reason: string) {
+  return callTrade<
+    { action_id: string; trading_account_id: string; reason: string },
+    { ret_info: RetInfo; action: OperatorAction }
+  >("console", "FlattenTradingAccount", { action_id, trading_account_id, reason }, { silent: true });
 }
 
 export function createLogicalAccount(req: CreateLogicalAccountReq) {
