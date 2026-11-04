@@ -1,9 +1,9 @@
 module github.com/mooyang-code/moox/packages/security
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
-	golang.org/x/crypto v0.50.0
-	golang.org/x/sys v0.43.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/sys v0.49.0
 )

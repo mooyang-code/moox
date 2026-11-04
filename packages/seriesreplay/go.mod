@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/seriesreplay
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/glebarez/go-sqlite v1.21.2

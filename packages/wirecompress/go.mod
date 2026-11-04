@@ -1,9 +1,9 @@
 module github.com/mooyang-code/moox/packages/wirecompress
 
-go 1.25.0
+go 1.26.0
 
 require (
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.20.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -27,7 +27,7 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.0 // indirect
 )

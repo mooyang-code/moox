@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/factorexpr
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/expr-lang/expr v1.17.8
