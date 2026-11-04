@@ -49,9 +49,6 @@ type CollectionItem struct {
 	EndTime        string `json:"end_time,omitempty"`
 	SnapshotAt     string `json:"snapshot_at,omitempty"`
 	BarLimit       int    `json:"bar_limit,omitempty"`
-	// Canary 标记运维/部署探测：取该市场此频率最近一根已收盘的交易桶（按 barclock 与内嵌交易日历），
-	// 周末、节假日回到上一个交易时段，不当作缺数据。
-	Canary bool `json:"canary,omitempty"`
 	// RequirePeriodCommit is carried into durable retry records so retries keep
 	// the same Storage commit contract as their source batch.
 	RequirePeriodCommit bool `json:"require_period_commit,omitempty"`

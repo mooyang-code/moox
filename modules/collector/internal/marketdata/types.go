@@ -324,13 +324,8 @@ type KlineRequest struct {
 	StartTime      time.Time
 	EndTime        time.Time
 	Now            time.Time
-	// HistoryAsOf is an explicit reference point for bounded historical
-	// probes. It is normally zero and falls back to Now; deployment canaries
-	// set it to the selected closed session so a weekend does not make a
-	// known latest-page response look out of range.
-	HistoryAsOf time.Time
-	RequestID   string
-	DNSRoutes   map[string][]string
+	RequestID      string
+	DNSRoutes      map[string][]string
 	// RateBudgetRatio limits this invocation's share of the
 	// provider limiter budget. Zero means the normal provider budget (1.0).
 	RateBudgetRatio float64

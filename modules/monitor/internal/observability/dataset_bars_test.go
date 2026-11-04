@@ -298,7 +298,12 @@ func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
 	require.Equal(t, "healthy", lunch.Status, lunch.Reason)
 	require.Zero(t, lunch.WaitingBars)
 
-	// 13:20：13:00、13:05… 已收线却没到，生产者 11:30 以后没再运行，判为运行停滞。
+	// 13:05:30：下午第一根刚收线、还没到，生产者最近一次运行仍是 11:30，不能立刻判停滞。
+	open := at(cst("2026-10-16", "13:05:30"))
+	require.Equal(t, 1, open.WaitingBars)
+	require.Equal(t, "healthy", open.Status, open.Reason)
+
+	// 13:20：13:00、13:05… 已收线却没到，从 13:05 起算超过 10 分 30 秒，判为运行停滞。
 	afternoon := at(cst("2026-10-16", "13:20:00"))
 	require.Equal(t, "stale", afternoon.Status)
 	require.Equal(t, "run stale", afternoon.Reason)
@@ -310,6 +315,14 @@ func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
 		weekend := at(now)
 		require.Equal(t, "healthy", weekend.Status, "%s %s", now, weekend.Reason)
 	}
+
+	// 周一 09:35:30：第一根刚收线，最近一次运行是上周五 15:00，同样不判停滞。
+	mondayOpen := at(cst("2026-10-19", "09:35:30"))
+	require.Equal(t, 1, mondayOpen.WaitingBars)
+	require.Equal(t, "healthy", mondayOpen.Status, mondayOpen.Reason)
+	mondayStopped := at(cst("2026-10-19", "09:50:00"))
+	require.Equal(t, "stale", mondayStopped.Status)
+	require.Equal(t, "run stale", mondayStopped.Reason)
 
 	// 全天交易的市场不受影响：同样的空档照常判运行停滞。
 	cryptoKey := datasetKey{producer: "collector", spaceID: "crypto", datasetID: "dataset_crypto_5m", freq: "5m"}

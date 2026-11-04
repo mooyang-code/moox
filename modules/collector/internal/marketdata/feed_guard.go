@@ -388,11 +388,7 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			lastErr = fmt.Errorf("%w: provider %s does not support market=%s exchange=%s frequency=%s", ErrProviderNotFound, providerID, req.MarketID, req.ExchangeID, req.Frequency)
 			continue
 		}
-		historyReference := req.Now
-		if !req.HistoryAsOf.IsZero() {
-			historyReference = req.HistoryAsOf
-		}
-		if err := spec.HistoryFor(req.Frequency).ValidateStart(historyReference, providerReq.StartTime); err != nil {
+		if err := spec.HistoryFor(req.Frequency).ValidateStart(req.Now, providerReq.StartTime); err != nil {
 			s.breaker.Observe(providerID, err)
 			lastErr = err
 			continue

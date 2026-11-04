@@ -280,7 +280,7 @@ func TestSessionOrdinalSkipsBreaksAndHolidays(t *testing.T) {
 	}
 
 	// 不是桶起点、午休时刻都报错。
-	_, err = clock.Ordinal(Bucket{Start: utc("2026-10-08T01:31:00Z")})
+	_, err = clock.Ordinal(Bucket{Key: utc("2026-10-08T01:31:00Z")})
 	require.Error(t, err)
 	_, err = clock.BucketAtOrdinal(-1)
 	require.ErrorIs(t, err, ErrOutOfCoverage)
@@ -302,4 +302,32 @@ func TestSessionDailyOrdinal(t *testing.T) {
 	back, err := clock.BucketAtOrdinal(b)
 	require.NoError(t, err)
 	require.Equal(t, monday, back)
+}
+
+// 休市时刻、非交易日按 Key 定位都报 ErrNoBucket；日历之外报 ErrOutOfCoverage。
+func TestSessionOrdinalRejectsNonBuckets(t *testing.T) {
+	clock, err := ClockFor("stockcn", 5*time.Minute)
+	require.NoError(t, err)
+	for _, at := range []string{"2026-10-08T04:00:00Z", "2026-10-08T03:30:00Z", "2026-10-10T02:00:00Z", "2026-10-01T02:00:00Z"} {
+		_, err := clock.Ordinal(Bucket{Key: utc(at)})
+		require.ErrorIs(t, err, ErrNoBucket, at)
+	}
+	_, err = clock.Ordinal(Bucket{Key: utc("2027-06-01T02:00:00Z")})
+	require.ErrorIs(t, err, ErrOutOfCoverage)
+}
+
+func BenchmarkSessionOrdinalRoundTrip(b *testing.B) {
+	clock, err := ClockFor("stockcn", 5*time.Minute)
+	require.NoError(b, err)
+	key := utc("2026-10-08T05:05:00Z")
+	b.ReportAllocs()
+	for b.Loop() {
+		n, err := clock.Ordinal(Bucket{Key: key})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := clock.BucketAtOrdinal(n); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

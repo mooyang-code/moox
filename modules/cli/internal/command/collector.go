@@ -661,10 +661,6 @@ func collectorProbeInstanceEligible(node adminclient.FunctionInstance) bool {
 	return false
 }
 
-// stockCNKlineRouteID 是 stockcn 采集函数的 K 线路由 ID，与 Collector 的 marketfetch.StockCNRouteID("5m") 一致
-// （路由 ID 按频率生成，stockcn 只采 5m；CLI 不能引用 Collector 的内部包）。
-const stockCNKlineRouteID = "stockcn_equity_kline_5m"
-
 // publishCollectorEgressMetric makes the one-time diagnostic visible to the
 // same Monitor stream as recurring SCF feed metrics. It is best effort.
 func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeReport) {
@@ -672,7 +668,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 		return
 	}
 	registry := prometheus.NewRegistry()
-	functions := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"})
+	functions := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "kind"})
 	if err := registry.Register(functions); err != nil {
 		return
 	}
@@ -684,7 +680,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 	}
 	values := map[string]int{"expected": gate.ExpectedCount, "result": len(gate.Results), "non_empty_ip": nonEmpty, "distinct_ip": gate.DistinctCount}
 	for kind, value := range values {
-		functions.WithLabelValues("stockcn", stockCNKlineRouteID, kind).Set(float64(max(value, 0)))
+		functions.WithLabelValues("stockcn", kind).Set(float64(max(value, 0)))
 	}
 	reporter, err := metricsreport.NewHandlerWithRegistry(collectorEgressReportConfig(), registry)
 	if err != nil {

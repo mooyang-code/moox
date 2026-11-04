@@ -201,3 +201,30 @@ func TestSessionEndOfCalendar(t *testing.T) {
 	_, err = axis.FromAxis(end)
 	require.Error(t, err, "下一根在日历之外")
 }
+
+// 换算是热路径（同步 Storage 时每行都换）：经 Axis 换算不分配内存。
+func BenchmarkSessionAxisRoundTrip(b *testing.B) {
+	axis, err := AxisFor("stockcn", "5m")
+	require.NoError(b, err)
+	at := time.Date(2026, 10, 8, 5, 5, 0, 0, time.UTC)
+	b.ReportAllocs()
+	for b.Loop() {
+		x, err := axis.ToAxis(at)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := axis.FromAxis(x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestSessionAxisRoundTripDoesNotAllocate(t *testing.T) {
+	axis := stockAxis(t)
+	at := cst(t, "2026-10-08 13:05")
+	allocs := testing.AllocsPerRun(100, func() {
+		x, _ := axis.ToAxis(at)
+		_, _ = axis.FromAxis(x)
+	})
+	require.Zero(t, allocs)
+}

@@ -11,19 +11,17 @@ import (
 
 // Session 是有交易时段的市场（A 股）的时钟，按 barclock 的交易桶实现：真实时间只有交易桶，午休、隔夜、休市日没有周期；
 // 轴上时间 = 纪元 + 交易序号 × 周期。周期必须整除每个交易时段（1d 为一个交易日一根），除不尽的频率报错。
+// 换算直接按交易序号计算（barclock 的 Ordinal、BucketAtOrdinal），不建当天的桶列表；热路径经 Axis 调用，不查缓存、不分配内存。
 type Session struct {
 	market barclock.Market
-
-	mu     sync.Mutex
-	clocks map[string]barclock.Clock
+	// clocks 是各频率的 barclock 时钟（频率 → barclock.Clock），构造时要载入交易日历，所以缓存。
+	clocks sync.Map
 }
 
-// clock 返回频率对应的 barclock 时钟（按频率缓存：构造时要载入交易日历）。
+// clock 返回频率对应的 barclock 时钟。
 func (s *Session) clock(freq string) (barclock.Clock, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.clocks[freq]; ok {
-		return c, nil
+	if c, ok := s.clocks.Load(freq); ok {
+		return c.(barclock.Clock), nil
 	}
 	duration, err := domain.ParseFrequency(freq)
 	if err != nil {
@@ -33,11 +31,8 @@ func (s *Session) clock(freq string) (barclock.Clock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s 在 %s 的交易时段上不可用：%v", ErrUnsupportedFrequency, freq, s.market.ID, err)
 	}
-	if s.clocks == nil {
-		s.clocks = map[string]barclock.Clock{}
-	}
-	s.clocks[freq] = c
-	return c, nil
+	actual, _ := s.clocks.LoadOrStore(freq, c)
+	return actual.(barclock.Clock), nil
 }
 
 // Duration 返回名义周期（5m 就是 5 分钟）。
@@ -49,30 +44,16 @@ func (s *Session) Duration(freq string) (time.Duration, error) {
 	return c.Period(), nil
 }
 
-// bucket 返回 data_time 恰为 t 的交易桶。
-func (s *Session) bucket(c barclock.Clock, t time.Time, freq string) (barclock.Bucket, error) {
-	t = t.UTC()
-	items, err := c.Between(t, t.Add(c.Period()), 1)
-	if err != nil {
-		return barclock.Bucket{}, err
-	}
-	if len(items) == 0 || !items[0].Key.Equal(t) {
-		return barclock.Bucket{}, fmt.Errorf("时间 %s 不是 %s 在 %s 交易时段内的桶起点", t.Format(time.RFC3339), freq, s.market.ID)
-	}
-	return items[0], nil
-}
-
 // Align 要求 t 是交易桶的 data_time。
 func (s *Session) Align(t time.Time, freq string) (time.Time, error) {
 	c, err := s.clock(freq)
 	if err != nil {
 		return time.Time{}, err
 	}
-	b, err := s.bucket(c, t, freq)
-	if err != nil {
+	if _, err := c.Ordinal(barclock.Bucket{Key: t}); err != nil {
 		return time.Time{}, err
 	}
-	return b.Key, nil
+	return t.UTC(), nil
 }
 
 // Window 返回含 t 在内往前 n 根交易桶的 data_time（升序）。
@@ -84,14 +65,14 @@ func (s *Session) Window(t time.Time, freq string, n int) ([]time.Time, error) {
 	if err != nil {
 		return nil, err
 	}
-	b, err := s.bucket(c, t, freq)
+	last, err := c.Ordinal(barclock.Bucket{Key: t})
 	if err != nil {
 		return nil, err
 	}
 	window := make([]time.Time, n)
-	window[n-1] = b.Key
-	for i := n - 2; i >= 0; i-- {
-		if b, err = c.Prev(b); err != nil {
+	for i := range window {
+		b, err := c.BucketAtOrdinal(last - int64(n-1-i))
+		if err != nil {
 			return nil, err
 		}
 		window[i] = b.Key
@@ -104,15 +85,7 @@ func (s *Session) ToAxis(t time.Time, freq string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	b, err := s.bucket(c, t, freq)
-	if err != nil {
-		return time.Time{}, err
-	}
-	n, err := c.Ordinal(b)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return axisAt(c, n), nil
+	return sessionToAxis(c, t)
 }
 
 func (s *Session) FromAxis(a time.Time, freq string) (time.Time, error) {
@@ -120,10 +93,30 @@ func (s *Session) FromAxis(a time.Time, freq string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
+	return sessionFromAxis(c, a)
+}
+
+func (s *Session) AxisEnd(t time.Time, freq string) (time.Time, error) {
+	c, err := s.clock(freq)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return sessionAxisEnd(c, t)
+}
+
+func sessionToAxis(c barclock.Clock, t time.Time) (time.Time, error) {
+	n, err := c.Ordinal(barclock.Bucket{Key: t})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return axisAt(c, n), nil
+}
+
+func sessionFromAxis(c barclock.Clock, a time.Time) (time.Time, error) {
 	step := int64(c.Period() / time.Second)
-	seconds := a.UTC().Unix()
+	seconds := a.Unix()
 	if a.Nanosecond() != 0 || seconds%step != 0 {
-		return time.Time{}, fmt.Errorf("轴上时间 %d 没有按 %s 对齐", seconds, freq)
+		return time.Time{}, fmt.Errorf("轴上时间 %d 没有按 %s 对齐", seconds, c.Period())
 	}
 	b, err := c.BucketAtOrdinal(seconds / step)
 	if err != nil {
@@ -132,11 +125,7 @@ func (s *Session) FromAxis(a time.Time, freq string) (time.Time, error) {
 	return b.Key, nil
 }
 
-func (s *Session) AxisEnd(t time.Time, freq string) (time.Time, error) {
-	c, err := s.clock(freq)
-	if err != nil {
-		return time.Time{}, err
-	}
+func sessionAxisEnd(c barclock.Clock, t time.Time) (time.Time, error) {
 	b, err := c.LatestClosed(t.UTC())
 	if err != nil {
 		return time.Time{}, err

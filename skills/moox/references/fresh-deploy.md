@@ -92,7 +92,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 ### 步骤 8 的已知限制
 
-`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；`config init` 只在有因子机和海外机时打开 `factors.enabled`。
+`setup start` 会逐项导入 `moox.toml` 里这个空间的 `[factors]` 任务；**任一任务的源数据集不存在就整体失败**，后面的任务不会建。默认有三个因子任务：crypto 的 `ftask_spot_1m`、`ftask_swap_1m` 与 A 股的 `ftask_cn_5m`（源数据集都由 Collector 的默认采集任务创建）；`config init` 在没有因子机时关闭 `factors.enabled`；有因子机、没有海外机时保留因子，只去掉读 crypto 数据的任务。
 `moox.toml` 里指向自定义数据集的任务（例如手工建的 5m 采集任务的数据集）在全新系统里没有源数据，会让 init 在那里失败；先把它们从导入范围中拿掉，建好对应采集任务后再 `setup factors` 补导入。
 
 ## 5. 默认初始化的范围
@@ -110,7 +110,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 `setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写存储机所在地域，该地域要有带 access 组件、配了 `private_address` 的主机）。它依次：
 
-1. 立即同步一次空间里的自动标签：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
+1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
 2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只、每函数 40 只，共 8 个函数，每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回 `no_work`）；
 3. 导入因子任务 `ftask_cn_5m`（只有 `ma__5`、`ma__10`），创建观察实例 `default_dual_ma_cn_5m`（[`examples/strategies/dual_ma_cn_5m.yaml`](../../../examples/strategies/dual_ma_cn_5m.yaml)，不挂账户）。
 

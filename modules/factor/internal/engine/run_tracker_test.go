@@ -217,3 +217,16 @@ func TestRunTrackerLagCountsTradingBars(t *testing.T) {
 		}
 	}
 }
+
+// 当前时刻超出交易日历的覆盖范围时算不出交易 K 线根数：不能显示成“已追平”，按真实时间流逝估算滞后。
+func TestRunTrackerLagOutsideCalendarIsNotCaughtUp(t *testing.T) {
+	axis, err := periodclock.AxisFor("stockcn", "5m")
+	require.NoError(t, err)
+	last := time.Date(2026, 12, 31, 6, 55, 0, 0, time.UTC) // 日历最后一根（北京时间 14:55）
+	period, err := axis.ToAxis(last)
+	require.NoError(t, err)
+	now := time.Date(2027, 1, 4, 2, 0, 0, 0, time.UTC)
+	summary := summaryOf("ftask", trackedRun{periodTime: period, axis: axis, status: "complete"}, now)
+	require.Equal(t, last.Unix(), summary.LastPeriodTime)
+	require.Equal(t, int64(now.Sub(last)/time.Second), summary.LagSeconds)
+}

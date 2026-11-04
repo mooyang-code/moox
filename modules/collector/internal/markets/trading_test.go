@@ -64,22 +64,6 @@ func TestTradingBarReportsCalendarCoverageErrors(t *testing.T) {
 	require.Error(t, err, "超出覆盖期必须报错，不能当作非交易")
 }
 
-func TestLatestClosedBarWalksBackAcrossClosedDays(t *testing.T) {
-	sunday := cst("2026-08-30", "12:00")
-	bucket, err := LatestClosedBar("stockcn", "5m", sunday)
-	require.NoError(t, err)
-	require.Equal(t, cst("2026-08-28", "14:55"), bucket.Start)
-	require.Equal(t, cst("2026-08-28", "15:00"), bucket.End)
-
-	bucket, err = LatestClosedBar("stockcn", "1m", cst("2026-10-12", "12:00"))
-	require.NoError(t, err)
-	require.Equal(t, cst("2026-10-12", "11:29"), bucket.Start)
-
-	bucket, err = LatestClosedBar("crypto", "5m", cst("2026-08-30", "12:03"))
-	require.NoError(t, err)
-	require.Equal(t, cst("2026-08-30", "11:55"), bucket.Start)
-}
-
 func TestCheckCalendarHorizon(t *testing.T) {
 	// 内嵌日历覆盖到 2026-12-31。
 	require.NoError(t, CheckCalendarHorizon("stockcn", cst("2026-11-04", "10:00"), 14))

@@ -221,26 +221,6 @@ func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineR
 	return p.rows, err
 }
 
-func TestKlinePipelineCanaryUsesLatestClosedCalendarSession(t *testing.T) {
-	now := time.Date(2026, 8, 30, 4, 0, 0, 0, time.UTC) // Sunday, 12:00 Asia/Shanghai.
-	barStart := time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: barStart, BarEnd: barStart.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: barStart.Add(time.Minute), FetchedAt: now, RequestID: "canary"}
-	var observed marketdata.KlineRequest
-	registry := marketdata.NewRegistry()
-	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}, request: &observed}))
-	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrNoClosedBar}))
-	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
-	require.NoError(t, err)
-	storage := &pipelineStorage{}
-	pipeline := &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"sina", "tencent"}, SettleDelay: 5 * time.Second, Now: func() time.Time { return now }}
-	payload, err := pipeline.Execute(context.Background(), Request{BatchID: "canary", BatchKind: domain.BatchKindBackfill, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m", Provider: "sina", MarketType: "equity", RequestID: "canary", Items: []domain.CollectionItem{{SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", StartTime: now.Add(-23 * time.Hour).Format(time.RFC3339Nano), BarLimit: 3, Canary: true}}})
-	require.NoError(t, err)
-	require.Equal(t, "succeeded", payload.GetStatus())
-	require.Equal(t, barStart, observed.StartTime)
-	require.Equal(t, bar.BarEnd, observed.EndTime)
-	require.Equal(t, bar.BarEnd, observed.HistoryAsOf)
-}
-
 func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbackWithinDeadline(t *testing.T) {
 	now := time.Date(2026, 8, 28, 7, 0, 10, 0, time.UTC) // 15:00:10 Asia/Shanghai：14:59 那根刚过结算延迟
 	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-30"}

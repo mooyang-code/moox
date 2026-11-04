@@ -195,16 +195,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				coverageEnd = frequency.BarEnd(coverageStart)
 				limit = 1
 			}
-			historyAsOf := started.UTC()
-			if item.Canary && !req.RequirePeriodCommit {
-				// 金丝雀取该市场此频率最近一根已收盘的交易桶：休市、周末、节假日时回到上一个交易时段。
-				bucket, calendarErr := markets.LatestClosedBar(marketID, req.Frequency, started.UTC().Add(-max(p.SettleDelay, 0)))
-				if calendarErr != nil {
-					results[index] = failureResult(item, domain.ItemOutcomeProviderError, "calendar", calendarErr)
-					return
-				}
-				coverageStart, coverageEnd, historyAsOf = bucket.Start, bucket.End, bucket.End
-			}
 			// Each provider request owns its DNS snapshot, including the IP slices.
 			var dnsRoutes map[string][]string
 			if len(req.DNSRoutes) > 0 {
@@ -215,7 +205,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -734,11 +724,15 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	if instrumentName == "" {
 		instrumentName = bar.SubjectID
 	}
+	tradeDate, err := tradeDateUTC(bar.BarStart)
+	if err != nil {
+		return nil, err
+	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
 		doubleValue("volume", bar.VolumeShares),
 		stringValue("instrument_name", instrumentName),
-		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
+		timeValue("trade_date", tradeDate), timeValue("close_time", bar.BarEnd),
 		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
 		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
 		timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
@@ -828,10 +822,14 @@ func parseOptionalTime(raw string) time.Time {
 	return parsed.UTC()
 }
 
-func tradeDateUTC(value time.Time) time.Time {
-	location, _ := time.LoadLocation("Asia/Shanghai")
+// tradeDateUTC 返回 K 线所属交易日（市场时区的自然日）零点的 UTC 时刻。
+func tradeDateUTC(value time.Time) (time.Time, error) {
+	location, err := markets.Location(StockCNSpaceID)
+	if err != nil {
+		return time.Time{}, err
+	}
 	local := value.In(location)
-	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC(), nil
 }
 
 func amountUnit(bar marketdata.NormalizedKline) string {

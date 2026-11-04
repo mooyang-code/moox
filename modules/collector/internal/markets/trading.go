@@ -93,15 +93,6 @@ func TradingBar(marketID, frequency string, barStart time.Time) (bool, error) {
 	return len(buckets) == 1 && buckets[0].Key.Equal(barStart.UTC()), nil
 }
 
-// LatestClosedBar 返回收盘时刻不晚于 now 的最近一个交易桶；交易时段市场在休市、节假日会往前找到上一个交易时段。
-func LatestClosedBar(marketID, frequency string, now time.Time) (barclock.Bucket, error) {
-	clock, err := Clock(marketID, frequency)
-	if err != nil {
-		return barclock.Bucket{}, err
-	}
-	return clock.LatestClosed(now)
-}
-
 // CheckCalendarHorizon 检查市场交易日历的覆盖期：已用完返回 ErrCalendarExpired，剩余不足 minDays 天返回
 // ErrCalendarExpiringSoon；没有交易日历的市场（连续交易）总是通过。
 func CheckCalendarHorizon(marketID string, now time.Time, minDays int) error {

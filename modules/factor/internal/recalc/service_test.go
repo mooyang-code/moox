@@ -168,29 +168,43 @@ func (r recalcSubjects) ListDatasetSubjects(context.Context, string, string) ([]
 	return append([]string(nil), r...), nil
 }
 
-// A 股补算区间：起点是交易桶的起点，终点可以是桶的起点或收盘时刻（含日历最后一天的收盘），按真实时间入库；午休中间的时刻不行。
-func TestAlignRangeAcceptsStockCNCloseAsEnd(t *testing.T) {
+// A 股补算区间吸附到交易 K 线：起点取不早于它的第一根开盘，终点取不晚于它的最近收盘，按真实时间入库；
+// 吸附后区间里没有 K 线才报错。crypto 仍严格按周期对齐。
+func TestAlignRangeSnapsStockCNToTradingBars(t *testing.T) {
 	cst := time.FixedZone("CST", 8*3600)
 	at := func(value string) time.Time {
 		parsed, err := time.ParseInLocation("2006-01-02 15:04", value, cst)
 		require.NoError(t, err)
-		return parsed
+		return parsed.UTC()
 	}
-	for _, c := range [][2]string{
-		{"2026-10-09 09:30", "2026-10-09 15:00"},
-		{"2026-10-09 09:30", "2026-10-09 11:30"},
-		{"2026-10-09 13:00", "2026-10-12 09:30"},
-		{"2026-12-31 14:00", "2026-12-31 15:00"},
+	for _, c := range []struct{ start, end, wantStart, wantEnd string }{
+		// 交易日 10:07 打开页面的默认区间：终点 10:07 吸附到 10:05（10:00 那根收盘），起点 08:47 吸附到 09:30 开盘。
+		{"2026-10-09 08:47", "2026-10-09 10:07", "2026-10-09 09:30", "2026-10-09 10:05"},
+		// 终点 20:00 吸附到当天 15:00 收盘。
+		{"2026-10-09 13:00", "2026-10-09 20:00", "2026-10-09 13:00", "2026-10-09 15:00"},
+		// 起点在周日：吸附到周一 09:30 开盘。
+		{"2026-10-11 10:00", "2026-10-12 10:00", "2026-10-12 09:30", "2026-10-12 10:00"},
+		// 起点在盘中（10:07）：吸附到下一根 10:10；终点 13:00 是午休后第一根的开盘，吸附到 11:30 收盘。
+		{"2026-10-09 10:07", "2026-10-09 13:00", "2026-10-09 10:10", "2026-10-09 11:30"},
+		// 已经对齐的区间不变；日历最后一天的收盘能作终点。
+		{"2026-12-31 14:00", "2026-12-31 15:00", "2026-12-31 14:00", "2026-12-31 15:00"},
 	} {
-		start, end, err := alignRange("stockcn", "5m", at(c[0]), at(c[1]))
+		start, end, err := AlignRange("stockcn", "5m", at(c.start), at(c.end))
 		require.NoError(t, err, c)
-		require.Equal(t, at(c[0]).UTC(), start)
-		require.Equal(t, at(c[1]).UTC(), end)
+		require.Equal(t, at(c.wantStart), start, c)
+		require.Equal(t, at(c.wantEnd), end, c)
 	}
-	_, _, err := alignRange("stockcn", "5m", at("2026-10-09 09:30"), at("2026-10-09 12:00"))
+	// 午休、周末里没有 K 线。
+	_, _, err := AlignRange("stockcn", "5m", at("2026-10-09 11:40"), at("2026-10-09 12:50"))
 	require.Error(t, err)
-	_, _, err = alignRange("stockcn", "5m", at("2026-10-09 11:30"), at("2026-10-09 15:00"))
-	require.Error(t, err, "起点必须是交易桶的起点")
-	_, _, err = alignRange("stockcn", "5m", at("2026-10-09 11:25"), at("2026-10-09 11:30"))
-	require.NoError(t, err, "区间里有一根")
+	_, _, err = AlignRange("stockcn", "5m", at("2026-10-10 10:00"), at("2026-10-11 20:00"))
+	require.Error(t, err)
+
+	// crypto 不吸附：没对齐就拒绝。
+	_, _, err = AlignRange("crypto", "5m", at("2026-10-09 10:07"), at("2026-10-09 11:00"))
+	require.Error(t, err)
+	start, end, err := AlignRange("crypto", "5m", at("2026-10-09 10:05"), at("2026-10-09 11:00"))
+	require.NoError(t, err)
+	require.Equal(t, at("2026-10-09 10:05"), start)
+	require.Equal(t, at("2026-10-09 11:00"), end)
 }

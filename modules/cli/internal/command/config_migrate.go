@@ -11,7 +11,7 @@ import (
 )
 
 func newConfigMigrateCommand() *cobra.Command {
-	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention string
+	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention, exampleFile string
 	var removeTasks, removeFactors, addTasks []string
 	var yes bool
 	cmd := &cobra.Command{
@@ -35,7 +35,7 @@ func newConfigMigrateCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks}
+			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks, ExampleFile: exampleFile}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			if retention != "" {
 				target, value, ok := strings.Cut(retention, "=")
@@ -86,6 +86,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&removeTasks, "remove-factor-task", nil, "删除这个因子任务（[[factors.tasks]] 的 id），可重复")
 	cmd.Flags().StringArrayVar(&removeFactors, "remove-factor", nil, "删除这个因子定义（[[factors.definitions]] 的 factor_id），可重复；仍被任务引用时报错")
 	cmd.Flags().StringArrayVar(&addTasks, "add-factor-task", nil, "从仓库根 moox.toml.example 复制这个因子任务（[[factors.tasks]] 的 id），可重复；已有同 ID 时报错")
+	cmd.Flags().StringVar(&exampleFile, "example-file", "", "--add-factor-task 读取的配置样例（默认仓库根的 moox.toml.example）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd

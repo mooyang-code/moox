@@ -30,16 +30,9 @@ func newSessionAxis(space string, step time.Duration) (*sessionAxis, error) {
 
 // toAxis 把交易桶的 data_time 换成轴上时间；不是交易桶起点（午休、休市、未对齐）时报错。
 func (a *sessionAxis) toAxis(t time.Time) (time.Time, error) {
-	items, err := a.clock.Between(t, t.Add(a.step), 1)
+	n, err := a.clock.Ordinal(barclock.Bucket{Key: t})
 	if err != nil {
-		return time.Time{}, err
-	}
-	if len(items) == 0 || !items[0].Key.Equal(t) {
-		return time.Time{}, fmt.Errorf("时间 %s 不是交易时段内按 %s 对齐的 K 线", t.Format(time.RFC3339), a.step)
-	}
-	n, err := a.clock.Ordinal(items[0])
-	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("时间 %s 不是交易时段内按 %s 对齐的 K 线：%w", t.Format(time.RFC3339), a.step, err)
 	}
 	return time.Unix(n*int64(a.step/time.Second), 0).UTC(), nil
 }
