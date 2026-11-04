@@ -120,7 +120,7 @@ func mustFrequency(t *testing.T, name string) marketdata.Frequency {
 }
 
 func TestKlinePipelineReportsStageTimingsAndCommit(t *testing.T) {
-	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
@@ -136,17 +136,17 @@ func TestKlinePipelineReportsStageTimingsAndCommit(t *testing.T) {
 	pipeline := &KlinePipeline{
 		Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina"}, Reporter: reporter, FunctionName: "fn",
 		SourceID: "stockcn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
-		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+		DatasetID: testStockDatasetID, Now: func() time.Time { return now },
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err = pipeline.Execute(ctx, Request{
 		BatchID: "timing", BatchKind: domain.BatchKindRealtime,
-		SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+		SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 		Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "timing",
 		Items: []domain.CollectionItem{{
 			SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
-			MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+			MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1,
 		}},
 	})
 	require.NoError(t, err)
@@ -210,7 +210,7 @@ func TestSchedProbeAndRuntimeFields(t *testing.T) {
 }
 
 func TestKlinePipelinePassesStandbyDelayToProviderRequests(t *testing.T) {
-	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 28, 6, 5, 0, 0, time.UTC) // 14:05 Asia/Shanghai，交易时段内
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
@@ -232,16 +232,16 @@ func TestKlinePipelinePassesStandbyDelayToProviderRequests(t *testing.T) {
 	pipeline := &KlinePipeline{
 		Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina"},
 		SourceID: "stockcn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
-		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+		DatasetID: testStockDatasetID, Now: func() time.Time { return now },
 	}
 	run := func(standbyMS int) {
 		_, err := pipeline.Execute(context.Background(), Request{
 			BatchID: "standby", BatchKind: domain.BatchKindRealtime, StandbyMS: standbyMS,
-			SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+			SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Frequency: "1m",
 			Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "standby",
 			Items: []domain.CollectionItem{{
 				SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
-				MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+				MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1,
 			}},
 		})
 		require.NoError(t, err)

@@ -512,7 +512,7 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 	if len(repaired) == 0 {
 		return
 	}
-	log.Infof("factor_gap_repaired task_id=%s entries=%d window=%s/%s", selection.Set.TaskID, len(repaired), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	log.Infof("factor_gap_repaired task_id=%s entries=%d window=%s/%s", selection.Set.TaskID, len(repaired), periodclock.FormatPeriod(selection.Set.SpaceID, selection.Set.Freq, start), periodclock.FormatPeriod(selection.Set.SpaceID, selection.Set.Freq, end))
 	if g.onRepaired == nil {
 		return
 	}

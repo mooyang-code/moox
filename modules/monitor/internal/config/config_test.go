@@ -366,6 +366,30 @@ func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	}
 }
 
+// A 股探针按内嵌交易日历与 barclock 校验周期：周期要整除每个交易时段，并且必须配置可用的 K 线来源。
+func TestMonitorConfigValidatesStockCNMarketCanaryFrequency(t *testing.T) {
+	tag := "default"
+	cfg := Default()
+	cfg.Deployment.Enabled = false
+	cfg.MarketCanary.Enabled = true
+	cfg.MarketCanary.Subjects = []MarketCanarySubject{{
+		SpaceID: "stockcn", DatasetID: "dataset_task", Symbol: "600000.XSHG", Frequency: "5m", SeriesTag: &tag,
+		EligibleKlineProviders: []string{"eastmoney", "tdx"},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("stockcn 5m 探针应当有效：%v", err)
+	}
+	cfg.MarketCanary.Subjects[0].Frequency = "45m"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "不能按 45m 切分") {
+		t.Fatalf("Validate() error = %v, want 45m 不能整除交易时段", err)
+	}
+	cfg.MarketCanary.Subjects[0].Frequency = "5m"
+	cfg.MarketCanary.Subjects[0].EligibleKlineProviders = nil
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "eligible_kline_providers") {
+		t.Fatalf("Validate() error = %v, want eligible_kline_providers error", err)
+	}
+}
+
 func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||

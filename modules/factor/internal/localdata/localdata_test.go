@@ -179,7 +179,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 	t.Cleanup(func() { _ = store.Close() })
 	st := newFakeStorage()
 	fx := &fixture{st: st, now: at(10)}
-	fx.data = New(Config{Store: store, Storage: st, Clock: periodclock.Continuous{}, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2, Now: func() time.Time { return fx.now }})
+	fx.data = New(Config{Store: store, Storage: st, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2, Now: func() time.Time { return fx.now }})
 	fx.runner = pipeline.NewRunner(st, fx.data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	fx.set = domain.EngineTask{
 		Set: domain.FactorTask{TaskID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m",

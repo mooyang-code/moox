@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
@@ -136,18 +136,15 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 		} `yaml:"tasks"`
 	}
 	require.NoError(t, yaml.Unmarshal(content, &bundle))
-	found := false
+	var stock []string
 	for _, task := range bundle.Tasks {
-		if task.SpaceID != "stockcn" || task.DataType != "kline" || !slices.Contains(task.TagIDs, "cn_a_share") {
+		if task.SpaceID != "stockcn" {
 			continue
 		}
-		if fmt.Sprint(task.CollectParams["frequency"]) != "1m" {
-			continue
-		}
-		found = true
+		stock = append(stock, task.DataType+"/"+strings.Join(task.TagIDs, ",")+"/"+fmt.Sprint(task.CollectParams["frequency"]))
 		assert.False(t, task.Enabled)
 	}
-	assert.True(t, found, "default stockcn 1m task should exist and remain disabled until explicit activation")
+	assert.Equal(t, []string{"kline/cn_hs300/5m"}, stock, "A 股只有一条沪深 300 的 5m 任务，默认停用，显式启用")
 }
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {

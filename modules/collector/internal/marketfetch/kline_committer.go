@@ -298,8 +298,7 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
 		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
 	} else {
-		// 估算成交额（close × volume）不是真实成交额：显式写 NULL，也覆盖该行之前写入过的估算值。
-		fields = append(fields, amountField(bar))
+		fields = append(fields, doubleValue("amount", bar.AmountCNY))
 		if p.InstrumentType == marketdata.InstrumentIndex {
 			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
 		}

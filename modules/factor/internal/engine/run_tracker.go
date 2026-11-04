@@ -5,7 +5,10 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-go/log"
+
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 )
 
@@ -20,7 +23,9 @@ type runTracker struct {
 }
 
 type trackedRun struct {
+	// periodTime 是轴上的周期；axis 是任务所在空间、频率的换算，上报时换回真实时间。
 	periodTime time.Time
+	axis       periodclock.Axis
 	// completedAt 是这一期结果写完的时刻，作为因子结果的到达时间上报给 Monitor。
 	completedAt    time.Time
 	status         string
@@ -53,7 +58,7 @@ func (t *runTracker) setOnRecord(hook func()) {
 	t.mu.Unlock()
 }
 
-func (t *runTracker) record(taskID string, periodTime time.Time, status string, outcome pipeline.Outcome, completedAt time.Time) {
+func (t *runTracker) record(taskID string, axis periodclock.Axis, periodTime time.Time, status string, outcome pipeline.Outcome, completedAt time.Time) {
 	if t == nil || taskID == "" || periodTime.IsZero() {
 		return
 	}
@@ -76,7 +81,7 @@ func (t *runTracker) record(taskID string, periodTime time.Time, status string, 
 		})
 	}
 	t.runs[taskID] = trackedRun{
-		periodTime: periodTime, completedAt: completedAt, status: status, factors: factors,
+		periodTime: periodTime, axis: axis, completedAt: completedAt, status: status, factors: factors,
 		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming, rows: outcome.RowsWritten,
 	}
 	t.mu.Unlock()
@@ -226,19 +231,69 @@ func (t *runTracker) all(now time.Time) []domain.TaskRunSummary {
 	return out
 }
 
+// summaryOf 是一期的对外摘要（心跳与 RecentRuns）：周期换回真实时间，滞后按交易 K 线根数计算，午休、隔夜、周末不算滞后。
 func summaryOf(taskID string, run trackedRun, now time.Time) domain.TaskRunSummary {
-	lag := int64(now.Sub(run.periodTime).Seconds())
-	if lag < 0 {
-		lag = 0
+	lastPeriod, err := run.axis.FromAxis(run.periodTime)
+	if err != nil {
+		lagErrors.report(taskID, err)
+		return domain.TaskRunSummary{TaskID: taskID, LastStatus: run.status}
+	}
+	lag, err := lagSeconds(run.axis, run.periodTime, now)
+	if err != nil {
+		// 算不出交易 K 线根数（例如当前时刻超出交易日历的覆盖范围）：不能显示成“已追平”，记错误日志，
+		// 滞后按真实时间流逝估算（不扣休市），让故障在页面上显示为滞后。
+		lagErrors.report(taskID, err)
+		lag = max(0, int64(now.Sub(lastPeriod)/time.Second))
 	}
 	var completedAt int64
 	if !run.completedAt.IsZero() {
 		completedAt = run.completedAt.Unix()
 	}
 	return domain.TaskRunSummary{
-		TaskID: taskID, LastPeriodTime: run.periodTime.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
+		TaskID: taskID, LastPeriodTime: lastPeriod.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
+}
+
+// lagBehind 是落后的根数：(AxisEnd(now) − 最后一期) / 周期 − 1。算完最新已收盘的一期为 0，收盘后、结果写出前为 1。
+func lagBehind(axis periodclock.Axis, period, now time.Time) (int64, error) {
+	end, err := axis.AxisEnd(now)
+	if err != nil {
+		return 0, err
+	}
+	return max(0, int64(end.Sub(period)/axis.Step())-1), nil
+}
+
+// lagErrorLog 限制滞后算不出来时的错误日志：每个任务每 10 分钟至多一条（心跳每几秒就算一次摘要）。
+type lagErrorLog struct {
+	mu     sync.Mutex
+	logged map[string]time.Time
+}
+
+var lagErrors = &lagErrorLog{logged: map[string]time.Time{}}
+
+func (l *lagErrorLog) report(taskID string, err error) {
+	l.mu.Lock()
+	last, seen := l.logged[taskID]
+	now := time.Now()
+	if seen && now.Sub(last) < 10*time.Minute {
+		l.mu.Unlock()
+		return
+	}
+	l.logged[taskID] = now
+	l.mu.Unlock()
+	log.Errorf("factor_lag_unknown task_id=%s error=%v（按交易 K 线计算滞后失败，可能是交易日历过期）", taskID, err)
+}
+
+// closeGrace 是收盘后给计算留的宽限：不超过半个周期，刚收盘、正在计算的那根在宽限内不算落后。
+const closeGrace = 30 * time.Second
+
+// lagSeconds 是落后的已收盘 K 线根数 × 周期。根数按市场时钟（交易序号轴）数，午休、隔夜、周末不算落后；
+// 前端直接按 lag_seconds / 周期 显示根数。
+func lagSeconds(axis periodclock.Axis, period, now time.Time) (int64, error) {
+	step := axis.Step()
+	bars, err := lagBehind(axis, period, now.Add(-min(closeGrace, step/2)))
+	return bars * int64(step/time.Second), err
 }
 
 // lastRecorded 返回任务最近记录的一期原始记录（只在内存里，引擎重启后清空）。

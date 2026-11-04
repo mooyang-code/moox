@@ -219,11 +219,12 @@ func defaultSCFPlan() SCFPlanConfig {
 		// 写入阶段预算 4 秒：错峰 1.5 秒 + 行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000, StaggerMS: 1500},
-		// stockcn：每函数 40 个标的；错峰窗口第 5～40 秒；国内数据源限流较保守。
+		// stockcn：每函数 40 个标的，国内数据源限流较保守；错峰窗口第 5～20 秒。定时函数超时 60 秒：东方财富单源串行、
+		// 每秒 5 次，40 只至少 8 秒（2026-11-04 实测单次约 0.2 秒），最晚 20 秒起跑也留出 30 秒以上给重试、兜底与写入。
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {SymbolsPerFunction: 40, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}},
+			"stockcn": {SymbolsPerFunction: 40, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 15000}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
 			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},

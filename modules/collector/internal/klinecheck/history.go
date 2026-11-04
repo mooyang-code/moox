@@ -73,11 +73,6 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 	if err != nil {
 		return nil, err
 	}
-	if c.CalendarReady != nil {
-		if err := c.CalendarReady(spaceID); err != nil {
-			return nil, fmt.Errorf("trading calendar is unavailable: %w", err)
-		}
-	}
 	records, err := c.Plans.ListAll(ctx, spaceID)
 	if err != nil {
 		return nil, err

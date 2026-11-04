@@ -426,6 +426,14 @@ func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar strin
 		if expectation, valid := datasetKey(instance, bar); valid {
 			limit = max(limit, warmupPeriods*expectation.Interval)
 		}
+		// A 股攒够 warmupPeriods 根要跨午休、隔夜或周末：按交易日历往后数，而不是按墙钟。
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && strings.EqualFold(strings.TrimSpace(resolved.Calendar), "cn_stock") {
+			if period, err := input.ClosedPeriod(resolved.Calendar, bar, since); err == nil {
+				if after, err := input.AdvanceBarEnd(resolved.Calendar, bar, period.BarEnd, warmupPeriods); err == nil {
+					limit = max(limit, after.Sub(since))
+				}
+			}
+		}
 		return at.Sub(since) <= limit
 	}
 	if expectation, valid := datasetKey(instance, bar); valid {

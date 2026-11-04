@@ -105,7 +105,7 @@ type DatasetInfo struct {
 	SubjectsRevision uint64
 }
 
-// TagInfo 是标签元数据；MarketType 是标签唯一且不可修改的市场类型（spot | swap）。
+// TagInfo 是标签元数据；MarketType 是标签唯一且不可修改的市场类型（spot | swap | equity）。
 type TagInfo struct {
 	MarketType string
 }

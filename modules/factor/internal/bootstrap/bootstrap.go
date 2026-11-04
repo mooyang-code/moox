@@ -126,7 +126,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 
 	filled := factorrpc.NewFilledInbox()
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
-		factorrpc.WithPreviewer(preview.New(storage, previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))), factorrpc.WithFilledInbox(filled))
+		factorrpc.WithPreviewer(preview.New(storageio.NewAxis(storage), previewWorkers, preview.WithUDF(udfhost.New(previewRuntime), fetchModule))), factorrpc.WithFilledInbox(filled))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService, filled))
 

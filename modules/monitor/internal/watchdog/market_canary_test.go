@@ -3,8 +3,6 @@ package watchdog
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +10,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -98,9 +97,10 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
 	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
 	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
+	// 只取已收盘的桶（不含 12:00 这根未收盘的），按时间升序。
 	require.Len(t, reader.request.GetKeys(), 24)
-	require.Equal(t, now.Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetTimeSeries().GetDataTime())
-	require.Equal(t, now.Add(-23*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetTimeSeries().GetDataTime())
+	require.Equal(t, now.Add(-24*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetTimeSeries().GetDataTime())
+	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetTimeSeries().GetDataTime())
 	require.Equal(t, []string{"close"}, reader.request.GetColumnNames())
 	require.Equal(t, auth, reader.request.GetAuthInfo())
 
@@ -262,55 +262,49 @@ func TestMarketCanaryStorageRejectionRedactsSensitiveDetail(t *testing.T) {
 }
 
 func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
-	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC) // 09:33:05 Asia/Shanghai.
+	now := shanghai(2026, 8, 28, 9, 33, 5)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 30, 0, 0, time.UTC), "sina"),
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 31, 0, 0, time.UTC), "tencent"),
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 32, 0, 0, time.UTC), "eastmoney"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 30, 0), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "tencent"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "eastmoney"),
 	}}
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	config := stockCanaryConfig("1m")
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
 	require.True(t, result.Success)
 	require.Equal(t, []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}, reader.request.GetColumnNames())
-	require.Len(t, reader.request.GetKeys(), 3)
+	require.Equal(t, []string{"2026-08-28T01:30:00Z", "2026-08-28T01:31:00Z", "2026-08-28T01:32:00Z"}, requestedTimes(reader))
 	require.Equal(t, "default", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
 }
 
 func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
-	early := time.Date(2026, 8, 28, 7, 0, 5, 0, time.UTC) // 15:00:05 Asia/Shanghai.
+	config := stockCanaryConfig("1m")
+	early := shanghai(2026, 8, 28, 15, 0, 5)
 	earlyReader := &canaryReader{}
 	earlyResult := (MarketCanary{Reader: earlyReader, Config: config, Now: func() time.Time { return early }}).Run(t.Context())
 	require.True(t, earlyResult.Success)
 	require.JSONEq(t, `{"state":"idle"}`, earlyResult.BodyExcerpt)
 	require.Nil(t, earlyReader.request)
 
-	now := time.Date(2026, 8, 28, 7, 1, 5, 0, time.UTC) // 15:01:05 Asia/Shanghai.
+	now := shanghai(2026, 8, 28, 15, 1, 5)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
-		stockCanaryRow(time.Date(2026, 8, 28, 6, 57, 0, 0, time.UTC), "sina"),
-		stockCanaryRow(time.Date(2026, 8, 28, 6, 58, 0, 0, time.UTC), "sina"),
-		stockCanaryRow(time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 14, 57, 0), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 14, 58, 0), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 14, 59, 0), "sina"),
 	}}
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
 	require.True(t, result.Success)
-	require.NotNil(t, reader.request)
-	foundFinalBar := false
-	for _, key := range reader.request.GetKeys() {
-		if key.GetTimeSeries().GetDataTime() == "2026-08-28T06:59:00Z" && key.GetTimeSeries().GetSeriesTag() == "default" {
-			foundFinalBar = true
-			break
-		}
-	}
-	require.True(t, foundFinalBar)
+	require.Equal(t, []string{"2026-08-28T06:57:00Z", "2026-08-28T06:58:00Z", "2026-08-28T06:59:00Z"}, requestedTimes(reader))
 }
 
 func TestMarketCanaryStockCNMiddayAndClosedDayAreIdleHealthy(t *testing.T) {
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	requireTradingStatus(t, 2026, 10, 1, marketcalendar.NonTradingDay)
+	config := stockCanaryConfig("1m")
 	for _, now := range []time.Time{
-		time.Date(2026, 8, 28, 4, 0, 0, 0, time.UTC), // 12:00 lunch.
-		time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC), // National Day closure.
+		shanghai(2026, 8, 28, 12, 0, 0), // 午休
+		shanghai(2026, 10, 1, 10, 0, 0), // 国庆休市
 	} {
 		reader := &canaryReader{}
 		result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
@@ -320,17 +314,99 @@ func TestMarketCanaryStockCNMiddayAndClosedDayAreIdleHealthy(t *testing.T) {
 	}
 }
 
-func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
-	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-08-27"))
-	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
-	require.Equal(t, "calendar_expired", result.ErrorMessage)
+// 5m 探针在交易时段内检查最近 3 根已收盘的 5 分钟线；午休前、收盘后只在收盘后 1～4 分钟内检查该时段最后几根，
+// 其余休市时间（午休、收盘后、开盘前、周末、节假日）空闲；开盘后最近 3 根可以跨到上一交易日。
+func TestMarketCanaryStockCN5mExpectedBars(t *testing.T) {
+	requireTradingStatus(t, 2026, 8, 27, marketcalendar.TradingDay)
+	requireTradingStatus(t, 2026, 8, 28, marketcalendar.TradingDay)
+	requireTradingStatus(t, 2026, 8, 29, marketcalendar.NonTradingDay)
+	requireTradingStatus(t, 2026, 10, 1, marketcalendar.NonTradingDay)
+	cases := []struct {
+		name string
+		now  time.Time
+		// want 为空表示空闲、不读存储。
+		want []time.Time
+	}{
+		{"交易时段内", shanghai(2026, 8, 28, 10, 0, 10), []time.Time{shanghai(2026, 8, 28, 9, 45, 0), shanghai(2026, 8, 28, 9, 50, 0), shanghai(2026, 8, 28, 9, 55, 0)}},
+		{"刚收盘还没等到写入", shanghai(2026, 8, 28, 10, 0, 3), []time.Time{shanghai(2026, 8, 28, 9, 40, 0), shanghai(2026, 8, 28, 9, 45, 0), shanghai(2026, 8, 28, 9, 50, 0)}},
+		{"开盘后跨到上一交易日", shanghai(2026, 8, 28, 9, 35, 5), []time.Time{shanghai(2026, 8, 27, 14, 50, 0), shanghai(2026, 8, 27, 14, 55, 0), shanghai(2026, 8, 28, 9, 30, 0)}},
+		{"开盘前", shanghai(2026, 8, 28, 9, 32, 0), nil},
+		{"上午收盘后等待写入", shanghai(2026, 8, 28, 11, 30, 5), nil},
+		{"上午收盘后检查最后几根", shanghai(2026, 8, 28, 11, 31, 5), []time.Time{shanghai(2026, 8, 28, 11, 15, 0), shanghai(2026, 8, 28, 11, 20, 0), shanghai(2026, 8, 28, 11, 25, 0)}},
+		{"午休", shanghai(2026, 8, 28, 12, 0, 0), nil},
+		{"下午第一根未收盘", shanghai(2026, 8, 28, 13, 3, 0), nil},
+		{"下午第一根收盘后", shanghai(2026, 8, 28, 13, 5, 10), []time.Time{shanghai(2026, 8, 28, 11, 20, 0), shanghai(2026, 8, 28, 11, 25, 0), shanghai(2026, 8, 28, 13, 0, 0)}},
+		{"收盘后等待写入", shanghai(2026, 8, 28, 15, 0, 30), nil},
+		{"收盘后检查最后几根", shanghai(2026, 8, 28, 15, 1, 5), []time.Time{shanghai(2026, 8, 28, 14, 45, 0), shanghai(2026, 8, 28, 14, 50, 0), shanghai(2026, 8, 28, 14, 55, 0)}},
+		{"收盘检查窗口已过", shanghai(2026, 8, 28, 15, 5, 0), nil},
+		{"周末", shanghai(2026, 8, 29, 10, 0, 0), nil},
+		{"节假日", shanghai(2026, 10, 1, 10, 0, 0), nil},
+	}
+	config := stockCanaryConfig("5m")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := make([]*storagepb.TimeSeriesRow, 0, len(tc.want))
+			want := make([]string, 0, len(tc.want))
+			for _, at := range tc.want {
+				rows = append(rows, stockCanaryRow(at, "eastmoney"))
+				want = append(want, at.UTC().Format(time.RFC3339Nano))
+			}
+			reader := &canaryReader{rows: rows}
+			result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return tc.now }}).Run(t.Context())
+			require.True(t, result.Success, result.ErrorMessage)
+			if len(tc.want) == 0 {
+				require.JSONEq(t, `{"state":"idle"}`, result.BodyExcerpt)
+				require.Nil(t, reader.request)
+				return
+			}
+			require.Empty(t, result.BodyExcerpt)
+			require.Equal(t, want, requestedTimes(reader))
+			require.Equal(t, "5m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+		})
+	}
+}
 
-	config = stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+func TestMarketCanaryStockCN5mReportsMissingBars(t *testing.T) {
+	now := shanghai(2026, 8, 28, 15, 1, 5)
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 30, 0, 0, time.UTC), ""),
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 31, 0, 0, time.UTC), "sina"),
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 32, 0, 0, time.UTC), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 14, 45, 0), "eastmoney"),
+		stockCanaryRow(shanghai(2026, 8, 28, 14, 50, 0), "tdx"),
+	}}
+	result := (MarketCanary{Reader: reader, Config: stockCanaryConfig("5m"), Now: func() time.Time { return now }}).Run(t.Context())
+	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
+}
+
+func TestMarketCanaryStockCNRejectsPeriodThatDoesNotDivideSessions(t *testing.T) {
+	reader := &canaryReader{}
+	result := (MarketCanary{Reader: reader, Config: stockCanaryConfig("45m"), Now: func() time.Time {
+		return shanghai(2026, 8, 28, 10, 0, 0)
+	}}).Run(t.Context())
+	require.Equal(t, "invalid_config", result.ErrorMessage)
+	require.Nil(t, reader.request)
+	require.Error(t, ValidateMarketCanary(stockCanaryConfig("45m")))
+	require.NoError(t, ValidateMarketCanary(stockCanaryConfig("5m")))
+	withoutProviders := stockCanaryConfig("5m")
+	withoutProviders.EligibleKlineProviders = nil
+	require.ErrorContains(t, ValidateMarketCanary(withoutProviders), "eligible_kline_providers")
+}
+
+func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
+	calendar, err := marketcalendar.Load("cn_stock")
+	require.NoError(t, err)
+	last := calendar.LastDate()
+	config := stockCanaryConfig("1m")
+	expired := shanghai(last.Year(), last.Month(), last.Day()+1, 10, 0, 0)
+	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return expired }}).Run(t.Context())
+	require.Equal(t, "calendar_expired", result.ErrorMessage)
+	expiring := shanghai(last.Year(), last.Month(), last.Day()-7, 10, 0, 0)
+	result = (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return expiring }}).Run(t.Context())
+	require.Equal(t, "calendar_expiring", result.ErrorMessage)
+
+	now := shanghai(2026, 8, 28, 9, 33, 5)
+	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 30, 0), ""),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "sina"),
 	}}
 	result = (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.Equal(t, "missing_source_provider", result.ErrorMessage)
@@ -341,24 +417,23 @@ func TestMarketCanaryStockCNReportsCalendarAndDataReasons(t *testing.T) {
 }
 
 func TestMarketCanaryStockCNEnforcesConfiguredClosedBarCoverage(t *testing.T) {
-	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	now := shanghai(2026, 8, 28, 9, 33, 5)
+	config := stockCanaryConfig("1m")
 	config.ClosedBarMinCoverage = 0.99
 	reader := &canaryReader{rows: []*storagepb.TimeSeriesRow{
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 31, 0, 0, time.UTC), "sina"),
-		stockCanaryRow(time.Date(2026, 8, 28, 1, 32, 0, 0, time.UTC), "tencent"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 31, 0), "sina"),
+		stockCanaryRow(shanghai(2026, 8, 28, 9, 32, 0), "tencent"),
 	}}
 
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
 	require.Equal(t, "closed_bar_coverage_below_threshold", result.ErrorMessage)
-	require.JSONEq(t, `{"type":"stockcn_closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
+	require.JSONEq(t, `{"type":"closed_bar_coverage","expected":3,"actual":2,"coverage":0.6666666666666666,"minimum":0.99}`, result.BodyExcerpt)
 }
 
 func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
-	now := time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
-	config.ClosedBarMinCoverage = 0.99
+	now := shanghai(2026, 8, 28, 9, 33, 5)
+	config := stockCanaryConfig("1m")
 
 	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 
@@ -366,30 +441,63 @@ func TestMarketCanaryStockCNReportsNoClosedBarData(t *testing.T) {
 }
 
 func TestMarketCanaryStockCNReportsNoEligibleKlineFeed(t *testing.T) {
-	config := stockCanaryConfig(t, stockCalendarPath(t, "2026-12-31"))
+	config := stockCanaryConfig("1m")
 	config.EligibleKlineProviders = nil
 	result := (MarketCanary{Reader: &canaryReader{}, Config: config, Now: func() time.Time {
-		return time.Date(2026, 8, 28, 1, 33, 5, 0, time.UTC)
+		return shanghai(2026, 8, 28, 9, 33, 5)
 	}}).Run(t.Context())
 	require.Equal(t, "no_eligible_kline_feed", result.ErrorMessage)
 }
 
-func stockCanaryConfig(t *testing.T, calendarPath string) MarketCanaryConfig {
-	t.Helper()
+// 空间 ID 即市场 ID：stockcn 空间的探针不配 market_id 也按 A 股交易时段判断。
+func TestMarketCanaryStockCNMarketDefaultsToSpace(t *testing.T) {
+	config := stockCanaryConfig("1m")
+	config.MarketID = ""
+	reader := &canaryReader{}
+	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return shanghai(2026, 8, 28, 12, 0, 0) }}).Run(t.Context())
+	require.True(t, result.Success)
+	require.JSONEq(t, `{"state":"idle"}`, result.BodyExcerpt)
+}
+
+func stockCanaryConfig(frequency string) MarketCanaryConfig {
 	return MarketCanaryConfig{
-		SpaceID: "stockcn", DatasetID: "dataset_stockcn_equity_kline_1m", SubjectID: "600000.XSHG", Frequency: "1m", SeriesTag: stringPtr("default"),
-		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stockcn", CalendarPath: calendarPath,
+		SpaceID: "stockcn", DatasetID: "dataset_stockcn_kline", SubjectID: "600000.XSHG", Frequency: frequency, SeriesTag: stringPtr("default"),
+		Freshness: 3 * time.Minute, ReturnThreshold: 0.2, MarketID: "stockcn",
 		SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99,
 		EligibleKlineProviders: []string{"sina", "tencent", "tdx", "eastmoney"},
 	}
 }
 
-func stockCalendarPath(t *testing.T, coverageEnd string) string {
+var shanghaiLocation = func() *time.Location {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		panic(err)
+	}
+	return location
+}()
+
+// shanghai 返回上海时间对应的 UTC 时刻。
+func shanghai(year int, month time.Month, day, hour, minute, second int) time.Time {
+	return time.Date(year, month, day, hour, minute, second, 0, shanghaiLocation).UTC()
+}
+
+func requireTradingStatus(t *testing.T, year int, month time.Month, day int, want marketcalendar.CoverageStatus) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "calendar.yaml")
-	raw := "timezone: Asia/Shanghai\ncoverage_start: \"2026-01-01\"\ncoverage_end: \"" + coverageEnd + "\"\nsessions:\n  - start: \"09:30\"\n    end: \"11:30\"\n  - start: \"13:00\"\n    end: \"15:00\"\nclosed_dates:\n  - \"2026-10-01\"\nexceptional_open_dates: []\n"
-	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
-	return path
+	calendar, err := marketcalendar.Load("cn_stock")
+	require.NoError(t, err)
+	date, err := marketcalendar.NewCivilDate(year, month, day)
+	require.NoError(t, err)
+	status, err := calendar.Status(date)
+	require.NoError(t, err)
+	require.Equal(t, want, status, "%s 的交易日状态", date)
+}
+
+func requestedTimes(reader *canaryReader) []string {
+	out := make([]string, 0, len(reader.request.GetKeys()))
+	for _, key := range reader.request.GetKeys() {
+		out = append(out, key.GetTimeSeries().GetDataTime())
+	}
+	return out
 }
 
 func stockCanaryRow(at time.Time, provider string) *storagepb.TimeSeriesRow {

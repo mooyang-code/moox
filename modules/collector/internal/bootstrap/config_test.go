@@ -411,7 +411,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
 		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
-		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
+		require.Equal(t, 15000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -439,7 +439,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
 	require.Equal(t, 8, fetch.Concurrency)
-	require.Equal(t, 35000, fetch.StaggerMS)
+	require.Equal(t, 15000, fetch.StaggerMS)
 	require.Positive(t, fetch.Concurrency)
 	require.Positive(t, fetch.Burst)
 	require.Positive(t, fetch.RequestTimeoutMS)

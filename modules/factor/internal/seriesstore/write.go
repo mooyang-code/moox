@@ -155,11 +155,11 @@ func (s *Store) writeSubject(snap kvReader, batch *pebble.Batch, src Source, g g
 		t := rows.Times[i]
 		if t < from || t >= to || !g.aligned(t) {
 			return res, fmt.Errorf("%w：标的 %s 的行时间 %s 不在 [%s, %s) 内或未按 %s 对齐", ErrInvalidWrite, w.Subject,
-				time.Unix(t, 0).UTC().Format(time.RFC3339), w.From.UTC().Format(time.RFC3339), w.To.UTC().Format(time.RFC3339), src.Freq)
+				src.Format(time.Unix(t, 0)), src.Format(w.From), src.Format(w.To), src.Freq)
 		}
 		idx := byTag[rows.Tags[i]]
 		if n := len(idx); n > 0 && rows.Times[idx[n-1]] == t {
-			return res, fmt.Errorf("%w：标的 %s 在 %s 有重复行", ErrInvalidWrite, w.Subject, time.Unix(t, 0).UTC().Format(time.RFC3339))
+			return res, fmt.Errorf("%w：标的 %s 在 %s 有重复行", ErrInvalidWrite, w.Subject, src.Format(time.Unix(t, 0)))
 		}
 		byTag[rows.Tags[i]] = append(idx, i)
 	}
@@ -250,7 +250,7 @@ func (s *Store) writeSubject(snap kvReader, batch *pebble.Batch, src Source, g g
 func checkRegion(src Source, g grid, w SubjectWrite) error {
 	from, to := w.From.UTC(), w.To.UTC()
 	if !from.Before(to) || from.Nanosecond() != 0 || to.Nanosecond() != 0 || !g.aligned(from.Unix()) || !g.aligned(to.Unix()) {
-		return fmt.Errorf("%w：标的 %s 的区间 [%s, %s) 必须按 %s 对齐且起点早于终点", ErrInvalidWrite, w.Subject, from.Format(time.RFC3339), to.Format(time.RFC3339), src.Freq)
+		return fmt.Errorf("%w：标的 %s 的区间 [%s, %s) 必须按 %s 对齐且起点早于终点", ErrInvalidWrite, w.Subject, src.Format(from), src.Format(to), src.Freq)
 	}
 	return nil
 }
@@ -322,7 +322,7 @@ func planTag(r kvReader, src Source, g grid, fields []Field, subject, tag string
 			return nil, nil, err
 		}
 		if row == nil {
-			return nil, nil, fmt.Errorf("%s/%s 的数据在 %s 处应当存在却读不到（本地数据不连续）", src, subject, time.Unix(leftEnd, 0).UTC().Format(time.RFC3339))
+			return nil, nil, fmt.Errorf("%s/%s 的数据在 %s 处应当存在却读不到（本地数据不连续）", src, subject, src.Format(time.Unix(leftEnd, 0)))
 		}
 		prev = row
 	}

@@ -9,7 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -445,15 +445,10 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}
-	clock, err := periodclock.ForSpace(set.SpaceID)
+	// 7×24 市场严格按周期对齐；有交易时段的市场把区间吸附到交易 K 线上（见 recalc.AlignRange）。
+	start, end, err = recalc.AlignRange(set.SpaceID, set.Freq, start, end)
 	if err != nil {
-		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(err)}, nil
-	}
-	if _, err := clock.Align(start, set.Freq); err != nil {
-		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("start_time must be aligned to %s: %w", set.Freq, err))}, nil
-	}
-	if _, err := clock.Align(end, set.Freq); err != nil {
-		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("end_time must be aligned to %s: %w", set.Freq, err))}, nil
+		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("recalc range must be aligned to %s: %w", set.Freq, err))}, nil
 	}
 	job, err := s.recalc.Submit(ctx, req.GetTaskId(), factorwire.CloneStrings(req.GetMembers()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
 	if err != nil {

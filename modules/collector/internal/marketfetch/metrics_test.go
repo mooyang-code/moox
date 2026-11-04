@@ -122,7 +122,7 @@ func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 	metrics := NewMetrics(registry)
 
 	metrics.ObserveFeedResult(FeedMetric{
-		MarketID: "stockcn", RouteID: StockCNRouteID, ProviderID: "sina",
+		MarketID: "stockcn", RouteID: StockCNRouteID("1m"), ProviderID: "sina",
 		FeedKind: "kline", GroupID: 7, GroupCount: 200, BatchKind: "realtime", Result: "success",
 	})
 
@@ -132,7 +132,7 @@ func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
 	require.Len(t, family.GetMetric(), 1)
 	labels := metricLabels(family.GetMetric()[0])
 	require.Equal(t, map[string]string{
-		"market_id": "stockcn", "route_id": StockCNRouteID, "provider_id": "sina",
+		"market_id": "stockcn", "route_id": StockCNRouteID("1m"), "provider_id": "sina",
 		"feed_kind": "kline", "group_id": "7", "batch_kind": "realtime", "result": "success",
 	}, labels)
 	for _, forbidden := range []string{"subject", "subject_id", "ip", "candidate_chain", "function_name"} {
@@ -154,7 +154,7 @@ func TestMetricsAllowConfiguredCryptoKlineFrequencies(t *testing.T) {
 func TestMetricsRejectFeedGroupOutsideConfiguredRange(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	metrics.ObserveFeedResult(FeedMetric{MarketID: "stockcn", RouteID: StockCNRouteID, ProviderID: "sina", FeedKind: "kline", GroupID: 200, GroupCount: 200, BatchKind: "realtime", Result: "success"})
+	metrics.ObserveFeedResult(FeedMetric{MarketID: "stockcn", RouteID: StockCNRouteID("1m"), ProviderID: "sina", FeedKind: "kline", GroupID: 200, GroupCount: 200, BatchKind: "realtime", Result: "success"})
 	families, err := registry.Gather()
 	require.NoError(t, err)
 	for _, family := range families {

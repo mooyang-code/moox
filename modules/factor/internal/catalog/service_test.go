@@ -57,11 +57,30 @@ func TestCreateTaskCanonicalizesUppercaseFrequency(t *testing.T) {
 func TestCreateTaskRejectsSpaceWithoutCalendar(t *testing.T) {
 	svc := NewService(openCatalogStore(t), newMetadataFake())
 	set := newTask()
-	set.SpaceID = "stockcn"
+	set.SpaceID = "stockhk"
 
 	_, err := svc.CreateTask(context.Background(), set)
 
 	require.ErrorIs(t, err, periodclock.ErrUnsupportedCalendar)
+}
+
+// A 股空间有交易日历：5m 任务可以建；整除不了交易时段的频率（4h）在创建时就拒绝。
+func TestCreateTaskAcceptsStockCN5m(t *testing.T) {
+	meta := newMetadataFake()
+	source := meta.datasets[resultKey("crypto", "dataset_prices")]
+	source.SpaceID, source.Freq = "stockcn", "5m"
+	meta.datasets[resultKey("stockcn", "dataset_prices")] = source
+	set := newTask()
+	set.SpaceID, set.Freq = "stockcn", "5m"
+
+	created, err := NewService(openCatalogStore(t), meta).CreateTask(context.Background(), set)
+	require.NoError(t, err)
+	require.Equal(t, "stockcn", created.SpaceID)
+	require.Equal(t, "5m", created.Freq)
+
+	set.TaskID, set.Name, set.Freq = "ftask_prices_4h", "四小时", "4h"
+	_, err = NewService(openCatalogStore(t), meta).CreateTask(context.Background(), set)
+	require.ErrorIs(t, err, periodclock.ErrUnsupportedFrequency)
 }
 
 func TestCreateTaskRetryResumesFromPending(t *testing.T) {

@@ -155,13 +155,13 @@ webhook_url = ""
 # 同一个因子可以用不同的固定参数多次加入同一个任务，固定参数加成员之后不再改，要换参数请另加一个成员。
 # 默认因子：xbx.yaml 里的 bias、cci、min_max、quote_volume_mean，以及 common.yaml 里的常用技术指标
 # （MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）。
-# 关闭默认因子导入请设置 factors.enabled = false（config init 在没有因子机或海外机时自动关闭：没有引擎或源数据会长期告警）；也可以在因子库里新增定义，或复制任务改成自己的数据集与频率。
+# 关闭默认因子导入请设置 factors.enabled = false（config init 在没有因子机时自动关闭；有因子机、没有海外机时去掉读 crypto 数据的任务，保留 A 股任务）；也可以在因子库里新增定义，或复制任务改成自己的数据集与频率。
 [factors]
 enabled = true
 source_dir = "./modules/factor/factors"
 
 # 每个采集任务独占一个结果数据集，ID 由任务 ID 派生为 dataset_<task_id>
-# （见 config/setup/collection-tasks.yaml）：下面两个分别读币安现货、合约 1m 任务的结果。
+# （见 config/setup/collection-tasks.yaml）：下面的任务分别读币安现货、合约 1m 任务与 A 股 5m 任务的结果。
 # 固定参数、可变成员的写法示例（加进任务的 members 里即可，不要和任务里已有的同一成员重复）：
 #   { factor = "ema", params = { span = 20, warmup = 50000 } },   # 成员键 ema__20_50000
 #   { factor = "ma", var = true },                                 # 成员键 ma__var，参数由关联的策略实例逐期提交
@@ -211,6 +211,20 @@ members = [
   { factor = "atr_pct" },
   { factor = "return_std" },
   { factor = "vwap" },
+]
+
+[[factors.tasks]]
+# A 股 5m 任务：读 config/setup/collection-tasks.yaml 里“A 股 K 线 5m”任务的结果（沪深 300 成分股）。
+# 只放双均线示例（examples/strategies/dual_ma_cn_5m.yaml）用到的两个成员，最长只回看 10 根，上线当天就能出结果；
+# EMA 等长回看因子在 A 股 5m 上要几年的历史（默认 EMA 最大回看 49995 根，每个交易日只有 48 根），需要时再加，并同步调大保留期。
+id = "ftask_cn_5m"
+name = "A股五分钟"
+space_id = "stockcn"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhh0"
+freq = "5m"
+members = [
+  { factor = "ma", params = { window = 5 } },
+  { factor = "ma", params = { window = 10 } },
 ]
 
 [[factors.definitions]]
@@ -305,6 +319,19 @@ enabled = false
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
+
+# config init 会按第一步密钥的 AppId 与入口主机的 VPC、子网、私网 IP 自动生成下面 A 股这一套：入口优先选存储服务器所在地域（同地域走内网），
+# 存储服务器没有可用的私有网络时退而选其他带 Access 的主机（如海外服务器）。
+# A 股：沪深 300 成分股 5m K 线，函数优先放在存储机所在地域（该地域要有带 access 组件、配了 private_address 的主机），
+# 每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回不采集。
+# [scf_plan.regions.ap-nanjing]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+# access_host = "storage"
+# [[scf_plan.spaces]]
+# space_id = "stockcn"
+# [scf_plan.spaces.markets]
+# equity = ["ap-nanjing"]
 
 # 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
 # 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示，不写时按 ID 生成（overseas-2 → 海外机 2）。

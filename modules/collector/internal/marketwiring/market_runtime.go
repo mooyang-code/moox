@@ -29,10 +29,8 @@ func newMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	if marketID == "" || providerID == "" || sourceID == "" {
 		return nil, fmt.Errorf("market, provider and source are required")
 	}
-	if marketID == marketfetch.StockCNSpaceID {
-		if instrumentType == marketdata.InstrumentEquity {
-			return NewStockKlinePipelineForSource(storage, providerID, sourceID)
-		}
+	if marketID == marketfetch.StockCNSpaceID && instrumentType == marketdata.InstrumentEquity {
+		return nil, fmt.Errorf("A 股股票走 NewStockKlinePipeline，不走单一来源的市场流水线")
 	}
 	provider, err := newMarketProvider(marketID, instrumentType, providerID, sourceID, feedRateLimit(limits))
 	if err != nil {
@@ -69,10 +67,6 @@ func newMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 			pipeline.InstrumentType = marketdata.InstrumentIndex
 		} else {
 			pipeline.InstrumentType = marketdata.InstrumentConvertibleBond
-		}
-		pipeline.Calendar, err = loadStockCNCalendar()
-		if err != nil {
-			return nil, err
 		}
 	}
 	return pipeline, nil

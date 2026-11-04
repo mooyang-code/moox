@@ -49,10 +49,6 @@ type CollectionItem struct {
 	EndTime        string `json:"end_time,omitempty"`
 	SnapshotAt     string `json:"snapshot_at,omitempty"`
 	BarLimit       int    `json:"bar_limit,omitempty"`
-	// Canary marks an operator/deployment probe. Stock canaries use the
-	// bundled trading calendar to resolve the latest closed session rather
-	// than treating a weekend or holiday as a missing-data failure.
-	Canary bool `json:"canary,omitempty"`
 	// RequirePeriodCommit is carried into durable retry records so retries keep
 	// the same Storage commit contract as their source batch.
 	RequirePeriodCommit bool `json:"require_period_commit,omitempty"`

@@ -18,7 +18,9 @@ import (
 )
 
 type Config struct {
+	// BaseURL 是标的列表（clist）的地址；KlineBaseURL 是 K 线的地址。两者不同：5m K 线只在 push2his 有数据。
 	BaseURL                  string
+	KlineBaseURL             string
 	KlineEndpoint            string
 	SourceID                 string
 	HTTPClient               *http.Client
@@ -30,6 +32,7 @@ type Config struct {
 
 type Provider struct {
 	baseURL             string
+	klineBaseURL        string
 	klineEndpoint       string
 	sourceID            string
 	client              *http.Client
@@ -42,6 +45,9 @@ type Provider struct {
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://push2.eastmoney.com"
+	}
+	if cfg.KlineBaseURL == "" {
+		cfg.KlineBaseURL = eastMoneyKlineBase
 	}
 	if cfg.KlineEndpoint == "" {
 		cfg.KlineEndpoint = "/api/qt/stock/kline/get"
@@ -68,26 +74,28 @@ func New(cfg Config) *Provider {
 	}
 	instrumentRateLimit := cfg.RateLimit
 	instrumentRateLimit.RequestTimeout = cfg.InstrumentRequestTimeout
-	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
+	return &Provider{baseURL: strings.TrimRight(cfg.BaseURL, "/"), klineBaseURL: strings.TrimRight(cfg.KlineBaseURL, "/"), klineEndpoint: cfg.KlineEndpoint, sourceID: strings.ToLower(strings.TrimSpace(cfg.SourceID)), client: cfg.HTTPClient, now: cfg.Now, rateLimit: cfg.RateLimit, instrumentRateLimit: instrumentRateLimit, maxBars: cfg.MaxBarsPerRequest}
 }
 
 func (p *Provider) Descriptor() marketdata.ProviderDescriptor {
-	return marketdata.ProviderDescriptor{ID: "eastmoney", SourceID: p.sourceID, DisplayName: "EastMoney", Hosts: []string{"push2.eastmoney.com"}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
+	return marketdata.ProviderDescriptor{ID: "eastmoney", SourceID: p.sourceID, DisplayName: "EastMoney", Hosts: []string{eastMoneyPushHost, eastMoneyKlineHost}, ProtocolVariant: "http", Transport: "https", Port: 443, Status: marketdata.SourceEnabled}
 }
 
 func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m"},
+		Frequencies:       []string{"1m", "5m"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: p.maxBars,
-		TimestampMode:     marketdata.TimestampModeOpen,
-		// The public endpoint returns one bounded latest page. Keep the common
-		// history contract conservative until a cursor-paginated feed is added.
-		History:   marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
-		RateLimit: p.rateLimit,
+		// 时间标签是 K 线的收盘时刻（2026-11-04 实测：1m 首根 09:31、5m 首根 09:35，末根 11:30、15:00，
+		// 午后首根 13:01 / 13:05），首根含 09:25 开盘集合竞价的成交。
+		TimestampMode: marketdata.TimestampModeClose,
+		// 1m 只能取到当天：保持 24 小时。5m 实测能取到约 1500 根（约 31 个交易日），保守声明 30 个自然日。
+		History:            marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{"5m": {MaxLookback: 30 * 24 * time.Hour}},
+		RateLimit:          p.rateLimit,
 	}
 }
 
@@ -111,18 +119,16 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
-	if req.Frequency != "1m" {
-		return nil, fmt.Errorf("%w: eastmoney only supports 1m", marketdata.ErrUnsupportedFrequency)
+	frequency, _ := req.FrequencyValue() // Validate 已校验
+	klt, ok := eastMoneyKlt[frequency]
+	if !ok {
+		return nil, fmt.Errorf("%w: eastmoney 不支持 %s", marketdata.ErrUnsupportedFrequency, req.Frequency)
 	}
 	secid, err := commonsrc.EastMoneySecID(req.SubjectID)
 	if err != nil {
 		return nil, err
 	}
-	beginDate := "0"
 	endDate := "20500101"
-	if !req.StartTime.IsZero() {
-		beginDate = req.StartTime.UTC().Format("20060102")
-	}
 	if !req.EndTime.IsZero() {
 		endDate = req.EndTime.UTC().Format("20060102")
 	} else if !req.Now.IsZero() {
@@ -133,12 +139,15 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if historicalRequest {
 		requestLimit = p.maxBars
 	}
-	query := "secid=" + url.QueryEscape(secid) +
-		"&klt=1&fqt=0&beg=" + url.QueryEscape(beginDate) +
-		"&end=" + url.QueryEscape(endDate) + "&lmt=" + strconv.Itoa(requestLimit) +
+	// 带 beg 时上游忽略 lmt、返回 [beg, end] 内的全部 K 线；实时请求不带 beg，只取 end 之前最近 lmt 根。
+	query := "secid=" + url.QueryEscape(secid) + "&klt=" + klt + "&fqt=0"
+	if !req.StartTime.IsZero() {
+		query += "&beg=" + url.QueryEscape(req.StartTime.UTC().Format("20060102"))
+	}
+	query += "&end=" + url.QueryEscape(endDate) + "&lmt=" + strconv.Itoa(requestLimit) +
 		"&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13" +
 		"&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+p.klineEndpoint+"?"+query, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.klineBaseURL+p.klineEndpoint+"?"+query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +208,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeMinuteKline(req.SubjectID, "eastmoney", req.ProviderSymbol, marketdata.TimestampModeOpen, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, 100, now, req.RequestID)
+		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "eastmoney", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
 		if err != nil {
 			return nil, err
 		}
@@ -222,11 +231,44 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	if marketID != "stockcn" {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: market_id %q is unsupported", marketdata.ErrInvalidRequest, req.MarketID)
 	}
-	spec := p.InstrumentSpec()
 	fetchedAt := req.SnapshotAt.UTC()
 	if req.SnapshotAt.IsZero() {
 		fetchedAt = p.now().UTC()
 	}
+	snapshot, _, err := p.fetchClistSnapshot(ctx, eastMoneyAShareFilter, p.InstrumentSpec().PageSize, fetchedAt)
+	return snapshot, err
+}
+
+// IndexCodes 返回登记了成分板块的指数代码。
+func (p *Provider) IndexCodes() []string {
+	codes := make([]string, 0, len(eastMoneyIndexBoards))
+	for code := range eastMoneyIndexBoards {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+// FetchIndexConstituents 取指数的全部成分股：与全部 A 股同一个 clist 列表请求，筛选条件换成该指数的成分板块。
+// 条数必须等于接口自报的 total，翻页不完整就报错。
+func (p *Provider) FetchIndexConstituents(ctx context.Context, indexCode string) (marketdata.InstrumentSnapshot, error) {
+	board, ok := eastMoneyIndexBoards[strings.TrimSpace(indexCode)]
+	if !ok {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: 东方财富没有登记指数 %q 的成分板块", marketdata.ErrInvalidRequest, indexCode)
+	}
+	snapshot, total, err := p.fetchClistSnapshot(ctx, "b:"+board, eastMoneyClistMaxPageSize, p.now().UTC())
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("指数 %s 成分股：%w", indexCode, err)
+	}
+	if total <= 0 || len(snapshot.Instruments) != total {
+		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: 指数 %s 成分股取到 %d 只，接口报的总数是 %d", marketdata.ErrProtocol, indexCode, len(snapshot.Instruments), total)
+	}
+	return snapshot, nil
+}
+
+// fetchClistSnapshot 按筛选条件 fs 翻页取完整的标的列表，返回快照与接口自报的总数（没报时为 0）。
+func (p *Provider) fetchClistSnapshot(ctx context.Context, fs string, pageSize int, fetchedAt time.Time) (marketdata.InstrumentSnapshot, int, error) {
+	marketID := "stockcn"
 	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
 	declaredTotal := 0
 	itemsSeen := 0
@@ -234,12 +276,12 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 	activeBase := ""
 	for page := 1; ; page++ {
 		if page > maxInstrumentPages {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
+			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
 		}
 		query := url.Values{
 			"pn":     {strconv.Itoa(page)},
-			"pz":     {strconv.Itoa(spec.PageSize)},
-			"fs":     {"m:0 t:6,m:0 t:80,m:1 t:2"},
+			"pz":     {strconv.Itoa(pageSize)},
+			"fs":     {fs},
 			"fid":    {"f12"},
 			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
 		}
@@ -256,22 +298,22 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				break
 			}
 			if i == len(bases)-1 || !instrumentHostRetryable(fetchErr) {
-				return marketdata.InstrumentSnapshot{}, fetchErr
+				return marketdata.InstrumentSnapshot{}, 0, fetchErr
 			}
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
+			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 		}
 		data := commonsrc.ObjectAt(payload, "data")
 		if data == nil {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
+			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
 		}
 		if total, ok := commonsrc.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
 			if declaredTotal == 0 {
 				declaredTotal = total
 			} else if declaredTotal != total {
-				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total changed from %d to %d on page %d", marketdata.ErrProtocol, declaredTotal, total, page)
+				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total changed from %d to %d on page %d", marketdata.ErrProtocol, declaredTotal, total, page)
 			}
 		}
 		items := commonsrc.ItemSlice(data, "diff", "clist", "list")
@@ -289,27 +331,27 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				}
 			}
 		}
-		totalPages := commonsrc.PageLimit(data, spec.PageSize)
+		totalPages := commonsrc.PageLimit(data, pageSize)
 		hasMore, hasMoreKnown := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more")
-		if declaredTotal == 0 && len(items) > 0 && len(items) < spec.PageSize {
+		if declaredTotal == 0 && len(items) > 0 && len(items) < pageSize {
 			sawUnverifiedShortPage = true
 			if (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
-				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is short (%d < %d) before a declared terminal page", marketdata.ErrProtocol, page, len(items), spec.PageSize)
+				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument page %d is short (%d < %d) before a declared terminal page", marketdata.ErrProtocol, page, len(items), pageSize)
 			}
 		}
 		itemsSeen += len(items)
 		if declaredTotal > 0 && itemsSeen > declaredTotal {
-			return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument items %d exceed declared total %d on page %d", marketdata.ErrProtocol, itemsSeen, declaredTotal, page)
+			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument items %d exceed declared total %d on page %d", marketdata.ErrProtocol, itemsSeen, declaredTotal, page)
 		}
 		if len(items) == 0 {
 			if declaredTotal > 0 && itemsSeen != declaredTotal {
-				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items on terminal page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items on terminal page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
 			}
 			if declaredTotal == 0 && sawUnverifiedShortPage {
-				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
 			}
 			if page == 1 || (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
-				return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument page %d is empty before terminal evidence", marketdata.ErrProtocol, page)
+				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument page %d is empty before terminal evidence", marketdata.ErrProtocol, page)
 			}
 			// Without an explicit total or has-more marker, the extra empty page is
 			// the provider's terminal signal; a short final page is valid. Body
@@ -326,14 +368,14 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 				commonsrc.StringField(item, "f107", "status", "state"),
 			)
 			if err != nil {
-				return marketdata.InstrumentSnapshot{}, err
+				return marketdata.InstrumentSnapshot{}, 0, err
 			}
 			if err := builder.Add(instrument); err != nil {
-				return marketdata.InstrumentSnapshot{}, err
+				return marketdata.InstrumentSnapshot{}, 0, err
 			}
 		}
 		builder.NextPage()
-		if totalPages := commonsrc.PageLimit(data, spec.PageSize); totalPages > 0 {
+		if totalPages := commonsrc.PageLimit(data, pageSize); totalPages > 0 {
 			if page >= totalPages {
 				// Without an explicit page count, PageLimit derives the last
 				// page from total/requested page size. Eastmoney caps pz below
@@ -344,10 +386,10 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 					continue
 				}
 				if declaredTotal > 0 && itemsSeen != declaredTotal {
-					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
 				}
 				if declaredTotal == 0 && sawUnverifiedShortPage {
-					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
 				}
 				break
 			}
@@ -356,10 +398,10 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		if hasMore, ok := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more"); ok {
 			if !hasMore {
 				if declaredTotal > 0 && itemsSeen != declaredTotal {
-					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
+					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
 				}
 				if declaredTotal == 0 && sawUnverifiedShortPage {
-					return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
+					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
 				}
 				break
 			}
@@ -369,7 +411,8 @@ func (p *Provider) FetchInstrumentSnapshot(ctx context.Context, req marketdata.I
 		// carries total/page or has-more metadata. Fetch the next page and
 		// require an empty terminal response instead.
 	}
-	return builder.Snapshot()
+	snapshot, err := builder.Snapshot()
+	return snapshot, declaredTotal, err
 }
 
 func (p *Provider) instrumentPageBases() []string {
@@ -437,4 +480,23 @@ const (
 	maxInstrumentPages        = 128
 	eastMoneyPushHost         = "push2.eastmoney.com"
 	eastMoneyPushFallbackBase = "https://push2test.eastmoney.com"
+	// 5m K 线只在 push2his 有数据（push2 返回空列表），1m 两边一致：K 线统一走 push2his。
+	eastMoneyKlineHost = "push2his.eastmoney.com"
+	eastMoneyKlineBase = "https://" + eastMoneyKlineHost
+	// eastMoneyAShareFilter 是全部 A 股的 clist 筛选条件：深主板、创业板、沪主板。
+	eastMoneyAShareFilter = "m:0 t:6,m:0 t:80,m:1 t:2"
+	// eastMoneyClistMaxPageSize 是 clist 每页的实际上限：请求更大的 pz 也只返回 100 条（2026-11-04 实测）。
+	eastMoneyClistMaxPageSize = 100
+	// 成交量单位是手：同一根 5m 东方财富 6735、通达信 673500 股（2026-11-04 实测 600519），乘 100 换成股。
+	eastMoneyVolumeMultiplier = 100
 )
+
+// eastMoneyIndexBoards 是指数代码到东方财富成分板块的对照：沪深 300 是 BK0500（板块名 HS300_，
+// 2026-11-04 实测 clist fs=b:BK0500 返回 total=300、三页各 100 条）。
+var eastMoneyIndexBoards = map[string]string{"000300": "BK0500"}
+
+// eastMoneyKlt 是 K 线接口的 klt 参数（周期分钟数）。
+var eastMoneyKlt = map[marketdata.Frequency]string{
+	marketdata.FrequencyMinute: "1",
+	marketdata.Frequency5Min:   "5",
+}

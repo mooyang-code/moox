@@ -33,9 +33,9 @@ func TestCanonicalSubjectAndProviderSymbolCodec(t *testing.T) {
 	}
 }
 
-func TestNormalizeMinuteKlineConvertsCloseLabeledMinute(t *testing.T) {
+func TestNormalizeIntradayKlineConvertsCloseLabeledMinute(t *testing.T) {
 	fetchedAt := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	row, err := NormalizeMinuteKline("600000.XSHG", "tencent", "sh600000", marketdata.TimestampModeClose, "202608290931", 10, 11, 9, 10.5, 2, 2100, 100, fetchedAt, "req-1")
+	row, err := NormalizeIntradayKline("600000.XSHG", "tencent", "sh600000", marketdata.FrequencyMinute, marketdata.TimestampModeClose, "202608290931", 10, 11, 9, 10.5, 2, 2100, 100, fetchedAt, "req-1")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), row.BarStart)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 31, 0, 0, time.UTC), row.BarEnd)

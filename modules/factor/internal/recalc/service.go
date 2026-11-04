@@ -18,13 +18,11 @@ type SubjectProvider interface {
 }
 
 type config struct {
-	clock    periodclock.Clock
 	subjects SubjectProvider
 }
 
 type Option func(*config)
 
-func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 func WithSubjectProvider(provider SubjectProvider) Option {
 	return func(cfg *config) { cfg.subjects = provider }
 }
@@ -59,11 +57,7 @@ func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subject
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	clock, err := s.clockFor(set.SpaceID)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	start, end, err = alignRange(clock, set.Freq, start, end)
+	start, end, err = AlignRange(set.SpaceID, set.Freq, start, end)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -75,11 +69,11 @@ func (s *Service) Submit(ctx context.Context, taskID string, memberKeys, subject
 		}
 		return existing, nil
 	}
-	set, selected, normalizedSubjects, clock, err := s.selection(ctx, taskID, memberKeys, subjects)
+	set, selected, normalizedSubjects, err := s.selection(ctx, taskID, memberKeys, subjects)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	start, end, err = alignRange(clock, set.Freq, start, end)
+	start, end, err = AlignRange(set.SpaceID, set.Freq, start, end)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -151,31 +145,27 @@ func (s *Service) Cancel(ctx context.Context, jobID string) (store.RecalcJob, er
 	})
 }
 
-func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, periodclock.Clock, error) {
+func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subjects []string) (domain.FactorTask, []domain.MemberDef, []string, error) {
 	set, err := s.db.GetTask(ctx, taskID)
 	if err != nil {
-		return domain.FactorTask{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, err
 	}
 	if set.Status != domain.TaskStatusEnabled {
-		return domain.FactorTask{}, nil, nil, nil, fmt.Errorf("factor task %q is not enabled", set.TaskID)
-	}
-	clock, err := s.clockFor(set.SpaceID)
-	if err != nil {
-		return domain.FactorTask{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, fmt.Errorf("factor task %q is not enabled", set.TaskID)
 	}
 	members, err := s.db.ListMembers(ctx, set.TaskID, "")
 	if err != nil {
-		return domain.FactorTask{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, err
 	}
 	selected, err := domain.SelectEnabledMembers(members, memberKeys)
 	if err != nil {
-		return domain.FactorTask{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, err
 	}
 	resolved, err := s.resolveSubjects(ctx, set, subjects)
 	if err != nil {
-		return domain.FactorTask{}, nil, nil, nil, err
+		return domain.FactorTask{}, nil, nil, err
 	}
-	return set, selected, resolved, clock, nil
+	return set, selected, resolved, nil
 }
 
 func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorTask, requested []string) ([]string, error) {
@@ -209,27 +199,50 @@ func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorTask, re
 	return resolved, nil
 }
 
-func (s *Service) clockFor(space string) (periodclock.Clock, error) {
-	if s.cfg.clock != nil {
-		return s.cfg.clock, nil
-	}
-	return periodclock.ForSpace(space)
-}
-
-func alignRange(clock periodclock.Clock, freq string, start, end time.Time) (time.Time, time.Time, error) {
+// AlignRange 规整补算区间 [start, end)（真实时间，按真实时间入库）。
+//   - 7×24 市场：起点、终点都必须按周期对齐（严格校验，不吸附）。
+//   - 有交易时段的市场（A 股）：前端按 7×24 的网格给出的区间会落在午休、收盘后、周末，这里吸附到交易 K 线上：
+//     起点取不早于它的第一根交易 K 线的开盘时刻，终点取不晚于它的最近一次收盘时刻；吸附后区间里没有 K 线才报错。
+func AlignRange(spaceID, freq string, start, end time.Time) (time.Time, time.Time, error) {
 	if start.IsZero() || end.IsZero() || !start.Before(end) {
 		return time.Time{}, time.Time{}, errors.New("recalc start must be before end")
 	}
-	start, err := clock.Align(start, freq)
+	axis, err := periodclock.AxisFor(spaceID, freq)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	start, end = start.UTC(), end.UTC()
+	if axis.Identity() {
+		if _, err := axis.ToAxis(start); err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("align recalc start: %w", err)
+		}
+		if _, err := axis.ToAxis(end); err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("align recalc end: %w", err)
+		}
+		return start, end, nil
+	}
+	// 起点：收盘不晚于 start 的最后一根之后的那一根；它的开盘早于 start（start 落在这根的盘中）时再往后一根。
+	axisStart, err := axis.AxisEnd(start)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("align recalc start: %w", err)
 	}
-	end, err = clock.Align(end, freq)
+	if open, err := axis.FromAxis(axisStart); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("align recalc start: %w", err)
+	} else if open.Before(start) {
+		axisStart = axisStart.Add(axis.Step())
+	}
+	axisEnd, err := axis.AxisEnd(end)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("align recalc end: %w", err)
 	}
-	if !start.Before(end) {
-		return time.Time{}, time.Time{}, errors.New("recalc start must be before end")
+	if !axisStart.Before(axisEnd) {
+		return time.Time{}, time.Time{}, fmt.Errorf("补算区间 [%s, %s) 内没有 %s 的交易 K 线", start.Format(time.RFC3339), end.Format(time.RFC3339), freq)
+	}
+	if start, err = axis.FromAxis(axisStart); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("align recalc start: %w", err)
+	}
+	if end, err = axis.FromAxisEnd(axisEnd); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("align recalc end: %w", err)
 	}
 	return start, end, nil
 }

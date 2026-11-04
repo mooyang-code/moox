@@ -320,14 +320,14 @@ func TestHeartbeatWakeSendsWithoutWaitingForTheTicker(t *testing.T) {
 	runs := newRunTracker()
 	runs.setOnRecord(beat.Wake)
 	period := time.Date(2026, 10, 16, 15, 45, 0, 0, time.UTC)
-	runs.record("task_a", period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
+	runs.record("task_a", testAxis("1m"), period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
 	select {
 	case <-recorder.beats:
 	case <-time.After(5 * time.Second):
 		t.Fatal("recording a period must send a heartbeat right away")
 	}
 	// 比已记录的更早的一期不覆盖，也不唤醒。
-	runs.record("task_a", period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
+	runs.record("task_a", testAxis("1m"), period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
 	select {
 	case <-recorder.beats:
 		t.Fatal("an older period must not wake the heartbeat")

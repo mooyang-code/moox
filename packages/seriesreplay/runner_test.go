@@ -33,7 +33,13 @@ func (f *fakeFactor) Open(_ context.Context, req FactorOpenRequest) (FactorOpenR
 	defer f.mu.Unlock()
 	f.opens++
 	f.gone = false
-	return FactorOpenResponse{ReplayID: req.ReplayID, Subjects: []string{"A"}, StepSecs: 60, Factors: []FactorInfo{{Member: "f", FactorID: "f", DefinitionHash: "h1"}}}, nil
+	from, _ := time.Parse(time.RFC3339, req.From)
+	to, _ := time.Parse(time.RFC3339, req.To)
+	var periods []int64
+	for t := from; t.Before(to); t = t.Add(time.Minute) {
+		periods = append(periods, t.Unix())
+	}
+	return FactorOpenResponse{ReplayID: req.ReplayID, Subjects: []string{"A"}, StepSecs: 60, PeriodTimes: periods, Factors: []FactorInfo{{Member: "f", FactorID: "f", DefinitionHash: "h1"}}}, nil
 }
 
 func (f *fakeFactor) Step(_ context.Context, req FactorStepRequest) (FactorStepResponse, error) {
@@ -55,7 +61,8 @@ func (f *fakeFactor) Step(_ context.Context, req FactorStepRequest) (FactorStepR
 		}
 		f.params[req.Period] = req.Params
 	}
-	rsp := FactorStepResponse{Period: req.Period, Subjects: map[string]FactorSubject{"A": {Close: 100, Exec: 101, Factors: map[string]map[string]float64{"f": {"m": 1}}}}, States: map[string]FactorState{"f": {Status: "complete", DefinitionHash: "h1"}}}
+	period, _ := time.Parse(time.RFC3339, req.Period)
+	rsp := FactorStepResponse{Period: req.Period, DecisionAt: period.Add(time.Minute).Format(time.RFC3339), Subjects: map[string]FactorSubject{"A": {Close: 100, Exec: 101, Factors: map[string]map[string]float64{"f": {"m": 1}}}}, States: map[string]FactorState{"f": {Status: "complete", DefinitionHash: "h1"}}}
 	if f.applied != nil {
 		rsp.AppliedParams, rsp.RejectedParams = f.applied(req)
 	}

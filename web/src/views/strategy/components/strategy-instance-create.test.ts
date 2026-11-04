@@ -156,6 +156,31 @@ describe("strategy instance creation behavior", () => {
     });
   });
 
+  it("lists no account for A-share instances and says why", async () => {
+    api.listLogicalAccounts.mockResolvedValue({
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, market_type: 1 }],
+      page_result: { has_more: false }
+    });
+    api.validateStrategy
+      .mockReset()
+      .mockResolvedValue({ diagnostics: [], resolved_json: '{"market_type":"equity"}', trial: null, trial_items: [] });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "解析列与成员契约")!
+      .trigger("click");
+    wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
+    await flushPromises();
+    expect(wrapper.text()).toContain("A 股暂无交易账户，请改为“仅计算”。");
+    expect(
+      wrapper
+        .findAll("select")[2]
+        .findAll("option")
+        .map(item => item.attributes("value"))
+    ).toEqual([""]);
+  });
+
   it("offers a retry when the factor task list fails", async () => {
     api.listFactorTasks
       .mockRejectedValueOnce(new Error("因子服务不可用"))

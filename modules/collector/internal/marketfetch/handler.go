@@ -30,13 +30,13 @@ type Handler struct {
 	Execute                func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
 	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType, *FeedLimits) (*KlinePipeline, error)
-	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
+	NewStockKlinePipeline  func(Storage, string) (*KlinePipeline, error)
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
 	// SpaceID 是执行端所属空间；为空时读 MOOX_SPACE_ID（SCF 函数）。本地执行端显式设置，不依赖进程环境。
 	SpaceID string
 	Now     func() time.Time
-	// PlanPeriodValid 判断采集计划里某个频率的目标周期是否需要执行（stockcn 用交易日历跳过非交易周期）；nil 表示总是执行。
+	// PlanPeriodValid 判断采集计划里某个频率的目标周期是否需要执行（交易时段市场跳过非交易桶）；nil 表示总是执行。
 	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
 	Reporter        ItemReporter
 	CLSReserve      time.Duration
@@ -235,7 +235,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		if newPipeline == nil {
 			return nil, fmt.Errorf("stock kline pipeline factory is not configured")
 		}
-		pipeline, pipelineErr := newPipeline(storage)
+		pipeline, pipelineErr := newPipeline(storage, req.Frequency)
 		if pipelineErr != nil {
 			return nil, pipelineErr
 		}

@@ -89,19 +89,14 @@ func (r *Runtime) catchupHook(ctx context.Context, ref lifecycle.Ref, since time
 	return r.catchupSet(ctx, ref.ID, since, time.Now().UTC()), nil
 }
 
-// catchupTarget 是追赶目标：最新一根已收盘（扣掉采集宽限）的周期。
-func catchupTarget(clock periodclock.Clock, freq string, now time.Time) (time.Time, time.Duration, error) {
-	step, err := clock.Duration(freq)
+// catchupTarget 是追赶目标（轴上）：扣掉采集宽限后最新一根已收盘的周期。
+func catchupTarget(axis periodclock.Axis, now time.Time) (time.Time, error) {
+	grace := min(axis.Step()/2, catchupGraceMax)
+	end, err := axis.AxisEnd(now.Add(-grace))
 	if err != nil {
-		return time.Time{}, 0, err
+		return time.Time{}, err
 	}
-	grace := min(step/2, catchupGraceMax)
-	// Align 只校验对齐、不取整，先向下取整到周期边界。
-	aligned, err := clock.Align(now.Add(-grace).Truncate(step), freq)
-	if err != nil {
-		return time.Time{}, 0, err
-	}
-	return aligned.Add(-step), step, nil
+	return end.Add(-axis.Step()), nil
 }
 
 func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time.Time) lifecycle.Catchup {
@@ -141,18 +136,24 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 		return out
 	}
 
-	// ② 显式建立追赶目标。
-	clock, err := periodclock.ForSpace(set.Set.SpaceID)
+	// ② 显式建立追赶目标。追赶在轴上进行；生命周期给的 since 与上报的目标是真实时间。
+	axis, err := periodclock.AxisFor(set.Set.SpaceID, set.Set.Freq)
 	if err != nil {
 		out.Message = err.Error()
 		return out
 	}
-	target, step, err := catchupTarget(clock, set.Set.Freq, now)
+	target, err := catchupTarget(axis, now)
 	if err != nil {
 		out.Message = err.Error()
 		return out
 	}
-	out.Target = target
+	step := axis.Step()
+	axisSince, err := axis.AxisEnd(since)
+	if err != nil {
+		out.Message = err.Error()
+		return out
+	}
+	out.Target = realPeriod(axis, target)
 	// 没有连续水位（不消费事件的运行时，例如测试）：没有需要补齐的周期，同步完成即追平。
 	if r.continuity == nil {
 		out.CaughtUp = true
@@ -174,11 +175,11 @@ func (r *Runtime) catchupSet(ctx context.Context, taskID string, since, now time
 		if state.TaskID != taskID {
 			continue
 		}
-		total := int64(target.Sub(since) / step)
-		done := int64(state.CommittedThrough.Sub(since) / step)
+		total := int64(target.Sub(axisSince) / step)
+		done := int64(state.CommittedThrough.Sub(axisSince) / step)
 		out.Total, out.Done = max(total, 0), min(max(done, 0), max(total, 0))
 		if !state.BlockedSince.IsZero() {
-			out.Message = fmt.Sprintf("水位卡在 %s：%s", state.BlockedPeriod.UTC().Format(time.RFC3339), state.BlockedReason)
+			out.Message = fmt.Sprintf("水位卡在 %s：%s", axis.Format(state.BlockedPeriod), state.BlockedReason)
 			return out
 		}
 		out.CaughtUp = !state.CommittedThrough.Before(target)

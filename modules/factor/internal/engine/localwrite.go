@@ -12,6 +12,7 @@ import (
 
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -132,11 +133,22 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	if src.SpaceID == "" || src.DatasetID == "" || src.Freq == "" || subject == "" {
 		return WriteResponse{}, http.StatusBadRequest, errors.New("space、dataset、freq、subject 都是必填项")
 	}
+	// 本地写入接口是换算边界：请求里的区间与行时间是真实时间，本地存储是轴上时间。
+	axis, err := periodclock.AxisFor(src.SpaceID, src.Freq)
+	if err != nil {
+		return WriteResponse{}, http.StatusBadRequest, err
+	}
 	from, err := time.Parse(time.RFC3339, req.From)
+	if err == nil {
+		from, err = axis.ToAxis(from)
+	}
 	if err != nil {
 		return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("from：%w", err)
 	}
 	to, err := time.Parse(time.RFC3339, req.To)
+	if err == nil {
+		to, err = axis.EndToAxis(to)
+	}
 	if err != nil {
 		return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("to：%w", err)
 	}
@@ -147,6 +159,13 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	rows, err := columnsFromWire(fields, req)
 	if err != nil {
 		return WriteResponse{}, http.StatusBadRequest, err
+	}
+	for i, at := range rows.Times {
+		x, err := axis.ToAxis(time.Unix(at, 0))
+		if err != nil {
+			return WriteResponse{}, http.StatusBadRequest, fmt.Errorf("第 %d 行的时间：%w", i, err)
+		}
+		rows.Times[i] = x.Unix()
 	}
 	opts := seriesstore.WriteOptions{FillGaps: req.AllowMissing, RecordPending: req.RecordPending, PendingReason: req.Reason}
 	if opts.RecordPending && opts.PendingReason == "" {
@@ -166,10 +185,14 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	res := results[0]
 	out := WriteResponse{Written: res.Written, Filled: res.Filled, Removed: res.Removed}
 	if !res.Changed.Empty() {
-		out.ChangedFrom, out.ChangedTo = res.Changed.From.UTC().Format(time.RFC3339), res.Changed.To.UTC().Format(time.RFC3339)
+		changedTo, err := axis.FromAxisEnd(res.Changed.To)
+		if err != nil {
+			return WriteResponse{}, http.StatusInternalServerError, err
+		}
+		out.ChangedFrom, out.ChangedTo = axis.Format(res.Changed.From), changedTo.Format(time.RFC3339)
 	}
 	if !res.Earliest.IsZero() {
-		out.Earliest, out.Latest = res.Earliest.UTC().Format(time.RFC3339), res.Latest.UTC().Format(time.RFC3339)
+		out.Earliest, out.Latest = axis.Format(res.Earliest), axis.Format(res.Latest)
 	}
 	return out, http.StatusOK, nil
 }
@@ -316,7 +339,7 @@ func (w *localWriter) handleBounds(rw http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"exists": ok}
 	if ok {
-		out["earliest"], out["latest"] = b.Earliest.UTC().Format(time.RFC3339), b.Latest.UTC().Format(time.RFC3339)
+		out["earliest"], out["latest"] = src.Format(b.Earliest), src.Format(b.Latest)
 	}
 	writeJSON(rw, http.StatusOK, out)
 }

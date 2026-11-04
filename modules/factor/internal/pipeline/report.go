@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -211,7 +212,7 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 		}
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_warming_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(warming), err)
+		log.ErrorContextf(ctx, "factor_warming_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, periodclock.FormatPeriod(plan.Set.SpaceID, plan.Set.Freq, target), len(warming), err)
 	}
 }
 
@@ -236,7 +237,7 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 		}
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_upstream_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(plan.UpstreamFailed), err)
+		log.ErrorContextf(ctx, "factor_upstream_record_failed task_id=%s period=%s subjects=%d error=%v", plan.Set.TaskID, periodclock.FormatPeriod(plan.Set.SpaceID, plan.Set.Freq, target), len(plan.UpstreamFailed), err)
 		return fmt.Errorf("%w: record upstream failures: %v", storageio.ErrInfra, err)
 	}
 	return nil
@@ -276,6 +277,6 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		return
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_unavailable_record_failed task_id=%s period=%s entries=%d error=%v", plan.Set.TaskID, target.UTC().Format(time.RFC3339), len(entries), err)
+		log.ErrorContextf(ctx, "factor_unavailable_record_failed task_id=%s period=%s entries=%d error=%v", plan.Set.TaskID, periodclock.FormatPeriod(plan.Set.SpaceID, plan.Set.Freq, target), len(entries), err)
 	}
 }

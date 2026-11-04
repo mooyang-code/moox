@@ -68,15 +68,16 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	clock := periodclock.Continuous{}
-	start, err := clock.Align(req.Period, set.Set.Freq)
-	if err != nil {
-		return pipeline.Outcome{}, fmt.Errorf("align period: %w", err)
-	}
-	duration, err := clock.Duration(set.Set.Freq)
+	// 诊断入口的周期是真实的桶起点：换到轴上，管线在轴上计算，Storage 客户端负责换回真实时间。
+	axis, err := periodclock.AxisFor(set.Set.SpaceID, set.Set.Freq)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
+	start, err := axis.ToAxis(req.Period)
+	if err != nil {
+		return pipeline.Outcome{}, fmt.Errorf("align period: %w", err)
+	}
+	clock, duration := periodclock.Continuous{}, axis.Step()
 	pipelineConfig := pipeline.Config{WriteBatchRows: cfg.Pipeline.WriteBatchRows, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory)}
 	// 任务引用自定义算子时，先备齐模块（本地命中或向管理端拉取），再用同一套宿主计算。
 	if refs := refsOfTasks([]domain.EngineTask{set}); len(refs) > 0 {
@@ -105,7 +106,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), clock, pipelineConfig)
 	// 可变成员按这一期已有行的 __params 计算（诊断进程直接读 Storage，不需要引擎租约）；已有行里没有这个成员时
 	// 用成员自己的参数，与补算一致。
-	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock), recalcexec.WithParamReader(recalcexec.NewStorageParamReader(storage))).RunChunk(ctx, recalcexec.Selection{
+	return recalcexec.NewExecutor(runner, recalcexec.WithParamReader(recalcexec.NewStorageParamReader(storage))).RunChunk(ctx, recalcexec.Selection{
 		Set: set.Set, Members: members, Subjects: subjects, Columns: columns,
 	}, start, start.Add(duration))
 }

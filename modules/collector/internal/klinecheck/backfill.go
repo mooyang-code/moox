@@ -496,10 +496,12 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 		}
 	}
 	instanceID := "backfill|" + chunk.Frequency + "|" + chunk.SubjectID
+	// 补采与实时采集同一套来源分配：A 股按标的分配、失败回落，加密货币固定标签来源。
+	provider, sourceID := plan.Market.RequestSource()
 	item := domain.CollectionItem{
 		InstanceID: instanceID, SubjectID: chunk.SubjectID, Symbol: plan.ExchangeSymbol(chunk.SubjectID),
 		StartTime: chunk.From.UTC().Format(time.RFC3339), EndTime: chunk.To.UTC().Format(time.RFC3339), BarLimit: bars,
-		Provider: plan.Market.Provider, SourceID: plan.Market.SourceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
+		Provider: provider, SourceID: sourceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		MarketType: plan.Market.MarketType, DataType: "kline", DatasetID: chunk.DatasetID, Frequency: chunk.Frequency,
 	}
 	target := domain.WriteTarget{
@@ -508,7 +510,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	}
 	return marketfetch.Request{
 		BatchID: chunk.ChunkID, BatchKind: domain.BatchKindBackfill, SpaceID: spaceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
-		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: plan.Market.Provider, SourceID: plan.Market.SourceID, MarketType: plan.Market.MarketType,
+		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: provider, SourceID: sourceID, MarketType: plan.Market.MarketType,
 		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, PlanRequest: true, Concurrency: 1, FetchLimits: plan.Fetch.Limits(),
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	}, nil

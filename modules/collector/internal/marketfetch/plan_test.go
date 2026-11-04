@@ -163,3 +163,31 @@ func TestFrequencyDueWeeklyUsesMonday(t *testing.T) {
 	_, due = frequencyDue(week, time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)) // 周四
 	require.False(t, due)
 }
+
+// A 股股票的计划请求不写死来源：由路由按标的分配、失败回落；加密货币仍固定用标签的来源。计划本身（含来源）不变。
+func TestPlanBuildRequestsLeavesStockSourcesToTheRoute(t *testing.T) {
+	plan := &Plan{
+		V:      1,
+		Market: PlanMarket{MarketID: "stockcn", InstrumentType: "equity", Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity"},
+		Fetch:  PlanFetch{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8},
+		Datasets: []PlanDataset{{DatasetID: "dataset_stock_5m", Frequency: "5m", LatenessS: 90, Copies: []PlanCopy{
+			{From: 1000, Hash: "h", Count: 2, Subjects: []PlanSubject{{ID: "600000.XSHG", Index: 0}, {ID: "600519.XSHG", Index: 1}}},
+		}}},
+	}
+	requests, err := plan.BuildRequests("stockcn", "fn", "req", time.Date(2026, 11, 4, 2, 0, 0, 0, time.UTC), nil)
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	request := requests[0].Request
+	require.Empty(t, request.Provider)
+	require.Empty(t, request.SourceID)
+	for _, item := range request.Items {
+		require.Empty(t, item.Provider, item.SubjectID)
+		require.Empty(t, item.SourceID, item.SubjectID)
+	}
+	require.Equal(t, "eastmoney", plan.Market.Provider, "计划仍按标签的来源分组，内容不变")
+
+	crypto, err := testPlan().BuildRequests("crypto", "fn", "req", time.Date(2026, 10, 11, 13, 0, 0, 0, time.UTC), nil)
+	require.NoError(t, err)
+	require.Equal(t, "binance", crypto[0].Request.Provider)
+	require.Equal(t, "spot_http", crypto[0].Request.Items[0].SourceID)
+}

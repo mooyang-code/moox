@@ -32,7 +32,6 @@ func TestManagedEnvironmentAcceptsMarketIdentityKeys(t *testing.T) {
 	for _, key := range []string{
 		"MOOX_MARKET_FETCH_MARKET_ID",
 		"MOOX_MARKET_FETCH_INSTRUMENT_TYPE",
-		"MOOX_MARKET_FETCH_SOURCE_ID",
 		"MOOX_MARKET_FETCH_SERIES_TAG",
 	} {
 		_, ok := managedEnvironmentKeys[key]
@@ -43,7 +42,6 @@ func TestManagedEnvironmentAcceptsMarketIdentityKeys(t *testing.T) {
 func TestManagedEnvironmentAllowsStockCNRouteKeys(t *testing.T) {
 	for _, key := range []string{
 		"MOOX_MARKET_FETCH_SUBJECT_COUNT",
-		"MOOX_MARKET_FETCH_PROVIDER_CHAIN",
 		"MOOX_MARKET_FETCH_ROUTE_VERSION",
 		"MOOX_MARKET_FETCH_GROUP_ID",
 		"MOOX_MARKET_FETCH_GROUP_COUNT",

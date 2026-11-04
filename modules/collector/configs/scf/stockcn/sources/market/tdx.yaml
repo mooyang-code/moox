@@ -2,9 +2,8 @@ provider:
   id: tdx
   market: stockcn
   enabled_feeds: [kline]
-  hosts: [jstdx.gtjas.com]
+  hosts: [shtdx.gtjas.com]
   kline:
-    frequency: 1m
     max_bars_per_request: 800
     volume_unit: shares
     amount_unit: CNY

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -46,9 +47,12 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	if periodTime.IsZero() {
 		periodTime = plan.TargetStart
 	}
+	// periodTime 是轴上的周期：日志、指标与运行摘要按真实时间输出。
+	axis, axisErr := periodclock.AxisFor(plan.Set.SpaceID, plan.Set.Freq)
+	shown := periodclock.FormatPeriod(plan.Set.SpaceID, plan.Set.Freq, periodTime)
 	r.health.StartRunner(plan.Set.TaskID, started)
 	defer r.health.EndRunner(plan.Set.TaskID)
-	log.InfoContextf(ctx, "factor_period_start task_id=%s period_time=%s mode=%d", plan.Set.TaskID, periodTime.UTC().Format(time.RFC3339), plan.Mode)
+	log.InfoContextf(ctx, "factor_period_start task_id=%s period_time=%s mode=%d", plan.Set.TaskID, shown, plan.Mode)
 	outcome, err := r.inner.Run(ctx, plan)
 	taskID := plan.Set.TaskID
 	for stage, duration := range outcome.StageDurations {
@@ -63,10 +67,17 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	}
 	if plan.Mode == pipeline.ModeLive {
 		r.metrics.PeriodTotal.WithLabelValues(taskID, status).Inc()
-		r.metrics.PeriodLag.WithLabelValues(taskID).Set(max(0, time.Since(periodTime).Seconds()))
-		if !periodTime.IsZero() && (err == nil || outcome.Status != "") {
-			r.metrics.LastPeriodTime.WithLabelValues(taskID).Set(float64(periodTime.Unix()))
-			r.runs.record(taskID, periodTime, status, outcome, time.Now())
+		at, atErr := periodTime, axisErr
+		if atErr == nil {
+			at, atErr = axis.FromAxis(periodTime)
+		}
+		if atErr == nil {
+			// PeriodLag 保留真实时间语义：这一期开盘到这次结束（成功或失败）的秒数，每期都更新。
+			r.metrics.PeriodLag.WithLabelValues(taskID).Set(max(0, time.Since(at).Seconds()))
+		}
+		if atErr == nil && !periodTime.IsZero() && (err == nil || outcome.Status != "") {
+			r.metrics.LastPeriodTime.WithLabelValues(taskID).Set(float64(at.Unix()))
+			r.runs.record(taskID, axis, periodTime, status, outcome, time.Now())
 		}
 	}
 	for _, factor := range outcome.Factors {
@@ -81,9 +92,9 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 	}
 	if err != nil {
 		r.metrics.Failures.WithLabelValues(taskID, periodFailureFactor, periodFailureReason(err)).Inc()
-		log.ErrorContextf(ctx, "factor_period_failed task_id=%s period_time=%s error=%v", taskID, periodTime.UTC().Format(time.RFC3339), err)
+		log.ErrorContextf(ctx, "factor_period_failed task_id=%s period_time=%s error=%v", taskID, shown, err)
 	} else {
-		log.InfoContextf(ctx, "factor_period_done task_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", taskID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
+		log.InfoContextf(ctx, "factor_period_done task_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", taskID, shown, status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
 }

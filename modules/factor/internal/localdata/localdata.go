@@ -35,9 +35,9 @@ type Storage interface {
 
 // Config 是数据层的参数。
 type Config struct {
-	Store   *seriesstore.Store
+	Store *seriesstore.Store
+	// Storage 读写的都是轴上时间（storageio.Axis 包装过的客户端）：数据层内部全部在轴上，按 periodclock.Continuous 做周期数学。
 	Storage Storage
-	Clock   periodclock.Clock
 	// Admit 非空时，窗口的常驻内存向它登记，新增窗口超出预算时拒绝（设计 4.2）。
 	Admit *memadmit.Admitter
 	// Workers 与 BatchSubjects 控制同步时并行读取 Storage 的批数与每批标的数。
@@ -373,9 +373,9 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	st.blocked = nil
 
 	// 本地补到最新已收盘的一根：停机缺口、新标的的回看窗口一次性拉齐。
-	end := d.cfg.Now().UTC().Truncate(step)
-	if aligned, err := d.cfg.Clock.Align(end, set.Set.Freq); err == nil {
-		end = aligned
+	end, err := d.axisNow(src)
+	if err != nil {
+		return err
 	}
 	pull, err := d.syncer.Pull(ctx, st.spec, subjects, end)
 	if err != nil {
@@ -461,10 +461,19 @@ func factorsOverLookback(members []domain.MemberDef, n int) *LookbackExceededErr
 	return &LookbackExceededError{N: n, Factors: names, Max: most}
 }
 
+// axisNow 是当前时刻在数据源轴上的排他终点：最新已收盘一根的下一期。
+func (d *Data) axisNow(src seriesstore.Source) (time.Time, error) {
+	axis, err := periodclock.AxisFor(src.SpaceID, src.Freq)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return axis.AxisEnd(d.cfg.Now())
+}
+
 // newListingExempt 判断新上市豁免对数据源是否成立（设计 6.2）：7×24 市场，并且 N 不超过数据集保留期能容纳的根数。
 // 有交易时段的市场清理按日历桶进行、N 超过保留期容量时，Storage 的首根都可能是被保留期截断的，不能据此认定是新上市。
 func (d *Data) newListingExempt(src seriesstore.Source, step time.Duration, lookback int, retention string) bool {
-	if _, continuous := d.cfg.Clock.(periodclock.Continuous); !continuous {
+	if !periodclock.IsContinuous(src.SpaceID) {
 		return false
 	}
 	period, err := storagepolicy.ParsePeriod(retention)
@@ -919,7 +928,7 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
-	from, err := pipeline.ReadStart(d.cfg.Clock, plan)
+	from, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
@@ -933,7 +942,7 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 			failed = append(failed, subject)
 		}
 	}
-	view, err := serieswindow.FromColumns(int64(step/time.Second), numeric, got)
+	view, err := serieswindow.FromColumns(spec.Source, int64(step/time.Second), numeric, got)
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
@@ -997,7 +1006,10 @@ func (d *Data) LongGaps(src seriesstore.Source) []LongGap {
 		out = append(out, LongGap{Subject: subject, Rows: rows, Duration: time.Duration(rows) * step})
 		seen[subject] = struct{}{}
 	}
-	now := d.cfg.Now().UTC()
+	now, err := d.axisNow(src)
+	if err != nil {
+		return out
+	}
 	for _, subject := range window.Subjects() {
 		if _, dup := seen[subject]; dup {
 			continue

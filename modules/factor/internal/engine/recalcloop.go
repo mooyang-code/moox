@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
@@ -106,7 +107,16 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 	}
 	log.InfoContextf(ctx, "factor_recalc_start job_id=%s task_id=%s start=%s end=%s progress=%s", job.JobID, job.Set.Set.TaskID,
 		job.Window.Start.Format(time.RFC3339), job.Window.End.Format(time.RFC3339), job.Window.Progress.Format(time.RFC3339))
-	err = l.runJob(ctx, &job)
+	realProgress := job.Window.Progress
+	axis, err := jobToAxis(&job)
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
+		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, realProgress, jobStatusFailed, err.Error(), nil); reportErr != nil {
+			log.ErrorContextf(ctx, "factor_recalc_report_failed job_id=%s error=%v", job.JobID, reportErr)
+		}
+		return true, nil
+	}
+	err = l.runJob(ctx, &job, axis)
 	switch {
 	case errors.Is(err, recalcexec.ErrGated):
 		// 任务被暂停（或在恢复追赶、重置）：不报失败，任务租约到期后由放行后的引擎继续；按没有任务处理，避免立刻重新领取。
@@ -120,16 +130,80 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 		// Shutdown: the lease expires and the job resumes from its progress.
 	default:
 		log.ErrorContextf(ctx, "factor_recalc_failed job_id=%s error=%v", job.JobID, err)
-		if _, reportErr := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
+		if _, reportErr := l.report(ctx, axis, job, job.Window.Progress, jobStatusFailed, err.Error(), nil); reportErr != nil {
 			log.ErrorContextf(ctx, "factor_recalc_report_failed job_id=%s error=%v", job.JobID, reportErr)
 		}
 	}
 	return true, nil
 }
 
+// jobToAxis 把领取到的作业换到轴上（引擎对外接口的入参）：Start 是真实的桶起点，End、Progress 是真实的排他终点
+// （Progress 为零表示还没开始），DefaultFilled 是真实周期的闭区间。
+func jobToAxis(job *PulledJob) (periodclock.Axis, error) {
+	axis, err := periodclock.AxisFor(job.Set.Set.SpaceID, job.Set.Set.Freq)
+	if err != nil {
+		return periodclock.Axis{}, err
+	}
+	if job.Window.Start, err = axis.ToAxis(job.Window.Start); err != nil {
+		return periodclock.Axis{}, fmt.Errorf("补算起点：%w", err)
+	}
+	if job.Window.End, err = axis.EndToAxis(job.Window.End); err != nil {
+		return periodclock.Axis{}, fmt.Errorf("补算终点：%w", err)
+	}
+	if !job.Window.Progress.IsZero() {
+		if job.Window.Progress, err = axis.EndToAxis(job.Window.Progress); err != nil {
+			return periodclock.Axis{}, fmt.Errorf("补算进度：%w", err)
+		}
+	}
+	if job.DefaultFilled, err = convertRanges(job.DefaultFilled, axis.ToAxis); err != nil {
+		return periodclock.Axis{}, fmt.Errorf("按默认参数新补的期次：%w", err)
+	}
+	return axis, nil
+}
+
+// report 上报作业进度（引擎对外接口的出参）：进度与按默认参数新补的期次换回真实时间。进度是排他终点，换成最后一根已算完的
+// K 线的收盘时刻（与领取时的 EndToAxis 对称），不取下一根的起点：日历最后一根之后没有下一根。
+func (l *recalcLoop) report(ctx context.Context, axis periodclock.Axis, job PulledJob, progress time.Time, status, errText string, filled map[string][]domain.TimeRange) (string, error) {
+	// 零值表示还没有任何进度（第一个分块之前就失败）：原样上报。
+	var realProgress time.Time
+	if !progress.IsZero() {
+		var err error
+		if realProgress, err = axis.FromAxisEnd(progress); err != nil {
+			return "", err
+		}
+	}
+	realFilled, err := convertRanges(filled, axis.FromAxis)
+	if err != nil {
+		return "", err
+	}
+	return l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, realProgress, status, errText, realFilled)
+}
+
+// convertRanges 逐个换算闭区间的两端。
+func convertRanges(ranges map[string][]domain.TimeRange, convert func(time.Time) (time.Time, error)) (map[string][]domain.TimeRange, error) {
+	if ranges == nil {
+		return nil, nil
+	}
+	out := make(map[string][]domain.TimeRange, len(ranges))
+	for key, items := range ranges {
+		for _, item := range items {
+			start, err := convert(time.Unix(item.Start, 0))
+			if err != nil {
+				return nil, err
+			}
+			end, err := convert(time.Unix(item.End, 0))
+			if err != nil {
+				return nil, err
+			}
+			out[key] = append(out[key], domain.TimeRange{Start: start.Unix(), End: end.Unix()})
+		}
+	}
+	return out, nil
+}
+
 // runJob advances job.Window.Progress as chunks are reported, so a failure
 // report carries the progress the manager already holds.
-func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
+func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob, axis periodclock.Axis) error {
 	set := job.Set
 	// 补算作业自带定义，领取时现场编译（设计 8）。
 	set.Members = CompileMembers(set.Members)
@@ -140,7 +214,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		}
 		defer release()
 	}
-	l.extendHistory(ctx, job)
+	l.extendHistory(ctx, job, axis)
 	lastNote := ""
 	step, stepErr := seriesstore.Step(set.Set.Freq)
 	if stepErr != nil {
@@ -167,7 +241,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 			filled[key] = domain.MergeTimeRanges(filled[key], int64(step/time.Second))
 			changed = filled
 		}
-		current, err := l.client.ReportRecalcProgress(ctx, job.JobID, job.LeaseToken, progress, status, lastNote, changed)
+		current, err := l.report(ctx, axis, *job, progress, status, lastNote, changed)
 		if err != nil {
 			return true, fmt.Errorf("%w: %w", errReportFailed, err)
 		}
@@ -229,19 +303,19 @@ func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
 // 任务还会标成功。例如新建私有因子任务时的初始回填（几千根）远早于只预载了回看根数的本地数据。读之前先把本地历史从 Storage 补到
 // 覆盖 [区间起点 − 回看, 现在]；Storage 保留期内没有那么早的数据时有多少补多少，补不上的周期照旧按失败记录。
 // 补历史失败不终止任务（只有已有的本地数据可算），记日志。
-func (l *recalcLoop) extendHistory(ctx context.Context, job *PulledJob) {
+func (l *recalcLoop) extendHistory(ctx context.Context, job *PulledJob, axis periodclock.Axis) {
 	if l.history == nil {
-		return
-	}
-	step, err := seriesstore.Step(job.Set.Set.Freq)
-	if err != nil {
 		return
 	}
 	now := time.Now
 	if l.now != nil {
 		now = l.now
 	}
-	bars := int(now().Sub(job.Window.Start)/step) + maxLookbackOf(job.Set) + 1
+	end, err := axis.AxisEnd(now())
+	if err != nil {
+		return
+	}
+	bars := int(end.Sub(job.Window.Start)/axis.Step()) + maxLookbackOf(job.Set) + 1
 	if bars < 1 {
 		return
 	}

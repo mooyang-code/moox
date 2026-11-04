@@ -668,7 +668,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 		return
 	}
 	registry := prometheus.NewRegistry()
-	functions := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "route_id", "kind"})
+	functions := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_egress_functions", Help: "Expected, returned, non-empty-IP, and distinct-IP function counts."}, []string{"market_id", "kind"})
 	if err := registry.Register(functions); err != nil {
 		return
 	}
@@ -680,7 +680,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 	}
 	values := map[string]int{"expected": gate.ExpectedCount, "result": len(gate.Results), "non_empty_ip": nonEmpty, "distinct_ip": gate.DistinctCount}
 	for kind, value := range values {
-		functions.WithLabelValues("stockcn", "stockcn_equity_kline_1m_v4", kind).Set(float64(max(value, 0)))
+		functions.WithLabelValues("stockcn", kind).Set(float64(max(value, 0)))
 	}
 	reporter, err := metricsreport.NewHandlerWithRegistry(collectorEgressReportConfig(), registry)
 	if err != nil {

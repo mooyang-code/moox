@@ -77,7 +77,7 @@ func viewFromFrames(frames map[string]*storageio.Frame, stepSeconds int64) (*ser
 		cols[subject] = c
 		fieldNames = serieswindow.NumericFields(fields)
 	}
-	return serieswindow.FromColumns(stepSeconds, fieldNames, cols)
+	return serieswindow.FromColumns(seriesstore.Source{}, stepSeconds, fieldNames, cols)
 }
 
 // withView 按 loaded.Frames 当前的内容重新生成列式视图（测试改了帧之后调用）。

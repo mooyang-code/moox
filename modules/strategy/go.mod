@@ -10,6 +10,7 @@ require (
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/factorname v0.0.0-00010101000000-000000000000
@@ -141,6 +142,8 @@ replace github.com/mooyang-code/moox/packages/frequency => ../../packages/freque
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
+
+replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
 
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 

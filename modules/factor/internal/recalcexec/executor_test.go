@@ -49,7 +49,7 @@ func testWindow(periods int) Window {
 
 func TestExecutorRunsChunksAndReportsProgress(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2))
+	executor := NewExecutor(runner, WithChunkPeriods(2))
 	window := testWindow(6)
 	var records []progressRecord
 
@@ -69,7 +69,7 @@ func TestExecutorRunsChunksAndReportsProgress(t *testing.T) {
 
 func TestExecutorStopsWhenProgressReportsCancelled(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2))
+	executor := NewExecutor(runner, WithChunkPeriods(2))
 	var records []progressRecord
 
 	require.NoError(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 1)))
@@ -80,7 +80,7 @@ func TestExecutorStopsWhenProgressReportsCancelled(t *testing.T) {
 
 func TestExecutorResumesFromProgress(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2))
+	executor := NewExecutor(runner, WithChunkPeriods(2))
 	window := testWindow(6)
 	window.Progress = window.Start.Add(4 * time.Minute)
 	var records []progressRecord
@@ -95,7 +95,7 @@ func TestExecutorResumesFromProgress(t *testing.T) {
 
 func TestExecutorEmptySubjectsSucceedsImmediately(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2))
+	executor := NewExecutor(runner, WithChunkPeriods(2))
 	window := testWindow(6)
 	var records []progressRecord
 
@@ -107,7 +107,7 @@ func TestExecutorEmptySubjectsSucceedsImmediately(t *testing.T) {
 
 func TestExecutorCompletedWindowReportsEnd(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	executor := NewExecutor(runner)
 	window := testWindow(6)
 	window.Progress = window.End
 	var records []progressRecord
@@ -124,7 +124,7 @@ func TestExecutorRetriesChunkThenFails(t *testing.T) {
 		attempts++
 		return pipeline.Outcome{}, fmt.Errorf("%w: storage unavailable", storageio.ErrInfra)
 	}}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkRetry(3, time.Millisecond))
+	executor := NewExecutor(runner, WithChunkRetry(3, time.Millisecond))
 	var records []progressRecord
 
 	err := executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0))
@@ -140,7 +140,7 @@ func TestExecutorPermanentFailureIsNotRetried(t *testing.T) {
 		attempts++
 		return pipeline.Outcome{}, errors.New("bad factor output")
 	}}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkRetry(3, time.Millisecond))
+	executor := NewExecutor(runner, WithChunkRetry(3, time.Millisecond))
 	var records []progressRecord
 
 	require.Error(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))
@@ -150,7 +150,7 @@ func TestExecutorPermanentFailureIsNotRetried(t *testing.T) {
 func TestExecutorPassesOutcomeToReport(t *testing.T) {
 	degraded := pipeline.Outcome{Status: "degraded", FailedSubjects: []string{"ETH"}}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) { return degraded, nil }}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	executor := NewExecutor(runner)
 	var records []progressRecord
 
 	require.NoError(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC", "ETH")), recordProgress(&records, 0)))
@@ -166,7 +166,7 @@ func TestExecutorHoldsTaskLockPerChunk(t *testing.T) {
 		require.True(t, locks.held, "chunk must run under the set lock")
 		return pipeline.Outcome{Status: "complete"}, nil
 	}}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2), WithLocks(locks))
+	executor := NewExecutor(runner, WithChunkPeriods(2), WithLocks(locks))
 	var records []progressRecord
 
 	require.NoError(t, executor.Run(context.Background(), testWindow(6), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))
@@ -235,7 +235,7 @@ func TestChunkNarrowsToMemoryBudget(t *testing.T) {
 
 	storage := &recalcPipelineStore{}
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(6), WithMemoryBudget(full.Total()/2))
+	executor := NewExecutor(runner, WithChunkPeriods(6), WithMemoryBudget(full.Total()/2))
 	var records []progressRecord
 	err = executor.Run(context.Background(), Window{Start: start, End: start.Add(6 * time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func TestChunkNarrowsToMemoryBudget(t *testing.T) {
 	require.Equal(t, start.Add(time.Duration(fit)*time.Minute), storage.readRequests[0].End)
 	require.Len(t, storage.written, 6)
 
-	tiny := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithMemoryBudget(64))
+	tiny := NewExecutor(runner, WithMemoryBudget(64))
 	storage.readRequests = nil
 	err = tiny.Run(context.Background(), Window{Start: start, End: start.Add(time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
 	require.ErrorIs(t, err, pipeline.ErrMemoryBudget)
@@ -254,7 +254,7 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	storage := &recalcPipelineStore{}
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(3))
+	executor := NewExecutor(runner, WithChunkPeriods(3))
 	selection := pipelineSelection(
 		testRecalcFactor("short", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("long", domain.MemberStatusEnabled, 3),
@@ -276,7 +276,7 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 func TestRecalcDoesNotReportMarker(t *testing.T) {
 	storage := &recalcPipelineStore{}
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	executor := NewExecutor(runner)
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 
 	_, err := executor.RunChunk(context.Background(), pipelineSelection(testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3)), period, period.Add(time.Minute))
@@ -336,7 +336,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 		require.True(t, locks.held, "运行必须在任务锁内")
 		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{Member: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
 	}}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
+	executor := NewExecutor(runner, WithLocks(locks))
 	calls := 0
 	source := func(context.Context) (Selection, error) {
 		calls++
@@ -371,7 +371,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 // 预热跳过的恢复：只填充同时写 carry 列（那一期实时路径没有写任何行）。
 func TestRunChunkWithFillCarryWritesCarryColumns(t *testing.T) {
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	executor := NewExecutor(runner)
 	source := func(context.Context) (Selection, error) {
 		selection := executorSelection("BTC")
 		selection.FillOnly, selection.FillCarry = true, true
@@ -390,7 +390,7 @@ func TestRunChunkWithFillCarryWritesCarryColumns(t *testing.T) {
 func TestRunChunkWithSkipsWhenSelectionBecomesEmpty(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
+	executor := NewExecutor(runner, WithLocks(locks))
 	start := testWindow(1).Start
 	calls := 0
 	source := func(context.Context) (Selection, error) {
@@ -411,7 +411,7 @@ func TestRunChunkWithSkipsWhenSelectionBecomesEmpty(t *testing.T) {
 func TestExecutorGateStopsWritesBeforeRunner(t *testing.T) {
 	runner := &recordingRunner{}
 	open := false
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2),
+	executor := NewExecutor(runner, WithChunkPeriods(2),
 		WithGate(func(taskID string) bool { return open && taskID == "ftask_bars_1m" }))
 	var records []progressRecord
 

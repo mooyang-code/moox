@@ -169,6 +169,16 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	if lookupErr != nil {
 		err = fmt.Errorf("%w: lookup enabled factor tasks: %v", storageio.ErrInfra, lookupErr)
 	}
+	// 事件入口是换算边界：事件里的周期是真实的桶起点，引擎内部按轴上时间计算。
+	if len(sets) > 0 {
+		axis, axisErr := periodclock.AxisFor(message.GetSpaceId(), payload.GetFrequency())
+		if axisErr == nil {
+			event.periodTime, axisErr = axis.ToAxis(event.periodTime)
+		}
+		if axisErr != nil {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("reject dataset period event: period_time %d: %w", payload.GetPeriodTime(), axisErr)}
+		}
+	}
 	var errs []error
 	if err != nil {
 		errs = append(errs, err)
@@ -252,13 +262,12 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 	}
 	var params map[string]domain.ParamSnapshot
 	if h.params != nil && len(members) > 0 {
-		aligned := period
-		if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
-			if value, err := clock.Align(period, set.Freq); err == nil {
-				aligned = value
-			}
+		// 取参是引擎对外接口：管理端按真实时间存参数的生效期，先把本期换回真实时间。
+		at, err := realPeriod(set, period)
+		if err != nil {
+			return pipeline.Outcome{}, err
 		}
-		selected, err := h.params.Select(ctx, set, members, aligned)
+		selected, err := h.params.Select(ctx, set, members, at)
 		if err != nil {
 			return pipeline.Outcome{}, fmt.Errorf("%w: select factor params: %v", storageio.ErrInfra, err)
 		}
@@ -282,22 +291,27 @@ func (h *Handler) finishParams(ctx context.Context, set domain.FactorTask, perio
 	if h.params == nil {
 		return
 	}
-	aligned := period
-	if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
-		if value, err := clock.Align(period, set.Freq); err == nil {
-			aligned = value
-		}
+	at, err := realPeriod(set, period)
+	if err == nil {
+		err = h.params.Done(ctx, set.TaskID, at)
 	}
-	if err := h.params.Done(ctx, set.TaskID, aligned); err != nil {
-		log.ErrorContextf(ctx, "factor_param_inflight_clear_failed task_id=%s period=%s error=%v", set.TaskID, aligned.UTC().Format(time.RFC3339), err)
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_param_inflight_clear_failed task_id=%s period=%s error=%v", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
 	}
 }
 
-func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
-	clock, clockErr := periodclock.ForSpace(set.SpaceID)
-	if clockErr != nil {
-		return pipeline.Plan{}, clockErr
+// realPeriod 把轴上的周期换回真实时间。
+func realPeriod(set domain.FactorTask, period time.Time) (time.Time, error) {
+	axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
+	if err != nil {
+		return time.Time{}, err
 	}
+	return axis.FromAxis(period)
+}
+
+func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
+	// 计划在轴上建立：轴是连续的，周期数学用 Continuous。
+	clock := periodclock.Continuous{}
 	columnsCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
 	carryColumns, columnsErr := h.store.DatasetColumns(columnsCtx, set.SpaceID, set.SourceDatasetID)
 	cancel()

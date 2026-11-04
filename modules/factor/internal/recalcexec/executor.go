@@ -78,7 +78,6 @@ type config struct {
 	memoryBudget int64
 	chunkRetries int
 	retryBackoff time.Duration
-	clock        periodclock.Clock
 	locks        SetLocker
 }
 
@@ -92,7 +91,6 @@ func WithMemoryBudget(budget int64) Option { return func(cfg *config) { cfg.memo
 func WithChunkRetry(attempts int, backoff time.Duration) Option {
 	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
 }
-func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
 
 // WithParamReader 设置已有行 __params 的读取方；没有设置时所有期次都按成员自己的参数计算，也不记录按默认参数新补的期次。
 func WithParamReader(reader ParamReader) Option { return func(cfg *config) { cfg.params = reader } }
@@ -116,7 +114,6 @@ type Executor struct {
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	runner       Runner
 	locks        SetLocker
-	clock        periodclock.Clock
 	chunkPeriods int
 	memoryBudget int64
 	chunkRetries int
@@ -137,7 +134,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		params: cfg.params, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks, clock: cfg.clock,
+		params: cfg.params, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -368,15 +365,9 @@ func (e *Executor) enter(ctx context.Context, taskID string) (func(), bool) {
 	return func() {}, true
 }
 
+// duration 是轴上的周期：补算的区间都在轴上，轴是连续的。
 func (e *Executor) duration(set domain.FactorTask) (time.Duration, error) {
-	clock := e.clock
-	if clock == nil {
-		var err error
-		if clock, err = periodclock.ForSpace(set.SpaceID); err != nil {
-			return 0, err
-		}
-	}
-	return clock.Duration(set.Freq)
+	return periodclock.Continuous{}.Duration(set.Freq)
 }
 
 func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (time.Time, error) {

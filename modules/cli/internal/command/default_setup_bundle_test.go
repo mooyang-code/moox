@@ -58,10 +58,6 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	for _, dataset := range seed.Datasets {
 		datasetsBySpace[dataset.SpaceID] = append(datasetsBySpace[dataset.SpaceID], dataset.DatasetID)
 		require.LessOrEqual(t, utf8.RuneCountInString(dataset.Name), 10, dataset.SpaceID+"/"+dataset.DatasetID)
-		if dataset.SpaceID == "stockcn" && dataset.DatasetID == "dataset_stockcn_equity_kline_1m" {
-			require.Equal(t, "1m", dataset.Freq)
-			require.Equal(t, "stockcn", dataset.DataSourceID)
-		}
 	}
 	for _, column := range seed.DatasetColumns {
 		columnCount[column.SpaceID+"/"+column.DatasetID]++
@@ -88,12 +84,9 @@ func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 		slices.Sort(datasetsBySpace[spaceID])
 	}
 	require.Equal(t, []string{
-		"dataset_stockcn_bond_kline_1m",
-		"dataset_stockcn_equity_kline_1m",
 		"dataset_stockcn_financial_statement_metric",
 		"dataset_stockcn_financial_summary",
-		"dataset_stockcn_index_kline_1d",
-	}, datasetsBySpace["stockcn"])
+	}, datasetsBySpace["stockcn"], "A 股行情结果由采集任务派生，种子里没有行情 Dataset")
 	require.Empty(t, datasetsBySpace["crypto"], "crypto results are task-owned Datasets that Collector creates")
 }
 

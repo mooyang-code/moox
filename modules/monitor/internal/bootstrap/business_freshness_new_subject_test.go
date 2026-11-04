@@ -46,6 +46,10 @@ func (f newSubjectFirstSeen) ObserveSubjects(context.Context, string, string, ma
 	return f, nil
 }
 
+func (f newSubjectFirstSeen) DatasetFirstSeen(context.Context, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 // 新上线对象在等首根 K 线：检查按通过记录（不触发告警），状态是 degraded，页面显示黄色关注；宽限期过了才按失败记录。
 func TestBusinessFreshnessRecordsNewSubjectsAsDegradedWithoutFailing(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))

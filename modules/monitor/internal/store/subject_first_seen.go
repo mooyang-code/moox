@@ -98,3 +98,21 @@ func (r *SubjectFirstSeenRepository) ObserveSubjects(ctx context.Context, spaceI
 	}
 	return value.fresh, nil
 }
+
+// DatasetFirstSeen 返回数据集的对象最早出现在采集清单里的时间（含部署前的存量）；还没有记录时 ok 为假。
+func (r *SubjectFirstSeenRepository) DatasetFirstSeen(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
+	type result struct {
+		at  time.Time
+		ok  bool
+		err error
+	}
+	value, err := WithDatabase(r.store, func(db *gorm.DB) result {
+		var row subjectFirstSeenRow
+		err := db.WithContext(ctx).Where("c_space_id = ? AND c_dataset_id = ?", spaceID, datasetID).Order("c_first_seen_at").Limit(1).Find(&row).Error
+		return result{at: row.FirstSeenAt.UTC(), ok: err == nil && row.SubjectID != "", err: err}
+	})
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return value.at, value.ok, value.err
+}

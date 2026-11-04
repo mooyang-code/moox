@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/stretchr/testify/require"
 )
@@ -59,7 +58,7 @@ func TestRunChunkSplitsByRowParams(t *testing.T) {
 		}
 		return pipeline.Outcome{Status: "complete", Items: items}, nil
 	}}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(100), WithParamReader(reader))
+	executor := NewExecutor(runner, WithChunkPeriods(100), WithParamReader(reader))
 
 	outcome, err := executor.RunChunk(context.Background(), selection, window.Start, window.End)
 	require.NoError(t, err)
@@ -120,7 +119,7 @@ func TestRunChunkWithoutParamReaderComputesOneSegment(t *testing.T) {
 	window := testWindow(5)
 	selection, key := paramSelection(t, "BTC")
 	runner := &recordingRunner{}
-	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(100))
+	executor := NewExecutor(runner, WithChunkPeriods(100))
 	outcome, err := executor.RunChunk(context.Background(), selection, window.Start, window.End)
 	require.NoError(t, err)
 	require.Len(t, runner.snapshot(), 1)

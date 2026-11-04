@@ -128,9 +128,24 @@ export function replaySourceLabel(replay: { strategy_id: string }, catalog: { st
   return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
 }
 
-/** 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。 */
+/** 时刻是否是上海时间零点。 */
+function isShanghaiMidnight(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && (timestamp + 8 * 3600 * 1000) % (24 * 3600 * 1000) === 0;
+}
+
+/**
+ * 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。回放记录只带日历不带周期，
+ * A 股日线的区间两端总是上海零点；A 股日内的区间是真实时刻，不是上海零点时按 UTC 时间写。
+ */
 export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }): string {
-  if (replay.calendar === "cn_stock" && replay.start_time && replay.end_time) {
+  if (
+    replay.calendar === "cn_stock" &&
+    replay.start_time &&
+    replay.end_time &&
+    isShanghaiMidnight(replay.start_time) &&
+    isShanghaiMidnight(replay.end_time)
+  ) {
     return `${shanghaiDate(replay.start_time)} → ${shanghaiDate(replay.end_time)}（上海日期，不含结束日）`;
   }
   return `${formatUtcTime(replay.start_time)} → ${formatUtcTime(replay.end_time)}`;

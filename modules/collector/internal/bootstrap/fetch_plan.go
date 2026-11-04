@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/localexec"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
@@ -68,8 +67,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	var reconcilers sync.Map
 	var autoScans sync.Map
 	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Absences: dbm.Backfill()}
-	checkCalendar := newStockCNCheckCalendar()
-	checker.Calendar, checker.CalendarReady = checkCalendar.valid, checkCalendar.ready
+	// 应有时间点与函数侧同一套过滤：只有该市场此频率的交易桶才应有 K 线。
+	checker.Calendar = markets.TradingBar
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
@@ -147,16 +146,12 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
 				DefaultLatenessS: defaultLatenessSeconds(spaceID), MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
-			var preflight func(context.Context) error
-			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-				preflight = stockCNCalendarPreflight
-			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {
 				return nil, err
 			}
 			reconciler := &marketfetch.PlanReconciler{
-				Preflight: preflight,
+				Preflight: calendarPreflight(spaceID),
 				SpaceID:   spaceID, Options: options, Deploy: deploy,
 				Groups: &marketfetch.GroupBuilder{
 					Tasks: dbm.Tasks(), Symbols: source, ResolveSourceID: marketwiring.DefaultSourceID, ResolveSymbol: marketwiring.ResolveSymbol,
@@ -224,102 +219,17 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	return nil
 }
 
-// stockCNCalendarPreflight 检查公共交易日历的覆盖期：不足 60 天告警，不足 14 天或已过期则拒绝创建新计划
-// （函数在日历失效时无法判断交易周期）。
-func stockCNCalendarPreflight(ctx context.Context) error {
-	calendar, err := stockmarket.LoadCalendar(stockCNCalendarPath())
-	if err != nil {
-		return fmt.Errorf("load stockcn calendar: %w", err)
-	}
-	now := time.Now()
-	if err := calendar.CheckHorizon(now, 14); err != nil {
-		return fmt.Errorf("stockcn calendar coverage is too short: %w", err)
-	}
-	if err := calendar.CheckHorizon(now, 60); err != nil {
-		log.WarnContextf(ctx, "stockcn calendar coverage is running out: %v", err)
-	}
-	return nil
-}
-
-// stockCNCheckCalendarFilter 是完整性检查使用的交易日历过滤：与函数侧一致，stockcn 只在交易日历的
-// 交易分钟应有 K 线，其余空间连续交易。日历加载失败不缓存，修复文件后下次检查会重新加载；
-// 不可用时 ready 返回错误，检查直接失败而不是得到空结果。
-type stockCNCheckCalendarFilter struct {
-	mu       sync.Mutex
-	calendar *stockmarket.Calendar
-	loadedAt time.Time
-	sessions map[string]map[int64]struct{}
-	now      func() time.Time
-}
-
-// checkCalendarReloadInterval 是交易日历的重新加载间隔：日历文件更新后无需重启即可生效。
-const checkCalendarReloadInterval = time.Hour
-
-func newStockCNCheckCalendar() *stockCNCheckCalendarFilter {
-	return &stockCNCheckCalendarFilter{sessions: map[string]map[int64]struct{}{}, now: time.Now}
-}
-
-func (f *stockCNCheckCalendarFilter) ready(spaceID string) error {
-	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+// calendarPreflight 检查空间所在市场的交易日历覆盖期：不足 60 天告警，不足 14 天或已过期则拒绝创建新计划
+// （覆盖期之外无法判断哪些周期是交易桶）。连续交易的市场没有交易日历，总是通过。
+func calendarPreflight(spaceID string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		now := time.Now()
+		if err := markets.CheckCalendarHorizon(spaceID, now, 14); err != nil {
+			return fmt.Errorf("%s 交易日历覆盖期不足：%w", spaceID, err)
+		}
+		if err := markets.CheckCalendarHorizon(spaceID, now, 60); err != nil {
+			log.WarnContextf(ctx, "%s 交易日历覆盖期快用完了：%v", spaceID, err)
+		}
 		return nil
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.calendar != nil && f.now().Sub(f.loadedAt) < checkCalendarReloadInterval {
-		return nil
-	}
-	calendar, err := stockmarket.LoadCalendar(stockCNCalendarPath())
-	if err == nil && (calendar == nil || calendar.Location() == nil) {
-		err = fmt.Errorf("calendar has no time zone")
-	}
-	if err != nil {
-		if f.calendar != nil {
-			// 重新加载失败时继续使用已加载的日历，下次检查再试。
-			f.loadedAt = f.now().Add(-checkCalendarReloadInterval + time.Minute)
-			return nil
-		}
-		return err
-	}
-	f.calendar, f.loadedAt = calendar, f.now()
-	f.sessions = map[string]map[int64]struct{}{}
-	return nil
-}
-
-func (f *stockCNCheckCalendarFilter) valid(spaceID, frequency string, barStart time.Time) (bool, error) {
-	if !strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
-		return true, nil
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.calendar == nil {
-		return false, fmt.Errorf("stockcn calendar is not loaded")
-	}
-	if !strings.EqualFold(frequency, "1m") {
-		return false, fmt.Errorf("stockcn calendar only supports 1m, got %s", frequency)
-	}
-	if !f.calendar.Covers(barStart) {
-		return false, fmt.Errorf("%s is outside the calendar coverage", barStart.In(f.calendar.Location()).Format("2006-01-02"))
-	}
-	tradeDate := barStart.In(f.calendar.Location()).Format("2006-01-02")
-	bars, cached := f.sessions[tradeDate]
-	if !cached {
-		expected, err := f.calendar.ExpectedMinuteBars(tradeDate)
-		if err != nil {
-			return false, err
-		}
-		bars = make(map[int64]struct{}, len(expected))
-		for _, bar := range expected {
-			bars[bar.UTC().Unix()] = struct{}{}
-		}
-		f.sessions[tradeDate] = bars
-	}
-	_, ok := bars[barStart.UTC().Unix()]
-	return ok, nil
-}
-
-func stockCNCalendarPath() string {
-	if path := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")); path != "" {
-		return path
-	}
-	return "./config/markets/stockcn/calendar.yaml"
 }

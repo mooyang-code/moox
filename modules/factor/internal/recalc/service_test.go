@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +16,7 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	seedRecalcTask(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	one, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-1", start, end)
@@ -33,7 +32,7 @@ func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
 	subjects := &changingSubjects{values: []string{"BTC"}}
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(subjects))
+	svc := NewService(db, WithSubjectProvider(subjects))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	accepted, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "stable-omitted", start, end)
@@ -69,7 +68,7 @@ func TestRecalcUsesSelectedFactorsOnly(t *testing.T) {
 		testRecalcFactor("one", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("two", domain.MemberStatusEnabled, 5),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	job, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
 	require.NoError(t, err)
@@ -127,7 +126,7 @@ func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	)
 	// A definition that exists but was never added to this set.
 	require.NoError(t, db.CreateFactor(context.Background(), testRecalcFactor("outsider", "", 1).def))
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"outsider"}, nil, "req-outsider", start, start.Add(time.Minute))
@@ -140,7 +139,7 @@ func TestRecalcRejectsDisabledMember(t *testing.T) {
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 		testRecalcFactor("parked", domain.MemberStatusDisabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "ftask_bars_1m", []string{"parked"}, nil, "req-parked", start, start.Add(time.Minute))
@@ -154,7 +153,7 @@ func TestRecalcDefaultsToAllEnabledMembers(t *testing.T) {
 		testRecalcFactor("b_parked", domain.MemberStatusDisabled, 3),
 		testRecalcFactor("c_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
+	svc := NewService(db, WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	job, err := svc.Submit(context.Background(), "ftask_bars_1m", nil, nil, "req-default", start, start.Add(time.Minute))
@@ -167,4 +166,45 @@ type recalcSubjects []string
 
 func (r recalcSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return append([]string(nil), r...), nil
+}
+
+// A 股补算区间吸附到交易 K 线：起点取不早于它的第一根开盘，终点取不晚于它的最近收盘，按真实时间入库；
+// 吸附后区间里没有 K 线才报错。crypto 仍严格按周期对齐。
+func TestAlignRangeSnapsStockCNToTradingBars(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	at := func(value string) time.Time {
+		parsed, err := time.ParseInLocation("2006-01-02 15:04", value, cst)
+		require.NoError(t, err)
+		return parsed.UTC()
+	}
+	for _, c := range []struct{ start, end, wantStart, wantEnd string }{
+		// 交易日 10:07 打开页面的默认区间：终点 10:07 吸附到 10:05（10:00 那根收盘），起点 08:47 吸附到 09:30 开盘。
+		{"2026-10-09 08:47", "2026-10-09 10:07", "2026-10-09 09:30", "2026-10-09 10:05"},
+		// 终点 20:00 吸附到当天 15:00 收盘。
+		{"2026-10-09 13:00", "2026-10-09 20:00", "2026-10-09 13:00", "2026-10-09 15:00"},
+		// 起点在周日：吸附到周一 09:30 开盘。
+		{"2026-10-11 10:00", "2026-10-12 10:00", "2026-10-12 09:30", "2026-10-12 10:00"},
+		// 起点在盘中（10:07）：吸附到下一根 10:10；终点 13:00 是午休后第一根的开盘，吸附到 11:30 收盘。
+		{"2026-10-09 10:07", "2026-10-09 13:00", "2026-10-09 10:10", "2026-10-09 11:30"},
+		// 已经对齐的区间不变；日历最后一天的收盘能作终点。
+		{"2026-12-31 14:00", "2026-12-31 15:00", "2026-12-31 14:00", "2026-12-31 15:00"},
+	} {
+		start, end, err := AlignRange("stockcn", "5m", at(c.start), at(c.end))
+		require.NoError(t, err, c)
+		require.Equal(t, at(c.wantStart), start, c)
+		require.Equal(t, at(c.wantEnd), end, c)
+	}
+	// 午休、周末里没有 K 线。
+	_, _, err := AlignRange("stockcn", "5m", at("2026-10-09 11:40"), at("2026-10-09 12:50"))
+	require.Error(t, err)
+	_, _, err = AlignRange("stockcn", "5m", at("2026-10-10 10:00"), at("2026-10-11 20:00"))
+	require.Error(t, err)
+
+	// crypto 不吸附：没对齐就拒绝。
+	_, _, err = AlignRange("crypto", "5m", at("2026-10-09 10:07"), at("2026-10-09 11:00"))
+	require.Error(t, err)
+	start, end, err := AlignRange("crypto", "5m", at("2026-10-09 10:05"), at("2026-10-09 11:00"))
+	require.NoError(t, err)
+	require.Equal(t, at("2026-10-09 10:05"), start)
+	require.Equal(t, at("2026-10-09 11:00"), end)
 }

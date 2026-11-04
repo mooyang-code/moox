@@ -110,9 +110,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		indexes[key] = i
 	}
 	owners := []string{
-		"stockcn/dataset_stockcn_equity_kline_1m",
-		"stockcn/dataset_stockcn_index_kline_1d",
-		"stockcn/dataset_stockcn_bond_kline_1m",
 		"stockhk/dataset_stockhk_equity_kline_1d",
 		"stockus/dataset_stockus_equity_kline_1d",
 	}

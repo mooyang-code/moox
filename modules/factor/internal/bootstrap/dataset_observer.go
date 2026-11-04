@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // engineView is the part of the engine hub the observer reads: the catalog the
@@ -36,6 +37,8 @@ type factorDatasetObserver struct {
 	// the same period is not counted as another run. Timer ticks may overlap.
 	mu       sync.Mutex
 	observed map[string]observedPeriod
+	// graced 是本进程里已经处理过首期等待宽限的任务（见 graceNewTasksLocked）。
+	graced map[string]bool
 	// blocked 是各任务连续水位阻塞的起始时间（0 表示没有阻塞），Monitor 据此对停滞超过 30 分钟告警。
 	blocked *prometheus.GaugeVec
 }
@@ -73,7 +76,7 @@ func resultRank(observation report.DatasetObservation) int {
 }
 
 func newFactorDatasetObserver(engine engineView, metrics *report.DatasetMetrics) *factorDatasetObserver {
-	return &factorDatasetObserver{engine: engine, metrics: metrics, clock: periodclock.Continuous{}, now: time.Now, observed: make(map[string]observedPeriod), notify: report.NotifyOutputAdvanced}
+	return &factorDatasetObserver{engine: engine, metrics: metrics, clock: periodclock.Continuous{}, now: time.Now, observed: make(map[string]observedPeriod), graced: make(map[string]bool), notify: report.NotifyOutputAdvanced}
 }
 
 func (o *factorDatasetObserver) observe(ctx context.Context) error {
@@ -112,9 +115,11 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	if err := o.metrics.ReplaceExpected(expected); err != nil {
 		return fmt.Errorf("replace expected factor datasets: %w", err)
 	}
+	// 引擎状态不明（刚重启、还没收到心跳）时不做宽限：这时看不到已有任务的运行记录，会把它们误当成新任务。
 	if engineErr != nil || !engineKnown {
 		return engineErr
 	}
+	o.graceNewTasksLocked(keys, paused, status.RecentRuns)
 	if o.blocked != nil {
 		for _, item := range status.Watermarks {
 			key, known := keys[item.TaskID]
@@ -161,6 +166,40 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// graceNewTasksLocked 给刚进入期望清单、还没有任何一期结果的任务一个首期等待宽限（照搬策略侧的 graceNewInstancesLocked）：
+// 结果数据集建好就进入期望清单，Monitor 看到它没有任何运行会立即判为“尚未上报”，而这个判断排在休市豁免之前；
+// 第一次运行要等第一根 K 线收盘，A 股收盘后、周末建的任务会整夜告警。这里以当前时刻记一次“空”运行（只刷新最近运行
+// 与最近成功时间，不推进产出水位），之后由 Monitor 的休市豁免与新鲜度检查接管。
+//
+// 指标只在进程内存里：factor-mgr 重启后每个任务首次进入期望清单时都会重新写这一条，不会回到“尚未上报”。只在引擎状态已知时做：
+// 引擎已经上报过这个任务的一期时不需要宽限（随后的运行记录直接覆盖）；暂停的任务不在期望清单里。
+// 7×24 市场的新任务也会多一条 empty，下一分钟的第一期结果随即覆盖，无害。调用方持有 o.mu。
+func (o *factorDatasetObserver) graceNewTasksLocked(keys map[string]report.DatasetKey, paused map[string]bool, runs []domain.TaskRunSummary) {
+	ran := make(map[string]bool, len(runs))
+	for _, run := range runs {
+		if run.LastPeriodTime > 0 {
+			ran[run.TaskID] = true
+		}
+	}
+	for taskID := range o.graced {
+		if _, ok := keys[taskID]; !ok {
+			delete(o.graced, taskID)
+		}
+	}
+	for taskID, key := range keys {
+		if o.graced[taskID] || paused[taskID] {
+			continue
+		}
+		o.graced[taskID] = true
+		if _, seen := o.observed[taskID]; seen || ran[taskID] {
+			continue
+		}
+		if err := o.metrics.ObserveRun(report.DatasetObservation{Key: key, Result: "empty", FinishedAt: o.now().UTC()}); err != nil {
+			log.Warnf("factor_dataset_grace_failed task_id=%s error=%v", taskID, err)
+		}
+	}
 }
 
 func datasetResult(run domain.TaskRunSummary) string {

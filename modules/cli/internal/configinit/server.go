@@ -320,7 +320,7 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, r, &request) {
 		return
 	}
-	raw, err := Render(r.Context(), &request, Environment{Lookup: s.cloud.lookup, Login: s.login, Probe: s.probe})
+	raw, err := Render(r.Context(), &request, Environment{Verify: s.cloud.verify, Lookup: s.cloud.lookup, Login: s.login, Probe: s.probe})
 	if err != nil {
 		// 校验没过不消耗令牌：用户改完可以直接再提交。
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})

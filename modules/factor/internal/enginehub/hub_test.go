@@ -130,19 +130,28 @@ func TestEngineBeforeFirstHeartbeat(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestLatestRunRecomputesLag(t *testing.T) {
+// 滞后由引擎按交易 K 线根数算好，管理端原样使用，不再用当前时间减最后一期的开始时间（A 股休市时那样会显示成滞后）。
+func TestLatestRunKeepsEngineLag(t *testing.T) {
 	hub, _, clock := newTestHub(t)
 	period := clock.now.Add(-2 * time.Minute)
 	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{RecentRuns: []domain.TaskRunSummary{
-		{TaskID: "task_a", LastPeriodTime: period.Unix(), LastStatus: "complete", LagSeconds: 1},
+		{TaskID: "task_a", LastPeriodTime: period.Unix(), LastStatus: "complete", LagSeconds: 90},
 	}})
 	require.NoError(t, err)
-	clock.Advance(time.Minute)
+	clock.Advance(30 * time.Second) // 心跳还没过期（租约 45 秒）
 
 	run := hub.LatestRun("task_a")
 
 	require.Equal(t, "complete", run.LastStatus)
-	require.Equal(t, int64(180), run.LagSeconds)
+	require.Equal(t, int64(90), run.LagSeconds)
+
+	// 引擎心跳过期（离线）后，滞后加上离线时长，不再停在最后一次心跳的值。
+	clock.Advance(10 * time.Minute)
+	require.Equal(t, int64(90+10*60+30), hub.LatestRun("task_a").LagSeconds)
+	_, status, ok, err := hub.Engine(context.Background())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(90+10*60+30), status.RecentRuns[0].LagSeconds)
 	require.Equal(t, "task_b", hub.LatestRun("task_b").TaskID)
 }
 

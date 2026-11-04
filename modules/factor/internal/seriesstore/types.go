@@ -8,12 +8,17 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 )
 
 // Source 标识一个数据源：空间、数据集和频率。
 type Source struct{ SpaceID, DatasetID, Freq string }
 
 func (s Source) String() string { return s.SpaceID + "/" + s.DatasetID + "/" + s.Freq }
+
+// Format 把本地存储里的轴上时间换回真实时间再格式化（日志与报错用）。
+func (s Source) Format(t time.Time) string { return periodclock.FormatPeriod(s.SpaceID, s.Freq, t) }
 
 // FieldType 是字段的存储类型。
 type FieldType uint8

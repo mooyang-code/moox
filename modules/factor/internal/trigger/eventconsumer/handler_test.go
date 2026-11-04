@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
@@ -470,4 +471,52 @@ func TestHandlerKeepsOnePeriodAtATimePerTask(t *testing.T) {
 	wg.Wait()
 	require.Len(t, runner.plans, 3)
 	require.EqualValues(t, 1, peak.Load(), "同一任务的期次不能并行计算")
+}
+
+// stockDelivery 是 A 股 5m 的周期完成事件，period 是真实的桶起点。
+func stockDelivery(t *testing.T, eventID string, period time.Time) *jetstream.Delivery {
+	t.Helper()
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	payload := &storagepb.DatasetPeriodCompleted{
+		DatasetId: "stock_bars", Frequency: "5m", PeriodTime: period.Unix(), Status: "complete",
+		Source: "ledger", SnapshotRef: "scope-1", UniverseSubjectIds: []string{"600000.SH"},
+		CompletedAt: timestamppb.New(period.Add(5 * time.Minute)),
+	}
+	raw, err := registry.MarshalMessage(events.DatasetPeriodCompleted, payload, events.PublishOptions{
+		EventID: eventID, OccurredAt: period.Add(5 * time.Minute), SpaceID: "stockcn", SubjectID: "stock_bars",
+	})
+	require.NoError(t, err)
+	subject, err := registry.RenderSubject(events.DatasetPeriodCompleted, "stockcn", "stock_bars")
+	require.NoError(t, err)
+	return &jetstream.Delivery{Subject: subject, RawData: raw, RawMessageID: eventID, ContentType: events.ContentType}
+}
+
+// 事件入口是换算边界：A 股事件的真实周期换到轴上再建计划；取参用的仍是真实时间；休市时刻的周期直接拒绝。
+func TestHandlerConvertsStockCNPeriodToAxis(t *testing.T) {
+	set := domain.FactorTask{TaskID: "ftask_stock", SpaceID: "stockcn", Name: "A股", SourceDatasetID: "stock_bars", Freq: "5m",
+		Status: domain.TaskStatusEnabled, ResultDatasetID: "dataset_factor_stock"}
+	factor := domain.FactorDef{FactorID: "f", InputColumns: []string{"close"}}
+	locator := &handlerTaskLocator{set: set, factors: []domain.FactorDef{factor}, found: true}
+	runner := new(handlerRunner)
+	handler := NewHandler(locator, &handlerPeriodStore{}, runner, new(testTaskLocks), HandlerConfig{})
+	t.Cleanup(handler.Close)
+	selector := new(handlerParamSelector)
+	handler.SetParamSelector(selector)
+
+	period := time.Date(2026, 10, 12, 5, 0, 0, 0, time.UTC) // 北京时间 13:00，午休后第一根
+	result := handler.Handle(context.Background(), stockDelivery(t, "event-stock", period))
+	require.Equal(t, jetstream.ACK, result.Decision, result.Err)
+	axis, err := periodclock.AxisFor("stockcn", "5m")
+	require.NoError(t, err)
+	want, err := axis.ToAxis(period)
+	require.NoError(t, err)
+	require.Len(t, runner.plans, 1)
+	require.Equal(t, want, runner.plans[0].PeriodTime, "计划在轴上")
+	require.Equal(t, []time.Time{period}, selector.periods, "取参用真实时间")
+
+	lunch := time.Date(2026, 10, 12, 4, 0, 0, 0, time.UTC) // 北京时间 12:00
+	result = handler.Handle(context.Background(), stockDelivery(t, "event-lunch", lunch))
+	require.Equal(t, jetstream.TERM, result.Decision)
+	require.Len(t, runner.plans, 1)
 }

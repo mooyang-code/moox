@@ -1,6 +1,7 @@
 package barclock
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,6 +18,14 @@ const maxBetweenDays = 3660
 // TradingDays 判断某天是否交易日；覆盖范围外返回 OutOfCoverage 与错误。marketcalendar.TradingCalendar 实现它。
 type TradingDays interface {
 	Status(marketcalendar.CivilDate) (marketcalendar.CoverageStatus, error)
+}
+
+// IndexedTradingDays 在 TradingDays 之外还能按序号定位交易日，交易序号（Ordinal）需要它。
+// marketcalendar.TradingCalendar 实现它。
+type IndexedTradingDays interface {
+	TradingDays
+	TradingDayIndex(marketcalendar.CivilDate) (int, error)
+	TradingDayAt(int) (marketcalendar.CivilDate, error)
 }
 
 // span 是一个交易时段，用距本地零点的时长表示。
@@ -58,6 +67,10 @@ type sessionClock struct {
 	days   TradingDays
 	spans  []span
 	period time.Duration
+	// perDay 是每个交易日的桶数（A 股没有半日市，每个交易日相同）；before[i] 是第 i 个交易时段之前的桶数。
+	// 交易序号直接按它们计算，热路径不建当天的桶列表。
+	perDay int64
+	before []int64
 }
 
 // NewSession 返回按交易时段切分的时钟。日内周期必须整除每个交易时段的长度；1d 一个交易日一根。
@@ -79,7 +92,15 @@ func NewSession(days TradingDays, location *time.Location, sessions []string, pe
 			}
 		}
 	}
-	return &sessionClock{loc: location, days: days, spans: spans, period: period}, nil
+	c := &sessionClock{loc: location, days: days, spans: spans, period: period, perDay: 1, before: make([]int64, len(spans))}
+	if period < 24*time.Hour {
+		c.perDay = 0
+		for i, item := range spans {
+			c.before[i] = c.perDay
+			c.perDay += int64(item.length() / period)
+		}
+	}
+	return c, nil
 }
 
 func formatClock(d time.Duration) string {
@@ -225,6 +246,89 @@ func (c *sessionClock) Between(start, end time.Time, limit int) ([]Bucket, error
 		}
 	}
 	return out, nil
+}
+
+func (c *sessionClock) indexed() (IndexedTradingDays, error) {
+	indexed, ok := c.days.(IndexedTradingDays)
+	if !ok {
+		return nil, fmt.Errorf("%w：交易日历不支持按序号定位", ErrNoCalendar)
+	}
+	return indexed, nil
+}
+
+// Ordinal 按桶的 Key 定位（日内桶的 Key 是开盘时刻，1d 桶的 Key 是交易日期的 UTC 零点），直接计算：
+// 交易日序号 × 每日根数 + 所在时段之前的根数 + (本地时刻 − 时段开盘) / 周期。不分配内存（出错时除外）。
+func (c *sessionClock) Ordinal(b Bucket) (int64, error) {
+	indexed, err := c.indexed()
+	if err != nil {
+		return 0, err
+	}
+	var (
+		date  marketcalendar.CivilDate
+		intra int64
+	)
+	if c.period == 24*time.Hour {
+		key := b.Key.UTC()
+		if key.Hour() != 0 || key.Minute() != 0 || key.Second() != 0 || key.Nanosecond() != 0 {
+			return 0, c.notBucket(b.Key)
+		}
+		date, _ = marketcalendar.NewCivilDate(key.Year(), key.Month(), key.Day())
+	} else {
+		local := b.Key.In(c.loc)
+		date, _ = marketcalendar.NewCivilDate(local.Year(), local.Month(), local.Day())
+		offset := time.Duration(local.Hour())*time.Hour + time.Duration(local.Minute())*time.Minute +
+			time.Duration(local.Second())*time.Second + time.Duration(local.Nanosecond())
+		found := false
+		for i, item := range c.spans {
+			if offset >= item.open && offset < item.close {
+				if rel := offset - item.open; rel%c.period == 0 {
+					intra, found = c.before[i]+int64(rel/c.period), true
+				}
+				break
+			}
+		}
+		if !found {
+			return 0, c.notBucket(b.Key)
+		}
+	}
+	day, err := indexed.TradingDayIndex(date)
+	if errors.Is(err, marketcalendar.ErrNotTradingDay) {
+		return 0, c.notBucket(b.Key)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("%w：%s：%v", ErrOutOfCoverage, date, err)
+	}
+	return int64(day)*c.perDay + intra, nil
+}
+
+func (c *sessionClock) notBucket(t time.Time) error {
+	return fmt.Errorf("%w：%s 不是 %s 的交易桶", ErrNoBucket, t.UTC().Format(time.RFC3339), c.period)
+}
+
+// BucketAtOrdinal 是 Ordinal 的反向，同样直接计算、不分配内存。
+func (c *sessionClock) BucketAtOrdinal(n int64) (Bucket, error) {
+	indexed, err := c.indexed()
+	if err != nil {
+		return Bucket{}, err
+	}
+	if n < 0 {
+		return Bucket{}, fmt.Errorf("%w：交易序号 %d 为负", ErrOutOfCoverage, n)
+	}
+	date, err := indexed.TradingDayAt(int(n / c.perDay))
+	if err != nil {
+		return Bucket{}, fmt.Errorf("%w：%v", ErrOutOfCoverage, err)
+	}
+	if c.period == 24*time.Hour {
+		key := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)
+		return Bucket{Key: key, Start: c.at(date, c.spans[0].open), End: c.at(date, c.spans[len(c.spans)-1].close)}, nil
+	}
+	intra := n % c.perDay
+	i := len(c.spans) - 1
+	for i > 0 && c.before[i] > intra {
+		i--
+	}
+	start := c.at(date, c.spans[i].open+time.Duration(intra-c.before[i])*c.period)
+	return Bucket{Key: start, Start: start, End: start.Add(c.period)}, nil
 }
 
 func (c *sessionClock) ValidateSource(source time.Duration) error {

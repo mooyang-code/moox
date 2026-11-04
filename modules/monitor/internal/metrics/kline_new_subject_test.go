@@ -15,6 +15,12 @@ type fakeFirstSeenStore struct {
 	fresh map[string]time.Time
 	err   error
 	calls int
+	// datasetSeen 非零时是数据集最早出现在清单里的时间。
+	datasetSeen time.Time
+}
+
+func (f *fakeFirstSeenStore) DatasetFirstSeen(context.Context, string, string) (time.Time, bool, error) {
+	return f.datasetSeen, !f.datasetSeen.IsZero(), nil
 }
 
 func (f *fakeFirstSeenStore) ObserveSubjects(context.Context, string, string, map[string]struct{}, time.Time) (map[string]time.Time, error) {
@@ -275,4 +281,33 @@ func TestKlineFreshnessTruncatedLaggingAllWithinGraceDoesNotCountUnlisted(t *tes
 	require.False(t, plain.Success)
 	require.Equal(t, 1, plain.StaleCount, "只有 NEW1 缺失")
 	require.Equal(t, 1, plain.MissingCount)
+}
+
+// A 股数据集收盘后建好、还没有任何输出：等第一根 K 线（次日 09:30 那根收线加允许迟到与采集余量）之前不告警，过了仍没有才报无输出。
+func TestKlineFreshnessNewStockDatasetWaitsForTheFirstBar(t *testing.T) {
+	cst := time.FixedZone("CST", 8*3600)
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", DatasetID: "dataset", ViewID: "view", Frequency: "5m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, Lateness: 90 * time.Second}
+	created := time.Date(2026, 11, 4, 15, 33, 0, 0, cst)
+	evaluate := func(now time.Time, store *fakeFirstSeenStore) KlineFreshnessReport {
+		query := newViewSummaryQuery(t, nil)
+		query.storage = NewStorageAdapter(&fakeMetadata{subjects: activeSubjects("600519.XSHG")})
+		evaluator := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20)
+		evaluator.SetSubjectFirstSeenStore(store)
+		reports, err := evaluator.Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	seen := &fakeFirstSeenStore{datasetSeen: created}
+	waiting := evaluate(time.Date(2026, 11, 4, 22, 0, 0, 0, cst), seen)
+	require.True(t, waiting.Success, waiting.Diagnostic)
+	require.Equal(t, "first_bar_pending", waiting.Reason)
+	require.True(t, waiting.PendingUntil.After(time.Date(2026, 11, 5, 9, 35, 0, 0, cst)), waiting.PendingUntil)
+
+	late := evaluate(time.Date(2026, 11, 5, 10, 30, 0, 0, cst), seen)
+	require.False(t, late.Success)
+	require.Equal(t, "no_observation", late.Reason)
+
+	unknown := evaluate(time.Date(2026, 11, 4, 22, 0, 0, 0, cst), &fakeFirstSeenStore{})
+	require.Equal(t, "no_observation", unknown.Reason, "没有首次出现记录时不推测")
 }

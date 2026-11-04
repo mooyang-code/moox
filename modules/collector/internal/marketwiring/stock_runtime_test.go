@@ -10,7 +10,7 @@ import (
 
 func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
 	provider, err := newStockCNProvider("sina", "stockcn_minute_http", marketfetch.StockCNProviderRuntime{
-		KlineSpec: marketfetch.StockCNProviderKlineConfig{Frequency: "1m", MaxBarsPerRequest: 1023},
+		KlineSpec: marketfetch.StockCNProviderKlineConfig{MaxBarsPerRequest: 1023},
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1,
 			Cooldown: time.Second, RequestTimeout: time.Second,
@@ -23,25 +23,28 @@ func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
 
 func TestNewStockCNProviderForSourceSupportsNormalTDX(t *testing.T) {
 	provider, err := newStockCNProvider("tdx", "normal_7709", marketfetch.StockCNProviderRuntime{
-		Hosts: []string{"quotes.example"},
-		Port:  7709,
-		KlineSpec: marketfetch.StockCNProviderKlineConfig{
-			Frequency:         "1m",
-			MaxBarsPerRequest: 800,
-		},
+		Hosts:     []string{"quotes.example"},
+		Port:      7709,
+		KlineSpec: marketfetch.StockCNProviderKlineConfig{MaxBarsPerRequest: 800},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "tdx", provider.Descriptor().ID)
 	require.Equal(t, "normal_7709", provider.Descriptor().SourceID)
 }
 
-func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
-	t.Setenv("MOOX_MARKET_FETCH_PROVIDER", "tencent")
-	t.Setenv("MOOX_MARKET_FETCH_SOURCE_ID", "stockcn_http")
-	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{})
+func TestNewStockKlinePipelineUsesTheFrequencyRoute(t *testing.T) {
+	minute, err := NewStockKlinePipeline(timerHandlerStorage{}, "1m")
 	require.NoError(t, err)
-	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, pipeline.CandidateChain)
-	require.Empty(t, pipeline.SourceID)
+	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, minute.CandidateChain)
+	require.True(t, minute.AutoBindSource)
+	require.Empty(t, minute.SourceID)
+
+	five, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
+	require.NoError(t, err)
+	require.Equal(t, []string{"eastmoney", "sina", "tdx", "tencent"}, five.CandidateChain)
+
+	_, err = NewStockKlinePipeline(timerHandlerStorage{}, "15m")
+	require.ErrorContains(t, err, "没有 15m 的 K 线路由")
 }
 
 func TestNewMarketKlinePipelineCreatesBinanceSpotSource(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -26,6 +27,7 @@ type taskSource interface {
 
 type datasetRegistry interface {
 	ReplaceExpected([]report.DatasetExpectation) error
+	ObserveRun(report.DatasetObservation) error
 	ObserveInventoryRefreshError()
 }
 
@@ -38,10 +40,13 @@ type RealtimeInventory struct {
 	dirty           bool
 	lastRefresh     time.Time
 	resampleEnabled bool
+	// registered 是本进程已登记过的期望数据集：新进入清单的数据集登记时记一次“空”运行（见 Refresh）。
+	registered map[report.DatasetKey]struct{}
+	now        func() time.Time
 }
 
 func NewRealtimeInventory(source taskSource, registry datasetRegistry) *RealtimeInventory {
-	return &RealtimeInventory{source: source, registry: registry, dirty: true, resampleEnabled: true}
+	return &RealtimeInventory{source: source, registry: registry, dirty: true, resampleEnabled: true, registered: map[report.DatasetKey]struct{}{}, now: time.Now}
 }
 
 // SetResampleEnabled keeps the published expectation aligned with the runtime
@@ -170,7 +175,28 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 	if err := i.registry.ReplaceExpected(items); err != nil {
 		return fmt.Errorf("replace collector expected datasets: %w", err)
 	}
-	i.lastRefresh = time.Now().UTC()
+	now := i.now().UTC()
+	i.graceNewDatasets(items, now)
+	i.lastRefresh = now
 	i.dirty = false
 	return nil
+}
+
+// graceNewDatasets 给本进程新登记的数据集记一次“空”运行（只刷新最近运行与最近成功时间，不推进水位）。
+//
+// Collector 的定时采集路径没有逐次运行上报，Monitor 在 Storage 第一次提交之前只看到这条清单：不记的话会一直判“尚未上报”，
+// 收盘后或周末启用 A 股任务时整夜告警，而交易所休市豁免要有运行时间才能接管。登记时刻作为起点，开盘后一直没有写入时
+// 照常从等待中的 K 线起算判停滞。进程重启后清单重新登记，这条记录随之重写；移出清单的数据集重新进入时再记一次。
+func (i *RealtimeInventory) graceNewDatasets(items []report.DatasetExpectation, now time.Time) {
+	next := make(map[report.DatasetKey]struct{}, len(items))
+	for _, item := range items {
+		next[item.Key] = struct{}{}
+		if _, known := i.registered[item.Key]; known {
+			continue
+		}
+		if err := i.registry.ObserveRun(report.DatasetObservation{Key: item.Key, Result: "empty", FinishedAt: now}); err != nil {
+			log.Warnf("记录数据集 %s/%s/%s 的登记运行失败：%v", item.Key.SpaceID, item.Key.DatasetID, item.Key.Freq, err)
+		}
+	}
+	i.registered = next
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 )
 
 var shanghaiLocation = mustLoadLocation("Asia/Shanghai")
@@ -113,22 +114,27 @@ func ParseFloat(value string) (float64, error) {
 	return number, nil
 }
 
-func NormalizeMinuteKline(subjectID, providerID, providerSymbol string, mode marketdata.TimestampMode, rawTime string, open, high, low, close, volume, amount float64, volumeMultiplier float64, fetchedAt time.Time, requestID string) (marketdata.NormalizedKline, error) {
+// NormalizeIntradayKline 把一根日内 K 线归一化：周期取请求频率，mode 说明上游时间标签是开盘时刻还是收盘时刻。
+func NormalizeIntradayKline(subjectID, providerID, providerSymbol string, frequency marketdata.Frequency, mode marketdata.TimestampMode, rawTime string, open, high, low, close, volume, amount float64, volumeMultiplier float64, fetchedAt time.Time, requestID string) (marketdata.NormalizedKline, error) {
+	period := frequency.Duration()
+	if period <= 0 || period >= 24*time.Hour {
+		return marketdata.NormalizedKline{}, fmt.Errorf("%w: %q 不是日内频率", marketdata.ErrUnsupportedFrequency, frequency)
+	}
 	barTime, err := ParseCNMinute(rawTime)
 	if err != nil {
 		return marketdata.NormalizedKline{}, err
 	}
 	barStart := barTime
-	barEnd := barTime.Add(time.Minute)
+	barEnd := barTime.Add(period)
 	if mode == marketdata.TimestampModeClose {
 		barEnd = barTime
-		barStart = barEnd.Add(-time.Minute)
+		barStart = barEnd.Add(-period)
 	}
 	row := marketdata.NormalizedKline{
 		SubjectID:         subjectID,
 		ProviderID:        providerID,
 		ProviderSymbol:    providerSymbol,
-		Frequency:         string(marketdata.FrequencyMinute),
+		Frequency:         string(frequency),
 		BarStart:          barStart.UTC(),
 		BarEnd:            barEnd.UTC(),
 		Open:              open,
@@ -145,6 +151,40 @@ func NormalizeMinuteKline(subjectID, providerID, providerSymbol string, mode mar
 		return marketdata.NormalizedKline{}, err
 	}
 	return row, nil
+}
+
+// LatestPageLimit 返回只给“最新一页”、没有起点游标的接口（新浪、腾讯）应请求的根数。
+// 没有起始时间时取请求的 Limit；有起始时间时按交易序号数出起始时间到现在的交易桶数，多取 2 根
+// （容忍未收盘那根与服务端延迟），不超过 maxBars。实时周期提交只要几根，长区间补采自然更多。
+func LatestPageLimit(req marketdata.KlineRequest, now time.Time, maxBars int) int {
+	if req.StartTime.IsZero() {
+		return req.Limit
+	}
+	clock, err := markets.Clock("stockcn", req.Frequency)
+	if err != nil {
+		return maxBars
+	}
+	newest, err := clock.LatestClosed(now)
+	if err != nil {
+		return maxBars
+	}
+	before, err := clock.LatestClosed(req.StartTime)
+	if err != nil {
+		return maxBars
+	}
+	first, err := clock.Next(before)
+	if err != nil {
+		return maxBars
+	}
+	newestOrdinal, err := clock.Ordinal(newest)
+	if err != nil {
+		return maxBars
+	}
+	firstOrdinal, err := clock.Ordinal(first)
+	if err != nil {
+		return maxBars
+	}
+	return min(max(int(newestOrdinal-firstOrdinal)+3, 3), maxBars)
 }
 
 func splitSubjectID(subjectID string) (string, string, error) {

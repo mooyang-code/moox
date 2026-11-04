@@ -23,9 +23,13 @@
 
 ## 当前接入与历史证据
 
-当前 Collector 的 `config/markets/stockcn/route.yaml` 将 `normal_7709` 列为 1m 行情的 fallback，
-运行时候选链由 `internal/marketwiring/stock_runtime.go` 组装；时序数据写入采集任务独占的
-`dataset_<task_id>`，不固定写入旧 `dataset_stockcn_equity_kline_1m`。
+当前 Collector 的 `config/markets/stockcn/route.yaml` 按频率分路由，`normal_7709` 是 1m、5m 行情的 fallback
+（5m 为东方财富主、通达信备），运行时候选链由 `internal/marketwiring/stock_runtime.go` 按请求频率组装；
+时序数据写入采集任务独占的 `dataset_<task_id>`。
+
+日内 K 线的时间标签是收盘时刻（2026-11-04 实测 600519 5m：首根 09:35、末根 11:30 / 15:00，与东方财富逐根对齐；
+成交量单位为股，首根含 09:25 开盘集合竞价）；午休期间上午最后一根被标成 13:00，Collector 归一化时归回 11:25 那根。
+实测样本在 `modules/collector/internal/sources/stockcn/tdx/testdata`。
 下列日期段保留当时的开发线路观测与验收边界，不代表本次重新探测，也不保证临时抓包目录仍存在。
 
 ## 2026-09-01 探测记录
@@ -43,7 +47,7 @@
 
 `packages/tdx/commands.go` 已改为先取 `zipday%2048` 再解析月、日，并新增回归测试。修复后从 `shtdx.gtjas.com:7709` 实测 `600000.SH`、`000001.SZ` 的 1 分钟请求均返回 20 根有效记录，时间落在 `2026-09-03`；与 easy_tdx 同线路请求的分钟时间及最新 OHLCV 样本一致。easy_tdx 的协议实现也明确使用 `month=(zipday%2048)//100`、`day=(zipday%2048)%100`，并将 category 7 定义为 1 分钟线。[easy_tdx datetime codec](https://github.com/handsomejustin/easy_tdx/blob/main/src/easy_tdx/codec/datetime_.py)
 
-当前 `normal_7709` 已切换为 `dataset_stockcn_equity_kline_1m` 的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stockcn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
+当时 `normal_7709` 已切换为 A 股 1m 行情的 active fallback 来源。正式运行链为 `sina -> tencent -> tdx -> eastmoney`：每个 Provider 请求失败最多重试 3 次，再进入下一个 Provider；TDX 失败后最后使用东方财富。TDX 不参与主分片分配，但会随每个 stockcn SCF 包注册，因此源绑定的 Timer 也能跨 Provider fallback。
 
 仍有两个独立的后续门禁：日线标准化需要修正为公共 UTC bucket 语义，且日线接口返回的当天记录必须等收盘后再纳入；北交所还需要使用真实有效证券代码完成实测。这些门禁不影响当前 1m normal TDX fallback 的启用。
 

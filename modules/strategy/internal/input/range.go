@@ -17,7 +17,7 @@ const DefaultReplayMaxBars = 20000
 
 // ReplayRange 把回放区间换成日历的口径：A 股日线按上海日期回放，两端各取所在上海日期的零点，[起始日期, 结束日期)
 // 内的交易日都包含在内（区间通常按 UTC 输入，而 A 股日线的 bar_start 是上海零点、即前一日 16:00 UTC，直接比较会漏掉
-// 首日、多出末日）；其余日历原样返回。
+// 首日、多出末日）；A 股日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
 func ReplayRange(calendar, bar string, start, end time.Time) (time.Time, time.Time, error) {
 	if !stockDaily(calendar, bar) {
 		return start, end, nil
@@ -65,6 +65,14 @@ func ReplayBars(calendar, bar string, start, end time.Time, limit int) ([]Period
 
 // firstBarAtOrAfter 返回 bar_start 不早于 at 的第一根。
 func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, error) {
+	if stockIntraday(calendar, bar) {
+		// 交易时段的 bar 不连续：直接取不早于 at 的那一根（跨午休、隔夜与休市）。
+		start, err := CeilStorageStart(calendar, bar, at)
+		if err != nil {
+			return PeriodBoundaries{}, err
+		}
+		return FromStorageStart(calendar, bar, start)
+	}
 	if stockDaily(calendar, bar) {
 		// 不经 ClosedPeriod 回看上一根收盘：at 落在日历首日时没有上一根。取 at 所在上海日期起的第一个交易日，
 		// at 晚于那天零点时再往后一根。
@@ -143,22 +151,33 @@ func (e *EarlyStartError) Error() string {
 }
 
 // PeriodLabel 是给用户看的 bar 标识：A 股日线写上海日期（bar_start 是上海零点，按 UTC 写会是前一日 16:00），
-// 其余写 bar_start 的 UTC 时间。
+// A 股日内写 bar_start 的上海时间，其余写 bar_start 的 UTC 时间。
 func PeriodLabel(calendar, bar string, storageStart time.Time) string {
 	if stockDaily(calendar, bar) {
 		if _, location, err := stockCalendar(); err == nil {
 			return storageStart.In(location).Format("2006-01-02") + "（上海日期）"
 		}
 	}
+	if stockIntraday(calendar, bar) {
+		if _, location, err := stockCalendar(); err == nil {
+			return storageStart.In(location).Format("2006-01-02 15:04") + "（上海时间）"
+		}
+	}
 	return storageStart.UTC().Format(time.RFC3339)
 }
 
-// BarEndLabel 是给用户看的 bar_end：UTC 时间（与回放表格的“K 线结束（UTC）”一致），A 股日线再注明上海的交易日收盘。
+// BarEndLabel 是给用户看的 bar_end：UTC 时间（与回放表格的“K 线结束（UTC）”一致），A 股日线再注明上海的交易日收盘，
+// A 股日内再注明上海时间。
 func BarEndLabel(calendar, bar string, barEnd time.Time) string {
 	label := barEnd.UTC().Format(time.RFC3339)
 	if stockDaily(calendar, bar) {
 		if _, location, err := stockCalendar(); err == nil {
 			label += "（上海 " + barEnd.In(location).Format("2006-01-02") + " 收盘）"
+		}
+	}
+	if stockIntraday(calendar, bar) {
+		if _, location, err := stockCalendar(); err == nil {
+			label += "（上海 " + barEnd.In(location).Format("2006-01-02 15:04") + "）"
 		}
 	}
 	return label
@@ -192,8 +211,9 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	if err != nil {
 		return time.Time{}, err
 	}
-	// limit 是终点的上限，last 是最后一根可以回放的 bar。最新一根已经写完时它就是日历的最后一个交易日：终点取次日的
-	// 上海零点，区间仍是“不含结束日”的整日口径（之后没有可知的交易日，ReplayBars 枚举到日历末尾为止）。
+	// limit 是终点的上限，last 是最后一根可以回放的 bar。最新一根已经写完时它就是日历的最后一根：终点往后放一天
+	// （日线即次日的上海零点，区间仍是“不含结束日”的整日口径；日内同样包含最后一根），之后没有可知的交易日，
+	// ReplayBars 枚举到日历末尾为止。
 	limit, last := latest.StorageStart, latest.PreviousStart
 	if bounds.ToClosed {
 		limit, last = latest.StorageStart.Add(24*time.Hour), latest.StorageStart

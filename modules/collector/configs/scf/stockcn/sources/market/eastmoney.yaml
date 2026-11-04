@@ -2,10 +2,9 @@ provider:
   id: eastmoney
   market: stockcn
   enabled_feeds: [kline, instrument]
-  hosts: [push2.eastmoney.com]
+  hosts: [push2.eastmoney.com, push2his.eastmoney.com]
   kline:
     endpoint: /api/qt/stock/kline/get
-    frequency: 1m
     max_bars_per_request: 1205
     volume_unit: shares
     amount_unit: CNY

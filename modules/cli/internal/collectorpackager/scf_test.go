@@ -48,54 +48,32 @@ func TestBuildSCFPackageExcludesTRPCAndCLSCredentials(t *testing.T) {
 	}
 }
 
-func TestBuildSCFPackageIncludesStockCNCalendar(t *testing.T) {
+func TestBuildSCFPackageIncludesStockCNRouteWithoutCalendar(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
-	calendar := filepath.Join(tmp, "modules", "collector", "config", "markets", "stockcn", "calendar.yaml")
-	require.NoError(t, os.MkdirAll(filepath.Dir(calendar), 0o755))
-	require.NoError(t, os.WriteFile(calendar, []byte("timezone: Asia/Shanghai\n"), 0o644))
 	route := filepath.Join(tmp, "modules", "collector", "config", "markets", "stockcn", "route.yaml")
-	require.NoError(t, os.WriteFile(route, []byte("market_id: stockcn\nroute_id: test\nfrequency: 1m\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(route), 0o755))
+	require.NoError(t, os.WriteFile(route, []byte("market_id: stockcn\n"), 0o644))
 
 	out := filepath.Join(tmp, "package.zip")
 	result, err := BuildSCFPackage(BuildSCFPackageOptions{EventBusCAPEM: testCAPEM(t), BinaryPath: binary, ConfigDir: config, OutPath: out})
 	require.NoError(t, err)
-	assert.Contains(t, result.Entries, "markets/stockcn/calendar.yaml")
 	assert.Contains(t, result.Entries, "markets/stockcn/route.yaml")
-
-	reader, err := zip.OpenReader(out)
-	require.NoError(t, err)
-	defer reader.Close()
-	var found bool
-	for _, file := range reader.File {
-		if file.Name == "markets/stockcn/calendar.yaml" {
-			found = true
-		}
-	}
-	assert.True(t, found)
-	var routeFound bool
-	for _, file := range reader.File {
-		if file.Name == "markets/stockcn/route.yaml" {
-			routeFound = true
-		}
-	}
-	assert.True(t, routeFound)
+	assert.NotContains(t, result.Entries, "markets/stockcn/calendar.yaml", "交易日历内嵌在二进制里")
 }
 
-func TestBuildSCFPackageRequiresStockCNCalendar(t *testing.T) {
+func TestBuildSCFPackageRequiresStockCNRoute(t *testing.T) {
 	tmp := t.TempDir()
 	binary := filepath.Join(tmp, "main")
 	require.NoError(t, os.WriteFile(binary, testfixture.LinuxExecutable(elf.EM_X86_64), 0o755))
 	config := filepath.Join(tmp, "modules", "collector", "configs", "scf", "stockcn")
-	require.NoError(t, os.MkdirAll(config, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(config, "sources"), 0o755))
 
 	_, err := BuildSCFPackage(BuildSCFPackageOptions{EventBusCAPEM: testCAPEM(t), BinaryPath: binary, ConfigDir: config, OutPath: filepath.Join(tmp, "package.zip")})
-	require.ErrorContains(t, err, "stockcn calendar")
+	require.ErrorContains(t, err, "stockcn route")
 }
 
 func TestBuildSCFPackageSetsOutputMode0600(t *testing.T) {

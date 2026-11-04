@@ -191,7 +191,7 @@ func buildBusinessFreshnessReporterWithInterval(
 					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
 						success: report.Success, reason: reason, diagnostic: report.Diagnostic,
-						degraded: report.Success && report.PendingCount > 0,
+						degraded: report.Success && (report.PendingCount > 0 || report.Reason == "first_bar_pending"),
 					}
 				}
 			}

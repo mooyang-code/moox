@@ -279,3 +279,107 @@ func TestConfirmedUntilUsesTheEarliestReportingInstance(t *testing.T) {
 	require.True(t, confirmedUntil(fresh(0), datasetValues{}).Equal(base))
 	require.True(t, confirmedUntil(datasetValues{}, fresh(0)).Equal(base))
 }
+
+// 交易所市场休市时生产者不运行：午休、收盘后、非交易日不按连续时间判运行、成功停滞；开盘后有等待中的 K 线时照常判。
+func TestStockSessionBreaksDoNotReportRunStale(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "collector", spaceID: "stockcn", datasetID: "dataset_stock_5m", freq: "5m"}
+	lastRun := cst("2026-10-16", "11:30:05")
+	value := datasetValues{
+		interval: 300, lastRun: float64(lastRun.Unix()), lastSuccess: float64(lastRun.Unix()),
+		output: float64(cst("2026-10-16", "11:25:00").Unix()), arrival: float64(lastRun.Unix()),
+	}
+	at := func(now time.Time) DatasetFrequencyStatus {
+		value.inventory = float64(now.Unix())
+		return datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	}
+
+	lunch := at(cst("2026-10-16", "12:50:00"))
+	require.Equal(t, "healthy", lunch.Status, lunch.Reason)
+	require.Zero(t, lunch.WaitingBars)
+
+	// 13:05:30：下午第一根刚收线、还没到，生产者最近一次运行仍是 11:30，不能立刻判停滞。
+	open := at(cst("2026-10-16", "13:05:30"))
+	require.Equal(t, 1, open.WaitingBars)
+	require.Equal(t, "healthy", open.Status, open.Reason)
+
+	// 13:20：13:00、13:05… 已收线却没到，从 13:05 起算超过 10 分 30 秒，判为运行停滞。
+	afternoon := at(cst("2026-10-16", "13:20:00"))
+	require.Equal(t, "stale", afternoon.Status)
+	require.Equal(t, "run stale", afternoon.Reason)
+
+	// 周五收盘后到周一开盘前都不报停滞。
+	value.lastRun, value.lastSuccess = float64(cst("2026-10-16", "15:00:05").Unix()), float64(cst("2026-10-16", "15:00:05").Unix())
+	value.output, value.arrival = float64(cst("2026-10-16", "14:55:00").Unix()), float64(cst("2026-10-16", "15:00:05").Unix())
+	for _, now := range []time.Time{cst("2026-10-16", "18:00:00"), cst("2026-10-18", "10:00:00"), cst("2026-10-19", "09:29:00")} {
+		weekend := at(now)
+		require.Equal(t, "healthy", weekend.Status, "%s %s", now, weekend.Reason)
+	}
+
+	// 周一 09:35:30：第一根刚收线，最近一次运行是上周五 15:00，同样不判停滞。
+	mondayOpen := at(cst("2026-10-19", "09:35:30"))
+	require.Equal(t, 1, mondayOpen.WaitingBars)
+	require.Equal(t, "healthy", mondayOpen.Status, mondayOpen.Reason)
+	mondayStopped := at(cst("2026-10-19", "09:50:00"))
+	require.Equal(t, "stale", mondayStopped.Status)
+	require.Equal(t, "run stale", mondayStopped.Reason)
+
+	// 全天交易的市场不受影响：同样的空档照常判运行停滞。
+	cryptoKey := datasetKey{producer: "collector", spaceID: "crypto", datasetID: "dataset_crypto_5m", freq: "5m"}
+	now := cst("2026-10-18", "10:00:00")
+	value.inventory = float64(now.Unix())
+	crypto := datasetStatus(now, cryptoKey, value, testRealtimePolicy(), spaceClock{clock: monmetrics.ContinuousClock()})
+	require.Equal(t, "stale", crypto.Status)
+}
+
+// 收盘后启用的 A 股采集数据集：生产者登记时记了一次空运行、还没有任何输出。整夜和开盘前不报停滞，
+// 开盘后一直没有写入时从第一根应到时间起算照常判出来。
+func TestStockDatasetRegisteredAfterCloseWaitsForTheNextSession(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "collector", spaceID: "stockcn", datasetID: "dataset_stock_5m", freq: "5m"}
+	registered := cst("2026-10-16", "20:00:00")
+	value := datasetValues{interval: 300, lastRun: float64(registered.Unix()), lastSuccess: float64(registered.Unix())}
+	at := func(now time.Time) DatasetFrequencyStatus {
+		value.inventory = float64(now.Unix())
+		return datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	}
+	for _, now := range []time.Time{cst("2026-10-16", "23:00:00"), cst("2026-10-18", "12:00:00"), cst("2026-10-19", "09:30:00"), cst("2026-10-19", "09:35:30")} {
+		item := at(now)
+		require.Equal(t, "healthy", item.Status, "%s %s", now, item.Reason)
+	}
+	stopped := at(cst("2026-10-19", "09:50:00"))
+	require.Equal(t, "stale", stopped.Status)
+	require.Equal(t, "run stale", stopped.Reason)
+	require.Equal(t, 4, stopped.WaitingBars, "09:30～09:45 四根已收线")
+}
+
+// 生产者在跑但每期都失败（结果一根都没写进来）：最近运行逐期前移，最近成功停在登记时刻。等待根数从最近一次成功往后数，
+// 开盘十来分钟内就报出来，不会因为“刚运行过”而整天显示正常。
+func TestStockDatasetFailingEveryPeriodIsReported(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "factor", spaceID: "stockcn", datasetID: "dataset_factor_stock_5m", freq: "5m"}
+	registered := cst("2026-10-16", "20:00:00")
+	now := cst("2026-10-19", "09:51:00")
+	value := datasetValues{interval: 300, lastRun: float64(cst("2026-10-19", "09:50:05").Unix()), lastSuccess: float64(registered.Unix()), inventory: float64(now.Unix())}
+	item := datasetStatus(now, key, value, testRealtimePolicy(), clock)
+	require.NotEqual(t, "healthy", item.Status, item.Reason)
+	require.Equal(t, 4, item.WaitingBars, "09:30～09:45 四根已收线、都没写进来")
+}
+
+// 因子任务预热中：每期都是 partial（按设计），产出水位不推进、最近成功停在登记时刻。午休、隔夜仍走休市豁免，不报停滞。
+func TestStockDatasetWarmingAcrossBreaksStaysHealthy(t *testing.T) {
+	clock := stockSpaceClock(t, stockDays)
+	key := datasetKey{producer: "factor", spaceID: "stockcn", datasetID: "dataset_factor_stock_5m", freq: "5m"}
+	registered := cst("2026-10-16", "20:00:00")
+	morning, afternoon := cst("2026-10-19", "11:30:05"), cst("2026-10-19", "15:00:05")
+	for _, c := range []struct{ now, lastPartial time.Time }{
+		{cst("2026-10-19", "11:50:00"), morning}, {cst("2026-10-19", "12:30:00"), morning},
+		{cst("2026-10-19", "18:00:00"), afternoon}, {cst("2026-10-20", "09:29:00"), afternoon},
+	} {
+		now, lastPartial := c.now, c.lastPartial
+		value := datasetValues{interval: 300, lastRun: float64(lastPartial.Unix()), lastSuccess: float64(registered.Unix()), lastPartial: float64(lastPartial.Unix()), inventory: float64(now.Unix())}
+		item := datasetStatus(now, key, value, testRealtimePolicy(), clock)
+		require.NotEqual(t, "stale", item.Status, "%s %s", now, item.Reason)
+		require.Zero(t, item.WaitingBars, "%s 休市时没有等待中的 K 线", now)
+	}
+}

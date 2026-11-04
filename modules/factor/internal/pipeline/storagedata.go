@@ -23,7 +23,8 @@ type storageData struct {
 func NewStorageData(store storageio.Store) Data { return storageData{store: store} }
 
 func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
-	start, err := ReadStart(clockFor(plan), plan)
+	// 管线始终在轴上运行：store 是换算边界包装过的客户端，读回的 data_time 已是轴上时间。
+	start, err := ReadStart(periodclock.Continuous{}, plan)
 	if err != nil {
 		return DataResult{}, err
 	}
@@ -76,7 +77,7 @@ func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 		}
 		rows[subject] = target
 	}
-	view, err := serieswindow.FromColumns(int64(step/time.Second), numeric, cols)
+	view, err := serieswindow.FromColumns(seriesstore.Source{SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID, Freq: plan.Set.Freq}, int64(step/time.Second), numeric, cols)
 	if err != nil {
 		return DataResult{}, fmt.Errorf("试算读到的数据不连续：%w", err)
 	}
@@ -121,5 +122,3 @@ func numericFields(frame *storageio.Frame) (fieldList, []int) {
 	}
 	return out, positions
 }
-
-func clockFor(Plan) periodclock.Clock { return periodclock.Continuous{} }

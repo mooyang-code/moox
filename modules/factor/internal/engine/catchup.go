@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -66,18 +67,24 @@ func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 		}
 		for _, engineTask := range sets {
 			set := engineTask.Set
-			clock, err := periodclock.ForSpace(set.SpaceID)
+			// 补齐通知来自心跳响应，是真实时间的 [from, to)：换到轴上再记。
+			axis, err := periodclock.AxisFor(set.SpaceID, set.Freq)
 			if err != nil {
 				continue
 			}
-			step, err := clock.Duration(set.Freq)
+			realFrom, realTo := time.Unix(item.GetFrom(), 0).UTC(), time.Unix(item.GetTo(), 0).UTC()
+			from, err := axis.ToAxis(realFrom)
+			if err == nil {
+				var to time.Time
+				if to, err = axis.AxisEnd(realTo); err == nil {
+					r.noteFilled(set, axis, from, to, item.GetAbsentSubjects())
+				}
+			}
 			if err != nil {
+				log.Warnf("factor_periods_filled_invalid task_id=%s from=%s to=%s error=%v", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), err)
 				continue
 			}
-			from, to := time.Unix(item.GetFrom(), 0).UTC(), time.Unix(item.GetTo(), 0).UTC()
-			r.continuity.NoteAbsent(set.TaskID, from, to, step, item.GetAbsentSubjects())
-			r.filled.add(set.TaskID, from, to)
-			log.Infof("factor_periods_filled task_id=%s from=%s to=%s absent=%s", set.TaskID, from.Format(time.RFC3339), to.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","))
+			log.Infof("factor_periods_filled task_id=%s from=%s to=%s absent=%s", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","))
 			select {
 			case r.advanceKick <- set.TaskID:
 			default:
@@ -87,6 +94,12 @@ func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 	if kickGap != nil {
 		kickGap()
 	}
+}
+
+// noteFilled 在轴上记下一段已补齐的周期 [from, to)：补采确认缺失的标的、上游失败的待办不再等 Settle。
+func (r *Runtime) noteFilled(set domain.FactorTask, axis periodclock.Axis, from, to time.Time, absent []string) {
+	r.continuity.NoteAbsent(set.TaskID, from, to, axis.Step(), absent)
+	r.filled.add(set.TaskID, from, to)
 }
 
 // filledPeriods 记录收到补齐通知的周期范围（1 小时后过期）。

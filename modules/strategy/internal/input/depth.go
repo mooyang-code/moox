@@ -31,8 +31,8 @@ type Bounds struct {
 	// ToClosed 表示 To 这一根已经写完、可以当作完整的 bar 回放：当前时间已过 A 股内嵌日历最后一天的收盘，索引里还有
 	// 那之后的数据，To 被夹到了日历的最后一个交易日。
 	ToClosed bool
-	// Beyond 是当前时间已过日历末日时，索引最晚一行超出日历最后一天的自然日数（不超过今天）：这些日子里至多各有
-	// 一个交易日，真正的最新一根比 To 最多晚这么多根，估算每个序列保留的起点时要扣掉。
+	// Beyond 是当前时间已过日历末日时，索引最晚一行超出日历最后一天的最多根数：自然日数（不超过今天）× 每个交易日的
+	// 根数——这些日子里至多各有一个交易日，真正的最新一根比 To 最多晚这么多根，估算每个序列保留的起点时要扣掉。
 	Beyond int
 }
 
@@ -61,6 +61,9 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 		if stockDaily(resolved.Calendar, resolved.Bar) {
 			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易日上", label(view.IndexedFrom), label(view.IndexedTo))
 		}
+		if stockIntraday(resolved.Calendar, resolved.Bar) {
+			return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）都不在 A 股交易时段的 bar 上", label(view.IndexedFrom), label(view.IndexedTo))
+		}
 		return Bounds{}, fmt.Errorf("索引里的行（%s 至 %s）没有落在完整的 bar 上", label(view.IndexedFrom), label(view.IndexedTo))
 	}
 	bounds := Bounds{From: from, To: to}
@@ -70,7 +73,7 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 		if closed, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now); err == nil && bounds.To.After(closed.StorageStart) {
 			bounds.To = closed.StorageStart
 		}
-		if beyond := daysBeyondStockCalendar(resolved, view.IndexedTo, now); beyond > 0 {
+		if beyond := barsBeyondStockCalendar(resolved, view.IndexedTo, now); beyond > 0 {
 			bounds.Beyond, bounds.ToClosed = beyond, true
 		}
 		if bounds.To.Before(bounds.From) {
@@ -98,11 +101,16 @@ func checkStockCoverageKey(at time.Time, resolved Resolved) error {
 	return checkStockRowKey(at, day, location)
 }
 
-// daysBeyondStockCalendar 在 now 已过 A 股内嵌日历最后一天的收盘时，返回行键 at 晚于日历最后一天的自然日数（不超过
-// now 当天）；其余情况为 0。now 还在日历之内时，日历之外的行只能是误写的未来数据，不算超出日历。
-func daysBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
+// barsBeyondStockCalendar 在 now 已过 A 股内嵌日历最后一天的收盘时，返回行键 at 晚于日历最后一天的最多根数：自然日数
+// （不超过 now 当天）× 每个交易日的根数（日线 1）；其余情况为 0。now 还在日历之内时，日历之外的行只能是误写的未来数据，
+// 不算超出日历。日线与日内都在 15:00 收盘。
+func barsBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
+	perDay := 1
 	if !stockDaily(resolved.Calendar, resolved.Bar) {
-		return 0
+		if !stockIntraday(resolved.Calendar, resolved.Bar) {
+			return 0
+		}
+		perDay = TradingDayBars(resolved.Calendar, resolved.Bar)
 	}
 	calendar, location, err := stockCalendar()
 	if err != nil {
@@ -121,7 +129,7 @@ func daysBeyondStockCalendar(resolved Resolved, at, now time.Time) int {
 	if today := now.In(location); latest.After(today) {
 		latest = time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, location)
 	}
-	return int(latest.Sub(lastMidnight).Hours()/24 + 0.5)
+	return int(latest.Sub(lastMidnight).Hours()/24+0.5) * perDay
 }
 
 // coverageUnusable 把覆盖范围无法使用的原因写成中文说明，when 是后半句（例如“暂不能回放”）。

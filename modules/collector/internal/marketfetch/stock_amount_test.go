@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStockKlineRowWritesNullForEstimatedAmount(t *testing.T) {
+func TestStockKlineRowWritesEstimatedAmountWithQualityMark(t *testing.T) {
 	start := time.Date(2026, 10, 12, 1, 30, 0, 0, time.UTC)
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m",
@@ -17,20 +17,20 @@ func TestStockKlineRowWritesNullForEstimatedAmount(t *testing.T) {
 		VolumeShares: 1000, AmountCNY: 10500, AmountEstimated: true,
 		ProviderTimestamp: start, FetchedAt: start.Add(time.Minute), RequestID: "req",
 	}
-	amount := func(bar marketdata.NormalizedKline) *storagepb.FieldValue {
-		row, err := stockKlineRow(bar, "", "route", 1, "name")
+	fields := func(bar marketdata.NormalizedKline) map[string]*storagepb.FieldValue {
+		row, err := stockKlineRow(bar, testStockDatasetID, "route", 1, "name")
 		require.NoError(t, err)
+		out := map[string]*storagepb.FieldValue{}
 		for _, field := range row.GetFields() {
-			if field.GetFieldId() == "amount" {
-				return field
-			}
+			out[field.GetFieldId()] = field
 		}
-		return nil
+		return out
 	}
-	estimated := amount(bar)
-	require.NotNil(t, estimated)
-	_, isNull := estimated.GetValue().GetValue().(*storagepb.TypedValue_NullValue)
-	require.True(t, isNull, "估算的成交额必须写显式 NULL")
+	estimated := fields(bar)
+	require.Equal(t, 10500.0, estimated["amount"].GetValue().GetDoubleValue(), "估算的成交额照常写入")
+	require.Equal(t, "estimated_close_x_volume", estimated["amount_quality"].GetValue().GetStringValue())
 	bar.AmountEstimated = false
-	require.Equal(t, 10500.0, amount(bar).GetValue().GetDoubleValue())
+	reported := fields(bar)
+	require.Equal(t, 10500.0, reported["amount"].GetValue().GetDoubleValue())
+	require.Equal(t, "reported", reported["amount_quality"].GetValue().GetStringValue())
 }

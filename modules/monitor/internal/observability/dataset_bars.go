@@ -116,6 +116,28 @@ func evaluateBars(sc spaceClock, freqRaw string, output, arrival, confirmedAt, n
 	return facts
 }
 
+// waitingSinceRun 用于交易所市场里还没写入过任何一根的数据集（例如收盘后才启用、生产者登记时记了一次空运行）：
+// 最近一次运行之后已收线的根都算等待中。否则没有输出水位就永远没有等待中的 K 线，休市豁免会把开盘后一直没写入的故障放过。
+func waitingSinceRun(sc spaceClock, freqRaw string, output, lastRun time.Time, facts barFacts) barFacts {
+	if !output.IsZero() || lastRun.IsZero() || facts.issue != nil || facts.waiting > 0 || facts.expected.Close.IsZero() {
+		return facts
+	}
+	freq, err := frequencypkg.Parse(freqRaw)
+	if err != nil {
+		return facts
+	}
+	before, err := sc.clock.LatestClosed(lastRun, freq)
+	if err != nil || !before.Close.Before(facts.expected.Close) {
+		return facts
+	}
+	count, first, err := sc.clock.ClosedBarsAfter(before, facts.expected.Close, freq)
+	if err != nil || count == 0 {
+		return facts
+	}
+	facts.waiting, facts.waitingSince = count, first.Close
+	return facts
+}
+
 // clockIssueText 是无法按交易日历判断时给人看的原因。没有交易日历的空间（例如 mooxsys 的主机、服务指标）不是行情 K 线，
 // 本来就不判断到达延迟，不给提示。
 func clockIssueText(err error) string {

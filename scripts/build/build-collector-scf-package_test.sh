@@ -167,7 +167,10 @@ grep -q ' sources/market/sina.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/tencent.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/eastmoney.yaml$' "${stock_listing_path}"
 grep -q ' sources/market/baidu.yaml$' "${stock_listing_path}"
-grep -q ' markets/stockcn/calendar.yaml$' "${stock_listing_path}"
+if grep -q 'calendar.yaml' "${stock_listing_path}"; then
+  echo "stockcn SCF package must not contain calendar.yaml (trading calendar is embedded)" >&2
+  exit 1
+fi
 grep -q ' markets/stockcn/route.yaml$' "${stock_listing_path}"
 ! grep -q 'trpc_go.yaml' "${stock_listing_path}"
 unzip -p "${stock_package_path}" sources/market/binance.yaml >"${TMP_ROOT}/stock-binance.yaml"

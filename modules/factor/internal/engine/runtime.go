@@ -41,7 +41,8 @@ type Runtime struct {
 	cfg      *Config
 	identity domain.EngineIdentity
 	gateway  *gatewayclient.Client
-	storage  *storageio.Client
+	// storage 是包装了换算边界的 Storage 客户端：引擎内部只见到轴上时间。
+	storage  *storageio.Axis
 	manager  *ManagerClient
 	params   *paramSelector
 	catalog  *CatalogCache
@@ -132,6 +133,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.metrics, err = observability.NewMetrics(prometheus.DefaultRegisterer); err != nil {
 		return nil, fmt.Errorf("register factor pipeline metrics: %w", err)
 	}
+	// 引擎内部全部在交易序号时间轴上计算：轴本身是连续的，周期数学一律用 Continuous，真实时间只在边界上换算。
 	clock := periodclock.Continuous{}
 	// 本地时序存储与内存窗口（设计第 3、4 节）：窗口与块缓存是常驻内存，先从进程预算里扣除，计算再向准入器预留。
 	r.admit = memadmit.New(int64(cfg.Memory.TotalBudget))
@@ -146,7 +148,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
 	r.data = localdata.New(localdata.Config{
-		Store: r.series, Storage: r.storage, Clock: clock, Admit: r.admit,
+		Store: r.series, Storage: r.storage, Admit: r.admit,
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
 		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
@@ -222,7 +224,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.reconcileConsumer()
 
 	executor := recalcexec.NewExecutor(r.runner,
-		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
+		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
 		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
@@ -239,7 +241,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
 		onRepaired: func(taskID string, period RepairedPeriod) {
 			if r.runs.repair(taskID, period, time.Now()) {
-				log.Infof("factor_period_repaired task_id=%s period_time=%s", taskID, period.Period.UTC().Format(time.RFC3339))
+				log.Infof("factor_period_repaired task_id=%s period_time=%s", taskID, r.formatTaskPeriod(taskID, period.Period))
 			}
 		},
 	}
@@ -372,8 +374,13 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 	}
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
-			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: state.CommittedThrough, Target: state.Target,
-				BlockedSince: state.BlockedSince, BlockedPeriod: state.BlockedPeriod, BlockedReason: state.BlockedReason})
+			// 心跳是引擎对外接口：水位里的周期换回真实时间（BlockedSince 本来就是真实时刻）。
+			axis, err := periodclock.AxisFor(state.SpaceID, state.Freq)
+			if err != nil {
+				continue
+			}
+			status.Watermarks = append(status.Watermarks, domain.SetWatermark{TaskID: state.TaskID, CommittedThrough: realPeriod(axis, state.CommittedThrough),
+				Target: realPeriod(axis, state.Target), BlockedSince: state.BlockedSince, BlockedPeriod: realPeriod(axis, state.BlockedPeriod), BlockedReason: state.BlockedReason})
 		}
 	}
 	return status
@@ -508,7 +515,26 @@ func (r *Runtime) Close() error {
 	return r.err
 }
 
-func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Client, error) {
+// formatTaskPeriod 把任务的轴上周期格式化成真实时间（日志用）。
+func (r *Runtime) formatTaskPeriod(taskID string, period time.Time) string {
+	set, _ := r.catalog.SetByID(taskID)
+	return periodclock.FormatPeriod(set.Set.SpaceID, set.Set.Freq, period)
+}
+
+// realPeriod 把轴上周期换回真实时间；零值保持零值，换不回时也给零值（只用于对外上报）。
+func realPeriod(axis periodclock.Axis, period time.Time) time.Time {
+	if period.IsZero() {
+		return time.Time{}
+	}
+	at, err := axis.FromAxis(period)
+	if err != nil {
+		return time.Time{}
+	}
+	return at
+}
+
+// newStorageClient 返回包装了换算边界的 Storage 客户端（引擎、诊断与离线维护命令共用）。
+func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storageio.Axis, error) {
 	secret, err := gatewayauth.ReadSigningSecret(cfg.AuthSecretFile)
 	if err != nil {
 		return nil, fmt.Errorf("read Storage auth secret: %w", err)
@@ -517,7 +543,7 @@ func newStorageClient(gateway gatewayclient.Invoker, cfg StorageConfig) (*storag
 	if err != nil {
 		return nil, err
 	}
-	return storageio.NewGatewayClient(gateway, storageio.NewAuthInfo("factor-engine-"+requestID, secret)), nil
+	return storageio.NewAxis(storageio.NewGatewayClient(gateway, storageio.NewAuthInfo("factor-engine-"+requestID, secret))), nil
 }
 
 func randomHex(n int) (string, error) {
