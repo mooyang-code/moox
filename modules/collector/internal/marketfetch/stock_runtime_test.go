@@ -62,7 +62,7 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Contains(t, providers["eastmoney"].Hosts, "push2his.eastmoney.com", "5m K 线走 push2his")
 }
 
-func TestReleaseStockCNRouteSpreads5mAcrossEastMoneyAndSina(t *testing.T) {
+func TestReleaseStockCNRouteSpreads5mAcrossAllFourProviders(t *testing.T) {
 	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
 	minute, err := route.Kline("1m")
@@ -71,10 +71,11 @@ func TestReleaseStockCNRouteSpreads5mAcrossEastMoneyAndSina(t *testing.T) {
 	five, err := route.Kline("5m")
 	require.NoError(t, err)
 	require.Equal(t, []string{"eastmoney", "sina", "tdx", "tencent"}, five.ProviderChain())
-	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 1}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1}}, five.PrimarySources())
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 1}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1},
+		{Provider: "tdx", SourceID: "normal_7709", Weight: 1}, {Provider: "tencent", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
 }
 
-// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在两家 primary 之间大致均分。
+// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在四家 primary 之间大致均分。
 func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 	routeID, sources, err := stockCNAssignmentRoute("5m")
 	require.NoError(t, err)
@@ -88,9 +89,10 @@ func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 		require.Equal(t, first, again, "同一标的每次分到同一来源")
 		counts[first.Provider]++
 	}
-	require.Len(t, counts, 2)
-	require.InDelta(t, 150, counts["eastmoney"], 30)
-	require.InDelta(t, 150, counts["sina"], 30)
+	require.Len(t, counts, 4)
+	for _, provider := range []string{"eastmoney", "sina", "tdx", "tencent"} {
+		require.InDelta(t, 75, counts[provider], 20, provider)
+	}
 }
 
 func TestStockCNRouteValidation(t *testing.T) {
