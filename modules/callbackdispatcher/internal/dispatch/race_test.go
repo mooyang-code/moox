@@ -42,7 +42,7 @@ func TestEventMergedDuringStepIsNotLost(t *testing.T) {
 			handler := &mergingHandler{outcome: outcome}
 			handler.merge = func() {
 				delivery := delistDelivery(t, "binance", events.DelistMarketSpot, "FOOUSDT", earlier)
-				require.NoError(t, intake.Handle(ctx, delivery).Err)
+				require.Equal(t, Accepted, handle(ctx, intake, delivery))
 			}
 			registry := action.NewRegistry()
 			registry.Register(store.SystemActionSellDelistedHoldings, handler)

@@ -1,6 +1,6 @@
-// Package consumer 把事件中心可订阅的事件从 EventBus 取下来：每个事件一个固定的 durable，
+// Package eventconsumer 把事件中心可订阅的事件从 EventBus 取下来：每个事件一个固定的 durable，
 // 连接不上时每隔一段时间重试，EventBus 比事件中心晚启动也能自动连上。
-package consumer
+package eventconsumer
 
 import (
 	"context"
@@ -8,14 +8,41 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/catalog"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/dispatch"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Handler 处理一条投递（dispatch.Intake.Handle 实现它）。
-type Handler interface {
-	Handle(context.Context, *jetstream.Delivery) jetstream.HandlerResult
+// Processor 处理一条原始事件（dispatch.Intake 实现它）。
+type Processor interface {
+	Process(ctx context.Context, raw []byte, subject, messageID, contentType string) (dispatch.Outcome, error)
+}
+
+// Handler 把投递交给 Processor，并把处理结果翻译成确认、重投或终止；确认策略只在这一层决定。
+type Handler struct {
+	Processor Processor
+}
+
+// Handle 实现 jetstream.DeliveryHandler。
+func (h Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
+	if delivery == nil {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
+	}
+	if delivery.DecodeError != nil {
+		telemetry.EventErrors.WithLabelValues("transport").Inc()
+		log.WarnContextf(ctx, "事件传输校验失败，已终止: %v", delivery.DecodeError)
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: delivery.DecodeError}
+	}
+	outcome, err := h.Processor.Process(ctx, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+	switch outcome {
+	case dispatch.Accepted:
+		return jetstream.HandlerResult{Decision: jetstream.ACK}
+	case dispatch.RetryLater:
+		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: dispatch.RetryDelay, Err: err}
+	}
+	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 }
 
 // Supervisor 维护到 EventBus 的连接和各个事件的消费者。
@@ -23,7 +50,7 @@ type Supervisor struct {
 	// Config 返回本次连接用的配置；每次重连都重新取，凭据文件被更新后无需重启。
 	Config   func() (jetstream.Config, error)
 	Registry *events.Registry
-	Handler  Handler
+	Handler  jetstream.DeliveryHandler
 	// SetConnected 在连接状态变化时被调用（健康检查里展示）。
 	SetConnected func(bool)
 	// ReconnectInterval 是连接失败后的重试间隔。
@@ -111,7 +138,7 @@ func (s *Supervisor) runEvent(ctx context.Context, client *jetstream.Client, ent
 			continue
 		}
 		failures = 0
-		runner := jetstream.NewRunner(consumer, jetstream.DeliveryHandlerFunc(s.Handler.Handle), jetstream.RunnerConfig{
+		runner := jetstream.NewRunner(consumer, s.Handler, jetstream.RunnerConfig{
 			BatchSize: 16,
 			ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 				log.WarnContextf(ctx, "事件 %s 的投递出错: %v", entry.Name(), err)

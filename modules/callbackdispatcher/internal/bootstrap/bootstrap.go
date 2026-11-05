@@ -10,9 +10,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/action"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/config"
-	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/consumer"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/delivery"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/dispatch"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/health"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/rpc"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/store"
@@ -114,10 +114,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	}
 
 	var eventBusConnected atomic.Bool
-	supervisor := &consumer.Supervisor{
+	supervisor := &eventconsumer.Supervisor{
 		Config:            func() (jetstream.Config, error) { return eventBusConfig(cfg) },
 		Registry:          registry,
-		Handler:           intake,
+		Handler:           eventconsumer.Handler{Processor: intake},
 		SetConnected:      eventBusConnected.Store,
 		ReconnectInterval: reconnectInterval,
 		FetchMaxWait:      time.Second,

@@ -24,7 +24,7 @@ go test -count=1 ./modules/callbackdispatcher/...
 | 包 | 职责 |
 | --- | --- |
 | `internal/catalog` | 可订阅事件目录：界面名、可限定的范围字段、示例内容 |
-| `internal/consumer` | 连接 EventBus、每个事件一个消费者 |
+| `internal/eventconsumer` | 连接 EventBus、每个事件一个消费者 |
 | `internal/dispatch` | 接收（解码、匹配规则、回执去重、新建或合并执行记录）与工作线程（通知投递、系统动作推进、重试） |
 | `internal/delivery` | 通知请求格式与 HMAC 签名、出站防护（`packages/netguard`）、结果分类、重试时间表 |
 | `internal/action` | 系统动作的注册点与调用 Trade 的客户端接口 |

@@ -1,4 +1,4 @@
-package consumer
+package eventconsumer
 
 import (
 	"context"
@@ -100,7 +100,7 @@ func TestEventBusStartedLateStillDeliversEarlierDelistEvent(t *testing.T) {
 			}
 			return jetstream.Config{URLs: []string{server.URL()}, Name: "moox-callback-dispatcher"}, nil
 		},
-		Registry: registry, Handler: &dispatch.Intake{Store: dbStore, Registry: registry},
+		Registry: registry, Handler: Handler{Processor: &dispatch.Intake{Store: dbStore, Registry: registry}},
 		SetConnected: connected.Store, ReconnectInterval: 50 * time.Millisecond, FetchMaxWait: 100 * time.Millisecond, RetryInterval: 50 * time.Millisecond,
 	}
 	go func() { _ = supervisor.Run(ctx) }()

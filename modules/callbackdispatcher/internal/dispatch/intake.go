@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -51,38 +50,45 @@ type Intake struct {
 	Now      func() time.Time
 }
 
-// Handle 处理一条投递，返回确认、重投或终止。
-func (i *Intake) Handle(ctx context.Context, delivery *jetstream.Delivery) jetstream.HandlerResult {
-	if delivery == nil {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: jetstream.ErrInvalidDelivery}
-	}
-	if delivery.DecodeError != nil {
-		telemetry.EventErrors.WithLabelValues("transport").Inc()
-		log.WarnContextf(ctx, "事件传输校验失败，已终止: %v", delivery.DecodeError)
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: delivery.DecodeError}
-	}
-	message, payload, err := events.DecodeRaw(i.Registry, delivery.RawData, delivery.Subject, delivery.RawMessageID, delivery.ContentType)
+// Outcome 是一条事件处理的结果，由事件消费层翻译成确认、重投或终止。
+type Outcome int
+
+const (
+	// Accepted 表示事件已经处理（匹配到的规则已落库，或没有规则需要它）：可以确认。
+	Accepted Outcome = iota
+	// Rejected 表示事件本身无法处理（解码失败、不在目录里）：重投也没用，应当终止。
+	Rejected
+	// RetryLater 表示写库失败：不能丢事件，应当稍后重投。
+	RetryLater
+)
+
+// RetryDelay 是写库失败时建议的重投延迟。
+const RetryDelay = retryDelay
+
+// Process 处理一条从 EventBus 取到的原始事件。
+func (i *Intake) Process(ctx context.Context, raw []byte, subject, messageID, contentType string) (Outcome, error) {
+	message, payload, err := events.DecodeRaw(i.Registry, raw, subject, messageID, contentType)
 	if err != nil {
 		// 解码失败重投也没用：终止并计数。
 		telemetry.EventErrors.WithLabelValues("decode").Inc()
 		log.WarnContextf(ctx, "事件解码失败，已终止: %v", err)
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		return Rejected, err
 	}
 	entry, ok := catalog.Lookup(message.GetEventName())
 	if !ok || entry.Event.Version() != message.GetEventVersion() {
 		telemetry.EventErrors.WithLabelValues("not_subscribable").Inc()
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("事件 %s@%d 不在可订阅目录里", message.GetEventName(), message.GetEventVersion())}
+		return Rejected, fmt.Errorf("事件 %s@%d 不在可订阅目录里", message.GetEventName(), message.GetEventVersion())
 	}
 	payloadJSON, err := PayloadJSON(payload)
 	if err != nil {
 		telemetry.EventErrors.WithLabelValues("payload_json").Inc()
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		return Rejected, err
 	}
 	if err := i.accept(ctx, entry, message, payloadJSON); err != nil {
 		log.WarnContextf(ctx, "事件写库失败，稍后重投: %v", err)
-		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: retryDelay, Err: err}
+		return RetryLater, err
 	}
-	return jetstream.HandlerResult{Decision: jetstream.ACK}
+	return Accepted, nil
 }
 
 func (i *Intake) accept(ctx context.Context, entry catalog.Entry, message *eventpb.EventMessage, payloadJSON string) error {
