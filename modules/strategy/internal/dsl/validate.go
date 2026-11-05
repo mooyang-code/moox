@@ -58,6 +58,11 @@ func Validate(s *Strategy) error {
 		}
 		s.Bar = string(bar)
 	}
+	if s.MarketDeclared {
+		if err := validateMarketCombination(&s.Market); err != nil {
+			return err
+		}
+	}
 	if s.Universe.MinAgeBars < 0 {
 		return errors.New("universe.min_age_bars 不能为负数")
 	}

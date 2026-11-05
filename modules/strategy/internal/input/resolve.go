@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/factorname"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
@@ -81,23 +80,22 @@ func Resolve(ctx context.Context, client Client, spaceID, taskID string, strateg
 		return Resolved{}, nil, err
 	}
 	resolved.MarketType = marketType
+	if marketType == dsl.MarketEquity && strategy.MarketDeclared {
+		return Resolved{}, nil, errors.New("股票策略不允许写 market")
+	}
+	if !strategy.MarketDeclared {
+		strategy.Market = dsl.SingleMarket(marketType)
+	}
+	if got := strategy.Market.Markets(); len(got) != 1 || got[0] != marketType {
+		return Resolved{}, nil, fmt.Errorf("市场模式 %s 需要绑定 %s 的因子任务，但任务 %s 的市场是 %s", strategy.Market, strings.Join(got, "、"), taskID, marketType)
+	}
+	if err := dsl.ValidateMode(strategy, strategy.Market); err != nil {
+		return Resolved{}, nil, err
+	}
 	// A 股（equity）与现货同样只能做多、不加杠杆、不按数量分批持有。
-	resolved.Spot = marketType == "spot" || marketType == "equity"
+	resolved.Spot = dsl.SpotLike(marketType)
 	if err := CheckCalendar(resolved.Calendar, resolved.Bar); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
-	}
-	if resolved.Spot && strategy.HasTranche() {
-		return Resolved{}, nil, errors.New("tranche 规则只用于合约 View：按数量持有会让权重之和略大于 1，现货 View 不允许")
-	}
-	if resolved.Spot {
-		if strategy.Portfolio.Leverage.Cmp(quant.One()) > 0 {
-			return Resolved{}, nil, fmt.Errorf("现货 View 不允许 portfolio.leverage 大于 1（当前 %s）", strategy.Portfolio.Leverage.String())
-		}
-		for _, rule := range strategy.Rules {
-			if rule.Side == dsl.SideShort {
-				return Resolved{}, nil, fmt.Errorf("现货 View 不允许规则 %s 做空", rule.ID)
-			}
-		}
 	}
 	if bars, ok := retentionBars(dataset.Retention, resolved.Calendar, resolved.Bar); ok {
 		if strategy.Universe.MinAgeBars > bars {
