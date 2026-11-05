@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -133,8 +134,11 @@ type WindowConfig struct {
 	MaxMemory ByteSize `yaml:"max_memory"`
 	// Headroom 是每个序列数组余量的根数，0 取窗口长度的 1/4（至少 16）。
 	Headroom int `yaml:"headroom"`
-	// Lookback 是回看数量 N 的全局默认（设计 8.1）：窗口长度、本地要保有的根数、任务内因子回看的上限。默认 1 万。
+	// Lookback 是 7×24 市场回看数量 N 的默认（设计 8.1）：窗口长度、本地要保有的根数、任务内因子回看的上限。默认 5 万。
 	Lookback int `yaml:"lookback"`
+	// SessionLookback 是有交易时段的市场（A 股等）回看数量 N 的默认，默认 5000 根：
+	// 这类市场每天只有几十根，5 万根要四年以上的历史，超出数据集保留期，新数据集永远凑不够。
+	SessionLookback int `yaml:"session_lookback"`
 	// LookbackOverrides 按数据源覆盖 N，键是 "space/dataset/freq"，例如 "crypto/spot_kline_1h/1h": 8000。
 	LookbackOverrides map[string]int `yaml:"lookback_overrides"`
 }
@@ -142,18 +146,28 @@ type WindowConfig struct {
 // MaxLookbackLimit 是回看数量 N 的绝对上限，与表达式引擎的回看上限一致。
 const MaxLookbackLimit = 100000
 
-// DefaultWindowBars 是回看数量 N 的默认值：要装得下默认因子 EMA 的最大回看 49995 根。
+// DefaultWindowBars 是 7×24 市场回看数量 N 的默认值：要装得下默认因子 EMA 的最大回看 49995 根。
 const DefaultWindowBars = 50000
 
-// LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再取全局默认。
+// DefaultSessionWindowBars 是有交易时段的市场回看数量 N 的默认值（A 股 5m 约 104 个交易日）。
+const DefaultSessionWindowBars = 5000
+
+// LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再按市场类型取默认。
 func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {
 	if n, ok := c.LookbackOverrides[spaceID+"/"+datasetID+"/"+freq]; ok && n > 0 {
 		return n
 	}
-	if c.Lookback > 0 {
-		return c.Lookback
+	if periodclock.IsContinuous(spaceID) {
+		return defaultInt(c.Lookback, DefaultWindowBars)
 	}
-	return DefaultWindowBars
+	return defaultInt(c.SessionLookback, DefaultSessionWindowBars)
+}
+
+func defaultInt(n, fallback int) int {
+	if n > 0 {
+		return n
+	}
+	return fallback
 }
 
 // MemoryConfig 是进程级内存预算（设计 4.4）：常驻窗口与块缓存先扣除，计算、回放、重算向准入器预留。
@@ -302,6 +316,7 @@ func (c *Config) applyDefaults() {
 		c.SeriesStore.BlockCache = d.SeriesStore.BlockCache
 	}
 	setInt(&c.Window.Lookback, DefaultWindowBars)
+	setInt(&c.Window.SessionLookback, DefaultSessionWindowBars)
 	setInt(&c.Sync.Workers, d.Sync.Workers)
 	setInt(&c.Sync.BatchSubjects, d.Sync.BatchSubjects)
 	setDuration(&c.Sync.FollowInterval, d.Sync.FollowInterval)
@@ -380,6 +395,7 @@ func (c *Config) Validate() error {
 		"sync.workers must be positive, sync.batch_subjects must be within [1, 100] and sync.follow_interval must be positive")
 	require(c.Window.MaxMemory >= 0 && c.Window.Headroom >= 0 && c.Memory.TotalBudget >= 0, "window.max_memory, window.headroom and memory.total_budget must not be negative")
 	require(c.Window.Lookback >= 1 && c.Window.Lookback <= MaxLookbackLimit, fmt.Sprintf("window.lookback must be within [1, %d]", MaxLookbackLimit))
+	require(c.Window.SessionLookback >= 1 && c.Window.SessionLookback <= MaxLookbackLimit, fmt.Sprintf("window.session_lookback must be within [1, %d]", MaxLookbackLimit))
 	for key, n := range c.Window.LookbackOverrides {
 		require(strings.Count(key, "/") == 2 && n >= 1 && n <= MaxLookbackLimit,
 			fmt.Sprintf("window.lookback_overrides[%q] must be keyed space/dataset/freq and within [1, %d]", key, MaxLookbackLimit))
