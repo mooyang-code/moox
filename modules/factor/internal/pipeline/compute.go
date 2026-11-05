@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
+	"github.com/mooyang-code/moox/packages/seriesset"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
@@ -49,6 +50,12 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		Results:      make(map[string]map[string]ItemResult, len(plan.Members)),
 		FactorStates: make(map[string]storageio.FactorState, len(plan.Members)),
 	}
+	// 统一数据集：缺失、跳过、失败都按序列判断（只缺永续的币时，现货序列照常算）。
+	var missingSeries []seriesset.Series
+	if plan.multi() {
+		computation.availableSeries = loaded.AvailableSeries
+		missingSeries = differenceSeries(plan.ExpectedSeries, loaded.AvailableSeries)
+	}
 	compiled := make(map[string]domain.MemberDef, len(plan.Members))
 	compileErrs := make(map[string]error)
 	for _, member := range plan.Members {
@@ -65,17 +72,26 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		factor := member.Factor
 		status := "complete"
 		failed := uniqueSorted(append([]string(nil), missing...))
-		if factor.FactorType == domain.FactorTypeCrossSection && len(missing) > 0 && !factor.AllowPartialUniverse {
-			status = "skipped"
-		}
-		if factor.FactorType == domain.FactorTypeCrossSection && len(available) == 0 {
-			status = "skipped"
-		}
-		if len(failed) > 0 && status != "skipped" {
-			status = "degraded"
+		var skippedTags []string
+		if plan.multi() {
+			status, skippedTags = seriesMemberStatus(plan, factor, loaded.AvailableSeries, missingSeries)
+		} else {
+			if factor.FactorType == domain.FactorTypeCrossSection && len(missing) > 0 && !factor.AllowPartialUniverse {
+				status = "skipped"
+			}
+			if factor.FactorType == domain.FactorTypeCrossSection && len(available) == 0 {
+				status = "skipped"
+			}
+			if len(failed) > 0 && status != "skipped" {
+				status = "degraded"
+			}
 		}
 		computation.Results[member.Key] = make(map[string]ItemResult)
-		computation.FactorStates[member.Key] = memberState(compiled[member.Key], status, failed)
+		state := memberState(compiled[member.Key], status, failed)
+		if plan.multi() {
+			state.FailedSeries, state.SkippedSeriesTags = append([]seriesset.Series(nil), missingSeries...), skippedTags
+		}
+		computation.FactorStates[member.Key] = state
 	}
 
 	// 参与本次程序的成员：时序因子全部参与；截面因子未被整因子跳过才参与。
@@ -126,6 +142,35 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		}
 	}
 	return computation, nil
+}
+
+// seriesMemberStatus 是统一数据集上成员本期的状态与被跳过的 series_tag。截面因子按 series_tag 分组计算：
+// 一个 tag 没有可用序列、或严格全集（不允许部分全集）下该 tag 有序列缺数，这个 tag 跳过，另一个 tag 照常算。
+// 汇总规则：全部 tag 都跳过才记 skipped；只跳过一部分记 degraded 并列出跳过的 tag；没有跳过但有序列缺数也是 degraded。
+func seriesMemberStatus(plan Plan, factor domain.FactorDef, available, missing []seriesset.Series) (string, []string) {
+	var skipped []string
+	if factor.FactorType == domain.FactorTypeCrossSection {
+		availableByTag, missingByTag := make(map[string]int), make(map[string]int)
+		for _, item := range available {
+			availableByTag[item.SeriesTag]++
+		}
+		for _, item := range missing {
+			missingByTag[item.SeriesTag]++
+		}
+		tags := seriesTags(plan.ExpectedSeries)
+		for _, tag := range tags {
+			if availableByTag[tag] == 0 || (missingByTag[tag] > 0 && !factor.AllowPartialUniverse) {
+				skipped = append(skipped, tag)
+			}
+		}
+		if len(skipped) == len(tags) {
+			return "skipped", nil
+		}
+	}
+	if len(missing) > 0 || len(skipped) > 0 {
+		return "degraded", skipped
+	}
+	return "complete", nil
 }
 
 // memberState 是成员本期的状态：成员身份、类型与定义的指纹。本期实际用的参数写在结果行的 __params 列里，不进周期标记。
@@ -279,12 +324,17 @@ func countSeries(subjects []string, view *serieswindow.View) int {
 	return total
 }
 
-// precheckMemory 在读取之前按标的数（每个标的按一条序列估计）检查本次计算的估算峰值内存。
+// precheckMemory 在读取之前按标的数（每个标的按一条序列估计；统一数据集按序列数）检查本次计算的估算峰值内存。
 func (r *Runner) precheckMemory(plan Plan) error {
 	if r.cfg.MaxMemory <= 0 {
 		return nil
 	}
-	return withinBudget(plan.Members, len(plan.Available), planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory)
+	series := len(plan.Available)
+	if plan.multi() {
+		// 统一数据集：一个标的有多条序列，按期望序列里属于可读标的的条数估算。
+		series = max(series, len(seriesOfSubjects(plan.ExpectedSeries, plan.Available)))
+	}
+	return withinBudget(plan.Members, series, planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory)
 }
 
 // failAll 返回本期全部成员对全部预期标的计算失败的结果（内存预检不通过时使用，没有读取）。
@@ -304,6 +354,9 @@ func (r *Runner) failAll(plan Plan, err error) Computation {
 		}
 	}
 	expected := uniqueSorted(plan.Expected)
+	if plan.multi() {
+		computation.availableSeries = differenceSeries(plan.ExpectedSeries, plan.UpstreamFailedSeries)
+	}
 	for _, member := range plan.Members {
 		computation.Results[member.Key] = make(map[string]ItemResult)
 		computation.FactorStates[member.Key] = memberState(member, "degraded", nil)
@@ -432,11 +485,19 @@ func (c *Computation) crossPeriods(member domain.MemberDef, targets []time.Time)
 func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid) {
 	positions := outputColumns(plan, result, member)
 	item := ItemResult{Member: member.Key, Columns: append([]string{"data_time", "series_tag", "subject_id"}, member.OutputColumns()...)}
+	// 被跳过的 series_tag（统一数据集）：这些序列不出结果，结果行保持预置的 NULL。
+	skipped := make(map[string]struct{})
+	for _, tag := range c.FactorStates[member.Key].SkippedSeriesTags {
+		skipped[tag] = struct{}{}
+	}
 	for t := grid.first; t <= grid.last; t++ {
 		if c.CrossPeriods[member.Key][grid.at(t).Unix()] != periodOK {
 			continue
 		}
 		for s, key := range result.Series {
+			if _, skip := skipped[key.Tag]; skip {
+				continue
+			}
 			if result.Present(s, t) {
 				item.Rows = append(item.Rows, append([]any{grid.at(t), key.Tag, key.Subject}, rowValues(result, positions, s, t)...))
 			}
@@ -450,6 +511,9 @@ func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.
 func (c *Computation) fail(member domain.MemberDef, plan Plan, available []string, err error) {
 	state := c.FactorStates[member.Key]
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
+	if len(c.availableSeries) > 0 {
+		state.FailedSeries = uniqueSeriesSorted(append(state.FailedSeries, c.availableSeries...))
+	}
 	state.Status = "degraded"
 	c.FactorStates[member.Key] = state
 	if c.Failures == nil {

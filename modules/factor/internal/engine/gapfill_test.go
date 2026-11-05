@@ -12,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,12 +99,13 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 
 type fakeUniverse struct {
 	subjects []string
+	series   []seriesset.Series
 	found    bool
 	err      error
 }
 
-func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) ([]string, bool, error) {
-	return f.subjects, f.found, f.err
+func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) (storageio.Universe, bool, error) {
+	return storageio.Universe{Subjects: f.subjects, Series: f.series}, f.found, f.err
 }
 
 type gapFixture struct {

@@ -13,6 +13,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorudf"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 func SetToPB(set domain.FactorTask) *factorpb.FactorTask {
@@ -200,6 +201,8 @@ func RunSummaryToPB(summary domain.TaskRunSummary) *factorpb.TaskRunSummary {
 			SpecHash:       factor.SpecHash,
 			DefinitionHash: factor.DefinitionHash,
 			GapSubjects:    CloneStrings(factor.GapSubjects),
+			FailedSeries:   seriesToPB(factor.FailedSeries), GapSeries: seriesToPB(factor.GapSeries),
+			SkippedSeriesTags: CloneStrings(factor.SkippedSeriesTags),
 		})
 	}
 	return &factorpb.TaskRunSummary{
@@ -219,6 +222,8 @@ func RunSummaryFromPB(pb *factorpb.TaskRunSummary) domain.TaskRunSummary {
 			FactorID: factor.GetFactorId(), MemberKey: factor.GetMemberKey(), MemberKind: factor.GetMemberKind(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), GapSubjects: CloneStrings(factor.GetGapSubjects()),
+			FailedSeries: seriesFromPB(factor.GetFailedSeries()), GapSeries: seriesFromPB(factor.GetGapSeries()),
+			SkippedSeriesTags: CloneStrings(factor.GetSkippedSeriesTags()),
 		})
 	}
 	return domain.TaskRunSummary{
@@ -464,6 +469,28 @@ func CloneParams(params map[string]float64) map[string]float64 {
 	out := make(map[string]float64, len(params))
 	for name, value := range params {
 		out[name] = value
+	}
+	return out
+}
+
+func seriesToPB(values []seriesset.Series) []*factorpb.SeriesRef {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]*factorpb.SeriesRef, len(values))
+	for i, value := range values {
+		out[i] = &factorpb.SeriesRef{SubjectId: value.SubjectID, SeriesTag: value.SeriesTag}
+	}
+	return out
+}
+
+func seriesFromPB(values []*factorpb.SeriesRef) []seriesset.Series {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]seriesset.Series, len(values))
+	for i, value := range values {
+		out[i] = seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()}
 	}
 	return out
 }

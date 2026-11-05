@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -31,6 +32,9 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 		if state.Status != "complete" {
 			outcome.Status = "degraded"
 		}
+	}
+	if plan.multi() {
+		outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
 	}
 	if len(outcome.FailedSubjects) > 0 {
 		outcome.Status = "degraded"
@@ -61,6 +65,7 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 		SourceDatasetID: plan.Set.SourceDatasetID, Frequency: plan.Set.Freq,
 		PeriodTime: target.Unix(), Status: outcome.Status,
 		UniverseSubjects: uniqueSorted(plan.Expected), FailedSubjects: uniqueSorted(outcome.FailedSubjects),
+		UniverseSeries: plan.ExpectedSeries, FailedSeries: outcome.FailedSeries,
 		Factors:        append([]storageio.FactorState(nil), outcome.Factors...),
 		TriggerEventID: plan.TriggerEventID, ComputedAt: time.Now().UTC(),
 	}

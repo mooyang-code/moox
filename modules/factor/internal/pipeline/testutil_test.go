@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,6 +95,8 @@ type frameData struct {
 	// read 返回计划需要的各标的的帧（回看窗口起点起的全部行）。
 	read            func(ctx context.Context, plan Plan, start time.Time) (map[string]*storageio.Frame, error)
 	failed, warming []string
+	// failedSeries 是数据层报告的不可用序列（统一数据集：标的在，但这条序列本期还没有真实的源行）。
+	failedSeries []seriesset.Series
 
 	mu    sync.Mutex
 	reads int
@@ -129,7 +132,7 @@ func (d *frameData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 		}
 		rows[subject] = out
 	}
-	return DataResult{View: view, Frames: rows, Failed: d.failed, Warming: d.warming}, nil
+	return DataResult{View: view, Frames: rows, Failed: d.failed, Warming: d.warming, FailedSeries: d.failedSeries}, nil
 }
 
 func (*frameData) WindowStatuses() []WarmupStatus { return nil }

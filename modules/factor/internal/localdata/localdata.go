@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -676,7 +677,8 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	timing.settle = time.Since(began)
 
 	began = time.Now()
-	staged, err := d.syncer.PullStaged(ctx, st.spec, subjects, plan.TargetEnd)
+	// 统一数据集按各序列自己的进度拉取：落后的市场（例如永续晚到）不会被另一个市场的最新时间盖住。
+	staged, err := d.syncer.PullStagedTags(ctx, st.spec, subjects, plan.TagsBySubject(), plan.TargetEnd)
 	timing.pull = time.Since(began)
 	if err != nil {
 		return pipeline.DataResult{}, false, err
@@ -740,8 +742,24 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 		}
 	}
 	var ok []string
+	var failedSeries []seriesset.Series
+	tagsOf := plan.TagsBySubject()
 	for _, subject := range subjects {
 		if _, bad := failed[subject]; bad {
+			continue
+		}
+		if plan.Multi() {
+			// 统一数据集：每条期望序列各自判断本期有没有真实的源行。有些序列还没到时，到了的序列照常算；
+			// 一条都没到的标的整体按失败处理。
+			missing := missingTagsAt(view, subject, tagsOf[subject], target.Unix(), true)
+			if len(missing) == len(tagsOf[subject]) {
+				failed[subject] = struct{}{}
+				continue
+			}
+			for _, tag := range missing {
+				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			}
+			ok = append(ok, subject)
 			continue
 		}
 		// 同步之后本地仍没有目标周期的行：数据还没到，本期按失败处理。
@@ -764,7 +782,27 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	for subject, frame := range hotFrames {
 		rows[subject] = frame
 	}
-	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed)}, false, nil
+	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed), FailedSeries: failedSeries}, false, nil
+}
+
+// missingTagsAt 返回这个标的在视图里没有「目标时刻 target 的真实源行」的 series_tag：序列不在视图里、最后一根早于目标、
+// 或目标那一根是填充行。live 为假时（补算的区间）只看序列有没有数据。
+func missingTagsAt(view *serieswindow.View, subject string, tags []string, target int64, live bool) []string {
+	have := make(map[string]serieswindow.SeriesView, len(tags))
+	for _, sv := range view.Series(subject) {
+		have[sv.Tag] = sv
+	}
+	var missing []string
+	for _, tag := range tags {
+		sv, ok := have[tag]
+		switch {
+		case !ok || sv.N == 0:
+			missing = append(missing, tag)
+		case live && (sv.End(view.Step) != target || sv.Filled[sv.N-1]):
+			missing = append(missing, tag)
+		}
+	}
+	return missing
 }
 
 // flushJob 是一次后台落盘。
@@ -784,6 +822,15 @@ const flushTimeout = 2 * time.Minute
 // 其余（新标的、缺期、一次拉到多根）保持同步写盘，因为窗口要按磁盘上生成的填充行重载。
 func (d *Data) splitHot(st *source, writes []seriesstore.SubjectWrite, step time.Duration) (hot, cold []seriesstore.SubjectWrite) {
 	for _, w := range writes {
+		if w.Rows.Len() > 1 {
+			// 统一数据集：一个标的同一期有多条序列的新行，每条序列恰好新增连续的 1 根时也走热路径。
+			if d.hotSeriesWrite(st, w, step) {
+				hot = append(hot, w)
+			} else {
+				cold = append(cold, w)
+			}
+			continue
+		}
 		if w.Rows.Len() != 1 || !st.window.Has(w.Subject) {
 			cold = append(cold, w)
 			continue
@@ -797,6 +844,32 @@ func (d *Data) splitHot(st *source, writes []seriesstore.SubjectWrite, step time
 		hot = append(hot, w)
 	}
 	return hot, cold
+}
+
+// hotSeriesWrite 判断一次多行写入能否走热路径：每行属于不同的 series_tag，本地与窗口里这条序列的最新时间都正好是这一行的前一根。
+// 单序列的判断见 splitHot；多序列各自判断，别的序列没有新行（还没到）不影响。
+func (d *Data) hotSeriesWrite(st *source, w seriesstore.SubjectWrite, step time.Duration) bool {
+	if !st.window.Has(w.Subject) {
+		return false
+	}
+	local, err := d.cfg.Store.TagBounds(st.spec.Source, w.Subject)
+	if err != nil {
+		return false
+	}
+	seen := make(map[string]struct{}, w.Rows.Len())
+	for i := 0; i < w.Rows.Len(); i++ {
+		tag := w.Rows.Tags[i]
+		if _, dup := seen[tag]; dup {
+			return false
+		}
+		seen[tag] = struct{}{}
+		b, ok := local[tag]
+		latest, inWindow := st.window.LatestOf(w.Subject, tag)
+		if !ok || !inWindow || !latest.Equal(b.Latest) || w.Rows.Times[i] != b.Latest.Add(step).Unix() {
+			return false
+		}
+	}
+	return true
 }
 
 // startFlush 在后台写入热路径的行。调用时持有数据源锁；下一次需要磁盘一致的操作会先 settleFlush。
@@ -973,7 +1046,22 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		}
 		rows[subject] = seriessync.ColumnsToFrame(subject, target, plan.CarryColumns, types)
 	}
-	return pipeline.DataResult{View: view, Frames: rows, Failed: failed}, nil
+	var failedSeries []seriesset.Series
+	if plan.Multi() {
+		// 统一数据集：实时周期（追赶读磁盘）按目标那一根逐序列判断；补算与只填充的区间只看这条序列有没有数据。
+		// 整个标的都没有数据的（failed）不再重复列出。
+		tagsOf := plan.TagsBySubject()
+		live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
+		for _, subject := range subjects {
+			if got[subject] == nil {
+				continue
+			}
+			for _, tag := range missingTagsAt(view, subject, tagsOf[subject], target, live) {
+				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			}
+		}
+	}
+	return pipeline.DataResult{View: view, Frames: rows, Failed: failed, FailedSeries: failedSeries}, nil
 }
 
 // LongGap 是一个长时间没有数据的标的（设计 3.4，决定 19）。

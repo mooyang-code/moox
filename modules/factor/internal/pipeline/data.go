@@ -6,6 +6,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Data 是管线的数据层：本地时序存储、内存窗口和与 Storage 的同步（engine 里的 localdata 实现）。
@@ -29,6 +30,9 @@ type DataResult struct {
 	Failed []string
 	// Warming 是窗口还没载入完成、本期没有算的标的。
 	Warming []string
+	// FailedSeries 是统一数据集（plan.ExpectedSeries 非空）上本期取不到的序列：标的本身没有失败，但这条序列没有真实的源行
+	// （例如永续比现货晚到）。Failed 里的标的整体失败（它的全部序列都不可用），不再重复列在这里。
+	FailedSeries []seriesset.Series
 }
 
 // Admission 是进程级内存准入（设计 4.4）：计算在开始前预留估算的内存，用完释放。

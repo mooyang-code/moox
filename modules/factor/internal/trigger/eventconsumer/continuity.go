@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -144,6 +145,7 @@ func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorT
 	}
 	if len(event.universe) > 0 && !period.Before(state.Target) {
 		state.Universe = append([]string(nil), event.universe...)
+		state.UniverseSeries = append([]seriesset.Series(nil), event.universeSeries...)
 	}
 	if err := c.cfg.Store.Put(state); err != nil {
 		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
@@ -189,26 +191,34 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 	state, _ := c.cfg.Store.Get(set.TaskID)
 	for processed := 0; state.Behind() && processed < c.cfg.MaxPeriods; processed++ {
 		period := state.CommittedThrough.Add(step)
-		universe, failed, triggerID := state.Universe, []string(nil), CatchupEventID(set.TaskID, period)
+		scope, triggerID := periodScope{universe: state.Universe, universeSeries: state.UniverseSeries}, CatchupEventID(set.TaskID, period)
 		if event != nil && event.periodTime.Equal(period) {
-			universe, failed, triggerID = event.universe, event.failed, event.eventID
-		} else {
-			missing, err := c.readback(ctx, h, set, members, period, universe)
+			scope, triggerID = event.scope(), event.eventID
+		} else if len(scope.universeSeries) > 0 {
+			missing, err := c.readbackSeries(ctx, h, set, members, period, scope.universeSeries)
 			if err != nil {
 				return err
 			}
-			failed = missing
+			scope.failedSeries = missing
+		} else {
+			missing, err := c.readback(ctx, h, set, members, period, scope.universe)
+			if err != nil {
+				return err
+			}
+			scope.failed = missing
 		}
 		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
 			triggerID = state.InFlightTrigger
 		}
-		expected, unconfirmed, confirmed := c.missing(set, period, universe, failed)
-		if reason := c.invalid(set.TaskID, expected, unconfirmed, confirmed); reason != "" {
+		// 有序列全集（统一数据集）时，期望与缺失按序列数计：一个市场整体晚到不会让整期按标的全部缺失而阻塞水位。
+		counts, confirmed, scope := c.scoped(set, period, scope)
+		expected, unconfirmed := counts.expected, counts.unconfirmed
+		if reason := c.invalid(set.TaskID, counts.judgeExpected, counts.judgeMissing, confirmed); reason != "" {
 			if state.BlockedSince.IsZero() || !state.BlockedPeriod.Equal(period) {
 				if state.BlockedSince.IsZero() {
 					state.BlockedSince = c.cfg.Now().UTC()
 				}
-				log.WarnContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=%s missing=%d expected=%d", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), reason, len(unconfirmed), len(expected))
+				log.WarnContextf(ctx, "factor_watermark_blocked task_id=%s period=%s reason=%s missing=%d expected=%d", set.TaskID, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), reason, unconfirmed, expected)
 			}
 			state.BlockedPeriod, state.BlockedReason = period, reason
 			if err := c.cfg.Store.Put(state); err != nil {
@@ -218,12 +228,12 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 		}
 		// 补采确认行情源没有的标的不参与计算：不读窗口、不记空洞账本、不补算。
 		// 范围内的标的全部确认没有时这一期没有可算的，直接推进。
-		if len(expected) > 0 {
+		if expected > 0 {
 			state.InFlightPeriod, state.InFlightTrigger = period, triggerID
 			if err := c.cfg.Store.Put(state); err != nil {
 				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 			}
-			if _, err := h.computePeriod(ctx, set, members, period, withoutSubjects(universe, confirmed), unconfirmed, triggerID); err != nil {
+			if _, err := h.computePeriod(ctx, set, members, period, scope, triggerID); err != nil {
 				return err
 			}
 		}
@@ -237,6 +247,59 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorT
 		}
 	}
 	return nil
+}
+
+// periodCounts 是一期的期望与缺失数：expected、unconfirmed 是总数（标的数，统一数据集是序列数）；
+// judgeExpected、judgeMissing 是判断这一期有没有效的数：单序列数据集就是总数，统一数据集取缺失比例最低的那个 series_tag 的数。
+type periodCounts struct {
+	expected, unconfirmed       int
+	judgeExpected, judgeMissing int
+}
+
+// scoped 整理一期的范围：扣除补采确认没有的标的，返回期望数与缺失数、确认没有的标的，以及真正要算的范围。
+// 单序列数据集按标的计数（原有口径）；有序列全集（统一数据集）时按序列计数，要算的范围里也带按序列的全集与失败名单，
+// 并且按 series_tag 分别看缺失比例：只要有一个市场的缺失在阈值以内，这一期就有效，另一个市场整体晚到不会连累它
+// （晚到的序列已经列在失败名单里，记进空洞账本，补齐后由只填充补算补上）。
+func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope periodScope) (counts periodCounts, confirmed map[string]struct{}, out periodScope) {
+	subjects, missing, confirmed := c.missing(set, period, scope.universe, scope.failed)
+	out = periodScope{universe: withoutSubjects(scope.universe, confirmed), failed: missing}
+	if len(scope.universeSeries) == 0 {
+		return periodCounts{len(subjects), len(missing), len(subjects), len(missing)}, confirmed, out
+	}
+	for _, item := range scope.universeSeries {
+		if _, absent := confirmed[strings.TrimSpace(item.SubjectID)]; !absent {
+			out.universeSeries = append(out.universeSeries, item)
+		}
+	}
+	inScope := make(map[seriesset.Series]struct{}, len(out.universeSeries))
+	expectedByTag, missingByTag := map[string]int{}, map[string]int{}
+	for _, item := range out.universeSeries {
+		inScope[item] = struct{}{}
+		expectedByTag[item.SeriesTag]++
+	}
+	var failedSubjects []string
+	for _, item := range scope.failedSeries {
+		if _, ok := inScope[item]; ok {
+			out.failedSeries = append(out.failedSeries, item)
+			failedSubjects = append(failedSubjects, item.SubjectID)
+			missingByTag[item.SeriesTag]++
+		}
+	}
+	out.failed = uniqueStrings(failedSubjects)
+	counts = periodCounts{expected: len(out.universeSeries), unconfirmed: len(out.failedSeries)}
+	first := true
+	for tag, expected := range expectedByTag {
+		missed := missingByTag[tag]
+		// 比例最低的 tag 的数；比例相同取缺失少的、再取 tag 小的，结果不依赖 map 的遍历顺序。
+		better := first || missed*counts.judgeExpected < counts.judgeMissing*expected
+		if !better && missed*counts.judgeExpected == counts.judgeMissing*expected {
+			better = missed < counts.judgeMissing || (missed == counts.judgeMissing && expected > counts.judgeExpected)
+		}
+		if better {
+			counts.judgeExpected, counts.judgeMissing, first = expected, missed, false
+		}
+	}
+	return counts, confirmed, out
 }
 
 // missing 返回该期期望的标的（该期事件的全集，扣除确认没有的）、未确认缺失的失败标的与确认没有的标的。
@@ -278,17 +341,17 @@ func withoutSubjects(values []string, drop map[string]struct{}) []string {
 	return out
 }
 
-// invalid 判断一期是否无效：不知道期望标的、零提交（全部缺失）、缺失超过阈值。
+// invalid 判断一期是否无效：不知道期望数量、零提交（全部缺失）、缺失超过阈值。数量是标的数，统一数据集是序列数。
 // 范围内的标的全部确认没有时不算无效（没有可算的，直接推进）。
-func (c *Continuity) invalid(taskID string, expected, missing []string, confirmed map[string]struct{}) string {
+func (c *Continuity) invalid(taskID string, expected, missing int, confirmed map[string]struct{}) string {
 	switch {
-	case len(expected) == 0 && len(confirmed) > 0:
+	case expected == 0 && len(confirmed) > 0:
 		return ""
-	case len(expected) == 0:
+	case expected == 0:
 		return "no_universe"
-	case len(missing) == len(expected):
+	case missing == expected:
 		return "no_rows"
-	case float64(len(missing))/float64(len(expected)) > c.ratioFor(taskID):
+	case float64(missing)/float64(expected) > c.ratioFor(taskID):
 		return "missing_over_threshold"
 	}
 	return ""
@@ -318,6 +381,52 @@ func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.Factor
 	for _, subject := range subjects {
 		if frame := frames[subject]; frame == nil || len(frame.Rows) == 0 {
 			missing = append(missing, subject)
+		}
+	}
+	return missing, nil
+}
+
+// readbackSeries 读回一期源数据，返回还没有行的期望序列（统一数据集按序列判断：永续没到、现货到了，只有永续算缺失）。
+func (c *Continuity) readbackSeries(ctx context.Context, h *Handler, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe []seriesset.Series) ([]seriesset.Series, error) {
+	var subjects []string
+	for _, item := range universe {
+		subjects = append(subjects, item.SubjectID)
+	}
+	subjects = uniqueStrings(subjects)
+	if len(subjects) == 0 {
+		return nil, nil
+	}
+	column := "close"
+	for _, member := range members {
+		if len(member.Factor.InputColumns) > 0 {
+			column = member.Factor.InputColumns[0]
+			break
+		}
+	}
+	step := periodStep(set)
+	readCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
+	defer cancel()
+	frames, err := c.cfg.Reader.ReadWindow(readCtx, storageio.ReadRequest{SpaceID: set.SpaceID, DatasetID: set.SourceDatasetID, Freq: set.Freq, Subjects: subjects, Start: period, End: period.Add(step), Columns: []string{column}})
+	if err != nil {
+		return nil, fmt.Errorf("%w: read back period %s: %v", storageio.ErrInfra, periodclock.FormatPeriod(set.SpaceID, set.Freq, period), err)
+	}
+	present := make(map[seriesset.Series]struct{})
+	for subject, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		for _, row := range frame.Rows {
+			if len(row) > 1 {
+				if tag, ok := row[1].(string); ok {
+					present[seriesset.Series{SubjectID: subject, SeriesTag: tag}] = struct{}{}
+				}
+			}
+		}
+	}
+	var missing []seriesset.Series
+	for _, item := range universe {
+		if _, ok := present[item]; !ok {
+			missing = append(missing, item)
 		}
 	}
 	return missing, nil

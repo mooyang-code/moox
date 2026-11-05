@@ -204,6 +204,17 @@ func (w *Window) Latest(subject string) (time.Time, bool) {
 	return time.Unix(end, 0).UTC(), true
 }
 
+// LatestOf 返回标的某一条序列（series_tag）在窗口里最新一根的时间；窗口里没有这条序列时 ok 为 false。
+func (w *Window) LatestOf(subject, tag string) (time.Time, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	s, ok := w.series[seriesKey{subject, tag}]
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Unix(s.end, 0).UTC(), true
+}
+
 // ---------------------------------------------------------------- 载入
 
 // Retain 只保留名单里的标的，其余标的的序列从窗口里移除（标的被移出任务之后释放它们占的内存，设计 6.2）。返回移除的标的数。

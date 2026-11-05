@@ -13,6 +13,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -62,14 +63,24 @@ func (c *Client) ComputedExists(ctx context.Context, spaceID, datasetID, trigger
 	return rsp != nil && rsp.GetFound(), nil
 }
 
-// ComputedUniverse 返回周期 marker 里冻结的全集（universe_subject_ids）；marker 不存在时 found 为 false。
-// 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面。
-func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) ([]string, bool, error) {
+// Universe 是周期 marker 里冻结的期望全集：Subjects 按标的；Series 按序列（标的、series_tag），只有统一数据集才有。
+type Universe struct {
+	Subjects []string
+	Series   []seriesset.Series
+}
+
+// ComputedUniverse 返回周期 marker 里冻结的全集（universe_subject_ids 与 universe_series）；marker 不存在时 found 为 false。
+// 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面；统一数据集按序列判断全集。
+func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (Universe, bool, error) {
 	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
 	if err != nil || rsp == nil || !rsp.GetFound() {
-		return nil, false, err
+		return Universe{}, false, err
 	}
-	return append([]string(nil), rsp.GetMarker().GetUniverseSubjectIds()...), true, nil
+	marker := rsp.GetMarker()
+	return Universe{
+		Subjects: append([]string(nil), marker.GetUniverseSubjectIds()...),
+		Series:   seriesFromMarker(marker.GetUniverseSeries()),
+	}, true, nil
 }
 
 // getComputed 读取周期 marker；NOT_FOUND 返回 (nil, nil)。
@@ -113,11 +124,14 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 			FactorId: factor.FactorID, MemberKey: factor.MemberKey, MemberKind: factor.MemberKind, Status: factor.Status,
 			FailedSubjects: normalizedSorted(factor.FailedSubjects), SpecHash: factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
+			FailedSeries: seriesToFactorPB(factor.FailedSeries), GapSeries: seriesToFactorPB(factor.GapSeries),
+			SkippedSeriesTags: normalizedSorted(factor.SkippedSeriesTags),
 		})
 	}
 	detail := &factorpb.PeriodDetail{SourceDatasetId: marker.SourceDatasetID, Factors: detailFactors}
 	universe, failed := normalizedSorted(marker.UniverseSubjects), normalizedSorted(marker.FailedSubjects)
-	if err := ValidatePeriodDetail(detail, universe, marker.Status); err != nil {
+	universeSeries := normalizedSeries(marker.UniverseSeries)
+	if err := ValidatePeriodDetail(detail, universe, universeSeries, marker.Status); err != nil {
 		return nil, err
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(detail)
@@ -127,6 +141,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	return &storagepb.DatasetPeriodCompletedMarker{
 		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
 		UniverseSubjectIds: universe, FailedSubjects: failed,
+		UniverseSeries: seriesToMarker(universeSeries), FailedSeries: seriesToMarker(normalizedSeries(marker.FailedSeries)),
 		CauseEventId: marker.TriggerEventID, CompletedAt: timestamppb.New(marker.ComputedAt.UTC()),
 		DetailType: PeriodDetailType, Detail: raw,
 	}, nil
@@ -157,4 +172,65 @@ func computedEventID(spaceID string, marker *storagepb.DatasetPeriodCompletedMar
 	}
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "storage-marker-" + hex.EncodeToString(hash[:16])
+}
+
+// normalizedSeries 去掉空项与重复项，按（标的、series_tag）排序；没有序列时返回 nil。
+func normalizedSeries(values []seriesset.Series) []seriesset.Series {
+	seen := make(map[seriesset.Series]struct{}, len(values))
+	out := make([]seriesset.Series, 0, len(values))
+	for _, value := range values {
+		value.SubjectID, value.SeriesTag = strings.TrimSpace(value.SubjectID), strings.TrimSpace(value.SeriesTag)
+		if value.SubjectID == "" || value.SeriesTag == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SubjectID != out[j].SubjectID {
+			return out[i].SubjectID < out[j].SubjectID
+		}
+		return out[i].SeriesTag < out[j].SeriesTag
+	})
+	return out
+}
+
+func seriesToMarker(values []seriesset.Series) []*storagepb.SeriesRef {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]*storagepb.SeriesRef, len(values))
+	for i, value := range values {
+		out[i] = &storagepb.SeriesRef{SubjectId: value.SubjectID, SeriesTag: value.SeriesTag}
+	}
+	return out
+}
+
+func seriesFromMarker(values []*storagepb.SeriesRef) []seriesset.Series {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]seriesset.Series, len(values))
+	for i, value := range values {
+		out[i] = seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()}
+	}
+	return out
+}
+
+func seriesToFactorPB(values []seriesset.Series) []*factorpb.SeriesRef {
+	values = normalizedSeries(values)
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]*factorpb.SeriesRef, len(values))
+	for i, value := range values {
+		out[i] = &factorpb.SeriesRef{SubjectId: value.SubjectID, SeriesTag: value.SeriesTag}
+	}
+	return out
 }

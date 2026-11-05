@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -28,7 +29,7 @@ type chunkWithRunner interface {
 }
 
 type universeReader interface {
-	ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) ([]string, bool, error)
+	ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (storageio.Universe, bool, error)
 }
 
 type gapFiller struct {
@@ -442,7 +443,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 	if err != nil {
 		return fmt.Errorf("read frozen universe: %w", err) // 读取失败：保持待恢复，下轮再试
 	}
-	if !found || len(universe) == 0 {
+	if !found || len(universe.Subjects) == 0 {
 		return g.ledger.MarkGaveUp(refs, "universe_unavailable")
 	}
 	duration, err := g.clock.Duration(set.Set.Freq)
@@ -470,7 +471,8 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns,
+		// 统一数据集：冻结全集按序列（标的、series_tag）判断，缺一个市场的币时只跳过那个市场。
+		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe.Subjects, Series: universe.Series, Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use)}, nil
 	}
 	after := func(selection recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
