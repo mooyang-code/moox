@@ -41,7 +41,8 @@ type Hub struct {
 	client      *jetstream.Client
 	publisher   *events.Publisher
 	lastFailure time.Time
-	onConnected []func(context.Context, *jetstream.Client) error
+	onConnected []func(context.Context, *jetstream.Client) (func() error, error)
+	closers     []func() error
 }
 
 // NewHub 创建连接管理器；Ensure 才真正去连，失败后一分钟内不再重试。
@@ -49,8 +50,9 @@ func NewHub(cfg Config, registry *events.Registry) *Hub {
 	return &Hub{cfg: cfg, registry: registry, RetryInterval: time.Minute, Now: time.Now}
 }
 
-// OnConnected 注册连接建立之后要做的事（例如启动 K 线合成的消费者）。回调返回错误时本次连接作废，下次 Ensure 重新来过。
-func (h *Hub) OnConnected(callback func(context.Context, *jetstream.Client) error) {
+// OnConnected 注册连接建立之后要做的事（例如启动 K 线合成的消费者）。回调可以返回一个关闭函数，Hub 关闭时先于连接调用它；
+// 回调返回错误时本次连接作废（已经成功的回调的关闭函数立即执行），下次 Ensure 重新来过。
+func (h *Hub) OnConnected(callback func(context.Context, *jetstream.Client) (func() error, error)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.onConnected = append(h.onConnected, callback)
@@ -92,13 +94,21 @@ func (h *Hub) connect(ctx context.Context) error {
 		_ = client.Close()
 		return err
 	}
+	var closers []func() error
 	for _, callback := range h.onConnected {
-		if err := callback(ctx, client); err != nil {
+		closer, err := callback(ctx, client)
+		if err != nil {
+			for i := len(closers) - 1; i >= 0; i-- {
+				_ = closers[i]()
+			}
 			_ = client.Close()
 			return err
 		}
+		if closer != nil {
+			closers = append(closers, closer)
+		}
 	}
-	h.client, h.publisher = client, publisher
+	h.client, h.publisher, h.closers = client, publisher, closers
 	return nil
 }
 
@@ -116,15 +126,19 @@ func (h *Hub) Publisher() *events.Publisher {
 	return h.publisher
 }
 
-// Close 关闭连接。
+// Close 先停掉依赖这条连接的消费者，再关闭连接。
 func (h *Hub) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.client == nil {
 		return nil
 	}
-	err := h.client.Close()
-	h.client, h.publisher = nil, nil
+	var err error
+	for i := len(h.closers) - 1; i >= 0; i-- {
+		err = errors.Join(err, h.closers[i]())
+	}
+	err = errors.Join(err, h.client.Close())
+	h.client, h.publisher, h.closers = nil, nil, nil
 	return err
 }
 

@@ -129,9 +129,10 @@ func (i *Intake) accept(ctx context.Context, entry catalog.Entry, message *event
 	})
 }
 
-// acceptSystem 按（规则、标的）合并或新建：同一标的已经有未结束的执行记录时只更新它的事件内容，不新建。
+// acceptSystem 按（规则、标的、范围）合并或新建：同一标的同一范围已经有未结束的执行记录时只更新它的事件内容，不新建。
+// 范围（ALL / PAPER_ONLY）是合并键的一部分：演练用的“仅模拟盘”登记不能改写同一标的真实下架的事件内容和时间。
 func acceptSystem(tx *store.Tx, rule store.Rule, message *eventpb.EventMessage, payloadJSON string, now int64) error {
-	key := rule.RuleID + "|" + message.GetSubjectId()
+	key := rule.RuleID + "|" + message.GetSubjectId() + "|" + scopeOf(payloadJSON)
 	existing, found, err := tx.FindUnfinishedByDedupe(key)
 	if err != nil {
 		return err
@@ -145,19 +146,25 @@ func acceptSystem(tx *store.Tx, rule store.Rule, message *eventpb.EventMessage, 
 	return tx.ReplaceExecutionEvent(existing.ExecutionID, payloadJSON, message.GetOccurredAt().AsTime().UnixMilli(), now)
 }
 
-// sameSchedule 报告两份下架事件内容的下架时间与范围是否相同：不同才需要让系统动作按新的内容重新安排。
+// scopeOf 取下架事件内容里的范围。
+func scopeOf(payloadJSON string) string {
+	var payload struct {
+		Scope string `json:"scope"`
+	}
+	_ = json.Unmarshal([]byte(payloadJSON), &payload)
+	return payload.Scope
+}
+
+// sameSchedule 报告两份下架事件内容的下架时间是否相同：不同才需要让系统动作按新的内容重新安排。
 func sameSchedule(previous, next string) bool {
-	schedule := func(raw string) (string, string) {
+	delistAt := func(raw string) string {
 		var payload struct {
 			DelistAt string `json:"delist_at"`
-			Scope    string `json:"scope"`
 		}
 		_ = json.Unmarshal([]byte(raw), &payload)
-		return payload.DelistAt, payload.Scope
+		return payload.DelistAt
 	}
-	previousAt, previousScope := schedule(previous)
-	nextAt, nextScope := schedule(next)
-	return previousAt == nextAt && previousScope == nextScope
+	return delistAt(previous) == delistAt(next)
 }
 
 func newExecution(rule store.Rule, message *eventpb.EventMessage, payloadJSON, dedupeKey string, now int64) store.Execution {

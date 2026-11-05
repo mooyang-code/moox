@@ -254,7 +254,7 @@ func seedSystem(t *testing.T, s *store.Store, c *clock) store.Execution {
 	require.NoError(t, s.CreateRule(ctx, systemRule()))
 	intake := newIntake(t, s)
 	intake.Now = c.Now
-	require.NoError(t, intake.accept(ctx, mustEntry(t), messageFor(t), `{"delist_at":"2026-11-11T08:00:00Z"}`))
+	require.NoError(t, intake.accept(ctx, mustEntry(t), messageFor(t), `{"delist_at":"2026-11-11T08:00:00Z","scope":"ALL"}`))
 	executions := listAll(t, s)
 	require.Len(t, executions, 1)
 	return executions[0]

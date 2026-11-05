@@ -76,12 +76,3 @@ func (r *DelistNoticeRepository) Register(ctx context.Context, notice DelistNoti
 	})
 	return created, err
 }
-
-// Cleanup 删除下架时间早于 before 的记录：下架已经过去，不会再被接口报告。
-func (r *DelistNoticeRepository) Cleanup(ctx context.Context, before time.Time) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, fmt.Errorf("delist notice repository is not ready")
-	}
-	result := r.db.WithContext(ctx).Where("c_delist_at < ?", before.UTC()).Delete(&delistNoticeRow{})
-	return result.RowsAffected, result.Error
-}

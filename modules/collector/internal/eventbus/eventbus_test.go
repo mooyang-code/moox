@@ -61,12 +61,19 @@ func TestRelayPublishesWithoutKlineResampleAndSurvivesLateEventBus(t *testing.T)
 	hub.RetryInterval = 50 * time.Millisecond
 	var connectedCalls int
 	var mu sync.Mutex
-	hub.OnConnected(func(_ context.Context, client *jetstream.Client) error {
+	closed := 0
+	hub.OnConnected(func(_ context.Context, client *jetstream.Client) (func() error, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		connectedCalls++
 		require.NotNil(t, client)
-		return nil
+		return func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			require.True(t, client.Ready(), "依赖连接的消费者必须先于连接关闭")
+			closed++
+			return nil
+		}, nil
 	})
 	t.Cleanup(func() { _ = hub.Close() })
 	relay := NewRelay(db.Resample(), registry, hub, 20*time.Millisecond)
@@ -95,6 +102,10 @@ func TestRelayPublishesWithoutKlineResampleAndSurvivesLateEventBus(t *testing.T)
 	mu.Lock()
 	require.Equal(t, 1, connectedCalls)
 	mu.Unlock()
+	require.NoError(t, hub.Close())
+	mu.Lock()
+	require.Equal(t, 1, closed, "关闭 Hub 时先调用回调返回的关闭函数")
+	mu.Unlock()
 
 	// 之后新写入的事件被唤醒后立即发布。
 	queueDelist(t, db, registry, "BARUSDT")
@@ -113,12 +124,12 @@ func TestFailedConnectedCallbackDiscardsTheConnectionAndRetries(t *testing.T) {
 	hub.RetryInterval = 10 * time.Millisecond
 	t.Cleanup(func() { _ = hub.Close() })
 	attempts := 0
-	hub.OnConnected(func(context.Context, *jetstream.Client) error {
+	hub.OnConnected(func(context.Context, *jetstream.Client) (func() error, error) {
 		attempts++
 		if attempts == 1 {
-			return errors.New("消费者创建失败")
+			return nil, errors.New("消费者创建失败")
 		}
-		return nil
+		return nil, nil
 	})
 	require.Error(t, hub.Ensure(context.Background()))
 	require.Nil(t, hub.Client(), "回调失败的连接作废")

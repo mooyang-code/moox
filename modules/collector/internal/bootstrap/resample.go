@@ -96,7 +96,7 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if bus != nil {
 		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks()}
 		// 启动时事件总线可能还没起来：Collector 级的连接管理器每分钟重试，连上之后才创建消费者。
-		bus.hub.OnConnected(func(_ context.Context, client *jetstream.Client) error {
+		bus.hub.OnConnected(func(_ context.Context, client *jetstream.Client) (func() error, error) {
 			consumers, startErr := eventconsumer.Start(process.ctx, client, eventconsumer.ConsumersConfig{SpaceIDs: spaceIDs}, registry,
 				&eventconsumer.PeriodHandler{Registry: registry, Trigger: &collectorresample.PeriodTrigger{Index: index, Engine: engine, Metrics: metrics}},
 				&eventconsumer.BackfilledHandler{
@@ -107,10 +107,9 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 					},
 				})
 			if startErr != nil {
-				return startErr
+				return nil, startErr
 			}
-			process.beforeClose = append(process.beforeClose, consumers.Close)
-			return nil
+			return consumers.Close, nil
 		})
 	}
 	return runtime, nil

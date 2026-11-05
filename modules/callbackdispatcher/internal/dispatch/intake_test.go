@@ -57,11 +57,21 @@ func delistDelivery(t *testing.T, exchange, market, symbol string, delistAt time
 
 func delistDeliveryWithID(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID string) *rawEvent {
 	t.Helper()
+	return delistDeliveryFull(t, exchange, market, symbol, delistAt, eventID, events.DelistScopeAll)
+}
+
+func delistDeliveryWithScope(t *testing.T, exchange, market, symbol string, delistAt time.Time, scope string) *rawEvent {
+	t.Helper()
+	return delistDeliveryFull(t, exchange, market, symbol, delistAt, events.InstrumentDelistEventID(exchange, market, symbol, scope, delistAt), scope)
+}
+
+func delistDeliveryFull(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID, scope string) *rawEvent {
+	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	payload := &storagepb.InstrumentDelistScheduled{
 		Exchange: exchange, Market: market, ExchangeSymbol: symbol, DelistAt: timestamppb.New(delistAt),
-		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(baseTime), Scope: events.DelistScopeAll,
+		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(baseTime), Scope: scope,
 	}
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, payload, events.PublishOptions{
 		EventID: eventID, OccurredAt: baseTime, SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID(exchange, market, symbol),
@@ -169,7 +179,7 @@ func TestSystemActionMergesSameInstrument(t *testing.T) {
 	executions := listAll(t, s)
 	require.Len(t, executions, 1)
 	original := executions[0]
-	require.Equal(t, "sys|binance:SPOT:FOOUSDT", original.DedupeKey)
+	require.Equal(t, "sys|binance:SPOT:FOOUSDT|ALL", original.DedupeKey)
 
 	// 另一个标的是另一条记录。
 	require.Equal(t, Accepted, handle(ctx, intake, delistDelivery(t, "binance", events.DelistMarketSpot, "BARUSDT", first)))
@@ -190,6 +200,32 @@ func TestSystemActionMergesSameInstrument(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Accepted, handle(ctx, intake, delistDelivery(t, "binance", events.DelistMarketSpot, "FOOUSDT", changed.Add(time.Hour))))
 	require.Len(t, listAll(t, s), 3)
+}
+
+// 演练用的“仅模拟盘”登记与同一标的真实下架是两条记录：不能改写真实下架的事件内容和时间。
+func TestPaperOnlyDrillDoesNotMergeIntoRealDelistExecution(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	intake := newIntake(t, s)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	realAt := baseTime.Add(7 * 24 * time.Hour)
+	require.Equal(t, Accepted, handle(ctx, intake, delistDelivery(t, "binance", events.DelistMarketSpot, "FOOUSDT", realAt)))
+
+	drillAt := baseTime.Add(3 * time.Hour)
+	drill := delistDeliveryWithScope(t, "binance", events.DelistMarketSpot, "FOOUSDT", drillAt, events.DelistScopePaperOnly)
+	require.Equal(t, Accepted, handle(ctx, intake, drill))
+
+	executions := listAll(t, s)
+	require.Len(t, executions, 2)
+	byKey := map[string]store.Execution{}
+	for _, execution := range executions {
+		byKey[execution.DedupeKey] = execution
+	}
+	real, drillExecution := byKey["sys|binance:SPOT:FOOUSDT|ALL"], byKey["sys|binance:SPOT:FOOUSDT|PAPER_ONLY"]
+	require.Contains(t, real.PayloadJSON, `"delist_at":"2026-11-11T08:00:00Z"`, "真实下架的时间和范围保持原样")
+	require.Contains(t, real.PayloadJSON, `"scope":"ALL"`)
+	require.Contains(t, drillExecution.PayloadJSON, `"scope":"PAPER_ONLY"`)
+	require.Contains(t, drillExecution.PayloadJSON, `"delist_at":"2026-11-04T11:00:00Z"`)
 }
 
 func TestSystemActionIgnoresRepublishWithSameSchedule(t *testing.T) {
