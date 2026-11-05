@@ -236,7 +236,7 @@ func TestRunBucketAStockHourlyUsesTradingSessionBars(t *testing.T) {
 
 type fakeAbsences struct{ absences []store.SourceAbsence }
 
-func (f fakeAbsences) AbsencesIn(_ context.Context, _, _, _ string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error) {
+func (f fakeAbsences) AbsencesIn(_ context.Context, _, _, _, _ string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error) {
 	var out []store.SourceAbsence
 	for _, absence := range f.absences {
 		if absence.From.Before(to) && absence.To.After(from) {

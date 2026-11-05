@@ -45,7 +45,7 @@ type SnapshotRegistrar interface {
 
 // AbsenceSource 查询已确认“行情源没有”的 K 线区间。
 type AbsenceSource interface {
-	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
+	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
 }
 
 // Task 是一个就绪合成任务的运行时视图。
@@ -289,7 +289,12 @@ func (e *Engine) absentTimes(ctx context.Context, task *Task, bucket barclock.Bu
 	if e.Absences == nil || len(subjects) == 0 {
 		return out, nil
 	}
-	absences, err := e.Absences.AbsencesIn(ctx, task.Spec.SpaceID, task.Spec.SourceDatasetID, task.Source.Storage, subjects, bucket.Start, bucket.End)
+	// 已确认缺失只有统一数据集（多条源序列）才按序列记录；单序列任务不区分序列。
+	seriesTag := ""
+	if len(task.Tags) > 1 {
+		seriesTag = task.Spec.SourceSeriesTag
+	}
+	absences, err := e.Absences.AbsencesIn(ctx, task.Spec.SpaceID, task.Spec.SourceDatasetID, task.Source.Storage, seriesTag, subjects, bucket.Start, bucket.End)
 	if err != nil {
 		return nil, fmt.Errorf("read source absences: %w", err)
 	}

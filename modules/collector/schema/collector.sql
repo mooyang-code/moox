@@ -157,12 +157,14 @@ BEGIN
 END;
 
 -- c_missing 是上一次执行后复查仍缺的 K 线（规范化区间串）：连续两次一致才确认是行情源没有。
+-- c_series_tag 只在统一数据集（同一数据集里有多个 series_tag）时有值：补采要用该序列所属市场的路由；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_chunk_id TEXT NOT NULL,
@@ -175,7 +177,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
-    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_chunks_job ON t_collector_kline_backfill_chunks (c_job_id, c_status);
@@ -190,16 +192,18 @@ BEGIN
 END;
 
 -- 已确认“行情源没有”的 K 线：补采成功后复查仍缺且结果一致的连续区间，检查与补采都扣除。
+-- c_series_tag 只在统一数据集时有值（同一标的的现货、永续分别确认）；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_bars INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
 );
 
 -- 每个数据集最近一次历史缺口扫描（早于最早生效点的一段历史）的结果；c_gaps 是缺口分组 JSON，供确认补采。

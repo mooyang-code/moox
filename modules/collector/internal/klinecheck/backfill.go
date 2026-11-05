@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -88,7 +89,7 @@ type BackfillStore interface {
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
 	AddAbsences(context.Context, []store.SourceAbsence) error
-	AbsencesIn(context.Context, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
+	AbsencesIn(context.Context, string, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
 	ClearAbsences(context.Context, string, string, string) (int64, error)
 	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
 	SaveHistoryScan(context.Context, store.HistoryScan) error
@@ -182,7 +183,11 @@ func splitGap(gap Gap, frequency marketdata.Frequency) [][2]time.Time {
 	return parts
 }
 
-func chunkID(jobID, datasetID, frequency, subject string, from time.Time) string {
+// chunkID 是分块的稳定标识；统一数据集（seriesTag 非空）在标的之后带上序列，单序列数据集的标识与以前一致。
+func chunkID(jobID, datasetID, frequency, subject, seriesTag string, from time.Time) string {
+	if seriesTag != "" {
+		return fmt.Sprintf("bf|%s|%s|%s|%s|%s|%d", jobID, datasetID, frequency, subject, seriesTag, from.Unix())
+	}
 	return fmt.Sprintf("bf|%s|%s|%s|%s|%d", jobID, datasetID, frequency, subject, from.Unix())
 }
 
@@ -236,7 +241,7 @@ func (b *Backfiller) createJob(ctx context.Context, job store.BackfillJob, gaps 
 			return "", 0, err
 		}
 		for _, part := range splitGap(gap, frequency) {
-			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, part[0])})
+			chunks = append(chunks, store.BackfillChunk{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, SeriesTag: gap.SeriesTag, From: part[0], To: part[1], ChunkID: chunkID(jobID, gap.DatasetID, gap.Frequency, gap.SubjectID, gap.SeriesTag, part[0])})
 		}
 	}
 	if len(chunks) > maxChunks {
@@ -400,7 +405,13 @@ func (b *Backfiller) baseContext() context.Context {
 // datasetMarket 从采集计划里找到负责该标的的那份函数计划（市场与交易所符号映射）。
 // 例外符号只保存在负责该标的的函数计划里，所以必须按数据集、频率、标的与时间定位，不能借用同一数据集的其他分片。
 // 优先选择在 at 时已生效的计划份，找不到时退回最近一份包含该标的的计划。
-func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, frequency, subjectID string, at time.Time) (*marketfetch.Plan, error) {
+// 统一数据集（seriesTag 非空）里同一标的有现货、永续两条序列，分属不同市场的函数：只选市场与该序列一致的计划，
+// 补采才会用对应市场的路由取数，写出的行 tag 与缺口一致，不会把永续的缺口补成现货行。
+func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, frequency, subjectID, seriesTag string, at time.Time) (*marketfetch.Plan, error) {
+	wantMarket := ""
+	if seriesTag != "" {
+		wantMarket = seriesset.SeriesTagMarket(seriesTag)
+	}
 	records, err := b.Plans.ListAll(ctx, spaceID)
 	if err != nil {
 		return nil, err
@@ -448,7 +459,7 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 		for _, name := range content.SortedFunctionNames() {
 			function := content.Functions[name]
 			for _, plan := range []*marketfetch.Plan{content.FinalPlan(function), content.TransitionalPlan(function)} {
-				if plan == nil {
+				if plan == nil || (wantMarket != "" && !strings.EqualFold(plan.Market.MarketType, wantMarket)) {
 					continue
 				}
 				for _, dataset := range plan.Datasets {
@@ -474,6 +485,9 @@ func (b *Backfiller) datasetMarket(ctx context.Context, spaceID, datasetID, freq
 	}
 	if fallback != nil {
 		return fallback, nil
+	}
+	if seriesTag != "" {
+		return nil, fmt.Errorf("subject %s (series %s) of dataset %s %s is not part of any fetch plan", subjectID, seriesTag, datasetID, frequency)
 	}
 	return nil, fmt.Errorf("subject %s of dataset %s %s is not part of any fetch plan", subjectID, datasetID, frequency)
 }
@@ -533,7 +547,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(errors.New(reason))
 		return
 	}
-	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.From)
+	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.SeriesTag, chunk.From)
 	if err != nil {
 		fail(err)
 		return
@@ -602,7 +616,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	// 复查带上 BeforeFirstPlan：强制重拉早于计划生效点的分块要真的读回来确认；范围在计划内的分块不受影响。
-	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
+	check, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, DatasetID: chunk.DatasetID, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From, To: chunk.To, BeforeFirstPlan: true})
 	if err != nil {
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return
@@ -656,7 +670,7 @@ func missingKey(gaps []Gap) string {
 func absencesOf(spaceID string, gaps []Gap) []store.SourceAbsence {
 	out := make([]store.SourceAbsence, 0, len(gaps))
 	for _, gap := range gaps {
-		out = append(out, store.SourceAbsence{SpaceID: spaceID, DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: gap.From, To: gap.To, Bars: gap.Missing})
+		out = append(out, store.SourceAbsence{SpaceID: spaceID, DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, SeriesTag: gap.SeriesTag, From: gap.From, To: gap.To, Bars: gap.Missing})
 	}
 	return out
 }
@@ -701,7 +715,7 @@ func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
 	for _, key := range order {
 		item := *ranges[key]
 		filled = append(filled, item)
-		absences, err := b.Store.AbsencesIn(ctx, job.SpaceID, item.DatasetID, item.Frequency, nil, item.From, item.To)
+		absences, err := b.Store.AbsencesIn(ctx, job.SpaceID, item.DatasetID, item.Frequency, "", nil, item.From, item.To)
 		if err != nil {
 			log.WarnContextf(ctx, "collector backfill filled notification skips source absences job=%s dataset=%s: %v", job.JobID, item.DatasetID, err)
 			continue
