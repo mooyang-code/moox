@@ -80,7 +80,7 @@ type LookbackExceededError struct {
 }
 
 func (e *LookbackExceededError) Error() string {
-	return fmt.Sprintf("因子 %s 的回看（最长 %d 根）超过数据源的回看数量 N=%d：请调大 window.lookback，或缩短因子的回看", strings.Join(e.Factors, "、"), e.Max, e.N)
+	return fmt.Sprintf("因子 %s 的回看（最长 %d 根）超过数据源的回看数量 N=%d：请调大 engine.yaml 的回看数量（7×24 市场 window.lookback，有交易时段的市场 window.session_lookback，或按数据源的 window.lookback_overrides），或缩短因子的回看", strings.Join(e.Factors, "、"), e.Max, e.N)
 }
 
 // Data 是数据层。

@@ -43,7 +43,7 @@ import-pack/
 - **硬约束**（预检强制，有问题一次列全、不写任何内容）：
   1. 每个文件最后一根（`last_utc`）早于**现在 − 2 天**（历史段只含已定稿的数据，不和实时写入重叠）；
   2. 最后一根到现在的缺口不超过 `min(30 天, 该频率 Storage 保留期 − 1 天)`——这段要靠 REST 补采，且必须整段留在 Storage 里，因子机同步器才能接着拉取（否则这段会被写成填充行）；
-  3. 每个文件行数不少于该数据源的回看数量（引擎 `window.lookback`，用 `--min-rows` 传入）；
+  3. 每个文件行数不少于该数据源的回看数量（7×24 市场是引擎的 `window.lookback`，有交易时段的市场是 `window.session_lookback`，有 `lookback_overrides` 时取覆盖值；用 `--min-rows` 传入）；
   4. 标的必须已在数据集的标签里；字段与类型和数据集严格一致；`sha256`、行数、首尾时间与文件一致。
 - `series_tag` 必须与实时采集写入的**完全一致**，否则历史和增量会变成两条序列。第 3 步核对。
 
@@ -55,7 +55,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --pack <包目录> --target sto
 ```
 
 `--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），用来确认窗口符合预期。
-有任何一项不合格就停下，把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（数据源有 `lookback_overrides` 的取覆盖值）。
+有任何一项不合格就停下，把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（7×24 市场）或 `window.session_lookback`（有交易时段的市场，未写时默认 5000），数据源有 `lookback_overrides` 的取覆盖值。
 
 ## 3. 核对 series_tag（操作机，只读）
 
