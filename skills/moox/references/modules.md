@@ -23,6 +23,21 @@
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
 
+## 事件中心
+
+- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓；处理器随交易计划 T27 之后上线）。管理台叫「事件中心」。
+- **在哪**：独立单元 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
+- **常用**：
+
+```bash
+./bin/moox-cli event catalog                                      # 可配置的事件与可限定的范围
+./bin/moox-cli event rules list|get|create|update|delete|test     # 事件规则；create 的验证密钥只显示一次，不要记录
+./bin/moox-cli event executions list|get|retry|cancel|ack         # 执行记录：失败重试、取消（下架处理会同时解除禁止）、确认
+./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
+```
+
+- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
+
 ## 采集
 
 - **做什么**：按采集任务定时拉取或经 WebSocket 推送 K 线，写入 Storage；巡检缺口、补采、K 线合成（重采样）、每小时同步交易所标的。

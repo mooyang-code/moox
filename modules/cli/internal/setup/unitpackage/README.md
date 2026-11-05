@@ -6,7 +6,7 @@
 - `Inspect(ctx, archive)` 校验归档，不写文件。
 - `Extract(ctx, ExtractOptions)` 在私密暂存目录内复用同一流式校验器，全部成功后原子发布到新的目标目录。
 
-软件包类型为 `host`、`control`、`eventbus`、`storage`、`access`、`egress-proxy`、`trade`、`collector-stream`、`factor-engine`、`archive-worker`。`Components(profile)` 给出服务边界，`Binaries(profile)` 同时包含相应 CLI/助手。主机网关、Host Agent 和共用运行助手只进入 host 包；业务包不携带主机服务。归档只包含二进制、共享服务目录、配置/资源模板和 schema，不含凭据或持久数据。原生单元生命周期包装脚本由安装器生成；外部程序包另携带 systemd 用户服务模板与安装脚本。
+软件包类型为 `host`、`control`、`eventbus`、`storage`、`access`、`egress-proxy`、`trade`、`collector-stream`、`callback-dispatcher`、`factor-engine`、`archive-worker`。`Components(profile)` 给出服务边界，`Binaries(profile)` 同时包含相应 CLI/助手。主机网关、Host Agent 和共用运行助手只进入 host 包；业务包不携带主机服务。归档只包含二进制、共享服务目录、配置/资源模板和 schema，不含凭据或持久数据。原生单元生命周期包装脚本由安装器生成；外部程序包另携带 systemd 用户服务模板与安装脚本。
 
 `package-manifest.json` 使用唯一的规范 JSON 编码，包含版本、平台、目录摘要、组件及逐文件路径/权限/长度/SHA256。检查器拒绝越界路径、链接、重复条目、无效 ELF、错误平台或组件、清单缺项、额外文件、多余 tar/gzip 载荷及流中断。归档大小与展开文件内容总量各不超过 1 GiB，单文件不超过 512 MiB，载荷最多 4096 个文件。
 
