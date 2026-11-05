@@ -19,7 +19,10 @@ describe("health display", () => {
     });
     expect(alertLink({ type: "dataset", producer: "strategy" }).href).toBe("#/strategy/tasks");
     expect(alertLink({ type: "business", kind: "market_canary" }).label).toBe("查看采集结果");
-    expect(alertLink({ type: "business", kind: "event_center_attention" })).toEqual({ href: "#/settings/events", label: "查看事件中心" });
+    expect(alertLink({ type: "business", kind: "event_center_attention" })).toEqual({
+      href: "#/settings/events",
+      label: "查看事件中心"
+    });
     expect(alertLink({ type: "component", host_id: "control", component_id: "collector" }).href).toBe(
       "#/ops/deployments?tab=services&host_id=control&component_id=collector"
     );
