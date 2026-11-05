@@ -255,7 +255,7 @@
                 </a-tag>
                 <span v-if="!editorSubjectTags.length">-</span>
               </div>
-              <span class="field-hint">Provider 和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。</span>
+              <span class="field-hint">Provider 和市场由标签固定绑定；已有任务不能增减另一个市场的标签，需要时请新建任务。</span>
             </div>
             <a-form-item v-else label="采集标的" required>
               <a-select
@@ -270,7 +270,19 @@
                   {{ tag.tag_name }}（{{ tagSource(tag) || "-" }} / {{ tagMarketType(tag) || "-" }}）
                 </a-option>
               </a-select>
-              <span class="field-hint">Provider 和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。</span>
+              <span class="field-hint"
+                >同一任务的标签必须来自同一来源；同时选现货、永续两个市场的标签时，可以合并成一个统一数据集。</span
+              >
+            </a-form-item>
+            <a-form-item v-if="!editing && crossMarketSelected" label="组织方式">
+              <a-radio-group v-model="organization">
+                <a-radio value="unified">合并为一个数据集</a-radio>
+                <a-radio value="split">按市场拆成两个任务</a-radio>
+              </a-radio-group>
+              <span class="field-hint"
+                >合并后现货、永续放在同一个数据集里，只要一个因子任务和一个
+                View；两个市场共用采集周期，一个市场延迟会拖慢另一个。只用一个市场的策略建议按市场拆成两个任务。</span
+              >
             </a-form-item>
           </template>
           <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
@@ -544,14 +556,20 @@ import {
   buildCollectionTaskPayload,
   collectionTaskResultLabel,
   collectionTaskNameError,
+  isCrossMarketSelection,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
   parseCollectionTaskInput,
+  planTaskGroups,
+  splitTaskName,
   taskFrequency,
+  taskTagSelectionError,
   type CollectionTaskDataType,
   type CollectionTaskInput,
   type CollectionTaskMarket,
-  type CollectionTaskRecord
+  type CollectionTaskRecord,
+  type TaskOrganization,
+  type TaskTagRoute
 } from "./collection-task-params";
 import ResampleJobsDrawer from "./resample-jobs-drawer.vue";
 import { sourceCandidateReason } from "./resample-jobs";
@@ -601,6 +619,8 @@ const jobsTarget = ref<{ taskId: string; taskName: string; targetFrequency: stri
 
 const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
+// 选了现货、永续两个市场的标签时，创建任务的组织方式：合并成一个统一数据集，或按市场拆成两个任务。
+const organization = ref<TaskOrganization>("unified");
 const selectedOutputFields = ref<string[]>([]);
 const outputFieldDraft = ref<string[]>([]);
 const outputFieldsVisible = ref(false);
@@ -658,6 +678,10 @@ const selectedOutputFieldLabels = computed(() =>
   })
 );
 const editorSubjectTags = computed(() => tags.value.filter(tag => subjectTagIds.value.includes(tag.tag_id)));
+const selectedTagRoutes = computed<TaskTagRoute[]>(() =>
+  editorSubjectTags.value.map(tag => ({ tag_id: tag.tag_id, source: tagSource(tag), market: tagMarketType(tag) }))
+);
+const crossMarketSelected = computed(() => isCrossMarketSelection(selectedTagRoutes.value));
 // 编辑态合成任务的源任务只读展示：从源任务清单里找名字，找不到时退回任务 ID。
 const editingSourceTaskName = computed(() => {
   const source = sourceTasks.value.find(task => task.task_id === sourceTaskId.value);
@@ -855,6 +879,7 @@ function resetEditor() {
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
+  organization.value = "unified";
   sourceTaskId.value = "";
   resamplePreview.value = null;
   resampleError.value = "";
@@ -1076,6 +1101,10 @@ async function validateEditor() {
     if (input.dataType === "kline" && !subjectTagIds.value.length) {
       throw new Error("请选择标的标签");
     }
+    if (input.dataType === "kline" && !editing.value) {
+      const selectionError = taskTagSelectionError(selectedTagRoutes.value);
+      if (selectionError) throw new Error(selectionError);
+    }
     if (input.dataType === "kline_resample" && !editing.value) {
       if (!sourceTaskId.value.trim()) throw new Error("请选择源采集任务");
       if (resampleError.value) throw new Error(resampleError.value);
@@ -1100,25 +1129,45 @@ async function saveEditor() {
   try {
     if (editorMode.value === "create") {
       const input = currentTaskInput();
-      const task = buildCollectionTaskPayload(
-        input,
-        {
-          task_name: editorSnapshot.task_name,
-          description: editorSnapshot.description,
-          space_id: editorSnapshot.space_id,
-          creator: editorSnapshot.creator || account.value?.user?.userName || "",
-          enabled: true
-        },
-        undefined
-      );
-      await CreateTask({
-        task,
-        result_config: {
-          data_node_id: resultSnapshot.data_node_id.trim(),
-          description: resultSnapshot.description.trim()
+      const groups =
+        input.dataType === "kline" ? planTaskGroups(selectedTagRoutes.value, organization.value) : [{ suffix: "", tagIds: [] }];
+      const created: string[] = [];
+      for (const group of groups) {
+        const groupInput = group.tagIds.length ? { ...input, subjectTags: group.tagIds } : input;
+        const task = buildCollectionTaskPayload(
+          groupInput,
+          {
+            task_name: splitTaskName(editorSnapshot.task_name, group.suffix),
+            description: editorSnapshot.description,
+            space_id: editorSnapshot.space_id,
+            creator: editorSnapshot.creator || account.value?.user?.userName || "",
+            enabled: true
+          },
+          undefined
+        );
+        try {
+          await CreateTask({
+            task,
+            result_config: {
+              data_node_id: resultSnapshot.data_node_id.trim(),
+              description: resultSnapshot.description.trim()
+            }
+          });
+        } catch (error) {
+          // 拆成两个任务时，后一个失败要保留已建好的前一个，并告诉用户补建哪个。
+          if (created.length) {
+            await getTaskList();
+            throw new Error(
+              `已创建“${created.join("”“")}”，但“${task.task_name}”创建失败：${
+                error instanceof Error ? error.message : "未知错误"
+              }。请修正后单独补建这个任务。`
+            );
+          }
+          throw error;
         }
-      });
-      Message.success(`采集任务“${task.task_name}”已创建，将从下一采集周期开始生效`);
+        created.push(task.task_name || "");
+      }
+      Message.success(`采集任务“${created.join("”“")}”已创建，将从下一采集周期开始生效`);
     } else {
       const input = currentTaskInput();
       const mutableTask = {
