@@ -66,7 +66,10 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if strings.TrimSpace(params.SourceDatasetID) == strings.TrimSpace(params.TargetDatasetID) {
 		return fmt.Errorf("source and target Dataset IDs must differ")
 	}
-	if strings.TrimSpace(params.SourceSeriesTag) == "" {
+	if strings.TrimSpace(params.SourceSeriesTag) != "" && len(params.SourceSeriesTags) > 0 {
+		return fmt.Errorf("source_series_tag 与 source_series_tags 不能同时给出")
+	}
+	if len(params.SourceTags()) == 0 {
 		return fmt.Errorf("source_series_tag is required")
 	}
 	source, err := ParseFixedFrequency(params.SourceFrequency)

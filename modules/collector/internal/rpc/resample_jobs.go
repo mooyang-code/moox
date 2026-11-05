@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,17 +15,21 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/barclock"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/rs/xid"
 )
 
 // resampleSource 是由源采集任务推导出的合成源参数。
 type resampleSource struct {
-	TaskID       string
-	DatasetID    string
-	Frequency    string
-	SeriesTag    string
+	TaskID    string
+	DatasetID string
+	Frequency string
+	SeriesTag string
+	// SeriesTags 只在统一数据集（现货加永续）作为源时有值，此时 SeriesTag 为空，MarketType 为 multi。
+	SeriesTags   []string
 	Provider     string
 	MarketType   string
 	SubjectCount int
@@ -51,6 +55,7 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 	switch strings.ToLower(task.DataType) {
 	case "kline_resample":
 		out.Frequency, out.SeriesTag, out.Provider, out.MarketType = params.TargetFrequency, params.SourceSeriesTag, params.Provider, params.MarketType
+		out.SeriesTags = append([]string(nil), params.SourceSeriesTags...)
 	case "kline":
 		out.Frequency = params.Frequency
 		tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
@@ -61,20 +66,33 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 		if len(tagIDs) == 0 {
 			return resampleSource{}, fmt.Errorf("source task %q has no tags", sourceTaskID)
 		}
-		routes := map[string]struct{}{}
+		type sourceRoute struct{ provider, marketType, seriesTag string }
+		routes := map[string]sourceRoute{}
+		markets := map[string]struct{}{}
 		for _, tagID := range tagIDs {
 			tag, tagErr := tagSource.GetTag(ctx, task.SpaceID, tagID)
 			if tagErr != nil || tag == nil {
 				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 			}
-			provider := tagattr.Source(tag)
-			marketType := tagattr.MarketType(tag)
-			routes[provider+"/"+marketType] = struct{}{}
-			out.Provider, out.MarketType = provider, marketType
-			out.SeriesTag = marketfetch.TaskSeriesTag(task.SpaceID, params, provider, marketType, s.sourceIDResolver)
+			route := sourceRoute{provider: tagattr.Source(tag), marketType: tagattr.MarketType(tag)}
+			route.seriesTag = marketfetch.TaskSeriesTag(task.SpaceID, params, route.provider, route.marketType, s.sourceIDResolver)
+			routes[route.provider+"/"+route.marketType] = route
+			markets[route.marketType] = struct{}{}
+			out.Provider, out.MarketType, out.SeriesTag = route.provider, route.marketType, route.seriesTag
 		}
 		if len(routes) > 1 {
-			return resampleSource{}, fmt.Errorf("source task %q writes %d series routes; a resample needs exactly one", sourceTaskID, len(routes))
+			// 统一数据集（同一数据源的现货加永续）：每个市场一条源序列，分别合成。
+			providers := map[string]struct{}{}
+			tags := make([]string, 0, len(routes))
+			for _, route := range routes {
+				providers[route.provider] = struct{}{}
+				tags = append(tags, route.seriesTag)
+			}
+			if len(providers) != 1 || !tagattr.IsSpotSwap(markets) {
+				return resampleSource{}, fmt.Errorf("源任务 %q 写入 %d 条互不相关的序列，合成只支持单一序列或同一数据源的现货加永续", sourceTaskID, len(routes))
+			}
+			sort.Strings(tags)
+			out.SeriesTag, out.SeriesTags, out.MarketType = "", tags, seriesset.MarketMulti
 		}
 	default:
 		return resampleSource{}, fmt.Errorf("source task %q is %s, not a K-line task", sourceTaskID, task.DataType)
@@ -119,7 +137,13 @@ func (s *Service) deriveResampleSource(ctx context.Context, task *domain.Collect
 	values["source_task_id"] = source.TaskID
 	values["source_dataset_id"] = source.DatasetID
 	values["source_frequency"] = source.Frequency
-	values["source_series_tag"] = source.SeriesTag
+	if len(source.SeriesTags) > 0 {
+		delete(values, "source_series_tag")
+		values["source_series_tags"] = source.SeriesTags
+	} else {
+		delete(values, "source_series_tags")
+		values["source_series_tag"] = source.SeriesTag
+	}
 	if source.Provider != "" {
 		values["provider"] = source.Provider
 	}
@@ -144,7 +168,7 @@ func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.Previe
 		return &pb.PreviewKlineResampleSourceRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	rsp := &pb.PreviewKlineResampleSourceRsp{
-		RetInfo: retOK(), SourceDatasetId: source.DatasetID, SourceFrequency: source.Frequency, SourceSeriesTag: source.SeriesTag,
+		RetInfo: retOK(), SourceDatasetId: source.DatasetID, SourceFrequency: source.Frequency, SourceSeriesTag: source.SeriesTag, SourceSeriesTags: source.SeriesTags,
 		SubjectCount: uint32(source.SubjectCount), MarketId: req.GetSpaceId(), Provider: source.Provider, MarketType: source.MarketType,
 	}
 	market, err := barclock.MarketFor(req.GetSpaceId())
@@ -155,10 +179,16 @@ func (s *Service) PreviewKlineResampleSource(ctx context.Context, req *pb.Previe
 	rsp.Alignment = market.Alignment
 	rsp.AllowedFrequencies = s.allowedResampleFrequencies(market, source.Frequency)
 	if target := strings.TrimSpace(req.GetTargetFrequency()); target != "" {
-		raw, _ := json.Marshal(map[string]any{
+		preview := map[string]any{
 			"provider": source.Provider, "market_type": source.MarketType, "source_dataset_id": source.DatasetID, "source_frequency": source.Frequency,
-			"source_series_tag": source.SeriesTag, "target_dataset_id": "dataset_preview", "target_frequency": target,
-		})
+			"target_dataset_id": "dataset_preview", "target_frequency": target,
+		}
+		if len(source.SeriesTags) > 0 {
+			preview["source_series_tags"] = source.SeriesTags
+		} else {
+			preview["source_series_tag"] = source.SeriesTag
+		}
+		raw, _ := json.Marshal(preview)
 		params, parseErr := domain.ParseCollectParams(string(raw), "", "", "kline_resample")
 		if parseErr == nil {
 			parseErr = collectorresample.ValidateTaskParams(req.GetSpaceId(), params)

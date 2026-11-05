@@ -329,6 +329,8 @@ message PreviewKlineResampleSourceRsp {
   repeated string allowed_frequencies = 10;
   // 目标频率不满足合成规则时的原因；为空表示通过或未给出目标频率。
   string validation_error = 11;
+  // 源是统一数据集（现货加永续，market_type 为 multi）时，各条源序列的 series_tag；此时 source_series_tag 为空。
+  repeated string source_series_tags = 12;
 }
 
 message SyncSubjectsReq {
