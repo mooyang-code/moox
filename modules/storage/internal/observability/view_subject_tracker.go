@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	// Bound the subjects tracked per process so a malformed or runaway View
-	// cannot grow the tracker without limit.
+	// Bound the series (subject and series_tag) tracked per process so a
+	// malformed or runaway View cannot grow the tracker without limit.
 	maxViewSubjectObservations     = 20000
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;
@@ -48,14 +48,25 @@ type viewSubjectState struct {
 	// written since the restart.
 	trackedSince int64
 	latest       int64
-	subjects     map[string]int64
+	// series holds the latest output bar of each (subject, series_tag). A
+	// unified Dataset carries several series per subject (spot and swap); one
+	// of them falling behind must not be hidden by another that is current.
+	series map[viewSeries]int64
+	// subjects counts the series of each distinct subject.
+	subjects map[string]int
 }
 
-// viewSubjectTracker keeps each View subject's latest output bar in memory and
+type viewSeries struct {
+	subjectID, seriesTag string
+}
+
+// viewSubjectTracker keeps each View series' latest output bar in memory and
 // reports a per-View summary when metrics are gathered: the View's latest bar,
 // how many subjects it tracks, how many trail that bar, and the most lagging
-// ones by name. Updating it on the write path is a map write, not a metric
-// series.
+// ones by name. A subject trails when any of its series trails, and is named
+// with its oldest series' bar, so Monitor keeps judging by subject while a
+// market that falls behind still shows. Updating it on the write path is a map
+// write, not a metric series.
 type viewSubjectTracker struct {
 	mu       sync.Mutex
 	scopes   map[viewSubjectScope]*viewSubjectState
@@ -95,18 +106,20 @@ func (t *viewSubjectTracker) observe(observation ViewDatasetObservation) error {
 	defer t.mu.Unlock()
 	state := t.scopes[scope]
 	if state == nil {
-		state = &viewSubjectState{bar: bar, trackedSince: dataTime, subjects: make(map[string]int64)}
+		state = &viewSubjectState{bar: bar, trackedSince: dataTime, series: make(map[viewSeries]int64), subjects: make(map[string]int)}
 		t.scopes[scope] = state
 	}
-	previous, known := state.subjects[subjectID]
+	key := viewSeries{subjectID: subjectID, seriesTag: strings.TrimSpace(observation.SeriesTag)}
+	previous, known := state.series[key]
 	if !known {
 		if t.observed >= maxViewSubjectObservations {
 			return fmt.Errorf("storage view subject observation limit exceeded: %d", maxViewSubjectObservations)
 		}
 		t.observed++
+		state.subjects[subjectID]++
 	}
 	if !known || dataTime > previous {
-		state.subjects[subjectID] = dataTime
+		state.series[key] = dataTime
 	}
 	if dataTime > state.latest {
 		state.latest = dataTime
@@ -123,7 +136,7 @@ func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
 		if _, keep := active[ViewKey{SpaceID: scope.spaceID, ViewID: scope.viewID}]; keep {
 			continue
 		}
-		t.observed -= len(state.subjects)
+		t.observed -= len(state.series)
 		delete(t.scopes, scope)
 	}
 }
@@ -146,11 +159,19 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 	for scope, state := range t.scopes {
 		labels := []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq}
 		cutoff := state.latest - int64((state.bar+viewSubjectLagTolerance)/time.Second)
-		var behind []lagging
-		for subjectID, dataTime := range state.subjects {
-			if dataTime < cutoff {
-				behind = append(behind, lagging{subjectID: subjectID, dataTime: dataTime})
+		// A subject trails when any of its series trails; it is named with the oldest bar among them.
+		oldest := make(map[string]int64)
+		for key, dataTime := range state.series {
+			if dataTime >= cutoff {
+				continue
 			}
+			if previous, ok := oldest[key.subjectID]; !ok || dataTime < previous {
+				oldest[key.subjectID] = dataTime
+			}
+		}
+		behind := make([]lagging, 0, len(oldest))
+		for subjectID, dataTime := range oldest {
+			behind = append(behind, lagging{subjectID: subjectID, dataTime: dataTime})
 		}
 		ch <- prometheus.MustNewConstMetric(t.latestDesc, prometheus.GaugeValue, float64(state.latest), labels...)
 		ch <- prometheus.MustNewConstMetric(t.trackedSinceDesc, prometheus.GaugeValue, float64(state.trackedSince), labels...)
