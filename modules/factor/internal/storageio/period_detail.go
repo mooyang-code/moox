@@ -6,6 +6,7 @@ import (
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/seriesset"
+	"google.golang.org/protobuf/proto"
 )
 
 // ValidatePeriodDetail 校验因子周期明细：成员身份是 member_key（同一因子可以用不同参数出现多次），factor_id 是它引用的定义；
@@ -65,7 +66,10 @@ func ValidatePeriodDetail(detail *factorpb.PeriodDetail, universe []string, univ
 				return fmt.Errorf("factor period detail: factor %q gap_subject %q is not in failed_subjects", state.GetFactorId(), subject)
 			}
 		}
-		if err := validateStateSeries(state, series, tags); err != nil {
+		// 成员的失败序列 = 周期级共享的一份加上自己的：校验用还原后的完整名单。
+		restored := proto.Clone(state).(*factorpb.FactorPeriodState)
+		restored.FailedSeries = seriesToFactorPB(MemberFailedSeries(detail, state))
+		if err := validateStateSeries(restored, series, tags); err != nil {
 			return err
 		}
 		if state.GetStatus() == "complete" && len(failed) != 0 {

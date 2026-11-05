@@ -1014,6 +1014,9 @@ type PeriodDetail struct {
 
 	SourceDatasetId string               `protobuf:"bytes,1,opt,name=source_dataset_id,json=sourceDatasetId,proto3" json:"source_dataset_id,omitempty"`
 	Factors         []*FactorPeriodState `protobuf:"bytes,2,rep,name=factors,proto3" json:"factors,omitempty"`
+	// shared_failed_series 是所有成员的 failed_series 的交集，只放一份（永续整体晚到时每个成员的失败序列相同，逐成员复制会让标记超过事件体积上限）。
+	// 成员完整的失败序列 = shared_failed_series ∪ 该成员的 failed_series；读取方必须这样还原。只有统一数据集才有。
+	SharedFailedSeries []*SeriesRef `protobuf:"bytes,3,rep,name=shared_failed_series,json=sharedFailedSeries,proto3" json:"shared_failed_series,omitempty"`
 }
 
 func (x *PeriodDetail) Reset() {
@@ -1058,6 +1061,13 @@ func (x *PeriodDetail) GetSourceDatasetId() string {
 func (x *PeriodDetail) GetFactors() []*FactorPeriodState {
 	if x != nil {
 		return x.Factors
+	}
+	return nil
+}
+
+func (x *PeriodDetail) GetSharedFailedSeries() []*SeriesRef {
+	if x != nil {
+		return x.SharedFailedSeries
 	}
 	return nil
 }
@@ -8162,15 +8172,20 @@ var file_factor_proto_rawDesc = []byte{
 	0x70, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x12, 0x2e, 0x0a, 0x13, 0x73, 0x6b, 0x69, 0x70, 0x70,
 	0x65, 0x64, 0x5f, 0x73, 0x65, 0x72, 0x69, 0x65, 0x73, 0x5f, 0x74, 0x61, 0x67, 0x73, 0x18, 0x0b,
 	0x20, 0x03, 0x28, 0x09, 0x52, 0x11, 0x73, 0x6b, 0x69, 0x70, 0x70, 0x65, 0x64, 0x53, 0x65, 0x72,
-	0x69, 0x65, 0x73, 0x54, 0x61, 0x67, 0x73, 0x22, 0x79, 0x0a, 0x0c, 0x50, 0x65, 0x72, 0x69, 0x6f,
-	0x64, 0x44, 0x65, 0x74, 0x61, 0x69, 0x6c, 0x12, 0x2a, 0x0a, 0x11, 0x73, 0x6f, 0x75, 0x72, 0x63,
-	0x65, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x0f, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65,
-	0x74, 0x49, 0x64, 0x12, 0x3d, 0x0a, 0x07, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x73, 0x18, 0x02,
-	0x20, 0x03, 0x28, 0x0b, 0x32, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x50, 0x65,
-	0x72, 0x69, 0x6f, 0x64, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52, 0x07, 0x66, 0x61, 0x63, 0x74, 0x6f,
-	0x72, 0x73, 0x22, 0xcb, 0x02, 0x0a, 0x0e, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x75, 0x6e, 0x53, 0x75,
+	0x69, 0x65, 0x73, 0x54, 0x61, 0x67, 0x73, 0x22, 0xc8, 0x01, 0x0a, 0x0c, 0x50, 0x65, 0x72, 0x69,
+	0x6f, 0x64, 0x44, 0x65, 0x74, 0x61, 0x69, 0x6c, 0x12, 0x2a, 0x0a, 0x11, 0x73, 0x6f, 0x75, 0x72,
+	0x63, 0x65, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0f, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x44, 0x61, 0x74, 0x61, 0x73,
+	0x65, 0x74, 0x49, 0x64, 0x12, 0x3d, 0x0a, 0x07, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x73, 0x18,
+	0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x50,
+	0x65, 0x72, 0x69, 0x6f, 0x64, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52, 0x07, 0x66, 0x61, 0x63, 0x74,
+	0x6f, 0x72, 0x73, 0x12, 0x4d, 0x0a, 0x14, 0x73, 0x68, 0x61, 0x72, 0x65, 0x64, 0x5f, 0x66, 0x61,
+	0x69, 0x6c, 0x65, 0x64, 0x5f, 0x73, 0x65, 0x72, 0x69, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28,
+	0x0b, 0x32, 0x1b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61,
+	0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x65, 0x66, 0x52, 0x12,
+	0x73, 0x68, 0x61, 0x72, 0x65, 0x64, 0x46, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x53, 0x65, 0x72, 0x69,
+	0x65, 0x73, 0x22, 0xcb, 0x02, 0x0a, 0x0e, 0x54, 0x61, 0x73, 0x6b, 0x52, 0x75, 0x6e, 0x53, 0x75,
 	0x6d, 0x6d, 0x61, 0x72, 0x79, 0x12, 0x17, 0x0a, 0x07, 0x74, 0x61, 0x73, 0x6b, 0x5f, 0x69, 0x64,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x74, 0x61, 0x73, 0x6b, 0x49, 0x64, 0x12, 0x28,
 	0x0a, 0x10, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x5f, 0x74, 0x69,
@@ -9595,217 +9610,218 @@ var file_factor_proto_depIdxs = []int32{
 	8,   // 7: trpc.moox.factor.FactorPeriodState.failed_series:type_name -> trpc.moox.factor.SeriesRef
 	8,   // 8: trpc.moox.factor.FactorPeriodState.gap_series:type_name -> trpc.moox.factor.SeriesRef
 	9,   // 9: trpc.moox.factor.PeriodDetail.factors:type_name -> trpc.moox.factor.FactorPeriodState
-	9,   // 10: trpc.moox.factor.TaskRunSummary.factors:type_name -> trpc.moox.factor.FactorPeriodState
-	0,   // 11: trpc.moox.factor.FactorTaskInfo.factor_task:type_name -> trpc.moox.factor.FactorTask
-	7,   // 12: trpc.moox.factor.FactorTaskInfo.members:type_name -> trpc.moox.factor.FactorMember
-	11,  // 13: trpc.moox.factor.FactorTaskInfo.last_run:type_name -> trpc.moox.factor.TaskRunSummary
-	15,  // 14: trpc.moox.factor.RecalcJob.default_filled:type_name -> trpc.moox.factor.MemberRanges
-	14,  // 15: trpc.moox.factor.MemberRanges.ranges:type_name -> trpc.moox.factor.TimeRange
-	0,   // 16: trpc.moox.factor.CreateFactorTaskReq.factor_task:type_name -> trpc.moox.factor.FactorTask
-	126, // 17: trpc.moox.factor.CreateFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,   // 18: trpc.moox.factor.CreateFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
-	126, // 19: trpc.moox.factor.SetFactorTaskStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,   // 20: trpc.moox.factor.SetFactorTaskStatusRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
-	126, // 21: trpc.moox.factor.DeleteFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	126, // 22: trpc.moox.factor.GetFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,   // 23: trpc.moox.factor.GetFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
-	7,   // 24: trpc.moox.factor.GetFactorTaskRsp.members:type_name -> trpc.moox.factor.FactorMember
-	11,  // 25: trpc.moox.factor.GetFactorTaskRsp.last_run:type_name -> trpc.moox.factor.TaskRunSummary
-	127, // 26: trpc.moox.factor.ListFactorTasksReq.page:type_name -> trpc.moox.common.Page
-	126, // 27: trpc.moox.factor.ListFactorTasksRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	12,  // 28: trpc.moox.factor.ListFactorTasksRsp.factor_tasks:type_name -> trpc.moox.factor.FactorTaskInfo
-	128, // 29: trpc.moox.factor.ListFactorTasksRsp.page_result:type_name -> trpc.moox.common.PageResult
-	3,   // 30: trpc.moox.factor.CreateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
-	126, // 31: trpc.moox.factor.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 32: trpc.moox.factor.CreateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
-	3,   // 33: trpc.moox.factor.UpdateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
-	126, // 34: trpc.moox.factor.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 35: trpc.moox.factor.UpdateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
-	118, // 36: trpc.moox.factor.AddTaskMemberReq.params:type_name -> trpc.moox.factor.AddTaskMemberReq.ParamsEntry
-	126, // 37: trpc.moox.factor.AddTaskMemberRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,   // 38: trpc.moox.factor.AddTaskMemberRsp.member:type_name -> trpc.moox.factor.FactorMember
-	126, // 39: trpc.moox.factor.RemoveTaskMemberRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	126, // 40: trpc.moox.factor.SetTaskMemberStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,   // 41: trpc.moox.factor.SetTaskMemberStatusRsp.member:type_name -> trpc.moox.factor.FactorMember
-	126, // 42: trpc.moox.factor.DeleteFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	126, // 43: trpc.moox.factor.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 44: trpc.moox.factor.GetFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
-	5,   // 45: trpc.moox.factor.GetFactorRsp.usages:type_name -> trpc.moox.factor.FactorUsage
-	127, // 46: trpc.moox.factor.ListFactorsReq.page:type_name -> trpc.moox.common.Page
-	126, // 47: trpc.moox.factor.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,   // 48: trpc.moox.factor.ListFactorsRsp.factors:type_name -> trpc.moox.factor.FactorInfo
-	128, // 49: trpc.moox.factor.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	126, // 50: trpc.moox.factor.RecalcFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 51: trpc.moox.factor.RecalcFactorsRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	127, // 52: trpc.moox.factor.ListRecalcJobsReq.page:type_name -> trpc.moox.common.Page
-	126, // 53: trpc.moox.factor.ListRecalcJobsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 54: trpc.moox.factor.ListRecalcJobsRsp.jobs:type_name -> trpc.moox.factor.RecalcJob
-	128, // 55: trpc.moox.factor.ListRecalcJobsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	126, // 56: trpc.moox.factor.GetRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 57: trpc.moox.factor.GetRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	126, // 58: trpc.moox.factor.CancelRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 59: trpc.moox.factor.CancelRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	126, // 60: trpc.moox.factor.GetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	50,  // 61: trpc.moox.factor.GetStatusRsp.runners:type_name -> trpc.moox.factor.FactorRunnerStatus
-	11,  // 62: trpc.moox.factor.GetStatusRsp.recent_runs:type_name -> trpc.moox.factor.TaskRunSummary
-	51,  // 63: trpc.moox.factor.GetStatusRsp.engine:type_name -> trpc.moox.factor.EngineInfo
-	101, // 64: trpc.moox.factor.GetStatusRsp.lifecycle:type_name -> trpc.moox.factor.EngineLifecycleStatus
-	119, // 65: trpc.moox.factor.ValidateFactorSpecReq.udf_versions:type_name -> trpc.moox.factor.ValidateFactorSpecReq.UdfVersionsEntry
-	126, // 66: trpc.moox.factor.ValidateFactorSpecRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	55,  // 67: trpc.moox.factor.ValidateFactorSpecRsp.diagnostic:type_name -> trpc.moox.factor.FactorSpecDiagnostic
-	1,   // 68: trpc.moox.factor.ValidateFactorSpecRsp.params:type_name -> trpc.moox.factor.FactorParamDecl
-	120, // 69: trpc.moox.factor.PreviewFactorReq.params:type_name -> trpc.moox.factor.PreviewFactorReq.ParamsEntry
-	121, // 70: trpc.moox.factor.PreviewFactorReq.udf_versions:type_name -> trpc.moox.factor.PreviewFactorReq.UdfVersionsEntry
-	126, // 71: trpc.moox.factor.PreviewFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	58,  // 72: trpc.moox.factor.PreviewFactorRsp.rows:type_name -> trpc.moox.factor.PreviewRow
-	60,  // 73: trpc.moox.factor.FactorFunction.args:type_name -> trpc.moox.factor.FactorFunctionArg
-	126, // 74: trpc.moox.factor.ListFactorFunctionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	61,  // 75: trpc.moox.factor.ListFactorFunctionsRsp.functions:type_name -> trpc.moox.factor.FactorFunction
-	126, // 76: trpc.moox.factor.ListFactorCategoriesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,   // 77: trpc.moox.factor.ListFactorCategoriesRsp.categories:type_name -> trpc.moox.factor.FactorCategory
-	2,   // 78: trpc.moox.factor.UpsertFactorCategoryReq.category:type_name -> trpc.moox.factor.FactorCategory
-	126, // 79: trpc.moox.factor.UpsertFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	2,   // 80: trpc.moox.factor.UpsertFactorCategoryRsp.category:type_name -> trpc.moox.factor.FactorCategory
-	126, // 81: trpc.moox.factor.DeleteFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	126, // 82: trpc.moox.factor.SetFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,   // 83: trpc.moox.factor.SetFactorCategoryRsp.factor:type_name -> trpc.moox.factor.FactorDef
-	126, // 84: trpc.moox.factor.BindFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,   // 85: trpc.moox.factor.BindFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
-	122, // 86: trpc.moox.factor.ParamValue.overrides:type_name -> trpc.moox.factor.ParamValue.OverridesEntry
-	123, // 87: trpc.moox.factor.MemberParams.params:type_name -> trpc.moox.factor.MemberParams.ParamsEntry
-	75,  // 88: trpc.moox.factor.SubmitFactorParamsReq.members:type_name -> trpc.moox.factor.MemberParams
-	126, // 89: trpc.moox.factor.SubmitFactorParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	77,  // 90: trpc.moox.factor.SubmitFactorParamsRsp.results:type_name -> trpc.moox.factor.MemberSubmitResult
-	124, // 91: trpc.moox.factor.MemberParamState.params:type_name -> trpc.moox.factor.MemberParamState.ParamsEntry
-	126, // 92: trpc.moox.factor.GetFactorParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	79,  // 93: trpc.moox.factor.GetFactorParamsRsp.members:type_name -> trpc.moox.factor.MemberParamState
-	126, // 94: trpc.moox.factor.PublishUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	84,  // 95: trpc.moox.factor.UdfInfo.versions:type_name -> trpc.moox.factor.UdfVersionInfo
-	94,  // 96: trpc.moox.factor.UdfInfo.modules:type_name -> trpc.moox.factor.UdfModuleStatus
-	126, // 97: trpc.moox.factor.ListUdfsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	85,  // 98: trpc.moox.factor.ListUdfsRsp.udfs:type_name -> trpc.moox.factor.UdfInfo
-	126, // 99: trpc.moox.factor.GetUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	85,  // 100: trpc.moox.factor.GetUdfRsp.udf:type_name -> trpc.moox.factor.UdfInfo
-	126, // 101: trpc.moox.factor.ActivateUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	91,  // 102: trpc.moox.factor.ActivateUdfRsp.impacts:type_name -> trpc.moox.factor.UdfImpact
-	92,  // 103: trpc.moox.factor.ActivateUdfRsp.prerequisites:type_name -> trpc.moox.factor.UdfPrerequisite
-	3,   // 104: trpc.moox.factor.EngineMember.factor:type_name -> trpc.moox.factor.FactorDef
-	125, // 105: trpc.moox.factor.EngineMember.params:type_name -> trpc.moox.factor.EngineMember.ParamsEntry
-	0,   // 106: trpc.moox.factor.EngineTask.factor_task:type_name -> trpc.moox.factor.FactorTask
-	96,  // 107: trpc.moox.factor.EngineTask.members:type_name -> trpc.moox.factor.EngineMember
-	95,  // 108: trpc.moox.factor.SyncEngineCatalogReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	126, // 109: trpc.moox.factor.SyncEngineCatalogRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	97,  // 110: trpc.moox.factor.SyncEngineCatalogRsp.tasks:type_name -> trpc.moox.factor.EngineTask
-	50,  // 111: trpc.moox.factor.EngineRuntimeStatus.runners:type_name -> trpc.moox.factor.FactorRunnerStatus
-	11,  // 112: trpc.moox.factor.EngineRuntimeStatus.recent_runs:type_name -> trpc.moox.factor.TaskRunSummary
-	102, // 113: trpc.moox.factor.EngineRuntimeStatus.watermarks:type_name -> trpc.moox.factor.TaskWatermarkStatus
-	94,  // 114: trpc.moox.factor.EngineRuntimeStatus.udf_modules:type_name -> trpc.moox.factor.UdfModuleStatus
-	101, // 115: trpc.moox.factor.EngineRuntimeStatus.lifecycle:type_name -> trpc.moox.factor.EngineLifecycleStatus
-	8,   // 116: trpc.moox.factor.PeriodsFilled.absent_series:type_name -> trpc.moox.factor.SeriesRef
-	103, // 117: trpc.moox.factor.NotifyPeriodsFilledReq.filled:type_name -> trpc.moox.factor.PeriodsFilled
-	126, // 118: trpc.moox.factor.NotifyPeriodsFilledRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	95,  // 119: trpc.moox.factor.EngineHeartbeatReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	100, // 120: trpc.moox.factor.EngineHeartbeatReq.status:type_name -> trpc.moox.factor.EngineRuntimeStatus
-	126, // 121: trpc.moox.factor.EngineHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	103, // 122: trpc.moox.factor.EngineHeartbeatRsp.filled:type_name -> trpc.moox.factor.PeriodsFilled
-	95,  // 123: trpc.moox.factor.PullRecalcJobReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	126, // 124: trpc.moox.factor.PullRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	13,  // 125: trpc.moox.factor.PullRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	97,  // 126: trpc.moox.factor.PullRecalcJobRsp.task:type_name -> trpc.moox.factor.EngineTask
-	95,  // 127: trpc.moox.factor.ReportRecalcProgressReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	15,  // 128: trpc.moox.factor.ReportRecalcProgressReq.default_filled:type_name -> trpc.moox.factor.MemberRanges
-	126, // 129: trpc.moox.factor.ReportRecalcProgressRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	95,  // 130: trpc.moox.factor.GetTaskParamsReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	126, // 131: trpc.moox.factor.GetTaskParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	79,  // 132: trpc.moox.factor.GetTaskParamsRsp.members:type_name -> trpc.moox.factor.MemberParamState
-	95,  // 133: trpc.moox.factor.GetUdfModuleReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	126, // 134: trpc.moox.factor.GetUdfModuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	74,  // 135: trpc.moox.factor.PreviewFactorReq.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
-	74,  // 136: trpc.moox.factor.MemberParams.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
-	74,  // 137: trpc.moox.factor.MemberParamState.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
-	16,  // 138: trpc.moox.factor.FactorMgr.CreateFactorTask:input_type -> trpc.moox.factor.CreateFactorTaskReq
-	18,  // 139: trpc.moox.factor.FactorMgr.SetFactorTaskStatus:input_type -> trpc.moox.factor.SetFactorTaskStatusReq
-	20,  // 140: trpc.moox.factor.FactorMgr.DeleteFactorTask:input_type -> trpc.moox.factor.DeleteFactorTaskReq
-	22,  // 141: trpc.moox.factor.FactorMgr.GetFactorTask:input_type -> trpc.moox.factor.GetFactorTaskReq
-	24,  // 142: trpc.moox.factor.FactorMgr.ListFactorTasks:input_type -> trpc.moox.factor.ListFactorTasksReq
-	26,  // 143: trpc.moox.factor.FactorMgr.CreateFactor:input_type -> trpc.moox.factor.CreateFactorReq
-	28,  // 144: trpc.moox.factor.FactorMgr.UpdateFactor:input_type -> trpc.moox.factor.UpdateFactorReq
-	36,  // 145: trpc.moox.factor.FactorMgr.DeleteFactor:input_type -> trpc.moox.factor.DeleteFactorReq
-	38,  // 146: trpc.moox.factor.FactorMgr.GetFactor:input_type -> trpc.moox.factor.GetFactorReq
-	30,  // 147: trpc.moox.factor.FactorMgr.AddTaskMember:input_type -> trpc.moox.factor.AddTaskMemberReq
-	32,  // 148: trpc.moox.factor.FactorMgr.RemoveTaskMember:input_type -> trpc.moox.factor.RemoveTaskMemberReq
-	34,  // 149: trpc.moox.factor.FactorMgr.SetTaskMemberStatus:input_type -> trpc.moox.factor.SetTaskMemberStatusReq
-	40,  // 150: trpc.moox.factor.FactorMgr.ListFactors:input_type -> trpc.moox.factor.ListFactorsReq
-	42,  // 151: trpc.moox.factor.FactorMgr.RecalcFactors:input_type -> trpc.moox.factor.RecalcFactorsReq
-	44,  // 152: trpc.moox.factor.FactorMgr.ListRecalcJobs:input_type -> trpc.moox.factor.ListRecalcJobsReq
-	46,  // 153: trpc.moox.factor.FactorMgr.GetRecalcJob:input_type -> trpc.moox.factor.GetRecalcJobReq
-	48,  // 154: trpc.moox.factor.FactorMgr.CancelRecalcJob:input_type -> trpc.moox.factor.CancelRecalcJobReq
-	52,  // 155: trpc.moox.factor.FactorMgr.GetStatus:input_type -> trpc.moox.factor.GetStatusReq
-	54,  // 156: trpc.moox.factor.FactorMgr.ValidateFactorSpec:input_type -> trpc.moox.factor.ValidateFactorSpecReq
-	57,  // 157: trpc.moox.factor.FactorMgr.PreviewFactor:input_type -> trpc.moox.factor.PreviewFactorReq
-	62,  // 158: trpc.moox.factor.FactorMgr.ListFactorFunctions:input_type -> trpc.moox.factor.ListFactorFunctionsReq
-	104, // 159: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:input_type -> trpc.moox.factor.NotifyPeriodsFilledReq
-	64,  // 160: trpc.moox.factor.FactorMgr.ListFactorCategories:input_type -> trpc.moox.factor.ListFactorCategoriesReq
-	66,  // 161: trpc.moox.factor.FactorMgr.UpsertFactorCategory:input_type -> trpc.moox.factor.UpsertFactorCategoryReq
-	68,  // 162: trpc.moox.factor.FactorMgr.DeleteFactorCategory:input_type -> trpc.moox.factor.DeleteFactorCategoryReq
-	70,  // 163: trpc.moox.factor.FactorMgr.SetFactorCategory:input_type -> trpc.moox.factor.SetFactorCategoryReq
-	72,  // 164: trpc.moox.factor.FactorMgr.BindFactorTask:input_type -> trpc.moox.factor.BindFactorTaskReq
-	76,  // 165: trpc.moox.factor.FactorMgr.SubmitFactorParams:input_type -> trpc.moox.factor.SubmitFactorParamsReq
-	80,  // 166: trpc.moox.factor.FactorMgr.GetFactorParams:input_type -> trpc.moox.factor.GetFactorParamsReq
-	82,  // 167: trpc.moox.factor.FactorMgr.PublishUdf:input_type -> trpc.moox.factor.PublishUdfReq
-	86,  // 168: trpc.moox.factor.FactorMgr.ListUdfs:input_type -> trpc.moox.factor.ListUdfsReq
-	88,  // 169: trpc.moox.factor.FactorMgr.GetUdf:input_type -> trpc.moox.factor.GetUdfReq
-	90,  // 170: trpc.moox.factor.FactorMgr.ActivateUdf:input_type -> trpc.moox.factor.ActivateUdfReq
-	98,  // 171: trpc.moox.factor.FactorEngine.SyncEngineCatalog:input_type -> trpc.moox.factor.SyncEngineCatalogReq
-	106, // 172: trpc.moox.factor.FactorEngine.EngineHeartbeat:input_type -> trpc.moox.factor.EngineHeartbeatReq
-	108, // 173: trpc.moox.factor.FactorEngine.PullRecalcJob:input_type -> trpc.moox.factor.PullRecalcJobReq
-	110, // 174: trpc.moox.factor.FactorEngine.ReportRecalcProgress:input_type -> trpc.moox.factor.ReportRecalcProgressReq
-	112, // 175: trpc.moox.factor.FactorEngine.GetTaskParams:input_type -> trpc.moox.factor.GetTaskParamsReq
-	114, // 176: trpc.moox.factor.FactorEngine.GetUdfModule:input_type -> trpc.moox.factor.GetUdfModuleReq
-	17,  // 177: trpc.moox.factor.FactorMgr.CreateFactorTask:output_type -> trpc.moox.factor.CreateFactorTaskRsp
-	19,  // 178: trpc.moox.factor.FactorMgr.SetFactorTaskStatus:output_type -> trpc.moox.factor.SetFactorTaskStatusRsp
-	21,  // 179: trpc.moox.factor.FactorMgr.DeleteFactorTask:output_type -> trpc.moox.factor.DeleteFactorTaskRsp
-	23,  // 180: trpc.moox.factor.FactorMgr.GetFactorTask:output_type -> trpc.moox.factor.GetFactorTaskRsp
-	25,  // 181: trpc.moox.factor.FactorMgr.ListFactorTasks:output_type -> trpc.moox.factor.ListFactorTasksRsp
-	27,  // 182: trpc.moox.factor.FactorMgr.CreateFactor:output_type -> trpc.moox.factor.CreateFactorRsp
-	29,  // 183: trpc.moox.factor.FactorMgr.UpdateFactor:output_type -> trpc.moox.factor.UpdateFactorRsp
-	37,  // 184: trpc.moox.factor.FactorMgr.DeleteFactor:output_type -> trpc.moox.factor.DeleteFactorRsp
-	39,  // 185: trpc.moox.factor.FactorMgr.GetFactor:output_type -> trpc.moox.factor.GetFactorRsp
-	31,  // 186: trpc.moox.factor.FactorMgr.AddTaskMember:output_type -> trpc.moox.factor.AddTaskMemberRsp
-	33,  // 187: trpc.moox.factor.FactorMgr.RemoveTaskMember:output_type -> trpc.moox.factor.RemoveTaskMemberRsp
-	35,  // 188: trpc.moox.factor.FactorMgr.SetTaskMemberStatus:output_type -> trpc.moox.factor.SetTaskMemberStatusRsp
-	41,  // 189: trpc.moox.factor.FactorMgr.ListFactors:output_type -> trpc.moox.factor.ListFactorsRsp
-	43,  // 190: trpc.moox.factor.FactorMgr.RecalcFactors:output_type -> trpc.moox.factor.RecalcFactorsRsp
-	45,  // 191: trpc.moox.factor.FactorMgr.ListRecalcJobs:output_type -> trpc.moox.factor.ListRecalcJobsRsp
-	47,  // 192: trpc.moox.factor.FactorMgr.GetRecalcJob:output_type -> trpc.moox.factor.GetRecalcJobRsp
-	49,  // 193: trpc.moox.factor.FactorMgr.CancelRecalcJob:output_type -> trpc.moox.factor.CancelRecalcJobRsp
-	53,  // 194: trpc.moox.factor.FactorMgr.GetStatus:output_type -> trpc.moox.factor.GetStatusRsp
-	56,  // 195: trpc.moox.factor.FactorMgr.ValidateFactorSpec:output_type -> trpc.moox.factor.ValidateFactorSpecRsp
-	59,  // 196: trpc.moox.factor.FactorMgr.PreviewFactor:output_type -> trpc.moox.factor.PreviewFactorRsp
-	63,  // 197: trpc.moox.factor.FactorMgr.ListFactorFunctions:output_type -> trpc.moox.factor.ListFactorFunctionsRsp
-	105, // 198: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:output_type -> trpc.moox.factor.NotifyPeriodsFilledRsp
-	65,  // 199: trpc.moox.factor.FactorMgr.ListFactorCategories:output_type -> trpc.moox.factor.ListFactorCategoriesRsp
-	67,  // 200: trpc.moox.factor.FactorMgr.UpsertFactorCategory:output_type -> trpc.moox.factor.UpsertFactorCategoryRsp
-	69,  // 201: trpc.moox.factor.FactorMgr.DeleteFactorCategory:output_type -> trpc.moox.factor.DeleteFactorCategoryRsp
-	71,  // 202: trpc.moox.factor.FactorMgr.SetFactorCategory:output_type -> trpc.moox.factor.SetFactorCategoryRsp
-	73,  // 203: trpc.moox.factor.FactorMgr.BindFactorTask:output_type -> trpc.moox.factor.BindFactorTaskRsp
-	78,  // 204: trpc.moox.factor.FactorMgr.SubmitFactorParams:output_type -> trpc.moox.factor.SubmitFactorParamsRsp
-	81,  // 205: trpc.moox.factor.FactorMgr.GetFactorParams:output_type -> trpc.moox.factor.GetFactorParamsRsp
-	83,  // 206: trpc.moox.factor.FactorMgr.PublishUdf:output_type -> trpc.moox.factor.PublishUdfRsp
-	87,  // 207: trpc.moox.factor.FactorMgr.ListUdfs:output_type -> trpc.moox.factor.ListUdfsRsp
-	89,  // 208: trpc.moox.factor.FactorMgr.GetUdf:output_type -> trpc.moox.factor.GetUdfRsp
-	93,  // 209: trpc.moox.factor.FactorMgr.ActivateUdf:output_type -> trpc.moox.factor.ActivateUdfRsp
-	99,  // 210: trpc.moox.factor.FactorEngine.SyncEngineCatalog:output_type -> trpc.moox.factor.SyncEngineCatalogRsp
-	107, // 211: trpc.moox.factor.FactorEngine.EngineHeartbeat:output_type -> trpc.moox.factor.EngineHeartbeatRsp
-	109, // 212: trpc.moox.factor.FactorEngine.PullRecalcJob:output_type -> trpc.moox.factor.PullRecalcJobRsp
-	111, // 213: trpc.moox.factor.FactorEngine.ReportRecalcProgress:output_type -> trpc.moox.factor.ReportRecalcProgressRsp
-	113, // 214: trpc.moox.factor.FactorEngine.GetTaskParams:output_type -> trpc.moox.factor.GetTaskParamsRsp
-	115, // 215: trpc.moox.factor.FactorEngine.GetUdfModule:output_type -> trpc.moox.factor.GetUdfModuleRsp
-	177, // [177:216] is the sub-list for method output_type
-	138, // [138:177] is the sub-list for method input_type
-	138, // [138:138] is the sub-list for extension type_name
-	138, // [138:138] is the sub-list for extension extendee
-	0,   // [0:138] is the sub-list for field type_name
+	8,   // 10: trpc.moox.factor.PeriodDetail.shared_failed_series:type_name -> trpc.moox.factor.SeriesRef
+	9,   // 11: trpc.moox.factor.TaskRunSummary.factors:type_name -> trpc.moox.factor.FactorPeriodState
+	0,   // 12: trpc.moox.factor.FactorTaskInfo.factor_task:type_name -> trpc.moox.factor.FactorTask
+	7,   // 13: trpc.moox.factor.FactorTaskInfo.members:type_name -> trpc.moox.factor.FactorMember
+	11,  // 14: trpc.moox.factor.FactorTaskInfo.last_run:type_name -> trpc.moox.factor.TaskRunSummary
+	15,  // 15: trpc.moox.factor.RecalcJob.default_filled:type_name -> trpc.moox.factor.MemberRanges
+	14,  // 16: trpc.moox.factor.MemberRanges.ranges:type_name -> trpc.moox.factor.TimeRange
+	0,   // 17: trpc.moox.factor.CreateFactorTaskReq.factor_task:type_name -> trpc.moox.factor.FactorTask
+	126, // 18: trpc.moox.factor.CreateFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 19: trpc.moox.factor.CreateFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
+	126, // 20: trpc.moox.factor.SetFactorTaskStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 21: trpc.moox.factor.SetFactorTaskStatusRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
+	126, // 22: trpc.moox.factor.DeleteFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	126, // 23: trpc.moox.factor.GetFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 24: trpc.moox.factor.GetFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
+	7,   // 25: trpc.moox.factor.GetFactorTaskRsp.members:type_name -> trpc.moox.factor.FactorMember
+	11,  // 26: trpc.moox.factor.GetFactorTaskRsp.last_run:type_name -> trpc.moox.factor.TaskRunSummary
+	127, // 27: trpc.moox.factor.ListFactorTasksReq.page:type_name -> trpc.moox.common.Page
+	126, // 28: trpc.moox.factor.ListFactorTasksRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	12,  // 29: trpc.moox.factor.ListFactorTasksRsp.factor_tasks:type_name -> trpc.moox.factor.FactorTaskInfo
+	128, // 30: trpc.moox.factor.ListFactorTasksRsp.page_result:type_name -> trpc.moox.common.PageResult
+	3,   // 31: trpc.moox.factor.CreateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
+	126, // 32: trpc.moox.factor.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 33: trpc.moox.factor.CreateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
+	3,   // 34: trpc.moox.factor.UpdateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
+	126, // 35: trpc.moox.factor.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 36: trpc.moox.factor.UpdateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
+	118, // 37: trpc.moox.factor.AddTaskMemberReq.params:type_name -> trpc.moox.factor.AddTaskMemberReq.ParamsEntry
+	126, // 38: trpc.moox.factor.AddTaskMemberRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 39: trpc.moox.factor.AddTaskMemberRsp.member:type_name -> trpc.moox.factor.FactorMember
+	126, // 40: trpc.moox.factor.RemoveTaskMemberRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	126, // 41: trpc.moox.factor.SetTaskMemberStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 42: trpc.moox.factor.SetTaskMemberStatusRsp.member:type_name -> trpc.moox.factor.FactorMember
+	126, // 43: trpc.moox.factor.DeleteFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	126, // 44: trpc.moox.factor.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 45: trpc.moox.factor.GetFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
+	5,   // 46: trpc.moox.factor.GetFactorRsp.usages:type_name -> trpc.moox.factor.FactorUsage
+	127, // 47: trpc.moox.factor.ListFactorsReq.page:type_name -> trpc.moox.common.Page
+	126, // 48: trpc.moox.factor.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,   // 49: trpc.moox.factor.ListFactorsRsp.factors:type_name -> trpc.moox.factor.FactorInfo
+	128, // 50: trpc.moox.factor.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	126, // 51: trpc.moox.factor.RecalcFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 52: trpc.moox.factor.RecalcFactorsRsp.job:type_name -> trpc.moox.factor.RecalcJob
+	127, // 53: trpc.moox.factor.ListRecalcJobsReq.page:type_name -> trpc.moox.common.Page
+	126, // 54: trpc.moox.factor.ListRecalcJobsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 55: trpc.moox.factor.ListRecalcJobsRsp.jobs:type_name -> trpc.moox.factor.RecalcJob
+	128, // 56: trpc.moox.factor.ListRecalcJobsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	126, // 57: trpc.moox.factor.GetRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 58: trpc.moox.factor.GetRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
+	126, // 59: trpc.moox.factor.CancelRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 60: trpc.moox.factor.CancelRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
+	126, // 61: trpc.moox.factor.GetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	50,  // 62: trpc.moox.factor.GetStatusRsp.runners:type_name -> trpc.moox.factor.FactorRunnerStatus
+	11,  // 63: trpc.moox.factor.GetStatusRsp.recent_runs:type_name -> trpc.moox.factor.TaskRunSummary
+	51,  // 64: trpc.moox.factor.GetStatusRsp.engine:type_name -> trpc.moox.factor.EngineInfo
+	101, // 65: trpc.moox.factor.GetStatusRsp.lifecycle:type_name -> trpc.moox.factor.EngineLifecycleStatus
+	119, // 66: trpc.moox.factor.ValidateFactorSpecReq.udf_versions:type_name -> trpc.moox.factor.ValidateFactorSpecReq.UdfVersionsEntry
+	126, // 67: trpc.moox.factor.ValidateFactorSpecRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	55,  // 68: trpc.moox.factor.ValidateFactorSpecRsp.diagnostic:type_name -> trpc.moox.factor.FactorSpecDiagnostic
+	1,   // 69: trpc.moox.factor.ValidateFactorSpecRsp.params:type_name -> trpc.moox.factor.FactorParamDecl
+	120, // 70: trpc.moox.factor.PreviewFactorReq.params:type_name -> trpc.moox.factor.PreviewFactorReq.ParamsEntry
+	121, // 71: trpc.moox.factor.PreviewFactorReq.udf_versions:type_name -> trpc.moox.factor.PreviewFactorReq.UdfVersionsEntry
+	126, // 72: trpc.moox.factor.PreviewFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	58,  // 73: trpc.moox.factor.PreviewFactorRsp.rows:type_name -> trpc.moox.factor.PreviewRow
+	60,  // 74: trpc.moox.factor.FactorFunction.args:type_name -> trpc.moox.factor.FactorFunctionArg
+	126, // 75: trpc.moox.factor.ListFactorFunctionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	61,  // 76: trpc.moox.factor.ListFactorFunctionsRsp.functions:type_name -> trpc.moox.factor.FactorFunction
+	126, // 77: trpc.moox.factor.ListFactorCategoriesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 78: trpc.moox.factor.ListFactorCategoriesRsp.categories:type_name -> trpc.moox.factor.FactorCategory
+	2,   // 79: trpc.moox.factor.UpsertFactorCategoryReq.category:type_name -> trpc.moox.factor.FactorCategory
+	126, // 80: trpc.moox.factor.UpsertFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	2,   // 81: trpc.moox.factor.UpsertFactorCategoryRsp.category:type_name -> trpc.moox.factor.FactorCategory
+	126, // 82: trpc.moox.factor.DeleteFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	126, // 83: trpc.moox.factor.SetFactorCategoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	3,   // 84: trpc.moox.factor.SetFactorCategoryRsp.factor:type_name -> trpc.moox.factor.FactorDef
+	126, // 85: trpc.moox.factor.BindFactorTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 86: trpc.moox.factor.BindFactorTaskRsp.factor_task:type_name -> trpc.moox.factor.FactorTask
+	122, // 87: trpc.moox.factor.ParamValue.overrides:type_name -> trpc.moox.factor.ParamValue.OverridesEntry
+	123, // 88: trpc.moox.factor.MemberParams.params:type_name -> trpc.moox.factor.MemberParams.ParamsEntry
+	75,  // 89: trpc.moox.factor.SubmitFactorParamsReq.members:type_name -> trpc.moox.factor.MemberParams
+	126, // 90: trpc.moox.factor.SubmitFactorParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	77,  // 91: trpc.moox.factor.SubmitFactorParamsRsp.results:type_name -> trpc.moox.factor.MemberSubmitResult
+	124, // 92: trpc.moox.factor.MemberParamState.params:type_name -> trpc.moox.factor.MemberParamState.ParamsEntry
+	126, // 93: trpc.moox.factor.GetFactorParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	79,  // 94: trpc.moox.factor.GetFactorParamsRsp.members:type_name -> trpc.moox.factor.MemberParamState
+	126, // 95: trpc.moox.factor.PublishUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	84,  // 96: trpc.moox.factor.UdfInfo.versions:type_name -> trpc.moox.factor.UdfVersionInfo
+	94,  // 97: trpc.moox.factor.UdfInfo.modules:type_name -> trpc.moox.factor.UdfModuleStatus
+	126, // 98: trpc.moox.factor.ListUdfsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 99: trpc.moox.factor.ListUdfsRsp.udfs:type_name -> trpc.moox.factor.UdfInfo
+	126, // 100: trpc.moox.factor.GetUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 101: trpc.moox.factor.GetUdfRsp.udf:type_name -> trpc.moox.factor.UdfInfo
+	126, // 102: trpc.moox.factor.ActivateUdfRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	91,  // 103: trpc.moox.factor.ActivateUdfRsp.impacts:type_name -> trpc.moox.factor.UdfImpact
+	92,  // 104: trpc.moox.factor.ActivateUdfRsp.prerequisites:type_name -> trpc.moox.factor.UdfPrerequisite
+	3,   // 105: trpc.moox.factor.EngineMember.factor:type_name -> trpc.moox.factor.FactorDef
+	125, // 106: trpc.moox.factor.EngineMember.params:type_name -> trpc.moox.factor.EngineMember.ParamsEntry
+	0,   // 107: trpc.moox.factor.EngineTask.factor_task:type_name -> trpc.moox.factor.FactorTask
+	96,  // 108: trpc.moox.factor.EngineTask.members:type_name -> trpc.moox.factor.EngineMember
+	95,  // 109: trpc.moox.factor.SyncEngineCatalogReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	126, // 110: trpc.moox.factor.SyncEngineCatalogRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	97,  // 111: trpc.moox.factor.SyncEngineCatalogRsp.tasks:type_name -> trpc.moox.factor.EngineTask
+	50,  // 112: trpc.moox.factor.EngineRuntimeStatus.runners:type_name -> trpc.moox.factor.FactorRunnerStatus
+	11,  // 113: trpc.moox.factor.EngineRuntimeStatus.recent_runs:type_name -> trpc.moox.factor.TaskRunSummary
+	102, // 114: trpc.moox.factor.EngineRuntimeStatus.watermarks:type_name -> trpc.moox.factor.TaskWatermarkStatus
+	94,  // 115: trpc.moox.factor.EngineRuntimeStatus.udf_modules:type_name -> trpc.moox.factor.UdfModuleStatus
+	101, // 116: trpc.moox.factor.EngineRuntimeStatus.lifecycle:type_name -> trpc.moox.factor.EngineLifecycleStatus
+	8,   // 117: trpc.moox.factor.PeriodsFilled.absent_series:type_name -> trpc.moox.factor.SeriesRef
+	103, // 118: trpc.moox.factor.NotifyPeriodsFilledReq.filled:type_name -> trpc.moox.factor.PeriodsFilled
+	126, // 119: trpc.moox.factor.NotifyPeriodsFilledRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	95,  // 120: trpc.moox.factor.EngineHeartbeatReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	100, // 121: trpc.moox.factor.EngineHeartbeatReq.status:type_name -> trpc.moox.factor.EngineRuntimeStatus
+	126, // 122: trpc.moox.factor.EngineHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	103, // 123: trpc.moox.factor.EngineHeartbeatRsp.filled:type_name -> trpc.moox.factor.PeriodsFilled
+	95,  // 124: trpc.moox.factor.PullRecalcJobReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	126, // 125: trpc.moox.factor.PullRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	13,  // 126: trpc.moox.factor.PullRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
+	97,  // 127: trpc.moox.factor.PullRecalcJobRsp.task:type_name -> trpc.moox.factor.EngineTask
+	95,  // 128: trpc.moox.factor.ReportRecalcProgressReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	15,  // 129: trpc.moox.factor.ReportRecalcProgressReq.default_filled:type_name -> trpc.moox.factor.MemberRanges
+	126, // 130: trpc.moox.factor.ReportRecalcProgressRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	95,  // 131: trpc.moox.factor.GetTaskParamsReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	126, // 132: trpc.moox.factor.GetTaskParamsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	79,  // 133: trpc.moox.factor.GetTaskParamsRsp.members:type_name -> trpc.moox.factor.MemberParamState
+	95,  // 134: trpc.moox.factor.GetUdfModuleReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	126, // 135: trpc.moox.factor.GetUdfModuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 136: trpc.moox.factor.PreviewFactorReq.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
+	74,  // 137: trpc.moox.factor.MemberParams.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
+	74,  // 138: trpc.moox.factor.MemberParamState.ParamsEntry.value:type_name -> trpc.moox.factor.ParamValue
+	16,  // 139: trpc.moox.factor.FactorMgr.CreateFactorTask:input_type -> trpc.moox.factor.CreateFactorTaskReq
+	18,  // 140: trpc.moox.factor.FactorMgr.SetFactorTaskStatus:input_type -> trpc.moox.factor.SetFactorTaskStatusReq
+	20,  // 141: trpc.moox.factor.FactorMgr.DeleteFactorTask:input_type -> trpc.moox.factor.DeleteFactorTaskReq
+	22,  // 142: trpc.moox.factor.FactorMgr.GetFactorTask:input_type -> trpc.moox.factor.GetFactorTaskReq
+	24,  // 143: trpc.moox.factor.FactorMgr.ListFactorTasks:input_type -> trpc.moox.factor.ListFactorTasksReq
+	26,  // 144: trpc.moox.factor.FactorMgr.CreateFactor:input_type -> trpc.moox.factor.CreateFactorReq
+	28,  // 145: trpc.moox.factor.FactorMgr.UpdateFactor:input_type -> trpc.moox.factor.UpdateFactorReq
+	36,  // 146: trpc.moox.factor.FactorMgr.DeleteFactor:input_type -> trpc.moox.factor.DeleteFactorReq
+	38,  // 147: trpc.moox.factor.FactorMgr.GetFactor:input_type -> trpc.moox.factor.GetFactorReq
+	30,  // 148: trpc.moox.factor.FactorMgr.AddTaskMember:input_type -> trpc.moox.factor.AddTaskMemberReq
+	32,  // 149: trpc.moox.factor.FactorMgr.RemoveTaskMember:input_type -> trpc.moox.factor.RemoveTaskMemberReq
+	34,  // 150: trpc.moox.factor.FactorMgr.SetTaskMemberStatus:input_type -> trpc.moox.factor.SetTaskMemberStatusReq
+	40,  // 151: trpc.moox.factor.FactorMgr.ListFactors:input_type -> trpc.moox.factor.ListFactorsReq
+	42,  // 152: trpc.moox.factor.FactorMgr.RecalcFactors:input_type -> trpc.moox.factor.RecalcFactorsReq
+	44,  // 153: trpc.moox.factor.FactorMgr.ListRecalcJobs:input_type -> trpc.moox.factor.ListRecalcJobsReq
+	46,  // 154: trpc.moox.factor.FactorMgr.GetRecalcJob:input_type -> trpc.moox.factor.GetRecalcJobReq
+	48,  // 155: trpc.moox.factor.FactorMgr.CancelRecalcJob:input_type -> trpc.moox.factor.CancelRecalcJobReq
+	52,  // 156: trpc.moox.factor.FactorMgr.GetStatus:input_type -> trpc.moox.factor.GetStatusReq
+	54,  // 157: trpc.moox.factor.FactorMgr.ValidateFactorSpec:input_type -> trpc.moox.factor.ValidateFactorSpecReq
+	57,  // 158: trpc.moox.factor.FactorMgr.PreviewFactor:input_type -> trpc.moox.factor.PreviewFactorReq
+	62,  // 159: trpc.moox.factor.FactorMgr.ListFactorFunctions:input_type -> trpc.moox.factor.ListFactorFunctionsReq
+	104, // 160: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:input_type -> trpc.moox.factor.NotifyPeriodsFilledReq
+	64,  // 161: trpc.moox.factor.FactorMgr.ListFactorCategories:input_type -> trpc.moox.factor.ListFactorCategoriesReq
+	66,  // 162: trpc.moox.factor.FactorMgr.UpsertFactorCategory:input_type -> trpc.moox.factor.UpsertFactorCategoryReq
+	68,  // 163: trpc.moox.factor.FactorMgr.DeleteFactorCategory:input_type -> trpc.moox.factor.DeleteFactorCategoryReq
+	70,  // 164: trpc.moox.factor.FactorMgr.SetFactorCategory:input_type -> trpc.moox.factor.SetFactorCategoryReq
+	72,  // 165: trpc.moox.factor.FactorMgr.BindFactorTask:input_type -> trpc.moox.factor.BindFactorTaskReq
+	76,  // 166: trpc.moox.factor.FactorMgr.SubmitFactorParams:input_type -> trpc.moox.factor.SubmitFactorParamsReq
+	80,  // 167: trpc.moox.factor.FactorMgr.GetFactorParams:input_type -> trpc.moox.factor.GetFactorParamsReq
+	82,  // 168: trpc.moox.factor.FactorMgr.PublishUdf:input_type -> trpc.moox.factor.PublishUdfReq
+	86,  // 169: trpc.moox.factor.FactorMgr.ListUdfs:input_type -> trpc.moox.factor.ListUdfsReq
+	88,  // 170: trpc.moox.factor.FactorMgr.GetUdf:input_type -> trpc.moox.factor.GetUdfReq
+	90,  // 171: trpc.moox.factor.FactorMgr.ActivateUdf:input_type -> trpc.moox.factor.ActivateUdfReq
+	98,  // 172: trpc.moox.factor.FactorEngine.SyncEngineCatalog:input_type -> trpc.moox.factor.SyncEngineCatalogReq
+	106, // 173: trpc.moox.factor.FactorEngine.EngineHeartbeat:input_type -> trpc.moox.factor.EngineHeartbeatReq
+	108, // 174: trpc.moox.factor.FactorEngine.PullRecalcJob:input_type -> trpc.moox.factor.PullRecalcJobReq
+	110, // 175: trpc.moox.factor.FactorEngine.ReportRecalcProgress:input_type -> trpc.moox.factor.ReportRecalcProgressReq
+	112, // 176: trpc.moox.factor.FactorEngine.GetTaskParams:input_type -> trpc.moox.factor.GetTaskParamsReq
+	114, // 177: trpc.moox.factor.FactorEngine.GetUdfModule:input_type -> trpc.moox.factor.GetUdfModuleReq
+	17,  // 178: trpc.moox.factor.FactorMgr.CreateFactorTask:output_type -> trpc.moox.factor.CreateFactorTaskRsp
+	19,  // 179: trpc.moox.factor.FactorMgr.SetFactorTaskStatus:output_type -> trpc.moox.factor.SetFactorTaskStatusRsp
+	21,  // 180: trpc.moox.factor.FactorMgr.DeleteFactorTask:output_type -> trpc.moox.factor.DeleteFactorTaskRsp
+	23,  // 181: trpc.moox.factor.FactorMgr.GetFactorTask:output_type -> trpc.moox.factor.GetFactorTaskRsp
+	25,  // 182: trpc.moox.factor.FactorMgr.ListFactorTasks:output_type -> trpc.moox.factor.ListFactorTasksRsp
+	27,  // 183: trpc.moox.factor.FactorMgr.CreateFactor:output_type -> trpc.moox.factor.CreateFactorRsp
+	29,  // 184: trpc.moox.factor.FactorMgr.UpdateFactor:output_type -> trpc.moox.factor.UpdateFactorRsp
+	37,  // 185: trpc.moox.factor.FactorMgr.DeleteFactor:output_type -> trpc.moox.factor.DeleteFactorRsp
+	39,  // 186: trpc.moox.factor.FactorMgr.GetFactor:output_type -> trpc.moox.factor.GetFactorRsp
+	31,  // 187: trpc.moox.factor.FactorMgr.AddTaskMember:output_type -> trpc.moox.factor.AddTaskMemberRsp
+	33,  // 188: trpc.moox.factor.FactorMgr.RemoveTaskMember:output_type -> trpc.moox.factor.RemoveTaskMemberRsp
+	35,  // 189: trpc.moox.factor.FactorMgr.SetTaskMemberStatus:output_type -> trpc.moox.factor.SetTaskMemberStatusRsp
+	41,  // 190: trpc.moox.factor.FactorMgr.ListFactors:output_type -> trpc.moox.factor.ListFactorsRsp
+	43,  // 191: trpc.moox.factor.FactorMgr.RecalcFactors:output_type -> trpc.moox.factor.RecalcFactorsRsp
+	45,  // 192: trpc.moox.factor.FactorMgr.ListRecalcJobs:output_type -> trpc.moox.factor.ListRecalcJobsRsp
+	47,  // 193: trpc.moox.factor.FactorMgr.GetRecalcJob:output_type -> trpc.moox.factor.GetRecalcJobRsp
+	49,  // 194: trpc.moox.factor.FactorMgr.CancelRecalcJob:output_type -> trpc.moox.factor.CancelRecalcJobRsp
+	53,  // 195: trpc.moox.factor.FactorMgr.GetStatus:output_type -> trpc.moox.factor.GetStatusRsp
+	56,  // 196: trpc.moox.factor.FactorMgr.ValidateFactorSpec:output_type -> trpc.moox.factor.ValidateFactorSpecRsp
+	59,  // 197: trpc.moox.factor.FactorMgr.PreviewFactor:output_type -> trpc.moox.factor.PreviewFactorRsp
+	63,  // 198: trpc.moox.factor.FactorMgr.ListFactorFunctions:output_type -> trpc.moox.factor.ListFactorFunctionsRsp
+	105, // 199: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:output_type -> trpc.moox.factor.NotifyPeriodsFilledRsp
+	65,  // 200: trpc.moox.factor.FactorMgr.ListFactorCategories:output_type -> trpc.moox.factor.ListFactorCategoriesRsp
+	67,  // 201: trpc.moox.factor.FactorMgr.UpsertFactorCategory:output_type -> trpc.moox.factor.UpsertFactorCategoryRsp
+	69,  // 202: trpc.moox.factor.FactorMgr.DeleteFactorCategory:output_type -> trpc.moox.factor.DeleteFactorCategoryRsp
+	71,  // 203: trpc.moox.factor.FactorMgr.SetFactorCategory:output_type -> trpc.moox.factor.SetFactorCategoryRsp
+	73,  // 204: trpc.moox.factor.FactorMgr.BindFactorTask:output_type -> trpc.moox.factor.BindFactorTaskRsp
+	78,  // 205: trpc.moox.factor.FactorMgr.SubmitFactorParams:output_type -> trpc.moox.factor.SubmitFactorParamsRsp
+	81,  // 206: trpc.moox.factor.FactorMgr.GetFactorParams:output_type -> trpc.moox.factor.GetFactorParamsRsp
+	83,  // 207: trpc.moox.factor.FactorMgr.PublishUdf:output_type -> trpc.moox.factor.PublishUdfRsp
+	87,  // 208: trpc.moox.factor.FactorMgr.ListUdfs:output_type -> trpc.moox.factor.ListUdfsRsp
+	89,  // 209: trpc.moox.factor.FactorMgr.GetUdf:output_type -> trpc.moox.factor.GetUdfRsp
+	93,  // 210: trpc.moox.factor.FactorMgr.ActivateUdf:output_type -> trpc.moox.factor.ActivateUdfRsp
+	99,  // 211: trpc.moox.factor.FactorEngine.SyncEngineCatalog:output_type -> trpc.moox.factor.SyncEngineCatalogRsp
+	107, // 212: trpc.moox.factor.FactorEngine.EngineHeartbeat:output_type -> trpc.moox.factor.EngineHeartbeatRsp
+	109, // 213: trpc.moox.factor.FactorEngine.PullRecalcJob:output_type -> trpc.moox.factor.PullRecalcJobRsp
+	111, // 214: trpc.moox.factor.FactorEngine.ReportRecalcProgress:output_type -> trpc.moox.factor.ReportRecalcProgressRsp
+	113, // 215: trpc.moox.factor.FactorEngine.GetTaskParams:output_type -> trpc.moox.factor.GetTaskParamsRsp
+	115, // 216: trpc.moox.factor.FactorEngine.GetUdfModule:output_type -> trpc.moox.factor.GetUdfModuleRsp
+	178, // [178:217] is the sub-list for method output_type
+	139, // [139:178] is the sub-list for method input_type
+	139, // [139:139] is the sub-list for extension type_name
+	139, // [139:139] is the sub-list for extension extendee
+	0,   // [0:139] is the sub-list for field type_name
 }
 
 func init() { file_factor_proto_init() }

@@ -129,6 +129,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 		})
 	}
 	detail := &factorpb.PeriodDetail{SourceDatasetId: marker.SourceDatasetID, Factors: detailFactors}
+	detail.SharedFailedSeries = shareFailedSeries(detailFactors)
 	universe, failed := normalizedSorted(marker.UniverseSubjects), normalizedSorted(marker.FailedSubjects)
 	universeSeries := normalizedSeries(marker.UniverseSeries)
 	if err := ValidatePeriodDetail(detail, universe, universeSeries, marker.Status); err != nil {
@@ -138,13 +139,80 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	if err != nil {
 		return nil, fmt.Errorf("编码因子周期明细: %w", err)
 	}
-	return &storagepb.DatasetPeriodCompletedMarker{
+	out := &storagepb.DatasetPeriodCompletedMarker{
 		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
 		UniverseSubjectIds: universe, FailedSubjects: failed,
 		UniverseSeries: seriesToMarker(universeSeries), FailedSeries: seriesToMarker(normalizedSeries(marker.FailedSeries)),
 		CauseEventId: marker.TriggerEventID, CompletedAt: timestamppb.New(marker.ComputedAt.UTC()),
 		DetailType: PeriodDetailType, Detail: raw,
-	}, nil
+	}
+	if size := proto.Size(out); size > MaxMarkerBytes {
+		return nil, fmt.Errorf("因子周期标记体积 %d 字节超过上限 %d 字节（成员 %d 个，期望标的 %d 个，期望序列 %d 条，失败序列 %d 条）：Storage 会拒绝这个超大的事件，请减少任务的成员数或标的数",
+			size, MaxMarkerBytes, len(detailFactors), len(universe), len(universeSeries), len(out.GetFailedSeries()))
+	}
+	return out, nil
+}
+
+// MaxMarkerBytes 是因子周期标记（连同明细）允许的体积上限。Storage 的事件上限默认 8 MiB（事件总线的 max_payload_bytes），
+// 周期完成事件另有信封与按标的、按序列的名单，这里留出余量，在写入前就给出清晰的错误，不等 Storage 拒绝。
+const MaxMarkerBytes = 6 << 20
+
+// shareFailedSeries 取所有成员失败序列的交集，从各成员的名单里去掉，作为周期级的一份返回（见 PeriodDetail.shared_failed_series）。
+// 永续整体晚到时每个成员的失败序列相同，不抽出来的话 230 个成员 × 数百序列会让标记超过事件体积上限。没有交集时返回 nil。
+func shareFailedSeries(factors []*factorpb.FactorPeriodState) []*factorpb.SeriesRef {
+	if len(factors) == 0 {
+		return nil
+	}
+	type key struct{ subject, tag string }
+	common := make(map[key]*factorpb.SeriesRef, len(factors[0].GetFailedSeries()))
+	for _, ref := range factors[0].GetFailedSeries() {
+		common[key{ref.GetSubjectId(), ref.GetSeriesTag()}] = ref
+	}
+	for _, state := range factors[1:] {
+		have := make(map[key]struct{}, len(state.GetFailedSeries()))
+		for _, ref := range state.GetFailedSeries() {
+			have[key{ref.GetSubjectId(), ref.GetSeriesTag()}] = struct{}{}
+		}
+		for k := range common {
+			if _, ok := have[k]; !ok {
+				delete(common, k)
+			}
+		}
+	}
+	if len(common) == 0 {
+		return nil
+	}
+	shared := make([]*factorpb.SeriesRef, 0, len(common))
+	for _, ref := range common {
+		shared = append(shared, ref)
+	}
+	sort.Slice(shared, func(i, j int) bool {
+		if shared[i].GetSubjectId() != shared[j].GetSubjectId() {
+			return shared[i].GetSubjectId() < shared[j].GetSubjectId()
+		}
+		return shared[i].GetSeriesTag() < shared[j].GetSeriesTag()
+	})
+	for _, state := range factors {
+		var rest []*factorpb.SeriesRef
+		for _, ref := range state.GetFailedSeries() {
+			if _, ok := common[key{ref.GetSubjectId(), ref.GetSeriesTag()}]; !ok {
+				rest = append(rest, ref)
+			}
+		}
+		state.FailedSeries = rest
+	}
+	return shared
+}
+
+// MemberFailedSeries 还原成员完整的失败序列：周期级共享的 shared_failed_series 加上该成员自己的 failed_series（去重、已排序）。
+// 读取 PeriodDetail 的地方一律用它取成员的失败序列，不要直接读 FactorPeriodState.failed_series。
+func MemberFailedSeries(detail *factorpb.PeriodDetail, state *factorpb.FactorPeriodState) []seriesset.Series {
+	refs := append(append([]*factorpb.SeriesRef(nil), detail.GetSharedFailedSeries()...), state.GetFailedSeries()...)
+	out := make([]seriesset.Series, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, seriesset.Series{SubjectID: ref.GetSubjectId(), SeriesTag: ref.GetSeriesTag()})
+	}
+	return normalizedSeries(out)
 }
 
 func normalizedSorted(values []string) []string {
