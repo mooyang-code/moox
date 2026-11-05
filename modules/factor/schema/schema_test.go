@@ -19,7 +19,6 @@ func TestFactorSchemaContainsExpectedTables(t *testing.T) {
 		"ux_t_factor_task_members_var",
 		"c_last_submitted_params TEXT NOT NULL DEFAULT '{}'",
 		"UNIQUE (c_space_id, c_name)",
-		"ux_t_factor_tasks_bound_instance",
 		"c_default_filled_json TEXT NOT NULL DEFAULT '{}'",
 		"FOREIGN KEY (c_category_id) REFERENCES t_factor_categories (c_category_id) ON DELETE RESTRICT",
 		"FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT",

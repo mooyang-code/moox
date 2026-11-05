@@ -19,10 +19,6 @@ CREATE TABLE IF NOT EXISTS t_factor_tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_factor_tasks_source ON t_factor_tasks (c_space_id, c_source_dataset_id, c_freq, c_status);
--- 关联实例唯一：空串（未关联）不参与
-CREATE UNIQUE INDEX IF NOT EXISTS ux_t_factor_tasks_bound_instance
-ON t_factor_tasks (c_bound_instance_id)
-WHERE c_bound_instance_id <> '';
 
 -- 因子分类（例如动量类、波动类）：只是元数据，用于因子库查找与按类展示
 CREATE TABLE IF NOT EXISTS t_factor_categories (
