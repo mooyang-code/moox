@@ -145,6 +145,15 @@ type FilledRange struct {
 	Frequency string
 	From, To  time.Time
 	Absent    []string
+	// AbsentSeries 是统一数据集上按序列确认行情源没有的（标的、series_tag）：只扣这一条序列，同标的的另一个市场照常算。
+	// 单序列数据集的确认缺失（series_tag 为空）仍用 Absent。
+	AbsentSeries []FilledSeries
+}
+
+// FilledSeries 是一条序列的身份：标的加 series_tag。
+type FilledSeries struct {
+	SubjectID string
+	SeriesTag string
 }
 
 func (b *Backfiller) now() time.Time {
@@ -728,7 +737,13 @@ func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
 			if to.After(item.To) {
 				to = item.To
 			}
-			filled = append(filled, FilledRange{SpaceID: job.SpaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, From: from, To: to, Absent: []string{absence.SubjectID}})
+			confirmed := FilledRange{SpaceID: job.SpaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, From: from, To: to}
+			if absence.SeriesTag != "" {
+				confirmed.AbsentSeries = []FilledSeries{{SubjectID: absence.SubjectID, SeriesTag: absence.SeriesTag}}
+			} else {
+				confirmed.Absent = []string{absence.SubjectID}
+			}
+			filled = append(filled, confirmed)
 		}
 	}
 	if len(filled) == 0 {

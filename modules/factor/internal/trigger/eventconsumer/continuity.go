@@ -51,7 +51,9 @@ type Continuity struct {
 
 type absentEntry struct {
 	subjects map[string]struct{}
-	until    time.Time
+	// series 是统一数据集里按序列确认没有的（标的、series_tag）：只扣这一条序列，同标的的另一个市场照常算。
+	series map[seriesset.Series]struct{}
+	until  time.Time
 }
 
 // NewContinuity 构造连续水位推进。
@@ -75,8 +77,9 @@ func NewContinuity(cfg ContinuityConfig) (*Continuity, error) {
 func (c *Continuity) States() []watermark.State { return c.cfg.Store.All() }
 
 // NoteAbsent 记下补采确认行情源没有的标的（补齐通知带来），30 分钟后过期。
-func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string) {
-	if len(subjects) == 0 || step <= 0 {
+// subjects 是按标的确认的（该标的的所有序列都没有），series 是按序列确认的（只有这一条序列没有）。
+func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Duration, subjects []string, series []seriesset.Series) {
+	if (len(subjects) == 0 && len(series) == 0) || step <= 0 {
 		return
 	}
 	c.mu.Lock()
@@ -90,15 +93,22 @@ func (c *Continuity) NoteAbsent(taskID string, from, to time.Time, step time.Dur
 		if entry.subjects == nil {
 			entry.subjects = map[string]struct{}{}
 		}
+		if entry.series == nil {
+			entry.series = map[seriesset.Series]struct{}{}
+		}
 		for _, subject := range subjects {
 			entry.subjects[strings.TrimSpace(subject)] = struct{}{}
+		}
+		for _, item := range series {
+			entry.series[seriesset.Series{SubjectID: strings.TrimSpace(item.SubjectID), SeriesTag: strings.TrimSpace(item.SeriesTag)}] = struct{}{}
 		}
 		entry.until = until
 		c.absent[taskID][period.Unix()] = entry
 	}
 }
 
-func (c *Continuity) absentAt(taskID string, period time.Time) map[string]struct{} {
+// absentAt 返回这一期确认没有的标的与序列（复制一份：NoteAbsent 在心跳线程里会修改同一个任务）。
+func (c *Continuity) absentAt(taskID string, period time.Time) (map[string]struct{}, map[seriesset.Series]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.cfg.Now()
@@ -107,12 +117,16 @@ func (c *Continuity) absentAt(taskID string, period time.Time) map[string]struct
 			delete(c.absent[taskID], key)
 		}
 	}
-	// 复制一份：NoteAbsent 在心跳线程里会修改同一个任务。
-	confirmed := make(map[string]struct{}, len(c.absent[taskID][period.Unix()].subjects))
-	for subject := range c.absent[taskID][period.Unix()].subjects {
-		confirmed[subject] = struct{}{}
+	entry := c.absent[taskID][period.Unix()]
+	subjects := make(map[string]struct{}, len(entry.subjects))
+	for subject := range entry.subjects {
+		subjects[subject] = struct{}{}
 	}
-	return confirmed
+	series := make(map[seriesset.Series]struct{}, len(entry.series))
+	for item := range entry.series {
+		series[item] = struct{}{}
+	}
+	return subjects, series
 }
 
 func (c *Continuity) ratioFor(taskID string) float64 {
@@ -266,11 +280,19 @@ func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope perio
 	if len(scope.universeSeries) == 0 {
 		return periodCounts{len(subjects), len(missing), len(subjects), len(missing)}, confirmed, out
 	}
+	// 按序列确认没有的（例如永续没有、现货有）只扣这一条序列；同标的的另一条序列仍在范围内。
+	_, absentSeries := c.absentAt(set.TaskID, period)
 	for _, item := range scope.universeSeries {
-		if _, absent := confirmed[strings.TrimSpace(item.SubjectID)]; !absent {
-			out.universeSeries = append(out.universeSeries, item)
+		if _, absent := confirmed[strings.TrimSpace(item.SubjectID)]; absent {
+			continue
 		}
+		if _, absent := absentSeries[item]; absent {
+			confirmed[item.SubjectID] = struct{}{} // 只用于“这一期有没有确认缺失”的判断与日志
+			continue
+		}
+		out.universeSeries = append(out.universeSeries, item)
 	}
+	out.universe = seriesSubjectList(out.universeSeries)
 	inScope := make(map[seriesset.Series]struct{}, len(out.universeSeries))
 	expectedByTag, missingByTag := map[string]int{}, map[string]int{}
 	for _, item := range out.universeSeries {
@@ -304,7 +326,7 @@ func (c *Continuity) scoped(set domain.FactorTask, period time.Time, scope perio
 
 // missing 返回该期期望的标的（该期事件的全集，扣除确认没有的）、未确认缺失的失败标的与确认没有的标的。
 func (c *Continuity) missing(set domain.FactorTask, period time.Time, universe, failed []string) ([]string, []string, map[string]struct{}) {
-	absent := c.absentAt(set.TaskID, period)
+	absent, _ := c.absentAt(set.TaskID, period)
 	var expected []string
 	confirmed := map[string]struct{}{}
 	for _, subject := range uniqueStrings(universe) {
@@ -325,6 +347,15 @@ func (c *Continuity) missing(set domain.FactorTask, period time.Time, universe, 
 		}
 	}
 	return expected, unconfirmed, confirmed
+}
+
+// seriesSubjectList 返回序列涉及的标的（去重、排序）。
+func seriesSubjectList(values []seriesset.Series) []string {
+	subjects := make([]string, 0, len(values))
+	for _, item := range values {
+		subjects = append(subjects, item.SubjectID)
+	}
+	return uniqueStrings(subjects)
 }
 
 // withoutSubjects 返回去掉给定标的后的列表。

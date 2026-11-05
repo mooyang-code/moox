@@ -156,3 +156,50 @@ func TestContinuityUnifiedReadbackJudgesSeriesNotSubjects(t *testing.T) {
 	require.Empty(t, h.runner.plans[2].UpstreamFailedSeries)
 	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
 }
+
+// 永续确认行情源没有的序列（补采后按序列通知）只扣永续这一条：同标的的现货仍在期望全集里照常计算；
+// 按标的扣除（单序列数据集的口径）会把现货一起丢掉。
+func TestContinuityUnifiedAbsentSeriesOnlyDropsThatSeries(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.seriesEvent(0, universe, nil)
+	swapAbsent := tagSeries(universe[:3], seriesSwap)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, nil, swapAbsent)
+
+	require.Equal(t, jetstream.ACK, h.seriesEvent(1, universe, swapAbsent).Decision)
+	require.Len(t, h.runner.plans, 2)
+	plan := h.runner.plans[1]
+	require.Len(t, plan.ExpectedSeries, 37, "40 条序列扣掉 3 条确认没有的永续")
+	for _, item := range swapAbsent {
+		require.NotContains(t, plan.ExpectedSeries, item)
+		require.Contains(t, plan.ExpectedSeries, seriesset.Series{SubjectID: item.SubjectID, SeriesTag: seriesSpot}, "同标的的现货仍在期望全集里")
+	}
+	require.Empty(t, plan.UpstreamFailedSeries, "确认没有的序列不再算上游失败")
+	require.Len(t, plan.Expected, 20, "三个标的仍有现货序列，标的全集不变")
+	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+}
+
+// 按标的确认没有（单序列数据集的口径）仍整个标的扣除，行为不变。
+func TestContinuityUnifiedAbsentSubjectDropsAllItsSeries(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.seriesEvent(0, universe, nil)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, universe[:3], nil)
+	require.Equal(t, jetstream.ACK, h.seriesEvent(1, universe, nil).Decision)
+	plan := h.runner.plans[1]
+	require.Len(t, plan.ExpectedSeries, 34)
+	require.Len(t, plan.Expected, 17)
+}
+
+// 永续的序列全部确认没有时，现货照常算，不阻塞水位。
+func TestContinuityUnifiedAllSwapAbsentStillComputesSpot(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.seriesEvent(0, universe, nil)
+	swapAll := tagSeries(universe, seriesSwap)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, nil, swapAll)
+	require.Equal(t, jetstream.ACK, h.seriesEvent(1, universe, swapAll).Decision)
+	require.Len(t, h.runner.plans, 2)
+	require.ElementsMatch(t, tagSeries(universe, seriesSpot), h.runner.plans[1].ExpectedSeries)
+	require.True(t, h.state().BlockedSince.IsZero())
+}

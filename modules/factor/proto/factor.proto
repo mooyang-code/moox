@@ -753,6 +753,9 @@ message PeriodsFilled {
   int64 from = 4;
   int64 to = 5;
   repeated string absent_subjects = 6;
+  // absent_series 是统一数据集（同一数据集里有多个 series_tag）上按序列确认行情源没有的（标的、series_tag）：
+  // 只扣这一条序列，同标的的另一个市场照常计算；单序列数据集不带，仍用 absent_subjects。
+  repeated SeriesRef absent_series = 7;
 }
 
 // NotifyPeriodsFilled 由 Collector 在补采作业成功后调用；因子管理服务在引擎心跳响应里转交，引擎据此立即推进水位并补算。
