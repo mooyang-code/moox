@@ -90,6 +90,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	if _, err := planTarget(r.clock, plan); err != nil {
 		return Outcome{}, err
 	}
+	if plan.Mode == ModeRecalc && len(plan.ExpectedSeries) == 0 && len(plan.Members) > 0 {
+		// 补算类计划没有冻结的序列全集：统一数据集上由数据层按本地存储构造，单序列数据集不受影响。
+		if expecter, ok := r.data.(SeriesExpecter); ok {
+			series, err := expecter.ExpectedSeries(ctx, plan)
+			if err != nil {
+				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
+			}
+			plan.ExpectedSeries = series
+		}
+	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
 	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}

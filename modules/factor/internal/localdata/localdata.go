@@ -613,6 +613,38 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	return d.loadRange(ctx, st, plan, subjects)
 }
 
+// ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（本地存储里这些标的的序列跨现货、永续两个市场）上的期望序列。
+// 序列在计划区间结束之前已有数据才算应存在；单序列数据集返回 nil。
+func (d *Data) ExpectedSeries(_ context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
+	src := sourceOf(plan.Set)
+	end := plan.TargetEnd.Unix()
+	var out []seriesset.Series
+	markets := map[string]struct{}{}
+	for _, subject := range plan.Expected {
+		bounds, err := d.cfg.Store.TagBounds(src, subject)
+		if err != nil {
+			return nil, err
+		}
+		for tag, b := range bounds {
+			if b.Earliest.Unix() >= end {
+				continue
+			}
+			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			markets[seriesset.SeriesTagMarket(tag)] = struct{}{}
+		}
+	}
+	if len(markets) < 2 {
+		return nil, nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SubjectID != out[j].SubjectID {
+			return out[i].SubjectID < out[j].SubjectID
+		}
+		return out[i].SeriesTag < out[j].SeriesTag
+	})
+	return out, nil
+}
+
 func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (pipeline.DataResult, error) {
 	res, fromDisk, err := d.loadLiveWindow(ctx, st, plan, subjects)
 	if err != nil || !fromDisk {

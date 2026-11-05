@@ -20,6 +20,14 @@ type Data interface {
 	WindowStatuses() []WarmupStatus
 }
 
+// SeriesExpecter 是数据层的可选能力：为补算类计划（人工补算、失效重算、时序因子空洞恢复）构造统一数据集的期望序列。
+// 这些路径拿不到周期 marker 里冻结的序列全集，改用本地存储里“应存在”的（标的、series_tag）：序列在计划区间结束之前已有数据，
+// 就是应存在，它在整个区间（含回看）都没数据才算缺失，与单序列数据集“标的整个区间都没数据才算缺失”同一粒度；
+// 新上永续的币，上市之前的区间不是缺失。单序列数据集（序列不跨现货、永续）返回 nil，计划保持按标的处理。
+type SeriesExpecter interface {
+	ExpectedSeries(ctx context.Context, plan Plan) ([]seriesset.Series, error)
+}
+
 // DataResult 是 Data.Load 的结果。
 type DataResult struct {
 	// View 是计算的列式输入。

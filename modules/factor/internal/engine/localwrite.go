@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // 本地写入接口（设计 7.1）：导入服务通过它把历史数据写进因子机的本地时序存储。本地存储同一时刻只能由引擎进程打开，
@@ -171,7 +172,11 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	if opts.RecordPending && opts.PendingReason == "" {
 		opts.PendingReason = "import"
 	}
-	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: true}}, opts)
+	scoped, err := w.unifiedSubject(src, subject, rows.Tags)
+	if err != nil {
+		return WriteResponse{}, http.StatusInternalServerError, err
+	}
+	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: scoped}}, opts)
 	if err != nil {
 		var gap *seriesstore.GapError
 		switch {
@@ -195,6 +200,26 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 		out.Earliest, out.Latest = axis.Format(res.Earliest), axis.Format(res.Latest)
 	}
 	return out, http.StatusOK, nil
+}
+
+// unifiedSubject 判断这次写入是不是统一数据集（同一数据集里有现货、永续两个市场的序列）上的标的：本批行的 series_tag 与本地已有的
+// series_tag 合起来跨两个以上市场（seriesset.SeriesTagMarket）。是则只替换本批出现的 tag，现货、永续可以分两次导入互不覆盖；
+// 否则（单市场）保持原来的整段替换，标的的全部序列按这一批重写。
+func (w *localWriter) unifiedSubject(src seriesstore.Source, subject string, batchTags []string) (bool, error) {
+	markets := make(map[string]struct{}, 2)
+	for _, tag := range batchTags {
+		markets[seriesset.SeriesTagMarket(tag)] = struct{}{}
+	}
+	if len(markets) < 2 {
+		existing, err := w.data.Store().TagBounds(src, subject)
+		if err != nil {
+			return false, fmt.Errorf("读取标的 %s 本地已有的序列：%w", subject, err)
+		}
+		for tag := range existing {
+			markets[seriesset.SeriesTagMarket(tag)] = struct{}{}
+		}
+	}
+	return len(markets) >= 2, nil
 }
 
 // datasetFields 返回数据集的本地字段表（含类型与填充规则），缓存 1 分钟。
