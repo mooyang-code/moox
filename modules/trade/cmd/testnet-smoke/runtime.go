@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
@@ -47,7 +48,7 @@ func seedSmokeStore(
 	case err == nil:
 		if existing.SpaceID != smokeSpaceID ||
 			existing.Exchange != string(options.Exchange) ||
-			existing.SoleMarket() != string(exchange.MarketTypeSpot) ||
+			!slices.Equal(existing.Markets, []string{string(exchange.MarketTypeSpot)}) ||
 			existing.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			existing.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			existing.CredentialSecretID != options.SecretID ||

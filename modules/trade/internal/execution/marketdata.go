@@ -17,9 +17,9 @@ type MarketQuote struct {
 
 type MarketDataSource interface {
 	LoadInstruments(context.Context) ([]exchange.Instrument, error)
-	GetQuote(context.Context, shared.ExchangeSymbol) (MarketQuote, error)
+	GetQuote(context.Context, exchange.SymbolKey) (MarketQuote, error)
 }
 
 type ReferencePriceSource interface {
-	GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error)
+	GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error)
 }

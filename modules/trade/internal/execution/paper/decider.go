@@ -62,7 +62,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 		}
 	}
 	if price.Cmp(shared.Zero()) <= 0 {
-		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
 		if quoteErr == nil && !QuoteFresh(quote, d.now(), 10*time.Second) {
 			quoteErr = errors.New("paper public quote is stale")
 		}

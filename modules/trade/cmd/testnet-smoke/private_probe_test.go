@@ -41,18 +41,11 @@ type capabilityAdapter struct {
 	lookedUpID string
 }
 
-func (*capabilityAdapter) GetReferencePrice(
-	context.Context,
-	string,
-) (exchange.ReferencePrice, error) {
+func (*capabilityAdapter) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	return exchange.ReferencePrice{Price: shared.MustDecimal("1")}, nil
 }
 
-func (a *capabilityAdapter) GetOrderByExchangeID(
-	_ context.Context,
-	_ string,
-	exchangeOrderID string,
-) (exchange.Order, error) {
+func (a *capabilityAdapter) GetOrderByExchangeID(_ context.Context, _ exchange.SymbolKey, exchangeOrderID string) (exchange.Order, error) {
 	a.lookedUpID = exchangeOrderID
 	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: exchangeOrderID}, nil
 }
@@ -62,7 +55,7 @@ func TestProbingAdapterPreservesOptionalCapabilities(t *testing.T) {
 	adapter := newProbingAdapter(base, newPrivateOrderProbe())
 	order, err := adapter.GetOrderByExchangeID(
 		context.Background(),
-		"BTCUSDT",
+		exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"),
 		"exchange-1",
 	)
 	if err != nil {

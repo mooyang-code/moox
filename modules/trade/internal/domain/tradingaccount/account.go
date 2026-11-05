@@ -146,15 +146,6 @@ func (a Account) MarketForInstrument(instrumentID string) exchange.MarketType {
 	return exchange.ResolveInstrumentMarket(instrumentID, a.Markets)
 }
 
-// SoleMarket 返回只开通了一个市场的账户的市场；开通多个市场时返回空串。
-// 适配器、会话和执行流程要等改成按标的所属市场判断后才能支持多市场账户，在那之前靠它安全失败。
-func (a Account) SoleMarket() exchange.MarketType {
-	if len(a.Markets) != 1 {
-		return exchange.MarketTypeUnspecified
-	}
-	return a.Markets[0]
-}
-
 func (a Account) ExecutionEligibility() error {
 	if err := a.Validate(); err != nil {
 		return err

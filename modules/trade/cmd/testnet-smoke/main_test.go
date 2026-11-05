@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -205,7 +206,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if account.Environment != "TESTNET" || account.ExecutionMode != "LIVE" ||
-		account.SoleMarket() != "SPOT" || account.CredentialSecretID != options.SecretID {
+		!slices.Equal(account.Markets, []string{"SPOT"}) || account.CredentialSecretID != options.SecretID {
 		t.Fatalf("account = %+v", account)
 	}
 	logical, err := database.GetLogicalAccount(ctx, smokeSpaceID, identity.LogicalAccountID)

@@ -385,7 +385,7 @@ func TestPaperAdapterStoreBoundariesPreserveInfrastructureErrors(t *testing.T) {
 			account, err := s.GetTradingAccountByID(context.Background(), "a")
 			require.NoError(t, err)
 			a := &Adapter{Store: s, Account: account}
-			_, err = a.GetOrder(context.Background(), "BTCUSDT", "missing")
+			_, err = a.GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "missing")
 			require.True(t, exchange.IsKind(err, exchange.ErrorOrderNotFound))
 			if mode == "closed" {
 				require.NoError(t, s.Close())
@@ -400,8 +400,14 @@ func TestPaperAdapterStoreBoundariesPreserveInfrastructureErrors(t *testing.T) {
 				"snapshot":  func(ctx context.Context) error { _, err := a.GetAccountSnapshot(ctx); return err },
 				"positions": func(ctx context.Context) error { _, err := a.ListPositionSnapshots(ctx); return err },
 				"orders":    func(ctx context.Context) error { _, err := a.ListOpenOrders(ctx); return err },
-				"fills":     func(ctx context.Context) error { _, _, err := a.ListRecentFills(ctx, "BTCUSDT", ""); return err },
-				"order":     func(ctx context.Context) error { _, err := a.GetOrder(ctx, "BTCUSDT", "a"); return err },
+				"fills": func(ctx context.Context) error {
+					_, _, err := a.ListRecentFills(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "")
+					return err
+				},
+				"order": func(ctx context.Context) error {
+					_, err := a.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "a")
+					return err
+				},
 			} {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				err := call(ctx)
@@ -421,7 +427,7 @@ func TestPaperAdapterReconstructsTransientOrderIdentityAfterCrash(t *testing.T) 
 	require.NoError(t, s.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN', c_exchange_order_id='' WHERE c_order_id='a'").Error)
 	account, err := s.GetTradingAccountByID(context.Background(), "a")
 	require.NoError(t, err)
-	order, err := (&Adapter{Store: s, Account: account}).GetOrder(context.Background(), "BTCUSDT", "a")
+	order, err := (&Adapter{Store: s, Account: account}).GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "a")
 	require.NoError(t, err)
 	want, _, _ := PaperIDs("a", "a")
 	require.Equal(t, want, order.ExchangeOrderID)
@@ -440,7 +446,7 @@ func (a *instrumentLoadFailure) LoadInstruments(context.Context) ([]exchange.Ins
 	a.loadCalls++
 	return a.instruments, a.err
 }
-func (a *instrumentLoadFailure) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a *instrumentLoadFailure) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	a.quoteCalls++
 	return execution.MarketQuote{}, nil
 }
@@ -450,7 +456,7 @@ func TestPaperNativeSymbolPreservesInstrumentLoadFailure(t *testing.T) {
 	for _, failure := range []error{InfrastructureError{Err: cause}, &InfrastructureError{Err: cause}, fmt.Errorf("wrapped: %w", InfrastructureError{Err: cause})} {
 		market := &instrumentLoadFailure{err: failure}
 		a := &Adapter{MarketData: market}
-		_, err := a.GetReferencePrice(context.Background(), "BTC-USDT")
+		_, err := a.GetReferencePrice(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT"))
 		require.ErrorIs(t, err, cause)
 		require.True(t, IsInfrastructureError(err))
 		require.Zero(t, market.quoteCalls, "do not silently use the unmapped canonical symbol after load failure")
@@ -461,23 +467,23 @@ func TestPaperNativeSymbolPreservesInstrumentLoadFailure(t *testing.T) {
 func TestPaperPreloadedNativeSymbolDoesNotReloadInstruments(t *testing.T) {
 	for _, native := range []string{"BTCUSDT", "BTC-USDT"} {
 		t.Run(native, func(t *testing.T) {
-			market := &instrumentLoadFailure{instruments: []exchange.Instrument{{InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: native}}}
+			market := &instrumentLoadFailure{instruments: []exchange.Instrument{{MarketType: exchange.MarketTypeSpot, InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: native}}}
 			a := &Adapter{MarketData: market}
 			_, err := a.LoadInstruments(context.Background())
 			require.NoError(t, err)
 			market.err = errors.New("instrument endpoint unavailable")
-			_, err = a.GetQuote(context.Background(), shared.ExchangeSymbol(native))
+			_, err = a.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, native))
 			require.NoError(t, err, "known native symbols must not depend on another instrument refresh")
-			_, err = a.GetQuote(context.Background(), "BTC-USDT-SPOT")
+			_, err = a.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT-SPOT"))
 			require.NoError(t, err)
 			require.Equal(t, 1, market.loadCalls)
 			require.Equal(t, 2, market.quoteCalls)
-			_, err = a.GetQuote(context.Background(), "UNKNOWN")
+			_, err = a.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "UNKNOWN"))
 			require.ErrorIs(t, err, market.err)
 		})
 	}
 }
 
-func (*instrumentLoadFailure) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (*instrumentLoadFailure) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	return exchange.ReferencePrice{}, errors.New("not used")
 }

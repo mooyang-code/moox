@@ -65,7 +65,7 @@ func (a *syncAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) 
 }
 func (a *syncAdapter) ListRecentFills(
 	context.Context,
-	shared.ExchangeSymbol,
+	exchange.SymbolKey,
 	string,
 ) ([]exchange.Fill, string, error) {
 	if a.fillStarted != nil {
@@ -74,32 +74,28 @@ func (a *syncAdapter) ListRecentFills(
 	}
 	return []exchange.Fill{a.fill}, "11", nil
 }
-func (a *syncAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *syncAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return a.order, nil
 }
-func (a *syncAdapter) GetOrderByExchangeID(
-	_ context.Context,
-	symbol string,
-	exchangeOrderID string,
-) (exchange.Order, error) {
+func (a *syncAdapter) GetOrderByExchangeID(_ context.Context, symbol exchange.SymbolKey, exchangeOrderID string) (exchange.Order, error) {
 	if a.lookupErr != nil {
 		return exchange.Order{}, a.lookupErr
 	}
 	current := a.order
-	current.ExchangeSymbol = symbol
+	current.Market, current.ExchangeSymbol = symbol.Market, symbol.Symbol
 	current.ExchangeOrderID = exchangeOrderID
 	return current, nil
 }
 func (*syncAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*syncAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*syncAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*syncAdapter) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
+func (*syncAdapter) SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error {
 	return nil
 }
-func (*syncAdapter) SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error {
+func (*syncAdapter) SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error {
 	return nil
 }
 func (*syncAdapter) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
@@ -1481,7 +1477,7 @@ func (a noFillsAdapter) GetAccountSnapshot(ctx context.Context) (exchange.Accoun
 	return snapshotAtAdapter{a.syncAdapter, a.at}.GetAccountSnapshot(ctx)
 }
 
-func (noFillsAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (noFillsAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }
 
@@ -1547,15 +1543,15 @@ func (lateFillAdapter) ListPositionSnapshots(context.Context) ([]exchange.Positi
 func (a lateFillAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return []exchange.Order{a.order}, nil
 }
-func (a lateFillAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a lateFillAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return a.order, nil
 }
-func (a lateFillAdapter) GetOrderByExchangeID(_ context.Context, symbol string, exchangeOrderID string) (exchange.Order, error) {
+func (a lateFillAdapter) GetOrderByExchangeID(_ context.Context, symbol exchange.SymbolKey, exchangeOrderID string) (exchange.Order, error) {
 	current := a.order
-	current.ExchangeSymbol, current.ExchangeOrderID = symbol, exchangeOrderID
+	current.Market, current.ExchangeSymbol, current.ExchangeOrderID = symbol.Market, symbol.Symbol, exchangeOrderID
 	return current, nil
 }
-func (a lateFillAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a lateFillAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return []exchange.Fill{a.fill}, "12", nil
 }
 
@@ -1643,7 +1639,7 @@ func (emptyAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position,
 	return nil, nil
 }
 func (emptyAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) { return nil, nil }
-func (emptyAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (emptyAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }
 

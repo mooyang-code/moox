@@ -120,7 +120,7 @@ func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "adapter", err)
 	}
-	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(validation.Instrument.MarketType, validation.Instrument.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
 	}

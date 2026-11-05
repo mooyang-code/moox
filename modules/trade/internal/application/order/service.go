@@ -57,7 +57,7 @@ type CancelConfirmer interface {
 
 // SymbolConfigurer 在首次开仓前把杠杆设置到交易所。
 type SymbolConfigurer interface {
-	EnsureSymbolConfig(ctx context.Context, tradingAccountID, symbol string, leverage shared.Decimal) error
+	EnsureSymbolConfig(ctx context.Context, tradingAccountID string, symbol exchange.SymbolKey, leverage shared.Decimal) error
 }
 
 type Service struct {
@@ -564,7 +564,7 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 
-	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	response, callErr := adapter.CancelOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer persistCancel()
 	ctx = persistCtx
@@ -647,7 +647,7 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr != nil {
 		return current, accountExecutionError(record.TradingAccountID, "cancel_lookup", lookupErr)
 	}
@@ -675,7 +675,7 @@ func (s *Service) RecoverCancel(
 		return latest, accountExecutionError(record.TradingAccountID, "cancel_lookup", err)
 	}
 	ioCtx := ctx
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	_, callErr := adapter.CancelOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer persistCancel()
 	if callErr == nil {
@@ -864,7 +864,7 @@ func (s *Service) resolveUnknown(
 	if err != nil {
 		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
@@ -876,7 +876,7 @@ func (s *Service) resolveUnknown(
 	if account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID); accountErr == nil {
 		cursor = account.FillCursors[exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol).String()]
 	}
-	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), cursor)
+	fills, _, fillsErr := adapter.ListRecentFills(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), cursor)
 	if fillsErr != nil {
 		return current, accountExecutionError(record.TradingAccountID, "list_fills", fillsErr)
 	}
@@ -927,7 +927,7 @@ func (s *Service) freshReference(
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
 	}
@@ -1040,7 +1040,7 @@ func (s *Service) prepareSubmit(
 		if adapterErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
 		}
-		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol))
 		if quoteErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
 		}
@@ -1081,7 +1081,7 @@ func (s *Service) prepareSubmit(
 	}
 	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
 		exchange.RuleFor(validation.Instrument.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
-		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, record.ExchangeSymbol, validation.Leverage); err != nil {
+		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), validation.Leverage); err != nil {
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
 				return nil, aggregate, err
 			}
@@ -1215,6 +1215,7 @@ func (s *Service) deliverSubmit(
 		return pending, false, err
 	}
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
+		Market:         validation.Instrument.MarketType,
 		ClientOrderID:  aggregate.Spec.ClientOrderID,
 		ExchangeSymbol: exchangeSymbol, OrderType: aggregate.Spec.Type,
 		FillPolicy: aggregate.Spec.FillPolicy, Side: aggregate.Spec.Side,

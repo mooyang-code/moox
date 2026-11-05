@@ -22,7 +22,7 @@ type deciderAdapter struct {
 	snapshot   exchange.AccountSnapshot
 }
 
-func (a *deciderAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a *deciderAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	a.quoteCalls++
 	return a.quote, a.quoteErr
 }

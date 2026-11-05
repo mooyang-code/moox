@@ -60,7 +60,7 @@ func (a failedSyncAdapter) Adapter(string) (execution.ExecutionAdapter, error) {
 func (a failedSyncAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return nil, errors.New("exchange unavailable")
 }
-func (a failedSyncAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a failedSyncAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 
@@ -168,7 +168,7 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 type cancelDeadlineAdapter struct{ *submissionAdapter }
 
 func (a cancelDeadlineAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
-func (a cancelDeadlineAdapter) CancelOrder(ctx context.Context, _ shared.ExchangeSymbol, _ string) (exchange.Order, error) {
+func (a cancelDeadlineAdapter) CancelOrder(ctx context.Context, _ exchange.SymbolKey, _ string) (exchange.Order, error) {
 	<-ctx.Done()
 	return exchange.Order{}, ctx.Err()
 }

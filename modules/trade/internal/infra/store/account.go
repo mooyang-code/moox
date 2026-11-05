@@ -121,7 +121,7 @@ func SnapshotFromExchange(snapshot exchange.AccountSnapshot) TradingAccountSnaps
 			Total: balance.Total.String(), Borrowed: balance.Borrowed.String(),
 		})
 	}
-	return TradingAccountSnapshot{
+	record := TradingAccountSnapshot{
 		Balances: balances, Equity: snapshot.Equity.String(),
 		AvailableFunds:    snapshot.AvailableFunds.String(),
 		UsedMargin:        snapshot.UsedMargin.String(),
@@ -130,6 +130,13 @@ func SnapshotFromExchange(snapshot exchange.AccountSnapshot) TradingAccountSnaps
 		ExchangeEquity:    snapshot.ExchangeEquity.String(),
 		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
 	}
+	if len(snapshot.WalletUpdatedAt) > 0 {
+		record.WalletUpdatedAt = make(map[string]int64, len(snapshot.WalletUpdatedAt))
+		for wallet, at := range snapshot.WalletUpdatedAt {
+			record.WalletUpdatedAt[string(wallet)] = at.UnixMilli()
+		}
+	}
+	return record
 }
 
 // ToExchange 把落库的快照转回交易所快照；空的或无法解析的数值按零处理。
@@ -146,8 +153,16 @@ func (s TradingAccountSnapshot) ToExchange() exchange.AccountSnapshot {
 	if s.ExchangeUpdatedAt > 0 {
 		updatedAt = time.UnixMilli(s.ExchangeUpdatedAt).UTC()
 	}
+	var walletUpdatedAt map[exchange.Wallet]time.Time
+	if len(s.WalletUpdatedAt) > 0 {
+		walletUpdatedAt = make(map[exchange.Wallet]time.Time, len(s.WalletUpdatedAt))
+		for wallet, at := range s.WalletUpdatedAt {
+			walletUpdatedAt[exchange.Wallet(wallet)] = time.UnixMilli(at).UTC()
+		}
+	}
 	return exchange.AccountSnapshot{
-		Balances: balances, Equity: decimalOrZero(s.Equity),
+		WalletUpdatedAt: walletUpdatedAt,
+		Balances:        balances, Equity: decimalOrZero(s.Equity),
 		AvailableFunds:    decimalOrZero(s.AvailableFunds),
 		UsedMargin:        decimalOrZero(s.UsedMargin),
 		MaintenanceMargin: decimalOrZero(s.MaintenanceMargin),
@@ -219,14 +234,6 @@ type TradingAccountRecord struct {
 	LastError           string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
-}
-
-// SoleMarket 返回只开通了一个市场的账户的市场；开通多个市场时返回空串。
-func (r TradingAccountRecord) SoleMarket() string {
-	if len(r.Markets) != 1 {
-		return ""
-	}
-	return r.Markets[0]
 }
 
 // HasBalanceMarket 报告账户是否开通了持仓来自余额的市场（现货、股票）。

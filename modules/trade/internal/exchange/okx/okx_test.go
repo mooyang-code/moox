@@ -67,7 +67,7 @@ func TestTestnetRequestAddsSimulationHeader(t *testing.T) {
 }
 
 func TestAdapterRequestValidationContract(t *testing.T) {
-	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	adapter := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{})
 	base := exchange.OrderRequest{
 		ClientOrderID:  "contract-client",
 		ExchangeSymbol: "BTC-USDT",
@@ -171,7 +171,7 @@ func TestMutationClassifiesItemErrorWhenTopLevelCodeIsOne(t *testing.T) {
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
-		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
@@ -194,12 +194,12 @@ func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := newWithClient(
-		exchange.AccountConfig{MarketType: exchange.MarketTypeSpot},
+		exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}},
 		exchange.Credential{},
 		httpclient.New(server.URL),
 	)
 
-	quote, err := adapter.GetReferencePrice(context.Background(), "BTC-USDT")
+	quote, err := adapter.GetReferencePrice(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT"))
 
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestSwapMarketOrderConvertsBaseQuantity(t *testing.T) {
 	if order.ClientOrderID != "cid" || !order.ReduceOnly {
 		t.Fatalf("order = %+v", order)
 	}
-	terminal, err := adapter.GetOrder(context.Background(), "BTC-USDT-SWAP", "cid")
+	terminal, err := adapter.GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "cid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestSpotMarketBuyUsesBaseQuantity(t *testing.T) {
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
-		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
@@ -358,7 +358,7 @@ func TestRecentFillsAndPositionsConvertContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	fills, cursor, err := adapter.ListRecentFills(
-		context.Background(), "BTC-USDT-SWAP", "99",
+		context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "99",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -410,12 +410,12 @@ func TestRecentFillsPaginatesWithoutSkippingGap(t *testing.T) {
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
-		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
 	fills, cursor, err := adapter.ListRecentFills(
-		context.Background(), "BTC-USDT", "99",
+		context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT"), "99",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -444,8 +444,8 @@ func TestRecentFillsOrdersByExecutionTimeWithBillIDTieBreak(t *testing.T) {
 		]`)
 	}))
 	defer server.Close()
-	adapter := newWithClient(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{}, httpclient.New(server.URL))
-	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	adapter := newWithClient(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{}, httpclient.New(server.URL))
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,11 +494,11 @@ func TestRecentFillsEmptyCursorConsumesAllAvailablePages(t *testing.T) {
 	defer server.Close()
 	adapter := newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
-		MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"},
 		httpclient.New(server.URL))
-	fills, cursor, err := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+	fills, cursor, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +574,7 @@ func TestRejectsUnsupportedAndClassifiesErrors(t *testing.T) {
 func swapAdapter(baseURL string) *Adapter {
 	return newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,
-		MarketType: exchange.MarketTypeSwap, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{exchange.MarketTypeSwap}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT", MarginMode: exchange.MarginModeCross,
 	}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "pass"}, httpclient.New(baseURL))
 }

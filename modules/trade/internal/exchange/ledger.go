@@ -39,9 +39,11 @@ type LedgerEntry struct {
 
 // LedgerQuery 是资金流水查询：[Start, End] 时间窗内最新的至多 Limit 条。
 type LedgerQuery struct {
-	Start time.Time
-	End   time.Time
-	Limit int
+	// Market 是要查流水的市场；账户只有一个市场支持流水时可以不写。
+	Market MarketType
+	Start  time.Time
+	End    time.Time
+	Limit  int
 }
 
 // LedgerPage 是一页资金流水，按时间倒序；HasMore 表示窗口内还有更早的记录没取到。

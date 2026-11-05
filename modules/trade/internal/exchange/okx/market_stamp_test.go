@@ -38,7 +38,7 @@ func TestRESTReadsCarryMarketAndWallet(t *testing.T) {
 	if _, err := adapter.LoadInstruments(ctx); err != nil {
 		t.Fatal(err)
 	}
-	fills, _, err := adapter.ListRecentFills(ctx, "BTC-USDT-SWAP", "99")
+	fills, _, err := adapter.ListRecentFills(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "99")
 	if err != nil || len(fills) != 1 || fills[0].Market != exchange.MarketTypeSwap {
 		t.Fatalf("fills = %+v err = %v", fills, err)
 	}

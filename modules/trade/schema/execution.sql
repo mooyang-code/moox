@@ -116,6 +116,15 @@ ON t_trade_orders (
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
 ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
 
+-- 单币每小时上限：按（组合、内部标的 ID、提交时间所在的自然小时）汇总已提交子单的名义金额。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_instrument_submitted
+ON t_trade_orders (
+    c_space_id,
+    c_logical_account_id,
+    c_instrument_id,
+    c_submitted_at
+);
+
 -- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_paper_open
 ON t_trade_orders (c_first_match_pending, c_space_id, c_order_id)

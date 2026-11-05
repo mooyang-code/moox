@@ -50,7 +50,7 @@ func TestRecoverCancelTerminalQueryWaitsForRealFillReducer(t *testing.T) {
 }
 
 func (a recoveryQueryAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
-func (a recoveryQueryAdapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, id string) (exchange.Order, error) {
+func (a recoveryQueryAdapter) GetOrder(ctx context.Context, symbol exchange.SymbolKey, id string) (exchange.Order, error) {
 	if a.wait {
 		a.getCalls++
 		<-ctx.Done()

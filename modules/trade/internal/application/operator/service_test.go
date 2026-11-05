@@ -931,13 +931,9 @@ type operatorPriceStub struct {
 	calls *[]string
 }
 
-func (s operatorPriceStub) LatestPrice(
-	_ context.Context,
-	_ string,
-	symbol string,
-) (Quote, error) {
+func (s operatorPriceStub) LatestPrice(_ context.Context, _ string, symbol exchange.SymbolKey) (Quote, error) {
 	if s.calls != nil {
-		*s.calls = append(*s.calls, symbol)
+		*s.calls = append(*s.calls, symbol.Symbol)
 	}
 	return s.quote, s.err
 }

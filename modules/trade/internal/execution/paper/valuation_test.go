@@ -41,11 +41,11 @@ type valuationMarket struct {
 func (m *valuationMarket) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
 	return m.instruments, nil
 }
-func (m *valuationMarket) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (m *valuationMarket) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	m.quoteCalls++
 	return execution.MarketQuote{}, nil
 }
-func (m *valuationMarket) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (m *valuationMarket) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	m.priceCalls++
 	return exchange.ReferencePrice{Price: shared.MustDecimal("110"), UpdatedAt: m.updatedAt}, nil
 }

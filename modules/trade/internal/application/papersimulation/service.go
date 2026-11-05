@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -54,10 +53,6 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	markets, err := exchange.NormalizeMarkets(command.Markets)
 	if err != nil {
 		return Result{}, fmt.Errorf("paper simulation: %w", err)
-	}
-	// 适配器和会话要等改成按标的所属市场工作后，模拟盘才能同时开通多个市场。
-	if len(markets) != 1 {
-		return Result{}, fmt.Errorf("paper simulation: %w", accountapp.ErrMultiMarketUnsupported)
 	}
 	hasLeverage := slices.ContainsFunc(markets, func(market exchange.MarketType) bool {
 		return exchange.RuleFor(market).Leverage

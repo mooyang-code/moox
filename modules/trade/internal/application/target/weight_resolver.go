@@ -132,7 +132,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		if err != nil {
 			return WeightConversion{}, err
 		}
-		quote, err := r.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol)
+		quote, err := r.Prices.LatestPrice(ctx, tradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 		if err != nil {
 			return WeightConversion{}, err
 		}

@@ -45,10 +45,10 @@ func TestOrdersChannelFeeCompletenessAndRESTParity(t *testing.T) {
 				"ts":"1700000000001","fillTime":"1700000000000","execType":"M"}]`, tc.fee, tc.currency))
 			}))
 			defer server.Close()
-			adapter := newWithClient(exchange.AccountConfig{TradingAccountID: "account-1", MarketType: exchange.MarketTypeSpot, SettlementAsset: "USDT"}, exchange.Credential{}, httpclient.New(server.URL))
+			adapter := newWithClient(exchange.AccountConfig{TradingAccountID: "account-1", Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT"}, exchange.Credential{}, httpclient.New(server.URL))
 			h := &handler{}
 			err := adapter.dispatchPrivate(context.Background(), []byte(`{"arg":{"channel":"orders"},"data":[`+row+`]}`), h)
-			fills, _, restErr := adapter.ListRecentFills(context.Background(), "BTC-USDT", "")
+			fills, _, restErr := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTC-USDT"), "")
 			if tc.invalid {
 				require.Error(t, err)
 				require.Empty(t, h.fills)
@@ -121,7 +121,7 @@ func openOKXReplayStore(t *testing.T) *store.Store {
 }
 
 func TestFillRejectsMissingExecutionTimeInsteadOfUsingGeneratedTime(t *testing.T) {
-	a := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	a := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{})
 	for _, raw := range []string{"", "invalid", "0", "-1"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := a.fill(fillPayload{InstID: "BTC-USDT", FillSz: "1", FillPx: "100", Fee: "0", FeeCcy: "USDT", Ts: "1700000000000", FillTime: raw})
@@ -159,7 +159,7 @@ func TestOrdersChannelUsesPerFillFee(t *testing.T) {
 }
 
 func TestOrdersChannelMultipleFillsPersistIndependentFees(t *testing.T) {
-	adapter := New(exchange.AccountConfig{TradingAccountID: "account-1", MarketType: exchange.MarketTypeSpot, SettlementAsset: "USDT"}, exchange.Credential{})
+	adapter := New(exchange.AccountConfig{TradingAccountID: "account-1", Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT"}, exchange.Credential{})
 	h := &handler{}
 	for i := 1; i <= 2; i++ {
 		require.NoError(t, adapter.dispatchPrivate(context.Background(), []byte(fmt.Sprintf(`{
@@ -243,13 +243,13 @@ func TestDispatchPrivateConvertsSwapFill(t *testing.T) {
 }
 
 func TestPrivateChannelsExcludeSpotPositions(t *testing.T) {
-	spot := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	spot := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{})
 	channels := spot.privateChannels()
 	if len(channels) != 2 || channels[0]["channel"] != "orders" ||
 		channels[1]["channel"] != "account" {
 		t.Fatalf("SPOT channels = %+v", channels)
 	}
-	swap := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSwap}, exchange.Credential{})
+	swap := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSwap}}, exchange.Credential{})
 	channels = swap.privateChannels()
 	if len(channels) != 3 || channels[2]["channel"] != "positions" ||
 		channels[2]["instType"] != "SWAP" {
@@ -476,7 +476,7 @@ func TestPrivateHandshakeTimesOutWhenServerNeverAcknowledges(t *testing.T) {
 	require.NoError(t, err)
 	defer connection.Close()
 
-	adapter := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSpot}, exchange.Credential{})
+	adapter := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{})
 	started := time.Now()
 	_, err = adapter.privateHandshake(connection)
 	require.Error(t, err)

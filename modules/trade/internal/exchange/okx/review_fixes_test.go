@@ -71,7 +71,7 @@ func TestIncrementalPushWithoutSettlementKeepsEquity(t *testing.T) {
 }
 
 func TestAccountAndPositionChannelsPushOnlyOnEvents(t *testing.T) {
-	swap := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSwap}, exchange.Credential{})
+	swap := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSwap}}, exchange.Credential{})
 	for _, channel := range swap.privateChannels() {
 		switch channel["channel"] {
 		case "account", "positions":
@@ -125,7 +125,7 @@ func TestCancelOrderSendsOneRequest(t *testing.T) {
 		ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0","sMsg":""}]`)
 	}))
 	defer server.Close()
-	order, err := swapAdapter(server.URL).CancelOrder(context.Background(), "BTC-USDT-SWAP", "cid")
+	order, err := swapAdapter(server.URL).CancelOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "cid")
 	if err != nil {
 		t.Fatal(err)
 	}

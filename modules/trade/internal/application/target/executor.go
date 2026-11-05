@@ -44,7 +44,7 @@ type Quote struct {
 }
 
 type PriceSource interface {
-	LatestPrice(context.Context, string, string) (Quote, error)
+	LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error)
 }
 
 type OrderService interface {
@@ -962,7 +962,7 @@ func (e *Executor) placeAction(
 		quote, err := e.Prices.LatestPrice(
 			ctx,
 			candidate.member.account.TradingAccountID,
-			candidate.instrument.ExchangeSymbol,
+			exchange.NewSymbolKey(candidate.instrument.MarketType, candidate.instrument.ExchangeSymbol),
 		)
 		if err != nil {
 			if paper.IsInfrastructureError(err) {

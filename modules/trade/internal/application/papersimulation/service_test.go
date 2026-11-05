@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -136,11 +135,14 @@ func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
 		_, err := s.Create(ctx, command)
 		require.Error(t, err, name)
 	}
-	// 适配器改成多市场之前，不能创建同时开通多个市场的模拟账户。
+	// 现货加合约：一个账户、一个资金池同时撮合两个市场。
 	command := paperCommand("both", "")
 	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap, exchange.MarketTypeSpot}
-	_, err = s.Create(ctx, command)
-	require.ErrorIs(t, err, accountapp.ErrMultiMarketUnsupported)
+	both, err := s.Create(ctx, command)
+	require.NoError(t, err)
+	require.Equal(t, []string{"SPOT", "SWAP"}, both.Account.Markets)
+	require.Equal(t, "CROSS", both.Account.MarginMode)
+	require.Equal(t, "UNIFIED", both.Account.Snapshot.Balances[0].Wallet)
 
 	command = paperCommand("swap", "")
 	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap}

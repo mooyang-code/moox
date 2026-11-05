@@ -47,7 +47,7 @@ func newStressExchange(symbols []string, seed int64) *stressExchange {
 
 func (*stressExchange) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
 
-func (x *stressExchange) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (x *stressExchange) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	return exchange.ReferencePrice{Price: shared.MustDecimal("100"), UpdatedAt: testNow}, nil
 }
 
@@ -90,11 +90,11 @@ func (x *stressExchange) ListOpenOrders(context.Context) ([]exchange.Order, erro
 	return nil, nil
 }
 
-func (x *stressExchange) ListRecentFills(_ context.Context, symbol shared.ExchangeSymbol, cursor string) ([]exchange.Fill, string, error) {
+func (x *stressExchange) ListRecentFills(_ context.Context, symbol exchange.SymbolKey, cursor string) ([]exchange.Fill, string, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.calls["fills"]++
-	all := x.fills[symbol.String()]
+	all := x.fills[symbol.Symbol]
 	start, _ := strconv.Atoi(cursor)
 	if start > len(all) {
 		start = len(all)
@@ -102,7 +102,7 @@ func (x *stressExchange) ListRecentFills(_ context.Context, symbol shared.Exchan
 	return append([]exchange.Fill(nil), all[start:]...), strconv.Itoa(len(all)), nil
 }
 
-func (x *stressExchange) GetOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
+func (x *stressExchange) GetOrder(_ context.Context, _ exchange.SymbolKey, clientOrderID string) (exchange.Order, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.calls["order"]++
@@ -155,7 +155,7 @@ func (x *stressExchange) PlaceOrder(_ context.Context, request exchange.OrderReq
 	return order, nil
 }
 
-func (*stressExchange) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*stressExchange) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 

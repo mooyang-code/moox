@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -267,7 +268,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 		t.Fatalf("Name = %q, want %q", got.Name, name)
 	}
 	if got.Exchange != before.Exchange ||
-		got.SoleMarket() != before.SoleMarket() ||
+		!slices.Equal(got.Markets, before.Markets) ||
 		got.ExecutionMode != before.ExecutionMode ||
 		got.CredentialSecretID != before.CredentialSecretID ||
 		got.SettlementAsset != before.SettlementAsset ||
@@ -422,7 +423,7 @@ func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 		context.Background(),
 		value.ID,
 		"ETH-USDT-SWAP",
-		"ETH-USDT",
+		exchange.NewSymbolKey(exchange.MarketTypeSwap, "ETH-USDT"),
 		shared.MustDecimal("3"),
 	); err != nil {
 		t.Fatalf("SetLeverage() error = %v", err)
@@ -623,14 +624,16 @@ func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-again", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
 }
 
-func TestCreateRejectsMultiMarketAccountUntilAdaptersSupportIt(t *testing.T) {
+func TestCreateAcceptsMultiMarketAccount(t *testing.T) {
 	value := validAccount()
 	value.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
 	value.MarginMode = exchange.MarginModeCross
+	value.LeverageSettings = map[string]shared.Decimal{"*": shared.MustDecimal("1")}
 
-	_, err := (&Service{Store: newMemoryStore()}).Create(context.Background(), value)
+	created, err := (&Service{Store: newMemoryStore()}).Create(context.Background(), value)
 
-	require.ErrorIs(t, err, ErrMultiMarketUnsupported)
+	require.NoError(t, err)
+	require.Equal(t, value.Markets, created.Markets)
 }
 
 func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {

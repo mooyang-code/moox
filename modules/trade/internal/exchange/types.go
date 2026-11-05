@@ -254,13 +254,23 @@ type Credential struct {
 type AccountConfig struct {
 	TradingAccountID string
 	Exchange         Exchange
-	MarketType       MarketType
-	ExecutionMode    ExecutionMode
-	Environment      AccountEnvironment
-	SettlementAsset  string
-	MarginMode       MarginMode
+	// Markets 是账户已开通的市场。同时开通多个市场时，注册表为每个市场各绑一个单市场适配器，
+	// 交给 execution.MultiMarket 按标的所属市场路由；单市场适配器拿到的配置里只有一个市场。
+	Markets         []MarketType
+	ExecutionMode   ExecutionMode
+	Environment     AccountEnvironment
+	SettlementAsset string
+	MarginMode      MarginMode
 	// CreatedAt 之前的成交不入账，适配器不用为它们多查一次订单。
 	CreatedAt time.Time
+}
+
+// Market 返回单市场适配器所服务的市场；开通了多个市场（或没有）时返回空串。
+func (c AccountConfig) Market() MarketType {
+	if len(c.Markets) != 1 {
+		return MarketTypeUnspecified
+	}
+	return c.Markets[0]
 }
 
 type Instrument struct {
@@ -302,8 +312,10 @@ type AccountSnapshot struct {
 	// ExchangeEquity 是交易所给的总权益，只用于展示核对，不参与换算。
 	ExchangeEquity    shared.Decimal
 	ExchangeUpdatedAt time.Time
-	Present           AccountSnapshotPresence
-	RequiresSync      bool
+	// WalletUpdatedAt 是各钱包余额的读取时间；同时读多个市场的适配器按钱包记录，没有记录的钱包按 ExchangeUpdatedAt 算。
+	WalletUpdatedAt map[Wallet]time.Time
+	Present         AccountSnapshotPresence
+	RequiresSync    bool
 }
 
 type AccountSnapshotPresence struct {
@@ -334,7 +346,9 @@ type Position struct {
 }
 
 type OrderRequest struct {
-	ClientOrderID  string
+	ClientOrderID string
+	// Market 是标的所属的市场：同一个账户的现货、合约代码相同（BTCUSDT），下单必须说明是哪个市场。
+	Market         MarketType
 	ExchangeSymbol string
 	OrderType      OrderType
 	FillPolicy     FillPolicy

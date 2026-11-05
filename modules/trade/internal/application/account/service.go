@@ -19,8 +19,6 @@ var (
 	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
 	ErrPaperAccountImmutable = errors.New("trade account: paper account configuration is immutable")
 	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
-	// ErrMultiMarketUnsupported：适配器和会话要等改成按标的所属市场工作后才能支持同时开通多个市场的账户。
-	ErrMultiMarketUnsupported = errors.New("trade account: 同时开通多个市场的执行账户暂不支持创建")
 	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
 	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )
@@ -54,7 +52,7 @@ type SecretSource interface {
 
 // SymbolConfigs 记录会话里已经在交易所设置过的标的。
 type SymbolConfigs interface {
-	ForgetSymbolConfig(tradingAccountID, symbol string)
+	ForgetSymbolConfig(tradingAccountID string, symbol exchange.SymbolKey)
 }
 
 type SessionState interface {
@@ -88,9 +86,6 @@ func (s *Service) Create(
 	}
 	if err := value.Validate(); err != nil {
 		return tradingaccount.Account{}, err
-	}
-	if value.SoleMarket() == exchange.MarketTypeUnspecified {
-		return tradingaccount.Account{}, ErrMultiMarketUnsupported
 	}
 	if value.ExecutionMode == exchange.ExecutionModeLive &&
 		value.Environment == exchange.AccountEnvironmentProduction &&
@@ -187,12 +182,12 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 }
 
 // SetLeverage 设置杠杆。leverageKey 是内部标的 ID（例如 BTC-USDT-SWAP）或账户默认杠杆的键 "*"；
-// exchangeSymbol 是该标的的交易所代码（默认杠杆时同样传 "*"），用来让会话下次开仓前重新设置。
+// exchangeSymbol 是该标的的（市场，交易所代码）（默认杠杆时代码传 "*"），用来让会话下次开仓前重新设置。
 func (s *Service) SetLeverage(
 	ctx context.Context,
 	tradingAccountID string,
 	leverageKey string,
-	exchangeSymbol string,
+	exchangeSymbol exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
 	if s == nil || s.Store == nil {
@@ -200,7 +195,7 @@ func (s *Service) SetLeverage(
 	}
 	if strings.TrimSpace(tradingAccountID) == "" ||
 		strings.TrimSpace(leverageKey) == "" ||
-		strings.TrimSpace(exchangeSymbol) == "" ||
+		strings.TrimSpace(exchangeSymbol.Symbol) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 {
 		return tradingaccount.ErrInvalidAccount
 	}

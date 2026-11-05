@@ -45,7 +45,7 @@ type Adapter struct {
 	Wake        func()
 	Now         func() time.Time
 	mu          sync.RWMutex
-	instruments map[string]string
+	instruments map[exchange.SymbolKey]string
 }
 
 func (a *Adapter) now() time.Time {
@@ -75,16 +75,21 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	equity := settlement
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
-	if account.SoleMarket() == string(exchange.MarketTypeSpot) {
-		// 只有现货估值要按基础资产找交易对；合约按持仓估值，不读全部标的（每笔撮合要算两次快照）。
-		instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.SoleMarket())
-		if err != nil {
-			return exchange.AccountSnapshot{}, storageError(err)
-		}
-		byBase := make(map[string]store.InstrumentRecord, len(instruments))
-		for _, instrument := range instruments {
-			if instrument.QuoteAsset == account.SettlementAsset && instrument.BaseAsset != "" {
-				byBase[instrument.BaseAsset] = instrument
+	if account.HasBalanceMarket() {
+		// 现货的非结算币按基础资产找交易对估值；合约按持仓估值，不读全部标的（每笔撮合要算两次快照）。
+		byBase := make(map[string]store.InstrumentRecord)
+		for _, market := range account.Markets {
+			if !exchange.RuleFor(market).PositionFromBalance {
+				continue
+			}
+			instruments, err := a.Store.ListInstruments(ctx, account.Exchange, market)
+			if err != nil {
+				return exchange.AccountSnapshot{}, storageError(err)
+			}
+			for _, instrument := range instruments {
+				if instrument.QuoteAsset == account.SettlementAsset && instrument.BaseAsset != "" {
+					byBase[instrument.BaseAsset] = instrument
+				}
 			}
 		}
 		for asset, balance := range balances {
@@ -95,13 +100,14 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			if !found {
 				return exchange.AccountSnapshot{}, fmt.Errorf("paper: no valuation instrument for %s", asset)
 			}
-			quote, quoteErr := a.valuationQuote(ctx, instrument.ExchangeSymbol)
+			quote, quoteErr := a.valuationQuote(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 			if quoteErr != nil {
 				return exchange.AccountSnapshot{}, quoteErr
 			}
 			equity = equity.Add(balance.Mul(quote))
 		}
-	} else {
+	}
+	if account.HasPositionMarket() {
 		positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
 		if positionErr != nil {
 			return exchange.AccountSnapshot{}, storageError(positionErr)
@@ -122,20 +128,19 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			if parseErr != nil || leverage.Cmp(shared.Zero()) <= 0 {
 				return exchange.AccountSnapshot{}, fmt.Errorf("%w: paper position leverage", store.ErrInvalidRecord)
 			}
-			mark, quoteErr := a.valuationQuote(ctx, position.ExchangeSymbol)
+			mark, quoteErr := a.valuationQuote(ctx, exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol))
 			if quoteErr != nil {
 				return exchange.AccountSnapshot{}, quoteErr
 			}
 			unrealizedPnL = unrealizedPnL.Add(mark.Sub(entry).Mul(quantity))
 			usedMargin = usedMargin.Add(quantity.Abs().Mul(mark).Div(leverage))
 		}
-		equity = settlement.Add(unrealizedPnL)
+		equity = equity.Add(unrealizedPnL)
 	}
-	available := equity
-	if account.SoleMarket() == string(exchange.MarketTypeSwap) {
-		available = equity.Sub(usedMargin).Sub(locked[account.SettlementAsset])
-	} else {
-		available = settlement.Sub(locked[account.SettlementAsset])
+	// 单一资金池：现货买入和合约保证金都花结算币；现货持有的币不能当保证金。
+	available := settlement.Sub(locked[account.SettlementAsset])
+	if account.HasPositionMarket() {
+		available = settlement.Add(unrealizedPnL).Sub(usedMargin).Sub(locked[account.SettlementAsset])
 	}
 	return exchange.AccountSnapshot{
 		Balances: paperBalances(balances, locked), Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
@@ -144,16 +149,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 }
 
 // valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。
-func (a *Adapter) valuationQuote(ctx context.Context, symbol string) (shared.Decimal, error) {
-	quote, err := a.GetReferencePrice(ctx, symbol)
+func (a *Adapter) valuationQuote(ctx context.Context, key exchange.SymbolKey) (shared.Decimal, error) {
+	quote, err := a.GetReferencePrice(ctx, key)
 	if err != nil {
 		return shared.Zero(), err
 	}
 	if !QuoteFresh(execution.MarketQuote{SourceTime: quote.UpdatedAt}, a.now(), 10*time.Second) {
-		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", symbol)
+		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", key)
 	}
 	if quote.Price.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero(), fmt.Errorf("paper: valuation quote is empty for %s", symbol)
+		return shared.Zero(), fmt.Errorf("paper: valuation quote is empty for %s", key)
 	}
 	return quote.Price, nil
 }
@@ -197,14 +202,14 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[string]string, len(instruments))
+	byID := make(map[exchange.SymbolKey]string, len(instruments))
 	for _, instrument := range instruments {
 		native := instrument.ExchangeSymbol
 		if native != "" {
-			byID[native] = native
+			byID[exchange.NewSymbolKey(instrument.MarketType, native)] = native
 		}
 		if instrument.InstrumentID != "" && native != "" {
-			byID[instrument.InstrumentID] = native
+			byID[exchange.NewSymbolKey(instrument.MarketType, instrument.InstrumentID)] = native
 		}
 	}
 	a.mu.Lock()
@@ -213,9 +218,10 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	return instruments, nil
 }
 
-func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) (string, error) {
+// nativeSymbol 把内部标的 ID 或交易所代码换成交易所代码；同名代码按市场区分。
+func (a *Adapter) nativeSymbol(ctx context.Context, key exchange.SymbolKey) (string, error) {
 	a.mu.RLock()
-	native, found := a.instruments[symbol]
+	native, found := a.instruments[key]
 	a.mu.RUnlock()
 	if found {
 		return native, nil
@@ -225,38 +231,37 @@ func (a *Adapter) nativeSymbol(ctx context.Context, symbol string) (string, erro
 	// instrument IDs never leak into an exchange's public endpoint.
 	if _, err := a.LoadInstruments(ctx); err != nil {
 		return "", err
-	} else {
-		a.mu.RLock()
-		native, found = a.instruments[symbol]
-		a.mu.RUnlock()
-		if found {
-			return native, nil
-		}
 	}
-	return symbol, nil
+	a.mu.RLock()
+	native, found = a.instruments[key]
+	a.mu.RUnlock()
+	if found {
+		return native, nil
+	}
+	return key.Symbol, nil
 }
 
-func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (execution.MarketQuote, error) {
 	if a.MarketData == nil {
 		return execution.MarketQuote{}, fmt.Errorf("paper: public market data source is unavailable")
 	}
-	native, err := a.nativeSymbol(ctx, symbol.String())
+	native, err := a.nativeSymbol(ctx, key)
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
-	return a.MarketData.GetQuote(ctx, shared.ExchangeSymbol(native))
+	return a.MarketData.GetQuote(ctx, exchange.SymbolKey{Market: key.Market, Symbol: native})
 }
 
 // GetReferencePrice 用公共行情的参考价：目标换算要一次取几百个标的，不能逐个请求盘口。
-func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+func (a *Adapter) GetReferencePrice(ctx context.Context, key exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	if a.MarketData == nil {
 		return exchange.ReferencePrice{}, errors.New("paper: public market data is not configured")
 	}
-	native, err := a.nativeSymbol(ctx, symbol)
+	native, err := a.nativeSymbol(ctx, key)
 	if err != nil {
 		return exchange.ReferencePrice{}, err
 	}
-	return a.MarketData.GetReferencePrice(ctx, native)
+	return a.MarketData.GetReferencePrice(ctx, exchange.SymbolKey{Market: key.Market, Symbol: native})
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
@@ -280,7 +285,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			RealizedPnL: decimalOrZero(row.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(row.ExchangeUpdatedAt).UTC(),
 		}
 		if position.Market == exchange.MarketTypeSwap && !position.SignedQuantity.IsZero() {
-			quote, quoteErr := a.GetReferencePrice(ctx, position.ExchangeSymbol)
+			quote, quoteErr := a.GetReferencePrice(ctx, exchange.NewSymbolKey(position.Market, position.ExchangeSymbol))
 			if quoteErr != nil {
 				return nil, quoteErr
 			}
@@ -311,11 +316,11 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	}
 	return result, nil
 }
-func (a *Adapter) ListRecentFills(ctx context.Context, symbol shared.ExchangeSymbol, _ string) ([]exchange.Fill, string, error) {
+func (a *Adapter) ListRecentFills(ctx context.Context, key exchange.SymbolKey, _ string) ([]exchange.Fill, string, error) {
 	if a.Store == nil {
 		return nil, "", nil
 	}
-	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, Market: a.Account.SoleMarket(), ExchangeSymbol: symbol.String(), Limit: 1000})
+	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Limit: 1000})
 	if err != nil {
 		return nil, "", storageError(err)
 	}
@@ -325,7 +330,7 @@ func (a *Adapter) ListRecentFills(ctx context.Context, symbol shared.ExchangeSym
 	}
 	return result, "", nil
 }
-func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, clientID string) (exchange.Order, error) {
+func (a *Adapter) GetOrder(ctx context.Context, key exchange.SymbolKey, clientID string) (exchange.Order, error) {
 	if a.Store == nil {
 		return exchange.Order{}, nil
 	}
@@ -336,7 +341,7 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 		}
 		return exchange.Order{}, storageError(err)
 	}
-	if symbol != "" && row.ExchangeSymbol != symbol.String() {
+	if key.Symbol != "" && (row.ExchangeSymbol != key.Symbol || (key.Market != "" && row.MarketType != string(key.Market))) {
 		return exchange.Order{}, fmt.Errorf("paper: symbol mismatch")
 	}
 	result := orderFromRecord(row)
@@ -356,11 +361,11 @@ func (a *Adapter) GetOrder(ctx context.Context, symbol shared.ExchangeSymbol, cl
 	}
 	return result, nil
 }
-func (a *Adapter) GetOrderByExchangeID(ctx context.Context, symbol, exchangeOrderID string) (exchange.Order, error) {
+func (a *Adapter) GetOrderByExchangeID(ctx context.Context, key exchange.SymbolKey, exchangeOrderID string) (exchange.Order, error) {
 	if a.Store == nil {
 		return exchange.Order{}, nil
 	}
-	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, exchange.NewSymbolKey(a.Account.SoleMarket(), symbol), exchangeOrderID)
+	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, key, exchangeOrderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}
@@ -376,11 +381,11 @@ func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exch
 	}
 	now := a.now()
 	symbol := req.ExchangeSymbol
-	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, Market: exchange.MarketType(a.Account.SoleMarket()), ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, Market: req.Market, ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
 }
-func (a *Adapter) CancelOrder(_ context.Context, symbol shared.ExchangeSymbol, id string) (exchange.Order, error) {
+func (a *Adapter) CancelOrder(_ context.Context, key exchange.SymbolKey, id string) (exchange.Order, error) {
 	now := a.now()
-	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, Market: exchange.MarketType(a.Account.SoleMarket()), ExchangeSymbol: symbol.String(), Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, Market: key.Market, ExchangeSymbol: key.Symbol, Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func orderFromRecord(row store.OrderRecord) exchange.Order {
@@ -406,9 +411,9 @@ func decimalOrZero(raw string) shared.Decimal {
 	}
 	return value
 }
-func (a *Adapter) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
+func (a *Adapter) SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error {
 	return nil
 }
-func (a *Adapter) SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error {
+func (a *Adapter) SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error {
 	return nil
 }

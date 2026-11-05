@@ -53,7 +53,7 @@ type capacityPaperAdapter struct {
 	now time.Time
 }
 
-func (a capacityPaperAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a capacityPaperAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("100"), Last: shared.MustDecimal("90"), SourceTime: a.now}, nil
 }
 func (a capacityPaperAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {

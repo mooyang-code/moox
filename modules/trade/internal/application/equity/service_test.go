@@ -23,8 +23,8 @@ func (a *equityTestAdapter) LoadInstruments(context.Context) ([]exchange.Instrum
 	return a.instruments, nil
 }
 
-func (a *equityTestAdapter) GetReferencePrice(_ context.Context, symbol string) (exchange.ReferencePrice, error) {
-	a.symbol = symbol
+func (a *equityTestAdapter) GetReferencePrice(_ context.Context, symbol exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	a.symbol = symbol.Symbol
 	return a.price, nil
 }
 

@@ -60,12 +60,12 @@ func (a *adapterStub) ListOpenOrders(context.Context) ([]exchange.Order, error) 
 
 func (a *adapterStub) ListRecentFills(
 	context.Context,
-	shared.ExchangeSymbol,
+	exchange.SymbolKey,
 	string,
 ) ([]exchange.Fill, string, error) {
 	return a.fills, "", a.fillsErr
 }
-func (a *adapterStub) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *adapterStub) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.getCalls++
 	return a.getResult, a.getErr
 }
@@ -77,7 +77,7 @@ func (a *adapterStub) PlaceOrder(_ context.Context, request exchange.OrderReques
 	}
 	return a.placeResult, a.placeErr
 }
-func (a *adapterStub) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *adapterStub) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.cancelCalls++
 	if a.cancelHook != nil {
 		a.cancelHook()
@@ -176,10 +176,10 @@ func TestRecoverCancelUncertainErrorReloadsPrivateTerminal(t *testing.T) {
 	require.Equal(t, orderdomain.Filled, got.State)
 }
 
-func (a *adapterStub) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
+func (a *adapterStub) SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error {
 	return nil
 }
-func (a *adapterStub) SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error {
+func (a *adapterStub) SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error {
 	return nil
 }
 func (a *adapterStub) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
@@ -349,7 +349,7 @@ type liveQuoteAdapter struct {
 	price string
 }
 
-func (a *liveQuoteAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a *liveQuoteAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	price := shared.MustDecimal(a.price)
 	return execution.MarketQuote{Bid: price, Ask: price, Last: price, SourceTime: a.now()}, nil
 }
@@ -1241,7 +1241,7 @@ func newTestServiceForMarket(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: account.SpaceID, TradingAccountID: account.ID, Name: account.Name,
-			Exchange: string(account.Exchange), Markets: []string{string(account.SoleMarket())},
+			Exchange: string(account.Exchange), Markets: []string{string(account.Markets[0])},
 			ExecutionMode:      string(account.ExecutionMode),
 			Environment:        string(account.Environment),
 			CredentialSecretID: account.CredentialSecretID,
@@ -1411,7 +1411,7 @@ func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T
 }
 
 // GetQuote 返回没有时间的报价，相当于行情已过期；需要新鲜报价的测试用 useLiveQuote。
-func (*adapterStub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (*adapterStub) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{}, nil
 }
 
@@ -1420,7 +1420,7 @@ type symbolConfigStub struct {
 	err   error
 }
 
-func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, string, shared.Decimal) error {
+func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, exchange.SymbolKey, shared.Decimal) error {
 	s.calls++
 	return s.err
 }

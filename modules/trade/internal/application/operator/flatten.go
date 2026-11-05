@@ -797,7 +797,7 @@ func (s *Service) flattenSpot(
 			continue
 		}
 		quote, quoteErr := s.Prices.LatestPrice(
-			ctx, account.TradingAccountID, instrument.ExchangeSymbol,
+			ctx, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 		)
 		price := shared.Zero()
 		if quoteErr == nil {
@@ -857,7 +857,7 @@ func (s *Service) placeOrContinueFlattenChild(
 	result *FlattenAccountResult,
 ) error {
 	quote, err := s.Prices.LatestPrice(
-		ctx, account.TradingAccountID, instrument.ExchangeSymbol,
+		ctx, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 	)
 	if err != nil {
 		return &orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_quote", Err: err}

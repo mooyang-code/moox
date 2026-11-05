@@ -29,7 +29,7 @@ var (
 type Quote = targetapp.Quote
 
 type PriceSource interface {
-	LatestPrice(context.Context, string, string) (Quote, error)
+	LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error)
 }
 
 type AccountSyncer interface {
@@ -354,7 +354,7 @@ func (s *Service) PlaceManualOrder(
 		return ManualOrderResult{Action: action}, err
 	}
 	quote, err := s.Prices.LatestPrice(
-		ctx, command.TradingAccountID, instrument.ExchangeSymbol,
+		ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 	)
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)

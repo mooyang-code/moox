@@ -19,7 +19,7 @@ import (
 
 type deadlinePrice struct{}
 
-func (deadlinePrice) LatestPrice(ctx context.Context, _, _ string) (Quote, error) {
+func (deadlinePrice) LatestPrice(ctx context.Context, _ string, _ exchange.SymbolKey) (Quote, error) {
 	<-ctx.Done()
 	return Quote{}, ctx.Err()
 }

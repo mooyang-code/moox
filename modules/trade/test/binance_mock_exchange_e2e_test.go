@@ -30,7 +30,7 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	adapter := binance.New(exchange.AccountConfig{
 		TradingAccountID: testAccount,
 		Exchange:         exchange.ExchangeBinance,
-		MarketType:       exchange.MarketTypeSpot,
+		Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:    exchange.ExecutionModeLive,
 		Environment:      exchange.AccountEnvironmentTestnet,
 		SettlementAsset:  "USDT",

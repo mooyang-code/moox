@@ -199,7 +199,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		return fakeAdapter{ExecutionAdapter: core}, nil
 	})
 	adapter, err := registry.Bind(exchange.AccountConfig{
-		TradingAccountID: testAccount, Exchange: fakeExchangeName, MarketType: exchange.MarketTypeStock,
+		TradingAccountID: testAccount, Exchange: fakeExchangeName, Markets: []exchange.MarketType{exchange.MarketTypeStock},
 		ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "CNY",
 	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})
 	require.NoError(t, err)

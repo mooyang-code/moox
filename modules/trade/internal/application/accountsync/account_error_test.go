@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -79,10 +78,10 @@ func (a boundarySyncAdapter) GetAccountSnapshot(ctx context.Context) (exchange.A
 	snapshot, _ := a.syncAdapter.GetAccountSnapshot(ctx)
 	return snapshot, a.failure("snapshot")
 }
-func (a boundarySyncAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a boundarySyncAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", a.failure("fills")
 }
-func (a boundarySyncAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a boundarySyncAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, a.failure("order")
 }
 

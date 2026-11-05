@@ -32,7 +32,7 @@ type blockedTargetPrice struct {
 	once    sync.Once
 }
 
-func (p *blockedTargetPrice) LatestPrice(ctx context.Context, _, _ string) (targetapp.Quote, error) {
+func (p *blockedTargetPrice) LatestPrice(ctx context.Context, _ string, _ exchange.SymbolKey) (targetapp.Quote, error) {
 	p.once.Do(func() { close(p.entered) })
 	select {
 	case <-ctx.Done():

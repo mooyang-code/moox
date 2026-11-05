@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -88,14 +89,14 @@ func openLiveHarness(
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
-			record.SoleMarket() != string(exchange.MarketTypeSpot) ||
+			!slices.Equal(record.Markets, []string{string(exchange.MarketTypeSpot)}) ||
 			record.Exchange != string(options.Exchange) {
 			return nil, errors.New("testnet smoke session configuration escaped TESTNET LIVE SPOT")
 		}
 		config := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			MarketType:       exchange.MarketType(record.SoleMarket()),
+			Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
 			Environment:      exchange.AccountEnvironmentTestnet,
 			SettlementAsset:  record.SettlementAsset,
@@ -251,7 +252,7 @@ func runSubmitPhase(
 	if !ok {
 		return errors.New("testnet adapter has no reference price source")
 	}
-	quote, err := priceSource.GetReferencePrice(ctx, options.ExchangeSymbol)
+	quote, err := priceSource.GetReferencePrice(ctx, exchange.NewSymbolKey(options.MarketType, options.ExchangeSymbol))
 	if err != nil {
 		return err
 	}
@@ -329,7 +330,7 @@ func runSubmitPhase(
 	if err := writeState(options.State, state); err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(options.ExchangeSymbol), clientOrderID)
+	queried, err := adapter.GetOrder(ctx, exchange.NewSymbolKey(options.MarketType, options.ExchangeSymbol), clientOrderID)
 	if err != nil {
 		return fmt.Errorf("query accepted order by client ID: %w", err)
 	}
@@ -402,7 +403,7 @@ func runRecoverPhase(
 	if err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, shared.ExchangeSymbol(state.ExchangeSymbol), state.ClientOrderID)
+	queried, err := adapter.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("restart query by client ID: %w", err)
 	}
@@ -441,7 +442,7 @@ func runRecoverPhase(
 	if err := waitLocalTerminal(ctx, harness, state.OrderID); err != nil {
 		return err
 	}
-	queried, err = adapter.GetOrder(ctx, shared.ExchangeSymbol(state.ExchangeSymbol), state.ClientOrderID)
+	queried, err = adapter.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("query terminal testnet order: %w", err)
 	}
@@ -775,7 +776,7 @@ func (s smokePositionSource) GetPosition(
 		ctx,
 		account.SpaceID,
 		tradingAccountID,
-		exchange.SymbolKey{Market: exchange.MarketType(account.SoleMarket()), Symbol: symbol},
+		exchange.SymbolKey{Market: exchange.MarketTypeSpot, Symbol: symbol},
 		string(exchange.PositionSideNet),
 	)
 	if err != nil {

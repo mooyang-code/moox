@@ -95,7 +95,7 @@ func restEndpoints(
 }
 
 func privateStreamEndpoint(config exchange.AccountConfig) string {
-	if config.MarketType == exchange.MarketTypeSpot {
+	if config.Market() == exchange.MarketTypeSpot {
 		if config.Environment == exchange.AccountEnvironmentTestnet {
 			return "wss://ws-api.testnet.binance.vision/ws-api/v3"
 		}
@@ -111,7 +111,7 @@ func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeBinance
 
 // wallet 是余额所在的钱包：普通账户的现货在现货钱包，合约在合约钱包。
 func (a *Adapter) wallet() exchange.Wallet {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		return exchange.WalletFutures
 	}
 	return exchange.WalletSpot
@@ -119,18 +119,18 @@ func (a *Adapter) wallet() exchange.Wallet {
 
 // key 返回本适配器所服务市场下的标的键。
 func (a *Adapter) key(symbol string) exchange.SymbolKey {
-	return exchange.SymbolKey{Market: a.config.MarketType, Symbol: symbol}
+	return exchange.SymbolKey{Market: a.config.Market(), Symbol: symbol}
 }
 
 func (a *Adapter) client() *httpclient.Client {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		return a.swap
 	}
 	return a.spot
 }
 
 func (a *Adapter) path(spot, swap string) string {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		return swap
 	}
 	return spot
@@ -208,7 +208,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	}
 	out := make([]exchange.Instrument, 0, len(payload.Symbols))
 	for _, item := range payload.Symbols {
-		if a.config.MarketType == exchange.MarketTypeSwap {
+		if a.config.Market() == exchange.MarketTypeSwap {
 			if item.ContractType != "PERPETUAL" || item.MarginAsset != "USDT" {
 				continue
 			}
@@ -216,26 +216,26 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		instrumentID, idErr := exchange.CanonicalInstrumentID(
 			item.BaseAsset,
 			item.QuoteAsset,
-			a.config.MarketType,
+			a.config.Market(),
 		)
 		if idErr != nil {
 			return nil, typedRejected("canonical instrument ID", idErr)
 		}
 		instrument := exchange.Instrument{
 			Exchange:           exchange.ExchangeBinance,
-			MarketType:         a.config.MarketType,
+			MarketType:         a.config.Market(),
 			ExchangeSymbol:     item.Symbol,
 			InstrumentID:       instrumentID,
 			BaseAsset:          item.BaseAsset,
 			QuoteAsset:         item.QuoteAsset,
 			SettlementAsset:    item.QuoteAsset,
-			Linear:             a.config.MarketType == exchange.MarketTypeSwap,
+			Linear:             a.config.Market() == exchange.MarketTypeSwap,
 			ContractValue:      shared.MustDecimal("1"),
 			ContractValueAsset: item.BaseAsset,
 			Status:             item.Status,
 			ExchangeUpdatedAt:  time.Now().UTC(),
 		}
-		if a.config.MarketType == exchange.MarketTypeSwap {
+		if a.config.Market() == exchange.MarketTypeSwap {
 			instrument.SettlementAsset = item.MarginAsset
 		}
 		for _, filter := range item.Filters {
@@ -279,8 +279,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 
 func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
-	symbol string,
+	key exchange.SymbolKey,
 ) (exchange.ReferencePrice, error) {
+	symbol := key.Symbol
 	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
 	}
@@ -330,15 +331,15 @@ func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.
 	return prices, nil
 }
 
-func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
-	last, err := a.GetReferencePrice(ctx, symbol.String())
+func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (execution.MarketQuote, error) {
+	last, err := a.GetReferencePrice(ctx, key)
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
-	if book, at, ok := a.books.Get(ctx, a.key(symbol.String()), a.allBooks); ok {
+	if book, at, ok := a.books.Get(ctx, key, a.allBooks); ok {
 		return execution.MarketQuote{Bid: book.Bid, Ask: book.Ask, Last: last.Price, SourceTime: at}, nil
 	}
-	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{symbol.String()}}})
+	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{key.Symbol}}})
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
@@ -412,7 +413,7 @@ type swapAccount struct {
 
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	// 持仓模式只在会话启动时检查一次，适配器随会话重建。
-	if a.config.MarketType == exchange.MarketTypeSwap && !a.modeChecked.Load() {
+	if a.config.Market() == exchange.MarketTypeSwap && !a.modeChecked.Load() {
 		if err := a.ensureOneWayMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -426,7 +427,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		var payload spotAccount
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return exchange.AccountSnapshot{}, typedRejected("decode account", err)
@@ -553,7 +554,7 @@ type positionRisk struct {
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		return nil, nil
 	}
 	raw, err := a.request(ctx, http.MethodGet, "/fapi/v3/positionRisk", nil)
@@ -574,7 +575,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			continue
 		}
 		position := exchange.Position{
-			Market:           a.config.MarketType,
+			Market:           a.config.Market(),
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -678,10 +679,10 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 
 func (a *Adapter) GetOrder(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
-	symbolValue := symbol.String()
+	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" || strings.TrimSpace(clientOrderID) == "" {
 		return exchange.Order{}, typedRejected("symbol and client order id are required", nil)
 	}
@@ -701,9 +702,10 @@ func (a *Adapter) GetOrder(
 
 func (a *Adapter) GetOrderByExchangeID(
 	ctx context.Context,
-	symbol string,
+	key exchange.SymbolKey,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
+	symbol := key.Symbol
 	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(exchangeOrderID) == "" {
 		return exchange.Order{}, typedRejected("symbol and Exchange order id are required", nil)
 	}
@@ -730,7 +732,7 @@ func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
 ) (exchange.Order, error) {
-	if err := validateOrderRequest(request, a.config.MarketType); err != nil {
+	if err := validateOrderRequest(request, a.config.Market()); err != nil {
 		return exchange.Order{}, err
 	}
 	values := url.Values{
@@ -745,7 +747,7 @@ func (a *Adapter) PlaceOrder(
 		values.Set("timeInForce", string(request.EffectiveFillPolicy()))
 		values.Set("price", request.LimitPrice.String())
 	}
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		values.Set("positionSide", "BOTH")
 		if request.ReduceOnly {
 			values.Set("reduceOnly", "true")
@@ -783,10 +785,10 @@ func (a *Adapter) PlaceOrder(
 
 func (a *Adapter) CancelOrder(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
-	symbolValue := symbol.String()
+	symbolValue := key.Symbol
 	raw, err := a.request(ctx, http.MethodDelete, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
 		"symbol":            []string{symbolValue},
 		"origClientOrderId": []string{clientOrderID},
@@ -823,10 +825,10 @@ type tradePayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	symbolValue := symbol.String()
+	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
 	}
@@ -940,11 +942,11 @@ func (a *Adapter) clientOrderIDByExchangeOrderID(
 
 func (a *Adapter) SetLeverage(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
-	symbolValue := symbol.String()
-	if a.config.MarketType != exchange.MarketTypeSwap ||
+	symbolValue := key.Symbol
+	if a.config.Market() != exchange.MarketTypeSwap ||
 		strings.TrimSpace(symbolValue) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 ||
 		strings.ContainsAny(leverage.String(), "./") {
@@ -959,11 +961,11 @@ func (a *Adapter) SetLeverage(
 
 func (a *Adapter) SetMarginMode(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	mode exchange.MarginMode,
 ) error {
-	symbolValue := symbol.String()
-	if a.config.MarketType != exchange.MarketTypeSwap ||
+	symbolValue := key.Symbol
+	if a.config.Market() != exchange.MarketTypeSwap ||
 		mode != exchange.MarginModeCross ||
 		strings.TrimSpace(symbolValue) == "" {
 		return typedRejected("only CROSS SWAP margin mode is supported", nil)
@@ -1022,14 +1024,14 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		limitPrice = &price
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
 			return exchange.Order{}, typedRejected("hedge order is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
 	return exchange.Order{
-		Market:          a.config.MarketType,
+		Market:          a.config.Market(),
 		ExchangeOrderID: row.OrderID.String(),
 		ClientOrderID:   row.ClientOrderID,
 		ExchangeSymbol:  row.Symbol,
@@ -1079,7 +1081,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		side = exchange.SideBuy
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
 			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
 		}
@@ -1094,7 +1096,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		role = "MAKER"
 	}
 	return exchange.Fill{
-		Market:          a.config.MarketType,
+		Market:          a.config.Market(),
 		ExchangeTradeID: row.ID.String(),
 		ExchangeOrderID: row.OrderID.String(),
 		ExchangeSymbol:  row.Symbol,

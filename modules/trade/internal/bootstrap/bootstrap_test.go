@@ -82,7 +82,7 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 		adapter, err := registry.Bind(exchange.AccountConfig{
 			TradingAccountID: "account-1",
 			Exchange:         name,
-			MarketType:       exchange.MarketTypeSpot,
+			Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 			ExecutionMode:    exchange.ExecutionModePaper,
 			SettlementAsset:  "USDT",
 		}, exchange.Credential{})
@@ -98,7 +98,7 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	_, err := registry.Bind(exchange.AccountConfig{
 		TradingAccountID: "account-1",
 		Exchange:         exchange.ExchangeOKX,
-		MarketType:       exchange.MarketTypeSpot,
+		Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:    exchange.ExecutionModeLive,
 		SettlementAsset:  "USDT",
 	}, exchange.Credential{APIKey: "key", APISecret: "secret"})
@@ -164,7 +164,7 @@ func TestRegistryBindsExchangeWithOnlyExtraCredential(t *testing.T) {
 	adapter, err := registry.Bind(exchange.AccountConfig{
 		TradingAccountID: "account-1",
 		Exchange:         fakeName,
-		MarketType:       exchange.MarketTypeSpot,
+		Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:    exchange.ExecutionModeLive,
 		SettlementAsset:  "CNY",
 	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})

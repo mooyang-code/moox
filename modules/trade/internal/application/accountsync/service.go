@@ -248,7 +248,7 @@ func (s *Service) syncAccountLocked(
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
 	for _, key := range symbols {
-		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(key.Symbol), cursors[key.String()])
+		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
 		if listErr != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
@@ -323,9 +323,9 @@ func orderIdentityKey(market exchange.MarketType, id string) string {
 
 func lookupLocalOrder(ctx context.Context, adapter execution.ExecutionAdapter, local store.OrderRecord) (exchange.Order, error) {
 	if local.ExchangeOrderID != "" {
-		return adapter.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
+		return adapter.GetOrderByExchangeID(ctx, exchange.NewSymbolKey(local.MarketType, local.ExchangeSymbol), local.ExchangeOrderID)
 	}
-	return adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
+	return adapter.GetOrder(ctx, exchange.NewSymbolKey(local.MarketType, local.ExchangeSymbol), local.ClientOrderID)
 }
 
 // orderMissingOnExchange 判断本地活动订单是否可以按已撤销处理。只认交易所明确的不存在错误码，
@@ -926,9 +926,9 @@ func (s *Service) ensureOrderForFill(
 	var current exchange.Order
 	var lookupErr error
 	if fill.ClientOrderID != "" {
-		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.ExchangeSymbol), fill.ClientOrderID)
+		current, lookupErr = adapter.GetOrder(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ClientOrderID)
 	} else {
-		current, lookupErr = adapter.GetOrderByExchangeID(ctx, fill.ExchangeSymbol, fill.ExchangeOrderID)
+		current, lookupErr = adapter.GetOrderByExchangeID(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ExchangeOrderID)
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {

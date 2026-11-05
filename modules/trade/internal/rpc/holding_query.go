@@ -85,7 +85,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			item.AverageCost = averageCost
 		}
 		if quoteSource != nil {
-			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, holdingQuoteSymbol(instrument)); quoteErr == nil {
+			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, holdingQuoteSymbol(instrument))); quoteErr == nil {
 				item.MarkPrice = quote.Price
 				item.MarketValue = quantity.Mul(quote.Price)
 				item.SourceTime = quote.UpdatedAt

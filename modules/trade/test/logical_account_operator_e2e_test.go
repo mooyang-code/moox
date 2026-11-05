@@ -20,11 +20,7 @@ type logicalAccountE2EPriceSource struct {
 	at time.Time
 }
 
-func (s logicalAccountE2EPriceSource) LatestPrice(
-	context.Context,
-	string,
-	string,
-) (targetapp.Quote, error) {
+func (s logicalAccountE2EPriceSource) LatestPrice(context.Context, string, exchange.SymbolKey) (targetapp.Quote, error) {
 	return targetapp.Quote{
 		Price: shared.MustDecimal("50000"), UpdatedAt: s.at,
 	}, nil

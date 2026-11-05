@@ -52,18 +52,18 @@ func (a *lagAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	a.record("open_orders")
 	return nil, nil
 }
-func (a *lagAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a *lagAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	a.record("fills")
 	return nil, "", nil
 }
-func (a *lagAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *lagAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.record("order")
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*lagAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*lagAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*lagAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 

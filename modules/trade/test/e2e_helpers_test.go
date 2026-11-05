@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/adaptertest"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func (f *fakeExchange) Exchange() exchange.Exchange { return exchange.ExchangeBi
 func (f *fakeExchange) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
 	return []exchange.Instrument{f.instrument}, nil
 }
-func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (f *fakeExchange) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.quoteErr != nil {
@@ -131,7 +132,7 @@ func (f *fakeExchange) GetReferencePrice(context.Context, string) (exchange.Refe
 	}
 	return f.reference, nil
 }
-func (f *fakeExchange) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (f *fakeExchange) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.quoteErr != nil {
@@ -170,8 +171,8 @@ func (f *fakeExchange) ListOpenOrders(context.Context) ([]exchange.Order, error)
 	}
 	return result, nil
 }
-func (f *fakeExchange) ListRecentFills(_ context.Context, symbol shared.ExchangeSymbol, cursor string) ([]exchange.Fill, string, error) {
-	symbolValue := symbol.String()
+func (f *fakeExchange) ListRecentFills(_ context.Context, symbol exchange.SymbolKey, cursor string) ([]exchange.Fill, string, error) {
+	symbolValue := symbol.Symbol
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fillsErr != nil {
@@ -192,7 +193,7 @@ func (f *fakeExchange) ListRecentFills(_ context.Context, symbol shared.Exchange
 	}
 	return result, next, nil
 }
-func (f *fakeExchange) GetOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
+func (f *fakeExchange) GetOrder(_ context.Context, _ exchange.SymbolKey, clientOrderID string) (exchange.Order, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lookupCalls++
@@ -225,7 +226,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 	f.orders[request.ClientOrderID] = current
 	return current, nil
 }
-func (f *fakeExchange) CancelOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
+func (f *fakeExchange) CancelOrder(_ context.Context, _ exchange.SymbolKey, clientOrderID string) (exchange.Order, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	current, ok := f.orders[clientOrderID]
@@ -237,16 +238,16 @@ func (f *fakeExchange) CancelOrder(_ context.Context, _ shared.ExchangeSymbol, c
 	f.orders[clientOrderID] = current
 	return current, nil
 }
-func (f *fakeExchange) SetLeverage(_ context.Context, symbol shared.ExchangeSymbol, leverage shared.Decimal) error {
+func (f *fakeExchange) SetLeverage(_ context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.leverageCalls = append(f.leverageCalls, leverageCall{symbol: symbol.String(), leverage: leverage})
+	f.leverageCalls = append(f.leverageCalls, leverageCall{symbol: symbol.Symbol, leverage: leverage})
 	return nil
 }
-func (f *fakeExchange) SetMarginMode(_ context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
+func (f *fakeExchange) SetMarginMode(_ context.Context, symbol exchange.SymbolKey, mode exchange.MarginMode) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.marginCalls = append(f.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
+	f.marginCalls = append(f.marginCalls, marginCall{symbol: symbol.Symbol, mode: mode})
 	return nil
 }
 func (f *fakeExchange) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
@@ -273,7 +274,7 @@ func (a recordingAdapter) LoadInstruments(ctx context.Context) ([]exchange.Instr
 	return source.LoadInstruments(ctx)
 }
 
-func (a recordingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a recordingAdapter) GetQuote(ctx context.Context, symbol exchange.SymbolKey) (execution.MarketQuote, error) {
 	source, ok := a.ExecutionAdapter.(execution.MarketDataSource)
 	if !ok {
 		return execution.MarketQuote{}, errors.New("recording adapter: market data source is unavailable")
@@ -281,7 +282,7 @@ func (a recordingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSy
 	return source.GetQuote(ctx, symbol)
 }
 
-func (a recordingAdapter) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
+func (a recordingAdapter) GetReferencePrice(ctx context.Context, symbol exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	source, ok := a.ExecutionAdapter.(execution.ReferencePriceSource)
 	if !ok {
 		return exchange.ReferencePrice{}, errors.New("recording adapter: reference price source is unavailable")
@@ -297,19 +298,19 @@ func (a recordingAdapter) PlaceOrder(ctx context.Context, request exchange.Order
 	return a.ExecutionAdapter.PlaceOrder(ctx, request)
 }
 
-func (a recordingAdapter) SetLeverage(ctx context.Context, symbol shared.ExchangeSymbol, leverage shared.Decimal) error {
+func (a recordingAdapter) SetLeverage(ctx context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error {
 	a.recorder.mu.Lock()
 	a.recorder.leverageCalls = append(
 		a.recorder.leverageCalls,
-		leverageCall{symbol: symbol.String(), leverage: leverage},
+		leverageCall{symbol: symbol.Symbol, leverage: leverage},
 	)
 	a.recorder.mu.Unlock()
 	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetLeverage(ctx, symbol, leverage)
 }
 
-func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol shared.ExchangeSymbol, mode exchange.MarginMode) error {
+func (a recordingAdapter) SetMarginMode(ctx context.Context, symbol exchange.SymbolKey, mode exchange.MarginMode) error {
 	a.recorder.mu.Lock()
-	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol.String(), mode: mode})
+	a.recorder.marginCalls = append(a.recorder.marginCalls, marginCall{symbol: symbol.Symbol, mode: mode})
 	a.recorder.mu.Unlock()
 	return a.ExecutionAdapter.(execution.SymbolConfigurer).SetMarginMode(ctx, symbol, mode)
 }
@@ -378,7 +379,7 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 
 func (a *synchronousPaperAdapter) ListRecentFills(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	symbol exchange.SymbolKey,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
 	rows, next, err := a.Adapter.ListRecentFills(ctx, symbol, cursor)
@@ -386,8 +387,8 @@ func (a *synchronousPaperAdapter) ListRecentFills(
 		return nil, cursor, err
 	}
 	a.mu.Lock()
-	pending := append([]exchange.Fill(nil), a.pending[symbol.String()]...)
-	delete(a.pending, symbol.String())
+	pending := append([]exchange.Fill(nil), a.pending[symbol.Symbol]...)
+	delete(a.pending, symbol.Symbol)
 	a.mu.Unlock()
 	return append(rows, pending...), next, nil
 }
@@ -403,7 +404,7 @@ func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (excha
 		pending = append(pending, fills...)
 	}
 	a.mu.Unlock()
-	if a.Account.SoleMarket() != string(exchange.MarketTypeSpot) {
+	if !slices.Equal(a.Account.Markets, []string{string(exchange.MarketTypeSpot)}) {
 		return snapshot, nil
 	}
 	balances := make(map[string]exchange.AssetBalance, len(snapshot.Balances))
@@ -411,7 +412,7 @@ func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (excha
 		balances[balance.Asset] = balance
 	}
 	for _, fill := range pending {
-		instrument, instrumentErr := a.Store.GetInstrument(ctx, a.Account.Exchange, a.Account.SoleMarket(), fill.ExchangeSymbol)
+		instrument, instrumentErr := a.Store.GetInstrument(ctx, a.Account.Exchange, string(fill.Market), fill.ExchangeSymbol)
 		if instrumentErr != nil {
 			continue
 		}
@@ -455,7 +456,7 @@ func (a *synchronousPaperAdapter) ListPositionSnapshots(ctx context.Context) ([]
 		pending = append(pending, fills...)
 	}
 	a.mu.Unlock()
-	if a.Account.SoleMarket() != string(exchange.MarketTypeSwap) {
+	if !slices.Equal(a.Account.Markets, []string{string(exchange.MarketTypeSwap)}) {
 		return positions, nil
 	}
 	bySymbol := make(map[string]int, len(positions))

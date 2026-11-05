@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
@@ -125,7 +124,7 @@ type errorBoundaryQuoteAdapter struct {
 	quote execution.MarketQuote
 }
 
-func (a errorBoundaryQuoteAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a errorBoundaryQuoteAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return a.quote, a.err
 }
 

@@ -152,7 +152,7 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 func (m *Manager) EnsureSymbolConfig(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	symbol exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
 	session, err := m.symbolConfigSession(tradingAccountID)
@@ -176,15 +176,15 @@ func (m *Manager) RequestSync(tradingAccountID string) bool {
 }
 
 // ForgetSymbolConfig 让标的下次开仓前重新设置，符号是默认杠杆键时清空全部记录。
-func (m *Manager) ForgetSymbolConfig(tradingAccountID, symbol string) {
+func (m *Manager) ForgetSymbolConfig(tradingAccountID string, symbol exchange.SymbolKey) {
 	if session, err := m.symbolConfigSession(tradingAccountID); err == nil {
 		session.ForgetSymbolConfig(symbol)
 	}
 }
 
 type symbolConfigSession interface {
-	EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error
-	ForgetSymbolConfig(symbol string)
+	EnsureSymbolConfig(ctx context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error
+	ForgetSymbolConfig(symbol exchange.SymbolKey)
 }
 
 func (m *Manager) symbolConfigSession(tradingAccountID string) (symbolConfigSession, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 		}
 		return ManualOrderResult{Action: action}, err
 	}
-	quote, err := s.Prices.LatestPrice(ctx, command.TradingAccountID, instrument.ExchangeSymbol)
+	quote, err := s.Prices.LatestPrice(ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)
 	}

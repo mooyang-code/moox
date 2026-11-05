@@ -681,7 +681,7 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 		}
 		price := shared.Zero()
 		if s.Prices != nil {
-			if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol); quoteErr == nil {
+			if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)); quoteErr == nil {
 				price = quote.Price
 			}
 		}

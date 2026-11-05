@@ -194,10 +194,10 @@ func (s *Service) prepareSymbolConfigs(ctx context.Context, records []store.Orde
 			continue
 		}
 		wg.Add(1)
-		go func(accountID, symbol string, leverage shared.Decimal) {
+		go func(accountID string, symbol exchange.SymbolKey, leverage shared.Decimal) {
 			defer wg.Done()
 			_ = s.SymbolConfig.EnsureSymbolConfig(ctx, accountID, symbol, leverage)
-		}(record.TradingAccountID, record.ExchangeSymbol, leverage)
+		}(record.TradingAccountID, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), leverage)
 	}
 	wg.Wait()
 }

@@ -140,11 +140,7 @@ type targetPriceStub struct {
 	err   error
 }
 
-func (s targetPriceStub) LatestPrice(
-	context.Context,
-	string,
-	string,
-) (Quote, error) {
+func (s targetPriceStub) LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error) {
 	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, s.err
 }
 

@@ -78,7 +78,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 
 	reducer := &consumer.Reducer{Store: s, Now: func() time.Time { return testNow }}
 	matcher := &paperexec.Matcher{Store: s, Reducer: reducer, DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
-		quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+		quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
 		if err != nil {
 			return paperexec.Decision{}, err
 		}
@@ -116,7 +116,7 @@ func (m deterministicMarketData) LoadInstruments(context.Context) ([]exchange.In
 	return []exchange.Instrument{m.instrument}, nil
 }
 
-func (deterministicMarketData) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (deterministicMarketData) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{
 		Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("101"), Last: shared.MustDecimal("100.5"),
 		SourceTime: testNow,
@@ -162,8 +162,8 @@ func openUnifiedE2EStore(t *testing.T) *store.Store {
 	return s
 }
 
-func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
-	quote, err := m.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	quote, err := m.GetQuote(ctx, exchange.SymbolKey(symbol))
 	if err != nil {
 		return exchange.ReferencePrice{}, err
 	}

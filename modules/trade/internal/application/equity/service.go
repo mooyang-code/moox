@@ -182,7 +182,7 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: no %s/%s Spot instrument", balance.Asset, settlement)
 			}
 			symbol := instrument.ExchangeSymbol
-			quote, quoteErr := adapter.GetReferencePrice(ctx, symbol)
+			quote, quoteErr := adapter.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, symbol))
 			if quoteErr != nil {
 				return store.TradingAccountSnapshot{}, quoteErr
 			}

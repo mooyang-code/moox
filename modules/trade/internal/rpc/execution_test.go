@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"path/filepath"
 	"testing"
 
@@ -16,7 +17,7 @@ import (
 type manualReplayDependencies struct{}
 
 func (manualReplayDependencies) SyncAccount(context.Context, string) error { return nil }
-func (manualReplayDependencies) LatestPrice(context.Context, string, string) (operator.Quote, error) {
+func (manualReplayDependencies) LatestPrice(context.Context, string, exchange.SymbolKey) (operator.Quote, error) {
 	return operator.Quote{}, nil
 }
 

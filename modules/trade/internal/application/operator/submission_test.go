@@ -52,12 +52,12 @@ func (a *submissionAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (
 	a.posts++
 	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: fmt.Sprintf("exchange-%d", a.posts), Status: exchange.OrderStatusOpen}, nil
 }
-func (a *submissionAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *submissionAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.queries++
 	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-recovered", Status: exchange.OrderStatusOpen}, a.lookupErr
 }
 
-func (a *submissionAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a *submissionAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }
 

@@ -38,19 +38,20 @@ func TestAccountMarketsMustBeCanonicalAndAccountModeOnlyForLiveCrypto(t *testing
 	}
 }
 
-func TestSoleMarketAndMarketForInstrument(t *testing.T) {
+func TestMarketForInstrument(t *testing.T) {
 	both := validSwapAccount()
 	both.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
-	if both.SoleMarket() != exchange.MarketTypeUnspecified {
-		t.Fatalf("开通两个市场时 SoleMarket 应为空，得到 %q", both.SoleMarket())
-	}
 	if got := both.MarketForInstrument("BTC-USDT-SPOT"); got != exchange.MarketTypeSpot {
+		t.Fatalf("market = %q", got)
+	}
+	if got := both.MarketForInstrument("BTC-USDT-SWAP"); got != exchange.MarketTypeSwap {
 		t.Fatalf("market = %q", got)
 	}
 	if !both.SupportsMarket(exchange.MarketTypeSpot) || both.SupportsMarket(exchange.MarketTypeStock) || !both.HasLeverageMarket() {
 		t.Fatal("市场判断不对")
 	}
-	if got := validSpotAccount().SoleMarket(); got != exchange.MarketTypeSpot {
-		t.Fatalf("SoleMarket = %q", got)
+	// 只开通一个市场时，标的 ID 不必带后缀。
+	if got := validSpotAccount().MarketForInstrument("BTCUSDT"); got != exchange.MarketTypeSpot {
+		t.Fatalf("market = %q", got)
 	}
 }

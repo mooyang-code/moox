@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -219,13 +220,10 @@ func initialize(
 				return nil, credentialErr
 			}
 		}
-		if record.SoleMarket() == "" {
-			return nil, fmt.Errorf("账户 %s 同时开通了多个市场 %v，适配器要改成多市场后才能启动会话", record.TradingAccountID, record.Markets)
-		}
 		accountConfig := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			MarketType:       exchange.MarketType(record.SoleMarket()),
+			Markets:          marketTypes(record.Markets),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
@@ -596,45 +594,13 @@ type positionSource struct {
 	store *store.Store
 }
 
+// GetPosition 按内部标的 ID 取持仓；标的 ID 自带市场，现货和合约同名的交易所代码不会串。
 func (s positionSource) GetPosition(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	instrumentID string,
 ) (exchange.Position, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	market := exchange.MarketType(account.SoleMarket())
-	record, found, err := s.store.GetPosition(
-		ctx,
-		account.SpaceID,
-		tradingAccountID,
-		exchange.SymbolKey{Market: market, Symbol: symbol},
-		string(exchange.PositionSideNet),
-	)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	if !found {
-		return exchange.Position{
-			TradingAccountID: tradingAccountID, Market: market, ExchangeSymbol: symbol,
-			PositionSide: exchange.PositionSideNet,
-		}, nil
-	}
-	return exchange.Position{
-		TradingAccountID: tradingAccountID, Market: exchange.MarketType(record.MarketType), ExchangeSymbol: symbol,
-		PositionSide:   exchange.PositionSide(record.PositionSide),
-		SignedQuantity: decimal(record.SignedQuantity),
-		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
-		Leverage:          decimal(record.Leverage),
-		MarginMode:        exchange.MarginMode(record.MarginMode),
-		UsedMargin:        decimal(record.UsedMargin),
-		LiquidationPrice:  decimal(record.LiquidationPrice),
-		UnrealizedPnL:     decimal(record.UnrealizedPnL),
-		RealizedPnL:       decimal(record.RealizedPnL),
-		ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}, nil
+	return s.GetPositionForAccount(ctx, tradingAccountID, instrumentID)
 }
 
 func (s positionSource) GetPositionForAccount(
@@ -646,11 +612,14 @@ func (s positionSource) GetPositionForAccount(
 	if err != nil {
 		return exchange.Position{}, err
 	}
-	// 传入的可能是内部标的 ID，也可能是交易所代码：先按标的 ID 找到（市场，交易所代码），找不到再按账户唯一的市场当作交易所代码。
-	key := exchange.SymbolKey{Market: exchange.MarketType(account.SoleMarket()), Symbol: symbol}
-	if instrument, instrumentErr := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol); instrumentErr == nil {
-		key = exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
+	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, nil
+		}
+		return exchange.Position{}, err
 	}
+	key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
 	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, key, string(exchange.PositionSideNet))
 	if err != nil {
 		return exchange.Position{}, err
@@ -667,6 +636,14 @@ func (s positionSource) GetPositionForAccount(
 		LiquidationPrice: decimal(record.LiquidationPrice), UnrealizedPnL: decimal(record.UnrealizedPnL),
 		RealizedPnL: decimal(record.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
 	}, nil
+}
+
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
 }
 
 func decimal(value string) shared.Decimal {

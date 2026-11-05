@@ -19,7 +19,7 @@ func (noOpenOrdersAdapter) ListOpenOrders(context.Context) ([]exchange.Order, er
 
 type idleSyncAdapter struct{ noOpenOrdersAdapter }
 
-func (idleSyncAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (idleSyncAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }
 

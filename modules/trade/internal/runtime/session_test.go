@@ -69,7 +69,7 @@ func (a *scriptedSessionAdapter) LoadInstruments(context.Context) ([]exchange.In
 	}}, nil
 }
 
-func (*scriptedSessionAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (*scriptedSessionAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{Last: shared.MustDecimal("100"), SourceTime: time.UnixMilli(2_000)}, nil
 }
 
@@ -119,24 +119,24 @@ func (a *scriptedSessionAdapter) ListOpenOrders(context.Context) ([]exchange.Ord
 }
 func (a *scriptedSessionAdapter) ListRecentFills(
 	context.Context,
-	shared.ExchangeSymbol,
+	exchange.SymbolKey,
 	string,
 ) ([]exchange.Fill, string, error) {
 	a.record("ListRecentFills")
 	return nil, "9", nil
 }
-func (*scriptedSessionAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*scriptedSessionAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*scriptedSessionAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*scriptedSessionAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 func (a *scriptedSessionAdapter) SetLeverage(
 	context.Context,
-	shared.ExchangeSymbol,
+	exchange.SymbolKey,
 	shared.Decimal,
 ) error {
 	a.record("SetLeverage")
@@ -144,7 +144,7 @@ func (a *scriptedSessionAdapter) SetLeverage(
 }
 func (a *scriptedSessionAdapter) SetMarginMode(
 	ctx context.Context,
-	_ shared.ExchangeSymbol,
+	_ exchange.SymbolKey,
 	_ exchange.MarginMode,
 ) error {
 	a.record("SetMarginMode")
@@ -489,16 +489,16 @@ func TestSessionSetsSymbolConfigOnceUntilForgotten(t *testing.T) {
 	leverage := shared.MustDecimal("3")
 	ctx := context.Background()
 
-	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
-	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
 	require.Equal(t, []string{"SetMarginMode", "SetLeverage"}, scripted.callSnapshot())
 
-	session.ForgetSymbolConfig("BTCUSDT")
-	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	session.ForgetSymbolConfig(exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
 	require.Len(t, scripted.callSnapshot(), 4)
 
-	session.ForgetSymbolConfig(store.DefaultLeverageKey)
-	require.NoError(t, session.EnsureSymbolConfig(ctx, "BTCUSDT", leverage))
+	session.ForgetSymbolConfig(exchange.NewSymbolKey(exchange.MarketTypeSwap, store.DefaultLeverageKey))
+	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
 	require.Len(t, scripted.callSnapshot(), 6)
 }
 
@@ -507,6 +507,6 @@ func TestPaperSessionSkipsSymbolConfig(t *testing.T) {
 	session := &ExchangeSession{
 		Account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModePaper)}, Adapter: scripted,
 	}
-	require.NoError(t, session.EnsureSymbolConfig(context.Background(), "BTCUSDT", shared.MustDecimal("3")))
+	require.NoError(t, session.EnsureSymbolConfig(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), shared.MustDecimal("3")))
 	require.Empty(t, scripted.callSnapshot())
 }

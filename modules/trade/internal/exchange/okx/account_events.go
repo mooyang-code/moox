@@ -199,7 +199,7 @@ func (a *Adapter) privateChannels() []map[string]string {
 		{"channel": "orders", "instType": a.instrumentType()},
 		{"channel": "account", "extraParams": eventOnlyPush},
 	}
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		channels = append(channels, map[string]string{
 			"channel": "positions", "instType": "SWAP", "extraParams": eventOnlyPush,
 		})
@@ -312,7 +312,7 @@ func (a *Adapter) dispatchPrivate(
 				return err
 			}
 			position := exchange.Position{
-				Market:           a.config.MarketType,
+				Market:           a.config.Market(),
 				TradingAccountID: a.config.TradingAccountID,
 				ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
