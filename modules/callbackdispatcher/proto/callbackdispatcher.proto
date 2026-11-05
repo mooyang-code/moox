@@ -114,15 +114,15 @@ message GetEventRuleRsp {
   EventRule rule = 2;
 }
 
+// 创建通知地址规则；系统动作规则由服务自带，不能新建。
 message CreateEventRuleReq {
   string name = 1;
   string event_name = 2;
   repeated ScopeFilter scope = 3;
-  // 只能是 ACTION_TYPE_NOTIFY_URL：系统动作规则由服务自带，不能新建。
-  ActionType action_type = 4;
-  string notify_url = 5;
-  bool allow_private_address = 6;
-  bool enabled = 7;
+  string notify_url = 4;
+  bool allow_private_address = 5;
+  // 不带时默认启用。
+  optional bool enabled = 6;
 }
 message CreateEventRuleRsp {
   common.RetInfo ret_info = 1;
@@ -131,14 +131,20 @@ message CreateEventRuleRsp {
   string signing_secret = 3;
 }
 
-// 更新规则：系统规则只允许改 enabled；通知地址规则不能改触发事件和验证密钥（要换密钥就删掉重建）。
+// 限定范围的整体替换值：带上这个消息就用 items 替换原来的范围（items 为空表示不限），不带表示不改。
+message ScopeFilters {
+  repeated ScopeFilter items = 1;
+}
+
+// 更新规则：只改请求里带了的字段。系统规则只允许改 enabled；
+// 通知地址规则不能改触发事件和验证密钥（要换密钥就删掉重建）。
 message UpdateEventRuleReq {
   string rule_id = 1;
-  string name = 2;
-  repeated ScopeFilter scope = 3;
-  string notify_url = 4;
-  bool allow_private_address = 5;
-  bool enabled = 6;
+  optional string name = 2;
+  ScopeFilters scope = 3;
+  optional string notify_url = 4;
+  optional bool allow_private_address = 5;
+  optional bool enabled = 6;
 }
 message UpdateEventRuleRsp {
   common.RetInfo ret_info = 1;

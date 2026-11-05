@@ -29,11 +29,11 @@ CREATE TABLE IF NOT EXISTS t_event_rules (
 );
 
 -- 系统动作规则每种动作只有服务自带的一条。
-CREATE UNIQUE INDEX IF NOT EXISTS ux_event_rules_system_action
+CREATE UNIQUE INDEX IF NOT EXISTS ux_t_event_rules_system_action
 ON t_event_rules (c_system_action)
 WHERE c_system = 1;
 
-CREATE INDEX IF NOT EXISTS idx_event_rules_event ON t_event_rules (c_event_name, c_enabled);
+CREATE INDEX IF NOT EXISTS idx_t_event_rules_event ON t_event_rules (c_event_name, c_enabled);
 
 -- ************ 事件回执 ************
 -- 同一事件对同一规则只处理一次：插入失败说明已经处理过。
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS t_event_receipts (
     PRIMARY KEY (c_event_id, c_rule_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_event_receipts_created ON t_event_receipts (c_created_at);
+CREATE INDEX IF NOT EXISTS idx_t_event_receipts_created ON t_event_receipts (c_created_at);
 
 -- ************ 执行记录 ************
 -- c_dedupe_key 只用于系统动作：规则加“交易所:市场:代码”，同一标的未结束的记录合并成一条。
@@ -77,10 +77,10 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     CHECK (json_valid(c_payload_json))
 );
 
-CREATE INDEX IF NOT EXISTS idx_event_executions_due ON t_event_executions (c_status, c_next_run_at);
-CREATE INDEX IF NOT EXISTS idx_event_executions_rule ON t_event_executions (c_rule_id, c_created_at);
-CREATE INDEX IF NOT EXISTS idx_event_executions_created ON t_event_executions (c_created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_event_executions_dedupe
+CREATE INDEX IF NOT EXISTS idx_t_event_executions_due ON t_event_executions (c_status, c_next_run_at);
+CREATE INDEX IF NOT EXISTS idx_t_event_executions_rule ON t_event_executions (c_rule_id, c_created_at);
+CREATE INDEX IF NOT EXISTS idx_t_event_executions_created ON t_event_executions (c_created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_t_event_executions_dedupe
 ON t_event_executions (c_dedupe_key)
 WHERE c_dedupe_key <> '' AND c_status IN ('PENDING', 'RUNNING');
 
