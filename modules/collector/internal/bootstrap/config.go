@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -30,10 +31,12 @@ type Config struct {
 	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
 	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
 	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
-	Health             HealthConfig                       `yaml:"health"`
-	DNS                DNSConfig                          `yaml:"dns"`
-	EgressProxy        EgressProxyConfig                  `yaml:"egress_proxy"`
-	SubjectSync        subjectsync.Config                 `yaml:"subject_sync"`
+	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
+	EventBus    eventbus.Config    `yaml:"event_bus"`
+	Health      HealthConfig       `yaml:"health"`
+	DNS         DNSConfig          `yaml:"dns"`
+	EgressProxy EgressProxyConfig  `yaml:"egress_proxy"`
+	SubjectSync subjectsync.Config `yaml:"subject_sync"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
 }
@@ -127,19 +130,6 @@ type KlineResampleConfig struct {
 	HistoryMaxJobs         int `yaml:"history_max_jobs"`
 	// MaxReadKeys 是单次读取源/目标行的键数上限。
 	MaxReadKeys int `yaml:"max_read_keys"`
-	// EventBus 配置后，合成订阅源数据集的周期完成事件与补采完成事件，并发布补采完成事件；不配置则只靠兜底检查。
-	EventBus ResampleEventBusConfig `yaml:"event_bus"`
-}
-
-// ResampleEventBusConfig 是合成使用的事件总线连接。凭据文件存放用户名与密码，权限必须是 0600。
-type ResampleEventBusConfig struct {
-	URLs           []string `yaml:"urls"`
-	CredentialFile string   `yaml:"credential_file"`
-}
-
-// Enabled 报告是否配置了事件总线。
-func (c ResampleEventBusConfig) Enabled() bool {
-	return len(c.URLs) > 0 || strings.TrimSpace(c.CredentialFile) != ""
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.

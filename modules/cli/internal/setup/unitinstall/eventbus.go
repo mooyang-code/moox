@@ -283,7 +283,7 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 				return err
 			}
 		} else if id == "collector" {
-			bus := member(member(document, "kline_resample"), "event_bus")
+			bus := member(document, "event_bus")
 			if err := setValue(bus, "urls", []string{options.EventBusURL}); err != nil {
 				return err
 			}

@@ -39,6 +39,7 @@ type Store struct {
 	tagRuns    *TagSyncRunRepository
 	backfill   *BackfillRepository
 	resample   *ResampleStateRepository
+	delist     *DelistNoticeRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -111,6 +112,7 @@ func Open(opts *Options) (*Store, error) {
 	s.tagRuns = NewTagSyncRunRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	s.resample = NewResampleStateRepository(db)
+	s.delist = NewDelistNoticeRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -170,6 +172,14 @@ func (s *Store) Resample() *ResampleStateRepository {
 		return nil
 	}
 	return s.resample
+}
+
+// DelistNotices returns the repository of discovered instrument delist notices.
+func (s *Store) DelistNotices() *DelistNoticeRepository {
+	if s == nil {
+		return nil
+	}
+	return s.delist
 }
 
 // Backfill returns the K-line backfill job repository.

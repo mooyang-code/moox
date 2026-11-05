@@ -667,6 +667,7 @@ components:
           - SetSubjectExclusions
           - ClearSubjectExclusions
           - ListSubjectExclusions
+          - RegisterDelistNotice
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -726,6 +727,12 @@ components:
               - SetSubjectExclusions
               - ClearSubjectExclusions
               - ListSubjectExclusions
+            callers:
+              - console
+              - moox-cli
+          # 手工登记标的下架（补漏报和演练）：事件中心页面（经控制台）和 moox-cli。
+          - methods:
+              - RegisterDelistNotice
             callers:
               - console
               - moox-cli

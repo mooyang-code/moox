@@ -918,6 +918,28 @@ service MarketFetchExecutor {
   rpc Invoke(InvokeMarketFetchReq) returns (InvokeMarketFetchRsp);
 }
 
+// RegisterDelistNotice 手工登记一条标的下架通知，用于补漏报和演练。登记后与自动发现的通知走同一条路：
+// 写入去重表和发件箱，由中继发布 event.collector.instrument.delist_scheduled。
+// 同一条（交易所、市场、代码、范围、下架时间）再次登记不会重复发布。手工登记可以补录过去的下架时间。
+message RegisterDelistNoticeReq {
+  // exchange 为小写交易所代码：binance、okx。
+  string exchange = 1;
+  // market 为 SPOT 或 SWAP。
+  string market = 2;
+  string exchange_symbol = 3;
+  // delist_at_ms 是下架时间（Unix 毫秒）。
+  int64 delist_at_ms = 4;
+  // paper_only 为真时事件的范围是 PAPER_ONLY：只处理模拟盘，用于演练。
+  bool paper_only = 5;
+}
+
+message RegisterDelistNoticeRsp {
+  common.RetInfo ret_info = 1;
+  // created 为假表示这条以前登记过，没有重复发布。
+  bool created = 2;
+  string event_id = 3;
+}
+
 service CollectMgr {
   // ----- 采集任务 -----
   rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
@@ -963,4 +985,7 @@ service CollectMgr {
   rpc SetSubjectExclusions(SetSubjectExclusionsReq) returns (SetSubjectExclusionsRsp);
   rpc ClearSubjectExclusions(ClearSubjectExclusionsReq) returns (ClearSubjectExclusionsRsp);
   rpc ListSubjectExclusions(ListSubjectExclusionsReq) returns (ListSubjectExclusionsRsp);
+
+  // ----- 下架检测 -----
+  rpc RegisterDelistNotice(RegisterDelistNoticeReq) returns (RegisterDelistNoticeRsp);
 }

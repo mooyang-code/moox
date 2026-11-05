@@ -219,6 +219,8 @@ type CollectMgrService interface {
 	ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq) (*ClearSubjectExclusionsRsp, error)
 
 	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq) (*ListSubjectExclusionsRsp, error)
+	// RegisterDelistNotice ----- 下架检测 -----
+	RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq) (*RegisterDelistNoticeRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -833,6 +835,24 @@ func CollectMgrService_ListSubjectExclusions_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
+func CollectMgrService_RegisterDelistNotice_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RegisterDelistNoticeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).RegisterDelistNotice(ctx, reqbody.(*RegisterDelistNoticeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -973,6 +993,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/ListSubjectExclusions",
 			Func: CollectMgrService_ListSubjectExclusions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/RegisterDelistNotice",
+			Func: CollectMgrService_RegisterDelistNotice_Handler,
 		},
 	},
 }
@@ -1120,6 +1144,11 @@ func (s *UnimplementedCollectMgr) ClearSubjectExclusions(ctx context.Context, re
 }
 func (s *UnimplementedCollectMgr) ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq) (*ListSubjectExclusionsRsp, error) {
 	return nil, errors.New("rpc ListSubjectExclusions of service CollectMgr is not implemented")
+}
+
+// RegisterDelistNotice ----- 下架检测 -----
+func (s *UnimplementedCollectMgr) RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq) (*RegisterDelistNoticeRsp, error) {
+	return nil, errors.New("rpc RegisterDelistNotice of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1310,6 +1339,8 @@ type CollectMgrClientProxy interface {
 	ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq, opts ...client.Option) (rsp *ClearSubjectExclusionsRsp, err error)
 
 	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq, opts ...client.Option) (rsp *ListSubjectExclusionsRsp, err error)
+	// RegisterDelistNotice ----- 下架检测 -----
+	RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq, opts ...client.Option) (rsp *RegisterDelistNoticeRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -1995,6 +2026,26 @@ func (c *CollectMgrClientProxyImpl) ListSubjectExclusions(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListSubjectExclusionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) RegisterDelistNotice(ctx context.Context, req *RegisterDelistNoticeReq, opts ...client.Option) (*RegisterDelistNoticeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/RegisterDelistNotice")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("RegisterDelistNotice")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RegisterDelistNoticeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

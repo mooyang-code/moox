@@ -110,22 +110,22 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true
   fallback_lookback_bars: 5
-  event_bus:
-    urls: ["nats://127.0.0.1:4222"]
-    credential_file: ./secrets/collector-eventbus.yaml
+event_bus:
+  urls: ["nats://127.0.0.1:4222"]
+  credential_file: ./secrets/collector-eventbus.yaml
 `))
 	require.NoError(t, err)
 	assert.True(t, cfg.KlineResample.Enabled)
 	assert.Equal(t, 5, cfg.KlineResample.FallbackLookbackBars)
 	assert.Equal(t, 200, cfg.KlineResample.FallbackMaxBuckets, "未写的项取默认值")
 	assert.Equal(t, 30*time.Second, cfg.KlineResample.ExecTimeout)
-	assert.True(t, cfg.KlineResample.EventBus.Enabled())
+	assert.True(t, cfg.EventBus.Enabled())
 }
 
 func TestLoadKlineResampleDefaultsHaveNoEventBus(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, "kline_resample:\n  enabled: true\n"))
 	require.NoError(t, err)
-	assert.False(t, cfg.KlineResample.EventBus.Enabled(), "没配置事件总线时合成只靠兜底检查")
+	assert.False(t, cfg.EventBus.Enabled(), "没配置事件总线时合成只靠兜底检查")
 	assert.Equal(t, 3, cfg.KlineResample.FallbackLookbackBars)
 	assert.Equal(t, time.Minute, cfg.KlineResample.FallbackGrace)
 }
