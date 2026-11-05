@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -98,7 +100,11 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if err := rejectInputOutputCollision(file, output); err != nil {
 				return fmt.Errorf("write kline response: %w", err)
 			}
-			selection, err := cfg.resolveKline(dataType, exchange, interval, market)
+			market = normalizeCatalogKey(market)
+			if market != "" && market != seriesset.MarketSpot && market != seriesset.MarketSwap {
+				return fmt.Errorf("--market 只能是 spot 或 swap，收到 %q", market)
+			}
+			selection, err := cfg.resolveKline(dataType, exchange, interval)
 			if err != nil {
 				return err
 			}
@@ -143,6 +149,13 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if owner != nil {
 				defer owner.Close()
 			}
+			if market != "" {
+				tag, err := resolveMarketSeriesTag(rpcCtx, reader, req, symbol, market)
+				if err != nil {
+					return err
+				}
+				req.Selectors[0].SeriesTag = &tag
+			}
 			rsp, err := reader.ReadTimeSeriesRows(rpcCtx, req)
 			if err != nil {
 				return fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
@@ -164,7 +177,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	cmd.Flags().StringVar(&exchange, "exchange", "", "交易所；省略时使用数据类型配置的默认值")
 	cmd.Flags().StringVar(&symbol, "symbol", "", "交易标的，例如 BTC-USDT")
 	cmd.Flags().StringVar(&interval, "interval", "1m", "K 线周期")
-	cmd.Flags().StringVar(&market, "market", "", "统一数据集里选序列：spot 或 swap（按数据访问配置的 market_series_tags）；省略时用交易所配置的 series_tag")
+	cmd.Flags().StringVar(&market, "market", "", "统一数据集里选序列：spot 或 swap，按数据集里已有序列的 series_tag 所属市场选；省略时用交易所配置的 series_tag")
 	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000；不给时间范围时是最新的 limit 根，给了时间范围时是范围内最早的 limit 根")
 	cmd.Flags().StringVar(&startTime, "from", "", "RFC3339 起始时间")
 	cmd.Flags().StringVar(&endTime, "to", "", "RFC3339 结束时间")
@@ -289,4 +302,48 @@ func klineColumns(columns []string) []string {
 		return columns
 	}
 	return []string{"open", "high", "low", "close", "volume"}
+}
+
+// resolveMarketSeriesTag 在统一数据集里为 --market 找序列：先不带 series_tag 读该标的每个序列最新的 1 根，
+// 按 series_tag 所属市场（seriesset.SeriesTagMarket）挑出唯一的一条序列的 tag，真正的读取再带上它，
+// 这样 --limit 与时间范围都只针对这一个市场。数据集里没有该市场的序列，或同一市场有多条不同的序列，都报错。
+func resolveMarketSeriesTag(ctx context.Context, reader timeSeriesReader, request *pb.ReadTimeSeriesRowsReq, symbol, market string) (string, error) {
+	selector := request.GetSelectors()[0]
+	probe := &pb.ReadTimeSeriesRowsReq{
+		AuthInfo: request.GetAuthInfo(), SpaceId: request.GetSpaceId(), DatasetId: request.GetDatasetId(),
+		Selectors: []*pb.TimeSeriesSelector{{
+			SpaceId: selector.GetSpaceId(), DatasetId: selector.GetDatasetId(), SubjectId: selector.GetSubjectId(), Freq: selector.GetFreq(),
+		}},
+		ColumnNames: []string{"close"}, LatestPerSeries: 1, Page: &pb.Page{Size: 100},
+	}
+	rsp, err := reader.ReadTimeSeriesRows(ctx, probe)
+	if err != nil {
+		return "", fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: %w", err)
+	}
+	if rsp == nil {
+		return "", fmt.Errorf("PrimaryStore/ReadTimeSeriesRows RPC failed: empty response")
+	}
+	if err := checkStorageRetInfo("PrimaryStore", "ReadTimeSeriesRows", rsp); err != nil {
+		return "", err
+	}
+	tags := map[string]struct{}{}
+	for _, row := range rsp.GetRows() {
+		if tag := row.GetKey().GetSeriesTag(); seriesset.SeriesTagMarket(tag) == market {
+			tags[tag] = struct{}{}
+		}
+	}
+	switch len(tags) {
+	case 0:
+		return "", fmt.Errorf("数据集 %s 里没有 %s 的 %s 序列", selector.GetDatasetId(), symbol, market)
+	case 1:
+		for tag := range tags {
+			return tag, nil
+		}
+	}
+	found := make([]string, 0, len(tags))
+	for tag := range tags {
+		found = append(found, tag)
+	}
+	sort.Strings(found)
+	return "", fmt.Errorf("数据集 %s 里 %s 的 %s 市场有多条序列（%s），--market 无法确定，请改用交易所配置的 series_tag", selector.GetDatasetId(), symbol, market, strings.Join(found, "、"))
 }
