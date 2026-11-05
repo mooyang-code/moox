@@ -146,3 +146,38 @@ func TestStockCN5mAcrossBreaks(t *testing.T) {
 		})
 	}
 }
+
+// 新建的 A 股数据集：本地只有开盘第一根，也就是 Storage 的首根。N 不超过 7200h 保留期内的交易根数（约 205 个交易日 × 48）时
+// 按新上市豁免通过覆盖检查；N=5 万远超保留期容量，首根可能是被截断的，仍然列为不足。
+func TestStockCNCoverageExemptsNewDatasetWithinRetention(t *testing.T) {
+	for _, c := range []struct {
+		lookback int
+		short    bool
+	}{{5000, false}, {50000, true}} {
+		store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = store.Close() })
+		raw := newFakeStorage()
+		raw.retention = "7200h"
+		raw.rows["600519.XSHG"] = []bar{{at: cstTime(t, "2026-11-05 09:30"), close: 1465, volume: 10}}
+		storage := storageio.NewAxis(stockBackend{fakeStorage: raw})
+		now := cstTime(t, "2026-11-05 09:36")
+		lookback := c.lookback
+		data := New(Config{Store: store, Storage: storage, Admit: memadmit.New(0), Now: func() time.Time { return now },
+			Lookback: func(seriesstore.Source) int { return lookback }})
+		set := domain.EngineTask{
+			Set: domain.FactorTask{TaskID: "cn5m", SpaceID: "stockcn", SourceDatasetID: "stock_bars", Freq: "5m",
+				ResultDatasetID: "factor_stock", Status: domain.TaskStatusEnabled},
+			Members: domain.AsMembers(domain.MustDefinition("ma", "ma", "output: ts_mean(close, 10)\n")),
+		}
+		require.NoError(t, data.Prepare(context.Background(), set, []string{"600519.XSHG"}))
+		short, err := data.Coverage(context.Background(), seriesstore.Source{SpaceID: "stockcn", DatasetID: "stock_bars", Freq: "5m"})
+		require.NoError(t, err)
+		if c.short {
+			require.Len(t, short, 1, "N=%d", c.lookback)
+			require.Equal(t, 1, short[0].Have)
+		} else {
+			require.Empty(t, short, "N=%d", c.lookback)
+		}
+	}
+}

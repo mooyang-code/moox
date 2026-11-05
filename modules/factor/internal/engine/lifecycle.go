@@ -243,7 +243,7 @@ func (r *Runtime) blockedCheck(src seriesstore.Source, taskID string) lifecycle.
 	case errors.As(err, &over):
 		return lifecycle.Check{
 			Name: "回看数量", Status: lifecycle.CheckFail, Message: err.Error(),
-			Remedy: fmt.Sprintf("在 engine.yaml 里调大 window.lookback（或 window.lookback_overrides 的 %s/%s/%s），重启引擎", src.SpaceID, src.DatasetID, src.Freq),
+			Remedy: fmt.Sprintf("在 engine.yaml 里调大 window.lookback（7×24 市场）或 window.session_lookback（有交易时段的市场），或设置 window.lookback_overrides 的 %s/%s/%s，重启引擎", src.SpaceID, src.DatasetID, src.Freq),
 		}
 	}
 	return lifecycle.Check{

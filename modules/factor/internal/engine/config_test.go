@@ -137,8 +137,13 @@ func TestWindowLookbackConfig(t *testing.T) {
 	require.Equal(t, 8000, window.LookbackFor("crypto", "spot_1h", "1h"))
 	require.Equal(t, 10000, window.LookbackFor("crypto", "spot_1m", "1m"))
 	require.Equal(t, DefaultWindowBars, WindowConfig{}.LookbackFor("crypto", "x", "1m"))
+	// 有交易时段的市场用 session_lookback，不受 7×24 市场的 lookback 影响；按数据源的覆盖对两类市场都优先。
+	require.Equal(t, DefaultSessionWindowBars, window.LookbackFor("stockcn", "cn_5m", "5m"))
+	require.Equal(t, 3000, WindowConfig{Lookback: 10000, SessionLookback: 3000}.LookbackFor("stockcn", "cn_5m", "5m"))
+	require.Equal(t, 800, WindowConfig{LookbackOverrides: map[string]int{"stockcn/cn_5m/5m": 800}}.LookbackFor("stockcn", "cn_5m", "5m"))
 
 	cfg := Default()
 	cfg.applyDefaults()
 	require.Equal(t, DefaultWindowBars, cfg.Window.Lookback, "没写 window.lookback 时默认 5 万")
+	require.Equal(t, DefaultSessionWindowBars, cfg.Window.SessionLookback, "没写 window.session_lookback 时默认 5000")
 }

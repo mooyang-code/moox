@@ -80,7 +80,7 @@ type LookbackExceededError struct {
 }
 
 func (e *LookbackExceededError) Error() string {
-	return fmt.Sprintf("因子 %s 的回看（最长 %d 根）超过数据源的回看数量 N=%d：请调大 window.lookback，或缩短因子的回看", strings.Join(e.Factors, "、"), e.Max, e.N)
+	return fmt.Sprintf("因子 %s 的回看（最长 %d 根）超过数据源的回看数量 N=%d：请调大 engine.yaml 的回看数量（7×24 市场 window.lookback，有交易时段的市场 window.session_lookback，或按数据源的 window.lookback_overrides），或缩短因子的回看", strings.Join(e.Factors, "、"), e.Max, e.N)
 }
 
 // Data 是数据层。
@@ -470,12 +470,10 @@ func (d *Data) axisNow(src seriesstore.Source) (time.Time, error) {
 	return axis.AxisEnd(d.cfg.Now())
 }
 
-// newListingExempt 判断新上市豁免对数据源是否成立（设计 6.2）：7×24 市场，并且 N 不超过数据集保留期能容纳的根数。
-// 有交易时段的市场清理按日历桶进行、N 超过保留期容量时，Storage 的首根都可能是被保留期截断的，不能据此认定是新上市。
+// newListingExempt 判断新上市豁免对数据源是否成立（设计 6.2）：N 不超过数据集保留期能容纳的根数。
+// 超过时 Storage 的首根可能是被保留期截断的，不能据此认定是新上市。容量按轴上的根数计算：
+// 7×24 市场就是保留期 ÷ 周期，有交易时段的市场只数保留期内的交易时段。
 func (d *Data) newListingExempt(src seriesstore.Source, step time.Duration, lookback int, retention string) bool {
-	if !periodclock.IsContinuous(src.SpaceID) {
-		return false
-	}
 	period, err := storagepolicy.ParsePeriod(retention)
 	if err != nil {
 		return false
@@ -483,7 +481,20 @@ func (d *Data) newListingExempt(src seriesstore.Source, step time.Duration, look
 	if period.Forever {
 		return true
 	}
-	return int64(lookback) <= int64(period.Duration/step)
+	axis, err := periodclock.AxisFor(src.SpaceID, src.Freq)
+	if err != nil {
+		return false
+	}
+	now := d.cfg.Now()
+	end, err := axis.AxisEnd(now)
+	if err != nil {
+		return false
+	}
+	start, err := axis.AxisEnd(now.Add(-period.Duration))
+	if err != nil {
+		return false
+	}
+	return int64(lookback) <= int64(end.Sub(start)/step)
 }
 
 // shortOfLookback 返回本地已有数据但不足 lookback 根的标的。

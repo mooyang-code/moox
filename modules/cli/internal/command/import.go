@@ -268,7 +268,7 @@ func applyImportPack(opts *importOptions) (*importPack, error) {
 		return nil, errors.New("用了 --pack 就不要再指定 --path 或 --subject：文件清单取自导入包")
 	}
 	if opts.MinRows <= 0 {
-		return nil, errors.New("用了 --pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml 的 window.lookback）：行数不够时因子窗口凑不满，这是预检的硬约束")
+		return nil, errors.New("用了 --pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml：7×24 市场 window.lookback，有交易时段的市场 window.session_lookback，有 lookback_overrides 时取覆盖值）：行数不够时因子窗口凑不满，这是预检的硬约束")
 	}
 	opts.Paths = pack.paths()
 	return pack, nil
