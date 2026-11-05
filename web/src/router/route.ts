@@ -37,6 +37,12 @@ export const staticRoutes = [
         meta: { title: "settings-secrets" }
       },
       {
+        path: "/settings/events",
+        name: "settings-events",
+        component: () => import("@/views/settings/events/index.vue"),
+        meta: { title: "settings-events" }
+      },
+      {
         path: "/data/sources",
         name: "data-sources",
         component: () => import("@/views/data/sources/index.vue"),
