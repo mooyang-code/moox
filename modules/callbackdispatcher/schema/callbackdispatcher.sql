@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_t_event_receipts_created ON t_event_receipts (c_c
 -- ************ 执行记录 ************
 -- c_dedupe_key 只用于系统动作：规则加“交易所:市场:代码”，同一标的未结束的记录合并成一条。
 -- c_next_run_at 是工作线程下一次该处理这条记录的时间；已结束的记录为 0。
+-- c_attempts 是累计尝试次数（编号用），c_failures 是自上次开始或重新执行以来的连续失败次数（决定重试间隔）。
 CREATE TABLE IF NOT EXISTS t_event_executions (
     c_execution_id TEXT NOT NULL PRIMARY KEY,
     c_rule_id TEXT NOT NULL,
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     c_payload_json TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'PENDING',
     c_attempts INTEGER NOT NULL DEFAULT 0,
+    c_failures INTEGER NOT NULL DEFAULT 0,
     c_first_failed_at INTEGER NOT NULL DEFAULT 0,
     c_last_error TEXT NOT NULL DEFAULT '',
     c_dedupe_key TEXT NOT NULL DEFAULT '',

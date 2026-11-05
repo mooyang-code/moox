@@ -209,7 +209,7 @@ func TestFailureRetryAcknowledgeAndRecovery(t *testing.T) {
 	_, err := s.ClaimDue(ctx, 100, 10, nil)
 	require.NoError(t, err)
 
-	applied, err := s.SaveResult(ctx, "n1", Result{Status: StatusFailed, Attempts: 7, FirstFailedAt: 50, LastError: "状态码 500", DurationMS: 12, FinishedAt: 120,
+	applied, err := s.SaveResult(ctx, "n1", Result{Status: StatusFailed, Attempts: 7, Failures: 7, FirstFailedAt: 50, LastError: "状态码 500", DurationMS: 12, FinishedAt: 120,
 		Attempt: &Attempt{Attempt: 7, At: 120, HTTPStatus: 500, DurationMS: 12, ResponseSnippet: "oops"}}, 120)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -229,6 +229,8 @@ func TestFailureRetryAcknowledgeAndRecovery(t *testing.T) {
 	require.EqualValues(t, 130, retried.NextRunAt)
 	require.False(t, retried.Acknowledged)
 	require.Zero(t, retried.FirstFailedAt)
+	require.Zero(t, retried.Failures)
+	require.Equal(t, 7, retried.Attempts, "累计尝试次数保留，尝试记录的编号继续往后")
 	_, err = s.RetryExecution(ctx, "n1", 131)
 	require.ErrorIs(t, err, ErrConflict, "只有失败的记录能重新执行")
 

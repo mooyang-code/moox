@@ -52,6 +52,7 @@ type Execution struct {
 	PayloadJSON   string
 	Status        string
 	Attempts      int
+	Failures      int
 	FirstFailedAt int64
 	LastError     string
 	DedupeKey     string
@@ -136,6 +137,7 @@ type executionRow struct {
 	PayloadJSON   string `gorm:"column:c_payload_json"`
 	Status        string `gorm:"column:c_status"`
 	Attempts      int    `gorm:"column:c_attempts"`
+	Failures      int    `gorm:"column:c_failures"`
 	FirstFailedAt int64  `gorm:"column:c_first_failed_at"`
 	LastError     string `gorm:"column:c_last_error"`
 	DedupeKey     string `gorm:"column:c_dedupe_key"`

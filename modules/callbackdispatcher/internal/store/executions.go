@@ -99,6 +99,7 @@ type Result struct {
 	NextRunAt     int64
 	LastError     string
 	Attempts      int
+	Failures      int
 	FirstFailedAt int64
 	DurationMS    int64
 	FinishedAt    int64
@@ -113,7 +114,7 @@ func (s *Store) SaveResult(ctx context.Context, executionID string, result Resul
 		update := tx.Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).
 			Updates(map[string]any{
 				"c_status": result.Status, "c_next_run_at": result.NextRunAt, "c_last_error": result.LastError,
-				"c_attempts": result.Attempts, "c_first_failed_at": result.FirstFailedAt, "c_duration_ms": result.DurationMS,
+				"c_attempts": result.Attempts, "c_failures": result.Failures, "c_first_failed_at": result.FirstFailedAt, "c_duration_ms": result.DurationMS,
 				"c_finished_at": result.FinishedAt, "c_updated_at": now,
 			})
 		if update.Error != nil || update.RowsAffected == 0 {
@@ -203,7 +204,7 @@ func (s *Store) RetryExecution(ctx context.Context, executionID string, now int6
 			}
 		}
 		updates := map[string]any{
-			"c_status": StatusPending, "c_next_run_at": now, "c_first_failed_at": 0, "c_acknowledged": false,
+			"c_status": StatusPending, "c_next_run_at": now, "c_failures": 0, "c_first_failed_at": 0, "c_acknowledged": false,
 			"c_finished_at": 0, "c_updated_at": now,
 		}
 		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).Updates(updates).Error
