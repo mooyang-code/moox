@@ -171,7 +171,7 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	if opts.RecordPending && opts.PendingReason == "" {
 		opts.PendingReason = "import"
 	}
-	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows}}, opts)
+	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: true}}, opts)
 	if err != nil {
 		var gap *seriesstore.GapError
 		switch {

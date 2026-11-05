@@ -433,3 +433,30 @@ func TestChangingTailRowsDoesNotReuseTheCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, again.chunks)
 }
+
+// 统一数据集的现货、永续分两个文件导入：每个文件用自己的 series_tag，写给目标的行带各自的 tag，不会混在一起。
+func TestRunAppliesSeriesTagPerFile(t *testing.T) {
+	const spot, swap = "venue:binance|market:spot|source:spot_http", "venue:binance|market:swap|source:swap_http"
+	dir := t.TempDir()
+	spotDir, swapDir := filepath.Join(dir, "spot"), filepath.Join(dir, "swap")
+	require.NoError(t, os.MkdirAll(spotDir, 0o755))
+	require.NoError(t, os.MkdirAll(swapDir, 0o755))
+	spotFile := writeCSV(t, spotDir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 6))
+	swapFile := writeCSV(t, swapDir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 6))
+	target := &recorder{name: "factor"}
+	req := baseRequest(spotFile, swapFile)
+	req.FileSeriesTags = map[string]string{spotFile: spot, swapFile: swap}
+	_, err := Run(context.Background(), req, Meta{Fields: fields}, []Target{target}, nil)
+	require.NoError(t, err)
+	tags := map[string]int{}
+	for _, chunk := range target.chunks {
+		for _, tag := range chunk.Batch.Tags {
+			tags[tag]++
+		}
+	}
+	require.Equal(t, map[string]int{spot: 6, swap: 6}, tags)
+	// 文件单独指定的 tag 改了，断点身份也要变。
+	other := req
+	other.FileSeriesTags = map[string]string{spotFile: spot, swapFile: spot}
+	require.NotEqual(t, stableJobID(req, []string{spotFile, swapFile}), stableJobID(other, []string{spotFile, swapFile}))
+}

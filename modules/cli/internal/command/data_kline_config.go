@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,9 +37,12 @@ type dataTypeConfig struct {
 }
 
 type exchangeConfig struct {
-	SpaceID       string            `yaml:"space_id"`
-	SeriesTag     string            `yaml:"series_tag"`
-	KlineDatasets map[string]string `yaml:"kline_datasets"`
+	SpaceID   string `yaml:"space_id"`
+	SeriesTag string `yaml:"series_tag"`
+	// MarketSeriesTags 是统一数据集（同一数据集里放现货、永续两条序列）的各市场 series_tag：键是 spot、swap，
+	// 查询时用 --market 选序列；没有配置时只能用 series_tag。
+	MarketSeriesTags map[string]string `yaml:"market_series_tags,omitempty"`
+	KlineDatasets    map[string]string `yaml:"kline_datasets"`
 }
 
 type klineSelection struct {
@@ -203,6 +207,14 @@ func (cfg dataAccessConfig) validate() error {
 			if len(exchangeCfg.KlineDatasets) == 0 {
 				return fmt.Errorf("exchange %q kline_datasets is required", exchange)
 			}
+			for market, tag := range exchangeCfg.MarketSeriesTags {
+				if market != seriesset.MarketSpot && market != seriesset.MarketSwap {
+					return fmt.Errorf("exchange %q market_series_tags key %q must be spot or swap", exchange, market)
+				}
+				if strings.TrimSpace(tag) == "" || seriesset.SeriesTagMarket(tag) != market {
+					return fmt.Errorf("exchange %q market_series_tags %q tag %q does not belong to that market", exchange, market, tag)
+				}
+			}
 			for interval, datasetID := range exchangeCfg.KlineDatasets {
 				if !isNormalizedCatalogKey(interval) {
 					return fmt.Errorf("interval key %q must be lowercase ASCII", interval)
@@ -216,7 +228,9 @@ func (cfg dataAccessConfig) validate() error {
 	return nil
 }
 
-func (cfg dataAccessConfig) resolveKline(dataType, exchange, interval string) (klineSelection, error) {
+// resolveKline 解析查询的数据集与序列：market 为空时用交易所的 series_tag；
+// 统一数据集用 market（spot、swap）从 market_series_tags 里选序列。
+func (cfg dataAccessConfig) resolveKline(dataType, exchange, interval, market string) (klineSelection, error) {
 	dataType = normalizeCatalogKey(dataType)
 	if dataType == "" {
 		return klineSelection{}, fmt.Errorf("data type is required")
@@ -238,11 +252,22 @@ func (cfg dataAccessConfig) resolveKline(dataType, exchange, interval string) (k
 	if !ok {
 		return klineSelection{}, fmt.Errorf("unsupported interval %q for data type %q and exchange %q", interval, dataType, exchange)
 	}
+	seriesTag := exchangeCfg.SeriesTag
+	if market = normalizeCatalogKey(market); market != "" {
+		if market != seriesset.MarketSpot && market != seriesset.MarketSwap {
+			return klineSelection{}, fmt.Errorf("--market 只能是 spot 或 swap，收到 %q", market)
+		}
+		tag, ok := exchangeCfg.MarketSeriesTags[market]
+		if !ok {
+			return klineSelection{}, fmt.Errorf("交易所 %q 没有配置 %s 市场的序列标签（数据访问配置的 market_series_tags），不能用 --market %s", exchange, market, market)
+		}
+		seriesTag = tag
+	}
 	return klineSelection{
 		Exchange:  exchange,
 		SpaceID:   exchangeCfg.SpaceID,
 		DatasetID: datasetID,
-		SeriesTag: exchangeCfg.SeriesTag,
+		SeriesTag: seriesTag,
 		Interval:  interval,
 	}, nil
 }

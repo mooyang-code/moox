@@ -54,6 +54,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 		exchange   string
 		symbol     string
 		interval   string
+		market     string
 		limit      uint32
 		startTime  string
 		endTime    string
@@ -97,7 +98,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 			if err := rejectInputOutputCollision(file, output); err != nil {
 				return fmt.Errorf("write kline response: %w", err)
 			}
-			selection, err := cfg.resolveKline(dataType, exchange, interval)
+			selection, err := cfg.resolveKline(dataType, exchange, interval, market)
 			if err != nil {
 				return err
 			}
@@ -163,6 +164,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	cmd.Flags().StringVar(&exchange, "exchange", "", "交易所；省略时使用数据类型配置的默认值")
 	cmd.Flags().StringVar(&symbol, "symbol", "", "交易标的，例如 BTC-USDT")
 	cmd.Flags().StringVar(&interval, "interval", "1m", "K 线周期")
+	cmd.Flags().StringVar(&market, "market", "", "统一数据集里选序列：spot 或 swap（按数据访问配置的 market_series_tags）；省略时用交易所配置的 series_tag")
 	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000；不给时间范围时是最新的 limit 根，给了时间范围时是范围内最早的 limit 根")
 	cmd.Flags().StringVar(&startTime, "from", "", "RFC3339 起始时间")
 	cmd.Flags().StringVar(&endTime, "to", "", "RFC3339 结束时间")
