@@ -16,7 +16,7 @@ func init() {
 
 	createInstanceFlags := []rpcFlag{
 		reqFlag("strategy-id", "instance.strategy_id", "策略定义 ID"),
-		reqFlag("factor-task-id", "instance.factor_task_id", "关联的因子计算任务（只能选本空间里运行中、还没被别的实例关联的任务；创建后不能改）"),
+		mapFlag("factor-task", "instance.factor_tasks", "关联的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，两个市场都用时两个都要给），股票策略 equity=…；只能选本空间里运行中、还没被别的实例关联的任务，创建后不能改"),
 		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；不挂＝观察实例，只算目标不下单"),
 		strFlag("instance-id", "instance.instance_id", "实例 ID；不给由服务端生成，重试创建时带上同一个 ID 保持幂等"),
 		boolFlag("enable", "instance.enabled", "创建后立即启用；不加则创建后停用，确认无误再 enable"),
@@ -25,14 +25,14 @@ func init() {
 		reqFlag("instance-id", "instance.instance_id", "实例 ID"),
 		reqFlag("strategy-id", "instance.strategy_id", "改绑到这个策略定义"),
 		strFlag("logical-account-id", "instance.logical_account_id", "挂载的逻辑账户；留空表示观察实例（整体替换）"),
-		strFlag("factor-task-id", "instance.factor_task_id", "可省略；给了就必须与现有的一致（因子任务创建时写定）"),
+		mapFlag("factor-task", "instance.factor_tasks", "可省略；给了就必须与现有的一致（因子任务创建时写定），写法同 create"),
 	}
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"strategy", "list"}, Short: "列出策略定义", Service: strategyMgr, Method: "ListStrategies", Page: rpcPagePSize},
 		rpcSpec{Path: []string{"strategy", "show"}, Short: "查看一个策略定义", Service: strategyMgr, Method: "GetStrategy",
 			Flags: []rpcFlag{reqFlag("strategy-id", "strategy_id", "策略 ID")}},
 		rpcSpec{Path: []string{"strategy", "validate"}, Short: "试算策略 DSL（不落库）", Service: strategyMgr, Method: "ValidateStrategy",
-			Flags: []rpcFlag{fileFlag("dsl-file", "dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true), strFlag("factor-task-id", "factor_task_id", "用这个因子任务校验列引用")}},
+			Flags: []rpcFlag{fileFlag("dsl-file", "dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true), mapFlag("factor-task", "factor_tasks", "用这些因子任务校验列引用并试算，写成 市场=任务 ID，可重复（混合市场策略给 spot= 和 swap= 两个）")}},
 		rpcSpec{Path: []string{"strategy", "create"}, Short: "创建策略定义（DSL 写在 --dsl-file 里，写法见 skill 的 strategy-dsl）", Service: strategyMgr, Method: "CreateStrategy",
 			Flags: []rpcFlag{fileFlag("dsl-file", "strategy.dsl_yaml", "策略 DSL YAML 文件；- 为标准输入", true), strFlag("strategy-id", "strategy.strategy_id", "策略 ID；不给由服务端生成"), strFlag("name", "strategy.name", "策略名称")}},
 		rpcSpec{Path: []string{"strategy", "update"}, Short: "修改策略定义（引用它的实例要先停用）", Service: strategyMgr, Method: "UpdateStrategy",

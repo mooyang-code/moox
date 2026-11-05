@@ -23,9 +23,9 @@ import (
 // Resolver 解析绑定、装配最新周期（试算）并校验回放区间。
 type Resolver interface {
 	// Resolve 按因子任务解析绑定（只读，不关联任务；校验与研究回放用）。
-	Resolve(ctx context.Context, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
-	// ResolveInstance 启用实例时的解析：先把任务与实例永久关联（幂等），要求任务已启用，再解析绑定。
-	ResolveInstance(ctx context.Context, instanceID, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	Resolve(ctx context.Context, spaceID string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// ResolveInstance 启用实例时的解析：先把任务（市场 → 任务）与实例永久关联（幂等），要求任务已启用，再解析绑定。
+	ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
 	CheckCoverage(ctx context.Context, spaceID string, resolved input.Resolved, now time.Time) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
@@ -35,7 +35,7 @@ type Resolver interface {
 
 // Owner 是 Trade 组合账户的会话所有权接口。
 type Owner interface {
-	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID, marketType string) error
+	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, markets []string) error
 	ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 }

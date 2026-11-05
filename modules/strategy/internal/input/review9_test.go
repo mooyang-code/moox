@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 // 而不是“都不在交易日上”；行全部落在周末时才说不在交易日上。
 func TestStockRowsLaterThanClosedBarAreReportedAsFuture(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, shanghai(t))
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	for name, view := range map[string]ViewInfo{
 		"未来的交易日":    {IndexedFrom: stockDay(t, 2026, 10, 20), IndexedTo: stockDay(t, 2026, 10, 23), SeriesBars: 500},
 		"只有当天盘中的一行": {IndexedFrom: stockDay(t, 2026, 10, 12), IndexedTo: stockDay(t, 2026, 10, 12), SeriesBars: 500},
@@ -39,7 +40,7 @@ func TestStockRowsLaterThanClosedBarAreReportedAsFuture(t *testing.T) {
 // 没有 min_age_bars 的 A 股实例启用时只校验行键：覆盖范围不影响实时求值，新建的 View 只有未来行或当天盘中一行也能启用。
 func TestStockEnableWithoutMinAgeOnlyChecksRowKey(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, shanghai(t))
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	client := newFakeClient("spot")
 	for name, view := range map[string]ViewInfo{
 		"未来的交易日":    {ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 10, 20), IndexedTo: stockDay(t, 2026, 10, 23), SeriesBars: 500},

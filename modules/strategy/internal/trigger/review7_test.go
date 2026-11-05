@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestCompileFailureKeepsSnapshotCalendar(t *testing.T) {
 rules:
   - {id: r, type: rank, score: "missing_col", select: {top: 1}, weight: 1}
 `
-	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
 	h := newHarnessWith(t, brokenDSL, nil, resolved)
 	shanghai := time.FixedZone("CST", 8*3600)
 	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)

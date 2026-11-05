@@ -243,6 +243,11 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 		} else if deleted > 0 {
 			log.Infof("已清理 %d 条过期解释明细", deleted)
 		}
+		if deleted, err := repo.DeleteReadyEventsBefore(ctx, now.AddDate(0, 0, -cfg.ReadyEventsDays)); err != nil {
+			log.Warnf("清理过期就绪事件记录失败：%v", err)
+		} else if deleted > 0 {
+			log.Infof("已清理 %d 条过期就绪事件记录", deleted)
+		}
 		if deleted, err := repo.DeleteReplaysBefore(ctx, now.AddDate(0, 0, -cfg.ReplaysDays)); err != nil {
 			log.Warnf("清理过期回放失败：%v", err)
 		} else if deleted > 0 {

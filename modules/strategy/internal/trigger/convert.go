@@ -15,6 +15,8 @@ import (
 // TargetJSON 是 targets_json 中一个元素的结构。
 type TargetJSON struct {
 	InstrumentID string `json:"instrument_id"`
+	// Market 是目标所在的市场（spot、swap 或 equity）：同一个标的的现货、永续各是一个目标。
+	Market       string `json:"market"`
 	TargetWeight string `json:"target_weight"`
 	// Hold 为 true 表示保持该标的当前持仓数量不动（因 K 线空洞缺数），TargetWeight 是预留的预算占用。
 	Hold bool `json:"hold,omitempty"`
@@ -24,7 +26,7 @@ type TargetJSON struct {
 func EncodeTargets(targets []engine.Target) ([]TargetJSON, json.RawMessage, error) {
 	items := make([]TargetJSON, 0, len(targets))
 	for _, target := range targets {
-		items = append(items, TargetJSON{InstrumentID: target.InstrumentID, TargetWeight: target.Weight.String(), Hold: target.Hold})
+		items = append(items, TargetJSON{InstrumentID: target.InstrumentID, Market: target.Market, TargetWeight: target.Weight.String(), Hold: target.Hold})
 	}
 	raw, err := json.Marshal(items)
 	if err != nil {
@@ -60,7 +62,7 @@ func EncodeSummary(summary engine.Summary, notes []string) (json.RawMessage, err
 func ResultItems(items []engine.Item) []store.ResultItem {
 	out := make([]store.ResultItem, 0, len(items))
 	for _, item := range items {
-		row := store.ResultItem{RuleID: item.RuleID, InstrumentID: item.InstrumentID, Stage: item.Stage, Reason: item.Reason}
+		row := store.ResultItem{RuleID: item.RuleID, InstrumentID: item.InstrumentID, Market: item.Market, Stage: item.Stage, Reason: item.Reason}
 		if item.Score != "" {
 			if score, err := strconv.ParseFloat(item.Score, 64); err == nil {
 				row.Score = &score
@@ -93,9 +95,8 @@ func TradeMarketType(marketType string) (string, error) {
 	}
 }
 
-// MarshalTargetEvent 构造发给 Trade 的目标权重事件；shadow 为真表示预热中的影子目标。
-// marketType 是目标里所有标的所属的 Trade 市场（SPOT、SWAP、STOCK）。
-func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool, marketType string) ([]byte, error) {
+// MarshalTargetEvent 构造发给 Trade 的目标权重事件；shadow 为真表示预热中的影子目标。每个目标带自己的市场。
+func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool) ([]byte, error) {
 	if instance.LogicalAccountID == nil {
 		return nil, fmt.Errorf("观察实例没有组合账户，不能构造目标事件")
 	}
@@ -105,6 +106,10 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 	}
 	payloadTargets := make([]*tradeeventpb.InstrumentWeightTarget, 0, len(targets))
 	for _, target := range targets {
+		marketType, err := TradeMarketType(target.Market)
+		if err != nil {
+			return nil, err
+		}
 		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: marketType})
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{

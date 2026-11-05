@@ -16,13 +16,15 @@ message Strategy {
   string updated_at = 6;
 }
 
-// StrategyInstance 把定义绑定到一个空间、一个因子任务和可选的组合账户。因子任务在创建时写定、不能修改，
-// 实例第一次启用时才与任务正式关联（独占、永久）；读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。
+// StrategyInstance 把定义绑定到一个空间、一个或两个（现货、永续各一个）因子任务和可选的组合账户。因子任务在创建时写定、
+// 不能修改，实例第一次启用时才与任务正式关联（一个任务只关联一个实例，永久）；读取的 View 是任务结果数据集的默认 View，
+// 由任务 ID 推导。
 message StrategyInstance {
   string instance_id = 1;
   string strategy_id = 2;
   string space_id = 3;
-  string factor_task_id = 4;
+  // 市场（spot | swap | equity）→ 因子任务 ID；市场必须与任务源数据集的市场一致，且恰好是策略市场模式需要的那些市场。
+  map<string, string> factor_tasks = 4;
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
@@ -36,6 +38,7 @@ message StrategyInstance {
 message InstrumentTarget {
   string instrument_id = 1;
   string target_weight = 2;
+  string market = 3;                     // spot | swap | equity；同一个标的的现货、永续各是一个目标
 }
 
 // StrategyResult 是一个处理过的周期：ok 带目标，skipped 带原因。
@@ -69,6 +72,7 @@ message StrategyResultItem {
   int32 rank = 5;
   string weight = 6;
   string reason = 7;
+  string market = 8;                     // 入选的权重取它进入的市场，其余取所选行所在的市场（spot | swap | equity）
 }
 
 // Replay 是一次基于 View 的研究回放任务。
@@ -130,7 +134,7 @@ message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
 message ValidateStrategyReq {
   string dsl_yaml = 1;
-  string factor_task_id = 2;             // 可选；给出时做列解析并在最新周期试算
+  map<string, string> factor_tasks = 2;  // 可选，市场 → 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
 }
 message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;

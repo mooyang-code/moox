@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(input.Resolved{ViewID: "view_factor_i1", FactorTaskID: "ftask_i1", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
+	raw, _ := json.Marshal(input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_i1", FactorTaskID: "ftask_i1", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, ViewColumns: []string{"close"}})
 	pending := "pending-session"
 	if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: pending, InstanceID: "i1", DSLHash: definition.DSLHash, ResolvedJSON: string(raw), CreatedAt: h.now}, definition.DSLYaml); err != nil {
 		t.Fatal(err)

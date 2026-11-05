@@ -134,15 +134,16 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 		return ReplayBinding{}, err
 	}
 	if strategy.HasTranche() {
-		return ReplayBinding{}, errors.New("tranche 规则只用于合约 View，而闭环回放第一版只支持现货，暂不支持回放 tranche 策略")
+		return ReplayBinding{}, errors.New("闭环回放第一版不支持 tranche 策略")
 	}
 	resolved, program, err := e.resolveForReplay(ctx, instance, strategy)
 	if err != nil {
 		return ReplayBinding{}, err
 	}
-	if !resolved.Spot {
-		return ReplayBinding{}, fmt.Errorf("View %s 的源数据集 market_type=%s；回放第一版只支持现货", resolved.ViewID, resolved.MarketType)
+	if !resolved.SpotOnly() {
+		return ReplayBinding{}, fmt.Errorf("闭环回放第一版只支持单个现货任务的实例；这个实例的市场模式是 %s（绑定了 %s 的任务），暂不支持回放", resolved.Market, strings.Join(resolved.Markets(), "、"))
 	}
+	task := resolved.Primary()
 	e.mu.Lock()
 	if e.bindings == nil {
 		e.bindings = map[string]*replayBound{}
@@ -170,10 +171,10 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	}
 	sort.Strings(columns)
 	return ReplayBinding{
-		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: resolved.ViewID,
-		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: resolved.Spot, MinAgeBars: resolved.MinAgeBars,
+		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: task.ViewID,
+		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: true, MinAgeBars: resolved.MinAgeBars,
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
-		FactorTaskID: resolved.FactorTaskID, Tuned: len(program.Params) > 0,
+		FactorTaskID: task.FactorTaskID, Tuned: len(program.Params) > 0,
 	}, nil
 }
 
@@ -345,9 +346,11 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 		return ReplayDecision{}, err
 	}
 
+	// 闭环回放只支持单个现货任务：帧里只有这一个市场。
+	rows := make(map[string]engine.Row, len(req.Rows))
 	frame := engine.Frame{
-		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: resolved.Spot, Rows: make(map[string]engine.Row, len(req.Rows)),
-		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, FailedColumns: replayFailedColumns(resolved, program, ready),
+		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex,
+		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut,
 	}
 	for subject, row := range req.Rows {
 		if _, ok := sets.Subjects[subject]; !ok {
@@ -359,8 +362,9 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 				engineRow.Previous = replayValues(resolved, program, row.SourcePrev, row.FactorsPrev)
 			}
 		}
-		frame.Rows[subject] = engineRow
+		rows[subject] = engineRow
 	}
+	frame.Markets = map[string]engine.MarketInput{resolved.Market.Select: {Rows: rows, Failed: replayFailedColumns(resolved, program, ready)}}
 	decision, err := engine.Evaluate(program, frame, state)
 	if err != nil {
 		return skipped(input.SkipConfigError, err.Error())
@@ -430,7 +434,7 @@ func replayFailedColumns(resolved input.Resolved, program *dsl.Program, ready re
 
 // metaFor 取标的绑定与规则引用的标签成员；回放期间缓存一段时间，不在每一期重复读取。
 func (e *ReplayEvaluator) metaFor(ctx context.Context, bound *replayBound) (*replayMeta, error) {
-	key := bound.space + "/" + bound.resolved.DatasetID + "/" + bound.dslHash
+	key := bound.space + "/" + bound.resolved.Primary().DatasetID + "/" + bound.dslHash
 	e.mu.Lock()
 	if e.meta == nil {
 		e.meta = map[string]*replayMeta{}
@@ -440,7 +444,7 @@ func (e *ReplayEvaluator) metaFor(ctx context.Context, bound *replayBound) (*rep
 	if cached != nil && e.now().Sub(cached.at) < replayMetaTTL {
 		return cached, nil
 	}
-	subjects, err := e.Client.ListDatasetSubjects(ctx, bound.space, bound.resolved.DatasetID)
+	subjects, err := e.Client.ListDatasetSubjects(ctx, bound.space, bound.resolved.Primary().DatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("读取数据集标的：%w", err)
 	}

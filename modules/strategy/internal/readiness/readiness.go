@@ -31,6 +31,10 @@ const (
 	statusSkipped  = "skipped"
 )
 
+// IsDataReason 报告判定原因是数据类的：只表示这个 View 本期的因子被跳过，绑定了多个 View 的实例可以只让这个市场本期不可用；
+// 其余原因（成员契约变了、事件缺失、没有上一根的版本证据）是配置、契约类，要整期按原因处理。
+func IsDataReason(reason string) bool { return reason == ReasonFactorSkipped }
+
 // Binding 是启用时固化的、与就绪判定有关的绑定信息。
 type Binding struct {
 	// Factors 是实例引用的因子成员（成员键）及其固化的成员契约（见 Contract）；只引用源列时为空。

@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_factor_a", Bar: "1h", Calendar: input.DefaultCalendar}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar}
 	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", EndTime: origin.Add(20 * time.Hour)}
 	return &Runner{Store: openStore(t), Client: client}, job, resolved, view
 }

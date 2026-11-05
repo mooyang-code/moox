@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
@@ -12,7 +11,7 @@ import (
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 )
 
-// ValidateStrategy 解析校验 DSL；给出 factor_task_id 时解析绑定并在最新周期试算一次，结果不落库。
+// ValidateStrategy 解析校验 DSL；给出 factor_tasks 时解析绑定并在最新周期试算一次，结果不落库。
 func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.ValidateStrategyReq) (*strategypb.ValidateStrategyRsp, error) {
 	if req == nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errNilRequest)}, nil
@@ -22,8 +21,12 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
 	}
 	rsp := &strategypb.ValidateStrategyRsp{RetInfo: success(), Diagnostics: []string{}}
-	if strings.TrimSpace(req.GetFactorTaskId()) == "" {
+	if len(req.GetFactorTasks()) == 0 {
 		return rsp, nil
+	}
+	tasks, err := normalizeFactorTasks(req.GetFactorTasks())
+	if err != nil {
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
 	}
 	scoped, err := requireSpaceID(ctx)
 	if err != nil {
@@ -32,8 +35,11 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	if s.Resolver == nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}, nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetFactorTaskId(), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, input.TaskIDs(tasks), strategy)
 	if err != nil {
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
+	}
+	if err := input.CheckTaskMarkets(resolved, tasks); err != nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
 	}
 	resolvedJSON, _ := json.Marshal(resolved)
@@ -48,7 +54,7 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 		rsp.Diagnostics = append(rsp.Diagnostics, "试算失败："+err.Error())
 		return rsp, nil
 	}
-	rsp.Trial = trialProto(decision, loaded, resolved.ViewID)
+	rsp.Trial = trialProto(decision, loaded, resolved.ViewIDs())
 	rsp.TrialItems = itemProtos(trigger.ResultItems(decision.Items))
 	for _, note := range loaded.Sets.Notes {
 		rsp.Diagnostics = append(rsp.Diagnostics, note)
@@ -59,11 +65,15 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	return rsp, nil
 }
 
-func trialProto(decision engine.Decision, loaded input.Loaded, viewID string) *strategypb.StrategyResult {
+func trialProto(decision engine.Decision, loaded input.Loaded, viewIDs []string) *strategypb.StrategyResult {
 	_, targetsJSON, _ := trigger.EncodeTargets(decision.Targets)
 	states, _ := json.Marshal(decision.State)
 	summary, _ := trigger.EncodeSummary(decision.Summary, loaded.Sets.Notes)
-	inputJSON, _ := json.Marshal(store.InputRecord{ViewID: viewID, BarStart: loaded.Boundary.StorageStart})
+	views := make(map[string]store.ViewInput, len(viewIDs))
+	for _, viewID := range viewIDs {
+		views[viewID] = store.ViewInput{}
+	}
+	inputJSON, _ := json.Marshal(store.InputRecord{Views: views, BarStart: loaded.Boundary.StorageStart})
 	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}
 	return resultProto(result)
 }

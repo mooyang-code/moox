@@ -128,7 +128,7 @@ func TestSetupStartStrategyIsRepeatableAndRespectsUserInstance(t *testing.T) {
 	require.Equal(t, 1, client.created)
 
 	bound := startClient()
-	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTaskID: example.FactorTask}}
+	bound.instances = []setupStartInstance{{InstanceID: "mine", FactorTasks: map[string]string{example.Market: example.FactorTask}}}
 	status, err = setupStartStrategy(context.Background(), bound, repository, "crypto", example, &summary)
 	require.NoError(t, err)
 	require.Equal(t, "skipped", status, "因子任务已被用户实例绑定")
@@ -168,5 +168,5 @@ func TestSetupStartStockCNExampleUsesItsOwnTask(t *testing.T) {
 	status, err := setupStartStrategy(context.Background(), client, repository, "stockcn", example, &summary)
 	require.NoError(t, err)
 	require.Equal(t, "created", status)
-	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTaskID: "ftask_cn_5m", Enabled: true}}, client.instances)
+	require.Equal(t, []setupStartInstance{{InstanceID: "default_dual_ma_cn_5m", StrategyID: "default_dual_ma_cn_5m", SpaceID: "stockcn", FactorTasks: map[string]string{"equity": "ftask_cn_5m"}, Enabled: true}}, client.instances)
 }

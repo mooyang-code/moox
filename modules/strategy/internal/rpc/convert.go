@@ -22,7 +22,7 @@ func definitionProto(value store.Definition) *strategypb.Strategy {
 
 func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{
-		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTaskId: value.FactorTaskID,
+		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
 		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 	}
@@ -53,7 +53,7 @@ func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
 	}
 	out := make([]*strategypb.InstrumentTarget, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, &strategypb.InstrumentTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
+		out = append(out, &strategypb.InstrumentTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Market: target.Market})
 	}
 	return out
 }
@@ -61,7 +61,7 @@ func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
 func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 	out := make([]*strategypb.StrategyResultItem, 0, len(items))
 	for _, item := range items {
-		row := &strategypb.StrategyResultItem{RuleId: item.RuleID, InstrumentId: item.InstrumentID, Stage: item.Stage, Reason: item.Reason, Weight: dereference(item.Weight)}
+		row := &strategypb.StrategyResultItem{RuleId: item.RuleID, InstrumentId: item.InstrumentID, Market: item.Market, Stage: item.Stage, Reason: item.Reason, Weight: dereference(item.Weight)}
 		if item.Score != nil {
 			row.Score = strconv.FormatFloat(*item.Score, 'g', -1, 64)
 		}

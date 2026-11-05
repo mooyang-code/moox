@@ -75,16 +75,16 @@ func TestInstanceWritesRequireLiveDefinition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: testNow, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.SoftDeleteDefinition(ctx, "s2", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i2", StrategyID: "s2", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: testNow, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i2", StrategyID: "s2", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: testNow, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
 		t.Fatalf("新建实例不能引用已删除的定义：%v", err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s2", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s2", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "s2 不存在") {
 		t.Fatalf("改绑不能引用已删除的定义：%v", err)
 	}
 }

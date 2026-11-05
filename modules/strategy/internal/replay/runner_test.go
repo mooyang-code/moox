@@ -235,7 +235,7 @@ func pinnedFactors(t *testing.T, dslYaml string) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, _, err := input.Resolve(context.Background(), &fakeClient{marketType: "spot"}, "crypto", "ftask_a", strategy)
+	resolved, _, err := input.Resolve(context.Background(), &fakeClient{marketType: "spot"}, "crypto", []string{"ftask_a"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +773,7 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resolved, program, err := input.Resolve(context.Background(), client, "crypto", "ftask_a", strategy)
+			resolved, program, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -786,7 +786,7 @@ func TestReplayTargetsMatchLiveAssembly(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: []string{"A", "B"}})
+				loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: map[string][]string{resolved.Market.Select: []string{"A", "B"}}})
 				if err != nil {
 					t.Fatalf("实时装配 %v 失败：%v", replayed.BarEndTime, err)
 				}

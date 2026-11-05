@@ -49,7 +49,8 @@ func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, ti
 	return f.coverageErr
 }
 
-func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	taskID := taskIDs[0]
 	f.calls++
 	if f.onResolve != nil {
 		f.onResolve()
@@ -61,6 +62,12 @@ func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl
 	if columns == nil {
 		columns = []string{"close"}
 	}
+	spot := !strings.HasSuffix(taskID, "swap")
+	marketType := "spot"
+	if !spot {
+		marketType = "swap"
+	}
+	strategy.Market = dsl.SingleMarket(marketType)
 	program, err := dsl.Compile(strategy, columns)
 	if err != nil {
 		return input.Resolved{}, nil, err
@@ -69,12 +76,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl
 	if err != nil {
 		return input.Resolved{}, nil, err
 	}
-	spot := !strings.HasSuffix(taskID, "swap")
-	marketType := "spot"
-	if !spot {
-		marketType = "swap"
-	}
-	resolved := input.Resolved{ViewID: viewID, FactorTaskID: taskID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	resolved := input.Resolved{Market: dsl.SingleMarket(marketType), Tasks: map[string]input.TaskBinding{marketType: {ViewID: viewID, FactorTaskID: taskID, DatasetID: "ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
 	if f.calendar != "" {
 		resolved.Calendar, resolved.Bar = f.calendar, "1d"
 	}
@@ -82,9 +84,10 @@ func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl
 }
 
 // ResolveInstance 记下启用时关联任务的实例，其余与 Resolve 相同。
-func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
-	f.bound = append(f.bound, instanceID+"@"+taskID)
-	return f.Resolve(ctx, spaceID, taskID, strategy)
+func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	taskIDs := input.TaskIDs(tasks)
+	f.bound = append(f.bound, instanceID+"@"+taskIDs[0])
+	return f.Resolve(ctx, spaceID, taskIDs, strategy)
 }
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {
@@ -108,7 +111,7 @@ type fakeOwner struct {
 	onRelease func(instance, session string)
 }
 
-func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session, _ string) error {
+func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session string, _ []string) error {
 	f.claims = append(f.claims, session)
 	if f.claimErr != nil {
 		return f.claimErr
@@ -197,9 +200,17 @@ func (h *harness) createStrategy(id, raw string) *strategypb.Strategy {
 	return rsp.GetStrategy()
 }
 
+// taskMap 把测试里的单个因子任务 ID 变成请求的 factor_tasks（现货）；空串表示不给。
+func taskMap(taskID string) map[string]string {
+	if taskID == "" {
+		return nil
+	}
+	return map[string]string{"spot": taskID}
+}
+
 func (h *harness) createInstance(id, strategyID, taskID, account string, enabled bool) *strategypb.CreateStrategyInstanceRsp {
 	h.t.Helper()
-	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTaskId: taskID, LogicalAccountId: account, Enabled: enabled}})
+	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTasks: taskMap(taskID), LogicalAccountId: account, Enabled: enabled}})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -427,18 +438,18 @@ func TestValidateStrategy(t *testing.T) {
 	plain, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL})
 	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
 	h.resolver.err = errors.New("列 momentum_99 不存在于 View view_a；可用列：close")
-	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "momentum_99")
 	h.resolver.err = nil
-	frame := engine.Frame{BarEnd: h.now, Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
+	frame := engine.Frame{BarEnd: h.now, Markets: map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
 	h.resolver.loaded = input.Loaded{Frame: frame, Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)}}
-	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireOK(t, int32(trial.GetRetInfo().GetCode()), trial.GetRetInfo().GetMsg())
 	if trial.GetTrial().GetStatus() != "ok" || len(trial.GetTrial().GetTargets()) != 1 || trial.GetTrial().GetTargets()[0].GetInstrumentId() != "BTC-USDT" || len(trial.GetTrialItems()) != 2 || trial.GetResolvedJson() == "" {
 		t.Fatalf("试算结果不符：%+v", trial)
 	}
 	h.resolver.loadErr = fmt.Errorf("View view_a 最近三个周期都没有数据")
-	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireOK(t, int32(empty.GetRetInfo().GetCode()), empty.GetRetInfo().GetMsg())
 	if len(empty.GetDiagnostics()) == 0 || !strings.Contains(empty.GetDiagnostics()[0], "试算未完成") {
 		t.Fatalf("没有数据时应给出诊断：%+v", empty.GetDiagnostics())

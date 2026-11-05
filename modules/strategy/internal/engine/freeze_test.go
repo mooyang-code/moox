@@ -45,7 +45,7 @@ func TestSignalHoldsFrozenPositionAndReservesBudget(t *testing.T) {
 	if held := second.State.Rules["s"].Held; len(held) != 2 || held[0] != "A" || held[1] != "B" {
 		t.Fatalf("理论持仓应仍包含 A：%v", held)
 	}
-	if second.State.Targets["A"] != "0.5" {
+	if second.State.Targets["A|swap"] != "0.5" {
 		t.Fatalf("保持标的的预留权重要写回状态，下一期才能继续保持：%v", second.State.Targets)
 	}
 	if second.Summary.Rules["s"].Held != 1 || second.Summary.Rules["s"].Missing != 0 {
@@ -189,7 +189,7 @@ func TestRankFreezeScalesRemainingTargets(t *testing.T) {
 	}
 
 	// 预留耗尽：把上期目标改成占满预算，其余目标为零。
-	full := State{Rules: first.State.Rules, Targets: map[string]string{"A": "1"}}
+	full := State{Rules: first.State.Rules, Targets: map[string]string{"A|swap": "1"}}
 	exhausted := evaluate(t, program, frame, full)
 	assertWeights(t, exhausted, map[string]string{"A": "1"})
 }

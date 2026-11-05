@@ -15,8 +15,8 @@ import (
 // 保持标记要贯穿 targets_json 与发往 Trade 的目标事件，Trade 才不会把保持标的当作目标权重去调仓。
 func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	items, raw, err := EncodeTargets([]engine.Target{
-		{InstrumentID: "A", Weight: quant.Must("0.5"), Hold: true},
-		{InstrumentID: "B", Weight: quant.Must("0.5")},
+		{InstrumentID: "A", Market: "spot", Weight: quant.Must("0.5"), Hold: true},
+		{InstrumentID: "B", Market: "spot", Weight: quant.Must("0.5")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil || len(decoded) != 2 || !decoded[0].Hold || decoded[1].Hold {
 		t.Fatalf("targets_json 不符：%s err=%v", raw, err)
 	}
-	if string(raw) != `[{"instrument_id":"A","target_weight":"0.5","hold":true},{"instrument_id":"B","target_weight":"0.5"}]` {
+	if string(raw) != `[{"instrument_id":"A","market":"spot","target_weight":"0.5","hold":true},{"instrument_id":"B","market":"spot","target_weight":"0.5"}]` {
 		t.Fatalf("非保持目标的 JSON 不应出现 hold 字段：%s", raw)
 	}
 
@@ -33,7 +33,7 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	now := time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
 	instance := store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto", LogicalAccountID: &account}
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "sess", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}
-	data, err := MarshalTargetEvent(instance, result, items, false, "SPOT")
+	data, err := MarshalTargetEvent(instance, result, items, false)
 	if err != nil {
 		t.Fatal(err)
 	}

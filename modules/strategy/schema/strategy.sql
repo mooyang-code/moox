@@ -16,13 +16,12 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 实例：定义 + 因子任务 + 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
--- 读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
+-- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
+-- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
-    c_factor_task_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_enabled INTEGER NOT NULL DEFAULT 0,
     c_session_id TEXT,
@@ -39,8 +38,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
--- 一个因子任务只能被一个实例独占
-CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_factor_task ON t_strategy_instances (c_factor_task_id);
+-- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，一个因子任务只能被一个实例独占
+CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
+    c_instance_id TEXT NOT NULL,
+    c_market TEXT NOT NULL,
+    c_factor_task_id TEXT NOT NULL,
+    PRIMARY KEY (c_instance_id, c_market),
+    CHECK (c_market IN ('spot', 'swap', 'equity')),
+    UNIQUE (c_factor_task_id),
+    FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
+);
 
 -- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
@@ -98,11 +105,29 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_results_params_pending
 ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
 WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
--- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_ctime 与所属结果相同，按天数清理
+-- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值，每个 View 的原始 ViewDataReady 事件
+-- 按字节保存（就绪判断要用整条事件）；(实例, 会话, View, bar_end) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
+CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
+    c_instance_id TEXT NOT NULL,
+    c_session_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_bar_end_time INTEGER NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_event_bytes BLOB NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_instance_id, c_session_id, c_view_id, c_bar_end_time),
+    FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_strategy_ready_events_ctime ON t_strategy_ready_events (c_ctime);
+
+-- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_market 是入选的权重进入的市场，其余是所选行所在的市场；
+-- c_ctime 与所属结果相同，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_result_id TEXT NOT NULL,
     c_rule_id TEXT NOT NULL,
     c_instrument_id TEXT NOT NULL,
+    c_market TEXT NOT NULL DEFAULT '',
     c_stage TEXT NOT NULL,
     c_score REAL,
     c_rank INTEGER,

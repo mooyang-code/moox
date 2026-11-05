@@ -20,13 +20,13 @@ func TestSetInstanceEnabledComparesSessionWithInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"i1", "i2"} {
-		if err := repo.CreateInstance(ctx, Instance{InstanceID: id, StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_" + id, CreatedAt: testNow}); err != nil {
+		if err := repo.CreateInstance(ctx, Instance{InstanceID: id, StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_" + id}, CreatedAt: testNow}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	open := func(sessionID, instanceID, hash, task string) string {
 		t.Helper()
-		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"factor_task_id":%q}`, task), CreatedAt: testNow}, "name: demo"); err != nil {
+		if err := repo.OpenSession(ctx, Session{SessionID: sessionID, InstanceID: instanceID, DSLHash: hash, ResolvedJSON: fmt.Sprintf(`{"tasks":{"spot":{"factor_task_id":%q}}}`, task), CreatedAt: testNow}, "name: demo"); err != nil {
 			t.Fatal(err)
 		}
 		return sessionID

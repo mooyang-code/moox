@@ -201,12 +201,12 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
-	resolved, program, err := input.Resolve(ctx, r.Client, job.SpaceID, job.FactorTaskID, strategy)
+	resolved, program, err := input.Resolve(ctx, r.Client, job.SpaceID, []string{job.FactorTaskID}, strategy)
 	if err != nil {
 		return Metrics{}, err
 	}
-	if !resolved.Spot {
-		return Metrics{}, fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", job.ViewID, resolved.MarketType)
+	if !resolved.SpotOnly() {
+		return Metrics{}, fmt.Errorf("View %s 的市场模式是 %s；研究回放目前只支持现货（纯现货策略）", job.ViewID, resolved.Market)
 	}
 	if drift := factorDrift(job.Factors, resolved.Factors); drift != "" {
 		return Metrics{}, fmt.Errorf("因子定义在排队期间发生变化（%s），请重新发起回放", drift)
@@ -566,7 +566,8 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 		}
 	}
 	previous := rows.Bars[bar.PreviousStart.Unix()]
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Spot: true, Rows: make(map[string]engine.Row, len(current)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
+	frameRows := make(map[string]engine.Row, len(current))
+	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: map[string]engine.MarketInput{resolved.Market.Select: {Rows: frameRows}}, Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
 	for subjectID, row := range current {
 		engineRow := engine.Row{Values: row.Values}
 		if program.UsesPreviousBar {
@@ -574,7 +575,7 @@ func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved in
 				engineRow.Previous = prev.Values
 			}
 		}
-		frame.Rows[subjectID] = engineRow
+		frameRows[subjectID] = engineRow
 	}
 	return engine.Evaluate(program, frame, state)
 }

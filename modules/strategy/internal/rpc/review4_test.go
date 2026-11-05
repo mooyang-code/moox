@@ -55,7 +55,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			session := "session-enabling"
-			if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}`, CreatedAt: h.now}, third); err != nil {
+			if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
 				t.Fatal(err)
 			}
 			if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &session, nil, h.now); err != nil {
@@ -65,7 +65,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			got := <-done
 			requireFail(t, got.code, got.msg, "")
 			after, err := h.service.Store.GetInstance(h.ctx, "i1")
-			if err != nil || after.StrategyID != "s3" || after.FactorTaskID != "ftask_i1" || after.SessionID == nil || *after.SessionID != session {
+			if err != nil || after.StrategyID != "s3" || after.FactorTasks["spot"] != "ftask_i1" || after.SessionID == nil || *after.SessionID != session {
 				t.Fatalf("启用中的实例不应被改绑：%+v err=%v", after, err)
 			}
 		})
@@ -102,7 +102,7 @@ func TestReconcileDisabledSkipsSessionChangedSinceSnapshot(t *testing.T) {
 			t.Error(err)
 		}
 		_ = h.service.Store.CloseSession(h.ctx, staleSession, h.now)
-		if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: replacement, InstanceID: "i1", DSLHash: dsl.Hash([]byte(demoDSL)), ResolvedJSON: `{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}`, CreatedAt: h.now}, demoDSL); err != nil {
+		if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: replacement, InstanceID: "i1", DSLHash: dsl.Hash([]byte(demoDSL)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, demoDSL); err != nil {
 			t.Error(err)
 		}
 		if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &replacement, nil, h.now); err != nil {

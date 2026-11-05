@@ -78,14 +78,14 @@ func tunedClient() *fakeClient {
 func TestResolveInstanceBindsFactorTask(t *testing.T) {
 	client, tasks := tunedClient(), &tasksFake{}
 	service := Service{Client: client, Sets: tasks}
-	resolved, program, err := service.ResolveInstance(context.Background(), "i1", "space", "ftask_i1", parseStrategy(t, tunedDSL))
+	resolved, program, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, tunedDSL))
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if len(tasks.binds) != 1 || tasks.binds[0] != "ftask_i1@i1" {
 		t.Fatalf("应关联一次任务：%v", tasks.binds)
 	}
-	if resolved.ViewID != "view_factor_i1" || resolved.FactorTaskID != "ftask_i1" {
+	if resolved.Primary().ViewID != "view_factor_i1" || resolved.Primary().FactorTaskID != "ftask_i1" {
 		t.Fatalf("应绑定任务的结果 View：%+v", resolved)
 	}
 	if got := resolved.Columns["bias__var"]; got.Source != SourceFactor || got.Member != "bias__var" || got.FactorID != "bias" || got.MemberKind != "var" || got.DefinitionHash != "sha256:bias" {
@@ -108,7 +108,7 @@ func TestResolveInstanceBindsFactorTask(t *testing.T) {
 // 可变成员与 factor_params 一一对应；参数名必须是定义声明的；params() 只能读可变成员。
 func TestResolveRejectsMismatchedFactorParams(t *testing.T) {
 	resolve := func(raw string) error {
-		_, _, err := Service{Client: tunedClient(), Sets: &tasksFake{}}.ResolveInstance(context.Background(), "i1", "space", "ftask_i1", parseStrategy(t, raw))
+		_, _, err := Service{Client: tunedClient(), Sets: &tasksFake{}}.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, raw))
 		return err
 	}
 	if err := resolve(strings.Replace(tunedDSL, "window: 20", "period: 20", 1)); err == nil || !strings.Contains(err.Error(), "factor_params.bias__var.period") || !strings.Contains(err.Error(), "window") {
@@ -131,7 +131,7 @@ func TestResolveRejectsMismatchedFactorParams(t *testing.T) {
 func TestResolveParamsFunctionBindsMemberContract(t *testing.T) {
 	strategy := parseStrategy(t, strings.Replace(tunedDSL, "select: {top: 1}", `select: {top: 1}
     filter: params("bias__var", "window") > 0`, 1))
-	resolved, program, err := Service{Client: tunedClient(), Sets: &tasksFake{}}.ResolveInstance(context.Background(), "i1", "space", "ftask_i1", strategy)
+	resolved, program, err := Service{Client: tunedClient(), Sets: &tasksFake{}}.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestResolveParamsFunctionBindsMemberContract(t *testing.T) {
 		t.Fatalf("params() 引用不符：%+v %v", program.ParamRefs, resolved.Factors)
 	}
 	// 没有可变成员的任务：普通策略直接解析。
-	if _, _, err := (Service{Client: newFakeClient("spot"), Sets: &tasksFake{}}).ResolveInstance(context.Background(), "i1", "space", "ftask_1h", parseStrategy(t, exampleDSL)); err != nil {
+	if _, _, err := (Service{Client: newFakeClient("spot"), Sets: &tasksFake{}}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil {
 		t.Fatalf("没有可变成员的任务应直接解析：%v", err)
 	}
 }
@@ -148,17 +148,17 @@ func TestResolveParamsFunctionBindsMemberContract(t *testing.T) {
 func TestResolveInstanceChecksTaskBinding(t *testing.T) {
 	strategy := parseStrategy(t, tunedDSL)
 	other := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "enabled", BoundInstanceID: "i2"}}
-	if _, _, err := (Service{Client: tunedClient(), Sets: other}).ResolveInstance(context.Background(), "i1", "space", "ftask_i1", strategy); err == nil || !strings.Contains(err.Error(), "关联的是实例") {
+	if _, _, err := (Service{Client: tunedClient(), Sets: other}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil || !strings.Contains(err.Error(), "关联的是实例") {
 		t.Fatalf("任务关联了别的实例应拒绝：%v", err)
 	}
 	disabled := &tasksFake{bound: BoundTask{TaskID: "ftask_i1", Status: "disabled", BoundInstanceID: "i1"}}
-	if _, _, err := (Service{Client: tunedClient(), Sets: disabled}).ResolveInstance(context.Background(), "i1", "space", "ftask_i1", strategy); err == nil || !strings.Contains(err.Error(), "已启用的任务") {
+	if _, _, err := (Service{Client: tunedClient(), Sets: disabled}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil || !strings.Contains(err.Error(), "已启用的任务") {
 		t.Fatalf("任务未启用应拒绝：%v", err)
 	}
-	if _, _, err := (Service{Client: tunedClient()}).ResolveInstance(context.Background(), "i1", "space", "ftask_i1", strategy); err == nil {
+	if _, _, err := (Service{Client: tunedClient()}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil {
 		t.Fatal("没有接线 Factor 时不能启用实例")
 	}
-	if _, _, err := (Service{Client: tunedClient(), Sets: &tasksFake{err: context.DeadlineExceeded}}).ResolveInstance(context.Background(), "i1", "space", "ftask_i1", strategy); err == nil {
+	if _, _, err := (Service{Client: tunedClient(), Sets: &tasksFake{err: context.DeadlineExceeded}}).ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, strategy); err == nil {
 		t.Fatal("关联失败应拒绝")
 	}
 }
@@ -167,7 +167,7 @@ func TestResolveInstanceChecksTaskBinding(t *testing.T) {
 func TestResolveInstanceWaitsForMemberColumns(t *testing.T) {
 	late := &lateColumns{fakeClient: tunedClient(), after: 3}
 	service := Service{Client: late, Sets: &tasksFake{}, ReadyWait: 2 * time.Second, ReadyStep: time.Millisecond}
-	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", "ftask_i1", parseStrategy(t, tunedDSL)); err != nil {
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, tunedDSL)); err != nil {
 		t.Fatalf("补齐后应解析成功：%v", err)
 	}
 	if late.reads <= 3 {
@@ -175,7 +175,7 @@ func TestResolveInstanceWaitsForMemberColumns(t *testing.T) {
 	}
 	never := &lateColumns{fakeClient: tunedClient(), after: 1 << 30}
 	service = Service{Client: never, Sets: &tasksFake{}, ReadyWait: 20 * time.Millisecond, ReadyStep: 5 * time.Millisecond}
-	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", "ftask_i1", parseStrategy(t, tunedDSL)); err == nil || !strings.Contains(err.Error(), "bias__var") {
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_i1"}, parseStrategy(t, tunedDSL)); err == nil || !strings.Contains(err.Error(), "bias__var") {
 		t.Fatalf("超时应报缺失的列：%v", err)
 	}
 }

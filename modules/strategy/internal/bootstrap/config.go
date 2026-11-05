@@ -47,12 +47,14 @@ type EvaluationConfig struct {
 	AttemptBudget int `yaml:"attempt_budget"`
 }
 
-// RetentionConfig 是解释明细与回放的保留期；结果主表、DSL 版本与会话永久保留。
+// RetentionConfig 是解释明细、就绪事件到达记录与回放的保留期；结果主表、DSL 版本与会话永久保留。
 // 回放同时按天数与每个空间的个数清理（ReplaysMax 是每个空间保留的最近已结束回放数）。
 type RetentionConfig struct {
 	ResultItemsDays int `yaml:"result_items_days"`
 	ReplaysDays     int `yaml:"replays_days"`
 	ReplaysMax      int `yaml:"replays_max"`
+	// ReadyEventsDays 是汇合求值用的就绪事件到达记录的保留天数。
+	ReadyEventsDays int `yaml:"ready_events_days"`
 }
 
 // ParamsConfig 是可变成员参数投递的告警参数。
@@ -178,6 +180,9 @@ func Load(path string) (Config, error) {
 	if c.Retention.ReplaysMax == 0 {
 		c.Retention.ReplaysMax = 50
 	}
+	if c.Retention.ReadyEventsDays == 0 {
+		c.Retention.ReadyEventsDays = 7
+	}
 	if c.Params.StaleAlertPeriods == 0 {
 		c.Params.StaleAlertPeriods = 10
 	}
@@ -204,7 +209,7 @@ func Load(path string) (Config, error) {
 	if c.Evaluation.AttemptBudget <= 0 {
 		return Config{}, errors.New("evaluation.attempt_budget 必须大于 0")
 	}
-	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 {
+	if c.Retention.ResultItemsDays <= 0 || c.Retention.ReplaysDays <= 0 || c.Retention.ReplaysMax <= 0 || c.Retention.ReadyEventsDays <= 0 {
 		return Config{}, errors.New("retention 的保留天数与 replays_max 必须大于 0")
 	}
 	if c.Params.StaleAlertPeriods < 0 {

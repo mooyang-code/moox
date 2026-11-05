@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"reflect"
 	"strings"
 	"testing"
@@ -158,7 +159,7 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 	}
-	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
 	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], subjects, barStart, 0, nil)
 	satisfied, err := probe(context.Background(), []string{"BTC-USDT", "ETH-USDT"})
@@ -187,7 +188,7 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 // 探针窗口内候选全部没有行时，先确认整个数据集在窗口内是否有数据：有数据说明候选确实是新上市，照常剔除；
 // 一行都没有说明是历史缺口，整期 history_insufficient，不能把全部标的当作新上市。
 func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
-	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "NEW-USDT": subject("NEW-USDT", true)}
 	client := newFakeClient("spot")
 	client.rows = func(query Query) ([]Row, uint64, error) {

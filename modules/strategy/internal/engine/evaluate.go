@@ -14,19 +14,26 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 	if program == nil {
 		return Decision{}, errors.New("策略程序为空")
 	}
-	decision := evaluateFrame(program, frame, previous)
+	mode := program.Strategy.Market
+	if mode.IsZero() {
+		return Decision{}, errors.New("策略程序没有确定市场模式")
+	}
+	held := indexHeld(previous)
+	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, held), previous)
+	decision := evaluateFrame(program, mode, frame, previous, held)
+	labelItems(mode, frame, held, decision.Items)
 	sortItems(program, decision.Items)
 	return decision, nil
 }
 
-func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
+func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous State, held heldIndex) Decision {
 	decision := Decision{
 		Status:  StatusOK,
 		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
 	// 因 K 线空洞缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
-	frozen := frozenSet(program, frame, previous)
+	frozen := frozenSet(program, frame, previous, held)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -91,7 +98,8 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
-			contributions[id] = contributions[id].Add(weight)
+			key := TargetKey(id, contributionMarket(mode, frame, held, id, weight.IsNegative()))
+			contributions[key] = contributions[key].Add(weight)
 			allocated = allocated.Add(abs(truncateWeightWith(weight, tolerance)))
 		}
 		summary := decision.Summary.Rules[rule.Rule.ID]
@@ -104,7 +112,7 @@ func evaluateFrame(program *dsl.Program, frame Frame, previous State) Decision {
 		decision.Items = mergeStopItems(decision.Items, result.items)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
-	if err := applyPortfolio(&decision, program.Strategy.Portfolio, frame.Spot, contributions, frozen, previous, tolerance); err != nil {
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, mode, contributions, frozen, previous, held, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision

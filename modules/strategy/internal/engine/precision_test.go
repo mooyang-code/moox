@@ -191,7 +191,7 @@ portfolio:
   max_weight: 0.00009
   max_missing: 1
 `, "m")
-	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1)}), State{Targets: map[string]string{"C": "0.5"}})
+	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1)}), State{Targets: map[string]string{"C|swap": "0.5"}})
 	assertOK(t, decision)
 	if len(decision.Targets) != 0 {
 		t.Fatalf("裁剪为零的标的不应留在目标里：%+v", decision.Targets)

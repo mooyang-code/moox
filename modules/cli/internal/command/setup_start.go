@@ -23,14 +23,16 @@ import (
 type spaceExample struct {
 	StrategyID string
 	InstanceID string
+	// Market 是 FactorTask 所属的市场（swap、equity）。
+	Market     string
 	FactorTask string
 	DSL        string
 }
 
 // spaceExamples 按空间登记默认示例，没有登记的空间不建示例策略。
 var spaceExamples = map[string]spaceExample{
-	"crypto":  {StrategyID: "default_dual_ma_swap_1m", InstanceID: "default_dual_ma_swap_1m", FactorTask: "ftask_swap_1m", DSL: "examples/strategies/dual_ma_swap_1m.yaml"},
-	"stockcn": {StrategyID: "default_dual_ma_cn_5m", InstanceID: "default_dual_ma_cn_5m", FactorTask: "ftask_cn_5m", DSL: "examples/strategies/dual_ma_cn_5m.yaml"},
+	"crypto":  {StrategyID: "default_dual_ma_swap_1m", InstanceID: "default_dual_ma_swap_1m", Market: "swap", FactorTask: "ftask_swap_1m", DSL: "examples/strategies/dual_ma_swap_1m.yaml"},
+	"stockcn": {StrategyID: "default_dual_ma_cn_5m", InstanceID: "default_dual_ma_cn_5m", Market: "equity", FactorTask: "ftask_cn_5m", DSL: "examples/strategies/dual_ma_cn_5m.yaml"},
 }
 
 const (
@@ -69,11 +71,12 @@ type setupStartClient interface {
 
 // setupStartInstance 是策略实例里 setup start 关心的字段。
 type setupStartInstance struct {
-	InstanceID   string `json:"instance_id"`
-	StrategyID   string `json:"strategy_id"`
-	SpaceID      string `json:"space_id"`
-	FactorTaskID string `json:"factor_task_id"`
-	Enabled      bool   `json:"enabled"`
+	InstanceID string `json:"instance_id"`
+	StrategyID string `json:"strategy_id"`
+	SpaceID    string `json:"space_id"`
+	// FactorTasks 是市场 → 因子任务。
+	FactorTasks map[string]string `json:"factor_tasks"`
+	Enabled     bool              `json:"enabled"`
 }
 
 func newSetupStartCommand(deps setupDeps) *cobra.Command {
@@ -291,6 +294,15 @@ func setupStartFactors(ctx context.Context, deps setupDeps, snapshot *setupconfi
 	return true, errors.Join(applyErr, service.Close())
 }
 
+// taskValues 返回绑定的因子任务 ID。
+func taskValues(tasks map[string]string) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, id := range tasks {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // setupStartStrategy 创建空间的默认示例并启用。用户已经把这个因子任务绑给别的实例时跳过：一个因子任务只能有一个实例。
 func setupStartStrategy(ctx context.Context, client setupStartClient, repository, spaceID string, example spaceExample, summary *setupStartSummary) (string, error) {
 	instances, err := client.Instances(ctx, spaceID)
@@ -302,7 +314,7 @@ func setupStartStrategy(ctx context.Context, client setupStartClient, repository
 		switch {
 		case instance.InstanceID == example.InstanceID:
 			existing = &instances[i]
-		case instance.FactorTaskID == example.FactorTask:
+		case slices.Contains(taskValues(instance.FactorTasks), example.FactorTask):
 			summary.Notes = append(summary.Notes, fmt.Sprintf("因子任务 %s 已绑定实例 %s，跳过默认示例", example.FactorTask, instance.InstanceID))
 			return "skipped", nil
 		}
@@ -320,7 +332,7 @@ func setupStartStrategy(ctx context.Context, client setupStartClient, repository
 	if err := client.EnsureStrategy(ctx, spaceID, example.StrategyID, string(dsl)); err != nil {
 		return "", err
 	}
-	return "created", client.CreateInstance(ctx, setupStartInstance{InstanceID: example.InstanceID, StrategyID: example.StrategyID, SpaceID: spaceID, FactorTaskID: example.FactorTask, Enabled: true})
+	return "created", client.CreateInstance(ctx, setupStartInstance{InstanceID: example.InstanceID, StrategyID: example.StrategyID, SpaceID: spaceID, FactorTasks: map[string]string{example.Market: example.FactorTask}, Enabled: true})
 }
 
 // gatewayStartClient 是 setupStartClient 的线上实现。

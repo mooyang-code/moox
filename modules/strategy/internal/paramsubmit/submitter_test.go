@@ -67,10 +67,10 @@ func harness(t *testing.T) (*store.Store, *Submitter, *factorsFake) {
 	if err := db.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: "sha256:x", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_i1", CreatedAt: now, UpdatedAt: now}); err != nil {
+	if err := db.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_i1"}, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	resolved := json.RawMessage(`{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}`)
+	resolved := json.RawMessage(`{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`)
 	if err := db.OpenSession(ctx, store.Session{SessionID: "session-1", InstanceID: "i1", DSLHash: "sha256:x", ResolvedJSON: string(resolved), CreatedAt: now}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}

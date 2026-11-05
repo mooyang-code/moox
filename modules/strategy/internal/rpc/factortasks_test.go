@@ -24,13 +24,13 @@ func TestInstanceFactorTaskIsRequiredAndExclusive(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	missing := h.createInstance("i1", "s1", "", "", false)
-	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "factor_task_id")
+	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "factor_tasks")
 	badID := h.createInstance("i1", "s1", "view_a", "", false)
 	requireFail(t, int32(badID.GetRetInfo().GetCode()), badID.GetRetInfo().GetMsg(), "不合法")
 
 	created := h.createInstance("i1", "s1", "ftask_shared", "", false)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
-	if created.GetInstance().GetFactorTaskId() != "ftask_shared" {
+	if created.GetInstance().GetFactorTasks()["spot"] != "ftask_shared" {
 		t.Fatalf("实例应记下因子任务：%+v", created.GetInstance())
 	}
 	taken := h.createInstance("i2", "s1", "ftask_shared", "", false)
@@ -40,11 +40,11 @@ func TestInstanceFactorTaskIsRequiredAndExclusive(t *testing.T) {
 	}
 
 	// 修改实例：任务不可改，留空或给同一个任务则只改其他字段。
-	changed, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTaskId: "ftask_other"}})
+	changed, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_other"}}})
 	requireFail(t, int32(changed.GetRetInfo().GetCode()), changed.GetRetInfo().GetMsg(), "不能修改")
-	same, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTaskId: "ftask_shared", LogicalAccountId: "acct-1"}})
+	same, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_shared"}, LogicalAccountId: "acct-1"}})
 	requireOK(t, int32(same.GetRetInfo().GetCode()), same.GetRetInfo().GetMsg())
-	if same.GetInstance().GetFactorTaskId() != "ftask_shared" || same.GetInstance().GetLogicalAccountId() != "acct-1" {
+	if same.GetInstance().GetFactorTasks()["spot"] != "ftask_shared" || same.GetInstance().GetLogicalAccountId() != "acct-1" {
 		t.Fatalf("修改后的实例不符：%+v", same.GetInstance())
 	}
 }
@@ -79,7 +79,7 @@ func TestEnableBindsFactorTaskAndSnapshotsItsView(t *testing.T) {
 func TestValidateAndReplayByFactorTask(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.columns = []string{"close", "bias__var"}
-	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, FactorTaskId: "ftask_x"})
+	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}})
 	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
 	if !strings.Contains(validated.GetResolvedJson(), `"factor_task_id":"ftask_x"`) || !strings.Contains(validated.GetResolvedJson(), `"view_id":"view_factor_x"`) {
 		t.Fatalf("校验应按任务解析并返回绑定：%s", validated.GetResolvedJson())

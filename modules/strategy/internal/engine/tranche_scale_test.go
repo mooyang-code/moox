@@ -66,7 +66,7 @@ func newTrancheScaleRun(t testing.TB) *trancheScaleRun {
 	text, columns := largeShape()
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
-	program, err := dsl.Compile(strategy, columns)
+	program, err := compileMode(strategy, columns)
 	require.NoError(t, err)
 	require.Len(t, program.Rules[0].TrancheGroups, 32)
 	ids := make([]string, 501)

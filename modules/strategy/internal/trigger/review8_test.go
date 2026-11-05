@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"encoding/json"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func stockEvent(eventID string) (*eventpb.EventMessage, *storagepb.ViewDataReady
 func TestCorruptSessionSnapshotFallsBackToInstanceCopy(t *testing.T) {
 	h := newHarness(t, rankDSL, nil)
 	h.now = time.Date(2026, 10, 9, 7, 5, 0, 0, time.UTC)
-	stock, _ := json.Marshal(input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}})
+	stock, _ := json.Marshal(input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}})
 	corrupt(t, h, `{}`, string(stock))
 	message, payload := stockEvent("event-stock")
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
