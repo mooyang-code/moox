@@ -28,12 +28,13 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade", "collector-eventbus": "eventbus_collector"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade", "collector-eventbus": "eventbus_collector", "callback-dispatcher-eventbus": "eventbus_callback_dispatcher"}
 
 type eventbusBundle struct {
 	CA        string    `json:"ca"`
@@ -409,6 +410,7 @@ func eventBusRoleFiles() map[string]string {
 		"strategy-eventbus":              "strategy-eventbus.yaml",
 		"trade-eventbus":                 "trade-eventbus.yaml",
 		"collector-eventbus":             "collector-eventbus.yaml",
+		"callback-dispatcher-eventbus":   "callback-dispatcher-eventbus.yaml",
 	}
 }
 
@@ -437,7 +439,11 @@ func collectorEventBusPublish() string {
 	return strings.Join(allow, ", ")
 }
 
-func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
+func usersYAML(tokens map[string]string) string {
+	return baseUsersYAML(tokens) + callbackDispatcherUserYAML(tokens["callback-dispatcher-eventbus"])
+}
+
+func baseUsersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
 	return fmt.Sprintf("users:\n"+
 		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
 		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.host.snapshot.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
@@ -450,6 +456,29 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: collector-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [%s]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
 		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"], tokens["collector-eventbus"], collectorEventBusPublish())
 }
+
+// callbackDispatcherEventBusPublish 是事件中心的权限：只有它自己消费的那几个 durable 的 JetStream 接口，
+// 没有任何事件主题的发布权限（它不向 EventBus 反写事件）。每个事件一个 durable，名字由 events 包统一生成。
+func callbackDispatcherEventBusPublish() string {
+	allow := []string{`"$JS.API.STREAM.NAMES"`}
+	for _, event := range events.CallbackDispatcherEvents {
+		stream, name := event.Stream(), events.CallbackDispatcherConsumerName(event)
+		allow = append(allow,
+			fmt.Sprintf(`"$JS.API.CONSUMER.INFO.*.%s"`, name),
+			fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s"`, stream, name),
+			fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s.>"`, stream, name),
+			fmt.Sprintf(`"$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"`, stream, name),
+			fmt.Sprintf(`"$JS.API.CONSUMER.MSG.NEXT.%s.%s"`, stream, name),
+			fmt.Sprintf(`"$JS.ACK.%s.%s.>"`, stream, name),
+		)
+	}
+	return strings.Join(allow, ", ")
+}
+
+func callbackDispatcherUserYAML(token string) string {
+	return fmt.Sprintf("  - username: callback-dispatcher-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [%s]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n", token, callbackDispatcherEventBusPublish())
+}
+
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".secret-*")
