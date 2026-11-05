@@ -113,7 +113,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 `setup start --space-id stockcn` 的前提是 `[scf_plan]` 打开并配了 stockcn（见 `moox.toml.example`：`[[scf_plan.spaces]] space_id = "stockcn"`，`markets.equity` 写入口主机所在地域，优先存储机所在地域，该地域要有带 access 组件、配了 `private_address` 的主机）。它依次：
 
 1. 启用任务时，任务绑定的标签还没有成员（全新部署时自动标签要等 Collector 下一轮标签巡检才首次同步）就先立即同步再启用：沪深 300 成分标签 `cn_hs300`（属性 `sync.index = "000300"`，东方财富成分接口，之后每天 08:40 自动同步，接口失败时保留旧成员）；
-2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只、每函数 40 只，共 8 个函数，每 5 分钟触发一次，午休、收盘后、非交易日函数直接返回 `no_work`）；
+2. 启用“A 股 K 线 5m”任务并触发对账，Collector 建出 SCF 计划（300 只、每函数 20 只，共 15 个函数，每 5 分钟触发一次、收盘后 5 秒同时取数，午休、收盘后、非交易日函数直接返回 `no_work`）；
 3. 导入因子任务 `ftask_cn_5m`（只有 `ma__5`、`ma__10`），创建观察实例 `default_dual_ma_cn_5m`（[`examples/strategies/dual_ma_cn_5m.yaml`](../../../examples/strategies/dual_ma_cn_5m.yaml)，不挂账户）。
 
 A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14:55），11:25 那根之后是 13:00 那根；午休、隔夜、周末 Monitor 不报停滞。

@@ -409,9 +409,10 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
 		require.NoError(t, err)
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
-		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
+		require.Equal(t, 20, cfg.SCFPlan.symbolsPerFunction("stockcn"))
 		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
-		require.Equal(t, 15000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
+		require.Equal(t, 5000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerBaseMS)
+		require.Zero(t, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS, "A 股不错峰")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -439,7 +440,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
 	require.Equal(t, 8, fetch.Concurrency)
-	require.Equal(t, 15000, fetch.StaggerMS)
+	require.Equal(t, 5000, fetch.StaggerBaseMS)
 	require.Positive(t, fetch.Concurrency)
 	require.Positive(t, fetch.Burst)
 	require.Positive(t, fetch.RequestTimeoutMS)
@@ -478,14 +479,14 @@ func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
 	require.Equal(t, 800, fetch.StandbyMS)
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
-	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
+	require.Equal(t, 1500, fetch.StaggerMS, "crypto 的错峰来自空间默认")
 	require.True(t, fetch.ConnReuse)
 }
 
-// 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值。
+// 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值；错峰按空间设置（crypto 的内置默认在空间上）。
 func TestScfPlanFetchYAMLStaggerOverride(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    conn_reuse: true\n  spaces:\n    crypto:\n      fetch:\n        stagger_ms: 500\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto", "")
@@ -509,7 +510,7 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 		require.NotEmpty(t, deploy.PackageName, space)
 		require.Contains(t, deploy.Networks, "ap-hongkong")
 	}
-	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "渲染产物里只有包名与命名空间，stockcn 默认值仍应补回")
+	require.Equal(t, 20, cfg.SCFPlan.symbolsPerFunction("stockcn"), "渲染产物里只有包名与命名空间，stockcn 默认值仍应补回")
 	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
