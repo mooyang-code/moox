@@ -42,7 +42,7 @@ func newFakeCore() *fakeCore {
 		Status: "TRADING", ExchangeUpdatedAt: testNow,
 	}
 	fake.reference.Price = shared.MustDecimal("1500")
-	fake.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletUnified,
+	fake.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletSpot,
 		Asset: "CNY", Available: shared.MustDecimal("1000000"), Total: shared.MustDecimal("1000000"),
 	}}
 	fake.account.Equity = shared.MustDecimal("1000000")
@@ -78,7 +78,7 @@ func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	balances[0].Available = balances[0].Available.Add(cash)
 	b.account.AvailableFunds = balances[0].Available
 	if len(balances) == 1 {
-		b.account.Balances = append(balances, exchange.AssetBalance{Wallet: exchange.WalletUnified,
+		b.account.Balances = append(balances, exchange.AssetBalance{Wallet: exchange.WalletSpot,
 			Asset: fakeInstrument, Available: available, Locked: total.Sub(available), Total: total,
 		})
 		return
@@ -143,7 +143,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 			CredentialSecretID: "fake-exchange-secret", SettlementAsset: "CNY",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
-				Balances: []store.AssetBalance{{Wallet: "UNIFIED", Asset: "CNY", Available: "1000000", Total: "1000000"}},
+				Balances: []store.AssetBalance{{Wallet: "SPOT", Asset: "CNY", Available: "1000000", Total: "1000000"}},
 				Equity:   "1000000", AvailableFunds: "1000000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},
 			SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),

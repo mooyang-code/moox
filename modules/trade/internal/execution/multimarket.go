@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -147,15 +148,22 @@ func (m *MultiMarket) GetAccountSnapshot(ctx context.Context) (exchange.AccountS
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
-		merged.Balances = append(merged.Balances, part.Balances...)
-		merged.Equity = merged.Equity.Add(part.Equity)
-		merged.AvailableFunds = merged.AvailableFunds.Add(part.AvailableFunds)
-		merged.UsedMargin = merged.UsedMargin.Add(part.UsedMargin)
-		merged.MaintenanceMargin = merged.MaintenanceMargin.Add(part.MaintenanceMargin)
-		merged.UnrealizedPnL = merged.UnrealizedPnL.Add(part.UnrealizedPnL)
-		merged.ExchangeEquity = merged.ExchangeEquity.Add(part.ExchangeEquity)
-		for _, balance := range part.Balances {
-			merged.WalletUpdatedAt[balance.Wallet] = part.ExchangeUpdatedAt
+		// 两个市场共用一个钱包（OKX 统一账户）时读到的是同一份账户数据，只计一次，不能相加。
+		sharedWallet := slices.ContainsFunc(part.Balances, func(balance exchange.AssetBalance) bool {
+			_, seen := merged.WalletUpdatedAt[balance.Wallet]
+			return seen
+		})
+		if !sharedWallet {
+			merged.Balances = append(merged.Balances, part.Balances...)
+			merged.Equity = merged.Equity.Add(part.Equity)
+			merged.AvailableFunds = merged.AvailableFunds.Add(part.AvailableFunds)
+			merged.UsedMargin = merged.UsedMargin.Add(part.UsedMargin)
+			merged.MaintenanceMargin = merged.MaintenanceMargin.Add(part.MaintenanceMargin)
+			merged.UnrealizedPnL = merged.UnrealizedPnL.Add(part.UnrealizedPnL)
+			merged.ExchangeEquity = merged.ExchangeEquity.Add(part.ExchangeEquity)
+			for _, balance := range part.Balances {
+				merged.WalletUpdatedAt[balance.Wallet] = part.ExchangeUpdatedAt
+			}
 		}
 		if merged.ExchangeUpdatedAt.IsZero() || (!part.ExchangeUpdatedAt.IsZero() && part.ExchangeUpdatedAt.Before(merged.ExchangeUpdatedAt)) {
 			merged.ExchangeUpdatedAt = part.ExchangeUpdatedAt

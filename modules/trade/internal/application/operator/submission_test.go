@@ -34,7 +34,7 @@ func (s submissionSources) ExecutionEligibility(ctx context.Context, id string) 
 	if record.Status != "ENABLED" {
 		return tradingaccount.Account{}, ErrInvalidCommand
 	}
-	return tradingaccount.Account{ID: id, SpaceID: "space-1", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet, Status: exchange.AccountStatusEnabled, Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now, Snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("100000"), Balances: []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("100000")}}}}, nil
+	return tradingaccount.Account{ID: id, SpaceID: "space-1", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet, Status: exchange.AccountStatusEnabled, Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now, Snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("100000"), Balances: []exchange.AssetBalance{{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("100000")}}}}, nil
 }
 
 func (s submissionSources) GetInstrument(context.Context, exchange.Exchange, exchange.MarketType, string) (exchange.Instrument, error) {

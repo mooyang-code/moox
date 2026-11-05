@@ -101,15 +101,16 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		}
 		return balances.Totals[validation.ReservedAsset].Add(adjustment).Sub(balances.Reserved[validation.ReservedAsset]), nil
 	}
-	unreflected, err := tx.GetUnreflectedReservation(validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
+	market := validation.Instrument.MarketType
+	unreflected, err := tx.GetUnreflectedReservation(
+		validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset,
+		validation.Account.MarketsInWallet(validation.Account.WalletFor(market)),
+		validation.Account.SnapshotSourceTime.UnixMilli(),
+	)
 	if err != nil {
 		return shared.Zero(), err
 	}
-	available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-	if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
-		available = validation.Account.Snapshot.AvailableFunds
-	}
-	return available.Sub(unreflected), nil
+	return availableFunds(validation.Account, market, validation.ReservedAsset).Sub(unreflected), nil
 }
 
 func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec, validation Validation) (orderdomain.OrderSpec, error) {

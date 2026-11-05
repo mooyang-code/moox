@@ -165,7 +165,7 @@ func TestStalePrivateUpdateKeepsBalanceButClosesAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, after.Ready)
 	require.Equal(t, before.Snapshot.AvailableFunds, after.Snapshot.AvailableFunds)
-	require.NotZero(t, after.BalancePendingUntil)
+	require.NotEmpty(t, after.BalancePending)
 }
 
 // 同一交易所的两把不同密钥各自同步，一个账户的成交不会变成另一个账户的外部成交。

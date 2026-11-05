@@ -653,7 +653,7 @@ func TestApplyPositionOnlyClosesReadiness(t *testing.T) {
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
-	require.EqualValues(t, 2_000, account.BalancePendingUntil)
+	require.Equal(t, map[string]int64{"FUTURES": 2_000}, account.BalancePending)
 }
 
 func TestPartialPositionAndAccountPushDoNotWakeTargetBeforeFullSync(t *testing.T) {
@@ -1248,7 +1248,7 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 		require.NoError(t, getErr)
 		require.False(t, account.Ready)
-		require.Equal(t, int64(3_000), account.BalancePendingUntil)
+		require.Equal(t, map[string]int64{"FUTURES": 3_000}, account.BalancePending)
 		require.Equal(t, before, boundary(), "未覆盖成交的快照不能推进预留抵扣边界")
 	}
 
@@ -1264,7 +1264,7 @@ func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.True(t, account.Ready, "覆盖成交的快照恢复准入")
-	require.Zero(t, account.BalancePendingUntil)
+	require.Empty(t, account.BalancePending)
 	require.Equal(t, int64(9_000), account.LastSyncAt)
 }
 
@@ -1348,7 +1348,7 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
-	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+	require.Equal(t, map[string]int64{"FUTURES": 3_000}, account.BalancePending)
 
 	// 重放同一成交（已去重）不会丢水位，余额覆盖成交后恢复
 	clock = 4_000
@@ -1357,7 +1357,7 @@ func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
 	require.True(t, result.Ready)
 	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	require.Zero(t, account.BalancePendingUntil)
+	require.Empty(t, account.BalancePending)
 }
 
 type noPositionsAdapter struct{ *syncAdapter }
@@ -1465,7 +1465,7 @@ func TestOrderAheadOfFillDetailsClosesAdmissionUntilBalanceCovers(t *testing.T) 
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready, "订单累计成交领先明细时不得保持可交易")
-	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+	require.Equal(t, map[string]int64{"FUTURES": 3_000}, account.BalancePending)
 }
 
 type noFillsAdapter struct {
@@ -1520,7 +1520,7 @@ func TestFillGapKeepsAdmissionClosedEvenWhenBalanceIsNewer(t *testing.T) {
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
-	require.NotZero(t, account.BalancePendingUntil)
+	require.NotEmpty(t, account.BalancePending)
 
 	// 成交明细补齐后再同步：恢复
 	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 4_000}}

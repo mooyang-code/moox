@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
@@ -21,7 +22,8 @@ func (s *Store) ListManagedInstruments(ctx context.Context, spaceID, tradingAcco
 }
 
 // ManagedAssets 返回持仓来自余额的账户里归 MooX 管理的资产：结算资产、当前目标里的标的、
-// 有成交的策略或人工订单涉及的标的。其他资产不估值，也不卖出。
+// 有成交的策略或人工订单涉及的标的，再减去组合资金设置里的排除资产
+// （BNB 保留、稳定币保证金、保证金币、底仓）。其他资产不估值，也不卖出。
 func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID string) (map[string]struct{}, error) {
 	account, err := s.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
@@ -39,7 +41,11 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
+	var settings fundsettings.Settings
 	if err == nil {
+		if settings, err = fundsettings.Parse(logical.FundSettingsJSON); err != nil {
+			return nil, err
+		}
 		target, targetErr := s.GetLogicalAccountTarget(ctx, spaceID, logical.LogicalAccountID)
 		if targetErr != nil && !errors.Is(targetErr, gorm.ErrRecordNotFound) {
 			return nil, targetErr
@@ -59,7 +65,7 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
 			continue
 		}
-		if _, ok := managed[instrument.InstrumentID]; ok {
+		if _, ok := managed[instrument.InstrumentID]; ok && !settings.ExcludedFromManaged(instrument.BaseAsset) {
 			assets[instrument.BaseAsset] = struct{}{}
 		}
 	}

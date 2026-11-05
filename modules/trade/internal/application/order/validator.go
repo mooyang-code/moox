@@ -178,7 +178,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			result.ReservedQuantity = spec.Quantity
 		}
 		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
+			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	} else {
@@ -225,7 +225,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			}
 		}
 		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
+			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	}
@@ -289,9 +289,20 @@ func withFeeBuffer(amount, rate shared.Decimal) shared.Decimal {
 	return amount.Add(amount.Mul(rate))
 }
 
-func availableBalance(snapshot exchange.AccountSnapshot, asset string) shared.Decimal {
+// availableFunds 返回订单所在钱包里某个资产的可用资金。普通账户的现货、合约钱包分开算；
+// 统一账户的合约和 OKX、模拟盘共用一个钱包，保证金按账户级可用资金算；只开通合约的账户同样如此。
+func availableFunds(account tradingaccount.Account, market exchange.MarketType, asset string) shared.Decimal {
+	wallet := account.WalletFor(market)
+	if exchange.RuleFor(market).UsesMargin && (len(account.Markets) == 1 || wallet == exchange.WalletUnified) {
+		return account.Snapshot.AvailableFunds
+	}
+	return availableBalance(account.Snapshot, wallet, asset)
+}
+
+// availableBalance 取指定钱包里资产的可用余额；快照没有钱包信息（空钱包）的余额当作属于任何钱包。
+func availableBalance(snapshot exchange.AccountSnapshot, wallet exchange.Wallet, asset string) shared.Decimal {
 	for _, balance := range snapshot.Balances {
-		if balance.Asset == asset {
+		if balance.Asset == asset && (balance.Wallet == wallet || balance.Wallet == exchange.WalletUnspecified) {
 			return balance.Available
 		}
 	}

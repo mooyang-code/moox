@@ -31,7 +31,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	require.NoError(t, err)
 	account.TradingAccountID, account.Name = second, second
 	account.CredentialSecretID = "local-http-mock-only-b" // 一把密钥只能对应一个执行账户
-	account.Snapshot.Balances = []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "100000", Total: "100000"}}
+	account.Snapshot.Balances = []store.AssetBalance{{Wallet: "SPOT", Asset: "USDT", Available: "100000", Total: "100000"}}
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
@@ -67,7 +67,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	adapters := isolationAdapters{testAccount: a, second: b}
 	f.orders.Adapters, f.sync.Adapters = adapters, adapters
 	f.sync.Now = func() time.Time { return testNow }
-	a.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.Zero(), Total: shared.Zero()}}
+	a.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.Zero(), Total: shared.Zero()}}
 	a.account.AvailableFunds = shared.Zero()
 	a.placeErr = &exchange.Error{Kind: exchange.ErrorInsufficientBalance, Err: errors.New("authoritative funds exhausted")}
 	executor := &targetapp.Executor{Store: f.store, Orders: f.orders,

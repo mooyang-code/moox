@@ -1152,7 +1152,12 @@ func (s *Service) prepareSubmit(
 				}
 			}
 		} else if refreshedReference || retryRepriced {
-			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
+			market := validation.Instrument.MarketType
+			unreflected, err := tx.GetUnreflectedReservation(
+				record.SpaceID, record.TradingAccountID, validation.ReservedAsset,
+				validation.Account.MarketsInWallet(validation.Account.WalletFor(market)),
+				validation.Account.SnapshotSourceTime.UnixMilli(),
+			)
 			if err != nil {
 				return err
 			}
@@ -1163,10 +1168,7 @@ func (s *Service) prepareSubmit(
 				}
 				unreflected = unreflected.Sub(previous)
 			}
-			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-			if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
-				available = validation.Account.Snapshot.AvailableFunds
-			}
+			available := availableFunds(validation.Account, market, validation.ReservedAsset)
 			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
 				return ErrInsufficientFunds
 			}
@@ -1300,7 +1302,7 @@ func (s *Service) deliverSubmit(
 				// 水位只用交易所时间：本地时间比成交晚一个往返，现货余额的更新时间永远追不上。
 				// 回执没有时间时只关闭准入，成交缺口会挡住恢复，成交入账时再按成交时间抬水位。
 				if at := response.UpdatedAt.UnixMilli(); at > 0 {
-					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, at); err != nil {
+					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, exchange.WalletFor(validation.Account.Exchange, validation.Account.AccountMode, exchange.MarketType(latest.MarketType)), at); err != nil {
 						return err
 					}
 				}

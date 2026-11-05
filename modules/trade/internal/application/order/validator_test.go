@@ -320,6 +320,7 @@ func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
+	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 	spec := testSpec(now)
 	spec.Type = exchange.OrderTypeLimit
@@ -334,6 +335,7 @@ func TestValidatorAcceptsPaperMarket(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
+	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 
 	_, err := validator.Validate(context.Background(), "space-1", testSpec(now))
@@ -392,8 +394,8 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
 		Snapshot: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
-				{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("1000")},
-				{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("10")},
+				{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("1000")},
+				{Wallet: exchange.WalletSpot, Asset: "BTC", Available: shared.MustDecimal("10")},
 			},
 			AvailableFunds: shared.MustDecimal("1000"),
 		},
@@ -455,4 +457,11 @@ func setTestOwner(spec *orderdomain.OrderSpec, ownerType orderdomain.OwnerType) 
 func decimalPointer(raw string) *shared.Decimal {
 	value := shared.MustDecimal(raw)
 	return &value
+}
+
+// 模拟盘只有一个统一钱包，夹具里的余额要跟着放进去。
+func moveToUnifiedWallet(account *tradingaccount.Account) {
+	for i := range account.Snapshot.Balances {
+		account.Snapshot.Balances[i].Wallet = exchange.WalletUnified
+	}
 }

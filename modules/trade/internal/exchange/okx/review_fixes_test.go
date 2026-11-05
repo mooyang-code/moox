@@ -134,7 +134,7 @@ func TestCancelOrderSendsOneRequest(t *testing.T) {
 	}
 }
 
-func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
+func TestOfficialAccountPushUsesCashBalance(t *testing.T) {
 	raw, err := os.ReadFile("testdata/account_push.json")
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
 		t.Fatalf("accounts = %+v", recorder.accounts)
 	}
 	snapshot := recorder.accounts[0]
-	if snapshot.Equity.String() != "4892.951170691435" || snapshot.AvailableFunds.String() != "4734.371190691435" ||
+	if snapshot.Equity.String() != "4750.426970691436" || snapshot.ExchangeEquity.String() != "55868.06403501676" || snapshot.AvailableFunds.String() != "4734.371190691435" ||
 		!snapshot.Present.Equity || snapshot.ExchangeUpdatedAt.UnixMilli() != 1705564223311 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}

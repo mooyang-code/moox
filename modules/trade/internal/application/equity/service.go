@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -109,14 +110,11 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := confirmedSnapshot(account)
-	if account.HasBalanceMarket() {
-		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
-		if valueErr != nil {
-			return valueErr
-		}
-		snapshot = valued
+	valued, valueErr := s.valueSnapshot(ctx, account, confirmedSnapshot(account))
+	if valueErr != nil {
+		return valueErr
 	}
+	snapshot := valued
 	var pnl *string
 	if strings.TrimSpace(snapshot.UnrealizedPnL) != "" {
 		value := snapshot.UnrealizedPnL
@@ -133,31 +131,61 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	return s.sampleLogicalAccounts(ctx, account.SpaceID, accountID, &snapshot)
 }
 
-// valueSpotSnapshot 计算受管资产的权益：结算资产加受管资产的市值。没有报价时不写入，
-// 避免留下误导的零值曲线。未受管的资产不计入，也不影响权益。
-func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot) (store.TradingAccountSnapshot, error) {
-	if !s.sourceFresh(snapshot.ExchangeUpdatedAt) {
+// fundSettings 读取执行账户所属组合的资金设置；不在任何组合里时取默认值。
+func (s *Service) fundSettings(ctx context.Context, account store.TradingAccountRecord) (fundsettings.Settings, error) {
+	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fundsettings.Parse("")
+	}
+	if err != nil {
+		return fundsettings.Settings{}, err
+	}
+	return fundsettings.Parse(logical.FundSettingsJSON)
+}
+
+// valueSnapshot 按统一公式计算执行账户的权益（plan 4.6）：
+//
+//	权益 = 结算资产在各钱包的净额（含负债为负）+ 永续未实现盈亏 + 受管现货市值 + 保证金币配置值 + 套利底仓现货市值
+//
+// 底仓对冲腿的未实现盈亏已包含在永续未实现盈亏里，底仓净值 = 底仓现货市值 + 对冲腿盈亏，所以公式只多加底仓现货市值。
+// 交易所给的总权益不参与计算，只在 ExchangeEquity 里留作展示核对。没有报价时不写入，避免留下误导的零值曲线。
+func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot) (store.TradingAccountSnapshot, error) {
+	if account.HasBalanceMarket() && !s.sourceFresh(snapshot.ExchangeUpdatedAt) {
 		return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot balance snapshot")
 	}
 	settlement := account.SettlementAsset
+	settings, err := s.fundSettings(ctx, account)
+	if err != nil {
+		return store.TradingAccountSnapshot{}, err
+	}
 	managed, err := s.Store.ManagedAssets(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return store.TradingAccountSnapshot{}, err
 	}
-	equity := shared.Zero()
-	available := shared.Zero()
+	unrealized := decimal(snapshot.UnrealizedPnL)
+	settlementNet := shared.Zero()
+	settlementSeen := false
+	settlementAvailable := shared.Zero()
 	var held []store.AssetBalance
 	for _, balance := range snapshot.Balances {
-		quantity := decimal(balance.Total)
+		quantity := decimal(balance.Total).Sub(decimal(balance.Borrowed))
 		if strings.EqualFold(balance.Asset, settlement) {
-			equity = equity.Add(quantity)
-			available = available.Add(decimal(balance.Available))
+			settlementNet = settlementNet.Add(quantity)
+			settlementAvailable = settlementAvailable.Add(decimal(balance.Available))
+			settlementSeen = true
 			continue
 		}
-		if _, ok := managed[balance.Asset]; ok && !quantity.IsZero() {
+		_, isManaged := managed[balance.Asset]
+		if (isManaged || settings.IsArbitrageBase(balance.Asset)) && !quantity.IsZero() {
+			balance.Total = quantity.String()
 			held = append(held, balance)
 		}
 	}
+	if !settlementSeen && !account.HasBalanceMarket() {
+		// 合约账户的快照没有带结算币明细时，沿用快照里的权益，去掉其中的未实现盈亏。
+		settlementNet = decimal(snapshot.Equity).Sub(unrealized)
+	}
+	equity := settlementNet.Add(unrealized).Add(settings.MarginCoinValue())
 	if len(held) > 0 {
 		if s.Adapters == nil {
 			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
@@ -170,9 +198,10 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		if err != nil {
 			return store.TradingAccountSnapshot{}, err
 		}
+		// 只有现货标的给持有的币估值：同名的合约标的有自己的报价，不能顶替现货价。
 		byAsset := make(map[string]store.InstrumentRecord)
 		for _, instrument := range instruments {
-			if strings.EqualFold(instrument.QuoteAsset, settlement) {
+			if exchange.RuleFor(instrument.MarketType).PositionFromBalance && strings.EqualFold(instrument.QuoteAsset, settlement) {
 				byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
 			}
 		}
@@ -198,7 +227,9 @@ func (s *Service) valueSpotSnapshot(ctx context.Context, account store.TradingAc
 		}
 	}
 	snapshot.Equity = equity.String()
-	snapshot.AvailableFunds = available.String()
+	if !account.HasPositionMarket() {
+		snapshot.AvailableFunds = settlementAvailable.String()
+	}
 	return snapshot, nil
 }
 
@@ -266,8 +297,8 @@ func (s *Service) sampleLogicalAccount(
 		memberSnapshot := confirmedSnapshot(memberAccount)
 		if member.TradingAccountID == accountID && sampled != nil {
 			memberSnapshot = *sampled
-		} else if memberAccount.HasBalanceMarket() {
-			valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
+		} else {
+			valued, valueErr := s.valueSnapshot(ctx, memberAccount, memberSnapshot)
 			if valueErr != nil {
 				return valueErr
 			}

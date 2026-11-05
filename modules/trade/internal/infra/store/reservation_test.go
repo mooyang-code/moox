@@ -52,10 +52,15 @@ func TestGetUnreflectedReservationUsesOrderFactsWithoutLedger(t *testing.T) {
 			"space-1",
 			"account-1",
 			"USDT",
+			[]string{"SPOT"},
 			200,
 		)
 		require.NoError(t, err)
 		require.Equal(t, "100", total.String())
+		// 合约钱包的预留不占用现货钱包的资金。
+		swapTotal, err := tx.GetUnreflectedReservation("space-1", "account-1", "USDT", []string{"SWAP"}, 200)
+		require.NoError(t, err)
+		require.True(t, swapTotal.IsZero())
 		return nil
 	}))
 }

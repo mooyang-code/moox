@@ -10,10 +10,12 @@ import (
 
 // GetUnreflectedReservation returns local order reservations that are newer
 // than, or not yet represented by, the latest confirmed Exchange snapshot.
+// markets 限定占用同一个钱包的市场：不同钱包的资金互不占用。
 func (tx *Tx) GetUnreflectedReservation(
 	spaceID string,
 	tradingAccountID string,
 	asset string,
+	markets []string,
 	snapshotSourceTime int64,
 ) (shared.Decimal, error) {
 	var rows []struct {
@@ -24,12 +26,13 @@ func (tx *Tx) GetUnreflectedReservation(
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 			AND c_reserved_asset = ?
+			AND c_market_type IN ?
 			AND c_remaining_reserved_quantity != '0'
 			AND (
 				c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
 				OR c_submitted_at >= ?
 			)
-	`, spaceID, tradingAccountID, asset, snapshotSourceTime).Scan(&rows).Error; err != nil {
+	`, spaceID, tradingAccountID, asset, markets, snapshotSourceTime).Scan(&rows).Error; err != nil {
 		return shared.Decimal{}, err
 	}
 	total := shared.Zero()

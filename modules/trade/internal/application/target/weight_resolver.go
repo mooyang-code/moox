@@ -8,12 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type EquitySource interface {
@@ -48,6 +52,10 @@ type WeightResolver struct {
 	Equity      EquitySource
 	Now         func() time.Time
 	MaxPriceAge time.Duration
+
+	// warned 记录排除资产告警的日期（组合|资产 -> 日期），同一个组合、同一个资产每天只告警一次。
+	warnMu sync.Mutex
+	warned map[string]string
 }
 
 // ErrPermanent marks a target request that cannot become valid by retrying
@@ -92,6 +100,17 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	if err := validateWeightRisk(orderedWeights); err != nil {
 		return WeightConversion{}, fmt.Errorf("%w: %v", ErrPermanent, err)
 	}
+	logical, err := r.Store.GetLogicalAccount(ctx, spaceID, request.GetLogicalAccountId())
+	if err != nil {
+		return WeightConversion{}, err
+	}
+	settings, err := fundsettings.Parse(logical.FundSettingsJSON)
+	if err != nil {
+		return WeightConversion{}, err
+	}
+	// 排除资产（BNB 保留、稳定币保证金、保证金币、底仓）只跳过这一项并告警，其余照常执行。
+	// 跳过的标的按“保持”处理：既不加仓也不减仓，整份目标全被跳过时也不会变成清仓指令。
+	r.skipExcludedTargets(ctx, request.GetLogicalAccountId(), settings, orderedWeights)
 	// The period carried by the event is the sole business timestamp. Do not
 	// fall back to exchange or local processing time when it is malformed.
 	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
@@ -146,6 +165,20 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		return WeightConversion{}, err
 	}
 	equity = equity.Add(unmanaged)
+	// 换算用的权益再扣资金预留比例，以及 BNB 保留金额还差的部分：BNB 本身不计入权益，所以买到位后不再扣。
+	equity = equity.Sub(equity.Mul(settings.ReserveRatio))
+	if settings.BNBReserveEnabled() {
+		bnbValue, bnbErr := r.bnbMarketValue(ctx, members)
+		if bnbErr != nil {
+			return WeightConversion{}, bnbErr
+		}
+		if shortfall := settings.BNBReserveAmount.Sub(bnbValue); shortfall.Cmp(shared.Zero()) > 0 {
+			equity = equity.Sub(shortfall)
+		}
+	}
+	if equity.Cmp(shared.Zero()) <= 0 {
+		return WeightConversion{}, fmt.Errorf("target weight resolver: 扣除资金预留和 BNB 保留金额后可用权益不为正")
+	}
 	for _, weight := range orderedWeights {
 		if weight.Hold {
 			// 保持标的不取报价、不换算数量；执行器对它既不加仓也不减仓。
@@ -188,8 +221,89 @@ type resolvedQuote struct {
 	quote            Quote
 }
 
+// skipExcludedTargets 把目标里的排除资产标记为保持并告警（同一个组合、同一个资产每天一次）。
+// BNB 保留、稳定币保证金、保证金币只排除现货标的；套利底仓的现货和对应永续都排除。
+func (r *WeightResolver) skipExcludedTargets(ctx context.Context, logicalAccountID string, settings fundsettings.Settings, weights []orderedWeight) {
+	for i := range weights {
+		market := exchange.MarketOfInstrumentID(weights[i].InstrumentID)
+		asset, _, _ := strings.Cut(weights[i].InstrumentID, "-")
+		excluded := false
+		switch market {
+		case exchange.MarketTypeSpot:
+			excluded = settings.ExcludedFromManaged(asset)
+		case exchange.MarketTypeSwap:
+			excluded = settings.IsArbitrageBase(asset)
+		}
+		if !excluded {
+			continue
+		}
+		weights[i].Hold = true
+		r.warnExcluded(ctx, logicalAccountID, strings.ToUpper(asset), weights[i].InstrumentID)
+	}
+}
+
+func (r *WeightResolver) warnExcluded(ctx context.Context, logicalAccountID, asset, instrumentID string) bool {
+	today := r.now().Format("2006-01-02")
+	key := logicalAccountID + "|" + asset
+	r.warnMu.Lock()
+	if r.warned == nil {
+		r.warned = make(map[string]string)
+	}
+	repeated := r.warned[key] == today
+	r.warned[key] = today
+	r.warnMu.Unlock()
+	if repeated {
+		return false
+	}
+	log.WarnContextf(ctx, "交易关注项：组合 %s 的目标里出现排除资产 %s（%s），已跳过这一项，其余照常执行", logicalAccountID, asset, instrumentID)
+	return true
+}
+
+// bnbMarketValue 返回成员账户里 BNB 现货余额的结算币市值；没有 BNB 余额时不取报价。
+func (r *WeightResolver) bnbMarketValue(ctx context.Context, members []store.LogicalAccountMemberRecord) (shared.Decimal, error) {
+	total := shared.Zero()
+	for _, member := range members {
+		account, err := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return shared.Zero(), err
+		}
+		quantity := shared.Zero()
+		for _, balance := range account.Snapshot.Balances {
+			if strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
+				held, err := shared.ParseDecimal(balance.Total)
+				if err != nil {
+					return shared.Zero(), err
+				}
+				quantity = quantity.Add(held)
+			}
+		}
+		if quantity.IsZero() {
+			continue
+		}
+		instruments, err := r.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		if err != nil {
+			return shared.Zero(), err
+		}
+		for _, instrument := range instruments {
+			if !exchange.RuleFor(instrument.MarketType).PositionFromBalance ||
+				!strings.EqualFold(instrument.BaseAsset, fundsettings.BNBAsset) ||
+				!strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
+				continue
+			}
+			quote, err := r.Prices.LatestPrice(ctx, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+			if err != nil {
+				return shared.Zero(), err
+			}
+			total = total.Add(quantity.Mul(quote.Price))
+			break
+		}
+	}
+	return total, nil
+}
+
 // unmanagedTargetValue 计算目标里尚未受管的现货资产市值。权益点只算受管资产，而目标一落库
 // 这些资产就受管了，收敛按全部余额算持仓。不计入的话数量按偏小的权益换算，会多卖一大截。
+// 只看现货标的：合约标的的 BTC 不是现货资产；同一基础资产只算一次。
 func (r *WeightResolver) unmanagedTargetValue(
 	ctx context.Context,
 	spaceID string,
@@ -209,10 +323,18 @@ func (r *WeightResolver) unmanagedTargetValue(
 		if err != nil {
 			return shared.Zero(), err
 		}
+		counted := make(map[string]struct{}, len(quotes))
 		for _, resolved := range quotes {
+			if !exchange.RuleFor(resolved.instrument.MarketType).PositionFromBalance {
+				continue
+			}
 			if _, ok := managed[resolved.instrument.BaseAsset]; ok {
 				continue
 			}
+			if _, done := counted[resolved.instrument.BaseAsset]; done {
+				continue
+			}
+			counted[resolved.instrument.BaseAsset] = struct{}{}
 			for _, balance := range account.Snapshot.Balances {
 				if balance.Asset != resolved.instrument.BaseAsset {
 					continue

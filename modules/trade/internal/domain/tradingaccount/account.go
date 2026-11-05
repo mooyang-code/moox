@@ -135,6 +135,25 @@ func (a Account) SupportsMarket(market exchange.MarketType) bool {
 }
 
 // HasLeverageMarket 报告账户是否开通了需要配置杠杆和保证金模式的市场（SWAP）。
+// WalletFor 返回某个市场的资金在这个账户里所在的钱包；模拟盘只有一个统一钱包。
+func (a Account) WalletFor(market exchange.MarketType) exchange.Wallet {
+	if a.ExecutionMode == exchange.ExecutionModePaper {
+		return exchange.WalletUnified
+	}
+	return exchange.WalletFor(a.Exchange, a.AccountMode, market)
+}
+
+// MarketsInWallet 返回占用同一个钱包资金的市场：普通账户的现货和合约各用各的钱包，统一账户和 OKX 共用一个。
+func (a Account) MarketsInWallet(wallet exchange.Wallet) []string {
+	var markets []string
+	for _, market := range a.Markets {
+		if a.WalletFor(market) == wallet {
+			markets = append(markets, string(market))
+		}
+	}
+	return markets
+}
+
 func (a Account) HasLeverageMarket() bool {
 	return slices.ContainsFunc(a.Markets, func(market exchange.MarketType) bool {
 		return exchange.RuleFor(market).Leverage

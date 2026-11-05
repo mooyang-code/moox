@@ -23,7 +23,7 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 	liveFake := newFakeExchange(exchange.MarketTypeSpot)
 	live := newFixture(t, exchange.MarketTypeSpot, liveFake)
 	setSpotSnapshot(t, live, store.TradingAccountSnapshot{
-		Balances:          []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "100000", Total: "100000"}},
+		Balances:          []store.AssetBalance{{Wallet: "SPOT", Asset: "USDT", Available: "100000", Total: "100000"}},
 		Equity:            "100000",
 		AvailableFunds:    "100000",
 		ExchangeUpdatedAt: testNow.UnixMilli(),
@@ -36,8 +36,8 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 	liveFake.mu.Lock()
 	liveFake.account = exchange.AccountSnapshot{
 		Balances: []exchange.AssetBalance{
-			{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("99500"), Total: shared.MustDecimal("99500")},
-			{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("0.01"), Total: shared.MustDecimal("0.01")},
+			{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("99500"), Total: shared.MustDecimal("99500")},
+			{Wallet: exchange.WalletSpot, Asset: "BTC", Available: shared.MustDecimal("0.01"), Total: shared.MustDecimal("0.01")},
 		},
 		Equity: shared.MustDecimal("100000"), AvailableFunds: shared.MustDecimal("99500"),
 		ExchangeUpdatedAt: testNow,

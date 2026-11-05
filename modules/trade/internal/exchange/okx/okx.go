@@ -405,6 +405,7 @@ func (a *Adapter) toBaseQuantity(symbol string, contracts shared.Decimal) (share
 
 type balanceEnvelope struct {
 	UTime   string `json:"uTime"`
+	TotalEq string `json:"totalEq"`
 	Details []struct {
 		Ccy       string `json:"ccy"`
 		AvailBal  string `json:"availBal"`
@@ -435,18 +436,21 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	return a.balanceSnapshot(payload[0])
 }
 
-// balanceSnapshot 把 REST 余额和私有流 account 推送统一转成账户快照。权益取结算币那一项的 eq，
-// 不用 totalEq（全币种折合 USD，账户里有别的币时会高估权益）。推送只带有变化的币种，
-// 所以结算币相关字段只有带了结算币明细才标记为存在，否则合并时会把它们写成 0。
+// balanceSnapshot 把 REST 余额和私有流 account 推送统一转成账户快照。余额数量取 cashBal（不含未实现盈亏），
+// 未实现盈亏只从 upl 取一次；totalEq（全币种折合 USD，账户里有别的币时会和统一权益重复）只记入 ExchangeEquity 供展示核对。
+// 推送只带有变化的币种，所以结算币相关字段只有带了结算币明细才标记为存在，否则合并时会把它们写成 0。
 func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot, error) {
 	snapshot := exchange.AccountSnapshot{
 		ExchangeUpdatedAt: millisString(row.UTime),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 	}
+	if exchangeEquity, err := decimalOrZero(row.TotalEq); err == nil {
+		snapshot.ExchangeEquity = exchangeEquity
+	}
 	for _, detail := range row.Details {
-		totalRaw := detail.Eq
+		totalRaw := detail.CashBal
 		if totalRaw == "" {
-			totalRaw = detail.CashBal
+			totalRaw = detail.Eq
 		}
 		total, err := decimalOrZero(totalRaw)
 		if err != nil {

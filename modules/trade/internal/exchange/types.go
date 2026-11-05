@@ -129,6 +129,29 @@ func (w Wallet) Valid() bool {
 	return w == WalletSpot || w == WalletFutures || w == WalletMargin || w == WalletUnified
 }
 
+// WalletFor 返回某个市场的资金所在的钱包：
+// 币安普通账户 SPOT→SPOT、SWAP→FUTURES；币安统一账户 SPOT→MARGIN、SWAP→UNIFIED；OKX 统一账户和模拟盘都是 UNIFIED。
+// 账户类型还没检测出来（空串）时，OKX 按统一账户，其余按币安普通账户的口径，与适配器当前输出的钱包一致。
+func WalletFor(name Exchange, mode AccountMode, market MarketType) Wallet {
+	if mode == AccountModeUnspecified && name == ExchangeOKX {
+		mode = AccountModeOKXUnified
+	}
+	switch mode {
+	case AccountModeOKXUnified:
+		return WalletUnified
+	case AccountModeBinancePortfolioMargin:
+		if market == MarketTypeSwap {
+			return WalletUnified
+		}
+		return WalletMargin
+	default:
+		if market == MarketTypeSwap {
+			return WalletFutures
+		}
+		return WalletSpot
+	}
+}
+
 type ExecutionMode string
 
 const (

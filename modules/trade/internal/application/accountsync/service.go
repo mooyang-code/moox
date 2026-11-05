@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -538,7 +539,6 @@ func (s *Service) applySnapshot(
 	if latestErr != nil {
 		return Result{}, latestErr
 	}
-	pending := latest.BalancePendingUntil
 	// 订单累计成交仍领先本地成交明细时，余额没有被这些成交的明细解释，不能恢复准入（与水位是否为零无关：
 	// 首次导入的终态外部订单、由首笔成交触发的导入都可能在水位为零时留下缺口）。
 	gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
@@ -549,15 +549,11 @@ func (s *Service) applySnapshot(
 	if hasGap {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
 	}
-	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending && !hasGap
-	// 现货持仓来自余额：内容比待确认水位旧的 REST 余额（交易所更新时间更早）不能恢复准入，
-	// 否则会按成交前的余额重复下单。读取时间更晚不代表内容更新。
-	if clearPending && pending > 0 && account.HasBalanceMarket() &&
-		snapshot.Account.ExchangeUpdatedAt.UnixMilli() < pending {
-		clearPending = false
-	}
+	// 水位按钱包记：合约成交只让合约钱包等确认，现货钱包的余额不必追上它。
+	covered := coveredWallets(latest, snapshot.Account, snapshotTime, result.AccountSnapshotUpdated && !hasGap)
+	stillPending := len(latest.BalancePending) > len(covered)
 	readinessCause := ""
-	if (pending > 0 || hasGap) && !clearPending {
+	if stillPending || hasGap {
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
@@ -567,7 +563,7 @@ func (s *Service) applySnapshot(
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
 	// 否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
 	syncBoundary := now
-	if (!result.AccountSnapshotUpdated || ((pending > 0 || hasGap) && !clearPending)) && account.LastSyncAt > 0 {
+	if (!result.AccountSnapshotUpdated || stillPending || hasGap) && account.LastSyncAt > 0 {
 		syncBoundary = account.LastSyncAt
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -581,8 +577,8 @@ func (s *Service) applySnapshot(
 		); err != nil {
 			return err
 		}
-		if clearPending && pending > 0 {
-			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, snapshotTime); err != nil {
+		for _, wallet := range covered {
+			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, wallet, snapshotTime); err != nil {
 				return err
 			}
 		}
@@ -598,6 +594,45 @@ func (s *Service) applySnapshot(
 		return Result{}, err
 	}
 	return result, nil
+}
+
+// coveredWallets 返回被本次完整余额快照覆盖的待确认钱包：快照读取时间不早于水位；
+// 钱包里放着现货持仓（持仓来自余额）时，余额内容的交易所更新时间也不能早于水位，
+// 否则会按成交前的余额重复下单。读取时间更晚不代表内容更新。
+func coveredWallets(
+	account store.TradingAccountRecord,
+	snapshot exchange.AccountSnapshot,
+	snapshotTime int64,
+	adopted bool,
+) []exchange.Wallet {
+	if !adopted {
+		return nil
+	}
+	var covered []exchange.Wallet
+	for name, until := range account.BalancePending {
+		wallet := exchange.Wallet(name)
+		if snapshotTime < until {
+			continue
+		}
+		if walletHoldsBalancePositions(account, wallet) {
+			contentTime := snapshot.ExchangeUpdatedAt
+			if at, found := snapshot.WalletUpdatedAt[wallet]; found {
+				contentTime = at
+			}
+			if contentTime.UnixMilli() < until {
+				continue
+			}
+		}
+		covered = append(covered, wallet)
+	}
+	return covered
+}
+
+// walletHoldsBalancePositions 报告钱包里是否放着持仓来自余额的市场（现货、股票）。
+func walletHoldsBalancePositions(account store.TradingAccountRecord, wallet exchange.Wallet) bool {
+	return slices.ContainsFunc(account.Markets, func(market string) bool {
+		return exchange.RuleFor(market).PositionFromBalance && account.WalletFor(market) == wallet
+	})
 }
 
 func (s *Service) resolveUnknownOrders(
@@ -738,7 +773,7 @@ func (s *Service) ApplyPosition(
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if at := position.ExchangeUpdatedAt.UnixMilli(); at > 0 {
-			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, at); err != nil {
+			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, account.WalletFor(string(position.Market)), at); err != nil {
 				return err
 			}
 		}
@@ -750,6 +785,25 @@ func (s *Service) ApplyPosition(
 			"private position update awaiting sync",
 		)
 	})
+}
+
+// privateUpdateWallets 返回私有账户更新涉及的钱包：快照里出现的钱包；快照没带余额明细时，账户所有市场的钱包都要等确认。
+func privateUpdateWallets(account store.TradingAccountRecord, snapshot exchange.AccountSnapshot) []exchange.Wallet {
+	var wallets []exchange.Wallet
+	add := func(wallet exchange.Wallet) {
+		if wallet.Valid() && !slices.Contains(wallets, wallet) {
+			wallets = append(wallets, wallet)
+		}
+	}
+	for _, balance := range snapshot.Balances {
+		add(balance.Wallet)
+	}
+	if len(wallets) == 0 {
+		for _, market := range account.Markets {
+			add(account.WalletFor(market))
+		}
+	}
+	return wallets
 }
 
 func (s *Service) ApplyAccountSnapshot(
@@ -787,8 +841,10 @@ func (s *Service) ApplyAccountSnapshot(
 			}
 		}
 		// 私有更新只合并了部分字段：完整余额快照覆盖这个时间之前，不能恢复准入
-		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
-			return err
+		for _, wallet := range privateUpdateWallets(account, snapshot) {
+			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, wallet, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
+				return err
+			}
 		}
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
@@ -843,7 +899,7 @@ func (s *Service) setReady(
 	if cause != nil && !errors.Is(cause, context.Canceled) {
 		lastError = cause.Error()
 	}
-	if ready && account.BalancePendingUntil > 0 {
+	if ready && account.HasBalancePending() {
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
 		ready, lastError = false, awaitingBalanceReason
 	}
@@ -1062,7 +1118,7 @@ func (s *Service) observeOrderFills(
 		if !ahead {
 			return nil
 		}
-		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, account.WalletFor(record.MarketType), until); err != nil {
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(

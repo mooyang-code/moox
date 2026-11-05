@@ -180,7 +180,7 @@ func TestSpotStaleBalanceDoesNotRestoreReady(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		return tx.RaiseBalancePending("space-1", "spot-1", 90_000)
+		return tx.RaiseBalancePending("space-1", "spot-1", exchange.WalletSpot, 90_000)
 	}))
 	adapter := newLagAdapter(time.UnixMilli(80_000))
 	service := &Service{

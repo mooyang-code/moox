@@ -471,6 +471,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}
 	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(snapshotTime)}
 	snapshot.Equity, err = decimalOrZero(payload.TotalMarginBalance)
+	snapshot.ExchangeEquity = snapshot.Equity
 	if err == nil {
 		snapshot.AvailableFunds, err = decimalOrZero(payload.AvailableBalance)
 	}

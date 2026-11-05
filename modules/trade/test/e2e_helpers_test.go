@@ -107,8 +107,8 @@ func newFakeExchange(market exchange.MarketType) *fakeExchange {
 		},
 		account: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
-				{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("100000"), Total: shared.MustDecimal("100000")},
-				{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("10"), Total: shared.MustDecimal("10")},
+				{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("100000"), Total: shared.MustDecimal("100000")},
+				{Wallet: exchange.WalletSpot, Asset: "BTC", Available: shared.MustDecimal("10"), Total: shared.MustDecimal("10")},
 			},
 			Equity: shared.MustDecimal("100000"), AvailableFunds: shared.MustDecimal("100000"),
 			ExchangeUpdatedAt: testNow,
@@ -703,8 +703,8 @@ func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.
 			LeverageSettings: leverage,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
-					{Wallet: "UNIFIED", Asset: "USDT", Available: "100000", Total: "100000"},
-					{Wallet: "UNIFIED", Asset: "BTC", Available: "10", Total: "10"},
+					{Wallet: "SPOT", Asset: "USDT", Available: "100000", Total: "100000"},
+					{Wallet: "SPOT", Asset: "BTC", Available: "10", Total: "10"},
 				},
 				Equity: "100000", AvailableFunds: "100000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},

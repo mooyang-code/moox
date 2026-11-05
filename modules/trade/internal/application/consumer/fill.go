@@ -226,7 +226,9 @@ func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fi
 	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
 		return nil
 	}
-	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
+	// 水位只记在这笔成交所属市场的钱包上：合约成交不会让现货钱包一直等不到确认。
+	wallet := account.WalletFor(string(fill.Market))
+	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, wallet, fill.TradedAt.UnixMilli()); err != nil {
 		return err
 	}
 	return tx.UpdateTradingAccountReadiness(

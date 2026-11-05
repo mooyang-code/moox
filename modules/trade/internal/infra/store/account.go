@@ -227,13 +227,13 @@ type TradingAccountRecord struct {
 	FillCursors        FillCursors
 	Snapshot           TradingAccountSnapshot
 	SnapshotSourceTime int64
-	// BalancePendingUntil 是待余额确认的水位（毫秒）；0 表示没有待确认的成交或私有余额更新。
-	BalancePendingUntil int64
-	LastSyncAt          int64
-	LastReadyAt         int64
-	LastError           string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	// BalancePending 是各钱包待余额确认的水位（钱包 -> 毫秒）；没有条目表示该钱包没有待确认的成交或私有余额更新。
+	BalancePending map[string]int64
+	LastSyncAt     int64
+	LastReadyAt    int64
+	LastError      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // HasBalanceMarket 报告账户是否开通了持仓来自余额的市场（现货、股票）。
@@ -248,6 +248,19 @@ func (r TradingAccountRecord) HasPositionMarket() bool {
 	return slices.ContainsFunc(r.Markets, func(market string) bool {
 		return !exchange.RuleFor(market).PositionFromBalance
 	})
+}
+
+// WalletFor 返回某个市场的资金在这个账户里所在的钱包；模拟盘只有一个统一钱包。
+func (r TradingAccountRecord) WalletFor(market string) exchange.Wallet {
+	if r.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return exchange.WalletUnified
+	}
+	return exchange.WalletFor(exchange.Exchange(r.Exchange), exchange.AccountMode(r.AccountMode), exchange.MarketType(market))
+}
+
+// HasBalancePending 报告是否有任何钱包还在等余额确认。
+func (r TradingAccountRecord) HasBalancePending() bool {
+	return len(r.BalancePending) > 0
 }
 
 // SupportsMarket 报告账户是否已开通某个市场。
@@ -274,7 +287,7 @@ type tradingAccountRow struct {
 	FillCursorsJSON      string    `gorm:"column:c_fill_cursors_json"`
 	SnapshotJSON         string    `gorm:"column:c_snapshot_json"`
 	SnapshotSourceTime   int64     `gorm:"column:c_snapshot_source_time"`
-	BalancePendingUntil  int64     `gorm:"column:c_balance_pending_until"`
+	BalancePendingJSON   string    `gorm:"column:c_balance_pending_json"`
 	LastSyncAt           int64     `gorm:"column:c_last_sync_at"`
 	LastReadyAt          int64     `gorm:"column:c_last_ready_at"`
 	LastError            string    `gorm:"column:c_last_error"`
@@ -568,29 +581,36 @@ func (tx *Tx) UpdateTradingAccountSnapshot(
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account snapshot")
 }
 
-// RaiseBalancePending 把待余额确认的水位抬到至少 until（毫秒，只升不降）。
-func (tx *Tx) RaiseBalancePending(spaceID, tradingAccountID string, until int64) error {
-	if blank(spaceID) || blank(tradingAccountID) || until <= 0 {
+// RaiseBalancePending 把某个钱包待余额确认的水位抬到至少 until（毫秒，只升不降）。
+func (tx *Tx) RaiseBalancePending(spaceID, tradingAccountID string, wallet exchange.Wallet, until int64) error {
+	if blank(spaceID) || blank(tradingAccountID) || !wallet.Valid() || until <= 0 {
 		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
 	}
+	path := "$." + string(wallet)
 	result := tx.db.Exec(`
 		UPDATE t_trading_accounts
-		SET c_balance_pending_until = MAX(c_balance_pending_until, ?), c_mtime = CURRENT_TIMESTAMP
+		SET c_balance_pending_json = json_set(
+				c_balance_pending_json, ?,
+				MAX(COALESCE(json_extract(c_balance_pending_json, ?), 0), ?)
+			),
+			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, until, spaceID, tradingAccountID)
+	`, path, path, until, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "balance pending watermark")
 }
 
-// ClearBalancePendingThrough 在完整余额快照覆盖水位（快照时间 >= 水位）后清零；水位更高时保持不变。
-func (tx *Tx) ClearBalancePendingThrough(spaceID, tradingAccountID string, coveredUntil int64) error {
-	if blank(spaceID) || blank(tradingAccountID) {
+// ClearBalancePendingThrough 在完整余额快照覆盖某个钱包的水位（覆盖时间 >= 水位）后清掉该钱包的水位；水位更高时保持不变。
+func (tx *Tx) ClearBalancePendingThrough(spaceID, tradingAccountID string, wallet exchange.Wallet, coveredUntil int64) error {
+	if blank(spaceID) || blank(tradingAccountID) || !wallet.Valid() {
 		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
 	}
+	path := "$." + string(wallet)
 	result := tx.db.Exec(`
 		UPDATE t_trading_accounts
-		SET c_balance_pending_until = 0, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_balance_pending_until <= ?
-	`, spaceID, tradingAccountID, coveredUntil)
+		SET c_balance_pending_json = json_remove(c_balance_pending_json, ?), c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+			AND COALESCE(json_extract(c_balance_pending_json, ?), 0) <= ?
+	`, path, spaceID, tradingAccountID, path, coveredUntil)
 	if result.Error != nil {
 		return writeError(result.Error)
 	}
@@ -795,6 +815,10 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 	if err != nil {
 		return TradingAccountRecord{}, err
 	}
+	var balancePending map[string]int64
+	if err := json.Unmarshal([]byte(row.BalancePendingJSON), &balancePending); err != nil {
+		return TradingAccountRecord{}, fmt.Errorf("%w: balance pending JSON: %v", ErrInvalidRecord, err)
+	}
 	return TradingAccountRecord{
 		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
 		Name: row.Name, Exchange: row.Exchange, Markets: markets,
@@ -806,7 +830,7 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 		Ready:            row.Ready,
 		LeverageSettings: leverage, FillCursors: fillCursors,
 		Snapshot:           snapshot,
-		SnapshotSourceTime: row.SnapshotSourceTime, BalancePendingUntil: row.BalancePendingUntil, LastSyncAt: row.LastSyncAt,
+		SnapshotSourceTime: row.SnapshotSourceTime, BalancePending: balancePending, LastSyncAt: row.LastSyncAt,
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil

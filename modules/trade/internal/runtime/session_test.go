@@ -450,7 +450,7 @@ func TestSessionHandlerKeepsAdmissionClosedAfterBufferedAccountEvent(t *testing.
 	stored, err := tradeStore.GetTradingAccountByID(ctx, account.TradingAccountID)
 	require.NoError(t, err)
 	require.False(t, stored.Ready, "缓冲的私有余额事件在完整同步前不得恢复准入")
-	require.Equal(t, int64(2_500), stored.BalancePendingUntil)
+	require.Equal(t, map[string]int64{"FUTURES": 2_500}, stored.BalancePending)
 }
 
 // pollingSessionAdapter 只暴露 ExecutionAdapter，隐藏底层的私有流。
