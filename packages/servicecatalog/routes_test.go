@@ -24,7 +24,7 @@ func productionTopology() Topology {
 	for host, ids := range map[string][]string{
 		"control":  {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"},
 		"storage":  {"storage-primary", "storage-node", "storage-view", "access"},
-		"overseas": {"access", "egress-proxy", "trade", "collector-stream"},
+		"overseas": {"access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher"},
 	} {
 		for _, id := range ids {
 			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {194, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "368249e1f357081170eebd2e51ef2ef4b52a48e5b57a762789443b7edbd64221"},
-		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "8c241b202720af68e0b9aeb1a1e0bd520093450c8e15ac4084e507d1833aed38"},
-		"overseas": {41, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "dd3d07f210223eeda5ea1ceeebdf964531f3ac0f1dda05ed7ba8f2f39c602588"},
+		"control":  {194, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "08d502aa892f0d6d974bfbe557df0d02c93b110f4935c36402139c90a4200f7b"},
+		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "d8cbc0c0358eb28b304be9024ad5b6bb269f5589e2f67b019e8243fb482968b3"},
+		"overseas": {53, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "6e4dc5d030dcd9bec20d177bf0e072328426853f76bc94472e12c9e3755ea45f"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)

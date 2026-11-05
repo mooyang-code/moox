@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/netguard"
 )
 
 var ErrInvalidDomain = errors.New("invalid domain")
@@ -270,7 +272,7 @@ func normalizeIPv4(addresses []string) []string {
 		if ip == nil || ip.To4() == nil {
 			continue
 		}
-		if !isPublicIPv4(ip.To4()) {
+		if !netguard.IsPublicIPv4(ip) {
 			continue
 		}
 		value := ip.To4().String()
@@ -282,37 +284,6 @@ func normalizeIPv4(addresses []string) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func isPublicIPv4(ip net.IP) bool {
-	if ip == nil || ip.To4() == nil {
-		return false
-	}
-	return ip.IsGlobalUnicast() &&
-		!ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsUnspecified() &&
-		!ip.IsMulticast() &&
-		!isReservedIPv4(ip.To4())
-}
-
-func isReservedIPv4(ip net.IP) bool {
-	if len(ip) != net.IPv4len {
-		return true
-	}
-	// RFC 6598 shared space, documentation ranges, benchmarking range and
-	// the special-use blocks are not safe SCF dial targets.
-	first, second, third := ip[0], ip[1], ip[2]
-	return first == 0 || first >= 224 ||
-		(first == 100 && second >= 64 && second <= 127) ||
-		(first == 192 && second == 0 && third == 0) ||
-		(first == 192 && second == 0 && third == 2) ||
-		(first == 198 && second == 18) ||
-		(first == 198 && second == 19) ||
-		(first == 198 && second == 51 && third == 100) ||
-		(first == 203 && second == 0 && third == 113)
 }
 
 func cloneResolution(value Resolution) Resolution {

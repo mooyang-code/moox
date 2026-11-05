@@ -1990,6 +1990,84 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
+  # 事件中心：接收 EventBus 事件，按用户配置的规则向用户接口发通知或执行系统动作。全局服务，不分空间。
+  - id: callback-dispatcher
+    name: 事件中心
+    binary: moox-callback-dispatcher
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11461
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.callbackdispatcher.CallbackDispatcherService
+        port: 11460
+        console_name: callback-dispatcher
+        # 测试发送要等对方最多 10 秒。
+        timeout_ms: 15000
+        max_body_bytes: 1048576
+        methods:
+          - ListSubscribableEvents
+          - ListEventRules
+          - GetEventRule
+          - CreateEventRule
+          - UpdateEventRule
+          - DeleteEventRule
+          - TestEventRule
+          - ListEventExecutions
+          - GetEventExecution
+          - RetryEventExecution
+          - CancelEventExecution
+          - AcknowledgeEventExecution
+        read_only_methods:
+          - ListSubscribableEvents
+          - ListEventRules
+          - GetEventRule
+          - ListEventExecutions
+          - GetEventExecution
+        acl:
+          - methods:
+              - ListSubscribableEvents
+              - ListEventRules
+              - GetEventRule
+              - CreateEventRule
+              - UpdateEventRule
+              - DeleteEventRule
+              - TestEventRule
+              - ListEventExecutions
+              - GetEventExecution
+              - RetryEventExecution
+              - CancelEventExecution
+              - AcknowledgeEventExecution
+            callers:
+              - console
+              - moox-cli
+    doctor:
+      role: callback-dispatcher
+      description: 事件中心：按规则把 EventBus 事件通知到用户接口或执行系统动作
+      duties:
+        - 消费可订阅事件并按规则匹配
+        - 投递通知并重试，记录每次执行
+      inputs:
+        - EventBus 事件
+        - 用户配置的事件规则
+      outputs:
+        - 通知请求与执行记录
+        - 事件中心关注项
+      dependencies:
+        - eventbus
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - callback-dispatcher/config/app.yaml
+        - callback-dispatcher/config/trpc_go.yaml
+      writable_paths:
+        - data/callback-dispatcher
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
   # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统，不经主机网关路由；
   # 由 systemd 用户服务托管，部署健康由 Monitor 经中转探测本机健康端口。
   - id: factor-engine
