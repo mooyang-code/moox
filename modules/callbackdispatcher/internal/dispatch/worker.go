@@ -163,7 +163,7 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 		w.reschedule(ctx, execution, err.Error())
 		return
 	}
-	update := store.Result{Attempts: execution.Attempts + 1, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt, LastError: outcome.Error}
+	update := store.Result{Attempts: execution.Attempts + 1, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt, LastError: outcome.Error, ProcessedPayload: execution.PayloadJSON}
 	switch outcome.Status {
 	case store.StatusPending:
 		next := outcome.NextRunAt
@@ -184,7 +184,7 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 func (w *Worker) reschedule(ctx context.Context, execution store.Execution, reason string) {
 	w.save(ctx, execution, store.Result{
 		Status: store.StatusPending, NextRunAt: w.now().Add(time.Minute).UnixMilli(), LastError: reason,
-		Attempts: execution.Attempts, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt,
+		Attempts: execution.Attempts, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt, ProcessedPayload: execution.PayloadJSON,
 	})
 }
 

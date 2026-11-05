@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -105,12 +106,26 @@ type Result struct {
 	FinishedAt    int64
 	// Attempt 非空时同时记一条通知尝试。
 	Attempt *Attempt
+	// ProcessedPayload 是本次处理时依据的事件内容。处理期间如果有新的事件合并进来（下架时间改了），
+	// 库里的内容就和它不同：这次的结果按旧内容算出，不能覆盖新安排，记录放回待处理并立即重新处理。
+	ProcessedPayload string
 }
 
 // SaveResult 写回处理结果。只有记录仍是执行中才写（处理期间被取消的记录保持已取消）；返回是否写入。
+// 处理期间事件内容被合并更新过（见 Result.ProcessedPayload）时，记录改为待处理并立即到期，其余计数照常写入。
 func (s *Store) SaveResult(ctx context.Context, executionID string, result Result, now int64) (bool, error) {
 	applied := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current executionRow
+		if err := tx.Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).Take(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if result.ProcessedPayload != "" && current.PayloadJSON != result.ProcessedPayload && result.Status != StatusCanceled {
+			result.Status, result.NextRunAt, result.FinishedAt = StatusPending, now, 0
+		}
 		update := tx.Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).
 			Updates(map[string]any{
 				"c_status": result.Status, "c_next_run_at": result.NextRunAt, "c_last_error": result.LastError,

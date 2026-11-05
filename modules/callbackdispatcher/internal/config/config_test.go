@@ -36,10 +36,10 @@ func TestLoadRejectsUnknownFieldsAndInvalidValues(t *testing.T) {
 	_, err = Load(write(t, "gateway_client:\n  caller: trade\n"))
 	require.ErrorContains(t, err, "callback-dispatcher")
 	for name, content := range map[string]string{
-		"批大小":   "delivery:\n  worker_batch: 0\n",
-		"请求超时":  "delivery:\n  connect_timeout: 5s\n  request_timeout: 1s\n",
-		"重试窗口":  "delivery:\n  retry_window: 1s\n",
-		"保留天数":  "retention:\n  execution_days: 0\n",
+		"批大小":    "delivery:\n  worker_batch: 0\n",
+		"请求超时":   "delivery:\n  connect_timeout: 5s\n  request_timeout: 1s\n",
+		"重试窗口":   "delivery:\n  retry_window: 1s\n",
+		"保留天数":   "retention:\n  execution_days: 0\n",
 		"没有总线地址": "eventbus:\n  urls: []\n",
 	} {
 		_, err := Load(write(t, content))
