@@ -1077,11 +1077,13 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		return nil, err
 	}
 	out = append(out, balances...)
-	attention, err := b.buildTradeAttentionStatuses(ctx)
-	if err != nil {
-		return nil, err
+	for _, source := range attentionSources {
+		attention, err := b.buildAttentionStatuses(ctx, source)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, attention...)
 	}
-	out = append(out, attention...)
 	return out, nil
 }
 
@@ -1098,20 +1100,56 @@ var TradeAttentionNames = map[string]string{
 	"unknown_results":   "下单结果未知偏多",
 }
 
-// buildTradeAttentionStatuses 把 Trade 的关注项变成业务检查。detail 标签带账户名和原因，
+// EventCenterAttentionNames 是事件中心上报的需要人看的情况。
+var EventCenterAttentionNames = map[string]string{
+	"execution_failed": "事件通知失败",
+	"delist_detected":  "发现标的即将下架",
+	"action_failed":    "系统动作处理失败",
+}
+
+// CollectorAttentionNames 是 Collector 上报的需要人看的情况（下架检测）。
+var CollectorAttentionNames = map[string]string{
+	"delist_source_failed":        "下架检测来源连续失败",
+	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
+}
+
+// attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。
+type attentionSource struct {
+	metric string
+	check  string
+	names  map[string]string
+}
+
+var attentionSources = []attentionSource{
+	{"moox_trade_attention_active", "trade_attention", TradeAttentionNames},
+	{"moox_callbackdispatcher_attention_active", "event_center_attention", EventCenterAttentionNames},
+	{"moox_collector_attention_active", "collector_attention", CollectorAttentionNames},
+}
+
+// AttentionCheckName 返回关注项检查的名字；不是关注项检查或种类未知时返回空。
+func AttentionCheckName(check, kind string) string {
+	for _, source := range attentionSources {
+		if source.check == check {
+			return source.names[kind]
+		}
+	}
+	return ""
+}
+
+// buildAttentionStatuses 把一个模块的关注项变成业务检查。detail 标签带对象名和原因，
 // 内容变化后旧序列不再更新，所以只看没有过期的序列。
-func (b Builder) buildTradeAttentionStatuses(ctx context.Context) ([]BusinessStatus, error) {
+func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSource) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", "moox_trade_attention_active", "", 0, 500)
+	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", source.metric, "", 0, 500)
 	if err != nil {
 		return nil, err
 	}
-	statuses := make(map[string]BusinessStatus, len(TradeAttentionNames))
+	statuses := make(map[string]BusinessStatus, len(source.names))
 	for _, item := range series {
 		kind := labelValue(item.LabelsJSON, "kind")
-		if _, known := TradeAttentionNames[kind]; !known || item.IsStale {
+		if _, known := source.names[kind]; !known || item.IsStale {
 			continue
 		}
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -1122,7 +1160,7 @@ func (b Builder) buildTradeAttentionStatuses(ctx context.Context) ([]BusinessSta
 			continue
 		}
 		status := BusinessStatus{
-			SpaceID: "crypto", Kind: "trade_attention", Module: kind, Status: "healthy", Reason: "正常",
+			SpaceID: "crypto", Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
 			LastCheckedAt: latest.ObservedAt,
 		}
 		if latest.Value > 0 {
@@ -1721,7 +1759,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "module", "kline_freshness", "console-page":
+	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness", "console-page":
 		return kind
 	default:
 		return ""
@@ -1737,6 +1775,10 @@ func businessModule(checkID string) string {
 		return "collector"
 	case "balance", "trade_attention":
 		return "trade"
+	case "event_center_attention":
+		return "callback-dispatcher"
+	case "collector_attention":
+		return "collector"
 	case "module":
 		for _, check := range report.BuiltInModuleHealthChecks() {
 			if check.ID == id {

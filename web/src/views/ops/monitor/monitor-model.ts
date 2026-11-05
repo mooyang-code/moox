@@ -651,6 +651,8 @@ const KIND_LABELS: Record<string, string> = {
   module: "模块运行",
   balance: "账户余额同步",
   trade_attention: "交易关注项",
+  event_center_attention: "事件中心关注项",
+  collector_attention: "采集关注项",
   "console-page": "控制台页面",
   subject_tag: "标的标签巡检"
 };
