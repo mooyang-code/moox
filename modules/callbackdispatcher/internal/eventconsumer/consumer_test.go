@@ -58,7 +58,7 @@ func publishDelist(t *testing.T, server *testkit.Server, symbol string, delistAt
 		Exchange: "binance", Market: events.DelistMarketSpot, ExchangeSymbol: symbol, DelistAt: timestamppb.New(delistAt),
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(seen), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{
-		EventID: events.InstrumentDelistEventID("binance", events.DelistMarketSpot, symbol, delistAt), OccurredAt: seen,
+		EventID: events.InstrumentDelistEventID("binance", events.DelistMarketSpot, symbol, events.DelistScopeAll, delistAt), OccurredAt: seen,
 		SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID("binance", events.DelistMarketSpot, symbol),
 	})
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestEventBusStartedLateStillDeliversEarlierDelistEvent(t *testing.T) {
 	case request := <-sender.requests:
 		require.Equal(t, "r1", request.RuleID)
 		require.Equal(t, "binance:SPOT:FOOUSDT", request.SubjectID)
-		require.Equal(t, events.InstrumentDelistEventID("binance", events.DelistMarketSpot, "FOOUSDT", delistAt), request.EventID)
+		require.Equal(t, events.InstrumentDelistEventID("binance", events.DelistMarketSpot, "FOOUSDT", events.DelistScopeAll, delistAt), request.EventID)
 		require.Contains(t, request.PayloadJSON, `"exchange_symbol":"FOOUSDT"`)
 	case <-time.After(10 * time.Second):
 		t.Fatal("没有在期限内收到通知")

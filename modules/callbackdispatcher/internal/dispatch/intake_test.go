@@ -52,7 +52,7 @@ func handle(ctx context.Context, intake *Intake, event *rawEvent) Outcome {
 // delistDelivery 生成一条“标的即将下架”的投递；delistAt 不同、symbol 不同都会得到不同的事件 ID。
 func delistDelivery(t *testing.T, exchange, market, symbol string, delistAt time.Time) *rawEvent {
 	t.Helper()
-	return delistDeliveryWithID(t, exchange, market, symbol, delistAt, events.InstrumentDelistEventID(exchange, market, symbol, delistAt))
+	return delistDeliveryWithID(t, exchange, market, symbol, delistAt, events.InstrumentDelistEventID(exchange, market, symbol, events.DelistScopeAll, delistAt))
 }
 
 func delistDeliveryWithID(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID string) *rawEvent {

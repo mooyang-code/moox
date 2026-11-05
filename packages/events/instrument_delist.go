@@ -35,10 +35,10 @@ func InstrumentDelistSubjectID(exchange, market, exchangeSymbol string) string {
 	return exchange + ":" + market + ":" + exchangeSymbol
 }
 
-// InstrumentDelistEventID 由（交易所、市场、代码、下架时间）确定性生成事件 ID，
-// 同一条下架重复发布时 NATS 会在去重窗口内丢弃重复消息。
-func InstrumentDelistEventID(exchange, market, exchangeSymbol string, delistAt time.Time) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{exchange, market, exchangeSymbol, strconv.FormatInt(delistAt.UTC().UnixMilli(), 10)}, "\x00")))
+// InstrumentDelistEventID 由（交易所、市场、代码、范围、下架时间）确定性生成事件 ID，
+// 同一条下架重复发布时 NATS 会在去重窗口内丢弃重复消息；范围也参与计算，演练用的“仅模拟盘”登记不会挡住同标的同时间的真实下架。
+func InstrumentDelistEventID(exchange, market, exchangeSymbol, scope string, delistAt time.Time) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{exchange, market, exchangeSymbol, scope, strconv.FormatInt(delistAt.UTC().UnixMilli(), 10)}, "\x00")))
 	return "delist-" + hex.EncodeToString(sum[:16])
 }
 

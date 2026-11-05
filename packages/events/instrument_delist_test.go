@@ -21,9 +21,10 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 		FirstSeenAt: timestamppb.New(seen), Scope: DelistScopeAll,
 	}
 	subject := InstrumentDelistSubjectID("binance", DelistMarketSpot, "FOOUSDT")
-	eventID := InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", delistAt)
-	require.Equal(t, eventID, InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", delistAt.In(time.FixedZone("x", 3600))))
-	require.NotEqual(t, eventID, InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", delistAt.Add(time.Second)))
+	eventID := InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", DelistScopeAll, delistAt)
+	require.Equal(t, eventID, InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", DelistScopeAll, delistAt.In(time.FixedZone("x", 3600))))
+	require.NotEqual(t, eventID, InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", DelistScopeAll, delistAt.Add(time.Second)))
+	require.NotEqual(t, eventID, InstrumentDelistEventID("binance", DelistMarketSpot, "FOOUSDT", DelistScopePaperOnly, delistAt), "范围不同是不同的事件")
 	opts := PublishOptions{EventID: eventID, OccurredAt: seen, SpaceID: DelistSystemSpaceID, SubjectID: subject}
 
 	raw, err := registry.MarshalMessage(InstrumentDelistScheduled, payload, opts)
