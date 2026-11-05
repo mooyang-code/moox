@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/rowidentity"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -207,11 +208,14 @@ func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
 	if s.maxEventBytes <= 0 {
 		return nil
 	}
+	// 最坏情况：每个标的、每条序列都失败。统一数据集的序列名单（标的加 series_tag）出现两次（全集与失败名单）。
 	universe, _ := periodMarkerSubjects(exp, nil, nil)
+	universeSeries, _ := periodMarkerSeries(exp, nil)
 	completed := &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: "degraded", SnapshotRef: exp.SeriesHash,
 		UniverseSubjectIDs: universe, FailedSubjects: append([]string(nil), universe...),
+		UniverseSeries: universeSeries, FailedSeries: universeSeries,
 		CompletedAt: timestamppb.New(time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)),
 	}
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
@@ -535,10 +539,12 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 		return "waiting", nil
 	}
 	universe, failed := periodMarkerSubjects(exp, bitmap, failures)
+	universeSeries, failedSeries := periodMarkerSeries(exp, bitmap)
 	completed := &LedgerPeriodCompleted{
 		DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime,
 		Status: terminal, SnapshotRef: exp.SeriesHash,
-		UniverseSubjectIDs: universe, FailedSubjects: failed, CompletedAt: timestamppb.New(now.UTC()),
+		UniverseSubjectIDs: universe, FailedSubjects: failed,
+		UniverseSeries: universeSeries, FailedSeries: failedSeries, CompletedAt: timestamppb.New(now.UTC()),
 	}
 	raw, _, err := BuildLedgerPeriodCompletedMessage(exp.SpaceID, completed)
 	if err != nil {
@@ -1135,6 +1141,35 @@ func periodMarkerSubjects(exp DatasetPeriodExpectation, success, failures []byte
 				failedSeen[subjectID] = struct{}{}
 				failed = append(failed, subjectID)
 			}
+		}
+	}
+	return universe, failed
+}
+
+// periodMarkerSeries 返回按序列（标的、series_tag）的期望全集与失败名单。
+// 只有快照含多个 series_tag（统一数据集）时才有；单序列数据集返回 nil，事件保持原样，按标的字段消费。
+// 失败口径与 periodMarkerSubjects 一致：没有成功提交的序列即失败。
+func periodMarkerSeries(exp DatasetPeriodExpectation, success []byte) (universe, failed []*storageeventpb.SeriesRef) {
+	tags := make(map[string]struct{}, 2)
+	for _, series := range exp.SeriesSnapshot {
+		tag := strings.TrimSpace(series.SeriesTag)
+		if tag == "" {
+			return nil, nil // 序列名单要求每条序列都有 series_tag
+		}
+		tags[tag] = struct{}{}
+	}
+	if len(tags) < 2 {
+		return nil, nil
+	}
+	for index, series := range exp.SeriesSnapshot {
+		subjectID := strings.TrimSpace(series.SubjectID)
+		if subjectID == "" {
+			continue
+		}
+		ref := &storageeventpb.SeriesRef{SubjectId: subjectID, SeriesTag: strings.TrimSpace(series.SeriesTag)}
+		universe = append(universe, ref)
+		if !bitmapBitSet(success, uint32(index)) {
+			failed = append(failed, ref)
 		}
 	}
 	return universe, failed

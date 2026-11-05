@@ -28,6 +28,12 @@ message CommittedPosition {
   uint64 sequence = 3;
 }
 
+// SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
+message SeriesRef {
+  string subject_id = 1;
+  string series_tag = 2;
+}
+
 // DatasetPeriodCompleted 表示数据集的某一期已经完成。source 只描述“这一期是怎么判定完成的”，不是业务分类：
 //   - ledger：DataNode 按登记的序列快照与截止时间判定（采集、重采样走序列账本）；
 //   - producer：写入方自己报告（例如因子）。
@@ -50,6 +56,11 @@ message DatasetPeriodCompleted {
   // detail_type、detail 是写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析。
   string detail_type = 12;
   bytes detail = 13;
+  // universe_series、failed_series 是按序列（标的、series_tag）的期望全集与失败名单：只有同一数据集含多个 series_tag
+  // （统一数据集）时才填；单序列数据集为空，消费方按 universe_subject_ids、failed_subjects 处理。
+  // 失败名单是全集的子集；原有的按标的字段口径不变（标的的任一序列失败，该标的记入 failed_subjects）。
+  repeated SeriesRef universe_series = 14;
+  repeated SeriesRef failed_series = 15;
 }
 
 message ViewDataReady {
@@ -89,6 +100,8 @@ message CollectorKlineBackfilled {
   // sync_request_id names the Dataset sync point appended before this event.
   string sync_request_id = 8;
   google.protobuf.Timestamp confirmed_at = 9;
+  // series_tags 是补采写入的序列（series_tag）；统一数据集的消费方只重算这些序列，空表示数据集的全部序列。
+  repeated string series_tags = 10;
 }
 
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.

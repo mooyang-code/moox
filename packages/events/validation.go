@@ -122,11 +122,63 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("%s complete status has failed_subjects", label)
 	}
+	if err := validatePeriodSeries(payload, subjects, label); err != nil {
+		return err
+	}
 	// 明细对 Storage 是不透明字节：只要求有明细就有类型，不解析内容。
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") || (payload.GetDetailType() != "" && !validRequiredToken(payload.GetDetailType())) {
 		return fmt.Errorf("%s detail and detail_type must be provided together", label)
 	}
 	return validateCommittedPositions(payload.GetCommittedPositions(), label)
+}
+
+// validatePeriodSeries 校验按序列的全集与失败名单：序列不重复、失败名单是全集的子集；
+// 有序列全集时，它包含的标的必须正好是 universe_subject_ids；没有全集（单序列数据集）时不能带失败序列。
+func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects map[string]struct{}, label string) error {
+	universe := make(map[string]struct{}, len(payload.GetUniverseSeries()))
+	seenSubjects := make(map[string]struct{}, len(subjects))
+	for i, series := range payload.GetUniverseSeries() {
+		key, err := seriesRefKey(series)
+		if err != nil {
+			return fmt.Errorf("%s universe_series item %d: %w", label, i, err)
+		}
+		if _, ok := universe[key]; ok {
+			return fmt.Errorf("%s universe_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+		universe[key] = struct{}{}
+		if _, ok := subjects[series.GetSubjectId()]; !ok {
+			return fmt.Errorf("%s universe_series subject %q is not in universe_subject_ids", label, series.GetSubjectId())
+		}
+		seenSubjects[series.GetSubjectId()] = struct{}{}
+	}
+	if len(universe) != 0 && len(seenSubjects) != len(subjects) {
+		return fmt.Errorf("%s universe_series does not cover every subject in universe_subject_ids", label)
+	}
+	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
+	for i, series := range payload.GetFailedSeries() {
+		key, err := seriesRefKey(series)
+		if err != nil {
+			return fmt.Errorf("%s failed_series item %d: %w", label, i, err)
+		}
+		if _, ok := failed[key]; ok {
+			return fmt.Errorf("%s failed_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+		failed[key] = struct{}{}
+		if _, ok := universe[key]; !ok {
+			return fmt.Errorf("%s failed_series %q is not in universe_series", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("%s complete status has failed_series", label)
+	}
+	return nil
+}
+
+func seriesRefKey(series *storagepb.SeriesRef) (string, error) {
+	if series == nil || !validRequiredToken(series.GetSubjectId()) || !validRequiredToken(series.GetSeriesTag()) {
+		return "", fmt.Errorf("subject_id and series_tag are required")
+	}
+	return series.GetSubjectId() + "\x00" + series.GetSeriesTag(), nil
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
@@ -203,6 +255,9 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 		if !validRequiredToken(subject) {
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
 		}
+	}
+	if _, err := validateUniqueTokens(payload.GetSeriesTags(), false, "collector kline backfilled series_tags"); err != nil {
+		return err
 	}
 	start, end := payload.GetStart(), payload.GetEnd()
 	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
