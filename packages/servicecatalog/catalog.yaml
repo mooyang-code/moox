@@ -255,10 +255,12 @@ components:
           - ToggleSecretStatus
           - ExportSecrets
           - ImportSecrets
+          - GetReadonlyExchangeKey
         read_only_methods:
           - ListSecrets
           - GetSecret
           - GetSecretValue
+          - GetReadonlyExchangeKey
         acl:
           - methods:
               - ListSecrets
@@ -282,6 +284,12 @@ components:
               - cloudfunction
               - trade
               - moox-cli
+          # Collector 只能读固定 ID 只读 Key 的公开标识；网关转发会丢掉调用方元数据，
+          # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
+          - methods:
+              - GetReadonlyExchangeKey
+            callers:
+              - collector
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy

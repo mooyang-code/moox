@@ -36,6 +36,8 @@ type SecretMgrService interface {
 	ExportSecrets(ctx context.Context, req *ExportSecretsReq) (*ExportSecretsRsp, error)
 
 	ImportSecrets(ctx context.Context, req *ImportSecretsReq) (*ImportSecretsRsp, error)
+
+	GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq) (*GetReadonlyExchangeKeyRsp, error)
 }
 
 func SecretMgrService_ListSecrets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -200,6 +202,24 @@ func SecretMgrService_ImportSecrets_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
+func SecretMgrService_GetReadonlyExchangeKey_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetReadonlyExchangeKeyReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).GetReadonlyExchangeKey(ctx, reqbody.(*GetReadonlyExchangeKeyReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SecretMgrServer_ServiceDesc descriptor for server.RegisterService.
 var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.SecretMgr",
@@ -240,6 +260,10 @@ var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.SecretMgr/ImportSecrets",
 			Func: SecretMgrService_ImportSecrets_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SecretMgr/GetReadonlyExchangeKey",
+			Func: SecretMgrService_GetReadonlyExchangeKey_Handler,
 		},
 	},
 }
@@ -282,6 +306,9 @@ func (s *UnimplementedSecretMgr) ExportSecrets(ctx context.Context, req *ExportS
 func (s *UnimplementedSecretMgr) ImportSecrets(ctx context.Context, req *ImportSecretsReq) (*ImportSecretsRsp, error) {
 	return nil, errors.New("rpc ImportSecrets of service SecretMgr is not implemented")
 }
+func (s *UnimplementedSecretMgr) GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq) (*GetReadonlyExchangeKeyRsp, error) {
+	return nil, errors.New("rpc GetReadonlyExchangeKey of service SecretMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -308,6 +335,8 @@ type SecretMgrClientProxy interface {
 	ExportSecrets(ctx context.Context, req *ExportSecretsReq, opts ...client.Option) (rsp *ExportSecretsRsp, err error)
 
 	ImportSecrets(ctx context.Context, req *ImportSecretsReq, opts ...client.Option) (rsp *ImportSecretsRsp, err error)
+
+	GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq, opts ...client.Option) (rsp *GetReadonlyExchangeKeyRsp, err error)
 }
 
 type SecretMgrClientProxyImpl struct {
@@ -493,6 +522,26 @@ func (c *SecretMgrClientProxyImpl) ImportSecrets(ctx context.Context, req *Impor
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ImportSecretsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) GetReadonlyExchangeKey(ctx context.Context, req *GetReadonlyExchangeKeyReq, opts ...client.Option) (*GetReadonlyExchangeKeyRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/GetReadonlyExchangeKey")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("GetReadonlyExchangeKey")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetReadonlyExchangeKeyRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
