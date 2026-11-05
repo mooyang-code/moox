@@ -18,6 +18,7 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
+		"event.collector.instrument.delist_scheduled@1",
 		"event.collector.kline.backfilled@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
@@ -28,6 +29,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
+		"event.collector.instrument.delist_scheduled@1":   "collector",
 		"event.collector.kline.backfilled@1":              "collector",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",

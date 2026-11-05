@@ -415,10 +415,10 @@ func eventBusRoleFiles() map[string]string {
 // collectorEventBusSpaces 是 Collector 合成消费者按空间创建持久消费者的空间；新增空间时同步修改。
 var collectorEventBusSpaces = []string{"crypto", "stockcn"}
 
-// collectorEventBusPublish 是 Collector 的发布权限：发布补采完成事件，以及合成的两个持久消费者
+// collectorEventBusPublish 是 Collector 的发布权限：发布补采完成事件和标的下架事件，以及合成的两个持久消费者
 // （源周期完成在 MOOX_STORAGE、补采完成在 MOOX_COLLECTOR，每个空间各一个）所需的 JetStream 接口。
 func collectorEventBusPublish() string {
-	allow := []string{`"moox.event.collector.kline.backfilled.v1.>"`, `"$JS.API.STREAM.NAMES"`}
+	allow := []string{`"moox.event.collector.kline.backfilled.v1.>"`, `"moox.event.collector.instrument.delist_scheduled.v1.>"`, `"$JS.API.STREAM.NAMES"`}
 	for _, space := range collectorEventBusSpaces {
 		for _, consumer := range []struct{ stream, name string }{
 			{"MOOX_STORAGE", "collector_resample_period_" + space + "_v1"},

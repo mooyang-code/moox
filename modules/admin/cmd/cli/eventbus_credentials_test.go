@@ -84,6 +84,7 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
 	for _, permission := range []string{
 		"moox.event.collector.kline.backfilled.v1.>",
+		"moox.event.collector.instrument.delist_scheduled.v1.>",
 		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.collector_resample_period_crypto_v1",
 		"$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.collector_resample_backfilled_stockcn_v1",
 		"$JS.ACK.MOOX_COLLECTOR.collector_resample_backfilled_crypto_v1.>",
