@@ -7,6 +7,7 @@ import (
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeInvoker struct {
@@ -22,7 +23,7 @@ func (f *fakeInvoker) Invoke(_ context.Context, service, method string, request,
 	if f.err != nil {
 		return f.err
 	}
-	*(response.(*adminpb.GetReadonlyExchangeKeyRsp)) = *f.response
+	proto.Merge(response.(proto.Message), f.response)
 	return nil
 }
 
