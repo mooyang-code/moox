@@ -87,7 +87,7 @@ func TestDialContext(t *testing.T) {
 	// 域名只解析到不允许的地址：不拨号。
 	dialed = nil
 	_, err = NewDialContext(DialOptions{Lookup: lookup("127.0.0.1", "::1", "169.254.169.254", "10.0.0.5"), Dial: dial})(context.Background(), "tcp", "rebind.example:443")
-	if !errors.Is(err, ErrNoReachableAddress) || len(dialed) != 0 {
+	if !errors.Is(err, ErrAddressBlocked) || len(dialed) != 0 {
 		t.Fatalf("err = %v，拨号 = %v", err, dialed)
 	}
 
@@ -105,12 +105,18 @@ func TestDialContext(t *testing.T) {
 	lookupCalled := false
 	guarded := NewDialContext(DialOptions{Lookup: func(context.Context, string) ([]string, error) { lookupCalled = true; return nil, nil }, Dial: dial})
 	for _, address := range []string{"127.0.0.1:80", "[::1]:80", "169.254.169.254:80", "10.0.0.1:80", "[fd00::1]:80"} {
-		if _, err := guarded(context.Background(), "tcp", address); !errors.Is(err, ErrNoReachableAddress) {
+		if _, err := guarded(context.Background(), "tcp", address); !errors.Is(err, ErrAddressBlocked) {
 			t.Errorf("%s: err = %v", address, err)
 		}
 	}
 	if lookupCalled {
 		t.Error("IP 字面量不应该做域名解析")
+	}
+
+	// 地址允许但连不上：与“被拒绝”区分开。
+	unreachable := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("refused") }
+	if _, err := NewDialContext(DialOptions{Lookup: lookup("93.184.216.34"), Dial: unreachable})(context.Background(), "tcp", "example.com:443"); !errors.Is(err, ErrNoReachableAddress) {
+		t.Errorf("连不上: %v", err)
 	}
 
 	// 端口限制、解析失败。

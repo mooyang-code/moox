@@ -129,6 +129,23 @@
 | `doctor bootstrap` | 检查新部署各模块的安装与配置 |
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
 
+## event：事件中心：事件规则（事件发生时通知你的接口）与执行记录（调用 CallbackDispatcherService）
+
+| 命令 | 说明 |
+| --- | --- |
+| `event catalog` | 列出可以配置规则的事件，以及每个事件可限定的范围字段 |
+| `event executions ack` | 确认失败的记录已处理，清除它引起的告警 |
+| `event executions cancel` | 取消还没结束的执行；对下架处理同时解除禁止买入（默认只预览，--yes 才执行） |
+| `event executions get` | 查看一条执行记录（每次尝试的状态码、耗时；下架处理的各轮步骤） |
+| `event executions list` | 列出执行记录 |
+| `event executions retry` | 重新执行一条失败的记录 |
+| `event rules create` | 新建通知地址规则（验证密钥只在返回里显示这一次，不要记录到对话或日志里） |
+| `event rules delete` | 删除事件规则（默认只预览，--yes 才执行；系统规则不能删除） |
+| `event rules get` | 查看一条事件规则 |
+| `event rules list` | 列出事件规则 |
+| `event rules test` | 用一条示例事件向通知地址发一次，返回状态码和耗时（不写执行记录） |
+| `event rules update` | 修改事件规则，只改给出的字段（系统规则只能改 --enabled） |
+
 ## eventbus：EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）
 
 | 命令 | 说明 |

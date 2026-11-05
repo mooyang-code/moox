@@ -98,6 +98,8 @@ var unitProfiles = map[string][]string{
 	"trade":        {"trade"},
 	// WS 推送采集与本地执行端：放在能直连交易所的海外机，独立成单元，首次安装与升级都不动其他单元。
 	"collector-stream": {"collector-stream"},
+	// 事件中心：全局服务，由 [deployments] 决定装在哪台主机（默认海外机），独立成单元。
+	"callback-dispatcher": {"callback-dispatcher"},
 	// 外部程序：由 systemd 用户服务托管，不经主机网关路由；安装脚本与服务模板随软件包一起交付。
 	"factor-engine":  {"factor-engine"},
 	"archive-worker": {"archive-worker"},
@@ -176,6 +178,7 @@ var unitSpecs = map[string]unitComponentSpec{
 		// 数据源配置（WS 地址与限额、REST 端点、Storage 绑定）与 Collector 同一份。
 		{"modules/collector/configs/sources/market/binance.yaml", "collector-stream/config/sources/market/binance.yaml", false},
 	}},
+	"callback-dispatcher": {[]string{"moox-callback-dispatcher-cli"}, []unitAsset{configAsset("callbackdispatcher", "callback-dispatcher"), schemaAsset("callbackdispatcher", "callback-dispatcher")}},
 	// 外部程序的目录布局与仓库一致（scripts/deploy、deploy/systemd、modules/...），安装脚本据此按相对位置找到服务模板与框架配置。
 	"factor-engine": {assets: []unitAsset{
 		{"scripts/deploy/deploy-factor-engine.sh", "factor-engine/scripts/deploy/deploy-factor-engine.sh", false},
@@ -192,7 +195,7 @@ var unitSpecs = map[string]unitComponentSpec{
 func Components(profile string) ([]Component, error) {
 	ids, ok := unitProfiles[profile]
 	if !ok {
-		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, trade, collector-stream, factor-engine, or archive-worker", profile)
+		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, trade, collector-stream, callback-dispatcher, factor-engine, or archive-worker", profile)
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {

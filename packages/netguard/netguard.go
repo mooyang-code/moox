@@ -28,7 +28,9 @@ var (
 	ErrPortNotAllowed = errors.New("目标端口不被允许")
 	// ErrLookupFailed 表示域名解析失败。
 	ErrLookupFailed = errors.New("域名解析失败")
-	// ErrNoReachableAddress 表示解析出的地址都被拒绝，或者都连不上。
+	// ErrAddressBlocked 表示目标地址（或域名解析出的全部地址）都被防护规则拒绝，重试也不会好。
+	ErrAddressBlocked = errors.New("目标地址不被允许")
+	// ErrNoReachableAddress 表示有允许的地址，但都连不上。
 	ErrNoReachableAddress = errors.New("没有可以连接的允许地址")
 )
 
@@ -158,6 +160,9 @@ func NewDialContext(opts DialOptions) func(ctx context.Context, network, address
 			if ctx.Err() != nil || attempted >= opts.MaxAttempts {
 				break
 			}
+		}
+		if attempted == 0 {
+			return nil, ErrAddressBlocked
 		}
 		return nil, ErrNoReachableAddress
 	}
