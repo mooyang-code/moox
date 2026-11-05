@@ -157,7 +157,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", StrategyId: "capacity-strategy",
 		BarEndTime: timestamppb.New(testNow), EffectiveAt: timestamppb.New(testNow), ValidUntil: timestamppb.New(testNow.Add(time.Hour)),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, TargetWeight: "1"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)

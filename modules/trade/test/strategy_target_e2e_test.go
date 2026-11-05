@@ -277,6 +277,19 @@ func targetDelivery(
 	quantity string,
 ) *jetstream.Delivery {
 	t.Helper()
+	return targetDeliveryForMarket(t, now, targetID, sequence, quantity, exchange.MarketTypeSpot)
+}
+
+// targetDeliveryForMarket 生成只含 BTC-USDT 一项、市场由调用方指定的目标。
+func targetDeliveryForMarket(
+	t *testing.T,
+	now time.Time,
+	targetID string,
+	sequence int64,
+	quantity string,
+	market exchange.MarketType,
+) *jetstream.Delivery {
+	t.Helper()
 	return targetDeliveryWithTargets(
 		t,
 		now,
@@ -284,6 +297,7 @@ func targetDelivery(
 		sequence,
 		[]*tradeeventpb.InstrumentWeightTarget{{
 			InstrumentId: "BTC-USDT",
+			MarketType:   string(market),
 			TargetWeight: quantity,
 		}},
 	)

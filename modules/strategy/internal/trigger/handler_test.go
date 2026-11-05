@@ -130,7 +130,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, MarketType: "spot", Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 

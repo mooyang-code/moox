@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -112,7 +113,7 @@ func HandleTarget(
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
 	}
 	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
-	request, err = normalizeTargetRequest(request, exchange.MarketType(account.MarketType))
+	request, err = normalizeTargetRequest(request, []exchange.MarketType{exchange.MarketType(account.MarketType)})
 	if err != nil {
 		return targetRejection("invalid_contract", err)
 	}
@@ -331,19 +332,31 @@ func handleShadowTarget(
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
+// normalizeTargetRequest 按每一项自带的 market_type 把标的 ID 标准化成 Trade 内部 ID。
+// 市场不在组合可交易的市场里、或标准化后撞成同一个内部 ID，都按契约错误处理。
 func normalizeTargetRequest(
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
-	market exchange.MarketType,
+	tradable []exchange.MarketType,
 ) (*tradeeventpb.LogicalAccountTargetWeightRequested, error) {
 	normalized, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
 	if !ok {
 		return nil, fmt.Errorf("trade target: unexpected event payload %T", request)
 	}
+	seen := make(map[string]struct{}, len(normalized.GetTargets()))
 	for _, target := range normalized.GetTargets() {
+		market := exchange.MarketType(target.GetMarketType())
+		if !slices.Contains(tradable, market) {
+			return nil, fmt.Errorf("%w: 标的 %s 的市场 %q 不在组合可交易的市场 %v 里",
+				exchange.ErrInvalidInstrumentID, target.GetInstrumentId(), market, tradable)
+		}
 		instrumentID, err := exchange.NormalizeInstrumentID(target.GetInstrumentId(), market)
 		if err != nil {
 			return nil, err
 		}
+		if _, dup := seen[instrumentID]; dup {
+			return nil, fmt.Errorf("%w: 标的 %s 重复出现", exchange.ErrInvalidInstrumentID, instrumentID)
+		}
+		seen[instrumentID] = struct{}{}
 		target.InstrumentId = instrumentID
 	}
 	return normalized, nil

@@ -35,7 +35,7 @@ func TestManualFlattenThenResumeCanReopenLatestTarget(t *testing.T) {
 	now := testNow
 	f := newPaperFixture(t, exchange.MarketTypeSwap)
 	seedSwapLogicalAccount(t, f.store)
-	delivery := targetDelivery(t, now, "target-reopen", 1, "0.002")
+	delivery := targetDeliveryForMarket(t, now, "target-reopen", 1, "0.002", exchange.MarketTypeSwap)
 	handled := eventconsumer.HandleTarget(ctx, delivery, eventconsumer.TargetOptions{
 		Store:          f.store,
 		Now:            func() time.Time { return now },

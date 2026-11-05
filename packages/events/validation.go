@@ -312,7 +312,8 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
 		return fmt.Errorf("trade target weight valid_until must be after effective_at")
 	}
-	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
+	type instrumentKey struct{ instrumentID, marketType string }
+	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))
 	gross := new(big.Rat)
 	for i, target := range payload.GetTargets() {
 		if target == nil {
@@ -322,10 +323,15 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		if strings.TrimSpace(instrumentID) == "" || strings.TrimSpace(instrumentID) != instrumentID {
 			return fmt.Errorf("trade target weight %d instrument_id is empty", i)
 		}
-		if _, exists := seenInstruments[instrumentID]; exists {
-			return fmt.Errorf("trade target weight instrument_id %q is duplicated", instrumentID)
+		marketType := target.GetMarketType()
+		if !validTargetMarketType(marketType) {
+			return fmt.Errorf("trade target weight %d market_type %q must be SPOT, SWAP or STOCK", i, marketType)
 		}
-		seenInstruments[instrumentID] = struct{}{}
+		key := instrumentKey{instrumentID: instrumentID, marketType: marketType}
+		if _, exists := seenInstruments[key]; exists {
+			return fmt.Errorf("trade target weight instrument_id %q market_type %s is duplicated", instrumentID, marketType)
+		}
+		seenInstruments[key] = struct{}{}
 		targetWeight := target.GetTargetWeight()
 		if len(targetWeight) > maxTargetWeightLength || !decimalTargetWeightPattern.MatchString(targetWeight) {
 			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
@@ -349,6 +355,11 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		return fmt.Errorf("trade target weight logical_account_id does not match subject_id")
 	}
 	return nil
+}
+
+// validTargetMarketType 判断目标里的市场是否是 Trade 认识的三种市场之一。
+func validTargetMarketType(value string) bool {
+	return value == "SPOT" || value == "SWAP" || value == "STOCK"
 }
 
 func validateStorageRow(row *storagepb.RowUpsert) error {

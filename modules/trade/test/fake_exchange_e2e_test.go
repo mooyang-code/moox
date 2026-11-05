@@ -231,7 +231,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, TargetWeight: quantity}},
+			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "STOCK", TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}
