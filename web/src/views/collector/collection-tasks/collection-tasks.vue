@@ -314,7 +314,9 @@
             <a-descriptions v-if="resamplePreview" :column="2" size="small" bordered class="resample-source-info">
               <a-descriptions-item label="源数据集">{{ resamplePreview.source_dataset_id || "-" }}</a-descriptions-item>
               <a-descriptions-item label="源周期">{{ resamplePreview.source_frequency || "-" }}</a-descriptions-item>
-              <a-descriptions-item label="序列标签">{{ resamplePreview.source_series_tag || "-" }}</a-descriptions-item>
+              <a-descriptions-item label="序列标签">{{
+                resamplePreview.source_series_tags?.join("、") || resamplePreview.source_series_tag || "-"
+              }}</a-descriptions-item>
               <a-descriptions-item label="采集标的"
                 >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
               >
@@ -470,7 +472,7 @@
           <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
             <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="源周期 / 序列标签">
-              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ stringParam(detailData, "source_series_tag") || "-" }}
+              {{ stringParam(detailData, "source_frequency") || "-" }} / {{ resampleSeriesTags(detailData) || "-" }}
             </a-descriptions-item>
           </a-descriptions>
           <div v-if="detailDependents.length" class="detail-dependents">
@@ -1274,6 +1276,13 @@ async function loadSourceTasks() {
 function stringParam(task: CollectionTaskRecord, key: string): string {
   const value = task.collect_params?.[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+// 合成源的序列标签：统一数据集是 source_series_tags（每个市场一条），单序列的源是 source_series_tag。
+function resampleSeriesTags(task: CollectionTaskRecord): string {
+  const tags = task.collect_params?.source_series_tags;
+  if (Array.isArray(tags) && tags.length) return tags.filter(tag => typeof tag === "string").join("、");
+  return stringParam(task, "source_series_tag");
 }
 
 // 列表“合成来源”列：源任务名 → 目标频率；老任务没有 source_task_id 时显示源数据集。
