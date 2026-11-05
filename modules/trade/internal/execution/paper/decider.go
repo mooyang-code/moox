@@ -115,7 +115,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if accountErr != nil {
 		return Decision{}, storageError(accountErr)
 	}
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if candidate.MarketType == string(exchange.MarketTypeSpot) {
 		// 现货手续费按成交额（报价币）计价：扣费币种必须是交易对的报价币，而不是账户结算币，
 		// 否则 USDT 结算账户在 ETH/BTC 上会把 BTC 计价的手续费记成 USDT。
 		instrument, instrumentErr := d.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.TradingAccountID, candidate.InstrumentID)
@@ -137,8 +137,8 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 			return Decision{Cancel: true, Reason: "paper reservation insufficient at match"}, nil
 		}
 	}
-	if account.MarketType == string(exchange.MarketTypeSwap) {
-		position, found, positionErr := d.Store.GetPosition(ctx, account.SpaceID, account.TradingAccountID, candidate.ExchangeSymbol, string(exchange.PositionSideNet))
+	if candidate.MarketType == string(exchange.MarketTypeSwap) {
+		position, found, positionErr := d.Store.GetPosition(ctx, account.SpaceID, account.TradingAccountID, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol), string(exchange.PositionSideNet))
 		if positionErr != nil {
 			return Decision{}, storageError(positionErr)
 		}
@@ -160,6 +160,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	return Decision{Fill: exchange.Fill{
 		ExchangeTradeID: candidate.TradingAccountID + ":" + candidate.ClientOrderID,
 		ExchangeOrderID: candidate.ExchangeOrderID, ClientOrderID: candidate.ClientOrderID,
+		Market:         exchange.MarketType(candidate.MarketType),
 		ExchangeSymbol: candidate.ExchangeSymbol,
 		Side:           exchange.Side(candidate.Side), PositionSide: exchange.PositionSide(candidate.PositionSide),
 		Quantity: decimalOrZero(candidate.Quantity), Price: price, Fee: fee, RealizedPnL: realizedPnL,
@@ -174,7 +175,7 @@ func paperReservationSufficient(
 	snapshot exchange.AccountSnapshot,
 	price, fee shared.Decimal,
 ) bool {
-	if account.MarketType != string(exchange.MarketTypeSpot) && account.MarketType != string(exchange.MarketTypeSwap) {
+	if candidate.MarketType != string(exchange.MarketTypeSpot) && candidate.MarketType != string(exchange.MarketTypeSwap) {
 		return true
 	}
 	reserved, err := shared.ParseDecimal(candidate.RemainingReservedQuantity)
@@ -186,11 +187,8 @@ func paperReservationSufficient(
 		return false
 	}
 	required := price.Mul(quantity).Add(fee)
-	if account.MarketType == string(exchange.MarketTypeSwap) {
+	if candidate.MarketType == string(exchange.MarketTypeSwap) {
 		leverage := account.LeverageSettings[candidate.InstrumentID]
-		if leverage == "" {
-			leverage = account.LeverageSettings[candidate.ExchangeSymbol]
-		}
 		if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
 			leverage = account.LeverageSettings["*"]
 		}

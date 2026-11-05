@@ -24,12 +24,12 @@ func (idleSyncAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, s
 }
 
 func TestRotationCoversFullSetInTenRounds(t *testing.T) {
-	full := make([]string, 0, 25)
+	full := make([]exchange.SymbolKey, 0, 25)
 	for index := 0; index < 25; index++ {
-		full = append(full, fmt.Sprintf("S%02d", index))
+		full = append(full, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: fmt.Sprintf("S%02d", index)})
 	}
 	service := &Service{}
-	seen := make(map[string]struct{})
+	seen := make(map[exchange.SymbolKey]struct{})
 	for round := 0; round < rotationBatches; round++ {
 		batch := service.nextRotationBatch("account-1", full)
 		require.Len(t, batch, 3)
@@ -42,10 +42,10 @@ func TestRotationCoversFullSetInTenRounds(t *testing.T) {
 
 func TestChangedAssetsFindsDifferencesAndDisappearedBalances(t *testing.T) {
 	changed := changedAssets(
-		[]store.AssetBalance{{Asset: "BTC", Total: "1"}, {Asset: "ETH", Total: "2"}, {Asset: "SOL", Total: "3"}},
+		[]store.AssetBalance{{Wallet: "UNIFIED", Asset: "BTC", Total: "1"}, {Wallet: "UNIFIED", Asset: "ETH", Total: "2"}, {Wallet: "UNIFIED", Asset: "SOL", Total: "3"}},
 		[]exchange.AssetBalance{
-			{Asset: "BTC", Total: shared.MustDecimal("1")},
-			{Asset: "ETH", Total: shared.MustDecimal("2.5")},
+			{Wallet: exchange.WalletUnified, Asset: "BTC", Total: shared.MustDecimal("1")},
+			{Wallet: exchange.WalletUnified, Asset: "ETH", Total: shared.MustDecimal("2.5")},
 		},
 	)
 	require.Equal(t, map[string]struct{}{"ETH": {}, "SOL": {}}, changed)
@@ -56,31 +56,34 @@ func TestIncrementalSyncSkipsIdleSymbolsOutsideRotation(t *testing.T) {
 	seedSyncAccount(t, tradeStore)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	full := make([]string, 0, 500)
+	full := make([]exchange.SymbolKey, 0, 500)
 	for index := 0; index < 500; index++ {
-		full = append(full, fmt.Sprintf("S%03d", index))
+		full = append(full, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: fmt.Sprintf("S%03d", index)})
 	}
 	service := &Service{Store: tradeStore}
 	symbols, err := service.incrementalSymbols(
 		context.Background(), account,
-		[]exchange.Order{{ExchangeSymbol: "ACTIVE"}}, nil,
-		[]exchange.Position{{ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
+		[]exchange.Order{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "ACTIVE"}}, nil,
+		[]exchange.Position{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
 		nil, exchange.AccountSnapshot{}, full, true, 0,
 	)
 	require.NoError(t, err)
 	// 轮转一次最多 rotationLimit 个标的。
 	require.Len(t, symbols, rotationLimit+2)
-	require.Contains(t, symbols, "ACTIVE")
-	require.Contains(t, symbols, "MOVED")
+	require.Contains(t, symbols, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "ACTIVE"})
+	require.Contains(t, symbols, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "MOVED"})
 	// 不推进轮转（撤单确认、未知订单收尾）时只拉有信号的标的。
 	symbols, err = service.incrementalSymbols(
 		context.Background(), account,
-		[]exchange.Order{{ExchangeSymbol: "ACTIVE"}}, nil,
-		[]exchange.Position{{ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
+		[]exchange.Order{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "ACTIVE"}}, nil,
+		[]exchange.Position{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "MOVED", SignedQuantity: shared.MustDecimal("1")}},
 		nil, exchange.AccountSnapshot{}, full, false, 0,
 	)
 	require.NoError(t, err)
-	require.Equal(t, []string{"ACTIVE", "MOVED"}, symbols)
+	require.Equal(t, []exchange.SymbolKey{
+		{Market: exchange.MarketTypeSwap, Symbol: "ACTIVE"},
+		{Market: exchange.MarketTypeSwap, Symbol: "MOVED"},
+	}, symbols)
 }
 
 // 接入前手工交易过的标的，第一次拉成交不能入账，也不能算外部成交。
@@ -89,11 +92,11 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(5_000), SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
-	adapter := noOpenOrdersAdapter{&syncAdapter{fill: exchange.Fill{
+	adapter := noOpenOrdersAdapter{&syncAdapter{fill: exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: "old-trade", ExchangeOrderID: "old-order", ClientOrderID: "old-client",
 		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"), SettlementAsset: "USDT",
@@ -109,7 +112,7 @@ func TestFillsBeforeAccountCreationOnlyAdvanceCursor(t *testing.T) {
 	require.False(t, result.ExternalFactsImported)
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
-	require.NotEmpty(t, account.FillCursors["BTC-USDT"])
+	require.NotEmpty(t, account.FillCursors["SWAP:BTC-USDT"])
 	require.True(t, account.Ready)
 }
 
@@ -129,7 +132,7 @@ func TestImportedOrderBeforeCreationSeedsFilledQuantity(t *testing.T) {
 	require.NoError(t, err)
 	account.CreatedAt = time.UnixMilli(5_000)
 	service := Service{Store: tradeStore}
-	record, err := service.importExternalOrder(context.Background(), account, exchange.Order{
+	record, err := service.importExternalOrder(context.Background(), account, exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "order-1", ClientOrderID: "client-1", ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		FilledQuantity: shared.MustDecimal("0.6"), AveragePrice: shared.MustDecimal("100"),
@@ -172,7 +175,7 @@ func TestTwoKeysOnSameExchangeSyncIndependently(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "account-2", Name: "second",
-			Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
@@ -214,14 +217,14 @@ func TestBoundedFullSymbolsCapsIdleSymbols(t *testing.T) {
 	require.NoError(t, err)
 	account.FillCursors = make(map[string]string, 500)
 	for index := 0; index < 500; index++ {
-		account.FillCursors[fmt.Sprintf("S%03dUSDT", index)] = "1"
+		account.FillCursors[fmt.Sprintf("SWAP:S%03dUSDT", index)] = "1"
 	}
 	service := &Service{Store: tradeStore}
-	open := []exchange.Order{{ExchangeSymbol: "OPENUSDT"}}
+	open := []exchange.Order{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "OPENUSDT"}}
 	symbols, err := service.BoundedFullSymbols(context.Background(), account, open, nil, nil, nil, exchange.AccountSnapshot{})
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(symbols), fullSymbolCap)
-	require.Contains(t, symbols, "OPENUSDT")
+	require.Contains(t, symbols, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "OPENUSDT"})
 }
 
 // 本地库为空、交易所已有几百个持仓：每个持仓都算变化，也不能一次全拉。
@@ -232,14 +235,14 @@ func TestBoundedFullSymbolsCapsChangedPositions(t *testing.T) {
 	require.NoError(t, err)
 	positions := make([]exchange.Position, 0, 491)
 	for index := 0; index < 491; index++ {
-		positions = append(positions, exchange.Position{ExchangeSymbol: fmt.Sprintf("P%03dUSDT", index), SignedQuantity: shared.MustDecimal("1")})
+		positions = append(positions, exchange.Position{Market: exchange.MarketTypeSwap, ExchangeSymbol: fmt.Sprintf("P%03dUSDT", index), SignedQuantity: shared.MustDecimal("1")})
 	}
 	service := &Service{Store: tradeStore}
-	open := []exchange.Order{{ExchangeSymbol: "OPENUSDT"}}
+	open := []exchange.Order{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "OPENUSDT"}}
 	symbols, err := service.BoundedFullSymbols(context.Background(), account, open, nil, positions, nil, exchange.AccountSnapshot{})
 	require.NoError(t, err)
 	require.Len(t, symbols, fullSymbolCap)
-	require.Contains(t, symbols, "OPENUSDT")
+	require.Contains(t, symbols, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "OPENUSDT"})
 }
 
 // 5 分钟内的已结束订单不能占满上限，把持仓变化的标的挤掉：重连期间的外部成交要靠它发现。
@@ -252,10 +255,10 @@ func TestBoundedFullSymbolsKeepsChangedPositionsAheadOfFinishedOrders(t *testing
 	for index := 0; index < 491; index++ {
 		local = append(local, store.OrderRecord{ExchangeSymbol: fmt.Sprintf("F%03dUSDT", index), State: "FILLED"})
 	}
-	positions := []exchange.Position{{ExchangeSymbol: "XUSDT", SignedQuantity: shared.MustDecimal("1")}}
+	positions := []exchange.Position{{Market: exchange.MarketTypeSwap, ExchangeSymbol: "XUSDT", SignedQuantity: shared.MustDecimal("1")}}
 	service := &Service{Store: tradeStore}
 	symbols, err := service.BoundedFullSymbols(context.Background(), account, nil, local, positions, nil, exchange.AccountSnapshot{})
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(symbols), fullSymbolCap)
-	require.Contains(t, symbols, "XUSDT")
+	require.Contains(t, symbols, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "XUSDT"})
 }

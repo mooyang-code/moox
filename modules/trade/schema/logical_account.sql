@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_owner_session_id TEXT,
     c_auth_fence TEXT NOT NULL DEFAULT '',
     c_execution_mode TEXT NOT NULL,
-    c_market_type TEXT NOT NULL,
     c_settlement_asset TEXT NOT NULL,
+    -- 下单设置与资金设置：空对象表示全部取默认值
+    c_order_settings_json TEXT NOT NULL DEFAULT '{}',
+    c_fund_settings_json TEXT NOT NULL DEFAULT '{}',
     c_automation_state TEXT NOT NULL DEFAULT 'PAUSED',
     c_pause_reason TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -20,7 +22,10 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     UNIQUE (c_space_id, c_name),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (c_control_mode IN ('STRATEGY', 'MANUAL')),
-    CHECK (c_market_type IN ('SPOT', 'SWAP', 'STOCK')),
+    CHECK (json_valid(c_order_settings_json)),
+    CHECK (json_type(c_order_settings_json) = 'object'),
+    CHECK (json_valid(c_fund_settings_json)),
+    CHECK (json_type(c_fund_settings_json) = 'object'),
     CHECK (c_automation_state IN ('ACTIVE', 'PAUSED')),
     CHECK (
         (c_automation_state = 'ACTIVE' AND c_pause_reason = '')
@@ -110,7 +115,16 @@ CREATE TABLE IF NOT EXISTS t_operator_actions (
     PRIMARY KEY (c_space_id, c_action_id),
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
-    CHECK (c_action_type IN ('MANUAL_ORDER', 'CANCEL_ORDER', 'FLATTEN', 'SUBMIT_ORDER')),
+    CHECK (
+        c_action_type IN (
+            'MANUAL_ORDER',
+            'CANCEL_ORDER',
+            'FLATTEN',
+            'SUBMIT_ORDER',
+            'REDUCE',
+            'DELIST_FLATTEN'
+        )
+    ),
     CHECK (c_status IN ('RUNNING', 'COMPLETED', 'PARTIAL', 'FAILED')),
     CHECK (json_valid(c_request_json)),
     CHECK (c_result_json IS NULL OR json_valid(c_result_json))

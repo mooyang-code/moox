@@ -404,7 +404,7 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: "SPOT", SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))
@@ -426,7 +426,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx",
-			Exchange: "OKX", MarketType: "SWAP", ExecutionMode: "PAPER",
+			Exchange: "OKX", Markets: []string{"SWAP"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS",
 			Status: "ENABLED", Ready: true,
 		}); err != nil {
@@ -435,7 +435,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: "SWAP", SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -594,7 +594,7 @@ func seedLogicalTargetAccount(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
 			Environment: "PAPER", SettlementAsset: "USDT",
 			Status: "ENABLED", Ready: ready,
 		}); err != nil {
@@ -603,7 +603,7 @@ func seedLogicalTargetAccount(
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: "SPOT", SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

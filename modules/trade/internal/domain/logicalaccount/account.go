@@ -38,7 +38,6 @@ type Account struct {
 	ID              string
 	Name            string
 	ExecutionMode   exchange.ExecutionMode
-	MarketType      exchange.MarketType
 	SettlementAsset string
 	AutomationState AutomationState
 	PauseReason     string
@@ -57,7 +56,6 @@ func New(
 	id string,
 	name string,
 	mode exchange.ExecutionMode,
-	market exchange.MarketType,
 	settlementAsset string,
 	controlMode ControlMode,
 ) (Account, error) {
@@ -67,7 +65,7 @@ func New(
 	account := Account{
 		ControlMode: controlMode,
 		SpaceID:     spaceID, ID: id, Name: name,
-		ExecutionMode: mode, MarketType: market,
+		ExecutionMode:   mode,
 		SettlementAsset: settlementAsset,
 		AutomationState: AutomationPaused,
 		PauseReason:     "new logical account",
@@ -86,7 +84,7 @@ func (a Account) Validate() error {
 		return fmt.Errorf("%w: manual account cannot have strategy ownership or automation", ErrInvalidAccount)
 	}
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.Name) ||
-		!a.ExecutionMode.Valid() || !a.MarketType.Valid() ||
+		!a.ExecutionMode.Valid() ||
 		blank(a.SettlementAsset) {
 		return fmt.Errorf("%w: missing or unsupported required field", ErrInvalidAccount)
 	}

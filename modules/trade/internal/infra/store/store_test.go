@@ -191,7 +191,7 @@ func TestListActiveOrdersForAccountSkipsFinishedOrders(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateTradingAccount(TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+		if err := tx.CreateTradingAccount(TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Name: "a", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 			return err
 		}
 		for id, state := range map[string]string{"open": "OPEN", "unknown": "SUBMIT_UNKNOWN", "filled": "FILLED", "canceled": "CANCELED"} {

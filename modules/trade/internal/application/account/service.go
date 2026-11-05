@@ -19,6 +19,8 @@ var (
 	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
 	ErrPaperAccountImmutable = errors.New("trade account: paper account configuration is immutable")
 	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
+	// ErrMultiMarketUnsupported：适配器和会话要等改成按标的所属市场工作后才能支持同时开通多个市场的账户。
+	ErrMultiMarketUnsupported = errors.New("trade account: 同时开通多个市场的执行账户暂不支持创建")
 	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
 	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )
@@ -33,12 +35,6 @@ type ExchangeSecret struct {
 	KeyID       string
 	SecretValue string
 	ExtraConfig string
-}
-
-type SyncTradingAccountsOptions struct {
-	UserID     string
-	Exchange   exchange.Exchange
-	MarketType exchange.MarketType
 }
 
 type Store interface {
@@ -92,6 +88,9 @@ func (s *Service) Create(
 	}
 	if err := value.Validate(); err != nil {
 		return tradingaccount.Account{}, err
+	}
+	if value.SoleMarket() == exchange.MarketTypeUnspecified {
+		return tradingaccount.Account{}, ErrMultiMarketUnsupported
 	}
 	if value.ExecutionMode == exchange.ExecutionModeLive &&
 		value.Environment == exchange.AccountEnvironmentProduction &&
@@ -166,8 +165,9 @@ func (s *Service) Update(
 	return s.Store.Get(ctx, command.TradingAccountID)
 }
 
-// rejectDuplicateCredential 防止同一把密钥建两个执行账户：两个会话看到同一批订单，
-// 会互相当成外部订单，组合账户被自动暂停。
+// rejectDuplicateCredential 保证一把密钥（交易所、环境、密钥 ID）全局只有一个启用的执行账户：
+// 两个会话看到同一批订单，会互相当成外部订单，组合账户被自动暂停。
+// 账户同时做现货和合约，所以不管市场是否相同都冲突；表上的唯一索引兜底并发。
 func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingaccount.Account) error {
 	if value.ExecutionMode != exchange.ExecutionModeLive || value.Status != exchange.AccountStatusEnabled {
 		return nil
@@ -176,34 +176,31 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 	if err != nil {
 		return err
 	}
-	unified := false
-	if s.Exchanges != nil {
-		if descriptor, ok := s.Exchanges.Descriptor(value.Exchange); ok {
-			unified = descriptor.UnifiedAccount
-		}
-	}
 	for _, other := range accounts {
 		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
 			other.Exchange == value.Exchange && other.Environment == value.Environment &&
-			other.CredentialSecretID == value.CredentialSecretID &&
-			(unified || other.MarketType == value.MarketType) {
-			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥", tradingaccount.ErrInvalidAccount, other.Name)
+			other.CredentialSecretID == value.CredentialSecretID {
+			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥，一把密钥只能对应一个执行账户", tradingaccount.ErrInvalidAccount, other.Name)
 		}
 	}
 	return nil
 }
 
+// SetLeverage 设置杠杆。leverageKey 是内部标的 ID（例如 BTC-USDT-SWAP）或账户默认杠杆的键 "*"；
+// exchangeSymbol 是该标的的交易所代码（默认杠杆时同样传 "*"），用来让会话下次开仓前重新设置。
 func (s *Service) SetLeverage(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	leverageKey string,
+	exchangeSymbol string,
 	leverage shared.Decimal,
 ) error {
 	if s == nil || s.Store == nil {
 		return ErrServiceNotConfigured
 	}
 	if strings.TrimSpace(tradingAccountID) == "" ||
-		strings.TrimSpace(symbol) == "" ||
+		strings.TrimSpace(leverageKey) == "" ||
+		strings.TrimSpace(exchangeSymbol) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 {
 		return tradingaccount.ErrInvalidAccount
 	}
@@ -211,18 +208,18 @@ func (s *Service) SetLeverage(
 	if err != nil {
 		return err
 	}
-	if !exchange.RuleFor(current.MarketType).Leverage {
+	if !current.HasLeverageMarket() {
 		return tradingaccount.ErrInvalidAccount
 	}
 	if current.ExecutionMode == exchange.ExecutionModePaper {
 		return ErrPaperAccountImmutable
 	}
-	if err := s.Store.SetLeverage(ctx, tradingAccountID, symbol, leverage); err != nil {
+	if err := s.Store.SetLeverage(ctx, tradingAccountID, leverageKey, leverage); err != nil {
 		return err
 	}
 	// 不重启会话，只让该标的下次开仓前重新设置。
 	if s.SymbolConfigs != nil {
-		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, symbol)
+		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, exchangeSymbol)
 	}
 	return nil
 }

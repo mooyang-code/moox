@@ -38,11 +38,11 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			facts.AvailableFunds = value
 		}
 	}
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
 		var row struct {
 			Quantity string `gorm:"column:c_signed_quantity"`
 		}
-		if err := tx.db.Raw("SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id=? AND c_trading_account_id=? AND c_exchange_symbol=? AND c_position_side='NET'", account.SpaceID, account.TradingAccountID, instrument.ExchangeSymbol).Scan(&row).Error; err != nil {
+		if err := tx.db.Raw("SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id=? AND c_trading_account_id=? AND c_market_type=? AND c_exchange_symbol=? AND c_position_side='NET'", account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol).Scan(&row).Error; err != nil {
 			return facts, err
 		}
 		if row.Quantity != "" {
@@ -56,7 +56,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			ReduceOnly bool   `gorm:"column:c_reduce_only"`
 			State      string `gorm:"column:c_state"`
 		}
-		if err := tx.db.Raw("SELECT c_quantity,c_filled_quantity,c_side,c_reduce_only,c_state FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_exchange_symbol=? AND c_reduce_only=1 AND c_state IN ?", account.SpaceID, account.TradingAccountID, instrument.ExchangeSymbol, activeOrderStates).Scan(&rows).Error; err != nil {
+		if err := tx.db.Raw("SELECT c_quantity,c_filled_quantity,c_side,c_reduce_only,c_state FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_market_type=? AND c_exchange_symbol=? AND c_reduce_only=1 AND c_state IN ?", account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol, activeOrderStates).Scan(&rows).Error; err != nil {
 			return facts, err
 		}
 		for _, row := range rows {

@@ -18,7 +18,7 @@ type valuationFacts struct {
 }
 
 func (f valuationFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
-	return store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", MarketType: "SWAP", SettlementAsset: "USDT"}, nil
+	return store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Markets: []string{"SWAP"}, SettlementAsset: "USDT"}, nil
 }
 func (f valuationFacts) GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error) {
 	return store.PaperBalanceSnapshot{Totals: map[string]shared.Decimal{"USDT": shared.MustDecimal("1000")}}, nil
@@ -26,7 +26,7 @@ func (f valuationFacts) GetPaperBalanceSnapshot(context.Context, string, string)
 func (f valuationFacts) ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error) {
 	return nil, nil
 }
-func (f valuationFacts) ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error) {
+func (f valuationFacts) ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error) {
 	return f.positions, nil
 }
 

@@ -110,7 +110,7 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 		return err
 	}
 	snapshot := confirmedSnapshot(account)
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasBalanceMarket() {
 		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
 		if valueErr != nil {
 			return valueErr
@@ -266,7 +266,7 @@ func (s *Service) sampleLogicalAccount(
 		memberSnapshot := confirmedSnapshot(memberAccount)
 		if member.TradingAccountID == accountID && sampled != nil {
 			memberSnapshot = *sampled
-		} else if exchange.RuleFor(memberAccount.MarketType).PositionFromBalance {
+		} else if memberAccount.HasBalanceMarket() {
 			valued, valueErr := s.valueSpotSnapshot(ctx, memberAccount, memberSnapshot)
 			if valueErr != nil {
 				return valueErr

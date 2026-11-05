@@ -54,7 +54,7 @@ func (a *capabilityAdapter) GetOrderByExchangeID(
 	exchangeOrderID string,
 ) (exchange.Order, error) {
 	a.lookedUpID = exchangeOrderID
-	return exchange.Order{ExchangeOrderID: exchangeOrderID}, nil
+	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: exchangeOrderID}, nil
 }
 
 func TestProbingAdapterPreservesOptionalCapabilities(t *testing.T) {

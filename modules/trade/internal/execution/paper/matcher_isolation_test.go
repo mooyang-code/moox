@@ -28,7 +28,7 @@ func matcherFixture(t *testing.T) *store.Store {
 			return err
 		}
 		for _, id := range []string{"a", "b"} {
-			if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: id, Name: id, Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+			if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "s", TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 				return err
 			}
 			if err := tx.CreateOrder(store.OrderRecord{SpaceID: "s", TradingAccountID: id, OrderID: id, ClientOrderID: id, ExchangeOrderID: id, ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: id, State: "OPEN", FirstMatchPending: true}); err != nil {
@@ -41,7 +41,7 @@ func matcherFixture(t *testing.T) *store.Store {
 }
 
 func matchFill(o store.OrderRecord) Decision {
-	return Decision{Fill: exchange.Fill{ExchangeTradeID: "fill-" + o.OrderID, ExchangeOrderID: o.ExchangeOrderID, ExchangeSymbol: o.ExchangeSymbol, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.UnixMilli(1000)}}
+	return Decision{Fill: exchange.Fill{Market: exchange.MarketType(o.MarketType), ExchangeTradeID: "fill-" + o.OrderID, ExchangeOrderID: o.ExchangeOrderID, ExchangeSymbol: o.ExchangeSymbol, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.UnixMilli(1000)}}
 }
 
 func TestMatcherIsolatesPermanentAccountFailureAndRecovers(t *testing.T) {

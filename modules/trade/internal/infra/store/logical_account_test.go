@@ -25,12 +25,12 @@ func TestLogicalAccountMembershipAllowsOneGroupPerTradingAccount(t *testing.T) {
 		for _, account := range []LogicalAccountRecord{
 			{
 				SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one",
-				ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+				ExecutionMode: "PAPER", SettlementAsset: "USDT",
 				AutomationState: "PAUSED", PauseReason: "configure",
 			},
 			{
 				SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "two",
-				ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+				ExecutionMode: "PAPER", SettlementAsset: "USDT",
 				AutomationState: "PAUSED", PauseReason: "configure",
 			},
 		} {
@@ -73,28 +73,75 @@ func TestLogicalAccountMembershipAllowsOneGroupPerTradingAccount(t *testing.T) {
 func TestLogicalAccountMembershipRejectsInhomogeneousAccount(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
-	swap := testAccount()
-	swap.TradingAccountID = "swap-1"
-	swap.Name = "swap"
-	swap.MarketType = "SWAP"
-	swap.MarginMode = "CROSS"
+	// 成员同质性只要求执行模式、环境、结算资产一致；市场不要求一致。
+	other := testAccount()
+	other.TradingAccountID = "usdc-1"
+	other.Name = "usdc"
+	other.SettlementAsset = "USDC"
 	err := s.Transaction(ctx, func(tx *Tx) error {
-		if err := tx.CreateTradingAccount(swap); err != nil {
+		if err := tx.CreateTradingAccount(other); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "spot",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
 		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TradingAccountID: "swap-1", Enabled: true,
+			TradingAccountID: "usdc-1", Enabled: true,
 		})
 	})
 	require.ErrorIs(t, err, ErrInvalidRecord)
+}
+
+func TestLogicalAccountMarketsAreUnionOfEnabledMembers(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	spot := testAccount()
+	spot.TradingAccountID, spot.Name = "spot-1", "spot"
+	swap := testAccount()
+	swap.TradingAccountID, swap.Name = "swap-1", "swap"
+	swap.Markets, swap.MarginMode = []string{"SWAP"}, "CROSS"
+	both := testAccount()
+	both.TradingAccountID, both.Name = "both-1", "both"
+	both.Markets, both.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		for _, account := range []TradingAccountRecord{spot, swap, both} {
+			if err := tx.CreateTradingAccount(account); err != nil {
+				return err
+			}
+		}
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
+			AutomationState: "PAUSED", PauseReason: "configure",
+		})
+	}))
+	markets := func() []string {
+		got, err := s.LogicalAccountMarkets(ctx, "space-1", "logical-1")
+		require.NoError(t, err)
+		return got
+	}
+	require.Empty(t, markets())
+	put := func(accountID string, enabled bool) {
+		require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+			return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+				SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: accountID, Enabled: enabled,
+			})
+		}))
+	}
+	put("swap-1", true)
+	require.Equal(t, []string{"SWAP"}, markets())
+	put("spot-1", true)
+	require.Equal(t, []string{"SPOT", "SWAP"}, markets())
+	// 停用的成员不算。
+	put("spot-1", false)
+	require.Equal(t, []string{"SWAP"}, markets())
+	put("both-1", true)
+	require.Equal(t, []string{"SPOT", "SWAP"}, markets())
 }
 
 func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {
@@ -117,7 +164,7 @@ func TestLogicalAccountMembershipRejectsMixedEnvironmentProfiles(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "live",
-			ExecutionMode: "LIVE", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -146,7 +193,7 @@ func TestLogicalAccountMembershipChangeRequiresPause(t *testing.T) {
 		}
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "active",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "ACTIVE",
 		})
 	}))
@@ -165,7 +212,7 @@ func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "new",
 		}); err != nil {
 			return err
@@ -193,7 +240,7 @@ func TestLogicalAccountUpdatedAtFollowsAutomationChange(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "one",
-			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))

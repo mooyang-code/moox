@@ -36,7 +36,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			}
 			created, err := console.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{
 				AccountName: "ordinary-paper", LogicalAccountName: "ordinary-manual", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-				MarketType: marketPB, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+				Markets: []tradepb.MarketType{marketPB}, SettlementAsset: "USDT", InitialBalance: "100000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
 				ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL,
 			})
 			require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			f := newFixtureWithMode(t, market, fake, exchange.ExecutionModeLive)
 			f.account.LiveTradingEnabled = true // The adapter is the local fake, never a network exchange.
 			logical := &logicalapp.Service{Store: f.store, Syncer: syncBridge{service: f.sync}, Now: func() time.Time { return testNow }}
-			_, err := logical.Create(ctx, testSpace, testLogicalAccount, "manual-live-mock", exchange.ExecutionModeLive, market, "USDT", "MANUAL")
+			_, err := logical.Create(ctx, testSpace, testLogicalAccount, "manual-live-mock", exchange.ExecutionModeLive, "USDT", "MANUAL")
 			require.NoError(t, err)
 			require.NoError(t, logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true}))
 			service := &operator.Service{Store: f.store, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}

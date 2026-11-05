@@ -45,12 +45,12 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSpot)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true, Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
-					{Asset: "USDT", Available: "500", Total: "500"},
-					{Asset: "BTC", Available: "0.01", Total: "0.01"},
+					{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"},
+					{Wallet: "UNIFIED", Asset: "BTC", Available: "0.01", Total: "0.01"},
 				}, ExchangeUpdatedAt: sourceMillis,
 			},
 		}); err != nil {
@@ -58,7 +58,7 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSpot),
+			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
 			return err
@@ -127,11 +127,11 @@ func TestEquityFreshnessFollowsConfirmedSyncNotBalanceChangeTime(t *testing.T) {
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSpot)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true, LastSyncAt: syncedAt,
 			Snapshot: store.TradingAccountSnapshot{
-				Balances:          []store.AssetBalance{{Asset: "USDT", Available: "500", Total: "500"}},
+				Balances:          []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"}},
 				ExchangeUpdatedAt: changedAt,
 			},
 		}); err != nil {
@@ -139,7 +139,7 @@ func TestEquityFreshnessFollowsConfirmedSyncNotBalanceChangeTime(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSpot),
+			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
 			return err

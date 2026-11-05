@@ -133,6 +133,22 @@ func marketFromPB(value tradepb.MarketType) exchange.MarketType {
 	}
 }
 
+func marketsFromPB(values []tradepb.MarketType) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(values))
+	for i, value := range values {
+		result[i] = marketFromPB(value)
+	}
+	return result
+}
+
+func marketsToPB[T ~string](values []T) []tradepb.MarketType {
+	result := make([]tradepb.MarketType, len(values))
+	for i, value := range values {
+		result[i] = marketToPB(string(value))
+	}
+	return result
+}
+
 func marketToPB(value string) tradepb.MarketType {
 	switch exchange.MarketType(value) {
 	case exchange.MarketTypeSpot:
@@ -283,12 +299,14 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 		balances = append(balances, &tradepb.AssetBalance{
 			Asset: balance.Asset, Available: balance.Available,
 			Locked: balance.Locked, Total: balance.Total,
+			Wallet: balance.Wallet, Borrowed: balance.Borrowed,
 		})
 	}
 	account := &tradepb.TradingAccount{
 		TradingAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
 		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
-		MarketType:      marketToPB(value.MarketType),
+		Markets:     marketsToPB(value.Markets),
+		AccountMode: value.AccountMode, InspectionJson: value.InspectionJSON,
 		ExecutionMode:   executionModeToPB(value.ExecutionMode),
 		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
 		Status: value.Status, Ready: value.Ready,
@@ -299,6 +317,7 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 			UsedMargin:        value.Snapshot.UsedMargin,
 			MaintenanceMargin: value.Snapshot.MaintenanceMargin,
 			UnrealizedPnl:     value.Snapshot.UnrealizedPnL,
+			ExchangeEquity:    value.Snapshot.ExchangeEquity,
 			ExchangeUpdatedAt: value.Snapshot.ExchangeUpdatedAt,
 		},
 		LastSyncAt: value.LastSyncAt, LastReadyAt: value.LastReadyAt,
@@ -325,6 +344,7 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 func logicalAccountToPB(
 	value store.LogicalAccountRecord,
 	members []store.LogicalAccountMemberRecord,
+	markets []string,
 	readiness logicalapp.Readiness,
 ) *tradepb.LogicalAccount {
 	if value.LogicalAccountID == "" {
@@ -348,7 +368,7 @@ func logicalAccountToPB(
 		AuthFence:        value.AuthFence,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		ControlMode:      controlModeToPB(value.ControlMode),
-		MarketType:       marketToPB(value.MarketType),
+		Markets:          marketsToPB(markets),
 		SettlementAsset:  value.SettlementAsset,
 		AutomationState:  value.AutomationState,
 		PauseReason:      value.PauseReason,
@@ -377,7 +397,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		ReducePositionOnly: value.ReduceOnly,
 		OwnerType:          value.OwnerType, OwnerId: value.OwnerID,
 		LogicalAccountId: value.LogicalAccountID, RunnerId: value.RunnerID,
-		State: value.State, FilledQuantity: value.FilledQuantity,
+		State: value.State, Attempt: int32(value.Attempt), FilledQuantity: value.FilledQuantity,
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
 		RemainingReservedQuantity: value.RemainingReservedQuantity,
@@ -404,6 +424,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
+		MarketType:       marketToPB(value.MarketType),
 		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,

@@ -51,7 +51,7 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space", TradingAccountID: "paper", Name: "Decider", Exchange: "BINANCE",
-			MarketType: market, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
+			Markets: []string{market}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			LeverageSettings: store.LeverageSettings{"BTC-USDT": "10"},
 			PaperConfig: &store.PaperAccountConfigRecord{SpaceID: "space", TradingAccountID: "paper",
 				InitialBalance: "10000", MakerFeeRate: "0.001", TakerFeeRate: "0.002", SlippageBPS: "100"},
@@ -61,7 +61,7 @@ func deciderFixture(t *testing.T, market string) (*Decider, *deciderAdapter, sto
 	adapter := &deciderAdapter{
 		quote: execution.MarketQuote{Bid: shared.MustDecimal("99"), Ask: shared.MustDecimal("101"), SourceTime: now},
 		snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("1000"), Balances: []exchange.AssetBalance{
-			{Asset: "USDT", Available: shared.MustDecimal("1000")},
+			{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("1000")},
 		}},
 	}
 	return &Decider{Store: db, Adapters: deciderAdapters{adapter}, Now: func() time.Time { return now }}, adapter, store.OrderRecord{
@@ -229,7 +229,7 @@ func TestDeciderSpotFeeAssetIsQuoteAssetOfThePair(t *testing.T) {
 		})
 	}))
 	adapter.quote.Bid, adapter.quote.Ask = shared.MustDecimal("0.0499"), shared.MustDecimal("0.05")
-	adapter.snapshot.Balances = []exchange.AssetBalance{{Asset: "BTC", Available: shared.MustDecimal("1")}}
+	adapter.snapshot.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("1")}}
 	order.InstrumentID, order.ExchangeSymbol, order.ReservedAsset = "ETH-BTC", "ETHBTC", "BTC"
 	order.RemainingReservedQuantity = "0.06"
 	order.ReferencePrice = "0.05"

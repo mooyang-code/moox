@@ -23,7 +23,7 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 	liveFake := newFakeExchange(exchange.MarketTypeSpot)
 	live := newFixture(t, exchange.MarketTypeSpot, liveFake)
 	setSpotSnapshot(t, live, store.TradingAccountSnapshot{
-		Balances:          []store.AssetBalance{{Asset: "USDT", Available: "100000", Total: "100000"}},
+		Balances:          []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "100000", Total: "100000"}},
 		Equity:            "100000",
 		AvailableFunds:    "100000",
 		ExchangeUpdatedAt: testNow.UnixMilli(),
@@ -36,8 +36,8 @@ func TestLiveAndPaperProduceEquivalentSpotFacts(t *testing.T) {
 	liveFake.mu.Lock()
 	liveFake.account = exchange.AccountSnapshot{
 		Balances: []exchange.AssetBalance{
-			{Asset: "USDT", Available: shared.MustDecimal("99500"), Total: shared.MustDecimal("99500")},
-			{Asset: "BTC", Available: shared.MustDecimal("0.01"), Total: shared.MustDecimal("0.01")},
+			{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("99500"), Total: shared.MustDecimal("99500")},
+			{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("0.01"), Total: shared.MustDecimal("0.01")},
 		},
 		Equity: shared.MustDecimal("100000"), AvailableFunds: shared.MustDecimal("99500"),
 		ExchangeUpdatedAt: testNow,
@@ -206,7 +206,7 @@ func assertCommonSwapFacts(t *testing.T, f *fixture, orderID string) {
 	require.Equal(t, "SWAP", fills[0].MarketType)
 	require.Equal(t, "0.01", fills[0].Quantity)
 
-	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, testSymbol)
+	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: testSymbol})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, "0.01", positions[0].SignedQuantity)
@@ -233,9 +233,9 @@ func setSpotSnapshot(t *testing.T, f *fixture, snapshot store.TradingAccountSnap
 func paperSnapshotRecordForTest(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
 	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
 	for _, balance := range snapshot.Balances {
-		balances = append(balances, store.AssetBalance{
+		balances = append(balances, store.AssetBalance{Wallet: "UNIFIED",
 			Asset: balance.Asset, Available: balance.Available.String(),
-			Locked: balance.Locked.String(), Total: balance.Total.String(),
+			Locked: balance.Locked.String(), Total: balance.Total.String(), Borrowed: balance.Borrowed.String(),
 		})
 	}
 	return store.TradingAccountSnapshot{

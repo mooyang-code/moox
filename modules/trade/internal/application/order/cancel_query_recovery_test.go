@@ -37,8 +37,8 @@ func TestRecoverCancelTerminalQueryWaitsForRealFillReducer(t *testing.T) {
 	_, err = s.Submit(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	setStoredOrderState(t, db, string(pending.ID), orderdomain.CancelUnknown, s.now())
-	a.getResult = exchange.Order{ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusFilled}
-	s.Syncer = recoveryFillSync{reducer: &consumer.Reducer{Store: db}, fill: exchange.Fill{ExchangeTradeID: "terminal-fill", ExchangeOrderID: "exchange-order-1", ClientOrderID: spec.ClientOrderID, ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, Quantity: spec.Quantity, Price: shared.MustDecimal("100"), Fee: shared.Zero(), FeeAsset: "USDT", TradedAt: s.now()}}
+	a.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusFilled}
+	s.Syncer = recoveryFillSync{reducer: &consumer.Reducer{Store: db}, fill: exchange.Fill{Market: exchange.MarketTypeSpot, ExchangeTradeID: "terminal-fill", ExchangeOrderID: "exchange-order-1", ClientOrderID: spec.ClientOrderID, ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, Quantity: spec.Quantity, Price: shared.MustDecimal("100"), Fee: shared.Zero(), FeeAsset: "USDT", TradedAt: s.now()}}
 	result, err := s.RecoverCancel(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Filled, result.State)
@@ -69,7 +69,7 @@ func TestRecoverCancelQueriesBeforeAnyMutation(t *testing.T) {
 			require.NoError(t, err)
 			setStoredOrderState(t, db, string(pending.ID), orderdomain.CancelUnknown, s.now())
 			s.Syncer = &syncerStub{}
-			a.getResult = exchange.Order{ExchangeOrderID: "exchange-1", Status: exchange.OrderStatusOpen}
+			a.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-1", Status: exchange.OrderStatusOpen}
 			if path == "filled" {
 				a.getResult.Status = exchange.OrderStatusFilled
 			}

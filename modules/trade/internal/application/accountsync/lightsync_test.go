@@ -96,7 +96,7 @@ func storedPosition(t *testing.T, tradeStore *store.Store) (string, bool) {
 	var quantity string
 	var found bool
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		position, ok, err := tx.GetPosition("space-1", "account-1", "BTC-USDT", "NET")
+		position, ok, err := tx.GetPosition("space-1", "account-1", exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT"}, "NET")
 		quantity, found = position.SignedQuantity, ok
 		return err
 	}))
@@ -130,7 +130,7 @@ func TestLightSyncOverridesStalePositionAfterGrace(t *testing.T) {
 	service, tradeStore, adapter := lightSyncFixture(t, &now)
 	filledAt := now.Add(-time.Second)
 	projectPosition(t, tradeStore, "0.5", filledAt)
-	adapter.positions = []exchange.Position{{
+	adapter.positions = []exchange.Position{{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"), EntryPrice: shared.MustDecimal("100"),
 		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
@@ -175,7 +175,7 @@ func TestSpotStaleBalanceDoesNotRestoreReady(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "spot-1", Name: "spot",
-			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err

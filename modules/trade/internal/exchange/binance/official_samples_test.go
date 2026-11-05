@@ -211,3 +211,39 @@ func TestExpiredInMatchAndUnknownCodes(t *testing.T) {
 		}
 	}
 }
+
+// 现货、合约的成交样例解析出来的记录必须带上各自的市场：同名代码、同号订单和成交靠市场区分。
+func TestOfficialSamplesCarryTheirMarket(t *testing.T) {
+	for _, test := range []struct {
+		market exchange.MarketType
+		name   string
+		wallet exchange.Wallet
+	}{
+		{exchange.MarketTypeSwap, "futures_user_trades.json", exchange.WalletFutures},
+		{exchange.MarketTypeSpot, "spot_my_trades.json", exchange.WalletSpot},
+	} {
+		body := sample(t, test.name)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			if request.URL.Query().Get("fromId") == "" {
+				_, _ = io.WriteString(w, `{"orderId":1,"clientOrderId":"cid","symbol":"x"}`)
+				return
+			}
+			_, _ = w.Write(body)
+		}))
+		adapter := testAdapter(test.market, server.URL)
+		fills, _, err := adapter.ListRecentFills(context.Background(), "x", "1")
+		server.Close()
+		if err != nil || len(fills) != 1 {
+			t.Fatalf("%s: fills = %+v err = %v", test.name, fills, err)
+		}
+		if fills[0].Market != test.market {
+			t.Fatalf("%s: fill market = %q，想要 %q", test.name, fills[0].Market, test.market)
+		}
+		if adapter.wallet() != test.wallet {
+			t.Fatalf("%s: wallet = %q，想要 %q", test.name, adapter.wallet(), test.wallet)
+		}
+		if got := adapter.key("BTCUSDT"); got != (exchange.SymbolKey{Market: test.market, Symbol: "BTCUSDT"}) {
+			t.Fatalf("key = %+v", got)
+		}
+	}
+}

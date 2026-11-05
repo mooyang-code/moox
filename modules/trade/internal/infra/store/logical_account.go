@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"gorm.io/gorm"
 )
 
 type LogicalAccountRecord struct {
@@ -23,12 +24,14 @@ type LogicalAccountRecord struct {
 	AuthFence       string
 	OwnerGeneration int64
 	ExecutionMode   string
-	MarketType      string
 	SettlementAsset string
-	AutomationState string
-	PauseReason     string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// OrderSettingsJSON、FundSettingsJSON 是下单设置和资金设置，空对象表示全部取默认值。
+	OrderSettingsJSON string
+	FundSettingsJSON  string
+	AutomationState   string
+	PauseReason       string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type LogicalAccountMemberRecord struct {
@@ -42,21 +45,22 @@ type LogicalAccountMemberRecord struct {
 }
 
 type logicalAccountRow struct {
-	ControlMode      string    `gorm:"column:c_control_mode"`
-	SpaceID          string    `gorm:"column:c_space_id"`
-	LogicalAccountID string    `gorm:"column:c_logical_account_id"`
-	Name             string    `gorm:"column:c_name"`
-	OwnerClaimedAt   int64     `gorm:"column:c_owner_claimed_at"`
-	OwnerInstanceID  *string   `gorm:"column:c_owner_instance_id"`
-	OwnerSessionID   *string   `gorm:"column:c_owner_session_id"`
-	AuthFence        string    `gorm:"column:c_auth_fence"`
-	ExecutionMode    string    `gorm:"column:c_execution_mode"`
-	MarketType       string    `gorm:"column:c_market_type"`
-	SettlementAsset  string    `gorm:"column:c_settlement_asset"`
-	AutomationState  string    `gorm:"column:c_automation_state"`
-	PauseReason      string    `gorm:"column:c_pause_reason"`
-	CreatedAt        time.Time `gorm:"column:c_ctime"`
-	UpdatedAt        time.Time `gorm:"column:c_mtime"`
+	ControlMode       string    `gorm:"column:c_control_mode"`
+	SpaceID           string    `gorm:"column:c_space_id"`
+	LogicalAccountID  string    `gorm:"column:c_logical_account_id"`
+	Name              string    `gorm:"column:c_name"`
+	OwnerClaimedAt    int64     `gorm:"column:c_owner_claimed_at"`
+	OwnerInstanceID   *string   `gorm:"column:c_owner_instance_id"`
+	OwnerSessionID    *string   `gorm:"column:c_owner_session_id"`
+	AuthFence         string    `gorm:"column:c_auth_fence"`
+	ExecutionMode     string    `gorm:"column:c_execution_mode"`
+	SettlementAsset   string    `gorm:"column:c_settlement_asset"`
+	OrderSettingsJSON string    `gorm:"column:c_order_settings_json"`
+	FundSettingsJSON  string    `gorm:"column:c_fund_settings_json"`
+	AutomationState   string    `gorm:"column:c_automation_state"`
+	PauseReason       string    `gorm:"column:c_pause_reason"`
+	CreatedAt         time.Time `gorm:"column:c_ctime"`
+	UpdatedAt         time.Time `gorm:"column:c_mtime"`
 }
 
 func (logicalAccountRow) TableName() string {
@@ -104,17 +108,25 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if blank(authFence) {
 		authFence = newAuthFence()
 	}
+	if blank(record.OrderSettingsJSON) {
+		record.OrderSettingsJSON = "{}"
+	}
+	if blank(record.FundSettingsJSON) {
+		record.FundSettingsJSON = "{}"
+	}
 	err := tx.db.Exec(`
 		INSERT INTO t_logical_accounts (
 			c_space_id, c_logical_account_id, c_name, c_owner_claimed_at,
 			c_owner_instance_id, c_owner_session_id, c_auth_fence,
-			c_control_mode, c_execution_mode, c_market_type, c_settlement_asset,
+			c_control_mode, c_execution_mode, c_settlement_asset,
+			c_order_settings_json, c_fund_settings_json,
 			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.LogicalAccountID, record.Name, ownerGeneration,
 		ownerInstance, ownerSession, authFence,
-		record.ControlMode, record.ExecutionMode, record.MarketType, record.SettlementAsset,
+		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
+		record.OrderSettingsJSON, record.FundSettingsJSON,
 		record.AutomationState, record.PauseReason,
 	).Error
 	return writeError(err)
@@ -359,6 +371,44 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
+// LogicalAccountMarkets 返回组合账户可交易的市场：启用成员已开通市场的并集，按固定顺序排列。
+// 这个集合不存储，每次由成员算出，成员变动后立刻反映在目标校验和 markets 只读字段上。
+func (s *Store) LogicalAccountMarkets(ctx context.Context, spaceID, logicalAccountID string) ([]string, error) {
+	return logicalAccountMarkets(s.db.WithContext(ctx), spaceID, logicalAccountID)
+}
+
+func (tx *Tx) LogicalAccountMarkets(spaceID, logicalAccountID string) ([]string, error) {
+	return logicalAccountMarkets(tx.db, spaceID, logicalAccountID)
+}
+
+func logicalAccountMarkets(db *gorm.DB, spaceID, logicalAccountID string) ([]string, error) {
+	var rows []string
+	if err := db.Raw(`
+		SELECT a.c_markets
+		FROM t_logical_account_members AS m
+		JOIN t_trading_accounts AS a
+			ON a.c_space_id = m.c_space_id
+			AND a.c_trading_account_id = m.c_trading_account_id
+		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1
+	`, spaceID, logicalAccountID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	sets := make([][]exchange.MarketType, 0, len(rows))
+	for _, raw := range rows {
+		markets, err := exchange.ParseMarkets(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+		}
+		sets = append(sets, markets)
+	}
+	union := exchange.UnionMarkets(sets...)
+	result := make([]string, len(union))
+	for i, market := range union {
+		result[i] = string(market)
+	}
+	return result, nil
+}
+
 func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 	member := logicalaccount.Member{
 		SpaceID: record.SpaceID, LogicalAccountID: record.LogicalAccountID,
@@ -390,7 +440,6 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		return err
 	}
 	if physical.ExecutionMode != account.ExecutionMode ||
-		physical.MarketType != account.MarketType ||
 		physical.SettlementAsset != account.SettlementAsset {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 	}
@@ -515,7 +564,6 @@ func logicalAccountDomain(record LogicalAccountRecord) logicalaccount.Account {
 		ControlMode: logicalaccount.ControlMode(record.ControlMode),
 		SpaceID:     record.SpaceID, ID: record.LogicalAccountID, Name: record.Name,
 		ExecutionMode:   exchange.ExecutionMode(record.ExecutionMode),
-		MarketType:      exchange.MarketType(record.MarketType),
 		SettlementAsset: record.SettlementAsset,
 		AutomationState: logicalaccount.AutomationState(record.AutomationState),
 		PauseReason:     record.PauseReason,
@@ -535,9 +583,10 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		SpaceID:     row.SpaceID, LogicalAccountID: row.LogicalAccountID,
 		Name: row.Name, OwnerInstanceID: instanceID,
 		OwnerSessionID: sessionID, AuthFence: row.AuthFence,
-		OwnerGeneration: row.OwnerClaimedAt,
-		ExecutionMode:   row.ExecutionMode, MarketType: row.MarketType,
-		SettlementAsset: row.SettlementAsset,
+		OwnerGeneration:   row.OwnerClaimedAt,
+		ExecutionMode:     row.ExecutionMode,
+		SettlementAsset:   row.SettlementAsset,
+		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
 		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}

@@ -113,7 +113,15 @@ func HandleTarget(
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
 	}
 	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
-	request, err = normalizeTargetRequest(request, []exchange.MarketType{exchange.MarketType(account.MarketType)})
+	tradable, err := opts.Store.LogicalAccountMarkets(ctx, message.GetSpaceId(), account.LogicalAccountID)
+	if err != nil {
+		return retryTarget(err)
+	}
+	if len(tradable) == 0 && len(request.GetTargets()) > 0 {
+		// 组合还没有启用的成员，没有可交易的市场：等成员加入后重投，和原来等成员就绪一致。
+		return retryTarget(errors.New("组合账户还没有启用的成员"))
+	}
+	request, err = normalizeTargetRequest(request, marketTypes(tradable))
 	if err != nil {
 		return targetRejection("invalid_contract", err)
 	}
@@ -330,6 +338,14 @@ func handleShadowTarget(
 		return retryTarget(err)
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
 }
 
 // normalizeTargetRequest 按每一项自带的 market_type 把标的 ID 标准化成 Trade 内部 ID。

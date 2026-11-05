@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
 
@@ -53,6 +54,11 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	}
 	assets := map[string]struct{}{account.SettlementAsset: {}}
 	for _, instrument := range instruments {
+		// 只有持仓来自余额的市场（现货）的标的会让基础资产变成受管资产：
+		// 合约标的的持仓在持仓表里，不能让 BTC 合约变成“受管的 BTC 现货”。
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
+			continue
+		}
 		if _, ok := managed[instrument.InstrumentID]; ok {
 			assets[instrument.BaseAsset] = struct{}{}
 		}

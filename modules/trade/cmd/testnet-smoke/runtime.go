@@ -47,7 +47,7 @@ func seedSmokeStore(
 	case err == nil:
 		if existing.SpaceID != smokeSpaceID ||
 			existing.Exchange != string(options.Exchange) ||
-			existing.MarketType != string(exchange.MarketTypeSpot) ||
+			existing.SoleMarket() != string(exchange.MarketTypeSpot) ||
 			existing.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			existing.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			existing.CredentialSecretID != options.SecretID ||
@@ -65,7 +65,7 @@ func seedSmokeStore(
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
 			Name:     "Testnet smoke " + string(options.Exchange),
-			Exchange: string(options.Exchange), MarketType: string(exchange.MarketTypeSpot),
+			Exchange: string(options.Exchange), Markets: []string{string(exchange.MarketTypeSpot)},
 			ExecutionMode:      string(exchange.ExecutionModeLive),
 			Environment:        string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: options.SecretID,
@@ -80,7 +80,6 @@ func seedSmokeStore(
 			SpaceID: smokeSpaceID, LogicalAccountID: identity.LogicalAccountID,
 			Name:            "Testnet smoke " + string(options.Exchange),
 			ExecutionMode:   string(exchange.ExecutionModeLive),
-			MarketType:      string(exchange.MarketTypeSpot),
 			SettlementAsset: "USDT",
 			AutomationState: "PAUSED",
 			PauseReason:     "testnet smoke isolation",
@@ -113,7 +112,6 @@ func validateSmokeLogicalAccount(
 	}
 	if logical.SpaceID != smokeSpaceID ||
 		logical.ExecutionMode != string(exchange.ExecutionModeLive) ||
-		logical.MarketType != string(exchange.MarketTypeSpot) ||
 		logical.SettlementAsset != "USDT" ||
 		logical.AutomationState != "PAUSED" {
 		return errors.New("existing smoke LogicalAccount is not isolated and PAUSED")

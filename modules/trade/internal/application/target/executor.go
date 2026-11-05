@@ -562,7 +562,8 @@ func (e *Executor) loadMembers(
 			return nil, err
 		}
 		instruments := make(map[string]store.InstrumentRecord)
-		symbols := make(map[string]string)
+		// 现货和合约的交易所代码相同（BTCUSDT），按（市场，代码）找标的。
+		symbols := make(map[exchange.SymbolKey]string)
 		for _, instrument := range instrumentRecords {
 			if instrument.Status != "TRADING" && instrument.Status != "live" {
 				continue
@@ -572,12 +573,12 @@ func (e *Executor) loadMembers(
 				continue
 			}
 			instruments[instrument.InstrumentID] = instrument
-			symbols[instrument.ExchangeSymbol] = instrument.InstrumentID
+			symbols[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument.InstrumentID
 		}
 		positions := make(map[string]shared.Decimal)
 		sellable := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
-		if exchange.RuleFor(account.MarketType).PositionFromBalance {
+		if account.HasBalanceMarket() {
 			managed, managedErr := e.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)
 			if managedErr != nil {
 				return nil, managedErr
@@ -613,9 +614,10 @@ func (e *Executor) loadMembers(
 				}
 				sellable[instrumentID] = sellable[instrumentID].Add(available)
 			}
-		} else {
+		}
+		if account.HasPositionMarket() {
 			positionRecords, listErr := e.Store.ListPositions(
-				ctx, spaceID, account.TradingAccountID, "",
+				ctx, spaceID, account.TradingAccountID, exchange.SymbolKey{},
 			)
 			if listErr != nil {
 				return nil, listErr
@@ -628,7 +630,7 @@ func (e *Executor) loadMembers(
 				if quantity.IsZero() {
 					continue
 				}
-				instrumentID := symbols[position.ExchangeSymbol]
+				instrumentID := symbols[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
 				if instrumentID == "" {
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: position.ExchangeSymbol,
@@ -655,7 +657,7 @@ func spotInstrumentID(
 ) (string, bool) {
 	instrumentID := ""
 	for candidateID, instrument := range instruments {
-		if instrument.BaseAsset != asset {
+		if instrument.BaseAsset != asset || !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
 			continue
 		}
 		if instrumentID != "" && instrumentID != candidateID {
@@ -976,7 +978,7 @@ func (e *Executor) placeAction(
 			return placement{}, err
 		}
 		// 合约全平只查最小数量，否则剩余仓位永远平不掉。
-		fullClose := candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).ReduceOnly &&
+		fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
 			quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
 		if belowMinimum && !fullClose {
 			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
@@ -988,7 +990,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, accountID+": "+reason)
 			continue
 		}
-		if candidate.reducing && exchange.RuleFor(candidate.member.account.MarketType).PositionFromBalance {
+		if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).PositionFromBalance {
 			sellable := candidate.member.sellable[candidate.instrument.InstrumentID]
 			if quantity.Cmp(sellable) > 0 {
 				quantity = sellable
@@ -1058,7 +1060,7 @@ func (e *Executor) placeAction(
 			},
 			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
-		spec.PositionSide = exchange.RuleFor(candidate.member.account.MarketType).PositionSide
+		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -1434,7 +1436,7 @@ func (e *Executor) positionUnreflected(
 		if !ok {
 			continue
 		}
-		records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, member.account.TradingAccountID, instrument.ExchangeSymbol, since)
+		records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, member.account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), since)
 		if err != nil {
 			return false, err
 		}
@@ -1493,7 +1495,7 @@ func (e *Executor) crossTargetReversal(
 ) bool {
 	since := e.now().Add(-5 * time.Minute).UnixMilli()
 	records, err := e.Store.RecentFilledOrdersForLane(ctx, spaceID, candidate.member.account.TradingAccountID,
-		candidate.instrument.ExchangeSymbol, since)
+		exchange.NewSymbolKey(candidate.instrument.MarketType, candidate.instrument.ExchangeSymbol), since)
 	if err != nil {
 		return false
 	}
@@ -1506,17 +1508,30 @@ func (e *Executor) crossTargetReversal(
 	return false
 }
 
+// batchMarket 是决定批次额度的市场：开通了合约的账户按合约算（额度更大），否则取第一个市场。
+func batchMarket(account store.TradingAccountRecord) exchange.MarketType {
+	for _, market := range account.Markets {
+		if exchange.RuleFor(market).UsesMargin {
+			return exchange.MarketType(market)
+		}
+	}
+	if len(account.Markets) == 0 {
+		return exchange.MarketTypeUnspecified
+	}
+	return exchange.MarketType(account.Markets[0])
+}
+
 // batchQuota 是每个执行账户本批可下的单数。
 func (e *Executor) batchQuota(members []memberState) map[string]int {
 	quota := make(map[string]int, len(members))
 	for _, member := range members {
 		size := 0
 		if e.BatchSize != nil {
-			size = e.BatchSize(member.account.MarketType)
+			size = e.BatchSize(string(batchMarket(member.account)))
 		}
 		if size <= 0 {
 			size = defaultSwapBatchSize
-			if !exchange.RuleFor(member.account.MarketType).UsesMargin {
+			if !exchange.RuleFor(batchMarket(member.account)).UsesMargin {
 				size = defaultSpotBatchSize
 			}
 		}

@@ -216,11 +216,11 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
-	for _, symbol := range symbols {
+	for _, key := range symbols {
 		rows, cursor, listErr := s.Adapter.ListRecentFills(
 			ctx,
-			shared.ExchangeSymbol(symbol),
-			cursors[symbol],
+			shared.ExchangeSymbol(key.Symbol),
+			cursors[key.String()],
 		)
 		if listErr != nil {
 			return s.disconnect(ctx, listErr)
@@ -230,7 +230,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		}
 		fills = append(fills, rows...)
 		if cursor != "" {
-			cursors[symbol] = cursor
+			cursors[key.String()] = cursor
 		}
 	}
 
@@ -658,7 +658,7 @@ func (s *ExchangeSession) persistInstruments(
 		}
 		for _, instrument := range instruments {
 			if instrument.Exchange != exchange.Exchange(s.Account.Exchange) ||
-				instrument.MarketType != exchange.MarketType(s.Account.MarketType) {
+				!s.Account.SupportsMarket(string(instrument.MarketType)) {
 				return fmt.Errorf("trade runtime: conflicting instrument identity")
 			}
 			if err := tx.UpsertInstrument(store.InstrumentRecord{

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,7 +17,7 @@ func TestCreateOrderPersistsTrustedOwnership(t *testing.T) {
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: "SPOT", SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -198,7 +199,7 @@ func TestRPCQueriesFilterAndPaginateOrdersFillsAndPositions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fills, 1)
 	require.Equal(t, int64(1), fillTotal)
-	positions, err := s.ListPositions(ctx, "space-1", "account-1", "BTCUSDT")
+	positions, err := s.ListPositions(ctx, "space-1", "account-1", exchange.SymbolKey{Market: exchange.MarketTypeSpot, Symbol: "BTCUSDT"})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.False(t, positions[0].UpdatedAt.IsZero())
@@ -566,7 +567,7 @@ func TestUpsertSwapPositionRequiresPositiveLeverageAndAllowsSignedPnL(t *testing
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
-	account.MarketType = "SWAP"
+	account.Markets = []string{"SWAP"}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateTradingAccount(account)
 	}))
@@ -600,7 +601,7 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
-	account.MarketType = "SWAP"
+	account.Markets = []string{"SWAP"}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
@@ -637,14 +638,14 @@ func TestReplacePositionsPreservesNewerPrivateUpdate(t *testing.T) {
 	var found bool
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		var err error
-		btc, found, err = tx.GetPosition("space-1", "account-1", "BTCUSDT", "NET")
+		btc, found, err = tx.GetPosition("space-1", "account-1", exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTCUSDT"}, "NET")
 		return err
 	}))
 	require.True(t, found)
 	require.Equal(t, "2", btc.SignedQuantity)
 	require.Equal(t, int64(1_800), btc.ExchangeUpdatedAt)
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		_, exists, err := tx.GetPosition("space-1", "account-1", "ETHUSDT", "NET")
+		_, exists, err := tx.GetPosition("space-1", "account-1", exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "ETHUSDT"}, "NET")
 		require.False(t, exists)
 		return err
 	}))
@@ -690,7 +691,7 @@ func TestReplacePositionsTombstoneCoversProtectionStart(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	account := testAccount()
-	account.MarketType = "SWAP"
+	account.Markets = []string{"SWAP"}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err

@@ -80,7 +80,7 @@ func (s *ConsoleServer) CreatePaperSimulation(
 		SpaceID: spaceID, AccountName: strings.TrimSpace(req.GetAccountName()),
 		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
 		ControlMode:        controlModeFromPB(req.GetControlMode()),
-		Exchange:           exchangeFromPB(req.GetExchange()), MarketType: marketFromPB(req.GetMarketType()),
+		Exchange:           exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 	})
@@ -275,7 +275,7 @@ func (s *ConsoleServer) ListHoldings(
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if !account.HasBalanceMarket() {
 		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
 	}
 	if s.Holdings != nil {
@@ -321,7 +321,7 @@ func (s *ConsoleServer) ListHoldings(
 func domainAccountForCapabilities(record store.TradingAccountRecord) tradingaccount.Account {
 	value := tradingaccount.Account{
 		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
-		Exchange: exchange.Exchange(record.Exchange), MarketType: exchange.MarketType(record.MarketType),
+		Exchange: exchange.Exchange(record.Exchange), Markets: marketTypes(record.Markets),
 		ExecutionMode: exchange.ExecutionMode(record.ExecutionMode), Environment: exchange.AccountEnvironment(record.Environment),
 		CredentialSecretID: record.CredentialSecretID, SettlementAsset: record.SettlementAsset,
 		MarginMode: exchange.MarginMode(record.MarginMode), Status: exchange.AccountStatus(record.Status), Ready: record.Ready,
@@ -340,6 +340,14 @@ func domainAccountForCapabilities(record store.TradingAccountRecord) tradingacco
 		value.LeverageSettings[key] = decimalValue(raw)
 	}
 	return value
+}
+
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
 }
 
 func decimalValue(raw string) shared.Decimal {

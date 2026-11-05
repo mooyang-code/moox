@@ -266,8 +266,8 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	account, err := fixture.store.GetTradingAccountByID(context.Background(), "account-b")
 	require.NoError(t, err)
 	account.Snapshot.Balances = []store.AssetBalance{
-		{Asset: "USDT", Available: "500", Total: "500"},
-		{Asset: "BTC", Available: "1", Total: "1"},
+		{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"},
+		{Wallet: "UNIFIED", Asset: "BTC", Available: "1", Total: "1"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountSync(

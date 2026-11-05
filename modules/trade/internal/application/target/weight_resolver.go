@@ -202,7 +202,7 @@ func (r *WeightResolver) unmanagedTargetValue(
 		if err != nil {
 			return shared.Zero(), err
 		}
-		if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+		if !account.HasBalanceMarket() {
 			continue
 		}
 		managed, err := r.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)

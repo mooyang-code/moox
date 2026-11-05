@@ -21,7 +21,7 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: "logical-close", Name: "close",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test setup",
 		}); err != nil {
 			return err
@@ -66,7 +66,7 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	require.Equal(t, beforeClose.LastSyncAt, account.LastSyncAt)
 	require.Equal(t, beforeClose.SnapshotSourceTime, account.SnapshotSourceTime)
 	require.Equal(t, "100000", account.Snapshot.AvailableFunds)
-	require.Equal(t, []store.AssetBalance{{Asset: "USDT", Total: "100000", Available: "100000", Locked: "0"}}, account.Snapshot.Balances)
+	require.Equal(t, []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Total: "100000", Available: "100000", Locked: "0", Borrowed: "0"}}, account.Snapshot.Balances)
 	logical, err := f.store.GetLogicalAccount(ctx, testSpace, "logical-close")
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logical.AutomationState)
@@ -161,7 +161,7 @@ func testClosePositionMarkTimestamp(t *testing.T, unknown bool) {
 	_, err := f.orders.Submit(ctx, testSpace, string(placed.ID))
 	require.NoError(t, err)
 	productionPaperMatch(t, f)
-	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, "")
+	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	if unknown {
@@ -231,7 +231,7 @@ func testCloseAfterPositionRefreshFailure(t *testing.T, reduce bool) {
 			return err
 		},
 	}
-	err = matcher.MatchOrder(ctx, candidate, paperexec.Decision{Fill: exchange.Fill{
+	err = matcher.MatchOrder(ctx, candidate, paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: "committed-before-refresh-failure", ExchangeOrderID: candidate.ExchangeOrderID,
 		ClientOrderID: candidate.ClientOrderID, ExchangeSymbol: candidate.ExchangeSymbol,
 		Side: side, PositionSide: exchange.PositionSideNet,
@@ -239,7 +239,7 @@ func testCloseAfterPositionRefreshFailure(t *testing.T, reduce bool) {
 		TradedAt: testNow.Add(time.Second),
 	}})
 	require.ErrorContains(t, err, "public quotes unavailable")
-	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, "")
+	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, wantMargin, positions[0].UsedMargin)

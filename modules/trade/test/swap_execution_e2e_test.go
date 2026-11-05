@@ -42,7 +42,7 @@ func TestSwapNetCrossLeverageReduceOnlyAndRealizedPnL(t *testing.T) {
 	_, err = f.orders.Submit(ctx, testSpace, string(closeOrder.ID))
 	require.NoError(t, err)
 	applyFakeFill(t, f, "long-close", "long-close-fill", "0.006", "51000", "6")
-	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, testSymbol)
+	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: testSymbol})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)
 	require.Equal(t, "0", positions[0].SignedQuantity)
@@ -52,7 +52,7 @@ func TestSwapNetCrossLeverageReduceOnlyAndRealizedPnL(t *testing.T) {
 	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	require.Equal(t, string(exchange.MarginModeCross), account.MarginMode)
-	require.Equal(t, "10", account.LeverageSettings[testSymbol])
+	require.Equal(t, "10", account.LeverageSettings[testInstrumentID(exchange.MarketTypeSwap)])
 	fake.mu.Lock()
 	requests := append([]exchange.OrderRequest(nil), fake.requests...)
 	leverageCalls := append([]leverageCall(nil), fake.leverageCalls...)
@@ -126,7 +126,7 @@ func assertNetPosition(t *testing.T, tradeStore *store.Store, quantity, leverage
 		context.Background(),
 		testSpace,
 		testAccount,
-		testSymbol,
+		exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: testSymbol},
 		string(exchange.PositionSideNet),
 	)
 	require.NoError(t, err)

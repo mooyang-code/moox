@@ -156,7 +156,7 @@ func (s *Service) Place(
 	record := orderRecord(validation, *aggregate)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if validation.Instrument.InstrumentID != "" &&
-			exchange.RuleFor(validation.Account.MarketType).ReduceOnly &&
+			exchange.RuleFor(validation.Instrument.MarketType).ReduceOnly &&
 			spec.ReducePositionOnly {
 			accountRecord, err := tx.GetTradingAccount(validation.Account.SpaceID, spec.TradingAccountID)
 			if err != nil {
@@ -260,7 +260,7 @@ func (s *Service) deriveReducePositionOnly(
 		return spec, err
 	}
 	spec.ReducePositionOnly = false
-	if !exchange.RuleFor(account.MarketType).ReduceOnly {
+	if !exchange.RuleFor(account.MarketForInstrument(spec.InstrumentID)).ReduceOnly {
 		return spec, nil
 	}
 	if s.Validator.Positions == nil {
@@ -874,7 +874,7 @@ func (s *Service) resolveUnknown(
 	// 从已同步的位置往后找，不重新拉全部历史。
 	cursor := ""
 	if account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID); accountErr == nil {
-		cursor = account.FillCursors[record.ExchangeSymbol]
+		cursor = account.FillCursors[exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol).String()]
 	}
 	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), cursor)
 	if fillsErr != nil {
@@ -1080,7 +1080,7 @@ func (s *Service) prepareSubmit(
 		return nil, aggregate, err
 	}
 	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
-		exchange.RuleFor(validation.Account.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
+		exchange.RuleFor(validation.Instrument.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
 		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, record.ExchangeSymbol, validation.Leverage); err != nil {
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
 				return nil, aggregate, err
@@ -1124,7 +1124,7 @@ func (s *Service) prepareSubmit(
 			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
 		}
 		notional := aggregate.Spec.Quantity.Mul(price)
-		if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+		if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
 			validation.ReservedQuantity = notional.Mul(feeRate)
 			if !aggregate.Spec.ReducePositionOnly {
 				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
@@ -1164,7 +1164,7 @@ func (s *Service) prepareSubmit(
 				unreflected = unreflected.Sub(previous)
 			}
 			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-			if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+			if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
 				available = validation.Account.Snapshot.AvailableFunds
 			}
 			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
@@ -1431,7 +1431,7 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		TradingAccountID: value.Spec.TradingAccountID,
 		ClientOrderID:    value.Spec.ClientOrderID,
 		Exchange:         string(validation.Account.Exchange),
-		MarketType:       string(validation.Account.MarketType),
+		MarketType:       string(validation.Instrument.MarketType),
 		InstrumentID:     instrumentID,
 		ExchangeSymbol:   exchangeSymbol,
 		OrderType:        string(value.Spec.Type), TimeInForce: string(value.Spec.FillPolicy),

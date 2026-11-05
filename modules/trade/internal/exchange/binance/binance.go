@@ -38,7 +38,7 @@ type Adapter struct {
 	swap       *httpclient.Client
 
 	mu          sync.RWMutex
-	instruments map[string]exchange.Instrument
+	instruments map[exchange.SymbolKey]exchange.Instrument
 	modeChecked atomic.Bool
 	prices      exchange.PriceBoard
 	books       exchange.BookBoard
@@ -55,7 +55,7 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 		credential:  credential,
 		spot:        spot,
 		swap:        swap,
-		instruments: make(map[string]exchange.Instrument),
+		instruments: make(map[exchange.SymbolKey]exchange.Instrument),
 	}
 }
 
@@ -108,6 +108,19 @@ func privateStreamEndpoint(config exchange.AccountConfig) string {
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
+
+// wallet 是余额所在的钱包：普通账户的现货在现货钱包，合约在合约钱包。
+func (a *Adapter) wallet() exchange.Wallet {
+	if a.config.MarketType == exchange.MarketTypeSwap {
+		return exchange.WalletFutures
+	}
+	return exchange.WalletSpot
+}
+
+// key 返回本适配器所服务市场下的标的键。
+func (a *Adapter) key(symbol string) exchange.SymbolKey {
+	return exchange.SymbolKey{Market: a.config.MarketType, Symbol: symbol}
+}
 
 func (a *Adapter) client() *httpclient.Client {
 	if a.config.MarketType == exchange.MarketTypeSwap {
@@ -256,9 +269,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		out = append(out, instrument)
 	}
 	a.mu.Lock()
-	a.instruments = make(map[string]exchange.Instrument, len(out))
+	a.instruments = make(map[exchange.SymbolKey]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.ExchangeSymbol] = instrument
+		a.instruments[a.key(instrument.ExchangeSymbol)] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -268,7 +281,7 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
-	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
 	}
 	raw, err := a.client().Do(ctx, &httpclient.Request{
@@ -293,7 +306,7 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
 }
 
-func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
+func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.Decimal, error) {
 	raw, err := a.client().Do(ctx, &httpclient.Request{
 		Method: http.MethodGet,
 		Path:   a.path("/api/v3/ticker/price", "/fapi/v1/ticker/price"),
@@ -308,10 +321,10 @@ func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, err
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, typedRejected("decode all prices", err)
 	}
-	prices := make(map[string]shared.Decimal, len(rows))
+	prices := make(map[exchange.SymbolKey]shared.Decimal, len(rows))
 	for _, row := range rows {
 		if price, err := shared.ParseDecimal(row.Price); err == nil {
-			prices[row.Symbol] = price
+			prices[a.key(row.Symbol)] = price
 		}
 	}
 	return prices, nil
@@ -322,7 +335,7 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
-	if book, at, ok := a.books.Get(ctx, symbol.String(), a.allBooks); ok {
+	if book, at, ok := a.books.Get(ctx, a.key(symbol.String()), a.allBooks); ok {
 		return execution.MarketQuote{Bid: book.Bid, Ask: book.Ask, Last: last.Price, SourceTime: at}, nil
 	}
 	raw, err := a.client().Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"), Query: url.Values{"symbol": []string{symbol.String()}}})
@@ -340,7 +353,7 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 }
 
 // allBooks 一次取全市场买一卖一（永续权重 5、现货 4）。
-func (a *Adapter) allBooks(ctx context.Context) (map[string]exchange.Book, error) {
+func (a *Adapter) allBooks(ctx context.Context) (map[exchange.SymbolKey]exchange.Book, error) {
 	raw, err := a.client().Do(ctx, &httpclient.Request{
 		Method: http.MethodGet,
 		Path:   a.path("/api/v3/ticker/bookTicker", "/fapi/v1/ticker/bookTicker"),
@@ -356,9 +369,9 @@ func (a *Adapter) allBooks(ctx context.Context) (map[string]exchange.Book, error
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, typedRejected("decode all books", err)
 	}
-	books := make(map[string]exchange.Book, len(rows))
+	books := make(map[exchange.SymbolKey]exchange.Book, len(rows))
 	for _, row := range rows {
-		books[row.Symbol] = exchange.Book{Bid: parseQuote(row.BidPrice), Ask: parseQuote(row.AskPrice)}
+		books[a.key(row.Symbol)] = exchange.Book{Bid: parseQuote(row.BidPrice), Ask: parseQuote(row.AskPrice)}
 	}
 	return books, nil
 }
@@ -433,7 +446,8 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 				return exchange.AccountSnapshot{}, err
 			}
 			snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-				Asset: balance.Asset, Available: available, Locked: locked, Total: available.Add(locked),
+				Wallet: a.wallet(),
+				Asset:  balance.Asset, Available: available, Locked: locked, Total: available.Add(locked),
 			})
 		}
 		return snapshot, nil
@@ -481,7 +495,8 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			return exchange.AccountSnapshot{}, parseErr
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: balance.Asset, Available: available, Locked: total.Sub(available), Total: total,
+			Wallet: a.wallet(),
+			Asset:  balance.Asset, Available: available, Locked: total.Sub(available), Total: total,
 		})
 	}
 	return snapshot, nil
@@ -559,6 +574,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			continue
 		}
 		position := exchange.Position{
+			Market:           a.config.MarketType,
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -1013,6 +1029,7 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		positionSide = exchange.PositionSideNet
 	}
 	return exchange.Order{
+		Market:          a.config.MarketType,
 		ExchangeOrderID: row.OrderID.String(),
 		ClientOrderID:   row.ClientOrderID,
 		ExchangeSymbol:  row.Symbol,
@@ -1077,6 +1094,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		role = "MAKER"
 	}
 	return exchange.Fill{
+		Market:          a.config.MarketType,
 		ExchangeTradeID: row.ID.String(),
 		ExchangeOrderID: row.OrderID.String(),
 		ExchangeSymbol:  row.Symbol,

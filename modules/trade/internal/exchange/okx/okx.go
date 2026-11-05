@@ -29,7 +29,7 @@ type Adapter struct {
 	client     *httpclient.Client
 
 	mu          sync.RWMutex
-	instruments map[string]exchange.Instrument
+	instruments map[exchange.SymbolKey]exchange.Instrument
 	prices      exchange.PriceBoard
 }
 
@@ -39,7 +39,7 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 	return &Adapter{
 		config: config, credential: credential,
 		client:      client,
-		instruments: make(map[string]exchange.Instrument),
+		instruments: make(map[exchange.SymbolKey]exchange.Instrument),
 	}
 }
 
@@ -52,6 +52,11 @@ func classifyRateLimit(status int, _ []byte) exchange.ErrorKind {
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
+
+// key 返回本适配器所服务市场下的标的键。
+func (a *Adapter) key(symbol string) exchange.SymbolKey {
+	return exchange.SymbolKey{Market: a.config.MarketType, Symbol: symbol}
+}
 
 // RateStatus 返回限流状态。OKX 没有权重响应头，只有暂停信息。
 func (a *Adapter) RateStatus() exchange.RateStatus {
@@ -262,9 +267,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		out = append(out, instrument)
 	}
 	a.mu.Lock()
-	a.instruments = make(map[string]exchange.Instrument, len(out))
+	a.instruments = make(map[exchange.SymbolKey]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.ExchangeSymbol] = instrument
+		a.instruments[a.key(instrument.ExchangeSymbol)] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -274,7 +279,7 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	symbol string,
 ) (exchange.ReferencePrice, error) {
-	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
 	}
 	data, err := a.request(
@@ -302,7 +307,7 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
 }
 
-func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
+func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.Decimal, error) {
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.MarketType)}}, nil, false)
 	if err != nil {
 		return nil, err
@@ -314,10 +319,10 @@ func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, err
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, rejected("decode all prices", err)
 	}
-	prices := make(map[string]shared.Decimal, len(rows))
+	prices := make(map[exchange.SymbolKey]shared.Decimal, len(rows))
 	for _, row := range rows {
 		if price, err := shared.ParseDecimal(row.Last); err == nil {
-			prices[row.InstID] = price
+			prices[a.key(row.InstID)] = price
 		}
 	}
 	return prices, nil
@@ -349,7 +354,7 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 	a.mu.RLock()
-	instrument, ok := a.instruments[symbol]
+	instrument, ok := a.instruments[a.key(symbol)]
 	a.mu.RUnlock()
 	if !ok {
 		return exchange.Instrument{}, &exchange.Error{
@@ -459,7 +464,8 @@ func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot
 			return exchange.AccountSnapshot{}, err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
+			Wallet: exchange.WalletUnified,
+			Asset:  detail.Ccy, Available: available, Locked: locked, Total: total,
 		})
 		if !strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
 			continue
@@ -546,6 +552,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			return nil, err
 		}
 		position := exchange.Position{
+			Market:           a.config.MarketType,
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -726,6 +733,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), true)
 	}
 	return exchange.Order{
+		Market:          a.config.MarketType,
 		ExchangeOrderID: payload[0].OrdID,
 		ClientOrderID:   request.ClientOrderID,
 		ExchangeSymbol:  request.ExchangeSymbol,
@@ -763,6 +771,7 @@ func (a *Adapter) CancelOrder(
 	// 回执只说明撤单已受理；最终状态和可能抢先发生的成交由调用方撤单后的同步拿到，这里不再追查订单：
 	// 追查失败会被当成撤单没发出而重发。
 	return exchange.Order{
+		Market:          a.config.MarketType,
 		ExchangeOrderID: payload[0].OrdID, ClientOrderID: clientOrderID, ExchangeSymbol: symbolValue,
 	}, nil
 }
@@ -968,6 +977,7 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 		limitPrice = &price
 	}
 	return exchange.Order{
+		Market:          a.config.MarketType,
 		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
 		ExchangeSymbol: row.InstID, OrderType: orderType, TimeInForce: tif,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
@@ -1016,6 +1026,7 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 		positionSide = exchange.PositionSideNet
 	}
 	return exchange.Fill{
+		Market:          a.config.MarketType,
 		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
 		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,

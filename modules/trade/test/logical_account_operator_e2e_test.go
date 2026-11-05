@@ -106,7 +106,7 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
 			Name:            "E2E swap logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

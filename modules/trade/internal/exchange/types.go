@@ -52,6 +52,19 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 	}
 }
 
+// MarketOfInstrumentID 由 Trade 内部标的 ID 推导所属市场：加密货币带 -SPOT、-SWAP 后缀，
+// 其余（股票）是原始代码。
+func MarketOfInstrumentID(instrumentID string) MarketType {
+	switch {
+	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSwap)):
+		return MarketTypeSwap
+	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSpot)):
+		return MarketTypeSpot
+	default:
+		return MarketTypeStock
+	}
+}
+
 // Exchange 指交易场所，可以是交易所，也可以是券商。
 type Exchange string
 
@@ -78,6 +91,42 @@ const (
 func (m MarketType) Valid() bool {
 	_, ok := marketRules[m]
 	return ok
+}
+
+// AccountMode 是加密货币实盘账户的类型，只由交易所检测写入；模拟盘和股票账户没有。
+type AccountMode string
+
+const (
+	AccountModeUnspecified            AccountMode = ""
+	AccountModeBinancePortfolioMargin AccountMode = "BINANCE_PORTFOLIO_MARGIN"
+	AccountModeBinanceStandard        AccountMode = "BINANCE_STANDARD"
+	AccountModeOKXUnified             AccountMode = "OKX_UNIFIED"
+)
+
+// Valid 允许空值：账户类型在检测之前、以及模拟盘和股票账户上都是空串。
+func (m AccountMode) Valid() bool {
+	switch m {
+	case AccountModeUnspecified, AccountModeBinancePortfolioMargin, AccountModeBinanceStandard, AccountModeOKXUnified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Wallet 是余额所在的钱包。币安普通账户有现货、合约两个钱包，统一账户有杠杆、统一两个钱包，
+// OKX 和模拟盘只有一个统一钱包。
+type Wallet string
+
+const (
+	WalletUnspecified Wallet = ""
+	WalletSpot        Wallet = "SPOT"
+	WalletFutures     Wallet = "FUTURES"
+	WalletMargin      Wallet = "MARGIN"
+	WalletUnified     Wallet = "UNIFIED"
+)
+
+func (w Wallet) Valid() bool {
+	return w == WalletSpot || w == WalletFutures || w == WalletMargin || w == WalletUnified
 }
 
 type ExecutionMode string
@@ -234,10 +283,13 @@ type Instrument struct {
 }
 
 type AssetBalance struct {
+	Wallet    Wallet
 	Asset     string
 	Available shared.Decimal
 	Locked    shared.Decimal
 	Total     shared.Decimal
+	// Borrowed 是借款（统一账户的杠杆钱包），没有借款的钱包为零。
+	Borrowed shared.Decimal
 }
 
 type AccountSnapshot struct {
@@ -247,6 +299,8 @@ type AccountSnapshot struct {
 	UsedMargin        shared.Decimal
 	MaintenanceMargin shared.Decimal
 	UnrealizedPnL     shared.Decimal
+	// ExchangeEquity 是交易所给的总权益，只用于展示核对，不参与换算。
+	ExchangeEquity    shared.Decimal
 	ExchangeUpdatedAt time.Time
 	Present           AccountSnapshotPresence
 	RequiresSync      bool
@@ -263,6 +317,7 @@ type AccountSnapshotPresence struct {
 
 type Position struct {
 	TradingAccountID  string
+	Market            MarketType
 	InstrumentID      string
 	ExchangeSymbol    string
 	PositionSide      PositionSide
@@ -302,6 +357,7 @@ func (r OrderRequest) NativeTimeInForce() TimeInForce {
 type Order struct {
 	ExchangeOrderID string
 	ClientOrderID   string
+	Market          MarketType
 	ExchangeSymbol  string
 	OrderType       OrderType
 	TimeInForce     TimeInForce
@@ -321,6 +377,7 @@ type Fill struct {
 	ExchangeTradeID string
 	ExchangeOrderID string
 	ClientOrderID   string
+	Market          MarketType
 	ExchangeSymbol  string
 	Side            Side
 	PositionSide    PositionSide

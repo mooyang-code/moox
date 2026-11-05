@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -127,7 +128,7 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	}
 	current := store.TradingAccountRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.ID,
-		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
+		Exchange: string(account.Exchange), Markets: marketStrings(account.Markets),
 		ExecutionMode:      string(account.ExecutionMode),
 		Environment:        environment,
 		CredentialSecretID: account.CredentialSecretID,
@@ -328,6 +329,14 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	return nil
 }
 
+func marketStrings(markets []exchange.MarketType) []string {
+	result := make([]string, len(markets))
+	for i, market := range markets {
+		result[i] = string(market)
+	}
+	return result
+}
+
 func sameSessionConfig(
 	left store.TradingAccountRecord,
 	right store.TradingAccountRecord,
@@ -335,7 +344,7 @@ func sameSessionConfig(
 	return left.SpaceID == right.SpaceID &&
 		left.TradingAccountID == right.TradingAccountID &&
 		left.Exchange == right.Exchange &&
-		left.MarketType == right.MarketType &&
+		slices.Equal(left.Markets, right.Markets) &&
 		left.ExecutionMode == right.ExecutionMode &&
 		left.Environment == right.Environment &&
 		left.CredentialSecretID == right.CredentialSecretID &&

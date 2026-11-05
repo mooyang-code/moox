@@ -99,7 +99,7 @@ func openOKXReplayStore(t *testing.T) *store.Store {
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "replay", Exchange: "OKX", MarketType: "SPOT",
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "replay", Exchange: "OKX", Markets: []string{"SPOT"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "unused", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err
@@ -132,7 +132,7 @@ func TestFillRejectsMissingExecutionTimeInsteadOfUsingGeneratedTime(t *testing.T
 
 func TestOrdersChannelUsesPerFillFee(t *testing.T) {
 	adapter := swapAdapter("http://unused")
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	h := &handler{}
 	for i := 1; i <= 2; i++ {
 		err := adapter.dispatchPrivate(context.Background(), []byte(fmt.Sprintf(`{
@@ -215,7 +215,7 @@ func (*handler) OnAccountSnapshot(context.Context, exchange.AccountSnapshot) err
 
 func TestDispatchPrivateConvertsSwapFill(t *testing.T) {
 	adapter := swapAdapter("http://unused")
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	handler := &handler{}
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"arg":{"channel":"orders"},
@@ -406,7 +406,7 @@ func TestDispatchPrivateIgnoresSubscriptionAcknowledgement(t *testing.T) {
 
 func TestDispatchPrivateRejectsMalformedPositionDecimal(t *testing.T) {
 	adapter := swapAdapter("http://unused")
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"arg":{"channel":"positions"},
 		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","mgnMode":"cross","pos":"1",
@@ -419,7 +419,7 @@ func TestDispatchPrivateRejectsMalformedPositionDecimal(t *testing.T) {
 
 func TestDispatchPrivatePositionRequiresCrossAndUsesIMR(t *testing.T) {
 	adapter := swapAdapter("http://unused")
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	recording := &handler{}
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"arg":{"channel":"positions"},

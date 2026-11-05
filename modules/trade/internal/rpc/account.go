@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
@@ -37,19 +38,21 @@ func (h *AccountServer) CreateTradingAccount(
 	if err := validatePB(req); err != nil {
 		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	marginMode := exchange.MarginMode(normalized(req.GetMarginMode()))
-	if req.GetMarketType() == tradepb.MarketType_MARKET_TYPE_SPOT {
-		marginMode = exchange.MarginModeUnspecified
+	markets, err := exchange.NormalizeMarkets(marketsFromPB(req.GetMarkets()))
+	if err != nil {
+		return &tradepb.CreateTradingAccountRsp{RetInfo: invalidInfo(err)}, nil
 	}
-	// 决策 D5：合约账户默认 1 倍杠杆，单标的配置优先。
+	// 决策 D5：开通合约的账户默认 1 倍杠杆，单标的配置优先；SWAP 一律全仓。
+	marginMode := exchange.MarginModeUnspecified
 	leverageSettings := map[string]shared.Decimal{}
-	if req.GetMarketType() == tradepb.MarketType_MARKET_TYPE_SWAP {
+	if slices.Contains(markets, exchange.MarketTypeSwap) {
 		leverageSettings[store.DefaultLeverageKey] = shared.MustDecimal("1")
+		marginMode = exchange.MarginModeCross
 	}
 	value := tradingaccount.Account{
 		ID: h.accountID(), SpaceID: spaceID, Name: strings.TrimSpace(req.GetName()),
 		Exchange:           exchangeFromPB(req.GetExchange()),
-		MarketType:         marketFromPB(req.GetMarketType()),
+		Markets:            markets,
 		ExecutionMode:      exchange.ExecutionModeLive,
 		Environment:        environmentFromPB(req.GetLive().GetEnvironment()),
 		CredentialSecretID: strings.TrimSpace(req.GetLive().GetCredentialSecretId()),
@@ -140,7 +143,7 @@ func (h *AccountServer) ListTradingAccounts(
 		if req.Exchange != nil && record.Exchange != string(exchangeFromPB(req.GetExchange())) {
 			continue
 		}
-		if req.MarketType != nil && record.MarketType != string(marketFromPB(req.GetMarketType())) {
+		if req.MarketType != nil && !record.SupportsMarket(string(marketFromPB(req.GetMarketType()))) {
 			continue
 		}
 		if req.ExecutionMode != nil &&
@@ -186,23 +189,26 @@ func (h *AccountServer) SetLeverage(
 	}
 	leverage, err := shared.ParseDecimal(req.GetLeverage())
 	if err == nil {
-		var account store.TradingAccountRecord
-		account, err = h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
-		symbol := store.DefaultLeverageKey
+		if _, err = h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+			return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err)}, nil
+		}
+		// 杠杆键是内部标的 ID（账户默认杠杆是 "*"）；会话要的是交易所代码。
+		leverageKey, symbol := store.DefaultLeverageKey, store.DefaultLeverageKey
 		if req.GetInstrumentId() != store.DefaultLeverageKey {
 			instrumentID := ""
 			if err == nil {
-				instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketType(account.MarketType))
+				// 杠杆只对合约生效，按合约市场标准化标的 ID。
+				instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketTypeSwap)
 			}
 			if err != nil {
 				return &tradepb.SetLeverageRsp{RetInfo: instrumentErrorInfo(err)}, nil
 			}
 			var instrument store.InstrumentRecord
 			instrument, err = h.Store.GetInstrumentByIDForAccount(ctx, spaceID, req.GetTradingAccountId(), instrumentID)
-			symbol = instrument.ExchangeSymbol
+			leverageKey, symbol = instrument.InstrumentID, instrument.ExchangeSymbol
 		}
 		if err == nil {
-			err = h.Accounts.SetLeverage(ctx, req.GetTradingAccountId(), symbol, leverage)
+			err = h.Accounts.SetLeverage(ctx, req.GetTradingAccountId(), leverageKey, symbol, leverage)
 		}
 	}
 	record, getErr := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())

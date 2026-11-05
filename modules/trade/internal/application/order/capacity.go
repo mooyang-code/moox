@@ -61,7 +61,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 		quantity = minCapacity(quantity, s.Validator.MaxChildNotional.Div(spec.ReferencePrice))
 	}
 	step, minimum := validation.Instrument.ExchangeQuantityStep, validation.Instrument.MinExchangeQuantity
-	if exchange.RuleFor(validation.Account.MarketType).ContractValue {
+	if exchange.RuleFor(validation.Instrument.MarketType).ContractValue {
 		step = step.Mul(validation.Instrument.ContractValue)
 		minimum = minimum.Mul(validation.Instrument.ContractValue)
 	}
@@ -106,7 +106,7 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		return shared.Zero(), err
 	}
 	available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-	if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+	if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
 		available = validation.Account.Snapshot.AvailableFunds
 	}
 	return available.Sub(unreflected), nil

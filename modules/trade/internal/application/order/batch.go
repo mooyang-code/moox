@@ -186,10 +186,10 @@ func (s *Service) prepareSymbolConfigs(ctx context.Context, records []store.Orde
 		}
 		account, err := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
 		if err != nil || exchange.ExecutionMode(account.ExecutionMode) != exchange.ExecutionModeLive ||
-			!exchange.RuleFor(account.MarketType).Leverage {
+			!exchange.RuleFor(record.MarketType).Leverage {
 			continue
 		}
-		leverage, ok := configuredLeverage(account, record.InstrumentID, record.ExchangeSymbol)
+		leverage, ok := configuredLeverage(account, record.InstrumentID)
 		if !ok {
 			continue
 		}
@@ -202,9 +202,9 @@ func (s *Service) prepareSymbolConfigs(ctx context.Context, records []store.Orde
 	wg.Wait()
 }
 
-// configuredLeverage 按标的 ID、交易所代码、默认值的顺序取账户配置的杠杆，和下单校验一致。
-func configuredLeverage(account store.TradingAccountRecord, instrumentID, symbol string) (shared.Decimal, bool) {
-	for _, key := range []string{instrumentID, symbol, store.DefaultLeverageKey} {
+// configuredLeverage 按标的 ID、默认值的顺序取账户配置的杠杆，和下单校验一致。
+func configuredLeverage(account store.TradingAccountRecord, instrumentID string) (shared.Decimal, bool) {
+	for _, key := range []string{instrumentID, store.DefaultLeverageKey} {
 		if raw, ok := account.LeverageSettings[key]; ok && raw != "" {
 			leverage, err := shared.ParseDecimal(raw)
 			if err == nil && leverage.Cmp(shared.Zero()) > 0 {

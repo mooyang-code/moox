@@ -208,7 +208,7 @@ func TestPaperMarginSnapshotErrorBoundary(t *testing.T) {
 			snapshotErr = paper.InfrastructureError{Err: cause}
 		}
 		s.Adapters = errorBoundarySource{adapter: errorBoundarySnapshotAdapter{adapterStub: adapter, err: snapshotErr}}
-		_, err := s.paperMarginAdjustment(context.Background(), Validation{Account: account})
+		_, err := s.paperMarginAdjustment(context.Background(), Validation{Account: account, Instrument: exchange.Instrument{MarketType: exchange.MarketTypeSwap}})
 		require.ErrorIs(t, err, cause)
 		var accountErr *AccountExecutionError
 		if infrastructure {

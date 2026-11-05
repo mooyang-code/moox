@@ -884,7 +884,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: string(market), SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -915,7 +915,7 @@ func (f *targetFixture) account(
 ) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: exchangeName, MarketType: string(f.market),
+		Exchange: exchangeName, Markets: []string{string(f.market)},
 		ExecutionMode: "PAPER", Environment: "PAPER",
 		SettlementAsset: "USDT", MarginMode: map[bool]string{
 			true: "CROSS", false: "",
@@ -926,7 +926,7 @@ func (f *targetFixture) account(
 		},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "100000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "100000", Total: "100000",
 			}},
 		},
@@ -1025,7 +1025,7 @@ func (f *targetFixture) setBalance(
 	t.Helper()
 	account, err := f.store.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
-	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{
+	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{Wallet: "UNIFIED",
 		Asset: asset, Available: total, Total: total,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {

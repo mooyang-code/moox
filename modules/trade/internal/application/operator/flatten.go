@@ -490,14 +490,18 @@ func (s *Service) flattenAccount(
 		result.quotes = nil
 		reasons := make(map[string]flattenReason)
 		switch {
-		case !exchange.MarketType(account.MarketType).Valid():
-			result.addError(flattenFinal{errors.New("不支持的市场类型 " + account.MarketType)})
+		case len(account.Markets) == 0:
+			result.addError(flattenFinal{errors.New("账户没有开通任何市场")})
 		case !execution.InTradingSession(s.Exchanges, account.Exchange, time.Now()):
 			result.addError(flattenFinal{errors.New("当前不在交易时段")})
-		case exchange.RuleFor(account.MarketType).PositionFromBalance:
-			s.flattenSpot(ctx, command, account, &result, reasons)
 		default:
-			s.flattenSwap(ctx, command, account, &result, reasons)
+			// 持仓来自余额的市场（现货、股票）和来自持仓表的市场（合约）各清各的。
+			if account.HasBalanceMarket() {
+				s.flattenSpot(ctx, command, account, &result, reasons)
+			}
+			if account.HasPositionMarket() {
+				s.flattenSwap(ctx, command, account, &result, reasons)
+			}
 		}
 		if ctx.Err() != nil {
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_deadline", Err: ctx.Err()})
@@ -703,7 +707,7 @@ func (s *Service) flattenSwap(
 	reasons map[string]flattenReason,
 ) {
 	positions, err := s.Store.ListPositions(
-		ctx, command.SpaceID, account.TradingAccountID, "",
+		ctx, command.SpaceID, account.TradingAccountID, exchange.SymbolKey{},
 	)
 	if err != nil {
 		result.addError(err)
@@ -714,10 +718,10 @@ func (s *Service) flattenSwap(
 		result.addError(err)
 		return
 	}
-	bySymbol := make(map[string]store.InstrumentRecord, len(instruments))
+	bySymbol := make(map[exchange.SymbolKey]store.InstrumentRecord, len(instruments))
 	for _, instrument := range instruments {
 		if exposure.Tradable(instrument, account.SettlementAsset) {
-			bySymbol[instrument.ExchangeSymbol] = instrument
+			bySymbol[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument
 		}
 	}
 	for _, position := range positions {
@@ -729,7 +733,7 @@ func (s *Service) flattenSwap(
 		if quantity.IsZero() {
 			continue
 		}
-		instrument, found := bySymbol[position.ExchangeSymbol]
+		instrument, found := bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
 		if !found {
 			reasons[position.ExchangeSymbol] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
 			continue
@@ -882,7 +886,7 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	)
 	existing, found, err := s.flattenChild(
 		ctx, command.SpaceID, account.TradingAccountID,
-		command.ActionID, instrument.ExchangeSymbol, clientOrderID,
+		command.ActionID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), clientOrderID,
 	)
 	if err != nil {
 		return err
@@ -921,13 +925,13 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 			Side: side, Quantity: quantity,
 		},
 		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-		ReducePositionOnly: exchange.RuleFor(account.MarketType).ReduceOnly,
+		ReducePositionOnly: exchange.RuleFor(instrument.MarketType).ReduceOnly,
 		Owner: orderdomain.OrderOwner{
 			Type: orderdomain.OwnerOperator, OwnerID: command.ActionID,
 			LogicalAccountID: command.LogicalAccountID,
 		},
 	}
-	spec.PositionSide = exchange.RuleFor(account.MarketType).PositionSide
+	spec.PositionSide = exchange.RuleFor(instrument.MarketType).PositionSide
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
 	if err != nil {
 		// 资金不足（预留不足时也返回它）和只减仓被拒可能只是持仓、余额还没同步，按可重试处理。
@@ -949,11 +953,11 @@ func (s *Service) flattenChild(
 	spaceID string,
 	tradingAccountID string,
 	actionID string,
-	symbol string,
+	key exchange.SymbolKey,
 	clientOrderID string,
 ) (store.OrderRecord, bool, error) {
 	records, err := s.Store.ListOrdersForLane(
-		ctx, spaceID, tradingAccountID, symbol,
+		ctx, spaceID, tradingAccountID, key,
 	)
 	if err != nil {
 		return store.OrderRecord{}, false, err
@@ -974,7 +978,7 @@ func (s *Service) flattenChild(
 	}
 	if len(active) > 1 {
 		return store.OrderRecord{}, false,
-			fmt.Errorf("multiple active flatten children exist for %s", symbol)
+			fmt.Errorf("multiple active flatten children exist for %s", key)
 	}
 	if len(active) == 1 {
 		return active[0], true, nil
@@ -1002,9 +1006,9 @@ func (s *Service) remainingForAccount(
 		}}
 	}
 	var remaining []RemainingPosition
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasPositionMarket() {
 		positions, listErr := s.Store.ListPositions(
-			ctx, spaceID, tradingAccountID, "",
+			ctx, spaceID, tradingAccountID, exchange.SymbolKey{},
 		)
 		if listErr != nil {
 			result.addError(listErr)
@@ -1030,7 +1034,8 @@ func (s *Service) remainingForAccount(
 				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason.text, final: reason.final,
 			})
 		}
-	} else {
+	}
+	if account.HasBalanceMarket() {
 		managed, managedErr := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
 		if managedErr != nil {
 			result.addError(managedErr)

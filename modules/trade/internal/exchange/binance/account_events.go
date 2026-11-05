@@ -388,6 +388,7 @@ func (a *Adapter) dispatchPrivate(
 		positionSide = exchange.PositionSideNet
 	}
 	return handler.OnFill(ctx, exchange.Fill{
+		Market:          a.config.MarketType,
 		ExchangeTradeID: order.tradeID,
 		ExchangeOrderID: order.payload.OrderID.String(),
 		ClientOrderID:   order.payload.ClientOrderID,
@@ -543,7 +544,8 @@ func (a *Adapter) dispatchFuturesAccount(
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: asset, Available: available, Locked: total.Sub(available), Total: total,
+			Wallet: a.wallet(),
+			Asset:  asset, Available: available, Locked: total.Sub(available), Total: total,
 		})
 	}
 	if err := handler.OnAccountSnapshot(ctx, snapshot); err != nil {
@@ -569,6 +571,7 @@ func (a *Adapter) dispatchFuturesAccount(
 			return err
 		}
 		position := exchange.Position{
+			Market:           a.config.MarketType,
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -621,7 +624,8 @@ func (a *Adapter) dispatchSpotAccount(
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: asset, Available: available, Locked: lockedValue,
+			Wallet: a.wallet(),
+			Asset:  asset, Available: available, Locked: lockedValue,
 			Total: available.Add(lockedValue),
 		})
 	}

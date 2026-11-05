@@ -96,7 +96,7 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 
 	fake.mu.Lock()
 	fake.placeErr = nil
-	fake.orders[command.ClientOrderID] = exchange.Order{
+	fake.orders[command.ClientOrderID] = exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "accepted-manual-response-lost", ClientOrderID: command.ClientOrderID,
 		ExchangeSymbol: testSymbol, OrderType: command.Type, Side: command.Side,
 		PositionSide: command.PositionSide, Quantity: command.Quantity,

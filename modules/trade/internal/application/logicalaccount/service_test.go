@@ -499,8 +499,8 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "LIVE",
-			MarketType:    "SWAP", SettlementAsset: "USDT",
+			ExecutionMode:   "LIVE",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -533,14 +533,14 @@ func (noopAccountSyncer) SyncAccount(context.Context, string) error { return nil
 func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: "BINANCE", MarketType: "SWAP",
-		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1",
+		Exchange: "BINANCE", Markets: []string{"SWAP"},
+		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-" + id,
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,
 		LeverageSettings: store.LeverageSettings{"BTCUSDT": "5"},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "1000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "1000", Total: "1000",
 			}},
 		},
@@ -666,7 +666,7 @@ func TestAddMemberRejectsAccountOwnedByAnotherGroupBeforeSync(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other",
-			ExecutionMode: "LIVE", MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))

@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
+	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -20,13 +22,14 @@ type CreateCommand struct {
 	AccountName        string
 	LogicalAccountName string
 	Exchange           exchange.Exchange
-	MarketType         exchange.MarketType
-	SettlementAsset    string
-	MarginMode         exchange.MarginMode
-	InitialBalance     shared.Decimal
-	MakerFeeRate       shared.Decimal
-	TakerFeeRate       shared.Decimal
-	SlippageBPS        shared.Decimal
+	// Markets 是模拟账户开通的市场集合：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
+	Markets         []exchange.MarketType
+	SettlementAsset string
+	MarginMode      exchange.MarginMode
+	InitialBalance  shared.Decimal
+	MakerFeeRate    shared.Decimal
+	TakerFeeRate    shared.Decimal
+	SlippageBPS     shared.Decimal
 }
 
 type Result struct {
@@ -45,26 +48,37 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	command.SettlementAsset = strings.ToUpper(strings.TrimSpace(command.SettlementAsset))
 	command.MarginMode = exchange.MarginMode(strings.ToUpper(strings.TrimSpace(string(command.MarginMode))))
 	if command.SpaceID == "" || command.AccountName == "" ||
-		!command.Exchange.Valid() || !command.MarketType.Valid() || command.SettlementAsset == "" {
+		!command.Exchange.Valid() || command.SettlementAsset == "" {
 		return Result{}, fmt.Errorf("paper simulation: incomplete create command")
 	}
-	if !exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified {
-		return Result{}, fmt.Errorf("paper simulation: SPOT cannot configure margin mode")
+	markets, err := exchange.NormalizeMarkets(command.Markets)
+	if err != nil {
+		return Result{}, fmt.Errorf("paper simulation: %w", err)
 	}
-	if exchange.RuleFor(command.MarketType).Leverage && command.SettlementAsset != "USDT" {
+	// 适配器和会话要等改成按标的所属市场工作后，模拟盘才能同时开通多个市场。
+	if len(markets) != 1 {
+		return Result{}, fmt.Errorf("paper simulation: %w", accountapp.ErrMultiMarketUnsupported)
+	}
+	hasLeverage := slices.ContainsFunc(markets, func(market exchange.MarketType) bool {
+		return exchange.RuleFor(market).Leverage
+	})
+	if !hasLeverage && command.MarginMode != exchange.MarginModeUnspecified {
+		return Result{}, fmt.Errorf("paper simulation: 没有开通 SWAP 的账户不能配置保证金模式")
+	}
+	if hasLeverage && command.SettlementAsset != "USDT" {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires USDT settlement")
 	}
-	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
+	if hasLeverage && command.MarginMode != exchange.MarginModeUnspecified && command.MarginMode != exchange.MarginModeCross {
 		return Result{}, fmt.Errorf("paper simulation: SWAP requires CROSS margin mode")
 	}
 	if command.InitialBalance.Cmp(shared.Zero()) <= 0 {
 		return Result{}, fmt.Errorf("paper simulation: initial balance must be positive")
 	}
-	if exchange.RuleFor(command.MarketType).Leverage && command.MarginMode == exchange.MarginModeUnspecified {
+	if hasLeverage && command.MarginMode == exchange.MarginModeUnspecified {
 		command.MarginMode = exchange.MarginModeCross
 	}
 	leverageSettings := store.LeverageSettings{}
-	if exchange.RuleFor(command.MarketType).Leverage {
+	if hasLeverage {
 		// The simulation form has no instrument-specific leverage yet. Persist a
 		// conservative wildcard so reservation, matching and Fill reduction use
 		// the same 1x value after restart.
@@ -73,12 +87,12 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	accountID, logicalID := stableIDs(command.SpaceID, command.AccountName, command.LogicalAccountName)
 	account := store.TradingAccountRecord{
 		SpaceID: command.SpaceID, TradingAccountID: accountID, Name: command.AccountName,
-		Exchange: string(command.Exchange), MarketType: string(command.MarketType),
+		Exchange: string(command.Exchange), Markets: marketStrings(markets),
 		ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: command.SettlementAsset,
 		MarginMode: string(command.MarginMode), Status: "ENABLED", Ready: false,
 		LeverageSettings: leverageSettings,
 		Snapshot: store.TradingAccountSnapshot{
-			Balances: []store.AssetBalance{{Asset: command.SettlementAsset, Available: command.InitialBalance.String(), Total: command.InitialBalance.String()}},
+			Balances: []store.AssetBalance{{Wallet: string(exchange.WalletUnified), Asset: command.SettlementAsset, Available: command.InitialBalance.String(), Total: command.InitialBalance.String(), Borrowed: "0"}},
 			Equity:   command.InitialBalance.String(), AvailableFunds: command.InitialBalance.String(),
 			ExchangeUpdatedAt: 1,
 		},
@@ -99,13 +113,13 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	logical := store.LogicalAccountRecord{
 		ControlMode: command.ControlMode,
 		SpaceID:     command.SpaceID, LogicalAccountID: logicalID, Name: command.LogicalAccountName,
-		ExecutionMode: "PAPER", MarketType: string(command.MarketType), SettlementAsset: command.SettlementAsset,
+		ExecutionMode: "PAPER", SettlementAsset: command.SettlementAsset,
 		AutomationState: "PAUSED", PauseReason: "paper simulation created",
 	}
 	if logical.ControlMode == "" {
 		logical.ControlMode = "STRATEGY"
 	}
-	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
 		}
@@ -153,6 +167,14 @@ func (s *Service) Close(ctx context.Context, spaceID, accountID string) error {
 		}
 		return tx.ClosePaperSimulation(spaceID, accountID)
 	})
+}
+
+func marketStrings(markets []exchange.MarketType) []string {
+	result := make([]string, len(markets))
+	for i, market := range markets {
+		result[i] = string(market)
+	}
+	return result
 }
 
 func stableIDs(spaceID, accountName, logicalName string) (string, string) {

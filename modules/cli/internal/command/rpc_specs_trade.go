@@ -13,7 +13,7 @@ func init() {
 
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"trade", "account", "list"}, Short: "列出交易账户", Service: tradeConsole, Method: "ListTradingAccounts", Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("exchange", "exchange", "按交易所过滤"), strFlag("market-type", "market_type", "按市场类型过滤"), strFlag("execution-mode", "execution_mode", "按执行模式过滤"), strFlag("status", "status", "按状态过滤")}},
+			Flags: []rpcFlag{strFlag("exchange", "exchange", "按交易所过滤"), strFlag("market-type", "market_type", "按已开通的市场过滤（SPOT、SWAP、STOCK）"), strFlag("execution-mode", "execution_mode", "按执行模式过滤"), strFlag("status", "status", "按状态过滤")}},
 		rpcSpec{Path: []string{"trade", "account", "show"}, Short: "查看交易账户", Service: tradeConsole, Method: "GetTradingAccount",
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
 		rpcSpec{Path: []string{"trade", "logical", "list"}, Short: "列出逻辑账户", Service: tradeConsole, Method: "ListLogicalAccounts", Page: rpcPageSize},

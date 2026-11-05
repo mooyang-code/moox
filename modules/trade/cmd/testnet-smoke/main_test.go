@@ -205,7 +205,7 @@ func TestSeedSmokeStoreCreatesOnlyTestnetLiveSpotAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if account.Environment != "TESTNET" || account.ExecutionMode != "LIVE" ||
-		account.MarketType != "SPOT" || account.CredentialSecretID != options.SecretID {
+		account.SoleMarket() != "SPOT" || account.CredentialSecretID != options.SecretID {
 		t.Fatalf("account = %+v", account)
 	}
 	logical, err := database.GetLogicalAccount(ctx, smokeSpaceID, identity.LogicalAccountID)
@@ -241,7 +241,7 @@ func TestSeedSmokeStoreRejectsExistingNonTestnetAccount(t *testing.T) {
 	if err := database.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
-			Name: "bad", Exchange: "BINANCE", MarketType: "SPOT",
+			Name: "bad", Exchange: "BINANCE", Markets: []string{"SPOT"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION",
 			CredentialSecretID: options.SecretID, SettlementAsset: "USDT",
 			Status: "ENABLED"})
@@ -294,7 +294,7 @@ func TestValidateQueriedOrderRequiresStableClientAndExchangeIdentity(t *testing.
 		ClientOrderID: "cid", OrderID: "oid",
 		ExchangeOrderID: "eid",
 	}
-	order := exchange.Order{
+	order := exchange.Order{Market: exchange.MarketTypeSwap,
 		ClientOrderID: "cid", ExchangeOrderID: "eid", ExchangeSymbol: "BTCUSDT",
 		Status: exchange.OrderStatusOpen,
 	}

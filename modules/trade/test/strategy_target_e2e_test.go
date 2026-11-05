@@ -249,7 +249,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
 			Name:            "E2E logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: account.ExecutionMode, MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: account.ExecutionMode, SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

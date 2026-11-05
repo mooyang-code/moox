@@ -56,7 +56,7 @@ func (x *stressExchange) GetAccountSnapshot(context.Context) (exchange.AccountSn
 	x.calls["account"]++
 	x.mu.Unlock()
 	return exchange.AccountSnapshot{
-		Balances:       []exchange.AssetBalance{{Asset: "USDT", Available: shared.MustDecimal("100000000"), Total: shared.MustDecimal("100000000")}},
+		Balances:       []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("100000000"), Total: shared.MustDecimal("100000000")}},
 		Equity:         shared.MustDecimal("100000000"),
 		AvailableFunds: shared.MustDecimal("100000000"), ExchangeUpdatedAt: testNow.Add(time.Minute),
 		Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
@@ -72,7 +72,7 @@ func (x *stressExchange) ListPositionSnapshots(context.Context) ([]exchange.Posi
 		if quantity == 0 {
 			continue
 		}
-		positions = append(positions, exchange.Position{
+		positions = append(positions, exchange.Position{Market: exchange.MarketTypeSwap,
 			ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: shared.MustDecimal(strconv.FormatInt(quantity, 10)),
 			EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("100"),
@@ -134,14 +134,14 @@ func (x *stressExchange) PlaceOrder(_ context.Context, request exchange.OrderReq
 	}
 	x.trade++
 	exchangeOrderID := fmt.Sprintf("ex-%d", x.trade)
-	x.fills[request.ExchangeSymbol] = append(x.fills[request.ExchangeSymbol], exchange.Fill{
+	x.fills[request.ExchangeSymbol] = append(x.fills[request.ExchangeSymbol], exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: fmt.Sprintf("trade-%d", x.trade), ExchangeOrderID: exchangeOrderID,
 		ClientOrderID: request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		Side: request.Side, PositionSide: exchange.PositionSideNet,
 		Quantity: request.Quantity, Price: shared.MustDecimal("100"),
 		SettlementAsset: "USDT", FeeAsset: "USDT", TradedAt: testNow,
 	})
-	order := exchange.Order{
+	order := exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: exchangeOrderID, ClientOrderID: request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		OrderType: request.OrderType, Side: request.Side, PositionSide: request.PositionSide,
 		Quantity: request.Quantity, FilledQuantity: request.Quantity, Status: exchange.OrderStatusFilled,
@@ -200,13 +200,13 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "stress",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSwap),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSwap)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: "stress-only", SettlementAsset: "USDT", MarginMode: string(exchange.MarginModeCross),
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "10"},
 			Snapshot: store.TradingAccountSnapshot{
-				Balances: []store.AssetBalance{{Asset: "USDT", Available: "100000000", Total: "100000000"}},
+				Balances: []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "100000000", Total: "100000000"}},
 				Equity:   "100000000", AvailableFunds: "100000000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},
 			SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),
@@ -229,7 +229,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSwap), SettlementAsset: "USDT",
+			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

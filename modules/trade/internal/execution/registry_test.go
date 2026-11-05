@@ -26,12 +26,12 @@ func (*registryStub) ListRecentFills(context.Context, shared.ExchangeSymbol, str
 }
 func (*registryStub) GetOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
 	if clientOrderID == "terminal-client" {
-		return exchange.Order{ClientOrderID: clientOrderID, Status: exchange.OrderStatusFilled, ReduceOnly: true}, nil
+		return exchange.Order{Market: exchange.MarketTypeSwap, ClientOrderID: clientOrderID, Status: exchange.OrderStatusFilled, ReduceOnly: true}, nil
 	}
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*registryStub) PlaceOrder(_ context.Context, request exchange.OrderRequest) (exchange.Order, error) {
-	return exchange.Order{ClientOrderID: request.ClientOrderID, Status: exchange.OrderStatusOpen, ReduceOnly: request.ReduceOnly}, nil
+	return exchange.Order{Market: exchange.MarketTypeSwap, ClientOrderID: request.ClientOrderID, Status: exchange.OrderStatusOpen, ReduceOnly: request.ReduceOnly}, nil
 }
 func (*registryStub) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
 	return exchange.Order{}, nil

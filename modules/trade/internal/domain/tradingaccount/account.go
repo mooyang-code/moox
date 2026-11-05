@@ -3,6 +3,7 @@ package tradingaccount
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,14 +29,19 @@ type PaperConfig struct {
 }
 
 type Account struct {
-	ID            string
-	SpaceID       string
-	Name          string
-	Exchange      exchange.Exchange
-	MarketType    exchange.MarketType
+	ID       string
+	SpaceID  string
+	Name     string
+	Exchange exchange.Exchange
+	// Markets 是账户已开通的市场，按固定顺序排列：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
+	Markets       []exchange.MarketType
 	ExecutionMode exchange.ExecutionMode
-	Live          *LiveConfig
-	Paper         *PaperConfig
+	// AccountMode 只用于加密货币实盘账户，由交易所检测写入，用户不能改。
+	AccountMode exchange.AccountMode
+	// InspectionJSON 是最近一次检测的结果（权限、持仓模式、检测时间、阻断项）。
+	InspectionJSON string
+	Live           *LiveConfig
+	Paper          *PaperConfig
 	// Environment and CredentialSecretID are retained as in-memory projections
 	// for existing exchange adapters; persistence uses Live/Paper configuration.
 	Environment        exchange.AccountEnvironment
@@ -44,6 +50,7 @@ type Account struct {
 	MarginMode         exchange.MarginMode
 	Status             exchange.AccountStatus
 	Ready              bool
+	// LeverageSettings 只对 SWAP 生效，键是内部标的 ID，"*" 是账户默认杠杆。
 	LeverageSettings   map[string]shared.Decimal
 	Snapshot           exchange.AccountSnapshot
 	SnapshotSourceTime time.Time
@@ -57,11 +64,13 @@ func (a Account) Validate() error {
 		blank(a.SpaceID) ||
 		blank(a.Name) ||
 		!a.Exchange.Valid() ||
-		!a.MarketType.Valid() ||
 		!a.ExecutionMode.Valid() ||
 		blank(a.SettlementAsset) ||
 		!validStatus(a.Status) {
 		return invalidAccount("missing or unsupported required field")
+	}
+	if err := a.validateMarkets(); err != nil {
+		return err
 	}
 	if a.Live == nil && a.ExecutionMode == exchange.ExecutionModeLive && a.Environment.ValidLive() && a.CredentialSecretID != "" {
 		a.Live = &LiveConfig{Environment: a.Environment, CredentialSecretID: a.CredentialSecretID}
@@ -84,21 +93,66 @@ func (a Account) Validate() error {
 		return invalidAccount("invalid paper config")
 	}
 	switch {
-	case !exchange.RuleFor(a.MarketType).Leverage:
+	case !a.HasLeverageMarket():
 		if a.MarginMode != exchange.MarginModeUnspecified || len(a.LeverageSettings) != 0 {
-			return invalidAccount("SPOT cannot configure margin mode or leverage")
+			return invalidAccount("没有开通 SWAP 的账户不能配置保证金模式或杠杆")
 		}
 	default:
 		if a.MarginMode != exchange.MarginModeCross {
-			return invalidAccount("SWAP requires CROSS margin mode")
+			return invalidAccount("SWAP 一律全仓，保证金模式必须是 CROSS")
 		}
 		for symbol, leverage := range a.LeverageSettings {
 			if blank(symbol) || leverage.Cmp(shared.Zero()) <= 0 {
-				return invalidAccount("SWAP leverage must be positive and symbol-bound")
+				return invalidAccount("SWAP 杠杆必须为正数且绑定标的")
 			}
 		}
 	}
 	return nil
+}
+
+// validateMarkets 校验已开通市场的规范写法，以及账户类型只出现在加密货币实盘账户上。
+func (a Account) validateMarkets() error {
+	normalized, err := exchange.NormalizeMarkets(a.Markets)
+	if err != nil {
+		return invalidAccount(err.Error())
+	}
+	if !slices.Equal(normalized, a.Markets) {
+		return invalidAccount("已开通的市场必须去重并按 SPOT、SWAP、STOCK 的顺序排列")
+	}
+	if !a.AccountMode.Valid() {
+		return invalidAccount("不支持的账户类型")
+	}
+	if a.AccountMode != exchange.AccountModeUnspecified &&
+		(a.ExecutionMode != exchange.ExecutionModeLive || a.SupportsMarket(exchange.MarketTypeStock)) {
+		return invalidAccount("账户类型只用于加密货币实盘账户")
+	}
+	return nil
+}
+
+// SupportsMarket 报告账户是否已开通某个市场。
+func (a Account) SupportsMarket(market exchange.MarketType) bool {
+	return slices.Contains(a.Markets, market)
+}
+
+// HasLeverageMarket 报告账户是否开通了需要配置杠杆和保证金模式的市场（SWAP）。
+func (a Account) HasLeverageMarket() bool {
+	return slices.ContainsFunc(a.Markets, func(market exchange.MarketType) bool {
+		return exchange.RuleFor(market).Leverage
+	})
+}
+
+// MarketForInstrument 返回内部标的 ID 在这个账户里所属的市场。
+func (a Account) MarketForInstrument(instrumentID string) exchange.MarketType {
+	return exchange.ResolveInstrumentMarket(instrumentID, a.Markets)
+}
+
+// SoleMarket 返回只开通了一个市场的账户的市场；开通多个市场时返回空串。
+// 适配器、会话和执行流程要等改成按标的所属市场判断后才能支持多市场账户，在那之前靠它安全失败。
+func (a Account) SoleMarket() exchange.MarketType {
+	if len(a.Markets) != 1 {
+		return exchange.MarketTypeUnspecified
+	}
+	return a.Markets[0]
 }
 
 func (a Account) ExecutionEligibility() error {

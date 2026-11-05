@@ -106,8 +106,8 @@ func newFakeExchange(market exchange.MarketType) *fakeExchange {
 		},
 		account: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
-				{Asset: "USDT", Available: shared.MustDecimal("100000"), Total: shared.MustDecimal("100000")},
-				{Asset: "BTC", Available: shared.MustDecimal("10"), Total: shared.MustDecimal("10")},
+				{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("100000"), Total: shared.MustDecimal("100000")},
+				{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("10"), Total: shared.MustDecimal("10")},
 			},
 			Equity: shared.MustDecimal("100000"), AvailableFunds: shared.MustDecimal("100000"),
 			ExchangeUpdatedAt: testNow,
@@ -214,7 +214,7 @@ func (f *fakeExchange) PlaceOrder(_ context.Context, request exchange.OrderReque
 		return current, nil
 	}
 	now := testNow.Add(time.Duration(f.placeCalls) * time.Second)
-	current := exchange.Order{
+	current := exchange.Order{Market: f.market,
 		ExchangeOrderID: fmt.Sprintf("exchange-%d", f.placeCalls),
 		ClientOrderID:   request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		OrderType: request.OrderType, TimeInForce: request.NativeTimeInForce(),
@@ -341,7 +341,7 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 	}
 	realized := shared.Zero()
 	if request.ReduceOnly && record.MarketType == string(exchange.MarketTypeSwap) {
-		position, found, positionErr := a.Store.GetPosition(ctx, testSpace, testAccount, record.ExchangeSymbol, string(exchange.PositionSideNet))
+		position, found, positionErr := a.Store.GetPosition(ctx, testSpace, testAccount, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), string(exchange.PositionSideNet))
 		if positionErr != nil {
 			return exchange.Order{}, positionErr
 		}
@@ -355,7 +355,7 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 			}
 		}
 	}
-	fill := exchange.Fill{
+	fill := exchange.Fill{Market: exchange.MarketType(record.MarketType),
 		ExchangeTradeID: "paper-trade-" + request.ClientOrderID,
 		ExchangeOrderID: response.ExchangeOrderID, ClientOrderID: request.ClientOrderID,
 		ExchangeSymbol: record.ExchangeSymbol,
@@ -403,7 +403,7 @@ func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (excha
 		pending = append(pending, fills...)
 	}
 	a.mu.Unlock()
-	if a.Account.MarketType != string(exchange.MarketTypeSpot) {
+	if a.Account.SoleMarket() != string(exchange.MarketTypeSpot) {
 		return snapshot, nil
 	}
 	balances := make(map[string]exchange.AssetBalance, len(snapshot.Balances))
@@ -411,7 +411,7 @@ func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (excha
 		balances[balance.Asset] = balance
 	}
 	for _, fill := range pending {
-		instrument, instrumentErr := a.Store.GetInstrument(ctx, a.Account.Exchange, a.Account.MarketType, fill.ExchangeSymbol)
+		instrument, instrumentErr := a.Store.GetInstrument(ctx, a.Account.Exchange, a.Account.SoleMarket(), fill.ExchangeSymbol)
 		if instrumentErr != nil {
 			continue
 		}
@@ -420,6 +420,7 @@ func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (excha
 		}
 		base, quote := balances[instrument.BaseAsset], balances[instrument.QuoteAsset]
 		base.Asset, quote.Asset = instrument.BaseAsset, instrument.QuoteAsset
+		base.Wallet, quote.Wallet = exchange.WalletUnified, exchange.WalletUnified
 		value := fill.Price.Mul(fill.Quantity)
 		if fill.Side == exchange.SideBuy {
 			base.Available = base.Available.Add(fill.Quantity)
@@ -454,7 +455,7 @@ func (a *synchronousPaperAdapter) ListPositionSnapshots(ctx context.Context) ([]
 		pending = append(pending, fills...)
 	}
 	a.mu.Unlock()
-	if a.Account.MarketType != string(exchange.MarketTypeSwap) {
+	if a.Account.SoleMarket() != string(exchange.MarketTypeSwap) {
 		return positions, nil
 	}
 	bySymbol := make(map[string]int, len(positions))
@@ -464,12 +465,12 @@ func (a *synchronousPaperAdapter) ListPositionSnapshots(ctx context.Context) ([]
 	for _, fill := range pending {
 		index, found := bySymbol[fill.ExchangeSymbol]
 		if !found {
-			positions = append(positions, exchange.Position{
+			positions = append(positions, exchange.Position{Market: exchange.MarketTypeSwap,
 				TradingAccountID:  a.Account.TradingAccountID,
 				InstrumentID:      fill.ExchangeSymbol,
 				ExchangeSymbol:    fill.ExchangeSymbol,
 				PositionSide:      exchange.PositionSideNet,
-				Leverage:          decimal(a.Account.LeverageSettings[fill.ExchangeSymbol]),
+				Leverage:          decimal(a.Account.LeverageSettings[testInstrumentID(exchange.MarketTypeSwap)]),
 				MarginMode:        exchange.MarginMode(a.Account.MarginMode),
 				ExchangeUpdatedAt: testNow,
 			})
@@ -495,7 +496,7 @@ func (f *fakeExchange) emitFill(clientID, tradeID, quantity, price, realized str
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	current := f.orders[clientID]
-	fill := exchange.Fill{
+	fill := exchange.Fill{Market: f.market,
 		ExchangeTradeID: tradeID, ExchangeOrderID: current.ExchangeOrderID,
 		ClientOrderID: clientID, ExchangeSymbol: current.ExchangeSymbol, Side: current.Side,
 		PositionSide: current.PositionSide, Quantity: shared.MustDecimal(quantity),
@@ -548,16 +549,16 @@ func (s instrumentSource) GetInstrument(ctx context.Context, name exchange.Excha
 type positionSource struct{ store *store.Store }
 
 func (s positionSource) GetPosition(ctx context.Context, accountID, symbol string) (exchange.Position, error) {
-	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, symbol, string(exchange.PositionSideNet))
+	record, found, err := s.store.GetPosition(ctx, testSpace, accountID, exchange.NewSymbolKey(exchange.MarketTypeSwap, symbol), string(exchange.PositionSideNet))
 	if !found && err == nil {
 		if instrument, instrumentErr := s.store.GetInstrumentByIDScoped(ctx, symbol, "BINANCE", "SWAP"); instrumentErr == nil {
-			record, found, err = s.store.GetPosition(ctx, testSpace, accountID, instrument.ExchangeSymbol, string(exchange.PositionSideNet))
+			record, found, err = s.store.GetPosition(ctx, testSpace, accountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), string(exchange.PositionSideNet))
 		}
 	}
 	if err != nil || !found {
-		return exchange.Position{TradingAccountID: accountID, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, err
+		return exchange.Position{Market: exchange.MarketTypeSwap, TradingAccountID: accountID, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, err
 	}
-	return exchange.Position{
+	return exchange.Position{Market: exchange.MarketTypeSwap,
 		TradingAccountID: accountID, ExchangeSymbol: symbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide),
 		SignedQuantity: decimal(record.SignedQuantity),
@@ -687,12 +688,12 @@ func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.
 	leverage := store.LeverageSettings{}
 	if market == exchange.MarketTypeSwap {
 		margin = string(exchange.MarginModeCross)
-		leverage[testSymbol] = "10"
+		leverage[testInstrumentID(market)] = "10"
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "E2E",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(market)},
 			ExecutionMode:      string(mode),
 			Environment:        string(environment),
 			CredentialSecretID: credentialID,
@@ -701,8 +702,8 @@ func seedFixtureWithMode(t *testing.T, tradeStore *store.Store, market exchange.
 			LeverageSettings: leverage,
 			Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
-					{Asset: "USDT", Available: "100000", Total: "100000"},
-					{Asset: "BTC", Available: "10", Total: "10"},
+					{Wallet: "UNIFIED", Asset: "USDT", Available: "100000", Total: "100000"},
+					{Wallet: "UNIFIED", Asset: "BTC", Available: "10", Total: "10"},
 				},
 				Equity: "100000", AvailableFunds: "100000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},

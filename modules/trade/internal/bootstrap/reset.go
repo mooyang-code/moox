@@ -31,9 +31,12 @@ var (
 		"t_logical_account_targets", "t_logical_account_target_receipts", "t_shadow_targets",
 		"t_replay_sessions", "t_replay_periods", "t_replay_orders",
 		"t_paper_balance_projections", "t_paper_asset_balances", "t_operator_actions",
+		"t_trade_wallet_transfers",
 	}
 	tradeConfigTables = []string{
 		"t_trading_accounts", "t_paper_account_configs", "t_logical_accounts", "t_logical_account_members", "t_trade_instruments",
+		// 下架名单是交易所层面的事实，不属于某个账户：清运行数据时保留，回到空白状态时才清。
+		"t_trade_blocked_instruments",
 	}
 )
 
@@ -83,10 +86,10 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 // 重置后这些币会变成未受管，不再计入权益，也不会被卖出。用户自己的币和下不了单的零头不算。
 func liveSpotHoldings(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT DISTINCT a.c_trading_account_id, a.c_market_type, a.c_snapshot_json, i.c_base_asset, i.c_min_exchange_quantity
+		SELECT DISTINCT a.c_trading_account_id, o.c_market_type, a.c_snapshot_json, i.c_base_asset, i.c_min_exchange_quantity
 		FROM t_trade_orders o
 		JOIN t_trading_accounts a ON a.c_space_id = o.c_space_id AND a.c_trading_account_id = o.c_trading_account_id
-		JOIN t_trade_instruments i ON i.c_exchange = a.c_exchange AND i.c_market_type = a.c_market_type AND i.c_instrument_id = o.c_instrument_id
+		JOIN t_trade_instruments i ON i.c_exchange = a.c_exchange AND i.c_market_type = o.c_market_type AND i.c_instrument_id = o.c_instrument_id
 		WHERE a.c_execution_mode = 'LIVE' AND a.c_status = 'ENABLED'
 			AND o.c_owner_type IN ('TARGET', 'OPERATOR') AND o.c_filled_quantity <> '0'`)
 	if err != nil {

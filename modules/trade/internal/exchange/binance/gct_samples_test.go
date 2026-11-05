@@ -99,7 +99,7 @@ func TestRecordedFuturesBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if book := books["BTCUSDT"]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
+	if book := books[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTCUSDT"}]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
 		t.Fatalf("books = %+v", books)
 	}
 }

@@ -224,14 +224,14 @@ func (s *Service) syncAccountLocked(
 	}
 	maxDifference := maxBalanceDifference(
 		account.Snapshot.Balances,
-		snapshotRecord(accountSnapshot).Balances,
+		store.SnapshotFromExchange(accountSnapshot).Balances,
 	)
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		result, failErr := s.fail(ctx, account, err)
 		return result, maxDifference, failErr
 	}
-	var symbols []string
+	var symbols []exchange.SymbolKey
 	switch mode {
 	case syncFull:
 		symbols, err = s.BoundedFullSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot)
@@ -247,35 +247,37 @@ func (s *Service) syncAccountLocked(
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
-	for _, symbol := range symbols {
-		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), cursors[symbol])
+	for _, key := range symbols {
+		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(key.Symbol), cursors[key.String()])
 		if listErr != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
 		}
 		fills = append(fills, rows...)
 		if strings.TrimSpace(cursor) != "" {
-			cursors[symbol] = cursor
+			cursors[key.String()] = cursor
 		}
 	}
 
 	orders := append([]exchange.Order(nil), openOrders...)
 	// 外部订单可能没有客户端订单号，挂单要同时按交易所订单号比对。
+	// 订单号是各市场各自的序列，现货和合约可能撞号，所以都带上市场。
 	openByClient := make(map[string]struct{}, len(openOrders))
 	openByExchange := make(map[string]struct{}, len(openOrders))
 	for _, current := range openOrders {
-		openByClient[current.ClientOrderID] = struct{}{}
-		openByExchange[current.ExchangeOrderID] = struct{}{}
+		openByClient[orderIdentityKey(current.Market, current.ClientOrderID)] = struct{}{}
+		openByExchange[orderIdentityKey(current.Market, current.ExchangeOrderID)] = struct{}{}
 	}
 	var missing []store.OrderRecord
 	for _, local := range localOrders {
 		if mode == syncLight || orderdomain.State(local.State).Terminal() {
 			continue
 		}
-		if _, found := openByClient[local.ClientOrderID]; found {
+		localMarket := exchange.MarketType(local.MarketType)
+		if _, found := openByClient[orderIdentityKey(localMarket, local.ClientOrderID)]; found {
 			continue
 		}
-		if _, found := openByExchange[local.ExchangeOrderID]; found && local.ExchangeOrderID != "" {
+		if _, found := openByExchange[orderIdentityKey(localMarket, local.ExchangeOrderID)]; found && local.ExchangeOrderID != "" {
 			continue
 		}
 		current, lookupErr := lookupLocalOrder(ctx, adapter, local)
@@ -314,6 +316,11 @@ func (s *Service) syncAccountLocked(
 	return result, maxDifference, nil
 }
 
+// orderIdentityKey 是“市场:订单号”，用于在同一批订单里按订单号去重或比对。
+func orderIdentityKey(market exchange.MarketType, id string) string {
+	return string(market) + ":" + id
+}
+
 func lookupLocalOrder(ctx context.Context, adapter execution.ExecutionAdapter, local store.OrderRecord) (exchange.Order, error) {
 	if local.ExchangeOrderID != "" {
 		return adapter.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
@@ -340,17 +347,20 @@ func (s *Service) orderMissingOnExchange(local store.OrderRecord, lookupErr erro
 }
 
 func maxBalanceDifference(before, after []store.AssetBalance) float64 {
-	previous := make(map[string]float64, len(before))
+	// 同一资产可能出现在多个钱包里，按（钱包，资产）比较。
+	type balanceKey struct{ wallet, asset string }
+	previous := make(map[balanceKey]float64, len(before))
 	for _, balance := range before {
-		previous[balance.Asset] = parseBalance(balance.Total)
+		previous[balanceKey{balance.Wallet, balance.Asset}] = parseBalance(balance.Total)
 	}
 	var maximum float64
 	for _, balance := range after {
+		key := balanceKey{balance.Wallet, balance.Asset}
 		current := parseBalance(balance.Total)
-		old := previous[balance.Asset]
+		old := previous[key]
 		denominator := math.Max(math.Abs(current), 1e-12)
 		maximum = max(maximum, math.Abs(current-old)/denominator)
-		delete(previous, balance.Asset)
+		delete(previous, key)
 	}
 	for _, old := range previous {
 		if old != 0 {
@@ -506,7 +516,7 @@ func (s *Service) applySnapshot(
 		freshness = account.Snapshot.ExchangeUpdatedAt
 	}
 	if snapshotTime >= freshness {
-		account.Snapshot = snapshotRecord(snapshot.Account)
+		account.Snapshot = store.SnapshotFromExchange(snapshot.Account)
 		account.SnapshotSourceTime = snapshotTime
 		result.AccountSnapshotUpdated = true
 	} else {
@@ -542,7 +552,7 @@ func (s *Service) applySnapshot(
 	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending && !hasGap
 	// 现货持仓来自余额：内容比待确认水位旧的 REST 余额（交易所更新时间更早）不能恢复准入，
 	// 否则会按成交前的余额重复下单。读取时间更晚不代表内容更新。
-	if clearPending && pending > 0 && exchange.RuleFor(account.MarketType).PositionFromBalance &&
+	if clearPending && pending > 0 && account.HasBalanceMarket() &&
 		snapshot.Account.ExchangeUpdatedAt.UnixMilli() < pending {
 		clearPending = false
 	}
@@ -889,7 +899,7 @@ func (s *Service) ensureOrderForFill(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			fill.ExchangeSymbol,
+			exchange.SymbolKey{Market: fill.Market, Symbol: fill.ExchangeSymbol},
 			fill.ExchangeOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -929,7 +939,7 @@ func (s *Service) ensureOrderForFill(
 		}
 		current = exchange.Order{
 			ExchangeOrderID: fill.ExchangeOrderID, ClientOrderID: fill.ClientOrderID,
-			ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
+			Market: fill.Market, ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
 			Side: fill.Side, PositionSide: fill.PositionSide,
 			Quantity: syntheticQuantity, Status: exchange.OrderStatusOpen,
 			CreatedAt: fill.TradedAt, UpdatedAt: fill.TradedAt,
@@ -939,6 +949,7 @@ func (s *Service) ensureOrderForFill(
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
 	current.ExchangeSymbol = fill.ExchangeSymbol
+	current.Market = fill.Market
 	batchFilled := syntheticQuantity
 	if batchFilled.Cmp(shared.Zero()) <= 0 {
 		batchFilled = fill.Quantity
@@ -955,10 +966,10 @@ func (s *Service) ensureOrderForFill(
 
 func fillBatchKey(fill exchange.Fill) string {
 	if fill.ExchangeOrderID != "" {
-		return fill.ExchangeSymbol + "\x00exchange\x00" + fill.ExchangeOrderID
+		return string(fill.Market) + "\x00" + fill.ExchangeSymbol + "\x00exchange\x00" + fill.ExchangeOrderID
 	}
 	if fill.ClientOrderID != "" {
-		return fill.ExchangeSymbol + "\x00client\x00" + fill.ClientOrderID
+		return string(fill.Market) + "\x00" + fill.ExchangeSymbol + "\x00client\x00" + fill.ClientOrderID
 	}
 	return ""
 }
@@ -983,7 +994,7 @@ func (s *Service) applyOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			current.ExchangeSymbol,
+			exchange.SymbolKey{Market: current.Market, Symbol: current.ExchangeSymbol},
 			current.ExchangeOrderID,
 		)
 	default:
@@ -1163,20 +1174,22 @@ func (s *Service) importExternalOrder(
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
 		strings.TrimSpace(current.ExchangeSymbol) == "" ||
+		!current.Market.Valid() ||
+		!account.SupportsMarket(string(current.Market)) ||
 		!current.Side.Valid() ||
 		current.Quantity.Cmp(shared.Zero()) <= 0 {
 		return store.OrderRecord{}, fmt.Errorf("trade account sync: incomplete external order")
 	}
 	clientOrderID := current.ClientOrderID
 	if strings.TrimSpace(clientOrderID) == "" {
-		clientOrderID = "external-" + current.ExchangeSymbol + "-" + current.ExchangeOrderID
+		clientOrderID = "external-" + string(current.Market) + "-" + current.ExchangeSymbol + "-" + current.ExchangeOrderID
 	}
 	environment := account.Environment
 	if account.ExecutionMode == "PAPER" || environment == "" {
 		environment = "PRODUCTION"
 	}
 	instrument, err := s.Store.GetInstrumentInEnvironment(
-		ctx, account.Exchange, environment, account.MarketType, current.ExchangeSymbol,
+		ctx, account.Exchange, environment, string(current.Market), current.ExchangeSymbol,
 	)
 	if err != nil {
 		return store.OrderRecord{}, err
@@ -1208,7 +1221,7 @@ func (s *Service) importExternalOrder(
 	} else {
 		tif = exchange.TimeInForceUnspecified
 	}
-	positionSide := exchange.RuleFor(account.MarketType).PositionSide
+	positionSide := exchange.RuleFor(current.Market).PositionSide
 	referenceAt := current.CreatedAt
 	if referenceAt.IsZero() {
 		referenceAt = current.UpdatedAt
@@ -1238,11 +1251,11 @@ func (s *Service) importExternalOrder(
 	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
-		OrderID: "external:" + account.TradingAccountID + ":" +
+		OrderID: "external:" + account.TradingAccountID + ":" + string(current.Market) + ":" +
 			current.ExchangeSymbol + ":" + current.ExchangeOrderID,
 		TradingAccountID: account.TradingAccountID,
 		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,
-		Exchange: account.Exchange, MarketType: account.MarketType,
+		Exchange: account.Exchange, MarketType: string(current.Market),
 		ExchangeSymbol: current.ExchangeSymbol, OrderType: string(orderType),
 		TimeInForce: string(tif), Side: string(current.Side),
 		PositionSide: string(positionSide), Quantity: current.Quantity.String(),
@@ -1415,50 +1428,40 @@ func cloneCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-func snapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
-	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
-	for _, balance := range snapshot.Balances {
-		balances = append(balances, store.AssetBalance{
-			Asset: balance.Asset, Available: balance.Available.String(),
-			Locked: balance.Locked.String(), Total: balance.Total.String(),
-		})
-	}
-	return store.TradingAccountSnapshot{
-		Balances: balances, Equity: snapshot.Equity.String(),
-		AvailableFunds:    snapshot.AvailableFunds.String(),
-		UsedMargin:        snapshot.UsedMargin.String(),
-		MaintenanceMargin: snapshot.MaintenanceMargin.String(),
-		UnrealizedPnL:     snapshot.UnrealizedPnL.String(),
-		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
-	}
-}
-
 func mergePrivateSnapshot(
 	current store.TradingAccountSnapshot,
 	update exchange.AccountSnapshot,
 ) store.TradingAccountSnapshot {
-	incoming := snapshotRecord(update)
+	incoming := store.SnapshotFromExchange(update)
 	if update.Present.Balances {
+		type balanceKey struct{ wallet, asset string }
 		balances := make(
-			map[string]store.AssetBalance,
+			map[balanceKey]store.AssetBalance,
 			len(current.Balances)+len(incoming.Balances),
 		)
-		order := make([]string, 0, len(current.Balances)+len(incoming.Balances))
+		order := make([]balanceKey, 0, len(current.Balances)+len(incoming.Balances))
 		for _, balance := range current.Balances {
-			if _, found := balances[balance.Asset]; !found {
-				order = append(order, balance.Asset)
+			key := balanceKey{balance.Wallet, balance.Asset}
+			if _, found := balances[key]; !found {
+				order = append(order, key)
 			}
-			balances[balance.Asset] = balance
+			balances[key] = balance
 		}
 		for _, balance := range incoming.Balances {
-			if _, found := balances[balance.Asset]; !found {
-				order = append(order, balance.Asset)
+			key := balanceKey{balance.Wallet, balance.Asset}
+			if _, found := balances[key]; !found {
+				order = append(order, key)
 			}
-			balances[balance.Asset] = balance
+			balances[key] = balance
+			// 私有流只带来部分钱包的余额：这些钱包的更新时间跟着推进，其他钱包保持原样。
+			if current.WalletUpdatedAt == nil {
+				current.WalletUpdatedAt = make(map[string]int64)
+			}
+			current.WalletUpdatedAt[balance.Wallet] = incoming.ExchangeUpdatedAt
 		}
 		current.Balances = current.Balances[:0]
-		for _, asset := range order {
-			current.Balances = append(current.Balances, balances[asset])
+		for _, key := range order {
+			current.Balances = append(current.Balances, balances[key])
 		}
 	}
 	for _, field := range []struct {
@@ -1491,7 +1494,7 @@ func positionRecord(
 	exchangeSymbol := position.ExchangeSymbol
 	return store.PositionRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
-		InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
+		MarketType: string(position.Market), InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
 		PositionSide:   string(position.PositionSide),
 		SignedQuantity: position.SignedQuantity.String(),
 		EntryPrice:     position.EntryPrice.String(), MarkPrice: position.MarkPrice.String(),

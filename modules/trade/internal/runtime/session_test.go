@@ -163,7 +163,7 @@ func (a *scriptedSessionAdapter) Subscribe(
 ) error {
 	a.record("Subscribe")
 	handler.OnSubscribed()
-	if err := handler.OnPosition(ctx, exchange.Position{
+	if err := handler.OnPosition(ctx, exchange.Position{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
@@ -311,7 +311,7 @@ func TestSessionHandlerPersistsReadyAfterLateBufferedPosition(t *testing.T) {
 	}))
 	// This event arrives after the initial activation pass but before its final
 	// gate closes, exactly the handoff window between Run's two calls.
-	require.NoError(t, handler.OnPosition(ctx, exchange.Position{
+	require.NoError(t, handler.OnPosition(ctx, exchange.Position{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
@@ -377,7 +377,7 @@ func TestSessionHandlerPostActivationPositionRequiresFullSync(t *testing.T) {
 	}))
 	require.NoError(t, handler.finishActivation(ctx))
 	session.ready.Store(true)
-	require.NoError(t, handler.OnPosition(ctx, exchange.Position{
+	require.NoError(t, handler.OnPosition(ctx, exchange.Position{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"),
 		EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("101"),
@@ -410,11 +410,11 @@ func seedRuntimeAccount(
 	t.Helper()
 	account := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-		Exchange: "BINANCE", MarketType: "SWAP", ExecutionMode: "LIVE",
+		Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
 		Environment:        "TESTNET",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		MarginMode: "CROSS", Status: "ENABLED",
-		LeverageSettings: store.LeverageSettings{"BTC-USDT": "5"},
+		LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "5"},
 	}
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(account)

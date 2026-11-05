@@ -522,7 +522,7 @@ func TestMutationWithMalformedSuccessResponseIsTransportUnknown(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := swapAdapter(server.URL)
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	_, err := adapter.PlaceOrder(context.Background(), exchange.OrderRequest{
 		ClientOrderID: "cid", ExchangeSymbol: "BTC-USDT-SWAP",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,

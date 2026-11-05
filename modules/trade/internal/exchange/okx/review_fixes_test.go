@@ -108,7 +108,7 @@ func TestOpenOrdersPaginates(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := swapAdapter(server.URL)
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	orders, err := adapter.ListOpenOrders(context.Background())
 	if err != nil {
 		t.Fatal(err)

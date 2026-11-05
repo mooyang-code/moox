@@ -119,7 +119,7 @@ func TestValidatorReservationMatrix(t *testing.T) {
 					instrument: testInstrument(tt.market),
 				},
 				Positions: positionSourceStub{
-					position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+					position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 				}, Now: func() time.Time { return now },
 				MaxReferenceAge:  time.Second,
 				MaxChildNotional: shared.MustDecimal("1000"),
@@ -304,7 +304,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 				testInstrument(exchange.MarketTypeSwap),
 			)
 			validator.Positions = positionSourceStub{
-				position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+				position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 			}
 			candidate := spec
 			candidate.Side = tt.side
@@ -386,14 +386,14 @@ func testValidator(
 func executableAccount(market exchange.MarketType) tradingaccount.Account {
 	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
-		Exchange: exchange.ExchangeBinance, MarketType: market,
+		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{market},
 		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
 		CredentialSecretID: "secret-1",
 		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
 		Snapshot: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
-				{Asset: "USDT", Available: shared.MustDecimal("1000")},
-				{Asset: "BTC", Available: shared.MustDecimal("10")},
+				{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("1000")},
+				{Wallet: exchange.WalletUnified, Asset: "BTC", Available: shared.MustDecimal("10")},
 			},
 			AvailableFunds: shared.MustDecimal("1000"),
 		},

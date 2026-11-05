@@ -88,14 +88,14 @@ func openLiveHarness(
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
-			record.MarketType != string(exchange.MarketTypeSpot) ||
+			record.SoleMarket() != string(exchange.MarketTypeSpot) ||
 			record.Exchange != string(options.Exchange) {
 			return nil, errors.New("testnet smoke session configuration escaped TESTNET LIVE SPOT")
 		}
 		config := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			MarketType:       exchange.MarketType(record.MarketType),
+			MarketType:       exchange.MarketType(record.SoleMarket()),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
 			Environment:      exchange.AccountEnvironmentTestnet,
 			SettlementAsset:  record.SettlementAsset,
@@ -775,7 +775,7 @@ func (s smokePositionSource) GetPosition(
 		ctx,
 		account.SpaceID,
 		tradingAccountID,
-		symbol,
+		exchange.SymbolKey{Market: exchange.MarketType(account.SoleMarket()), Symbol: symbol},
 		string(exchange.PositionSideNet),
 	)
 	if err != nil {

@@ -27,14 +27,14 @@ func TestAccountSyncFailureRecoveryImportsExternalOrderAndFill(t *testing.T) {
 	require.Contains(t, account.LastError, "snapshot failure")
 
 	fake.accountErr = nil
-	fake.orders["external-client"] = exchange.Order{
+	fake.orders["external-client"] = exchange.Order{Market: exchange.MarketTypeSpot,
 		ExchangeOrderID: "external-order", ClientOrderID: "external-client",
 		ExchangeSymbol: testSymbol, OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.02"), FilledQuantity: shared.MustDecimal("0.01"),
 		AveragePrice: shared.MustDecimal("50000"), Status: exchange.OrderStatusPartiallyFilled,
 		CreatedAt: testNow.Add(time.Second), UpdatedAt: testNow.Add(2 * time.Second),
 	}
-	fake.fills = append(fake.fills, exchange.Fill{
+	fake.fills = append(fake.fills, exchange.Fill{Market: exchange.MarketTypeSpot,
 		ExchangeTradeID: "external-trade", ExchangeOrderID: "external-order",
 		ClientOrderID: "external-client", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.01"), Price: shared.MustDecimal("50000"),

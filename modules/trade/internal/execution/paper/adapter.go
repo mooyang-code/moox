@@ -23,9 +23,9 @@ type FactStore interface {
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
 	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
 	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
-	GetOrderByExchangeID(context.Context, string, string, string, string) (store.OrderRecord, error)
+	GetOrderByExchangeID(context.Context, string, string, exchange.SymbolKey, string) (store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
-	ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error)
+	ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error)
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
 
@@ -75,9 +75,9 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	equity := settlement
 	usedMargin := shared.Zero()
 	unrealizedPnL := shared.Zero()
-	if account.MarketType == string(exchange.MarketTypeSpot) {
+	if account.SoleMarket() == string(exchange.MarketTypeSpot) {
 		// 只有现货估值要按基础资产找交易对；合约按持仓估值，不读全部标的（每笔撮合要算两次快照）。
-		instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.MarketType)
+		instruments, err := a.Store.ListInstruments(ctx, account.Exchange, account.SoleMarket())
 		if err != nil {
 			return exchange.AccountSnapshot{}, storageError(err)
 		}
@@ -102,7 +102,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			equity = equity.Add(balance.Mul(quote))
 		}
 	} else {
-		positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, "")
+		positions, positionErr := a.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
 		if positionErr != nil {
 			return exchange.AccountSnapshot{}, storageError(positionErr)
 		}
@@ -132,7 +132,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		equity = settlement.Add(unrealizedPnL)
 	}
 	available := equity
-	if account.MarketType == string(exchange.MarketTypeSwap) {
+	if account.SoleMarket() == string(exchange.MarketTypeSwap) {
 		available = equity.Sub(usedMargin).Sub(locked[account.SettlementAsset])
 	} else {
 		available = settlement.Sub(locked[account.SettlementAsset])
@@ -180,7 +180,8 @@ func paperBalances(total, locked map[string]shared.Decimal) []exchange.AssetBala
 		totalAmount := total[asset]
 		lockedAmount := locked[asset]
 		result = append(result, exchange.AssetBalance{
-			Asset: asset, Available: totalAmount.Sub(lockedAmount), Locked: lockedAmount, Total: totalAmount,
+			Wallet: exchange.WalletUnified,
+			Asset:  asset, Available: totalAmount.Sub(lockedAmount), Locked: lockedAmount, Total: totalAmount,
 		})
 	}
 	return result
@@ -262,14 +263,14 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 	if a.Store == nil {
 		return nil, nil
 	}
-	rows, err := a.Store.ListPositions(ctx, a.Account.SpaceID, a.Account.TradingAccountID, "")
+	rows, err := a.Store.ListPositions(ctx, a.Account.SpaceID, a.Account.TradingAccountID, exchange.SymbolKey{})
 	if err != nil {
 		return nil, storageError(err)
 	}
 	result := make([]exchange.Position, 0, len(rows))
 	for _, row := range rows {
 		position := exchange.Position{
-			TradingAccountID: row.TradingAccountID, InstrumentID: row.InstrumentID,
+			TradingAccountID: row.TradingAccountID, Market: exchange.MarketType(row.MarketType), InstrumentID: row.InstrumentID,
 			ExchangeSymbol: row.ExchangeSymbol,
 			PositionSide:   exchange.PositionSide(row.PositionSide),
 			SignedQuantity: decimalOrZero(row.SignedQuantity), EntryPrice: decimalOrZero(row.EntryPrice),
@@ -278,7 +279,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			LiquidationPrice: decimalOrZero(row.LiquidationPrice), UnrealizedPnL: decimalOrZero(row.UnrealizedPnL),
 			RealizedPnL: decimalOrZero(row.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(row.ExchangeUpdatedAt).UTC(),
 		}
-		if a.Account.MarketType == string(exchange.MarketTypeSwap) && !position.SignedQuantity.IsZero() {
+		if position.Market == exchange.MarketTypeSwap && !position.SignedQuantity.IsZero() {
 			quote, quoteErr := a.GetReferencePrice(ctx, position.ExchangeSymbol)
 			if quoteErr != nil {
 				return nil, quoteErr
@@ -314,7 +315,7 @@ func (a *Adapter) ListRecentFills(ctx context.Context, symbol shared.ExchangeSym
 	if a.Store == nil {
 		return nil, "", nil
 	}
-	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, ExchangeSymbol: symbol.String(), Limit: 1000})
+	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, Market: a.Account.SoleMarket(), ExchangeSymbol: symbol.String(), Limit: 1000})
 	if err != nil {
 		return nil, "", storageError(err)
 	}
@@ -359,7 +360,7 @@ func (a *Adapter) GetOrderByExchangeID(ctx context.Context, symbol, exchangeOrde
 	if a.Store == nil {
 		return exchange.Order{}, nil
 	}
-	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, symbol, exchangeOrderID)
+	row, err := a.Store.GetOrderByExchangeID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, exchange.NewSymbolKey(a.Account.SoleMarket(), symbol), exchangeOrderID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}
@@ -388,11 +389,11 @@ func orderFromRecord(row store.OrderRecord) exchange.Order {
 		value, _ := shared.ParseDecimal(*row.LimitPrice)
 		limit = &value
 	}
-	return exchange.Order{ExchangeOrderID: row.ExchangeOrderID, ClientOrderID: row.ClientOrderID, ExchangeSymbol: row.ExchangeSymbol, OrderType: exchange.OrderType(row.OrderType), TimeInForce: exchange.TimeInForce(row.TimeInForce), Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), LimitPrice: limit, FilledQuantity: decimalOrZero(row.FilledQuantity), AveragePrice: decimalOrZero(row.AveragePrice), ReduceOnly: row.ReduceOnly, Status: exchange.OrderStatus(row.State), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return exchange.Order{ExchangeOrderID: row.ExchangeOrderID, ClientOrderID: row.ClientOrderID, Market: exchange.MarketType(row.MarketType), ExchangeSymbol: row.ExchangeSymbol, OrderType: exchange.OrderType(row.OrderType), TimeInForce: exchange.TimeInForce(row.TimeInForce), Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), LimitPrice: limit, FilledQuantity: decimalOrZero(row.FilledQuantity), AveragePrice: decimalOrZero(row.AveragePrice), ReduceOnly: row.ReduceOnly, Status: exchange.OrderStatus(row.State), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func fillFromRecord(row store.FillRecord) exchange.Fill {
-	return exchange.Fill{ExchangeTradeID: row.ExchangeTradeID, ExchangeOrderID: row.ExchangeOrderID, ExchangeSymbol: row.ExchangeSymbol, Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), Price: decimalOrZero(row.Price), Fee: decimalOrZero(row.Fee), FeeAsset: row.FeeAsset, RealizedPnL: decimalOrZero(row.RealizedPnL), SettlementAsset: row.SettlementAsset, LiquidityRole: row.Role, TradedAt: time.UnixMilli(row.TradedAt).UTC()}
+	return exchange.Fill{ExchangeTradeID: row.ExchangeTradeID, ExchangeOrderID: row.ExchangeOrderID, Market: exchange.MarketType(row.MarketType), ExchangeSymbol: row.ExchangeSymbol, Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), Price: decimalOrZero(row.Price), Fee: decimalOrZero(row.Fee), FeeAsset: row.FeeAsset, RealizedPnL: decimalOrZero(row.RealizedPnL), SettlementAsset: row.SettlementAsset, LiquidityRole: row.Role, TradedAt: time.UnixMilli(row.TradedAt).UTC()}
 }
 
 func decimalOrZero(raw string) shared.Decimal {

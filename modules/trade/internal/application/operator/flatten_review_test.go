@@ -18,8 +18,8 @@ func spotHolding(t *testing.T, fixture *operatorFixture, total, available string
 	account, err := fixture.store.GetTradingAccountByID(context.Background(), "account-a")
 	require.NoError(t, err)
 	account.Snapshot.Balances = []store.AssetBalance{
-		{Asset: "USDT", Available: "500", Total: "500"},
-		{Asset: "BTC", Available: available, Total: total},
+		{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"},
+		{Wallet: "UNIFIED", Asset: "BTC", Available: available, Total: total},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.UpdateTradingAccountSync(account.SpaceID, account.TradingAccountID, store.TradingAccountSyncState{

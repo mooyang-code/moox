@@ -38,7 +38,7 @@ func (s *proxyStub) ReleaseLogicalAccountOwner(_ context.Context, _ *tradepb.Rel
 }
 
 func account(owner, session string) *tradepb.LogicalAccount {
-	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, SpaceId: "space-1", OwnerInstanceId: owner, OwnerSessionId: session, AuthFence: "fence-7"}
+	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SpaceId: "space-1", OwnerInstanceId: owner, OwnerSessionId: session, AuthFence: "fence-7"}
 }
 
 func TestClaimSessionCarriesAuthFenceAndChecksOwner(t *testing.T) {
@@ -135,15 +135,25 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestCheckMarketRejectsMismatch(t *testing.T) {
-	if err := checkMarket("swap", tradepb.MarketType_MARKET_TYPE_SWAP); err != nil {
+func TestCheckMarketRequiresMarketInLogicalAccountMarkets(t *testing.T) {
+	swap, spot := tradepb.MarketType_MARKET_TYPE_SWAP, tradepb.MarketType_MARKET_TYPE_SPOT
+	if err := checkMarket("swap", []tradepb.MarketType{swap}); err != nil {
 		t.Fatalf("相同市场不应报错：%v", err)
 	}
-	err := checkMarket("swap", tradepb.MarketType_MARKET_TYPE_SPOT)
-	if !errors.Is(err, ErrMarketMismatch) || !IsPermanentClaimError(err) {
-		t.Fatalf("市场不一致应是永久拒绝：%v", err)
+	// 组合同时可交易现货和合约时，两种策略都能绑。
+	for _, market := range []string{"spot", "swap"} {
+		if err := checkMarket(market, []tradepb.MarketType{spot, swap}); err != nil {
+			t.Fatalf("市场 %s 在组合可交易的市场里，不应报错：%v", market, err)
+		}
 	}
-	if err := checkMarket("", tradepb.MarketType_MARKET_TYPE_SWAP); !errors.Is(err, ErrMarketMismatch) {
+	err := checkMarket("swap", []tradepb.MarketType{spot})
+	if !errors.Is(err, ErrMarketMismatch) || !IsPermanentClaimError(err) {
+		t.Fatalf("市场不在组合可交易的市场里应是永久拒绝：%v", err)
+	}
+	if err := checkMarket("swap", nil); !errors.Is(err, ErrMarketMismatch) {
+		t.Fatalf("组合没有可交易的市场应被拒绝：%v", err)
+	}
+	if err := checkMarket("", []tradepb.MarketType{swap}); !errors.Is(err, ErrMarketMismatch) {
 		t.Fatalf("未知市场应被拒绝：%v", err)
 	}
 }

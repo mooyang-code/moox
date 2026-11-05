@@ -312,6 +312,7 @@ func (a *Adapter) dispatchPrivate(
 				return err
 			}
 			position := exchange.Position{
+				Market:           a.config.MarketType,
 				TradingAccountID: a.config.TradingAccountID,
 				ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,

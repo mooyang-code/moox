@@ -32,6 +32,8 @@ const (
 	OwnerTarget   OwnerType = "TARGET"
 	OwnerOperator OwnerType = "OPERATOR"
 	OwnerExternal OwnerType = "EXTERNAL"
+	// OwnerSystem 是系统自己发起的订单，例如 BNB 补买和稳定币调平；不暂停组合，也不算本目标的子单。
+	OwnerSystem OwnerType = "SYSTEM"
 )
 
 type OrderOwner struct {
@@ -59,6 +61,10 @@ func (o OrderOwner) Validate() error {
 	case OwnerExternal:
 		if o.RunnerID != nil {
 			return invalidSpec("EXTERNAL cannot have runner ownership")
+		}
+	case OwnerSystem:
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
+			return invalidSpec("SYSTEM requires logical account without runner")
 		}
 	default:
 		return invalidSpec("unsupported order owner type")

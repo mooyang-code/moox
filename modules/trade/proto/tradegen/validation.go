@@ -22,13 +22,13 @@ func (r *CreateTradingAccountReq) Validate() error {
 		return fmt.Errorf("name is required")
 	}
 	if !validExchange(r.Exchange) ||
-		!validMarketType(r.MarketType) ||
+		!validMarkets(r.Markets) ||
 		r.Live == nil ||
 		!validAccountEnvironment(r.Live.GetEnvironment()) ||
 		(r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
 			r.Live.GetEnvironment() != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
 		strings.TrimSpace(r.Live.GetCredentialSecretId()) == "" {
-		return fmt.Errorf("exchange, market_type and live environment/credential are required")
+		return fmt.Errorf("exchange, markets and live environment/credential are required")
 	}
 	return nil
 }
@@ -88,8 +88,8 @@ func (r *SyncTradingAccountReq) Validate() error {
 
 func (r *CreatePaperSimulationReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
-		!validExchange(r.Exchange) || !validMarketType(r.MarketType) || strings.TrimSpace(r.SettlementAsset) == "" {
-		return fmt.Errorf("account_name, exchange, market_type and settlement_asset are required")
+		!validExchange(r.Exchange) || !validMarkets(r.Markets) || strings.TrimSpace(r.SettlementAsset) == "" {
+		return fmt.Errorf("account_name, exchange, markets and settlement_asset are required")
 	}
 	if !validCreationControlMode(r.ControlMode) {
 		return fmt.Errorf("control_mode is invalid")
@@ -99,13 +99,14 @@ func (r *CreatePaperSimulationReq) Validate() error {
 		return fmt.Errorf("paper configuration decimals are invalid")
 	}
 	margin := strings.ToUpper(strings.TrimSpace(r.MarginMode))
-	if r.MarketType != MarketType_MARKET_TYPE_SWAP && margin != "" {
-		return fmt.Errorf("SPOT paper simulation cannot configure margin_mode")
+	hasSwap := containsMarket(r.Markets, MarketType_MARKET_TYPE_SWAP)
+	if !hasSwap && margin != "" {
+		return fmt.Errorf("paper simulation without SWAP cannot configure margin_mode")
 	}
-	if r.MarketType == MarketType_MARKET_TYPE_SWAP && margin != "" && margin != "CROSS" {
+	if hasSwap && margin != "" && margin != "CROSS" {
 		return fmt.Errorf("SWAP paper simulation requires CROSS margin_mode")
 	}
-	if r.MarketType == MarketType_MARKET_TYPE_SWAP && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
+	if hasSwap && !strings.EqualFold(strings.TrimSpace(r.SettlementAsset), "USDT") {
 		return fmt.Errorf("SWAP paper simulation requires USDT settlement_asset")
 	}
 	return nil
@@ -161,16 +162,42 @@ func (r *ListHoldingsReq) Validate() error {
 func (r *CreateLogicalAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" ||
 		!validExecutionMode(r.ExecutionMode) ||
-		!validMarketType(r.MarketType) ||
 		strings.TrimSpace(r.SettlementAsset) == "" {
 		return fmt.Errorf(
-			"name, execution_mode, market_type and settlement_asset are required",
+			"name, execution_mode and settlement_asset are required",
 		)
 	}
 	if !validCreationControlMode(r.ControlMode) {
 		return fmt.Errorf("control_mode is invalid")
 	}
 	return nil
+}
+
+// validMarkets 要求市场集合非空、每项合法且不重复；顺序和 STOCK 不能与现货、合约混合由服务端规范化时校验。
+func validMarkets(markets []MarketType) bool {
+	if len(markets) == 0 {
+		return false
+	}
+	seen := make(map[MarketType]struct{}, len(markets))
+	for _, market := range markets {
+		if !validMarketType(market) {
+			return false
+		}
+		if _, duplicate := seen[market]; duplicate {
+			return false
+		}
+		seen[market] = struct{}{}
+	}
+	return true
+}
+
+func containsMarket(markets []MarketType, want MarketType) bool {
+	for _, market := range markets {
+		if market == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validCreationControlMode(mode ControlMode) bool {

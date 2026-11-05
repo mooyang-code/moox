@@ -98,14 +98,19 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if account.SpaceID != spaceID {
 		return Validation{}, ErrAccountOwnership
 	}
-	if err := spec.Validate(account.MarketType, now, v.MaxReferenceAge); err != nil {
+	// 订单的市场由标的 ID 决定，必须是账户已开通的市场。
+	market := account.MarketForInstrument(spec.InstrumentID)
+	if !account.SupportsMarket(market) {
+		return Validation{}, fmt.Errorf("%w: 账户没有开通市场 %s", ErrInstrumentDisabled, market)
+	}
+	if err := spec.Validate(market, now, v.MaxReferenceAge); err != nil {
 		return Validation{}, err
 	}
 	var instrument exchange.Instrument
 	if scoped, ok := v.Instruments.(AccountInstrumentSource); ok {
-		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, account.MarketType, spec.InstrumentID)
+		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, market, spec.InstrumentID)
 	} else {
-		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, account.MarketType, spec.InstrumentID)
+		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, market, spec.InstrumentID)
 	}
 	if err != nil {
 		return Validation{}, err
@@ -114,7 +119,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		return Validation{}, ErrInstrumentDisabled
 	}
 	exchangeQuantity := spec.Quantity
-	if exchange.RuleFor(account.MarketType).ContractValue {
+	if exchange.RuleFor(market).ContractValue {
 		if instrument.ContractValue.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, ErrQuantityRule
 		}
@@ -154,7 +159,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		// taker, while a resting GTC LIMIT may later be maker.
 		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
 	}
-	if rule := exchange.RuleFor(account.MarketType); !rule.UsesMargin {
+	if rule := exchange.RuleFor(market); !rule.UsesMargin {
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
 			reserveNotional := referenceNotional
@@ -178,9 +183,6 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		}
 	} else {
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
-		if !found && instrument.ExchangeSymbol != "" {
-			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
-		}
 		if !found {
 			leverage, found = account.LeverageSettings["*"]
 		}

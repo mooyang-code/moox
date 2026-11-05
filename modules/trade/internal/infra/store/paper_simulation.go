@@ -102,13 +102,13 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	snapshot.Balances = make([]AssetBalance, 0, len(assets))
 	for _, asset := range assets {
 		total := projection.Totals[asset].String()
-		snapshot.Balances = append(snapshot.Balances, AssetBalance{Asset: asset, Total: total, Available: total, Locked: "0"})
+		snapshot.Balances = append(snapshot.Balances, AssetBalance{Wallet: string(exchange.WalletUnified), Asset: asset, Total: total, Available: total, Locked: "0", Borrowed: "0"})
 	}
 	// Closing must work without quotes. Cash is authoritative, but mark-based
 	// valuation remains cached and none of its freshness timestamps advance.
 	cash := projection.Totals[account.SettlementAsset]
 	snapshot.AvailableFunds = cash.String()
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasPositionMarket() {
 		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err

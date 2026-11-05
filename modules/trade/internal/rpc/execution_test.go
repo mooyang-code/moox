@@ -26,7 +26,7 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			db := rpcStoreWithAccount(t)
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 			if err := db.Transaction(ctx, func(tx *store.Tx) error {
-				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		for _, accountID := range []string{"account-1", "account-2"} {
 			if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 				SpaceID: "space-1", TradingAccountID: accountID, Name: accountID,
-				Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+				Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
 				Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 			}); err != nil {
 				return err
@@ -195,7 +195,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
 			return err
@@ -264,7 +264,7 @@ func rpcStoreWithAccount(t *testing.T) *store.Store {
 	if err := db.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
-			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 		})
 	}); err != nil {

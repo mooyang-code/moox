@@ -4,30 +4,179 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
 )
 
 type LeverageSettings map[string]string
 type FillCursors map[string]string
 
+// AssetBalance 是一个钱包里一种资产的余额。内存里所有钱包的余额平铺在一起，每项带钱包；
+// 落库时按钱包分组，见 TradingAccountSnapshot 的 MarshalJSON。
 type AssetBalance struct {
+	Wallet    string `json:"-"`
 	Asset     string `json:"asset"`
 	Available string `json:"available"`
 	Locked    string `json:"locked"`
 	Total     string `json:"total"`
+	Borrowed  string `json:"borrowed"`
 }
 
 type TradingAccountSnapshot struct {
-	Balances          []AssetBalance `json:"balances"`
-	Equity            string         `json:"equity"`
-	AvailableFunds    string         `json:"available_funds"`
-	UsedMargin        string         `json:"used_margin"`
-	MaintenanceMargin string         `json:"maintenance_margin"`
-	UnrealizedPnL     string         `json:"unrealized_pnl"`
-	ExchangeUpdatedAt int64          `json:"exchange_updated_at"`
+	Balances          []AssetBalance
+	Equity            string
+	AvailableFunds    string
+	UsedMargin        string
+	MaintenanceMargin string
+	UnrealizedPnL     string
+	// ExchangeEquity 是交易所给的总权益，只用于展示核对。
+	ExchangeEquity    string
+	ExchangeUpdatedAt int64
+	// WalletUpdatedAt 记录各钱包余额的更新时间（交易所毫秒）；没有记录的钱包按 ExchangeUpdatedAt 算。
+	WalletUpdatedAt map[string]int64
+}
+
+// walletSnapshot 是快照落库时一个钱包的写法。
+type walletSnapshot struct {
+	Wallet    string         `json:"wallet"`
+	UpdatedAt int64          `json:"updated_at"`
+	Balances  []AssetBalance `json:"balances"`
+}
+
+// snapshotDocument 是快照落库的 JSON 结构：权益字段 + 各钱包余额。
+type snapshotDocument struct {
+	Equity            string           `json:"equity"`
+	AvailableFunds    string           `json:"available_funds"`
+	UsedMargin        string           `json:"used_margin"`
+	MaintenanceMargin string           `json:"maintenance_margin"`
+	UnrealizedPnL     string           `json:"unrealized_pnl"`
+	ExchangeEquity    string           `json:"exchange_equity"`
+	ExchangeUpdatedAt int64            `json:"exchange_updated_at"`
+	Wallets           []walletSnapshot `json:"wallets"`
+}
+
+// MarshalJSON 把平铺的余额按钱包分组，钱包按名称排序，同一个钱包内保持原有顺序。
+func (s TradingAccountSnapshot) MarshalJSON() ([]byte, error) {
+	document := snapshotDocument{
+		Equity: s.Equity, AvailableFunds: s.AvailableFunds, UsedMargin: s.UsedMargin,
+		MaintenanceMargin: s.MaintenanceMargin, UnrealizedPnL: s.UnrealizedPnL,
+		ExchangeEquity: s.ExchangeEquity, ExchangeUpdatedAt: s.ExchangeUpdatedAt,
+		Wallets: []walletSnapshot{},
+	}
+	index := make(map[string]int)
+	for _, balance := range s.Balances {
+		at, ok := index[balance.Wallet]
+		if !ok {
+			updatedAt, known := s.WalletUpdatedAt[balance.Wallet]
+			if !known {
+				updatedAt = s.ExchangeUpdatedAt
+			}
+			at = len(document.Wallets)
+			index[balance.Wallet] = at
+			document.Wallets = append(document.Wallets, walletSnapshot{Wallet: balance.Wallet, UpdatedAt: updatedAt, Balances: []AssetBalance{}})
+		}
+		document.Wallets[at].Balances = append(document.Wallets[at].Balances, balance)
+	}
+	sort.SliceStable(document.Wallets, func(i, j int) bool { return document.Wallets[i].Wallet < document.Wallets[j].Wallet })
+	return json.Marshal(document)
+}
+
+// UnmarshalJSON 读取落库的 JSON，把各钱包的余额还原成带钱包的平铺列表。
+func (s *TradingAccountSnapshot) UnmarshalJSON(data []byte) error {
+	var document snapshotDocument
+	if err := json.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	*s = TradingAccountSnapshot{
+		Equity: document.Equity, AvailableFunds: document.AvailableFunds, UsedMargin: document.UsedMargin,
+		MaintenanceMargin: document.MaintenanceMargin, UnrealizedPnL: document.UnrealizedPnL,
+		ExchangeEquity: document.ExchangeEquity, ExchangeUpdatedAt: document.ExchangeUpdatedAt,
+	}
+	for _, wallet := range document.Wallets {
+		if s.WalletUpdatedAt == nil {
+			s.WalletUpdatedAt = make(map[string]int64, len(document.Wallets))
+		}
+		s.WalletUpdatedAt[wallet.Wallet] = wallet.UpdatedAt
+		for _, balance := range wallet.Balances {
+			balance.Wallet = wallet.Wallet
+			s.Balances = append(s.Balances, balance)
+		}
+	}
+	return nil
+}
+
+// SnapshotFromExchange 把适配器返回的快照转成落库的快照。
+func SnapshotFromExchange(snapshot exchange.AccountSnapshot) TradingAccountSnapshot {
+	balances := make([]AssetBalance, 0, len(snapshot.Balances))
+	for _, balance := range snapshot.Balances {
+		balances = append(balances, AssetBalance{
+			Wallet: string(balance.Wallet), Asset: balance.Asset,
+			Available: balance.Available.String(), Locked: balance.Locked.String(),
+			Total: balance.Total.String(), Borrowed: balance.Borrowed.String(),
+		})
+	}
+	return TradingAccountSnapshot{
+		Balances: balances, Equity: snapshot.Equity.String(),
+		AvailableFunds:    snapshot.AvailableFunds.String(),
+		UsedMargin:        snapshot.UsedMargin.String(),
+		MaintenanceMargin: snapshot.MaintenanceMargin.String(),
+		UnrealizedPnL:     snapshot.UnrealizedPnL.String(),
+		ExchangeEquity:    snapshot.ExchangeEquity.String(),
+		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
+	}
+}
+
+// ToExchange 把落库的快照转回交易所快照；空的或无法解析的数值按零处理。
+func (s TradingAccountSnapshot) ToExchange() exchange.AccountSnapshot {
+	balances := make([]exchange.AssetBalance, 0, len(s.Balances))
+	for _, balance := range s.Balances {
+		balances = append(balances, exchange.AssetBalance{
+			Wallet: exchange.Wallet(balance.Wallet), Asset: balance.Asset,
+			Available: decimalOrZero(balance.Available), Locked: decimalOrZero(balance.Locked),
+			Total: decimalOrZero(balance.Total), Borrowed: decimalOrZero(balance.Borrowed),
+		})
+	}
+	var updatedAt time.Time
+	if s.ExchangeUpdatedAt > 0 {
+		updatedAt = time.UnixMilli(s.ExchangeUpdatedAt).UTC()
+	}
+	return exchange.AccountSnapshot{
+		Balances: balances, Equity: decimalOrZero(s.Equity),
+		AvailableFunds:    decimalOrZero(s.AvailableFunds),
+		UsedMargin:        decimalOrZero(s.UsedMargin),
+		MaintenanceMargin: decimalOrZero(s.MaintenanceMargin),
+		UnrealizedPnL:     decimalOrZero(s.UnrealizedPnL),
+		ExchangeEquity:    decimalOrZero(s.ExchangeEquity),
+		ExchangeUpdatedAt: updatedAt,
+	}
+}
+
+func decimalOrZero(raw string) shared.Decimal {
+	if raw == "" {
+		return shared.Zero()
+	}
+	value, err := shared.ParseDecimal(raw)
+	if err != nil {
+		return shared.Zero()
+	}
+	return value
+}
+
+// WalletBalances 返回某个钱包里的余额。
+func (s TradingAccountSnapshot) WalletBalances(wallet string) []AssetBalance {
+	var result []AssetBalance
+	for _, balance := range s.Balances {
+		if balance.Wallet == wallet {
+			result = append(result, balance)
+		}
+	}
+	return result
 }
 
 // DefaultLeverageKey 是 LeverageSettings 里账户默认杠杆的键，不是交易标的。
@@ -42,12 +191,16 @@ func (s LeverageSettings) For(symbol string) string {
 }
 
 type TradingAccountRecord struct {
-	SpaceID            string
-	TradingAccountID   string
-	Name               string
-	Exchange           string
-	MarketType         string
-	ExecutionMode      string
+	SpaceID          string
+	TradingAccountID string
+	Name             string
+	Exchange         string
+	// Markets 是已开通的市场，按 SPOT、SWAP、STOCK 的固定顺序排列。
+	Markets       []string
+	ExecutionMode string
+	// AccountMode 只由交易所检测写入；InspectionJSON 是最近一次检测的结果。
+	AccountMode        string
+	InspectionJSON     string
 	Environment        string
 	PaperConfig        *PaperAccountConfigRecord
 	CredentialSecretID string
@@ -68,13 +221,42 @@ type TradingAccountRecord struct {
 	UpdatedAt           time.Time
 }
 
+// SoleMarket 返回只开通了一个市场的账户的市场；开通多个市场时返回空串。
+func (r TradingAccountRecord) SoleMarket() string {
+	if len(r.Markets) != 1 {
+		return ""
+	}
+	return r.Markets[0]
+}
+
+// HasBalanceMarket 报告账户是否开通了持仓来自余额的市场（现货、股票）。
+func (r TradingAccountRecord) HasBalanceMarket() bool {
+	return slices.ContainsFunc(r.Markets, func(market string) bool {
+		return exchange.RuleFor(market).PositionFromBalance
+	})
+}
+
+// HasPositionMarket 报告账户是否开通了持仓来自持仓表（而不是余额）的市场，例如 SWAP。
+func (r TradingAccountRecord) HasPositionMarket() bool {
+	return slices.ContainsFunc(r.Markets, func(market string) bool {
+		return !exchange.RuleFor(market).PositionFromBalance
+	})
+}
+
+// SupportsMarket 报告账户是否已开通某个市场。
+func (r TradingAccountRecord) SupportsMarket(market string) bool {
+	return slices.Contains(r.Markets, market)
+}
+
 type tradingAccountRow struct {
 	SpaceID              string    `gorm:"column:c_space_id"`
 	TradingAccountID     string    `gorm:"column:c_trading_account_id"`
 	Name                 string    `gorm:"column:c_name"`
 	Exchange             string    `gorm:"column:c_exchange"`
-	MarketType           string    `gorm:"column:c_market_type"`
+	Markets              string    `gorm:"column:c_markets"`
 	ExecutionMode        string    `gorm:"column:c_execution_mode"`
+	AccountMode          string    `gorm:"column:c_account_mode"`
+	InspectionJSON       string    `gorm:"column:c_inspection_json"`
 	Environment          string    `gorm:"column:c_live_environment"`
 	CredentialSecretID   string    `gorm:"column:c_credential_secret_id"`
 	SettlementAsset      string    `gorm:"column:c_settlement_asset"`
@@ -103,7 +285,7 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		tx.store.identities.Invalidate()
 	}
 	if record.SpaceID == "" || record.TradingAccountID == "" || record.Name == "" ||
-		record.Exchange == "" || record.MarketType == "" || record.ExecutionMode == "" ||
+		record.Exchange == "" || len(record.Markets) == 0 || record.ExecutionMode == "" ||
 		record.SettlementAsset == "" || record.Status == "" ||
 		(record.ExecutionMode == "LIVE" && record.CredentialSecretID == "") {
 		return fmt.Errorf("%w: incomplete Exchange account", ErrInvalidRecord)
@@ -127,10 +309,18 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	if err != nil {
 		return err
 	}
+	markets, err := encodeMarkets(record.Markets)
+	if err != nil {
+		return err
+	}
+	if record.InspectionJSON == "" {
+		record.InspectionJSON = "{}"
+	}
 	row := tradingAccountRow{
 		SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
-		Name: record.Name, Exchange: record.Exchange, MarketType: record.MarketType,
-		ExecutionMode: record.ExecutionMode, Environment: record.Environment,
+		Name: record.Name, Exchange: record.Exchange, Markets: markets,
+		ExecutionMode: record.ExecutionMode, AccountMode: record.AccountMode,
+		InspectionJSON: record.InspectionJSON, Environment: record.Environment,
 		CredentialSecretID: record.CredentialSecretID,
 		SettlementAsset:    record.SettlementAsset, MarginMode: record.MarginMode,
 		Status:               record.Status,
@@ -146,18 +336,20 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	}
 	err = tx.db.Exec(`
 		INSERT INTO t_trading_accounts (
-			c_space_id, c_trading_account_id, c_name, c_exchange, c_market_type,
-		c_execution_mode, c_live_environment, c_credential_secret_id,
+			c_space_id, c_trading_account_id, c_name, c_exchange, c_markets,
+			c_execution_mode, c_account_mode, c_inspection_json,
+			c_live_environment, c_credential_secret_id,
 			c_settlement_asset, c_margin_mode,
 			c_status, c_ready,
 			c_leverage_settings_json,
 			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
 			c_last_sync_at, c_last_ready_at,
 			c_last_error, c_ctime
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.MarketType,
-		row.ExecutionMode, row.Environment, row.CredentialSecretID,
+		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.Markets,
+		row.ExecutionMode, row.AccountMode, row.InspectionJSON,
+		row.Environment, row.CredentialSecretID,
 		row.SettlementAsset, row.MarginMode,
 		row.Status, row.Ready,
 		row.LeverageSettingsJSON,
@@ -592,10 +784,15 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 	if _, err := encodeSnapshot(snapshot); err != nil {
 		return TradingAccountRecord{}, err
 	}
+	markets, err := decodeMarkets(row.Markets)
+	if err != nil {
+		return TradingAccountRecord{}, err
+	}
 	return TradingAccountRecord{
 		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
-		Name: row.Name, Exchange: row.Exchange, MarketType: row.MarketType,
-		ExecutionMode: row.ExecutionMode, Environment: row.Environment,
+		Name: row.Name, Exchange: row.Exchange, Markets: markets,
+		ExecutionMode: row.ExecutionMode, AccountMode: row.AccountMode,
+		InspectionJSON: row.InspectionJSON, Environment: row.Environment,
 		CredentialSecretID: row.CredentialSecretID,
 		SettlementAsset:    row.SettlementAsset, MarginMode: row.MarginMode,
 		Status:           row.Status,
@@ -674,12 +871,23 @@ func encodeLeverageSettings(settings LeverageSettings) (string, error) {
 }
 
 func encodeSnapshot(snapshot TradingAccountSnapshot) (string, error) {
+	// 先复制余额再规范化，不改动调用方持有的快照。
+	snapshot.Balances = append([]AssetBalance(nil), snapshot.Balances...)
+	seen := make(map[string]struct{}, len(snapshot.Balances))
 	for i := range snapshot.Balances {
 		balance := &snapshot.Balances[i]
 		if balance.Asset == "" {
 			return "", fmt.Errorf("%w: empty balance asset", ErrInvalidRecord)
 		}
-		for _, value := range []*string{&balance.Available, &balance.Locked, &balance.Total} {
+		if !exchange.Wallet(balance.Wallet).Valid() {
+			return "", fmt.Errorf("%w: balance %s has unsupported wallet %q", ErrInvalidRecord, balance.Asset, balance.Wallet)
+		}
+		key := balance.Wallet + "/" + balance.Asset
+		if _, duplicate := seen[key]; duplicate {
+			return "", fmt.Errorf("%w: duplicate balance %s in wallet %s", ErrInvalidRecord, balance.Asset, balance.Wallet)
+		}
+		seen[key] = struct{}{}
+		for _, value := range []*string{&balance.Available, &balance.Locked, &balance.Total, &balance.Borrowed} {
 			canonical, err := canonicalOptionalDecimal(*value)
 			if err != nil {
 				return "", err
@@ -693,6 +901,7 @@ func encodeSnapshot(snapshot TradingAccountSnapshot) (string, error) {
 		&snapshot.UsedMargin,
 		&snapshot.MaintenanceMargin,
 		&snapshot.UnrealizedPnL,
+		&snapshot.ExchangeEquity,
 	} {
 		canonical, err := canonicalOptionalDecimal(*value)
 		if err != nil {
@@ -700,14 +909,40 @@ func encodeSnapshot(snapshot TradingAccountSnapshot) (string, error) {
 		}
 		*value = canonical
 	}
-	if snapshot.Balances == nil {
-		snapshot.Balances = []AssetBalance{}
-	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return "", fmt.Errorf("%w: encode snapshot: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+// encodeMarkets 把已开通的市场写成库里的逗号分隔文本；输入必须已经是规范写法。
+func encodeMarkets(markets []string) (string, error) {
+	typed := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		typed[i] = exchange.MarketType(market)
+	}
+	normalized, err := exchange.NormalizeMarkets(typed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
+	encoded := exchange.JoinMarkets(normalized)
+	if encoded != strings.Join(markets, ",") {
+		return "", fmt.Errorf("%w: markets %v are not canonical", ErrInvalidRecord, markets)
+	}
+	return encoded, nil
+}
+
+func decodeMarkets(raw string) ([]string, error) {
+	typed, err := exchange.ParseMarkets(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
+	markets := make([]string, len(typed))
+	for i, market := range typed {
+		markets[i] = string(market)
+	}
+	return markets, nil
 }
 
 func canonicalOptionalDecimal(raw string) (string, error) {

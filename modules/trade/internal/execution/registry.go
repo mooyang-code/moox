@@ -23,8 +23,6 @@ type ExchangeDescriptor struct {
 	Exchange     exchange.Exchange
 	OrderTypes   []exchange.OrderType
 	FillPolicies []exchange.FillPolicy
-	// UnifiedAccount 表示现货和合约共用一个资金账户，同一把密钥只能建一个执行账户。
-	UnifiedAccount bool
 	// TradingSession 判断当前是否在交易时段；nil 表示全天可交易。
 	TradingSession func(time.Time) bool
 }
