@@ -383,7 +383,7 @@ overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dis
 factor = ["factor-engine", "archive-worker"]
 
 [egress_proxy]
-http_domains = ["*.binance.com", "data-api.binance.vision"]
+http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
 
 [egress_proxy.dns]
 refresh_interval_seconds = 300

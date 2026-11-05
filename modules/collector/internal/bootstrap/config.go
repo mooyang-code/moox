@@ -350,7 +350,7 @@ func Default() *Config {
 			RefreshInterval: 5 * time.Minute,
 			ResolveTimeout:  5 * time.Second,
 		},
-		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision"}, DNS: EgressDNSConfig{
+		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}, DNS: EgressDNSConfig{
 			RefreshInterval: 5 * time.Minute,
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,

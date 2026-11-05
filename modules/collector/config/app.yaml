@@ -58,7 +58,7 @@ dns:
   # nameservers: ["119.29.29.29", "1.1.1.1"]
 
 egress_proxy:
-  domains: ["*.binance.com", "data-api.binance.vision"]
+  domains: ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
   dns:
     domains: []
     refresh_interval: 5m

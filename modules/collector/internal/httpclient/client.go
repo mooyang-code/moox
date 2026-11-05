@@ -294,6 +294,7 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 		return fmt.Errorf("创建请求失败: %w", err)
 	}
 	req.Header.Set("User-Agent", "moox-collector/1.0")
+	applyRequestHeaders(ctx, req)
 	started := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {

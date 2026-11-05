@@ -601,7 +601,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.Factors.SourceDir = "./modules/factor/factors"
 	}
 	if !md.IsDefined("egress_proxy", "http_domains") {
-		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision"}
+		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}
 	}
 	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
 		out.EgressProxy.DNS.RefreshIntervalSeconds = 300
