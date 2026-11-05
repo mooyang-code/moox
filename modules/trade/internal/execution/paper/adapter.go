@@ -376,11 +376,11 @@ func (a *Adapter) PlaceOrder(_ context.Context, req exchange.OrderRequest) (exch
 	}
 	now := a.now()
 	symbol := req.ExchangeSymbol
-	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: paperOrderID(a.Account.TradingAccountID, req.ClientOrderID), ClientOrderID: req.ClientOrderID, Market: exchange.MarketType(a.Account.SoleMarket()), ExchangeSymbol: symbol, Status: exchange.OrderStatusOpen, CreatedAt: now, UpdatedAt: now}, nil
 }
 func (a *Adapter) CancelOrder(_ context.Context, symbol shared.ExchangeSymbol, id string) (exchange.Order, error) {
 	now := a.now()
-	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, ExchangeSymbol: symbol.String(), Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
+	return exchange.Order{ExchangeOrderID: id, ClientOrderID: id, Market: exchange.MarketType(a.Account.SoleMarket()), ExchangeSymbol: symbol.String(), Status: exchange.OrderStatusCanceled, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func orderFromRecord(row store.OrderRecord) exchange.Order {
