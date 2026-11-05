@@ -47,10 +47,13 @@ type ResampleSnapshot struct {
 	TaskID        string
 	EffectiveFrom int64
 	SeriesHash    string
-	Subjects      []string
+	// Subjects 是快照里的全部标的（去重、升序）。
+	Subjects []string
+	// Members 只在统一数据集（源有多个 series_tag）时有值：每个 series_tag 下的成员标的；单序列任务为空，成员就是 Subjects。
+	Members map[string][]string
 }
 
-// ResampleJob 是一个历史合成作业。Subjects 为空表示全部标的。
+// ResampleJob 是一个历史合成作业。Subjects 为空表示全部标的；SeriesTags 为空表示任务的全部源序列。
 type ResampleJob struct {
 	JobID          string
 	SpaceID        string
@@ -58,6 +61,7 @@ type ResampleJob struct {
 	RequestID      string
 	Origin         string
 	Subjects       []string
+	SeriesTags     []string
 	Start, End     time.Time
 	NextBucket     time.Time
 	NotBefore      time.Time
@@ -84,6 +88,8 @@ type BackfillNotice struct {
 	DatasetID string
 	Frequency string
 	SubjectID string
+	// SeriesTag 是被补写的序列；单序列数据集为空（事件里不带 series_tags）。
+	SeriesTag string
 	Start     time.Time
 	End       time.Time
 	Origin    string
@@ -109,6 +115,7 @@ type resampleSnapshotRow struct {
 	EffectiveFrom int64     `gorm:"column:c_effective_from"`
 	SeriesHash    string    `gorm:"column:c_series_hash"`
 	Subjects      string    `gorm:"column:c_subjects"`
+	Members       string    `gorm:"column:c_members"`
 	CreatedAt     time.Time `gorm:"column:c_ctime"`
 }
 
@@ -122,6 +129,7 @@ type resampleJobRow struct {
 	RequestID      string    `gorm:"column:c_request_id"`
 	Origin         string    `gorm:"column:c_origin"`
 	Subjects       string    `gorm:"column:c_subjects"`
+	SeriesTags     string    `gorm:"column:c_series_tags"`
 	Start          time.Time `gorm:"column:c_start"`
 	End            time.Time `gorm:"column:c_end"`
 	NextBucket     time.Time `gorm:"column:c_next_bucket"`
@@ -147,6 +155,7 @@ func (row resampleJobRow) job() ResampleJob {
 		LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 	_ = json.Unmarshal([]byte(row.Subjects), &job.Subjects)
+	_ = json.Unmarshal([]byte(row.SeriesTags), &job.SeriesTags)
 	_ = json.Unmarshal([]byte(row.SkippedSamples), &job.SkippedSamples)
 	return job
 }
@@ -157,6 +166,7 @@ type backfillNoticeRow struct {
 	DatasetID string    `gorm:"column:c_dataset_id"`
 	Frequency string    `gorm:"column:c_frequency"`
 	SubjectID string    `gorm:"column:c_subject_id"`
+	SeriesTag string    `gorm:"column:c_series_tag"`
 	Start     time.Time `gorm:"column:c_start"`
 	End       time.Time `gorm:"column:c_end"`
 	Origin    string    `gorm:"column:c_origin"`
@@ -168,7 +178,7 @@ type backfillNoticeRow struct {
 func (backfillNoticeRow) TableName() string { return "t_collector_backfill_notices" }
 
 func (row backfillNoticeRow) notice() BackfillNotice {
-	return BackfillNotice{ID: row.ID, SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID,
+	return BackfillNotice{ID: row.ID, SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag,
 		Start: row.Start.UTC(), End: row.End.UTC(), Origin: row.Origin, JobID: row.JobID, BatchID: row.BatchID}
 }
 
@@ -206,7 +216,11 @@ func (r *ResampleStateRepository) AddSnapshot(ctx context.Context, snapshot Resa
 		return err
 	}
 	subjects, _ := json.Marshal(snapshot.Subjects)
-	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects)}
+	members := []byte("{}")
+	if len(snapshot.Members) > 0 {
+		members, _ = json.Marshal(snapshot.Members)
+	}
+	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects), Members: string(members)}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
 }
 
@@ -239,6 +253,7 @@ func snapshotFromRow(row resampleSnapshotRow, err error) (ResampleSnapshot, bool
 	}
 	snapshot := ResampleSnapshot{SpaceID: row.SpaceID, TaskID: row.TaskID, EffectiveFrom: row.EffectiveFrom, SeriesHash: row.SeriesHash}
 	_ = json.Unmarshal([]byte(row.Subjects), &snapshot.Subjects)
+	_ = json.Unmarshal([]byte(row.Members), &snapshot.Members)
 	return snapshot, true, nil
 }
 
@@ -284,10 +299,12 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 				merged.End = maxTime(merged.End, job.End)
 				merged.NotBefore = maxTime(merged.NotBefore, job.NotBefore)
 				merged.Subjects = unionSubjects(merged.Subjects, job.Subjects)
+				merged.SeriesTags = unionSubjects(merged.SeriesTags, job.SeriesTags)
 				subjects, _ := json.Marshal(merged.Subjects)
+				seriesTags, _ := json.Marshal(merged.SeriesTags)
 				if err := tx.Model(&resampleJobRow{}).Where("c_id = ?", row.ID).Updates(map[string]any{
 					"c_start": merged.Start, "c_next_bucket": merged.NextBucket, "c_end": merged.End, "c_not_before": merged.NotBefore,
-					"c_subjects": string(subjects), "c_total_buckets": 0, "c_mtime": time.Now().UTC(),
+					"c_subjects": string(subjects), "c_series_tags": string(seriesTags), "c_total_buckets": 0, "c_mtime": time.Now().UTC(),
 				}).Error; err != nil {
 					return err
 				}
@@ -296,8 +313,9 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 			}
 		}
 		subjects, _ := json.Marshal(sortedUnique(job.Subjects))
+		seriesTags, _ := json.Marshal(sortedUnique(job.SeriesTags))
 		row := resampleJobRow{
-			JobID: job.JobID, SpaceID: job.SpaceID, TaskID: job.TaskID, RequestID: job.RequestID, Origin: job.Origin, Subjects: string(subjects),
+			JobID: job.JobID, SpaceID: job.SpaceID, TaskID: job.TaskID, RequestID: job.RequestID, Origin: job.Origin, Subjects: string(subjects), SeriesTags: string(seriesTags),
 			Start: job.Start.UTC(), End: job.End.UTC(), NextBucket: job.Start.UTC(), NotBefore: job.NotBefore.UTC(), Status: ResampleJobQueued,
 			TotalBuckets: job.TotalBuckets, SkippedSamples: "[]",
 		}
@@ -540,7 +558,7 @@ func addNoticesTx(tx *gorm.DB, notices []BackfillNotice) error {
 	}
 	rows := make([]backfillNoticeRow, len(notices))
 	for i, notice := range notices {
-		rows[i] = backfillNoticeRow{SpaceID: notice.SpaceID, DatasetID: notice.DatasetID, Frequency: notice.Frequency, SubjectID: notice.SubjectID,
+		rows[i] = backfillNoticeRow{SpaceID: notice.SpaceID, DatasetID: notice.DatasetID, Frequency: notice.Frequency, SubjectID: notice.SubjectID, SeriesTag: notice.SeriesTag,
 			Start: notice.Start.UTC(), End: notice.End.UTC(), Origin: notice.Origin, JobID: notice.JobID}
 	}
 	return tx.CreateInBatches(&rows, 200).Error

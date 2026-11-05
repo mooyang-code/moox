@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS t_collector_tag_sync_runs (
 
 -- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
 -- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
+-- c_members 只在统一数据集（源有多个 series_tag）时有值：series_tag 到成员标的的映射；单序列任务为 '{}'，成员就是 c_subjects。
 CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -289,12 +290,14 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL,
     c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_members TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (c_space_id, c_task_id, c_effective_from)
 );
 
 -- 历史合成作业：范围 [c_start, c_end) 按目标桶推进，c_next_bucket 是游标，进程重启后从游标继续。
 -- c_origin 取 manual（CLI、控制台）或 source_backfill（源数据补采完成后触发）；c_not_before 之前不开始。
+-- c_series_tags 是限定要合成的源序列（series_tag），'[]' 表示任务的全部源序列。
 CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
@@ -303,6 +306,7 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_request_id TEXT NOT NULL,
     c_origin TEXT NOT NULL DEFAULT 'manual',
     c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_series_tags TEXT NOT NULL DEFAULT '[]',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_next_bucket DATETIME NOT NULL,
@@ -335,12 +339,14 @@ END;
 
 -- 补写通知：补采分块读回确认成功（以及合成在周期结束后的补写）时，与状态更新在同一事务里记录。
 -- 发布协程按（空间、数据集、频率、来源、作业）合并成批，c_batch_id 为空表示还没有成批。
+-- c_series_tag 是被补写的序列；单序列数据集为空串，事件里不带 series_tags。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_notices (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_origin TEXT NOT NULL,

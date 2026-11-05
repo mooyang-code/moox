@@ -299,7 +299,7 @@ func TestWriteUsesPeriodCommitInsideSnapshotAndPlainWriteOutside(t *testing.T) {
 	engine, storage, task, bucket, mgr := commitFixture(t, now)
 	ctx := context.Background()
 	require.NoError(t, mgr.Resample().AddSnapshot(ctx, store.ResampleSnapshot{SpaceID: "crypto", TaskID: "task", EffectiveFrom: bucket.Key.Add(-time.Hour).Unix(), SeriesHash: "unused", Subjects: []string{"BTC", "ETH"}}))
-	set, err := seriesset.Canonicalize(task.series([]string{"BTC", "ETH"}))
+	set, err := seriesset.Canonicalize(SingleTagMembers(task, []string{"BTC", "ETH"}).Series())
 	require.NoError(t, err)
 	require.NoError(t, mgr.Resample().AddSnapshot(ctx, store.ResampleSnapshot{SpaceID: "crypto", TaskID: "task", EffectiveFrom: bucket.Key.Add(-30 * time.Minute).Unix(), SeriesHash: set.Hash, Subjects: []string{"BTC", "ETH"}}))
 
@@ -326,7 +326,7 @@ func TestWriteFallsBackToPlainWriteWhenPeriodCommitFailsOrDeadlinePassed(t *test
 	now := utc("2026-10-21T10:16:00Z")
 	engine, storage, task, bucket, mgr := commitFixture(t, now)
 	ctx := context.Background()
-	set, _ := seriesset.Canonicalize(task.series([]string{"BTC", "ETH", "SOL"}))
+	set, _ := seriesset.Canonicalize(SingleTagMembers(task, []string{"BTC", "ETH", "SOL"}).Series())
 	require.NoError(t, mgr.Resample().AddSnapshot(ctx, store.ResampleSnapshot{SpaceID: "crypto", TaskID: "task", EffectiveFrom: bucket.Key.Add(-time.Hour).Unix(), SeriesHash: set.Hash, Subjects: []string{"BTC", "ETH", "SOL"}}))
 
 	storage.commitErr = errors.New("period already completed")
@@ -360,17 +360,17 @@ func TestEnsureSnapshotRegistersFromNextBucketAndFollowsSubjectChanges(t *testin
 	task := makeTask(t, "crypto", "5m", "15m")
 	ctx := context.Background()
 
-	require.NoError(t, engine.EnsureSnapshot(ctx, task, []string{"ETH", "BTC"}))
+	require.NoError(t, engine.EnsureSnapshot(ctx, task, SingleTagMembers(task, []string{"ETH", "BTC"})))
 	require.Equal(t, []int64{utc("2026-10-21T10:15:00Z").Unix()}, registrar.calls, "生效点是当前时间之后的第一个目标桶边界")
-	require.NoError(t, engine.EnsureSnapshot(ctx, task, []string{"BTC", "ETH"}))
+	require.NoError(t, engine.EnsureSnapshot(ctx, task, SingleTagMembers(task, []string{"BTC", "ETH"})))
 	require.Len(t, registrar.calls, 1, "标的集合没变不重复登记")
 
 	// 上一份快照还没生效时不登记新的。
-	require.NoError(t, engine.EnsureSnapshot(ctx, task, []string{"BTC", "ETH", "SOL"}))
+	require.NoError(t, engine.EnsureSnapshot(ctx, task, SingleTagMembers(task, []string{"BTC", "ETH", "SOL"})))
 	require.Len(t, registrar.calls, 1)
 
 	now = utc("2026-10-21T10:20:00Z")
-	require.NoError(t, engine.EnsureSnapshot(ctx, task, []string{"BTC", "ETH", "SOL"}))
+	require.NoError(t, engine.EnsureSnapshot(ctx, task, SingleTagMembers(task, []string{"BTC", "ETH", "SOL"})))
 	require.Equal(t, []int64{utc("2026-10-21T10:15:00Z").Unix(), utc("2026-10-21T10:30:00Z").Unix()}, registrar.calls)
 	latest, ok, err := mgr.Resample().LatestSnapshot(ctx, "crypto", "task")
 	require.NoError(t, err)
@@ -379,7 +379,7 @@ func TestEnsureSnapshotRegistersFromNextBucketAndFollowsSubjectChanges(t *testin
 
 	registrar.err = marketstorage.ErrStaleEffectiveFrom
 	now = utc("2026-10-21T10:40:00Z")
-	require.NoError(t, engine.EnsureSnapshot(ctx, task, []string{"BTC"}), "生效点过期不报错，下一轮重选")
+	require.NoError(t, engine.EnsureSnapshot(ctx, task, SingleTagMembers(task, []string{"BTC"})), "生效点过期不报错，下一轮重选")
 }
 
 func TestEnsureSnapshotSkipsAStockHolidayBeyondStorageLimit(t *testing.T) {
@@ -388,7 +388,7 @@ func TestEnsureSnapshotSkipsAStockHolidayBeyondStorageLimit(t *testing.T) {
 	// 2026-09-30 晚间，国庆长假（10-01 起）之后第一个交易日离当前超过 Storage 允许的 7 天就不登记。
 	engine := &Engine{Snapshots: registrar, State: mgr.Resample(), Now: func() time.Time { return utc("2026-09-30T12:00:00Z") }}
 	task := makeTask(t, "stockcn", "1m", "1h")
-	require.NoError(t, engine.EnsureSnapshot(context.Background(), task, []string{"600000"}))
+	require.NoError(t, engine.EnsureSnapshot(context.Background(), task, SingleTagMembers(task, []string{"600000"})))
 	for _, at := range registrar.calls {
 		require.LessOrEqual(t, time.Unix(at, 0).UTC().Sub(utc("2026-09-30T12:00:00Z")), 7*24*time.Hour)
 	}
