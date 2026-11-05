@@ -62,7 +62,7 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Contains(t, providers["eastmoney"].Hosts, "push2his.eastmoney.com", "5m K 线走 push2his")
 }
 
-func TestReleaseStockCNRouteSpreads5mAcrossAllFourProviders(t *testing.T) {
+func TestReleaseStockCNRouteWeights5mTowardsTdx(t *testing.T) {
 	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
 	minute, err := route.Kline("1m")
@@ -70,12 +70,13 @@ func TestReleaseStockCNRouteSpreads5mAcrossAllFourProviders(t *testing.T) {
 	require.Equal(t, []string{"sina", "tencent", "tdx", "eastmoney"}, minute.ProviderChain())
 	five, err := route.Kline("5m")
 	require.NoError(t, err)
-	require.Equal(t, []string{"eastmoney", "sina", "tdx", "tencent"}, five.ProviderChain())
-	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 1}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1},
-		{Provider: "tdx", SourceID: "normal_7709", Weight: 1}, {Provider: "tencent", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
+	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, five.ProviderChain())
+	// PrimarySources 按来源名排序，与候选链的回落顺序无关；分配只看权重。
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 2}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1},
+		{Provider: "tdx", SourceID: "normal_7709", Weight: 3}, {Provider: "tencent", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
 }
 
-// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在四家 primary 之间大致均分。
+// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在四家 primary 之间按权重 3:2:1:1 分配。
 func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 	routeID, sources, err := stockCNAssignmentRoute("5m")
 	require.NoError(t, err)
@@ -90,9 +91,10 @@ func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 		counts[first.Provider]++
 	}
 	require.Len(t, counts, 4)
-	for _, provider := range []string{"eastmoney", "sina", "tdx", "tencent"} {
-		require.InDelta(t, 75, counts[provider], 20, provider)
+	for provider, want := range map[string]float64{"tdx": 129, "eastmoney": 86, "sina": 43, "tencent": 43} {
+		require.InDelta(t, want, counts[provider], 25, provider)
 	}
+	require.Greater(t, counts["tdx"], counts["eastmoney"], "tdx 权重最高")
 }
 
 func TestStockCNRouteValidation(t *testing.T) {

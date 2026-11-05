@@ -12,15 +12,16 @@ klines:
       - {id: eastmoney, source_id: stockcn_http, weight: 1, role: fallback}
   # 5m：四家都不复权，时间标签都是收盘时刻、首根都含 09:25 开盘集合竞价，归一化后时间对齐、成交量单位都是股；
   # 贴近 5 分钟边界的个别成交各家归属不同，个别根的量价会有小差异，整段成交量合计一致（2026-11-04 实测 600519 同 60 根，差 0.1% 以内）。
-  # 四家都是 primary：按标的固定分配（按路由 ID 与标的哈希，不随调用变化），每家只承担约四分之一的请求；
-  # 2026-11-05 实测 15 个函数收盘后同时起跑时，只用东方财富、新浪两家会开始出现重试。失败或限流再按下面的顺序回落。
+  # 四家都是 primary：按标的固定分配（按路由 ID 与标的哈希，不随调用变化），失败时按这里的顺序依次回落（每家最多试 3 次再换下一家）。
+  # 2026-11-05 在南京同 VPC 实测：四家都扛得住 64 并发突发、每秒 80 次持续，没有触顶，所以权重不看并发上限，看延迟和数据质量：
+  # - tdx：TCP，延迟最低且不随并发上升（64 并发仍约 130ms，HTTP 三家约 700ms），成交量与东方财富一致，成交额是 float32
+  #   （末位有误差，茅台 3.25 亿差约 7 元）；权重最高、排在回落链首位。
   # - eastmoney：push2his，成交量单位手×100，有成交额，回看 30 天。
-  # - sina：成交量单位股，有成交额，一页 1023 根、回看 20 天。
-  # - tdx：TCP，成交量单位股，成交额是 float32（末位有误差），可按偏移分页回看 365 天，但每页单独建连，长回看补采也靠它。
-  # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated_close_x_volume）。
+  # - sina：成交量单位股，有成交额但成交量、成交额比其他三家低约 0.04%，一页 1023 根、回看 20 天。
+  # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated_close_x_volume），权重最低。
   - frequency: 5m
     providers:
-      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 3, role: primary}
+      - {id: eastmoney, source_id: stockcn_http, weight: 2, role: primary}
       - {id: sina, source_id: stockcn_minute_http, weight: 1, role: primary}
-      - {id: tdx, source_id: normal_7709, weight: 1, role: primary}
       - {id: tencent, source_id: stockcn_http, weight: 1, role: primary}
