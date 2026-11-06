@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,4 +115,12 @@ func TestStockCNFetchLimitsAreDerivedFromTheSourceLimits(t *testing.T) {
 	require.Equal(t, 3000, got.RequestTimeoutMS, "其余参数不动")
 	unchanged := PlanFetch{Concurrency: 7, RPS: 9, FeedConcurrency: 3}
 	require.Equal(t, unchanged, derive(TaskGroup{Frequency: "15m"}, unchanged), "没有这个频率的路由时保持原值")
+}
+
+func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {
+	require.False(t, adaptiveBatch(domain.BatchKindRealtime))
+	require.False(t, adaptiveBatch(""))
+	for _, kind := range []domain.BatchKind{domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair} {
+		require.True(t, adaptiveBatch(kind), kind)
+	}
 }

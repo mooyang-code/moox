@@ -32,6 +32,9 @@ type FeedGuard struct {
 
 	sem chan struct{}
 
+	// adaptive 不为空时，每秒请求数取它的当前值而不是策略里的固定值（补采路径，见 AdaptiveRate）。
+	adaptive *AdaptiveRate
+
 	mu            sync.Mutex
 	initialized   bool
 	tokens        float64
@@ -76,7 +79,18 @@ func (g *FeedGuard) Do(ctx context.Context, fn func(context.Context) error) erro
 	if errors.Is(err, ErrRateLimited) {
 		g.setCooldown()
 	}
+	if g.adaptive != nil {
+		g.adaptive.Observe(err)
+	}
 	return err
+}
+
+// rate 返回当前每秒请求数：自适应时取实时值，否则是策略里的固定值。
+func (g *FeedGuard) rate() float64 {
+	if g.adaptive != nil {
+		return g.adaptive.Rate()
+	}
+	return g.policy.RequestsPerSecond
 }
 
 func (g *FeedGuard) wait(ctx context.Context) error {
@@ -85,6 +99,7 @@ func (g *FeedGuard) wait(ctx context.Context) error {
 			return err
 		}
 		now := g.clock.Now()
+		rate := g.rate()
 
 		g.mu.Lock()
 		wait := time.Duration(0)
@@ -99,7 +114,7 @@ func (g *FeedGuard) wait(ctx context.Context) error {
 			} else {
 				elapsed := now.Sub(g.lastRefill)
 				if elapsed > 0 {
-					g.tokens = math.Min(float64(g.policy.Burst), g.tokens+elapsed.Seconds()*g.policy.RequestsPerSecond)
+					g.tokens = math.Min(float64(g.policy.Burst), g.tokens+elapsed.Seconds()*rate)
 					g.lastRefill = now
 				}
 			}
@@ -112,7 +127,7 @@ func (g *FeedGuard) wait(ctx context.Context) error {
 				g.mu.Unlock()
 				return nil
 			}
-			wait = tokenWaitDuration(g.tokens, g.policy.RequestsPerSecond)
+			wait = tokenWaitDuration(g.tokens, rate)
 		}
 		g.mu.Unlock()
 
@@ -393,7 +408,7 @@ func (s *RouterSession) FetchKlines(ctx context.Context, req KlineRequest, candi
 			lastErr = err
 			continue
 		}
-		guard, err := s.router.feedGuard(providerID, spec.RateLimit, req.RateBudgetRatio)
+		guard, err := s.router.feedGuard(providerID, spec.RateLimit, req.RateBudgetRatio, req.Adaptive)
 		if err != nil {
 			s.breaker.Observe(providerID, err)
 			return nil, err
@@ -438,20 +453,24 @@ func (s *RouterSession) KlineSpec(providerID string) (KlineSpec, error) {
 	return fetcher.KlineSpec(), nil
 }
 
-func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudgetRatio float64) (*FeedGuard, error) {
+func (r *Router) feedGuard(providerID string, policy RateLimitPolicy, rateBudgetRatio float64, adaptive bool) (*FeedGuard, error) {
 	r.guardsMu.Lock()
 	defer r.guardsMu.Unlock()
 
 	rateBudgetRatio = normalizedRateBudgetRatio(rateBudgetRatio)
 	policy = applyRuntimeRequestTimeout(policy)
-	guardKey := providerID + "\x00" + strconv.FormatFloat(rateBudgetRatio, 'g', -1, 64)
+	guardKey := providerID + "\x00" + strconv.FormatFloat(rateBudgetRatio, 'g', -1, 64) + "\x00" + strconv.FormatBool(adaptive)
 	guard, ok := r.feedGuardsByID[guardKey]
 	if ok {
 		return guard, nil
 	}
-	created, err := NewFeedGuard(scaleRateLimitPolicy(policy, rateBudgetRatio), r.clock, r.sleep)
+	scaled := scaleRateLimitPolicy(policy, rateBudgetRatio)
+	created, err := NewFeedGuard(scaled, r.clock, r.sleep)
 	if err != nil {
 		return nil, err
+	}
+	if adaptive {
+		created.adaptive = sharedAdaptiveRate(providerID, scaled.RequestsPerSecond, r.clock)
 	}
 	r.feedGuardsByID[guardKey] = created
 	return created, nil
