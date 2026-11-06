@@ -60,7 +60,7 @@ func (p *schedProbe) finish() map[string]string {
 }
 
 // runtimeFields 是函数进程与触发的上下文字段：进程已存活多久（冷启动时很小）、第几次调用、CPU 数，
-// 以及定时事件迟到、函数内错峰等待和从入口到开始取数的时间。
+// 以及定时事件迟到和从入口到开始取数的时间（含等待收盘后的取数时刻）。
 func runtimeFields(req Request, started time.Time) map[string]string {
 	fields := map[string]string{
 		"proc_age_ms":    strconv.FormatInt(started.Sub(processStart).Milliseconds(), 10),
@@ -74,9 +74,6 @@ func runtimeFields(req Request, started time.Time) map[string]string {
 	}
 	if req.TimerLateMS != 0 {
 		fields["timer_late_ms"] = strconv.Itoa(req.TimerLateMS)
-	}
-	if req.StaggerMS != 0 {
-		fields["stagger_ms"] = strconv.Itoa(req.StaggerMS)
 	}
 	if !req.EntryAt.IsZero() {
 		fields["entry_to_start_ms"] = strconv.FormatInt(started.Sub(req.EntryAt).Milliseconds(), 10)

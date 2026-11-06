@@ -118,13 +118,12 @@ func (h *Handler) RunPlan(ctx context.Context, plan *Plan, run PlanRun) (*model.
 	}
 	defer closeGateway()
 	defer h.reportMetrics(ctx)
-	stagger := plan.StartDelay(functionName, entry, scheduled.UTC().Truncate(time.Minute))
+	wait := plan.StartDelay(entry, scheduled.UTC().Truncate(time.Minute))
 	for index := range planned {
 		planned[index].Request.TimerLateMS = int(entry.Sub(scheduled).Milliseconds())
-		planned[index].Request.StaggerMS = int(stagger.Milliseconds())
 		planned[index].Request.EntryAt = entry
 	}
-	if delay := stagger; delay > 0 {
+	if delay := wait; delay > 0 {
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:

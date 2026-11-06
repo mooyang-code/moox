@@ -411,8 +411,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		require.Equal(t, 20, cfg.SCFPlan.symbolsPerFunction("stockcn"))
 		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
-		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerBaseMS)
-		require.Zero(t, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS, "A 股不错峰")
+		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 1 秒取数")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -440,7 +439,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
 	require.Equal(t, 8, fetch.Concurrency)
-	require.Equal(t, 1000, fetch.StaggerBaseMS)
+	require.Equal(t, 1000, fetch.NotBeforeMS)
 	require.Positive(t, fetch.Concurrency)
 	require.Positive(t, fetch.Burst)
 	require.Positive(t, fetch.RequestTimeoutMS)
@@ -479,18 +478,17 @@ func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
 	require.Equal(t, 800, fetch.StandbyMS)
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
-	require.Equal(t, 1500, fetch.StaggerMS, "crypto 的错峰来自空间默认")
 	require.True(t, fetch.ConnReuse)
 }
 
-// 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值；错峰按空间设置（crypto 的内置默认在空间上）。
-func TestScfPlanFetchYAMLStaggerOverride(t *testing.T) {
+// 连接复用与备援、取数时刻可以只写需要改的几项，其余沿用默认值；取数时刻按空间设置。
+func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    conn_reuse: true\n  spaces:\n    crypto:\n      fetch:\n        stagger_ms: 500\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    conn_reuse: true\n  spaces:\n    crypto:\n      fetch:\n        not_before_ms: 2000\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto", "")
-	require.Equal(t, 500, fetch.StaggerMS)
+	require.Equal(t, 2000, fetch.NotBeforeMS)
 	require.True(t, fetch.ConnReuse)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
 	require.Zero(t, fetch.StandbyMS)

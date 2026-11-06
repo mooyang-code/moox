@@ -37,7 +37,7 @@ type SCFPlanConfig struct {
 	// 旧 Invoke 函数不在 VPC 内，仍走公网入口，直到 6b 清理。
 	AccessRoutes map[string]SCFAccessEndpoint `yaml:"access_routes"`
 	Fetch        SCFPlanFetchConfig           `yaml:"fetch"`
-	// Spaces 是按空间的覆盖项：每函数标的数与拉取参数（stockcn 与 crypto 的限流、错峰不同）。
+	// Spaces 是按空间的覆盖项：每函数标的数与拉取参数（stockcn 与 crypto 的限流、取数时刻不同）。
 	Spaces map[string]SCFPlanSpaceConfig `yaml:"spaces"`
 }
 
@@ -49,8 +49,6 @@ type SCFPlanFetchConfig struct {
 	FeedConcurrency  int `yaml:"feed_concurrency"`
 	RequestTimeoutMS int `yaml:"request_timeout_ms"`
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
-	StaggerBaseMS    int `yaml:"stagger_base_ms"`
-	StaggerMS        int `yaml:"stagger_ms"`
 	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒没有结果就并发再发一个备援请求，先成功的为准），默认关闭；
 	// StandbyHourOnly 为真时只在整点那一分钟启用。
 	StandbyMS       int  `yaml:"standby_ms"`
@@ -72,8 +70,8 @@ func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
 	return SCFPlanFetchConfig{
 		Concurrency: pick(f.Concurrency, base.Concurrency), RPS: pick(f.RPS, base.RPS), Burst: pick(f.Burst, base.Burst),
 		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
-		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS), StaggerBaseMS: pick(f.StaggerBaseMS, base.StaggerBaseMS), StaggerMS: pick(f.StaggerMS, base.StaggerMS),
-		StandbyMS: pick(f.StandbyMS, base.StandbyMS), StandbyHourOnly: f.StandbyHourOnly || base.StandbyHourOnly,
+		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS),
+		StandbyMS:        pick(f.StandbyMS, base.StandbyMS), StandbyHourOnly: f.StandbyHourOnly || base.StandbyHourOnly,
 		ConnReuse: f.ConnReuse || base.ConnReuse, NotBeforeMS: pick(f.NotBeforeMS, base.NotBeforeMS),
 	}
 }
@@ -137,7 +135,7 @@ func (c SCFPlanConfig) fetchFor(spaceID, marketType string) marketfetch.PlanFetc
 	}
 	return marketfetch.PlanFetch{
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
-		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, StaggerBaseMS: fetch.StaggerBaseMS, StaggerMS: fetch.StaggerMS,
+		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS,
 		StandbyMS: fetch.StandbyMS, StandbyHourOnly: fetch.StandbyHourOnly,
 		ConnReuse: fetch.ConnReuse, NotBeforeMS: fetch.NotBeforeMS,
 	}
@@ -216,18 +214,18 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
-		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒（crypto 再加 1.5 秒错峰）仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
+		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000},
-		// stockcn：每函数 20 个标的（沪深300 共 15 个函数），收盘后固定等 1 秒再取数（2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 1 秒一致），不错峰。
+		// stockcn：每函数 20 个标的（沪深300 共 15 个函数），收盘后固定等 1 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 1 秒一致），各函数同时起跑。
 		// 标的按哈希分到东方财富、新浪两个主源，单函数每源约 10 次请求；2026-11-05 实测 15 个函数同时起跑没有命中频控，
 		// 收盘后 7～8.5 秒全部取完（原来 8 个函数、错峰 5～20 秒时要 23 秒），起跑改 1 秒后预计 3～4 秒。
-		// crypto：错峰 1.5 秒；币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
+		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {SymbolsPerFunction: 20, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 1000}},
+			"stockcn": {SymbolsPerFunction: 20, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
-			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Fetch: &SCFPlanFetchConfig{StaggerMS: 1500}, Markets: map[string]SCFPlanMarketConfig{
+			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
 				"swap": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 8000}, LatenessS: 20},
 			}},

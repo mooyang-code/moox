@@ -2,7 +2,6 @@ package marketfetch
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -66,16 +65,13 @@ type PlanFetch struct {
 	FeedConcurrency  int `json:"feed_concurrency"`
 	RequestTimeoutMS int `json:"request_timeout_ms"`
 	StorageTimeoutMS int `json:"storage_timeout_ms,omitempty"`
-	// StaggerBaseMS 是错峰的固定起点；StaggerMS 是在起点之后按函数名哈希增加的确定性延迟上限（毫秒）。
-	StaggerBaseMS int `json:"stagger_base_ms,omitempty"`
-	StaggerMS     int `json:"stagger_ms,omitempty"`
 	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准），0 表示关闭。
 	// StandbyHourOnly 为真时只在整点那一分钟触发的调用里启用。
 	StandbyMS       int  `json:"standby_ms,omitempty"`
 	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
 	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
 	ConnReuse bool `json:"conn_reuse,omitempty"`
-	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：错峰等待之后还要等到收盘 + NotBeforeMS 才取数，0 表示不限制。
+	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：函数要等到收盘 + NotBeforeMS 才开始取数（定时器晚到时不再多等），0 表示不等待。
 	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
 
@@ -199,7 +195,7 @@ func (p *Plan) Validate() error {
 	if f.Concurrency < 1 || f.Concurrency > MaxConcurrency {
 		return fmt.Errorf("plan fetch.concurrency must be between 1 and %d", MaxConcurrency)
 	}
-	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
+	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 {
 		return errors.New("plan fetch limits are out of range")
 	}
 	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
@@ -438,26 +434,13 @@ func (p *Plan) buildFrequencyRequest(spaceID, functionName, requestID, frequency
 
 func planInstanceID(frequency, subjectID string) string { return frequency + "|" + subjectID }
 
-// StaggerDelay 返回按函数名哈希得到的确定性错峰延迟。
-func (p *Plan) StaggerDelay(functionName string) time.Duration {
-	base := time.Duration(p.Fetch.StaggerBaseMS) * time.Millisecond
-	if p.Fetch.StaggerMS <= 0 {
-		return base
-	}
-	sum := sha256.Sum256([]byte(functionName))
-	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
-}
-
-// StartDelay 返回从函数入口 entry 起到开始取数的等待时间：先错峰，再保证不早于收盘（scheduled）+ NotBeforeMS。
+// StartDelay 返回从函数入口 entry 起到开始取数的等待时间：保证不早于收盘（scheduled）+ NotBeforeMS。
 // 定时器本身会晚到，所以“收盘后多少秒”必须按 scheduled 而不是入口时间算。
-func (p *Plan) StartDelay(functionName string, entry, scheduled time.Time) time.Duration {
-	delay := p.StaggerDelay(functionName)
-	if p.Fetch.NotBeforeMS > 0 {
-		if wait := scheduled.Add(time.Duration(p.Fetch.NotBeforeMS) * time.Millisecond).Sub(entry); wait > delay {
-			delay = wait
-		}
+func (p *Plan) StartDelay(entry, scheduled time.Time) time.Duration {
+	if p.Fetch.NotBeforeMS <= 0 {
+		return 0
 	}
-	return max(delay, 0)
+	return max(scheduled.Add(time.Duration(p.Fetch.NotBeforeMS)*time.Millisecond).Sub(entry), 0)
 }
 
 // StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。

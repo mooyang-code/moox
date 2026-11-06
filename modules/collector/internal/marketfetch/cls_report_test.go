@@ -135,7 +135,7 @@ func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
 	pipeline.reportBatch(req, 1, 1, time.Second, time.Second, batchTimingFields(timings, closeAt.Add(time.Second), closeAt.Add(3*time.Second), closeAt, 800))
 	probe := startSchedProbe()
 	probeFields := probe.finish()
-	pipeline.reportBatch(req, 1, 0, time.Second, time.Second, probeFields, runtimeFields(Request{TimerLateMS: 900, StaggerMS: 1500, EntryAt: closeAt}, closeAt.Add(2*time.Second)))
+	pipeline.reportBatch(req, 1, 0, time.Second, time.Second, probeFields, runtimeFields(Request{TimerLateMS: 900, EntryAt: closeAt}, closeAt.Add(2*time.Second)))
 	pipeline.reportSlowItems(req, timings, closeAt)
 	pipeline.reportCommit(req, 25, 1, 120*time.Millisecond, closeAt.Add(4*time.Second), closeAt, errors.New("storage busy"))
 	indexed := map[string]bool{}
