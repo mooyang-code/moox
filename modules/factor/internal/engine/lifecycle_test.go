@@ -101,12 +101,16 @@ func TestPrepareSetSkipsWhenAlreadyPrepared(t *testing.T) {
 // 心跳里的任务暂停标记：手动暂停的任务标为暂停，运行中的不标；没有生命周期控制器时都不标。
 func TestMarkPausedRunnersFollowsTaskLifecycle(t *testing.T) {
 	ctx := context.Background()
-	r, _ := newLifecycleRuntime(t)
+	r, fake := newLifecycleRuntime(t)
 	ref := setRef("ftask_a")
 	for _, cmd := range []lifecycle.Command{lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm} {
 		_, err := r.life.Command(ctx, cmd, ref)
 		require.NoError(t, err)
 	}
+	// 恢复追赶的本地同步在后台进行；让它停在“同步中”，否则同步抢先完成时任务会直接追平放行、离开恢复追赶阶段。
+	// 放在预载之后，免得卡住 init。
+	fake.hold = make(chan struct{})
+	t.Cleanup(func() { close(fake.hold) })
 	runners := []domain.RunnerStatus{{TaskID: "ftask_a"}}
 	markPausedRunners(runners, r.life)
 	require.False(t, runners[0].Paused, "运行中的任务不是暂停")
