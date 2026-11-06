@@ -50,10 +50,10 @@ func TestFleetSizingReturnsZeroWhenItCannotEstimate(t *testing.T) {
 
 func TestStockCNAutoSizeUsesTheReleaseRouteAndProviderLimits(t *testing.T) {
 	t.Chdir("..")
-	size := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4})
+	size := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
 	got := size(TaskGroup{Frequency: "5m"}, 300)
 	require.Positive(t, got)
-	require.LessOrEqual(t, got, 75)
+	require.LessOrEqual(t, got, 38)
 	require.Zero(t, size(TaskGroup{Frequency: "15m"}, 300), "没有这个频率的路由时算不出")
 }
 
@@ -74,7 +74,7 @@ func TestBuildDesiredStateSizesTheStockCNFleetFromLimits(t *testing.T) {
 		return []TaskGroup{{Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity",
 			DatasetID: "ds_cn_5m", Frequency: "5m", Subjects: subjects}}
 	}
-	auto := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4})
+	auto := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
 	sizeOf := func(opts PlanOptions, count int) (int, int) {
 		state, err := BuildDesiredState(opts, groups(count), nil)
 		require.NoError(t, err)
@@ -87,17 +87,17 @@ func TestBuildDesiredStateSizesTheStockCNFleetFromLimits(t *testing.T) {
 		return len(state.Functions), perFunction
 	}
 	functions, per := sizeOf(options(auto), 300)
-	require.Equal(t, 4, functions, "沪深 300：至少 4 个函数，每个函数 75 只")
-	require.Equal(t, 75, per)
+	require.Equal(t, 8, functions, "沪深 300：至少 8 个函数（分散出口 IP），每个函数 38 只")
+	require.Equal(t, 38, per)
 	state, err := BuildDesiredState(options(auto), groups(300), nil)
 	require.NoError(t, err)
 	for _, function := range state.Functions {
-		require.Equal(t, 48, function.Plan.Fetch.Concurrency)
+		require.Equal(t, 32, function.Plan.Fetch.Concurrency)
 		require.Zero(t, function.Plan.Fetch.RPS)
 	}
 	functions, per = sizeOf(options(auto), 1000)
-	require.Greater(t, functions, 4, "标的变多，函数个数随之增加")
-	require.LessOrEqual(t, per, 93, "每个函数的标的数不超过按限速算出的上限")
+	require.Greater(t, functions, 8, "标的变多，函数个数随之增加")
+	require.LessOrEqual(t, per, 80, "每个函数的标的数不超过按限速算出的上限")
 	// 不估算时仍按固定的每函数标的数。
 	functions, _ = sizeOf(options(nil), 300)
 	require.Equal(t, 6, functions)
@@ -108,7 +108,7 @@ func TestStockCNFetchLimitsAreDerivedFromTheSourceLimits(t *testing.T) {
 	t.Chdir("..")
 	derive := StockCNFetchLimits()
 	got := derive(TaskGroup{Frequency: "5m"}, PlanFetch{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000})
-	require.Equal(t, 48, got.Concurrency, "tdx 16 + eastmoney 16 + sina 16")
+	require.Equal(t, 32, got.Concurrency, "tdx 16 + eastmoney 16")
 	require.Equal(t, 16, got.FeedConcurrency)
 	require.Zero(t, got.RPS)
 	require.Zero(t, got.Burst)

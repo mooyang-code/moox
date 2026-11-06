@@ -411,7 +411,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
 		sizing := cfg.SCFPlan.autoSizing("stockcn")
 		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
-		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4}, *sizing)
+		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
 		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 1 秒取数")
 	})
 	t.Run("several spaces", func(t *testing.T) {

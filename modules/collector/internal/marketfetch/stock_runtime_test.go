@@ -72,11 +72,11 @@ func TestReleaseStockCNRouteWeights5mTowardsTdxWithTencentAsFallback(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, five.ProviderChain())
 	// PrimarySources 按来源名排序，与候选链的回落顺序无关；分配只看权重。
-	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 2}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1},
-		{Provider: "tdx", SourceID: "normal_7709", Weight: 4}}, five.PrimarySources(), "腾讯只做 fallback")
+	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 2},
+		{Provider: "tdx", SourceID: "normal_7709", Weight: 4}}, five.PrimarySources(), "新浪、腾讯只做 fallback")
 }
 
-// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在三家 primary 之间按权重 4:2:1 分配，腾讯不分到标的。
+// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在两家 primary 之间按权重 4:2 分配，新浪、腾讯不分到标的。
 func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 	routeID, sources, err := stockCNAssignmentRoute("5m")
 	require.NoError(t, err)
@@ -90,8 +90,8 @@ func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 		require.Equal(t, first, again, "同一标的每次分到同一来源")
 		counts[first.Provider]++
 	}
-	require.Len(t, counts, 3)
-	for provider, want := range map[string]float64{"tdx": 171, "eastmoney": 86, "sina": 43} {
+	require.Len(t, counts, 2)
+	for provider, want := range map[string]float64{"tdx": 200, "eastmoney": 100} {
 		require.InDelta(t, want, counts[provider], 25, provider)
 	}
 	require.Greater(t, counts["tdx"], counts["eastmoney"], "tdx 权重最高")
