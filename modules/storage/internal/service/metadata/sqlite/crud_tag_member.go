@@ -36,31 +36,18 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 	if strings.TrimSpace(query.TagID) == "" {
 		return s.listAllSubjectMembers(ctx, query, pageNo, size, offset)
 	}
-	where := []string{"m.c_space_id = ?"}
-	args := []any{query.SpaceID}
-	if strings.TrimSpace(query.TagID) != "" {
-		where = append(where, "m.c_tag_id = ?")
-		args = append(args, query.TagID)
-	}
+	status := ""
 	if strings.TrimSpace(query.Status) != "" {
-		where = append(where, "m.c_status = ?")
-		args = append(args, query.Status)
+		status = query.Status
 	}
-	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
-		where = append(where, `(instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0 OR instr(lower(s.c_subject_type), ?) > 0 OR instr(lower(s.c_market), ?) > 0)`)
-		args = append(args, keyword, keyword, keyword, keyword)
-	}
-	whereSQL := strings.Join(where, " AND ")
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	args := []any{query.SpaceID, query.TagID, status, status, keyword, keyword, keyword}
 	db := s.queryDB(ctx)
 	var total uint64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE `+whereSQL, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, queryTagMembersCount, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_attrs_json
-		FROM t_subject_tags m
-		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
-		WHERE `+whereSQL+` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
+	rows, err := db.QueryContext(ctx, queryTagMembersList, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,23 +71,18 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 }
 
 func (s *Store) listAllSubjectMembers(ctx context.Context, query metadatastore.TagMemberQuery, pageNo, size uint32, offset int) ([]*pb.TagMember, *pb.PageResult, error) {
-	where := []string{"s.c_space_id = ?"}
-	args := []any{query.SpaceID}
+	status := ""
 	if strings.TrimSpace(query.Status) != "" {
-		where = append(where, "s.c_status = ?")
-		args = append(args, query.Status)
+		status = query.Status
 	}
-	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
-		where = append(where, `(instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0 OR instr(lower(s.c_subject_type), ?) > 0 OR instr(lower(s.c_market), ?) > 0)`)
-		args = append(args, keyword, keyword, keyword, keyword)
-	}
-	whereSQL := strings.Join(where, " AND ")
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	args := []any{query.SpaceID, status, status, keyword, keyword, keyword}
 	db := s.queryDB(ctx)
 	var total uint64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_subjects s WHERE `+whereSQL, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, queryAllSubjectsCount, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT s.c_attrs_json FROM t_subjects s WHERE `+whereSQL+` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
+	rows, err := db.QueryContext(ctx, queryAllSubjectsList, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -417,3 +399,19 @@ func stringsToAny(values []string) []any {
 }
 
 func formatSQLiteTime(t time.Time) string { return t.UTC().Format(sqliteTimeLayout) }
+
+// 成员列表的筛选条件固定：状态、关键字为空表示不限，关键字已转为小写。
+const (
+	tagMemberKeywordFilter = `(? = '' OR instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0)`
+	tagMembersFilter       = `m.c_space_id = ? AND m.c_tag_id = ? AND (? = '' OR m.c_status = ?) AND ` + tagMemberKeywordFilter
+	allSubjectsFilter      = `s.c_space_id = ? AND (? = '' OR s.c_status = ?) AND ` + tagMemberKeywordFilter
+
+	queryTagMembersCount = `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE ` + tagMembersFilter
+	queryTagMembersList  = `
+		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_attrs_json
+		FROM t_subject_tags m
+		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
+		WHERE ` + tagMembersFilter + ` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`
+	queryAllSubjectsCount = `SELECT COUNT(1) FROM t_subjects s WHERE ` + allSubjectsFilter
+	queryAllSubjectsList  = `SELECT s.c_attrs_json FROM t_subjects s WHERE ` + allSubjectsFilter + ` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`
+)

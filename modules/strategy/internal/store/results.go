@@ -262,10 +262,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			committed = existing.result()
 			return nil
 		}
-		if err := tx.Exec(`
-			INSERT INTO t_strategy_results (`+resultColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')
-		`, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
+		if err := tx.Exec(insertResultSQL, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
 			string(result.InputJSON), string(result.TargetsJSON), string(result.RuleStatesJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC(),
 			string(result.NextParamsJSON)).Error; err != nil {
 			return err
@@ -606,3 +603,9 @@ func (s *Store) PendingOutboxStats(ctx context.Context) (OutboxStats, error) {
 	stats.OldestPending = oldest.CreatedAt.UTC()
 	return stats, nil
 }
+
+// insertResultSQL 写入一条策略结果，列清单与 resultColumns 一一对应。
+const insertResultSQL = `
+	INSERT INTO t_strategy_results (` + resultColumns + `)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')
+`

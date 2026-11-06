@@ -124,7 +124,7 @@ func scanTag(row rowScanner) (*pb.Tag, error) {
 }
 
 func (s *Store) GetTag(ctx context.Context, spaceID, tagID string) (*pb.Tag, error) {
-	return scanTag(s.queryDB(ctx).QueryRowContext(ctx, tagSelect+` WHERE t.c_space_id = ? AND t.c_tag_id = ?`, spaceID, tagID))
+	return scanTag(s.queryDB(ctx).QueryRowContext(ctx, queryTagByID, spaceID, tagID))
 }
 
 func (s *Store) ListTags(ctx context.Context, spaceID string, page *pb.Page) ([]*pb.Tag, *pb.PageResult, error) {
@@ -134,7 +134,7 @@ func (s *Store) ListTags(ctx context.Context, spaceID string, page *pb.Page) ([]
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_tags WHERE (? = '' OR c_space_id = ?)`, spaceID, spaceID).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, tagSelect+` WHERE (? = '' OR t.c_space_id = ?) ORDER BY t.c_space_id, t.c_builtin DESC, t.c_tag_id LIMIT ? OFFSET ?`, spaceID, spaceID, size, offset)
+	rows, err := db.QueryContext(ctx, queryTagList, spaceID, spaceID, size, offset)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -220,3 +220,9 @@ func validateSubjectTagsExist(ctx context.Context, db execQueryRower, spaceID st
 	}
 	return nil
 }
+
+// 标签查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryTagByID = tagSelect + ` WHERE t.c_space_id = ? AND t.c_tag_id = ?`
+	queryTagList = tagSelect + ` WHERE (? = '' OR t.c_space_id = ?) ORDER BY t.c_space_id, t.c_builtin DESC, t.c_tag_id LIMIT ? OFFSET ?`
+)

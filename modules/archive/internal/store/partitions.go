@@ -60,13 +60,12 @@ func scanPartition(row rowScanner) (Partition, error) {
 
 // ListPartitions 按分区键倒序分页列出空间的分区；datasetID 为空表示全部数据集，fromKey、toKey 是分区键（含）的字典序范围。
 func (s *Store) ListPartitions(ctx context.Context, spaceID, datasetID, fromKey, toKey string, limit, offset int) ([]Partition, int, error) {
-	where := `c_space_id = ? AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_partition_key >= ?) AND (? = '' OR c_partition_key <= ?)`
 	args := []any{spaceID, datasetID, datasetID, fromKey, fromKey, toKey, toKey}
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_partitions WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, queryPartitionsCount, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM t_archive_partitions WHERE `+where+` ORDER BY c_dataset_id, c_partition_key DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := s.db.QueryContext(ctx, queryPartitionsList, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -84,7 +83,7 @@ func (s *Store) ListPartitions(ctx context.Context, spaceID, datasetID, fromKey,
 
 // GetPartition 读取一个分区登记。
 func (s *Store) GetPartition(ctx context.Context, spaceID, datasetID, key string) (Partition, error) {
-	p, err := scanPartition(s.db.QueryRowContext(ctx, `SELECT `+partitionColumns+` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`, spaceID, datasetID, key))
+	p, err := scanPartition(s.db.QueryRowContext(ctx, queryPartitions2, spaceID, datasetID, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Partition{}, ErrNotFound
 	}
@@ -145,7 +144,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		return fmt.Errorf("invalid completion status %q", req.Status)
 	}
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		run, err := scanRun(tx.QueryRowContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_run_id = ?`, req.RunID))
+		run, err := scanRun(tx.QueryRowContext(ctx, queryPartitions3, req.RunID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -203,7 +202,7 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 	if p.Status != PartitionOpen && p.Status != PartitionExported && p.Status != PartitionFinal {
 		return fmt.Errorf("invalid partition status %q", p.Status)
 	}
-	existing, err := scanPartition(tx.QueryRowContext(ctx, `SELECT `+partitionColumns+` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`,
+	existing, err := scanPartition(tx.QueryRowContext(ctx, queryPartitions2,
 		p.SpaceID, p.DatasetID, p.PartitionKey))
 	found := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -263,7 +262,7 @@ c_last_changed_at = ?, c_exported_at = ?, c_finalized_at = ?, c_last_run_id = ? 
 
 // ListOpenPartitions 返回尚未导出（open）的分区登记，用于任务健康等级。
 func (s *Store) ListOpenPartitions(ctx context.Context, spaceID string) ([]Partition, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM t_archive_partitions WHERE c_status = 'open' AND (? = '' OR c_space_id = ?)`, spaceID, spaceID)
+	rows, err := s.db.QueryContext(ctx, queryPartitions4, spaceID, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -278,3 +277,17 @@ func (s *Store) ListOpenPartitions(ctx context.Context, spaceID string) ([]Parti
 	}
 	return out, rows.Err()
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryPartitions2 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`
+	queryPartitions3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
+	queryPartitions4 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_status = 'open' AND (? = '' OR c_space_id = ?)`
+)
+
+// 分区列表的筛选条件固定，datasetID、fromKey、toKey 为空表示不限。
+const (
+	partitionsFilter     = `c_space_id = ? AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_partition_key >= ?) AND (? = '' OR c_partition_key <= ?)`
+	queryPartitionsCount = `SELECT COUNT(*) FROM t_archive_partitions WHERE ` + partitionsFilter
+	queryPartitionsList  = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE ` + partitionsFilter + ` ORDER BY c_dataset_id, c_partition_key DESC LIMIT ? OFFSET ?`
+)

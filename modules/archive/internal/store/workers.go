@@ -61,7 +61,7 @@ type HeartbeatResult struct {
 func (s *Store) Heartbeat(ctx context.Context, w Worker, now time.Time, ttl time.Duration) (HeartbeatResult, error) {
 	var result HeartbeatResult
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		own, err := scanWorker(tx.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers WHERE c_worker_id = ?`, w.WorkerID))
+		own, err := scanWorker(tx.QueryRowContext(ctx, queryWorkers1, w.WorkerID))
 		hasOwn := err == nil
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
@@ -106,7 +106,7 @@ c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_
 
 // IsActiveWorker 报告 worker_id/instance_id 当前是否持有未过期的活动租约。
 func (s *Store) IsActiveWorker(ctx context.Context, workerID, instanceID string, now time.Time) (bool, error) {
-	w, err := scanWorker(s.db.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers WHERE c_worker_id = ?`, workerID))
+	w, err := scanWorker(s.db.QueryRowContext(ctx, queryWorkers1, workerID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -118,7 +118,7 @@ func (s *Store) IsActiveWorker(ctx context.Context, workerID, instanceID string,
 
 // ListWorkers 返回全部 worker，活动租约的在前。
 func (s *Store) ListWorkers(ctx context.Context) ([]Worker, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers ORDER BY c_lease_until DESC, c_worker_id`)
+	rows, err := s.db.QueryContext(ctx, queryWorkers2)
 	if err != nil {
 		return nil, err
 	}
@@ -151,3 +151,9 @@ func (s *Store) PartitionWorkers(ctx context.Context) (map[string]string, error)
 	}
 	return out, rows.Err()
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryWorkers1 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
+	queryWorkers2 = `SELECT ` + workerColumns + ` FROM t_archive_workers ORDER BY c_lease_until DESC, c_worker_id`
+)

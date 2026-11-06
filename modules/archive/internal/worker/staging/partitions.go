@@ -59,7 +59,7 @@ func scanPartition(row interface{ Scan(...any) error }) (PartitionState, error) 
 
 // Partitions 按分区键升序返回任务的全部分区状态。
 func (s *Store) Partitions(ctx context.Context, spaceID, datasetID string) ([]PartitionState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? ORDER BY partition_key`, spaceID, datasetID)
+	rows, err := s.db.QueryContext(ctx, queryPartitions1, spaceID, datasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (s *Store) Partitions(ctx context.Context, spaceID, datasetID string) ([]Pa
 
 // Partition 读取一个分区的状态。
 func (s *Store) Partition(ctx context.Context, spaceID, datasetID, key string) (PartitionState, bool, error) {
-	p, err := scanPartition(s.db.QueryRowContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, spaceID, datasetID, key))
+	p, err := scanPartition(s.db.QueryRowContext(ctx, queryPartitions2, spaceID, datasetID, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return PartitionState{}, false, nil
 	}
@@ -386,7 +386,7 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 
 // PendingReports 返回最新状态还没有被 mgr 确认登记的分区（含已定稿的），按分区键升序。
 func (s *Store) PendingReports(ctx context.Context, spaceID, datasetID string) ([]PartitionState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending = 1 ORDER BY partition_key`, spaceID, datasetID)
+	rows, err := s.db.QueryContext(ctx, queryPartitions3, spaceID, datasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -507,3 +507,10 @@ func epochNewer(a, b string) bool {
 	y, errB := strconv.ParseInt(b, 10, 64)
 	return errA == nil && errB == nil && x > y
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryPartitions1 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? ORDER BY partition_key`
+	queryPartitions2 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`
+	queryPartitions3 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending = 1 ORDER BY partition_key`
+)

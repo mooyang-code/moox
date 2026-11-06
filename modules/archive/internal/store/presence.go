@@ -12,7 +12,7 @@ var ErrWorkerActive = errors.New("archive worker still holds an active lease")
 
 // LatestWorker 返回最近一次心跳的 worker（当前单活动 worker 模型下就是正在工作或最后工作的那台）；ok 为 false 表示没有任何登记。
 func (s *Store) LatestWorker(ctx context.Context) (Worker, bool, error) {
-	w, err := scanWorker(s.db.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers ORDER BY c_last_heartbeat_at DESC, c_worker_id LIMIT 1`))
+	w, err := scanWorker(s.db.QueryRowContext(ctx, queryPresence1))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Worker{}, false, nil
 	}
@@ -36,7 +36,7 @@ func (s *Store) HasEnabledTasks(ctx context.Context) (bool, error) {
 func (s *Store) RetireWorker(ctx context.Context, workerID string, now time.Time) (bool, error) {
 	var retired bool
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		w, err := scanWorker(tx.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers WHERE c_worker_id = ?`, workerID))
+		w, err := scanWorker(tx.QueryRowContext(ctx, queryPresence2, workerID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -54,3 +54,9 @@ func (s *Store) RetireWorker(ctx context.Context, workerID string, now time.Time
 	})
 	return retired, err
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryPresence1 = `SELECT ` + workerColumns + ` FROM t_archive_workers ORDER BY c_last_heartbeat_at DESC, c_worker_id LIMIT 1`
+	queryPresence2 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
+)
