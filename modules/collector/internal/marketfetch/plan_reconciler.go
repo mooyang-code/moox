@@ -1980,6 +1980,10 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			drifted = append(drifted, name)
 		}
 	}
+	// 云端函数被删或缺失要重建：新建出来的函数同样要做一次出口 IP 去重（重新初始化也走这里）。
+	if len(missing) > 0 || len(gone) > 0 {
+		r.Egress.Arm()
+	}
 	// 没有其他问题时才做出口 IP 去重：重复 IP 的函数按“云端函数没了”走删除再重建；重建后几分钟再探测下一轮。
 	egressRound := false
 	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 && unverified == 0 {

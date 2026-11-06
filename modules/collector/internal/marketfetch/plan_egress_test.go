@@ -71,3 +71,26 @@ func TestPlanReconcilerRecreatesNewFunctionsThatShareAnEgressIP(t *testing.T) {
 	require.Nil(t, h.open(), "计划本身没有变化")
 	require.True(t, balancer.Pending(), "还没确认重建后的 IP 是否分开")
 }
+
+// 云端函数被删后按已生效计划重建：重建出来的函数也要做一次出口 IP 去重（重新初始化的路径）。
+func TestPlanReconcilerArmsEgressBalanceWhenMissingFunctionsAreRebuilt(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+
+	balancer, err := egressbalance.New(egressbalance.Config{})
+	require.NoError(t, err)
+	r.Egress = balancer // 计划生效之后才配置：创建函数时没有标记
+	require.False(t, balancer.Pending())
+	for name := range h.cloud.nodes {
+		delete(h.cloud.nodes, name)
+		break
+	}
+	h.now = h.now.Add(2 * time.Hour)
+	require.NoError(t, h.reconcile(r))
+	require.True(t, balancer.Pending(), "函数被删后重建：标记要做出口 IP 去重")
+}
