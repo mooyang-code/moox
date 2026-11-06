@@ -438,7 +438,7 @@ func (c *Client) Invoke(ctx context.Context, spaceID, instanceID string, event m
 
 // ProbeEgressIP 调用函数的 egress_probe，返回函数此刻的公网出口 IP（用于核对不同函数是否共用同一个出口）。
 func (c *Client) ProbeEgressIP(ctx context.Context, spaceID, instanceID string) (string, error) {
-	result, err := c.Invoke(ctx, spaceID, instanceID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": "sina", "market_type": "stockcn", "node_id": instanceID}}, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_UNSPECIFIED)
+	result, err := c.Invoke(ctx, spaceID, instanceID, map[string]any{"action": "egress_probe", "data": map[string]any{"node_id": instanceID}}, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_UNSPECIFIED)
 	if err != nil {
 		return "", err
 	}

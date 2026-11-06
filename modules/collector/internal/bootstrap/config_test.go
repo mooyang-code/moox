@@ -413,6 +413,21 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
 		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, *sizing)
 		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 1 秒取数")
+		balance := cfg.SCFPlan.Spaces["stockcn"].EgressBalance
+		require.NotNil(t, balance, "A 股默认新建函数后去重出口 IP")
+		require.Equal(t, SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "09:00", Timezone: "Asia/Shanghai"}, *balance)
+	})
+	t.Run("egress balance is configurable for any space and validated", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
+			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, egress_balance: {max_per_ip: 2, rounds: 3}}\n")))
+		require.NoError(t, err)
+		require.Equal(t, SCFPlanEgressBalance{MaxPerIP: 2, Rounds: 3}, *cfg.SCFPlan.Spaces["crypto"].EgressBalance, "任何空间都能配置，不写时段表示任何时候")
+		_, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
+			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, egress_balance: {idle_start: \"25:00\", idle_end: \"09:00\"}}\n")))
+		require.ErrorContains(t, err, "egress_balance")
+		cfg, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
+		require.NoError(t, err)
+		require.Nil(t, cfg.SCFPlan.Spaces["crypto"].EgressBalance, "没配置就不做")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",

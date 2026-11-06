@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/packages/security"
 )
@@ -90,10 +91,18 @@ type SCFPlanAutoSize struct {
 	MinFunctions  int `yaml:"min_functions"`
 }
 
-// SCFPlanEgressBalance 是函数出口 IP 去重的参数（见 marketfetch.EgressBalance）：探测各函数的出口 IP，把共用同一个 IP 的函数删掉重建。
+// SCFPlanEgressBalance 是函数出口 IP 去重的参数（见 egressbalance 包）：计划新建函数后，探测各函数的出口 IP，把共用同一个 IP 的函数删掉重建。
+// 任何空间都可以配置；idle_start、idle_end（"15:04" 格式，按 timezone 的时钟，起点晚于终点表示跨午夜）限定允许删除重建的时段，都不写表示任何时候。
 type SCFPlanEgressBalance struct {
-	MaxPerIP int `yaml:"max_per_ip"`
-	Rounds   int `yaml:"rounds"`
+	MaxPerIP  int    `yaml:"max_per_ip"`
+	Rounds    int    `yaml:"rounds"`
+	IdleStart string `yaml:"idle_start"`
+	IdleEnd   string `yaml:"idle_end"`
+	Timezone  string `yaml:"timezone"`
+}
+
+func (b SCFPlanEgressBalance) config() egressbalance.Config {
+	return egressbalance.Config{MaxPerIP: b.MaxPerIP, Rounds: b.Rounds, IdleWindow: egressbalance.Window{Start: b.IdleStart, End: b.IdleEnd, Timezone: b.Timezone}}
 }
 
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
@@ -271,7 +280,7 @@ func defaultSCFPlan() SCFPlanConfig {
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5}, AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
+			"stockcn": {EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "09:00", Timezone: "Asia/Shanghai"}, AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
 			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
@@ -340,6 +349,11 @@ func (c *Config) validateSCFPlan() error {
 	for space, override := range plan.Spaces {
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
 			return fmt.Errorf("scf_plan.spaces[%s].auto_size 超出范围：target_fetch_ms 500～10000，request_ms 50～target_fetch_ms，min_functions 1～50", space)
+		}
+		if balance := override.EgressBalance; balance != nil {
+			if _, err := egressbalance.New(balance.config()); err != nil {
+				return fmt.Errorf("scf_plan.spaces[%s].egress_balance: %w", space, err)
+			}
 		}
 		mode := plan.defaultModeFor(space)
 		if (mode.Mode != marketfetch.IngestStreaming && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
