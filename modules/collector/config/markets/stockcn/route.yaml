@@ -22,7 +22,7 @@ klines:
   # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated_close_x_volume）；fallback。
   - frequency: 5m
     providers:
-      - {id: tdx, source_id: normal_7709, weight: 3, role: primary}
+      - {id: tdx, source_id: normal_7709, weight: 4, role: primary}
       - {id: eastmoney, source_id: stockcn_http, weight: 2, role: primary}
       - {id: sina, source_id: stockcn_minute_http, weight: 1, role: primary}
       - {id: tencent, source_id: stockcn_http, weight: 1, role: fallback}

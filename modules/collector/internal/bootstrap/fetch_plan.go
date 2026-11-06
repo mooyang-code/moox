@@ -146,6 +146,13 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
 				DefaultLatenessS: defaultLatenessSeconds(spaceID), MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
+			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
+				// A 股的函数内并发等 fetch 参数由各源的限速配置推导，不再在计划配置里手填。
+				options.DeriveFetch = marketfetch.StockCNFetchLimits()
+				if sizing := cfg.SCFPlan.autoSizing(spaceID); sizing != nil {
+					options.AutoSize = marketfetch.StockCNAutoSize(*sizing)
+				}
+			}
 			deploy, err := cfg.fetchPlanDeploy(spaceID)
 			if err != nil {
 				return nil, err

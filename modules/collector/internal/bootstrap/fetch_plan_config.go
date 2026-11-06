@@ -83,9 +83,18 @@ type SCFPlanMarketConfig struct {
 	LatenessS int `yaml:"lateness_s"`
 }
 
+// SCFPlanAutoSize 是按配置估算每函数标的数的参数（见 marketfetch.FleetSizing）。
+type SCFPlanAutoSize struct {
+	TargetFetchMS int `yaml:"target_fetch_ms"`
+	RequestMS     int `yaml:"request_ms"`
+	MinFunctions  int `yaml:"min_functions"`
+}
+
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
 type SCFPlanSpaceConfig struct {
+	// SymbolsPerFunction 大于 0 时固定每函数标的数；为 0 且配置了 AutoSize 时按源的权重与限速、标的数估算，函数个数随之调整。
 	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
+	AutoSize           *SCFPlanAutoSize    `yaml:"auto_size"`
 	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
 	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
@@ -98,6 +107,15 @@ type SCFPlanSpaceConfig struct {
 	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集第一次出现时的采集方式初值，之后以库为准。
 	DefaultIngest   string `yaml:"default_ingest"`
 	DefaultExecutor string `yaml:"default_executor"`
+}
+
+// autoSizing 返回空间按配置估算每函数标的数的参数；空间固定了 symbols_per_function 或没有配置 auto_size 时返回 nil。
+func (c SCFPlanConfig) autoSizing(spaceID string) *marketfetch.FleetSizing {
+	space := c.Spaces[strings.ToLower(spaceID)]
+	if space.SymbolsPerFunction > 0 || space.AutoSize == nil {
+		return nil
+	}
+	return &marketfetch.FleetSizing{TargetFetchMS: space.AutoSize.TargetFetchMS, RequestMS: space.AutoSize.RequestMS, MinFunctions: space.AutoSize.MinFunctions}
 }
 
 // defaultModeFor 返回空间新数据集的采集方式初值（没写的按拉取 + SCF）。
@@ -171,6 +189,23 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		if override.SymbolsPerFunction == 0 {
 			override.SymbolsPerFunction = base.SymbolsPerFunction
 		}
+		switch {
+		case override.AutoSize == nil && base.AutoSize != nil:
+			auto := *base.AutoSize
+			override.AutoSize = &auto
+		case override.AutoSize != nil && base.AutoSize != nil:
+			auto := *override.AutoSize
+			if auto.TargetFetchMS == 0 {
+				auto.TargetFetchMS = base.AutoSize.TargetFetchMS
+			}
+			if auto.RequestMS == 0 {
+				auto.RequestMS = base.AutoSize.RequestMS
+			}
+			if auto.MinFunctions == 0 {
+				auto.MinFunctions = base.AutoSize.MinFunctions
+			}
+			override.AutoSize = &auto
+		}
 		if override.DefaultIngest == "" {
 			override.DefaultIngest = base.DefaultIngest
 		}
@@ -217,13 +252,14 @@ func defaultSCFPlan() SCFPlanConfig {
 		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000},
-		// stockcn：每函数 20 个标的（沪深300 共 15 个函数），收盘后固定等 1 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 1 秒一致），各函数同时起跑。
-		// 标的按哈希分到东方财富、新浪两个主源，单函数每源约 10 次请求；2026-11-05 实测 15 个函数同时起跑没有命中频控，
-		// 收盘后 7～8.5 秒全部取完（原来 8 个函数、错峰 5～20 秒时要 23 秒），起跑改 1 秒后预计 3～4 秒。
+		// stockcn：每函数标的数按各源的权重与限速、标的数估算（auto_size；沪深300 约 4 个函数），收盘后固定等 1 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 1 秒一致），各函数同时起跑。
+		// 标的按权重哈希分到通达信、东方财富、新浪三个主源（腾讯只做备源）；函数内同时处理的标的数（concurrency）、熔断并发（feed_concurrency）
+		// 由各源的限速配置推导（configs/scf/stockcn/sources/market/*.yaml），rps、burst 只给币安用、A 股不用，所以这里不配。
+		// 2026-11-06 实测 15 个函数同时起跑没有命中频控，起跑 1 秒后 10:40 那期 1.7 秒取完、策略产出 3.2 秒（原来 8 个函数、错峰 5～20 秒时要 23 秒）。
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {SymbolsPerFunction: 20, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
+			"stockcn": {AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
 			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
@@ -290,6 +326,9 @@ func (c *Config) validateSCFPlan() error {
 		packages[key] = space
 	}
 	for space, override := range plan.Spaces {
+		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
+			return fmt.Errorf("scf_plan.spaces[%s].auto_size 超出范围：target_fetch_ms 500～10000，request_ms 50～target_fetch_ms，min_functions 1～50", space)
+		}
 		mode := plan.defaultModeFor(space)
 		if (mode.Mode != marketfetch.IngestStreaming && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
 			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)

@@ -10,9 +10,9 @@ provider:
   rate_limit:
     scope: egress_ip
     # 2026-11-06 南京实测单个出口 IP：256 并发突发仍 100% 成功，512 并发出现约 5% 超时/断连；每秒 160～640 次持续有 0.1～1.4% 超时。
-    # 15 个函数同时起跑最坏占 15 × 8 = 120 个连接，留在 256 以内；每个函数每源约 10 只，一次放出。
-    requests_per_second: 30
-    burst: 10
-    max_concurrent: 8
+    # SCF 各函数的出口 IP 不一定相同，单个函数 16 个连接远低于单 IP 的 256；即使所有函数共用一个出口，按估算的 4～6 个函数也只有 64～96 个连接。
+    requests_per_second: 60
+    burst: 16
+    max_concurrent: 16
     cooldown: 1s
     request_timeout: 5s
