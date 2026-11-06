@@ -192,13 +192,7 @@ func (s *Store) BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs 
 		}
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(fieldIDs)), ",")
-	args := make([]any, 0, len(fieldIDs)+1)
-	args = append(args, spaceID)
-	for _, fieldID := range fieldIDs {
-		args = append(args, fieldID)
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id IN (`+placeholders+`)`, args...)
+	rows, err := tx.QueryContext(ctx, selectFieldsByIDsSQL, spaceID, jsonStringArray(fieldIDs))
 	if err != nil {
 		return 0, err
 	}
@@ -278,3 +272,6 @@ func (s *Store) DeleteFieldGroup(ctx context.Context, spaceID string, groupID st
 	}
 	return tx.Commit()
 }
+
+// 按字段 ID 批量读取：ID 以 JSON 数组传入，用 json_each 展开。
+const selectFieldsByIDsSQL = `SELECT c_attrs_json FROM t_fields WHERE c_space_id = ? AND c_field_id IN (SELECT value FROM json_each(?))`
