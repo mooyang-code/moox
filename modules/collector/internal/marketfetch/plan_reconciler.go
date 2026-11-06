@@ -2133,8 +2133,8 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	if allOK {
 		r.releaseLease(ctx)
-		if unverified > 0 || egressRound {
-			// 修复完成，但有函数这次没读回成功，或刚重建了共用出口 IP 的函数：几分钟后重新读回、探测。
+		if unverified > 0 || egressRound || r.Egress.Pending() {
+			// 修复完成，但有函数这次没读回成功、刚重建了共用出口 IP 的函数，或出口 IP 去重还没做完：几分钟后重新读回、探测。
 			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
 			return nil
 		}
