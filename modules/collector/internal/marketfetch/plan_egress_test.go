@@ -93,4 +93,5 @@ func TestPlanReconcilerArmsEgressBalanceWhenMissingFunctionsAreRebuilt(t *testin
 	h.now = h.now.Add(2 * time.Hour)
 	require.NoError(t, h.reconcile(r))
 	require.True(t, balancer.Pending(), "函数被删后重建：标记要做出口 IP 去重")
+	require.True(t, r.lastVerified.Before(h.now), "去重还没做完：几分钟后再核对，而不是等一小时")
 }
