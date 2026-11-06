@@ -201,6 +201,14 @@ type PlanReconciler struct {
 	pending        []pendingPlanJob
 	aux            auxJobs
 	lastVerified   time.Time
+	// EgressBalance 非空时，核对云端函数发现没有其他问题后探测各函数的出口 IP，把共用 IP 的函数删掉重建；EgressIdle 返回此刻
+	// 是否允许做（删除重建期间这些函数没有数据，只在收盘后等空闲时段做），为空则不做。
+	EgressBalance *EgressBalance
+	EgressIdle    func(time.Time) bool
+	// 出口 IP 去重只在计划新建了函数之后做一次（egressPending），做完或地址池用尽就清掉，之后不再探测；
+	// 进度只在进程内：已做轮数、最多出现过的不同 IP 数、连续没有改善的轮数。
+	egressPending                         bool
+	egressRounds, egressBest, egressStall int
 	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
 	packageMu       sync.Mutex
 	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
@@ -499,6 +507,8 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	for name, function := range desired.Functions {
 		if previousFunctions[name] == nil && function.Executor == "" {
 			lead = planLeadTimeWithCreate
+			// 新建函数的出口 IP 要去重：计划生效后探测一次、重建共用 IP 的函数。
+			r.egressPending, r.egressRounds, r.egressBest, r.egressStall = r.EgressBalance != nil, 0, 0, 0
 			break
 		}
 	}
@@ -1975,6 +1985,13 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			drifted = append(drifted, name)
 		}
 	}
+	// 没有其他问题时才做出口 IP 去重：重复 IP 的函数按“云端函数没了”走删除再重建；重建后几分钟再探测下一轮。
+	egressRound := false
+	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 && unverified == 0 {
+		if again := r.egressRecreate(ctx, names, byName); len(again) > 0 {
+			gone, egressRound = append(gone, again...), true
+		}
+	}
 	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
 		if unverified > 0 {
 			// 有函数这次没读回成功：不能宣布全部核对完毕，几分钟后重试。
@@ -2109,8 +2126,8 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	if allOK {
 		r.releaseLease(ctx)
-		if unverified > 0 {
-			// 修复完成，但有函数这次没读回成功：几分钟后重新读回。
+		if unverified > 0 || egressRound {
+			// 修复完成，但有函数这次没读回成功，或刚重建了共用出口 IP 的函数：几分钟后重新读回、探测。
 			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
 			return nil
 		}

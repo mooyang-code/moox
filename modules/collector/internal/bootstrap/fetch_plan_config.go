@@ -90,12 +90,20 @@ type SCFPlanAutoSize struct {
 	MinFunctions  int `yaml:"min_functions"`
 }
 
+// SCFPlanEgressBalance 是函数出口 IP 去重的参数（见 marketfetch.EgressBalance）：探测各函数的出口 IP，把共用同一个 IP 的函数删掉重建。
+type SCFPlanEgressBalance struct {
+	MaxPerIP int `yaml:"max_per_ip"`
+	Rounds   int `yaml:"rounds"`
+}
+
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
 type SCFPlanSpaceConfig struct {
 	// SymbolsPerFunction 大于 0 时固定每函数标的数；为 0 且配置了 AutoSize 时按源的权重与限速、标的数估算，函数个数随之调整。
-	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
-	AutoSize           *SCFPlanAutoSize    `yaml:"auto_size"`
-	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
+	SymbolsPerFunction int              `yaml:"symbols_per_function"`
+	AutoSize           *SCFPlanAutoSize `yaml:"auto_size"`
+	// EgressBalance 非空时在收盘后的空闲时段探测函数出口 IP，并重建共用 IP 的函数；只对 A 股有效。
+	EgressBalance *SCFPlanEgressBalance `yaml:"egress_balance"`
+	Fetch         *SCFPlanFetchConfig   `yaml:"fetch"`
 	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
 	PackageName         string `yaml:"package_name"`
@@ -206,6 +214,10 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 			}
 			override.AutoSize = &auto
 		}
+		if override.EgressBalance == nil && base.EgressBalance != nil {
+			balance := *base.EgressBalance
+			override.EgressBalance = &balance
+		}
 		if override.DefaultIngest == "" {
 			override.DefaultIngest = base.DefaultIngest
 		}
@@ -259,7 +271,7 @@ func defaultSCFPlan() SCFPlanConfig {
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
+			"stockcn": {EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5}, AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 1000}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
 			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
