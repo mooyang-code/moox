@@ -434,7 +434,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 
 func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	defaults := defaultSCFPlan()
-	// 只写了 rps：并发、错峰等沿用 stockcn 的默认值，不会变成零。
+	// 只写了 rps：取数时刻、超时等沿用 stockcn 的默认值，不会变成零。
 	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {Fetch: &SCFPlanFetchConfig{RPS: 10}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
 	fetch := plan.fetchFor("stockcn", "")
