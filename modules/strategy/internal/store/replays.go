@@ -155,10 +155,7 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		if active >= MaxActiveReplays {
 			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
 		}
-		return tx.Exec(`
-			INSERT INTO t_strategy_replays (`+replayColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.Calendar, replay.SpaceID, replay.FactorTaskID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+		return tx.Exec(insertReplaySQL, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.Calendar, replay.SpaceID, replay.FactorTaskID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
 	})
 }
 
@@ -386,3 +383,9 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 	}
 	return bars, total, nil
 }
+
+// insertReplaySQL 写入一条排队中的回放，列清单与 replayColumns 一一对应。
+const insertReplaySQL = `
+	INSERT INTO t_strategy_replays (` + replayColumns + `)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+`

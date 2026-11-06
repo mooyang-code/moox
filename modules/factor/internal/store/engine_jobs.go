@@ -13,6 +13,13 @@ import (
 
 // pullableCondition selects jobs a compute engine may take: accepted ones and
 // running ones whose lease has expired (their engine stopped reporting).
+// leaseRecalcJobSQL 把一个可拉取的任务置为运行中并写入租约。
+const leaseRecalcJobSQL = `
+	UPDATE t_factor_recalc_jobs
+	SET c_status = 'running', c_engine_id = ?, c_lease_token = ?, c_lease_expires_at = ?,
+		c_progress_time = ?, c_mtime = ?
+	WHERE c_job_id = ? AND ` + pullableCondition
+
 const pullableCondition = `(c_status = 'accepted' OR (c_status = 'running' AND c_lease_expires_at <= ?))`
 
 // PullRecalcJob atomically leases the oldest pullable job to engineID. Jobs of
@@ -55,11 +62,7 @@ func (s *Store) PullRecalcJob(ctx context.Context, engineID string, now time.Tim
 				continue
 			}
 			progress := max(row.ProgressTime, row.StartTime)
-			result := tx.Exec(`
-				UPDATE t_factor_recalc_jobs
-				SET c_status = 'running', c_engine_id = ?, c_lease_token = ?, c_lease_expires_at = ?,
-					c_progress_time = ?, c_mtime = ?
-				WHERE c_job_id = ? AND `+pullableCondition,
+			result := tx.Exec(leaseRecalcJobSQL,
 				engineID, token, nowUnix+int64(ttl/time.Second), progress, now.UTC(), row.JobID, nowUnix)
 			if result.Error != nil {
 				return result.Error

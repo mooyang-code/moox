@@ -83,7 +83,7 @@ func insertRun(ctx context.Context, tx *sql.Tx, spaceID, datasetID, kind string,
 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, kind, nullTime(rangeStart), nullTime(rangeEnd), fmtTime(scheduledAt)); err != nil {
 		return Run{}, err
 	}
-	return scanRun(tx.QueryRowContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_run_id = ?`, id))
+	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
 }
 
 // CreateRun 为任务生成一条 manual 或 range 运行；已有排队中或运行中的运行时 manual 返回 ErrConflict。
@@ -113,7 +113,7 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID, kind string, 
 
 // GetRun 读取一次运行。
 func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
-	run, err := scanRun(s.db.QueryRowContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_run_id = ?`, runID))
+	run, err := scanRun(s.db.QueryRowContext(ctx, queryRuns1, runID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
@@ -122,13 +122,12 @@ func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 
 // ListRuns 按计划时刻倒序分页列出运行；spaceID、datasetID、status 为空表示不限。
 func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string, limit, offset int) ([]Run, int, error) {
-	where := `(? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_status = ?)`
 	args := []any{spaceID, spaceID, datasetID, datasetID, status, status}
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_runs WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, queryRunsCount, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE `+where+` ORDER BY c_scheduled_at DESC, c_id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	rows, err := s.db.QueryContext(ctx, queryRunsList, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -146,8 +145,7 @@ func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string,
 
 // ListActiveRuns 返回排队中与运行中的运行。
 func (s *Store) ListActiveRuns(ctx context.Context, spaceID string) ([]Run, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_status IN ('queued', 'running') AND (? = '' OR c_space_id = ?)
-ORDER BY c_scheduled_at`, spaceID, spaceID)
+	rows, err := s.db.QueryContext(ctx, queryRuns3, spaceID, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +163,7 @@ ORDER BY c_scheduled_at`, spaceID, spaceID)
 
 // LastRuns 返回每个任务最近一次运行（按计划时刻），用于任务列表。
 func (s *Store) LastRuns(ctx context.Context, spaceID string) (map[string]Run, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs r WHERE (? = '' OR c_space_id = ?)
-AND c_id = (SELECT c_id FROM t_archive_runs x WHERE x.c_space_id = r.c_space_id AND x.c_dataset_id = r.c_dataset_id ORDER BY c_scheduled_at DESC, c_id DESC LIMIT 1)`, spaceID, spaceID)
+	rows, err := s.db.QueryContext(ctx, queryRuns4, spaceID, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +183,7 @@ AND c_id = (SELECT c_id FROM t_archive_runs x WHERE x.c_space_id = r.c_space_id 
 // 已结束的运行返回 ErrConflict。spaceID 非空时要求运行属于该空间。
 func (s *Store) CancelRun(ctx context.Context, runID, spaceID string, now time.Time) (Run, error) {
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		run, err := scanRun(tx.QueryRowContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_run_id = ?`, runID))
+		run, err := scanRun(tx.QueryRowContext(ctx, queryRuns1, runID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -235,7 +232,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 	var claimed []Claimed
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		if req.InstanceID != "" {
-			worker, err := scanWorker(tx.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers WHERE c_worker_id = ?`, req.WorkerID))
+			worker, err := scanWorker(tx.QueryRowContext(ctx, queryRuns5, req.WorkerID))
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -246,9 +243,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 				return nil
 			}
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs r WHERE c_status = 'queued'
-AND NOT EXISTS (SELECT 1 FROM t_archive_partitions p WHERE p.c_space_id = r.c_space_id AND p.c_dataset_id = r.c_dataset_id AND p.c_worker_id != ?)
-ORDER BY c_scheduled_at, c_id`, req.WorkerID)
+		rows, err := tx.QueryContext(ctx, queryRuns6, req.WorkerID)
 		if err != nil {
 			return err
 		}
@@ -272,7 +267,7 @@ ORDER BY c_scheduled_at, c_id`, req.WorkerID)
 			if len(claimed) >= req.FreeSlots {
 				break
 			}
-			task, err := scanTask(tx.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, run.SpaceID, run.DatasetID))
+			task, err := scanTask(tx.QueryRowContext(ctx, queryRuns7, run.SpaceID, run.DatasetID))
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
@@ -299,7 +294,7 @@ WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, tok
 // Progress 续租并更新进度。运行已被取消、已结束或租约不属于调用方时返回 canceled=true。
 func (s *Store) Progress(ctx context.Context, runID, workerID, leaseToken string, stats RunStats, now time.Time, ttl time.Duration) (canceled bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		run, err := scanRun(tx.QueryRowContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs WHERE c_run_id = ?`, runID))
+		run, err := scanRun(tx.QueryRowContext(ctx, queryRuns1, runID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -376,3 +371,24 @@ func mergeUnrecoverable(items []Unrecoverable) string {
 	}
 	return string(raw)
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryRuns1 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
+	queryRuns3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status IN ('queued', 'running') AND (? = '' OR c_space_id = ?)
+ORDER BY c_scheduled_at`
+	queryRuns4 = `SELECT ` + runColumns + ` FROM t_archive_runs r WHERE (? = '' OR c_space_id = ?)
+AND c_id = (SELECT c_id FROM t_archive_runs x WHERE x.c_space_id = r.c_space_id AND x.c_dataset_id = r.c_dataset_id ORDER BY c_scheduled_at DESC, c_id DESC LIMIT 1)`
+	queryRuns5 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
+	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs r WHERE c_status = 'queued'
+AND NOT EXISTS (SELECT 1 FROM t_archive_partitions p WHERE p.c_space_id = r.c_space_id AND p.c_dataset_id = r.c_dataset_id AND p.c_worker_id != ?)
+ORDER BY c_scheduled_at, c_id`
+	queryRuns7 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
+)
+
+// 运行列表的筛选条件固定，spaceID、datasetID、status 为空表示不限。
+const (
+	runsFilter     = `(? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_status = ?)`
+	queryRunsCount = `SELECT COUNT(*) FROM t_archive_runs WHERE ` + runsFilter
+	queryRunsList  = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE ` + runsFilter + ` ORDER BY c_scheduled_at DESC, c_id DESC LIMIT ? OFFSET ?`
+)

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -36,31 +37,18 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 	if strings.TrimSpace(query.TagID) == "" {
 		return s.listAllSubjectMembers(ctx, query, pageNo, size, offset)
 	}
-	where := []string{"m.c_space_id = ?"}
-	args := []any{query.SpaceID}
-	if strings.TrimSpace(query.TagID) != "" {
-		where = append(where, "m.c_tag_id = ?")
-		args = append(args, query.TagID)
-	}
+	status := ""
 	if strings.TrimSpace(query.Status) != "" {
-		where = append(where, "m.c_status = ?")
-		args = append(args, query.Status)
+		status = query.Status
 	}
-	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
-		where = append(where, `(instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0 OR instr(lower(s.c_subject_type), ?) > 0 OR instr(lower(s.c_market), ?) > 0)`)
-		args = append(args, keyword, keyword, keyword, keyword)
-	}
-	whereSQL := strings.Join(where, " AND ")
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	args := []any{query.SpaceID, query.TagID, status, status, keyword, keyword, keyword}
 	db := s.queryDB(ctx)
 	var total uint64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE `+whereSQL, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, queryTagMembersCount, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_attrs_json
-		FROM t_subject_tags m
-		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
-		WHERE `+whereSQL+` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
+	rows, err := db.QueryContext(ctx, queryTagMembersList, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,23 +72,18 @@ func (s *Store) ListTagMembers(ctx context.Context, query metadatastore.TagMembe
 }
 
 func (s *Store) listAllSubjectMembers(ctx context.Context, query metadatastore.TagMemberQuery, pageNo, size uint32, offset int) ([]*pb.TagMember, *pb.PageResult, error) {
-	where := []string{"s.c_space_id = ?"}
-	args := []any{query.SpaceID}
+	status := ""
 	if strings.TrimSpace(query.Status) != "" {
-		where = append(where, "s.c_status = ?")
-		args = append(args, query.Status)
+		status = query.Status
 	}
-	if keyword := strings.ToLower(strings.TrimSpace(query.Keyword)); keyword != "" {
-		where = append(where, `(instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0 OR instr(lower(s.c_subject_type), ?) > 0 OR instr(lower(s.c_market), ?) > 0)`)
-		args = append(args, keyword, keyword, keyword, keyword)
-	}
-	whereSQL := strings.Join(where, " AND ")
+	keyword := strings.ToLower(strings.TrimSpace(query.Keyword))
+	args := []any{query.SpaceID, status, status, keyword, keyword, keyword}
 	db := s.queryDB(ctx)
 	var total uint64
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_subjects s WHERE `+whereSQL, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, queryAllSubjectsCount, args...).Scan(&total); err != nil {
 		return nil, nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT s.c_attrs_json FROM t_subjects s WHERE `+whereSQL+` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`, append(args, size, offset)...)
+	rows, err := db.QueryContext(ctx, queryAllSubjectsList, append(args, size, offset)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -179,7 +162,7 @@ func (s *Store) RemoveTagMembers(ctx context.Context, spaceID, tagID string, sub
 	if err := requireManualTag(ctx, tx, spaceID, tagID); err != nil {
 		return 0, err
 	}
-	result, err := tx.ExecContext(ctx, `DELETE FROM t_subject_tags WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (`+placeholders(len(uniqueStrings(subjectIDs)))+`)`, append([]any{spaceID, tagID}, stringsToAny(uniqueStrings(subjectIDs))...)...)
+	result, err := tx.ExecContext(ctx, deleteTagMembersSQL, spaceID, tagID, jsonStringArray(uniqueStrings(subjectIDs)))
 	if err != nil {
 		return 0, err
 	}
@@ -203,7 +186,7 @@ func (s *Store) SetTagMemberStatus(ctx context.Context, spaceID, tagID string, s
 	if status == metadatastore.TagMemberInactive {
 		inactiveAt = formatSQLiteTime(s.nowUTC())
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = ?, c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (`+placeholders(len(uniqueStrings(subjectIDs)))+`)`, append([]any{status, inactiveAt, spaceID, tagID}, stringsToAny(uniqueStrings(subjectIDs))...)...)
+	result, err := tx.ExecContext(ctx, setTagMembersStatusSQL, status, inactiveAt, spaceID, tagID, jsonStringArray(uniqueStrings(subjectIDs)))
 	if err != nil {
 		return 0, err
 	}
@@ -254,15 +237,14 @@ func (s *Store) ApplyTagSnapshot(ctx context.Context, spaceID, tagID string, ite
 		return metadatastore.TagSnapshotResult{}, metadatastore.ErrTagSnapshotEmpty
 	}
 	{
-		resultSet := `(` + placeholders(len(ids)) + `)`
-		args := append([]any{spaceID, tagID}, stringsToAny(ids)...)
-		res, err := tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN `+resultSet+` AND c_status <> 'active'`, args...)
+		idsJSON := jsonStringArray(ids)
+		res, err := tx.ExecContext(ctx, activateSnapshotMembersSQL, spaceID, tagID, idsJSON)
 		if err != nil {
 			return metadatastore.TagSnapshotResult{}, err
 		}
 		n, _ := res.RowsAffected()
 		result.Activated = int(n)
-		res, err = tx.ExecContext(ctx, `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN `+resultSet, append([]any{formatSQLiteTime(s.nowUTC()), spaceID, tagID}, stringsToAny(ids)...)...)
+		res, err = tx.ExecContext(ctx, inactivateMissingMembersSQL, formatSQLiteTime(s.nowUTC()), spaceID, tagID, idsJSON)
 		if err != nil {
 			return metadatastore.TagSnapshotResult{}, err
 		}
@@ -331,7 +313,7 @@ func (s *Store) ResolveSubjects(ctx context.Context, spaceID string, tagIDs []st
 	if len(ids) == 0 {
 		return []*pb.Subject{}, nil
 	}
-	rows, err := s.queryDB(ctx).QueryContext(ctx, `SELECT s.c_attrs_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_tag_id IN (`+placeholders(len(ids))+`) GROUP BY s.c_subject_id, s.c_attrs_json ORDER BY s.c_subject_id`, append([]any{spaceID}, stringsToAny(ids)...)...)
+	rows, err := s.queryDB(ctx).QueryContext(ctx, resolveSubjectsSQL, spaceID, jsonStringArray(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -401,19 +383,38 @@ func (s *Store) SubjectsRevision(ctx context.Context, spaceID string) (uint64, e
 	return revision, err
 }
 
-func placeholders(count int) string {
-	if count <= 0 {
-		return "NULL"
+// jsonStringArray 把字符串列表编码成 JSON 数组，供 SQL 里 json_each(?) 展开，代替拼接数量不定的 IN 占位符。
+func jsonStringArray(values []string) string {
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return "[]"
 	}
-	return strings.TrimRight(strings.Repeat("?,", count), ",")
-}
-
-func stringsToAny(values []string) []any {
-	out := make([]any, len(values))
-	for i, value := range values {
-		out[i] = value
-	}
-	return out
+	return string(raw)
 }
 
 func formatSQLiteTime(t time.Time) string { return t.UTC().Format(sqliteTimeLayout) }
+
+// 成员列表的筛选条件固定：状态、关键字为空表示不限，关键字已转为小写。
+const (
+	tagMemberKeywordFilter = `(? = '' OR instr(lower(s.c_subject_id), ?) > 0 OR instr(lower(s.c_name), ?) > 0)`
+	tagMembersFilter       = `m.c_space_id = ? AND m.c_tag_id = ? AND (? = '' OR m.c_status = ?) AND ` + tagMemberKeywordFilter
+	allSubjectsFilter      = `s.c_space_id = ? AND (? = '' OR s.c_status = ?) AND ` + tagMemberKeywordFilter
+
+	queryTagMembersCount = `SELECT COUNT(1) FROM t_subject_tags m JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id WHERE ` + tagMembersFilter
+	queryTagMembersList  = `
+		SELECT m.c_space_id, m.c_tag_id, m.c_status, m.c_inactive_at, s.c_attrs_json
+		FROM t_subject_tags m
+		JOIN t_subjects s ON s.c_space_id = m.c_space_id AND s.c_subject_id = m.c_subject_id
+		WHERE ` + tagMembersFilter + ` ORDER BY m.c_tag_id, m.c_subject_id LIMIT ? OFFSET ?`
+	queryAllSubjectsCount = `SELECT COUNT(1) FROM t_subjects s WHERE ` + allSubjectsFilter
+	queryAllSubjectsList  = `SELECT s.c_attrs_json FROM t_subjects s WHERE ` + allSubjectsFilter + ` ORDER BY s.c_subject_id LIMIT ? OFFSET ?`
+)
+
+// 按成员列表批量操作的语句：成员 ID 以 JSON 数组传入，用 json_each 展开。
+const (
+	deleteTagMembersSQL         = `DELETE FROM t_subject_tags WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
+	setTagMembersStatusSQL      = `UPDATE t_subject_tags SET c_status = ?, c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?))`
+	activateSnapshotMembersSQL  = `UPDATE t_subject_tags SET c_status = 'active', c_inactive_at = '' WHERE c_space_id = ? AND c_tag_id = ? AND c_subject_id IN (SELECT value FROM json_each(?)) AND c_status <> 'active'`
+	inactivateMissingMembersSQL = `UPDATE t_subject_tags SET c_status = 'inactive', c_inactive_at = ? WHERE c_space_id = ? AND c_tag_id = ? AND c_status = 'active' AND c_subject_id NOT IN (SELECT value FROM json_each(?))`
+	resolveSubjectsSQL          = `SELECT s.c_attrs_json FROM t_subjects s JOIN t_subject_tags m ON m.c_space_id = s.c_space_id AND m.c_subject_id = s.c_subject_id WHERE s.c_space_id = ? AND s.c_status = 'active' AND m.c_status = 'active' AND m.c_tag_id IN (SELECT value FROM json_each(?)) GROUP BY s.c_subject_id, s.c_attrs_json ORDER BY s.c_subject_id`
+)

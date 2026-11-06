@@ -298,29 +298,20 @@ func (s *Store) UpdateLogicalAccountTargetState(
 	if err != nil {
 		return false, err
 	}
-	where := `c_target_id = ? AND c_command_sequence = ?`
+	query := updateTargetBySequenceSQL
 	args := []any{record.TargetID, record.CommandSequence}
 	if record.InstanceID != "" || record.SessionID != "" {
 		if record.InstanceID == "" || record.SessionID == "" || record.BarEndTime <= 0 || record.ValidUntil <= record.EffectiveAt || record.EffectiveAt != record.BarEndTime {
 			return false, fmt.Errorf("%w: invalid logical account target session update", ErrInvalidRecord)
 		}
-		where = `c_target_id = ? AND c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
+		query = updateTargetBySessionSQL
 		args = []any{record.TargetID, record.InstanceID, record.SessionID, record.BarEndTime}
 	}
 	args = append(args, record.SpaceID, record.LogicalAccountID)
 	values := []any{record.Status, blockedJSON, record.LastError, record.SpaceID, record.LogicalAccountID}
 	values = append(values, args[:len(args)-2]...)
 	values = append(values, record.Status)
-	result := s.db.WithContext(ctx).Exec(fmt.Sprintf(`
-		UPDATE t_logical_account_targets
-		SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND %s
-			AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
-	`, where),
-		values...,
-	)
+	result := s.db.WithContext(ctx).Exec(query, values...)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -513,3 +504,19 @@ func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
 	}
 	return targets, nil
 }
+
+// 逻辑账户目标状态更新的两种定位方式：按指令序号，或按实例、会话与收盘时刻。
+const (
+	updateTargetBySequenceSQL = updateTargetPrefixSQL + `c_target_id = ? AND c_command_sequence = ?` + updateTargetSuffixSQL
+	updateTargetBySessionSQL  = updateTargetPrefixSQL + `c_target_id = ? AND c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?` + updateTargetSuffixSQL
+
+	updateTargetPrefixSQL = `
+	UPDATE t_logical_account_targets
+	SET c_status = ?, c_blocked_targets_json = ?, c_last_error = ?,
+		c_mtime = CURRENT_TIMESTAMP
+	WHERE c_space_id = ? AND c_logical_account_id = ?
+		AND `
+	updateTargetSuffixSQL = `
+		AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
+`
+)

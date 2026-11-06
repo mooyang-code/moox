@@ -91,7 +91,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
 
 // GetTask 读取一个任务。
 func (s *Store) GetTask(ctx context.Context, spaceID, datasetID string) (Task, error) {
-	task, err := scanTask(s.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID))
+	task, err := scanTask(s.db.QueryRowContext(ctx, queryTasks1, spaceID, datasetID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Task{}, ErrNotFound
 	}
@@ -104,8 +104,7 @@ func (s *Store) ListTasks(ctx context.Context, spaceID string, limit, offset int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_tasks WHERE (? = '' OR c_space_id = ?)`, spaceID, spaceID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM t_archive_tasks WHERE (? = '' OR c_space_id = ?)
-ORDER BY c_space_id, c_dataset_id LIMIT ? OFFSET ?`, spaceID, spaceID, limit, offset)
+	rows, err := s.db.QueryContext(ctx, queryTasks2, spaceID, spaceID, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -228,8 +227,7 @@ func (s *Store) TriggerDue(ctx context.Context, now time.Time, next func(Task, t
 	var result TriggerResult
 	var problems []error
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT `+taskColumns+` FROM t_archive_tasks WHERE c_status = 'enabled' AND c_next_run_at IS NOT NULL AND c_next_run_at <= ?
-ORDER BY c_next_run_at`, fmtTime(now))
+		rows, err := tx.QueryContext(ctx, queryTasks3, fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -283,3 +281,12 @@ ORDER BY c_next_run_at`, fmtTime(now))
 	})
 	return result, problems, err
 }
+
+// 以下查询语句整条写成常量，避免在调用处拼接 SQL。
+const (
+	queryTasks1 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
+	queryTasks2 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE (? = '' OR c_space_id = ?)
+ORDER BY c_space_id, c_dataset_id LIMIT ? OFFSET ?`
+	queryTasks3 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' AND c_next_run_at IS NOT NULL AND c_next_run_at <= ?
+ORDER BY c_next_run_at`
+)
