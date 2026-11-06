@@ -89,9 +89,9 @@ func (f PlanFetch) Limits() *FeedLimits {
 	return &FeedLimits{RPS: f.RPS, Burst: f.Burst, FeedConcurrency: f.FeedConcurrency, RequestTimeoutMS: f.RequestTimeoutMS, StorageTimeoutMS: f.StorageTimeoutMS}
 }
 
-// MinNotBeforeMS、MaxNotBeforeMS 是最早取数时刻的取值范围：小于 1 秒没有意义，超过 12 秒就挤占了提交与重试的时间。
+// MinNotBeforeMS、MaxNotBeforeMS 是最早取数时刻的取值范围：小于 0.8 秒没有意义（A 股三个主源收盘后 0.1～0.5 秒就出定稿值），超过 12 秒就挤占了提交与重试的时间。
 const (
-	MinNotBeforeMS = 1000
+	MinNotBeforeMS = 800
 	MaxNotBeforeMS = 12000
 )
 
