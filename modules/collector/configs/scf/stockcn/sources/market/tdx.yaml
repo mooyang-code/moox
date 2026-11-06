@@ -9,8 +9,9 @@ provider:
     amount_unit: CNY
   rate_limit:
     scope: egress_ip
-    # 2026-11-06 南京实测单个出口 IP 64 并发突发、每秒 80 次持续都没有触顶；每个函数每源只有约 10 只，不用再串行排队。
-    requests_per_second: 20
+    # 2026-11-06 南京实测单个出口 IP：256 并发突发仍 100% 成功，512 并发出现约 5% 超时/断连；每秒 160～640 次持续有 0.1～1.4% 超时。
+    # 15 个函数同时起跑最坏占 15 × 8 = 120 个连接，留在 256 以内；每个函数每源约 10 只，一次放出。
+    requests_per_second: 30
     burst: 10
     max_concurrent: 8
     cooldown: 1s

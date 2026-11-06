@@ -56,8 +56,8 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.True(t, providers["sina"].KlineEnabled)
 	require.True(t, providers["sina"].InstrumentEnabled)
 	require.Equal(t, 1023, providers["sina"].KlineSpec.MaxBarsPerRequest)
-	require.Equal(t, 20.0, providers["sina"].RateLimit.RequestsPerSecond)
-	require.Equal(t, 8, providers["sina"].RateLimit.MaxConcurrent)
+	require.Equal(t, 50.0, providers["sina"].RateLimit.RequestsPerSecond)
+	require.Equal(t, 16, providers["sina"].RateLimit.MaxConcurrent)
 	require.Equal(t, []string{"sina", "eastmoney"}, route.InstrumentProviders())
 	require.Contains(t, providers["eastmoney"].Hosts, "push2his.eastmoney.com", "5m K 线走 push2his")
 }
