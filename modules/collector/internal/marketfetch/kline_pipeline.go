@@ -206,7 +206,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketdata.MarketID(marketID), ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, Adaptive: adaptiveBatch(req.BatchKind), DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -638,6 +638,16 @@ func metricKlineResult(err error) string {
 	default:
 		return "no_candidate"
 	}
+}
+
+// adaptiveBatch 报告这类批次是否使用自适应速率：补采、追赶、缺口修复是持续几分钟到几小时的请求，能边跑边学出安全的速率；
+// 实时采集每 5 分钟只有 1～2 秒的突发，用配置里的固定上限。
+func adaptiveBatch(kind domain.BatchKind) bool {
+	switch kind {
+	case domain.BatchKindBackfill, domain.BatchKindCatchup, domain.BatchKindGapRepair:
+		return true
+	}
+	return false
 }
 
 func stockProviderExchange(subjectID string) marketdata.ExchangeID {

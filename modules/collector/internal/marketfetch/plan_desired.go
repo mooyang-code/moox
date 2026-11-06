@@ -37,6 +37,11 @@ type PlanOptions struct {
 	StreamLatenessS map[string]int
 	// AssumedEgressIPs 是函数出口 IP 个数的估计值，只用于频控估算（保守默认 1）。
 	AssumedEgressIPs int
+	// AutoSize 按市场的限速配置与标的数估算每函数标的数（见 FleetSizing）；返回 0 表示算不出，用 SymbolsPerFunction。
+	// 任务自己指定的每函数标的数优先于它。
+	AutoSize func(sample TaskGroup, subjects int) int
+	// DeriveFetch 按市场的源配置推导计划里的 fetch 参数（A 股的函数内并发等），nil 表示不推导。
+	DeriveFetch func(sample TaskGroup, fetch PlanFetch) PlanFetch
 }
 
 // PlanDatasetState 是一个结果数据集在某一时刻的状态：标的集合 hash 与总数等。
@@ -214,7 +219,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		info := markets[key]
 		// newPlan 构造一项计划：subjects 是这一项负责的标的，datasetKeys 是它服务的数据集。
 		newPlan := func(executor string, subjects []string, datasetKeys []string) *Plan {
-			plan := &Plan{V: 1, Fetch: opts.fetchFor(info.sample.MarketType), Market: PlanMarket{
+			plan := &Plan{V: 1, Fetch: opts.planFetch(info.sample), Market: PlanMarket{
 				MarketID: info.sample.MarketID, InstrumentType: info.sample.InstrumentType, Provider: info.sample.Provider,
 				SourceID: info.sample.SourceID, MarketType: info.sample.MarketType,
 			}}
@@ -282,6 +287,9 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 				return nil, fmt.Errorf("no SCF region is configured for market %s in space %s", info.sample.MarketType, spaceID)
 			}
 			size := info.size
+			if size <= 0 && opts.AutoSize != nil {
+				size = opts.AutoSize(info.sample, len(universe))
+			}
 			if size <= 0 {
 				size = defaultSize
 			}
@@ -368,6 +376,15 @@ func (o PlanOptions) latenessFor(group TaskGroup, mode DatasetMode) int {
 		lateness = 60
 	}
 	return lateness
+}
+
+// planFetch 返回写进计划的拉取参数：按市场取值后，再按源配置推导（如果配置了）。
+func (o PlanOptions) planFetch(sample TaskGroup) PlanFetch {
+	fetch := o.fetchFor(sample.MarketType)
+	if o.DeriveFetch != nil {
+		fetch = o.DeriveFetch(sample, fetch)
+	}
+	return fetch
 }
 
 // fetchFor 返回某市场类型的拉取参数：有按市场的覆盖就用覆盖，否则用空间值。

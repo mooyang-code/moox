@@ -20,29 +20,26 @@ func TestPlanNotBeforeRangeIsValidated(t *testing.T) {
 	}
 }
 
-// 取数开始不早于收盘 + not_before_ms：定时器晚到 1 秒也一样；错峰更晚时以错峰为准。
+// 取数开始不早于收盘 + not_before_ms：定时器晚到 1 秒也一样，晚到超过 not_before_ms 就不再等待。
 func TestPlanStartDelayHonoursNotBeforeFromTheClose(t *testing.T) {
 	scheduled := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
 	plan := testPlan()
-	plan.Fetch.StaggerMS = 0
 	plan.Fetch.NotBeforeMS = 8000
 	for _, late := range []time.Duration{0, 400 * time.Millisecond, time.Second} {
 		entry := scheduled.Add(late)
-		start := entry.Add(plan.StartDelay("fn", entry, scheduled))
+		start := entry.Add(plan.StartDelay(entry, scheduled))
 		require.Equal(t, scheduled.Add(8*time.Second), start, "late=%s", late)
 	}
 	// 定时器晚到超过 not_before_ms：不再等待。
-	require.Zero(t, plan.StartDelay("fn", scheduled.Add(9*time.Second), scheduled))
-	// 错峰比 not_before_ms 更晚：按错峰。
-	plan.Fetch.StaggerBaseMS = 9000
-	require.Equal(t, 9*time.Second, plan.StartDelay("fn", scheduled.Add(time.Second), scheduled))
+	require.Zero(t, plan.StartDelay(scheduled.Add(9*time.Second), scheduled))
+	// 没有设置 not_before_ms：不等待。
+	require.Zero(t, (&Plan{}).StartDelay(scheduled.Add(time.Second), scheduled))
 	// 合约 20 秒截止：8 秒起取数，周期截止仍远在其后，留出取数与提交的窗口。
-	plan.Fetch.StaggerBaseMS = 0
 	plan.Datasets[0].LatenessS = 20
 	requests, err := plan.BuildRequests("crypto", "fn", "req", scheduled, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, requests)
-	start := scheduled.Add(time.Second).Add(plan.StartDelay("fn", scheduled.Add(time.Second), scheduled))
+	start := scheduled.Add(time.Second).Add(plan.StartDelay(scheduled.Add(time.Second), scheduled))
 	for _, request := range requests {
 		if request.Frequency == "1m" {
 			require.True(t, request.StorageDeadline.Sub(start) >= 7*time.Second, "截止 %s 开始 %s", request.StorageDeadline, start)

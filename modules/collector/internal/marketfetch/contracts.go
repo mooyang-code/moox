@@ -69,10 +69,9 @@ type Request struct {
 	FetchLimits *FeedLimits `json:"fetch_limits,omitempty"`
 	// ConnReuse 记录本次调用是否使用了跨调用的连接复用，只用于上报。
 	ConnReuse bool `json:"conn_reuse,omitempty"`
-	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），StaggerMS 是函数内错峰等待的时长，EntryAt 是函数入口时刻；
-	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是错峰上。
+	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），EntryAt 是函数入口时刻；
+	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是等待收盘后的取数时刻上。
 	TimerLateMS int                              `json:"timer_late_ms,omitempty"`
-	StaggerMS   int                              `json:"stagger_ms,omitempty"`
 	EntryAt     time.Time                        `json:"-"`
 	DNSRoutes   map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
 	Items       []domain.CollectionItem          `json:"items"`

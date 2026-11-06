@@ -409,9 +409,10 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
 		require.NoError(t, err)
 		require.Equal(t, []string{"stockcn"}, cfg.scfSpaces(), "只配置 stockcn 也要启动管理器")
-		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
-		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
-		require.Equal(t, 15000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
+		sizing := cfg.SCFPlan.autoSizing("stockcn")
+		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
+		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4}, *sizing)
+		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 1 秒取数")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -433,13 +434,13 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 
 func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	defaults := defaultSCFPlan()
-	// 只写了 rps：并发、错峰等沿用 stockcn 的默认值，不会变成零。
+	// 只写了 rps：取数时刻、超时等沿用 stockcn 的默认值，不会变成零。
 	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {Fetch: &SCFPlanFetchConfig{RPS: 10}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
 	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
-	require.Equal(t, 8, fetch.Concurrency)
-	require.Equal(t, 15000, fetch.StaggerMS)
+	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency)
+	require.Equal(t, 1000, fetch.NotBeforeMS)
 	require.Positive(t, fetch.Concurrency)
 	require.Positive(t, fetch.Burst)
 	require.Positive(t, fetch.RequestTimeoutMS)
@@ -478,18 +479,17 @@ func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
 	require.Equal(t, 800, fetch.StandbyMS)
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
-	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
 	require.True(t, fetch.ConnReuse)
 }
 
-// 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值。
-func TestScfPlanFetchYAMLStaggerOverride(t *testing.T) {
+// 连接复用与备援、取数时刻可以只写需要改的几项，其余沿用默认值；取数时刻按空间设置。
+func TestScfPlanFetchYAMLNotBeforeOverride(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    conn_reuse: true\n  spaces:\n    crypto:\n      fetch:\n        not_before_ms: 2000\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto", "")
-	require.Equal(t, 500, fetch.StaggerMS)
+	require.Equal(t, 2000, fetch.NotBeforeMS)
 	require.True(t, fetch.ConnReuse)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
 	require.Zero(t, fetch.StandbyMS)
@@ -509,7 +509,7 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 		require.NotEmpty(t, deploy.PackageName, space)
 		require.Contains(t, deploy.Networks, "ap-hongkong")
 	}
-	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "渲染产物里只有包名与命名空间，stockcn 默认值仍应补回")
+	require.NotNil(t, cfg.SCFPlan.autoSizing("stockcn"), "渲染产物里只有包名与命名空间，stockcn 的估算参数仍应补回")
 	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
@@ -568,4 +568,22 @@ func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
 		}
 	}
 	t.Fatal("没有找到 trpc.moox.collector.Health 服务")
+}
+
+// 空间固定了 symbols_per_function 时不再估算；auto_size 只写部分字段时其余沿用默认值。
+func TestScfPlanAutoSizeOverrides(t *testing.T) {
+	defaults := defaultSCFPlan()
+	fixed := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 20}}}
+	fixed.mergeSpaceDefaults(defaults.Spaces)
+	require.Nil(t, fixed.autoSizing("stockcn"), "固定每函数标的数后不估算")
+	require.Equal(t, 20, fixed.symbolsPerFunction("stockcn"))
+
+	partial := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {AutoSize: &SCFPlanAutoSize{MinFunctions: 6}}}}
+	partial.mergeSpaceDefaults(defaults.Spaces)
+	sizing := partial.autoSizing("stockcn")
+	require.NotNil(t, sizing)
+	require.Equal(t, 6, sizing.MinFunctions)
+	require.Equal(t, 2000, sizing.TargetFetchMS)
+	require.Equal(t, 500, sizing.RequestMS)
+	require.Nil(t, defaults.autoSizing("crypto"), "加密货币不估算")
 }

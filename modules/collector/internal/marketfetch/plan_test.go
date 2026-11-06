@@ -17,7 +17,7 @@ func testPlan() *Plan {
 	return &Plan{
 		V:      1,
 		Market: PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
-		Fetch:  PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10, StaggerMS: 1500},
+		Fetch:  PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},
 		Datasets: []PlanDataset{
 			{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 15, Copies: []PlanCopy{
 				{From: 1000, Hash: "old", Count: 2, Subjects: []PlanSubject{{ID: "BTC-USDT", Index: 0}, {ID: "ETH-USDT", Index: 1}}},
@@ -135,15 +135,6 @@ func TestPlanBuildRequestsUsesOldCopyBeforeEffectiveStart(t *testing.T) {
 	for _, target := range requests[0].Request.Targets {
 		require.Equal(t, "old", target.SeriesHash)
 	}
-}
-
-func TestPlanStaggerIsDeterministicAndBounded(t *testing.T) {
-	plan := testPlan()
-	first := plan.StaggerDelay("function-a")
-	require.Equal(t, first, plan.StaggerDelay("function-a"))
-	require.LessOrEqual(t, first, 1500*time.Millisecond)
-	plan.Fetch.StaggerMS = 0
-	require.Zero(t, plan.StaggerDelay("function-a"))
 }
 
 func TestPlanExchangeSymbol(t *testing.T) {
