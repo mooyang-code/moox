@@ -412,7 +412,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		sizing := cfg.SCFPlan.autoSizing("stockcn")
 		require.NotNil(t, sizing, "A 股默认按配置估算每函数标的数")
 		require.Equal(t, marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4}, *sizing)
-		require.Equal(t, 1000, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 1 秒取数")
+		require.Equal(t, 800, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 0.8 秒取数")
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -440,7 +440,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
 	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency)
-	require.Equal(t, 1000, fetch.NotBeforeMS)
+	require.Equal(t, 800, fetch.NotBeforeMS)
 	require.Positive(t, fetch.Concurrency)
 	require.Positive(t, fetch.Burst)
 	require.Positive(t, fetch.RequestTimeoutMS)
