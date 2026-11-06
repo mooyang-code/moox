@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/packages/security"
 )
@@ -90,12 +91,28 @@ type SCFPlanAutoSize struct {
 	MinFunctions  int `yaml:"min_functions"`
 }
 
+// SCFPlanEgressBalance 是函数出口 IP 去重的参数（见 egressbalance 包）：计划新建函数后，探测各函数的出口 IP，把共用同一个 IP 的函数删掉重建。
+// 任何空间都可以配置；idle_start、idle_end（"15:04" 格式，按 timezone 的时钟，起点晚于终点表示跨午夜）限定允许删除重建的时段，都不写表示任何时候。
+type SCFPlanEgressBalance struct {
+	MaxPerIP  int    `yaml:"max_per_ip"`
+	Rounds    int    `yaml:"rounds"`
+	IdleStart string `yaml:"idle_start"`
+	IdleEnd   string `yaml:"idle_end"`
+	Timezone  string `yaml:"timezone"`
+}
+
+func (b SCFPlanEgressBalance) config() egressbalance.Config {
+	return egressbalance.Config{MaxPerIP: b.MaxPerIP, Rounds: b.Rounds, IdleWindow: egressbalance.Window{Start: b.IdleStart, End: b.IdleEnd, Timezone: b.Timezone}}
+}
+
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
 type SCFPlanSpaceConfig struct {
 	// SymbolsPerFunction 大于 0 时固定每函数标的数；为 0 且配置了 AutoSize 时按源的权重与限速、标的数估算，函数个数随之调整。
-	SymbolsPerFunction int                 `yaml:"symbols_per_function"`
-	AutoSize           *SCFPlanAutoSize    `yaml:"auto_size"`
-	Fetch              *SCFPlanFetchConfig `yaml:"fetch"`
+	SymbolsPerFunction int              `yaml:"symbols_per_function"`
+	AutoSize           *SCFPlanAutoSize `yaml:"auto_size"`
+	// EgressBalance 非空时在收盘后的空闲时段探测函数出口 IP，并重建共用 IP 的函数；只对 A 股有效。
+	EgressBalance *SCFPlanEgressBalance `yaml:"egress_balance"`
+	Fetch         *SCFPlanFetchConfig   `yaml:"fetch"`
 	// PackageName、PackageID、Namespace、BaseEnvironmentFile 为空表示沿用全局值。代码包按空间构建（带各自的市场配置），
 	// 同时管理多个空间时每个空间必须有自己的代码包。
 	PackageName         string `yaml:"package_name"`
@@ -206,6 +223,10 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 			}
 			override.AutoSize = &auto
 		}
+		if override.EgressBalance == nil && base.EgressBalance != nil {
+			balance := *base.EgressBalance
+			override.EgressBalance = &balance
+		}
 		if override.DefaultIngest == "" {
 			override.DefaultIngest = base.DefaultIngest
 		}
@@ -252,14 +273,14 @@ func defaultSCFPlan() SCFPlanConfig {
 		// 写入阶段预算 4 秒：行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000},
-		// stockcn：每函数标的数按各源的权重与限速、标的数估算（auto_size；沪深300 约 4 个函数），收盘后固定等 0.8 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 0.8 秒一致），各函数同时起跑。
+		// stockcn：每函数标的数按各源的权重与限速、标的数估算（auto_size；沪深300 约 8 个函数，只用通达信和东方财富，多拆函数让出口 IP 分散、避开单 IP 频控），收盘后固定等 0.8 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与代码里的定稿窗口 0.8 秒一致），各函数同时起跑。
 		// 标的按权重哈希分到通达信、东方财富、新浪三个主源（腾讯只做备源）；函数内同时处理的标的数（concurrency）、熔断并发（feed_concurrency）
 		// 由各源的限速配置推导（configs/scf/stockcn/sources/market/*.yaml），rps、burst 只给币安用、A 股不用，所以这里不配。
 		// 2026-11-06 实测 15 个函数同时起跑没有命中频控，起跑 1 秒后 10:40 那期 1.7 秒取完、策略产出 3.2 秒（原来 8 个函数、起跑错开 5～20 秒时要 23 秒）。
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 4}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 800}},
+			"stockcn": {EgressBalance: &SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "09:00", Timezone: "Asia/Shanghai"}, AutoSize: &SCFPlanAutoSize{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8}, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 800}},
 			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
 			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
@@ -328,6 +349,11 @@ func (c *Config) validateSCFPlan() error {
 	for space, override := range plan.Spaces {
 		if auto := override.AutoSize; auto != nil && (auto.TargetFetchMS < 500 || auto.TargetFetchMS > 10000 || auto.RequestMS < 50 || auto.RequestMS > auto.TargetFetchMS || auto.MinFunctions < 1 || auto.MinFunctions > 50) {
 			return fmt.Errorf("scf_plan.spaces[%s].auto_size 超出范围：target_fetch_ms 500～10000，request_ms 50～target_fetch_ms，min_functions 1～50", space)
+		}
+		if balance := override.EgressBalance; balance != nil {
+			if _, err := egressbalance.New(balance.config()); err != nil {
+				return fmt.Errorf("scf_plan.spaces[%s].egress_balance: %w", space, err)
+			}
 		}
 		mode := plan.defaultModeFor(space)
 		if (mode.Mode != marketfetch.IngestStreaming && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {

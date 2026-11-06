@@ -2,6 +2,7 @@ package scfinvoker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -433,6 +434,29 @@ func (c *Client) Invoke(ctx context.Context, spaceID, instanceID string, event m
 		resultMap = result.GetResult().AsMap()
 	}
 	return InvocationResult{RequestID: result.GetRequestId(), Code: result.GetCode(), Message: result.GetMessage(), Result: resultMap, DurationMS: result.GetDuration(), BillDuration: result.GetBillDuration()}, nil
+}
+
+// ProbeEgressIP 调用函数的 egress_probe，返回函数此刻的公网出口 IP（用于核对不同函数是否共用同一个出口）。
+func (c *Client) ProbeEgressIP(ctx context.Context, spaceID, instanceID string) (string, error) {
+	result, err := c.Invoke(ctx, spaceID, instanceID, map[string]any{"action": "egress_probe", "data": map[string]any{"node_id": instanceID}}, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_UNSPECIFIED)
+	if err != nil {
+		return "", err
+	}
+	data, _ := result.Result["data"].(map[string]any)
+	if data == nil {
+		if raw, ok := result.Result["raw"].(string); ok {
+			var decoded map[string]any
+			if json.Unmarshal([]byte(raw), &decoded) == nil {
+				data, _ = decoded["data"].(map[string]any)
+			}
+		}
+	}
+	details, _ := data["details"].(map[string]any)
+	ip, _ := details["public_ip"].(string)
+	if strings.TrimSpace(ip) == "" {
+		return "", fmt.Errorf("egress probe of %s returned no public ip", instanceID)
+	}
+	return strings.TrimSpace(ip), nil
 }
 
 func (c *Client) invoke(ctx context.Context, spaceID, service, method string, request, response proto.Message, unknownAfterSend bool) error {

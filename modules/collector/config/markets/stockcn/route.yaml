@@ -14,15 +14,17 @@ klines:
   # 贴近 5 分钟边界的个别成交各家归属不同，个别根的量价会有小差异，整段成交量合计一致（2026-11-04 实测 600519 同 60 根，差 0.1% 以内）。
   # 按标的固定分配到 primary（按路由 ID 与标的哈希，不随调用变化），失败时按这里的顺序依次回落（每家最多试 3 次再换下一家）。
   # 2026-11-05、06 在南京同 VPC 实测：四家都扛得住 64 并发突发、每秒 80 次持续，没有触顶；收盘后出现目标 K 线的时刻
-  # tdx 约 0.1 秒、eastmoney 0.16～0.28 秒、sina 0.27～0.5 秒，出现后数值不再变；tencent 约 0.17～0.28 秒就出现，
-  # 但 20 只里 16～18 只首次给的是未定稿值，9 秒后仍有一半以上与通达信不一致，所以只做 fallback。
+  # tdx 约 0.1 秒、eastmoney 0.09～0.28 秒；tencent、sina 也在 0.1～0.3 秒给出，但给的是未定稿值：
+  # 2026-11-06 盘中连续 5 个边界、每源 60 只实测，首次出现后 8 秒数值又变的比例 tdx 0、eastmoney 0、sina 69%、tencent 85%
+  # （sina 变动的标的里约一半收盘价差 0.01～0.04，成交量中位差 1.5%～5.8%），所以 sina、tencent 只做 fallback。
+  # 四个来源的返回里都没有“K 线已完成”的标记，只有时间、开高低收、成交量、成交额。
   # - tdx：TCP，延迟最低且不随并发上升，成交量与东方财富一致，成交额是 float32（末位有误差）；权重最高、排在回落链首位。
   # - eastmoney：push2his，成交量单位手×100，有成交额，回看 30 天。
-  # - sina：成交量单位股，有成交额，盘中成交量比通达信低约 1～1.5%（个别 5%），一页 1023 根、回看 20 天；权重最低的 primary。
+  # - sina：成交量单位股，有成交额，一页 1023 根、回看 20 天；收盘后头几秒给未定稿值，fallback（排在 tencent 之前）。
   # - tencent：成交量单位手（可有小数），没有成交额，按 收盘价 × 成交量 估算（amount_quality=estimated_close_x_volume）；fallback。
   - frequency: 5m
     providers:
       - {id: tdx, source_id: normal_7709, weight: 4, role: primary}
       - {id: eastmoney, source_id: stockcn_http, weight: 2, role: primary}
-      - {id: sina, source_id: stockcn_minute_http, weight: 1, role: primary}
+      - {id: sina, source_id: stockcn_minute_http, weight: 1, role: fallback}
       - {id: tencent, source_id: stockcn_http, weight: 1, role: fallback}

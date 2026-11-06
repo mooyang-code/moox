@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
 	"github.com/mooyang-code/moox/modules/collector/internal/localexec"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -168,6 +169,13 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Modes: dbm.IngestModes(), DefaultMode: cfg.SCFPlan.defaultModeFor(spaceID), Workers: dbm.StreamWorkers(),
 				StreamOnline: func(ctx context.Context) (bool, error) { return stream.Online(ctx, spaceID) },
 				Exclusions:   dbm.SubjectExclusions(),
+			}
+			if balance := cfg.SCFPlan.Spaces[strings.ToLower(spaceID)].EgressBalance; balance != nil {
+				balancer, err := egressbalance.New(balance.config())
+				if err != nil {
+					return nil, fmt.Errorf("scf_plan.spaces[%s].egress_balance: %w", spaceID, err)
+				}
+				reconciler.Egress = balancer
 			}
 			reconcilers.Store(spaceID, reconciler)
 			return reconciler, nil

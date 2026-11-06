@@ -16,6 +16,7 @@ import (
 
 	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/egressbalance"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
@@ -201,6 +202,9 @@ type PlanReconciler struct {
 	pending        []pendingPlanJob
 	aux            auxJobs
 	lastVerified   time.Time
+	// Egress 非空时，计划新建了函数之后做一次出口 IP 去重（见 egressbalance 包）：核对云端没有其他问题时探测各函数的出口 IP，
+	// 共用 IP 的函数走“云端缺失重建”流程。做完或地址池用尽之后不再探测。
+	Egress *egressbalance.Balancer
 	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
 	packageMu       sync.Mutex
 	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
@@ -499,6 +503,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	for name, function := range desired.Functions {
 		if previousFunctions[name] == nil && function.Executor == "" {
 			lead = planLeadTimeWithCreate
+			r.Egress.Arm() // 新建函数的出口 IP 要去重：计划生效后探测一次
 			break
 		}
 	}
@@ -1975,6 +1980,21 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			drifted = append(drifted, name)
 		}
 	}
+	// 没有其他问题时才做出口 IP 去重：重复 IP 的函数按“云端函数没了”走删除再重建；重建后几分钟再探测下一轮。
+	egressRound := false
+	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 && unverified == 0 {
+		if prober, ok := r.Cloud.(egressbalance.Prober); ok {
+			present := make([]string, 0, len(names))
+			for _, name := range names {
+				if _, exists := byName[name]; exists {
+					present = append(present, name)
+				}
+			}
+			if again := r.Egress.Next(ctx, prober, r.SpaceID, present, r.now()); len(again) > 0 {
+				gone, egressRound = append(gone, again...), true
+			}
+		}
+	}
 	if len(drifted) == 0 && len(missing) == 0 && len(gone) == 0 {
 		if unverified > 0 {
 			// 有函数这次没读回成功：不能宣布全部核对完毕，几分钟后重试。
@@ -2109,8 +2129,8 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	}
 	if allOK {
 		r.releaseLease(ctx)
-		if unverified > 0 {
-			// 修复完成，但有函数这次没读回成功：几分钟后重新读回。
+		if unverified > 0 || egressRound {
+			// 修复完成，但有函数这次没读回成功，或刚重建了共用出口 IP 的函数：几分钟后重新读回、探测。
 			r.lastVerified = r.now().Add(planVerifyRetry - planVerifyInterval)
 			return nil
 		}
