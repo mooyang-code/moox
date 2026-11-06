@@ -765,11 +765,6 @@ func deleteCollectorTaskData(ctx context.Context, dbPath string, tasks []collect
 
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if requestedSpaceID != "" {
-			if collectorTableExists(tx, "t_period_readiness_items") && collectorTableExists(tx, "t_collector_task_instances") {
-				if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_instance_id IN (SELECT c_instance_id FROM t_collector_task_instances WHERE c_space_id = ?)`, requestedSpaceID).Error; err != nil {
-					return err
-				}
-			}
 			for _, table := range []string{
 				"t_collector_task_instances",
 				"t_collector_fetch_batches",
@@ -787,11 +782,6 @@ func deleteCollectorTaskData(ctx context.Context, dbPath string, tasks []collect
 					return err
 				}
 			}
-			if collectorTableExists(tx, "t_period_readiness") && collectorTableExists(tx, "t_period_readiness_items") {
-				if err := tx.Exec(`DELETE FROM t_period_readiness WHERE c_space_id = ? AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items WHERE c_readiness_id = t_period_readiness.c_id)`, requestedSpaceID).Error; err != nil {
-					return err
-				}
-			}
 			return nil
 		}
 
@@ -800,11 +790,6 @@ func deleteCollectorTaskData(ctx context.Context, dbPath string, tasks []collect
 			taskID := strings.TrimSpace(task.TaskID)
 			if taskID == "" {
 				continue
-			}
-			if collectorTableExists(tx, "t_period_readiness_items") && collectorTableExists(tx, "t_collector_task_instances") {
-				if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_instance_id IN (SELECT c_instance_id FROM t_collector_task_instances WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
-					return err
-				}
 			}
 			for _, table := range []string{
 				"t_collector_task_instances",
@@ -820,19 +805,6 @@ func deleteCollectorTaskData(ctx context.Context, dbPath string, tasks []collect
 			}
 			if collectorTableExists(tx, "t_collector_tasks") {
 				if err := tx.Exec(`DELETE FROM t_collector_tasks WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
-					return err
-				}
-			}
-		}
-		if collectorTableExists(tx, "t_period_readiness") && collectorTableExists(tx, "t_period_readiness_items") {
-			spaces := make(map[string]struct{}, len(tasks))
-			for _, task := range tasks {
-				if spaceID := strings.TrimSpace(task.SpaceID); spaceID != "" {
-					spaces[spaceID] = struct{}{}
-				}
-			}
-			for spaceID := range spaces {
-				if err := tx.Exec(`DELETE FROM t_period_readiness WHERE c_space_id = ? AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items WHERE c_readiness_id = t_period_readiness.c_id)`, spaceID).Error; err != nil {
 					return err
 				}
 			}

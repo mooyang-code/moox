@@ -35,20 +35,20 @@ type TaskSpec struct {
 
 // WriteTarget 是一次采集请求里某个任务结果数据集的写入目标（序号、hash、总数随请求下发）。
 type WriteTarget struct {
-	ID             string     `gorm:"column:c_write_target_id;primaryKey" json:"write_target_id"`
-	SpaceID        string     `gorm:"column:c_space_id" json:"space_id"`
-	InstanceID     string     `gorm:"column:c_instance_id" json:"instance_id"`
-	TaskID         string     `gorm:"column:c_task_id" json:"task_id"`
-	DatasetID      string     `gorm:"column:c_dataset_id" json:"dataset_id"`
-	ViewID         string     `gorm:"column:c_view_id" json:"view_id,omitempty"`
-	OutputFields   string     `gorm:"column:c_output_fields_json" json:"output_fields_json,omitempty"`
-	SeriesIndex    uint32     `gorm:"column:c_series_index" json:"series_index"`
-	SeriesHash     string     `gorm:"column:c_series_hash" json:"series_hash"`
-	ExpectedCount  uint32     `gorm:"column:c_expected_count" json:"expected_count"`
-	Frequency      string     `gorm:"-" json:"frequency"`
-	TargetDataTime string     `gorm:"-" json:"target_data_time"`
-	Status         string     `gorm:"column:c_status" json:"status"`
-	Attempt        int        `gorm:"column:c_attempt" json:"attempt"`
-	LastError      string     `gorm:"column:c_last_error" json:"last_error,omitempty"`
-	NextRetryAt    *time.Time `gorm:"column:c_next_retry_at" json:"next_retry_at,omitempty"`
+	ID             string     `json:"write_target_id"`
+	SpaceID        string     `json:"space_id"`
+	InstanceID     string     `json:"instance_id"`
+	TaskID         string     `json:"task_id"`
+	DatasetID      string     `json:"dataset_id"`
+	ViewID         string     `json:"view_id,omitempty"`
+	OutputFields   string     `json:"output_fields_json,omitempty"`
+	SeriesIndex    uint32     `json:"series_index"`
+	SeriesHash     string     `json:"series_hash"`
+	ExpectedCount  uint32     `json:"expected_count"`
+	Frequency      string     `json:"frequency"`
+	TargetDataTime string     `json:"target_data_time"`
+	Status         string     `json:"status"`
+	Attempt        int        `json:"attempt"`
+	LastError      string     `json:"last_error,omitempty"`
+	NextRetryAt    *time.Time `json:"next_retry_at,omitempty"`
 }
