@@ -62,7 +62,7 @@ func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	require.Contains(t, providers["eastmoney"].Hosts, "push2his.eastmoney.com", "5m K 线走 push2his")
 }
 
-func TestReleaseStockCNRouteWeights5mTowardsTdx(t *testing.T) {
+func TestReleaseStockCNRouteWeights5mTowardsTdxWithTencentAsFallback(t *testing.T) {
 	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
 	minute, err := route.Kline("1m")
@@ -73,10 +73,10 @@ func TestReleaseStockCNRouteWeights5mTowardsTdx(t *testing.T) {
 	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, five.ProviderChain())
 	// PrimarySources 按来源名排序，与候选链的回落顺序无关；分配只看权重。
 	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 2}, {Provider: "sina", SourceID: "stockcn_minute_http", Weight: 1},
-		{Provider: "tdx", SourceID: "normal_7709", Weight: 3}, {Provider: "tencent", SourceID: "stockcn_http", Weight: 1}}, five.PrimarySources())
+		{Provider: "tdx", SourceID: "normal_7709", Weight: 3}}, five.PrimarySources(), "腾讯只做 fallback")
 }
 
-// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在四家 primary 之间按权重 3:2:1:1 分配。
+// 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在三家 primary 之间按权重 3:2:1 分配，腾讯不分到标的。
 func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 	routeID, sources, err := stockCNAssignmentRoute("5m")
 	require.NoError(t, err)
@@ -90,8 +90,8 @@ func TestStockCNAssignmentIsStablePerSubjectAndSpreadsLoad(t *testing.T) {
 		require.Equal(t, first, again, "同一标的每次分到同一来源")
 		counts[first.Provider]++
 	}
-	require.Len(t, counts, 4)
-	for provider, want := range map[string]float64{"tdx": 129, "eastmoney": 86, "sina": 43, "tencent": 43} {
+	require.Len(t, counts, 3)
+	for provider, want := range map[string]float64{"tdx": 150, "eastmoney": 100, "sina": 50} {
 		require.InDelta(t, want, counts[provider], 25, provider)
 	}
 	require.Greater(t, counts["tdx"], counts["eastmoney"], "tdx 权重最高")

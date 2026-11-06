@@ -49,7 +49,9 @@ func NewStockKlinePipeline(storage marketfetch.Storage, frequency string) (*mark
 	return &marketfetch.KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true,
 		SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, InstrumentType: marketdata.InstrumentEquity,
-		SettleDelay: 5 * time.Second,
+		// 2026-11-06 南京实测：通达信、东方财富、新浪在收盘后 0.1～0.5 秒就给出定稿的目标 K 线，等 1 秒即可；
+		// 腾讯最早给的是未定稿值（要靠回落才会用到），所以不能再靠更长的等待去迁就它。
+		SettleDelay: time.Second,
 	}, nil
 }
 
