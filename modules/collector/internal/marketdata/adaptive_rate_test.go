@@ -4,81 +4,139 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdaptiveRateBacksOffOnPressureAndRecovers(t *testing.T) {
+// run 在 duration 内均匀发出 n 个请求，结果都是 err，返回时时钟走到周期末尾。
+func run(a *AdaptiveRate, clock *fakeClock, n int, duration time.Duration, err error) {
+	for i := 0; i < n; i++ {
+		a.Observe(err)
+		clock.Advance(duration / time.Duration(n))
+	}
+}
+
+func TestAdaptiveRateBacksOffImmediatelyOnRateLimiting(t *testing.T) {
 	clock := newFakeClock(time.Unix(1_000, 0))
 	a := newAdaptiveRate("p", 100, clock)
 	require.Equal(t, 100.0, a.Rate(), "从配置的上限开始")
 
 	a.Observe(ErrRateLimited)
-	require.Equal(t, 50.0, a.Rate(), "明确限流减半")
+	require.Equal(t, 50.0, a.Rate(), "明确限流立即减半")
 
-	// 同一批并发请求一起失败，只算一次压力信号。
+	// 同一批并发请求一起被限流，只算一次。
 	a.Observe(ErrRateLimited)
-	a.Observe(ErrRateLimited)
+	a.Observe(fmt.Errorf("繁忙：%w", ErrRemoteBusy))
 	require.Equal(t, 50.0, a.Rate())
 
-	clock.Advance(adaptiveDownGap)
-	a.Observe(fmt.Errorf("读超时：%w", ErrTimeout))
-	require.Equal(t, 40.0, a.Rate(), "超时、断连是弱信号，降 20%")
+	clock.Advance(adaptiveTick)
+	a.Observe(ErrRateLimited)
+	require.Equal(t, 25.0, a.Rate(), "过了一个周期再被限流，再减半")
+}
+
+func TestAdaptiveRateToleratesSmallSamplesAndSmallFailureShares(t *testing.T) {
+	clock := newFakeClock(time.Unix(1_000, 0))
+	a := newAdaptiveRate("p", 100, clock)
+
+	// 样本太少（不足 5 个）：一个超时不算数。
+	a.Observe(ErrTimeout)
+	a.Observe(nil)
+	a.Observe(nil)
+	clock.Advance(adaptiveTick)
+	require.Equal(t, 100.0, a.Rate())
+
+	// 20 个请求里 1 个超时（5%）在容忍范围内：不降。
+	for i := 0; i < 19; i++ {
+		a.Observe(nil)
+	}
+	a.Observe(ErrTimeout)
+	clock.Advance(adaptiveTick)
+	require.Equal(t, 100.0, a.Rate())
+
+	// 10 个请求里 5 个超时、断连：占比远超容忍值加 3 倍标准误差，降 20%。
+	for i := 0; i < 5; i++ {
+		a.Observe(nil)
+		a.Observe(fmt.Errorf("读超时：%w", ErrTimeout))
+	}
+	clock.Advance(adaptiveTick)
+	require.InDelta(t, 80.0, a.Rate(), 1e-9)
+
+	// 整周期都失败（对方挂了）也只降 20%，之后每个周期继续降。
+	run(a, clock, 10, adaptiveTick, ErrTCP)
+	require.InDelta(t, 64.0, a.Rate(), 1e-9)
+	run(a, clock, 10, adaptiveTick, ErrHTTPStatus)
+	require.InDelta(t, 51.2, a.Rate(), 1e-9)
 
 	// 与速率无关的错误既不算成功也不算压力。
+	before := a.Rate()
 	for i := 0; i < 50; i++ {
 		a.Observe(ErrNoClosedBar)
 	}
-	clock.Advance(adaptiveHold)
-	require.Equal(t, 40.0, a.Rate())
+	clock.Advance(adaptiveTick)
+	require.Equal(t, before, a.Rate())
+}
 
-	// 降速之后冷静期内不升；冷静期过后连续成功才升。
-	clock.Advance(-adaptiveHold)
-	for i := 0; i < adaptiveStreak; i++ {
-		a.Observe(nil)
-	}
-	require.Equal(t, 40.0, a.Rate(), "冷静期内不升")
-	clock.Advance(adaptiveHold)
-	for i := 0; i < adaptiveStreak; i++ {
-		a.Observe(nil)
-	}
-	require.InDelta(t, 44.0, a.Rate(), 1e-9)
+func TestAdaptiveRateRecoversOnlyWhenTrafficUsesTheRate(t *testing.T) {
+	clock := newFakeClock(time.Unix(1_000, 0))
+	a := newAdaptiveRate("p", 100, clock)
+	a.Observe(ErrRateLimited) // 50
+	require.Equal(t, 50.0, a.Rate())
 
-	// 失败打断连续成功的计数。
-	clock.Advance(adaptiveDownGap)
-	for i := 0; i < adaptiveStreak-1; i++ {
-		a.Observe(nil)
+	// 降速后 3 秒内不升。
+	run(a, clock, 50, adaptiveTick, nil)
+	run(a, clock, 50, adaptiveTick, nil)
+	require.Equal(t, 50.0, a.Rate(), "冷静期内不升")
+
+	// 冷静期过后：连续 2 个健康周期且流量用到速率，升 10%。
+	run(a, clock, 50, adaptiveTick, nil)
+	run(a, clock, 50, adaptiveTick, nil)
+	require.InDelta(t, 55.0, a.Rate(), 1e-9)
+
+	// 流量只有 10/s、远没有用满 55/s：不升（流量被别的因素限制住了）。
+	before := a.Rate()
+	for i := 0; i < 6; i++ {
+		run(a, clock, 10, adaptiveTick, nil)
 	}
-	a.Observe(ErrHTTPStatus)
-	clock.Advance(adaptiveHold)
-	a.Observe(nil)
-	require.Less(t, a.Rate(), 44.0)
+	require.Equal(t, before, a.Rate(), "没有用满速率不升")
+
+	// 有弱信号（没超标）的周期不算健康，打断连续计数：健康周期与带一个超时的周期交替，一直不升。
+	timeoutTick := func() {
+		for i := 0; i < 39; i++ {
+			a.Observe(nil)
+		}
+		a.Observe(ErrTimeout)
+		clock.Advance(adaptiveTick)
+	}
+	timeoutTick()
+	for i := 0; i < 5; i++ {
+		run(a, clock, 40, adaptiveTick, nil)
+		timeoutTick()
+	}
+	require.Equal(t, before, a.Rate())
 }
 
 func TestAdaptiveRateStaysWithinFloorAndMax(t *testing.T) {
 	clock := newFakeClock(time.Unix(1_000, 0))
 	a := newAdaptiveRate("p", 50, clock)
 	for i := 0; i < 20; i++ {
-		clock.Advance(adaptiveDownGap)
+		clock.Advance(adaptiveTick)
 		a.Observe(ErrRateLimited)
 	}
 	require.Equal(t, 5.0, a.Rate(), "下限是上限的 10%")
 	small := newAdaptiveRate("p", 4, clock)
-	clock.Advance(adaptiveDownGap)
-	small.Observe(ErrRateLimited)
-	clock.Advance(adaptiveDownGap)
-	small.Observe(ErrRateLimited)
-	clock.Advance(adaptiveDownGap)
-	small.Observe(ErrRateLimited)
+	for i := 0; i < 4; i++ {
+		clock.Advance(adaptiveTick)
+		small.Observe(ErrRateLimited)
+	}
 	require.Equal(t, 1.0, small.Rate(), "绝对下限每秒 1 次")
 
-	for i := 0; i < 5000; i++ {
-		clock.Advance(100 * time.Millisecond)
-		a.Observe(nil)
+	for i := 0; i < 400; i++ {
+		run(a, clock, int(math.Ceil(a.Rate())), adaptiveTick, nil)
 	}
-	require.Equal(t, 50.0, a.Rate(), "一直成功时回到上限，不会超过")
+	require.Equal(t, 50.0, a.Rate(), "一直健康且用满时回到上限，不会超过")
 }
 
 // 模拟一个隐藏了限额的行情源（每秒最多 L 次，超过就返回限流）：自适应速率应收敛到限额附近，限流占比很小。
