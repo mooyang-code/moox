@@ -39,18 +39,23 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 	for name, mutate := range map[string]func(*storagepb.InstrumentDelistScheduled){
 		"subject mismatch": func(p *storagepb.InstrumentDelistScheduled) { p.ExchangeSymbol = "BARUSDT" },
 		"upper exchange":   func(p *storagepb.InstrumentDelistScheduled) { p.Exchange = "BINANCE" },
-		"lower symbol": func(p *storagepb.InstrumentDelistScheduled) {
-			p.ExchangeSymbol = "foousdt"
-		},
-		"bad market":     func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
-		"no delist time": func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = nil },
-		"no first seen":  func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = nil },
-		"bad source":     func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
-		"bad scope":      func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
+		"bad market":       func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
+		"no delist time":   func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = nil },
+		"no first seen":    func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = nil },
+		"bad source":       func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
+		"bad scope":        func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
 		mutate(broken)
 		_, err := registry.Encode(InstrumentDelistScheduled, broken, opts)
 		require.Error(t, err, name)
 	}
+
+	// 交易所代码必须是大写：subject 也一起改成小写，这样只有大写校验能拦住它（不是靠 subject 对不上）。
+	lower := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
+	lower.ExchangeSymbol = "foousdt"
+	lowerOpts := opts
+	lowerOpts.SubjectID = InstrumentDelistSubjectID("binance", DelistMarketSpot, "foousdt")
+	_, err = registry.Encode(InstrumentDelistScheduled, lower, lowerOpts)
+	require.ErrorContains(t, err, "upper case")
 }
