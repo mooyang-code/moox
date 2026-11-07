@@ -371,3 +371,45 @@ func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, waiting, "挂着系统单，快路径照常")
 }
+
+// 挂单到期：先撤单（等待），撤单结束、标的到位后回到原来的状态——这里还有一个真实阻塞的标的，所以回到 BLOCKED。
+func TestRestingExpiryGoesFromWaitBackToBlocked(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","resting_ratio":"1","resting_ttl_seconds":600}`)
+	f.now = time.Now().UTC()
+	// BTC 现货买单金额低于交易所最小名义金额（真实阻塞）；BTC 合约有一张挂单。
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
+	f.target(t, []store.InstrumentTarget{
+		{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"},
+		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
+	})
+	f.setSwapPosition("BTCUSDT", "100")
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "resting-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		ClientOrderID: "resting-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "10", LimitPrice: strPtr("99.9"), ReferencePrice: "100",
+		OwnerType: "TARGET", OwnerID: "target-current", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
+	})
+	executor := f.restingExecutor()
+
+	// 挂单还在寿命内：只剩挂单和一个真实阻塞 → BLOCKED，唤醒时间取到挂单到期。
+	first, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, first.Status)
+	require.InDelta(t, float64(10*time.Minute), float64(first.RetryAfter), float64(2*time.Second))
+
+	// 挂单到期：撤单，目标进入等待。
+	f.now = f.now.Add(10*time.Minute + time.Second)
+	waiting, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "wait", waiting.Action)
+	require.Equal(t, []string{"resting-1"}, f.orders.canceled)
+
+	// 撤单结束、合约这一腿已经到位：回到 BLOCKED（现货那个真实阻塞还在），不再有挂单。
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state = 'CANCELED', c_finished_at = ? WHERE c_order_id = 'resting-1'", f.now.UnixMilli()).Error)
+	f.setSwapPosition("BTCUSDT", "110")
+	last, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, last.Status)
+	require.Empty(t, f.orders.specs)
+}

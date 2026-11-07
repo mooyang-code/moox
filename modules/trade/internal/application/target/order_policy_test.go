@@ -158,7 +158,14 @@ func TestConfiguredMinimumNotionalSkipsSmallOpening(t *testing.T) {
 	small.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.4"}})
 	result := small.converge(t)
 	require.Empty(t, small.orders.specs)
-	require.Equal(t, StatusBlocked, result.Status, "从空仓开新仓达不到最小下单额需要人看")
+	require.Equal(t, StatusConverged, result.Status, "低于最小下单额的差额视为已满足：不阻塞，免得“目标持续阻塞”误告警")
+	target, err := small.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, target.BlockedTargets, "blocked_targets 不记")
+	// 过期告警同口径：这点差额不算“持仓未到位”。
+	different, err := small.executor().HasDifference(context.Background(), target)
+	require.NoError(t, err)
+	require.False(t, different)
 
 	large := swapPolicyFixture(t, settings)
 	large.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "0.6"}})

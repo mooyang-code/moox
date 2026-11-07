@@ -136,6 +136,9 @@ type placement struct {
 	deferred bool
 	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
 	capDeferred bool
+	// belowConfiguredMin 表示差额低于设置的最小下单额，视为已满足：跳过这个标的，不阻塞，blocked_targets 不记
+	// （和调仓阈值同口径；合约减仓、清仓不受这个门槛限制，照常下）。
+	belowConfiguredMin bool
 }
 
 type laneAction struct {
@@ -583,6 +586,9 @@ func (e *Executor) Converge(
 			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
 				continue
 			}
+			if placement.belowConfiguredMin {
+				continue
+			}
 			if placement.reason != "" {
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID,
@@ -675,15 +681,31 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	}
 	env := e.newLaneEnv(ctx, target.SpaceID, target.LogicalAccountID, orderSettings, members, desired)
 	for _, instrumentID := range laneIDs(desired, members) {
-		_, complete, _, err := e.laneAction(env, instrumentID, desired[instrumentID], members)
+		action, complete, reason, err := e.laneAction(env, instrumentID, desired[instrumentID], members)
 		if err != nil {
 			return false, err
 		}
-		if !complete {
-			return true, nil
+		if complete {
+			continue
 		}
+		// 差额低于设置的最小下单额的，收敛时视为已满足，这里同口径：不算还有差额，免得误报“目标过期且持仓未到位”。
+		if reason == "" && e.belowConfiguredMinimumNow(ctx, env, action) {
+			continue
+		}
+		return true, nil
 	}
 	return false, nil
+}
+
+// belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
+func (e *Executor) belowConfiguredMinimumNow(ctx context.Context, env *laneEnv, action laneAction) bool {
+	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
+		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
+	if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
+		return false
+	}
+	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
+	return env.belowConfiguredMinimum(action, quantity, quote.Price)
 }
 
 func (e *Executor) loadMembers(
@@ -1081,6 +1103,8 @@ func (e *Executor) placeAction(
 	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
 	// 有成员本来能下单但被排除时不能算完成。
 	tooSmall := 0
+	// configuredSmall 统计因为低于设置的最小下单额而下不了单的成员。
+	configuredSmall := 0
 	// unfilled 表示有成员的伪市价单用满了尝试次数。
 	unfilled := false
 	candidates := placementCandidates(action, members)
@@ -1137,6 +1161,7 @@ func (e *Executor) placeAction(
 		if env.belowConfiguredMinimum(candidate, quantity, quote.Price) {
 			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
 			tooSmall++
+			configuredSmall++
 			continue
 		}
 		if reason, excluded := rejected[accountID]; excluded {
@@ -1287,7 +1312,10 @@ func (e *Executor) placeAction(
 		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
 		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
-	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
+	result := placement{
+		tooSmall:           len(candidates) > 0 && tooSmall == len(candidates),
+		belowConfiguredMin: configuredSmall > 0 && tooSmall == len(candidates),
+	}
 	if len(capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
 		return result, nil

@@ -166,7 +166,7 @@ func ptrDecimal(raw string) *shared.Decimal {
 	return &value
 }
 
-// 默认设置里现货最小下单额是 10：低于它的目标不下单（写进 blocked_targets），高于它的照常下。
+// 默认设置里现货最小下单额是 10：低于它的差额视为已满足（不下单、不阻塞、blocked_targets 不记），高于它的照常下。
 // 把交易所最小数量放小，让配置的门槛真正起作用（夹具里的最小数量 0.001 个 BTC 本身就是 50 USDT）。
 func TestDefaultOrderSettingsEnforceTheConfiguredMinimumNotional(t *testing.T) {
 	ctx := context.Background()
@@ -202,9 +202,9 @@ func TestDefaultOrderSettingsEnforceTheConfiguredMinimumNotional(t *testing.T) {
 			continue
 		}
 		require.Empty(t, orders, "数量 %s：金额 5 低于默认最小下单额 10", c.quantity)
-		require.Equal(t, targetapp.StatusBlocked, result.Status)
+		require.Equal(t, targetapp.StatusConverged, result.Status, "低于最小下单额的差额视为已满足，不阻塞")
 		target, err := f.store.GetLogicalAccountTarget(ctx, testSpace, testLogicalAccount)
 		require.NoError(t, err)
-		require.Contains(t, target.BlockedTargets[0].Reason, "最小下单额")
+		require.Empty(t, target.BlockedTargets)
 	}
 }

@@ -200,3 +200,54 @@ func TestHourlyCapDeferralAfterARealBlockKeepsTheRealReasonFirst(t *testing.T) {
 	require.False(t, target.BlockedTargets[0].Deferred, "真实阻塞不带顺延标记")
 	require.True(t, target.BlockedTargets[1].Deferred)
 }
+
+// 顺延期间过了整点：定时唤醒后自动恢复，下顺延的部分，blocked_targets 里的顺延项清掉。
+func TestHourlyCapDeferralRecoversAfterTheHourAndClearsTheList(t *testing.T) {
+	f := swapPolicyFixture(t, capSettings)
+	f.now = time.Now().UTC()
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
+	first := f.converge(t)
+	require.Equal(t, StatusConverged, first.Status)
+	deferred, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, deferred.BlockedTargets, 1)
+
+	// 定时器按 RetryAfter 在整点之后唤醒。
+	f.now = f.now.Add(first.RetryAfter)
+	resumed := f.converge(t)
+	require.Equal(t, StatusConverging, resumed.Status)
+	require.Equal(t, "place", resumed.Action)
+	require.Len(t, f.orders.specs, 1)
+	after, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, after.BlockedTargets)
+}
+
+// 顺延期间来了新目标：额度按组合累计，不因为换了目标就重新给；新目标是减仓时照常下，不受顺延影响。
+func TestHourlyCapDeferralSurvivesANewTargetAndNeverBlocksItsReductions(t *testing.T) {
+	f := swapPolicyFixture(t, capSettings)
+	f.now = time.Now().UTC()
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
+	require.Equal(t, StatusConverged, f.converge(t).Status)
+	require.Empty(t, f.orders.specs)
+
+	// 新目标（还是加仓）：额度仍是本小时已用满，继续顺延，blocked_targets 换成新目标的。
+	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+		BarEndTime: f.now.UnixMilli() + 1, EffectiveAt: f.now.UnixMilli() + 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "200"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli() + 1,
+	})
+	require.NoError(t, err)
+	require.True(t, accepted)
+	f.now = f.now.Add(time.Second)
+	result := f.converge(t)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, f.orders.specs, "换了目标额度也不重新给")
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "target-next", target.TargetID)
+	require.Len(t, target.BlockedTargets, 1)
+	require.True(t, target.BlockedTargets[0].Deferred)
+}
