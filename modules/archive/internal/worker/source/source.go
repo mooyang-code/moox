@@ -49,7 +49,7 @@ type Client struct {
 	infos map[string][]ColumnInfo
 }
 
-// ColumnInfo 是一个值列的元数据（来自 Storage 的数据集列定义），写进归档根目录的 *_dataset.json。
+// ColumnInfo 是一个值列的元数据（来自 Storage 的数据集列定义），写进 <space>/<dataset_id>/dataset.json。
 type ColumnInfo struct {
 	Name        string            `json:"name"`
 	Type        string            `json:"type"`

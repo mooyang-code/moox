@@ -16,8 +16,8 @@ import (
 type Config struct {
 	// RequestSeconds 是每分钟内允许发起请求的秒区间 [from, to]（含）。
 	RequestSeconds [2]int
-	// DisableMinuteWindow 为 true 时不再限制每分钟内的秒区间（整点静默、带宽和请求间隔仍然生效）。默认 false，即启用。
-	DisableMinuteWindow bool
+	// MinuteWindow 为 true 时只在 RequestSeconds 区间内发起请求；为 false 时整分钟都可发（整点静默、带宽和请求间隔仍然生效）。
+	MinuteWindow bool
 	// HourQuiet 是每小时内不发起请求的区间 [from, to)，格式 "MM:SS"，from 大于 to 表示跨整点。
 	HourQuiet [2]string
 	// RequestInterval 是同一运行两次请求之间的最小间隔。
@@ -28,7 +28,7 @@ type Config struct {
 
 // Default 返回默认节奏：每分钟 25–55 秒、整点 :58～:04 避让、请求间隔 200ms、512KB/s。
 func Default() Config {
-	return Config{RequestSeconds: [2]int{25, 55}, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond, MaxBytesPerSecond: 512 << 10}
+	return Config{RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond, MaxBytesPerSecond: 512 << 10}
 }
 
 // Validate 检查配置。
@@ -143,7 +143,7 @@ func (p *Pacer) AllowedAt(t time.Time) time.Time {
 			t = next
 			continue
 		}
-		if p.cfg.DisableMinuteWindow {
+		if !p.cfg.MinuteWindow {
 			return t
 		}
 		minute := t.Truncate(time.Minute)

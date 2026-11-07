@@ -234,6 +234,39 @@ func cloneSubjectSet(input map[string]struct{}) map[string]struct{} {
 	return output
 }
 
+// maxArchivableScans 是列出可归档数据集时最多翻的页数。
+const maxArchivableScans = 50
+
+// ListArchivableDatasets 列出应当有归档任务的数据集（"空间/数据集 ID"，排好序）：已激活、有限保留期的时序数据集，
+// 不含运维指标空间 mooxsys。保留期为 forever 的不会被删，不要求归档。
+func (a *StorageAdapter) ListArchivableDatasets(ctx context.Context) ([]string, error) {
+	if a == nil || a.metadata == nil {
+		return nil, errors.New("metrics storage metadata client is not initialized")
+	}
+	var out []string
+	for page := uint32(1); page <= maxArchivableScans; page++ {
+		rsp, err := a.metadata.ListDatasets(ctx, &storagepb.ListDatasetsReq{AuthInfo: a.auth, Page: &commonpb.Page{Page: page, Size: factorResultPageSize}})
+		if err != nil {
+			return nil, fmt.Errorf("list archivable datasets: %w", err)
+		}
+		if err := storageOK("list archivable datasets", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, d := range rsp.GetDatasets() {
+			if d == nil || d.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || !strings.EqualFold(d.GetStatus(), "active") ||
+				d.GetSpaceId() == InternalMetricSpaceID || d.GetRetention() == "" || d.GetRetention() == "forever" {
+				continue
+			}
+			out = append(out, d.GetSpaceId()+"/"+d.GetDatasetId())
+		}
+		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+			sort.Strings(out)
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("dataset catalog exceeds %d pages", maxArchivableScans)
+}
+
 // FactorResultDataset 是源数据集上一个因子任务的结果数据集：任务 ID 由数据集 ID 反解，名称就是数据集名称（与任务名相同）。
 type FactorResultDataset struct {
 	TaskID, Name, DatasetID string

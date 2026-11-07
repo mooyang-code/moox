@@ -31,6 +31,7 @@ type archiveFlags struct {
 	Paused       bool
 	Status       string
 	RunNow       bool
+	ClearUnrecov bool
 	From         string
 	To           string
 	RunID        string
@@ -131,7 +132,7 @@ func runArchiveTasksUpdate(ctx context.Context, out io.Writer, f archiveFlags) e
 	rsp := &archivepb.UpdateArchiveTaskRsp{}
 	return archiveInvoke(ctx, out, f.File, "UpdateArchiveTask", &archivepb.UpdateArchiveTaskReq{
 		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ScheduleCron: f.Cron, ScheduleTz: f.TZ, StartMode: f.StartMode, StartAt: f.StartAt,
-		BackfillFrom: f.BackfillFrom, Status: f.Status, RunNow: f.RunNow,
+		BackfillFrom: f.BackfillFrom, Status: f.Status, RunNow: f.RunNow, ClearUnrecoverable: f.ClearUnrecov,
 	}, rsp, rsp.GetRetInfo)
 }
 
@@ -283,6 +284,7 @@ func init() {
 			c.Flags().StringVar(&f.BackfillFrom, "backfill-from", "", "回补起点，RFC3339")
 			c.Flags().StringVar(&f.Status, "status", "", "enabled 或 paused")
 			c.Flags().BoolVar(&f.RunNow, "run-now", false, "启用时立即运行一次")
+			c.Flags().BoolVar(&f.ClearUnrecov, "clear-unrecoverable", false, "清除任务累积的无法补齐区间（确认过、不再需要提示时）")
 		}),
 		newArchiveLeaf("delete", "删除没有分区的任务", runArchiveTasksDelete, func(c *cobra.Command, f *archiveFlags) {
 			bindDataset(c, f)

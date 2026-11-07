@@ -24,8 +24,6 @@ const (
 	progressEvery   = 30 * time.Second
 	rpcTimeout      = 15 * time.Second
 	completeRetries = 6
-	// compactMinBytes 是暂存库文件小于它时不重建。
-	compactMinBytes = 64 << 20
 	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
 	maintenanceWait = 30 * time.Minute
 )
@@ -47,15 +45,11 @@ type Options struct {
 	DiskUsage  DiskUsage
 }
 
-type taskRef struct{ space, dataset, epoch string }
-
 type activeRun struct {
 	assignment *archivepb.RunAssignment
 	cancel     context.CancelFunc
 	ctx        context.Context
 	stop       atomic.Bool
-	// recreated：领取时数据集还有未处理的删除通知，说明任务被删除后重建，旧状态须在运行前清掉。
-	recreated *taskRef
 }
 
 // App 是 worker。
@@ -72,8 +66,7 @@ type App struct {
 	diskFree        uint64
 	diskTotal       uint64
 	running         map[string]*activeRun
-	deleted         map[string]taskRef
-	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则重建暂存库时会漏掉在途的运行。
+	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则对账时会漏掉在途的运行。
 	pulling int
 	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
 	// 但旧运行要等下一次心跳才知道被取消，两个运行同时改写同一个暂存表和分区文件会丢行。
@@ -99,7 +92,7 @@ func New(opts Options) *App {
 			}
 		}
 	}
-	return &App{opts: opts, running: map[string]*activeRun{}, deleted: map[string]taskRef{}, datasetSlots: map[string]chan struct{}{}, leaseTTL: 45 * time.Second, progressEvery: progressEvery}
+	return &App{opts: opts, running: map[string]*activeRun{}, datasetSlots: map[string]chan struct{}{}, leaseTTL: 45 * time.Second, progressEvery: progressEvery}
 }
 
 // Start 启动时的清理：残留的 .partial 文件。
@@ -132,7 +125,7 @@ func (a *App) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	loop(func() time.Duration { return a.opts.Config.Worker.HeartbeatInterval }, a.heartbeatOnce)
+	loop(func() time.Duration { return a.opts.Config.Worker.HeartbeatInterval }, func(ctx context.Context) { a.heartbeatOnce(ctx) })
 	loop(func() time.Duration { return a.opts.Config.Worker.PullInterval }, a.pullOnce)
 	loops.Add(1)
 	go func() {
@@ -177,10 +170,14 @@ func (a *App) runningIDs() []string {
 // HeartbeatOnce 发送一次心跳（主循环按配置的间隔调用；测试也直接调用）。
 func (a *App) HeartbeatOnce(ctx context.Context) { a.heartbeatOnce(ctx) }
 
+// MaintainOnce 执行一次维护（同上）。
+func (a *App) MaintainOnce(ctx context.Context) { a.maintainOnce(ctx) }
+
 // PullOnce 领取并启动一次运行（同上）。
 func (a *App) PullOnce(ctx context.Context) { a.pullOnce(ctx) }
 
-func (a *App) heartbeatOnce(ctx context.Context) {
+// heartbeatOnce 发送一次心跳。本实例是活动 worker 时 mgr 下发当前全部任务，返回它们（键 "space/dataset"，值 task_id）；否则返回 nil。
+func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	cfg := a.opts.Config
 	total, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
@@ -213,7 +210,7 @@ func (a *App) heartbeatOnce(ctx context.Context) {
 		} else {
 			log.Warnf("archive worker heartbeat failed: %v", err)
 		}
-		return
+		return nil
 	}
 	a.lastError = ""
 	a.lastHeartbeatOK = a.opts.Now()
@@ -227,16 +224,14 @@ func (a *App) heartbeatOnce(ctx context.Context) {
 			r.cancel()
 		}
 	}
-	for _, ref := range rsp.GetDeletedTasks() {
-		a.deleted[ref.GetSpaceId()+"/"+ref.GetDatasetId()] = taskRef{space: ref.GetSpaceId(), dataset: ref.GetDatasetId(), epoch: ref.GetTaskEpoch()}
+	if !rsp.GetActive() {
+		return nil
 	}
-}
-
-// leaseValid 报告本实例的租约在本地看来是否仍有效：最近一次成功的心跳在租约有效期内。
-func (a *App) leaseValid() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.active && !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < a.leaseTTL
+	tasks := make(map[string]string, len(rsp.GetTasks()))
+	for _, ref := range rsp.GetTasks() {
+		tasks[ref.GetSpaceId()+"/"+ref.GetDatasetId()] = ref.GetTaskId()
+	}
+	return tasks
 }
 
 // ---- 领取与执行 ----
@@ -287,12 +282,6 @@ func (a *App) pullOnce(ctx context.Context) {
 		runCtx, cancel := context.WithCancel(ctx)
 		run := &activeRun{assignment: assignment, cancel: cancel, ctx: runCtx}
 		a.running[assignment.GetRunId()] = run
-		// 数据集重新创建了任务：之前记下的「已删除」通知作废，不能再清掉它的暂存数据。
-		key := assignment.GetSpaceId() + "/" + assignment.GetDatasetId()
-		if ref, ok := a.deleted[key]; ok {
-			run.recreated = &ref
-		}
-		delete(a.deleted, key)
 		runs = append(runs, run)
 	}
 	a.pulling--
@@ -315,8 +304,8 @@ func (a *App) launch(run *activeRun) {
 	}()
 }
 
-// acquireDataset 等到同一个数据集没有其他运行在本地执行；等待期间照常续租（上报零进度），否则排队的运行会因租约过期被判失联。
-func (a *App) acquireDataset(ctx context.Context, run *activeRun, progress func()) (release func(), err error) {
+// acquireDataset 等到同一个数据集没有其他运行在本地执行；等待期间由运行的续租定时器照常续租。
+func (a *App) acquireDataset(ctx context.Context, run *activeRun) (release func(), err error) {
 	key := run.assignment.GetSpaceId() + "/" + run.assignment.GetDatasetId()
 	a.mu.Lock()
 	slot, ok := a.datasetSlots[key]
@@ -325,18 +314,11 @@ func (a *App) acquireDataset(ctx context.Context, run *activeRun, progress func(
 		a.datasetSlots[key] = slot
 	}
 	a.mu.Unlock()
-	for {
-		select {
-		case slot <- struct{}{}:
-			return func() { <-slot }, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Second):
-			if run.stop.Load() {
-				return nil, context.Canceled
-			}
-			progress()
-		}
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -345,7 +327,6 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	assignment := run.assignment
 	var latest atomic.Pointer[runner.Progress]
 	latest.Store(&runner.Progress{})
-	var lastSent atomic.Int64
 	send := func() {
 		p := latest.Load()
 		callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
@@ -354,7 +335,6 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			SubjectsDone: p.SubjectsDone, RequestCount: p.RequestCount, BytesRead: p.BytesRead, RowsRead: p.RowsRead,
 		})
 		cancel()
-		lastSent.Store(a.opts.Now().UnixNano())
 		switch {
 		case err != nil:
 			log.Warnf("archive worker progress report failed run=%s: %v", assignment.GetRunId(), err)
@@ -393,24 +373,12 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
 	var reported []string
 	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行的迟到上报可能覆盖新运行刚登记的分区。
-	var dropErr error
-	release, err := a.acquireDataset(ctx, run, send)
+	release, err := a.acquireDataset(ctx, run)
 	if err == nil {
 		defer release()
-		if run.recreated != nil {
-			// 在串行保护内清掉未绑定任务实例的状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
-			if derr := a.opts.Staging.DropIfUnbound(ctx, assignment.GetSpaceId(), assignment.GetDatasetId()); derr != nil {
-				a.mu.Lock()
-				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = *run.recreated
-				a.mu.Unlock()
-				err, dropErr = nil, derr
-			}
-		}
 	}
 	if err != nil {
 		req.Status, req.Message = "canceled", "运行在等待同一数据集的上一个运行时被取消"
-	} else if dropErr != nil {
-		req.Status, req.Message = "failed", fmt.Sprintf("清理重建任务遗留的旧状态失败: %v", dropErr)
 	} else {
 		report := func(p runner.Progress) bool {
 			cp := p
@@ -495,7 +463,8 @@ func (a *App) untilMaintenance() time.Duration {
 	return next.Sub(now)
 }
 
-// maintainOnce 执行一次维护：先停止领取并等进行中的运行结束，再清理已删除任务、CHECKPOINT、必要时重建库文件、清理临时目录。
+// maintainOnce 执行一次维护：先停止领取并等进行中的运行结束，再发一次心跳取当前全部任务做对账
+// （拿不到任务列表就跳过对账），最后回收暂存库空闲页并截断 WAL。
 func (a *App) maintainOnce(ctx context.Context) {
 	a.mu.Lock()
 	a.maintaining = true
@@ -515,28 +484,16 @@ func (a *App) maintainOnce(ctx context.Context) {
 			return
 		}
 	}
-	a.mu.Lock()
-	pending := make([]taskRef, 0, len(a.deleted))
-	for _, ref := range a.deleted {
-		pending = append(pending, ref)
+	// 用这次心跳自己的结果：缓存的旧列表可能早已过时。
+	if keep := a.heartbeatOnce(ctx); keep == nil {
+		log.Warnf("archive worker maintenance: 没有拿到当前任务列表，跳过对账")
+	} else if dropped, err := a.opts.Staging.Reconcile(ctx, keep); err != nil {
+		log.Warnf("archive worker reconcile staging: %v", err)
+	} else if len(dropped) > 0 {
+		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
 	}
-	a.mu.Unlock()
-	for _, ref := range pending {
-		if err := a.opts.Staging.DropDeleted(ctx, ref.space, ref.dataset, ref.epoch); err != nil {
-			log.Warnf("archive worker drop deleted task %s/%s: %v", ref.space, ref.dataset, err)
-			continue
-		}
-		a.mu.Lock()
-		delete(a.deleted, ref.space+"/"+ref.dataset)
-		a.mu.Unlock()
-	}
-	if err := a.opts.Staging.Checkpoint(ctx); err != nil {
-		log.Warnf("archive worker checkpoint: %v", err)
-	}
-	if compacted, err := a.opts.Staging.Compact(ctx, a.opts.Config.Staging.RebuildRatio, compactMinBytes); err != nil {
-		log.Errorf("archive worker compact staging database: %v", err)
-	} else if compacted {
-		log.Infof("archive worker rebuilt the staging database")
+	if err := a.opts.Staging.Maintain(ctx); err != nil {
+		log.Warnf("archive worker staging maintenance: %v", err)
 	}
 }
 

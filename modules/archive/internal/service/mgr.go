@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -102,39 +101,49 @@ func (s *Service) buildSchedule(in scheduleInput, retention string, now time.Tim
 	}
 	if !backfill.IsZero() {
 		if !backfill.Before(now) {
-			return builtSchedule{}, errors.New("回补起点必须早于当前时间")
+			return builtSchedule{}, fmt.Errorf("%w：必须早于当前时间", ErrInvalidBackfill)
 		}
-		if earliest, ok := earliestBackfill(retention, now); ok && backfill.Before(earliest) {
-			return builtSchedule{}, fmt.Errorf("回补起点不能早于 %s（今天 − 线上保留期 + 1 天）", earliest.Format(time.RFC3339))
+		earliest, ok, err := earliestBackfill(retention, now)
+		if err != nil {
+			return builtSchedule{}, err
+		}
+		if ok && backfill.Before(earliest) {
+			return builtSchedule{}, fmt.Errorf("%w：不能早于 %s（今天 − 线上保留期 + 1 天）", ErrInvalidBackfill, earliest.Format(time.RFC3339))
 		}
 		out.BackfillFrom = backfill
 	}
 	return out, nil
 }
 
-// earliestBackfill 返回回补起点的下限；保留期不限时返回 false。
-func earliestBackfill(retention string, now time.Time) (time.Time, bool) {
+// earliestBackfill 返回回补起点的下限；保留期为 forever 时返回 false。
+func earliestBackfill(retention string, now time.Time) (time.Time, bool, error) {
 	limit, forever, err := parseRetention(retention)
 	if err != nil || forever {
-		return time.Time{}, false
+		return time.Time{}, false, err
 	}
-	return now.Add(-limit).Add(24 * time.Hour), true
+	return now.Add(-limit).Add(24 * time.Hour), true, nil
 }
+
+// ErrInvalidDataset 表示数据集不能归档（不是时序数据集、未激活或 ID 为空）。
+var ErrInvalidDataset = errors.New("数据集不能归档")
+
+// ErrInvalidBackfill 表示回补起点不合法。
+var ErrInvalidBackfill = errors.New("回补起点不合法")
 
 // loadArchivableDataset 读取数据集并确认它是已激活的时序数据集。
 func (s *Service) loadArchivableDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error) {
 	if strings.TrimSpace(datasetID) == "" {
-		return Dataset{}, errors.New("dataset_id 不能为空")
+		return Dataset{}, fmt.Errorf("%w：dataset_id 不能为空", ErrInvalidDataset)
 	}
 	ds, err := s.datasets.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
 		return Dataset{}, err
 	}
 	if strings.ToLower(ds.DataKind) != timeSeriesKind {
-		return Dataset{}, fmt.Errorf("数据集 %s 不是时序数据集，不能归档", datasetID)
+		return Dataset{}, fmt.Errorf("%w：数据集 %s 不是时序数据集", ErrInvalidDataset, datasetID)
 	}
 	if strings.ToLower(ds.Status) != datasetActive {
-		return Dataset{}, fmt.Errorf("数据集 %s 尚未激活（状态 %q），不能归档", datasetID, ds.Status)
+		return Dataset{}, fmt.Errorf("%w：数据集 %s 尚未激活（状态 %q）", ErrInvalidDataset, datasetID, ds.Status)
 	}
 	return ds, nil
 }
@@ -158,13 +167,9 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	prefix, err := s.chooseFilePrefix(ctx, space, ds.DatasetID, ds.Name)
-	if err != nil {
-		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
-	}
 	task := store.Task{
-		FilePrefix: prefix, MetaJSON: metaJSON(ds),
-		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
+		MetaJSON: metaJSON(ds),
+		SpaceID:  space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
 		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
 		BackfillFrom: built.BackfillFrom, Status: store.StatusEnabled, NextRunAt: built.NextRunAt, Creator: "console",
 	}
@@ -175,14 +180,10 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	created, _, err := s.store.CreateTask(ctx, task, immediate, now)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			if _, gerr := s.store.GetTask(ctx, space, ds.DatasetID); gerr != nil {
-				return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("文件名前缀 %q 与同空间其他任务冲突，请重试", prefix))}, nil
-			}
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("数据集 %s 已经有归档任务", ds.DatasetID))}, nil
 		}
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	s.clearDeleted(space, ds.DatasetID)
 	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: taskToPB(created)}, nil
 }
 
@@ -190,7 +191,7 @@ func datasetError(err error) *commonpb.RetInfo {
 	if errors.Is(err, ErrDatasetNotFound) {
 		return &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND, Msg: err.Error()}
 	}
-	if strings.Contains(err.Error(), "不是时序数据集") || strings.Contains(err.Error(), "尚未激活") || strings.Contains(err.Error(), "不能为空") {
+	if errors.Is(err, ErrInvalidDataset) {
 		return invalid(err)
 	}
 	return inner(err)
@@ -231,7 +232,7 @@ func (m *MgrService) UpdateArchiveTask(ctx context.Context, req *archivepb.Updat
 	built, err := s.buildSchedule(in, task.Retention, now)
 	if err != nil {
 		// 已有回补起点超出保留期时不应阻止修改其他设置：只有用户改了回补起点才校验它。
-		if req.GetBackfillFrom() == "" && strings.Contains(err.Error(), "回补起点") {
+		if req.GetBackfillFrom() == "" && errors.Is(err, ErrInvalidBackfill) {
 			in.BackfillFrom = ""
 			built, err = s.buildSchedule(in, task.Retention, now)
 		}
@@ -245,7 +246,7 @@ func (m *MgrService) UpdateArchiveTask(ctx context.Context, req *archivepb.Updat
 	}
 	update := store.TaskUpdate{
 		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
-		BackfillFrom: built.BackfillFrom, Status: status, NextRunAt: built.NextRunAt, RunNow: req.GetRunNow(),
+		BackfillFrom: built.BackfillFrom, Status: status, NextRunAt: built.NextRunAt, RunNow: req.GetRunNow(), ClearUnrecoverable: req.GetClearUnrecoverable(),
 	}
 	if status == store.StatusPaused {
 		update.NextRunAt = time.Time{}
@@ -263,7 +264,7 @@ func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.Delet
 	if err != nil {
 		return &archivepb.DeleteArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	deletedID, err := s.store.DeleteTask(ctx, space, req.GetDatasetId())
+	_, err = s.store.DeleteTask(ctx, space, req.GetDatasetId())
 	if err != nil {
 		if errors.Is(err, store.ErrHasPartitions) {
 			return &archivepb.DeleteArchiveTaskRsp{RetInfo: conflict(errors.New("任务已有归档分区，不能删除，只能停用"))}, nil
@@ -273,7 +274,6 @@ func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.Delet
 		}
 		return &archivepb.DeleteArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	s.markDeleted(space, req.GetDatasetId(), strconv.FormatInt(deletedID, 10))
 	return &archivepb.DeleteArchiveTaskRsp{RetInfo: success()}, nil
 }
 
@@ -324,8 +324,13 @@ func (m *MgrService) BackfillArchiveRange(ctx context.Context, req *archivepb.Ba
 	if err != nil {
 		return &archivepb.BackfillArchiveRangeRsp{RetInfo: fail(err)}, nil
 	}
-	if limit, forever, perr := parseRetention(task.Retention); perr == nil && !forever && start.Before(now.Add(-limit)) {
-		return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(fmt.Errorf("补拉区间不能早于线上保留期截止时间 %s", now.Add(-limit).Format(time.RFC3339)))}, nil
+	limit, forever, perr := parseRetention(task.Retention)
+	if perr != nil {
+		return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(perr)}, nil
+	}
+	// 和回补起点一样留一天余量：运行排队开始时截止点已经后移，贴着截止点的起点会被截掉一截、误记为无法补齐。
+	if earliest := now.Add(-limit).Add(24 * time.Hour); !forever && start.Before(earliest) {
+		return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(fmt.Errorf("补拉区间不能早于 %s（今天 − 线上保留期 + 1 天）", earliest.Format(time.RFC3339)))}, nil
 	}
 	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindRange, start, end, now)
 	if err != nil {
@@ -444,7 +449,7 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 		RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention, DataNodeId: ds.DataNodeID,
 		RecommendedCron: spec, RecommendedTz: tz,
 	}
-	if earliest, ok := earliestBackfill(ds.Retention, s.clock()); ok {
+	if earliest, ok, _ := earliestBackfill(ds.Retention, s.clock()); ok {
 		rsp.EarliestBackfillFrom = fmtRFC(earliest)
 	}
 	if _, err := s.store.GetTask(ctx, space, ds.DatasetID); err == nil {
@@ -652,7 +657,7 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 			rsp.QueuedRunCount++
 		}
 	}
-	tasks, total, err := s.store.ListTasks(ctx, space, 10000, 0)
+	tasks, total, err := s.store.ListTasks(ctx, space, maxListedTasks, 0)
 	if err != nil {
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: inner(err)}, nil
 	}

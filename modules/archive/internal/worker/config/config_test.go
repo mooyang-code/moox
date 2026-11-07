@@ -3,19 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
-// testRoot 是各平台上合法的绝对路径：Windows 上以斜杠开头的路径不是绝对路径。
-var testRoot = func() string {
-	if runtime.GOOS == "windows" {
-		return `C:\data\moox-archive`
-	}
-	return "/data/moox-archive"
-}()
+const testRoot = "/data/moox-archive"
 
 func write(t *testing.T, body string) string {
 	t.Helper()
@@ -48,7 +41,7 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 		t.Fatalf("pacing = %+v", cfg.Pacing)
 	}
 	if cfg.Worker.MinFreeBytes != 5<<30 || cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.PullInterval != 5*time.Second ||
-		cfg.Staging.CacheSize != 256<<20 || cfg.Staging.RebuildRatio != 2 || cfg.Health.Addr != "127.0.0.1:11418" || cfg.Maintenance.At != "04:17:43" {
+		cfg.Staging.CacheSize != 256<<20 || cfg.Worker.ExportFormat != "csv.gz" || cfg.Health.Addr != "127.0.0.1:11418" || cfg.Maintenance.At != "04:17:43" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
 	if cfg.StatePath() != filepath.Join(testRoot, ".state", "staging.db") {
@@ -89,7 +82,7 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 			body = base + "worker:\n  heartbeat_interval: 30s\n"
 			body = strings.Replace(body, "worker:\n  worker_id: archive-worker@testhost\n  root_dir: "+testRoot+"\n", "", 1) + "  worker_id: w\n  root_dir: /data/a\n"
 		case "bad format":
-			body = base + "  export_formats: [parquet]\n"
+			body = base + "  export_format: parquet\n"
 		case "wrong caller":
 			body = strings.Replace(base, "caller: archive-worker", "caller: factor-engine", 1)
 		case "low free":
@@ -105,7 +98,7 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 		case "small cache":
 			body = base + "staging:\n  cache_size: 64KB\n"
 		case "export formats":
-			body = base + "  export_formats: []\n"
+			body = base + "  export_formats: [csv]\n"
 		default:
 			body = base + extra
 		}
@@ -142,9 +135,7 @@ func TestShippedWorkerConfigParsesOnceTheCredentialsAreFilledIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 示例配置里的 root_dir 是 Unix 路径；Windows 上换成该平台的绝对路径再解析。
 	body := strings.Replace(string(raw), `key_id: ""`, "key_id: abc123", 1)
-	body = strings.Replace(body, "root_dir: /data/moox-archive", "root_dir: "+testRoot, 1)
 	cfg, err := Load(write(t, body))
 	if err != nil {
 		t.Fatal(err)
@@ -157,19 +148,26 @@ func TestShippedWorkerConfigParsesOnceTheCredentialsAreFilledIn(t *testing.T) {
 	}
 }
 
+func TestExportFormatAcceptsPlainCSV(t *testing.T) {
+	cfg, err := Load(write(t, strings.Replace(base, "worker:\n", "worker:\n  export_format: csv\n", 1)))
+	if err != nil || cfg.Worker.ExportFormat != "csv" {
+		t.Fatalf("cfg=%v err=%v", cfg, err)
+	}
+}
+
 func TestMinuteWindowDefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 	cfg, err := Load(write(t, base))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Pacing.MinuteWindow || cfg.PacingConfig().DisableMinuteWindow {
+	if !cfg.Pacing.MinuteWindow || !cfg.PacingConfig().MinuteWindow {
 		t.Fatalf("minute_window 默认应开启: %+v", cfg.Pacing)
 	}
 	off, err := Load(write(t, base+"pacing:\n  minute_window: false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if off.Pacing.MinuteWindow || !off.PacingConfig().DisableMinuteWindow {
+	if off.Pacing.MinuteWindow || off.PacingConfig().MinuteWindow {
 		t.Fatalf("minute_window: false 应关闭: %+v", off.Pacing)
 	}
 }

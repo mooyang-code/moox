@@ -23,7 +23,7 @@ func openTest(t *testing.T) *Store {
 
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, FilePrefix: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
+		SpaceID: space, DatasetID: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
 		ScheduleCron: "43 4-59/5 * * * *", ScheduleTZ: "Asia/Shanghai", IntervalSeconds: 300,
 		StartAt: t0, Status: StatusEnabled, NextRunAt: t0.Add(5 * time.Minute), Creator: "tester",
 	}

@@ -3,6 +3,7 @@ package staging
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,8 +28,6 @@ type PartitionRef struct {
 type StageResult struct {
 	Added   uint64
 	Changed uint64
-	// Touched 是有新增或变化行的分区。
-	Touched map[string]PartitionRef
 }
 
 // maxParams 限制一条 INSERT 的参数个数（SQLite 默认上限 32766）。
@@ -36,8 +35,9 @@ const maxParams = 6000
 
 // Stage 把一批行写入暂存区：先进临时表，与暂存表按主键比对，只把新增和值有变化的行写进暂存表，
 // 并在同一个事务里更新受影响分区的 last_changed_at。值没变的行不产生写入。
+// 行落在已定稿分区时报错（整批回滚）：调用方必须先用 ReopenFinal 读回原文件，否则重新导出会只剩新行。
 func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func(time.Time) PartitionRef, now time.Time) (StageResult, error) {
-	result := StageResult{Touched: map[string]PartitionRef{}}
+	var result StageResult
 	if len(rows) == 0 {
 		return result, nil
 	}
@@ -55,6 +55,9 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 	for _, row := range rows {
 		if len(row.Values) != len(task.Columns) {
 			return result, fmt.Errorf("row %s@%s has %d values, want %d", row.SubjectID, row.DataTime.Format(time.RFC3339Nano), len(row.Values), len(task.Columns))
+		}
+		if err := checkNanosRange(row.DataTime); err != nil {
+			return result, fmt.Errorf("标的 %s 的 data_time: %w", row.SubjectID, err)
 		}
 		k := key{row.SubjectID, nanos(row.DataTime), row.SeriesTag}
 		if at, ok := index[k]; ok {
@@ -160,13 +163,19 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 			return err
 		}
 		for _, t := range list {
+			var status string
+			err := tx.QueryRowContext(ctx, `SELECT status FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, task.SpaceID, task.DatasetID, t.ref.Key).Scan(&status)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if status == StatusFinal {
+				return fmt.Errorf("分区 %s 已定稿，写入前必须先读回原文件", t.ref.Key)
+			}
 			result.Changed += t.changed
 			result.Added += t.added
-			result.Touched[t.ref.Key] = t.ref
 			if _, err := tx.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at)
 VALUES (?, ?, ?, ?, ?, 'open', ?)
-ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = 1,
-    status = CASE WHEN partition_state.status = 'final' THEN 'open' ELSE partition_state.status END`,
+ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = 1`,
 				task.SpaceID, task.DatasetID, t.ref.Key, nanos(t.ref.Start), nanos(t.ref.End), nanos(now)); err != nil {
 				return err
 			}
@@ -179,7 +188,7 @@ ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at 
 		return nil
 	})
 	if err != nil {
-		return StageResult{Touched: map[string]PartitionRef{}}, err
+		return StageResult{}, err
 	}
 	return result, nil
 }

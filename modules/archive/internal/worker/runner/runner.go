@@ -1,5 +1,5 @@
-// Package runner executes one archive run: compute the read range, read it page by page, stage the
-// changed rows, export due partitions, then finalize partitions and advance the watermark atomically.
+// Package runner executes one archive run: compute the read range, read it partition chunk by chunk,
+// stage the changed rows, export and finalize due partitions after every chunk, then advance the watermark.
 package runner
 
 import (
@@ -72,7 +72,7 @@ type Runner struct {
 var errStopped = errors.New("archive run stopped")
 
 type runState struct {
-	bound    bool // 任务实例已确认，暂存状态属于当前任务
+	bound    bool // 任务已绑定且列信息齐全，暂存状态属于当前任务，可以收集分区报告
 	r        *Runner
 	a        *archivepb.RunAssignment
 	task     staging.Task
@@ -80,6 +80,7 @@ type runState struct {
 	unit     string
 	started  time.Time
 	lookback time.Duration
+	span     time.Duration
 	hold     time.Duration
 	report   func(Progress) bool
 	progress Progress
@@ -98,7 +99,8 @@ func (r *Runner) now() time.Time {
 }
 
 // Execute 执行一次运行。report 在每页之后调用，返回 true 表示运行已被取消。
-// 出错或取消时已提交的批次留在暂存区，水位不推进；返回的 Outcome 仍带上本次涉及的分区登记，便于 mgr 展示「暂存中」。
+// 每读完一个分区块就导出、定稿到期的分区，并（非补拉运行）把续读起点记进暂存库；全部读完才推进水位。
+// 出错或取消时已提交的批次留在暂存区，水位不推进，下次从续读起点接着读；返回的 Outcome 仍带上待上报的分区登记。
 func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report func(Progress) bool) (out *Outcome, err error) {
 	started, err := time.Parse(time.RFC3339, a.GetStartedAt())
 	if err != nil {
@@ -111,9 +113,13 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if a.GetPartitionUnit() != "day" && a.GetPartitionUnit() != "month" {
 		return nil, fmt.Errorf("run %s has invalid partition unit %q", a.GetRunId(), a.GetPartitionUnit())
 	}
+	span, err := schedule.BarSpan(a.GetFreq())
+	if err != nil {
+		return nil, err
+	}
 	s := &runState{
 		r: r, a: a, loc: loc, unit: a.GetPartitionUnit(), started: started.UTC(),
-		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
+		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, span: span, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
 		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{},
 		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId()},
 	}
@@ -122,7 +128,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		// 不论成功、失败还是取消，都带上本次涉及的分区的当前登记。
 		out.Progress = s.progress
 		out.RowsAdded, out.RowsChanged = s.added, s.changed
-		// 任务实例确认之前（绑定失败）暂存库里可能还是旧任务的状态，不能把它的分区报给新任务。
+		// 任务绑定之前暂存库里可能还是旧任务的状态，不能把它的分区报给新任务。
 		if s.bound {
 			if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
 				out.Partitions = reports
@@ -140,7 +146,11 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		}
 	}()
 	// 任务被删除后重建时，旧任务的水位和暂存数据不能带到新任务上。
-	if _, err = r.Staging.BindEpoch(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskEpoch()); err != nil {
+	if err = r.Staging.BindTask(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskId()); err != nil {
+		return out, err
+	}
+	// 暂存库丢失后，按 mgr 的登记补齐本地缺的分区状态：已有文件的分区不会被当成新分区从残缺数据导出。
+	if err = s.restorePartitions(ctx); err != nil {
 		return out, err
 	}
 	ranges, unrecoverable, err := s.readRanges(ctx)
@@ -153,29 +163,94 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		return out, err
 	}
 	s.task.Columns = columns
-	s.bound = true // 实例已确认且列信息齐全，才能收集分区报告
+	s.bound = true
 	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
 		return out, err
 	}
 	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
-		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), FilePrefix: s.filePrefix(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
 		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
 	}, r.now())); err != nil {
-		return out, fmt.Errorf("write _dataset.json: %w", err)
+		return out, fmt.Errorf("写 dataset.json 失败: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
-	for _, rng := range ranges {
+	resumable := a.GetKind() != "range"
+	for i, rng := range ranges {
 		if err := s.readChunk(ctx, rng[0], rng[1]); err != nil {
 			return out, err
+		}
+		if i == len(ranges)-1 {
+			break
+		}
+		// 每读完一块就导出、定稿到期的分区，暂存库不会随长回补无限变大；失败重跑从续读起点接着读。
+		if err := s.exportDue(ctx, out); err != nil {
+			return out, err
+		}
+		if err := s.finalize(ctx, out, false); err != nil {
+			return out, err
+		}
+		if resumable {
+			// 续读点不晚于“本次运行开始 − L − S”：块结束在这之后的那一段下次本来就要重读，免得续跑落进刚定稿的分区整段读回。
+			resume := rng[1]
+			if limit := s.started.Add(-s.lookback - s.span); limit.Before(resume) {
+				resume = limit
+			}
+			if err := r.Staging.SetResumeFrom(ctx, a.GetSpaceId(), a.GetDatasetId(), resume); err != nil {
+				return out, err
+			}
 		}
 	}
 	if err := s.exportDue(ctx, out); err != nil {
 		return out, err
 	}
-	if err := s.finalize(ctx, out); err != nil {
+	if err := s.finalize(ctx, out, resumable); err != nil {
 		return out, err
 	}
 	return out, nil
+}
+
+// restorePartitions 把下发的有文件的分区登记补进本地分区状态（只插入本地没有的分区，一律按 final）。
+func (s *runState) restorePartitions(ctx context.Context) error {
+	regs := make([]staging.PartitionState, 0, len(s.a.GetRegisteredPartitions()))
+	for _, p := range s.a.GetRegisteredPartitions() {
+		if p.GetFilePath() == "" {
+			continue
+		}
+		state := staging.PartitionState{
+			Key: p.GetPartitionKey(), Status: p.GetStatus(), FilePath: p.GetFilePath(), SHA256: p.GetFileSha256(),
+			ExportCount: p.GetExportCount(), RowCount: p.GetRowCount(), SubjectCount: p.GetSubjectCount(),
+		}
+		var err error
+		for _, item := range []struct {
+			value string
+			dest  *time.Time
+		}{
+			{p.GetRangeStart(), &state.Start}, {p.GetRangeEnd(), &state.End}, {p.GetLastChangedAt(), &state.LastChangedAt},
+			{p.GetExportedAt(), &state.ExportedAt}, {p.GetFinalizedAt(), &state.FinalizedAt},
+			{p.GetMinDataTime(), &state.MinDataTime}, {p.GetMaxDataTime(), &state.MaxDataTime},
+		} {
+			if *item.dest, err = parseOptionalTime(item.value); err != nil {
+				return fmt.Errorf("分区登记 %s: %w", p.GetPartitionKey(), err)
+			}
+		}
+		regs = append(regs, state)
+	}
+	if len(regs) == 0 {
+		return nil
+	}
+	_, err := s.r.Staging.RestorePartitions(ctx, s.task.SpaceID, s.task.DatasetID, regs, s.r.now())
+	return err
+}
+
+func parseOptionalTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("无效的时间 %q", value)
+	}
+	return t.UTC(), nil
 }
 
 // readRanges 算出本次要读的区间，并按分区边界切成块。
@@ -192,37 +267,18 @@ func (s *runState) readRanges(ctx context.Context) ([][2]time.Time, []*archivepb
 		}
 		start, end = start.UTC(), end.UTC()
 	} else {
-		span, err := schedule.BarSpan(a.GetFreq())
-		if err != nil {
-			return nil, nil, err
-		}
 		end = s.started
-		watermark, ok, err := s.r.Staging.Watermark(ctx, a.GetSpaceId(), a.GetDatasetId())
+		var err error
+		if start, err = s.scheduledStart(ctx); err != nil {
+			return nil, nil, err
+		}
+		// 上次运行中途失败时，之前的分区块已经处理过，从续读起点接着读。
+		resume, ok, err := s.r.Staging.ResumeFrom(ctx, a.GetSpaceId(), a.GetDatasetId())
 		if err != nil {
 			return nil, nil, err
 		}
-		switch {
-		case ok:
-			start = watermark.Add(-s.lookback - span)
-		case a.GetBackfillFrom() != "":
-			if start, err = time.Parse(time.RFC3339, a.GetBackfillFrom()); err != nil {
-				return nil, nil, fmt.Errorf("invalid backfill_from: %w", err)
-			}
-			start = start.UTC()
-		default:
-			// 首次运行没有水位：起点从本次运行开始往前推。失败后重试必须从同一个起点读起，否则会跳过两次起点之间
-			// 尚未读到的数据，所以第一次算出的起点记在暂存库里，水位前进之前一直沿用更早的那个。
-			derived := s.started.Add(-time.Duration(a.GetIntervalSeconds())*time.Second - s.lookback - span)
-			start = derived
-			persisted, found, err := s.r.Staging.FirstStart(ctx, a.GetSpaceId(), a.GetDatasetId())
-			if err != nil {
-				return nil, nil, err
-			}
-			if found && persisted.Before(derived) {
-				start = persisted
-			} else if err := s.r.Staging.SetFirstStart(ctx, a.GetSpaceId(), a.GetDatasetId(), derived); err != nil {
-				return nil, nil, err
-			}
+		if ok && resume.After(start) {
+			start = resume
 		}
 	}
 	var unrecoverable []*archivepb.UnrecoverableRange
@@ -234,7 +290,10 @@ func (s *runState) readRanges(ctx context.Context) ([][2]time.Time, []*archivepb
 			if cut.After(end) {
 				cut = end
 			}
-			unrecoverable = append(unrecoverable, &archivepb.UnrecoverableRange{StartTime: start.Format(time.RFC3339), EndTime: cut.Format(time.RFC3339)})
+			// 截掉的长度不到一根 K 线跨度时不记：Storage 按天桶删除，这几秒的数据其实还在。
+			if cut.Sub(start) >= s.span {
+				unrecoverable = append(unrecoverable, &archivepb.UnrecoverableRange{StartTime: start.Format(time.RFC3339), EndTime: cut.Format(time.RFC3339)})
+			}
 			start = earliest
 		}
 	}
@@ -251,9 +310,69 @@ func (s *runState) readRanges(ctx context.Context) ([][2]time.Time, []*archivepb
 	return ranges, unrecoverable, nil
 }
 
+// scheduledStart 算定时/手动运行的读取起点（续读起点之前）：
+//   - 本地有水位 W：W − L − S；
+//   - 本地没有水位（暂存库丢失）但 mgr 下发了 last_success_at：把它当 W，并前移到登记里最早一个
+//     没有文件的 open 分区或 exported 分区的开始，让这些没定稿的分区按线上还在的数据整段重读；
+//   - 都没有：回补起点；没有回补起点则从本次运行开始往前推（首次运行）。
+func (s *runState) scheduledStart(ctx context.Context) (time.Time, error) {
+	a := s.a
+	watermark, ok, err := s.r.Staging.Watermark(ctx, a.GetSpaceId(), a.GetDatasetId())
+	if err != nil {
+		return time.Time{}, err
+	}
+	if ok {
+		return watermark.Add(-s.lookback - s.span), nil
+	}
+	if a.GetLastSuccessAt() != "" {
+		w, err := time.Parse(time.RFC3339, a.GetLastSuccessAt())
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid last_success_at: %w", err)
+		}
+		start := w.UTC().Add(-s.lookback - s.span)
+		// 看 mgr 的登记：本地已把有文件的分区一律恢复成 final，查本地找不到它们。
+		for _, p := range a.GetRegisteredPartitions() {
+			unfinished := p.GetStatus() == staging.StatusExported || p.GetStatus() == staging.StatusOpen && p.GetFilePath() == ""
+			if !unfinished {
+				continue
+			}
+			rs, err := time.Parse(time.RFC3339, p.GetRangeStart())
+			if err != nil {
+				return time.Time{}, fmt.Errorf("分区登记 %s 的 range_start 无效: %w", p.GetPartitionKey(), err)
+			}
+			if rs.Before(start) {
+				start = rs.UTC()
+			}
+		}
+		return start, nil
+	}
+	if a.GetBackfillFrom() != "" {
+		start, err := time.Parse(time.RFC3339, a.GetBackfillFrom())
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid backfill_from: %w", err)
+		}
+		return start.UTC(), nil
+	}
+	// 首次运行没有水位：起点从本次运行开始往前推。失败后重试必须从同一个起点读起，否则会跳过两次起点之间
+	// 尚未读到的数据，所以第一次算出的起点记在暂存库里，水位前进之前一直沿用更早的那个。
+	derived := s.started.Add(-time.Duration(a.GetIntervalSeconds())*time.Second - s.lookback - s.span)
+	persisted, found, err := s.r.Staging.FirstStart(ctx, a.GetSpaceId(), a.GetDatasetId())
+	if err != nil {
+		return time.Time{}, err
+	}
+	if found && persisted.Before(derived) {
+		return persisted, nil
+	}
+	if err := s.r.Staging.SetFirstStart(ctx, a.GetSpaceId(), a.GetDatasetId(), derived); err != nil {
+		return time.Time{}, err
+	}
+	return derived, nil
+}
+
+// parseRetention 解析线上保留期：只有 forever 是永久，空串按错误处理（数据集信息异常时不能跳过保留期截断）。
 func parseRetention(value string) (time.Duration, bool, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || value == "forever" {
+	if value == "forever" {
 		return 0, true, nil
 	}
 	d, err := time.ParseDuration(value)
@@ -354,12 +473,12 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) error {
 		if !ok || p.Status != staging.StatusFinal {
 			continue
 		}
-		rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), key)
-		if err != nil {
-			return err
+		// 用导出时记下的路径读回，先确认文件没有被改动或截断。
+		if err := s.r.Files.Verify(p.FilePath, p.SHA256); err != nil {
+			return fmt.Errorf("读回已定稿分区 %s: %w", key, err)
 		}
-		if err := s.r.Staging.ReopenFinal(ctx, s.task, key, s.r.Files.Abs(rel)); err != nil {
-			return fmt.Errorf("reopen final partition %s: %w", key, err)
+		if err := s.r.Staging.ReopenFinal(ctx, s.task, key, s.r.Files.Abs(p.FilePath)); err != nil {
+			return fmt.Errorf("读回已定稿分区 %s: %w", key, err)
 		}
 		s.reopened[key] = true
 	}
@@ -396,23 +515,26 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 		}
 		// 导出时间取 COPY 开始之前的时刻：此后（含 COPY 与登记之间）写入的变化，其 last_changed_at 一定晚于它，会触发下一次重写。
 		exportStarted := s.r.now()
-		info, err := s.r.Files.Write(ctx, s.r.Staging, s.task, s.filePrefix(), p)
+		info, err := s.r.Files.Write(ctx, s.r.Staging, s.task, p)
+		if info.Path != "" {
+			// 文件已就位就必须记下（运行被取消也要记），否则下次会因“文件已存在却没有记录”拒绝导出。
+			if markErr := s.r.Staging.MarkExported(context.WithoutCancel(ctx), s.task.SpaceID, s.task.DatasetID, p.Key, exportStarted, info.Path, info.SHA256); markErr != nil {
+				return errors.Join(err, markErr)
+			}
+		}
 		if err != nil {
 			return err
 		}
-		if err := s.r.Staging.MarkExported(ctx, s.task.SpaceID, s.task.DatasetID, p.Key, exportStarted, info.SHA256); err != nil {
-			return err
-		}
+
 		s.previews[p.Key] = info.Preview
 		out.Exported++
 	}
 	return nil
 }
 
-// finalize 在一个暂存库事务里定稿满足条件的分区并推进读取水位：
-// 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且没有待导出的变化。补拉区间不推进水位。
-// 定稿时分区的统计（行数、标的数、数据时间范围）一起记进分区状态，登记不再依赖已删除的暂存行。
-func (s *runState) finalize(ctx context.Context, out *Outcome) error {
+// finalize 定稿满足条件的分区：运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且没有待导出的变化。
+// 定稿前确认文件还在且 sha256 与记录一致（不一致就报错，运行失败）。每个分区一个事务；advance 为真时最后单独推进读取水位。
+func (s *runState) finalize(ctx context.Context, out *Outcome, advance bool) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err
@@ -429,16 +551,18 @@ func (s *runState) finalize(ctx context.Context, out *Outcome) error {
 		if s.started.Before(closeAt.Add(s.lookback).Add(s.hold)) {
 			continue
 		}
+		if err := s.r.Files.Verify(p.FilePath, p.SHA256); err != nil {
+			return fmt.Errorf("定稿分区 %s: %w", p.Key, err)
+		}
 		keys = append(keys, p.Key)
 	}
-	advance := s.a.GetKind() != "range"
-	if len(keys) == 0 && !advance {
-		return nil
-	}
-	if err := s.r.Staging.Finalize(ctx, s.task, keys, s.started, s.r.now(), advance); err != nil {
+	if err := s.r.Staging.Finalize(ctx, s.task, keys, s.r.now()); err != nil {
 		return err
 	}
-	out.Finalized = uint32(len(keys))
+	out.Finalized += uint32(len(keys))
+	if advance {
+		return s.r.Staging.AdvanceWatermark(ctx, s.task.SpaceID, s.task.DatasetID, s.started)
+	}
 	return nil
 }
 
@@ -471,13 +595,9 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 		if !minTime.IsZero() {
 			report.MinDataTime, report.MaxDataTime = minTime.Format(time.RFC3339), maxTime.Format(time.RFC3339)
 		}
-		if !p.ExportedAt.IsZero() {
-			rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), p.Key)
-			if err != nil {
-				return nil, err
-			}
-			report.FilePath, report.FileSha256, report.Columns = rel, p.SHA256, names
-			if info, err := os.Stat(s.r.Files.Abs(rel)); err == nil {
+		if p.FilePath != "" {
+			report.FilePath, report.FileSha256, report.Columns = p.FilePath, p.SHA256, names
+			if info, err := os.Stat(s.r.Files.Abs(p.FilePath)); err == nil {
 				report.FileBytes = uint64(info.Size())
 			}
 			report.Preview = s.previews[p.Key] // 本次没有重新导出时留空，mgr 保留已登记的预览
@@ -512,20 +632,13 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// filePrefix 是任务下发的导出文件名前缀。
-func (s *runState) filePrefix() string { return s.a.GetFilePrefix() }
-
-// exportedFileMissing 报告已导出但还没定稿的分区没有文件（文件被删除）：
+// exportedFileMissing 报告已导出但还没定稿的分区（含读回后的分区）的文件不在了：
 // 它的行还在暂存区，重新导出即可。已定稿分区的行已不在暂存区，不在此列。
 func (s *runState) exportedFileMissing(p staging.PartitionState) bool {
-	if p.Status != staging.StatusExported {
+	if p.Status == staging.StatusFinal || p.FilePath == "" {
 		return false
 	}
-	rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), p.Key)
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(s.r.Files.Abs(rel))
+	_, err := os.Stat(s.r.Files.Abs(p.FilePath))
 	return errors.Is(err, os.ErrNotExist)
 }
 

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -31,15 +32,14 @@ const (
 // Files 管理归档根目录下的分区文件。
 type Files struct {
 	Root string
-	// Format 是导出文件格式：csv（默认，空值同 csv）或 csv.gz。
+	// Format 是导出文件格式：csv.gz 或 csv（空值同 csv.gz）。
 	Format string
 }
 
 // Info 是一次导出得到的文件信息。
 type Info struct {
-	// Path 是相对归档根目录的路径（斜杠分隔），登记到 mgr。
+	// Path 是相对归档根目录的路径（斜杠分隔），记进分区状态并登记到 mgr。
 	Path    string
-	Bytes   uint64
 	SHA256  string
 	Preview string
 }
@@ -50,84 +50,149 @@ const (
 	FormatCSVGz = "csv.gz"
 )
 
-func ext(format string) string {
-	if format == FormatCSVGz {
-		return ".csv.gz"
+func (f Files) format() string {
+	if f.Format == FormatCSV {
+		return FormatCSV
 	}
-	return ".csv"
+	return FormatCSVGz
+}
+
+func ext(format string) string {
+	if format == FormatCSV {
+		return ".csv"
+	}
+	return ".csv.gz"
 }
 
 func checkComponent(part string) error {
 	if part == "" || strings.ContainsAny(part, `/\`) || part == "." || part == ".." || strings.HasPrefix(part, ".") {
-		return fmt.Errorf("unsafe path component %q", part)
+		return fmt.Errorf("不安全的路径片段 %q", part)
 	}
 	return nil
 }
 
-// RelPath 返回分区文件相对归档根目录的路径：
-// <space>/<yyyy>/<prefix>_<yyyymmdd>.csv（日分区）或 <prefix>_<yyyymm>.csv（月分区）；format 为 csv.gz 时扩展名为 .csv.gz。
-// prefix 是导出文件名前缀（数据集名去空格）。
-func RelPath(spaceID, prefix, partitionKey, format string) (string, error) {
+// RelPath 返回分区文件相对归档根目录的路径：<space>/<dataset_id>/<yyyy>/<yyyymmdd>.csv.gz（日分区）
+// 或 <space>/<dataset_id>/<yyyy>/<yyyymm>.csv.gz（月分区）；format 为 csv 时扩展名为 .csv。
+func RelPath(spaceID, datasetID, partitionKey, format string) (string, error) {
 	digits := strings.ReplaceAll(partitionKey, "-", "")
 	if len(partitionKey) != 7 && len(partitionKey) != 10 || len(digits) < 6 {
-		return "", fmt.Errorf("invalid partition key %q", partitionKey)
+		return "", fmt.Errorf("无效的分区键 %q", partitionKey)
 	}
 	for _, r := range digits {
 		if r < '0' || r > '9' {
-			return "", fmt.Errorf("invalid partition key %q", partitionKey)
+			return "", fmt.Errorf("无效的分区键 %q", partitionKey)
 		}
 	}
-	for _, part := range []string{spaceID, prefix} {
+	for _, part := range []string{spaceID, datasetID} {
 		if err := checkComponent(part); err != nil {
 			return "", err
 		}
 	}
-	return filepath.ToSlash(filepath.Join(spaceID, digits[:4], prefix+"_"+digits+ext(format))), nil
+	return filepath.ToSlash(filepath.Join(spaceID, datasetID, digits[:4], digits+ext(format))), nil
 }
 
 // RelPath 按本目录配置的格式返回分区文件的相对路径。
-func (f Files) RelPath(spaceID, prefix, partitionKey string) (string, error) {
-	return RelPath(spaceID, prefix, partitionKey, f.Format)
+func (f Files) RelPath(spaceID, datasetID, partitionKey string) (string, error) {
+	return RelPath(spaceID, datasetID, partitionKey, f.format())
 }
 
 // Abs 把相对路径解析到归档根目录下。
 func (f Files) Abs(rel string) string { return filepath.Join(f.Root, filepath.FromSlash(rel)) }
 
-// Write 导出分区：COPY 到 .partial，fsync，rename，fsync 目录，计算 sha256 与预览。任何一步失败都不会留下半写的正式文件。
-func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Task, prefix string, p staging.PartitionState) (Info, error) {
-	rel, err := f.RelPath(task.SpaceID, prefix, p.Key)
-	if err != nil {
-		return Info{}, err
+// Write 导出分区：写 .partial（写入时同时算磁盘字节的 sha256），fsync，rename，fsync 目录，生成预览。
+// 任何一步失败都不会留下半写的正式文件。改名之后的步骤失败时仍返回带 Path 与 SHA256 的 Info（文件已就位），
+// 调用方要先记下它再处理错误，否则下次会因“文件已存在却没有记录”拒绝导出。分区已有文件（p.FilePath）时写回原路径并沿用它的格式；
+// 没有时按当前格式生成新路径，若该路径已有文件就拒绝导出：本地没有记录却有文件，说明暂存状态丢过，
+// 用残缺的暂存数据覆盖会丢掉文件里的行。
+func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Task, p staging.PartitionState) (Info, error) {
+	rel := p.FilePath
+	if rel == "" {
+		var err error
+		if rel, err = f.RelPath(task.SpaceID, task.DatasetID, p.Key); err != nil {
+			return Info{}, err
+		}
 	}
 	final := f.Abs(rel)
+	if p.FilePath == "" {
+		if _, err := os.Stat(final); err == nil {
+			return Info{}, fmt.Errorf("分区 %s 的目标文件 %s 已存在，但本地没有它的导出记录：可能是暂存库丢失或任务重建，拒绝覆盖，需要人工核对", p.Key, rel)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Info{}, err
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return Info{}, err
 	}
 	partial := final + partialSuffix
-	_ = os.Remove(partial)
-	if err := store.ExportCSV(ctx, task, p, partial, f.Format == FormatCSVGz); err != nil {
+	sha, err := writePartial(ctx, store, task, p, partial, strings.HasSuffix(rel, ".gz"))
+	if err != nil {
 		_ = os.Remove(partial)
-		return Info{}, err
-	}
-	if err := syncFile(partial); err != nil {
-		_ = os.Remove(partial)
-		return Info{}, err
+		return Info{}, fmt.Errorf("导出分区 %s: %w", p.Key, err)
 	}
 	if err := os.Rename(partial, final); err != nil {
 		_ = os.Remove(partial)
 		return Info{}, err
 	}
+	info := Info{Path: rel, SHA256: sha}
 	if err := syncDir(filepath.Dir(final)); err != nil {
-		return Info{}, err
-	}
-	info := Info{Path: rel}
-	if info.SHA256, info.Bytes, err = hashFile(final); err != nil {
-		return Info{}, err
+		return info, err
 	}
 	if info.Preview, err = preview(final); err != nil {
-		return Info{}, err
+		return info, err
 	}
 	return info, nil
+}
+
+// writePartial 把分区写进 partial 并 fsync，返回文件内容（压缩后的字节）的 sha256。
+func writePartial(ctx context.Context, store *staging.Store, task staging.Task, p staging.PartitionState, partial string, gz bool) (sum string, err error) {
+	file, err := os.OpenFile(partial, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	hash := sha256.New()
+	disk := io.MultiWriter(file, hash)
+	if !gz {
+		if err := store.ExportCSV(ctx, task, p, disk); err != nil {
+			return "", err
+		}
+	} else {
+		zw := gzip.NewWriter(disk)
+		if err := store.ExportCSV(ctx, task, p, zw); err != nil {
+			return "", err
+		}
+		if err := zw.Close(); err != nil {
+			return "", err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// Verify 确认相对路径 rel 的文件存在且 sha256 等于 want；读回与定稿前用它确认原文件完好。
+func (f Files) Verify(rel, want string) error {
+	if rel == "" || want == "" {
+		return fmt.Errorf("文件路径或 sha256 未记录（%q）", rel)
+	}
+	file, err := os.Open(f.Abs(rel))
+	if err != nil {
+		return fmt.Errorf("打开归档文件 %s: %w", rel, err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fmt.Errorf("读取归档文件 %s: %w", rel, err)
+	}
+	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+		return fmt.Errorf("归档文件 %s 的 sha256 是 %s，与记录的 %s 不一致：文件被改动或损坏，需要人工核对", rel, got, want)
+	}
+	return nil
 }
 
 func syncFile(path string) error {
@@ -138,23 +203,6 @@ func syncFile(path string) error {
 	defer file.Close()
 	return file.Sync()
 }
-
-func hashFile(path string) (string, uint64, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", 0, err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	n, err := io.Copy(hash, file)
-	if err != nil {
-		return "", 0, err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), uint64(n), nil
-}
-
-// FileSHA256 计算文件的 sha256 与大小。
-func FileSHA256(path string) (string, uint64, error) { return hashFile(path) }
 
 // preview 返回表头加前 20 行（不超过 8KB）。
 func preview(path string) (string, error) {
@@ -203,11 +251,10 @@ type ColumnMeta struct {
 	Attributes  map[string]string `json:"attributes,omitempty"`
 }
 
-// DatasetMeta 是 <prefix>_dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
+// DatasetMeta 是 <space>/<dataset_id>/dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
 type DatasetMeta struct {
-	SpaceID    string `json:"space_id"`
-	DatasetID  string `json:"dataset_id"`
-	FilePrefix string `json:"file_prefix"`
+	SpaceID   string `json:"space_id"`
+	DatasetID string `json:"dataset_id"`
 	// Dataset 是 Storage 里的数据集信息（名称、简介、数据来源、标的范围等），由 mgr 提供。
 	Dataset json.RawMessage `json:"dataset,omitempty"`
 	Freq    string          `json:"freq"`
@@ -234,8 +281,8 @@ type FilesMeta struct {
 
 // DatasetMetaInput 是生成元数据文件需要的信息。
 type DatasetMetaInput struct {
-	SpaceID, DatasetID, FilePrefix, Freq string
-	PartitionUnit, Timezone              string
+	SpaceID, DatasetID, Freq string
+	PartitionUnit, Timezone  string
 	// DatasetJSON 是 mgr 下发的数据集信息 JSON，可为空。
 	DatasetJSON string
 	Columns     []staging.Column
@@ -269,40 +316,36 @@ func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta 
 	if in.DatasetJSON != "" && json.Valid([]byte(in.DatasetJSON)) {
 		dataset = json.RawMessage(in.DatasetJSON)
 	}
-	pattern := "<yyyy>/" + in.FilePrefix + "_<yyyymmdd>" + ext(f.Format)
+	pattern := "<yyyy>/<yyyymmdd>" + ext(f.format())
 	if in.PartitionUnit == "month" {
-		pattern = "<yyyy>/" + in.FilePrefix + "_<yyyymm>" + ext(f.Format)
-	}
-	format := f.Format
-	if format == "" {
-		format = FormatCSV
+		pattern = "<yyyy>/<yyyymm>" + ext(f.format())
 	}
 	return DatasetMeta{
-		SpaceID: in.SpaceID, DatasetID: in.DatasetID, FilePrefix: in.FilePrefix, Dataset: dataset, Freq: in.Freq,
+		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Dataset: dataset, Freq: in.Freq,
 		Partition: PartitionMeta{Unit: in.PartitionUnit, Timezone: in.Timezone},
-		Files:     FilesMeta{Format: format, PathPattern: pattern, Header: header},
+		Files:     FilesMeta{Format: f.format(), PathPattern: pattern, Header: header},
 		Columns:   columns, UpdatedAt: now.UTC().Format(time.RFC3339),
 	}
 }
 
-// WriteDatasetJSON 写 <root>/<space>/<prefix>_dataset.json；除更新时间外内容没变时不重写。
+// WriteDatasetJSON 写 <root>/<space>/<dataset_id>/dataset.json；除更新时间外内容没变时不重写。
 func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
-	if _, err := f.RelPath(meta.SpaceID, meta.FilePrefix, "2000-01"); err != nil {
-		return err
+	for _, part := range []string{meta.SpaceID, meta.DatasetID} {
+		if err := checkComponent(part); err != nil {
+			return err
+		}
 	}
-	dir := filepath.Join(f.Root, meta.SpaceID)
+	dir := filepath.Join(f.Root, meta.SpaceID, meta.DatasetID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, meta.FilePrefix+"_dataset.json")
+	path := filepath.Join(dir, "dataset.json")
 	if raw, err := os.ReadFile(path); err == nil {
 		var current DatasetMeta
 		if json.Unmarshal(raw, &current) == nil {
-			stamp := current.UpdatedAt
 			current.UpdatedAt = meta.UpdatedAt
 			if a, errA := json.Marshal(current); errA == nil {
 				if b, errB := json.Marshal(meta); errB == nil && string(a) == string(b) {
-					_ = stamp
 					return nil
 				}
 			}

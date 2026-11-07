@@ -15,7 +15,8 @@ import (
 // 归档文件的 CSV 格式（RFC 4180，逗号分隔，换行 \n）：
 //   - 表头 data_time,subject_id,series_tag,<值列…>；
 //   - data_time 与时间列为 UTC RFC3339，秒以下保留到纳秒（尾随的 0 省略）；
-//   - 浮点数用最短的可精确往返表示，整数值带 .0（例如 2.0），NaN/Inf 写作 NaN、+Inf、-Inf；
+//   - 浮点数用最短的可精确往返表示：绝对值小于 1e21 时用定点写法（不用指数），整数值带 .0（例如 2.0、1234567.0）；
+//     更大的用指数写法（1e+22）；无穷写作 +Inf、-Inf（NaN 在 SQLite 里存为 NULL，导出为缺失值）；
 //   - 布尔为 true / false；二进制为标准 base64；
 //   - 缺失值（NULL）是空字段，空字符串写作 ""，读回时二者可以区分。
 // encoding/csv 读不出字段是否带引号，所以这里自带一个最小的读写实现。
@@ -121,18 +122,16 @@ func (c *csvReader) read() ([]csvField, error) {
 // formatTime 写时间：UTC RFC3339，秒以下保留到纳秒。
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
-// formatFloat 写浮点数：最短可往返表示，整数值补 .0。
+// formatFloat 写浮点数：最短可往返表示；绝对值小于 1e21 用定点写法，整数值补 .0。
 func formatFloat(v float64) string {
-	switch {
-	case math.IsNaN(v):
-		return "NaN"
-	case math.IsInf(v, 1):
-		return "+Inf"
-	case math.IsInf(v, -1):
-		return "-Inf"
+	if math.IsInf(v, 0) {
+		return strconv.FormatFloat(v, 'g', -1, 64) // +Inf / -Inf
 	}
-	s := strconv.FormatFloat(v, 'g', -1, 64)
-	if !strings.ContainsAny(s, ".e") {
+	if math.Abs(v) >= 1e21 {
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	}
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
 		s += ".0"
 	}
 	return s
@@ -188,15 +187,7 @@ func parseValue(columnType string, f csvField) (any, error) {
 	}
 	switch columnType {
 	case TypeDouble:
-		switch f.value {
-		case "NaN":
-			return math.NaN(), nil
-		case "+Inf":
-			return math.Inf(1), nil
-		case "-Inf":
-			return math.Inf(-1), nil
-		}
-		return strconv.ParseFloat(f.value, 64)
+		return strconv.ParseFloat(f.value, 64) // 也接受 +Inf、-Inf
 	case TypeInt:
 		return strconv.ParseInt(f.value, 10, 64)
 	case TypeBool:

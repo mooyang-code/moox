@@ -28,6 +28,32 @@ func (s *Service) Presence(ctx context.Context) (state int, workerID string, las
 	return report.EvaluatePresence(required, lastHeartbeat, s.clock(), report.DefaultPresenceTimeout), workerID, lastHeartbeat, nil
 }
 
+// TaskHealthLevels 返回全部任务的健康等级，供指标上报（Monitor 据此告警）。
+func (s *Service) TaskHealthLevels(ctx context.Context) ([]report.ArchiveTaskLevel, error) {
+	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
+	if err != nil {
+		return nil, err
+	}
+	views, err := s.taskViews(ctx, "", tasks)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]report.ArchiveTaskLevel, 0, len(views))
+	for _, v := range views {
+		level := report.ArchiveTaskHealthOK
+		switch v.GetHealth() {
+		case HealthWarning:
+			level = report.ArchiveTaskHealthWarning
+		case HealthError:
+			level = report.ArchiveTaskHealthError
+		case HealthPaused:
+			level = report.ArchiveTaskHealthPaused
+		}
+		out = append(out, report.ArchiveTaskLevel{Space: v.GetSpaceId(), Dataset: v.GetDatasetId(), Level: level})
+	}
+	return out, nil
+}
+
 // RetireArchiveWorker 删除一条不再使用的 worker 登记；仍持有活动租约时拒绝。
 func (m *MgrService) RetireArchiveWorker(ctx context.Context, req *archivepb.RetireArchiveWorkerReq) (*archivepb.RetireArchiveWorkerRsp, error) {
 	workerID := strings.TrimSpace(req.GetWorkerId())

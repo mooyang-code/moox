@@ -58,10 +58,15 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 }
 
 func taskToPB(t store.Task) *archivepb.ArchiveTask {
-	return &archivepb.ArchiveTask{
+	out := &archivepb.ArchiveTask{
 		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Freq: t.Freq, PartitionUnit: t.PartitionUnit, DataNodeId: t.DataNodeID, Retention: t.Retention,
 		ScheduleCron: t.ScheduleCron, ScheduleTz: t.ScheduleTZ, IntervalSeconds: uint32(t.IntervalSeconds), StartAt: fmtRFC(t.StartAt),
 		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status, NextRunAt: fmtRFC(t.NextRunAt), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
 		LastSuccessAt: fmtRFC(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: fmtRFC(t.CreatedAt), UpdatedAt: fmtRFC(t.UpdatedAt),
 	}
+	out.BlockedReason = t.BlockedReason
+	for _, item := range t.Unrecoverable {
+		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
+	}
+	return out
 }

@@ -43,6 +43,9 @@ type DatasetProvider interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error)
 }
 
+// maxListedTasks 是一次列出全部任务时的上限（单用户系统的任务数远小于它）。
+const maxListedTasks = 100000
+
 // ErrDatasetNotFound 表示数据集在 Storage 中不存在。
 var ErrDatasetNotFound = errors.New("dataset not found")
 
@@ -53,13 +56,11 @@ type Service struct {
 	datasets DatasetProvider
 	now      func() time.Time
 
-	mu            sync.Mutex
-	plans         map[string]*schedule.Plan
-	deletedTasks  map[string]deletedTask
-	lastRefresh   time.Time
-	lastCleanup   time.Time
-	lastVacuum    time.Time
-	lastHeartbeat time.Time
+	mu          sync.Mutex
+	plans       map[string]*schedule.Plan
+	lastRefresh time.Time
+	lastCleanup time.Time
+	lastVacuum  time.Time
 }
 
 // Option 调整 Service。
@@ -74,7 +75,7 @@ func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...
 		return nil, errors.New("archive service requires a store, config and dataset provider")
 	}
 	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() },
-		plans: map[string]*schedule.Plan{}, deletedTasks: map[string]deletedTask{}}
+		plans: map[string]*schedule.Plan{}}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -183,10 +184,10 @@ func resolveSpace(ctx context.Context, requested string, required bool) (string,
 	return requested, nil
 }
 
-// parseRetention 解析线上保留期："<n>h"，"forever" 或空串表示不限。
+// parseRetention 解析线上保留期："<n>h" 或 "forever"（不限）；空串说明没有读到数据集信息，按错误处理。
 func parseRetention(value string) (limit time.Duration, forever bool, err error) {
 	value = strings.TrimSpace(value)
-	if value == "" || value == "forever" {
+	if value == "forever" {
 		return 0, true, nil
 	}
 	d, err := time.ParseDuration(value)

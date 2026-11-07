@@ -10,7 +10,6 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_partition_unit TEXT NOT NULL,
     c_data_node_id TEXT NOT NULL DEFAULT '',
     c_retention TEXT NOT NULL DEFAULT '',
-    c_file_prefix TEXT NOT NULL DEFAULT '',
     c_meta_json TEXT NOT NULL DEFAULT '',
     c_schedule_cron TEXT NOT NULL,
     c_schedule_tz TEXT NOT NULL DEFAULT 'Asia/Shanghai',
@@ -25,6 +24,8 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_creator TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_unrecoverable_json TEXT NOT NULL DEFAULT '[]',
+    c_blocked_reason TEXT NOT NULL DEFAULT '',
     CHECK (c_partition_unit IN ('day', 'month')),
     CHECK (c_interval_seconds >= 300),
     CHECK (c_status IN ('enabled', 'paused')),
@@ -33,10 +34,6 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_archive_tasks_due ON t_archive_tasks (c_status, c_next_run_at);
--- 同一空间内文件名前缀唯一（不区分大小写，macOS 等文件系统不区分）：防止不同数据集的导出文件互相覆盖
-CREATE UNIQUE INDEX IF NOT EXISTS ux_archive_tasks_file_prefix
-ON t_archive_tasks (c_space_id, lower(c_file_prefix))
-WHERE c_file_prefix != '';
 
 CREATE TRIGGER IF NOT EXISTS trg_t_archive_tasks_mtime
 AFTER UPDATE ON t_archive_tasks

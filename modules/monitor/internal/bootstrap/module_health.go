@@ -18,7 +18,6 @@ var moduleHealthNames = map[string]string{
 	"factor-calculation":    "因子计算",
 	"strategy-targets":      "策略目标生成",
 	"trade-rebalance":       "交易调仓",
-	"archive-materialize":   "数据归档",
 	"monitor-metrics":       "监控指标接收",
 }
 

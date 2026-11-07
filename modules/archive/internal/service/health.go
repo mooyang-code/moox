@@ -42,7 +42,10 @@ func evaluateHealth(in healthInput) (string, string) {
 	}
 	var errs, warns []string
 	// 异常：最近一次成功运行距今超过「线上保留期 − 2 天」。
-	if limit, forever, err := parseRetention(in.Task.Retention); err == nil && !forever {
+	limit, forever, retentionErr := parseRetention(in.Task.Retention)
+	if retentionErr != nil {
+		errs = append(errs, "没有读到数据集的线上保留期，无法判断是否会漏数据")
+	} else if !forever {
 		threshold := limit - 48*time.Hour
 		if threshold < limit/2 {
 			threshold = limit / 2
@@ -56,8 +59,11 @@ func evaluateHealth(in healthInput) (string, string) {
 			errs = append(errs, fmt.Sprintf("%s距今 %s，已接近线上保留期 %s", label, in.Now.Sub(reference).Truncate(time.Minute), limit))
 		}
 	}
-	if in.LastRun != nil && len(in.LastRun.Unrecoverable) > 0 {
-		errs = append(errs, fmt.Sprintf("有 %d 段数据已超出线上保留期、无法补齐", len(in.LastRun.Unrecoverable)))
+	if in.Task.BlockedReason != "" {
+		errs = append(errs, "分区登记被拒："+in.Task.BlockedReason)
+	}
+	if len(in.Task.Unrecoverable) > 0 {
+		errs = append(errs, fmt.Sprintf("有 %d 段数据已超出线上保留期、无法补齐", len(in.Task.Unrecoverable)))
 	}
 	if !in.OldestQueued.IsZero() && !in.WorkerActive {
 		offlineSince := in.WorkerLastSeen

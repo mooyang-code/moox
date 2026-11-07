@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -18,8 +19,6 @@ type Task struct {
 	PartitionUnit string
 	DataNodeID    string
 	Retention     string
-	// FilePrefix 是导出文件名前缀（数据集名去空格）；创建时确定，之后数据集改名也不变，已导出的文件不会改名。
-	FilePrefix string
 	// MetaJSON 是数据集元数据（名称、简介等）的 JSON，创建与每小时维护时从 Storage 刷新。
 	MetaJSON         string
 	ScheduleCron     string
@@ -35,22 +34,30 @@ type Task struct {
 	Creator          string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	// Unrecoverable 是按任务累积的无法补齐区间（超出线上保留期）。
+	Unrecoverable []Unrecoverable
+	// BlockedReason 是分区登记被拒的原因（行数或标的数倒退）；下一次被接受的完成上报清空。
+	BlockedReason string
 }
 
-const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_meta_json, c_schedule_cron, c_schedule_tz,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json, c_schedule_cron, c_schedule_tz,
 c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_last_success_at, c_final_until,
-c_creator, c_ctime, c_mtime`
+c_creator, c_ctime, c_mtime, c_unrecoverable_json, c_blocked_reason`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var start, backfill, next, lastSuccess, finalUntil, created, updated timeValue
-	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.FilePrefix, &t.MetaJSON, &t.ScheduleCron, &t.ScheduleTZ,
+	var unrecoverable string
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.MetaJSON, &t.ScheduleCron, &t.ScheduleTZ,
 		&t.IntervalSeconds, &start, &backfill, &t.Status, &next, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
-		&t.Creator, &created, &updated)
+		&t.Creator, &created, &updated, &unrecoverable, &t.BlockedReason)
 	if err != nil {
 		return Task{}, err
+	}
+	if unrecoverable != "" && unrecoverable != "[]" {
+		_ = json.Unmarshal([]byte(unrecoverable), &t.Unrecoverable)
 	}
 	t.StartAt, t.BackfillFrom, t.NextRunAt = start.Time, backfill.Time, next.Time
 	t.LastSuccessAt, t.FinalUntil, t.CreatedAt, t.UpdatedAt = lastSuccess.Time, finalUntil.Time, created.Time, updated.Time
@@ -61,10 +68,10 @@ func scanTask(row rowScanner) (Task, error) {
 func (s *Store) CreateTask(ctx context.Context, task Task, immediate bool, now time.Time) (Task, *Run, error) {
 	var run *Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_meta_json,
+		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json,
 c_schedule_cron, c_schedule_tz, c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_creator)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.FilePrefix, task.MetaJSON,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.MetaJSON,
 			task.ScheduleCron, task.ScheduleTZ, task.IntervalSeconds, fmtTime(task.StartAt), nullTime(task.BackfillFrom),
 			task.Status, nullTime(task.NextRunAt), task.Creator)
 		if err != nil {
@@ -131,6 +138,8 @@ type TaskUpdate struct {
 	NextRunAt       time.Time
 	// RunNow 为真时在同一事务里生成一条 manual 运行（立即开始，或停用后重新启用时立即运行一次）。
 	RunNow bool
+	// ClearUnrecoverable 为真时清空累积的无法补齐区间。
+	ClearUnrecoverable bool
 }
 
 // UpdateTask 修改任务；停用时同时取消排队中的运行。
@@ -138,9 +147,10 @@ func (s *Store) UpdateTask(ctx context.Context, spaceID, datasetID string, updat
 	var run *Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_schedule_cron = ?, c_schedule_tz = ?, c_interval_seconds = ?, c_start_at = ?,
-c_backfill_from = ?, c_status = ?, c_next_run_at = ?, c_consecutive_skips = 0 WHERE c_space_id = ? AND c_dataset_id = ?`,
+c_backfill_from = ?, c_status = ?, c_next_run_at = ?, c_consecutive_skips = 0,
+c_unrecoverable_json = CASE WHEN ? THEN '[]' ELSE c_unrecoverable_json END WHERE c_space_id = ? AND c_dataset_id = ?`,
 			update.ScheduleCron, update.ScheduleTZ, update.IntervalSeconds, fmtTime(update.StartAt), nullTime(update.BackfillFrom),
-			update.Status, nullTime(update.NextRunAt), spaceID, datasetID)
+			update.Status, nullTime(update.NextRunAt), update.ClearUnrecoverable, spaceID, datasetID)
 		if err != nil {
 			return err
 		}

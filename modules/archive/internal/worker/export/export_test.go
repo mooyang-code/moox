@@ -15,14 +15,19 @@ import (
 
 func TestRelPathBuildsDayAndMonthNamesAndRejectsUnsafeInput(t *testing.T) {
 	for _, tc := range []struct{ space, dataset, key, want string }{
-		{"crypto", "ds_1m", "2026-10-15", "crypto/2026/ds_1m_20261015.csv"},
-		{"stockcn", "cn_1d", "2026-10", "stockcn/2026/cn_1d_202610.csv"},
-		{"crypto", "币安现货1分钟K线", "2026-10-15", "crypto/2026/币安现货1分钟K线_20261015.csv"},
+		{"crypto", "ds_1m", "2026-10-15", "crypto/ds_1m/2026/20261015.csv"},
+		{"stockcn", "cn_1d", "2026-10", "stockcn/cn_1d/2026/202610.csv"},
 	} {
 		got, err := RelPath(tc.space, tc.dataset, tc.key, FormatCSV)
 		if err != nil || got != tc.want {
 			t.Fatalf("RelPath(%v) = %q, %v, want %q", tc, got, err, tc.want)
 		}
+	}
+	if got, _ := RelPath("crypto", "ds_1m", "2026-10-15", FormatCSVGz); got != "crypto/ds_1m/2026/20261015.csv.gz" {
+		t.Fatalf("csv.gz 路径 = %q", got)
+	}
+	if got, _ := (Files{}).RelPath("crypto", "ds_1m", "2026-10"); got != "crypto/ds_1m/2026/202610.csv.gz" {
+		t.Fatalf("默认格式应是 csv.gz: %q", got)
 	}
 	for _, tc := range []struct{ space, dataset, key string }{
 		{"crypto", "ds", "2026-1"}, {"crypto", "ds", "20261015"}, {"crypto", "ds", "2026-10-1x"},
@@ -64,21 +69,28 @@ func setup(t *testing.T) (Files, *staging.Store, staging.Task, staging.Partition
 	return Files{Root: root, Format: FormatCSVGz}, store, task, p
 }
 
-func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
+func TestWriteIsAtomicAndReportsHashAndPreview(t *testing.T) {
 	files, store, task, p := setup(t)
-	info, err := files.Write(context.Background(), store, task, "ds_1m", p)
+	info, err := files.Write(context.Background(), store, task, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Path != "crypto/2026/ds_1m_20261015.csv.gz" || info.Bytes == 0 || len(info.SHA256) != 64 {
+	if info.Path != "crypto/ds_1m/2026/20261015.csv.gz" || len(info.SHA256) != 64 {
 		t.Fatalf("info = %+v", info)
 	}
 	lines := strings.Split(strings.TrimSuffix(info.Preview, "\n"), "\n")
 	if len(lines) != 21 || lines[0] != "data_time,subject_id,series_tag,open" || !strings.HasPrefix(lines[1], "2026-10-15T00:00:00Z,BTC,\"\",0.0") {
 		t.Fatalf("preview = %q", info.Preview)
 	}
-	if sha, size, err := FileSHA256(files.Abs(info.Path)); err != nil || sha != info.SHA256 || size != info.Bytes {
-		t.Fatalf("sha=%s size=%d err=%v", sha, size, err)
+	// 写入时算出的 sha256 是磁盘上（压缩后）字节的哈希。
+	if err := files.Verify(info.Path, info.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Verify(info.Path, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "不一致") {
+		t.Fatalf("sha256 不一致必须报错: %v", err)
+	}
+	if err := files.Verify("crypto/missing.csv", info.SHA256); err == nil {
+		t.Fatal("文件缺失必须报错")
 	}
 	if _, err := os.Stat(files.Abs(info.Path) + ".partial"); !os.IsNotExist(err) {
 		t.Fatalf(".partial 不应残留: %v", err)
@@ -89,28 +101,57 @@ func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := io.ReadAll(zr)
-	// 读完立刻关闭：Windows 上不能把仍被打开的文件作为重命名的目标替换。
 	_ = f.Close()
 	if strings.Count(string(raw), "\n") != 41 {
 		t.Fatalf("行数 = %d", strings.Count(string(raw), "\n"))
 	}
-	// 重写：同路径原子替换。
-	again, err := files.Write(context.Background(), store, task, "ds_1m", p)
+	// 本地没有导出记录、目标文件却已存在：拒绝覆盖。
+	if _, err := files.Write(context.Background(), store, task, p); err == nil || !strings.Contains(err.Error(), "已存在") {
+		t.Fatalf("目标文件已存在且本地无记录时应拒绝导出: %v", err)
+	}
+	// 有记录时重写：同路径原子替换。
+	p.FilePath = info.Path
+	again, err := files.Write(context.Background(), store, task, p)
+	if err != nil || again.Path != info.Path || again.SHA256 != info.SHA256 {
+		t.Fatalf("again = %+v err=%v", again, err)
+	}
+}
+
+// 已有文件的分区重写时沿用记录的路径与格式，不按当前配置另写一份。
+func TestRewriteKeepsTheRecordedPathAndFormat(t *testing.T) {
+	files, store, task, p := setup(t)
+	files.Format = FormatCSV
+	info, err := files.Write(context.Background(), store, task, p)
+	if err != nil || info.Path != "crypto/ds_1m/2026/20261015.csv" {
+		t.Fatalf("info = %+v err=%v", info, err)
+	}
+	files.Format = FormatCSVGz
+	p.FilePath = info.Path
+	again, err := files.Write(context.Background(), store, task, p)
 	if err != nil || again.Path != info.Path {
 		t.Fatalf("again = %+v err=%v", again, err)
+	}
+	raw, _ := os.ReadFile(files.Abs(again.Path))
+	if !strings.HasPrefix(string(raw), "data_time,") {
+		t.Fatal("沿用原格式（未压缩）")
+	}
+	entries, _ := os.ReadDir(filepath.Dir(files.Abs(info.Path)))
+	if len(entries) != 1 {
+		t.Fatalf("目录里该分区只应有一份文件: %v", entries)
 	}
 }
 
 func TestWriteFailureLeavesNoPartialAndKeepsTheOldFile(t *testing.T) {
 	files, store, task, p := setup(t)
-	info, err := files.Write(context.Background(), store, task, "ds_1m", p)
+	info, err := files.Write(context.Background(), store, task, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(files.Abs(info.Path))
+	p.FilePath = info.Path
 	bad := task
 	bad.Columns = []staging.Column{{Name: "no_such_column", Type: staging.TypeDouble}} // 暂存表里没有这一列：COPY 会失败
-	if _, err := files.Write(context.Background(), store, bad, "ds_1m", p); err == nil {
+	if _, err := files.Write(context.Background(), store, bad, p); err == nil {
 		t.Fatal("导出失败必须返回错误")
 	}
 	after, _ := os.ReadFile(files.Abs(info.Path))
@@ -123,7 +164,8 @@ func TestWriteFailureLeavesNoPartialAndKeepsTheOldFile(t *testing.T) {
 	}
 	unsafe := task
 	unsafe.DatasetID = "../x"
-	if _, err := files.Write(context.Background(), store, unsafe, "ds_1m", p); err == nil {
+	p.FilePath = ""
+	if _, err := files.Write(context.Background(), store, unsafe, p); err == nil {
 		t.Fatal("不安全的路径必须被拒绝")
 	}
 }
@@ -133,16 +175,16 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	cols := []staging.Column{{Name: "open", Type: staging.TypeDouble}}
 	input := DatasetMetaInput{
-		SpaceID: "crypto", DatasetID: "ds_1m", FilePrefix: "现货分钟K线", Freq: "1m", PartitionUnit: "day", Timezone: "UTC",
+		SpaceID: "crypto", DatasetID: "ds_1m", Freq: "1m", PartitionUnit: "day", Timezone: "UTC",
 		DatasetJSON: `{"name":"现货分钟K线","description":"币安现货 1 分钟 K 线"}`, Columns: cols,
 		Infos: []ColumnMeta{{Name: "open", DisplayName: "开盘价", OriginType: "field", OriginID: "open"}},
 	}
 	if err := files.WriteDatasetJSON(files.BuildDatasetMeta(input, now)); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(files.Root, "crypto", "现货分钟K线_dataset.json")
+	path := filepath.Join(files.Root, "crypto", "ds_1m", "dataset.json")
 	first, _ := os.ReadFile(path)
-	for _, want := range []string{`"name": "现货分钟K线"`, `"description": "币安现货 1 分钟 K 线"`, `"display_name": "开盘价"`, `"display_name": "数据时间"`, `"path_pattern": "<yyyy>/现货分钟K线_<yyyymmdd>.csv"`, `"timezone": "UTC"`} {
+	for _, want := range []string{`"name": "现货分钟K线"`, `"description": "币安现货 1 分钟 K 线"`, `"display_name": "开盘价"`, `"display_name": "数据时间"`, `"path_pattern": "<yyyy>/<yyyymmdd>.csv.gz"`, `"format": "csv.gz"`, `"timezone": "UTC"`} {
 		if !strings.Contains(string(first), want) {
 			t.Fatalf("元数据缺少 %s:\n%s", want, first)
 		}
@@ -194,18 +236,21 @@ func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
 	}
 }
 
-func TestWritePlainCSVWithAChinesePrefix(t *testing.T) {
+func TestWritePlainCSV(t *testing.T) {
 	files, store, task, p := setup(t)
 	files.Format = FormatCSV
-	info, err := files.Write(context.Background(), store, task, "币安现货1分钟K线", p)
+	info, err := files.Write(context.Background(), store, task, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Path != "crypto/2026/币安现货1分钟K线_20261015.csv" || !strings.HasPrefix(info.Preview, "data_time,subject_id,series_tag,open\n") {
+	if info.Path != "crypto/ds_1m/2026/20261015.csv" || !strings.HasPrefix(info.Preview, "data_time,subject_id,series_tag,open\n") {
 		t.Fatalf("info = %+v", info)
 	}
 	raw, err := os.ReadFile(files.Abs(info.Path))
 	if err != nil || !strings.HasPrefix(string(raw), "data_time,subject_id,series_tag,open\n") {
 		t.Fatalf("文件应是未压缩的 CSV: %v %q", err, raw[:20])
+	}
+	if err := files.Verify(info.Path, info.SHA256); err != nil {
+		t.Fatal(err)
 	}
 }

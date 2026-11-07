@@ -129,8 +129,14 @@ func (s *Store) Close() error {
 
 // IncrementalVacuum 回收空闲页。
 func (s *Store) IncrementalVacuum(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "PRAGMA incremental_vacuum")
-	return err
+	// incremental_vacuum 每一步只回收一页，Exec 只执行一步，要用 Query 把结果读完。
+	rows, err := s.db.QueryContext(ctx, "PRAGMA incremental_vacuum")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // tx 在事务里执行 fn；返回错误即回滚。

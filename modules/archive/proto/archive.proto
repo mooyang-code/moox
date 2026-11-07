@@ -79,6 +79,10 @@ message ArchiveTask {
   string min_data_time = 26;
   string max_data_time = 27;
   ArchiveRun last_run = 28;
+  // 按任务累积的无法补齐区间（超出线上保留期）。
+  repeated UnrecoverableRange unrecoverable = 29;
+  // 分区登记被拒的原因（上报的行数或标的数比已登记的少）；非空时任务为异常，下一次被接受的完成上报清空。
+  string blocked_reason = 30;
 }
 
 // ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）。
@@ -125,11 +129,12 @@ message ArchiveWorkerInfo {
   bool active = 13;
 }
 
+// TaskRef 是一个归档任务的身份。
 message TaskRef {
   string space_id = 1;
   string dataset_id = 2;
-  // 被删除任务的实例标识；worker 只清理属于该实例（或尚未绑定实例）的状态。
-  string task_epoch = 3;
+  // 任务自增 ID（十进制串）：任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的暂存状态。
+  string task_id = 3;
 }
 
 // ---- ArchiveMgr ----
@@ -222,6 +227,8 @@ message UpdateArchiveTaskReq {
   string status = 8;
   // 停用后重新启用时是否立即运行一次。
   bool run_now = 9;
+  // 清除任务累积的无法补齐区间（确认过、不再需要提示时）。
+  bool clear_unrecoverable = 10;
 }
 message UpdateArchiveTaskRsp {
   common.RetInfo ret_info = 1;
@@ -360,8 +367,8 @@ message ArchiveWorkerHeartbeatRsp {
   uint32 lease_ttl_seconds = 3;
   // 需要取消的运行（用户取消，或租约已不属于本 worker）。
   repeated string cancel_run_ids = 4;
-  // 已删除的任务：worker 在下次维护时清理它们的暂存表和序列状态。
-  repeated TaskRef deleted_tasks = 5;
+  // 当前全部任务（只在 active 为真时下发）：worker 维护时删掉不在列表里的数据集的暂存状态。
+  repeated TaskRef tasks = 5;
 }
 
 // DataNodeLoad 是 worker 当前在某个 DataNode 上占用的运行数。
@@ -408,12 +415,14 @@ message RunAssignment {
   // 回补起点（任务设置，首次运行使用）。
   string backfill_from = 19;
   uint32 lease_ttl_seconds = 20;
-  // 任务实例标识（任务自增 ID，不复用）。任务被删除后重建会得到新的值，worker 据此丢弃旧任务遗留的水位和暂存数据。
-  string task_epoch = 21;
-  // 导出文件名前缀（数据集名去空格；为空时用数据集 ID）。
-  string file_prefix = 22;
-  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进根目录的 *_dataset.json。
-  string dataset_meta_json = 23;
+  // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的水位和暂存数据。
+  string task_id = 21;
+  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<dataset_id>/dataset.json。
+  string dataset_meta_json = 22;
+  // 任务最近一次成功的定时或手动运行的开始时间（即读取水位）；worker 本地没有水位时用它。
+  string last_success_at = 23;
+  // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，不带预览与列名）；worker 本地缺分区状态时据此补齐。
+  repeated PartitionReport registered_partitions = 24;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

@@ -1,5 +1,5 @@
 // Command moox-archive-worker 是归档 worker：经 Access 领取运行，读取 Storage 的时间区间数据，
-// 写入本地 SQLite 暂存区，并导出 CSV 分区文件。它只出站，可以部署在任何能访问 Access 的机器上（Linux、macOS、Windows）。
+// 写入本地 SQLite 暂存区，并导出 CSV 分区文件。它只出站，可以部署在任何能访问 Access 的 Linux 或 macOS 机器上。
 package main
 
 import (
@@ -91,7 +91,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormats[0]}
+	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormat}
 	instance := newInstanceID()
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,

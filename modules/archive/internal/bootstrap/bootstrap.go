@@ -112,7 +112,7 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 	return nil
 }
 
-// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态并上报指标快照，Monitor 据此发出“归档 worker 离线”告警。
+// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态与各任务的健康等级并上报指标快照，Monitor 据此告警。
 func registerMetricsReporter(s *server.Server, svc *service.Service) error {
 	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
 	if err != nil {
@@ -122,11 +122,20 @@ func registerMetricsReporter(s *server.Server, svc *service.Service) error {
 	if err != nil {
 		return fmt.Errorf("create archive worker presence metric: %w", err)
 	}
+	taskHealth, err := report.NewArchiveTaskHealth(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("create archive task health metric: %w", err)
+	}
 	return registerTimer(s, metricsService, "archive_metrics", metricsTimeout, func(ctx context.Context) error {
 		if state, workerID, last, err := svc.Presence(ctx); err != nil {
 			log.WarnContextf(ctx, "archive worker presence not evaluated: %v", err)
 		} else {
 			presence.Set(state, workerID, last)
+		}
+		if levels, err := svc.TaskHealthLevels(ctx); err != nil {
+			log.WarnContextf(ctx, "archive task health not evaluated: %v", err)
+		} else {
+			taskHealth.Set(levels)
 		}
 		return handler.Handle(ctx)
 	})

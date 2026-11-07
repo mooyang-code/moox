@@ -28,6 +28,7 @@ var healthMetricSuffixes = []string{
 }
 
 var healthMetricNames = map[string]struct{}{
+	ArchiveTaskHealthMetric:                                                    {},
 	"moox_collector_market_fetch_assignment_required":                          {},
 	"moox_collector_market_fetch_assignment_active":                            {},
 	"moox_collector_market_fetch_assignment_last_success_timestamp_seconds":    {},
