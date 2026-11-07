@@ -20,12 +20,14 @@ describe("新建账户", () => {
       settlement_asset: "USDT"
     });
     expect(buildPaperRequest({ ...form, logicalName: "组合一" }).logical_account_name).toBe("组合一");
+    expect(buildPaperRequest(form).logical_account_id).toBeUndefined();
   });
 
-  it("加入已有组合时不让后端新建组合；只开现货不设保证金模式", () => {
+  it("加入已有组合时带组合编号、不带组合名称，由后端在同一个事务里加入；只开现货不设保证金模式", () => {
     const form = { ...createDefaultForm(), name: "a", markets: [1] as 1[], join: "exist" as const, existingLogicalId: "l" };
     const request = buildPaperRequest(form);
     expect(request.logical_account_name).toBe("");
+    expect(request.logical_account_id).toBe("l");
     expect(request.margin_mode).toBe("");
   });
 

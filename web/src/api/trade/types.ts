@@ -378,6 +378,10 @@ export interface CreatePaperSimulationReq {
   maker_fee_rate: string;
   taker_fee_rate: string;
   slippage_bps: string;
+  /** 加入已有的组合账户：后端在创建账户的同一个事务里加成启用成员，此时 logical_account_name 必须为空 */
+  logical_account_id?: string;
+  /** 加入已有组合时的优先级；不填排在现有成员之后 */
+  priority?: number;
 }
 
 export interface EquityPoint {

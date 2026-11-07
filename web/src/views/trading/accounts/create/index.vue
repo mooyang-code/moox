@@ -15,11 +15,7 @@
       <a-step v-for="title in stepTitles(form.kind)" :key="title">{{ title }}</a-step>
     </a-steps>
 
-    <a-alert v-if="waiting" type="info" class="block">
-      正在等待账户会话建立：新账户的会话由运行时每隔几秒检查建立，建好后会自动加入组合，最多等 20 秒。
-    </a-alert>
     <a-alert v-if="error" type="error" class="block">{{ error }}</a-alert>
-    <a-alert v-if="locked" type="warning" class="block"> 执行账户已经创建，前面几步的参数不能再改，这里只补做加入组合。 </a-alert>
 
     <!-- 1 类型 -->
     <div v-if="form.step === 0" class="choice" role="radiogroup" aria-label="账户类型">
@@ -99,13 +95,13 @@
       <a-form :model="form" layout="vertical" class="block">
         <template v-if="form.join === 'new'">
           <a-form-item label="组合名称"
-            ><a-input v-model="form.logicalName" :placeholder="form.name" :max-length="64"
+            ><a-input v-model="form.logicalName" :disabled="Boolean(created.logicalId)" :placeholder="form.name" :max-length="64"
           /></a-form-item>
           <a-form-item
             label="运行方式"
             :extra="form.controlMode === 1 ? '之后在策略管理里把策略实例绑到这个组合' : '只按你的手工订单交易，没有策略目标'"
           >
-            <a-radio-group v-model="form.controlMode" type="button">
+            <a-radio-group v-model="form.controlMode" type="button" :disabled="Boolean(created.logicalId)">
               <a-radio :value="1">策略驱动</a-radio>
               <a-radio :value="2">自主下单</a-radio>
             </a-radio-group>
@@ -153,7 +149,6 @@ import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchan
 import { joinableLogicals, nextPriority } from "../shared/membership";
 import { accountMapOf } from "../account-list";
 import type { TradingAccount } from "@/api/trade";
-import { retryWhileSessionStarting } from "./join-retry";
 import {
   buildLiveRequest,
   buildPaperRequest,
@@ -174,7 +169,6 @@ const visible = ref(false);
 const form = reactive(createDefaultForm());
 const error = ref("");
 const submitting = ref(false);
-const waiting = ref(false);
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const scope = createSubmitScope();
@@ -250,17 +244,16 @@ async function submit() {
   }
   const submission = scope.begin();
   submitting.value = true;
-  waiting.value = false;
   error.value = "";
   const exist =
     form.join === "exist" ? props.logicals.find(item => item.logical_account_id === form.existingLogicalId) : undefined;
   try {
-    // 前面几步已经建成的对象记在 created 里：加入组合失败后重试，只补没做完的，不会重复建账户（同名会冲突）
+    // 前面几步已经建成的对象记在 created 里：中途失败后重试，只补没做完的，不会重复建账户（同名会冲突）
     if (!created.accountId) {
       if (form.kind === "paper") {
+        // 模拟盘一次请求完成：新建组合或加入已有组合都由后端在同一个事务里做，中途失败不会留下孤立的账户
         created.accountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
-        // 新建组合时，模拟账户的创建请求已经把账户加进了新组合
-        created.joined = !exist;
+        created.joined = true;
       } else {
         created.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
       }
@@ -279,41 +272,36 @@ async function submit() {
         ).logical_account.logical_account_id;
         created.logicalId = target;
       }
-      // 新账户的会话要等运行时的周期检查才建起来，加入组合在这之前会失败：自动等一会儿再试
-      await retryWhileSessionStarting(
-        () =>
-          addLogicalAccountMember({
-            logical_account_id: target,
-            trading_account_id: created.accountId,
-            enabled: true,
-            priority: exist ? nextPriority(exist) : 1,
-            adopt_existing_exposure: false
-          }),
-        { onWaiting: () => (waiting.value = true), cancelled: () => !submission.isCurrent() }
-      );
+      // 实盘（1B）：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured。
+      // 开放实盘建账户（T5）时，在这里补等待重试或让后端像模拟盘一样在同一个事务里完成；现在实盘选项还没有开放。
+      await addLogicalAccountMember({
+        logical_account_id: target,
+        trading_account_id: created.accountId,
+        enabled: true,
+        priority: exist ? nextPriority(exist) : 1,
+        adopt_existing_exposure: false
+      });
       created.joined = true;
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
-    if (submission.isCurrent()) {
-      error.value = created.accountId
-        ? `执行账户已创建，但加入组合没有完成：${message}。修正后可以再点一次，只会补做加入组合。`
-        : message;
-    }
+    // 账户已经建成就通知列表刷新，哪怕对话框已经关闭或重新打开
     if (created.accountId) emit("created", form.kind);
+    if (!submission.isCurrent()) return;
+    error.value = created.accountId
+      ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。`
+      : message;
     submitting.value = false;
-    waiting.value = false;
     return;
   }
-  submitting.value = false;
-  waiting.value = false;
+  emit("created", form.kind);
   if (!submission.isCurrent()) return;
+  submitting.value = false;
   visible.value = false;
   Message.success("账户已创建");
-  emit("created", form.kind);
 }
 
-defineExpose({ open, form, next, submit });
+defineExpose({ open, form, next, submit, visible });
 </script>
 
 <style src="../shared/accounts.css"></style>
