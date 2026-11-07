@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/delist"
 	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
@@ -18,8 +19,9 @@ import (
 // eventBusRuntime 是 Collector 级的 EventBus 接入：共享连接和独立的发件箱中继。
 // K 线合成、下架检测等事件生产者都往同一个发件箱写，由中继发布；中继不依赖 K 线合成是否开启。
 type eventBusRuntime struct {
-	hub   *eventbus.Hub
-	relay *eventbus.Relay
+	hub       *eventbus.Hub
+	relay     *eventbus.Relay
+	attention *attention.Attention
 }
 
 // relayInterval 是中继轮询发件箱的间隔；新事件封存后会立即唤醒它。
@@ -35,7 +37,10 @@ func newEventBusRuntime(cfg *Config, dbm *store.Store) (*eventBusRuntime, error)
 		return nil, err
 	}
 	hub := eventbus.NewHub(cfg.EventBus, registry)
-	return &eventBusRuntime{hub: hub, relay: eventbus.NewRelay(dbm.Resample(), registry, hub, relayInterval)}, nil
+	attn := attention.New(prometheus.DefaultRegisterer)
+	relay := eventbus.NewRelay(dbm.Resample(), registry, hub, relayInterval)
+	relay.Attention = attn
+	return &eventBusRuntime{hub: hub, relay: relay, attention: attn}, nil
 }
 
 // start 启动中继循环（连接在循环里建立并自动重试）。必须在各生产者注册完连接成功后的回调之后调用。
@@ -73,7 +78,7 @@ func registerDelistDetection(cfg *Config, dbm *store.Store, process *Runtime, bu
 			&delist.OKXSwap{Client: http},
 		},
 		Registrar: registrar,
-		Attention: delist.NewAttention(prometheus.DefaultRegisterer),
+		Attention: bus.attention,
 	}
 	process.launch(func() { _ = detector.Run(process.ctx) })
 	return nil

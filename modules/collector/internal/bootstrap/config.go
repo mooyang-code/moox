@@ -128,6 +128,8 @@ type KlineResampleConfig struct {
 	// HistoryBucketsPerRound 是历史合成作业每轮最多推进的桶数；HistoryMaxJobs 是每轮最多推进的作业数。
 	HistoryBucketsPerRound int `yaml:"history_buckets_per_round"`
 	HistoryMaxJobs         int `yaml:"history_max_jobs"`
+	// LegacyEventBus 只用来识别旧配置：EventBus 连接已经移到顶层 event_bus，旧位置出现就给出明确的报错（见 validateKlineResample）。
+	LegacyEventBus any `yaml:"event_bus"`
 	// MaxReadKeys 是单次读取源/目标行的键数上限。
 	MaxReadKeys int `yaml:"max_read_keys"`
 }
@@ -281,6 +283,9 @@ func (c *Config) validateEgressProxy() error {
 
 func (c *Config) validateKlineResample() error {
 	k := c.KlineResample
+	if k.LegacyEventBus != nil {
+		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请用新版 setup（unitinstall）重新渲染配置，或把这一段从 kline_resample 下移到顶层")
+	}
 	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive")
 	}

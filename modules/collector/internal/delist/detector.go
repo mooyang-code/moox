@@ -5,72 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// 需要人看的情况。Monitor 按 kind 生成检查，detail 是来源和原因。
-const (
-	// AttentionSourceFailed 是某个来源连续失败了 SourceFailureThreshold 次。
-	AttentionSourceFailed = "delist_source_failed"
-	// AttentionReadonlyKeyMissing 是读不到币安只读 Key，币安现货来源本轮跳过。
-	AttentionReadonlyKeyMissing = "delist_readonly_key_missing"
-	// SourceFailureThreshold 是来源连续失败多少次才算关注项。
-	SourceFailureThreshold = 3
-)
-
-var attentionKinds = []string{AttentionSourceFailed, AttentionReadonlyKeyMissing}
-
-// maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
-const maxAttentionDetail = 480
-
-// Attention 上报 moox_collector_attention_active：每种关注项一个值，1 表示当前有需要处理的情况，detail 里列出来源和原因。
-type Attention struct {
-	gauge *prometheus.GaugeVec
-}
-
-// NewAttention 注册关注项指标。
-func NewAttention(registerer prometheus.Registerer) *Attention {
-	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_attention_active", Help: "Collector conditions that need a person, with source and reason in the detail label."}, []string{"kind", "detail"})
-	if registerer != nil {
-		if err := registerer.Register(gauge); err != nil {
-			var already prometheus.AlreadyRegisteredError
-			if errors.As(err, &already) {
-				gauge = already.ExistingCollector.(*prometheus.GaugeVec)
-			}
-		}
-	}
-	return &Attention{gauge: gauge}
-}
-
-// Publish 用本轮结果替换上报值，items 按 kind 列出每条详情；恢复后值回到 0，Monitor 才看得到恢复。
-func (a *Attention) Publish(items map[string][]string) {
-	a.gauge.Reset()
-	for _, kind := range attentionKinds {
-		details := append([]string(nil), items[kind]...)
-		if len(details) == 0 {
-			a.gauge.WithLabelValues(kind, "").Set(0)
-			continue
-		}
-		sort.Strings(details)
-		detail := strings.Join(details, "；")
-		if len(detail) > maxAttentionDetail {
-			detail = strings.ToValidUTF8(detail[:maxAttentionDetail], "") + "…"
-		}
-		a.gauge.WithLabelValues(kind, detail).Set(1)
-	}
-}
+// SourceFailureThreshold 是来源连续失败多少次才算关注项。
+const SourceFailureThreshold = 3
 
 // Detector 定时轮询各个来源，把新发现的下架通知登记（并发布）。
 type Detector struct {
 	Sources   []Source
 	Registrar *Registrar
-	Attention *Attention
+	Attention *attention.Attention
 	// Interval 是两轮之间的间隔，默认 10 分钟。
 	Interval time.Duration
 	// FetchTimeout 是单个来源一次请求的时限，默认 30 秒。
@@ -157,15 +106,15 @@ func (d *Detector) publishLocked() {
 	items := map[string][]string{}
 	for name, count := range d.failures {
 		if count >= SourceFailureThreshold {
-			items[AttentionSourceFailed] = append(items[AttentionSourceFailed], fmt.Sprintf("%s 连续 %d 次失败：%s", name, count, stable(d.lastErr[name])))
+			items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], fmt.Sprintf("%s 连续 %d 次失败：%s", name, count, stable(d.lastErr[name])))
 		}
 	}
 	for name, missing := range d.keyGone {
 		if missing {
-			items[AttentionReadonlyKeyMissing] = append(items[AttentionReadonlyKeyMissing], name+"：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")
+			items[attention.KindReadonlyKeyMissing] = append(items[attention.KindReadonlyKeyMissing], name+"：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")
 		}
 	}
-	d.Attention.Publish(items)
+	d.Attention.Set("delist", items)
 }
 
 var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)

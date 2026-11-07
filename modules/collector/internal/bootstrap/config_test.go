@@ -122,6 +122,18 @@ event_bus:
 	assert.True(t, cfg.EventBus.Enabled())
 }
 
+// 旧位置 kline_resample.event_bus 给出定向的中文报错，而不是笼统的“未知字段”。
+func TestLoadRejectsLegacyKlineResampleEventBusWithGuidance(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, `kline_resample:
+  enabled: true
+  event_bus:
+    urls: ["nats://127.0.0.1:4222"]
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "已经移到顶层 event_bus")
+	assert.Contains(t, err.Error(), "重新渲染配置")
+}
+
 func TestLoadKlineResampleDefaultsHaveNoEventBus(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, "kline_resample:\n  enabled: true\n"))
 	require.NoError(t, err)

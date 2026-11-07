@@ -613,6 +613,24 @@ func (r *ResampleStateRepository) MarkPublished(ctx context.Context, id int64) e
 	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", true).Error
 }
 
+// MarkDead 把无法解码的发件箱事件标成死信（c_published = 2）：它不再被当作待发布，不会堵住后面的事件。
+func (r *ResampleStateRepository) MarkDead(ctx context.Context, id int64) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", 2).Error
+}
+
+// DeadEvents 返回被标成死信的发件箱事件个数。
+func (r *ResampleStateRepository) DeadEvents(ctx context.Context) (int64, error) {
+	if err := r.ready(); err != nil {
+		return 0, err
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_published = 2").Count(&count).Error
+	return count, err
+}
+
 // CleanupNotices 删除早于 before 的通知与已发布事件，返回删除的行数。没有事件总线时通知不会成批，也靠它清理。
 func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before time.Time) (int64, error) {
 	if err := r.ready(); err != nil {
@@ -624,6 +642,6 @@ func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before tim
 		return 0, result.Error
 	}
 	total += result.RowsAffected
-	result = r.db.WithContext(ctx).Where("c_published = ? AND c_ctime < ?", true, before.UTC()).Delete(&eventOutboxRow{})
+	result = r.db.WithContext(ctx).Where("c_published > 0 AND c_ctime < ?", before.UTC()).Delete(&eventOutboxRow{})
 	return total + result.RowsAffected, result.Error
 }

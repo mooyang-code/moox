@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/attention"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	"github.com/mooyang-code/moox/packages/events"
@@ -248,28 +249,28 @@ func TestDetectorPublishesOncePerNoticeAndRaisesAttention(t *testing.T) {
 	ctx := context.Background()
 	db := openStore(t)
 	registrar, _ := newRegistrar(t, db)
-	attention := NewAttention(prometheus.NewRegistry())
+	attn := attention.New(prometheus.NewRegistry())
 	notice := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: "FOO-USDT-SWAP", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
 	flaky := &scriptedSource{name: "OKX", results: []sourceResult{{notices: []Notice{notice}}, {err: errors.New("超时")}, {err: errors.New("超时")}, {err: errors.New("超时")}, {notices: []Notice{notice}}}}
 	keyless := &scriptedSource{name: "币安现货", results: []sourceResult{{err: ErrReadonlyKeyMissing}, {notices: nil}}}
-	detector := &Detector{Sources: []Source{flaky, keyless}, Registrar: registrar, Attention: attention}
+	detector := &Detector{Sources: []Source{flaky, keyless}, Registrar: registrar, Attention: attn}
 
 	detector.RunOnce(ctx) // OKX 发现一条；币安现货缺 Key
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, 1.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionReadonlyKeyMissing, "币安现货：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")))
-	require.Equal(t, 0.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionSourceFailed, "")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "币安现货：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")))
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))
 
 	detector.RunOnce(ctx) // 币安现货补上 Key 后恢复；OKX 第 1 次失败
 	detector.RunOnce(ctx) // 第 2 次失败
-	require.Equal(t, 0.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionReadonlyKeyMissing, "")))
-	require.Equal(t, 0.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionSourceFailed, "")), "连续失败不到 3 次不告警")
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "连续失败不到 3 次不告警")
 	detector.RunOnce(ctx) // 第 3 次失败
-	require.Equal(t, 1.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionSourceFailed, "OKX 连续 3 次失败：超时")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 连续 3 次失败：超时")))
 
 	detector.RunOnce(ctx) // 恢复，同一条下架不再重复发布
-	require.Equal(t, 0.0, testutil.ToFloat64(attention.gauge.WithLabelValues(AttentionSourceFailed, "")))
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))
 	pending, err = db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "同一条只发布一次")
