@@ -202,6 +202,10 @@ func (f *fakeTrade) FlattenInstrument(_ context.Context, request action.FlattenR
 	}
 	key := accountKey(request.SpaceID, request.LogicalAccountID)
 	if op, exists := f.ops[request.ActionID]; exists {
+		// 和 Trade 一样：同一个操作号的请求内容（含截止时间、说明）必须一致，否则判幂等冲突。
+		if op.request.DeadlineAt != request.DeadlineAt || op.request.Reason != request.Reason {
+			return action.OperatorAction{}, errors.New("Trade 返回 CONFLICT：同一个操作号的参数不一致")
+		}
 		// 同一个操作号幂等：不重复平仓，返回当前状态；FAILED 的用同一个号再调会重新执行。
 		if op.status == action.OperatorFailed {
 			op.status = action.OperatorRunning

@@ -114,6 +114,10 @@ func TestPartialIsReviewedWithNewActionID(t *testing.T) {
 	require.Equal(t, store.DelistSucceeded, second.Status)
 	require.NotEqual(t, first.OperatorActionID, second.OperatorActionID)
 	require.Equal(t, 2, h.trade.flattenCount())
+	// 两轮平仓都把下架时间 T 作为截止时间传给 Trade：到点由 Trade 停止下单。
+	for _, request := range h.trade.flattens {
+		require.Equal(t, delistAt.UnixMilli(), request.DeadlineAt)
+	}
 
 	// 核对通过。
 	outcome := h.step("e1", delistAt.Add(10*time.Minute))
@@ -230,6 +234,42 @@ func TestNoOrderAfterDelistTimeEvenMidStep(t *testing.T) {
 	step := h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")]
 	require.Equal(t, store.DelistFailed, step.Status)
 	require.Contains(t, step.Error, "已到下架时间")
+}
+
+// 同一个操作号重发时带同一个截止时间：这一轮还在进行中下架时间被合并更新，已经发起过的行沿用建立时的下架时间重试，
+// 不会因为截止时间变了被 Trade 判成幂等冲突。
+func TestRelaunchKeepsDeadlineOfTheRow(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	delistAt := baseTime.Add(30 * time.Hour)
+	h.trade.setHolders(live("crypto", "la-1"))
+	h.addExecution("e1", delistAt, "ALL")
+	var attempts int
+	h.trade.finalFor = func(action.FlattenRequest) (string, string) {
+		attempts++
+		if attempts == 1 {
+			return action.OperatorFailed, "交易所拒单"
+		}
+		return action.OperatorCompleted, ""
+	}
+	h.step("e1", baseTime)
+	h.step("e1", delistAt.Add(-24*time.Hour))
+	h.step("e1", delistAt.Add(-24*time.Hour+30*time.Second))
+	row := h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")]
+	require.Equal(t, store.DelistPending, row.Status)
+	require.Equal(t, 1, row.Attempts)
+
+	// 下架时间提前 1 小时：这一轮还没结束，不重开，已有的行按原来的操作号重试。
+	require.NoError(t, h.store.InTx(ctx, func(tx *store.Tx) error {
+		return tx.ReplaceExecutionEvent("e1", "event-2", payloadAt(delistAt.Add(-time.Hour), "ALL"), baseTime.UnixMilli(), baseTime.UnixMilli())
+	}))
+	h.step("e1", delistAt.Add(-24*time.Hour+2*time.Minute))
+	h.step("e1", delistAt.Add(-24*time.Hour+3*time.Minute))
+	row = h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")]
+	require.Equal(t, store.DelistSucceeded, row.Status, row.Error)
+	require.Len(t, h.trade.flattens, 1)
+	require.Equal(t, delistAt.UnixMilli(), h.trade.flattens[0].DeadlineAt)
+	require.Equal(t, 2, h.trade.calls["Flatten"], "重试用同一个操作号、同一个截止时间，没有被判冲突")
 }
 
 // 到了下架时间，没结束的平仓一律停下（不再重试）。

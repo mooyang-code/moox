@@ -788,10 +788,18 @@ func (r *run) launch(ctx context.Context, row store.DelistAction) error {
 		row.Status, row.Error = store.DelistFailed, "已到下架时间，不再下单"
 		return r.save(ctx, row)
 	}
+	// 下架时间 T 作为截止时间传给 Trade：平仓跑到 T 还没做完时由 Trade 停止下单，不靠这里的下一次推进才发现。
+	// 用这一行建立时的下架时间（操作号也由它算出）：截止时间是 Trade 判断同号请求是否一致的一部分，
+	// 同一个操作号重发必须带同一个值，否则会被判成幂等冲突；改期后新建的行自带新的下架时间。
+	// 一轮进行中下架时间被提前时，这一轮已有的行仍带原来的截止时间，到新的 T 由 afterDelist 停下这些行。
+	deadline := row.PlannedDelistAt
+	if deadline <= 0 {
+		deadline = r.target.DelistAt.UnixMilli()
+	}
 	callCtx, cancel := r.h.tradeCtx(ctx)
 	result, err := r.h.Trade.FlattenInstrument(callCtx, action.FlattenRequest{
 		ActionID: row.OperatorActionID, SpaceID: row.SpaceID, LogicalAccountID: row.LogicalAccountID,
-		Instrument: r.target.Instrument, Reason: row.Reason,
+		Instrument: r.target.Instrument, Reason: row.Reason, DeadlineAt: deadline,
 	})
 	cancel()
 	switch {

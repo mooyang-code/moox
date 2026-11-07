@@ -86,7 +86,8 @@ func (c *Client) invoke(ctx context.Context, method, spaceID string, request, re
 	return c.gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), tradeService, method, request, response)
 }
 
-// retError 把 Trade 的返回码翻译成错误：参数不合法单独标出（重试没有用）。
+// retError 把 Trade 的返回码翻译成错误：参数不合法、需要确认接管已有仓位单独标出（重试没有用）；
+// 会话还没启动（TRADE_SESSION_NOT_READY）和其他错误一样按暂时失败处理。
 func retError(info *tradepb.RetInfo) error {
 	if info == nil || info.GetCode() == tradepb.ErrorCode_SUCCESS {
 		return nil
@@ -95,7 +96,7 @@ func retError(info *tradepb.RetInfo) error {
 	if message == "" {
 		message = info.GetCode().String()
 	}
-	if info.GetCode() == tradepb.ErrorCode_INVALID_PARAM {
+	if info.GetCode() == tradepb.ErrorCode_INVALID_PARAM || info.GetCode() == tradepb.ErrorCode_TRADE_ADOPTION_REQUIRED {
 		return fmt.Errorf("%w: %s", action.ErrInvalidRequest, message)
 	}
 	return fmt.Errorf("Trade 返回 %s：%s", info.GetCode(), message)
@@ -200,6 +201,7 @@ func (c *Client) FlattenInstrument(ctx context.Context, request action.FlattenRe
 	if err := c.invoke(ctx, "FlattenInstrument", request.SpaceID, &tradepb.FlattenInstrumentReq{
 		ActionId: request.ActionID, LogicalAccountId: request.LogicalAccountID,
 		Exchange: exchange, MarketType: market, ExchangeSymbol: request.Instrument.ExchangeSymbol, Reason: request.Reason,
+		DeadlineAt: request.DeadlineAt,
 	}, response); err != nil {
 		return action.OperatorAction{}, err
 	}

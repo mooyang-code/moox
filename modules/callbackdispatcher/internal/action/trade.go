@@ -77,6 +77,8 @@ type FlattenRequest struct {
 	LogicalAccountID string
 	Instrument       InstrumentRef
 	Reason           string
+	// DeadlineAt 是截止时间（Unix 毫秒，传下架时间 T）：到点 Trade 不再下单，动作记 PARTIAL；0 表示不限。
+	DeadlineAt int64
 }
 
 // BlockResult 是写入下架名单的结果。

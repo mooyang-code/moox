@@ -58,7 +58,7 @@ func TestSpaceHeaderOnlyForSpaceMethods(t *testing.T) {
 	require.NoError(t, err)
 	_, err = client.ListInstrumentHolders(ctx, foo, false)
 	require.NoError(t, err)
-	_, err = client.FlattenInstrument(ctx, action.FlattenRequest{ActionID: "a1", SpaceID: "crypto", LogicalAccountID: "la-1", Instrument: foo, Reason: "r"})
+	_, err = client.FlattenInstrument(ctx, action.FlattenRequest{ActionID: "a1", SpaceID: "crypto", LogicalAccountID: "la-1", Instrument: foo, Reason: "r", DeadlineAt: 1767225600000})
 	require.NoError(t, err)
 	_, err = client.GetOperatorAction(ctx, "crypto", "a1")
 	require.NoError(t, err)
@@ -72,6 +72,12 @@ func TestSpaceHeaderOnlyForSpaceMethods(t *testing.T) {
 		"BlockInstrument": "", "UnblockInstrument": "", "ListBlockedInstruments": "", "ListInstrumentHolders": "",
 		"FlattenInstrument": "crypto", "GetOperatorAction": "crypto",
 	}, spaces)
+	// 下架时间作为截止时间原样写进请求
+	for _, call := range gateway.calls {
+		if call.method == "FlattenInstrument" {
+			require.Equal(t, int64(1767225600000), call.request.(*tradepb.FlattenInstrumentReq).GetDeadlineAt())
+		}
+	}
 }
 
 func TestBlockAndHoldersMapping(t *testing.T) {
@@ -133,6 +139,17 @@ func TestFlattenBusyAndErrors(t *testing.T) {
 	gateway.responses["FlattenInstrument"] = &tradepb.FlattenInstrumentRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_INVALID_PARAM, Msg: "reason is required"}}
 	_, err = client.FlattenInstrument(context.Background(), request)
 	require.ErrorIs(t, err, action.ErrInvalidRequest)
+
+	// 需要确认接管已有仓位和参数不合法一样，重试没有用
+	gateway.responses["FlattenInstrument"] = &tradepb.FlattenInstrumentRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_TRADE_ADOPTION_REQUIRED, Msg: "需要接管"}}
+	_, err = client.FlattenInstrument(context.Background(), request)
+	require.ErrorIs(t, err, action.ErrInvalidRequest)
+
+	// 会话还没启动是暂时失败，不算参数不合法
+	gateway.responses["FlattenInstrument"] = &tradepb.FlattenInstrumentRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_TRADE_SESSION_NOT_READY, Msg: "交易账户会话还没有启动"}}
+	_, err = client.FlattenInstrument(context.Background(), request)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, action.ErrInvalidRequest)
 
 	gateway.err = errors.New("网关不可达")
 	_, err = client.FlattenInstrument(context.Background(), request)
