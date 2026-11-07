@@ -206,6 +206,15 @@ func (d Document) Canonical() (string, error) {
 	normalized := d
 	normalized.HourlyCapSpot = upperKeys(d.HourlyCapSpot)
 	normalized.HourlyCapSwap = upperKeys(d.HourlyCapSwap)
+	// 小数规范化（"0.050" 存成 "0.05"），和资金设置一致。
+	for _, field := range []*string{
+		&normalized.RebalanceThresholdRatio, &normalized.MinNotionalSpot, &normalized.MinNotionalSwap,
+		&normalized.MaxChildNotional, &normalized.SlippageStep, &normalized.SlippageMax, &normalized.RestingRatio,
+	} {
+		if value, err := shared.ParseDecimal(strings.TrimSpace(*field)); err == nil {
+			*field = value.String()
+		}
+	}
 	encoded, err := json.Marshal(normalized)
 	if err != nil {
 		return "", err

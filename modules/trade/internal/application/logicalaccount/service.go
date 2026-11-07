@@ -165,9 +165,29 @@ func (s *Service) UpdateFundSettings(
 	if err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
-	if existing.ExecutionMode == string(exchange.ExecutionModePaper) &&
-		(parsed.BNBDiscount || parsed.BNBReserveEnabled() || parsed.DustConvert || len(parsed.StablecoinTargets) > 0) {
+	maintenance := parsed.BNBDiscount || parsed.BNBReserveEnabled() || parsed.DustConvert || len(parsed.StablecoinTargets) > 0
+	if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
 		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
+	}
+	// 保证金币、套利底仓不能写成这个组合的结算币（结算币在权益里本来就按净额算）。
+	if _, isMargin := parsed.MarginCoins[strings.ToUpper(existing.SettlementAsset)]; isMargin || parsed.IsArbitrageBase(existing.SettlementAsset) {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %s 是这个组合的结算币，不能写进保证金币或套利底仓", store.ErrInvalidRecord, existing.SettlementAsset)
+	}
+	// BNB 抵扣、BNB 保留、小额兑 BNB、稳定币调平都是币安的功能：含非币安成员的组合不能开。
+	if maintenance {
+		members, err := s.Store.ListLogicalAccountMembers(ctx, spaceID, logicalAccountID, true)
+		if err != nil {
+			return store.LogicalAccountRecord{}, err
+		}
+		for _, member := range members {
+			account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+			if err != nil {
+				return store.LogicalAccountRecord{}, err
+			}
+			if account.Exchange != string(exchange.ExchangeBinance) {
+				return store.LogicalAccountRecord{}, fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, account.TradingAccountID)
+			}
+		}
 	}
 	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountFundSettings(spaceID, logicalAccountID, canonical)

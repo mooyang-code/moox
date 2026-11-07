@@ -230,6 +230,14 @@ type TradingAccountRecord struct {
 	UpdatedAt         time.Time
 }
 
+// FundMaintenanceApplies 报告资金维护（BNB 抵扣、BNB 补买、小额兑 BNB）对这个账户是否生效：
+// 只有币安生产环境的实盘账户；其他交易所没有 BNB，测试网的币没有真实价值。
+func (r TradingAccountRecord) FundMaintenanceApplies() bool {
+	return r.Exchange == string(exchange.ExchangeBinance) &&
+		r.ExecutionMode == string(exchange.ExecutionModeLive) &&
+		r.Environment == string(exchange.AccountEnvironmentProduction)
+}
+
 // HasBalanceMarket 报告账户是否开通了持仓来自余额的市场（现货、股票）。
 func (r TradingAccountRecord) HasBalanceMarket() bool {
 	return slices.ContainsFunc(r.Markets, func(market string) bool {

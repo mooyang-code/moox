@@ -39,10 +39,9 @@ const (
 	ownerStableRebalance = "stable-rebalance"
 )
 
-// 约定的数值：BNB 市值低于“保留金额 − bnbReserveSlack”才补买；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
+// 约定的数值：BNB 市值低于“保留金额 − fundsettings.BNBReserveSlack”才补买；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
 // 取绝对差）才调平；零头资产价值低于 dustValueLimit（结算币计）才兑换。
 var (
-	bnbReserveSlack = shared.MustDecimal("10")
 	stableDeviation = shared.MustDecimal("0.05")
 	dustValueLimit  = shared.MustDecimal("5")
 )
@@ -158,7 +157,8 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			runErrors = append(runErrors, err)
 			continue
 		}
-		if account.ExecutionMode != string(exchange.ExecutionModeLive) || account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
+		// 只对币安生产环境的实盘账户做：OKX 没有 BNB，测试网的币没有真实价值。
+		if !account.FundMaintenanceApplies() || account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
 			continue
 		}
 		adapter, err := s.Adapters.Adapter(account.TradingAccountID)

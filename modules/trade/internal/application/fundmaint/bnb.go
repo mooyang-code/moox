@@ -69,7 +69,7 @@ func (s *Service) topUpBNB(
 		return err
 	}
 	value := bnbQuantity(account).Mul(price)
-	if value.Cmp(reserve.Sub(bnbReserveSlack)) >= 0 {
+	if value.Cmp(reserve.Sub(fundsettings.BNBReserveSlack)) >= 0 {
 		return nil
 	}
 	step, minimum, minNotional, err := quantityRules(instrument)

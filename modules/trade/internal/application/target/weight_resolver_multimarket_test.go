@@ -152,6 +152,7 @@ func TestExcludedAssetWarningOncePerDay(t *testing.T) {
 func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 	// 权益 2000 + 现货 BTC 1000 = 3000；预留 10% = 300；BNB 保留 500，现有 1 个 BNB = 100，还差 400。
 	tradeStore := newMixedResolverStore(t, `{"reserve_ratio":"0.1","bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
 	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
@@ -162,6 +163,7 @@ func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 
 	// BNB 买到位（市值不低于保留金额）后不再扣。
 	enough := newMixedResolverStore(t, `{"bnb_reserve_amount":"100"}`)
+	makeBinanceProduction(t, enough, "account-a")
 	resolver.Store = enough
 	conversion, err = resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
 	require.NoError(t, err)
@@ -179,4 +181,49 @@ func TestShortingIsCheckedPerInstrumentMarket(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrPermanent)
 	require.Contains(t, err.Error(), "ETH-USDT-SPOT")
+}
+
+// makeBinanceProduction 把测试账户改成币安生产环境的实盘账户：只有它们才有资金维护（BNB 补买）。
+func makeBinanceProduction(t *testing.T, tradeStore *store.Store, accountID string) {
+	t.Helper()
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION', c_credential_secret_id = 'secret-1',
+			c_account_mode = 'BINANCE_STANDARD', c_snapshot_json = REPLACE(c_snapshot_json, '"UNIFIED"', '"SPOT"') WHERE c_trading_account_id = ?`, accountID).Error)
+}
+
+// BNB 保留按每个会补买的币安执行账户各保留 N：两个成员各差 400，一共扣 800；
+// 非币安、测试网、模拟盘成员不补买，不为它们留钱。
+func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
+	// 权益 2000 + 现货 BTC 1000 = 3000；BNB 保留 500，每个成员现有 1 个 BNB = 100，各差 400。
+	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
+	accounts, err := tradeStore.ListAllTradingAccounts(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		second := accounts[0]
+		second.TradingAccountID, second.Name = "account-b", "account-b"
+		second.ExecutionMode, second.Environment, second.CredentialSecretID = "LIVE", "PRODUCTION", "secret-2"
+		return tx.CreateTradingAccount(second)
+	}))
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	shortfall, err := resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-a"},
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b"},
+	}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "800", shortfall.String())
+
+	// 第二个成员是测试网账户：不补买，不留钱。
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_live_environment = 'TESTNET', c_markets = 'SPOT' WHERE c_trading_account_id = 'account-b'").Error)
+	shortfall, err = resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{
+		{TradingAccountID: "account-a"}, {TradingAccountID: "account-b"},
+	}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "400", shortfall.String())
+
+	// 模拟盘成员也不补买。
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode = 'PAPER', c_live_environment = '', c_credential_secret_id = '', c_account_mode = '' WHERE c_trading_account_id = 'account-a'").Error)
+	shortfall, err = resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{{TradingAccountID: "account-a"}}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "0", shortfall.String())
 }

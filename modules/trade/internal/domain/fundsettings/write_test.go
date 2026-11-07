@@ -97,3 +97,31 @@ func TestLenientKeepsExclusionsWhenStablecoinTargetsAreBroken(t *testing.T) {
 	require.True(t, settings.ExcludedFromManaged("USDC"))
 	require.Nil(t, settings.StablecoinTargets, "目标比例坏了不做调平")
 }
+
+// 结算币 USDT 不能当保证金币或套利底仓；开着 BNB 保留时 BNB 不能同时是保证金币、底仓。
+func TestSettlementAssetAndBNBOverlapAreRejected(t *testing.T) {
+	for _, raw := range []string{
+		`{"margin_coins":{"USDT":"100"}}`,
+		`{"arbitrage_base_assets":["usdt"]}`,
+		`{"bnb_reserve_amount":"200","margin_coins":{"BNB":"100"}}`,
+		`{"bnb_reserve_amount":"200","arbitrage_base_assets":["BNB"]}`,
+	} {
+		_, _, err := ParseForWrite(raw)
+		require.Error(t, err, raw)
+	}
+	// 没开 BNB 保留时 BNB 可以当保证金币。
+	_, _, err := ParseForWrite(`{"margin_coins":{"BNB":"100"}}`)
+	require.NoError(t, err)
+}
+
+// 保留金额不大于 10 时永远不会补买（市值低于保留金额减 10 才补买），却会一直扣缺口：拒绝。
+func TestBNBReserveMustExceedTheTopUpSlack(t *testing.T) {
+	for _, amount := range []string{"0.5", "5", "10"} {
+		_, _, err := ParseForWrite(`{"bnb_reserve_amount":"` + amount + `"}`)
+		require.ErrorContains(t, err, "大于 10", amount)
+	}
+	for _, amount := range []string{"0", "10.01", "200"} {
+		_, _, err := ParseForWrite(`{"bnb_reserve_amount":"` + amount + `"}`)
+		require.NoError(t, err, amount)
+	}
+}

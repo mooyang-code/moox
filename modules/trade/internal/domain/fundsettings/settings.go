@@ -66,8 +66,11 @@ type Document struct {
 // BNBAsset 是 BNB 保留涉及的资产。
 const BNBAsset = "BNB"
 
-// USDTAsset 是多稳定币保证金必须包含的资产。
+// USDTAsset 是多稳定币保证金必须包含的资产，也是保证金币、套利底仓不能写的结算币。
 const USDTAsset = "USDT"
+
+// BNBReserveSlack 是 BNB 补买的容差：BNB 市值低于“保留金额 − 10”才补买。
+var BNBReserveSlack = shared.MustDecimal("10")
 
 const (
 	defaultDustConvertIntervalDays = 15
@@ -136,6 +139,10 @@ func (d Document) Validate() (Settings, error) {
 	if settings.BNBReserveAmount.IsNegative() {
 		return Settings{}, fmt.Errorf("BNB 保留金额不能为负")
 	}
+	// 市值低于“保留金额 − 10”才补买：保留金额不大于 10 时永远不会补买，换算目标时却一直扣着缺口。
+	if amount := settings.BNBReserveAmount; amount.Cmp(shared.Zero()) > 0 && amount.Cmp(BNBReserveSlack) <= 0 {
+		return Settings{}, fmt.Errorf("BNB 保留金额要大于 %s：市值低于保留金额减 %s 才会补买，不大于 %s 的设置永远不会补买", BNBReserveSlack, BNBReserveSlack, BNBReserveSlack)
+	}
 	days := d.DustConvertIntervalDays
 	switch {
 	case days == 0:
@@ -148,6 +155,9 @@ func (d Document) Validate() (Settings, error) {
 	claim := func(asset, group string) error {
 		if !assetPattern.MatchString(asset) {
 			return fmt.Errorf("资产名 %q 不合法（只允许字母和数字）", asset)
+		}
+		if asset == USDTAsset && group != "稳定币保证金" {
+			return fmt.Errorf("%s 是结算币，不能写进%s", USDTAsset, group)
 		}
 		if previous, taken := owners[asset]; taken {
 			if previous == group {
@@ -207,6 +217,12 @@ func (d Document) Validate() (Settings, error) {
 		settings.ArbitrageBaseAssets = append(settings.ArbitrageBaseAssets, asset)
 	}
 	sort.Strings(settings.ArbitrageBaseAssets)
+	// BNB 保留开着时 BNB 是补买专用的排除资产，不能再同时当保证金币、底仓或稳定币。
+	if settings.BNBReserveAmount.Cmp(shared.Zero()) > 0 {
+		if group, taken := owners[BNBAsset]; taken {
+			return Settings{}, fmt.Errorf("开启 BNB 保留时，%s 不能同时出现在%s里", BNBAsset, group)
+		}
+	}
 	return settings, nil
 }
 

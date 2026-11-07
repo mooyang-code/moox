@@ -424,3 +424,19 @@ func TestStablecoinWithoutAPairSkipsTheWholeRound(t *testing.T) {
 }
 
 func strPtr(value string) *string { return &value }
+
+// 资金维护只对币安生产环境的实盘账户做：测试网账户的币没有真实价值，OKX 没有 BNB。
+func TestMaintenanceSkipsTestnetAndNonBinanceAccounts(t *testing.T) {
+	const settings = `{"bnb_discount":true,"bnb_reserve_amount":"200","dust_convert_enabled":true}`
+	for name, update := range map[string]string{
+		"测试网": "UPDATE t_trading_accounts SET c_live_environment = 'TESTNET'",
+		"OKX": "UPDATE t_trading_accounts SET c_exchange = 'OKX', c_account_mode = 'OKX_UNIFIED'",
+	} {
+		f := dustFixture(t, settings, []exchange.DustAsset{{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: shared.MustDecimal("0.00001")}})
+		require.NoError(t, f.store.DBForTest().Exec(update).Error, name)
+		require.NoError(t, f.run(), name)
+		require.Empty(t, f.adapter.setCalls, name)
+		require.Empty(t, f.adapter.converts, name)
+		require.Empty(t, f.orders.specs, name)
+	}
+}

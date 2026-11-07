@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/stretchr/testify/require"
@@ -135,4 +136,34 @@ func TestPaperLogicalAccountRejectsLiveOnlyFundSettings(t *testing.T) {
 	}
 	response := update(&tradepb.FundSettings{ReserveRatio: "0.05", MarginCoins: map[string]string{"ETH": "100"}, ArbitrageBaseAssets: []string{"BTC"}})
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
+}
+
+// 含非币安成员的组合不能开 BNB 抵扣、BNB 保留、小额兑换、稳定币保证金；保证金币不能写成组合的结算币。
+func TestFundSettingsAreRestrictedToBinanceMembersAndSettlementAsset(t *testing.T) {
+	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "OKX", Markets: []string{"SPOT"},
+			ExecutionMode: "LIVE", AccountMode: "OKX_UNIFIED", Environment: "PRODUCTION", CredentialSecretID: "secret-okx",
+			SettlementAsset: "USDT", Status: "ENABLED",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "okx-1", Enabled: true, Priority: 1})
+	}))
+	update := func(settings *tradepb.FundSettings) tradepb.ErrorCode {
+		response, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{LogicalAccountId: "logical-1", Settings: settings})
+		require.NoError(t, err)
+		return response.GetRetInfo().GetCode()
+	}
+	for name, settings := range map[string]*tradepb.FundSettings{
+		"BNB 抵扣": {BnbDiscount: true},
+		"BNB 保留": {BnbReserveAmount: "100"},
+		"小额兑换":   {DustConvertEnabled: true},
+		"稳定币保证金": {StablecoinMargin: map[string]string{"USDT": "0.5", "USDC": "0.5"}},
+	} {
+		require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, update(settings), "OKX 成员："+name)
+	}
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, update(&tradepb.FundSettings{ReserveRatio: "0.05", MarginCoins: map[string]string{"ETH": "100"}}), "与交易所无关的项照常")
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, update(&tradepb.FundSettings{MarginCoins: map[string]string{"USDT": "100"}}), "结算币不能当保证金币")
 }

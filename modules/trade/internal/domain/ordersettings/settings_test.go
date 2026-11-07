@@ -81,11 +81,11 @@ func TestHourlyCapLookupFallsBackToWildcard(t *testing.T) {
 func TestCanonicalRoundTripsAndNormalizesKeys(t *testing.T) {
 	var document Document
 	require.NoError(t, shared.DecodeStrictObject(`{
-		"rebalance_threshold_mode":"EQUITY_RATIO","rebalance_threshold_ratio":"0.0200",
+		"rebalance_threshold_mode":"EQUITY_RATIO","rebalance_threshold_ratio":"0.02",
 		"hourly_cap_swap":{"btc-usdt-swap":"1000.50"},"batch_interval_seconds":3,"resting_ratio":"0.3","resting_ttl_seconds":600}`, &document))
 	canonical, err := document.Canonical()
 	require.NoError(t, err)
-	require.JSONEq(t, `{"rebalance_threshold_mode":"EQUITY_RATIO","rebalance_threshold_ratio":"0.0200",
+	require.JSONEq(t, `{"rebalance_threshold_mode":"EQUITY_RATIO","rebalance_threshold_ratio":"0.02",
 		"hourly_cap_swap":{"BTC-USDT-SWAP":"1000.5"},"batch_interval_seconds":3,"resting_ratio":"0.3","resting_ttl_seconds":600}`, canonical)
 	settings, err := Parse(canonical)
 	require.NoError(t, err)
@@ -97,4 +97,13 @@ func TestCanonicalRoundTripsAndNormalizesKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, settings.MaxChildNotional.String(), again.MaxChildNotional.String())
 	require.Equal(t, settings.OrderMode, again.OrderMode)
+}
+
+// 小数写进库前规范化："0.050" 存成 "0.05"，没写的项不写出来。
+func TestCanonicalNormalizesDecimals(t *testing.T) {
+	var document Document
+	require.NoError(t, shared.DecodeStrictObject(`{"rebalance_threshold_ratio":"0.050","min_notional_spot":"10.00","slippage_step":"0.0150","resting_ratio":"0.30"}`, &document))
+	canonical, err := document.Canonical()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"rebalance_threshold_ratio":"0.05","min_notional_spot":"10","slippage_step":"0.015","resting_ratio":"0.3"}`, canonical)
 }
