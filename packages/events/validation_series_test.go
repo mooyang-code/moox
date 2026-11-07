@@ -1,6 +1,7 @@
 package events
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -38,7 +39,17 @@ func TestDatasetPeriodCompletedSeriesValidation(t *testing.T) {
 			p.UniverseSubjectIds = []string{"BTC-USDT"}
 			p.FailedSubjects = nil
 		},
-		"empty tag":                      func(p *storagepb.DatasetPeriodCompleted) { p.UniverseSeries[0].SeriesTag = "" },
+		"empty tag": func(p *storagepb.DatasetPeriodCompleted) { p.UniverseSeries[0].SeriesTag = "" },
+		"failed series subject not in failed subjects": func(p *storagepb.DatasetPeriodCompleted) {
+			p.FailedSeries = append(p.FailedSeries, &storagepb.SeriesRef{SubjectId: "BTC-USDT", SeriesTag: spot})
+		},
+		"tag over 128 bytes": func(p *storagepb.DatasetPeriodCompleted) {
+			long := strings.Repeat("x", 129)
+			p.UniverseSeries[3].SeriesTag, p.FailedSeries[0].SeriesTag = long, long
+		},
+		"tag with control character": func(p *storagepb.DatasetPeriodCompleted) {
+			p.UniverseSeries[3].SeriesTag, p.FailedSeries[0].SeriesTag = "market:swap\n", "market:swap\n"
+		},
 		"failed series without universe": func(p *storagepb.DatasetPeriodCompleted) { p.UniverseSeries = nil },
 		"complete has failed series": func(p *storagepb.DatasetPeriodCompleted) {
 			p.Status = "complete"
@@ -68,4 +79,7 @@ func TestCollectorKlineBackfilledSeriesTags(t *testing.T) {
 	payload.SeriesTags = []string{"a", "a"}
 	_, err = registry.Encode(CollectorKlineBackfilled, payload, options)
 	require.Error(t, err)
+	payload.SeriesTags = []string{strings.Repeat("x", 129)}
+	_, err = registry.Encode(CollectorKlineBackfilled, payload, options)
+	require.Error(t, err, "series_tag 与行键同一套规则")
 }

@@ -231,6 +231,17 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				}
 			}
 		}
+		// 上游判为失败的序列（统一数据集事件的 failed_series）：本地即使已有这一期的源行，这条序列的结果也写 NULL、不记参数
+		// （统一数据集执行计划 3.5“一个 tag 失败，只把这条序列的行写成 NULL”）。计算时它们已不进面板；这里只记失败范围，
+		// 不改成员状态（失败序列已在 Compute 里记进成员状态，截面因子可能因此是 skipped，不能被改回 degraded）。
+		if multi && !plan.FillOnly && len(plan.UpstreamFailedSeries) > 0 {
+			if failedFactorSubjects[member.Key] == nil {
+				failedFactorSubjects[member.Key] = make(map[failTarget]struct{})
+			}
+			for _, item := range plan.UpstreamFailedSeries {
+				failedFactorSubjects[member.Key][failTarget{subject: item.SubjectID, tag: item.SeriesTag}] = struct{}{}
+			}
+		}
 		failedSubjects := failedFactorSubjects[member.Key]
 		if len(failedSubjects) == 0 || plan.FillOnly {
 			continue

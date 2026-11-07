@@ -279,7 +279,9 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	}
 	grid := computeGrid{start: window[0].UTC(), duration: duration}
 	grid.first, grid.last = grid.index(first), grid.index(last)
-	panel, err := buildPanel(grid, program.Columns, subjects, view)
+	// 上游判为失败的序列（统一数据集事件的 failed_series）不进面板：本地即使已有这一期的数据也不可信，不能算出值，
+	// 也不能参与截面排名，否则会影响同一个 tag 上别的序列的结果。它们的结果行由 Assemble 写成 NULL。
+	panel, err := buildPanel(grid, program.Columns, subjects, view, seriesSet(plan.UpstreamFailedSeries))
 	if err != nil {
 		return nil, computeGrid{}, err
 	}
@@ -370,14 +372,17 @@ func (r *Runner) failAll(plan Plan, err error) Computation {
 
 // buildPanel 把各标的的窗口放到网格上：每个 (标的, series_tag) 一条序列，按 (标的, 标签) 排序，结果与工作线程数无关。
 // 视图里的序列按列连续存放（本地数据没有缺行），直接按段复制到面板；null 在窗口里已经是 NaN。
-// 虚拟列 is_filled 由填充标记生成；输入列不在视图里（非数值字段）时报错。
-func buildPanel(grid computeGrid, columns []string, subjects []string, view *serieswindow.View) (*exec.Panel, error) {
+// 虚拟列 is_filled 由填充标记生成；输入列不在视图里（非数值字段）时报错。skip 里的序列不放进面板。
+func buildPanel(grid computeGrid, columns []string, subjects []string, view *serieswindow.View, skip map[seriesset.Series]struct{}) (*exec.Panel, error) {
 	length := grid.last + 1
 	ordered := append([]string(nil), subjects...)
 	sort.Strings(ordered)
 	var keys []exec.SeriesKey
 	for _, subject := range ordered {
 		for _, sv := range view.Series(subject) {
+			if _, skipped := skip[seriesset.Series{SubjectID: subject, SeriesTag: sv.Tag}]; skipped {
+				continue
+			}
 			keys = append(keys, exec.SeriesKey{Subject: subject, Tag: sv.Tag})
 		}
 	}
@@ -401,7 +406,10 @@ func buildPanel(grid computeGrid, columns []string, subjects []string, view *ser
 	gridStart := grid.start.Unix()
 	for _, subject := range ordered {
 		for _, sv := range view.Series(subject) {
-			s, _ := panel.SeriesIndex(exec.SeriesKey{Subject: subject, Tag: sv.Tag})
+			s, ok := panel.SeriesIndex(exec.SeriesKey{Subject: subject, Tag: sv.Tag})
+			if !ok {
+				continue // 不放进面板的序列
+			}
 			// 行 [r0, r0+count) 对应网格下标 [t0, t0+count)。
 			t0, r0 := 0, 0
 			if sv.Start >= gridStart {

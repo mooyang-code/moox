@@ -53,6 +53,32 @@ func TestForMarketSplitsFailedSeriesByMarket(t *testing.T) {
 	}
 }
 
+// 统一数据集某一期期望快照里只剩一个 series_tag：Storage 不生成序列名单，因子只给出按标的的失败名单。
+// 事件里确定不了是哪个市场，按标的的名单保守地带到每个市场，失败的标的不会被当成可用。
+func TestForMarketFallsBackToSubjectsWithoutSeriesList(t *testing.T) {
+	member := state("ma", "degraded", "h1", "BTC-USDT")
+	member.GapSubjects = []string{"BTC-USDT"}
+	result := Check(Binding{Factors: map[string]string{"ma": "h1|fixed"}}, nil, unifiedEvent(nil, member, state("rank", "complete", "h2")))
+	if result.Reason != "" || len(result.FailedSeries) != 0 {
+		t.Fatalf("没有序列名单：%+v", result)
+	}
+	for _, market := range []string{"spot", "swap"} {
+		got := result.ForMarket(market)
+		if !reflect.DeepEqual(got.FailedByFactor, map[string][]string{"ma": {"BTC-USDT"}}) || !reflect.DeepEqual(got.GapByFactor, map[string][]string{"ma": {"BTC-USDT"}}) {
+			t.Fatalf("%s 市场应保守地把 BTC 记为失败：%+v", market, got)
+		}
+		if _, ok := got.FailedByFactor["rank"]; ok {
+			t.Fatalf("没有失败的因子不受影响：%+v", got)
+		}
+	}
+	// 有序列名单时仍只按序列归市场，不回退。
+	member.FailedSeries = refs("BTC-USDT", swapTag)
+	withSeries := Check(Binding{Factors: map[string]string{"ma": "h1|fixed"}}, nil, unifiedEvent(nil, member))
+	if spot := withSeries.ForMarket("spot"); len(spot.FailedByFactor) != 0 {
+		t.Fatalf("有序列名单时现货照常：%+v", spot)
+	}
+}
+
 // 某个因子在永续的 series_tag 上被跳过（部分 tag 跳过，成员 degraded）：永续本期不可用（数据类原因），现货照常；
 // 全部 tag 都跳过（成员 skipped）时每个市场都是整期原因。
 func TestForMarketSkippedSeriesTags(t *testing.T) {
