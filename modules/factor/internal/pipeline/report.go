@@ -33,6 +33,13 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 			outcome.Status = "degraded"
 		}
 	}
+	if plan.ExpectedSeriesDerived && !plan.FillOnly {
+		for _, state := range outcome.Factors {
+			if state.Status == "skipped" || len(state.SkippedSeriesTags) > 0 {
+				outcome.DerivedSkipped = true
+			}
+		}
+	}
 	if plan.multi() {
 		outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
 	}
@@ -71,6 +78,9 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 	}
 	if err := r.store.ReportComputed(ctx, marker); err != nil {
 		return fmt.Errorf("report factor period computed: %w", err)
+	}
+	if sink, ok := r.cfg.GapSink.(ReportedSink); ok {
+		sink.PeriodReported()
 	}
 	return nil
 }

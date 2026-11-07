@@ -66,7 +66,10 @@ type Outcome struct {
 	Status         string
 	FailedSubjects []string
 	// FailedSeries 是按序列的失败名单（统一数据集才有）。
-	FailedSeries   []seriesset.Series
+	FailedSeries []seriesset.Series
+	// DerivedSkipped 表示补算类计划（期望序列是数据层推测的，ExpectedSeriesDerived）里有成员因推测的期望缺数而整个或部分 tag 被跳过：
+	// 这些行保留了旧值、没有真正重算，失效重算据此保留这一段待办，等推测不再跳过（例如已下架的序列沉默超过阈值被排除）再重算。
+	DerivedSkipped bool
 	Factors        []storageio.FactorState
 	RowsWritten    int
 	Warming        int
