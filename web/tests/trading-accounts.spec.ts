@@ -282,3 +282,23 @@ test("390 窄屏下持仓页右侧操作列不固定，不会盖住数据列", a
   await expect(page.getByRole("row", { name: /BTC/ })).toBeVisible();
   expect(await page.locator(".tx-detail .arco-table-col-fixed-right").count()).toBe(0);
 });
+
+// 详情页每 5 秒整体换一次组合对象：正在改的设置不能被悄悄还原（否则按保存会存下还原过的内容）。
+test("下单设置、资金设置改到一半，轮询刷新组合后输入保持不变", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "settings");
+  const minSpot = field(page, "现货最小下单额");
+  await expect(minSpot).toBeVisible();
+  const original = await minSpot.inputValue();
+  const reserve = field(page, "资金预留比例");
+  await expect(reserve).toBeVisible();
+  const reserveOriginal = await reserve.inputValue();
+  const edited = original === "20" ? "21" : "20";
+  const reserveEdited = reserveOriginal === "0.2" ? "0.3" : "0.2";
+  await minSpot.fill(edited);
+  await reserve.fill(reserveEdited);
+  const before = calls.getLogical;
+  await page.waitForTimeout(6500);
+  expect(calls.getLogical).toBeGreaterThan(before);
+  await expect(minSpot).toHaveValue(edited);
+  await expect(reserve).toHaveValue(reserveEdited);
+});

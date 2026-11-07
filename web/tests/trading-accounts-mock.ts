@@ -167,6 +167,8 @@ export interface Calls {
   flatten: Record<string, unknown>[];
   /** ListLogicalAccounts 被调用的次数 */
   listLogicals: number;
+  /** 读单个组合账户的次数：详情页每 5 秒轮询一次 */
+  getLogical: number;
 }
 export let calls: Calls;
 
@@ -190,6 +192,7 @@ async function gateway(route: Route) {
         json: ok({ logical_accounts: logicals, page_result: { page: 1, size: 500, total: logicals.length } })
       });
     case "GetLogicalAccount":
+      calls.getLogical += 1;
       return route.fulfill({
         json: ok({ logical_account: logicals.find(item => item.logical_account_id === body.logical_account_id) })
       });
@@ -382,7 +385,7 @@ async function gateway(route: Route) {
 }
 
 export async function installTradingMock(page: Page) {
-  calls = { paper: [], members: [], flatten: [], listLogicals: 0 };
+  calls = { paper: [], members: [], flatten: [], listLogicals: 0, getLogical: 0 };
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, gateway);
   return calls;
