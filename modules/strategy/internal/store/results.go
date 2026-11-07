@@ -139,7 +139,55 @@ func (r resultRow) result() Result {
 	}
 }
 
-const resultColumns = "c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error"
+// 结果的 SQL：整条写成常量，不在调用处拼接；读结果的语句列清单与 resultRow 一一对应。
+const (
+	// sqlInsertResult 写入一条策略结果（参数尚未送达、没有拒绝原因）。
+	sqlInsertResult = `
+	INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')`
+	// sqlInsertResultItem 写入一条解释明细。
+	sqlInsertResultItem = `INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// readLatest 的两个变体：本会话最新的处理记录（ok 或 skipped）、最新的 ok 记录。同一实例、同一会话内 bar_end 唯一（表约束），
+	// 按 bar_end 倒序取一条即可直接走索引。
+	sqlSelectLatestResult   = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? ORDER BY c_bar_end_time DESC LIMIT 1`
+	sqlSelectLatestOKResult = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_status = 'ok' ORDER BY c_bar_end_time DESC LIMIT 1`
+	// sqlSelectResultAtBar 读取本会话某个周期的记录。
+	sqlSelectResultAtBar = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`
+	// sqlCancelSupersededResults 把本会话更早周期的待投递结果标记为 cancelled。
+	sqlCancelSupersededResults = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`
+	// sqlSelectLatestStateResult 读取本会话最近一条带规则状态的记录。
+	sqlSelectLatestStateResult = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_rule_states_json <> '{}' ORDER BY c_bar_end_time DESC LIMIT 1`
+	// sqlSelectLatestBarEnds 读取实例（不分会话）最近处理的一根与最近一个 ok 的一根的 bar_end。
+	sqlSelectLatestBarEnds = `SELECT MAX(c_bar_end_time) AS processed, MAX(CASE WHEN c_status = 'ok' THEN c_bar_end_time END) AS ok FROM t_strategy_results WHERE c_instance_id = ?`
+	// sqlSelectResultsAtBarAnySession 读取实例某一根 bar 的全部记录：当前会话优先，其次创建时间最新。
+	sqlSelectResultsAtBarAnySession = `
+		SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results
+		WHERE c_instance_id = ? AND c_bar_end_time = ?
+		ORDER BY CASE WHEN c_session_id = ? THEN 0 ELSE 1 END, c_ctime DESC, c_result_id DESC`
+	// sqlSelectResultByID 按结果 ID 读取结果。
+	sqlSelectResultByID = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_result_id = ?`
+
+	// ListResults 的变体：全部会话与指定会话，各有计数与分页两条。
+	sqlCountResultsOfInstance = `SELECT COUNT(*) FROM t_strategy_results WHERE c_instance_id = ?`
+	sqlCountResultsOfSession  = `SELECT COUNT(*) FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ?`
+	sqlListResultsOfInstance  = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
+	sqlListResultsOfSession   = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
+	// sqlListResultItems 读取一个结果的解释明细，按规则与标的排序。
+	sqlListResultItems = `SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`
+	// sqlListPendingResults 按创建顺序列出待投递的结果。
+	sqlListPendingResults = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_publish_status = 'pending' ORDER BY c_ctime, c_result_id LIMIT ?`
+	// sqlSelectPendingResultByID 读取一条仍待投递的结果。
+	sqlSelectPendingResultByID = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_result_id = ? AND c_publish_status = 'pending'`
+	// sqlCancelPendingResult 把一条待投递结果标记为 cancelled。
+	sqlCancelPendingResult = `UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_result_id = ? AND c_publish_status = 'pending'`
+	// sqlTransitionPublishStatus 比较交换推进投递状态。
+	sqlTransitionPublishStatus = `UPDATE t_strategy_results SET c_publish_status = ? WHERE c_result_id = ? AND c_publish_status = ?`
+	// sqlCountPendingOutbox 统计带事件数据的待投递结果。
+	sqlCountPendingOutbox = `SELECT COUNT(*) FROM t_strategy_results WHERE c_publish_status = 'pending' AND c_event_data IS NOT NULL`
+	// sqlSelectOldestPendingOutbox 读取最早一条带事件数据的待投递结果的创建时间。
+	sqlSelectOldestPendingOutbox = `SELECT c_ctime FROM t_strategy_results WHERE c_publish_status = 'pending' AND c_event_data IS NOT NULL ORDER BY c_ctime, c_result_id LIMIT 1`
+)
 
 // CommitRequest 是一次结果提交。
 type CommitRequest struct {
@@ -210,12 +258,10 @@ func validateResult(result Result) error {
 }
 
 func readLatest(tx *gorm.DB, instanceID, sessionID string, onlyOK bool) (resultRow, bool, error) {
-	query := `SELECT ` + resultColumns + ` FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ?`
+	query := sqlSelectLatestResult
 	if onlyOK {
-		query += ` AND c_status = 'ok'`
+		query = sqlSelectLatestOKResult
 	}
-	// 同一实例、同一会话内 bar_end 唯一（表约束），按 bar_end 倒序取一条即可直接走索引。
-	query += ` ORDER BY c_bar_end_time DESC LIMIT 1`
 	var row resultRow
 	if err := tx.Raw(query, instanceID, sessionID).Scan(&row).Error; err != nil {
 		return resultRow{}, false, err
@@ -266,14 +312,14 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			}
 		}
 		var existing resultRow
-		if err := tx.Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`, result.InstanceID, result.SessionID, millis(result.BarEndTime)).Scan(&existing).Error; err != nil {
+		if err := tx.Raw(sqlSelectResultAtBar, result.InstanceID, result.SessionID, millis(result.BarEndTime)).Scan(&existing).Error; err != nil {
 			return err
 		}
 		if existing.ResultID != "" {
 			committed = existing.result()
 			return nil
 		}
-		if err := tx.Exec(insertResultSQL, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
+		if err := tx.Exec(sqlInsertResult, result.ResultID, result.InstanceID, result.SessionID, millis(result.BarEndTime), millis(result.ValidUntil), result.Status, result.SkipReason, result.DSLHash,
 			string(result.InputJSON), string(result.TargetsJSON), string(result.RuleStatesJSON), string(result.SummaryJSON), result.EventData, result.PublishStatus, result.CreatedAt.UTC(),
 			string(result.NextParamsJSON)).Error; err != nil {
 			return err
@@ -282,7 +328,7 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 			return err
 		}
 		if result.Status == StatusOK && result.PublishStatus == PublishPending {
-			cancel := tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`, result.InstanceID, result.SessionID, millis(result.BarEndTime))
+			cancel := tx.Exec(sqlCancelSupersededResults, result.InstanceID, result.SessionID, millis(result.BarEndTime))
 			if cancel.Error != nil {
 				return cancel.Error
 			}
@@ -305,17 +351,13 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 		if end > len(items) {
 			end = len(items)
 		}
-		var builder strings.Builder
-		builder.WriteString("INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES ")
-		args := make([]any, 0, (end-start)*10)
-		for i, item := range items[start:end] {
+		// 先校验整块，再在调用方的事务里逐条写入：一块里有不完整的明细时整块都不写，与原先一条多行 INSERT 的报错顺序一致。
+		for _, item := range items[start:end] {
 			if strings.TrimSpace(item.RuleID) == "" || strings.TrimSpace(item.InstrumentID) == "" || strings.TrimSpace(item.Stage) == "" {
 				return fmt.Errorf("%w：解释明细缺少规则、标的或阶段", ErrResultInvalid)
 			}
-			if i > 0 {
-				builder.WriteString(", ")
-			}
-			builder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		}
+		for _, item := range items[start:end] {
 			var score, rank, weight any
 			if item.Score != nil {
 				score = *item.Score
@@ -326,10 +368,9 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			if item.Weight != nil {
 				weight = *item.Weight
 			}
-			args = append(args, resultID, item.RuleID, item.InstrumentID, item.Market, item.Stage, score, rank, weight, item.Reason, createdAt)
-		}
-		if err := tx.Exec(builder.String(), args...).Error; err != nil {
-			return err
+			if err := tx.Exec(sqlInsertResultItem, resultID, item.RuleID, item.InstrumentID, item.Market, item.Stage, score, rank, weight, item.Reason, createdAt).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -357,7 +398,7 @@ func (s *Store) LatestOk(ctx context.Context, instanceID, sessionID string) (Res
 // 其他 skipped 记录的规则状态是空对象，不参与。规则状态从它恢复，状态才不会因为跳过的周期而缺口。
 func (s *Store) LatestState(ctx context.Context, instanceID, sessionID string) (Result, bool, error) {
 	var row resultRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_rule_states_json <> '{}' ORDER BY c_bar_end_time DESC LIMIT 1`, instanceID, sessionID).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectLatestStateResult, instanceID, sessionID).Scan(&row).Error; err != nil {
 		return Result{}, false, err
 	}
 	if row.ResultID == "" {
@@ -373,7 +414,7 @@ func (s *Store) LatestBarEnds(ctx context.Context, instanceID string) (processed
 		Processed sql.NullInt64 `gorm:"column:processed"`
 		OK        sql.NullInt64 `gorm:"column:ok"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT MAX(c_bar_end_time) AS processed, MAX(CASE WHEN c_status = 'ok' THEN c_bar_end_time END) AS ok FROM t_strategy_results WHERE c_instance_id = ?`, instanceID).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectLatestBarEnds, instanceID).Scan(&row).Error; err != nil {
 		return time.Time{}, time.Time{}, err
 	}
 	if row.Processed.Valid {
@@ -388,7 +429,7 @@ func (s *Store) LatestBarEnds(ctx context.Context, instanceID string) (processed
 // ResultAtBar 返回本会话某个周期的记录。
 func (s *Store) ResultAtBar(ctx context.Context, instanceID, sessionID string, barEnd time.Time) (Result, bool, error) {
 	var row resultRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ?`, instanceID, sessionID, millis(barEnd)).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectResultAtBar, instanceID, sessionID, millis(barEnd)).Scan(&row).Error; err != nil {
 		return Result{}, false, err
 	}
 	if row.ResultID == "" {
@@ -401,11 +442,7 @@ func (s *Store) ResultAtBar(ctx context.Context, instanceID, sessionID string, b
 // 不限会话，优先当前会话，其次创建时间最新。
 func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, viewIDs []string, bar, calendar string, barEnd time.Time, factorIDs []string, preferSessionID string) (Result, InputRecord, bool, error) {
 	var rows []resultRow
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT `+resultColumns+` FROM t_strategy_results
-		WHERE c_instance_id = ? AND c_bar_end_time = ?
-		ORDER BY CASE WHEN c_session_id = ? THEN 0 ELSE 1 END, c_ctime DESC, c_result_id DESC
-	`, instanceID, millis(barEnd), preferSessionID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectResultsAtBarAnySession, instanceID, millis(barEnd), preferSessionID).Scan(&rows).Error; err != nil {
 		return Result{}, InputRecord{}, false, err
 	}
 	for _, row := range rows {
@@ -435,7 +472,7 @@ func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, viewIDs [
 // GetResult 读取结果。
 func (s *Store) GetResult(ctx context.Context, resultID string) (Result, error) {
 	var row resultRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_result_id = ?`, resultID).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectResultByID, resultID).Scan(&row).Error; err != nil {
 		return Result{}, err
 	}
 	if row.ResultID == "" {
@@ -452,18 +489,18 @@ func (s *Store) ListResults(ctx context.Context, instanceID, sessionID string, o
 	if offset < 0 {
 		offset = 0
 	}
-	where := ` WHERE c_instance_id = ?`
+	countQuery, listQuery := sqlCountResultsOfInstance, sqlListResultsOfInstance
 	args := []any{instanceID}
 	if strings.TrimSpace(sessionID) != "" {
-		where += ` AND c_session_id = ?`
+		countQuery, listQuery = sqlCountResultsOfSession, sqlListResultsOfSession
 		args = append(args, sessionID)
 	}
 	var total int64
-	if err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_results`+where, args...).Scan(&total).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(countQuery, args...).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []resultRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results`+where+` ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(listQuery, append(args, limit, offset)...).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	results := make([]Result, 0, len(rows))
@@ -485,7 +522,7 @@ func (s *Store) ListResultItems(ctx context.Context, resultID string) ([]ResultI
 		Weight       sql.NullString  `gorm:"column:c_weight"`
 		Reason       string          `gorm:"column:c_reason"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`, resultID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlListResultItems, resultID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	items := make([]ResultItem, 0, len(rows))
@@ -510,7 +547,7 @@ func (s *Store) ListPendingResults(ctx context.Context, limit int) ([]Result, er
 		return []Result{}, nil
 	}
 	var rows []resultRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_publish_status = 'pending' ORDER BY c_ctime, c_result_id LIMIT ?`, limit).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlListPendingResults, limit).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	results := make([]Result, 0, len(rows))
@@ -531,7 +568,7 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 	reason := ""
 	err := s.transaction(ctx, func(tx *gorm.DB) error {
 		var row resultRow
-		if err := tx.Raw(`SELECT `+resultColumns+` FROM t_strategy_results WHERE c_result_id = ? AND c_publish_status = 'pending'`, resultID).Scan(&row).Error; err != nil {
+		if err := tx.Raw(sqlSelectPendingResultByID, resultID).Scan(&row).Error; err != nil {
 			return err
 		}
 		if row.ResultID == "" {
@@ -559,7 +596,7 @@ func (s *Store) PreparePendingResult(ctx context.Context, resultID string, now t
 		}
 		valid = reason == ""
 		if !valid {
-			return tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_result_id = ? AND c_publish_status = 'pending'`, resultID).Error
+			return tx.Exec(sqlCancelPendingResult, resultID).Error
 		}
 		return nil
 	})
@@ -576,7 +613,7 @@ func (s *Store) TransitionPublishStatus(ctx context.Context, resultID string, fr
 	if !(from == PublishPending && (to == PublishSent || to == PublishCancelled)) && !(from == PublishCancelled && to == PublishSent) {
 		return errors.New("投递状态只能从 pending 变为 sent 或 cancelled，或在事件已发出时从 cancelled 变为 sent")
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_results SET c_publish_status = ? WHERE c_result_id = ? AND c_publish_status = ?`, to, resultID, from)
+	result := s.db.WithContext(ctx).Exec(sqlTransitionPublishStatus, to, resultID, from)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -601,7 +638,7 @@ type OutboxStats struct {
 // PendingOutboxStats 返回待投递结果的数量与最早创建时间。
 func (s *Store) PendingOutboxStats(ctx context.Context) (OutboxStats, error) {
 	var stats OutboxStats
-	if err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_results WHERE c_publish_status = 'pending' AND c_event_data IS NOT NULL`).Scan(&stats.PendingCount).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlCountPendingOutbox).Scan(&stats.PendingCount).Error; err != nil {
 		return OutboxStats{}, err
 	}
 	if stats.PendingCount == 0 {
@@ -610,15 +647,9 @@ func (s *Store) PendingOutboxStats(ctx context.Context) (OutboxStats, error) {
 	var oldest struct {
 		CreatedAt time.Time `gorm:"column:c_ctime"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_ctime FROM t_strategy_results WHERE c_publish_status = 'pending' AND c_event_data IS NOT NULL ORDER BY c_ctime, c_result_id LIMIT 1`).Scan(&oldest).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectOldestPendingOutbox).Scan(&oldest).Error; err != nil {
 		return OutboxStats{}, err
 	}
 	stats.OldestPending = oldest.CreatedAt.UTC()
 	return stats, nil
 }
-
-// insertResultSQL 写入一条策略结果，列清单与 resultColumns 一一对应。
-const insertResultSQL = `
-	INSERT INTO t_strategy_results (` + resultColumns + `)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')
-`

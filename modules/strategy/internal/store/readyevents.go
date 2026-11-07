@@ -8,6 +8,36 @@ import (
 	"time"
 )
 
+// 就绪事件的 SQL：整条写成常量，不在调用处拼接。
+const (
+	// sqlInsertReadyEvent 写入一条就绪事件，主键重复时保留先到的那条。
+	sqlInsertReadyEvent = `
+		INSERT OR IGNORE INTO t_strategy_ready_events (c_instance_id, c_session_id, c_view_id, c_bar_end_time, c_event_id, c_event_bytes, c_ctime)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	// sqlSelectReadyEventsAt 读出本会话某个周期已到达的就绪事件。
+	sqlSelectReadyEventsAt = `
+		SELECT c_view_id, c_bar_end_time, c_event_id, c_event_bytes, c_ctime FROM t_strategy_ready_events
+		WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ? ORDER BY c_view_id`
+	// sqlSelectUnprocessedReadyPeriods 读出有到达记录、还没有结果的周期及其 View。
+	sqlSelectUnprocessedReadyPeriods = `
+		SELECT e.c_view_id, e.c_bar_end_time FROM t_strategy_ready_events e
+		WHERE e.c_instance_id = ? AND e.c_session_id = ? AND e.c_bar_end_time > ? AND e.c_bar_end_time < ?
+		AND NOT EXISTS (
+			SELECT 1 FROM t_strategy_results r
+			WHERE r.c_instance_id = e.c_instance_id AND r.c_session_id = e.c_session_id AND r.c_bar_end_time = e.c_bar_end_time
+		)
+		ORDER BY e.c_bar_end_time, e.c_view_id`
+	// sqlSelectLatestReadyOfView 读出一个 View 已到达的最晚一期。
+	sqlSelectLatestReadyOfView = `
+		SELECT c_bar_end_time FROM t_strategy_ready_events
+		WHERE c_instance_id = ? AND c_session_id = ? AND c_view_id = ?
+		ORDER BY c_bar_end_time DESC LIMIT 1`
+	// sqlDeleteReadyEventsBefore 分批删除到达时间早于截止时间的就绪事件。
+	sqlDeleteReadyEventsBefore = `
+		DELETE FROM t_strategy_ready_events
+		WHERE rowid IN (SELECT rowid FROM t_strategy_ready_events WHERE c_ctime < ? LIMIT ?)`
+)
+
 // ReadyEvent 是绑定多个因子任务的实例收到的一个 View 的就绪事件（原始 ViewDataReady 按字节保存）。
 type ReadyEvent struct {
 	InstanceID string
@@ -28,10 +58,7 @@ func (s *Store) PutReadyEvent(ctx context.Context, event ReadyEvent) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	result := s.db.WithContext(ctx).Exec(`
-		INSERT OR IGNORE INTO t_strategy_ready_events (c_instance_id, c_session_id, c_view_id, c_bar_end_time, c_event_id, c_event_bytes, c_ctime)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, event.InstanceID, event.SessionID, event.ViewID, millis(event.BarEnd), event.EventID, event.Payload, arrived)
+	result := s.db.WithContext(ctx).Exec(sqlInsertReadyEvent, event.InstanceID, event.SessionID, event.ViewID, millis(event.BarEnd), event.EventID, event.Payload, arrived)
 	return result.RowsAffected == 1, result.Error
 }
 
@@ -46,10 +73,7 @@ type readyEventRow struct {
 // ReadyEventsAt 返回本会话某个周期已到达的就绪事件（按 View 排序）。
 func (s *Store) ReadyEventsAt(ctx context.Context, instanceID, sessionID string, barEnd time.Time) ([]ReadyEvent, error) {
 	var rows []readyEventRow
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT c_view_id, c_bar_end_time, c_event_id, c_event_bytes, c_ctime FROM t_strategy_ready_events
-		WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time = ? ORDER BY c_view_id
-	`, instanceID, sessionID, millis(barEnd)).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectReadyEventsAt, instanceID, sessionID, millis(barEnd)).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	events := make([]ReadyEvent, 0, len(rows))
@@ -66,15 +90,7 @@ func (s *Store) UnprocessedReadyPeriods(ctx context.Context, instanceID, session
 		ViewID string `gorm:"column:c_view_id"`
 		BarEnd int64  `gorm:"column:c_bar_end_time"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT e.c_view_id, e.c_bar_end_time FROM t_strategy_ready_events e
-		WHERE e.c_instance_id = ? AND e.c_session_id = ? AND e.c_bar_end_time > ? AND e.c_bar_end_time < ?
-		AND NOT EXISTS (
-			SELECT 1 FROM t_strategy_results r
-			WHERE r.c_instance_id = e.c_instance_id AND r.c_session_id = e.c_session_id AND r.c_bar_end_time = e.c_bar_end_time
-		)
-		ORDER BY e.c_bar_end_time, e.c_view_id
-	`, instanceID, sessionID, afterMillis(after), millis(before)).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectUnprocessedReadyPeriods, instanceID, sessionID, afterMillis(after), millis(before)).Scan(&rows).Error; err != nil {
 		return nil, nil, err
 	}
 	views := map[time.Time][]string{}
@@ -95,11 +111,7 @@ func (s *Store) LatestReadyByView(ctx context.Context, instanceID, sessionID str
 	latest := make(map[string]time.Time, len(viewIDs))
 	for _, viewID := range viewIDs {
 		var barEnds []int64
-		if err := s.db.WithContext(ctx).Raw(`
-			SELECT c_bar_end_time FROM t_strategy_ready_events
-			WHERE c_instance_id = ? AND c_session_id = ? AND c_view_id = ?
-			ORDER BY c_bar_end_time DESC LIMIT 1
-		`, instanceID, sessionID, viewID).Scan(&barEnds).Error; err != nil {
+		if err := s.db.WithContext(ctx).Raw(sqlSelectLatestReadyOfView, instanceID, sessionID, viewID).Scan(&barEnds).Error; err != nil {
 			return nil, err
 		}
 		if len(barEnds) > 0 {
@@ -113,10 +125,7 @@ func (s *Store) LatestReadyByView(ctx context.Context, instanceID, sessionID str
 func (s *Store) DeleteReadyEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	var total int64
 	for {
-		result := s.db.WithContext(ctx).Exec(`
-			DELETE FROM t_strategy_ready_events
-			WHERE rowid IN (SELECT rowid FROM t_strategy_ready_events WHERE c_ctime < ? LIMIT ?)
-		`, cutoff.UTC(), retentionBatch)
+		result := s.db.WithContext(ctx).Exec(sqlDeleteReadyEventsBefore, cutoff.UTC(), retentionBatch)
 		if result.Error != nil {
 			return total, result.Error
 		}

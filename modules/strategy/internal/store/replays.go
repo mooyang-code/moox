@@ -132,10 +132,47 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
-
-// replayListColumns 与 replayColumns 相同，只是不读取 DSL 全文。
-var replayListColumns = strings.Replace(replayColumns, "c_dsl_yaml,", "'' AS c_dsl_yaml,", 1)
+// 回放的 SQL：整条写成常量，不在调用处拼接；读回放的语句列清单与 replayRow 一一对应。
+const (
+	// sqlInsertReplay 写入一条排队中的回放。
+	sqlInsertReplay = `
+	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
+	// sqlCountActiveReplays 统计空间内排队与运行中的回放。
+	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`
+	// sqlSelectReplayByID 按回放 ID 读取回放。
+	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
+	// sqlCountReplaysOfSpace 统计空间内的全部回放。
+	sqlCountReplaysOfSpace = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`
+	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文（c_dsl_yaml 返回空串）。
+	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
+	// sqlSelectNextPendingReplay 读取最早的一条排队中的回放。
+	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
+	// sqlClaimReplay 比较交换把排队中的回放改为运行中。
+	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`
+	// sqlUpdateReplayProgress 推进运行中回放的进度。
+	sqlUpdateReplayProgress = `UPDATE t_strategy_replays SET c_progress_time = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'running'`
+	// sqlFinishReplay 把运行中的回放置为终态并写入指标与错误。
+	sqlFinishReplay = `UPDATE t_strategy_replays SET c_status = ?, c_metrics_json = ?, c_error = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'running'`
+	// sqlRecordCancelledReplayMetrics 给已取消的回放写入部分指标。
+	sqlRecordCancelledReplayMetrics = `UPDATE t_strategy_replays SET c_metrics_json = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'cancelled'`
+	// sqlCancelReplay 取消排队或运行中的回放。
+	sqlCancelReplay = `UPDATE t_strategy_replays SET c_status = 'cancelled', c_mtime = ? WHERE c_replay_id = ? AND c_status IN ('pending', 'running')`
+	// sqlSelectReplayStatus 只读取回放状态。
+	sqlSelectReplayStatus = `SELECT c_status FROM t_strategy_replays WHERE c_replay_id = ?`
+	// sqlMarkRunningReplaysInterrupted 把遗留的运行中回放标记为 failed(interrupted)。
+	sqlMarkRunningReplaysInterrupted = `UPDATE t_strategy_replays SET c_status = 'failed', c_error = 'interrupted', c_mtime = ? WHERE c_status = 'running'`
+	// sqlInsertReplayBar 写入一个周期的回放记录。
+	sqlInsertReplayBar = `
+		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// sqlCountReplayBars 统计回放的周期记录数。
+	sqlCountReplayBars = `SELECT COUNT(*) FROM t_strategy_replay_bars WHERE c_replay_id = ?`
+	// sqlListReplayBars 按周期顺序分页读取回放记录（含目标、持仓与摘要 JSON）。
+	sqlListReplayBars = `SELECT c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`
+	// sqlListReplayBarsBrief 与 sqlListReplayBars 相同，只是目标、持仓与摘要 JSON 返回空值。
+	sqlListReplayBarsBrief = `SELECT c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`
+)
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
@@ -179,27 +216,27 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		var active int64
-		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`, replay.SpaceID).Scan(&active).Error; err != nil {
+		if err := tx.Raw(sqlCountActiveReplays, replay.SpaceID).Scan(&active).Error; err != nil {
 			return err
 		}
 		if active >= MaxActiveReplays {
 			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
 		}
-		return tx.Exec(insertReplaySQL, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, string(factorsJSON), now, now).Error
+		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, string(factorsJSON), now, now).Error
 	})
 }
 
 // CountActiveReplays 返回空间内排队与运行中的回放数。
 func (s *Store) CountActiveReplays(ctx context.Context, spaceID string) (int64, error) {
 	var active int64
-	err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`, spaceID).Scan(&active).Error
+	err := s.db.WithContext(ctx).Raw(sqlCountActiveReplays, spaceID).Scan(&active).Error
 	return active, err
 }
 
 // GetReplay 读取回放任务。
 func (s *Store) GetReplay(ctx context.Context, replayID string) (Replay, error) {
 	var row replayRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+replayColumns+` FROM t_strategy_replays WHERE c_replay_id = ?`, replayID).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectReplayByID, replayID).Scan(&row).Error; err != nil {
 		return Replay{}, err
 	}
 	if row.ReplayID == "" {
@@ -217,12 +254,12 @@ func (s *Store) ListReplays(ctx context.Context, spaceID string, offset, limit i
 		offset = 0
 	}
 	var total int64
-	if err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`, spaceID).Scan(&total).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlCountReplaysOfSpace, spaceID).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []replayRow
 	// 列表每 5 秒轮询一次：不读 DSL 全文（每行最多 64 KiB），版本用 c_dsl_hash 展示。
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+replayListColumns+` FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`, spaceID, limit, offset).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlListReplaysOfSpace, spaceID, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	replays := make([]Replay, 0, len(rows))
@@ -242,13 +279,13 @@ func (s *Store) ClaimNextReplay(ctx context.Context, at time.Time) (Replay, bool
 	found := false
 	err = s.transaction(ctx, func(tx *gorm.DB) error {
 		var row replayRow
-		if err := tx.Raw(`SELECT ` + replayColumns + ` FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`).Scan(&row).Error; err != nil {
+		if err := tx.Raw(sqlSelectNextPendingReplay).Scan(&row).Error; err != nil {
 			return err
 		}
 		if row.ReplayID == "" {
 			return nil
 		}
-		result := tx.Exec(`UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`, now, row.ReplayID)
+		result := tx.Exec(sqlClaimReplay, now, row.ReplayID)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -270,7 +307,7 @@ func (s *Store) UpdateReplayProgress(ctx context.Context, replayID string, progr
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_progress_time = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'running'`, millis(progress), now, replayID).Error
+	return s.db.WithContext(ctx).Exec(sqlUpdateReplayProgress, millis(progress), now, replayID).Error
 }
 
 // FinishReplay 把运行中的回放置为终态（done | failed）。
@@ -290,7 +327,7 @@ func (s *Store) FinishReplay(ctx context.Context, replayID, status string, metri
 		}
 		metrics = string(metricsJSON)
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_status = ?, c_metrics_json = ?, c_error = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'running'`, status, metrics, errText, now, replayID)
+	result := s.db.WithContext(ctx).Exec(sqlFinishReplay, status, metrics, errText, now, replayID)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -310,7 +347,7 @@ func (s *Store) RecordCancelledReplayMetrics(ctx context.Context, replayID strin
 	if err := json.Unmarshal(metricsJSON, &object); err != nil || object == nil {
 		return errors.New("回放指标必须是 JSON 对象")
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_metrics_json = ?, c_mtime = ? WHERE c_replay_id = ? AND c_status = 'cancelled'`, string(metricsJSON), now, replayID).Error
+	return s.db.WithContext(ctx).Exec(sqlRecordCancelledReplayMetrics, string(metricsJSON), now, replayID).Error
 }
 
 // CancelReplay 取消 pending 或 running 的回放；运行中的任务由执行循环在下一期检查状态后停止。
@@ -319,7 +356,7 @@ func (s *Store) CancelReplay(ctx context.Context, replayID string, at time.Time)
 	if err != nil {
 		return err
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_status = 'cancelled', c_mtime = ? WHERE c_replay_id = ? AND c_status IN ('pending', 'running')`, now, replayID)
+	result := s.db.WithContext(ctx).Exec(sqlCancelReplay, now, replayID)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -332,7 +369,7 @@ func (s *Store) CancelReplay(ctx context.Context, replayID string, at time.Time)
 // ReplayStatus 只读取状态，供执行循环检查取消。
 func (s *Store) ReplayStatus(ctx context.Context, replayID string) (string, error) {
 	var status string
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_status FROM t_strategy_replays WHERE c_replay_id = ?`, replayID).Scan(&status).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectReplayStatus, replayID).Scan(&status).Error; err != nil {
 		return "", err
 	}
 	if status == "" {
@@ -347,7 +384,7 @@ func (s *Store) MarkRunningReplaysInterrupted(ctx context.Context, at time.Time)
 	if err != nil {
 		return 0, err
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_replays SET c_status = 'failed', c_error = 'interrupted', c_mtime = ? WHERE c_status = 'running'`, now)
+	result := s.db.WithContext(ctx).Exec(sqlMarkRunningReplaysInterrupted, now)
 	return result.RowsAffected, result.Error
 }
 
@@ -361,10 +398,7 @@ func (s *Store) AppendReplayBar(ctx context.Context, bar ReplayBar) error {
 			return fmt.Errorf("回放周期的 %s 不是有效 JSON", name)
 		}
 	}
-	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee, bar.SpotValue, bar.SwapValue, bar.Holdings, bar.Frozen, bar.SkipReason, bar.Unfilled, bar.Liquidated).Error
+	return s.db.WithContext(ctx).Exec(sqlInsertReplayBar, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee, bar.SpotValue, bar.SwapValue, bar.Holdings, bar.Frozen, bar.SkipReason, bar.Unfilled, bar.Liquidated).Error
 }
 
 // ListReplayBars 按周期顺序分页读取回放记录。brief 为 true 时不读目标、持仓与摘要 JSON（返回空值），
@@ -377,7 +411,7 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 		offset = 0
 	}
 	var total int64
-	if err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_replay_bars WHERE c_replay_id = ?`, replayID).Scan(&total).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlCountReplayBars, replayID).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []struct {
@@ -399,11 +433,11 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 		Unfilled      int     `gorm:"column:c_unfilled"`
 		Liquidated    int     `gorm:"column:c_liquidated"`
 	}
-	columns := "c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+	query := sqlListReplayBars
 	if brief {
-		columns = "c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+		query = sqlListReplayBarsBrief
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+columns+` FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`, replayID, limit, offset).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(query, replayID, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	bars := make([]ReplayBar, 0, len(rows))
@@ -415,9 +449,3 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 	}
 	return bars, total, nil
 }
-
-// insertReplaySQL 写入一条排队中的回放，列清单与 replayColumns 一一对应。
-const insertReplaySQL = `
-	INSERT INTO t_strategy_replays (` + replayColumns + `)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-`
