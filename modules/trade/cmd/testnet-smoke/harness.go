@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/rs/xid"
+	"gorm.io/gorm"
 )
 
 type liveHarness struct {
@@ -89,17 +90,19 @@ func openLiveHarness(
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
-			!slices.Equal(record.Markets, []string{string(exchange.MarketTypeSpot)}) ||
+			!slices.Equal(record.Markets, []string{string(options.MarketType)}) ||
 			record.Exchange != string(options.Exchange) {
-			return nil, errors.New("testnet smoke session configuration escaped TESTNET LIVE SPOT")
+			return nil, errors.New("testnet smoke session configuration escaped the TESTNET LIVE single-market account")
 		}
 		config := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
+			Markets:          []exchange.MarketType{options.MarketType},
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironmentTestnet,
 			SettlementAsset:  record.SettlementAsset,
+			MarginMode:       exchange.MarginMode(record.MarginMode),
 		}
 		var adapter execution.ExecutionAdapter
 		switch options.Exchange {
@@ -238,12 +241,12 @@ func runSubmitPhase(
 	instrumentRecord, err := harness.store.GetInstrumentInEnvironment(
 		ctx,
 		string(options.Exchange), string(exchange.AccountEnvironmentTestnet),
-		string(exchange.MarketTypeSpot), options.ExchangeSymbol,
+		string(options.MarketType), options.ExchangeSymbol,
 	)
 	if err != nil {
 		return err
 	}
-	instrument := smokeInstrumentFromRecord(options.Exchange, exchange.MarketTypeSpot, instrumentRecord)
+	instrument := smokeInstrumentFromRecord(options.Exchange, options.MarketType, instrumentRecord)
 	adapter, err := harness.adapter()
 	if err != nil {
 		return err
@@ -262,16 +265,13 @@ func runSubmitPhase(
 		instrument.ExchangeQuantityStep,
 		instrument.MinExchangeQuantity,
 		instrument.MinNotional,
+		instrument.ContractValue,
 		options.MaxNotional,
 	)
 	if err != nil {
 		return err
 	}
-	account, err := harness.store.GetTradingAccountByID(ctx, harness.identity.AccountID)
-	if err != nil {
-		return err
-	}
-	baseline, err := snapshotAssetTotal(account.Snapshot, instrument.BaseAsset)
+	baseline, err := harness.exposure(ctx, harness.identity.AccountID, instrumentRecord)
 	if err != nil {
 		return err
 	}
@@ -297,8 +297,8 @@ func runSubmitPhase(
 		); getErr == nil {
 			state := smokeState{
 				Version: 1, Exchange: options.Exchange,
-				Environment: exchange.AccountEnvironmentTestnet,
-				SpaceID:     smokeSpaceID, AccountID: harness.identity.AccountID,
+				Environment: exchange.AccountEnvironmentTestnet, MarketType: options.MarketType,
+				SpaceID: smokeSpaceID, AccountID: harness.identity.AccountID,
 				LogicalAccountID: harness.identity.LogicalAccountID,
 				InstrumentID:     instrument.InstrumentID, ExchangeSymbol: instrument.ExchangeSymbol,
 				BaseAsset:         instrument.BaseAsset,
@@ -319,8 +319,8 @@ func runSubmitPhase(
 		options.Exchange, clientOrderID, result.Order.ExchangeOrderID)
 	state := smokeState{
 		Version: 1, Exchange: options.Exchange,
-		Environment: exchange.AccountEnvironmentTestnet,
-		SpaceID:     smokeSpaceID, AccountID: harness.identity.AccountID,
+		Environment: exchange.AccountEnvironmentTestnet, MarketType: options.MarketType,
+		SpaceID: smokeSpaceID, AccountID: harness.identity.AccountID,
 		LogicalAccountID: harness.identity.LogicalAccountID,
 		InstrumentID:     instrument.InstrumentID, ExchangeSymbol: instrument.ExchangeSymbol,
 		BaseAsset:         instrument.BaseAsset,
@@ -367,7 +367,7 @@ func runRecoverPhase(
 	options smokeOptions,
 	credential exchange.Credential,
 ) (err error) {
-	state, err := readState(options.State, options.Exchange)
+	state, err := readState(options.State, options.Exchange, options.MarketType)
 	if err != nil {
 		return err
 	}
@@ -404,7 +404,7 @@ func runRecoverPhase(
 	if err != nil {
 		return err
 	}
-	queried, err := adapter.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, state.ExchangeSymbol), state.ClientOrderID)
+	queried, err := adapter.GetOrder(ctx, exchange.NewSymbolKey(state.MarketType, state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("restart query by client ID: %w", err)
 	}
@@ -443,7 +443,7 @@ func runRecoverPhase(
 	if err := waitLocalTerminal(ctx, harness, state.OrderID); err != nil {
 		return err
 	}
-	queried, err = adapter.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, state.ExchangeSymbol), state.ClientOrderID)
+	queried, err = adapter.GetOrder(ctx, exchange.NewSymbolKey(state.MarketType, state.ExchangeSymbol), state.ClientOrderID)
 	if err != nil {
 		return fmt.Errorf("query terminal testnet order: %w", err)
 	}
@@ -597,17 +597,21 @@ func cleanupTestExposure(
 	if _, err := harness.sync.SyncAccount(ctx, state.AccountID); err != nil {
 		return shared.Zero(), err
 	}
-	account, err := harness.store.GetTradingAccountByID(ctx, state.AccountID)
+	instrumentRecord, err := harness.store.GetInstrumentByIDForAccount(
+		ctx, smokeSpaceID, state.AccountID, state.InstrumentID,
+	)
 	if err != nil {
 		return shared.Zero(), err
 	}
 	baseline := mustDecimal(state.BaselineBaseTotal)
-	total, err := snapshotAssetTotal(account.Snapshot, state.BaseAsset)
+	total, err := harness.exposure(ctx, state.AccountID, instrumentRecord)
 	if err != nil {
 		return shared.Zero(), err
 	}
 	delta := total.Sub(baseline)
-	if delta.IsNegative() {
+	swap := state.MarketType == exchange.MarketTypeSwap
+	// 现货余额不能低于基线（不知道少的是谁卖的，不猜）；合约持仓可以是负的（比基线少），反向买回即可。
+	if delta.IsNegative() && !swap {
 		return delta, errors.New("base balance fell below pre-smoke baseline; refusing to guess cleanup")
 	}
 	if delta.IsZero() {
@@ -621,20 +625,28 @@ func cleanupTestExposure(
 	if filled.IsZero() {
 		return delta, errors.New("base balance changed without a recorded test fill; refusing cleanup")
 	}
-	instrument, err := harness.store.GetInstrumentByIDForAccount(
-		ctx, smokeSpaceID, state.AccountID, state.InstrumentID,
-	)
-	if err != nil {
-		return delta, err
-	}
-	quantity := delta
+	instrument := instrumentRecord
+	quantity := delta.Abs()
 	if quantity.Cmp(filled) > 0 {
 		quantity = filled
 	}
-	step := mustDecimal(instrument.ExchangeQuantityStep)
+	// 数量步长和最小下单量是交易所单位（OKX 永续是张），换算成基础资产数量后再和基础资产数量比。
+	contractValue := mustDecimal(instrument.ContractValue)
+	if contractValue.Cmp(shared.Zero()) <= 0 {
+		contractValue = shared.MustDecimal("1")
+	}
+	step := mustDecimal(instrument.ExchangeQuantityStep).Mul(contractValue)
 	quantity = floorToStep(quantity, step)
-	if quantity.Cmp(mustDecimal(instrument.MinExchangeQuantity)) < 0 {
+	if quantity.Cmp(mustDecimal(instrument.MinExchangeQuantity).Mul(contractValue)) < 0 {
 		return delta, errors.New("test fill is below the Exchange cleanup minimum")
+	}
+	reverseSide := exchange.SideSell
+	if delta.IsNegative() {
+		reverseSide = exchange.SideBuy
+	}
+	reversePositionSide := exchange.PositionSideUnspecified
+	if swap {
+		reversePositionSide = exchange.PositionSideNet
 	}
 	cleanup, err := harness.operator.PlaceManualOrder(
 		ctx,
@@ -642,7 +654,7 @@ func cleanupTestExposure(
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
 			TradingAccountID: state.AccountID, ClientOrderID: xid.New().String(),
 			InstrumentID: state.InstrumentID, Type: exchange.OrderTypeMarket,
-			Side: exchange.SideSell, Quantity: quantity,
+			Side: reverseSide, PositionSide: reversePositionSide, Quantity: quantity,
 			Reason: "real testnet smoke reverse cleanup",
 		},
 	)
@@ -652,22 +664,38 @@ func cleanupTestExposure(
 	if err := waitLocalTerminal(ctx, harness, cleanup.Order.OrderID); err != nil {
 		return delta, err
 	}
-	account, err = harness.store.GetTradingAccountByID(ctx, state.AccountID)
-	if err != nil {
-		return delta, err
-	}
-	total, err = snapshotAssetTotal(account.Snapshot, state.BaseAsset)
+	total, err = harness.exposure(ctx, state.AccountID, instrumentRecord)
 	if err != nil {
 		return delta, err
 	}
 	remaining := total.Sub(baseline)
-	if remaining.IsNegative() {
+	if remaining.IsNegative() && !swap {
 		return remaining, errors.New("reverse cleanup sold below pre-smoke baseline")
 	}
-	if remaining.Cmp(step) >= 0 {
+	if remaining.Abs().Cmp(step) >= 0 {
 		return remaining, errors.New("test-generated position remains after reverse cleanup")
 	}
 	return remaining, nil
+}
+
+// exposure 是测试标的当前的敞口，单位是基础资产数量：现货取基础资产余额，合约取持仓数量（带符号）。
+// 数据来自最近一次账户同步，调用前由调用方同步。
+func (h *liveHarness) exposure(ctx context.Context, accountID string, instrument store.InstrumentRecord) (shared.Decimal, error) {
+	account, err := h.store.GetTradingAccountByID(ctx, accountID)
+	if err != nil {
+		return shared.Zero(), err
+	}
+	if exchange.RuleFor(instrument.MarketType).PositionFromBalance {
+		return snapshotAssetTotal(account.Snapshot, instrument.BaseAsset)
+	}
+	record, found, err := h.store.GetPosition(
+		ctx, account.SpaceID, accountID,
+		exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), string(exchange.PositionSideNet),
+	)
+	if err != nil || !found {
+		return shared.Zero(), err
+	}
+	return shared.ParseDecimal(record.SignedQuantity)
 }
 
 func terminalExchangeStatus(status exchange.OrderStatus) bool {
@@ -767,30 +795,33 @@ type smokePositionSource struct {
 func (s smokePositionSource) GetPosition(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	instrumentID string,
 ) (exchange.Position, error) {
 	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		return exchange.Position{}, err
 	}
-	record, found, err := s.store.GetPosition(
-		ctx,
-		account.SpaceID,
-		tradingAccountID,
-		exchange.SymbolKey{Market: exchange.MarketTypeSpot, Symbol: symbol},
-		string(exchange.PositionSideNet),
-	)
+	// 订单规格里的标的是内部标的 ID，自带市场；冒烟账户只有一个市场。
+	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, instrumentID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: instrumentID, PositionSide: exchange.PositionSideNet}, nil
+		}
+		return exchange.Position{}, err
+	}
+	key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
+	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, key, string(exchange.PositionSideNet))
 	if err != nil {
 		return exchange.Position{}, err
 	}
 	if !found {
 		return exchange.Position{
-			TradingAccountID: tradingAccountID,
-			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
+			TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: instrumentID,
+			ExchangeSymbol: key.Symbol, PositionSide: exchange.PositionSideNet,
 		}, nil
 	}
 	return exchange.Position{
-		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
+		TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: instrumentID, ExchangeSymbol: key.Symbol,
 		PositionSide:      exchange.PositionSide(record.PositionSide),
 		SignedQuantity:    mustDecimal(record.SignedQuantity),
 		EntryPrice:        mustDecimal(record.EntryPrice),

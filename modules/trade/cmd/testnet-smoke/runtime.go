@@ -19,12 +19,38 @@ type smokeIdentity struct {
 	LogicalAccountID string
 }
 
-func smokeIdentityFor(exchangeName exchange.Exchange) smokeIdentity {
-	name := strings.ToLower(string(exchangeName))
+// smokeIdentityFor 每个（交易所、市场）一个独立的账户：币安现货、合约测试网是两套域名和两把密钥，
+// 现货、合约各用各的测试网账户，OKX 也按市场分开跑，互不影响。
+func smokeIdentityFor(exchangeName exchange.Exchange, market exchange.MarketType) smokeIdentity {
+	name := strings.ToLower(string(exchangeName)) + "-" + strings.ToLower(string(market))
 	return smokeIdentity{
 		AccountID:        "testnet-smoke-" + name,
 		LogicalAccountID: "testnet-smoke-logical-" + name,
 	}
+}
+
+// smokeAccountMode 是测试网账户的类型：币安测试网跳过检测，一律按普通账户；OKX 模拟盘是统一账户。
+func smokeAccountMode(exchangeName exchange.Exchange) string {
+	if exchangeName == exchange.ExchangeOKX {
+		return string(exchange.AccountModeOKXUnified)
+	}
+	return string(exchange.AccountModeBinanceStandard)
+}
+
+// smokeMarginMode：合约账户一律全仓，现货为空。
+func smokeMarginMode(market exchange.MarketType) string {
+	if exchange.RuleFor(market).Leverage {
+		return string(exchange.MarginModeCross)
+	}
+	return ""
+}
+
+func smokeLeverage(market exchange.MarketType) store.LeverageSettings {
+	if exchange.RuleFor(market).Leverage {
+		// 测试网冒烟固定 1 倍杠杆，不放大测试单的风险。
+		return store.LeverageSettings{store.DefaultLeverageKey: "1"}
+	}
+	return store.LeverageSettings{}
 }
 
 func seedSmokeStore(
@@ -38,7 +64,11 @@ func seedSmokeStore(
 			options.Exchange != exchange.ExchangeOKX) {
 		return smokeIdentity{}, errors.New("testnet smoke store requires a supported TESTNET Exchange")
 	}
-	identity := smokeIdentityFor(options.Exchange)
+	if options.MarketType != exchange.MarketTypeSpot && options.MarketType != exchange.MarketTypeSwap {
+		return smokeIdentity{}, errors.New("testnet smoke store requires a SPOT or SWAP market")
+	}
+	identity := smokeIdentityFor(options.Exchange, options.MarketType)
+	markets := []string{string(options.MarketType)}
 	existing, err := database.GetTradingAccount(
 		ctx,
 		smokeSpaceID,
@@ -48,14 +78,14 @@ func seedSmokeStore(
 	case err == nil:
 		if existing.SpaceID != smokeSpaceID ||
 			existing.Exchange != string(options.Exchange) ||
-			!slices.Equal(existing.Markets, []string{string(exchange.MarketTypeSpot)}) ||
+			!slices.Equal(existing.Markets, markets) ||
 			existing.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			existing.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			existing.CredentialSecretID != options.SecretID ||
 			existing.SettlementAsset != "USDT" ||
 			existing.Status != string(exchange.AccountStatusEnabled) {
 			return smokeIdentity{}, errors.New(
-				"existing smoke account must remain an enabled TESTNET LIVE SPOT account",
+				"existing smoke account must remain an enabled TESTNET LIVE account of the same market",
 			)
 		}
 		return identity, validateSmokeLogicalAccount(ctx, database, identity)
@@ -65,21 +95,23 @@ func seedSmokeStore(
 	err = database.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
-			Name:     "Testnet smoke " + string(options.Exchange),
-			Exchange: string(options.Exchange), Markets: []string{string(exchange.MarketTypeSpot)},
+			Name:     "Testnet smoke " + string(options.Exchange) + " " + string(options.MarketType),
+			Exchange: string(options.Exchange), Markets: markets,
 			ExecutionMode:      string(exchange.ExecutionModeLive),
+			AccountMode:        smokeAccountMode(options.Exchange),
 			Environment:        string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: options.SecretID,
 			SettlementAsset:    "USDT",
+			MarginMode:         smokeMarginMode(options.MarketType),
 			Status:             string(exchange.AccountStatusEnabled),
-			LeverageSettings:   store.LeverageSettings{},
+			LeverageSettings:   smokeLeverage(options.MarketType),
 			FillCursors:        store.FillCursors{},
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: smokeSpaceID, LogicalAccountID: identity.LogicalAccountID,
-			Name:            "Testnet smoke " + string(options.Exchange),
+			Name:            "Testnet smoke " + string(options.Exchange) + " " + string(options.MarketType),
 			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "USDT",
 			AutomationState: "PAUSED",
