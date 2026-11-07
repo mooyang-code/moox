@@ -407,7 +407,20 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 		return reload(), err
 	}
+	s.startWarmUp(ctx, instance.InstanceID, sessionID)
 	return reload(), nil
+}
+
+// startWarmUp 在策略池实例启用成功后开始后台预热：会话带成员快照、还没有预热结果才需要；非池实例什么也不做。
+func (s *Service) startWarmUp(ctx context.Context, instanceID, sessionID string) {
+	if s.Warmer == nil {
+		return
+	}
+	session, err := s.Store.GetSession(ctx, sessionID)
+	if err != nil || session.MembersJSON == "" || session.WarmedThrough != nil {
+		return
+	}
+	s.Warmer.Start(ctx, instanceID, sessionID)
 }
 
 // checkLiveCalendar 拒绝在 A 股内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。
@@ -477,6 +490,9 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	}
 	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
+	}
+	if s.Warmer != nil {
+		s.Warmer.Stop(instance.InstanceID)
 	}
 	if releaseNeeded {
 		if s.Owner == nil {

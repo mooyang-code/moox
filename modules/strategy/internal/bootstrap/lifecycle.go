@@ -1,8 +1,12 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -11,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
+	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -38,6 +43,15 @@ type lifecycleDeps struct {
 	consumerReady  func() bool
 	// handler 在生命周期之后才创建（它的门禁依赖控制器），创建后绑定；追赶进度从它读取。
 	handler *atomic.Pointer[trigger.Handler]
+	// warm 是策略池的预热状态；为空表示没有预热（测试）。
+	warm warmState
+}
+
+// warmState 是策略池预热状态的只读视图（*warmup.Manager 实现）。
+type warmState interface {
+	State(instanceID string) (warmup.Status, string)
+	// Blocked 返回实例不能确认进入运行阶段的说明；预热完成或不是池实例时为空串。
+	Blocked(instanceID string) string
 }
 
 // catchupGrace 是恢复追赶目标之前留的宽限：最新一根刚收盘时因子结果还在路上，不把它算进追赶目标。
@@ -69,6 +83,9 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 func (d lifecycleDeps) autoConfirm(ref lifecycle.Ref, _ time.Time) bool {
 	if ref.Kind != instanceKind || d.db == nil {
 		return false
+	}
+	if d.warm != nil && d.warm.Blocked(ref.ID) != "" {
+		return false // 策略池预热没完成：没有账户的观察实例也不能自动确认
 	}
 	instance, err := d.db.GetInstance(context.Background(), ref.ID)
 	if err != nil {
@@ -206,10 +223,20 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 // triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值
 // （暂停、恢复追赶、重置、故障，对象各自的阶段不变但都不求值）。模块自身只是暂时未就绪（刚启动、出站 EventBus 还在连接）
 // 时返回 ModeWait：事件稍后重投，就绪后照常求值，不丢掉这几期。
-func triggerGate(c *lifecycle.Controller) func(string) trigger.Mode {
+func triggerGate(c *lifecycle.Controller, warm warmState) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
 		if c.ModuleWaiting() {
 			return trigger.ModeWait
+		}
+		// 策略池预热没完成：事件稍后重投，不丢期（不能用“检查失败”实现，那样门禁返回 ModeOff，事件会被直接确认掉）。
+		// 预热失败（要人工修复后重新启用）时不再等：返回 ModeOff。这一步要放在 Allowed 与追赶判断之前。
+		if warm != nil {
+			switch status, _ := warm.State(instanceID); status {
+			case warmup.StatusRunning:
+				return trigger.ModeWait
+			case warmup.StatusFailed:
+				return trigger.ModeOff
+			}
 		}
 		if !c.Allowed(instanceRef(instanceID)) { // 模块自身暂停或故障时，所有实例都不求值
 			if c.CatchupAllowed(instanceRef(instanceID)) {
@@ -232,10 +259,41 @@ func releasedAt(c *lifecycle.Controller) func(string) time.Time {
 	return func(instanceID string) time.Time { return c.ReleasedAt(instanceRef(instanceID)) }
 }
 
-func lifecycleRoutes(c *lifecycle.Controller) []health.Route {
+// confirmGuard 在控制器的命令入口外包一层：策略池实例预热没完成时拒绝 confirm（进入运行阶段）。
+// 现有的追赶钩子只在恢复追赶阶段才会被调用，预热阶段确认运行不会经过它，所以要在这里判断。
+func confirmGuard(next http.Handler, blocked func(instanceID string) string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && blocked != nil {
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<16))
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "请求体过大或无法读取"})
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var req lifecycle.CommandRequest
+			if json.Unmarshal(body, &req) == nil && req.Command == lifecycle.CmdConfirm && req.Kind == instanceKind {
+				if reason := blocked(req.ID); reason != "" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func lifecycleRoutes(c *lifecycle.Controller, warm warmState) []health.Route {
+	var blocked func(string) string
+	if warm != nil {
+		blocked = warm.Blocked
+	}
 	return []health.Route{
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
-		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
+		{Path: lifecycle.CommandPath, Handler: confirmGuard(c.CommandHandler(), blocked)},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
 		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}

@@ -252,7 +252,9 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return err
 		}
 		if rt.pool.warmedThrough.IsZero() {
-			// 策略池预热还没完成：事件稍后重投（正常由门禁拦住，这里是兜底）。
+			// 策略池预热还没完成：事件稍后重投（正常由门禁拦住，这里是兜底），到达记录照写：预热完成后按 bar 顺序补处理，
+			// 不会因为重投退避的先后变成乱序。
+			h.recordArrival(ctx, instance, rt, message, payload, time.Unix(payload.GetPeriodTime(), 0).UTC())
 			return ErrModuleNotReady
 		}
 	}

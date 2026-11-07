@@ -48,6 +48,12 @@ type Owner interface {
 	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 }
 
+// Warmer 管理策略池实例的后台预热：启用成功后开始预热，停用时取消。
+type Warmer interface {
+	Start(ctx context.Context, instanceID, sessionID string)
+	Stop(instanceID string)
+}
+
 // Alerter 接收需要人工处理的实例事件（例如因 Trade 拒绝会话被自动停用），用于模块健康告警。
 type Alerter interface {
 	Alert(instance store.Instance, reason string)
@@ -64,8 +70,10 @@ type Service struct {
 	Resolver Resolver
 	Owner    Owner
 	Replays  ReplayWaker
-	Alerts   Alerter
-	Now      func() time.Time
+	// Warmer 为空时不预热（没有策略池的部署）。
+	Warmer Warmer
+	Alerts Alerter
+	Now    func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex

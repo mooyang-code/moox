@@ -117,7 +117,7 @@ func (s *Store) SetSessionWarmed(ctx context.Context, sessionID, state string, t
 	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(state) == "" || through.IsZero() {
 		return false, errors.New("预热结果缺少 session_id、状态或终点")
 	}
-	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_sessions SET c_warm_state = ?, c_warmed_through = ? WHERE c_session_id = ? AND c_closed_at IS NULL AND c_warmed_through IS NULL`, state, millis(through), sessionID)
+	result := s.db.WithContext(ctx).Exec(`UPDATE t_strategy_sessions SET c_warm_state = ?, c_warmed_through = ? WHERE c_session_id = ? AND c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL`, state, millis(through), sessionID)
 	return result.RowsAffected == 1, result.Error
 }
 

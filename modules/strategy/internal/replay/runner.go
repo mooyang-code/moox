@@ -228,6 +228,44 @@ type marketReader struct {
 	passed map[string]struct{}
 }
 
+// loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
+func loadMarketViews(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved) (map[string]input.ViewInfo, map[string][]input.Subject, error) {
+	markets := resolved.Markets()
+	views := make(map[string]input.ViewInfo, len(markets))
+	subjects := make(map[string][]input.Subject, len(markets))
+	for _, market := range markets {
+		task := resolved.Tasks[market]
+		view, err := client.GetView(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return nil, nil, err
+		}
+		hasClose := false
+		for _, column := range view.Columns {
+			if column.Name == "close" {
+				hasClose = true
+			}
+		}
+		if !hasClose {
+			return nil, nil, fmt.Errorf("View %s 没有 close 列，无法估值", task.ViewID)
+		}
+		bindings, err := client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
+		if err != nil {
+			return nil, nil, err
+		}
+		sort.Slice(bindings, func(i, j int) bool { return bindings[i].SubjectID < bindings[j].SubjectID })
+		active := make([]input.Subject, 0, len(bindings))
+		for _, subject := range bindings {
+			subject.Active = true
+			active = append(active, subject)
+		}
+		if len(active) == 0 {
+			return nil, nil, fmt.Errorf("View %s 的数据集没有标的绑定", task.ViewID)
+		}
+		views[market], subjects[market] = view, active
+	}
+	return views, subjects, nil
+}
+
 func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) {
 	if r.Client == nil {
 		return Metrics{}, errors.New("Storage 与 Factor 依赖未配置，不能回放")
@@ -248,37 +286,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		return Metrics{}, fmt.Errorf("因子定义在排队期间发生变化（%s），请重新发起回放", drift)
 	}
 	markets := resolved.Markets()
-	views := make(map[string]input.ViewInfo, len(markets))
-	subjects := make(map[string][]input.Subject, len(markets))
-	for _, market := range markets {
-		task := job.Tasks[market]
-		view, err := r.Client.GetView(ctx, job.SpaceID, task.ViewID)
-		if err != nil {
-			return Metrics{}, err
-		}
-		hasClose := false
-		for _, column := range view.Columns {
-			if column.Name == "close" {
-				hasClose = true
-			}
-		}
-		if !hasClose {
-			return Metrics{}, fmt.Errorf("View %s 没有 close 列，无法估值", task.ViewID)
-		}
-		bindings, err := r.Client.ListDatasetSubjects(ctx, job.SpaceID, view.DatasetID)
-		if err != nil {
-			return Metrics{}, err
-		}
-		sort.Slice(bindings, func(i, j int) bool { return bindings[i].SubjectID < bindings[j].SubjectID })
-		active := make([]input.Subject, 0, len(bindings))
-		for _, subject := range bindings {
-			subject.Active = true
-			active = append(active, subject)
-		}
-		if len(active) == 0 {
-			return Metrics{}, fmt.Errorf("View %s 的数据集没有标的绑定", task.ViewID)
-		}
-		views[market], subjects[market] = view, active
+	views, subjects, err := loadMarketViews(ctx, r.Client, job.SpaceID, resolved)
+	if err != nil {
+		return Metrics{}, err
 	}
 	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
 	abort := r.abortHook(job.ReplayID)
@@ -337,25 +347,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			if err := abort(ctx); err != nil {
 				return acc.finish(), err
 			}
-			decision, err := r.evaluate(ctx, program, resolved, readers, members, segments, bar, state)
+			decision, err := evaluateBar(ctx, program, resolved, readers, members, segments, bar, state)
 			if err != nil {
 				return acc.finish(), err
 			}
-			// 价格表按（标的，市场）取各 View 的原始行，不受选币池构造的去重影响（另一个市场的持仓也要估值）；
-			// 同一标的同一周期有多个序列时，这根 bar 上它的价格不可信，按缺价处理。
-			key := bar.StorageStart.Unix()
-			prices := make(map[string]float64)
-			for _, market := range readers {
-				rows := segments[market.market].rows
-				for subjectID, row := range rows.Bars[key] {
-					if _, ambiguous := rows.Ambiguous[key][subjectID]; ambiguous {
-						continue
-					}
-					if price, ok := row.Values["close"]; ok && price > 0 {
-						prices[engine.TargetKey(subjectID, market.market)] = price
-					}
-				}
-			}
+			prices := barPrices(readers, segments, bar.StorageStart.Unix())
 			ok := decision.Status == engine.StatusOK
 			targets := make(map[string]float64, len(decision.Targets))
 			for _, target := range decision.Targets {
@@ -385,6 +381,24 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		}
 	}
 	return acc.finish(), nil
+}
+
+// barPrices 是一根 bar 上各（标的，市场）的收盘价：按各 View 的原始行取，不受选币池构造的去重影响（另一个市场的持仓也要估值）；
+// 同一标的同一周期有多个序列时，这根 bar 上它的价格不可信，按缺价处理。
+func barPrices(readers []*marketReader, segments map[string]marketSegment, key int64) map[string]float64 {
+	prices := make(map[string]float64)
+	for _, market := range readers {
+		rows := segments[market.market].rows
+		for subjectID, row := range rows.Bars[key] {
+			if _, ambiguous := rows.Ambiguous[key][subjectID]; ambiguous {
+				continue
+			}
+			if price, ok := row.Values["close"]; ok && price > 0 {
+				prices[engine.TargetKey(subjectID, market.market)] = price
+			}
+		}
+	}
+	return prices
 }
 
 // 按 key 替换的局限说明：同一件事只保留最新的一条。
@@ -617,7 +631,7 @@ reload:
 // evaluate 装配一期的帧并求值。与实时一致：基础集合只由选币市场的行构成，另一个市场只提供可用标记；只有策略涉及的标的
 // （∪E(r)，年龄剔除之前）在本期（用到 bars[-1] 时还有上一根）出现多个序列才整期跳过，无关标的的歧义不影响本期，只是它们的价格
 // 不用于估值。年龄判定按市场各自的历史；多个市场时，年龄没通过的市场不用它的行。
-func (r *Runner) evaluate(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
+func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
 	multi := len(readers) > 1
 	// 每个市场本期有行的标的；基础集合与标的绑定只取选币市场。

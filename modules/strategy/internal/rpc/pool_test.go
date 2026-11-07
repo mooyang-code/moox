@@ -190,3 +190,52 @@ func TestPoolIsNotReplayableOrTrialled(t *testing.T) {
 	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: strings.Replace(poolDefDSL, "member_spot", "ghost", 1)})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "ghost 不存在")
 }
+
+type fakeWarmer struct {
+	started []string
+	stopped []string
+}
+
+func (w *fakeWarmer) Start(_ context.Context, instanceID, sessionID string) {
+	w.started = append(w.started, instanceID+"@"+sessionID)
+}
+
+func (w *fakeWarmer) Stop(instanceID string) { w.stopped = append(w.stopped, instanceID) }
+
+// 池实例启用成功后开始预热，停用时取消；非池实例不预热；重复启用不重新预热。
+func TestPoolEnableStartsWarmUpAndDisableStopsIt(t *testing.T) {
+	h := newHarness(t)
+	warmer := &fakeWarmer{}
+	h.service.Warmer = warmer
+	h.createStrategy("member_spot", spotMemberDSL)
+	h.createStrategy("member_swap", swapMemberDSL)
+	h.createStrategy("pool_1", poolDefDSL)
+	h.createStrategy("plain", demoDSL)
+	created := createPoolInstance(h, "p1", "pool_1", map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, true)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	session := created.GetInstance().GetSessionId()
+	if len(warmer.started) != 1 || warmer.started[0] != "p1@"+session {
+		t.Fatalf("池实例启用后应开始预热：%v", warmer.started)
+	}
+	again := h.setEnabled("p1", true)
+	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
+	if len(warmer.started) != 1 {
+		t.Fatalf("重复启用不重新预热：%v", warmer.started)
+	}
+	plain := h.createInstance("i1", "plain", "ftask_i1", "", true)
+	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
+	if len(warmer.started) != 1 {
+		t.Fatalf("非池实例不预热：%v", warmer.started)
+	}
+	disabled := h.setEnabled("p1", false)
+	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
+	if len(warmer.stopped) != 1 || warmer.stopped[0] != "p1" {
+		t.Fatalf("停用应取消预热：%v", warmer.stopped)
+	}
+	// 重新启用产生新会话，重新预热。
+	reenabled := h.setEnabled("p1", true)
+	requireOK(t, int32(reenabled.GetRetInfo().GetCode()), reenabled.GetRetInfo().GetMsg())
+	if len(warmer.started) != 2 || warmer.started[1] == warmer.started[0] {
+		t.Fatalf("重新启用应以新会话重新预热：%v", warmer.started)
+	}
+}

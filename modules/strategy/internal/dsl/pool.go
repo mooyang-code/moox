@@ -136,6 +136,16 @@ func (s Strategy) MaxHoldBars() int {
 	return longest
 }
 
+// PoolWarmBars 是策略池预热需要推进的期数：轮动因子与择时里最长的窗口、成员里最长的持有期，取大者再加 1。
+// 窗口决定成员净值序列要读满多少期；持有期决定长持有期的成员从空仓起步时前段净值的偏差要多久才消化，所以也要算进去。
+func PoolWarmBars(pool Strategy, members []Strategy) int {
+	longest := pool.Pool.MaxWindow()
+	for _, member := range members {
+		longest = max(longest, member.MaxHoldBars())
+	}
+	return longest + 1
+}
+
 // EffectiveOrder 返回因子的排序方向：写了用写的，没写按因子取默认（drawdown 越小越好，其余越大越好）。
 func (f RotationFactor) EffectiveOrder() string {
 	if f.Order != "" {

@@ -384,3 +384,25 @@ strategy_pool:
 		}
 	}
 }
+
+// 预热期间到达的事件不丢，也不乱序：等待期间记下的到达事件，在预热完成后按 bar 顺序补处理，即使重投的先后是倒过来的。
+func TestPoolEventsArrivingDuringWarmUpAreProcessedInOrder(t *testing.T) {
+	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
+	h.frame(2, abcFrame(3, 2, 1))
+	h.frame(3, abcFrame(1, 2, 3))
+	h.frame(4, abcFrame(2, 3, 1))
+	for _, n := range []int{2, 3, 4} {
+		expectRetry(t, h.deliverWith(n, bothFactors))
+	}
+	h.warm(barStart(1), "")
+	h.now = start.Add(time.Hour)
+	// 重投倒序：先到第 4 期，处理它之前先补处理更早的第 2、3 期。
+	expectAck(t, h.deliverWith(4, bothFactors))
+	for _, n := range []int{2, 3, 4} {
+		if got := h.resultAt(n); got.Status != store.StatusOK {
+			t.Fatalf("第 %d 期应补处理为 ok：%+v", n, got)
+		}
+	}
+	expectAck(t, h.deliverWith(2, bothFactors))
+	expectAck(t, h.deliverWith(3, bothFactors))
+}
