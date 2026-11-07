@@ -5,6 +5,8 @@ import {
   SYSTEM_ACTION_DISABLED_TEXT,
   canAcknowledge,
   canCancel,
+  cancelConfirmText,
+  cancelLabel,
   canRetry,
   delistTimeError,
   describeScope,
@@ -30,7 +32,8 @@ const fields: ScopeField[] = [
   { field: "exchange_symbol", title: "交易所代码", options: [] }
 ];
 
-const execution = (status: EventExecution["status"], acknowledged = false) => ({ status, acknowledged }) as EventExecution;
+const execution = (status: EventExecution["status"], acknowledged = false, cleanup_pending = false) =>
+  ({ status, acknowledged, cleanup_pending }) as EventExecution;
 
 describe("事件中心的限定范围", () => {
   it("没有限定时显示不限，有限定时按字段标题展示", () => {
@@ -119,6 +122,11 @@ describe("执行记录的操作", () => {
     expect(canCancel(execution("EXECUTION_STATUS_PENDING"))).toBe(true);
     expect(canCancel(execution("EXECUTION_STATUS_RUNNING"))).toBe(true);
     expect(canCancel(execution("EXECUTION_STATUS_FAILED"))).toBe(false);
+    expect(canCancel(execution("EXECUTION_STATUS_CANCELED"))).toBe(false);
+    expect(canCancel(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe(true);
+    expect(cancelLabel(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe("重试善后");
+    expect(cancelLabel(execution("EXECUTION_STATUS_PENDING"))).toBe("取消");
+    expect(cancelConfirmText(execution("EXECUTION_STATUS_CANCELED", false, true))).toContain("解除禁止买入没做成");
     expect(canAcknowledge(execution("EXECUTION_STATUS_FAILED"))).toBe(true);
     expect(canAcknowledge(execution("EXECUTION_STATUS_FAILED", true))).toBe(false);
     expect(canAcknowledge(execution("EXECUTION_STATUS_PENDING"))).toBe(false);

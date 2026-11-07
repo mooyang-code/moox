@@ -59,9 +59,11 @@ type Execution struct {
 	NextRunAt     int64
 	DurationMS    int64
 	Acknowledged  bool
-	CreatedAt     int64
-	UpdatedAt     int64
-	FinishedAt    int64
+	// CleanupPending 表示系统动作记录已取消，但取消后的善后（解除禁止买入）还没做成；做成之前可以再取消一次重做。
+	CleanupPending bool
+	CreatedAt      int64
+	UpdatedAt      int64
+	FinishedAt     int64
 }
 
 // Attempt 是通知地址的一次尝试。
@@ -125,28 +127,29 @@ type ruleRow struct {
 func (ruleRow) TableName() string { return "t_event_rules" }
 
 type executionRow struct {
-	ExecutionID   string `gorm:"column:c_execution_id;primaryKey"`
-	RuleID        string `gorm:"column:c_rule_id"`
-	RuleName      string `gorm:"column:c_rule_name"`
-	ActionType    string `gorm:"column:c_action_type"`
-	EventID       string `gorm:"column:c_event_id"`
-	EventName     string `gorm:"column:c_event_name"`
-	SpaceID       string `gorm:"column:c_space_id"`
-	SubjectID     string `gorm:"column:c_subject_id"`
-	OccurredAt    int64  `gorm:"column:c_occurred_at"`
-	PayloadJSON   string `gorm:"column:c_payload_json"`
-	Status        string `gorm:"column:c_status"`
-	Attempts      int    `gorm:"column:c_attempts"`
-	Failures      int    `gorm:"column:c_failures"`
-	FirstFailedAt int64  `gorm:"column:c_first_failed_at"`
-	LastError     string `gorm:"column:c_last_error"`
-	DedupeKey     string `gorm:"column:c_dedupe_key"`
-	NextRunAt     int64  `gorm:"column:c_next_run_at"`
-	DurationMS    int64  `gorm:"column:c_duration_ms"`
-	Acknowledged  bool   `gorm:"column:c_acknowledged"`
-	CreatedAt     int64  `gorm:"column:c_created_at;autoCreateTime:false"`
-	UpdatedAt     int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
-	FinishedAt    int64  `gorm:"column:c_finished_at"`
+	ExecutionID    string `gorm:"column:c_execution_id;primaryKey"`
+	RuleID         string `gorm:"column:c_rule_id"`
+	RuleName       string `gorm:"column:c_rule_name"`
+	ActionType     string `gorm:"column:c_action_type"`
+	EventID        string `gorm:"column:c_event_id"`
+	EventName      string `gorm:"column:c_event_name"`
+	SpaceID        string `gorm:"column:c_space_id"`
+	SubjectID      string `gorm:"column:c_subject_id"`
+	OccurredAt     int64  `gorm:"column:c_occurred_at"`
+	PayloadJSON    string `gorm:"column:c_payload_json"`
+	Status         string `gorm:"column:c_status"`
+	Attempts       int    `gorm:"column:c_attempts"`
+	Failures       int    `gorm:"column:c_failures"`
+	FirstFailedAt  int64  `gorm:"column:c_first_failed_at"`
+	LastError      string `gorm:"column:c_last_error"`
+	DedupeKey      string `gorm:"column:c_dedupe_key"`
+	NextRunAt      int64  `gorm:"column:c_next_run_at"`
+	DurationMS     int64  `gorm:"column:c_duration_ms"`
+	Acknowledged   bool   `gorm:"column:c_acknowledged"`
+	CleanupPending bool   `gorm:"column:c_cleanup_pending"`
+	CreatedAt      int64  `gorm:"column:c_created_at;autoCreateTime:false"`
+	UpdatedAt      int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
+	FinishedAt     int64  `gorm:"column:c_finished_at"`
 }
 
 func (executionRow) TableName() string { return "t_event_executions" }

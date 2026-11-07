@@ -344,6 +344,24 @@ func TestSystemFailureRaisesActionFailedAttention(t *testing.T) {
 	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionDelistDetected, "")))
 }
 
+// 已取消但善后（解除禁止买入）没做成的系统动作记录，算作 action_failed，做成之后恢复。
+func TestUnfinishedCancelCleanupRaisesActionFailedAttention(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seeded := seedSystem(t, s, c)
+	_, err := s.CancelExecution(ctx, seeded.ExecutionID, c.now.UnixMilli())
+	require.NoError(t, err)
+
+	attention := &AttentionWorker{Store: s, Now: c.Now}
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则：取消后的善后未完成，请在执行记录里再取消一次")))
+
+	require.NoError(t, s.FinishCleanup(ctx, seeded.ExecutionID, c.now.UnixMilli()))
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+}
+
 func TestDeletedRuleCancelsPendingExecution(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)

@@ -195,6 +195,8 @@ message EventExecution {
   int64 next_run_at_ms = 16;
   // 失败后用户已确认处理。
   bool acknowledged = 17;
+  // 系统动作已取消，但取消后的善后（解除禁止买入）还没做成：这时可以再取消一次重做善后。
+  bool cleanup_pending = 18;
 }
 
 // 通知地址的一次尝试。

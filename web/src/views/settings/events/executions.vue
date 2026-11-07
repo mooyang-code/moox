@@ -48,8 +48,8 @@
             <a-space>
               <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
               <a-button v-if="canRetry(record)" size="mini" type="text" @click="act('retry', record)">重新执行</a-button>
-              <a-popconfirm v-if="canCancel(record)" :content="cancelText(record)" @ok="act('cancel', record)">
-                <a-button size="mini" type="text" status="danger">取消</a-button>
+              <a-popconfirm v-if="canCancel(record)" :content="cancelConfirmText(record)" @ok="act('cancel', record)">
+                <a-button size="mini" type="text" status="danger">{{ cancelLabel(record) }}</a-button>
               </a-popconfirm>
               <a-button v-if="canAcknowledge(record)" size="mini" type="text" @click="act('ack', record)"> 确认已处理 </a-button>
             </a-space>
@@ -89,6 +89,8 @@ import {
   EXECUTION_STATUS_FILTERS,
   canAcknowledge,
   canCancel,
+  cancelConfirmText,
+  cancelLabel,
   canRetry,
   eventTitle,
   formatDuration,
@@ -155,12 +157,6 @@ function onPageSizeChange(size: number) {
 function openDetail(item: EventExecution) {
   detailId.value = item.execution_id;
   drawerVisible.value = true;
-}
-
-function cancelText(item: EventExecution) {
-  return item.action_type === "ACTION_TYPE_SYSTEM"
-    ? "确认取消？下架处理会停止，已经禁止买入的标的也会解除禁止。"
-    : "确认取消这条执行？";
 }
 
 async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {

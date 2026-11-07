@@ -36,15 +36,23 @@ type countingCancelHandler struct {
 	err        error
 	cancels    int
 	seenStatus string
+	// onCancel 在 OnCancel 里执行，用来模拟善后期间请求被取消。
+	onCancel func()
+	// seenCanceled 记录 OnCancel 收到的 ctx 是否已被取消。
+	seenCanceled bool
 }
 
 func (*countingCancelHandler) Step(context.Context, store.Execution, time.Time) (action.Outcome, error) {
 	return action.Outcome{Status: store.StatusSucceeded}, nil
 }
 
-func (h *countingCancelHandler) OnCancel(_ context.Context, execution store.Execution) error {
+func (h *countingCancelHandler) OnCancel(ctx context.Context, execution store.Execution) error {
 	h.cancels++
 	h.seenStatus = execution.Status
+	if h.onCancel != nil {
+		h.onCancel()
+	}
+	h.seenCanceled = ctx.Err() != nil
 	return h.err
 }
 
@@ -387,6 +395,7 @@ func TestCancelSystemExecutionCancelsFirstThenRunsCleanup(t *testing.T) {
 	state, lastError := status("cleanup-fails")
 	require.Equal(t, pb.ExecutionStatus_EXECUTION_STATUS_CANCELED, state)
 	require.Contains(t, lastError, "取消后的善后失败")
+	require.True(t, cleanupPending(t, s, "cleanup-fails"), "善后没做成：对外标明还能再取消")
 	require.Equal(t, 1, handler.cancels)
 	require.Equal(t, store.StatusPending, handler.seenStatus, "处理器看到的是取消前的记录")
 
@@ -397,6 +406,7 @@ func TestCancelSystemExecutionCancelsFirstThenRunsCleanup(t *testing.T) {
 	require.Equal(t, 3, handler.cancels)
 	_, lastError = status("cleanup-fails")
 	require.Empty(t, lastError, "善后成功后清除说明")
+	require.False(t, cleanupPending(t, s, "cleanup-fails"))
 	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("cleanup-fails").RetInfo.Code, "善后做完之后不能再取消")
 	require.Equal(t, 3, handler.cancels)
 
@@ -406,6 +416,40 @@ func TestCancelSystemExecutionCancelsFirstThenRunsCleanup(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("done").RetInfo.Code)
 	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("failed").RetInfo.Code)
 	require.Equal(t, 3, handler.cancels, "已结束的记录不调处理器")
+}
+
+func cleanupPending(t *testing.T, s *Service, id string) bool {
+	t.Helper()
+	got, err := s.GetEventExecution(context.Background(), &pb.GetEventExecutionReq{ExecutionId: id})
+	require.NoError(t, err)
+	return got.Detail.Execution.CleanupPending
+}
+
+// 善后期间请求被取消（超时）：善后和记状态用不随请求取消的 ctx，记录仍标明“善后未完成”，之后再取消一次能做成。
+func TestCancelCleanupSurvivesRequestCancellationAndRestart(t *testing.T) {
+	s, _ := newService(t)
+	reqCtx, cancelRequest := context.WithCancel(context.Background())
+	handler := &countingCancelHandler{err: errors.New("Trade 不可达"), onCancel: cancelRequest}
+	s.Actions.Register(store.SystemActionSellDelistedHoldings, handler)
+	seedExecution(t, s, "timeout", SystemRuleID, store.ActionSystem, store.StatusPending)
+
+	rsp, err := s.CancelEventExecution(reqCtx, &pb.CancelEventExecutionReq{ExecutionId: "timeout"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
+	require.False(t, handler.seenCanceled, "处理器拿到的 ctx 不随请求取消")
+	require.True(t, cleanupPending(t, s, "timeout"))
+
+	// 进程在“置已取消”与 OnCancel 之间重启：库里只有“已取消、善后未完成”，再取消一次照样做善后。
+	seedExecution(t, s, "restarted", SystemRuleID, store.ActionSystem, store.StatusPending)
+	_, err = s.Store.CancelExecution(context.Background(), "restarted", testNow.UnixMilli())
+	require.NoError(t, err)
+	handler.err, handler.onCancel = nil, nil
+	for _, id := range []string{"timeout", "restarted"} {
+		done, err := s.CancelEventExecution(context.Background(), &pb.CancelEventExecutionReq{ExecutionId: id})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_SUCCESS, done.RetInfo.Code, id)
+		require.False(t, done.Execution.CleanupPending)
+	}
 }
 
 func TestDeleteRuleCancelsItsPendingExecutions(t *testing.T) {

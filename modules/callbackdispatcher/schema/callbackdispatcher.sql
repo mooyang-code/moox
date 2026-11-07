@@ -70,12 +70,15 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     c_next_run_at INTEGER NOT NULL DEFAULT 0,
     c_duration_ms INTEGER NOT NULL DEFAULT 0,
     c_acknowledged INTEGER NOT NULL DEFAULT 0,
+    -- 系统动作记录已取消但善后（解除禁止买入）还没做成：1 时可以再取消一次重做，善后成功后清 0；清理旧记录时跳过。
+    c_cleanup_pending INTEGER NOT NULL DEFAULT 0,
     c_created_at INTEGER NOT NULL,
     c_updated_at INTEGER NOT NULL,
     c_finished_at INTEGER NOT NULL DEFAULT 0,
     CHECK (c_action_type IN ('NOTIFY_URL', 'SYSTEM')),
     CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELED')),
     CHECK (c_acknowledged IN (0, 1)),
+    CHECK (c_cleanup_pending IN (0, 1)),
     CHECK (json_valid(c_payload_json))
 );
 

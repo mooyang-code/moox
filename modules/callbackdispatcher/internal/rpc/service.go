@@ -461,12 +461,10 @@ func (s *Service) RetryEventExecution(ctx context.Context, req *pb.RetryEventExe
 	return &pb.RetryEventExecutionRsp{RetInfo: okRet(), Execution: executionToPB(execution)}, nil
 }
 
-// cleanupFailedMarker 标记“已取消，但取消后的善后（解除禁止买入）没做成”：这样的记录可以再取消一次，只重做善后。
-const cleanupFailedMarker = "取消后的善后失败："
-
-// CancelEventExecution 取消还没结束的执行。顺序是：先原子地把记录置为已取消（工作线程不会再推进它，已结束的记录在这一步就被拒绝），
-// 再调处理器善后（下架：解除禁止买入）。先取消再善后，处理器就不会在善后之后又被工作线程推进、重新写入名单。
-// 善后失败时记录已经是已取消，错误说明里记下失败原因；再点一次取消只重做善后（善后必须幂等）。
+// CancelEventExecution 取消还没结束的执行。顺序是：先原子地把记录置为已取消（工作线程不会再推进它，已结束的记录在这一步就被拒绝；
+// 系统动作的记录同时记下“善后未完成”），再调处理器善后（下架：解除禁止买入），成功后清除标记。
+// 先取消再善后，处理器就不会在善后之后又被工作线程推进、重新写入名单。
+// 善后没做成（处理器报错、请求超时、进程在两步之间重启）时记录仍是“已取消、善后未完成”：关注项会提醒，再取消一次只重做善后（善后必须幂等）。
 func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventExecutionReq) (*pb.CancelEventExecutionRsp, error) {
 	fail := func(info *pb.RetInfo) (*pb.CancelEventExecutionRsp, error) {
 		return &pb.CancelEventExecutionRsp{RetInfo: info}, nil
@@ -478,8 +476,7 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 	if err != nil {
 		return fail(internalRet(ctx, "读取执行记录失败", err))
 	}
-	cleanupOnly := execution.Status == store.StatusCanceled && execution.ActionType == store.ActionSystem && strings.HasPrefix(execution.LastError, cleanupFailedMarker)
-	if !cleanupOnly {
+	if !(execution.Status == store.StatusCanceled && execution.CleanupPending) {
 		// 已结束的记录在调处理器之前就拒绝；其余的先原子置为已取消。
 		if _, err := s.Store.CancelExecution(ctx, execution.ExecutionID, s.now().UnixMilli()); err != nil {
 			if errors.Is(err, store.ErrConflict) {
@@ -489,23 +486,23 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 		}
 	}
 	if execution.ActionType == store.ActionSystem {
-		rule, err := s.Store.GetRule(ctx, execution.RuleID)
+		// 善后和记状态都不跟请求一起取消：请求超时不能让记录停在“已取消但没人知道善后没做”。
+		cleanupCtx := context.WithoutCancel(ctx)
+		rule, err := s.Store.GetRule(cleanupCtx, execution.RuleID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fail(internalRet(ctx, "读取事件规则失败", err))
+			return fail(internalRet(ctx, "记录已取消，但读取事件规则失败，请再点一次取消重试", err))
 		}
 		if handler, ok := s.Actions.Handler(rule.SystemAction); ok {
-			if err := handler.OnCancel(ctx, execution); err != nil {
+			if err := handler.OnCancel(cleanupCtx, execution); err != nil {
 				log.ErrorContextf(ctx, "取消系统动作 %s 的善后失败: %v", execution.ExecutionID, err)
-				if markErr := s.Store.SetLastError(ctx, execution.ExecutionID, cleanupFailedMarker+stableMessage(err), s.now().UnixMilli()); markErr != nil {
+				if markErr := s.Store.SetLastError(cleanupCtx, execution.ExecutionID, "取消后的善后失败："+stableMessage(err), s.now().UnixMilli()); markErr != nil {
 					log.ErrorContextf(ctx, "记录取消善后失败的原因失败: %v", markErr)
 				}
 				return fail(failRet(pb.ErrorCode_INNER_ERR, "记录已取消，但解除禁止买入失败，请再点一次取消重试"))
 			}
 		}
-		if cleanupOnly {
-			if err := s.Store.SetLastError(ctx, execution.ExecutionID, "", s.now().UnixMilli()); err != nil {
-				return fail(internalRet(ctx, "清除善后失败的说明失败", err))
-			}
+		if err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, s.now().UnixMilli()); err != nil {
+			return fail(internalRet(ctx, "记录已取消，但记下善后完成失败，请再点一次取消重试", err))
 		}
 	}
 	canceled, err := s.Store.GetExecution(ctx, execution.ExecutionID)

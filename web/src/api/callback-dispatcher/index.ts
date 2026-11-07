@@ -125,6 +125,8 @@ export interface EventExecution {
   duration_ms: number;
   next_run_at_ms: number;
   acknowledged: boolean;
+  /** 系统动作已取消，但取消后的善后（解除禁止买入）还没做成：可以再取消一次重做。 */
+  cleanup_pending: boolean;
 }
 
 export interface DeliveryAttempt {
@@ -235,7 +237,8 @@ export function normalizeExecution(raw: Partial<EventExecution> & Record<string,
     finished_at_ms: toNumber(raw.finished_at_ms),
     duration_ms: toNumber(raw.duration_ms),
     next_run_at_ms: toNumber(raw.next_run_at_ms),
-    acknowledged: Boolean(raw.acknowledged)
+    acknowledged: Boolean(raw.acknowledged),
+    cleanup_pending: Boolean(raw.cleanup_pending)
   };
 }
 

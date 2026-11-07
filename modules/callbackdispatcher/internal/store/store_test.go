@@ -260,6 +260,45 @@ func TestRetryRefusesWhenSameInstrumentHasUnfinishedExecution(t *testing.T) {
 	require.ErrorIs(t, err, ErrConflict)
 }
 
+// 系统动作记录取消时同一条 UPDATE 记下“善后未完成”；做完之前清理旧记录不删它。
+func TestCancelMarksCleanupPendingAndPurgeKeepsIt(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.CreateRule(ctx, notifyRule("r1")))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		if err := tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5)); err != nil {
+			return err
+		}
+		return tx.InsertExecution(execution("note", "r1", ActionNotifyURL, "", 5))
+	}))
+	_, err := s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	_, err = s.CancelExecution(ctx, "note", 100)
+	require.NoError(t, err)
+
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.True(t, got.CleanupPending)
+	got, err = s.GetExecution(ctx, "note")
+	require.NoError(t, err)
+	require.False(t, got.CleanupPending, "通知类没有善后")
+	pending, err := s.ListPendingCleanups(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+
+	require.NoError(t, s.PurgeBefore(ctx, 1000))
+	_, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err, "善后没做成的不清理")
+	_, err = s.GetExecution(ctx, "note")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	require.NoError(t, s.FinishCleanup(ctx, "sys", 101))
+	require.NoError(t, s.PurgeBefore(ctx, 1000))
+	_, err = s.GetExecution(ctx, "sys")
+	require.ErrorIs(t, err, ErrNotFound, "善后做完后照常清理")
+}
+
 func TestListFiltersAndLastExecutionAndPurge(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)

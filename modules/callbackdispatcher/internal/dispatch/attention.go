@@ -23,7 +23,7 @@ func stableReason(reason string) string {
 
 // AttentionWorker 每轮从库里的状态重新算出关注项并上报，重启不丢：
 //   - execution_failed：通知类的记录失败，直到用户重新执行或确认；
-//   - action_failed：系统动作的记录失败，直到用户处理；
+//   - action_failed：系统动作的记录失败，直到用户处理；已取消但取消后的善后（解除禁止买入）没做成的记录也算，直到再取消一次做成；
 //   - delist_detected：由系统动作处理器记下（telemetry.NoteDelistDetected），约 3 分钟。
 type AttentionWorker struct {
 	Store    *store.Store
@@ -67,6 +67,13 @@ func (a *AttentionWorker) Publish(ctx context.Context) error {
 			kind = telemetry.AttentionActionFailed
 		}
 		items[kind] = append(items[kind], execution.RuleName+"："+stableReason(execution.LastError))
+	}
+	cleanups, err := a.Store.ListPendingCleanups(ctx)
+	if err != nil {
+		return err
+	}
+	for _, execution := range cleanups {
+		items[telemetry.AttentionActionFailed] = append(items[telemetry.AttentionActionFailed], execution.RuleName+"：取消后的善后未完成，请在执行记录里再取消一次")
 	}
 	items[telemetry.AttentionDelistDetected] = telemetry.Recent(telemetry.AttentionDelistDetected, a.now(), telemetry.DelistDetectedWindow)
 	telemetry.PublishAttention(items)

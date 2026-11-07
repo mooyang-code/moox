@@ -87,7 +87,7 @@ func executionToPB(execution store.Execution) *pb.EventExecution {
 		SpaceId: execution.SpaceID, SubjectId: execution.SubjectID, Status: statusToPB[execution.Status],
 		Attempts: uint32(execution.Attempts), LastError: execution.LastError, OccurredAtMs: execution.OccurredAt,
 		CreatedAtMs: execution.CreatedAt, FinishedAtMs: execution.FinishedAt, DurationMs: execution.DurationMS,
-		NextRunAtMs: execution.NextRunAt, Acknowledged: execution.Acknowledged,
+		NextRunAtMs: execution.NextRunAt, Acknowledged: execution.Acknowledged, CleanupPending: execution.CleanupPending,
 	}
 }
 

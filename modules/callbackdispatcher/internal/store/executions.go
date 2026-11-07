@@ -265,16 +265,39 @@ func (s *Store) CancelExecution(ctx context.Context, executionID string, now int
 			return ErrConflict
 		}
 		before = executionFromRow(row)
+		// 系统动作的记录在同一条 UPDATE 里记下“善后未完成”：之后无论请求超时还是进程重启，都还能再取消一次重做善后。
 		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).
-			Updates(map[string]any{"c_status": StatusCanceled, "c_next_run_at": 0, "c_finished_at": now, "c_updated_at": now}).Error
+			Updates(map[string]any{
+				"c_status": StatusCanceled, "c_next_run_at": 0, "c_finished_at": now, "c_updated_at": now,
+				"c_cleanup_pending": row.ActionType == ActionSystem,
+			}).Error
 	})
 	return before, err
 }
 
-// SetLastError 改写执行记录的“最近一次错误”说明（不改状态）；空串表示清除。
+// FinishCleanup 记下取消后的善后已经做完：清除“善后未完成”标记和失败说明。
+func (s *Store) FinishCleanup(ctx context.Context, executionID string, now int64) error {
+	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
+		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now}).Error
+}
+
+// SetLastError 改写执行记录的“最近一次错误”说明（不改状态）。
 func (s *Store) SetLastError(ctx context.Context, executionID, message string, now int64) error {
 	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
 		Updates(map[string]any{"c_last_error": message, "c_updated_at": now}).Error
+}
+
+// ListPendingCleanups 返回已取消但善后还没做成的系统动作记录，用于计算告警关注项。
+func (s *Store) ListPendingCleanups(ctx context.Context) ([]Execution, error) {
+	var rows []executionRow
+	if err := s.db.WithContext(ctx).Where("c_status = ? AND c_cleanup_pending = 1", StatusCanceled).Order("c_created_at ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	executions := make([]Execution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, executionFromRow(row))
+	}
+	return executions, nil
 }
 
 // AcknowledgeExecution 确认失败的记录已处理，清除它引起的告警。
@@ -306,9 +329,10 @@ func (s *Store) ListUnacknowledgedFailures(ctx context.Context) ([]Execution, er
 }
 
 // PurgeBefore 删除 cutoff 之前创建且已结束的执行记录（连同尝试与下架步骤），以及 cutoff 之前的事件回执。
+// 善后还没做成的已取消记录不删：用户还要靠它再取消一次。
 func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("c_created_at < ? AND c_status IN ?", cutoff, []string{StatusSucceeded, StatusFailed, StatusCanceled}).Delete(&executionRow{}).Error; err != nil {
+		if err := tx.Where("c_created_at < ? AND c_status IN ? AND c_cleanup_pending = 0", cutoff, []string{StatusSucceeded, StatusFailed, StatusCanceled}).Delete(&executionRow{}).Error; err != nil {
 			return err
 		}
 		return tx.Exec(`DELETE FROM t_event_receipts WHERE c_created_at < ?`, cutoff).Error

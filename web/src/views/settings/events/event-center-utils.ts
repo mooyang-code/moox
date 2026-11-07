@@ -141,8 +141,20 @@ export function notifyUrlError(raw: string): string {
 
 export const canRetry = (item: EventExecution) => item.status === "EXECUTION_STATUS_FAILED";
 
+/** 没结束的能取消；已取消但善后（解除禁止买入）没做成的，还能再取消一次重做善后。 */
 export const canCancel = (item: EventExecution) =>
-  item.status === "EXECUTION_STATUS_PENDING" || item.status === "EXECUTION_STATUS_RUNNING";
+  item.status === "EXECUTION_STATUS_PENDING" ||
+  item.status === "EXECUTION_STATUS_RUNNING" ||
+  (item.status === "EXECUTION_STATUS_CANCELED" && item.cleanup_pending);
+
+export const cancelLabel = (item: EventExecution) => (item.cleanup_pending ? "重试善后" : "取消");
+
+export function cancelConfirmText(item: EventExecution): string {
+  if (item.cleanup_pending) return "这条记录已经取消，但解除禁止买入没做成。确认重试？";
+  return item.action_type === "ACTION_TYPE_SYSTEM"
+    ? "确认取消？下架处理会停止，已经禁止买入的标的也会解除禁止。"
+    : "确认取消这条执行？";
+}
 
 export const canAcknowledge = (item: EventExecution) => item.status === "EXECUTION_STATUS_FAILED" && !item.acknowledged;
 

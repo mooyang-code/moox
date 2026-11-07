@@ -28,8 +28,8 @@
 
         <a-space class="drawer-actions">
           <a-button v-if="canRetry(execution)" size="small" @click="emitAction('retry')">重新执行</a-button>
-          <a-popconfirm v-if="canCancel(execution)" content="确认取消这条执行？" @ok="emitAction('cancel')">
-            <a-button size="small" status="danger">取消</a-button>
+          <a-popconfirm v-if="canCancel(execution)" :content="cancelConfirmText(execution)" @ok="emitAction('cancel')">
+            <a-button size="small" status="danger">{{ cancelLabel(execution) }}</a-button>
           </a-popconfirm>
           <a-button v-if="canAcknowledge(execution)" size="small" @click="emitAction('ack')">确认已处理</a-button>
         </a-space>
@@ -110,6 +110,8 @@ import CodeBlock from "@/components/code-block/index.vue";
 import {
   canAcknowledge,
   canCancel,
+  cancelConfirmText,
+  cancelLabel,
   canRetry,
   eventTitle,
   formatDuration,
