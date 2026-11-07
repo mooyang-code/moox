@@ -830,9 +830,13 @@ func TestUnifiedMatchesDualTasksCountsHeldAgedOutFailures(t *testing.T) {
 					delete(world.rows["swap"], id)
 				}
 				decision, targets := requireSame(t, world)
+				// 永续不可用：持仓冻结（0.5 且带 hold）；或冻结的持仓占满预期集合，整期 too_many_missing、持仓不动。
+				if decision.Status == engine.StatusSkipped {
+					return
+				}
 				for _, key := range []string{"D|swap", "X|swap"} {
-					if _, ok := targets[key]; !ok && decision.Status != engine.StatusSkipped {
-						t.Fatalf("持有的 %s 被卖出：%s %v", key, decision.Status, targets)
+					if targets[key] != "0.5(hold)" {
+						t.Fatalf("持有的 %s 应冻结（0.5 且 hold），被卖出或改仓了：%s %v", key, decision.Status, targets)
 					}
 				}
 			})

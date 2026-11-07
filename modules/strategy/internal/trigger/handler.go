@@ -474,11 +474,12 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	if rt.pool != nil {
 		return h.evaluatePool(ctx, p, key, ready)
 	}
-	evalStart := h.now()
-	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
 	// 上期状态先于输入装配读取：装配要知道各市场的持仓（判断因子失败比例时持仓豁免年龄剔除）。
+	stateStart := h.now()
 	previous, ok, err := h.previousState(ctx, p)
+	stateTook := h.now().Sub(stateStart)
 	if err != nil || !ok {
+		p.timing.eval = stateTook
 		return nil, input.Loaded{}, err
 	}
 	loaded, skip, terminal, err := h.loadInput(ctx, p, key, rt.resolved, rt.program, ready, previous)
@@ -488,6 +489,9 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	if skip != nil {
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
+	// “求值”耗时从装配输入之后算起，再加上读上期状态的时间（不与“读取”重叠）。
+	evalStart := h.now().Add(-stateTook)
+	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
 	runStart := h.now()
 	decision, err := engine.Evaluate(rt.program, loaded.Frame, previous)
 	p.timing.evalRun = h.now().Sub(runStart)
