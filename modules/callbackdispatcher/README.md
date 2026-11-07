@@ -27,11 +27,12 @@ go test -count=1 ./modules/callbackdispatcher/...
 | `internal/eventconsumer` | 连接 EventBus、每个事件一个消费者 |
 | `internal/dispatch` | 接收（解码、匹配规则、回执去重、新建或合并执行记录）与工作线程（通知投递、系统动作推进、重试） |
 | `internal/delivery` | 通知请求格式与 HMAC 签名、出站防护（`packages/netguard`）、结果分类、重试时间表 |
-| `internal/action` | 系统动作的注册点与调用 Trade 的客户端接口 |
+| `internal/action` | 系统动作的注册点与调用 Trade 的客户端接口；`action/delist` 是下架处理器 |
+| `internal/tradegateway` | 经网关调用 Trade 的客户端 |
 | `internal/store` | SQLite：规则、事件回执、执行记录、通知尝试、下架处理步骤 |
 | `internal/rpc` | `CallbackDispatcherService` 的实现 |
 | `internal/telemetry` | 关注项 `moox_callbackdispatcher_attention_active` 与错误计数 |
 
-## 系统动作（任务 C6，尚未实现）
+## 系统动作
 
-第一版唯一的系统动作“卖出策略持有的下架币”依赖交易计划 T27 的 Trade 接口。框架已经备好：`internal/action` 里的 `Handler` 接口、`Registry` 注册点和 `TradeClient` 接口（用事件中心自己的类型描述 Trade 的 BlockInstrument、UnblockInstrument、ListBlockedInstruments、ListInstrumentHolders、FlattenInstrument、GetOperatorAction）。没有注册处理器的系统动作，工作线程不会领取对应的执行记录，记录停在待处理，注册之后立即被处理。实现步骤见 `internal/action/action.go` 的包说明。
+第一版唯一的系统动作“卖出策略持有的下架币”：`internal/action/delist` 是处理器（发现即禁止买入、下架前 24 小时平仓、2 小时复查、下架后核对），`internal/tradegateway` 经网关（配置里的 `gateway_client`）调用 Trade 的下架名单与下架清仓接口。服务启动时注册处理器，网关打不开则启动失败。流程、重试、取消与并发的约定见设计文档第 5 节。

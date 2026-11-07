@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { EventExecution, ScopeField } from "@/api/callback-dispatcher";
 import {
   actionText,
-  SYSTEM_ACTION_DISABLED_TEXT,
   systemActionNotice,
   canAcknowledge,
   canCancel,
@@ -19,6 +18,7 @@ import {
   notifyUrlError,
   prettyPayload,
   roundText,
+  stepStatusText,
   scopeFromForm,
   scopeToForm,
   signatureExamples,
@@ -33,8 +33,12 @@ const fields: ScopeField[] = [
   { field: "exchange_symbol", title: "交易所代码", options: [] }
 ];
 
-const execution = (status: EventExecution["status"], acknowledged = false, cleanup_pending = false) =>
-  ({ status, acknowledged, cleanup_pending }) as EventExecution;
+const execution = (
+  status: EventExecution["status"],
+  acknowledged = false,
+  cleanup_pending = false,
+  action_type: EventExecution["action_type"] = "ACTION_TYPE_NOTIFY_URL"
+) => ({ status, acknowledged, cleanup_pending, action_type }) as EventExecution;
 
 describe("事件中心的限定范围", () => {
   it("没有限定时显示不限，有限定时按字段标题展示", () => {
@@ -86,27 +90,16 @@ describe("事件中心的文案", () => {
     expect(
       actionText({ action_type: "ACTION_TYPE_SYSTEM", notify_url: "", system_action: "SYSTEM_ACTION_SELL_DELISTED_HOLDINGS" })
     ).toBe("系统：卖出策略持有的下架币");
-    expect(
-      actionText(
-        { action_type: "ACTION_TYPE_SYSTEM", notify_url: "", system_action: "SYSTEM_ACTION_SELL_DELISTED_HOLDINGS" },
-        false
-      )
-    ).toBe("系统：卖出策略持有的下架币（尚未启用，只记录）");
-    expect(SYSTEM_ACTION_DISABLED_TEXT).toContain("系统动作尚未启用，现在只记录");
     expect(systemActionNotice(true)).toBe("");
-    expect(systemActionNotice(false)).toBe(SYSTEM_ACTION_DISABLED_TEXT);
     expect(systemActionNotice(null)).toContain("无法确认系统动作是否启用");
-    expect(
-      actionText(
-        { action_type: "ACTION_TYPE_SYSTEM", notify_url: "", system_action: "SYSTEM_ACTION_SELL_DELISTED_HOLDINGS" },
-        null
-      )
-    ).toBe("系统：卖出策略持有的下架币");
     const events = [{ event_name: "e.a", version: 1, title: "标的即将下架", description: "", scope_fields: [] }];
     expect(eventTitle(events, "e.a")).toBe("标的即将下架");
     expect(eventTitle(events, "e.b")).toBe("e.b");
     expect(roundText(0)).toBe("发现后禁止买入");
     expect(roundText(3)).toBe("下架后核对");
+    expect(stepStatusText("PARTIAL")).toBe("只平了一部分");
+    expect(stepStatusText("SUCCEEDED")).toBe("成功");
+    expect(stepStatusText("OTHER")).toBe("OTHER");
   });
 
   it("时间和耗时", () => {
@@ -136,6 +129,7 @@ describe("执行记录的操作", () => {
     expect(canCancel(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe(true);
     expect(cancelLabel(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe("重试善后");
     expect(cancelLabel(execution("EXECUTION_STATUS_PENDING"))).toBe("取消");
+    expect(cancelLabel(execution("EXECUTION_STATUS_PENDING", false, false, "ACTION_TYPE_SYSTEM"))).toBe("取消并解除禁止");
     expect(cancelConfirmText(execution("EXECUTION_STATUS_CANCELED", false, true))).toContain("解除禁止买入没做成");
     expect(canAcknowledge(execution("EXECUTION_STATUS_FAILED"))).toBe(true);
     expect(canAcknowledge(execution("EXECUTION_STATUS_FAILED", true))).toBe(false);

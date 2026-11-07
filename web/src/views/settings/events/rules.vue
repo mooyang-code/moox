@@ -28,7 +28,7 @@
           <template #cell="{ record }">{{ describeScope(record.scope, fieldsOf(record.event_name)) }}</template>
         </a-table-column>
         <a-table-column title="动作" :width="280" :ellipsis="true" :tooltip="true">
-          <template #cell="{ record }">{{ actionText(record, systemActionEnabled) }}</template>
+          <template #cell="{ record }">{{ actionText(record) }}</template>
         </a-table-column>
         <a-table-column title="启用" :width="80" align="center">
           <template #cell="{ record }">
@@ -106,7 +106,7 @@ defineOptions({ name: "EventCenterRules" });
 
 const rows = ref<EventRule[]>([]);
 const events = ref<SubscribableEvent[]>([]);
-// 三态：null 是还在加载或加载失败（不知道），不能当成已启用，也不能说“尚未启用”。
+// true 已启用；null 是还在加载或加载失败（不知道），不能当成已启用。
 const systemActionEnabled = ref<boolean | null>(null);
 const loading = ref(false);
 const pagination = reactive(defaultPagination());
@@ -139,7 +139,7 @@ async function loadEvents() {
   try {
     const catalog = await listSubscribableEvents();
     events.value = catalog.events;
-    systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS");
+    systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS") ? true : null;
   } catch (error) {
     reportControlError(error);
   }

@@ -399,3 +399,29 @@ func TestDeletedRuleCancelsPendingExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, store.StatusCanceled, got.Status)
 }
+
+// 还没结束的系统动作记录里有下架步骤失败：算作 action_failed，记录结束后恢复；核对留有零头的一次性告警持续约 3 分钟。
+func TestUnfinishedExecutionWithFailedStepRaisesActionFailedAttention(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seeded := seedSystem(t, s, c)
+	require.NoError(t, s.UpsertDelistAction(ctx, store.DelistAction{
+		ExecutionID: seeded.ExecutionID, Round: 1, Kind: store.DelistKindFlatten, SpaceID: "crypto", LogicalAccountID: "la-1",
+		Status: store.DelistFailed, Error: "平仓用完重试", UpdatedAt: c.now.UnixMilli(),
+	}))
+	attention := &AttentionWorker{Store: s, Now: c.Now}
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed,
+		"系统规则（binance:SPOT:FOOUSDT）：下架处理有步骤失败或只完成一部分，请在执行记录里看各步结果")))
+
+	_, err := s.CancelExecution(ctx, seeded.ExecutionID, c.now.UnixMilli())
+	require.NoError(t, err)
+	require.NoError(t, s.FinishCleanup(ctx, seeded.ExecutionID, c.now.UnixMilli()))
+	telemetry.Note(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头", c.now)
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头")))
+	c.now = c.now.Add(telemetry.DelistDetectedWindow + time.Second)
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+}

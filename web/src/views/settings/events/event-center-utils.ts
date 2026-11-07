@@ -49,6 +49,19 @@ export function stepKindText(kind: DelistStepKind): string {
   return STEP_KIND_TEXT[kind] ?? "未知";
 }
 
+const STEP_STATUS_TEXT: Record<string, string> = {
+  PENDING: "等待",
+  RUNNING: "进行中",
+  SUCCEEDED: "成功",
+  FAILED: "失败",
+  PARTIAL: "只平了一部分"
+};
+
+/** 下架步骤的状态：Trade 报“只平了一部分”的组合，这一轮不再重试，下一轮复查会换新的操作再平。 */
+export function stepStatusText(status: string): string {
+  return STEP_STATUS_TEXT[status] ?? status;
+}
+
 /** 下架处理各轮的说明：第 0 轮发现即禁止买入，之后是下架前 24 小时平仓、2 小时复查、下架后核对。 */
 export function roundText(round: number): string {
   switch (round) {
@@ -111,29 +124,16 @@ export function scopeToForm(scope: ScopeFilter[]): Record<string, string[]> {
   return values;
 }
 
-/** 系统动作的处理器还没上线时，所有系统动作只留执行记录，不会真的动 Trade。 */
-export const SYSTEM_ACTION_DISABLED_TEXT = "系统动作尚未启用，现在只记录；启用后，还没结束的记录会接着处理。";
-
-/** 事件目录没读到时，不知道系统动作有没有启用：什么都不能断言。 */
+/** 服务启动时一定注册系统动作的处理器；事件目录里没读到“系统动作已启用”（还在加载或加载失败）时，什么都不能断言。 */
 export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
 
-/**
- * 系统动作是否启用的三态：true 已启用，false 尚未启用，null 还在加载或加载失败（未知）。
- * 返回要给用户看的提示；已启用时为空。
- */
+/** 系统动作是否已启用：true 已启用，null 还不知道。返回要给用户看的提示；已启用时为空。 */
 export function systemActionNotice(enabled: boolean | null): string {
-  if (enabled === null) return SYSTEM_ACTION_UNKNOWN_TEXT;
-  return enabled ? "" : SYSTEM_ACTION_DISABLED_TEXT;
+  return enabled === true ? "" : SYSTEM_ACTION_UNKNOWN_TEXT;
 }
 
-export function actionText(
-  rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">,
-  systemActionEnabled: boolean | null = true
-): string {
-  if (rule.action_type === "ACTION_TYPE_SYSTEM") {
-    return systemActionEnabled === false ? "系统：卖出策略持有的下架币（尚未启用，只记录）" : "系统：卖出策略持有的下架币";
-  }
-  return `通知地址：${rule.notify_url}`;
+export function actionText(rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">): string {
+  return rule.action_type === "ACTION_TYPE_SYSTEM" ? "系统：卖出策略持有的下架币" : `通知地址：${rule.notify_url}`;
 }
 
 /** 通知地址只允许 http、https。返回错误说明，合法时返回空串。 */
@@ -159,7 +159,10 @@ export const canCancel = (item: EventExecution) =>
   item.status === "EXECUTION_STATUS_RUNNING" ||
   (item.status === "EXECUTION_STATUS_CANCELED" && item.cleanup_pending);
 
-export const cancelLabel = (item: EventExecution) => (item.cleanup_pending ? "重试善后" : "取消");
+export function cancelLabel(item: EventExecution): string {
+  if (item.cleanup_pending) return "重试善后";
+  return item.action_type === "ACTION_TYPE_SYSTEM" ? "取消并解除禁止" : "取消";
+}
 
 export function cancelConfirmText(item: EventExecution): string {
   if (item.cleanup_pending) return "这条记录已经取消，但解除禁止买入没做成。确认重试？";

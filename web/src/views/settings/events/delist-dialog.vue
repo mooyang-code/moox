@@ -150,9 +150,7 @@ const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
 const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
-const noHolderEffect = computed(() =>
-  props.systemActionEnabled ? "登记后只会禁止买入。" : "登记后现在只记录，启用后才会处理。"
-);
+const noHolderEffect = computed(() => (props.systemActionEnabled ? "登记后只会禁止买入。" : ""));
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
 
