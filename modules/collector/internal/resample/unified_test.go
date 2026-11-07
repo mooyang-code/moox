@@ -197,12 +197,16 @@ func TestNoticePublisherCarriesSeriesTagsOnlyForUnifiedDatasets(t *testing.T) {
 	}))
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	relay := &recordingRelay{}
-	publisher := &NoticePublisher{State: mgr.Resample(), Registry: registry, Relay: relay, Now: func() time.Time { return start.Add(3 * time.Hour) }}
+	sync := &recordingSync{}
+	publisher := &NoticePublisher{State: mgr.Resample(), Sync: sync, Registry: registry, Enabled: true, Wake: func() {}, Now: func() time.Time { return start.Add(3 * time.Hour) }}
 	require.NoError(t, publisher.Flush(ctx))
-	require.Len(t, relay.messages, 2)
+	pending, err := mgr.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
 	byJob := map[string]*storagepb.CollectorKlineBackfilled{}
-	for _, message := range relay.messages {
+	for _, event := range pending {
+		message, err := registry.UnmarshalMessage(event.Payload)
+		require.NoError(t, err)
 		value := decodePayload(t, registry, message)
 		byJob[value.GetJobId()] = value
 	}
