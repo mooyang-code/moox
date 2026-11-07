@@ -269,7 +269,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}, Abort: abort},
 	}
 	members := cachedMembership(r.Client, job.SpaceID)
-	ledger := NewLedger(r.initialEquity(), job.FeeBps, r.liquidateAfter())
+	ledger := NewLedger(r.initialEquity(), job.FeeBps, 0, r.liquidateAfter())
 	state := engine.State{}
 	previousEquity := r.initialEquity()
 	chunk := r.chunkBars()
@@ -301,14 +301,14 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 					continue
 				}
 				if price, ok := row.Values["close"]; ok && price > 0 {
-					prices[subjectID] = price
+					prices[engine.TargetKey(subjectID, resolved.Market.Select)] = price
 				}
 			}
 			ok := decision.Status == engine.StatusOK
 			targets := make(map[string]float64, len(decision.Targets))
 			for _, target := range decision.Targets {
 				weight, _ := strconv.ParseFloat(target.Weight.String(), 64)
-				targets[target.InstrumentID] = weight
+				targets[engine.TargetKey(target.InstrumentID, target.Market)] = weight
 			}
 			outcome := ledger.Step(Step{Prices: prices, Targets: targets, OK: ok})
 			if ok {

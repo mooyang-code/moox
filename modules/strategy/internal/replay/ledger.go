@@ -1,9 +1,12 @@
-// Package replay 是基于 View 的研究回放：按周期装配历史帧、复用引擎求值，并用现货理论账本模拟成交。
+// Package replay 是基于 View 的研究回放：按周期装配历史帧、复用引擎求值，并用理论账本模拟现货与永续的成交。
 package replay
 
 import (
 	"math"
 	"sort"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 )
 
 const (
@@ -14,29 +17,38 @@ const (
 	dustRatio = 1e-9
 )
 
-// Position 是一个标的的理论持仓。
+// Position 是一个标的在一个市场的理论持仓。
 type Position struct {
-	Quantity    float64 `json:"quantity"`
-	LastPrice   float64 `json:"last_price"`
+	// Quantity 现货不为负；永续带符号，空头为负。
+	Quantity  float64 `json:"quantity"`
+	LastPrice float64 `json:"last_price"`
+	// Value 是 Quantity × LastPrice：现货是市值，永续是名义价值（空头为负）。
 	Value       float64 `json:"value"`
 	Frozen      bool    `json:"frozen,omitempty"`
 	MissingBars int     `json:"missing_bars,omitempty"`
 }
 
-// Ledger 是现货理论账本：现金与持仓数量，不读 Trade。
+// Ledger 是理论账本：现金与持仓数量，不读 Trade。持仓键是 engine.TargetKey（标的 + 市场），同一个币的现货与永续是两个持仓，
+// 不互相抵消；没有市场后缀的键按现货类处理。
+//
+// 现货按现金成交，权益里计入市值。永续不占用现金，按收盘价逐期结算：每期有价时把 Quantity × (收盘价 − 上期价) 记入现金，
+// 权益 = 现金 + 现货市值，成交只改数量并扣手续费。这样永续的盈利可以用来买现货，亏损会减少现金（现金可以为负，此时现货买入被缩减为 0，
+// 目标权重按缩小后的权益折算，现货随后被卖出补回现金）。没有价格的永续持仓冻结，不结算。不计资金费，不模拟强平与保证金率。
 type Ledger struct {
-	Cash           float64
-	Positions      map[string]*Position
-	FeeRate        float64
+	Cash      float64
+	Positions map[string]*Position
+	// SpotFeeRate 是现货类（现货、股票）的单边手续费率，SwapFeeRate 是永续的。
+	SpotFeeRate    float64
+	SwapFeeRate    float64
 	LiquidateAfter int
 }
 
-// NewLedger 用初始现金构造账本；feeBps 是单边手续费（基点）。
-func NewLedger(initialCash, feeBps float64, liquidateAfter int) *Ledger {
-	return &Ledger{Cash: initialCash, Positions: map[string]*Position{}, FeeRate: feeBps / 10000, LiquidateAfter: liquidateAfter}
+// NewLedger 用初始现金构造账本；spotFeeBps 与 swapFeeBps 是现货类与永续的单边手续费（基点）。
+func NewLedger(initialCash, spotFeeBps, swapFeeBps float64, liquidateAfter int) *Ledger {
+	return &Ledger{Cash: initialCash, Positions: map[string]*Position{}, SpotFeeRate: spotFeeBps / 10000, SwapFeeRate: swapFeeBps / 10000, LiquidateAfter: liquidateAfter}
 }
 
-// Step 的输入：当期收盘价（只含有价的标的）与目标权重。OK 为 false 表示本期 skipped。
+// Step 的输入：当期各（标的, 市场）的收盘价（只含有价的）与目标权重，键是 engine.TargetKey。OK 为 false 表示本期 skipped。
 type Step struct {
 	Prices  map[string]float64
 	Targets map[string]float64
@@ -52,15 +64,32 @@ type Outcome struct {
 	Turnover     float64  `json:"turnover"`
 	Unfilled     []string `json:"unfilled,omitempty"`
 	Liquidated   []string `json:"liquidated,omitempty"`
-	// BuyScale 只在现金不足、买入被按比例缩减时给出（现金为 0 时为 0）。
+	// BuyScale 只在现金不足、现货买入被按比例缩减时给出（现金为 0 时为 0）。
 	BuyScale *float64 `json:"buy_scale,omitempty"`
+	// SpotValue 是期末现货类持仓的市值之和；SwapValue 是永续持仓的净名义价值（多头为正，空头为负）。
+	SpotValue float64 `json:"spot_value"`
+	SwapValue float64 `json:"swap_value"`
 }
 
-// Equity 返回当前估值下的总权益（含冻结持仓）。
+func isSwapKey(key string) bool {
+	_, market := engine.SplitTargetKey(key)
+	return market == dsl.MarketSwap
+}
+
+func (l *Ledger) feeRate(key string) float64 {
+	if isSwapKey(key) {
+		return l.SwapFeeRate
+	}
+	return l.SpotFeeRate
+}
+
+// Equity 返回当前估值下的总权益（含冻结持仓）：现金加现货市值，永续的盈亏已经结算进现金。
 func (l *Ledger) Equity() float64 {
 	total := l.Cash
-	for _, position := range l.Positions {
-		total += position.Value
+	for _, key := range l.sortedIDs() {
+		if !isSwapKey(key) {
+			total += l.Positions[key].Value
+		}
 	}
 	return total
 }
@@ -70,12 +99,28 @@ func (l *Ledger) Holdings() int {
 	return len(l.Positions)
 }
 
-// Step 推进一期：先按当期价格估值（无价持仓冻结并累计缺价期数）；skipped 期到此为止。
-// ok 期依次：清算缺价达到阈值的冻结持仓 → 按总权益迭代扣费后的目标金额 → 先卖后买（买入受现金约束，按比例缩减）。
+// values 返回期末现货类持仓的市值之和与永续持仓的净名义价值。
+func (l *Ledger) values() (spot, swap float64) {
+	for _, key := range l.sortedIDs() {
+		if isSwapKey(key) {
+			swap += l.Positions[key].Value
+		} else {
+			spot += l.Positions[key].Value
+		}
+	}
+	return spot, swap
+}
+
+// Step 推进一期：先按当期价格估值（永续按价差结算进现金；无价持仓冻结并累计缺价期数）；skipped 期到此为止。
+// ok 期依次：清算缺价达到阈值的冻结持仓 → 按总权益迭代扣费后的目标金额 → 先卖现货、再调永续、最后买现货
+// （现货买入受现金约束，按比例缩减；永续不占用现金，不缩减）。
 func (l *Ledger) Step(step Step) Outcome {
 	for _, id := range l.sortedIDs() {
 		position := l.Positions[id]
 		if price, ok := step.Prices[id]; ok && price > 0 {
+			if isSwapKey(id) {
+				l.Cash += position.Quantity * (price - position.LastPrice)
+			}
 			position.LastPrice = price
 			position.Frozen = false
 			position.MissingBars = 0
@@ -89,14 +134,19 @@ func (l *Ledger) Step(step Step) Outcome {
 	dust := dustRatio * math.Max(outcome.EquityBefore, 1)
 	if !step.OK {
 		outcome.EquityAfter = outcome.EquityBefore
+		outcome.SpotValue, outcome.SwapValue = l.values()
 		return outcome
 	}
 	for _, id := range l.sortedIDs() {
 		position := l.Positions[id]
 		if position.Frozen && l.LiquidateAfter > 0 && position.MissingBars >= l.LiquidateAfter {
-			fee := position.Value * l.FeeRate
-			l.Cash += position.Value - fee
-			outcome.Traded += position.Value
+			// 现货按最后价卖出换回现金；永续的盈亏已按最后价结算，清算只扣手续费。
+			fee := math.Abs(position.Value) * l.feeRate(id)
+			if !isSwapKey(id) {
+				l.Cash += position.Value
+			}
+			l.Cash -= fee
+			outcome.Traded += math.Abs(position.Value)
 			outcome.Fee += fee
 			outcome.Liquidated = append(outcome.Liquidated, id)
 			delete(l.Positions, id)
@@ -137,7 +187,7 @@ func (l *Ledger) Step(step Step) Outcome {
 		if !position.Frozen {
 			continue
 		}
-		if _, targeted := step.Targets[id]; !targeted && position.Value > dust {
+		if _, targeted := step.Targets[id]; !targeted && math.Abs(position.Value) > dust {
 			unfilled[id] = struct{}{}
 		}
 	}
@@ -147,43 +197,70 @@ func (l *Ledger) Step(step Step) Outcome {
 		}
 		return 0
 	}
+	ids := make([]string, 0, len(tradable))
+	for id := range tradable {
+		ids = append(ids, id)
+	}
+	sortKeys(ids)
+	// 目标金额：现货数量不为负，负权重按空仓处理。
+	want := func(id string, adjusted float64) float64 {
+		amount := step.Targets[id] * adjusted
+		if amount < 0 && !isSwapKey(id) {
+			return 0
+		}
+		return amount
+	}
 	adjusted := equity
 	for iteration := 0; iteration < maxIterations; iteration++ {
-		cost := 0.0
-		for id := range tradable {
-			cost += math.Abs(step.Targets[id]*adjusted - value(id))
+		spotCost, swapCost := 0.0, 0.0
+		for _, id := range ids {
+			if isSwapKey(id) {
+				swapCost += math.Abs(want(id, adjusted) - value(id))
+			} else {
+				spotCost += math.Abs(want(id, adjusted) - value(id))
+			}
 		}
-		next := equity - l.FeeRate*cost
+		next := equity - (l.SpotFeeRate*spotCost + l.SwapFeeRate*swapCost)
 		converged := math.Abs(next-adjusted) <= convergenceTolerance*math.Max(math.Abs(equity), 1)
 		adjusted = next
 		if converged {
 			break
 		}
 	}
-	ids := make([]string, 0, len(tradable))
-	for id := range tradable {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
 	desired := make(map[string]float64, len(ids))
 	for _, id := range ids {
-		desired[id] = step.Targets[id] * adjusted
+		desired[id] = want(id, adjusted)
 	}
 	for _, id := range ids {
+		if isSwapKey(id) {
+			continue
+		}
 		current := value(id)
 		if desired[id] >= current-dust {
 			continue
 		}
 		sell := current - desired[id]
-		fee := sell * l.FeeRate
+		fee := sell * l.SpotFeeRate
 		l.Cash += sell - fee
 		outcome.Traded += sell
 		outcome.Fee += fee
 		l.adjust(id, -sell, tradable[id], dust)
 	}
+	for _, id := range ids {
+		if !isSwapKey(id) {
+			continue
+		}
+		if delta := desired[id] - value(id); math.Abs(delta) > dust {
+			outcome.Fee += l.tradeSwap(id, delta, tradable[id], dust)
+			outcome.Traded += math.Abs(delta)
+		}
+	}
 	buys := make(map[string]float64)
 	total := 0.0
 	for _, id := range ids {
+		if isSwapKey(id) {
+			continue
+		}
 		if amount := desired[id] - value(id); amount > dust {
 			buys[id] = amount
 			total += amount
@@ -191,7 +268,7 @@ func (l *Ledger) Step(step Step) Outcome {
 	}
 	if total > 0 {
 		scale := 1.0
-		need := total * (1 + l.FeeRate)
+		need := total * (1 + l.SpotFeeRate)
 		if need > l.Cash {
 			scale = math.Max(l.Cash, 0) / need
 			// 迭代误差造成的粉尘级缺口只做截断，不算目标未达成。
@@ -212,7 +289,7 @@ func (l *Ledger) Step(step Step) Outcome {
 			if buy <= dust {
 				continue
 			}
-			fee := buy * l.FeeRate
+			fee := buy * l.SpotFeeRate
 			l.Cash -= buy + fee
 			outcome.Traded += buy
 			outcome.Fee += fee
@@ -225,8 +302,9 @@ func (l *Ledger) Step(step Step) Outcome {
 	for id := range unfilled {
 		outcome.Unfilled = append(outcome.Unfilled, id)
 	}
-	sort.Strings(outcome.Unfilled)
+	sortKeys(outcome.Unfilled)
 	outcome.EquityAfter = l.Equity()
+	outcome.SpotValue, outcome.SwapValue = l.values()
 	if outcome.EquityBefore > 0 {
 		// 单边换手：成交额（买卖之和）/ 2 / 成交前权益，与实时结果的 Σ|w_new − w_old| / 2 口径一致。
 		outcome.Turnover = outcome.Traded / 2 / outcome.EquityBefore
@@ -234,7 +312,7 @@ func (l *Ledger) Step(step Step) Outcome {
 	return outcome
 }
 
-// adjust 按金额增减持仓（price 为成交价）；剩余价值不超过粉尘阈值时删除持仓。
+// adjust 按金额增减现货持仓（price 为成交价）；剩余价值不超过粉尘阈值时删除持仓。
 func (l *Ledger) adjust(id string, amount, price, dust float64) {
 	position, ok := l.Positions[id]
 	if !ok {
@@ -249,22 +327,61 @@ func (l *Ledger) adjust(id string, amount, price, dust float64) {
 	}
 }
 
+// tradeSwap 按名义金额变化 delta（正为加多或减空，负为加空或减多）调整永续持仓，返回手续费：成交价就是已结算的当期价，
+// 只改数量、扣手续费。
+func (l *Ledger) tradeSwap(id string, delta, price, dust float64) float64 {
+	position, ok := l.Positions[id]
+	if !ok {
+		position = &Position{LastPrice: price}
+		l.Positions[id] = position
+	}
+	fee := math.Abs(delta) * l.SwapFeeRate
+	l.Cash -= fee
+	position.LastPrice = price
+	position.Quantity += delta / price
+	position.Value = position.Quantity * price
+	if math.Abs(position.Value) <= dust {
+		delete(l.Positions, id)
+	}
+	return fee
+}
+
 func (l *Ledger) sortedIDs() []string {
 	ids := make([]string, 0, len(l.Positions))
 	for id := range l.Positions {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	sortKeys(ids)
 	return ids
+}
+
+// sortKeys 先按标的、再按市场排序（现货类在前，永续其次）；没有市场后缀的键视为现货类。
+func sortKeys(keys []string) {
+	sort.Slice(keys, func(i, j int) bool {
+		idA, _ := engine.SplitTargetKey(keys[i])
+		idB, _ := engine.SplitTargetKey(keys[j])
+		if idA != idB {
+			return idA < idB
+		}
+		return !isSwapKey(keys[i]) && isSwapKey(keys[j])
+	})
+}
+
+// snapshotPosition 是写入 positions_json 的一个持仓：带上标的与市场，键仍是 engine.TargetKey。
+type snapshotPosition struct {
+	InstrumentID string `json:"instrument_id"`
+	Market       string `json:"market"`
+	Position
 }
 
 // Snapshot 返回持仓与现金的拷贝（写入 positions_json）。
 func (l *Ledger) Snapshot() map[string]any {
-	positions := make(map[string]Position, len(l.Positions))
+	positions := make(map[string]snapshotPosition, len(l.Positions))
 	for id, position := range l.Positions {
 		copied := *position
 		copied.Quantity, copied.Value = roundPlaces(copied.Quantity, quantityPlaces), round4(copied.Value)
-		positions[id] = copied
+		instrument, market := engine.SplitTargetKey(id)
+		positions[id] = snapshotPosition{InstrumentID: instrument, Market: market, Position: copied}
 	}
 	return map[string]any{"cash": round4(l.Cash), "positions": positions}
 }
