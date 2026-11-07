@@ -539,8 +539,8 @@ func (s *Service) finishFlatten(
 		if len(result.ManualCheckOrderIDs) > 0 || outcome.incomplete {
 			detail := fmt.Sprintf("组合 %s 的动作 %s：%d 笔子单没收拾掉，需人工核对", command.LogicalAccountID, command.ActionID, len(result.ManualCheckOrderIDs))
 			if outcome.incomplete {
-				detail = fmt.Sprintf("组合 %s 的动作 %s：收尾满 30 分钟仍没能列全子单，%d 笔子单没收拾掉，需人工核对",
-					command.LogicalAccountID, command.ActionID, len(result.ManualCheckOrderIDs))
+				detail = fmt.Sprintf("组合 %s 的动作 %s：收尾满 30 分钟仍没能列全执行账户 %s 的子单，%d 笔子单没收拾掉，需人工核对",
+					command.LogicalAccountID, command.ActionID, strings.Join(outcome.unlisted, ","), len(result.ManualCheckOrderIDs))
 			}
 			telemetry.Note(telemetry.AttentionFlattenOrdersUnsettled, detail, s.clock())
 			log.WarnContextf(ctx, "交易关注项：%s（%s）：%s", detail, strings.Join(result.ManualCheckOrderIDs, ","), outcome.errorText())
@@ -583,6 +583,7 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 		records, err := s.listFlattenChildren(ctx, command, member.TradingAccountID)
 		if err != nil {
 			outcome.incomplete = true
+			outcome.unlisted = append(outcome.unlisted, member.TradingAccountID)
 			outcome.errs = append(outcome.errs, err)
 			continue
 		}
@@ -607,7 +608,11 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 		}
 	}
 
-	failedAccounts := make(map[string]struct{})
+	// 第 2 步等锁超时的账户，解析同样要等这把锁，这一轮也不再试。
+	failedAccounts := make(map[string]struct{}, len(lockBusy))
+	for accountID := range lockBusy {
+		failedAccounts[accountID] = struct{}{}
+	}
 	for i, child := range unknown {
 		if _, failed := failedAccounts[child.TradingAccountID]; failed {
 			outcome.unsettled = append(outcome.unsettled, child.OrderID)
@@ -747,8 +752,9 @@ type settleOutcome struct {
 	unsettled   []string
 	manualCheck []string
 	errs        []error
-	// incomplete 表示有账户的子单没列出来（结果不全）。
+	// incomplete 表示有账户的子单没列出来（结果不全），unlisted 是这些账户。
 	incomplete bool
+	unlisted   []string
 }
 
 // errorText 是写进动作 last_error 的收拾失败原因；没有错误时为空。
