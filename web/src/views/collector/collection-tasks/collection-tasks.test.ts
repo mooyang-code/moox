@@ -171,4 +171,14 @@ describe("collector task workbench", () => {
     expect(source).toContain("locateTask(item)");
     expect(source).toContain("依赖它的合成任务");
   });
+
+  it("offers unified or split organization when the selected tags span two markets", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain("合并为一个数据集");
+    expect(source).toContain("按市场拆成两个任务");
+    expect(source).toContain("crossMarketSelected");
+    expect(source).toContain("planTaskGroups(selectedTagRoutes.value, organization.value)");
+    // 拆成两个任务时后一个失败要保留前一个并提示补建。
+    expect(source).toContain("请修正后单独补建这个任务");
+  });
 });

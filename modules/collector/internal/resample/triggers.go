@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -102,16 +103,6 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 		return err
 	}
 	period := time.Unix(payload.GetPeriodTime(), 0).UTC()
-	failed := make(map[string]struct{}, len(payload.GetFailedSubjects()))
-	for _, subject := range payload.GetFailedSubjects() {
-		failed[subject] = struct{}{}
-	}
-	subjects := make([]string, 0, len(payload.GetUniverseSubjectIds()))
-	for _, subject := range payload.GetUniverseSubjectIds() {
-		if _, bad := failed[subject]; !bad {
-			subjects = append(subjects, subject)
-		}
-	}
 	var errs []error
 	for _, task := range tasks {
 		bucket, ok, err := task.Clock.BucketAt(period)
@@ -123,11 +114,48 @@ func (t *PeriodTrigger) OnPeriod(ctx context.Context, spaceID string, payload *s
 		if !ok || !bucket.End.Equal(period.Add(task.Source.Duration)) {
 			continue
 		}
-		if _, err := t.Engine.RunBucket(ctx, task, bucket, subjects, ""); err != nil {
+		if _, err := t.Engine.RunBucketMembers(ctx, task, bucket, periodMembers(task, payload), ""); err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// periodMembers 由周期完成事件算出每条源序列可以合成的成员。
+// 事件带序列名单（统一数据集）时按序列判断：失败的序列不合成，其他序列照常；
+// 没有序列名单时按标的判断（失败的标的不合成），所有源序列用同一组标的。
+func periodMembers(task *Task, payload *storagepb.DatasetPeriodCompleted) Members {
+	if len(payload.GetUniverseSeries()) > 0 {
+		failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
+		for _, series := range payload.GetFailedSeries() {
+			failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())] = struct{}{}
+		}
+		wanted := make(map[string]struct{}, len(task.Tags))
+		for _, tag := range task.Tags {
+			wanted[tag] = struct{}{}
+		}
+		members := Members{}
+		for _, series := range payload.GetUniverseSeries() {
+			if _, ok := wanted[series.GetSeriesTag()]; !ok {
+				continue
+			}
+			if _, bad := failed[seriesset.CanonicalKey(series.GetSubjectId(), series.GetSeriesTag())]; !bad {
+				members[series.GetSeriesTag()] = append(members[series.GetSeriesTag()], series.GetSubjectId())
+			}
+		}
+		return members.normalized()
+	}
+	failed := make(map[string]struct{}, len(payload.GetFailedSubjects()))
+	for _, subject := range payload.GetFailedSubjects() {
+		failed[subject] = struct{}{}
+	}
+	subjects := make([]string, 0, len(payload.GetUniverseSubjectIds()))
+	for _, subject := range payload.GetUniverseSubjectIds() {
+		if _, bad := failed[subject]; !bad {
+			subjects = append(subjects, subject)
+		}
+	}
+	return SingleTagMembers(task, subjects)
 }
 
 // BackfillTrigger 处理 event.collector.kline.backfilled：源数据被补写后，对依赖它的合成任务提交历史合成作业。
@@ -157,9 +185,12 @@ func (t *BackfillTrigger) OnBackfilled(ctx context.Context, spaceID, eventID str
 	}
 	var errs []error
 	for _, task := range tasks {
+		if !task.coversAnyTag(payload.GetSeriesTags()) {
+			continue // 补采只写了任务不合成的序列
+		}
 		_, _, err := SubmitJob(ctx, t.State, task, SubmitJobRequest{
 			SpaceID: task.Spec.SpaceID, TaskID: task.Spec.TaskID, RequestID: eventID, Origin: store.ResampleOriginSourceBackfill,
-			Subjects: payload.GetSubjectIds(), Start: payload.GetStart().AsTime(), End: payload.GetEnd().AsTime(), NotBefore: payload.GetConfirmedAt().AsTime().Add(t.SettleAfter),
+			Subjects: payload.GetSubjectIds(), SeriesTags: payload.GetSeriesTags(), Start: payload.GetStart().AsTime(), End: payload.GetEnd().AsTime(), NotBefore: payload.GetConfirmedAt().AsTime().Add(t.SettleAfter),
 		}, newID, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("task %s: %w", task.Spec.TaskID, err))

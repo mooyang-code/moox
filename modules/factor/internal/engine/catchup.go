@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -77,14 +78,14 @@ func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 			if err == nil {
 				var to time.Time
 				if to, err = axis.AxisEnd(realTo); err == nil {
-					r.noteFilled(set, axis, from, to, item.GetAbsentSubjects())
+					r.noteFilled(set, axis, from, to, item.GetAbsentSubjects(), absentSeriesOf(item.GetAbsentSeries()))
 				}
 			}
 			if err != nil {
 				log.Warnf("factor_periods_filled_invalid task_id=%s from=%s to=%s error=%v", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), err)
 				continue
 			}
-			log.Infof("factor_periods_filled task_id=%s from=%s to=%s absent=%s", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","))
+			log.Infof("factor_periods_filled task_id=%s from=%s to=%s absent=%s absent_series=%d", set.TaskID, realFrom.Format(time.RFC3339), realTo.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","), len(item.GetAbsentSeries()))
 			select {
 			case r.advanceKick <- set.TaskID:
 			default:
@@ -96,10 +97,24 @@ func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 	}
 }
 
-// noteFilled 在轴上记下一段已补齐的周期 [from, to)：补采确认缺失的标的、上游失败的待办不再等 Settle。
-func (r *Runtime) noteFilled(set domain.FactorTask, axis periodclock.Axis, from, to time.Time, absent []string) {
-	r.continuity.NoteAbsent(set.TaskID, from, to, axis.Step(), absent)
+// noteFilled 在轴上记下一段已补齐的周期 [from, to)：补采确认缺失的标的或序列、上游失败的待办不再等 Settle。
+// 按序列确认缺失的通知（统一数据集）只表示那一条序列没有，不是整段补齐，所以只记确认缺失、不记补齐范围：
+// 同一次补采的整段补齐通知（不带确认缺失）已经记过范围，只补了永续的通知不会误记现货。
+func (r *Runtime) noteFilled(set domain.FactorTask, axis periodclock.Axis, from, to time.Time, absent []string, absentSeries []seriesset.Series) {
+	r.continuity.NoteAbsent(set.TaskID, from, to, axis.Step(), absent, absentSeries)
+	if len(absentSeries) > 0 && len(absent) == 0 {
+		return
+	}
 	r.filled.add(set.TaskID, from, to)
+}
+
+// absentSeriesOf 把通知里的序列名单转成内部类型。
+func absentSeriesOf(values []*factorpb.SeriesRef) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(values))
+	for _, value := range values {
+		out = append(out, seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()})
+	}
+	return out
 }
 
 // filledPeriods 记录收到补齐通知的周期范围（1 小时后过期）。

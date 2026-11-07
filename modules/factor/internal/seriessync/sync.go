@@ -230,6 +230,13 @@ func (sp *StagedPull) Commit(ctx context.Context, writes []seriesstore.SubjectWr
 
 // PullStaged 做 Pull 的取数部分，不写本地存储。
 func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, end time.Time) (*StagedPull, error) {
+	return s.PullStagedTags(ctx, spec, subjects, nil, end)
+}
+
+// PullStagedTags 与 PullStaged 相同，只是标的的起点按各 series_tag 自己的最新时间算（统一数据集）：tags 给出每个标的期望的
+// series_tag，起点取这些序列里最落后的一条的最新时间之后，落后的市场不会被另一个市场的最新时间盖住。
+// 标的没有列在 tags 里时按并集的最新时间（单序列数据集的原有行为）。
+func (s *Syncer) PullStagedTags(ctx context.Context, spec Spec, subjects []string, tags map[string][]string, end time.Time) (*StagedPull, error) {
 	staged := &StagedPull{syncer: s, spec: spec}
 	step, err := seriesstore.Step(spec.Source.Freq)
 	if err != nil {
@@ -240,12 +247,29 @@ func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, e
 	byFrom := map[time.Time][]string{}
 	for _, subject := range subjects {
 		from := end.Add(-time.Duration(max(spec.Lookback, 1)) * step)
-		b, ok, err := s.Store.Bounds(spec.Source, subject)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			from = b.Latest.Add(step)
+		if wanted := tags[subject]; len(wanted) > 0 {
+			perTag, err := s.Store.TagBounds(spec.Source, subject)
+			if err != nil {
+				return nil, err
+			}
+			// 本地还没有数据的序列（新上市）不拉回看根数：它的第一根真实行落在本次起点之后，随范围一起取回；
+			// 标的在本地完全没有数据时按回看根数拉取（下面保持 from 的初值）。
+			first := true
+			for _, tag := range wanted {
+				if b, ok := perTag[tag]; ok {
+					if next := b.Latest.Add(step); first || next.Before(from) {
+						from, first = next, false
+					}
+				}
+			}
+		} else {
+			b, ok, err := s.Store.Bounds(spec.Source, subject)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				from = b.Latest.Add(step)
+			}
 		}
 		if !from.Before(end) {
 			continue

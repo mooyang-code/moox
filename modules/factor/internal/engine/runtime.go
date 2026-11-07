@@ -235,7 +235,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 			return err
 		}}
 	filler := &gapFiller{
-		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
+		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, unified: r.data.UnifiedTask, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
 		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。

@@ -1,5 +1,6 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
+import { isUnifiedMarketType, marketLabel } from "@/views/data/shared/series-market";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
 // K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
@@ -30,7 +31,7 @@ export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
   "amount_quality"
 ]);
 
-export type CollectionTaskMarket = "spot" | "swap" | "equity";
+export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
 
 export interface CollectionSourceOption {
   source_id: string;
@@ -243,10 +244,18 @@ export function collectionSourceMatches(
       ? ["DATA_KIND_TIME_SERIES", "time_series", 2]
       : ["DATA_KIND_RECORD", "record", 1];
   if (!expectedKinds.includes(source.data_kind)) return false;
-  if (market && source.attributes?.market_type?.toLowerCase() !== market.toLowerCase()) return false;
+  if (market && !sourceMarketMatches(source.attributes?.market_type, market)) return false;
   if (normalizedType === "kline_resample" && source.attributes?.dataset_role === "kline_resample_result") return false;
   if (frequency && normalizeFrequency(source.freq || "") !== normalizeFrequency(frequency)) return false;
   return true;
+}
+
+// 统一数据集（market_type 为 multi）同时放现货、永续两条序列，视为同时匹配现货和永续。
+function sourceMarketMatches(sourceMarket: string | undefined, market: string): boolean {
+  const actual = (sourceMarket || "").toLowerCase();
+  const wanted = market.toLowerCase();
+  if (actual === wanted) return true;
+  return isUnifiedMarketType(actual) && (wanted === "spot" || wanted === "swap");
 }
 
 function normalizeDataType(value: string): CollectionTaskDataType {
@@ -255,7 +264,61 @@ function normalizeDataType(value: string): CollectionTaskDataType {
 }
 
 export function normalizeMarket(value: string): CollectionTaskMarket {
-  return value === "swap" || value === "equity" ? value : "spot";
+  return value === "swap" || value === "equity" || value === "multi" ? value : "spot";
+}
+
+/** 一个标签的最小描述：创建任务时按它判断来源和市场。 */
+export interface TaskTagRoute {
+  tag_id: string;
+  source: string;
+  market: string;
+}
+
+/** 创建任务时两个市场的组织方式：合并成一个统一数据集，或按市场拆成两个任务。 */
+export type TaskOrganization = "unified" | "split";
+
+export interface TaskGroupPlan {
+  /** 拆分时加在任务名后面的市场名；合并（单组）时为空。 */
+  suffix: string;
+  tagIds: string[];
+}
+
+/**
+ * 选中的标签跨了现货、永续两个市场（同一来源）。后端只认这一种跨市场：来源不同的标签不能放进同一个任务。
+ */
+export function isCrossMarketSelection(tags: TaskTagRoute[]): boolean {
+  return new Set(tags.map(tag => tag.market)).size > 1;
+}
+
+/** 选中的标签能否放进一个任务：来源必须相同；跨市场时只允许现货和永续。返回不能的原因，没有问题时返回空。 */
+export function taskTagSelectionError(tags: TaskTagRoute[]): string {
+  if (new Set(tags.map(tag => tag.source)).size > 1) {
+    return "同一任务的标签必须来自同一来源；来源不同的标签请分别建任务";
+  }
+  const markets = [...new Set(tags.map(tag => tag.market))];
+  if (markets.length > 1 && !(markets.length === 2 && markets.includes("spot") && markets.includes("swap"))) {
+    return "只有现货和永续两个市场可以放进同一个任务";
+  }
+  return "";
+}
+
+/**
+ * 按组织方式把选中的标签分成要创建的任务：合并（或没有跨市场）就是一个任务；拆分按市场各一个任务，现货在前。
+ */
+export function planTaskGroups(tags: TaskTagRoute[], organization: TaskOrganization): TaskGroupPlan[] {
+  if (!isCrossMarketSelection(tags) || organization === "unified") {
+    return [{ suffix: "", tagIds: tags.map(tag => tag.tag_id) }];
+  }
+  const byMarket = new Map<string, string[]>();
+  for (const tag of tags) byMarket.set(tag.market, [...(byMarket.get(tag.market) || []), tag.tag_id]);
+  return [...byMarket.entries()]
+    .sort(([left], [right]) => (left === "spot" ? -1 : right === "spot" ? 1 : left.localeCompare(right)))
+    .map(([market, tagIds]) => ({ suffix: marketLabel(market), tagIds }));
+}
+
+/** 拆分后各任务的名字：原名加市场名。 */
+export function splitTaskName(name: string, suffix: string): string {
+  return suffix ? `${normalizeCollectionTaskName(name)}（${suffix}）` : normalizeCollectionTaskName(name);
 }
 
 function normalizeResult(value: unknown): CollectorTask["result"] | undefined {

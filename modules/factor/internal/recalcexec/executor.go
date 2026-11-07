@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -34,7 +35,10 @@ type Selection struct {
 	Set      domain.FactorTask
 	Members  []domain.MemberDef
 	Subjects []string
-	Columns  []string
+	// Series 是统一数据集（同一个数据集里有多个 series_tag）上冻结的期望序列全集（标的、series_tag）；缺口恢复用它按序列判断全集。
+	// 为空表示按标的处理（单序列数据集，以及没有冻结全集可用的人工补算）。有值时 Subjects 是它涉及的标的。
+	Series  []seriesset.Series
+	Columns []string
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
 	FillOnly bool
 	// FillCarry 让只填充同时按源数据写 carry 列：预热中被跳过的周期在实时路径上一行都没写，恢复时要把 carry 列一并补上。
@@ -378,8 +382,8 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (ti
 	}
 	periods := e.chunkPeriods
 	if e.memoryBudget > 0 {
-		// 序列数按标的数估计（crypto 每个标的一个 series_tag）。
-		fit, err := pipeline.MaxPeriodsWithin(selection.Members, len(selection.Subjects), len(selection.Columns), periods, e.memoryBudget)
+		// 序列数按标的数估计（crypto 每个标的一个 series_tag）；统一数据集按冻结的序列数。
+		fit, err := pipeline.MaxPeriodsWithin(selection.Members, max(len(selection.Subjects), len(selection.Series)), len(selection.Columns), periods, e.memoryBudget)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -522,6 +526,7 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 		into.Status = "degraded"
 	}
 	into.FailedSubjects = append(into.FailedSubjects, next.FailedSubjects...)
+	into.FailedSeries = append(into.FailedSeries, next.FailedSeries...)
 	into.RowsWritten += next.RowsWritten
 	into.Warming += next.Warming
 	if into.Items == nil && next.Items != nil {
@@ -550,6 +555,9 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 			into.Factors[i].Status = state.Status
 		}
 		into.Factors[i].FailedSubjects = append(into.Factors[i].FailedSubjects, state.FailedSubjects...)
+		into.Factors[i].FailedSeries = append(into.Factors[i].FailedSeries, state.FailedSeries...)
+		into.Factors[i].GapSeries = append(into.Factors[i].GapSeries, state.GapSeries...)
+		into.Factors[i].SkippedSeriesTags = append(into.Factors[i].SkippedSeriesTags, state.SkippedSeriesTags...)
 	}
 	return into
 }
@@ -558,9 +566,10 @@ func plan(selection Selection, seg segment, start time.Time) pipeline.Plan {
 	return pipeline.Plan{
 		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
 		TargetStart: start, TargetEnd: seg.end,
-		Expected:     append([]string(nil), selection.Subjects...),
-		Available:    append([]string(nil), selection.Subjects...),
-		CarryColumns: selection.Columns, WriteCarry: !selection.FillOnly || selection.FillCarry, FillOnly: selection.FillOnly,
+		Expected:       append([]string(nil), selection.Subjects...),
+		Available:      append([]string(nil), selection.Subjects...),
+		ExpectedSeries: append([]seriesset.Series(nil), selection.Series...),
+		CarryColumns:   selection.Columns, WriteCarry: !selection.FillOnly || selection.FillCarry, FillOnly: selection.FillOnly,
 	}
 }
 

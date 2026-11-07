@@ -204,11 +204,11 @@ func TestSourceAbsencesAndHistoryScans(t *testing.T) {
 		{SpaceID: "crypto", DatasetID: "d", Frequency: "1m", SubjectID: "B", From: from.Add(time.Hour), To: from.Add(time.Hour + time.Minute), Bars: 1},
 	}))
 	require.NoError(t, repo.AddAbsences(ctx, []SourceAbsence{{SpaceID: "crypto", DatasetID: "d", Frequency: "1m", SubjectID: "A", From: from, To: from.Add(3 * time.Minute), Bars: 3}}), "同一起点重复确认取更长的区间")
-	found, err := repo.AbsencesIn(ctx, "crypto", "d", "1m", []string{"A"}, from.Add(time.Minute), from.Add(10*time.Minute))
+	found, err := repo.AbsencesIn(ctx, "crypto", "d", "1m", "", []string{"A"}, from.Add(time.Minute), from.Add(10*time.Minute))
 	require.NoError(t, err)
 	require.Len(t, found, 1)
 	require.True(t, found[0].To.Equal(from.Add(3*time.Minute)))
-	none, err := repo.AbsencesIn(ctx, "crypto", "d", "1m", nil, from.Add(3*time.Minute), from.Add(10*time.Minute))
+	none, err := repo.AbsencesIn(ctx, "crypto", "d", "1m", "", nil, from.Add(3*time.Minute), from.Add(10*time.Minute))
 	require.NoError(t, err)
 	require.Empty(t, none, "区间右开，不相交")
 	bars, err := repo.AbsentBars(ctx, "crypto")

@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/seriessync"
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -91,9 +92,21 @@ type Data struct {
 	mu      sync.Mutex
 	sources map[seriesstore.Source]*source
 
+	// unified 缓存各数据源是不是统一数据集（数据集属性 market_type=multi），避免每个补算分块都读一次元数据。
+	unifiedMu sync.Mutex
+	unified   map[seriesstore.Source]unifiedEntry
+
 	// hotWrites 是走热路径（窗口先追加、写盘并行）的标的写入累计数，coldWrites 是同步写盘的累计数。
 	hotWrites, coldWrites atomic.Int64
 }
+
+type unifiedEntry struct {
+	multi bool
+	at    time.Time
+}
+
+// unifiedCacheTTL 是“是否统一数据集”结论的缓存时间；数据集的 market_type 创建后不会改变，缓存只为减少元数据读取。
+const unifiedCacheTTL = time.Minute
 
 type coverageKey struct {
 	subject  string
@@ -146,7 +159,28 @@ func New(cfg Config) *Data {
 		cfg:     cfg,
 		syncer:  &seriessync.Syncer{Store: cfg.Store, Storage: cfg.Storage, Workers: cfg.Workers, BatchSubjects: cfg.BatchSubjects},
 		sources: map[seriesstore.Source]*source{},
+		unified: map[seriesstore.Source]unifiedEntry{},
 	}
+}
+
+// UnifiedDataset 报告数据源是不是统一数据集（同一数据集里放现货、永续两个市场的序列）：以数据集属性
+// market_type=multi 为准（采集建数据集时写入），不靠本地存储里有哪些 series_tag 推断。
+func (d *Data) UnifiedDataset(ctx context.Context, src seriesstore.Source) (bool, error) {
+	d.unifiedMu.Lock()
+	if entry, ok := d.unified[src]; ok && d.cfg.Now().Sub(entry.at) < unifiedCacheTTL {
+		d.unifiedMu.Unlock()
+		return entry.multi, nil
+	}
+	d.unifiedMu.Unlock()
+	info, err := d.cfg.Storage.GetDataset(ctx, src.SpaceID, src.DatasetID)
+	if err != nil {
+		return false, fmt.Errorf("读取源数据集 %s/%s 的 market_type：%w", src.SpaceID, src.DatasetID, err)
+	}
+	multi := strings.EqualFold(strings.TrimSpace(info.Attributes["market_type"]), seriesset.MarketMulti)
+	d.unifiedMu.Lock()
+	d.unified[src] = unifiedEntry{multi: multi, at: d.cfg.Now()}
+	d.unifiedMu.Unlock()
+	return multi, nil
 }
 
 // Reset 丢弃内存里的全部数据源（窗口、同步状态）并释放常驻内存登记（重置时用，之后要对每个任务重新 Prepare）。
@@ -612,6 +646,93 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	return d.loadRange(ctx, st, plan, subjects)
 }
 
+// DelistedMinSilence 是判断序列已下架的最短沉默时长：序列的最后一行比数据源最新一根早过这么久（见 DelistedThreshold）才可能是已下架。
+// 它是独立的常量，与跳过恢复的 give_up_after 无关：调小 give_up_after 不会让晚到的序列被当成下架。
+const DelistedMinSilence = 6 * time.Hour
+
+// DelistedThreshold 是已下架的沉默阈值：max(DelistedMinSilence, k×周期)，k 为 2；步长不小于 8 小时（日线等）时按 3 期，
+// 与 LongGapThreshold 同一口径。周期长于几小时的任务，晚到一根的序列沉默时长就是一两个周期，不能因为超过固定时长就当成下架。
+func DelistedThreshold(step time.Duration) time.Duration {
+	k := time.Duration(2)
+	if step >= 8*time.Hour {
+		k = 3
+	}
+	return max(DelistedMinSilence, k*step)
+}
+
+// seriesDelisted 判断一条序列在本次计划里是否已下架：最后一行早于计划区间起点（区间内断档、延续到区间里的序列不算），
+// 并且相对参照时刻（数据源最新一根）已经沉默了超过阈值。沉默时长恰等于阈值仍算应存在。
+func seriesDelisted(latest, targetStart, reference time.Time, step time.Duration) bool {
+	return latest.Before(targetStart) && reference.Sub(latest) > DelistedThreshold(step)
+}
+
+// UnifiedTask 报告任务的源数据集是不是统一数据集（数据集属性 market_type=multi）。
+func (d *Data) UnifiedTask(ctx context.Context, set domain.FactorTask) (bool, error) {
+	return d.UnifiedDataset(ctx, sourceOf(set))
+}
+
+// ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（数据集属性 market_type=multi）上的期望序列，
+// 取本地存储里这些标的“应存在”的每条序列（标的、series_tag）。这是没有冻结全集可用时的兜底（人工补算、失效重算、
+// 没有 marker 的待办）；能读到周期 marker 的恢复路径直接用冻结的 universe_series，不走这里。
+// 应存在 = 计划区间结束之前已有数据，并且没有下架（见 seriesDelisted）：下架判断的参照点是“数据源最新一根已经沉默多久”，
+// 不是区间起点——历史重算块能正确排除早已下架的合约，而最近一期晚到的永续（沉默时长只有一两个周期）仍算应存在；
+// 阈值与回看根数、give_up_after 都无关：回看只决定读多远的窗口，分不清“晚到停更”和“已下架”。
+// 兜底推导是推测：刚下架不久（沉默不到阈值）的合约分不出来，仍会被当成应存在，所以补算类计划里因此缺数而被跳过的 tag
+// 不写 NULL（见 Plan.ExpectedSeriesDerived）。单序列数据集返回 nil。
+func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
+	src := sourceOf(plan.Set)
+	multi, err := d.UnifiedDataset(ctx, src)
+	if err != nil || !multi {
+		return nil, err
+	}
+	step, err := seriesstore.Step(src.Freq)
+	if err != nil {
+		return nil, err
+	}
+	var all []seriesBounds
+	for _, subject := range plan.Expected {
+		bounds, err := d.cfg.Store.TagBounds(src, subject)
+		if err != nil {
+			return nil, err
+		}
+		for tag, b := range bounds {
+			all = append(all, seriesBounds{subject: subject, tag: tag, bounds: b})
+		}
+	}
+	return expectedFromBounds(all, plan.TargetStart, plan.TargetEnd, step), nil
+}
+
+// seriesBounds 是本地存储里一条序列（标的、series_tag）的数据边界。
+type seriesBounds struct {
+	subject, tag string
+	bounds       seriesstore.Bounds
+}
+
+// expectedFromBounds 从各序列的本地边界选出应存在的序列。参照时刻是它们里最新的一根（数据源最新一根）。
+func expectedFromBounds(all []seriesBounds, targetStart, targetEnd time.Time, step time.Duration) []seriesset.Series {
+	var reference time.Time
+	for _, item := range all {
+		if item.bounds.Latest.After(reference) {
+			reference = item.bounds.Latest
+		}
+	}
+	end := targetEnd.Unix()
+	var out []seriesset.Series
+	for _, item := range all {
+		if item.bounds.Earliest.Unix() >= end || seriesDelisted(item.bounds.Latest, targetStart, reference, step) {
+			continue
+		}
+		out = append(out, seriesset.Series{SubjectID: item.subject, SeriesTag: item.tag})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SubjectID != out[j].SubjectID {
+			return out[i].SubjectID < out[j].SubjectID
+		}
+		return out[i].SeriesTag < out[j].SeriesTag
+	})
+	return out
+}
+
 func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (pipeline.DataResult, error) {
 	res, fromDisk, err := d.loadLiveWindow(ctx, st, plan, subjects)
 	if err != nil || !fromDisk {
@@ -676,7 +797,8 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	timing.settle = time.Since(began)
 
 	began = time.Now()
-	staged, err := d.syncer.PullStaged(ctx, st.spec, subjects, plan.TargetEnd)
+	// 统一数据集按各序列自己的进度拉取：落后的市场（例如永续晚到）不会被另一个市场的最新时间盖住。
+	staged, err := d.syncer.PullStagedTags(ctx, st.spec, subjects, plan.TagsBySubject(), plan.TargetEnd)
 	timing.pull = time.Since(began)
 	if err != nil {
 		return pipeline.DataResult{}, false, err
@@ -740,8 +862,24 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 		}
 	}
 	var ok []string
+	var failedSeries []seriesset.Series
+	tagsOf := plan.TagsBySubject()
 	for _, subject := range subjects {
 		if _, bad := failed[subject]; bad {
+			continue
+		}
+		if plan.Multi() {
+			// 统一数据集：每条期望序列各自判断本期有没有真实的源行。有些序列还没到时，到了的序列照常算；
+			// 一条都没到的标的整体按失败处理。
+			missing := missingTagsAt(view, subject, tagsOf[subject], target.Unix(), true)
+			if len(missing) == len(tagsOf[subject]) {
+				failed[subject] = struct{}{}
+				continue
+			}
+			for _, tag := range missing {
+				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			}
+			ok = append(ok, subject)
 			continue
 		}
 		// 同步之后本地仍没有目标周期的行：数据还没到，本期按失败处理。
@@ -764,7 +902,27 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	for subject, frame := range hotFrames {
 		rows[subject] = frame
 	}
-	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed)}, false, nil
+	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed), FailedSeries: failedSeries}, false, nil
+}
+
+// missingTagsAt 返回这个标的在视图里没有「目标时刻 target 的真实源行」的 series_tag：序列不在视图里、最后一根早于目标、
+// 或目标那一根是填充行。live 为假时（补算的区间）只看序列有没有数据。
+func missingTagsAt(view *serieswindow.View, subject string, tags []string, target int64, live bool) []string {
+	have := make(map[string]serieswindow.SeriesView, len(tags))
+	for _, sv := range view.Series(subject) {
+		have[sv.Tag] = sv
+	}
+	var missing []string
+	for _, tag := range tags {
+		sv, ok := have[tag]
+		switch {
+		case !ok || sv.N == 0:
+			missing = append(missing, tag)
+		case live && (sv.End(view.Step) != target || sv.Filled[sv.N-1]):
+			missing = append(missing, tag)
+		}
+	}
+	return missing
 }
 
 // flushJob 是一次后台落盘。
@@ -784,6 +942,15 @@ const flushTimeout = 2 * time.Minute
 // 其余（新标的、缺期、一次拉到多根）保持同步写盘，因为窗口要按磁盘上生成的填充行重载。
 func (d *Data) splitHot(st *source, writes []seriesstore.SubjectWrite, step time.Duration) (hot, cold []seriesstore.SubjectWrite) {
 	for _, w := range writes {
+		if w.Rows.Len() > 1 {
+			// 统一数据集：一个标的同一期有多条序列的新行，每条序列恰好新增连续的 1 根时也走热路径。
+			if d.hotSeriesWrite(st, w, step) {
+				hot = append(hot, w)
+			} else {
+				cold = append(cold, w)
+			}
+			continue
+		}
 		if w.Rows.Len() != 1 || !st.window.Has(w.Subject) {
 			cold = append(cold, w)
 			continue
@@ -797,6 +964,32 @@ func (d *Data) splitHot(st *source, writes []seriesstore.SubjectWrite, step time
 		hot = append(hot, w)
 	}
 	return hot, cold
+}
+
+// hotSeriesWrite 判断一次多行写入能否走热路径：每行属于不同的 series_tag，本地与窗口里这条序列的最新时间都正好是这一行的前一根。
+// 单序列的判断见 splitHot；多序列各自判断，别的序列没有新行（还没到）不影响。
+func (d *Data) hotSeriesWrite(st *source, w seriesstore.SubjectWrite, step time.Duration) bool {
+	if !st.window.Has(w.Subject) {
+		return false
+	}
+	local, err := d.cfg.Store.TagBounds(st.spec.Source, w.Subject)
+	if err != nil {
+		return false
+	}
+	seen := make(map[string]struct{}, w.Rows.Len())
+	for i := 0; i < w.Rows.Len(); i++ {
+		tag := w.Rows.Tags[i]
+		if _, dup := seen[tag]; dup {
+			return false
+		}
+		seen[tag] = struct{}{}
+		b, ok := local[tag]
+		latest, inWindow := st.window.LatestOf(w.Subject, tag)
+		if !ok || !inWindow || !latest.Equal(b.Latest) || w.Rows.Times[i] != b.Latest.Add(step).Unix() {
+			return false
+		}
+	}
+	return true
 }
 
 // startFlush 在后台写入热路径的行。调用时持有数据源锁；下一次需要磁盘一致的操作会先 settleFlush。
@@ -973,7 +1166,22 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		}
 		rows[subject] = seriessync.ColumnsToFrame(subject, target, plan.CarryColumns, types)
 	}
-	return pipeline.DataResult{View: view, Frames: rows, Failed: failed}, nil
+	var failedSeries []seriesset.Series
+	if plan.Multi() {
+		// 统一数据集：实时周期（追赶读磁盘）按目标那一根逐序列判断；补算与只填充的区间只看这条序列有没有数据。
+		// 整个标的都没有数据的（failed）不再重复列出。
+		tagsOf := plan.TagsBySubject()
+		live, target := plan.Mode == pipeline.ModeLive, plan.TargetEnd.Add(-step).Unix()
+		for _, subject := range subjects {
+			if got[subject] == nil {
+				continue
+			}
+			for _, tag := range missingTagsAt(view, subject, tagsOf[subject], target, live) {
+				failedSeries = append(failedSeries, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			}
+		}
+	}
+	return pipeline.DataResult{View: view, Frames: rows, Failed: failed, FailedSeries: failedSeries}, nil
 }
 
 // LongGap 是一个长时间没有数据的标的（设计 3.4，决定 19）。

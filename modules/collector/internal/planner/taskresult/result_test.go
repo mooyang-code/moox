@@ -462,6 +462,7 @@ func TestDeleteRemovesTaskOwnedDatasetAndView(t *testing.T) {
 type taggedResultMetadataFake struct {
 	*resultMetadataFake
 	tagSources map[string]string
+	tagMarkets map[string]string
 }
 
 func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
@@ -469,11 +470,15 @@ func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTa
 	if !ok {
 		return &storagepb.GetTagRsp{RetInfo: resultNotFound()}, nil
 	}
-	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Attributes: map[string]string{"sync.source": source}}}, nil
+	attrs := map[string]string{"sync.source": source}
+	if market := f.tagMarkets[req.GetTagId()]; market != "" {
+		attrs["market_type"] = market
+	}
+	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Attributes: attrs}}, nil
 }
 
 func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
-	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}}
+	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}, nil}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
 	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
 		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
@@ -530,4 +535,26 @@ func (c *countingCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryD
 
 func (c *countingCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
 	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: resultOK()}, nil
+}
+
+// 同一数据源的现货、永续两个标签：统一数据集，market_type 为 multi，数据源保留；单市场的标签写它自己的市场。
+func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
+	fake := taggedResultMetadataFake{newResultMetadataFake(),
+		map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_swap": "okx"},
+		map[string]string{"binance_spot": "spot", "binance_swap": "swap", "okx_swap": "swap"}}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
+		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
+		require.NoError(t, err)
+		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
+	}
+	unified := ensure("unified", "binance_spot", "binance_swap")
+	require.Equal(t, "multi", unified.GetAttributes()["market_type"])
+	require.Equal(t, "binance", unified.GetDataSourceId(), "统一数据集保留数据源")
+	single := ensure("single", "binance_swap")
+	require.Equal(t, "swap", single.GetAttributes()["market_type"], "单标签任务不变")
+	require.Equal(t, "binance", single.GetDataSourceId())
+	mixed := ensure("mixed", "binance_spot", "okx_swap")
+	require.Empty(t, mixed.GetDataSourceId(), "数据源不同不能成为统一数据集")
+	require.Empty(t, mixed.GetAttributes()["market_type"])
 }

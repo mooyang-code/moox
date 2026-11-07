@@ -1128,34 +1128,39 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 		// production DatasetSource implements GetTag and always takes this path.
 		return nil
 	}
-	var firstTag, firstRoute string
+	type tagRoute struct{ id, source, market string }
+	routes := make([]tagRoute, 0, len(task.TagIDs))
+	markets := map[string]struct{}{}
 	for _, tagID := range normalizeTagIDs(task.TagIDs) {
 		tag, err := tagSource.GetTag(ctx, task.SpaceID, tagID)
 		if err != nil {
 			return fmt.Errorf("load tag %s: %w", tagID, err)
 		}
-		source := tagattr.Source(tag)
-		market := tagattr.MarketType(tag)
-		if source == "" || market == "" {
+		route := tagRoute{id: tagID, source: tagattr.Source(tag), market: tagattr.MarketType(tag)}
+		if route.source == "" || route.market == "" {
 			return fmt.Errorf("tag %s must have sync.source and market_type attributes", tagID)
 		}
-		// 同一任务的结果数据集只能来自一个市场，否则计划生成会拒绝整个空间。
-		route := source + "/" + market
-		if firstTag == "" {
-			firstTag, firstRoute = tagID, route
-		} else if route != firstRoute {
-			return fmt.Errorf("tag %s (%s) and tag %s (%s) belong to different markets; a task must use tags of one source and market_type", firstTag, firstRoute, tagID, route)
+		// 同一任务的结果数据集只能来自一个数据源；市场可以是同一个，或正好是现货加永续（统一数据集）。
+		if first := routes; len(first) > 0 && route.source != first[0].source {
+			return fmt.Errorf("标签 %s（数据源 %s）与标签 %s（数据源 %s）的数据源不同，一个任务只能使用同一数据源的标签", first[0].id, first[0].source, tagID, route.source)
 		}
-		params, err := domain.ParseCollectParams(task.CollectParams, source, market, task.DataType)
+		routes = append(routes, route)
+		markets[route.market] = struct{}{}
+	}
+	if len(markets) > 1 && !tagattr.IsSpotSwap(markets) {
+		return fmt.Errorf("标签属于 %d 个不同市场，一个任务的标签要么同属一个市场，要么正好是现货加永续（统一数据集）", len(markets))
+	}
+	for _, route := range routes {
+		params, err := domain.ParseCollectParams(task.CollectParams, route.source, route.market, task.DataType)
 		if err != nil {
-			return fmt.Errorf("validate tag %s route: %w", tagID, err)
+			return fmt.Errorf("validate tag %s route: %w", route.id, err)
 		}
 		if err := params.Validate(); err != nil {
-			return fmt.Errorf("tag %s route is invalid: %w", tagID, err)
+			return fmt.Errorf("tag %s route is invalid: %w", route.id, err)
 		}
 		definition, exists := jobs.JobDefinitionByDataType(params.Collector.DataType)
 		if !exists || !definition.ExecutionMode.Valid() || !definition.Matches(params) {
-			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", tagID, source, market, params.Collector.DataType)
+			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", route.id, route.source, route.market, params.Collector.DataType)
 		}
 	}
 	return nil

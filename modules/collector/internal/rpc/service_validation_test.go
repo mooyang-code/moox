@@ -1067,8 +1067,19 @@ func TestValidateCollectionTaskTagRoutes(t *testing.T) {
 	params := `{"target_dataset_id":"bars","frequency":"1m"}`
 	task := domain.CollectionTask{SpaceID: "crypto", DataType: "kline", CollectParams: params}
 
+	// 同一数据源的现货加永续是统一数据集，通过。
 	task.TagIDs = []string{"binance_spot", "binance_swap"}
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "different markets")
+	require.NoError(t, service.validateCollectionTaskTagRoutes(context.Background(), task))
+
+	// 数据源不同的标签不能放进同一个任务。
+	service.datasetSrc.(tagValidationSource).tags["okx_swap"] = &storagepb.Tag{TagId: "okx_swap", Attributes: map[string]string{"sync.source": "okx", "market_type": "swap"}}
+	task.TagIDs = []string{"binance_spot", "okx_swap"}
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "数据源不同")
+
+	// 同一数据源但不是现货加永续（例如再加一个交割合约市场）也拒绝。
+	service.datasetSrc.(tagValidationSource).tags["binance_delivery"] = &storagepb.Tag{TagId: "binance_delivery", Attributes: map[string]string{"sync.source": "binance", "market_type": "delivery"}}
+	task.TagIDs = []string{"binance_spot", "binance_swap", "binance_delivery"}
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "现货加永续")
 
 	for _, tagID := range []string{"binance_spot", "cn_a_share"} {
 		task.TagIDs = []string{tagID}

@@ -289,6 +289,8 @@ func runKlineCheck(ctx context.Context, out io.Writer, flags klineRangeFlags) er
 		DatasetID string `json:"dataset_id"`
 		Frequency string `json:"frequency"`
 		SubjectID string `json:"subject_id"`
+		// SeriesTag 只在统一数据集（同一数据集里有现货、永续多条序列）时有值。
+		SeriesTag string `json:"series_tag,omitempty"`
 		From      string `json:"from"`
 		To        string `json:"to"`
 		Missing   int32  `json:"missing"`
@@ -305,7 +307,7 @@ func runKlineCheck(ctx context.Context, out io.Writer, flags klineRangeFlags) er
 		result.Status = "gaps"
 	}
 	for _, item := range rsp.GetGaps() {
-		result.Gaps = append(result.Gaps, gap{DatasetID: item.GetDatasetId(), Frequency: item.GetFrequency(), SubjectID: item.GetSubjectId(), From: item.GetFrom(), To: item.GetTo(), Missing: item.GetMissing()})
+		result.Gaps = append(result.Gaps, gap{DatasetID: item.GetDatasetId(), Frequency: item.GetFrequency(), SubjectID: item.GetSubjectId(), SeriesTag: item.GetSeriesTag(), From: item.GetFrom(), To: item.GetTo(), Missing: item.GetMissing()})
 	}
 	return printJSON(out, result)
 }
@@ -376,7 +378,11 @@ func runKlineBackfillStatus(ctx context.Context, out io.Writer, flags klineRange
 	}
 	failed := make([]map[string]any, 0, len(rsp.GetFailedChunks()))
 	for _, chunk := range rsp.GetFailedChunks() {
-		failed = append(failed, map[string]any{"dataset_id": chunk.GetDatasetId(), "frequency": chunk.GetFrequency(), "subject_id": chunk.GetSubjectId(), "from": chunk.GetFrom(), "to": chunk.GetTo(), "attempts": chunk.GetAttempts(), "rows": chunk.GetRows(), "last_error": chunk.GetLastError()})
+		item := map[string]any{"dataset_id": chunk.GetDatasetId(), "frequency": chunk.GetFrequency(), "subject_id": chunk.GetSubjectId(), "from": chunk.GetFrom(), "to": chunk.GetTo(), "attempts": chunk.GetAttempts(), "rows": chunk.GetRows(), "last_error": chunk.GetLastError()}
+		if tag := chunk.GetSeriesTag(); tag != "" {
+			item["series_tag"] = tag
+		}
+		failed = append(failed, item)
 	}
 	result := klineJobMap(rsp.GetJob())
 	result["failed_chunks"] = failed

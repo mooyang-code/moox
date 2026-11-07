@@ -152,12 +152,15 @@ export interface KlineBackfillChunk {
   attempts?: number;
   last_error?: string;
   rows?: number;
+  series_tag?: string;
 }
 
 export interface KlineGap {
   dataset_id?: string;
   frequency?: string;
   subject_id?: string;
+  /** 统一数据集（现货加永续）时缺口所属的序列。 */
+  series_tag?: string;
   from?: string;
   to?: string;
   missing?: number;

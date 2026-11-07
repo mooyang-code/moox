@@ -96,6 +96,8 @@ type periodInventoryMarker struct {
 	snapshotRef        string
 	universeSubjectIDs []string
 	failedSubjects     []string
+	universeSeries     []*storageeventpb.SeriesRef
+	failedSeries       []*storageeventpb.SeriesRef
 	eventIDMatches     bool
 	timestampMatches   bool
 }
@@ -462,6 +464,8 @@ func scanPeriodMarkerLinks(db *cpebble.DB, scope PeriodLedgerScope, records map[
 				raw: append([]byte(nil), iter.Value()...), status: marker.GetStatus(), snapshotRef: marker.GetSnapshotRef(),
 				universeSubjectIDs: append([]string(nil), marker.GetUniverseSubjectIds()...),
 				failedSubjects:     append([]string(nil), marker.GetFailedSubjects()...),
+				universeSeries:     marker.GetUniverseSeries(),
+				failedSeries:       marker.GetFailedSeries(),
 			}
 			expectedEventID, idErr := deterministicLedgerPeriodEventID(message.GetSpaceId(), marker)
 			inventoryMarker.eventIDMatches = idErr == nil && expectedEventID == message.GetEventId()
@@ -574,6 +578,7 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 		entry.IntegrityErrors = append(entry.IntegrityErrors, "missing field: series_snapshot")
 	}
 	var markerUniverse, markerFailed []string
+	var markerUniverseSeries, markerFailedSeries []*storageeventpb.SeriesRef
 	markerSnapshotUsable := false
 	if snapshotKey != "" {
 		var series []DatasetPeriodSeries
@@ -602,6 +607,7 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 					entry.IntegrityErrors = append(entry.IntegrityErrors, "snapshot is invalid: "+err.Error())
 				} else {
 					markerUniverse, markerFailed = periodMarkerSubjects(expectation, fields["bitmap"], fields["failures"])
+					markerUniverseSeries, markerFailedSeries = periodMarkerSeries(expectation, fields["bitmap"])
 					markerSnapshotUsable = true
 				}
 			}
@@ -659,6 +665,12 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 			if !equalStrings(marker.failedSubjects, normalizedIDs(markerFailed)) {
 				entry.IntegrityErrors = append(entry.IntegrityErrors, "marker failed_subjects do not match period failure bitmap")
 			}
+			if !equalSeries(marker.universeSeries, markerUniverseSeries) {
+				entry.IntegrityErrors = append(entry.IntegrityErrors, "marker universe_series do not match period snapshot")
+			}
+			if !equalSeries(marker.failedSeries, markerFailedSeries) {
+				entry.IntegrityErrors = append(entry.IntegrityErrors, "marker failed_series do not match period failure bitmap")
+			}
 		}
 		if outboxMarker, pending := record.outboxIDs[eventID]; pending {
 			if !bytes.Equal(marker.raw, outboxMarker.raw) {
@@ -693,9 +705,24 @@ func deterministicLedgerPeriodEventID(spaceID string, marker *storageeventpb.Dat
 	_, eventID, err := BuildLedgerPeriodCompletedMessage(spaceID, &LedgerPeriodCompleted{
 		DatasetID: marker.GetDatasetId(), Frequency: marker.GetFrequency(), PeriodTime: marker.GetPeriodTime(),
 		Status: marker.GetStatus(), SnapshotRef: marker.GetSnapshotRef(), UniverseSubjectIDs: marker.GetUniverseSubjectIds(),
-		FailedSubjects: marker.GetFailedSubjects(), CommittedPositions: positions, CompletedAt: marker.GetCompletedAt(),
+		FailedSubjects: marker.GetFailedSubjects(), UniverseSeries: marker.GetUniverseSeries(), FailedSeries: marker.GetFailedSeries(),
+		CommittedPositions: positions, CompletedAt: marker.GetCompletedAt(),
 	})
 	return eventID, err
+}
+
+// equalSeries 比较两份序列名单（顺序无关，空项与重复项忽略）。
+func equalSeries(left, right []*storageeventpb.SeriesRef) bool {
+	a, b := normalizedSeries(left), normalizedSeries(right)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].GetSubjectId() != b[i].GetSubjectId() || a[i].GetSeriesTag() != b[i].GetSeriesTag() {
+			return false
+		}
+	}
+	return true
 }
 
 func bitmapHasPaddingBits(bitmap []byte, expectedCount uint32) bool {

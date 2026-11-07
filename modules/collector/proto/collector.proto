@@ -329,6 +329,8 @@ message PreviewKlineResampleSourceRsp {
   repeated string allowed_frequencies = 10;
   // 目标频率不满足合成规则时的原因；为空表示通过或未给出目标频率。
   string validation_error = 11;
+  // 源是统一数据集（现货加永续，market_type 为 multi）时，各条源序列的 series_tag；此时 source_series_tag 为空。
+  repeated string source_series_tags = 12;
 }
 
 message SyncSubjectsReq {
@@ -419,6 +421,8 @@ message KlineGap {
   // to 是缺失区间的右开端点。
   string to = 5;
   int32 missing = 6;
+  // series_tag 只在统一数据集（同一数据集里有多个 series_tag）时有值：缺口属于（标的、该 tag）这一条序列，如永续。
+  string series_tag = 7;
 }
 
 message CheckKlineRsp {
@@ -460,6 +464,8 @@ message KlineBackfillChunk {
   int32 rows = 9;
   // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
   string dataset_name = 10;
+  // series_tag 只在统一数据集时有值：该分块补的是这一条序列。
+  string series_tag = 11;
 }
 
 message KlineBackfillJob {

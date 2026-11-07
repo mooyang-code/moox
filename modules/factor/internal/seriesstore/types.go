@@ -219,6 +219,10 @@ type SubjectWrite struct {
 	Subject  string
 	From, To time.Time
 	Rows     *Columns
+	// Scoped 为真时只替换 Rows 里出现的 series_tag，标的的其他序列保持不动：
+	// 统一数据集的现货、永续分两次导入时，后一次不能删掉前一次写的另一个市场。
+	// 为假（同步器、对账）时替换标的的全部序列。
+	Scoped bool
 }
 
 // PendingSpan 是待提交的失效重算区间。

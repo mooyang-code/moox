@@ -8,6 +8,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -71,9 +72,13 @@ type PeriodMarker struct {
 	Status           string
 	UniverseSubjects []string
 	FailedSubjects   []string
-	Factors          []FactorState
-	TriggerEventID   string
-	ComputedAt       time.Time
+	// UniverseSeries、FailedSeries 是按序列（标的、series_tag）的期望全集与失败名单：只有统一数据集（多个 series_tag）才有，
+	// 单序列数据集为空，按标的字段处理。
+	UniverseSeries []seriesset.Series
+	FailedSeries   []seriesset.Series
+	Factors        []FactorState
+	TriggerEventID string
+	ComputedAt     time.Time
 }
 
 // FactorState 是一个成员一期的结果状态：Member 是成员别名（结果数据集内唯一），FactorID 是它引用的定义；
@@ -88,6 +93,12 @@ type FactorState struct {
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string
+	// FailedSeries、GapSeries 是按序列的失败与空洞名单（统一数据集才有，口径同 FailedSubjects、GapSubjects）。
+	FailedSeries []seriesset.Series
+	GapSeries    []seriesset.Series
+	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
+	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。
+	SkippedSeriesTags []string
 }
 
 type Store interface {

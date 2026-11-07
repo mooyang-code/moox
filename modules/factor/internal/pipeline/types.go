@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 type Mode int
@@ -35,10 +36,18 @@ type Plan struct {
 	Expected       []string
 	Available      []string
 	UpstreamFailed []string
-	CarryColumns   []string
-	WriteCarry     bool
-	TriggerEventID string
-	Budget         time.Duration
+	// ExpectedSeries、UpstreamFailedSeries 是按序列（标的、series_tag）的期望全集与上游失败名单，只有统一数据集才有：
+	// 期望、缺失、跳过、失败都按序列判断，一个市场的缺数不连累另一个市场。单序列数据集为空，一切按标的处理。
+	// 有序列全集时 Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
+	ExpectedSeries       []seriesset.Series
+	UpstreamFailedSeries []seriesset.Series
+	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层按本地存储推测出来的（补算、失效重算没有冻结全集可用），不是 marker 里冻结的确定值。
+	// 推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的 series_tag 不写 NULL，保留已有的值。
+	ExpectedSeriesDerived bool
+	CarryColumns          []string
+	WriteCarry            bool
+	TriggerEventID        string
+	Budget                time.Duration
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。
 	FillOnly bool
@@ -56,6 +65,8 @@ type RowKey struct {
 type Outcome struct {
 	Status         string
 	FailedSubjects []string
+	// FailedSeries 是按序列的失败名单（统一数据集才有）。
+	FailedSeries   []seriesset.Series
 	Factors        []storageio.FactorState
 	RowsWritten    int
 	Warming        int
@@ -117,6 +128,11 @@ type LoadResult struct {
 	View           *serieswindow.View
 	Available      []string
 	FailedSubjects []string
+	// AvailableSeries、FailedSeries 是统一数据集上期望序列里本期可用与不可用的序列（可用：本期有真实的源行；
+	// 不可用：上游失败、本期数据还没到、同步失败、预热中），两者合起来正好是 Plan.ExpectedSeries。单序列数据集为空。
+	// 不可用序列的标的都在 FailedSubjects 里（按标的口径：任一序列失败，标的就记失败）；Available 是至少有一条可用序列的标的。
+	AvailableSeries []seriesset.Series
+	FailedSeries    []seriesset.Series
 	// WarmingSubjects are left out of the period until their lookback window
 	// is loaded; they are also listed in FailedSubjects.
 	WarmingSubjects []string
@@ -130,6 +146,8 @@ type Computation struct {
 	// Failures 记录成员整体计算失败的原因（补算模式下截面因子的逐行结果不带错误，原因放在这里供试算等调用方报告）。
 	Failures  map[string]error
 	BudgetHit bool
+	// availableSeries 是统一数据集上本期可用的序列：成员整体计算失败时，这些序列都记为失败。
+	availableSeries []seriesset.Series
 }
 
 // ItemResult 是一个成员在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、

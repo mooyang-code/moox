@@ -15,6 +15,8 @@ type SourceAbsence struct {
 	DatasetID string
 	Frequency string
 	SubjectID string
+	// SeriesTag 只在统一数据集（多个 series_tag）时有值；单序列数据集为空。
+	SeriesTag string
 	From      time.Time
 	To        time.Time
 	Bars      int
@@ -26,6 +28,7 @@ type sourceAbsenceRow struct {
 	DatasetID string    `gorm:"column:c_dataset_id;primaryKey"`
 	Frequency string    `gorm:"column:c_frequency;primaryKey"`
 	SubjectID string    `gorm:"column:c_subject_id;primaryKey"`
+	SeriesTag string    `gorm:"column:c_series_tag;primaryKey"`
 	From      time.Time `gorm:"column:c_from;primaryKey"`
 	To        time.Time `gorm:"column:c_to"`
 	Bars      int       `gorm:"column:c_bars"`
@@ -48,9 +51,9 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 			if !absence.From.Before(absence.To) {
 				return fmt.Errorf("absence range of %s is empty", absence.SubjectID)
 			}
-			if err := tx.Exec(`INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from, c_to, c_bars, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`,
-				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
+			if err := tx.Exec(`INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from, c_to, c_bars, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`,
+				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.SeriesTag, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
 				return err
 			}
 		}
@@ -58,8 +61,8 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 	})
 }
 
-// AbsencesIn 返回与 [from, to) 相交的已确认缺失；subjects 为空表示全部标的。
-func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]SourceAbsence, error) {
+// AbsencesIn 返回与 [from, to) 相交的已确认缺失；subjects 为空表示全部标的；seriesTag 为空表示不区分序列（单序列数据集）。
+func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID, frequency, seriesTag string, subjects []string, from, to time.Time) ([]SourceAbsence, error) {
 	if err := r.ready(); err != nil {
 		return nil, err
 	}
@@ -67,13 +70,16 @@ func (r *BackfillRepository) AbsencesIn(ctx context.Context, spaceID, datasetID,
 	if len(subjects) > 0 {
 		query = query.Where("c_subject_id IN ?", subjects)
 	}
+	if seriesTag != "" {
+		query = query.Where("c_series_tag = ?", seriesTag)
+	}
 	var rows []sourceAbsenceRow
-	if err := query.Order("c_subject_id, c_from").Find(&rows).Error; err != nil {
+	if err := query.Order("c_subject_id, c_series_tag, c_from").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]SourceAbsence, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
+		out = append(out, SourceAbsence{SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, Bars: row.Bars, CreatedAt: row.CreatedAt})
 	}
 	return out, nil
 }
