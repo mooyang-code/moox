@@ -19,7 +19,7 @@
         size="small"
         :data="rows"
         :pagination="false"
-        :scroll="{ x: 1000 }"
+        :scroll="{ x: MEMBERS_WIDTH }"
         :expandable="{ width: 40 }"
         v-model:expanded-keys="expandedKeys"
       >
@@ -30,7 +30,7 @@
               <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="交易所 · 市场" :width="150">
+          <a-table-column title="交易所 · 市场" :width="160">
             <template #cell="{ record }"
               >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</template
             >
@@ -41,21 +41,21 @@
           <a-table-column title="启用" :width="70">
             <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
           </a-table-column>
-          <a-table-column title="就绪" :width="150">
+          <a-table-column title="就绪" :width="140">
             <template #cell="{ record }">
               <StatusMark :tone="record.account.ready ? 'ok' : 'bad'">
                 {{ record.account.ready ? "就绪" : record.account.last_error || "未就绪" }}
               </StatusMark>
             </template>
           </a-table-column>
-          <a-table-column title="权益" :width="110" align="right">
+          <a-table-column title="权益" :width="120" align="right">
             <template #cell="{ record }"
-              ><span class="tx-num">{{ fmtMoney(record.account.snapshot?.equity) }}</span></template
+              ><span class="tx-num tx-nowrap">{{ fmtMoney(record.account.snapshot?.equity) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="可用资金" :width="110" align="right">
+          <a-table-column title="可用资金" :width="120" align="right">
             <template #cell="{ record }"
-              ><span class="tx-num">{{ fmtMoney(record.account.snapshot?.available_funds) }}</span></template
+              ><span class="tx-num tx-nowrap">{{ fmtMoney(record.account.snapshot?.available_funds) }}</span></template
             >
           </a-table-column>
           <a-table-column title="最近同步" :width="120">
@@ -202,6 +202,8 @@ const {
   openClosePaper
 } = inject(detailContextKey)!;
 
+// 各列宽度之和加展开箭头列：窄屏时横向滚动，数字不折行
+const MEMBERS_WIDTH = 40 + 190 + 160 + 80 + 70 + 140 + 120 + 120 + 120 + 190;
 const memberDialog = ref<InstanceType<typeof MemberDialog>>();
 const expandedKeys = ref<string[]>([]);
 const allLogicals = ref<LogicalAccount[]>([]);

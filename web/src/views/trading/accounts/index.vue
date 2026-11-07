@@ -25,13 +25,13 @@
         :data="rows"
         :loading="loading"
         :pagination="false"
-        :scroll="{ x: 980 }"
+        :scroll="{ x: LIST_WIDTH }"
         :row-class="rowClass"
         v-model:expanded-keys="expandedKeys"
         @row-click="onRowClick"
       >
         <template #columns>
-          <a-table-column title="组合账户" :width="250">
+          <a-table-column title="组合账户" :width="230">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <strong>{{ record.logical.name }}</strong>
@@ -42,7 +42,7 @@
               </template>
             </template>
           </a-table-column>
-          <a-table-column title="交易所" :width="190">
+          <a-table-column title="交易所" :width="180">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">{{ record.exchangesText }}</template>
               <template v-else>
@@ -50,7 +50,7 @@
               </template>
             </template>
           </a-table-column>
-          <a-table-column title="关联策略">
+          <a-table-column title="关联策略" :width="200">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <template v-if="strategyOf(record)">
@@ -68,7 +68,7 @@
               <span v-else class="tx-muted">优先级 {{ record.priority }} · {{ record.enabled ? "启用" : "停用" }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="自动执行" :width="150">
+          <a-table-column title="自动执行" :width="130">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <span v-if="record.logical.control_mode !== 1" class="tx-muted">不适用</span>
@@ -80,15 +80,15 @@
                 </a-tooltip>
                 <StatusMark v-else tone="run">运行中</StatusMark>
               </template>
-              <span v-else class="tx-muted">同步于 {{ fmtClock(record.account.last_sync_at) }}</span>
+              <span v-else class="tx-muted tx-nowrap">同步于 {{ fmtClock(record.account.last_sync_at) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="权益" :width="150" align="right">
+          <a-table-column title="权益" :width="170" align="right">
             <template #cell="{ record }">
               <span class="tx-num tx-nowrap">
                 <strong v-if="record.kind === 'combo'">{{ fmtMoney(record.equity) }}</strong>
                 <template v-else>{{ fmtMoney(record.account.snapshot?.equity) }}</template>
-                <span v-if="record.kind === 'combo'" class="tx-muted"> {{ record.settlementAsset }}</span>
+                <span v-if="record.kind === 'combo'" class="tx-muted tx-unit">{{ record.settlementAsset }}</span>
               </span>
             </template>
           </a-table-column>
@@ -96,9 +96,11 @@
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <span v-if="changes[record.key] === undefined" class="tx-muted">…</span>
-                <span v-else class="tx-num" :class="pnlClass(changes[record.key])">{{ fmtPercent(changes[record.key]) }}</span>
+                <span v-else class="tx-num tx-nowrap" :class="pnlClass(changes[record.key])">{{
+                  fmtPercent(changes[record.key])
+                }}</span>
               </template>
-              <span v-else class="tx-muted tx-num">可用 {{ fmtMoney(record.account.snapshot?.available_funds) }}</span>
+              <span v-else class="tx-muted tx-num tx-nowrap">可用 {{ fmtMoney(record.account.snapshot?.available_funds) }}</span>
             </template>
           </a-table-column>
           <a-table-column title="持仓" :width="70" align="right">
@@ -109,7 +111,7 @@
               </template>
             </template>
           </a-table-column>
-          <a-table-column title="就绪" :width="150">
+          <a-table-column title="就绪" :width="140">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <StatusMark v-if="record.logical.ready" tone="ok">就绪</StatusMark>
@@ -163,6 +165,9 @@ import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
 import UnjoinedDialog from "./unjoined-dialog.vue";
 
 defineOptions({ name: "trading-accounts" });
+
+// 各列宽度之和：窄屏时表格横向滚动，每一列都保持自己的宽度，不会被挤成 0
+const LIST_WIDTH = 230 + 180 + 200 + 130 + 170 + 130 + 70 + 140;
 
 const route = useRoute();
 const router = useRouter();

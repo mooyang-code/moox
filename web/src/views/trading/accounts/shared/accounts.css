@@ -94,3 +94,8 @@
 .tx-confirm--prod .arco-modal-header {
   border-top: 3px solid rgb(var(--red-6));
 }
+
+/* 数字后面的单位 */
+.tx-unit {
+  margin-left: 4px;
+}
