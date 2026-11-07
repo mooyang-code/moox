@@ -368,22 +368,31 @@ func credentialUnavailable(err error) bool {
 	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
 }
 
-// allOrdersUnreachable 判断撤目标单失败是否每一支都是等多久都不会成功的：凭证失效、账户没有会话、交易所确认标的不存在。
-// 多笔单的错误是 errors.Join 起来的，只要有一支是别的错误（例如超时、限流），就不算，照样让调用方重试。
-func allOrdersUnreachable(err error) bool {
+// allOrdersUnreachable 判断撤目标单失败是否每一支都是等多久都不会成功的：凭证失效、交易所确认标的不存在、
+// 取不到账户会话而交易账户已经停用。取不到会话但交易账户仍启用（例如重启后会话还没建好）只是暂时的，不算；
+// 查不到交易账户状态也不算。多笔单的错误是 errors.Join 起来的，只要有一支是别的错误（例如超时、限流），就不算，照样让调用方重试。
+func (s *Service) allOrdersUnreachable(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
 		for _, child := range children {
-			if !allOrdersUnreachable(child) {
+			if !s.allOrdersUnreachable(ctx, child) {
 				return false
 			}
 		}
 		return len(children) > 0
 	}
-	return credentialUnavailable(err) || exchange.IsInstrumentNotFound(err)
+	if exchange.IsKind(err, exchange.ErrorAuthentication) || exchange.IsInstrumentNotFound(err) {
+		return true
+	}
+	var accountErr *orderapp.AccountExecutionError
+	if !errors.As(err, &accountErr) || accountErr.Operation != "adapter" {
+		return false
+	}
+	account, getErr := s.Store.GetTradingAccountByID(ctx, accountErr.TradingAccountID)
+	return getErr == nil && account.Status == string(exchange.AccountStatusDisabled)
 }
 
 // syncFailureSummary 是给前端看的同步失败原因：用中文说清是没有会话还是凭证失效，不带交易所原文（可能是英文或带请求串）。
@@ -543,8 +552,8 @@ func (s *Service) ReleaseSession(
 	defer unlock()
 	// 释放会删掉目标，之后没有人再管这个组合的目标单。顺序：先删目标（执行器不会再按它下新单），再撤目标单，最后做所有权 CAS。
 	// 撤不下来就不释放、返回错误，由策略稍后重试释放（目标已删，重试时只撤单）。撤单按组合查单，不依赖目标。
-	// 凭证失效、账户没有会话时撤单永远不会成功：比照移出成员，只按本地记录放行，记关注项，交给人工核对；
-	// 交易所确认标的不存在（已下架）的单也不可能还挂着，同样放行。
+	// 凭证失效、交易账户已停用（没有会话）时撤单永远不会成功：比照移出成员，只按本地记录放行，记关注项，交给人工核对；
+	// 交易所确认标的不存在（已下架）的单也不可能还挂着，同样放行。账户仍启用只是暂时没有会话（例如重启后还没建好）时不放行，让策略重试。
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return err
@@ -557,10 +566,10 @@ func (s *Service) ReleaseSession(
 		}
 		if s.TargetOrders != nil {
 			if err := s.TargetOrders.ReleaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-				if ctx.Err() != nil || !allOrdersUnreachable(err) {
+				if ctx.Err() != nil || !s.allOrdersUnreachable(ctx, err) {
 					return targetOrdersNotReleased{cause: err}
 				}
-				detail := "组合 " + logicalAccountID + "：凭证失效、没有会话或标的已不存在，目标单没能撤下，只按本地记录释放会话，需人工核对"
+				detail := "组合 " + logicalAccountID + "：凭证失效、交易账户已停用或标的已不存在，目标单没能撤下，只按本地记录释放会话，需人工核对"
 				telemetry.Note(telemetry.AttentionReleaseOrdersUnverified, detail, time.Now())
 				log.WarnContextf(ctx, "交易关注项：%s：%v", detail, err)
 			}

@@ -807,7 +807,8 @@ func (a *Adapter) listOpenOrders(ctx context.Context, values url.Values) ([]exch
 		values,
 	)
 	if err != nil {
-		return nil, err
+		// 带上错误码：按标的查时标的已下架是 -1121（exchange.IsInstrumentNotFound），同步据此跳过这个标的。
+		return nil, classifyAPIError(err, raw)
 	}
 	var payload []orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -1022,7 +1023,8 @@ func (a *Adapter) ListRecentFills(
 			values,
 		)
 		if err != nil {
-			return nil, cursor, err
+			// 带上错误码：标的已下架时是 -1121（exchange.IsInstrumentNotFound），同步据此跳过这个标的。
+			return nil, cursor, classifyAPIError(err, raw)
 		}
 		var payload []tradePayload
 		if err := json.Unmarshal(raw, &payload); err != nil {

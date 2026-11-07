@@ -87,9 +87,7 @@ type FlattenAccountResult struct {
 	Error string              `json:"error,omitempty"`
 	// Unblocked 为真表示下架清仓发现标的已被解除禁止而提前结束（不算失败）。
 	Unblocked bool `json:"unblocked,omitempty"`
-	// ManualCheckOrderIDs 是这个账户上撤不掉、跳过的别的单（结果未知、交易所确认标的不存在），要人工核对。
-	ManualCheckOrderIDs []string `json:"manual_check_order_ids,omitempty"`
-	cause               error
+	cause     error
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
@@ -353,7 +351,7 @@ func (s *Service) FlattenLogicalAccount(
 		AttemptStartedAt: attemptStart,
 		Accounts:         make([]FlattenAccountResult, 0, len(members)),
 	}
-	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing(), unreachable: map[string]string{}}
+	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
 	if command.actionType() == operatordomain.ActionDelistFlatten {
 		scope.stillBlocked = func(ctx context.Context, tradingAccountID string) (bool, error) {
 			return s.delistStillBlocked(ctx, command.SpaceID, tradingAccountID, scope.instrumentID)
@@ -438,7 +436,6 @@ func (s *Service) FlattenLogicalAccount(
 		if accountResult.cause != nil && errors.Is(accountResult.cause, context.DeadlineExceeded) && !time.Now().Before(deadline) {
 			accountResult.cause = &orderapp.AccountExecutionError{TradingAccountID: member.TradingAccountID, Operation: "flatten_budget", Err: accountResult.cause}
 		}
-		accountResult.ManualCheckOrderIDs = scope.unreachableFor(member.TradingAccountID)
 		if wasExecutable {
 			executable++
 		}
@@ -524,7 +521,7 @@ func (s *Service) finishFlatten(
 	if status != string(operatordomain.StatusRunning) {
 		outcome, settleErr := s.settleFlattenChildren(ctx, command, members)
 		if settleErr != nil {
-			// 列子单、读库失败：没法判断，保持原样等下一次恢复。
+			// 列子单、读写库这类共享故障：没法判断，保持原样等下一次恢复，错误照样返回。
 			result.FinishingStatus = status
 			if result.FinishingSince == 0 {
 				result.FinishingSince = s.clock().UnixMilli()
@@ -569,14 +566,15 @@ func (s *Service) finishFlatten(
 //   - 提交中、结果未知的先同步解析，解析后退回待提交的同样丢弃；
 //   - 挂单中、撤单中的不动，它们自己会结束。
 //
-// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃报错、取不到账户会话）；manualCheck 是收拾不了的
-// （交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误只有列子单这类读库失败。
+// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃遇到本动作的账户问题、取不到账户会话、预算到点）；
+// manualCheck 是收拾不了的（交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误是这次没法判断的：列子单读库失败，
+// 或解析、丢弃遇到不只关乎本动作的错误（ActionScopedError 判为否，例如写库失败）；预算到点后列子单失败记成本账户的预算错误返回。
 func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (settleOutcome, error) {
 	var outcome settleOutcome
 	for _, member := range members {
 		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
 		if err != nil {
-			return settleOutcome{}, err
+			return settleOutcome{}, settleScoped(ctx, member.TradingAccountID, err)
 		}
 		for _, child := range records {
 			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
@@ -586,6 +584,9 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 			if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
 				resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
 				if resolveErr != nil {
+					if resolveErr = settleScoped(ctx, child.TradingAccountID, resolveErr); !ActionScopedError(resolveErr) {
+						return settleOutcome{}, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr)
+					}
 					if childUnsettleable(resolveErr) {
 						outcome.manualCheck = append(outcome.manualCheck, child.OrderID)
 					} else {
@@ -599,6 +600,9 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 			switch state {
 			case orderdomain.Pending:
 				if _, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID); discardErr != nil {
+					if discardErr = settleScoped(ctx, child.TradingAccountID, discardErr); !ActionScopedError(discardErr) {
+						return settleOutcome{}, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr)
+					}
 					outcome.unsettled = append(outcome.unsettled, child.OrderID)
 					outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
 				}
@@ -608,6 +612,15 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 		}
 	}
 	return outcome, nil
+}
+
+// settleScoped 把预算到点（调用上下文已结束）时原样带回的超时、取消错误记成这个账户的预算错误：那是本动作这次调用的时间用完，
+// 不是共享故障，下次恢复接着收拾；其余错误原样返回，由 ActionScopedError 判断。
+func settleScoped(ctx context.Context, tradingAccountID string, err error) error {
+	if ctx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		return &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_settle", Err: err}
+	}
+	return err
 }
 
 // settleOutcome 是一次收拾子单的结果。
@@ -1072,7 +1085,7 @@ func (s *Service) hasCancelableOrders(
 		return false, err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == actionID {
 			continue
 		}
@@ -1129,19 +1142,15 @@ func (s *Service) cancelAccountOrders(
 	}
 	var cancelErrors []error
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue
 		}
 		err := s.stopOrder(ctx, current)
-		if err != nil && scope.unreachable != nil && exchange.IsInstrumentNotFound(err) {
-			// 交易所确认标的不存在：这笔单撤不掉、也确认不了（多半是之前动作留下、已标为需人工核对的子单），跳过它，
-			// 不让它挡住这次清仓；单号写进账户结果并记关注项。
-			scope.unreachable[current.OrderID] = tradingAccountID
-			detail := fmt.Sprintf("组合 %s 的动作 %s：执行账户 %s 上有撤不掉的单（标的已不存在），已跳过，需人工核对", current.LogicalAccountID, actionID, tradingAccountID)
-			telemetry.Note(telemetry.AttentionFlattenOrdersUnsettled, detail, s.clock())
-			log.WarnContextf(ctx, "交易关注项：%s（%s）：%v", detail, current.OrderID, err)
+		if exchange.IsInstrumentNotFound(err) {
+			// 交易所确认标的不存在（已下架）：这笔单撤不掉也查不到（多半是之前动作留下的结果未知子单）。不算撤单失败，
+			// 撤单后的同步（syncAfterCancel，此时一定有要撤的单）会把它按过期结束并记关注项，随后的撤单确认就过了。
 			continue
 		}
 		if err != nil {
@@ -1167,7 +1176,7 @@ func (s *Service) confirmAccountCancellations(
 		return err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue
