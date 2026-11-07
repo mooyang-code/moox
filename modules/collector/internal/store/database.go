@@ -237,7 +237,7 @@ func (s *Store) verifySchemaUpgrade() error {
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("%w：%s。请先停止 Collector，按 modules/collector/schema/migrations/20261105-unified-dataset.sql 升级数据库（步骤见《采集》文档“升级已有的 Collector 库”）后再启动", ErrSchemaNotUpgraded, strings.Join(problems, "；"))
+		return fmt.Errorf("%w：%s。请先停止 Collector 并备份数据库，再用 sqlite3 -bail 执行发布包里 collector/schema/migrations/20261105-unified-dataset.sql 升级（只能对未升级的库执行一次，步骤见《采集》文档“升级已有的 Collector 库”），然后再启动", ErrSchemaNotUpgraded, strings.Join(problems, "；"))
 	}
 	return nil
 }
