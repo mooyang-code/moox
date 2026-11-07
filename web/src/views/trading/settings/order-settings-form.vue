@@ -9,10 +9,10 @@
         <a-input v-model="model.rebalance_threshold_ratio" :disabled="model.rebalance_threshold_mode === 'ALWAYS'" />
       </a-form-item>
       <a-form-item label="现货最小下单额">
-        <a-input v-model="model.min_notional_spot" suffix="USDT" />
+        <a-input v-model="model.min_notional_spot" :suffix="unit" />
       </a-form-item>
       <a-form-item label="合约最小下单额" extra="合约减仓和清仓低于这个额度也能下">
-        <a-input v-model="model.min_notional_swap" suffix="USDT" />
+        <a-input v-model="model.min_notional_swap" :suffix="unit" />
       </a-form-item>
     </section>
 
@@ -25,7 +25,7 @@
         <div class="cap-title">{{ market.label }}</div>
         <div v-for="(row, index) in model[market.key]" :key="index" class="cap-row">
           <a-input v-model="row.key" :placeholder="market.placeholder" />
-          <a-input v-model="row.value" placeholder="金额" suffix="USDT" />
+          <a-input v-model="row.value" placeholder="金额" :suffix="unit" />
           <a-button type="text" status="danger" @click="model[market.key].splice(index, 1)">删除</a-button>
         </div>
         <a-button type="text" @click="model[market.key].push({ key: '', value: '' })">增加{{ market.label }}上限</a-button>
@@ -35,7 +35,7 @@
     <section class="settings-group">
       <h4>拆单与节奏</h4>
       <a-form-item label="单笔上限" extra="拆单时每笔的名义金额上限">
-        <a-input v-model="model.max_child_notional" suffix="USDT" />
+        <a-input v-model="model.max_child_notional" :suffix="unit" />
       </a-form-item>
       <a-form-item label="拆单随机化" extra="每笔金额在单笔上限的 50% 到 100% 之间随机">
         <a-switch v-model="model.randomize_split" />
@@ -80,15 +80,19 @@
     <a-space>
       <a-button type="primary" :loading="saving" :disabled="!!props.error" @click="submit">保存下单设置</a-button>
       <a-button @click="restore">还原</a-button>
+      <a-popconfirm v-if="props.error" content="按默认值重置会丢掉原来保存的全部下单设置，确认重置？" @ok="resetToDefault">
+        <a-button status="danger">按默认值重置</a-button>
+      </a-popconfirm>
     </a-space>
   </a-form>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import type { OrderSettings } from "@/api/trade/settings";
 import {
   buildOrderSettingsRequest,
+  defaultOrderSettings,
   orderModeOptions,
   orderSettingsToModel,
   thresholdModeOptions,
@@ -104,6 +108,8 @@ const props = defineProps<{
   saving?: boolean;
   /** 存的设置读不出来时的说明（LogicalAccount.order_settings_error）：显示提示并禁止保存，不按默认值显示 */
   error?: string;
+  /** 组合的结算币，默认 USDT：金额类设置的单位 */
+  settlementAsset?: string;
 }>();
 const emit = defineEmits<{ save: [settings: OrderSettings]; refresh: [] }>();
 
@@ -114,6 +120,7 @@ const capMarkets = [
 
 const model = reactive(orderSettingsToModel(props.settings));
 const formError = ref("");
+const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
 
 function reset() {
   Object.assign(model, orderSettingsToModel(props.settings));
@@ -121,6 +128,11 @@ function reset() {
 }
 
 watch(() => props.settings, reset);
+
+// 已保存的设置读不出来时的出路：用户确认后按默认值整个覆盖（由父组件调保存接口）。
+function resetToDefault() {
+  emit("save", buildOrderSettingsRequest(orderSettingsToModel(defaultOrderSettings())));
+}
 
 function restore() {
   reset();

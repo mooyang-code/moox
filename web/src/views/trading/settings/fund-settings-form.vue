@@ -16,11 +16,11 @@
         label="BNB 保留金额"
         extra="BNB 市值低于这个金额减 10 时市价补买到这个金额；0 表示不保留。保留期间 BNB 不参与策略持仓"
       >
-        <a-input v-model="model.bnb_reserve_amount" suffix="USDT" />
+        <a-input v-model="model.bnb_reserve_amount" :suffix="unit" />
       </a-form-item>
       <a-form-item
         label="小额资产兑换 BNB"
-        extra="定期把 MooX 交易留下的零头（不在当前目标里、不是排除资产、低于 5 USDT）兑成 BNB；你自己放在账户里、MooX 没交易过的币不动"
+        extra="定期把 MooX 交易留下的零头（不在当前目标里、不是排除资产、低于 5 个结算币）兑成 BNB；你自己放在账户里、MooX 没交易过的币不动"
       >
         <a-switch v-model="model.dust_convert_enabled" />
       </a-form-item>
@@ -32,10 +32,11 @@
     <section v-if="liveOnly" class="settings-group">
       <h4>稳定币保证金（币安统一账户）</h4>
       <p class="settings-hint">
-        各稳定币的目标比例，必须包含 USDT 且比例之和为 1。每小时检查一次，偏离目标超过 5% 时在稳定币交易对上调平；不填表示不调平。
+        各稳定币的目标比例，必须包含结算币（{{ unit }}）且比例之和为 1。每小时检查一次，偏离目标超过 5%
+        时在稳定币交易对上调平；不填表示不调平。
       </p>
       <div v-for="(row, index) in model.stablecoin_margin" :key="index" class="asset-row">
-        <a-input v-model="row.asset" placeholder="资产，例如 USDT" />
+        <a-input v-model="row.asset" placeholder="资产，例如 USDT、USDC" />
         <a-input v-model="row.value" placeholder="目标比例，例如 0.6" />
         <a-button type="text" status="danger" @click="model.stablecoin_margin.splice(index, 1)">删除</a-button>
       </div>
@@ -44,10 +45,10 @@
 
     <section class="settings-group">
       <h4>保证金币</h4>
-      <p class="settings-hint">统一账户里作为保证金的币种，按这里配置的固定 USDT 价值计入权益，不参与策略持仓。</p>
+      <p class="settings-hint">统一账户里作为保证金的币种，按这里配置的固定 {{ unit }} 价值计入权益，不参与策略持仓。</p>
       <div v-for="(row, index) in model.margin_coins" :key="index" class="asset-row">
         <a-input v-model="row.asset" placeholder="资产，例如 ETH" />
-        <a-input v-model="row.value" placeholder="配置的价值" suffix="USDT" />
+        <a-input v-model="row.value" placeholder="配置的价值" :suffix="unit" />
         <a-button type="text" status="danger" @click="model.margin_coins.splice(index, 1)">删除</a-button>
       </div>
       <a-button type="text" @click="model.margin_coins.push({ asset: '', value: '' })">增加保证金币</a-button>
@@ -70,6 +71,13 @@
     <a-space>
       <a-button type="primary" :loading="saving" :disabled="!!props.error" @click="submit">保存资金设置</a-button>
       <a-button @click="restore">还原</a-button>
+      <a-popconfirm
+        v-if="props.error"
+        content="按默认值重置会丢掉原来保存的全部资金设置（包括稳定币保证金、保证金币、底仓），确认重置？"
+        @ok="resetToDefault"
+      >
+        <a-button status="danger">按默认值重置</a-button>
+      </a-popconfirm>
     </a-space>
   </a-form>
 </template>
@@ -79,6 +87,7 @@ import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
 import {
   buildFundSettingsRequest,
+  defaultFundSettings,
   fundSettingsToModel,
   showsLiveOnlyFields,
   validateFundSettingsModel
@@ -105,6 +114,7 @@ const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
 const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance, settlementAsset: props.settlementAsset }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
+const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
 
 const model = reactive(fundSettingsToModel(props.settings));
 const formError = ref("");
@@ -115,6 +125,11 @@ function reset() {
 }
 
 watch(() => props.settings, reset);
+
+// 已保存的设置读不出来（或个别数值读不出来）时的出路：用户确认后按默认值整个覆盖（由父组件调保存接口）。
+function resetToDefault() {
+  emit("save", buildFundSettingsRequest(fundSettingsToModel(defaultFundSettings()), scope.value));
+}
 
 function restore() {
   reset();
