@@ -127,6 +127,9 @@ type MigrateReport struct {
 	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
 	// AddedEgressDomains 记录 --add-egress-domain 实际追加到 http_domains 的域名（已在名单里的不算）。
 	AddedEgressDomains []string `json:"added_egress_domains,omitempty"`
+	// DroppedComments 记录整条重写时注释没能保住的条目（多行数组中间几行上的注释）：首行、末行的行尾注释会接在新行后面，
+	// 中间几行的注释保不住，在这里列出条目位置，提示用户该条目的注释已去掉。
+	DroppedComments []string `json:"dropped_comments,omitempty"`
 	// RemovedFactorTasks / RemovedFactors 记录 --remove-factor-task、--remove-factor 删掉的任务 ID 与因子 ID。
 	RemovedFactorTasks []string `json:"removed_factor_tasks,omitempty"`
 	RemovedFactors     []string `json:"removed_factors,omitempty"`
@@ -207,7 +210,7 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	}
 	if opts.AddDeploymentHost != "" {
 		var added []string
-		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents); err != nil {
+		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents, &report.DroppedComments); err != nil {
 			return report, err
 		}
 		if len(added) > 0 {
@@ -215,7 +218,7 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 		}
 	}
 	if len(opts.AddEgressDomains) > 0 {
-		if migrated, report.AddedEgressDomains, err = addEgressDomains(migrated, opts.AddEgressDomains); err != nil {
+		if migrated, report.AddedEgressDomains, err = addEgressDomains(migrated, opts.AddEgressDomains, &report.DroppedComments); err != nil {
 			return report, err
 		}
 	}
@@ -1024,7 +1027,7 @@ func setHostReachability(plain []byte, host, mode string) ([]byte, error) {
 
 // addEgressDomains 把域名追加到 [egress_proxy] http_domains，返回实际追加的域名。
 // 已在名单里的（同名，或被已有的 *. 后缀覆盖）不重复；没写 http_domains 时从默认名单开始追加，没有 [egress_proxy] 表时新建。
-func addEgressDomains(plain []byte, domains []string) ([]byte, []string, error) {
+func addEgressDomains(plain []byte, domains []string, droppedComments *[]string) ([]byte, []string, error) {
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
 	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "egress_proxy" && !b.array })
 	if i < 0 {
@@ -1079,7 +1082,10 @@ func addEgressDomains(plain []byte, domains []string) ([]byte, []string, error) 
 	}
 	line := "http_domains = [" + strings.Join(quoted, ", ") + "]"
 	if start >= 0 {
-		lines = append(lines[:start], append([]string{line}, lines[end+1:]...)...)
+		var dropped bool
+		if lines, dropped = rewriteEntry(lines, start, end, line); dropped {
+			*droppedComments = append(*droppedComments, "[egress_proxy] http_domains：该条目中间几行的注释已去掉")
+		}
 	} else {
 		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
 	}
@@ -1091,8 +1097,55 @@ func addEgressDomains(plain []byte, domains []string) ([]byte, []string, error) 
 	return []byte(strings.Join(out, "\n")), added, nil
 }
 
+// rewriteEntry 把 lines[start:end+1] 这一条键值整条换成一行 line：原条目首行、末行的行尾注释接在新行后面。
+// 多行数组中间几行上的注释（含整行注释）没有地方放，返回 dropped 为真，由调用方在输出里提示“该条目的注释已去掉”。
+func rewriteEntry(lines []string, start, end int, line string) ([]string, bool) {
+	var comments []string
+	for _, n := range []int{start, end} {
+		if comment := lineComment(lines[n]); comment != "" && !slices.Contains(comments, comment) {
+			comments = append(comments, comment)
+		}
+		if start == end {
+			break
+		}
+	}
+	dropped := false
+	for n := start + 1; n < end; n++ {
+		if lineComment(lines[n]) != "" {
+			dropped = true
+		}
+	}
+	if len(comments) > 0 {
+		line += "   " + strings.Join(comments, " ")
+	}
+	out := append(slices.Clone(lines[:start]), line)
+	return append(out, lines[end+1:]...), dropped
+}
+
+// lineComment 返回一行里字符串之外的 # 注释（含 #）；没有时返回空串。识别双引号（含转义）与单引号字符串。
+func lineComment(line string) string {
+	var quote rune
+	escaped := false
+	for at, r := range line {
+		switch {
+		case quote == '"' && escaped:
+			escaped = false
+		case quote == '"' && r == '\\':
+			escaped = true
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote != 0:
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#':
+			return strings.TrimSpace(line[at:])
+		}
+	}
+	return ""
+}
+
 // addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。
-func addHostDeployments(plain []byte, host string, components []string) ([]byte, []string, error) {
+func addHostDeployments(plain []byte, host string, components []string, droppedComments *[]string) ([]byte, []string, error) {
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
 	if !slices.ContainsFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array }) {
 		return nil, nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
@@ -1135,7 +1188,10 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 	}
 	line := host + " = [" + strings.Join(quoted, ", ") + "]"
 	if start >= 0 {
-		lines = append(lines[:start], append([]string{line}, lines[end+1:]...)...)
+		var dropped bool
+		if lines, dropped = rewriteEntry(lines, start, end, line); dropped {
+			*droppedComments = append(*droppedComments, "[deployments] "+host+"：该条目中间几行的注释已去掉")
+		}
 	} else {
 		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
 	}
