@@ -319,8 +319,18 @@ func (a *Adapter) GetReferencePrice(
 	var rows []struct {
 		Last string `json:"last"`
 	}
-	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
+	if err := json.Unmarshal(data, &rows); err != nil {
 		return exchange.ReferencePrice{}, rejected("decode reference price", err)
+	}
+	if len(rows) == 0 {
+		// 成功响应但没有行：标的已不在交易所，和 51001 一样按“标的不存在”返回，估值据此识别。
+		return exchange.ReferencePrice{}, &exchange.Error{
+			Kind: exchange.ErrorRejected, Code: exchange.CodeOKXInstrumentNotFound,
+			Err: fmt.Errorf("标的 %s 没有行情", symbol),
+		}
+	}
+	if len(rows) != 1 {
+		return exchange.ReferencePrice{}, rejected("decode reference price", nil)
 	}
 	price, err := shared.ParseDecimal(rows[0].Last)
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {

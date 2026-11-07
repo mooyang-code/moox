@@ -1,0 +1,118 @@
+package paper
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
+	"github.com/stretchr/testify/require"
+)
+
+// delistedFacts 是一个模拟账户：持有 BTC（正常交易）和 DEAD（已下架的零头），以及一个停止交易的 HALT。
+type delistedFacts struct {
+	FactStore
+	account store.TradingAccountRecord
+}
+
+func (f delistedFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
+	return f.account, nil
+}
+func (f delistedFacts) GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error) {
+	return store.PaperBalanceSnapshot{Totals: map[string]shared.Decimal{
+		"USDT": shared.MustDecimal("1000"), "BTC": shared.MustDecimal("1"),
+		"DEAD": shared.MustDecimal("3"), "HALT": shared.MustDecimal("2"), "GONE": shared.MustDecimal("5"),
+	}, Reserved: map[string]shared.Decimal{}}, nil
+}
+func (f delistedFacts) ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error) {
+	return []store.InstrumentRecord{
+		{MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
+		{MarketType: "SPOT", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT", BaseAsset: "DEAD", QuoteAsset: "USDT", Status: "TRADING"},
+		{MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT", BaseAsset: "HALT", QuoteAsset: "USDT", Status: "BREAK"},
+		// GONE 没有估值标的：已从标的列表里移除。
+	}, nil
+}
+func (f delistedFacts) ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error) {
+	return nil, nil
+}
+
+type delistedMarket struct {
+	execution.MarketDataSource
+	now    time.Time
+	asked  []string
+	failed bool
+}
+
+func (m *delistedMarket) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
+	return []exchange.Instrument{
+		{MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT"},
+		{MarketType: "SPOT", ExchangeSymbol: "DEADUSDT", InstrumentID: "DEAD-USDT"},
+		{MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", InstrumentID: "HALT-USDT"},
+	}, nil
+}
+func (m *delistedMarket) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
+	return execution.MarketQuote{Bid: shared.MustDecimal("99"), Ask: shared.MustDecimal("101"), SourceTime: m.now}, nil
+}
+func (m *delistedMarket) GetReferencePrice(_ context.Context, key exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	m.asked = append(m.asked, key.Symbol)
+	if key.Symbol == "DEADUSDT" {
+		// 币安对已下架标的回 HTTP 400 + -1121。
+		return exchange.ReferencePrice{}, &exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400, Code: exchange.CodeBinanceInvalidSymbol}
+	}
+	if m.failed {
+		return exchange.ReferencePrice{}, &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429}
+	}
+	return exchange.ReferencePrice{Price: shared.MustDecimal("100"), UpdatedAt: m.now}, nil
+}
+
+func TestPaperSnapshotDegradesUnvaluableHoldingsAndSpotSellSkipsSnapshot(t *testing.T) {
+	d, _, order := deciderFixture(t, "SPOT")
+	now := d.Now()
+	market := &delistedMarket{now: now}
+	paperAdapter := &Adapter{
+		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"},
+		Store: delistedFacts{account: store.TradingAccountRecord{
+			SpaceID: "space", TradingAccountID: "paper", Name: "模拟盘", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
+		}},
+		MarketData: market, Now: func() time.Time { return now },
+	}
+	snapshot, err := paperAdapter.GetAccountSnapshot(context.Background())
+	require.NoError(t, err, "下架、停止交易、没有标的的零头都不能让快照失败")
+	// USDT 1000 + BTC 1 × 100；DEAD、HALT、GONE 没有最后已知价，按 0 计。
+	require.Equal(t, "1100", snapshot.Equity.String())
+	require.NotContains(t, market.asked, "HALTUSDT", "状态不可交易的标的不发取价请求")
+	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionValuationDegraded, now, time.Minute))
+
+	// 之后 BTC 暂时取价失败（限流）：有最后已知价就用它，不报错。
+	market.failed = true
+	snapshot, err = paperAdapter.GetAccountSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "1100", snapshot.Equity.String())
+
+	// 现货卖单撮合不读快照。
+	d.Adapters = deciderAdapters{paperAdapter}
+	order.Side, order.ReservedAsset, order.RemainingReservedQuantity = "SELL", "BTC", "1"
+	decision, err := d.Decide(context.Background(), order)
+	require.NoError(t, err)
+	require.False(t, decision.Cancel || decision.Rest)
+}
+
+// 标的仍在交易、从没取到过价时，暂时的取价失败照旧报错：不能一次限流就把真实持仓按 0 计。
+func TestPaperSnapshotKeepsFailingOnTransientQuoteErrorWithoutLastPrice(t *testing.T) {
+	now := time.Now().UTC()
+	paperAdapter := &Adapter{
+		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"},
+		Store: delistedFacts{account: store.TradingAccountRecord{
+			SpaceID: "space", TradingAccountID: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
+		}},
+		MarketData: &delistedMarket{now: now, failed: true}, Now: func() time.Time { return now },
+	}
+	_, err := paperAdapter.GetAccountSnapshot(context.Background())
+	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
+}

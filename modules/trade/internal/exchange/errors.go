@@ -91,6 +91,23 @@ func IsConfirmedOrderMissing(err error) bool {
 	return typed.Code == "-2013" || typed.Code == "51603"
 }
 
+// IsInstrumentNotFound 报告交易所是否用明确的错误码确认标的不存在（已下架或代码错误）：
+// 币安 -1121（Invalid symbol），OKX 51001（Instrument ID does not exist，社区样例确认，官方错误码表未逐字核对）。
+// Kind 仍是 ErrorRejected，下单路径按拒单处理不受影响；估值路径据此把下架零头降级处理，不阻断采样。
+func IsInstrumentNotFound(err error) bool {
+	var typed *Error
+	if !errors.As(err, &typed) || typed == nil || typed.Kind != ErrorRejected {
+		return false
+	}
+	return typed.Code == CodeBinanceInvalidSymbol || typed.Code == CodeOKXInstrumentNotFound
+}
+
+// 标的不存在的错误码。
+const (
+	CodeBinanceInvalidSymbol  = "-1121"
+	CodeOKXInstrumentNotFound = "51001"
+)
+
 // rejectCodeMessages 是常见拒单错误码的中文说明，其余错误显示交易所原文。
 var rejectCodeMessages = map[string]string{
 	"-1013": "价格或数量不符合交易规则",

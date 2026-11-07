@@ -373,7 +373,8 @@ func (a *Adapter) GetReferencePrice(
 		Query:  url.Values{"symbol": []string{symbol}},
 	})
 	if err != nil {
-		return exchange.ReferencePrice{}, err
+		// 带上错误码：标的已下架时是 -1121，估值据此识别（exchange.IsInstrumentNotFound）。
+		return exchange.ReferencePrice{}, classifyAPIError(err, raw)
 	}
 	var payload struct {
 		Price string `json:"price"`

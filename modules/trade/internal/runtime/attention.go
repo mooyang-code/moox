@@ -72,6 +72,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		// 划转额度不足每份目标记一次，保留窗口内持续上报。
 		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
 		telemetry.AttentionTransferFailing:   telemetry.Recent(telemetry.AttentionTransferFailing, now, rejectionWindow),
+		telemetry.AttentionValuationDegraded: telemetry.Recent(telemetry.AttentionValuationDegraded, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
