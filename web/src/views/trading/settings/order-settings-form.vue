@@ -28,7 +28,7 @@
           <a-input v-model="row.value" placeholder="金额" suffix="USDT" />
           <a-button type="text" status="danger" @click="model[market.key].splice(index, 1)">删除</a-button>
         </div>
-        <a-button type="text" @click="model[market.key].push({ key: '', value: '' })">添加{{ market.label }}上限</a-button>
+        <a-button type="text" @click="model[market.key].push({ key: '', value: '' })">增加{{ market.label }}上限</a-button>
       </div>
     </section>
 

@@ -36,7 +36,7 @@
         <a-input v-model="row.value" placeholder="目标比例，例如 0.6" />
         <a-button type="text" status="danger" @click="model.stablecoin_margin.splice(index, 1)">删除</a-button>
       </div>
-      <a-button type="text" @click="model.stablecoin_margin.push({ asset: '', value: '' })">添加稳定币</a-button>
+      <a-button type="text" @click="model.stablecoin_margin.push({ asset: '', value: '' })">增加稳定币</a-button>
     </section>
 
     <section class="settings-group">
@@ -47,7 +47,7 @@
         <a-input v-model="row.value" placeholder="配置的价值" suffix="USDT" />
         <a-button type="text" status="danger" @click="model.margin_coins.splice(index, 1)">删除</a-button>
       </div>
-      <a-button type="text" @click="model.margin_coins.push({ asset: '', value: '' })">添加保证金币</a-button>
+      <a-button type="text" @click="model.margin_coins.push({ asset: '', value: '' })">增加保证金币</a-button>
     </section>
 
     <section class="settings-group">
