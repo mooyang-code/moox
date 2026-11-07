@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const flattenActionTimeout = 30 * time.Minute
@@ -35,6 +37,9 @@ type FlattenCommand struct {
 	Reason           string
 	// InstrumentID 非空时只处理这个标的（内部标的 ID）：撤单、平仓、剩余统计都只看它，不暂停组合账户。
 	InstrumentID string
+	// Exchange 非空时只处理组合里属于这个交易所的成员（内部标的 ID 跨交易所同名，混合交易所的组合不能误平另一家）。
+	// 只和 InstrumentID 一起用：下架清仓按（交易所、市场、代码）定位标的。
+	Exchange string
 	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
 	ReduceRatio shared.Decimal
 }
@@ -73,6 +78,8 @@ type FlattenAccountResult struct {
 	// Dust 是下不了单的现货零头，不算剩余，不阻止完成。
 	Dust  []RemainingPosition `json:"dust_positions,omitempty"`
 	Error string              `json:"error,omitempty"`
+	// Unblocked 为真表示下架清仓发现标的已被解除禁止而提前结束（不算失败）。
+	Unblocked bool `json:"unblocked,omitempty"`
 	cause error
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
@@ -84,6 +91,8 @@ type FlattenAccountResult struct {
 type FlattenResult struct {
 	Action   store.OperatorActionRecord `json:"-"`
 	Accounts []FlattenAccountResult     `json:"accounts"`
+	// Unblocked 为真表示下架清仓因为标的已解除禁止而提前结束：动作记 COMPLETED，调用方不要重试。
+	Unblocked bool `json:"unblocked,omitempty"`
 	// ReduceTargets 是减仓发起时写定的各持仓目标数量（键：执行账户|标的 ID），之后各轮都收敛到它。
 	ReduceTargets map[string]string `json:"reduce_targets,omitempty"`
 	// ReduceDone 是已经算过减仓目标的执行账户：每个账户的目标只在第一次算，之后沿用。
@@ -94,6 +103,7 @@ type flattenRequest struct {
 	LogicalAccountID string `json:"logical_account_id"`
 	TradingAccountID string `json:"trading_account_id,omitempty"`
 	InstrumentID     string `json:"instrument_id,omitempty"`
+	Exchange         string `json:"exchange,omitempty"`
 	ReduceRatio      string `json:"reduce_ratio,omitempty"`
 }
 
@@ -129,7 +139,7 @@ func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, er
 	command := FlattenCommand{
 		SpaceID: action.SpaceID, ActionID: action.ActionID,
 		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
-		InstrumentID: request.InstrumentID, Reason: action.Reason,
+		InstrumentID: request.InstrumentID, Exchange: request.Exchange, Reason: action.Reason,
 	}
 	if request.ReduceRatio != "" {
 		ratio, err := shared.ParseDecimal(request.ReduceRatio)
@@ -268,11 +278,34 @@ func (s *Service) FlattenLogicalAccount(
 		}
 		members = selected
 	}
+	if exchangeName := strings.TrimSpace(command.Exchange); exchangeName != "" {
+		// 只处理这个交易所的成员；发起之后成员被移出或换了交易所，没有可处理的就按失败结束。
+		selected := members[:0]
+		for _, member := range members {
+			account, accountErr := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+			if accountErr != nil {
+				return FlattenResult{Action: action}, accountErr
+			}
+			if account.Exchange == exchangeName {
+				selected = append(selected, member)
+			}
+		}
+		if len(selected) == 0 {
+			result := FlattenResult{Action: action}
+			return result, errors.Join(ErrNotInLogicalAccount, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
+		}
+		members = selected
+	}
 	result := FlattenResult{
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
 	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
+	if command.actionType() == operatordomain.ActionDelistFlatten {
+		scope.stillBlocked = func(ctx context.Context, tradingAccountID string) (bool, error) {
+			return s.delistStillBlocked(ctx, command.SpaceID, tradingAccountID, scope.instrumentID)
+		}
+	}
 	if scope.instrumentID != "" {
 		// 只平一个标的时，标的要能在被选中的成员里解析到：解析不到不能静默当作平完了。
 		if err := s.requireInstrumentInMembers(ctx, command, members); err != nil {
@@ -349,6 +382,7 @@ func (s *Service) FlattenLogicalAccount(
 			}
 		}
 		result.Accounts = append(result.Accounts, accountResult)
+		result.Unblocked = result.Unblocked || accountResult.Unblocked
 		if err := s.persistFlattenProgress(ctx, &result, "RUNNING"); err != nil {
 			return result, errors.Join(errors.Join(sharedErrors...), err)
 		}
@@ -366,6 +400,9 @@ func (s *Service) FlattenLogicalAccount(
 	}
 	return result, errors.Join(sharedErrors...)
 }
+
+// reasonArbitrageHedgeLeg 是只平一个标的而它正是套利底仓对冲腿时的剩余原因。
+const reasonArbitrageHedgeLeg = "套利底仓的永续对冲腿，不自动平仓，需要人工处理"
 
 // errWaitingBalance：账户在等余额确认，本轮暂停下单，属可重试。
 var errWaitingBalance = errors.New("账户等待余额确认，本轮暂停下单")
@@ -396,7 +433,7 @@ var flattenActionTypes = []string{
 }
 
 // flattenConflict 报告另一个运行中的动作是否和这次请求冲突：整组清仓和减仓与这一族的任何运行中动作冲突；
-// 单标的清仓只和整组动作、同一标的的单标的清仓冲突，不同标的的单标的清仓不互相冲突。
+// 单标的清仓只和整组动作、同一交易所同一标的的单标的清仓冲突，不同标的的单标的清仓不互相冲突。
 func flattenConflict(other store.OperatorActionRecord, command FlattenCommand) bool {
 	if !slices.Contains(flattenActionTypes, other.ActionType) {
 		return false
@@ -406,7 +443,7 @@ func flattenConflict(other store.OperatorActionRecord, command FlattenCommand) b
 	}
 	var request flattenRequest
 	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
-	return request.InstrumentID == strings.TrimSpace(command.InstrumentID)
+	return request.InstrumentID == strings.TrimSpace(command.InstrumentID) && request.Exchange == strings.TrimSpace(command.Exchange)
 }
 
 // runningFlattenFor 决定另一个运行中清仓能不能代表这次请求：整组清仓覆盖所有成员，同一账户的清仓覆盖这个账户，
@@ -415,7 +452,7 @@ func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand)
 	var request flattenRequest
 	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
 	sameKind := other.ActionType == string(command.actionType()) && request.InstrumentID == strings.TrimSpace(command.InstrumentID) &&
-		request.ReduceRatio == reduceRatioText(command)
+		request.Exchange == strings.TrimSpace(command.Exchange) && request.ReduceRatio == reduceRatioText(command)
 	if sameKind && (request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID)) {
 		return runningFlattenResult(other), true, nil
 	}
@@ -446,6 +483,7 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 		LogicalAccountID: command.LogicalAccountID,
 		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
 		InstrumentID:     strings.TrimSpace(command.InstrumentID),
+		Exchange:         strings.TrimSpace(command.Exchange),
 	}
 	request.ReduceRatio = reduceRatioText(command)
 	data, err := json.Marshal(request)
@@ -485,6 +523,9 @@ func (s *Service) flattenAccount(
 		return result, false
 	}
 	scope.settings = settings
+	if s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
+		return result, true
+	}
 	if err := s.syncLight(ctx, tradingAccountID); err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
@@ -564,6 +605,9 @@ func (s *Service) flattenAccount(
 		if attempt > 0 && !time.Now().Before(deadline) {
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: context.DeadlineExceeded})
 			break
+		}
+		if attempt > 0 && s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
+			return result, true
 		}
 		if attempt > 0 {
 			if err := s.waitFlattenRetry(ctx); err != nil {
@@ -874,7 +918,13 @@ func (s *Service) flattenSwap(
 			continue
 		}
 		// 套利底仓的永续对冲腿不参与清仓，与执行器一致：平掉它会留下没对冲的底仓现货。
+		// 但只平这一个标的而它正是对冲腿（下架的恰好是对冲腿）时不能静默当作平完：记一条终结原因，
+		// 动作以部分完成结束（剩余统计里报出终结原因）并告警，由人决定怎么处理。
 		if settings.IsArbitrageBase(instrument.BaseAsset) {
+			if scope.instrumentID != "" {
+				log.Warnf("交易关注项：下架清仓的标的 %s 是套利底仓的永续对冲腿，不自动平仓，需要人工处理（账户 %s）",
+					instrument.InstrumentID, account.TradingAccountID)
+			}
 			continue
 		}
 		// 减仓只处理登记过的持仓，并只减到目标数量；整组清仓的目标是零。
@@ -1053,6 +1103,17 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	quote Quote,
 	result *FlattenAccountResult,
 ) error {
+	// 下架清仓用伪市价单（限价 + IOC，滑点 3%）：每一轮按最新报价重新下，零成交的 IOC 单不算终结，
+	// 子单号带上第几次尝试，同一个动作号重试时不会撞上上一次已结束的子单。
+	delist := command.actionType() == operatorDelistFlatten
+	attempt := 0
+	if delist {
+		var attemptErr error
+		attempt, attemptErr = s.delistAttempts(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		if attemptErr != nil {
+			return attemptErr
+		}
+	}
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
 		account.TradingAccountID,
@@ -1060,6 +1121,9 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		side,
 		quantity,
 	)
+	if attempt > 0 {
+		clientOrderID += "a" + strconv.Itoa(attempt)
+	}
 	existing, found, err := s.flattenChild(
 		ctx, command.SpaceID, account.TradingAccountID,
 		command.ActionID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), clientOrderID,
@@ -1108,6 +1172,10 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		},
 	}
 	spec.PositionSide = exchange.RuleFor(instrument.MarketType).PositionSide
+	if delist {
+		limit := delistLimitPrice(quote.Price, side, instrument.PriceTick)
+		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
+	}
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
 	if err != nil {
 		// 资金不足（预留不足时也返回它）和只减仓被拒可能只是持仓、余额还没同步，按可重试处理。
@@ -1213,7 +1281,14 @@ func (s *Service) remainingForAccount(
 			instrumentID := ""
 			if instrument, found := index.bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]; found {
 				if settings.IsArbitrageBase(instrument.BaseAsset) {
-					continue // 对冲腿不算清仓剩余
+					// 对冲腿不算整组清仓和减仓的剩余；只平这个标的而它正是对冲腿时，要作为剩余报出来。
+					if scope.instrumentID == "" || !scope.includes(instrument.InstrumentID) {
+						continue
+					}
+					remaining = append(remaining, RemainingPosition{
+						InstrumentID: instrument.InstrumentID, Quantity: quantity.String(), Reason: reasonArbitrageHedgeLeg, final: true,
+					})
+					continue
 				}
 				instrumentID = instrument.InstrumentID
 			} else if scope.narrow() {
@@ -1312,9 +1387,10 @@ func (s *Service) persistFlattenProgress(
 	defer cancel()
 	data, err := json.Marshal(struct {
 		Accounts      []FlattenAccountResult `json:"accounts"`
+		Unblocked     bool                   `json:"unblocked,omitempty"`
 		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
 		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
-	}{Accounts: result.Accounts, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
+	}{Accounts: result.Accounts, Unblocked: result.Unblocked, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
 	if err != nil {
 		return err
 	}
@@ -1348,13 +1424,14 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 	}
 	var persisted struct {
 		Accounts      []FlattenAccountResult `json:"accounts"`
+		Unblocked     bool                   `json:"unblocked,omitempty"`
 		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
 		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
-	result.Accounts = persisted.Accounts
+	result.Accounts, result.Unblocked = persisted.Accounts, persisted.Unblocked
 	result.ReduceTargets, result.ReduceDone = persisted.ReduceTargets, persisted.ReduceDone
 	return result, nil
 }
@@ -1490,4 +1567,68 @@ func appendUnique(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+// operatorDelistFlatten 是下架清仓的动作类型的简写。
+const operatorDelistFlatten = operatordomain.ActionDelistFlatten
+
+const (
+	// delistMaxAttempts 是下架清仓每个标的最多下几次 IOC 单：用满仍没成交完就记终结原因，交给人看，不无限下单。
+	delistMaxAttempts = 20
+)
+
+// delistSlippage 是下架清仓伪市价单的滑点：买入向上、卖出向下 3%。
+var delistSlippage = shared.MustDecimal("0.03")
+
+// delistLimitPrice 返回伪市价的限价：参考价 ×（1 ± 3%），买入向上、卖出向下取整到价格精度；价格精度不明时不取整。
+func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick string) shared.Decimal {
+	one := shared.MustDecimal("1")
+	tick, tickErr := shared.ParseDecimal(priceTick)
+	validTick := tickErr == nil && tick.Cmp(shared.Zero()) > 0
+	if side == exchange.SideBuy {
+		price := reference.Mul(one.Add(delistSlippage))
+		if validTick {
+			floored := exposure.FloorToStep(price, tick)
+			if floored.Cmp(price) != 0 {
+				price = floored.Add(tick)
+			} else {
+				price = floored
+			}
+		}
+		return price
+	}
+	price := reference.Mul(one.Sub(delistSlippage))
+	if validTick {
+		price = exposure.FloorToStep(price, tick)
+	}
+	return price
+}
+
+// delistAttempts 返回本动作在这个标的上已经结束的子单数（下一笔是第几次尝试）。
+// 最近一笔被交易所拒绝的不再重试（同样的单再发还是拒绝），已用满次数的同样是终结错误。
+func (s *Service) delistAttempts(ctx context.Context, command FlattenCommand, tradingAccountID string, key exchange.SymbolKey) (int, error) {
+	records, err := s.Store.ListOrdersForLane(ctx, command.SpaceID, tradingAccountID, key)
+	if err != nil {
+		return 0, err
+	}
+	finished := 0
+	var last *store.OrderRecord
+	for index := range records {
+		current := records[index]
+		if current.OwnerType != string(orderdomain.OwnerOperator) || current.OwnerID != command.ActionID ||
+			!orderdomain.State(current.State).Terminal() {
+			continue
+		}
+		finished++
+		if last == nil || current.CreatedAt.After(last.CreatedAt) {
+			last = &records[index]
+		}
+	}
+	if last != nil && last.State == string(orderdomain.Rejected) {
+		return 0, flattenFinal{fmt.Errorf("下架清仓的订单被交易所拒绝：%s", last.RejectReason)}
+	}
+	if finished >= delistMaxAttempts {
+		return 0, flattenFinal{fmt.Errorf("下架清仓已下 %d 次限价单（滑点 3%%）仍未全部成交，需要人工处理", finished)}
+	}
+	return finished, nil
 }

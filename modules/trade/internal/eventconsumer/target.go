@@ -181,7 +181,7 @@ func HandleTarget(
 		return retryTarget(lockErr)
 	}
 	defer unlockAccount()
-	unsupportedInstrument, membersReady, err := unsupportedLogicalTargetInstrument(
+	unsupportedInstrument, delisted, membersReady, err := unsupportedLogicalTargetInstrument(
 		ctx, opts.Store, message.GetSpaceId(), request,
 	)
 	if err != nil {
@@ -201,6 +201,9 @@ func HandleTarget(
 		return retryTarget(err)
 	}
 
+	if len(delisted) > 0 {
+		request = holdTargets(request, delisted)
+	}
 	now = time.Now().UTC()
 	if opts.Now != nil {
 		now = opts.Now().UTC()
@@ -383,24 +386,46 @@ func mustMarshal(value any) string {
 	return string(raw)
 }
 
+// holdTargets 把指定的标的改成“保持”：名单里已经不能交易的标的只跳过这一项，既不买也不卖，
+// 其余照常执行；全部跳过时也不会变成清仓指令。
+func holdTargets(request *tradeeventpb.LogicalAccountTargetWeightRequested, instrumentIDs []string) *tradeeventpb.LogicalAccountTargetWeightRequested {
+	held, ok := proto.Clone(request).(*tradeeventpb.LogicalAccountTargetWeightRequested)
+	if !ok {
+		return request
+	}
+	for _, target := range held.GetTargets() {
+		if slices.Contains(instrumentIDs, target.GetInstrumentId()) {
+			target.Hold, target.TargetWeight = true, "0"
+		}
+	}
+	return held
+}
+
+// unsupportedLogicalTargetInstrument 找出第一个没有成员能交易的标的。名单里（下架名单）已经不能交易的标的不算不受支持，
+// 单独列在 delisted 里：只跳过这一项，不拒绝整份目标。
 func unsupportedLogicalTargetInstrument(
 	ctx context.Context,
 	tradeStore *store.Store,
 	spaceID string,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
-) (instrumentID string, membersReady bool, err error) {
+) (instrumentID string, delisted []string, membersReady bool, err error) {
 	if len(request.GetTargets()) == 0 {
-		return "", true, nil
+		return "", nil, true, nil
 	}
 	members, err := tradeStore.ListLogicalAccountMembers(
 		ctx, spaceID, request.GetLogicalAccountId(), false,
 	)
 	if err != nil {
-		return "", false, err
+		return "", nil, false, err
 	}
 	if len(members) == 0 {
-		return request.GetTargets()[0].GetInstrumentId(), false, nil
+		return request.GetTargets()[0].GetInstrumentId(), nil, false, nil
 	}
+	blockedSet, err := tradeStore.LoadBlockedSet(ctx)
+	if err != nil {
+		return "", nil, false, err
+	}
+	blockedIDs := make(map[string]struct{})
 	supportedIDs := make(map[string]struct{})
 	enabledMemberCount := 0
 	readyMemberCount := 0
@@ -409,7 +434,7 @@ func unsupportedLogicalTargetInstrument(
 			ctx, member.TradingAccountID,
 		)
 		if accountErr != nil {
-			return "", false, accountErr
+			return "", nil, false, accountErr
 		}
 		if account.Status != "ENABLED" {
 			continue
@@ -421,10 +446,13 @@ func unsupportedLogicalTargetInstrument(
 		readyMemberCount++
 		instruments, instrumentErr := tradeStore.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if instrumentErr != nil {
-			return "", false, instrumentErr
+			return "", nil, false, instrumentErr
 		}
 		for _, instrument := range instruments {
 			if !exchange.StatusTradable(instrument.Status) {
+				if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+					blockedIDs[instrument.InstrumentID] = struct{}{}
+				}
 				continue
 			}
 			if instrument.SettlementAsset != "" &&
@@ -444,10 +472,14 @@ func unsupportedLogicalTargetInstrument(
 			continue
 		}
 		if _, ok := supportedIDs[target.GetInstrumentId()]; !ok {
-			return target.GetInstrumentId(), membersReady, nil
+			if _, delist := blockedIDs[target.GetInstrumentId()]; delist {
+				delisted = append(delisted, target.GetInstrumentId())
+				continue
+			}
+			return target.GetInstrumentId(), nil, membersReady, nil
 		}
 	}
-	return "", membersReady, nil
+	return "", delisted, membersReady, nil
 }
 
 // pausedTargetDelay 是暂停期间目标的重投间隔：暂停是人为的、可能持续很久，不需要每秒重试。

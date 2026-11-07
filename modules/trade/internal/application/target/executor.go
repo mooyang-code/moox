@@ -124,6 +124,10 @@ type memberState struct {
 	// positions 用 Total，股票当日买入的数量算持仓但不可卖。
 	sellable map[string]shared.Decimal
 	blocked  []store.BlockedTarget
+	// skip 是执行器不碰的标的（内部标的 ID）：名单里已经不能交易的，或正在做下架清仓的。
+	skip map[string]bool
+	// reduceOnly 是只减不增的标的：名单里还能交易的。
+	reduceOnly map[string]bool
 }
 
 // placement 是一次下单尝试的结果。tooSmall 表示全部成员都因最小量或最小金额下不了单。
@@ -268,7 +272,11 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusPaused}, nil
 	}
-	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
+	flattens, err := e.runningDelistFlattens(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	members, err := e.loadMembers(ctx, spaceID, logicalAccountID, flattens)
 	if errors.Is(err, store.ErrFundSettingsUnreadable) {
 		// 资金设置的排除字段读不出来：这个组合不下单，原因写进目标，不让整个模块显示未就绪。
 		target.LastError = err.Error()
@@ -310,6 +318,9 @@ func (e *Executor) Converge(
 	}
 	for _, current := range orders {
 		switch {
+		// 下架清仓的单不算冲突，不暂停组合：执行器只是不碰那个标的（loadMembers 里已跳过）。
+		case current.OwnerType == string(orderdomain.OwnerOperator) && flattens.owns(current.OwnerID):
+			continue
 		case current.OwnerType == string(orderdomain.OwnerExternal),
 			current.OwnerType == string(orderdomain.OwnerOperator),
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
@@ -363,6 +374,8 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	// 下架名单：名单里的标的只减不增，不能交易的整项跳过；在 reconcileResting 之前截断，名单标的的买入挂单会随之撤掉。
+	e.warnReduceOnly(logicalAccountID, constrainDesired(desired, members))
 	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
@@ -663,7 +676,11 @@ func (e *Executor) Converge(
 
 // HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
 func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccountTargetRecord) (bool, error) {
-	members, err := e.loadMembers(ctx, target.SpaceID, target.LogicalAccountID)
+	flattens, err := e.runningDelistFlattens(ctx, target.SpaceID, target.LogicalAccountID)
+	if err != nil {
+		return false, err
+	}
+	members, err := e.loadMembers(ctx, target.SpaceID, target.LogicalAccountID, flattens)
 	if err != nil {
 		return false, err
 	}
@@ -671,6 +688,7 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	if err != nil {
 		return false, err
 	}
+	constrainDesired(desired, members)
 	logical, err := e.Store.GetLogicalAccount(ctx, target.SpaceID, target.LogicalAccountID)
 	if err != nil {
 		return false, err
@@ -712,6 +730,7 @@ func (e *Executor) loadMembers(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
+	flattens delistFlattens,
 ) ([]memberState, error) {
 	records, err := e.Store.ListLogicalAccountMembers(
 		ctx, spaceID, logicalAccountID, false,
@@ -728,6 +747,11 @@ func (e *Executor) loadMembers(
 	}
 	// 数值字段坏了按默认处理（告警限频），排除字段坏了直接报错、不下单：排除资产（底仓对冲腿等）不能因为设置坏了被交易。
 	settings, err := e.Store.ResolveFundSettings(logical)
+	if err != nil {
+		return nil, err
+	}
+	// 下架名单只在这里读一次：成员的“只减不增”、跳过标的、阻塞判断都用同一份。
+	blockedSet, err := e.Store.LoadBlockedSet(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -755,6 +779,21 @@ func (e *Executor) loadMembers(
 			instruments[instrument.InstrumentID] = instrument
 			symbols[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument.InstrumentID
 		}
+		skip := make(map[string]bool)
+		reduceOnly := make(map[string]bool)
+		for _, instrument := range instrumentRecords {
+			if blockedSet.ContainsInstrument(account.Exchange, instrument) {
+				if _, tradable := instruments[instrument.InstrumentID]; tradable {
+					reduceOnly[instrument.InstrumentID] = true
+				} else {
+					skip[instrument.InstrumentID] = true
+				}
+			}
+			if flattens.covers(account, instrument.InstrumentID) {
+				skip[instrument.InstrumentID] = true
+			}
+		}
+		blockedAssets := blockedSet.SpotBaseAssets(account.Exchange, instrumentRecords)
 		positions := make(map[string]shared.Decimal)
 		sellable := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
@@ -779,12 +818,19 @@ func (e *Executor) loadMembers(
 					instruments,
 				)
 				if !mapped {
+					// 名单里已经不能交易的现货标的：下架后剩下的余额不阻塞组合，整项跳过。
+					if _, delisted := blockedAssets[balance.Asset]; delisted {
+						continue
+					}
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: balance.Asset,
 						Quantity:     quantity.String(),
 						Reason: account.TradingAccountID +
 							"：资产没有唯一可交易的标的",
 					})
+					continue
+				}
+				if skip[instrumentID] {
 					continue
 				}
 				positions[instrumentID] = positions[instrumentID].Add(quantity)
@@ -815,6 +861,9 @@ func (e *Executor) loadMembers(
 				if instrument, known := instruments[instrumentID]; known && settings.IsArbitrageBase(instrument.BaseAsset) {
 					continue
 				}
+				if instrumentID == "" && blockedSet.Contains(account.Exchange, position.MarketType, position.ExchangeSymbol) {
+					continue // 名单里已经不能交易的永续：不阻塞组合，整项跳过
+				}
 				if instrumentID == "" {
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: position.ExchangeSymbol,
@@ -824,12 +873,16 @@ func (e *Executor) loadMembers(
 					})
 					continue
 				}
+				if skip[instrumentID] {
+					continue
+				}
 				positions[instrumentID] = positions[instrumentID].Add(quantity)
 			}
 		}
 		members = append(members, memberState{
 			member: record, account: account,
 			instruments: instruments, positions: positions, sellable: sellable, blocked: blocked,
+			skip: skip, reduceOnly: reduceOnly,
 		})
 	}
 	return members, nil
@@ -1032,6 +1085,9 @@ func nextLaneAction(
 		}
 	}
 	for _, member := range members {
+		if member.restricted(instrumentID) {
+			continue // 只减不增或不碰的成员不能加仓
+		}
 		if instrument, ok := member.instruments[instrumentID]; ok {
 			return laneAction{
 				member: member, instrument: instrument,
@@ -1334,7 +1390,7 @@ func placementCandidates(action laneAction, members []memberState) []laneAction 
 	if !action.reducing {
 		candidates := make([]laneAction, 0, len(members))
 		for _, member := range members {
-			if instrument, ok := member.instruments[instrumentID]; ok {
+			if instrument, ok := member.instruments[instrumentID]; ok && !member.restricted(instrumentID) {
 				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta, resting: action.resting})
 			}
 		}
