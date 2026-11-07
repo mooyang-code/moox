@@ -78,12 +78,12 @@
                     >编辑</a-button
                   >
                 </a-tooltip>
-                <a-tooltip :content="removeBlockedReason(record.account)" :disabled="!removeBlockedReason(record.account)">
+                <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
                   <a-button
                     size="mini"
                     type="text"
                     status="danger"
-                    :disabled="Boolean(removeBlockedReason(record.account))"
+                    :disabled="!membersEditable"
                     @click="openRemove(record.account)"
                     >移出</a-button
                   >
@@ -183,11 +183,14 @@
       :submit="submitRemove"
     >
       <p class="dialog-text">
-        移出后这个执行账户不再算进组合，也不再被策略使用。有持仓时要先平仓才能移出；交易所账户里其他资产不动。
+        移出后这个执行账户不再算进组合，也不再被策略使用；交易所账户里其他资产不动。受管持仓和挂单要先平掉才能移出，能不能移出由后端判断，不能移出时这里会显示原因。
       </p>
       <a-descriptions :column="1" size="small">
-        <a-descriptions-item label="当前持仓"
-          >{{ removeTarget ? positionCountOf(removeTarget.trading_account_id) : 0 }} 个</a-descriptions-item
+        <a-descriptions-item label="账户里的持仓"
+          >{{
+            removeTarget ? positionCountOf(removeTarget.trading_account_id) : 0
+          }}
+          个（含不受组合管理的资产和零头，仅供参考）</a-descriptions-item
         >
       </a-descriptions>
     </ConfirmDialog>
@@ -296,7 +299,8 @@ watch(
   }
 );
 
-// 受管持仓：永续仓位和有标的的现货余额（结算资产这类没有标的的余额不算）
+// 账户里的持仓数，只在移出确认框里作提示：永续仓位和有标的的非零现货余额。这里分不出受管、被排除的资产和零头，
+// 能不能移出以后端（只看受管持仓和挂单）为准，所以不拿它禁用按钮。
 function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
@@ -306,23 +310,19 @@ function positionCountOf(accountId: string): number {
   );
 }
 
-/** 不能移出的原因：没暂停自动执行，或者还有受管持仓（后端会拒绝）；可以移出时返回空串。 */
-function removeBlockedReason(account: TradingAccount): string {
-  if (!membersEditable.value) return "先暂停自动执行";
-  if (positionCountOf(account.trading_account_id) > 0) return "有持仓时要先平仓";
-  return "";
-}
-
 function openRemove(account: TradingAccount) {
   removeTarget.value = account;
   removeVisible.value = true;
 }
 
+// 后端拒绝时抛出的错误由确认框显示（中文原因）；凭证失效等原因只按本地记录确认时，成功响应里带着提示。
 async function submitRemove() {
   const account = removeTarget.value;
   if (!account) return false;
-  await removeLogicalAccountMember(logical.value.logical_account_id, account.trading_account_id);
-  Message.success("已移出组合");
+  const rsp = await removeLogicalAccountMember(logical.value.logical_account_id, account.trading_account_id);
+  const warning = rsp.ret_info?.msg?.trim();
+  if (warning) Message.warning(`已移出组合：${warning}`);
+  else Message.success("已移出组合");
   await reload();
   return true;
 }

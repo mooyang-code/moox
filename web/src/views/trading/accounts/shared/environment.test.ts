@@ -30,6 +30,18 @@ describe("环境推导", () => {
     expect(logicalEnvironment({ execution_mode: 2, members: members("missing") } as LogicalAccount, accounts)).toBe("prod");
   });
 
+  it("没有可判断成员的实盘组合按进来的页签显示，不知道从哪进来时按生产；有成员时以成员为准", () => {
+    const accounts = new Map([["p", { ...live(0), trading_account_id: "p" }]]);
+    const empty = { execution_mode: 2, members: [] } as unknown as LogicalAccount;
+    expect(logicalEnvironment(empty, accounts, "testnet")).toBe("testnet");
+    expect(logicalEnvironment(empty, accounts, "prod")).toBe("prod");
+    expect(logicalEnvironment(empty, accounts, "paper")).toBe("prod");
+    expect(logicalEnvironment(empty, accounts)).toBe("prod");
+    const withProd = { execution_mode: 2, members: [{ trading_account_id: "p", enabled: true, priority: 0 }] } as LogicalAccount;
+    expect(logicalEnvironment(withProd, accounts, "testnet")).toBe("prod");
+    expect(logicalEnvironment({ execution_mode: 1, members: [] }, accounts, "testnet")).toBe("paper");
+  });
+
   it("没有可判断成员的实盘组合在测试网和生产环境两个页签都列出，有成员的只在成员所在环境", () => {
     const accounts = new Map([["t", { ...live(1), trading_account_id: "t" }]]);
     const empty = { execution_mode: 2, members: [] } as unknown as LogicalAccount;

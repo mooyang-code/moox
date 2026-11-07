@@ -82,6 +82,17 @@ describe("Trade response errors", () => {
     expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
     expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
+    expect(text("trade order: Exchange account ownership mismatch")).toBe("执行账户不属于当前空间");
+    expect(text("trade: invalid order specification")).toBe("订单参数不合法");
+  });
+
+  it("“记录不合法”只是外层包装：剥掉英文前缀只显示后面的中文原因", () => {
+    const text = (msg: string) => new TradeResponseError({ ret_info: { code: 1, msg } }).message;
+    expect(text("trade store: invalid record: 修改组合成员前要先暂停组合")).toBe("修改组合成员前要先暂停组合");
+    expect(text("trade store: invalid record: 执行账户已属于其他组合账户，先从该组合移除")).toBe(
+      "执行账户已属于其他组合账户，先从该组合移除"
+    );
+    expect(text("trade store: invalid record")).toBe("数据不合法");
   });
 
   it("does not invent acceptance when the response envelope is missing", async () => {

@@ -50,7 +50,8 @@
               <p class="alert-line__reason">{{ line.reason }}</p>
               <div class="alert-line__foot">
                 <span class="chip">{{ line.layer }}</span>
-                <a class="locator" :href="line.link.href">{{ line.link.label }} →</a>
+                <span v-if="line.note" class="alert-line__note">{{ line.note }}</span>
+                <a v-else class="locator" :href="line.link.href">{{ line.link.label }} →</a>
               </div>
               <div v-if="expandedAlert === line.key" class="alert-line__detail">
                 <dl class="facts">
@@ -857,8 +858,14 @@ a {
 .alert-line__foot {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   margin: 6px 0 0 13px;
   font-size: 12px;
+}
+.alert-line__note {
+  color: var(--color-text-2);
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 .alert-line__detail {
   margin: 8px 0 0 13px;

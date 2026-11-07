@@ -48,6 +48,24 @@ func TestRenderCollectorRuntimeConfigIncludesRetentionPolicy(t *testing.T) {
 	require.Equal(t, 25000, retention["max_rows_per_pass"])
 }
 
+// 下架自动检测要经出口代理：配了海外机（有 egress-proxy）为 true，没配为 false；模板里原来的值被覆盖。
+func TestRenderCollectorDelistAutoDetectFollowsEgressProxy(t *testing.T) {
+	template := []byte("delist:\n  auto_detect: true\n")
+	for name, tc := range map[string]struct {
+		deployments map[string][]string
+		want        bool
+	}{
+		"有海外机":  {map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}, true},
+		"没配海外机": {map[string][]string{"control": {"admin", "collector"}}, false},
+	} {
+		rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: tc.deployments}}, template)
+		require.NoError(t, err, name)
+		var got map[string]any
+		require.NoError(t, yaml.Unmarshal(rendered, &got), name)
+		require.Equal(t, tc.want, got["delist"].(map[string]any)["auto_detect"], name)
+	}
+}
+
 func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trade", "app.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

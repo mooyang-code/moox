@@ -321,7 +321,7 @@ import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from
 import { accountMapOf } from "../account-list";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
 import EnvMark from "../shared/env-mark.vue";
-import { environmentLabel, logicalEnvironment } from "../shared/environment";
+import { environmentFromQuery, environmentLabel, logicalEnvironment } from "../shared/environment";
 import { fmtClock, fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
@@ -367,7 +367,10 @@ const syncing = ref(false);
 const orderDialog = ref<InstanceType<typeof OrderDialog>>();
 
 const accounts = computed(() => accountMapOf(allAccounts.value));
-const env = computed(() => (logical.value ? logicalEnvironment(logical.value, accounts.value) : "paper"));
+// 列表页进详情时带着当前页签（?env=）：没有可判断成员的实盘组合按它显示
+const env = computed(() =>
+  logical.value ? logicalEnvironment(logical.value, accounts.value, environmentFromQuery(route.query.env)) : "paper"
+);
 const enabledAccounts = computed(() =>
   (logical.value?.members || [])
     .filter(member => member.enabled)

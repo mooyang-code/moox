@@ -43,11 +43,29 @@ export function hostHref(hostID?: string) {
 
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
+function readonlyKeyMissing(object?: HealthObject): boolean {
+  return object?.kind === "collector_attention" && object.attention_kind === "delist_readonly_key_missing";
+}
+
+/**
+ * 没有页面能处理、要在命令行里处理的告警：给出处理办法的说明文字，监控页用它代替跳转链接；其余返回空串。
+ * 缺币安只读 Key：Collector 只读固定 ID exchange-binance-production-readonly，秘钥页新增的 ID 是随机的，补不上这把 Key。
+ */
+export function alertNote(object?: HealthObject): string {
+  if (readonlyKeyMissing(object)) {
+    return (
+      "运行 moox-cli config edit，在“交易所密钥”里加一把币安生产环境的只读 Key（名称填 readonly，勾选只读，" +
+      '即 [[exchange_keys]] 里 exchange = "binance"、environment = "production"、name = "readonly"、readonly = true），' +
+      "再运行 moox-cli setup apply 写入。补上之前，现货下架只能用 moox-cli collector delist register 手工登记"
+    );
+  }
+  return "";
+}
+
 /** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
 export function alertLink(object?: HealthObject): { href: string; label: string } {
-  if (object?.kind === "collector_attention" && object.attention_kind === "delist_readonly_key_missing") {
-    return { href: "#/settings/secrets", label: "去录入币安只读 Key" };
-  }
+  // 只能在命令行里处理：首页跳到监控告警页，那里显示处理说明（alertNote）。
+  if (readonlyKeyMissing(object)) return { href: "#/ops/monitor", label: "查看处理办法" };
   if (object?.type === "host") return { href: hostHref(object.host_id), label: "查看主机" };
   if (object?.type === "dataset") {
     switch (object.producer) {

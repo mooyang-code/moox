@@ -48,6 +48,20 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 	require.Empty(t, checks["trade_attention:target_rejected"].Kind, "Trade 的关注项不受影响")
 }
 
+// 缺币安只读 Key 触发时是 degraded（需关注），不是 down：安装验收只把 down 当成故障。
+func TestReadonlyKeyMissingIsDegradedNotDown(t *testing.T) {
+	checks := attentionChecks(t, func(db *gorm.DB, now time.Time) {
+		seedOverviewMetricForInstance(t, db, "co-key", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"delist_readonly_key_missing","detail":"币安现货下架计划：没有读到只读 Key"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "co-source", "collector", "collector@control", "moox_collector_attention_active", `{"kind":"delist_source_failed","detail":"超时"}`, 1, now)
+	})
+	key := checks["collector_attention:delist_readonly_key_missing"]
+	require.Equal(t, "degraded", key.Status)
+	require.Contains(t, key.Reason, "只读 Key")
+	require.Equal(t, "down", checks["collector_attention:delist_source_failed"].Status)
+	require.True(t, AttentionIsWarning("collector_attention", "delist_readonly_key_missing"))
+	require.False(t, AttentionIsWarning("collector_attention", "delist_source_failed"))
+}
+
 func TestAttentionCheckNames(t *testing.T) {
 	require.Equal(t, "交易目标被拒绝", AttentionCheckName("trade_attention", "target_rejected"))
 	require.Equal(t, "估值降级（有持仓取不到价）", AttentionCheckName("trade_attention", "valuation_degraded"))

@@ -267,7 +267,8 @@ function onRowClick(record: ComboRow | MemberRow, event: Event) {
   if (record.kind !== "combo") return;
   // 点三角只展开，不进详情
   if ((event.target as HTMLElement).closest(".arco-table-expand-btn, .arco-link, a, button")) return;
-  void router.push({ path: `/trading/accounts/${record.key}` });
+  // 带上当前页签：没有成员的实盘组合在测试网、生产环境两个页签都列出，详情按进来的页签显示环境
+  void router.push({ path: `/trading/accounts/${record.key}`, query: { env: env.value === "paper" ? undefined : env.value } });
 }
 
 function openStrategy(instanceId: string) {

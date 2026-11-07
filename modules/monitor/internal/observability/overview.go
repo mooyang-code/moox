@@ -1121,6 +1121,18 @@ var CollectorAttentionNames = map[string]string{
 	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
 }
 
+// warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
+// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收。
+// 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
+var warningAttention = map[string]bool{
+	"collector_attention:delist_readonly_key_missing": true,
+}
+
+// AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。
+func AttentionIsWarning(check, kind string) bool {
+	return warningAttention[check+":"+kind]
+}
+
 // attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。
 type attentionSource struct {
 	metric string
@@ -1173,6 +1185,9 @@ func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSou
 		}
 		if latest.Value > 0 {
 			status.Status, status.Reason = "down", labelValue(item.LabelsJSON, "detail")
+			if AttentionIsWarning(source.check, kind) {
+				status.Status = "degraded"
+			}
 		}
 		if current, ok := statuses[kind]; !ok || status.LastCheckedAt.After(current.LastCheckedAt) {
 			statuses[kind] = status
