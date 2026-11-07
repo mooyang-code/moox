@@ -453,3 +453,100 @@ func TestDelistActionsUpsert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []DelistAction{action}, actions)
 }
+
+// 只在记录已取消时才把“善后未完成”重新置 1；其余状态不动。
+func TestMarkCleanupPendingIfCanceled(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		return tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5))
+	}))
+	applied, err := s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败", 50)
+	require.NoError(t, err)
+	require.False(t, applied, "记录还没取消")
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.False(t, got.CleanupPending)
+	require.Empty(t, got.LastError)
+
+	_, err = s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	require.NoError(t, s.FinishCleanup(ctx, "sys", 101))
+	applied, err = s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败：Trade 不可达", 102)
+	require.NoError(t, err)
+	require.True(t, applied)
+	got, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.True(t, got.CleanupPending)
+	require.Equal(t, "补解除失败：Trade 不可达", got.LastError)
+	pending, err := s.ListPendingCleanups(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+}
+
+// 同一标的别的未结束的系统动作记录要跨范围（ALL 与 PAPER_ONLY）统计，已结束的、通知类的、别的标的的都不算。
+func TestCountOtherUnfinishedSystemBySubject(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.CreateRule(ctx, notifyRule("r1")))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		for _, item := range []Execution{
+			execution("real", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|ALL", 5),
+			execution("drill", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|PAPER_ONLY", 5),
+			execution("note", "r1", ActionNotifyURL, "", 5),
+		} {
+			if err := tx.InsertExecution(item); err != nil {
+				return err
+			}
+		}
+		other := execution("other", "sys-1", ActionSystem, "sys-1|binance:SPOT:BARUSDT|ALL", 5)
+		other.SubjectID = "binance:SPOT:BARUSDT"
+		return tx.InsertExecution(other)
+	}))
+	count, err := s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count, "只有真实那条，通知类和别的标的不算")
+	count, err = s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "real")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+
+	_, err = s.CancelExecution(ctx, "real", 100)
+	require.NoError(t, err)
+	count, err = s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	require.NoError(t, err)
+	require.Zero(t, count, "已取消的不算未结束")
+}
+
+func TestListUnfinishedWithFailedSteps(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		for _, id := range []string{"ok", "failed-step", "partial-step", "finished"} {
+			if err := tx.InsertExecution(execution(id, "sys-1", ActionSystem, "sys-1|"+id, 5)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	step := func(id, status string) DelistAction {
+		return DelistAction{ExecutionID: id, Round: 1, Kind: DelistKindFlatten, SpaceID: "crypto", LogicalAccountID: "la", Status: status, UpdatedAt: 1}
+	}
+	for _, action := range []DelistAction{
+		step("ok", DelistSucceeded), step("failed-step", DelistFailed), step("partial-step", DelistPartial), step("finished", DelistFailed),
+	} {
+		require.NoError(t, s.UpsertDelistAction(ctx, action))
+	}
+	_, err := s.CancelExecution(ctx, "finished", 10)
+	require.NoError(t, err)
+
+	got, err := s.ListUnfinishedWithFailedSteps(ctx)
+	require.NoError(t, err)
+	ids := []string{}
+	for _, item := range got {
+		ids = append(ids, item.ExecutionID)
+	}
+	require.ElementsMatch(t, []string{"failed-step", "partial-step"}, ids)
+}

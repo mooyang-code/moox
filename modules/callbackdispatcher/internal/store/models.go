@@ -107,6 +107,8 @@ const (
 	DelistRunning   = "RUNNING"
 	DelistSucceeded = "SUCCEEDED"
 	DelistFailed    = "FAILED"
+	// DelistPartial 是平仓只完成了一部分：Trade 报 PARTIAL（最近一笔被交易所拒绝、连续多笔没成交等），这一轮不再重试，由下一轮复查换新操作号再平。
+	DelistPartial = "PARTIAL"
 )
 
 // 数据库行：列名与 schema 一一对应。

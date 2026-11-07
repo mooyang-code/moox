@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS t_event_attempts (
 
 -- ************ 下架处理的各轮步骤 ************
 -- 轮次 0 是发现即禁止，1 是下架前 24 小时平仓，2 是下架前 2 小时复查平仓，3 是下架后核对。
+-- 平仓轮次里空间和组合账户都为空的一行是这一轮的汇总（查到几个持有者、零头），每个持有的组合另有一行。
 CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_execution_id TEXT NOT NULL,
     c_round INTEGER NOT NULL,
@@ -128,5 +129,5 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
-    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'))
+    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );
