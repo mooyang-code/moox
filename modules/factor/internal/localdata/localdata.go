@@ -49,6 +49,8 @@ type Config struct {
 	// Lookback 返回数据源的回看数量 N（设计 8.1，决定 23）：窗口长度、本地要保有的根数、因子回看的上限。
 	// 为 nil 或返回非正数时取任务内各因子的最大回看。
 	Lookback func(src seriesstore.Source) int
+	// DelistedAfter 是判断序列已下架的固定时长（见 ExpectedSeries）；0 取 DefaultDelistedAfter。引擎传跳过恢复的 give_up_after。
+	DelistedAfter time.Duration
 	// LockWaitWarn 是实时同步等数据源锁的告警阈值（设计 4.1），0 取 1 秒。
 	LockWaitWarn time.Duration
 	// WindowMax 是所有数据源窗口常驻内存的上限；新启用的任务会超出时拒绝启用。0 表示不限制。
@@ -646,21 +648,32 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	return d.loadRange(ctx, st, plan, subjects)
 }
 
+// DefaultDelistedAfter 是判断序列已下架的固定时长：本地存储里一条序列的最后一行比计划区间起点还早这么久，就认为它已下架（或长期停更）。
+const DefaultDelistedAfter = 6 * time.Hour
+
+// UnifiedTask 报告任务的源数据集是不是统一数据集（数据集属性 market_type=multi）。
+func (d *Data) UnifiedTask(ctx context.Context, set domain.FactorTask) (bool, error) {
+	return d.UnifiedDataset(ctx, sourceOf(set))
+}
+
 // ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（数据集属性 market_type=multi）上的期望序列，
-// 取本地存储里这些标的在读取范围内应存在的每条序列（标的、series_tag）。
-// 应存在 = 计划区间结束之前已有数据，并且最后一根不早于读取起点（区间起点减回看）：区间内断档仍算缺失，
-// 回看起点之前就已结束的（下架的合约）不算期望序列，否则它会让严格截面因子永远跳过整个 tag。
-// 单序列数据集返回 nil。
+// 取本地存储里这些标的“应存在”的每条序列（标的、series_tag）。这是没有冻结全集可用时的兜底（人工补算、失效重算、
+// 没有 marker 的待办）；能读到周期 marker 的恢复路径直接用冻结的 universe_series，不走这里。
+// 应存在 = 计划区间结束之前已有数据，并且最后一行不早于“区间起点减 DelistedAfter”。下架判断用固定时长，不依赖因子的回看根数：
+// 回看只决定读多远的窗口，分不清“永续晚到、停更”和“已下架”；回看 1 根时用回看判断会把停更的永续排除、把现货误确认，
+// 回看很长（EMA50000 的 5m 任务约 173 天）时又会把回看期内下架的合约一直当成应存在、待办永远确认不了。
+// 区间内断档（最后一行在区间内或之后）仍算应存在。单序列数据集返回 nil。
 func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
 	src := sourceOf(plan.Set)
 	multi, err := d.UnifiedDataset(ctx, src)
 	if err != nil || !multi {
 		return nil, err
 	}
-	readStart, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
-	if err != nil {
-		return nil, err
+	delisted := d.cfg.DelistedAfter
+	if delisted <= 0 {
+		delisted = DefaultDelistedAfter
 	}
+	oldest := plan.TargetStart.Add(-delisted)
 	end := plan.TargetEnd.Unix()
 	var out []seriesset.Series
 	for _, subject := range plan.Expected {
@@ -669,7 +682,7 @@ func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]series
 			return nil, err
 		}
 		for tag, b := range bounds {
-			if b.Earliest.Unix() >= end || b.Latest.Before(readStart) {
+			if b.Earliest.Unix() >= end || b.Latest.Before(oldest) {
 				continue
 			}
 			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})

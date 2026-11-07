@@ -175,10 +175,11 @@ func TestExpectedSeriesIsNilForSingleSeriesDatasets(t *testing.T) {
 	require.Nil(t, series)
 }
 
-// 区间前结束的序列（下架的合约）不算期望序列：不影响其他标的，严格全集的截面因子在永续上照常按 BTC、ETH 排名，
+// 区间前很久就结束（比区间起点早过 DelistedAfter）的序列（下架的合约）不算期望序列：不影响其他标的，严格全集的截面因子在永续上照常按 BTC、ETH 排名，
 // 不会因为下架的 SOL 永续把整个永续 tag 跳过、把实时算好的排名覆盖成 NULL。
 func TestDelistedSwapSeriesIsNotExpected(t *testing.T) {
 	fx := unifiedStoreFixtureWith(t, []int{0, 1}, strictRank())
+	fx.data.cfg.DelistedAfter = 5 * time.Minute // 下架判断用固定时长：最后一行比区间起点早过 5 分钟（这里的时间轴是分钟）
 	subjects := []string{"BTC", "ETH", "SOL"}
 	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(9), TargetEnd: at(10)})
 	require.NoError(t, err)
@@ -235,4 +236,123 @@ func TestFillOnlyRecoveryFailsWhenOneSeriesLacksTheTargetBar(t *testing.T) {
 	outcome, err = single.runner.Run(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, pipeline.ItemFailed, outcome.Items[key])
+}
+
+func ratioFactor() domain.FactorDef {
+	return domain.MustDefinition("ratio", "ratio", "output: close / volume\n")
+}
+
+// localHistory 先 Prepare（建好本地 schema），再直接往本地存储写各条序列的完整历史（不受 Prepare 只拉回看根数的限制）。
+func localHistory(t *testing.T, fx *fixture, series map[string][]int) {
+	t.Helper()
+	fx.st.marketType = seriesset.MarketMulti
+	fx.st.putTag("BTC", spotTag, 100, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	for tag, minutes := range series {
+		fx.putLocalEarly(t, "BTC", tag, minutes...)
+	}
+}
+
+func minutesBetween(from, to int) []int {
+	var out []int
+	for m := from; m <= to; m++ {
+		out = append(out, m)
+	}
+	return out
+}
+
+func btcSeries(tags ...string) []seriesset.Series {
+	var out []seriesset.Series
+	for _, tag := range tags {
+		out = append(out, seriesset.Series{SubjectID: "BTC", SeriesTag: tag})
+	}
+	return out
+}
+
+// fillItems 对 BTC 在 [start, end) 做只填充恢复，返回每个周期的逐项结果；frozen 为空表示没有冻结全集。
+func fillItems(t *testing.T, fx *fixture, member string, start, end int, frozen []seriesset.Series) map[int]pipeline.ItemStatus {
+	t.Helper()
+	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(start), TargetEnd: at(end),
+		Expected: []string{"BTC"}, ExpectedSeries: frozen, Available: []string{"BTC"}, CarryColumns: []string{"close", "volume"}, FillOnly: true}
+	outcome, err := fx.runner.Run(context.Background(), plan)
+	require.NoError(t, err)
+	out := map[int]pipeline.ItemStatus{}
+	for m := start; m < end; m++ {
+		out[m] = outcome.Items[pipeline.ItemKey{Member: member, Subject: "BTC", Period: at(m)}]
+	}
+	return out
+}
+
+// 回看 1 根的因子：现货 0~9、永续 0~8，只填充恢复第 9 分钟。冻结全集里有永续（该期永续应当存在，只是晚到），永续缺第 9 根：必须 failed，
+// 不能因为现货行写成就确认。没有冻结全集时（兜底推导）下架判断用固定时长，停更 1 分钟的永续同样是期望序列，也是 failed。
+func TestFillOnlyLookbackOneFailsWhenSwapIsLate(t *testing.T) {
+	for name, frozen := range map[string][]seriesset.Series{"冻结全集": btcSeries(spotTag, swapTag), "本地推导": nil} {
+		fx := newFixture(t, ratioFactor())
+		localHistory(t, fx, map[string][]int{spotTag: minutesBetween(0, 9), swapTag: minutesBetween(0, 8)})
+		require.Equal(t, pipeline.ItemFailed, fillItems(t, fx, "ratio", 9, 10, frozen)[9], name)
+	}
+	// 永续第 9 根也到了：写成。
+	fx := newFixture(t, ratioFactor())
+	localHistory(t, fx, map[string][]int{spotTag: minutesBetween(0, 9), swapTag: minutesBetween(0, 9)})
+	require.Equal(t, pipeline.ItemWritten, fillItems(t, fx, "ratio", 9, 10, btcSeries(spotTag, swapTag))[9])
+}
+
+// 回看 3 根、永续停更（本地 0~5，已超过回看）：恢复区间起点后移到 8、9 时，冻结全集里有永续就必须 failed。
+func TestFillOnlyOutageLongerThanLookbackFailsWithFrozenUniverse(t *testing.T) {
+	fx := newFixture(t, mean3())
+	localHistory(t, fx, map[string][]int{spotTag: minutesBetween(0, 12), swapTag: minutesBetween(0, 5)})
+	for _, start := range []int{6, 8, 9} {
+		items := fillItems(t, fx, "mean", start, 10, btcSeries(spotTag, swapTag))
+		for m := start; m < 10; m++ {
+			require.Equal(t, pipeline.ItemFailed, items[m], "恢复区间起点 %d，第 %d 分钟", start, m)
+		}
+	}
+}
+
+// 永续在回看期内下架（本地 0~7）：冻结全集里不再有永续的那一期，现货的待办写成、确认，不会连跑多轮 failed 不收敛。
+func TestFillOnlyConvergesAfterSwapDelistedWithinLookback(t *testing.T) {
+	fx := newFixture(t, mean3())
+	localHistory(t, fx, map[string][]int{spotTag: minutesBetween(0, 12), swapTag: minutesBetween(0, 7)})
+	for round := 0; round < 3; round++ {
+		require.Equal(t, pipeline.ItemWritten, fillItems(t, fx, "mean", 10, 11, btcSeries(spotTag))[10], "第 %d 轮", round)
+	}
+	// 下架之前的那一期，冻结全集里还有永续：它有行，写成。
+	require.Equal(t, pipeline.ItemWritten, fillItems(t, fx, "mean", 7, 8, btcSeries(spotTag, swapTag))[7])
+}
+
+// 失效重算的生产入口（engine/series.go 的 seriesFollower.run）构造的 Selection 不带 Series：期望序列由数据层兜底推出。
+// SOL 的永续停更（本地只有 0、1），实时路径这一期写的是 NULL；重算时 SOL 永续仍是期望序列（停更远没到下架的固定时长），
+// 永续 tag 的严格截面因子整体跳过，不会在 BTC、ETH 上写出残缺排名（0.5、1）覆盖 NULL。
+func TestInvalidationProductionPathDoesNotOverwriteWithPartialUniverse(t *testing.T) {
+	fx := unifiedStoreFixture(t, strictRank())
+	subjects := []string{"BTC", "ETH", "SOL"}
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.st.mu.Lock()
+		fx.st.results[s+at(9).Format(time.RFC3339)+swapTag] = storageio.ResultRow{SubjectID: s, DataTime: at(9), SeriesTag: swapTag, Fields: map[string]any{"rank": nil}}
+		fx.st.mu.Unlock()
+	}
+	executor := recalcexec.NewExecutor(fx.runner)
+	source := func(context.Context) (recalcexec.Selection, error) { // 与 seriesFollower.run 一致：只给标的，不给 Series
+		return recalcexec.Selection{Set: fx.set.Set, Members: fx.set.Members, Subjects: subjects, Columns: []string{"close", "volume"}}, nil
+	}
+	_, err := executor.RunChunkWith(context.Background(), source, at(9), at(10), nil)
+	require.NoError(t, err)
+	for _, s := range []string{"BTC", "ETH"} {
+		swap, ok := fx.rawResult(s, swapTag, 9)
+		require.True(t, ok)
+		require.Nil(t, swap.rank, "重算后永续仍是 NULL：%s", s)
+	}
+	for _, s := range subjects {
+		spot, ok := fx.rawResult(s, spotTag, 9)
+		require.True(t, ok, s)
+		require.NotNil(t, spot.rank, "现货照常排名：%s", s)
+	}
+}
+
+// 单序列数据集：没有 ExpectedSeries 的计划不受影响，缺目标那一根仍是 failed，与统一数据集改造之前一致。
+func TestFillOnlySingleSeriesUnchanged(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	require.Equal(t, pipeline.ItemFailed, fillItems(t, fx, "mean", 9, 10, nil)[9])
 }

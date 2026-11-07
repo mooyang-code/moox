@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -38,10 +39,12 @@ type gapFiller struct {
 	source   SourceDataset
 	exec     chunkWithRunner
 	universe universeReader
-	clock    periodclock.Clock
-	active   func() bool
-	cfg      GapConfig
-	now      func() time.Time
+	// unified 判断任务的源数据集是不是统一数据集（market_type=multi），为 nil 表示都不是：只有统一数据集的时序恢复才逐期读冻结的序列全集。
+	unified func(ctx context.Context, set domain.FactorTask) (bool, error)
+	clock   periodclock.Clock
+	active  func() bool
+	cfg     GapConfig
+	now     func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
 	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在任务锁内。引擎据此把补齐的最新一期记入运行摘要。
@@ -365,9 +368,32 @@ func (g *gapFiller) span(set domain.FactorTask, entries []gapledger.Entry) (time
 }
 
 // fillSubjects 在 [start, end) 上一次恢复一个任务里若干标的的时间序列因子待办。
+// 统一数据集（同一数据集里有现货、永续两个市场的序列）按待办周期读结果数据集 marker 里冻结的 universe_series：
+// 每个周期的期望序列就是当期实际存在的序列，恢复时每条期望序列都要写成才确认（永续晚到、这一期只有现货行时记失败，待办保留），
+// 已下架的序列不在之后各期的冻结全集里，不会让现货的待办永远确认不了。冻结全集相同的相邻周期合并成一次运行；
+// 单序列数据集、读不到 marker 或 marker 里没有序列全集的周期，保持原来的一次运行，期望序列由数据层兜底推出。
 func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, subjects []string, start, end time.Time) error {
 	taskID := set.Set.TaskID
 	pending := func() []gapledger.Entry { return g.ledger.PendingFor(taskID, subjects) }
+	runs, err := g.frozenRuns(ctx, set, pending(), start, end)
+	if err != nil {
+		return fmt.Errorf("read frozen universe: %w", err) // 读取失败：保持待恢复，下轮再试
+	}
+	for _, run := range runs {
+		if err := g.fillRun(ctx, taskID, pending, run); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fillRun 是时序恢复的一次运行：[run.start, run.end) 上一个冻结全集（series 为空表示没有冻结全集）。
+type fillRun struct {
+	start, end time.Time
+	series     []seriesset.Series
+}
+
+func (g *gapFiller) fillRun(ctx context.Context, taskID string, pending func() []gapledger.Entry, run fillRun) error {
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
 		// 在任务锁内重读：用最新的待办（含最新的 skipID）与最新的任务、因子定义。
 		if g.active != nil && !g.active() {
@@ -381,8 +407,9 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, sub
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
+		subjects := entrySubjects(use)
 		return recalcexec.Selection{
-			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns,
+			Set: current.Set, Members: members, Subjects: subjects, Series: seriesOfSubjects(run.series, subjects), Columns: columns,
 			FillOnly: true, FillCarry: anyWarming(use),
 		}, nil
 	}
@@ -390,10 +417,100 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, sub
 		if runErr != nil {
 			return
 		}
-		g.confirm(pending(), selection, outcome, start, end)
+		g.confirm(pending(), selection, outcome, run.start, run.end)
 	}
-	_, err := g.exec.RunChunkWith(ctx, source, start, end, after)
+	_, err := g.exec.RunChunkWith(ctx, source, run.start, run.end, after)
 	return err
+}
+
+// frozenRuns 把 [start, end) 切成按冻结全集分段的运行。非统一数据集（或没有任何周期有冻结全集）返回原区间的一次运行。
+// 有冻结全集时只覆盖有待办的周期：相邻的、冻结全集相同的周期合并，没有冻结全集的周期单独成段（期望序列由数据层兜底）。
+func (g *gapFiller) frozenRuns(ctx context.Context, set domain.EngineTask, entries []gapledger.Entry, start, end time.Time) ([]fillRun, error) {
+	whole := []fillRun{{start: start, end: end}}
+	if g.unified == nil || g.universe == nil {
+		return whole, nil
+	}
+	multi, err := g.unified(ctx, set.Set)
+	if err != nil || !multi {
+		return whole, err
+	}
+	duration, err := g.clock.Duration(set.Set.Freq)
+	if err != nil {
+		return nil, err
+	}
+	triggers := make(map[int64]string)
+	var periods []int64
+	for _, entry := range entries {
+		if entry.Period.Before(start) || !entry.Period.Before(end) {
+			continue
+		}
+		at := entry.Period.Unix()
+		if _, seen := triggers[at]; !seen {
+			periods = append(periods, at)
+			triggers[at] = ""
+		}
+		if triggers[at] == "" {
+			triggers[at] = entry.Trigger
+		}
+	}
+	sort.Slice(periods, func(i, j int) bool { return periods[i] < periods[j] })
+	var runs []fillRun
+	anyFrozen := false
+	for _, at := range periods {
+		var series []seriesset.Series
+		if trigger := triggers[at]; trigger != "" {
+			universe, found, err := g.universe.ComputedUniverse(ctx, set.Set.SpaceID, set.Set.ResultDatasetID, trigger, at)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				series = universe.Series
+			}
+		}
+		anyFrozen = anyFrozen || len(series) > 0
+		period := time.Unix(at, 0).UTC()
+		if last := len(runs) - 1; last >= 0 && sameSeries(runs[last].series, series) {
+			runs[last].end = period.Add(duration)
+			continue
+		}
+		runs = append(runs, fillRun{start: period, end: period.Add(duration), series: series})
+	}
+	if !anyFrozen {
+		return whole, nil
+	}
+	return runs, nil
+}
+
+// sameSeries 判断两份序列全集是否相同（顺序无关）。
+func sameSeries(a, b []seriesset.Series) bool {
+	left, right := seriesset.Union(a), seriesset.Union(b)
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// seriesOfSubjects 返回序列里属于这些标的的部分。
+func seriesOfSubjects(values []seriesset.Series, subjects []string) []seriesset.Series {
+	if len(values) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		wanted[subject] = struct{}{}
+	}
+	out := make([]seriesset.Series, 0, len(values))
+	for _, value := range values {
+		if _, ok := wanted[value.SubjectID]; ok {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // anyWarming 报告待办里是否有预热中或上游失败而跳过的项：那一期实时路径没有写任何行，恢复时 carry 列也要按源数据写入。

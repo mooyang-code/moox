@@ -150,7 +150,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.data = localdata.New(localdata.Config{
 		Store: r.series, Storage: r.storage, Admit: r.admit,
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
-		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
+		Lookback:      func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
+		DelistedAfter: cfg.Gap.GiveUpAfter,
 	})
 	pipelineConfig := pipeline.Config{
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
@@ -235,7 +236,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 			return err
 		}}
 	filler := &gapFiller{
-		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
+		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, unified: r.data.UnifiedTask, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
 		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。

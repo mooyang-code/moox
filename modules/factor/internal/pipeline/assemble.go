@@ -43,10 +43,13 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		return nil, AssembleReport{}, err
 	}
 	applied := make(map[ItemKey]bool)
-	appliedSeries := make(map[seriesItem]bool) // 统一数据集：每条序列各自取得有效值的项
+	appliedSeries := make(map[seriesItem]bool) // 统一数据集：每条序列各自取得有效值的项；单序列计划不记
+	multi := plan.multi()
 	markApplied := func(member domain.MemberDef, subject, tag string, at time.Time) {
 		applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
-		appliedSeries[seriesItem{ItemKey: ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}, tag: tag}] = true
+		if multi {
+			appliedSeries[seriesItem{ItemKey: ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}, tag: tag}] = true
+		}
 	}
 	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
 	rows := make(map[resultKey]*assembledRow)
