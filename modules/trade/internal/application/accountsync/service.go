@@ -194,7 +194,7 @@ func (s *Service) syncAccountLocked(
 	// 轻量同步不读全部挂单（永续 40 权重、现货 80 权重），挂单由私有流和对账维护。
 	var openOrders []exchange.Order
 	if mode != syncLight {
-		openOrders, err = adapter.ListOpenOrders(ctx)
+		openOrders, err = s.listOpenOrders(ctx, adapter, account, mode)
 		if err != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_open_orders", err))
 			return result, 0, failErr

@@ -504,7 +504,7 @@ const setTradingAccountInspectionSQL = `
 `
 
 // SetTradingAccountInspection 写入最近一次检测的结果。credentialSecretID 是这次检测所用的密钥 ID：
-// 检测最长 25 秒，期间账户换了密钥，旧密钥的结果不能覆盖新密钥的，更新不到返回 ErrConflict。
+// 检测最长 12 秒（account.inspectTimeout），期间账户换了密钥，旧密钥的结果不能覆盖新密钥的，更新不到返回 ErrConflict。
 func (tx *Tx) SetTradingAccountInspection(spaceID, tradingAccountID, credentialSecretID, accountMode, inspectionJSON string) error {
 	if blank(spaceID) || blank(tradingAccountID) || blank(inspectionJSON) {
 		return fmt.Errorf("%w: incomplete Exchange account inspection", ErrInvalidRecord)

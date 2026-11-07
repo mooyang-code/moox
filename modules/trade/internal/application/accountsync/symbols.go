@@ -2,6 +2,7 @@ package accountsync
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -9,7 +10,9 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 // rotationBatches 是轮转批次数：每轮多拉全集的十分之一，但不超过 rotationLimit 个标的。
@@ -18,6 +21,73 @@ const (
 	rotationBatches = 10
 	rotationLimit   = 20
 )
+
+// listOpenOrders 读挂单。统一账户现货不传 symbol 的挂单查询按“当前交易中的标的数量”计权重，30 秒一次的周期对账
+// 改为只查本地未结束订单、受管（持有）资产和当前目标涉及的现货标的，每个标的权重 5；会话启动、手动全量同步和增量同步
+// （确认撤单等）仍读全部挂单。没有这个能力的适配器（普通账户、OKX、模拟盘）照常读全部挂单。
+func (s *Service) listOpenOrders(ctx context.Context, adapter execution.ExecutionAdapter, account store.TradingAccountRecord, mode syncMode) ([]exchange.Order, error) {
+	scoped, ok := adapter.(execution.ScopedOpenOrderSource)
+	if !ok || mode != syncReconcile {
+		return adapter.ListOpenOrders(ctx)
+	}
+	symbols, err := s.reconcileSpotSymbols(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	return scoped.ListOpenOrdersForSymbols(ctx, symbols)
+}
+
+// reconcileSpotSymbols 是周期对账要查挂单的现货标的：本地未结束的订单、持有资产对应的交易对、当前目标里的标的。
+func (s *Service) reconcileSpotSymbols(ctx context.Context, account store.TradingAccountRecord) ([]exchange.SymbolKey, error) {
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	localOrders, err := s.Store.ListOrdersForAccount(ctx, account.SpaceID, account.TradingAccountID, s.now().Add(-s.lateFillWindow()).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[exchange.SymbolKey]struct{})
+	add := func(key exchange.SymbolKey) {
+		if key.Valid() && key.Market == exchange.MarketTypeSpot {
+			set[key] = struct{}{}
+		}
+	}
+	for _, current := range localOrders {
+		if !orderdomain.State(current.State).Terminal() {
+			add(exchange.NewSymbolKey(current.MarketType, current.ExchangeSymbol))
+		}
+	}
+	held := make(map[string]struct{})
+	for _, balance := range account.Snapshot.Balances {
+		if parseBalance(balance.Total) > 0 || parseBalance(balance.Available) > 0 || parseBalance(balance.Locked) > 0 {
+			held[balance.Asset] = struct{}{}
+		}
+	}
+	for _, key := range symbolsForAssets(account, instruments, held) {
+		add(key)
+	}
+	logicalAccountID, err := s.logicalAccountOf(ctx, account.SpaceID, account.TradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if logicalAccountID != "" {
+		target, err := s.Store.GetLogicalAccountTarget(ctx, account.SpaceID, logicalAccountID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		wanted := make(map[string]struct{}, len(target.Targets))
+		for _, item := range target.Targets {
+			wanted[item.InstrumentID] = struct{}{}
+		}
+		for _, instrument := range instruments {
+			if _, ok := wanted[instrument.InstrumentID]; ok {
+				add(exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+			}
+		}
+	}
+	return sortedSymbols(set), nil
+}
 
 // FullSymbols 是账户可能有成交的全部标的：有成交游标、有持仓、有挂单或近期订单的标的，
 // 以及现货持有资产对应的交易对。会话启动和手动同步拉这个全集。

@@ -161,6 +161,36 @@ func (p *PortfolioMargin) ListOpenOrders(ctx context.Context) ([]exchange.Order,
 	return all, nil
 }
 
+// ListOpenOrdersForSymbols 是周期对账用的挂单查询：现货（杠杆账户）只查给定的标的，每个标的权重 5；
+// 不传 symbol 的全量查询按“当前交易中的标的数量”计权重，每 30 秒对账一次会占掉共用 IP 的 papi 额度。
+// 合约（UM）照常列全部挂单。没有出现在 symbols 里的现货标的上的外部挂单，要等会话启动或手动全量同步才发现。
+func (p *PortfolioMargin) ListOpenOrdersForSymbols(ctx context.Context, symbols []exchange.SymbolKey) ([]exchange.Order, error) {
+	var all []exchange.Order
+	for _, market := range p.order {
+		if market != exchange.MarketTypeSpot {
+			items, err := p.markets[market].ListOpenOrders(ctx)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, items...)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, key := range symbols {
+			if key.Market != exchange.MarketTypeSpot || seen[key.Symbol] {
+				continue
+			}
+			seen[key.Symbol] = true
+			items, err := p.markets[market].ListOpenOrdersForSymbol(ctx, key)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, items...)
+		}
+	}
+	return all, nil
+}
+
 // SetLeverage、SetMarginMode 只有合约有；统一账户的合约一律全仓，设置保证金模式是空操作。
 func (p *PortfolioMargin) SetLeverage(ctx context.Context, key exchange.SymbolKey, leverage shared.Decimal) error {
 	sub, err := p.route(key.Market)

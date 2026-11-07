@@ -179,6 +179,39 @@ func TestPortfolioMarginSwapOrderUsesUMEndpointWithoutSideEffect(t *testing.T) {
 	require.Empty(t, sent[0].Query.Get("sideEffectType"), "合约下单不带现货的借币参数")
 }
 
+// 周期对账读挂单：现货（杠杆账户）按给定标的逐个查（带 symbol），不发不带 symbol 的全量查询；合约照常列全部。
+func TestPortfolioMarginListOpenOrdersForSymbolsQueriesEachSpotSymbolOnly(t *testing.T) {
+	state, server := newPMServer(t, map[string]string{
+		"GET /papi/v1/margin/openOrders": samplePath(t, "papi_margin_open_orders.json"),
+		"GET /papi/v1/um/openOrders":     `[` + withFields(t, "papi_um_order_query.json", map[string]any{"positionSide": "BOTH"}) + `]`,
+	})
+	pm := testPM(server, exchange.MarketTypeSpot, exchange.MarketTypeSwap)
+	symbols := []exchange.SymbolKey{
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "BNBBTC"),
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "ETHUSDT"),
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "BNBBTC"),
+		exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"),
+	}
+	orders, err := pm.ListOpenOrdersForSymbols(context.Background(), symbols)
+	require.NoError(t, err)
+
+	margin := state.find(http.MethodGet, "/papi/v1/margin/openOrders")
+	require.Len(t, margin, 2, "每个现货标的查一次，重复的合并")
+	for _, request := range margin {
+		require.NotEmpty(t, request.Query.Get("symbol"), "不能发不带 symbol 的全量查询")
+	}
+	require.ElementsMatch(t, []string{"BNBBTC", "ETHUSDT"}, []string{margin[0].Query.Get("symbol"), margin[1].Query.Get("symbol")})
+	require.Len(t, state.find(http.MethodGet, "/papi/v1/um/openOrders"), 1, "合约照常列全部")
+	require.NotEmpty(t, orders)
+
+	// 没有现货标的时完全不查现货挂单。
+	before := len(margin)
+	_, err = pm.ListOpenOrdersForSymbols(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, state.find(http.MethodGet, "/papi/v1/margin/openOrders"), before)
+	var _ execution.ScopedOpenOrderSource = pm
+}
+
 func TestPortfolioMarginRoutesQueryCancelOpenOrdersAndFillsPerMarket(t *testing.T) {
 	umOrder := func(name string) string {
 		return withFields(t, name, map[string]any{"positionSide": "BOTH"})

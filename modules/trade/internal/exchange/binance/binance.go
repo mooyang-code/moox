@@ -727,12 +727,28 @@ type orderPayload struct {
 // 官方文档（SDK 里转录的原文）写明 “If symbol is not sent, order records for all symbols are returned”，
 // 同时说明不传时限频按“当前交易中的标的数量”计权重（传 symbol 时权重 5）。SDK 的参数校验把 symbol 标成必填，
 // 与文档说明不一致，这里以文档说明为准；真实行为未实测，V3 小额实测要核对这个接口，必填的话改为按相关标的逐个查询。
+// 不传 symbol 的全量查询只在会话启动和手动全量同步时用；周期对账走 PortfolioMargin.ListOpenOrdersForSymbols，按标的逐个查。
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
+	return a.listOpenOrders(ctx, nil)
+}
+
+// ListOpenOrdersForSymbol 列出本市场某个标的的挂单（传 symbol，统一账户现货权重 5）。
+func (a *Adapter) ListOpenOrdersForSymbol(ctx context.Context, key exchange.SymbolKey) ([]exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(key.Symbol) == "" {
+		return nil, typedRejected("symbol is required", nil)
+	}
+	return a.listOpenOrders(ctx, url.Values{"symbol": []string{key.Symbol}})
+}
+
+func (a *Adapter) listOpenOrders(ctx context.Context, values url.Values) ([]exchange.Order, error) {
 	raw, err := a.request(
 		ctx,
 		http.MethodGet,
 		a.path("/api/v3/openOrders", "/fapi/v1/openOrders"),
-		nil,
+		values,
 	)
 	if err != nil {
 		return nil, err
