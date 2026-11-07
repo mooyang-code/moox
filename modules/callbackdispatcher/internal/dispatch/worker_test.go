@@ -355,11 +355,36 @@ func TestUnfinishedCancelCleanupRaisesActionFailedAttention(t *testing.T) {
 
 	attention := &AttentionWorker{Store: s, Now: c.Now}
 	require.NoError(t, attention.Publish(ctx))
-	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则：取消后的善后未完成，请在执行记录里再取消一次")))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”")))
 
 	require.NoError(t, s.FinishCleanup(ctx, seeded.ExecutionID, c.now.UnixMilli()))
 	require.NoError(t, attention.Publish(ctx))
 	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+}
+
+// 善后未完成的关注项：同一规则、同一标的多条记录只报一条，不同标的各报一条。
+func TestUnfinishedCancelCleanupAttentionIsDedupedPerSubject(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	first := seedSystem(t, s, c)
+	require.NoError(t, s.InTx(ctx, func(tx *store.Tx) error {
+		for id, subject := range map[string]string{"dup": first.SubjectID, "other": "okx:SWAP:BAR-USDT-SWAP"} {
+			e := first
+			e.ExecutionID, e.SubjectID, e.DedupeKey = id, subject, first.RuleID+"|"+id
+			if err := tx.InsertExecution(e); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	for _, id := range []string{first.ExecutionID, "dup", "other"} {
+		_, err := s.CancelExecution(ctx, id, c.now.UnixMilli())
+		require.NoError(t, err)
+	}
+	require.NoError(t, (&AttentionWorker{Store: s, Now: c.Now}).Publish(ctx))
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed,
+		"系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”；系统规则（okx:SWAP:BAR-USDT-SWAP）：取消后的善后未完成，请在执行记录里点“重试善后”")))
 }
 
 func TestDeletedRuleCancelsPendingExecution(t *testing.T) {

@@ -72,8 +72,14 @@ func (a *AttentionWorker) Publish(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	seen := map[string]bool{}
 	for _, execution := range cleanups {
-		items[telemetry.AttentionActionFailed] = append(items[telemetry.AttentionActionFailed], execution.RuleName+"：取消后的善后未完成，请在执行记录里再取消一次")
+		// 带上标的，并去重：同一规则、同一标的多条善后未完成的记录只报一次，不同标的各报一条。
+		detail := execution.RuleName + "（" + execution.SubjectID + "）：取消后的善后未完成，请在执行记录里点“重试善后”"
+		if !seen[detail] {
+			seen[detail] = true
+			items[telemetry.AttentionActionFailed] = append(items[telemetry.AttentionActionFailed], detail)
+		}
 	}
 	items[telemetry.AttentionDelistDetected] = telemetry.Recent(telemetry.AttentionDelistDetected, a.now(), telemetry.DelistDetectedWindow)
 	telemetry.PublishAttention(items)

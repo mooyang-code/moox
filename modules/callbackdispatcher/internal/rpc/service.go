@@ -464,7 +464,7 @@ func (s *Service) RetryEventExecution(ctx context.Context, req *pb.RetryEventExe
 // CancelEventExecution 取消还没结束的执行。顺序是：先原子地把记录置为已取消（工作线程不会再推进它，已结束的记录在这一步就被拒绝；
 // 系统动作的记录同时记下“善后未完成”），再调处理器善后（下架：解除禁止买入），成功后清除标记。
 // 先取消再善后，处理器就不会在善后之后又被工作线程推进、重新写入名单。
-// 善后没做成（处理器报错、请求超时、进程在两步之间重启）时记录仍是“已取消、善后未完成”：关注项会提醒，再取消一次只重做善后（善后必须幂等）。
+// 善后没做成（处理器报错、请求超时、进程在两步之间重启）时记录仍是“已取消、善后未完成”：关注项会提醒，再取消一次（管理台上的“重试善后”）只重做善后（善后必须幂等）。
 func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventExecutionReq) (*pb.CancelEventExecutionRsp, error) {
 	fail := func(info *pb.RetInfo) (*pb.CancelEventExecutionRsp, error) {
 		return &pb.CancelEventExecutionRsp{RetInfo: info}, nil
@@ -490,19 +490,19 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 		cleanupCtx := context.WithoutCancel(ctx)
 		rule, err := s.Store.GetRule(cleanupCtx, execution.RuleID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return fail(internalRet(ctx, "记录已取消，但读取事件规则失败，请再点一次取消重试", err))
+			return fail(internalRet(ctx, "记录已取消，但读取事件规则失败，请点“重试善后”", err))
 		}
 		if handler, ok := s.Actions.Handler(rule.SystemAction); ok {
 			if err := handler.OnCancel(cleanupCtx, execution); err != nil {
 				log.ErrorContextf(ctx, "取消系统动作 %s 的善后失败: %v", execution.ExecutionID, err)
-				if markErr := s.Store.SetLastError(cleanupCtx, execution.ExecutionID, "取消后的善后失败："+stableMessage(err), s.now().UnixMilli()); markErr != nil {
+				if markErr := s.Store.SetCleanupError(cleanupCtx, execution.ExecutionID, "取消后的善后失败："+stableMessage(err), s.now().UnixMilli()); markErr != nil {
 					log.ErrorContextf(ctx, "记录取消善后失败的原因失败: %v", markErr)
 				}
-				return fail(failRet(pb.ErrorCode_INNER_ERR, "记录已取消，但解除禁止买入失败，请再点一次取消重试"))
+				return fail(failRet(pb.ErrorCode_INNER_ERR, "记录已取消，但解除禁止买入失败，请点“重试善后”"))
 			}
 		}
 		if err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, s.now().UnixMilli()); err != nil {
-			return fail(internalRet(ctx, "记录已取消，但记下善后完成失败，请再点一次取消重试", err))
+			return fail(internalRet(ctx, "记录已取消，但记下善后完成失败，请点“重试善后”", err))
 		}
 	}
 	canceled, err := s.Store.GetExecution(ctx, execution.ExecutionID)

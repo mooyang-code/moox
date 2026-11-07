@@ -372,6 +372,29 @@ func TestCancelMarksCleanupPendingAndPurgeKeepsIt(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound, "善后做完后照常清理")
 }
 
+// 两次取消交错：一次已经做完善后，另一次迟到的失败说明不能盖住它。
+func TestSetCleanupErrorOnlyWhileCleanupPending(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		return tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5))
+	}))
+	_, err := s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	require.NoError(t, s.SetCleanupError(ctx, "sys", "取消后的善后失败：Trade 不可达", 101))
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.Equal(t, "取消后的善后失败：Trade 不可达", got.LastError)
+
+	require.NoError(t, s.FinishCleanup(ctx, "sys", 102))
+	require.NoError(t, s.SetCleanupError(ctx, "sys", "迟到的失败说明", 103))
+	got, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.Empty(t, got.LastError, "善后已做完，迟到的失败说明不写")
+	require.False(t, got.CleanupPending)
+}
+
 func TestListFiltersAndLastExecutionAndPurge(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)

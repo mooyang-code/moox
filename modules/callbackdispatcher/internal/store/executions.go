@@ -305,9 +305,10 @@ func (s *Store) FinishCleanup(ctx context.Context, executionID string, now int64
 		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now}).Error
 }
 
-// SetLastError 改写执行记录的“最近一次错误”说明（不改状态）。
-func (s *Store) SetLastError(ctx context.Context, executionID, message string, now int64) error {
-	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
+// SetCleanupError 记下取消后的善后失败的原因。只在善后仍未完成时才写：两次取消交错、其中一次已经做完善后时，
+// 迟到的失败说明不能盖住“已做完”的状态（页面会显示失败却没有“重试善后”按钮）。
+func (s *Store) SetCleanupError(ctx context.Context, executionID, message string, now int64) error {
+	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_cleanup_pending = 1", executionID).
 		Updates(map[string]any{"c_last_error": message, "c_updated_at": now}).Error
 }
 

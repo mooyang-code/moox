@@ -48,8 +48,9 @@ type Handler interface {
 	// 它返回错误时记录仍是已取消，用户再点一次取消会重新调它，所以实现必须幂等。
 	//
 	// 竞态：取消发生在 Step 执行期间时，Step 可能在取消之后才写入禁止名单。所以处理器每次写名单（BlockInstrument）
-	// 之后必须复查执行记录的状态，已经是已取消就补一次解除（UnblockInstrument）；并且只有同一标的没有别的未结束的真实执行时才解除
-	// （Trade 的名单是全局的，演练登记 PAPER_ONLY 的取消不能解除真实下架的禁止）。
+	// 之后必须复查执行记录的状态，已经是已取消就补一次解除（UnblockInstrument）；并且只有同一标的没有别的未结束的执行时才解除，
+	// 真实（ALL）与演练（PAPER_ONLY）都算：Trade 的名单是全局的，哪条都靠它（演练的取消不能解除真实下架的禁止）。
+	// 同一条记录可能被快速连点两次取消，两路 OnCancel 会同时执行，实现要靠按标的的锁和幂等挡住。
 	OnCancel(ctx context.Context, execution store.Execution) error
 }
 
