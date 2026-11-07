@@ -1006,7 +1006,7 @@ message SummarizeAccountPnlReq {
   string logical_account_id = 1;
   // 只看组合里的一个执行账户。
   string trading_account_id = 2;
-  // 毫秒时间戳；不传时默认近 7 天，资金费最长 90 天。
+  // 毫秒时间戳；不传时默认近 7 天，时间范围最长 90 天。
   int64 start_time = 3;
   int64 end_time = 4;
 }
@@ -1021,7 +1021,7 @@ message SummarizeAccountPnlRsp {
   int64 fill_count = 5;
   // 资金费是否取到了：模拟盘、现货账户或交易所不支持流水时为 false，funding_note 说明原因。
   bool funding_available = 6;
-  // 资金费窗口里还有更早的记录没取到，或请求的时间窗超过了 90 天被截短：汇总只是一部分。
+  // 资金费流水翻页没取完，或有账户的流水查不了：汇总只是一部分。
   bool funding_truncated = 7;
   string funding_note = 8;
   // 资金费实际统计的起点（毫秒时间戳）。

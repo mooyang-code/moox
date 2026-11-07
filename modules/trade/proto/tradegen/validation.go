@@ -661,7 +661,20 @@ func (r *SummarizeAccountPnlReq) Validate() error {
 	if r == nil || (strings.TrimSpace(r.LogicalAccountId) == "" && strings.TrimSpace(r.TradingAccountId) == "") {
 		return fmt.Errorf("logical_account_id or trading_account_id is required")
 	}
-	return validateTimeRange(r.StartTime, r.EndTime)
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	// 成交汇总逐行读成交表，资金费最长也只查 90 天：时间范围和资金流水一样限制在 90 天内。
+	if r.StartTime > 0 {
+		end := r.EndTime
+		if end == 0 {
+			end = time.Now().UnixMilli()
+		}
+		if end-r.StartTime > maxLedgerWindow {
+			return fmt.Errorf("时间范围不能超过 90 天")
+		}
+	}
+	return nil
 }
 
 var validOperatorActionTypes = map[string]struct{}{

@@ -114,7 +114,7 @@
 ./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
 ./bin/moox-cli trade order list --logical-account-id <ID> [--owner-type TARGET|OPERATOR|EXTERNAL|SYSTEM]   # 订单，可按来源过滤
 ./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
-./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（超出 90 天标明截断）
+./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
 ```

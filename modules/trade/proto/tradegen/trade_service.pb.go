@@ -9014,7 +9014,7 @@ type SummarizeAccountPnlReq struct {
 	LogicalAccountId string `protobuf:"bytes,1,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
 	// 只看组合里的一个执行账户。
 	TradingAccountId string `protobuf:"bytes,2,opt,name=trading_account_id,json=tradingAccountId,proto3" json:"trading_account_id,omitempty"`
-	// 毫秒时间戳；不传时默认近 7 天，资金费最长 90 天。
+	// 毫秒时间戳；不传时默认近 7 天，时间范围最长 90 天。
 	StartTime int64 `protobuf:"varint,3,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
 	EndTime   int64 `protobuf:"varint,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
 }
@@ -9094,7 +9094,7 @@ type SummarizeAccountPnlRsp struct {
 	FillCount   int64        `protobuf:"varint,5,opt,name=fill_count,json=fillCount,proto3" json:"fill_count,omitempty"`
 	// 资金费是否取到了：模拟盘、现货账户或交易所不支持流水时为 false，funding_note 说明原因。
 	FundingAvailable bool `protobuf:"varint,6,opt,name=funding_available,json=fundingAvailable,proto3" json:"funding_available,omitempty"`
-	// 资金费窗口里还有更早的记录没取到，或请求的时间窗超过了 90 天被截短：汇总只是一部分。
+	// 资金费流水翻页没取完，或有账户的流水查不了：汇总只是一部分。
 	FundingTruncated bool   `protobuf:"varint,7,opt,name=funding_truncated,json=fundingTruncated,proto3" json:"funding_truncated,omitempty"`
 	FundingNote      string `protobuf:"bytes,8,opt,name=funding_note,json=fundingNote,proto3" json:"funding_note,omitempty"`
 	// 资金费实际统计的起点（毫秒时间戳）。
