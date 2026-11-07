@@ -91,12 +91,12 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 			return PoolResolved{}, fmt.Errorf("两个 View 的周期或日历不一致：%s 是 %s/%s，%s 是 %s/%s", first.view.ViewID, first.view.Frequency, calendarOf(first), item.view.ViewID, item.view.Frequency, calendarOf(item))
 		}
 	}
-	// 数据集的保留期要能装下预热：预热期数（多取一期抵消终点前移）加成员里最长的回看（上一根与年龄判定）。
-	need := dsl.PoolWarmBars(pool, memberStrategies(members)) + 1 + poolLookback(members)
+	// 数据集的保留期要能装下预热：预热期数加成员里最长的回看（上一根与年龄判定）。
+	need := dsl.PoolWarmBars(pool, memberStrategies(members)) + poolLookback(members)
 	for _, item := range views {
 		if bars, ok := retentionBars(item.dataset.Retention, calendarOf(first), strings.ToLower(first.view.Frequency)); ok && need > bars {
 			return PoolResolved{}, fmt.Errorf("View %s 的数据集保留 %d 根，策略池预热需要 %d 根（预热 %d 期 + 成员最长回看 %d 根），请调大保留期或缩短轮动、择时的窗口",
-				item.view.ViewID, bars, need, need-1-poolLookback(members), poolLookback(members))
+				item.view.ViewID, bars, need, need-poolLookback(members), poolLookback(members))
 		}
 	}
 	// 估值需要 close：账本按收盘价成交与结算。

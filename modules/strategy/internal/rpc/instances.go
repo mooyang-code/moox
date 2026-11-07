@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func optionalString(value string) *string {
@@ -417,7 +418,12 @@ func (s *Service) startWarmUp(ctx context.Context, instanceID, sessionID string)
 		return
 	}
 	session, err := s.Store.GetSession(ctx, sessionID)
-	if err != nil || session.MembersJSON == "" || session.WarmedThrough != nil {
+	if err != nil {
+		// 读不到会话就不知道要不要预热：记日志，进程重启时的恢复会重新找出没有预热结果的池会话。
+		log.Warnf("实例 %s 启用后读取会话 %s 失败，策略池预热没有开始：%v", instanceID, sessionID, err)
+		return
+	}
+	if session.MembersJSON == "" || session.WarmedThrough != nil {
 		return
 	}
 	s.Warmer.Start(ctx, instanceID, sessionID)

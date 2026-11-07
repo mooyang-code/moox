@@ -34,6 +34,9 @@ type PoolRun struct {
 	Logf      func(format string, args ...any)
 	// Abort 在每期之前与每次退避重读之前调用，返回非空错误时放弃（例如会话已被停用）；可以为空。
 	Abort func(context.Context) error
+	// IncludeLatest 为真时终点可以包含 View 里已闭合的最新一根：研究回放把最新一根当作可能还没写完而排除在外，但预热的终点之后
+	// 不会再有这一根的事件（它的就绪事件在启用之前就发出了），排除它会在池的历史上留下一期空洞。调用方保证区间的终点已留过宽限。
+	IncludeLatest bool
 	// OnBar 非空时每推进一期调用一次（测试与观测用）。
 	OnBar func(bar input.PeriodBoundaries, decision engine.Decision)
 }
@@ -233,6 +236,20 @@ func (run PoolRun) checkWindow(ctx context.Context, views map[string]input.ViewI
 			}
 			end = next
 		}
+	}
+	if run.IncludeLatest {
+		// 起点一侧的校验已经通过：终点放宽到每个 View 里已闭合的最新一根（取各 View 中最早的），但不超过调用方给的终点。
+		latest := run.End
+		for market, view := range covered {
+			bounds, err := input.CoverageBounds(view, run.Resolved, now)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("%s 市场 View %s：%w", market, view.ViewID, err)
+			}
+			if next := bounds.To.Add(time.Nanosecond); next.Before(latest) {
+				latest = next
+			}
+		}
+		end = latest
 	}
 	if !end.After(run.Start) {
 		return time.Time{}, errors.New("历史推进的区间在数据覆盖范围内没有完整的 bar")

@@ -271,7 +271,7 @@ func (m *Manager) warm(ctx context.Context, instanceID, sessionID string) (done 
 	checked := 0
 	run := replay.PoolRun{
 		Client: m.Client, SpaceID: current.SpaceID, Resolved: resolved, Members: members, Programs: programs, Config: cfg,
-		Start: start, End: end, Now: m.Now, ChunkBars: m.ChunkBars, Logf: m.Logf,
+		Start: start, End: end, IncludeLatest: true, Now: m.Now, ChunkBars: m.ChunkBars, Logf: m.Logf,
 		Abort: func(ctx context.Context) error {
 			checked++
 			if checked%abortCheckEvery != 0 {
@@ -331,15 +331,15 @@ func WarmBars(pool dsl.Strategy, members []*dsl.Program) int {
 	return dsl.PoolWarmBars(pool, strategies)
 }
 
-// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars+1 期。
-// 最后一期实际有没有数据、有没有写完由 replay.RunPool 按 View 的覆盖范围截断（最新一根可能还没写完，终点通常前移一根），
-// 多取的一期正是抵消这一根，推进完成时净值序列仍然读满 WarmBars 期。
+// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars 期。
+// 最后一期实际有没有数据由 replay.RunPool 按 View 的覆盖范围截断（View 里还没有的期不推进）。该期的就绪事件在启用之前就已发出，
+// 预热不推进它就没有别的路径会处理它，所以终点包含已闭合的最新一根（宽限与追赶判断的口径一致：收盘超过宽限即视为有数据）。
 func Window(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program, now time.Time, grace time.Duration) (start, end time.Time, err error) {
 	closed, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, now.Add(-grace))
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	if start, err = input.HistoryStart(resolved.Calendar, resolved.Bar, closed.StorageStart, WarmBars(pool, members)+1); err != nil {
+	if start, err = input.HistoryStart(resolved.Calendar, resolved.Bar, closed.StorageStart, WarmBars(pool, members)); err != nil {
 		return time.Time{}, time.Time{}, err
 	}
 	return start, closed.StorageStart.Add(time.Nanosecond), nil

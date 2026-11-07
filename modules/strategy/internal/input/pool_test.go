@@ -106,7 +106,7 @@ func TestResolvePoolChecksRetentionCoversWarmUp(t *testing.T) {
 	raw := strings.Replace(poolDSL, "allocation: {method: fixed, ratios: {a: 0.5, b: 0.5}}", "allocation: {method: fixed, ratios: {a: 0.5, b: 0.5}}\n  timing: {window: 1000}", 1)
 	members := []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}
 	_, err := ResolvePool(context.Background(), newDualClient(), "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw), members)
-	if err == nil || !strings.Contains(err.Error(), "保留 720 根，策略池预热需要 1003 根") {
+	if err == nil || !strings.Contains(err.Error(), "保留 720 根，策略池预热需要 1002 根") {
 		t.Fatalf("保留期装不下预热应被拒绝：%v", err)
 	}
 	// 窗口 100：预热 101 + 1 根，加上回看 1 根，装得下。

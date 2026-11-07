@@ -10,12 +10,18 @@ import (
 	"testing"
 	"time"
 
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
+	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
+	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
+	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	"github.com/mooyang-code/moox/packages/storagepb"
 )
 
 var origin = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -24,7 +30,9 @@ var origin = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 type fakeClient struct {
 	mu          sync.Mutex
 	indexedFrom time.Time
-	queries     int
+	// indexedTo 是索引里最晚一行的 bar_start，零值取很晚的时间（被“已闭合的最后一根”夹住）。
+	indexedTo time.Time
+	queries   int
 	// failFirst 是前几次读取行依次返回的错误；gate 非空时每次读取行之前先等它。
 	failFirst []error
 	gate      chan struct{}
@@ -57,7 +65,11 @@ func (f *fakeClient) ViewCoverage(context.Context, string, input.ViewInfo, bool)
 	if from.IsZero() {
 		from = origin
 	}
-	return input.Coverage{IndexedFrom: from, IndexedTo: origin.Add(1000 * time.Hour)}, nil
+	to := f.indexedTo
+	if to.IsZero() {
+		to = origin.Add(1000 * time.Hour)
+	}
+	return input.Coverage{IndexedFrom: from, IndexedTo: to}, nil
 }
 
 func (f *fakeClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
@@ -222,9 +234,9 @@ func TestWarmUpWritesStateAndReleasesTheGate(t *testing.T) {
 	h.manager.Start(context.Background(), "i1", "session-1")
 	eventually(t, "预热完成", func() bool { return h.session(t).WarmedThrough != nil })
 	session := h.session(t)
-	// 现在是第 100.5 小时：最新已收盘的一根是 bar_end = 第 100 小时的那根；它可能还没写完，回放的终点取最后一根确认写完的
-	// （再往前一根，bar_end = 第 99 小时）。更晚的周期由实时事件照常处理。
-	if want := origin.Add(99 * time.Hour); !session.WarmedThrough.Equal(want) {
+	// 现在是第 100.5 小时：最新已收盘的一根是 bar_end = 第 100 小时的那根。它的就绪事件在启用之前就发出了，预热必须推进到它，
+	// 否则没有别的路径会处理它；更晚的周期由实时事件照常处理。
+	if want := origin.Add(100 * time.Hour); !session.WarmedThrough.Equal(want) {
 		t.Fatalf("预热终点 %v，期望 %v", session.WarmedThrough, want)
 	}
 	var state engine.State
@@ -232,7 +244,7 @@ func TestWarmUpWritesStateAndReleasesTheGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	poolState, err := pool.DecodeState(state.Pool)
-	if err != nil || !poolState.Started || len(poolState.Series["a"]) != 6 {
+	if err != nil || !poolState.Started || len(poolState.Series["a"]) != 6 || poolState.LastBarIndex == 0 {
 		t.Fatalf("预热状态要带成员净值序列（窗口 5 + 1 期）：%+v %v", poolState, err)
 	}
 	eventually(t, "门禁放行", func() bool { return h.manager.Blocked("i1") == "" })
@@ -369,5 +381,90 @@ rules:
 	// 择时窗口 5、成员持有期 12：取大者 12，再加 1。
 	if got := WarmBars(strategy, []*dsl.Program{plain}); got != 13 {
 		t.Fatalf("预热期数 %d，期望 13", got)
+	}
+}
+
+// 预热终点之后的第一期走真实的实时路径（处理器 + 输入装配 + 就绪判断）：它的分配比例、成员净值、目标与池状态，
+// 与从同一起点用历史推进一路算到这一期逐位一致。
+func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
+	h := newHarness(t)
+	h.client.indexedTo = origin.Add(101 * time.Hour) // 索引里最晚一行是第 101 小时的 bar_start（最新一根）
+	warmNow := h.manager.Now()
+	h.manager.Start(context.Background(), "i1", "session-1")
+	eventually(t, "预热完成", func() bool { return h.session(t).WarmedThrough != nil })
+	session := h.session(t)
+	if !session.WarmedThrough.Equal(origin.Add(100 * time.Hour)) {
+		t.Fatalf("预热终点 %v", session.WarmedThrough)
+	}
+	// 第一期正式事件：bar_start = 第 100 小时（bar_end = 第 101 小时）。
+	handler := &trigger.Handler{Store: h.repo, Loader: input.Loader{Client: h.client}, Now: func() time.Time { return origin.Add(101*time.Hour + 20*time.Minute) }}
+	detailType, detail, err := readiness.EncodeDetail([]*factorpb.FactorPeriodState{{MemberKey: "mom", MemberKind: "fixed", FactorId: "mom", Status: "complete", DefinitionHash: "sha256:mom"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := &eventpb.EventMessage{EventId: "event-100", EventName: "event.storage.view.data_ready", SpaceId: "crypto"}
+	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1h", PeriodTime: origin.Add(100 * time.Hour).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, DetailType: detailType, Detail: detail}
+	if err := handler.Handle(context.Background(), message, payload); err != nil {
+		t.Fatal(err)
+	}
+	live, found, err := h.repo.ResultAtBar(context.Background(), "i1", "session-1", origin.Add(101*time.Hour))
+	if err != nil || !found || live.Status != store.StatusOK {
+		t.Fatalf("第一期正式结果：%+v found=%v err=%v", live, found, err)
+	}
+	// 同一起点一路推进到这一期。
+	resolved, _ := input.ParseResolved([]byte(session.ResolvedJSON))
+	members, programs, err := input.ParseMembers(session.MembersJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategy, err := dsl.Parse([]byte(poolYaml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pool.NewConfig(strategy, resolved.Market)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, _, err := Window(resolved, strategy, programs, warmNow, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want *engine.Decision
+	run := replay.PoolRun{Client: h.client, SpaceID: "crypto", Resolved: resolved, Members: members, Programs: programs, Config: cfg,
+		Start: start, End: origin.Add(100*time.Hour + time.Nanosecond), IncludeLatest: true, ChunkBars: 4, Now: func() time.Time { return origin.Add(101*time.Hour + 20*time.Minute) },
+		OnBar: func(bar input.PeriodBoundaries, decision engine.Decision) {
+			if bar.BarEnd.Equal(origin.Add(101 * time.Hour)) {
+				copied := decision
+				want = &copied
+			}
+		}}
+	if _, err := replay.RunPool(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if want == nil {
+		t.Fatal("一路推进没有算到第 101 小时那一期")
+	}
+	var summary engine.Summary
+	if err := json.Unmarshal(live.SummaryJSON, &summary); err != nil {
+		t.Fatal(err)
+	}
+	gotMembers, _ := json.Marshal(summary.Pool)
+	wantMembers, _ := json.Marshal(want.Summary.Pool)
+	if string(gotMembers) != string(wantMembers) {
+		t.Fatalf("池明细（比例、净值、择时）不逐位一致：\n实时 %s\n历史 %s", gotMembers, wantMembers)
+	}
+	var liveState engine.State
+	if err := json.Unmarshal(live.RuleStatesJSON, &liveState); err != nil {
+		t.Fatal(err)
+	}
+	if string(liveState.Pool) != string(want.State.Pool) {
+		t.Fatalf("池状态不逐位一致：\n实时 %s\n历史 %s", liveState.Pool, want.State.Pool)
+	}
+	_, wantTargets, _ := trigger.EncodeTargets(want.Targets)
+	if string(live.TargetsJSON) != string(wantTargets) {
+		t.Fatalf("目标不一致：\n实时 %s\n历史 %s", live.TargetsJSON, wantTargets)
+	}
+	if len(want.Targets) == 0 {
+		t.Fatal("测试数据应产生非空目标")
 	}
 }
