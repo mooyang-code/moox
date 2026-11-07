@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/packages/frequency"
@@ -316,7 +317,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers}
 	members := cachedMembership(r.Client, job.SpaceID)
-	ledger := NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
+	book := ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
 	state := engine.State{}
 	previousEquity := r.initialEquity()
 	chunk := r.chunkBars()
@@ -361,7 +362,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 				weight, _ := strconv.ParseFloat(target.Weight.String(), 64)
 				targets[engine.TargetKey(target.InstrumentID, target.Market)] = weight
 			}
-			outcome := ledger.Step(Step{Prices: prices, Targets: targets, OK: ok})
+			outcome := book.Step(ledger.Step{Prices: prices, Targets: targets, OK: ok})
 			if ok {
 				state = decision.State
 			}
@@ -371,10 +372,10 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			}
 			previousEquity = outcome.EquityAfter
 			// 先写入周期再累计指标：写入失败时，保留的部分指标与已写入的周期一致。
-			if err := r.writeBar(ctx, job.ReplayID, bar.BarEnd, decision, ledger, outcome, barReturn); err != nil {
+			if err := r.writeBar(ctx, job.ReplayID, bar.BarEnd, decision, book, outcome, barReturn); err != nil {
 				return acc.finish(), err
 			}
-			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, ledger.Holdings())
+			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, book.Holdings())
 			if outcome.Bankrupt {
 				acc.setNote(noteBankrupt, fmt.Sprintf("权益在 %s 这一期不为正（模拟爆仓），此后各期空仓：目标不再成交，权益保持不变", input.BarEndLabel(resolved.Calendar, resolved.Bar, bar.BarEnd)))
 			}
@@ -762,7 +763,7 @@ func factorDrift(pinned, current map[string]string) string {
 	return ""
 }
 
-func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time, decision engine.Decision, ledger *Ledger, outcome Outcome, barReturn float64) error {
+func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time, decision engine.Decision, book *ledger.Ledger, outcome ledger.Outcome, barReturn float64) error {
 	targets := decision.Targets
 	if decision.Status != engine.StatusOK {
 		targets = nil
@@ -771,16 +772,16 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	if err != nil {
 		return err
 	}
-	positions, err := json.Marshal(ledger.Snapshot())
+	positions, err := json.Marshal(snapshotLedger(book))
 	if err != nil {
 		return err
 	}
-	summary, err := json.Marshal(map[string]any{"skip_reason": decision.SkipReason, "decision": decision.Summary, "ledger": outcome.rounded()})
+	summary, err := json.Marshal(map[string]any{"skip_reason": decision.SkipReason, "decision": decision.Summary, "ledger": roundedOutcome(outcome)})
 	if err != nil {
 		return err
 	}
 	frozen := 0
-	for _, position := range ledger.Positions {
+	for _, position := range book.Positions {
 		if position.Frozen {
 			frozen++
 		}
@@ -788,7 +789,7 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	return r.Store.AppendReplayBar(ctx, store.ReplayBar{
 		ReplayID: replayID, BarEndTime: barEnd, Status: decision.Status, TargetsJSON: targetsJSON, PositionsJSON: positions, SummaryJSON: summary,
 		Return: round4(barReturn), Equity: round4(outcome.EquityAfter), Turnover: round4(outcome.Turnover), Fee: round4(outcome.Fee),
-		SpotValue: round4(outcome.SpotValue), SwapValue: round4(outcome.SwapValue), Holdings: ledger.Holdings(), Frozen: frozen, SkipReason: decision.SkipReason, Unfilled: len(outcome.Unfilled), Liquidated: len(outcome.Liquidated),
+		SpotValue: round4(outcome.SpotValue), SwapValue: round4(outcome.SwapValue), Holdings: book.Holdings(), Frozen: frozen, SkipReason: decision.SkipReason, Unfilled: len(outcome.Unfilled), Liquidated: len(outcome.Liquidated),
 	})
 }
 
