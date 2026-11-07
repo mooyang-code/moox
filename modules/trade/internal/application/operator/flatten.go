@@ -42,6 +42,9 @@ type FlattenCommand struct {
 	Exchange string
 	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
 	ReduceRatio shared.Decimal
+
+	// attemptStart 是这一轮执行的起点（毫秒，精确到秒）：动作每次重新进入运行都重新记，下架清仓只统计起点之后的子单是否被拒、是否连续没成交。
+	attemptStart int64
 }
 
 type RemainingPosition struct {
@@ -91,6 +94,9 @@ type FlattenAccountResult struct {
 type FlattenResult struct {
 	Action   store.OperatorActionRecord `json:"-"`
 	Accounts []FlattenAccountResult     `json:"accounts"`
+	// AttemptStartedAt 是这一轮执行的起点（毫秒）：被拒和连续未成交的统计只看起点之后创建的子单，
+	// 同一个动作号在 FAILED、PARTIAL 之后重试时会重新记，让重试真的重新来过。
+	AttemptStartedAt int64 `json:"attempt_started_at,omitempty"`
 	// Unblocked 为真表示下架清仓因为标的已解除禁止而提前结束：动作记 COMPLETED，调用方不要重试。
 	Unblocked bool `json:"unblocked,omitempty"`
 	// ReduceTargets 是减仓发起时写定的各持仓目标数量（键：执行账户|标的 ID），之后各轮都收敛到它。
@@ -296,9 +302,21 @@ func (s *Service) FlattenLogicalAccount(
 		}
 		members = selected
 	}
+	// 这一轮执行的起点：运行中的动作被工作线程反复恢复时沿用原来的起点；从 FAILED、PARTIAL 重新进入运行（同一个动作号重试）、
+	// 或刚创建时记现在（精确到秒，操作记录的创建时间只到秒）。
+	attemptStart := time.Now().Truncate(time.Second).UnixMilli()
+	if resuming {
+		if previous, _ := decodeFlattenResult(existing); previous.AttemptStartedAt > 0 {
+			attemptStart = previous.AttemptStartedAt
+		} else if !existing.CreatedAt.IsZero() {
+			attemptStart = existing.CreatedAt.UnixMilli()
+		}
+	}
+	command.attemptStart = attemptStart
 	result := FlattenResult{
-		Action:   action,
-		Accounts: make([]FlattenAccountResult, 0, len(members)),
+		Action:           action,
+		AttemptStartedAt: attemptStart,
+		Accounts:         make([]FlattenAccountResult, 0, len(members)),
 	}
 	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
 	if command.actionType() == operatordomain.ActionDelistFlatten {
@@ -456,6 +474,11 @@ func flattenConflict(other store.OperatorActionRecord, command FlattenCommand) b
 func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand) (FlattenResult, bool, error) {
 	var request flattenRequest
 	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
+	// 下架清仓遇到别的动作号正在平同一个标的：返回忙，不返回别人的动作（新号没有创建，调用方稍后再试）。
+	// 演练（只看模拟盘）和真实下架同时平同一个模拟盘组合时会遇到。
+	if command.actionType() == operatordomain.ActionDelistFlatten {
+		return FlattenResult{}, true, ErrLogicalAccountBusy
+	}
 	sameKind := other.ActionType == string(command.actionType()) && request.InstrumentID == strings.TrimSpace(command.InstrumentID) &&
 		request.Exchange == strings.TrimSpace(command.Exchange) && request.ReduceRatio == reduceRatioText(command)
 	if sameKind && (request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID)) {
@@ -963,7 +986,9 @@ func (s *Service) flattenSwap(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
 			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
-			result.addError(err)
+			if !errors.Is(err, errDelistPacing) { // 间隔未到只是等一等，不是错误
+				result.addError(err)
+			}
 		}
 	}
 }
@@ -1073,7 +1098,9 @@ func (s *Service) flattenSpot(
 			exchange.SideSell, quantity, quote, result,
 		); err != nil {
 			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
-			result.addError(err)
+			if !errors.Is(err, errDelistPacing) {
+				result.addError(err)
+			}
 		}
 	}
 }
@@ -1111,24 +1138,23 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	// 下架清仓用伪市价单（限价 + IOC，滑点 3%）：每一轮按最新报价重新下，零成交的 IOC 单不算终结，
 	// 子单号带上第几次尝试，同一个动作号重试时不会撞上上一次已结束的子单。
 	delist := command.actionType() == operatorDelistFlatten
-	attempt := 0
+	var history delistHistory
 	if delist {
-		var attemptErr error
-		attempt, attemptErr = s.delistAttempts(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
-		if attemptErr != nil {
-			return attemptErr
+		var historyErr error
+		history, historyErr = s.loadDelistHistory(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		if historyErr != nil {
+			return historyErr
 		}
 	}
+	attempt := history.finished
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
 		account.TradingAccountID,
 		exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 		side,
 		quantity,
+		attempt,
 	)
-	if attempt > 0 {
-		clientOrderID += "a" + strconv.Itoa(attempt)
-	}
 	existing, found, err := s.flattenChild(
 		ctx, command.SpaceID, account.TradingAccountID,
 		command.ActionID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol), clientOrderID,
@@ -1160,6 +1186,12 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 			return ended
 		default:
 			return nil
+		}
+	}
+	if delist {
+		// 要下新的一笔了：被拒绝、连续没成交封顶、离上一笔结束太近都先不下。
+		if err := s.checkDelistAttempt(history); err != nil {
+			return err
 		}
 	}
 	spec := orderdomain.OrderSpec{
@@ -1391,11 +1423,12 @@ func (s *Service) persistFlattenProgress(
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	data, err := json.Marshal(struct {
-		Accounts      []FlattenAccountResult `json:"accounts"`
-		Unblocked     bool                   `json:"unblocked,omitempty"`
-		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
-		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
-	}{Accounts: result.Accounts, Unblocked: result.Unblocked, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
+		Accounts         []FlattenAccountResult `json:"accounts"`
+		Unblocked        bool                   `json:"unblocked,omitempty"`
+		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
+		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
+		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
+	}{Accounts: result.Accounts, Unblocked: result.Unblocked, AttemptStartedAt: result.AttemptStartedAt, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
 	if err != nil {
 		return err
 	}
@@ -1428,15 +1461,16 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 		return result, errors.New(action.LastError)
 	}
 	var persisted struct {
-		Accounts      []FlattenAccountResult `json:"accounts"`
-		Unblocked     bool                   `json:"unblocked,omitempty"`
-		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
-		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
+		Accounts         []FlattenAccountResult `json:"accounts"`
+		Unblocked        bool                   `json:"unblocked,omitempty"`
+		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
+		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
+		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
-	result.Accounts, result.Unblocked = persisted.Accounts, persisted.Unblocked
+	result.Accounts, result.Unblocked, result.AttemptStartedAt = persisted.Accounts, persisted.Unblocked, persisted.AttemptStartedAt
 	result.ReduceTargets, result.ReduceDone = persisted.ReduceTargets, persisted.ReduceDone
 	return result, nil
 }
@@ -1453,16 +1487,19 @@ func flattenStatus(accounts []FlattenAccountResult, executable int) string {
 	return string(operatordomain.StatusCompleted)
 }
 
+// flattenClientOrderIDForSpec 生成清仓子单的客户端订单号：固定 32 位（"mf" + 30 位十六进制），所有交易所都不超过
+// （OKX 的 clOrdId 上限 32 位）。下架清仓的第几次尝试并进哈希输入，不能再往后面拼后缀把号拼长。
 func flattenClientOrderIDForSpec(
 	actionID string,
 	accountID string,
 	key exchange.SymbolKey,
 	side exchange.Side,
 	quantity shared.Decimal,
+	attempt int,
 ) string {
 	sum := sha256.Sum256([]byte(
 		actionID + "\x00" + accountID + "\x00" + key.String() + "\x00" +
-			string(side) + "\x00" + quantity.String(),
+			string(side) + "\x00" + quantity.String() + "\x00" + strconv.Itoa(attempt),
 	))
 	return "mf" + hex.EncodeToString(sum[:15])
 }
@@ -1609,13 +1646,27 @@ func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick st
 	return price
 }
 
-// delistAttempts 返回下一笔子单是第几次尝试（本动作在这个标的上已结束的子单数，只用来让子单号唯一）。
-// 终结的情况：最近一笔被交易所拒绝（同样的单再发还是拒绝，复查要换新的动作号）；最近连续 delistMaxAttempts 笔 IOC 一股都没成交
-// （部分成交说明在推进，不算）。
-func (s *Service) delistAttempts(ctx context.Context, command FlattenCommand, tradingAccountID string, key exchange.SymbolKey) (int, error) {
+// errDelistPacing 表示离上一笔 IOC 单结束太近，稍后再下：不算终结，下一轮继续。
+var errDelistPacing = errors.New("下架清仓的限价单刚结束，间隔几秒再下下一笔")
+
+// delistHistory 是下架清仓在一个标的上的子单历史。
+type delistHistory struct {
+	// finished 是本动作在这个标的上已结束的子单总数（不分起点）：并进子单号的哈希，保证每笔的号不同。
+	finished int
+	// lastRejected、rejectReason 说明这一轮（起点之后）最近一笔是否被交易所拒绝；unfilled 是这一轮最近连续一股都没成交的笔数。
+	lastRejected bool
+	rejectReason string
+	unfilled     int
+	// lastFinishedAt 是最近一笔结束的时间（任何一轮），用来控制两笔 IOC 之间的最小间隔。
+	lastFinishedAt time.Time
+}
+
+// loadDelistHistory 读本动作在这个标的上已结束的子单。被拒和连续未成交只统计这一轮起点之后创建的子单：
+// 同一个动作号在 FAILED、PARTIAL 之后重试会重新记起点，让重试真的重新来过；起点之前的子单只影响号和间隔。
+func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand, tradingAccountID string, key exchange.SymbolKey) (delistHistory, error) {
 	records, err := s.Store.ListOrdersForLane(ctx, command.SpaceID, tradingAccountID, key)
 	if err != nil {
-		return 0, err
+		return delistHistory{}, err
 	}
 	var finished []store.OrderRecord
 	for _, current := range records {
@@ -1630,19 +1681,57 @@ func (s *Service) delistAttempts(ctx context.Context, command FlattenCommand, tr
 		}
 		return finished[i].OrderID < finished[j].OrderID
 	})
-	if len(finished) > 0 && finished[len(finished)-1].State == string(orderdomain.Rejected) {
-		return 0, flattenFinal{fmt.Errorf("下架清仓的订单被交易所拒绝：%s", finished[len(finished)-1].RejectReason)}
+	history := delistHistory{finished: len(finished)}
+	var thisRound []store.OrderRecord
+	for _, current := range finished {
+		at := current.CreatedAt
+		if current.FinishedAt > 0 {
+			at = time.UnixMilli(current.FinishedAt)
+		}
+		if at.After(history.lastFinishedAt) {
+			history.lastFinishedAt = at
+		}
+		if current.CreatedAt.UnixMilli() >= command.attemptStart {
+			thisRound = append(thisRound, current)
+		}
 	}
-	unfilled := 0
-	for index := len(finished) - 1; index >= 0; index-- {
-		filled, parseErr := decimalOrZero(finished[index].FilledQuantity)
+	if n := len(thisRound); n > 0 && thisRound[n-1].State == string(orderdomain.Rejected) {
+		history.lastRejected, history.rejectReason = true, thisRound[n-1].RejectReason
+	}
+	for index := len(thisRound) - 1; index >= 0; index-- {
+		filled, parseErr := decimalOrZero(thisRound[index].FilledQuantity)
 		if parseErr != nil || filled.Cmp(shared.Zero()) > 0 {
 			break
 		}
-		unfilled++
+		history.unfilled++
 	}
-	if unfilled >= delistMaxAttempts {
-		return 0, flattenFinal{fmt.Errorf("下架清仓连续 %d 次限价单（滑点 3%%）一股都没成交，需要人工处理", unfilled)}
+	return history, nil
+}
+
+// checkDelistAttempt 判断能不能再下一笔：最近一笔被交易所拒绝（同样的单再发还是拒绝），或这一轮连续 delistMaxAttempts 笔 IOC 一股都没成交
+// （部分成交说明在推进，不算）是终结错误，这一轮停下；同一个动作号重试会重新来过。两笔之间至少隔 delistAttemptInterval。
+func (s *Service) checkDelistAttempt(history delistHistory) error {
+	if history.lastRejected {
+		return flattenFinal{fmt.Errorf("下架清仓的订单被交易所拒绝：%s", history.rejectReason)}
 	}
-	return len(finished), nil
+	if history.unfilled >= delistMaxAttempts {
+		return flattenFinal{fmt.Errorf("下架清仓连续 %d 次限价单（滑点 3%%）一股都没成交，需要人工处理", history.unfilled)}
+	}
+	if interval := s.delistAttemptInterval(); interval > 0 && !history.lastFinishedAt.IsZero() && time.Since(history.lastFinishedAt) < interval {
+		return errDelistPacing
+	}
+	return nil
+}
+
+// defaultDelistAttemptInterval 是两笔下架清仓 IOC 单之间的最小间隔：薄盘口下一笔打完马上再打只会在同一个价位上空转。
+const defaultDelistAttemptInterval = 3 * time.Second
+
+func (s *Service) delistAttemptInterval() time.Duration {
+	switch {
+	case s.DelistAttemptInterval < 0:
+		return 0
+	case s.DelistAttemptInterval == 0:
+		return defaultDelistAttemptInterval
+	}
+	return s.DelistAttemptInterval
 }

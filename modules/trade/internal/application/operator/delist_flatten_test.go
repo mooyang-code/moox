@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +54,19 @@ func TestWholeFlattenStillUsesMarketOrders(t *testing.T) {
 	}
 }
 
+// 清仓子单号固定 32 位（"mf" + 30 位十六进制），OKX 的 clOrdId 上限 32 位：尝试次数并进哈希，不拼后缀。
+func TestFlattenChildClientOrderIDsFitEveryExchange(t *testing.T) {
+	key := exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT")
+	seen := map[string]struct{}{}
+	for attempt := 0; attempt < 200; attempt++ {
+		id := flattenClientOrderIDForSpec("delist-action-with-a-rather-long-identifier", "account-a", key, exchange.SideSell, shared.MustDecimal("3"), attempt)
+		require.Len(t, id, 32)
+		require.True(t, okx.ValidClientOrderID(id), id)
+		seen[id] = struct{}{}
+	}
+	require.Len(t, seen, 200, "每次尝试的号都不同")
+}
+
 // 零成交的 IOC 单不算终结：同一个动作号再跑一轮，用新的单号按最新报价重新下。
 func TestDelistFlattenRetriesAfterAnUnfilledIOCOrder(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
@@ -63,8 +78,7 @@ func TestDelistFlattenRetriesAfterAnUnfilledIOCOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
 	first := fixture.orders.specs[0].ClientOrderID
-	// 这一单一股没成交就过期了（持仓没变）。
-	// （替身把交易所代码写成了内部标的 ID，这里改回真实的交易所代码，按标的查才找得到。）
+	// 这一单一股没成交就过期了（持仓没变）。（替身把交易所代码写成了内部标的 ID，这里改回真实的交易所代码，按标的查才找得到。）
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_filled_quantity = '0', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-retry'`).Error)
 	fixture.orders.nextID = "child-second"
 
@@ -72,50 +86,109 @@ func TestDelistFlattenRetriesAfterAnUnfilledIOCOrder(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 2, "再下一单，不是被判终结")
-	require.NotEqual(t, first, fixture.orders.specs[1].ClientOrderID)
-	require.Equal(t, first+"a1", fixture.orders.specs[1].ClientOrderID)
+	second := fixture.orders.specs[1].ClientOrderID
+	require.NotEqual(t, first, second)
+	require.Len(t, second, 32, "第二笔的号也是 32 位，OKX 才收")
+	require.True(t, okx.ValidClientOrderID(second))
 }
 
-// 被交易所拒绝的不再重试；下满次数仍未成交的记终结原因。
-func TestDelistFlattenStopsAfterRejectionOrTooManyAttempts(t *testing.T) {
+// ageOrders 把本动作已有子单的创建时间往前拨：模拟它们是上一轮执行留下的。
+func ageOrders(t *testing.T, fixture *operatorFixture, actionID string) {
+	t.Helper()
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = datetime('now', '-10 minutes') WHERE c_owner_id = ?`, actionID).Error)
+}
+
+// 被交易所拒绝：这一轮停下（PARTIAL）；同一个动作号重试会重新来过——起点之前的被拒子单不计，会再下单。
+func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "SWAP", "BTCUSDT")
-	command := delistCommand("delist-stop", "BTC-USDT-SWAP")
+	command := delistCommand("delist-reject", "BTC-USDT-SWAP")
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-stop'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-reject'`).Error)
 	fixture.orders.specs = nil
 
+	// 这一轮里最近一笔被拒：不再下，动作以 PARTIAL 结束。
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
-
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
 	require.Equal(t, "PARTIAL", result.Action.Status)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "被交易所拒绝")
 
-	// 下满次数：把已结束的子单数补到上限。
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED' WHERE c_owner_id = 'delist-stop'`).Error)
+	// 同一个动作号重试：重新进入运行，起点之后没有被拒的子单，会再下一笔。
+	ageOrders(t, fixture, "delist-reject")
+	fixture.orders.nextID = "child-retry"
+	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "被拒一次不能让整轮平仓报废")
+	require.Positive(t, result.AttemptStartedAt)
+}
+
+// 连续 20 笔 IOC 一股都没成交：这一轮封顶；部分成交打断计数；同号重试重新来过。
+func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	command := delistCommand("delist-streak", "BTC-USDT-SWAP")
+	fixture.orders.nextID = ""
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-streak'`).Error)
 	limit := "97"
 	for i := 1; i < delistMaxAttempts; i++ {
+		id := "old-" + string(rune('a'+i))
 		fixture.order(t, store.OrderRecord{
-			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: "old-" + string(rune('a'+i)), ClientOrderID: "old-" + string(rune('a'+i)),
+			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: id, ClientOrderID: id,
 			Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 			OrderType: "LIMIT", TimeInForce: "IOC", Side: "SELL", Quantity: "3", LimitPrice: &limit, ReferencePrice: "100",
-			State: "EXPIRED", OwnerType: "OPERATOR", OwnerID: "delist-stop", LogicalAccountID: "logical-1", Version: 1,
+			State: "EXPIRED", OwnerType: "OPERATOR", OwnerID: "delist-streak", LogicalAccountID: "logical-1", Version: 1,
 		})
 	}
-	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	fixture.orders.specs = nil
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "需要人工处理")
 
-	// 最近一笔有成交说明在推进：连续没成交的笔数从头数，不会因为总笔数多就终结。
+	// 最近一笔有成交说明在推进：连续没成交的笔数从头数。
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_filled_quantity = '1' WHERE c_order_id = 'old-t'`).Error)
 	fixture.orders.nextID = "child-progress"
 	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1, "部分成交不计入连续未成交，继续下单")
+
+	// 封顶之后同号重试：这些子单都是上一轮留下的，不再计入。
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_filled_quantity = '0', c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-streak'`).Error)
+	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	fixture.orders.specs = nil
+	ageOrders(t, fixture, "delist-streak")
+	fixture.orders.nextID = "child-after-reset"
+	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "同号重试重新来过，起点之前的子单不计")
+}
+
+// 两笔 IOC 之间至少隔一段时间：上一笔刚结束就先不下，不算终结。
+func TestDelistFlattenPacesConsecutiveIOCOrders(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	command := delistCommand("delist-pace", "BTC-USDT-SWAP")
+	fixture.orders.nextID = ""
+	service := fixture.service()
+	service.DelistAttemptInterval = time.Minute
+	_, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-pace'`).Error)
+	fixture.orders.nextID = "child-paced"
+
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "离上一笔结束太近，这一轮不再下")
+	require.Equal(t, "RUNNING", result.Action.Status, "不算终结，下一轮继续")
 }
 
 // 解除禁止就停：撤掉本动作的订单，记 COMPLETED 并带“已解除禁止”标记，不下单、不记 PARTIAL。
@@ -272,4 +345,59 @@ func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T)
 	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "ACTIVE", logical.AutomationState)
+}
+
+// 解除禁止提前结束时要确认撤单：本动作的子单还没结束就不能记 COMPLETED，也不能唤醒目标（执行器会把没结束的 OPERATOR 单当冲突、暂停组合）。
+func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	command := delistCommand("delist-cancel-confirm", "BTC-USDT-SWAP")
+	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
+	fixture.orders.nextID = ""
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	_, err = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	require.NoError(t, err)
+	fixture.orders.specs = nil
+	wakes := 0
+	service := fixture.service()
+	service.Wake = func() { wakes++ }
+
+	// 撤单发出了但订单还开着（撤单没确认）：动作继续运行，不记完成、不唤醒。
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status)
+	require.False(t, result.Unblocked)
+	require.Zero(t, wakes)
+	require.Empty(t, fixture.orders.specs, "解除后不再下单")
+	require.Contains(t, fixture.trace, "cancel:child-account-a-BTC-USDT-SWAP")
+
+	// 撤单确认之后才记完成并唤醒。
+	fixture.orders.leaveOpen = nil
+	result, err = service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.True(t, result.Unblocked)
+	require.Equal(t, 1, wakes)
+}
+
+// 同标的同交易所已经有另一个动作号在平：新号返回“忙”，不创建新动作、也不把旧动作当成新号的结果返回。
+func TestDelistFlattenWithAnotherActionIDOnTheSameInstrumentIsBusy(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
+		SpaceID: "space-1", ActionID: "drill", LogicalAccountID: "logical-1", ActionType: "DELIST_FLATTEN", Reason: "演练",
+		RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, Status: "RUNNING",
+	})
+	require.NoError(t, err)
+	command := delistCommand("real", "BTC-USDT-SWAP")
+	command.Exchange = "BINANCE"
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+
+	require.ErrorIs(t, err, ErrLogicalAccountBusy)
+	require.Empty(t, result.Action.ActionID, "不返回别人的动作")
+	require.Empty(t, fixture.orders.specs)
+	_, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "real")
+	require.Error(t, getErr, "新号没有创建")
 }

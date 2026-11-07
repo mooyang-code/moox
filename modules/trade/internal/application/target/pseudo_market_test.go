@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -196,4 +197,13 @@ func TestPseudoMarketAttemptsAreCountedPerInstrumentNotPerMember(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, f.orders.specs, "account-b 没下过单，也不能重新从第 0 次开始")
 	require.Equal(t, StatusBlocked, result.Status)
+}
+
+// 伪市价子单号要被所有交易所接受：OKX 的 clOrdId 上限 32 位。
+func TestChildClientOrderIDsFitEveryExchange(t *testing.T) {
+	for attempt := 0; attempt < 100; attempt++ {
+		id := childClientOrderID(attempt)
+		require.LessOrEqual(t, len(id), 32)
+		require.True(t, okx.ValidClientOrderID(id), id)
+	}
 }

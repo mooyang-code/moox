@@ -762,7 +762,7 @@ func (f *operatorFixture) service() *Service {
 	return &Service{
 		Store: f.store, Orders: f.orders, Syncer: f.syncer, Prices: f.prices,
 		Now: func() time.Time { return f.now }, FlattenMaxAttempts: 1,
-		FlattenRetryInterval: -1,
+		FlattenRetryInterval: -1, DelistAttemptInterval: -1,
 	}
 }
 
