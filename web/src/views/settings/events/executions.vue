@@ -128,7 +128,7 @@ async function load() {
 async function loadOptions() {
   try {
     [events.value, rules.value] = await Promise.all([
-      listSubscribableEvents(),
+      listSubscribableEvents().then(catalog => catalog.events),
       listEventRules({ page: 1, size: 200 }).then(rsp => rsp.rules)
     ]);
   } catch (error) {

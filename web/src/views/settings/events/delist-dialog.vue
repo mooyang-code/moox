@@ -7,8 +7,11 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
-      <a-alert class="block-alert">
+      <a-alert v-if="systemActionEnabled" class="block-alert">
         用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
+      </a-alert>
+      <a-alert v-else type="warning" class="block-alert">
+        用来补录漏报的下架，或做演练。{{ SYSTEM_ACTION_DISABLED_TEXT }}
       </a-alert>
       <a-form :model="form" auto-label-width>
         <a-form-item field="exchange" label="交易所" required>
@@ -54,11 +57,12 @@
       </a-alert>
       <template v-else>
         <p v-if="instrumentUnknown" class="muted">
-          交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有，登记后只会禁止买入。
+          交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有。{{ noHolderEffect }}
         </p>
-        <p v-else-if="!holders.length" class="muted">没有策略持有这个标的，登记后只会禁止买入。</p>
+        <p v-else-if="!holders.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
         <template v-else>
-          <p>下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+          <p v-if="systemActionEnabled">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+          <p v-else>下面这些组合持有这个标的（系统动作尚未启用，不会被平仓）：</p>
           <ul class="holder-list">
             <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
             <li v-for="holder in summary.paper" :key="holderKey(holder)">模拟盘　{{ holderLine(holder) }}</li>
@@ -72,7 +76,9 @@
         </template>
       </template>
       <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
-      <a-checkbox v-else-if="summary.live.length" v-model="confirmed"> 我确认有生产组合会被平仓，仍然登记 </a-checkbox>
+      <a-checkbox v-else-if="systemActionEnabled && summary.live.length" v-model="confirmed">
+        我确认有生产组合会被平仓，仍然登记
+      </a-checkbox>
     </template>
 
     <template #footer>
@@ -114,12 +120,13 @@ import {
   holderLine,
   isPastDelistTime,
   pickerValueToMs,
-  summarizeHolders
+  summarizeHolders,
+  SYSTEM_ACTION_DISABLED_TEXT
 } from "./event-center-utils";
 
 defineOptions({ name: "EventDelistDialog" });
 
-const props = defineProps<{ visible: boolean }>();
+const props = defineProps<{ visible: boolean; systemActionEnabled: boolean }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
 const form = reactive({
@@ -142,7 +149,10 @@ const confirmed = ref(false);
 const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
-const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
+const needConfirm = computed(
+  () => previewFailed.value || !verified.value || (props.systemActionEnabled && summary.value.live.length > 0)
+);
+const noHolderEffect = computed(() => (props.systemActionEnabled ? "登记后只会禁止买入。" : "登记后只记录，不会禁止买入。"));
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
 

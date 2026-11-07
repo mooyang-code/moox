@@ -1,5 +1,8 @@
 <template>
   <section>
+    <a-alert v-if="!systemActionEnabled" type="warning" class="system-action-alert">
+      {{ SYSTEM_ACTION_DISABLED_TEXT }}
+    </a-alert>
     <a-table
       row-key="rule_id"
       size="small"
@@ -25,7 +28,7 @@
           <template #cell="{ record }">{{ describeScope(record.scope, fieldsOf(record.event_name)) }}</template>
         </a-table-column>
         <a-table-column title="动作" :width="280" :ellipsis="true" :tooltip="true">
-          <template #cell="{ record }">{{ actionText(record) }}</template>
+          <template #cell="{ record }">{{ actionText(record, systemActionEnabled) }}</template>
         </a-table-column>
         <a-table-column title="启用" :width="80" align="center">
           <template #cell="{ record }">
@@ -67,7 +70,7 @@
 
     <RuleDialog v-model:visible="ruleVisible" :rule="editingRule" :events="events" @saved="onSaved" />
     <SecretDialog v-model:visible="secretVisible" :rule-name="createdName" :secret="createdSecret" />
-    <DelistDialog v-model:visible="delistVisible" />
+    <DelistDialog v-model:visible="delistVisible" :system-action-enabled="systemActionEnabled" />
   </section>
 </template>
 
@@ -88,12 +91,22 @@ import { defaultPagination } from "@/views/data/shared/metadata-utils";
 import RuleDialog from "./rule-dialog.vue";
 import SecretDialog from "./secret-dialog.vue";
 import DelistDialog from "./delist-dialog.vue";
-import { actionText, describeScope, eventTitle, formatDuration, formatMs, statusText, statusTone } from "./event-center-utils";
+import {
+  actionText,
+  describeScope,
+  eventTitle,
+  formatDuration,
+  formatMs,
+  statusText,
+  statusTone,
+  SYSTEM_ACTION_DISABLED_TEXT
+} from "./event-center-utils";
 
 defineOptions({ name: "EventCenterRules" });
 
 const rows = ref<EventRule[]>([]);
 const events = ref<SubscribableEvent[]>([]);
+const systemActionEnabled = ref(false);
 const loading = ref(false);
 const pagination = reactive(defaultPagination());
 const toggling = ref("");
@@ -123,7 +136,9 @@ async function load() {
 
 async function loadEvents() {
   try {
-    events.value = await listSubscribableEvents();
+    const catalog = await listSubscribableEvents();
+    events.value = catalog.events;
+    systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS");
   } catch (error) {
     reportControlError(error);
   }
@@ -211,6 +226,10 @@ defineExpose({ openCreate, openDelist, load });
 </script>
 
 <style scoped>
+.system-action-alert {
+  margin-bottom: 12px;
+}
+
 .system-mark {
   margin-left: 8px;
   color: var(--color-text-3);

@@ -253,9 +253,21 @@ function normalizeEvent(raw: Partial<SubscribableEvent> & Record<string, unknown
   };
 }
 
-export async function listSubscribableEvents(): Promise<SubscribableEvent[]> {
-  const rsp = await callControl<Record<string, never>, { events?: SubscribableEvent[] }>(SERVICE, "ListSubscribableEvents", {});
-  return (rsp.events ?? []).map(event => normalizeEvent(event as never));
+export interface SubscribableCatalog {
+  events: SubscribableEvent[];
+  /** 已经上线的系统动作；不在里面的只记录执行记录，不会真的禁止买入或平仓。 */
+  availableSystemActions: SystemAction[];
+}
+
+export async function listSubscribableEvents(): Promise<SubscribableCatalog> {
+  const rsp = await callControl<
+    Record<string, never>,
+    { events?: SubscribableEvent[]; available_system_actions?: (number | string)[] }
+  >(SERVICE, "ListSubscribableEvents", {});
+  return {
+    events: (rsp.events ?? []).map(event => normalizeEvent(event as never)),
+    availableSystemActions: (rsp.available_system_actions ?? []).map(item => enumName(item, SYSTEM_ACTION_NAMES))
+  };
 }
 
 export async function listEventRules(page: PageReq = {}): Promise<{ rules: EventRule[]; page_result?: PageResult }> {

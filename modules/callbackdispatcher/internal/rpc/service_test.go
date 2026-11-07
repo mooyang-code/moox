@@ -92,6 +92,19 @@ func TestSubscribableEventsCatalog(t *testing.T) {
 	require.Equal(t, []string{"exchange", "market", "exchange_symbol"}, fields)
 }
 
+// 系统动作的处理器注册之前，目录里不列它：管理台据此提示“系统动作尚未启用，只记录”。
+func TestSubscribableEventsExposeSystemActionAvailability(t *testing.T) {
+	s, _ := newService(t)
+	rsp, err := s.ListSubscribableEvents(context.Background(), &pb.ListSubscribableEventsReq{})
+	require.NoError(t, err)
+	require.Empty(t, rsp.AvailableSystemActions)
+
+	s.Actions.Register(store.SystemActionSellDelistedHoldings, &countingCancelHandler{})
+	rsp, err = s.ListSubscribableEvents(context.Background(), &pb.ListSubscribableEventsReq{})
+	require.NoError(t, err)
+	require.Equal(t, []pb.SystemAction{pb.SystemAction_SYSTEM_ACTION_SELL_DELISTED_HOLDINGS}, rsp.AvailableSystemActions)
+}
+
 func TestCreateRuleReturnsSecretOnlyOnce(t *testing.T) {
 	s, _ := newService(t)
 	created := createRule(t, s, nil)

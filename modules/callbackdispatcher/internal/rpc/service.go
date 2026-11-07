@@ -91,9 +91,12 @@ func pageResult(page, size int, total int64) *pb.PageResult {
 	return &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}
 }
 
-// ListSubscribableEvents 返回可配置规则的事件目录。
+// ListSubscribableEvents 返回可配置规则的事件目录，以及已经上线的系统动作（没上线的只记录，不真的执行）。
 func (s *Service) ListSubscribableEvents(_ context.Context, _ *pb.ListSubscribableEventsReq) (*pb.ListSubscribableEventsRsp, error) {
 	rsp := &pb.ListSubscribableEventsRsp{RetInfo: okRet()}
+	for _, name := range s.Actions.Actions() {
+		rsp.AvailableSystemActions = append(rsp.AvailableSystemActions, systemActionToPB(name))
+	}
 	for _, entry := range catalog.Subscribable() {
 		item := &pb.SubscribableEvent{EventName: entry.Name(), Version: entry.Event.Version(), Title: entry.Title, Description: entry.Description}
 		for _, field := range entry.Fields {

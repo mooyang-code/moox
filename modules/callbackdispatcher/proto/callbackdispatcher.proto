@@ -95,6 +95,8 @@ message ListSubscribableEventsReq {}
 message ListSubscribableEventsRsp {
   common.RetInfo ret_info = 1;
   repeated SubscribableEvent events = 2;
+  // 已经上线（注册了处理器）的系统动作。没在里面的系统动作只记录执行记录，不会真的禁止买入或平仓。
+  repeated SystemAction available_system_actions = 3;
 }
 
 message ListEventRulesReq {

@@ -10,6 +10,7 @@ import {
   getEventExecution,
   listEventExecutions,
   listEventRules,
+  listSubscribableEvents,
   retryEventExecution,
   updateEventRule
 } from "./index";
@@ -28,6 +29,14 @@ describe("事件中心接口", () => {
     expect(enumName("A_TWO", names)).toBe("A_TWO");
     expect(enumName(9, names)).toBe("A_UNSPECIFIED");
     expect(enumName(undefined, names)).toBe("A_UNSPECIFIED");
+  });
+
+  it("事件目录带上已上线的系统动作，没上线时是空列表", async () => {
+    mocks.callControl.mockResolvedValue({ events: [{ event_name: "e.a", version: 1, title: "t" }] });
+    expect(await listSubscribableEvents()).toMatchObject({ availableSystemActions: [] });
+
+    mocks.callControl.mockResolvedValue({ events: [], available_system_actions: [1] });
+    expect((await listSubscribableEvents()).availableSystemActions).toEqual(["SYSTEM_ACTION_SELL_DELISTED_HOLDINGS"]);
   });
 
   it("规则列表：枚举、缺省的布尔和范围都被规范化", async () => {

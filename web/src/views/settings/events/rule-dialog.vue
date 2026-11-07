@@ -27,7 +27,10 @@
       </a-form-item>
       <a-form-item field="notify_url" label="通知地址" required>
         <a-input v-model="form.notify_url" placeholder="https://example.com/hooks/moox" />
-        <template #extra>事件发生时，向这个地址发一条 POST 请求。只支持 http 和 https。</template>
+        <template #extra
+          >事件发生时，向这个地址发一条 POST 请求。只支持 http 和
+          https。地址会显示在规则列表和执行记录里，不要把令牌放进地址，接收方用验证密钥验签即可。</template
+        >
       </a-form-item>
       <a-form-item field="allow_private_address" label="允许内网地址">
         <a-switch v-model="form.allow_private_address" />
