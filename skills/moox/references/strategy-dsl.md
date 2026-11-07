@@ -13,7 +13,7 @@ name: dual_ma_swap_1m          # 策略名
 bar: 1m                        # 可选断言：与 View 周期不一致时拒绝启用
 market: {select: swap}         # 可选：市场模式（见下），不写按绑定任务的市场取默认值
 universe: {min_age_bars: 15}   # 策略级默认标的池，省略即全部
-rules: [...]                   # 至少一条规则
+rules: [...]                   # 至少一条规则（或写 strategy_pool，见下，二选一）
 portfolio: {leverage: 1}       # 组合级约束
 factor_params: {...}           # 可选：可变成员的逐期调参（见 docs/模块/策略.md「动态调参」）
 ```
@@ -47,6 +47,34 @@ market:
 - 一个市场的因子本期被跳过时，这个市场的币本期不可用：已持仓的保持不动，新开仓用另一个市场。
 - tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
+
+### strategy_pool：策略池
+
+一个策略写 `rules` 或 `strategy_pool`，二选一。池由若干成员（引用已有策略）组成，按成员模拟净值分配资金：
+
+```yaml
+name: 双策略轮动
+bar: 1h                                     # 必须写，成员的 bar 要一致
+strategy_pool:
+  members:
+    - {id: a, strategy: strategy_xxx}       # id 是 snake_case；strategy 是已有策略的 ID
+    - {id: b, strategy: strategy_yyy}
+  allocation:
+    method: rotation                        # fixed（写 ratios: {a: 0.6, b: 0.4}，覆盖所有成员）或 rotation
+    rotation:
+      factors: [{name: return, window: 24, weight: 1}, {name: ma_ratio, window: 72, weight: 1}]   # return / ma_ratio / drawdown，可选 order: asc|desc
+      top: 1                                # 前几名，并列的平分
+  timing: {window: 24}                      # 可选：净值在 24 期均线之上取 1，否则取 0
+  step: 0.2                                 # 可选：每期每个成员的比例变化上限
+  fees: {spot_bps: 10, swap_bps: 5}         # 可选：成员模拟账本的手续费
+portfolio: {leverage: 1, max_weight: 0.1}
+```
+
+- 成员策略必须显式写 `market`、不能是池、不能用 `factor_params`、`bar` 与池一致；池不写 `market`、`universe`、`factor_params`。
+- 实例要绑定的因子任务是成员所需市场的并集（现货、永续各最多一个）；View 要有 `close` 列，数据集保留期要装得下预热。
+- 启用后先在后台预热（用历史推进成员净值），预热完成前不求值（事件稍后重投）也不能 `confirm`；停用再启用会重新预热。
+- 研究回放与闭环回放暂不支持策略池；成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。
+- 成员净值是模拟曲线（不计资金费与强平），只用来分配资金，不代表实盘收益。语义与计算顺序见 `docs/模块/策略.md` 的“策略池”。
 
 ### universe 与 portfolio
 
@@ -227,6 +255,7 @@ stop:
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段 | 按本文字段名核对 |
+| 池定义被拒，提示成员不存在或不能进池 | 成员没写 `market`、是池、用了 `factor_params`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |

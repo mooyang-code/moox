@@ -9,10 +9,12 @@
           <h2>{{ editing ? "编辑策略定义" : "新建策略定义" }}</h2>
           <span>这里只保存 DSL，不会创建实例或启用策略。</span>
         </div>
-        <a-space
+        <a-space wrap
           ><a-button :disabled="loading || saving" @click="loadTemplate('ranked')">截面选股模板</a-button
           ><a-button :disabled="loading || saving" @click="loadTemplate('signal')">择时模板</a-button
           ><a-button :disabled="loading || saving" @click="loadTemplate('tuned')">动态调参模板</a-button
+          ><a-button :disabled="loading || saving" @click="loadTemplate('mixed')">混合市场模板</a-button
+          ><a-button :disabled="loading || saving" @click="loadTemplate('pool')">策略池模板</a-button
           ><a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button></a-space
         >
       </div>
@@ -43,9 +45,14 @@
             <a-descriptions v-else :column="1" bordered size="small">
               <a-descriptions-item label="名称">{{ parse.preview.name }}</a-descriptions-item>
               <a-descriptions-item label="bar 断言">{{ parse.preview.bar }}</a-descriptions-item>
-              <a-descriptions-item label="标的池">{{ parse.preview.universe }}</a-descriptions-item>
+              <a-descriptions-item label="市场">{{ parse.preview.market }}</a-descriptions-item>
+              <a-descriptions-item v-if="!parse.preview.pool" label="标的池">{{ parse.preview.universe }}</a-descriptions-item>
               <a-descriptions-item label="杠杆上限">{{ parse.preview.leverage }}</a-descriptions-item>
-              <a-descriptions-item label="规则"
+              <a-descriptions-item v-if="parse.preview.pool" label="策略池"
+                ><div>{{ describePool(parse.preview.pool) }}</div>
+                <div class="mono">{{ parse.preview.pool.memberIds.join("、") || "未写成员" }}</div></a-descriptions-item
+              >
+              <a-descriptions-item v-else label="规则"
                 ><div v-for="rule in parse.preview.rules" :key="rule.id">
                   {{ rule.name || rule.id }} · <span class="mono">{{ rule.id }}</span> ·
                   {{
@@ -81,7 +88,15 @@ import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
-import { parseDSL, rankedTemplate, signalTemplate, tunedTemplate } from "@/views/strategy/dsl";
+import {
+  describePool,
+  mixedMarketTemplate,
+  parseDSL,
+  poolTemplate,
+  rankedTemplate,
+  signalTemplate,
+  tunedTemplate
+} from "@/views/strategy/dsl";
 
 defineOptions({ name: "StrategyEditor" });
 const route = useRoute();
@@ -123,10 +138,17 @@ async function load() {
     if (requestId === loadRequest) loading.value = false;
   }
 }
-function loadTemplate(kind: "ranked" | "signal" | "tuned") {
+const templates = {
+  ranked: rankedTemplate,
+  signal: signalTemplate,
+  tuned: tunedTemplate,
+  mixed: mixedMarketTemplate,
+  pool: poolTemplate
+};
+function loadTemplate(kind: keyof typeof templates) {
   if (!loaded.value) return;
   if (dirty.value && !window.confirm("当前 DSL 尚未保存，确认替换？")) return;
-  source.value = kind === "ranked" ? rankedTemplate : kind === "tuned" ? tunedTemplate : signalTemplate;
+  source.value = templates[kind];
 }
 async function save() {
   error.value = "";

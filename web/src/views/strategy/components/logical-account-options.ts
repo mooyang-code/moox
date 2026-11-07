@@ -25,12 +25,16 @@ export function resolvedMarkets(resolvedJSON?: string): ResolvedMarkets {
     const select = resolved.market?.select || "";
     const prefer = resolved.market?.prefer || select;
     if (!select) return {};
-    const markets = select === "both" || select !== prefer ? ["spot", "swap"] : [select];
-    const noAccount = markets.map(market => marketsWithoutAccounts[market]).find(Boolean);
-    return { types: markets.map(market => marketTypes[market]).filter(Boolean), noAccount };
+    return marketsToResolved(select === "both" || select !== prefer ? ["spot", "swap"] : [select]);
   } catch {
     return {};
   }
+}
+
+// 市场列表对应的账户要求：账户的可交易市场要包含列表里的全部市场（策略池按成员市场的并集）。
+export function marketsToResolved(markets: string[]): ResolvedMarkets {
+  const noAccount = markets.map(market => marketsWithoutAccounts[market]).find(Boolean);
+  return { types: markets.map(market => marketTypes[market]).filter(Boolean), noAccount };
 }
 
 // 账户的可交易市场必须包含策略要输出的全部市场（交易模块用启用成员已开通市场的并集算出）。
