@@ -1,4 +1,4 @@
-import type { LedgerType } from "@/api/trade";
+import type { LedgerType, MarketType } from "@/api/trade";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -15,6 +15,14 @@ export const ledgerTypeOptions: { value: LedgerType; label: string }[] = [
 
 export function ledgerTypeLabel(value: string): string {
   return ledgerTypeOptions.find(item => item.value === value)?.label || value || "-";
+}
+
+/**
+ * 多市场账户的默认流水市场：优先永续。后端只在账户级给“能否查流水”，不说明哪个市场支持；
+ * 币安现货没有统一流水接口、永续有，OKX 两个市场都有，所以默认永续最不容易落到不支持的市场。
+ */
+export function defaultLedgerMarket(markets: readonly number[] | undefined): MarketType {
+  return (markets?.includes(2) ? 2 : (markets?.[0] ?? 1)) as MarketType;
 }
 
 /** 默认查近 7 天：[开始, 结束] 毫秒时间戳 */

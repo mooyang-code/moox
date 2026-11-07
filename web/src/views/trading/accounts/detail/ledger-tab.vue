@@ -5,7 +5,7 @@
       <a-select v-if="memberOptions.length > 1" v-model="accountId" style="width: 150px" @change="onAccountChange">
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
       </a-select>
-      <a-select v-if="accountMarkets.length > 1" v-model="market" style="width: 150px" @change="load">
+      <a-select v-if="showMarket" v-model="market" style="width: 150px" @change="load">
         <a-option v-for="item in accountMarkets" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
       <a-range-picker v-model="range" value-format="timestamp" :allow-clear="false" style="width: 320px" @change="load" />
@@ -14,7 +14,10 @@
       </a-select>
       <a-button :loading="loading" @click="load">查询</a-button>
     </div>
-    <a-alert v-if="error" type="warning" class="alert">{{ error }}</a-alert>
+    <a-alert v-if="unsupported" type="info" class="alert">
+      这个账户的交易所没有资金流水接口，不显示资金流水。订单和成交照常可查。
+    </a-alert>
+    <a-alert v-else-if="error" type="warning" class="alert">{{ error }}</a-alert>
     <a-alert v-else-if="hasMore" type="info" class="alert">
       只取到时间范围内最新的 {{ entries.length }} 条{{
         typeFilter ? "，类型筛选只在这些记录里进行" : ""
@@ -58,9 +61,16 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from "vue";
-import { listAccountLedger, type LedgerEntry, type MarketType } from "@/api/trade";
+import { getExecutionCapabilities, listAccountLedger, type LedgerEntry, type MarketType } from "@/api/trade";
 import { fmtClock, fmtSigned } from "../shared/format";
-import { amountClass, defaultLedgerRange, ledgerRangeError, ledgerTypeLabel, ledgerTypeOptions } from "../shared/ledger";
+import {
+  amountClass,
+  defaultLedgerMarket,
+  defaultLedgerRange,
+  ledgerRangeError,
+  ledgerTypeLabel,
+  ledgerTypeOptions
+} from "../shared/ledger";
 import { marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
@@ -86,12 +96,17 @@ const memberOptions = computed(() =>
     .map(member => ({ id: member.trading_account_id, label: accounts.value.get(member.trading_account_id)!.name }))
 );
 const accountMarkets = computed(() => accounts.value.get(accountId.value)?.markets || []);
+// 模拟盘由本地成交生成流水，后端不看市场，下拉没有作用
+const showMarket = computed(() => accountMarkets.value.length > 1 && accounts.value.get(accountId.value)?.execution_mode !== 1);
+// 后端给的“能否查流水”标志（账户级）；false 时不发请求，直接说明
+const supportedByAccount = ref<Record<string, boolean>>({});
+const unsupported = computed(() => supportedByAccount.value[accountId.value] === false);
 const visibleEntries = computed(() =>
   typeFilter.value ? entries.value.filter(entry => entry.type === typeFilter.value) : entries.value
 );
 
 function onAccountChange() {
-  market.value = accountMarkets.value[0] ?? 1;
+  market.value = defaultLedgerMarket(accountMarkets.value);
   void load();
 }
 
@@ -108,10 +123,22 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
+    if (supportedByAccount.value[accountId.value] === undefined) {
+      const id = accountId.value;
+      const capability = await getExecutionCapabilities(id).catch(() => undefined);
+      if (current !== token) return;
+      // proto3 的 false 不出现在 JSON 里，没有这个字段就是不支持；读不到标志时照常查询，由后端说明原因
+      if (capability) supportedByAccount.value = { ...supportedByAccount.value, [id]: Boolean(capability.capabilities.ledger) };
+    }
+    if (unsupported.value) {
+      entries.value = [];
+      hasMore.value = false;
+      return;
+    }
     const rsp = await listAccountLedger({
       trading_account_id: accountId.value,
-      // 账户只开通一个市场时可以省略，多个市场时必须指明
-      market_type: accountMarkets.value.length > 1 ? market.value : undefined,
+      // 账户只开通一个市场时可以省略，多个市场时必须指明；模拟盘不看市场
+      market_type: showMarket.value ? market.value : undefined,
       start_time: String(range.value[0]),
       end_time: String(range.value[1]),
       limit: LEDGER_LIMIT
@@ -134,7 +161,7 @@ watch(
   () => logical.value.logical_account_id,
   () => {
     accountId.value = memberOptions.value[0]?.id ?? "";
-    market.value = accountMarkets.value[0] ?? 1;
+    market.value = defaultLedgerMarket(accountMarkets.value);
     range.value = defaultLedgerRange();
     typeFilter.value = undefined;
     void load();
