@@ -21,6 +21,8 @@ export interface ReplayMetrics {
   limitations: string[];
   first_bar_end: string;
   last_bar_end: string;
+  /** 权益首次不超过 0（模拟爆仓）的那一期的 bar_end；没有爆仓为空串。此后各期空仓。 */
+  bankrupt_at: string;
 }
 
 /** 解析回放指标；任务未完成或指标缺失时返回 null。 */
@@ -48,7 +50,8 @@ export function parseMetrics(raw?: string): ReplayMetrics | null {
       factors: value.factors ?? {},
       limitations: Array.isArray(value.limitations) ? value.limitations : [],
       first_bar_end: value.first_bar_end ?? "",
-      last_bar_end: value.last_bar_end ?? ""
+      last_bar_end: value.last_bar_end ?? "",
+      bankrupt_at: value.bankrupt_at ?? ""
     };
   } catch {
     return null;

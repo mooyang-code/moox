@@ -44,7 +44,7 @@ export function replayMarkets(form: ReplayFormState, strategies: Strategy[]): st
   return form.single_market ? [form.single_market] : [];
 }
 
-/** 提交用的 factor_tasks：只含回放要读的市场。 */
+/** 提交用的 factor_tasks：只含回放要读的市场；从实例发起且没有预填任务时为空，由后端读实例关联的任务。 */
 export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[]): Record<string, string> {
   return Object.fromEntries(replayMarkets(form, strategies).map(market => [market, form.tasks[market] ?? ""]));
 }
@@ -60,7 +60,9 @@ export function validateReplayForm(
 ): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
   const markets = replayMarkets(form, strategies);
-  if (!markets.length) return "请选择策略的因子任务（策略没写 market 时先选任务所属的市场）";
+  // 从实例发起且入口没有带任务：不给 factor_tasks，后端读实例关联的任务。
+  const omitted = Boolean(form.instance_id) && !markets.length;
+  if (!omitted && !markets.length) return "请选择策略的因子任务（策略没写 market 时先选任务所属的市场）";
   if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择因子任务";
   const start = parse(form.start);
   const end = parse(form.end);

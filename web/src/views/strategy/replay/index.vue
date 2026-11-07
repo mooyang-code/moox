@@ -115,6 +115,11 @@
                 <span>目标未达成期数 / 清算次数</span><strong>{{ metrics.unfilled_bars }} / {{ metrics.liquidations }}</strong>
               </div>
             </div>
+            <a-alert v-if="metrics?.bankrupt_at" type="error" show-icon class="top-alert"
+              >模拟爆仓：K 线结束于
+              {{ formatUtcTime(metrics.bankrupt_at) }}
+              的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
+            >
             <a-alert v-if="replayUsesSwap(selected)" type="warning" class="top-alert"
               >模拟曲线未计资金费与强平：永续按收盘价逐期结算盈亏，成交按收盘价、每期都调到目标，不模拟实盘的调仓阈值、最小下单额与拆单；它只用于比较策略，不代表实盘收益。</a-alert
             >

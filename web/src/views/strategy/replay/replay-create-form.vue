@@ -33,8 +33,8 @@
       </a-form-item>
     </template>
     <a-form-item v-if="form.instance_id" label="因子任务">
-      <span class="mono">{{ tasksText(form.tasks) || "实例没有关联因子任务" }}</span>
-      <span class="muted task-note">（实例关联的任务，不能更改）</span>
+      <span class="mono">{{ tasksText(form.tasks) || "读取实例关联的因子任务" }}</span>
+      <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
       <a-form-item v-if="!declared" label="任务所属的市场" required>

@@ -452,6 +452,16 @@ describe("strategy replay page", () => {
     expect(Object.keys(api.startReplay.mock.calls[0][0].factor_tasks)).toEqual(["spot", "swap"]);
   });
 
+  it("warns when the simulated account went bankrupt", async () => {
+    const metrics = '{"bars":3,"ok_bars":3,"limitations":[],"bankrupt_at":"2026-09-01T07:00:00Z"}';
+    api.listReplays.mockResolvedValue({ items: [replay("r9", "done")], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(replay("r9", "done", metrics));
+    api.listReplayBars.mockResolvedValue({ items: [bar()], page: { total: 1 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain("模拟爆仓：K 线结束于 2026-09-01 07:00 UTC");
+  });
+
   it("asks for one task per market when a saved definition uses both markets", async () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.startReplay.mockResolvedValue({ replay: replay("r8", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });

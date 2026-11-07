@@ -63,6 +63,13 @@ describe("replay form model", () => {
     expect(validateReplayForm({ ...base, strategy_id: "s3" }, parseUtcInput, strategies)).toContain("先选任务所属的市场");
   });
 
+  it("lets an instance replay omit the tasks and read the instance's own", () => {
+    const fromInstance = { ...base, instance_id: "i1", tasks: {} };
+    expect(validateReplayForm(fromInstance, parseUtcInput, strategies)).toBe("");
+    expect(replayFactorTasks(fromInstance, strategies)).toEqual({});
+    expect(validateReplayForm({ ...fromInstance, instance_id: "" }, parseUtcInput, strategies)).toContain("每个市场");
+  });
+
   it("checks the time format and ordering", () => {
     expect(validateReplayForm({ ...base, start: "yesterday" }, parseUtcInput, strategies)).toContain("时间格式");
     expect(validateReplayForm({ ...base, end: base.start }, parseUtcInput, strategies)).toBe("结束时间必须晚于开始时间");
