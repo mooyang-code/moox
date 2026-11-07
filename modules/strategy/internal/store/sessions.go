@@ -48,7 +48,19 @@ func (r sessionRow) session() Session {
 	return session
 }
 
-const sessionColumns = "c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at"
+// 会话的查询语句：整条写成常量，不在调用处拼接。
+const (
+	selectSessionSQL = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+		FROM t_strategy_sessions WHERE c_session_id = ?`
+	listSessionsSQL = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+		FROM t_strategy_sessions WHERE c_instance_id = ? ORDER BY c_ctime DESC, c_session_id`
+	// pendingWarmSessionsSQL 找出未关闭、挂在启用实例上、有成员快照而还没有预热结果的会话。
+	pendingWarmSessionsSQL = `SELECT c_session_id, c_instance_id, c_dsl_hash, c_resolved_json, c_members_json, c_warm_state, c_warmed_through, c_ctime, c_closed_at
+		FROM t_strategy_sessions
+		WHERE c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL
+		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_enabled = 1 AND c_session_id IS NOT NULL)
+		ORDER BY c_ctime`
+)
 
 // OpenSession 写入会话快照；dslYaml 用于登记 DSL 版本（已存在则忽略）。
 func (s *Store) OpenSession(ctx context.Context, session Session, dslYaml string) error {
@@ -80,7 +92,7 @@ func (s *Store) OpenSession(ctx context.Context, session Session, dslYaml string
 // GetSession 读取会话快照。
 func (s *Store) GetSession(ctx context.Context, sessionID string) (Session, error) {
 	var row sessionRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+sessionColumns+` FROM t_strategy_sessions WHERE c_session_id = ?`, sessionID).Scan(&row).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(selectSessionSQL, sessionID).Scan(&row).Error; err != nil {
 		return Session{}, err
 	}
 	if row.SessionID == "" {
@@ -92,7 +104,7 @@ func (s *Store) GetSession(ctx context.Context, sessionID string) (Session, erro
 // ListSessions 按创建时间倒序列出实例的会话。
 func (s *Store) ListSessions(ctx context.Context, instanceID string) ([]Session, error) {
 	var rows []sessionRow
-	if err := s.db.WithContext(ctx).Raw(`SELECT `+sessionColumns+` FROM t_strategy_sessions WHERE c_instance_id = ? ORDER BY c_ctime DESC, c_session_id`, instanceID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(listSessionsSQL, instanceID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	sessions := make([]Session, 0, len(rows))
@@ -124,12 +136,7 @@ func (s *Store) SetSessionWarmed(ctx context.Context, sessionID, state string, t
 // PendingWarmSessions 返回还没有完成预热的策略池会话（未关闭、挂在启用实例上、有成员快照）：进程启动时据此重新开始预热。
 func (s *Store) PendingWarmSessions(ctx context.Context) ([]Session, error) {
 	var rows []sessionRow
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT ` + sessionColumns + ` FROM t_strategy_sessions
-		WHERE c_closed_at IS NULL AND c_members_json <> '' AND c_warmed_through IS NULL
-		AND c_session_id IN (SELECT c_session_id FROM t_strategy_instances WHERE c_enabled = 1 AND c_session_id IS NOT NULL)
-		ORDER BY c_ctime
-	`).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(pendingWarmSessionsSQL).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	sessions := make([]Session, 0, len(rows))

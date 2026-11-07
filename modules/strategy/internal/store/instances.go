@@ -120,22 +120,29 @@ func instanceTasks(tx *gorm.DB, instanceID string) (map[string]string, error) {
 	return tasks, nil
 }
 
+// selectTasksOfInstancesSQL 按实例 ID 的 JSON 数组一次读出一批实例绑定的因子任务。
+const selectTasksOfInstancesSQL = `SELECT c_instance_id, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id IN (SELECT value FROM json_each(?))`
+
 // withTasks 给一批实例行补上绑定的因子任务，按一次查询读取。
 func withTasks(tx *gorm.DB, rows []instanceRow) ([]Instance, error) {
 	instances := make([]Instance, 0, len(rows))
 	if len(rows) == 0 {
 		return instances, nil
 	}
-	ids := make([]any, 0, len(rows))
+	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.InstanceID)
+	}
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
 	}
 	var taskRows []struct {
 		InstanceID   string `gorm:"column:c_instance_id"`
 		Market       string `gorm:"column:c_market"`
 		FactorTaskID string `gorm:"column:c_factor_task_id"`
 	}
-	if err := tx.Raw(`SELECT c_instance_id, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, ids...).Scan(&taskRows).Error; err != nil {
+	if err := tx.Raw(selectTasksOfInstancesSQL, string(idsJSON)).Scan(&taskRows).Error; err != nil {
 		return nil, err
 	}
 	byInstance := make(map[string]map[string]string, len(rows))
