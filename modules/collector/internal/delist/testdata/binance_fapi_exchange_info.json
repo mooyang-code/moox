@@ -46,6 +46,15 @@
       "quoteAsset": "BUSD"
     },
     {
+      "symbol": "DELIVUSDT",
+      "pair": "DELIVUSDT",
+      "contractType": "PERPETUAL_DELIVERING",
+      "deliveryDate": 1793952000000,
+      "status": "TRADING",
+      "baseAsset": "DELIV",
+      "quoteAsset": "USDT"
+    },
+    {
       "symbol": "GONEUSDT",
       "pair": "GONEUSDT",
       "contractType": "PERPETUAL",

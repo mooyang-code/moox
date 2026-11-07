@@ -51,10 +51,11 @@ func (t *Tx) FindUnfinishedByDedupe(key string) (Execution, bool, error) {
 	return executionFromRow(row), true, nil
 }
 
-// ReplaceExecutionEvent 把合并进来的新事件内容写进已有的执行记录，并让工作线程立即处理它。
-func (t *Tx) ReplaceExecutionEvent(executionID, payloadJSON string, occurredAt, now int64) error {
+// ReplaceExecutionEvent 把合并进来的新事件（ID、内容、发生时间）写进已有的执行记录，并让工作线程立即处理它：
+// 记录里的事件 ID 始终是最近合并的那条，详情和对账能对上实际生效的事件。
+func (t *Tx) ReplaceExecutionEvent(executionID, eventID, payloadJSON string, occurredAt, now int64) error {
 	return t.db.Model(&executionRow{}).Where("c_execution_id = ?", executionID).
-		Updates(map[string]any{"c_payload_json": payloadJSON, "c_occurred_at": occurredAt, "c_next_run_at": now, "c_updated_at": now}).Error
+		Updates(map[string]any{"c_event_id": eventID, "c_payload_json": payloadJSON, "c_occurred_at": occurredAt, "c_next_run_at": now, "c_updated_at": now}).Error
 }
 
 // ClaimDue 取出到期的待处理记录并置为执行中。systemActions 是已经注册了处理器的系统动作：

@@ -102,7 +102,7 @@ func parseBinanceSpotSchedule(schedule binanceDelistSchedule, now time.Time) []N
 }
 
 // BinanceSwap 读币安 U 本位合约信息。单独解码，不复用过滤掉非 TRADING 合约的 GetExchangeInfo。
-// 永续合约的交割时间正常是占位的远期值，出现真实的近期交割时间就是即将下架。
+// 永续合约（PERPETUAL，下架流程中为 PERPETUAL_DELIVERING）的交割时间正常是占位的远期值，出现真实的近期交割时间就是即将下架。
 type BinanceSwap struct {
 	Client PlainGetter
 	Now    func() time.Time
@@ -133,7 +133,8 @@ func (s *BinanceSwap) Fetch(ctx context.Context) ([]Notice, error) {
 func parseBinanceSwapExchangeInfo(info binanceSwapExchangeInfo, now time.Time) []Notice {
 	var notices []Notice
 	for _, item := range info.Symbols {
-		if item.ContractType != "PERPETUAL" || item.QuoteAsset != "USDT" {
+		// 永续合约进入下架流程后合约类型会变成 PERPETUAL_DELIVERING：两种都要看；季度合约（CURRENT_QUARTER 等）不是下架。
+		if (item.ContractType != "PERPETUAL" && item.ContractType != "PERPETUAL_DELIVERING") || item.QuoteAsset != "USDT" {
 			continue
 		}
 		delistAt := time.UnixMilli(item.DeliveryDate).UTC()

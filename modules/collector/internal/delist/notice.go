@@ -80,18 +80,26 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 	now := r.now()
 	delistAt := notice.DelistAt.UTC().Truncate(time.Millisecond)
 	subject := events.InstrumentDelistSubjectID(notice.Exchange, notice.Market, notice.Symbol)
-	eventID = events.InstrumentDelistEventID(notice.Exchange, notice.Market, notice.Symbol, notice.Scope, delistAt)
-	raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
-		Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: timestamppb.New(delistAt),
-		Source: notice.Source, FirstSeenAt: timestamppb.New(now), Scope: notice.Scope,
-	}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.DelistSystemSpaceID, SubjectID: subject})
-	if err != nil {
-		return false, "", fmt.Errorf("生成下架事件失败: %w", err)
+	// 事件 ID 由（交易所、市场、代码、范围、下架时间）确定性生成；同一标的第 n 次发布（n>0，例如下架时间改回以前出现过的值）
+	// 带上序号，免得和以前的事件 ID 相同而被去重丢掉。
+	build := func(revision int) (store.OutboxEvent, error) {
+		eventID := events.InstrumentDelistEventID(notice.Exchange, notice.Market, notice.Symbol, notice.Scope, delistAt)
+		if revision > 0 {
+			eventID = fmt.Sprintf("%s-r%d", eventID, revision)
+		}
+		raw, err := r.Registry.MarshalMessage(events.InstrumentDelistScheduled, &storagepb.InstrumentDelistScheduled{
+			Exchange: notice.Exchange, Market: notice.Market, ExchangeSymbol: notice.Symbol, DelistAt: timestamppb.New(delistAt),
+			Source: notice.Source, FirstSeenAt: timestamppb.New(now), Scope: notice.Scope,
+		}, events.PublishOptions{EventID: eventID, OccurredAt: now, SpaceID: events.DelistSystemSpaceID, SubjectID: subject})
+		if err != nil {
+			return store.OutboxEvent{}, fmt.Errorf("生成下架事件失败: %w", err)
+		}
+		return store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
 	}
-	created, err = r.Repo.Register(ctx, store.DelistNotice{
+	created, eventID, err = r.Repo.Register(ctx, store.DelistNotice{
 		Exchange: notice.Exchange, Market: notice.Market, Symbol: notice.Symbol, Scope: notice.Scope, DelistAt: delistAt,
-		Source: notice.Source, EventID: eventID, SeenAt: now,
-	}, store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw})
+		Source: notice.Source, SeenAt: now,
+	}, build)
 	if err != nil {
 		return false, "", err
 	}

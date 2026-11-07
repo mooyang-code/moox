@@ -57,15 +57,21 @@ func delistDelivery(t *testing.T, exchange, market, symbol string, delistAt time
 
 func delistDeliveryWithID(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID string) *rawEvent {
 	t.Helper()
-	return delistDeliveryFull(t, exchange, market, symbol, delistAt, eventID, events.DelistScopeAll)
+	return delistDeliveryFull(t, exchange, market, symbol, delistAt, eventID, events.DelistScopeAll, baseTime)
 }
 
 func delistDeliveryWithScope(t *testing.T, exchange, market, symbol string, delistAt time.Time, scope string) *rawEvent {
 	t.Helper()
-	return delistDeliveryFull(t, exchange, market, symbol, delistAt, events.InstrumentDelistEventID(exchange, market, symbol, scope, delistAt), scope)
+	return delistDeliveryFull(t, exchange, market, symbol, delistAt, events.InstrumentDelistEventID(exchange, market, symbol, scope, delistAt), scope, baseTime)
 }
 
-func delistDeliveryFull(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID, scope string) *rawEvent {
+// delistDeliveryOccurred 生成发生时间为 occurredAt 的下架事件，用来构造乱序到达的事件。
+func delistDeliveryOccurred(t *testing.T, symbol string, delistAt, occurredAt time.Time, eventID string) *rawEvent {
+	t.Helper()
+	return delistDeliveryFull(t, "binance", events.DelistMarketSpot, symbol, delistAt, eventID, events.DelistScopeAll, occurredAt)
+}
+
+func delistDeliveryFull(t *testing.T, exchange, market, symbol string, delistAt time.Time, eventID, scope string, occurredAt time.Time) *rawEvent {
 	t.Helper()
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
@@ -74,7 +80,7 @@ func delistDeliveryFull(t *testing.T, exchange, market, symbol string, delistAt 
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(baseTime), Scope: scope,
 	}
 	raw, err := registry.MarshalMessage(events.InstrumentDelistScheduled, payload, events.PublishOptions{
-		EventID: eventID, OccurredAt: baseTime, SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID(exchange, market, symbol),
+		EventID: eventID, OccurredAt: occurredAt, SpaceID: events.DelistSystemSpaceID, SubjectID: events.InstrumentDelistSubjectID(exchange, market, symbol),
 	})
 	require.NoError(t, err)
 	message, err := registry.UnmarshalMessage(raw)
@@ -193,7 +199,7 @@ func TestSystemActionMergesSameInstrument(t *testing.T) {
 	merged, err := s.GetExecution(ctx, original.ExecutionID)
 	require.NoError(t, err)
 	require.Contains(t, merged.PayloadJSON, `"delist_at":"2026-11-13T08:00:00Z"`)
-	require.Equal(t, original.EventID, merged.EventID, "记录保留最初那条事件的 ID")
+	require.Equal(t, events.InstrumentDelistEventID("binance", events.DelistMarketSpot, "FOOUSDT", events.DelistScopeAll, changed), merged.EventID, "记录里的事件 ID 是最近合并的那条")
 
 	// 记录已经被取消：之后同一标的的新事件新建一条。
 	_, err = s.CancelExecution(ctx, original.ExecutionID, baseTime.UnixMilli())
@@ -228,6 +234,27 @@ func TestPaperOnlyDrillDoesNotMergeIntoRealDelistExecution(t *testing.T) {
 	require.Contains(t, drillExecution.PayloadJSON, `"delist_at":"2026-11-04T11:00:00Z"`)
 }
 
+// 乱序或重投：较旧的事件不能覆盖较新的下架时间。
+func TestOlderEventDoesNotOverwriteNewerDelistTime(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	intake := newIntake(t, s)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	newer := baseTime.Add(2 * 24 * time.Hour)
+	older := baseTime.Add(5 * 24 * time.Hour)
+
+	require.Equal(t, Accepted, handle(ctx, intake, delistDeliveryOccurred(t, "FOOUSDT", older, baseTime.Add(time.Hour), "event-first")))
+	// 较新的事件（发生时间更晚）把下架时间提前。
+	require.Equal(t, Accepted, handle(ctx, intake, delistDeliveryOccurred(t, "FOOUSDT", newer, baseTime.Add(2*time.Hour), "event-newer")))
+	// 较旧的事件（发生时间更早）乱序后到：不能把时间改回去。
+	require.Equal(t, Accepted, handle(ctx, intake, delistDeliveryOccurred(t, "FOOUSDT", older.Add(time.Hour), baseTime, "event-stale")))
+
+	executions := listAll(t, s)
+	require.Len(t, executions, 1)
+	require.Equal(t, "event-newer", executions[0].EventID)
+	require.Contains(t, executions[0].PayloadJSON, `"delist_at":"2026-11-06T08:00:00Z"`)
+}
+
 func TestSystemActionIgnoresRepublishWithSameSchedule(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
@@ -239,7 +266,7 @@ func TestSystemActionIgnoresRepublishWithSameSchedule(t *testing.T) {
 	require.Len(t, executions, 1)
 	// 过了一段时间，工作线程把下一次推进安排到下架前 24 小时。
 	require.NoError(t, s.InTx(ctx, func(tx *store.Tx) error {
-		return tx.ReplaceExecutionEvent(executions[0].ExecutionID, executions[0].PayloadJSON, executions[0].OccurredAt, executions[0].NextRunAt+999)
+		return tx.ReplaceExecutionEvent(executions[0].ExecutionID, executions[0].EventID, executions[0].PayloadJSON, executions[0].OccurredAt, executions[0].NextRunAt+999)
 	}))
 	// 同样的下架时间被另一个事件再次报告（比如换了来源）：不动已经安排好的时间。
 	repeat := delistDeliveryWithID(t, "binance", events.DelistMarketSpot, "FOOUSDT", delistAt, "event-from-another-source")

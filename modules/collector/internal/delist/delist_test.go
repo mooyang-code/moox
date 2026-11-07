@@ -50,8 +50,10 @@ func TestParseBinanceSwapExchangeInfoOnlyPerpetualUSDTWithRealDeliveryDate(t *te
 	readSample(t, "binance_fapi_exchange_info.json", &info)
 
 	notices := parseBinanceSwapExchangeInfo(info, testNow)
-	require.Equal(t, []Notice{{Exchange: "binance", Market: events.DelistMarketSwap, Symbol: "FOOUSDT", DelistAt: time.UnixMilli(1793865600000).UTC(), Source: events.DelistSourceBinanceSwapExchangeInfo}}, notices,
-		"占位远期值、季度合约、非 USDT 计价、已经过去的交割时间都不算")
+	require.Equal(t, []Notice{
+		{Exchange: "binance", Market: events.DelistMarketSwap, Symbol: "FOOUSDT", DelistAt: time.UnixMilli(1793865600000).UTC(), Source: events.DelistSourceBinanceSwapExchangeInfo},
+		{Exchange: "binance", Market: events.DelistMarketSwap, Symbol: "DELIVUSDT", DelistAt: time.UnixMilli(1793952000000).UTC(), Source: events.DelistSourceBinanceSwapExchangeInfo},
+	}, notices, "PERPETUAL 与下架流程中的 PERPETUAL_DELIVERING 都算；占位远期值、季度合约、非 USDT 计价、已经过去的交割时间都不算")
 }
 
 // OKX 永续：expTime 为空是正常的永续合约；有值才是计划下架。只要 USDT 本位。
@@ -178,6 +180,18 @@ func TestRegisterPublishesEachNoticeOnlyOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created)
 	require.NotEqual(t, eventID, changedID)
+
+	// 下架时间改了又改回以前出现过的值：与最近一次发布的时间不同，所以要再发布一次（序号不同，事件 ID 不会和以前的重复）。
+	back := notice
+	created, backID, err := registrar.Register(ctx, back)
+	require.NoError(t, err)
+	require.True(t, created, "与最近一次发布的下架时间（+1 天）不同")
+	require.NotEqual(t, eventID, backID)
+	require.Contains(t, backID, "-r2")
+	created, sameID, err := registrar.Register(ctx, back)
+	require.NoError(t, err)
+	require.False(t, created, "与最近一次发布的下架时间相同")
+	require.Equal(t, backID, sameID, "已经登记过的返回已有的事件 ID")
 
 	// 仅模拟盘的演练登记不会挡住同标的同时间的真实下架。
 	paper := notice

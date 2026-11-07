@@ -143,7 +143,12 @@ func acceptSystem(tx *store.Tx, rule store.Rule, message *eventpb.EventMessage, 
 	if sameSchedule(existing.PayloadJSON, payloadJSON) {
 		return nil
 	}
-	return tx.ReplaceExecutionEvent(existing.ExecutionID, payloadJSON, message.GetOccurredAt().AsTime().UnixMilli(), now)
+	// 乱序或重投：比记录里已有的事件更旧的事件不能覆盖较新的下架时间。
+	occurredAt := message.GetOccurredAt().AsTime().UnixMilli()
+	if occurredAt < existing.OccurredAt {
+		return nil
+	}
+	return tx.ReplaceExecutionEvent(existing.ExecutionID, message.GetEventId(), payloadJSON, occurredAt, now)
 }
 
 // scopeOf 取下架事件内容里的范围。

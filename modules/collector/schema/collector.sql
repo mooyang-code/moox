@@ -367,8 +367,9 @@ CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_pending ON t_collector_event_outbox (c_published, c_id);
 
--- 下架检测发现（或手工登记）的下架通知：同一条再次被报告时只更新最后报告时间，不再发布。
--- 事件经上面的发件箱发布；范围（ALL / PAPER_ONLY）也是唯一键的一部分，演练登记不会挡住真实下架。
+-- 下架检测发现（或手工登记）的下架通知：与该标的（交易所、市场、代码、范围）最近一次发布的下架时间相同时只更新最后报告时间，
+-- 不同（包括改回以前出现过的时间）就是一次新的发布，所以同一标的可以有多行；事件经上面的发件箱发布。
+-- 范围（ALL / PAPER_ONLY）是标的身份的一部分，演练登记不会挡住真实下架。
 CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_exchange TEXT NOT NULL,
@@ -380,8 +381,10 @@ CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
     c_event_id TEXT NOT NULL,
     c_first_seen_at DATETIME NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
-    UNIQUE (c_exchange, c_market, c_symbol, c_scope, c_delist_at)
+    UNIQUE (c_event_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
 
 -- 已删除的旧结构：逐标的合成实例、实例写入目标、周期就绪（合成改为按数据集 × 桶批量执行，目标周期由 Storage 跟踪）。
 -- 保留这些语句让已有的库在升级后清掉旧表；新库里它们什么都不做。

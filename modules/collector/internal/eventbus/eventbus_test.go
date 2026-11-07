@@ -38,10 +38,12 @@ func queueDelist(t *testing.T, db *store.Store, registry *events.Registry, symbo
 		Source: events.DelistSourceManual, FirstSeenAt: timestamppb.New(delistAt.Add(-time.Hour)), Scope: events.DelistScopeAll,
 	}, events.PublishOptions{EventID: eventID, OccurredAt: delistAt.Add(-time.Hour), SpaceID: events.DelistSystemSpaceID, SubjectID: subject})
 	require.NoError(t, err)
-	created, err := db.DelistNotices().Register(context.Background(), store.DelistNotice{
+	created, _, err := db.DelistNotices().Register(context.Background(), store.DelistNotice{
 		Exchange: "binance", Market: events.DelistMarketSpot, Symbol: symbol, Scope: events.DelistScopeAll, DelistAt: delistAt,
-		Source: events.DelistSourceManual, EventID: eventID, SeenAt: delistAt.Add(-time.Hour),
-	}, store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw})
+		Source: events.DelistSourceManual, SeenAt: delistAt.Add(-time.Hour),
+	}, func(int) (store.OutboxEvent, error) {
+		return store.OutboxEvent{EventID: eventID, SpaceID: events.DelistSystemSpaceID, EventName: events.InstrumentDelistScheduled.Name(), SubjectToken: subject, Payload: raw}, nil
+	})
 	require.NoError(t, err)
 	require.True(t, created)
 }
