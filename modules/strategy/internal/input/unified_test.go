@@ -252,10 +252,11 @@ func TestAgeProbeIsPerMarketOnUnifiedDataset(t *testing.T) {
 		return loaded
 	}
 	loaded := load()
-	if _, ok := loaded.Frame.Markets["swap"].Rows["BTC-USDT"]; ok {
-		t.Fatalf("永续刚上线的 BTC 不能借用现货的历史通过年龄检查：%+v", loaded.Frame.Markets["swap"].Rows)
+	// 永续刚上线的 BTC、ETH 年龄不够：行保留在帧里，但记在永续的 AgedOut 里，由选币池构造决定（不借现货的历史、持仓豁免）。
+	if aged := loaded.Frame.Markets["swap"].AgedOut; len(aged) != 2 || !hasKey(aged, "BTC-USDT") || !hasKey(aged, "ETH-USDT") {
+		t.Fatalf("永续刚上线的 BTC、ETH 不能借用现货的历史通过年龄检查：%v", aged)
 	}
-	if len(loaded.Frame.Markets["spot"].Rows) != 3 || loaded.Frame.Markets["swap"].Rows["DOGE-USDT"].Values["ma_20"] != 4 {
+	if len(loaded.Frame.Markets["spot"].AgedOut) != 0 || len(loaded.Frame.Markets["spot"].Rows) != 3 || loaded.Frame.Markets["swap"].Rows["DOGE-USDT"].Values["ma_20"] != 4 {
 		t.Fatalf("现货三个标的都通过，永续只有 DOGE：%+v", loaded.Frame.Markets)
 	}
 	if len(store.saved) != 2 {
@@ -276,4 +277,9 @@ func TestResolvePoolRejectsUnifiedDatasetTask(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "策略池暂不支持") {
 		t.Fatalf("统一数据集上的任务不能绑定策略池：%v", err)
 	}
+}
+
+func hasKey(set map[string]struct{}, key string) bool {
+	_, ok := set[key]
+	return ok
 }

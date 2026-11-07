@@ -78,6 +78,16 @@ func indexHeld(previous State) heldIndex {
 	return index
 }
 
+// holds 报告上期在这个市场持有标的的非零目标。
+func (h heldIndex) holds(id, market string) bool {
+	for _, entry := range h[id] {
+		if entry.market == market {
+			return true
+		}
+	}
+	return false
+}
+
 // subjects 返回上期持有非零目标的标的（排序）。
 func (h heldIndex) subjects() []string {
 	ids := make([]string, 0, len(h))
@@ -147,15 +157,27 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 			frame.FailedColumns[column][subject] = reason
 		}
 	}
+	// usableRow 返回标的在一个市场本期可用的行：这个市场里年龄不够的标的不用它的行，持仓豁免（见 MarketInput.AgedOut）。
+	usableRow := func(market, id string) (Row, bool) {
+		input := frame.Markets[market]
+		row, ok := input.Rows[id]
+		if !ok {
+			return Row{}, false
+		}
+		if _, aged := input.AgedOut[id]; aged && !held.holds(id, market) {
+			return Row{}, false
+		}
+		return row, true
+	}
 	for _, id := range subjects {
 		flags := make(map[string]bool, len(markets))
 		for _, market := range markets {
-			_, ok := frame.Markets[market].Rows[id]
+			_, ok := usableRow(market, id)
 			flags[market] = ok
 		}
 		frame.avail[id] = flags
 		for _, market := range pickOrder(mode, id, held) {
-			if row, ok := frame.Markets[market].Rows[id]; ok {
+			if row, ok := usableRow(market, id); ok {
 				frame.Rows[id] = row
 				frame.RowMarket[id] = market
 				break

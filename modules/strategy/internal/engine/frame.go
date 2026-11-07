@@ -24,6 +24,10 @@ type MarketInput struct {
 	Rows map[string]Row
 	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedGap、FailedSource 或 FailedMarket）。
 	Failed map[string]map[string]string
+	// AgedOut 是这个市场里年龄不够（min_age_bars 的探针没通过）的标的：多个市场时，年龄按市场各自判断，老币刚上线永续，
+	// 不能用现货的历史让永续的行通过年龄检查。选币池构造不取这些标的在这个市场的行，但已持仓的豁免：年龄剔除只拦新进入的标的，
+	// 持仓在建仓时已满足年龄，不能因为探针窗口里的历史缺口把行删掉（删了就是无行、不冻结、被卖出）。没有年龄要求时为空。
+	AgedOut map[string]struct{}
 }
 
 // Frame 是一个周期的全部输入。集合划分由 input 包完成到规则级的预期集合：

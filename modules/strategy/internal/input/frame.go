@@ -409,11 +409,15 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			if _, ok := sets.Subjects[subjectID]; !ok {
 				continue
 			}
-			// 多个市场时，某个市场里年龄不够的标的不用这个市场的行（例如老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）。
+			// 多个市场时，某个市场里年龄不够的标的不用这个市场的行（例如老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
+			// 这里只记下，由选币池构造决定（已持仓的标的豁免，见 engine.MarketInput.AgedOut）。
 			if passed, probed := agePassed[load.market]; probed && len(loads) > 1 {
 				if _, inUniverse := load.universe[subjectID]; inUniverse {
 					if _, ok := passed[subjectID]; !ok {
-						continue
+						if input.AgedOut == nil {
+							input.AgedOut = make(map[string]struct{})
+						}
+						input.AgedOut[subjectID] = struct{}{}
 					}
 				}
 			}

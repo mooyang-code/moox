@@ -731,15 +731,20 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		current := segments[reader.market].rows.Bars[key]
 		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]
 		frameRows := make(map[string]engine.Row, len(current))
+		var marketAged map[string]struct{}
 		for subjectID, row := range current {
 			if multi {
 				if _, ok := sets.Subjects[subjectID]; !ok {
 					continue
 				}
-				// 某个市场里年龄不够的标的不用这个市场的行（老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）。
+				// 某个市场里年龄不够的标的不用这个市场的行（老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
+				// 只记下，由选币池构造决定（已持仓的标的豁免）。
 				if passed, probed := agePassed[reader.market]; probed {
 					if _, ok := passed[subjectID]; !ok {
-						continue
+						if marketAged == nil {
+							marketAged = make(map[string]struct{})
+						}
+						marketAged[subjectID] = struct{}{}
 					}
 				}
 			}
@@ -751,7 +756,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			}
 			frameRows[subjectID] = engineRow
 		}
-		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows}
+		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
 	}
 	return engine.Evaluate(program, frame, state)
 }
