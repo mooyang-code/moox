@@ -222,7 +222,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		for _, id := range []string{"gap-open", "gap-expired"} {
+		for _, id := range []string{"gap-open", "gap-filled", "gap-expired"} {
 			limit := "1"
 			if err := tx.CreateOrder(store.OrderRecord{
 				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1", ClientOrderID: id + "-client",
@@ -250,25 +250,27 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
 		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
 	}
-	// 生产路径造缺口：交易所订单更新报了成交（明细还没到），一笔仍挂着，一笔 IOC 式地过期结束。
-	exchangeOrder := func(id string, status exchange.OrderStatus) exchange.Order {
+	// 生产路径造缺口：交易所订单更新报了成交（明细还没到），一笔部分成交仍挂着，一笔交易所已报全部成交
+	// （本地要等明细入账才落成 FILLED，所以仍是 OPEN），一笔交易所报过期、本地落成终态。
+	exchangeOrder := func(id string, status exchange.OrderStatus, filled shared.Decimal) exchange.Order {
 		limit := shared.MustDecimal("1")
 		return exchange.Order{
 			Market: exchange.MarketTypeSwap, ExchangeSymbol: delistedSymbol, ClientOrderID: id + "-client",
 			ExchangeOrderID: id + "-exchange", OrderType: exchange.OrderTypeLimit, Side: exchange.SideSell,
 			PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"), LimitPrice: &limit,
-			FilledQuantity: shared.MustDecimal("1"), Status: status,
+			FilledQuantity: filled, Status: status,
 			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
 		}
 	}
-	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-open", exchange.OrderStatusPartiallyFilled)))
-	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-expired", exchange.OrderStatusExpired)))
+	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-open", exchange.OrderStatusPartiallyFilled, shared.MustDecimal("1"))))
+	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-filled", exchange.OrderStatusFilled, shared.MustDecimal("2"))))
+	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-expired", exchange.OrderStatusExpired, shared.MustDecimal("1"))))
 	expired, err := tradeStore.GetOrder(ctx, "space-1", "gap-expired")
 	require.NoError(t, err)
 	require.Equal(t, "EXPIRED", expired.State, "前提：已结束的单带着缺口，不经过 closeInstrumentGone")
 	gaps, err := tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
 	require.NoError(t, err)
-	require.Equal(t, 2, gaps)
+	require.Equal(t, 3, gaps)
 	account, err = tradeStore.GetTradingAccountByID(ctx, "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
@@ -289,7 +291,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	gaps, err = tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
 	require.NoError(t, err)
 	require.Zero(t, gaps)
-	for _, id := range []string{"gap-open", "gap-expired"} {
+	for _, id := range []string{"gap-open", "gap-filled", "gap-expired"} {
 		record, err := tradeStore.GetOrder(ctx, "space-1", id)
 		require.NoError(t, err)
 		require.Equal(t, "EXPIRED", record.State, id)
@@ -301,7 +303,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	}
 
 	notes := telemetry.Recent(telemetry.AttentionOrdersInstrumentGone, time.Now(), time.Hour)
-	for _, id := range []string{"gap-open", "gap-expired"} {
+	for _, id := range []string{"gap-open", "gap-filled", "gap-expired"} {
 		found := false
 		for _, detail := range notes {
 			found = found || strings.Contains(detail, id) && strings.Contains(detail, "成交明细缺失")
