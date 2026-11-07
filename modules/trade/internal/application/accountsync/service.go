@@ -260,12 +260,16 @@ func (s *Service) syncAccountLocked(
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
 	var warnings []string
+	var goneSymbols []exchange.SymbolKey
 	for _, key := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
 		if exchange.IsInstrumentNotFound(listErr) {
-			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的，游标原样保留，不让整次同步失败。
-			// 未结束的单、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
+			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的、删掉它的成交游标，不让整次同步失败。
+			// 未结束的单、成交缺口、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
+			// 这个标的上的成交缺口再也补不上，在入账快照之前收掉（见 settleGoneFillGaps）。
 			warnings = append(warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
+			delete(cursors, key.String())
+			goneSymbols = append(goneSymbols, key)
 			continue
 		}
 		if listErr != nil {
@@ -277,6 +281,12 @@ func (s *Service) syncAccountLocked(
 			cursors[key.String()] = cursor
 		}
 	}
+	settledGaps, err := s.settleGoneFillGaps(ctx, account, goneSymbols)
+	if err != nil {
+		result, failErr := s.fail(ctx, account, err)
+		return result, maxDifference, failErr
+	}
+	warnings = append(warnings, settledGaps...)
 
 	orders := append([]exchange.Order(nil), openOrders...)
 	// 外部订单可能没有客户端订单号，挂单要同时按交易所订单号比对。
@@ -400,6 +410,47 @@ func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderReco
 		return tx.UpdateOrder(record, expected)
 	})
 	return closed && err == nil, err
+}
+
+// InstrumentGoneFillGapReason 是已下架标的上成交缺口被收掉时日志和关注项里的说明。
+const InstrumentGoneFillGapReason = "标的已下架，成交明细缺失，以持仓/余额同步为准"
+
+// settleGoneFillGaps 收掉已下架标的上的成交缺口：订单的观察累计成交量（下单回执、订单快照抬高的）领先已入账成交明细，
+// 而交易所对这个标的查成交只回“标的不存在”，明细再也补不上，不收掉的话账户每次同步都判有缺口、一直未就绪。
+// 在同一个事务里把这些标的上观察成交量大于已入账成交量的订单（含已结束的单）压回已入账值，每笔记关注项、写日志，
+// 要人工到交易所核对实际成交。必须在入账快照（applySnapshot）之前做，调用方持有账户锁。返回给同步结果的提示。
+func (s *Service) settleGoneFillGaps(ctx context.Context, account store.TradingAccountRecord, keys []exchange.SymbolKey) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	settled := make(map[exchange.SymbolKey][]string, len(keys))
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		clear(settled)
+		for _, key := range keys {
+			ids, err := tx.SettleFillGapsOfGoneInstrument(account.SpaceID, account.TradingAccountID, key)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				settled[key] = ids
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	var warnings []string
+	for _, key := range keys {
+		for _, orderID := range settled[key] {
+			warnings = append(warnings, fmt.Sprintf("订单 %s 的%s，成交缺口已收掉，需人工核对", orderID, InstrumentGoneFillGapReason))
+			detail := fmt.Sprintf("执行账户 %s：订单 %s（%s %s）%s，观察到的累计成交已压回已入账值，需人工核对成交",
+				account.Name, orderID, key.Market, key.Symbol, InstrumentGoneFillGapReason)
+			telemetry.Note(telemetry.AttentionOrdersInstrumentGone, detail, s.now())
+			log.WarnContextf(ctx, "交易关注项：%s", detail)
+		}
+	}
+	return warnings, nil
 }
 
 // orderIdentityKey 是“市场:订单号”，用于在同一批订单里按订单号去重或比对。

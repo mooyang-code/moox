@@ -1106,7 +1106,8 @@ var TradeAttentionNames = map[string]string{
 	"valuation_degraded":        "估值降级（有持仓取不到价）",
 	"flatten_orders_unsettled":  "清仓结束时有子单没收拾掉，需人工核对",
 	"release_orders_unverified": "释放会话时没能撤单，只按本地记录释放",
-	"orders_instrument_gone":    "标的已下架的订单已按过期结束，需人工核对成交",
+	"release_orders_stuck":      "释放会话持续失败，目标单没撤下",
+	"orders_instrument_gone":    "标的已下架的订单需人工核对成交",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

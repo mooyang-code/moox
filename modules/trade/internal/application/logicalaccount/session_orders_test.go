@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -145,4 +148,61 @@ func TestReleaseSessionPassesWhenCredentialsUnavailable(t *testing.T) {
 			require.Equal(t, "session-1", account.OwnerSessionID)
 		})
 	}
+}
+
+// 交易账户处于异常（ERROR）状态、取不到会话：和已停用一样撤单永远不会成功，按本地记录放行并记关注项。
+func TestReleaseSessionPassesWhenAccountInError(t *testing.T) {
+	service, tradeStore, fence := modernSessionFixture(t)
+	acceptModernSessionTarget(t, tradeStore, "session-1")
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trading_accounts SET c_status = 'ERROR' WHERE c_trading_account_id = 'account-a'`).Error)
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	service.TargetOrders = &recordingReleaser{store: tradeStore, err: fmt.Errorf("目标单 o1：%w", noSession)}
+	telemetry.Forget(telemetry.AttentionReleaseOrdersUnverified, releaseUnverifiedDetail("logical-1"))
+
+	require.NoError(t, service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence))
+	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, account.OwnerSessionID)
+	require.True(t, hasNote(telemetry.AttentionReleaseOrdersUnverified, "logical-1"))
+}
+
+// 交易账户启用、会话一直建不起来：释放照样返回“没撤下来”让策略重试；连续失败满 10 分钟记关注项 release_orders_stuck，
+// 之后释放成功就清掉。
+func TestReleaseSessionNotesStuckReleaseAfterTenMinutes(t *testing.T) {
+	service, tradeStore, fence := modernSessionFixture(t)
+	acceptModernSessionTarget(t, tradeStore, "session-1")
+	now := time.Now().UTC()
+	service.Now = func() time.Time { return now }
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	releaser := &recordingReleaser{store: tradeStore, err: fmt.Errorf("目标单 o1：%w", noSession)}
+	service.TargetOrders = releaser
+	release := func() error {
+		return service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence)
+	}
+	stuck := func() bool { return hasNote(telemetry.AttentionReleaseOrdersStuck, "logical-1") }
+	telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, releaseStuckDetail("logical-1"))
+
+	require.ErrorIs(t, release(), ErrTargetOrdersNotReleased)
+	now = now.Add(9 * time.Minute)
+	require.ErrorIs(t, release(), ErrTargetOrdersNotReleased)
+	require.False(t, stuck(), "不到 10 分钟不记")
+	now = now.Add(time.Minute)
+	require.ErrorIs(t, release(), ErrTargetOrdersNotReleased, "记了关注项也照样返回错误，让策略重试")
+	require.True(t, stuck(), "连续失败满 10 分钟要记")
+	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "session-1", account.OwnerSessionID)
+
+	releaser.err = nil
+	require.NoError(t, release())
+	require.False(t, stuck(), "释放成功后清掉")
+}
+
+func hasNote(kind, needle string) bool {
+	for _, detail := range telemetry.Recent(kind, time.Now(), time.Hour) {
+		if strings.Contains(detail, needle) {
+			return true
+		}
+	}
+	return false
 }

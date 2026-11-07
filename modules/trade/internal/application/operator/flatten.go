@@ -509,7 +509,7 @@ const flattenFinishingTimeout = 30 * time.Minute
 // 照样落成 status，这些子单记进结果的 ManualCheckOrderIDs 并记关注项，要人工核对。返回实际落库的状态。
 //
 // 子单解析失败属于本动作的账户问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error。
-// 读写数据库这类共享故障照样返回。
+// 读写数据库这类共享故障在收尾 30 分钟内照样返回；满 30 分钟仍是共享故障，也并入没收拾掉的子单交给人工，照常落成。
 func (s *Service) finishFlatten(
 	ctx context.Context,
 	command FlattenCommand,
@@ -520,21 +520,25 @@ func (s *Service) finishFlatten(
 	note := ""
 	if status != string(operatordomain.StatusRunning) {
 		outcome, settleErr := s.settleFlattenChildren(ctx, command, members)
+		if (settleErr != nil || len(outcome.unsettled) > 0) && result.FinishingSince == 0 {
+			result.FinishingSince = s.clock().UnixMilli()
+		}
+		timedOut := result.FinishingSince != 0 && s.clock().Sub(time.UnixMilli(result.FinishingSince)) >= flattenFinishingTimeout
 		if settleErr != nil {
-			// 列子单、读写库这类共享故障：没法判断，保持原样等下一次恢复，错误照样返回。
-			result.FinishingStatus = status
-			if result.FinishingSince == 0 {
-				result.FinishingSince = s.clock().UnixMilli()
+			if !timedOut {
+				// 列子单、读写库这类共享故障：没法判断，保持原样等下一次恢复，错误照样返回（让就绪反映出故障）。
+				result.FinishingStatus = status
+				running := string(operatordomain.StatusRunning)
+				return running, errors.Join(settleErr, s.persistFlattenProgress(ctx, result, running))
 			}
-			running := string(operatordomain.StatusRunning)
-			return running, errors.Join(settleErr, s.persistFlattenProgress(ctx, result, running))
+			// 收尾到上限仍是共享故障：不再无限运行下去，出错前没收拾掉的子单和出错的那笔一起交给人工，照常落成。
+			// 出错之后没轮到的子单尽量列出来；列不出来（库还在出错）时单号只能到订单记录里找，关注项照样记。
+			outcome.errs = append(outcome.errs, settleErr)
+			outcome.unsettled = append(outcome.unsettled, s.flattenChildrenLeft(ctx, command, members, outcome)...)
 		}
 		result.ManualCheckOrderIDs = outcome.manualCheck
 		if len(outcome.unsettled) > 0 {
-			if result.FinishingSince == 0 {
-				result.FinishingSince = s.clock().UnixMilli()
-			}
-			if s.clock().Sub(time.UnixMilli(result.FinishingSince)) < flattenFinishingTimeout {
+			if !timedOut {
 				result.FinishingStatus = status
 				running := string(operatordomain.StatusRunning)
 				return running, s.persistFlattenProgressNote(ctx, result, running, outcome.errorText())
@@ -542,8 +546,12 @@ func (s *Service) finishFlatten(
 			// 收尾到上限：不再等，没收拾掉的子单交给人工。
 			result.ManualCheckOrderIDs = append(result.ManualCheckOrderIDs, outcome.unsettled...)
 		}
-		if len(result.ManualCheckOrderIDs) > 0 {
+		if len(result.ManualCheckOrderIDs) > 0 || settleErr != nil {
 			detail := fmt.Sprintf("组合 %s 的动作 %s：%d 笔子单没收拾掉，需人工核对", command.LogicalAccountID, command.ActionID, len(result.ManualCheckOrderIDs))
+			if settleErr != nil {
+				detail = fmt.Sprintf("组合 %s 的动作 %s：收尾满 30 分钟仍读写不了子单（%s），%d 笔子单没收拾掉，需人工核对",
+					command.LogicalAccountID, command.ActionID, telemetry.StableReason(settleErr.Error()), len(result.ManualCheckOrderIDs))
+			}
 			telemetry.Note(telemetry.AttentionFlattenOrdersUnsettled, detail, s.clock())
 			log.WarnContextf(ctx, "交易关注项：%s（%s）：%s", detail, strings.Join(result.ManualCheckOrderIDs, ","), outcome.errorText())
 		}
@@ -569,12 +577,13 @@ func (s *Service) finishFlatten(
 // 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃遇到本动作的账户问题、取不到账户会话、预算到点）；
 // manualCheck 是收拾不了的（交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误是这次没法判断的：列子单读库失败，
 // 或解析、丢弃遇到不只关乎本动作的错误（ActionScopedError 判为否，例如写库失败）；预算到点后列子单失败记成本账户的预算错误返回。
+// 返回错误时也带回出错前的结果，出错的那笔子单记在 unsettled 里（收尾到上限时交给人工）。
 func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (settleOutcome, error) {
 	var outcome settleOutcome
 	for _, member := range members {
 		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
 		if err != nil {
-			return settleOutcome{}, settleScoped(ctx, member.TradingAccountID, err)
+			return outcome, settleScoped(ctx, member.TradingAccountID, err)
 		}
 		for _, child := range records {
 			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
@@ -585,7 +594,8 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 				resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
 				if resolveErr != nil {
 					if resolveErr = settleScoped(ctx, child.TradingAccountID, resolveErr); !ActionScopedError(resolveErr) {
-						return settleOutcome{}, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr)
+						outcome.unsettled = append(outcome.unsettled, child.OrderID)
+						return outcome, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr)
 					}
 					if childUnsettleable(resolveErr) {
 						outcome.manualCheck = append(outcome.manualCheck, child.OrderID)
@@ -601,7 +611,8 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 			case orderdomain.Pending:
 				if _, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID); discardErr != nil {
 					if discardErr = settleScoped(ctx, child.TradingAccountID, discardErr); !ActionScopedError(discardErr) {
-						return settleOutcome{}, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr)
+						outcome.unsettled = append(outcome.unsettled, child.OrderID)
+						return outcome, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr)
 					}
 					outcome.unsettled = append(outcome.unsettled, child.OrderID)
 					outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
@@ -612,6 +623,40 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 		}
 	}
 	return outcome, nil
+}
+
+// flattenChildrenLeft 在收尾到上限、收拾子单遇到共享故障时，尽量列出本动作还没结束、又不在 outcome 里的子单
+// （出错之后没轮到的），交给人工核对。列子单失败的账户跳过，只写日志。
+func (s *Service) flattenChildrenLeft(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord, outcome settleOutcome) []string {
+	seen := make(map[string]struct{}, len(outcome.unsettled)+len(outcome.manualCheck))
+	for _, id := range append(append([]string(nil), outcome.unsettled...), outcome.manualCheck...) {
+		seen[id] = struct{}{}
+	}
+	var left []string
+	for _, member := range members {
+		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
+		if err != nil {
+			log.WarnContextf(ctx, "动作 %s 收尾到上限，列执行账户 %s 的子单失败：%v", command.ActionID, member.TradingAccountID, err)
+			continue
+		}
+		for _, child := range records {
+			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
+				continue
+			}
+			switch orderdomain.State(child.State) {
+			case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
+			default:
+				// 挂单中、撤单中的自己会结束，平时收尾也不管它们。
+				continue
+			}
+			if _, found := seen[child.OrderID]; found {
+				continue
+			}
+			seen[child.OrderID] = struct{}{}
+			left = append(left, child.OrderID)
+		}
+	}
+	return left
 }
 
 // settleScoped 把预算到点（调用上下文已结束）时原样带回的超时、取消错误记成这个账户的预算错误：那是本动作这次调用的时间用完，

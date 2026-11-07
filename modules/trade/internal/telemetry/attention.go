@@ -39,11 +39,15 @@ const (
 	// AttentionFlattenOrdersUnsettled 是清仓、减仓、下架清仓结束时有子单没收拾掉（收尾满 30 分钟仍解析不出结果、
 	// 交易所确认标的不存在），动作照常结束，这些子单要人工到交易所核对。
 	AttentionFlattenOrdersUnsettled = "flatten_orders_unsettled"
-	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效或账户没有会话，目标单没能撤下或确认，只按本地记录释放，
-	// 这些单要人工到交易所核对。
+	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效、交易账户已停用或异常、标的已不存在，目标单没能撤下或确认，
+	// 只按本地记录释放，这些单要人工到交易所核对。
 	AttentionReleaseOrdersUnverified = "release_orders_unverified"
-	// AttentionOrdersInstrumentGone 是账户同步发现未结束订单的标的已下架、交易所查不到（币安 -1121、OKX 51001），
-	// 已按过期结束并释放资金预留；这笔单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
+	// AttentionReleaseOrdersStuck 是释放策略会话连续失败超过 10 分钟（例如交易账户启用但会话一直建不起来）：目标单没撤下，
+	// 会话还没释放，策略仍在重试。
+	AttentionReleaseOrdersStuck = "release_orders_stuck"
+	// AttentionOrdersInstrumentGone 是账户同步发现订单的标的已下架、交易所查不到（币安 -1121、OKX 51001）：未结束的单
+	// 已按过期结束并释放资金预留；订单（含已结束的单）的累计成交领先已入账成交明细的，缺口已按已入账值收掉（成交明细缺失）。
+	// 这些单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
 	AttentionOrdersInstrumentGone = "orders_instrument_gone"
 )
 
@@ -53,7 +57,8 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
-	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionOrdersInstrumentGone,
+	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
+	AttentionOrdersInstrumentGone,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
@@ -102,6 +107,13 @@ func Note(kind, detail string, at time.Time) {
 		notes[kind] = map[string]time.Time{}
 	}
 	notes[kind][detail] = at
+}
+
+// Forget 删掉一条关注项：情况已经解除，不必等保留窗口过去。
+func Forget(kind, detail string) {
+	notesMu.Lock()
+	defer notesMu.Unlock()
+	delete(notes[kind], detail)
 }
 
 // NoteTargetRejection 记录一次被拒绝的目标。

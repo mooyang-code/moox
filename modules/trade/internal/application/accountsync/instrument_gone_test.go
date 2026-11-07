@@ -119,7 +119,7 @@ func seedDelisted(t *testing.T, tradeStore *store.Store) {
 
 // 下架清仓最后一笔 IOC 结果未知、标的随后下架：查单、查成交回 -1121 不能让整次同步失败（否则账户一直未就绪，
 // 清仓、减仓、目标执行全被挡住）。发出过的单按过期结束、写明需人工核对、释放资金预留并记关注项；
-// 待提交、刚提交中的单不动；成交游标保留；持仓以交易所为准（交易所已经没有这笔持仓）。
+// 待提交、刚提交中的单不动；成交游标删掉；持仓以交易所为准（交易所已经没有这笔持仓）。
 func TestSyncClosesOrdersOfDelistedInstrument(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
@@ -146,7 +146,7 @@ func TestSyncClosesOrdersOfDelistedInstrument(t *testing.T) {
 	account, err := tradeStore.GetTradingAccountByID(ctx, "account-1")
 	require.NoError(t, err)
 	require.True(t, account.Ready, "账户要就绪，否则清仓、减仓、目标执行都被挡住")
-	require.Equal(t, "41", account.FillCursors["SWAP:"+delistedSymbol], "游标原样保留")
+	require.NotContains(t, account.FillCursors, "SWAP:"+delistedSymbol, "下架标的的成交游标删掉，不再把它带进同步")
 
 	for _, id := range []string{"gone-unknown", "gone-open", "gone-canceling"} {
 		record, err := tradeStore.GetOrder(ctx, "space-1", id)
@@ -203,4 +203,116 @@ func containsDetail(details []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// 下架标的的单带着成交缺口：下单回执、订单快照抬高了观察累计成交量，明细还没入账标的就下架了，查成交只回 -1121，
+// 缺口永远补不上。同步要在入账快照之前收掉这个标的上的缺口（挂单中的和已结束的单都算），删掉成交游标，记关注项，
+// 账户恢复就绪；否则账户一直停在“成交待余额同步确认”。
+func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	ctx := context.Background()
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SWAP", ExchangeSymbol: delistedSymbol,
+			InstrumentID: "DEADUSDT", BaseAsset: "DEAD", QuoteAsset: "USDT",
+			SettlementAsset: "USDT", Linear: true, ContractValue: "1",
+			ContractValueAsset: "DEAD", ExchangeQuantityStep: "1",
+			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
+		}); err != nil {
+			return err
+		}
+		for _, id := range []string{"gap-open", "gap-expired"} {
+			limit := "1"
+			if err := tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", OrderID: id, TradingAccountID: "account-1", ClientOrderID: id + "-client",
+				ExchangeOrderID: id + "-exchange", MarketType: "SWAP", ExchangeSymbol: delistedSymbol, OrderType: "LIMIT",
+				TimeInForce: "GTC", Side: "SELL", PositionSide: "NET", Quantity: "2", LimitPrice: &limit,
+				ReferencePrice: "1", ReferencePriceAt: 1_000, ReduceOnly: true, OwnerType: "OPERATOR", OwnerID: "delist-1",
+				LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0", ReservedAsset: "USDT",
+				ReservedQuantity: "5", RemainingReservedQuantity: "5", SubmittedAt: time.Now().UnixMilli(), Version: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	account, err := tradeStore.GetTradingAccountByID(ctx, "account-1")
+	require.NoError(t, err)
+	cursors := account.FillCursors
+	cursors["SWAP:"+delistedSymbol] = "41"
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountFacts("space-1", "account-1", cursors, account.Snapshot, 1, 1)
+	}))
+
+	adapter := &delistedAdapter{}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		SessionState: readySessionState(true), Fills: &consumer.Reducer{Store: tradeStore},
+	}
+	// 生产路径造缺口：交易所订单更新报了成交（明细还没到），一笔仍挂着，一笔 IOC 式地过期结束。
+	exchangeOrder := func(id string, status exchange.OrderStatus) exchange.Order {
+		limit := shared.MustDecimal("1")
+		return exchange.Order{
+			Market: exchange.MarketTypeSwap, ExchangeSymbol: delistedSymbol, ClientOrderID: id + "-client",
+			ExchangeOrderID: id + "-exchange", OrderType: exchange.OrderTypeLimit, Side: exchange.SideSell,
+			PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"), LimitPrice: &limit,
+			FilledQuantity: shared.MustDecimal("1"), Status: status,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+		}
+	}
+	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-open", exchange.OrderStatusPartiallyFilled)))
+	require.NoError(t, service.ApplyOrder(ctx, "account-1", exchangeOrder("gap-expired", exchange.OrderStatusExpired)))
+	expired, err := tradeStore.GetOrder(ctx, "space-1", "gap-expired")
+	require.NoError(t, err)
+	require.Equal(t, "EXPIRED", expired.State, "前提：已结束的单带着缺口，不经过 closeInstrumentGone")
+	gaps, err := tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 2, gaps)
+	account, err = tradeStore.GetTradingAccountByID(ctx, "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.Equal(t, awaitingBalanceReason, account.LastError)
+	require.True(t, account.HasBalancePending())
+
+	result, err := service.SyncAccount(ctx, "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready, "%v", result.Warnings)
+	require.Contains(t, adapter.fillQueries, delistedSymbol, "缺口会带进下架标的，要实际查过")
+
+	account, err = tradeStore.GetTradingAccountByID(ctx, "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "缺口收掉后账户要就绪：%s", account.LastError)
+	require.False(t, account.HasBalancePending())
+	require.NotContains(t, account.FillCursors, "SWAP:"+delistedSymbol, "下架标的的成交游标要删掉")
+	require.Contains(t, account.FillCursors, "SWAP:BTC-USDT", "别的标的的游标不动")
+	gaps, err = tradeStore.CountOrdersWithFillGap(ctx, "space-1", "account-1")
+	require.NoError(t, err)
+	require.Zero(t, gaps)
+	for _, id := range []string{"gap-open", "gap-expired"} {
+		record, err := tradeStore.GetOrder(ctx, "space-1", id)
+		require.NoError(t, err)
+		require.Equal(t, "EXPIRED", record.State, id)
+		require.Equal(t, "0", record.FilledQuantity, "没有明细就不凭空入账："+id)
+		var observed string
+		require.NoError(t, tradeStore.DBForTest().Raw(
+			`SELECT c_observed_filled_quantity FROM t_trade_orders WHERE c_order_id = ?`, id).Scan(&observed).Error)
+		require.Equal(t, "0", observed, "观察成交量压回已入账值："+id)
+	}
+
+	notes := telemetry.Recent(telemetry.AttentionOrdersInstrumentGone, time.Now(), time.Hour)
+	for _, id := range []string{"gap-open", "gap-expired"} {
+		found := false
+		for _, detail := range notes {
+			found = found || strings.Contains(detail, id) && strings.Contains(detail, "成交明细缺失")
+		}
+		require.True(t, found, "要记关注项（带单号和“成交明细缺失”）：%s %v", id, notes)
+	}
+
+	// 再同步一次：下架标的不再被带进来，账户照样就绪。
+	adapter.fillQueries = nil
+	result, err = service.SyncAccountReconcile(ctx, "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready)
+	require.NotContains(t, adapter.fillQueries, delistedSymbol, "缺口、游标、未结束的单都没有了，不再查下架标的")
 }

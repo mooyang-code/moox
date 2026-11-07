@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -311,6 +312,53 @@ func TestFlattenFinishingGivesUpAfterTimeout(t *testing.T) {
 	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-stuck"), "收拾不了的子单原样留着，等人工核对")
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute))
+}
+
+// 收尾时解析子单一直遇到共享故障（例如写库失败）：30 分钟内照样返回错误、保持运行（让就绪反映故障）；
+// 满 30 分钟不再无限运行，没收拾掉的子单并入人工核对，照常落成记下的 PARTIAL 并记关注项，不再返回错误。
+func TestFlattenFinishingGivesUpOnSharedErrorAfterTimeout(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-shared", "child-shared", errors.New("disk I/O error"))
+	enteredAt := fixture.now
+
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.Error(t, err, "30 分钟内共享故障照样返回")
+	require.False(t, ActionScopedError(err))
+	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
+
+	resume := func() (FlattenResult, error) {
+		stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-shared")
+		require.NoError(t, getErr)
+		resumeErr := service.ResumeOperatorAction(context.Background(), stored)
+		stored, getErr = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-shared")
+		require.NoError(t, getErr)
+		decoded, decodeErr := decodeFlattenResult(stored)
+		require.NoError(t, decodeErr)
+		return decoded, resumeErr
+	}
+	fixture.now = enteredAt.Add(29 * time.Minute)
+	decoded, err := resume()
+	require.Error(t, err)
+	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
+
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	decoded, err = resume()
+	require.NoError(t, err, "满 30 分钟落成之后不再返回共享故障")
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, []string{"child-shared"}, decoded.ManualCheckOrderIDs)
+	require.Empty(t, decoded.FinishingStatus)
+	require.Zero(t, decoded.FinishingSince)
+	require.Contains(t, decoded.Action.LastError, "disk I/O error")
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-shared"), "收拾不了的子单原样留着，等人工核对")
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
+	found := false
+	for _, detail := range telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute) {
+		found = found || strings.Contains(detail, "delist-shared") && strings.Contains(detail, "读写不了子单")
+	}
+	require.True(t, found, "要记关注项")
 }
 
 // 交易所确认标的不存在（币安 -1121、OKX 51001）：这笔子单等多久都收拾不了，不阻塞收尾，
