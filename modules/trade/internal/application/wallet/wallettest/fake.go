@@ -41,6 +41,7 @@ type Exchange struct {
 	QueryErr, ListErr error
 
 	calls   []Call
+	queries int
 	records []execution.TransferRecord
 	nextID  int
 }
@@ -70,6 +71,7 @@ func (f *Exchange) GetReferencePrice(context.Context, exchange.SymbolKey) (excha
 func (f *Exchange) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.queries++
 	if f.QueryErr != nil {
 		return exchange.AccountSnapshot{}, f.QueryErr
 	}
@@ -108,6 +110,7 @@ func (f *Exchange) Transfer(_ context.Context, from, to exchange.Wallet, asset s
 func (f *Exchange) ListTransfers(context.Context, time.Time) ([]execution.TransferRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.queries++
 	if f.ListErr != nil {
 		return nil, f.ListErr
 	}
@@ -139,6 +142,13 @@ func (f *Exchange) Calls() []Call {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]Call(nil), f.calls...)
+}
+
+// Queries 返回目前为止查余额、查划转记录的调用次数（退避期内不应增加）。
+func (f *Exchange) Queries() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queries
 }
 
 // Set 在持锁的情况下修改假交易所的状态。

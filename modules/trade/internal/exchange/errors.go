@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -125,4 +126,41 @@ func RejectMessage(err error) string {
 		return "交易所返回：" + exchangeErr.Err.Error()
 	}
 	return "交易所返回：" + exchangeErr.Error()
+}
+
+// FailureSummary 把交易所调用失败转成简短的中文说明：只含错误类别、HTTP 状态和错误码，
+// 不含请求串、响应体原文（可能带签名、账户信息）。检测、划转等要把失败原因给人看的地方共用。
+func FailureSummary(err error) string {
+	var typed *Error
+	switch {
+	case errors.As(err, &typed):
+		var kind string
+		switch typed.Kind {
+		case ErrorRateLimited, ErrorOrderRateLimited, ErrorThrottled, ErrorBanned, ErrorNotSent:
+			kind = "被限频或本地限流暂停"
+		case ErrorTransportUnknown:
+			kind = "网络错误或交易所服务异常"
+		case ErrorAuthentication:
+			kind = "鉴权类错误但没有可识别的错误码"
+		case ErrorRejected:
+			kind = "被交易所拒绝"
+		case ErrorInsufficientBalance:
+			kind = "余额不足"
+		case ErrorNotReady:
+			kind = "账户会话还没准备好"
+		default:
+			kind = "交易所返回了无法判断的错误"
+		}
+		parts := []string{kind}
+		if typed.HTTPStatus != 0 {
+			parts = append(parts, fmt.Sprintf("HTTP %d", typed.HTTPStatus))
+		}
+		if typed.Code != "" {
+			parts = append(parts, "错误码 "+typed.Code)
+		}
+		return strings.Join(parts, "，")
+	case errors.Is(err, context.DeadlineExceeded):
+		return "请求超时"
+	}
+	return "没有得到交易所的明确答复"
 }

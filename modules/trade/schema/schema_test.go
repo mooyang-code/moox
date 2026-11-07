@@ -334,6 +334,12 @@ func TestNewTablesRejectInvalidRows(t *testing.T) {
 	require.NoError(t, transfer("t2", "TO_FUTURES", "COMPLETED"))
 	require.Error(t, transfer("t3", "WITHDRAW", "PENDING"))
 	require.Error(t, transfer("t4", "TO_SPOT", "UNKNOWN"))
+	require.Error(t, db.Exec(`
+		INSERT INTO t_trade_wallet_transfers (
+			c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
+			c_direction, c_asset, c_amount, c_client_ref, c_capped, c_state, c_requested_at
+		) VALUES ('s', 't5', 'a', 'l', 'target-1', 'TO_SPOT', 'USDT', '100', 'ref-t5', 2, 'PENDING', 1)
+	`).Error, "封顶标记只能是 0 或 1")
 }
 
 func hasUniqueIndex(t *testing.T, db *gorm.DB, table string, want []string) bool {

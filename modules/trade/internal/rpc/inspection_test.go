@@ -136,3 +136,19 @@ func TestReinspectTradingAccountInconclusiveKeepsLastResultAndReportsUnavailable
 	require.Equal(t, int32(1), rsp.GetInspection().GetConsecutiveFailures())
 	require.Equal(t, "BINANCE_STANDARD", rsp.GetAccount().GetAccountMode(), "没有结论时保留上次的账户类型")
 }
+
+func TestResolveWalletTransferRequiresSpaceAndValidResult(t *testing.T) {
+	handler, _ := inspectionHandler(t, inspectorStub{})
+	noSpace, err := handler.ResolveWalletTransfer(context.Background(), &tradepb.ResolveWalletTransferReq{TransferId: "t-1", Result: "FAILED"})
+	require.NoError(t, err)
+	require.NotEqual(t, tradepb.ErrorCode_SUCCESS, noSpace.GetRetInfo().GetCode())
+
+	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
+	invalid, err := handler.ResolveWalletTransfer(ctx, &tradepb.ResolveWalletTransferReq{TransferId: "t-1", Result: "PENDING"})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
+
+	missing, err := handler.ResolveWalletTransfer(ctx, &tradepb.ResolveWalletTransferReq{TransferId: "t-1", Result: "FAILED"})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_NOT_FOUND, missing.GetRetInfo().GetCode())
+}

@@ -415,6 +415,23 @@ message ReinspectTradingAccountRsp {
   bool mode_changed = 4;
 }
 
+// 人工结束一条超过 10 分钟还没对账出结果的钱包划转记录：到交易所核对划转记录后，到账了记 COMPLETED，没到账记 FAILED。
+// 只用在自动对账一直没有结论、告警里带着划转编号的情况；已经结束的记录原样返回，不报错。
+message ResolveWalletTransferReq {
+  string transfer_id = 1;
+  // COMPLETED 或 FAILED。
+  string result = 2;
+  // 核对说明，写进记录。
+  string note = 3;
+}
+message ResolveWalletTransferRsp {
+  common.RetInfo ret_info = 1;
+  // 处理后记录的状态：PENDING 以外的终态。
+  string state = 2;
+  // 记录在这次调用之前就已经结束（被自动对账或另一次人工处理抢先），没有改动。
+  bool already_settled = 3;
+}
+
 message GetTradingAccountReq {
   string trading_account_id = 1;
 }
@@ -863,6 +880,7 @@ service TradeConsoleService {
   rpc SyncTradingAccount(SyncTradingAccountReq) returns (SyncTradingAccountRsp);
   rpc InspectExchangeCredential(InspectExchangeCredentialReq) returns (InspectExchangeCredentialRsp);
   rpc ReinspectTradingAccount(ReinspectTradingAccountReq) returns (ReinspectTradingAccountRsp);
+  rpc ResolveWalletTransfer(ResolveWalletTransferReq) returns (ResolveWalletTransferRsp);
   rpc CreateLogicalAccount(CreateLogicalAccountReq) returns (CreateLogicalAccountRsp);
   rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
   rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);

@@ -105,35 +105,13 @@ func (s *Service) inspect(ctx context.Context, name exchange.Exchange, request e
 	return inspection, nil
 }
 
-// FailureSummary 把检测失败的错误转成简短的中文说明：只含错误类别、HTTP 状态和错误码，
-// 不含请求串、响应体原文（可能带签名、账户信息）。
+// FailureSummary 把检测失败的错误转成简短的中文说明：类别、HTTP 状态和错误码，不含请求串和响应体原文。
 func FailureSummary(err error) string {
 	var typed *exchange.Error
-	switch {
-	case errors.As(err, &typed):
-		var kind string
-		switch typed.Kind {
-		case exchange.ErrorRateLimited, exchange.ErrorOrderRateLimited, exchange.ErrorThrottled, exchange.ErrorBanned, exchange.ErrorNotSent:
-			kind = "被限频或本地限流暂停"
-		case exchange.ErrorTransportUnknown:
-			kind = "网络错误或交易所服务异常"
-		case exchange.ErrorAuthentication:
-			kind = "鉴权类错误但没有可识别的错误码"
-		default:
-			kind = "交易所返回了无法判断的错误"
-		}
-		parts := []string{kind}
-		if typed.HTTPStatus != 0 {
-			parts = append(parts, fmt.Sprintf("HTTP %d", typed.HTTPStatus))
-		}
-		if typed.Code != "" {
-			parts = append(parts, "错误码 "+typed.Code)
-		}
-		return strings.Join(parts, "，")
-	case errors.Is(err, context.DeadlineExceeded):
+	if !errors.As(err, &typed) && errors.Is(err, context.DeadlineExceeded) {
 		return "检测超时"
 	}
-	return "没有得到交易所的明确答复"
+	return exchange.FailureSummary(err)
 }
 
 // inspectForSave 在建账户、换密钥、重新启用之前检测：检测没完成或有阻断项都不能保存；

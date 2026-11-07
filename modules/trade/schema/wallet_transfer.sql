@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS t_trade_wallet_transfers (
     -- 请求交易所之前先写入的本地引用号；超时后靠它连同时间窗口、金额对账交易所的划转记录
     c_client_ref TEXT NOT NULL,
     c_exchange_transfer_id TEXT NOT NULL DEFAULT '',
+    -- 1 表示这笔划转被合约钱包的可划转额度封顶；它完成后同一目标不再追加划转
+    c_capped INTEGER NOT NULL DEFAULT 0,
     c_state TEXT NOT NULL,
     c_last_error TEXT NOT NULL DEFAULT '',
     c_requested_at INTEGER NOT NULL,
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS t_trade_wallet_transfers (
     FOREIGN KEY (c_space_id, c_logical_account_id)
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id),
     CHECK (c_direction IN ('TO_SPOT', 'TO_FUTURES')),
+    CHECK (c_capped IN (0, 1)),
     CHECK (c_state IN ('PENDING', 'COMPLETED', 'FAILED')),
     CHECK (c_asset <> ''),
     CHECK (c_amount <> ''),

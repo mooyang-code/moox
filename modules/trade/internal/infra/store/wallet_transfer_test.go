@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func seedTransferParents(t *testing.T) *Store {
@@ -64,12 +65,25 @@ func TestWalletTransferLifecycle(t *testing.T) {
 	err = tradeStore.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpdateWalletTransfer("space-1", "t-1", "tran-9", TransferStateFailed, "x", 0)
 	})
-	require.ErrorIs(t, err, ErrInvalidRecord)
+	require.ErrorIs(t, err, ErrNotPending)
 	rows, err = tradeStore.ListWalletTransfersForTarget(ctx, "space-1", "logical-1", "target-1", "account-1", TransferToSpot)
 	require.NoError(t, err)
 	require.Equal(t, "tran-9", rows[0].ExchangeTransferID)
 	require.Equal(t, TransferStateCompleted, rows[0].State)
 	require.EqualValues(t, 3000, rows[0].CompletedAt)
+
+	// 按编号读取；封顶标记随记录保存。
+	capped := transferRecord("t-cap", "target-1:TO_SPOT:2", TransferToSpot, 4000)
+	capped.Capped = true
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *Tx) error { return tx.InsertWalletTransfer(capped) }))
+	got, err := tradeStore.GetWalletTransfer(ctx, "space-1", "t-cap")
+	require.NoError(t, err)
+	require.True(t, got.Capped)
+	plain, err := tradeStore.GetWalletTransfer(ctx, "space-1", "t-1")
+	require.NoError(t, err)
+	require.False(t, plain.Capped)
+	_, err = tradeStore.GetWalletTransfer(ctx, "space-1", "missing")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
 	// 另一个方向和另一个账户互不影响；按账户查按请求时间倒序。
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *Tx) error {
@@ -80,7 +94,7 @@ func TestWalletTransferLifecycle(t *testing.T) {
 	require.Len(t, back, 1)
 	byAccount, err := tradeStore.ListWalletTransfersByAccount(ctx, "space-1", "account-1", 0, 10_000)
 	require.NoError(t, err)
-	require.Len(t, byAccount, 2)
+	require.Len(t, byAccount, 3, "t-3、封顶的 t-cap、t-1")
 	require.Equal(t, "t-3", byAccount[0].TransferID)
 	window, err := tradeStore.ListWalletTransfersByAccount(ctx, "space-1", "account-1", 0, 2000)
 	require.NoError(t, err)

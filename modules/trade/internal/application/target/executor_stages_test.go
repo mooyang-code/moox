@@ -224,19 +224,32 @@ func strPtr(value string) *string { return &value }
 
 type fakeTransfer struct {
 	beforePending, collectPending bool
-	beforeCalls, collectCalls     int
-	buys                          []TransferBuy
-	scale                         map[string]shared.Decimal
+	// waitAccounts 只让这些账户等划转（beforePending 为真时所有账户都等）。
+	waitAccounts              map[string]bool
+	beforeCalls, collectCalls int
+	buys                      []TransferBuy
+	scale                     map[string]shared.Decimal
+	collected                 []string
 }
 
 func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error) {
 	f.beforeCalls++
 	f.buys = buys
-	return TransferOutcome{Pending: f.beforePending, BuyScale: f.scale}, nil
+	outcome := TransferOutcome{BuyScale: f.scale}
+	outcome.Waiting = map[string]string{}
+	for _, buy := range buys {
+		if f.beforePending || f.waitAccounts[buy.Account.TradingAccountID] {
+			outcome.Waiting[buy.Account.TradingAccountID] = ""
+		}
+	}
+	return outcome, nil
 }
 
-func (f *fakeTransfer) Collect(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, _ []store.TradingAccountRecord) (bool, error) {
+func (f *fakeTransfer) Collect(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (bool, error) {
 	f.collectCalls++
+	for _, account := range accounts {
+		f.collected = append(f.collected, account.TradingAccountID)
+	}
 	return f.collectPending, nil
 }
 

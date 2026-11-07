@@ -171,4 +171,92 @@ func TestWalletRejectionIsRecordedAsBlockedReasonNotRoundError(t *testing.T) {
 	require.Contains(t, stored.BlockedTargets[0].Reason, "-5013")
 }
 
+// 限频等软失败：目标保持收敛中并按退避重试，不是 BLOCKED；原因是中文类别，退避期内（目标每秒收敛一次）不再请求交易所。
+func TestWalletSoftFailureKeepsConvergingAndBacksOff(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	fake.TransferErr = &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429, Err: errors.New("429")}
+	ctx := context.Background()
+	executor := newExecutor()
+
+	result, err := executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status, "限频不让目标直接 BLOCKED")
+	require.Equal(t, "transfer", result.Action)
+	require.Greater(t, result.RetryAfter, time.Duration(0))
+	require.Empty(t, f.orders.specs)
+	stored, err := f.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, stored.BlockedTargets, 1)
+	require.True(t, stored.BlockedTargets[0].Deferred, "等重试不是阻塞，界面用中性色")
+	require.Contains(t, stored.BlockedTargets[0].Reason, "被限频或本地限流暂停")
+	require.NotContains(t, stored.BlockedTargets[0].Reason, "RATE_LIMITED")
+
+	calls, queries := len(fake.Calls()), fake.Queries()
+	for range 3 {
+		result, err = executor.Converge(ctx, "space-1", "logical-1")
+		require.NoError(t, err)
+		require.Equal(t, "transfer", result.Action)
+	}
+	require.Len(t, fake.Calls(), calls, "退避期内不再发划转")
+	require.Equal(t, queries, fake.Queries(), "退避期内不查余额")
+}
+
+// 没被额度封顶的划转完成后价格上涨 1%：再划一笔差额，买单不缩小（不会缩成 100/101），买够后目标收敛。
+func TestWalletUncappedTransferTopsUpWhenPriceRises(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	ctx := context.Background()
+	executor := newExecutor()
+
+	result, err := executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "transfer", result.Action)
+	fake.ConfirmAll()
+	markSpotSnapshot(t, f, time.Now().Add(time.Second))
+	fake.Set(func(e *wallettest.Exchange) { e.Ask = "50500" })
+
+	result, err = executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "transfer", result.Action, "缺的 5.1 从合约钱包补划")
+	require.Len(t, fake.Calls(), 2)
+	require.Equal(t, "5.1", fake.Calls()[1].Amount.String())
+	fake.ConfirmAll()
+	markSpotSnapshot(t, f, time.Now().Add(2*time.Second))
+	result, err = executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "place", result.Action)
+	require.Equal(t, "0.01", f.orders.specs[0].Quantity.String(), "买单没有被缩小")
+}
+
+// 划转完成后某一轮买单被每小时上限顺延：这一轮不能把刚划进来的钱归集回合约钱包。
+func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	// 两个钱包合计 610：归集阈值 100，划转后现货钱包多出的 509 够归集，没有顺延保护时会被划回去。
+	fake.Set(func(e *wallettest.Exchange) { e.Futures = "600" })
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_spot":{"BTC-USDT-SPOT":"1000"}}`)
+	hourStart := time.Now().UTC().Truncate(time.Hour).Add(time.Second).UnixMilli()
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
+		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: hourStart, FinishedAt: hourStart, Version: 1,
+	})
+	ctx := context.Background()
+	executor := newExecutor()
+
+	result, err := executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "transfer", result.Action)
+	fake.ConfirmAll()
+	markSpotSnapshot(t, f, time.Now().Add(time.Second))
+
+	result, err = executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status, "买单顺延到下一个整点")
+	require.Empty(t, f.orders.specs)
+	for _, call := range fake.Calls() {
+		require.Equal(t, exchange.WalletSpot, call.To, "不能把现货钱包里的钱归集回合约钱包")
+	}
+	require.Len(t, fake.Calls(), 1)
+}
+
 func mustDec(value string) shared.Decimal { return shared.MustDecimal(value) }

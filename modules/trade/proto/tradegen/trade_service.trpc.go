@@ -35,6 +35,8 @@ type TradeConsoleServiceService interface {
 
 	ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq) (*ReinspectTradingAccountRsp, error)
 
+	ResolveWalletTransfer(ctx context.Context, req *ResolveWalletTransferReq) (*ResolveWalletTransferRsp, error)
+
 	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error)
 
 	GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq) (*GetLogicalAccountRsp, error)
@@ -232,6 +234,24 @@ func TradeConsoleServiceService_ReinspectTradingAccount_Handler(svr interface{},
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).ReinspectTradingAccount(ctx, reqbody.(*ReinspectTradingAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ResolveWalletTransfer_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ResolveWalletTransferReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ResolveWalletTransfer(ctx, reqbody.(*ResolveWalletTransferReq))
 	}
 
 	var rsp interface{}
@@ -838,6 +858,10 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_ReinspectTradingAccount_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer",
+			Func: TradeConsoleServiceService_ResolveWalletTransfer_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
 			Func: TradeConsoleServiceService_CreateLogicalAccount_Handler,
 		},
@@ -999,6 +1023,9 @@ func (s *UnimplementedTradeConsoleService) InspectExchangeCredential(ctx context
 func (s *UnimplementedTradeConsoleService) ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq) (*ReinspectTradingAccountRsp, error) {
 	return nil, errors.New("rpc ReinspectTradingAccount of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) ResolveWalletTransfer(ctx context.Context, req *ResolveWalletTransferReq) (*ResolveWalletTransferRsp, error) {
+	return nil, errors.New("rpc ResolveWalletTransfer of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error) {
 	return nil, errors.New("rpc CreateLogicalAccount of service TradeConsoleService is not implemented")
 }
@@ -1116,6 +1143,8 @@ type TradeConsoleServiceClientProxy interface {
 	InspectExchangeCredential(ctx context.Context, req *InspectExchangeCredentialReq, opts ...client.Option) (rsp *InspectExchangeCredentialRsp, err error)
 
 	ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq, opts ...client.Option) (rsp *ReinspectTradingAccountRsp, err error)
+
+	ResolveWalletTransfer(ctx context.Context, req *ResolveWalletTransferReq, opts ...client.Option) (rsp *ResolveWalletTransferRsp, err error)
 
 	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq, opts ...client.Option) (rsp *CreateLogicalAccountRsp, err error)
 
@@ -1343,6 +1372,26 @@ func (c *TradeConsoleServiceClientProxyImpl) ReinspectTradingAccount(ctx context
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReinspectTradingAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ResolveWalletTransfer(ctx context.Context, req *ResolveWalletTransferReq, opts ...client.Option) (*ResolveWalletTransferRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ResolveWalletTransfer")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ResolveWalletTransferRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -100,6 +100,19 @@ func (r *InspectExchangeCredentialReq) Validate() error {
 	return nil
 }
 
+func (r *ResolveWalletTransferReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TransferId) == "" {
+		return fmt.Errorf("transfer_id is required")
+	}
+	if r.Result != "COMPLETED" && r.Result != "FAILED" {
+		return fmt.Errorf("result must be COMPLETED or FAILED")
+	}
+	if len([]rune(r.Note)) > 200 {
+		return fmt.Errorf("note is too long")
+	}
+	return nil
+}
+
 func (r *ReinspectTradingAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
 		return fmt.Errorf("trading_account_id is required")

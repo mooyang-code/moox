@@ -116,7 +116,7 @@ func (e *env) before(quantity string) Outcome {
 func TestBeforeSpotBuyTransfersShortfallAndWaitsForSnapshot(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	outcome := e.before("0.01") // 0.01 × 50000 = 500，× 1.02 = 510
-	require.True(t, outcome.Pending)
+	require.True(t, waiting(outcome))
 	calls := e.exchange.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, exchange.WalletFutures, calls[0].From)
@@ -129,7 +129,7 @@ func TestBeforeSpotBuyTransfersShortfallAndWaitsForSnapshot(t *testing.T) {
 
 	// 反复调用：交易所还没确认，不会重复划转。
 	for range 3 {
-		require.True(t, e.before("0.01").Pending)
+		require.True(t, waiting(e.before("0.01")))
 	}
 	require.Len(t, e.exchange.Calls(), 1, "没有幂等键，靠本地 PENDING 记录避免重复划转")
 
@@ -138,7 +138,7 @@ func TestBeforeSpotBuyTransfersShortfallAndWaitsForSnapshot(t *testing.T) {
 	completedAt := e.now
 	e.now = e.now.Add(2 * time.Second)
 	e.markSynced(completedAt.Add(-time.Minute))
-	require.True(t, e.before("0.01").Pending)
+	require.True(t, waiting(e.before("0.01")))
 	require.Equal(t, []string{"account-1"}, e.syncs)
 	require.Equal(t, store.TransferStateCompleted, e.transfers(store.TransferToSpot)[0].State)
 	require.EqualValues(t, completedAt.UnixMilli(), e.transfers(store.TransferToSpot)[0].CompletedAt, "完成时间取交易所划转记录的时间")
@@ -146,7 +146,7 @@ func TestBeforeSpotBuyTransfersShortfallAndWaitsForSnapshot(t *testing.T) {
 	// 现货钱包的快照时间追上划转时间后放行，按现在的余额不缩小。
 	e.markSynced(completedAt)
 	outcome = e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Empty(t, outcome.BuyScale)
 	require.Len(t, e.exchange.Calls(), 1)
 }
@@ -159,17 +159,17 @@ func TestRestartRightAfterTransferCompletedResumesWithoutDuplicate(t *testing.T)
 	completedAt := e.now
 	e.now = e.now.Add(time.Second)
 	e.markSynced(completedAt.Add(-time.Hour))
-	require.True(t, e.before("0.01").Pending, "划转已完成，等快照")
+	require.True(t, waiting(e.before("0.01")), "划转已完成，等快照")
 
 	restarted := e.newService()
 	outcome, err := restarted.BeforeSpotBuy(context.Background(), "space-1", e.target, e.buys("0.01"))
 	require.NoError(t, err)
-	require.True(t, outcome.Pending, "重启后仍要等现货钱包的快照")
+	require.True(t, waiting(outcome), "重启后仍要等现货钱包的快照")
 	e.now = e.now.Add(time.Second)
 	e.markSynced(completedAt)
 	outcome, err = restarted.BeforeSpotBuy(context.Background(), "space-1", e.target, e.buys("0.01"))
 	require.NoError(t, err)
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Len(t, e.exchange.Calls(), 1)
 }
 
@@ -180,9 +180,9 @@ func TestSnapshotWaitIsBoundedByGracePeriod(t *testing.T) {
 	e.exchange.ConfirmAll()
 	e.markSynced(e.now.Add(-time.Hour))
 	e.now = e.now.Add(time.Second)
-	require.True(t, e.before("0.01").Pending)
+	require.True(t, waiting(e.before("0.01")))
 	e.now = e.now.Add(snapshotGrace)
-	require.False(t, e.before("0.01").Pending)
+	require.False(t, waiting(e.before("0.01")))
 }
 
 // 请求超时但交易所其实已经执行：下一轮靠交易所划转记录（时间窗口、金额、方向）认领，不会重复划转。
@@ -191,7 +191,7 @@ func TestTimeoutAfterDeliveryIsAdoptedFromExchangeRecordsWithoutRetry(t *testing
 	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
 	e.exchange.TransferDelivers = true
 
-	require.True(t, e.before("0.01").Pending, "结果不明按等待处理，不是错误")
+	require.True(t, waiting(e.before("0.01")), "结果不明按等待处理，不是错误")
 	rows := e.transfers(store.TransferToSpot)
 	require.Len(t, rows, 1)
 	require.Equal(t, store.TransferStatePending, rows[0].State, "结果不明：记录保持 PENDING")
@@ -202,7 +202,7 @@ func TestTimeoutAfterDeliveryIsAdoptedFromExchangeRecordsWithoutRetry(t *testing
 	e.exchange.ConfirmAll()
 	completedAt := e.now.Add(-2 * time.Second)
 	e.markSynced(completedAt)
-	require.False(t, e.before("0.01").Pending)
+	require.False(t, waiting(e.before("0.01")))
 	require.Len(t, e.exchange.Calls(), 1, "划转已经执行，不能再划一次")
 	rows = e.transfers(store.TransferToSpot)
 	require.Equal(t, store.TransferStateCompleted, rows[0].State)
@@ -213,15 +213,15 @@ func TestTimeoutAfterDeliveryIsAdoptedFromExchangeRecordsWithoutRetry(t *testing
 func TestTimeoutWithoutDeliveryRetriesOnlyAfterGracePeriod(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
-	require.True(t, e.before("0.01").Pending)
+	require.True(t, waiting(e.before("0.01")))
 	e.exchange.TransferErr = nil
 
 	e.now = e.now.Add(10 * time.Second)
-	require.True(t, e.before("0.01").Pending, "宽限期内记录里没有也不能下结论")
+	require.True(t, waiting(e.before("0.01")), "宽限期内记录里没有也不能下结论")
 	require.Len(t, e.exchange.Calls(), 1)
 
 	e.now = e.now.Add(2 * confirmGrace)
-	require.True(t, e.before("0.01").Pending, "重试已发出，等到账")
+	require.True(t, waiting(e.before("0.01")), "重试已发出，等到账")
 	require.Len(t, e.exchange.Calls(), 2)
 	rows := e.transfers(store.TransferToSpot)
 	require.Len(t, rows, 2)
@@ -238,7 +238,7 @@ func TestNewTargetWaitsForPendingTransferOfPreviousTarget(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
 	e.exchange.TransferDelivers = true
-	require.True(t, e.before("0.01").Pending)
+	require.True(t, waiting(e.before("0.01")))
 	e.exchange.TransferErr = nil
 	require.Len(t, e.exchange.Calls(), 1)
 
@@ -246,14 +246,14 @@ func TestNewTargetWaitsForPendingTransferOfPreviousTarget(t *testing.T) {
 	e.target = store.LogicalAccountTargetRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-2"}
 	e.now = e.now.Add(3 * time.Second)
 	outcome := e.before("0.01")
-	require.True(t, outcome.Pending, "有别的目标留下的未结划转，不发起新划转")
+	require.True(t, waiting(outcome), "有别的目标留下的未结划转，不发起新划转")
 	require.Len(t, e.exchange.Calls(), 1, "没有重复划转")
 
 	// 交易所把旧划转确认了：旧记录被对账认领、记入完成，目标 2 看到现货钱包有了资金，不再划转。
 	e.exchange.ConfirmAll()
 	e.markSynced(e.now)
 	outcome = e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Len(t, e.exchange.Calls(), 1)
 	old, err := e.store.ListWalletTransfersForTarget(context.Background(), "space-1", "logical-1", "target-1", "account-1", store.TransferToSpot)
 	require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestRejectedTransferScalesToZeroWithReasonAndStopsAfterRepeatedFailures(t *
 	for attempt := 1; attempt <= maxTransferFailures; attempt++ {
 		e.now = e.now.Add(time.Second)
 		outcome := e.before("0.01")
-		require.False(t, outcome.Pending)
+		require.False(t, waiting(outcome))
 		scale, ok := outcome.BuyScale["account-1"]
 		require.True(t, ok)
 		require.True(t, scale.IsZero())
@@ -294,25 +294,58 @@ func TestEnoughSpotFundsIsNotBlockedByPastTransferFailures(t *testing.T) {
 	e.exchange.TransferErr = nil
 	e.exchange.Set(func(f *wallettest.Exchange) { f.Spot = "1000" })
 	outcome := e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Empty(t, outcome.BuyScale, "现货钱包够用就直接买")
 	require.Empty(t, outcome.Reasons)
 }
 
-// 限频没发出请求：不计入连续失败，不会因为限频把目标永久拦住。
+// 限频没发出请求：不计入连续失败，不会因为限频把目标永久拦住；这个账户按退避等待后自动重试（目标保持收敛中，不是阻塞），
+// 原因是中文类别，不含英文枚举。
 func TestRateLimitedTransfersDoNotCountAsFailures(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429, Err: errors.New("429")}
 	for attempt := 1; attempt <= maxTransferFailures+2; attempt++ {
-		e.now = e.now.Add(time.Second)
+		e.now = e.now.Add(time.Minute)
 		outcome := e.before("0.01")
-		require.True(t, outcome.BuyScale["account-1"].IsZero(), "限频这一轮不买")
-		require.NotContains(t, outcome.Reasons["account-1"], "不再重试")
-		require.Len(t, e.exchange.Calls(), attempt, "限频的每一轮都继续尝试")
+		require.True(t, waiting(outcome), "限频：账户等待重试，不缩成 0、不阻塞")
+		require.Empty(t, outcome.BuyScale)
+		reason := outcome.Waiting["account-1"]
+		require.Contains(t, reason, "暂时没发出")
+		require.Contains(t, reason, "被限频或本地限流暂停")
+		require.Contains(t, reason, "HTTP 429")
+		require.NotContains(t, reason, "RATE_LIMITED")
+		require.NotContains(t, reason, "NOT_SENT")
+		require.Positive(t, outcome.RetryAfter)
+		require.Len(t, e.exchange.Calls(), attempt, "退避期过后每轮都继续尝试")
 	}
 	rows := e.transfers(store.TransferToSpot)
 	failures, _ := trailingHardFailures(rows)
 	require.Zero(t, failures)
+}
+
+// 软失败的退避在钱包服务里生效：目标每秒收敛一次，退避期内直接返回等待，不请求交易所，也不再新写划转记录。
+func TestSoftFailureBackoffDoesNotCallExchangeBeforeRetryTime(t *testing.T) {
+	e := newEnv(t, "10", "1000")
+	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorNotSent, Err: errors.New("paused")}
+	first := e.before("0.01")
+	require.True(t, waiting(first))
+	require.Len(t, e.exchange.Calls(), 1)
+	queries := e.exchange.Queries()
+	rows := len(e.transfers(store.TransferToSpot))
+	for range 5 {
+		e.now = e.now.Add(100 * time.Millisecond)
+		outcome := e.before("0.01")
+		require.True(t, waiting(outcome))
+		require.Contains(t, outcome.Waiting["account-1"], "暂时没发出", "等待期间仍说明原因")
+	}
+	require.Len(t, e.exchange.Calls(), 1)
+	require.Equal(t, queries, e.exchange.Queries(), "退避期内不查余额、不查划转记录")
+	require.Len(t, e.transfers(store.TransferToSpot), rows)
+
+	e.now = e.now.Add(first.RetryAfter)
+	e.exchange.TransferErr = nil
+	require.True(t, waiting(e.before("0.01")))
+	require.Len(t, e.exchange.Calls(), 2, "退避期过后才重试，重试成功就发出划转")
 }
 
 // 额度不足：合约钱包可划转额度的 99% 只用一次；同一个目标之后的轮次只按比例缩小，不再划转，不会把留的 1% 也用掉；告警每个目标一次。
@@ -320,7 +353,7 @@ func TestInsufficientCapacityTransfersOnceThenOnlyScales(t *testing.T) {
 	e := newEnv(t, "10", "100")
 	before := len(telemetry.Recent(telemetry.AttentionTransferShortfall, e.now, time.Minute))
 	outcome := e.before("0.01") // 需要 510
-	require.True(t, outcome.Pending)
+	require.True(t, waiting(outcome))
 	calls := e.exchange.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, "99", calls[0].Amount.String(), "不超过合约钱包可划转额度 × 0.99")
@@ -333,7 +366,7 @@ func TestInsufficientCapacityTransfersOnceThenOnlyScales(t *testing.T) {
 	e.markSynced(completedAt)
 	outcome = e.before("0.01")
 	// 到账后现货 109、合约 1：不再划第二笔，只缩放 109 / 510。
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	scale, ok := outcome.BuyScale["account-1"]
 	require.True(t, ok)
 	require.Equal(t, shared.MustDecimal("109").Div(shared.MustDecimal("510")).RoundDown(8).String(), scale.String())
@@ -352,7 +385,7 @@ func TestTransferCapacityUsesMaxWithdrawAmountNotAvailableBalance(t *testing.T) 
 	e := newEnv(t, "10", "1000")
 	e.exchange.FuturesTransferable = "200" // 有持仓浮盈：可用 1000，但最多只能转出 200
 	outcome := e.before("0.01")            // 需要 500
-	require.True(t, outcome.Pending)
+	require.True(t, waiting(outcome))
 	calls := e.exchange.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, "198", calls[0].Amount.String(), "200 × 0.99，不是 1000 × 0.99")
@@ -361,7 +394,7 @@ func TestTransferCapacityUsesMaxWithdrawAmountNotAvailableBalance(t *testing.T) 
 func TestNoFuturesFundsScalesBuysToAvailableSpotWithoutTransfer(t *testing.T) {
 	e := newEnv(t, "0", "0")
 	outcome := e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Empty(t, e.exchange.Calls())
 	scale, ok := outcome.BuyScale["account-1"]
 	require.True(t, ok)
@@ -372,28 +405,36 @@ func TestNoFuturesFundsScalesBuysToAvailableSpotWithoutTransfer(t *testing.T) {
 func TestEnoughSpotFundsDoesNotTransfer(t *testing.T) {
 	e := newEnv(t, "600", "1000")
 	outcome := e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.Empty(t, outcome.BuyScale)
 	require.Empty(t, e.exchange.Calls())
 }
 
-// 查询持续失败：返回等待，退避时间指数增长有上限，连续失败到阈值告警；恢复后清零。一个账户出问题不影响同组合的其他账户。
+// 查询持续失败：返回等待，退避时间指数增长有上限，退避期内不请求交易所；连续失败到阈值告警；恢复后清零。
 func TestQueryFailuresBackOffAlertAndRecover(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	e.exchange.QueryErr = errors.New("network down")
 	var last time.Duration
 	for attempt := 1; attempt <= queryFailureAlert+3; attempt++ {
 		outcome := e.before("0.01")
-		require.True(t, outcome.Pending)
+		require.True(t, waiting(outcome))
+		require.Contains(t, outcome.Waiting["account-1"], "稍后自动重试")
 		require.GreaterOrEqual(t, outcome.RetryAfter, last, "退避只增不减")
 		require.LessOrEqual(t, outcome.RetryAfter, maxBackoff)
 		last = outcome.RetryAfter
+		// 退避期内再来几轮：直接等待，不调交易所。
+		queries := e.exchange.Queries()
+		for range 3 {
+			require.True(t, waiting(e.before("0.01")))
+		}
+		require.Equal(t, queries, e.exchange.Queries(), "退避期内不请求交易所")
+		e.now = e.now.Add(outcome.RetryAfter)
 	}
 	require.Equal(t, maxBackoff, minDuration(last, maxBackoff))
 	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionTransferFailing, e.now, time.Minute), "连续失败要告警")
 	e.exchange.QueryErr = nil
 	outcome := e.before("0.01")
-	require.True(t, outcome.Pending, "恢复后正常发起划转")
+	require.True(t, waiting(outcome), "恢复后正常发起划转")
 	require.Zero(t, outcome.RetryAfter)
 }
 
@@ -407,20 +448,95 @@ func minDuration(a, b time.Duration) time.Duration {
 // 交易所划转记录查不出来：记录保持 PENDING、不重试划转，同样退避和告警。
 func TestListTransfersFailureKeepsPendingAndBacksOff(t *testing.T) {
 	e := newEnv(t, "10", "1000")
-	require.True(t, e.before("0.01").Pending)
+	require.True(t, waiting(e.before("0.01")))
 	e.exchange.ListErr = errors.New("rate limited")
+	e.now = e.now.Add(time.Second)
 	outcome := e.before("0.01")
-	require.True(t, outcome.Pending)
+	require.True(t, waiting(outcome))
 	require.Positive(t, outcome.RetryAfter)
 	require.Len(t, e.exchange.Calls(), 1)
 	require.Equal(t, store.TransferStatePending, e.transfers(store.TransferToSpot)[0].State)
+}
+
+// 没被额度封顶的划转完成后，价格上涨使现货钱包又差几十 U：再划一笔，不缩小买单，也不发“合约钱包可划转资金不足”告警
+// （合约钱包还有大量资金）。
+func TestUncappedTransferCompletedTransfersAgainWhenPriceRises(t *testing.T) {
+	e := newEnv(t, "10", "90000")
+	before := len(telemetry.Recent(telemetry.AttentionTransferShortfall, e.now, time.Minute))
+	require.True(t, waiting(e.before("0.01")))
+	require.Len(t, e.exchange.Calls(), 1)
+	require.False(t, e.transfers(store.TransferToSpot)[0].Capped, "金额没有被额度封顶")
+	e.exchange.ConfirmAll()
+	completedAt := e.now
+	e.now = e.now.Add(time.Second)
+	e.markSynced(completedAt)
+
+	// 价格上涨 1%：需要 515.1，现货钱包只有 510。
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Ask = "50500" })
+	outcome := e.before("0.01")
+	require.True(t, waiting(outcome), "缺的钱从合约钱包再划一笔")
+	require.Len(t, e.exchange.Calls(), 2)
+	require.Equal(t, "5.1", e.exchange.Calls()[1].Amount.String())
+	require.Empty(t, outcome.BuyScale)
+	require.Equal(t, before, len(telemetry.Recent(telemetry.AttentionTransferShortfall, e.now, time.Minute)), "合约钱包还有钱，不告警")
+}
+
+// 被额度封顶的划转在记录上有标记；它完成后这个目标不再追加，只按现有资金缩小；
+// 没封顶的划转次数也有上限，余额口径异常时不会一直追加。
+func TestCappedTransferIsMarkedAndStopsFurtherTransfers(t *testing.T) {
+	e := newEnv(t, "10", "100")
+	require.True(t, waiting(e.before("0.01")))
+	rows := e.transfers(store.TransferToSpot)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Capped, "金额小于需要的金额：被额度封顶")
+	e.exchange.ConfirmAll()
+	completedAt := e.now
+	e.now = e.now.Add(time.Second)
+	e.markSynced(completedAt)
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Futures = "5000" })
+	outcome := e.before("0.01")
+	require.False(t, waiting(outcome))
+	require.Len(t, e.exchange.Calls(), 1, "封顶的划转完成后不再追加")
+	require.NotEmpty(t, outcome.BuyScale["account-1"])
+	require.Contains(t, outcome.Reasons["account-1"], "已经划完")
+}
+
+func TestTransfersPerTargetAreLimited(t *testing.T) {
+	e := newEnv(t, "10", "90000")
+	for round := 1; round <= maxTransfersPerTarget; round++ {
+		e.exchange.Set(func(f *wallettest.Exchange) { f.Ask = fmt.Sprintf("%d", 50000*(round+1)) })
+		require.True(t, waiting(e.before("0.01")), "第 %d 笔划转", round)
+		require.Len(t, e.exchange.Calls(), round)
+		e.exchange.ConfirmAll()
+		completedAt := e.now
+		e.now = e.now.Add(time.Second)
+		e.markSynced(completedAt)
+	}
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Ask = "500000" })
+	outcome := e.before("0.01")
+	require.False(t, waiting(outcome))
+	require.Len(t, e.exchange.Calls(), maxTransfersPerTarget, "到上限不再划")
+	require.Contains(t, outcome.Reasons["account-1"], "已经划转")
+}
+
+// 记录已经不是 PENDING（人工结束或另一轮对账抢先处理）时推进它不是错误，不能当成查询失败去退避、告警。
+func TestFinishOnAlreadySettledRecordIsNotAnError(t *testing.T) {
+	e := newEnv(t, "10", "1000")
+	require.True(t, waiting(e.before("0.01")))
+	row := e.transfers(store.TransferToSpot)[0]
+	_, err := e.service.finish(context.Background(), "space-1", row, "tran-9", store.TransferStateCompleted, "", e.now.UnixMilli())
+	require.NoError(t, err)
+	stale, err := e.service.finish(context.Background(), "space-1", row, "", store.TransferStateFailed, "x", 0)
+	require.NoError(t, err, "已经完成的记录再推进：原样返回，不报错")
+	require.Equal(t, store.TransferStatePending, stale.State)
+	require.Equal(t, store.TransferStateCompleted, e.transfers(store.TransferToSpot)[0].State)
 }
 
 func TestUnsupportedAdapterScalesToZeroWithReasonInsteadOfFailingTheRound(t *testing.T) {
 	e := newEnv(t, "10", "1000")
 	e.service.Adapters = wallettest.Adapters{"account-1": noTransferAdapter{}}
 	outcome := e.before("0.01")
-	require.False(t, outcome.Pending)
+	require.False(t, waiting(outcome))
 	require.True(t, outcome.BuyScale["account-1"].IsZero())
 	require.Contains(t, outcome.Reasons["account-1"], "不可用")
 }
@@ -442,12 +558,16 @@ func TestOneAccountFailingDoesNotAffectAnother(t *testing.T) {
 	buys := append(e.buys("0.01"), Buy{Account: second, Instrument: e.buys("0.01")[0].Instrument, Quantity: shared.MustDecimal("0.01")})
 	outcome, err := e.service.BeforeSpotBuy(context.Background(), "space-1", e.target, buys)
 	require.NoError(t, err)
-	require.True(t, outcome.Pending, "健康账户的划转已发出")
+	require.True(t, waiting(outcome), "健康账户的划转已发出")
 	require.Len(t, healthy.Calls(), 1)
 	require.True(t, outcome.BuyScale["account-2"].IsZero())
 	require.NotEmpty(t, outcome.Reasons["account-2"])
 	_, hasScale := outcome.BuyScale["account-1"]
 	require.False(t, hasScale)
+	_, brokenWaits := outcome.Waiting["account-2"]
+	require.False(t, brokenWaits, "只有还在划转的账户才等待，出问题的账户另有结论")
+	_, healthyWaits := outcome.Waiting["account-1"]
+	require.True(t, healthyWaits)
 }
 
 // 归集：现货钱包多出来的资金（留 1U）达到阈值才划回合约钱包；每个目标最多归集一次。
@@ -575,3 +695,59 @@ func TestMatchesRowChecksDirectionAssetAmountAndTime(t *testing.T) {
 	tooOld.At = requestedAt.Add(-10 * time.Minute)
 	require.False(t, matchesRow(tooOld, row), "请求之前很久的同金额划转不是这一笔")
 }
+
+// 人工结束 PENDING 记录：太新的不让动；记 FAILED 带“未到账”软标记、不计入连续失败，这个目标可以重试；
+// 记 COMPLETED 之后照常等快照；已经结束的原样返回。
+func TestResolveStuckPendingTransferManually(t *testing.T) {
+	e := newEnv(t, "10", "1000")
+	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
+	require.True(t, waiting(e.before("0.01")), "结果不明：记录保持 PENDING")
+	row := e.transfers(store.TransferToSpot)[0]
+	ctx := context.Background()
+
+	_, err := Resolve(ctx, e.store, "space-1", row.TransferID, store.TransferStateFailed, "", e.now.Add(5*time.Minute))
+	require.ErrorIs(t, err, store.ErrInvalidRecord)
+	require.Contains(t, err.Error(), "先等自动对账")
+	_, err = Resolve(ctx, e.store, "space-1", row.TransferID, "PENDING", "", e.now.Add(time.Hour))
+	require.ErrorIs(t, err, store.ErrInvalidRecord)
+	_, err = Resolve(ctx, e.store, "space-1", "no-such", store.TransferStateFailed, "", e.now.Add(time.Hour))
+	require.Error(t, err)
+
+	later := e.now.Add(11 * time.Minute)
+	result, err := Resolve(ctx, e.store, "space-1", row.TransferID, store.TransferStateFailed, "交易所没有这笔", later)
+	require.NoError(t, err)
+	require.Equal(t, ResolveResult{State: store.TransferStateFailed}, result)
+	stored := e.transfers(store.TransferToSpot)[0]
+	require.Equal(t, store.TransferStateFailed, stored.State)
+	require.True(t, strings.HasPrefix(stored.LastError, softNotArrive), "人工记没到账不计入连续失败")
+	require.Contains(t, stored.LastError, "交易所没有这笔")
+	failures, _ := trailingHardFailures(e.transfers(store.TransferToSpot))
+	require.Zero(t, failures)
+
+	again, err := Resolve(ctx, e.store, "space-1", row.TransferID, store.TransferStateCompleted, "", later)
+	require.NoError(t, err)
+	require.Equal(t, ResolveResult{State: store.TransferStateFailed, AlreadySettled: true}, again, "已经结束的原样返回")
+
+	// 账户不再被这条记录挡住：目标可以重新发起划转。
+	e.exchange.TransferErr = nil
+	e.now = later
+	require.True(t, waiting(e.before("0.01")))
+	require.Len(t, e.exchange.Calls(), 2)
+}
+
+func TestResolveAsCompletedUnblocksAccountAndKeepsAmount(t *testing.T) {
+	e := newEnv(t, "10", "1000")
+	e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
+	require.True(t, waiting(e.before("0.01")))
+	row := e.transfers(store.TransferToSpot)[0]
+	later := e.now.Add(11 * time.Minute)
+	result, err := Resolve(context.Background(), e.store, "space-1", row.TransferID, store.TransferStateCompleted, "", later)
+	require.NoError(t, err)
+	require.Equal(t, store.TransferStateCompleted, result.State)
+	stored := e.transfers(store.TransferToSpot)[0]
+	require.Equal(t, later.UnixMilli(), stored.CompletedAt)
+	require.Empty(t, stored.LastError)
+}
+
+// waiting 报告本轮有没有账户在等（划转、对账、等快照或退避）。
+func waiting(outcome Outcome) bool { return len(outcome.Waiting) > 0 }

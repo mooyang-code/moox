@@ -20,7 +20,7 @@ func (b walletBridge) BeforeSpotBuy(ctx context.Context, spaceID string, record 
 		converted = append(converted, wallet.Buy{Account: buy.Account, Instrument: buy.Instrument, Quantity: buy.Quantity})
 	}
 	outcome, err := b.service.BeforeSpotBuy(ctx, spaceID, record, converted)
-	return TransferOutcome{Pending: outcome.Pending, BuyScale: outcome.BuyScale, Reasons: outcome.Reasons, RetryAfter: outcome.RetryAfter}, err
+	return TransferOutcome{Waiting: outcome.Waiting, BuyScale: outcome.BuyScale, Reasons: outcome.Reasons, RetryAfter: outcome.RetryAfter}, err
 }
 
 func (b walletBridge) Collect(ctx context.Context, spaceID string, record store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (bool, error) {

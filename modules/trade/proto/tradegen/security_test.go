@@ -15,7 +15,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 	want := map[protoreflect.FullName][]protoreflect.Name{
 		"trpc.moox.trade.TradeConsoleService": {
 			"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts",
-			"SetLeverage", "SyncTradingAccount", "InspectExchangeCredential", "ReinspectTradingAccount",
+			"SetLeverage", "SyncTradingAccount", "InspectExchangeCredential", "ReinspectTradingAccount", "ResolveWalletTransfer",
 			"CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts",
 			"UpdateLogicalAccount", "UpdateLogicalAccountOrderSettings", "UpdateLogicalAccountFundSettings", "AddLogicalAccountMember",
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
@@ -235,6 +235,7 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&SetLeverageReq{},
 		&SyncTradingAccountReq{},
 		&ReinspectTradingAccountReq{},
+		&ResolveWalletTransferReq{},
 		&GetLogicalAccountReq{},
 		&UpdateLogicalAccountReq{},
 		&UpdateLogicalAccountOrderSettingsReq{},

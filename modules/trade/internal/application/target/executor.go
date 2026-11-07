@@ -499,6 +499,19 @@ func (e *Executor) Converge(
 	var placedIDs []string
 	deferred := false
 	capDeferred := false
+	// transferWaiting 表示有执行账户的现货买单在等划转（划转、对账、等快照、失败后退避）：它们这轮不下单，
+	// 其余账户照常下单；只要还有账户在等，目标不能定终态，也不进入归集。
+	transferWaiting := false
+	var transferRetry time.Duration
+	// openBuyAccounts 是本目标里还有未完成、被挡或被顺延的现货买单的执行账户：这些账户不归集，
+	// 否则刚划进现货钱包的资金又被划回合约钱包，剩下的买单再也买不了。
+	openBuyAccounts := map[string]struct{}{}
+	// holdCollect 记下现货买单（阶段 5）里没做完的账户：被挡、被顺延，或缩小后太小。
+	holdCollect := func(stage int, action laneAction) {
+		if stage == stageSpotBuy {
+			openBuyAccounts[action.member.account.TradingAccountID] = struct{}{}
+		}
+	}
 	// deferredItems 是被每小时上限顺延的标的：写进 blocked_targets 让界面看得到原因，但不算阻塞——
 	// 全是顺延时目标定为 CONVERGED（计划 4.4），不触发“目标持续阻塞”告警；有真实阻塞时真实原因排在前面。
 	var deferredItems []store.BlockedTarget
@@ -524,29 +537,41 @@ func (e *Executor) Converge(
 			// 合约钱包可划额度不够时，现货买入按比例缩小，剩下的留到下一份目标重算。
 			scaledActions := scaleBuys(stageActions, outcome.BuyScale, outcome.Reasons)
 			for _, action := range stageActions {
+				accountID := action.member.account.TradingAccountID
+				if reason, waiting := outcome.Waiting[accountID]; waiting {
+					// 这个账户在划转、对账、等快照或失败后退避：它的买单这轮不下，不算阻塞；同组合其他账户照常下单。
+					transferWaiting = true
+					openBuyAccounts[accountID] = struct{}{}
+					if reason != "" {
+						deferredItems = append(deferredItems, store.BlockedTarget{
+							InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(), Reason: reason, Deferred: true,
+						})
+					}
+					continue
+				}
 				kept := false
 				for _, scaled := range scaledActions {
 					kept = kept || (scaled.instrument.InstrumentID == action.instrument.InstrumentID &&
-						scaled.member.account.TradingAccountID == action.member.account.TradingAccountID)
+						scaled.member.account.TradingAccountID == accountID)
 				}
 				if !kept {
-					reason := outcome.Reasons[action.member.account.TradingAccountID]
+					reason := outcome.Reasons[accountID]
 					if reason == "" {
 						reason = "合约钱包可划转的资金不足，这轮买不了"
 					}
+					openBuyAccounts[accountID] = struct{}{}
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(),
 						Reason: reason,
 					})
 				}
 			}
-			stageActions = scaledActions
-			if outcome.Pending {
-				target.BlockedTargets = blocked
-				if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-					return Result{}, err
+			transferRetry = max(transferRetry, outcome.RetryAfter)
+			stageActions = stageActions[:0:0]
+			for _, action := range scaledActions {
+				if _, waiting := outcome.Waiting[action.member.account.TradingAccountID]; !waiting {
+					stageActions = append(stageActions, action)
 				}
-				return Result{Status: StatusConverging, Action: "transfer", RetryAfter: max(transferPollInterval, outcome.RetryAfter)}, nil
 			}
 		}
 		for _, action := range stageActions {
@@ -575,6 +600,7 @@ func (e *Executor) Converge(
 					Quantity:     action.blockedQuantity(),
 					Reason:       reasonPositionUnreflected,
 				})
+				holdCollect(stage, action)
 				continue
 			}
 			placement, placeErr := e.placeAction(
@@ -595,6 +621,7 @@ func (e *Executor) Converge(
 				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
 				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
 				capDeferred = true
+				holdCollect(stage, action)
 				deferredItems = append(deferredItems, store.BlockedTarget{
 					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: reasonHourlyCapDeferred, Deferred: true,
 				})
@@ -611,6 +638,7 @@ func (e *Executor) Converge(
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: action.scaleReason,
 				})
+				holdCollect(stage, action)
 				continue
 			}
 			if placement.reason != "" {
@@ -619,6 +647,7 @@ func (e *Executor) Converge(
 					Quantity:     action.blockedQuantity(),
 					Reason:       placement.reason,
 				})
+				holdCollect(stage, action)
 				continue
 			}
 			if placement.placed {
@@ -649,8 +678,17 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusConverging, Action: "pace"}, nil
 	}
+	if transferWaiting {
+		// 有账户的现货买单还在等划转（含失败后退避重试）：目标保持收敛中，不归集、不定终态；退避期内不请求交易所。
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "transfer", RetryAfter: max(transferPollInterval, transferRetry)}, nil
+	}
 	// 阶段 6：普通账户把现货钱包里多出来的资金归集回合约钱包，归集完成才定终态。
-	if collecting, err := e.walletCollect(ctx, spaceID, target, members); err != nil {
+	// 本目标里还有没做完的现货买单的账户不归集（见 openBuyAccounts）。
+	if collecting, err := e.walletCollect(ctx, spaceID, target, members, openBuyAccounts); err != nil {
 		return Result{}, err
 	} else if collecting {
 		target.BlockedTargets = listedBlocked(blocked, deferredItems)
@@ -2074,9 +2112,23 @@ func (e *Executor) waitingOnChildren(
 }
 
 // listedBlocked 返回写进目标 blocked_targets 的列表：真实阻塞在前（监控关注项只取第一条），顺延的在后。
+// 同一个标的只列一条（blocked_targets 不允许重复标的）：已经有真实阻塞的标的不再列它的顺延。
 func listedBlocked(blocked, deferred []store.BlockedTarget) []store.BlockedTarget {
 	if len(deferred) == 0 {
 		return blocked
 	}
-	return append(append(make([]store.BlockedTarget, 0, len(blocked)+len(deferred)), blocked...), deferred...)
+	listed := make(map[string]struct{}, len(blocked)+len(deferred))
+	merged := make([]store.BlockedTarget, 0, len(blocked)+len(deferred))
+	for _, item := range blocked {
+		listed[item.InstrumentID] = struct{}{}
+		merged = append(merged, item)
+	}
+	for _, item := range deferred {
+		if _, dup := listed[item.InstrumentID]; dup {
+			continue
+		}
+		listed[item.InstrumentID] = struct{}{}
+		merged = append(merged, item)
+	}
+	return merged
 }

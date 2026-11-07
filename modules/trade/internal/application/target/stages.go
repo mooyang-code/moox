@@ -45,7 +45,7 @@ func actionStage(action laneAction) int {
 type WalletTransfer interface {
 	// BeforeSpotBuy 在现货买入前把资金划进现货钱包，并等现货钱包的快照晚于划转完成时间。
 	// buys 只含需要划转的普通账户的现货买入。每一轮收敛都会调用它：实现必须按目标 ID 查划转表保证幂等，
-	// 已经划过的不重复划，划转完成但快照还没追上时返回 Pending。
+	// 已经划过的不重复划，划转完成但快照还没追上时把该账户放进 Waiting（只挡这个账户的买单）。
 	// 合约钱包可划额度不够时，用 BuyScale 把该账户的现货买入按比例缩小（0 到 1，缺省不缩小，0 表示这轮买不了）。
 	BeforeSpotBuy(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error)
 	// Collect 在目标执行完毕后把现货钱包多出来的资金归集回合约钱包，pending 为真表示归集还没完成。
@@ -55,13 +55,14 @@ type WalletTransfer interface {
 
 // TransferOutcome 是第 4 阶段一次划转检查的结果。
 type TransferOutcome struct {
-	// Pending 为真表示还在划转或等待现货钱包快照，本轮不进入现货买入。
-	Pending bool
+	// Waiting 是本轮还不能买入的账户（键：执行账户 ID）：正在划转、等待现货钱包快照，或失败后在退避等待。
+	// 值是给人看的原因，空串表示正常等待、不用显示。只有这些账户的买单被挡，同组合的其他账户照常下单。
+	Waiting map[string]string
 	// BuyScale 是各账户现货买入要缩小到的比例（键：执行账户 ID，0 到 1）；没有条目表示不缩小。
 	BuyScale map[string]shared.Decimal
 	// Reasons 是比例缩小或为 0 的原因（键：执行账户 ID），写进 blocked_targets；没有写原因的用默认说明。
 	Reasons map[string]string
-	// RetryAfter 是建议的下次收敛间隔（划转前的查询持续失败时指数退避）；0 表示用 transferPollInterval。
+	// RetryAfter 是建议的下次收敛间隔（失败后退避的剩余时间）；0 表示用 transferPollInterval。
 	RetryAfter time.Duration
 }
 
@@ -134,18 +135,20 @@ func scaleBuys(buys []laneAction, scale map[string]shared.Decimal, reasons map[s
 }
 
 // walletCollect 执行阶段 6；没有配置划转或没有需要归集的账户时直接放行。
+// skip 是本目标里还有没做完的现货买单的执行账户：这些账户的资金还要用来买入，不归集。
 func (e *Executor) walletCollect(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	members []memberState,
+	skip map[string]struct{},
 ) (bool, error) {
 	if e.Transfers == nil {
 		return false, nil
 	}
 	var accounts []store.TradingAccountRecord
 	for _, member := range members {
-		if needsWalletTransfer(member.account) {
+		if _, open := skip[member.account.TradingAccountID]; !open && needsWalletTransfer(member.account) {
 			accounts = append(accounts, member.account)
 		}
 	}
