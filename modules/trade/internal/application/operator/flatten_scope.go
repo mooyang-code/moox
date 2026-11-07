@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 // actionType 返回清仓命令对应的动作类型：比例小于 1 是 REDUCE；只平一个标的是 DELIST_FLATTEN；否则是整组 FLATTEN。
@@ -39,7 +41,37 @@ func (c FlattenCommand) validateScope() error {
 	if c.ReduceRatio.IsNegative() || c.ReduceRatio.Cmp(shared.MustDecimal("1")) > 0 {
 		return fmt.Errorf("%w: 减仓比例必须在 0 到 1 之间", ErrInvalidCommand)
 	}
+	if c.reducing() && strings.TrimSpace(c.InstrumentID) != "" {
+		return fmt.Errorf("%w: 减仓比例和单个标的不能同时给", ErrInvalidCommand)
+	}
 	return nil
+}
+
+// instrumentIndex 是账户标的的索引：不带可交易过滤，已下架的标的也能判断是否在清仓范围内。
+type instrumentIndex struct {
+	// bySymbol 按（市场，交易所代码）找标的，所有状态。
+	bySymbol map[exchange.SymbolKey]store.InstrumentRecord
+	// spot 按基础资产找现货卖出标的（计价资产等于结算资产），有可交易的优先。
+	spot map[string]store.InstrumentRecord
+}
+
+func newInstrumentIndex(instruments []store.InstrumentRecord, settlementAsset string) instrumentIndex {
+	index := instrumentIndex{
+		bySymbol: make(map[exchange.SymbolKey]store.InstrumentRecord, len(instruments)),
+		spot:     make(map[string]store.InstrumentRecord),
+	}
+	for _, instrument := range instruments {
+		index.bySymbol[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance ||
+			instrument.QuoteAsset != settlementAsset || instrument.BaseAsset == settlementAsset {
+			continue
+		}
+		current, exists := index.spot[instrument.BaseAsset]
+		if !exists || (!exposure.Tradable(current, settlementAsset) && exposure.Tradable(instrument, settlementAsset)) {
+			index.spot[instrument.BaseAsset] = instrument
+		}
+	}
+	return index
 }
 
 // flattenScope 是一次清仓或减仓要处理的范围：只看哪个标的，以及减仓时每个持仓要减到多少。
@@ -51,7 +83,12 @@ type flattenScope struct {
 	targets map[string]shared.Decimal
 	// reducing 为真时只处理 targets 里有的持仓。
 	reducing bool
+	// ensureTargets 在账户撤单、确认、同步之后计算并落库这个账户的减仓目标，只在第一次计算，之后沿用。
+	ensureTargets func(ctx context.Context, tradingAccountID string) error
 }
+
+// narrow 报告范围是否被收窄：只平一个标的，或减仓（只处理登记过的持仓）。收窄时范围外的资产和持仓一律跳过。
+func (s flattenScope) narrow() bool { return s.instrumentID != "" || s.reducing }
 
 func (s flattenScope) includes(instrumentID string) bool {
 	return s.instrumentID == "" || s.instrumentID == instrumentID
@@ -83,81 +120,79 @@ func (s flattenScope) orderInScope(order store.OrderRecord) bool {
 	return s.includes(order.InstrumentID)
 }
 
-// reduceTargets 为减仓算出每个持仓的目标数量：减掉 ratio 比例（按交易所数量步长向下取整），余下的就是目标。
-// 现货按受管资产的余额，合约按持仓；零头（减不动一个步长）的持仓不登记。
-func (s *Service) reduceTargets(
+// reduceTargetsForAccount 为一个账户的减仓算出每个持仓的目标数量：减掉 ratio 比例（按交易所数量步长向下取整），
+// 余下的就是目标。现货按受管资产的余额，合约按持仓；减不动一个最小数量的持仓（零头）不登记，不参与减仓。
+// 调用方要在撤单确认和同步之后再算，在途子单的成交才不会让目标算偏。
+func (s *Service) reduceTargetsForAccount(
 	ctx context.Context,
 	command FlattenCommand,
-	members []store.LogicalAccountMemberRecord,
+	tradingAccountID string,
 ) (map[string]shared.Decimal, error) {
 	targets := make(map[string]shared.Decimal)
-	for _, member := range members {
-		account, err := s.Store.GetTradingAccount(ctx, command.SpaceID, member.TradingAccountID)
+	account, err := s.Store.GetTradingAccount(ctx, command.SpaceID, tradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	index := newInstrumentIndex(instruments, account.SettlementAsset)
+	add := func(instrument store.InstrumentRecord, current shared.Decimal) error {
+		step, minimum, ruleErr := baseQuantityRules(instrument)
+		if ruleErr != nil {
+			return fmt.Errorf("标的 %s 的数量规则无法解析：%w", instrument.InstrumentID, ruleErr)
+		}
+		reduce := exposure.FloorToStep(current.Abs().Mul(command.ReduceRatio), step)
+		// 现货零头和合约减仓量低于最小数量用同一个口径：减不动，不登记。
+		if reduce.IsZero() || reduce.Cmp(minimum) < 0 {
+			return nil
+		}
+		signed := reduce
+		if current.IsNegative() {
+			signed = reduce.Neg()
+		}
+		targets[scopeKey(account.TradingAccountID, instrument.InstrumentID)] = current.Sub(signed)
+		return nil
+	}
+	if account.HasPositionMarket() {
+		positions, err := s.Store.ListPositions(ctx, command.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
 		if err != nil {
 			return nil, err
 		}
-		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		for _, position := range positions {
+			quantity, err := decimalOrZero(position.SignedQuantity)
+			if err != nil {
+				return nil, err
+			}
+			instrument, found := index.bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
+			if quantity.IsZero() || !found || !exposure.Tradable(instrument, account.SettlementAsset) {
+				continue
+			}
+			if err := add(instrument, quantity); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if account.HasBalanceMarket() {
+		managed, err := s.Store.ManagedAssets(ctx, command.SpaceID, account.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
-		bySymbol := make(map[exchange.SymbolKey]store.InstrumentRecord, len(instruments))
-		for _, instrument := range instruments {
-			bySymbol[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument
-		}
-		add := func(instrument store.InstrumentRecord, current shared.Decimal) {
-			if strings.TrimSpace(command.InstrumentID) != "" && instrument.InstrumentID != command.InstrumentID {
-				return
+		for _, balance := range account.SpotBalances() {
+			if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
+				continue
 			}
-			step, _, ruleErr := baseQuantityRules(instrument)
-			if ruleErr != nil {
-				return
-			}
-			reduce := exposure.FloorToStep(current.Abs().Mul(command.ReduceRatio), step)
-			if reduce.IsZero() {
-				return
-			}
-			signed := reduce
-			if current.IsNegative() {
-				signed = reduce.Neg()
-			}
-			targets[scopeKey(account.TradingAccountID, instrument.InstrumentID)] = current.Sub(signed)
-		}
-		if account.HasPositionMarket() {
-			positions, err := s.Store.ListPositions(ctx, command.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
+			total, err := decimalOrZero(balance.Total)
 			if err != nil {
 				return nil, err
 			}
-			for _, position := range positions {
-				quantity, err := decimalOrZero(position.SignedQuantity)
-				if err != nil {
-					return nil, err
-				}
-				instrument, found := bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
-				if quantity.IsZero() || !found {
-					continue
-				}
-				add(instrument, quantity)
+			instrument, found := index.spot[balance.Asset]
+			if total.Cmp(shared.Zero()) <= 0 || !found || !exposure.Tradable(instrument, account.SettlementAsset) {
+				continue
 			}
-		}
-		if account.HasBalanceMarket() {
-			managed, err := s.Store.ManagedAssets(ctx, command.SpaceID, account.TradingAccountID)
-			if err != nil {
+			if err := add(instrument, total); err != nil {
 				return nil, err
-			}
-			byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
-			for _, balance := range account.SpotBalances() {
-				if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
-					continue
-				}
-				total, err := decimalOrZero(balance.Total)
-				if err != nil {
-					return nil, err
-				}
-				instrument, found := byAsset[balance.Asset]
-				if total.Cmp(shared.Zero()) <= 0 || !found {
-					continue
-				}
-				add(instrument, total)
 			}
 		}
 	}
@@ -186,4 +221,20 @@ func decodeTargets(encoded map[string]string) (map[string]shared.Decimal, error)
 		targets[key] = value
 	}
 	return targets, nil
+}
+
+// requireInstrumentInMembers 要求只平的标的至少能在一个被选中的成员的标的表里解析到：
+// 任何成员都解析不到时不能静默当作平完了，按无效命令失败。
+func (s *Service) requireInstrumentInMembers(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) error {
+	instrumentID := strings.TrimSpace(command.InstrumentID)
+	for _, member := range members {
+		_, err := s.Store.GetInstrumentByIDForAccount(ctx, command.SpaceID, member.TradingAccountID, instrumentID)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	return fmt.Errorf("%w: 标的 %s 在所有成员的标的表里都解析不到", ErrInvalidCommand, instrumentID)
 }

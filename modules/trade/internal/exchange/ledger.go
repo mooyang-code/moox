@@ -21,6 +21,17 @@ const (
 	LedgerOther       LedgerType = "OTHER"
 )
 
+// MarketScoped 报告这类流水是否属于某个市场：成交、手续费、已实现盈亏、资金费、强平按市场区分；
+// 划转、利息等是账户级的，不属于某个市场。
+func (t LedgerType) MarketScoped() bool {
+	switch t {
+	case LedgerTrade, LedgerFee, LedgerRealizedPnL, LedgerFundingFee, LedgerLiquidation:
+		return true
+	default:
+		return false
+	}
+}
+
 // LedgerEntry 是一条资金流水：某个资产余额的一次变动。只用于展示和对账，不参与交易决策。
 type LedgerEntry struct {
 	// ID 是交易所流水号，同一账户内唯一。

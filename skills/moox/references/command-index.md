@@ -437,7 +437,7 @@
 | `trade equity` | 查询权益曲线 |
 | `trade fills` | 列出成交 |
 | `trade holdings` | 列出账户的持仓明细 |
-| `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转） |
+| `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转）；`--market-type` 指定市场 |
 | `trade logical list` | 列出逻辑账户 |
 | `trade logical show` | 查看逻辑账户 |
 | `trade logical target` | 查看逻辑账户当前的目标 |

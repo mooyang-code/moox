@@ -263,9 +263,9 @@ func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery
 	if err != nil {
 		return exchange.LedgerPage{}, err
 	}
-	// 流水带上所属市场，同名的现货和合约代码不会混淆。
+	// 按市场区分的流水带上所属市场，同名的现货和合约代码不会混淆；账户级流水（划转等）不标市场。
 	for i := range page.Entries {
-		if page.Entries[i].Market == exchange.MarketTypeUnspecified {
+		if page.Entries[i].Market == exchange.MarketTypeUnspecified && page.Entries[i].Type.MarketScoped() {
 			page.Entries[i].Market = market
 		}
 	}

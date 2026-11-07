@@ -61,9 +61,10 @@ type marketLedgerAdapter struct {
 func (a *marketLedgerAdapter) LedgerSupported() bool { return true }
 func (a *marketLedgerAdapter) ListLedger(_ context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	a.seen = query.Market
-	return exchange.LedgerPage{Entries: []exchange.LedgerEntry{{
-		ID: "1", Time: time.UnixMilli(1000), Type: exchange.LedgerFundingFee, Asset: "USDT", Amount: shared.MustDecimal("-1"), ExchangeSymbol: "BTCUSDT",
-	}}}, nil
+	return exchange.LedgerPage{Entries: []exchange.LedgerEntry{
+		{ID: "1", Time: time.UnixMilli(1000), Type: exchange.LedgerFundingFee, Asset: "USDT", Amount: shared.MustDecimal("-1"), ExchangeSymbol: "BTCUSDT"},
+		{ID: "2", Time: time.UnixMilli(900), Type: exchange.LedgerTransfer, Asset: "USDT", Amount: shared.MustDecimal("100")},
+	}}, nil
 }
 
 type singleLedgerSource struct{ adapter execution.ExecutionAdapter }
@@ -89,6 +90,17 @@ func TestListAccountLedgerPassesMarketAndStampsEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().String())
 	require.Equal(t, exchange.MarketTypeSwap, adapter.seen)
-	require.Len(t, rsp.GetEntries(), 1)
+	require.Len(t, rsp.GetEntries(), 2)
 	require.Equal(t, tradepb.MarketType_MARKET_TYPE_SWAP, rsp.GetEntries()[0].GetMarketType())
+	require.Equal(t, tradepb.MarketType_MARKET_TYPE_UNSPECIFIED, rsp.GetEntries()[1].GetMarketType(), "划转是账户级流水，不属于某个市场")
+
+	// 账户没开通的市场被拒绝。
+	rejected, err := handler.ListAccountLedger(ctx, &tradepb.ListAccountLedgerReq{
+		TradingAccountId: "dual-1", MarketType: tradepb.MarketType_MARKET_TYPE_STOCK,
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rejected.GetRetInfo().GetCode())
+
+	// 市场枚举不合法在校验里就被拒绝。
+	require.Error(t, (&tradepb.ListAccountLedgerReq{TradingAccountId: "dual-1", MarketType: tradepb.MarketType(99)}).Validate())
 }

@@ -270,29 +270,42 @@ func (s *Service) FlattenLogicalAccount(
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
 	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
+	if scope.instrumentID != "" {
+		// 只平一个标的时，标的要能在被选中的成员里解析到：解析不到不能静默当作平完了。
+		if err := s.requireInstrumentInMembers(ctx, command, members); err != nil {
+			return result, errors.Join(err, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
+		}
+	}
 	if scope.reducing {
-		// 减仓的目标数量发起时写定，之后各轮（包括重试和重启恢复）都收敛到它，不会再减一次。
-		var resumed FlattenResult
-		if resuming {
-			resumed, _ = decodeFlattenResult(existing)
-		}
-		if len(resumed.ReduceTargets) > 0 {
-			result.ReduceTargets = resumed.ReduceTargets
-		} else {
-			targets, targetErr := s.reduceTargets(ctx, command, members)
-			if targetErr != nil {
-				return result, errors.Join(targetErr, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
-			}
-			result.ReduceTargets = encodeTargets(targets)
-			if err := s.persistFlattenProgress(ctx, &result, "RUNNING"); err != nil {
-				return result, err
+		// 减仓的目标数量每个账户只算一次：在账户撤单、确认、同步之后算好并落库，再下子单；
+		// 之后各轮（包括 FAILED、PARTIAL 后用同一个动作号重放和重启恢复）都沿用，不会再减一次。
+		var decodeErr error
+		if found {
+			if previous, _ := decodeFlattenResult(existing); len(previous.ReduceTargets) > 0 {
+				result.ReduceTargets = previous.ReduceTargets
 			}
 		}
-		decoded, decodeErr := decodeTargets(result.ReduceTargets)
+		scope.targets, decodeErr = decodeTargets(result.ReduceTargets)
 		if decodeErr != nil {
 			return result, decodeErr
 		}
-		scope.targets = decoded
+		targets := scope.targets
+		scope.ensureTargets = func(ctx context.Context, tradingAccountID string) error {
+			marker := scopeKey(tradingAccountID, "")
+			if _, done := targets[marker]; done {
+				return nil
+			}
+			computed, err := s.reduceTargetsForAccount(ctx, command, tradingAccountID)
+			if err != nil {
+				return err
+			}
+			for key, value := range computed {
+				targets[key] = value
+			}
+			targets[marker] = shared.Zero()
+			result.ReduceTargets = encodeTargets(targets)
+			return s.persistFlattenProgress(ctx, &result, "RUNNING")
+		}
 	}
 	// 预算从收到请求算起，等锁用掉的时间要扣除，加上收尾不能超过网关的调用超时。
 	budgetEnd, _ := ctx.Deadline()
@@ -394,7 +407,8 @@ func flattenConflict(other store.OperatorActionRecord, command FlattenCommand) b
 func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand) (FlattenResult, bool, error) {
 	var request flattenRequest
 	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
-	sameKind := other.ActionType == string(command.actionType()) && request.InstrumentID == strings.TrimSpace(command.InstrumentID)
+	sameKind := other.ActionType == string(command.actionType()) && request.InstrumentID == strings.TrimSpace(command.InstrumentID) &&
+		request.ReduceRatio == reduceRatioText(command)
 	if sameKind && (request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID)) {
 		return runningFlattenResult(other), true, nil
 	}
@@ -408,6 +422,14 @@ func runningFlattenResult(action store.OperatorActionRecord) FlattenResult {
 	return result
 }
 
+// reduceRatioText 是命令里减仓比例写进请求 JSON 的文本；整组清仓为空。
+func reduceRatioText(command FlattenCommand) string {
+	if command.reducing() {
+		return command.ReduceRatio.String()
+	}
+	return ""
+}
+
 func flattenRequestJSON(command FlattenCommand) (string, error) {
 	if blank(command.SpaceID) || blank(command.ActionID) ||
 		blank(command.LogicalAccountID) || blank(command.Reason) {
@@ -418,9 +440,7 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
 		InstrumentID:     strings.TrimSpace(command.InstrumentID),
 	}
-	if command.reducing() {
-		request.ReduceRatio = command.ReduceRatio.String()
-	}
+	request.ReduceRatio = reduceRatioText(command)
 	data, err := json.Marshal(request)
 	return string(data), err
 }
@@ -504,6 +524,14 @@ func (s *Service) flattenAccount(
 		result.Error = err.Error()
 		result.cause = err
 		return result, false
+	}
+	if scope.reducing && scope.ensureTargets != nil {
+		if err := scope.ensureTargets(ctx, tradingAccountID); err != nil {
+			result.addError(err)
+			result.Status = "PARTIAL"
+			result.Remaining = s.remainingForAccount(ctx, command.SpaceID, tradingAccountID, nil, &result, scope)
+			return result, false
+		}
 	}
 	attempts := s.flattenAttempts()
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -799,12 +827,7 @@ func (s *Service) flattenSwap(
 		result.addError(err)
 		return
 	}
-	bySymbol := make(map[exchange.SymbolKey]store.InstrumentRecord, len(instruments))
-	for _, instrument := range instruments {
-		if exposure.Tradable(instrument, account.SettlementAsset) {
-			bySymbol[exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)] = instrument
-		}
-	}
+	index := newInstrumentIndex(instruments, account.SettlementAsset)
 	for _, position := range positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
@@ -814,10 +837,12 @@ func (s *Service) flattenSwap(
 		if quantity.IsZero() {
 			continue
 		}
-		key := exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol).String()
-		instrument, found := bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
+		symbolKey := exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)
+		key := symbolKey.String()
+		instrument, found := index.bySymbol[symbolKey]
 		if !found {
-			if scope.instrumentID == "" {
+			// 标的表里都没有它：收窄范围时无从判断是不是范围内的，跳过；整组清仓记终结原因。
+			if !scope.narrow() {
 				reasons[key] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
 			}
 			continue
@@ -825,13 +850,18 @@ func (s *Service) flattenSwap(
 		if !scope.includes(instrument.InstrumentID) {
 			continue
 		}
-		// 减仓只处理发起时登记的持仓，并只减到目标数量；整组清仓的目标是零。
+		// 减仓只处理登记过的持仓，并只减到目标数量；整组清仓的目标是零。
 		target, inScope := scope.target(account.TradingAccountID, instrument.InstrumentID)
 		if !inScope {
 			continue
 		}
 		quantity = excess(quantity, target)
 		if quantity.IsZero() {
+			continue
+		}
+		// 范围内但已经不可交易（例如下架）：记终结原因，不空转。
+		if !exposure.Tradable(instrument, account.SettlementAsset) {
+			reasons[key] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
 			continue
 		}
 		// 永续平仓单 reduceOnly，不查最小名义金额，只有数量不符合交易所规则才平不掉。
@@ -874,7 +904,7 @@ func (s *Service) flattenSpot(
 		result.addError(err)
 		return
 	}
-	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
+	index := newInstrumentIndex(instruments, account.SettlementAsset)
 	for _, balance := range account.SpotBalances() {
 		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 			continue
@@ -888,9 +918,9 @@ func (s *Service) flattenSpot(
 		if total.Cmp(shared.Zero()) <= 0 {
 			continue
 		}
-		instrument, found := byAsset[balance.Asset]
+		instrument, found := index.spot[balance.Asset]
 		if !found {
-			if scope.instrumentID == "" {
+			if !scope.narrow() {
 				reasons[key] = flattenReason{text: "资产没有对应结算资产的标的", final: true}
 			}
 			continue
@@ -905,6 +935,10 @@ func (s *Service) flattenSpot(
 		}
 		total = excess(total, target)
 		if total.Cmp(shared.Zero()) <= 0 {
+			continue
+		}
+		if !exposure.Tradable(instrument, account.SettlementAsset) {
+			reasons[key] = flattenReason{text: "资产没有对应结算资产的标的", final: true}
 			continue
 		}
 		quote, quoteErr := s.Prices.LatestPrice(
@@ -995,7 +1029,7 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
 		account.TradingAccountID,
-		instrument.ExchangeSymbol,
+		exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 		side,
 		quantity,
 	)
@@ -1122,6 +1156,13 @@ func (s *Service) remainingForAccount(
 		}}
 	}
 	var remaining []RemainingPosition
+	instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, tradingAccountID)
+	if listErr != nil {
+		result.addError(listErr)
+		return []RemainingPosition{{Quantity: "unknown", Reason: listErr.Error()}}
+	}
+	// 标的表索引和平仓用同一份：持仓所属标的按（市场，代码）查表，不用持仓记录里可能对不上的标的 ID。
+	index := newInstrumentIndex(instruments, account.SettlementAsset)
 	if account.HasPositionMarket() {
 		positions, listErr := s.Store.ListPositions(
 			ctx, spaceID, tradingAccountID, exchange.SymbolKey{},
@@ -1141,8 +1182,12 @@ func (s *Service) remainingForAccount(
 			if quantity.IsZero() {
 				continue
 			}
-			instrumentID := position.InstrumentID
-			if instrumentID == "" {
+			instrumentID := ""
+			if instrument, found := index.bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]; found {
+				instrumentID = instrument.InstrumentID
+			} else if scope.narrow() {
+				continue // 标的表里没有它，收窄范围时不算范围内
+			} else {
 				instrumentID = position.ExchangeSymbol
 			}
 			if !scope.includes(instrumentID) {
@@ -1169,12 +1214,6 @@ func (s *Service) remainingForAccount(
 			result.addError(managedErr)
 			return nil
 		}
-		instruments, listErr := s.Store.ListInstrumentsForAccount(ctx, tradingAccountID)
-		if listErr != nil {
-			result.addError(listErr)
-			return nil
-		}
-		byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
 		result.Dust = nil
 		for _, balance := range account.SpotBalances() {
 			if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
@@ -1188,7 +1227,11 @@ func (s *Service) remainingForAccount(
 			if quantity.Cmp(shared.Zero()) <= 0 {
 				continue
 			}
-			if instrument, found := byAsset[balance.Asset]; found {
+			instrument, found := index.spot[balance.Asset]
+			if !found && scope.narrow() {
+				continue // 没有对应的现货标的，收窄范围时不算范围内
+			}
+			if found {
 				if !scope.includes(instrument.InstrumentID) {
 					continue
 				}
@@ -1201,7 +1244,8 @@ func (s *Service) remainingForAccount(
 					continue
 				}
 				// 只用本轮已拿到的报价；没有报价时只按最小数量判断，收尾不再发请求。
-				if exposure.SpotDust(quantity, result.quotes[balance.Asset], instrument) {
+				if exposure.Tradable(instrument, account.SettlementAsset) &&
+					exposure.SpotDust(quantity, result.quotes[balance.Asset], instrument) {
 					result.Dust = append(result.Dust, RemainingPosition{
 						Asset: balance.Asset, Quantity: quantity.String(), Reason: "零头，低于交易所最小数量或最小金额",
 					})
@@ -1297,12 +1341,12 @@ func flattenStatus(accounts []FlattenAccountResult, executable int) string {
 func flattenClientOrderIDForSpec(
 	actionID string,
 	accountID string,
-	symbol string,
+	key exchange.SymbolKey,
 	side exchange.Side,
 	quantity shared.Decimal,
 ) string {
 	sum := sha256.Sum256([]byte(
-		actionID + "\x00" + accountID + "\x00" + symbol + "\x00" +
+		actionID + "\x00" + accountID + "\x00" + key.String() + "\x00" +
 			string(side) + "\x00" + quantity.String(),
 	))
 	return "mf" + hex.EncodeToString(sum[:15])

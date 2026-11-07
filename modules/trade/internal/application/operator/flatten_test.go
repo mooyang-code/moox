@@ -34,7 +34,7 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 		"cancel:active-order",
 		"sync:account-a",
 		"place:" + flattenClientOrderIDForSpec(
-			"flatten-1", "account-a", "BTCUSDT", exchange.SideSell,
+			"flatten-1", "account-a", exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), exchange.SideSell,
 			shared.MustDecimal("2"),
 		),
 		"submit:child-account-a-BTC-USDT-SWAP",
@@ -205,7 +205,7 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 		ClientOrderID: flattenClientOrderIDForSpec(
 			"flatten-1",
 			"account-a",
-			"BTCUSDT",
+			exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"),
 			exchange.SideSell,
 			shared.MustDecimal("2"),
 		),

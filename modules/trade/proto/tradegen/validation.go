@@ -327,6 +327,9 @@ func (r *ListAccountLedgerReq) Validate() error {
 	if r.Limit < 0 || r.Limit > 1000 {
 		return fmt.Errorf("limit must be between 0 and 1000")
 	}
+	if !validOptionalMarketType(r.MarketType) {
+		return fmt.Errorf("market_type is invalid")
+	}
 	return nil
 }
 
@@ -343,6 +346,9 @@ func (r *PlaceManualOrderReq) Validate() error {
 	}
 	if r.DeadlineAt < 0 {
 		return fmt.Errorf("deadline_at must be zero or positive Unix milliseconds")
+	}
+	if !validOptionalMarketType(r.MarketType) {
+		return fmt.Errorf("market_type is invalid")
 	}
 	if !validOrderType(r.OrderType) ||
 		!validFillPolicy(r.FillPolicy) ||
@@ -383,7 +389,7 @@ func (r *SubmitOrderReq) Validate() error {
 		ActionId: r.ActionId, TradingAccountId: r.TradingAccountId,
 		ClientOrderId: r.ClientOrderId, InstrumentId: r.InstrumentId,
 		OrderType: r.OrderType, FillPolicy: r.FillPolicy, Side: r.Side,
-		PositionSide: r.PositionSide, Quantity: r.Quantity, LimitPrice: r.LimitPrice,
+		PositionSide: r.PositionSide, Quantity: r.Quantity, LimitPrice: r.LimitPrice, MarketType: r.MarketType,
 		Reason: r.Reason, DeadlineAt: r.DeadlineAt,
 	}).Validate()
 }
@@ -457,6 +463,11 @@ func (r *ListPositionsReq) Validate() error {
 func validExchange(value Exchange) bool {
 	_, known := Exchange_name[int32(value)]
 	return known && value != Exchange_EXCHANGE_UNSPECIFIED
+}
+
+// validOptionalMarketType 允许不填（未指定）；填了必须是已知市场。
+func validOptionalMarketType(value MarketType) bool {
+	return value == MarketType_MARKET_TYPE_UNSPECIFIED || validMarketType(value)
 }
 
 func validMarketType(value MarketType) bool {
