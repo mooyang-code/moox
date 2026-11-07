@@ -255,6 +255,14 @@ func (e *Executor) Converge(
 	}
 
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
+	if errors.Is(err, store.ErrFundSettingsUnreadable) {
+		// 资金设置的排除字段读不出来：这个组合不下单，原因写进目标，不让整个模块显示未就绪。
+		target.LastError = err.Error()
+		if updateErr := e.updateTarget(ctx, &target, StatusPending); updateErr != nil {
+			return Result{}, updateErr
+		}
+		return Result{Status: StatusPaused}, nil
+	}
 	if err != nil {
 		return Result{}, err
 	}

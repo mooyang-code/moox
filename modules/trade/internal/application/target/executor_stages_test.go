@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // newMixedExecutorFixture 建一个现货、合约都开通的模拟账户：现货钱包里有 10 个 ETH。
@@ -481,8 +483,35 @@ func TestUnreadableExclusionSettingStopsExecutorFromTrading(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{})
 	f.now = time.Now().UTC()
 
-	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err, "设置坏了不是模块级故障，不能让整个 trade 模块显示未就绪")
+	require.Equal(t, StatusPaused, result.Status)
+	require.Empty(t, f.orders.specs)
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Contains(t, target.LastError, "margin_coins", "原因写进这个目标的 LastError")
+}
+
+// 到期撤单成功后写“已过期”失败：设重试唤醒，已收敛、已阻塞的目标不被定时扫描，不设会一直卡住。
+func TestExpiryStatusWriteFailureSchedulesRetry(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+	f.now = time.UnixMilli(target.ValidUntil).Add(time.Second).UTC()
+	callback := "test:expiry_status_write_failure"
+	require.NoError(t, f.store.DBForTest().Callback().Raw().Before("gorm:raw").Register(callback, func(db *gorm.DB) {
+		if strings.Contains(db.Statement.SQL.String(), "t_logical_account_targets") && strings.HasPrefix(strings.TrimSpace(db.Statement.SQL.String()), "UPDATE") {
+			db.AddError(errors.New("状态写入失败"))
+		}
+	}))
+	defer f.store.DBForTest().Callback().Raw().Remove(callback)
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
 
 	require.Error(t, err)
-	require.Empty(t, f.orders.specs)
+	require.Equal(t, []string{"resting-eth"}, f.orders.canceled, "挂单已经撤掉")
+	require.Equal(t, expiryRetryDelay, result.RetryAfter)
 }

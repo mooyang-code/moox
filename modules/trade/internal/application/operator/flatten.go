@@ -477,6 +477,11 @@ func (s *Service) flattenAccount(
 		result.Status = "FAILED"
 		result.Error = err.Error()
 		result.cause = err
+		if errors.Is(err, store.ErrFundSettingsUnreadable) {
+			// 设置坏了重试也一样：直接以失败结束，不让动作一直 RUNNING、operator 每秒重试 30 分钟。
+			result.cause = flattenFinal{err}
+			result.decided, result.retry = true, false
+		}
 		return result, false
 	}
 	scope.settings = settings

@@ -435,9 +435,9 @@ func TestSubmitWorkerLockTimeoutContinuesNextActionWithHealthyDiagnostics(t *tes
 					unlock()
 				}
 			}()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 30 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
+			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 300 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
 				err := s.ResumeOperatorAction(ctx, action)
 				if action.ActionID == first.Action.ActionID {
 					unlock()

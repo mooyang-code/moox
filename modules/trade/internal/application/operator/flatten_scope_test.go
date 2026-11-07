@@ -304,9 +304,10 @@ func TestFlattenDoesNotTradeWhenExclusionSettingIsUnreadable(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":"BTC"}'`).Error)
 
-	_, err := fixture.service().FlattenLogicalAccount(context.Background(), flattenCommand("flatten-broken-exclusion"))
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), flattenCommand("flatten-broken-exclusion"))
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "套利底仓")
+	require.NoError(t, err, "设置坏了不是模块级故障，不能让 operator 一直未就绪")
 	require.Empty(t, placed(fixture), "排除字段读不出来不下单")
+	require.Equal(t, "FAILED", result.Action.Status, "直接以失败结束，不一直 RUNNING 被每秒重试")
+	require.Contains(t, result.Accounts[0].Error, "套利底仓")
 }
