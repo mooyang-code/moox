@@ -70,14 +70,14 @@ test("未加入组合的执行账户在弹窗里加入组合", async ({ page }) 
   });
 });
 
-test("新建模拟账户四步，只开放模拟盘，请求带市场集合", async ({ page }) => {
+test("新建模拟账户四步，测试网和生产环境也可选，请求带市场集合", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "新建账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
   await expect(dialog.getByText("1 类型").or(dialog.getByText("类型", { exact: true }))).toBeVisible();
-  await expect(dialog.locator('input[value="testnet"]')).toBeDisabled();
-  await expect(dialog.locator('input[value="prod"]')).toBeDisabled();
-  await expect(dialog.getByText("即将开放")).toHaveCount(2);
+  await expect(dialog.locator('input[value="testnet"]')).toBeEnabled();
+  await expect(dialog.locator('input[value="prod"]')).toBeEnabled();
+  await expect(dialog.getByText("即将开放")).toHaveCount(0);
   await dialog.getByRole("button", { name: "下一步" }).click();
   await field(dialog, "账户名称").fill("演示账户");
   await dialog.getByRole("button", { name: "下一步" }).click();

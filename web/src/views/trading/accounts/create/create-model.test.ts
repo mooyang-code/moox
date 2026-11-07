@@ -1,12 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { buildLiveRequest, buildPaperRequest, createDefaultForm, defaultFees, toggleMarket, validateStep } from "./create-model";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildLiveRequest,
+  buildPaperRequest,
+  createDefaultForm,
+  defaultFees,
+  restrictMarkets,
+  retryWhileSessionStarting,
+  toggleMarket,
+  validateStep
+} from "./create-model";
 
 describe("新建账户", () => {
-  it("1A 期间测试网和生产环境不能选", () => {
+  it("模拟盘、测试网、生产环境都能选", () => {
     const form = createDefaultForm();
-    expect(validateStep(form, 0)).toBe("");
-    expect(validateStep({ ...form, kind: "testnet" }, 0)).not.toBe("");
-    expect(validateStep({ ...form, kind: "prod" }, 0)).not.toBe("");
+    for (const kind of ["paper", "testnet", "prod"] as const) {
+      expect(validateStep({ ...form, kind }, 0)).toBe("");
+    }
+  });
+
+  it("实盘按检测出的可开通市场收窄勾选，没有限制时原样保留", () => {
+    expect(restrictMarkets([1, 2], [])).toEqual([1, 2]);
+    expect(restrictMarkets([1, 2], ["SPOT"])).toEqual([1]);
+    expect(restrictMarkets([2], ["SPOT"])).toEqual([1]);
+    expect(restrictMarkets([1], ["SPOT", "SWAP"])).toEqual([1]);
   });
 
   it("模拟盘请求带市场集合，永续固定全仓，新建组合时组合名称缺省取账户名", () => {
@@ -60,5 +76,23 @@ describe("新建账户", () => {
     expect(toggleMarket([1, 2], 2, false)).toEqual([1]);
     expect(defaultFees([1])).toEqual({ maker: "0.001", taker: "0.001" });
     expect(defaultFees([1, 2]).taker).toBe("0.0005");
+  });
+
+  it("加入组合只在会话还没建起来时重试，其他错误直接抛出", async () => {
+    const sleep = () => Promise.resolve();
+    const call = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("trade runtime: ExchangeSession is not configured"))
+      .mockResolvedValueOnce("ok");
+    await expect(retryWhileSessionStarting(call, { sleep })).resolves.toBe("ok");
+    expect(call).toHaveBeenCalledTimes(2);
+
+    const other = vi.fn().mockRejectedValue(new Error("先暂停自动执行"));
+    await expect(retryWhileSessionStarting(other, { sleep })).rejects.toThrow("先暂停自动执行");
+    expect(other).toHaveBeenCalledTimes(1);
+
+    const never = vi.fn().mockRejectedValue(new Error("ExchangeSession is not configured"));
+    await expect(retryWhileSessionStarting(never, { sleep, attempts: 3 })).rejects.toThrow("ExchangeSession");
+    expect(never).toHaveBeenCalledTimes(3);
   });
 });

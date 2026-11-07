@@ -40,16 +40,30 @@
         </a-select>
       </a-form-item>
       <a-form-item label="账户名称"><a-input v-model="form.name" :max-length="64" /></a-form-item>
+      <!-- 实盘：选完密钥立即检测账户类型和权限，有阻断项或没有结论时“下一步”不放行 -->
+      <InspectionPreview
+        v-if="form.kind !== 'paper'"
+        :exchange="form.exchange"
+        :environment="form.kind === 'testnet' ? 1 : 2"
+        :secret-id="form.secretId"
+        @change="onPreviewChange"
+      />
     </a-form>
 
     <!-- 3 市场与参数 -->
     <a-form v-else-if="form.step === 2" :model="form" layout="vertical">
       <a-form-item label="开通的市场" extra="一个账户可以同时开通现货和永续；永续固定全仓、USDT 结算">
         <a-space size="large">
-          <a-checkbox :model-value="form.markets.includes(1)" @change="(value: unknown) => setMarket(1, Boolean(value))"
+          <a-checkbox
+            :model-value="form.markets.includes(1)"
+            :disabled="!marketAvailable('SPOT')"
+            @change="(value: unknown) => setMarket(1, Boolean(value))"
             >现货</a-checkbox
           >
-          <a-checkbox :model-value="form.markets.includes(2)" @change="(value: unknown) => setMarket(2, Boolean(value))"
+          <a-checkbox
+            :model-value="form.markets.includes(2)"
+            :disabled="!marketAvailable('SWAP')"
+            @change="(value: unknown) => setMarket(2, Boolean(value))"
             >永续</a-checkbox
           >
         </a-space>
@@ -126,9 +140,7 @@
 
     <div class="footer">
       <a-button @click="back">{{ form.step && !locked ? "上一步" : "取消" }}</a-button>
-      <a-button v-if="form.step < 3" type="primary" :disabled="form.step === 0 && !selectedKind?.open" @click="next"
-        >下一步</a-button
-      >
+      <a-button v-if="form.step < 3" type="primary" :disabled="nextDisabled" @click="next">下一步</a-button>
       <a-button v-else-if="form.kind === 'prod'" type="primary" status="danger" :loading="submitting" @click="submit">
         开通生产账户
       </a-button>
@@ -142,6 +154,8 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, createLogicalAccount, createPaperSimulation, createTradingAccount } from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
+import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
+import type { InspectionView } from "@/components/trade-inspection/inspection";
 import { createSubmitScope } from "@/utils/submit-scope";
 import EnvMark from "../shared/env-mark.vue";
 import type { Environment } from "../shared/environment";
@@ -155,6 +169,8 @@ import {
   createDefaultForm,
   createKinds,
   defaultFees,
+  restrictMarkets,
+  retryWhileSessionStarting,
   stepTitles,
   toggleMarket,
   validateStep
@@ -172,6 +188,8 @@ const submitting = ref(false);
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const scope = createSubmitScope();
+// 实盘第二步的检测结果：allowNext 为真才能离开这一步；可开通的市场用来收窄第三步的勾选
+const preview = reactive<{ allowNext: boolean; view: InspectionView | null }>({ allowNext: false, view: null });
 // 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
 const created = reactive({ accountId: "", logicalId: "", joined: false });
 
@@ -180,7 +198,25 @@ const locked = computed(() => Boolean(created.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
 
+const nextDisabled = computed(() => {
+  if (form.step === 0) return !selectedKind.value?.open;
+  return form.step === 1 && form.kind !== "paper" && !preview.allowNext;
+});
+
 watch(visible, () => scope.invalidate());
+
+function onPreviewChange(payload: { allowNext: boolean; view: InspectionView | null }) {
+  preview.allowNext = payload.allowNext;
+  preview.view = payload.view;
+  if (payload.view) form.markets = restrictMarkets(form.markets, payload.view.availableMarkets);
+}
+
+/** 模拟盘不限制；实盘只能开通检测结果里有的市场（测试网跳过检测、没有市场列表时不限制）。 */
+function marketAvailable(market: "SPOT" | "SWAP"): boolean {
+  if (form.kind === "paper") return true;
+  const available = preview.view?.availableMarkets ?? [];
+  return !available.length || available.includes(market);
+}
 
 async function loadSecrets() {
   secretsLoading.value = true;
@@ -196,6 +232,7 @@ async function loadSecrets() {
 function open(kind: Environment) {
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
   Object.assign(created, { accountId: "", logicalId: "", joined: false });
+  Object.assign(preview, { allowNext: false, view: null });
   error.value = "";
   submitting.value = false;
   visible.value = true;
@@ -203,6 +240,7 @@ function open(kind: Environment) {
 
 function onExchangeChange() {
   form.secretId = "";
+  Object.assign(preview, { allowNext: false, view: null });
   if (form.kind !== "paper") void loadSecrets();
 }
 
@@ -222,6 +260,7 @@ function next() {
     error.value = problem;
     return;
   }
+  if (nextDisabled.value) return;
   error.value = "";
   form.step = (form.step + 1) as typeof form.step;
   if (form.step === 1 && form.kind !== "paper") void loadSecrets();
@@ -272,15 +311,17 @@ async function submit() {
         ).logical_account.logical_account_id;
         created.logicalId = target;
       }
-      // 实盘（1B）：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured。
-      // 开放实盘建账户（T5）时，在这里补等待重试或让后端像模拟盘一样在同一个事务里完成；现在实盘选项还没有开放。
-      await addLogicalAccountMember({
-        logical_account_id: target,
-        trading_account_id: created.accountId,
-        enabled: true,
-        priority: exist ? nextPriority(exist) : 1,
-        adopt_existing_exposure: false
-      });
+      // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured，等几秒重试。
+      const accountId = created.accountId;
+      await retryWhileSessionStarting(() =>
+        addLogicalAccountMember({
+          logical_account_id: target,
+          trading_account_id: accountId,
+          enabled: true,
+          priority: exist ? nextPriority(exist) : 1,
+          adopt_existing_exposure: false
+        })
+      );
       created.joined = true;
     }
   } catch (cause) {

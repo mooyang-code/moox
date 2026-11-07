@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   createPaperSimulation: vi.fn(),
   createTradingAccount: vi.fn(),
   createLogicalAccount: vi.fn(),
-  addLogicalAccountMember: vi.fn()
+  addLogicalAccountMember: vi.fn(),
+  inspectExchangeCredential: vi.fn()
 }));
 vi.mock("@/api/trade", async () => ({
   ...(await vi.importActual<typeof import("@/api/trade")>("@/api/trade")),
@@ -51,6 +52,7 @@ beforeEach(() => {
   mocks.createLogicalAccount.mockReset().mockResolvedValue({ logical_account: { logical_account_id: "la-made" } });
   mocks.createPaperSimulation.mockReset().mockResolvedValue({ account: { trading_account_id: "ta-new" } });
   mocks.addLogicalAccountMember.mockReset().mockResolvedValue({});
+  mocks.inspectExchangeCredential.mockReset();
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -107,7 +109,38 @@ describe("新建账户提交", () => {
     expect(vm.visible).toBe(true);
   });
 
-  describe("实盘路径（1A 期间界面不开放，这里直接验证提交逻辑）", () => {
+  describe("实盘路径", () => {
+    function nextButton() {
+      return [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item =>
+        item.textContent?.includes("下一步")
+      );
+    }
+
+    it("选完密钥检测通过才放行“下一步”，检测没有结论或有阻断项都不放行", async () => {
+      const vm = await openDialog();
+      vm.open("testnet");
+      Object.assign(vm.form, { step: 1, name: "实盘账户", secretId: "s1" });
+      mocks.inspectExchangeCredential.mockRejectedValueOnce(new Error("请求超时"));
+      await flushPromises();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("这次没有检测成功"));
+      expect(nextButton()?.disabled).toBe(true);
+
+      mocks.inspectExchangeCredential.mockResolvedValueOnce({
+        inspection: { account_mode: "BINANCE_STANDARD", blockers: [{ code: "WITHDRAW", message: "密钥有提现权限" }] }
+      });
+      Object.assign(vm.form, { secretId: "s2" });
+      await flushPromises();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("密钥有提现权限"));
+      expect(nextButton()?.disabled).toBe(true);
+
+      mocks.inspectExchangeCredential.mockResolvedValueOnce({
+        inspection: { account_mode: "BINANCE_STANDARD", available_markets: [1, 2] }
+      });
+      Object.assign(vm.form, { secretId: "s3" });
+      await flushPromises();
+      await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
+    });
+
     const liveForm = { kind: "testnet", secretId: "s1", name: "实盘账户", markets: [2] };
 
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {

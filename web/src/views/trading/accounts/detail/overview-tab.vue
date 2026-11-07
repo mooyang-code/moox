@@ -29,7 +29,8 @@
           </a-descriptions-item>
           <a-descriptions-item label="目标">{{ targetCoins }} 个币</a-descriptions-item>
           <a-descriptions-item label="未到位">{{ offCount }} 个</a-descriptions-item>
-          <a-descriptions-item label="被拦下">{{ (target.blocked_targets || []).length }} 个</a-descriptions-item>
+          <a-descriptions-item label="被拦下">{{ blockedCount }} 个</a-descriptions-item>
+          <a-descriptions-item v-if="deferredCount" label="顺延">{{ deferredCount }} 个</a-descriptions-item>
           <a-descriptions-item label="最近错误">{{ target.last_error || "无" }}</a-descriptions-item>
         </a-descriptions>
       </SectionBlock>
@@ -103,6 +104,9 @@ const members = computed(() =>
     .filter((item): item is typeof item & { account: NonNullable<typeof item.account> } => Boolean(item.account))
 );
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
+// 被单币每小时上限顺延的标的不算被拦下，单独计数
+const blockedCount = computed(() => (target.value?.blocked_targets || []).filter(item => !item.deferred).length);
+const deferredCount = computed(() => (target.value?.blocked_targets || []).filter(item => item.deferred).length);
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);
 const targetTone = computed(() => {
   switch (target.value?.status) {

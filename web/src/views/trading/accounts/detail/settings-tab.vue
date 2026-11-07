@@ -99,14 +99,28 @@
       </a-table>
     </SectionBlock>
 
-    <!-- 挂载点：下单设置（T14）。接入时用对应的表单组件替换下面这一行。 -->
     <SectionBlock title="下单设置">
-      <p class="placeholder">暂未提供。</p>
+      <OrderSettingsForm
+        :settings="settingsOf.order_settings"
+        :error="settingsOf.order_settings_error"
+        :settlement-asset="logical.settlement_asset"
+        :saving="savingOrder"
+        @save="saveOrderSettings"
+        @refresh="reload"
+      />
     </SectionBlock>
 
-    <!-- 挂载点：资金设置（T22）。接入时用对应的表单组件替换下面这一行。 -->
     <SectionBlock title="资金设置">
-      <p class="placeholder">暂未提供。</p>
+      <FundSettingsForm
+        :settings="settingsOf.fund_settings"
+        :error="settingsOf.fund_settings_error"
+        :paper="logical.execution_mode === 1"
+        :non-binance="nonBinance"
+        :settlement-asset="logical.settlement_asset"
+        :saving="savingFund"
+        @save="saveFundSettings"
+        @refresh="reload"
+      />
     </SectionBlock>
 
     <SectionBlock title="组合设置">
@@ -182,6 +196,15 @@ import { computed, inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { exchangeLabels, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
+import {
+  updateLogicalAccountFundSettings,
+  updateLogicalAccountOrderSettings,
+  type FundSettings,
+  type LogicalAccountWithSettings,
+  type OrderSettings
+} from "@/api/trade/settings";
+import FundSettingsForm from "../../settings/fund-settings-form.vue";
+import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
 import { fmtClock, fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
@@ -218,12 +241,20 @@ const allLogicals = ref<LogicalAccount[]>([]);
 const comboName = ref(logical.value.name);
 const renaming = ref(false);
 const removeVisible = ref(false);
+const savingOrder = ref(false);
+const savingFund = ref(false);
 const removeTarget = ref<TradingAccount | null>(null);
 
 const rows = computed(() =>
   (logical.value.members || [])
     .map(member => ({ ...member, account: accounts.value.get(member.trading_account_id) }))
     .filter((item): item is typeof item & { account: TradingAccount } => Boolean(item.account))
+);
+// 组合详情里带着当前生效的下单设置和资金设置（读不出来时带 *_error，表单会禁止保存）
+const settingsOf = computed(() => logical.value as LogicalAccountWithSettings);
+// 后端按全部成员（含停用的）判断组合里有没有非币安账户；查不到账户信息的成员按非币安算，宁可少开放
+const nonBinance = computed(() =>
+  (logical.value.members || []).some(member => (accounts.value.get(member.trading_account_id)?.exchange ?? 0) !== 1)
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 const hasPositions = computed(
@@ -268,6 +299,32 @@ async function submitRemove() {
   return true;
 }
 
+async function saveOrderSettings(settings: OrderSettings) {
+  savingOrder.value = true;
+  try {
+    await updateLogicalAccountOrderSettings(logical.value.logical_account_id, settings);
+    Message.success("下单设置已保存");
+    await reload();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    savingOrder.value = false;
+  }
+}
+
+async function saveFundSettings(settings: FundSettings) {
+  savingFund.value = true;
+  try {
+    await updateLogicalAccountFundSettings(logical.value.logical_account_id, settings);
+    Message.success("资金设置已保存");
+    await reload();
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    savingFund.value = false;
+  }
+}
+
 async function renameCombo() {
   renaming.value = true;
   try {
@@ -288,12 +345,6 @@ async function renameCombo() {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-3);
-}
-
-.placeholder {
-  margin: 0;
-  color: var(--color-text-3);
-  font-size: 13px;
 }
 
 .combo-form {

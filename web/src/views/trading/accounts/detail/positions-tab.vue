@@ -67,6 +67,7 @@
               </div>
               <span v-if="record.deviationSpot === null && record.deviationSwap === null" class="tx-muted">保持</span>
               <span v-else-if="record.state === 'ok'" class="tx-muted">到位</span>
+              <div v-if="record.deferredReason" class="tx-muted">顺延：{{ record.deferredReason }}</div>
             </template>
           </template>
         </a-table-column>
