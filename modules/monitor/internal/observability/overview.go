@@ -1100,6 +1100,7 @@ var TradeAttentionNames = map[string]string{
 	"unknown_results":    "下单结果未知偏多",
 	"inspection_blocked": "交易账户密钥检测发现阻断项",
 	"inspection_failing": "交易账户密钥检测连续失败",
+	"transfer_shortfall": "合约钱包可划转资金不足，现货买入被缩小",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

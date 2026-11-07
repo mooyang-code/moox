@@ -68,6 +68,8 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionTargetRejected: telemetry.Recent(telemetry.AttentionTargetRejected, now, rejectionWindow),
 		telemetry.AttentionTargetReversal: telemetry.Recent(telemetry.AttentionTargetReversal, now, rejectionWindow),
 		telemetry.AttentionRateLimited:    telemetry.Recent(telemetry.AttentionRateLimited, now, rejectionWindow),
+		// 划转额度不足每轮收敛都会记一次，保留窗口内持续上报。
+		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)

@@ -27,6 +27,8 @@ const (
 	AttentionInspectionBlocked = "inspection_blocked"
 	// AttentionInspectionFailing 是密钥复查连续多次没有检测成功。
 	AttentionInspectionFailing = "inspection_failing"
+	// AttentionTransferShortfall 是普通账户合约钱包可划转的资金不够，现货买入被按比例缩小。
+	AttentionTransferShortfall = "transfer_shortfall"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -34,7 +36,7 @@ var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
-	AttentionInspectionBlocked, AttentionInspectionFailing,
+	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

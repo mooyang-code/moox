@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -98,6 +99,12 @@ func (s *ConsoleServer) ListAccountLedger(
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
+	// 普通账户的钱包划转记在本地划转表里，合并进流水（流水本身仍然即查、不落库）。
+	transfers, err := s.Store.ListWalletTransfersByAccount(ctx, spaceID, req.GetTradingAccountId(), start.UnixMilli(), end.UnixMilli())
+	if err != nil {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
+	}
+	page.Entries, page.HasMore = mergeTransferEntries(page.Entries, transfers, limit, page.HasMore)
 	rsp := &tradepb.ListAccountLedgerRsp{RetInfo: success(), HasMore: page.HasMore}
 	for _, entry := range page.Entries {
 		// 流水所属市场只给按市场区分的类型；划转、利息等账户级流水不属于某个市场，留空。
@@ -114,6 +121,38 @@ func (s *ConsoleServer) ListAccountLedger(
 		})
 	}
 	return rsp, nil
+}
+
+// mergeTransferEntries 把已完成的钱包划转合并进流水，按时间倒序取最新的 limit 条；
+// 划转是账户级流水，不属于某个市场；方向写在说明里。多出来的部分标记还有更多。
+func mergeTransferEntries(entries []exchange.LedgerEntry, transfers []store.WalletTransferRecord, limit int, hasMore bool) ([]exchange.LedgerEntry, bool) {
+	merged := append([]exchange.LedgerEntry(nil), entries...)
+	for _, transfer := range transfers {
+		if transfer.State != store.TransferStateCompleted {
+			continue
+		}
+		amount, err := shared.ParseDecimal(transfer.Amount)
+		if err != nil {
+			continue
+		}
+		at := transfer.CompletedAt
+		if at <= 0 {
+			at = transfer.RequestedAt
+		}
+		info := "合约钱包 → 现货钱包"
+		if transfer.Direction == store.TransferToFutures {
+			info = "现货钱包 → 合约钱包（归集）"
+		}
+		merged = append(merged, exchange.LedgerEntry{
+			ID: "transfer:" + transfer.TransferID, Time: time.UnixMilli(at).UTC(), Type: exchange.LedgerTransfer,
+			ExchangeType: "WALLET_TRANSFER_" + transfer.Direction, Asset: transfer.Asset, Amount: amount, Info: info,
+		})
+	}
+	exchange.SortLedgerNewestFirst(merged)
+	if limit > 0 && len(merged) > limit {
+		merged, hasMore = merged[:limit], true
+	}
+	return merged, hasMore
 }
 
 // FlattenTradingAccount 只平组合账户里的一个执行账户。
