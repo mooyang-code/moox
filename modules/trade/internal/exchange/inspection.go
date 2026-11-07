@@ -143,7 +143,9 @@ func (i *Inspection) ApplyFindings(markets []MarketType) {
 	for _, finding := range i.Blockers {
 		base[finding.Message] = struct{}{}
 	}
-	for _, finding := range i.BlockersFor(i.AvailableMarkets) {
+	// 按现货和永续都开通来算（不是按“这把密钥现在能开通的市场”：OKX 现货模式、没有合约交易权限时 SWAP 不在可开通市场里，
+	// 但正是这种密钥需要提醒“开通永续时会被阻断”）。
+	for _, finding := range i.BlockersFor([]MarketType{MarketTypeSpot, MarketTypeSwap}) {
 		if _, ok := base[finding.Message]; ok {
 			continue
 		}

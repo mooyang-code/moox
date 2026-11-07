@@ -103,6 +103,34 @@ func TestInspectPreviewTurnsHedgeModeIntoWarning(t *testing.T) {
 	}
 }
 
+// OKX 现货模式（acctLv=1）有交易权限：SWAP 不在可开通市场里，预览（不带市场）仍要有“开通永续时会被阻断”的提醒。
+func TestInspectPreviewWarnsAboutSpotModeAccountOpeningSwap(t *testing.T) {
+	body := configReply(t, func(row map[string]any) {
+		row["perm"] = "read_only,trade"
+		row["posMode"] = "net_mode"
+		row["acctLv"] = "1"
+	})
+	result, err := inspectAgainst(t, http.StatusOK, body, exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Blockers) != 0 {
+		t.Fatalf("预览不应有和市场有关的阻断项：%+v", result.Blockers)
+	}
+	if !hasFinding(result.Warnings, exchange.FindingSpotModeWithSwap) {
+		t.Fatalf("现货模式开永续应写成提醒：%+v", result.Warnings)
+	}
+	// 没有交易权限同样提醒（SWAP 不在可开通市场里）。
+	readOnly := configReply(t, func(row map[string]any) { row["perm"] = "read_only"; row["posMode"] = "net_mode"; row["acctLv"] = "2" })
+	result, err = inspectAgainst(t, http.StatusOK, readOnly, exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(result.Warnings, exchange.FindingMarketNotPermitted) {
+		t.Fatalf("没有合约交易权限应写成提醒：%+v", result.Warnings)
+	}
+}
+
 func TestInspectUnifiedAccountPasses(t *testing.T) {
 	for _, level := range []string{"2", "3", "4"} {
 		replaced := configReply(t, func(row map[string]any) {
