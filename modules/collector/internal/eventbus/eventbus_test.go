@@ -189,23 +189,23 @@ func TestHookFailureRaisesAttentionAfterThreshold(t *testing.T) {
 	calls := 0
 	hub.OnConnected("K 线合成消费者", func(context.Context, *jetstream.Client) (func() error, error) {
 		calls++
-		if calls <= 3 {
+		if calls <= 5 {
 			return nil, errors.New("创建消费者失败")
 		}
 		return nil, nil
 	})
-	detail := "K 线合成消费者 连续 3 次启动失败：创建消费者失败"
-	for i := 1; i <= 3; i++ {
+	detail := "K 线合成消费者 连续 3 次以上启动失败：创建消费者失败"
+	for i := 1; i <= 5; i++ {
 		require.NoError(t, hub.Ensure(context.Background()))
 		want := 0.0
-		if i == 3 {
+		if i >= 3 { // 之后继续失败，detail 不变，不会一分钟多一条新序列
 			want = 1.0
 		}
 		require.Equal(t, want, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, detail)), "第 %d 次失败后", i)
 		now = now.Add(2 * time.Minute)
 	}
 	require.NoError(t, hub.Ensure(context.Background()))
-	require.Equal(t, 4, calls)
+	require.Equal(t, 6, calls)
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, "")), "成功之后恢复")
 }
 
@@ -243,7 +243,7 @@ func TestInvalidOutboxEventIsParkedAndDoesNotBlockTheRest(t *testing.T) {
 	dead, err := db.Resample().DeadEvents(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, dead)
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有 1 条无效事件被搁置，需要人工查看")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有无效事件被搁置，需要人工查看")))
 }
 
 // 发件箱里最老的事件超过 10 分钟没发布出去：上报关注项；发布出去之后恢复。
@@ -266,5 +266,5 @@ func TestRelayReportsStuckOutboxAndRecovers(t *testing.T) {
 
 	now = now.Add(StuckAfter + time.Minute)
 	require.Error(t, relay.Flush(context.Background()))
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有事件 11 分钟没发布出去（EventBus 连不上或发布被拒）")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindOutboxStuck, "事件发件箱有事件超过 10 分钟没发布出去（EventBus 连不上或发布被拒）")))
 }

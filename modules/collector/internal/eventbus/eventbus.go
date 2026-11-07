@@ -137,6 +137,7 @@ func (h *Hub) runHooks(ctx context.Context) {
 }
 
 // publishHookAttention 上报连续失败达到阈值的回调；恢复后值回到 0。
+// detail 里不放会变的数字（次数、时长）：每个不同的 detail 是一条新序列，Monitor 会保留旧序列 24 小时，序列越积越多会让检查被误判为已移除。
 func (h *Hub) publishHookAttention() {
 	if h.Attention == nil {
 		return
@@ -144,7 +145,7 @@ func (h *Hub) publishHookAttention() {
 	var details []string
 	for _, item := range h.hooks {
 		if !item.done && item.failures >= HookFailureThreshold {
-			details = append(details, fmt.Sprintf("%s 连续 %d 次启动失败：%s", item.name, item.failures, stableReason(item.lastErr)))
+			details = append(details, fmt.Sprintf("%s 连续 %d 次以上启动失败：%s", item.name, HookFailureThreshold, stableReason(item.lastErr)))
 		}
 	}
 	h.Attention.Set("eventbus_hooks", map[string][]string{attention.KindConsumerFailed: details})
@@ -308,11 +309,11 @@ func (r *Relay) reportAttention(ctx context.Context) {
 	var details []string
 	if pending, err := r.Outbox.PendingEvents(ctx, 1); err == nil && len(pending) > 0 {
 		if age := r.Now().Sub(pending[0].CreatedAt); age > StuckAfter {
-			details = append(details, fmt.Sprintf("事件发件箱有事件 %d 分钟没发布出去（EventBus 连不上或发布被拒）", int(age/time.Minute)))
+			details = append(details, fmt.Sprintf("事件发件箱有事件超过 %d 分钟没发布出去（EventBus 连不上或发布被拒）", int(StuckAfter/time.Minute)))
 		}
 	}
 	if dead, err := r.Outbox.DeadEvents(ctx); err == nil && dead > 0 {
-		details = append(details, fmt.Sprintf("事件发件箱有 %d 条无效事件被搁置，需要人工查看", dead))
+		details = append(details, "事件发件箱有无效事件被搁置，需要人工查看")
 	}
 	r.Attention.Set("outbox", map[string][]string{attention.KindOutboxStuck: details})
 }

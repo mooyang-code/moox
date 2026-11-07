@@ -267,7 +267,7 @@ func TestDetectorPublishesOncePerNoticeAndRaisesAttention(t *testing.T) {
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "")))
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "连续失败不到 3 次不告警")
 	detector.RunOnce(ctx) // 第 3 次失败
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 连续 3 次失败：超时")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 连续 3 次以上失败：超时")))
 
 	detector.RunOnce(ctx) // 恢复，同一条下架不再重复发布
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))

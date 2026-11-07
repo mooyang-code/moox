@@ -131,7 +131,7 @@ func (d *Detector) publishLocked() {
 	items := map[string][]string{}
 	for name, count := range d.failures {
 		if count >= SourceFailureThreshold {
-			items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], fmt.Sprintf("%s 连续 %d 次失败：%s", name, count, stable(d.lastErr[name])))
+			items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], fmt.Sprintf("%s 连续 %d 次以上失败：%s", name, SourceFailureThreshold, stable(d.lastErr[name])))
 		}
 	}
 	for name, missing := range d.keyGone {
