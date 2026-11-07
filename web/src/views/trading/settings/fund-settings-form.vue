@@ -61,7 +61,37 @@
       </a-form-item>
     </section>
 
-    <a-alert v-if="!liveOnly" type="info" class="settings-error">
+    <section v-if="marginMonitor" class="settings-group">
+      <h4>保证金率监控</h4>
+      <p class="settings-hint">
+        只对实盘组合生效，币安、OKX
+        都适用。触发后会暂停这个组合的自动执行，并把每个持仓按“触发后减仓比例”同比例减掉；普通账户还会把现货钱包里的
+        {{ unit }} 归集回合约钱包。触发后组合保持暂停，需要你确认账户安全后手动恢复。
+      </p>
+      <a-form-item label="关闭保证金率监控" extra="开启后不再监控，触发条件满足也不会暂停组合或减仓">
+        <a-switch v-model="model.margin_monitor_disabled" />
+      </a-form-item>
+      <a-form-item
+        label="普通账户触发阈值"
+        extra="合约钱包权益 ÷ 合约持仓名义，不高于这个值时触发。留空用默认 0.5，范围大于 0 且不超过 10"
+      >
+        <a-input v-model="model.margin_ratio_threshold" placeholder="默认 0.5" />
+      </a-form-item>
+      <a-form-item
+        label="统一账户触发阈值（uniMMR）"
+        extra="统一账户的 uniMMR 低于这个值时触发。留空用默认 1.5，范围大于 1 且不超过 100"
+      >
+        <a-input v-model="model.unified_mmr_threshold" placeholder="默认 1.5" />
+      </a-form-item>
+      <a-form-item label="触发后减仓比例" extra="每个持仓各减掉的比例，0.1 表示 10%。留空用默认 0.1，范围大于 0 且小于 1">
+        <a-input v-model="model.margin_reduce_ratio" placeholder="默认 0.1" />
+      </a-form-item>
+    </section>
+
+    <a-alert v-if="paper" type="info" class="settings-error">
+      模拟盘组合没有资金维护任务，BNB、稳定币保证金和保证金率监控都不显示。
+    </a-alert>
+    <a-alert v-else-if="!liveOnly" type="info" class="settings-error">
       BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只对币安实盘组合生效，这个组合不显示。
     </a-alert>
     <a-alert v-if="formError" type="error" class="settings-error">{{ formError }}</a-alert>
@@ -73,7 +103,7 @@
       <a-button @click="restore">还原</a-button>
       <a-popconfirm
         v-if="props.error"
-        content="按默认值重置会丢掉原来保存的全部资金设置（包括稳定币保证金、保证金币、底仓），确认重置？"
+        content="按默认值重置会丢掉原来保存的全部资金设置（包括稳定币保证金、保证金币、底仓、保证金率监控），确认重置？"
         @ok="resetToDefault"
       >
         <a-button status="danger">按默认值重置</a-button>
@@ -90,13 +120,14 @@ import {
   defaultFundSettings,
   fundSettingsToModel,
   showsLiveOnlyFields,
+  showsMarginMonitor,
   validateFundSettingsModel
 } from "./fund-settings-form";
 
 /**
  * 资金设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
  * 由父组件调用 updateLogicalAccountFundSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
- * paper、nonBinance 为真时不显示仅币安实盘生效的项。
+ * paper、nonBinance 为真时不显示仅币安实盘生效的项；paper 为真时也不显示保证金率监控（它不分交易所，只看是不是实盘）。
  */
 const props = defineProps<{
   settings?: FundSettings;
@@ -114,6 +145,7 @@ const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
 const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance, settlementAsset: props.settlementAsset }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
+const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
 
 const model = reactive(fundSettingsToModel(props.settings));

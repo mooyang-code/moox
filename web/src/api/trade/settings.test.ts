@@ -31,4 +31,21 @@ describe("Trade settings API", () => {
       { silent: true }
     );
   });
+
+  it("资金设置里的保证金率监控字段原样带给后端", async () => {
+    const fund = {
+      reserve_ratio: "0.05",
+      margin_ratio_threshold: "0.4",
+      unified_mmr_threshold: "1.3",
+      margin_reduce_ratio: "0.2",
+      margin_monitor_disabled: true
+    } as Parameters<typeof updateLogicalAccountFundSettings>[1];
+    await updateLogicalAccountFundSettings("logical-1", fund);
+    expect(callTrade).toHaveBeenLastCalledWith(
+      "console",
+      "UpdateLogicalAccountFundSettings",
+      { logical_account_id: "logical-1", settings: fund },
+      { silent: true }
+    );
+  });
 });

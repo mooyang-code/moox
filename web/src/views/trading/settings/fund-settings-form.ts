@@ -16,9 +16,14 @@ export interface FundSettingsModel {
   margin_coins: AssetRow[];
   /** 套利底仓，逗号或空格分隔 */
   arbitrage_base_assets: string;
+  /** 以下三项空表示用默认值 */
+  margin_ratio_threshold: string;
+  unified_mmr_threshold: string;
+  margin_reduce_ratio: string;
+  margin_monitor_disabled: boolean;
 }
 
-/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示。 */
+/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示；保证金率监控不分交易所，只有模拟盘不显示。 */
 export interface FundFormScope {
   /** 模拟盘组合没有资金维护任务 */
   paper?: boolean;
@@ -35,13 +40,22 @@ export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
   return !scope.paper && !scope.nonBinance;
 }
 
+/** 保证金率监控只对实盘账户生效，币安、OKX 都适用，所以不跟 nonBinance 走。 */
+export function showsMarginMonitor(scope: FundFormScope = {}): boolean {
+  return !scope.paper;
+}
+
 export function defaultFundSettings(): FundSettings {
   return {
     reserve_ratio: "0",
     bnb_discount: false,
     bnb_reserve_amount: "0",
     dust_convert_enabled: false,
-    dust_convert_interval_days: 15
+    dust_convert_interval_days: 15,
+    margin_ratio_threshold: "",
+    unified_mmr_threshold: "",
+    margin_reduce_ratio: "",
+    margin_monitor_disabled: false
   };
 }
 
@@ -61,7 +75,11 @@ export function fundSettingsToModel(settings?: FundSettings): FundSettingsModel 
     dust_convert_interval_days: value.dust_convert_interval_days || 15,
     stablecoin_margin: rows(value.stablecoin_margin),
     margin_coins: rows(value.margin_coins),
-    arbitrage_base_assets: (value.arbitrage_base_assets || []).join(", ")
+    arbitrage_base_assets: (value.arbitrage_base_assets || []).join(", "),
+    margin_ratio_threshold: value.margin_ratio_threshold ?? "",
+    unified_mmr_threshold: value.unified_mmr_threshold ?? "",
+    margin_reduce_ratio: value.margin_reduce_ratio ?? "",
+    margin_monitor_disabled: Boolean(value.margin_monitor_disabled)
   };
 }
 
@@ -70,6 +88,38 @@ const assetPattern = /^[A-Z0-9]{1,20}$/;
 
 function isDecimal(value: string): boolean {
   return decimalPattern.test(value.trim());
+}
+
+/** 保证金率监控的三个数：留空取默认值；填了必须是区间内的数。区间和后端一致，开关关闭时也照样校验。 */
+const marginFields = [
+  {
+    key: "margin_ratio_threshold",
+    label: "普通账户触发阈值",
+    range: "大于 0 且不超过 10",
+    valid: (n: number) => n > 0 && n <= 10
+  },
+  {
+    key: "unified_mmr_threshold",
+    label: "统一账户触发阈值",
+    range: "大于 1 且不超过 100",
+    valid: (n: number) => n > 1 && n <= 100
+  },
+  {
+    key: "margin_reduce_ratio",
+    label: "触发后减仓比例",
+    range: "大于 0 且小于 1",
+    valid: (n: number) => n > 0 && n < 1
+  }
+] as const;
+
+function validateMarginMonitor(model: FundSettingsModel): string {
+  for (const field of marginFields) {
+    const text = model[field.key].trim();
+    if (text !== "" && (!isDecimal(text) || !field.valid(Number(text)))) {
+      return `${field.label}必须是${field.range}的数字，留空表示用默认值`;
+    }
+  }
+  return "";
 }
 
 /** 精确求和：按最长小数位放大成整数，避免 0.1 + 0.2 这类浮点误差。 */
@@ -150,7 +200,7 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
   if (liveOnly && Number(model.bnb_reserve_amount) > 0 && owners.has("BNB")) {
     return `开启 BNB 保留时，BNB 不能同时出现在${owners.get("BNB")}里`;
   }
-  return "";
+  return showsMarginMonitor(scope) ? validateMarginMonitor(model) : "";
 }
 
 function recordOf(list: AssetRow[]): Record<string, string> | undefined {
@@ -158,11 +208,15 @@ function recordOf(list: AssetRow[]): Record<string, string> | undefined {
   return Object.fromEntries(list.map(row => [row.asset.trim().toUpperCase(), row.value.trim()]));
 }
 
+/** 空串按“用默认值”提交：不带这个字段。 */
+const orUndefined = (value: string): string | undefined => value.trim() || undefined;
+
 /** 不显示的项（模拟盘、含非币安成员）一律按默认值提交，不带过期的旧值。 */
 export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFormScope = {}): FundSettings {
   const base = parseAssetList(model.arbitrage_base_assets);
   const liveOnly = showsLiveOnlyFields(scope);
   const defaults = defaultFundSettings();
+  const margin = showsMarginMonitor(scope);
   return {
     reserve_ratio: model.reserve_ratio.trim(),
     bnb_discount: liveOnly ? model.bnb_discount : defaults.bnb_discount,
@@ -171,6 +225,10 @@ export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFo
     dust_convert_interval_days: liveOnly ? model.dust_convert_interval_days : defaults.dust_convert_interval_days,
     stablecoin_margin: liveOnly ? recordOf(model.stablecoin_margin) : undefined,
     margin_coins: recordOf(model.margin_coins),
-    arbitrage_base_assets: base.length > 0 ? base : undefined
+    arbitrage_base_assets: base.length > 0 ? base : undefined,
+    margin_ratio_threshold: margin ? orUndefined(model.margin_ratio_threshold) : undefined,
+    unified_mmr_threshold: margin ? orUndefined(model.unified_mmr_threshold) : undefined,
+    margin_reduce_ratio: margin ? orUndefined(model.margin_reduce_ratio) : undefined,
+    margin_monitor_disabled: margin ? model.margin_monitor_disabled : false
   };
 }

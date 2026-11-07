@@ -256,11 +256,56 @@ async function gateway(route: Route) {
           ]
         })
       });
-    case "ListOrders":
+    case "ListOrders": {
+      const matched = orders.filter(
+        item => (!body.only_open || item.state === "OPEN") && (!body.owner_type || item.owner_type === body.owner_type)
+      );
+      return route.fulfill({
+        json: ok({ orders: matched, page_result: { page: 1, size: 20, total: matched.length } })
+      });
+    }
+    case "SummarizeAccountPnl":
+      // 和后端一致：proto3 的零值不出现，funding_truncated 为 false 时不返回
       return route.fulfill({
         json: ok({
-          orders: body.only_open ? [orders[1]] : orders,
-          page_result: { page: 1, size: 20, total: body.only_open ? 1 : 2 }
+          fees: [
+            { asset: "USDT", amount: "0.016" },
+            { asset: "BNB", amount: "0.0004" }
+          ],
+          realized_pnl: [{ asset: "USDT", amount: "12.5" }],
+          funding_fees: [{ asset: "USDT", amount: "-0.8" }],
+          fill_count: "3",
+          funding_available: true,
+          funding_from: String(NOW - 7 * 86_400_000)
+        })
+      });
+    case "ListOperatorActions":
+      return route.fulfill({
+        json: ok({
+          actions: [
+            {
+              action_id: "act-2",
+              logical_account_id: body.logical_account_id,
+              action_type: "DELIST_FLATTEN",
+              reason: "ABC 即将下架",
+              status: "COMPLETED",
+              result_json: '{"unblocked":true}',
+              created_at: String(NOW - 120_000),
+              updated_at: String(NOW - 60_000)
+            },
+            {
+              action_id: "act-1",
+              logical_account_id: body.logical_account_id,
+              action_type: "REDUCE",
+              reason: "保证金率过低",
+              status: "FAILED",
+              result_json: "",
+              last_error: "撤单失败",
+              created_at: String(NOW - 3_600_000),
+              updated_at: String(NOW - 3_500_000)
+            }
+          ].filter(item => !body.action_type || item.action_type === body.action_type),
+          page_result: { page: 1, size: 10, total: 2 }
         })
       });
     case "ListFills":

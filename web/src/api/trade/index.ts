@@ -3,6 +3,7 @@ export { TradeResponseError } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
+  BlockedInstrument,
   CreateTradingAccountReq,
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
@@ -13,6 +14,7 @@ import type {
   Holding,
   LedgerEntry,
   ListAccountLedgerReq,
+  ListOperatorActionsReq,
   ListTradingAccountsReq,
   ListFillsReq,
   ListOrdersReq,
@@ -21,14 +23,19 @@ import type {
   LogicalAccountResponse,
   LogicalAccountTarget,
   OperatorAction,
+  OperatorActionType,
   Order,
   Page,
   PageResult,
   PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
+  ReduceLogicalAccountReq,
+  SummarizeAccountPnlReq,
+  SummarizeAccountPnlRsp,
   TradableInstrument,
   RetInfo,
+  UnblockInstrumentReq,
   UpdateTradingAccountReq
 } from "./types";
 
@@ -211,6 +218,16 @@ export function flattenLogicalAccount(action_id: string, logical_account_id: str
   >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason }, { silent: true });
 }
 
+/** 按比例减仓：先暂停组合、撤全部订单，再把现货和合约同比例减掉；同一个 action_id 重试不会再减一次 */
+export function reduceLogicalAccount(req: ReduceLogicalAccountReq) {
+  return callTrade<ReduceLogicalAccountReq, { ret_info: RetInfo; action: OperatorAction }>(
+    "console",
+    "ReduceLogicalAccount",
+    req,
+    { silent: true }
+  );
+}
+
 export function submitOrder(req: SubmitOrderReq) {
   return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req, {
     silent: true
@@ -263,6 +280,33 @@ export function listPositions(req: ListPositionsReq) {
   return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
 }
 
+/** 下架名单（全局，不分空间） */
+export function listBlockedInstruments() {
+  return callTrade<Record<string, never>, { ret_info: RetInfo; instruments?: BlockedInstrument[] }>(
+    "console",
+    "ListBlockedInstruments",
+    {}
+  );
+}
+
+/** 把标的移出下架名单；removed 为 false 表示它本来就不在名单里 */
+export function unblockInstrument(req: UnblockInstrumentReq) {
+  return callTrade<UnblockInstrumentReq, { ret_info: RetInfo; removed?: boolean }>("console", "UnblockInstrument", req);
+}
+
+/** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */
+export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
+  return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
+}
+
+export function listOperatorActions(req: ListOperatorActionsReq) {
+  return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
+    "console",
+    "ListOperatorActions",
+    req
+  );
+}
+
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
 export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "永续", 3: "股票" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
@@ -291,6 +335,15 @@ export const actionStateLabels: Record<string, string> = {
   PARTIAL: "部分完成",
   FAILED: "失败"
 };
+/** 操作记录里的完整类型名；页头进度条另有一套短名（detail-model 的 actionTypeLabels） */
+export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
+  MANUAL_ORDER: "人工下单",
+  SUBMIT_ORDER: "提交订单",
+  CANCEL_ORDER: "撤单",
+  FLATTEN: "整组清仓",
+  REDUCE: "按比例减仓",
+  DELIST_FLATTEN: "下架清仓"
+};
 export const targetStateLabels: Record<string, string> = {
   PENDING: "等待执行",
   CONVERGING: "收敛中",
@@ -306,7 +359,8 @@ export function canCancelOrderState(state: string): boolean {
 export const orderOwnerLabels: Record<string, string> = {
   TARGET: "策略",
   OPERATOR: "人工",
-  EXTERNAL: "外部"
+  EXTERNAL: "外部",
+  SYSTEM: "系统"
 };
 
 export function formatTimestamp(value?: string): string {
