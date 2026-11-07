@@ -485,38 +485,53 @@ func TestMarkCleanupPendingIfCanceled(t *testing.T) {
 	require.Len(t, pending, 1)
 }
 
-// 同一标的别的未结束的系统动作记录要跨范围（ALL 与 PAPER_ONLY）统计，已结束的、通知类的、别的标的的都不算。
-func TestCountOtherUnfinishedSystemBySubject(t *testing.T) {
+// 同一标的上别的、未被取消的真实下架（ALL）记录：已结束的也算（真实下架结束后名单按设计保留），演练、通知类、别的标的、已取消的都不算。
+func TestCountNonCanceledAllBySubject(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
 	require.NoError(t, s.CreateRule(ctx, systemRule()))
 	require.NoError(t, s.CreateRule(ctx, notifyRule("r1")))
+	allPayload := `{"scope":"ALL","delist_at":"2026-11-11T08:00:00Z"}`
 	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
-		for _, item := range []Execution{
-			execution("real", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|ALL", 5),
-			execution("drill", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|PAPER_ONLY", 5),
-			execution("note", "r1", ActionNotifyURL, "", 5),
-		} {
+		real := execution("real", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|ALL", 5)
+		real.PayloadJSON = allPayload
+		drill := execution("drill", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|PAPER_ONLY", 5)
+		drill.PayloadJSON = `{"scope":"PAPER_ONLY","delist_at":"2026-11-11T08:00:00Z"}`
+		other := execution("other", "sys-1", ActionSystem, "sys-1|binance:SPOT:BARUSDT|ALL", 5)
+		other.SubjectID, other.PayloadJSON = "binance:SPOT:BARUSDT", allPayload
+		for _, item := range []Execution{real, drill, execution("note", "r1", ActionNotifyURL, "", 5), other} {
 			if err := tx.InsertExecution(item); err != nil {
 				return err
 			}
 		}
-		other := execution("other", "sys-1", ActionSystem, "sys-1|binance:SPOT:BARUSDT|ALL", 5)
-		other.SubjectID = "binance:SPOT:BARUSDT"
-		return tx.InsertExecution(other)
+		return nil
 	}))
-	count, err := s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	count, err := s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, count, "只有真实那条，通知类和别的标的不算")
-	count, err = s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "real")
+	count, err = s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "real")
 	require.NoError(t, err)
-	require.EqualValues(t, 1, count)
+	require.Zero(t, count, "演练不算，自己不算")
 
-	_, err = s.CancelExecution(ctx, "real", 100)
+	claimed, err := s.ClaimDue(ctx, 1000, 10, []string{SystemActionSellDelistedHoldings})
 	require.NoError(t, err)
-	count, err = s.CountOtherUnfinishedSystemBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	for _, item := range claimed {
+		result := Result{Status: StatusPending, NextRunAt: 5}
+		if item.ExecutionID == "real" {
+			result = Result{Status: StatusSucceeded, FinishedAt: 1}
+		}
+		_, err := s.SaveResult(ctx, item.ExecutionID, item.ClaimedAt, result, 1)
+		require.NoError(t, err)
+	}
+	count, err = s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
 	require.NoError(t, err)
-	require.Zero(t, count, "已取消的不算未结束")
+	require.EqualValues(t, 1, count, "已结束的真实下架也算：名单按设计保留")
+
+	_, err = s.CancelExecution(ctx, "drill", 100)
+	require.NoError(t, err)
+	got, err := s.GetExecution(ctx, "real")
+	require.NoError(t, err)
+	require.Equal(t, StatusSucceeded, got.Status)
 }
 
 func TestListUnfinishedWithFailedSteps(t *testing.T) {

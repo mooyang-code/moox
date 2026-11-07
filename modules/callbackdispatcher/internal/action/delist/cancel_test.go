@@ -53,8 +53,9 @@ func TestDrillCancelKeepsRealBlock(t *testing.T) {
 	require.Zero(t, h.trade.callCount("Unblock"))
 }
 
-// 真实记录取消时同标的还有演练没结束：禁止不能解除，已发起的平仓还会继续，必须报错让用户知道；取消演练后再重试善后才真正解除。
-func TestRealCancelWithUnfinishedDrillReportsError(t *testing.T) {
+// 真实记录取消时一律解除名单（不管同标的演练有没有结束）：Trade 只在解除禁止时才停下清仓，不解除的话已发起的平仓会继续卖。
+// 演练下一次推进前查名单发现不在了，会自己停下。
+func TestRealCancelAlwaysUnblocksAndDrillStopsItself(t *testing.T) {
 	h := newHarness(t)
 	delistAt := baseTime.Add(48 * time.Hour)
 	h.addExecution("real", delistAt, "ALL")
@@ -62,14 +63,11 @@ func TestRealCancelWithUnfinishedDrillReportsError(t *testing.T) {
 	h.step("real", baseTime)
 	h.step("drill", baseTime)
 
-	err := h.cancel("real")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "演练")
-	require.True(t, h.trade.isBlocked())
-
-	require.NoError(t, h.cancel("drill"), "真实那条已取消，演练取消时没有别的未结束执行，解除禁止")
+	require.NoError(t, h.cancel("real"))
 	require.False(t, h.trade.isBlocked())
-	require.NoError(t, h.handler.OnCancel(context.Background(), h.execution("real")), "重试善后成功")
+	outcome := h.step("drill", baseTime.Add(time.Hour))
+	require.Equal(t, store.StatusCanceled, outcome.Status)
+	require.Contains(t, outcome.Error, "手工解除")
 }
 
 // 取消发生在 Step 写名单期间：名单是在取消之后才写进去的，Step 复查后补一次解除。

@@ -123,11 +123,14 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_result TEXT NOT NULL DEFAULT '',
     c_error TEXT NOT NULL DEFAULT '',
     c_next_check_at INTEGER NOT NULL DEFAULT 0,
+    -- 只用于禁止买入那一行：1 表示标的是这条记录自己写进名单的（Trade 返回 created），演练结束或取消时只解除自己写的那一条。
+    c_owns_block INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
+    CHECK (c_owns_block IN (0, 1)),
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
     CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );

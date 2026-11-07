@@ -334,13 +334,15 @@ func (s *Store) MarkCleanupPendingIfCanceled(ctx context.Context, executionID, m
 	return result.RowsAffected > 0, result.Error
 }
 
-// CountOtherUnfinishedSystemBySubject 统计同一标的（c_subject_id：交易所:市场:代码）上除自己以外还没结束的系统动作记录。
-// 合并键带了范围，不能用它判断；这里跨范围（ALL 与 PAPER_ONLY）按标的查：Trade 的禁止名单是全局的，哪条未结束的执行都靠它。
-func (s *Store) CountOtherUnfinishedSystemBySubject(ctx context.Context, subjectID, exceptExecutionID string) (int64, error) {
+// countNonCanceledAllBySubject 统计同一标的上除自己以外、范围不是 PAPER_ONLY（真实下架）、没有被取消的系统动作记录，已结束的也算：
+// 真实下架结束后（成功或失败）禁止名单按设计保留，演练的结束或取消不能把它解除。
+const countNonCanceledAllBySubject = `c_action_type = 'SYSTEM' AND c_subject_id = ? AND c_status <> 'CANCELED' AND c_execution_id <> ?
+AND COALESCE(json_extract(c_payload_json, '$.scope'), '') <> 'PAPER_ONLY'`
+
+// CountNonCanceledAllBySubject 见 countNonCanceledAllBySubject。subjectID 是统一后的标的名（交易所:市场:代码）。
+func (s *Store) CountNonCanceledAllBySubject(ctx context.Context, subjectID, exceptExecutionID string) (int64, error) {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&executionRow{}).
-		Where("c_action_type = ? AND c_subject_id = ? AND c_status IN ? AND c_execution_id <> ?", ActionSystem, subjectID, []string{StatusPending, StatusRunning}, exceptExecutionID).
-		Count(&count).Error
+	err := s.db.WithContext(ctx).Model(&executionRow{}).Where(countNonCanceledAllBySubject, subjectID, exceptExecutionID).Count(&count).Error
 	return count, err
 }
 

@@ -53,7 +53,7 @@ func TestCancelThroughServiceUnblocksAndRetriesCleanup(t *testing.T) {
 	require.False(t, h.trade.isBlocked())
 }
 
-// 真实下架取消时同标的演练没结束：善后失败并留下说明，用户先取消演练再重试善后。
+// 真实下架取消时同标的演练没结束：照样解除禁止，演练下一次推进时自己停下。
 func TestCancelRealWithDrillThroughService(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -66,18 +66,10 @@ func TestCancelRealWithDrillThroughService(t *testing.T) {
 
 	rsp, err := service.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "real"})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
-	require.Contains(t, h.execution("real").LastError, "演练")
-	require.True(t, h.trade.isBlocked())
-
-	rsp, err = service.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "drill"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
-	require.False(t, h.trade.isBlocked())
-	rsp, err = service.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "real"})
-	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.RetInfo.Code)
 	require.False(t, h.execution("real").CleanupPending)
+	require.False(t, h.trade.isBlocked())
+	require.Equal(t, store.StatusCanceled, h.step("drill", baseTime.Add(time.Minute)).Status)
 }
 
 // 详情接口返回各轮步骤。

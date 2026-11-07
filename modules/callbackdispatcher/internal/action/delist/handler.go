@@ -54,6 +54,8 @@ type Handler struct {
 	TradeTimeout time.Duration
 
 	locks keyedMutex
+	// loadExecution 为空时读库；测试用它模拟“写名单后复查记录状态失败”。
+	loadExecution func(ctx context.Context, executionID string) (store.Execution, error)
 }
 
 var _ action.Handler = (*Handler)(nil)
@@ -119,28 +121,50 @@ func (h *Handler) OnCancel(ctx context.Context, execution store.Execution) error
 	}
 	unlock := h.locks.Lock(tgt.subject())
 	defer unlock()
-	return h.release(ctx, execution, tgt)
+	steps, err := h.Store.ListDelistActions(ctx, execution.ExecutionID)
+	if err != nil {
+		return fmt.Errorf("读取下架步骤失败: %w", err)
+	}
+	block, attempted := findBlock(steps)
+	return h.release(ctx, execution, tgt, block, attempted)
 }
 
-// release 解除禁止买入。调用时必须已持有这个标的的锁。
-// Trade 的名单是全局的，同一标的只要还有别的未结束的执行（真实 ALL 与演练 PAPER_ONLY 都算）就不能解除：
-//   - 演练被取消而真实下架还在处理：不解除，返回 nil，禁止由真实那条维持；
-//   - 真实被取消而演练还没结束：Trade 只在解除禁止时才会停下清仓，这时不解除，已发起的平仓会继续，必须让用户知道，所以返回错误，
-//     记录带着“善后未完成”，先取消演练、再点“重试善后”才会真正解除。
-func (h *Handler) release(ctx context.Context, execution store.Execution, tgt target) error {
-	others, err := h.Store.CountOtherUnfinishedSystemBySubject(ctx, execution.SubjectID, execution.ExecutionID)
-	if err != nil {
-		return fmt.Errorf("查同一标的别的未结束的下架处理失败: %w", err)
+// findBlock 找出禁止买入那一行；没有说明这条记录从来没有尝试过写名单。
+func findBlock(steps []store.DelistAction) (store.DelistAction, bool) {
+	for _, step := range steps {
+		if step.Kind == store.DelistKindBlock && step.Round == RoundBlock {
+			return step, true
+		}
 	}
-	if others > 0 {
-		if tgt.PaperOnly {
+	return store.DelistAction{}, false
+}
+
+// release 解除禁止买入。调用时必须已持有这个标的的锁。block 是这条记录禁止买入那一行，attempted 为假表示从没尝试过写名单。
+//   - 真实下架（ALL）：尝试过写名单就一律解除。同标的的演练还没结束时，它下一次推进前查名单发现不在了会自己停下，代价只是一次模拟盘演练；
+//     不解除的话，已发起的平仓会继续卖（Trade 只在解除禁止时才停下清仓）。
+//   - 演练（PAPER_ONLY）：只解除“自己写进名单的那一条”（block.OwnsBlock），并且同标的没有未取消的真实下架（含已结束的，结束的真实下架按设计
+//     保留名单）。否则演练的结束或取消会把真实下架的名单解除，持有这个币的组合就卡在被禁止里。
+//
+// Trade 拒绝参数（ErrInvalidRequest）说明名单里本来就不会有它，当作没有要解除的，不能让记录永远卡在善后上。
+func (h *Handler) release(ctx context.Context, execution store.Execution, tgt target, block store.DelistAction, attempted bool) error {
+	if !attempted {
+		return nil
+	}
+	if tgt.PaperOnly {
+		if !block.OwnsBlock {
 			return nil
 		}
-		return fmt.Errorf("同一标的还有别的下架处理（演练）没有结束，禁止买入没有解除，已发起的平仓仍在执行；请先取消那一条，再重试善后")
+		others, err := h.Store.CountNonCanceledAllBySubject(ctx, tgt.subject(), execution.ExecutionID)
+		if err != nil {
+			return fmt.Errorf("查同一标的的真实下架失败: %w", err)
+		}
+		if others > 0 {
+			return nil
+		}
 	}
 	callCtx, cancel := h.tradeCtx(ctx)
 	defer cancel()
-	if err := h.Trade.UnblockInstrument(callCtx, tgt.Instrument); err != nil {
+	if err := h.Trade.UnblockInstrument(callCtx, tgt.Instrument); err != nil && !errors.Is(err, action.ErrInvalidRequest) {
 		return fmt.Errorf("解除禁止买入失败: %w", err)
 	}
 	return nil
@@ -168,7 +192,8 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	// 而已结束的记录不能再取消。同标的还有别的未结束的下架处理时 release 不会解除。真实下架结束后名单保留（标的确实下架了）。
 	unlock := h.locks.Lock(tgt.subject())
 	defer unlock()
-	if releaseErr := h.release(ctx, execution, tgt); releaseErr != nil {
+	block, attempted := r.blockRow()
+	if releaseErr := h.release(ctx, execution, tgt, block, attempted); releaseErr != nil {
 		r.problem("演练结束后解除禁止买入失败，稍后重试: %v", releaseErr)
 		r.wakeAt(now.Add(transientRetry))
 		return r.pending(), nil
@@ -189,6 +214,12 @@ type run struct {
 	problems []string
 	// stopped 为真表示执行记录已经被取消：不再发起新的 Trade 调用，直接返回。
 	stopped bool
+}
+
+// blockRow 返回这条记录禁止买入那一行。
+func (r *run) blockRow() (store.DelistAction, bool) {
+	step, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]
+	return step, ok
 }
 
 func (r *run) wakeAt(at time.Time) {
@@ -301,16 +332,29 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 		return r.pending(), true, nil
 	}
 
+	// 先记下“名单已经写了”（还不算成功）：之后无论是复查出已取消，还是复查本身失败，OnCancel 才知道有名单要解除、是不是自己写的。
+	step.OwnsBlock = step.OwnsBlock || result.Created
+	step.Status, step.Error, step.Attempts = store.DelistPending, "", step.Attempts+1
+	step.Result = "名单已写入，正在确认执行记录状态"
+	if err := r.save(ctx, step); err != nil {
+		return action.Outcome{}, false, err
+	}
+
 	// 写名单之后复查记录状态：取消发生在 Step 执行期间时，名单是在取消之后才写进去的，必须补一次解除。
-	fresh, getErr := r.h.Store.GetExecution(ctx, r.execution.ExecutionID)
+	fresh, getErr := r.recheck(ctx)
 	if getErr != nil {
-		// 名单已写但没法确认记录状态：不记步骤成功，下次推进会重新写（幂等）并再复查。
+		// 没法确认记录状态：不记步骤成功，下次推进会重新写（幂等）并再复查。记录要是其实已经取消，Step 的结果会被丢掉，
+		// 没有下一次推进，所以顺手把“善后未完成”标记写回库（记录没取消时什么也不做），用户能看到“重试善后”。
+		message := "取消后的善后可能没做完：写名单后复查记录状态失败（" + getErr.Error() + "），请点“重试善后”"
+		if _, markErr := r.h.Store.MarkCleanupPendingIfCanceled(context.WithoutCancel(ctx), r.execution.ExecutionID, message, r.h.now().UnixMilli()); markErr != nil {
+			log.WarnContextf(ctx, "记录善后可能没做完失败: %v", markErr)
+		}
 		r.problem("复查执行记录状态失败，稍后重试: %v", getErr)
 		r.wakeAt(r.now.Add(transientRetry))
 		return r.pending(), true, nil
 	}
 	if fresh.Status == store.StatusCanceled {
-		if releaseErr := r.h.release(ctx, fresh, r.target); releaseErr != nil {
+		if releaseErr := r.h.release(ctx, fresh, r.target, step, true); releaseErr != nil {
 			// 记录已经不是执行中，SaveResult 会丢掉结果：直接把“善后未完成”标记写回库，用户才看得到“重试善后”。
 			message := "取消后的善后失败：" + releaseErr.Error()
 			if _, markErr := r.h.Store.MarkCleanupPendingIfCanceled(context.WithoutCancel(ctx), fresh.ExecutionID, message, r.h.now().UnixMilli()); markErr != nil {
@@ -321,7 +365,7 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 		return action.Outcome{Status: store.StatusCanceled}, true, nil
 	}
 
-	step.Status, step.Error, step.Attempts = store.DelistSucceeded, "", step.Attempts+1
+	step.Status, step.Error = store.DelistSucceeded, ""
 	switch {
 	case result.InstrumentUnknown:
 		step.Result = "Trade 没有这个标的（没有开通对应市场的账户），已写入禁止名单，没有持仓要处理"
@@ -340,6 +384,30 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 	releaseLock()
 	r.noteDetected(ctx)
 	return action.Outcome{}, false, nil
+}
+
+// recheck 读最新的执行记录，失败时短暂重试几次。
+func (r *run) recheck(ctx context.Context) (store.Execution, error) {
+	var (
+		fresh store.Execution
+		err   error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		if r.h.loadExecution != nil {
+			fresh, err = r.h.loadExecution(ctx, r.execution.ExecutionID)
+		} else {
+			fresh, err = r.h.Store.GetExecution(ctx, r.execution.ExecutionID)
+		}
+		if err == nil {
+			return fresh, nil
+		}
+		select {
+		case <-ctx.Done():
+			return fresh, err
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fresh, err
 }
 
 // noteDetected 发现下架时，用只读的 ListInstrumentHolders 查当前有没有策略持有，有就产生 delist_detected 关注项。查不到不影响处理。
