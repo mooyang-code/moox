@@ -2,8 +2,10 @@ package input
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
@@ -110,5 +112,47 @@ func TestResolvePoolChecksRetentionCoversWarmUp(t *testing.T) {
 	raw = strings.Replace(raw, "window: 1000", "window: 100", 1)
 	if _, err := ResolvePool(context.Background(), newDualClient(), "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw), members); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 启用时按精确的覆盖统计核对 View 实际的历史：配置的保留期够，但历史还没攒够预热需要的根数时拒绝。
+func TestCheckPoolWarmCoverageUsesActualHistory(t *testing.T) {
+	members := []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}
+	resolve := func(window string) (PoolResolved, *fakeClient) {
+		client := newDualClient()
+		raw := strings.Replace(poolDSL, "allocation: {method: fixed, ratios: {a: 0.5, b: 0.5}}", "allocation: {method: fixed, ratios: {a: 0.5, b: 0.5}}\n  timing: {window: "+window+"}", 1)
+		pooled, err := ResolvePool(context.Background(), client, "space", []string{"ftask_1h", "ftask_swap1h"}, parseStrategy(t, raw), members)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pooled, client
+	}
+	now := barStart.Add(time.Hour + 30*time.Minute) // 最新已收盘的一根就是索引里最晚的那根（barStart）
+	pooled, client := resolve("100")
+	if err := CheckPoolWarmCoverage(context.Background(), client, "space", pooled, now); err != nil {
+		t.Fatalf("历史 500 根够预热 101 根：%v", err)
+	}
+	// 保留期 720 根装得下 601 根，但 View 实际只攒了 500 根。
+	pooled, client = resolve("600")
+	err := CheckPoolWarmCoverage(context.Background(), client, "space", pooled, now)
+	var early *EarlyStartError
+	if !errors.As(err, &early) || !strings.Contains(err.Error(), "不能启用") || !strings.Contains(err.Error(), "成员 a") {
+		t.Fatalf("历史不够应拒绝启用并说明成员：%v", err)
+	}
+	// 覆盖未知（View 还没有数据）时无法确认，同样拒绝。
+	pooled, client = resolve("100")
+	for _, id := range []string{"view_factor_1h", "view_factor_swap1h"} {
+		view := client.views[id]
+		view.IndexedFrom, view.IndexedTo = time.Time{}, time.Time{}
+		client.views[id] = view
+	}
+	if err := CheckPoolWarmCoverage(context.Background(), client, "space", pooled, now); err == nil {
+		t.Fatal("覆盖范围未知应拒绝")
+	}
+	service := Service{Client: client}
+	pooled, client = resolve("600")
+	service.Client = client
+	if err := service.CheckPoolCoverage(context.Background(), "space", pooled, now); err == nil {
+		t.Fatal("服务的启用校验也要包含预热历史")
 	}
 }

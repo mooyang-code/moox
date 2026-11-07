@@ -27,6 +27,8 @@ const (
 	// SkipMarketMissing 是绑定两个因子任务的实例里，另一个市场的数据没有到：缺的那个 View 已经到了更晚的一期，或更晚的一期已经汇合求值，
 	// 这一期不会再等到齐。属于数据未到，不计入实例故障。
 	SkipMarketMissing = "market_missing"
+	// SkipPoolWarmupFailed 是策略池预热失败时留在结果里的一条记录：原因写在输入摘要的说明里，页面的历史结果能直接看到。
+	SkipPoolWarmupFailed = "pool_warmup_failed"
 )
 
 // PublishStatus 是结果的投递状态。

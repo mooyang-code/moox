@@ -30,8 +30,8 @@ type Resolver interface {
 	ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
 	// ResolvePool 解析策略池的绑定（只读，不关联任务；校验接口用）。
 	ResolvePool(ctx context.Context, spaceID string, taskIDs []string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
-	// CheckPoolCoverage 在启用策略池时按每个成员校验 View 的覆盖。
-	CheckPoolCoverage(ctx context.Context, spaceID string, members []input.PoolMember, now time.Time) error
+	// CheckPoolCoverage 在启用策略池时校验 View 的覆盖：按每个成员的 min_age_bars，以及 View 实际的历史够不够预热。
+	CheckPoolCoverage(ctx context.Context, spaceID string, pooled input.PoolResolved, now time.Time) error
 	// TaskMarket 返回因子任务的市场（任务结果 View → 数据集 → 源数据集的市场类型）。
 	TaskMarket(ctx context.Context, spaceID, taskID string) (string, error)
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。

@@ -87,7 +87,7 @@ func (f *fakeResolver) ResolvePoolInstance(ctx context.Context, instanceID, spac
 	return f.ResolvePool(ctx, spaceID, input.TaskIDs(tasks), pool, members)
 }
 
-func (f *fakeResolver) CheckPoolCoverage(context.Context, string, []input.PoolMember, time.Time) error {
+func (f *fakeResolver) CheckPoolCoverage(context.Context, string, input.PoolResolved, time.Time) error {
 	return f.coverageErr
 }
 

@@ -31,7 +31,7 @@ const (
 )
 
 const (
-	defaultGrace       = time.Minute
+	defaultGrace       = input.PoolWarmGrace
 	defaultRetryDelay  = 5 * time.Second
 	maxRetryDelay      = time.Minute
 	defaultMaxAttempts = 6
@@ -223,6 +223,49 @@ func (m *Manager) fail(ctx context.Context, instanceID string, entry *job, err e
 	if markErr := m.Store.MarkInstanceDegraded(ctx, instanceID, entry.sessionID, m.now()); markErr != nil {
 		m.logf("实例 %s 标记 degraded 失败：%v", instanceID, markErr)
 	}
+	if recordErr := m.recordFailure(ctx, instanceID, entry.sessionID, err); recordErr != nil {
+		m.logf("实例 %s 记录预热失败的原因失败：%v", instanceID, recordErr)
+	}
+}
+
+// recordFailure 把预热失败写成一条 skipped(pool_warmup_failed) 结果：原因在输入摘要的说明里，实例的历史结果里能看到，
+// 不用去翻日志（门禁此后返回 ModeOff，事件会被直接确认掉，不会再有别的记录）。
+func (m *Manager) recordFailure(ctx context.Context, instanceID, sessionID string, cause error) error {
+	session, err := m.Store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
+	if err != nil {
+		return err
+	}
+	now := m.now()
+	boundary, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, now)
+	if err != nil {
+		return err
+	}
+	validUntil, err := input.AdvanceBarEnd(resolved.Calendar, resolved.Bar, boundary.BarEnd, 2)
+	if err != nil {
+		return err
+	}
+	resultID, err := store.NewID()
+	if err != nil {
+		return err
+	}
+	record, err := json.Marshal(store.InputRecord{Bar: resolved.Bar, Calendar: resolved.Calendar, BarStart: boundary.StorageStart, Detail: "策略池预热失败，请修复后重新启用实例：" + cause.Error()})
+	if err != nil {
+		return err
+	}
+	_, _, err = m.Store.CommitResult(ctx, store.CommitRequest{Now: now, Result: store.Result{
+		ResultID: resultID, InstanceID: instanceID, SessionID: sessionID, BarEndTime: boundary.BarEnd, ValidUntil: validUntil,
+		Status: store.StatusSkipped, SkipReason: store.SkipPoolWarmupFailed, DSLHash: session.DSLHash,
+		InputJSON: record, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`),
+		PublishStatus: store.PublishNone, CreatedAt: now,
+	}})
+	if errors.Is(err, store.ErrResultInstanceNotActive) {
+		return nil
+	}
+	return err
 }
 
 // permanent 报告错误是永久性的：重试不会成功，要人工修复。
@@ -341,16 +384,9 @@ func WarmBars(pool dsl.Strategy, members []*dsl.Program) int {
 	return dsl.PoolWarmBars(pool, strategies)
 }
 
-// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars 期。
+// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars 期（见 input.PoolWarmWindow）。
 // 最后一期实际有没有数据由 replay.RunPool 按 View 的覆盖范围截断（View 里还没有的期不推进）。该期的就绪事件在启用之前就已发出，
-// 预热不推进它就没有别的路径会处理它，所以终点包含已闭合的最新一根（宽限与追赶判断的口径一致：收盘超过宽限即视为有数据）。
+// 预热不推进它就没有别的路径会处理它，所以终点包含已闭合的最新一根。
 func Window(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program, now time.Time, grace time.Duration) (start, end time.Time, err error) {
-	closed, err := input.ClosedPeriod(resolved.Calendar, resolved.Bar, now.Add(-grace))
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	if start, err = input.HistoryStart(resolved.Calendar, resolved.Bar, closed.StorageStart, WarmBars(pool, members)); err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	return start, closed.StorageStart.Add(time.Nanosecond), nil
+	return input.PoolWarmWindow(resolved, WarmBars(pool, members), now, grace)
 }

@@ -182,8 +182,8 @@ func ParseMembers(raw string) ([]PoolMember, []*dsl.Program, error) {
 	return members, programs, nil
 }
 
-// CheckPoolCoverage 在启用策略池时按每个成员自己的 min_age_bars 与 A 股行键校验 View 的覆盖（见 CheckCoverage）。
-func CheckPoolCoverage(ctx context.Context, client Client, spaceID string, members []PoolMember, now time.Time) error {
+// CheckPoolMemberCoverage 在启用策略池时按每个成员自己的 min_age_bars 与 A 股行键校验 View 的覆盖（见 CheckCoverage）。
+func CheckPoolMemberCoverage(ctx context.Context, client Client, spaceID string, members []PoolMember, now time.Time) error {
 	for _, member := range members {
 		if err := CheckCoverage(ctx, client, spaceID, member.Resolved, now); err != nil {
 			return fmt.Errorf("成员 %s：%w", member.ID, err)
@@ -209,4 +209,85 @@ func poolLookback(members []PoolMemberDef) int {
 		}
 	}
 	return lookback
+}
+
+// PoolWarmGrace 是预热终点的宽限：最新一根刚收盘时因子结果还在路上，收盘超过它才算有数据（与追赶判断的口径一致）。
+const PoolWarmGrace = time.Minute
+
+// PoolWarmWindow 返回策略池预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 bars 期。
+func PoolWarmWindow(resolved Resolved, bars int, now time.Time, grace time.Duration) (start, end time.Time, err error) {
+	closed, err := ClosedPeriod(resolved.Calendar, resolved.Bar, now.Add(-grace))
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if start, err = HistoryStart(resolved.Calendar, resolved.Bar, closed.StorageStart, bars); err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	return start, closed.StorageStart.Add(time.Nanosecond), nil
+}
+
+// PoolWindow 复查策略池历史推进（预热）的区间 [start, end)：每个 View 按精确统计读一次覆盖范围，再按每个成员自己的 min_age_bars 与回看要求
+// 校验起点（起点早于数据覆盖范围返回 *EarlyStartError）、截断终点（取各 View、各成员中最早的）；返回截断后的终点。
+// includeLatest 为真时终点放宽到每个 View 里已闭合的最新一根（但不超过 end）：研究回放把最新一根当作可能还没写完而排除在外，
+// 预热的终点之后没有别的路径会处理它，所以预热不能排除。views 是各市场的 View（不带覆盖统计）。
+func PoolWindow(ctx context.Context, client Client, spaceID string, resolved Resolved, members []PoolMember, programs []*dsl.Program, views map[string]ViewInfo, start, end, now time.Time, includeLatest bool) (time.Time, error) {
+	covered := make(map[string]ViewInfo, len(views))
+	for market, view := range views {
+		var err error
+		if covered[market], err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
+			return time.Time{}, err
+		}
+	}
+	limit := end
+	for i, member := range members {
+		for _, market := range member.Resolved.Markets() {
+			next, err := ReplayWindow(member.Resolved, programs[i], covered[market], start, end, now)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("成员 %s 的 %s 市场 View %s：%w", member.ID, market, covered[market].ViewID, err)
+			}
+			end = next
+		}
+	}
+	if includeLatest {
+		end = limit
+		for market, view := range covered {
+			bounds, err := CoverageBounds(view, resolved, now)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("%s 市场 View %s：%w", market, view.ViewID, err)
+			}
+			if next := bounds.To.Add(time.Nanosecond); next.Before(end) {
+				end = next
+			}
+		}
+	}
+	if !end.After(start) {
+		return time.Time{}, errors.New("历史推进的区间在数据覆盖范围内没有完整的 bar")
+	}
+	return end, nil
+}
+
+// CheckPoolWarmCoverage 在启用策略池时按精确的覆盖统计核对 View 的实际历史够不够预热（只核对配置的保留期不够：历史还没攒够的 View 上
+// 启用成功，预热随后会永久失败）。不够时返回说明原因的错误，不启用。
+func CheckPoolWarmCoverage(ctx context.Context, client Client, spaceID string, pooled PoolResolved, now time.Time) error {
+	strategies := make([]dsl.Strategy, 0, len(pooled.Programs))
+	for _, program := range pooled.Programs {
+		strategies = append(strategies, program.Strategy)
+	}
+	start, end, err := PoolWarmWindow(pooled.Resolved, dsl.PoolWarmBars(pooled.Program.Strategy, strategies), now, PoolWarmGrace)
+	if err != nil {
+		return err
+	}
+	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
+	for market, task := range pooled.Resolved.Tasks {
+		view, err := client.GetView(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return err
+		}
+		view.ViewID = task.ViewID
+		views[market] = view
+	}
+	if _, err := PoolWindow(ctx, client, spaceID, pooled.Resolved, pooled.Members, pooled.Programs, views, start, end, now, true); err != nil {
+		return fmt.Errorf("View 的历史不够策略池预热，不能启用：%w", err)
+	}
+	return nil
 }

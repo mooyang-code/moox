@@ -353,7 +353,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			if err := checkLiveCalendar(pooled.Resolved, s.nowTime()); err != nil {
 				return reload(), err
 			}
-			if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled.Members, s.nowTime()); err != nil {
+			if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled, s.nowTime()); err != nil {
 				return reload(), err
 			}
 			if membersJSON, err = pooled.MembersJSON(); err != nil {

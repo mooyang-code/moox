@@ -218,12 +218,16 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 	return end, generations, nil
 }
 
-// CheckPoolCoverage 在启用策略池时按每个成员校验 View 的覆盖（见包级 CheckPoolCoverage）。
-func (s Service) CheckPoolCoverage(ctx context.Context, spaceID string, members []PoolMember, now time.Time) error {
+// CheckPoolCoverage 在启用策略池时校验 View 的覆盖：按每个成员的 min_age_bars 与 A 股行键（见 CheckPoolMemberCoverage），
+// 再按精确的覆盖统计核对 View 实际的历史够不够预热（见 CheckPoolWarmCoverage）。
+func (s Service) CheckPoolCoverage(ctx context.Context, spaceID string, pooled PoolResolved, now time.Time) error {
 	if s.Client == nil {
 		return errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 	}
-	return CheckPoolCoverage(ctx, s.Client, spaceID, members, now)
+	if err := CheckPoolMemberCoverage(ctx, s.Client, spaceID, pooled.Members, now); err != nil {
+		return err
+	}
+	return CheckPoolWarmCoverage(ctx, s.Client, spaceID, pooled, now)
 }
 
 // CheckCoverage 在启用实例时校验 View 的覆盖（见包级 CheckCoverage）。

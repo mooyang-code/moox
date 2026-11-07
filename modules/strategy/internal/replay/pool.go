@@ -212,47 +212,11 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 	return result, nil
 }
 
-// checkWindow 复查历史推进的区间：每个 View 按精确统计读一次覆盖范围，再按每个成员自己的 min_age_bars 与回看要求校验起点、截断终点
-// （终点取各 View、各成员中最早的）；返回截断后的终点。
+// checkWindow 复查历史推进的区间（见 input.PoolWindow）。
 func (run PoolRun) checkWindow(ctx context.Context, views map[string]input.ViewInfo) (time.Time, error) {
 	now := time.Now().UTC()
 	if run.Now != nil {
 		now = run.Now().UTC()
 	}
-	covered := make(map[string]input.ViewInfo, len(views))
-	for market, view := range views {
-		var err error
-		if covered[market], err = input.WithCoverage(ctx, run.Client, run.SpaceID, view, true); err != nil {
-			return time.Time{}, err
-		}
-	}
-	end := run.End
-	for i, member := range run.Members {
-		markets := member.Resolved.Markets()
-		for _, market := range markets {
-			next, err := input.ReplayWindow(member.Resolved, run.Programs[i], covered[market], run.Start, end, now)
-			if err != nil {
-				return time.Time{}, fmt.Errorf("成员 %s 的 %s 市场 View %s：%w", member.ID, market, covered[market].ViewID, err)
-			}
-			end = next
-		}
-	}
-	if run.IncludeLatest {
-		// 起点一侧的校验已经通过：终点放宽到每个 View 里已闭合的最新一根（取各 View 中最早的），但不超过调用方给的终点。
-		latest := run.End
-		for market, view := range covered {
-			bounds, err := input.CoverageBounds(view, run.Resolved, now)
-			if err != nil {
-				return time.Time{}, fmt.Errorf("%s 市场 View %s：%w", market, view.ViewID, err)
-			}
-			if next := bounds.To.Add(time.Nanosecond); next.Before(latest) {
-				latest = next
-			}
-		}
-		end = latest
-	}
-	if !end.After(run.Start) {
-		return time.Time{}, errors.New("历史推进的区间在数据覆盖范围内没有完整的 bar")
-	}
-	return end, nil
+	return input.PoolWindow(ctx, run.Client, run.SpaceID, run.Resolved, run.Members, run.Programs, views, run.Start, run.End, now, run.IncludeLatest)
 }

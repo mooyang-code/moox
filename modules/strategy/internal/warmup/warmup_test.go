@@ -304,6 +304,15 @@ func TestWarmUpPermanentFailureMarksDegradedAndKeepsBlocking(t *testing.T) {
 	if h.session(t).WarmedThrough != nil {
 		t.Fatal("失败不写预热结果")
 	}
+	// 失败原因写进实例的历史结果：页面直接可见。
+	latest, found, err := h.repo.LatestProcessed(context.Background(), "i1", "session-1")
+	if err != nil || !found || latest.Status != store.StatusSkipped || latest.SkipReason != store.SkipPoolWarmupFailed {
+		t.Fatalf("应留下一条预热失败的结果：%+v found=%v err=%v", latest, found, err)
+	}
+	var record store.InputRecord
+	if err := json.Unmarshal(latest.InputJSON, &record); err != nil || !strings.Contains(record.Detail, "成员 a") || !strings.Contains(record.Detail, "重新启用") {
+		t.Fatalf("说明要写明原因：%+v %v", record, err)
+	}
 }
 
 func TestWarmUpExhaustedRetriesFail(t *testing.T) {
