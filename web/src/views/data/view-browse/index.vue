@@ -348,7 +348,7 @@
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
           <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
           <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="市场">{{
-            seriesTagDisplay(detailRow.seriesTag)
+            seriesTagMarketText(detailRow.seriesTag)
           }}</a-descriptions-item>
           <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="序列标签">{{
             detailRow.seriesTag
@@ -394,7 +394,7 @@ import type {
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
-import { datasetMarketText, isUnifiedMarketType, seriesTagDisplay } from "@/views/data/shared/series-market";
+import { datasetMarketText, isUnifiedMarketType, seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,

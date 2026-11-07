@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # strategy_check.py 的契约测试（只依赖 Python 标准库，全部离线）：
-# targets / summary 能读策略库，compare 对一致的权重判通过、对不一致判失败、对没有变化的窗口给出警告，
+# targets / summary 能读策略库，targets 按 (market, instrument_id) 区分同一标的的现货与永续，compare 对一致的权重判通过、对不一致判失败、对没有变化的窗口给出警告，
 # 截断按十进制向零（0.7284 不会被截成 0.7283），latency / task-lag 能按 bar_end 关联两份日志并算出分段耗时。
 set -euo pipefail
 
@@ -16,9 +16,10 @@ c = sqlite3.connect(sys.argv[1])
 c.execute("CREATE TABLE t_strategy_results (c_instance_id TEXT, c_bar_end_time INTEGER, c_status TEXT, c_skip_reason TEXT, c_targets_json TEXT, c_rule_states_json TEXT)")
 base = 1793037600000  # 2026-10-26T18:00:00Z
 rows = [
-    ("inst-a", base, "ok", "", [{"instrument_id": "BTC-USDT", "target_weight": "0.5"}], "x" * 100),
-    ("inst-a", base + 300000, "ok", "", [{"instrument_id": "BTC-USDT", "target_weight": "0.7284"}, {"instrument_id": "ETH-USDT", "target_weight": "0.1"}], "x" * 200),
-    ("inst-a", base + 600000, "ok", "", [{"instrument_id": "ETH-USDT", "target_weight": "0.25"}], "x" * 200),
+    ("inst-a", base, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.5"}], "x" * 100),
+    ("inst-a", base + 300000, "ok", "", [{"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "0.7284"}, {"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.1"}, {"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.05"}], "x" * 200),
+    # 同一个标的同时有现货和永续目标：两条都要保留，不能互相覆盖
+    ("inst-a", base + 600000, "ok", "", [{"instrument_id": "ETH-USDT", "market": "swap", "target_weight": "0.25"}, {"instrument_id": "ETH-USDT", "market": "spot", "target_weight": "0.3"}], "x" * 200),
     ("inst-a", base + 900000, "skipped", "expired", [], "x" * 200),
 ]
 for iid, bar, status, reason, targets, states in rows:
@@ -27,26 +28,35 @@ c.commit()
 PY
 
 python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --instance A=inst-a --output "${TMP}/targets.json" 2>/dev/null
-python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1]))["A"]; assert sorted(t)==["2026-10-26T18:00:00Z","2026-10-26T18:05:00Z","2026-10-26T18:10:00Z"], t; assert t["2026-10-26T18:05:00Z"]["BTC-USDT"]=="0.7284"' "${TMP}/targets.json" \
-  || fail "targets 应只导出 ok 的期，并保留权重原文"
+python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1]))["A"]; assert sorted(t)==["2026-10-26T18:00:00Z","2026-10-26T18:05:00Z","2026-10-26T18:10:00Z"], t; assert t["2026-10-26T18:05:00Z"]["swap:BTC-USDT"]=="0.7284"; assert t["2026-10-26T18:10:00Z"]=={"swap:ETH-USDT":"0.25","spot:ETH-USDT":"0.3"}, t' "${TMP}/targets.json" \
+  || fail "targets 应只导出 ok 的期、保留权重原文，并按 (market, instrument_id) 区分现货与永续"
 summary="$(python3 -I "${CHECK}" summary --db "${TMP}/strategy.sqlite" --instance A=inst-a)"
 grep -q "跳过原因 {'expired': 1}" <<<"${summary}" || fail "summary 应列出跳过原因：${summary}"
 grep -q "最大 200" <<<"${summary}" || fail "summary 应给出状态体积"
 
 cat > "${TMP}/ref.csv" <<'EOF'
-bar_end,instrument_id,weight
-2026-10-26T18:00:00Z,BTC-USDT,0.50009
-2026-10-26T18:05:00Z,BTC-USDT,0.7284
-2026-10-26T18:05:00Z,ETH-USDT,0.10004
-2026-10-26T18:05:00Z,SOL-USDT,0.00003
-2026-10-26T18:10:00Z,ETH-USDT,0.25
+bar_end,market,instrument_id,weight
+2026-10-26T18:00:00Z,swap,BTC-USDT,0.50009
+2026-10-26T18:05:00Z,swap,BTC-USDT,0.7284
+2026-10-26T18:05:00Z,spot,BTC-USDT,0.05
+2026-10-26T18:05:00Z,swap,ETH-USDT,0.10004
+2026-10-26T18:05:00Z,swap,SOL-USDT,0.00003
+2026-10-26T18:10:00Z,swap,ETH-USDT,0.25
+2026-10-26T18:10:00Z,spot,ETH-USDT,0.3
 EOF
 python3 -I "${CHECK}" compare --targets "${TMP}/targets.json" --name A --reference "${TMP}/ref.csv" --trunc 1e-4 >/dev/null \
   || fail "截断后一致（含 0.7284 边界、截成 0 的 SOL）应当通过"
 sed 's/0.25$/0.2601/' "${TMP}/ref.csv" > "${TMP}/ref_bad.csv"
+# 市场写错（现货的目标写成永续）也算不一致
+sed 's/^2026-10-26T18:10:00Z,spot,/2026-10-26T18:10:00Z,swap,/' "${TMP}/ref.csv" > "${TMP}/ref_market.csv"
+sed 's/^bar_end,market,/bar_end,/; s/,swap,/,/; s/,spot,/,/' "${TMP}/ref.csv" > "${TMP}/ref_nomarket.csv"
 set +e
 python3 -I "${CHECK}" compare --targets "${TMP}/targets.json" --name A --reference "${TMP}/ref_bad.csv" --trunc 1e-4 >/dev/null
 [[ $? == 1 ]] || fail "权重不一致必须以 1 退出"
+python3 -I "${CHECK}" compare --targets "${TMP}/targets.json" --name A --reference "${TMP}/ref_market.csv" --trunc 1e-4 >/dev/null
+[[ $? == 1 ]] || fail "市场不一致必须以 1 退出"
+out="$(python3 -I "${CHECK}" compare --targets "${TMP}/targets.json" --name A --reference "${TMP}/ref_nomarket.csv" --trunc 1e-4 2>&1)"
+[[ $? != 0 ]] && grep -q "缺少列 \['market'\]" <<<"${out}" || fail "参考 CSV 没有 market 列必须报错：${out}"
 python3 -I "${CHECK}" compare --targets "${TMP}/targets.json" --name A --reference "${TMP}/ref.csv" --trunc 1e-4 \
   --until 2026-10-26T18:00:00Z >/dev/null 2>&1
 [[ $? == 2 ]] || fail "只有一期、权重没有变化的窗口必须以 2 退出（路径没被检验）"

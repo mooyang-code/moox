@@ -64,7 +64,7 @@
         </p>
         <p v-else-if="!holders.length && !skippedAccounts.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
         <template v-else-if="holders.length">
-          <p v-if="willProcess">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+          <p v-if="willProcess">下面这些组合持有这个标的，会在下架前 24 小时（已不足 24 小时的立即）被平仓：</p>
           <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
             <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
@@ -136,6 +136,7 @@ import {
   holderLine,
   isPastDelistTime,
   pickerValueToMs,
+  requestErrorText,
   skippedLine,
   summarizeHolders,
   systemActionNotice
@@ -180,8 +181,8 @@ const confirmText = computed(() =>
 const needConfirm = computed(
   () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
 );
-// 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理。
-const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false);
+// 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理；下架时间已经过去时只做核对，不会平仓。
+const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false && !pastTime.value);
 const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
@@ -236,7 +237,7 @@ async function preview() {
     verified.value = true;
     instrumentUnknown.value = false;
     previewFailed.value = true;
-    previewError.value = error instanceof Error ? error.message : "未知原因";
+    previewError.value = requestErrorText(error);
   } finally {
     previewing.value = false;
   }

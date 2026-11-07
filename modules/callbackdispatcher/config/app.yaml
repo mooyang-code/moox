@@ -14,9 +14,6 @@ eventbus:
   urls: ["nats://127.0.0.1:4222"]
   credential_file: ~/.config/moox/eventbus/callback-dispatcher-eventbus.yaml
 
-health:
-  addr: ":11461"
-
 # 通知投递：失败后按固定间隔重试，从第一次失败起超过 retry_window 就置为失败。
 delivery:
   # 每轮最多同时处理的执行记录数。

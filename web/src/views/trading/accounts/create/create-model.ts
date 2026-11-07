@@ -1,4 +1,5 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
+import { TradeResponseError } from "@/api/trade/http";
 import type { Environment } from "../shared/environment";
 
 export const createKinds: readonly { key: Environment; label: string; desc: string; open: boolean }[] = [
@@ -27,6 +28,8 @@ export interface CreateForm {
   logicalName: string;
   controlMode: 1 | 2;
   existingLogicalId: string;
+  /** 实盘：加入组合时接管账户里已有的持仓和余额（例如抵扣手续费用的 BNB），不勾时账户里有资产就加不进去 */
+  adoptExisting: boolean;
 }
 
 export function defaultFees(markets: readonly MarketType[]): { maker: string; taker: string } {
@@ -54,7 +57,8 @@ export function createDefaultForm(kind: Environment = "paper"): CreateForm {
     join: "new",
     logicalName: "",
     controlMode: 1,
-    existingLogicalId: ""
+    existingLogicalId: "",
+    adoptExisting: false
   };
 }
 
@@ -159,7 +163,9 @@ export async function retryWhileSessionStarting<T>(
     try {
       return await call();
     } catch (error) {
-      const starting = error instanceof Error && error.message.includes(sessionStartingText);
+      // 后端没有专门的错误码，只能先认原始英文消息（TradeResponseError 的 message 已换成中文，原文在 ret_info.msg）
+      const raw = error instanceof TradeResponseError ? error.response.ret_info.msg : error instanceof Error ? error.message : "";
+      const starting = raw.includes(sessionStartingText);
       if (!starting || attempt >= attempts) throw error;
       await sleep(delayMs);
     }

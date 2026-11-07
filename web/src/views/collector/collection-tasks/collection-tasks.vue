@@ -891,8 +891,12 @@ function resetEditor() {
   resultConfig.description = "";
 }
 
+// 这次新建表单里已经建成的任务名：拆成两个任务时后一个失败，重试只补建没建成的。打开新的新建表单时清空。
+const createdTaskNames = new Set<string>();
+
 function onAdd() {
   editorMode.value = "create";
+  createdTaskNames.clear();
   resetEditor();
   editorVisible.value = true;
 }
@@ -921,6 +925,7 @@ function onUpdate(record: CollectionTaskRecord) {
           source_dataset_id: input.sourceId || "",
           source_frequency: input.sourceFrequency || "",
           source_series_tag: input.sourceSeriesTag || "",
+          source_series_tags: input.sourceSeriesTags || [],
           subject_count: 0,
           market_id: "",
           provider: input.provider,
@@ -1136,6 +1141,12 @@ async function saveEditor() {
       const created: string[] = [];
       for (const group of groups) {
         const groupInput = group.tagIds.length ? { ...input, subjectTags: group.tagIds } : input;
+        // 上一次提交拆成两个任务、只建成了前一个：重试时跳过已建成的，只补建失败的那个（同名再建会冲突）
+        const groupName = splitTaskName(editorSnapshot.task_name, group.suffix);
+        if (createdTaskNames.has(groupName)) {
+          created.push(groupName);
+          continue;
+        }
         const task = buildCollectionTaskPayload(
           groupInput,
           {
@@ -1162,12 +1173,13 @@ async function saveEditor() {
             throw new Error(
               `已创建“${created.join("”“")}”，但“${task.task_name}”创建失败：${
                 error instanceof Error ? error.message : "未知错误"
-              }。请修正后单独补建这个任务。`
+              }。修正后再点一次“保存任务”只会补建这个任务。`
             );
           }
           throw error;
         }
         created.push(task.task_name || "");
+        createdTaskNames.add(groupName);
       }
       Message.success(`采集任务“${created.join("”“")}”已创建，将从下一采集周期开始生效`);
     } else {

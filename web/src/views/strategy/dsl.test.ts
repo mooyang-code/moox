@@ -98,7 +98,7 @@ describe("混合市场模板", () => {
     expect(result.preview?.rules.map(rule => rule.id)).toEqual(["long_momentum", "short_weak"]);
     expect(mixedMarketTemplate).toContain("market: {select: both, prefer: swap}");
     expect(mixedMarketTemplate).toContain("side: short");
-    expect(mixedMarketTemplate).toContain("同时绑定现货和永续两个因子任务");
+    expect(mixedMarketTemplate).toContain("现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务");
     expect(mixedMarketTemplate).not.toContain("type: tranche");
     expect(mixedMarketTemplate).not.toContain("factor_params:");
   });
@@ -114,6 +114,7 @@ describe("策略池", () => {
     const result = parseDSL(poolTemplate);
     expect(result.diagnostics).toEqual([]);
     expect(result.preview?.rules).toEqual([]);
+    expect(result.preview?.market, "池不写 market，市场是成员的并集").toBe("成员市场的并集（各成员按自己的 market）");
     expect(result.preview?.pool).toEqual({
       memberIds: ["a", "b"],
       method: "rotation",

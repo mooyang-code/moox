@@ -101,5 +101,8 @@ export const systemMenu = [
   directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
   menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
-  menu("0703", "07", "/settings/events", "settings-events", "settings-events", "settings/events/index", 3)
+  // 页签用 ?tab=（告警会直接跳到执行记录），query 变化时复用页面。
+  menu("0703", "07", "/settings/events", "settings-events", "settings-events", "settings/events/index", 3, {
+    reuseOnQuery: true
+  })
 ];

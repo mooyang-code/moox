@@ -280,6 +280,18 @@ export async function listEventRules(page: PageReq = {}): Promise<{ rules: Event
   return { rules: (rsp.rules ?? []).map(rule => normalizeRule(rule as never)), page_result: rsp.page_result };
 }
 
+/** 读出全部规则（按 200 条一页翻完）：系统规则的状态、筛选项不能只看当前页。 */
+export async function listAllEventRules(): Promise<EventRule[]> {
+  const size = 200;
+  const rules: EventRule[] = [];
+  for (let page = 1; ; page++) {
+    const rsp = await listEventRules({ page, size });
+    rules.push(...rsp.rules);
+    const total = rsp.page_result?.total ?? 0;
+    if (!rsp.rules.length || rsp.page_result?.has_more === false || rules.length >= total) return rules;
+  }
+}
+
 export async function createEventRule(req: CreateEventRuleReq): Promise<{ rule: EventRule; signing_secret: string }> {
   const rsp = await callControl<CreateEventRuleReq, { rule: EventRule; signing_secret?: string }>(
     SERVICE,

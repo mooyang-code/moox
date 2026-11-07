@@ -331,6 +331,62 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 	require.Error(t, err, "未知组件由配置校验拒绝")
 }
 
+// --add-egress-domain 把域名追加到 [egress_proxy] http_domains：已在名单里（同名或被 *. 后缀覆盖）的不重复，重复执行没有改动。
+func TestMigrateAddsEgressDomains(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	report, err := MigrateFile(path, MigrateOptions{
+		RepoRoot: root, Keys: keys, Write: true,
+		AddEgressDomains: []string{"openapi.okx.com", "fapi.binance.com", " WWW.OKX.COM ", "*.okx.com"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com", "*.okx.com"}, report.AddedEgressDomains)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com", "www.okx.com", "*.okx.com"}, manifest.EgressProxy.HTTPDomains)
+	require.Equal(t, 1, strings.Count(string(plain), "http_domains"))
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{"openapi.okx.com", "www.okx.com"}})
+	require.NoError(t, err)
+	require.Empty(t, again.AddedEgressDomains)
+	require.False(t, again.Changed, "重复执行不产生改动")
+}
+
+// 没写 http_domains（多行写法也一样）时从默认名单开始追加，不丢掉默认的币安与 OKX 域名。
+func TestMigrateAddEgressDomainStartsFromDefaultsAndReplacesMultilineArray(t *testing.T) {
+	text := sampleText(t)
+	line := regexp.MustCompile(`(?m)^http_domains = .*\n`)
+	require.True(t, line.MatchString(text))
+
+	path, root, keys := migrateFixture(t, line.ReplaceAllString(text, ""))
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{"www.okx.com"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com"}, report.AddedEgressDomains)
+
+	multiline := line.ReplaceAllString(text, "http_domains = [\n  \"*.binance.com\",\n  \"openapi.okx.com\",\n]\n")
+	path, root, keys = migrateFixture(t, multiline)
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com"}})
+	require.NoError(t, err)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "openapi.okx.com", "www.okx.com"}, manifest.EgressProxy.HTTPDomains)
+}
+
+func TestMigrateAddEgressDomainRejectsInvalidDomain(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	for _, bad := range []string{"https://openapi.okx.com", "127.0.0.1", "okx"} {
+		_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{bad}})
+		require.ErrorContains(t, err, "不是合法域名", bad)
+	}
+}
+
 func TestMigrateSetsHostReachability(t *testing.T) {
 	path, root, keys := migrateFixture(t, legacyFactorText(t, "factor"))
 	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})

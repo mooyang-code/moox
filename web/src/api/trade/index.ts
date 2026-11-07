@@ -1,5 +1,5 @@
 import { callTrade } from "./http";
-export { TradeResponseError } from "./http";
+export { isTradeInvalidParam, isTradeNotFound, TradeResponseError } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
@@ -116,7 +116,7 @@ export function closePaperSimulation(trading_account_id: string) {
   return callTrade<
     { trading_account_id: string },
     { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }
-  >("console", "ClosePaperSimulation", { trading_account_id });
+  >("console", "ClosePaperSimulation", { trading_account_id }, { silent: true });
 }
 
 export function getExecutionCapabilities(trading_account_id: string) {
@@ -204,7 +204,8 @@ export function removeLogicalAccountMember(logical_account_id: string, trading_a
   return callTrade<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
     "console",
     "RemoveLogicalAccountMember",
-    { logical_account_id, trading_account_id }
+    { logical_account_id, trading_account_id },
+    { silent: true }
   );
 }
 
@@ -224,7 +225,8 @@ export function resumeLogicalAccount(logical_account_id: string) {
   return callTrade<{ logical_account_id: string }, LogicalAccountResponse & { warning?: string }>(
     "console",
     "ResumeLogicalAccount",
-    { logical_account_id }
+    { logical_account_id },
+    { silent: true }
   );
 }
 
@@ -301,13 +303,6 @@ export function listOperatorActions(req: ListOperatorActionsReq) {
 }
 
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
-export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "永续", 3: "股票" };
-export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
-export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
-export const logicalAutomationStateLabels: Record<string, string> = {
-  ACTIVE: "运行中",
-  PAUSED: "已暂停"
-};
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",

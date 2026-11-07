@@ -2,7 +2,12 @@
   <div class="moox-page tx-detail">
     <div class="moox-inner">
       <a-result v-if="loadError" status="error" :title="loadError">
-        <template #extra><a-button @click="backToList">返回交易账户</a-button></template>
+        <template #extra>
+          <a-space>
+            <a-button v-if="!notFound" type="primary" @click="loadFirst">重新加载</a-button>
+            <a-button @click="backToList">返回交易账户</a-button>
+          </a-space>
+        </template>
       </a-result>
       <template v-else-if="logical">
         <div class="detail-head">
@@ -301,6 +306,7 @@ import {
   flattenTradingAccount,
   formatTimestamp,
   getLogicalAccount,
+  isTradeNotFound,
   getLogicalAccountTarget,
   listOrders,
   listTradingAccounts,
@@ -351,6 +357,7 @@ const logicalId = computed(() => String(route.params.logical_account_id || ""));
 const tab = computed(() => tabFromQuery(route.query.tab));
 const logical = ref<LogicalAccount | null>(null);
 const loadError = ref("");
+const notFound = ref(false);
 const allAccounts = ref<TradingAccount[]>([]);
 const target = ref<LogicalAccountTarget | null>(null);
 const snapshot = ref<PositionSnapshot>({ swapPositions: [], spotHoldings: [] });
@@ -392,7 +399,8 @@ const membersEditable = computed(() => logical.value?.automation_state === "PAUS
 
 const tracker = useActionTracker({
   logicalAccountId: () => logical.value?.logical_account_id,
-  onChanged: () => void reload().catch(() => undefined)
+  // 动作状态变了（开始、完成）：订单、成交等页签按 dataVersion 重读，组合和持仓跟着刷新
+  onChanged: () => afterAction()
 });
 const flattenRunning = computed(() => isFlattenRunning(tracker.action.value));
 const flattenResult = computed(() => parseFlattenResult(tracker.action.value || undefined));
@@ -430,6 +438,7 @@ async function reload() {
     listTradingAccounts({ page: { page: 1, size: 200 } })
   ]);
   if (!request.isLatest() || id !== logicalId.value) return;
+  loadError.value = "";
   logical.value = logicalRsp.logical_account;
   target.value = targetRsp.target || null;
   allAccounts.value = accountRsp.accounts || [];
@@ -443,8 +452,13 @@ async function loadFirst() {
     await reload();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
     strategy.value = links.get(logicalId.value) ?? null;
-  } catch {
-    if (!logical.value) loadError.value = "组合账户不存在或无权限";
+  } catch (cause) {
+    if (logical.value) return;
+    // 不存在和其他失败（网络、服务暂时不可用）分开说：后者可以重试，轮询读到后也会自动恢复
+    loadError.value = isTradeNotFound(cause)
+      ? "组合账户不存在或无权限"
+      : `组合账户加载失败：${cause instanceof Error ? cause.message : "请稍后重试"}`;
+    notFound.value = isTradeNotFound(cause);
   }
 }
 

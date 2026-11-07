@@ -39,6 +39,21 @@ export function logicalEnvironment(
   return "prod";
 }
 
+/**
+ * 组合是否属于这个环境的页签。实盘组合还没有可判断的成员时（例如新建账户加入组合失败后留下的空组合），
+ * 测试网和生产环境两个页签都列出它，好让用户在任一页签里给它加成员或处理掉；其余按 logicalEnvironment 判断。
+ */
+export function logicalInEnvironment(
+  logical: Pick<LogicalAccount, "execution_mode" | "members">,
+  accounts: ReadonlyMap<string, TradingAccount>,
+  env: Environment
+): boolean {
+  if (logical.execution_mode === 1) return env === "paper";
+  const known = (logical.members || []).some(member => accounts.has(member.trading_account_id));
+  if (!known) return env !== "paper";
+  return logicalEnvironment(logical, accounts) === env;
+}
+
 export interface ConfirmTier {
   env: Environment;
   /** 对话框顶部的提示色条文字，模拟盘没有 */

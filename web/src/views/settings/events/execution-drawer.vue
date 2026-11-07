@@ -12,7 +12,7 @@
         <a-descriptions :column="2" size="small" bordered>
           <a-descriptions-item label="规则">{{ execution.rule_name }}</a-descriptions-item>
           <a-descriptions-item label="状态">
-            <span :class="['status', `status-${statusTone(execution.status)}`]">{{ statusText(execution.status) }}</span>
+            <span :class="['status', `status-${executionStatusTone(execution)}`]">{{ executionStatusText(execution) }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="事件">{{ eventTitle(events, execution.event_name) }}</a-descriptions-item>
           <a-descriptions-item label="对象">{{ execution.subject_id }}</a-descriptions-item>
@@ -20,6 +20,11 @@
           <a-descriptions-item label="记录创建时间">{{ formatMs(execution.created_at_ms) }}</a-descriptions-item>
           <a-descriptions-item label="尝试次数">{{ execution.attempts }}</a-descriptions-item>
           <a-descriptions-item label="下一次处理">{{ formatMs(execution.next_run_at_ms) }}</a-descriptions-item>
+          <a-descriptions-item label="结束时间">{{ formatMs(execution.finished_at_ms) }}</a-descriptions-item>
+          <a-descriptions-item label="耗时">{{ formatDuration(execution.duration_ms) }}</a-descriptions-item>
+          <a-descriptions-item v-if="execution.status === 'EXECUTION_STATUS_FAILED'" label="确认处理" :span="2">
+            {{ execution.acknowledged ? "已确认处理，不再告警" : "还没确认，会一直告警" }}
+          </a-descriptions-item>
           <a-descriptions-item label="事件编号" :span="2">{{ execution.event_id }}</a-descriptions-item>
           <a-descriptions-item v-if="execution.last_error" label="失败原因" :span="2">
             {{ execution.last_error }}
@@ -27,11 +32,13 @@
         </a-descriptions>
 
         <a-space class="drawer-actions">
-          <a-button v-if="canRetry(execution)" size="small" @click="emitAction('retry')">重新执行</a-button>
+          <a-button v-if="canRetry(execution)" size="small" :disabled="busy" @click="emitAction('retry')">重新执行</a-button>
           <a-popconfirm v-if="canCancel(execution)" :content="cancelConfirmText(execution)" @ok="emitAction('cancel')">
-            <a-button size="small" status="danger">{{ cancelLabel(execution) }}</a-button>
+            <a-button size="small" status="danger" :disabled="busy">{{ cancelLabel(execution) }}</a-button>
           </a-popconfirm>
-          <a-button v-if="canAcknowledge(execution)" size="small" @click="emitAction('ack')">确认已处理</a-button>
+          <a-button v-if="canAcknowledge(execution)" size="small" :disabled="busy" @click="emitAction('ack')"
+            >确认已处理</a-button
+          >
         </a-space>
 
         <template v-if="execution.action_type === 'ACTION_TYPE_NOTIFY_URL'">
@@ -81,6 +88,9 @@
                 <template #cell="{ record }">{{ stepStatusText(record.status) }}</template>
               </a-table-column>
               <a-table-column title="次数" data-index="attempts" :width="70" />
+              <a-table-column title="交易操作号" :width="200" :ellipsis="true" :tooltip="true">
+                <template #cell="{ record }">{{ record.operator_action_id || "-" }}</template>
+              </a-table-column>
               <a-table-column title="结果 / 零头 / 失败原因" :width="260" :ellipsis="true" :tooltip="true">
                 <template #cell="{ record }">{{ record.error || record.result || "-" }}</template>
               </a-table-column>
@@ -116,19 +126,26 @@ import {
   cancelLabel,
   canRetry,
   eventTitle,
+  executionStatusText,
+  executionStatusTone,
   formatDuration,
   formatMs,
   prettyPayload,
   roundText,
-  statusText,
   stepStatusText,
-  statusTone,
   stepKindText
 } from "./event-center-utils";
 
 defineOptions({ name: "EventExecutionDrawer" });
 
-const props = defineProps<{ visible: boolean; executionId: string; events: SubscribableEvent[]; refreshToken: number }>();
+const props = defineProps<{
+  visible: boolean;
+  executionId: string;
+  events: SubscribableEvent[];
+  refreshToken: number;
+  /** 父页面正在做某个操作：做完之前按钮不能点。 */
+  busy?: boolean;
+}>();
 const emit = defineEmits<{
   "update:visible": [value: boolean];
   action: [kind: "retry" | "cancel" | "ack", item: EventExecution];
@@ -141,15 +158,22 @@ const execution = computed(() => detail.value?.execution as EventExecution);
 const payloadText = computed(() => prettyPayload(detail.value?.payload_json ?? ""));
 const stepKey = (step: DelistStep) => `${step.round}/${step.kind}/${step.space_id}/${step.logical_account_id}`;
 
+// 每次读取编一个序号，只有最新一次的结果能写进来：换了记录或关掉抽屉后，迟到的响应直接丢弃。
+let loadSeq = 0;
+
 async function load() {
+  const seq = ++loadSeq;
+  const id = props.executionId;
   loading.value = true;
   try {
-    detail.value = await getEventExecution(props.executionId);
+    const result = await getEventExecution(id);
+    if (seq === loadSeq) detail.value = result;
   } catch (error) {
+    if (seq !== loadSeq) return;
     detail.value = null;
     reportControlError(error);
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -165,9 +189,13 @@ watch(
   }
 );
 
+// 换记录或重新打开时先清掉上一条的详情，不让旧内容和新记录的按钮混在一起。
 watch(
   () => [props.visible, props.executionId] as const,
   ([visible, id]) => {
+    loadSeq++;
+    detail.value = null;
+    loading.value = false;
     if (visible && id) void load();
   }
 );

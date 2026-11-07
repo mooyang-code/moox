@@ -2,6 +2,27 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// vi.mock 总会被提升到文件顶部执行，对整个文件生效，所以写在顶层
+const api = vi.hoisted(() => ({
+  createInstance: vi.fn(),
+  getInstance: vi.fn(),
+  getStrategy: vi.fn(),
+  validateStrategy: vi.fn(),
+  listFactorTasks: vi.fn(),
+  listLogicalAccounts: vi.fn(),
+  listAllDatasets: vi.fn()
+}));
+vi.mock("@/api/strategy", () => ({
+  createInstance: api.createInstance,
+  getInstance: api.getInstance,
+  getStrategy: api.getStrategy,
+  validateStrategy: api.validateStrategy
+}));
+vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
+vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
+
 const source = readFileSync(resolve(process.cwd(), "src/views/strategy/components/strategy-instance-create.vue"), "utf8");
 
 describe("strategy instance creation contract", () => {
@@ -22,26 +43,6 @@ describe("strategy instance creation contract", () => {
 });
 
 describe("strategy instance creation behavior", () => {
-  const api = vi.hoisted(() => ({
-    createInstance: vi.fn(),
-    getInstance: vi.fn(),
-    getStrategy: vi.fn(),
-    validateStrategy: vi.fn(),
-    listFactorTasks: vi.fn(),
-    listLogicalAccounts: vi.fn(),
-    listAllDatasets: vi.fn()
-  }));
-  vi.mock("@/api/strategy", () => ({
-    createInstance: api.createInstance,
-    getInstance: api.getInstance,
-    getStrategy: api.getStrategy,
-    validateStrategy: api.validateStrategy
-  }));
-  vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
-  vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
-  vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
-  vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
-
   const stubs = {
     "a-drawer": { props: ["visible"], template: '<div v-if="visible"><slot /><slot name="footer" /></div>' },
     "a-alert": { template: '<div class="alert"><slot /></div>' },
@@ -432,6 +433,37 @@ describe("strategy instance creation behavior", () => {
       factor_tasks: { swap: "ftask_a" },
       logical_account_id: ""
     });
+  });
+
+  it("预检后账户列表收窄：已选的账户不在新列表里时清掉", async () => {
+    api.listLogicalAccounts.mockResolvedValue({
+      logical_accounts: [
+        { logical_account_id: "acc_swap", name: "永续户", space_id: "crypto", control_mode: 1, markets: [2] },
+        { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+      ],
+      page_result: { has_more: false }
+    });
+    api.validateStrategy.mockResolvedValue({
+      diagnostics: [],
+      resolved_json: '{"market":{"select":"both","prefer":"swap"}}',
+      trial: null,
+      trial_items: []
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
+    await flushPromises();
+    const accountSelect = () => wrapper.findAll("select").at(-1)!;
+    await accountSelect().setValue("acc_swap");
+    await flushPromises();
+    expect((accountSelect().element as HTMLSelectElement).value).toBe("acc_swap");
+    await precheck(wrapper, flushPromises);
+    expect(
+      accountSelect()
+        .findAll("option")
+        .map(item => item.attributes("value"))
+    ).toEqual(["", "acc_both"]);
+    expect((accountSelect().element as HTMLSelectElement).value).toBe("");
   });
 
   describe("策略池实例", () => {

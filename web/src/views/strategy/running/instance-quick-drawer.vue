@@ -22,7 +22,7 @@
           <a-descriptions-item label="状态"
             ><StatusBadge :enabled="instance.enabled" :health="instance.health"
           /></a-descriptions-item>
-          <a-descriptions-item label="View"
+          <a-descriptions-item label="因子任务"
             ><span class="mono">{{ tasksText(instance.factor_tasks) }}</span></a-descriptions-item
           >
           <a-descriptions-item label="模式"

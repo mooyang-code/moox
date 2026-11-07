@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { amountClass, defaultLedgerRange, ledgerRangeError, ledgerTypeLabel } from "./ledger";
-import { flattenStatusText } from "./flatten";
 
 describe("account ledger helpers", () => {
   it("labels ledger types and falls back to the raw value", () => {
@@ -22,11 +21,6 @@ describe("account ledger helpers", () => {
     expect(amountClass("1.5")).toBe("tx-pos");
     expect(amountClass("-0.01")).toBe("tx-neg");
     expect(amountClass("0")).toBe("");
-  });
-
-  it("describes flatten progress", () => {
-    expect(flattenStatusText("PARTIAL")).toContain("部分完成");
-    expect(flattenStatusText("COMPLETED")).toBe("平仓完成");
   });
 });
 

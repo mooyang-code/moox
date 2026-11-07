@@ -161,7 +161,8 @@ DSL 要逐字节和提交的内容一致；DSL 超过 64 KiB 时，同时验证�
 
 **参考运行器**（放在 `local/`）：对原框架的**副本**打必要的补丁后运行，常见的有三类——第三方库版本兼容（例如 pandas 2 的
 `Series.between(inclusive=...)` 只接受字符串）、关掉计时与日志输出、去掉上面第 1 条的"起点回退"。因子列预先用原版因子函数算好，
-每个子策略分别跑出持仓，按 `stg_weight` 加权合并后写成 `bar_end,instrument_id,weight`（instrument_id 用 MooX 的 `BTC-USDT` 写法，不截断）。
+每个子策略分别跑出持仓，按 `stg_weight` 加权合并后写成 `bar_end,market,instrument_id,weight`（market 取 `spot`、`swap` 或 `equity`，
+instrument_id 用 MooX 的 `BTC-USDT` 写法，不截断；同一个标的的现货和永续是两行，`targets` 的输出也按 `市场:标的` 区分）。
 
 **比对**（`strategy_check.py`，只读）：
 

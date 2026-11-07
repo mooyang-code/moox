@@ -8,6 +8,7 @@ import type {
   SubscribableEvent
 } from "@/api/callback-dispatcher";
 import type { InstrumentHolder, SkippedAccount } from "@/api/callback-dispatcher/delist";
+import { NETWORK_ERROR_MESSAGE, isNetworkFailure } from "@/api/network-error";
 
 export type StatusTone = "wait" | "run" | "ok" | "fail" | "cancel";
 
@@ -36,6 +37,19 @@ export function statusText(status: ExecutionStatus): string {
 
 export function statusTone(status: ExecutionStatus): StatusTone {
   return STATUS_TEXT[status]?.tone ?? "cancel";
+}
+
+/** 执行记录的状态文字：已取消但善后没做成、失败但已确认处理的，要在状态里说清楚。 */
+export function executionStatusText(item: Pick<EventExecution, "status" | "cleanup_pending" | "acknowledged">): string {
+  if (item.status === "EXECUTION_STATUS_CANCELED" && item.cleanup_pending) return "已取消，解除禁止买入未完成";
+  if (item.status === "EXECUTION_STATUS_FAILED" && item.acknowledged) return "失败，已确认处理";
+  return statusText(item.status);
+}
+
+/** 已取消但善后没做成的记录按失败的颜色显示，提醒还要处理。 */
+export function executionStatusTone(item: Pick<EventExecution, "status" | "cleanup_pending">): StatusTone {
+  if (item.status === "EXECUTION_STATUS_CANCELED" && item.cleanup_pending) return "fail";
+  return statusTone(item.status);
 }
 
 const STEP_KIND_TEXT: Record<DelistStepKind, string> = {
@@ -124,6 +138,18 @@ export function scopeToForm(scope: ScopeFilter[]): Record<string, string[]> {
   return values;
 }
 
+/** 两份限定范围是否一样：字段和取值的先后不算差别，取值为空的字段等于不限。 */
+export function sameScope(a: ScopeFilter[], b: ScopeFilter[]): boolean {
+  const canonical = (scope: ScopeFilter[]) =>
+    JSON.stringify(
+      scope
+        .filter(item => item.values.length > 0)
+        .map(item => [item.field, [...new Set(item.values)].sort()] as const)
+        .sort(([x], [y]) => x.localeCompare(y))
+    );
+  return canonical(a) === canonical(b);
+}
+
 /** 服务启动时一定注册系统动作的处理器；事件目录里没读到“系统动作已启用”（还在加载或加载失败）时，什么都不能断言。 */
 export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
 
@@ -172,6 +198,15 @@ export function cancelConfirmText(item: EventExecution): string {
 }
 
 export const canAcknowledge = (item: EventExecution) => item.status === "EXECUTION_STATUS_FAILED" && !item.acknowledged;
+
+/** 停用系统规则前的确认说明：停用只影响之后发现的下架。 */
+export const SYSTEM_RULE_DISABLE_TEXT =
+  "停用后，之后发现的下架不会再处理：不会禁止买入，也不会平仓，持有下架币的组合要你自己处理。已经在处理的下架照常处理，同一标的登记新的下架时间也会照常改期。";
+
+/** 规则列表里通知地址规则的密钥末 4 位，用来辨认接收方配的是哪一个密钥。 */
+export function secretHintText(rule: Pick<EventRule, "action_type" | "secret_hint">): string {
+  return rule.action_type === "ACTION_TYPE_NOTIFY_URL" && rule.secret_hint ? `密钥末 4 位 ${rule.secret_hint}` : "";
+}
 
 export interface SignatureExample {
   language: string;
@@ -225,9 +260,46 @@ def verify(secret: str, headers: dict, body: bytes) -> bool:
 }
 
 export const RECEIVER_NOTES = [
-  "返回 2xx 算成功，其余都算失败。返回 4xx（408、429 除外）不会再试，其余失败会在 24 小时内按 1 分钟、5 分钟、30 分钟、2 小时、6 小时、12 小时重试。",
+  "返回 2xx 算成功，其余都算失败。返回 3xx（不跟随跳转，请填最终地址）、4xx（408、429 除外），或者地址被出站防护拒绝时不会再试；其余失败（超时、连不上、408、429、5xx）从第一次失败起 24 小时内按 1 分钟、5 分钟、30 分钟、2 小时、6 小时、12 小时重试。",
   "同一件事可能收到不止一次，请用请求头 X-MooX-Event-Id 去重；不保证先后顺序。"
 ];
+
+export interface DocRow {
+  name: string;
+  desc: string;
+}
+
+/** 每个请求都带的请求头。 */
+export const REQUEST_HEADERS: DocRow[] = [
+  { name: "Content-Type", desc: "固定是 application/json" },
+  { name: "X-MooX-Event-Id", desc: "这件事的编号，同一件事重发时不变，用来去重" },
+  { name: "X-MooX-Event", desc: "事件名，例如 event.collector.instrument.delist_scheduled，和请求体里的 event 一样" },
+  { name: "X-MooX-Timestamp", desc: "发送时的 Unix 毫秒时间戳，验签时要用" },
+  { name: "X-MooX-Signature", desc: 'sha256= 加上 HMAC-SHA256(验证密钥, 时间戳 + "." + 原始请求体) 的十六进制' }
+];
+
+/** 请求体（JSON）的字段。 */
+export const BODY_FIELDS: DocRow[] = [
+  { name: "event_id", desc: "这件事的编号，和请求头 X-MooX-Event-Id 一样" },
+  { name: "event", desc: "事件名，和请求头 X-MooX-Event 一样" },
+  { name: "version", desc: "事件内容的版本号，内容格式有不兼容的变化时才会加一" },
+  { name: "space_id", desc: "事件所属的空间；下架这类不分空间的事件是 mooxsys" },
+  { name: "subject", desc: "事件说的是哪个对象，例如下架事件里是 交易所:市场:代码" },
+  { name: "occurred_at", desc: "事件发生的时间，UTC，RFC 3339 格式，例如 2026-11-04T08:00:00Z" },
+  { name: "rule_id", desc: "触发这次通知的规则编号" },
+  { name: "data", desc: "事件本身的内容，字段随事件不同；“发一条测试”收到的就是一份示例" }
+];
+
+export const SAMPLE_REQUEST = `POST <通知地址>
+Content-Type: application/json
+X-MooX-Event-Id: 4f1c...
+X-MooX-Event: event.collector.instrument.delist_scheduled
+X-MooX-Timestamp: 1762243200000
+X-MooX-Signature: sha256=9a0b...
+
+{"event_id": "4f1c...", "event": "event.collector.instrument.delist_scheduled", "version": 1,
+ "space_id": "mooxsys", "subject": "binance:SPOT:FOOUSDT", "occurred_at": "2026-11-04T08:00:00Z",
+ "rule_id": "...", "data": { ... }}`;
 
 export interface HolderSummary {
   /** 生产组合：会被真实平仓，需要二次确认。 */
@@ -321,4 +393,12 @@ export function prettyPayload(raw: string): string {
 /** 过去的下架时间：服务端会直接跳到核对，不再下单。 */
 export function isPastDelistTime(delistAtMs: number, nowMs: number): boolean {
   return delistAtMs <= nowMs;
+}
+
+/** 请求失败的原因文字：没拿到响应、超时换成中文说明，服务端返回的错误原样显示。 */
+export function requestErrorText(error: unknown): string {
+  if (isNetworkFailure(error)) return NETWORK_ERROR_MESSAGE;
+  const failure = error as { code?: unknown; message?: unknown } | null;
+  if (failure?.code === "ECONNABORTED" || failure?.code === "ETIMEDOUT") return "请求超时，交易服务没有及时响应";
+  return typeof failure?.message === "string" && failure.message ? failure.message : "未知原因";
 }

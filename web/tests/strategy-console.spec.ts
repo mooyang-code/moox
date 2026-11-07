@@ -54,13 +54,11 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
 test("instance detail distinguishes valid target weight from trade fills and explains skipped periods", async ({ page }) => {
   await installShell(page);
   const resolved = JSON.stringify({
-    view_id: "view_factor_1h",
-    dataset_id: "ds",
+    market: { select: "spot", prefer: "spot" },
+    tasks: { spot: { factor_task_id: "ftask_ma", view_id: "view_factor_1h", dataset_id: "ds" } },
     bar: "1h",
     calendar: "crypto_24x7",
-    spot: true,
-    market_type: "spot",
-    columns: { ma_20: { source: "factor", factor_id: "ma", definition_hash: "sha256:abc" } },
+    columns: { ma_20: { source: "factor", member: "ma_20", factor_id: "ma", definition_hash: "sha256:abc" } },
     view_columns: ["ma_20"]
   });
   await page.route("**/api/admin/strategy/GetStrategyInstance", route =>
@@ -71,7 +69,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
           instance_id: "instance-paper",
           strategy_id: "momentum",
           space_id: "space-1",
-          view_id: "view_factor_1h",
+          factor_tasks: { spot: "ftask_ma" },
           logical_account_id: "logical-paper",
           enabled: true,
           session_id: "session-1",

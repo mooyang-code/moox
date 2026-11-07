@@ -209,7 +209,7 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
     duration: since(startedMs, nowMs),
     recovering: Boolean(alert.recovering),
     facts,
-    link: alertLink(alert.object)
+    link: alertLink(alert.object, alert.id)
   };
 }
 

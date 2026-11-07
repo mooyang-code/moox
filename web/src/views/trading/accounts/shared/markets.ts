@@ -26,10 +26,3 @@ export function instrumentName(instrumentId: string): string {
 export function coinOf(instrumentId: string): string {
   return instrumentName(instrumentId).split("-")[0];
 }
-
-/** 交易所账户类型（只由检测写入）。 */
-export const accountModeLabels: Record<string, string> = {
-  BINANCE_PORTFOLIO_MARGIN: "币安统一账户",
-  BINANCE_STANDARD: "币安普通账户",
-  OKX_UNIFIED: "OKX 统一账户"
-};

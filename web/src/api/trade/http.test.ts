@@ -7,7 +7,7 @@ vi.mock("../admin/signed-client", () => ({ installSpaceAwareSignedClient: vi.fn(
 const { messageError } = vi.hoisted(() => ({ messageError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
 
-import { callTrade } from "./http";
+import { callTrade, isTradeInvalidParam, isTradeNotFound, TradeResponseError } from "./http";
 
 describe("Trade response errors", () => {
   beforeEach(() => {
@@ -43,8 +43,28 @@ describe("Trade response errors", () => {
     await expect(callTrade("console", "SubmitOrder", {})).resolves.toEqual(response);
   });
 
+  it("没有消息时给出中文兜底和错误码；已知的英文错误换成中文，未知的原样返回", async () => {
+    client.post.mockResolvedValue({ data: { ret_info: { code: 13, msg: "" } } });
+    await expect(callTrade("console", "ListOrders", {})).rejects.toThrow("交易服务请求失败（错误码 13）");
+    client.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "trade logical account: adoption is required" } } });
+    const error = await callTrade("console", "AddLogicalAccountMember", {}, { silent: true }).catch(cause => cause);
+    expect(error.message).toContain("接管账户里已有的持仓");
+    expect(error.response.ret_info.msg, "原始消息保留").toBe("trade logical account: adoption is required");
+    expect(isTradeInvalidParam(error)).toBe(true);
+    expect(isTradeNotFound(error)).toBe(false);
+    expect(isTradeNotFound(new TradeResponseError({ ret_info: { code: "NOT_FOUND", msg: "" } }))).toBe(true);
+  });
+
+  it("包装进去的具体原因保留在括号里；只认完整的错误常量", () => {
+    const text = (msg: string) => new TradeResponseError({ ret_info: { code: 14, msg } }).message;
+    expect(text("trade store: conflict: stale paper order")).toBe("数据已经被修改，刷新后再试（stale paper order）");
+    expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
+    expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
+    expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
+  });
+
   it("does not invent acceptance when the response envelope is missing", async () => {
     client.post.mockResolvedValue({ data: {} });
-    await expect(callTrade("console", "SubmitOrder", {})).rejects.toThrow("missing ret_info");
+    await expect(callTrade("console", "SubmitOrder", {})).rejects.toThrow("缺少 ret_info");
   });
 });

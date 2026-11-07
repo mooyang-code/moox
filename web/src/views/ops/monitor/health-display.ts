@@ -43,8 +43,14 @@ export function hostHref(hostID?: string) {
 
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
-/** 告警对象的处理入口：页面地址与链接文字。 */
-export function alertLink(object?: HealthObject): { href: string; label: string } {
+/** 缺少币安只读 Key 的告警检查 ID：告警编号是“告警规则 ID:检查 ID”，按完整的检查 ID 结尾认出它。 */
+const READONLY_KEY_MISSING_CHECK = "collector_attention:delist_readonly_key_missing";
+
+/** 告警对象的处理入口：页面地址与链接文字。alertId 用来区分同一类关注项里的具体情况。 */
+export function alertLink(object?: HealthObject, alertId?: string): { href: string; label: string } {
+  if (object?.kind === "collector_attention" && alertId?.endsWith(`:${READONLY_KEY_MISSING_CHECK}`)) {
+    return { href: "#/settings/secrets", label: "去录入币安只读 Key" };
+  }
   if (object?.type === "host") return { href: hostHref(object.host_id), label: "查看主机" };
   if (object?.type === "dataset") {
     switch (object.producer) {
@@ -69,7 +75,7 @@ export function alertLink(object?: HealthObject): { href: string; label: string 
     case "trade_attention":
       return { href: "#/trading/accounts", label: "查看交易账户" };
     case "event_center_attention":
-      return { href: "#/settings/events", label: "查看事件中心" };
+      return { href: "#/settings/events?tab=executions", label: "查看事件中心执行记录" };
   }
   return {
     href:
@@ -83,6 +89,6 @@ export function alertLink(object?: HealthObject): { href: string; label: string 
   };
 }
 
-export function alertHref(item: { object?: HealthObject }) {
-  return alertLink(item.object).href;
+export function alertHref(item: { object?: HealthObject; id?: string }) {
+  return alertLink(item.object, item.id).href;
 }

@@ -48,7 +48,7 @@ import { inspectExchangeCredential } from "@/api/trade";
 import type { Exchange, MarketType } from "@/api/trade/types";
 import InspectionResult from "./inspection-result.vue";
 import { fromInspection, type InspectionView } from "./inspection";
-import { exchangeFromProvider, inspectionRequest } from "./inspection-request";
+import { exchangeFromProvider, inspectionRequest, secretEnvironmentOf } from "./inspection-request";
 
 defineOptions({ name: "TradeInspectionTestDialog" });
 
@@ -69,7 +69,8 @@ watch(
   () => {
     view.value = null;
     errorText.value = "";
-    form.environment = 2;
+    // 按密钥 ID 的环境段预选环境；看不出来时默认生产环境
+    form.environment = secretEnvironmentOf(props.secretId) || 2;
     form.markets = [];
   }
 );

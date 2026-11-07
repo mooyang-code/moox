@@ -68,6 +68,11 @@
           <a-table-column title="数据集" data-index="dataset_label" />
           <a-table-column title="频率" data-index="frequency" :width="70" />
           <a-table-column title="标的" data-index="subject_id" :width="130" />
+          <a-table-column title="市场" :width="80">
+            <template #cell="{ record }"
+              ><span :title="record.series_tag || undefined">{{ seriesTagDisplay(record.series_tag) }}</span></template
+            >
+          </a-table-column>
           <a-table-column title="范围（UTC）" :width="260">
             <template #cell="{ record }">{{ utcText(record.from) }} ~ {{ utcText(record.to) }}</template>
           </a-table-column>
@@ -86,6 +91,7 @@
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { checkKline, submitKlineBackfill, type CheckKlineResponse } from "@/api/collector/runtime-status";
+import { seriesTagDisplay } from "@/views/data/shared/series-market";
 import { quickRange, toRFC3339, utcText } from "./backfill-model";
 
 const props = defineProps<{
@@ -118,7 +124,7 @@ const gapRows = computed(() =>
   (result.value?.gaps || []).map((item, index) => ({
     ...item,
     dataset_label: props.datasetOptions.find(option => option.value === item.dataset_id)?.label || item.dataset_id,
-    key: `${item.dataset_id}|${item.subject_id}|${item.from}|${index}`
+    key: `${item.dataset_id}|${item.subject_id}|${item.series_tag ?? ""}|${item.from}|${index}`
   }))
 );
 

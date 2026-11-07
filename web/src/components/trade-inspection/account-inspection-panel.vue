@@ -3,7 +3,7 @@
     <div class="account-inspection-head">
       <div>
         <span class="account-inspection-title">账户类型与检测</span>
-        <a-tag v-if="view" size="small" class="account-inspection-mode">{{ accountModeLabel(view.accountMode) }}</a-tag>
+        <span v-if="view" class="account-inspection-mode">{{ accountModeLabel(view.accountMode) }}</span>
       </div>
       <a-button size="small" :loading="running" @click="reinspect">重新检测</a-button>
     </div>
@@ -63,6 +63,8 @@ async function reinspect() {
 }
 .account-inspection-mode {
   margin-left: 8px;
+  color: var(--color-text-2);
+  font-size: 13px;
 }
 .account-inspection-empty {
   color: var(--color-text-3);

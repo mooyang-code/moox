@@ -145,6 +145,12 @@
             ><span class="tx-neg">没有可以加入的组合：需要同环境、同结算资产，并且已暂停自动执行</span></template
           >
         </a-form-item>
+        <a-form-item
+          v-if="form.kind !== 'paper'"
+          extra="交易所账户里已有持仓或非结算币余额（例如抵扣手续费用的 BNB）时要勾选，否则加不进组合。只有出现在策略目标里的标的会被调整，其余资产不动"
+        >
+          <a-checkbox v-model="form.adoptExisting">接管账户里已有的持仓</a-checkbox>
+        </a-form-item>
       </a-form>
     </div>
 
@@ -162,7 +168,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addLogicalAccountMember, createLogicalAccount, createPaperSimulation, createTradingAccount } from "@/api/trade";
+import {
+  addLogicalAccountMember,
+  createLogicalAccount,
+  createPaperSimulation,
+  createTradingAccount,
+  isTradeInvalidParam
+} from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
 import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
 import type { InspectionView } from "@/components/trade-inspection/inspection";
@@ -265,7 +277,7 @@ function marketAvailable(market: "SPOT" | "SWAP"): boolean {
 async function loadSecrets() {
   secretsLoading.value = true;
   try {
-    secrets.value = await loadExchangeSecrets(form.exchange);
+    secrets.value = await loadExchangeSecrets(form.exchange, form.kind === "testnet" ? 1 : 2);
   } catch {
     secrets.value = [];
   } finally {
@@ -374,7 +386,7 @@ async function submit() {
           trading_account_id: accountId,
           enabled: true,
           priority: exist ? nextPriority(exist) : 1,
-          adopt_existing_exposure: false
+          adopt_existing_exposure: form.kind !== "paper" && form.adoptExisting
         })
       );
       created.joined = true;
@@ -384,8 +396,13 @@ async function submit() {
     // 账户已经建成就通知列表刷新，哪怕对话框已经关闭或重新打开
     if (created.accountId) emit("created", form.kind);
     if (!submission.isCurrent()) return;
+    // 后端没有专门的“需要接管”错误码：实盘加入组合被判为参数不合法、又没勾接管时，提示勾选后重试
+    const adoptHint =
+      created.accountId && form.kind !== "paper" && !form.adoptExisting && isTradeInvalidParam(cause)
+        ? "如果交易所账户里已有持仓或非结算币余额，勾选下方“接管账户里已有的持仓”后再点一次。"
+        : "";
     error.value = created.accountId
-      ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。`
+      ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。${adoptHint}`
       : message;
     submitting.value = false;
     return;

@@ -19,7 +19,6 @@ type Config struct {
 	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
 	Database      DatabaseConfig           `yaml:"database"`
 	EventBus      EventBusConfig           `yaml:"eventbus"`
-	Health        HealthConfig             `yaml:"health"`
 	Delivery      DeliveryConfig           `yaml:"delivery"`
 	Retention     RetentionConfig          `yaml:"retention"`
 
@@ -35,11 +34,6 @@ type DatabaseConfig struct {
 type EventBusConfig struct {
 	URLs           []string `yaml:"urls"`
 	CredentialFile string   `yaml:"credential_file"`
-}
-
-// HealthConfig 是健康检查的监听地址。
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
 }
 
 // DeliveryConfig 控制通知的投递。
@@ -64,7 +58,6 @@ func Default() *Config {
 		GatewayClient: gatewayclient.FileConfig{Caller: "callback-dispatcher", KeyFile: "../../secrets/caller-callback-dispatcher.key"},
 		Database:      DatabaseConfig{Path: "./data/moox_callback_dispatcher.db"},
 		EventBus:      EventBusConfig{URLs: []string{"nats://127.0.0.1:4222"}},
-		Health:        HealthConfig{Addr: ":11461"},
 		Delivery: DeliveryConfig{
 			WorkerBatch: 8, PollInterval: time.Second,
 			ConnectTimeout: 3 * time.Second, RequestTimeout: 10 * time.Second, RetryWindow: 24 * time.Hour,
@@ -115,9 +108,6 @@ func (c *Config) Validate() error {
 	}
 	if len(c.EventBus.URLs) == 0 {
 		return fmt.Errorf("eventbus.urls 不能为空")
-	}
-	if c.Health.Addr == "" {
-		return fmt.Errorf("health.addr 不能为空")
 	}
 	d := c.Delivery
 	if d.WorkerBatch < 1 || d.WorkerBatch > 64 {

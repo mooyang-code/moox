@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { datasetMarketText, isUnifiedMarketType, marketLabel, seriesTagDisplay, seriesTagMarket } from "./series-market";
+import {
+  datasetMarketText,
+  isUnifiedMarketType,
+  marketLabel,
+  seriesTagDisplay,
+  seriesTagExplicitMarket,
+  seriesTagMarketText
+} from "./series-market";
 
 describe("series tag market", () => {
   it("parses the market segment of the production tags", () => {
-    expect(seriesTagMarket("venue:binance|market:spot|source:spot_http")).toBe("spot");
-    expect(seriesTagMarket("venue:binance|market:swap|source:swap_http")).toBe("swap");
-    expect(seriesTagMarket("venue:okx|market:SWAP")).toBe("swap");
+    expect(seriesTagExplicitMarket("venue:binance|market:spot|source:spot_http")).toBe("spot");
+    expect(seriesTagExplicitMarket("venue:binance|market:swap|source:swap_http")).toBe("swap");
+    expect(seriesTagExplicitMarket("venue:okx|market:SWAP")).toBe("swap");
   });
 
-  it("treats tags without a market segment as spot", () => {
-    expect(seriesTagMarket("venue:binance")).toBe("spot");
-    expect(seriesTagMarket("default")).toBe("spot");
-    expect(seriesTagMarket("")).toBe("spot");
-    expect(seriesTagMarket(undefined)).toBe("spot");
-    expect(seriesTagMarket("venue:binance|market:")).toBe("spot");
+  it("没有 market 段的 tag 不认作任何市场，详情里说明没写市场", () => {
+    for (const tag of ["venue:binance", "default", "", undefined, "venue:binance|market:"]) {
+      expect(seriesTagExplicitMarket(tag)).toBeNull();
+      expect(seriesTagMarketText(tag)).toBe("序列标签里没有写市场");
+    }
+    expect(seriesTagMarketText("venue:binance|market:swap")).toBe("永续");
   });
 
   it("labels markets in Chinese", () => {
