@@ -41,6 +41,9 @@ type Ledger struct {
 	SpotFeeRate    float64
 	SwapFeeRate    float64
 	LiquidateAfter int
+	// Bankrupt 在持仓期间权益降到不超过 0 时置位（模拟爆仓）：之后各期忽略目标，可成交的持仓全部平掉、不再开仓，空仓直到结束。
+	// 没有这条规则时负权益会让“目标权重 × 权益”变成反向持仓，账户靠反向持仓“复活”。
+	Bankrupt bool
 }
 
 // NewLedger 用初始现金构造账本；spotFeeBps 与 swapFeeBps 是现货类与永续的单边手续费（基点）。
@@ -66,6 +69,8 @@ type Outcome struct {
 	Liquidated   []string `json:"liquidated,omitempty"`
 	// BuyScale 只在现金不足、现货买入被按比例缩减时给出（现金为 0 时为 0）。
 	BuyScale *float64 `json:"buy_scale,omitempty"`
+	// Bankrupt 只在权益首次降到不超过 0 的那一期为真（模拟爆仓）；此后各期空仓。
+	Bankrupt bool `json:"bankrupt,omitempty"`
 	// SpotValue 是期末现货类持仓的市值之和；SwapValue 是永续持仓的净名义价值（多头为正，空头为负）。
 	SpotValue float64 `json:"spot_value"`
 	SwapValue float64 `json:"swap_value"`
@@ -131,6 +136,10 @@ func (l *Ledger) Step(step Step) Outcome {
 		position.Value = position.Quantity * position.LastPrice
 	}
 	outcome := Outcome{EquityBefore: l.Equity()}
+	// 有持仓（或现金已为负）时权益不超过 0 即爆仓；空账户的零权益不算。
+	if !l.Bankrupt && outcome.EquityBefore <= 0 && (len(l.Positions) > 0 || l.Cash < 0) {
+		l.Bankrupt, outcome.Bankrupt = true, true
+	}
 	dust := dustRatio * math.Max(outcome.EquityBefore, 1)
 	if !step.OK {
 		outcome.EquityAfter = outcome.EquityBefore
@@ -142,10 +151,11 @@ func (l *Ledger) Step(step Step) Outcome {
 		if position.Frozen && l.LiquidateAfter > 0 && position.MissingBars >= l.LiquidateAfter {
 			// 现货按最后价卖出换回现金；永续的盈亏已按最后价结算，清算只扣手续费。
 			fee := math.Abs(position.Value) * l.feeRate(id)
-			if !isSwapKey(id) {
-				l.Cash += position.Value
+			if isSwapKey(id) {
+				l.Cash -= fee
+			} else {
+				l.Cash += position.Value - fee
 			}
-			l.Cash -= fee
 			outcome.Traded += math.Abs(position.Value)
 			outcome.Fee += fee
 			outcome.Liquidated = append(outcome.Liquidated, id)
@@ -153,6 +163,9 @@ func (l *Ledger) Step(step Step) Outcome {
 		}
 	}
 	equity := l.Equity()
+	if l.Bankrupt {
+		step.Targets = nil
+	}
 	// 可成交集合：当期有价的持仓与目标标的。
 	tradable := make(map[string]float64)
 	for id, price := range step.Prices {

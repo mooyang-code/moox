@@ -9,24 +9,26 @@ import (
 
 // Metrics 是回放的绩效与局限性说明，写入 metrics_json。
 type Metrics struct {
-	Bars             int               `json:"bars"`
-	OKBars           int               `json:"ok_bars"`
-	SkippedBars      int               `json:"skipped_bars"`
-	SkipReasons      map[string]int    `json:"skip_reasons,omitempty"`
-	InitialEquity    float64           `json:"initial_equity"`
-	FinalEquity      float64           `json:"final_equity"`
-	TotalReturn      float64           `json:"total_return"`
-	AnnualizedReturn *float64          `json:"annualized_return,omitempty"`
-	MaxDrawdown      float64           `json:"max_drawdown"`
-	AverageTurnover  float64           `json:"average_turnover"`
-	AverageHoldings  float64           `json:"average_holdings"`
-	TotalFee         float64           `json:"total_fee"`
-	UnfilledBars     int               `json:"unfilled_bars"`
-	Liquidations     int               `json:"liquidations"`
-	FirstBarEnd      time.Time         `json:"first_bar_end,omitzero"`
-	LastBarEnd       time.Time         `json:"last_bar_end,omitzero"`
-	Factors          map[string]string `json:"factors,omitempty"`
-	Limitations      []string          `json:"limitations"`
+	Bars             int            `json:"bars"`
+	OKBars           int            `json:"ok_bars"`
+	SkippedBars      int            `json:"skipped_bars"`
+	SkipReasons      map[string]int `json:"skip_reasons,omitempty"`
+	InitialEquity    float64        `json:"initial_equity"`
+	FinalEquity      float64        `json:"final_equity"`
+	TotalReturn      float64        `json:"total_return"`
+	AnnualizedReturn *float64       `json:"annualized_return,omitempty"`
+	MaxDrawdown      float64        `json:"max_drawdown"`
+	AverageTurnover  float64        `json:"average_turnover"`
+	AverageHoldings  float64        `json:"average_holdings"`
+	TotalFee         float64        `json:"total_fee"`
+	UnfilledBars     int            `json:"unfilled_bars"`
+	Liquidations     int            `json:"liquidations"`
+	FirstBarEnd      time.Time      `json:"first_bar_end,omitzero"`
+	LastBarEnd       time.Time      `json:"last_bar_end,omitzero"`
+	// BankruptAt 是权益首次不超过 0（模拟爆仓）的那一期的 bar_end；没有爆仓时省略。此后各期空仓。
+	BankruptAt  time.Time         `json:"bankrupt_at,omitzero"`
+	Factors     map[string]string `json:"factors,omitempty"`
+	Limitations []string          `json:"limitations"`
 }
 
 // accumulator 逐期累计绩效。
@@ -79,6 +81,9 @@ func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outc
 		m.UnfilledBars++
 	}
 	m.Liquidations += len(outcome.Liquidated)
+	if outcome.Bankrupt {
+		m.BankruptAt = barEnd
+	}
 	m.TotalFee += outcome.Fee
 	a.holdingsSum += float64(holdings)
 	m.FinalEquity = outcome.EquityAfter

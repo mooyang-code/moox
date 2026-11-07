@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -379,4 +380,230 @@ func TestReplayFollowsIndexSwitchOfOneMarket(t *testing.T) {
 	if client.spot.activeIndex != "" || client.swap.activeIndex != "idx2" {
 		t.Fatalf("只有永续换了索引：spot=%q swap=%q", client.spot.activeIndex, client.swap.activeIndex)
 	}
+}
+
+// referenceEquity 是独立于账本的权益推算，只用每期的目标权重、各（标的，市场）的价格、费率与是否有价：
+//  1. 有价的持仓名义价值随价格涨跌，权益随之变化（永续逐期结算进现金，与现货市值对权益的作用相同）；无价的持仓冻结不动；
+//  2. 持仓期间权益不超过 0 即爆仓：此后目标视为空；
+//  3. 可成交的（有价的持仓与目标）按 A = 权益 − Σ 费率 × |目标权重 × A − 现有名义价值| 迭代求 A，名义价值调到 目标权重 × A；
+//  4. 跳过的期不成交。
+//
+// 它不模拟现货的现金约束，所以只用在现货权重不大的场景。
+func referenceEquity(t *testing.T, bars []store.ReplayBar, initial float64, rates map[string]float64, price func(market, id string, hour int) (float64, bool)) []float64 {
+	t.Helper()
+	type held struct{ notional, last float64 }
+	positions := map[string]*held{}
+	split := func(key string) (string, string) {
+		id, market, _ := strings.Cut(key, "|")
+		return id, market
+	}
+	equity, bankrupt := initial, false
+	var series []float64
+	for _, bar := range bars {
+		hour := hourOf(bar)
+		before := equity
+		keys := make([]string, 0, len(positions))
+		for key := range positions {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			id, market := split(key)
+			if px, ok := price(market, id, hour); ok {
+				position := positions[key]
+				moved := position.notional * px / position.last
+				before += moved - position.notional
+				position.notional, position.last = moved, px
+			}
+		}
+		if !bankrupt && before <= 0 && len(positions) > 0 {
+			bankrupt = true
+		}
+		if bar.Status != "ok" {
+			equity = before
+			series = append(series, equity)
+			continue
+		}
+		targets := decodeTargets(t, bar)
+		if bankrupt {
+			targets = nil
+		}
+		tradable := map[string]float64{}
+		for key := range positions {
+			id, market := split(key)
+			if px, ok := price(market, id, hour); ok {
+				tradable[key] = px
+			}
+		}
+		for key, weight := range targets {
+			id, market := split(key)
+			if px, ok := price(market, id, hour); ok && weight != 0 {
+				tradable[key] = px
+			}
+		}
+		current := func(key string) float64 {
+			if position := positions[key]; position != nil {
+				return position.notional
+			}
+			return 0
+		}
+		adjusted := before
+		for i := 0; i < 200; i++ {
+			cost := 0.0
+			for key := range tradable {
+				_, market := split(key)
+				cost += rates[market] * math.Abs(targets[key]*adjusted-current(key))
+			}
+			adjusted = before - cost
+		}
+		fee := 0.0
+		for key, px := range tradable {
+			_, market := split(key)
+			target := targets[key] * adjusted
+			fee += rates[market] * math.Abs(target-current(key))
+			if math.Abs(target) < 1e-9 {
+				delete(positions, key)
+			} else {
+				positions[key] = &held{notional: target, last: px}
+			}
+		}
+		equity = before - fee
+		series = append(series, equity)
+	}
+	return series
+}
+
+func requireMatchesReference(t *testing.T, bars []store.ReplayBar, initial float64, rates map[string]float64, price func(market, id string, hour int) (float64, bool)) {
+	t.Helper()
+	want := referenceEquity(t, bars, initial, rates, price)
+	for i, bar := range bars {
+		if math.Abs(bar.Equity-want[i]) > 1e-3+1e-6*math.Abs(want[i]) {
+			t.Fatalf("第 %d 期（小时 %d）权益 %.4f，独立推算应为 %.4f", i, hourOf(bar), bar.Equity, want[i])
+		}
+	}
+}
+
+// pricesOf 把各市场的价格函数与“某小时没有行”的清单合成独立推算要用的取价函数。
+func pricesOf(client *dualClient) func(market, id string, hour int) (float64, bool) {
+	return func(market, id string, hour int) (float64, bool) {
+		fake := client.spot
+		if market == "swap" {
+			fake = client.swap
+		}
+		if fake.missing[id][hour] {
+			return 0, false
+		}
+		return fake.priceAt(id, hour), true
+	}
+}
+
+// 带手续费的纯永续与混合对冲：权益与独立推算逐期一致（费用迭代、分市场费率、重新平衡）。
+func TestReplayEquityMatchesReferenceWithFees(t *testing.T) {
+	cases := []struct {
+		name         string
+		dsl          string
+		tasks        map[string]store.ReplayTask
+		spot, swap   float64
+		spotR, swapR float64
+	}{
+		{"纯永续", swapOnlyDSL, map[string]store.ReplayTask{"swap": swapTask}, 0, 10, 0, 0.001},
+		{"混合对冲", hedgeDSL, map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, 10, 20, 0.001, 0.002},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := openStore(t)
+			client := newDualClient()
+			job := startMarketReplay(t, repo, client, "p1", c.dsl, 12, c.tasks, c.spot, c.swap)
+			(&Runner{Store: repo, Client: client, ChunkBars: 5, InitialEquity: 100}).Execute(context.Background(), job)
+			bars := barsOf(t, repo, "p1")
+			if len(bars) != 12 {
+				t.Fatalf("应有 12 根：%d", len(bars))
+			}
+			requireMatchesReference(t, bars, 100, map[string]float64{"spot": c.spotR, "swap": c.swapR}, pricesOf(client))
+		})
+	}
+}
+
+// 持仓的标的所在 View 缺了几根：账本冻结它（不结算、不成交），价格回来后从冻结前的价格结算；权益与独立推算一致。
+func TestReplayEquityMatchesReferenceWithFrozenSwap(t *testing.T) {
+	repo := openStore(t)
+	client := newDualClient()
+	gap := map[int]bool{6: true, 7: true}
+	client.swap.missing = map[string]map[int]bool{"A": gap, "B": gap}
+	job := startMarketReplay(t, repo, client, "p1", swapOnlyDSL, 12, map[string]store.ReplayTask{"swap": swapTask}, 0, 10)
+	(&Runner{Store: repo, Client: client, ChunkBars: 5, InitialEquity: 100, MissingPriceLiquidateBars: 5}).Execute(context.Background(), job)
+	bars := barsOf(t, repo, "p1")
+	frozen := 0
+	for _, bar := range bars {
+		frozen += bar.Frozen
+	}
+	if frozen == 0 {
+		t.Fatal("这个场景应让持仓冻结至少一期")
+	}
+	requireMatchesReference(t, bars, 100, map[string]float64{"swap": 0.001}, pricesOf(client))
+}
+
+const leveragedSwapDSL = `name: leveraged
+market: {select: swap}
+rules:
+  - id: r
+    type: rank
+    score: "mom"
+    select: {top: 1}
+    weight: {total: 5}
+portfolio:
+  leverage: 5
+  max_missing: 1
+`
+
+// crashPrice 在第 6 小时暴跌 30%、之后继续跌到 50，再反弹。
+func crashPrice(_ string, hour int) float64 {
+	return map[int]float64{6: 70, 7: 60, 8: 50, 9: 80, 10: 100, 11: 120}[hour] + 100*boolFloat(hour <= 5 || hour > 11)
+}
+
+func boolFloat(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// 纯永续 5 倍杠杆，价格暴跌 30% 使权益变成 −50：模拟爆仓，持仓平掉，之后价格再怎么变都空仓、权益不变，
+// 不会被“目标权重 × 负权益”翻成反向持仓而“复活”。
+func TestReplayLeveragedSwapBlowsUpAndStaysFlat(t *testing.T) {
+	repo := openStore(t)
+	client := newDualClient()
+	client.swap.priceFn = crashPrice
+	job := startMarketReplay(t, repo, client, "p1", leveragedSwapDSL, 10, map[string]store.ReplayTask{"swap": swapTask}, 0, 0)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+	done, _ := repo.GetReplay(context.Background(), "p1")
+	if done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	bars := barsOf(t, repo, "p1")
+	var metrics Metrics
+	if err := json.Unmarshal(done.MetricsJSON, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	crashAt := origin.Add(7 * time.Hour) // 第 6 小时这根的 bar_end
+	if !metrics.BankruptAt.Equal(crashAt) || !strings.Contains(strings.Join(metrics.Limitations, "；"), "模拟爆仓") {
+		t.Fatalf("应记录爆仓期与说明：%+v", metrics)
+	}
+	for _, bar := range bars {
+		switch {
+		case hourOf(bar) < 6:
+			if len(decodePositions(t, bar)) != 1 {
+				t.Fatalf("爆仓前应满仓 5 倍多头：%s", bar.PositionsJSON)
+			}
+		case hourOf(bar) == 6:
+			if math.Abs(bar.Equity+50) > 1e-3 || len(decodePositions(t, bar)) != 0 {
+				t.Fatalf("第 6 小时权益应为 −50 并已平仓：%v %s", bar.Equity, bar.PositionsJSON)
+			}
+		default:
+			if math.Abs(bar.Equity+50) > 1e-3 || len(decodePositions(t, bar)) != 0 || bar.SwapValue != 0 || bar.Turnover != 0 {
+				t.Fatalf("爆仓后应一直空仓、权益不变：小时 %d 权益 %v %s", hourOf(bar), bar.Equity, bar.PositionsJSON)
+			}
+		}
+	}
+	requireMatchesReference(t, bars, 100, map[string]float64{"swap": 0}, pricesOf(client))
 }

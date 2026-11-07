@@ -375,6 +375,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 				return acc.finish(), err
 			}
 			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, ledger.Holdings())
+			if outcome.Bankrupt {
+				acc.setNote(noteBankrupt, fmt.Sprintf("权益在 %s 这一期不为正（模拟爆仓），此后各期空仓：目标不再成交，权益保持不变", input.BarEndLabel(resolved.Calendar, resolved.Bar, bar.BarEnd)))
+			}
 		}
 		if err := r.Store.UpdateReplayProgress(ctx, job.ReplayID, segment[len(segment)-1].BarEnd, r.now()); err != nil {
 			return acc.finish(), err
@@ -385,6 +388,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 
 // 按 key 替换的局限说明：同一件事只保留最新的一条。
 const (
+	noteBankrupt    = "bankrupt"
 	noteTruncated   = "truncated"
 	noteIndexSwitch = "index_switch"
 )

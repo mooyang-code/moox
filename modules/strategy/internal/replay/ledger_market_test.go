@@ -2,6 +2,7 @@ package replay
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"testing"
 )
@@ -246,5 +247,57 @@ func TestPositionKeysSortBySubjectThenMarket(t *testing.T) {
 	sortKeys(keys)
 	if want := []string{"A|spot", "A|swap", "A-B|spot", "B|spot", "B|swap"}; !reflect.DeepEqual(keys, want) {
 		t.Fatalf("排序不符：%v", keys)
+	}
+}
+
+// 加杠杆的永续多头遇到暴跌：权益降到不超过 0 即爆仓，持仓全部平掉，之后不再开仓；不会因为“目标权重 × 负权益”被翻成反向持仓。
+func TestLeveragedSwapLongBlowsUpAndStaysFlat(t *testing.T) {
+	ledger := NewLedger(100, 0, 0, 3)
+	targets := map[string]float64{swapA: 5}
+	ledger.Step(Step{OK: true, Prices: map[string]float64{swapA: 10}, Targets: targets})
+	near(t, "5 倍多头的数量", ledger.Positions[swapA].Quantity, 50)
+	// 跌 25%：亏损 50 × 2.5 = 125，现金 −25，权益 −25。
+	crash := ledger.Step(Step{OK: true, Prices: map[string]float64{swapA: 7.5}, Targets: targets})
+	near(t, "爆仓期的成交前权益", crash.EquityBefore, -25)
+	if !crash.Bankrupt || !ledger.Bankrupt {
+		t.Fatalf("权益不为正应记为爆仓：%+v", crash)
+	}
+	if len(ledger.Positions) != 0 {
+		t.Fatalf("爆仓后不能留下任何持仓（包括反向持仓）：%+v", ledger.Positions[swapA])
+	}
+	near(t, "平仓不改变现金", ledger.Cash, -25)
+	near(t, "平仓成交额", crash.Traded, 375)
+	near(t, "爆仓后权益", crash.EquityAfter, -25)
+	// 之后价格反弹、目标仍是 5 倍多头：保持空仓，权益不变，也不再标记爆仓。
+	for _, price := range []float64{10, 14, 6} {
+		next := ledger.Step(Step{OK: true, Prices: map[string]float64{swapA: price}, Targets: targets})
+		if next.Bankrupt || len(ledger.Positions) != 0 || next.Traded != 0 || math.Abs(next.EquityAfter+25) > 1e-9 || len(next.Unfilled) != 0 {
+			t.Fatalf("爆仓后应一直空仓：%+v %+v", next, ledger.Positions)
+		}
+	}
+}
+
+// 爆仓时现货也一并卖出，现金为负的部分保持不变。
+func TestBankruptcySellsSpotAndFlattensSwap(t *testing.T) {
+	ledger := NewLedger(100, 0, 0, 3)
+	targets := map[string]float64{spotA: 0.5, swapB: 5}
+	ledger.Step(Step{OK: true, Prices: map[string]float64{spotA: 10, swapB: 10}, Targets: targets})
+	// 永续跌 25%：现金 50 − 125 = −75，现货市值 50，权益 −25。
+	crash := ledger.Step(Step{OK: true, Prices: map[string]float64{spotA: 10, swapB: 7.5}, Targets: targets})
+	if !crash.Bankrupt || len(ledger.Positions) != 0 {
+		t.Fatalf("爆仓应平掉现货与永续：%+v %+v", crash, ledger.Positions)
+	}
+	near(t, "现货卖出后现金", ledger.Cash, -25)
+	near(t, "期末权益", crash.EquityAfter, -25)
+	near(t, "期末现货市值", crash.SpotValue, 0)
+	near(t, "期末永续名义价值", crash.SwapValue, 0)
+}
+
+// 空账户的零权益不算爆仓；权益为正时不受影响。
+func TestEmptyZeroEquityLedgerIsNotBankrupt(t *testing.T) {
+	ledger := NewLedger(0, 0, 0, 3)
+	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{swapA: 10}, Targets: map[string]float64{swapA: 1}})
+	if outcome.Bankrupt || ledger.Bankrupt {
+		t.Fatalf("空账户不是爆仓：%+v", outcome)
 	}
 }
