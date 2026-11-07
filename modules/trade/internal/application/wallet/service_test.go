@@ -852,5 +852,86 @@ func TestRiskCollectIsIdempotentPerKeyAndSeparatesRiskEvents(t *testing.T) {
 	require.Len(t, e.exchange.Calls(), 3)
 }
 
+// 风控归集必须做成：不沿用目标归集“收尾吞错”的语义。出错返回 error（调用方下一轮重试），别的未结划转时 pending，
+// 限频、没到账的软失败记录不算“做过”，重试用递增的本地引用号不撞唯一约束，被拒绝连续 3 次后不再自动重试。
+func TestRiskCollectRetriesAfterFailuresInsteadOfLookingDone(t *testing.T) {
+	ctx := context.Background()
+	const key = "margin-logical-1-1"
+	collect := func(e *env) (bool, error) {
+		return e.service.CollectForRisk(ctx, "space-1", "logical-1", key, []store.TradingAccountRecord{e.account})
+	}
+	refs := func(e *env) []string {
+		rows, err := e.store.ListWalletTransfersByAccount(ctx, "space-1", "account-1", 0, e.now.Add(time.Hour).UnixMilli())
+		require.NoError(t, err)
+		var out []string
+		for index := len(rows) - 1; index >= 0; index-- {
+			out = append(out, rows[index].ClientRef+"|"+rows[index].State)
+		}
+		return out
+	}
+
+	t.Run("查余额被限频：返回错误，恢复后能划", func(t *testing.T) {
+		e := newEnv(t, "500", "50")
+		e.exchange.QueryErr = &exchange.Error{Kind: exchange.ErrorRateLimited, Err: errors.New("429")}
+		_, err := collect(e)
+		require.Error(t, err, "不能当成已经归集完")
+		e.exchange.QueryErr = nil
+		pending, err := collect(e)
+		require.NoError(t, err)
+		require.True(t, pending)
+		require.Len(t, e.exchange.Calls(), 1)
+	})
+
+	t.Run("划转被限频（没发出）：返回错误；同一个幂等键再调能划，引用号递增", func(t *testing.T) {
+		e := newEnv(t, "500", "50")
+		e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorRateLimited, Err: errors.New("429")}
+		_, err := collect(e)
+		require.Error(t, err)
+		require.Equal(t, []string{key + ":TO_FUTURES:1|FAILED"}, refs(e))
+		e.exchange.TransferErr = nil
+		pending, err := collect(e)
+		require.NoError(t, err)
+		require.True(t, pending)
+		require.Equal(t, []string{key + ":TO_FUTURES:1|FAILED", key + ":TO_FUTURES:2|PENDING"}, refs(e), "重试的本地引用号递增，不撞唯一约束")
+		require.Len(t, e.exchange.Calls(), 2)
+	})
+
+	t.Run("账户上有别的未结划转：pending，不发起新归集", func(t *testing.T) {
+		e := newEnv(t, "500", "50")
+		e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New("timeout")}
+		e.before("0.1") // 目标划转结果不明，记录保持 PENDING
+		e.exchange.TransferErr = nil
+		calls := len(e.exchange.Calls())
+		pending, err := collect(e)
+		require.NoError(t, err)
+		require.True(t, pending, "有别的未结划转：等它结束再归集，不能当成归集完")
+		require.Len(t, e.exchange.Calls(), calls)
+	})
+
+	t.Run("被交易所拒绝：重试，连续 3 次后不再自动重试但仍返回错误", func(t *testing.T) {
+		e := newEnv(t, "500", "50")
+		e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("rejected")}
+		for range maxTransferFailures {
+			_, err := collect(e)
+			require.Error(t, err)
+		}
+		require.Len(t, e.exchange.Calls(), maxTransferFailures)
+		e.exchange.TransferErr = nil
+		_, err := collect(e)
+		require.Error(t, err, "不再自动重试，但不能当成完成")
+		require.Contains(t, err.Error(), "手动")
+		require.Len(t, e.exchange.Calls(), maxTransferFailures)
+		require.Equal(t, key+":TO_FUTURES:3|FAILED", refs(e)[2])
+	})
+
+	t.Run("目标归集仍是收尾动作：出错只告警、不返回错误", func(t *testing.T) {
+		e := newEnv(t, "500", "50")
+		e.exchange.QueryErr = &exchange.Error{Kind: exchange.ErrorRateLimited, Err: errors.New("429")}
+		pending, err := e.service.Collect(ctx, "space-1", e.target, []store.TradingAccountRecord{e.account})
+		require.NoError(t, err)
+		require.False(t, pending)
+	})
+}
+
 // waiting 报告本轮有没有账户在等（划转、对账、等快照或退避）。
 func waiting(outcome Outcome) bool { return len(outcome.Waiting) > 0 }
