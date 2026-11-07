@@ -118,6 +118,7 @@ const itemReasons: Record<string, string> = {
   no_row: "本期无行",
   score_invalid: "分数无效",
   not_expected: "已不在预期集合",
+  period_skipped: "本期整期跳过，未求值",
   holding: "延续批次持有",
   gap_hold: "K 线空洞，保持持仓不动",
   market_hold: "所在市场本期不可用，保持持仓不动",
