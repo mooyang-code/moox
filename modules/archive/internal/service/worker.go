@@ -42,8 +42,12 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	}
 	rsp.CancelRunIds = canceled
 	if result.Active {
-		for _, ref := range s.deletedTaskRefs() {
-			rsp.DeletedTasks = append(rsp.DeletedTasks, &archivepb.TaskRef{SpaceId: ref.space, DatasetId: ref.dataset, TaskEpoch: ref.epoch})
+		tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
+		if err != nil {
+			return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
+		}
+		for _, t := range tasks {
+			rsp.Tasks = append(rsp.Tasks, &archivepb.TaskRef{SpaceId: t.SpaceID, DatasetId: t.DatasetID, TaskId: strconv.FormatInt(t.ID, 10)})
 		}
 	}
 	return rsp, nil
@@ -76,21 +80,36 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	}
 	rsp := &archivepb.PullArchiveRunRsp{RetInfo: success()}
 	for _, c := range claimed {
-		rsp.Runs = append(rsp.Runs, s.assignment(c))
+		// worker 的读取都截在线上保留期内，更早的分区用不到，不下发（否则登记随年份增长、撑大响应）。
+		var since time.Time
+		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever {
+			since = c.Run.StartedAt.Add(-limit)
+		}
+		registered, err := s.store.TaskPartitions(ctx, c.Task.SpaceID, c.Task.DatasetID, since)
+		if err != nil {
+			// 运行已领取：读不到分区登记就让它照常下发会冒用残缺的本地状态，宁可让租约过期后重来。
+			return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
+		}
+		rsp.Runs = append(rsp.Runs, s.assignment(c, registered))
 	}
 	return rsp, nil
 }
 
 // assignment 把领取到的运行与任务打包成下发给 worker 的参数。
-func (s *Service) assignment(c store.Claimed) *archivepb.RunAssignment {
+func (s *Service) assignment(c store.Claimed, registered []store.Partition) *archivepb.RunAssignment {
 	spaceCfg := s.cfg.Space(c.Task.SpaceID)
+	reports := make([]*archivepb.PartitionReport, 0, len(registered))
+	for _, p := range registered {
+		reports = append(reports, registeredPartitionToPB(p))
+	}
 	return &archivepb.RunAssignment{
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind, SpaceId: c.Task.SpaceID, DatasetId: c.Task.DatasetID,
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, DataNodeId: c.Task.DataNodeID, Retention: c.Task.Retention,
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
-		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskEpoch: strconv.FormatInt(c.Task.ID, 10), FilePrefix: c.Task.FilePrefix, DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
+		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
+		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports,
 	}
 }
 
@@ -144,6 +163,16 @@ func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.C
 		return &archivepb.CompleteArchiveRunRsp{RetInfo: fail(err)}, nil
 	}
 	return &archivepb.CompleteArchiveRunRsp{RetInfo: success()}, nil
+}
+
+// registeredPartitionToPB 把一条分区登记转成下发给 worker 的报告（不带预览与列名，只用来补齐本地分区状态）。
+func registeredPartitionToPB(p store.Partition) *archivepb.PartitionReport {
+	return &archivepb.PartitionReport{
+		PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd), Status: p.Status,
+		RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
+		FilePath: p.FilePath, FileBytes: p.FileBytes, FileSha256: p.FileSHA256, ExportCount: p.ExportCount,
+		LastChangedAt: fmtRFC(p.LastChangedAt), ExportedAt: fmtRFC(p.ExportedAt), FinalizedAt: fmtRFC(p.FinalizedAt),
+	}
 }
 
 func partitionsFromPB(items []*archivepb.PartitionReport) ([]store.Partition, error) {

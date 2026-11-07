@@ -28,8 +28,10 @@ type fakeSource struct {
 	failAll  error
 	columns  []staging.Column
 	// failAfter 大于 0 时，成功服务 failAfter 页之后的读取全部失败。
-	failAfter  int
-	served     int
+	failAfter int
+	served    int
+	// failFrom 非零时，起点不早于它的读取全部失败。
+	failFrom   time.Time
 	columnsErr error // 非空时 Columns 失败
 }
 
@@ -51,6 +53,9 @@ func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page
 	if f.failures > 0 {
 		f.failures--
 		return source.Page{}, errors.New("transient")
+	}
+	if !f.failFrom.IsZero() && !req.Start.Before(f.failFrom) {
+		return source.Page{}, errors.New("source went away")
 	}
 	if f.failAfter > 0 && f.served >= f.failAfter {
 		return source.Page{}, errors.New("source went away")
@@ -94,6 +99,8 @@ type env struct {
 	src   *fakeSource
 	pace  *noPacer
 	now   time.Time
+	// format 是导出格式；默认 csv（便于直接读文件），空串即生产默认的 csv.gz。
+	format string
 }
 
 func newEnv(t *testing.T) *env {
@@ -104,16 +111,16 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return &env{t: t, root: root, store: store, src: &fakeSource{}, pace: &noPacer{}, now: time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC)}
+	return &env{t: t, root: root, store: store, src: &fakeSource{}, pace: &noPacer{}, now: time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC), format: export.FormatCSV}
 }
 
 func (e *env) runner(pageRows int) *Runner {
-	return &Runner{Source: e.src, Staging: e.store, Files: export.Files{Root: e.root}, Pace: e.pace, PageRows: pageRows, Now: func() time.Time { return e.now }, ReadAttempts: 3}
+	return &Runner{Source: e.src, Staging: e.store, Files: export.Files{Root: e.root, Format: e.format}, Pace: e.pace, PageRows: pageRows, Now: func() time.Time { return e.now }, ReadAttempts: 3}
 }
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", FilePrefix: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.Format(time.RFC3339), ScheduledAt: e.now.Format(time.RFC3339),
 	}
@@ -197,8 +204,8 @@ func TestFirstRunStagesRowsWithoutBackfillAndAdvancesTheWatermark(t *testing.T) 
 	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
 		t.Fatalf("watermark = %v %v", w, ok)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m_dataset.json")); err != nil {
-		t.Fatalf("_dataset.json: %v", err)
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "dataset.json")); err != nil {
+		t.Fatalf("dataset.json: %v", err)
 	}
 }
 
@@ -241,7 +248,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	e.now = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
 	out = e.run(2000, nil, nil)
 	p := report(out, "2026-10-16")
-	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/2026/ds_1m_20261016.csv" || p.GetFileSha256() == "" ||
+	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/ds_1m/2026/20261016.csv" || p.GetFileSha256() == "" ||
 		p.GetFileBytes() == 0 || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,open,close\n") || p.GetRowCount() != 90 {
 		t.Fatalf("partition = %v", p)
 	}
@@ -273,7 +280,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	if state.Status != staging.StatusFinal || st.Rows != 0 {
 		t.Fatalf("state=%+v stats=%+v", state, st)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "2026", "ds_1m_20261016.csv")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "2026", "20261016.csv")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -289,7 +296,7 @@ func TestLateRowsReopenAFinalPartitionAndKeepEveryOriginalRow(t *testing.T) {
 	if p := report(out, "2026-10-10"); p == nil || p.GetStatus() != "final" || p.GetExportCount() != 1 || out.Exported != 1 || out.Finalized != 1 {
 		t.Fatalf("应已导出并定稿: %v out=%+v", p, out)
 	}
-	orig := readFile(t, e.root, "crypto/2026/ds_1m_20261010.csv")
+	orig := readFile(t, e.root, "crypto/ds_1m/2026/20261010.csv")
 	// 用补拉区间读到一条晚到的行：先读回原文件，再写入，重新导出，包含原来的 30 行 + 1 行。
 	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
 	e.now = e.now.Add(time.Hour)
@@ -483,8 +490,8 @@ func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day, 60, 1)
-	// 第一次运行：01:04:43 开始，首页成功后第二页失败（页大小 20，重试 1 次）。
-	e.src.failAfter = 1
+	// 第一次运行：01:04:43 开始，第一块（前一天 23:48:43 起）的读取就失败（只试 1 次），没有续读起点。
+	e.src.failAll = errors.New("access unreachable")
 	r := e.runner(20)
 	r.ReadAttempts = 1
 	out, err := r.Execute(context.Background(), e.assignment(nil), nil)
@@ -492,7 +499,7 @@ func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 	firstStart := e.src.requests[0].Start
-	e.src.requests, e.src.failAfter, e.src.served = nil, 0, 0
+	e.src.requests, e.src.failAll = nil, nil
 	// 一个小时之后重试：起点必须仍是第一次的起点（而不是重新往前推 1h16m），否则两次起点之间没读到的数据永久漏读。
 	e.now = e.now.Add(time.Hour)
 	out = e.run(20, nil, nil)
@@ -555,7 +562,7 @@ func TestPartitionsStayPendingUntilAcknowledgedSoALostCompletionIsReportedAgain(
 	}
 }
 
-func TestExportedPartitionWithoutAFileAtTheCurrentPathIsExportedAgain(t *testing.T) {
+func TestExportedPartitionWhoseFileWasDeletedIsExportedAgain(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
@@ -565,7 +572,7 @@ func TestExportedPartitionWithoutAFileAtTheCurrentPathIsExportedAgain(t *testing
 	if p == nil || p.GetStatus() != "exported" {
 		t.Fatalf("out=%+v", out)
 	}
-	// 升级前用旧目录导出、新命名下没有文件：下一次运行重新导出，登记的路径指向真实存在的文件。
+	// 文件被删：行还在暂存区，下一次运行按记录的路径重新导出。
 	if err := os.Remove(filepath.Join(e.root, filepath.FromSlash(p.GetFilePath()))); err != nil {
 		t.Fatal(err)
 	}
@@ -577,5 +584,292 @@ func TestExportedPartitionWithoutAFileAtTheCurrentPathIsExportedAgain(t *testing
 	}
 	if _, err := os.Stat(filepath.Join(e.root, filepath.FromSlash(again.GetFilePath()))); err != nil {
 		t.Fatalf("重新导出后文件应存在: %v", err)
+	}
+}
+
+func partitionState(t *testing.T, e *env, key string) staging.PartitionState {
+	t.Helper()
+	p, ok, err := e.store.Partition(context.Background(), "crypto", "ds_1m", key)
+	if err != nil || !ok {
+		t.Fatalf("partition %s: ok=%v err=%v", key, ok, err)
+	}
+	return p
+}
+
+// 回补中途某页失败：之前的分区块已经导出、到期的已定稿；下一次运行从续读起点接着读，不从回补起点重读。
+func TestBackfillResumesAfterAFailedChunkWithEarlierPartitionsAlreadyHandled(t *testing.T) {
+	e := newEnv(t)
+	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	for d := 0; d < 4; d++ {
+		e.src.rows = append(e.src.rows, rows("BTC", from.AddDate(0, 0, d).Add(time.Hour), 30, float64(d))...)
+	}
+	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	e.src.failFrom = time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC) // 第三块起读取失败
+	backfill := func(a *archivepb.RunAssignment) { a.BackfillFrom = from.Format(time.RFC3339); a.Retention = "forever" }
+	r := e.runner(2000)
+	r.ReadAttempts = 1
+	out, err := r.Execute(context.Background(), e.assignment(backfill), nil)
+	if err != nil || out.Status != "failed" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	// 10-10 收盘 + L + 3 天 = 10-14 00:15，已定稿；10-11 已过收盘 + L，已导出。
+	if p := partitionState(t, e, "2026-10-10"); p.Status != staging.StatusFinal || p.RowCount != 30 {
+		t.Fatalf("10-10 = %+v", p)
+	}
+	if p := partitionState(t, e, "2026-10-11"); p.Status != staging.StatusExported || p.FilePath == "" {
+		t.Fatalf("10-11 = %+v", p)
+	}
+	if out.Exported != 2 || out.Finalized != 1 || report(out, "2026-10-10").GetStatus() != "final" {
+		t.Fatalf("上报应带上已处理的分区: %+v", out)
+	}
+	if _, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); ok {
+		t.Fatal("失败的运行不能推进水位")
+	}
+	resume, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m")
+	if !ok || !resume.Equal(e.src.failFrom) {
+		t.Fatalf("resume_from = %v %v", resume, ok)
+	}
+	// 下一次运行（回补起点仍在）：从续读起点读，读完后推进水位并清掉续读起点。
+	e.src.failFrom, e.src.requests = time.Time{}, nil
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, backfill, nil)
+	if out.Status != "succeeded" || !e.src.requests[0].Start.Equal(resume) {
+		t.Fatalf("续读起点 = %s, want %s; out=%+v", e.src.requests[0].Start, resume, out)
+	}
+	if out.Progress.RowsRead != 60 || partitionState(t, e, "2026-10-12").Status != staging.StatusExported {
+		t.Fatalf("续读应只读 10-12 起的两天: %+v", out)
+	}
+	if _, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m"); ok {
+		t.Fatal("水位推进后续读起点应清掉")
+	}
+	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
+		t.Fatalf("watermark = %v %v", w, ok)
+	}
+}
+
+// 续读点不晚于“本次运行开始 − L − S”。
+func TestResumePointIsCappedAtRunStartMinusLookback(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day, 30, 1)
+	e.now = time.Date(2026, 10, 17, 0, 5, 0, 0, time.UTC)
+	// 区间 [10-16 23:00, 10-17 00:05)：第一块结束于 00:00，而 运行开始 − 16 分钟 = 23:49。
+	e.src.failFrom = day
+	r := e.runner(2000)
+	r.ReadAttempts = 1
+	if out, _ := r.Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T23:00:00Z" }), nil); out.Status != "failed" {
+		t.Fatalf("out=%+v", out)
+	}
+	if resume, ok, _ := e.store.ResumeFrom(context.Background(), "crypto", "ds_1m"); !ok || !resume.Equal(e.now.Add(-16*time.Minute)) {
+		t.Fatalf("resume_from = %v %v", resume, ok)
+	}
+}
+
+// 暂存库丢失后：按 mgr 的登记（last_success_at + registered_partitions）重建，再读到旧分区的行时读回原文件合并，行数不减少。
+func TestLostStagingIsRebuiltFromTheManagerRegistrationWithoutLosingRows(t *testing.T) {
+	e := newEnv(t)
+	e.format = "" // 走生产默认的 csv.gz：读回前校验、解压读回、重新压缩导出
+	day := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	e.src.rows = append(rows("BTC", day.Add(23*time.Hour), 60, 1), rows("ETH", day.Add(23*time.Hour+30*time.Minute), 30, 50)...)
+	e.now = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T22:00:00Z" }, nil)
+	registered := report(out, "2026-10-16")
+	if registered.GetStatus() != "exported" || registered.GetRowCount() != 90 || !strings.HasSuffix(registered.GetFilePath(), ".csv.gz") {
+		t.Fatalf("registered = %v", registered)
+	}
+	lastSuccess := e.now
+	orig := readFile(t, e.root, registered.GetFilePath())
+
+	// 暂存库整个丢失；Storage 里那一天只剩部分行（例如线上已删一部分），另有一条晚到的行。
+	_ = e.store.Close()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(filepath.Join(e.root, ".state", "staging.db"+suffix))
+	}
+	store, err := staging.Open(filepath.Join(e.root, ".state", "staging.db"), staging.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	e.store = store
+	e.src.rows = append(rows("BTC", day.Add(23*time.Hour+40*time.Minute), 20, 41), rows("SOL", day.Add(23*time.Hour), 1, 7)...)
+	e.src.requests = nil
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, func(a *archivepb.RunAssignment) {
+		a.LastSuccessAt = lastSuccess.Format(time.RFC3339)
+		a.RegisteredPartitions = []*archivepb.PartitionReport{registered}
+	}, nil)
+	if out.Status != "succeeded" {
+		t.Fatalf("out = %+v", out)
+	}
+	// 起点前移到登记里 exported 分区的开始。
+	if !e.src.requests[0].Start.Equal(day) {
+		t.Fatalf("start = %s", e.src.requests[0].Start)
+	}
+	p := report(out, "2026-10-16")
+	if p == nil || p.GetRowCount() != 91 || p.GetSubjectCount() != 3 || p.GetExportCount() != 2 || p.GetFilePath() != registered.GetFilePath() {
+		t.Fatalf("读回合并后: %v", p)
+	}
+	rewritten := readFile(t, e.root, p.GetFilePath())
+	for _, line := range strings.Split(strings.TrimSpace(orig), "\n")[1:] {
+		if !strings.Contains(rewritten, line) {
+			t.Fatalf("重建后丢了原有的行 %q", line)
+		}
+	}
+}
+
+// 改了导出格式之后，读回用记录的路径，重新导出也写回原路径，目录里只有一份文件。
+func TestReadBackUsesTheRecordedPathAfterTheExportFormatChanged(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
+	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
+	if p := report(out, "2026-10-10"); p.GetStatus() != "final" || p.GetFilePath() != "crypto/ds_1m/2026/20261010.csv" {
+		t.Fatalf("p = %v", p)
+	}
+	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
+	r := e.runner(2000)
+	r.Files.Format = export.FormatCSVGz
+	e.now = e.now.Add(time.Hour)
+	out, err := r.Execute(context.Background(), e.assignment(func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "range", "2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"
+	}), nil)
+	if err != nil || out.Status != "succeeded" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	p := report(out, "2026-10-10")
+	if p.GetRowCount() != 31 || p.GetFilePath() != "crypto/ds_1m/2026/20261010.csv" || p.GetExportCount() != 2 {
+		t.Fatalf("p = %v", p)
+	}
+	entries, _ := os.ReadDir(filepath.Join(e.root, "crypto", "ds_1m", "2026"))
+	if len(entries) != 1 {
+		t.Fatalf("该分区只应有一份文件: %v", entries)
+	}
+}
+
+// 读回前 sha256 与记录不一致：报错，运行失败，不改动文件。
+func TestReadBackRefusesAFileWhoseSHA256Changed(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
+	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
+	path := filepath.Join(e.root, filepath.FromSlash(report(out, "2026-10-10").GetFilePath()))
+	raw, _ := os.ReadFile(path)
+	truncated := raw[:len(raw)-len("2026-10-10T01:29:00Z,BTC,\"\",30.0,30.5\n")]
+	if err := os.WriteFile(path, truncated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "range", "2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"
+	}, nil)
+	if out.Status != "failed" || !strings.Contains(out.Message, "sha256") {
+		t.Fatalf("out = %+v", out)
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(truncated) {
+		t.Fatal("校验失败不能改动文件")
+	}
+	if p := partitionState(t, e, "2026-10-10"); p.Status != staging.StatusFinal {
+		t.Fatalf("分区应保持 final: %+v", p)
+	}
+}
+
+// 目标文件已存在、本地却没有导出记录：拒绝导出，运行失败，不覆盖文件。
+func TestExportRefusesToOverwriteAFileTheStagingDoesNotKnow(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day.Add(23*time.Hour), 60, 1)
+	target := filepath.Join(e.root, "crypto", "ds_1m", "2026", "20261016.csv")
+	_ = os.MkdirAll(filepath.Dir(target), 0o755)
+	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.now = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-16T22:00:00Z" }, nil)
+	if out.Status != "failed" || !strings.Contains(out.Message, "已存在") {
+		t.Fatalf("out = %+v", out)
+	}
+	if raw, _ := os.ReadFile(target); string(raw) != "old" {
+		t.Fatal("不能覆盖已有文件")
+	}
+}
+
+// 保留期截掉的长度不到一根 K 线跨度时不记“无法补齐”。
+func TestRetentionCutShorterThanABarIsNotReported(t *testing.T) {
+	e := newEnv(t)
+	out := e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Retention = "24h"
+		a.BackfillFrom = e.now.Add(-24*time.Hour - 30*time.Second).Format(time.RFC3339)
+	}, nil)
+	if out.Status != "succeeded" || len(out.Unrecoverable) != 0 {
+		t.Fatalf("out = %+v", out)
+	}
+	if !e.src.requests[0].Start.Equal(e.now.Add(-24 * time.Hour)) {
+		t.Fatalf("start = %s", e.src.requests[0].Start)
+	}
+}
+
+func TestEmptyRetentionIsAnError(t *testing.T) {
+	if _, _, err := parseRetention(""); err == nil {
+		t.Fatal("空保留期必须报错")
+	}
+	if _, forever, err := parseRetention("forever"); err != nil || !forever {
+		t.Fatal("forever 是永久")
+	}
+}
+
+func TestTickReadsTheAssignedRangeWithoutTouchingTheWatermark(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	// 首次就是到点拉取（复核还没跑过）：只读下发区间，不写首次起点。
+	e.now = time.Date(2026, 10, 17, 0, 4, 30, 0, time.UTC)
+	e.src.rows = rows("BTC", time.Date(2026, 10, 16, 23, 50, 0, 0, time.UTC), 14, 1)
+	tick := func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-16T23:55:00Z", "2026-10-17T00:04:25Z"
+	}
+	out := e.run(2000, tick, nil)
+	if out.Status != "succeeded" || out.Progress.RowsRead != 9 {
+		t.Fatalf("out = %+v", out)
+	}
+	var bounds []string
+	for _, r := range e.src.requests {
+		bounds = append(bounds, r.Start.Format("01-02T15:04:05")+"→"+r.End.Format("01-02T15:04:05"))
+	}
+	// 按分区边界切块，读的就是下发区间。
+	if strings.Join(bounds, ",") != "10-16T23:55:00→10-17T00:00:00,10-17T00:00:00→10-17T00:04:25" {
+		t.Fatalf("requests = %v", bounds)
+	}
+	if _, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能推进水位")
+	}
+	if _, ok, _ := e.store.FirstStart(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写首次起点")
+	}
+	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写续读起点")
+	}
+
+	// 复核推进水位；之后的到点拉取不改它。
+	e.now = time.Date(2026, 10, 17, 0, 34, 30, 0, time.UTC)
+	e.run(2000, nil, nil)
+	w, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m")
+	if !ok || !w.Equal(e.now) {
+		t.Fatalf("复核推进水位: %v %v", w, ok)
+	}
+	e.now = time.Date(2026, 10, 17, 0, 40, 30, 0, time.UTC)
+	e.src.requests = nil
+	out = e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-17T00:37:00Z", "2026-10-17T00:40:25Z"
+	}, nil)
+	if out.Status != "succeeded" || len(e.src.requests) != 1 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 37, 0, 0, time.UTC)) {
+		t.Fatalf("out = %+v requests = %+v", out, e.src.requests)
+	}
+	if after, _, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); !after.Equal(w) {
+		t.Fatalf("到点拉取改了水位: %s → %s", w, after)
+	}
+	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写续读起点")
 	}
 }

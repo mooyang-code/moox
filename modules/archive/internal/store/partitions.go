@@ -81,6 +81,24 @@ func (s *Store) ListPartitions(ctx context.Context, spaceID, datasetID, fromKey,
 	return out, total, rows.Err()
 }
 
+// TaskPartitions 按分区键升序返回一个任务结束时间晚于 since 的分区登记（since 为零表示全部）。
+func (s *Store) TaskPartitions(ctx context.Context, spaceID, datasetID string, since time.Time) ([]Partition, error) {
+	rows, err := s.db.QueryContext(ctx, queryPartitions5, spaceID, datasetID, fmtTime(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Partition
+	for rows.Next() {
+		p, err := scanPartition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // GetPartition 读取一个分区登记。
 func (s *Store) GetPartition(ctx context.Context, spaceID, datasetID, key string) (Partition, error) {
 	p, err := scanPartition(s.db.QueryRowContext(ctx, queryPartitions2, spaceID, datasetID, key))
@@ -139,11 +157,13 @@ type CompleteRequest struct {
 
 // CompleteRun 在一个事务里更新运行状态、分区登记、任务的最近成功时间与定稿边界。
 // 运行已被用户取消（canceled）时仍接受统计与分区登记，状态保持 canceled；已处于其他终态的运行返回 ErrConflict。
+// 上报里有分区的行数或标的数比已登记的少（已有文件时）就整次拒绝：运行记为失败，不更新分区与任务，返回 ErrPartitionRegression。
 func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 	if req.Status != RunSucceeded && req.Status != RunFailed && req.Status != RunCanceled {
 		return fmt.Errorf("invalid completion status %q", req.Status)
 	}
-	return s.tx(ctx, func(tx *sql.Tx) error {
+	var regression error
+	err := s.tx(ctx, func(tx *sql.Tx) error {
 		run, err := scanRun(tx.QueryRowContext(ctx, queryPartitions3, req.RunID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
@@ -164,6 +184,27 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 				message = run.Message
 			}
 		}
+		reason, err := findRegression(ctx, tx, run.SpaceID, run.DatasetID, req.Partitions)
+		if err != nil {
+			return err
+		}
+		if reason != "" {
+			regression = fmt.Errorf("%w：%s", ErrPartitionRegression, reason)
+			// 只记下失败原因，分区与任务都不动；worker 收到冲突不清待上报标记，下次运行还会报、还会被拒，健康等级一直显示失败。
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'failed', c_finished_at = ?, c_message = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`,
+				fmtTime(req.Now), reason, req.RunID); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = ? WHERE c_space_id = ? AND c_dataset_id = ?`, reason, run.SpaceID, run.DatasetID)
+			return err
+		}
+		// 只有带分区的上报才清掉被拒原因：被拒的分区一直待上报，任务绑定后的每次上报都会带上它；
+		// 不带分区的上报（绑定前失败、排队时被取消）说明不了问题已解决。
+		if len(req.Partitions) > 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_blocked_reason = '' WHERE c_space_id = ? AND c_dataset_id = ? AND c_blocked_reason != ''`, run.SpaceID, run.DatasetID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
 c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
 c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`, status, fmtTime(req.Now), message,
@@ -179,9 +220,15 @@ c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_i
 			}
 		}
 		// 被取消的运行即使 worker 上报成功也不推进任务状态；最近成功时间只前进不回退。
-		if status == RunSucceeded && run.Kind != KindRange {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at IS NULL OR c_last_success_at < ?)`,
+		// 水位已推进，回补起点不再需要：清掉它，免得暂存库丢失后又从回补起点整段重读。
+		if status == RunSucceeded && (run.Kind == KindScheduled || run.Kind == KindManual) {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ?, c_backfill_from = NULL WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at IS NULL OR c_last_success_at < ?)`,
 				fmtTime(run.StartedAt), run.SpaceID, run.DatasetID, fmtTime(run.StartedAt)); err != nil {
+				return err
+			}
+		}
+		if len(req.Unrecoverable) > 0 {
+			if err := accumulateUnrecoverable(ctx, tx, run.SpaceID, run.DatasetID, req.Unrecoverable); err != nil {
 				return err
 			}
 		}
@@ -193,6 +240,59 @@ c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_i
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return regression
+}
+
+// ErrPartitionRegression 表示上报的分区行数或标的数比已登记的少。归档只增不删（读回合并后不会变少），
+// 变少只会来自暂存状态丢失后用残缺数据重新导出，必须拒绝。它包含 ErrConflict，调用方按冲突处理。
+var ErrPartitionRegression = fmt.Errorf("%w: partition regression", ErrConflict)
+
+// findRegression 检查上报的分区里有没有比已登记的（已有文件的）行数或标的数少的，有则返回原因。
+func findRegression(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, reports []Partition) (string, error) {
+	for _, p := range reports {
+		existing, err := scanPartition(tx.QueryRowContext(ctx, queryPartitions2, spaceID, datasetID, p.PartitionKey))
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if existing.FilePath == "" {
+			continue
+		}
+		if p.RowCount < existing.RowCount || p.SubjectCount < existing.SubjectCount {
+			return fmt.Sprintf("分区 %s 的行数从 %d 降到 %d、标的数从 %d 降到 %d，拒绝登记；可能是暂存库丢失后用残缺数据重新导出，原文件需要人工核对",
+				p.PartitionKey, existing.RowCount, p.RowCount, existing.SubjectCount, p.SubjectCount), nil
+		}
+	}
+	return "", nil
+}
+
+// accumulateUnrecoverable 把本次的无法补齐区间并进任务的累积记录（去重，最多 maxUnrecoverable 条）。
+func accumulateUnrecoverable(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, items []Unrecoverable) error {
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT c_unrecoverable_json FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&current); err != nil {
+		return err
+	}
+	var merged []Unrecoverable
+	if current != "" && current != "[]" {
+		_ = json.Unmarshal([]byte(current), &merged)
+	}
+	seen := map[Unrecoverable]bool{}
+	for _, item := range merged {
+		seen[item] = true
+	}
+	for _, item := range items {
+		if !seen[item] {
+			seen[item] = true
+			merged = append(merged, item)
+		}
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_unrecoverable_json = ? WHERE c_space_id = ? AND c_dataset_id = ?`, mergeUnrecoverable(merged), spaceID, datasetID)
+	return err
 }
 
 func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
@@ -283,6 +383,7 @@ const (
 	queryPartitions2 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`
 	queryPartitions3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
 	queryPartitions4 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_status = 'open' AND (? = '' OR c_space_id = ?)`
+	queryPartitions5 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_range_end > ? ORDER BY c_partition_key`
 )
 
 // 分区列表的筛选条件固定，datasetID、fromKey、toKey 为空表示不限。

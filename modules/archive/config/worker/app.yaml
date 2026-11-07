@@ -13,14 +13,13 @@ storage_auth_file: ../secrets/storage-primary-auth.secret
 worker:
   worker_id: archive-worker@example-host   # 换机器时整体迁移目录并沿用同一个 worker_id
   root_dir: /data/moox-archive
-  export_formats: [csv]
+  export_format: csv.gz             # csv.gz（默认）或 csv
   min_free_bytes: 5GB
   heartbeat_interval: 10s
   pull_interval: 5s
 
 staging:
   cache_size: 256MB
-  rebuild_ratio: 2
 
 pacing:
   request_seconds: [25, 55]          # 每分钟内允许发起请求的秒区间

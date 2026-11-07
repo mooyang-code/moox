@@ -182,7 +182,7 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", FilePrefix: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
 	}
@@ -215,6 +215,17 @@ func (h *harness) idle() {
 	}
 }
 
+// canPull 调用一次领取，报告它是否真的向 mgr 发出了领取请求。
+func (h *harness) canPull(ctx context.Context) bool {
+	h.mgr.mu.Lock()
+	before := len(h.mgr.pulls)
+	h.mgr.mu.Unlock()
+	h.app.pullOnce(ctx)
+	h.mgr.mu.Lock()
+	defer h.mgr.mu.Unlock()
+	return len(h.mgr.pulls) > before
+}
+
 func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -223,8 +234,8 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	h.app.running["r1"] = &activeRun{assignment: assignment("r1", nil), cancel: func() { cancelled = true }}
 	h.app.mu.Unlock()
 	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, CancelRunIds: []string{"r1", "ghost"},
-		DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "old", TaskEpoch: "1"}}}
-	h.app.heartbeatOnce(ctx)
+		Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "7"}}}
+	tasks := h.app.heartbeatOnce(ctx)
 	req := h.mgr.heartbeats[0]
 	if req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
 		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskLow() || len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
@@ -233,13 +244,22 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	if !cancelled || !h.app.running["r1"].stop.Load() {
 		t.Fatal("mgr 要求取消的运行应被取消")
 	}
-	if len(h.app.deleted) != 1 || h.app.leaseTTL != 30*time.Second || !h.app.leaseValid() {
-		t.Fatalf("deleted=%v ttl=%s", h.app.deleted, h.app.leaseTTL)
+	if len(tasks) != 1 || tasks["crypto/ds_1m"] != "7" || h.app.leaseTTL != 30*time.Second {
+		t.Fatalf("tasks=%v ttl=%s", tasks, h.app.leaseTTL)
+	}
+	// 不是活动 worker：任务列表不可用。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: false, LeaseTtlSeconds: 30}
+	if tasks := h.app.heartbeatOnce(ctx); tasks != nil {
+		t.Fatalf("非活动 worker 不应拿到任务列表: %v", tasks)
+	}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30}
+	if tasks := h.app.heartbeatOnce(ctx); tasks == nil || len(tasks) != 0 {
+		t.Fatalf("活动 worker 没有任务时应拿到空列表: %v", tasks)
 	}
 	// 磁盘低于下限：心跳上报 disk_low。
 	h.free = 1 << 30
 	h.app.heartbeatOnce(ctx)
-	if !h.mgr.heartbeats[1].GetDiskLow() {
+	if !h.mgr.heartbeats[len(h.mgr.heartbeats)-1].GetDiskLow() {
 		t.Fatal("可用空间低于 min_free_bytes 应上报 disk_low")
 	}
 }
@@ -248,12 +268,12 @@ func TestHeartbeatConflictAndFailuresStopPulling(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	h.app.heartbeatOnce(ctx)
-	if !h.app.leaseValid() || !h.app.Snapshot().Ready {
-		t.Fatal("首次心跳成功后应就绪")
+	if !h.app.Snapshot().Ready || !h.canPull(ctx) {
+		t.Fatal("首次心跳成功后应就绪并可领取")
 	}
 	h.mgr.heartbeatErr = errors.Join(manager.ErrConflict, errors.New("duplicate"))
 	h.app.heartbeatOnce(ctx)
-	if h.app.leaseValid() || h.app.Snapshot().Active || h.app.Snapshot().LastError == "" {
+	if h.canPull(ctx) || h.app.Snapshot().Active || h.app.Snapshot().LastError == "" {
 		t.Fatalf("冲突后应不活动: %+v", h.app.Snapshot())
 	}
 	// 普通失败：保留活动状态，但租约超过有效期后不再领取。
@@ -261,11 +281,11 @@ func TestHeartbeatConflictAndFailuresStopPulling(t *testing.T) {
 	h.app.heartbeatOnce(ctx)
 	h.mgr.heartbeatErr = errors.New("timeout")
 	h.app.heartbeatOnce(ctx)
-	if !h.app.leaseValid() {
+	if !h.canPull(ctx) {
 		t.Fatal("租约有效期内仍可领取")
 	}
 	h.now = h.now.Add(46 * time.Second)
-	if h.app.leaseValid() {
+	if h.canPull(ctx) {
 		t.Fatal("超过租约有效期应停止领取")
 	}
 	if snap := h.app.Snapshot(); snap.Ready {
@@ -399,27 +419,58 @@ func TestRunsOfTheSameDatasetNeverOverlapLocally(t *testing.T) {
 	if len(h.mgr.completes) != 2 {
 		t.Fatalf("completes = %d", len(h.mgr.completes))
 	}
-	// 排队等待期间仍在续租。
-	if len(h.mgr.progresses) == 0 {
+	// 排队等待期间由续租定时器照常续租。
+	h.mgr.mu.Lock()
+	renewedNew := false
+	for _, p := range h.mgr.progresses {
+		renewedNew = renewedNew || p.GetRunId() == "new" || p.GetRunId() == "old"
+	}
+	h.mgr.mu.Unlock()
+	if !renewedNew {
 		t.Fatal("排队的运行也要续租")
 	}
 }
 
-func TestMaintenanceWaitsForInFlightPullsAndANewAssignmentCancelsAStaleDeletion(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	for _, ds := range []string{"gone", "ds_1m"} {
-		task := staging.Task{SpaceID: "crypto", DatasetID: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
-		if err := h.store.EnsureTable(ctx, task); err != nil {
+func stagedTasks(t *testing.T, h *harness, datasets ...string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for _, ds := range datasets {
+		parts, err := h.store.Partitions(context.Background(), "crypto", ds)
+		if err != nil {
 			t.Fatal(err)
 		}
+		out[ds] = len(parts) > 0
 	}
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "gone", TaskEpoch: "1"}, {SpaceId: "crypto", DatasetId: "ds_1m", TaskEpoch: "1"}}}
+	return out
+}
+
+// seed 为数据集绑定任务并写一行，让它在暂存库里有状态。
+func (h *harness) seed(ds, taskID string) {
+	h.t.Helper()
+	ctx := context.Background()
+	task := staging.Task{SpaceID: "crypto", DatasetID: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
+	if err := h.store.BindTask(ctx, "crypto", ds, taskID); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := h.store.EnsureTable(ctx, task); err != nil {
+		h.t.Fatal(err)
+	}
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	ref := func(time.Time) staging.PartitionRef {
+		return staging.PartitionRef{Key: "2026-10-17", Start: day, End: day.AddDate(0, 0, 1)}
+	}
+	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func TestMaintenanceWaitsForInFlightPullsThenReconcilesWithAFreshTaskList(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.seed("gone", "1")
+	h.seed("ds_1m", "1")
 	h.app.heartbeatOnce(ctx)
-	if len(h.app.deleted) != 2 {
-		t.Fatalf("deleted = %v", h.app.deleted)
-	}
-	// 领取调用还在途中（运行还没登记）：维护不能开始，已删除的任务不能被清理。
+	// 领取调用还在途中（运行还没登记）：维护不能开始，也不能对账。
 	gate := make(chan struct{})
 	entered := make(chan struct{})
 	h.mgr.pullGate, h.mgr.pullEntered = gate, entered
@@ -427,20 +478,47 @@ func TestMaintenanceWaitsForInFlightPullsAndANewAssignmentCancelsAStaleDeletion(
 	pulled := make(chan struct{})
 	go func() { h.app.pullOnce(ctx); close(pulled) }()
 	<-entered
+	h.mgr.mu.Lock()
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1"}}}
+	h.mgr.mu.Unlock()
 	h.app.maintainOnce(ctx)
-	if tables, _ := h.store.StagedTables(ctx); len(tables) != 2 {
-		t.Fatalf("在途领取期间维护必须等待（最终跳过），不能清理: %v", tables)
+	if got := stagedTasks(t, h, "gone", "ds_1m"); !got["gone"] || !got["ds_1m"] {
+		t.Fatalf("在途领取期间维护必须等待（最终跳过），不能对账: %v", got)
 	}
 	close(gate)
 	<-pulled
 	h.waitComplete()
 	h.idle()
-	// 新派发的运行属于「ds_1m」：它的删除通知作废；真正被删除的「gone」照常清理。
+	// 运行结束后维护：先发心跳取当前任务列表，删掉不在列表里的「gone」。
+	h.mgr.mu.Lock()
+	before := len(h.mgr.heartbeats)
+	h.mgr.mu.Unlock()
 	h.app.maintainOnce(ctx)
-	tables, _ := h.store.StagedTables(ctx)
-	keep := staging.Task{SpaceID: "crypto", DatasetID: "ds_1m"}.Table()
-	if len(tables) != 1 || tables[0] != keep {
-		t.Fatalf("tables = %v, want only %s", tables, keep)
+	if got := stagedTasks(t, h, "gone", "ds_1m"); got["gone"] || !got["ds_1m"] {
+		t.Fatalf("对账后: %v", got)
+	}
+	if len(h.mgr.heartbeats) != before+1 {
+		t.Fatal("维护应主动发一次心跳拿任务列表")
+	}
+}
+
+func TestMaintenanceSkipsReconcileWhenTheTaskListIsUnavailable(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.seed("ds_1m", "1")
+	h.mgr.heartbeatErr = errors.New("mgr down")
+	h.app.maintainOnce(ctx)
+	h.mgr.heartbeatErr = nil
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: false}
+	h.app.maintainOnce(ctx)
+	if got := stagedTasks(t, h, "ds_1m"); !got["ds_1m"] {
+		t.Fatal("拿不到任务列表时不能对账删除")
+	}
+	// 任务被删除后重建（ID 变了）：对账同样清掉旧状态。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, Tasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "2"}}}
+	h.app.maintainOnce(ctx)
+	if got := stagedTasks(t, h, "ds_1m"); got["ds_1m"] {
+		t.Fatal("任务 ID 变了应清掉旧状态")
 	}
 }
 
@@ -506,31 +584,20 @@ func TestCompleteRetriesTransientFailuresAndStopsOnConflict(t *testing.T) {
 	}
 }
 
-func TestMaintenanceDropsDeletedTasksAndWaitsForRuns(t *testing.T) {
+func TestMaintenanceWaitsForRuns(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	task := staging.Task{SpaceID: "crypto", DatasetID: "old", Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
-	if err := h.store.EnsureTable(ctx, task); err != nil {
-		t.Fatal(err)
-	}
+	h.seed("old", "1")
 	h.app.mu.Lock()
-	h.app.deleted["crypto/old"] = taskRef{space: "crypto", dataset: "old", epoch: "1"}
 	h.app.running["r1"] = &activeRun{assignment: assignment("r1", nil), cancel: func() {}}
 	h.app.mu.Unlock()
-	// 有运行一直不结束：等待到期后跳过，已删除的任务保留到下次。
+	// 有运行一直不结束：等待到期后跳过，不对账。
 	h.app.maintainOnce(ctx)
-	if tables, _ := h.store.StagedTables(ctx); len(tables) != 1 {
-		t.Fatalf("运行未结束不应清理: %v", tables)
+	if got := stagedTasks(t, h, "old"); !got["old"] {
+		t.Fatal("运行未结束不应清理")
 	}
 	if h.app.Snapshot().Maintaining {
 		t.Fatal("维护结束后应恢复领取")
-	}
-	h.app.mu.Lock()
-	delete(h.app.running, "r1")
-	h.app.mu.Unlock()
-	h.app.maintainOnce(ctx)
-	if tables, _ := h.store.StagedTables(ctx); len(tables) != 0 || len(h.app.deleted) != 0 {
-		t.Fatalf("tables=%v deleted=%v", tables, h.app.deleted)
 	}
 	total := time.Duration(0)
 	for _, d := range h.slept {
@@ -538,6 +605,13 @@ func TestMaintenanceDropsDeletedTasksAndWaitsForRuns(t *testing.T) {
 	}
 	if total < maintenanceWait {
 		t.Fatalf("应等满 %s: %s", maintenanceWait, total)
+	}
+	h.app.mu.Lock()
+	delete(h.app.running, "r1")
+	h.app.mu.Unlock()
+	h.app.maintainOnce(ctx)
+	if got := stagedTasks(t, h, "old"); got["old"] {
+		t.Fatal("运行结束后维护应删掉不在任务列表里的数据集")
 	}
 }
 

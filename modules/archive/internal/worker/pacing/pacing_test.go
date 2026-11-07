@@ -143,7 +143,7 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 
 func TestDisablingTheMinuteWindowKeepsTheHourQuietZone(t *testing.T) {
 	cfg := Default()
-	cfg.DisableMinuteWindow = true
+	cfg.MinuteWindow = false
 	p := mustPacer(t, cfg, &fakeClock{now: at(1, 10, 0)})
 	// 关闭每分钟窗口：整分钟都可以发请求。
 	if got := p.AllowedAt(at(1, 10, 3)); !got.Equal(at(1, 10, 3)) {

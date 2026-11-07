@@ -23,19 +23,26 @@ func openTest(t *testing.T) *Store {
 
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, FilePrefix: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
-		ScheduleCron: "43 4-59/5 * * * *", ScheduleTZ: "Asia/Shanghai", IntervalSeconds: 300,
-		StartAt: t0, Status: StatusEnabled, NextRunAt: t0.Add(5 * time.Minute), Creator: "tester",
+		SpaceID: space, DatasetID: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
+		PullEveryBars: 1, IntervalSeconds: 3600, Status: StatusEnabled, Creator: "tester",
 	}
 }
 
+// mustTask 创建任务；immediate 为真时再生成一条 manual 运行（计划时刻 t0）。
 func mustTask(t *testing.T, s *Store, space, dataset string, immediate bool) (Task, *Run) {
 	t.Helper()
-	created, run, err := s.CreateTask(context.Background(), task(space, dataset), immediate, t0)
+	created, err := s.CreateTask(context.Background(), task(space, dataset))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return created, run
+	if !immediate {
+		return created, nil
+	}
+	run, err := s.CreateRun(context.Background(), space, dataset, KindManual, time.Time{}, time.Time{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return created, &run
 }
 
 func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
@@ -52,21 +59,24 @@ func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
 	}
 }
 
-func TestCreateTaskAllowsOneTaskPerDatasetAndImmediateCreatesAManualRun(t *testing.T) {
+func TestCreateTaskAllowsOneTaskPerDatasetAndStartsWithEmptyBoundaries(t *testing.T) {
 	s := openTest(t)
-	created, run := mustTask(t, s, "crypto", "ds1", true)
-	if created.Status != StatusEnabled || created.IntervalSeconds != 300 || !created.NextRunAt.Equal(t0.Add(5*time.Minute)) {
+	created, _ := mustTask(t, s, "crypto", "ds1", false)
+	if created.Status != StatusEnabled || created.IntervalSeconds != 3600 || created.PullEveryBars != 1 || !created.LastBoundary.IsZero() || !created.LastReview.IsZero() {
 		t.Fatalf("task = %+v", created)
 	}
-	if run == nil || run.Kind != KindManual || run.Status != RunQueued || !run.ScheduledAt.Equal(t0) {
-		t.Fatalf("immediate run = %+v", run)
+	if runs, total, _ := s.ListRuns(context.Background(), "crypto", "ds1", "", true, 10, 0); total != 0 || len(runs) != 0 {
+		t.Fatalf("创建任务不生成运行: %v", runs)
 	}
-	if _, _, err := s.CreateTask(context.Background(), task("crypto", "ds1"), false, t0); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateTask(context.Background(), task("crypto", "ds1")); !errors.Is(err, ErrConflict) {
 		t.Fatalf("重复创建应返回 ErrConflict: %v", err)
 	}
-	if _, run := mustTask(t, s, "crypto", "ds2", false); run != nil {
-		t.Fatal("非立即开始不应生成运行")
+	bad := task("crypto", "ds3")
+	bad.PullEveryBars = 1441
+	if _, err := s.CreateTask(context.Background(), bad); err == nil {
+		t.Fatal("pull_every_bars 超出 1～1440 应被表约束拒绝")
 	}
+	mustTask(t, s, "crypto", "ds2", false)
 	tasks, total, err := s.ListTasks(context.Background(), "crypto", 10, 0)
 	if err != nil || total != 2 || len(tasks) != 2 || tasks[0].DatasetID != "ds1" {
 		t.Fatalf("tasks=%v total=%d err=%v", tasks, total, err)
@@ -79,110 +89,124 @@ func TestCreateTaskAllowsOneTaskPerDatasetAndImmediateCreatesAManualRun(t *testi
 	}
 }
 
-func nextEvery5(task Task, now time.Time) (time.Time, error) {
-	return now.Truncate(5 * time.Minute).Add(5*time.Minute + 43*time.Second), nil
+// fixedPlan 对所有任务返回同一个判定。
+func fixedPlan(plan TriggerPlan) func(Task) (TriggerPlan, error) {
+	return func(Task) (TriggerPlan, error) { return plan, nil }
 }
 
-func TestTriggerDueCreatesRunSkipsBusyTasksAndAdvancesPastNow(t *testing.T) {
+func TestTriggerDueRecordsBoundariesSkipsBusyTasksAndIgnoresPausedOnes(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
 	mustTask(t, s, "crypto", "ds2", false)
-	// 还没到点：什么都不触发。
-	if res, _, err := s.TriggerDue(ctx, t0, nextEvery5); err != nil || res.Created != 0 || res.Skipped != 0 {
-		t.Fatalf("early trigger = %+v err=%v", res, err)
+	mustTask(t, s, "crypto", "ds3", false)
+	if _, err := s.UpdateTask(ctx, "crypto", "ds3", TaskUpdate{PullEveryBars: 1, Status: StatusPaused}, t0); err != nil {
+		t.Fatal(err)
 	}
-	due := t0.Add(5*time.Minute + time.Second)
-	res, problems, err := s.TriggerDue(ctx, due, nextEvery5)
-	if err != nil || len(problems) != 0 || res.Created != 2 || res.Skipped != 0 {
-		t.Fatalf("trigger = %+v problems=%v err=%v", res, problems, err)
+	// 不到点：什么都不写。
+	if res, problems, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{})); err != nil || res != (TriggerResult{}) || len(problems) != 0 {
+		t.Fatalf("不到点 = %+v %v %v", res, problems, err)
+	}
+	if runs, _, _ := s.ListRuns(ctx, "", "", "", true, 10, 0); len(runs) != 0 {
+		t.Fatalf("不到点不写运行记录: %v", runs)
+	}
+	review := TriggerPlan{Kind: KindScheduled, LastBoundary: t0.Truncate(time.Minute), LastReview: t0.Truncate(time.Hour).Add(34 * time.Minute)}
+	res, _, err := s.TriggerDue(ctx, t0, fixedPlan(review))
+	if err != nil || res.Reviews != 2 || res.Ticks != 0 || res.Skipped != 0 {
+		t.Fatalf("复核 = %+v err=%v", res, err)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if !got.NextRunAt.After(due) {
-		t.Fatalf("next_run_at 必须推进到当前时刻之后: %s", got.NextRunAt)
+	if !got.LastBoundary.Equal(review.LastBoundary) || !got.LastReview.Equal(review.LastReview) {
+		t.Fatalf("生成运行后记下两个边界: %+v", got)
 	}
-	// 错过多个计划时刻（worker 离线一小时）：只合并成一次触发，不补。
-	later := due.Add(time.Hour)
-	res, _, err = s.TriggerDue(ctx, later, nextEvery5)
-	if err != nil || res.Created != 0 || res.Skipped != 2 {
-		t.Fatalf("上一次未结束时应跳过: %+v err=%v", res, err)
+	if paused, _ := s.GetTask(ctx, "crypto", "ds3"); !paused.LastBoundary.IsZero() {
+		t.Fatalf("停用的任务不触发: %+v", paused)
+	}
+	// 已有排队中的运行：跳过、累加次数，边界不前进。
+	tick := TriggerPlan{Kind: KindTick, RangeStart: t0.Add(-3 * time.Minute), RangeEnd: t0.Add(time.Minute), LastBoundary: t0.Add(time.Minute).Truncate(time.Minute), LastReview: review.LastReview}
+	res, _, err = s.TriggerDue(ctx, t0.Add(time.Minute), fixedPlan(tick))
+	if err != nil || res.Skipped != 2 || res.Ticks != 0 {
+		t.Fatalf("应跳过: %+v err=%v", res, err)
 	}
 	got, _ = s.GetTask(ctx, "crypto", "ds1")
-	if got.ConsecutiveSkips != 1 || !got.NextRunAt.After(later) {
-		t.Fatalf("task after skip = %+v", got)
+	if got.ConsecutiveSkips != 1 || !got.LastBoundary.Equal(review.LastBoundary) {
+		t.Fatalf("跳过时边界不前进: %+v", got)
 	}
-	runs, total, err := s.ListRuns(ctx, "crypto", "", "", 10, 0)
-	if err != nil || total != 2 || len(runs) != 2 || runs[0].Kind != KindScheduled || runs[0].Status != RunQueued {
-		t.Fatalf("runs=%v total=%d err=%v", runs, total, err)
+	// 运行结束后到点拉取：生成 tick 运行（带区间），清零跳过次数。
+	for _, ds := range []string{"ds1", "ds2"} {
+		runs, _, _ := s.ListRuns(ctx, "crypto", ds, "", true, 10, 0)
+		if _, err := s.CancelRun(ctx, runs[0].RunID, "", t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
 	}
-}
-
-func TestTriggerDueResetsSkipsAndIgnoresPausedTasks(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", false)
-	mustTask(t, s, "crypto", "ds2", false)
-	if _, _, err := s.UpdateTask(ctx, "crypto", "ds2", TaskUpdate{ScheduleCron: "0 0 * * * *", ScheduleTZ: "UTC", IntervalSeconds: 3600, StartAt: t0, Status: StatusPaused}, t0); err != nil {
-		t.Fatal(err)
+	res, _, err = s.TriggerDue(ctx, t0.Add(time.Minute), fixedPlan(tick))
+	if err != nil || res.Ticks != 2 {
+		t.Fatalf("到点拉取 = %+v err=%v", res, err)
 	}
-	now := t0.Add(6 * time.Minute)
-	if res, _, _ := s.TriggerDue(ctx, now, nextEvery5); res.Created != 1 {
-		t.Fatalf("停用的任务不触发: %+v", res)
+	got, _ = s.GetTask(ctx, "crypto", "ds1")
+	if got.ConsecutiveSkips != 0 || !got.LastBoundary.Equal(tick.LastBoundary) {
+		t.Fatalf("tick 后: %+v", got)
 	}
-	runs, _, _ := s.ListRuns(ctx, "crypto", "ds1", "", 10, 0)
-	if _, err := s.Progress(ctx, runs[0].RunID, "w1", "x", RunStats{}, now, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	// 完成运行后下一次到点生成新运行并清零跳过次数。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, Now: now, LeaseTTL: 10 * time.Minute})
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("claim = %v err=%v", claimed, err)
-	}
-	if err := s.CompleteRun(ctx, CompleteRequest{RunID: claimed[0].Run.RunID, WorkerID: "w1", LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: now}); err != nil {
-		t.Fatal(err)
-	}
-	next := now.Add(10 * time.Minute)
-	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	res, _, _ := s.TriggerDue(ctx, next, nextEvery5)
-	got2, _ := s.GetTask(ctx, "crypto", "ds1")
-	if res.Created != 1 || got2.ConsecutiveSkips != 0 || got.NextRunAt.After(next) {
-		t.Fatalf("res=%+v task=%+v", res, got2)
+	runs, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
+	if len(runs) != 1 || runs[0].Kind != KindTick || !runs[0].RangeStart.Equal(tick.RangeStart) || !runs[0].RangeEnd.Equal(tick.RangeEnd) || !runs[0].ScheduledAt.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("tick 运行 = %+v", runs)
 	}
 }
 
-func TestTriggerDueReportsPlanProblemsAndBacksOff(t *testing.T) {
+func TestTriggerDueSkipsTasksWhosePlanFails(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	now := t0.Add(6 * time.Minute)
-	res, problems, err := s.TriggerDue(ctx, now, func(Task, time.Time) (time.Time, error) { return time.Time{}, errors.New("bad plan") })
-	if err != nil || res.Created != 1 || len(problems) != 1 {
+	res, problems, err := s.TriggerDue(ctx, t0, func(Task) (TriggerPlan, error) { return TriggerPlan{}, errors.New("bad timing") })
+	if err != nil || res != (TriggerResult{}) || len(problems) != 1 {
 		t.Fatalf("res=%+v problems=%v err=%v", res, problems, err)
 	}
-	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if !got.NextRunAt.Equal(now.Add(time.Hour)) {
-		t.Fatalf("计划无法解析时推迟一小时: %s", got.NextRunAt)
+	if _, problems, _ := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindRange})); len(problems) != 1 {
+		t.Fatalf("触发器不能生成补拉运行: %v", problems)
+	}
+	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastBoundary.IsZero() || got.ConsecutiveSkips != 0 {
+		t.Fatalf("判定出错时任务状态不变: %+v", got)
 	}
 }
 
-func TestPausingCancelsQueuedRunsAndResumeCanRunNow(t *testing.T) {
+func TestPausingCancelsQueuedRunsAndResumeClearsBoundaries(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	_, run := mustTask(t, s, "crypto", "ds1", true)
-	update := TaskUpdate{ScheduleCron: "0 0 * * * *", ScheduleTZ: "UTC", IntervalSeconds: 3600, StartAt: t0, Status: StatusPaused}
-	if _, _, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(time.Minute)); err != nil {
+	if _, _, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := s.GetRun(ctx, run.RunID)
-	if got.Status != RunCanceled || got.FinishedAt.IsZero() {
+	if _, err := s.CancelRun(ctx, run.RunID, "", t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.TriggerDue(ctx, t0, fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
+		t.Fatal(err)
+	}
+	queued, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunQueued, true, 10, 0)
+	if len(queued) != 1 {
+		t.Fatalf("queued = %v", queued)
+	}
+	update := TaskUpdate{PullEveryBars: 5, Status: StatusPaused}
+	paused, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(time.Minute))
+	if err != nil || paused.PullEveryBars != 5 || !paused.LastBoundary.Equal(t0) {
+		t.Fatalf("停用不清边界: %+v err=%v", paused, err)
+	}
+	if got, _ := s.GetRun(ctx, queued[0].RunID); got.Status != RunCanceled || got.FinishedAt.IsZero() {
 		t.Fatalf("停用应取消排队中的运行: %+v", got)
 	}
-	update.Status, update.RunNow, update.NextRunAt = StatusEnabled, true, t0.Add(time.Hour)
-	_, resumed, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(2*time.Minute))
-	if err != nil || resumed == nil || resumed.Kind != KindManual {
-		t.Fatalf("重新启用并立即运行: %v %v", resumed, err)
+	update.Status = StatusEnabled
+	resumed, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(2*time.Minute))
+	if err != nil || resumed.Status != StatusEnabled || !resumed.LastBoundary.IsZero() || !resumed.LastReview.IsZero() {
+		t.Fatalf("重新启用清空两个边界: %+v err=%v", resumed, err)
 	}
-	if _, _, err := s.UpdateTask(ctx, "crypto", "missing", update, t0); !errors.Is(err, ErrNotFound) {
+	// 本来就是启用的任务修改设置时不清边界。
+	if _, _, err := s.TriggerDue(ctx, t0.Add(3*time.Minute), fixedPlan(TriggerPlan{Kind: KindScheduled, LastBoundary: t0, LastReview: t0})); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(4*time.Minute)); !again.LastBoundary.Equal(t0) {
+		t.Fatalf("启用 → 启用不清边界: %+v", again)
+	}
+	if _, err := s.UpdateTask(ctx, "crypto", "missing", update, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)
 	}
 }
@@ -198,6 +222,9 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0); !errors.Is(err, ErrConflict) {
 		t.Fatalf("已有排队中的运行: %v", err)
 	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds2", KindTick, t0, t0, t0); err == nil {
+		t.Fatal("CreateRun 不能生成 tick 运行")
+	}
 	if _, err := s.CreateRun(ctx, "crypto", "nope", KindManual, time.Time{}, time.Time{}, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown task: %v", err)
 	}
@@ -212,7 +239,10 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 		if name == "c" {
 			tk.DataNodeID = "node-1"
 		}
-		if _, _, err := s.CreateTask(ctx, tk, true, t0.Add(time.Duration(i)*time.Second)); err != nil {
+		if _, err := s.CreateTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateRun(ctx, "crypto", name, KindManual, time.Time{}, time.Time{}, t0.Add(time.Duration(i)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -500,35 +530,57 @@ func TestExpireLeasesFailsLostRunsAndCleanupHonorsRetention(t *testing.T) {
 	if run.Status != RunFailed || run.Message != "worker 失联" {
 		t.Fatalf("run = %+v", run)
 	}
-	// 清理：失败的运行保留 90 天，成功的定时运行保留 30 天。
+	// 清理：失败的运行保留 90 天，成功的复核保留 30 天，成功的到点拉取保留 24 小时。
+	const day = 24 * time.Hour
 	now := t0.AddDate(0, 0, 45)
-	if n, _ := s.CleanupRuns(ctx, now, 30*24*time.Hour, 90*24*time.Hour); n != 0 {
+	if n, _ := s.CleanupRuns(ctx, now, day, 30*day, 90*day); n != 0 {
 		t.Fatalf("失败的运行 45 天内不清理: %d", n)
 	}
-	sched, _ := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0)
-	_ = sched
 	mustTask(t, s, "crypto", "ds2", false)
-	if _, _, err := s.TriggerDue(ctx, t0.Add(10*time.Minute), nextEvery5); err != nil {
-		t.Fatal(err)
-	}
-	runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", 10, 0)
-	if len(runs) != 1 || runs[0].Kind != KindScheduled {
-		t.Fatalf("runs = %+v", runs)
-	}
-	claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, Now: t0.Add(10 * time.Minute), LeaseTTL: time.Minute})
-	for _, cl := range claimed {
-		status := RunSucceeded
-		if cl.Task.DatasetID == "ds1" {
-			status = RunFailed
+	mustTask(t, s, "crypto", "ds3", false)
+	complete := func(kind string, at time.Time) {
+		t.Helper()
+		plan := TriggerPlan{Kind: kind, LastBoundary: at, LastReview: at}
+		if kind == KindTick {
+			plan.RangeStart, plan.RangeEnd = at.Add(-3*time.Minute), at
 		}
-		if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, WorkerID: "w1", LeaseToken: cl.Run.LeaseToken, Status: status, Now: t0.Add(11 * time.Minute)}); err != nil {
+		if _, _, err := s.TriggerDue(ctx, at, func(task Task) (TriggerPlan, error) {
+			if task.DatasetID == "ds1" {
+				return TriggerPlan{}, nil
+			}
+			return plan, nil
+		}); err != nil {
 			t.Fatal(err)
 		}
+		claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, Now: at, LeaseTTL: time.Minute})
+		if len(claimed) != 2 {
+			t.Fatalf("claimed = %v", claimed)
+		}
+		for _, cl := range claimed {
+			if err := s.CompleteRun(ctx, CompleteRequest{RunID: cl.Run.RunID, WorkerID: "w1", LeaseToken: cl.Run.LeaseToken, Status: RunSucceeded, Now: at.Add(time.Second)}); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), 30*24*time.Hour, 90*24*time.Hour); err != nil || n != 1 {
-		t.Fatalf("成功的定时运行超过 30 天应清理 1 条: n=%d err=%v", n, err)
+	complete(KindScheduled, t0.Add(10*time.Minute))
+	complete(KindTick, t0.Add(11*time.Minute))
+	// 成功的到点拉取不推进最近成功时间。
+	if got, _ := s.GetTask(ctx, "crypto", "ds2"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
+		t.Fatalf("last_success_at = %s", got.LastSuccessAt)
 	}
-	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), 30*24*time.Hour, 90*24*time.Hour); err != nil || n < 2 {
+	if runs, total, _ := s.ListRuns(ctx, "crypto", "ds2", "", false, 10, 0); total != 1 || runs[0].Kind != KindScheduled {
+		t.Fatalf("默认不列成功的 tick: %v", runs)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.Add(day), day, 30*day, 90*day); err != nil || n != 0 {
+		t.Fatalf("tick 成功运行 24 小时内不清理: n=%d err=%v", n, err)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.Add(day+12*time.Minute), day, 30*day, 90*day); err != nil || n != 2 {
+		t.Fatalf("成功的 tick 超过 24 小时应清理 2 条: n=%d err=%v", n, err)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 30*day, 90*day); err != nil || n != 2 {
+		t.Fatalf("成功的复核超过 30 天应清理 2 条: n=%d err=%v", n, err)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 100), day, 30*day, 90*day); err != nil || n != 1 {
 		t.Fatalf("失败的运行超过 90 天应清理: n=%d err=%v", n, err)
 	}
 }
@@ -552,7 +604,7 @@ func TestDeleteTaskRefusesTasksWithPartitionsOrRunningRuns(t *testing.T) {
 	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); err != nil {
 		t.Fatal(err)
 	}
-	if runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", 10, 0); len(runs) != 0 {
+	if runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", true, 10, 0); len(runs) != 0 {
 		t.Fatalf("删除任务应级联删除运行: %v", runs)
 	}
 	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); !errors.Is(err, ErrNotFound) {
@@ -631,25 +683,6 @@ func TestUpdateTaskDatasetRefreshesRetentionAndDataNode(t *testing.T) {
 	}
 }
 
-func TestResumeRunNowDoesNotCreateAParallelRun(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	mustTask(t, s, "crypto", "ds1", true)
-	c := mustClaim(t, s, "w1", t0) // 运行中
-	update := TaskUpdate{ScheduleCron: "0 0 * * * *", ScheduleTZ: "UTC", IntervalSeconds: 3600, StartAt: t0, Status: StatusPaused}
-	if _, _, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0); err != nil {
-		t.Fatal(err)
-	}
-	update.Status, update.RunNow, update.NextRunAt = StatusEnabled, true, t0.Add(time.Hour)
-	_, run, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(time.Minute))
-	if err != nil || run != nil {
-		t.Fatalf("已有运行中的运行，不应再生成: run=%v err=%v", run, err)
-	}
-	if active, _ := s.ListActiveRuns(ctx, "crypto"); len(active) != 1 || active[0].RunID != c.Run.RunID {
-		t.Fatalf("active = %+v", active)
-	}
-}
-
 func TestCanceledRunsAcceptOneCompletionAndNeverAdvanceTheTask(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -724,5 +757,66 @@ func TestClaimRunsRechecksTheInstanceInsideTheTransaction(t *testing.T) {
 	}
 	if claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", InstanceID: "j1", FreeSlots: 1, Now: later, LeaseTTL: time.Minute}); err != nil || len(claimed) != 1 {
 		t.Fatalf("活动实例可以领取: %v err=%v", claimed, err)
+	}
+}
+
+func TestLastRunsStayFastWithManyTicks(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, ds := range []string{"ds1", "ds2"} {
+		mustTask(t, s, "crypto", ds, false)
+	}
+	// 每个任务 1 条复核，之后 1.5 万条成功的 tick（约 10 天的 1m 拉取）。
+	_, err := s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at, c_started_at, c_finished_at)
+SELECT 'review_' || c_dataset_id, c_space_id, c_dataset_id, 'scheduled', 'succeeded', '2026-10-17 00:34:25.000', '2026-10-17 00:34:30.000', '2026-10-17 00:35:00.000'
+FROM t_archive_tasks`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 15000)
+INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at)
+SELECT 'tick_' || t.c_dataset_id || '_' || n.i, t.c_space_id, t.c_dataset_id, 'tick', '2026-10-17 00:00:00.000', '2026-10-17 00:01:00.000', 'succeeded',
+strftime('%Y-%m-%d %H:%M:%S.000', '2026-10-17 00:40:25', '+' || n.i || ' minutes')
+FROM n, t_archive_tasks t`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	last, err := s.LastRuns(ctx, "crypto")
+	if err != nil || len(last) != 2 || last["crypto/ds1"].RunID != "tick_ds1_15000" {
+		t.Fatalf("last = %+v err=%v", last, err)
+	}
+	reviews, err := s.LastReviewRuns(ctx, "")
+	if err != nil || len(reviews) != 2 || reviews["crypto/ds2"].RunID != "review_ds2" {
+		t.Fatalf("reviews = %+v err=%v", reviews, err)
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Fatalf("最近运行查询耗时 %s", took)
+	}
+	t.Logf("两次查询耗时 %s", time.Since(started))
+}
+
+// 排队中的到点拉取让位给立即运行与补拉区间；运行中的运行仍然冲突。
+func TestManualRunPreemptsQueuedTick(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", false)
+	tick := TriggerPlan{Kind: KindTick, RangeStart: t0.Add(-3 * time.Minute), RangeEnd: t0, LastBoundary: t0.Truncate(time.Minute), LastReview: t0}
+	if res, _, err := s.TriggerDue(ctx, t0, fixedPlan(tick)); err != nil || res.Ticks != 1 {
+		t.Fatalf("tick = %+v %v", res, err)
+	}
+	manual, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0.Add(time.Second))
+	if err != nil {
+		t.Fatalf("排队中的 tick 应让位: %v", err)
+	}
+	canceled, _, _ := s.ListRuns(ctx, "crypto", "ds1", RunCanceled, true, 10, 0)
+	if len(canceled) != 1 || canceled[0].Kind != KindTick {
+		t.Fatalf("被让位的 tick 应标为取消: %+v", canceled)
+	}
+	if _, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w", FreeSlots: 1, Now: t0.Add(2 * time.Second), LeaseTTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("运行中的 %s 仍应冲突: %v", manual.RunID, err)
 	}
 }

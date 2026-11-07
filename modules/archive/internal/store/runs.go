@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -86,8 +87,11 @@ VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, kind, nullTime(
 	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
 }
 
-// CreateRun 为任务生成一条 manual 或 range 运行；已有排队中或运行中的运行时 manual 返回 ErrConflict。
+// CreateRun 为任务生成一条 manual 或 range 运行（复核与到点拉取只由 TriggerDue 生成）；已有排队中或运行中的运行时返回 ErrConflict。
 func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID, kind string, rangeStart, rangeEnd, now time.Time) (Run, error) {
+	if kind != KindManual && kind != KindRange {
+		return Run{}, fmt.Errorf("CreateRun 不能生成 %q 运行", kind)
+	}
 	var run Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var exists int
@@ -96,6 +100,12 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID, kind string, 
 		}
 		if exists == 0 {
 			return ErrNotFound
+		}
+		// 排队中的到点拉取让位：取消它（它的区间由之后的复核兜底），否则 1m 任务几乎每分钟都有一条排队的 tick，
+		// 立即运行与补拉会间歇返回冲突，worker 每天维护期间更是必定冲突。
+		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给立即运行或补拉区间'
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'tick' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
+			return err
 		}
 		var active int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND c_status IN ('queued', 'running')`, spaceID, datasetID).Scan(&active); err != nil {
@@ -120,9 +130,9 @@ func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 	return run, err
 }
 
-// ListRuns 按计划时刻倒序分页列出运行；spaceID、datasetID、status 为空表示不限。
-func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string, limit, offset int) ([]Run, int, error) {
-	args := []any{spaceID, spaceID, datasetID, datasetID, status, status}
+// ListRuns 按计划时刻倒序分页列出运行；spaceID、datasetID、status 为空表示不限；includeTicks 为假时不列成功的到点拉取。
+func (s *Store) ListRuns(ctx context.Context, spaceID, datasetID, status string, includeTicks bool, limit, offset int) ([]Run, int, error) {
+	args := []any{spaceID, spaceID, datasetID, datasetID, status, status, includeTicks}
 	var total int
 	if err := s.db.QueryRowContext(ctx, queryRunsCount, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -163,7 +173,16 @@ func (s *Store) ListActiveRuns(ctx context.Context, spaceID string) ([]Run, erro
 
 // LastRuns 返回每个任务最近一次运行（按计划时刻），用于任务列表。
 func (s *Store) LastRuns(ctx context.Context, spaceID string) (map[string]Run, error) {
-	rows, err := s.db.QueryContext(ctx, queryRuns4, spaceID, spaceID)
+	return s.lastRuns(ctx, queryRuns4, spaceID)
+}
+
+// LastReviewRuns 返回每个任务最近一次复核或手动运行（按计划时刻），健康等级按它判断耗时。
+func (s *Store) LastReviewRuns(ctx context.Context, spaceID string) (map[string]Run, error) {
+	return s.lastRuns(ctx, queryRuns8, spaceID)
+}
+
+func (s *Store) lastRuns(ctx context.Context, query, spaceID string) (map[string]Run, error) {
+	rows, err := s.db.QueryContext(ctx, query, spaceID, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -342,17 +361,23 @@ func (s *Store) RunningRunIDsCanceled(ctx context.Context, workerID string, runI
 	return out, nil
 }
 
-// CleanupRuns 按保留期清理运行记录：成功的定时运行用 scheduledSuccess，其余用 other。
-func (s *Store) CleanupRuns(ctx context.Context, now time.Time, scheduledSuccess, other time.Duration) (int, error) {
+// CleanupRuns 按保留期清理运行记录：成功的到点拉取用 tickSuccess，成功的复核用 scheduledSuccess，其余用 other。
+func (s *Store) CleanupRuns(ctx context.Context, now time.Time, tickSuccess, scheduledSuccess, other time.Duration) (int, error) {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM t_archive_runs WHERE c_status IN ('succeeded', 'failed', 'canceled') AND c_finished_at IS NOT NULL AND
-((c_kind = 'scheduled' AND c_status = 'succeeded' AND c_finished_at < ?) OR (NOT (c_kind = 'scheduled' AND c_status = 'succeeded') AND c_finished_at < ?))`,
-		fmtTime(now.Add(-scheduledSuccess)), fmtTime(now.Add(-other)))
+((c_kind = 'tick' AND c_status = 'succeeded' AND c_finished_at < ?)
+OR (c_kind = 'scheduled' AND c_status = 'succeeded' AND c_finished_at < ?)
+OR (c_kind = 'tick' AND c_status != 'succeeded' AND c_finished_at < ?)
+OR (c_kind != 'tick' AND NOT (c_kind = 'scheduled' AND c_status = 'succeeded') AND c_finished_at < ?))`,
+		fmtTime(now.Add(-tickSuccess)), fmtTime(now.Add(-scheduledSuccess)), fmtTime(now.Add(-tickOtherRetention)), fmtTime(now.Add(-other)))
 	if err != nil {
 		return 0, err
 	}
 	affected, _ := result.RowsAffected()
 	return int(affected), nil
 }
+
+// tickOtherRetention 是失败、取消的到点拉取的保留期：每分钟可能一条，按其余运行的 90 天保留会堆积十几万条，拖慢每分钟的检查。
+const tickOtherRetention = 7 * 24 * time.Hour
 
 // CountQueued 返回排队中的运行数。
 func (s *Store) CountQueued(ctx context.Context) (int, error) {
@@ -377,8 +402,14 @@ const (
 	queryRuns1 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
 	queryRuns3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status IN ('queued', 'running') AND (? = '' OR c_space_id = ?)
 ORDER BY c_scheduled_at`
-	queryRuns4 = `SELECT ` + runColumns + ` FROM t_archive_runs r WHERE (? = '' OR c_space_id = ?)
-AND c_id = (SELECT c_id FROM t_archive_runs x WHERE x.c_space_id = r.c_space_id AND x.c_dataset_id = r.c_dataset_id ORDER BY c_scheduled_at DESC, c_id DESC LIMIT 1)`
+	// 最近一次运行：从任务表出发（每个任务一次索引查找），不随运行记录（每分钟一条 tick）变多而变慢。
+	queryRuns4 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_id IN (SELECT (SELECT x.c_id FROM t_archive_runs x
+WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
+FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
+	queryRuns8 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_id IN (SELECT (SELECT x.c_id FROM t_archive_runs x
+WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id AND x.c_kind IN ('scheduled', 'manual')
+ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
+FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
 	queryRuns5 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
 	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs r WHERE c_status = 'queued'
 AND NOT EXISTS (SELECT 1 FROM t_archive_partitions p WHERE p.c_space_id = r.c_space_id AND p.c_dataset_id = r.c_dataset_id AND p.c_worker_id != ?)
@@ -388,7 +419,8 @@ ORDER BY c_scheduled_at, c_id`
 
 // 运行列表的筛选条件固定，spaceID、datasetID、status 为空表示不限。
 const (
-	runsFilter     = `(? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_status = ?)`
+	runsFilter = `(? = '' OR c_space_id = ?) AND (? = '' OR c_dataset_id = ?) AND (? = '' OR c_status = ?)
+AND (? OR c_kind != 'tick' OR c_status != 'succeeded')`
 	queryRunsCount = `SELECT COUNT(*) FROM t_archive_runs WHERE ` + runsFilter
 	queryRunsList  = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE ` + runsFilter + ` ORDER BY c_scheduled_at DESC, c_id DESC LIMIT ? OFFSET ?`
 )

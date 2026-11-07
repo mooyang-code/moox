@@ -286,7 +286,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
+			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -619,6 +619,10 @@ func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkI
 		checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
 	} else if business.Kind == "worker_presence" {
 		checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
+	} else if business.Kind == "archive_task" {
+		checkID, name = "archive_task:"+business.Module, monitorobservability.ArchiveTaskCheckName(business.Module)
+	} else if business.Kind == "archive_coverage" {
+		checkID, name = "archive_coverage:"+business.Module, monitorobservability.ArchiveCoverageCheckName
 	}
 	return checkID, name
 }

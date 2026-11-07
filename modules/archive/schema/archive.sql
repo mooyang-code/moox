@@ -1,7 +1,8 @@
 -- Archive manager SQLite schema（库以 PRAGMA auto_vacuum = INCREMENTAL 创建，见 store.Open）。
 -- 时间列统一存 UTC 文本 "2006-01-02 15:04:05.000"，按字典序比较即按时间比较。
 
--- 归档任务：一个时序数据集最多一个任务；频率、分区粒度和执行间隔在保存时确定，保留期与 DataNode 由维护定时器刷新
+-- 归档任务：一个时序数据集最多一个任务；频率、分区粒度和复核间隔在保存时确定，保留期与 DataNode 由维护定时器刷新
+-- c_last_boundary、c_last_review 是最近一次已生成运行的拉取边界与复核边界，为空时下一次检查立即复核
 CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -10,33 +11,30 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_partition_unit TEXT NOT NULL,
     c_data_node_id TEXT NOT NULL DEFAULT '',
     c_retention TEXT NOT NULL DEFAULT '',
-    c_file_prefix TEXT NOT NULL DEFAULT '',
     c_meta_json TEXT NOT NULL DEFAULT '',
-    c_schedule_cron TEXT NOT NULL,
-    c_schedule_tz TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    c_pull_every_bars INTEGER NOT NULL DEFAULT 1,
     c_interval_seconds INTEGER NOT NULL,
-    c_start_at DATETIME NOT NULL,
     c_backfill_from DATETIME,
     c_status TEXT NOT NULL DEFAULT 'enabled',
-    c_next_run_at DATETIME,
+    c_last_boundary DATETIME,
+    c_last_review DATETIME,
     c_consecutive_skips INTEGER NOT NULL DEFAULT 0,
     c_last_success_at DATETIME,
     c_final_until DATETIME,
     c_creator TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_unrecoverable_json TEXT NOT NULL DEFAULT '[]',
+    c_blocked_reason TEXT NOT NULL DEFAULT '',
     CHECK (c_partition_unit IN ('day', 'month')),
-    CHECK (c_interval_seconds >= 300),
+    CHECK (c_pull_every_bars BETWEEN 1 AND 1440),
+    CHECK (c_interval_seconds IN (3600, 86400)),
     CHECK (c_status IN ('enabled', 'paused')),
     CHECK (c_consecutive_skips >= 0),
     UNIQUE (c_space_id, c_dataset_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_archive_tasks_due ON t_archive_tasks (c_status, c_next_run_at);
--- 同一空间内文件名前缀唯一（不区分大小写，macOS 等文件系统不区分）：防止不同数据集的导出文件互相覆盖
-CREATE UNIQUE INDEX IF NOT EXISTS ux_archive_tasks_file_prefix
-ON t_archive_tasks (c_space_id, lower(c_file_prefix))
-WHERE c_file_prefix != '';
+CREATE INDEX IF NOT EXISTS idx_t_archive_tasks_status ON t_archive_tasks (c_status);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_archive_tasks_mtime
 AFTER UPDATE ON t_archive_tasks
@@ -46,7 +44,7 @@ BEGIN
     UPDATE t_archive_tasks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 归档运行：一次定时、手动或补拉区间的执行；running 期间由租约标识持有的 worker
+-- 归档运行：一次复核（scheduled）、手动、到点拉取（tick）或补拉区间（range）的执行；running 期间由租约标识持有的 worker
 CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_run_id TEXT NOT NULL,
@@ -75,9 +73,9 @@ CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_message TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_kind IN ('scheduled', 'manual', 'range')),
+    CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range')),
     CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
-    CHECK (c_kind != 'range' OR (c_range_start IS NOT NULL AND c_range_end IS NOT NULL)),
+    CHECK (c_kind NOT IN ('tick', 'range') OR (c_range_start IS NOT NULL AND c_range_end IS NOT NULL)),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_archive_tasks (c_space_id, c_dataset_id) ON DELETE CASCADE,
     UNIQUE (c_run_id)
 );
