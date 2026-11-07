@@ -333,7 +333,7 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `setup apply` | 写入初始用户与云凭据 |
+| `setup apply` | 写入初始用户、云凭据与交易所密钥（`[[exchange_keys]]`，只建不改）；Trade 已部署时逐把检测（只读和已在管理台删除的跳过，检测没完成只提示稍后重试，不影响退出码），没部署时提示部署后用 `trade inspect-credential` |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
 | `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
@@ -442,24 +442,29 @@
 | `system resume` | 系统恢复：先追赶补采，全部追平后统一放行 |
 | `system status` | 查看各模块的阶段与恢复追赶进度 |
 
-## trade：交易：只读查询（账户、订单、成交、持仓、权益）；写操作不提供命令
+## trade：交易：只读查询（账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单）；写操作不提供命令
 
 | 命令 | 说明 |
 | --- | --- |
 | `trade account list` | 列出交易账户 |
 | `trade account show` | 查看交易账户 |
 | `trade action` | 查看一次操作的执行结果 |
+| `trade actions` | 列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）；`--action-type` 按类型过滤 |
+| `trade blocked list` | 列出下架名单（全局，名单里的标的只减不增） |
 | `trade capabilities` | 查看交易账户的执行能力 |
+| `trade inspect-credential` | 检测一把交易所密钥的账户类型和权限（只读，不落库，不下单）；`--markets` 指定要开通的市场 |
 | `trade instruments` | 列出交易账户可下单的标的 |
 | `trade equity` | 查询权益曲线 |
 | `trade fills` | 列出成交 |
+| `trade holders` | 列出策略持有某个标的的执行账户（跨空间，全局；零头和模拟盘有标记）；`--exchange`、`--market-type`、`--exchange-symbol` 必填 |
 | `trade holdings` | 列出账户的持仓明细 |
 | `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转）；`--market-type` 指定市场 |
 | `trade logical list` | 列出逻辑账户 |
 | `trade logical show` | 查看逻辑账户 |
 | `trade logical target` | 查看逻辑账户当前的目标 |
-| `trade order list` | 列出订单 |
+| `trade order list` | 列出订单；`--owner-type` 按来源过滤（TARGET、OPERATOR、EXTERNAL、SYSTEM） |
 | `trade order show` | 查看订单 |
+| `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate

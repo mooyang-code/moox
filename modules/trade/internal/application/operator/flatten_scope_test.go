@@ -54,6 +54,15 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 	return fixture
 }
 
+// block 把标的写进下架名单：下架清仓每一轮先查名单，不在名单里就当作已经解除禁止而结束。
+func (f *operatorFixture) block(t *testing.T, market, symbol string) {
+	t.Helper()
+	_, err := f.store.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+		Exchange: "BINANCE", MarketType: market, ExchangeSymbol: symbol, Reason: "测试下架", BlockedAt: 1,
+	})
+	require.NoError(t, err)
+}
+
 func placed(fixture *operatorFixture) []string {
 	var result []string
 	for _, spec := range fixture.orders.specs {
@@ -129,6 +138,7 @@ func TestFlattenSingleInstrumentLeavesOthersAndDoesNotPause(t *testing.T) {
 	other := activeOrder(fixture, "spot-open", "TARGET")
 	other.MarketType, other.InstrumentID = "SPOT", "BTC-USDT-SPOT"
 	fixture.order(t, other)
+	fixture.block(t, "SWAP", "BTCUSDT")
 	command := flattenCommand("delist-1")
 	command.InstrumentID = "BTC-USDT-SWAP"
 
@@ -232,6 +242,7 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		})
 	}))
+	fixture.block(t, "SWAP", "BTCUSDT")
 	command := flattenCommand("delist-2")
 	command.InstrumentID = "BTC-USDT-SWAP"
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -22,6 +23,28 @@ func (secretSourceStub) GetExchangeSecret(
 		SecretID: "secret-1", Category: "exchange",
 		Exchange: exchange.ExchangeBinance, Status: "active",
 	}, nil
+}
+
+// inspectorStub 返回固定的检测结果；err 非空时模拟没有检测成功。
+type inspectorStub struct {
+	result exchange.Inspection
+	err    error
+}
+
+func (s inspectorStub) Inspect(_ context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
+	if s.err != nil {
+		return exchange.Inspection{}, s.err
+	}
+	result := s.result
+	if result.InspectedAt.IsZero() {
+		result = exchange.Inspection{
+			Exchange: name, Environment: request.Environment, AccountMode: exchange.AccountModeBinanceStandard,
+			CanTradeSpot: true, CanTradeSwap: true, UniversalTransfer: true,
+			AvailableMarkets: []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
+			InspectedAt:      time.Now().UTC(),
+		}
+	}
+	return result, nil
 }
 
 func TestAccountRPCRejectsMissingSpace(t *testing.T) {
@@ -44,8 +67,9 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 	}
 	defer tradeStore.Close()
 	service := &accountapp.Service{
-		Store:   accountapp.Repository{Store: tradeStore},
-		Secrets: secretSourceStub{},
+		Store:     accountapp.Repository{Store: tradeStore},
+		Secrets:   secretSourceStub{},
+		Inspector: inspectorStub{},
 	}
 	handler := &AccountServer{
 		Accounts: service, Store: tradeStore, NewID: func() string { return "account-1" },

@@ -3,7 +3,9 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -762,7 +764,7 @@ func (f *operatorFixture) service() *Service {
 	return &Service{
 		Store: f.store, Orders: f.orders, Syncer: f.syncer, Prices: f.prices,
 		Now: func() time.Time { return f.now }, FlattenMaxAttempts: 1,
-		FlattenRetryInterval: -1,
+		FlattenRetryInterval: -1, DelistAttemptInterval: -1,
 	}
 }
 
@@ -786,11 +788,18 @@ func (s *operatorOrderStub) Place(
 	id := s.nextID
 	if id == "" {
 		id = "child-" + spec.TradingAccountID + "-" + spec.InstrumentID
+		// 同一个测试里下多笔时订单号不能撞：已经有同号的就加序号。
+		for n := 2; ; n++ {
+			if _, err := s.store.GetOrder(ctx, spaceID, id); err != nil {
+				break
+			}
+			id = fmt.Sprintf("child-%s-%s-%d", spec.TradingAccountID, spec.InstrumentID, n)
+		}
 	}
 	record := store.OrderRecord{
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
-		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
+		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: stubExchangeSymbol(spec.InstrumentID),
 		MarketType: string(exchange.MarketOfInstrumentID(spec.InstrumentID)), InstrumentID: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
@@ -946,4 +955,10 @@ func traceIndex(trace []string, expected string) int {
 		}
 	}
 	return -1
+}
+
+// stubExchangeSymbol 把内部标的 ID（BTC-USDT-SWAP）还原成测试夹具里的交易所代码（BTCUSDT），订单按（市场、代码）才查得到。
+func stubExchangeSymbol(instrumentID string) string {
+	symbol := strings.TrimSuffix(strings.TrimSuffix(instrumentID, "-SWAP"), "-SPOT")
+	return strings.ReplaceAll(symbol, "-", "")
 }

@@ -180,7 +180,7 @@ func (s *Service) adjustStablecoin(
 	holding stableHolding,
 	delta shared.Decimal,
 ) (bool, error) {
-	step, minimum, minNotional, err := quantityRules(holding.instrument)
+	step, minimum, minNotional, err := quantityRules(holding.instrument, holding.price)
 	if err != nil {
 		return false, err
 	}

@@ -70,14 +70,14 @@ test("未加入组合的执行账户在弹窗里加入组合", async ({ page }) 
   });
 });
 
-test("新建模拟账户四步，只开放模拟盘，请求带市场集合", async ({ page }) => {
+test("新建模拟账户四步，测试网和生产环境也可选，请求带市场集合", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await page.getByRole("button", { name: "新建账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
   await expect(dialog.getByText("1 类型").or(dialog.getByText("类型", { exact: true }))).toBeVisible();
-  await expect(dialog.locator('input[value="testnet"]')).toBeDisabled();
-  await expect(dialog.locator('input[value="prod"]')).toBeDisabled();
-  await expect(dialog.getByText("即将开放")).toHaveCount(2);
+  await expect(dialog.locator('input[value="testnet"]')).toBeEnabled();
+  await expect(dialog.locator('input[value="prod"]')).toBeEnabled();
+  await expect(dialog.getByText("即将开放")).toHaveCount(0);
   await dialog.getByRole("button", { name: "下一步" }).click();
   await field(dialog, "账户名称").fill("演示账户");
   await dialog.getByRole("button", { name: "下一步" }).click();
@@ -281,4 +281,25 @@ test("390 窄屏下持仓页右侧操作列不固定，不会盖住数据列", a
   await openDetail(page, "la-paper-1", "positions");
   await expect(page.getByRole("row", { name: /BTC/ })).toBeVisible();
   expect(await page.locator(".tx-detail .arco-table-col-fixed-right").count()).toBe(0);
+});
+
+// 详情页每 5 秒整体换一次组合对象：正在改的设置不能被悄悄还原（否则按保存会存下还原过的内容）。
+test("下单设置、资金设置改到一半，轮询刷新组合后输入保持不变", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "settings");
+  const detail = page.locator(".tx-detail");
+  const minSpot = field(detail, "现货最小下单额");
+  await expect(minSpot).toBeVisible();
+  const original = await minSpot.inputValue();
+  const reserve = field(detail, "资金预留比例");
+  await expect(reserve).toBeVisible();
+  const reserveOriginal = await reserve.inputValue();
+  const edited = original === "20" ? "21" : "20";
+  const reserveEdited = reserveOriginal === "0.2" ? "0.3" : "0.2";
+  await minSpot.fill(edited);
+  await reserve.fill(reserveEdited);
+  const before = calls.getLogical;
+  await page.waitForTimeout(6500);
+  expect(calls.getLogical).toBeGreaterThan(before);
+  await expect(minSpot).toHaveValue(edited);
+  await expect(reserve).toHaveValue(reserveEdited);
 });

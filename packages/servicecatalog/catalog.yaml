@@ -1878,8 +1878,13 @@ components:
         timeout_ms: 5000
         method_timeouts_ms:
           ListAccountLedger: 15000
+          InspectExchangeCredential: 15000
+          ReinspectTradingAccount: 15000
+          SummarizeAccountPnl: 15000
           FlattenLogicalAccount: 12000
           FlattenTradingAccount: 12000
+          FlattenInstrument: 12000
+          ReduceLogicalAccount: 12000
         max_body_bytes: 4194304
         methods:
           - CreateTradingAccount
@@ -1888,6 +1893,9 @@ components:
           - ListTradingAccounts
           - SetLeverage
           - SyncTradingAccount
+          - InspectExchangeCredential
+          - ReinspectTradingAccount
+          - ResolveWalletTransfer
           - CreateLogicalAccount
           - GetLogicalAccount
           - ListLogicalAccounts
@@ -1919,7 +1927,16 @@ components:
           - ListHoldings
           - ListAccountLedger
           - FlattenTradingAccount
+          - BlockInstrument
+          - UnblockInstrument
+          - ListBlockedInstruments
+          - ListInstrumentHolders
+          - FlattenInstrument
+          - ReduceLogicalAccount
+          - SummarizeAccountPnl
+          - ListOperatorActions
         read_only_methods:
+          - InspectExchangeCredential
           - GetTradingAccount
           - ListTradingAccounts
           - GetLogicalAccount
@@ -1935,6 +1952,10 @@ components:
           - QueryEquityCurve
           - ListHoldings
           - ListAccountLedger
+          - ListBlockedInstruments
+          - ListInstrumentHolders
+          - SummarizeAccountPnl
+          - ListOperatorActions
         acl:
           - methods:
               - CreateTradingAccount
@@ -1943,6 +1964,9 @@ components:
               - ListTradingAccounts
               - SetLeverage
               - SyncTradingAccount
+              - InspectExchangeCredential
+              - ReinspectTradingAccount
+              - ResolveWalletTransfer
               - CreateLogicalAccount
               - GetLogicalAccount
               - ListLogicalAccounts
@@ -1971,9 +1995,30 @@ components:
               - ListHoldings
               - ListAccountLedger
               - FlattenTradingAccount
+              - SummarizeAccountPnl
+              - ListOperatorActions
             callers:
               - console
               - moox-cli
+          - methods:
+              - ListBlockedInstruments
+              - ListInstrumentHolders
+            callers:
+              - console
+              - moox-cli
+              - callback-dispatcher
+          - methods:
+              - UnblockInstrument
+              - ReduceLogicalAccount
+            callers:
+              - console
+          - methods:
+              - BlockInstrument
+              - UnblockInstrument
+              - FlattenInstrument
+              - GetOperatorAction
+            callers:
+              - callback-dispatcher
           - methods:
               - ClaimLogicalAccountOwner
               - ReleaseLogicalAccountOwner

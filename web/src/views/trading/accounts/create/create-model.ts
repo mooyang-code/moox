@@ -1,23 +1,10 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
 import type { Environment } from "../shared/environment";
 
-/** 1A 只开放模拟盘；测试网和生产环境要等交易所检测（T5）上线后再放开。 */
-export const LIVE_ENVIRONMENTS_OPEN = false;
-
 export const createKinds: readonly { key: Environment; label: string; desc: string; open: boolean }[] = [
   { key: "paper", label: "模拟盘", desc: "用真实行情在本地撮合，不连交易所，不需要密钥。", open: true },
-  {
-    key: "testnet",
-    label: "测试网",
-    desc: LIVE_ENVIRONMENTS_OPEN ? "连交易所测试环境，用测试币验证下单流程。" : "即将开放。",
-    open: LIVE_ENVIRONMENTS_OPEN
-  },
-  {
-    key: "prod",
-    label: "生产环境",
-    desc: LIVE_ENVIRONMENTS_OPEN ? "连交易所生产环境，用真实资金交易。" : "即将开放。",
-    open: LIVE_ENVIRONMENTS_OPEN
-  }
+  { key: "testnet", label: "测试网", desc: "连交易所测试环境，用测试币验证下单流程。", open: true },
+  { key: "prod", label: "生产环境", desc: "连交易所生产环境，用真实资金交易，选密钥后会先检测账户类型和权限。", open: true }
 ];
 
 export interface CreateForm {
@@ -71,6 +58,17 @@ export function createDefaultForm(kind: Environment = "paper"): CreateForm {
   };
 }
 
+/**
+ * 按检测出的可开通市场收窄勾选：实盘账户只能开通检测结果里有的市场。
+ * available 是检测结果的 SPOT/SWAP 字符串，为空表示没有限制（测试网跳过检测）；收窄后一个都不剩时取第一个可开通的市场。
+ */
+export function restrictMarkets(markets: readonly MarketType[], available: readonly string[]): MarketType[] {
+  if (!available.length) return [...markets];
+  const allowed = ([1, 2] as MarketType[]).filter(item => available.includes(item === 1 ? "SPOT" : "SWAP"));
+  const kept = markets.filter(item => allowed.includes(item));
+  return kept.length || !allowed.length ? kept : [allowed[0]];
+}
+
 /** 市场勾选结果按现货、永续的固定顺序排列。 */
 export function toggleMarket(markets: readonly MarketType[], market: MarketType, on: boolean): MarketType[] {
   const next = new Set(markets);
@@ -97,6 +95,7 @@ export function validateStep(form: CreateForm, step: number): string {
   }
   if (step === 2) {
     if (!form.markets.length) return "至少开通一个市场";
+    if (form.kind === "testnet" && form.exchange === 1 && form.markets.length > 1) return "币安测试网一个账户只能开通一个市场";
     if (!form.settlementAsset.trim()) return "请输入结算资产";
     if (form.markets.includes(2) && form.settlementAsset.trim().toUpperCase() !== "USDT") return "永续只支持 USDT 结算";
     if (form.kind === "paper") {
@@ -143,4 +142,26 @@ export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq {
     margin_mode: form.markets.includes(2) ? "CROSS" : "",
     live: { environment: form.kind === "testnet" ? 1 : 2, credential_secret_id: form.secretId }
   };
+}
+
+const sessionStartingText = "ExchangeSession is not configured";
+
+/**
+ * 新建的实盘账户，运行时的会话要等周期检查才建起来：加入组合在这段时间里会报“会话未配置”，
+ * 只对这一种错误等几秒重试，其余错误原样抛出。
+ */
+export async function retryWhileSessionStarting<T>(
+  call: () => Promise<T>,
+  options: { attempts?: number; delayMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<T> {
+  const { attempts = 6, delayMs = 2000, sleep = ms => new Promise<void>(resolve => setTimeout(resolve, ms)) } = options;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (error) {
+      const starting = error instanceof Error && error.message.includes(sessionStartingText);
+      if (!starting || attempt >= attempts) throw error;
+      await sleep(delayMs);
+    }
+  }
 }

@@ -82,7 +82,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 }
 
 func (a *Adapter) incomePage(ctx context.Context, from, to int64) ([]incomePayload, error) {
-	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/income", url.Values{
+	raw, err := a.request(ctx, http.MethodGet, a.path("", "/fapi/v1/income"), url.Values{
 		"startTime": []string{strconv.FormatInt(from, 10)},
 		"endTime":   []string{strconv.FormatInt(to, 10)},
 		"limit":     []string{strconv.Itoa(incomePageLimit)},

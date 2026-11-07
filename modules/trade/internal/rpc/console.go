@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -34,6 +35,10 @@ type ConsoleServer struct {
 	Exchanges          execution.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
+	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓；ReduceAccount 发起按比例减仓。
+	Delist                  *delistapp.Service
+	FlattenInstrumentAction FlattenInstrumentFunc
+	ReduceAccount           ReduceLogicalAccountFunc
 }
 
 type HoldingQueryService interface {

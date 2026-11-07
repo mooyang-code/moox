@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     CHECK (c_markets IN ('SPOT', 'SWAP', 'SPOT,SWAP', 'STOCK')),
     CHECK (c_account_mode IN ('', 'BINANCE_PORTFOLIO_MARGIN', 'BINANCE_STANDARD', 'OKX_UNIFIED')),
     CHECK (c_account_mode = '' OR (c_execution_mode = 'LIVE' AND c_markets <> 'STOCK')),
-    -- 测试网一个账户只开一个市场
-    CHECK (c_live_environment <> 'TESTNET' OR c_markets <> 'SPOT,SWAP'),
+    -- 币安测试网一个账户只开一个市场（现货、合约测试网是两套密钥）；OKX 模拟盘一个账户可以同时开两个
+    CHECK (c_live_environment <> 'TESTNET' OR c_exchange <> 'BINANCE' OR c_markets <> 'SPOT,SWAP'),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (
         (c_execution_mode = 'PAPER'

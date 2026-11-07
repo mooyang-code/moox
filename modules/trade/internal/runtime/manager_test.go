@@ -476,3 +476,14 @@ func TestManagerResetsBackoffAfterStableRun(t *testing.T) {
 	require.GreaterOrEqual(t, fastGap, 70*time.Millisecond, "fast failures must keep doubling")
 	require.Less(t, stableGap, 60*time.Millisecond, "a stable run must reset the backoff")
 }
+
+// 同一个密钥 ID 下改了密钥内容：重新检测写入新的指纹，会话配置随之不同，会话被重建。
+func TestSameSessionConfigDiffersWhenCredentialFingerprintChanges(t *testing.T) {
+	account := func(apiKey string) store.TradingAccountRecord {
+		raw, err := exchange.Inspection{InspectedAt: time.Now().UTC(), CredentialFingerprint: exchange.CredentialFingerprint(apiKey)}.Encode()
+		require.NoError(t, err)
+		return store.TradingAccountRecord{TradingAccountID: "a", CredentialSecretID: "secret-1", InspectionJSON: raw}
+	}
+	require.True(t, sameSessionConfig(account("key-1"), account("key-1")))
+	require.False(t, sameSessionConfig(account("key-1"), account("key-2")))
+}

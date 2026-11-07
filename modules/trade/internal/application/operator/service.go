@@ -70,6 +70,11 @@ type Service struct {
 	FlattenMaxAttempts   int
 	FlattenRetryInterval time.Duration
 	FlattenTimeout       time.Duration
+
+	// Wake 在下架清仓结束时唤醒目标重新收敛，为空时不唤醒。
+	Wake func()
+	// DelistAttemptInterval 是两笔下架清仓 IOC 单之间的最小间隔：零用默认的 3 秒，负数不限制（测试用）。
+	DelistAttemptInterval time.Duration
 }
 
 type ManualOrderCommand struct {

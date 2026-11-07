@@ -9,6 +9,7 @@ import (
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
@@ -68,6 +69,9 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionTargetRejected: telemetry.Recent(telemetry.AttentionTargetRejected, now, rejectionWindow),
 		telemetry.AttentionTargetReversal: telemetry.Recent(telemetry.AttentionTargetReversal, now, rejectionWindow),
 		telemetry.AttentionRateLimited:    telemetry.Recent(telemetry.AttentionRateLimited, now, rejectionWindow),
+		// 划转额度不足每份目标记一次，保留窗口内持续上报。
+		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
+		telemetry.AttentionTransferFailing:   telemetry.Recent(telemetry.AttentionTransferFailing, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
@@ -79,6 +83,14 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 	for _, account := range accounts {
 		spaces[account.SpaceID] = struct{}{}
 		names[account.TradingAccountID] = account.Name
+		if blocked, failing := InspectionAttention(account); blocked != "" || failing != "" {
+			if blocked != "" {
+				items[telemetry.AttentionInspectionBlocked] = append(items[telemetry.AttentionInspectionBlocked], blocked)
+			}
+			if failing != "" {
+				items[telemetry.AttentionInspectionFailing] = append(items[telemetry.AttentionInspectionFailing], failing)
+			}
+		}
 		if account.Status != string(exchange.AccountStatusEnabled) || account.Ready {
 			continue
 		}
@@ -132,6 +144,11 @@ func (w *AttentionWorker) scanLogicalAccount(
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
+	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
+	// 详情是固定文字，不带比值，不会每次触发产生新的指标序列。
+	if store.IsMarginPauseReason(logical.PauseReason) {
+		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率风控已暂停，等待确认后恢复")
+	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
 		log.WarnContextf(ctx, "交易关注项：组合 %s 换手检查失败：%v", logical.LogicalAccountID, err)
@@ -173,10 +190,26 @@ func (w *AttentionWorker) noteTarget(
 			since = now
 		}
 		blocked[logical.LogicalAccountID] = since
-		if now.Sub(since) > bar && len(target.BlockedTargets) > 0 {
-			blocked := target.BlockedTargets[0]
-			items[telemetry.AttentionTargetBlocked] = append(items[telemetry.AttentionTargetBlocked],
-				logical.Name+" "+blocked.InstrumentID+"："+blocked.Reason)
+		// 资金缺口是持续状态：目标一直 BLOCKED 且带着资金不足的项就一直上报，不依赖 5 分钟的事件窗口
+		// （已阻塞的目标不会被定时重新收敛，策略周期长于窗口时事件早就过期了）。固定文字、不带会变的数字。
+		for _, item := range target.BlockedTargets {
+			if !item.Deferred && walletapp.IsFundsShortage(item.Reason) {
+				items[telemetry.AttentionTransferShortfall] = append(items[telemetry.AttentionTransferShortfall],
+					logical.Name+"：合约钱包可划转的资金不足，现货买入被缩小或挡下")
+				break
+			}
+		}
+		if now.Sub(since) > bar {
+			// 合约钱包可划转资金不足同时有 transfer_shortfall 在报，这里跳过它，同一个缺口不发两条告警；
+			// 只有别的原因的阻塞才算目标持续阻塞。
+			for _, blocked := range target.BlockedTargets {
+				if blocked.Deferred || walletapp.IsFundsShortage(blocked.Reason) {
+					continue
+				}
+				items[telemetry.AttentionTargetBlocked] = append(items[telemetry.AttentionTargetBlocked],
+					logical.Name+" "+blocked.InstrumentID+"："+blocked.Reason)
+				break
+			}
 		}
 	case targetapp.StatusConverged:
 		delete(w.expiredCounts, logical.LogicalAccountID)

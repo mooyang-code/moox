@@ -334,17 +334,22 @@ func (s *Service) referencePrice(ctx context.Context, adapter execution.Executio
 // maxQuoteAge 是系统单参考价的最长时延：和下单校验的 10 秒一致。
 const maxQuoteAge = 10 * time.Second
 
-// quantityRules 返回标的的数量步长、最小数量和最小名义金额（现货标的，面值为 1）。
-func quantityRules(instrument store.InstrumentRecord) (step, minimum, minNotional shared.Decimal, err error) {
+// quantityRules 返回标的的数量步长、最小数量和在这个价格下的最小名义金额（现货标的，面值为 1）：
+// 交易所给了最小名义金额就用它，没给（OKX）用最小下单量 × 价格折算。
+func quantityRules(instrument store.InstrumentRecord, price shared.Decimal) (step, minimum, minNotional shared.Decimal, err error) {
 	if step, err = shared.ParseDecimal(instrument.ExchangeQuantityStep); err != nil || step.Cmp(shared.Zero()) <= 0 {
 		return shared.Zero(), shared.Zero(), shared.Zero(), fmt.Errorf("%s 的数量步长不合法", instrument.InstrumentID)
 	}
 	if minimum, err = shared.ParseDecimal(instrument.MinExchangeQuantity); err != nil {
 		return shared.Zero(), shared.Zero(), shared.Zero(), fmt.Errorf("%s 的最小数量不合法", instrument.InstrumentID)
 	}
+	raw, err := instrument.MinNotionalAt(price)
+	if err != nil {
+		return shared.Zero(), shared.Zero(), shared.Zero(), fmt.Errorf("%s 的最小名义金额不合法", instrument.InstrumentID)
+	}
 	minNotional = shared.Zero()
-	if strings.TrimSpace(instrument.MinNotional) != "" {
-		if minNotional, err = shared.ParseDecimal(instrument.MinNotional); err != nil {
+	if strings.TrimSpace(raw) != "" {
+		if minNotional, err = shared.ParseDecimal(raw); err != nil {
 			return shared.Zero(), shared.Zero(), shared.Zero(), fmt.Errorf("%s 的最小名义金额不合法", instrument.InstrumentID)
 		}
 	}

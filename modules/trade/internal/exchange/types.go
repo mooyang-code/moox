@@ -279,8 +279,10 @@ type AccountConfig struct {
 	Exchange         Exchange
 	// Markets 是账户已开通的市场。同时开通多个市场时，注册表为每个市场各绑一个单市场适配器，
 	// 交给 execution.MultiMarket 按标的所属市场路由；单市场适配器拿到的配置里只有一个市场。
-	Markets         []MarketType
-	ExecutionMode   ExecutionMode
+	Markets       []MarketType
+	ExecutionMode ExecutionMode
+	// AccountMode 是检测出来的账户类型（币安统一账户或普通账户、OKX 统一账户）；模拟盘为空。
+	AccountMode     AccountMode
 	Environment     AccountEnvironment
 	SettlementAsset string
 	MarginMode      MarginMode
@@ -315,6 +317,23 @@ type Instrument struct {
 	ExchangeUpdatedAt    time.Time
 }
 
+// MinNotionalAt 返回在某个价格下的最小下单名义金额：交易所给了最小名义金额（币安）就用它；
+// 没有（OKX）就用最小下单量折算：minSz × 合约面值 × 价格（现货合约面值为 1；永续要乘 ctVal，漏掉会差几个数量级）。
+// 最小下单量和合约面值缺失时返回 0，表示没有可用的下限。
+func (i Instrument) MinNotionalAt(price shared.Decimal) shared.Decimal {
+	if i.MinNotional.Cmp(shared.Zero()) > 0 {
+		return i.MinNotional
+	}
+	if price.Cmp(shared.Zero()) <= 0 || i.MinExchangeQuantity.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero()
+	}
+	contractValue := i.ContractValue
+	if contractValue.Cmp(shared.Zero()) <= 0 {
+		contractValue = shared.MustDecimal("1")
+	}
+	return i.MinExchangeQuantity.Mul(contractValue).Mul(price)
+}
+
 type AssetBalance struct {
 	Wallet    Wallet
 	Asset     string
@@ -323,6 +342,10 @@ type AssetBalance struct {
 	Total     shared.Decimal
 	// Borrowed 是借款（统一账户的杠杆钱包），没有借款的钱包为零。
 	Borrowed shared.Decimal
+	// Transferable 是这个钱包里这个资产最多能划转出去的数量（币安普通账户合约钱包的 maxWithdrawAmount，
+	// 官方说明为 “Maximum transferable/withdrawable amount”）。它和可用余额不是一回事：持仓浮盈、多资产模式下
+	// 可用余额可以大于允许转出的数量。没有这个概念的钱包为零；只用于划转，不进入快照存储。
+	Transferable shared.Decimal
 }
 
 type AccountSnapshot struct {
@@ -333,7 +356,10 @@ type AccountSnapshot struct {
 	MaintenanceMargin shared.Decimal
 	UnrealizedPnL     shared.Decimal
 	// ExchangeEquity 是交易所给的总权益，只用于展示核对，不参与换算。
-	ExchangeEquity    shared.Decimal
+	ExchangeEquity shared.Decimal
+	// UniMMR 是交易所给的统一账户维持保证金率（币安 papi account 的 uniMMR，零表示没有）。保证金率监控直接用它比阈值：
+	// 它的分子是计入抵押率、再扣掉挂单浮亏（openLoss）后的调整后权益，自己用 accountEquity ÷ accountMaintMargin 算可能偏高。
+	UniMMR            shared.Decimal
 	ExchangeUpdatedAt time.Time
 	// WalletUpdatedAt 是各钱包余额的读取时间；同时读多个市场的适配器按钱包记录，没有记录的钱包按 ExchangeUpdatedAt 算。
 	WalletUpdatedAt map[Wallet]time.Time

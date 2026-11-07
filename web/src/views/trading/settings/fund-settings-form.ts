@@ -16,14 +16,31 @@ export interface FundSettingsModel {
   margin_coins: AssetRow[];
   /** 套利底仓，逗号或空格分隔 */
   arbitrage_base_assets: string;
+  /** 以下三项空表示用默认值 */
+  margin_ratio_threshold: string;
+  unified_mmr_threshold: string;
+  margin_reduce_ratio: string;
+  margin_monitor_disabled: boolean;
 }
 
-/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示。 */
+/**
+ * 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示；
+ * 保证金率监控只要组合里有币安生产实盘成员就生效（触发时对整组减仓，含 OKX 成员），
+ * 模拟盘、测试网和没有币安生产实盘成员的组合不显示。
+ */
 export interface FundFormScope {
   /** 模拟盘组合没有资金维护任务 */
   paper?: boolean;
-  /** 含非币安成员：BNB 与稳定币相关项只适用于币安 */
+  /** 含非币安成员：BNB 与稳定币相关项只适用于币安；与 hasBinanceLive 同时为真即混合组合 */
   nonBinance?: boolean;
+  /** 测试网组合：保证金率监控不监控测试网 */
+  testnet?: boolean;
+  /**
+   * 组合里有会被监控的币安账户：启用的成员、执行账户已启用、生产实盘、**开通了永续**、账户类型是币安普通或统一账户
+   * （后端 marginmonitor 就按这个口径监控；停用的成员、只开现货的币安账户、测试网都不被监控，不算）。
+   * 不传按有处理，只有明确传 false（没有这样的账户，例如全是 OKX 或只开现货）才隐藏。
+   */
+  hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
   settlementAsset?: string;
 }
@@ -35,13 +52,52 @@ export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
   return !scope.paper && !scope.nonBinance;
 }
 
+/** 保证金率监控：模拟盘、测试网不监控；全是 OKX 等不被监控成员的组合没有币安生产实盘成员，也不监控。混合组合照常显示。 */
+export function showsMarginMonitor(scope: FundFormScope = {}): boolean {
+  return !scope.paper && !scope.testnet && scope.hasBinanceLive !== false;
+}
+
+/** 保证金率监控不显示时给用户的说明；显示时返回空串。模拟盘的整体说明由表单另给，这里也返回空串。 */
+export function marginMonitorHiddenNote(scope: FundFormScope = {}): string {
+  if (showsMarginMonitor(scope) || scope.paper) return "";
+  if (scope.testnet) return "保证金率监控只对生产环境的币安实盘组合生效，测试网组合不显示";
+  return "这个组合没有会被监控的币安账户（生产实盘、已启用、开通了永续），保证金率监控不生效";
+}
+
+/** 混合组合（既有币安生产实盘成员、又有非币安成员）在监控区块里的补充说明；其他情况返回空串。 */
+export function marginMonitorMixedNote(scope: FundFormScope = {}): string {
+  if (!showsMarginMonitor(scope) || !scope.nonBinance) return "";
+  return "OKX 成员不参与保证金率判断；触发减仓时按设置的比例对整组减仓（含 OKX 成员）";
+}
+
+/** 监控区块不显示时，这四项不可编辑也不校验，提交时沿用库里已存的值，不能用默认值把它们悄悄重置。 */
+export function withStoredMarginMonitor(
+  model: FundSettingsModel,
+  stored: FundSettings | undefined,
+  scope: FundFormScope = {}
+): FundSettingsModel {
+  if (showsMarginMonitor(scope)) return model;
+  const saved = fundSettingsToModel(stored);
+  return {
+    ...model,
+    margin_ratio_threshold: saved.margin_ratio_threshold,
+    unified_mmr_threshold: saved.unified_mmr_threshold,
+    margin_reduce_ratio: saved.margin_reduce_ratio,
+    margin_monitor_disabled: saved.margin_monitor_disabled
+  };
+}
+
 export function defaultFundSettings(): FundSettings {
   return {
     reserve_ratio: "0",
     bnb_discount: false,
     bnb_reserve_amount: "0",
     dust_convert_enabled: false,
-    dust_convert_interval_days: 15
+    dust_convert_interval_days: 15,
+    margin_ratio_threshold: "",
+    unified_mmr_threshold: "",
+    margin_reduce_ratio: "",
+    margin_monitor_disabled: false
   };
 }
 
@@ -61,7 +117,11 @@ export function fundSettingsToModel(settings?: FundSettings): FundSettingsModel 
     dust_convert_interval_days: value.dust_convert_interval_days || 15,
     stablecoin_margin: rows(value.stablecoin_margin),
     margin_coins: rows(value.margin_coins),
-    arbitrage_base_assets: (value.arbitrage_base_assets || []).join(", ")
+    arbitrage_base_assets: (value.arbitrage_base_assets || []).join(", "),
+    margin_ratio_threshold: value.margin_ratio_threshold ?? "",
+    unified_mmr_threshold: value.unified_mmr_threshold ?? "",
+    margin_reduce_ratio: value.margin_reduce_ratio ?? "",
+    margin_monitor_disabled: Boolean(value.margin_monitor_disabled)
   };
 }
 
@@ -70,6 +130,38 @@ const assetPattern = /^[A-Z0-9]{1,20}$/;
 
 function isDecimal(value: string): boolean {
   return decimalPattern.test(value.trim());
+}
+
+/** 保证金率监控的三个数：留空取默认值；填了必须是区间内的数。区间和后端一致，开关关闭时也照样校验。 */
+const marginFields = [
+  {
+    key: "margin_ratio_threshold",
+    label: "普通账户触发阈值",
+    range: "大于 0 且不超过 10",
+    valid: (n: number) => n > 0 && n <= 10
+  },
+  {
+    key: "unified_mmr_threshold",
+    label: "统一账户触发阈值",
+    range: "大于 1 且不超过 100",
+    valid: (n: number) => n > 1 && n <= 100
+  },
+  {
+    key: "margin_reduce_ratio",
+    label: "触发后减仓比例",
+    range: "大于 0 且小于 1",
+    valid: (n: number) => n > 0 && n < 1
+  }
+] as const;
+
+function validateMarginMonitor(model: FundSettingsModel): string {
+  for (const field of marginFields) {
+    const text = model[field.key].trim();
+    if (text !== "" && (!isDecimal(text) || !field.valid(Number(text)))) {
+      return `${field.label}必须是${field.range}的数字，留空表示用默认值`;
+    }
+  }
+  return "";
 }
 
 /** 精确求和：按最长小数位放大成整数，避免 0.1 + 0.2 这类浮点误差。 */
@@ -150,7 +242,8 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
   if (liveOnly && Number(model.bnb_reserve_amount) > 0 && owners.has("BNB")) {
     return `开启 BNB 保留时，BNB 不能同时出现在${owners.get("BNB")}里`;
   }
-  return "";
+  // 监控区块不显示时不校验：用户改不了这几项，提交的是库里已存的值
+  return showsMarginMonitor(scope) ? validateMarginMonitor(model) : "";
 }
 
 function recordOf(list: AssetRow[]): Record<string, string> | undefined {
@@ -158,7 +251,13 @@ function recordOf(list: AssetRow[]): Record<string, string> | undefined {
   return Object.fromEntries(list.map(row => [row.asset.trim().toUpperCase(), row.value.trim()]));
 }
 
-/** 不显示的项（模拟盘、含非币安成员）一律按默认值提交，不带过期的旧值。 */
+/** 空串按“用默认值”提交：不带这个字段。 */
+const orUndefined = (value: string): string | undefined => value.trim() || undefined;
+
+/**
+ * 币安实盘专属项（BNB、小额兑换、稳定币保证金）不显示时按默认值提交，不带过期的旧值；
+ * 保证金率监控四项一律按 model 提交，不显示时调用方先用 withStoredMarginMonitor 换成库里已存的值。
+ */
 export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFormScope = {}): FundSettings {
   const base = parseAssetList(model.arbitrage_base_assets);
   const liveOnly = showsLiveOnlyFields(scope);
@@ -171,6 +270,10 @@ export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFo
     dust_convert_interval_days: liveOnly ? model.dust_convert_interval_days : defaults.dust_convert_interval_days,
     stablecoin_margin: liveOnly ? recordOf(model.stablecoin_margin) : undefined,
     margin_coins: recordOf(model.margin_coins),
-    arbitrage_base_assets: base.length > 0 ? base : undefined
+    arbitrage_base_assets: base.length > 0 ? base : undefined,
+    margin_ratio_threshold: orUndefined(model.margin_ratio_threshold),
+    unified_mmr_threshold: orUndefined(model.unified_mmr_threshold),
+    margin_reduce_ratio: orUndefined(model.margin_reduce_ratio),
+    margin_monitor_disabled: model.margin_monitor_disabled
   };
 }

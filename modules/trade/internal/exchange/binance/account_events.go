@@ -214,6 +214,18 @@ func (a *Adapter) receivePrivateWithHeartbeat(
 	handler execution.AccountEventHandler,
 	heartbeatTimeout time.Duration,
 ) error {
+	return receiveStream(ctx, connection, handler, heartbeatTimeout, a.dispatchPrivate)
+}
+
+// receiveStream 读取私有流并逐条分派；心跳超时、读失败或分派出错都结束并返回，由会话重连。
+// 普通账户（按市场）和统一账户（整个账户一条流）共用。
+func receiveStream(
+	ctx context.Context,
+	connection *websocket.Conn,
+	handler execution.AccountEventHandler,
+	heartbeatTimeout time.Duration,
+	dispatch func(context.Context, []byte, execution.AccountEventHandler) error,
+) error {
 	go func() {
 		<-ctx.Done()
 		_ = connection.Close()
@@ -245,7 +257,7 @@ func (a *Adapter) receivePrivateWithHeartbeat(
 		if err := refreshDeadline(); err != nil {
 			return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 		}
-		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
+		if err := dispatch(ctx, payload, handler); err != nil {
 			return err
 		}
 	}
@@ -364,31 +376,40 @@ func (a *Adapter) dispatchPrivate(
 	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
 		return nil
 	}
-	quantity, err := decimalOrZero(order.lastQty)
+	fill, err := fillFromPrivateOrder(a.config.Market(), a.config.SettlementAsset, order)
 	if err != nil {
 		return err
+	}
+	return handler.OnFill(ctx, fill)
+}
+
+// fillFromPrivateOrder 把私有流订单事件里的成交部分转成成交记录；普通账户和统一账户共用。
+func fillFromPrivateOrder(market exchange.MarketType, settlementAsset string, order privateOrder) (exchange.Fill, error) {
+	quantity, err := decimalOrZero(order.lastQty)
+	if err != nil {
+		return exchange.Fill{}, err
 	}
 	price, err := decimalOrZero(order.lastPrice)
 	if err != nil {
-		return err
+		return exchange.Fill{}, err
 	}
 	fee, err := decimalOrZero(order.fee)
 	if err != nil {
-		return err
+		return exchange.Fill{}, err
 	}
 	pnl, err := decimalOrZero(order.realizedPnL)
 	if err != nil {
-		return err
+		return exchange.Fill{}, err
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.Market() == exchange.MarketTypeSwap {
+	if market == exchange.MarketTypeSwap {
 		if order.payload.PositionSide != "" && order.payload.PositionSide != "BOTH" {
-			return typedRejected("hedge fill is unsupported", nil)
+			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
-	return handler.OnFill(ctx, exchange.Fill{
-		Market:          a.config.Market(),
+	return exchange.Fill{
+		Market:          market,
 		ExchangeTradeID: order.tradeID,
 		ExchangeOrderID: order.payload.OrderID.String(),
 		ClientOrderID:   order.payload.ClientOrderID,
@@ -400,10 +421,10 @@ func (a *Adapter) dispatchPrivate(
 		Fee:             fee.Abs(),
 		FeeAsset:        order.feeAsset,
 		RealizedPnL:     pnl,
-		SettlementAsset: a.config.SettlementAsset,
+		SettlementAsset: settlementAsset,
 		LiquidityRole:   binanceLiquidityRole(order.maker),
 		TradedAt:        millis(order.transactionAt),
-	})
+	}, nil
 }
 
 // spotPrivateOrder 解析现货 executionReport。撤单事件的 c 是撤单请求自己的单号，原单号在 C；

@@ -1161,15 +1161,47 @@ func mapStatus(raw string, filled shared.Decimal) exchange.OrderStatus {
 	}
 }
 
-func classify(err error, _ []byte) error {
+// classify 把请求错误转成统一错误。OKX 的业务错误码在响应体里：鉴权类错误（密钥、签名、时间戳）常常带 HTTP 401 返回，
+// 如果只看状态码，401 一律是“鉴权失败”，时间戳过期（50102）这类“结果未知”的码就被当成密钥被拒绝。
+// 所以响应体里能解析出 OKX 错误码时，按错误码分类并保留码；限流类（HTTP 429 等）仍以状态码分类为准；
+// 5xx 且错误码没有明确含义时保持“结果未知”。
+func classify(err error, raw []byte) error {
 	if err == nil {
 		return nil
 	}
 	var typed *exchange.Error
-	if errors.As(err, &typed) {
+	if !errors.As(err, &typed) {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	code, message, found := okxErrorBody(raw)
+	if !found {
 		return typed
 	}
-	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	switch typed.Kind {
+	case exchange.ErrorRateLimited, exchange.ErrorOrderRateLimited, exchange.ErrorBanned, exchange.ErrorThrottled, exchange.ErrorNotSent:
+		typed.Code = code
+		return typed
+	}
+	coded := classifyOKXCode(code, message).(*exchange.Error)
+	// 5xx、超时等结果不明的响应：响应体里的错误码（含鉴权类）不能把它变成确定结论，只保留码。
+	if (coded.Kind == exchange.ErrorRejected || coded.Kind == exchange.ErrorAuthentication) && typed.Kind == exchange.ErrorTransportUnknown {
+		typed.Code = code
+		return typed
+	}
+	coded.HTTPStatus = typed.HTTPStatus
+	return coded
+}
+
+// okxErrorBody 从非 2xx 响应体里取 OKX 的错误码和说明；不是 OKX 的 JSON 信封时返回 false。
+func okxErrorBody(raw []byte) (code, message string, found bool) {
+	var envelope struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Code == "" || envelope.Code == "0" {
+		return "", "", false
+	}
+	return envelope.Code, envelope.Msg, true
 }
 
 func classifyOKXCode(code, message string) error {
@@ -1178,7 +1210,8 @@ func classifyOKXCode(code, message string) error {
 	case "50011", "50040", "50061":
 		kind = exchange.ErrorOrderRateLimited
 	// 鉴权类：API 冻结、环境不符、请求头缺失或错误、签名错误（50014 是“参数不能为空”，不是鉴权）。
-	case "50100", "50101", "50103", "50104", "50105", "50106", "50111", "50112", "50113", "50114":
+	// 50110（IP 不在密钥的白名单里）未在官方文档里逐字核对，按鉴权类处理。
+	case "50100", "50101", "50103", "50104", "50105", "50106", "50110", "50111", "50112", "50113", "50114":
 		kind = exchange.ErrorAuthentication
 	case "51008":
 		kind = exchange.ErrorInsufficientBalance

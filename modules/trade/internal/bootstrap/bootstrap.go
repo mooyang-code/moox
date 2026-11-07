@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
@@ -14,13 +13,16 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -100,6 +102,7 @@ func initialize(
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		Inspector: registry,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
@@ -179,6 +182,11 @@ func initialize(
 		// 模拟盘没有交易所限频，批间隔缩短到 0.3 秒。
 		PaperMinBatchInterval: 300 * time.Millisecond,
 		RateStatus:            adapterRateStatus(manager),
+		// 普通账户的第 4、6 阶段：钱包划转与归集；统一账户、OKX、模拟盘不会调用。
+		Transfers: targetapp.NewWalletTransfer(&walletapp.Service{
+			Store: tradeStore, Adapters: manager,
+			RequestSync: func(accountID string) { manager.RequestSync(accountID) },
+		}),
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
@@ -198,6 +206,7 @@ func initialize(
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	inspectionWorker := &traderuntime.InspectionWorker{Store: tradeStore, Accounts: accounts, Logical: logicalAccounts}
 	// 资金维护（BNB 抵扣与补买、小额兑 BNB、稳定币调平）：每小时一次，资金设置变更后马上一次。
 	fundService := &fundmaint.Service{Store: tradeStore, Adapters: manager, Orders: orderService}
 	fundWorker := &traderuntime.FundWorker{Maintainer: fundService, Interval: time.Hour, Gate: lifeGate.Open}
@@ -206,11 +215,39 @@ func initialize(
 		fundWorker.Wake(spaceID, logicalAccountID)
 	}
 	operatorService := &operatorapp.Service{
-		Exchanges: registry,
-		Store:     tradeStore, Orders: orderService,
+		Exchanges: registry, Wake: targetWorker.Wake,
+		Store: tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
+	marginService := &marginmonitor.Service{
+		Store: tradeStore,
+		Reduce: func(
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+		) (store.OperatorActionRecord, error) {
+			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+			})
+			return result.Action, reduceErr
+		},
+		Collect: func(
+			callCtx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord,
+		) (bool, error) {
+			// 归集用执行器的钱包划转；还没接入划转时监控只告警一次，请用户手动划转。
+			if targetExecutor.Transfers == nil {
+				return false, marginmonitor.ErrTransferUnavailable
+			}
+			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。idempotencyKey（风控减仓的动作号 margin-<组合>-<时间>）
+			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
+			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
+		},
+		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
+			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
+			return pauseErr
+		},
+	}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}
@@ -227,12 +264,18 @@ func initialize(
 			if credentialErr != nil {
 				return nil, credentialErr
 			}
+			// 同一个密钥 ID 下直接改了密钥内容会绕过检测：绑定前核对密钥指纹，对不上就不绑定并立即重新检测。
+			if fingerprintErr := verifyCredentialFingerprint(record, credential); fingerprintErr != nil {
+				recheckInspection(inspectionWorker, record.SpaceID, record.TradingAccountID)
+				return nil, fingerprintErr
+			}
 		}
 		accountConfig := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
 			Markets:          marketTypes(record.Markets),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
@@ -312,7 +355,9 @@ func initialize(
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker(inspectionWorker.Run)
 	runWorker(fundWorker.Run)
+	runWorker(marginWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
@@ -328,7 +373,7 @@ func initialize(
 	}
 	rpc.RegisterAll(
 		serverInstance,
-		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
+		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore, AfterInspection: inspectionWorker.Handle},
 		&rpc.LogicalAccountServer{
 			LogicalAccounts: logicalAccounts,
 			Store:           tradeStore,
@@ -409,6 +454,22 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
+			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
+				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
+					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
+				})
+				return result.Action, result.Unblocked, flattenErr
+			},
+			ReduceAccount: func(
+				callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+			) (store.OperatorActionRecord, error) {
+				result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+				})
+				return result.Action, reduceErr
+			},
 			FlattenAccount: func(
 				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
 			) (store.OperatorActionRecord, error) {
@@ -458,23 +519,38 @@ func initialize(
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	cryptoExchange := func(name exchange.Exchange) execution.ExchangeDescriptor {
+	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
 		return execution.ExchangeDescriptor{
 			Exchange:     name,
 			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+			Inspect:      inspect,
 		}
 	}
-	registry.Register(cryptoExchange(exchange.ExchangeBinance), func(
+	binanceDescriptor := cryptoExchange(exchange.ExchangeBinance, binance.Inspect)
+	// 统一账户整个账户一个适配器（一个余额接口、一条私有流）；普通账户按市场各一个，由注册表合成。
+	binanceDescriptor.WholeAccount = func(config exchange.AccountConfig) bool {
+		return config.AccountMode == exchange.AccountModeBinancePortfolioMargin
+	}
+	registry.Register(binanceDescriptor, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
 		if err := requireAPIKey(config, credential); err != nil {
 			return nil, err
 		}
+		if err := requireInspectedMode(config); err != nil {
+			return nil, err
+		}
+		if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
+			if config.Environment == exchange.AccountEnvironmentTestnet {
+				return nil, errors.New("币安测试网没有统一账户")
+			}
+			return binance.NewPortfolioMargin(config, credential), nil
+		}
 		return binance.New(config, credential), nil
 	})
-	okxExchange := cryptoExchange(exchange.ExchangeOKX)
+	okxExchange := cryptoExchange(exchange.ExchangeOKX, okx.Inspect)
 	registry.Register(okxExchange, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
@@ -499,6 +575,51 @@ func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential
 	return nil
 }
 
+// verifyCredentialFingerprint 核对账户检测结果里记录的密钥指纹和现在读到的密钥是否一致：
+// 检测通过的是当时那把密钥；同一个密钥 ID 下改了密钥内容、或账户从来没检测过，都不能直接绑定。
+func verifyCredentialFingerprint(record store.TradingAccountRecord, credential exchange.Credential) error {
+	inspection, err := exchange.ParseInspection(record.InspectionJSON)
+	if err != nil {
+		return fmt.Errorf("账户的检测结果读不出来，需要重新检测：%w", err)
+	}
+	if inspection.InspectedAt.IsZero() || inspection.CredentialFingerprint == "" {
+		return errors.New("账户的密钥还没有检测过，正在检测，通过后才会绑定")
+	}
+	if inspection.CredentialFingerprint != exchange.CredentialFingerprint(credential.APIKey) {
+		return errors.New("密钥内容与检测时不一致（同一个密钥 ID 下改了密钥），正在重新检测，通过后才会绑定")
+	}
+	return nil
+}
+
+// recheckInspections 记录正在重新检测的账户，避免会话每次重试绑定都再起一个检测。
+var recheckInspections sync.Map
+
+// recheckInspection 在后台立即重新检测一个账户；检测通过后写入新的指纹，会话下次重试绑定就能通过。
+func recheckInspection(worker *traderuntime.InspectionWorker, spaceID, accountID string) {
+	if _, running := recheckInspections.LoadOrStore(accountID, struct{}{}); running {
+		return
+	}
+	go func() {
+		defer recheckInspections.Delete(accountID)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := worker.CheckAccount(ctx, spaceID, accountID); err != nil {
+			log.Warnf("交易账户 %s 密钥内容变化后重新检测没有完成：%v", accountID, err)
+		}
+	}()
+}
+
+// requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。
+// 测试网跳过检测，一律按普通账户。
+func requireInspectedMode(config exchange.AccountConfig) error {
+	if config.ExecutionMode == exchange.ExecutionModeLive &&
+		config.Environment == exchange.AccountEnvironmentProduction &&
+		config.AccountMode == exchange.AccountModeUnspecified {
+		return errors.New("账户类型还没有检测出来：请先在管理台对这个账户“重新检测”")
+	}
+	return nil
+}
+
 func exchangeCredential(
 	ctx context.Context,
 	secrets accountapp.SecretSource,
@@ -518,19 +639,7 @@ func exchangeCredential(
 			secretID,
 		)
 	}
-	extra := map[string]string{}
-	if strings.TrimSpace(value.ExtraConfig) != "" {
-		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
-			return exchange.Credential{}, fmt.Errorf(
-				"trade bootstrap: decode credential extra config: %w",
-				err,
-			)
-		}
-	}
-	return exchange.Credential{
-		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra["passphrase"], Extra: extra,
-	}, nil
+	return accountapp.CredentialFromSecret(value)
 }
 
 type accountSyncer struct {

@@ -73,7 +73,7 @@ func (s *Service) topUpBNB(
 	if value.Cmp(reserve.Sub(fundsettings.BNBReserveSlack)) >= 0 {
 		return false, nil
 	}
-	step, minimum, minNotional, err := quantityRules(instrument)
+	step, minimum, minNotional, err := quantityRules(instrument, price)
 	if err != nil {
 		return false, err
 	}

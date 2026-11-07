@@ -194,7 +194,7 @@ func (s *Service) syncAccountLocked(
 	// 轻量同步不读全部挂单（永续 40 权重、现货 80 权重），挂单由私有流和对账维护。
 	var openOrders []exchange.Order
 	if mode != syncLight {
-		openOrders, err = adapter.ListOpenOrders(ctx)
+		openOrders, err = s.listOpenOrders(ctx, adapter, account, mode)
 		if err != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_open_orders", err))
 			return result, 0, failErr
@@ -1546,6 +1546,10 @@ func mergePrivateSnapshot(
 		if field.present {
 			*field.destination = field.source
 		}
+	}
+	if update.Present.MaintenanceMargin {
+		// 维持保证金被私有事件更新了，上一次完整读到的 uniMMR 已经过期：清掉，监控退回用权益和维持保证金自己算。
+		current.UniMMR = ""
 	}
 	current.ExchangeUpdatedAt = incoming.ExchangeUpdatedAt
 	return current

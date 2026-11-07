@@ -86,6 +86,40 @@ func (r *SyncTradingAccountReq) Validate() error {
 	return nil
 }
 
+func (r *InspectExchangeCredentialReq) Validate() error {
+	if r == nil || !validExchange(r.Exchange) ||
+		(r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
+			r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
+		strings.TrimSpace(r.CredentialSecretId) == "" {
+		return fmt.Errorf("exchange, environment and credential_secret_id are required")
+	}
+	// 市场可以不填（预览），填了就必须合法且不重复。
+	if len(r.Markets) != 0 && !validMarkets(r.Markets) {
+		return fmt.Errorf("markets are invalid")
+	}
+	return nil
+}
+
+func (r *ResolveWalletTransferReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TransferId) == "" {
+		return fmt.Errorf("transfer_id is required")
+	}
+	if r.Result != "COMPLETED" && r.Result != "FAILED" {
+		return fmt.Errorf("result must be COMPLETED or FAILED")
+	}
+	if len([]rune(r.Note)) > 200 {
+		return fmt.Errorf("note is too long")
+	}
+	return nil
+}
+
+func (r *ReinspectTradingAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
+		return fmt.Errorf("trading_account_id is required")
+	}
+	return nil
+}
+
 func (r *CreatePaperSimulationReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
 		!validExchange(r.Exchange) || !validMarkets(r.Markets) || strings.TrimSpace(r.SettlementAsset) == "" {
@@ -453,10 +487,21 @@ func (r *ListOrdersReq) Validate() error {
 			"logical_account_id or trading_account_id is required",
 		)
 	}
+	if r.OwnerType != "" && !validOrderOwnerType(r.OwnerType) {
+		return fmt.Errorf("owner_type is invalid")
+	}
 	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
 		return err
 	}
 	return validatePage(r.Page)
+}
+
+func validOrderOwnerType(value string) bool {
+	switch value {
+	case "TARGET", "OPERATOR", "EXTERNAL", "SYSTEM":
+		return true
+	}
+	return false
 }
 
 func (r *ListFillsReq) Validate() error {
@@ -576,4 +621,111 @@ func requireID(present bool, id string, field string) error {
 
 func value(read func() string) string {
 	return read()
+}
+
+// 下架名单只收现货和永续。
+func validDelistMarket(market MarketType) bool {
+	return market == MarketType_MARKET_TYPE_SPOT || market == MarketType_MARKET_TYPE_SWAP
+}
+
+func validateInstrumentKey(exchange Exchange, market MarketType, symbol string) error {
+	if !validExchange(exchange) || !validDelistMarket(market) || strings.TrimSpace(symbol) == "" {
+		return fmt.Errorf("exchange, market_type (SPOT or SWAP) and exchange_symbol are required")
+	}
+	if symbol != strings.TrimSpace(symbol) {
+		return fmt.Errorf("exchange_symbol must not have surrounding whitespace")
+	}
+	return nil
+}
+
+func (r *BlockInstrumentReq) Validate() error {
+	if r == nil {
+		return fmt.Errorf("request is required")
+	}
+	if err := validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Reason) == "" {
+		return fmt.Errorf("reason is required")
+	}
+	return nil
+}
+
+func (r *UnblockInstrumentReq) Validate() error {
+	if r == nil {
+		return fmt.Errorf("request is required")
+	}
+	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
+}
+
+func (r *ListBlockedInstrumentsReq) Validate() error { return nil }
+
+func (r *ListInstrumentHoldersReq) Validate() error {
+	if r == nil {
+		return fmt.Errorf("request is required")
+	}
+	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
+}
+
+func (r *FlattenInstrumentReq) Validate() error {
+	if r == nil ||
+		strings.TrimSpace(r.ActionId) == "" ||
+		strings.TrimSpace(r.LogicalAccountId) == "" ||
+		strings.TrimSpace(r.Reason) == "" {
+		return fmt.Errorf("action_id, logical_account_id and reason are required")
+	}
+	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
+}
+
+func (r *ReduceLogicalAccountReq) Validate() error {
+	if r == nil ||
+		strings.TrimSpace(r.ActionId) == "" ||
+		strings.TrimSpace(r.LogicalAccountId) == "" ||
+		strings.TrimSpace(r.Reason) == "" {
+		return fmt.Errorf("action_id, logical_account_id and reason are required")
+	}
+	ratio, ok := new(big.Rat).SetString(r.ReduceRatio)
+	if !ok || !isCanonicalPositiveDecimal(r.ReduceRatio) || ratio.Cmp(big.NewRat(1, 1)) >= 0 {
+		return fmt.Errorf("reduce_ratio must be a positive decimal below 1")
+	}
+	return nil
+}
+
+func (r *SummarizeAccountPnlReq) Validate() error {
+	if r == nil || (strings.TrimSpace(r.LogicalAccountId) == "" && strings.TrimSpace(r.TradingAccountId) == "") {
+		return fmt.Errorf("logical_account_id or trading_account_id is required")
+	}
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	// 成交汇总逐行读成交表，资金费最长也只查 90 天：时间范围和资金流水一样限制在 90 天内。
+	if r.StartTime > 0 {
+		end := r.EndTime
+		if end == 0 {
+			end = time.Now().UnixMilli()
+		}
+		if end-r.StartTime > maxLedgerWindow {
+			return fmt.Errorf("时间范围不能超过 90 天")
+		}
+	}
+	return nil
+}
+
+var validOperatorActionTypes = map[string]struct{}{
+	"MANUAL_ORDER": {}, "SUBMIT_ORDER": {}, "CANCEL_ORDER": {}, "FLATTEN": {}, "REDUCE": {}, "DELIST_FLATTEN": {},
+}
+
+func (r *ListOperatorActionsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" {
+		return fmt.Errorf("logical_account_id is required")
+	}
+	if r.ActionType != "" {
+		if _, ok := validOperatorActionTypes[r.ActionType]; !ok {
+			return fmt.Errorf("action_type is invalid")
+		}
+	}
+	if err := validateTimeRange(r.StartTime, r.EndTime); err != nil {
+		return err
+	}
+	return validatePage(r.Page)
 }

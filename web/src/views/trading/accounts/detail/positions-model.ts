@@ -20,6 +20,8 @@ export interface CoinRow {
   spotBalance: number;
   /** 被拦下的原因，没有则为空 */
   blockedReason: string;
+  /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算被拦下，状态仍按差额判断 */
+  deferredReason: string;
   state: "ok" | "off" | "blocked" | "extra";
   /** 相对偏差的最大值，用于排序 */
   worstRatio: number;
@@ -48,6 +50,7 @@ function blankRow(coin: string): CoinRow {
     deviationSwap: null,
     spotBalance: 0,
     blockedReason: "",
+    deferredReason: "",
     state: "ok",
     worstRatio: 0
   };
@@ -86,7 +89,8 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
   }
   for (const item of input.blocked) {
     const row = rowOf(coinOf(item.instrument_id));
-    row.blockedReason = row.blockedReason ? `${row.blockedReason}；${item.reason}` : item.reason;
+    if (item.deferred) row.deferredReason = row.deferredReason ? `${row.deferredReason}；${item.reason}` : item.reason;
+    else row.blockedReason = row.blockedReason ? `${row.blockedReason}；${item.reason}` : item.reason;
   }
   for (const position of input.swapPositions) {
     rowOf(coinOf(position.instrument_id)).actualSwap += Number(position.signed_quantity);
@@ -104,7 +108,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     if (row.targetSwap && row.targetSwap.quantity !== null) row.deviationSwap = row.actualSwap - row.targetSwap.quantity;
     const hasAnyTarget = Boolean(row.targetSpot || row.targetSwap);
     // 目标之外的持仓也要列出：其中受管的现货会被执行器按目标 0 卖掉，永续有仓位也一样。
-    const listed = hasAnyTarget || row.blockedReason || row.actualSwap !== 0 || row.actualSpot !== 0;
+    const listed = hasAnyTarget || row.blockedReason || row.deferredReason || row.actualSwap !== 0 || row.actualSpot !== 0;
     if (!listed) continue;
     row.worstRatio = Math.max(
       ratioOf(row.deviationSpot, row.targetSpot, row.actualSpot),

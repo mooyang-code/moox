@@ -80,7 +80,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	if spec.Type == exchange.OrderTypeLimit {
 		price = *spec.LimitPrice
 	}
-	if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 || quantity.Mul(price).Cmp(validation.Instrument.MinNotional) < 0 {
+	if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 || quantity.Mul(price).Cmp(validation.Instrument.MinNotionalAt(price)) < 0 {
 		return shared.Zero(), nil
 	}
 	return quantity, nil

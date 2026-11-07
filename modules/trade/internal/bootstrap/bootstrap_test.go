@@ -7,10 +7,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -107,6 +110,56 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	}
 }
 
+func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
+	registry := execution.NewRegistry()
+	registerBuiltins(registry)
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
+		Markets:       []exchange.MarketType{exchange.MarketTypeSpot},
+		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "USDT",
+	}
+	credential := exchange.Credential{APIKey: "key", APISecret: "secret"}
+	_, err := registry.Bind(config, credential)
+	require.ErrorContains(t, err, "账户类型还没有检测出来", "生产环境的实盘账户不能按默认值猜账户类型")
+
+	config.AccountMode = exchange.AccountModeBinanceStandard
+	_, err = registry.Bind(config, credential)
+	require.NoError(t, err)
+
+	// 测试网跳过检测，没有账户类型也能绑定。
+	testnet := config
+	testnet.AccountMode, testnet.Environment = exchange.AccountModeUnspecified, exchange.AccountEnvironmentTestnet
+	_, err = registry.Bind(testnet, credential)
+	require.NoError(t, err)
+}
+
+// 统一账户整个账户一个适配器；普通账户按市场拆开再合成。
+func TestBindChoosesAdapterByInspectedAccountMode(t *testing.T) {
+	registry := execution.NewRegistry()
+	registerBuiltins(registry)
+	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: both, MarginMode: exchange.MarginModeCross,
+		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "USDT",
+		AccountMode: exchange.AccountModeBinancePortfolioMargin,
+	}
+	credential := exchange.Credential{APIKey: "key", APISecret: "secret"}
+	adapter, err := registry.Bind(config, credential)
+	require.NoError(t, err)
+	_, isPM := adapter.(*binance.PortfolioMargin)
+	require.True(t, isPM, "统一账户应是一个整账户适配器，实际 %T", adapter)
+
+	config.AccountMode = exchange.AccountModeBinanceStandard
+	adapter, err = registry.Bind(config, credential)
+	require.NoError(t, err)
+	_, isMulti := adapter.(*execution.MultiMarket)
+	require.True(t, isMulti, "普通账户应按市场拆开再合成，实际 %T", adapter)
+
+	config.AccountMode, config.Environment = exchange.AccountModeBinancePortfolioMargin, exchange.AccountEnvironmentTestnet
+	_, err = registry.Bind(config, credential)
+	require.ErrorContains(t, err, "没有统一账户")
+}
+
 type bootstrapSecretSource struct {
 	secret   accountapp.ExchangeSecret
 	err      error
@@ -174,4 +227,23 @@ func TestRegistryBindsExchangeWithOnlyExtraCredential(t *testing.T) {
 	if _, ok := adapter.(execution.AccountEventSource); ok {
 		t.Fatal("没有私有流的场所不应实现 AccountEventSource")
 	}
+}
+
+// 同一个密钥 ID 下改了密钥内容、或账户从来没检测过：不能直接绑定。
+func TestVerifyCredentialFingerprint(t *testing.T) {
+	inspected := func(apiKey string) store.TradingAccountRecord {
+		raw, err := exchange.Inspection{
+			InspectedAt: time.Now().UTC(), CredentialFingerprint: exchange.CredentialFingerprint(apiKey),
+		}.Encode()
+		require.NoError(t, err)
+		return store.TradingAccountRecord{InspectionJSON: raw}
+	}
+	require.NoError(t, verifyCredentialFingerprint(inspected("key-1"), exchange.Credential{APIKey: "key-1"}))
+	require.ErrorContains(t, verifyCredentialFingerprint(inspected("key-1"), exchange.Credential{APIKey: "key-2"}), "密钥内容与检测时不一致")
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: "{}"}, exchange.Credential{APIKey: "key-1"}), "还没有检测过")
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: "not json"}, exchange.Credential{APIKey: "key-1"}), "重新检测")
+	// 没有指纹的旧结果同样不放行。
+	legacy, err := exchange.Inspection{InspectedAt: time.Now().UTC()}.Encode()
+	require.NoError(t, err)
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: legacy}, exchange.Credential{APIKey: "key-1"}), "还没有检测过")
 }

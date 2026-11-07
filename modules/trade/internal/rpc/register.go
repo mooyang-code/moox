@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	executionport "github.com/mooyang-code/moox/modules/trade/internal/execution"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
@@ -32,6 +33,9 @@ func RegisterAll(
 		console.Exchanges = options[0].Exchanges
 		console.Adapters = options[0].Adapters
 		console.FlattenAccount = options[0].FlattenAccount
+		console.Delist = options[0].Delist
+		console.FlattenInstrumentAction = options[0].FlattenInstrument
+		console.ReduceAccount = options[0].ReduceAccount
 	}
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
@@ -44,4 +48,7 @@ type ConsoleOptions struct {
 	Exchanges          executionport.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
+	Delist             *delistapp.Service
+	FlattenInstrument  FlattenInstrumentFunc
+	ReduceAccount      ReduceLogicalAccountFunc
 }

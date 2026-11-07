@@ -142,8 +142,13 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
 	// 合约全平只查最小数量。
-	if !capacity && !spec.ReducePositionOnly && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
-		orderNotional.Cmp(instrument.MinNotional) < 0 {
+	// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
+	orderPrice := spec.ReferencePrice
+	if spec.Type == exchange.OrderTypeLimit {
+		orderPrice = *spec.LimitPrice
+	}
+	if minNotional := instrument.MinNotionalAt(orderPrice); !capacity && !spec.ReducePositionOnly &&
+		minNotional.Cmp(shared.Zero()) > 0 && orderNotional.Cmp(minNotional) < 0 {
 		return Validation{}, ErrQuantityRule
 	}
 	if !capacity && v.MaxChildNotional.Cmp(shared.Zero()) > 0 &&

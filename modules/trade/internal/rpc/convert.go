@@ -6,6 +6,7 @@ import (
 	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
@@ -54,10 +55,14 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, logicalaccount.ErrMemberElsewhere),
 		errors.Is(err, accountapp.ErrAccountInLogicalAccount),
 		errors.Is(err, operatorapp.ErrNotInLogicalAccount),
+		errors.Is(err, delistapp.ErrInvalidRequest),
+		errors.Is(err, delistapp.ErrNoMemberOfExchange),
 		errors.Is(err, errLedgerUnsupported),
 		errors.Is(err, errLedgerUnavailable),
 		errors.Is(err, logicalapp.ErrNotReady),
 		errors.Is(err, accountapp.ErrInvalidCredential),
+		errors.Is(err, accountapp.ErrInspectionBlocked),
+		errors.Is(err, accountapp.ErrReadOnlyCredential),
 		errors.Is(err, orderdomain.ErrInvalidOrder),
 		errors.Is(err, orderdomain.ErrInvalidSpec),
 		errors.Is(err, orderapp.ErrAccountOwnership),

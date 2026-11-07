@@ -113,7 +113,7 @@ func endedChild(fixture *operatorFixture, state, filled string) store.OrderRecor
 	quantity := shared.MustDecimal("2")
 	return store.OrderRecord{
 		SpaceID: "space-1", OrderID: "ended-child", TradingAccountID: "account-a",
-		ClientOrderID:  flattenClientOrderIDForSpec("flatten-1", "account-a", exchange.NewSymbolKey(exchange.MarketOfInstrumentID(fixture.instrumentID()), "BTCUSDT"), exchange.SideSell, quantity),
+		ClientOrderID:  flattenClientOrderIDForSpec("flatten-1", "account-a", exchange.NewSymbolKey(exchange.MarketOfInstrumentID(fixture.instrumentID()), "BTCUSDT"), exchange.SideSell, quantity, 0),
 		ExchangeSymbol: "BTCUSDT", InstrumentID: fixture.instrumentID(), OrderType: "MARKET",
 		Side: "SELL", PositionSide: "NET", Quantity: quantity.String(), FilledQuantity: filled,
 		ReferencePrice: "100", ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,

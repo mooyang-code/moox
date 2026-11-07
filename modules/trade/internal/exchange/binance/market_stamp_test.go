@@ -135,8 +135,8 @@ func TestAdapterSnapshotsPersistToStore(t *testing.T) {
 			_, _ = io.WriteString(w, `{"totalMarginBalance":"100","availableBalance":"90","assets":[{"asset":"USDT","walletBalance":"100","availableBalance":"90","updateTime":2}]}`)
 		case "/fapi/v1/positionSide/dual":
 			_, _ = io.WriteString(w, `{"dualSidePosition":false}`)
-		case "/fapi/v1/multiAssetsMargin":
-			_, _ = io.WriteString(w, `{"multiAssetsMargin":false}`)
+		case "/fapi/v3/positionRisk":
+			_, _ = io.WriteString(w, `[]`)
 		default:
 			t.Errorf("意外的请求 %s", request.URL.Path)
 		}

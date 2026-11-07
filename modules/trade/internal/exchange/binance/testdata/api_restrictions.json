@@ -1,0 +1,15 @@
+{
+  "ipRestrict": false,
+  "createTime": 1623840271000,
+  "enableReading": true,
+  "enableWithdrawals": false,
+  "enableInternalTransfer": true,
+  "enableMargin": false,
+  "enableFutures": false,
+  "permitsUniversalTransfer": true,
+  "enableVanillaOptions": false,
+  "enableFixApiTrade": false,
+  "enableFixReadOnly": true,
+  "enableSpotAndMarginTrading": false,
+  "enablePortfolioMarginTrading": true
+}

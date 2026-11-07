@@ -23,6 +23,8 @@ type FundWorker struct {
 	Gate func() bool
 	// RunTimeout 是一次运行的最长时间，默认 5 分钟。
 	RunTimeout time.Duration
+	// Name 是任务名，只用在出错日志里，默认“资金维护任务”。
+	Name string
 
 	once sync.Once
 	wake chan struct{}
@@ -95,6 +97,10 @@ func (w *FundWorker) runOnce(ctx context.Context) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := w.Maintainer.RunAll(runCtx); err != nil && ctx.Err() == nil {
-		log.Warnf("交易关注项：资金维护任务有失败，下次再试：%v", err)
+		name := w.Name
+		if name == "" {
+			name = "资金维护任务"
+		}
+		log.Warnf("交易关注项：%s有失败，下次再试：%v", name, err)
 	}
 }

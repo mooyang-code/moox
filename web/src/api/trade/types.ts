@@ -339,6 +339,8 @@ export interface ListOrdersReq {
   start_time?: string;
   end_time?: string;
   page?: Page;
+  /** 订单来源：TARGET、OPERATOR、EXTERNAL、SYSTEM；空表示全部 */
+  owner_type?: string;
 }
 
 export interface ListFillsReq {
@@ -441,4 +443,81 @@ export interface ListAccountLedgerReq {
   start_time?: string;
   end_time?: string;
   limit?: number;
+}
+
+// 交易所密钥检测（InspectExchangeCredential、ReinspectTradingAccount）的返回。
+export interface InspectionFinding {
+  code: string;
+  message: string;
+}
+
+export interface ExchangeInspection {
+  account_mode?: string;
+  skipped?: boolean;
+  can_withdraw?: boolean;
+  can_trade_spot?: boolean;
+  can_trade_swap?: boolean;
+  universal_transfer?: boolean;
+  ip_restricted?: boolean;
+  raw_permissions?: string;
+  okx_acct_lv?: string;
+  position_mode?: string;
+  multi_assets_margin?: boolean;
+  available_markets?: MarketType[];
+  blockers?: InspectionFinding[];
+  warnings?: InspectionFinding[];
+  inspected_at?: number | string;
+  consecutive_failures?: number;
+  last_failure?: string;
+}
+
+export interface InspectExchangeCredentialReq {
+  exchange: Exchange;
+  environment: AccountEnvironment;
+  credential_secret_id: string;
+  markets?: MarketType[];
+}
+
+/** 一个资产加一个金额；金额是字符串小数 */
+export interface PnlAmount {
+  asset: string;
+  amount: string;
+}
+
+/** logical_account_id 和 trading_account_id 二选一；时间是毫秒时间戳，不传时后端默认近 7 天 */
+export interface SummarizeAccountPnlReq {
+  logical_account_id?: string;
+  trading_account_id?: string;
+  start_time?: string;
+  end_time?: string;
+}
+
+/** 收益拆解。proto3 的零值不出现在 JSON 里：没有的数组就是空，没有的布尔就是 false */
+export interface SummarizeAccountPnlRsp {
+  ret_info: RetInfo;
+  /** 手续费，按手续费资产分别汇总，不折算；正数是支付 */
+  fees?: PnlAmount[];
+  /** 已实现盈亏，按结算资产汇总 */
+  realized_pnl?: PnlAmount[];
+  /** 资金费，按结算资产汇总，收到为正、支付为负 */
+  funding_fees?: PnlAmount[];
+  fill_count?: string;
+  /** false 表示没取到资金费（模拟盘、现货、交易所不支持），原因见 funding_note */
+  funding_available?: boolean;
+  /** true 表示资金费只是一部分：流水太多没取完 */
+  funding_truncated?: boolean;
+  funding_note?: string;
+  /** 资金费实际统计的起点（毫秒时间戳） */
+  funding_from?: string;
+}
+
+/** 操作类型：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN */
+export type OperatorActionType = "MANUAL_ORDER" | "SUBMIT_ORDER" | "CANCEL_ORDER" | "FLATTEN" | "REDUCE" | "DELIST_FLATTEN";
+
+export interface ListOperatorActionsReq {
+  logical_account_id: string;
+  action_type?: OperatorActionType;
+  start_time?: string;
+  end_time?: string;
+  page?: Page;
 }

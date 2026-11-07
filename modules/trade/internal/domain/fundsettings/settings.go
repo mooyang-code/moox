@@ -34,6 +34,50 @@ type Settings struct {
 	MarginCoins map[string]shared.Decimal
 	// ArbitrageBaseAssets 是套利底仓资产：现货和对应永续都不参与策略持仓，按净值计入权益。
 	ArbitrageBaseAssets []string
+	// 保证金率监控（交易计划 4.7，只对实盘账户生效）。普通账户：合约钱包权益 ÷ 合约持仓名义不高于 MarginRatioThreshold 时触发；
+	// 统一账户：uniMMR 低于 UnifiedMMRThreshold 时触发；触发后暂停组合并按 MarginReduceRatio 减仓。MarginMonitorDisabled 为真时不监控。
+	MarginRatioThreshold  shared.Decimal
+	UnifiedMMRThreshold   shared.Decimal
+	MarginReduceRatio     shared.Decimal
+	MarginMonitorDisabled bool
+}
+
+// 保证金率监控的默认值和允许范围。
+var (
+	DefaultMarginRatioThreshold = shared.MustDecimal("0.5")
+	DefaultUnifiedMMRThreshold  = shared.MustDecimal("1.5")
+	DefaultMarginReduceRatio    = shared.MustDecimal("0.1")
+	maxMarginRatioThreshold     = shared.MustDecimal("10")
+	maxUnifiedMMRThreshold      = shared.MustDecimal("100")
+)
+
+func defaultSettings() Settings {
+	return Settings{
+		ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero(), DustConvertInterval: defaultDustConvertIntervalDays * 24 * time.Hour,
+		MarginRatioThreshold: DefaultMarginRatioThreshold, UnifiedMMRThreshold: DefaultUnifiedMMRThreshold, MarginReduceRatio: DefaultMarginReduceRatio,
+	}
+}
+
+// checkMarginRatioThreshold 等三个校验函数返回的是错误说明；写入路径直接拒绝，读取路径取默认值并给出 warning。
+func checkMarginRatioThreshold(value shared.Decimal) error {
+	if value.Cmp(shared.Zero()) <= 0 || value.Cmp(maxMarginRatioThreshold) > 0 {
+		return fmt.Errorf("普通账户保证金率阈值必须大于 0 且不超过 %s", maxMarginRatioThreshold)
+	}
+	return nil
+}
+
+func checkUnifiedMMRThreshold(value shared.Decimal) error {
+	if value.Cmp(shared.MustDecimal("1")) <= 0 || value.Cmp(maxUnifiedMMRThreshold) > 0 {
+		return fmt.Errorf("统一账户 uniMMR 阈值必须大于 1 且不超过 %s", maxUnifiedMMRThreshold)
+	}
+	return nil
+}
+
+func checkMarginReduceRatio(value shared.Decimal) error {
+	if value.Cmp(shared.Zero()) <= 0 || value.Cmp(shared.MustDecimal("1")) >= 0 {
+		return fmt.Errorf("保证金率触发后的减仓比例必须大于 0 且小于 1")
+	}
+	return nil
 }
 
 // rawDocument 和 Document 用同一组 json 键：宽松解析按字段单独处理，字段全是原始 JSON。
@@ -49,6 +93,10 @@ type rawDocument struct {
 	StablecoinMargin        json.RawMessage `json:"stablecoin_margin"`
 	MarginCoins             json.RawMessage `json:"margin_coins"`
 	ArbitrageBaseAssets     json.RawMessage `json:"arbitrage_base_assets"`
+	MarginRatioThreshold    json.RawMessage `json:"margin_ratio_threshold"`
+	UnifiedMMRThreshold     json.RawMessage `json:"unified_mmr_threshold"`
+	MarginReduceRatio       json.RawMessage `json:"margin_reduce_ratio"`
+	MarginMonitorDisabled   json.RawMessage `json:"margin_monitor_disabled"`
 }
 
 // Document 是资金设置的 JSON 形态；数值用字符串，没写的键取默认值。
@@ -61,6 +109,10 @@ type Document struct {
 	StablecoinMargin        map[string]string `json:"stablecoin_margin,omitempty"`
 	MarginCoins             map[string]string `json:"margin_coins,omitempty"`
 	ArbitrageBaseAssets     []string          `json:"arbitrage_base_assets,omitempty"`
+	MarginRatioThreshold    string            `json:"margin_ratio_threshold,omitempty"`
+	UnifiedMMRThreshold     string            `json:"unified_mmr_threshold,omitempty"`
+	MarginReduceRatio       string            `json:"margin_reduce_ratio,omitempty"`
+	MarginMonitorDisabled   bool              `json:"margin_monitor_disabled,omitempty"`
 }
 
 // BNBAsset 是 BNB 保留涉及的资产。
@@ -102,7 +154,8 @@ func (d Document) validateAndCanonical(settlementAsset string) (Settings, string
 // validate 校验并换算为有效设置；settlementAsset 非空时再检查结算币相关的规则。
 func (d Document) validate(settlementAsset string) (Settings, error) {
 	settlementAsset = strings.ToUpper(strings.TrimSpace(settlementAsset))
-	settings := Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero(), BNBDiscount: d.BNBDiscount, DustConvert: d.DustConvertEnabled}
+	settings := defaultSettings()
+	settings.BNBDiscount, settings.DustConvert, settings.MarginMonitorDisabled = d.BNBDiscount, d.DustConvertEnabled, d.MarginMonitorDisabled
 	var err error
 	if settings.ReserveRatio, err = parseOptional(d.ReserveRatio, "资金预留比例"); err != nil {
 		return Settings{}, err
@@ -119,6 +172,27 @@ func (d Document) validate(settlementAsset string) (Settings, error) {
 	// 市值低于“保留金额 − 10”才补买：保留金额不大于 10 时永远不会补买，换算目标时却一直扣着缺口。
 	if amount := settings.BNBReserveAmount; amount.Cmp(shared.Zero()) > 0 && amount.Cmp(BNBReserveSlack) <= 0 {
 		return Settings{}, fmt.Errorf("BNB 保留金额要大于 %s：市值低于保留金额减 %s 才会补买，不大于 %s 的设置永远不会补买", BNBReserveSlack, BNBReserveSlack, BNBReserveSlack)
+	}
+	for _, item := range []struct {
+		raw, name string
+		target    *shared.Decimal
+		check     func(shared.Decimal) error
+	}{
+		{d.MarginRatioThreshold, "普通账户保证金率阈值", &settings.MarginRatioThreshold, checkMarginRatioThreshold},
+		{d.UnifiedMMRThreshold, "统一账户 uniMMR 阈值", &settings.UnifiedMMRThreshold, checkUnifiedMMRThreshold},
+		{d.MarginReduceRatio, "保证金率触发后的减仓比例", &settings.MarginReduceRatio, checkMarginReduceRatio},
+	} {
+		if strings.TrimSpace(item.raw) == "" {
+			continue // 没写取默认值
+		}
+		value, err := parseOptional(item.raw, item.name)
+		if err != nil {
+			return Settings{}, err
+		}
+		if err := item.check(value); err != nil {
+			return Settings{}, err
+		}
+		*item.target = value
 	}
 	days := d.DustConvertIntervalDays
 	switch {
@@ -224,7 +298,7 @@ func normalizeDecimalMap(raw map[string]string) map[string]string {
 //   - 排除集合（稳定币保证金、保证金币、套利底仓）只要读得出键就保留，数值坏了不影响排除；
 //   - 排除字段本身的类型坏了、整份不是合法 JSON：无从知道排除哪些资产，返回 err，调用方不能下单。
 func ParseLenient(raw string) (settings Settings, warning error, err error) {
-	settings = Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero(), DustConvertInterval: defaultDustConvertIntervalDays * 24 * time.Hour}
+	settings = defaultSettings()
 	if strings.TrimSpace(raw) == "" {
 		return settings, nil, nil
 	}
@@ -274,6 +348,45 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 			warnings = append(warnings, fmt.Errorf("小额兑换间隔不合法，按 %d 天处理", defaultDustConvertIntervalDays))
 		} else if days > 0 {
 			settings.DustConvertInterval = time.Duration(days) * 24 * time.Hour
+		}
+	}
+	for _, item := range []struct {
+		raw    json.RawMessage
+		name   string
+		target *shared.Decimal
+		check  func(shared.Decimal) error
+	}{
+		{fields.MarginRatioThreshold, "普通账户保证金率阈值", &settings.MarginRatioThreshold, checkMarginRatioThreshold},
+		{fields.UnifiedMMRThreshold, "统一账户 uniMMR 阈值", &settings.UnifiedMMRThreshold, checkUnifiedMMRThreshold},
+		{fields.MarginReduceRatio, "保证金率触发后的减仓比例", &settings.MarginReduceRatio, checkMarginReduceRatio},
+	} {
+		if len(item.raw) == 0 {
+			continue
+		}
+		var text string
+		err := json.Unmarshal(item.raw, &text)
+		if err != nil {
+			warnings = append(warnings, fmt.Errorf("%s不是字符串形式的数字，按默认值处理：%w", item.name, err))
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
+			continue // 没写取默认值
+		}
+		value, err := parseOptional(text, item.name)
+		if err == nil {
+			err = item.check(value)
+		}
+		if err != nil {
+			warnings = append(warnings, fmt.Errorf("%w（按默认值处理）", err))
+			continue
+		}
+		*item.target = value
+	}
+	if value := fields.MarginMonitorDisabled; len(value) > 0 {
+		if err := json.Unmarshal(value, &settings.MarginMonitorDisabled); err != nil {
+			// 读不出来时宁可继续监控：监控是保护，不能因为设置写坏了就悄悄关掉。
+			warnings = append(warnings, fmt.Errorf("保证金率监控的关闭开关不是布尔值，按开启监控处理：%w", err))
+			settings.MarginMonitorDisabled = false
 		}
 	}
 	if value := fields.StablecoinMargin; len(value) > 0 {
@@ -366,6 +479,10 @@ func (s Settings) Document() Document {
 		DustConvertEnabled:      s.DustConvert,
 		DustConvertIntervalDays: int(s.DustConvertInterval / (24 * time.Hour)),
 		ArbitrageBaseAssets:     append([]string(nil), s.ArbitrageBaseAssets...),
+		MarginRatioThreshold:    s.MarginRatioThreshold.String(),
+		UnifiedMMRThreshold:     s.UnifiedMMRThreshold.String(),
+		MarginReduceRatio:       s.MarginReduceRatio.String(),
+		MarginMonitorDisabled:   s.MarginMonitorDisabled,
 	}
 	if len(s.StablecoinTargets) > 0 {
 		document.StablecoinMargin = make(map[string]string, len(s.StablecoinTargets))

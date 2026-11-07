@@ -123,8 +123,9 @@ func (a Account) validateMarkets() error {
 	if a.Live != nil {
 		environment = a.Live.Environment
 	}
-	if environment == exchange.AccountEnvironmentTestnet && len(a.Markets) > 1 {
-		return invalidAccount("测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
+	// 只有币安测试网要求一个账户一个市场；OKX 模拟盘一把密钥同时能做现货和永续。
+	if environment == exchange.AccountEnvironmentTestnet && a.Exchange == exchange.ExchangeBinance && len(a.Markets) > 1 {
+		return invalidAccount("币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
 	}
 	if !a.AccountMode.Valid() {
 		return invalidAccount("不支持的账户类型")
@@ -195,7 +196,23 @@ func (a Account) ExecutionEligibility() error {
 	if a.Status != exchange.AccountStatusEnabled || !a.Ready {
 		return ErrAccountNotExecutable
 	}
+	if blockers := a.InspectionBlockers(); len(blockers) != 0 {
+		return fmt.Errorf("%w：%s", ErrAccountNotExecutable, blockers[0].Message)
+	}
 	return nil
+}
+
+// InspectionBlockers 返回最近一次检测里按账户已开通市场算出的阻断项：有任何一项，账户都不能下单。
+// 还没有检测过的账户（模拟盘、股票，或检测前的实盘账户）没有阻断项；检测结果解析失败时不阻断，由复查重新写入。
+func (a Account) InspectionBlockers() []exchange.InspectionFinding {
+	if a.ExecutionMode != exchange.ExecutionModeLive {
+		return nil
+	}
+	inspection, err := exchange.ParseInspection(a.InspectionJSON)
+	if err != nil {
+		return nil
+	}
+	return inspection.BlockersFor(a.Markets)
 }
 
 func (a Account) MarketDataEnvironment() exchange.AccountEnvironment {

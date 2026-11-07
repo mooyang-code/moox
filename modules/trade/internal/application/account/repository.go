@@ -78,7 +78,7 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 	}
 	applyUpdate(&value, command)
 	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountConfiguration(
+		if err := tx.UpdateTradingAccountConfiguration(
 			value.SpaceID,
 			value.ID,
 			store.TradingAccountConfiguration{
@@ -86,7 +86,30 @@ func (r Repository) Update(ctx context.Context, command UpdateCommand) error {
 				SettlementAsset: value.SettlementAsset,
 				MarginMode:      string(value.MarginMode), Status: string(value.Status),
 			},
-		)
+		); err != nil {
+			return err
+		}
+		// 换密钥时同一个事务里写入重新检测的结果，检测通过才保存。
+		if command.InspectionJSON != nil {
+			return tx.SetTradingAccountInspection(value.SpaceID, value.ID, credentialSecret(value), string(value.AccountMode), value.InspectionJSON)
+		}
+		return nil
+	})
+}
+
+// SetInspection 写入复查的结果（账户类型和检测结果）。
+func (r Repository) SetInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error {
+	unlock, lockErr := r.Store.LockTradingAccountContext(ctx, id)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer unlock()
+	current, err := r.Store.GetTradingAccountByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return r.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.SetTradingAccountInspection(current.SpaceID, current.TradingAccountID, credentialSecretID, string(mode), inspectionJSON)
 	})
 }
 

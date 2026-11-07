@@ -27,6 +27,13 @@ type ExchangeOrderLookup interface {
 	GetOrderByExchangeID(context.Context, exchange.SymbolKey, string) (exchange.Order, error)
 }
 
+// ScopedOpenOrderSource 是挂单查询可以按标的收窄的场所才实现的能力：统一账户现货不传 symbol 的挂单查询
+// 按“当前交易中的标的数量”计权重，周期对账改为只查给定标的（每个权重 5）；没有这个能力的适配器照常查全部挂单。
+// 返回给定现货标的的挂单和全部合约挂单；其余现货标的上的外部挂单只在会话启动、手动全量同步时才会发现。
+type ScopedOpenOrderSource interface {
+	ListOpenOrdersForSymbols(context.Context, []exchange.SymbolKey) ([]exchange.Order, error)
+}
+
 // LedgerSource 是能查询资金流水（手续费、资金费、已实现盈亏、划转等）的场所才实现的能力，只读、即查即用。
 // 同一个适配器服务现货和永续时，LedgerSupported 按账户市场类型说明是否支持（例如币安现货没有统一流水接口）。
 type LedgerSource interface {

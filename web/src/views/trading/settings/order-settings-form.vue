@@ -127,7 +127,8 @@ function reset() {
   formError.value = "";
 }
 
-watch(() => props.settings, reset);
+// 详情页每 5 秒整体换一次组合对象：只有保存的设置内容真的变了才重置表单，否则正在改的内容会被悄悄还原。
+watch(() => JSON.stringify(props.settings ?? null), reset);
 
 // 已保存的设置读不出来时的出路：用户确认后按默认值整个覆盖（由父组件调保存接口）。
 function resetToDefault() {

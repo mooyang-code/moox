@@ -58,6 +58,20 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].blockedReason).toContain("最小下单额");
   });
 
+  it("被每小时上限顺延的目标不算被拦下：状态按差额判断，原因单独放在顺延里", () => {
+    const rows = buildCoinRows({
+      targets: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100" }],
+      blocked: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100", reason: "超出每小时上限，留到下一个整点", deferred: true }],
+      swapPositions: [],
+      spotHoldings: [spot("DOGE", "10")],
+      converged: false,
+      hasTarget: true
+    });
+    expect(rows[0].state).toBe("off");
+    expect(rows[0].blockedReason).toBe("");
+    expect(rows[0].deferredReason).toContain("下一个整点");
+  });
+
   it("保持当前持仓的目标没有偏差；自主下单的组合列出现货持有且不算目标外", () => {
     const hold = buildCoinRows({
       targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "", hold: true }],

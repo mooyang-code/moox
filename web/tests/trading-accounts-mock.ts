@@ -167,6 +167,8 @@ export interface Calls {
   flatten: Record<string, unknown>[];
   /** ListLogicalAccounts 被调用的次数 */
   listLogicals: number;
+  /** 读单个组合账户的次数：详情页每 5 秒轮询一次 */
+  getLogical: number;
 }
 export let calls: Calls;
 
@@ -190,8 +192,36 @@ async function gateway(route: Route) {
         json: ok({ logical_accounts: logicals, page_result: { page: 1, size: 500, total: logicals.length } })
       });
     case "GetLogicalAccount":
+      calls.getLogical += 1;
       return route.fulfill({
-        json: ok({ logical_account: logicals.find(item => item.logical_account_id === body.logical_account_id) })
+        json: ok({
+          logical_account: {
+            ...logicals.find(item => item.logical_account_id === body.logical_account_id),
+            // 当前生效的设置：组合账户详情总是带着它们，设置表单拿它们当初始值
+            order_settings: {
+              rebalance_threshold_mode: "TARGET_RATIO",
+              rebalance_threshold_ratio: "0.05",
+              min_notional_spot: "10",
+              min_notional_swap: "10",
+              max_child_notional: "10000",
+              randomize_split: false,
+              batch_interval_seconds: 0,
+              order_mode: "MARKET",
+              slippage_step: "0.015",
+              slippage_max: "0.05",
+              max_attempts: 3,
+              resting_ratio: "0",
+              resting_ttl_seconds: 0
+            },
+            fund_settings: {
+              reserve_ratio: "0.05",
+              bnb_discount: false,
+              bnb_reserve_amount: "0",
+              dust_convert_enabled: false,
+              dust_convert_interval_days: 0
+            }
+          }
+        })
       });
     case "GetLogicalAccountTarget":
       return route.fulfill({
@@ -256,11 +286,56 @@ async function gateway(route: Route) {
           ]
         })
       });
-    case "ListOrders":
+    case "ListOrders": {
+      const matched = orders.filter(
+        item => (!body.only_open || item.state === "OPEN") && (!body.owner_type || item.owner_type === body.owner_type)
+      );
+      return route.fulfill({
+        json: ok({ orders: matched, page_result: { page: 1, size: 20, total: matched.length } })
+      });
+    }
+    case "SummarizeAccountPnl":
+      // 和后端一致：proto3 的零值不出现，funding_truncated 为 false 时不返回
       return route.fulfill({
         json: ok({
-          orders: body.only_open ? [orders[1]] : orders,
-          page_result: { page: 1, size: 20, total: body.only_open ? 1 : 2 }
+          fees: [
+            { asset: "USDT", amount: "0.016" },
+            { asset: "BNB", amount: "0.0004" }
+          ],
+          realized_pnl: [{ asset: "USDT", amount: "12.5" }],
+          funding_fees: [{ asset: "USDT", amount: "-0.8" }],
+          fill_count: "3",
+          funding_available: true,
+          funding_from: String(NOW - 7 * 86_400_000)
+        })
+      });
+    case "ListOperatorActions":
+      return route.fulfill({
+        json: ok({
+          actions: [
+            {
+              action_id: "act-2",
+              logical_account_id: body.logical_account_id,
+              action_type: "DELIST_FLATTEN",
+              reason: "ABC 即将下架",
+              status: "COMPLETED",
+              result_json: '{"unblocked":true}',
+              created_at: String(NOW - 120_000),
+              updated_at: String(NOW - 60_000)
+            },
+            {
+              action_id: "act-1",
+              logical_account_id: body.logical_account_id,
+              action_type: "REDUCE",
+              reason: "保证金率过低",
+              status: "FAILED",
+              result_json: "",
+              last_error: "撤单失败",
+              created_at: String(NOW - 3_600_000),
+              updated_at: String(NOW - 3_500_000)
+            }
+          ].filter(item => !body.action_type || item.action_type === body.action_type),
+          page_result: { page: 1, size: 10, total: 2 }
         })
       });
     case "ListFills":
@@ -382,7 +457,7 @@ async function gateway(route: Route) {
 }
 
 export async function installTradingMock(page: Page) {
-  calls = { paper: [], members: [], flatten: [], listLogicals: 0 };
+  calls = { paper: [], members: [], flatten: [], listLogicals: 0, getLogical: 0 };
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, gateway);
   return calls;

@@ -47,6 +47,7 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	lines = replaceExchangeKeys(lines, request.ExchangeKeys)
 	if plan != nil {
 		if lines, err = setKey(lines, "scf_plan", "enabled", "true"); err != nil {
 			return nil, err

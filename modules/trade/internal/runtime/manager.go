@@ -357,6 +357,8 @@ func sameSessionConfig(
 		left.AccountMode == right.AccountMode &&
 		left.Environment == right.Environment &&
 		left.CredentialSecretID == right.CredentialSecretID &&
+		// 同一个密钥 ID 下改了密钥内容：重新检测会写入新的指纹，会话随之重建、绑定检测过的新密钥。
+		inspectionFingerprint(left) == inspectionFingerprint(right) &&
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
@@ -427,4 +429,13 @@ func (m *Manager) stopAll() {
 		delete(m.sessions, id)
 	}
 	m.mu.Unlock()
+}
+
+// inspectionFingerprint 取账户检测结果里记录的密钥指纹；没有检测结果为空串。
+func inspectionFingerprint(account store.TradingAccountRecord) string {
+	inspection, err := exchange.ParseInspection(account.InspectionJSON)
+	if err != nil {
+		return ""
+	}
+	return inspection.CredentialFingerprint
 }

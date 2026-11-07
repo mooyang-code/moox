@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,6 +27,11 @@ type ExchangeDescriptor struct {
 	FillPolicies []exchange.FillPolicy
 	// TradingSession 判断当前是否在交易时段；nil 表示全天可交易。
 	TradingSession func(time.Time) bool
+	// Inspect 检测这个场所的密钥（账户类型、权限）；nil 表示不支持检测（券商、模拟盘）。
+	Inspect exchange.Inspector
+	// WholeAccount 报告某个账户配置是否由一个适配器同时服务全部市场（币安统一账户：一个余额接口、一条私有流），
+	// 为真时注册表只调用一次工厂并把全部市场交给它，不再按市场拆成多个单市场适配器；nil 表示按市场拆分。
+	WholeAccount func(exchange.AccountConfig) bool
 }
 
 // InTradingSession 报告场所当前是否可以下单。
@@ -45,6 +51,15 @@ func InTradingSession(exchanges ExchangeCatalog, name string, now time.Time) boo
 	}
 	descriptor, ok := exchanges.Descriptor(exchange.Exchange(name))
 	return !ok || descriptor.InTradingSession(now)
+}
+
+// Inspect 用场所登记的检测函数检测一把密钥；场所没有登记检测函数时返回错误。
+func (r *Registry) Inspect(ctx context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
+	descriptor, ok := r.Descriptor(name)
+	if !ok || descriptor.Inspect == nil {
+		return exchange.Inspection{}, fmt.Errorf("execution: 场所 %q 不支持密钥检测", name)
+	}
+	return descriptor.Inspect(ctx, request)
 }
 
 type Registry struct {
@@ -88,9 +103,23 @@ func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Crede
 	}
 	r.mu.RLock()
 	factory, ok := r.factories[config.Exchange]
+	descriptor := r.descriptors[config.Exchange]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("execution: unregistered Exchange %q", config.Exchange)
+	}
+	if descriptor.WholeAccount != nil && descriptor.WholeAccount(config) {
+		adapter, err := factory(config, credential)
+		if err != nil {
+			return nil, fmt.Errorf("execution: bind %s account %q: %w", config.Exchange, config.TradingAccountID, err)
+		}
+		if adapter == nil {
+			return nil, fmt.Errorf("execution: %s factory returned nil adapter", config.Exchange)
+		}
+		if identity, ok := adapter.(ExchangeIdentity); !ok || identity.Exchange() != config.Exchange {
+			return nil, fmt.Errorf("execution: adapter identity does not match account Exchange %q", config.Exchange)
+		}
+		return adapter, nil
 	}
 	// 每个市场绑一个单市场适配器；开通多个市场时合成一个按市场路由的适配器。
 	adapters := make(map[exchange.MarketType]ExecutionAdapter, len(config.Markets))

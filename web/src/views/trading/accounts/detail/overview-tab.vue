@@ -5,10 +5,7 @@
         <template #sub>{{ logical.settlement_asset }}，每分钟一个点</template>
         <EquityCurve :logical-account-id="logical.logical_account_id" />
       </SectionBlock>
-      <!-- 收益拆解由 T29 提供：按时间段汇总已实现盈亏、手续费、资金费 -->
-      <SectionBlock title="收益拆解">
-        <p class="placeholder">暂未提供。</p>
-      </SectionBlock>
+      <PnlBreakdown />
     </div>
 
     <div class="column">
@@ -29,7 +26,8 @@
           </a-descriptions-item>
           <a-descriptions-item label="目标">{{ targetCoins }} 个币</a-descriptions-item>
           <a-descriptions-item label="未到位">{{ offCount }} 个</a-descriptions-item>
-          <a-descriptions-item label="被拦下">{{ (target.blocked_targets || []).length }} 个</a-descriptions-item>
+          <a-descriptions-item label="被拦下">{{ blockedCount }} 个</a-descriptions-item>
+          <a-descriptions-item v-if="deferredCount" label="顺延">{{ deferredCount }} 个</a-descriptions-item>
           <a-descriptions-item label="最近错误">{{ target.last_error || "无" }}</a-descriptions-item>
         </a-descriptions>
       </SectionBlock>
@@ -70,10 +68,7 @@
         <p v-if="!members.length" class="placeholder">组合里还没有执行账户。</p>
       </SectionBlock>
 
-      <!-- 人工操作记录由 T29 提供：按组合分页列出暂停、下单、撤单、清仓及其结果 -->
-      <SectionBlock title="人工操作记录">
-        <p class="placeholder">暂未提供。</p>
-      </SectionBlock>
+      <OperatorActions />
     </div>
   </div>
 </template>
@@ -90,6 +85,8 @@ import { marketsText } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
+import OperatorActions from "./operator-actions.vue";
+import PnlBreakdown from "./pnl-breakdown.vue";
 import { targetCoinCount } from "./positions-model";
 
 const context = inject(detailContextKey)!;
@@ -103,6 +100,9 @@ const members = computed(() =>
     .filter((item): item is typeof item & { account: NonNullable<typeof item.account> } => Boolean(item.account))
 );
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
+// 被单币每小时上限顺延的标的不算被拦下，单独计数
+const blockedCount = computed(() => (target.value?.blocked_targets || []).filter(item => !item.deferred).length);
+const deferredCount = computed(() => (target.value?.blocked_targets || []).filter(item => item.deferred).length);
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);
 const targetTone = computed(() => {
   switch (target.value?.status) {

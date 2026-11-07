@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -43,6 +44,8 @@ type Store interface {
 	SetLeverage(context.Context, string, string, shared.Decimal) error
 	// ListEnabled 返回全部启用的执行账户。
 	ListEnabled(context.Context) ([]tradingaccount.Account, error)
+	// SetInspection 写入复查的结果（账户类型和检测结果）。
+	SetInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error
 	// LogicalAccountName 返回执行账户所属组合账户的名称（启用或停用成员都算），不属于任何组合时返回空串。
 	LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error)
 }
@@ -68,6 +71,9 @@ type Service struct {
 	SymbolConfigs      SymbolConfigs
 	Exchanges          execution.ExchangeCatalog
 	LiveTradingEnabled bool
+	// Inspector 检测实盘密钥的账户类型和权限；实盘账户建立、换密钥、重新启用前必须检测通过。
+	Inspector Inspector
+	Now       func() time.Time
 }
 
 type UpdateCommand struct {
@@ -77,6 +83,9 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
+	// AccountMode、InspectionJSON 只由检测写入（换密钥或重新启用时），调用方不用设置。
+	AccountMode    *exchange.AccountMode
+	InspectionJSON *string
 }
 
 func (s *Service) Create(
@@ -98,6 +107,11 @@ func (s *Service) Create(
 		return tradingaccount.Account{}, err
 	}
 	if err := s.rejectDuplicateCredential(ctx, value); err != nil {
+		return tradingaccount.Account{}, err
+	}
+	// 必须先检测通过：账户类型和权限靠检测得到，不靠手填。
+	value, err := s.inspectForSave(ctx, value)
+	if err != nil {
 		return tradingaccount.Account{}, err
 	}
 	if err := s.Store.Create(ctx, value); err != nil {
@@ -154,6 +168,14 @@ func (s *Service) Update(
 		}
 		if err := s.rejectDuplicateCredential(ctx, projected); err != nil {
 			return tradingaccount.Account{}, err
+		}
+		// 换密钥或重新启用：必须重新检测通过才保存，账户类型随之更新。
+		inspected, err := s.inspectForSave(ctx, projected)
+		if err != nil {
+			return tradingaccount.Account{}, err
+		}
+		if projected.ExecutionMode == exchange.ExecutionModeLive {
+			command.AccountMode, command.InspectionJSON = &inspected.AccountMode, &inspected.InspectionJSON
 		}
 	}
 	if err := s.Store.Update(ctx, command); err != nil {
@@ -298,5 +320,11 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
+	}
+	if command.AccountMode != nil {
+		value.AccountMode = *command.AccountMode
+	}
+	if command.InspectionJSON != nil {
+		value.InspectionJSON = *command.InspectionJSON
 	}
 }

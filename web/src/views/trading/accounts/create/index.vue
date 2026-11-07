@@ -40,16 +40,31 @@
         </a-select>
       </a-form-item>
       <a-form-item label="账户名称"><a-input v-model="form.name" :max-length="64" /></a-form-item>
+      <!-- 实盘：选完密钥立即检测账户类型和权限，有阻断项或没有结论时“下一步”不放行。
+           这一步还没选市场，只拦和市场无关的阻断项（提现权限、密钥被拒绝等）；和市场有关的在下一步按所选市场再检测 -->
+      <InspectionPreview
+        v-if="form.kind !== 'paper'"
+        :exchange="form.exchange"
+        :environment="form.kind === 'testnet' ? 1 : 2"
+        :secret-id="form.secretId"
+        @change="onPreviewChange"
+      />
     </a-form>
 
     <!-- 3 市场与参数 -->
     <a-form v-else-if="form.step === 2" :model="form" layout="vertical">
-      <a-form-item label="开通的市场" extra="一个账户可以同时开通现货和永续；永续固定全仓、USDT 结算">
+      <a-form-item label="开通的市场" :extra="marketsExtra">
         <a-space size="large">
-          <a-checkbox :model-value="form.markets.includes(1)" @change="(value: unknown) => setMarket(1, Boolean(value))"
+          <a-checkbox
+            :model-value="form.markets.includes(1)"
+            :disabled="!marketAvailable('SPOT')"
+            @change="(value: unknown) => setMarket(1, Boolean(value))"
             >现货</a-checkbox
           >
-          <a-checkbox :model-value="form.markets.includes(2)" @change="(value: unknown) => setMarket(2, Boolean(value))"
+          <a-checkbox
+            :model-value="form.markets.includes(2)"
+            :disabled="!marketAvailable('SWAP')"
+            @change="(value: unknown) => setMarket(2, Boolean(value))"
             >永续</a-checkbox
           >
         </a-space>
@@ -57,6 +72,15 @@
       <a-form-item label="结算资产">
         <a-input v-model="form.settlementAsset" :disabled="form.markets.includes(2)" />
       </a-form-item>
+      <!-- 实盘：按所选市场再检测一次（万向划转权限、双向持仓等和市场有关的阻断项），通过才能继续 -->
+      <InspectionPreview
+        v-if="form.kind !== 'paper'"
+        :exchange="form.exchange"
+        :environment="form.kind === 'testnet' ? 1 : 2"
+        :secret-id="form.secretId"
+        :markets="form.markets"
+        @change="onMarketPreviewChange"
+      />
       <template v-if="form.kind === 'paper'">
         <div class="row">
           <a-form-item label="初始资金"><a-input v-model="form.initialBalance" /></a-form-item>
@@ -126,9 +150,7 @@
 
     <div class="footer">
       <a-button @click="back">{{ form.step && !locked ? "上一步" : "取消" }}</a-button>
-      <a-button v-if="form.step < 3" type="primary" :disabled="form.step === 0 && !selectedKind?.open" @click="next"
-        >下一步</a-button
-      >
+      <a-button v-if="form.step < 3" type="primary" :disabled="nextDisabled" @click="next">下一步</a-button>
       <a-button v-else-if="form.kind === 'prod'" type="primary" status="danger" :loading="submitting" @click="submit">
         开通生产账户
       </a-button>
@@ -142,6 +164,8 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, createLogicalAccount, createPaperSimulation, createTradingAccount } from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
+import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
+import type { InspectionView } from "@/components/trade-inspection/inspection";
 import { createSubmitScope } from "@/utils/submit-scope";
 import EnvMark from "../shared/env-mark.vue";
 import type { Environment } from "../shared/environment";
@@ -155,6 +179,8 @@ import {
   createDefaultForm,
   createKinds,
   defaultFees,
+  restrictMarkets,
+  retryWhileSessionStarting,
   stepTitles,
   toggleMarket,
   validateStep
@@ -172,6 +198,10 @@ const submitting = ref(false);
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const scope = createSubmitScope();
+// 实盘第二步的检测结果：allowNext 为真才能离开这一步；可开通的市场用来收窄第三步的勾选
+const preview = reactive<{ allowNext: boolean; view: InspectionView | null }>({ allowNext: false, view: null });
+// 第三步按所选市场再检测的结果：和市场有关的阻断项在这里判断
+const marketPreview = reactive({ allowNext: false });
 // 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
 const created = reactive({ accountId: "", logicalId: "", joined: false });
 
@@ -180,7 +210,57 @@ const locked = computed(() => Boolean(created.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
 
+const nextDisabled = computed(() => {
+  if (form.step === 0) return !selectedKind.value?.open;
+  if (form.kind === "paper") return false;
+  if (form.step === 1) return !preview.allowNext;
+  return form.step === 2 && !marketPreview.allowNext;
+});
+
+// 币安测试网一个账户只能开通一个市场（现货测试网和合约测试网是两套密钥）
+const singleMarket = computed(() => form.kind === "testnet" && form.exchange === 1);
+const marketsExtra = computed(() =>
+  singleMarket.value
+    ? "币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥；永续固定全仓、USDT 结算"
+    : "一个账户可以同时开通现货和永续；永续固定全仓、USDT 结算"
+);
+
 watch(visible, () => scope.invalidate());
+// 换密钥、换交易所后，之前的“确认这是生产环境密钥且没有提现权限”作废，要对新的密钥重新确认
+watch(
+  () => [form.secretId, form.exchange],
+  () => {
+    form.ack = false;
+  }
+);
+
+// 换交易所或环境后进入单选模式（币安测试网），已经勾着的多个市场收成一个，否则两个都勾着、点哪个都取消不掉
+watch(
+  () => [singleMarket.value, form.markets.length],
+  () => {
+    if (singleMarket.value && form.markets.length > 1) {
+      form.markets = [form.markets[0]];
+      syncMarketDefaults();
+    }
+  }
+);
+
+function onPreviewChange(payload: { allowNext: boolean; view: InspectionView | null }) {
+  preview.allowNext = payload.allowNext;
+  preview.view = payload.view;
+  if (payload.view) form.markets = restrictMarkets(form.markets, payload.view.availableMarkets);
+}
+
+function onMarketPreviewChange(payload: { allowNext: boolean }) {
+  marketPreview.allowNext = payload.allowNext;
+}
+
+/** 模拟盘不限制；实盘只能开通检测结果里有的市场（测试网跳过检测、没有市场列表时不限制）。 */
+function marketAvailable(market: "SPOT" | "SWAP"): boolean {
+  if (form.kind === "paper") return true;
+  const available = preview.view?.availableMarkets ?? [];
+  return !available.length || available.includes(market);
+}
 
 async function loadSecrets() {
   secretsLoading.value = true;
@@ -196,6 +276,8 @@ async function loadSecrets() {
 function open(kind: Environment) {
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
   Object.assign(created, { accountId: "", logicalId: "", joined: false });
+  Object.assign(preview, { allowNext: false, view: null });
+  marketPreview.allowNext = false;
   error.value = "";
   submitting.value = false;
   visible.value = true;
@@ -203,11 +285,22 @@ function open(kind: Environment) {
 
 function onExchangeChange() {
   form.secretId = "";
+  Object.assign(preview, { allowNext: false, view: null });
   if (form.kind !== "paper") void loadSecrets();
 }
 
 function setMarket(market: MarketType, on: boolean) {
-  form.markets = toggleMarket(form.markets, market, on);
+  // 单选模式：勾另一个市场是切换，取消勾选照常生效
+  form.markets = singleMarket.value
+    ? on
+      ? [market]
+      : form.markets.filter(item => item !== market)
+    : toggleMarket(form.markets, market, on);
+  syncMarketDefaults();
+}
+
+// 市场变了，结算资产和（没手工改过的）默认费率跟着重算：开通永续固定 USDT 结算，只开现货和带永续的默认费率不同。
+function syncMarketDefaults() {
   if (form.markets.includes(2)) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
     const fees = defaultFees(form.markets);
@@ -222,6 +315,7 @@ function next() {
     error.value = problem;
     return;
   }
+  if (nextDisabled.value) return;
   error.value = "";
   form.step = (form.step + 1) as typeof form.step;
   if (form.step === 1 && form.kind !== "paper") void loadSecrets();
@@ -272,15 +366,17 @@ async function submit() {
         ).logical_account.logical_account_id;
         created.logicalId = target;
       }
-      // 实盘（1B）：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured。
-      // 开放实盘建账户（T5）时，在这里补等待重试或让后端像模拟盘一样在同一个事务里完成；现在实盘选项还没有开放。
-      await addLogicalAccountMember({
-        logical_account_id: target,
-        trading_account_id: created.accountId,
-        enabled: true,
-        priority: exist ? nextPriority(exist) : 1,
-        adopt_existing_exposure: false
-      });
+      // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured，等几秒重试。
+      const accountId = created.accountId;
+      await retryWhileSessionStarting(() =>
+        addLogicalAccountMember({
+          logical_account_id: target,
+          trading_account_id: accountId,
+          enabled: true,
+          priority: exist ? nextPriority(exist) : 1,
+          adopt_existing_exposure: false
+        })
+      );
       created.joined = true;
     }
   } catch (cause) {

@@ -54,11 +54,13 @@
           <a-button size="small" :loading="leverageSaving" @click="saveLeverage">设置</a-button>
         </div>
       </div>
-      <!-- 挂载点：账户类型与检测结果、重新检测（T5）。接入时替换下面这一块；模拟账户没有检测。 -->
-      <template v-if="!paper">
-        <div class="block-title">检测</div>
-        <p class="hint">暂未提供。</p>
-      </template>
+      <!-- 账户类型与检测结果、重新检测；模拟账户没有检测。检测可能改变账户类型，完成后通知详情页重读 -->
+      <AccountInspectionPanel
+        v-if="!paper"
+        :account-id="account.trading_account_id"
+        :inspection-json="account.inspection_json"
+        @updated="emit('changed')"
+      />
     </div>
   </div>
 </template>
@@ -68,6 +70,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { setLeverage, updateTradingAccount } from "@/api/trade";
 import type { TradingAccount } from "@/api/trade";
+import AccountInspectionPanel from "@/components/trade-inspection/account-inspection-panel.vue";
 import { fmtMoney } from "./format";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
 

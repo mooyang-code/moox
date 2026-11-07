@@ -47,6 +47,12 @@ func (s *Secret) EnvironmentBound() bool {
 		(s.Category == EventBusCategory && s.Provider == EventBusProvider)
 }
 
+// ExchangeSecretID 返回交易所密钥的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
+// setup apply 按 moox.toml 的 [[exchange_keys]] 写入时用它；Collector 读只读 Key 用的 exchange-binance-production-readonly 也是它。
+func ExchangeSecretID(exchange, environment, name string) string {
+	return strings.ToLower("exchange-" + exchange + "-" + environment + "-" + name)
+}
+
 // Secret 秘钥管理表
 type Secret struct {
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`

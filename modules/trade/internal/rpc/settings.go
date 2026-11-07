@@ -101,6 +101,10 @@ func fundSettingsFromPB(value *tradepb.FundSettings) fundsettings.Document {
 		StablecoinMargin:        value.GetStablecoinMargin(),
 		MarginCoins:             value.GetMarginCoins(),
 		ArbitrageBaseAssets:     value.GetArbitrageBaseAssets(),
+		MarginRatioThreshold:    value.GetMarginRatioThreshold(),
+		UnifiedMMRThreshold:     value.GetUnifiedMmrThreshold(),
+		MarginReduceRatio:       value.GetMarginReduceRatio(),
+		MarginMonitorDisabled:   value.GetMarginMonitorDisabled(),
 	}
 }
 
@@ -127,5 +131,9 @@ func fundSettingsToPB(stored string) (*tradepb.FundSettings, string) {
 		StablecoinMargin:        value.StablecoinMargin,
 		MarginCoins:             value.MarginCoins,
 		ArbitrageBaseAssets:     value.ArbitrageBaseAssets,
+		MarginRatioThreshold:    value.MarginRatioThreshold,
+		UnifiedMmrThreshold:     value.UnifiedMMRThreshold,
+		MarginReduceRatio:       value.MarginReduceRatio,
+		MarginMonitorDisabled:   value.MarginMonitorDisabled,
 	}, message
 }
