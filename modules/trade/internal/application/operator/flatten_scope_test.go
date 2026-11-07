@@ -287,3 +287,26 @@ func TestFlattenKeepsArbitrageBaseAndItsHedgeLeg(t *testing.T) {
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.Empty(t, result.Accounts[0].Remaining)
 }
+
+// 资金设置的数值字段坏了而底仓设置还在：清仓仍然不动底仓现货和永续对冲腿。
+func TestFlattenKeepsArbitrageBaseWhenNumericSettingIsBroken(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"],"reserve_ratio":"oops"}'`).Error)
+
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), flattenCommand("flatten-broken-number"))
+
+	require.NoError(t, err)
+	require.Empty(t, placed(fixture), "数值字段坏了排除资产照样不动")
+}
+
+// 排除字段本身坏了：无从知道排除哪些资产，清仓不下单，动作失败。
+func TestFlattenDoesNotTradeWhenExclusionSettingIsUnreadable(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":"BTC"}'`).Error)
+
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), flattenCommand("flatten-broken-exclusion"))
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "套利底仓")
+	require.Empty(t, placed(fixture), "排除字段读不出来不下单")
+}

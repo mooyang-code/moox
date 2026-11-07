@@ -4,6 +4,7 @@ package fundsettings
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,8 @@ import (
 type Settings struct {
 	// ReserveRatio 是换算目标时从权益里扣掉的比例，0 到 1。
 	ReserveRatio shared.Decimal
+	// BNBReserveUnreadable 为真表示 bnb_reserve_amount 读不出来：按开启了 BNB 保留处理，BNB 仍是排除资产。
+	BNBReserveUnreadable bool
 	// BNBReserveAmount 大于 0 表示开启 BNB 保留：BNB 现货标的成为排除资产，权益只扣还差的部分。
 	BNBReserveAmount shared.Decimal
 	// StablecoinMargin 是稳定币保证金的资产集合。
@@ -83,15 +86,94 @@ func Parse(raw string) (Settings, error) {
 	return settings, nil
 }
 
-// ParseOrDefault 解析失败时返回全部取默认值的设置和解析错误：清仓、平仓这类必须能执行的路径用它，
-// 设置坏了不能挡住清仓，调用方记告警后按默认设置继续。
-func ParseOrDefault(raw string) (Settings, error) {
-	settings, err := Parse(raw)
-	if err != nil {
-		defaults, _ := Parse("")
-		return defaults, err
+// ParseLenient 逐字段宽松解析，给清仓、收敛、受管资产这类必须能执行的路径用：
+//   - 数值字段（资金预留比例、保证金币的配置值）解析失败取默认值，原因放进 warning；
+//   - bnb_reserve_amount 解析失败按“开启了 BNB 保留”处理（金额按 0），BNB 仍是排除资产；
+//   - 排除集合（稳定币保证金、保证金币、套利底仓）只要读得出键就保留，数值坏了不影响排除；
+//   - 排除字段本身的类型坏了、整份不是合法 JSON：无从知道排除哪些资产，返回 err，调用方不能下单。
+func ParseLenient(raw string) (settings Settings, warning error, err error) {
+	settings = Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero()}
+	if strings.TrimSpace(raw) == "" {
+		return settings, nil, nil
 	}
-	return settings, nil
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+		return Settings{}, nil, fmt.Errorf("资金设置不是合法 JSON，无法确定排除资产：%w", err)
+	}
+	var warnings []error
+	if value, ok := fields["reserve_ratio"]; ok {
+		ratio, err := decimalField(value, "资金预留比例")
+		if err == nil && (ratio.IsNegative() || ratio.Cmp(shared.MustDecimal("1")) >= 0) {
+			err = fmt.Errorf("资金预留比例必须在 0 到 1 之间（不含 1）")
+		}
+		if err != nil {
+			warnings = append(warnings, err)
+		} else {
+			settings.ReserveRatio = ratio
+		}
+	}
+	if value, ok := fields["bnb_reserve_amount"]; ok {
+		amount, err := decimalField(value, "BNB 保留金额")
+		if err == nil && amount.IsNegative() {
+			err = fmt.Errorf("BNB 保留金额不能为负")
+		}
+		if err != nil {
+			warnings = append(warnings, fmt.Errorf("%w（按开启 BNB 保留处理）", err))
+			settings.BNBReserveUnreadable = true
+		} else {
+			settings.BNBReserveAmount = amount
+		}
+	}
+	if value, ok := fields["stablecoin_margin"]; ok {
+		var assets map[string]json.RawMessage
+		if err := json.Unmarshal(value, &assets); err != nil {
+			return Settings{}, nil, fmt.Errorf("资金设置里稳定币保证金（stablecoin_margin）的格式不对，无法确定排除资产：%w", err)
+		}
+		for asset := range assets {
+			settings.StablecoinMargin = append(settings.StablecoinMargin, strings.ToUpper(asset))
+		}
+		sort.Strings(settings.StablecoinMargin)
+	}
+	if value, ok := fields["margin_coins"]; ok {
+		var coins map[string]json.RawMessage
+		if err := json.Unmarshal(value, &coins); err != nil {
+			return Settings{}, nil, fmt.Errorf("资金设置里保证金币（margin_coins）的格式不对，无法确定排除资产：%w", err)
+		}
+		if len(coins) > 0 {
+			settings.MarginCoins = make(map[string]shared.Decimal, len(coins))
+		}
+		for asset, raw := range coins {
+			parsed, err := decimalField(raw, "保证金币 "+asset)
+			if err == nil && parsed.IsNegative() {
+				err = fmt.Errorf("保证金币 %s 的配置值不能为负", asset)
+			}
+			if err != nil {
+				warnings = append(warnings, err)
+				parsed = shared.Zero()
+			}
+			settings.MarginCoins[strings.ToUpper(asset)] = parsed
+		}
+	}
+	if value, ok := fields["arbitrage_base_assets"]; ok {
+		var assets []string
+		if err := json.Unmarshal(value, &assets); err != nil {
+			return Settings{}, nil, fmt.Errorf("资金设置里套利底仓（arbitrage_base_assets）的格式不对，无法确定排除资产：%w", err)
+		}
+		for _, asset := range assets {
+			settings.ArbitrageBaseAssets = append(settings.ArbitrageBaseAssets, strings.ToUpper(asset))
+		}
+		sort.Strings(settings.ArbitrageBaseAssets)
+	}
+	return settings, errors.Join(warnings...), nil
+}
+
+// decimalField 把 JSON 字段按字符串小数解析。
+func decimalField(raw json.RawMessage, name string) (shared.Decimal, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return shared.Zero(), fmt.Errorf("%s不是字符串形式的数字：%w", name, err)
+	}
+	return parseOptional(text, name)
 }
 
 func parseOptional(raw, name string) (shared.Decimal, error) {
@@ -112,7 +194,7 @@ func (s Settings) HasExclusions() bool {
 
 // BNBReserveEnabled 报告是否开启了 BNB 保留。
 func (s Settings) BNBReserveEnabled() bool {
-	return s.BNBReserveAmount.Cmp(shared.Zero()) > 0
+	return s.BNBReserveUnreadable || s.BNBReserveAmount.Cmp(shared.Zero()) > 0
 }
 
 // IsArbitrageBase 报告资产是否是套利底仓；底仓的现货和对应永续都不参与策略持仓。

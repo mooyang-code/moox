@@ -451,3 +451,38 @@ func TestExpiryCancelFailureSchedulesRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, StatusExpired, current.Status, "撤单没成功，目标不能先置为过期")
 }
+
+// 资金设置的数值字段坏了而底仓设置还在：执行器对空目标和已接收的目标都不平掉底仓的永续对冲腿。
+func TestBrokenNumericSettingStillKeepsArbitrageHedgeLeg(t *testing.T) {
+	for name, targets := range map[string][]store.InstrumentTarget{
+		"空目标（清仓）": {},
+		"非空目标":    {{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMixedExecutorFixture(t)
+			require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"],"reserve_ratio":"oops"}'`).Error)
+			f.setSwapPosition("BTCUSDT", "-5")
+			f.target(t, targets)
+			f.now = time.Now().UTC()
+
+			_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+			require.NoError(t, err)
+			require.NotContains(t, placedInstruments(f), "BTC-USDT-SWAP:BUY", "对冲腿不能被平掉")
+		})
+	}
+}
+
+// 排除字段坏了：执行器报错、不下单，不能把排除资产当普通资产交易。
+func TestUnreadableExclusionSettingStopsExecutorFromTrading(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_coins":["ETH"]}'`).Error)
+	f.setSwapPosition("BTCUSDT", "-5")
+	f.target(t, []store.InstrumentTarget{})
+	f.now = time.Now().UTC()
+
+	_, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.Error(t, err)
+	require.Empty(t, f.orders.specs)
+}

@@ -48,15 +48,10 @@ func (c FlattenCommand) validateScope() error {
 	return nil
 }
 
-// fundSettingsOf 读取执行账户所属组合的资金设置；不在组合里或设置坏了时取默认值（清仓不能被设置挡住）。
-func (s *Service) fundSettingsOf(ctx context.Context, spaceID, tradingAccountID string) fundsettings.Settings {
-	logical, _, err := s.Store.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
-	if err != nil {
-		defaults, _ := fundsettings.Parse("")
-		return defaults
-	}
-	settings, _ := fundsettings.ParseOrDefault(logical.FundSettingsJSON)
-	return settings
+// fundSettingsOf 读取执行账户所属组合的资金设置，和执行器、受管资产同一个入口：账户不在任何组合里才取默认值，
+// 数值字段坏了取默认值，排除字段坏了或其他读错误一律返回错误，清仓这一轮不下单。每个账户每轮只读一次。
+func (s *Service) fundSettingsOf(ctx context.Context, spaceID, tradingAccountID string) (fundsettings.Settings, error) {
+	return s.Store.FundSettingsForAccount(ctx, spaceID, tradingAccountID)
 }
 
 // instrumentIndex 是账户标的的索引：不带可交易过滤，已下架的标的也能判断是否在清仓范围内。
@@ -96,7 +91,9 @@ type flattenScope struct {
 	// reducing 为真时只处理 targets 里有的持仓。
 	reducing bool
 	// ensureTargets 在账户撤单、确认、同步之后计算并落库这个账户的减仓目标，只在第一次计算，之后沿用。
-	ensureTargets func(ctx context.Context, tradingAccountID string) error
+	ensureTargets func(ctx context.Context, tradingAccountID string, settings fundsettings.Settings) error
+	// settings 是这个账户这一轮读到的资金设置（flattenAccount 读一次，平仓、剩余统计、减仓目标共用）。
+	settings fundsettings.Settings
 }
 
 // narrow 报告范围是否被收窄：只平一个标的，或减仓（只处理登记过的持仓）。收窄时范围外的资产和持仓一律跳过。
@@ -139,6 +136,7 @@ func (s *Service) reduceTargetsForAccount(
 	ctx context.Context,
 	command FlattenCommand,
 	tradingAccountID string,
+	settings fundsettings.Settings,
 ) (map[string]shared.Decimal, error) {
 	targets := make(map[string]shared.Decimal)
 	account, err := s.Store.GetTradingAccount(ctx, command.SpaceID, tradingAccountID)
@@ -150,7 +148,6 @@ func (s *Service) reduceTargetsForAccount(
 		return nil, err
 	}
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
-	settings := s.fundSettingsOf(ctx, command.SpaceID, tradingAccountID)
 	add := func(instrument store.InstrumentRecord, current shared.Decimal) error {
 		step, minimum, ruleErr := baseQuantityRules(instrument)
 		if ruleErr != nil {

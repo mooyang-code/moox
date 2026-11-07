@@ -14,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -295,12 +296,12 @@ func (s *Service) FlattenLogicalAccount(
 			scope.targets[scopeKey(accountID, "")] = shared.Zero()
 		}
 		targets := scope.targets
-		scope.ensureTargets = func(ctx context.Context, tradingAccountID string) error {
+		scope.ensureTargets = func(ctx context.Context, tradingAccountID string, settings fundsettings.Settings) error {
 			marker := scopeKey(tradingAccountID, "")
 			if _, done := targets[marker]; done {
 				return nil
 			}
-			computed, err := s.reduceTargetsForAccount(ctx, command, tradingAccountID)
+			computed, err := s.reduceTargetsForAccount(ctx, command, tradingAccountID, settings)
 			if err != nil {
 				return err
 			}
@@ -469,6 +470,16 @@ func (s *Service) flattenAccount(
 		result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: err})
 		return result, false
 	}
+	// 资金设置每个账户每轮只读一次，平仓、剩余统计、减仓目标共用：读不出来（排除字段坏了、数据库忙）
+	// 就不下单，不能悄悄按默认设置把底仓的对冲腿平掉。
+	settings, err := s.fundSettingsOf(ctx, command.SpaceID, tradingAccountID)
+	if err != nil {
+		result.Status = "FAILED"
+		result.Error = err.Error()
+		result.cause = err
+		return result, false
+	}
+	scope.settings = settings
 	if err := s.syncLight(ctx, tradingAccountID); err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
@@ -532,7 +543,7 @@ func (s *Service) flattenAccount(
 		return result, false
 	}
 	if scope.reducing && scope.ensureTargets != nil {
-		if err := scope.ensureTargets(ctx, tradingAccountID); err != nil {
+		if err := scope.ensureTargets(ctx, tradingAccountID, scope.settings); err != nil {
 			result.addError(err)
 			result.Status = "PARTIAL"
 			result.Remaining = s.remainingForAccount(ctx, command.SpaceID, tradingAccountID, nil, &result, scope)
@@ -834,7 +845,7 @@ func (s *Service) flattenSwap(
 		return
 	}
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
-	settings := s.fundSettingsOf(ctx, command.SpaceID, account.TradingAccountID)
+	settings := scope.settings
 	for _, position := range positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
@@ -1174,7 +1185,7 @@ func (s *Service) remainingForAccount(
 	}
 	// 标的表索引和平仓用同一份：持仓所属标的按（市场，代码）查表，不用持仓记录里可能对不上的标的 ID。
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
-	settings := s.fundSettingsOf(ctx, spaceID, tradingAccountID)
+	settings := scope.settings
 	if account.HasPositionMarket() {
 		positions, listErr := s.Store.ListPositions(
 			ctx, spaceID, tradingAccountID, exchange.SymbolKey{},

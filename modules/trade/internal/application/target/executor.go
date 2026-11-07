@@ -11,7 +11,6 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -19,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var (
@@ -191,7 +189,8 @@ func (e *Executor) Converge(
 			target.LastError = ""
 			updated, err := e.Store.UpdateLogicalAccountTargetState(persistCtx, target)
 			if err != nil {
-				result, resultErr = Result{}, err
+				// 挂单已经撤掉，只是写“已过期”失败：设重试唤醒，已收敛、已阻塞的目标不被定时扫描，不设会一直卡住。
+				result, resultErr = Result{RetryAfter: expiryRetryDelay}, err
 				return
 			}
 			result, resultErr = Result{Status: StatusExpired}, nil
@@ -633,10 +632,10 @@ func (e *Executor) loadMembers(
 	if err != nil {
 		return nil, err
 	}
-	// 资金设置坏了不能挡住收敛（空目标就是清仓）：告警后按默认设置继续。
-	settings, settingsErr := fundsettings.ParseOrDefault(logical.FundSettingsJSON)
-	if settingsErr != nil {
-		log.Warnf("交易关注项：组合 %s 的资金设置无法解析，按默认设置处理：%v", logicalAccountID, settingsErr)
+	// 数值字段坏了按默认处理（告警限频），排除字段坏了直接报错、不下单：排除资产（底仓对冲腿等）不能因为设置坏了被交易。
+	settings, err := e.Store.ResolveFundSettings(logical)
+	if err != nil {
+		return nil, err
 	}
 	members := make([]memberState, 0, len(records))
 	for _, record := range records {

@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -44,10 +46,9 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	}
 	var settings fundsettings.Settings
 	if err == nil {
-		// 资金设置坏了不能挡住清仓、收敛：告警后按默认设置继续。
-		var settingsErr error
-		if settings, settingsErr = fundsettings.ParseOrDefault(logical.FundSettingsJSON); settingsErr != nil {
-			log.Warnf("交易关注项：组合 %s 的资金设置无法解析，按默认设置处理：%v", logical.LogicalAccountID, settingsErr)
+		// 数值字段坏了按默认处理（告警限频），排除字段坏了直接报错、不下单。
+		if settings, err = s.ResolveFundSettings(logical); err != nil {
+			return nil, err
 		}
 		target, targetErr := s.GetLogicalAccountTarget(ctx, spaceID, logical.LogicalAccountID)
 		if targetErr != nil && !errors.Is(targetErr, gorm.ErrRecordNotFound) {
@@ -73,4 +74,44 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 		}
 	}
 	return assets, nil
+}
+
+// ResolveFundSettings 是执行器、受管资产、清仓共用的资金设置读取入口：逐字段宽松解析，
+// 数值字段坏了取默认值并按组合限频告警（一小时一次）；排除字段坏了返回错误，调用方不能下单。
+func (s *Store) ResolveFundSettings(logical LogicalAccountRecord) (fundsettings.Settings, error) {
+	settings, warning, err := fundsettings.ParseLenient(logical.FundSettingsJSON)
+	if err != nil {
+		return fundsettings.Settings{}, fmt.Errorf("%w: 组合 %s：%v", ErrInvalidRecord, logical.LogicalAccountID, err)
+	}
+	if warning != nil && s.shouldWarnFundSettings(logical.LogicalAccountID) {
+		log.Warnf("交易关注项：组合 %s 的资金设置有字段无法解析，已按默认值（BNB 保留按开启）处理：%v", logical.LogicalAccountID, warning)
+	}
+	return settings, nil
+}
+
+// FundSettingsForAccount 取执行账户所属组合的资金设置：只有账户不在任何组合里（没有记录）才取默认值，
+// 其他读错误（数据库忙、超时）原样返回，不能悄悄按默认设置继续。
+func (s *Store) FundSettingsForAccount(ctx context.Context, spaceID, tradingAccountID string) (fundsettings.Settings, error) {
+	logical, _, err := s.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		settings, _, _ := fundsettings.ParseLenient("")
+		return settings, nil
+	}
+	if err != nil {
+		return fundsettings.Settings{}, err
+	}
+	return s.ResolveFundSettings(logical)
+}
+
+func (s *Store) shouldWarnFundSettings(logicalAccountID string) bool {
+	s.fundWarnMu.Lock()
+	defer s.fundWarnMu.Unlock()
+	if s.fundWarned == nil {
+		s.fundWarned = make(map[string]time.Time)
+	}
+	if last, ok := s.fundWarned[logicalAccountID]; ok && time.Since(last) < time.Hour {
+		return false
+	}
+	s.fundWarned[logicalAccountID] = time.Now()
+	return true
 }
