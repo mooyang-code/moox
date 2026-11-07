@@ -293,6 +293,12 @@ async function loadMissingMembers() {
   );
 }
 watch(selectedStrategy, () => void loadMissingMembers(), { immediate: true });
+// 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
+watch(accountOptions, options => {
+  if (!form.logical_account_id) return;
+  const kept = options.find(option => option.account.logical_account_id === form.logical_account_id);
+  if (!kept || kept.disabledReason) form.logical_account_id = "";
+});
 const activeMarkets = computed(() =>
   requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
 );

@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  collectionSourceMatches,
   isCrossMarketSelection,
   normalizeMarket,
   planTaskGroups,
   splitTaskName,
   taskTagSelectionError,
-  type CollectionSourceOption,
   type TaskTagRoute
 } from "./collection-task-params";
 
@@ -40,19 +38,7 @@ describe("unified dataset task creation", () => {
     expect(splitTaskName("币安", "")).toBe("币安");
   });
 
-  it("treats a unified source dataset as matching both spot and swap", () => {
-    const source: CollectionSourceOption = {
-      source_id: "d",
-      data_source_id: "binance",
-      data_kind: "DATA_KIND_TIME_SERIES",
-      attributes: { market_type: "multi" },
-      freq: "1m"
-    };
-    expect(collectionSourceMatches(source, "binance", "kline_resample", "spot", "1m")).toBe(true);
-    expect(collectionSourceMatches(source, "binance", "kline_resample", "swap", "1m")).toBe(true);
-    expect(collectionSourceMatches(source, "binance", "kline_resample", "equity", "1m")).toBe(false);
-    const spotOnly = { ...source, attributes: { market_type: "spot" } };
-    expect(collectionSourceMatches(spotOnly, "binance", "kline_resample", "swap", "1m")).toBe(false);
+  it("accepts multi as the market of a unified dataset", () => {
     expect(normalizeMarket("multi")).toBe("multi");
   });
 });

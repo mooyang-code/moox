@@ -94,7 +94,9 @@
         />
         <a-collapse :bordered="false" class="extra-sections">
           <a-collapse-item key="bindings" header="输入绑定（会话固化的结果 View 列与成员契约）"
-            ><ResolvedTable :resolved-json="store.instance.resolved_json"
+            ><ResolvedTable
+              :resolved-json="store.instance.resolved_json"
+              :pool="poolMembers(store.strategy?.dsl_yaml || '') !== null"
           /></a-collapse-item>
           <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（最近一次提交、各期投递状态与外显设置）">
             <StrategyFactorParams :instance="store.instance" />
@@ -118,6 +120,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import { poolMembers } from "@/views/strategy/market-mode";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";

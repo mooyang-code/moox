@@ -173,9 +173,12 @@ export function replayTasksText(replay: Pick<Replay, "tasks">): string {
   return tasksText(Object.fromEntries(Object.entries(replay.tasks ?? {}).map(([market, task]) => [market, task.factor_task_id])));
 }
 
-/** 回放是否读取永续：永续相关的列、费率与“未计资金费与强平”的说明只在这时显示。 */
+/**
+ * 回放是否读取永续：永续相关的列、费率与“未计资金费与强平”的说明只在这时显示。
+ * 统一数据集上的任务（键 multi）同时带现货与永续，也算读取永续。
+ */
 export function replayUsesSwap(replay: Pick<Replay, "tasks"> | null | undefined): boolean {
-  return Boolean(replay?.tasks?.swap);
+  return Boolean(replay?.tasks?.swap || replay?.tasks?.multi);
 }
 
 /** 回放的手续费说明：现货类一个费率，用到永续时再写永续的。 */

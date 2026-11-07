@@ -78,12 +78,17 @@ function factorText(column: { member?: string; member_kind?: string; factor_id: 
   const kind = column.member_kind === "var" ? " [可变]" : "";
   return `${member}${definition}${kind}${column.output_name ? ` · ${column.output_name}` : ""}`;
 }
-const props = defineProps<{ resolvedJson: string; emptyText?: string }>();
+// pool：这是策略池的绑定。池的市场模式只表示涉及哪些市场（成员市场的并集），选币和下单按各成员自己的 market。
+const props = defineProps<{ resolvedJson: string; emptyText?: string; pool?: boolean }>();
 const binding = computed(() => parseResolved(props.resolvedJson));
 // 市场模式：单市场写市场名；混合市场写 从哪里选、优先在哪里下单。
 const modeText = computed(() => {
   const market = binding.value?.market;
   if (!market?.select) return "-";
+  if (props.pool) {
+    const markets = market.select === "both" ? "现货、永续" : marketLabel(market.select);
+    return `成员市场的并集：${markets}（各成员按自己的 market 选币、下单）`;
+  }
   if (market.select === market.prefer || !market.prefer) return marketLabel(market.select);
   const select = market.select === "both" ? "现货、永续" : marketLabel(market.select);
   return `${select}中选币，优先在${marketLabel(market.prefer)}下单`;

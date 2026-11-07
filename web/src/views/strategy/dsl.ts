@@ -79,7 +79,7 @@ portfolio:
 
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
-# 需要同时绑定现货和永续两个因子任务（启用实例时分别选择），两个任务的列名要一致；
+# 创建实例时绑定因子任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
 # 混合市场不能用 tranche 规则与 factor_params。
 name: mixed_market_momentum
 bar: 1h
@@ -185,7 +185,7 @@ export interface DSLPreview {
   rules: DSLRulePreview[];
   universe: string;
   leverage: string;
-  /** 市场模式的说明；没写 market 时是“按因子任务的市场”。 */
+  /** 市场模式的说明；没写 market 时是“按因子任务的市场”，策略池是成员市场的并集。 */
   market: string;
   /** 策略池策略才有；此时 rules 为空。 */
   pool?: DSLPoolPreview;
@@ -238,7 +238,8 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
       rules,
       universe,
       leverage: value.portfolio?.leverage === undefined ? "1" : String(value.portfolio.leverage),
-      market: describeMarket(value.market),
+      // 策略池不写 market：池涉及的市场是各成员所需市场的并集，选币和下单按成员自己的 market
+      market: hasPool ? "成员市场的并集（各成员按自己的 market）" : describeMarket(value.market),
       ...(pool ? { pool } : {})
     },
     diagnostics

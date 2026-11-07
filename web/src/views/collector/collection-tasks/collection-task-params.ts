@@ -1,6 +1,6 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
-import { isUnifiedMarketType, marketLabel } from "@/views/data/shared/series-market";
+import { marketLabel } from "@/views/data/shared/series-market";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
 // K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
@@ -33,16 +33,6 @@ export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
 
 export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
 
-export interface CollectionSourceOption {
-  source_id: string;
-  name?: string;
-  data_source_id: string;
-  data_kind: string | number;
-  attributes?: Record<string, string>;
-  freq?: string;
-  retention?: string;
-}
-
 export interface CollectionTaskInput {
   dataType: CollectionTaskDataType;
   provider: string;
@@ -55,6 +45,8 @@ export interface CollectionTaskInput {
   sourceId?: string;
   sourceFrequency?: string;
   sourceSeriesTag?: string;
+  /** 源是统一数据集（现货加永续）时各条源序列的 series_tag，此时 sourceSeriesTag 为空 */
+  sourceSeriesTags?: string[];
   outputFields?: string[];
   tagIds?: string[];
 }
@@ -66,6 +58,8 @@ export interface KlineResampleParams extends Record<string, unknown> {
   source_dataset_id?: string;
   source_frequency?: string;
   source_series_tag?: string;
+  /** 源是统一数据集时各条源序列的 series_tag，与 source_series_tag 只会给出一个 */
+  source_series_tags?: string[];
   target_frequency: string;
   output_fields?: string[];
 }
@@ -150,6 +144,9 @@ export function parseKlineResampleParams(params: Record<string, unknown>): Kline
     source_dataset_id: stringValue(params.source_dataset_id),
     source_frequency: stringValue(params.source_frequency),
     source_series_tag: stringValue(params.source_series_tag),
+    ...(stringArrayValue(params.source_series_tags).length
+      ? { source_series_tags: stringArrayValue(params.source_series_tags) }
+      : {}),
     target_frequency: stringValue(params.target_frequency),
     ...(stringArrayValue(params.output_fields).length ? { output_fields: stringArrayValue(params.output_fields) } : {})
   };
@@ -210,6 +207,7 @@ export function parseCollectionTaskInput(
       sourceId: resample.source_dataset_id,
       sourceFrequency: resample.source_frequency,
       sourceSeriesTag: resample.source_series_tag,
+      sourceSeriesTags: resample.source_series_tags || [],
       outputFields: resample.output_fields || []
     };
   }
@@ -226,36 +224,6 @@ export function parseCollectionTaskInput(
 export function taskFrequency(task: Pick<CollectionTaskRecord, "data_type" | "collect_params">): string {
   const params = task.collect_params;
   return task.data_type === "kline_resample" ? stringValue(params.target_frequency) || "-" : stringValue(params.frequency) || "-";
-}
-
-export function collectionSourceMatches(
-  source: CollectionSourceOption,
-  provider: string,
-  dataType: string,
-  market?: string,
-  frequency?: string
-): boolean {
-  const normalizedType = normalizeDataType(dataType);
-  if (normalizedType !== "kline" && normalizedType !== "kline_resample" && source.data_source_id !== provider) {
-    return false;
-  }
-  const expectedKinds =
-    normalizedType === "kline" || normalizedType === "kline_resample"
-      ? ["DATA_KIND_TIME_SERIES", "time_series", 2]
-      : ["DATA_KIND_RECORD", "record", 1];
-  if (!expectedKinds.includes(source.data_kind)) return false;
-  if (market && !sourceMarketMatches(source.attributes?.market_type, market)) return false;
-  if (normalizedType === "kline_resample" && source.attributes?.dataset_role === "kline_resample_result") return false;
-  if (frequency && normalizeFrequency(source.freq || "") !== normalizeFrequency(frequency)) return false;
-  return true;
-}
-
-// 统一数据集（market_type 为 multi）同时放现货、永续两条序列，视为同时匹配现货和永续。
-function sourceMarketMatches(sourceMarket: string | undefined, market: string): boolean {
-  const actual = (sourceMarket || "").toLowerCase();
-  const wanted = market.toLowerCase();
-  if (actual === wanted) return true;
-  return isUnifiedMarketType(actual) && (wanted === "spot" || wanted === "swap");
 }
 
 function normalizeDataType(value: string): CollectionTaskDataType {

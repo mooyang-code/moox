@@ -1,8 +1,12 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { validateStrategy, listFactorTasks } = vi.hoisted(() => ({ validateStrategy: vi.fn(), listFactorTasks: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ validateStrategy }));
+const { validateStrategy, listFactorTasks, getStrategy } = vi.hoisted(() => ({
+  validateStrategy: vi.fn(),
+  listFactorTasks: vi.fn(),
+  getStrategy: vi.fn()
+}));
+vi.mock("@/api/strategy", () => ({ validateStrategy, getStrategy }));
 vi.mock("@/api/factor", () => ({ listFactorTasks }));
 vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
@@ -64,6 +68,26 @@ describe("strategy trial panel", () => {
       .map(item => item.attributes("value"))
       .filter(Boolean);
     expect(options).toEqual(["ftask_spot"]);
+  });
+
+  it("策略池按成员所需市场的并集选任务：成员一个现货、一个永续时两个市场都要选", async () => {
+    vi.useFakeTimers();
+    try {
+      getStrategy.mockReset().mockImplementation(async (id: string) => ({
+        dsl_yaml: id === "m_spot" ? "name: a\nmarket: {select: spot}\n" : "name: b\nmarket: {select: swap}\n"
+      }));
+      const source =
+        "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n";
+      const wrapper = mount(TrialPanel, { props: { source, spaceId: "s1" }, global: { stubs } });
+      expect(wrapper.text()).toContain("成员定义读到后才能确定");
+      await vi.advanceTimersByTimeAsync(500);
+      await flushPromises();
+      expect(getStrategy).toHaveBeenCalledTimes(2);
+      expect(wrapper.text()).toContain("策略池要绑定各成员所需市场的并集：现货、永续");
+      expect(wrapper.findAll("select")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops a response that arrives after the DSL changed", async () => {

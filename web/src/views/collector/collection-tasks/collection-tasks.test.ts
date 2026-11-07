@@ -178,7 +178,8 @@ describe("collector task workbench", () => {
     expect(source).toContain("按市场拆成两个任务");
     expect(source).toContain("crossMarketSelected");
     expect(source).toContain("planTaskGroups(selectedTagRoutes.value, organization.value)");
-    // 拆成两个任务时后一个失败要保留前一个并提示补建。
-    expect(source).toContain("请修正后单独补建这个任务");
+    // 拆成两个任务时后一个失败要保留前一个；重试跳过已建成的，只补建失败的那个。
+    expect(source).toContain("只会补建这个任务");
+    expect(source).toContain("createdTaskNames.has(groupName)");
   });
 });

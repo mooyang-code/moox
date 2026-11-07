@@ -34,10 +34,20 @@
       }}</a-button>
     </div>
     <p class="muted">
-      策略的市场模式需要绑定：{{
-        requirement.declared ? requirement.markets.map(marketLabel).join("、") : "一个因子任务（先选它的市场）"
-      }}；不选任务时只校验 DSL。
+      <template v-if="pool">
+        策略池要绑定各成员所需市场的并集：{{
+          pool.markets.length ? pool.markets.map(marketLabel).join("、") : "成员定义读到后才能确定"
+        }}；不选任务时只校验 DSL。
+      </template>
+      <template v-else>
+        策略的市场模式需要绑定：{{
+          requirement.declared ? requirement.markets.map(marketLabel).join("、") : "一个因子任务（先选它的市场）"
+        }}；不选任务时只校验 DSL。
+      </template>
     </p>
+    <div v-if="pool?.problems.length" class="muted">
+      <div v-for="item in pool.problems" :key="item">{{ item }}</div>
+    </div>
     <a-alert v-if="tasksError" type="error" show-icon class="block">因子任务列表加载失败：{{ tasksError }}</a-alert>
     <template v-if="result">
       <a-alert v-if="!result.diagnostics.length && !result.trial" type="success" show-icon class="block">DSL 校验通过</a-alert>
@@ -63,7 +73,7 @@
           <ResultItems :result="result.trial" :items="result.trial_items" />
         </a-tab-pane>
         <a-tab-pane v-if="result.resolved_json" key="binding" title="绑定解析"
-          ><ResolvedTable :resolved-json="result.resolved_json"
+          ><ResolvedTable :resolved-json="result.resolved_json" :pool="Boolean(pool)"
         /></a-tab-pane>
       </a-tabs>
     </template>
@@ -71,16 +81,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTaskInfo } from "@/api/factor/types";
-import { validateStrategy } from "@/api/strategy";
+import { getStrategy, validateStrategy } from "@/api/strategy";
 import type { ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { enabledTasks, isUnifiedTask, type TaskOption } from "@/views/strategy/components/task-options";
 import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
-import { marketLabel, marketRequirement, targetKey } from "@/views/strategy/market-mode";
+import { marketLabel, marketRequirement, poolMembers, poolRequirement, targetKey } from "@/views/strategy/market-mode";
 import { formatStrategyTime, percent, skipReasonLabel } from "@/views/strategy/model";
 
 const props = defineProps<{ source: string; spaceId: string }>();
@@ -98,7 +108,38 @@ let loadedSpace = "";
 let tasksRequest = 0;
 let runRequest = 0;
 
-const requirement = computed(() => marketRequirement(props.source));
+// 策略池：要绑定的市场是成员所需市场的并集，成员定义按需读取（null 表示不存在或读取失败）。
+const memberDefinitions = reactive<Record<string, string | null>>({});
+const pool = computed(() => poolRequirement(props.source, id => (id in memberDefinitions ? memberDefinitions[id] : undefined)));
+const requirement = computed(() =>
+  pool.value ? { declared: true, markets: pool.value.markets } : marketRequirement(props.source)
+);
+let memberRequest = 0;
+let memberTimer: ReturnType<typeof setTimeout> | undefined;
+// 编辑 DSL 时每次按键都会变，停下 400 毫秒后再读新出现的成员，避免把输入到一半的 ID 都读一遍。
+function scheduleMemberLoad() {
+  clearTimeout(memberTimer);
+  memberTimer = setTimeout(() => void loadMissingMembers(), 400);
+}
+async function loadMissingMembers() {
+  const requestId = memberRequest;
+  const missing = (poolMembers(props.source) ?? [])
+    .map(member => member.strategyId)
+    .filter(id => id && !(id in memberDefinitions));
+  await Promise.all(
+    [...new Set(missing)].map(async id => {
+      let definition: string | null = null;
+      try {
+        definition = (await getStrategy(id)).dsl_yaml || null;
+      } catch {
+        // 读取失败按“不存在或读取失败”提示
+      }
+      if (requestId === memberRequest) memberDefinitions[id] = definition;
+    })
+  );
+}
+watch(() => props.source, scheduleMemberLoad, { immediate: true });
+onBeforeUnmount(() => clearTimeout(memberTimer));
 const activeMarkets = computed(() =>
   requirement.value.declared ? requirement.value.markets : singleMarket.value ? [singleMarket.value] : []
 );
@@ -178,6 +219,10 @@ watch(
     runRequest += 1;
     loadedSpace = "";
     tasks.value = [];
+    // 成员定义属于原来的空间，换空间后重读
+    memberRequest += 1;
+    for (const key of Object.keys(memberDefinitions)) delete memberDefinitions[key];
+    scheduleMemberLoad();
     singleMarket.value = undefined;
     for (const key of Object.keys(selected)) delete selected[key];
     result.value = null;

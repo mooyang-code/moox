@@ -188,6 +188,9 @@ describe("replay model helpers", () => {
     expect(replayUsesSwap(single)).toBe(false);
     expect(replayUsesSwap(mixed)).toBe(true);
     expect(replayUsesSwap(null)).toBe(false);
+    const unified = { tasks: { multi: { factor_task_id: "ftask_u", view_id: "u" } }, spot_fee_bps: 10, swap_fee_bps: 5 };
+    expect(replayUsesSwap(unified), "统一数据集的任务同时带现货与永续").toBe(true);
+    expect(replayFeeText(unified)).toBe("现货 10 bps、永续 5 bps");
   });
 
   it("summarizes the equity curve in text", () => {
