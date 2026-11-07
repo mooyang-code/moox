@@ -3,7 +3,6 @@ export { TradeResponseError } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
-  BlockedInstrument,
   CreateTradingAccountReq,
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
@@ -30,12 +29,10 @@ import type {
   PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
-  ReduceLogicalAccountReq,
   SummarizeAccountPnlReq,
   SummarizeAccountPnlRsp,
   TradableInstrument,
   RetInfo,
-  UnblockInstrumentReq,
   UpdateTradingAccountReq
 } from "./types";
 
@@ -218,16 +215,6 @@ export function flattenLogicalAccount(action_id: string, logical_account_id: str
   >("console", "FlattenLogicalAccount", { action_id, logical_account_id, reason }, { silent: true });
 }
 
-/** 按比例减仓：先暂停组合、撤全部订单，再把现货和合约同比例减掉；同一个 action_id 重试不会再减一次 */
-export function reduceLogicalAccount(req: ReduceLogicalAccountReq) {
-  return callTrade<ReduceLogicalAccountReq, { ret_info: RetInfo; action: OperatorAction }>(
-    "console",
-    "ReduceLogicalAccount",
-    req,
-    { silent: true }
-  );
-}
-
 export function submitOrder(req: SubmitOrderReq) {
   return callTrade<SubmitOrderReq, { ret_info: RetInfo; action: OperatorAction; order: Order }>("console", "SubmitOrder", req, {
     silent: true
@@ -278,20 +265,6 @@ export function listFills(req: ListFillsReq = {}) {
 
 export function listPositions(req: ListPositionsReq) {
   return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
-}
-
-/** 下架名单（全局，不分空间） */
-export function listBlockedInstruments() {
-  return callTrade<Record<string, never>, { ret_info: RetInfo; instruments?: BlockedInstrument[] }>(
-    "console",
-    "ListBlockedInstruments",
-    {}
-  );
-}
-
-/** 把标的移出下架名单；removed 为 false 表示它本来就不在名单里 */
-export function unblockInstrument(req: UnblockInstrumentReq) {
-  return callTrade<UnblockInstrumentReq, { ret_info: RetInfo; removed?: boolean }>("console", "UnblockInstrument", req);
 }
 
 /** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */

@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +196,34 @@ func TestOtherOperatorOrdersStillPauseTheLogicalAccount(t *testing.T) {
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
 	result := f.converged(t)
 	require.Equal(t, StatusPaused, result.Status)
+}
+
+func reduceOnlyWarnings(executor *Executor) int {
+	count := 0
+	for key := range executor.warned {
+		if strings.HasPrefix(key, "reduce-only|") {
+			count++
+		}
+	}
+	return count
+}
+
+// 截断告警只在确实截掉了会下出的买入量时发：目标只比持仓多一点点（低于调仓阈值，本来也不会下单）不告警。
+func TestReduceOnlyWarningOnlyWhenTheTruncatedBuyWouldHaveBeenPlaced(t *testing.T) {
+	for _, c := range []struct {
+		target string
+		warns  int
+	}{{"20", 1}, {"5.1", 0}, {"5", 0}} {
+		f := newMixedExecutorFixture(t)
+		f.setSwapPosition("BTCUSDT", "5")
+		f.block(t, "SWAP", "BTCUSDT")
+		f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: c.target}})
+		f.now = time.Now().UTC()
+		executor := f.executor()
+		executor.MinBatchInterval = 0
+		_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+		require.NoError(t, err)
+		require.Empty(t, f.orders.specs, "目标 %s：加仓都被截掉", c.target)
+		require.Equal(t, c.warns, reduceOnlyWarnings(executor), "目标 %s", c.target)
+	}
 }

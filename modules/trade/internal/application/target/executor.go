@@ -375,8 +375,13 @@ func (e *Executor) Converge(
 		return Result{}, err
 	}
 	// 下架名单：名单里的标的只减不增，不能交易的整项跳过；在 reconcileResting 之前截断，名单标的的买入挂单会随之撤掉。
-	e.warnReduceOnly(logicalAccountID, constrainDesired(desired, members))
+	original := make(map[string]desiredTarget, len(desired))
+	for instrumentID, want := range desired {
+		original[instrumentID] = want
+	}
+	truncated := constrainDesired(desired, members)
 	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
+	e.warnReduceOnly(ctx, env, logicalAccountID, original, truncated, members)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
 	// resting 是本目标簿上有限价 GTC 挂单的标的：挂单不阻塞其他标的，剩余量从这个标的的差额里扣除。

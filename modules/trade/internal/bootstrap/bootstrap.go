@@ -231,11 +231,16 @@ func initialize(
 			if targetExecutor.Transfers == nil {
 				return false, marginmonitor.ErrTransferUnavailable
 			}
+			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。
 			return targetExecutor.Transfers.Collect(callCtx, spaceID,
-				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID, TargetID: actionID}, accounts)
+				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID}, accounts)
+		},
+		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
+			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
+			return pauseErr
 		},
 	}
-	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}
@@ -435,7 +440,7 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
-			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake},
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
 			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,

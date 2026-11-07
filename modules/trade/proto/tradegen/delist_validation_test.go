@@ -3,6 +3,7 @@ package tradepb
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/commonpb"
 )
@@ -61,6 +62,14 @@ func TestListOrdersOwnerTypeAndOperatorActionTypeAreChecked(t *testing.T) {
 	}
 	if err := (&ListOperatorActionsReq{LogicalAccountId: "l", Page: &commonpb.Page{Size: 1001}}).Validate(); err == nil {
 		t.Fatal("过大的页被接受")
+	}
+	now := time.Now().UnixMilli()
+	day := int64(24 * 60 * 60 * 1000)
+	if err := (&SummarizeAccountPnlReq{LogicalAccountId: "l", StartTime: now - 91*day, EndTime: now}).Validate(); err == nil {
+		t.Fatal("超过 90 天的时间范围被接受")
+	}
+	if err := (&SummarizeAccountPnlReq{LogicalAccountId: "l", StartTime: now - 89*day, EndTime: now}).Validate(); err != nil {
+		t.Fatalf("89 天应当有效：%v", err)
 	}
 	if err := (&SummarizeAccountPnlReq{StartTime: 1}).Validate(); err == nil {
 		t.Fatal("缺组合和执行账户被接受")

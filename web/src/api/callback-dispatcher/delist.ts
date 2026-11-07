@@ -23,6 +23,16 @@ export interface InstrumentHolder {
   dust: boolean;
   /** 模拟盘。 */
   paper: boolean;
+  /** 执行账户状态：ENABLED、DISABLED、ERROR；停用和出错的账户照常列出。 */
+  status: string;
+  /** 对这一项的标注，例如零头只按最小数量判断。 */
+  note: string;
+}
+
+/** 查询时出错、没能判断的账户：不能当成没有持有。 */
+export interface SkippedAccount {
+  trading_account_id: string;
+  reason: string;
 }
 
 /** 持有者预览：除了列表，还说明这份列表能不能当真。 */
@@ -35,6 +45,10 @@ export interface HoldersPreview {
   verified: boolean;
   /** Trade 没有这个标的（没开通对应市场的账户），自然没有策略持有。 */
   instrumentUnknown: boolean;
+  /** 出错没能判断的账户；非空时 verified 为 false。 */
+  skippedAccounts: SkippedAccount[];
+  /** 明确不算持有的说明（例如标的计价币不是账户的结算币）。 */
+  notes: string[];
 }
 
 export interface ListInstrumentHoldersReq {
@@ -78,7 +92,13 @@ export function buildHoldersRequest(input: {
 export async function listInstrumentHolders(input: Parameters<typeof buildHoldersRequest>[0]): Promise<HoldersPreview> {
   const rsp = await callTrade<
     ListInstrumentHoldersReq,
-    { ret_info: RetInfo; holders?: Partial<InstrumentHolder>[]; instrument_unknown?: boolean }
+    {
+      ret_info: RetInfo;
+      holders?: Partial<InstrumentHolder>[];
+      instrument_unknown?: boolean;
+      skipped_accounts?: Partial<SkippedAccount>[];
+      notes?: string[];
+    }
   >("console", "ListInstrumentHolders", buildHoldersRequest(input), { silent: true });
   const instrumentUnknown = Boolean(rsp.instrument_unknown);
   const holders = (rsp.holders ?? []).map(item => ({
@@ -87,11 +107,23 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
     trading_account_id: item.trading_account_id ?? "",
     quantity: String(item.quantity ?? ""),
     dust: Boolean(item.dust),
-    paper: Boolean(item.paper)
+    paper: Boolean(item.paper),
+    status: item.status ?? "",
+    note: item.note ?? ""
+  }));
+  const skippedAccounts = (rsp.skipped_accounts ?? []).map(item => ({
+    trading_account_id: item.trading_account_id ?? "",
+    reason: item.reason ?? ""
   }));
   // 不替对方改写 paper：对方违约要让人看得出来，而不是被掩盖。
   const violated = (input.paper_only && holders.some(item => !item.paper)) || (instrumentUnknown && holders.length > 0);
-  return { holders, verified: (Array.isArray(rsp.holders) || instrumentUnknown) && !violated, instrumentUnknown };
+  return {
+    holders,
+    verified: (Array.isArray(rsp.holders) || instrumentUnknown) && !violated && skippedAccounts.length === 0,
+    instrumentUnknown,
+    skippedAccounts,
+    notes: rsp.notes ?? []
+  };
 }
 
 export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promise<RegisterDelistNoticeResult> {

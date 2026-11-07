@@ -7,6 +7,7 @@ import (
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -128,12 +129,46 @@ func capReduceOnly(target, position shared.Decimal) shared.Decimal {
 }
 
 // warnReduceOnly 对截掉了加仓的标的告警，同一个组合、同一个标的每天一次。
-func (e *Executor) warnReduceOnly(logicalAccountID string, instrumentIDs []string) {
+// 只在截掉的买入量确实会下出去时才告警：目标比持仓只多一点点（低于调仓阈值、低于最小下单额）本来也不会下单，不算。
+func (e *Executor) warnReduceOnly(ctx context.Context, env *laneEnv, logicalAccountID string, original map[string]desiredTarget, truncated []string, members []memberState) {
 	day := e.now().Format("2006-01-02")
-	for _, instrumentID := range instrumentIDs {
+	for _, instrumentID := range truncated {
+		if !e.truncationMatters(ctx, env, instrumentID, original[instrumentID], members) {
+			continue
+		}
 		e.warnOnce(
 			"reduce-only|"+logicalAccountID+"|"+instrumentID+"|"+day,
 			fmt.Sprintf("组合 %s 的标的 %s 在下架名单里，目标里加仓的部分已去掉，只减不增", logicalAccountID, instrumentID),
 		)
 	}
+}
+
+// truncationMatters 判断截断之前的目标会不会下出买单：超过调仓阈值，且按步长取整后的金额不低于设置的最小下单额。
+func (e *Executor) truncationMatters(ctx context.Context, env *laneEnv, instrumentID string, want desiredTarget, members []memberState) bool {
+	confirmed := shared.Zero()
+	for _, member := range members {
+		if !member.skip[instrumentID] {
+			confirmed = confirmed.Add(member.positions[instrumentID])
+		}
+	}
+	if env.withinRebalanceThreshold(want.Quantity, confirmed, members, instrumentID) {
+		return false
+	}
+	for _, member := range members {
+		instrument, ok := member.instruments[instrumentID]
+		if !ok || member.skip[instrumentID] {
+			continue
+		}
+		delta := want.Quantity.Sub(confirmed)
+		quantity := floorToStep(delta.Abs(), mustBaseStep(instrument))
+		if quantity.IsZero() {
+			return false
+		}
+		quote, err := e.Prices.LatestPrice(ctx, member.account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
+			return true // 拿不到报价，判断不了，宁可提醒
+		}
+		return !env.belowConfiguredMinimum(laneAction{member: member, instrument: instrument, delta: delta}, quantity, quote.Price)
+	}
+	return false
 }

@@ -463,7 +463,7 @@
 | `trade logical target` | 查看逻辑账户当前的目标 |
 | `trade order list` | 列出订单；`--owner-type` 按来源过滤（TARGET、OPERATOR、EXTERNAL、SYSTEM） |
 | `trade order show` | 查看订单 |
-| `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，最长 90 天，超出标明截断） |
+| `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate

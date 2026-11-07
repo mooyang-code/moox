@@ -53,7 +53,7 @@ const (
 func (s *Store) BlockInstrument(ctx context.Context, record BlockedInstrumentRecord) (bool, error) {
 	record.Exchange = strings.ToUpper(strings.TrimSpace(record.Exchange))
 	record.MarketType = strings.ToUpper(strings.TrimSpace(record.MarketType))
-	record.ExchangeSymbol = strings.TrimSpace(record.ExchangeSymbol)
+	record.ExchangeSymbol = strings.ToUpper(strings.TrimSpace(record.ExchangeSymbol))
 	record.Reason = strings.TrimSpace(record.Reason)
 	if record.Exchange == "" || record.MarketType == "" || record.ExchangeSymbol == "" || record.Reason == "" {
 		return false, fmt.Errorf("%w: incomplete blocked instrument", ErrInvalidRecord)
@@ -73,7 +73,7 @@ func (s *Store) BlockInstrument(ctx context.Context, record BlockedInstrumentRec
 // UnblockInstrument 把标的从下架名单里去掉；不在名单里返回 removed=false，不算错误。
 func (s *Store) UnblockInstrument(ctx context.Context, exchange, marketType, exchangeSymbol string) (bool, error) {
 	result := s.db.WithContext(ctx).Exec(sqlDeleteBlockedInstrument,
-		strings.ToUpper(strings.TrimSpace(exchange)), strings.ToUpper(strings.TrimSpace(marketType)), strings.TrimSpace(exchangeSymbol))
+		strings.ToUpper(strings.TrimSpace(exchange)), strings.ToUpper(strings.TrimSpace(marketType)), strings.ToUpper(strings.TrimSpace(exchangeSymbol)))
 	if err := writeError(result.Error); err != nil {
 		return false, err
 	}

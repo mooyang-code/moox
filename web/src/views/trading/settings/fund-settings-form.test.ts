@@ -3,6 +3,7 @@ import {
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
+  marginMonitorHiddenNote,
   parseAssetList,
   showsLiveOnlyFields,
   showsMarginMonitor,
@@ -234,13 +235,26 @@ describe("fund settings form", () => {
       );
     });
 
-    it("只有模拟盘不显示；含非币安成员的实盘组合照常显示和校验", () => {
+    it("只对生产环境的币安实盘显示：模拟盘、测试网、含 OKX 的组合都隐藏", () => {
       expect(showsMarginMonitor()).toBe(true);
-      expect(showsMarginMonitor({ nonBinance: true })).toBe(true);
+      expect(showsMarginMonitor({ nonBinance: false, testnet: false, hasOkx: false })).toBe(true);
       expect(showsMarginMonitor({ paper: true })).toBe(false);
+      expect(showsMarginMonitor({ testnet: true })).toBe(false);
+      expect(showsMarginMonitor({ hasOkx: true })).toBe(false);
+      expect(showsMarginMonitor({ hasOkx: true, nonBinance: true, testnet: true, paper: true })).toBe(false);
       const bad = withMargin({ margin_reduce_ratio: "1" });
-      expect(validateFundSettingsModel(bad, { nonBinance: true })).toContain("触发后减仓比例");
-      expect(validateFundSettingsModel(bad, { paper: true })).toBe("");
+      expect(validateFundSettingsModel(bad)).toContain("触发后减仓比例");
+      for (const scope of [{ paper: true }, { testnet: true }, { hasOkx: true }]) {
+        expect(validateFundSettingsModel(bad, scope)).toBe("");
+      }
+    });
+
+    it("隐藏时的说明：含 OKX 要说明没有保护，测试网说明只对生产生效，模拟盘由整体说明负责", () => {
+      expect(marginMonitorHiddenNote()).toBe("");
+      expect(marginMonitorHiddenNote({ paper: true })).toBe("");
+      expect(marginMonitorHiddenNote({ hasOkx: true })).toContain("OKX 账户的保证金率监控暂未接入");
+      expect(marginMonitorHiddenNote({ hasOkx: true, testnet: true })).toContain("没有保证金率保护");
+      expect(marginMonitorHiddenNote({ testnet: true })).toContain("生产环境");
     });
 
     it("提交时去掉空白，空值不带字段；开关按所填提交", () => {
@@ -258,24 +272,22 @@ describe("fund settings form", () => {
         margin_monitor_disabled: true
       });
       expect(request.unified_mmr_threshold).toBeUndefined();
-      // 含非币安成员的实盘组合（例如 OKX）照样提交
-      expect(buildFundSettingsRequest(withMargin({ margin_ratio_threshold: "0.4" }), { nonBinance: true })).toMatchObject({
-        margin_ratio_threshold: "0.4"
-      });
     });
 
-    it("模拟盘按默认值提交，不带过期的旧值", () => {
+    it("模拟盘、测试网、含 OKX 的组合按默认值提交，不带过期的旧值", () => {
       const stale = withMargin({
         margin_ratio_threshold: "0.4",
         unified_mmr_threshold: "1.3",
         margin_reduce_ratio: "0.2",
         margin_monitor_disabled: true
       });
-      const request = buildFundSettingsRequest(stale, { paper: true });
-      expect(request.margin_ratio_threshold).toBeUndefined();
-      expect(request.unified_mmr_threshold).toBeUndefined();
-      expect(request.margin_reduce_ratio).toBeUndefined();
-      expect(request.margin_monitor_disabled).toBe(false);
+      for (const scope of [{ paper: true }, { testnet: true }, { hasOkx: true }]) {
+        const request = buildFundSettingsRequest(stale, scope);
+        expect(request.margin_ratio_threshold).toBeUndefined();
+        expect(request.unified_mmr_threshold).toBeUndefined();
+        expect(request.margin_reduce_ratio).toBeUndefined();
+        expect(request.margin_monitor_disabled).toBe(false);
+      }
     });
 
     it("读不出来时按默认值重置：监控开着、阈值都用默认", () => {

@@ -210,23 +210,65 @@ func TestSummarizeAccountPnlFundingPagesAndMarksTruncation(t *testing.T) {
 	require.Empty(t, rsp.GetFees(), "没有成交就没有手续费")
 }
 
-func TestSummarizeAccountPnlTruncatesLongWindowsAndIncompletePages(t *testing.T) {
+// 翻页挪不动、没取完：标明截断并写明说明。
+func TestSummarizeAccountPnlTruncatesIncompletePages(t *testing.T) {
 	server := ledgerServer(t, nil)
 	end := time.Now().UTC()
-	// 每页都说还有更多、而且挪不动：翻页停下，标明截断。
-	stuck := exchange.LedgerPage{HasMore: true, Entries: []exchange.LedgerEntry{funding("1", end.UnixMilli(), "1")}}
+	stuck := exchange.LedgerPage{HasMore: true, Entries: []exchange.LedgerEntry{funding("1", end.Add(-time.Hour).UnixMilli(), "1")}}
 	adapter := &pnlLedgerAdapter{pages: []exchange.LedgerPage{stuck}}
 	server.Adapters = adapterMap{"account-1": adapter}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 
 	rsp, err := server.SummarizeAccountPnl(ctx, &tradepb.SummarizeAccountPnlReq{
-		TradingAccountId: "account-1", EndTime: end.UnixMilli(), StartTime: end.Add(-120 * 24 * time.Hour).UnixMilli(),
+		TradingAccountId: "account-1", EndTime: end.UnixMilli(), StartTime: end.Add(-30 * 24 * time.Hour).UnixMilli(),
 	})
 
 	require.NoError(t, err)
-	require.True(t, rsp.GetFundingTruncated(), "窗口超过 90 天，且翻页没取完")
-	require.Contains(t, rsp.GetFundingNote(), "90 天")
-	require.Equal(t, end.Add(-maxFundingWindow).UnixMilli(), adapter.calls[0].Start.UnixMilli(), "最长只查 90 天")
+	require.True(t, rsp.GetFundingTruncated())
+	require.Contains(t, rsp.GetFundingNote(), "流水条数太多")
+	require.Equal(t, end.Add(-time.Hour).UnixMilli(), rsp.GetFundingFrom(), "统计起点是已取到的最老时间")
+}
+
+// 多个账户都没取完时，统计起点取各账户已取到的最老时间里最晚的一个（这之后所有账户才都取全了），不是最早的。
+func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T) {
+	server := ledgerServer(t, nil)
+	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-2", Name: "paper-2", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
+		})
+	}))
+	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+		}); err != nil {
+			return err
+		}
+		for _, id := range []string{"account-1", "account-2"} {
+			if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+				SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: id, Enabled: true, Priority: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	end := time.Now().UTC()
+	older, newer := end.Add(-10*time.Hour).UnixMilli(), end.Add(-2*time.Hour).UnixMilli()
+	server.Adapters = adapterMap{
+		"account-1": &pnlLedgerAdapter{pages: []exchange.LedgerPage{{HasMore: true, Entries: []exchange.LedgerEntry{funding("a", older, "1")}}}},
+		"account-2": &pnlLedgerAdapter{pages: []exchange.LedgerPage{{HasMore: true, Entries: []exchange.LedgerEntry{funding("b", newer, "1")}}}},
+	}
+	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
+
+	rsp, err := server.SummarizeAccountPnl(ctx, &tradepb.SummarizeAccountPnlReq{
+		LogicalAccountId: "logical-1", EndTime: end.UnixMilli(), StartTime: end.Add(-24 * time.Hour).UnixMilli(),
+	})
+
+	require.NoError(t, err)
+	require.True(t, rsp.GetFundingTruncated())
+	require.Equal(t, newer, rsp.GetFundingFrom())
 }
 
 func TestSummarizeAccountPnlWithoutLedgerExplainsWhy(t *testing.T) {

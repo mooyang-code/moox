@@ -15,8 +15,6 @@ import (
 
 const (
 	defaultPnlWindow = 7 * 24 * time.Hour
-	// maxFundingWindow 与资金流水一次查询的最长时间窗一致（OKX 归档账单只保留 3 个月）。
-	maxFundingWindow = 90 * 24 * time.Hour
 	// fundingPageLimit 是流水每页条数；fundingMaxPages 限制翻页次数：流水里成交、手续费也占条数，
 	// 窗口太长时只取到最近的一部分，如实标明截断。
 	fundingPageLimit = 1000
@@ -24,7 +22,7 @@ const (
 )
 
 // SummarizeAccountPnl 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
-// 手续费按手续费资产分别列出，不折算成结算币；资金费窗口超过 90 天、翻页取不完或有账户查不到时标明截断。
+// 手续费按手续费资产分别列出，不折算成结算币；资金费翻页取不完或有账户查不到时标明截断。时间范围最长 90 天（请求校验里限制）。
 func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.SummarizeAccountPnlReq) (*tradepb.SummarizeAccountPnlRsp, error) {
 	spaceID, err := requiredSpace(ctx)
 	if err == nil {
@@ -93,16 +91,13 @@ func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
 
 // summarizeFunding 从各个有永续市场的执行账户的交易所流水里汇总资金费。
 func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
-	effectiveStart := start
 	truncated := false
-	if end.Sub(start) > maxFundingWindow {
-		effectiveStart, truncated = end.Add(-maxFundingWindow), true
-	}
 	totals := map[string]shared.Decimal{}
 	var assets []string
 	var notes []string
 	queried := 0
-	earliest := end
+	// reached 是各个没取完的账户已经取到的最老时间里最晚的一个：只有这个时间之后的资金费，所有账户都取全了。
+	var reached time.Time
 	// 所有账户的流水查询共用一个期限：要明显小于网关给这个接口的调用超时，到点后没查的账户记为截断。
 	ctx, cancel := context.WithTimeout(ctx, ledgerQueryTimeout)
 	defer cancel()
@@ -116,7 +111,7 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 			truncated = true
 			continue
 		}
-		entries, complete, oldest, err := fundingEntries(ctx, source, effectiveStart, end)
+		entries, complete, oldest, err := fundingEntries(ctx, source, start, end)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("账户 %s 的流水查询失败：%v", account.Name, err))
 			truncated = true
@@ -125,8 +120,8 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 		queried++
 		if !complete {
 			truncated = true
-			if oldest.After(effectiveStart) && oldest.Before(earliest) {
-				earliest = oldest
+			if oldest.After(reached) {
+				reached = oldest
 			}
 		}
 		for _, entry := range entries {
@@ -145,9 +140,9 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 		return
 	}
 	rsp.FundingAvailable = true
-	from := effectiveStart
-	if earliest.Before(end) && earliest.After(from) {
-		from = earliest
+	from := start
+	if reached.After(from) {
+		from = reached
 	}
 	rsp.FundingFrom = from.UnixMilli()
 	rsp.FundingTruncated = truncated
@@ -155,12 +150,8 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 	for _, asset := range assets {
 		rsp.FundingFees = append(rsp.FundingFees, &tradepb.PnlAmount{Asset: asset, Amount: totals[asset].String()})
 	}
-	if truncated {
-		if effectiveStart.After(start) {
-			notes = append(notes, "资金费最长统计 90 天，更早的部分没有计入")
-		} else if from.After(effectiveStart) {
-			notes = append(notes, "流水条数太多，只统计到最近的一部分")
-		}
+	if from.After(start) {
+		notes = append(notes, "流水条数太多，只统计到最近的一部分")
 	}
 	rsp.FundingNote = strings.Join(notes, "；")
 }

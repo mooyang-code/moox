@@ -64,9 +64,8 @@
     <section v-if="marginMonitor" class="settings-group">
       <h4>保证金率监控</h4>
       <p class="settings-hint">
-        只对实盘组合生效，币安、OKX
-        都适用。触发后会暂停这个组合的自动执行，并把每个持仓按“触发后减仓比例”同比例减掉；普通账户还会把现货钱包里的
-        {{ unit }} 归集回合约钱包。触发后组合保持暂停，需要你确认账户安全后手动恢复。
+        只对生产环境的币安实盘组合生效。触发后会暂停这个组合的自动执行，并把每个持仓按“触发后减仓比例”同比例减掉；普通账户的钱包划转还没有接入，只会提示你手动把现货钱包里的
+        {{ unit }} 划回合约钱包。触发后组合保持暂停，需要你确认账户安全后手动恢复。
       </p>
       <a-form-item label="关闭保证金率监控" extra="开启后不再监控，触发条件满足也不会暂停组合或减仓">
         <a-switch v-model="model.margin_monitor_disabled" />
@@ -94,6 +93,7 @@
     <a-alert v-else-if="!liveOnly" type="info" class="settings-error">
       BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只对币安实盘组合生效，这个组合不显示。
     </a-alert>
+    <a-alert v-if="marginNote" type="info" class="settings-error">{{ marginNote }}</a-alert>
     <a-alert v-if="formError" type="error" class="settings-error">{{ formError }}</a-alert>
     <a-alert v-if="props.error" type="error" class="settings-error">
       已保存的资金设置读不出来（{{ props.error }}），先修好再保存，否则会覆盖原来的设置。
@@ -119,6 +119,7 @@ import {
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
+  marginMonitorHiddenNote,
   showsLiveOnlyFields,
   showsMarginMonitor,
   validateFundSettingsModel
@@ -127,7 +128,8 @@ import {
 /**
  * 资金设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
  * 由父组件调用 updateLogicalAccountFundSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
- * paper、nonBinance 为真时不显示仅币安实盘生效的项；paper 为真时也不显示保证金率监控（它不分交易所，只看是不是实盘）。
+ * paper、nonBinance 为真时不显示仅币安实盘生效的项；保证金率监控只对生产环境的币安实盘生效，
+ * paper、testnet、hasOkx 任一为真时不显示（不校验，提交按默认值）。
  */
 const props = defineProps<{
   settings?: FundSettings;
@@ -138,14 +140,25 @@ const props = defineProps<{
   paper?: boolean;
   /** 组合里有非币安成员。父组件要把停用成员也算上（后端按全部成员判断，包括停用的） */
   nonBinance?: boolean;
+  /** 测试网组合（不监控保证金率）。父组件按交易账户的环境传入 */
+  testnet?: boolean;
+  /** 组合里有 OKX 成员（OKX 保证金率监控未接入）。父组件要把停用成员也算上 */
+  hasOkx?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和底仓不能写它 */
   settlementAsset?: string;
 }>();
 const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
-const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance, settlementAsset: props.settlementAsset }));
+const scope = computed(() => ({
+  paper: props.paper,
+  nonBinance: props.nonBinance,
+  testnet: props.testnet,
+  hasOkx: props.hasOkx,
+  settlementAsset: props.settlementAsset
+}));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
 const marginMonitor = computed(() => showsMarginMonitor(scope.value));
+const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
 const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
 
 const model = reactive(fundSettingsToModel(props.settings));

@@ -281,9 +281,11 @@ func (s *Service) delistStillBlocked(ctx context.Context, spaceID, tradingAccoun
 	return blocked.ContainsInstrument(account.Exchange, instrument), nil
 }
 
-// stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单并结束，
-// 账户记 COMPLETED 并带“已解除禁止”标记，不记 FAILED 或 PARTIAL，免得事件中心按规则重试。
-// 查名单失败时不停（按仍在名单里继续），错误留给后面的步骤；返回 true 表示已结束。
+// stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单，撤单之后同步并确认它们都结束了，
+// 账户才记 COMPLETED 并带“已解除禁止”标记（不记 FAILED 或 PARTIAL，免得事件中心按规则重试）。
+// 撤单还没确认结束时这个账户这一轮到此为止（记运行中、可重试），下一轮接着确认：不能返回去继续下单，
+// 也不能把还没结束的订单留给执行器（它会把这笔 OPERATOR 单当冲突、暂停组合）。
+// 查名单失败时不停（按仍在名单里继续），错误留给后面的步骤；返回 true 表示这个账户这一轮不再往下做。
 func (s *Service) stopIfUnblocked(
 	ctx context.Context,
 	command FlattenCommand,
@@ -298,32 +300,42 @@ func (s *Service) stopIfUnblocked(
 	if err != nil || blocked {
 		return false
 	}
-	if err := s.cancelOwnOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID, result); err != nil {
-		// 撤不掉就先不结束，下一轮再试；订单还在，结果不能报完成。
-		result.addError(err)
-		return false
+	canceled, err := s.cancelOwnOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID, result)
+	if err == nil {
+		err = s.syncAfterCancel(ctx, tradingAccountID, canceled)
+	}
+	if err == nil {
+		err = s.confirmFlattenChildren(ctx, command, tradingAccountID, result)
+	}
+	if err != nil {
+		result.Status, result.decided, result.retry = "RUNNING", true, true
+		// 只是还没做完：写进说明，不当作这次调用的错误（cause 留空）。
+		result.Error, result.cause = "已解除禁止，撤单还没确认结束，下一轮继续："+err.Error(), nil
+		return true
 	}
 	result.Status, result.Error, result.cause = "COMPLETED", "", nil
 	result.Unblocked, result.decided, result.retry = true, true, false
 	return true
 }
 
-// cancelOwnOrders 撤掉本动作自己下的、还没结束的订单。
-func (s *Service) cancelOwnOrders(ctx context.Context, spaceID, tradingAccountID, actionID string, result *FlattenAccountResult) error {
+// cancelOwnOrders 撤掉本动作自己下的、还没结束的订单，返回是否撤了单。
+func (s *Service) cancelOwnOrders(ctx context.Context, spaceID, tradingAccountID, actionID string, result *FlattenAccountResult) (bool, error) {
 	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
-		return err
+		return false, err
 	}
+	canceled := false
 	var cancelErrors []error
 	for _, current := range records {
 		if orderdomain.State(current.State).Terminal() ||
 			current.OwnerType != string(orderdomain.OwnerOperator) || current.OwnerID != actionID {
 			continue
 		}
+		canceled = true
 		result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, current.OrderID)
 		if err := s.stopOrder(ctx, current); err != nil {
 			cancelErrors = append(cancelErrors, fmt.Errorf("cancel order %s: %w", current.OrderID, err))
 		}
 	}
-	return errors.Join(cancelErrors...)
+	return canceled, errors.Join(cancelErrors...)
 }

@@ -201,20 +201,6 @@ describe("Trade public API", () => {
     ).toBe("0.1");
   });
 
-  it("下架名单：读取只读，解除禁止和按比例减仓是写操作", async () => {
-    await trade.listBlockedInstruments();
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListBlockedInstruments", {});
-
-    const unblock = { exchange: 1 as const, market_type: 2 as const, exchange_symbol: "BTCUSDT" };
-    await trade.unblockInstrument(unblock);
-    // 解除禁止由管理台直接操作，业务错误走默认弹窗，不加 silent
-    expect(callTrade).toHaveBeenLastCalledWith("console", "UnblockInstrument", unblock);
-
-    const reduce = { action_id: "action-1", logical_account_id: "logical-1", reduce_ratio: "0.1", reason: "保证金率过低" };
-    await trade.reduceLogicalAccount(reduce);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ReduceLogicalAccount", reduce, { silent: true });
-  });
-
   it("管理台不暴露只给事件中心用的写入接口", () => {
     expect(trade).not.toHaveProperty("blockInstrument");
     expect(trade).not.toHaveProperty("flattenInstrument");

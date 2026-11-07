@@ -106,7 +106,7 @@
 
 ## 交易（只读）
 
-- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（跌破阈值自动暂停组合并按比例减仓）。
+- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
 - **在哪**：独立单元 `trade`，默认海外机（`[deployments]` 决定）。
 - **常用**（都是只读，写操作由用户在管理台做）：
 
@@ -114,7 +114,7 @@
 ./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
 ./bin/moox-cli trade order list --logical-account-id <ID> [--owner-type TARGET|OPERATOR|EXTERNAL|SYSTEM]   # 订单，可按来源过滤
 ./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
-./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（超出 90 天标明截断）
+./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
 ./bin/moox-cli trade blocked list                                  # 下架名单（全局）
 ./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
 ```
