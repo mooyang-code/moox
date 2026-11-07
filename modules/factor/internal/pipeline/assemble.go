@@ -43,6 +43,11 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		return nil, AssembleReport{}, err
 	}
 	applied := make(map[ItemKey]bool)
+	appliedSeries := make(map[seriesItem]bool) // 统一数据集：每条序列各自取得有效值的项
+	markApplied := func(member domain.MemberDef, subject, tag string, at time.Time) {
+		applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+		appliedSeries[seriesItem{ItemKey: ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}, tag: tag}] = true
+	}
 	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
@@ -155,7 +160,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 						continue
 					}
 					if applyFactorValues(plan, rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, outputs, factorColumns) {
-						applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+						markApplied(member, subject, tag, at)
 					} else {
 						failedItems[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
 						failApply(member, subject, tag)
@@ -183,7 +188,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 					continue
 				}
 				if applyFactorValues(plan, rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, outputs, factorColumns) {
-					applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+					markApplied(member, subject, tag, at)
 				} else {
 					failedItems[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
 					failApply(member, subject, tag)
@@ -250,7 +255,7 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		return out[i].SeriesTag < out[j].SeriesTag
 	})
 	if plan.multi() {
-		r.failUnavailableSeriesItems(plan, loaded, computation, failedItems)
+		r.failUnavailableSeriesItems(plan, loaded, computation, appliedSeries, failedItems)
 	}
 	for key := range failedItems {
 		delete(applied, key)
@@ -492,9 +497,16 @@ func markFactorSeriesFailure(computation Computation, failed map[string]map[fail
 	computation.FactorStates[member.Key] = state
 }
 
-// failUnavailableSeriesItems 统一数据集：标的有序列缺数、或所在 tag 被跳过时，这个 (成员, 标的, 周期) 不算取得有效值，
-// 不能因为另一个市场的序列成功就确认（补算与缺口恢复据此保留待办）。
-func (r *Runner) failUnavailableSeriesItems(plan Plan, loaded LoadResult, computation Computation, failedItems map[ItemKey]bool) {
+// seriesItem 是统一数据集里（成员、标的、周期、series_tag）一条序列上的结果项。
+type seriesItem struct {
+	ItemKey
+	tag string
+}
+
+// failUnavailableSeriesItems 统一数据集：这个 (成员, 标的, 周期) 要期望且可用的每条序列在该周期都取得有效值才算写成，
+// 缺一条（序列整段缺数、所在 tag 被跳过、或这一周期那条序列没有行/没有取得值）就记为失败——
+// 不能因为另一个市场的序列成功就确认（补算与缺口恢复据此保留待办），与单序列数据集“缺这一根就是失败”同一口径。
+func (r *Runner) failUnavailableSeriesItems(plan Plan, loaded LoadResult, computation Computation, appliedSeries map[seriesItem]bool, failedItems map[ItemKey]bool) {
 	targets, err := r.itemTargets(plan)
 	if err != nil {
 		return
@@ -504,11 +516,12 @@ func (r *Runner) failUnavailableSeriesItems(plan Plan, loaded LoadResult, comput
 		skipped := computation.FactorStates[member.Key].SkippedSeriesTags
 		for _, item := range plan.ExpectedSeries {
 			_, isMissing := missing[item]
-			if !isMissing && !tagIn(skipped, item.SeriesTag) {
-				continue
-			}
+			unavailable := isMissing || tagIn(skipped, item.SeriesTag)
 			for _, target := range targets {
-				failedItems[ItemKey{Member: member.Key, Subject: item.SubjectID, Period: target.UTC()}] = true
+				key := ItemKey{Member: member.Key, Subject: item.SubjectID, Period: target.UTC()}
+				if unavailable || !appliedSeries[seriesItem{ItemKey: key, tag: item.SeriesTag}] {
+					failedItems[key] = true
+				}
 			}
 		}
 	}
