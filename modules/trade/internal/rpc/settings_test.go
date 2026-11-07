@@ -1,0 +1,113 @@
+package rpc
+
+import (
+	"context"
+	"testing"
+
+	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"github.com/stretchr/testify/require"
+)
+
+func newSettingsHandler(t *testing.T) (*LogicalAccountServer, context.Context) {
+	t.Helper()
+	tradeStore := openRPCStore(t)
+	handler := &LogicalAccountServer{
+		LogicalAccounts: &logicalapp.Service{Store: tradeStore},
+		Store:           tradeStore,
+		NewID:           func() string { return "logical-1" },
+	}
+	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
+	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
+		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
+	// 新建的组合读到的就是默认设置。
+	require.Equal(t, "TARGET_RATIO", created.GetLogicalAccount().GetOrderSettings().GetRebalanceThresholdMode())
+	require.Equal(t, "PSEUDO_MARKET", created.GetLogicalAccount().GetOrderSettings().GetOrderMode())
+	return handler, ctx
+}
+
+func TestUpdateOrderSettingsStoresAndReturnsEffectiveValues(t *testing.T) {
+	handler, ctx := newSettingsHandler(t)
+	response, err := handler.UpdateLogicalAccountOrderSettings(ctx, &tradepb.UpdateLogicalAccountOrderSettingsReq{
+		LogicalAccountId: "logical-1",
+		Settings: &tradepb.OrderSettings{
+			RebalanceThresholdMode: "EQUITY_RATIO", RebalanceThresholdRatio: "0.02",
+			HourlyCapSwap: map[string]string{"btc-usdt-swap": "5000"}, RestingRatio: "0.3", RestingTtlSeconds: 600,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
+	settings := response.GetLogicalAccount().GetOrderSettings()
+	require.Equal(t, "EQUITY_RATIO", settings.GetRebalanceThresholdMode())
+	require.Equal(t, "5000", settings.GetHourlyCapSwap()["BTC-USDT-SWAP"], "标的键存成大写")
+	require.Equal(t, "0.3", settings.GetRestingRatio())
+	require.Equal(t, "100000", settings.GetMaxChildNotional(), "没写的项显示默认值")
+	got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: "logical-1"})
+	require.NoError(t, err)
+	require.Equal(t, "EQUITY_RATIO", got.GetLogicalAccount().GetOrderSettings().GetRebalanceThresholdMode())
+}
+
+func TestUpdateOrderSettingsRejectsInvalidValues(t *testing.T) {
+	handler, ctx := newSettingsHandler(t)
+	for name, settings := range map[string]*tradepb.OrderSettings{
+		"挂单比例大于 1": {RestingRatio: "1.5"},
+		"未知阈值模式":   {RebalanceThresholdMode: "SOMETIMES"},
+		"空设置里的坏数字": {MinNotionalSpot: "abc"},
+		"重复标的键":    {HourlyCapSpot: map[string]string{"btc-usdt-spot": "1", "BTC-USDT-SPOT": "2"}},
+	} {
+		response, err := handler.UpdateLogicalAccountOrderSettings(ctx, &tradepb.UpdateLogicalAccountOrderSettingsReq{
+			LogicalAccountId: "logical-1", Settings: settings,
+		})
+		require.NoError(t, err, name)
+		require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode(), name)
+	}
+	// 被拒绝的写入不改变已保存的设置。
+	got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: "logical-1"})
+	require.NoError(t, err)
+	require.Equal(t, "0", got.GetLogicalAccount().GetOrderSettings().GetRestingRatio())
+}
+
+func TestUpdateFundSettingsValidatesStablecoinMargin(t *testing.T) {
+	handler, ctx := newSettingsHandler(t)
+	update := func(settings *tradepb.FundSettings) *tradepb.UpdateLogicalAccountFundSettingsRsp {
+		response, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{
+			LogicalAccountId: "logical-1", Settings: settings,
+		})
+		require.NoError(t, err)
+		return response
+	}
+	for name, settings := range map[string]*tradepb.FundSettings{
+		"比例和不为 1":    {StablecoinMargin: map[string]string{"USDT": "0.5", "USDC": "0.4"}},
+		"不含 USDT":    {StablecoinMargin: map[string]string{"USDC": "0.5", "FDUSD": "0.5"}},
+		"预留比例大于等于 1": {ReserveRatio: "1"},
+		"资产重复":       {MarginCoins: map[string]string{"ETH": "1"}, ArbitrageBaseAssets: []string{"eth"}},
+	} {
+		require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, update(settings).GetRetInfo().GetCode(), name)
+	}
+	response := update(&tradepb.FundSettings{
+		ReserveRatio: "0.05", BnbDiscount: true, BnbReserveAmount: "200", DustConvertEnabled: true,
+		StablecoinMargin: map[string]string{"usdt": "0.6", "usdc": "0.4"},
+		MarginCoins:      map[string]string{"eth": "100"}, ArbitrageBaseAssets: []string{"btc"},
+	})
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
+	fund := response.GetLogicalAccount().GetFundSettings()
+	require.True(t, fund.GetBnbDiscount())
+	require.Equal(t, "0.6", fund.GetStablecoinMargin()["USDT"])
+	require.Equal(t, "100", fund.GetMarginCoins()["ETH"])
+	require.Equal(t, []string{"BTC"}, fund.GetArbitrageBaseAssets())
+	require.Equal(t, int32(15), fund.GetDustConvertIntervalDays(), "没写的间隔显示默认 15 天")
+}
+
+func TestSettingsRPCRequiresSpaceAndSettings(t *testing.T) {
+	handler := &LogicalAccountServer{}
+	response, err := handler.UpdateLogicalAccountOrderSettings(context.Background(), &tradepb.UpdateLogicalAccountOrderSettingsReq{LogicalAccountId: "x", Settings: &tradepb.OrderSettings{}})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_NO_PERMISSION, response.GetRetInfo().GetCode())
+	response2, err := handler.UpdateLogicalAccountFundSettings(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.UpdateLogicalAccountFundSettingsReq{LogicalAccountId: "x"})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, response2.GetRetInfo().GetCode())
+}

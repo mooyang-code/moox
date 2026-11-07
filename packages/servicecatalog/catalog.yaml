@@ -1892,6 +1892,8 @@ components:
           - GetLogicalAccount
           - ListLogicalAccounts
           - UpdateLogicalAccount
+          - UpdateLogicalAccountOrderSettings
+          - UpdateLogicalAccountFundSettings
           - AddLogicalAccountMember
           - RemoveLogicalAccountMember
           - ClaimLogicalAccountOwner
@@ -1945,6 +1947,8 @@ components:
               - GetLogicalAccount
               - ListLogicalAccounts
               - UpdateLogicalAccount
+              - UpdateLogicalAccountOrderSettings
+              - UpdateLogicalAccountFundSettings
               - AddLogicalAccountMember
               - RemoveLogicalAccountMember
               - PauseLogicalAccount

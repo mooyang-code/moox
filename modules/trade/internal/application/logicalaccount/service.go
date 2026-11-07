@@ -11,7 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -47,6 +49,8 @@ type Service struct {
 	Prices         targetapp.PriceSource
 	Now            func() time.Time
 	MaxSnapshotAge time.Duration
+	// OnFundSettingsChanged 在资金设置保存后调用，通知资金维护任务重新检查；为空时不通知。
+	OnFundSettingsChanged func(spaceID, logicalAccountID string)
 }
 
 type AccountSyncer interface {
@@ -117,6 +121,65 @@ func (s *Service) UpdateName(
 		)
 	})
 	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
+// UpdateOrderSettings 校验并保存下单设置。每次收敛都读最新设置，保存后对之后的收敛立即生效。
+func (s *Service) UpdateOrderSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	document ordersettings.Document,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	canonical, err := document.Canonical()
+	if err != nil {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	return s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountOrderSettings(spaceID, logicalAccountID, canonical)
+	})
+}
+
+// UpdateFundSettings 校验并保存资金设置，保存后通知资金维护任务重新检查。
+func (s *Service) UpdateFundSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	document fundsettings.Document,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	_, canonical, err := fundsettings.ParseDocumentForWrite(document)
+	if err != nil {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountFundSettings(spaceID, logicalAccountID, canonical)
+	})
+	if err == nil && s.OnFundSettingsChanged != nil {
+		s.OnFundSettingsChanged(spaceID, logicalAccountID)
+	}
+	return record, err
+}
+
+func (s *Service) saveSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	write func(*store.Tx) error,
+) (store.LogicalAccountRecord, error) {
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
+	defer unlock()
+	if err := s.Store.Transaction(ctx, write); err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)

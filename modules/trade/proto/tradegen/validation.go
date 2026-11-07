@@ -226,6 +226,20 @@ func (r *UpdateLogicalAccountReq) Validate() error {
 	return nil
 }
 
+func (r *UpdateLogicalAccountOrderSettingsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || r.Settings == nil {
+		return fmt.Errorf("logical_account_id and settings are required")
+	}
+	return nil
+}
+
+func (r *UpdateLogicalAccountFundSettingsReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || r.Settings == nil {
+		return fmt.Errorf("logical_account_id and settings are required")
+	}
+	return nil
+}
+
 func (r *AddLogicalAccountMemberReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||

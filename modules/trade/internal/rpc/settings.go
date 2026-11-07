@@ -1,0 +1,122 @@
+package rpc
+
+import (
+	"context"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
+	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+)
+
+func (h *LogicalAccountServer) UpdateLogicalAccountOrderSettings(
+	ctx context.Context,
+	req *tradepb.UpdateLogicalAccountOrderSettingsReq,
+) (*tradepb.UpdateLogicalAccountOrderSettingsRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.UpdateLogicalAccountOrderSettingsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	record, err := h.LogicalAccounts.UpdateOrderSettings(ctx, spaceID, req.GetLogicalAccountId(), orderSettingsFromPB(req.GetSettings()))
+	return &tradepb.UpdateLogicalAccountOrderSettingsRsp{
+		RetInfo:        errorInfo(err),
+		LogicalAccount: h.logicalAccount(ctx, record),
+	}, nil
+}
+
+func (h *LogicalAccountServer) UpdateLogicalAccountFundSettings(
+	ctx context.Context,
+	req *tradepb.UpdateLogicalAccountFundSettingsReq,
+) (*tradepb.UpdateLogicalAccountFundSettingsRsp, error) {
+	spaceID, err := requiredSpace(ctx)
+	if err == nil {
+		err = validatePB(req)
+	}
+	if err != nil {
+		return &tradepb.UpdateLogicalAccountFundSettingsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
+	}
+	record, err := h.LogicalAccounts.UpdateFundSettings(ctx, spaceID, req.GetLogicalAccountId(), fundSettingsFromPB(req.GetSettings()))
+	return &tradepb.UpdateLogicalAccountFundSettingsRsp{
+		RetInfo:        errorInfo(err),
+		LogicalAccount: h.logicalAccount(ctx, record),
+	}, nil
+}
+
+func orderSettingsFromPB(value *tradepb.OrderSettings) ordersettings.Document {
+	return ordersettings.Document{
+		RebalanceThresholdMode:  value.GetRebalanceThresholdMode(),
+		RebalanceThresholdRatio: value.GetRebalanceThresholdRatio(),
+		MinNotionalSpot:         value.GetMinNotionalSpot(),
+		MinNotionalSwap:         value.GetMinNotionalSwap(),
+		HourlyCapSpot:           value.GetHourlyCapSpot(),
+		HourlyCapSwap:           value.GetHourlyCapSwap(),
+		MaxChildNotional:        value.GetMaxChildNotional(),
+		RandomizeSplit:          value.GetRandomizeSplit(),
+		BatchIntervalSeconds:    int(value.GetBatchIntervalSeconds()),
+		OrderMode:               value.GetOrderMode(),
+		SlippageStep:            value.GetSlippageStep(),
+		SlippageMax:             value.GetSlippageMax(),
+		MaxAttempts:             int(value.GetMaxAttempts()),
+		RestingRatio:            value.GetRestingRatio(),
+		RestingTTLSeconds:       int(value.GetRestingTtlSeconds()),
+	}
+}
+
+// orderSettingsToPB 把存储的设置转成当前生效的值（没写的项填默认值）；存的内容读不出来时返回 nil。
+func orderSettingsToPB(stored string) *tradepb.OrderSettings {
+	settings, err := ordersettings.Parse(stored)
+	if err != nil {
+		return nil
+	}
+	value := settings.Document()
+	return &tradepb.OrderSettings{
+		RebalanceThresholdMode:  value.RebalanceThresholdMode,
+		RebalanceThresholdRatio: value.RebalanceThresholdRatio,
+		MinNotionalSpot:         value.MinNotionalSpot,
+		MinNotionalSwap:         value.MinNotionalSwap,
+		HourlyCapSpot:           value.HourlyCapSpot,
+		HourlyCapSwap:           value.HourlyCapSwap,
+		MaxChildNotional:        value.MaxChildNotional,
+		RandomizeSplit:          value.RandomizeSplit,
+		BatchIntervalSeconds:    int32(value.BatchIntervalSeconds),
+		OrderMode:               value.OrderMode,
+		SlippageStep:            value.SlippageStep,
+		SlippageMax:             value.SlippageMax,
+		MaxAttempts:             int32(value.MaxAttempts),
+		RestingRatio:            value.RestingRatio,
+		RestingTtlSeconds:       int32(value.RestingTTLSeconds),
+	}
+}
+
+func fundSettingsFromPB(value *tradepb.FundSettings) fundsettings.Document {
+	return fundsettings.Document{
+		ReserveRatio:            value.GetReserveRatio(),
+		BNBDiscount:             value.GetBnbDiscount(),
+		BNBReserveAmount:        value.GetBnbReserveAmount(),
+		DustConvertEnabled:      value.GetDustConvertEnabled(),
+		DustConvertIntervalDays: int(value.GetDustConvertIntervalDays()),
+		StablecoinMargin:        value.GetStablecoinMargin(),
+		MarginCoins:             value.GetMarginCoins(),
+		ArbitrageBaseAssets:     value.GetArbitrageBaseAssets(),
+	}
+}
+
+func fundSettingsToPB(stored string) *tradepb.FundSettings {
+	settings, err := fundsettings.Parse(stored)
+	if err != nil {
+		return nil
+	}
+	value := settings.Document()
+	return &tradepb.FundSettings{
+		ReserveRatio:            value.ReserveRatio,
+		BnbDiscount:             value.BNBDiscount,
+		BnbReserveAmount:        value.BNBReserveAmount,
+		DustConvertEnabled:      value.DustConvertEnabled,
+		DustConvertIntervalDays: int32(value.DustConvertIntervalDays),
+		StablecoinMargin:        value.StablecoinMargin,
+		MarginCoins:             value.MarginCoins,
+		ArbitrageBaseAssets:     value.ArbitrageBaseAssets,
+	}
+}

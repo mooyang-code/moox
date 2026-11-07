@@ -377,6 +377,8 @@ func logicalAccountToPB(
 		ReadinessReasons: append([]string(nil), readiness.Reasons...),
 		CreatedAt:        unixMilli(value.CreatedAt),
 		UpdatedAt:        unixMilli(value.UpdatedAt),
+		OrderSettings:    orderSettingsToPB(value.OrderSettingsJSON),
+		FundSettings:     fundSettingsToPB(value.FundSettingsJSON),
 	}
 }
 

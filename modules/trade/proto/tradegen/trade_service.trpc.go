@@ -39,6 +39,10 @@ type TradeConsoleServiceService interface {
 
 	UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq) (*UpdateLogicalAccountRsp, error)
 
+	UpdateLogicalAccountOrderSettings(ctx context.Context, req *UpdateLogicalAccountOrderSettingsReq) (*UpdateLogicalAccountOrderSettingsRsp, error)
+
+	UpdateLogicalAccountFundSettings(ctx context.Context, req *UpdateLogicalAccountFundSettingsReq) (*UpdateLogicalAccountFundSettingsRsp, error)
+
 	AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq) (*AddLogicalAccountMemberRsp, error)
 
 	RemoveLogicalAccountMember(ctx context.Context, req *RemoveLogicalAccountMemberReq) (*RemoveLogicalAccountMemberRsp, error)
@@ -260,6 +264,42 @@ func TradeConsoleServiceService_UpdateLogicalAccount_Handler(svr interface{}, ct
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).UpdateLogicalAccount(ctx, reqbody.(*UpdateLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_UpdateLogicalAccountOrderSettings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateLogicalAccountOrderSettingsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).UpdateLogicalAccountOrderSettings(ctx, reqbody.(*UpdateLogicalAccountOrderSettingsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_UpdateLogicalAccountFundSettings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpdateLogicalAccountFundSettingsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).UpdateLogicalAccountFundSettings(ctx, reqbody.(*UpdateLogicalAccountFundSettingsReq))
 	}
 
 	var rsp interface{}
@@ -766,6 +806,14 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_UpdateLogicalAccount_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings",
+			Func: TradeConsoleServiceService_UpdateLogicalAccountOrderSettings_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountFundSettings",
+			Func: TradeConsoleServiceService_UpdateLogicalAccountFundSettings_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember",
 			Func: TradeConsoleServiceService_AddLogicalAccountMember_Handler,
 		},
@@ -909,6 +957,12 @@ func (s *UnimplementedTradeConsoleService) ListLogicalAccounts(ctx context.Conte
 func (s *UnimplementedTradeConsoleService) UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq) (*UpdateLogicalAccountRsp, error) {
 	return nil, errors.New("rpc UpdateLogicalAccount of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) UpdateLogicalAccountOrderSettings(ctx context.Context, req *UpdateLogicalAccountOrderSettingsReq) (*UpdateLogicalAccountOrderSettingsRsp, error) {
+	return nil, errors.New("rpc UpdateLogicalAccountOrderSettings of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) UpdateLogicalAccountFundSettings(ctx context.Context, req *UpdateLogicalAccountFundSettingsReq) (*UpdateLogicalAccountFundSettingsRsp, error) {
+	return nil, errors.New("rpc UpdateLogicalAccountFundSettings of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq) (*AddLogicalAccountMemberRsp, error) {
 	return nil, errors.New("rpc AddLogicalAccountMember of service TradeConsoleService is not implemented")
 }
@@ -1012,6 +1066,10 @@ type TradeConsoleServiceClientProxy interface {
 	ListLogicalAccounts(ctx context.Context, req *ListLogicalAccountsReq, opts ...client.Option) (rsp *ListLogicalAccountsRsp, err error)
 
 	UpdateLogicalAccount(ctx context.Context, req *UpdateLogicalAccountReq, opts ...client.Option) (rsp *UpdateLogicalAccountRsp, err error)
+
+	UpdateLogicalAccountOrderSettings(ctx context.Context, req *UpdateLogicalAccountOrderSettingsReq, opts ...client.Option) (rsp *UpdateLogicalAccountOrderSettingsRsp, err error)
+
+	UpdateLogicalAccountFundSettings(ctx context.Context, req *UpdateLogicalAccountFundSettingsReq, opts ...client.Option) (rsp *UpdateLogicalAccountFundSettingsRsp, err error)
 
 	AddLogicalAccountMember(ctx context.Context, req *AddLogicalAccountMemberReq, opts ...client.Option) (rsp *AddLogicalAccountMemberRsp, err error)
 
@@ -1267,6 +1325,46 @@ func (c *TradeConsoleServiceClientProxyImpl) UpdateLogicalAccount(ctx context.Co
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &UpdateLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) UpdateLogicalAccountOrderSettings(ctx context.Context, req *UpdateLogicalAccountOrderSettingsReq, opts ...client.Option) (*UpdateLogicalAccountOrderSettingsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("UpdateLogicalAccountOrderSettings")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateLogicalAccountOrderSettingsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) UpdateLogicalAccountFundSettings(ctx context.Context, req *UpdateLogicalAccountFundSettingsReq, opts ...client.Option) (*UpdateLogicalAccountFundSettingsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountFundSettings")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("UpdateLogicalAccountFundSettings")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpdateLogicalAccountFundSettingsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

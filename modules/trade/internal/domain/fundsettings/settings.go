@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
@@ -20,67 +22,174 @@ type Settings struct {
 	BNBReserveUnreadable bool
 	// BNBReserveAmount 大于 0 表示开启 BNB 保留：BNB 现货标的成为排除资产，权益只扣还差的部分。
 	BNBReserveAmount shared.Decimal
-	// StablecoinMargin 是稳定币保证金的资产集合。
-	StablecoinMargin []string
+	// StablecoinMargin 是稳定币保证金的资产集合；StablecoinTargets 是各稳定币的目标比例（和为 1，含 USDT）。
+	StablecoinMargin  []string
+	StablecoinTargets map[string]shared.Decimal
+	// BNBDiscount 为真表示用 BNB 抵扣手续费（会话启动和设置变更时调用交易所的抵扣接口）。
+	BNBDiscount bool
+	// DustConvert 为真表示每隔 DustConvertInterval 把非目标、非排除、低于 5U 的现货零头兑成 BNB。
+	DustConvert         bool
+	DustConvertInterval time.Duration
 	// MarginCoins 是保证金币及其配置的固定 U 值，按配置值计入权益。
 	MarginCoins map[string]shared.Decimal
 	// ArbitrageBaseAssets 是套利底仓资产：现货和对应永续都不参与策略持仓，按净值计入权益。
 	ArbitrageBaseAssets []string
 }
 
-// rawDocument 和 document 用同一组 json 标签，字段全是原始 JSON：宽松解析按字段单独处理，
-// 键名匹配和严格解析（encoding/json 解到结构体，键名不区分大小写）完全一致，不会出现一边认得一边不认的情况。
-// 写入设置时（T22）应拒绝未知键和大小写不规范的键，这里只保证读的时候两边结论相同。
+// rawDocument 和 Document 用同一组 json 键：宽松解析按字段单独处理，字段全是原始 JSON。
+// 读取时键名匹配用 encoding/json（不区分大小写），两边完全一致，不会出现一边认得一边不认的情况；
+// 写入设置时用 ParseForWrite，精确比对键名，拒绝未知键和大小写不规范的键。
+// 两个结构体的键集合必须相同，由测试锁住。
 type rawDocument struct {
-	ReserveRatio        json.RawMessage `json:"reserve_ratio"`
-	BNBReserveAmount    json.RawMessage `json:"bnb_reserve_amount"`
-	StablecoinMargin    json.RawMessage `json:"stablecoin_margin"`
-	MarginCoins         json.RawMessage `json:"margin_coins"`
-	ArbitrageBaseAssets json.RawMessage `json:"arbitrage_base_assets"`
+	ReserveRatio            json.RawMessage `json:"reserve_ratio"`
+	BNBDiscount             json.RawMessage `json:"bnb_discount"`
+	BNBReserveAmount        json.RawMessage `json:"bnb_reserve_amount"`
+	DustConvertEnabled      json.RawMessage `json:"dust_convert_enabled"`
+	DustConvertIntervalDays json.RawMessage `json:"dust_convert_interval_days"`
+	StablecoinMargin        json.RawMessage `json:"stablecoin_margin"`
+	MarginCoins             json.RawMessage `json:"margin_coins"`
+	ArbitrageBaseAssets     json.RawMessage `json:"arbitrage_base_assets"`
 }
 
-type document struct {
-	ReserveRatio        string            `json:"reserve_ratio"`
-	BNBReserveAmount    string            `json:"bnb_reserve_amount"`
-	StablecoinMargin    map[string]string `json:"stablecoin_margin"`
-	MarginCoins         map[string]string `json:"margin_coins"`
-	ArbitrageBaseAssets []string          `json:"arbitrage_base_assets"`
+// Document 是资金设置的 JSON 形态；数值用字符串，没写的键取默认值。
+type Document struct {
+	ReserveRatio            string            `json:"reserve_ratio,omitempty"`
+	BNBDiscount             bool              `json:"bnb_discount,omitempty"`
+	BNBReserveAmount        string            `json:"bnb_reserve_amount,omitempty"`
+	DustConvertEnabled      bool              `json:"dust_convert_enabled,omitempty"`
+	DustConvertIntervalDays int               `json:"dust_convert_interval_days,omitempty"`
+	StablecoinMargin        map[string]string `json:"stablecoin_margin,omitempty"`
+	MarginCoins             map[string]string `json:"margin_coins,omitempty"`
+	ArbitrageBaseAssets     []string          `json:"arbitrage_base_assets,omitempty"`
 }
 
 // BNBAsset 是 BNB 保留涉及的资产。
 const BNBAsset = "BNB"
 
-// Parse 解析资金设置 JSON；空串和空对象返回全部默认值。
+// USDTAsset 是多稳定币保证金必须包含的资产。
+const USDTAsset = "USDT"
+
+const (
+	defaultDustConvertIntervalDays = 15
+	maxDustConvertIntervalDays     = 365
+)
+
+// Parse 解析资金设置 JSON；空串和空对象返回全部默认值。读取路径，键名不区分大小写。
 func Parse(raw string) (Settings, error) {
-	settings := Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero()}
 	if strings.TrimSpace(raw) == "" {
-		return settings, nil
+		return Document{}.Validate()
 	}
-	var doc document
+	var doc Document
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		return Settings{}, fmt.Errorf("资金设置不是合法 JSON：%w", err)
 	}
+	return doc.Validate()
+}
+
+// ParseForWrite 是写入设置前的严格解析：未知键、大小写不规范的键、类型不对和越界的值都拒绝，
+// 返回有效设置和要存进数据库的规范 JSON。
+func ParseForWrite(raw string) (Settings, string, error) {
+	var doc Document
+	if err := shared.DecodeStrictObject(raw, &doc); err != nil {
+		return Settings{}, "", fmt.Errorf("资金设置：%w", err)
+	}
+	return doc.validateAndCanonical()
+}
+
+// ParseDocumentForWrite 校验 RPC 传来的结构化文档，返回有效设置和规范 JSON。
+func ParseDocumentForWrite(doc Document) (Settings, string, error) {
+	return doc.validateAndCanonical()
+}
+
+func (d Document) validateAndCanonical() (Settings, string, error) {
+	settings, err := d.Validate()
+	if err != nil {
+		return Settings{}, "", err
+	}
+	normalized := d
+	normalized.StablecoinMargin = normalizeDecimalMap(d.StablecoinMargin)
+	normalized.MarginCoins = normalizeDecimalMap(d.MarginCoins)
+	normalized.ArbitrageBaseAssets = settings.ArbitrageBaseAssets
+	if len(normalized.ArbitrageBaseAssets) == 0 {
+		normalized.ArbitrageBaseAssets = nil
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return Settings{}, "", err
+	}
+	return settings, string(encoded), nil
+}
+
+// Validate 校验并换算为有效设置。
+func (d Document) Validate() (Settings, error) {
+	settings := Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero(), BNBDiscount: d.BNBDiscount, DustConvert: d.DustConvertEnabled}
 	var err error
-	if settings.ReserveRatio, err = parseOptional(doc.ReserveRatio, "资金预留比例"); err != nil {
+	if settings.ReserveRatio, err = parseOptional(d.ReserveRatio, "资金预留比例"); err != nil {
 		return Settings{}, err
 	}
 	if settings.ReserveRatio.IsNegative() || settings.ReserveRatio.Cmp(shared.MustDecimal("1")) >= 0 {
 		return Settings{}, fmt.Errorf("资金预留比例必须在 0 到 1 之间（不含 1）")
 	}
-	if settings.BNBReserveAmount, err = parseOptional(doc.BNBReserveAmount, "BNB 保留金额"); err != nil {
+	if settings.BNBReserveAmount, err = parseOptional(d.BNBReserveAmount, "BNB 保留金额"); err != nil {
 		return Settings{}, err
 	}
 	if settings.BNBReserveAmount.IsNegative() {
 		return Settings{}, fmt.Errorf("BNB 保留金额不能为负")
 	}
-	for asset := range doc.StablecoinMargin {
-		settings.StablecoinMargin = append(settings.StablecoinMargin, strings.ToUpper(asset))
+	days := d.DustConvertIntervalDays
+	switch {
+	case days == 0:
+		days = defaultDustConvertIntervalDays
+	case days < 0 || days > maxDustConvertIntervalDays:
+		return Settings{}, fmt.Errorf("小额兑换 BNB 的间隔必须在 1 到 %d 天之间", maxDustConvertIntervalDays)
 	}
-	sort.Strings(settings.StablecoinMargin)
-	if len(doc.MarginCoins) > 0 {
-		settings.MarginCoins = make(map[string]shared.Decimal, len(doc.MarginCoins))
+	settings.DustConvertInterval = time.Duration(days) * 24 * time.Hour
+	owners := make(map[string]string)
+	claim := func(asset, group string) error {
+		if !assetPattern.MatchString(asset) {
+			return fmt.Errorf("资产名 %q 不合法（只允许字母和数字）", asset)
+		}
+		if previous, taken := owners[asset]; taken {
+			if previous == group {
+				return fmt.Errorf("%s 里的资产 %s 重复（资产名不区分大小写）", group, asset)
+			}
+			return fmt.Errorf("资产 %s 同时出现在%s和%s里", asset, previous, group)
+		}
+		owners[asset] = group
+		return nil
 	}
-	for asset, value := range doc.MarginCoins {
+	if len(d.StablecoinMargin) > 0 {
+		settings.StablecoinTargets = make(map[string]shared.Decimal, len(d.StablecoinMargin))
+		sum := shared.Zero()
+		for asset, value := range d.StablecoinMargin {
+			asset = strings.ToUpper(strings.TrimSpace(asset))
+			if err := claim(asset, "稳定币保证金"); err != nil {
+				return Settings{}, err
+			}
+			ratio, err := shared.ParseDecimal(value)
+			if err != nil || ratio.Cmp(shared.Zero()) <= 0 || ratio.Cmp(shared.MustDecimal("1")) > 0 {
+				return Settings{}, fmt.Errorf("稳定币 %s 的目标比例必须是大于 0 且不超过 1 的数字", asset)
+			}
+			settings.StablecoinTargets[asset] = ratio
+			settings.StablecoinMargin = append(settings.StablecoinMargin, asset)
+			sum = sum.Add(ratio)
+		}
+		sort.Strings(settings.StablecoinMargin)
+		if _, hasUSDT := settings.StablecoinTargets[USDTAsset]; !hasUSDT {
+			return Settings{}, fmt.Errorf("稳定币保证金必须包含 %s", USDTAsset)
+		}
+		if sum.Cmp(shared.MustDecimal("1")) != 0 {
+			return Settings{}, fmt.Errorf("稳定币保证金的目标比例之和必须等于 1，现在是 %s", sum.String())
+		}
+	}
+	if len(d.MarginCoins) > 0 {
+		settings.MarginCoins = make(map[string]shared.Decimal, len(d.MarginCoins))
+	}
+	for asset, value := range d.MarginCoins {
+		asset = strings.ToUpper(strings.TrimSpace(asset))
+		if err := claim(asset, "保证金币"); err != nil {
+			return Settings{}, err
+		}
 		parsed, err := parseOptional(value, "保证金币 "+asset)
 		if err != nil {
 			return Settings{}, err
@@ -88,13 +197,32 @@ func Parse(raw string) (Settings, error) {
 		if parsed.IsNegative() {
 			return Settings{}, fmt.Errorf("保证金币 %s 的配置值不能为负", asset)
 		}
-		settings.MarginCoins[strings.ToUpper(asset)] = parsed
+		settings.MarginCoins[asset] = parsed
 	}
-	for _, asset := range doc.ArbitrageBaseAssets {
-		settings.ArbitrageBaseAssets = append(settings.ArbitrageBaseAssets, strings.ToUpper(asset))
+	for _, asset := range d.ArbitrageBaseAssets {
+		asset = strings.ToUpper(strings.TrimSpace(asset))
+		if err := claim(asset, "套利底仓"); err != nil {
+			return Settings{}, err
+		}
+		settings.ArbitrageBaseAssets = append(settings.ArbitrageBaseAssets, asset)
 	}
 	sort.Strings(settings.ArbitrageBaseAssets)
 	return settings, nil
+}
+
+var assetPattern = regexp.MustCompile(`^[A-Z0-9]{1,20}$`)
+
+// normalizeDecimalMap 把资产键转大写、数值转规范小数，写进数据库的形态统一。
+func normalizeDecimalMap(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(raw))
+	for asset, value := range raw {
+		parsed, _ := shared.ParseDecimal(value)
+		normalized[strings.ToUpper(strings.TrimSpace(asset))] = parsed.String()
+	}
+	return normalized
 }
 
 // ParseLenient 逐字段宽松解析，给清仓、收敛、受管资产这类必须能执行的路径用：
@@ -103,7 +231,7 @@ func Parse(raw string) (Settings, error) {
 //   - 排除集合（稳定币保证金、保证金币、套利底仓）只要读得出键就保留，数值坏了不影响排除；
 //   - 排除字段本身的类型坏了、整份不是合法 JSON：无从知道排除哪些资产，返回 err，调用方不能下单。
 func ParseLenient(raw string) (settings Settings, warning error, err error) {
-	settings = Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero()}
+	settings = Settings{ReserveRatio: shared.Zero(), BNBReserveAmount: shared.Zero(), DustConvertInterval: defaultDustConvertIntervalDays * 24 * time.Hour}
 	if strings.TrimSpace(raw) == "" {
 		return settings, nil, nil
 	}
@@ -135,15 +263,53 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 			settings.BNBReserveAmount = amount
 		}
 	}
+	if value := fields.BNBDiscount; len(value) > 0 {
+		if err := json.Unmarshal(value, &settings.BNBDiscount); err != nil {
+			warnings = append(warnings, fmt.Errorf("BNB 抵扣开关不是布尔值，按关闭处理：%w", err))
+			settings.BNBDiscount = false
+		}
+	}
+	if value := fields.DustConvertEnabled; len(value) > 0 {
+		if err := json.Unmarshal(value, &settings.DustConvert); err != nil {
+			warnings = append(warnings, fmt.Errorf("小额兑换开关不是布尔值，按关闭处理：%w", err))
+			settings.DustConvert = false
+		}
+	}
+	if value := fields.DustConvertIntervalDays; len(value) > 0 {
+		var days int
+		if err := json.Unmarshal(value, &days); err != nil || days < 0 || days > maxDustConvertIntervalDays {
+			warnings = append(warnings, fmt.Errorf("小额兑换间隔不合法，按 %d 天处理", defaultDustConvertIntervalDays))
+		} else if days > 0 {
+			settings.DustConvertInterval = time.Duration(days) * 24 * time.Hour
+		}
+	}
 	if value := fields.StablecoinMargin; len(value) > 0 {
 		var assets map[string]json.RawMessage
 		if err := json.Unmarshal(value, &assets); err != nil {
 			return Settings{}, nil, fmt.Errorf("资金设置里稳定币保证金（stablecoin_margin）的格式不对，无法确定排除资产：%w", err)
 		}
-		for asset := range assets {
-			settings.StablecoinMargin = append(settings.StablecoinMargin, strings.ToUpper(asset))
+		targets := make(map[string]shared.Decimal, len(assets))
+		var targetErr error
+		for asset, raw := range assets {
+			asset = strings.ToUpper(asset)
+			settings.StablecoinMargin = append(settings.StablecoinMargin, asset)
+			ratio, err := decimalField(raw, "稳定币 "+asset+" 的目标比例")
+			if err == nil && (ratio.Cmp(shared.Zero()) <= 0 || ratio.Cmp(shared.MustDecimal("1")) > 0) {
+				err = fmt.Errorf("稳定币 %s 的目标比例必须大于 0 且不超过 1", asset)
+			}
+			if err != nil {
+				targetErr = err
+				continue
+			}
+			targets[asset] = ratio
 		}
 		sort.Strings(settings.StablecoinMargin)
+		// 目标比例坏了只影响调平：排除集合照常保留，不做调平。
+		if targetErr != nil {
+			warnings = append(warnings, fmt.Errorf("%w（稳定币保证金不做调平）", targetErr))
+		} else {
+			settings.StablecoinTargets = targets
+		}
 	}
 	if value := fields.MarginCoins; len(value) > 0 {
 		var coins map[string]json.RawMessage
@@ -196,6 +362,31 @@ func parseOptional(raw, name string) (shared.Decimal, error) {
 		return shared.Zero(), fmt.Errorf("%s不是合法数字：%w", name, err)
 	}
 	return value, nil
+}
+
+// Document 返回有效设置的完整文档形态（默认值也写出来），给界面显示当前生效的值。
+func (s Settings) Document() Document {
+	document := Document{
+		ReserveRatio:            s.ReserveRatio.String(),
+		BNBDiscount:             s.BNBDiscount,
+		BNBReserveAmount:        s.BNBReserveAmount.String(),
+		DustConvertEnabled:      s.DustConvert,
+		DustConvertIntervalDays: int(s.DustConvertInterval / (24 * time.Hour)),
+		ArbitrageBaseAssets:     append([]string(nil), s.ArbitrageBaseAssets...),
+	}
+	if len(s.StablecoinTargets) > 0 {
+		document.StablecoinMargin = make(map[string]string, len(s.StablecoinTargets))
+		for asset, ratio := range s.StablecoinTargets {
+			document.StablecoinMargin[asset] = ratio.String()
+		}
+	}
+	if len(s.MarginCoins) > 0 {
+		document.MarginCoins = make(map[string]string, len(s.MarginCoins))
+		for asset, value := range s.MarginCoins {
+			document.MarginCoins[asset] = value.String()
+		}
+	}
+	return document
 }
 
 // HasExclusions 报告是否有任何排除资产：没有时调用方可以跳过逐个标的的排除检查。
