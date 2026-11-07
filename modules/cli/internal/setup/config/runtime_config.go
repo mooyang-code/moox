@@ -55,6 +55,13 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	// 下架自动检测要经出口代理访问币安、OKX：没配海外机时关掉，免得三个来源一直失败；手工登记不受影响。
+	rendered, err = replaceYAMLMapping(rendered, "delist", orderedMapping(
+		mappingField{"auto_detect", snapshot.Manifest.HasEgressProxy()},
+	))
+	if err != nil {
+		return nil, err
+	}
 	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", nil)
 	if err != nil {
 		return nil, err

@@ -19,12 +19,24 @@ const tradeClient = axios.create({
 /**
  * 后端还没改成中文的错误：按错误常量开头对照成中文，只用于展示，不拿来做逻辑判断
  * （逻辑判断看错误码）。后端错误常量改成中文后，这张表里对应的项就删掉。
+ * detailOnly：这个常量只是外层包装（例如 "trade store: invalid record: 修改组合成员前要先暂停组合"），
+ * 后面接了具体原因时只显示原因，没有原因时才显示 text。
  */
-const tradeMessageTexts: readonly [prefix: string, text: string][] = [
+const tradeMessageTexts: readonly [prefix: string, text: string, detailOnly?: boolean][] = [
   ["trade: invalid trading account", "执行账户的参数不合法"],
   ["trade: trading account is not executable", "执行账户当前不能下单"],
   ["trade: invalid order", "订单参数不合法"],
-  ["trade store: conflict", "数据已经被修改，刷新后再试"]
+  ["trade: invalid order specification", "订单参数不合法"],
+  ["trade: invalid operator action", "操作参数不合法"],
+  ["trade: invalid decimal", "数值格式不合法"],
+  ["trade order: Exchange account ownership mismatch", "执行账户不属于当前空间"],
+  ["trade reservation: insufficient reducible quantity", "可减仓的数量不够"],
+  ["trade target: invalid target", "交易目标不合法"],
+  ["trade target: target validity window elapsed", "交易目标已过有效期"],
+  ["trade store: target expired", "交易目标已过有效期"],
+  ["trade Exchange: invalid instrument ID", "标的 ID 不合法"],
+  ["trade store: conflict", "数据已经被修改，刷新后再试"],
+  ["trade store: invalid record", "数据不合法", true]
 ];
 
 /** 错误常量在消息里的位置：后面必须是结尾或冒号，避免 "trade: invalid order" 命中 "trade: invalid order transition"。 */
@@ -43,13 +55,14 @@ function constantAt(raw: string, prefix: string): number {
 export function tradeErrorText(retInfo: RetInfo): string {
   const raw = retInfo.msg || "";
   if (!raw) return `交易服务请求失败（错误码 ${retInfo.code}）`;
-  for (const [prefix, text] of tradeMessageTexts) {
+  for (const [prefix, text, detailOnly] of tradeMessageTexts) {
     const at = constantAt(raw, prefix);
     if (at < 0) continue;
     const before = raw.slice(0, at).replace(/[:\s]+$/, "");
     const after = raw.slice(at + prefix.length).replace(/^[:\s]+/, "");
     const detail = [before, after].filter(Boolean).join("；");
-    return detail ? `${text}（${detail}）` : text;
+    if (!detail) return text;
+    return detailOnly ? detail : `${text}（${detail}）`;
   }
   return raw;
 }

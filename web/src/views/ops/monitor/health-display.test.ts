@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertLink, formatCheckedAt, statusLabel } from "./health-display";
+import { alertLink, alertNote, formatCheckedAt, statusLabel } from "./health-display";
 
 describe("health display", () => {
   it("uses friendly Chinese labels", () => {
@@ -23,10 +23,14 @@ describe("health display", () => {
       href: "#/settings/events?tab=executions",
       label: "查看事件中心执行记录"
     });
-    expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" })).toEqual({
-      href: "#/settings/secrets",
-      label: "去录入币安只读 Key"
-    });
+    // 缺币安只读 Key 只能在命令行补：不跳秘钥页（那里建不出固定 ID 的 Key），首页跳监控页看说明
+    const readonlyMissing = { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" };
+    expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");
+    expect(alertNote(readonlyMissing)).toContain("moox-cli config edit");
+    expect(alertNote(readonlyMissing)).toContain('name = "readonly"');
+    expect(alertNote(readonlyMissing)).toContain("moox-cli setup apply");
+    expect(alertNote(readonlyMissing)).toContain("moox-cli collector delist register");
+    expect(alertNote({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" })).toBe("");
     expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" }).href).not.toBe(
       "#/settings/secrets"
     );

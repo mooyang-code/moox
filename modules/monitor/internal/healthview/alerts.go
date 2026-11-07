@@ -64,10 +64,13 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 }
 
 // alertSeverity 区分告警轻重：critical 表示服务不可用、数据中断、主机失联或网关异常；
-// warning 表示还在工作但有风险，例如资源超过阈值、运行指标上报中断、采集任务清单过期、指标序列新增过快。
+// warning 表示还在工作但有风险，例如资源超过阈值、运行指标上报中断、采集任务清单过期、指标序列新增过快、
+// 只需提醒的关注项（缺币安只读 Key：现货下架改为手工登记）。
 func alertSeverity(checkID string, object *pb.HealthObject) string {
 	switch {
 	case object.Kind == "reporter", object.Kind == "metrics_ingest", checkID == monmetrics.TaskResultInventoryCheckID:
+		return "warning"
+	case object.AttentionKind != "" && observability.AttentionIsWarning(object.Kind, object.AttentionKind):
 		return "warning"
 	case object.Type == "host" && hostmetrics.MetricLabel(object.Kind) != "":
 		return "warning"

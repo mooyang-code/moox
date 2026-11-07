@@ -401,7 +401,7 @@ def main():
     p = sub.add_parser('compare', help='与参考框架的权重逐期比对')
     p.add_argument('--targets', required=True, help='targets 子命令的输出')
     p.add_argument('--name', required=True, help='targets 里的名称')
-    p.add_argument('--reference', required=True, help='参考权重 CSV：bar_end（K 线收盘，RFC3339 UTC）,instrument_id,weight')
+    p.add_argument('--reference', required=True, help='参考权重 CSV：bar_end（K 线收盘，RFC3339 UTC）,market（spot、swap 或 equity）,instrument_id,weight')
     p.add_argument('--since')
     p.add_argument('--until')
     p.add_argument('--trunc', type=float, default=0.0, help='参考权重按此粒度向零截断（与 moox 输出精度一致，例如 1e-4）')

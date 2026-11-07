@@ -17,7 +17,7 @@ import {
   type NameBook,
   type Tone
 } from "@/views/home/home-model";
-import { alertLink, hostHref, statusLabel } from "./health-display";
+import { alertLink, alertNote, hostHref, statusLabel } from "./health-display";
 import { marketTime } from "./market-time";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
@@ -73,6 +73,8 @@ export interface AlertLine {
   recovering: boolean;
   facts: Fact[];
   link: { href: string; label: string };
+  /** 只能在命令行里处理的告警的处理说明；有说明时不显示跳转链接。 */
+  note: string;
 }
 
 export interface AlertGroup {
@@ -209,7 +211,8 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
     duration: since(startedMs, nowMs),
     recovering: Boolean(alert.recovering),
     facts,
-    link: alertLink(alert.object)
+    link: alertLink(alert.object),
+    note: alertNote(alert.object)
   };
 }
 

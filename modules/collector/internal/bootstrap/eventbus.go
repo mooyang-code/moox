@@ -55,6 +55,7 @@ func (b *eventBusRuntime) start(process *Runtime) {
 
 // registerDelistDetection 启动下架检测：定时轮询币安现货下架计划、币安 U 本位合约信息和 OKX 永续合约信息，
 // 并让 CollectMgr 接受手工登记。没有配置 EventBus 时不检测（发现了也发布不了），手工登记返回明确的错误。
+// delist.auto_detect 为 false（没有出口代理，三个来源都连不上）时只接手工登记，不轮询来源。
 func registerDelistDetection(cfg *Config, dbm *store.Store, process *Runtime, bus *eventBusRuntime, svc *collectsvc.Service) error {
 	if bus == nil {
 		log.Warn("collector 没有配置 event_bus，下架检测不启动")
@@ -66,6 +67,10 @@ func registerDelistDetection(cfg *Config, dbm *store.Store, process *Runtime, bu
 	}
 	registrar := &delist.Registrar{Repo: dbm.DelistNotices(), Registry: registry, Wake: bus.relay.Wake}
 	svc.SetDelistRegistrar(registrar)
+	if !cfg.Delist.AutoDetect {
+		log.Info("collector 的 delist.auto_detect 已关闭（没有出口代理），不自动检测下架，手工登记照常可用")
+		return nil
+	}
 
 	http, err := httpclient.NewEgressHTTPClient(process.gateway, cfg.EgressProxy.Domains)
 	if err != nil {

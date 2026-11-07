@@ -34,6 +34,9 @@ func (m Manifest) HasStorageHost() bool  { return m.StorageHost().Name != "" }
 func (m Manifest) HasViewHost() bool     { return m.ViewHost().Name != "" }
 func (m Manifest) HasStrategyHost() bool { return m.StrategyHost().Name != "" }
 
+// HasEgressProxy 报告拓扑里有没有出口代理：配了海外机才有。没有时 Collector 连不上币安、OKX，下架自动检测要关掉。
+func (m Manifest) HasEgressProxy() bool { return m.ComponentHost("egress-proxy") != "" }
+
 // EventBusClientURL 是 EventBus 客户端使用的连接地址：与 EventBus 同机用回环地址，否则用 EventBus 所在主机的对外地址。
 // 所有渲染 EventBus 地址的地方都经过它，不再各自假设"EventBus 在控制机"。
 func EventBusClientURL(busHostID, busAddress string, port int, clientHostID string) string {

@@ -25,18 +25,20 @@ export function accountEnvironment(account: Pick<TradingAccount, "execution_mode
 
 /**
  * 组合账户的环境：后端要求成员环境一致，所以取第一个能找到的成员的环境。
- * 实盘组合没有可判断的成员时按生产环境处理，确认也按最严的一档。
+ * 实盘组合没有可判断的成员时（列表页的测试网、生产环境两个页签都列出它）用 entered：从哪个页签进来就按哪个环境显示；
+ * 不知道从哪进来（例如直接打开链接）时按生产环境处理，确认也按最严的一档。
  */
 export function logicalEnvironment(
   logical: Pick<LogicalAccount, "execution_mode" | "members">,
-  accounts: ReadonlyMap<string, TradingAccount>
+  accounts: ReadonlyMap<string, TradingAccount>,
+  entered?: Environment
 ): Environment {
   if (logical.execution_mode === 1) return "paper";
   for (const member of logical.members || []) {
     const account = accounts.get(member.trading_account_id);
     if (account) return accountEnvironment(account);
   }
-  return "prod";
+  return entered === "testnet" ? "testnet" : "prod";
 }
 
 /**

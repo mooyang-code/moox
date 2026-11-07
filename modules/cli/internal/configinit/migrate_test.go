@@ -379,6 +379,22 @@ func TestMigrateAddEgressDomainStartsFromDefaultsAndReplacesMultilineArray(t *te
 	require.Equal(t, []string{"*.binance.com", "openapi.okx.com", "www.okx.com"}, manifest.EgressProxy.HTTPDomains)
 }
 
+// 单引号写法（TOML 字面字符串）也能读到原有域名，写回时不丢。
+func TestMigrateAddEgressDomainReadsSingleQuotedArray(t *testing.T) {
+	text := regexp.MustCompile(`(?m)^http_domains = .*\n`).ReplaceAllString(sampleText(t), "http_domains = ['*.binance.com', 'openapi.okx.com'] # 单引号\n")
+	path, root, keys := migrateFixture(t, text)
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com", "fapi.binance.com"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com"}, report.AddedEgressDomains, "fapi.binance.com 已被 *.binance.com 覆盖")
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "openapi.okx.com", "www.okx.com"}, manifest.EgressProxy.HTTPDomains)
+}
+
 func TestMigrateAddEgressDomainRejectsInvalidDomain(t *testing.T) {
 	path, root, keys := migrateFixture(t, sampleText(t))
 	for _, bad := range []string{"https://openapi.okx.com", "127.0.0.1", "okx"} {

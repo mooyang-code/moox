@@ -103,7 +103,14 @@
   `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、
   `strategy template list|show|save|delete|render`、`strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
   逐期回放（因子 → 策略 → 纸面成交）用 `./bin/moox-cli replay start|status|report …`。迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
-- **注意**：一个因子任务只能关联一个实例；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+- **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
+  决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
+- **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
+  一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
+  不支持 `factor_params`、不能进策略池、不支持闭环回放。
+- **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
+  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放与闭环回放不支持（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
+- **注意**：一个因子任务只能关联一个实例，绑定在创建实例时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
 
 ## 交易（只读）
 

@@ -68,6 +68,10 @@ egress_proxy:
     request_timeout: 3s
     cache_ttl: 5m
 
+# 下架检测：安装时按拓扑渲染，没有出口代理（没配海外机）时为 false，只接受手工登记（collector delist register）。
+delist:
+  auto_detect: true
+
 subject_sync:
   fetch_timeout: 2m
   attributes:

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -1044,10 +1045,14 @@ func addEgressDomains(plain []byte, domains []string) ([]byte, []string, error) 
 	}
 	current := setupconfig.DefaultEgressHTTPDomains()
 	if start >= 0 {
-		current = nil
-		for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(strings.Join(lines[start:end+1], "\n"), -1) {
-			current = append(current, item[1])
+		// 按 TOML 解析这一项：单引号、双引号、多行数组都能读到，写回时不会丢域名。
+		var value struct {
+			HTTPDomains []string `toml:"http_domains"`
 		}
+		if _, err := toml.Decode(strings.Join(lines[start:end+1], "\n"), &value); err != nil {
+			return nil, nil, fmt.Errorf("读不出 [egress_proxy] http_domains：%w", err)
+		}
+		current = value.HTTPDomains
 	}
 	merged := slices.Clone(current)
 	var added []string

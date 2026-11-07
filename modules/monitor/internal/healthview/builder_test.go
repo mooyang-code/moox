@@ -228,3 +228,12 @@ func TestAttentionAlertObjectCarriesAttentionKind(t *testing.T) {
 	require.Empty(t, alertObject("crypto", "collector_attention:unknown_kind", observability.Overview{}).AttentionKind)
 	require.Empty(t, alertObject("crypto", "module:delist_readonly_key_missing", observability.Overview{}).AttentionKind)
 }
+
+// 缺币安只读 Key 只是现货下架改为手工登记，告警是 warning，不挡安装验收；下架来源失败仍是 critical。
+func TestReadonlyKeyMissingAlertIsAWarning(t *testing.T) {
+	check := "collector_attention:delist_readonly_key_missing"
+	require.Equal(t, "warning", alertSeverity(check, alertObject("crypto", check, observability.Overview{})))
+	failed := "collector_attention:delist_source_failed"
+	require.Equal(t, "critical", alertSeverity(failed, alertObject("crypto", failed, observability.Overview{})))
+	require.Equal(t, "critical", alertSeverity("trade_attention:auto_paused", alertObject("crypto", "trade_attention:auto_paused", observability.Overview{})))
+}

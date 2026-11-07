@@ -32,10 +32,12 @@ type Config struct {
 	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
 	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
 	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
-	EventBus    eventbus.Config    `yaml:"event_bus"`
-	Health      HealthConfig       `yaml:"health"`
-	DNS         DNSConfig          `yaml:"dns"`
-	EgressProxy EgressProxyConfig  `yaml:"egress_proxy"`
+	EventBus    eventbus.Config   `yaml:"event_bus"`
+	Health      HealthConfig      `yaml:"health"`
+	DNS         DNSConfig         `yaml:"dns"`
+	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
+	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
+	Delist      DelistConfig       `yaml:"delist"`
 	SubjectSync subjectsync.Config `yaml:"subject_sync"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
@@ -146,6 +148,12 @@ type DNSConfig struct {
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	ResolveTimeout  time.Duration `yaml:"resolve_timeout"`
 	Nameservers     []string      `yaml:"nameservers"`
+}
+
+// DelistConfig 控制下架检测。AutoDetect 为 false 时不轮询币安现货、币安 U 本位、OKX 永续三个来源，
+// 手工登记（collector delist register）照常可用。默认 true：配置里没写时保持自动检测。
+type DelistConfig struct {
+	AutoDetect bool `yaml:"auto_detect"`
 }
 
 // EgressProxyConfig selects HTTP domains and DNS snapshots through the shared gateway.
@@ -328,6 +336,7 @@ func Default() *Config {
 		SCFPlan:     defaultSCFPlan(),
 		SubjectSync: subjectsync.DefaultConfig(),
 		Stream:      defaultStreamConfig(),
+		Delist:      DelistConfig{AutoDetect: true},
 		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
