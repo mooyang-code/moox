@@ -107,3 +107,53 @@ func TestDisplaySettingsRequireInScopeInstance(t *testing.T) {
 	missing, _ := h.service.GetStrategyDisplaySettings(h.ctx, &strategypb.GetStrategyDisplaySettingsReq{InstanceId: "nope"})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "")
 }
+
+// factor_tasks 的写法：一个或两个，市场只能是 spot、swap、equity，任务不能重复，股票不能与加密货币混用。
+func TestCreateInstanceFactorTasksRules(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	create := func(id string, tasks map[string]string) *strategypb.CreateStrategyInstanceRsp {
+		rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: "s1", FactorTasks: tasks}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rsp
+	}
+	for name, tc := range map[string]struct {
+		tasks map[string]string
+		want  string
+	}{
+		"未知市场":  {map[string]string{"futures": "ftask_a"}, "不受支持"},
+		"任务重复":  {map[string]string{"spot": "ftask_a", "swap": "ftask_a"}, "同时登记"},
+		"股票不混用": {map[string]string{"equity": "ftask_a", "spot": "ftask_b"}, "不能与现货、永续混用"},
+	} {
+		rsp := create("bad-"+name, tc.tasks)
+		requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), tc.want)
+	}
+	both := create("i-both", map[string]string{"spot": "ftask_spot", "swap": "ftask_swap"})
+	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
+	if tasks := both.GetInstance().GetFactorTasks(); tasks["spot"] != "ftask_spot" || tasks["swap"] != "ftask_swap" || len(tasks) != 2 {
+		t.Fatalf("实例应记下两个因子任务：%+v", both.GetInstance())
+	}
+	// 一个任务只能被一个实例独占，即使另一个任务不同。
+	taken := create("i-other", map[string]string{"spot": "ftask_x", "swap": "ftask_swap"})
+	requireFail(t, int32(taken.GetRetInfo().GetCode()), taken.GetRetInfo().GetMsg(), "")
+	if _, err := h.service.Store.GetInstance(h.ctx, "i-other"); err == nil {
+		t.Fatal("任务已被独占时第二个实例不应创建成功")
+	}
+	// 同一个 instance_id、相同任务重试幂等；任务不同则冲突。
+	again := create("i-both", map[string]string{"swap": "ftask_swap", "spot": "ftask_spot"})
+	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
+	conflict := create("i-both", map[string]string{"spot": "ftask_spot"})
+	requireFail(t, int32(conflict.GetRetInfo().GetCode()), conflict.GetRetInfo().GetMsg(), "冲突")
+}
+
+// 校验接口按市场先后把全部绑定的任务交给解析（试算读全部 View）。
+func TestValidateStrategyReadsEveryBoundTask(t *testing.T) {
+	h := newHarness(t)
+	rsp, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"swap": "ftask_b", "spot": "ftask_a"}})
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if got := strings.Join(h.resolver.resolvedTasks, ","); got != "ftask_a,ftask_b" {
+		t.Fatalf("应按现货、永续的顺序解析全部任务：%s", got)
+	}
+}

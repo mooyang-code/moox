@@ -211,3 +211,54 @@ func TestDisableInstanceClosesSessionAtomically(t *testing.T) {
 		t.Fatalf("应停用、清空并关闭会话：%+v %+v", instance, closed)
 	}
 }
+
+// 实例可以绑定现货、永续两个因子任务；一个任务只能属于一个实例；事件按任意一个任务路由到实例。
+func TestInstanceBindsTwoFactorTasksExclusively(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	dual := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_spot", "swap": "ftask_swap"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, dual); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetInstance(ctx, "i1")
+	if err != nil || len(got.FactorTasks) != 2 || got.FactorTasks["spot"] != "ftask_spot" || got.FactorTasks["swap"] != "ftask_swap" {
+		t.Fatalf("实例应记下两个任务：%+v err=%v", got, err)
+	}
+	clash := Instance{InstanceID: "i2", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"swap": "ftask_swap"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, clash); err == nil {
+		t.Fatal("一个因子任务只能被一个实例绑定")
+	}
+	if _, err := repo.GetInstance(ctx, "i2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("创建失败的实例不应留下记录：%v", err)
+	}
+	for _, bad := range []map[string]string{nil, {"spot": "a", "swap": "b", "equity": "c"}, {"futures": "a"}, {"spot": " "}} {
+		if err := repo.CreateInstance(ctx, Instance{InstanceID: "i3", StrategyID: "s1", SpaceID: "space", FactorTasks: bad, CreatedAt: testNow}); err == nil {
+			t.Fatalf("非法的因子任务绑定应被拒绝：%v", bad)
+		}
+	}
+	// 修改实例：任务集合必须不变。
+	changed := dual
+	changed.UpdatedAt = testNow
+	changed.FactorTasks = map[string]string{"spot": "ftask_spot"}
+	if err := repo.UpdateInstance(ctx, changed); err == nil {
+		t.Fatal("实例的因子任务创建时写定，不能修改")
+	}
+	changed.FactorTasks = dual.FactorTasks
+	if err := repo.UpdateInstance(ctx, changed); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-1"
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_spot","factor_task_id":"ftask_spot"},"swap":{"view_id":"view_factor_swap","factor_task_id":"ftask_swap"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	attachAndEnable(t, repo, "i1", session, nil)
+	for _, view := range []string{"view_factor_spot", "view_factor_swap"} {
+		instances, err := repo.EnabledInstancesByView(ctx, "space", view)
+		if err != nil || len(instances) != 1 || instances[0].InstanceID != "i1" || len(instances[0].FactorTasks) != 2 {
+			t.Fatalf("View %s 的事件应路由到实例：%+v err=%v", view, instances, err)
+		}
+	}
+}

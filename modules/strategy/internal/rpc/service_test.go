@@ -31,14 +31,16 @@ rules:
 
 // fakeResolver 按因子任务返回固定的解析结果；swap 结尾的任务视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
-	calls       int
-	bound       []string
-	err         error
-	columns     []string
-	loaded      input.Loaded
-	loadErr     error
-	view        input.ViewInfo
-	coverageErr error
+	calls int
+	// resolvedTasks 记下最近一次 Resolve 收到的任务（按市场先后）。
+	resolvedTasks []string
+	bound         []string
+	err           error
+	columns       []string
+	loaded        input.Loaded
+	loadErr       error
+	view          input.ViewInfo
+	coverageErr   error
 	// onResolve 在每次解析开始时调用，用来模拟解析期间的并发修改。
 	onResolve func()
 	// calendar 非空时解析结果使用该日历的日线（例如 cn_stock）。
@@ -51,6 +53,7 @@ func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, ti
 
 func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
 	taskID := taskIDs[0]
+	f.resolvedTasks = taskIDs
 	f.calls++
 	if f.onResolve != nil {
 		f.onResolve()
@@ -62,21 +65,30 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, st
 	if columns == nil {
 		columns = []string{"close"}
 	}
-	spot := !strings.HasSuffix(taskID, "swap")
-	marketType := "spot"
-	if !spot {
-		marketType = "swap"
+	// 一个任务：后缀 swap 的是永续，其余现货；两个任务：现货、永续各一个，市场模式是 both/spot。
+	mode := dsl.SingleMarket("spot")
+	if strings.HasSuffix(taskID, "swap") {
+		mode = dsl.SingleMarket("swap")
 	}
-	strategy.Market = dsl.SingleMarket(marketType)
+	tasks := map[string]input.TaskBinding{}
+	for i, id := range taskIDs {
+		viewID, err := input.ViewIDOfTask(id)
+		if err != nil {
+			return input.Resolved{}, nil, err
+		}
+		market := mode.Select
+		if len(taskIDs) == 2 {
+			market = []string{"spot", "swap"}[i]
+			mode = dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}
+		}
+		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+	}
+	strategy.Market = mode
 	program, err := dsl.Compile(strategy, columns)
 	if err != nil {
 		return input.Resolved{}, nil, err
 	}
-	viewID, err := input.ViewIDOfTask(taskID)
-	if err != nil {
-		return input.Resolved{}, nil, err
-	}
-	resolved := input.Resolved{Market: dsl.SingleMarket(marketType), Tasks: map[string]input.TaskBinding{marketType: {ViewID: viewID, FactorTaskID: taskID, DatasetID: "ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	resolved := input.Resolved{Market: mode, Tasks: tasks, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
 	if f.calendar != "" {
 		resolved.Calendar, resolved.Bar = f.calendar, "1d"
 	}
