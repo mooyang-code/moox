@@ -50,6 +50,16 @@ func TestEventCenterAndCollectorAttentionBecomeBusinessChecks(t *testing.T) {
 
 func TestAttentionCheckNames(t *testing.T) {
 	require.Equal(t, "交易目标被拒绝", AttentionCheckName("trade_attention", "target_rejected"))
+	require.Equal(t, "估值降级（有持仓取不到价）", AttentionCheckName("trade_attention", "valuation_degraded"))
+	// Trade 上报的每种关注项（modules/trade/internal/telemetry/attention.go 的 attentionKinds）都要有中文名，
+	// 没登记的 kind 不会生成检查，告警会被悄悄丢掉。
+	for _, kind := range []string{
+		"target_rejected", "auto_paused", "target_blocked", "account_not_ready", "target_expired", "target_reversal",
+		"rate_limited", "turnover_high", "unknown_results", "margin_ratio_low", "inspection_blocked", "inspection_failing",
+		"transfer_shortfall", "transfer_failing", "valuation_degraded",
+	} {
+		require.NotEmpty(t, AttentionCheckName("trade_attention", kind), kind)
+	}
 	require.Equal(t, "发现标的即将下架", AttentionCheckName("event_center_attention", "delist_detected"))
 	require.Equal(t, "下架检测缺少币安只读 Key", AttentionCheckName("collector_attention", "delist_readonly_key_missing"))
 	require.Empty(t, AttentionCheckName("collector_attention", "unknown"))

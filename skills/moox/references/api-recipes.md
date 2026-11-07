@@ -77,11 +77,11 @@
 
 ### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）
 
-币安普通账户的钱包划转超过 10 分钟还没有对账出结果时，监控会发 `transfer_failing` 告警，文字里带划转编号，这个账户在此期间不会再发起新的划转。这是**用户自己判断**的操作：先请用户到交易所的划转记录里核对这笔划转有没有到账，用户确认结果后再调用，Agent 不代用户判断到账与否。
+币安普通账户的钱包划转超过 10 分钟还没有对账出结果时，监控会发 `transfer_failing` 告警，这个账户在此期间不会再发起新的划转。告警标签是固定文字（只有账户名，不带划转编号和金额，带变化的值会让指标序列不断增长）；划转编号、金额和资产只在 Trade 日志正文里：用 `setup logs --host <Trade 所在主机> --component trade --lines 2000` 搜“交易划转”和“划转编号”。这是**用户自己判断**的操作：先请用户到交易所的划转记录里核对这笔划转有没有到账，用户确认结果后再调用，Agent 不代用户判断到账与否。
 
 ```bash
 # 不带 --yes 只预览请求；用户确认后加 --yes。result 到账填 COMPLETED，没到账填 FAILED；note 是核对说明（可不写）
-./bin/moox-cli gateway call trpc.moox.trade.TradeConsoleService ResolveWalletTransfer --space-id crypto --data '{"transfer_id":"<告警里的划转编号>","result":"COMPLETED"}' --yes
+./bin/moox-cli gateway call trpc.moox.trade.TradeConsoleService ResolveWalletTransfer --space-id crypto --data '{"transfer_id":"<Trade 日志里的划转编号>","result":"COMPLETED"}' --yes
 ```
 
 - 只处理超过 10 分钟的未结记录；已经被自动对账或另一次人工处理结束的记录原样返回（`already_settled` 为真），不报错。

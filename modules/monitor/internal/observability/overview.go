@@ -1103,6 +1103,7 @@ var TradeAttentionNames = map[string]string{
 	"transfer_shortfall": "合约钱包可划转资金不足，现货买入被缩小",
 	"transfer_failing":   "钱包划转或归集出问题",
 	"margin_ratio_low":   "合约保证金率过低",
+	"valuation_degraded": "估值降级（有持仓取不到价）",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。
