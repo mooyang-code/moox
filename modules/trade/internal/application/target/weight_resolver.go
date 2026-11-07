@@ -321,7 +321,7 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 			if exchange.RuleFor(instruments[i].MarketType).PositionFromBalance &&
 				strings.EqualFold(instruments[i].BaseAsset, fundsettings.BNBAsset) &&
 				strings.EqualFold(instruments[i].QuoteAsset, account.SettlementAsset) &&
-				(instruments[i].Status == "TRADING" || instruments[i].Status == "live") {
+				exchange.StatusTradable(instruments[i].Status) {
 				bnb = &instruments[i]
 				break
 			}
@@ -449,7 +449,7 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 		}
 		instrument, err := r.Store.GetInstrumentByIDForAccount(ctx, spaceID, member.TradingAccountID, instrumentID)
 		if err == nil {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" && instrument.SettlementAsset != account.SettlementAsset {

@@ -723,7 +723,7 @@ func (e *Executor) loadMembers(
 		// 现货和合约的交易所代码相同（BTCUSDT），按（市场，代码）找标的。
 		symbols := make(map[exchange.SymbolKey]string)
 		for _, instrument := range instrumentRecords {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" &&

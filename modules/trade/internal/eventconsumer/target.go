@@ -424,7 +424,7 @@ func unsupportedLogicalTargetInstrument(
 			return "", false, instrumentErr
 		}
 		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" &&

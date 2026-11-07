@@ -38,7 +38,7 @@ type Settings struct {
 
 // rawDocument 和 Document 用同一组 json 键：宽松解析按字段单独处理，字段全是原始 JSON。
 // 读取时键名匹配用 encoding/json（不区分大小写），两边完全一致，不会出现一边认得一边不认的情况；
-// 写入设置时用 ParseForWrite，精确比对键名，拒绝未知键和大小写不规范的键。
+// 写入设置时（RPC 传结构化文档）用 ParseDocumentForWrite 校验，键名由 proto 字段固定。
 // 两个结构体的键集合必须相同，由测试锁住。
 type rawDocument struct {
 	ReserveRatio            json.RawMessage `json:"reserve_ratio"`
@@ -66,9 +66,6 @@ type Document struct {
 // BNBAsset 是 BNB 保留涉及的资产。
 const BNBAsset = "BNB"
 
-// USDTAsset 是默认的结算币（测试和展示用）；写入校验按组合实际的结算币判断，不写死 USDT。
-const USDTAsset = "USDT"
-
 // BNBReserveSlack 是 BNB 补买的容差：BNB 市值低于“保留金额 − 10”才补买。
 var BNBReserveSlack = shared.MustDecimal("10")
 
@@ -76,28 +73,6 @@ const (
 	defaultDustConvertIntervalDays = 15
 	maxDustConvertIntervalDays     = 365
 )
-
-// Parse 解析资金设置 JSON；空串和空对象返回全部默认值。读取路径，键名不区分大小写。
-func Parse(raw string) (Settings, error) {
-	if strings.TrimSpace(raw) == "" {
-		return Document{}.validate("")
-	}
-	var doc Document
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return Settings{}, fmt.Errorf("资金设置不是合法 JSON：%w", err)
-	}
-	return doc.validate("")
-}
-
-// ParseForWrite 是写入设置前的严格解析：未知键、大小写不规范的键、类型不对和越界的值都拒绝，
-// 返回有效设置和要存进数据库的规范 JSON。
-func ParseForWrite(raw, settlementAsset string) (Settings, string, error) {
-	var doc Document
-	if err := shared.DecodeStrictObject(raw, &doc); err != nil {
-		return Settings{}, "", fmt.Errorf("资金设置：%w", err)
-	}
-	return doc.validateAndCanonical(settlementAsset)
-}
 
 // ParseDocumentForWrite 校验 RPC 传来的结构化文档，返回有效设置和规范 JSON。
 // settlementAsset 是组合的结算币：稳定币保证金必须含它，保证金币、套利底仓不能写它。
@@ -122,11 +97,6 @@ func (d Document) validateAndCanonical(settlementAsset string) (Settings, string
 		return Settings{}, "", err
 	}
 	return settings, string(encoded), nil
-}
-
-// Validate 校验并换算为有效设置（不带结算币相关的检查）。
-func (d Document) Validate() (Settings, error) {
-	return d.validate("")
 }
 
 // validate 校验并换算为有效设置；settlementAsset 非空时再检查结算币相关的规则。

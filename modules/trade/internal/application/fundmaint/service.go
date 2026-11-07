@@ -312,7 +312,7 @@ func (s *Service) spotInstrument(ctx context.Context, account store.TradingAccou
 		if exchange.RuleFor(instrument.MarketType).PositionFromBalance &&
 			strings.EqualFold(instrument.BaseAsset, base) &&
 			strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) &&
-			(instrument.Status == "TRADING" || instrument.Status == "live") {
+			exchange.StatusTradable(instrument.Status) {
 			return instrument, true, nil
 		}
 	}

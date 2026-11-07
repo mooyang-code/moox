@@ -683,7 +683,7 @@ func (s *Service) supportedInstruments(ctx context.Context, members []store.Logi
 			return nil, err
 		}
 		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" &&
