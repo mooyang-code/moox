@@ -13,7 +13,8 @@ import (
 // LedgerSupported：模拟盘由本地成交生成流水（手续费、已实现盈亏），没有资金费和划转。
 func (a *Adapter) LedgerSupported() bool { return true }
 
-// ListLedger 返回 [Start, End] 内最新的至多 Limit 条流水，按时间倒序。每笔成交至多生成手续费和已实现盈亏两条。
+// ListLedger 返回 [Start, End] 内最新的至多 Limit 条流水，按时间倒序。每笔成交至多生成手续费和已实现盈亏两条，
+// 每条都带成交所属的市场（现货、永续同名标的靠它区分）。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if a == nil || a.Store == nil {
 		return exchange.LedgerPage{}, errors.New("paper adapter: store is not configured")
@@ -22,8 +23,8 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		return exchange.LedgerPage{}, errors.New("paper adapter: invalid ledger query")
 	}
 	fills, total, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{
-		TradingAccountID: a.Account.TradingAccountID,
-		StartTime:        query.Start.UnixMilli(), EndTime: query.End.UnixMilli(), Limit: query.Limit,
+		TradingAccountID: a.Account.TradingAccountID, Market: string(query.Market),
+		StartTime: query.Start.UnixMilli(), EndTime: query.End.UnixMilli(), Limit: query.Limit,
 	})
 	if err != nil {
 		return exchange.LedgerPage{}, err
@@ -34,13 +35,15 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		if fee, err := shared.ParseDecimal(fill.Fee); err == nil && !fee.IsZero() {
 			entries = append(entries, exchange.LedgerEntry{
 				ID: fill.FillID + ":fee", Time: at, Type: exchange.LedgerFee, ExchangeType: "PAPER_FEE",
-				Asset: fill.FeeAsset, Amount: fee.Neg(), ExchangeSymbol: fill.ExchangeSymbol, TradeID: fill.ExchangeTradeID,
+				Asset: fill.FeeAsset, Amount: fee.Neg(), Market: exchange.MarketType(fill.MarketType),
+				ExchangeSymbol: fill.ExchangeSymbol, TradeID: fill.ExchangeTradeID,
 			})
 		}
 		if pnl, err := shared.ParseDecimal(fill.RealizedPnL); err == nil && !pnl.IsZero() {
 			entries = append(entries, exchange.LedgerEntry{
 				ID: fill.FillID + ":pnl", Time: at, Type: exchange.LedgerRealizedPnL, ExchangeType: "PAPER_REALIZED_PNL",
-				Asset: fill.SettlementAsset, Amount: pnl, ExchangeSymbol: fill.ExchangeSymbol, TradeID: fill.ExchangeTradeID,
+				Asset: fill.SettlementAsset, Amount: pnl, Market: exchange.MarketType(fill.MarketType),
+				ExchangeSymbol: fill.ExchangeSymbol, TradeID: fill.ExchangeTradeID,
 			})
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -33,7 +34,39 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
 	}
-	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, adapter.GetAccountSnapshot)
+	// 账户上有挂着的单（OPEN、部分成交）时不复用：撮合随时可能让它成交，持仓和保证金会变。
+	reusable, err := s.noRestingPaperOrders(ctx, validation)
+	if err != nil {
+		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
+	}
+	load := adapter.GetAccountSnapshot
+	if !reusable {
+		snapshot, loadErr := load(ctx)
+		return s.marginFromSnapshot(validation, snapshot, loadErr)
+	}
+	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, load)
+	return s.marginFromSnapshot(validation, snapshot, err)
+}
+
+// noRestingPaperOrders 报告账户上是否没有可能被撮合的挂单（OPEN、部分成交）。
+func (s *Service) noRestingPaperOrders(ctx context.Context, validation Validation) (bool, error) {
+	if ctx.Value(snapshotReuseKey{}) == nil {
+		return true, nil
+	}
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, validation.Account.SpaceID, validation.Account.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, order := range orders {
+		// 只看模拟撮合会成交的状态：挂单和部分成交。
+		if order.State == string(orderdomain.Open) || order.State == string(orderdomain.PartiallyFilled) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *Service) marginFromSnapshot(validation Validation, snapshot exchange.AccountSnapshot, err error) (shared.Decimal, error) {
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
 	}
@@ -66,8 +99,8 @@ type snapshotReuse struct {
 }
 
 // WithSnapshotReuse 让同一轮建子单里对同一执行账户的模拟盘保证金估值只算一次快照。
-// 只用于 Converge 持逻辑账户锁、循环开始时成员账户没有活动订单的连续建单这一段：PENDING 单不参与撮合，
-// 一个执行账户只属于一个启用的组合账户，这期间持仓和标记价之外的保证金因素不会变化。
+// 只用于 Converge 持逻辑账户锁的连续建单这一段：PENDING 单不参与撮合，一个执行账户只属于一个启用的组合账户，
+// 这期间持仓和标记价之外的保证金因素不会变化。账户上有挂着的单（OPEN、部分成交）时不复用，每次现算。
 // 发送阶段不能用：同批前面的子单可能已被撮合成交。
 func WithSnapshotReuse(ctx context.Context) context.Context {
 	return context.WithValue(ctx, snapshotReuseKey{}, &snapshotReuse{snapshots: make(map[string]exchange.AccountSnapshot)})
