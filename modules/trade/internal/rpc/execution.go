@@ -229,7 +229,7 @@ func (h *ExecutionServer) ListOrders(
 	records, total, err := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
 		LogicalAccountID: req.GetLogicalAccountId(),
 		TradingAccountID: req.GetTradingAccountId(),
-		InstrumentID:     instrumentID, State: normalized(req.GetState()),
+		InstrumentID:     instrumentID, State: normalized(req.GetState()), OwnerType: req.GetOwnerType(),
 		OnlyOpen: req.GetOnlyOpen(), StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})
