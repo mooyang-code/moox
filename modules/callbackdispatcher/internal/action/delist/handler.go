@@ -759,9 +759,9 @@ func (r *run) reopenable(summary store.DelistAction, plannedAt int64) bool {
 	return true
 }
 
-// retireStaleRows 在一轮按新的下架时间重开时，收掉不在新持有者名单里的组合留下的旧计划的行：它们已经不再持有，
-// 旧行留着失败、只完成一部分的状态，关注项会一直提醒到核对。改成按新计划“已不再持有”结束，旧结果写在说明里。
-// 旧计划里成功的行不动。
+// retireStaleRows 在一轮按新的下架时间重开时，收掉不在新持有者名单里的组合留下的旧计划的行：旧行留着失败、只完成一部分的状态，
+// 关注项会一直提醒到核对。改成按新计划结束，旧结果写在说明里；旧计划里成功的行不动。
+// 不在名单里也可能是这个账户这次没能判断（Trade 返回的 skipped）：那种情况汇总行带着说明、至少是“只完成一部分”，关注项照样提醒。
 func (r *run) retireStaleRows(ctx context.Context, round int, plannedAt int64, holding map[stepKey]bool) error {
 	var stale []store.DelistAction
 	for key, step := range r.steps {
@@ -776,7 +776,7 @@ func (r *run) retireStaleRows(ctx context.Context, round int, plannedAt int64, h
 	for _, step := range stale {
 		previous := joinLines(nonEmpty(step.Status, step.Error))
 		step.Status, step.Error, step.NextCheckAt, step.BusySince = store.DelistSucceeded, "", 0, 0
-		step.Result = "改期后按新的下架时间重查，已不再持有（旧计划的结果：" + previous + "）"
+		step.Result = "改期后按新的下架时间重查，不在持有者名单里（旧计划的结果：" + previous + "）"
 		step.PlannedDelistAt = plannedAt
 		if err := r.save(ctx, step); err != nil {
 			return err
@@ -867,9 +867,6 @@ func (r *run) launch(ctx context.Context, row store.DelistAction) error {
 	// 同一个操作号重发必须带同一个值，否则会被判成幂等冲突；改期后新建的行自带新的下架时间。
 	// 走到这里的行都是按现在的下架时间规划的（改期前没发起的行不会发起，见 advanceRow），截止时间就是现在的 T。
 	deadline := row.PlannedDelistAt
-	if deadline <= 0 {
-		deadline = r.target.DelistAt.UnixMilli()
-	}
 	if !r.h.now().Before(time.UnixMilli(deadline)) {
 		row.Status, row.Error = store.DelistFailed, "已到下架时间，不再下单"
 		return r.save(ctx, row)

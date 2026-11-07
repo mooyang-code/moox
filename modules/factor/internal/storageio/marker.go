@@ -131,9 +131,20 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	detail := &factorpb.PeriodDetail{SourceDatasetId: marker.SourceDatasetID, Factors: detailFactors}
 	detail.SharedFailedSeries = shareFailedSeries(detailFactors)
 	universe, failed := normalizedSorted(marker.UniverseSubjects), normalizedSorted(marker.FailedSubjects)
-	universeSeries := normalizedSeries(marker.UniverseSeries)
+	universeSeries, failedSeries := normalizedSeries(marker.UniverseSeries), normalizedSeries(marker.FailedSeries)
 	if err := ValidatePeriodDetail(detail, universe, universeSeries, marker.Status); err != nil {
 		return nil, err
+	}
+	// 周期级失败序列的标的必须在失败标的里（有一条序列失败的标的就是失败标的）：Storage 发布事件时按同一条规则校验，
+	// 这里先查，违反时给出中文错误，而不是等 Storage 拒发。
+	failedSet := make(map[string]struct{}, len(failed))
+	for _, subject := range failed {
+		failedSet[subject] = struct{}{}
+	}
+	for _, item := range failedSeries {
+		if _, ok := failedSet[item.SubjectID]; !ok {
+			return nil, fmt.Errorf("因子周期标记的失败序列 %s/%s 的标的不在失败标的里", item.SubjectID, item.SeriesTag)
+		}
 	}
 	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(detail)
 	if err != nil {
@@ -142,7 +153,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 	out := &storagepb.DatasetPeriodCompletedMarker{
 		DatasetId: marker.ResultDatasetID, Frequency: marker.Frequency, PeriodTime: marker.PeriodTime, Status: marker.Status,
 		UniverseSubjectIds: universe, FailedSubjects: failed,
-		UniverseSeries: seriesToMarker(universeSeries), FailedSeries: seriesToMarker(normalizedSeries(marker.FailedSeries)),
+		UniverseSeries: seriesToMarker(universeSeries), FailedSeries: seriesToMarker(failedSeries),
 		CauseEventId: marker.TriggerEventID, CompletedAt: timestamppb.New(marker.ComputedAt.UTC()),
 		DetailType: PeriodDetailType, Detail: raw,
 	}

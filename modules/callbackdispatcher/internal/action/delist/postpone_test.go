@@ -232,7 +232,7 @@ func TestReopenRetiresRowsOfFormerHolders(t *testing.T) {
 	h.step("e1", newT.Add(-24*time.Hour))
 	former := h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-2")]
 	require.Equal(t, store.DelistSucceeded, former.Status)
-	require.Contains(t, former.Result, "已不再持有")
+	require.Contains(t, former.Result, "不在持有者名单里")
 	require.Contains(t, former.Result, store.DelistPartial, "旧结果留在说明里")
 	require.Equal(t, newT.UnixMilli(), former.PlannedDelistAt)
 

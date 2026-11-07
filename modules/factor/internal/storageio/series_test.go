@@ -51,6 +51,11 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 
 	// 读回：冻结全集带按序列的名单。
 	require.Equal(t, normalizedSeries(universe), seriesFromMarker(protoMarker.GetUniverseSeries()))
+
+	// 失败序列的标的不在失败标的里：先在因子这边报错，不等 Storage 拒发。
+	marker.FailedSeries = append(marker.FailedSeries, seriesRef("BTC", testSpotTag))
+	_, err = markerToProto(marker)
+	require.ErrorContains(t, err, "不在失败标的里")
 }
 
 func TestValidatePeriodDetailSeriesRules(t *testing.T) {
