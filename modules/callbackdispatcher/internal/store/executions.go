@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -58,38 +59,66 @@ func (t *Tx) ReplaceExecutionEvent(executionID, eventID, payloadJSON string, occ
 		Updates(map[string]any{"c_event_id": eventID, "c_payload_json": payloadJSON, "c_occurred_at": occurredAt, "c_next_run_at": now, "c_updated_at": now}).Error
 }
 
-// ClaimDue 取出到期的待处理记录并置为执行中。systemActions 是已经注册了处理器的系统动作：
+// ClaimDue 取出到期的待处理记录并置为执行中，不限制每条规则的数量。systemActions 是已经注册了处理器的系统动作：
 // 没有处理器的系统动作记录不取，免得每轮都到期却没人处理。
 func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemActions []string) ([]Execution, error) {
-	return s.ClaimDueExcluding(ctx, now, limit, systemActions, nil)
+	return s.ClaimDueLimited(ctx, now, limit, systemActions, 0, nil)
 }
 
-// ClaimDueExcluding 与 ClaimDue 相同，但不取 excludeRules 里的规则的记录：某条规则已经占满了它的并发名额时，
-// 不让它的慢接口占住全部处理能力。
-func (s *Store) ClaimDueExcluding(ctx context.Context, now int64, limit int, systemActions, excludeRules []string) ([]Execution, error) {
+// ClaimDueLimited 与 ClaimDue 相同，但每条规则这一轮最多取 perRule 条（0 表示不限）；remaining 里列出的规则按它的剩余名额取
+// （0 就是这一轮不取）。在 SQL 里按规则限额，一条规则积压再多，也不会占满每一轮的领取名额，别的规则照常被领到。
+func (s *Store) ClaimDueLimited(ctx context.Context, now int64, limit int, systemActions []string, perRule int, remaining map[string]int) ([]Execution, error) {
 	var claimed []Execution
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var rows []executionRow
-		query := tx.Table("t_event_executions AS e").Select("e.*").
-			Joins("LEFT JOIN t_event_rules r ON r.c_rule_id = e.c_rule_id").
-			Where("e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ?", StatusPending, now)
+		where := "e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ? AND "
+		args := []any{StatusPending, now}
 		if len(systemActions) == 0 {
-			query = query.Where("e.c_action_type = ?", ActionNotifyURL)
+			where += "e.c_action_type = ?"
+			args = append(args, ActionNotifyURL)
 		} else {
-			query = query.Where("(e.c_action_type = ? OR r.c_system_action IN ?)", ActionNotifyURL, systemActions)
+			where += "(e.c_action_type = ? OR r.c_system_action IN ?)"
+			args = append(args, ActionNotifyURL, systemActions)
 		}
-		if len(excludeRules) > 0 {
-			query = query.Where("e.c_rule_id NOT IN ?", excludeRules)
+		outer := ""
+		if perRule > 0 {
+			outer = " WHERE rn <= CASE c_rule_id"
+			var ruleIDs []string
+			for rule := range remaining {
+				ruleIDs = append(ruleIDs, rule)
+			}
+			sort.Strings(ruleIDs)
+			var caseArgs []any
+			for _, rule := range ruleIDs {
+				outer += " WHEN ? THEN ?"
+				caseArgs = append(caseArgs, rule, remaining[rule])
+			}
+			if len(ruleIDs) == 0 {
+				outer = " WHERE rn <= ?"
+			} else {
+				outer += " ELSE ? END"
+			}
+			caseArgs = append(caseArgs, perRule)
+			args = append(args, caseArgs...)
 		}
-		if err := query.Order("e.c_next_run_at ASC, e.c_execution_id ASC").Limit(limit).Scan(&rows).Error; err != nil {
+		query := `SELECT * FROM (
+    SELECT e.*, ROW_NUMBER() OVER (PARTITION BY e.c_rule_id ORDER BY e.c_next_run_at ASC, e.c_execution_id ASC) AS rn
+    FROM t_event_executions AS e
+    LEFT JOIN t_event_rules AS r ON r.c_rule_id = e.c_rule_id
+    WHERE ` + where + `
+)` + outer + ` ORDER BY c_next_run_at ASC, c_execution_id ASC LIMIT ?`
+		args = append(args, limit)
+		var rows []executionRow
+		if err := tx.Raw(query, args...).Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {
+			// 领取时间同时是凭证，必须和这条记录上一次的不同。
+			token := max(now, row.ClaimedAt+1)
 			if err := tx.Model(&executionRow{}).Where("c_execution_id = ?", row.ExecutionID).
-				Updates(map[string]any{"c_status": StatusRunning, "c_updated_at": now}).Error; err != nil {
+				Updates(map[string]any{"c_status": StatusRunning, "c_claimed_at": token, "c_updated_at": now}).Error; err != nil {
 				return err
 			}
-			row.Status = StatusRunning
+			row.Status, row.ClaimedAt = StatusRunning, token
 			claimed = append(claimed, executionFromRow(row))
 		}
 		return nil
@@ -104,16 +133,10 @@ func (s *Store) RecoverRunning(ctx context.Context, now int64) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
-// ReleaseClaim 把刚领取、还没开始处理的记录放回待处理（保持原来的到期时间）：领取后发现它所属的规则已经占满并发名额。
-func (s *Store) ReleaseClaim(ctx context.Context, executionID string, now int64) error {
-	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).
-		Updates(map[string]any{"c_status": StatusPending, "c_updated_at": now}).Error
-}
-
-// RecoverStaleRunning 把停在“执行中”超过 staleBefore（Unix 毫秒）没更新的记录放回待处理：
+// RecoverStaleRunning 把领取时间早于 staleBefore（Unix 毫秒）、还停在“执行中”的记录放回待处理：
 // 处理它的线程卡死或丢失结果时，记录不会永远停在执行中。返回放回的条数。
 func (s *Store) RecoverStaleRunning(ctx context.Context, staleBefore, now int64) (int64, error) {
-	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_status = ? AND c_updated_at < ?", StatusRunning, staleBefore).
+	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_status = ? AND c_claimed_at < ?", StatusRunning, staleBefore).
 		Updates(map[string]any{"c_status": StatusPending, "c_next_run_at": now, "c_updated_at": now})
 	return result.RowsAffected, result.Error
 }
@@ -135,13 +158,14 @@ type Result struct {
 	ProcessedPayload string
 }
 
-// SaveResult 写回处理结果。只有记录仍是执行中才写（处理期间被取消的记录保持已取消）；返回是否写入。
+// SaveResult 写回处理结果。只有记录仍是执行中、并且领取凭证 claimedAt 还对得上才写：处理期间被取消的记录保持已取消，
+// 卡住后被放回又被重新领取的记录，旧线程迟到的结果不能覆盖新线程的；返回是否写入。
 // 处理期间事件内容被合并更新过（见 Result.ProcessedPayload）时，记录改为待处理并立即到期，其余计数照常写入。
-func (s *Store) SaveResult(ctx context.Context, executionID string, result Result, now int64) (bool, error) {
+func (s *Store) SaveResult(ctx context.Context, executionID string, claimedAt int64, result Result, now int64) (bool, error) {
 	applied := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current executionRow
-		if err := tx.Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).Take(&current).Error; err != nil {
+		if err := tx.Where("c_execution_id = ? AND c_status = ? AND c_claimed_at = ?", executionID, StatusRunning, claimedAt).Take(&current).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			}
@@ -150,7 +174,7 @@ func (s *Store) SaveResult(ctx context.Context, executionID string, result Resul
 		if result.ProcessedPayload != "" && current.PayloadJSON != result.ProcessedPayload && result.Status != StatusCanceled {
 			result.Status, result.NextRunAt, result.FinishedAt = StatusPending, now, 0
 		}
-		update := tx.Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).
+		update := tx.Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ? AND c_claimed_at = ?", executionID, StatusRunning, claimedAt).
 			Updates(map[string]any{
 				"c_status": result.Status, "c_next_run_at": result.NextRunAt, "c_last_error": result.LastError,
 				"c_attempts": result.Attempts, "c_failures": result.Failures, "c_first_failed_at": result.FirstFailedAt, "c_duration_ms": result.DurationMS,

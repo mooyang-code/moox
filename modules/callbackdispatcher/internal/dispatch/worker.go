@@ -47,8 +47,12 @@ func (w *Worker) now() time.Time {
 	return time.Now()
 }
 
-// StaleRunningAfter 是记录停在“执行中”超过多久还没有结果就放回待处理。一次处理最长只有几十秒，这个值要远大于它。
+// StaleRunningAfter 是记录停在“执行中”超过多久还没有结果就放回待处理。
 const StaleRunningAfter = 10 * time.Minute
+
+// stepTimeout 是一次处理（发送通知或推进系统动作一步）的时限：只有一半的 StaleRunningAfter，
+// 这样记录被当作卡住放回去之前，旧线程已经被取消，不会和重新领取它的线程同时做同一步（比如重复平仓）。
+const stepTimeout = StaleRunningAfter / 2
 
 // MaxPerRule 是同一条规则同时处理的执行记录数上限：一条规则的接口很慢时，不会占住全部处理能力。
 const MaxPerRule = 2
@@ -109,7 +113,7 @@ func (w *Worker) RunOnce(ctx context.Context) int {
 }
 
 // dispatch 按空闲的处理名额领取到期的记录，各自在 goroutine 里处理，领取完立即返回；返回启动的个数。
-// 已经占满 MaxPerRule 名额的规则这一轮不再领取。
+// 每条规则同时处理的数量不超过 MaxPerRule：领取时在库里按规则的剩余名额限制，占满的规则这一轮一条也不领。
 func (w *Worker) dispatch(ctx context.Context) int {
 	w.once.Do(func() {
 		w.slots = make(chan struct{}, w.Batch)
@@ -120,37 +124,25 @@ func (w *Worker) dispatch(ctx context.Context) int {
 		return 0
 	}
 	w.mu.Lock()
-	var busy []string
+	remaining := map[string]int{}
 	for rule, count := range w.running {
-		if count >= MaxPerRule {
-			busy = append(busy, rule)
+		if count > 0 {
+			remaining[rule] = max(MaxPerRule-count, 0)
 		}
 	}
 	w.mu.Unlock()
-	claimed, err := w.Store.ClaimDueExcluding(ctx, w.now().UnixMilli(), free, w.Actions.Actions(), busy)
+	claimed, err := w.Store.ClaimDueLimited(ctx, w.now().UnixMilli(), free, w.Actions.Actions(), MaxPerRule, remaining)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.WarnContextf(ctx, "领取到期的执行记录失败: %v", err)
 		}
 		return 0
 	}
-	launched := 0
 	for _, execution := range claimed {
 		w.mu.Lock()
-		over := w.running[execution.RuleID] >= MaxPerRule
-		if !over {
-			w.running[execution.RuleID]++
-		}
+		w.running[execution.RuleID]++
 		w.mu.Unlock()
-		if over {
-			// 同一轮领到了同一条规则的多条：超出并发名额的放回去，下一轮再领。
-			if err := w.Store.ReleaseClaim(ctx, execution.ExecutionID, w.now().UnixMilli()); err != nil && ctx.Err() == nil {
-				log.WarnContextf(ctx, "放回超出并发名额的执行记录 %s 失败: %v", execution.ExecutionID, err)
-			}
-			continue
-		}
 		w.slots <- struct{}{}
-		launched++
 		w.inflight.Add(1)
 		go func() {
 			defer func() {
@@ -163,7 +155,7 @@ func (w *Worker) dispatch(ctx context.Context) int {
 			w.process(ctx, execution)
 		}()
 	}
-	return launched
+	return len(claimed)
 }
 
 func (w *Worker) process(ctx context.Context, execution store.Execution) {
@@ -195,7 +187,9 @@ func (w *Worker) process(ctx context.Context, execution store.Execution) {
 
 func (w *Worker) processNotify(ctx context.Context, execution store.Execution, rule store.Rule) {
 	entry, _ := catalog.Lookup(execution.EventName)
-	result := w.Sender.Send(ctx, delivery.Target{URL: rule.NotifyURL, Secret: rule.Secret, AllowPrivate: rule.AllowPrivate}, requestFor(execution, entry))
+	callCtx, cancel := context.WithTimeout(ctx, stepTimeout)
+	defer cancel()
+	result := w.Sender.Send(callCtx, delivery.Target{URL: rule.NotifyURL, Secret: rule.Secret, AllowPrivate: rule.AllowPrivate}, requestFor(execution, entry))
 	now := w.now()
 	attempt := execution.Attempts + 1
 	record := store.Attempt{Attempt: attempt, At: now.UnixMilli(), HTTPStatus: result.StatusCode, DurationMS: result.Duration.Milliseconds(), ResponseSnippet: result.Snippet}
@@ -232,7 +226,9 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 		return
 	}
 	now := w.now()
-	outcome, err := handler.Step(ctx, execution, now)
+	stepCtx, cancel := context.WithTimeout(ctx, stepTimeout)
+	defer cancel()
+	outcome, err := handler.Step(stepCtx, execution, now)
 	if err != nil {
 		w.reschedule(ctx, execution, err.Error())
 		return
@@ -263,7 +259,7 @@ func (w *Worker) reschedule(ctx context.Context, execution store.Execution, reas
 }
 
 func (w *Worker) save(ctx context.Context, execution store.Execution, result store.Result) {
-	if _, err := w.Store.SaveResult(ctx, execution.ExecutionID, result, w.now().UnixMilli()); err != nil && ctx.Err() == nil {
+	if _, err := w.Store.SaveResult(ctx, execution.ExecutionID, execution.ClaimedAt, result, w.now().UnixMilli()); err != nil && ctx.Err() == nil {
 		log.WarnContextf(ctx, "保存执行记录 %s 的结果失败: %v", execution.ExecutionID, err)
 	}
 }

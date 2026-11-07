@@ -56,9 +56,11 @@ type Execution struct {
 	FirstFailedAt int64
 	LastError     string
 	DedupeKey     string
-	NextRunAt     int64
-	DurationMS    int64
-	Acknowledged  bool
+	// ClaimedAt 是最近一次领取的时间，也是领取凭证（见 SaveResult）。
+	ClaimedAt    int64
+	NextRunAt    int64
+	DurationMS   int64
+	Acknowledged bool
 	// CleanupPending 表示系统动作记录已取消，但取消后的善后（解除禁止买入）还没做成；做成之前可以再取消一次重做。
 	CleanupPending bool
 	CreatedAt      int64
@@ -143,6 +145,7 @@ type executionRow struct {
 	FirstFailedAt  int64  `gorm:"column:c_first_failed_at"`
 	LastError      string `gorm:"column:c_last_error"`
 	DedupeKey      string `gorm:"column:c_dedupe_key"`
+	ClaimedAt      int64  `gorm:"column:c_claimed_at"`
 	NextRunAt      int64  `gorm:"column:c_next_run_at"`
 	DurationMS     int64  `gorm:"column:c_duration_ms"`
 	Acknowledged   bool   `gorm:"column:c_acknowledged"`

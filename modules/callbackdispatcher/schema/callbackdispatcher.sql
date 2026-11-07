@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     c_first_failed_at INTEGER NOT NULL DEFAULT 0,
     c_last_error TEXT NOT NULL DEFAULT '',
     c_dedupe_key TEXT NOT NULL DEFAULT '',
+    -- 最近一次领取（置为执行中）的时间，同时是领取凭证：写回结果时必须对得上，卡住后被放回再被领取的记录，旧线程的结果写不进来。
+    c_claimed_at INTEGER NOT NULL DEFAULT 0,
     c_next_run_at INTEGER NOT NULL DEFAULT 0,
     c_duration_ms INTEGER NOT NULL DEFAULT 0,
     c_acknowledged INTEGER NOT NULL DEFAULT 0,

@@ -121,3 +121,25 @@ func TestStaleRunningExecutionsAreRecovered(t *testing.T) {
 	worker := newWorker(t, s, &fakeSender{results: []delivery.Result{{Class: delivery.Success, StatusCode: 200}}}, action.NewRegistry(), c)
 	require.Equal(t, 2, worker.RunOnce(ctx))
 }
+
+// deadlineSender 记录发送时 ctx 的截止时间。
+type deadlineSender struct{ remaining time.Duration }
+
+func (d *deadlineSender) Send(ctx context.Context, _ delivery.Target, _ delivery.Request) delivery.Result {
+	if deadline, ok := ctx.Deadline(); ok {
+		d.remaining = time.Until(deadline)
+	}
+	return delivery.Result{Class: delivery.Success, StatusCode: 200}
+}
+
+// 一次处理的时限只有 StaleRunningAfter 的一半：记录被当作卡住放回去之前，旧线程已经被取消。
+func TestStepHasTimeoutShorterThanStaleRecovery(t *testing.T) {
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seedMany(t, s, c, "r1", "https://example.com/hook", 1)
+	sender := &deadlineSender{}
+	worker := newWorker(t, s, sender, nil, c)
+	require.Equal(t, 1, worker.RunOnce(context.Background()))
+	require.Positive(t, sender.remaining)
+	require.LessOrEqual(t, sender.remaining, StaleRunningAfter/2)
+}
