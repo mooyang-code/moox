@@ -30,11 +30,17 @@ func (c Config) Enabled() bool {
 
 // hook 是连接建立之后要做的一件事（例如启动 K 线合成的消费者）：失败只影响它自己，之后单独重试。
 type hook struct {
+	name        string
 	run         func(context.Context, *jetstream.Client) (func() error, error)
 	closer      func() error
 	done        bool
 	lastFailure time.Time
+	failures    int
+	lastErr     string
 }
+
+// HookFailureThreshold 是连接后的回调连续失败多少次才算关注项。
+const HookFailureThreshold = 3
 
 // Hub 持有 Collector 与 EventBus 的共享连接。
 type Hub struct {
@@ -45,6 +51,8 @@ type Hub struct {
 	RetryInterval time.Duration
 	// Now 可由测试替换。
 	Now func() time.Time
+	// Attention 非空时，连接后的回调连续失败 HookFailureThreshold 次上报关注项。
+	Attention *attention.Attention
 
 	mu          sync.Mutex
 	client      *jetstream.Client
@@ -58,12 +66,12 @@ func NewHub(cfg Config, registry *events.Registry) *Hub {
 	return &Hub{cfg: cfg, registry: registry, RetryInterval: time.Minute, Now: time.Now}
 }
 
-// OnConnected 注册连接建立之后要做的事（例如启动 K 线合成的消费者）。回调可以返回一个关闭函数，Hub 关闭时先于连接调用它。
+// OnConnected 注册连接建立之后要做的事（例如启动 K 线合成的消费者），name 用在日志和关注项里。回调可以返回一个关闭函数，Hub 关闭时先于连接调用它。
 // 回调失败不影响连接和发布：连接与发布器照样保留（下架事件等照常发布），失败的回调在之后的 Ensure 里单独重试。
-func (h *Hub) OnConnected(callback func(context.Context, *jetstream.Client) (func() error, error)) {
+func (h *Hub) OnConnected(name string, callback func(context.Context, *jetstream.Client) (func() error, error)) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.hooks = append(h.hooks, &hook{run: callback})
+	h.hooks = append(h.hooks, &hook{name: name, run: callback})
 }
 
 var errNotYetRetry = errors.New("EventBus 还没连上，稍后重试")
@@ -118,11 +126,36 @@ func (h *Hub) runHooks(ctx context.Context) {
 		closer, err := item.run(ctx, h.client)
 		if err != nil {
 			item.lastFailure = h.Now()
-			log.WarnContextf(ctx, "[Collector] EventBus 连接后的初始化失败（连接与发布不受影响，%s 后重试）: %v", h.RetryInterval, err)
+			item.failures++
+			item.lastErr = err.Error()
+			log.WarnContextf(ctx, "[Collector] EventBus 连接后的初始化 %s 失败（连续 %d 次；连接与发布不受影响，%s 后重试）: %v", item.name, item.failures, h.RetryInterval, err)
 			continue
 		}
-		item.closer, item.done = closer, true
+		item.closer, item.done, item.failures = closer, true, 0
 	}
+	h.publishHookAttention()
+}
+
+// publishHookAttention 上报连续失败达到阈值的回调；恢复后值回到 0。
+func (h *Hub) publishHookAttention() {
+	if h.Attention == nil {
+		return
+	}
+	var details []string
+	for _, item := range h.hooks {
+		if !item.done && item.failures >= HookFailureThreshold {
+			details = append(details, fmt.Sprintf("%s 连续 %d 次启动失败：%s", item.name, item.failures, stableReason(item.lastErr)))
+		}
+	}
+	h.Attention.Set("eventbus_hooks", map[string][]string{attention.KindConsumerFailed: details})
+}
+
+// stableReason 截短错误文本：原文可能带地址和时间，每次都不同，会让指标序列不断增长。
+func stableReason(reason string) string {
+	if runes := []rune(reason); len(runes) > 60 {
+		return string(runes[:60])
+	}
+	return reason
 }
 
 // Client 返回共享连接；还没连上时为 nil。

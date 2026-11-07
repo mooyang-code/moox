@@ -1112,6 +1112,7 @@ var CollectorAttentionNames = map[string]string{
 	"delist_source_failed":        "下架检测来源连续失败",
 	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
 	"event_outbox_stuck":          "Collector 事件发件箱积压",
+	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
 }
 
 // attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。

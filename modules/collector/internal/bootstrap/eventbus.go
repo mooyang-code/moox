@@ -38,6 +38,7 @@ func newEventBusRuntime(cfg *Config, dbm *store.Store) (*eventBusRuntime, error)
 	}
 	hub := eventbus.NewHub(cfg.EventBus, registry)
 	attn := attention.New(prometheus.DefaultRegisterer)
+	hub.Attention = attn
 	relay := eventbus.NewRelay(dbm.Resample(), registry, hub, relayInterval)
 	relay.Attention = attn
 	return &eventBusRuntime{hub: hub, relay: relay, attention: attn}, nil

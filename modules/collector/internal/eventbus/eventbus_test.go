@@ -67,7 +67,7 @@ func TestRelayPublishesWithoutKlineResampleAndSurvivesLateEventBus(t *testing.T)
 	var connectedCalls int
 	var mu sync.Mutex
 	closed := 0
-	hub.OnConnected(func(_ context.Context, client *jetstream.Client) (func() error, error) {
+	hub.OnConnected("测试回调", func(_ context.Context, client *jetstream.Client) (func() error, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		connectedCalls++
@@ -135,14 +135,14 @@ func TestFailedConnectedCallbackKeepsConnectionAndPublishingAndIsRetriedAlone(t 
 	t.Cleanup(func() { _ = hub.Close() })
 
 	failing, healthy, closedHealthy := 0, 0, 0
-	hub.OnConnected(func(context.Context, *jetstream.Client) (func() error, error) {
+	hub.OnConnected("测试回调", func(context.Context, *jetstream.Client) (func() error, error) {
 		failing++
 		if failing <= 2 {
 			return nil, errors.New("消费者创建失败")
 		}
 		return nil, nil
 	})
-	hub.OnConnected(func(context.Context, *jetstream.Client) (func() error, error) {
+	hub.OnConnected("测试回调", func(context.Context, *jetstream.Client) (func() error, error) {
 		healthy++
 		return func() error { closedHealthy++; return nil }, nil
 	})
@@ -171,6 +171,42 @@ func TestFailedConnectedCallbackKeepsConnectionAndPublishingAndIsRetriedAlone(t 
 	require.Equal(t, 1, healthy)
 	require.NoError(t, hub.Close())
 	require.Equal(t, 1, closedHealthy)
+}
+
+// 连上之后的回调连续失败 3 次才上报关注项；成功之后恢复。
+func TestHookFailureRaisesAttentionAfterThreshold(t *testing.T) {
+	server := testkit.Start(t)
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	attn := attention.New(prometheus.NewRegistry())
+	now := time.Now()
+	hub := NewHub(Config{URLs: []string{server.URL()}}, registry)
+	hub.Attention = attn
+	hub.RetryInterval = time.Minute
+	hub.Now = func() time.Time { return now }
+	t.Cleanup(func() { _ = hub.Close() })
+
+	calls := 0
+	hub.OnConnected("K 线合成消费者", func(context.Context, *jetstream.Client) (func() error, error) {
+		calls++
+		if calls <= 3 {
+			return nil, errors.New("创建消费者失败")
+		}
+		return nil, nil
+	})
+	detail := "K 线合成消费者 连续 3 次启动失败：创建消费者失败"
+	for i := 1; i <= 3; i++ {
+		require.NoError(t, hub.Ensure(context.Background()))
+		want := 0.0
+		if i == 3 {
+			want = 1.0
+		}
+		require.Equal(t, want, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, detail)), "第 %d 次失败后", i)
+		now = now.Add(2 * time.Minute)
+	}
+	require.NoError(t, hub.Ensure(context.Background()))
+	require.Equal(t, 4, calls)
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindConsumerFailed, "")), "成功之后恢复")
 }
 
 // 无效事件不堵住后面的：标成死信并上报关注项，后面的事件照常发布。

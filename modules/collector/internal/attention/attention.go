@@ -19,9 +19,11 @@ const (
 	KindReadonlyKeyMissing = "delist_readonly_key_missing"
 	// KindOutboxStuck 是事件发件箱里的事件积压过久没发布出去，或有无效事件被搁置。
 	KindOutboxStuck = "event_outbox_stuck"
+	// KindConsumerFailed 是连上 EventBus 之后的初始化（例如 K 线合成的消费者）连续失败，一直没有成功。
+	KindConsumerFailed = "eventbus_consumer_failed"
 )
 
-var kinds = []string{KindSourceFailed, KindReadonlyKeyMissing, KindOutboxStuck}
+var kinds = []string{KindSourceFailed, KindReadonlyKeyMissing, KindOutboxStuck, KindConsumerFailed}
 
 // maxDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
 const maxDetail = 480
