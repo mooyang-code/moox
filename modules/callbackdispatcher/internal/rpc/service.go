@@ -197,6 +197,10 @@ func normalizeScope(entry catalog.Entry, scope []*pb.ScopeFilter) ([]store.Scope
 			if value == "" || len(value) > 256 {
 				return nil, fmt.Errorf("%s 的取值不能为空，也不能太长", definition.Title)
 			}
+			if field == catalog.FieldExchangeSymbol {
+				// 事件里的交易所代码一律是大写（入口统一）：填小写的规则永远匹配不上，所以保存时统一成大写。
+				value = strings.ToUpper(value)
+			}
 			if len(definition.Options) != 0 && !contains(definition.Options, value) {
 				return nil, fmt.Errorf("%s 的取值 %q 不在可选范围 %s 内", definition.Title, value, strings.Join(definition.Options, "、"))
 			}
