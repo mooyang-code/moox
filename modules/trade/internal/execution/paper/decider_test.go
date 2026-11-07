@@ -102,8 +102,10 @@ func TestDeciderLiveQuotePoliciesAndFees(t *testing.T) {
 	}{
 		{"market-buy-slippage", "MARKET", "", "", "BUY", "102.01", "0.20402", "TAKER", false, false},
 		{"market-sell-slippage", "MARKET", "", "", "SELL", "98.01", "0.19602", "TAKER", false, false},
-		{"resting-maker", "LIMIT", "GTC", "102", "BUY", "101", "0.101", "MAKER", false, false},
-		{"resting-sell-maker", "LIMIT", "GTC", "98", "SELL", "99", "0.099", "MAKER", false, false},
+		// 已挂在盘口的限价单（第一次撮合没成交）之后被对手成交：按自己的限价成交、收 maker 费率。
+		// 真实交易所里挂单是被动成交方，市场后来穿过限价（卖一 101 低于买价 102）也只按 102 成交，不会拿到更好的价格。
+		{"resting-maker", "LIMIT", "GTC", "102", "BUY", "102", "0.102", "MAKER", false, false},
+		{"resting-sell-maker", "LIMIT", "GTC", "98", "SELL", "98", "0.098", "MAKER", false, false},
 		{"gtc-not-marketable", "LIMIT", "GTC", "100", "BUY", "", "", "", true, false},
 		{"ioc-not-marketable", "LIMIT", "IOC", "100", "BUY", "", "", "", false, true},
 		{"fok-not-marketable", "LIMIT", "FOK", "100", "BUY", "", "", "", false, true},
@@ -128,6 +130,36 @@ func TestDeciderLiveQuotePoliciesAndFees(t *testing.T) {
 			require.Equal(t, tc.role, decision.Fill.LiquidityRole)
 			require.Equal(t, "USDT", decision.Fill.FeeAsset)
 			require.Equal(t, "1", decision.Fill.Quantity.String())
+		})
+	}
+}
+
+// 下单当时就可成交的限价单是吃单：按下单时记下的卖一/买一加滑点成交、收 taker 费率，但不会比限价更差。
+// 夹具：滑点 100bps、taker 0.002；下单时卖一 100（ReferencePrice）。
+func TestDeciderFirstMatchLimitTakesWithSlippageCappedAtLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, side, reference, limit, price, fee string
+	}{
+		{"买单加滑点未触及限价", "BUY", "100", "102", "101", "0.202"},
+		{"买单加滑点超过限价按限价", "BUY", "100", "100.5", "100.5", "0.201"},
+		{"卖单减滑点未触及限价", "SELL", "100", "98", "99", "0.198"},
+		{"卖单减滑点低于限价按限价", "SELL", "100", "99.5", "99.5", "0.199"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, adapter, order := deciderFixture(t, "SPOT")
+			limit := tc.limit
+			order.OrderType, order.TimeInForce, order.Side = "LIMIT", "GTC", tc.side
+			order.LimitPrice, order.FirstMatchPending, order.ReferencePrice = &limit, true, tc.reference
+			if tc.side == "SELL" {
+				order.ReservedAsset = "BTC"
+			}
+			decision, err := d.Decide(context.Background(), order)
+			require.NoError(t, err)
+			require.False(t, decision.Cancel || decision.Rest, decision.Reason)
+			require.Equal(t, tc.price, decision.Fill.Price.String())
+			require.Equal(t, tc.fee, decision.Fill.Fee.String())
+			require.Equal(t, "TAKER", decision.Fill.LiquidityRole)
+			require.Zero(t, adapter.quoteCalls, "第一次撮合用下单时记下的价格，不取实时行情")
 		})
 	}
 }
