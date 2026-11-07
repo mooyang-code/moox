@@ -25,11 +25,44 @@ type Service struct {
 // 要求任务已启用；再解析绑定——DSL 引用的列都存在，任务的可变成员与 factor_params 一一对应。tasks 是实例登记的市场 → 因子任务，
 // 解析出的市场必须与登记一致。任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
 func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
-	if s.Client == nil || s.Sets == nil {
-		return Resolved{}, nil, errors.New("Factor 依赖未配置，不能启用实例")
-	}
 	if err := dsl.Validate(&strategy); err != nil {
 		return Resolved{}, nil, err
+	}
+	var program *dsl.Program
+	resolved, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func(taskIDs []string) (Resolved, error) {
+		resolved, compiled, err := Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
+		program = compiled
+		return resolved, err
+	})
+	return resolved, program, err
+}
+
+// ResolvePoolInstance 是策略池启用时的解析：与 ResolveInstance 相同的任务关联与重试，绑定按成员分别解析。
+func (s Service) ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []PoolMemberDef) (PoolResolved, error) {
+	if err := dsl.Validate(&pool); err != nil {
+		return PoolResolved{}, err
+	}
+	var out PoolResolved
+	_, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func(taskIDs []string) (Resolved, error) {
+		var err error
+		out, err = ResolvePool(ctx, s.Client, spaceID, taskIDs, pool, members)
+		return out.Resolved, err
+	})
+	return out, err
+}
+
+// ResolvePool 解析策略池的绑定（不关联任务，只读；校验接口用）。
+func (s Service) ResolvePool(ctx context.Context, spaceID string, taskIDs []string, pool dsl.Strategy, members []PoolMemberDef) (PoolResolved, error) {
+	if s.Client == nil {
+		return PoolResolved{}, errors.New("Storage 与 Factor 依赖未配置，不能解析绑定")
+	}
+	return ResolvePool(ctx, s.Client, spaceID, taskIDs, pool, members)
+}
+
+// bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、把任务与实例关联，再在限定时间内重试 resolve（任务的结果 View 还没补齐列时）。
+func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, resolve func(taskIDs []string) (Resolved, error)) (Resolved, error) {
+	if s.Client == nil || s.Sets == nil {
+		return Resolved{}, errors.New("Factor 依赖未配置，不能启用实例")
 	}
 	taskIDs := TaskIDs(tasks)
 	deadline := time.Now().Add(s.ReadyWait)
@@ -41,40 +74,40 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 			break
 		}
 		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
-			return Resolved{}, nil, err
+			return Resolved{}, err
 		}
 		select {
 		case <-ctx.Done():
-			return Resolved{}, nil, ctx.Err()
+			return Resolved{}, ctx.Err()
 		case <-time.After(s.ReadyStep):
 		}
 	}
 	for _, taskID := range taskIDs {
 		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
 		if err != nil {
-			return Resolved{}, nil, err
+			return Resolved{}, err
 		}
 		if bound.BoundInstanceID != instanceID {
-			return Resolved{}, nil, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
+			return Resolved{}, fmt.Errorf("因子任务 %s 关联的是实例 %q，不是本实例", taskID, bound.BoundInstanceID)
 		}
 		if bound.Status != "enabled" {
-			return Resolved{}, nil, fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, bound.Status)
+			return Resolved{}, fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, bound.Status)
 		}
 	}
 	for {
-		resolved, program, err := Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
+		resolved, err := resolve(taskIDs)
 		if err == nil {
 			err = CheckResolvedMarkets(resolved, tasks)
 		}
 		if err == nil {
-			return resolved, program, nil
+			return resolved, nil
 		}
 		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
-			return Resolved{}, nil, err
+			return Resolved{}, err
 		}
 		select {
 		case <-ctx.Done():
-			return Resolved{}, nil, ctx.Err()
+			return Resolved{}, ctx.Err()
 		case <-time.After(s.ReadyStep):
 		}
 	}
@@ -85,7 +118,7 @@ func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string
 	if s.Client == nil {
 		return "", errors.New("Storage 与 Factor 依赖未配置，不能确定因子任务的市场")
 	}
-	item, err := resolveView(ctx, s.Client, spaceID, strings.TrimSpace(taskID), dsl.Strategy{})
+	item, err := resolveView(ctx, s.Client, spaceID, strings.TrimSpace(taskID), "")
 	if err != nil {
 		return "", err
 	}
@@ -183,6 +216,14 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		generations[market] = view.Generation
 	}
 	return end, generations, nil
+}
+
+// CheckPoolCoverage 在启用策略池时按每个成员校验 View 的覆盖（见包级 CheckPoolCoverage）。
+func (s Service) CheckPoolCoverage(ctx context.Context, spaceID string, members []PoolMember, now time.Time) error {
+	if s.Client == nil {
+		return errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
+	}
+	return CheckPoolCoverage(ctx, s.Client, spaceID, members, now)
 }
 
 // CheckCoverage 在启用实例时校验 View 的覆盖（见包级 CheckCoverage）。

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -21,6 +22,10 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
 	}
 	rsp := &strategypb.ValidateStrategyRsp{RetInfo: success(), Diagnostics: []string{}}
+	members, err := s.checkPool(ctx, strategy)
+	if err != nil {
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}, nil
+	}
 	if len(req.GetFactorTasks()) == 0 {
 		return rsp, nil
 	}
@@ -34,6 +39,9 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	}
 	if s.Resolver == nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(errDependenciesUnavailable), Diagnostics: []string{errDependenciesUnavailable.Error()}}, nil
+	}
+	if strategy.IsPool() {
+		return s.validatePool(ctx, rsp, scoped, tasks, strategy, members), nil
 	}
 	resolved, program, err := s.Resolver.Resolve(ctx, scoped, input.TaskIDs(tasks), strategy)
 	if err != nil {
@@ -76,4 +84,19 @@ func trialProto(decision engine.Decision, loaded input.Loaded, viewIDs []string)
 	inputJSON, _ := json.Marshal(store.InputRecord{Views: views, BarStart: loaded.Boundary.StorageStart})
 	result := store.Result{BarEndTime: loaded.Boundary.BarEnd, Status: decision.Status, SkipReason: decision.SkipReason, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, InputJSON: inputJSON, PublishStatus: store.PublishNone}
 	return resultProto(result)
+}
+
+// validatePool 解析策略池的绑定并校验各成员；策略池的试算在池实例启用后的预热与运行中查看（成员的净值与分配比例依赖历史）。
+func (s *Service) validatePool(ctx context.Context, rsp *strategypb.ValidateStrategyRsp, spaceID string, tasks map[string]string, strategy dsl.Strategy, members []input.PoolMemberDef) *strategypb.ValidateStrategyRsp {
+	pooled, err := s.Resolver.ResolvePool(ctx, spaceID, input.TaskIDs(tasks), strategy, members)
+	if err == nil {
+		err = input.CheckResolvedMarkets(pooled.Resolved, tasks)
+	}
+	if err != nil {
+		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{publicMessage(err)}}
+	}
+	resolvedJSON, _ := json.Marshal(pooled.Resolved)
+	rsp.ResolvedJson = string(resolvedJSON)
+	rsp.Diagnostics = append(rsp.Diagnostics, "策略池不做试算：成员的净值与分配比例依赖历史，启用后先预热再运行")
+	return rsp
 }

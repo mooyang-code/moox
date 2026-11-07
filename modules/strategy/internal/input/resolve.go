@@ -34,6 +34,7 @@ type resolvedView struct {
 
 // Resolve 在启用时解析绑定：每个因子任务 → 结果 View → 数据集 → 源数据集市场类型，确定市场模式，
 // 再校验两个 View 的周期、日历、列与成员契约，编译策略。taskIDs 是绑定的因子任务（一个或现货、永续各一个）。
+// 策略池要先取到成员定义，走 ResolvePool。
 func Resolve(ctx context.Context, client Client, spaceID string, taskIDs []string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if client == nil {
 		return Resolved{}, nil, errors.New("Storage 客户端未配置")
@@ -41,24 +42,45 @@ func Resolve(ctx context.Context, client Client, spaceID string, taskIDs []strin
 	if len(taskIDs) == 0 || len(taskIDs) > 2 {
 		return Resolved{}, nil, fmt.Errorf("需要绑定一个或两个（现货、永续各一个）因子任务，实际 %d 个", len(taskIDs))
 	}
+	if strategy.IsPool() {
+		return Resolved{}, nil, errors.New("策略池需要成员策略的定义，不能按普通策略解析")
+	}
 	if err := dsl.Validate(&strategy); err != nil {
 		return Resolved{}, nil, err
 	}
-	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
+	views, err := resolveViews(ctx, client, spaceID, taskIDs, strategy.Bar)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	return bindViews(ctx, client, spaceID, views, strategy)
+}
+
+// resolveViews 解析每个因子任务的结果 View 与数据集，按市场先后（现货、永续）排序；两个任务的市场不能相同。bar 是 DSL 的周期断言。
+func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []string, bar string) ([]resolvedView, error) {
 	var views []resolvedView
+	seen := map[string]string{}
 	for _, taskID := range taskIDs {
 		taskID = strings.TrimSpace(taskID)
-		item, err := resolveView(ctx, client, spaceID, taskID, strategy)
+		item, err := resolveView(ctx, client, spaceID, taskID, bar)
 		if err != nil {
-			return Resolved{}, nil, err
+			return nil, err
 		}
-		if _, dup := resolved.Tasks[item.market]; dup {
-			return Resolved{}, nil, fmt.Errorf("因子任务 %s 与另一个任务的市场都是 %s，两个任务必须一个现货、一个永续", taskID, item.market)
+		if _, dup := seen[item.market]; dup {
+			return nil, fmt.Errorf("因子任务 %s 与另一个任务的市场都是 %s，两个任务必须一个现货、一个永续", taskID, item.market)
 		}
-		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+		seen[item.market] = taskID
 		views = append(views, item)
 	}
 	sort.Slice(views, func(i, j int) bool { return marketOrder(views[i].market) < marketOrder(views[j].market) })
+	return views, nil
+}
+
+// bindViews 在已解析的 View 上绑定并编译一个策略：校验周期与日历一致、确定市场模式、校验列与成员契约。
+func bindViews(ctx context.Context, client Client, spaceID string, views []resolvedView, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
+	for _, item := range views {
+		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
+	}
 	first := views[0]
 	for _, item := range views[1:] {
 		if !strings.EqualFold(item.view.Frequency, first.view.Frequency) {
@@ -224,7 +246,7 @@ func Resolve(ctx context.Context, client Client, spaceID string, taskIDs []strin
 }
 
 // resolveView 解析一个因子任务：结果 View、数据集、源数据集与市场类型。
-func resolveView(ctx context.Context, client Client, spaceID, taskID string, strategy dsl.Strategy) (resolvedView, error) {
+func resolveView(ctx context.Context, client Client, spaceID, taskID, bar string) (resolvedView, error) {
 	viewID, err := ViewIDOfTask(taskID)
 	if err != nil {
 		return resolvedView{}, fmt.Errorf("因子任务 ID %q 不合法：%w", taskID, err)
@@ -239,8 +261,8 @@ func resolveView(ctx context.Context, client Client, spaceID, taskID string, str
 	if view.Status != "" && view.Status != "active" {
 		return resolvedView{}, fmt.Errorf("View %s 的状态是 %s，只能绑定 active 的 View", viewID, view.Status)
 	}
-	if strategy.Bar != "" && !strings.EqualFold(strategy.Bar, view.Frequency) {
-		return resolvedView{}, fmt.Errorf("DSL 的 bar 断言为 %s，但 View %s 的周期是 %s", strategy.Bar, viewID, view.Frequency)
+	if bar != "" && !strings.EqualFold(bar, view.Frequency) {
+		return resolvedView{}, fmt.Errorf("DSL 的 bar 断言为 %s，但 View %s 的周期是 %s", bar, viewID, view.Frequency)
 	}
 	dataset, err := client.GetDataset(ctx, spaceID, view.DatasetID)
 	if err != nil {
