@@ -224,14 +224,16 @@ func (a *Adapter) signedRequest(
 
 type exchangeInfo struct {
 	Symbols []struct {
-		Symbol       string `json:"symbol"`
-		Pair         string `json:"pair"`
-		ContractType string `json:"contractType"`
-		Status       string `json:"status"`
-		BaseAsset    string `json:"baseAsset"`
-		QuoteAsset   string `json:"quoteAsset"`
-		MarginAsset  string `json:"marginAsset"`
-		Filters      []struct {
+		Symbol string `json:"symbol"`
+		// IsMarginTradingAllowed 只有现货的 exchangeInfo 有；统一账户的现货走杠杆账户下单，不允许杠杆交易的标的下不了单。
+		IsMarginTradingAllowed *bool  `json:"isMarginTradingAllowed"`
+		Pair                   string `json:"pair"`
+		ContractType           string `json:"contractType"`
+		Status                 string `json:"status"`
+		BaseAsset              string `json:"baseAsset"`
+		QuoteAsset             string `json:"quoteAsset"`
+		MarginAsset            string `json:"marginAsset"`
+		Filters                []struct {
 			FilterType  string `json:"filterType"`
 			TickSize    string `json:"tickSize"`
 			StepSize    string `json:"stepSize"`
@@ -258,6 +260,11 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 			if item.ContractType != "PERPETUAL" || item.MarginAsset != "USDT" {
 				continue
 			}
+		}
+		// 统一账户的现货走杠杆账户（margin）下单：exchangeInfo 里明确不允许杠杆交易的标的不上架，避免下单被交易所拒绝。
+		if a.papi != nil && a.config.Market() == exchange.MarketTypeSpot &&
+			item.IsMarginTradingAllowed != nil && !*item.IsMarginTradingAllowed {
+			continue
 		}
 		instrumentID, idErr := exchange.CanonicalInstrumentID(
 			item.BaseAsset,
@@ -707,6 +714,10 @@ type orderPayload struct {
 	TransactTime int64 `json:"transactTime"`
 }
 
+// ListOpenOrders 列出本市场全部挂单。统一账户现货走 /papi/v1/margin/openOrders 且不传 symbol：
+// 官方文档（SDK 里转录的原文）写明 “If symbol is not sent, order records for all symbols are returned”，
+// 同时说明不传时限频按“当前交易中的标的数量”计权重（传 symbol 时权重 5）。SDK 的参数校验把 symbol 标成必填，
+// 与文档说明不一致，这里以文档说明为准；真实行为未实测，V3 小额实测要核对这个接口，必填的话改为按相关标的逐个查询。
 func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
 	raw, err := a.request(
 		ctx,

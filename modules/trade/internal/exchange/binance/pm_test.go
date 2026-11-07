@@ -489,3 +489,27 @@ func TestPortfolioMarginLedgerUsesUMIncome(t *testing.T) {
 	_, err = pm.ListLedger(context.Background(), exchange.LedgerQuery{Market: exchange.MarketTypeSpot, Start: time.UnixMilli(1), End: time.UnixMilli(2), Limit: 1})
 	require.Error(t, err, "现货没有资金流水")
 }
+
+// 统一账户的现货走杠杆账户下单：exchangeInfo 里不允许杠杆交易的标的不上架；普通账户的现货不受影响。
+func TestPortfolioMarginSpotInstrumentsSkipNonMarginSymbols(t *testing.T) {
+	var info map[string]any
+	require.NoError(t, json.Unmarshal(sample(t, "gct_spot_exchange_info.json"), &info))
+	symbols := info["symbols"].([]any)
+	require.GreaterOrEqual(t, len(symbols), 2)
+	blocked := symbols[0].(map[string]any)["symbol"].(string)
+	symbols[0].(map[string]any)["isMarginTradingAllowed"] = false
+	raw, err := json.Marshal(info)
+	require.NoError(t, err)
+	_, server := newPMServer(t, map[string]string{"GET /api/v3/exchangeInfo": string(raw)})
+
+	pm := testPM(server, exchange.MarketTypeSpot)
+	instruments, err := pm.LoadInstruments(context.Background())
+	require.NoError(t, err)
+	require.Len(t, instruments, len(symbols)-1)
+	for _, instrument := range instruments {
+		require.NotEqual(t, blocked, instrument.ExchangeSymbol)
+	}
+	standard, err := testAdapter(exchange.MarketTypeSpot, server.URL).LoadInstruments(context.Background())
+	require.NoError(t, err)
+	require.Len(t, standard, len(symbols), "普通账户的现货不看 isMarginTradingAllowed")
+}

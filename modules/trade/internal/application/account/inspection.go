@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 var (
@@ -85,20 +86,54 @@ func (s *Service) InspectCredential(
 	return s.inspect(ctx, name, exchange.InspectRequest{Environment: environment, Credential: credential, Markets: markets})
 }
 
-// inspectTimeout 是一次检测的总时限，要小于服务目录里 InspectExchangeCredential 的 30 秒方法超时。
-const inspectTimeout = 25 * time.Second
+// inspectTimeout 是一次检测的总时限，要小于 TradeConsoleService 的服务端超时（config/trpc_go.yaml 的 15000ms）；
+// 服务目录里两个检测方法的 method_timeouts_ms 与服务端超时一致（15000）。正常检测一两秒完成，到点按没有结论处理。
+const inspectTimeout = 12 * time.Second
 
 func (s *Service) inspect(ctx context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
 	ctx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
 	inspection, err := s.Inspector.Inspect(ctx, name, request)
 	if err != nil {
-		if errors.Is(err, exchange.ErrInspectionInconclusive) {
-			return exchange.Inspection{}, fmt.Errorf("%w：%v", ErrInspectionUnavailable, err)
+		if errors.Is(err, exchange.ErrInspectionInconclusive) || errors.Is(err, context.DeadlineExceeded) {
+			// 错误文本会存库、返回前端，原始错误可能带签名后的请求串和交易所响应体，只留简短的中文说明。
+			return exchange.Inspection{}, fmt.Errorf("%w：%s", ErrInspectionUnavailable, FailureSummary(err))
 		}
 		return exchange.Inspection{}, err
 	}
+	inspection.CredentialFingerprint = exchange.CredentialFingerprint(request.Credential.APIKey)
 	return inspection, nil
+}
+
+// FailureSummary 把检测失败的错误转成简短的中文说明：只含错误类别、HTTP 状态和错误码，
+// 不含请求串、响应体原文（可能带签名、账户信息）。
+func FailureSummary(err error) string {
+	var typed *exchange.Error
+	switch {
+	case errors.As(err, &typed):
+		var kind string
+		switch typed.Kind {
+		case exchange.ErrorRateLimited, exchange.ErrorOrderRateLimited, exchange.ErrorThrottled, exchange.ErrorBanned, exchange.ErrorNotSent:
+			kind = "被限频或本地限流暂停"
+		case exchange.ErrorTransportUnknown:
+			kind = "网络错误或交易所服务异常"
+		case exchange.ErrorAuthentication:
+			kind = "鉴权类错误但没有可识别的错误码"
+		default:
+			kind = "交易所返回了无法判断的错误"
+		}
+		parts := []string{kind}
+		if typed.HTTPStatus != 0 {
+			parts = append(parts, fmt.Sprintf("HTTP %d", typed.HTTPStatus))
+		}
+		if typed.Code != "" {
+			parts = append(parts, "错误码 "+typed.Code)
+		}
+		return strings.Join(parts, "，")
+	case errors.Is(err, context.DeadlineExceeded):
+		return "检测超时"
+	}
+	return "没有得到交易所的明确答复"
 }
 
 // inspectForSave 在建账户、换密钥、重新启用之前检测：检测没完成或有阻断项都不能保存；
@@ -187,8 +222,8 @@ func (s *Service) Reinspect(ctx context.Context, accountID string) (ReinspectRes
 		if encodeErr != nil {
 			return ReinspectResult{}, encodeErr
 		}
-		if writeErr := s.Store.SetInspection(ctx, accountID, current.AccountMode, encoded); writeErr != nil {
-			return ReinspectResult{}, writeErr
+		if writeErr := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); writeErr != nil {
+			return ReinspectResult{}, staleInspection(writeErr)
 		}
 		result.Inspection, result.Inconclusive, result.Cause = previous, true, err
 		result.Blocked = previous.Blocked(current.Markets)
@@ -204,13 +239,21 @@ func (s *Service) Reinspect(ctx context.Context, accountID string) (ReinspectRes
 	if err != nil {
 		return ReinspectResult{}, err
 	}
-	if err := s.Store.SetInspection(ctx, accountID, inspection.AccountMode, encoded); err != nil {
-		return ReinspectResult{}, err
+	if err := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, inspection.AccountMode, encoded); err != nil {
+		return ReinspectResult{}, staleInspection(err)
 	}
 	result.Inspection = inspection
 	result.ModeChanged = current.AccountMode != exchange.AccountModeUnspecified && current.AccountMode != inspection.AccountMode
 	result.Blocked = inspection.Blocked(current.Markets)
 	return result, nil
+}
+
+// staleInspection 说明检测期间账户换了密钥：旧密钥的结果已丢弃，不覆盖新密钥的结果。
+func staleInspection(err error) error {
+	if errors.Is(err, store.ErrConflict) {
+		return fmt.Errorf("%w：账户在检测期间换了密钥，这次检测结果已丢弃，请对新密钥重新检测", err)
+	}
+	return err
 }
 
 func truncateRunes(value string, limit int) string {

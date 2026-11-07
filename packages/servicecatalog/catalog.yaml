@@ -1878,8 +1878,8 @@ components:
         timeout_ms: 5000
         method_timeouts_ms:
           ListAccountLedger: 15000
-          InspectExchangeCredential: 30000
-          ReinspectTradingAccount: 30000
+          InspectExchangeCredential: 15000
+          ReinspectTradingAccount: 15000
           FlattenLogicalAccount: 12000
           FlattenTradingAccount: 12000
         max_body_bytes: 4194304

@@ -2,6 +2,8 @@ package exchange
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -79,6 +81,9 @@ type Inspection struct {
 	Warnings []InspectionFinding `json:"warnings,omitempty"`
 
 	InspectedAt time.Time `json:"inspected_at"`
+	// CredentialFingerprint 是被检测的密钥内容（API Key）的哈希前缀，不存明文。
+	// 同一个密钥 ID 下直接改了密钥内容时，指纹对不上：会话不会绑定没检测过的密钥，并立即重新检测。
+	CredentialFingerprint string `json:"credential_fingerprint,omitempty"`
 
 	// 复查状态：传输错误（超时、限频、5xx）不下结论，保留上次结果，连续失败到阈值再告警。
 	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
@@ -126,6 +131,15 @@ func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 		add(FindingMarketNotPermitted, "密钥没有合约交易权限")
 	}
 	return findings
+}
+
+// CredentialFingerprint 返回 API Key 的指纹（SHA-256 前 12 个十六进制字符）；API Key 为空返回空串。
+func CredentialFingerprint(apiKey string) string {
+	if apiKey == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("moox-credential:" + apiKey))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // Blocked 报告按这些市场算有没有阻断项。

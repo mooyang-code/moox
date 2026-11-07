@@ -226,6 +226,11 @@ func initialize(
 			if credentialErr != nil {
 				return nil, credentialErr
 			}
+			// 同一个密钥 ID 下直接改了密钥内容会绕过检测：绑定前核对密钥指纹，对不上就不绑定并立即重新检测。
+			if fingerprintErr := verifyCredentialFingerprint(record, credential); fingerprintErr != nil {
+				recheckInspection(inspectionWorker, record.SpaceID, record.TradingAccountID)
+				return nil, fingerprintErr
+			}
 		}
 		accountConfig := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
@@ -509,6 +514,40 @@ func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential
 		return errors.New("live account requires credential")
 	}
 	return nil
+}
+
+// verifyCredentialFingerprint 核对账户检测结果里记录的密钥指纹和现在读到的密钥是否一致：
+// 检测通过的是当时那把密钥；同一个密钥 ID 下改了密钥内容、或账户从来没检测过，都不能直接绑定。
+func verifyCredentialFingerprint(record store.TradingAccountRecord, credential exchange.Credential) error {
+	inspection, err := exchange.ParseInspection(record.InspectionJSON)
+	if err != nil {
+		return fmt.Errorf("账户的检测结果读不出来，需要重新检测：%w", err)
+	}
+	if inspection.InspectedAt.IsZero() || inspection.CredentialFingerprint == "" {
+		return errors.New("账户的密钥还没有检测过，正在检测，通过后才会绑定")
+	}
+	if inspection.CredentialFingerprint != exchange.CredentialFingerprint(credential.APIKey) {
+		return errors.New("密钥内容与检测时不一致（同一个密钥 ID 下改了密钥），正在重新检测，通过后才会绑定")
+	}
+	return nil
+}
+
+// recheckInspections 记录正在重新检测的账户，避免会话每次重试绑定都再起一个检测。
+var recheckInspections sync.Map
+
+// recheckInspection 在后台立即重新检测一个账户；检测通过后写入新的指纹，会话下次重试绑定就能通过。
+func recheckInspection(worker *traderuntime.InspectionWorker, spaceID, accountID string) {
+	if _, running := recheckInspections.LoadOrStore(accountID, struct{}{}); running {
+		return
+	}
+	go func() {
+		defer recheckInspections.Delete(accountID)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := worker.CheckAccount(ctx, spaceID, accountID); err != nil {
+			log.Warnf("交易账户 %s 密钥内容变化后重新检测没有完成：%v", accountID, err)
+		}
+	}()
 }
 
 // requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。

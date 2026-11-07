@@ -40,3 +40,21 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 	okx.Markets, okx.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(okx) }), "OKX 模拟盘一个账户可以同时开两个市场")
 }
+
+// 检测结果只能写给检测时用的那个密钥：账户换了密钥，旧密钥的结果写不进去。
+func TestSetTradingAccountInspectionRequiresSameCredential(t *testing.T) {
+	s := openTestStore(t)
+	account := testAccount()
+	account.ExecutionMode, account.Environment = "LIVE", "PRODUCTION"
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(account) }))
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
+		return tx.SetTradingAccountInspection("space-1", "account-1", "secret-1", "BINANCE_STANDARD", `{"account_mode":"BINANCE_STANDARD"}`)
+	}))
+	err := s.Transaction(context.Background(), func(tx *Tx) error {
+		return tx.SetTradingAccountInspection("space-1", "account-1", "old-secret", "BINANCE_PORTFOLIO_MARGIN", `{"account_mode":"BINANCE_PORTFOLIO_MARGIN"}`)
+	})
+	require.ErrorIs(t, err, ErrConflict)
+	got, err := s.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, "BINANCE_STANDARD", got.AccountMode)
+}

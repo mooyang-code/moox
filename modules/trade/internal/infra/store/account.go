@@ -492,15 +492,19 @@ const setTradingAccountInspectionSQL = `
 	SET c_account_mode = ?, c_inspection_json = ?,
 		c_ready = CASE WHEN c_account_mode <> ? THEN 0 ELSE c_ready END,
 		c_mtime = CURRENT_TIMESTAMP
-	WHERE c_space_id = ? AND c_trading_account_id = ?
+	WHERE c_space_id = ? AND c_trading_account_id = ? AND c_credential_secret_id = ?
 `
 
-// SetTradingAccountInspection 写入最近一次检测的结果。
-func (tx *Tx) SetTradingAccountInspection(spaceID, tradingAccountID, accountMode, inspectionJSON string) error {
+// SetTradingAccountInspection 写入最近一次检测的结果。credentialSecretID 是这次检测所用的密钥 ID：
+// 检测最长 25 秒，期间账户换了密钥，旧密钥的结果不能覆盖新密钥的，更新不到返回 ErrConflict。
+func (tx *Tx) SetTradingAccountInspection(spaceID, tradingAccountID, credentialSecretID, accountMode, inspectionJSON string) error {
 	if blank(spaceID) || blank(tradingAccountID) || blank(inspectionJSON) {
 		return fmt.Errorf("%w: incomplete Exchange account inspection", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(setTradingAccountInspectionSQL, accountMode, inspectionJSON, accountMode, spaceID, tradingAccountID)
+	result := tx.db.Exec(setTradingAccountInspectionSQL, accountMode, inspectionJSON, accountMode, spaceID, tradingAccountID, credentialSecretID)
+	if result.Error == nil && result.RowsAffected == 0 {
+		return fmt.Errorf("%w: Exchange account inspection was computed for a different credential", ErrConflict)
+	}
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account inspection")
 }
 

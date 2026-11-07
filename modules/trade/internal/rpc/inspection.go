@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"errors"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -61,7 +60,7 @@ func (h *AccountServer) ReinspectTradingAccount(
 	}
 	if result.Inconclusive {
 		// 检测没有成功：保留了上次的结果，告诉调用方这次没有结论。
-		rsp.RetInfo = errorInfo(errors.Join(accountapp.ErrInspectionUnavailable, result.Cause))
+		rsp.RetInfo = errorInfo(result.Cause)
 	}
 	return rsp, nil
 }

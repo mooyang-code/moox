@@ -7,11 +7,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -225,4 +227,23 @@ func TestRegistryBindsExchangeWithOnlyExtraCredential(t *testing.T) {
 	if _, ok := adapter.(execution.AccountEventSource); ok {
 		t.Fatal("没有私有流的场所不应实现 AccountEventSource")
 	}
+}
+
+// 同一个密钥 ID 下改了密钥内容、或账户从来没检测过：不能直接绑定。
+func TestVerifyCredentialFingerprint(t *testing.T) {
+	inspected := func(apiKey string) store.TradingAccountRecord {
+		raw, err := exchange.Inspection{
+			InspectedAt: time.Now().UTC(), CredentialFingerprint: exchange.CredentialFingerprint(apiKey),
+		}.Encode()
+		require.NoError(t, err)
+		return store.TradingAccountRecord{InspectionJSON: raw}
+	}
+	require.NoError(t, verifyCredentialFingerprint(inspected("key-1"), exchange.Credential{APIKey: "key-1"}))
+	require.ErrorContains(t, verifyCredentialFingerprint(inspected("key-1"), exchange.Credential{APIKey: "key-2"}), "密钥内容与检测时不一致")
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: "{}"}, exchange.Credential{APIKey: "key-1"}), "还没有检测过")
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: "not json"}, exchange.Credential{APIKey: "key-1"}), "重新检测")
+	// 没有指纹的旧结果同样不放行。
+	legacy, err := exchange.Inspection{InspectedAt: time.Now().UTC()}.Encode()
+	require.NoError(t, err)
+	require.ErrorContains(t, verifyCredentialFingerprint(store.TradingAccountRecord{InspectionJSON: legacy}, exchange.Credential{APIKey: "key-1"}), "还没有检测过")
 }

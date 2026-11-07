@@ -45,7 +45,7 @@ type Store interface {
 	// ListEnabled 返回全部启用的执行账户。
 	ListEnabled(context.Context) ([]tradingaccount.Account, error)
 	// SetInspection 写入复查的结果（账户类型和检测结果）。
-	SetInspection(ctx context.Context, id string, mode exchange.AccountMode, inspectionJSON string) error
+	SetInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error
 	// LogicalAccountName 返回执行账户所属组合账户的名称（启用或停用成员都算），不属于任何组合时返回空串。
 	LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error)
 }

@@ -67,6 +67,15 @@ func inspectable(account store.TradingAccountRecord) bool {
 	return !(account.Exchange == string(exchange.ExchangeBinance) && account.Environment == string(exchange.AccountEnvironmentTestnet))
 }
 
+// CheckAccount 立即复查一个账户并处理结果（会话绑定时发现密钥内容与检测时不一致用）。
+func (w *InspectionWorker) CheckAccount(ctx context.Context, spaceID, accountID string) error {
+	result, err := w.Accounts.Reinspect(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	return w.Handle(ctx, spaceID, accountID, result)
+}
+
 // CheckAll 复查全部需要复查的账户，单个账户失败不影响其他账户。
 func (w *InspectionWorker) CheckAll(ctx context.Context) error {
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -233,4 +234,73 @@ func TestReinspectKeepsAccountModeWhenCredentialIsRejected(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.ModeChanged)
 	require.Equal(t, exchange.AccountModeBinanceStandard, store.accounts[fresh.ID].AccountMode)
+}
+
+// 检测结果记录被检测密钥的指纹（API Key 的哈希前缀，不存明文）。
+func TestInspectionRecordsCredentialFingerprintWithoutPlaintext(t *testing.T) {
+	store := newMemoryStore()
+	secret := validSecret()
+	secret.KeyID = "my-api-key-plaintext"
+	created, err := inspectingService(store, &fakeInspector{}, secret).Create(context.Background(), liveProductionAccount())
+	require.NoError(t, err)
+	inspection, err := exchange.ParseInspection(created.InspectionJSON)
+	require.NoError(t, err)
+	require.Equal(t, exchange.CredentialFingerprint("my-api-key-plaintext"), inspection.CredentialFingerprint)
+	require.Len(t, inspection.CredentialFingerprint, 12)
+	require.NotContains(t, created.InspectionJSON, "my-api-key-plaintext")
+	require.NotEqual(t, exchange.CredentialFingerprint("another-key"), inspection.CredentialFingerprint)
+}
+
+// 复查最长要等十几秒：期间账户换了密钥，旧密钥的结果不能覆盖新密钥的。
+func TestReinspectDiscardsResultWhenCredentialChangedDuringInspection(t *testing.T) {
+	memory := newMemoryStore()
+	value := liveProductionAccount()
+	value.AccountMode = exchange.AccountModeBinanceStandard
+	memory.accounts[value.ID] = value
+	service := inspectingService(memory, &fakeInspector{}, validSecret())
+	service.Inspector = inspectorFunc(func(ctx context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
+		// 检测进行中，账户换了密钥。
+		changed := memory.accounts[value.ID]
+		changed.CredentialSecretID = "secret-2"
+		changed.Live = &tradingaccount.LiveConfig{Environment: changed.Environment, CredentialSecretID: "secret-2"}
+		memory.accounts[value.ID] = changed
+		return (&fakeInspector{}).Inspect(ctx, name, request)
+	})
+	_, err := service.Reinspect(context.Background(), value.ID)
+	require.ErrorIs(t, err, store.ErrConflict)
+	require.Contains(t, err.Error(), "换了密钥")
+	require.Empty(t, memory.accounts[value.ID].InspectionJSON, "新密钥的账户没有被旧结果覆盖")
+}
+
+type inspectorFunc func(context.Context, exchange.Exchange, exchange.InspectRequest) (exchange.Inspection, error)
+
+func (f inspectorFunc) Inspect(ctx context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
+	return f(ctx, name, request)
+}
+
+// 存库、返回前端的失败说明不带请求串（可能含签名）和交易所响应体原文。
+func TestInspectionFailureTextHasNoRawRequestOrBody(t *testing.T) {
+	memory := newMemoryStore()
+	value := liveProductionAccount()
+	memory.accounts[value.ID] = value
+	raw := &exchange.Error{
+		Kind: exchange.ErrorTransportUnknown, HTTPStatus: 503, Code: "-1003",
+		Err: errors.New(`Get "https://papi.binance.com/papi/v1/account?timestamp=1&signature=deadbeef": http 503: {"msg":"secret-body"}`),
+	}
+	service := inspectingService(memory, &fakeInspector{err: errors.Join(exchange.ErrInspectionInconclusive, raw)}, validSecret())
+	result, err := service.Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, result.Inconclusive)
+	for _, text := range []string{result.Inspection.LastFailure, result.Cause.Error(), memory.accounts[value.ID].InspectionJSON} {
+		require.NotContains(t, text, "signature")
+		require.NotContains(t, text, "secret-body")
+		require.NotContains(t, text, "papi.binance.com")
+	}
+	require.Contains(t, result.Inspection.LastFailure, "HTTP 503")
+	require.Contains(t, result.Inspection.LastFailure, "-1003")
+
+	_, err = service.InspectCredential(context.Background(), exchange.ExchangeBinance, exchange.AccountEnvironmentProduction, "secret-1", nil)
+	require.ErrorIs(t, err, ErrInspectionUnavailable)
+	require.NotContains(t, err.Error(), "signature")
+	require.NotContains(t, err.Error(), "secret-body")
 }

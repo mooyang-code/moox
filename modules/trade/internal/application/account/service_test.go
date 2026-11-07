@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -527,10 +528,13 @@ func (s *memoryStore) Update(_ context.Context, command UpdateCommand) error {
 	return nil
 }
 
-func (s *memoryStore) SetInspection(_ context.Context, id string, mode exchange.AccountMode, inspectionJSON string) error {
+func (s *memoryStore) SetInspection(_ context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error {
 	value, found := s.accounts[id]
 	if !found {
 		return ErrAccountNotFound
+	}
+	if credentialSecret(value) != credentialSecretID && value.CredentialSecretID != credentialSecretID {
+		return store.ErrConflict
 	}
 	value.AccountMode, value.InspectionJSON = mode, inspectionJSON
 	s.accounts[id] = value
