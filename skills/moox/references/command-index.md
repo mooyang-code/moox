@@ -140,7 +140,6 @@
 | `event executions get` | 查看一条执行记录（每次尝试的状态码、耗时；下架处理的各轮步骤） |
 | `event executions list` | 列出执行记录 |
 | `event executions retry` | 重新执行一条失败的记录 |
-| `event rules create` | 新建通知地址规则（验证密钥只在返回里显示这一次，不要记录到对话或日志里） |
 | `event rules delete` | 删除事件规则（默认只预览，--yes 才执行；系统规则不能删除） |
 | `event rules get` | 查看一条事件规则 |
 | `event rules list` | 列出事件规则 |

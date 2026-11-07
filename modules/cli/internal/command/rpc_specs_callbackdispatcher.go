@@ -1,7 +1,8 @@
 package command
 
 // 事件中心（CallbackDispatcherService）：事件规则与执行记录。事件中心是全局服务，不分空间。
-// 换通知地址的验证密钥没有专用接口：删掉规则重建即可（密钥只在创建时显示一次）。
+// 新建通知地址规则（CreateEventRule）不提供命令：返回里有验证密钥明文，请用户在管理台「系统设置 › 事件中心」新建，
+// 密钥只在那里显示一次，不经过 Agent。换验证密钥也在管理台：删掉规则重新新建。
 
 const callbackDispatcher = "trpc.moox.callbackdispatcher.CallbackDispatcherService"
 
@@ -16,11 +17,6 @@ func init() {
 		rpcSpec{Path: []string{"event", "rules", "list"}, Short: "列出事件规则", Service: callbackDispatcher, Method: "ListEventRules", NoSpace: true, Page: rpcPageSize},
 		rpcSpec{Path: []string{"event", "rules", "get"}, Short: "查看一条事件规则", Service: callbackDispatcher, Method: "GetEventRule", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("rule-id", "rule_id", "规则 ID")}},
-		rpcSpec{Path: []string{"event", "rules", "create"}, Short: "新建通知地址规则（验证密钥只在返回里显示这一次，不要记录到对话或日志里）", Service: callbackDispatcher, Method: "CreateEventRule", NoSpace: true,
-			Flags: []rpcFlag{reqFlag("name", "name", "规则名称"), reqFlag("event-name", "event_name", "触发事件，见 event catalog"),
-				jsonFlag("scope", "scope", `限定范围，JSON 数组，如 [{"field":"exchange","values":["binance"]}]；不填表示不限`),
-				reqFlag("notify-url", "notify_url", "通知地址（http 或 https）"), boolFlag("allow-private", "allow_private_address", "允许通知地址解析到内网地址"),
-				boolFlag("enabled", "enabled", "是否启用（不填默认启用）")}},
 		rpcSpec{Path: []string{"event", "rules", "update"}, Short: "修改事件规则，只改给出的字段（系统规则只能改 --enabled）", Service: callbackDispatcher, Method: "UpdateEventRule", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("rule-id", "rule_id", "规则 ID"), strFlag("name", "name", "规则名称"),
 				jsonFlag("scope", "scope.items", "限定范围，JSON 数组（空数组表示不限）"),

@@ -2043,11 +2043,15 @@ components:
           - ListEventExecutions
           - GetEventExecution
         acl:
+          # CreateEventRule 的返回里有验证密钥明文：只放行 console，moox-cli 与 gateway call 都不能调用。
+          - methods:
+              - CreateEventRule
+            callers:
+              - console
           - methods:
               - ListSubscribableEvents
               - ListEventRules
               - GetEventRule
-              - CreateEventRule
               - UpdateEventRule
               - DeleteEventRule
               - TestEventRule

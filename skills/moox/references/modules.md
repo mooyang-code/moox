@@ -31,7 +31,7 @@
 
 ```bash
 ./bin/moox-cli event catalog                                      # 可配置的事件与可限定的范围
-./bin/moox-cli event rules list|get|create|update|delete|test     # 事件规则；create 的验证密钥只显示一次，不要记录
+./bin/moox-cli event rules list|get|update|delete|test            # 事件规则；新建规则返回验证密钥明文，Agent 不新建，请用户在管理台「系统设置 › 事件中心」新建
 ./bin/moox-cli event executions list|get|retry|cancel|ack         # 执行记录：失败重试、取消（下架处理会同时解除禁止）、确认
 ./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
 ```
