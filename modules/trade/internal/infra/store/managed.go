@@ -40,16 +40,17 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	for _, instrumentID := range instrumentIDs {
 		managed[instrumentID] = struct{}{}
 	}
+	// 设置按账户所属组合读（含停用成员，和清仓同一个入口）：数值字段坏了按默认处理，排除字段坏了报错、不下单。
+	settings, settingsErr := s.FundSettingsForAccount(ctx, spaceID, tradingAccountID)
+	if settingsErr != nil {
+		return nil, settingsErr
+	}
+	// 目标里的标的只在成员启用时并入受管资产。
 	logical, _, err := s.FindLogicalAccountByTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	var settings fundsettings.Settings
 	if err == nil {
-		// 数值字段坏了按默认处理（告警限频），排除字段坏了直接报错、不下单。
-		if settings, err = s.ResolveFundSettings(logical); err != nil {
-			return nil, err
-		}
 		target, targetErr := s.GetLogicalAccountTarget(ctx, spaceID, logical.LogicalAccountID)
 		if targetErr != nil && !errors.Is(targetErr, gorm.ErrRecordNotFound) {
 			return nil, targetErr
@@ -76,15 +77,22 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	return assets, nil
 }
 
+// ErrFundSettingsUnreadable 表示资金设置里排除字段读不出来，无法确定排除哪些资产：这个组合不能下单。
+var ErrFundSettingsUnreadable = errors.New("资金设置的排除字段无法解析")
+
 // ResolveFundSettings 是执行器、受管资产、清仓共用的资金设置读取入口：逐字段宽松解析，
-// 数值字段坏了取默认值并按组合限频告警（一小时一次）；排除字段坏了返回错误，调用方不能下单。
+// 数值字段坏了取默认值并按组合限频告警（一小时一次）；排除字段坏了返回 ErrFundSettingsUnreadable，
+// 调用方不能下单，同样按组合限频打交易关注项。
 func (s *Store) ResolveFundSettings(logical LogicalAccountRecord) (fundsettings.Settings, error) {
 	settings, warning, err := fundsettings.ParseLenient(logical.FundSettingsJSON)
 	if err != nil {
-		return fundsettings.Settings{}, fmt.Errorf("%w: 组合 %s：%v", ErrInvalidRecord, logical.LogicalAccountID, err)
+		if s.shouldWarnFundSettings(logical.LogicalAccountID) {
+			log.Warnf("交易关注项：组合 %s 的资金设置排除字段无法解析，该组合暂停下单：%v", logical.LogicalAccountID, err)
+		}
+		return fundsettings.Settings{}, fmt.Errorf("%w: 组合 %s：%v", ErrFundSettingsUnreadable, logical.LogicalAccountID, err)
 	}
 	if warning != nil && s.shouldWarnFundSettings(logical.LogicalAccountID) {
-		log.Warnf("交易关注项：组合 %s 的资金设置有字段无法解析，已按默认值（BNB 保留按开启）处理：%v", logical.LogicalAccountID, warning)
+		log.Warnf("交易关注项：组合 %s 的资金设置有字段无法解析，已按默认值处理：%v", logical.LogicalAccountID, warning)
 	}
 	return settings, nil
 }

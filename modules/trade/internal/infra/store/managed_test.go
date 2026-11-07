@@ -142,3 +142,24 @@ func TestManagedAssetsToleratesBrokenFundSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, managed, "ETH")
 }
+
+// 成员被停用后，受管资产仍按所属组合的真实资金设置排除底仓（和清仓同一个入口），不会因为取到默认设置而把底仓当受管现货。
+func TestManagedAssetsUseRealSettingsForDisabledMember(t *testing.T) {
+	s := seedManagedFixture(t, `{"arbitrage_base_assets":["BTC"]}`, []managedOrder{{"SPOT", "BTC", "TARGET"}, {"SPOT", "ETH", "TARGET"}})
+	require.NoError(t, s.DBForTest().Exec(`UPDATE t_logical_account_members SET c_enabled = 0`).Error)
+
+	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
+
+	require.NoError(t, err)
+	require.NotContains(t, managed, "BTC", "底仓不受管")
+	require.Contains(t, managed, "ETH")
+}
+
+// 排除字段坏了：受管资产报错，不能把排除资产当普通资产。
+func TestManagedAssetsFailWhenExclusionSettingIsUnreadable(t *testing.T) {
+	s := seedManagedFixture(t, `{"arbitrage_base_assets":"BTC"}`, []managedOrder{{"SPOT", "BTC", "TARGET"}})
+
+	_, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
+
+	require.ErrorIs(t, err, ErrFundSettingsUnreadable)
+}

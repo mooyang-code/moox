@@ -28,6 +28,17 @@ type Settings struct {
 	ArbitrageBaseAssets []string
 }
 
+// rawDocument 和 document 用同一组 json 标签，字段全是原始 JSON：宽松解析按字段单独处理，
+// 键名匹配和严格解析（encoding/json 解到结构体，键名不区分大小写）完全一致，不会出现一边认得一边不认的情况。
+// 写入设置时（T22）应拒绝未知键和大小写不规范的键，这里只保证读的时候两边结论相同。
+type rawDocument struct {
+	ReserveRatio        json.RawMessage `json:"reserve_ratio"`
+	BNBReserveAmount    json.RawMessage `json:"bnb_reserve_amount"`
+	StablecoinMargin    json.RawMessage `json:"stablecoin_margin"`
+	MarginCoins         json.RawMessage `json:"margin_coins"`
+	ArbitrageBaseAssets json.RawMessage `json:"arbitrage_base_assets"`
+}
+
 type document struct {
 	ReserveRatio        string            `json:"reserve_ratio"`
 	BNBReserveAmount    string            `json:"bnb_reserve_amount"`
@@ -96,12 +107,12 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 	if strings.TrimSpace(raw) == "" {
 		return settings, nil, nil
 	}
-	var fields map[string]json.RawMessage
+	var fields rawDocument
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		return Settings{}, nil, fmt.Errorf("资金设置不是合法 JSON，无法确定排除资产：%w", err)
 	}
 	var warnings []error
-	if value, ok := fields["reserve_ratio"]; ok {
+	if value := fields.ReserveRatio; len(value) > 0 {
 		ratio, err := decimalField(value, "资金预留比例")
 		if err == nil && (ratio.IsNegative() || ratio.Cmp(shared.MustDecimal("1")) >= 0) {
 			err = fmt.Errorf("资金预留比例必须在 0 到 1 之间（不含 1）")
@@ -112,7 +123,7 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 			settings.ReserveRatio = ratio
 		}
 	}
-	if value, ok := fields["bnb_reserve_amount"]; ok {
+	if value := fields.BNBReserveAmount; len(value) > 0 {
 		amount, err := decimalField(value, "BNB 保留金额")
 		if err == nil && amount.IsNegative() {
 			err = fmt.Errorf("BNB 保留金额不能为负")
@@ -124,7 +135,7 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 			settings.BNBReserveAmount = amount
 		}
 	}
-	if value, ok := fields["stablecoin_margin"]; ok {
+	if value := fields.StablecoinMargin; len(value) > 0 {
 		var assets map[string]json.RawMessage
 		if err := json.Unmarshal(value, &assets); err != nil {
 			return Settings{}, nil, fmt.Errorf("资金设置里稳定币保证金（stablecoin_margin）的格式不对，无法确定排除资产：%w", err)
@@ -134,7 +145,7 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 		}
 		sort.Strings(settings.StablecoinMargin)
 	}
-	if value, ok := fields["margin_coins"]; ok {
+	if value := fields.MarginCoins; len(value) > 0 {
 		var coins map[string]json.RawMessage
 		if err := json.Unmarshal(value, &coins); err != nil {
 			return Settings{}, nil, fmt.Errorf("资金设置里保证金币（margin_coins）的格式不对，无法确定排除资产：%w", err)
@@ -154,7 +165,7 @@ func ParseLenient(raw string) (settings Settings, warning error, err error) {
 			settings.MarginCoins[strings.ToUpper(asset)] = parsed
 		}
 	}
-	if value, ok := fields["arbitrage_base_assets"]; ok {
+	if value := fields.ArbitrageBaseAssets; len(value) > 0 {
 		var assets []string
 		if err := json.Unmarshal(value, &assets); err != nil {
 			return Settings{}, nil, fmt.Errorf("资金设置里套利底仓（arbitrage_base_assets）的格式不对，无法确定排除资产：%w", err)
