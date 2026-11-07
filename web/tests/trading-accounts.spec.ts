@@ -8,8 +8,13 @@ test.beforeEach(async ({ page }) => {
   calls = await installTradingMock(page);
 });
 
+// 按标签文字完全相等定位表单项（“数量”不会命中“交易标的”里的“数量步长…”提示）
 const field = (scope: Locator, label: string) =>
-  scope.locator(".arco-form-item").filter({ hasText: label }).locator("input").first();
+  scope
+    .locator(".arco-form-item")
+    .filter({ has: scope.page().locator(".arco-form-item-label", { hasText: new RegExp(`^\\s*${label}\\s*$`) }) })
+    .locator("input")
+    .first();
 
 const detailTab = (page: Page, label: string) =>
   page.locator(".detail-tabs .arco-tabs-tab").filter({ hasText: new RegExp(`^${label}$`) });
@@ -124,7 +129,7 @@ test("生产环境清仓要输入组合名称，其他环境不用", async ({ pa
   await page.getByRole("button", { name: "清仓", exact: true }).first().click();
   const dialog = page.locator(".arco-modal:visible");
   await expect(dialog.getByText("这是生产环境，会使用真实资金。")).toBeVisible();
-  await field(dialog, "原因").fill("人工检查");
+  await field(dialog, "原因（必填）").fill("人工检查");
   const confirm = dialog.getByRole("button", { name: "开始清仓" });
   await expect(confirm).toBeDisabled();
   await field(dialog, "输入组合名称「生产组合」确认").fill("生产组");
@@ -142,7 +147,7 @@ test("模拟盘清仓不要输入组合名称", async ({ page }) => {
   await page.getByRole("button", { name: "清仓", exact: true }).click();
   const dialog = page.locator(".arco-modal:visible");
   await expect(dialog.getByText("输入组合名称")).toHaveCount(0);
-  await field(dialog, "原因").fill("风险处理");
+  await field(dialog, "原因（必填）").fill("风险处理");
   await expect(dialog.getByRole("button", { name: "开始清仓" })).toBeEnabled();
 });
 
@@ -232,4 +237,48 @@ test("持仓行下单：现货、永续各一个入口，预填方向和与目�
   // BTC 永续目标 1、实际 0.5：买入 0.5
   await expect(field(dialog, "数量")).toHaveValue("0.5");
   await expect(dialog.locator(".arco-radio-checked").filter({ hasText: "买入" })).toBeVisible();
+});
+
+test("新建模拟账户加入已有组合：一次请求带组合编号，不再单独加成员", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await page.getByRole("button", { name: "新建账户" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await field(dialog, "账户名称").fill("加入用账户");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByText("加入已有组合", { exact: true }).click();
+  await dialog.locator(".arco-select").first().click();
+  await page.locator(".arco-select-option").filter({ hasText: "手动模拟组合" }).click();
+  await dialog.getByRole("button", { name: "创建" }).click();
+  await expect.poll(() => calls.paper.length).toBe(1);
+  expect(calls.paper[0]).toMatchObject({ logical_account_id: "la-paper-manual", logical_account_name: "" });
+  expect(calls.members).toHaveLength(0);
+});
+
+test("资金流水、关闭模拟账户对话框的提示不超出外框，成员表交易所·市场不折行", async ({ page }) => {
+  await openDetail(page, "la-prod-1", "ledger");
+  const alertText = "没有资金流水接口";
+  const alert = page.locator(".tx-detail .arco-alert").filter({ hasText: alertText });
+  await expect(alert).toBeVisible();
+  const section = page.locator(".tx-detail .tx-section", { has: page.locator(".arco-alert", { hasText: alertText }) });
+  const [a, b] = [await alert.boundingBox(), await section.boundingBox()];
+  expect((a?.x ?? 0) + (a?.width ?? 0)).toBeLessThanOrEqual((b?.x ?? 0) + (b?.width ?? 0) + 0.5);
+
+  await openDetail(page, "la-paper-1", "settings");
+  const cell = page.locator(".tx-detail .arco-table-td .tx-nowrap").filter({ hasText: "Binance" }).first();
+  expect((await cell.boundingBox())?.height).toBeLessThan(26);
+  await page.getByRole("button", { name: "关闭模拟账户" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  // 红色提示里写明会暂停整个组合账户，不再另叠一条橙色；唯一成员时再多一条蓝色说明
+  await expect(dialog.locator(".arco-alert-error")).toHaveCount(1);
+  await expect(dialog.locator(".arco-alert-warning")).toHaveCount(0);
+  await expect(dialog.getByText("暂停整个组合账户的自动执行")).toBeVisible();
+});
+
+test("390 窄屏下持仓页右侧操作列不固定，不会盖住数据列", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await openDetail(page, "la-paper-1", "positions");
+  await expect(page.getByRole("row", { name: /BTC/ })).toBeVisible();
+  expect(await page.locator(".tx-detail .arco-table-col-fixed-right").count()).toBe(0);
 });
