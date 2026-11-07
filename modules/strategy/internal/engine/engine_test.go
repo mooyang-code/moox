@@ -274,7 +274,7 @@ func exampleFrame(program *dsl.Program) Frame {
 }
 
 func TestExampleStrategyEvaluatesDeterministically(t *testing.T) {
-	program := compile(t, exampleStrategy, exampleColumns...)
+	program := compileIn(t, dsl.SingleMarket(dsl.MarketSpot), exampleStrategy, exampleColumns...)
 	frame := exampleFrame(program)
 	first := evaluate(t, program, frame, State{})
 	assertOK(t, first)

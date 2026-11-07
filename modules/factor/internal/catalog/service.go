@@ -168,7 +168,7 @@ func (s *Service) SetTaskStatus(ctx context.Context, taskID, status string) (dom
 	return s.db.GetTask(ctx, task.TaskID)
 }
 
-// BindTask 把任务与策略实例永久关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
+// BindTask 把任务与策略实例永久关联（任务独占，一个实例可以关联多个任务）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
 // 任务没有成员时拒绝：没有成员的任务不会产出任何列，关联没有意义（设计 S1）。
 func (s *Service) BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error) {
 	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -61,6 +62,13 @@ func (h *Handler) checkReady(p *period, adjacent *store.InputRecord) mergedReadi
 	}
 	if merged.Reason == "" && len(merged.Unavailable) == len(resolved.Tasks) {
 		merged.Reason, merged.Detail = dataReason, dataDetail
+	}
+	// 选币市场整体不可用时没有候选池（select 为单个市场，另一个市场只决定下单市场）：按数据类原因整期跳过，
+	// 不能让它走“预期标的全部缺数”的 too_many_missing。
+	if selectMarket := resolved.Market.Select; merged.Reason == "" && selectMarket != dsl.MarketBoth {
+		if detail, down := merged.Unavailable[selectMarket]; down {
+			merged.Reason, merged.Detail = merged.Results[selectMarket].Reason, detail
+		}
 	}
 	if merged.Reason != "" {
 		merged.Unavailable = map[string]string{}

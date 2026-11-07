@@ -85,7 +85,7 @@ func TestCreateTaskAllowsSharedSourceButUniqueResultAndName(t *testing.T) {
 	require.NoError(t, s.CreateTask(ctx, otherSpace), "名称只在空间内唯一")
 }
 
-// 关联实例独占且永久：同一个实例重复关联幂等；任务不能换实例；一个实例只能关联一个任务；已关联的任务不能删除。
+// 关联实例独占且永久：同一个实例重复关联幂等；任务不能换实例；一个实例可以关联多个任务；已关联的任务不能删除。
 func TestBindTaskIsPermanentAndOneTaskOneInstance(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

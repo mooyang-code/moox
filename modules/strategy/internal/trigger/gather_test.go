@@ -253,3 +253,28 @@ func TestGatherProcessesCompletePendingPeriodsBeforeLaterOne(t *testing.T) {
 		t.Fatalf("重复投递不应重复求值：results=%d calls=%d", h.resultCount(), h.loader.calls)
 	}
 }
+
+// select: spot, prefer: swap：选币市场（现货）的因子被跳过时没有候选池，整期按 factor_skipped 跳过，不走 too_many_missing；
+// 永续（只决定下单市场）被跳过时现货照常出目标。
+func TestGatherSelectMarketUnavailableSkipsWholePeriod(t *testing.T) {
+	h := newDualHarness(t)
+	resolved := input.Resolved{Market: dsl.Market{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap}, Tasks: map[string]input.TaskBinding{
+		"spot": {ViewID: spotView, FactorTaskID: "ftask_a", DatasetID: "ds"}, "swap": {ViewID: swapView, FactorTaskID: "ftask_b", DatasetID: "ds2"}},
+		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
+		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	dslText := "name: dual_demo\nmarket: {select: spot, prefer: swap}\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 1}\nportfolio:\n  max_missing: 0.2\n"
+	h = newHarnessWith(t, dslText, nil, resolved)
+	h.frame(1, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
+	h.frame(2, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
+	expectAck(t, h.deliverStatus(spotView, 1, "skipped", "h1"))
+	expectAck(t, h.deliverView(swapView, 1))
+	first := h.resultAt(1)
+	if first.Status != store.StatusSkipped || first.SkipReason != readiness.ReasonFactorSkipped {
+		t.Fatalf("选币市场被跳过应整期按 factor_skipped 跳过：%+v", first)
+	}
+	expectAck(t, h.deliverView(spotView, 2))
+	expectAck(t, h.deliverStatus(swapView, 2, "skipped", "h1"))
+	if second := h.resultAt(2); second.Status != store.StatusOK {
+		t.Fatalf("只有下单市场被跳过时现货照常出目标：%+v", second)
+	}
+}

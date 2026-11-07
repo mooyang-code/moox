@@ -168,7 +168,7 @@ func TestMemberColumnsCarryContractAttributes(t *testing.T) {
 	}
 }
 
-// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有成员的任务不能关联；一个实例只能关联一个任务。
+// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有成员的任务不能关联；一个实例可以关联多个任务，一个任务只能关联一个实例。
 func TestBindTask(t *testing.T) {
 	ctx := context.Background()
 	db := openCatalogStore(t)
