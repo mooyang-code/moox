@@ -1,5 +1,11 @@
 import { callTrade } from "./http";
-export { isTradeInvalidParam, isTradeNotFound, TradeResponseError } from "./http";
+export {
+  isTradeAdoptionRequired,
+  isTradeInvalidParam,
+  isTradeNotFound,
+  isTradeSessionNotReady,
+  TradeResponseError
+} from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,

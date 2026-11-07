@@ -201,17 +201,20 @@ describe("下单对话框", () => {
     expect(tracker.submittedOrder.value).toBeNull();
   });
 
-  it.each([1, 2, 3, 5, 14, "INVALID_PARAM", "CONFLICT"])("明确被拒绝的请求可以修改后重填，不轮询（%s）", async code => {
-    const vm = await openEntry();
-    mocks.submitOrder.mockRejectedValueOnce(new TradeResponseError({ ret_info: { code, msg: "request rejected" } }));
-    expect(await vm.submitManual()).toBe(false);
-    await vi.advanceTimersByTimeAsync(1600);
-    expect(mocks.getOperatorAction).not.toHaveBeenCalled();
-    vm.manualForm.quantity = "0.02";
-    await vm.submitManual();
-    expect(mocks.submitOrder.mock.calls[1][0].quantity).toBe("0.02");
-    expect(mocks.submitOrder.mock.calls[1][0].action_id).toBe("action");
-  });
+  it.each([1, 2, 3, 5, 14, 19, "INVALID_PARAM", "CONFLICT", "TRADE_SESSION_NOT_READY"])(
+    "明确被拒绝的请求可以修改后重填，不轮询（%s）",
+    async code => {
+      const vm = await openEntry();
+      mocks.submitOrder.mockRejectedValueOnce(new TradeResponseError({ ret_info: { code, msg: "request rejected" } }));
+      expect(await vm.submitManual()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(mocks.getOperatorAction).not.toHaveBeenCalled();
+      vm.manualForm.quantity = "0.02";
+      await vm.submitManual();
+      expect(mocks.submitOrder.mock.calls[1][0].quantity).toBe("0.02");
+      expect(mocks.submitOrder.mock.calls[1][0].action_id).toBe("action");
+    }
+  );
 
   it("切换到另一个组合后，迟到的失败响应不再影响页面", async () => {
     const vm = await openEntry();

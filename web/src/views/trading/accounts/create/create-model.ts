@@ -1,5 +1,5 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
-import { TradeResponseError } from "@/api/trade/http";
+import { isTradeSessionNotReady } from "@/api/trade/http";
 import type { Environment } from "../shared/environment";
 
 export const createKinds: readonly { key: Environment; label: string; desc: string; open: boolean }[] = [
@@ -148,10 +148,8 @@ export function buildLiveRequest(form: CreateForm): CreateTradingAccountReq {
   };
 }
 
-const sessionStartingText = "ExchangeSession is not configured";
-
 /**
- * 新建的实盘账户，运行时的会话要等周期检查才建起来：加入组合在这段时间里会报“会话未配置”，
+ * 新建的实盘账户，运行时的会话要等周期检查才建起来：加入组合在这段时间里会返回 TRADE_SESSION_NOT_READY，
  * 只对这一种错误等几秒重试，其余错误原样抛出。
  */
 export async function retryWhileSessionStarting<T>(
@@ -163,10 +161,7 @@ export async function retryWhileSessionStarting<T>(
     try {
       return await call();
     } catch (error) {
-      // 后端没有专门的错误码，只能先认原始英文消息（TradeResponseError 的 message 已换成中文，原文在 ret_info.msg）
-      const raw = error instanceof TradeResponseError ? error.response.ret_info.msg : error instanceof Error ? error.message : "";
-      const starting = raw.includes(sessionStartingText);
-      if (!starting || attempt >= attempts) throw error;
+      if (!isTradeSessionNotReady(error) || attempt >= attempts) throw error;
       await sleep(delayMs);
     }
   }

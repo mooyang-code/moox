@@ -301,15 +301,18 @@ async function submitManual() {
           "3",
           "5",
           "14",
+          "19",
           "INVALID_PARAM",
           "NO_AUTH",
           "NO_PERMISSION",
           "NOT_FOUND",
           "SPACE_NOT_FOUND",
-          "CONFLICT"
+          "CONFLICT",
+          "TRADE_SESSION_NOT_READY"
         ].includes(String(error.response.ret_info.code))
       ) {
-        // 只有明确的受理前错误才允许修改后重填；编号保留。缺失、系统错误和传输错误都可能已被受理。
+        // 只有明确的受理前错误才允许修改后重填；编号保留。会话未启动（19）时请求没有发到交易所，也算受理前。
+        // 缺失、系统错误和传输错误都可能已被受理。
         pendingSubmission.value = null;
         tracker.stop();
         return false;

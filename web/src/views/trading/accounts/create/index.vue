@@ -173,7 +173,7 @@ import {
   createLogicalAccount,
   createPaperSimulation,
   createTradingAccount,
-  isTradeInvalidParam
+  isTradeAdoptionRequired
 } from "@/api/trade";
 import type { LogicalAccount, MarketType } from "@/api/trade";
 import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
@@ -378,7 +378,7 @@ async function submit() {
         ).logical_account.logical_account_id;
         created.logicalId = target;
       }
-      // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合可能报 ExchangeSession is not configured，等几秒重试。
+      // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合会返回 TRADE_SESSION_NOT_READY，等几秒重试。
       const accountId = created.accountId;
       await retryWhileSessionStarting(() =>
         addLogicalAccountMember({
@@ -396,11 +396,8 @@ async function submit() {
     // 账户已经建成就通知列表刷新，哪怕对话框已经关闭或重新打开
     if (created.accountId) emit("created", form.kind);
     if (!submission.isCurrent()) return;
-    // 后端没有专门的“需要接管”错误码：实盘加入组合被判为参数不合法、又没勾接管时，提示勾选后重试
-    const adoptHint =
-      created.accountId && form.kind !== "paper" && !form.adoptExisting && isTradeInvalidParam(cause)
-        ? "如果交易所账户里已有持仓或非结算币余额，勾选下方“接管账户里已有的持仓”后再点一次。"
-        : "";
+    // 后端明确返回需要接管（TRADE_ADOPTION_REQUIRED）时，提示勾选接管后重试
+    const adoptHint = created.accountId && isTradeAdoptionRequired(cause) ? "勾选下方“接管账户里已有的持仓”后再点一次。" : "";
     error.value = created.accountId
       ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。${adoptHint}`
       : message;

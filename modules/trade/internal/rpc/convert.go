@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"gorm.io/gorm"
 )
@@ -35,6 +36,12 @@ func errorInfo(err error) *tradepb.RetInfo {
 	switch {
 	case errors.Is(err, operatorapp.ErrInvalidActionResult):
 		code = tradepb.ErrorCode_INNER_ERR
+	case errors.Is(err, runtime.ErrSessionConfig):
+		// 会话还没建起来：请求没有发到交易所，稍后重试即可；前端据此等几秒重试。
+		code = tradepb.ErrorCode_TRADE_SESSION_NOT_READY
+	case errors.Is(err, logicalapp.ErrAdoptionRequired):
+		// 账户上已有持仓或挂单：前端据此提示勾选“接管已有持仓”再提交。
+		code = tradepb.ErrorCode_TRADE_ADOPTION_REQUIRED
 	case errors.Is(err, errSpaceRequired):
 		code = tradepb.ErrorCode_NO_PERMISSION
 	case errors.Is(err, gorm.ErrRecordNotFound),
@@ -50,7 +57,6 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, operatorapp.ErrInvalidCommand),
 		errors.Is(err, orderapp.ErrCrossZero),
 		errors.Is(err, tradingaccount.ErrInvalidAccount),
-		errors.Is(err, logicalapp.ErrAdoptionRequired),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),
 		errors.Is(err, logicalaccount.ErrMemberElsewhere),
 		errors.Is(err, accountapp.ErrAccountInLogicalAccount),

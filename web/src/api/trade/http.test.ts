@@ -7,7 +7,14 @@ vi.mock("../admin/signed-client", () => ({ installSpaceAwareSignedClient: vi.fn(
 const { messageError } = vi.hoisted(() => ({ messageError: vi.fn() }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
 
-import { callTrade, isTradeInvalidParam, isTradeNotFound, TradeResponseError } from "./http";
+import {
+  callTrade,
+  isTradeAdoptionRequired,
+  isTradeInvalidParam,
+  isTradeNotFound,
+  isTradeSessionNotReady,
+  TradeResponseError
+} from "./http";
 
 describe("Trade response errors", () => {
   beforeEach(() => {
@@ -46,13 +53,27 @@ describe("Trade response errors", () => {
   it("没有消息时给出中文兜底和错误码；已知的英文错误换成中文，未知的原样返回", async () => {
     client.post.mockResolvedValue({ data: { ret_info: { code: 13, msg: "" } } });
     await expect(callTrade("console", "ListOrders", {})).rejects.toThrow("交易服务请求失败（错误码 13）");
-    client.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "trade logical account: adoption is required" } } });
-    const error = await callTrade("console", "AddLogicalAccountMember", {}, { silent: true }).catch(cause => cause);
-    expect(error.message).toContain("接管账户里已有的持仓");
-    expect(error.response.ret_info.msg, "原始消息保留").toBe("trade logical account: adoption is required");
+    client.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "trade: invalid trading account" } } });
+    const error = await callTrade("console", "UpdateTradingAccount", {}, { silent: true }).catch(cause => cause);
+    expect(error.message).toBe("执行账户的参数不合法");
+    expect(error.response.ret_info.msg, "原始消息保留").toBe("trade: invalid trading account");
     expect(isTradeInvalidParam(error)).toBe(true);
     expect(isTradeNotFound(error)).toBe(false);
     expect(isTradeNotFound(new TradeResponseError({ ret_info: { code: "NOT_FOUND", msg: "" } }))).toBe(true);
+    expect(new TradeResponseError({ ret_info: { code: 1, msg: "执行账户上已有持仓或挂单" } }).message).toBe(
+      "执行账户上已有持仓或挂单"
+    );
+  });
+
+  it("会话未启动、需要接管按专门的错误码识别，数字和枚举名都认", () => {
+    const error = (code: number | string) => new TradeResponseError({ ret_info: { code, msg: "" } });
+    expect(isTradeSessionNotReady(error(19))).toBe(true);
+    expect(isTradeSessionNotReady(error("TRADE_SESSION_NOT_READY"))).toBe(true);
+    expect(isTradeSessionNotReady(error(4))).toBe(false);
+    expect(isTradeAdoptionRequired(error(20))).toBe(true);
+    expect(isTradeAdoptionRequired(error("TRADE_ADOPTION_REQUIRED"))).toBe(true);
+    expect(isTradeAdoptionRequired(error(1))).toBe(false);
+    expect(isTradeSessionNotReady(new Error("交易账户会话还没有启动"))).toBe(false);
   });
 
   it("包装进去的具体原因保留在括号里；只认完整的错误常量", () => {

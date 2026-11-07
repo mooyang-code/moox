@@ -112,4 +112,8 @@ enum ErrorCode {
   DIMENSION_VALUE_INVALID = 17;
   // SUBJECT_NOT_IN_DATASET 表示数据对象未登记到目标数据集。
   SUBJECT_NOT_IN_DATASET = 18;
+  // TRADE_SESSION_NOT_READY 表示交易账户的交易所会话还没有启动（新建账户要等运行时的周期检查），稍后重试即可；请求没有发到交易所。
+  TRADE_SESSION_NOT_READY = 19;
+  // TRADE_ADOPTION_REQUIRED 表示执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位。
+  TRADE_ADOPTION_REQUIRED = 20;
 }

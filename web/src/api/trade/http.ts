@@ -17,30 +17,14 @@ const tradeClient = axios.create({
 });
 
 /**
- * 后端还没改成中文的常见错误：按错误常量开头对照成中文，只用于展示，不拿来做逻辑判断
- * （逻辑判断看错误码）。后端错误常量改成中文后，这张表里对应的项就用不到了。
+ * 后端还没改成中文的错误：按错误常量开头对照成中文，只用于展示，不拿来做逻辑判断
+ * （逻辑判断看错误码）。后端错误常量改成中文后，这张表里对应的项就删掉。
  */
 const tradeMessageTexts: readonly [prefix: string, text: string][] = [
-  ["trade logical account: adoption is required", "账户里已有持仓或余额，要勾选“接管账户里已有的持仓”才能加入组合"],
-  ["trade logical account: member has active exposure", "执行账户还有持仓或挂单，要先平仓"],
-  ["trade logical account: not ready", "组合账户还没有准备好，稍后再试"],
-  ["trade logical account: runner ownership conflict", "组合正在被另一个执行进程处理，稍后再试"],
-  ["trade: logical account membership change requires pause", "组合正在自动执行，先暂停再增删成员"],
-  ["trade: logical account members must be homogeneous", "组合成员的环境和结算资产必须一致"],
-  ["trade: invalid logical account", "组合账户的参数不合法"],
   ["trade: invalid trading account", "执行账户的参数不合法"],
   ["trade: trading account is not executable", "执行账户当前不能下单"],
   ["trade: invalid order", "订单参数不合法"],
-  ["trade account: not found", "执行账户不存在"],
-  ["trade account: conflict", "执行账户冲突：名称重复或状态已经变化，刷新后再试"],
-  ["trade account: invalid Exchange credential", "交易所密钥无效"],
-  ["trade account: production trading is disabled", "生产环境交易没有开启"],
-  ["trade store: conflict", "数据已经被修改，刷新后再试"],
-  ["trade order: idempotency conflict", "同一个操作编号已经用于另一个请求"],
-  ["trade operator: invalid command", "操作参数不合法"],
-  ["trade operator: cancellation is not confirmed", "撤单还没有得到交易所确认"],
-  ["trade delist: invalid request", "下架请求的参数不合法"],
-  ["ExchangeSession is not configured", "执行账户的交易所会话还没有建立，稍等几秒再试"]
+  ["trade store: conflict", "数据已经被修改，刷新后再试"]
 ];
 
 /** 错误常量在消息里的位置：后面必须是结尾或冒号，避免 "trade: invalid order" 命中 "trade: invalid order transition"。 */
@@ -86,6 +70,16 @@ export class TradeResponseError extends Error {
 /** 请求参数不合法（ErrorCode.INVALID_PARAM）：业务校验没通过，改了参数可以重试。 */
 export function isTradeInvalidParam(error: unknown): boolean {
   return error instanceof TradeResponseError && error.hasCode(1, "INVALID_PARAM");
+}
+
+/** 交易账户的交易所会话还没有启动（ErrorCode.TRADE_SESSION_NOT_READY = 19）：请求没有发到交易所，等几秒重试即可。 */
+export function isTradeSessionNotReady(error: unknown): boolean {
+  return error instanceof TradeResponseError && error.hasCode(19, "TRADE_SESSION_NOT_READY");
+}
+
+/** 执行账户上已有持仓或挂单，加入组合要确认接管（ErrorCode.TRADE_ADOPTION_REQUIRED = 20）。 */
+export function isTradeAdoptionRequired(error: unknown): boolean {
+  return error instanceof TradeResponseError && error.hasCode(20, "TRADE_ADOPTION_REQUIRED");
 }
 
 /** 对象不存在（ErrorCode.NOT_FOUND）。 */

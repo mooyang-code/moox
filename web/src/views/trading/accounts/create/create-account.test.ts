@@ -258,14 +258,23 @@ describe("新建账户提交", () => {
       expect(mocks.addLogicalAccountMember).toHaveBeenCalledTimes(2);
     });
 
-    it("账户里有非结算币时加入组合要接管：没勾时提示勾选后重试，勾上后重试带上接管", async () => {
+    it("后端返回需要接管（TRADE_ADOPTION_REQUIRED）时提示勾选后重试，勾上后重试带上接管", async () => {
       mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
       const vm = await openDialog();
       Object.assign(vm.form, { ...liveForm, join: "new", logicalName: "实盘组合", step: 3 });
       await flushPromises();
       expect(document.body.textContent).toContain("接管账户里已有的持仓");
+      // 普通的参数不合法不再猜测是要接管
       mocks.addLogicalAccountMember.mockRejectedValueOnce(
-        new TradeResponseError({ ret_info: { code: 1, msg: "trade logical account: adoption is required" } })
+        new TradeResponseError({ ret_info: { code: 1, msg: "组合成员的环境和结算资产必须一致" } })
+      );
+      await vm.submit();
+      await flushPromises();
+      expect(document.body.textContent).not.toContain("后再点一次。");
+      mocks.addLogicalAccountMember.mockRejectedValueOnce(
+        new TradeResponseError({
+          ret_info: { code: 20, msg: "执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位" }
+        })
       );
       await vm.submit();
       await flushPromises();

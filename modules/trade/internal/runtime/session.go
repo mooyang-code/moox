@@ -18,7 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-var ErrSessionConfig = errors.New("交易账户会话还没有启动（ExchangeSession is not configured），请稍后重试")
+// ErrSessionConfig 是交易账户没有可用的会话（新建账户要等运行时的周期检查才建起来）；RPC 返回 TRADE_SESSION_NOT_READY。
+var ErrSessionConfig = errors.New("交易账户会话还没有启动，请稍后重试")
 
 const (
 	sessionOrderWindow        = 5 * time.Minute

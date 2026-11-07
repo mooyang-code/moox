@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TradeResponseError } from "@/api/trade/http";
 import {
   buildLiveRequest,
   buildPaperRequest,
@@ -85,21 +86,28 @@ describe("新建账户", () => {
     expect(defaultFees([1, 2]).taker).toBe("0.0005");
   });
 
-  it("加入组合只在会话还没建起来时重试，其他错误直接抛出", async () => {
+  it("加入组合只在会话还没建起来（TRADE_SESSION_NOT_READY）时重试，其他错误直接抛出", async () => {
     const sleep = () => Promise.resolve();
-    const call = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("trade runtime: ExchangeSession is not configured"))
-      .mockResolvedValueOnce("ok");
+    const notReady = (code: number | string) =>
+      new TradeResponseError({ ret_info: { code, msg: "交易账户会话还没有启动，请稍后重试" } });
+    const call = vi.fn().mockRejectedValueOnce(notReady(19)).mockResolvedValueOnce("ok");
     await expect(retryWhileSessionStarting(call, { sleep })).resolves.toBe("ok");
     expect(call).toHaveBeenCalledTimes(2);
+
+    const byName = vi.fn().mockRejectedValueOnce(notReady("TRADE_SESSION_NOT_READY")).mockResolvedValueOnce("ok");
+    await expect(retryWhileSessionStarting(byName, { sleep })).resolves.toBe("ok");
+
+    // 消息文字相同但错误码不是 TRADE_SESSION_NOT_READY 时不重试：只认错误码
+    const sameText = vi.fn().mockRejectedValue(notReady(4));
+    await expect(retryWhileSessionStarting(sameText, { sleep })).rejects.toThrow("会话还没有启动");
+    expect(sameText).toHaveBeenCalledTimes(1);
 
     const other = vi.fn().mockRejectedValue(new Error("先暂停自动执行"));
     await expect(retryWhileSessionStarting(other, { sleep })).rejects.toThrow("先暂停自动执行");
     expect(other).toHaveBeenCalledTimes(1);
 
-    const never = vi.fn().mockRejectedValue(new Error("ExchangeSession is not configured"));
-    await expect(retryWhileSessionStarting(never, { sleep, attempts: 3 })).rejects.toThrow("ExchangeSession");
+    const never = vi.fn().mockRejectedValue(notReady(19));
+    await expect(retryWhileSessionStarting(never, { sleep, attempts: 3 })).rejects.toThrow("会话还没有启动");
     expect(never).toHaveBeenCalledTimes(3);
   });
 });
