@@ -386,6 +386,18 @@ func allOrdersUnreachable(err error) bool {
 	return credentialUnavailable(err) || exchange.IsInstrumentNotFound(err)
 }
 
+// syncFailureSummary 是给前端看的同步失败原因：用中文说清是没有会话还是凭证失效，不带交易所原文（可能是英文或带请求串）。
+func syncFailureSummary(err error) string {
+	var accountErr *orderapp.AccountExecutionError
+	switch {
+	case errors.As(err, &accountErr) && accountErr.Operation == "adapter":
+		return "账户会话没有启动或账户已停用"
+	case exchange.IsKind(err, exchange.ErrorAuthentication):
+		return "凭证失效，" + exchange.FailureSummary(err)
+	}
+	return exchange.FailureSummary(err)
+}
+
 // UnverifiedRemovalWarning 是同步失败、只凭本地记录移除成员时返回的提示。
 const UnverifiedRemovalWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
 
@@ -421,7 +433,7 @@ func (s *Service) RemoveMember(
 		if syncErr != nil {
 			// 本地还有挂单、持仓或受管资产：照样按“有持仓不能移出”报，不能只返回同步错误（没有会话时会被当成“稍后重试”，
 			// 重试多少次都不会成功，也看不出是有持仓）。同步错误只作为原因附上，不参与错误码判断。
-			return "", fmt.Errorf("%w（同步失败：%v）", ErrRemovalHasExposure, syncErr)
+			return "", fmt.Errorf("%w（同步失败：%s）", ErrRemovalHasExposure, syncFailureSummary(syncErr))
 		}
 		return "", ErrRemovalHasExposure
 	}

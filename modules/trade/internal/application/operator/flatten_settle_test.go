@@ -349,3 +349,25 @@ func TestActionScopedErrorClassifiesAccountErrors(t *testing.T) {
 	require.False(t, ActionScopedError(errors.Join(account, errors.New("database is locked"))))
 	require.False(t, ActionScopedError(nil))
 }
+
+// 上一个动作留下、标为需人工核对的子单（结果未知、标的已不存在）：之后的整组清仓撤单确认时跳过它，照常下单，不被它挡成一直运行。
+func TestLaterFlattenSkipsUnreachableLeftoverChild(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	gone := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-gone", "child-gone", gone)
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-gone"))
+
+	fixture.orders.nextID = ""
+	later, err := service.FlattenLogicalAccount(context.Background(), flattenCommand("flatten-later"))
+	require.NoError(t, err)
+	require.NotEmpty(t, fixture.orders.specs, "遗留单不能挡住撤单确认，清仓要照常下单")
+	require.Equal(t, "account-a", later.Accounts[0].TradingAccountID)
+	require.Equal(t, []string{"child-gone"}, later.Accounts[0].ManualCheckOrderIDs)
+	require.NotEmpty(t, later.Accounts[0].ChildOrderIDs)
+	require.NotContains(t, later.Accounts[0].Error, ErrCancelUnconfirmed.Error())
+	require.Empty(t, later.Accounts[1].ManualCheckOrderIDs, "别的账户不带这笔单")
+}

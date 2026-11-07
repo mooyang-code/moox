@@ -87,7 +87,9 @@ type FlattenAccountResult struct {
 	Error string              `json:"error,omitempty"`
 	// Unblocked 为真表示下架清仓发现标的已被解除禁止而提前结束（不算失败）。
 	Unblocked bool `json:"unblocked,omitempty"`
-	cause     error
+	// ManualCheckOrderIDs 是这个账户上撤不掉、跳过的别的单（结果未知、交易所确认标的不存在），要人工核对。
+	ManualCheckOrderIDs []string `json:"manual_check_order_ids,omitempty"`
+	cause               error
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
@@ -351,7 +353,7 @@ func (s *Service) FlattenLogicalAccount(
 		AttemptStartedAt: attemptStart,
 		Accounts:         make([]FlattenAccountResult, 0, len(members)),
 	}
-	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
+	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing(), unreachable: map[string]string{}}
 	if command.actionType() == operatordomain.ActionDelistFlatten {
 		scope.stillBlocked = func(ctx context.Context, tradingAccountID string) (bool, error) {
 			return s.delistStillBlocked(ctx, command.SpaceID, tradingAccountID, scope.instrumentID)
@@ -436,6 +438,7 @@ func (s *Service) FlattenLogicalAccount(
 		if accountResult.cause != nil && errors.Is(accountResult.cause, context.DeadlineExceeded) && !time.Now().Before(deadline) {
 			accountResult.cause = &orderapp.AccountExecutionError{TradingAccountID: member.TradingAccountID, Operation: "flatten_budget", Err: accountResult.cause}
 		}
+		accountResult.ManualCheckOrderIDs = scope.unreachableFor(member.TradingAccountID)
 		if wasExecutable {
 			executable++
 		}
@@ -1072,7 +1075,7 @@ func (s *Service) hasCancelableOrders(
 		return false, err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == actionID {
 			continue
 		}
@@ -1129,12 +1132,22 @@ func (s *Service) cancelAccountOrders(
 	}
 	var cancelErrors []error
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue
 		}
-		if err := s.stopOrder(ctx, current); err != nil {
+		err := s.stopOrder(ctx, current)
+		if err != nil && scope.unreachable != nil && exchange.IsInstrumentNotFound(err) {
+			// 交易所确认标的不存在：这笔单撤不掉、也确认不了（多半是之前动作留下、已标为需人工核对的子单），跳过它，
+			// 不让它挡住这次清仓；单号写进账户结果并记关注项。
+			scope.unreachable[current.OrderID] = tradingAccountID
+			detail := fmt.Sprintf("组合 %s 的动作 %s：执行账户 %s 上有撤不掉的单（标的已不存在），已跳过，需人工核对", current.LogicalAccountID, actionID, tradingAccountID)
+			telemetry.Note(telemetry.AttentionFlattenOrdersUnsettled, detail, s.clock())
+			log.WarnContextf(ctx, "交易关注项：%s（%s）：%v", detail, current.OrderID, err)
+			continue
+		}
+		if err != nil {
 			cancelErrors = append(cancelErrors, fmt.Errorf(
 				"cancel order %s: %w",
 				current.OrderID,
@@ -1157,7 +1170,7 @@ func (s *Service) confirmAccountCancellations(
 		return err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) || scope.skipsOrder(current.OrderID) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue

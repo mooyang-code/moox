@@ -81,7 +81,7 @@ func TestRemoveMemberWithoutSessionReportsExposure(t *testing.T) {
 	if info.GetCode() != tradepb.ErrorCode_INVALID_PARAM {
 		t.Fatalf("ret_info = %+v", info)
 	}
-	if !strings.Contains(info.GetMsg(), "持仓") || !strings.Contains(info.GetMsg(), "同步失败") {
+	if !strings.Contains(info.GetMsg(), "持仓") || !strings.Contains(info.GetMsg(), "同步失败：账户会话没有启动") {
 		t.Fatalf("msg = %q", info.GetMsg())
 	}
 }

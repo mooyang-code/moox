@@ -117,7 +117,8 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 	}))
 	_, err = service.RemoveMember(context.Background(), "space-1", "logical-1", "account-b")
 	require.ErrorIs(t, err, ErrRemovalHasExposure)
-	require.ErrorContains(t, err, "invalid api key")
+	require.ErrorContains(t, err, "凭证失效")
+	require.NotContains(t, err.Error(), "invalid api key", "给前端的原因不带交易所英文原文")
 }
 
 func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {

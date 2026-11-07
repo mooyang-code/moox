@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
@@ -101,6 +102,27 @@ type flattenScope struct {
 	// stillBlocked 只用于下架清仓：报告标的是否仍在下架名单里。解除禁止（多半是误报被取消）后清仓必须停下，
 	// 否则执行器恢复买入、清仓继续卖，会来回成交。
 	stillBlocked func(ctx context.Context, tradingAccountID string) (bool, error)
+	// unreachable 是这次调用里撤不掉、也永远确认不了的别的单（键：订单号，值：执行账户）：结果未知、交易所又确认标的不存在
+	// （多半是之前动作留下、已标为需人工核对的子单）。撤单确认跳过它们，不让一笔下架标的的遗留单挡住之后的清仓、减仓。
+	unreachable map[string]string
+}
+
+// skipsOrder 报告这笔单是否已认定撤不掉、留给人工核对。
+func (s flattenScope) skipsOrder(orderID string) bool {
+	_, skipped := s.unreachable[orderID]
+	return skipped
+}
+
+// unreachableFor 返回这个账户上撤不掉、留给人工核对的单号（排好序）。
+func (s flattenScope) unreachableFor(tradingAccountID string) []string {
+	var orderIDs []string
+	for orderID, accountID := range s.unreachable {
+		if accountID == tradingAccountID {
+			orderIDs = append(orderIDs, orderID)
+		}
+	}
+	sort.Strings(orderIDs)
+	return orderIDs
 }
 
 // narrow 报告范围是否被收窄：只平一个标的，或减仓（只处理登记过的持仓）。收窄时范围外的资产和持仓一律跳过。
